@@ -43,6 +43,10 @@ app.get("/api/fixed-dispatch", requireView, async (_req, res) => {
   res.json(await readDispatchCache());
 });
 
+app.get("/admin", (_req, res) => {
+  res.sendFile(path.join(publicDir, "admin.html"));
+});
+
 app.post("/api/refresh", requireAdmin, async (req, res) => {
   if (refreshState.running) {
     return res.status(409).json({ error: "Refresh already running.", refresh: refreshState });
