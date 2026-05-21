@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: freshon-dispatch-admin
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: FRESHON_BASE_URL
+        value: https://mis.freshon.co.kr/bo/main
+      - key: FRESHON_ID
+        sync: false
+      - key: FRESHON_PASSWORD
+        sync: false
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: PUBLIC_VIEW
+        value: true
+      - key: FRESHON_HEADLESS
+        value: true
