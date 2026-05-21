@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "postinstall": "npx playwright install chromium"
+    "render-build": "npx playwright install --with-deps chromium"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
