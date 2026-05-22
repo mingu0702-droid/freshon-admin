@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
@@ -34,13 +34,123 @@ let routeRefreshState = {
   failed: 0,
   current: null,
   active: [],
-  concurrency: 1
+  concurrency: 1,
+  stopRequested: false
 };
 
 let dailyRouteWriteQueue = Promise.resolve();
+let routeRefreshGeneration = 0;
 
 const DEFAULT_ROUTE_VEHICLES = [
-  "101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "111", "112", "113", "114", "115", "116", "117", "118", "119", "120", "121", "122", "123", "124", "125", "126", "127", "151", "152", "153", "154", "155", "156", "157", "158", "159", "160", "161", "162", "163", "164", "165", "166", "167", "168", "169", "170", "171", "172", "173", "175", "176", "177", "178", "201", "202", "203", "204", "205", "206", "207", "208", "209", "210", "211", "212", "213", "214", "215", "216", "217", "218", "219", "220", "221", "222", "223", "225", "227", "228", "229", "230", "231", "234", "235", "236", "용01", "용02", "용03", "용04", "용05", "용06", "용07", "용08", "용09", "용10", "용11", "용12", "용13", "용14", "용31", "용32", "용33", "용34", "용35", "척01", "척02", "척05", "척06", "척07", "척08", "척09"
+  "101",
+  "102",
+  "103",
+  "104",
+  "105",
+  "106",
+  "107",
+  "108",
+  "109",
+  "110",
+  "111",
+  "112",
+  "113",
+  "114",
+  "115",
+  "116",
+  "117",
+  "118",
+  "119",
+  "120",
+  "121",
+  "122",
+  "123",
+  "124",
+  "125",
+  "126",
+  "127",
+  "151",
+  "152",
+  "153",
+  "154",
+  "155",
+  "156",
+  "157",
+  "158",
+  "159",
+  "160",
+  "161",
+  "162",
+  "163",
+  "164",
+  "165",
+  "166",
+  "167",
+  "168",
+  "169",
+  "170",
+  "171",
+  "172",
+  "173",
+  "175",
+  "176",
+  "177",
+  "178",
+  "201",
+  "202",
+  "203",
+  "204",
+  "205",
+  "206",
+  "207",
+  "208",
+  "209",
+  "210",
+  "211",
+  "212",
+  "213",
+  "214",
+  "215",
+  "216",
+  "217",
+  "218",
+  "219",
+  "220",
+  "221",
+  "222",
+  "223",
+  "225",
+  "227",
+  "228",
+  "229",
+  "230",
+  "231",
+  "234",
+  "235",
+  "236",
+  "\uC6A901",
+  "\uC6A902",
+  "\uC6A903",
+  "\uC6A904",
+  "\uC6A905",
+  "\uC6A906",
+  "\uC6A907",
+  "\uC6A908",
+  "\uC6A909",
+  "\uC6A910",
+  "\uC6A911",
+  "\uC6A912",
+  "\uC6A913",
+  "\uC6A914",
+  "\uCC9901",
+  "\uCC9902",
+  "\uCC9903",
+  "\uCC9904",
+  "\uCC9905",
+  "\uCC9906",
+  "\uCC9907",
+  "\uCC9908",
+  "\uCC9909"
 ];
 
 function eachDate(startDate, endDate) {
@@ -75,6 +185,7 @@ async function writeDailyRouteQueued(payload) {
 }
 
 async function runRouteBatch({ startDate, endDate, vehicles, center, concurrency = 3 }) {
+  const generation = ++routeRefreshGeneration;
   const dates = eachDate(startDate, endDate);
   const jobs = dates.flatMap((date) => vehicles.map((vehicle) => ({ date, vehicle })));
   let nextJobIndex = 0;
@@ -90,7 +201,8 @@ async function runRouteBatch({ startDate, endDate, vehicles, center, concurrency
     failed: 0,
     current: null,
     active: [],
-    concurrency
+    concurrency,
+    stopRequested: false
   };
 
   async function nextJob() {
@@ -101,7 +213,7 @@ async function runRouteBatch({ startDate, endDate, vehicles, center, concurrency
 
   async function runWorker(workerId) {
     await withDailyRouteSession(async (scrape) => {
-      while (routeRefreshState.running) {
+      while (routeRefreshState.running && !routeRefreshState.stopRequested) {
         const job = await nextJob();
         if (!job) return;
         const { date, vehicle } = job;
@@ -132,10 +244,12 @@ async function runRouteBatch({ startDate, endDate, vehicles, center, concurrency
     const workerCount = Math.min(concurrency, jobs.length || 1);
     await Promise.all(Array.from({ length: workerCount }, (_value, index) => runWorker(index + 1)));
   } finally {
-    routeRefreshState.running = false;
-    routeRefreshState.lastFinishedAt = new Date().toISOString();
-    routeRefreshState.current = null;
-    routeRefreshState.active = [];
+    if (generation === routeRefreshGeneration) {
+      routeRefreshState.running = false;
+      routeRefreshState.lastFinishedAt = new Date().toISOString();
+      routeRefreshState.current = null;
+      routeRefreshState.active = [];
+    }
   }
 }
 
@@ -255,6 +369,17 @@ app.post("/api/refresh-daily-routes", requireAdmin, async (req, res) => {
   });
 });
 
+app.post("/api/cancel-daily-routes", requireAdmin, (_req, res) => {
+  if (!routeRefreshState.running) {
+    return res.json({ ok: true, message: "No daily route refresh is running.", routeRefresh: routeRefreshState });
+  }
+  routeRefreshState.stopRequested = true;
+  routeRefreshState.running = false;
+  routeRefreshState.lastError = "Daily route refresh was stopped by admin.";
+  routeRefreshState.lastFinishedAt = new Date().toISOString();
+  res.json({ ok: true, message: "Daily route refresh stop requested.", routeRefresh: routeRefreshState });
+});
+
 app.get("*", (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
@@ -262,3 +387,4 @@ app.get("*", (_req, res) => {
 app.listen(config.port, () => {
   console.log(`Freshon dispatch admin listening on ${config.port}`);
 });
+

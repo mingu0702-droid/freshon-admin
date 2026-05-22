@@ -10,6 +10,7 @@ const refreshButton = document.getElementById("refreshButton");
 const reloadButton = document.getElementById("reloadButton");
 const csvButton = document.getElementById("csvButton");
 const routeRefreshButton = document.getElementById("routeRefreshButton");
+const routeCancelButton = document.getElementById("routeCancelButton");
 const routeStartDate = document.getElementById("routeStartDate");
 const routeEndDate = document.getElementById("routeEndDate");
 const routeCenter = document.getElementById("routeCenter");
@@ -82,13 +83,16 @@ function renderRouteStatus(state) {
   }
   if (state.running) {
     const current = state.current ? ` / 현재 ${state.current.date} ${state.current.vehicle}` : "";
+    const active = state.active?.length ? ` / 작업 ${state.active.map((item) => `${item.date} ${item.vehicle}`).join(", ")}` : "";
     const skipped = state.skipped ? `, 기존 캐시 건너뜀 ${state.skipped}` : "";
-    routeRefreshStatus.textContent = `진행 중 ${state.completed}/${state.total}, 실패 ${state.failed}${skipped}${current}`;
+    routeRefreshStatus.textContent = `진행 중 ${state.completed}/${state.total}, 실패 ${state.failed}${skipped}${current}${active}`;
+    if (routeCancelButton) routeCancelButton.disabled = false;
     return;
   }
   const finished = state.lastFinishedAt ? new Date(state.lastFinishedAt).toLocaleString("ko-KR") : "-";
   const skipped = state.skipped ? `, 기존 캐시 건너뜀 ${state.skipped}` : "";
   routeRefreshStatus.textContent = `대기 중 / 완료 ${state.completed || 0}/${state.total || 0}, 실패 ${state.failed || 0}${skipped}, 마지막 완료 ${finished}${state.lastError ? ` / 최근 오류: ${state.lastError}` : ""}`;
+  if (routeCancelButton) routeCancelButton.disabled = true;
 }
 
 async function loadStatus() {
@@ -172,6 +176,12 @@ async function refreshRouteCache() {
       })
     });
     const json = await response.json();
+    if (response.status === 409) {
+      renderRouteStatus(json.routeRefresh);
+      setStatus("이미 동선 캐시 작업이 진행 중입니다. 필요하면 동선 작업 중지를 누른 뒤 다시 시작하세요.");
+      await loadStatus();
+      return;
+    }
     if (!response.ok) throw new Error(json.error || "동선 캐시 갱신 실패");
     renderRouteStatus(json.routeRefresh);
     await loadStatus();
@@ -181,6 +191,34 @@ async function refreshRouteCache() {
     alert(error.message);
   } finally {
     routeRefreshButton.disabled = false;
+  }
+}
+
+async function cancelRouteCache() {
+  const token = getToken();
+  if (!token) {
+    alert("동선 작업 중지는 관리 토큰이 필요합니다.");
+    return;
+  }
+  routeCancelButton.disabled = true;
+  setStatus("동선 캐시 작업 중지 요청 중");
+  try {
+    const response = await fetch("/api/cancel-daily-routes", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-token": token
+      },
+      body: JSON.stringify({})
+    });
+    const json = await response.json();
+    if (!response.ok) throw new Error(json.error || "동선 작업 중지 실패");
+    renderRouteStatus(json.routeRefresh);
+    setStatus("동선 캐시 작업 중지 요청 완료");
+    await loadStatus();
+  } catch (error) {
+    setStatus(`동선 작업 중지 실패: ${error.message}`);
+    alert(error.message);
   }
 }
 
@@ -222,6 +260,7 @@ setDefaultDates();
 saveTokenButton.addEventListener("click", saveToken);
 refreshButton.addEventListener("click", refreshData);
 routeRefreshButton.addEventListener("click", refreshRouteCache);
+if (routeCancelButton) routeCancelButton.addEventListener("click", cancelRouteCache);
 reloadButton.addEventListener("click", loadData);
 csvButton.addEventListener("click", downloadCsv);
 loadData();
