@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
 import { getDefaultDispatchRange } from "./dateRange.js";
-import { readDispatchCache, writeDispatchCache } from "./store.js";
+import { readDailyRoute, readDispatchCache, writeDailyRoute, writeDispatchCache } from "./store.js";
 import { refreshFixedDispatchData } from "./scraper/freshonFixedDispatch.js";
+import { refreshDailyRouteData } from "./scraper/freshonDailyRoute.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,6 +44,19 @@ app.get("/api/fixed-dispatch", requireView, async (_req, res) => {
   res.json(await readDispatchCache());
 });
 
+app.get("/api/daily-route", requireView, async (req, res) => {
+  const date = String(req.query.date || "");
+  const vehicle = String(req.query.vehicle || "");
+  if (!date || !vehicle) {
+    return res.status(400).json({ error: "date and vehicle are required." });
+  }
+  const payload = await readDailyRoute(date, vehicle);
+  if (!payload) {
+    return res.status(404).json({ error: "No cached daily route.", date, vehicle });
+  }
+  res.json(payload);
+});
+
 app.get("/admin", (_req, res) => {
   res.sendFile(path.join(publicDir, "admin.html"));
 });
@@ -71,6 +85,23 @@ app.post("/api/refresh", requireAdmin, async (req, res) => {
     refreshState.lastError = error.message;
     refreshState.lastFinishedAt = new Date().toISOString();
     res.status(500).json({ error: error.message, refresh: refreshState });
+  }
+});
+
+app.post("/api/refresh-daily-route", requireAdmin, async (req, res) => {
+  const date = String(req.body?.date || "");
+  const vehicle = String(req.body?.vehicle || "");
+  const center = String(req.body?.center || "");
+  if (!date || !vehicle) {
+    return res.status(400).json({ error: "date and vehicle are required." });
+  }
+
+  try {
+    const payload = await refreshDailyRouteData({ date, vehicle, center });
+    await writeDailyRoute(payload);
+    res.json({ ok: true, date, vehicle, rowCount: payload.rowCount });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
