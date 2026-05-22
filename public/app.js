@@ -1,8 +1,11 @@
 let currentPayload = { columns: [], rows: [] };
 let statusTimer = null;
 
+const TOKEN_KEY = "freshonAdminToken";
+
 const statusEl = document.getElementById("status");
 const tokenEl = document.getElementById("adminToken");
+const saveTokenButton = document.getElementById("saveTokenButton");
 const refreshButton = document.getElementById("refreshButton");
 const reloadButton = document.getElementById("reloadButton");
 const csvButton = document.getElementById("csvButton");
@@ -16,6 +19,26 @@ const table = document.getElementById("dataTable");
 
 function setStatus(text) {
   statusEl.textContent = text;
+}
+
+function getToken() {
+  return tokenEl.value.trim();
+}
+
+function saveToken() {
+  const token = getToken();
+  if (!token) {
+    localStorage.removeItem(TOKEN_KEY);
+    setStatus("저장된 관리 토큰을 지웠습니다.");
+    return;
+  }
+  localStorage.setItem(TOKEN_KEY, token);
+  setStatus("관리 토큰을 이 브라우저에 저장했습니다.");
+}
+
+function loadSavedToken() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) tokenEl.value = token;
 }
 
 function setDefaultDates() {
@@ -35,7 +58,8 @@ function render(payload) {
   const columns = payload.columns || [];
   const rows = payload.rows || [];
   if (!columns.length) {
-    table.innerHTML = `<tbody><tr><td>${payload.warning || "데이터가 없습니다."}</td></tr></tbody>`;
+    const message = payload.warning || "아직 고정배차 캐시가 없습니다. 관리 토큰 저장 후 고정배차 갱신을 눌러주세요.";
+    table.innerHTML = `<tbody><tr><td>${escapeHtml(message)}</td></tr></tbody>`;
     return;
   }
 
@@ -84,11 +108,12 @@ async function loadData() {
 }
 
 async function refreshData() {
-  const token = tokenEl.value.trim();
+  const token = getToken();
   if (!token) {
-    alert("데이터 갱신은 관리 토큰이 필요합니다.");
+    alert("고정배차 갱신은 관리 토큰이 필요합니다. 한 번 입력한 뒤 토큰 저장을 눌러두면 다음부터 자동 입력됩니다.");
     return;
   }
+  saveToken();
   refreshButton.disabled = true;
   setStatus("Freshon 고정배차 갱신 중");
   try {
@@ -101,7 +126,7 @@ async function refreshData() {
       body: JSON.stringify({})
     });
     const json = await response.json();
-    if (!response.ok) throw new Error(json.error || "Refresh failed");
+    if (!response.ok) throw new Error(json.error || "고정배차 갱신 실패");
     await loadData();
   } catch (error) {
     setStatus(`갱신 실패: ${error.message}`);
@@ -112,17 +137,17 @@ async function refreshData() {
 }
 
 async function refreshRouteCache() {
-  const token = tokenEl.value.trim();
+  const token = getToken();
   if (!token) {
-    alert("동선 캐시 갱신은 관리 토큰이 필요합니다.");
+    alert("동선 캐시 갱신은 관리 토큰이 필요합니다. 한 번 입력한 뒤 토큰 저장을 눌러두면 다음부터 자동 입력됩니다.");
     return;
   }
-  const vehicles = routeVehicles.value.trim();
-  if (!routeStartDate.value || !routeEndDate.value || !vehicles) {
-    alert("시작일, 종료일, 호차 목록을 입력해주세요.");
+  if (!routeStartDate.value || !routeEndDate.value) {
+    alert("시작일과 종료일을 선택해주세요. 물류센터와 호차 목록은 비워두면 전체로 진행합니다.");
     return;
   }
 
+  saveToken();
   routeRefreshButton.disabled = true;
   setStatus("동선 캐시 갱신 시작 중");
   try {
@@ -136,11 +161,11 @@ async function refreshRouteCache() {
         startDate: routeStartDate.value,
         endDate: routeEndDate.value,
         center: routeCenter.value.trim(),
-        vehicles
+        vehicles: routeVehicles.value.trim()
       })
     });
     const json = await response.json();
-    if (!response.ok) throw new Error(json.error || "Route refresh failed");
+    if (!response.ok) throw new Error(json.error || "동선 캐시 갱신 실패");
     renderRouteStatus(json.routeRefresh);
     await loadStatus();
     setStatus("동선 캐시 갱신 진행 중");
@@ -155,6 +180,10 @@ async function refreshRouteCache() {
 function downloadCsv() {
   const columns = currentPayload.columns || [];
   const rows = currentPayload.rows || [];
+  if (!columns.length) {
+    alert("다운로드할 고정배차 목록이 없습니다. 먼저 고정배차 갱신을 실행해주세요.");
+    return;
+  }
   const csv = [
     columns.map(csvCell).join(","),
     ...rows.map((row) => columns.map((column) => csvCell(row[column] || "")).join(","))
@@ -181,7 +210,9 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+loadSavedToken();
 setDefaultDates();
+saveTokenButton.addEventListener("click", saveToken);
 refreshButton.addEventListener("click", refreshData);
 routeRefreshButton.addEventListener("click", refreshRouteCache);
 reloadButton.addEventListener("click", loadData);

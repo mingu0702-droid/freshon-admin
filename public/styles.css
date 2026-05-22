@@ -27,6 +27,31 @@ header {
 h1 { margin: 0; font-size: 20px; }
 main { padding: 18px; }
 
+.version-note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.page-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.page-nav a {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  line-height: 1;
+}
+
 .toolbar {
   display: flex;
   gap: 10px;

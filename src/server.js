@@ -34,6 +34,21 @@ let routeRefreshState = {
   current: null
 };
 
+const DEFAULT_ROUTE_VEHICLES = [
+  "101", "102", "103", "104", "105", "106", "107", "108", "109", "110",
+  "111", "112", "113", "114", "115", "116", "117", "118", "119", "120",
+  "121", "122", "123", "124", "125", "126", "127", "151", "152", "153",
+  "154", "155", "156", "157", "158", "159", "160", "161", "162", "163",
+  "164", "165", "166", "167", "168", "169", "170", "171", "172", "173",
+  "175", "176", "177", "178", "201", "202", "203", "204", "205", "206",
+  "207", "208", "209", "210", "211", "212", "213", "214", "215", "216",
+  "217", "218", "219", "220", "221", "222", "223", "225", "227", "228",
+  "229", "230", "231", "234", "235", "236", "용01", "용02", "용03",
+  "용04", "용05", "용06", "용07", "용08", "용09", "용10", "용11",
+  "용12", "용13", "용14", "용31", "용32", "용33", "용34", "용35",
+  "척01", "척02", "척05", "척06", "척07", "척08", "척09"
+];
+
 function eachDate(startDate, endDate) {
   const dates = [];
   const start = new Date(`${startDate}T00:00:00`);
@@ -47,10 +62,11 @@ function eachDate(startDate, endDate) {
 
 function parseVehicles(value) {
   if (Array.isArray(value)) return value.map(String).map((v) => v.trim()).filter(Boolean);
-  return String(value || "")
+  const vehicles = String(value || "")
     .split(/[\s,]+/)
     .map((v) => v.trim())
     .filter(Boolean);
+  return vehicles.length ? vehicles : DEFAULT_ROUTE_VEHICLES;
 }
 
 async function runRouteBatch({ startDate, endDate, vehicles, center }) {
@@ -181,8 +197,8 @@ app.post("/api/refresh-daily-routes", requireAdmin, async (req, res) => {
   const vehicles = parseVehicles(req.body?.vehicles);
   const center = String(req.body?.center || "");
 
-  if (!startDate || !endDate || !vehicles.length) {
-    return res.status(400).json({ error: "startDate, endDate, and vehicles are required." });
+  if (!startDate || !endDate) {
+    return res.status(400).json({ error: "startDate and endDate are required." });
   }
 
   runRouteBatch({ startDate, endDate, vehicles, center }).catch((error) => {

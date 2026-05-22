@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>운영지도 참고</title>
+  <style>
+    body { margin:0; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#0f172a; background:#f1f5f9; }
+    header { background:#fff; border-bottom:1px solid #cbd5e1; padding:18px 22px; }
+    main { max-width:960px; margin:0 auto; padding:22px; }
+    h1 { margin:0 0 8px; font-size:26px; }
+    h2 { margin:28px 0 10px; font-size:18px; }
+    p { line-height:1.65; color:#334155; }
+    .page-nav { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 14px; }
+    .page-nav a { border:1px solid #cbd5e1; background:#fff; color:#0f172a; border-radius:6px; padding:8px 10px; font-size:13px; font-weight:800; text-decoration:none; line-height:1; }
+    .page-nav a.active { background:#2563eb; border-color:#2563eb; color:#fff; }
+    .panel { background:#fff; border:1px solid #cbd5e1; border-radius:8px; padding:18px; margin:14px 0; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+    .metric { background:#f8fafc; border:1px solid #dbe4ef; border-radius:8px; padding:14px; }
+    .metric strong { display:block; margin-bottom:6px; font-size:15px; }
+    ul { margin:8px 0 0 20px; padding:0; color:#334155; line-height:1.65; }
+    code { background:#e2e8f0; border-radius:4px; padding:2px 5px; }
+    a { color:#1d4ed8; }
+  </style>
+</head>
+<body>
+  <header>
+    <nav class="page-nav" aria-label="페이지 이동">
+      <a href="/">권역</a>
+      <a href="/daily-routes.html">일일동선</a>
+      <a href="/reference.html" class="active">운영지도 참고</a>
+      <a href="/admin">관리자</a>
+    </nav>
+    <h1>운영지도 참고</h1>
+    <p>기존 운영지도와 프레시온 연동에서 가져올 만한 구조를 정리한 페이지입니다.</p>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>바로가기</h2>
+      <p><a href="https://dispatching-managemant.onrender.com/index.html" target="_blank" rel="noreferrer">기존 운영지도 열기</a></p>
+      <p>외부 운영지도는 참고용으로만 연결하고, 우리 지도 원본 데이터와 캐시는 별도로 관리합니다.</p>
+    </section>
+    <section class="grid">
+      <article class="metric">
+        <strong>메인 권역 지도</strong>
+        <p>호차별 주 배송 권역을 빠르게 확인하는 화면입니다. 일일동선 기능은 빼서 첫 로딩을 가볍게 유지합니다.</p>
+      </article>
+      <article class="metric">
+        <strong>일일동선 지도</strong>
+        <p>관리자에서 미리 저장한 <code>daily-routes.json</code> 캐시를 읽어 날짜별 순번 깃발과 이동선을 표시합니다.</p>
+      </article>
+      <article class="metric">
+        <strong>관리자</strong>
+        <p>프레시온 동선 수집과 고정배차 데이터 갱신을 담당합니다. 지도 화면은 수집된 캐시만 읽습니다.</p>
+      </article>
+    </section>
+    <section class="panel">
+      <h2>가져갈 설계</h2>
+      <ul>
+        <li>운영지도처럼 지도는 실시간 크롤링 대신 미리 만들어둔 JSON을 읽게 합니다.</li>
+        <li>프레시온 조회는 관리자에서 배치로 돌리고, 사용자는 캐시된 결과를 빠르게 봅니다.</li>
+        <li>페이지를 나눠 권역, 일일동선, 관리자 기능이 서로 로딩을 방해하지 않게 합니다.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

@@ -8,47 +8,60 @@
 </head>
 <body>
   <header>
-    <h1>Freshon 고정배차 관리자</h1>
+    <div>
+      <h1>Freshon 고정배차 관리자</h1>
+      <p class="version-note">최종본: 페이지 분리 + 토큰 저장 + 전체 호차 자동 수집</p>
+      <nav class="page-nav" aria-label="페이지 이동">
+        <a href="/">권역 지도</a>
+        <a href="/daily-routes.html">일일동선</a>
+        <a href="/reference.html">운영지도 참고</a>
+      </nav>
+    </div>
     <div id="status">상태 확인 중</div>
   </header>
   <main>
     <section class="toolbar">
       <div>
-        <label>관리 토큰</label>
-        <input id="adminToken" type="password" placeholder="갱신할 때만 입력">
+        <label for="adminToken">관리 토큰</label>
+        <input id="adminToken" type="password" placeholder="한 번 입력하면 이 브라우저에 저장">
       </div>
-      <button id="refreshButton">고정배차 갱신</button>
-      <button id="reloadButton">목록 새로고침</button>
-      <button id="csvButton">CSV 다운로드</button>
+      <button id="saveTokenButton" class="secondary" type="button">토큰 저장</button>
+      <button id="refreshButton" type="button">고정배차 갱신</button>
+      <button id="reloadButton" type="button">목록 새로고침</button>
+      <button id="csvButton" type="button">CSV 다운로드</button>
     </section>
+
     <section class="toolbar route-toolbar">
       <div>
-        <label>시작일</label>
+        <label for="routeStartDate">시작일</label>
         <input id="routeStartDate" type="date">
       </div>
       <div>
-        <label>종료일</label>
+        <label for="routeEndDate">종료일</label>
         <input id="routeEndDate" type="date">
       </div>
       <div>
-        <label>물류센터</label>
-        <input id="routeCenter" placeholder="예: 오산">
+        <label for="routeCenter">물류센터</label>
+        <input id="routeCenter" placeholder="비워두면 전체/기본 조회">
       </div>
       <div class="wide">
-        <label>호차 목록</label>
-        <textarea id="routeVehicles" rows="3" placeholder="예: 101 102 206 또는 줄바꿈 입력"></textarea>
+        <label for="routeVehicles">호차 목록</label>
+        <textarea id="routeVehicles" rows="3" placeholder="비워두면 전체 호차 자동 수집. 일부만 할 때 예: 101 102 용08 척01"></textarea>
       </div>
-      <button id="routeRefreshButton">동선 캐시 갱신</button>
+      <button id="routeRefreshButton" type="button">동선 캐시 갱신</button>
     </section>
+
     <section class="route-status">
       <b>동선 캐시 상태</b>
       <span id="routeRefreshStatus">-</span>
     </section>
+
     <section class="summary">
       <div><span>기준 기간</span><b id="rangeText">-</b></div>
       <div><span>갱신 시각</span><b id="generatedAt">-</b></div>
       <div><span>행 수</span><b id="rowCount">0</b></div>
     </section>
+
     <section class="table-wrap">
       <table id="dataTable"></table>
     </section>

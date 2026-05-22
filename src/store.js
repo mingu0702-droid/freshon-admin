@@ -16,7 +16,7 @@ export async function readDispatchCache() {
       range: null,
       rows: [],
       columns: [],
-      warning: "No cached data yet. Run refresh after configuring Freshon credentials."
+      warning: "아직 고정배차 캐시가 없습니다. 관리 토큰 저장 후 고정배차 갱신을 눌러주세요."
     };
   }
 }
