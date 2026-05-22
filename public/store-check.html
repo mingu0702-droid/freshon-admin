@@ -3,66 +3,84 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>신규 매장 배차 확인</title>
+  <title>신규지점확인</title>
   <script src="//dapi.kakao.com/v2/maps/sdk.js?appkey=8f1459975e9f3b3aa62089837a2aeb85&libraries=services"></script>
   <script src="./vehicle-data.js"></script>
   <style>
-    :root { --ink:#0f172a; --muted:#64748b; --line:#cbd5e1; --bg:#eef3f8; --panel:#fff; --blue:#2563eb; --ok:#047857; --warn:#b45309; }
+    :root { --ink:#0f172a; --muted:#64748b; --line:#cbd5e1; --bg:#eef3f8; --panel:#fff; --blue:#2563eb; --ok:#047857; --warn:#b45309; --danger:#b91c1c; }
     * { box-sizing:border-box; }
     body { margin:0; font-family:Arial,"Malgun Gothic",sans-serif; color:var(--ink); background:var(--bg); }
-    header { background:#fff; border-bottom:1px solid var(--line); padding:18px 22px; }
-    main { display:grid; grid-template-columns:380px 1fr; gap:14px; padding:14px; }
-    h1 { margin:0 0 6px; font-size:24px; }
-    h2 { margin:0 0 10px; font-size:17px; }
-    p { color:var(--muted); line-height:1.55; }
-    .page-nav { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px; }
+    header { height:86px; display:flex; align-items:center; justify-content:space-between; gap:14px; background:#fff; border-bottom:1px solid var(--line); padding:14px 18px; }
+    h1 { margin:0; font-size:24px; letter-spacing:0; }
+    h2 { margin:0 0 10px; font-size:16px; }
+    p { margin:8px 0; color:var(--muted); line-height:1.5; }
+    .page-nav { display:flex; flex-wrap:wrap; gap:6px; }
     .page-nav a { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:6px; padding:8px 10px; font-size:13px; font-weight:800; text-decoration:none; }
     .page-nav a.active { background:var(--blue); border-color:var(--blue); color:#fff; }
-    .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; }
-    label { display:block; margin:12px 0 6px; font-size:13px; font-weight:800; }
+    main { height:calc(100vh - 86px); display:grid; grid-template-columns:360px minmax(0,1fr); }
+    aside { overflow:auto; background:#fff; border-right:1px solid var(--line); padding:16px; }
+    #map { min-height:100%; }
+    label { display:block; margin:14px 0 6px; font-size:13px; font-weight:900; }
     input, textarea { width:100%; border:1px solid var(--line); border-radius:6px; padding:10px; font:inherit; }
-    textarea { min-height:78px; resize:vertical; }
-    button { margin-top:12px; width:100%; border:0; border-radius:6px; background:var(--blue); color:#fff; padding:11px 12px; font-weight:900; cursor:pointer; }
-    .result { display:grid; gap:10px; }
-    .card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px; }
-    .status { display:inline-block; border-radius:999px; padding:5px 9px; font-size:12px; font-weight:900; color:#fff; background:var(--warn); }
-    .status.ok { background:var(--ok); }
-    .status.info { background:var(--blue); }
-    .title { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
-    .title strong { font-size:18px; }
-    .muted { color:var(--muted); font-size:13px; }
-    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; margin-top:10px; }
-    .mini { background:#f8fafc; border:1px solid #dbe4ef; border-radius:6px; padding:10px; }
-    .mini b { display:block; margin-bottom:3px; }
+    textarea { min-height:94px; resize:vertical; }
+    button { margin-top:12px; width:100%; border:0; border-radius:6px; background:var(--blue); color:#fff; padding:12px; font-weight:900; cursor:pointer; }
+    .hint { font-size:12px; color:var(--muted); }
+    .result { margin-top:14px; display:grid; gap:10px; }
+    .card { background:#f8fafc; border:1px solid #dbe4ef; border-radius:8px; padding:12px; }
+    .decision { background:#fff; border:2px solid var(--blue); }
+    .decision.ok { border-color:var(--ok); }
+    .decision.warn { border-color:var(--warn); }
+    .decision.danger { border-color:var(--danger); }
+    .badge { display:inline-block; border-radius:999px; padding:5px 8px; color:#fff; background:var(--blue); font-size:12px; font-weight:900; }
+    .badge.ok { background:var(--ok); }
+    .badge.warn { background:var(--warn); }
+    .badge.danger { background:var(--danger); }
+    .big { font-size:21px; font-weight:900; margin:7px 0 3px; }
+    .mini-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+    .mini { background:#fff; border:1px solid var(--line); border-radius:6px; padding:9px; font-size:13px; }
+    .mini b { display:block; margin-bottom:4px; }
     ol { margin:8px 0 0 20px; padding:0; }
-    li { margin:7px 0; line-height:1.45; }
-    #map { height:calc(100vh - 120px); min-height:560px; border:1px solid var(--line); border-radius:8px; }
-    @media (max-width:900px) { main { grid-template-columns:1fr; } #map { height:420px; min-height:420px; } }
+    li { margin:7px 0; line-height:1.4; }
+    .pin-label { padding:5px 8px; border:2px solid #111827; background:#fff; border-radius:6px; font-size:13px; font-weight:900; white-space:nowrap; box-shadow:0 2px 8px rgba(15,23,42,.18); }
+    .candidate-label { padding:4px 7px; border:1px solid #2563eb; background:#eff6ff; color:#1d4ed8; border-radius:6px; font-size:12px; font-weight:900; white-space:nowrap; }
+    @media (max-width:900px) {
+      header { height:auto; display:block; }
+      .page-nav { margin-top:10px; }
+      main { height:auto; grid-template-columns:1fr; }
+      aside { border-right:0; border-bottom:1px solid var(--line); }
+      #map { height:62vh; min-height:420px; }
+    }
   </style>
 </head>
 <body>
   <header>
+    <div>
+      <h1>신규지점확인</h1>
+      <p class="hint">주소 기준으로 지도에 핀을 찍고 주변 권역을 보고 배차 예정 호차를 추천합니다.</p>
+    </div>
     <nav class="page-nav" aria-label="페이지 이동">
       <a href="/">권역 지도</a>
       <a href="/daily-routes.html">일일동선</a>
-      <a href="/store-check.html" class="active">입점 확인</a>
-      <a href="/reference.html">운영지도 참고</a>
+      <a href="/store-check.html" class="active">신규지점확인</a>
       <a href="/admin">관리자</a>
     </nav>
-    <h1>신규 매장 배차 확인</h1>
-    <p>고객코드나 주소를 넣으면 기존 배송 여부와 추천 호차를 조회합니다. 신규 주소 판정은 기존 권역/주변 배송처 기준 추정입니다.</p>
   </header>
   <main>
-    <section class="panel">
-      <h2>조회 조건</h2>
-      <label for="customerCode">고객코드</label>
-      <input id="customerCode" placeholder="예: S245125">
-      <label for="keyword">매장명 또는 주소</label>
-      <textarea id="keyword" placeholder="예: 경기 남양주시 별내3로 320 또는 매장명"></textarea>
-      <button id="checkButton" type="button">배차 가능성 확인</button>
-      <p class="muted">고객코드가 있으면 기존 배송처를 먼저 찾고, 주소만 있으면 카카오 주소검색과 주변 배송처로 추천합니다.</p>
-    </section>
-    <section class="result" id="result"></section>
+    <aside>
+      <h2>조회조건</h2>
+      <label for="addressInput">매장명 주소</label>
+      <textarea id="addressInput" placeholder="예: 김금자숯불갈비 전주중화산점 전주시 완산구 화산천변5길 18"></textarea>
+      <label for="customerCode">고객 코드</label>
+      <input id="customerCode" placeholder="있으면 입력. 예: S245125">
+      <button id="checkButton" type="button">지도에 핀 찍고 확인</button>
+      <p class="hint">유사 주소 검색은 하지 않고, 입력한 주소 좌표와 주변 기존 배송 권역으로 판단합니다.</p>
+      <div class="result" id="result">
+        <article class="card">
+          <b>대기 중</b>
+          <p>매장명 주소를 입력하면 신규 지점 후보 핀과 추천 호차가 표시됩니다.</p>
+        </article>
+      </div>
+    </aside>
     <section id="map"></section>
   </main>
   <script>
@@ -70,7 +88,7 @@
     const vehicles = data.vehicles || [];
     const customers = vehicles.flatMap((vehicle) => (vehicle.customers || []).map((customer) => ({ ...customer, vehicle })));
     const fmt = new Intl.NumberFormat("ko-KR");
-    let map, geocoder, markers = [];
+    let map, geocoder, markerLayer = [], overlayLayer = [];
 
     function esc(value) {
       return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
@@ -91,16 +109,24 @@
       return 2 * r * Math.asin(Math.sqrt(h));
     }
 
-    function clearMarkers() {
-      markers.forEach((marker) => marker.setMap(null));
-      markers = [];
+    function clearMap() {
+      markerLayer.forEach((item) => item.setMap(null));
+      overlayLayer.forEach((item) => item.setMap(null));
+      markerLayer = [];
+      overlayLayer = [];
     }
 
-    function addMarker(lat, lng, text) {
-      const marker = new kakao.maps.Marker({ position:new kakao.maps.LatLng(lat, lng), map });
-      const info = new kakao.maps.InfoWindow({ content:`<div style="padding:6px 8px;font-size:12px;white-space:nowrap">${esc(text)}</div>` });
-      kakao.maps.event.addListener(marker, "click", () => info.open(map, marker));
-      markers.push(marker);
+    function addMarker(lat, lng, text, className = "candidate-label") {
+      const position = new kakao.maps.LatLng(lat, lng);
+      const marker = new kakao.maps.Marker({ position, map });
+      const overlay = new kakao.maps.CustomOverlay({
+        position,
+        yAnchor: 1.75,
+        content: `<div class="${className}">${esc(text)}</div>`
+      });
+      overlay.setMap(map);
+      markerLayer.push(marker);
+      overlayLayer.push(overlay);
       return marker;
     }
 
@@ -112,135 +138,147 @@
       geocoder = new kakao.maps.services.Geocoder();
     }
 
-    function findExisting(code, keyword) {
+    function existingByCode(code) {
       const codeNorm = norm(code);
-      const keyNorm = norm(keyword);
-      if (codeNorm) {
-        const exact = customers.filter((c) => norm(c.id) === codeNorm);
-        if (exact.length) return exact;
-      }
-      if (!keyNorm) return [];
-      return customers.filter((c) => {
-        return norm(c.id).includes(keyNorm) || norm(c.name).includes(keyNorm) || norm(c.address).includes(keyNorm);
-      }).slice(0, 20);
+      if (!codeNorm) return null;
+      return customers.find((customer) => norm(customer.id) === codeNorm) || null;
     }
 
-    function vehicleScoreForText(text) {
-      const key = norm(text);
+    function nearestCandidates(point) {
+      const nearest = customers
+        .filter((customer) => Number.isFinite(customer.lat) && Number.isFinite(customer.lng))
+        .map((customer) => ({ customer, km:distanceKm(point, customer) }))
+        .sort((a, b) => a.km - b.km)
+        .slice(0, 24);
+      const byVehicle = new Map();
+      for (const item of nearest) {
+        const key = item.customer.vehicle.vehicle;
+        const previous = byVehicle.get(key);
+        if (!previous || item.km < previous.km) {
+          byVehicle.set(key, { vehicle:item.customer.vehicle, km:item.km, sample:item.customer });
+        }
+      }
+      return [...byVehicle.values()].sort((a, b) => a.km - b.km).slice(0, 8);
+    }
+
+    function findAreaMatches(address) {
+      const key = norm(address);
       return vehicles.map((vehicle) => {
         let score = 0;
         for (const [area, count] of vehicle.top_districts || []) {
           if (key.includes(norm(area))) score += count * 4;
         }
         for (const area of vehicle.top_admin_areas || []) {
-          if (key.includes(norm(area.name))) score += area.count * 5;
+          if (key.includes(norm(area.name))) score += area.count * 6;
         }
-        if (key.includes(norm(vehicle.primary_area))) score += 20;
+        if (key.includes(norm(vehicle.primary_area))) score += 25;
         return { vehicle, score };
-      }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 6);
+      }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score).slice(0, 6);
     }
 
-    function nearestCandidates(point) {
-      const nearest = customers
-        .filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lng))
-        .map((c) => ({ customer:c, km:distanceKm(point, c) }))
-        .sort((a, b) => a.km - b.km)
-        .slice(0, 12);
-      const byVehicle = new Map();
-      for (const item of nearest) {
-        const key = item.customer.vehicle.vehicle;
-        const prev = byVehicle.get(key);
-        if (!prev || item.km < prev.km) byVehicle.set(key, { vehicle:item.customer.vehicle, km:item.km, sample:item.customer });
-      }
-      return [...byVehicle.values()].sort((a, b) => a.km - b.km).slice(0, 6);
-    }
-
-    function renderExisting(matches) {
-      clearMarkers();
-      const first = matches[0];
-      map.setCenter(new kakao.maps.LatLng(first.lat, first.lng));
-      map.setLevel(5);
-      matches.slice(0, 12).forEach((c) => addMarker(c.lat, c.lng, `${c.id} / ${c.vehicle.vehicle}호`));
-      document.getElementById("result").innerHTML = `
-        <article class="card">
-          <div class="title"><strong>이미 배송 중인 고객입니다</strong><span class="status ok">기존 배송처</span></div>
-          <p class="muted">일치 또는 유사 결과 ${fmt.format(matches.length)}건을 찾았습니다.</p>
-          <ol>
-            ${matches.slice(0, 10).map((c) => `<li><b>${esc(c.id)} / ${esc(c.name)}</b><br>${esc(c.address)}<br><span class="muted">${esc(c.vehicle.vehicle)}호차 · ${esc(c.vehicle.area_label)} · ${esc(c.delivery_pattern || "-")}</span></li>`).join("")}
-          </ol>
-        </article>`;
-    }
-
-    function renderRecommendation(address, point, nearest, textScores) {
-      clearMarkers();
-      addMarker(point.lat, point.lng, "신규 매장 후보");
-      nearest.slice(0, 5).forEach((x) => addMarker(x.sample.lat, x.sample.lng, `${x.vehicle.vehicle}호 주변 배송처`));
-      map.setCenter(new kakao.maps.LatLng(point.lat, point.lng));
-      map.setLevel(6);
+    function decide(nearest, areaMatches) {
       const best = nearest[0];
-      const status = best && best.km <= 5 ? "배차 가능성 높음" : best && best.km <= 12 ? "검토 필요" : "신규 권역 검토";
-      const statusClass = best && best.km <= 5 ? "ok" : "info";
-      document.getElementById("result").innerHTML = `
-        <article class="card">
-          <div class="title"><strong>${esc(status)}</strong><span class="status ${statusClass}">추정</span></div>
-          <p class="muted">${esc(address)}</p>
-          <div class="grid">
-            <div class="mini"><b>1순위 추천</b>${best ? esc(best.vehicle.vehicle + "호 / " + best.vehicle.area_label) : "-"}</div>
-            <div class="mini"><b>가까운 기존 배송처</b>${best ? esc(best.sample.name) : "-"}</div>
-            <div class="mini"><b>거리</b>${best ? best.km.toFixed(1) + "km" : "-"}</div>
-          </div>
-        </article>
-        <article class="card">
-          <h2>주변 배송처 기준 추천</h2>
-          <ol>
-            ${nearest.map((x) => `<li><b>${esc(x.vehicle.vehicle)}호</b> · ${esc(x.vehicle.area_label)} · ${x.km.toFixed(1)}km<br><span class="muted">근처 배송처: ${esc(x.sample.id)} / ${esc(x.sample.name)}</span></li>`).join("")}
-          </ol>
-        </article>
-        <article class="card">
-          <h2>주소 권역명 기준 후보</h2>
-          <ol>
-            ${textScores.length ? textScores.map((x) => `<li><b>${esc(x.vehicle.vehicle)}호</b> · ${esc(x.vehicle.area_label)} · 점수 ${fmt.format(x.score)}</li>`).join("") : "<li>주소명으로 바로 매칭된 권역은 없습니다.</li>"}
-          </ol>
-        </article>`;
+      if (!best) return { type:"danger", title:"판단 필요", text:"주변 기존 배송처가 확인되지 않습니다.", planned:null };
+
+      const closeVehicles = nearest.filter((item) => item.km <= Math.max(3, best.km + 1.2));
+      const areaTop = areaMatches[0]?.vehicle.vehicle;
+      const isOverlap = closeVehicles.length >= 2 && closeVehicles.some((item) => item.vehicle.vehicle !== best.vehicle.vehicle);
+      const areaConflict = areaTop && areaTop !== best.vehicle.vehicle && areaMatches[0].score >= 25;
+
+      if (isOverlap || areaConflict) {
+        return {
+          type:"warn",
+          title:"판단 필요",
+          text:"인근 권역에 여러 호차가 겹칩니다. 아래 후보를 보고 배차 담당자가 선택해야 합니다.",
+          planned:null
+        };
+      }
+      return {
+        type:"ok",
+        title:`${best.vehicle.vehicle}호차 배차 예정`,
+        text:`가장 가까운 기존 배송처 기준 ${best.km.toFixed(1)}km 거리입니다.`,
+        planned:best
+      };
     }
 
-    function geocodeAddress(address) {
+    function geocode(address) {
       return new Promise((resolve, reject) => {
         geocoder.addressSearch(address, (result, status) => {
           if (status === kakao.maps.services.Status.OK && result[0]) {
             resolve({ lat:Number(result[0].y), lng:Number(result[0].x), address:result[0].address_name || address });
           } else {
-            reject(new Error("주소 좌표를 찾지 못했습니다. 도로명/지번 주소를 조금 더 자세히 입력해주세요."));
+            reject(new Error("주소 좌표를 찾지 못했습니다. 매장명보다 도로명/지번 주소를 더 자세히 입력해주세요."));
           }
         });
       });
     }
 
+    function renderExisting(existing) {
+      clearMap();
+      addMarker(existing.lat, existing.lng, `${existing.vehicle.vehicle}호 기존 배송처`, "pin-label");
+      map.setCenter(new kakao.maps.LatLng(existing.lat, existing.lng));
+      map.setLevel(5);
+      document.getElementById("result").innerHTML = `
+        <article class="card decision ok">
+          <span class="badge ok">기존 배송처</span>
+          <div class="big">${esc(existing.vehicle.vehicle)}호차 배차 중</div>
+          <p>${esc(existing.name)}</p>
+          <p class="hint">${esc(existing.address)}</p>
+          <div class="mini-grid">
+            <div class="mini"><b>권역</b>${esc(existing.vehicle.area_label)}</div>
+            <div class="mini"><b>배송 패턴</b>${esc(existing.delivery_pattern || "-")}</div>
+          </div>
+        </article>`;
+    }
+
+    function renderDecision(point, nearest, areaMatches, decision) {
+      clearMap();
+      addMarker(point.lat, point.lng, "신규 지점", "pin-label");
+      nearest.slice(0, 5).forEach((item) => addMarker(item.sample.lat, item.sample.lng, `${item.vehicle.vehicle}호 ${item.km.toFixed(1)}km`));
+      map.setCenter(new kakao.maps.LatLng(point.lat, point.lng));
+      map.setLevel(6);
+
+      document.getElementById("result").innerHTML = `
+        <article class="card decision ${decision.type}">
+          <span class="badge ${decision.type}">${decision.type === "ok" ? "배차 예정" : "확인 필요"}</span>
+          <div class="big">${esc(decision.title)}</div>
+          <p>${esc(decision.text)}</p>
+          <p class="hint">${esc(point.address)}</p>
+        </article>
+        <article class="card">
+          <b>인근 호차 후보</b>
+          <ol>
+            ${nearest.map((item) => `<li><b>${esc(item.vehicle.vehicle)}호</b> · ${esc(item.vehicle.area_label)} · ${item.km.toFixed(1)}km<br><span class="hint">근처 배송처: ${esc(item.sample.name)}</span></li>`).join("")}
+          </ol>
+        </article>
+        <article class="card">
+          <b>주소 권역명 기준</b>
+          <ol>
+            ${areaMatches.length ? areaMatches.map((item) => `<li><b>${esc(item.vehicle.vehicle)}호</b> · ${esc(item.vehicle.area_label)} · 점수 ${fmt.format(item.score)}</li>`).join("") : "<li>주소명으로 매칭되는 권역명이 없습니다.</li>"}
+          </ol>
+        </article>`;
+    }
+
     async function runCheck() {
+      const address = document.getElementById("addressInput").value.trim();
       const code = document.getElementById("customerCode").value.trim();
-      const keyword = document.getElementById("keyword").value.trim();
-      const matches = findExisting(code, keyword);
-      if (matches.length) {
-        renderExisting(matches);
+      const existing = existingByCode(code);
+      if (existing) {
+        renderExisting(existing);
         return;
       }
-      if (!keyword) {
-        document.getElementById("result").innerHTML = `<article class="card"><strong>조회어가 필요합니다</strong><p>고객코드나 주소를 입력해주세요.</p></article>`;
+      if (!address) {
+        document.getElementById("result").innerHTML = `<article class="card"><b>주소가 필요합니다</b><p>매장명 주소를 입력해주세요.</p></article>`;
         return;
       }
-      document.getElementById("result").innerHTML = `<article class="card"><strong>주소 확인 중...</strong><p>카카오 주소검색으로 좌표를 찾고 있습니다.</p></article>`;
+      document.getElementById("result").innerHTML = `<article class="card"><b>주소 확인 중</b><p>카카오 지도에서 좌표를 찾고 있습니다.</p></article>`;
       try {
-        const point = await geocodeAddress(keyword);
-        renderRecommendation(point.address, point, nearestCandidates(point), vehicleScoreForText(keyword));
+        const point = await geocode(address);
+        const nearest = nearestCandidates(point);
+        const areaMatches = findAreaMatches(address);
+        renderDecision(point, nearest, areaMatches, decide(nearest, areaMatches));
       } catch (error) {
-        const textScores = vehicleScoreForText(keyword);
-        document.getElementById("result").innerHTML = `
-          <article class="card">
-            <div class="title"><strong>좌표 확인 실패</strong><span class="status">검토 필요</span></div>
-            <p>${esc(error.message)}</p>
-            <h2>주소 권역명 기준 후보</h2>
-            <ol>${textScores.length ? textScores.map((x) => `<li><b>${esc(x.vehicle.vehicle)}호</b> · ${esc(x.vehicle.area_label)} · 점수 ${fmt.format(x.score)}</li>`).join("") : "<li>권역명 매칭 후보가 없습니다.</li>"}</ol>
-          </article>`;
+        document.getElementById("result").innerHTML = `<article class="card decision danger"><span class="badge danger">확인 실패</span><div class="big">판단 필요</div><p>${esc(error.message)}</p></article>`;
       }
     }
 

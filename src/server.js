@@ -32,22 +32,15 @@ let routeRefreshState = {
   completed: 0,
   skipped: 0,
   failed: 0,
-  current: null
+  current: null,
+  active: [],
+  concurrency: 1
 };
 
+let dailyRouteWriteQueue = Promise.resolve();
+
 const DEFAULT_ROUTE_VEHICLES = [
-  "101", "102", "103", "104", "105", "106", "107", "108", "109", "110",
-  "111", "112", "113", "114", "115", "116", "117", "118", "119", "120",
-  "121", "122", "123", "124", "125", "126", "127", "151", "152", "153",
-  "154", "155", "156", "157", "158", "159", "160", "161", "162", "163",
-  "164", "165", "166", "167", "168", "169", "170", "171", "172", "173",
-  "175", "176", "177", "178", "201", "202", "203", "204", "205", "206",
-  "207", "208", "209", "210", "211", "212", "213", "214", "215", "216",
-  "217", "218", "219", "220", "221", "222", "223", "225", "227", "228",
-  "229", "230", "231", "234", "235", "236", "용01", "용02", "용03",
-  "용04", "용05", "용06", "용07", "용08", "용09", "용10", "용11",
-  "용12", "용13", "용14", "용31", "용32", "용33", "용34", "용35",
-  "척01", "척02", "척05", "척06", "척07", "척08", "척09"
+  "101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "111", "112", "113", "114", "115", "116", "117", "118", "119", "120", "121", "122", "123", "124", "125", "126", "127", "151", "152", "153", "154", "155", "156", "157", "158", "159", "160", "161", "162", "163", "164", "165", "166", "167", "168", "169", "170", "171", "172", "173", "175", "176", "177", "178", "201", "202", "203", "204", "205", "206", "207", "208", "209", "210", "211", "212", "213", "214", "215", "216", "217", "218", "219", "220", "221", "222", "223", "225", "227", "228", "229", "230", "231", "234", "235", "236", "용01", "용02", "용03", "용04", "용05", "용06", "용07", "용08", "용09", "용10", "용11", "용12", "용13", "용14", "용31", "용32", "용33", "용34", "용35", "척01", "척02", "척05", "척06", "척07", "척08", "척09"
 ];
 
 function eachDate(startDate, endDate) {
@@ -70,46 +63,79 @@ function parseVehicles(value) {
   return vehicles.length ? vehicles : DEFAULT_ROUTE_VEHICLES;
 }
 
-async function runRouteBatch({ startDate, endDate, vehicles, center }) {
+function parseConcurrency(value) {
+  const number = Number(value || process.env.ROUTE_REFRESH_CONCURRENCY || 3);
+  if (!Number.isFinite(number)) return 3;
+  return Math.max(1, Math.min(5, Math.floor(number)));
+}
+
+async function writeDailyRouteQueued(payload) {
+  dailyRouteWriteQueue = dailyRouteWriteQueue.then(() => writeDailyRoute(payload));
+  return dailyRouteWriteQueue;
+}
+
+async function runRouteBatch({ startDate, endDate, vehicles, center, concurrency = 3 }) {
   const dates = eachDate(startDate, endDate);
+  const jobs = dates.flatMap((date) => vehicles.map((vehicle) => ({ date, vehicle })));
+  let nextJobIndex = 0;
+
   routeRefreshState = {
     running: true,
     lastError: null,
     lastStartedAt: new Date().toISOString(),
     lastFinishedAt: null,
-    total: dates.length * vehicles.length,
+    total: jobs.length,
     completed: 0,
     skipped: 0,
     failed: 0,
-    current: null
+    current: null,
+    active: [],
+    concurrency
   };
 
-  try {
+  async function nextJob() {
+    const index = nextJobIndex;
+    nextJobIndex += 1;
+    return jobs[index] || null;
+  }
+
+  async function runWorker(workerId) {
     await withDailyRouteSession(async (scrape) => {
-      for (const date of dates) {
-        for (const vehicle of vehicles) {
-          routeRefreshState.current = { date, vehicle };
-          try {
-            const cached = await readDailyRoute(date, vehicle);
-            if (cached?.stops?.length) {
-              routeRefreshState.skipped += 1;
-              routeRefreshState.completed += 1;
-              continue;
-            }
-            const payload = await scrape({ date, vehicle, center });
-            await writeDailyRoute(payload);
+      while (routeRefreshState.running) {
+        const job = await nextJob();
+        if (!job) return;
+        const { date, vehicle } = job;
+        routeRefreshState.current = { date, vehicle };
+        routeRefreshState.active = [
+          ...routeRefreshState.active.filter((item) => item.workerId !== workerId),
+          { workerId, date, vehicle }
+        ];
+        try {
+          const cached = await readDailyRoute(date, vehicle);
+          if (cached?.stops?.length) {
+            routeRefreshState.skipped += 1;
             routeRefreshState.completed += 1;
-          } catch (error) {
-            routeRefreshState.failed += 1;
-            routeRefreshState.lastError = `${date} ${vehicle}: ${error.message}`;
+            continue;
           }
+          const payload = await scrape({ date, vehicle, center });
+          await writeDailyRouteQueued(payload);
+          routeRefreshState.completed += 1;
+        } catch (error) {
+          routeRefreshState.failed += 1;
+          routeRefreshState.lastError = `${date} ${vehicle}: ${error.message}`;
         }
       }
     });
+  }
+
+  try {
+    const workerCount = Math.min(concurrency, jobs.length || 1);
+    await Promise.all(Array.from({ length: workerCount }, (_value, index) => runWorker(index + 1)));
   } finally {
     routeRefreshState.running = false;
     routeRefreshState.lastFinishedAt = new Date().toISOString();
     routeRefreshState.current = null;
+    routeRefreshState.active = [];
   }
 }
 
@@ -206,12 +232,13 @@ app.post("/api/refresh-daily-routes", requireAdmin, async (req, res) => {
   const endDate = String(req.body?.endDate || req.body?.date || startDate);
   const vehicles = parseVehicles(req.body?.vehicles);
   const center = String(req.body?.center || "");
+  const concurrency = parseConcurrency(req.body?.concurrency);
 
   if (!startDate || !endDate) {
     return res.status(400).json({ error: "startDate and endDate are required." });
   }
 
-  runRouteBatch({ startDate, endDate, vehicles, center }).catch((error) => {
+  runRouteBatch({ startDate, endDate, vehicles, center, concurrency }).catch((error) => {
     routeRefreshState.running = false;
     routeRefreshState.lastError = error.message;
     routeRefreshState.lastFinishedAt = new Date().toISOString();
@@ -222,7 +249,8 @@ app.post("/api/refresh-daily-routes", requireAdmin, async (req, res) => {
     message: "Daily route refresh started.",
     routeRefresh: {
       ...routeRefreshState,
-      total: eachDate(startDate, endDate).length * vehicles.length
+      total: eachDate(startDate, endDate).length * vehicles.length,
+      concurrency
     }
   });
 });
