@@ -6,7 +6,7 @@ import { requireAdmin, requireView } from "./auth.js";
 import { getDefaultDispatchRange } from "./dateRange.js";
 import { readDailyRoute, readDispatchCache, writeDailyRoute, writeDispatchCache } from "./store.js";
 import { refreshFixedDispatchData } from "./scraper/freshonFixedDispatch.js";
-import { refreshDailyRouteData } from "./scraper/freshonDailyRoute.js";
+import { refreshDailyRouteData, withDailyRouteSession } from "./scraper/freshonDailyRoute.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,6 +30,7 @@ let routeRefreshState = {
   lastFinishedAt: null,
   total: 0,
   completed: 0,
+  skipped: 0,
   failed: 0,
   current: null
 };
@@ -78,24 +79,33 @@ async function runRouteBatch({ startDate, endDate, vehicles, center }) {
     lastFinishedAt: null,
     total: dates.length * vehicles.length,
     completed: 0,
+    skipped: 0,
     failed: 0,
     current: null
   };
 
   try {
-    for (const date of dates) {
-      for (const vehicle of vehicles) {
-        routeRefreshState.current = { date, vehicle };
-        try {
-          const payload = await refreshDailyRouteData({ date, vehicle, center });
-          await writeDailyRoute(payload);
-          routeRefreshState.completed += 1;
-        } catch (error) {
-          routeRefreshState.failed += 1;
-          routeRefreshState.lastError = `${date} ${vehicle}: ${error.message}`;
+    await withDailyRouteSession(async (scrape) => {
+      for (const date of dates) {
+        for (const vehicle of vehicles) {
+          routeRefreshState.current = { date, vehicle };
+          try {
+            const cached = await readDailyRoute(date, vehicle);
+            if (cached?.stops?.length) {
+              routeRefreshState.skipped += 1;
+              routeRefreshState.completed += 1;
+              continue;
+            }
+            const payload = await scrape({ date, vehicle, center });
+            await writeDailyRoute(payload);
+            routeRefreshState.completed += 1;
+          } catch (error) {
+            routeRefreshState.failed += 1;
+            routeRefreshState.lastError = `${date} ${vehicle}: ${error.message}`;
+          }
         }
       }
-    }
+    });
   } finally {
     routeRefreshState.running = false;
     routeRefreshState.lastFinishedAt = new Date().toISOString();

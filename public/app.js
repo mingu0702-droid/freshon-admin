@@ -78,11 +78,13 @@ function renderRouteStatus(state) {
   }
   if (state.running) {
     const current = state.current ? ` / 현재 ${state.current.date} ${state.current.vehicle}` : "";
-    routeRefreshStatus.textContent = `진행 중 ${state.completed}/${state.total}, 실패 ${state.failed}${current}`;
+    const skipped = state.skipped ? `, 기존 캐시 건너뜀 ${state.skipped}` : "";
+    routeRefreshStatus.textContent = `진행 중 ${state.completed}/${state.total}, 실패 ${state.failed}${skipped}${current}`;
     return;
   }
   const finished = state.lastFinishedAt ? new Date(state.lastFinishedAt).toLocaleString("ko-KR") : "-";
-  routeRefreshStatus.textContent = `대기 중 / 완료 ${state.completed || 0}/${state.total || 0}, 실패 ${state.failed || 0}, 마지막 완료 ${finished}${state.lastError ? ` / 최근 오류: ${state.lastError}` : ""}`;
+  const skipped = state.skipped ? `, 기존 캐시 건너뜀 ${state.skipped}` : "";
+  routeRefreshStatus.textContent = `대기 중 / 완료 ${state.completed || 0}/${state.total || 0}, 실패 ${state.failed || 0}${skipped}, 마지막 완료 ${finished}${state.lastError ? ` / 최근 오류: ${state.lastError}` : ""}`;
 }
 
 async function loadStatus() {

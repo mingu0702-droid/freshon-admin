@@ -151,31 +151,39 @@ function toStops(rows) {
     .sort((a, b) => a.sequence - b.sequence);
 }
 
-export async function refreshDailyRouteData({ date, vehicle, center = "" }) {
-  assertCredentials();
+async function scrapeDailyRouteOnPage(page, { date, vehicle, center = "" }) {
   if (!date || !vehicle) {
     throw new Error("date and vehicle are required.");
   }
 
+  await setFilters(page, { date, vehicle, center });
+  await clickSearch(page);
+
+  const rows = await extractGridRows(page);
+  const stops = toStops(rows);
+  return {
+    generatedAt: new Date().toISOString(),
+    source: "freshon",
+    date,
+    vehicle,
+    center,
+    rowCount: stops.length,
+    stops
+  };
+}
+
+export async function withDailyRouteSession(callback) {
+  assertCredentials();
   const browser = await chromium.launch({ headless: config.headless });
   const page = await browser.newPage();
   try {
     await navigateToFixedDispatch(page);
-    await setFilters(page, { date, vehicle, center });
-    await clickSearch(page);
-
-    const rows = await extractGridRows(page);
-    const stops = toStops(rows);
-    return {
-      generatedAt: new Date().toISOString(),
-      source: "freshon",
-      date,
-      vehicle,
-      center,
-      rowCount: stops.length,
-      stops
-    };
+    return await callback((job) => scrapeDailyRouteOnPage(page, job));
   } finally {
     await browser.close();
   }
+}
+
+export async function refreshDailyRouteData({ date, vehicle, center = "" }) {
+  return withDailyRouteSession((scrape) => scrape({ date, vehicle, center }));
 }
