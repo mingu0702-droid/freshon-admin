@@ -1,6 +1,8 @@
 import { chromium } from "playwright";
 import { config } from "../config.js";
 
+const ROUTE_TIMEOUT_MS = Math.min(config.navTimeoutMs, 25000);
+
 function assertCredentials() {
   if (!config.freshonId || !config.freshonPassword) {
     throw new Error("FRESHON_ID and FRESHON_PASSWORD must be configured as environment variables.");
@@ -25,7 +27,7 @@ async function clickText(page, texts) {
   for (const text of texts) {
     const target = page.getByText(text, { exact: false }).first();
     if (await target.count()) {
-      const clicked = await target.click({ timeout: 5000 }).then(() => true).catch(() => false);
+      const clicked = await target.click({ timeout: 4000 }).then(() => true).catch(() => false);
       if (clicked) return true;
     }
   }
@@ -52,23 +54,26 @@ async function maybeLogin(page) {
 
   if (idFilled && pwFilled) {
     await Promise.allSettled([
-      page.waitForLoadState("networkidle", { timeout: config.navTimeoutMs }),
+      page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }),
       clickText(page, ["로그인", "Login"])
     ]);
   }
 }
 
 async function navigateToFixedDispatch(page) {
+  page.setDefaultTimeout(ROUTE_TIMEOUT_MS);
+  page.setDefaultNavigationTimeout(ROUTE_TIMEOUT_MS);
+
   await page.goto(`${config.freshonBaseUrl}#/bo/wm/standard/driverCarListPage`, {
     waitUntil: "domcontentloaded",
-    timeout: config.navTimeoutMs
+    timeout: ROUTE_TIMEOUT_MS
   });
   await maybeLogin(page);
   await page.goto(`${config.freshonBaseUrl}#/bo/wm/standard/driverCarListPage`, {
     waitUntil: "domcontentloaded",
-    timeout: config.navTimeoutMs
+    timeout: ROUTE_TIMEOUT_MS
   });
-  await page.waitForLoadState("networkidle", { timeout: config.navTimeoutMs }).catch(() => null);
+  await page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }).catch(() => null);
 }
 
 async function fillByNearbyLabel(page, labels, value) {
@@ -106,8 +111,8 @@ async function setFilters(page, { date, vehicle, center }) {
 
 async function clickSearch(page) {
   await clickText(page, ["조회", "검색", "Search"]);
-  await page.waitForLoadState("networkidle", { timeout: config.navTimeoutMs }).catch(() => null);
-  await page.waitForTimeout(2500);
+  await page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }).catch(() => null);
+  await page.waitForTimeout(1200);
 }
 
 async function extractGridRows(page) {

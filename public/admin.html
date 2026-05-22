@@ -17,9 +17,32 @@
         <label>관리 토큰</label>
         <input id="adminToken" type="password" placeholder="갱신할 때만 입력">
       </div>
-      <button id="refreshButton">데이터 갱신</button>
+      <button id="refreshButton">고정배차 갱신</button>
       <button id="reloadButton">목록 새로고침</button>
       <button id="csvButton">CSV 다운로드</button>
+    </section>
+    <section class="toolbar route-toolbar">
+      <div>
+        <label>시작일</label>
+        <input id="routeStartDate" type="date">
+      </div>
+      <div>
+        <label>종료일</label>
+        <input id="routeEndDate" type="date">
+      </div>
+      <div>
+        <label>물류센터</label>
+        <input id="routeCenter" placeholder="예: 오산">
+      </div>
+      <div class="wide">
+        <label>호차 목록</label>
+        <textarea id="routeVehicles" rows="3" placeholder="예: 101 102 206 또는 줄바꿈 입력"></textarea>
+      </div>
+      <button id="routeRefreshButton">동선 캐시 갱신</button>
+    </section>
+    <section class="route-status">
+      <b>동선 캐시 상태</b>
+      <span id="routeRefreshStatus">-</span>
     </section>
     <section class="summary">
       <div><span>기준 기간</span><b id="rangeText">-</b></div>

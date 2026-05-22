@@ -45,11 +45,18 @@ label {
   margin-bottom: 6px;
 }
 
-input {
+input, textarea {
   width: 260px;
   padding: 9px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
+  font-family: inherit;
+  font-size: 14px;
+}
+
+textarea {
+  width: 420px;
+  resize: vertical;
 }
 
 button {
@@ -64,6 +71,34 @@ button {
 
 button.secondary { background: #475467; }
 button:disabled { opacity: 0.55; cursor: wait; }
+
+.route-toolbar {
+  margin-top: 12px;
+}
+
+.toolbar .wide {
+  flex: 1 1 420px;
+}
+
+.toolbar .wide textarea {
+  width: 100%;
+}
+
+.route-status {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 13px;
+}
+
+.route-status span {
+  color: var(--muted);
+}
 
 .summary {
   display: grid;
@@ -119,5 +154,5 @@ th {
 @media (max-width: 760px) {
   header { display: block; }
   .summary { grid-template-columns: 1fr; }
-  input { width: 100%; }
+  input, textarea { width: 100%; }
 }

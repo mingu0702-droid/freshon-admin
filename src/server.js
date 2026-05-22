@@ -23,6 +23,70 @@ let refreshState = {
   lastFinishedAt: null
 };
 
+let routeRefreshState = {
+  running: false,
+  lastError: null,
+  lastStartedAt: null,
+  lastFinishedAt: null,
+  total: 0,
+  completed: 0,
+  failed: 0,
+  current: null
+};
+
+function eachDate(startDate, endDate) {
+  const dates = [];
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return dates;
+  for (let d = start; d <= end; d = new Date(d.getTime() + 86400000)) {
+    dates.push(d.toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
+function parseVehicles(value) {
+  if (Array.isArray(value)) return value.map(String).map((v) => v.trim()).filter(Boolean);
+  return String(value || "")
+    .split(/[\s,]+/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+async function runRouteBatch({ startDate, endDate, vehicles, center }) {
+  const dates = eachDate(startDate, endDate);
+  routeRefreshState = {
+    running: true,
+    lastError: null,
+    lastStartedAt: new Date().toISOString(),
+    lastFinishedAt: null,
+    total: dates.length * vehicles.length,
+    completed: 0,
+    failed: 0,
+    current: null
+  };
+
+  try {
+    for (const date of dates) {
+      for (const vehicle of vehicles) {
+        routeRefreshState.current = { date, vehicle };
+        try {
+          const payload = await refreshDailyRouteData({ date, vehicle, center });
+          await writeDailyRoute(payload);
+          routeRefreshState.completed += 1;
+        } catch (error) {
+          routeRefreshState.failed += 1;
+          routeRefreshState.lastError = `${date} ${vehicle}: ${error.message}`;
+        }
+      }
+    }
+  } finally {
+    routeRefreshState.running = false;
+    routeRefreshState.lastFinishedAt = new Date().toISOString();
+    routeRefreshState.current = null;
+  }
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, generatedAt: new Date().toISOString() });
 });
@@ -31,6 +95,7 @@ app.get("/api/status", requireView, async (_req, res) => {
   const cache = await readDispatchCache();
   res.json({
     refresh: refreshState,
+    routeRefresh: routeRefreshState,
     cache: {
       generatedAt: cache.generatedAt,
       range: cache.range,
@@ -55,14 +120,7 @@ app.get("/api/daily-route", requireView, async (req, res) => {
   if (cached) {
     return res.json(cached);
   }
-
-  try {
-    const payload = await refreshDailyRouteData({ date, vehicle, center });
-    await writeDailyRoute(payload);
-    return res.json(payload);
-  } catch (error) {
-    return res.status(500).json({ error: error.message, date, vehicle });
-  }
+  return res.status(404).json({ error: "No cached daily route. Refresh route cache from admin first.", date, vehicle });
 });
 
 app.get("/admin", (_req, res) => {
@@ -111,6 +169,36 @@ app.post("/api/refresh-daily-route", requireAdmin, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+app.post("/api/refresh-daily-routes", requireAdmin, async (req, res) => {
+  if (routeRefreshState.running) {
+    return res.status(409).json({ error: "Daily route refresh already running.", routeRefresh: routeRefreshState });
+  }
+
+  const startDate = String(req.body?.startDate || req.body?.date || "");
+  const endDate = String(req.body?.endDate || req.body?.date || startDate);
+  const vehicles = parseVehicles(req.body?.vehicles);
+  const center = String(req.body?.center || "");
+
+  if (!startDate || !endDate || !vehicles.length) {
+    return res.status(400).json({ error: "startDate, endDate, and vehicles are required." });
+  }
+
+  runRouteBatch({ startDate, endDate, vehicles, center }).catch((error) => {
+    routeRefreshState.running = false;
+    routeRefreshState.lastError = error.message;
+    routeRefreshState.lastFinishedAt = new Date().toISOString();
+  });
+
+  res.status(202).json({
+    ok: true,
+    message: "Daily route refresh started.",
+    routeRefresh: {
+      ...routeRefreshState,
+      total: eachDate(startDate, endDate).length * vehicles.length
+    }
+  });
 });
 
 app.get("*", (_req, res) => {
