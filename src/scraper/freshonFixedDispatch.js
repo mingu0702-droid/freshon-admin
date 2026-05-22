@@ -2,6 +2,10 @@ import { chromium } from "playwright";
 import { config } from "../config.js";
 import { getDefaultDispatchRange } from "../dateRange.js";
 
+const PAGE_SIZE = 1000;
+const MAX_PAGES = 120;
+const freshonOrigin = new URL(config.freshonBaseUrl).origin;
+
 function assertCredentials() {
   if (!config.freshonId || !config.freshonPassword) {
     throw new Error("FRESHON_ID and FRESHON_PASSWORD must be configured as environment variables.");
@@ -10,11 +14,11 @@ function assertCredentials() {
 
 async function fillFirstVisible(page, selectors, value) {
   for (const selector of selectors) {
-    const locator = page.locator(selector);
+    const locator = page.locator(selector).first();
     if (await locator.count()) {
-      const first = locator.first();
-      if (await first.isVisible().catch(() => false)) {
-        await first.fill(value);
+      const visible = await locator.isVisible().catch(() => false);
+      if (visible) {
+        await locator.fill(value).catch(() => null);
         return true;
       }
     }
@@ -26,8 +30,8 @@ async function clickText(page, texts) {
   for (const text of texts) {
     const target = page.getByText(text, { exact: false }).first();
     if (await target.count()) {
-      await target.click({ timeout: 5000 }).catch(() => null);
-      return true;
+      const clicked = await target.click({ timeout: 5000 }).then(() => true).catch(() => false);
+      if (clicked) return true;
     }
   }
   return false;
@@ -53,98 +57,111 @@ async function maybeLogin(page) {
 
   if (idFilled && pwFilled) {
     await Promise.allSettled([
-      page.waitForLoadState("networkidle", { timeout: config.navTimeoutMs }),
+      page.waitForLoadState("domcontentloaded", { timeout: config.navTimeoutMs }),
       clickText(page, ["로그인", "Login"])
     ]);
   }
 }
 
-async function navigateToFixedDispatch(page) {
+async function createLoggedInContext() {
+  const browser = await chromium.launch({ headless: config.headless });
+  const page = await browser.newPage();
   await page.goto(`${config.freshonBaseUrl}#/bo/wm/standard/driverCarListPage`, {
     waitUntil: "domcontentloaded",
     timeout: config.navTimeoutMs
   });
   await maybeLogin(page);
+  await page.waitForLoadState("domcontentloaded", { timeout: config.navTimeoutMs }).catch(() => null);
+  return { browser, context: page.context() };
+}
 
-  await page.goto(`${config.freshonBaseUrl}#/bo/wm/standard/driverCarListPage`, {
-    waitUntil: "domcontentloaded",
+function toForm({ page, range }) {
+  return {
+    page: String(page),
+    isPaging: "true",
+    isCount: "true",
+    size: String(PAGE_SIZE),
+    sort: "est_cd,ASC",
+    excelFileNm: `고정배차정보 내역_${new Date().toISOString().slice(0, 10).replaceAll("-", "")}`,
+    logCd: "011",
+    estCd: "",
+    estName: "",
+    estNm: "",
+    estGbn: "",
+    startDate: range?.startDate || "",
+    endDate: range?.endDate || "",
+    carCd: "",
+    carNm: "",
+    shipGbn: "1",
+    baecha: ""
+  };
+}
+
+function normalizeRow(row) {
+  return {
+    호차코드: row.carCd || "",
+    호차: row.carSeqSunNm || row.carSeqMonNm || row.carSeqTueNm || row.carSeqWedNm || row.carSeqThuNm || row.carSeqFriNm || row.carSeqSatNm || row.carNm || "",
+    고객코드: row.estCd || "",
+    고객명: row.estNm || row.estName || "",
+    주소: row.address || "",
+    사업자번호: row.bizNo || "",
+    배송구분: row.estGbnNm || row.shipGbnNm || "",
+    담당자: row.employeeName || "",
+    월: row.mon || row.carSeqMonNm || "",
+    화: row.tue || row.carSeqTueNm || "",
+    수: row.wed || row.carSeqWedNm || "",
+    목: row.thu || row.carSeqThuNm || "",
+    금: row.fri || row.carSeqFriNm || "",
+    토: row.sat || row.carSeqSatNm || "",
+    일: row.sun || row.carSeqSunNm || "",
+    원본: JSON.stringify(row)
+  };
+}
+
+async function fetchFixedDispatchPage(context, { page, range }) {
+  const response = await context.request.post(`${freshonOrigin}/bo/wm/standard/fixedAlctnList`, {
+    form: toForm({ page, range }),
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: freshonOrigin,
+      Referer: config.freshonBaseUrl
+    },
     timeout: config.navTimeoutMs
   });
 
-  await page.waitForLoadState("networkidle", { timeout: config.navTimeoutMs }).catch(() => null);
-
-  await clickText(page, ["물류관리"]);
-  await clickText(page, ["기준정보 관리", "기준정보관리"]);
-  await clickText(page, ["고정배차 정보 관리", "고정배차정보관리"]);
-}
-
-async function setDateRangeIfPresent(page, range) {
-  const inputs = await page.locator("input").all();
-  for (const input of inputs) {
-    const placeholder = await input.getAttribute("placeholder").catch(() => "");
-    const name = await input.getAttribute("name").catch(() => "");
-    const id = await input.getAttribute("id").catch(() => "");
-    const hint = `${placeholder || ""} ${name || ""} ${id || ""}`;
-    if (/시작|from|start/i.test(hint)) {
-      await input.fill(range.startDate).catch(() => null);
-    }
-    if (/종료|to|end/i.test(hint)) {
-      await input.fill(range.endDate).catch(() => null);
-    }
+  if (!response.ok()) {
+    throw new Error(`fixedAlctnList API failed: ${response.status()} ${response.statusText()}`);
   }
-}
-
-async function clickSearch(page) {
-  await clickText(page, ["조회", "검색", "Search"]);
-  await page.waitForLoadState("networkidle", { timeout: config.navTimeoutMs }).catch(() => null);
-  await page.waitForTimeout(1500);
-}
-
-async function extractTables(page) {
-  return page.evaluate(() => {
-    const tables = [...document.querySelectorAll("table")];
-    return tables.map((table) => {
-      const rows = [...table.querySelectorAll("tr")].map((tr) =>
-        [...tr.querySelectorAll("th,td")].map((cell) => cell.innerText.trim())
-      ).filter((row) => row.some(Boolean));
-      return rows;
-    }).filter((rows) => rows.length);
-  });
-}
-
-function tableToObjects(table) {
-  if (!table.length) return { columns: [], rows: [] };
-  const [header, ...body] = table;
-  const columns = header.map((name, index) => name || `column_${index + 1}`);
-  const rows = body.map((line) => Object.fromEntries(columns.map((column, index) => [column, line[index] || ""])));
-  return { columns, rows };
+  const json = await response.json();
+  if (json.status && Number(json.status) !== 200) {
+    throw new Error(json.message || `fixedAlctnList API returned status ${json.status}`);
+  }
+  return Array.isArray(json.data) ? json.data : [];
 }
 
 export async function refreshFixedDispatchData(options = {}) {
   assertCredentials();
   const range = options.range || getDefaultDispatchRange();
-  const browser = await chromium.launch({ headless: config.headless });
-  const page = await browser.newPage();
+  const { browser, context } = await createLoggedInContext();
 
   try {
-    await navigateToFixedDispatch(page);
-    await setDateRangeIfPresent(page, range);
-    await clickSearch(page);
-
-    const tables = await extractTables(page);
-    if (!tables.length) {
-      throw new Error("No table data was found on the Freshon fixed-dispatch page. Selectors may need tuning.");
+    const rows = [];
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const batch = await fetchFixedDispatchPage(context, { page, range });
+      rows.push(...batch.map(normalizeRow));
+      if (batch.length < PAGE_SIZE) break;
     }
 
-    const largest = tables.sort((a, b) => b.length - a.length)[0];
-    const parsed = tableToObjects(largest);
     return {
       generatedAt: new Date().toISOString(),
-      source: "freshon",
+      source: "freshon-api",
       range,
-      columns: parsed.columns,
-      rows: parsed.rows,
-      rowCount: parsed.rows.length
+      columns: [
+        "호차코드", "호차", "고객코드", "고객명", "주소", "사업자번호", "배송구분",
+        "담당자", "월", "화", "수", "목", "금", "토", "일", "원본"
+      ],
+      rows,
+      rowCount: rows.length
     };
   } finally {
     await browser.close();
