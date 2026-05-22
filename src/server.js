@@ -212,6 +212,10 @@ async function runRouteBatch({ startDate, endDate, vehicles, center, concurrency
   }
 
   async function runWorker(workerId) {
+    routeRefreshState.active = [
+      ...routeRefreshState.active.filter((item) => item.workerId !== workerId),
+      { workerId, date: "-", vehicle: "session-starting" }
+    ];
     await withDailyRouteSession(async (scrape) => {
       while (routeRefreshState.running && !routeRefreshState.stopRequested) {
         const job = await nextJob();
@@ -306,18 +310,21 @@ app.post("/api/refresh", requireAdmin, async (req, res) => {
     lastFinishedAt: null
   };
 
-  try {
-    const payload = await refreshFixedDispatchData({ range });
-    await writeDispatchCache(payload);
-    refreshState.running = false;
-    refreshState.lastFinishedAt = new Date().toISOString();
-    res.json({ ok: true, rowCount: payload.rowCount, range: payload.range });
-  } catch (error) {
-    refreshState.running = false;
-    refreshState.lastError = error.message;
-    refreshState.lastFinishedAt = new Date().toISOString();
-    res.status(500).json({ error: error.message, refresh: refreshState });
-  }
+  refreshFixedDispatchData({ range })
+    .then((payload) => writeDispatchCache(payload).then(() => payload))
+    .then((payload) => {
+      refreshState.running = false;
+      refreshState.lastFinishedAt = new Date().toISOString();
+      refreshState.rowCount = payload.rowCount;
+      refreshState.range = payload.range;
+    })
+    .catch((error) => {
+      refreshState.running = false;
+      refreshState.lastError = error.message;
+      refreshState.lastFinishedAt = new Date().toISOString();
+    });
+
+  res.status(202).json({ ok: true, message: "Fixed dispatch refresh started.", refresh: refreshState });
 });
 
 app.post("/api/refresh-daily-route", requireAdmin, async (req, res) => {

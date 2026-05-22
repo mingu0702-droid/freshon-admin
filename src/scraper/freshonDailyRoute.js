@@ -1,7 +1,10 @@
 import { chromium } from "playwright";
 import { config } from "../config.js";
 
+const PAGE_SIZE = 1000;
+const MAX_PAGES = 80;
 const ROUTE_TIMEOUT_MS = Math.min(config.navTimeoutMs, 25000);
+const freshonOrigin = new URL(config.freshonBaseUrl).origin;
 
 function assertCredentials() {
   if (!config.freshonId || !config.freshonPassword) {
@@ -23,44 +26,38 @@ async function fillFirstVisible(page, selectors, value) {
   return false;
 }
 
-async function clickText(page, texts) {
-  for (const text of texts) {
-    const target = page.getByText(text, { exact: false }).first();
-    if (await target.count()) {
-      const clicked = await target.click({ timeout: 4000 }).then(() => true).catch(() => false);
-      if (clicked) return true;
-    }
-  }
-  return false;
-}
-
 async function maybeLogin(page) {
   const idFilled = await fillFirstVisible(page, [
     "input[name='id']",
     "input[name='userId']",
     "input[name='loginId']",
-    "input[type='text']",
-    "input[placeholder*='아이디']",
-    "input[placeholder*='ID']"
+    "input[type='text']"
   ], config.freshonId);
 
   const pwFilled = await fillFirstVisible(page, [
     "input[name='password']",
     "input[name='passwd']",
-    "input[type='password']",
-    "input[placeholder*='비밀번호']",
-    "input[placeholder*='Password']"
+    "input[type='password']"
   ], config.freshonPassword);
 
-  if (idFilled && pwFilled) {
+  if (!idFilled || !pwFilled) return;
+
+  const submit = page.locator("button[type='submit'], input[type='submit'], button").first();
+  if (await submit.count()) {
     await Promise.allSettled([
       page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }),
-      clickText(page, ["로그인", "Login"])
+      submit.click({ timeout: 4000 })
     ]);
+  } else {
+    await page.keyboard.press("Enter").catch(() => null);
+    await page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }).catch(() => null);
   }
 }
 
-async function navigateToFixedDispatch(page) {
+async function createLoggedInContext() {
+  assertCredentials();
+  const browser = await chromium.launch({ headless: config.headless });
+  const page = await browser.newPage();
   page.setDefaultTimeout(ROUTE_TIMEOUT_MS);
   page.setDefaultNavigationTimeout(ROUTE_TIMEOUT_MS);
 
@@ -69,101 +66,114 @@ async function navigateToFixedDispatch(page) {
     timeout: ROUTE_TIMEOUT_MS
   });
   await maybeLogin(page);
-  await page.goto(`${config.freshonBaseUrl}#/bo/wm/standard/driverCarListPage`, {
-    waitUntil: "domcontentloaded",
+  await page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }).catch(() => null);
+  return { browser, context: page.context() };
+}
+
+function toForm({ page, date, vehicle, center }) {
+  return {
+    page: String(page),
+    isPaging: "true",
+    isCount: "true",
+    size: String(PAGE_SIZE),
+    sort: "est_cd,ASC",
+    excelFileNm: `daily_route_${date || ""}_${vehicle || ""}`,
+    logCd: "011",
+    estCd: "",
+    estName: "",
+    estNm: "",
+    estGbn: "",
+    startDate: "",
+    endDate: "",
+    carCd: "",
+    carNm: vehicle || "",
+    shipGbn: "1",
+    baecha: center || ""
+  };
+}
+
+function weekdayKeys(date) {
+  const day = new Date(`${date}T00:00:00`).getDay();
+  return [
+    ["carSeqSun", "carSeqSunNm", "sun"],
+    ["carSeqMon", "carSeqMonNm", "mon"],
+    ["carSeqTue", "carSeqTueNm", "tue"],
+    ["carSeqWed", "carSeqWedNm", "wed"],
+    ["carSeqThu", "carSeqThuNm", "thu"],
+    ["carSeqFri", "carSeqFriNm", "fri"],
+    ["carSeqSat", "carSeqSatNm", "sat"]
+  ][day];
+}
+
+function norm(value) {
+  return String(value || "").replace(/\s+/g, "").toLowerCase();
+}
+
+function rowMatchesVehicle(row, vehicle, date) {
+  const target = norm(vehicle);
+  const keys = weekdayKeys(date);
+  const weekdayValues = keys.map((key) => row[key]).filter(Boolean);
+  if (weekdayValues.some((value) => norm(value) === target || norm(value).includes(target))) return true;
+
+  return [
+    row.carCd,
+    row.carNm,
+    row.mainCarSeq,
+    row.mainCarSeqNm,
+    row.carSeq,
+    row.carSeqNm,
+    row.baecha
+  ].filter(Boolean).some((value) => norm(value) === target || norm(value).includes(target));
+}
+
+function toStop(row, index) {
+  return {
+    sequence: index + 1,
+    raw: row,
+    code: row.estCd || "",
+    name: row.estNm || row.estName || "",
+    address: row.address || "",
+    amount: row.avgOrderAmt || row.orderAmt || row.amt || ""
+  };
+}
+
+async function fetchFixedDispatchPage(context, { page, date, vehicle, center }) {
+  const response = await context.request.post(`${freshonOrigin}/bo/wm/standard/fixedAlctnList`, {
+    form: toForm({ page, date, vehicle, center }),
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: freshonOrigin,
+      Referer: config.freshonBaseUrl
+    },
     timeout: ROUTE_TIMEOUT_MS
   });
-  await page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }).catch(() => null);
-}
 
-async function fillByNearbyLabel(page, labels, value) {
-  for (const label of labels) {
-    const input = page.locator(`xpath=//*[contains(normalize-space(.), '${label}')]/following::input[1]`).first();
-    if (await input.count()) {
-      await input.fill(value).catch(() => null);
-      return true;
-    }
+  if (!response.ok()) {
+    throw new Error(`fixedAlctnList API failed: ${response.status()} ${response.statusText()}`);
   }
-  return false;
-}
-
-async function selectCenterIfPresent(page, center) {
-  if (!center) return;
-  const selects = await page.locator("select").all();
-  for (const select of selects) {
-    const ok = await select.selectOption({ label: center }).then(() => true).catch(() => false);
-    if (ok) return;
+  const json = await response.json();
+  if (json.status && Number(json.status) !== 200) {
+    throw new Error(json.message || `fixedAlctnList API returned status ${json.status}`);
   }
-  await clickText(page, [center]);
+  return Array.isArray(json.data) ? json.data : [];
 }
 
-async function setFilters(page, { date, vehicle, center }) {
-  await selectCenterIfPresent(page, center);
-  await fillByNearbyLabel(page, ["등록일", "일자"], date);
-  await fillByNearbyLabel(page, ["호차"], vehicle);
-  await fillFirstVisible(page, [
-    "input[name*='car']",
-    "input[name*='vehicle']",
-    "input[id*='car']",
-    "input[id*='vehicle']"
-  ], vehicle);
-}
-
-async function clickSearch(page) {
-  await clickText(page, ["조회", "검색", "Search"]);
-  await page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }).catch(() => null);
-  await page.waitForTimeout(1200);
-}
-
-async function extractGridRows(page) {
-  return page.evaluate(() => {
-    const clean = (value) => (value || "").replace(/\s+/g, " ").trim();
-    const rowsFromTable = [...document.querySelectorAll("table")].flatMap((table) =>
-      [...table.querySelectorAll("tr")].map((tr) =>
-        [...tr.querySelectorAll("th,td")].map((cell) => clean(cell.innerText))
-      )
-    );
-
-    const rowsFromGrid = [...document.querySelectorAll("[role='row'], .ag-row, .el-table__row, .ant-table-row, .dx-row")]
-      .map((row) => [...row.querySelectorAll("[role='gridcell'], .ag-cell, td, .cell")]
-        .map((cell) => clean(cell.innerText))
-        .filter(Boolean))
-      .filter((row) => row.length > 1);
-
-    return [...rowsFromTable, ...rowsFromGrid].filter((row) => row.some(Boolean));
-  });
-}
-
-function toStops(rows) {
-  return rows
-    .filter((row) => row.length >= 3)
-    .map((row, index) => {
-      const text = row.join(" ");
-      const sequenceMatch = text.match(/\b(\d{1,3})\b/);
-      return {
-        sequence: sequenceMatch ? Number(sequenceMatch[1]) : index + 1,
-        raw: row,
-        code: row.find((cell) => /^[A-Z]?\d{4,}/.test(cell)) || "",
-        name: row.find((cell) => /[가-힣]/.test(cell) && !/(시|군|구|동|읍|면|로|길)/.test(cell.slice(0, 8))) || row[0] || "",
-        address: row.find((cell) => /(서울|경기|인천|강원|충북|충남|전북|전남|경북|경남|부산|대구|광주|대전|울산|세종|제주).+/.test(cell)) || ""
-      };
-    })
-    .sort((a, b) => a.sequence - b.sequence);
-}
-
-async function scrapeDailyRouteOnPage(page, { date, vehicle, center = "" }) {
-  if (!date || !vehicle) {
-    throw new Error("date and vehicle are required.");
+async function scrapeDailyRouteWithContext(context, { date, vehicle, center = "" }) {
+  const rows = [];
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const batch = await fetchFixedDispatchPage(context, { page, date, vehicle, center });
+    rows.push(...batch);
+    if (batch.length < PAGE_SIZE) break;
   }
 
-  await setFilters(page, { date, vehicle, center });
-  await clickSearch(page);
+  const sourceRows = rows.filter((row) => rowMatchesVehicle(row, vehicle, date));
+  const stops = sourceRows
+    .filter((row) => row.address)
+    .map(toStop);
 
-  const rows = await extractGridRows(page);
-  const stops = toStops(rows);
   return {
     generatedAt: new Date().toISOString(),
-    source: "freshon",
+    source: "freshon-fixed-dispatch-api",
     date,
     vehicle,
     center,
@@ -173,12 +183,9 @@ async function scrapeDailyRouteOnPage(page, { date, vehicle, center = "" }) {
 }
 
 export async function withDailyRouteSession(callback) {
-  assertCredentials();
-  const browser = await chromium.launch({ headless: config.headless });
-  const page = await browser.newPage();
+  const { browser, context } = await createLoggedInContext();
   try {
-    await navigateToFixedDispatch(page);
-    return await callback((job) => scrapeDailyRouteOnPage(page, job));
+    return await callback((job) => scrapeDailyRouteWithContext(context, job));
   } finally {
     await browser.close();
   }

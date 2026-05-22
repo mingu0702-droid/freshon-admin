@@ -10,14 +10,13 @@
     :root { --ink:#0f172a; --muted:#64748b; --line:#cbd5e1; --bg:#eef3f8; --panel:#fff; --blue:#2563eb; --ok:#047857; --warn:#b45309; --danger:#b91c1c; }
     * { box-sizing:border-box; }
     body { margin:0; font-family:Arial,"Malgun Gothic",sans-serif; color:var(--ink); background:var(--bg); }
-    header { height:86px; display:flex; align-items:center; justify-content:space-between; gap:14px; background:#fff; border-bottom:1px solid var(--line); padding:14px 18px; }
-    h1 { margin:0; font-size:24px; letter-spacing:0; }
+    h1 { margin:0 0 8px; font-size:22px; letter-spacing:0; }
     h2 { margin:0 0 10px; font-size:16px; }
     p { margin:8px 0; color:var(--muted); line-height:1.5; }
-    .page-nav { display:flex; flex-wrap:wrap; gap:6px; }
-    .page-nav a { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:6px; padding:8px 10px; font-size:13px; font-weight:800; text-decoration:none; }
+    .page-nav { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 14px; }
+    .page-nav a { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:6px; padding:7px 9px; font-size:12px; font-weight:800; text-decoration:none; }
     .page-nav a.active { background:var(--blue); border-color:var(--blue); color:#fff; }
-    main { height:calc(100vh - 86px); display:grid; grid-template-columns:360px minmax(0,1fr); }
+    main { height:100vh; min-height:640px; display:grid; grid-template-columns:360px minmax(0,1fr); }
     aside { overflow:auto; background:#fff; border-right:1px solid var(--line); padding:16px; }
     #map { min-height:100%; }
     label { display:block; margin:14px 0 6px; font-size:13px; font-weight:900; }
@@ -44,8 +43,6 @@
     .pin-label { padding:5px 8px; border:2px solid #111827; background:#fff; border-radius:6px; font-size:13px; font-weight:900; white-space:nowrap; box-shadow:0 2px 8px rgba(15,23,42,.18); }
     .candidate-label { padding:4px 7px; border:1px solid #2563eb; background:#eff6ff; color:#1d4ed8; border-radius:6px; font-size:12px; font-weight:900; white-space:nowrap; }
     @media (max-width:900px) {
-      header { height:auto; display:block; }
-      .page-nav { margin-top:10px; }
       main { height:auto; grid-template-columns:1fr; }
       aside { border-right:0; border-bottom:1px solid var(--line); }
       #map { height:62vh; min-height:420px; }
@@ -53,20 +50,16 @@
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>신규지점확인</h1>
-      <p class="hint">주소 기준으로 지도에 핀을 찍고 주변 권역을 보고 배차 예정 호차를 추천합니다.</p>
-    </div>
-    <nav class="page-nav" aria-label="페이지 이동">
-      <a href="/">권역 지도</a>
-      <a href="/daily-routes.html">일일동선</a>
-      <a href="/store-check.html" class="active">신규지점확인</a>
-      <a href="/admin">관리자</a>
-    </nav>
-  </header>
   <main>
     <aside>
+      <nav class="page-nav" aria-label="페이지 이동">
+        <a href="/">권역 지도</a>
+        <a href="/daily-routes.html">일일동선</a>
+        <a href="/store-check.html" class="active">신규지점확인</a>
+        <a href="/admin">관리자</a>
+      </nav>
+      <h1>신규지점확인</h1>
+      <p class="hint">주소 또는 고객코드로 주변 권역을 보고 배차 예정 호차를 추천합니다.</p>
       <h2>조회조건</h2>
       <label for="addressInput">매장명 주소</label>
       <textarea id="addressInput" placeholder="예: 김금자숯불갈비 전주중화산점 전주시 완산구 화산천변5길 18"></textarea>

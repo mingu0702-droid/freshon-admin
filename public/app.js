@@ -97,24 +97,33 @@ function renderRouteStatus(state) {
 
 async function loadStatus() {
   const response = await fetch("/api/status");
-  if (!response.ok) return;
+  if (!response.ok) return null;
   const json = await response.json();
   renderRouteStatus(json.routeRefresh);
+  if (json.refresh?.running) {
+    setStatus("고정배차 갱신 진행 중 - 다른 화면으로 이동해도 서버에서 계속 진행됩니다.");
+  } else if (json.refresh?.lastError) {
+    setStatus(`고정배차 갱신 실패: ${json.refresh.lastError}`);
+  }
   if (json.routeRefresh?.running && !statusTimer) {
     statusTimer = setInterval(loadStatus, 4000);
   }
-  if (!json.routeRefresh?.running && statusTimer) {
+  if (json.refresh?.running && !statusTimer) {
+    statusTimer = setInterval(loadStatus, 4000);
+  }
+  if (!json.routeRefresh?.running && !json.refresh?.running && statusTimer) {
     clearInterval(statusTimer);
     statusTimer = null;
   }
+  return json;
 }
 
 async function loadData() {
   setStatus("목록 불러오는 중");
   const response = await fetch("/api/fixed-dispatch");
   render(await response.json());
-  await loadStatus();
-  setStatus("조회 완료");
+  const status = await loadStatus();
+  if (!status?.refresh?.running && !status?.routeRefresh?.running) setStatus("조회 완료");
 }
 
 async function refreshData() {
@@ -129,6 +138,7 @@ async function refreshData() {
   try {
     const response = await fetch("/api/refresh", {
       method: "POST",
+      keepalive: true,
       headers: {
         "Content-Type": "application/json",
         "x-admin-token": token
@@ -136,8 +146,14 @@ async function refreshData() {
       body: JSON.stringify({})
     });
     const json = await response.json();
+    if (response.status === 409) {
+      setStatus("이미 고정배차 갱신이 진행 중입니다. 다른 화면으로 이동해도 서버에서 계속 진행됩니다.");
+      await loadStatus();
+      return;
+    }
     if (!response.ok) throw new Error(json.error || "고정배차 갱신 실패");
-    await loadData();
+    setStatus("고정배차 갱신 진행 중 - 다른 화면으로 이동해도 서버에서 계속 진행됩니다.");
+    await loadStatus();
   } catch (error) {
     const message = `고정배차 갱신 실패: ${error.message}`;
     setStatus(message);
@@ -164,6 +180,7 @@ async function refreshRouteCache() {
   try {
     const response = await fetch("/api/refresh-daily-routes", {
       method: "POST",
+      keepalive: true,
       headers: {
         "Content-Type": "application/json",
         "x-admin-token": token
