@@ -47,14 +47,22 @@ app.get("/api/fixed-dispatch", requireView, async (_req, res) => {
 app.get("/api/daily-route", requireView, async (req, res) => {
   const date = String(req.query.date || "");
   const vehicle = String(req.query.vehicle || "");
+  const center = String(req.query.center || "");
   if (!date || !vehicle) {
     return res.status(400).json({ error: "date and vehicle are required." });
   }
-  const payload = await readDailyRoute(date, vehicle);
-  if (!payload) {
-    return res.status(404).json({ error: "No cached daily route.", date, vehicle });
+  const cached = await readDailyRoute(date, vehicle);
+  if (cached) {
+    return res.json(cached);
   }
-  res.json(payload);
+
+  try {
+    const payload = await refreshDailyRouteData({ date, vehicle, center });
+    await writeDailyRoute(payload);
+    return res.json(payload);
+  } catch (error) {
+    return res.status(500).json({ error: error.message, date, vehicle });
+  }
 });
 
 app.get("/admin", (_req, res) => {
