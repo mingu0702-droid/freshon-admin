@@ -21,6 +21,10 @@ function setStatus(text) {
   statusEl.textContent = text;
 }
 
+function showTableMessage(message) {
+  table.innerHTML = `<tbody><tr><td>${escapeHtml(message)}</td></tr></tbody>`;
+}
+
 function getToken() {
   return tokenEl.value.trim();
 }
@@ -131,8 +135,9 @@ async function refreshData() {
     if (!response.ok) throw new Error(json.error || "고정배차 갱신 실패");
     await loadData();
   } catch (error) {
-    setStatus(`갱신 실패: ${error.message}`);
-    alert(error.message);
+    const message = `고정배차 갱신 실패: ${error.message}`;
+    setStatus(message);
+    showTableMessage("고정배차 표를 찾지 못했습니다. 일일동선 캐시 수집은 별도 작업이라 계속 진행할 수 있습니다.");
   } finally {
     refreshButton.disabled = false;
   }
