@@ -146,7 +146,14 @@ function toStop(row, index) {
     code: row.estCd || "",
     name: row.estNm || row.estName || "",
     address: row.address || "",
-    amount: row.avgOrderAmt || row.orderAmt || row.amt || ""
+    vehicle: row.carSeqSunNm || row.carSeqMonNm || row.carSeqTueNm || row.carSeqWedNm || row.carSeqThuNm || row.carSeqFriNm || row.carSeqSatNm || row.carNm || row.mainCarSeqNm || "",
+    customerCode: row.estCd || row.customerCode || row.custCd || "",
+    customerName: row.estNm || row.estName || row.customerName || row.custNm || "",
+    amount: row.avgOrderAmt || row.orderAmt || row.amt || row.saleAmt || "",
+    dailyAmount: row.daySaleAmt || row.dailySaleAmt || row.orderAmt || row.amt || "",
+    monthlyAmount: row.monthSaleAmt || row.monthlySaleAmt || row.avgOrderAmt || "",
+    orderCount: row.orderCnt || row.ordCnt || row.totalAlcnt || row.alcnt || row.count || "",
+    deliveryPattern: row.mon || row.tue || row.wed || row.thu || row.fri || row.sat || row.sun || ""
   };
 }
 
