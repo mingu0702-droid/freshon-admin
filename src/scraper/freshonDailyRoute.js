@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { chromium, request } from "playwright";
 import { config } from "../config.js";
 
 const PAGE_SIZE = 1000;
@@ -55,6 +55,19 @@ async function maybeLogin(page) {
 }
 
 async function createLoggedInContext() {
+  if (config.freshonCookie) {
+    const context = await request.newContext({
+      baseURL: freshonOrigin,
+      extraHTTPHeaders: {
+        Accept: "application/json, text/plain, */*",
+        Cookie: config.freshonCookie,
+        Origin: freshonOrigin,
+        Referer: config.freshonBaseUrl
+      }
+    });
+    return { browser: null, context };
+  }
+
   assertCredentials();
   const browser = await chromium.launch({ headless: config.headless });
   const page = await browser.newPage();
@@ -187,7 +200,8 @@ export async function withDailyRouteSession(callback) {
   try {
     return await callback((job) => scrapeDailyRouteWithContext(context, job));
   } finally {
-    await browser.close();
+    await context.close?.();
+    await browser?.close();
   }
 }
 

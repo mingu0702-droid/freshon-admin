@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>신규지점확인</title>
-  <script src="//dapi.kakao.com/v2/maps/sdk.js?appkey=8f1459975e9f3b3aa62089837a2aeb85&libraries=services"></script>
+  <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=8f1459975e9f3b3aa62089837a2aeb85&libraries=services"></script>
   <script src="./vehicle-data.js"></script>
   <style>
     :root { --ink:#0f172a; --muted:#64748b; --line:#cbd5e1; --bg:#eef3f8; --panel:#fff; --blue:#2563eb; --ok:#047857; --warn:#b45309; --danger:#b91c1c; }
@@ -18,7 +18,7 @@
     .page-nav a.active { background:var(--blue); border-color:var(--blue); color:#fff; }
     main { height:100vh; min-height:640px; display:grid; grid-template-columns:360px minmax(0,1fr); }
     aside { overflow:auto; background:#fff; border-right:1px solid var(--line); padding:16px; }
-    #map { min-height:100%; }
+    #map { height:100%; min-height:640px; width:100%; background:#e8eef5; }
     label { display:block; margin:14px 0 6px; font-size:13px; font-weight:900; }
     input, textarea { width:100%; border:1px solid var(--line); border-radius:6px; padding:10px; font:inherit; }
     textarea { min-height:94px; resize:vertical; }
@@ -53,8 +53,8 @@
   <main>
     <aside>
       <nav class="page-nav" aria-label="페이지 이동">
-        <a href="/">권역 지도</a>
         <a href="/daily-routes.html">일일동선</a>
+        <a href="/">권역 지도</a>
         <a href="/store-check.html" class="active">신규지점확인</a>
         <a href="/admin">관리자</a>
       </nav>
@@ -156,11 +156,16 @@
     }
 
     function initMap() {
+      if (!window.kakao?.maps) {
+        document.getElementById("map").innerHTML = '<div style="padding:24px;font-weight:900;color:#b91c1c">카카오 지도를 불러오지 못했습니다. 카카오 JavaScript 키의 도메인 설정에 freshon-admin-1.onrender.com 이 들어있는지 확인해주세요.</div>';
+        return;
+      }
       map = new kakao.maps.Map(document.getElementById("map"), {
         center:new kakao.maps.LatLng(36.8, 127.8),
         level:13
       });
       geocoder = new kakao.maps.services.Geocoder();
+      setTimeout(() => kakao.maps.event.trigger(map, "resize"), 150);
     }
 
     function existingByCode(code) {
