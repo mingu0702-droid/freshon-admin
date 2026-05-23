@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { chromium, request } from "playwright";
 import { config } from "../config.js";
 import { getDefaultDispatchRange } from "../dateRange.js";
 
@@ -64,6 +64,19 @@ async function maybeLogin(page) {
 }
 
 async function createLoggedInContext() {
+  if (config.freshonCookie) {
+    const context = await request.newContext({
+      baseURL: freshonOrigin,
+      extraHTTPHeaders: {
+        Accept: "application/json, text/plain, */*",
+        Cookie: config.freshonCookie,
+        Origin: freshonOrigin,
+        Referer: config.freshonBaseUrl
+      }
+    });
+    return { browser: null, context };
+  }
+
   const browser = await chromium.launch({ headless: config.headless });
   const page = await browser.newPage();
   await page.goto(`${config.freshonBaseUrl}#/bo/wm/standard/driverCarListPage`, {
@@ -119,7 +132,8 @@ function normalizeRow(row) {
 }
 
 async function fetchFixedDispatchPage(context, { page, range }) {
-  const response = await context.request.post(`${freshonOrigin}/bo/wm/standard/fixedAlctnList`, {
+  const api = context.request || context;
+  const response = await api.post(`${freshonOrigin}/bo/wm/standard/fixedAlctnList`, {
     form: toForm({ page, range }),
     headers: {
       Accept: "application/json, text/plain, */*",
@@ -164,6 +178,7 @@ export async function refreshFixedDispatchData(options = {}) {
       rowCount: rows.length
     };
   } finally {
-    await browser.close();
+    await context.close?.();
+    await browser?.close();
   }
 }

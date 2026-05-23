@@ -151,7 +151,8 @@ function toStop(row, index) {
 }
 
 async function fetchFixedDispatchPage(context, { page, date, vehicle, center }) {
-  const response = await context.request.post(`${freshonOrigin}/bo/wm/standard/fixedAlctnList`, {
+  const api = context.request || context;
+  const response = await api.post(`${freshonOrigin}/bo/wm/standard/fixedAlctnList`, {
     form: toForm({ page, date, vehicle, center }),
     headers: {
       Accept: "application/json, text/plain, */*",
