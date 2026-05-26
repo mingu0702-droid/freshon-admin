@@ -4,28 +4,28 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>신규지점확인</title>
-  <script>
-    window.KAKAO_SDK_FAILED = false;
-  </script>
+  <script>window.KAKAO_SDK_FAILED = false;</script>
   <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=8f1459975e9f3b3aa62089837a2aeb85&autoload=false&libraries=services" onerror="window.KAKAO_SDK_FAILED=true"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/vehicle-data.js"></script>
   <style>
-    :root { --ink:#0f172a; --muted:#64748b; --line:#cbd5e1; --bg:#eef3f8; --panel:#fff; --blue:#2563eb; --ok:#047857; --warn:#b45309; --danger:#b91c1c; }
+    :root { --ink:#0f172a; --muted:#64748b; --line:#cbd5e1; --bg:#eef3f8; --blue:#2563eb; --ok:#047857; --warn:#b45309; --danger:#b91c1c; }
     * { box-sizing:border-box; }
     body { margin:0; font-family:Arial,"Malgun Gothic",sans-serif; color:var(--ink); background:var(--bg); }
-    h1 { margin:0 0 8px; font-size:22px; letter-spacing:0; }
-    h2 { margin:0 0 10px; font-size:16px; }
-    p { margin:8px 0; color:var(--muted); line-height:1.5; }
-    .page-nav { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 14px; }
-    .page-nav a { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:6px; padding:7px 9px; font-size:12px; font-weight:800; text-decoration:none; }
-    .page-nav a.active { background:var(--blue); border-color:var(--blue); color:#fff; }
     main { height:100vh; min-height:640px; display:grid; grid-template-columns:360px minmax(0,1fr); }
     aside { overflow:auto; background:#fff; border-right:1px solid var(--line); padding:16px; }
     #map { height:100%; min-height:640px; width:100%; background:#e8eef5; }
+    h1 { margin:0 0 8px; font-size:22px; letter-spacing:0; }
+    h2 { margin:18px 0 10px; font-size:16px; }
+    p { margin:8px 0; color:var(--muted); line-height:1.5; }
     label { display:block; margin:14px 0 6px; font-size:13px; font-weight:900; }
     input, textarea { width:100%; border:1px solid var(--line); border-radius:6px; padding:10px; font:inherit; }
     textarea { min-height:94px; resize:vertical; }
     button { margin-top:12px; width:100%; border:0; border-radius:6px; background:var(--blue); color:#fff; padding:12px; font-weight:900; cursor:pointer; }
+    .page-nav { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 14px; }
+    .page-nav a { border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:6px; padding:7px 9px; font-size:12px; font-weight:800; text-decoration:none; }
+    .page-nav a.active { background:var(--blue); border-color:var(--blue); color:#fff; }
     .hint { font-size:12px; color:var(--muted); }
     .result { margin-top:14px; display:grid; gap:10px; }
     .card { background:#f8fafc; border:1px solid #dbe4ef; border-radius:8px; padding:12px; }
@@ -44,7 +44,8 @@
     ol { margin:8px 0 0 20px; padding:0; }
     li { margin:7px 0; line-height:1.4; }
     .pin-label { padding:5px 8px; border:2px solid #111827; background:#fff; border-radius:6px; font-size:13px; font-weight:900; white-space:nowrap; box-shadow:0 2px 8px rgba(15,23,42,.18); }
-    .candidate-label { padding:4px 7px; border:1px solid #2563eb; background:#eff6ff; color:#1d4ed8; border-radius:6px; font-size:12px; font-weight:900; white-space:nowrap; }
+    .candidate-label { padding:4px 7px; border:1px solid #2563eb; background:#eff6ff; color:#1d4ed8; border-radius:6px; font-size:12px; font-weight:900; white-space:nowrap; box-shadow:0 2px 8px rgba(15,23,42,.18); }
+    .map-message { padding:24px; font-weight:900; color:#b91c1c; line-height:1.55; }
     @media (max-width:900px) {
       main { height:auto; grid-template-columns:1fr; }
       aside { border-right:0; border-bottom:1px solid var(--line); }
@@ -65,7 +66,7 @@
       <p class="hint">주소 또는 고객코드로 주변 권역을 보고 배차 예정 호차를 추천합니다.</p>
       <h2>조회조건</h2>
       <label for="addressInput">매장명 주소</label>
-      <textarea id="addressInput" placeholder="예: 김금자숯불갈비 전주중화산점 전주시 완산구 화산천변5길 18"></textarea>
+      <textarea id="addressInput" placeholder="예: 세종특별자치시 부강면 부강금호로 229-5"></textarea>
       <label for="customerCode">고객 코드</label>
       <input id="customerCode" placeholder="있으면 입력. 예: S245125">
       <button id="checkButton" type="button">지도에 핀 찍고 확인</button>
@@ -84,7 +85,11 @@
     const vehicles = data.vehicles || [];
     const customers = vehicles.flatMap((vehicle) => (vehicle.customers || []).map((customer) => ({ ...customer, vehicle })));
     const fmt = new Intl.NumberFormat("ko-KR");
-    let map, geocoder, markerLayer = [], overlayLayer = [];
+    let map;
+    let geocoder;
+    let mapProvider = "";
+    let markerLayer = [];
+    let overlayLayer = [];
 
     function esc(value) {
       return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
@@ -97,19 +102,15 @@
     function distanceKm(a, b) {
       const toRad = (v) => v * Math.PI / 180;
       const r = 6371;
-      const dLat = toRad(b.lat - a.lat);
-      const dLng = toRad(b.lng - a.lng);
-      const lat1 = toRad(a.lat);
-      const lat2 = toRad(b.lat);
+      const dLat = toRad(Number(b.lat) - Number(a.lat));
+      const dLng = toRad(Number(b.lng) - Number(a.lng));
+      const lat1 = toRad(Number(a.lat));
+      const lat2 = toRad(Number(b.lat));
       const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
       return 2 * r * Math.asin(Math.sqrt(h));
     }
 
-    const COLORS = [
-      "#2563eb", "#059669", "#dc2626", "#7c3aed", "#0891b2", "#ea580c", "#16a34a", "#be123c",
-      "#4f46e5", "#0f766e", "#ca8a04", "#9333ea", "#0284c7", "#65a30d", "#c2410c", "#1d4ed8",
-      "#047857", "#b91c1c", "#6d28d9", "#0e7490", "#d97706", "#15803d", "#9f1239", "#4338ca"
-    ];
+    const COLORS = ["#2563eb","#059669","#dc2626","#7c3aed","#0891b2","#ea580c","#16a34a","#be123c","#4f46e5","#0f766e","#ca8a04","#9333ea","#0284c7","#65a30d","#c2410c","#1d4ed8"];
 
     function hashText(value) {
       let result = 0;
@@ -132,10 +133,19 @@
     }
 
     function clearMap() {
-      markerLayer.forEach((item) => item.setMap(null));
-      overlayLayer.forEach((item) => item.setMap(null));
+      markerLayer.forEach((item) => item.setMap ? item.setMap(null) : item.remove?.());
+      overlayLayer.forEach((item) => item.setMap ? item.setMap(null) : item.remove?.());
       markerLayer = [];
       overlayLayer = [];
+    }
+
+    function setMapView(lat, lng, kakaoLevel = 6, leafletZoom = 13) {
+      if (mapProvider === "kakao") {
+        map.setCenter(new kakao.maps.LatLng(Number(lat), Number(lng)));
+        map.setLevel(kakaoLevel);
+      } else if (mapProvider === "leaflet") {
+        map.setView([Number(lat), Number(lng)], leafletZoom);
+      }
     }
 
     function addMarker(lat, lng, text, options = {}) {
@@ -145,45 +155,86 @@
       const inlineStyle = className === "candidate-label"
         ? ` style="border-color:${color};background:${color};color:${readableTextColor(color)}"`
         : "";
+      const labelHtml = `<div class="${className}"${inlineStyle}>${esc(text)}</div>`;
+
+      if (mapProvider === "leaflet") {
+        const marker = L.marker([lat, lng]).addTo(map);
+        const label = L.marker([lat, lng], {
+          interactive: false,
+          icon: L.divIcon({ className: "", html: labelHtml, iconSize: null, iconAnchor: [0, 36] })
+        }).addTo(map);
+        markerLayer.push(marker);
+        overlayLayer.push(label);
+        return marker;
+      }
+
       const position = new kakao.maps.LatLng(lat, lng);
       const marker = new kakao.maps.Marker({ position, map });
-      const overlay = new kakao.maps.CustomOverlay({
-        position,
-        yAnchor: 1.75,
-        content: `<div class="${className}"${inlineStyle}>${esc(text)}</div>`
-      });
+      const overlay = new kakao.maps.CustomOverlay({ position, yAnchor: 1.75, content: labelHtml });
       overlay.setMap(map);
       markerLayer.push(marker);
       overlayLayer.push(overlay);
       return marker;
     }
 
-    function initMap() {
-      const mapEl = document.getElementById("map");
-      const showMapError = (message) => {
-        mapEl.innerHTML = `<div style="padding:24px;font-weight:900;color:#b91c1c;line-height:1.55">${message}</div>`;
-      };
-      if (window.KAKAO_SDK_FAILED || !window.kakao?.maps) {
-        showMapError("카카오 지도를 불러오지 못했습니다.<br>카카오 Developers > JavaScript 키 > Web 도메인에 https://freshon-admin-1.onrender.com 을 추가해주세요.");
+    function initLeafletMap() {
+      if (!window.L) {
+        document.getElementById("map").innerHTML = '<div class="map-message">지도를 불러오지 못했습니다.<br>카카오 지도와 예비 지도가 모두 로딩되지 않았습니다.</div>';
         return;
       }
-      const createMap = () => {
+      mapProvider = "leaflet";
+      map = L.map("map").setView([36.8, 127.8], 7);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap"
+      }).addTo(map);
+      setTimeout(() => map.invalidateSize(), 150);
+    }
+
+    function initMap() {
+      if (window.KAKAO_SDK_FAILED || !window.kakao?.maps) {
+        initLeafletMap();
+        return;
+      }
+      kakao.maps.load(() => {
         try {
-          map = new kakao.maps.Map(mapEl, {
+          mapProvider = "kakao";
+          map = new kakao.maps.Map(document.getElementById("map"), {
             center:new kakao.maps.LatLng(36.8, 127.8),
             level:13
           });
           geocoder = new kakao.maps.services.Geocoder();
           setTimeout(() => kakao.maps.event.trigger(map, "resize"), 150);
-        } catch (error) {
-          showMapError(`카카오 지도 초기화에 실패했습니다.<br>${esc(error.message || error)}`);
+        } catch {
+          initLeafletMap();
         }
-      };
-      if (typeof kakao.maps.load === "function") {
-        kakao.maps.load(createMap);
-      } else {
-        createMap();
-      }
+      });
+    }
+
+    function geocode(address) {
+      return new Promise((resolve, reject) => {
+        if (mapProvider === "kakao" && geocoder) {
+          geocoder.addressSearch(address, (result, status) => {
+            if (status === kakao.maps.services.Status.OK && result[0]) {
+              resolve({ lat:Number(result[0].y), lng:Number(result[0].x), address:result[0].address_name || address });
+            } else {
+              reject(new Error("주소 좌표를 찾지 못했습니다. 도로명 또는 지번 주소를 더 자세히 입력해주세요."));
+            }
+          });
+          return;
+        }
+
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=kr&q=${encodeURIComponent(address)}`)
+          .then((response) => response.ok ? response.json() : [])
+          .then((result) => {
+            if (result?.[0]) {
+              resolve({ lat:Number(result[0].lat), lng:Number(result[0].lon), address:result[0].display_name || address });
+            } else {
+              reject(new Error("주소 좌표를 찾지 못했습니다. 도로명 또는 지번 주소를 더 자세히 입력해주세요."));
+            }
+          })
+          .catch(() => reject(new Error("주소 좌표를 찾지 못했습니다. 잠시 후 다시 시도해주세요.")));
+      });
     }
 
     function existingByCode(code) {
@@ -208,9 +259,7 @@
         try {
           const parsed = JSON.parse(value);
           if (parsed && typeof parsed === "object") return parsed;
-        } catch {
-          // Ignore non-JSON values.
-        }
+        } catch {}
       }
       return {};
     }
@@ -289,48 +338,20 @@
     function decide(nearest, areaMatches) {
       const best = nearest[0];
       if (!best) return { type:"danger", title:"판단 필요", text:"주변 기존 배송처가 확인되지 않습니다.", planned:null };
-
       const closeVehicles = nearest.filter((item) => item.km <= Math.max(3, best.km + 1.2));
       const areaTop = areaMatches[0]?.vehicle.vehicle;
       const isOverlap = closeVehicles.length >= 2 && closeVehicles.some((item) => item.vehicle.vehicle !== best.vehicle.vehicle);
       const areaConflict = areaTop && areaTop !== best.vehicle.vehicle && areaMatches[0].score >= 25;
-
       if (isOverlap || areaConflict) {
-        return {
-          type:"warn",
-          title:"판단 필요",
-          text:"인근 권역에 여러 호차가 겹칩니다. 아래 후보를 보고 배차 담당자가 선택해야 합니다.",
-          planned:null
-        };
+        return { type:"warn", title:"판단 필요", text:"인근 권역에 여러 호차가 겹칩니다. 아래 후보를 보고 배차 담당자가 선택해야 합니다.", planned:null };
       }
-      return {
-        type:"ok",
-        title:`${best.vehicle.vehicle}호차 배차 예정`,
-        text:`가장 가까운 기존 배송처 기준 ${best.km.toFixed(1)}km 거리입니다.`,
-        planned:best
-      };
-    }
-
-    function geocode(address) {
-      return new Promise((resolve, reject) => {
-        geocoder.addressSearch(address, (result, status) => {
-          if (status === kakao.maps.services.Status.OK && result[0]) {
-            resolve({ lat:Number(result[0].y), lng:Number(result[0].x), address:result[0].address_name || address });
-          } else {
-            reject(new Error("주소 좌표를 찾지 못했습니다. 매장명보다 도로명/지번 주소를 더 자세히 입력해주세요."));
-          }
-        });
-      });
+      return { type:"ok", title:`${best.vehicle.vehicle}호차 배차 예정`, text:`가장 가까운 기존 배송처 기준 ${best.km.toFixed(1)}km 거리입니다.`, planned:best };
     }
 
     function renderExisting(existing) {
       clearMap();
-      addMarker(existing.lat, existing.lng, `${existing.vehicle.vehicle}호 기존 배송처`, {
-        className: "candidate-label",
-        color: getVehicleColor(existing.vehicle)
-      });
-      map.setCenter(new kakao.maps.LatLng(existing.lat, existing.lng));
-      map.setLevel(5);
+      addMarker(existing.lat, existing.lng, `${existing.vehicle.vehicle}호 기존 배송처`, { className: "candidate-label", color: getVehicleColor(existing.vehicle) });
+      setMapView(existing.lat, existing.lng, 5, 14);
       document.getElementById("result").innerHTML = `
         <article class="card decision ok">
           <span class="badge ok">기존 배송처</span>
@@ -347,12 +368,8 @@
     function renderDecision(point, nearest, areaMatches, decision) {
       clearMap();
       addMarker(point.lat, point.lng, "신규 지점", "pin-label");
-      nearest.slice(0, 5).forEach((item) => addMarker(item.sample.lat, item.sample.lng, `${item.vehicle.vehicle}호 ${item.km.toFixed(1)}km`, {
-        color: getVehicleColor(item.vehicle)
-      }));
-      map.setCenter(new kakao.maps.LatLng(point.lat, point.lng));
-      map.setLevel(6);
-
+      nearest.slice(0, 5).forEach((item) => addMarker(item.sample.lat, item.sample.lng, `${item.vehicle.vehicle}호 ${item.km.toFixed(1)}km`, { color: getVehicleColor(item.vehicle) }));
+      setMapView(point.lat, point.lng, 6, 13);
       document.getElementById("result").innerHTML = `
         <article class="card decision ${decision.type}">
           <span class="badge ${decision.type}">${decision.type === "ok" ? "배차 예정" : "확인 필요"}</span>
@@ -362,19 +379,19 @@
         </article>
         <article class="card">
           <b>인근 호차 후보</b>
-          <ol>
-            ${nearest.map((item) => `<li><b>${esc(item.vehicle.vehicle)}호</b> · ${esc(item.vehicle.area_label)} · ${item.km.toFixed(1)}km<br><span class="hint">근처 배송처: ${esc(item.sample.name)}</span></li>`).join("")}
-          </ol>
+          <ol>${nearest.map((item) => `<li><b>${esc(item.vehicle.vehicle)}호</b> · ${esc(item.vehicle.area_label)} · ${item.km.toFixed(1)}km<br><span class="hint">근처 배송처: ${esc(item.sample.name)}</span></li>`).join("")}</ol>
         </article>
         <article class="card">
           <b>주소 권역명 기준</b>
-          <ol>
-            ${areaMatches.length ? areaMatches.map((item) => `<li><b>${esc(item.vehicle.vehicle)}호</b> · ${esc(item.vehicle.area_label)} · 점수 ${fmt.format(item.score)}</li>`).join("") : "<li>주소명으로 매칭되는 권역명이 없습니다.</li>"}
-          </ol>
+          <ol>${areaMatches.length ? areaMatches.map((item) => `<li><b>${esc(item.vehicle.vehicle)}호</b> · ${esc(item.vehicle.area_label)} · 점수 ${fmt.format(item.score)}</li>`).join("") : "<li>주소명으로 매칭되는 권역명이 없습니다.</li>"}</ol>
         </article>`;
     }
 
     async function runCheck() {
+      if (!mapProvider) {
+        document.getElementById("result").innerHTML = `<article class="card decision danger"><span class="badge danger">지도 준비 중</span><p>지도가 아직 준비되지 않았습니다. 잠시 후 다시 눌러주세요.</p></article>`;
+        return;
+      }
       const address = document.getElementById("addressInput").value.trim();
       const code = document.getElementById("customerCode").value.trim();
       const addressLooksLikeCode = /^[A-Za-z]?\d{3,}$/i.test(address.replace(/\s+/g, ""));
@@ -387,7 +404,6 @@
       const cached = lookupCode ? await findFixedDispatchByCode(lookupCode) : null;
       if (cached?.address) {
         document.getElementById("addressInput").value = cached.address;
-        document.getElementById("result").innerHTML = `<article class="card"><b>고정배차 캐시 확인 중</b><p>${esc(lookupCode)} 코드의 주소를 찾았습니다. 지도 좌표를 확인합니다.</p></article>`;
         try {
           const point = await geocode(cached.address);
           point.address = cached.address;
@@ -402,20 +418,14 @@
       }
       if (lookupCode && (!address || addressLooksLikeCode)) {
         clearMap();
-        document.getElementById("result").innerHTML = `
-          <article class="card decision warn">
-            <span class="badge warn">확인 필요</span>
-            <div class="big">코드를 찾지 못했습니다</div>
-            <p>${esc(lookupCode)} 고객 코드는 현재 권역 지도 데이터에서 바로 확인되지 않습니다.</p>
-            <p class="hint">고정배차 갱신 후 다시 조회하거나, 주소를 함께 넣으면 주변 권역 기준으로 배차 예정 호차를 판단합니다.</p>
-          </article>`;
+        document.getElementById("result").innerHTML = `<article class="card decision warn"><span class="badge warn">확인 필요</span><div class="big">코드를 찾지 못했습니다.</div><p>${esc(lookupCode)} 고객 코드는 현재 권역 지도 데이터에서 바로 확인되지 않습니다.</p><p class="hint">고정배차 갱신 후 다시 조회하거나 주소를 함께 입력해주세요.</p></article>`;
         return;
       }
       if (!address) {
-        document.getElementById("result").innerHTML = `<article class="card"><b>주소가 필요합니다</b><p>매장명 주소를 입력해주세요.</p></article>`;
+        document.getElementById("result").innerHTML = `<article class="card"><b>주소가 필요합니다.</b><p>매장명 주소를 입력해주세요.</p></article>`;
         return;
       }
-      document.getElementById("result").innerHTML = `<article class="card"><b>주소 확인 중</b><p>카카오 지도에서 좌표를 찾고 있습니다.</p></article>`;
+      document.getElementById("result").innerHTML = `<article class="card"><b>주소 확인 중</b><p>지도에서 좌표를 찾고 있습니다.</p></article>`;
       try {
         const point = await geocode(address);
         const nearest = nearestCandidates(point);

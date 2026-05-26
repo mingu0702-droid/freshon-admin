@@ -1,4 +1,5 @@
 ﻿import express from "express";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
@@ -40,6 +41,7 @@ let routeRefreshState = {
 
 let dailyRouteWriteQueue = Promise.resolve();
 let routeRefreshGeneration = 0;
+let vehicleAreaDataPromise = null;
 
 const DEFAULT_ROUTE_VEHICLES = [
   "101",
@@ -179,6 +181,52 @@ function parseConcurrency(value) {
   return Math.max(1, Math.min(5, Math.floor(number)));
 }
 
+async function readVehicleAreaData() {
+  vehicleAreaDataPromise ||= fs.readFile(path.join(publicDir, "vehicle-data.js"), "utf8")
+    .then((text) => {
+      const jsonText = text
+        .replace(/^window\.VEHICLE_AREA_DATA\s*=\s*/, "")
+        .replace(/;\s*$/, "");
+      return JSON.parse(jsonText);
+    })
+    .catch(() => ({ vehicles: [] }));
+  return vehicleAreaDataPromise;
+}
+
+async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = "" }) {
+  const data = await readVehicleAreaData();
+  const vehicleData = (data.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
+  const customers = (vehicleData?.customers || []).filter((customer) => Number.isFinite(customer.lat) && Number.isFinite(customer.lng));
+  if (!customers.length) return null;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    source: "vehicle-area-fallback",
+    warning: reason ? `Freshon route API failed; used vehicle area data instead. ${reason}` : "Freshon route API failed; used vehicle area data instead.",
+    date,
+    vehicle,
+    center,
+    rowCount: customers.length,
+    stops: customers.map((customer, index) => ({
+      sequence: index + 1,
+      raw: customer,
+      code: customer.id || "",
+      name: customer.name || "",
+      address: customer.address || "",
+      vehicle: `${vehicle}호`,
+      customerCode: customer.id || "",
+      customerName: customer.name || "",
+      amount: customer.avg_order_amount || "",
+      dailyAmount: customer.avg_order_amount || "",
+      monthlyAmount: customer.avg_order_amount || "",
+      orderCount: customer.delivery_pattern || "",
+      deliveryPattern: customer.delivery_pattern || "",
+      lat: customer.lat,
+      lng: customer.lng
+    }))
+  };
+}
+
 async function writeDailyRouteQueued(payload) {
   dailyRouteWriteQueue = dailyRouteWriteQueue.then(() => writeDailyRoute(payload));
   return dailyRouteWriteQueue;
@@ -233,12 +281,22 @@ async function runRouteBatch({ startDate, endDate, vehicles, center, concurrency
             routeRefreshState.completed += 1;
             continue;
           }
-          const payload = await scrape({ date, vehicle, center });
+          let payload = await scrape({ date, vehicle, center });
+          if (!payload?.stops?.length) {
+            payload = await buildFallbackDailyRoute({ date, vehicle, center, reason: "Freshon returned no matched stops." }) || payload;
+          }
           await writeDailyRouteQueued(payload);
           routeRefreshState.completed += 1;
         } catch (error) {
-          routeRefreshState.failed += 1;
-          routeRefreshState.lastError = `${date} ${vehicle}: ${error.message}`;
+          const fallback = await buildFallbackDailyRoute({ date, vehicle, center, reason: error.message });
+          if (fallback) {
+            await writeDailyRouteQueued(fallback);
+            routeRefreshState.completed += 1;
+            routeRefreshState.lastError = `${date} ${vehicle}: Freshon failed, fallback saved (${error.message})`;
+          } else {
+            routeRefreshState.failed += 1;
+            routeRefreshState.lastError = `${date} ${vehicle}: ${error.message}`;
+          }
         }
       }
     });
@@ -336,10 +394,19 @@ app.post("/api/refresh-daily-route", requireAdmin, async (req, res) => {
   }
 
   try {
-    const payload = await refreshDailyRouteData({ date, vehicle, center });
+    let payload = await refreshDailyRouteData({ date, vehicle, center });
+    if (!payload?.stops?.length) {
+      payload = await buildFallbackDailyRoute({ date, vehicle, center, reason: "Freshon returned no matched stops." }) || payload;
+    }
     await writeDailyRoute(payload);
     res.json({ ok: true, date, vehicle, rowCount: payload.rowCount });
   } catch (error) {
+    const fallback = await buildFallbackDailyRoute({ date, vehicle, center, reason: error.message });
+    if (fallback) {
+      await writeDailyRoute(fallback);
+      res.json({ ok: true, date, vehicle, rowCount: fallback.rowCount, warning: fallback.warning });
+      return;
+    }
     res.status(500).json({ error: error.message });
   }
 });
