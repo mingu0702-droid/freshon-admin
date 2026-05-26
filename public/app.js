@@ -1,29 +1,19 @@
 let currentPayload = { columns: [], rows: [] };
-let statusTimer = null;
 
 const TOKEN_KEY = "freshonAdminToken";
 
 const statusEl = document.getElementById("status");
 const tokenEl = document.getElementById("adminToken");
 const saveTokenButton = document.getElementById("saveTokenButton");
-const refreshButton = document.getElementById("refreshButton");
 const reloadButton = document.getElementById("reloadButton");
 const csvButton = document.getElementById("csvButton");
-const routeRefreshButton = document.getElementById("routeRefreshButton");
-const routeCancelButton = document.getElementById("routeCancelButton");
-const routeStartDate = document.getElementById("routeStartDate");
-const routeEndDate = document.getElementById("routeEndDate");
-const routeCenter = document.getElementById("routeCenter");
-const routeVehicles = document.getElementById("routeVehicles");
-const routeRefreshStatus = document.getElementById("routeRefreshStatus");
+const uploadButton = document.getElementById("uploadButton");
+const fileInput = document.getElementById("fixedDispatchFiles");
+const uploadStatus = document.getElementById("uploadStatus");
 const table = document.getElementById("dataTable");
 
 function setStatus(text) {
   statusEl.textContent = text;
-}
-
-function showTableMessage(message) {
-  table.innerHTML = `<tbody><tr><td>${escapeHtml(message)}</td></tr></tbody>`;
 }
 
 function getToken() {
@@ -46,14 +36,6 @@ function loadSavedToken() {
   if (token) tokenEl.value = token;
 }
 
-function setDefaultDates() {
-  const today = new Date();
-  const yesterday = new Date(today.getTime() - 86400000);
-  const weekAgo = new Date(today.getTime() - 7 * 86400000);
-  routeStartDate.value ||= weekAgo.toISOString().slice(0, 10);
-  routeEndDate.value ||= yesterday.toISOString().slice(0, 10);
-}
-
 function render(payload) {
   currentPayload = payload;
   document.getElementById("rangeText").textContent = payload.range ? `${payload.range.startDate} ~ ${payload.range.endDate}` : "-";
@@ -63,57 +45,31 @@ function render(payload) {
   const columns = payload.columns || [];
   const rows = payload.rows || [];
   if (!columns.length) {
-    const message = payload.warning || "아직 고정배차 캐시가 없습니다. 관리 토큰 저장 후 고정배차 갱신을 눌러주세요.";
+    const message = payload.warning || "아직 고정배차 캐시가 없습니다. 월별 엑셀 파일을 업로드해 주세요.";
     table.innerHTML = `<tbody><tr><td>${escapeHtml(message)}</td></tr></tbody>`;
     return;
   }
 
+  const previewRows = rows.slice(0, 500);
   table.innerHTML = `
     <thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
     <tbody>
-      ${rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(row[column] || "")}</td>`).join("")}</tr>`).join("")}
+      ${previewRows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(row[column] || "")}</td>`).join("")}</tr>`).join("")}
     </tbody>
   `;
-}
-
-function renderRouteStatus(state) {
-  if (!state) {
-    routeRefreshStatus.textContent = "-";
-    return;
-  }
-  if (state.running) {
-    const current = state.current ? ` / 현재 ${state.current.date} ${state.current.vehicle}` : "";
-    const active = state.active?.length ? ` / 작업 ${state.active.map((item) => `${item.date} ${item.vehicle}`).join(", ")}` : "";
-    const skipped = state.skipped ? `, 기존 캐시 건너뜀 ${state.skipped}` : "";
-    routeRefreshStatus.textContent = `진행 중 ${state.completed}/${state.total}, 실패 ${state.failed}${skipped}${current}${active}`;
-    if (routeCancelButton) routeCancelButton.disabled = false;
-    return;
-  }
-  const finished = state.lastFinishedAt ? new Date(state.lastFinishedAt).toLocaleString("ko-KR") : "-";
-  const skipped = state.skipped ? `, 기존 캐시 건너뜀 ${state.skipped}` : "";
-  routeRefreshStatus.textContent = `대기 중 / 완료 ${state.completed || 0}/${state.total || 0}, 실패 ${state.failed || 0}${skipped}, 마지막 완료 ${finished}${state.lastError ? ` / 최근 오류: ${state.lastError}` : ""}`;
-  if (routeCancelButton) routeCancelButton.disabled = true;
+  uploadStatus.textContent = rows.length > previewRows.length
+    ? `저장 완료. 화면에는 ${previewRows.length.toLocaleString("ko-KR")}행만 미리보기로 표시합니다.`
+    : "저장 완료.";
 }
 
 async function loadStatus() {
   const response = await fetch("/api/status");
   if (!response.ok) return null;
   const json = await response.json();
-  renderRouteStatus(json.routeRefresh);
   if (json.refresh?.running) {
-    setStatus("고정배차 갱신 진행 중 - 다른 화면으로 이동해도 서버에서 계속 진행됩니다.");
+    setStatus("엑셀 저장 진행 중입니다.");
   } else if (json.refresh?.lastError) {
-    setStatus(`고정배차 갱신 실패: ${json.refresh.lastError}`);
-  }
-  if (json.routeRefresh?.running && !statusTimer) {
-    statusTimer = setInterval(loadStatus, 4000);
-  }
-  if (json.refresh?.running && !statusTimer) {
-    statusTimer = setInterval(loadStatus, 4000);
-  }
-  if (!json.routeRefresh?.running && !json.refresh?.running && statusTimer) {
-    clearInterval(statusTimer);
-    statusTimer = null;
+    setStatus(`최근 저장 실패: ${json.refresh.lastError}`);
   }
   return json;
 }
@@ -122,120 +78,48 @@ async function loadData() {
   setStatus("목록 불러오는 중");
   const response = await fetch("/api/fixed-dispatch");
   render(await response.json());
-  const status = await loadStatus();
-  if (!status?.refresh?.running && !status?.routeRefresh?.running) setStatus("조회 완료");
+  await loadStatus();
+  setStatus("조회 완료");
 }
 
-async function refreshData() {
+async function uploadFixedDispatchFiles() {
   const token = getToken();
   if (!token) {
-    alert("고정배차 갱신은 관리 토큰이 필요합니다. 한 번 입력한 뒤 토큰 저장을 눌러두면 다음부터 자동 입력됩니다.");
+    alert("엑셀 업로드 저장은 관리 토큰이 필요합니다. 토큰을 입력하고 저장해 주세요.");
     return;
   }
-  saveToken();
-  refreshButton.disabled = true;
-  setStatus("Freshon 고정배차 갱신 중");
-  try {
-    const response = await fetch("/api/refresh", {
-      method: "POST",
-      keepalive: true,
-      headers: {
-        "Content-Type": "application/json",
-        "x-admin-token": token
-      },
-      body: JSON.stringify({})
-    });
-    const json = await response.json();
-    if (response.status === 409) {
-      setStatus("이미 고정배차 갱신이 진행 중입니다. 다른 화면으로 이동해도 서버에서 계속 진행됩니다.");
-      await loadStatus();
-      return;
-    }
-    if (!response.ok) throw new Error(json.error || "고정배차 갱신 실패");
-    setStatus("고정배차 갱신 진행 중 - 다른 화면으로 이동해도 서버에서 계속 진행됩니다.");
-    await loadStatus();
-  } catch (error) {
-    const message = `고정배차 갱신 실패: ${error.message}`;
-    setStatus(message);
-    showTableMessage("고정배차 표를 찾지 못했습니다. 일일동선 캐시 수집은 별도 작업이라 계속 진행할 수 있습니다.");
-  } finally {
-    refreshButton.disabled = false;
-  }
-}
-
-async function refreshRouteCache() {
-  const token = getToken();
-  if (!token) {
-    alert("동선 캐시 갱신은 관리 토큰이 필요합니다. 한 번 입력한 뒤 토큰 저장을 눌러두면 다음부터 자동 입력됩니다.");
-    return;
-  }
-  if (!routeStartDate.value || !routeEndDate.value) {
-    alert("시작일과 종료일을 선택해주세요. 물류센터와 호차 목록은 비워두면 전체로 진행합니다.");
+  const files = [...fileInput.files];
+  if (!files.length) {
+    alert("업로드할 엑셀 파일을 선택해 주세요.");
     return;
   }
 
   saveToken();
-  routeRefreshButton.disabled = true;
-  setStatus("동선 캐시 갱신 시작 중");
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+
+  uploadButton.disabled = true;
+  uploadStatus.textContent = `${files.length}개 파일 업로드 중...`;
+  setStatus("엑셀 업로드 저장 중");
+
   try {
-    const response = await fetch("/api/refresh-daily-routes", {
+    const response = await fetch("/api/upload-fixed-dispatch", {
       method: "POST",
-      keepalive: true,
       headers: {
-        "Content-Type": "application/json",
         "x-admin-token": token
       },
-      body: JSON.stringify({
-        startDate: routeStartDate.value,
-        endDate: routeEndDate.value,
-        center: routeCenter.value.trim(),
-        vehicles: routeVehicles.value.trim()
-      })
+      body: formData
     });
     const json = await response.json();
-    if (response.status === 409) {
-      renderRouteStatus(json.routeRefresh);
-      setStatus("이미 동선 캐시 작업이 진행 중입니다. 필요하면 동선 작업 중지를 누른 뒤 다시 시작하세요.");
-      await loadStatus();
-      return;
-    }
-    if (!response.ok) throw new Error(json.error || "동선 캐시 갱신 실패");
-    renderRouteStatus(json.routeRefresh);
-    await loadStatus();
-    setStatus("동선 캐시 갱신 진행 중");
+    if (!response.ok) throw new Error(json.error || "엑셀 업로드 저장 실패");
+    uploadStatus.textContent = `업로드 ${json.uploadedRows.toLocaleString("ko-KR")}행, 전체 저장 ${json.rowCount.toLocaleString("ko-KR")}행`;
+    await loadData();
   } catch (error) {
-    setStatus(`동선 캐시 갱신 실패: ${error.message}`);
+    uploadStatus.textContent = `실패: ${error.message}`;
+    setStatus(`엑셀 업로드 저장 실패: ${error.message}`);
     alert(error.message);
   } finally {
-    routeRefreshButton.disabled = false;
-  }
-}
-
-async function cancelRouteCache() {
-  const token = getToken();
-  if (!token) {
-    alert("동선 작업 중지는 관리 토큰이 필요합니다.");
-    return;
-  }
-  routeCancelButton.disabled = true;
-  setStatus("동선 캐시 작업 중지 요청 중");
-  try {
-    const response = await fetch("/api/cancel-daily-routes", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-admin-token": token
-      },
-      body: JSON.stringify({})
-    });
-    const json = await response.json();
-    if (!response.ok) throw new Error(json.error || "동선 작업 중지 실패");
-    renderRouteStatus(json.routeRefresh);
-    setStatus("동선 캐시 작업 중지 요청 완료");
-    await loadStatus();
-  } catch (error) {
-    setStatus(`동선 작업 중지 실패: ${error.message}`);
-    alert(error.message);
+    uploadButton.disabled = false;
   }
 }
 
@@ -243,7 +127,7 @@ function downloadCsv() {
   const columns = currentPayload.columns || [];
   const rows = currentPayload.rows || [];
   if (!columns.length) {
-    alert("다운로드할 고정배차 목록이 없습니다. 먼저 고정배차 갱신을 실행해주세요.");
+    alert("다운로드할 고정배차 목록이 없습니다. 먼저 엑셀 파일을 업로드해 주세요.");
     return;
   }
   const csv = [
@@ -273,11 +157,9 @@ function escapeHtml(value) {
 }
 
 loadSavedToken();
-setDefaultDates();
 saveTokenButton.addEventListener("click", saveToken);
-refreshButton.addEventListener("click", refreshData);
-routeRefreshButton.addEventListener("click", refreshRouteCache);
-if (routeCancelButton) routeCancelButton.addEventListener("click", cancelRouteCache);
 reloadButton.addEventListener("click", loadData);
 csvButton.addEventListener("click", downloadCsv);
+uploadButton.addEventListener("click", uploadFixedDispatchFiles);
 loadData();
+
