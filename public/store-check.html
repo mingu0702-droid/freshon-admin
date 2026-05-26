@@ -4,8 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>신규지점확인</title>
-  <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=8f1459975e9f3b3aa62089837a2aeb85&libraries=services"></script>
-  <script src="./vehicle-data.js"></script>
+  <script>
+    window.KAKAO_SDK_FAILED = false;
+  </script>
+  <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=8f1459975e9f3b3aa62089837a2aeb85&autoload=false&libraries=services" onerror="window.KAKAO_SDK_FAILED=true"></script>
+  <script src="/vehicle-data.js"></script>
   <style>
     :root { --ink:#0f172a; --muted:#64748b; --line:#cbd5e1; --bg:#eef3f8; --panel:#fff; --blue:#2563eb; --ok:#047857; --warn:#b45309; --danger:#b91c1c; }
     * { box-sizing:border-box; }
@@ -77,7 +80,7 @@
     <section id="map"></section>
   </main>
   <script>
-    const data = window.VEHICLE_AREA_DATA;
+    const data = window.VEHICLE_AREA_DATA || { vehicles: [] };
     const vehicles = data.vehicles || [];
     const customers = vehicles.flatMap((vehicle) => (vehicle.customers || []).map((customer) => ({ ...customer, vehicle })));
     const fmt = new Intl.NumberFormat("ko-KR");
@@ -156,16 +159,31 @@
     }
 
     function initMap() {
-      if (!window.kakao?.maps) {
-        document.getElementById("map").innerHTML = '<div style="padding:24px;font-weight:900;color:#b91c1c">카카오 지도를 불러오지 못했습니다. 카카오 JavaScript 키의 도메인 설정에 freshon-admin-1.onrender.com 이 들어있는지 확인해주세요.</div>';
+      const mapEl = document.getElementById("map");
+      const showMapError = (message) => {
+        mapEl.innerHTML = `<div style="padding:24px;font-weight:900;color:#b91c1c;line-height:1.55">${message}</div>`;
+      };
+      if (window.KAKAO_SDK_FAILED || !window.kakao?.maps) {
+        showMapError("카카오 지도를 불러오지 못했습니다.<br>카카오 Developers > JavaScript 키 > Web 도메인에 https://freshon-admin-1.onrender.com 을 추가해주세요.");
         return;
       }
-      map = new kakao.maps.Map(document.getElementById("map"), {
-        center:new kakao.maps.LatLng(36.8, 127.8),
-        level:13
-      });
-      geocoder = new kakao.maps.services.Geocoder();
-      setTimeout(() => kakao.maps.event.trigger(map, "resize"), 150);
+      const createMap = () => {
+        try {
+          map = new kakao.maps.Map(mapEl, {
+            center:new kakao.maps.LatLng(36.8, 127.8),
+            level:13
+          });
+          geocoder = new kakao.maps.services.Geocoder();
+          setTimeout(() => kakao.maps.event.trigger(map, "resize"), 150);
+        } catch (error) {
+          showMapError(`카카오 지도 초기화에 실패했습니다.<br>${esc(error.message || error)}`);
+        }
+      };
+      if (typeof kakao.maps.load === "function") {
+        kakao.maps.load(createMap);
+      } else {
+        createMap();
+      }
     }
 
     function existingByCode(code) {
@@ -408,7 +426,7 @@
       }
     }
 
-    initMap();
+    window.addEventListener("load", initMap);
     document.getElementById("checkButton").addEventListener("click", runCheck);
   </script>
 </body>
