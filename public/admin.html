@@ -14,7 +14,6 @@
       <nav class="page-nav" aria-label="페이지 이동">
         <a href="/daily-routes.html">일일동선</a>
         <a href="/">권역 지도</a>
-        <a href="/store-check.html">신규지점확인</a>
       </nav>
     </div>
     <div id="status">상태 확인 중</div>
@@ -26,18 +25,18 @@
         <label for="adminToken">관리 토큰</label>
         <input id="adminToken" type="password" placeholder="처음 한 번 저장하면 브라우저에 보관됩니다">
       </div>
-      <button id="saveTokenButton" class="secondary" type="button">토큰 저장</button>
-      <button id="reloadButton" type="button">목록 새로고침</button>
-      <button id="csvButton" type="button">CSV 다운로드</button>
+      <button id="saveTokenButton" class="secondary" type="button">토큰 기억하기</button>
+      <button id="reloadButton" type="button">저장자료 보기</button>
+      <button id="csvButton" type="button">엑셀용 파일 받기</button>
     </section>
 
     <section class="toolbar upload-toolbar">
       <div class="wide">
         <label for="fixedDispatchFiles">고정배차 월별 엑셀</label>
         <input id="fixedDispatchFiles" type="file" multiple accept=".xlsx,.xls,.csv">
-        <p class="help-text">3개월치면 월별 파일 3개를 한 번에 선택하세요. 기존 데이터와 합쳐 저장하고 중복은 덮어씁니다.</p>
+        <p class="help-text">월별 파일을 여러 개 선택해도 하나씩 저장합니다. 기존 데이터와 합쳐 저장하고 중복은 덮어씁니다.</p>
       </div>
-      <button id="uploadButton" type="button">엑셀 업로드 저장</button>
+      <button id="uploadButton" type="button">엑셀 저장하기</button>
     </section>
 
     <section class="route-status">

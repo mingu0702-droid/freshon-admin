@@ -28,7 +28,7 @@ function saveToken() {
     return;
   }
   localStorage.setItem(TOKEN_KEY, token);
-  setStatus("관리 토큰을 이 브라우저에 저장했습니다.");
+  setStatus("관리 토큰을 이 브라우저에 기억했습니다.");
 }
 
 function loadSavedToken() {
@@ -37,15 +37,15 @@ function loadSavedToken() {
 }
 
 function render(payload) {
-  currentPayload = payload;
-  document.getElementById("rangeText").textContent = payload.range ? `${payload.range.startDate} ~ ${payload.range.endDate}` : "-";
-  document.getElementById("generatedAt").textContent = payload.generatedAt ? new Date(payload.generatedAt).toLocaleString("ko-KR") : "-";
-  document.getElementById("rowCount").textContent = String(payload.rowCount || payload.rows?.length || 0);
+  currentPayload = payload || { columns: [], rows: [] };
+  document.getElementById("rangeText").textContent = currentPayload.range ? `${currentPayload.range.startDate} ~ ${currentPayload.range.endDate}` : "-";
+  document.getElementById("generatedAt").textContent = currentPayload.generatedAt ? new Date(currentPayload.generatedAt).toLocaleString("ko-KR") : "-";
+  document.getElementById("rowCount").textContent = String(currentPayload.rowCount || currentPayload.rows?.length || 0);
 
-  const columns = payload.columns || [];
-  const rows = payload.rows || [];
+  const columns = currentPayload.columns || [];
+  const rows = currentPayload.rows || [];
   if (!columns.length) {
-    const message = payload.warning || "아직 고정배차 캐시가 없습니다. 월별 엑셀 파일을 업로드해 주세요.";
+    const message = currentPayload.warning || "아직 고정배차 캐시가 없습니다. 월별 엑셀 파일을 업로드해주세요.";
     table.innerHTML = `<tbody><tr><td>${escapeHtml(message)}</td></tr></tbody>`;
     return;
   }
@@ -67,7 +67,7 @@ async function loadStatus() {
   if (!response.ok) return null;
   const json = await response.json();
   if (json.refresh?.running) {
-    setStatus("엑셀 저장 진행 중입니다.");
+    setStatus("작업 저장 진행 중입니다.");
   } else if (json.refresh?.lastError) {
     setStatus(`최근 저장 실패: ${json.refresh.lastError}`);
   }
@@ -75,7 +75,7 @@ async function loadStatus() {
 }
 
 async function loadData() {
-  setStatus("목록 불러오는 중");
+  setStatus("저장자료 불러오는 중");
   const response = await fetch("/api/fixed-dispatch");
   render(await response.json());
   await loadStatus();
@@ -85,38 +85,58 @@ async function loadData() {
 async function uploadFixedDispatchFiles() {
   const token = getToken();
   if (!token) {
-    alert("엑셀 업로드 저장은 관리 토큰이 필요합니다. 토큰을 입력하고 저장해 주세요.");
+    alert("관리 토큰을 먼저 입력해주세요. 한 번 저장하면 다음부터는 자동으로 불러옵니다.");
     return;
   }
   const files = [...fileInput.files];
   if (!files.length) {
-    alert("업로드할 엑셀 파일을 선택해 주세요.");
+    alert("업로드할 엑셀 파일을 선택해주세요.");
     return;
   }
 
   saveToken();
-  const formData = new FormData();
-  files.forEach((file) => formData.append("files", file));
-
   uploadButton.disabled = true;
-  uploadStatus.textContent = `${files.length}개 파일 업로드 중...`;
-  setStatus("엑셀 업로드 저장 중");
+  setStatus("엑셀 저장 진행 중");
+  const startedAt = Date.now();
+  let uploadedRows = 0;
+  let finalRowCount = 0;
 
   try {
-    const response = await fetch("/api/upload-fixed-dispatch", {
-      method: "POST",
-      headers: {
-        "x-admin-token": token
-      },
-      body: formData
-    });
-    const json = await response.json();
-    if (!response.ok) throw new Error(json.error || "엑셀 업로드 저장 실패");
-    uploadStatus.textContent = `업로드 ${json.uploadedRows.toLocaleString("ko-KR")}행, 전체 저장 ${json.rowCount.toLocaleString("ko-KR")}행`;
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i];
+      const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+      const done = i;
+      const avgSeconds = done ? elapsedSeconds / done : null;
+      const remainSeconds = avgSeconds ? Math.max(1, Math.round(avgSeconds * (files.length - done))) : null;
+      uploadStatus.textContent = `${i + 1}/${files.length} 저장 중: ${file.name}${remainSeconds ? ` · 예상 남은 시간 ${remainSeconds}초` : " · 남은 시간 계산 중"}`;
+
+      const formData = new FormData();
+      formData.append("files", file);
+      const response = await fetch("/api/upload-fixed-dispatch", {
+        method: "POST",
+        headers: { "x-admin-token": token },
+        body: formData
+      });
+
+      const responseText = await response.text();
+      let json = {};
+      if (responseText) {
+        try {
+          json = JSON.parse(responseText);
+        } catch (_error) {
+          throw new Error(`서버 응답을 읽지 못했습니다. ${file.name} 파일이 너무 크거나 서버가 처리 중에 끊겼을 수 있습니다.`);
+        }
+      }
+      if (!response.ok) throw new Error(json.error || `${file.name} 저장 실패`);
+      uploadedRows += Number(json.uploadedRows || 0);
+      finalRowCount = Number(json.rowCount || finalRowCount || 0);
+    }
+    const totalSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    uploadStatus.textContent = `저장 완료 · 업로드 ${uploadedRows.toLocaleString("ko-KR")}행 · 전체 ${finalRowCount.toLocaleString("ko-KR")}행 · 총 ${totalSeconds}초`;
     await loadData();
   } catch (error) {
     uploadStatus.textContent = `실패: ${error.message}`;
-    setStatus(`엑셀 업로드 저장 실패: ${error.message}`);
+    setStatus(`엑셀 저장 실패: ${error.message}`);
     alert(error.message);
   } finally {
     uploadButton.disabled = false;
@@ -127,7 +147,7 @@ function downloadCsv() {
   const columns = currentPayload.columns || [];
   const rows = currentPayload.rows || [];
   if (!columns.length) {
-    alert("다운로드할 고정배차 목록이 없습니다. 먼저 엑셀 파일을 업로드해 주세요.");
+    alert("받을 고정배차 목록이 없습니다. 먼저 엑셀 파일을 업로드해주세요.");
     return;
   }
   const csv = [
@@ -162,4 +182,3 @@ reloadButton.addEventListener("click", loadData);
 csvButton.addEventListener("click", downloadCsv);
 uploadButton.addEventListener("click", uploadFixedDispatchFiles);
 loadData();
-
