@@ -1,5 +1,6 @@
 import express from "express";
 import { spawn } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import multer from "multer";
@@ -16,10 +17,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.resolve(__dirname, "..", "public");
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
+const uploadDir = path.join(os.tmpdir(), "freshon-upload-files");
+fsSync.mkdirSync(uploadDir, { recursive: true });
 
 const app = express();
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => callback(null, uploadDir),
+    filename: (_req, file, callback) => {
+      const safeName = Buffer.from(file.originalname, "latin1").toString("utf8").replace(/[^\w.-]+/g, "_");
+      callback(null, `${Date.now()}-${Math.random().toString(36).slice(2)}-${safeName}`);
+    }
+  }),
   limits: {
     fileSize: 100 * 1024 * 1024,
     files: 12
@@ -86,6 +95,13 @@ function parsePlainWorkbook(file) {
   }
 
   return { rows, columns: [...columns] };
+}
+
+async function withFileBuffer(file, callback) {
+  if (file.buffer) return callback(file);
+  if (!file.path) throw new Error(`${file.originalname} upload temp file was not found.`);
+  const buffer = await fs.readFile(file.path);
+  return callback({ ...file, buffer });
 }
 
 async function parseEncryptedWorkbook(file) {
@@ -504,7 +520,11 @@ async function processUploadedDispatchFiles(files, jobId) {
       refreshState.currentFile = file.originalname;
       refreshState.completedFiles = index;
       refreshState.totalFiles = files.length;
-      parsedFiles.push(await parseWorkbook(file));
+      try {
+        parsedFiles.push(await withFileBuffer(file, parseWorkbook));
+      } finally {
+        if (file.path) await fs.rm(file.path, { force: true }).catch(() => {});
+      }
     }
 
     const uploadedRows = parsedFiles.flatMap((item) => item.rows);
