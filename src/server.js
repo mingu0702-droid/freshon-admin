@@ -1,5 +1,7 @@
 import express from "express";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import multer from "multer";
 import path from "node:path";
 import XLSX from "xlsx";
@@ -13,6 +15,7 @@ import { writeDispatchCache } from "./store.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.resolve(__dirname, "..", "public");
+const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
 
 const app = express();
 const upload = multer({
@@ -101,6 +104,40 @@ async function parseEncryptedWorkbook(file) {
   return { rows, columns: [...columns] };
 }
 
+function runPythonDecrypt(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("python3", [decryptScriptPath, inputPath, outputPath, config.excelPassword], {
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(stderr.trim() || `python decrypt exited with code ${code}`));
+      }
+    });
+  });
+}
+
+async function parseOfficeCryptoWorkbook(file) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "freshon-excel-"));
+  const inputPath = path.join(tempDir, "input.xls");
+  const outputPath = path.join(tempDir, "decrypted.xls");
+  try {
+    await fs.writeFile(inputPath, file.buffer);
+    await runPythonDecrypt(inputPath, outputPath);
+    const decryptedBuffer = await fs.readFile(outputPath);
+    return parsePlainWorkbook({ ...file, buffer: decryptedBuffer });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function parseWorkbook(file) {
   try {
     return parsePlainWorkbook(file);
@@ -108,7 +145,11 @@ async function parseWorkbook(file) {
     try {
       return await parseEncryptedWorkbook(file);
     } catch (encryptedError) {
-      throw new Error(`${file.originalname} 파일을 읽지 못했습니다. 암호화 Excel 복호화도 실패했습니다. 암호 설정(EXCEL_PASSWORD)과 파일 형식을 확인해주세요. (일반: ${error.message} / 암호: ${encryptedError.message})`);
+      try {
+        return await parseOfficeCryptoWorkbook(file);
+      } catch (officeCryptoError) {
+        throw new Error(`${file.originalname} 파일을 읽지 못했습니다. 암호화 Excel 복호화도 실패했습니다. 암호 설정(EXCEL_PASSWORD)과 파일 형식을 확인해주세요. (일반: ${error.message} / xlsx암호: ${encryptedError.message} / 구형암호: ${officeCryptoError.message})`);
+      }
     }
   }
 }
