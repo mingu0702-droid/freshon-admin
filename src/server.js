@@ -132,7 +132,82 @@ async function readVehicleAreaData() {
   return vehicleAreaDataPromise;
 }
 
+function firstValue(row, columns) {
+  for (const column of columns) {
+    const value = normalizeCell(row[column]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function normalizeDateValue(value) {
+  const text = normalizeCell(value);
+  if (!text) return "";
+  const match = text.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+  if (!match) return "";
+  return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
+}
+
+function normalizeVehicleValue(value) {
+  return normalizeCell(value).replace(/\s+/g, "").replace(new RegExp("\\uD638$", "u"), "");
+}
+
+function rowMatchesDailyRoute(row, date, vehicle) {
+  const rowDate = normalizeDateValue(firstValue(row, ["\uC785\uACE0\uC694\uCCAD\uC77C", "\uB4F1\uB85D\uC77C", "\uC77C\uC790", "\uBC30\uC1A1\uC77C", "\uCD9C\uACE0\uC77C"]));
+  if (rowDate !== date) return false;
+  const selected = normalizeVehicleValue(vehicle);
+  const vehicleValues = ["\uD655\uC815\uD638\uCC28", "\uAE30\uC900\uD638\uCC28", "\uD638\uCC28", "\uCC28\uB7C9", "\uCC28\uB7C9\uBC88\uD638"]
+    .map((column) => normalizeVehicleValue(row[column]))
+    .filter(Boolean);
+  return vehicleValues.some((value) => value === selected || value.includes(selected));
+}
+
+function buildStopFromDispatchRow(row, vehicle, sequence) {
+  const address = [
+    firstValue(row, ["\uACE0\uAC1D\uC8FC\uC18C", "\uC8FC\uC18C", "\uBC30\uC1A1\uC8FC\uC18C"]),
+    firstValue(row, ["\uC0C1\uC138\uC8FC\uC18C", "\uC0C1\uC138\uC8FC\uC18C1", "\uC0C1\uC138"])
+  ].filter(Boolean).join(" ").trim();
+  const customerCode = firstValue(row, ["\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uAC70\uB798\uCC98\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
+  const customerName = firstValue(row, ["\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
+  const amount = firstValue(row, ["\uB9E4\uCD9C\uAE08\uC561", "\uAE08\uC561", "\uCD9C\uACE0\uAE08\uC561", "\uD310\uB9E4\uAE08\uC561"]);
+  return {
+    sequence,
+    raw: row,
+    code: customerCode,
+    name: customerName,
+    address,
+    vehicle: `${vehicle}\uD638`,
+    customerCode,
+    customerName,
+    amount,
+    dailyAmount: amount,
+    monthlyAmount: amount,
+    orderCount: firstValue(row, ["\uBC30\uC1A1\uAC74\uC218", "\uC8FC\uBB38\uC218", "\uAC74\uC218"]),
+    weight: firstValue(row, ["\uC911\uB7C9", "\uBB34\uAC8C"]),
+    cbm: firstValue(row, ["CBM", "cbm"])
+  };
+}
+
+async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" }) {
+  const cache = await readDispatchCache();
+  const rows = (cache.rows || []).filter((row) => rowMatchesDailyRoute(row, date, vehicle));
+  if (!rows.length) return null;
+  return {
+    generatedAt: new Date().toISOString(),
+    source: "uploaded-fixed-dispatch",
+    warning: "Uploaded fixed-dispatch Excel data was used for this daily route.",
+    date,
+    vehicle,
+    center,
+    rowCount: rows.length,
+    stops: rows.map((row, index) => buildStopFromDispatchRow(row, vehicle, index + 1))
+  };
+}
+
 async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = "" }) {
+  const uploaded = await buildDailyRouteFromUploadedDispatch({ date, vehicle, center });
+  if (uploaded) return uploaded;
+
   const data = await readVehicleAreaData();
   const vehicleData = (data.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
   const customers = (vehicleData?.customers || []).filter((customer) => Number.isFinite(customer.lat) && Number.isFinite(customer.lng));
@@ -141,7 +216,7 @@ async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = ""
   return {
     generatedAt: new Date().toISOString(),
     source: "vehicle-area-fallback",
-    warning: reason ? `Freshon route scraping is disabled; used vehicle area data instead. ${reason}` : "Freshon route scraping is disabled; used vehicle area data instead.",
+    warning: reason ? `No uploaded route rows for this date; used vehicle area data instead. ${reason}` : "No uploaded route rows for this date; used vehicle area data instead.",
     date,
     vehicle,
     center,
@@ -152,7 +227,7 @@ async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = ""
       code: customer.id || "",
       name: customer.name || "",
       address: customer.address || "",
-      vehicle: `${vehicle}호`,
+      vehicle: `${vehicle}\uD638`,
       customerCode: customer.id || "",
       customerName: customer.name || "",
       amount: customer.avg_order_amount || "",
