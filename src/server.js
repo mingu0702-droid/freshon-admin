@@ -21,7 +21,7 @@ const app = express();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 30 * 1024 * 1024,
+    fileSize: 100 * 1024 * 1024,
     files: 12
   }
 });
@@ -540,6 +540,17 @@ app.post("/api/upload-fixed-dispatch", requireAdmin, upload.array("files", 12), 
     refreshState.lastFinishedAt = new Date().toISOString();
     res.status(500).json({ error: error.message });
   }
+});
+
+app.use((error, _req, res, next) => {
+  if (!error) return next();
+  if (error instanceof multer.MulterError) {
+    const message = error.code === "LIMIT_FILE_SIZE"
+      ? "Excel file is too large. The current upload limit is 100MB per file."
+      : `Excel upload failed: ${error.message}`;
+    return res.status(413).json({ error: message });
+  }
+  return next(error);
 });
 
 app.get("*", (_req, res) => {

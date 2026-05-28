@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "render-build": "echo build complete"
+    "render-build": "python3 -m pip install --user --break-system-packages msoffcrypto-tool || python3 -m pip install --user msoffcrypto-tool || echo python decrypt dependency install skipped"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
