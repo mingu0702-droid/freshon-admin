@@ -82,7 +82,7 @@ async function loadStatus() {
   if (!response.ok) return null;
   const json = await response.json();
   if (json.refresh?.running) {
-    setStatus("작업 저장 진행 중입니다.");
+    setStatus("저장 작업이 진행 중입니다.");
   } else if (json.refresh?.lastError) {
     setStatus(`최근 저장 실패: ${json.refresh.lastError}`);
   }
@@ -107,6 +107,23 @@ function uploadProgressText({ index, total, fileName, fileElapsed, completedTime
   const nextFiles = total - index - 1;
   const remainingSeconds = currentRemaining + avgSeconds * nextFiles;
   return `${index + 1}/${total} 저장 중: ${fileName} · 경과 ${formatSeconds(fileElapsed)} · 예상 남은 시간 ${formatSeconds(remainingSeconds)}`;
+}
+
+async function readUploadResponse(response, fileName) {
+  const responseText = await response.text();
+  let json = {};
+  if (responseText) {
+    try {
+      json = JSON.parse(responseText);
+    } catch (_error) {
+      const preview = responseText.replace(/\s+/g, " ").slice(0, 300);
+      throw new Error(`${fileName} 저장 실패 · HTTP ${response.status} · 서버 응답: ${preview || "empty response"}`);
+    }
+  }
+  if (!response.ok) {
+    throw new Error(json.error || `${fileName} 저장 실패 · HTTP ${response.status}`);
+  }
+  return json;
 }
 
 async function uploadFixedDispatchFiles() {
@@ -156,16 +173,7 @@ async function uploadFixedDispatchFiles() {
           body: formData
         });
 
-        const responseText = await response.text();
-        let json = {};
-        if (responseText) {
-          try {
-            json = JSON.parse(responseText);
-          } catch (_error) {
-            throw new Error(`서버 응답을 읽지 못했습니다. ${file.name} 파일이 너무 크거나 서버가 처리 중에 끊겼을 수 있습니다.`);
-          }
-        }
-        if (!response.ok) throw new Error(json.error || `${file.name} 저장 실패`);
+        const json = await readUploadResponse(response, file.name);
         uploadedRows += Number(json.uploadedRows || 0);
         finalRowCount = Number(json.rowCount || finalRowCount || 0);
         completedTimes.push(Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000)));

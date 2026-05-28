@@ -104,9 +104,9 @@ async function parseEncryptedWorkbook(file) {
   return { rows, columns: [...columns] };
 }
 
-function runPythonDecrypt(inputPath, outputPath) {
+function spawnDecryptWithPython(command, inputPath, outputPath) {
   return new Promise((resolve, reject) => {
-    const child = spawn("python3", [decryptScriptPath, inputPath, outputPath, config.excelPassword], {
+    const child = spawn(command, [decryptScriptPath, inputPath, outputPath, config.excelPassword], {
       stdio: ["ignore", "ignore", "pipe"]
     });
     let stderr = "";
@@ -118,10 +118,23 @@ function runPythonDecrypt(inputPath, outputPath) {
       if (code === 0) {
         resolve();
       } else {
-        reject(new Error(stderr.trim() || `python decrypt exited with code ${code}`));
+        reject(new Error(stderr.trim() || `${command} decrypt exited with code ${code}`));
       }
     });
   });
+}
+
+async function runPythonDecrypt(inputPath, outputPath) {
+  const errors = [];
+  for (const command of ["python3", "python"]) {
+    try {
+      await spawnDecryptWithPython(command, inputPath, outputPath);
+      return;
+    } catch (error) {
+      errors.push(`${command}: ${error.message}`);
+    }
+  }
+  throw new Error(`Python Excel decrypt failed. ${errors.join(" / ")}`);
 }
 
 async function parseOfficeCryptoWorkbook(file) {
