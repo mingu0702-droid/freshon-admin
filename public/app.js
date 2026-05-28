@@ -126,6 +126,35 @@ async function readUploadResponse(response, fileName) {
   return json;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForUploadJob(jobId, fileName, fileStartedAt) {
+  while (true) {
+    await sleep(3000);
+    const status = await loadStatus();
+    const refresh = status?.refresh || {};
+    if (refresh.jobId && refresh.jobId !== jobId) {
+      throw new Error(`${fileName} 저장 상태를 확인하지 못했습니다. 다른 저장 작업이 시작되었습니다.`);
+    }
+    const elapsed = Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000));
+    if (refresh.running) {
+      const current = refresh.currentFile ? ` · 현재 파일 ${refresh.currentFile}` : "";
+      uploadStatus.textContent = `${fileName} 서버 저장 중 · 경과 ${formatSeconds(elapsed)}${current}`;
+      continue;
+    }
+    if (refresh.lastError) {
+      throw new Error(refresh.lastError);
+    }
+    return {
+      uploadedRows: Number(refresh.uploadedRows || 0),
+      rowCount: Number(refresh.rowCount || 0),
+      range: refresh.range || null
+    };
+  }
+}
+
 async function uploadFixedDispatchFiles() {
   const token = getToken();
   if (!token) {
@@ -173,7 +202,10 @@ async function uploadFixedDispatchFiles() {
           body: formData
         });
 
-        const json = await readUploadResponse(response, file.name);
+        const accepted = await readUploadResponse(response, file.name);
+        const json = accepted.accepted
+          ? await waitForUploadJob(accepted.jobId, file.name, fileStartedAt)
+          : accepted;
         uploadedRows += Number(json.uploadedRows || 0);
         finalRowCount = Number(json.rowCount || finalRowCount || 0);
         completedTimes.push(Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000)));

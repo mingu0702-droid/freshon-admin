@@ -33,7 +33,8 @@ let refreshState = {
   running: false,
   lastError: null,
   lastStartedAt: null,
-  lastFinishedAt: null
+  lastFinishedAt: null,
+  jobId: null
 };
 
 let vehicleAreaDataPromise = null;
@@ -495,25 +496,17 @@ app.get("/admin", (_req, res) => {
   res.sendFile(path.join(publicDir, "admin.html"));
 });
 
-app.post("/api/upload-fixed-dispatch", requireAdmin, upload.array("files", 12), async (req, res) => {
-  if (refreshState.running) {
-    return res.status(409).json({ error: "Upload already running.", refresh: refreshState });
-  }
-  const files = req.files || [];
-  if (!files.length) {
-    return res.status(400).json({ error: "Excel files are required." });
-  }
-
-  refreshState = {
-    running: true,
-    lastError: null,
-    lastStartedAt: new Date().toISOString(),
-    lastFinishedAt: null
-  };
-
+async function processUploadedDispatchFiles(files, jobId) {
   try {
     const current = await readDispatchCache();
-    const parsedFiles = await Promise.all(files.map((file) => parseWorkbook(file)));
+    const parsedFiles = [];
+    for (const [index, file] of files.entries()) {
+      refreshState.currentFile = file.originalname;
+      refreshState.completedFiles = index;
+      refreshState.totalFiles = files.length;
+      parsedFiles.push(await parseWorkbook(file));
+    }
+
     const uploadedRows = parsedFiles.flatMap((item) => item.rows);
     if (!uploadedRows.length) {
       throw new Error("No rows were found in the uploaded Excel files.");
@@ -536,23 +529,59 @@ app.post("/api/upload-fixed-dispatch", requireAdmin, upload.array("files", 12), 
     };
 
     await writeDispatchCache(payload);
-    refreshState.running = false;
-    refreshState.lastFinishedAt = new Date().toISOString();
-    refreshState.rowCount = payload.rowCount;
-    refreshState.range = payload.range;
-    res.json({
-      ok: true,
+    refreshState = {
+      ...refreshState,
+      running: false,
+      lastError: null,
+      lastFinishedAt: new Date().toISOString(),
+      currentFile: null,
+      completedFiles: files.length,
+      totalFiles: files.length,
       uploadedRows: uploadedRows.length,
       rowCount: payload.rowCount,
-      files: payload.uploadedFiles,
-      range: payload.range
-    });
+      range: payload.range,
+      jobId
+    };
   } catch (error) {
-    refreshState.running = false;
-    refreshState.lastError = error.message;
-    refreshState.lastFinishedAt = new Date().toISOString();
-    res.status(500).json({ error: error.message });
+    refreshState = {
+      ...refreshState,
+      running: false,
+      lastError: error.message,
+      lastFinishedAt: new Date().toISOString(),
+      jobId
+    };
+    console.error(`Upload job ${jobId} failed:`, error);
   }
+}
+
+app.post("/api/upload-fixed-dispatch", requireAdmin, upload.array("files", 12), async (req, res) => {
+  if (refreshState.running) {
+    return res.status(409).json({ error: "Upload already running.", refresh: refreshState });
+  }
+  const files = req.files || [];
+  if (!files.length) {
+    return res.status(400).json({ error: "Excel files are required." });
+  }
+
+  const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  refreshState = {
+    running: true,
+    lastError: null,
+    lastStartedAt: new Date().toISOString(),
+    lastFinishedAt: null,
+    currentFile: files[0]?.originalname || null,
+    completedFiles: 0,
+    totalFiles: files.length,
+    uploadedRows: 0,
+    rowCount: 0,
+    range: null,
+    jobId
+  };
+
+  res.status(202).json({ ok: true, accepted: true, jobId, refresh: refreshState });
+  setImmediate(() => {
+    processUploadedDispatchFiles(files, jobId);
+  });
 });
 
 app.use((error, _req, res, next) => {
