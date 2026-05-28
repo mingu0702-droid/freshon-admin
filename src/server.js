@@ -41,7 +41,12 @@ function normalizeCell(value) {
 }
 
 function parseWorkbook(file) {
-  const workbook = XLSX.read(file.buffer, { type: "buffer", cellDates: true });
+  let workbook;
+  try {
+    workbook = XLSX.read(file.buffer, { type: "buffer", cellDates: true, password: config.excelPassword });
+  } catch (error) {
+    throw new Error(`${file.originalname} 파일을 읽지 못했습니다. 암호가 맞는지 또는 Excel에서 다시 저장한 파일인지 확인해주세요. (${error.message})`);
+  }
   const rows = [];
   const columns = new Set();
 
@@ -81,6 +86,7 @@ function makeRowKey(row) {
     "호차",
     "확정호차",
     "기준호차",
+    "고객주소",
     "주소"
   ];
   const values = priorityKeys.map((key) => row[key]).filter(Boolean);
@@ -105,14 +111,8 @@ function inferRange(rows) {
   for (const row of rows) {
     for (const column of dateColumns) {
       const value = normalizeCell(row[column]);
-      if (/^\d{4}[-./]\d{1,2}[-./]\d{1,2}$/.test(value)) {
-        const normalized = value
-          .replace(/[./]/g, "-")
-          .split("-")
-          .map((part, index) => index === 0 ? part : part.padStart(2, "0"))
-          .join("-");
-        dates.push(normalized);
-      }
+      const normalized = normalizeDateValue(value);
+      if (normalized) dates.push(normalized);
     }
   }
   dates.sort();
@@ -132,10 +132,34 @@ async function readVehicleAreaData() {
   return vehicleAreaDataPromise;
 }
 
+function normalizeColumnName(value) {
+  return normalizeCell(value).replace(/\s+/g, "").replace(/[()（）]/g, "");
+}
+
 function firstValue(row, columns) {
   for (const column of columns) {
     const value = normalizeCell(row[column]);
     if (value) return value;
+  }
+  const entries = Object.entries(row);
+  for (const column of columns) {
+    const target = normalizeColumnName(column);
+    if (!target) continue;
+    const match = entries.find(([key, value]) => {
+      const keyName = normalizeColumnName(key);
+      return normalizeCell(value) && (keyName === target || keyName.includes(target));
+    });
+    if (match) return normalizeCell(match[1]);
+  }
+  return "";
+}
+
+function exactColumnValue(row, columns) {
+  const entries = Object.entries(row);
+  for (const column of columns) {
+    const target = normalizeColumnName(column);
+    const match = entries.find(([key, value]) => normalizeColumnName(key) === target && normalizeCell(value));
+    if (match) return normalizeCell(match[1]);
   }
   return "";
 }
@@ -143,23 +167,68 @@ function firstValue(row, columns) {
 function normalizeDateValue(value) {
   const text = normalizeCell(value);
   if (!text) return "";
-  const match = text.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+  const match = text.match(/(\d{4})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})/);
   if (!match) return "";
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
 function normalizeVehicleValue(value) {
-  return normalizeCell(value).replace(/\s+/g, "").replace(new RegExp("\\uD638$", "u"), "");
+  const text = normalizeCell(value).replace(/\s+/g, "");
+  if (!text) return "";
+  return text
+    .replace(new RegExp("\\uD638\\uCC28$", "u"), "")
+    .replace(new RegExp("\\uD638$", "u"), "")
+    .replace(new RegExp("\\uBC88$", "u"), "");
+}
+
+function vehicleTokens(value) {
+  const text = normalizeVehicleValue(value);
+  const tokens = new Set();
+  if (!text) return tokens;
+  tokens.add(text);
+  const digitMatch = text.match(/\d{2,4}/);
+  if (digitMatch) tokens.add(digitMatch[0]);
+  const prefixedMatch = text.match(/[\uC6A9\uCC99]\d{1,4}/u);
+  if (prefixedMatch) tokens.add(prefixedMatch[0]);
+  return tokens;
 }
 
 function rowMatchesDailyRoute(row, date, vehicle) {
   const rowDate = normalizeDateValue(firstValue(row, ["\uC785\uACE0\uC694\uCCAD\uC77C", "\uB4F1\uB85D\uC77C", "\uC77C\uC790", "\uBC30\uC1A1\uC77C", "\uCD9C\uACE0\uC77C"]));
   if (rowDate !== date) return false;
-  const selected = normalizeVehicleValue(vehicle);
-  const vehicleValues = ["\uD655\uC815\uD638\uCC28", "\uAE30\uC900\uD638\uCC28", "\uD638\uCC28", "\uCC28\uB7C9", "\uCC28\uB7C9\uBC88\uD638"]
-    .map((column) => normalizeVehicleValue(row[column]))
-    .filter(Boolean);
-  return vehicleValues.some((value) => value === selected || value.includes(selected));
+  const selected = vehicleTokens(vehicle);
+  if (!selected.size) return false;
+  const rowTokens = ["\uD655\uC815\uD638\uCC28", "\uAE30\uC900\uD638\uCC28", "\uD638\uCC28", "\uCC28\uB7C9", "\uCC28\uB7C9\uBC88\uD638", "\uBC30\uCC28\uD638\uCC28"]
+    .flatMap((column) => [...vehicleTokens(row[column])]);
+  return rowTokens.some((value) => selected.has(value));
+}
+
+function deliveryCompletionInfo(row) {
+  const status = firstValue(row, ["\uBC30\uC1A1\uC0C1\uD0DC", "\uC0C1\uD0DC", "\uCC98\uB9AC\uC0C1\uD0DC"]);
+  const completeFlag = exactColumnValue(row, ["\uBC30\uC1A1\uC644\uB8CC"]);
+  const completedAt = firstValue(row, ["\uBC30\uC1A1\uC644\uB8CC\uC77C\uC2DC", "\uBC30\uC1A1\uC644\uB8CC \uC77C\uC2DC", "\uC644\uB8CC\uC77C\uC2DC", "\uC644\uB8CC\uC2DC\uAC04"]);
+  const statusText = [status, completeFlag].filter(Boolean).join(" ");
+  const appRecorded = statusText.includes("\uBC30\uC1A1\uC644\uB8CC")
+    && !statusText.includes("\uBC30\uC1A1\uB204\uB77D")
+    && !statusText.includes("\uB9C8\uAC10");
+  return {
+    status,
+    completeFlag,
+    deliveryCompletedAt: appRecorded ? completedAt : "",
+    rawDeliveryCompletedAt: completedAt,
+    appRecorded,
+    appUsageGroup: appRecorded ? "\uAE30\uC0AC\uC571 \uC644\uB8CC\uAE30\uB85D" : "\uC571 \uBBF8\uC0AC\uC6A9/\uBBF8\uAE30\uB85D"
+  };
+}
+
+function isDeliveryHistoryRow(row) {
+  return Boolean(firstValue(row, [
+    "\uBC30\uC1A1ID",
+    "\uBC30\uC1A1\uC0C1\uD0DC",
+    "\uBC30\uC1A1\uBC29\uBC95",
+    "\uBC30\uC1A1\uC644\uB8CC\uC77C\uC2DC",
+    "\uBC30\uCC28\uD655\uC815\uC77C\uC2DC"
+  ]));
 }
 
 function buildStopFromDispatchRow(row, vehicle, sequence) {
@@ -167,9 +236,11 @@ function buildStopFromDispatchRow(row, vehicle, sequence) {
     firstValue(row, ["\uACE0\uAC1D\uC8FC\uC18C", "\uC8FC\uC18C", "\uBC30\uC1A1\uC8FC\uC18C"]),
     firstValue(row, ["\uC0C1\uC138\uC8FC\uC18C", "\uC0C1\uC138\uC8FC\uC18C1", "\uC0C1\uC138"])
   ].filter(Boolean).join(" ").trim();
-  const customerCode = firstValue(row, ["\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uAC70\uB798\uCC98\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
+  const customerCode = firstValue(row, ["\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uACE0\uAC1DERP\uCF54\uB4DC", "ERP\uCF54\uB4DC", "\uAC70\uB798\uCC98\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
   const customerName = firstValue(row, ["\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
   const amount = firstValue(row, ["\uB9E4\uCD9C\uAE08\uC561", "\uAE08\uC561", "\uCD9C\uACE0\uAE08\uC561", "\uD310\uB9E4\uAE08\uC561"]);
+  const deliveryTime = firstValue(row, ["\uBC30\uC1A1\uC2DC\uAC04", "\uB3C4\uCC29\uC2DC\uAC04", "\uCD9C\uBC1C\uC2DC\uAC04", "\uC785\uACE0\uC2DC\uAC04", "\uC2DC\uAC04"]);
+  const completion = deliveryCompletionInfo(row);
   return {
     sequence,
     raw: row,
@@ -182,24 +253,61 @@ function buildStopFromDispatchRow(row, vehicle, sequence) {
     amount,
     dailyAmount: amount,
     monthlyAmount: amount,
+    deliveryTime: completion.deliveryCompletedAt || deliveryTime,
+    deliveryCompletedAt: completion.deliveryCompletedAt,
+    rawDeliveryCompletedAt: completion.rawDeliveryCompletedAt,
+    deliveryStatus: completion.status || completion.completeFlag,
+    appRecorded: completion.appRecorded,
+    appUsageGroup: completion.appUsageGroup,
+    routeOrder: firstValue(row, ["\uBC30\uC1A1\uC21C\uBC88", "\uC21C\uBC88", "\uC21C\uC11C", "\uBC30\uC1A1\uC21C\uC11C"]),
     orderCount: firstValue(row, ["\uBC30\uC1A1\uAC74\uC218", "\uC8FC\uBB38\uC218", "\uAC74\uC218"]),
     weight: firstValue(row, ["\uC911\uB7C9", "\uBB34\uAC8C"]),
     cbm: firstValue(row, ["CBM", "cbm"])
   };
 }
 
+function routeSortValue(row, fallbackIndex) {
+  const completion = deliveryCompletionInfo(row);
+  const completedAtMatch = normalizeCell(completion.deliveryCompletedAt).match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (completedAtMatch) {
+    return Number(completedAtMatch[1]) * 3600 + Number(completedAtMatch[2]) * 60 + Number(completedAtMatch[3] || 0);
+  }
+
+  const orderText = firstValue(row, ["\uBC30\uC1A1\uC21C\uBC88", "\uC21C\uBC88", "\uC21C\uC11C", "\uBC30\uC1A1\uC21C\uC11C"]);
+  const orderMatch = normalizeCell(orderText).match(/\d+/);
+  if (orderMatch) return Number(orderMatch[0]);
+
+  const timeText = firstValue(row, ["\uBC30\uC1A1\uC2DC\uAC04", "\uB3C4\uCC29\uC2DC\uAC04", "\uCD9C\uBC1C\uC2DC\uAC04", "\uC785\uACE0\uC2DC\uAC04", "\uC2DC\uAC04"]);
+  const timeMatch = normalizeCell(timeText).match(/(\d{1,2})\D?(\d{2})?/);
+  if (timeMatch) return Number(timeMatch[1]) * 100 + Number(timeMatch[2] || 0);
+
+  return 100000 + fallbackIndex;
+}
+
 async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" }) {
   const cache = await readDispatchCache();
-  const rows = (cache.rows || []).filter((row) => rowMatchesDailyRoute(row, date, vehicle));
+  const matchedItems = (cache.rows || [])
+    .map((row, index) => ({ row, index }))
+    .filter((item) => rowMatchesDailyRoute(item.row, date, vehicle));
+  const deliveryItems = matchedItems.filter((item) => isDeliveryHistoryRow(item.row));
+  const routeItems = (deliveryItems.length ? deliveryItems : matchedItems)
+    .sort((left, right) => routeSortValue(left.row, left.index) - routeSortValue(right.row, right.index))
+  const rows = routeItems.map((item) => item.row);
   if (!rows.length) return null;
+  const appRecordedCount = rows.filter((row) => deliveryCompletionInfo(row).appRecorded).length;
+  const appMissingCount = rows.length - appRecordedCount;
   return {
     generatedAt: new Date().toISOString(),
-    source: "uploaded-fixed-dispatch",
-    warning: "Uploaded fixed-dispatch Excel data was used for this daily route.",
+    source: deliveryItems.length ? "uploaded-delivery-history" : "uploaded-fixed-dispatch",
+    warning: deliveryItems.length
+      ? "Uploaded delivery-history Excel data was used. Only rows with delivery-completed status are treated as app-recorded route points."
+      : "Uploaded fixed-dispatch Excel data was used for this daily route.",
     date,
     vehicle,
     center,
     rowCount: rows.length,
+    appRecordedCount,
+    appMissingCount,
     stops: rows.map((row, index) => buildStopFromDispatchRow(row, vehicle, index + 1))
   };
 }

@@ -16,5 +16,6 @@ export const config = {
   githubToken: process.env.GITHUB_TOKEN || "",
   githubRepo: process.env.GITHUB_CACHE_REPO || "",
   githubBranch: process.env.GITHUB_CACHE_BRANCH || "main",
-  githubCacheDir: process.env.GITHUB_CACHE_DIR || "freshon-cache"
+  githubCacheDir: process.env.GITHUB_CACHE_DIR || "freshon-cache",
+  excelPassword: process.env.EXCEL_PASSWORD || "minkyu"
 };

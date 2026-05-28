@@ -1,4 +1,5 @@
 let currentPayload = { columns: [], rows: [] };
+let uploadRunning = false;
 
 const TOKEN_KEY = "freshonAdminToken";
 
@@ -12,12 +13,26 @@ const fileInput = document.getElementById("fixedDispatchFiles");
 const uploadStatus = document.getElementById("uploadStatus");
 const table = document.getElementById("dataTable");
 
+window.addEventListener("beforeunload", (event) => {
+  if (!uploadRunning) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
 function setStatus(text) {
   statusEl.textContent = text;
 }
 
 function getToken() {
   return tokenEl.value.trim();
+}
+
+function formatSeconds(seconds) {
+  const value = Math.max(0, Math.round(seconds || 0));
+  if (value < 60) return `${value}초`;
+  const minutes = Math.floor(value / 60);
+  const rest = value % 60;
+  return rest ? `${minutes}분 ${rest}초` : `${minutes}분`;
 }
 
 function saveToken() {
@@ -82,6 +97,18 @@ async function loadData() {
   setStatus("조회 완료");
 }
 
+function uploadProgressText({ index, total, fileName, fileElapsed, completedTimes }) {
+  const done = completedTimes.length;
+  if (!done) {
+    return `${index + 1}/${total} 저장 중: ${fileName} · 경과 ${formatSeconds(fileElapsed)} · 첫 파일 완료 후 남은 시간 계산`;
+  }
+  const avgSeconds = completedTimes.reduce((sum, value) => sum + value, 0) / done;
+  const currentRemaining = Math.max(0, avgSeconds - fileElapsed);
+  const nextFiles = total - index - 1;
+  const remainingSeconds = currentRemaining + avgSeconds * nextFiles;
+  return `${index + 1}/${total} 저장 중: ${fileName} · 경과 ${formatSeconds(fileElapsed)} · 예상 남은 시간 ${formatSeconds(remainingSeconds)}`;
+}
+
 async function uploadFixedDispatchFiles() {
   const token = getToken();
   if (!token) {
@@ -95,50 +122,66 @@ async function uploadFixedDispatchFiles() {
   }
 
   saveToken();
+  uploadRunning = true;
   uploadButton.disabled = true;
   setStatus("엑셀 저장 진행 중");
   const startedAt = Date.now();
+  const completedTimes = [];
   let uploadedRows = 0;
   let finalRowCount = 0;
 
   try {
     for (let i = 0; i < files.length; i += 1) {
       const file = files[i];
-      const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-      const done = i;
-      const avgSeconds = done ? elapsedSeconds / done : null;
-      const remainSeconds = avgSeconds ? Math.max(1, Math.round(avgSeconds * (files.length - done))) : null;
-      uploadStatus.textContent = `${i + 1}/${files.length} 저장 중: ${file.name}${remainSeconds ? ` · 예상 남은 시간 ${remainSeconds}초` : " · 남은 시간 계산 중"}`;
+      const fileStartedAt = Date.now();
+      const updateText = () => {
+        const fileElapsed = Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000));
+        uploadStatus.textContent = uploadProgressText({
+          index: i,
+          total: files.length,
+          fileName: file.name,
+          fileElapsed,
+          completedTimes
+        });
+      };
+      updateText();
+      const ticker = setInterval(updateText, 1000);
 
-      const formData = new FormData();
-      formData.append("files", file);
-      const response = await fetch("/api/upload-fixed-dispatch", {
-        method: "POST",
-        headers: { "x-admin-token": token },
-        body: formData
-      });
+      try {
+        const formData = new FormData();
+        formData.append("files", file);
+        const response = await fetch("/api/upload-fixed-dispatch", {
+          method: "POST",
+          headers: { "x-admin-token": token },
+          body: formData
+        });
 
-      const responseText = await response.text();
-      let json = {};
-      if (responseText) {
-        try {
-          json = JSON.parse(responseText);
-        } catch (_error) {
-          throw new Error(`서버 응답을 읽지 못했습니다. ${file.name} 파일이 너무 크거나 서버가 처리 중에 끊겼을 수 있습니다.`);
+        const responseText = await response.text();
+        let json = {};
+        if (responseText) {
+          try {
+            json = JSON.parse(responseText);
+          } catch (_error) {
+            throw new Error(`서버 응답을 읽지 못했습니다. ${file.name} 파일이 너무 크거나 서버가 처리 중에 끊겼을 수 있습니다.`);
+          }
         }
+        if (!response.ok) throw new Error(json.error || `${file.name} 저장 실패`);
+        uploadedRows += Number(json.uploadedRows || 0);
+        finalRowCount = Number(json.rowCount || finalRowCount || 0);
+        completedTimes.push(Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000)));
+      } finally {
+        clearInterval(ticker);
       }
-      if (!response.ok) throw new Error(json.error || `${file.name} 저장 실패`);
-      uploadedRows += Number(json.uploadedRows || 0);
-      finalRowCount = Number(json.rowCount || finalRowCount || 0);
     }
     const totalSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-    uploadStatus.textContent = `저장 완료 · 업로드 ${uploadedRows.toLocaleString("ko-KR")}행 · 전체 ${finalRowCount.toLocaleString("ko-KR")}행 · 총 ${totalSeconds}초`;
+    uploadStatus.textContent = `저장 완료 · 업로드 ${uploadedRows.toLocaleString("ko-KR")}행 · 전체 ${finalRowCount.toLocaleString("ko-KR")}행 · 총 ${formatSeconds(totalSeconds)}`;
     await loadData();
   } catch (error) {
     uploadStatus.textContent = `실패: ${error.message}`;
     setStatus(`엑셀 저장 실패: ${error.message}`);
     alert(error.message);
   } finally {
+    uploadRunning = false;
     uploadButton.disabled = false;
   }
 }
