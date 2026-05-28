@@ -22,7 +22,7 @@ async function readLocalJson(file, fallback) {
 async function writeLocalJson(file, payload) {
   await fs.mkdir(dataDir, { recursive: true });
   const tmp = `${file}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(payload, null, 2), "utf8");
+  await fs.writeFile(tmp, JSON.stringify(payload), "utf8");
   await fs.rename(tmp, file);
 }
 
@@ -71,7 +71,7 @@ async function writeExternalJson(fileName, payload) {
   const body = {
     message: `Update Freshon cache ${fileName}`,
     branch: config.githubBranch,
-    content: Buffer.from(JSON.stringify(payload, null, 2), "utf8").toString("base64")
+    content: Buffer.from(JSON.stringify(payload), "utf8").toString("base64")
   };
   if (sha) body.sha = sha;
 

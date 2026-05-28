@@ -22,3 +22,5 @@ services:
         value: true
       - key: FRESHON_HEADLESS
         value: true
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=1536

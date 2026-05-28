@@ -515,25 +515,29 @@ app.get("/admin", (_req, res) => {
 async function processUploadedDispatchFiles(files, jobId) {
   try {
     const current = await readDispatchCache();
-    const parsedFiles = [];
+    let columns = current.columns || [];
+    let rows = current.rows || [];
+    let uploadedRowsCount = 0;
     for (const [index, file] of files.entries()) {
       refreshState.currentFile = file.originalname;
       refreshState.completedFiles = index;
       refreshState.totalFiles = files.length;
       try {
-        parsedFiles.push(await withFileBuffer(file, parseWorkbook));
+        const parsed = await withFileBuffer(file, parseWorkbook);
+        uploadedRowsCount += parsed.rows.length;
+        columns = mergeColumns(columns, parsed.columns);
+        rows = mergeRows(rows, parsed.rows);
+        refreshState.uploadedRows = uploadedRowsCount;
+        refreshState.rowCount = rows.length;
       } finally {
         if (file.path) await fs.rm(file.path, { force: true }).catch(() => {});
       }
     }
 
-    const uploadedRows = parsedFiles.flatMap((item) => item.rows);
-    if (!uploadedRows.length) {
+    if (!uploadedRowsCount) {
       throw new Error("No rows were found in the uploaded Excel files.");
     }
 
-    const columns = mergeColumns(current.columns || [], parsedFiles.flatMap((item) => item.columns));
-    const rows = mergeRows(current.rows || [], uploadedRows);
     const payload = {
       generatedAt: new Date().toISOString(),
       source: "uploaded-excel",
@@ -557,7 +561,7 @@ async function processUploadedDispatchFiles(files, jobId) {
       currentFile: null,
       completedFiles: files.length,
       totalFiles: files.length,
-      uploadedRows: uploadedRows.length,
+      uploadedRows: uploadedRowsCount,
       rowCount: payload.rowCount,
       range: payload.range,
       jobId
