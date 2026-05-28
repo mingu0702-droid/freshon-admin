@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import multer from "multer";
 import path from "node:path";
 import XLSX from "xlsx";
+import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
@@ -40,36 +41,76 @@ function normalizeCell(value) {
   return String(value).trim();
 }
 
-function parseWorkbook(file) {
-  let workbook;
-  try {
-    workbook = XLSX.read(file.buffer, { type: "buffer", cellDates: true, password: config.excelPassword });
-  } catch (error) {
-    throw new Error(`${file.originalname} 파일을 읽지 못했습니다. 암호가 맞는지 또는 Excel에서 다시 저장한 파일인지 확인해주세요. (${error.message})`);
+function rowsFromSheetValues(values, file, sheetName) {
+  const rows = [];
+  const columns = new Set();
+  const headerIndex = values.findIndex((row) => Array.isArray(row) && row.some((value) => normalizeCell(value)));
+  if (headerIndex < 0) return { rows, columns: [] };
+
+  const headers = values[headerIndex].map((value, index) => normalizeCell(value) || `column_${index + 1}`);
+  for (const header of headers) {
+    if (header && !header.startsWith("__EMPTY")) columns.add(header);
   }
+
+  for (const rowValues of values.slice(headerIndex + 1)) {
+    const row = {};
+    headers.forEach((header, index) => {
+      const column = normalizeCell(header);
+      if (!column || column.startsWith("__EMPTY")) return;
+      row[column] = normalizeCell(rowValues?.[index]);
+    });
+    if (Object.values(row).some(Boolean)) {
+      row._sourceFile = file.originalname;
+      row._sourceSheet = sheetName;
+      rows.push(row);
+    }
+  }
+  return { rows, columns: [...columns] };
+}
+
+function parsePlainWorkbook(file) {
+  const workbook = XLSX.read(file.buffer, { type: "buffer", cellDates: true });
   const rows = [];
   const columns = new Set();
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
-    const sheetRows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
-    for (const sheetRow of sheetRows) {
-      const row = {};
-      for (const [key, value] of Object.entries(sheetRow)) {
-        const column = normalizeCell(key);
-        if (!column || column.startsWith("__EMPTY")) continue;
-        row[column] = normalizeCell(value);
-        columns.add(column);
-      }
-      if (Object.values(row).some(Boolean)) {
-        row._sourceFile = file.originalname;
-        row._sourceSheet = sheetName;
-        rows.push(row);
-      }
-    }
+    const values = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false, header: 1 });
+    const parsed = rowsFromSheetValues(values, file, sheetName);
+    rows.push(...parsed.rows);
+    for (const column of parsed.columns) columns.add(column);
   }
 
   return { rows, columns: [...columns] };
+}
+
+async function parseEncryptedWorkbook(file) {
+  const workbook = await XlsxPopulate.fromDataAsync(file.buffer, { password: config.excelPassword });
+  const rows = [];
+  const columns = new Set();
+
+  for (const sheet of workbook.sheets()) {
+    const usedRange = sheet.usedRange();
+    if (!usedRange) continue;
+    const values = usedRange.value();
+    const parsed = rowsFromSheetValues(values, file, sheet.name());
+    rows.push(...parsed.rows);
+    for (const column of parsed.columns) columns.add(column);
+  }
+
+  return { rows, columns: [...columns] };
+}
+
+async function parseWorkbook(file) {
+  try {
+    return parsePlainWorkbook(file);
+  } catch (error) {
+    try {
+      return await parseEncryptedWorkbook(file);
+    } catch (encryptedError) {
+      throw new Error(`${file.originalname} 파일을 읽지 못했습니다. 암호화 Excel 복호화도 실패했습니다. 암호 설정(EXCEL_PASSWORD)과 파일 형식을 확인해주세요. (일반: ${error.message} / 암호: ${encryptedError.message})`);
+    }
+  }
 }
 
 function makeRowKey(row) {
@@ -418,7 +459,7 @@ app.post("/api/upload-fixed-dispatch", requireAdmin, upload.array("files", 12), 
 
   try {
     const current = await readDispatchCache();
-    const parsedFiles = files.map(parseWorkbook);
+    const parsedFiles = await Promise.all(files.map((file) => parseWorkbook(file)));
     const uploadedRows = parsedFiles.flatMap((item) => item.rows);
     if (!uploadedRows.length) {
       throw new Error("No rows were found in the uploaded Excel files.");
