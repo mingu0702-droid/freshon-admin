@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import multer from "multer";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import XLSX from "xlsx";
 import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
@@ -18,7 +19,9 @@ const __dirname = path.dirname(__filename);
 const publicDir = path.resolve(__dirname, "..", "public");
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
 const uploadDir = path.join(os.tmpdir(), "freshon-upload-files");
+const chunkDir = path.join(os.tmpdir(), "freshon-upload-chunks");
 fsSync.mkdirSync(uploadDir, { recursive: true });
+fsSync.mkdirSync(chunkDir, { recursive: true });
 
 const app = express();
 const upload = multer({
@@ -577,6 +580,88 @@ async function processUploadedDispatchFiles(files, jobId) {
     console.error(`Upload job ${jobId} failed:`, error);
   }
 }
+
+function safePathPart(value) {
+  return String(value || "")
+    .replace(/[^\w.-]+/g, "_")
+    .slice(0, 120) || "upload";
+}
+
+async function assembleChunkedUpload({ uploadId, totalChunks, fileName, size }) {
+  const dir = path.join(chunkDir, safePathPart(uploadId));
+  const outputPath = path.join(uploadDir, `${Date.now()}-${safePathPart(fileName)}`);
+  const output = fsSync.createWriteStream(outputPath);
+  try {
+    for (let index = 0; index < totalChunks; index += 1) {
+      const chunkPath = path.join(dir, `${index}.part`);
+      await pipeline(fsSync.createReadStream(chunkPath), output, { end: false });
+      await fs.rm(chunkPath, { force: true }).catch(() => {});
+    }
+  } finally {
+    await new Promise((resolve, reject) => {
+      output.end(resolve);
+      output.on("error", reject);
+    });
+  }
+  await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  return {
+    path: outputPath,
+    originalname: fileName,
+    size: Number(size || 0)
+  };
+}
+
+app.post("/api/upload-fixed-dispatch-chunk", requireAdmin, upload.single("chunk"), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: "Chunk file is required." });
+
+  try {
+    const uploadId = safePathPart(req.body.uploadId);
+    const index = Number(req.body.index);
+    const totalChunks = Number(req.body.totalChunks);
+    const fileName = String(req.body.fileName || file.originalname || "upload.xlsx");
+    const fileSize = Number(req.body.fileSize || file.size || 0);
+    if (!uploadId || !Number.isInteger(index) || !Number.isInteger(totalChunks) || index < 0 || totalChunks < 1 || index >= totalChunks) {
+      throw new Error("Invalid chunk upload metadata.");
+    }
+
+    const dir = path.join(chunkDir, uploadId);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.rename(file.path, path.join(dir, `${index}.part`));
+
+    if (index < totalChunks - 1) {
+      return res.json({ ok: true, received: index + 1, totalChunks });
+    }
+
+    if (refreshState.running) {
+      return res.status(409).json({ error: "Upload already running.", refresh: refreshState });
+    }
+
+    const assembled = await assembleChunkedUpload({ uploadId, totalChunks, fileName, size: fileSize });
+    const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    refreshState = {
+      running: true,
+      lastError: null,
+      lastStartedAt: new Date().toISOString(),
+      lastFinishedAt: null,
+      currentFile: assembled.originalname,
+      completedFiles: 0,
+      totalFiles: 1,
+      uploadedRows: 0,
+      rowCount: 0,
+      range: null,
+      jobId
+    };
+
+    res.status(202).json({ ok: true, accepted: true, jobId, refresh: refreshState });
+    setTimeout(() => {
+      processUploadedDispatchFiles([assembled], jobId);
+    }, 250);
+  } catch (error) {
+    if (file.path) await fs.rm(file.path, { force: true }).catch(() => {});
+    res.status(500).json({ error: error.message });
+  }
+});
 
 app.post("/api/upload-fixed-dispatch", requireAdmin, upload.array("files", 12), async (req, res) => {
   if (refreshState.running) {

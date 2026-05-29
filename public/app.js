@@ -155,6 +155,38 @@ async function waitForUploadJob(jobId, fileName, fileStartedAt) {
   }
 }
 
+async function uploadFileInChunks(file, token, fileStartedAt) {
+  const chunkSize = 2 * 1024 * 1024;
+  const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+  const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}-${file.name}`;
+  let accepted = null;
+
+  for (let index = 0; index < totalChunks; index += 1) {
+    const start = index * chunkSize;
+    const end = Math.min(file.size, start + chunkSize);
+    const formData = new FormData();
+    formData.append("uploadId", uploadId);
+    formData.append("index", String(index));
+    formData.append("totalChunks", String(totalChunks));
+    formData.append("fileName", file.name);
+    formData.append("fileSize", String(file.size));
+    formData.append("chunk", file.slice(start, end), `${file.name}.part${index}`);
+
+    const elapsed = Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000));
+    uploadStatus.textContent = `${file.name} 업로드 중 · ${index + 1}/${totalChunks} 조각 · 경과 ${formatSeconds(elapsed)}`;
+    const response = await fetch("/api/upload-fixed-dispatch-chunk", {
+      method: "POST",
+      headers: { "x-admin-token": token },
+      body: formData
+    });
+    accepted = await readUploadResponse(response, file.name);
+  }
+
+  return accepted?.accepted
+    ? waitForUploadJob(accepted.jobId, file.name, fileStartedAt)
+    : accepted;
+}
+
 async function uploadFixedDispatchFiles() {
   const token = getToken();
   if (!token) {
@@ -194,18 +226,7 @@ async function uploadFixedDispatchFiles() {
       const ticker = setInterval(updateText, 1000);
 
       try {
-        const formData = new FormData();
-        formData.append("files", file);
-        const response = await fetch("/api/upload-fixed-dispatch", {
-          method: "POST",
-          headers: { "x-admin-token": token },
-          body: formData
-        });
-
-        const accepted = await readUploadResponse(response, file.name);
-        const json = accepted.accepted
-          ? await waitForUploadJob(accepted.jobId, file.name, fileStartedAt)
-          : accepted;
+        const json = await uploadFileInChunks(file, token, fileStartedAt);
         uploadedRows += Number(json.uploadedRows || 0);
         finalRowCount = Number(json.rowCount || finalRowCount || 0);
         completedTimes.push(Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000)));
