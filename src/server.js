@@ -366,13 +366,45 @@ function vehicleTokens(value) {
 }
 
 function rowMatchesDailyRoute(row, date, vehicle) {
-  const rowDate = normalizeDateValue(firstValue(row, ["\uC785\uACE0\uC694\uCCAD\uC77C", "\uB4F1\uB85D\uC77C", "\uC77C\uC790", "\uBC30\uC1A1\uC77C", "\uCD9C\uACE0\uC77C"]));
+  const rowDate = normalizeDateValue(firstValue(row, [
+    "\uC785\uACE0\uC694\uCCAD\uC77C(\uBC30\uC1A1\uC77C)",
+    "\uC785\uACE0\uC694\uCCAD\uC77C",
+    "\uBC30\uC1A1\uC77C",
+    "\uBC30\uC1A1\uC77C\uC790",
+    "\uC77C\uC790",
+    "\uCD9C\uACE0\uC77C",
+    "\uBC30\uCC28\uC77C",
+    "\uBC30\uCC28\uC77C\uC790",
+    "\uC6B4\uD589\uC77C\uC790",
+    "\uB0A9\uD488\uC77C\uC790",
+    "\uB4F1\uB85D\uC77C"
+  ]));
   if (rowDate !== date) return false;
   const selected = vehicleTokens(vehicle);
   if (!selected.size) return false;
-  const rowTokens = ["\uD655\uC815\uD638\uCC28", "\uAE30\uC900\uD638\uCC28", "\uD638\uCC28", "\uCC28\uB7C9", "\uCC28\uB7C9\uBC88\uD638", "\uBC30\uCC28\uD638\uCC28"]
-    .flatMap((column) => [...vehicleTokens(row[column])]);
-  return rowTokens.some((value) => selected.has(value));
+  const rowTokens = new Set();
+  const vehicleColumns = [
+    "\uD655\uC815\uD638\uCC28",
+    "\uAE30\uC900\uD638\uCC28",
+    "\uD638\uCC28",
+    "\uCC28\uB7C9",
+    "\uCC28\uB7C9\uBC88\uD638",
+    "\uBC30\uCC28\uD638\uCC28",
+    "\uBC30\uCC28 \uD638\uCC28",
+    "\uBC30\uC1A1\uD638\uCC28",
+    "\uC6B4\uD589\uD638\uCC28",
+    "\uD638\uCC28\uBA85"
+  ];
+  for (const column of vehicleColumns) {
+    for (const token of vehicleTokens(row[column])) rowTokens.add(token);
+  }
+  for (const [key, value] of Object.entries(row)) {
+    const column = normalizeColumnName(key);
+    if (column.includes("\uD638\uCC28") || column.includes("\uCC28\uB7C9")) {
+      for (const token of vehicleTokens(value)) rowTokens.add(token);
+    }
+  }
+  return [...rowTokens].some((value) => selected.has(value));
 }
 
 function deliveryCompletionInfo(row) {
@@ -599,11 +631,12 @@ app.get("/api/daily-route", requireView, async (req, res) => {
   const date = String(req.query.date || "");
   const vehicle = String(req.query.vehicle || "");
   const center = String(req.query.center || "");
+  const forceRefresh = req.query.refresh === "1" || req.query.refresh === "true";
   if (!date || !vehicle) {
     return res.status(400).json({ error: "date and vehicle are required." });
   }
   const cached = await readDailyRoute(date, vehicle);
-  if (cached) {
+  if (cached && !forceRefresh) {
     const dispatchCache = await readDispatchCache();
     const cachedAt = cached.generatedAt ? Date.parse(cached.generatedAt) : 0;
     const dispatchAt = dispatchCache.generatedAt ? Date.parse(dispatchCache.generatedAt) : 0;
