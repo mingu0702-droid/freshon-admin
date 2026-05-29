@@ -378,7 +378,7 @@ function rowMatchesDailyRoute(row, date, vehicle) {
 function deliveryCompletionInfo(row) {
   const status = firstValue(row, ["\uBC30\uC1A1\uC0C1\uD0DC", "\uC0C1\uD0DC", "\uCC98\uB9AC\uC0C1\uD0DC"]);
   const completeFlag = exactColumnValue(row, ["\uBC30\uC1A1\uC644\uB8CC"]);
-  const completedAt = firstValue(row, ["\uBC30\uC1A1\uC644\uB8CC\uC77C\uC2DC", "\uBC30\uC1A1\uC644\uB8CC \uC77C\uC2DC", "\uC644\uB8CC\uC77C\uC2DC", "\uC644\uB8CC\uC2DC\uAC04"]);
+  const completedAt = firstValue(row, ["\uBC30\uC1A1\uACB0\uACFC\uCC98\uB9AC\uC77C\uC2DC", "\uBC30\uC1A1\uC644\uB8CC\uC77C\uC2DC", "\uBC30\uC1A1\uC644\uB8CC \uC77C\uC2DC", "\uC644\uB8CC\uC77C\uC2DC", "\uC644\uB8CC\uC2DC\uAC04"]);
   const statusText = [status, completeFlag].filter(Boolean).join(" ");
   const appRecorded = statusText.includes("\uBC30\uC1A1\uC644\uB8CC")
     && !statusText.includes("\uBC30\uC1A1\uB204\uB77D")
@@ -401,6 +401,36 @@ function isDeliveryHistoryRow(row) {
     "\uBC30\uC1A1\uC644\uB8CC\uC77C\uC2DC",
     "\uBC30\uCC28\uD655\uC815\uC77C\uC2DC"
   ]));
+}
+
+function routeIdentity(row) {
+  const code = firstValue(row, ["\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uACE0\uAC1DERP\uCF54\uB4DC", "ERP\uCF54\uB4DC", "\uAC70\uB798\uCC98\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
+  if (code) return `code:${code}`;
+  const name = firstValue(row, ["\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
+  const address = [
+    firstValue(row, ["\uACE0\uAC1D\uC8FC\uC18C", "\uC8FC\uC18C", "\uBC30\uC1A1\uC8FC\uC18C"]),
+    firstValue(row, ["\uC0C1\uC138\uC8FC\uC18C", "\uC0C1\uC138\uC8FC\uC18C1", "\uC0C1\uC138"])
+  ].filter(Boolean).join(" ").trim();
+  return `fallback:${name}|${address}`;
+}
+
+function mergeRouteBaseWithHistory(baseRow, historyRow) {
+  if (!historyRow) return baseRow;
+  const merged = { ...baseRow };
+  const alwaysCopy = [
+    "\uBC30\uC1A1\uACB0\uACFC\uCC98\uB9AC\uC77C\uC2DC",
+    "\uBC30\uC1A1\uC0C1\uD0DC",
+    "\uBC30\uC1A1\uBC29\uBC95",
+    "\uBC30\uCC28 \uD655\uC815 \uC77C\uC2DC(\uC13C\uD130 \uCD9C\uBC1C \uC2DC\uAC04)",
+    "GPS\uC815\uBCF4",
+    "\uC2E4\uD328\uC0AC\uC720"
+  ];
+  for (const [key, value] of Object.entries(historyRow)) {
+    if (alwaysCopy.includes(key) || !normalizeCell(merged[key])) {
+      merged[key] = value;
+    }
+  }
+  return merged;
 }
 
 function buildStopFromDispatchRow(row, vehicle, sequence) {
@@ -462,18 +492,34 @@ async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" 
     .map((row, index) => ({ row, index }))
     .filter((item) => rowMatchesDailyRoute(item.row, date, vehicle));
   const deliveryItems = matchedItems.filter((item) => isDeliveryHistoryRow(item.row));
-  const routeItems = (deliveryItems.length ? deliveryItems : matchedItems)
+  const baseItems = matchedItems.filter((item) => !isDeliveryHistoryRow(item.row));
+  const historyByKey = new Map();
+  for (const item of deliveryItems) {
+    historyByKey.set(routeIdentity(item.row), item.row);
+  }
+  const routeItems = (baseItems.length ? baseItems : matchedItems)
+    .map((item) => ({
+      ...item,
+      row: baseItems.length ? mergeRouteBaseWithHistory(item.row, historyByKey.get(routeIdentity(item.row))) : item.row
+    }))
     .sort((left, right) => routeSortValue(left.row, left.index) - routeSortValue(right.row, right.index))
   const rows = routeItems.map((item) => item.row);
   if (!rows.length) return null;
   const appRecordedCount = rows.filter((row) => deliveryCompletionInfo(row).appRecorded).length;
   const appMissingCount = rows.length - appRecordedCount;
+  const source = baseItems.length && deliveryItems.length
+    ? "uploaded-fixed-dispatch-with-delivery-history"
+    : deliveryItems.length
+      ? "uploaded-delivery-history"
+      : "uploaded-fixed-dispatch";
   return {
     generatedAt: new Date().toISOString(),
-    source: deliveryItems.length ? "uploaded-delivery-history" : "uploaded-fixed-dispatch",
-    warning: deliveryItems.length
-      ? "Uploaded delivery-history Excel data was used. Only rows with delivery-completed status are treated as app-recorded route points."
-      : "Uploaded fixed-dispatch Excel data was used for this daily route.",
+    source,
+    warning: baseItems.length && deliveryItems.length
+      ? "Uploaded fixed-dispatch rows were used as the route base, and delivery-history rows were merged only for app completion records."
+      : deliveryItems.length
+        ? "Uploaded delivery-history Excel data was used because no fixed-dispatch route base rows matched this date and vehicle."
+        : "Uploaded fixed-dispatch Excel data was used for this daily route.",
     date,
     vehicle,
     center,
@@ -561,7 +607,7 @@ app.get("/api/daily-route", requireView, async (req, res) => {
     const dispatchCache = await readDispatchCache();
     const cachedAt = cached.generatedAt ? Date.parse(cached.generatedAt) : 0;
     const dispatchAt = dispatchCache.generatedAt ? Date.parse(dispatchCache.generatedAt) : 0;
-    if (!dispatchAt || cachedAt >= dispatchAt) {
+    if (cached.source !== "uploaded-delivery-history" && (!dispatchAt || cachedAt >= dispatchAt)) {
       return res.json(cached);
     }
   }
