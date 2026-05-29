@@ -570,7 +570,14 @@ app.get("/api/daily-route", requireView, async (req, res) => {
     await writeDailyRoute(fallback);
     return res.json(fallback);
   }
-  return res.status(404).json({ error: "No cached daily route.", date, vehicle });
+  const dispatchCache = await readDispatchCache();
+  return res.status(404).json({
+    error: "No cached daily route.",
+    date,
+    vehicle,
+    fixedDispatchRows: dispatchCache.rowCount || dispatchCache.rows?.length || 0,
+    fixedDispatchGeneratedAt: dispatchCache.generatedAt || null
+  });
 });
 
 app.get("/admin", (_req, res) => {

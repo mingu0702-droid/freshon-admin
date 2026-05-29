@@ -34,6 +34,18 @@ async function readExternalJson(fileName) {
   }
 
   if (!config.githubToken || !config.githubRepo) return null;
+  const rawUrl = `https://raw.githubusercontent.com/${config.githubRepo}/${encodeURIComponent(config.githubBranch)}/${externalPath(fileName)}`;
+  const rawResponse = await fetch(rawUrl, {
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${config.githubToken}`,
+      "User-Agent": "freshon-admin-cache"
+    }
+  }).catch(() => null);
+  if (rawResponse?.ok) {
+    return rawResponse.json();
+  }
+
   const url = `https://api.github.com/repos/${config.githubRepo}/contents/${externalPath(fileName)}?ref=${encodeURIComponent(config.githubBranch)}`;
   const response = await fetch(url, {
     headers: {
@@ -45,6 +57,16 @@ async function readExternalJson(fileName) {
   if (!response?.ok) return null;
 
   const json = await response.json();
+  if (json.download_url) {
+    const downloadResponse = await fetch(json.download_url, {
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${config.githubToken}`,
+        "User-Agent": "freshon-admin-cache"
+      }
+    }).catch(() => null);
+    if (downloadResponse?.ok) return downloadResponse.json();
+  }
   if (!json.content) return null;
   return JSON.parse(Buffer.from(json.content, "base64").toString("utf8"));
 }
