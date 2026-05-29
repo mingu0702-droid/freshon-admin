@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 python3-pip \
-  && pip3 install --no-cache-dir msoffcrypto-tool \
+  && pip3 install --no-cache-dir msoffcrypto-tool openpyxl \
   && rm -rf /var/lib/apt/lists/*
 
 RUN npm install --omit=dev

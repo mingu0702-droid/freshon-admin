@@ -18,6 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.resolve(__dirname, "..", "public");
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
+const parseExcelScriptPath = path.join(__dirname, "parse_excel.py");
 const uploadDir = path.join(os.tmpdir(), "freshon-upload-files");
 const chunkDir = path.join(os.tmpdir(), "freshon-upload-chunks");
 fsSync.mkdirSync(uploadDir, { recursive: true });
@@ -200,6 +201,46 @@ async function parseWorkbookFast(file) {
         throw new Error(`${file.originalname} parse failed. Check EXCEL_PASSWORD and file format. (plain: ${plainError.message} / office: ${officeCryptoError.message} / xlsx: ${encryptedError.message})`);
       }
     }
+  }
+}
+
+function spawnPythonParse(command, inputPath, outputPath, sourceName) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [parseExcelScriptPath, inputPath, outputPath, config.excelPassword, sourceName], {
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(stderr.trim() || `${command} parse exited with code ${code}`));
+      }
+    });
+  });
+}
+
+async function parseWorkbookWithPython(file) {
+  if (!file.path) return withFileBuffer(file, parseWorkbookFast);
+  const outputPath = path.join(os.tmpdir(), `freshon-parse-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  const errors = [];
+  try {
+    for (const command of ["python3", "python"]) {
+      try {
+        await spawnPythonParse(command, file.path, outputPath, file.originalname);
+        const text = await fs.readFile(outputPath, "utf8");
+        return JSON.parse(text);
+      } catch (error) {
+        errors.push(`${command}: ${error.message}`);
+      }
+    }
+    throw new Error(`Python Excel parse failed. ${errors.join(" / ")}`);
+  } finally {
+    await fs.rm(outputPath, { force: true }).catch(() => {});
   }
 }
 
@@ -542,7 +583,7 @@ async function processUploadedDispatchFiles(files, jobId) {
       refreshState.completedFiles = index;
       refreshState.totalFiles = files.length;
       try {
-        const parsed = await withFileBuffer(file, parseWorkbookFast);
+        const parsed = await parseWorkbookWithPython(file);
         uploadedRowsCount += parsed.rows.length;
         columns = mergeColumns(columns, parsed.columns);
         rows = mergeRows(rows, parsed.rows);
