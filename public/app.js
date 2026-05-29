@@ -212,27 +212,18 @@ async function uploadFixedDispatchFiles() {
     for (let i = 0; i < files.length; i += 1) {
       const file = files[i];
       const fileStartedAt = Date.now();
-      const updateText = () => {
-        const fileElapsed = Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000));
-        uploadStatus.textContent = uploadProgressText({
-          index: i,
-          total: files.length,
-          fileName: file.name,
-          fileElapsed,
-          completedTimes
-        });
-      };
-      updateText();
-      const ticker = setInterval(updateText, 1000);
-
-      try {
-        const json = await uploadFileInChunks(file, token, fileStartedAt);
-        uploadedRows += Number(json.uploadedRows || 0);
-        finalRowCount = Number(json.rowCount || finalRowCount || 0);
-        completedTimes.push(Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000)));
-      } finally {
-        clearInterval(ticker);
-      }
+      const fileElapsed = Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000));
+      uploadStatus.textContent = uploadProgressText({
+        index: i,
+        total: files.length,
+        fileName: file.name,
+        fileElapsed,
+        completedTimes
+      });
+      const json = await uploadFileInChunks(file, token, fileStartedAt);
+      uploadedRows += Number(json.uploadedRows || 0);
+      finalRowCount = Number(json.rowCount || finalRowCount || 0);
+      completedTimes.push(Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000)));
     }
     const totalSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
     uploadStatus.textContent = `저장 완료 · 업로드 ${uploadedRows.toLocaleString("ko-KR")}행 · 전체 ${finalRowCount.toLocaleString("ko-KR")}행 · 총 ${formatSeconds(totalSeconds)}`;

@@ -187,6 +187,22 @@ async function parseWorkbook(file) {
   }
 }
 
+async function parseWorkbookFast(file) {
+  try {
+    return parsePlainWorkbook(file);
+  } catch (plainError) {
+    try {
+      return await parseOfficeCryptoWorkbook(file);
+    } catch (officeCryptoError) {
+      try {
+        return await parseEncryptedWorkbook(file);
+      } catch (encryptedError) {
+        throw new Error(`${file.originalname} parse failed. Check EXCEL_PASSWORD and file format. (plain: ${plainError.message} / office: ${officeCryptoError.message} / xlsx: ${encryptedError.message})`);
+      }
+    }
+  }
+}
+
 function makeRowKey(row) {
   const priorityKeys = [
     "등록일",
@@ -526,7 +542,7 @@ async function processUploadedDispatchFiles(files, jobId) {
       refreshState.completedFiles = index;
       refreshState.totalFiles = files.length;
       try {
-        const parsed = await withFileBuffer(file, parseWorkbook);
+        const parsed = await withFileBuffer(file, parseWorkbookFast);
         uploadedRowsCount += parsed.rows.length;
         columns = mergeColumns(columns, parsed.columns);
         rows = mergeRows(rows, parsed.rows);
