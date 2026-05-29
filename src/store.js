@@ -123,6 +123,14 @@ export async function writeDispatchCache(payload) {
   await writeCache("fixed-dispatch.json", dispatchFile, payload);
 }
 
+export async function clearDailyRouteCache(reason = "fixed dispatch cache updated") {
+  await writeCache("daily-routes.json", dailyRouteFile, {
+    generatedAt: new Date().toISOString(),
+    routes: {},
+    invalidatedReason: reason
+  });
+}
+
 export async function readDailyRouteCache() {
   return readCache("daily-routes.json", dailyRouteFile, { generatedAt: null, routes: {} });
 }

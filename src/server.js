@@ -11,7 +11,7 @@ import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
-import { readDailyRoute, readDispatchCache, writeDailyRoute } from "./store.js";
+import { clearDailyRouteCache, readDailyRoute, readDispatchCache, writeDailyRoute } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -558,7 +558,12 @@ app.get("/api/daily-route", requireView, async (req, res) => {
   }
   const cached = await readDailyRoute(date, vehicle);
   if (cached) {
-    return res.json(cached);
+    const dispatchCache = await readDispatchCache();
+    const cachedAt = cached.generatedAt ? Date.parse(cached.generatedAt) : 0;
+    const dispatchAt = dispatchCache.generatedAt ? Date.parse(dispatchCache.generatedAt) : 0;
+    if (!dispatchAt || cachedAt >= dispatchAt) {
+      return res.json(cached);
+    }
   }
   const fallback = await buildFallbackDailyRoute({ date, vehicle, center });
   if (fallback) {
@@ -613,6 +618,7 @@ async function processUploadedDispatchFiles(files, jobId) {
     };
 
     await writeDispatchCache(payload);
+    await clearDailyRouteCache("fixed dispatch Excel uploaded");
     refreshState = {
       ...refreshState,
       running: false,
