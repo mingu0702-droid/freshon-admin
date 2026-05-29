@@ -637,14 +637,13 @@ app.post("/api/upload-fixed-dispatch-chunk", requireAdmin, upload.single("chunk"
       return res.status(409).json({ error: "Upload already running.", refresh: refreshState });
     }
 
-    const assembled = await assembleChunkedUpload({ uploadId, totalChunks, fileName, size: fileSize });
     const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     refreshState = {
       running: true,
       lastError: null,
       lastStartedAt: new Date().toISOString(),
       lastFinishedAt: null,
-      currentFile: assembled.originalname,
+      currentFile: fileName,
       completedFiles: 0,
       totalFiles: 1,
       uploadedRows: 0,
@@ -655,7 +654,18 @@ app.post("/api/upload-fixed-dispatch-chunk", requireAdmin, upload.single("chunk"
 
     res.status(202).json({ ok: true, accepted: true, jobId, refresh: refreshState });
     setTimeout(() => {
-      processUploadedDispatchFiles([assembled], jobId);
+      assembleChunkedUpload({ uploadId, totalChunks, fileName, size: fileSize })
+        .then((assembled) => processUploadedDispatchFiles([assembled], jobId))
+        .catch((error) => {
+          refreshState = {
+            ...refreshState,
+            running: false,
+            lastError: error.message,
+            lastFinishedAt: new Date().toISOString(),
+            jobId
+          };
+          console.error(`Upload assemble job ${jobId} failed:`, error);
+        });
     }, 250);
   } catch (error) {
     if (file.path) await fs.rm(file.path, { force: true }).catch(() => {});
