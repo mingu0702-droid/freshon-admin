@@ -130,6 +130,10 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isRetriableUploadStatus(status) {
+  return [502, 503, 504, 524].includes(Number(status));
+}
+
 async function waitForUploadJob(jobId, fileName, fileStartedAt) {
   while (true) {
     await sleep(3000);
@@ -156,7 +160,7 @@ async function waitForUploadJob(jobId, fileName, fileStartedAt) {
 }
 
 async function uploadFileInChunks(file, token, fileStartedAt) {
-  const chunkSize = 2 * 1024 * 1024;
+  const chunkSize = 512 * 1024;
   const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
   const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}-${file.name}`;
   let accepted = null;
@@ -174,17 +178,43 @@ async function uploadFileInChunks(file, token, fileStartedAt) {
 
     const elapsed = Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000));
     uploadStatus.textContent = `${file.name} 업로드 중 · ${index + 1}/${totalChunks} 조각 · 경과 ${formatSeconds(elapsed)}`;
-    const response = await fetch("/api/upload-fixed-dispatch-chunk", {
-      method: "POST",
-      headers: { "x-admin-token": token },
-      body: formData
-    });
-    accepted = await readUploadResponse(response, file.name);
+    accepted = await postChunkWithRetry(formData, file.name, token, index, totalChunks);
   }
 
   return accepted?.accepted
     ? waitForUploadJob(accepted.jobId, file.name, fileStartedAt)
     : accepted;
+}
+
+async function postChunkWithRetry(formData, fileName, token, index, totalChunks) {
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch("/api/upload-fixed-dispatch-chunk", {
+        method: "POST",
+        headers: { "x-admin-token": token },
+        body: formData
+      });
+      if (response.status === 409) {
+        const json = await response.json().catch(() => null);
+        if (json?.refresh?.jobId) {
+          return { ok: true, accepted: true, jobId: json.refresh.jobId, refresh: json.refresh };
+        }
+      }
+      if (isRetriableUploadStatus(response.status) && attempt < maxAttempts) {
+        await response.text().catch(() => "");
+        uploadStatus.textContent = `${fileName} 업로드 재시도 중 · ${index + 1}/${totalChunks} 조각 · ${attempt + 1}/${maxAttempts}`;
+        await sleep(1200 * attempt);
+        continue;
+      }
+      return await readUploadResponse(response, fileName);
+    } catch (error) {
+      if (attempt >= maxAttempts) throw error;
+      uploadStatus.textContent = `${fileName} 업로드 재시도 중 · ${index + 1}/${totalChunks} 조각 · ${attempt + 1}/${maxAttempts}`;
+      await sleep(1200 * attempt);
+    }
+  }
+  throw new Error(`${fileName} 업로드 실패 · 조각 ${index + 1}/${totalChunks}`);
 }
 
 async function uploadFixedDispatchFiles() {
