@@ -564,7 +564,7 @@ async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" 
 
 async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = "" }) {
   const uploaded = await buildDailyRouteFromUploadedDispatch({ date, vehicle, center });
-  if (uploaded) return uploaded;
+  if (uploaded && uploaded.rowCount > 2) return uploaded;
 
   const data = await readVehicleAreaData();
   const vehicleData = (data.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
@@ -574,7 +574,9 @@ async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = ""
   return {
     generatedAt: new Date().toISOString(),
     source: "vehicle-area-fallback",
-    warning: reason ? `No uploaded route rows for this date; used vehicle area data instead. ${reason}` : "No uploaded route rows for this date; used vehicle area data instead.",
+    warning: uploaded
+      ? `Uploaded route rows looked incomplete (${uploaded.rowCount} rows), so vehicle area data was shown instead.`
+      : reason ? `No uploaded route rows for this date; used vehicle area data instead. ${reason}` : "No uploaded route rows for this date; used vehicle area data instead.",
     date,
     vehicle,
     center,
