@@ -91,7 +91,14 @@ function rowsFromSheetValues(values, file, sheetName) {
 }
 
 function normalizeBaseUrl(value) {
-  return String(value || "").replace(/\/+$/, "");
+  const text = String(value || "").trim() || "https://delivery-bali.chabyulhwa.com";
+  const fixed = text.replace("delivery-api.chabyulhwa.com", "delivery-bali.chabyulhwa.com");
+  try {
+    const url = new URL(fixed);
+    return url.origin.replace(/\/+$/, "");
+  } catch {
+    return fixed.replace(/\/+$/, "");
+  }
 }
 
 function mergeCookieHeader(existing, setCookieHeaders) {

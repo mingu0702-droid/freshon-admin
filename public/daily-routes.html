@@ -153,6 +153,13 @@
     .wms-candidate { border:1px solid #cbd5e1; background:#fff; border-radius:6px; padding:7px 8px; font-size:11px; font-weight:900; color:#344054; cursor:pointer; text-align:left; line-height:1.35; }
     .wms-candidate span { display:block; color:#667085; font-weight:700; margin-top:2px; }
     .wms-candidate:hover { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
+    .wms-stops { display:grid; gap:5px; margin-top:8px; max-height:240px; overflow:auto; padding-right:2px; }
+    .wms-stop { display:grid; grid-template-columns:36px minmax(0, 1fr) auto; gap:8px; align-items:start; border:1px solid #e2e8f0; border-radius:6px; background:#fff; padding:7px; font-size:11px; line-height:1.35; cursor:pointer; }
+    .wms-stop:hover { border-color:#2563eb; background:#eff6ff; }
+    .wms-stop .seq { width:26px; height:22px; border-radius:999px; background:#dc2626; color:#fff; display:inline-flex; align-items:center; justify-content:center; font-weight:900; }
+    .wms-stop b { display:block; font-size:12px; margin-bottom:2px; overflow-wrap:anywhere; }
+    .wms-stop small { display:block; color:#667085; overflow-wrap:anywhere; }
+    .wms-stop .amt { white-space:nowrap; font-weight:900; color:#0f172a; }
     .load-chip { display:block; width:100%; text-align:left; border:0; background:transparent; padding:0; cursor:pointer; color:inherit; font:inherit; }
     .load-chip:hover b { color:#1d4ed8; text-decoration:underline; }
     .result-line { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
@@ -254,8 +261,10 @@
     body[data-work-tab="new"] .insight-work { display:none; }
     body.main-page .route-controls,
     body.main-page .route-status { display:none; }
-    body[data-work-tab="wms"] .shell { grid-template-columns:auto minmax(360px, 1fr); }
-    body[data-work-tab="wms"] aside { width:min(860px, 62vw); min-width:560px; max-width:84vw; resize:horizontal; padding:14px; }
+    body[data-work-tab="wms"] .shell { grid-template-columns:minmax(720px, 1fr) minmax(430px, 34vw); }
+    body[data-work-tab="wms"] aside { width:auto; min-width:0; max-width:none; resize:none; padding:14px; }
+    body[data-work-tab="wms"] main { border-left:1px solid var(--edge); min-width:0; }
+    body[data-work-tab="wms"] #map { min-width:420px; }
     body[data-work-tab="wms"] .wms-panel { height:calc(100vh - 72px); display:flex; flex-direction:column; margin:0; background:#fff; }
     body[data-work-tab="wms"] .wms-panel h2 { font-size:20px; }
     body[data-work-tab="wms"] .wms-results { max-height:none; flex:1; }
@@ -301,7 +310,7 @@
       </div>
       <section class="wms-panel wms-work" aria-label="WMS 배차 검토">
         <h2>WMS 배차 현황</h2>
-        <div class="meta">WMS 전용 화면 v2026-06-02-2 · 배차계획조정 엑셀을 올리거나 화면 표를 복사해 붙여넣으면 과배차/조정 후보를 추려봅니다.</div>
+        <div class="meta">WMS 전용 화면 v2026-06-03-1 · 배차계획조정 엑셀의 실제 셀 범위를 복구해서 파일 착지 전체와 과배차/조정 후보를 함께 봅니다.</div>
         <div class="wms-file">
           <input id="wmsFileInput" type="file" accept=".xlsx,.xls,.csv,.tsv">
           <textarea id="wmsPasteInput" placeholder="호차	차량톤수	금액	정류지수"></textarea>
@@ -400,6 +409,7 @@
     let newAreaSearchText = "";
     let wmsResults = [];
     let wmsAnalyzedAt = "";
+    let activeWmsStatus = "";
     let activeLoadStatus = "";
     let flatVehicleCustomerCache = null;
     const geocodeCache = new Map();
@@ -523,6 +533,7 @@
       downloadTemplateButton.addEventListener("click", downloadSheetTemplate);
       analyzeWmsButton.addEventListener("click", () => {
         setWorkTab("wms");
+        activeWmsStatus = "";
         analyzeWmsDispatch();
       });
       clearWmsButton.addEventListener("click", () => {
@@ -530,12 +541,19 @@
         wmsPasteInput.value = "";
         wmsResults = [];
         wmsAnalyzedAt = "";
+        activeWmsStatus = "";
         wmsStatus.textContent = "";
         wmsSummary.innerHTML = "";
         wmsResultsEl.innerHTML = "";
         render();
       });
       wmsResultsEl.addEventListener("click", (event) => {
+        const stop = event.target.closest(".wms-stop[data-wms-vehicle]");
+        if (stop) {
+          event.stopPropagation();
+          showWmsStopPin(stop.dataset.wmsVehicle, Number(stop.dataset.stopIndex));
+          return;
+        }
         const candidate = event.target.closest(".wms-candidate[data-wms-vehicle]");
         if (candidate) {
           event.stopPropagation();
@@ -543,11 +561,15 @@
           return;
         }
         const item = event.target.closest(".wms-vehicle-row[data-vehicle]");
-        if (item) openVehicleDetail(item.dataset.vehicle);
+        if (item) showWmsVehicleRoute(item.dataset.vehicle);
       });
       wmsSummary.addEventListener("click", (event) => {
         const card = event.target.closest("[data-wms-status]");
-        if (card) showLoadStatusVehicles(card.dataset.wmsStatus);
+        if (card) {
+          activeWmsStatus = activeWmsStatus === card.dataset.wmsStatus ? "" : card.dataset.wmsStatus;
+          renderWmsAnalysis(wmsResults.flatMap(row => row.rows || []));
+          showLoadStatusVehicles(card.dataset.wmsStatus);
+        }
       });
       document.getElementById("summaryCard").addEventListener("click", (event) => {
         const statusButton = event.target.closest("[data-load-status]");
@@ -1487,10 +1509,30 @@
         if (!window.XLSX) throw new Error("엑셀 읽기 모듈을 불러오지 못했습니다. 표를 복사해 붙여넣기로 분석해주세요.");
         const buffer = await file.arrayBuffer();
         const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+        return workbook.SheetNames.flatMap(sheetName => {
+          const sheet = workbook.Sheets[sheetName];
+          repairWorksheetRange(sheet);
+          const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+          return rows.map(row => {
+            const copy = Array.isArray(row) ? [...row] : row;
+            copy._sheetName = sheetName;
+            return copy;
+          });
+        });
       }
       return rowsFromDelimitedText(wmsPasteInput.value);
+    }
+
+    function repairWorksheetRange(sheet) {
+      if (!sheet || !window.XLSX) return;
+      const refs = Object.keys(sheet).filter(key => /^[A-Z]+[0-9]+$/i.test(key));
+      if (!refs.length) return;
+      const cells = refs.map(ref => XLSX.utils.decode_cell(ref));
+      const range = cells.reduce((acc, cell) => ({
+        s: { c: Math.min(acc.s.c, cell.c), r: Math.min(acc.s.r, cell.r) },
+        e: { c: Math.max(acc.e.c, cell.c), r: Math.max(acc.e.r, cell.r) }
+      }), { s: { c: cells[0].c, r: cells[0].r }, e: { c: cells[0].c, r: cells[0].r } });
+      sheet["!ref"] = XLSX.utils.encode_range(range);
     }
 
     function rowsFromDelimitedText(text) {
@@ -1504,10 +1546,23 @@
     function parseWmsRows(rows) {
       const compactRows = rows.filter(row => row.some(cell => String(cell || "").trim()));
       if (!compactRows.length) return [];
-      let headerIndex = compactRows.findIndex(row => row.some(cell => /호차|확정호차|변경호차/.test(String(cell))) && row.some(cell => /금액|고객|주소|정류|중량|CBM/i.test(String(cell))));
-      if (headerIndex < 0) headerIndex = 0;
-      const headers = compactRows[headerIndex].map(normalizeHeader);
-      return compactRows.slice(headerIndex + 1).map(raw => {
+      const isHeaderRow = (row) => row.some(cell => /호차|확정호차|변경호차|기준호차/.test(String(cell))) && row.some(cell => /금액|고객|주소|정류|중량|CBM/i.test(String(cell)));
+      const headerIndexes = compactRows.map((row, index) => isHeaderRow(row) ? index : -1).filter(index => index >= 0);
+      if (!headerIndexes.length) headerIndexes.push(0);
+      const parsed = [];
+      headerIndexes.forEach((headerIndex, sectionIndex) => {
+        const nextHeader = headerIndexes[sectionIndex + 1] ?? compactRows.length;
+        const headers = compactRows[headerIndex].map(normalizeHeader);
+        compactRows.slice(headerIndex + 1, nextHeader).forEach(raw => {
+          if (isHeaderRow(raw)) return;
+          const row = parseWmsRawRow(raw, headers);
+          if (row) parsed.push(row);
+        });
+      });
+      return parsed;
+    }
+
+    function parseWmsRawRow(raw, headers) {
         const object = {};
         headers.forEach((header, index) => {
           if (header) object[header] = raw[index] ?? "";
@@ -1522,8 +1577,8 @@
         const customerName = pickWms(object, ["고객명", "고객사명", "배송처", "업체명"]);
         const address = pickWms(object, ["주소", "고객주소", "배송주소"]);
         if (!vehicle && !amount && !customerName && !address) return null;
-        return { raw: object, vehicle, tonText, amount, stopCount, weight, cbm, customerCode, customerName, address };
-      }).filter(Boolean);
+        const isSummary = Boolean(vehicle && amount && !customerName && !address);
+        return { raw: object, sheetName: raw._sheetName || "", vehicle, tonText, amount, stopCount, weight, cbm, customerCode, customerName, address, isSummary };
     }
 
     function normalizeHeader(value) {
@@ -1561,10 +1616,11 @@
       rows.forEach(row => {
         if (!row.vehicle) return;
         if (!byVehicle.has(row.vehicle)) {
-          byVehicle.set(row.vehicle, { vehicle: row.vehicle, tonText: "", amount: 0, stopCount: 0, weight: 0, cbm: 0, rows: [] });
+          byVehicle.set(row.vehicle, { vehicle: row.vehicle, tonText: "", sheetName: "", amount: 0, stopCount: 0, weight: 0, cbm: 0, rows: [] });
         }
         const bucket = byVehicle.get(row.vehicle);
         if (!bucket.tonText && row.tonText) bucket.tonText = row.tonText;
+        if (!bucket.sheetName && row.sheetName) bucket.sheetName = row.sheetName;
         bucket.amount += row.amount || 0;
         bucket.stopCount += row.stopCount || (row.customerName || row.address ? 1 : 0);
         bucket.weight += row.weight || 0;
@@ -1572,12 +1628,21 @@
         bucket.rows.push(row);
       });
       return [...byVehicle.values()].map(bucket => {
+        const detailRows = bucket.rows.filter(row => row.customerName || row.address || row.customerCode);
+        const summaryRows = bucket.rows.filter(row => row.isSummary || (!row.customerName && !row.address && row.amount));
+        const summaryAmount = summaryRows.length ? Math.max(...summaryRows.map(row => row.amount || 0)) : 0;
+        const summaryStopCount = summaryRows.length ? Math.max(...summaryRows.map(row => row.stopCount || 0)) : 0;
+        if (summaryAmount) bucket.amount = summaryAmount;
+        else if (detailRows.length) bucket.amount = detailRows.reduce((sum, row) => sum + (row.amount || 0), 0);
+        if (summaryStopCount) bucket.stopCount = summaryStopCount;
+        else if (detailRows.length) bucket.stopCount = detailRows.length;
+        const analysisRows = detailRows.length ? detailRows : bucket.rows;
         const vehicleData = data.vehicles.find(v => v.vehicle === bucket.vehicle);
         const tonLabel = inferTonLabel(bucket.vehicle, bucket.tonText, vehicleData);
         const limit = inferRevenueLimit(bucket.vehicle, tonLabel, vehicleData);
         const usage = limit ? bucket.amount / limit : 0;
         const status = usage > 1 ? "초과" : usage >= .92 ? "과밀" : usage >= .75 ? "보통" : "여유";
-        const enrichedRows = bucket.rows.map(row => buildWmsStopInsight(row, bucket, vehicleData));
+        const enrichedRows = analysisRows.map(row => buildWmsStopInsight(row, bucket, vehicleData));
         const candidates = enrichedRows
           .filter(row => row.amount || row.customerName || row.address)
           .sort((a, b) => (b.removeScore || 0) - (a.removeScore || 0))
@@ -1622,6 +1687,38 @@
         removeScore,
         removeReason: reasons.join(" · ")
       };
+    }
+
+    function wmsStopTitle(row) {
+      return row.customerName || row.address || row.customerCode || "배송처";
+    }
+
+    function wmsStopSubtitle(row) {
+      return [
+        row.customerCode,
+        row.address,
+        row.match?.matchedVehicle ? `${row.match.matchedVehicle.vehicle}호 권역` : ""
+      ].filter(Boolean).join(" · ");
+    }
+
+    function renderWmsStopList(row) {
+      const stops = row.rows.filter(item => item.customerName || item.address || item.amount);
+      if (!stops.length) return `<div class="wms-route-list"><b>파일 착지 전체</b><br>상세 배송처 rows를 찾지 못했습니다. WMS 상세 시트를 올렸는지 확인해주세요.</div>`;
+      return `
+        <div class="wms-route-list"><b>파일 착지 전체 ${fmt.format(stops.length)}건</b><br>아래 착지를 누르면 우측 지도에 해당 위치만 표시됩니다. 호차 행을 누르면 전체 착지가 빨간 선으로 연결됩니다.</div>
+        <div class="wms-stops">
+          ${stops.map((item, index) => `
+            <button type="button" class="wms-stop" data-wms-vehicle="${esc(row.vehicle)}" data-stop-index="${index}">
+              <span class="seq">${index + 1}</span>
+              <span>
+                <b>${esc(wmsStopTitle(item))}</b>
+                <small>${esc(wmsStopSubtitle(item) || item.sheetName || "-")}</small>
+              </span>
+              <span class="amt">${item.amount ? fmt.format(Math.round(item.amount)) + "원" : "-"}</span>
+            </button>
+          `).join("")}
+        </div>
+      `;
     }
 
     function inferTonLabel(vehicle, tonText, vehicleData) {
@@ -1689,12 +1786,12 @@
       const need = wmsResults.filter(row => row.status === "초과" || row.status === "과밀");
       wmsStatus.textContent = `${fmt.format(sourceRows.length)}행 분석 · ${fmt.format(wmsResults.length)}개 호차 · 조정 후보 ${fmt.format(need.length)}대`;
       wmsSummary.innerHTML = `
-        <div data-wms-status="초과">초과<b>${fmt.format(counts["초과"] || 0)}대</b></div>
-        <div data-wms-status="과밀">과밀<b>${fmt.format(counts["과밀"] || 0)}대</b></div>
-        <div data-wms-status="보통">보통<b>${fmt.format(counts["보통"] || 0)}대</b></div>
-        <div data-wms-status="여유">여유<b>${fmt.format(counts["여유"] || 0)}대</b></div>
+        <div data-wms-status="초과" ${activeWmsStatus === "초과" ? 'style="border-color:#2563eb;background:#eff6ff"' : ""}>초과<b>${fmt.format(counts["초과"] || 0)}대</b></div>
+        <div data-wms-status="과밀" ${activeWmsStatus === "과밀" ? 'style="border-color:#2563eb;background:#eff6ff"' : ""}>과밀<b>${fmt.format(counts["과밀"] || 0)}대</b></div>
+        <div data-wms-status="보통" ${activeWmsStatus === "보통" ? 'style="border-color:#2563eb;background:#eff6ff"' : ""}>보통<b>${fmt.format(counts["보통"] || 0)}대</b></div>
+        <div data-wms-status="여유" ${activeWmsStatus === "여유" ? 'style="border-color:#2563eb;background:#eff6ff"' : ""}>여유<b>${fmt.format(counts["여유"] || 0)}대</b></div>
       `;
-      const order = ["초과", "과밀", "보통", "여유"];
+      const order = activeWmsStatus ? [activeWmsStatus] : ["초과", "과밀", "보통", "여유"];
       wmsResultsEl.innerHTML = order.map(status => {
         const rows = wmsResults.filter(row => row.status === status)
           .sort((a, b) => String(a.vehicle).localeCompare(String(b.vehicle), "ko", { numeric: true }));
@@ -1706,12 +1803,6 @@
               const cls = row.status === "초과" ? "judge-no" : row.status === "과밀" ? "judge-review" : "judge-ok";
               const overAmount = Math.max(0, row.amount - row.limit);
               const normalTargetCut = Math.max(0, row.amount - row.limit * .98);
-              const topStops = row.rows
-                .slice()
-                .sort((a, b) => (b.amount || 0) - (a.amount || 0))
-                .slice(0, 4)
-                .map(item => `${item.customerName || item.address || "배송처"} ${item.amount ? fmt.format(Math.round(item.amount)) + "원" : ""}`.trim())
-                .join(" / ");
               const routeSummary = row.vehicleData
                 ? `${row.vehicleData.area_label} · 주요 동선 ${row.vehicleData.top_dongs.slice(0, 4).map(item => `${item[0]} ${item[1]}건`).join(", ")}`
                 : "운영지도 기준 호차 없음";
@@ -1736,9 +1827,11 @@
                   <div class="wms-reason">
                     <div><b>왜 ${esc(row.status)}?</b>${esc(row.reasons.join(" · "))}<br>${esc(row.tonLabel)} 기준 ${fmt.format(Math.round(row.limit))}원</div>
                     <div><b>감액 목표</b>기준 초과 ${fmt.format(Math.round(overAmount))}원<br>보통권 ${fmt.format(Math.round(normalTargetCut))}원</div>
-                    <div><b>현재 건수</b>${fmt.format(row.stopCount)}개 배송처<br>상위 금액 후보 우선</div>
+                    <div><b>파일 기준</b>${fmt.format(row.rows.length)}개 착지 row<br>${esc(row.sheetName || "WMS 업로드")}</div>
                   </div>
-                  <div class="wms-route-list"><b>현재 담당 동선</b><br>${esc(routeSummary)}<br><b>WMS 주요 배송처</b><br>${esc(topStops || "배송처 상세 없음")}</div>
+                  <div class="wms-route-list"><b>운영지도 기준 권역</b><br>${esc(routeSummary)}</div>
+                  ${renderWmsStopList(row)}
+                  <div class="wms-route-list"><b>금액/위치 기준으로 뺄 후보</b></div>
                   <div class="wms-candidates">${candidates}</div>
                   <small>기준 권역: ${esc(routeArea)}</small>
                 </div>
@@ -1781,6 +1874,85 @@
         상태: ${esc(row.status)}
       `);
       wmsStatus.textContent = `${vehicle}호 후보 1건만 지도에 표시 중`;
+    }
+
+    async function resolveWmsStopPoint(stop) {
+      if (stop?.match && Number.isFinite(stop.match.lat) && Number.isFinite(stop.match.lng)) return stop.match;
+      if (stop?.lat && stop?.lng) return { lat: Number(stop.lat), lng: Number(stop.lng), name: stop.customerName, address: stop.address };
+      if (stop?.address) {
+        const point = await geocodeAddressCached(stop.address);
+        if (point && Number.isFinite(point.lat) && Number.isFinite(point.lng)) return { ...point, name: stop.customerName || point.name, address: stop.address || point.address };
+      }
+      return null;
+    }
+
+    async function showWmsVehicleRoute(vehicle) {
+      const row = wmsResults.find(item => item.vehicle === String(vehicle));
+      if (!row) return;
+      clearMapLayers();
+      wmsStatus.textContent = `${vehicle}호 파일 착지 지도 표시 중...`;
+      const points = [];
+      const stops = row.rows.filter(item => item.customerName || item.address || item.amount);
+      for (let index = 0; index < stops.length; index += 1) {
+        const stop = stops[index];
+        const point = await resolveWmsStopPoint(stop);
+        if (!point) continue;
+        points.push([point.lat, point.lng]);
+        addRouteFlagMarker(
+          [point.lat, point.lng],
+          "#dc2626",
+          `${vehicle}호`,
+          index + 1,
+          stops.length,
+          `
+            <b>${esc(wmsStopTitle(stop))}</b><br>
+            호차: ${esc(vehicle)}호 / 파일 착지 ${index + 1}<br>
+            고객 코드: ${esc(stop.customerCode || "-")}<br>
+            주소: ${esc(stop.address || point.address || "-")}<br>
+            금액: ${stop.amount ? fmt.format(Math.round(stop.amount)) + "원" : "-"}<br>
+            조정 힌트: ${esc(stop.removeReason || "-")}
+          `
+        );
+      }
+      if (points.length >= 2) {
+        addKakaoPolyline(points, { color:"#dc2626", weight:4, opacity:.9 }, spanLayer);
+      }
+      if (points.length) {
+        fitKakaoBounds(points);
+        wmsStatus.textContent = `${vehicle}호 파일 착지 ${fmt.format(stops.length)}건 중 ${fmt.format(points.length)}건 지도 표시 · 빨간 선은 파일 row 순서`;
+      } else {
+        wmsStatus.textContent = `${vehicle}호 착지 주소를 지도에 표시하지 못했습니다. WMS 주소 컬럼을 확인해주세요.`;
+      }
+    }
+
+    async function showWmsStopPin(vehicle, index) {
+      const row = wmsResults.find(item => item.vehicle === String(vehicle));
+      const stops = row?.rows?.filter(item => item.customerName || item.address || item.amount) || [];
+      const stop = stops[index];
+      if (!row || !stop) return;
+      clearMapLayers();
+      const point = await resolveWmsStopPoint(stop);
+      if (!point) {
+        wmsStatus.textContent = `${vehicle}호 ${index + 1}번째 착지 위치를 찾지 못했습니다.`;
+        return;
+      }
+      addRouteFlagMarker(
+        [point.lat, point.lng],
+        "#dc2626",
+        `${vehicle}호`,
+        index + 1,
+        stops.length,
+        `
+          <b>${esc(wmsStopTitle(stop))}</b><br>
+          호차: ${esc(vehicle)}호 / 파일 착지 ${index + 1}<br>
+          고객 코드: ${esc(stop.customerCode || "-")}<br>
+          주소: ${esc(stop.address || point.address || "-")}<br>
+          금액: ${stop.amount ? fmt.format(Math.round(stop.amount)) + "원" : "-"}<br>
+          조정 힌트: ${esc(stop.removeReason || "-")}
+        `
+      );
+      setKakaoView(point.lat, point.lng, 4);
+      wmsStatus.textContent = `${vehicle}호 ${index + 1}번째 착지만 지도에 표시 중`;
     }
 
     function downloadSheetTemplate() {
