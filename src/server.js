@@ -53,6 +53,7 @@ let refreshState = {
 let vehicleAreaDataPromise = null;
 let deliveryAdminSession = {
   cookie: config.deliveryAdminCookie || "",
+  authorization: "",
   username: "",
   expiresAt: 0
 };
@@ -132,6 +133,7 @@ async function deliveryAdminFetch(pathname, options = {}) {
     ...(options.headers || {})
   };
   if (cookie) headers.Cookie = cookie;
+  if (deliveryAdminSession.authorization) headers.Authorization = deliveryAdminSession.authorization;
   const response = await fetch(url, {
     ...options,
     headers,
@@ -177,23 +179,33 @@ async function ensureDeliveryAdminSession(force = false) {
     throw new Error("DELIVERY_ADMIN_ID and DELIVERY_ADMIN_PASSWORD are not configured.");
   }
   deliveryAdminSession.cookie = "";
-  const response = await deliveryAdminFetch("/api/auth/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      username: config.deliveryAdminId,
-      password: config.deliveryAdminPassword
-    })
-  });
-  const text = await response.text();
-  if (!response.ok) {
+  deliveryAdminSession.authorization = "";
+  const attempts = [
+    { url: "/api/auth/login", body: { username: config.deliveryAdminId, password: config.deliveryAdminPassword } },
+    { url: "/api/auth/login", body: { id: config.deliveryAdminId, password: config.deliveryAdminPassword } },
+    { url: "https://delivery-api.chabyulhwa.com/admin/auth/sign-in", body: { username: config.deliveryAdminId, password: config.deliveryAdminPassword } },
+    { url: "https://delivery-api.chabyulhwa.com/admin/auth/sign-in", body: { id: config.deliveryAdminId, password: config.deliveryAdminPassword } }
+  ];
+  const errors = [];
+  for (const attempt of attempts) {
+    const response = await deliveryAdminFetch(attempt.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(attempt.body)
+    });
+    const text = await response.text();
     let payload = {};
-    try { payload = JSON.parse(text); } catch {}
-    throw new Error(payload?.message || `Delivery admin login failed: HTTP ${response.status}`);
+    try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: text }; }
+    if (response.ok) {
+      const token = payload?.token || payload?.accessToken || payload?.access_token || payload?.data?.token || payload?.data?.accessToken || payload?.data?.access_token;
+      if (token) deliveryAdminSession.authorization = `Bearer ${token}`;
+      deliveryAdminSession.username = config.deliveryAdminId;
+      deliveryAdminSession.expiresAt = Date.now() + 20 * 60 * 1000;
+      return deliveryAdminSession.cookie || deliveryAdminSession.authorization;
+    }
+    errors.push(`${attempt.url}: HTTP ${response.status}${payload?.message ? ` ${payload.message}` : ""}`);
   }
-  deliveryAdminSession.username = config.deliveryAdminId;
-  deliveryAdminSession.expiresAt = Date.now() + 20 * 60 * 1000;
-  return deliveryAdminSession.cookie;
+  throw new Error(`Delivery admin login failed. Tried ${errors.join(" / ")}`);
 }
 
 function deliveryApiQuery(data) {

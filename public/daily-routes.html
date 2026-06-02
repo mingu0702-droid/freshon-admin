@@ -261,10 +261,10 @@
     body[data-work-tab="new"] .insight-work { display:none; }
     body.main-page .route-controls,
     body.main-page .route-status { display:none; }
-    body[data-work-tab="wms"] .shell { grid-template-columns:minmax(720px, 1fr) minmax(430px, 34vw); }
+    body[data-work-tab="wms"] .shell { grid-template-columns:minmax(860px, 1fr) minmax(320px, 24vw); }
     body[data-work-tab="wms"] aside { width:auto; min-width:0; max-width:none; resize:none; padding:14px; }
     body[data-work-tab="wms"] main { border-left:1px solid var(--edge); min-width:0; }
-    body[data-work-tab="wms"] #map { min-width:420px; }
+    body[data-work-tab="wms"] #map { min-width:320px; }
     body[data-work-tab="wms"] .wms-panel { height:calc(100vh - 72px); display:flex; flex-direction:column; margin:0; background:#fff; }
     body[data-work-tab="wms"] .wms-panel h2 { font-size:20px; }
     body[data-work-tab="wms"] .wms-results { max-height:none; flex:1; }
@@ -310,9 +310,9 @@
       </div>
       <section class="wms-panel wms-work" aria-label="WMS 배차 검토">
         <h2>WMS 배차 현황</h2>
-        <div class="meta">WMS 전용 화면 v2026-06-03-1 · 배차계획조정 엑셀의 실제 셀 범위를 복구해서 파일 착지 전체와 과배차/조정 후보를 함께 봅니다.</div>
+        <div class="meta">WMS 전용 화면 v2026-06-03-2 · 배차계획조정 상세 파일과 차량톤수 요약 파일을 함께 올려 파일 착지 전체와 과배차/조정 후보를 봅니다.</div>
         <div class="wms-file">
-          <input id="wmsFileInput" type="file" accept=".xlsx,.xls,.csv,.tsv">
+          <input id="wmsFileInput" type="file" accept=".xlsx,.xls,.csv,.tsv" multiple>
           <textarea id="wmsPasteInput" placeholder="호차	차량톤수	금액	정류지수"></textarea>
         </div>
         <div class="wms-actions">
@@ -615,6 +615,11 @@
     }
 
     function render() {
+      if (document.body.dataset.workTab === "wms") {
+        clearMapLayers();
+        closeInfoWindows();
+        return;
+      }
       backToOverviewButton.classList.toggle("hidden", viewMode.value !== "detail");
       if (viewMode.value.startsWith("overview")) {
         lastOverviewMode = viewMode.value;
@@ -634,6 +639,7 @@
       });
       setTimeout(() => {
         if (map && typeof map.relayout === "function") map.relayout();
+        if (next === "wms") clearMapLayers();
       }, 0);
     }
 
@@ -1500,25 +1506,35 @@
     }
 
     async function readWmsInputRows() {
-      const file = wmsFileInput.files && wmsFileInput.files[0];
-      if (file) {
+      const files = [...(wmsFileInput.files || [])];
+      if (files.length) {
+        const allRows = [];
+        for (const file of files) {
         const ext = file.name.split(".").pop().toLowerCase();
         if (ext === "csv" || ext === "tsv") {
-          return rowsFromDelimitedText(await file.text());
+          rowsFromDelimitedText(await file.text()).forEach(row => {
+            row._sheetName = file.name;
+            row._fileName = file.name;
+            allRows.push(row);
+          });
+          continue;
         }
         if (!window.XLSX) throw new Error("엑셀 읽기 모듈을 불러오지 못했습니다. 표를 복사해 붙여넣기로 분석해주세요.");
         const buffer = await file.arrayBuffer();
         const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-        return workbook.SheetNames.flatMap(sheetName => {
+        workbook.SheetNames.flatMap(sheetName => {
           const sheet = workbook.Sheets[sheetName];
           repairWorksheetRange(sheet);
           const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
           return rows.map(row => {
             const copy = Array.isArray(row) ? [...row] : row;
             copy._sheetName = sheetName;
+            copy._fileName = file.name;
             return copy;
           });
-        });
+        }).forEach(row => allRows.push(row));
+        }
+        return allRows;
       }
       return rowsFromDelimitedText(wmsPasteInput.value);
     }
@@ -1578,7 +1594,7 @@
         const address = pickWms(object, ["주소", "고객주소", "배송주소"]);
         if (!vehicle && !amount && !customerName && !address) return null;
         const isSummary = Boolean(vehicle && amount && !customerName && !address);
-        return { raw: object, sheetName: raw._sheetName || "", vehicle, tonText, amount, stopCount, weight, cbm, customerCode, customerName, address, isSummary };
+        return { raw: object, sheetName: raw._sheetName || "", fileName: raw._fileName || "", vehicle, tonText, amount, stopCount, weight, cbm, customerCode, customerName, address, isSummary };
     }
 
     function normalizeHeader(value) {
@@ -1619,7 +1635,7 @@
           byVehicle.set(row.vehicle, { vehicle: row.vehicle, tonText: "", sheetName: "", amount: 0, stopCount: 0, weight: 0, cbm: 0, rows: [] });
         }
         const bucket = byVehicle.get(row.vehicle);
-        if (!bucket.tonText && row.tonText) bucket.tonText = row.tonText;
+        if (row.tonText && (row.isSummary || !bucket.tonText)) bucket.tonText = row.tonText;
         if (!bucket.sheetName && row.sheetName) bucket.sheetName = row.sheetName;
         bucket.amount += row.amount || 0;
         bucket.stopCount += row.stopCount || (row.customerName || row.address ? 1 : 0);
@@ -1632,6 +1648,8 @@
         const summaryRows = bucket.rows.filter(row => row.isSummary || (!row.customerName && !row.address && row.amount));
         const summaryAmount = summaryRows.length ? Math.max(...summaryRows.map(row => row.amount || 0)) : 0;
         const summaryStopCount = summaryRows.length ? Math.max(...summaryRows.map(row => row.stopCount || 0)) : 0;
+        const summaryTon = summaryRows.map(row => normalizeTonLabel(row.tonText)).find(Boolean);
+        if (summaryTon) bucket.tonText = summaryTon;
         if (summaryAmount) bucket.amount = summaryAmount;
         else if (detailRows.length) bucket.amount = detailRows.reduce((sum, row) => sum + (row.amount || 0), 0);
         if (summaryStopCount) bucket.stopCount = summaryStopCount;
@@ -1705,7 +1723,7 @@
       const stops = row.rows.filter(item => item.customerName || item.address || item.amount);
       if (!stops.length) return `<div class="wms-route-list"><b>파일 착지 전체</b><br>상세 배송처 rows를 찾지 못했습니다. WMS 상세 시트를 올렸는지 확인해주세요.</div>`;
       return `
-        <div class="wms-route-list"><b>파일 착지 전체 ${fmt.format(stops.length)}건</b><br>아래 착지를 누르면 우측 지도에 해당 위치만 표시됩니다. 호차 행을 누르면 전체 착지가 빨간 선으로 연결됩니다.</div>
+        <div class="wms-route-list"><b>파일 착지 전체 ${fmt.format(stops.length)}건</b><br>아래 착지를 누르면 우측 지도에 해당 위치만 표시됩니다. 호차 행을 누르면 전체 착지가 핀으로 표시됩니다.</div>
         <div class="wms-stops">
           ${stops.map((item, index) => `
             <button type="button" class="wms-stop" data-wms-vehicle="${esc(row.vehicle)}" data-stop-index="${index}">
@@ -1847,15 +1865,6 @@
       const candidate = row?.candidates?.[index];
       if (!row || !candidate) return;
       clearMapLayers();
-      const vehicleData = row.vehicleData || data.vehicles.find(v => v.vehicle === vehicle);
-      if (vehicleData) {
-        addAdminBoundaryLayer(vehicleData, vehicleData.detail_admin_codes, {
-          color: getVehicleColor(vehicleData),
-          weight: 4,
-          fillOpacity: .07,
-          opacity: .72
-        });
-      }
       let point = candidate.match;
       if ((!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) && candidate.address) {
         point = await geocodeAddressCached(candidate.address);
@@ -1914,12 +1923,9 @@
           `
         );
       }
-      if (points.length >= 2) {
-        addKakaoPolyline(points, { color:"#dc2626", weight:4, opacity:.9 }, spanLayer);
-      }
       if (points.length) {
         fitKakaoBounds(points);
-        wmsStatus.textContent = `${vehicle}호 파일 착지 ${fmt.format(stops.length)}건 중 ${fmt.format(points.length)}건 지도 표시 · 빨간 선은 파일 row 순서`;
+        wmsStatus.textContent = `${vehicle}호 파일 착지 ${fmt.format(stops.length)}건 중 ${fmt.format(points.length)}건 지도 표시`;
       } else {
         wmsStatus.textContent = `${vehicle}호 착지 주소를 지도에 표시하지 못했습니다. WMS 주소 컬럼을 확인해주세요.`;
       }
