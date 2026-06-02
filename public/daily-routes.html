@@ -145,8 +145,13 @@
     .wms-vehicle-row:hover { background:#eff6ff; }
     .wms-vehicle-row strong { display:flex; justify-content:space-between; gap:8px; font-size:13px; line-height:1.3; }
     .wms-vehicle-row small { display:block; margin-top:4px; color:var(--muted); line-height:1.4; overflow-wrap:anywhere; }
-    .wms-candidates { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
-    .wms-candidate { border:1px solid #cbd5e1; background:#fff; border-radius:999px; padding:4px 7px; font-size:11px; font-weight:900; color:#344054; cursor:pointer; }
+    .wms-reason { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:8px; }
+    .wms-reason div { border:1px solid #dbe4f0; background:#f8fafc; border-radius:6px; padding:7px; font-size:11px; line-height:1.35; }
+    .wms-reason b { display:block; color:#111827; font-size:12px; margin-bottom:2px; }
+    .wms-route-list { margin:8px 0 0; padding:7px 9px; border-left:3px solid #2563eb; background:#f8fafc; font-size:12px; line-height:1.45; color:#344054; }
+    .wms-candidates { display:grid; gap:5px; margin-top:8px; }
+    .wms-candidate { border:1px solid #cbd5e1; background:#fff; border-radius:6px; padding:7px 8px; font-size:11px; font-weight:900; color:#344054; cursor:pointer; text-align:left; line-height:1.35; }
+    .wms-candidate span { display:block; color:#667085; font-weight:700; margin-top:2px; }
     .wms-candidate:hover { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
     .load-chip { display:block; width:100%; text-align:left; border:0; background:transparent; padding:0; cursor:pointer; color:inherit; font:inherit; }
     .load-chip:hover b { color:#1d4ed8; text-decoration:underline; }
@@ -1185,10 +1190,14 @@
       const explicitDongHo = /(^|[^\d])\d{1,4}\s*동\s*\d{1,4}\s*호(?=$|[^\d가-힣])/;
       const attachedDongHo = /(^|[^\d])\d{1,4}\s*동\s*\d{2,4}(?=$|[^\d가-힣])/;
       const dongNumberOnly = /(^|[^\d])\d{1,4}\s*동\s+\d{1,4}(?=$|[^\d가-힣])/;
+      const apartmentNameHint = /(아파트|APT|apt|맨션|주공|e편한세상|이편한세상|자이|래미안|힐스테이트|푸르지오|더샵|롯데캐슬|아이파크|우미린|두산위브|반도유보라|센트럴파크)/i;
+      const hyphenDongHo = /(^|[^\d])\d{1,4}\s*[-\/]\s*\d{2,4}(?=$|[^\d가-힣])/;
+      const spaceDongHo = /(^|[^\d])\d{1,4}\s+\d{3,4}(?=$|[^\d가-힣])/;
       const hasDongHo = explicitDongHo.test(text) || dongNumberOnly.test(text);
       const hasAttachedDongHo = attachedDongHo.test(text);
-      if (!hasDongHo && !hasAttachedDongHo) return "";
       if (commercialHint.test(text)) return "";
+      if ((hyphenDongHo.test(text) || spaceDongHo.test(text)) && apartmentNameHint.test(text)) return "아파트";
+      if (!hasDongHo && !hasAttachedDongHo) return "";
       return "아파트 동/호수";
     }
 
@@ -1503,6 +1512,7 @@
           if (header) object[header] = raw[index] ?? "";
         });
         const vehicle = cleanVehicle(pickWms(object, ["확정호차", "변경호차", "기준호차", "호차", "TMS호차명"]));
+        const tonText = pickWms(object, ["차량톤수", "차량톤", "톤수", "톤"]);
         const amount = parseKoreanNumber(pickWms(object, ["금액", "매출", "총금액"]));
         const stopCount = parseKoreanNumber(pickWms(object, ["정류지수", "배송처수", "건수"]));
         const weight = parseKoreanNumber(pickWms(object, ["중량", "중량kg", "kg"]));
@@ -1511,7 +1521,7 @@
         const customerName = pickWms(object, ["고객명", "고객사명", "배송처", "업체명"]);
         const address = pickWms(object, ["주소", "고객주소", "배송주소"]);
         if (!vehicle && !amount && !customerName && !address) return null;
-        return { raw: object, vehicle, amount, stopCount, weight, cbm, customerCode, customerName, address };
+        return { raw: object, vehicle, tonText, amount, stopCount, weight, cbm, customerCode, customerName, address };
       }).filter(Boolean);
     }
 
@@ -1550,9 +1560,10 @@
       rows.forEach(row => {
         if (!row.vehicle) return;
         if (!byVehicle.has(row.vehicle)) {
-          byVehicle.set(row.vehicle, { vehicle: row.vehicle, amount: 0, stopCount: 0, weight: 0, cbm: 0, rows: [] });
+          byVehicle.set(row.vehicle, { vehicle: row.vehicle, tonText: "", amount: 0, stopCount: 0, weight: 0, cbm: 0, rows: [] });
         }
         const bucket = byVehicle.get(row.vehicle);
+        if (!bucket.tonText && row.tonText) bucket.tonText = row.tonText;
         bucket.amount += row.amount || 0;
         bucket.stopCount += row.stopCount || (row.customerName || row.address ? 1 : 0);
         bucket.weight += row.weight || 0;
@@ -1561,38 +1572,106 @@
       });
       return [...byVehicle.values()].map(bucket => {
         const vehicleData = data.vehicles.find(v => v.vehicle === bucket.vehicle);
-        const limit = vehicleData?.revenue_limit || inferRevenueLimit(bucket.vehicle);
+        const tonLabel = inferTonLabel(bucket.vehicle, bucket.tonText, vehicleData);
+        const limit = inferRevenueLimit(bucket.vehicle, tonLabel, vehicleData);
         const usage = limit ? bucket.amount / limit : 0;
-        const status = usage >= 1.35 ? "초과" : usage >= 1.12 ? "과밀" : usage >= .85 ? "보통" : "여유";
-        const candidates = bucket.rows
-          .map(row => ({ ...row, match: matchKnownCustomer(row, vehicleData) }))
-          .sort((a, b) => (b.amount || 0) - (a.amount || 0))
-          .slice(0, 6);
+        const status = usage > 1 ? "초과" : usage >= .92 ? "과밀" : usage >= .75 ? "보통" : "여유";
+        const enrichedRows = bucket.rows.map(row => buildWmsStopInsight(row, bucket, vehicleData));
+        const candidates = enrichedRows
+          .filter(row => row.amount || row.customerName || row.address)
+          .sort((a, b) => (b.removeScore || 0) - (a.removeScore || 0))
+          .slice(0, 8);
         const reasons = [];
-        if (usage >= 1.12) reasons.push(`금액 ${Math.round(usage * 100)}%`);
+        if (usage > 1) reasons.push(`기준 초과 ${Math.round(usage * 100)}%`);
+        else if (usage >= .92) reasons.push(`기준 임박 ${Math.round(usage * 100)}%`);
         if (bucket.stopCount >= 28) reasons.push(`정류지 ${fmt.format(bucket.stopCount)}건`);
         if (!reasons.length) reasons.push("기준 내");
-        return { ...bucket, vehicleData, limit, usage, status, reasons, candidates };
+        return { ...bucket, rows: enrichedRows, vehicleData, tonLabel, limit, usage, status, reasons, candidates };
       }).sort((a, b) => (b.usage || 0) - (a.usage || 0));
     }
 
-    function inferRevenueLimit(vehicle) {
+    function buildWmsStopInsight(row, bucket, vehicleData) {
+      const match = matchKnownCustomer(row, vehicleData);
+      const amountShare = bucket.amount ? (row.amount || 0) / bucket.amount : 0;
+      const currentArea = vehicleData?.area_label || "";
+      const matchVehicle = match?.matchedVehicle;
+      const matchedArea = matchVehicle?.area_label || match?.district || "";
+      const areaMismatch = Boolean(matchVehicle && vehicleData && matchVehicle.vehicle !== vehicleData.vehicle);
+      const centerDistance = vehicleData && match && Number.isFinite(match.lat) && Number.isFinite(match.lng)
+        ? distanceKm({ lat: vehicleData.center[0], lng: vehicleData.center[1] }, match)
+        : null;
+      const highAmount = amountShare >= .18 || (row.amount || 0) >= 1000000;
+      const reasons = [];
+      if (highAmount) reasons.push(`고액 ${fmt.format(Math.round(row.amount || 0))}원`);
+      if (areaMismatch) reasons.push(`${matchVehicle.vehicle}호 권역과 가까움`);
+      if (Number.isFinite(centerDistance) && centerDistance >= 3) reasons.push(`동선 외곽 ${centerDistance.toFixed(1)}km`);
+      if (!reasons.length) reasons.push("금액/위치 기준 후보");
+      const removeScore = (row.amount || 0)
+        + (areaMismatch ? 700000 : 0)
+        + (Number.isFinite(centerDistance) ? centerDistance * 60000 : 0)
+        + (highAmount ? 300000 : 0);
+      return {
+        ...row,
+        match,
+        amountShare,
+        currentArea,
+        matchedArea,
+        areaMismatch,
+        centerDistance,
+        removeScore,
+        removeReason: reasons.join(" · ")
+      };
+    }
+
+    function inferTonLabel(vehicle, tonText, vehicleData) {
+      const explicit = normalizeTonLabel(tonText);
+      if (explicit) return explicit;
+      const embedded = normalizeTonLabel(vehicleData?.primary_ton || vehicleData?.tons?.[0]?.[0]);
+      if (embedded) return embedded;
+      const number = Number(String(vehicle || "").replace(/\D/g, ""));
+      if (number >= 300 && number <= 599) return "1.2톤";
+      return "1톤";
+    }
+
+    function normalizeTonLabel(value) {
+      const text = String(value || "").replace(/\s+/g, "").trim();
+      if (!text) return "";
+      const match = text.match(/\d+(?:\.\d+)?/);
+      if (!match) return text;
+      const number = Number(match[0]);
+      if (!Number.isFinite(number)) return text;
+      return `${number % 1 === 0 ? number.toFixed(0) : String(number)}톤`;
+    }
+
+    function inferRevenueLimit(vehicle, tonLabel, vehicleData) {
+      const ton = normalizeTonLabel(tonLabel);
+      if (ton === "3.5톤") return 14600000;
+      if (ton === "2.5톤") return 13600000;
+      if (ton === "1.4톤") return 10500000;
+      if (ton === "1.2톤") return 9600000;
+      if (ton === "1톤") return 6100000;
       const number = Number(String(vehicle || "").replace(/\D/g, ""));
       const known = data.vehicles.find(v => v.vehicle === String(vehicle));
+      if (vehicleData?.revenue_limit) return vehicleData.revenue_limit;
       if (known?.revenue_limit) return known.revenue_limit;
       if (number >= 300 && number <= 599) return 9600000;
       return 6100000;
     }
 
     function matchKnownCustomer(row, vehicleData) {
-      const customers = vehicleData?.customers?.length ? vehicleData.customers : allVehicleCustomers();
       const code = String(row.customerCode || "").trim();
       const name = String(row.customerName || "").trim();
       const address = String(row.address || "").trim();
-      return customers.find(c => code && c.id === code)
-        || customers.find(c => name && c.name && (c.name.includes(name) || name.includes(c.name)))
-        || customers.find(c => address && c.address && (c.address.includes(address) || address.includes(c.address)))
-        || null;
+      if (vehicleData?.customers?.length) {
+        const own = vehicleData.customers.find(c => code && c.id === code)
+          || vehicleData.customers.find(c => name && c.name && (c.name.includes(name) || name.includes(c.name)))
+          || vehicleData.customers.find(c => address && c.address && (c.address.includes(address) || address.includes(c.address)));
+        if (own) return { ...own, matchedVehicle: vehicleData };
+      }
+      const global = allVehicleCustomers().find(({ customer }) => code && customer.id === code)
+        || allVehicleCustomers().find(({ customer }) => name && customer.name && (customer.name.includes(name) || name.includes(customer.name)))
+        || allVehicleCustomers().find(({ customer }) => address && customer.address && (customer.address.includes(address) || address.includes(customer.address)));
+      return global ? { ...global.customer, matchedVehicle: global.vehicle } : null;
     }
 
     function renderWmsAnalysis(sourceRows) {
@@ -1624,19 +1703,41 @@
             <div class="wms-status-head"><span>${esc(status)}</span><span>${fmt.format(rows.length)}대</span></div>
             ${rows.map(row => {
               const cls = row.status === "초과" ? "judge-no" : row.status === "과밀" ? "judge-review" : "judge-ok";
+              const overAmount = Math.max(0, row.amount - row.limit);
+              const normalTargetCut = Math.max(0, row.amount - row.limit * .98);
+              const topStops = row.rows
+                .slice()
+                .sort((a, b) => (b.amount || 0) - (a.amount || 0))
+                .slice(0, 4)
+                .map(item => `${item.customerName || item.address || "배송처"} ${item.amount ? fmt.format(Math.round(item.amount)) + "원" : ""}`.trim())
+                .join(" / ");
+              const routeSummary = row.vehicleData
+                ? `${row.vehicleData.area_label} · 주요 동선 ${row.vehicleData.top_dongs.slice(0, 4).map(item => `${item[0]} ${item[1]}건`).join(", ")}`
+                : "운영지도 기준 호차 없음";
               const candidates = row.candidates.slice(0, 5).map((item, index) => {
                 const label = item.customerName || item.address || "배송처";
-                const amount = item.amount ? ` · ${fmt.format(Math.round(item.amount))}원` : "";
-                return `<button type="button" class="wms-candidate" data-wms-vehicle="${esc(row.vehicle)}" data-candidate-index="${index}">${esc(label)}${amount}</button>`;
+                const amount = item.amount ? `${fmt.format(Math.round(item.amount))}원` : "금액 없음";
+                const area = item.match?.matchedVehicle ? `${item.match.matchedVehicle.vehicle}호 권역` : item.matchedArea || "위치 미확인";
+                return `
+                  <button type="button" class="wms-candidate" data-wms-vehicle="${esc(row.vehicle)}" data-candidate-index="${index}">
+                    ${esc(label)} · ${esc(amount)}
+                    <span>뺄 후보: ${esc(item.removeReason)} · ${esc(area)}</span>
+                  </button>
+                `;
               }).join("") || `<small>상세 배송처 없음</small>`;
               const routeArea = row.vehicleData ? row.vehicleData.area_label : "운영지도 기준 호차 없음";
               return `
                 <div class="wms-vehicle-row" data-vehicle="${esc(row.vehicle)}">
                   <strong>
-                    <span><span class="${cls}">${esc(row.vehicle)}호 · ${esc(row.status)}</span></span>
+                    <span><span class="${cls}">${esc(row.vehicle)}호 · ${esc(row.tonLabel)} · ${esc(row.status)}</span></span>
                     <span>${fmt.format(Math.round(row.amount))}원 · ${Math.round(row.usage * 100)}%</span>
                   </strong>
-                  <small>${esc(row.reasons.join(" · "))} · 정류지 ${fmt.format(row.stopCount)}건</small>
+                  <div class="wms-reason">
+                    <div><b>왜 ${esc(row.status)}?</b>${esc(row.reasons.join(" · "))}<br>${esc(row.tonLabel)} 기준 ${fmt.format(Math.round(row.limit))}원</div>
+                    <div><b>감액 목표</b>기준 초과 ${fmt.format(Math.round(overAmount))}원<br>보통권 ${fmt.format(Math.round(normalTargetCut))}원</div>
+                    <div><b>현재 건수</b>${fmt.format(row.stopCount)}개 배송처<br>상위 금액 후보 우선</div>
+                  </div>
+                  <div class="wms-route-list"><b>현재 담당 동선</b><br>${esc(routeSummary)}<br><b>WMS 주요 배송처</b><br>${esc(topStops || "배송처 상세 없음")}</div>
                   <div class="wms-candidates">${candidates}</div>
                   <small>기준 권역: ${esc(routeArea)}</small>
                 </div>
