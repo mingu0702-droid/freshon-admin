@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import { spawn } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -126,23 +126,37 @@ function getSetCookieHeaders(response) {
 async function deliveryAdminFetch(pathname, options = {}) {
   const baseUrl = normalizeBaseUrl(config.deliveryAdminBaseUrl);
   const url = pathname.startsWith("http") ? pathname : `${baseUrl}${pathname.startsWith("/") ? "" : "/"}${pathname}`;
-  const cookie = options.cookie || deliveryAdminSession.cookie || config.deliveryAdminCookie || "";
+  const { timeoutMs = 12000, ...fetchOptions } = options;
+  const cookie = fetchOptions.cookie || deliveryAdminSession.cookie || config.deliveryAdminCookie || "";
   const headers = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": "freshon-admin-route-sync/1.0",
-    ...(options.headers || {})
+    ...(fetchOptions.headers || {})
   };
   if (cookie) headers.Cookie = cookie;
   if (deliveryAdminSession.authorization) headers.Authorization = deliveryAdminSession.authorization;
-  const response = await fetch(url, {
-    ...options,
-    headers,
-    redirect: options.redirect || "manual"
-  });
-  const setCookies = getSetCookieHeaders(response);
-  if (setCookies.length) {
-    deliveryAdminSession.cookie = mergeCookieHeader(deliveryAdminSession.cookie || cookie, setCookies);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(url, {
+      ...fetchOptions,
+      headers,
+      signal: fetchOptions.signal || controller.signal,
+      redirect: fetchOptions.redirect || "manual"
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      const timeoutError = new Error(`Delivery admin request timed out after ${Math.round(timeoutMs / 1000)}s (${url})`);
+      timeoutError.status = 504;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
+  const setCookies = getSetCookieHeaders(response);
+  if (setCookies.length) deliveryAdminSession.cookie = mergeCookieHeader(deliveryAdminSession.cookie || cookie, setCookies);
   return response;
 }
 
@@ -354,7 +368,7 @@ async function parseWorkbook(file) {
       try {
         return await parseOfficeCryptoWorkbook(file);
       } catch (officeCryptoError) {
-        throw new Error(`${file.originalname} 파일을 읽지 못했습니다. 암호화 Excel 복호화도 실패했습니다. 암호 설정(EXCEL_PASSWORD)과 파일 형식을 확인해주세요. (일반: ${error.message} / xlsx암호: ${encryptedError.message} / 구형암호: ${officeCryptoError.message})`);
+        throw new Error(`${file.originalname} ?뚯씪???쎌? 紐삵뻽?듬땲?? ?뷀샇??Excel 蹂듯샇?붾룄 ?ㅽ뙣?덉뒿?덈떎. ?뷀샇 ?ㅼ젙(EXCEL_PASSWORD)怨??뚯씪 ?뺤떇???뺤씤?댁＜?몄슂. (?쇰컲: ${error.message} / xlsx?뷀샇: ${encryptedError.message} / 援ы삎?뷀샇: ${officeCryptoError.message})`);
       }
     }
   }
@@ -418,26 +432,22 @@ async function parseWorkbookWithPython(file) {
 
 function makeRowKey(row) {
   const priorityKeys = [
-    "등록일",
-    "일자",
-    "배송일",
-    "입고요청일",
-    "출고일",
-    "고객코드",
-    "고객 코드",
-    "거래처코드",
-    "매장코드",
-    "호차",
-    "확정호차",
-    "기준호차",
-    "고객주소",
-    "주소"
+    "date", "requestDate", "deliveryDate", "inReqDate", "enteringDate", "outDate",
+    "customerCode", "customerERPCode", "erpCode", "custCd", "estCd",
+    "vehicle", "vehicleNo", "carSeq", "carNm", "fixedCarSeq",
+    "address", "customerAddress", "addr", "roadAddress"
   ];
-  const values = priorityKeys.map((key) => row[key]).filter(Boolean);
+  const values = [];
+  for (const key of priorityKeys) {
+    if (row[key]) values.push(normalizeCell(row[key]));
+  }
   if (values.length >= 2) return values.join("|");
-  return JSON.stringify(row);
+  const fallback = Object.entries(row)
+    .filter(([key, value]) => !String(key).startsWith("_") && normalizeCell(value))
+    .slice(0, 8)
+    .map(([key, value]) => `${key}:${normalizeCell(value)}`);
+  return fallback.length ? fallback.join("|") : JSON.stringify(row);
 }
-
 function mergeColumns(left = [], right = []) {
   return [...new Set([...left, ...right])].filter((column) => !String(column).startsWith("_"));
 }
@@ -450,12 +460,10 @@ function mergeRows(existingRows = [], uploadedRows = []) {
 }
 
 function inferRange(rows) {
-  const dateColumns = ["등록일", "일자", "배송일", "입고요청일", "출고일"];
   const dates = [];
   for (const row of rows) {
-    for (const column of dateColumns) {
-      const value = normalizeCell(row[column]);
-      const normalized = normalizeDateValue(value);
+    for (const value of Object.values(row || {})) {
+      const normalized = normalizeDateValue(normalizeCell(value));
       if (normalized) dates.push(normalized);
     }
   }
@@ -463,7 +471,6 @@ function inferRange(rows) {
   if (!dates.length) return null;
   return { startDate: dates[0], endDate: dates[dates.length - 1] };
 }
-
 async function readVehicleAreaData() {
   vehicleAreaDataPromise ||= fs.readFile(path.join(publicDir, "vehicle-data.js"), "utf8")
     .then((text) => {
@@ -477,7 +484,7 @@ async function readVehicleAreaData() {
 }
 
 function normalizeColumnName(value) {
-  return normalizeCell(value).replace(/\s+/g, "").replace(/[()（）]/g, "");
+  return normalizeCell(value).replace(/\s+/g, "").replace(/[()竊덌펹]/g, "");
 }
 
 function firstValue(row, columns) {
@@ -1050,6 +1057,221 @@ async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) 
   };
 }
 
+async function freshonFetch(pathname, options = {}) {
+  const origin = new URL(config.freshonBaseUrl).origin;
+  const url = pathname.startsWith("http") ? pathname : `${origin}${pathname.startsWith("/") ? "" : "/"}${pathname}`;
+  const { timeoutMs = 12000, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...fetchOptions,
+      signal: fetchOptions.signal || controller.signal,
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "User-Agent": "freshon-admin-daily-route/1.0",
+        Origin: origin,
+        Referer: `${origin}/bo/main#/bo/wm/dispatch/dailyDsptcPage`,
+        ...(config.freshonCookie ? { Cookie: config.freshonCookie } : {}),
+        ...(fetchOptions.headers || {})
+      }
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      const timeoutError = new Error(`Freshon request timed out after ${Math.round(timeoutMs / 1000)}s (${pathname})`);
+      timeoutError.status = 504;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readFreshonJson(pathname, options = {}) {
+  const response = await freshonFetch(pathname, options);
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+  if (!response.ok) {
+    const error = new Error(payload?.message || payload?.error || `Freshon HTTP ${response.status}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
+function freshonDailyRouteForm({ date, vehicle, center = "", page = 0 }) {
+  const centerText = center || "";
+  return {
+    page: String(page),
+    isPaging: "true",
+    isCount: "true",
+    size: "1000",
+    excelFileNm: `daily_dispatch_${date}_${vehicle}`,
+    logCd: "011",
+    logCdNm: centerText,
+    logisticsCenter: centerText,
+    logisticsCenterNm: centerText,
+    whCd: "",
+    centerCd: "",
+    baecha: centerText,
+    startDate: date,
+    endDate: date,
+    inReqDate: date,
+    enteringDate: date,
+    reqDate: date,
+    dlvyReqDate: date,
+    carSeq: vehicle,
+    carSeqNm: vehicle,
+    carCd: vehicle,
+    carNm: vehicle,
+    carNo: vehicle,
+    fixedCarSeq: vehicle,
+    fixedCarSeqNm: vehicle,
+    shipGbn: "1",
+    shipGbnNm: "night",
+    tcYn: "",
+    tcGbn: ""
+  };
+}
+
+function extractFreshonRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  const direct = payload?.data?.content
+    || payload?.data?.items
+    || payload?.data?.list
+    || payload?.data?.rows
+    || payload?.data
+    || payload?.content
+    || payload?.items
+    || payload?.list
+    || payload?.rows;
+  if (Array.isArray(direct)) return direct;
+  return findArrayDeep(payload, (item) => {
+    if (!item || typeof item !== "object") return false;
+    return Boolean(
+      item.estCd || item.estNm || item.customerCode || item.customerName || item.custCd || item.custNm
+      || item.confirmCarSeq || item.carSeq || item.carNm || item.totalOrderAmt || item.orderAmt
+    );
+  }) || [];
+}
+
+function freshonRowVehicle(row) {
+  return normalizeVehicleValue(
+    row.confirmCarSeq
+    || row.confirmedCarSeq
+    || row.fixedCarSeq
+    || row.baseCarSeq
+    || row.changeCarSeq
+    || row.carSeq
+    || row.carSeqNm
+    || row.carCd
+    || row.carNm
+    || row.carNo
+    || row.hocha
+    || row.vehicle
+    || ""
+  );
+}
+
+function buildStopFromFreshonDailyRow(row, vehicle, sequence) {
+  const customerCode = deliveryStopText(row, ["estCd", "customerCode", "custCd", "erpCode", "customerErpCode", "custCode"]);
+  const customerName = deliveryStopText(row, ["estNm", "estName", "customerName", "custNm", "customerNm", "custName", "storeName"]);
+  const amount = deliveryStopText(row, ["totalOrderAmt", "totOrderAmt", "orderAmt", "saleAmt", "salesAmount", "amt", "totalAmount", "daySaleAmt"]);
+  const weight = deliveryStopText(row, ["weight", "weightKg", "totalWeight"]);
+  const cbm = deliveryStopText(row, ["cbm", "CBM"]);
+  const address = [
+    deliveryStopText(row, ["addr", "address", "customerAddress", "roadAddress"]),
+    deliveryStopText(row, ["addrDtl", "addressDetail", "detailAddress"])
+  ].filter(Boolean).join(" ").trim();
+  return {
+    sequence,
+    raw: row,
+    code: customerCode,
+    name: customerName,
+    address,
+    vehicle: `${vehicle}\uD638`,
+    customerCode,
+    customerName,
+    amount,
+    dailyAmount: amount,
+    monthlyAmount: amount,
+    deliveryTime: "",
+    deliveryCompletedAt: "",
+    rawDeliveryCompletedAt: "",
+    deliveryStatus: "Freshon daily dispatch",
+    appRecorded: false,
+    appUsageGroup: "Freshon daily dispatch lookup",
+    routeOrder: deliveryStopText(row, ["seq", "sequence", "sort", "rownum", "No"]),
+    orderCount: deliveryStopText(row, ["deliveryCount", "orderCount", "count", "customerCount"]),
+    weight,
+    cbm
+  };
+}
+async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
+  if (!config.freshonCookie) {
+    const error = new Error("FRESHON_COOKIE is not configured. Freshon direct lookup needs the browser session cookie.");
+    error.status = 401;
+    throw error;
+  }
+  const selected = vehicleTokens(vehicle);
+  const endpoints = [
+    "/bo/wm/dispatch/LOTMTR005_list",
+    "/bo/wm/dispatch/LOTMTR005/list",
+    "/bo/wm/dispatch/LOTMTR005",
+    "/bo/wm/dispatch/dispatchStatusList",
+    "/bo/wm/dispatch/alctnStatusList",
+    "/bo/wm/dispatch/dailyDsptcList",
+    "/bo/wm/dispatch/dailyDsptc/list",
+    "/bo/wm/dispatch/dailyDsptcPage/list",
+    "/bo/wm/dispatch/selectDailyDsptcList",
+    "/bo/wm/dispatch/dailyDispatchList"
+  ];
+  const errors = [];
+  for (const endpoint of endpoints) {
+    try {
+      const payload = await readFreshonJson(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+        body: new URLSearchParams(freshonDailyRouteForm({ date, vehicle, center })).toString()
+      });
+      const rows = extractFreshonRows(payload);
+      const matched = rows.filter((row) => {
+        const tokens = vehicleTokens(freshonRowVehicle(row));
+        return !tokens.size || [...tokens].some((token) => selected.has(token));
+      });
+      if (!matched.length) continue;
+      const stops = matched
+        .map((row, index) => buildStopFromFreshonDailyRow(row, vehicle, index + 1))
+        .filter((stop) => stop.customerCode || stop.customerName || stop.address || stop.amount);
+      if (!stops.length) continue;
+      return {
+        generatedAt: new Date().toISOString(),
+        source: "freshon-daily-dispatch-api",
+        warning: "Freshon daily dispatch management data was used. Coordinates are matched against the operating-map customer cache.",
+        date,
+        vehicle,
+        center,
+        rowCount: stops.length,
+        appRecordedCount: 0,
+        appMissingCount: stops.length,
+        stops
+      };
+    } catch (error) {
+      errors.push(`${endpoint}: ${error.message || String(error)}`);
+    }
+  }
+  const error = new Error(`Freshon daily dispatch lookup failed. ${errors[0] || "No matching rows returned."}`);
+  error.status = 502;
+  throw error;
+}
+
 async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = "" }) {
   const uploaded = await buildDailyRouteFromUploadedDispatch({ date, vehicle, center });
   if (uploaded && uploaded.rowCount > 2) return uploaded;
@@ -1122,7 +1344,8 @@ app.get("/api/daily-route", requireView, async (req, res) => {
   const vehicle = String(req.query.vehicle || "");
   const center = String(req.query.center || "");
   const forceRefresh = req.query.refresh === "1" || req.query.refresh === "true";
-  const preferLive = req.query.source === "delivery-admin" || req.query.live === "1" || forceRefresh;
+  const preferFreshon = req.query.source === "freshon" || req.query.live === "1" || forceRefresh;
+  const preferDeliveryAdmin = req.query.source === "delivery-admin";
   if (!date || !vehicle) {
     return res.status(400).json({ error: "date and vehicle are required." });
   }
@@ -1135,7 +1358,28 @@ app.get("/api/daily-route", requireView, async (req, res) => {
       return res.json(cached);
     }
   }
-  if (preferLive) {
+  if (preferFreshon) {
+    try {
+      const live = await buildDailyRouteFromFreshon({ date, vehicle, center });
+      if (live) {
+        await writeDailyRoute(live);
+        return res.json(live);
+      }
+    } catch (error) {
+      if (req.query.source === "freshon") {
+        const fallback = await buildFallbackDailyRoute({ date, vehicle, center, reason: error.message });
+        if (fallback) {
+          await writeDailyRoute(fallback);
+          return res.json(fallback);
+        }
+        return res.status(error.status || 502).json({
+          error: error.message || "Freshon daily dispatch lookup failed.",
+          source: "freshon-daily-dispatch"
+        });
+      }
+    }
+  }
+  if (preferDeliveryAdmin) {
     try {
       const live = await buildDailyRouteFromDeliveryAdmin({ date, vehicle, center });
       if (live) {
@@ -1386,4 +1630,7 @@ app.get("*", (_req, res) => {
 app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
 });
+
+
+
 
