@@ -133,37 +133,23 @@
     .wms-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; }
     .wms-actions button { border:1px solid #2563eb; background:#2563eb; color:#fff; border-radius:6px; padding:9px; font-size:12px; font-weight:900; cursor:pointer; }
     .wms-actions button.secondary { background:#fff; color:#1d4ed8; }
-    .wms-summary { display:grid; grid-template-columns:repeat(2, 1fr); gap:6px; margin-top:8px; font-size:12px; }
-    .wms-summary div { border:1px solid var(--edge); border-radius:6px; background:#fff; padding:8px; }
+    .wms-summary { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; margin-top:8px; font-size:12px; }
+    .wms-summary div { border:1px solid var(--edge); border-radius:6px; background:#fff; padding:8px; cursor:pointer; }
+    .wms-summary div:hover { border-color:#2563eb; background:#eff6ff; }
     .wms-summary b { display:block; font-size:15px; margin-top:2px; }
-    .wms-results { display:none; }
-    .wms-result { border:1px solid var(--edge); border-radius:7px; background:#fff; padding:9px; cursor:pointer; font-size:12px; transition:border-color .12s ease, background .12s ease, transform .12s ease; }
-    .wms-result:hover { border-color:#2563eb; background:#eff6ff; transform:translateY(-1px); }
-    .wms-result strong { display:block; margin-bottom:4px; line-height:1.25; }
-    .wms-result small { display:block; color:var(--muted); line-height:1.45; overflow-wrap:anywhere; }
+    .wms-results { margin-top:10px; max-height:calc(100vh - 385px); overflow:auto; border:1px solid var(--edge); border-radius:8px; background:#fff; }
+    .wms-status-section { border-top:1px solid #e5e7eb; }
+    .wms-status-section:first-child { border-top:0; }
+    .wms-status-head { position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; gap:8px; padding:9px 10px; background:#eef2f7; font-size:12px; font-weight:900; }
+    .wms-vehicle-row { border-top:1px solid #eef2f7; padding:9px 10px; cursor:pointer; }
+    .wms-vehicle-row:hover { background:#eff6ff; }
+    .wms-vehicle-row strong { display:flex; justify-content:space-between; gap:8px; font-size:13px; line-height:1.3; }
+    .wms-vehicle-row small { display:block; margin-top:4px; color:var(--muted); line-height:1.4; overflow-wrap:anywhere; }
+    .wms-candidates { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+    .wms-candidate { border:1px solid #cbd5e1; background:#fff; border-radius:999px; padding:4px 7px; font-size:11px; font-weight:900; color:#344054; cursor:pointer; }
+    .wms-candidate:hover { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
     .load-chip { display:block; width:100%; text-align:left; border:0; background:transparent; padding:0; cursor:pointer; color:inherit; font:inherit; }
     .load-chip:hover b { color:#1d4ed8; text-decoration:underline; }
-    .wms-map-panel { position:absolute; left:0; top:0; bottom:0; z-index:530; display:none; width:min(760px, 56vw); background:rgba(255,255,255,.97); border-right:1px solid var(--edge); box-shadow:16px 0 38px rgba(15,23,42,.22); backdrop-filter:blur(8px); overflow:hidden; transition:transform .22s ease; }
-    .wms-map-panel.active { display:block; }
-    .wms-map-panel.collapsed { transform:translateX(calc(-100% + 42px)); }
-    .wms-map-panel.collapsed .wms-table-wrap,
-    .wms-map-panel.collapsed .wms-map-head strong,
-    .wms-map-panel.collapsed .wms-map-head span { visibility:hidden; }
-    .wms-map-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 12px; border-bottom:1px solid var(--edge); background:#f8fafc; min-height:52px; }
-    .wms-map-head strong { font-size:14px; }
-    .wms-map-head span { color:var(--muted); font-size:12px; }
-    .wms-map-head button { border:1px solid #cbd5e1; background:#fff; color:#0f172a; border-radius:6px; padding:6px 9px; font-size:12px; font-weight:900; cursor:pointer; }
-    .wms-map-panel.collapsed .wms-map-head { justify-content:flex-end; padding:8px 5px; }
-    .wms-map-panel.collapsed .wms-map-head button { writing-mode:vertical-rl; width:31px; height:86px; padding:7px 4px; }
-    .wms-table-wrap { height:calc(100vh - 52px); overflow:auto; }
-    .wms-table { width:100%; border-collapse:collapse; font-size:12px; min-width:980px; }
-    .wms-table th, .wms-table td { border-bottom:1px solid #e5e7eb; padding:7px 8px; text-align:left; white-space:nowrap; }
-    .wms-table th { position:sticky; top:0; z-index:1; background:#eef2f7; color:#344054; font-weight:900; }
-    .wms-table tr { cursor:pointer; }
-    .wms-table tr:hover td { background:#eff6ff; }
-    .wms-table .num { text-align:right; font-variant-numeric:tabular-nums; }
-    body[data-work-tab="route"] .wms-map-panel,
-    body[data-work-tab="new"] .wms-map-panel { display:none; }
     .result-line { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
     .result-line code { font-family:Arial, "Malgun Gothic", sans-serif; font-weight:900; color:#344054; background:#f2f4f7; border-radius:4px; padding:2px 5px; white-space:nowrap; }
     .judge-ok { color:#047857; font-weight:900; }
@@ -243,6 +229,19 @@
     .task-tabs button.active { border-color:#2563eb; background:#eff6ff; color:#1d4ed8; }
     body[data-work-tab="wms"] .route-work,
     body[data-work-tab="wms"] .new-work,
+    body[data-work-tab="wms"] .task-tabs,
+    body[data-work-tab="wms"] aside > .control-panel,
+    body[data-work-tab="wms"] aside > h1,
+    body[data-work-tab="wms"] aside > .meta,
+    body[data-work-tab="wms"] aside > .stats,
+    body[data-work-tab="wms"] aside > #summaryCard,
+    body[data-work-tab="wms"] aside > #variablePanel,
+    body[data-work-tab="wms"] aside > .section-title,
+    body[data-work-tab="wms"] aside > .area-list,
+    body[data-work-tab="wms"] aside > .customer-list,
+    body[data-work-tab="wms"] aside > #vehicleNote,
+    body[data-work-tab="wms"] aside > #backToOverviewButton,
+    body[data-work-tab="wms"] .insight-work,
     body[data-work-tab="route"] .new-work,
     body[data-work-tab="route"] .wms-work,
     body[data-work-tab="new"] .route-work,
@@ -250,11 +249,22 @@
     body[data-work-tab="new"] .insight-work { display:none; }
     body.main-page .route-controls,
     body.main-page .route-status { display:none; }
+    body[data-work-tab="wms"] .shell { grid-template-columns:auto minmax(360px, 1fr); }
+    body[data-work-tab="wms"] aside { width:min(860px, 62vw); min-width:560px; max-width:84vw; resize:horizontal; padding:14px; }
+    body[data-work-tab="wms"] .wms-panel { height:calc(100vh - 72px); display:flex; flex-direction:column; margin:0; background:#fff; }
+    body[data-work-tab="wms"] .wms-panel h2 { font-size:20px; }
+    body[data-work-tab="wms"] .wms-results { max-height:none; flex:1; }
 
-    @media (max-width: 880px) { .shell { grid-template-columns:1fr; grid-template-rows:380px 1fr; } aside { order:2; border-right:0; border-top:1px solid var(--edge); } #map { min-height:380px; } }
+    @media (max-width: 880px) {
+      .shell { grid-template-columns:1fr; grid-template-rows:380px 1fr; }
+      aside { order:2; border-right:0; border-top:1px solid var(--edge); }
+      body[data-work-tab="wms"] aside { width:auto; min-width:0; max-width:none; resize:none; }
+      body[data-work-tab="wms"] .shell { grid-template-columns:1fr; grid-template-rows:360px 1fr; }
+      #map { min-height:380px; }
+    }
   </style>
 </head>
-<body class="route-page" data-work-tab="wms">
+<body class="route-page" data-work-tab="route">
   <div class="shell">
     <aside>
       <nav class="page-nav" aria-label="페이지 이동">
@@ -285,11 +295,11 @@
         <button type="button" data-work-tab="new">신규판단</button>
       </div>
       <section class="wms-panel wms-work" aria-label="WMS 배차 검토">
-        <h2>WMS 배차 검토</h2>
-        <div class="meta">WMS 배차계획조정 엑셀을 올리거나 화면 표를 복사해 붙여넣으면 과배차/조정 후보를 추려봅니다.</div>
+        <h2>WMS 배차 현황</h2>
+        <div class="meta">WMS 전용 화면 v2026-06-02-2 · 배차계획조정 엑셀을 올리거나 화면 표를 복사해 붙여넣으면 과배차/조정 후보를 추려봅니다.</div>
         <div class="wms-file">
           <input id="wmsFileInput" type="file" accept=".xlsx,.xls,.csv,.tsv">
-          <textarea id="wmsPasteInput" placeholder="호차	차량톤수	금액	정류지수	중량(kg)	CBM(m²)"></textarea>
+          <textarea id="wmsPasteInput" placeholder="호차	차량톤수	금액	정류지수"></textarea>
         </div>
         <div class="wms-actions">
           <button id="analyzeWmsButton" type="button">WMS 분석</button>
@@ -362,13 +372,6 @@
         <div><span class="swatch" style="height:10px;border-radius:999px"></span>전체 보기: 주 권역 중심 범위</div>
         <div><span class="swatch" style="background:#dc2626"></span>빨간 점선: 가장 먼 배송처 구간</div>
       </div>
-      <section id="wmsMapPanel" class="wms-map-panel" aria-label="WMS 배차 현황">
-        <div class="wms-map-head">
-          <div><strong>WMS 배차 현황</strong> <span id="wmsMapMeta"></span></div>
-          <button id="closeWmsMapPanelButton" type="button">지도 보기</button>
-        </div>
-        <div id="wmsMapTable" class="wms-table-wrap"></div>
-      </section>
     </main>
   </div>
   <script src="//dapi.kakao.com/v2/maps/sdk.js?appkey=8f1459975e9f3b3aa62089837a2aeb85&libraries=services"></script>
@@ -426,10 +429,6 @@
     const wmsStatus = document.getElementById("wmsStatus");
     const wmsSummary = document.getElementById("wmsSummary");
     const wmsResultsEl = document.getElementById("wmsResults");
-    const wmsMapPanel = document.getElementById("wmsMapPanel");
-    const wmsMapMeta = document.getElementById("wmsMapMeta");
-    const wmsMapTable = document.getElementById("wmsMapTable");
-    const closeWmsMapPanelButton = document.getElementById("closeWmsMapPanelButton");
 
     async function init() {
       data = EMBEDDED_DATA;
@@ -439,6 +438,11 @@
         center: new kakao.maps.LatLng(36.2, 127.8),
         level: 12
       });
+      if (window.ResizeObserver) {
+        new ResizeObserver(() => {
+          if (map && typeof map.relayout === "function") map.relayout();
+        }).observe(document.querySelector(".shell"));
+      }
       geocoder = new kakao.maps.services.Geocoder();
       markersLayer = makeLayerGroup();
       areaLayer = makeLayerGroup();
@@ -524,22 +528,21 @@
         wmsStatus.textContent = "";
         wmsSummary.innerHTML = "";
         wmsResultsEl.innerHTML = "";
-        wmsMapMeta.textContent = "";
-        wmsMapTable.innerHTML = "";
-        wmsMapPanel.classList.remove("active");
         render();
       });
       wmsResultsEl.addEventListener("click", (event) => {
-        const item = event.target.closest(".wms-result[data-vehicle]");
+        const candidate = event.target.closest(".wms-candidate[data-wms-vehicle]");
+        if (candidate) {
+          event.stopPropagation();
+          showWmsCandidatePin(candidate.dataset.wmsVehicle, Number(candidate.dataset.candidateIndex));
+          return;
+        }
+        const item = event.target.closest(".wms-vehicle-row[data-vehicle]");
         if (item) openVehicleDetail(item.dataset.vehicle);
       });
-      wmsMapTable.addEventListener("click", (event) => {
-        const row = event.target.closest("tr[data-vehicle]");
-        if (row) openVehicleDetail(row.dataset.vehicle);
-      });
-      closeWmsMapPanelButton.addEventListener("click", () => {
-        const collapsed = wmsMapPanel.classList.toggle("collapsed");
-        closeWmsMapPanelButton.textContent = collapsed ? "WMS 보기" : "지도 보기";
+      wmsSummary.addEventListener("click", (event) => {
+        const card = event.target.closest("[data-wms-status]");
+        if (card) showLoadStatusVehicles(card.dataset.wmsStatus);
       });
       document.getElementById("summaryCard").addEventListener("click", (event) => {
         const statusButton = event.target.closest("[data-load-status]");
@@ -561,6 +564,7 @@
         viewMode.value = "detail";
       }
       kakao.maps.event.addListener(map, "zoom_changed", updateOverviewLabelScale);
+      setWorkTab(document.body.dataset.workTab || "route");
       render();
     }
 
@@ -594,18 +598,16 @@
     }
 
     function setWorkTab(tab) {
-      const next = ["wms", "route", "new"].includes(tab) ? tab : "wms";
+      const next = ["wms", "route", "new"].includes(tab) ? tab : "route";
       document.body.dataset.workTab = next;
       topWmsTab.classList.toggle("active", next === "wms");
       document.querySelector('.page-nav a[href="/daily-routes.html"]').classList.toggle("active", next !== "wms");
       taskTabs.querySelectorAll("button[data-work-tab]").forEach(button => {
         button.classList.toggle("active", button.dataset.workTab === next);
       });
-      if (next === "wms" && wmsResults.length) {
-        wmsMapPanel.classList.add("active");
-        wmsMapPanel.classList.remove("collapsed");
-        closeWmsMapPanelButton.textContent = "지도 보기";
-      }
+      setTimeout(() => {
+        if (map && typeof map.relayout === "function") map.relayout();
+      }, 0);
     }
 
     let lastOverviewMode = "overview:osan";
@@ -1569,8 +1571,6 @@
         const reasons = [];
         if (usage >= 1.12) reasons.push(`금액 ${Math.round(usage * 100)}%`);
         if (bucket.stopCount >= 28) reasons.push(`정류지 ${fmt.format(bucket.stopCount)}건`);
-        if (bucket.weight >= 1600) reasons.push(`중량 ${fmt.format(Math.round(bucket.weight))}kg`);
-        if (bucket.cbm >= .2) reasons.push(`CBM ${bucket.cbm.toFixed(2)}`);
         if (!reasons.length) reasons.push("기준 내");
         return { ...bucket, vehicleData, limit, usage, status, reasons, candidates };
       }).sort((a, b) => (b.usage || 0) - (a.usage || 0));
@@ -1600,9 +1600,6 @@
         wmsStatus.textContent = sourceRows.length ? "분석할 호차를 찾지 못했습니다. WMS 표의 호차/금액 컬럼을 확인해주세요." : "WMS 데이터가 없습니다.";
         wmsSummary.innerHTML = "";
         wmsResultsEl.innerHTML = "";
-        wmsMapPanel.classList.remove("active");
-        wmsMapMeta.textContent = "";
-        wmsMapTable.innerHTML = "";
         return;
       }
       const counts = wmsResults.reduce((acc, row) => {
@@ -1612,54 +1609,76 @@
       const need = wmsResults.filter(row => row.status === "초과" || row.status === "과밀");
       wmsStatus.textContent = `${fmt.format(sourceRows.length)}행 분석 · ${fmt.format(wmsResults.length)}개 호차 · 조정 후보 ${fmt.format(need.length)}대`;
       wmsSummary.innerHTML = `
-        <div>초과<b>${fmt.format(counts["초과"] || 0)}대</b></div>
-        <div>과밀<b>${fmt.format(counts["과밀"] || 0)}대</b></div>
-        <div>보통<b>${fmt.format(counts["보통"] || 0)}대</b></div>
-        <div>여유<b>${fmt.format(counts["여유"] || 0)}대</b></div>
+        <div data-wms-status="초과">초과<b>${fmt.format(counts["초과"] || 0)}대</b></div>
+        <div data-wms-status="과밀">과밀<b>${fmt.format(counts["과밀"] || 0)}대</b></div>
+        <div data-wms-status="보통">보통<b>${fmt.format(counts["보통"] || 0)}대</b></div>
+        <div data-wms-status="여유">여유<b>${fmt.format(counts["여유"] || 0)}대</b></div>
       `;
-      wmsResultsEl.innerHTML = "";
-      wmsMapPanel.classList.add("active");
-      wmsMapPanel.classList.remove("collapsed");
-      closeWmsMapPanelButton.textContent = "지도 보기";
-      wmsMapMeta.textContent = `${fmt.format(sourceRows.length)}행 · ${fmt.format(wmsResults.length)}개 호차 · 조정 후보 ${fmt.format(need.length)}대`;
-      wmsMapTable.innerHTML = `
-        <table class="wms-table">
-          <thead>
-            <tr>
-              <th>상태</th>
-              <th>호차</th>
-              <th class="num">금액</th>
-              <th class="num">사용률</th>
-              <th class="num">정류지</th>
-              <th class="num">중량</th>
-              <th class="num">CBM</th>
-              <th>사유</th>
-              <th>조정 후보</th>
-              <th>기준 권역</th>
-            </tr>
-          </thead>
-          <tbody>
-      ${wmsResults.map(row => {
-        const cls = row.status === "초과" ? "judge-no" : row.status === "과밀" ? "judge-review" : "judge-ok";
-        const candidates = row.candidates.slice(0, 3).map(item => `${item.customerName || item.address || "배송처"} ${item.amount ? fmt.format(item.amount) + "원" : ""}`.trim()).join(" / ") || "상세 배송처 없음";
+      const order = ["초과", "과밀", "보통", "여유"];
+      wmsResultsEl.innerHTML = order.map(status => {
+        const rows = wmsResults.filter(row => row.status === status)
+          .sort((a, b) => String(a.vehicle).localeCompare(String(b.vehicle), "ko", { numeric: true }));
+        if (!rows.length) return "";
         return `
-            <tr data-vehicle="${esc(row.vehicle)}">
-              <td><span class="${cls}">${esc(row.status)}</span></td>
-              <td><b>${esc(row.vehicle)}호</b></td>
-              <td class="num">${fmt.format(Math.round(row.amount))}</td>
-              <td class="num">${Math.round(row.usage * 100)}%</td>
-              <td class="num">${fmt.format(row.stopCount)}</td>
-              <td class="num">${row.weight ? fmt.format(Math.round(row.weight)) : "-"}</td>
-              <td class="num">${row.cbm ? row.cbm.toFixed(2) : "-"}</td>
-              <td>${esc(row.reasons.join(" · "))}</td>
-              <td>${esc(candidates)}</td>
-              <td>${row.vehicleData ? esc(row.vehicleData.area_label) : "운영지도 기준 호차 없음"}</td>
-            </tr>
+          <section class="wms-status-section">
+            <div class="wms-status-head"><span>${esc(status)}</span><span>${fmt.format(rows.length)}대</span></div>
+            ${rows.map(row => {
+              const cls = row.status === "초과" ? "judge-no" : row.status === "과밀" ? "judge-review" : "judge-ok";
+              const candidates = row.candidates.slice(0, 5).map((item, index) => {
+                const label = item.customerName || item.address || "배송처";
+                const amount = item.amount ? ` · ${fmt.format(Math.round(item.amount))}원` : "";
+                return `<button type="button" class="wms-candidate" data-wms-vehicle="${esc(row.vehicle)}" data-candidate-index="${index}">${esc(label)}${amount}</button>`;
+              }).join("") || `<small>상세 배송처 없음</small>`;
+              const routeArea = row.vehicleData ? row.vehicleData.area_label : "운영지도 기준 호차 없음";
+              return `
+                <div class="wms-vehicle-row" data-vehicle="${esc(row.vehicle)}">
+                  <strong>
+                    <span><span class="${cls}">${esc(row.vehicle)}호 · ${esc(row.status)}</span></span>
+                    <span>${fmt.format(Math.round(row.amount))}원 · ${Math.round(row.usage * 100)}%</span>
+                  </strong>
+                  <small>${esc(row.reasons.join(" · "))} · 정류지 ${fmt.format(row.stopCount)}건</small>
+                  <div class="wms-candidates">${candidates}</div>
+                  <small>기준 권역: ${esc(routeArea)}</small>
+                </div>
+              `;
+            }).join("")}
+          </section>
         `;
-      }).join("")}
-          </tbody>
-        </table>
-      `;
+      }).join("");
+    }
+
+    async function showWmsCandidatePin(vehicle, index) {
+      const row = wmsResults.find(item => item.vehicle === vehicle);
+      const candidate = row?.candidates?.[index];
+      if (!row || !candidate) return;
+      clearMapLayers();
+      const vehicleData = row.vehicleData || data.vehicles.find(v => v.vehicle === vehicle);
+      if (vehicleData) {
+        addAdminBoundaryLayer(vehicleData, vehicleData.detail_admin_codes, {
+          color: getVehicleColor(vehicleData),
+          weight: 4,
+          fillOpacity: .07,
+          opacity: .72
+        });
+      }
+      let point = candidate.match;
+      if ((!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) && candidate.address) {
+        point = await geocodeAddressCached(candidate.address);
+      }
+      if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) {
+        wmsStatus.textContent = `${vehicle}호 후보 위치를 찾지 못했습니다. 주소 컬럼을 확인해주세요.`;
+        return;
+      }
+      addKakaoLabel([point.lat, point.lng], `<span class="customer-pin" style="--pin-color:#dc2626"></span>`, "customer-pin-wrap", labelLayer);
+      setKakaoView(point.lat, point.lng, 4);
+      openInfoWindow(new kakao.maps.LatLng(point.lat, point.lng), `
+        <b>${esc(vehicle)}호 WMS 후보</b><br>
+        ${esc(candidate.customerName || point.name || "-")}<br>
+        ${esc(candidate.address || point.address || "")}<br>
+        금액: ${candidate.amount ? fmt.format(Math.round(candidate.amount)) + "원" : "-"}<br>
+        상태: ${esc(row.status)}
+      `);
+      wmsStatus.textContent = `${vehicle}호 후보 1건만 지도에 표시 중`;
     }
 
     function downloadSheetTemplate() {
