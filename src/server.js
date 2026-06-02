@@ -51,6 +51,11 @@ let refreshState = {
 };
 
 let vehicleAreaDataPromise = null;
+let deliveryAdminSession = {
+  cookie: config.deliveryAdminCookie || "",
+  username: "",
+  expiresAt: 0
+};
 
 function normalizeCell(value) {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
@@ -83,6 +88,154 @@ function rowsFromSheetValues(values, file, sheetName) {
     }
   }
   return { rows, columns: [...columns] };
+}
+
+function normalizeBaseUrl(value) {
+  return String(value || "").replace(/\/+$/, "");
+}
+
+function mergeCookieHeader(existing, setCookieHeaders) {
+  const jar = new Map();
+  const addCookie = (cookie) => {
+    const first = String(cookie || "").split(";")[0].trim();
+    if (!first || !first.includes("=")) return;
+    const [name, ...rest] = first.split("=");
+    if (name) jar.set(name, rest.join("="));
+  };
+  String(existing || "").split(";").forEach(addCookie);
+  const headers = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
+  headers.forEach(addCookie);
+  return [...jar.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
+function getSetCookieHeaders(response) {
+  if (!response?.headers) return [];
+  if (typeof response.headers.getSetCookie === "function") return response.headers.getSetCookie();
+  const raw = response.headers.get("set-cookie");
+  return raw ? [raw] : [];
+}
+
+async function deliveryAdminFetch(pathname, options = {}) {
+  const baseUrl = normalizeBaseUrl(config.deliveryAdminBaseUrl);
+  const url = pathname.startsWith("http") ? pathname : `${baseUrl}${pathname.startsWith("/") ? "" : "/"}${pathname}`;
+  const cookie = options.cookie || deliveryAdminSession.cookie || config.deliveryAdminCookie || "";
+  const headers = {
+    "Accept": "application/json, text/plain, */*",
+    "User-Agent": "freshon-admin-route-sync/1.0",
+    ...(options.headers || {})
+  };
+  if (cookie) headers.Cookie = cookie;
+  const response = await fetch(url, {
+    ...options,
+    headers,
+    redirect: options.redirect || "manual"
+  });
+  const setCookies = getSetCookieHeaders(response);
+  if (setCookies.length) {
+    deliveryAdminSession.cookie = mergeCookieHeader(deliveryAdminSession.cookie || cookie, setCookies);
+  }
+  return response;
+}
+
+async function readDeliveryAdminJson(pathname, options = {}) {
+  const response = await deliveryAdminFetch(pathname, options);
+  const text = await response.text();
+  let payload = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = { raw: text };
+    }
+  }
+  if (!response.ok) {
+    const error = new Error(payload?.message || payload?.error || `Delivery admin HTTP ${response.status}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
+async function ensureDeliveryAdminSession(force = false) {
+  if (!force && deliveryAdminSession.cookie && Date.now() < deliveryAdminSession.expiresAt) {
+    return deliveryAdminSession.cookie;
+  }
+  if (config.deliveryAdminCookie && !force) {
+    deliveryAdminSession.cookie = config.deliveryAdminCookie;
+    deliveryAdminSession.expiresAt = Date.now() + 20 * 60 * 1000;
+    return deliveryAdminSession.cookie;
+  }
+  if (!config.deliveryAdminId || !config.deliveryAdminPassword) {
+    throw new Error("DELIVERY_ADMIN_ID and DELIVERY_ADMIN_PASSWORD are not configured.");
+  }
+  deliveryAdminSession.cookie = "";
+  const response = await deliveryAdminFetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username: config.deliveryAdminId,
+      password: config.deliveryAdminPassword
+    })
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    let payload = {};
+    try { payload = JSON.parse(text); } catch {}
+    throw new Error(payload?.message || `Delivery admin login failed: HTTP ${response.status}`);
+  }
+  deliveryAdminSession.username = config.deliveryAdminId;
+  deliveryAdminSession.expiresAt = Date.now() + 20 * 60 * 1000;
+  return deliveryAdminSession.cookie;
+}
+
+function deliveryApiQuery(data) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(data || {})) {
+    if (value === undefined || value === null || value === "") continue;
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== undefined && item !== null && item !== "") params.append(key, String(item));
+      });
+    } else {
+      params.append(key, String(value));
+    }
+  }
+  return params.toString();
+}
+
+async function deliveryAdminJson(pathname, options = {}) {
+  await ensureDeliveryAdminSession(false);
+  try {
+    return await readDeliveryAdminJson(pathname, options);
+  } catch (error) {
+    if (error.status !== 401) throw error;
+    await ensureDeliveryAdminSession(true);
+    return readDeliveryAdminJson(pathname, options);
+  }
+}
+
+function asArray(value) {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function findArrayDeep(value, predicate, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return null;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    if (value.length && value.some((item) => predicate(item))) return value;
+    for (const item of value) {
+      const found = findArrayDeep(item, predicate, seen);
+      if (found) return found;
+    }
+    return null;
+  }
+  for (const item of Object.values(value)) {
+    const found = findArrayDeep(item, predicate, seen);
+    if (found) return found;
+  }
+  return null;
 }
 
 function parsePlainWorkbook(file) {
@@ -562,6 +715,306 @@ async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" 
   };
 }
 
+function deliveryRecordVehicle(record) {
+  return normalizeVehicleValue(
+    record.fixedNo
+    || record.fixed_no
+    || record.fixedNumber
+    || record.vehicle
+    || record.vehicleNo
+    || record.carrierNo
+    || record.carrierName
+    || ""
+  );
+}
+
+function extractPoint(value) {
+  if (!value || typeof value !== "object") return {};
+  const candidates = [
+    value,
+    value.location,
+    value.coordinate,
+    value.coord,
+    value.point,
+    value.position,
+    value.address
+  ].filter(Boolean);
+  for (const item of candidates) {
+    const lat = Number(item.lat ?? item.latitude ?? item.y ?? item.wgs84Y);
+    const lng = Number(item.lng ?? item.lon ?? item.longitude ?? item.x ?? item.wgs84X);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+      return { lat, lng };
+    }
+  }
+  return {};
+}
+
+function deliveryStopText(value, keys) {
+  for (const key of keys) {
+    const text = normalizeCell(value?.[key]);
+    if (text) return text;
+  }
+  return "";
+}
+
+function buildStopFromDeliveryAdminPoint(point, vehicle, sequence) {
+  const nestedCustomer = point.customer || point.store || point.destination || point.place || {};
+  const nestedCarrier = point.carrier || {};
+  const coords = extractPoint(point);
+  const customerCode = deliveryStopText(point, ["customerCode", "customerCd", "estCd", "code", "id"])
+    || deliveryStopText(nestedCustomer, ["customerCode", "customerCd", "estCd", "code", "id"]);
+  const customerName = deliveryStopText(point, ["customerName", "customerNm", "estNm", "name", "storeName", "title"])
+    || deliveryStopText(nestedCustomer, ["customerName", "customerNm", "estNm", "name", "storeName", "title"]);
+  const address = deliveryStopText(point, ["address", "addr", "roadAddress", "destinationAddress"])
+    || deliveryStopText(nestedCustomer, ["address", "addr", "roadAddress", "destinationAddress"]);
+  const deliveryTime = deliveryStopText(point, ["completedAt", "deliveryCompletedAt", "arrivedAt", "arrivalTime", "startedAt", "time"]);
+  const vehicleName = deliveryStopText(point, ["fixedNo", "vehicle", "vehicleNo", "carrierNo"])
+    || deliveryStopText(nestedCarrier, ["fixedNo", "vehicle", "vehicleNo", "carrierNo"])
+    || vehicle;
+  return {
+    sequence,
+    raw: point,
+    code: customerCode,
+    name: customerName,
+    address,
+    vehicle: `${normalizeVehicleValue(vehicleName) || vehicle}\uD638`,
+    customerCode,
+    customerName,
+    amount: deliveryStopText(point, ["amount", "salesAmount", "cost", "price"]),
+    dailyAmount: deliveryStopText(point, ["amount", "salesAmount", "cost", "price"]),
+    monthlyAmount: "",
+    deliveryTime,
+    deliveryCompletedAt: deliveryTime,
+    rawDeliveryCompletedAt: deliveryTime,
+    deliveryStatus: deliveryStopText(point, ["status", "deliveryStatus", "state"]),
+    appRecorded: Boolean(deliveryTime),
+    appUsageGroup: deliveryTime ? "\uB51C\uB9AC\uBC84\uB9AC \uC5B4\uB4DC\uBBFC \uC870\uD68C" : "\uC870\uD68C\uB41C \uB3D9\uC120",
+    routeOrder: deliveryStopText(point, ["order", "sequence", "seq", "sort"]),
+    orderCount: "",
+    weight: deliveryStopText(point, ["weight", "weightKg"]),
+    cbm: deliveryStopText(point, ["cbm", "CBM"]),
+    ...coords
+  };
+}
+
+function extractDeliveryRouteStops(detailPayload) {
+  const result = detailPayload?.resultB || detailPayload?.data?.resultB || detailPayload?.resultA || detailPayload?.data?.resultA || detailPayload;
+  const costs = asArray(result?.costs || result?.data?.costs);
+  const costStops = costs
+    .map((cost) => asArray(cost?.route)[0])
+    .filter(Boolean);
+  if (costStops.length) return costStops;
+  const route = asArray(result?.route || result?.routes || result?.items || result?.stops);
+  if (route.length) return route;
+  return findArrayDeep(detailPayload, (item) => {
+    if (!item || typeof item !== "object") return false;
+    return Boolean(
+      item.customerName || item.customerNm || item.estNm || item.storeName || item.address || item.addr || extractPoint(item).lat
+    );
+  }) || [];
+}
+
+function taskRowNested(row) {
+  return {
+    carrier: row?.carrier || row?.carrierInfo || row?.driver || {},
+    customer: row?.customer || row?.customerInfo || row?.store || row?.franchise || {},
+    order: row?.order || row?.orderInfo || {},
+    center: row?.logisticsCenter || row?.logisticsCenterInfo || row?.center || {}
+  };
+}
+
+function deliveryTaskVehicle(row) {
+  const nested = taskRowNested(row);
+  return normalizeVehicleValue(
+    row?.fixedNo
+    || row?.fixed_no
+    || row?.fixedNumber
+    || row?.fixedVehicleNo
+    || row?.carrierNo
+    || row?.vehicleNo
+    || row?.vehicle
+    || nested.carrier.fixedNo
+    || nested.carrier.fixed_no
+    || nested.carrier.fixedNumber
+    || nested.carrier.carrierNo
+    || nested.carrier.vehicleNo
+    || nested.carrier.name
+    || ""
+  );
+}
+
+function deliveryTaskStatus(row) {
+  const nested = taskRowNested(row);
+  const status = deliveryStopText(row, ["taskStatus", "deliveryStatus", "status", "statusText", "taskStatusText", "deliveryStatusText"])
+    || deliveryStopText(nested.order, ["taskStatus", "deliveryStatus", "status", "statusText"]);
+  const upper = status.toUpperCase();
+  const completedAt = deliveryStopText(row, [
+    "completedAt",
+    "deliveryCompletedAt",
+    "deliveryCompleteAt",
+    "taskCompletedAt",
+    "deliveredAt",
+    "completedDatedAt",
+    "deliveryCompletedDatedAt"
+  ]);
+  const appRecorded = Boolean(completedAt)
+    || upper === "COMPLETED"
+    || status.includes("\uBC30\uC1A1\uC644\uB8CC");
+  return { status, completedAt, appRecorded };
+}
+
+function deliveryTaskSortValue(row, fallbackIndex) {
+  const status = deliveryTaskStatus(row);
+  const timeText = status.completedAt
+    || deliveryStopText(row, ["deliveryCompletedAt", "completedAt", "fixedAt", "carrierConfirmedAt", "updatedAt", "createdAt"]);
+  const timeMatch = normalizeCell(timeText).match(/(?:T|\s)(\d{1,2}):(\d{2})(?::(\d{2}))?/)
+    || normalizeCell(timeText).match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (timeMatch) {
+    return Number(timeMatch[1]) * 3600 + Number(timeMatch[2]) * 60 + Number(timeMatch[3] || 0);
+  }
+
+  const orderText = deliveryStopText(row, ["sequence", "seq", "sort", "sortNo", "routeOrder", "deliverySequence"]);
+  const orderMatch = normalizeCell(orderText).match(/\d+/);
+  if (orderMatch) return Number(orderMatch[0]);
+
+  return 100000 + fallbackIndex;
+}
+
+function buildStopFromDeliveryTaskRow(row, vehicle, sequence) {
+  const nested = taskRowNested(row);
+  const customerCode = deliveryStopText(row, ["customerErpCode", "customerERPCode", "customerCode", "customerCd", "erpCode", "erpCd"])
+    || deliveryStopText(nested.customer, ["erpCode", "erpCd", "customerErpCode", "customerCode", "code"]);
+  const customerName = deliveryStopText(row, ["customerName", "customerNm", "storeName", "name"])
+    || deliveryStopText(nested.customer, ["name", "customerName", "customerNm", "storeName"]);
+  const address = [
+    deliveryStopText(row, ["address", "customerAddress", "roadAddress", "jibunAddress", "addr"])
+      || deliveryStopText(nested.customer, ["address", "roadAddress", "jibunAddress", "addr"]),
+    deliveryStopText(row, ["addressDetail", "detailAddress", "customerAddressDetail"])
+      || deliveryStopText(nested.customer, ["addressDetail", "detailAddress"])
+  ].filter(Boolean).join(" ").trim();
+  const amount = deliveryStopText(row, ["salesAmount", "amount", "sales", "price", "totalAmount"])
+    || deliveryStopText(nested.order, ["salesAmount", "amount", "price", "totalAmount"]);
+  const status = deliveryTaskStatus(row);
+  const vehicleName = deliveryTaskVehicle(row) || vehicle;
+  const coords = extractPoint(row);
+  return {
+    sequence,
+    raw: row,
+    code: customerCode,
+    name: customerName,
+    address,
+    vehicle: `${normalizeVehicleValue(vehicleName) || vehicle}\uD638`,
+    customerCode,
+    customerName,
+    amount,
+    dailyAmount: amount,
+    monthlyAmount: amount,
+    deliveryTime: status.completedAt,
+    deliveryCompletedAt: status.completedAt,
+    rawDeliveryCompletedAt: status.completedAt,
+    deliveryStatus: status.status,
+    appRecorded: status.appRecorded,
+    appUsageGroup: status.appRecorded ? "\uB51C\uB9AC\uBC84\uB9AC \uC5B4\uB4DC\uBBFC \uBC30\uC1A1\uC644\uB8CC" : "\uB51C\uB9AC\uBC84\uB9AC \uC5B4\uB4DC\uBBFC \uC870\uD68C",
+    routeOrder: deliveryStopText(row, ["sequence", "seq", "sort", "sortNo", "routeOrder", "deliverySequence"]),
+    orderCount: deliveryStopText(row, ["shipmentCount", "orderCount", "deliveryCount", "count"]),
+    weight: deliveryStopText(row, ["weight", "weightKg", "totalWeight"]),
+    cbm: deliveryStopText(row, ["cbm", "CBM", "totalCbm"]),
+    ...coords
+  };
+}
+
+function extractDeliveryTaskRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  const direct = payload?.data?.content
+    || payload?.data?.items
+    || payload?.data?.list
+    || payload?.data?.rows
+    || payload?.content
+    || payload?.items
+    || payload?.list
+    || payload?.rows;
+  if (Array.isArray(direct)) return direct;
+  return findArrayDeep(payload, (item) => {
+    if (!item || typeof item !== "object") return false;
+    return Boolean(
+      deliveryTaskVehicle(item)
+      || item.customerName
+      || item.customerErpCode
+      || item.deliveryId
+      || item.taskId
+    );
+  }) || [];
+}
+
+async function fetchDeliveryTaskRows({ date, vehicle }) {
+  const selectedTokens = vehicleTokens(vehicle);
+  const variants = [
+    { enteringDatedAtBetween: [date, date], searchOption: "FIXED_NO", searchValue: vehicle },
+    { enteringDatedAtBetween: [date, date], searchOption: "FIXED_NO", keyword: vehicle },
+    { enteringDatedAtBetween: [date, date], searchType: "FIXED_NO", searchKeyword: vehicle },
+    { enteringDatedAtBetween: [date, date], fixedNo: vehicle },
+    { fromDatedAt: date, toDatedAt: date, searchOption: "FIXED_NO", searchValue: vehicle },
+    { enteringDatedAtBetween: [date, date] }
+  ];
+
+  let lastRows = [];
+  for (const query of variants) {
+    const payload = await deliveryAdminJson(`/api/bali/task/all?${deliveryApiQuery(query)}`, { method: "GET" });
+    const rows = extractDeliveryTaskRows(payload);
+    const matched = rows.filter((row) => {
+      const tokens = vehicleTokens(deliveryTaskVehicle(row));
+      return [...tokens].some((token) => selectedTokens.has(token));
+    });
+    if (matched.length) return matched;
+    if (rows.length) lastRows = rows;
+  }
+
+  if (lastRows.length) {
+    return lastRows.filter((row) => {
+      const tokens = vehicleTokens(deliveryTaskVehicle(row));
+      return [...tokens].some((token) => selectedTokens.has(token));
+    });
+  }
+  return [];
+}
+
+async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) {
+  if ((!config.deliveryAdminId || !config.deliveryAdminPassword) && !config.deliveryAdminCookie) return null;
+
+  const rows = await fetchDeliveryTaskRows({ date, vehicle });
+  if (!rows.length) {
+    const error = new Error(`Delivery admin task rows were not found for ${date} ${vehicle}.`);
+    error.status = 404;
+    throw error;
+  }
+
+  const sortedRows = rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => deliveryTaskSortValue(left.row, left.index) - deliveryTaskSortValue(right.row, right.index))
+    .map((item) => item.row);
+  const stops = sortedRows
+    .map((row, index) => buildStopFromDeliveryTaskRow(row, vehicle, index + 1))
+    .filter((stop) => stop.name || stop.address || (Number.isFinite(stop.lat) && Number.isFinite(stop.lng)));
+  if (!stops.length) {
+    const error = new Error("Delivery admin returned task rows, but no usable stop rows were found.");
+    error.status = 404;
+    throw error;
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    source: "delivery-admin-live",
+    warning: "Delivery admin task/all data was used from the task lookup screen. No browser automation was started.",
+    date,
+    vehicle,
+    center,
+    rowCount: stops.length,
+    appRecordedCount: stops.filter((stop) => stop.appRecorded).length,
+    appMissingCount: stops.filter((stop) => !stop.appRecorded).length,
+    stops
+  };
+}
+
 async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = "" }) {
   const uploaded = await buildDailyRouteFromUploadedDispatch({ date, vehicle, center });
   if (uploaded && uploaded.rowCount > 2) return uploaded;
@@ -634,6 +1087,7 @@ app.get("/api/daily-route", requireView, async (req, res) => {
   const vehicle = String(req.query.vehicle || "");
   const center = String(req.query.center || "");
   const forceRefresh = req.query.refresh === "1" || req.query.refresh === "true";
+  const preferLive = req.query.source === "delivery-admin" || req.query.live === "1" || forceRefresh;
   if (!date || !vehicle) {
     return res.status(400).json({ error: "date and vehicle are required." });
   }
@@ -644,6 +1098,22 @@ app.get("/api/daily-route", requireView, async (req, res) => {
     const dispatchAt = dispatchCache.generatedAt ? Date.parse(dispatchCache.generatedAt) : 0;
     if (cached.source !== "uploaded-delivery-history" && (!dispatchAt || cachedAt >= dispatchAt)) {
       return res.json(cached);
+    }
+  }
+  if (preferLive) {
+    try {
+      const live = await buildDailyRouteFromDeliveryAdmin({ date, vehicle, center });
+      if (live) {
+        await writeDailyRoute(live);
+        return res.json(live);
+      }
+    } catch (error) {
+      if (req.query.source === "delivery-admin") {
+        return res.status(error.status || 502).json({
+          error: error.message || "Delivery admin live route lookup failed.",
+          source: "delivery-admin-live"
+        });
+      }
     }
   }
   const fallback = await buildFallbackDailyRoute({ date, vehicle, center });
@@ -658,6 +1128,15 @@ app.get("/api/daily-route", requireView, async (req, res) => {
     vehicle,
     fixedDispatchRows: dispatchCache.rowCount || dispatchCache.rows?.length || 0,
     fixedDispatchGeneratedAt: dispatchCache.generatedAt || null
+  });
+});
+
+app.get("/api/delivery-admin/status", requireView, async (_req, res) => {
+  res.json({
+    configured: Boolean((config.deliveryAdminId && config.deliveryAdminPassword) || config.deliveryAdminCookie),
+    hasCookie: Boolean(deliveryAdminSession.cookie || config.deliveryAdminCookie),
+    baseUrl: config.deliveryAdminBaseUrl,
+    usernameConfigured: Boolean(config.deliveryAdminId)
   });
 });
 

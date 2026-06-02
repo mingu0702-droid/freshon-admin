@@ -561,7 +561,7 @@
       routeDateInput.addEventListener("change", () => {
         shouldShowRoute = false;
         currentRouteStops = [];
-        routeStatus.textContent = "날짜 선택 후 동선 보기를 누르면 저장된 일일동선 캐시를 조회합니다.";
+        routeStatus.textContent = "날짜 선택 후 동선 보기를 누르면 딜리버리 어드민을 직접 조회합니다.";
       });
       const requested = new URLSearchParams(location.search).get("vehicle");
       if (requested && data.vehicles.some(v => v.vehicle === requested)) {
@@ -947,12 +947,12 @@
         return;
       }
       if (!shouldShowRoute) {
-        routeStatus.textContent = "날짜 선택 후 동선 보기를 누르면 저장된 일일동선 캐시를 조회합니다.";
+        routeStatus.textContent = "날짜 선택 후 동선 보기를 누르면 딜리버리 어드민을 직접 조회합니다.";
         return;
       }
-      routeStatus.textContent = "프레시온 일일동선 확인 중...";
+      routeStatus.textContent = "딜리버리 어드민 일일동선 확인 중...";
       try {
-        const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, refresh: "1" });
+        const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, source: "delivery-admin", refresh: "1" });
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 30000);
         const response = await fetch(`/api/daily-route?${params.toString()}`, { cache: "no-store", signal: controller.signal });
@@ -960,8 +960,8 @@
         if (!response.ok) {
           const error = await response.json().catch(() => ({}));
           routeStatus.textContent = error.error
-            ? `동선 캐시 조회 실패: ${error.error}`
-            : "동선 캐시를 찾지 못했습니다. 관리자에서 먼저 캐시를 갱신해주세요.";
+            ? `동선 직접 조회 실패: ${error.error}`
+            : "딜리버리 어드민에서 해당 날짜/호차 동선을 찾지 못했습니다.";
           return;
         }
         const payload = await response.json();
@@ -969,7 +969,7 @@
           ? (await Promise.all(payload.stops.map(stop => resolveRouteStop(vehicle, stop)))).filter(s => s.lat && s.lng)
           : [];
         if (!stops.length) {
-          routeStatus.textContent = "프레시온에서 동선은 가져왔지만 지도 좌표와 매칭된 배송처가 없습니다.";
+          routeStatus.textContent = "딜리버리 어드민에서 동선은 가져왔지만 지도 좌표와 매칭된 배송처가 없습니다.";
           return;
         }
         currentRouteStops = stops;
@@ -1000,12 +1000,13 @@
           );
         });
         const missingCount = stops.length - recordedStops.length;
-        routeStatus.textContent = `${date} ${vehicle.vehicle}호 동선 ${fmt.format(stops.length)}건 표시 중 · 배송완료 기록 ${fmt.format(recordedStops.length)}건 · 미기록 ${fmt.format(missingCount)}건`;
+        const sourceLabel = payload.source === "delivery-admin-live" ? "딜리버리 어드민 직접 조회" : payload.source === "vehicle-area-fallback" ? "고정권역 대체 표시" : "업로드/캐시 데이터";
+        routeStatus.textContent = `${date} ${vehicle.vehicle}호 동선 ${fmt.format(stops.length)}건 표시 중 · ${sourceLabel} · 배송완료 기록 ${fmt.format(recordedStops.length)}건 · 미기록 ${fmt.format(missingCount)}건`;
         fitKakaoBounds(allPoints);
       } catch (error) {
         routeStatus.textContent = error.name === "AbortError"
-          ? "프레시온 응답이 느려 30초에서 중단했습니다. 잠시 후 다시 눌러주세요."
-          : "프레시온 동선 데이터를 불러오지 못했습니다.";
+          ? "딜리버리 어드민 응답이 느려 30초에서 중단했습니다. 잠시 후 다시 눌러주세요."
+          : "딜리버리 어드민 동선 데이터를 불러오지 못했습니다.";
       }
     }
 

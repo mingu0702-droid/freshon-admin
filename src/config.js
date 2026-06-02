@@ -17,5 +17,9 @@ export const config = {
   githubRepo: process.env.GITHUB_CACHE_REPO || "",
   githubBranch: process.env.GITHUB_CACHE_BRANCH || "main",
   githubCacheDir: process.env.GITHUB_CACHE_DIR || "freshon-cache",
-  excelPassword: process.env.EXCEL_PASSWORD || "minkyu"
+  excelPassword: process.env.EXCEL_PASSWORD || "minkyu",
+  deliveryAdminBaseUrl: process.env.DELIVERY_ADMIN_BASE_URL || "https://delivery-bali.chabyulhwa.com",
+  deliveryAdminId: process.env.DELIVERY_ADMIN_ID || "",
+  deliveryAdminPassword: process.env.DELIVERY_ADMIN_PASSWORD || "",
+  deliveryAdminCookie: process.env.DELIVERY_ADMIN_COOKIE || ""
 };
