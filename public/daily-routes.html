@@ -142,6 +142,10 @@
     .wms-results { margin-top:10px; max-height:calc(100vh - 385px); overflow:auto; border:1px solid var(--edge); border-radius:8px; background:#fff; }
     .wms-map-slot { display:none; }
     .wms-board { display:grid; grid-template-columns:minmax(460px, .58fr) minmax(520px, .72fr); min-height:0; height:100%; }
+    .wms-board-title { position:sticky; top:0; z-index:4; display:flex; align-items:center; gap:8px; padding:8px 10px; background:#eef2f7; border-bottom:1px solid #d8e0eb; font-size:12px; font-weight:900; }
+    .wms-board-title span:first-child { white-space:nowrap; }
+    .wms-inline-filters { display:flex; gap:6px; margin-left:auto; min-width:0; }
+    .wms-inline-filters select { min-width:104px; max-width:150px; padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; font-size:12px; }
     .wms-board-list, .wms-board-detail { min-width:0; min-height:0; overflow:auto; }
     .wms-board-detail { border-left:1px solid #d8e0eb; background:#fff; }
     .wms-status-section { border-top:1px solid #e5e7eb; }
@@ -170,7 +174,7 @@
     .wms-sheet-row { display:grid; grid-template-columns:70px 62px 96px 96px 72px 60px 76px 1fr; align-items:center; border-bottom:1px solid #e5e7eb; cursor:pointer; }
     .wms-sheet-row:hover { background:#eff6ff; }
     .wms-sheet-row.active { background:#eaf2ff; box-shadow:inset 3px 0 #2563eb; }
-    .wms-sheet-head { position:sticky; top:0; z-index:3; background:#eef2f7; font-weight:900; cursor:default; }
+    .wms-sheet-head { position:sticky; top:39px; z-index:3; background:#eef2f7; font-weight:900; cursor:default; }
     .wms-sheet-cell { padding:8px 9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-left:1px solid #eef2f7; }
     .wms-sheet-cell:first-child { border-left:0; }
     .wms-detail-sheet { border-top:1px solid #cbd5e1; background:#fff; }
@@ -283,23 +287,31 @@
     body[data-work-tab="new"] .insight-work { display:none; }
     body.main-page .route-controls,
     body.main-page .route-status { display:none; }
+    body[data-work-tab="wms"] .page-nav { max-width:540px; grid-template-columns:repeat(3, minmax(120px, 1fr)); margin-bottom:10px; }
+    body[data-work-tab="wms"] .page-nav a, body[data-work-tab="wms"] .page-nav button { padding:7px 9px; }
     body[data-work-tab="wms"] .shell { display:block; height:100vh; min-height:640px; }
     body[data-work-tab="wms"] aside { width:100%; height:100vh; min-width:0; max-width:none; resize:none; padding:14px; border-right:0; overflow:auto; }
     body[data-work-tab="wms"] main { position:relative; inset:auto; width:100%; height:100%; z-index:auto; min-width:0; border:0; border-radius:0; overflow:hidden; background:#fff; box-shadow:none; }
     body[data-work-tab="wms"] #map { min-width:0; min-height:0; width:100%; height:100%; }
     body[data-work-tab="wms"] .legend { display:none; }
     body[data-work-tab="wms"] .data-actions { display:none; }
-    body[data-work-tab="wms"] .wms-panel { height:calc(100vh - 28px); display:grid; grid-template-columns:minmax(560px, 1fr) minmax(460px, .6fr); grid-auto-rows:min-content; gap:8px 12px; margin:0; background:#fff; }
+    body[data-work-tab="wms"] .wms-panel { height:calc(100vh - 70px); display:grid; grid-template-columns:minmax(560px, 1fr) minmax(420px, .52fr); grid-auto-rows:min-content; gap:8px 12px; margin:0; background:#fff; }
     body[data-work-tab="wms"] .wms-panel h2 { font-size:20px; }
     body[data-work-tab="wms"] .wms-panel > h2,
     body[data-work-tab="wms"] .wms-panel > .meta,
     body[data-work-tab="wms"] .wms-panel > .wms-file,
     body[data-work-tab="wms"] .wms-panel > .wms-actions,
     body[data-work-tab="wms"] .wms-panel > .route-status,
-    body[data-work-tab="wms"] .wms-panel > .wms-summary,
-    body[data-work-tab="wms"] .wms-panel > .wms-filters { grid-column:1; }
-    body[data-work-tab="wms"] .wms-map-slot { display:block; grid-column:2; grid-row:1 / span 7; min-height:360px; border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#f8fafc; box-shadow:0 12px 32px rgba(15,23,42,.16); }
-    body[data-work-tab="wms"] .wms-results { grid-column:1 / -1; max-height:none; height:calc(100vh - 430px); min-height:280px; overflow:hidden; margin-top:0; }
+    body[data-work-tab="wms"] .wms-panel > .wms-summary { grid-column:1; }
+    body[data-work-tab="wms"] .wms-panel > .wms-filters { display:none; }
+    body[data-work-tab="wms"] #wmsPasteInput { display:none; }
+    body[data-work-tab="wms"] .wms-map-slot { position:relative; display:block; grid-column:2; grid-row:1 / span 6; height:360px; min-height:220px; border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#f8fafc; box-shadow:0 12px 32px rgba(15,23,42,.16); }
+    body[data-work-tab="wms"][data-wms-map-size="small"] .wms-map-slot { height:250px; }
+    body[data-work-tab="wms"][data-wms-map-size="large"] .wms-map-slot { height:520px; }
+    body[data-work-tab="wms"] .wms-map-controls { position:absolute; top:8px; right:8px; z-index:20; display:flex; gap:4px; padding:4px; border-radius:8px; background:rgba(255,255,255,.92); box-shadow:0 4px 14px rgba(15,23,42,.18); }
+    body[data-work-tab="wms"] .wms-map-controls button { border:1px solid #cbd5e1; background:#fff; color:#344054; border-radius:6px; padding:5px 8px; font-size:11px; font-weight:900; cursor:pointer; }
+    body[data-work-tab="wms"] .wms-map-controls button.active { border-color:#2563eb; background:#2563eb; color:#fff; }
+    body[data-work-tab="wms"] .wms-results { grid-column:1 / -1; max-height:none; height:calc(100vh - 470px); min-height:280px; overflow:hidden; margin-top:0; }
 
     @media (max-width: 880px) {
       .shell { grid-template-columns:1fr; grid-template-rows:380px 1fr; }
@@ -348,7 +360,13 @@
       <section class="wms-panel wms-work" aria-label="WMS 배차 검토">
         <h2>WMS 배차 현황</h2>
         <div class="meta">WMS 전용 화면 v2026-06-03-3 · 배차계획조정 상세 파일과 차량톤수 요약 파일을 함께 올려 파일 착지 전체와 과배차/조정 후보를 봅니다.</div>
-        <div id="wmsMapSlot" class="wms-map-slot" aria-label="WMS 지도 미리보기"></div>
+        <div id="wmsMapSlot" class="wms-map-slot" aria-label="WMS 지도 미리보기">
+          <div class="wms-map-controls" aria-label="WMS 지도 크기">
+            <button type="button" data-wms-map-size="small">작게</button>
+            <button type="button" data-wms-map-size="medium" class="active">보통</button>
+            <button type="button" data-wms-map-size="large">크게</button>
+          </div>
+        </div>
         <div class="wms-file">
           <input id="wmsFileInput" type="file" accept=".xlsx,.xls,.csv,.tsv" multiple>
           <textarea id="wmsPasteInput" placeholder="호차	차량톤수	금액	정류지수"></textarea>
@@ -511,6 +529,7 @@
     const wmsResultsEl = document.getElementById("wmsResults");
     const mapPanel = document.querySelector("main");
     const wmsMapSlot = document.getElementById("wmsMapSlot");
+    const wmsMapControls = document.querySelector(".wms-map-controls");
     const mapHome = document.getElementById("mapHome");
 
     async function init() {
@@ -535,6 +554,8 @@
       viewMode.addEventListener("change", render);
       vehicleSelect.addEventListener("change", () => {
         viewMode.value = "detail";
+        vehicleSearchInput.value = vehicleSelect.value ? `${vehicleSelect.value}호` : "";
+        vehicleSearchResults.innerHTML = "";
         activeLoadStatus = "";
         render();
       });
@@ -619,6 +640,15 @@
         wmsResultsEl.innerHTML = "";
         render();
       });
+      wmsMapControls.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-wms-map-size]");
+        if (!button) return;
+        document.body.dataset.wmsMapSize = button.dataset.wmsMapSize || "medium";
+        wmsMapControls.querySelectorAll("button").forEach(item => item.classList.toggle("active", item === button));
+        setTimeout(() => {
+          if (map && typeof map.relayout === "function") map.relayout();
+        }, 0);
+      });
       [wmsStatusFilter, wmsTonFilter, wmsSortSelect].forEach((element) => {
         element.addEventListener("change", () => {
           activeWmsStatus = wmsStatusFilter.value === "all" ? "" : wmsStatusFilter.value;
@@ -656,6 +686,16 @@
           showLoadStatusVehicles(card.dataset.wmsStatus);
         }
       });
+      wmsResultsEl.addEventListener("change", (event) => {
+        const select = event.target.closest("select[data-wms-filter]");
+        if (!select) return;
+        if (select.dataset.wmsFilter === "status") wmsStatusFilter.value = select.value;
+        if (select.dataset.wmsFilter === "ton") wmsTonFilter.value = select.value;
+        if (select.dataset.wmsFilter === "sort") wmsSortSelect.value = select.value;
+        activeWmsStatus = wmsStatusFilter.value === "all" ? "" : wmsStatusFilter.value;
+        selectedWmsVehicle = "";
+        renderWmsAnalysis(wmsResults.flatMap(row => row.rows || []));
+      });
       document.getElementById("summaryCard").addEventListener("click", (event) => {
         const statusButton = event.target.closest("[data-load-status]");
         if (statusButton) {
@@ -673,6 +713,7 @@
       const requested = new URLSearchParams(location.search).get("vehicle");
       if (requested && data.vehicles.some(v => v.vehicle === requested)) {
         vehicleSelect.value = requested;
+        vehicleSearchInput.value = `${requested}호`;
         viewMode.value = "detail";
       }
       kakao.maps.event.addListener(map, "zoom_changed", updateOverviewLabelScale);
@@ -1077,8 +1118,9 @@
         clearTimeout(timer);
         if (!response.ok) {
           const error = await response.json().catch(() => ({}));
-          routeStatus.textContent = error.error
-            ? `프레시온 직접 조회 실패: ${String(error.error).slice(0, 220)}`
+          const message = String(error.error || "");
+          routeStatus.textContent = message
+            ? `프레시온 직접 조회 실패: ${/401|FRESHON_COOKIE|Unauthorized/i.test(message) ? "로그인 세션(FRESHON_COOKIE)이 없거나 만료됐습니다. Render 환경변수의 프레시온 쿠키를 갱신해야 합니다." : message.slice(0, 220)}`
             : "프레시온 직접 조회에서 해당 날짜/호차 동선을 찾지 못했습니다.";
           return;
         }
@@ -1626,7 +1668,7 @@
         }
         return allRows;
       }
-      return rowsFromDelimitedText(wmsPasteInput.value);
+      throw new Error("WMS 파일을 선택해주세요. 상세 파일과 차량톤수 요약 파일을 함께 올리면 톤수는 요약 파일에서 읽고, 착지/금액은 상세 파일에서만 집계합니다.");
     }
 
     function repairWorksheetRange(sheet) {
@@ -1683,7 +1725,10 @@
         const customerName = pickWms(object, ["고객명", "고객사명", "배송처", "업체명"]);
         const address = pickWms(object, ["주소", "고객주소", "배송주소"]);
         if (!vehicle && !amount && !customerName && !address) return null;
-        const isSummary = Boolean(vehicle && amount && !customerName && !address);
+        const hasCustomerDetail = Boolean(customerCode || customerName || address);
+        const headerText = headers.join(" ");
+        const summarySignals = /차량톤수|차량톤|톤수|정류지수|배송처수|건수/.test(headerText) && !/주소|고객주소|배송주소|고객명|고객사명|배송처(?!수)|업체명|고객ERP코드|고객코드/.test(headerText);
+        const isSummary = Boolean(vehicle && (amount || stopCount || tonText) && (!hasCustomerDetail || summarySignals));
         return { raw: object, sheetName: raw._sheetName || "", fileName: raw._fileName || "", vehicle, tonText, amount, stopCount, weight, cbm, customerCode, customerName, address, isSummary };
     }
 
@@ -1699,7 +1744,11 @@
       const keys = Object.keys(object);
       for (const name of names) {
         const needle = normalizeHeader(name).toLowerCase();
-        const key = keys.find(k => k.toLowerCase().includes(needle) || needle.includes(k.toLowerCase()));
+        const key = keys.find(k => {
+          const lower = k.toLowerCase();
+          if (needle === "배송처" && /배송처수/.test(k)) return false;
+          return lower.includes(needle) || needle.includes(lower);
+        });
         if (key && object[key] != null && String(object[key]).trim() !== "") return String(object[key]).trim();
       }
       return "";
@@ -1722,28 +1771,35 @@
       rows.forEach(row => {
         if (!row.vehicle) return;
         if (!byVehicle.has(row.vehicle)) {
-          byVehicle.set(row.vehicle, { vehicle: row.vehicle, tonText: "", sheetName: "", amount: 0, stopCount: 0, weight: 0, cbm: 0, rows: [] });
+          byVehicle.set(row.vehicle, { vehicle: row.vehicle, tonText: "", sheetName: "", amount: 0, detailAmount: 0, summaryAmount: 0, stopCount: 0, detailStopCount: 0, summaryStopCount: 0, weight: 0, cbm: 0, rows: [] });
         }
         const bucket = byVehicle.get(row.vehicle);
         if (row.tonText && (row.isSummary || !bucket.tonText)) bucket.tonText = row.tonText;
         if (!bucket.sheetName && row.sheetName) bucket.sheetName = row.sheetName;
-        bucket.amount += row.amount || 0;
-        bucket.stopCount += row.stopCount || (row.customerName || row.address ? 1 : 0);
-        bucket.weight += row.weight || 0;
-        bucket.cbm += row.cbm || 0;
+        if (row.isSummary) {
+          bucket.summaryAmount = Math.max(bucket.summaryAmount || 0, row.amount || 0);
+          bucket.summaryStopCount = Math.max(bucket.summaryStopCount || 0, row.stopCount || 0);
+        } else {
+          bucket.detailAmount += row.amount || 0;
+          bucket.detailStopCount += row.stopCount || (row.customerName || row.address || row.customerCode ? 1 : 0);
+          bucket.weight += row.weight || 0;
+          bucket.cbm += row.cbm || 0;
+        }
         bucket.rows.push(row);
       });
       return [...byVehicle.values()].map(bucket => {
-        const detailRows = bucket.rows.filter(row => row.customerName || row.address || row.customerCode);
+        const detailRows = bucket.rows.filter(row => !row.isSummary && (row.customerName || row.address || row.customerCode));
         const summaryRows = bucket.rows.filter(row => row.isSummary || (!row.customerName && !row.address && row.amount));
         const summaryAmount = summaryRows.length ? Math.max(...summaryRows.map(row => row.amount || 0)) : 0;
         const summaryStopCount = summaryRows.length ? Math.max(...summaryRows.map(row => row.stopCount || 0)) : 0;
         const summaryTon = summaryRows.map(row => normalizeTonLabel(row.tonText)).find(Boolean);
         if (summaryTon) bucket.tonText = summaryTon;
-        if (summaryAmount) bucket.amount = summaryAmount;
-        else if (detailRows.length) bucket.amount = detailRows.reduce((sum, row) => sum + (row.amount || 0), 0);
-        if (summaryStopCount) bucket.stopCount = summaryStopCount;
-        else if (detailRows.length) bucket.stopCount = detailRows.length;
+        if (detailRows.length && bucket.detailAmount) bucket.amount = bucket.detailAmount;
+        else if (summaryAmount) bucket.amount = summaryAmount;
+        else bucket.amount = bucket.detailAmount || bucket.summaryAmount || 0;
+        if (detailRows.length) bucket.stopCount = detailRows.length;
+        else if (summaryStopCount) bucket.stopCount = summaryStopCount;
+        else bucket.stopCount = bucket.detailStopCount || bucket.summaryStopCount || 0;
         const analysisRows = detailRows.length ? detailRows : bucket.rows;
         const vehicleData = data.vehicles.find(v => v.vehicle === bucket.vehicle);
         const tonLabel = inferTonLabel(bucket.vehicle, bucket.tonText, vehicleData);
@@ -1924,6 +1980,35 @@
       `;
     }
 
+    function renderWmsInlineFilters() {
+      const statusValue = wmsStatusFilter.value || "all";
+      const tonValue = wmsTonFilter.value || "all";
+      const sortValue = wmsSortSelect.value || "usage-desc";
+      const tonOptions = [...wmsTonFilter.options].map(option => `<option value="${esc(option.value)}"${option.value === tonValue ? " selected" : ""}>${esc(option.textContent)}</option>`).join("");
+      return `
+        <div class="wms-inline-filters">
+          <select data-wms-filter="status" aria-label="상태 필터">
+            <option value="all"${statusValue === "all" ? " selected" : ""}>전체 상태</option>
+            <option value="초과"${statusValue === "초과" ? " selected" : ""}>초과</option>
+            <option value="과밀"${statusValue === "과밀" ? " selected" : ""}>과밀</option>
+            <option value="보통"${statusValue === "보통" ? " selected" : ""}>보통</option>
+            <option value="여유"${statusValue === "여유" ? " selected" : ""}>여유</option>
+          </select>
+          <select data-wms-filter="ton" aria-label="톤수 필터">${tonOptions}</select>
+          <select data-wms-filter="sort" aria-label="정렬">
+            <option value="usage-desc"${sortValue === "usage-desc" ? " selected" : ""}>사용률 높은순</option>
+            <option value="usage-asc"${sortValue === "usage-asc" ? " selected" : ""}>사용률 낮은순</option>
+            <option value="amount-desc"${sortValue === "amount-desc" ? " selected" : ""}>금액 높은순</option>
+            <option value="amount-asc"${sortValue === "amount-asc" ? " selected" : ""}>금액 낮은순</option>
+            <option value="vehicle-asc"${sortValue === "vehicle-asc" ? " selected" : ""}>호차 이름순</option>
+            <option value="vehicle-desc"${sortValue === "vehicle-desc" ? " selected" : ""}>호차 역순</option>
+            <option value="stops-desc"${sortValue === "stops-desc" ? " selected" : ""}>착지 많은순</option>
+            <option value="stops-asc"${sortValue === "stops-asc" ? " selected" : ""}>착지 적은순</option>
+          </select>
+        </div>
+      `;
+    }
+
     function inferTonLabel(vehicle, tonText, vehicleData) {
       const explicit = normalizeTonLabel(tonText);
       if (explicit) return explicit;
@@ -2005,6 +2090,10 @@
       wmsResultsEl.innerHTML = `
         <div class="wms-board">
           <div class="wms-board-list">
+            <div class="wms-board-title">
+              <span>차량호차 리스트 · ${fmt.format(rows.length)}대</span>
+              ${renderWmsInlineFilters()}
+            </div>
             <div class="wms-sheet">
               <div class="wms-sheet-row wms-sheet-head">
                 <div class="wms-sheet-cell">호차</div>
