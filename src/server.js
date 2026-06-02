@@ -1367,7 +1367,7 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
-app.listen(config.port, () => {
-  console.log(`Freshon dispatch admin listening on ${config.port}`);
+app.listen(config.port, config.host, () => {
+  console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
 });
 

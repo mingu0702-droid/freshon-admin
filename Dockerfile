@@ -16,6 +16,6 @@ ENV NODE_ENV=production
 ENV FRESHON_HEADLESS=true
 ENV NODE_OPTIONS=--max-old-space-size=1536
 
-EXPOSE 3000
+EXPOSE 10000
 
 CMD ["npm", "start"]

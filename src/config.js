@@ -4,6 +4,7 @@ dotenv.config();
 
 export const config = {
   port: Number(process.env.PORT || 3000),
+  host: process.env.HOST || "0.0.0.0",
   freshonBaseUrl: process.env.FRESHON_BASE_URL || "https://mis.freshon.co.kr/bo/main",
   freshonId: process.env.FRESHON_ID || "",
   freshonPassword: process.env.FRESHON_PASSWORD || "",
