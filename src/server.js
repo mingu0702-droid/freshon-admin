@@ -1367,11 +1367,6 @@ app.get("/api/daily-route", requireView, async (req, res) => {
       }
     } catch (error) {
       if (req.query.source === "freshon") {
-        const fallback = await buildFallbackDailyRoute({ date, vehicle, center, reason: error.message });
-        if (fallback) {
-          await writeDailyRoute(fallback);
-          return res.json(fallback);
-        }
         return res.status(error.status || 502).json({
           error: error.message || "Freshon daily dispatch lookup failed.",
           source: "freshon-daily-dispatch"
