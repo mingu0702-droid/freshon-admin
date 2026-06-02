@@ -968,17 +968,28 @@ function extractDeliveryTaskRows(payload) {
 async function fetchDeliveryTaskRows({ date, vehicle }) {
   const selectedTokens = vehicleTokens(vehicle);
   const variants = [
-    { enteringDatedAtBetween: [date, date], searchOption: "FIXED_NO", searchValue: vehicle },
-    { enteringDatedAtBetween: [date, date], searchOption: "FIXED_NO", keyword: vehicle },
-    { enteringDatedAtBetween: [date, date], searchType: "FIXED_NO", searchKeyword: vehicle },
-    { enteringDatedAtBetween: [date, date], fixedNo: vehicle },
     { fromDatedAt: date, toDatedAt: date, searchOption: "FIXED_NO", searchValue: vehicle },
+    { fromDatedAt: date, toDatedAt: date, searchType: "FIXED_NO", searchKeyword: vehicle },
+    { fromDatedAt: date, toDatedAt: date, fixedNo: vehicle },
+    { startDatedAt: date, endDatedAt: date, searchOption: "FIXED_NO", searchValue: vehicle },
+    { "enteringDatedAtBetween[0]": date, "enteringDatedAtBetween[1]": date, searchOption: "FIXED_NO", searchValue: vehicle },
+    { "enteringDatedAtBetween[0]": date, "enteringDatedAtBetween[1]": date, fixedNo: vehicle },
+    { enteringDatedAt: date, searchOption: "FIXED_NO", searchValue: vehicle },
+    { enteringDatedAt: date, fixedNo: vehicle },
+    { fromDatedAt: date, toDatedAt: date },
     { enteringDatedAtBetween: [date, date] }
   ];
 
   let lastRows = [];
+  const errors = [];
   for (const query of variants) {
-    const payload = await deliveryAdminJson(`/api/bali/task/all?${deliveryApiQuery(query)}`, { method: "GET" });
+    let payload;
+    try {
+      payload = await deliveryAdminJson(`/api/bali/task/all?${deliveryApiQuery(query)}`, { method: "GET" });
+    } catch (error) {
+      errors.push(error.message || String(error));
+      continue;
+    }
     const rows = extractDeliveryTaskRows(payload);
     const matched = rows.filter((row) => {
       const tokens = vehicleTokens(deliveryTaskVehicle(row));
@@ -993,6 +1004,11 @@ async function fetchDeliveryTaskRows({ date, vehicle }) {
       const tokens = vehicleTokens(deliveryTaskVehicle(row));
       return [...tokens].some((token) => selectedTokens.has(token));
     });
+  }
+  if (errors.length && !lastRows.length) {
+    const error = new Error(`Delivery admin task lookup failed. ${errors[0]}`);
+    error.status = 502;
+    throw error;
   }
   return [];
 }
