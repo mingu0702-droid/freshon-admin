@@ -148,6 +148,10 @@
     .wms-board { display:grid; grid-template-columns:minmax(460px, .58fr) minmax(520px, .72fr); min-height:0; height:100%; }
     .wms-board-title { position:sticky; top:0; z-index:4; display:flex; align-items:center; gap:8px; padding:8px 10px; background:#eef2f7; border-bottom:1px solid #d8e0eb; font-size:12px; font-weight:900; }
     .wms-board-title span:first-child { white-space:nowrap; }
+    .wms-board-title .sub { color:#667085; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .wms-kpi-strip { display:flex; gap:5px; margin-left:auto; white-space:nowrap; }
+    .wms-kpi-strip button { border:1px solid #cbd5e1; background:#fff; color:#344054; border-radius:999px; padding:4px 8px; font-size:11px; font-weight:900; cursor:pointer; }
+    .wms-kpi-strip button.active { border-color:#2563eb; background:#eff6ff; color:#1d4ed8; }
     .wms-inline-filters { display:flex; gap:6px; margin-left:auto; min-width:0; }
     .wms-inline-filters select { min-width:104px; max-width:150px; padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; font-size:12px; }
     .wms-board-list, .wms-board-detail { min-width:0; min-height:0; overflow:auto; }
@@ -187,6 +191,7 @@
     .wms-head-action .mark { color:#667085; font-weight:900; }
     .wms-detail-sheet { border-top:1px solid #cbd5e1; background:#fff; }
     .wms-detail-title { display:flex; justify-content:space-between; gap:10px; padding:10px; background:#f8fafc; border-bottom:1px solid #e5e7eb; font-size:12px; font-weight:900; }
+    .wms-detail-title .muted { color:#667085; font-weight:700; }
     .wms-stop-table { display:grid; min-width:900px; font-size:11px; }
     .wms-stop-row { display:grid; grid-template-columns:44px 92px minmax(170px, 1.2fr) minmax(260px, 1.8fr) 92px minmax(170px, 1fr); border-bottom:1px solid #eef2f7; cursor:pointer; }
     .wms-stop-row:hover { background:#eff6ff; }
@@ -308,8 +313,10 @@
       height:calc(100vh - 64px);
       display:block;
       margin:0;
-      background:#fff;
+      background:#f3f6fb;
       overflow:hidden;
+      border:1px solid #d8e0eb;
+      border-radius:8px;
     }
     body[data-work-tab="wms"] .wms-panel h2,
     body[data-work-tab="wms"] .wms-panel > .meta,
@@ -320,46 +327,46 @@
     body[data-work-tab="wms"] .wms-panel > .wms-file {
       position:absolute;
       right:12px;
-      top:10px;
+      top:8px;
       z-index:30;
-      width:min(360px, calc(50vw - 36px));
+      width:min(280px, calc(36vw - 28px));
       margin:0;
       background:rgba(255,255,255,.94);
       border:1px solid #dbe4f0;
-      border-radius:8px;
-      box-shadow:0 8px 24px rgba(15,23,42,.10);
+      border-radius:6px;
+      box-shadow:0 4px 16px rgba(15,23,42,.08);
     }
-    body[data-work-tab="wms"] .wms-file input[type="file"] { width:100%; padding:8px 10px; font-size:12px; border:0; background:transparent; }
+    body[data-work-tab="wms"] .wms-file input[type="file"] { width:100%; padding:7px 9px; font-size:12px; border:0; background:transparent; }
     body[data-work-tab="wms"] .wms-actions {
       position:absolute;
       right:12px;
-      top:58px;
+      top:48px;
       z-index:30;
       display:grid;
       grid-template-columns:1fr 1fr;
       gap:6px;
-      width:min(240px, calc(42vw - 36px));
+      width:min(210px, calc(32vw - 28px));
       margin:0;
     }
-    body[data-work-tab="wms"] .wms-actions button { min-width:0; min-height:34px; padding:7px 9px; }
+    body[data-work-tab="wms"] .wms-actions button { min-width:0; min-height:32px; padding:6px 8px; border-radius:6px; }
     body[data-work-tab="wms"] .wms-map-slot {
       position:absolute;
       right:12px;
-      top:104px;
+      top:86px;
       z-index:20;
       display:block;
-      width:min(760px, 50vw);
-      height:230px;
+      width:min(690px, 45vw);
+      height:210px;
       min-width:360px;
       min-height:170px;
-      max-width:calc(100vw - 420px);
+      max-width:calc(100vw - 520px);
       max-height:calc(100vh - 180px);
       resize:none;
       border:1px solid var(--edge);
-      border-radius:8px;
+      border-radius:6px;
       overflow:hidden;
       background:#f8fafc;
-      box-shadow:0 12px 32px rgba(15,23,42,.16);
+      box-shadow:0 10px 24px rgba(15,23,42,.14);
     }
     body[data-work-tab="wms"][data-wms-map-size="small"] .wms-map-slot { height:250px; width:min(520px, 100%); }
     body[data-work-tab="wms"][data-wms-map-size="large"] .wms-map-slot { height:520px; width:100%; }
@@ -377,24 +384,70 @@
       min-height:280px;
       overflow:hidden;
       margin-top:0;
-      border-radius:8px;
+      border:0;
+      border-radius:0;
+      background:#f3f6fb;
     }
     body[data-work-tab="wms"] .wms-results:empty::before {
-      content:"우측 상단에서 WMS 상세 파일과 차량톤수 요약 파일을 2개 올린 뒤 분석하세요. 분석 후 왼쪽에는 차량호차 리스트, 오른쪽에는 지도와 착지 상세가 표시됩니다.";
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      height:100%;
+      content:"WMS 배차 검토 대기\\A\\A우측 상단에서 상세 파일과 차량톤수 요약 파일 2개를 올린 뒤 분석하세요.\\A왼쪽은 차량호차 리스트, 오른쪽은 지도와 착지 상세로 고정됩니다.";
+      white-space:pre-line;
+      display:block;
+      width:calc(54% - 16px);
+      height:calc(100% - 24px);
+      margin:12px;
       padding:24px;
-      color:#667085;
+      color:#344054;
       font-size:13px;
-      text-align:center;
+      text-align:left;
       line-height:1.6;
+      border:1px dashed #b8c4d6;
+      border-radius:8px;
+      background:linear-gradient(180deg,#fff,#f8fafc);
     }
-    body[data-work-tab="wms"] .wms-board { grid-template-columns:minmax(620px, .46fr) minmax(640px, .54fr); }
-    body[data-work-tab="wms"] .wms-board-detail { padding-top:248px; }
-    body[data-work-tab="wms"] .wms-board-title { top:0; }
+    body[data-work-tab="wms"] .wms-board {
+      grid-template-columns:minmax(780px, .56fr) minmax(560px, .44fr);
+      gap:8px;
+      height:100%;
+      padding:8px;
+      background:#f3f6fb;
+    }
+    body[data-work-tab="wms"] .wms-board-list,
+    body[data-work-tab="wms"] .wms-board-detail {
+      border:1px solid #d8e0eb;
+      border-radius:8px;
+      background:#fff;
+      box-shadow:0 2px 8px rgba(15,23,42,.04);
+    }
+    body[data-work-tab="wms"] .wms-board-detail { padding-top:304px; }
+    body[data-work-tab="wms"] .wms-board-title { top:0; min-height:38px; background:#e9eef6; border-bottom:1px solid #d8e0eb; }
     body[data-work-tab="wms"] .wms-sheet-head { top:39px; }
+    body[data-work-tab="route"] .route-work.control-panel,
+    body[data-work-tab="new"] .new-area-panel {
+      border-radius:8px;
+      background:#f8fafc;
+      border-color:#d8e0eb;
+      box-shadow:none;
+    }
+    body[data-work-tab="route"] .route-controls {
+      display:grid;
+      grid-template-columns:minmax(0, 1fr) auto;
+      gap:8px;
+      align-items:end;
+    }
+    body[data-work-tab="route"] .route-controls button {
+      min-height:38px;
+      border-radius:6px;
+      background:#2563eb;
+      border-color:#2563eb;
+    }
+    body[data-work-tab="route"] .route-status {
+      margin-top:8px;
+      border:1px solid #d8e0eb;
+      border-radius:6px;
+      background:#fff;
+      padding:8px;
+      line-height:1.45;
+    }
 
     @media (max-width: 880px) {
       .shell { grid-template-columns:1fr; grid-template-rows:380px 1fr; }
@@ -743,6 +796,15 @@
         });
       });
       wmsResultsEl.addEventListener("click", (event) => {
+        const statusChip = event.target.closest("[data-wms-status]");
+        if (statusChip) {
+          activeWmsStatus = activeWmsStatus === statusChip.dataset.wmsStatus ? "" : statusChip.dataset.wmsStatus;
+          wmsStatusFilter.value = activeWmsStatus || "all";
+          selectedWmsVehicle = "";
+          renderWmsAnalysis(wmsResults.flatMap(row => row.rows || []));
+          showLoadStatusVehicles(statusChip.dataset.wmsStatus);
+          return;
+        }
         const stop = event.target.closest(".wms-stop[data-wms-vehicle], .wms-stop-row[data-wms-vehicle]");
         if (stop) {
           event.stopPropagation();
@@ -2239,8 +2301,8 @@
       return `
         <div class="wms-detail-sheet">
           <div class="wms-detail-title">
-            <span>${esc(row.vehicle)}호 착지 상세 · ${esc(row.tonLabel)} · ${fmt.format(Math.round(row.amount))}원 / ${fmt.format(Math.round(row.limit))}원 · ${Math.round(row.usage * 100)}%</span>
-            <span>기준 초과 ${fmt.format(Math.round(overAmount))}원</span>
+            <span>${esc(row.vehicle)}호 착지 상세 <span class="muted">· ${esc(row.tonLabel)} · ${fmt.format(Math.round(row.amount))}원 / ${fmt.format(Math.round(row.limit))}원 · ${Math.round(row.usage * 100)}%</span></span>
+            <span>${overAmount ? `기준 초과 ${fmt.format(Math.round(overAmount))}원` : "기준 내"}</span>
           </div>
           <div class="wms-route-list"><b>용차 후보 지역 묶음</b><br>${groupChips}</div>
           <div class="wms-stop-table">
@@ -2381,6 +2443,14 @@
           <div class="wms-board-list">
             <div class="wms-board-title">
               <span>차량호차 리스트 · ${fmt.format(rows.length)}대</span>
+              <span class="sub">${fmt.format(sourceRows.length)}행 · 전체 ${fmt.format(wmsResults.length)}대 · 조정 후보 ${fmt.format(need.length)}대</span>
+              <div class="wms-kpi-strip">
+                ${["초과", "과밀", "보통", "여유"].map(status => `
+                  <button type="button" data-wms-status="${status}" class="${statusFilter === status ? "active" : ""}">
+                    ${status} ${fmt.format(counts[status] || 0)}
+                  </button>
+                `).join("")}
+              </div>
             </div>
             <div class="wms-sheet">
               <div class="wms-sheet-row wms-sheet-head">

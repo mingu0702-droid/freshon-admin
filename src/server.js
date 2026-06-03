@@ -126,7 +126,7 @@ function getSetCookieHeaders(response) {
 async function deliveryAdminFetch(pathname, options = {}) {
   const baseUrl = normalizeBaseUrl(config.deliveryAdminBaseUrl);
   const url = pathname.startsWith("http") ? pathname : `${baseUrl}${pathname.startsWith("/") ? "" : "/"}${pathname}`;
-  const { timeoutMs = 12000, ...fetchOptions } = options;
+  const { timeoutMs = 25000, ...fetchOptions } = options;
   const cookie = fetchOptions.cookie || deliveryAdminSession.cookie || config.deliveryAdminCookie || "";
   const headers = {
     "Accept": "application/json, text/plain, */*",
@@ -1146,18 +1146,11 @@ function freshonDailyRouteRequestVariants({ date, vehicle, center = "", page = 0
   const params = new URLSearchParams(form);
   return [
     {
-      label: "form",
-      options: {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-        body: params.toString()
-      }
-    },
-    {
       label: "json",
       options: {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=UTF-8" },
+        timeoutMs: 15000,
         body: JSON.stringify(form)
       }
     },
@@ -1165,7 +1158,17 @@ function freshonDailyRouteRequestVariants({ date, vehicle, center = "", page = 0
       label: "query",
       suffix: `?${params.toString()}`,
       options: {
-        method: "GET"
+        method: "GET",
+        timeoutMs: 15000
+      }
+    },
+    {
+      label: "form",
+      options: {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+        timeoutMs: 10000,
+        body: params.toString()
       }
     }
   ];
@@ -1323,7 +1326,8 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
       }
     }
   }
-  const error = new Error(`Freshon daily dispatch lookup failed. ${errors[0] || "No matching rows returned."}`);
+  const preferredError = errors.find((message) => !message.includes("timed out after")) || errors[0];
+  const error = new Error(`Freshon daily dispatch lookup failed. ${preferredError || "No matching rows returned."}`);
   error.status = 502;
   throw error;
 }
