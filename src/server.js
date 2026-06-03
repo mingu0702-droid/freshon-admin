@@ -1222,6 +1222,12 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
   }
   const selected = vehicleTokens(vehicle);
   const endpoints = [
+    "/bo/wm/dispatch/dailyDsptcGrid1List",
+    "/bo/wm/dispatch/dailyDsptcGrid2List",
+    "/bo/wm/dispatch/dailyDsptcGrid3List",
+    "/bo/wm/dispatch/dailyDsptcGrid4List",
+    "/bo/wm/dispatch/dailyDsptcGrid1/list",
+    "/bo/wm/dispatch/dailyDsptcGrid1",
     "/bo/wm/dispatch/LOTMTR005_list",
     "/bo/wm/dispatch/LOTMTR005/list",
     "/bo/wm/dispatch/LOTMTR005",

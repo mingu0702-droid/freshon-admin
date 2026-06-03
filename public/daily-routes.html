@@ -177,6 +177,9 @@
     .wms-sheet-head { position:sticky; top:39px; z-index:3; background:#eef2f7; font-weight:900; cursor:default; }
     .wms-sheet-cell { padding:8px 9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-left:1px solid #eef2f7; }
     .wms-sheet-cell:first-child { border-left:0; }
+    .wms-sheet-head .wms-sheet-cell { display:flex; align-items:center; gap:5px; }
+    .wms-head-filter { width:18px; min-width:18px; height:18px; border:1px solid #cbd5e1; border-radius:4px; background:#fff; color:transparent; cursor:pointer; font-size:10px; padding:0; }
+    .wms-head-filter:focus { width:auto; min-width:74px; color:#0f172a; padding:1px 4px; outline:2px solid #bfdbfe; }
     .wms-detail-sheet { border-top:1px solid #cbd5e1; background:#fff; }
     .wms-detail-title { display:flex; justify-content:space-between; gap:10px; padding:10px; background:#f8fafc; border-bottom:1px solid #e5e7eb; font-size:12px; font-weight:900; }
     .wms-stop-table { display:grid; min-width:900px; font-size:11px; }
@@ -305,12 +308,14 @@
     body[data-work-tab="wms"] .wms-panel > .wms-summary { grid-column:1; }
     body[data-work-tab="wms"] .wms-panel > .wms-filters { display:none; }
     body[data-work-tab="wms"] #wmsPasteInput { display:none; }
-    body[data-work-tab="wms"] .wms-map-slot { position:relative; display:block; grid-column:2; grid-row:1 / span 6; width:100%; height:360px; min-width:360px; min-height:220px; max-width:100%; max-height:calc(100vh - 150px); resize:both; justify-self:end; align-self:start; border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#f8fafc; box-shadow:0 12px 32px rgba(15,23,42,.16); }
+    body[data-work-tab="wms"] .wms-map-slot { position:relative; display:block; grid-column:2; grid-row:1 / span 6; width:100%; height:360px; min-width:360px; min-height:220px; max-width:100%; max-height:calc(100vh - 150px); resize:none; justify-self:end; align-self:start; border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#f8fafc; box-shadow:0 12px 32px rgba(15,23,42,.16); }
     body[data-work-tab="wms"][data-wms-map-size="small"] .wms-map-slot { height:250px; width:min(520px, 100%); }
     body[data-work-tab="wms"][data-wms-map-size="large"] .wms-map-slot { height:520px; width:100%; }
-    body[data-work-tab="wms"] .wms-map-controls { position:absolute; top:8px; right:8px; z-index:20; display:flex; gap:4px; padding:4px; border-radius:8px; background:rgba(255,255,255,.92); box-shadow:0 4px 14px rgba(15,23,42,.18); }
-    body[data-work-tab="wms"] .wms-map-controls button { border:1px solid #cbd5e1; background:#fff; color:#344054; border-radius:6px; padding:5px 8px; font-size:11px; font-weight:900; cursor:pointer; }
-    body[data-work-tab="wms"] .wms-map-controls button.active { border-color:#2563eb; background:#2563eb; color:#fff; }
+    body[data-work-tab="wms"] .wms-map-controls { display:none; }
+    body[data-work-tab="wms"] .wms-resize-handle { position:absolute; z-index:25; background:rgba(37,99,235,.12); border:2px solid #2563eb; border-radius:2px; }
+    body[data-work-tab="wms"] .wms-resize-handle.left { left:-1px; top:50%; width:14px; height:42px; transform:translateY(-50%); cursor:ew-resize; }
+    body[data-work-tab="wms"] .wms-resize-handle.right { right:-1px; top:50%; width:14px; height:42px; transform:translateY(-50%); cursor:ew-resize; }
+    body[data-work-tab="wms"] .wms-resize-handle.bottom { left:50%; bottom:-1px; width:52px; height:14px; transform:translateX(-50%); cursor:ns-resize; }
     body[data-work-tab="wms"] .wms-results { grid-column:1 / -1; grid-row:7; max-height:none; height:100%; min-height:280px; overflow:hidden; margin-top:0; }
 
     @media (max-width: 880px) {
@@ -352,6 +357,9 @@
         <label for="vehicleSearchInput">호차 검색</label>
         <input id="vehicleSearchInput" placeholder="101, 용08, 척01">
         <div id="vehicleSearchResults" class="search-results"></div>
+        <label for="customerSearchInput">고객/주소 검색</label>
+        <input id="customerSearchInput" placeholder="고객코드, 고객명, 주소">
+        <div id="customerSearchResults" class="search-results"></div>
       </div>
       <div class="task-tabs" id="taskTabs">
         <button type="button" data-work-tab="route">동선</button>
@@ -361,11 +369,9 @@
         <h2>WMS 배차 현황</h2>
         <div class="meta">WMS 전용 화면 v2026-06-03-3 · 배차계획조정 상세 파일과 차량톤수 요약 파일을 함께 올려 파일 착지 전체와 과배차/조정 후보를 봅니다.</div>
         <div id="wmsMapSlot" class="wms-map-slot" aria-label="WMS 지도 미리보기">
-          <div class="wms-map-controls" aria-label="WMS 지도 크기">
-            <button type="button" data-wms-map-size="small">작게</button>
-            <button type="button" data-wms-map-size="medium" class="active">보통</button>
-            <button type="button" data-wms-map-size="large">크게</button>
-          </div>
+          <div class="wms-resize-handle left" data-wms-resize="left" aria-hidden="true"></div>
+          <div class="wms-resize-handle bottom" data-wms-resize="bottom" aria-hidden="true"></div>
+          <div class="wms-resize-handle right" data-wms-resize="right" aria-hidden="true"></div>
         </div>
         <div class="wms-file">
           <input id="wmsFileInput" type="file" accept=".xlsx,.xls,.csv,.tsv" multiple>
@@ -500,6 +506,8 @@
     const backToOverviewButton = document.getElementById("backToOverviewButton");
     const vehicleSearchInput = document.getElementById("vehicleSearchInput");
     const vehicleSearchResults = document.getElementById("vehicleSearchResults");
+    const customerSearchInput = document.getElementById("customerSearchInput");
+    const customerSearchResults = document.getElementById("customerSearchResults");
     const routeDateInput = document.getElementById("routeDateInput");
     const showRouteButton = document.getElementById("showRouteButton");
     const routeStatus = document.getElementById("routeStatus");
@@ -529,7 +537,6 @@
     const wmsResultsEl = document.getElementById("wmsResults");
     const mapPanel = document.querySelector("main");
     const wmsMapSlot = document.getElementById("wmsMapSlot");
-    const wmsMapControls = document.querySelector(".wms-map-controls");
     const mapHome = document.getElementById("mapHome");
 
     async function init() {
@@ -568,6 +575,12 @@
         if (event.key !== "Enter") return;
         const hits = getVehicleSearchHits();
         if (hits.length) openVehicleDetail(hits[0].vehicle);
+      });
+      customerSearchInput.addEventListener("input", renderCustomerSearchResults);
+      customerSearchInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        const hits = getCustomerSearchHits();
+        if (hits.length) openCustomerSearchHit(hits[0]);
       });
       backToOverviewButton.addEventListener("click", () => {
         viewMode.value = getLastOverviewMode();
@@ -644,15 +657,7 @@
         wmsResultsEl.innerHTML = "";
         render();
       });
-      wmsMapControls.addEventListener("click", (event) => {
-        const button = event.target.closest("button[data-wms-map-size]");
-        if (!button) return;
-        document.body.dataset.wmsMapSize = button.dataset.wmsMapSize || "medium";
-        wmsMapControls.querySelectorAll("button").forEach(item => item.classList.toggle("active", item === button));
-        setTimeout(() => {
-          if (map && typeof map.relayout === "function") map.relayout();
-        }, 0);
-      });
+      initWmsMapResizeHandles();
       [wmsStatusFilter, wmsTonFilter, wmsSortSelect].forEach((element) => {
         element.addEventListener("change", () => {
           activeWmsStatus = wmsStatusFilter.value === "all" ? "" : wmsStatusFilter.value;
@@ -742,6 +747,112 @@
         </div>
       `).join("");
       document.querySelectorAll(".search-hit").forEach(el => el.addEventListener("click", () => openVehicleDetail(el.dataset.vehicle)));
+    }
+
+    function getCustomerSearchHits() {
+      const q = customerSearchInput.value.trim().toLowerCase();
+      if (!q) return [];
+      return allVehicleCustomers()
+        .filter(({ vehicle, customer }) => [
+          vehicle.vehicle,
+          customer.id,
+          customer.name,
+          customer.address,
+          customer.district,
+          customer.dong,
+          customer.admin_name
+        ].join(" ").toLowerCase().includes(q))
+        .slice(0, 12);
+    }
+
+    function renderCustomerSearchResults() {
+      const hits = getCustomerSearchHits();
+      customerSearchResults.innerHTML = hits.map(({ vehicle, customer }, index) => `
+        <div class="search-hit" data-customer-hit="${index}">
+          <b>${esc(customer.name || "-")}</b> · ${esc(vehicle.vehicle)}호<br>
+          ${esc(customer.id || "")} · ${esc(customer.address || "")}
+        </div>
+      `).join("");
+      customerSearchResults.querySelectorAll("[data-customer-hit]").forEach(el => {
+        el.addEventListener("click", () => {
+          const hit = getCustomerSearchHits()[Number(el.dataset.customerHit)];
+          if (hit) openCustomerSearchHit(hit);
+        });
+      });
+    }
+
+    function openCustomerSearchHit(hit) {
+      const { vehicle, customer } = hit;
+      openVehicleDetail(vehicle.vehicle);
+      customerSearchInput.value = customer.id || customer.name || customer.address || "";
+      customerSearchResults.innerHTML = "";
+      setTimeout(() => {
+        clearMapLayers();
+        const color = getVehicleColor(vehicle);
+        addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
+          color,
+          weight: 3,
+          fillOpacity: .12,
+          opacity: .8
+        });
+        addKakaoLabel(
+          [customer.lat, customer.lng],
+          `<span class="customer-pin" style="--pin-color:#dc2626"></span>`,
+          "customer-pin-wrap",
+          labelLayer,
+          () => openInfoWindow(
+            new kakao.maps.LatLng(Number(customer.lat), Number(customer.lng)),
+            buildStorePopup({
+              ...customer,
+              code: customer.id,
+              customerCode: customer.id,
+              customerName: customer.name
+            }, vehicle, routeDateInput.value, "-")
+          )
+        );
+        setKakaoView(customer.lat, customer.lng, 4);
+        openInfoWindow(
+          new kakao.maps.LatLng(Number(customer.lat), Number(customer.lng)),
+          `<b>${esc(customer.name || "-")}</b><br>배송 호차: ${esc(vehicle.vehicle)}호<br>고객 코드: ${esc(customer.id || "-")}<br>주소: ${esc(customer.address || "-")}`
+        );
+      }, 0);
+    }
+
+    function initWmsMapResizeHandles() {
+      let drag = null;
+      wmsMapSlot.querySelectorAll("[data-wms-resize]").forEach(handle => {
+        handle.addEventListener("pointerdown", (event) => {
+          if (document.body.dataset.workTab !== "wms") return;
+          event.preventDefault();
+          handle.setPointerCapture?.(event.pointerId);
+          const rect = wmsMapSlot.getBoundingClientRect();
+          drag = {
+            side: handle.dataset.wmsResize,
+            x: event.clientX,
+            y: event.clientY,
+            width: rect.width,
+            height: rect.height
+          };
+        });
+      });
+      window.addEventListener("pointermove", (event) => {
+        if (!drag) return;
+        const panelRect = document.querySelector(".wms-panel").getBoundingClientRect();
+        let width = drag.width;
+        let height = drag.height;
+        if (drag.side === "right") width = drag.width + (event.clientX - drag.x);
+        if (drag.side === "left") width = drag.width - (event.clientX - drag.x);
+        if (drag.side === "bottom") height = drag.height + (event.clientY - drag.y);
+        width = Math.max(360, Math.min(width, panelRect.width - 620));
+        height = Math.max(220, Math.min(height, window.innerHeight - 160));
+        wmsMapSlot.style.width = `${width}px`;
+        wmsMapSlot.style.height = `${height}px`;
+        if (map && typeof map.relayout === "function") map.relayout();
+      });
+      window.addEventListener("pointerup", () => {
+        drag = null;
+        if (map && typeof map.relayout === "function") map.relayout();
+      });
     }
 
     function render() {
@@ -2096,17 +2207,16 @@
           <div class="wms-board-list">
             <div class="wms-board-title">
               <span>차량호차 리스트 · ${fmt.format(rows.length)}대</span>
-              ${renderWmsInlineFilters()}
             </div>
             <div class="wms-sheet">
               <div class="wms-sheet-row wms-sheet-head">
-                <div class="wms-sheet-cell">호차</div>
-                <div class="wms-sheet-cell">톤수</div>
-                <div class="wms-sheet-cell">금액</div>
+                <div class="wms-sheet-cell">호차<select class="wms-head-filter" data-wms-filter="sort" aria-label="호차 정렬"><option value="vehicle-asc"${wmsSortSelect.value === "vehicle-asc" ? " selected" : ""}>오름</option><option value="vehicle-desc"${wmsSortSelect.value === "vehicle-desc" ? " selected" : ""}>내림</option></select></div>
+                <div class="wms-sheet-cell">톤수<select class="wms-head-filter" data-wms-filter="ton" aria-label="톤수 필터">${[...wmsTonFilter.options].map(option => `<option value="${esc(option.value)}"${option.value === (wmsTonFilter.value || "all") ? " selected" : ""}>${esc(option.textContent)}</option>`).join("")}</select></div>
+                <div class="wms-sheet-cell">금액<select class="wms-head-filter" data-wms-filter="sort" aria-label="금액 정렬"><option value="amount-desc"${wmsSortSelect.value === "amount-desc" ? " selected" : ""}>높은순</option><option value="amount-asc"${wmsSortSelect.value === "amount-asc" ? " selected" : ""}>낮은순</option></select></div>
                 <div class="wms-sheet-cell">기준금액</div>
                 <div class="wms-sheet-cell">사용률</div>
                 <div class="wms-sheet-cell">착지</div>
-                <div class="wms-sheet-cell">상태</div>
+                <div class="wms-sheet-cell">상태<select class="wms-head-filter" data-wms-filter="status" aria-label="상태 필터"><option value="all"${(wmsStatusFilter.value || "all") === "all" ? " selected" : ""}>전체</option><option value="초과"${wmsStatusFilter.value === "초과" ? " selected" : ""}>초과</option><option value="과밀"${wmsStatusFilter.value === "과밀" ? " selected" : ""}>과밀</option><option value="보통"${wmsStatusFilter.value === "보통" ? " selected" : ""}>보통</option><option value="여유"${wmsStatusFilter.value === "여유" ? " selected" : ""}>여유</option></select></div>
                 <div class="wms-sheet-cell">용차 후보 / 사유</div>
               </div>
               ${rows.map(row => {
