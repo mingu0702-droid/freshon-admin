@@ -128,13 +128,13 @@
     .new-area-result:hover { border-color:#2563eb; background:#eff6ff; transform:translateY(-1px); }
     .new-area-result strong { display:block; margin-bottom:4px; line-height:1.25; }
     .new-area-result small { display:block; color:var(--muted); line-height:1.45; overflow-wrap:anywhere; }
-    .wms-file { display:grid; gap:8px; margin-top:8px; }
+    .wms-file { display:grid; gap:6px; margin-top:8px; }
     .wms-file input[type="file"] { padding:7px; background:#fff; }
-    .wms-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; }
-    .wms-actions button { border:1px solid #2563eb; background:#2563eb; color:#fff; border-radius:6px; padding:9px; font-size:12px; font-weight:900; cursor:pointer; }
+    .wms-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .wms-actions button { min-width:92px; border:1px solid #2563eb; background:#2563eb; color:#fff; border-radius:6px; padding:8px 12px; font-size:12px; font-weight:900; cursor:pointer; }
     .wms-actions button.secondary { background:#fff; color:#1d4ed8; }
     .wms-summary { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; margin-top:8px; font-size:12px; }
-    .wms-summary div { border:1px solid var(--edge); border-radius:6px; background:#fff; padding:8px; cursor:pointer; }
+    .wms-summary div { border:1px solid var(--edge); border-radius:6px; background:#fff; padding:7px 8px; cursor:pointer; }
     .wms-summary div:hover { border-color:#2563eb; background:#eff6ff; }
     .wms-summary b { display:block; font-size:15px; margin-top:2px; }
     .wms-filters { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; margin-top:8px; }
@@ -295,7 +295,7 @@
     body[data-work-tab="wms"] #map { min-width:0; min-height:0; width:100%; height:100%; }
     body[data-work-tab="wms"] .legend { display:none; }
     body[data-work-tab="wms"] .data-actions { display:none; }
-    body[data-work-tab="wms"] .wms-panel { height:calc(100vh - 70px); display:grid; grid-template-columns:minmax(560px, 1fr) minmax(420px, .52fr); grid-auto-rows:min-content; gap:8px 12px; margin:0; background:#fff; }
+    body[data-work-tab="wms"] .wms-panel { height:calc(100vh - 70px); display:grid; grid-template-columns:minmax(560px, .46fr) minmax(460px, .54fr); grid-template-rows:auto auto auto auto auto auto minmax(280px, 1fr); gap:7px 12px; margin:0; background:#fff; }
     body[data-work-tab="wms"] .wms-panel h2 { font-size:20px; }
     body[data-work-tab="wms"] .wms-panel > h2,
     body[data-work-tab="wms"] .wms-panel > .meta,
@@ -305,13 +305,13 @@
     body[data-work-tab="wms"] .wms-panel > .wms-summary { grid-column:1; }
     body[data-work-tab="wms"] .wms-panel > .wms-filters { display:none; }
     body[data-work-tab="wms"] #wmsPasteInput { display:none; }
-    body[data-work-tab="wms"] .wms-map-slot { position:relative; display:block; grid-column:2; grid-row:1 / span 6; height:360px; min-height:220px; border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#f8fafc; box-shadow:0 12px 32px rgba(15,23,42,.16); }
-    body[data-work-tab="wms"][data-wms-map-size="small"] .wms-map-slot { height:250px; }
-    body[data-work-tab="wms"][data-wms-map-size="large"] .wms-map-slot { height:520px; }
+    body[data-work-tab="wms"] .wms-map-slot { position:relative; display:block; grid-column:2; grid-row:1 / span 6; width:100%; height:360px; min-width:360px; min-height:220px; max-width:100%; max-height:calc(100vh - 150px); resize:both; justify-self:end; align-self:start; border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#f8fafc; box-shadow:0 12px 32px rgba(15,23,42,.16); }
+    body[data-work-tab="wms"][data-wms-map-size="small"] .wms-map-slot { height:250px; width:min(520px, 100%); }
+    body[data-work-tab="wms"][data-wms-map-size="large"] .wms-map-slot { height:520px; width:100%; }
     body[data-work-tab="wms"] .wms-map-controls { position:absolute; top:8px; right:8px; z-index:20; display:flex; gap:4px; padding:4px; border-radius:8px; background:rgba(255,255,255,.92); box-shadow:0 4px 14px rgba(15,23,42,.18); }
     body[data-work-tab="wms"] .wms-map-controls button { border:1px solid #cbd5e1; background:#fff; color:#344054; border-radius:6px; padding:5px 8px; font-size:11px; font-weight:900; cursor:pointer; }
     body[data-work-tab="wms"] .wms-map-controls button.active { border-color:#2563eb; background:#2563eb; color:#fff; }
-    body[data-work-tab="wms"] .wms-results { grid-column:1 / -1; max-height:none; height:calc(100vh - 470px); min-height:280px; overflow:hidden; margin-top:0; }
+    body[data-work-tab="wms"] .wms-results { grid-column:1 / -1; grid-row:7; max-height:none; height:100%; min-height:280px; overflow:hidden; margin-top:0; }
 
     @media (max-width: 880px) {
       .shell { grid-template-columns:1fr; grid-template-rows:380px 1fr; }
@@ -544,6 +544,10 @@
         new ResizeObserver(() => {
           if (map && typeof map.relayout === "function") map.relayout();
         }).observe(document.querySelector(".shell"));
+        new ResizeObserver(() => {
+          if (document.body.dataset.workTab !== "wms") return;
+          if (map && typeof map.relayout === "function") map.relayout();
+        }).observe(wmsMapSlot);
       }
       geocoder = new kakao.maps.services.Geocoder();
       markersLayer = makeLayerGroup();
