@@ -128,10 +128,10 @@
     .new-area-result:hover { border-color:#2563eb; background:#eff6ff; transform:translateY(-1px); }
     .new-area-result strong { display:block; margin-bottom:4px; line-height:1.25; }
     .new-area-result small { display:block; color:var(--muted); line-height:1.45; overflow-wrap:anywhere; }
-    .wms-file { display:grid; gap:6px; margin-top:8px; }
-    .wms-file input[type="file"] { padding:7px; background:#fff; }
-    .wms-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-    .wms-actions button { min-width:92px; border:1px solid #2563eb; background:#2563eb; color:#fff; border-radius:6px; padding:8px 12px; font-size:12px; font-weight:900; cursor:pointer; }
+    .wms-file { display:flex; align-items:center; gap:8px; margin-top:6px; min-width:0; }
+    .wms-file input[type="file"] { width:100%; min-width:0; padding:7px; background:#fff; }
+    .wms-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+    .wms-actions button { min-width:84px; border:1px solid #2563eb; background:#2563eb; color:#fff; border-radius:6px; padding:7px 11px; font-size:12px; font-weight:900; cursor:pointer; }
     .wms-actions button.secondary { background:#fff; color:#1d4ed8; }
     .wms-summary { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; margin-top:8px; font-size:12px; }
     .wms-summary div { border:1px solid var(--edge); border-radius:6px; background:#fff; padding:7px 8px; cursor:pointer; }
@@ -298,17 +298,17 @@
     body[data-work-tab="wms"] #map { min-width:0; min-height:0; width:100%; height:100%; }
     body[data-work-tab="wms"] .legend { display:none; }
     body[data-work-tab="wms"] .data-actions { display:none; }
-    body[data-work-tab="wms"] .wms-panel { height:calc(100vh - 70px); display:grid; grid-template-columns:minmax(560px, .46fr) minmax(460px, .54fr); grid-template-rows:auto auto auto auto auto auto minmax(280px, 1fr); gap:7px 12px; margin:0; background:#fff; }
+    body[data-work-tab="wms"] .wms-panel { height:calc(100vh - 70px); display:grid; grid-template-columns:minmax(420px, .34fr) minmax(560px, .66fr); grid-template-rows:auto auto auto auto minmax(280px, 1fr); gap:6px 10px; margin:0; background:#fff; }
     body[data-work-tab="wms"] .wms-panel h2 { font-size:20px; }
     body[data-work-tab="wms"] .wms-panel > h2,
     body[data-work-tab="wms"] .wms-panel > .meta,
     body[data-work-tab="wms"] .wms-panel > .wms-file,
     body[data-work-tab="wms"] .wms-panel > .wms-actions,
-    body[data-work-tab="wms"] .wms-panel > .route-status,
-    body[data-work-tab="wms"] .wms-panel > .wms-summary { grid-column:1; }
+    body[data-work-tab="wms"] .wms-panel > .route-status { grid-column:1; }
+    body[data-work-tab="wms"] .wms-panel > .wms-summary { grid-column:1; grid-row:4; }
     body[data-work-tab="wms"] .wms-panel > .wms-filters { display:none; }
     body[data-work-tab="wms"] #wmsPasteInput { display:none; }
-    body[data-work-tab="wms"] .wms-map-slot { position:relative; display:block; grid-column:2; grid-row:1 / span 6; width:100%; height:360px; min-width:360px; min-height:220px; max-width:100%; max-height:calc(100vh - 150px); resize:none; justify-self:end; align-self:start; border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#f8fafc; box-shadow:0 12px 32px rgba(15,23,42,.16); }
+    body[data-work-tab="wms"] .wms-map-slot { position:relative; display:block; grid-column:2; grid-row:1 / span 4; width:100%; height:300px; min-width:360px; min-height:180px; max-width:none; max-height:calc(100vh - 170px); resize:none; justify-self:stretch; align-self:start; border:1px solid var(--edge); border-radius:8px; overflow:hidden; background:#f8fafc; box-shadow:0 12px 32px rgba(15,23,42,.16); }
     body[data-work-tab="wms"][data-wms-map-size="small"] .wms-map-slot { height:250px; width:min(520px, 100%); }
     body[data-work-tab="wms"][data-wms-map-size="large"] .wms-map-slot { height:520px; width:100%; }
     body[data-work-tab="wms"] .wms-map-controls { display:none; }
@@ -316,7 +316,7 @@
     body[data-work-tab="wms"] .wms-resize-handle.left { left:-1px; top:50%; width:14px; height:42px; transform:translateY(-50%); cursor:ew-resize; }
     body[data-work-tab="wms"] .wms-resize-handle.right { right:-1px; top:50%; width:14px; height:42px; transform:translateY(-50%); cursor:ew-resize; }
     body[data-work-tab="wms"] .wms-resize-handle.bottom { left:50%; bottom:-1px; width:52px; height:14px; transform:translateX(-50%); cursor:ns-resize; }
-    body[data-work-tab="wms"] .wms-results { grid-column:1 / -1; grid-row:7; max-height:none; height:100%; min-height:280px; overflow:hidden; margin-top:0; }
+    body[data-work-tab="wms"] .wms-results { grid-column:1 / -1; grid-row:5; max-height:none; height:100%; min-height:280px; overflow:hidden; margin-top:0; }
 
     @media (max-width: 880px) {
       .shell { grid-template-columns:1fr; grid-template-rows:380px 1fr; }
@@ -826,26 +826,32 @@
           event.preventDefault();
           handle.setPointerCapture?.(event.pointerId);
           const rect = wmsMapSlot.getBoundingClientRect();
+          const panel = document.querySelector(".wms-panel");
+          const panelRect = panel.getBoundingClientRect();
           drag = {
             side: handle.dataset.wmsResize,
             x: event.clientX,
             y: event.clientY,
             width: rect.width,
-            height: rect.height
+            height: rect.height,
+            panelLeft: panelRect.left,
+            panelWidth: panelRect.width
           };
         });
       });
       window.addEventListener("pointermove", (event) => {
         if (!drag) return;
-        const panelRect = document.querySelector(".wms-panel").getBoundingClientRect();
+        const panel = document.querySelector(".wms-panel");
+        const panelRect = panel.getBoundingClientRect();
         let width = drag.width;
         let height = drag.height;
-        if (drag.side === "right") width = drag.width + (event.clientX - drag.x);
-        if (drag.side === "left") width = drag.width - (event.clientX - drag.x);
+        if (drag.side === "left" || drag.side === "right") {
+          const leftWidth = Math.max(260, Math.min(event.clientX - panelRect.left, panelRect.width - 360));
+          panel.style.gridTemplateColumns = `${Math.round(leftWidth)}px minmax(360px, 1fr)`;
+          wmsMapSlot.style.width = "100%";
+        }
         if (drag.side === "bottom") height = drag.height + (event.clientY - drag.y);
-        width = Math.max(360, Math.min(width, panelRect.width - 620));
         height = Math.max(220, Math.min(height, window.innerHeight - 160));
-        wmsMapSlot.style.width = `${width}px`;
         wmsMapSlot.style.height = `${height}px`;
         if (map && typeof map.relayout === "function") map.relayout();
       });
@@ -1228,14 +1234,14 @@
       try {
         const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, center: vehicle.region || "", source: "freshon", refresh: "1" });
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 18000);
+        const timer = setTimeout(() => controller.abort(), 45000);
         const response = await fetch(`/api/daily-route?${params.toString()}`, { cache: "no-store", signal: controller.signal });
         clearTimeout(timer);
         if (!response.ok) {
           const error = await response.json().catch(() => ({}));
           const message = String(error.error || "");
           routeStatus.textContent = message
-            ? `프레시온 직접 조회 실패: ${/401|FRESHON_COOKIE|Unauthorized/i.test(message) ? "로그인 세션(FRESHON_COOKIE)이 없거나 만료됐습니다. Render 환경변수의 프레시온 쿠키를 갱신해야 합니다." : message.slice(0, 220)}`
+            ? `프레시온 직접 조회 실패: ${/401|FRESHON_COOKIE|Unauthorized/i.test(message) ? "로그인 세션(FRESHON_COOKIE)이 없거나 만료됐습니다. Render 환경변수의 프레시온 쿠키를 갱신해야 합니다." : message.slice(0, 520)}`
             : "프레시온 직접 조회에서 해당 날짜/호차 동선을 찾지 못했습니다.";
           return;
         }
@@ -1280,7 +1286,7 @@
         fitKakaoBounds(allPoints);
       } catch (error) {
         routeStatus.textContent = error.name === "AbortError"
-          ? "프레시온 응답이 느려 18초에서 중단했습니다. 잠시 후 다시 눌러주세요."
+          ? "프레시온 응답이 느려 45초에서 중단했습니다. 프레시온 화면에서 같은 조건 조회가 되는지 확인해주세요."
           : "프레시온 일일배차 데이터를 불러오지 못했습니다.";
       }
     }
