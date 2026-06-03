@@ -1178,10 +1178,9 @@ function extractFreshonRows(payload) {
     const hasCustomer = item.estCd || item.estNm || item.customerCode || item.customerName || item.custCd || item.custNm || item.custErpCd || item.dlvyPlaceNm;
     const hasAddress = item.addr || item.address || item.customerAddress || item.roadAddress || item.baseAddr || item.dlvyAddr || item.deliveryAddress || item.shipAddr;
     const hasVehicle = item.confirmCarSeq || item.confirmedCarSeq || item.fixedCarSeq || item.baseCarSeq || item.changeCarSeq || item.carSeq || item.carSeqNm || item.carCd || item.carNm || item.carNo || item.hocha || item.vehicle;
-    if (hasCustomer || hasAddress || hasVehicle) return true;
-    return !hasPagingOnlyKeys && false;
+    return Boolean(hasCustomer || hasAddress || hasVehicle) && !hasPagingOnlyKeys;
   };
-  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload)) return payload.filter(isFreshonCustomerRow);
   const direct = payload?.data?.content
     || payload?.data?.items
     || payload?.data?.list
@@ -1305,7 +1304,7 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
         if (!matched.length) continue;
         const stops = matched
           .map((row, index) => buildStopFromFreshonDailyRow(row, vehicle, index + 1))
-          .filter((stop) => stop.customerCode || stop.customerName || stop.address || stop.amount);
+          .filter((stop) => stop.customerCode || stop.customerName || stop.address);
         if (!stops.length) continue;
         return {
           generatedAt: new Date().toISOString(),
