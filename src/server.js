@@ -1172,6 +1172,15 @@ function freshonDailyRouteRequestVariants({ date, vehicle, center = "", page = 0
 }
 
 function extractFreshonRows(payload) {
+  const isFreshonCustomerRow = (item) => {
+    if (!item || typeof item !== "object") return false;
+    const hasPagingOnlyKeys = item.totalCnt != null || item.totalPages != null || item.isPaging != null || item.sortName != null;
+    const hasCustomer = item.estCd || item.estNm || item.customerCode || item.customerName || item.custCd || item.custNm || item.custErpCd || item.dlvyPlaceNm;
+    const hasAddress = item.addr || item.address || item.customerAddress || item.roadAddress || item.baseAddr || item.dlvyAddr || item.deliveryAddress || item.shipAddr;
+    const hasVehicle = item.confirmCarSeq || item.confirmedCarSeq || item.fixedCarSeq || item.baseCarSeq || item.changeCarSeq || item.carSeq || item.carSeqNm || item.carCd || item.carNm || item.carNo || item.hocha || item.vehicle;
+    if (hasCustomer || hasAddress || hasVehicle) return true;
+    return !hasPagingOnlyKeys && false;
+  };
   if (Array.isArray(payload)) return payload;
   const direct = payload?.data?.content
     || payload?.data?.items
@@ -1182,14 +1191,8 @@ function extractFreshonRows(payload) {
     || payload?.items
     || payload?.list
     || payload?.rows;
-  if (Array.isArray(direct)) return direct;
-  return findArrayDeep(payload, (item) => {
-    if (!item || typeof item !== "object") return false;
-    return Boolean(
-      item.estCd || item.estNm || item.customerCode || item.customerName || item.custCd || item.custNm
-      || item.confirmCarSeq || item.carSeq || item.carNm || item.totalOrderAmt || item.orderAmt
-    );
-  }) || [];
+  if (Array.isArray(direct)) return direct.filter(isFreshonCustomerRow);
+  return findArrayDeep(payload, isFreshonCustomerRow) || [];
 }
 
 function freshonRowVehicle(row) {
