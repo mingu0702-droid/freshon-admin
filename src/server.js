@@ -1141,6 +1141,36 @@ function freshonDailyRouteForm({ date, vehicle, center = "", page = 0 }) {
   };
 }
 
+function freshonDailyRouteRequestVariants({ date, vehicle, center = "", page = 0 }) {
+  const form = freshonDailyRouteForm({ date, vehicle, center, page });
+  const params = new URLSearchParams(form);
+  return [
+    {
+      label: "form",
+      options: {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+        body: params.toString()
+      }
+    },
+    {
+      label: "json",
+      options: {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=UTF-8" },
+        body: JSON.stringify(form)
+      }
+    },
+    {
+      label: "query",
+      suffix: `?${params.toString()}`,
+      options: {
+        method: "GET"
+      }
+    }
+  ];
+}
+
 function extractFreshonRows(payload) {
   if (Array.isArray(payload)) return payload;
   const direct = payload?.data?.content
@@ -1241,36 +1271,34 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
   ];
   const errors = [];
   for (const endpoint of endpoints) {
-    try {
-      const payload = await readFreshonJson(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-        body: new URLSearchParams(freshonDailyRouteForm({ date, vehicle, center })).toString()
-      });
-      const rows = extractFreshonRows(payload);
-      const matched = rows.filter((row) => {
-        const tokens = vehicleTokens(freshonRowVehicle(row));
-        return !tokens.size || [...tokens].some((token) => selected.has(token));
-      });
-      if (!matched.length) continue;
-      const stops = matched
-        .map((row, index) => buildStopFromFreshonDailyRow(row, vehicle, index + 1))
-        .filter((stop) => stop.customerCode || stop.customerName || stop.address || stop.amount);
-      if (!stops.length) continue;
-      return {
-        generatedAt: new Date().toISOString(),
-        source: "freshon-daily-dispatch-api",
-        warning: "Freshon daily dispatch management data was used. Coordinates are matched against the operating-map customer cache.",
-        date,
-        vehicle,
-        center,
-        rowCount: stops.length,
-        appRecordedCount: 0,
-        appMissingCount: stops.length,
-        stops
-      };
-    } catch (error) {
-      errors.push(`${endpoint}: ${error.message || String(error)}`);
+    for (const variant of freshonDailyRouteRequestVariants({ date, vehicle, center })) {
+      try {
+        const payload = await readFreshonJson(`${endpoint}${variant.suffix || ""}`, variant.options);
+        const rows = extractFreshonRows(payload);
+        const matched = rows.filter((row) => {
+          const tokens = vehicleTokens(freshonRowVehicle(row));
+          return !tokens.size || [...tokens].some((token) => selected.has(token));
+        });
+        if (!matched.length) continue;
+        const stops = matched
+          .map((row, index) => buildStopFromFreshonDailyRow(row, vehicle, index + 1))
+          .filter((stop) => stop.customerCode || stop.customerName || stop.address || stop.amount);
+        if (!stops.length) continue;
+        return {
+          generatedAt: new Date().toISOString(),
+          source: "freshon-daily-dispatch-api",
+          warning: "Freshon daily dispatch management data was used. Coordinates are matched against the operating-map customer cache.",
+          date,
+          vehicle,
+          center,
+          rowCount: stops.length,
+          appRecordedCount: 0,
+          appMissingCount: stops.length,
+          stops
+        };
+      } catch (error) {
+        errors.push(`${endpoint} ${variant.label}: ${error.message || String(error)}`);
+      }
     }
   }
   const error = new Error(`Freshon daily dispatch lookup failed. ${errors[0] || "No matching rows returned."}`);

@@ -86,31 +86,44 @@ async function getGithubSha(fileName) {
   return json.sha || null;
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function writeExternalJson(fileName, payload) {
   if (!config.githubToken || !config.githubRepo) return;
-  const sha = await getGithubSha(fileName);
   const url = `https://api.github.com/repos/${config.githubRepo}/contents/${externalPath(fileName)}`;
-  const body = {
-    message: `Update Freshon cache ${fileName}`,
-    branch: config.githubBranch,
-    content: Buffer.from(JSON.stringify(payload), "utf8").toString("base64")
-  };
-  if (sha) body.sha = sha;
+  const content = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const sha = await getGithubSha(fileName);
+    const body = {
+      message: `Update Freshon cache ${fileName}`,
+      branch: config.githubBranch,
+      content
+    };
+    if (sha) body.sha = sha;
 
-  const response = await fetch(url, {
-    method: "PUT",
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${config.githubToken}`,
-      "Content-Type": "application/json",
-      "User-Agent": "freshon-admin-cache"
-    },
-    body: JSON.stringify(body)
-  }).catch(() => null);
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${config.githubToken}`,
+        "Content-Type": "application/json",
+        "User-Agent": "freshon-admin-cache"
+      },
+      body: JSON.stringify(body)
+    }).catch(() => null);
 
-  if (!response?.ok) {
+    if (response?.ok) return;
+
     const text = await response?.text().catch(() => "");
+    if (response?.status === 409 && attempt < 3) {
+      console.warn(`External cache write conflict for ${fileName}; retrying with latest GitHub sha (${attempt}/3).`);
+      await wait(250 * attempt);
+      continue;
+    }
     console.warn(`External cache write failed for ${fileName}: ${response?.status || "network"} ${text}`);
+    return;
   }
 }
 
