@@ -1656,9 +1656,22 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
-app.listen(config.port, config.host, () => {
+const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
 });
+
+function shutdown(signal) {
+  console.log(`Received ${signal}; closing Freshon dispatch admin cleanly.`);
+  server.close(() => {
+    process.exit(0);
+  });
+  setTimeout(() => {
+    process.exit(0);
+  }, 8000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 
 

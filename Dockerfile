@@ -18,4 +18,4 @@ ENV NODE_OPTIONS=--max-old-space-size=1536
 
 EXPOSE 10000
 
-CMD ["npm", "start"]
+CMD ["node", "src/server.js"]
