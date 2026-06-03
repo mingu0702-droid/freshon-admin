@@ -104,6 +104,10 @@
     .route-controls button { border:1px solid #2563eb; background:#2563eb; color:#fff; border-radius:6px; padding:9px 12px; font-size:12px; font-weight:900; cursor:pointer; white-space:nowrap; }
     .route-controls button:hover, .new-area-actions button:hover { background:#1d4ed8; border-color:#1d4ed8; }
     .route-status { color:var(--muted); font-size:12px; line-height:1.45; margin:8px 0 0; }
+    .route-unmatched { display:grid; gap:6px; margin-top:8px; }
+    .route-unmatched-item { border:1px solid #fecaca; border-radius:6px; background:#fff7f7; color:#7f1d1d; padding:7px 8px; line-height:1.35; }
+    .route-unmatched-item b { color:#991b1b; }
+    .route-unmatched-item small { display:block; color:#475467; margin-top:2px; overflow-wrap:anywhere; }
     .data-actions { position:absolute; right:14px; top:14px; z-index:520; display:flex; gap:8px; }
     .data-actions button, .data-actions a { border:1px solid #cbd5e1; background:rgba(255,255,255,.94); color:#0f172a; border-radius:6px; padding:8px 10px; font-size:12px; font-weight:900; text-decoration:none; box-shadow:0 8px 22px rgba(15,23,42,.13); cursor:pointer; backdrop-filter:blur(6px); }
     .data-actions button:hover, .data-actions a:hover { border-color:#2563eb; color:#1d4ed8; }
@@ -336,11 +340,10 @@
     body[data-work-tab="wms"] .wms-map-controls { display:none; }
     body[data-work-tab="wms"] .wms-resize-handle { position:absolute; z-index:25; display:flex; align-items:center; justify-content:center; background:#2563eb; border:2px solid #fff; color:#fff; border-radius:999px; box-shadow:0 3px 12px rgba(15,23,42,.35); font-size:11px; font-weight:900; user-select:none; }
     body[data-work-tab="wms"] .wms-resize-handle.left { left:6px; top:50%; width:58px; height:26px; transform:translateY(-50%); cursor:ew-resize; }
-    body[data-work-tab="wms"] .wms-resize-handle.right { right:6px; top:50%; width:58px; height:26px; transform:translateY(-50%); cursor:ew-resize; }
+    body[data-work-tab="wms"] .wms-resize-handle.right { display:none; }
     body[data-work-tab="wms"] .wms-resize-handle.bottom { left:50%; bottom:6px; width:68px; height:26px; transform:translateX(-50%); cursor:ns-resize; }
     body[data-work-tab="wms"] .wms-resize-handle::after { content:"지도"; }
     body[data-work-tab="wms"] .wms-resize-handle.left::after { content:"← 지도"; }
-    body[data-work-tab="wms"] .wms-resize-handle.right::after { content:"지도 →"; }
     body[data-work-tab="wms"] .wms-resize-handle.bottom::after { content:"높이 ↕"; }
     body[data-work-tab="wms"] .wms-results { grid-area:results; max-height:none; height:100%; min-height:280px; overflow:hidden; margin-top:0; }
 
@@ -397,7 +400,6 @@
         <div id="wmsMapSlot" class="wms-map-slot" aria-label="WMS 지도 미리보기">
           <div class="wms-resize-handle left" data-wms-resize="left" aria-hidden="true"></div>
           <div class="wms-resize-handle bottom" data-wms-resize="bottom" aria-hidden="true"></div>
-          <div class="wms-resize-handle right" data-wms-resize="right" aria-hidden="true"></div>
         </div>
         <div class="wms-file">
           <input id="wmsFileInput" type="file" accept=".xlsx,.xls,.csv,.tsv" multiple>
@@ -1278,11 +1280,16 @@
           return;
         }
         const payload = await response.json();
-        const stops = Array.isArray(payload.stops)
-          ? (await Promise.all(payload.stops.map(stop => resolveRouteStop(vehicle, stop)))).filter(s => s.lat && s.lng)
+        const resolvedStops = Array.isArray(payload.stops)
+          ? await Promise.all(payload.stops.map(stop => resolveRouteStop(vehicle, stop)))
           : [];
+        const stops = resolvedStops.filter(hasStopPoint);
+        const unmatchedStops = resolvedStops.filter(stop => !hasStopPoint(stop));
         if (!stops.length) {
-          routeStatus.textContent = "프레시온에서 착지는 가져왔지만 지도 좌표와 매칭된 배송처가 없습니다.";
+          routeStatus.innerHTML = renderUnmatchedRouteStops(
+            `프레시온에서 착지 ${fmt.format(resolvedStops.length)}건은 가져왔지만 지도 좌표와 매칭된 배송처가 없습니다.`,
+            unmatchedStops
+          );
           return;
         }
         currentRouteStops = stops;
@@ -1314,13 +1321,41 @@
         });
         const missingCount = stops.length - recordedStops.length;
         const sourceLabel = payload.source === "freshon-daily-dispatch-api" ? "프레시온 일일배차관리 직접 조회" : payload.source === "delivery-admin-live" ? "딜리버리 어드민 직접 조회" : payload.source === "vehicle-area-fallback" ? "고정권역 대체 표시" : "업로드/캐시 데이터";
-        routeStatus.textContent = `${date} ${vehicle.vehicle}호 동선 ${fmt.format(stops.length)}건 표시 중 · ${sourceLabel} · 배송완료 기록 ${fmt.format(recordedStops.length)}건 · 미기록 ${fmt.format(missingCount)}건`;
+        routeStatus.innerHTML = `${date} ${vehicle.vehicle}호 동선 ${fmt.format(stops.length)}건 표시 중 · ${sourceLabel} · 배송완료 기록 ${fmt.format(recordedStops.length)}건 · 미기록 ${fmt.format(missingCount)}건`
+          + (unmatchedStops.length ? renderUnmatchedRouteStops(`지도 매칭 실패 ${fmt.format(unmatchedStops.length)}건`, unmatchedStops) : "");
         fitKakaoBounds(allPoints);
       } catch (error) {
         routeStatus.textContent = error.name === "AbortError"
           ? "프레시온 응답이 느려 45초에서 중단했습니다. 프레시온 화면에서 같은 조건 조회가 되는지 확인해주세요."
           : "프레시온 일일배차 데이터를 불러오지 못했습니다.";
       }
+    }
+
+    function hasStopPoint(stop) {
+      return Number.isFinite(Number(stop?.lat)) && Number.isFinite(Number(stop?.lng));
+    }
+
+    function renderUnmatchedRouteStops(title, stops) {
+      const rows = (stops || []).slice(0, 20);
+      const more = stops.length > rows.length ? `<small>외 ${fmt.format(stops.length - rows.length)}건 더 있음</small>` : "";
+      return `
+        <div>${esc(title)}</div>
+        <div class="route-unmatched">
+          ${rows.map(stop => {
+            const raw = stop.raw && typeof stop.raw === "object"
+              ? Object.entries(stop.raw).slice(0, 12).map(([key, value]) => `${key}:${String(value ?? "")}`).join(" / ")
+              : "";
+            return `
+              <div class="route-unmatched-item">
+                <b>${esc(stop.sequence || "-")} · ${esc(stop.customerCode || stop.code || "-")} · ${esc(stop.customerName || stop.name || "-")}</b>
+                <small>주소: ${esc(stop.address || "-")} · 금액: ${esc(stop.amount || stop.dailyAmount || "-")}</small>
+                ${raw ? `<small>원문: ${esc(raw)}</small>` : ""}
+              </div>
+            `;
+          }).join("") || `<div class="route-unmatched-item"><b>표시할 실패 착지가 없습니다.</b></div>`}
+          ${more}
+        </div>
+      `;
     }
 
     async function resolveRouteStop(vehicle, stop) {

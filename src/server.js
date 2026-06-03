@@ -1211,14 +1211,14 @@ function freshonRowVehicle(row) {
 }
 
 function buildStopFromFreshonDailyRow(row, vehicle, sequence) {
-  const customerCode = deliveryStopText(row, ["estCd", "customerCode", "custCd", "erpCode", "customerErpCode", "custCode"]);
-  const customerName = deliveryStopText(row, ["estNm", "estName", "customerName", "custNm", "customerNm", "custName", "storeName"]);
+  const customerCode = deliveryStopText(row, ["estCd", "customerCode", "custCd", "erpCode", "customerErpCode", "custCode", "custErpCd"]);
+  const customerName = deliveryStopText(row, ["estNm", "estName", "customerName", "custNm", "customerNm", "custName", "storeName", "dlvyPlaceNm", "deliveryPlaceName"]);
   const amount = deliveryStopText(row, ["totalOrderAmt", "totOrderAmt", "orderAmt", "saleAmt", "salesAmount", "amt", "totalAmount", "daySaleAmt"]);
   const weight = deliveryStopText(row, ["weight", "weightKg", "totalWeight"]);
   const cbm = deliveryStopText(row, ["cbm", "CBM"]);
   const address = [
-    deliveryStopText(row, ["addr", "address", "customerAddress", "roadAddress"]),
-    deliveryStopText(row, ["addrDtl", "addressDetail", "detailAddress"])
+    deliveryStopText(row, ["addr", "address", "customerAddress", "roadAddress", "baseAddr", "dlvyAddr", "deliveryAddress", "shipAddr"]),
+    deliveryStopText(row, ["addrDtl", "addressDetail", "detailAddress", "dtlAddr", "dlvyAddrDtl", "deliveryAddressDetail", "shipAddrDtl"])
   ].filter(Boolean).join(" ").trim();
   return {
     sequence,
@@ -1244,6 +1244,23 @@ function buildStopFromFreshonDailyRow(row, vehicle, sequence) {
     cbm
   };
 }
+
+function freshonRowMatchesVehicleCustomer(row, vehicleData) {
+  if (!vehicleData?.customers?.length) return false;
+  const stop = buildStopFromFreshonDailyRow(row, vehicleData.vehicle, 1);
+  const key = String(stop.customerCode || stop.code || "").trim();
+  const name = String(stop.customerName || stop.name || "").replace(/\s+/g, "");
+  const address = String(stop.address || "").replace(/\s+/g, "");
+  return vehicleData.customers.some((customer) => {
+    const customerId = String(customer.id || "").trim();
+    const customerName = String(customer.name || "").replace(/\s+/g, "");
+    const customerAddress = String(customer.address || "").replace(/\s+/g, "");
+    return (key && customerId === key)
+      || (name && customerName && (customerName === name || customerName.includes(name) || name.includes(customerName)))
+      || (address && customerAddress && (customerAddress.includes(address) || address.includes(customerAddress)));
+  });
+}
+
 async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
   if (!config.freshonCookie) {
     const error = new Error("FRESHON_COOKIE is not configured. Freshon direct lookup needs the browser session cookie.");
@@ -1251,6 +1268,8 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
     throw error;
   }
   const selected = vehicleTokens(vehicle);
+  const vehicleAreaData = await readVehicleAreaData().catch(() => null);
+  const vehicleData = (vehicleAreaData?.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
   const endpoints = [
     "/bo/wm/dispatch/dailyDsptcGrid1List",
     "/bo/wm/dispatch/dailyDsptcGrid2List",
@@ -1277,7 +1296,8 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
         const rows = extractFreshonRows(payload);
         const matched = rows.filter((row) => {
           const tokens = vehicleTokens(freshonRowVehicle(row));
-          return !tokens.size || [...tokens].some((token) => selected.has(token));
+          if (tokens.size) return [...tokens].some((token) => selected.has(token));
+          return freshonRowMatchesVehicleCustomer(row, vehicleData);
         });
         if (!matched.length) continue;
         const stops = matched
