@@ -1824,7 +1824,7 @@
       try {
         const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, center: vehicle.region || "", source: "freshon", refresh: "1" });
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 45000);
+        const timer = setTimeout(() => controller.abort(), 90000);
         const response = await fetch(`/api/daily-route?${params.toString()}`, { cache: "no-store", signal: controller.signal });
         clearTimeout(timer);
         if (!response.ok) {
@@ -1880,7 +1880,7 @@
         fitKakaoBounds(allPoints);
       } catch (error) {
         routeStatus.textContent = error.name === "AbortError"
-          ? "프레시온 응답이 느려 45초에서 중단했습니다. 프레시온 화면에서 같은 조건 조회가 되는지 확인해주세요."
+          ? "프레시온 응답이 느려 90초에서 중단했습니다. ID/PW 자동 로그인 또는 프레시온 화면의 같은 조건 조회가 되는지 확인해주세요."
           : "프레시온 일일배차 데이터를 불러오지 못했습니다.";
       }
     }

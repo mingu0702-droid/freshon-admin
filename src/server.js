@@ -1604,7 +1604,22 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
           stops
         };
       } catch (error) {
-        diagnostics.push(freshonAttemptDiagnostic({ endpoint, variant, result: "error", error }));
+        const diagnostic = freshonAttemptDiagnostic({ endpoint, variant, result: "error", error });
+        diagnostics.push(diagnostic);
+        if (Number(error.status || diagnostic.status) === 401 || diagnostic.type === "html-or-login-response") {
+          const authError = new Error(error.message || "Freshon cookie lookup was rejected.");
+          authError.status = 401;
+          authError.diagnostics = {
+            type: "freshon-cookie-auth-rejected",
+            date,
+            vehicle,
+            center,
+            hasCookie: true,
+            attemptCount: diagnostics.length,
+            attempts: diagnostics.slice(0, 8)
+          };
+          throw authError;
+        }
       }
     }
   }
