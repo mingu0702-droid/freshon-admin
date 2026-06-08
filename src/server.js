@@ -1334,6 +1334,46 @@ function freshonAttemptDiagnostic({ endpoint, variant, result, payload, rows, ma
   };
 }
 
+async function buildDailyRouteFromFreshonLogin({ date, vehicle, center = "" }) {
+  if (!config.freshonId || !config.freshonPassword) {
+    const error = new Error("FRESHON_ID and FRESHON_PASSWORD are not configured for automatic Freshon login.");
+    error.status = 401;
+    error.diagnostics = {
+      type: "missing-freshon-credentials",
+      date,
+      vehicle,
+      center,
+      hasId: Boolean(config.freshonId),
+      hasPassword: Boolean(config.freshonPassword)
+    };
+    throw error;
+  }
+  try {
+    const { refreshDailyRouteData } = await import("./scraper/freshonDailyRoute.js");
+    const result = await refreshDailyRouteData({ date, vehicle, center, forceLogin: true });
+    return {
+      ...result,
+      source: result?.source || "freshon-id-password-login",
+      warning: "Freshon ID/PW automatic login was used because cookie lookup failed or was unavailable."
+    };
+  } catch (error) {
+    const wrapped = new Error(`Freshon ID/PW automatic login failed. ${error.message || String(error)}`);
+    wrapped.status = /Cannot find package 'playwright'|ERR_MODULE_NOT_FOUND/i.test(String(error.message || ""))
+      ? 500
+      : (error.status || 502);
+    wrapped.diagnostics = {
+      type: "freshon-id-password-login",
+      date,
+      vehicle,
+      center,
+      hasId: Boolean(config.freshonId),
+      hasPassword: Boolean(config.freshonPassword),
+      message: error.message || String(error)
+    };
+    throw wrapped;
+  }
+}
+
 function freshonDailyRouteForm({ date, vehicle, center = "", page = 0 }) {
   const centerText = center || "";
   return {
@@ -1713,11 +1753,24 @@ app.get("/api/daily-route", requireView, async (req, res) => {
         return res.json(live);
       }
     } catch (error) {
+      try {
+        const loginLive = await buildDailyRouteFromFreshonLogin({ date, vehicle, center });
+        if (loginLive) {
+          await writeDailyRoute(loginLive);
+          return res.json(loginLive);
+        }
+      } catch (loginError) {
+        error.loginFallback = {
+          error: loginError.message || String(loginError),
+          diagnostics: loginError.diagnostics || loginError.diagnostic || null
+        };
+      }
       if (req.query.source === "freshon") {
         return res.status(error.status || 502).json({
           error: error.message || "Freshon daily dispatch lookup failed.",
           source: "freshon-daily-dispatch",
-          diagnostics: error.diagnostics || error.diagnostic || null
+          diagnostics: error.diagnostics || error.diagnostic || null,
+          loginFallback: error.loginFallback || null
         });
       }
     }

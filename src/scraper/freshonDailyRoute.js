@@ -54,8 +54,8 @@ async function maybeLogin(page) {
   }
 }
 
-async function createLoggedInContext() {
-  if (config.freshonCookie) {
+async function createLoggedInContext({ forceLogin = false } = {}) {
+  if (config.freshonCookie && !forceLogin) {
     const context = await request.newContext({
       baseURL: freshonOrigin,
       extraHTTPHeaders: {
@@ -203,8 +203,8 @@ async function scrapeDailyRouteWithContext(context, { date, vehicle, center = ""
   };
 }
 
-export async function withDailyRouteSession(callback) {
-  const { browser, context } = await createLoggedInContext();
+export async function withDailyRouteSession(callback, options = {}) {
+  const { browser, context } = await createLoggedInContext(options);
   try {
     return await callback((job) => scrapeDailyRouteWithContext(context, job));
   } finally {
@@ -213,6 +213,6 @@ export async function withDailyRouteSession(callback) {
   }
 }
 
-export async function refreshDailyRouteData({ date, vehicle, center = "" }) {
-  return withDailyRouteSession((scrape) => scrape({ date, vehicle, center }));
+export async function refreshDailyRouteData({ date, vehicle, center = "", forceLogin = false }) {
+  return withDailyRouteSession((scrape) => scrape({ date, vehicle, center }), { forceLogin });
 }

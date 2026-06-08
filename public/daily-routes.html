@@ -1769,10 +1769,12 @@
       const diagnostics = errorPayload?.diagnostics || {};
       const attempts = Array.isArray(diagnostics.attempts) ? diagnostics.attempts : [];
       const firstItems = attempts.slice(0, 8);
+      const loginFallback = errorPayload?.loginFallback || null;
       const message = String(errorPayload?.error || "Freshon daily dispatch lookup failed.");
       const chips = [
         ["진단", freshonDiagnosticReason(errorPayload)],
         ["쿠키 설정", diagnostics.hasCookie === false ? "없음" : diagnostics.hasCookie === true ? "있음" : "확인 불가"],
+        ["ID/PW 재시도", loginFallback ? "시도함" : "응답에 없음"],
         ["시도 횟수", diagnostics.attemptCount || attempts.length || 0],
         ["조회 조건", `${diagnostics.date || routeDateInput.value || "-"} / ${diagnostics.vehicle || vehicleSelect.value || "-"}호`]
       ];
@@ -1783,6 +1785,17 @@
           <div class="diagnostic-grid">
             ${chips.map(([label, value]) => `<div class="diagnostic-chip"><b>${esc(label)}</b><br>${esc(value)}</div>`).join("")}
           </div>
+          ${loginFallback ? `
+            <div class="diagnostic-attempt">
+              <b>ID/PW 자동 로그인 재시도 결과</b><br>
+              ${esc(String(loginFallback.error || "").slice(0, 420))}
+            </div>
+          ` : `
+            <div class="diagnostic-attempt">
+              <b>ID/PW 자동 로그인 재시도 기록 없음</b><br>
+              현재 응답에 loginFallback 정보가 없습니다. 최신 배포가 반영되지 않았거나, 서버가 ID/PW 재시도 코드까지 도달하지 못한 상태입니다.
+            </div>
+          `}
           <div class="diagnostic-attempts">
             ${firstItems.map(item => `
               <div class="diagnostic-attempt">

@@ -17,8 +17,9 @@
     .topbar { display:grid; grid-template-columns:minmax(280px,1fr) auto; gap:16px; align-items:center; padding:14px 18px; background:#f9fbfd; border-bottom:1px solid var(--line); }
     h1 { margin:0; font-size:22px; line-height:1.25; }
     .sub { margin:5px 0 0; color:var(--muted); font-size:13px; line-height:1.4; }
-    .actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
-    .btn { border:1px solid #b8c7dc; border-radius:6px; padding:9px 12px; background:#fff; color:var(--navy); font-weight:800; cursor:pointer; white-space:nowrap; }
+    .actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
+    .btn { border:1px solid #b8c7dc; border-radius:6px; padding:8px 10px; background:#fff; color:var(--navy); font-weight:800; cursor:pointer; white-space:nowrap; text-decoration:none; font-size:12px; }
+    .btn.active { border-color:var(--blue); background:var(--blue); color:#fff; }
     .btn.primary { border-color:var(--blue); background:var(--blue); color:#fff; }
     .btn:hover { border-color:var(--blue); color:var(--blue); }
     .btn.primary:hover { color:#fff; background:#0f4bd1; }
@@ -118,6 +119,9 @@
       </div>
       <div class="actions">
         <a class="btn" href="/daily-routes.html">일일동선</a>
+        <a class="btn active" href="/wms-ui-concept.html">WMS</a>
+        <a class="btn" href="/operations-data.html">운영데이터</a>
+        <a class="btn" href="/admin">관리자</a>
         <button class="btn">상세 배차 업로드</button>
         <button class="btn">톤수 요약 업로드</button>
         <button class="btn primary">검토 시작</button>
