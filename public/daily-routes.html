@@ -692,8 +692,7 @@
     <aside>
       <nav class="page-nav" aria-label="페이지 이동">
         <a href="/daily-routes.html" class="active">일일동선</a>
-        <button id="topWmsTab" type="button">WMS</button>
-        <a href="/wms-ui-concept.html">WMS시안</a>
+        <a id="topWmsTab" href="/wms-ui-concept.html">WMS</a>
         <a href="/operations-data.html">운영데이터</a>
         <a href="/admin">관리자</a>
       </nav>
@@ -1013,7 +1012,7 @@
         setWorkTab(button.dataset.workTab);
       });
       topWmsTab.addEventListener("click", () => {
-        setWorkTab("wms");
+        window.location.href = "/wms-ui-concept.html";
       });
       newAreaToolbar.addEventListener("click", (event) => {
         const button = event.target.closest("button");
