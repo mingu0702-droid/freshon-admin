@@ -17,6 +17,8 @@ import { writeDispatchCache } from "./store.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.resolve(__dirname, "..", "public");
+const vehicleAreaSourceUrl = path.join(publicDir, "vehicle-data.js");
+const customerMasterSourceUrl = path.join(publicDir, "customer-master-20260604.json");
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
 const parseExcelScriptPath = path.join(__dirname, "parse_excel.py");
 const uploadDir = path.join(os.tmpdir(), "freshon-upload-files");
@@ -51,6 +53,7 @@ let refreshState = {
 };
 
 let vehicleAreaDataPromise = null;
+let customerMasterDataPromise = null;
 let deliveryAdminSession = {
   cookie: config.deliveryAdminCookie || "",
   authorization: "",
@@ -62,6 +65,83 @@ function normalizeCell(value) {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   if (value === null || value === undefined) return "";
   return String(value).trim();
+}
+
+function normalizeSearchValue(value) {
+  return normalizeCell(value)
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[()]/g, "");
+}
+
+function pickFirstValue(row, keys) {
+  for (const key of keys) {
+    const value = row?.[key];
+    if (normalizeCell(value)) return normalizeCell(value);
+  }
+  return "";
+}
+
+function toFiniteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function fixedDispatchSearchRow(row) {
+  const address = pickFirstValue(row, ["고객주소", "주소", "배송주소", "address", "customerAddress"]);
+  const detailAddress = pickFirstValue(row, ["상세주소", "detailAddress"]);
+  const code = pickFirstValue(row, ["고객코드", "고객ERP코드", "고객사코드", "customerCode", "code"]);
+  const name = pickFirstValue(row, ["고객명", "고객명(업체명)", "고객사명", "업체명", "customerName", "name"]);
+  const vehicle = normalizeVehicleValue(pickFirstValue(row, ["확정호차", "기준호차", "호차", "vehicle"]));
+  const lat = toFiniteNumber(row?.lat ?? row?.위도 ?? row?.latitude);
+  const lng = toFiniteNumber(row?.lng ?? row?.경도 ?? row?.longitude);
+
+  return {
+    code,
+    name,
+    address: [address, detailAddress].filter(Boolean).join(" "),
+    vehicle,
+    center: pickFirstValue(row, ["물류센터", "센터", "center"]),
+    sourceFile: pickFirstValue(row, ["_sourceFile", "sourceFile"]),
+    sourceSheet: pickFirstValue(row, ["_sourceSheet", "sourceSheet"]),
+    gps: pickFirstValue(row, ["GPS정보", "gps"]),
+    lat,
+    lng,
+    hasCoords: lat !== null && lng !== null
+  };
+}
+
+function fixedDispatchSearchScore(item, query, normalizedQuery) {
+  const fields = [item.code, item.name, item.address, item.vehicle, item.center].filter(Boolean);
+  const normalizedFields = fields.map(normalizeSearchValue);
+  if (normalizedFields.some((value) => value === normalizedQuery)) return 100;
+  if (normalizeSearchValue(item.code) === normalizedQuery) return 95;
+  if (normalizeSearchValue(item.name).includes(normalizedQuery)) return 80;
+  if (normalizeSearchValue(item.address).includes(normalizedQuery)) return 70;
+  if (fields.some((value) => value.includes(query))) return 60;
+  if (normalizedFields.some((value) => value.includes(normalizedQuery))) return 50;
+  return 0;
+}
+
+function buildFixedDispatchSearchItems(cache, query) {
+  const normalizedQuery = normalizeSearchValue(query);
+  if (!normalizedQuery) return [];
+  const seen = new Set();
+  return (cache.rows || [])
+    .map(fixedDispatchSearchRow)
+    .map((item) => ({
+      ...item,
+      score: fixedDispatchSearchScore(item, query, normalizedQuery)
+    }))
+    .filter((item) => item.score > 0 && (item.code || item.name || item.address))
+    .filter((item) => {
+      const key = [item.code, item.name, item.address, item.vehicle].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => b.score - a.score || Number(b.hasCoords) - Number(a.hasCoords))
+    .slice(0, 50);
 }
 
 function rowsFromSheetValues(values, file, sheetName) {
@@ -472,7 +552,7 @@ function inferRange(rows) {
   return { startDate: dates[0], endDate: dates[dates.length - 1] };
 }
 async function readVehicleAreaData() {
-  vehicleAreaDataPromise ||= fs.readFile(path.join(publicDir, "vehicle-data.js"), "utf8")
+  vehicleAreaDataPromise ||= fs.readFile(vehicleAreaSourceUrl, "utf8")
     .then((text) => {
       const jsonText = text
         .replace(/^window\.VEHICLE_AREA_DATA\s*=\s*/, "")
@@ -481,6 +561,93 @@ async function readVehicleAreaData() {
     })
     .catch(() => ({ vehicles: [] }));
   return vehicleAreaDataPromise;
+}
+
+async function readCustomerMasterData() {
+  customerMasterDataPromise ||= fs.readFile(customerMasterSourceUrl, "utf8")
+    .then((text) => JSON.parse(text.replace(/^\uFEFF/, "")))
+    .catch(() => ({ customers: [] }));
+  return customerMasterDataPromise;
+}
+
+function customerSearchScore(item, query, normalizedQuery) {
+  const fields = [item.code, item.name, item.address, item.vehicle, item.route, item.sequence].filter(Boolean);
+  const normalizedFields = fields.map(normalizeSearchValue);
+  if (normalizedFields.some((value) => value === normalizedQuery)) return 100;
+  if (normalizeSearchValue(item.code) === normalizedQuery) return 95;
+  if (normalizeSearchValue(item.name).includes(normalizedQuery)) return 85;
+  if (normalizeSearchValue(item.address).includes(normalizedQuery)) return 75;
+  if (fields.some((value) => value.includes(query))) return 65;
+  if (normalizedFields.some((value) => value.includes(normalizedQuery))) return 55;
+  return 0;
+}
+
+function pushCustomerSearchItem(results, seen, item, query, normalizedQuery) {
+  if (!item || !(item.code || item.name || item.address)) return;
+  const score = customerSearchScore(item, query, normalizedQuery);
+  if (!score) return;
+  const key = [item.code, item.name, item.address, item.vehicle, item.sequence].join("|");
+  if (seen.has(key)) return;
+  seen.add(key);
+  results.push({ ...item, score });
+}
+
+async function buildCustomerSearchItems(query) {
+  const normalizedQuery = normalizeSearchValue(query);
+  if (!normalizedQuery) return [];
+  const results = [];
+  const seen = new Set();
+  const customerMaster = await readCustomerMasterData().catch(() => ({ customers: [] }));
+  for (const row of customerMaster.customers || customerMaster.rows || []) {
+    pushCustomerSearchItem(results, seen, {
+      source: "customer-master",
+      code: normalizeCell(row.customerCode || row.code),
+      name: normalizeCell(row.customerName || row.storeName || row.name),
+      address: normalizeCell(row.address),
+      vehicle: normalizeVehicleValue(row.route || row.vehicle || row.vehicleNo),
+      route: normalizeCell(row.logisticsCenter || row.center),
+      sequence: normalizeCell(row.stopOrder || row.sequence),
+      hasCoords: false,
+      lat: null,
+      lng: null
+    }, query, normalizedQuery);
+  }
+  const vehicleAreaData = await readVehicleAreaData().catch(() => ({ vehicles: [] }));
+  for (const vehicle of vehicleAreaData.vehicles || []) {
+    for (const customer of vehicle.customers || []) {
+      pushCustomerSearchItem(results, seen, {
+        source: "vehicle-area",
+        code: normalizeCell(customer.id || customer.code || customer.customerCode),
+        name: normalizeCell(customer.name || customer.customerName),
+        address: normalizeCell(customer.address),
+        vehicle: normalizeVehicleValue(vehicle.vehicle),
+        route: vehicle.area_label || vehicle.primary_area || "",
+        sequence: normalizeCell(customer.sequence || customer.routeOrder || customer.order),
+        hasCoords: Number.isFinite(customer.lat) && Number.isFinite(customer.lng),
+        lat: Number.isFinite(customer.lat) ? customer.lat : null,
+        lng: Number.isFinite(customer.lng) ? customer.lng : null
+      }, query, normalizedQuery);
+    }
+  }
+  const cache = await readDispatchCache().catch(() => ({ rows: [] }));
+  for (const row of cache.rows || []) {
+    const item = fixedDispatchSearchRow(row);
+    pushCustomerSearchItem(results, seen, {
+      source: "fixed-dispatch",
+      code: item.code,
+      name: item.name,
+      address: item.address,
+      vehicle: item.vehicle,
+      route: item.center,
+      sequence: normalizeCell(row?.착순 || row?.순번 || row?.routeOrder),
+      hasCoords: item.hasCoords,
+      lat: item.lat,
+      lng: item.lng
+    }, query, normalizedQuery);
+  }
+  return results
+    .sort((a, b) => b.score - a.score || Number(b.hasCoords) - Number(a.hasCoords))
+    .slice(0, 30);
 }
 
 function normalizeColumnName(value) {
@@ -1091,19 +1258,80 @@ async function freshonFetch(pathname, options = {}) {
 async function readFreshonJson(pathname, options = {}) {
   const response = await freshonFetch(pathname, options);
   const text = await response.text();
+  const preview = String(text || "").replace(/\s+/g, " ").trim().slice(0, 500);
+  const contentType = response.headers.get("content-type") || "";
   let payload = null;
   try {
     payload = text ? JSON.parse(text) : {};
-  } catch {
+  } catch (parseError) {
     payload = { raw: text };
+    const looksHtml = /<!doctype|<html|<body|login|로그인|j_username|password/i.test(text || "");
+    const error = new Error(
+      looksHtml
+        ? "Freshon returned an HTML/login page instead of JSON. The browser session cookie is likely expired or not accepted."
+        : "Freshon returned a non-JSON response."
+    );
+    error.status = looksHtml ? 401 : 502;
+    error.payload = payload;
+    error.diagnostic = {
+      type: looksHtml ? "html-or-login-response" : "json-parse-error",
+      pathname,
+      status: response.status,
+      statusText: response.statusText,
+      contentType,
+      responsePreview: preview,
+      parserMessage: parseError.message
+    };
+    throw error;
   }
   if (!response.ok) {
     const error = new Error(payload?.message || payload?.error || `Freshon HTTP ${response.status}`);
     error.status = response.status;
     error.payload = payload;
+    error.diagnostic = {
+      type: "http-error",
+      pathname,
+      status: response.status,
+      statusText: response.statusText,
+      contentType,
+      responsePreview: preview,
+      payloadKeys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 20) : []
+    };
     throw error;
   }
   return payload;
+}
+
+function freshonAttemptDiagnostic({ endpoint, variant, result, payload, rows, matched, stops, error }) {
+  const base = {
+    endpoint,
+    variant: variant?.label || "",
+    method: variant?.options?.method || "GET",
+    result
+  };
+  if (error) {
+    const diagnostic = error.diagnostic || {};
+    return {
+      ...base,
+      result: "error",
+      type: diagnostic.type || "request-error",
+      status: error.status || diagnostic.status || null,
+      statusText: diagnostic.statusText || "",
+      contentType: diagnostic.contentType || "",
+      message: error.message || String(error),
+      responsePreview: diagnostic.responsePreview || "",
+      parserMessage: diagnostic.parserMessage || ""
+    };
+  }
+  const firstRow = Array.isArray(rows) && rows.length ? rows[0] : null;
+  return {
+    ...base,
+    rowCount: Array.isArray(rows) ? rows.length : 0,
+    matchedCount: Array.isArray(matched) ? matched.length : 0,
+    stopCount: Array.isArray(stops) ? stops.length : 0,
+    payloadKeys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 20) : [],
+    sampleRowKeys: firstRow && typeof firstRow === "object" ? Object.keys(firstRow).slice(0, 20) : []
+  };
 }
 
 function freshonDailyRouteForm({ date, vehicle, center = "", page = 0 }) {
@@ -1270,6 +1498,14 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
   if (!config.freshonCookie) {
     const error = new Error("FRESHON_COOKIE is not configured. Freshon direct lookup needs the browser session cookie.");
     error.status = 401;
+    error.diagnostics = {
+      type: "missing-cookie",
+      date,
+      vehicle,
+      center,
+      hasCookie: false,
+      attempts: []
+    };
     throw error;
   }
   const selected = vehicleTokens(vehicle);
@@ -1293,7 +1529,7 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
     "/bo/wm/dispatch/selectDailyDsptcList",
     "/bo/wm/dispatch/dailyDispatchList"
   ];
-  const errors = [];
+  const diagnostics = [];
   for (const endpoint of endpoints) {
     for (const variant of freshonDailyRouteRequestVariants({ date, vehicle, center })) {
       try {
@@ -1304,11 +1540,17 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
           if (tokens.size) return [...tokens].some((token) => selected.has(token));
           return freshonRowMatchesVehicleCustomer(row, vehicleData);
         });
-        if (!matched.length) continue;
+        if (!matched.length) {
+          diagnostics.push(freshonAttemptDiagnostic({ endpoint, variant, result: "no-vehicle-match", payload, rows, matched }));
+          continue;
+        }
         const stops = matched
           .map((row, index) => buildStopFromFreshonDailyRow(row, vehicle, index + 1))
           .filter((stop) => stop.customerCode || stop.customerName || stop.address);
-        if (!stops.length) continue;
+        if (!stops.length) {
+          diagnostics.push(freshonAttemptDiagnostic({ endpoint, variant, result: "matched-without-stop-fields", payload, rows, matched, stops }));
+          continue;
+        }
         return {
           generatedAt: new Date().toISOString(),
           source: "freshon-daily-dispatch-api",
@@ -1322,13 +1564,25 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
           stops
         };
       } catch (error) {
-        errors.push(`${endpoint} ${variant.label}: ${error.message || String(error)}`);
+        diagnostics.push(freshonAttemptDiagnostic({ endpoint, variant, result: "error", error }));
       }
     }
   }
-  const preferredError = errors.find((message) => !message.includes("timed out after")) || errors[0];
-  const error = new Error(`Freshon daily dispatch lookup failed. ${preferredError || "No matching rows returned."}`);
-  error.status = 502;
+  const preferredError = diagnostics.find((item) => item.result === "error" && !String(item.message || "").includes("timed out after"))
+    || diagnostics.find((item) => item.result === "error")
+    || diagnostics[0];
+  const detail = preferredError?.message || preferredError?.result || "No matching rows returned.";
+  const error = new Error(`Freshon daily dispatch lookup failed. ${detail}`);
+  error.status = preferredError?.status || 502;
+  error.diagnostics = {
+    type: "freshon-daily-route",
+    date,
+    vehicle,
+    center,
+    hasCookie: true,
+    attemptCount: diagnostics.length,
+    attempts: diagnostics.slice(0, 48)
+  };
   throw error;
 }
 
@@ -1399,6 +1653,39 @@ app.get("/api/fixed-dispatch", requireView, async (_req, res) => {
   res.json(await readDispatchCache());
 });
 
+app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => {
+  const q = normalizeCell(req.query.q);
+  if (!q) return res.json({ query: q, results: [] });
+  const cache = await readDispatchCache();
+  res.json({
+    query: q,
+    generatedAt: cache.generatedAt || null,
+    rowCount: cache.rowCount || cache.rows?.length || 0,
+    results: buildFixedDispatchSearchItems(cache, q)
+  });
+});
+
+app.get("/api/mobile/customer-search", requireView, async (req, res) => {
+  const q = normalizeCell(req.query.q);
+  if (!q) return res.json({ query: q, results: [] });
+  const results = await buildCustomerSearchItems(q);
+  res.json({
+    query: q,
+    results: results.map((item) => ({
+      customerCode: item.code,
+      customerName: item.name,
+      address: item.address,
+      vehicle: item.vehicle,
+      route: item.route,
+      sequence: item.sequence,
+      hasCoords: item.hasCoords,
+      lat: item.lat,
+      lng: item.lng,
+      source: item.source
+    }))
+  });
+});
+
 app.get("/api/daily-route", requireView, async (req, res) => {
   const date = String(req.query.date || "");
   const vehicle = String(req.query.vehicle || "");
@@ -1429,7 +1716,8 @@ app.get("/api/daily-route", requireView, async (req, res) => {
       if (req.query.source === "freshon") {
         return res.status(error.status || 502).json({
           error: error.message || "Freshon daily dispatch lookup failed.",
-          source: "freshon-daily-dispatch"
+          source: "freshon-daily-dispatch",
+          diagnostics: error.diagnostics || error.diagnostic || null
         });
       }
     }

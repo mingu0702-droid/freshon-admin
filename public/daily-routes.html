@@ -8,8 +8,8 @@
     :root { --ink:#172033; --muted:#667085; --line:#2563eb; --panel:#ffffff; --edge:#d8e0eb; --soft:#f6f8fb; --focus:#1d4ed8; --danger:#dc2626; --ok:#047857; --warn:#b45309; }
     * { box-sizing:border-box; }
     body { margin:0; font-family:Arial, "Malgun Gothic", sans-serif; color:var(--ink); background:#eaf0f6; }
-    .shell { display:grid; grid-template-columns:380px minmax(0, 1fr); height:100vh; min-height:640px; }
-    aside { background:var(--panel); border-right:1px solid var(--edge); padding:16px; overflow:auto; }
+    .shell { display:grid; grid-template-columns:360px minmax(0, 1fr); height:100vh; min-height:640px; }
+    aside { background:var(--panel); border-right:1px solid var(--edge); padding:14px; overflow:auto; }
     h1 { font-size:22px; margin:0 0 6px; letter-spacing:0; }
     .meta { color:var(--muted); font-size:12px; line-height:1.45; margin-bottom:12px; }
     .section-title { font-size:13px; margin:14px 0 8px; color:#344054; font-weight:900; }
@@ -42,6 +42,8 @@
     .search-hit { border:1px solid var(--edge); background:#fff; border-radius:6px; padding:8px; cursor:pointer; font-size:12px; }
     .search-hit:hover { border-color:#2563eb; background:#eff6ff; }
     .search-hit b { font-size:13px; }
+    .search-hit .source-badge { display:inline-flex; align-items:center; margin-left:4px; padding:1px 5px; border-radius:999px; background:#eef2ff; color:#1d4ed8; font-size:11px; font-weight:700; }
+    .search-hit .no-coord-badge { background:#fff7ed; color:#c2410c; }
     .hidden { display:none; }
     .note { padding:10px; border-radius:6px; background:#fff7ed; color:#9a3412; font-size:12px; line-height:1.45; margin:10px 0; }
     .area-list { margin:0; padding:8px 10px 8px 26px; font-size:13px; line-height:1.65; border:1px solid var(--edge); border-radius:8px; background:#fff; }
@@ -98,7 +100,7 @@
       border-radius:1px 3px 3px 1px;
       box-shadow:0 1px 3px rgba(15,23,42,.3);
     }
-    .control-panel { border:1px solid var(--edge); border-radius:8px; background:var(--soft); padding:10px; margin:12px 0; }
+    .control-panel { border:1px solid var(--edge); border-radius:8px; background:var(--soft); padding:10px; margin:10px 0; }
     .route-controls { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:end; margin:8px 0 0; }
     .route-controls label { margin:0 0 6px; }
     .route-controls button { border:1px solid #2563eb; background:#2563eb; color:#fff; border-radius:6px; padding:9px 12px; font-size:12px; font-weight:900; cursor:pointer; white-space:nowrap; }
@@ -111,7 +113,7 @@
     .data-actions { position:absolute; right:14px; top:14px; z-index:520; display:flex; gap:8px; }
     .data-actions button, .data-actions a { border:1px solid #cbd5e1; background:rgba(255,255,255,.94); color:#0f172a; border-radius:6px; padding:8px 10px; font-size:12px; font-weight:900; text-decoration:none; box-shadow:0 8px 22px rgba(15,23,42,.13); cursor:pointer; backdrop-filter:blur(6px); }
     .data-actions button:hover, .data-actions a:hover { border-color:#2563eb; color:#1d4ed8; }
-    .new-area-panel, .wms-panel { border:1px solid #cfd9e8; border-radius:8px; background:#f8fafc; padding:12px; margin:12px 0; }
+    .new-area-panel, .wms-panel { border:1px solid #cfd9e8; border-radius:8px; background:#f8fafc; padding:10px; margin:10px 0; }
     .new-area-panel h2, .wms-panel h2 { font-size:15px; margin:0 0 6px; }
     .new-area-panel textarea, .wms-panel textarea { width:100%; min-height:92px; resize:vertical; border:1px solid var(--edge); border-radius:6px; padding:9px; font-size:12px; font-family:Arial, "Malgun Gothic", sans-serif; background:#fff; line-height:1.45; }
     .new-area-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; }
@@ -293,7 +295,6 @@
     body[data-work-tab="wms"] aside > #vehicleNote,
     body[data-work-tab="wms"] aside > #backToOverviewButton,
     body[data-work-tab="wms"] .insight-work,
-    body[data-work-tab="route"] .new-work,
     body[data-work-tab="route"] .wms-work,
     body[data-work-tab="new"] .route-work,
     body[data-work-tab="new"] .wms-work,
@@ -311,7 +312,15 @@
     body[data-work-tab="wms"] .wms-panel {
       position:relative;
       height:calc(100vh - 64px);
-      display:block;
+      display:grid;
+      grid-template-columns:minmax(760px, 58fr) minmax(520px, 42fr);
+      grid-template-rows:42px 210px minmax(320px, 1fr);
+      grid-template-areas:
+        "results tools"
+        "results map"
+        "results detail";
+      gap:8px;
+      padding:8px;
       margin:0;
       background:#f3f6fb;
       overflow:hidden;
@@ -325,11 +334,12 @@
     body[data-work-tab="wms"] .wms-panel > .wms-filters { display:none; }
     body[data-work-tab="wms"] #wmsPasteInput { display:none; }
     body[data-work-tab="wms"] .wms-panel > .wms-file {
-      position:absolute;
-      right:12px;
-      top:8px;
+      grid-area:tools;
+      position:relative;
+      right:auto;
+      top:auto;
       z-index:30;
-      width:min(280px, calc(36vw - 28px));
+      width:100%;
       margin:0;
       background:rgba(255,255,255,.94);
       border:1px solid #dbe4f0;
@@ -338,29 +348,33 @@
     }
     body[data-work-tab="wms"] .wms-file input[type="file"] { width:100%; padding:7px 9px; font-size:12px; border:0; background:transparent; }
     body[data-work-tab="wms"] .wms-actions {
-      position:absolute;
-      right:12px;
-      top:48px;
+      grid-area:tools;
+      position:relative;
+      justify-self:end;
+      align-self:end;
+      right:auto;
+      top:auto;
       z-index:30;
       display:grid;
       grid-template-columns:1fr 1fr;
       gap:6px;
-      width:min(210px, calc(32vw - 28px));
+      width:210px;
       margin:0;
     }
     body[data-work-tab="wms"] .wms-actions button { min-width:0; min-height:32px; padding:6px 8px; border-radius:6px; }
     body[data-work-tab="wms"] .wms-map-slot {
-      position:absolute;
-      right:12px;
-      top:86px;
+      grid-area:map;
+      position:relative;
+      right:auto;
+      top:auto;
       z-index:20;
       display:block;
-      width:min(690px, 45vw);
-      height:210px;
-      min-width:360px;
-      min-height:170px;
-      max-width:calc(100vw - 520px);
-      max-height:calc(100vh - 180px);
+      width:100%;
+      height:100%;
+      min-width:0;
+      min-height:0;
+      max-width:none;
+      max-height:none;
       resize:none;
       border:1px solid var(--edge);
       border-radius:6px;
@@ -379,6 +393,7 @@
     body[data-work-tab="wms"] .wms-resize-handle.left::after { content:"← 지도"; }
     body[data-work-tab="wms"] .wms-resize-handle.bottom::after { content:"높이 ↕"; }
     body[data-work-tab="wms"] .wms-results {
+      grid-area:results;
       max-height:none;
       height:100%;
       min-height:280px;
@@ -389,10 +404,10 @@
       background:#f3f6fb;
     }
     body[data-work-tab="wms"] .wms-results:empty::before {
-      content:"WMS 배차 검토 대기\\A\\A우측 상단에서 상세 파일과 차량톤수 요약 파일 2개를 올린 뒤 분석하세요.\\A왼쪽은 차량호차 리스트, 오른쪽은 지도와 착지 상세로 고정됩니다.";
+      content:"WMS 배차 검토 대기\\A\\A오른쪽 위에서 상세 파일과 차량톤수 요약 파일 2개를 올린 뒤 분석하세요.\\A분석 후 이 영역은 차량호차 리스트로 채워집니다.";
       white-space:pre-line;
       display:block;
-      width:calc(54% - 16px);
+      width:calc(100% - 24px);
       height:calc(100% - 24px);
       margin:12px;
       padding:24px;
@@ -405,28 +420,88 @@
       background:linear-gradient(180deg,#fff,#f8fafc);
     }
     body[data-work-tab="wms"] .wms-board {
-      grid-template-columns:minmax(780px, .56fr) minmax(560px, .44fr);
-      gap:8px;
+      display:block;
       height:100%;
-      padding:8px;
+      padding:0;
       background:#f3f6fb;
     }
-    body[data-work-tab="wms"] .wms-board-list,
-    body[data-work-tab="wms"] .wms-board-detail {
+    body[data-work-tab="wms"] .wms-board-list {
       border:1px solid #d8e0eb;
       border-radius:8px;
       background:#fff;
       box-shadow:0 2px 8px rgba(15,23,42,.04);
+      height:100%;
     }
-    body[data-work-tab="wms"] .wms-board-detail { padding-top:304px; }
+    body[data-work-tab="wms"] .wms-board-detail {
+      position:absolute;
+      right:8px;
+      bottom:8px;
+      width:calc(42% - 12px);
+      height:calc(100% - 268px);
+      min-height:300px;
+      border:1px solid #d8e0eb;
+      border-radius:8px;
+      background:#fff;
+      box-shadow:0 2px 8px rgba(15,23,42,.04);
+      overflow:auto;
+      padding-top:0;
+    }
     body[data-work-tab="wms"] .wms-board-title { top:0; min-height:38px; background:#e9eef6; border-bottom:1px solid #d8e0eb; }
     body[data-work-tab="wms"] .wms-sheet-head { top:39px; }
+    body[data-work-tab="route"] .shell {
+      grid-template-columns:348px minmax(0, 1fr);
+      background:#eaf0f6;
+    }
+    body[data-work-tab="route"] aside {
+      padding:12px;
+      background:#f8fafc;
+    }
+    body[data-work-tab="route"] h1 {
+      font-size:19px;
+      margin-bottom:4px;
+    }
+    body[data-work-tab="route"] aside > .meta {
+      margin-bottom:8px;
+      line-height:1.35;
+    }
+    body[data-work-tab="route"] .page-nav {
+      margin-bottom:10px;
+      grid-template-columns:repeat(3, minmax(0, 1fr));
+    }
+    body[data-work-tab="route"] .control-panel {
+      display:grid;
+      gap:8px;
+      margin:8px 0;
+      padding:10px;
+      background:#fff;
+      box-shadow:0 1px 4px rgba(15,23,42,.05);
+    }
+    body[data-work-tab="route"] .control-panel label {
+      margin:0 0 4px;
+    }
+    body[data-work-tab="route"] .route-field-grid {
+      display:grid;
+      grid-template-columns:minmax(0, 1fr) 112px;
+      gap:8px;
+      align-items:end;
+    }
+    body[data-work-tab="route"] .route-search-panel .search-results {
+      max-height:190px;
+      overflow:auto;
+      padding-right:2px;
+    }
+    body[data-work-tab="route"] .search-hit {
+      padding:8px;
+    }
+    body[data-work-tab="route"] .task-tabs {
+      margin:8px 0;
+    }
     body[data-work-tab="route"] .route-work.control-panel,
     body[data-work-tab="new"] .new-area-panel {
       border-radius:8px;
-      background:#f8fafc;
+      background:#fff;
       border-color:#d8e0eb;
-      box-shadow:none;
+      box-shadow:0 1px 4px rgba(15,23,42,.05);
     }
     body[data-work-tab="route"] .route-controls {
       display:grid;
@@ -448,6 +523,43 @@
       padding:8px;
       line-height:1.45;
     }
+    body[data-work-tab="route"] .new-area-panel {
+      background:#fff;
+      box-shadow:0 1px 4px rgba(15,23,42,.05);
+    }
+    body[data-work-tab="route"] .new-area-panel h2 {
+      font-size:14px;
+    }
+    body[data-work-tab="route"] .new-area-panel textarea {
+      min-height:68px;
+      max-height:120px;
+    }
+    body[data-work-tab="route"] .new-area-summary {
+      grid-template-columns:repeat(3, minmax(0, 1fr));
+    }
+    body[data-work-tab="route"] .new-area-results {
+      max-height:220px;
+    }
+    body[data-work-tab="route"] .insight-work {
+      display:none;
+    }
+    body[data-work-tab="route"] .data-actions {
+      top:10px;
+      right:10px;
+    }
+    body[data-work-tab="route"] .legend {
+      max-width:270px;
+      right:10px;
+      bottom:10px;
+    }
+    .freshon-diagnostics { display:grid; gap:7px; color:#334155; }
+    .freshon-diagnostics b { color:#0f172a; }
+    .freshon-diagnostics .diagnostic-main { color:#991b1b; font-weight:900; }
+    .freshon-diagnostics .diagnostic-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px; }
+    .freshon-diagnostics .diagnostic-chip { border:1px solid #dbe5f2; border-radius:6px; background:#f8fafc; padding:6px 7px; overflow-wrap:anywhere; }
+    .freshon-diagnostics .diagnostic-attempts { display:grid; gap:5px; max-height:220px; overflow:auto; }
+    .freshon-diagnostics .diagnostic-attempt { border:1px solid #fecaca; border-radius:6px; background:#fff7f7; padding:6px 7px; overflow-wrap:anywhere; }
+    .freshon-diagnostics .diagnostic-preview { color:#475569; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:11px; }
 
     @media (max-width: 880px) {
       .shell { grid-template-columns:1fr; grid-template-rows:380px 1fr; }
@@ -472,19 +584,25 @@
         <a href="/admin">관리자</a>
       </nav>
 
-      <h1>운영지도</h1>
-      <div class="meta">WMS 배차 검토, 일일동선, 신규권역 판단을 한 화면에서 봅니다.</div>
-      <div class="control-panel">
-        <label for="viewMode">보기</label>
-        <select id="viewMode">
-          <option value="overview:osan">오산센터 권역</option>
-          <option value="overview:yeongnam">영남권 권역</option>
-          <option value="overview:honam">호남권 권역</option>
-          <option value="overview:all">전체 권역</option>
-          <option value="detail">선택 호차 상세</option>
-        </select>
-        <label for="vehicleSelect">호차</label>
-        <select id="vehicleSelect"></select>
+      <h1>일일동선 운영지도</h1>
+      <div class="meta">고객/주소 검색, 신규주소 권역 판단, 호차별 일일동선을 지도 중심으로 확인합니다.</div>
+      <div class="control-panel route-search-panel">
+        <div class="route-field-grid">
+          <div>
+            <label for="viewMode">보기</label>
+            <select id="viewMode">
+              <option value="overview:osan">오산센터 권역</option>
+              <option value="overview:yeongnam">영남권 권역</option>
+              <option value="overview:honam">호남권 권역</option>
+              <option value="overview:all">전체 권역</option>
+              <option value="detail">선택 호차 상세</option>
+            </select>
+          </div>
+          <div>
+            <label for="vehicleSelect">호차</label>
+            <select id="vehicleSelect"></select>
+          </div>
+        </div>
         <label for="vehicleSearchInput">호차 검색</label>
         <input id="vehicleSearchInput" placeholder="101, 용08, 척01">
         <div id="vehicleSearchResults" class="search-results"></div>
@@ -628,6 +746,9 @@
     let selectedWmsVehicle = "";
     let activeLoadStatus = "";
     let flatVehicleCustomerCache = null;
+    let savedCustomerSearchHits = [];
+    let savedCustomerSearchQuery = "";
+    let savedCustomerSearchTimer = null;
     const geocodeCache = new Map();
 
     const fmt = new Intl.NumberFormat("ko-KR");
@@ -706,11 +827,16 @@
         const hits = getVehicleSearchHits();
         if (hits.length) openVehicleDetail(hits[0].vehicle);
       });
-      customerSearchInput.addEventListener("input", renderCustomerSearchResults);
+      customerSearchInput.addEventListener("input", () => {
+        renderCustomerSearchResults();
+        scheduleSavedCustomerSearch();
+      });
       customerSearchInput.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") return;
-        const hits = getCustomerSearchHits();
-        if (hits.length) openCustomerSearchHit(hits[0]);
+        const hits = getCombinedCustomerSearchHits();
+        if (!hits.length) return;
+        if (hits[0].type === "saved") openSavedCustomerSearchHit(hits[0].item);
+        else openCustomerSearchHit(hits[0].item);
       });
       backToOverviewButton.addEventListener("click", () => {
         viewMode.value = getLastOverviewMode();
@@ -910,20 +1036,120 @@
         .slice(0, 12);
     }
 
+    function getSavedCustomerSearchHits() {
+      const q = customerSearchInput.value.trim();
+      if (!q || savedCustomerSearchQuery !== q) return [];
+      return savedCustomerSearchHits.slice(0, 12);
+    }
+
+    function getCombinedCustomerSearchHits() {
+      const localHits = getCustomerSearchHits().map(item => ({ type: "map", item }));
+      const localKeys = new Set(localHits.map(({ item }) => [
+        item.customer.id,
+        item.customer.name,
+        item.customer.address,
+        item.vehicle.vehicle
+      ].join("|")));
+      const savedHits = getSavedCustomerSearchHits()
+        .filter(item => !localKeys.has([item.code, item.name, item.address, item.vehicle].join("|")))
+        .map(item => ({ type: "saved", item }));
+      return [...localHits, ...savedHits].slice(0, 18);
+    }
+
+    function scheduleSavedCustomerSearch() {
+      const q = customerSearchInput.value.trim();
+      window.clearTimeout(savedCustomerSearchTimer);
+      if (!q) {
+        savedCustomerSearchQuery = "";
+        savedCustomerSearchHits = [];
+        return;
+      }
+      savedCustomerSearchTimer = window.setTimeout(async () => {
+        try {
+          const res = await fetch(`/api/fixed-dispatch/customer-search?q=${encodeURIComponent(q)}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const payload = await res.json();
+          if (customerSearchInput.value.trim() !== q) return;
+          savedCustomerSearchQuery = q;
+          savedCustomerSearchHits = Array.isArray(payload.results) ? payload.results : [];
+          renderCustomerSearchResults();
+        } catch (error) {
+          if (customerSearchInput.value.trim() !== q) return;
+          savedCustomerSearchQuery = q;
+          savedCustomerSearchHits = [];
+          renderCustomerSearchResults();
+        }
+      }, 250);
+    }
+
     function renderCustomerSearchResults() {
-      const hits = getCustomerSearchHits();
-      customerSearchResults.innerHTML = hits.map(({ vehicle, customer }, index) => `
+      const hits = getCombinedCustomerSearchHits();
+      customerSearchResults.innerHTML = hits.map((hit, index) => {
+        if (hit.type === "saved") {
+          const item = hit.item;
+          const coordBadge = item.hasCoords
+            ? `<span class="source-badge">저장자료</span>`
+            : `<span class="source-badge no-coord-badge">좌표 없음</span>`;
+          return `
         <div class="search-hit" data-customer-hit="${index}">
-          <b>${esc(customer.name || "-")}</b> · ${esc(vehicle.vehicle)}호<br>
+          <b>${esc(item.name || "-")}</b> · ${esc(item.vehicle ? `${item.vehicle}호` : "호차 없음")} ${coordBadge}<br>
+          ${esc(item.code || "")} · ${esc(item.address || "")}
+        </div>
+      `;
+        }
+        const { vehicle, customer } = hit.item;
+        return `
+        <div class="search-hit" data-customer-hit="${index}">
+          <b>${esc(customer.name || "-")}</b> · ${esc(vehicle.vehicle)}호 <span class="source-badge">지도</span><br>
           ${esc(customer.id || "")} · ${esc(customer.address || "")}
         </div>
-      `).join("");
+      `;
+      }).join("");
       customerSearchResults.querySelectorAll("[data-customer-hit]").forEach(el => {
         el.addEventListener("click", () => {
-          const hit = getCustomerSearchHits()[Number(el.dataset.customerHit)];
-          if (hit) openCustomerSearchHit(hit);
+          const hit = getCombinedCustomerSearchHits()[Number(el.dataset.customerHit)];
+          if (!hit) return;
+          if (hit.type === "saved") openSavedCustomerSearchHit(hit.item);
+          else openCustomerSearchHit(hit.item);
         });
       });
+    }
+
+    function findVehicleByNumber(vehicleNumber) {
+      const normalized = String(vehicleNumber || "").replace(/\D/g, "");
+      if (!normalized) return null;
+      return data.vehicles.find(v => String(v.vehicle) === normalized) || null;
+    }
+
+    function openSavedCustomerSearchHit(item) {
+      const vehicle = findVehicleByNumber(item.vehicle);
+      if (vehicle) openVehicleDetail(vehicle.vehicle);
+      customerSearchInput.value = item.code || item.name || item.address || "";
+      customerSearchResults.innerHTML = "";
+      if (!item.hasCoords) {
+        routeStatus.textContent = `${item.name || item.code || "검색 결과"}: 주소는 저장자료에 있지만 좌표가 없어 지도에는 표시하지 못합니다. 저장자료 검색 결과로는 확인되었습니다.`;
+        return;
+      }
+      setTimeout(() => {
+        clearMapLayers();
+        const lat = Number(item.lat);
+        const lng = Number(item.lng);
+        addKakaoLabel(
+          [lat, lng],
+          `<span class="customer-pin" style="--pin-color:#dc2626"></span>`,
+          "customer-pin-wrap",
+          labelLayer,
+          () => openInfoWindow(
+            new kakao.maps.LatLng(lat, lng),
+            `<b>${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>고객 코드: ${esc(item.code || "-")}<br>주소: ${esc(item.address || "-")}`
+          )
+        );
+        setKakaoView(lat, lng, 4);
+        openInfoWindow(
+          new kakao.maps.LatLng(lat, lng),
+          `<b>${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>고객 코드: ${esc(item.code || "-")}<br>주소: ${esc(item.address || "-")}`
+        );
+      }, 0);
     }
 
     function openCustomerSearchHit(hit) {
@@ -1363,6 +1589,59 @@
       fitKakaoBounds(boundsPoints);
     }
 
+    function freshonDiagnosticReason(errorPayload) {
+      const message = String(errorPayload?.error || "");
+      const diagnostics = errorPayload?.diagnostics || {};
+      const attempts = Array.isArray(diagnostics.attempts) ? diagnostics.attempts : [];
+      const firstError = attempts.find(item => item.result === "error") || attempts[0] || {};
+      const type = firstError.type || diagnostics.type || "";
+      if (/FRESHON_COOKIE|missing-cookie/i.test(message) || diagnostics.hasCookie === false) {
+        return "서버에 Freshon 쿠키가 설정되어 있지 않습니다.";
+      }
+      if (/401|Unauthorized|html-or-login-response|login/i.test(`${message} ${type}`)) {
+        return "쿠키는 들어갔지만 Freshon이 로그인 화면/권한 오류를 돌려준 것으로 보입니다.";
+      }
+      if (/json-parse-error|non-JSON/i.test(`${message} ${type}`)) {
+        return "Freshon API가 JSON 데이터가 아닌 다른 형식으로 응답했습니다.";
+      }
+      if (attempts.some(item => item.result === "no-vehicle-match")) {
+        return "Freshon 응답은 왔지만 선택한 날짜/호차와 맞는 행을 찾지 못했습니다.";
+      }
+      return "Freshon 직접 조회 조건 또는 API 응답 구조를 추가 확인해야 합니다.";
+    }
+
+    function renderFreshonDiagnostics(errorPayload) {
+      const diagnostics = errorPayload?.diagnostics || {};
+      const attempts = Array.isArray(diagnostics.attempts) ? diagnostics.attempts : [];
+      const firstItems = attempts.slice(0, 8);
+      const message = String(errorPayload?.error || "Freshon daily dispatch lookup failed.");
+      const chips = [
+        ["진단", freshonDiagnosticReason(errorPayload)],
+        ["쿠키 설정", diagnostics.hasCookie === false ? "없음" : diagnostics.hasCookie === true ? "있음" : "확인 불가"],
+        ["시도 횟수", diagnostics.attemptCount || attempts.length || 0],
+        ["조회 조건", `${diagnostics.date || routeDateInput.value || "-"} / ${diagnostics.vehicle || vehicleSelect.value || "-"}호`]
+      ];
+      return `
+        <div class="freshon-diagnostics">
+          <div class="diagnostic-main">프레시온 직접 조회 실패</div>
+          <div>${esc(message.slice(0, 520))}</div>
+          <div class="diagnostic-grid">
+            ${chips.map(([label, value]) => `<div class="diagnostic-chip"><b>${esc(label)}</b><br>${esc(value)}</div>`).join("")}
+          </div>
+          <div class="diagnostic-attempts">
+            ${firstItems.map(item => `
+              <div class="diagnostic-attempt">
+                <b>${esc(item.endpoint || "-")} · ${esc(item.variant || "-")}</b><br>
+                결과: ${esc(item.result || item.type || "-")} · 상태: ${esc(item.status || "-")} · 행: ${esc(item.rowCount ?? "-")} / 매칭: ${esc(item.matchedCount ?? "-")}<br>
+                ${item.message ? `<span>${esc(String(item.message).slice(0, 260))}</span><br>` : ""}
+                ${item.responsePreview ? `<span class="diagnostic-preview">${esc(String(item.responsePreview).slice(0, 260))}</span>` : ""}
+              </div>
+            `).join("") || `<div class="diagnostic-attempt"><b>시도 기록이 없습니다.</b></div>`}
+          </div>
+        </div>
+      `;
+    }
+
     async function renderDailyRoute(vehicle, color) {
       const date = routeDateInput.value;
       if (!date) {
@@ -1382,10 +1661,7 @@
         clearTimeout(timer);
         if (!response.ok) {
           const error = await response.json().catch(() => ({}));
-          const message = String(error.error || "");
-          routeStatus.textContent = message
-            ? `프레시온 직접 조회 실패: ${/401|FRESHON_COOKIE|Unauthorized/i.test(message) ? "로그인 세션(FRESHON_COOKIE)이 없거나 만료됐습니다. Render 환경변수의 프레시온 쿠키를 갱신해야 합니다." : message.slice(0, 520)}`
-            : "프레시온 직접 조회에서 해당 날짜/호차 동선을 찾지 못했습니다.";
+          routeStatus.innerHTML = renderFreshonDiagnostics(error);
           return;
         }
         const payload = await response.json();
