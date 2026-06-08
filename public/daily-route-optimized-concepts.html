@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Freshon 일일동선 최적화 시안 3종</title>
+  <style>
+    :root{--bg:#eaf0f6;--panel:#fff;--ink:#172033;--muted:#667085;--line:#d8e0eb;--blue:#2563eb;--soft:#eff6ff;--green:#047857;--amber:#b45309;--red:#dc2626;--shadow:0 12px 28px rgba(15,23,42,.12)}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Malgun Gothic",sans-serif;color:var(--ink);background:var(--bg);letter-spacing:0}
+    button,input,select{font:inherit}button{cursor:pointer}.app{height:100vh;min-height:720px;display:grid;grid-template-rows:auto auto auto 1fr}
+    .top{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:11px 16px;background:#fbfcfe;border-bottom:1px solid var(--line)}
+    h1{margin:0;font-size:21px}.caption{margin:4px 0 0;color:var(--muted);font-size:12px}.nav{display:flex;gap:6px;flex-wrap:wrap}.nav a{border:1px solid #b8c7dc;border-radius:6px;background:#fff;color:#344054;padding:8px 10px;font-size:12px;font-weight:900;text-decoration:none}.nav .active{border-color:var(--blue);background:var(--blue);color:#fff}
+    .bar{display:grid;grid-template-columns:130px 140px 140px 1fr;gap:8px;padding:9px 16px;background:#fff;border-bottom:1px solid var(--line)}label{display:block;color:#344054;font-size:11px;font-weight:900;margin:0 0 4px}select,input{width:100%;border:1px solid var(--line);border-radius:6px;padding:8px 9px;background:#fff;color:var(--ink);font-size:13px}.btn{align-self:end;border:1px solid var(--blue);border-radius:6px;background:var(--blue);color:#fff;padding:8px 11px;font-size:12px;font-weight:900;white-space:nowrap}
+    .tabs{display:flex;gap:6px;padding:8px 16px;background:#f8fafc;border-bottom:1px solid var(--line);align-items:center;min-height:48px;flex:0 0 auto}.tab{border:1px solid #cbd5e1;border-radius:999px;background:#fff;color:#344054;padding:8px 12px;font-size:12px;font-weight:900;line-height:1;min-height:32px}.tab.active{border-color:var(--blue);background:var(--soft);color:#1d4ed8}
+    .concept{display:none;min-height:0}.concept.active{display:grid}
+    .map{position:relative;background:radial-gradient(circle at 26% 33%,rgba(37,99,235,.14),transparent 22%),radial-gradient(circle at 70% 62%,rgba(4,120,87,.12),transparent 21%),linear-gradient(76deg,transparent 0 20%,rgba(148,163,184,.42) 20.2% 21.1%,transparent 21.4% 100%),linear-gradient(118deg,transparent 0 42%,rgba(148,163,184,.46) 42.3% 43.1%,transparent 43.4% 100%),linear-gradient(90deg,rgba(37,99,235,.08) 1px,transparent 1px),linear-gradient(rgba(37,99,235,.08) 1px,transparent 1px),#f8fafc;background-size:auto,auto,260px 210px,230px 190px,42px 42px,42px 42px;overflow:hidden}
+    .pin{position:absolute;width:28px;height:28px;border:3px solid #fff;border-radius:50%;background:var(--blue);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:900;transform:translate(-50%,-50%);box-shadow:0 4px 12px rgba(23,32,51,.3);z-index:4}.pin.warn{background:var(--amber)}.pin.done{background:var(--green)}.pin.active{width:34px;height:34px;outline:5px solid rgba(37,99,235,.18)}
+    .line{position:absolute;height:6px;border-radius:999px;background:var(--blue);transform-origin:left center;opacity:.85;z-index:3}.area{position:absolute;border:1px solid rgba(37,99,235,.24);border-radius:999px;padding:6px 10px;background:rgba(255,255,255,.86);color:#1d4ed8;font-size:12px;font-weight:900;z-index:2}.depot{position:absolute;left:10%;top:72%;border-radius:8px;background:#172033;color:#fff;padding:8px 10px;font-size:12px;font-weight:900;z-index:5}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);overflow:hidden}.head{display:flex;justify-content:space-between;gap:8px;padding:11px 12px;border-bottom:1px solid var(--line);background:#fbfcfe}.head h2{margin:0;font-size:15px}.head small{display:block;margin-top:3px;color:var(--muted)}
+    .chip{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:900;white-space:nowrap}.blue{background:var(--soft);color:#1d4ed8}.green{background:#e5f7ef;color:var(--green)}.amber{background:#fff7ed;color:var(--amber)}.red{background:#fee2e2;color:var(--red)}
+    .list{display:grid;gap:7px;padding:9px;overflow:auto}.item{border:1px solid var(--line);border-radius:8px;background:#fff;padding:9px;display:grid;gap:4px}.item b{font-size:13px}.item small{color:var(--muted);line-height:1.35}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:9px;border-top:1px solid var(--line);background:#fff}.stat{border:1px solid var(--line);border-radius:7px;background:#f8fafc;padding:8px}.stat span{display:block;color:var(--muted);font-size:11px;margin-bottom:3px}.stat b{font-size:15px}
+    .c1{grid-template-columns:360px minmax(0,1fr);gap:10px;padding:10px;min-height:0}.c1 .map{border:1px solid var(--line);border-radius:8px;min-height:0}.c1 .panel{min-height:0}
+    .mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}.mini-card{border:1px solid var(--line);border-radius:7px;background:#f8fafc;padding:8px}.mini-card span{display:block;color:var(--muted);font-size:11px;margin-bottom:3px}.mini-card b{font-size:14px}.result-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:9px;display:grid;gap:4px}.result-card.active{border-color:var(--blue);background:#f5f8ff}.result-card b{font-size:13px}.result-card small{color:var(--muted);line-height:1.35}.map-note{position:absolute;right:14px;bottom:14px;z-index:8;width:260px;border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.95);box-shadow:0 8px 22px rgba(15,23,42,.12);padding:10px}.map-note b{display:block;font-size:13px;margin-bottom:5px}.map-note small{display:block;color:var(--muted);line-height:1.4}
+    .c2{grid-template-rows:minmax(0,1fr) 190px;gap:10px;padding:10px;min-height:0}.c2 .map{border:1px solid var(--line);border-radius:8px}.timeline{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;padding:9px}.stopbox{border:1px solid var(--line);border-radius:8px;background:#fff;padding:9px}.stopbox b{display:block;font-size:13px}.stopbox small{color:var(--muted)}
+    .c3{grid-template-columns:minmax(0,1fr) 360px;gap:10px;padding:10px;min-height:0}.c3 .map{border:1px solid var(--line);border-radius:8px}.drawer{display:grid;grid-template-rows:auto 1fr;min-height:0}
+    .overlay{position:absolute;left:14px;top:14px;z-index:8;display:flex;gap:8px;flex-wrap:wrap}.overlay .stat{background:rgba(255,255,255,.94);box-shadow:0 8px 22px rgba(15,23,42,.12)}
+    @media(max-width:1000px){.bar,.c1,.c3{display:block}.c2{display:block}.map{height:560px}.panel{margin-bottom:10px}.timeline{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.top{display:block}.nav{margin-top:10px}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div><h1>일일동선 최적화 시안 3종</h1><p class="caption">기본 운영지도 데이터를 베이스로, 배차/라우팅 서비스의 지도 중심 흐름을 참고한 비교 시안입니다.</p></div>
+      <nav class="nav"><a class="active" href="#">일일동선</a><a href="#">WMS</a><a href="#">운영데이터</a><a href="#">관리자</a></nav>
+    </header>
+    <section class="bar">
+      <div><label>센터</label><select><option>오산센터</option></select></div>
+      <div><label>날짜</label><input type="date" value="2026-06-08"></div>
+      <div><label>호차</label><select><option>101호차</option><option>204호차</option></select></div>
+      <div><label>비교 기준</label><input placeholder="운영지도 데이터 기반 시안 비교" readonly></div>
+    </section>
+    <nav class="tabs">
+      <button class="tab active" data-concept="c1">A. 운영지도 확장형</button>
+      <button class="tab" data-concept="c2">B. 지도+타임라인형</button>
+      <button class="tab" data-concept="c3">C. 문제해결 집중형</button>
+    </nav>
+
+    <main class="concept c1 active" id="c1">
+      <aside class="panel">
+        <div class="head"><div><h2>A. 운영지도 확장형</h2><small>현재 운영지도처럼 왼쪽에서 검색하고 오른쪽 지도에서 바로 확인합니다.</small></div><span class="chip blue">가장 현실적</span></div>
+        <div class="list">
+          <div class="item">
+            <b>고객/주소 검색</b>
+            <small>고객코드, 고객명, 주소로 검색합니다. 좌표가 없어도 결과는 유지합니다.</small>
+            <input placeholder="S10922, 할맥, 은평구 진흥로">
+          </div>
+          <div class="result-card active">
+            <b>S10922 · 할맥 은평점</b>
+            <small>서울 은평구 진흥로 82</small>
+            <small><span class="chip blue">101호차 서북권</span> <span class="chip green">지도 표시</span></small>
+          </div>
+          <div class="result-card">
+            <b>S12015 · 연신내 키친</b>
+            <small>서울 은평구 연서로 247</small>
+            <small><span class="chip blue">101호차 서북권</span> <span class="chip amber">좌표 확인</span></small>
+          </div>
+          <div class="item">
+            <b>신규주소 권역 판단</b>
+            <small>새 주소를 붙여넣으면 가까운 기존 고객과 추천 호차를 보여줍니다.</small>
+            <input placeholder="예: 서울 은평구 연서로 신규 매장">
+          </div>
+          <div class="result-card">
+            <b>신규주소 판단 결과</b>
+            <small>추천: 101호차 서북권</small>
+            <small>가까운 기존 고객: S12015 연신내 키친, S12551 구산 델리</small>
+          </div>
+          <div class="item">
+            <b>호차 동선 보기</b>
+            <small>운영지도 위에 일일동선 선과 착순 핀을 겹쳐 표시합니다.</small>
+            <button class="btn" type="button">101호차 동선 보기</button>
+          </div>
+          <div class="mini-grid">
+            <div class="mini-card"><span>기사</span><b>김도윤</b></div>
+            <div class="mini-card"><span>전화번호</span><b>010-2388-1201</b></div>
+            <div class="mini-card"><span>차량톤수</span><b>1.2톤</b></div>
+            <div class="mini-card"><span>착지수</span><b>18곳</b></div>
+          </div>
+        </div>
+      </aside>
+      <section class="map" data-map="c1"></section>
+    </main>
+
+    <main class="concept c2" id="c2">
+      <section class="map" data-map="c2"></section>
+      <section class="panel">
+        <div class="head"><div><h2>B. 지도 + 타임라인형</h2><small>지도는 크게 두고 아래에 착순 타임라인만 놓습니다.</small></div><span class="chip green">동선 확인 최적</span></div>
+        <div class="timeline" id="timeline"></div>
+      </section>
+    </main>
+
+    <main class="concept c3" id="c3">
+      <section class="map" data-map="c3"></section>
+      <aside class="panel drawer">
+        <div class="head"><div><h2>C. 문제해결 집중형</h2><small>좌표 없음, 주소 오류, 끝단 착지만 오른쪽에서 해결합니다.</small></div><span class="chip amber">오류 처리</span></div>
+        <div class="list">
+          <div class="item"><b>좌표 없음 2건</b><small>S12015 연신내 키친, S12770 갈현푸드</small><span class="chip amber">좌표 보정</span></div>
+          <div class="item"><b>끝단 착지 후보</b><small>연신내/구산 묶음 4곳, 158만원</small><span class="chip blue">용차 검토</span></div>
+          <div class="item"><b>기사 연락처</b><small>김도윤 / 010-2388-1201 / 1.2톤</small><span class="chip green">마스터 반영</span></div>
+          <div class="item"><b>권장</b><small>동선 자체는 유지, 금요일만 끝단 묶음 별도 검토</small><span class="chip red">주의</span></div>
+        </div>
+      </aside>
+    </main>
+  </div>
+  <script>
+    const stops=[{n:1,x:23,y:33,s:"done"},{n:2,x:34,y:39,s:"done"},{n:3,x:45,y:45,s:"done"},{n:4,x:54,y:52,s:""},{n:5,x:63,y:45,s:"warn"},{n:6,x:71,y:58,s:""},{n:7,x:78,y:66,s:"warn"}];
+    function line(a,b){const dx=b.x-a.x,dy=b.y-a.y,w=Math.sqrt(dx*dx+dy*dy),ang=Math.atan2(dy,dx)*180/Math.PI;return `<i class="line" style="left:${a.x}%;top:${a.y}%;width:${w}%;transform:rotate(${ang}deg)"></i>`}
+    function renderMap(el){
+      const isA = el.dataset.map === "c1";
+      el.innerHTML=`<div class="depot">오산센터</div><div class="area" style="left:20%;top:20%">은평/서대문</div><div class="area" style="left:58%;top:31%">101호 본권역</div><div class="overlay"><div class="stat"><span>기사</span><b>김도윤</b></div><div class="stat"><span>톤수</span><b>1.2톤</b></div><div class="stat"><span>착지</span><b>18곳</b></div><div class="stat"><span>좌표 확인</span><b>2건</b></div></div>`+stops.slice(0,-1).map((s,i)=>line(s,stops[i+1])).join("")+stops.map(s=>`<i class="pin ${s.s}" style="left:${s.x}%;top:${s.y}%">${s.n}</i>`).join("")+(isA?`<div class="map-note"><b>S10922 · 할맥 은평점</b><small>서울 은평구 진흥로 82</small><small>101호차 서북권 / 2착 / 지도 표시 가능</small></div>`:"");
+    }
+    function renderTimeline(){document.getElementById("timeline").innerHTML=stops.map(s=>`<div class="stopbox"><b>${s.n}착 ${s.s==="warn"?"좌표 확인":"정상"}</b><small>S10${s.n}22 · 고객명 · 은평구</small></div>`).join("")}
+    document.querySelectorAll("[data-map]").forEach(renderMap);
+    renderTimeline();
+    document.querySelectorAll(".tab").forEach(tab=>tab.addEventListener("click",()=>{document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t===tab));document.querySelectorAll(".concept").forEach(c=>c.classList.toggle("active",c.id===tab.dataset.concept));}));
+  </script>
+</body>
+</html>

@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Freshon 운영데이터 UI 시안 v2</title>
+  <style>
+    :root {
+      --bg:#eef2f6; --panel:#fff; --ink:#172033; --muted:#667085; --line:#d7dfeb;
+      --blue:#2563eb; --soft:#eff6ff; --green:#047857; --amber:#b45309; --red:#dc2626;
+      --purple:#6d5dfc; --shadow:0 12px 28px rgba(15,23,42,.10);
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Arial,"Malgun Gothic",sans-serif; color:var(--ink); background:var(--bg); letter-spacing:0; }
+    button,input,select { font:inherit; }
+    button { cursor:pointer; }
+    .app { min-height:100vh; display:grid; grid-template-rows:auto auto auto 1fr; }
+    .top {
+      display:grid; grid-template-columns:1fr auto; gap:14px; align-items:center;
+      padding:13px 18px; background:#fbfcfe; border-bottom:1px solid var(--line);
+    }
+    h1 { margin:0; font-size:22px; line-height:1.25; }
+    .caption { margin:4px 0 0; color:var(--muted); font-size:12px; line-height:1.4; }
+    .nav { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; }
+    .nav a {
+      border:1px solid #b8c7dc; border-radius:6px; background:#fff; color:#344054;
+      padding:8px 10px; font-size:12px; font-weight:900; text-decoration:none; white-space:nowrap;
+    }
+    .nav .active { border-color:var(--blue); background:var(--blue); color:#fff; }
+    .toolbar {
+      display:grid; grid-template-columns:150px 150px 1fr 150px auto; gap:8px;
+      padding:11px 18px; background:#fff; border-bottom:1px solid var(--line);
+    }
+    label { display:block; color:#344054; font-size:11px; font-weight:900; margin:0 0 4px; }
+    select,input {
+      width:100%; border:1px solid var(--line); border-radius:6px; padding:9px 10px;
+      background:#fff; color:var(--ink); font-size:13px;
+    }
+    .btn {
+      align-self:end; border:1px solid var(--blue); border-radius:6px; background:var(--blue);
+      color:#fff; padding:9px 12px; font-size:12px; font-weight:900; white-space:nowrap;
+    }
+    .tabs {
+      display:flex; gap:6px; padding:10px 18px; background:#f8fafc; border-bottom:1px solid var(--line);
+      overflow:auto;
+    }
+    .tab {
+      border:1px solid #cbd5e1; border-radius:999px; background:#fff; color:#344054;
+      padding:8px 12px; font-size:12px; font-weight:900; white-space:nowrap;
+    }
+    .tab.active { border-color:var(--blue); background:var(--soft); color:#1d4ed8; }
+    main { padding:14px 18px 18px; display:grid; gap:12px; }
+    .kpis { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; }
+    .card,.panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); min-width:0; }
+    .card { padding:12px; }
+    .card span { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
+    .card b { display:block; font-size:21px; }
+    .card small { display:block; color:var(--muted); font-size:12px; margin-top:5px; line-height:1.35; }
+    .panel-head {
+      display:flex; justify-content:space-between; gap:10px; align-items:flex-start;
+      padding:12px 13px; border-bottom:1px solid var(--line); background:#fbfcfe;
+    }
+    .panel-head h2 { margin:0; font-size:15px; }
+    .panel-head small { display:block; color:var(--muted); margin-top:3px; line-height:1.35; }
+    .chip {
+      display:inline-flex; align-items:center; border-radius:999px; padding:3px 8px;
+      font-size:11px; font-weight:900; white-space:nowrap;
+    }
+    .blue { background:var(--soft); color:#1d4ed8; }
+    .green { background:#e5f7ef; color:var(--green); }
+    .amber { background:#fff7ed; color:var(--amber); }
+    .red { background:#fee2e2; color:var(--red); }
+    .purple { background:#f0edff; color:var(--purple); }
+    .grid { display:grid; grid-template-columns:1.1fr .9fr; gap:12px; align-items:start; }
+    .wide-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { border-bottom:1px solid #e5ebf3; padding:9px 10px; text-align:left; white-space:nowrap; }
+    th { color:#344054; background:#f8fafc; font-size:12px; position:sticky; top:0; }
+    td.amount,td.num { text-align:right; font-weight:900; }
+    .table-wrap { overflow:auto; max-height:420px; }
+    .list { display:grid; gap:8px; padding:10px; }
+    .item {
+      border:1px solid var(--line); border-radius:8px; background:#fff; padding:10px; cursor:pointer;
+      display:grid; gap:6px;
+    }
+    .item:hover,.item.active { border-color:var(--blue); background:#f5f8ff; }
+    .item b { font-size:13px; }
+    .item small { color:var(--muted); line-height:1.4; overflow-wrap:anywhere; }
+    .bar { height:9px; border-radius:999px; background:#e6ebf2; overflow:hidden; }
+    .bar i { display:block; height:100%; width:var(--w); background:var(--c,var(--blue)); }
+    .weekday { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; padding:12px; }
+    .day {
+      border:1px solid var(--line); border-radius:7px; padding:8px 4px; text-align:center; background:#f8fafc;
+    }
+    .day b { display:block; font-size:13px; margin-bottom:3px; }
+    .day span { color:var(--muted); font-size:11px; }
+    .day.hot { border-color:var(--blue); background:var(--soft); color:#1d4ed8; }
+    .day.warn { border-color:#fed7aa; background:#fff7ed; color:var(--amber); }
+    .view { display:none; }
+    .view.active { display:grid; gap:12px; }
+    @media (max-width:1180px) {
+      .kpis { grid-template-columns:repeat(3,1fr); }
+      .grid,.wide-grid { grid-template-columns:1fr; }
+    }
+    @media (max-width:780px) {
+      .top,.toolbar { display:block; }
+      .nav { justify-content:flex-start; margin-top:10px; }
+      .toolbar > div,.toolbar button { margin-bottom:8px; }
+      .kpis { grid-template-columns:1fr 1fr; }
+      .weekday { grid-template-columns:repeat(4,1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div>
+        <h1>운영데이터</h1>
+        <p class="caption">지도 화면과 분리한 배차 판단용 데이터센터입니다. 착지수, 매출, 주문 패턴, 좌표 품질, 조정 후보를 따로 봅니다.</p>
+      </div>
+      <nav class="nav">
+        <a href="#">일일동선</a>
+        <a href="#">WMS</a>
+        <a href="#">신규판단</a>
+        <a class="active" href="#">운영데이터</a>
+        <a href="#">관리자</a>
+      </nav>
+    </header>
+
+    <section class="toolbar">
+      <div>
+        <label>분석 월</label>
+        <select><option>2026년 6월</option><option>2026년 5월</option><option>최근 3개월</option></select>
+      </div>
+      <div>
+        <label>센터</label>
+        <select><option>오산센터</option><option>이천센터</option><option>전체 센터</option></select>
+      </div>
+      <div>
+        <label>고객/주소/호차 검색</label>
+        <input id="globalSearch" placeholder="101호차, S10922, 할맥, 은평구">
+      </div>
+      <div>
+        <label>보기 기준</label>
+        <select><option>배차 판단 기준</option><option>매출 기준</option><option>착지수 기준</option></select>
+      </div>
+      <button class="btn" id="refreshButton" type="button">데이터 갱신</button>
+    </section>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-view="vehicle">호차 분석</button>
+      <button class="tab" data-view="store">매장 분석</button>
+      <button class="tab" data-view="weekday">요일 패턴</button>
+      <button class="tab" data-view="new">신규주소 이력</button>
+      <button class="tab" data-view="coord">좌표 관리</button>
+      <button class="tab" data-view="adjust">조정 후보</button>
+    </nav>
+
+    <main>
+      <section class="kpis">
+        <div class="card"><span>월 평균 착지수</span><b>19.8곳</b><small>전월 대비 +1.7곳</small></div>
+        <div class="card"><span>월 평균 매출</span><b>8,920만원</b><small>호차별 평균 기준</small></div>
+        <div class="card"><span>착지당 금액</span><b>46.2만원</b><small>객단가 기준</small></div>
+        <div class="card"><span>끝단 착지 비율</span><b>18%</b><small>조정 후보 신호</small></div>
+        <div class="card"><span>좌표 보정 필요</span><b>17곳</b><small>검색 가능, 지도 미표시</small></div>
+        <div class="card"><span>매출 급변 매장</span><b>23곳</b><small>증가 14 / 감소 9</small></div>
+      </section>
+
+      <section class="view active" id="view-vehicle">
+        <div class="grid">
+          <div class="panel">
+            <div class="panel-head">
+              <div><h2>호차별 월 평균 착지수</h2><small>착지수, 매출, 착지당 금액, 끝단 비율을 같이 봅니다.</small></div>
+              <span class="chip blue">호차 분석</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>호차</th><th>평균 착지수</th><th>총 매출</th><th>착지당 금액</th><th>끝단 비율</th><th>상태</th></tr></thead>
+                <tbody id="vehicleRows"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <div><h2>월별 운행기록 추적</h2><small>최근 월별 착지수 증가/감소 흐름입니다.</small></div>
+              <span class="chip green">추이</span>
+            </div>
+            <div class="list" id="monthTimeline"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-store">
+        <div class="grid">
+          <div class="panel">
+            <div class="panel-head">
+              <div><h2>매장별 월 평균 매출</h2><small>매장별 금액대, 주문 주기, 매출 변화를 봅니다.</small></div>
+              <span class="chip green">매장 분석</span>
+            </div>
+            <div class="list" id="storeList"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <div><h2 id="storeDetailTitle">S10922 · 할맥 은평점</h2><small>선택 매장의 운영 판단 요약입니다.</small></div>
+              <span class="chip amber" id="storeDetailBadge">금요일 집중</span>
+            </div>
+            <div class="wide-grid" style="padding:12px;">
+              <div class="card" style="box-shadow:none;"><span>월 평균 매출</span><b id="avgSales">1,840,000원</b><small>최근 3개월 +8%</small></div>
+              <div class="card" style="box-shadow:none;"><span>주문 주기</span><b id="cycleText">2~3일 간격</b><small>월/수/금 패턴</small></div>
+              <div class="card" style="box-shadow:none;"><span>매출 등급</span><b id="gradeText">B급</b><small>월 100~300만원</small></div>
+            </div>
+            <div class="weekday" id="storeWeekdays"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-weekday">
+        <div class="panel">
+          <div class="panel-head">
+            <div><h2>요일별 예상 물량</h2><small>요일마다 과밀해질 호차와 집중 매장을 미리 봅니다.</small></div>
+            <span class="chip purple">요일 패턴</span>
+          </div>
+          <div class="wide-grid" style="padding:12px;" id="weekdayCards"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-new">
+        <div class="panel">
+          <div class="panel-head">
+            <div><h2>신규주소 판단 이력</h2><small>신규주소, 추천 호차, 가까운 기존 고객, 실제 반영 여부를 남깁니다.</small></div>
+            <span class="chip amber">신규주소</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>날짜</th><th>신규주소</th><th>추천 호차</th><th>가까운 기존 고객</th><th>판단</th><th>반영</th></tr></thead>
+              <tbody id="newRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-coord">
+        <div class="grid">
+          <div class="panel">
+            <div class="panel-head">
+              <div><h2>좌표 없는 고객 관리</h2><small>검색은 되지만 지도에 안 찍히는 고객을 관리합니다.</small></div>
+              <span class="chip red">좌표 보정</span>
+            </div>
+            <div class="list" id="coordList"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <div><h2>주소 품질 점검</h2><small>중복 주소, 고객코드 중복, 주소 불완전 건을 따로 봅니다.</small></div>
+              <span class="chip blue">주소 품질</span>
+            </div>
+            <div class="list" id="addressQuality"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-adjust">
+        <div class="panel">
+          <div class="panel-head">
+            <div><h2>호차 조정 / 용차 후보</h2><small>끝단 착지, 과밀 호차, 여유 호차를 기준으로 조정 후보를 봅니다.</small></div>
+            <span class="chip red">조정 후보</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>구분</th><th>대상 호차</th><th>후보 묶음</th><th>착지수</th><th>매출</th><th>추천 조치</th></tr></thead>
+              <tbody id="adjustRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const vehicles = [
+      ["101호차","21.2곳","9,820만원","46.3만원","28%","과밀","amber"],
+      ["204호차","16.8곳","7,420만원","44.1만원","12%","보통","green"],
+      ["315호차","23.4곳","1억 1,240만원","48.0만원","31%","초과","red"],
+      ["422호차","13.1곳","5,180만원","39.5만원","7%","여유","blue"]
+    ];
+    const stores = [
+      { code:"S10922", name:"할맥 은평점", area:"101호차 서북권", sales:"1,840,000원", cycle:"2~3일", grade:"B급", top:"금", days:[32,12,38,10,92,22,8], memo:"금요일 물량이 커서 101호차 과밀일 때 확인 필요" },
+      { code:"S12015", name:"연신내 키친", area:"101호차 끝단", sales:"2,210,000원", cycle:"주 3회", grade:"B급", top:"수", days:[14,44,88,20,62,18,6], memo:"끝단 지역이라 용차 후보와 같이 확인" },
+      { code:"S31577", name:"독산 식품", area:"315호차 남부권", sales:"1,520,000원", cycle:"주 2회", grade:"B급", top:"월", days:[91,8,12,54,18,10,4], memo:"최근 3개월 매출 감소" },
+      { code:"S42233", name:"중계 마트", area:"422호차 동북권", sales:"980,000원", cycle:"격주", grade:"C급", top:"목", days:[10,16,12,80,21,46,7], memo:"금액은 낮지만 꾸준한 패턴" }
+    ];
+    const dayNames = ["월","화","수","목","금","토","일"];
+    let selectedStore = stores[0];
+
+    function chip(text, cls) {
+      return `<span class="chip ${cls}">${text}</span>`;
+    }
+    function renderVehicles() {
+      document.getElementById("vehicleRows").innerHTML = vehicles.map(row => `
+        <tr><td><b>${row[0]}</b></td><td class="num">${row[1]}</td><td class="amount">${row[2]}</td><td class="amount">${row[3]}</td><td class="num">${row[4]}</td><td>${chip(row[5], row[6])}</td></tr>
+      `).join("");
+    }
+    function renderTimeline() {
+      const rows = [["2026.03","17.8곳",70],["2026.04","18.5곳",76],["2026.05","19.4곳",82],["2026.06","21.2곳",92]];
+      document.getElementById("monthTimeline").innerHTML = rows.map(row => `
+        <div class="item"><b>${row[0]} · 평균 ${row[1]}</b><div class="bar"><i style="--w:${row[2]}%"></i></div><small>착지수 기준 추이</small></div>
+      `).join("");
+    }
+    function renderStores() {
+      const q = document.getElementById("globalSearch").value.trim().toLowerCase();
+      const list = stores.filter(store => `${store.code} ${store.name} ${store.area}`.toLowerCase().includes(q));
+      document.getElementById("storeList").innerHTML = list.map(store => `
+        <article class="item ${selectedStore.code === store.code ? "active" : ""}" data-code="${store.code}">
+          <b>${store.code} · ${store.name}</b>
+          <small>${store.area}</small>
+          <small>월 평균 ${store.sales} · ${store.top}요일 집중 · ${store.cycle}</small>
+        </article>
+      `).join("") || `<div class="item"><small>검색 결과가 없습니다.</small></div>`;
+      document.querySelectorAll("#storeList .item[data-code]").forEach(card => {
+        card.addEventListener("click", () => {
+          selectedStore = stores.find(store => store.code === card.dataset.code);
+          renderStores();
+          renderStoreDetail();
+        });
+      });
+    }
+    function renderStoreDetail() {
+      document.getElementById("storeDetailTitle").textContent = `${selectedStore.code} · ${selectedStore.name}`;
+      document.getElementById("storeDetailBadge").textContent = `${selectedStore.top}요일 집중`;
+      document.getElementById("avgSales").textContent = selectedStore.sales;
+      document.getElementById("cycleText").textContent = selectedStore.cycle;
+      document.getElementById("gradeText").textContent = selectedStore.grade;
+      document.getElementById("storeWeekdays").innerHTML = selectedStore.days.map((value, index) => {
+        const hot = dayNames[index] === selectedStore.top;
+        const normal = value >= 35;
+        return `<div class="day ${hot ? "hot" : normal ? "warn" : ""}"><b>${dayNames[index]}</b><span>${value}%</span></div>`;
+      }).join("");
+    }
+    function renderWeekday() {
+      const cards = [
+        ["월요일","315호차 과밀 예상","독산 식품, 대방 상회 주문 집중", "red"],
+        ["수요일","101호차 끝단 증가","연신내/구산 묶음 확인 필요", "amber"],
+        ["금요일","전체 물량 최고","할맥 은평점 포함 42곳 집중", "red"],
+        ["토요일","동북권 여유","422호차 신규 흡수 가능", "green"]
+      ];
+      document.getElementById("weekdayCards").innerHTML = cards.map(row => `
+        <div class="item"><b>${row[0]} · ${chip(row[1], row[3])}</b><small>${row[2]}</small></div>
+      `).join("");
+    }
+    function renderNewRows() {
+      const rows = [
+        ["06-08","서울 은평구 연서로 신규 매장","101호차","S12015 연신내 키친","권역 후보","검토중"],
+        ["06-07","서울 금천구 독산로 신규점","315호차","S31577 독산 식품","용차 후보","미반영"],
+        ["06-05","서울 노원구 동일로 신규점","422호차","S42201 상계 프레시","흡수 가능","반영"]
+      ];
+      document.getElementById("newRows").innerHTML = rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("");
+    }
+    function renderCoord() {
+      document.getElementById("coordList").innerHTML = [
+        ["S12015 연신내 키친","주소 있음, 좌표 확인 필요"],
+        ["S12770 갈현푸드","지도 핀 실패, 수기 보정 필요"],
+        ["S42233 중계 마트","주소 후보 2개, 중복 확인"]
+      ].map(row => `<div class="item"><b>${row[0]}</b><small>${row[1]}</small></div>`).join("");
+      document.getElementById("addressQuality").innerHTML = [
+        ["주소 중복","8건"],
+        ["고객코드 중복","2건"],
+        ["상세주소 누락","11건"]
+      ].map(row => `<div class="item"><b>${row[0]}</b><small>${row[1]} 점검 필요</small></div>`).join("");
+    }
+    function renderAdjust() {
+      const rows = [
+        ["용차 후보","315호차","시흥/독산 묶음","5곳","214만원","새 용차 분리"],
+        ["호차 이동","101호차","연신내/구산 끝단","4곳","158만원","204호차 인접성 확인"],
+        ["신규 흡수","422호차","상계 신규 주소","2곳","예상 78만원","422호차 흡수 가능"]
+      ];
+      document.getElementById("adjustRows").innerHTML = rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("");
+    }
+    function switchView(view) {
+      document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.view === view));
+      document.querySelectorAll(".view").forEach(section => section.classList.toggle("active", section.id === `view-${view}`));
+    }
+    document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => switchView(tab.dataset.view)));
+    document.getElementById("globalSearch").addEventListener("input", renderStores);
+    document.getElementById("refreshButton").addEventListener("click", () => {
+      selectedStore = stores[0];
+      renderStores();
+      renderStoreDetail();
+    });
+    renderVehicles();
+    renderTimeline();
+    renderStores();
+    renderStoreDetail();
+    renderWeekday();
+    renderNewRows();
+    renderCoord();
+    renderAdjust();
+  </script>
+</body>
+</html>

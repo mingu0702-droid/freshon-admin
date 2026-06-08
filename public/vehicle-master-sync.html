@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Freshon 기사/차량 마스터 연동 시안</title>
+  <style>
+    :root{--bg:#eef2f6;--panel:#fff;--ink:#172033;--muted:#667085;--line:#d7dfeb;--blue:#2563eb;--soft:#eff6ff;--green:#047857;--amber:#b45309;--red:#dc2626;--shadow:0 12px 28px rgba(15,23,42,.1)}
+    *{box-sizing:border-box} body{margin:0;font-family:Arial,"Malgun Gothic",sans-serif;color:var(--ink);background:var(--bg);letter-spacing:0}
+    button,input,select{font:inherit}button{cursor:pointer}
+    .top{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;padding:13px 18px;background:#fbfcfe;border-bottom:1px solid var(--line)}
+    h1{margin:0;font-size:22px}.caption{margin:4px 0 0;color:var(--muted);font-size:12px;line-height:1.4}
+    .nav{display:flex;gap:6px;flex-wrap:wrap}.nav a{border:1px solid #b8c7dc;border-radius:6px;background:#fff;color:#344054;padding:8px 10px;font-size:12px;font-weight:900;text-decoration:none}.nav .active{border-color:var(--blue);background:var(--blue);color:#fff}
+    main{padding:14px 18px;display:grid;gap:12px}
+    .flow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.box,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);min-width:0}.box{padding:12px}.box span{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.box b{font-size:18px}
+    .grid{display:grid;grid-template-columns:minmax(620px,1.15fr) minmax(360px,.85fr);gap:12px;align-items:start}
+    .head{display:flex;justify-content:space-between;gap:10px;padding:12px 13px;border-bottom:1px solid var(--line);background:#fbfcfe}.head h2{margin:0;font-size:15px}.head small{display:block;margin-top:3px;color:var(--muted)}
+    .toolbar{display:grid;grid-template-columns:1fr 150px auto;gap:8px;padding:10px;border-bottom:1px solid var(--line)} input,select{width:100%;border:1px solid var(--line);border-radius:6px;padding:9px 10px;background:#fff;color:var(--ink);font-size:13px}.btn{border:1px solid var(--blue);border-radius:6px;background:var(--blue);color:#fff;padding:9px 12px;font-size:12px;font-weight:900;white-space:nowrap}.btn.secondary{background:#fff;color:#1d4ed8}
+    table{width:100%;border-collapse:collapse;font-size:13px}th,td{border-bottom:1px solid #e5ebf3;padding:9px 10px;text-align:left;white-space:nowrap}th{background:#f8fafc;color:#344054;font-size:12px}td input,td select{padding:7px 8px}.table-wrap{overflow:auto;max-height:480px}
+    .chip{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:900;white-space:nowrap}.blue{background:var(--soft);color:#1d4ed8}.green{background:#e5f7ef;color:var(--green)}.amber{background:#fff7ed;color:var(--amber)}.red{background:#fee2e2;color:var(--red)}
+    .sync-list{display:grid;gap:8px;padding:10px}.sync{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px;line-height:1.4}.sync b{display:block;font-size:13px;margin-bottom:4px}.sync small{display:block;color:var(--muted)}
+    .preview{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px}.mini{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px}.mini h3{margin:0 0 8px;font-size:13px}.mini p{margin:0;color:var(--muted);font-size:12px;line-height:1.45}
+    @media(max-width:1000px){.grid,.flow,.preview{grid-template-columns:1fr}.top{display:block}.nav{margin-top:10px}.toolbar{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div><h1>기사/차량 마스터</h1><p class="caption">기사 이름, 전화번호, 차량 톤수를 한 곳에서 수정하면 WMS와 일일동선에 자동 반영되는 구조입니다.</p></div>
+    <nav class="nav"><a href="#">일일동선</a><a href="#">WMS</a><a class="active" href="#">운영데이터</a><a href="#">관리자</a></nav>
+  </header>
+  <main>
+    <section class="flow">
+      <div class="box"><span>1. 마스터 수정</span><b>기사/차량 정보 저장</b></div>
+      <div class="box"><span>2. 공통 API</span><b>/api/vehicle-master</b></div>
+      <div class="box"><span>3. 자동 반영</span><b>WMS · 일일동선 · 운영지도</b></div>
+    </section>
+    <section class="grid">
+      <div class="panel">
+        <div class="head"><div><h2>호차별 기사/차량 정보</h2><small>여기서 바꾸는 값이 모든 화면의 기준값입니다.</small></div><span class="chip blue">마스터</span></div>
+        <div class="toolbar"><input id="search" placeholder="호차, 기사명, 전화번호 검색"><select><option>전체 톤수</option><option>1.0톤</option><option>1.2톤</option><option>1.4톤</option><option>2.5톤</option></select><button class="btn" id="saveBtn">변경 저장</button></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>호차</th><th>기사명</th><th>전화번호</th><th>톤수</th><th>상태</th><th>최근 반영</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="head"><div><h2>반영 미리보기</h2><small>수정 후 어느 화면에 어떻게 바뀌는지 바로 확인합니다.</small></div><span class="chip green">자동 동기화</span></div>
+        <div class="preview">
+          <div class="mini"><h3>WMS 배차 검토</h3><p id="wmsPreview">101호차 · 김도윤 · 1.2톤 기준 금액 9,600,000원으로 계산</p></div>
+          <div class="mini"><h3>일일동선</h3><p id="routePreview">101호차 지도 라벨과 기사 연락처에 김도윤 / 010-2388-1201 표시</p></div>
+        </div>
+        <div class="sync-list">
+          <div class="sync"><b>변경 이력</b><small>누가 언제 기사명/전화번호/톤수를 바꿨는지 남깁니다.</small></div>
+          <div class="sync"><b>톤수 기준금액 자동 변경</b><small>1.2톤에서 1.4톤으로 바꾸면 WMS 기준금액도 자동으로 바뀝니다.</small></div>
+          <div class="sync"><b>Render/GitHub 캐시 분리</b><small>마스터 데이터는 별도 저장소 또는 DB에 저장해서 배포와 분리합니다.</small></div>
+          <div class="sync"><b>오류 방지</b><small>전화번호 형식, 중복 기사, 중복 호차를 저장 전에 검사합니다.</small></div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const data=[
+      {v:"101호차",d:"김도윤",p:"010-2388-1201",t:"1.2톤",s:"정상",c:"오늘 09:12"},
+      {v:"204호차",d:"박민재",p:"010-7721-2040",t:"1.4톤",s:"정상",c:"어제 18:40"},
+      {v:"315호차",d:"이서준",p:"010-9915-0315",t:"2.5톤",s:"확인 필요",c:"06-05 14:21"},
+      {v:"422호차",d:"최하늘",p:"010-4422-7788",t:"1.0톤",s:"정상",c:"06-01 08:30"}
+    ];
+    function render(){
+      const q=document.getElementById("search").value.trim().toLowerCase();
+      document.getElementById("rows").innerHTML=data.filter(r=>`${r.v} ${r.d} ${r.p}`.toLowerCase().includes(q)).map((r,i)=>`
+        <tr data-index="${i}"><td><b>${r.v}</b></td><td><input value="${r.d}" data-field="d"></td><td><input value="${r.p}" data-field="p"></td><td><select data-field="t"><option ${r.t==="1.0톤"?"selected":""}>1.0톤</option><option ${r.t==="1.2톤"?"selected":""}>1.2톤</option><option ${r.t==="1.4톤"?"selected":""}>1.4톤</option><option ${r.t==="2.5톤"?"selected":""}>2.5톤</option></select></td><td><span class="chip ${r.s==="정상"?"green":"amber"}">${r.s}</span></td><td>${r.c}</td></tr>
+      `).join("");
+      document.querySelectorAll("tbody input, tbody select").forEach(el=>el.addEventListener("input",updatePreview));
+    }
+    function updatePreview(){
+      const first=document.querySelector("tbody tr");
+      if(!first)return;
+      const driver=first.querySelector('[data-field="d"]').value;
+      const phone=first.querySelector('[data-field="p"]').value;
+      const ton=first.querySelector('[data-field="t"]').value;
+      document.getElementById("wmsPreview").textContent=`101호차 · ${driver} · ${ton} 기준으로 WMS 초과/여유 계산`;
+      document.getElementById("routePreview").textContent=`101호차 지도 라벨과 기사 연락처에 ${driver} / ${phone} 표시`;
+    }
+    document.getElementById("search").addEventListener("input",render);
+    document.getElementById("saveBtn").addEventListener("click",()=>{document.getElementById("saveBtn").textContent="저장 완료";setTimeout(()=>document.getElementById("saveBtn").textContent="변경 저장",1200)});
+    render();
+  </script>
+</body>
+</html>

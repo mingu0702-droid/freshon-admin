@@ -274,7 +274,7 @@
       white-space:nowrap;
     }
 
-    .page-nav { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin:0 0 14px; }
+    .page-nav { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:6px; margin:0 0 14px; }
     .page-nav a, .page-nav button { border:1px solid #cbd5e1; background:#fff; color:#0f172a; border-radius:6px; padding:8px 9px; font-size:12px; font-weight:900; text-decoration:none; line-height:1; text-align:center; cursor:pointer; }
     .page-nav a.active, .page-nav button.active { background:#2563eb; border-color:#2563eb; color:#fff; }
     .task-tabs { display:grid; grid-template-columns:repeat(2, 1fr); gap:6px; margin:10px 0; }
@@ -448,6 +448,69 @@
     }
     body[data-work-tab="wms"] .wms-board-title { top:0; min-height:38px; background:#e9eef6; border-bottom:1px solid #d8e0eb; }
     body[data-work-tab="wms"] .wms-sheet-head { top:39px; }
+    body[data-work-tab="route"] .page-nav {
+      grid-template-columns:repeat(5, minmax(0, 1fr));
+    }
+    body[data-work-tab="route"] .page-nav a,
+    body[data-work-tab="route"] .page-nav button {
+      padding:8px 5px;
+      font-size:11px;
+    }
+    body[data-work-tab="route"] .route-ops-head {
+      border:1px solid #cbd5e1;
+      border-radius:8px;
+      background:linear-gradient(180deg,#0f172a,#1e3a5f);
+      color:#fff;
+      padding:12px;
+      box-shadow:0 8px 18px rgba(15,23,42,.16);
+    }
+    body[data-work-tab="route"] .route-ops-head span {
+      display:inline-flex;
+      border:1px solid rgba(255,255,255,.28);
+      border-radius:999px;
+      padding:3px 8px;
+      font-size:11px;
+      font-weight:900;
+      color:#bfdbfe;
+      background:rgba(255,255,255,.08);
+    }
+    body[data-work-tab="route"] .route-ops-head h1 {
+      margin:8px 0 4px;
+      color:#fff;
+      font-size:22px;
+    }
+    body[data-work-tab="route"] .route-ops-head p {
+      margin:0;
+      color:#dbeafe;
+      font-size:12px;
+      line-height:1.45;
+    }
+    body[data-work-tab="route"] .route-quick-kpis {
+      display:grid;
+      grid-template-columns:repeat(3, minmax(0, 1fr));
+      gap:6px;
+      margin-top:10px;
+    }
+    body[data-work-tab="route"] .route-quick-kpis div {
+      border:1px solid rgba(255,255,255,.18);
+      border-radius:7px;
+      padding:7px;
+      background:rgba(255,255,255,.08);
+      min-width:0;
+    }
+    body[data-work-tab="route"] .route-quick-kpis b {
+      display:block;
+      font-size:15px;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    body[data-work-tab="route"] .route-quick-kpis small {
+      display:block;
+      margin-top:2px;
+      color:#bfdbfe;
+      font-size:11px;
+    }
     body[data-work-tab="route"] .shell {
       grid-template-columns:348px minmax(0, 1fr);
       background:#eaf0f6;
@@ -552,6 +615,55 @@
       right:10px;
       bottom:10px;
     }
+    .route-map-hud {
+      display:none;
+      position:absolute;
+      left:14px;
+      top:14px;
+      z-index:520;
+      width:min(360px, calc(100% - 420px));
+      border:1px solid #cbd5e1;
+      border-radius:8px;
+      background:rgba(255,255,255,.96);
+      box-shadow:0 12px 28px rgba(15,23,42,.16);
+      backdrop-filter:blur(8px);
+      padding:12px;
+      gap:10px;
+      align-items:center;
+      justify-content:space-between;
+    }
+    body[data-work-tab="route"] .route-map-hud { display:flex; }
+    .route-map-hud .hud-eyebrow {
+      display:block;
+      color:#2563eb;
+      font-size:11px;
+      font-weight:900;
+      margin-bottom:3px;
+    }
+    .route-map-hud strong {
+      display:block;
+      color:#0f172a;
+      font-size:15px;
+      line-height:1.25;
+    }
+    .route-map-hud small {
+      display:block;
+      color:#667085;
+      font-size:12px;
+      line-height:1.35;
+      margin-top:3px;
+    }
+    .route-map-hud button {
+      border:1px solid #2563eb;
+      border-radius:6px;
+      background:#2563eb;
+      color:#fff;
+      padding:8px 10px;
+      font-size:12px;
+      font-weight:900;
+      white-space:nowrap;
+      cursor:pointer;
+    }
     .freshon-diagnostics { display:grid; gap:7px; color:#334155; }
     .freshon-diagnostics b { color:#0f172a; }
     .freshon-diagnostics .diagnostic-main { color:#991b1b; font-weight:900; }
@@ -581,11 +693,21 @@
       <nav class="page-nav" aria-label="페이지 이동">
         <a href="/daily-routes.html" class="active">일일동선</a>
         <button id="topWmsTab" type="button">WMS</button>
+        <a href="/wms-ui-concept.html">WMS시안</a>
+        <a href="/operations-data.html">운영데이터</a>
         <a href="/admin">관리자</a>
       </nav>
 
-      <h1>일일동선 운영지도</h1>
-      <div class="meta">고객/주소 검색, 신규주소 권역 판단, 호차별 일일동선을 지도 중심으로 확인합니다.</div>
+      <div class="route-ops-head">
+        <span>지도 중심 A형</span>
+        <h1>일일동선 관제</h1>
+        <p>고객/주소 검색, 신규주소 권역 판단, 호차별 일일동선을 한 흐름으로 확인합니다.</p>
+        <div class="route-quick-kpis">
+          <div><b id="routeHudVehicle">-</b><small>선택 호차</small></div>
+          <div><b id="routeHudStops">-</b><small>표시 착지</small></div>
+          <div><b id="routeHudDate">-</b><small>기준일</small></div>
+        </div>
+      </div>
       <div class="control-panel route-search-panel">
         <div class="route-field-grid">
           <div>
@@ -709,6 +831,14 @@
     </aside>
     <main style="position:relative;">
       <div id="map"></div>
+      <div id="routeMapHud" class="route-map-hud" aria-live="polite">
+        <div>
+          <span class="hud-eyebrow">일일동선 지도</span>
+          <strong id="routeMapHudTitle">호차를 선택해주세요</strong>
+          <small id="routeMapHudMeta">운영지도 권역 데이터 기준으로 표시 중입니다.</small>
+        </div>
+        <button id="routeMapHudButton" type="button">동선 보기</button>
+      </div>
       <div class="data-actions">
         <a href="/admin">엑셀 업로드</a>
         <button id="downloadTemplateButton" type="button">시트 양식</button>
@@ -762,6 +892,12 @@
     const routeDateInput = document.getElementById("routeDateInput");
     const showRouteButton = document.getElementById("showRouteButton");
     const routeStatus = document.getElementById("routeStatus");
+    const routeHudVehicle = document.getElementById("routeHudVehicle");
+    const routeHudStops = document.getElementById("routeHudStops");
+    const routeHudDate = document.getElementById("routeHudDate");
+    const routeMapHudTitle = document.getElementById("routeMapHudTitle");
+    const routeMapHudMeta = document.getElementById("routeMapHudMeta");
+    const routeMapHudButton = document.getElementById("routeMapHudButton");
     const newAreaInput = document.getElementById("newAreaInput");
     const analyzeNewAreaButton = document.getElementById("analyzeNewAreaButton");
     const clearNewAreaButton = document.getElementById("clearNewAreaButton");
@@ -843,6 +979,11 @@
         render();
       });
       showRouteButton.addEventListener("click", () => {
+        setWorkTab("route");
+        shouldShowRoute = true;
+        render();
+      });
+      routeMapHudButton.addEventListener("click", () => {
         setWorkTab("route");
         shouldShowRoute = true;
         render();
@@ -1462,6 +1603,19 @@
       `;
     }
 
+    function updateRouteHud(vehicle, stopCount, modeLabel = "운영지도 권역") {
+      const date = routeDateInput.value || "-";
+      const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}호` : "전체";
+      const area = vehicle?.area_label || modeLabel;
+      routeHudVehicle.textContent = vehicleLabel;
+      routeHudStops.textContent = Number.isFinite(Number(stopCount)) ? fmt.format(Number(stopCount)) : "-";
+      routeHudDate.textContent = date;
+      routeMapHudTitle.textContent = vehicle?.vehicle ? `${vehicleLabel} · ${area}` : modeLabel;
+      routeMapHudMeta.textContent = shouldShowRoute && routeDateInput.value
+        ? `${date} 프레시온 일일배차관리 기준 동선 조회 모드입니다.`
+        : "운영지도 권역 데이터 기준입니다. 날짜 선택 후 동선 보기를 누르면 일일동선이 겹쳐집니다.";
+    }
+
     function renderOverview() {
       clearMapLayers();
       const group = viewMode.value.split(":")[1] || "all";
@@ -1490,6 +1644,7 @@
       });
 
       const groupLabel = group === "osan" ? "오산센터" : group === "yeongnam" ? "영남권" : group === "honam" ? "호남권" : "전체";
+      updateRouteHud(null, vehicles.reduce((sum, v) => sum + v.count, 0), `${groupLabel} 전체 권역`);
       const filterText = activeLoadStatus ? ` · ${esc(activeLoadStatus)} 호차만 표시 중` : "";
       document.getElementById("vehicleNote").innerHTML = `<div class="note">${esc(groupLabel)} 보기${filterText}입니다. 지도 위 호차 라벨을 누르면 상세 권역선과 배송처가 보입니다.</div>`;
       document.getElementById("customerCount").textContent = fmt.format(vehicles.reduce((sum, v) => sum + v.count, 0));
@@ -1517,6 +1672,7 @@
       const customers = vehicle.customers;
       const routeFocus = shouldShowRoute && !!routeDateInput.value;
       clearMapLayers();
+      updateRouteHud(vehicle, routeFocus ? currentRouteStops.length || customers.length : customers.length, routeFocus ? "일일동선" : "호차 권역");
       document.querySelector(".stats .stat:nth-child(2) span").textContent = "권역 최장 폭";
 
       const color = getVehicleColor(vehicle);
@@ -1678,6 +1834,7 @@
           return;
         }
         currentRouteStops = stops;
+        updateRouteHud(vehicle, stops.length, "일일동선");
         renderRouteGroups(stops);
         addRouteGroupBoundaries(stops, color);
         const recordedStops = stops.filter(stop => stop.appRecorded || stop.deliveryCompletedAt);
