@@ -1009,7 +1009,10 @@
       customerSearchInput.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") return;
         const hits = getCombinedCustomerSearchHits();
-        if (!hits.length) return;
+        if (!hits.length) {
+          openAddressSearchPin(customerSearchInput.value.trim());
+          return;
+        }
         if (hits[0].type === "saved") openSavedCustomerSearchHit(hits[0].item);
         else openCustomerSearchHit(hits[0].item);
       });
@@ -1398,6 +1401,57 @@
           `<b>${esc(customer.name || "-")}</b><br>배송 호차: ${esc(vehicle.vehicle)}호<br>고객 코드: ${esc(customer.id || "-")}<br>주소: ${esc(customer.address || "-")}`
         );
       }, 0);
+    }
+
+    async function openAddressSearchPin(query) {
+      const address = String(query || "").trim();
+      if (!address) return;
+      customerSearchResults.innerHTML = `<div class="search-hit"><b>주소 검색 중...</b><div class="search-hit-address">${esc(address)}</div></div>`;
+      const point = await geocodeAddressCached(address);
+      if (!point) {
+        customerSearchResults.innerHTML = `<div class="search-hit"><b>주소 좌표를 찾지 못했습니다.</b><div class="search-hit-address">${esc(address)}</div></div>`;
+        routeStatus.textContent = `${address}: 주소 좌표를 찾지 못했습니다. 주소를 조금 더 자세히 입력해주세요.`;
+        return;
+      }
+      const judged = judgeNewArea({ address, customer: "주소 검색" }, point);
+      const vehicle = findVehicleByNumber(judged.vehicle);
+      const color = vehicle ? getVehicleColor(vehicle) : "#dc2626";
+      const reason = newAreaReasonForOutput(judged);
+      customerSearchResults.innerHTML = `
+        <div class="search-hit" data-address-search-pin="1">
+          <div class="search-hit-title">
+            <b>주소 검색 결과</b>
+            <span class="search-hit-action">지도 표시</span>
+          </div>
+          <div class="search-hit-meta">
+            <span class="search-chip">${esc(judged.vehicle && judged.vehicle !== "-" ? `${judged.vehicle}호` : "추천 없음")}</span>
+            <span class="search-chip">반경 500m ${fmt.format(judged.radiusCount || 0)}곳</span>
+            ${reason ? `<span class="search-chip">${esc(reason)}</span>` : `<span class="source-badge">전요일 가능</span>`}
+          </div>
+          <div class="search-hit-address">${esc(address)}</div>
+        </div>
+      `;
+      customerSearchResults.querySelector("[data-address-search-pin]")?.addEventListener("click", () => openAddressSearchPin(address));
+      clearMapLayers();
+      if (vehicle) {
+        addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
+          color,
+          weight: 3,
+          fillOpacity: .10,
+          opacity: .75
+        });
+      }
+      addKakaoLabel([point.lat, point.lng], vehiclePinHtml(judged.vehicle || "검색", "#111827", "new-area-pin"), "customer-pin-wrap", labelLayer);
+      setKakaoView(point.lat, point.lng, 4);
+      openInfoWindow(new kakao.maps.LatLng(point.lat, point.lng), `
+        <b>주소 검색</b><br>
+        결과 주소: ${esc(address)}<br>
+        추천 호차: ${esc(judged.vehicle && judged.vehicle !== "-" ? `${judged.vehicle}호` : "-")}<br>
+        반경 500m 인근 매장: ${fmt.format(judged.radiusCount || 0)}곳<br>
+        사유/요일: ${esc(reason || "전요일 가능")}<br>
+        가까운 배송처: ${esc(judged.nearestName || "-")}
+      `);
+      routeStatus.textContent = `${address}: 가상 핀 표시 · 반경 500m 인근 매장 ${fmt.format(judged.radiusCount || 0)}곳 기준`;
     }
 
     function initWmsMapResizeHandles() {
@@ -2300,6 +2354,13 @@
       return best;
     }
 
+    function customersWithinRadius(point, radiusKm = 0.5) {
+      return allVehicleCustomers()
+        .map(item => ({ ...item, distance: distanceKm(point, item.customer) }))
+        .filter(item => item.distance <= radiusKm)
+        .sort((a, b) => a.distance - b.distance);
+    }
+
     function nearestRouteStop(point) {
       if (!currentRouteStops.length) return null;
       return currentRouteStops
@@ -2334,6 +2395,17 @@
         .slice(0, 4);
     }
 
+    function dominantDeliveryPattern(groups) {
+      if (!groups.length) return "";
+      const total = groups.reduce((sum, item) => sum + (item.count || 0), 0);
+      const top = groups[0];
+      if (!top || !top.pattern) return "";
+      const normalized = normalizeDeliveryPattern(top.pattern);
+      if (normalized === "월화수목금토") return "";
+      const topShare = total ? top.count / total : 0;
+      return isSpecialDeliveryPattern(normalized) && topShare >= .4 ? normalized : "";
+    }
+
     function isSpecialDeliveryPattern(pattern) {
       const normalized = normalizeDeliveryPattern(pattern);
       if (!normalized || normalized === "월화수목금토") return false;
@@ -2343,19 +2415,7 @@
 
     function nearbyDeliveryPatternText(patterns) {
       if (!patterns?.length) return "";
-      const byPattern = new Map();
-      patterns.forEach(item => {
-        const pattern = normalizeDeliveryPattern(item.pattern);
-        if (!isSpecialDeliveryPattern(pattern)) return;
-        if (!byPattern.has(pattern)) byPattern.set(pattern, { pattern, count: 0, distance: Number.POSITIVE_INFINITY });
-        const row = byPattern.get(pattern);
-        row.count += item.count || 1;
-        row.distance = Math.min(row.distance, Number(item.distance) || Number.POSITIVE_INFINITY);
-      });
-      return [...byPattern.values()]
-        .sort((a, b) => b.count - a.count || a.distance - b.distance || a.pattern.localeCompare(b.pattern, "ko"))
-        .map(item => item.pattern)
-        .join(", ");
+      return dominantDeliveryPattern(patterns);
     }
 
     function newAreaReasonForOutput(row) {
@@ -2368,6 +2428,7 @@
 
     function judgeNewArea(row, point) {
       const nearest = nearestCustomers(point, 6);
+      const radiusCustomers = customersWithinRadius(point, 0.5);
       const best = nearest[0];
       const routeBest = nearestRouteStop(point);
       const selectedVehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value);
@@ -2402,7 +2463,8 @@
           reason = "배송동선 맞지않음";
         }
       }
-      const patternCandidates = nearbyDeliveryPatterns(nearest);
+      const patternSource = radiusCustomers.length ? radiusCustomers : nearest;
+      const patternCandidates = nearbyDeliveryPatterns(patternSource);
       const deliveryPatternText = nearbyDeliveryPatternText(patternCandidates);
 
       return {
@@ -2415,6 +2477,7 @@
         nearestName: best?.customer?.name || "-",
         nearestAddress: best?.customer?.address || "",
         nearestDistance: distance,
+        radiusCount: radiusCustomers.length,
         deliveryPatternText,
         deliveryPatternCandidates: patternCandidates,
         candidates: nearest
@@ -2540,7 +2603,7 @@
             <div class="result-line"><strong><span class="${cls}">${esc(row.decision)}</span> · ${vehicleText}${centerText}</strong>${reasonText}</div>
             <small>${esc(row.customer || "-")}</small>
             <small>${esc(row.address)}</small>
-            <small>가까운 배송처: ${esc(row.nearestName)}</small>
+            <small>가까운 배송처: ${esc(row.nearestName)} · 반경 500m ${fmt.format(row.radiusCount || 0)}곳</small>
             ${patternText}
           </div>
         `;
