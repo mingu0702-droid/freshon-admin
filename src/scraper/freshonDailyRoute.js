@@ -3,7 +3,8 @@ import { config } from "../config.js";
 
 const PAGE_SIZE = 1000;
 const MAX_PAGES = 8;
-const ROUTE_TIMEOUT_MS = Math.min(config.navTimeoutMs, 15000);
+const API_TIMEOUT_MS = Math.min(config.navTimeoutMs, 15000);
+const NAV_TIMEOUT_MS = Math.min(Math.max(config.navTimeoutMs, 45000), 90000);
 const freshonOrigin = new URL(config.freshonBaseUrl).origin;
 
 function assertCredentials() {
@@ -45,12 +46,12 @@ async function maybeLogin(page) {
   const submit = page.locator("button[type='submit'], input[type='submit'], button").first();
   if (await submit.count()) {
     await Promise.allSettled([
-      page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }),
+      page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }),
       submit.click({ timeout: 4000 })
     ]);
   } else {
     await page.keyboard.press("Enter").catch(() => null);
-    await page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }).catch(() => null);
+    await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
   }
 }
 
@@ -71,15 +72,19 @@ async function createLoggedInContext({ forceLogin = false } = {}) {
   assertCredentials();
   const browser = await chromium.launch({ headless: config.headless });
   const page = await browser.newPage();
-  page.setDefaultTimeout(ROUTE_TIMEOUT_MS);
-  page.setDefaultNavigationTimeout(ROUTE_TIMEOUT_MS);
+  page.setDefaultTimeout(API_TIMEOUT_MS);
+  page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
 
-  await page.goto(`${config.freshonBaseUrl}#/bo/wm/dispatch/dailyDsptcPage`, {
-    waitUntil: "domcontentloaded",
-    timeout: ROUTE_TIMEOUT_MS
+  await page.goto(config.freshonBaseUrl, {
+    waitUntil: "commit",
+    timeout: NAV_TIMEOUT_MS
   });
   await maybeLogin(page);
-  await page.waitForLoadState("domcontentloaded", { timeout: ROUTE_TIMEOUT_MS }).catch(() => null);
+  await page.goto(`${config.freshonBaseUrl}#/bo/wm/dispatch/dailyDsptcPage`, {
+    waitUntil: "commit",
+    timeout: NAV_TIMEOUT_MS
+  }).catch(() => null);
+  await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
   return { browser, context: page.context() };
 }
 
@@ -196,10 +201,10 @@ async function postDailyDispatchPage(api, endpoint, { page, date, vehicle, cente
     Referer: `${freshonOrigin}/bo/main#/bo/wm/dispatch/dailyDsptcPage`
   };
   const options = variant === "json"
-    ? { data: form, headers: { ...commonHeaders, "Content-Type": "application/json; charset=UTF-8" }, timeout: ROUTE_TIMEOUT_MS }
+    ? { data: form, headers: { ...commonHeaders, "Content-Type": "application/json; charset=UTF-8" }, timeout: API_TIMEOUT_MS }
     : variant === "query"
-      ? { headers: commonHeaders, timeout: ROUTE_TIMEOUT_MS }
-      : { form, headers: commonHeaders, timeout: ROUTE_TIMEOUT_MS };
+      ? { headers: commonHeaders, timeout: API_TIMEOUT_MS }
+      : { form, headers: commonHeaders, timeout: API_TIMEOUT_MS };
   const url = variant === "query" ? `${freshonOrigin}${endpoint}?${params.toString()}` : `${freshonOrigin}${endpoint}`;
   return api.post(url, options);
 }

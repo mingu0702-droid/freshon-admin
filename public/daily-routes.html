@@ -270,6 +270,7 @@
     .overview-label .area { display:none; }
     .overview-label.zoom-far .area { display:none; }
     .overview-label.zoom-far { font-size:10px; padding:2px 5px; }
+    body.map-zooming .overview-label { opacity:.18; pointer-events:none; }
     .detail-label {
       color:#b91c1c;
       font-size:15px;
@@ -1950,6 +1951,32 @@
       fitKakaoBounds(allPoints);
     }
 
+    function buildOperatingRoutePayload(vehicle, date) {
+      const stops = (vehicle.customers || [])
+        .filter(customer => Number.isFinite(Number(customer.lat)) && Number.isFinite(Number(customer.lng)))
+        .map((customer, index) => ({
+          sequence: index + 1,
+          code: customer.id,
+          customerCode: customer.id,
+          name: customer.name,
+          customerName: customer.name,
+          address: customer.address,
+          amount: customer.avg_order_amount,
+          dailyAmount: customer.avg_order_amount,
+          lat: customer.lat,
+          lng: customer.lng,
+          deliveryPattern: customer.delivery_pattern
+        }));
+      return {
+        generatedAt: null,
+        source: "vehicle-area-fallback",
+        date,
+        vehicle: vehicle.vehicle,
+        center: vehicle.region || "",
+        stops
+      };
+    }
+
     async function renderDailyRoute(vehicle, color, options = {}) {
       const date = routeDateInput.value;
       if (!date) {
@@ -1960,7 +1987,8 @@
         routeStatus.textContent = "날짜 선택 후 동선 보기를 누르면 프레시온 일일배차관리 기준으로 조회합니다.";
         return;
       }
-      routeStatus.textContent = "저장된 최신 동선 확인 중...";
+      await renderDailyRoutePayload(vehicle, color, date, buildOperatingRoutePayload(vehicle, date));
+      routeStatus.innerHTML += `<div class="diagnostic-attempt"><b>프레시온 최신 동기화</b><br>운영지도 기준 동선을 먼저 표시했습니다. 프레시온 저장 동선이 확인되면 자동으로 바꿔 표시합니다.</div>`;
       try {
         if (!options.skipSync) {
           startDailyRouteSync(date, vehicle).catch(() => null);
@@ -1968,18 +1996,12 @@
         }
         const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, center: vehicle.region || "" });
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 12000);
+        const timer = setTimeout(() => controller.abort(), 4500);
         const response = await fetch(`/api/daily-route?${params.toString()}`, { cache: "no-store", signal: controller.signal });
         clearTimeout(timer);
         if (!response.ok) {
           const error = await response.json().catch(() => ({}));
-          routeStatus.innerHTML = `
-            <div class="freshon-diagnostics">
-              <div class="diagnostic-main">저장된 동선 없음</div>
-              <div>${esc(error.error || "아직 표시할 저장 동선이 없습니다.")}</div>
-              <div class="diagnostic-attempt"><b>처리 방식</b><br>프레시온 최신 동기화는 백그라운드에서 진행 중입니다. 완료되면 자동으로 다시 표시합니다.</div>
-            </div>
-          `;
+          routeStatus.innerHTML += `<div class="diagnostic-attempt"><b>저장 동선 확인</b><br>${esc(error.error || "아직 표시할 저장 동선이 없습니다.")} 운영지도 기준 동선은 계속 표시합니다.</div>`;
           return;
         }
         const payload = await response.json();
@@ -1989,9 +2011,11 @@
           routeStatus.innerHTML += `<div class="diagnostic-attempt"><b>동기화 상태</b><br>${renderSyncNotice(job)}</div>`;
         }
       } catch (error) {
-        routeStatus.textContent = error.name === "AbortError"
-          ? "저장된 동선 조회가 12초 안에 끝나지 않았습니다. 프레시온 동기화는 백그라운드에서 계속 진행됩니다."
-          : "저장된 일일동선 데이터를 불러오지 못했습니다.";
+        routeStatus.innerHTML += `<div class="diagnostic-attempt"><b>저장 동선 확인</b><br>${
+          error.name === "AbortError"
+            ? "저장 동선 조회가 4.5초 안에 끝나지 않아 운영지도 기준 동선을 유지합니다. 프레시온 동기화는 백그라운드에서 계속 진행됩니다."
+            : "저장된 일일동선 데이터를 불러오지 못해 운영지도 기준 동선을 유지합니다."
+        }</div>`;
       }
     }
 
@@ -3339,8 +3363,12 @@
     }
 
     function scheduleOverviewLabelScale() {
+      document.body.classList.add("map-zooming");
       if (overviewLabelScaleTimer) clearTimeout(overviewLabelScaleTimer);
-      overviewLabelScaleTimer = setTimeout(updateOverviewLabelScale, 140);
+      overviewLabelScaleTimer = setTimeout(() => {
+        updateOverviewLabelScale();
+        document.body.classList.remove("map-zooming");
+      }, 180);
     }
 
     function addAdminBoundaryLayer(vehicle, codes, options) {
