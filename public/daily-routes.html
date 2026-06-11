@@ -696,6 +696,12 @@
   </style>
 </head>
 <body class="route-page" data-work-tab="route">
+  <script>
+    {
+      const initialTab = new URLSearchParams(location.search).get("tab");
+      if (["wms", "route", "new"].includes(initialTab)) document.body.dataset.workTab = initialTab;
+    }
+  </script>
   <div class="shell">
     <aside>
       <nav class="page-nav" aria-label="페이지 이동">
