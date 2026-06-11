@@ -72,6 +72,27 @@
       background:var(--pin-color, #2563eb);
       box-shadow:0 1px 5px rgba(15,23,42,.34);
     }
+    .vehicle-pin {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-width:38px;
+      min-height:24px;
+      padding:3px 8px;
+      border:2px solid #fff;
+      border-radius:999px;
+      background:var(--pin-color, #2563eb);
+      color:#fff;
+      box-shadow:0 2px 8px rgba(15,23,42,.30);
+      font-size:11px;
+      font-weight:900;
+      line-height:1;
+      white-space:nowrap;
+      transform:translate(-18px, -20px);
+    }
+    .vehicle-pin.new-area-pin {
+      background:#dc2626;
+    }
     .legend { position:absolute; right:14px; bottom:16px; z-index:500; background:rgba(255,255,255,.94); border:1px solid var(--edge); border-radius:8px; padding:10px 12px; font-size:12px; box-shadow:0 10px 28px rgba(15,23,42,.14); backdrop-filter:blur(6px); }
     .legend div { margin:4px 0; }
     .swatch { display:inline-block; width:18px; height:4px; vertical-align:middle; margin-right:6px; background:#2563eb; }
@@ -1326,7 +1347,7 @@
         const lng = Number(item.lng);
         addKakaoLabel(
           [lat, lng],
-          `<span class="customer-pin" style="--pin-color:#dc2626"></span>`,
+          vehiclePinHtml(item.vehicle || "검색", "#dc2626"),
           "customer-pin-wrap",
           labelLayer,
           () => openInfoWindow(
@@ -1358,7 +1379,7 @@
         });
         addKakaoLabel(
           [customer.lat, customer.lng],
-          `<span class="customer-pin" style="--pin-color:#dc2626"></span>`,
+          vehiclePinHtml(vehicle, "#dc2626"),
           "customer-pin-wrap",
           labelLayer,
           () => openInfoWindow(
@@ -1600,9 +1621,15 @@
       return overlay;
     }
 
-    function addRouteFlagMarker(point, color, vehicleLabel, sequence, total, popupHtml) {
+    function vehiclePinHtml(vehicle, color = "#2563eb", extraClass = "") {
+      const raw = typeof vehicle === "object" ? vehicle?.vehicle : vehicle;
+      const text = raw ? `${String(raw).replace(/호$/, "")}호` : "호차";
+      return `<span class="vehicle-pin ${esc(extraClass)}" style="--pin-color:${esc(color)}">${esc(text)}</span>`;
+    }
+
+    function addRouteFlagMarker(point, color, vehicleLabel, sequence, total, popupHtml, recordedOverride) {
       const node = document.createElement("div");
-      const recorded = !popupHtml.includes("앱 미사용/미기록");
+      const recorded = recordedOverride == null ? !popupHtml.includes("앱 미사용/미기록") : Boolean(recordedOverride);
       node.className = `route-flag${Number(sequence) === 1 ? " first" : ""}${Number(sequence) === Number(total) ? " last" : ""}${recorded ? "" : " unrecorded"}`;
       node.style.setProperty("--flag-color", color);
       node.title = `${vehicleLabel} ${sequence}번째`;
@@ -1630,22 +1657,16 @@
       const customerName = stop.name || stop.customerName || raw.estNm || raw.estName || "-";
       const customerCode = stop.code || stop.customerCode || raw.estCd || "-";
       const address = stop.address || raw.address || "-";
-      const monthlyAmount = stop.monthlyAmount || raw.monthSaleAmt || raw.monthlySaleAmt || raw.avgOrderAmt || stop.amount || "";
       const dailyAmount = stop.dailyAmount || raw.daySaleAmt || raw.dailySaleAmt || raw.orderAmt || raw.amt || "";
       const orderCount = stop.orderCount || raw.orderCnt || raw.ordCnt || raw.totalAlcnt || raw.alcnt || raw.count || "";
-      const deliveryTime = stop.deliveryTime || stop.routeTime || raw.deliveryTime || raw.arrivalTime || raw.time || "";
       const vehicleName = stop.vehicle || vehicle.vehicle;
       const vehicleLabel = String(vehicleName).endsWith("호") ? String(vehicleName) : `${vehicleName}호`;
       const routeLabel = Number(sequence) === 1 ? "첫배지" : stop.isLast ? "막배지" : "배송지";
-      const appUsageGroup = stop.appUsageGroup || raw.appUsageGroup || "";
       return `
         <b>${esc(customerName)}</b><br>
         호차: ${esc(vehicleLabel)} / ${esc(routeLabel)} ${esc(sequence || stop.sequence || "-")}<br>
         고객 코드: ${esc(customerCode)}<br>
         주소: ${esc(address)}<br>
-        배송완료 시간: ${deliveryTime ? esc(deliveryTime) : "앱 미사용/미기록"}<br>
-        기록 구분: ${appUsageGroup ? esc(appUsageGroup) : "-"}<br>
-        월 매출액: ${money(monthlyAmount)}<br>
         일 매출액: ${money(dailyAmount)}<br>
         주문 횟수: ${orderCount ? esc(orderCount) : "-"}<br>
         기준일: ${esc(date || routeDateInput.value || "-")}
@@ -1740,7 +1761,7 @@
           if (!Number.isFinite(customer.lat) || !Number.isFinite(customer.lng)) return;
           addKakaoLabel(
             [customer.lat, customer.lng],
-            `<span class="customer-pin" style="--pin-color:${color}"></span>`,
+            vehiclePinHtml(vehicle, color),
             "customer-pin-wrap",
             labelLayer,
             () => openInfoWindow(
@@ -1946,7 +1967,8 @@
           `${vehicle.vehicle}호`,
           sequence,
           stops.length,
-          buildStorePopup(stopWithRouteMeta, vehicle, date, sequence)
+          buildStorePopup(stopWithRouteMeta, vehicle, date, sequence),
+          Boolean(stop.appRecorded || stop.deliveryCompletedAt)
         );
       });
       const missingCount = stops.length - recordedStops.length;
@@ -2285,6 +2307,45 @@
         .sort((a, b) => a.distance - b.distance)[0] || null;
     }
 
+    function normalizeDeliveryPattern(pattern) {
+      const text = String(pattern || "").replace(/\s+/g, "");
+      if (!text || text === "-") return "";
+      const days = ["월", "화", "수", "목", "금", "토", "일"];
+      const found = days.filter(day => text.includes(day));
+      return found.length ? found.join("") : text;
+    }
+
+    function nearbyDeliveryPatterns(candidates) {
+      const groups = new Map();
+      (candidates || []).forEach(({ vehicle, customer, distance }) => {
+        const pattern = normalizeDeliveryPattern(customer?.delivery_pattern);
+        const vehicleNo = vehicle?.vehicle;
+        if (!pattern || !vehicleNo) return;
+        const key = `${vehicleNo}|${pattern}`;
+        if (!groups.has(key)) {
+          groups.set(key, { vehicle: vehicleNo, pattern, count: 0, distance: Number.POSITIVE_INFINITY });
+        }
+        const group = groups.get(key);
+        group.count += 1;
+        group.distance = Math.min(group.distance, Number(distance) || Number.POSITIVE_INFINITY);
+      });
+      return [...groups.values()]
+        .sort((a, b) => b.count - a.count || a.distance - b.distance || String(a.vehicle).localeCompare(String(b.vehicle), "ko", { numeric: true }))
+        .slice(0, 4);
+    }
+
+    function nearbyDeliveryPatternText(patterns) {
+      if (!patterns?.length) return "";
+      return `인근동선: ${patterns.map(item => `${item.vehicle}호 ${item.pattern}`).join(", ")}`;
+    }
+
+    function newAreaReasonForOutput(row) {
+      const nearbyText = row.deliveryPatternText || "";
+      if (!nearbyText) return row.reason || "";
+      if (!row.reason) return nearbyText;
+      return `${row.reason} / ${nearbyText}`;
+    }
+
     function judgeNewArea(row, point) {
       const nearest = nearestCustomers(point, 6);
       const best = nearest[0];
@@ -2321,6 +2382,8 @@
           reason = "배송동선 맞지않음";
         }
       }
+      const patternCandidates = nearbyDeliveryPatterns(nearest);
+      const deliveryPatternText = nearbyDeliveryPatternText(patternCandidates);
 
       return {
         ...row,
@@ -2332,6 +2395,8 @@
         nearestName: best?.customer?.name || "-",
         nearestAddress: best?.customer?.address || "",
         nearestDistance: distance,
+        deliveryPatternText,
+        deliveryPatternCandidates: patternCandidates,
         candidates: nearest
       };
     }
@@ -2447,13 +2512,16 @@
         const cls = row.decision === "O" ? "judge-ok" : row.decision === "X" ? "judge-no" : "judge-review";
         const vehicleText = row.vehicle && row.vehicle !== "-" ? `${esc(row.vehicle)}호` : "-";
         const centerText = row.center ? ` · ${esc(row.center)}` : "";
-        const reasonText = row.reason ? `<code>${esc(row.reason)}</code>` : "";
+        const reasonOutput = newAreaReasonForOutput(row);
+        const reasonText = reasonOutput ? `<code>${esc(reasonOutput)}</code>` : "";
+        const patternText = row.deliveryPatternText ? `<small>${esc(row.deliveryPatternText)}</small>` : "";
         return `
           <div class="new-area-result" data-index="${index}">
             <div class="result-line"><strong><span class="${cls}">${esc(row.decision)}</span> · ${vehicleText}${centerText}</strong>${reasonText}</div>
             <small>${esc(row.customer || "-")}</small>
             <small>${esc(row.address)}</small>
             <small>가까운 배송처: ${esc(row.nearestName)}</small>
+            ${patternText}
           </div>
         `;
       }).join("") || `<div class="new-area-result"><strong>표시할 결과가 없습니다.</strong><small>다른 필터를 선택해보세요.</small></div>`;
@@ -2492,13 +2560,13 @@
       }
       if (Number.isFinite(row.lat) && Number.isFinite(row.lng)) {
         setTimeout(() => {
-          addKakaoLabel([row.lat, row.lng], `<span class="customer-pin" style="--pin-color:#dc2626"></span>`, "customer-pin-wrap", labelLayer);
+          addKakaoLabel([row.lat, row.lng], vehiclePinHtml(row.vehicle || "신규", "#dc2626", "new-area-pin"), "customer-pin-wrap", labelLayer);
           setKakaoView(row.lat, row.lng, 4);
           openInfoWindow(new kakao.maps.LatLng(row.lat, row.lng), `
             <b>${esc(row.decision)} · ${esc(row.vehicle)}호</b><br>
             ${esc(row.customer || "-")}<br>
             ${esc(row.address)}<br>
-            사유: ${esc(row.reason)}<br>
+            사유: ${esc(newAreaReasonForOutput(row) || "-")}<br>
             센터/권역: ${esc(row.center)}
           `);
         }, 0);
@@ -3089,7 +3157,7 @@
         wmsStatus.textContent = `${vehicle}호 후보 위치를 찾지 못했습니다. 주소 컬럼을 확인해주세요.`;
         return;
       }
-      addKakaoLabel([point.lat, point.lng], `<span class="customer-pin" style="--pin-color:#dc2626"></span>`, "customer-pin-wrap", labelLayer);
+      addKakaoLabel([point.lat, point.lng], vehiclePinHtml(vehicle, "#dc2626"), "customer-pin-wrap", labelLayer);
       setKakaoView(point.lat, point.lng, 4);
       openInfoWindow(new kakao.maps.LatLng(point.lat, point.lng), `
         <b>${esc(vehicle)}호 WMS 후보</b><br>
@@ -3218,18 +3286,19 @@
     }
 
     function buildNewAreaResultRows() {
-      const headers = ["주소(X)", "고객정보(Y)", "판단(BV)", "사유(BW)", "적용일자(BX)", "센터/권역(BY)", "추천호차", "가까운 배송처", "거리km"];
+      const headers = ["주소(X)", "고객정보(Y)", "판단(BV)", "사유(BW)", "적용일자(BX)", "센터/권역(BY)", "추천호차", "가까운 배송처", "거리km", "인근동선요일"];
       const date = routeDateInput.value || "";
       const rows = newAreaResults.map(row => [
         row.address || "",
         row.customer || "",
         row.decision || "",
-        row.reason || "",
+        newAreaReasonForOutput(row),
         date,
         row.center || "",
         row.vehicle || "",
         row.nearestName || "",
-        row.nearestDistance != null ? row.nearestDistance.toFixed(2) : ""
+        row.nearestDistance != null ? row.nearestDistance.toFixed(2) : "",
+        row.deliveryPatternText || ""
       ]);
       return [headers, ...rows];
     }
