@@ -2334,16 +2334,36 @@
         .slice(0, 4);
     }
 
+    function isSpecialDeliveryPattern(pattern) {
+      const normalized = normalizeDeliveryPattern(pattern);
+      if (!normalized || normalized === "월화수목금토") return false;
+      const dayCount = ["월", "화", "수", "목", "금", "토", "일"].filter(day => normalized.includes(day)).length;
+      return dayCount >= 2 && dayCount <= 3;
+    }
+
     function nearbyDeliveryPatternText(patterns) {
       if (!patterns?.length) return "";
-      return `인근동선: ${patterns.map(item => `${item.vehicle}호 ${item.pattern}`).join(", ")}`;
+      const byPattern = new Map();
+      patterns.forEach(item => {
+        const pattern = normalizeDeliveryPattern(item.pattern);
+        if (!isSpecialDeliveryPattern(pattern)) return;
+        if (!byPattern.has(pattern)) byPattern.set(pattern, { pattern, count: 0, distance: Number.POSITIVE_INFINITY });
+        const row = byPattern.get(pattern);
+        row.count += item.count || 1;
+        row.distance = Math.min(row.distance, Number(item.distance) || Number.POSITIVE_INFINITY);
+      });
+      return [...byPattern.values()]
+        .sort((a, b) => b.count - a.count || a.distance - b.distance || a.pattern.localeCompare(b.pattern, "ko"))
+        .map(item => item.pattern)
+        .join(", ");
     }
 
     function newAreaReasonForOutput(row) {
       const nearbyText = row.deliveryPatternText || "";
-      if (!nearbyText) return row.reason || "";
-      if (!row.reason) return nearbyText;
-      return `${row.reason} / ${nearbyText}`;
+      if (row.reason === "아파트" || row.reason === "제주도" || row.reason === "검토필요") return row.reason;
+      if (nearbyText) return nearbyText;
+      if (row.reason === "배송동선 맞지않음") return "";
+      return row.reason || "";
     }
 
     function judgeNewArea(row, point) {
@@ -3286,7 +3306,7 @@
     }
 
     function buildNewAreaResultRows() {
-      const headers = ["주소(X)", "고객정보(Y)", "판단(BV)", "사유(BW)", "적용일자(BX)", "센터/권역(BY)", "추천호차", "가까운 배송처", "거리km", "인근동선요일"];
+      const headers = ["주소(X)", "고객정보(Y)", "판단(BV)", "사유(BW)", "적용일자(BX)", "센터/권역(BY)", "추천호차", "가까운 배송처", "거리km"];
       const date = routeDateInput.value || "";
       const rows = newAreaResults.map(row => [
         row.address || "",
@@ -3297,8 +3317,7 @@
         row.center || "",
         row.vehicle || "",
         row.nearestName || "",
-        row.nearestDistance != null ? row.nearestDistance.toFixed(2) : "",
-        row.deliveryPatternText || ""
+        row.nearestDistance != null ? row.nearestDistance.toFixed(2) : ""
       ]);
       return [headers, ...rows];
     }
