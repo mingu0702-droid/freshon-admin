@@ -42,6 +42,14 @@ const upload = multer({
 });
 
 app.use(express.json({ limit: "10mb" }));
+app.use((req, res, next) => {
+  if (req.path === "/" || req.path.endsWith(".html")) {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+  }
+  next();
+});
 app.use(express.static(publicDir));
 
 let refreshState = {
@@ -51,6 +59,8 @@ let refreshState = {
   lastFinishedAt: null,
   jobId: null
 };
+
+const dailyRouteSyncJobs = new Map();
 
 let vehicleAreaDataPromise = null;
 let customerMasterDataPromise = null;
@@ -1348,9 +1358,29 @@ async function buildDailyRouteFromFreshonLogin({ date, vehicle, center = "" }) {
     };
     throw error;
   }
+  const timeoutMs = 65000;
+  const timeout = new Promise((_, reject) => {
+    setTimeout(() => {
+      const error = new Error(`Freshon ID/PW automatic login timed out after ${Math.round(timeoutMs / 1000)}s.`);
+      error.status = 504;
+      error.diagnostics = {
+        type: "freshon-id-password-timeout",
+        date,
+        vehicle,
+        center,
+        timeoutMs,
+        hasId: Boolean(config.freshonId),
+        hasPassword: Boolean(config.freshonPassword)
+      };
+      reject(error);
+    }, timeoutMs);
+  });
   try {
     const { refreshDailyRouteData } = await import("./scraper/freshonDailyRoute.js");
-    const result = await refreshDailyRouteData({ date, vehicle, center, forceLogin: true });
+    const result = await Promise.race([
+      refreshDailyRouteData({ date, vehicle, center, forceLogin: true }),
+      timeout
+    ]);
     return {
       ...result,
       source: result?.source || "freshon-id-password-login",
@@ -1739,6 +1769,91 @@ app.get("/api/mobile/customer-search", requireView, async (req, res) => {
       source: item.source
     }))
   });
+});
+
+function dailyRouteSyncKey({ date, vehicle }) {
+  return `${date}::${vehicle}`;
+}
+
+function publicDailyRouteSyncJob(job) {
+  if (!job) return null;
+  return {
+    key: job.key,
+    date: job.date,
+    vehicle: job.vehicle,
+    center: job.center,
+    status: job.status,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt || null,
+    error: job.error || null,
+    source: job.source || null,
+    stopCount: job.stopCount ?? null
+  };
+}
+
+async function runDailyRouteSyncJob(job) {
+  try {
+    let live = null;
+    try {
+      live = await buildDailyRouteFromFreshon({ date: job.date, vehicle: job.vehicle, center: job.center });
+    } catch (cookieError) {
+      job.cookieError = cookieError.message || String(cookieError);
+      live = await buildDailyRouteFromFreshonLogin({ date: job.date, vehicle: job.vehicle, center: job.center });
+    }
+    if (!live) throw new Error("Freshon returned no daily route payload.");
+    await writeDailyRoute(live);
+    job.status = "done";
+    job.finishedAt = new Date().toISOString();
+    job.source = live.source || "freshon";
+    job.stopCount = Array.isArray(live.stops) ? live.stops.length : 0;
+  } catch (error) {
+    job.status = "error";
+    job.finishedAt = new Date().toISOString();
+    job.error = error.message || String(error);
+    job.diagnostics = error.diagnostics || error.diagnostic || null;
+  }
+}
+
+app.get("/api/daily-route-sync", requireView, (req, res) => {
+  const date = String(req.query.date || "");
+  const vehicle = String(req.query.vehicle || "");
+  if (!date || !vehicle) {
+    return res.status(400).json({ error: "date and vehicle are required." });
+  }
+  const key = dailyRouteSyncKey({ date, vehicle });
+  return res.json(publicDailyRouteSyncJob(dailyRouteSyncJobs.get(key)) || {
+    key,
+    date,
+    vehicle,
+    status: "idle"
+  });
+});
+
+app.post("/api/daily-route-sync", requireView, async (req, res) => {
+  const date = String(req.body?.date || req.query.date || "");
+  const vehicle = String(req.body?.vehicle || req.query.vehicle || "");
+  const center = String(req.body?.center || req.query.center || "");
+  if (!date || !vehicle) {
+    return res.status(400).json({ error: "date and vehicle are required." });
+  }
+  const key = dailyRouteSyncKey({ date, vehicle });
+  const current = dailyRouteSyncJobs.get(key);
+  if (current?.status === "running") {
+    return res.status(202).json(publicDailyRouteSyncJob(current));
+  }
+  const job = {
+    key,
+    date,
+    vehicle,
+    center,
+    status: "running",
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    error: null
+  };
+  dailyRouteSyncJobs.set(key, job);
+  runDailyRouteSyncJob(job);
+  return res.status(202).json(publicDailyRouteSyncJob(job));
 });
 
 app.get("/api/daily-route", requireView, async (req, res) => {

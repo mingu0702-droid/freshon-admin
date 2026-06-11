@@ -2,8 +2,8 @@ import { chromium, request } from "playwright";
 import { config } from "../config.js";
 
 const PAGE_SIZE = 1000;
-const MAX_PAGES = 80;
-const ROUTE_TIMEOUT_MS = Math.min(config.navTimeoutMs, 25000);
+const MAX_PAGES = 8;
+const ROUTE_TIMEOUT_MS = Math.min(config.navTimeoutMs, 15000);
 const freshonOrigin = new URL(config.freshonBaseUrl).origin;
 
 function assertCredentials() {
@@ -74,7 +74,7 @@ async function createLoggedInContext({ forceLogin = false } = {}) {
   page.setDefaultTimeout(ROUTE_TIMEOUT_MS);
   page.setDefaultNavigationTimeout(ROUTE_TIMEOUT_MS);
 
-  await page.goto(`${config.freshonBaseUrl}#/bo/wm/standard/driverCarListPage`, {
+  await page.goto(`${config.freshonBaseUrl}#/bo/wm/dispatch/dailyDsptcPage`, {
     waitUntil: "domcontentloaded",
     timeout: ROUTE_TIMEOUT_MS
   });
@@ -89,19 +89,31 @@ function toForm({ page, date, vehicle, center }) {
     isPaging: "true",
     isCount: "true",
     size: String(PAGE_SIZE),
-    sort: "est_cd,ASC",
-    excelFileNm: `daily_route_${date || ""}_${vehicle || ""}`,
+    excelFileNm: `daily_dispatch_${date || ""}_${vehicle || ""}`,
     logCd: "011",
-    estCd: "",
-    estName: "",
-    estNm: "",
-    estGbn: "",
-    startDate: "",
-    endDate: "",
-    carCd: "",
+    logCdNm: center || "",
+    logisticsCenter: center || "",
+    logisticsCenterNm: center || "",
+    whCd: "",
+    centerCd: "",
+    baecha: center || "",
+    startDate: date || "",
+    endDate: date || "",
+    inReqDate: date || "",
+    enteringDate: date || "",
+    reqDate: date || "",
+    dlvyReqDate: date || "",
+    carSeq: vehicle || "",
+    carSeqNm: vehicle || "",
+    carCd: vehicle || "",
     carNm: vehicle || "",
+    carNo: vehicle || "",
+    fixedCarSeq: vehicle || "",
+    fixedCarSeqNm: vehicle || "",
     shipGbn: "1",
-    baecha: center || ""
+    shipGbnNm: "night",
+    tcYn: "",
+    tcGbn: ""
   };
 }
 
@@ -135,6 +147,11 @@ function rowMatchesVehicle(row, vehicle, date) {
     row.mainCarSeqNm,
     row.carSeq,
     row.carSeqNm,
+    row.fixedCarSeq,
+    row.fixedCarSeqNm,
+    row.carNo,
+    row.carNumber,
+    row.vehicle,
     row.baecha
   ].filter(Boolean).some((value) => norm(value) === target || norm(value).includes(target));
 }
@@ -143,9 +160,9 @@ function toStop(row, index) {
   return {
     sequence: index + 1,
     raw: row,
-    code: row.estCd || "",
-    name: row.estNm || row.estName || "",
-    address: row.address || "",
+    code: row.estCd || row.customerCode || row.custCd || row.custCode || row.storeCd || "",
+    name: row.estNm || row.estName || row.customerName || row.custNm || row.storeNm || "",
+    address: row.address || row.addr || row.dlvyAddr || row.deliveryAddress || row.customerAddress || "",
     vehicle: row.carSeqSunNm || row.carSeqMonNm || row.carSeqTueNm || row.carSeqWedNm || row.carSeqThuNm || row.carSeqFriNm || row.carSeqSatNm || row.carNm || row.mainCarSeqNm || "",
     customerCode: row.estCd || row.customerCode || row.custCd || "",
     customerName: row.estNm || row.estName || row.customerName || row.custNm || "",
@@ -157,32 +174,71 @@ function toStop(row, index) {
   };
 }
 
-async function fetchFixedDispatchPage(context, { page, date, vehicle, center }) {
-  const api = context.request || context;
-  const response = await api.post(`${freshonOrigin}/bo/wm/standard/fixedAlctnList`, {
-    form: toForm({ page, date, vehicle, center }),
-    headers: {
-      Accept: "application/json, text/plain, */*",
-      Origin: freshonOrigin,
-      Referer: config.freshonBaseUrl
-    },
-    timeout: ROUTE_TIMEOUT_MS
-  });
+function extractRows(json) {
+  if (Array.isArray(json)) return json;
+  if (Array.isArray(json?.data)) return json.data;
+  if (Array.isArray(json?.rows)) return json.rows;
+  if (Array.isArray(json?.list)) return json.list;
+  if (Array.isArray(json?.result)) return json.result;
+  if (Array.isArray(json?.data?.rows)) return json.data.rows;
+  if (Array.isArray(json?.data?.list)) return json.data.list;
+  if (Array.isArray(json?.result?.rows)) return json.result.rows;
+  if (Array.isArray(json?.result?.list)) return json.result.list;
+  return [];
+}
 
-  if (!response.ok()) {
-    throw new Error(`fixedAlctnList API failed: ${response.status()} ${response.statusText()}`);
+async function postDailyDispatchPage(api, endpoint, { page, date, vehicle, center }, variant) {
+  const form = toForm({ page, date, vehicle, center });
+  const params = new URLSearchParams(form);
+  const commonHeaders = {
+    Accept: "application/json, text/plain, */*",
+    Origin: freshonOrigin,
+    Referer: `${freshonOrigin}/bo/main#/bo/wm/dispatch/dailyDsptcPage`
+  };
+  const options = variant === "json"
+    ? { data: form, headers: { ...commonHeaders, "Content-Type": "application/json; charset=UTF-8" }, timeout: ROUTE_TIMEOUT_MS }
+    : variant === "query"
+      ? { headers: commonHeaders, timeout: ROUTE_TIMEOUT_MS }
+      : { form, headers: commonHeaders, timeout: ROUTE_TIMEOUT_MS };
+  const url = variant === "query" ? `${freshonOrigin}${endpoint}?${params.toString()}` : `${freshonOrigin}${endpoint}`;
+  return api.post(url, options);
+}
+
+async function fetchDailyDispatchPage(context, { page, date, vehicle, center }) {
+  const api = context.request || context;
+  const endpoints = [
+    "/bo/wm/dispatch/dailyDsptcGridList",
+    "/bo/wm/dispatch/dailyDsptcList",
+    "/bo/wm/dispatch/dailyDsptc/list",
+    "/bo/wm/dispatch/dailyDsptcPage/list",
+    "/bo/wm/dispatch/selectDailyDsptcList",
+    "/bo/wm/dispatch/dailyDispatchList"
+  ];
+  const errors = [];
+  for (const endpoint of endpoints) {
+    for (const variant of ["json", "form", "query"]) {
+      const response = await postDailyDispatchPage(api, endpoint, { page, date, vehicle, center }, variant).catch((error) => {
+        errors.push(`${endpoint}:${variant}:${error.message || error}`);
+        return null;
+      });
+      if (!response) continue;
+      if (!response.ok()) {
+        errors.push(`${endpoint}:${variant}:HTTP ${response.status()}`);
+        continue;
+      }
+      const json = await response.json().catch(async () => ({ raw: await response.text().catch(() => "") }));
+      const rows = extractRows(json);
+      if (rows.length) return rows;
+      errors.push(`${endpoint}:${variant}:no rows`);
+    }
   }
-  const json = await response.json();
-  if (json.status && Number(json.status) !== 200) {
-    throw new Error(json.message || `fixedAlctnList API returned status ${json.status}`);
-  }
-  return Array.isArray(json.data) ? json.data : [];
+  throw new Error(`dailyDsptcPage API returned no rows. ${errors.slice(0, 8).join(" / ")}`);
 }
 
 async function scrapeDailyRouteWithContext(context, { date, vehicle, center = "" }) {
   const rows = [];
   for (let page = 0; page < MAX_PAGES; page += 1) {
-    const batch = await fetchFixedDispatchPage(context, { page, date, vehicle, center });
+    const batch = await fetchDailyDispatchPage(context, { page, date, vehicle, center });
     rows.push(...batch);
     if (batch.length < PAGE_SIZE) break;
   }
@@ -194,7 +250,7 @@ async function scrapeDailyRouteWithContext(context, { date, vehicle, center = ""
 
   return {
     generatedAt: new Date().toISOString(),
-    source: "freshon-fixed-dispatch-api",
+    source: "freshon-daily-dispatch-api",
     date,
     vehicle,
     center,
