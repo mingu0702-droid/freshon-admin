@@ -1387,7 +1387,11 @@ async function buildDailyRouteFromFreshonLogin({ date, vehicle, center = "" }) {
       warning: "Freshon ID/PW automatic login was used because cookie lookup failed or was unavailable."
     };
   } catch (error) {
-    const wrapped = new Error(`Freshon ID/PW automatic login failed. ${error.message || String(error)}`);
+    const rawMessage = error.message || String(error);
+    const noRows = /dailyDsptcPage API returned no rows|:no rows/i.test(rawMessage);
+    const wrapped = new Error(noRows
+      ? `Freshon daily dispatch returned no rows for the selected date/vehicle. ${rawMessage}`
+      : `Freshon ID/PW automatic login failed. ${rawMessage}`);
     wrapped.status = /Cannot find package 'playwright'|ERR_MODULE_NOT_FOUND/i.test(String(error.message || ""))
       ? 500
       : (error.status || 502);
@@ -1415,7 +1419,7 @@ function compactDate(date) {
   return String(date || "").replace(/\D/g, "");
 }
 
-function freshonDailyRouteForm({ date, vehicle, center = "", page = 0, inDate = date }) {
+function freshonDailyRouteForm({ date, vehicle, center = "", page = 0, inDate = date, shipGbn = "1", logCd = "011" }) {
   const centerText = center || "";
   return {
     page: String(page),
@@ -1425,10 +1429,10 @@ function freshonDailyRouteForm({ date, vehicle, center = "", page = 0, inDate = 
     sort: ",ASC",
     excelFileNm: `일일배차 내역_${compactDate(date)}`,
     sqlType: "LOTSIM003_P01",
-    logCd: "011",
+    logCd,
     inDate,
     closeTrans: "2",
-    shipGbn: "1",
+    shipGbn,
     logCdNm: centerText,
     logisticsCenter: centerText,
     logisticsCenterNm: centerText,
@@ -1448,7 +1452,7 @@ function freshonDailyRouteForm({ date, vehicle, center = "", page = 0, inDate = 
     carNo: vehicle,
     fixedCarSeq: vehicle,
     fixedCarSeqNm: vehicle,
-    shipGbnNm: "night",
+    shipGbnNm: shipGbn === "1" ? "night" : "",
     estCd: "",
     estName: "",
     tcYn: "",
@@ -1457,13 +1461,19 @@ function freshonDailyRouteForm({ date, vehicle, center = "", page = 0, inDate = 
 }
 
 function freshonDailyRouteRequestVariants({ date, vehicle, center = "", page = 0 }) {
-  const dates = [...new Set([addDays(date, 1), date].filter(Boolean))];
-  return dates.flatMap((inDate) => {
-    const form = freshonDailyRouteForm({ date, vehicle, center, page, inDate });
+  const baseVariants = [...new Set([date, addDays(date, 1)].filter(Boolean))]
+    .flatMap((inDate) => [
+      { inDate, shipGbn: "", logCd: "011" },
+      { inDate, shipGbn: "1", logCd: "011" },
+      { inDate, shipGbn: "", logCd: "" },
+      { inDate, shipGbn: "1", logCd: "" }
+    ]);
+  return baseVariants.flatMap((base) => {
+    const form = freshonDailyRouteForm({ date, vehicle, center, page, ...base });
     const params = new URLSearchParams(form);
     return [
       {
-        label: `freshon-form:${inDate}`,
+        label: `form:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}`,
         options: {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
@@ -1472,7 +1482,7 @@ function freshonDailyRouteRequestVariants({ date, vehicle, center = "", page = 0
         }
       },
       {
-        label: `freshon-json:${inDate}`,
+        label: `json:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}`,
         options: {
           method: "POST",
           headers: { "Content-Type": "application/json; charset=UTF-8" },

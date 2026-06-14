@@ -130,7 +130,7 @@ function compactDate(date) {
   return String(date || "").replace(/\D/g, "");
 }
 
-function toForm({ page, date, vehicle, center, inDate = date }) {
+function toForm({ page, date, vehicle, center, inDate = date, shipGbn = "1", logCd = "011" }) {
   return {
     page: String(page),
     isPaging: "false",
@@ -139,7 +139,7 @@ function toForm({ page, date, vehicle, center, inDate = date }) {
     sort: ",ASC",
     excelFileNm: `일일배차 내역_${compactDate(date)}`,
     sqlType: "LOTSIM003_P01",
-    logCd: "011",
+    logCd,
     inDate: inDate || "",
     closeTrans: "2",
     logCdNm: center || "",
@@ -161,8 +161,8 @@ function toForm({ page, date, vehicle, center, inDate = date }) {
     carNo: vehicle || "",
     fixedCarSeq: vehicle || "",
     fixedCarSeqNm: vehicle || "",
-    shipGbn: "1",
-    shipGbnNm: "night",
+    shipGbn,
+    shipGbnNm: shipGbn === "1" ? "night" : "",
     estCd: "",
     estName: "",
     tcYn: "",
@@ -243,7 +243,15 @@ function extractRows(json) {
 }
 
 async function postDailyDispatchPage(api, endpoint, { page, date, vehicle, center }, variant) {
-  const form = toForm({ page, date, vehicle, center, inDate: variant.inDate || date });
+  const form = toForm({
+    page,
+    date,
+    vehicle,
+    center,
+    inDate: variant.inDate || date,
+    shipGbn: variant.shipGbn,
+    logCd: variant.logCd
+  });
   const params = new URLSearchParams(form);
   const commonHeaders = {
     Accept: "application/json, text/plain, */*",
@@ -298,10 +306,16 @@ async function fetchDailyDispatchPage(context, { page, date, vehicle, center }) 
     "/bo/wm/dispatch/dailyDispatchList"
   ];
   const errors = [];
-  const variants = [...new Set([addDays(date, 1), date].filter(Boolean))]
+  const variants = [...new Set([date, addDays(date, 1)].filter(Boolean))]
     .flatMap((inDate) => [
-      { type: "form", label: `freshon-form:${inDate}`, inDate },
-      { type: "json", label: `freshon-json:${inDate}`, inDate }
+      { inDate, shipGbn: "", logCd: "011" },
+      { inDate, shipGbn: "1", logCd: "011" },
+      { inDate, shipGbn: "", logCd: "" },
+      { inDate, shipGbn: "1", logCd: "" }
+    ])
+    .flatMap((base) => [
+      { ...base, type: "form", label: `form:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}` },
+      { ...base, type: "json", label: `json:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}` }
     ]);
   for (const endpoint of endpoints) {
     for (const variant of variants) {
@@ -320,7 +334,8 @@ async function fetchDailyDispatchPage(context, { page, date, vehicle, center }) 
       errors.push(`${endpoint}:${variant.label}:no rows`);
     }
   }
-  throw new Error(`dailyDsptcPage API returned no rows. ${errors.slice(0, 8).join(" / ")}`);
+  const triedDates = [...new Set(variants.map((variant) => variant.inDate).filter(Boolean))].join(", ");
+  throw new Error(`dailyDsptcPage API returned no rows for date=${date}, vehicle=${vehicle}, tried inDate=${triedDates}, shipGbn=all/1, logCd=011/all. ${errors.slice(0, 8).join(" / ")}`);
 }
 
 async function scrapeDailyRouteWithContext(context, { date, vehicle, center = "" }) {
