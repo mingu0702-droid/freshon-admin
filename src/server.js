@@ -705,6 +705,12 @@ function monthKeyFromDate(date) {
   return normalized ? normalized.slice(0, 7) : "";
 }
 
+function numberFromMoney(value) {
+  const raw = normalizeCell(value).replace(/[^\d.-]/g, "");
+  const number = Number(raw);
+  return Number.isFinite(number) ? number : 0;
+}
+
 function normalizeVehicleValue(value) {
   const text = normalizeCell(value).replace(/\s+/g, "");
   if (!text) return "";
@@ -1778,6 +1784,70 @@ app.get("/api/status", requireView, async (_req, res) => {
 
 app.get("/api/fixed-dispatch", requireView, async (_req, res) => {
   res.json(await readDispatchCache());
+});
+
+app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
+  const cache = await readDispatchCache();
+  const rows = Array.isArray(cache.rows) ? cache.rows : [];
+  const vehicles = new Map();
+  const stores = new Map();
+  let totalAmount = 0;
+  for (const row of rows) {
+    const date = normalizeDateValue(firstValue(row, [
+      "\uC785\uACE0\uC694\uCCAD\uC77C(\uBC30\uC1A1\uC77C)",
+      "\uC785\uACE0\uC694\uCCAD\uC77C",
+      "\uBC30\uC1A1\uC77C",
+      "\uBC30\uC1A1\uC77C\uC790",
+      "\uC77C\uC790",
+      "\uBC30\uCC28\uC77C"
+    ]));
+    const vehicle = normalizeVehicleValue(firstValue(row, [
+      "\uD655\uC815\uD638\uCC28",
+      "\uAE30\uC900\uD638\uCC28",
+      "\uD638\uCC28",
+      "\uBC30\uCC28\uD638\uCC28",
+      "\uBC30\uC1A1\uD638\uCC28"
+    ]));
+    const code = firstValue(row, ["\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uACE0\uAC1DERP\uCF54\uB4DC", "ERP\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
+    const name = firstValue(row, ["\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
+    const address = firstValue(row, ["\uACE0\uAC1D\uC8FC\uC18C", "\uC8FC\uC18C", "\uBC30\uC1A1\uC8FC\uC18C"]);
+    const amount = numberFromMoney(firstValue(row, ["\uB9E4\uCD9C\uAE08\uC561", "\uAE08\uC561", "\uCD9C\uACE0\uAE08\uC561", "\uD310\uB9E4\uAE08\uC561", "\uCD1D\uC8FC\uBB38\uC561"]));
+    totalAmount += amount;
+    if (vehicle) {
+      const current = vehicles.get(vehicle) || { vehicle, stopCount: 0, amount: 0, dates: new Set() };
+      current.stopCount += 1;
+      current.amount += amount;
+      if (date) current.dates.add(date);
+      vehicles.set(vehicle, current);
+    }
+    const storeKey = code || `${name}|${address}`;
+    if (storeKey && storeKey !== "|") {
+      const current = stores.get(storeKey) || { code, name, address, vehicle, stopCount: 0, amount: 0, dates: new Set() };
+      current.stopCount += 1;
+      current.amount += amount;
+      if (date) current.dates.add(date);
+      stores.set(storeKey, current);
+    }
+  }
+  const vehicleRows = [...vehicles.values()]
+    .map((item) => ({ ...item, dates: item.dates.size }))
+    .sort((a, b) => b.amount - a.amount || b.stopCount - a.stopCount)
+    .slice(0, 80);
+  const storeRows = [...stores.values()]
+    .map((item) => ({ ...item, dates: item.dates.size }))
+    .sort((a, b) => b.amount - a.amount || b.stopCount - a.stopCount)
+    .slice(0, 120);
+  res.json({
+    generatedAt: cache.generatedAt || null,
+    range: cache.range || null,
+    rowCount: cache.rowCount || rows.length,
+    totalAmount,
+    vehicleCount: vehicles.size,
+    storeCount: stores.size,
+    vehicles: vehicleRows,
+    stores: storeRows,
+    source: "monthly-dispatch-cache"
+  });
 });
 
 app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => {

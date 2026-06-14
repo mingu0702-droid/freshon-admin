@@ -108,13 +108,13 @@
     .legend { position:absolute; right:14px; bottom:16px; z-index:500; background:rgba(255,255,255,.94); border:1px solid var(--edge); border-radius:8px; padding:10px 12px; font-size:12px; box-shadow:0 10px 28px rgba(15,23,42,.14); backdrop-filter:blur(6px); }
     .legend div { margin:4px 0; }
     .swatch { display:inline-block; width:18px; height:4px; vertical-align:middle; margin-right:6px; background:#2563eb; }
-    .map-popup { min-width:190px; max-width:280px; padding:9px 10px; font-family:Arial, "Malgun Gothic", sans-serif; font-size:12px; line-height:1.38; color:#111827; }
-    .store-popup { min-width:220px; max-width:260px; }
-    .popup-title { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:8px; border-bottom:1px solid #e5edf7; padding-bottom:7px; }
+    .map-popup { min-width:190px; max-width:250px; padding:8px 9px; font-family:Arial, "Malgun Gothic", sans-serif; font-size:12px; line-height:1.35; color:#111827; }
+    .store-popup { min-width:210px; max-width:240px; }
+    .popup-title { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:7px; border-bottom:1px solid #e5edf7; padding-bottom:6px; }
     .popup-title b { font-size:13px; line-height:1.25; overflow-wrap:anywhere; }
     .popup-badge { display:inline-flex; align-items:center; min-height:22px; padding:3px 8px; border-radius:999px; background:#fff0c2; color:#7c2d12; font-size:11px; font-weight:900; white-space:nowrap; }
-    .popup-grid { display:grid; gap:4px; }
-    .popup-row { display:grid; grid-template-columns:64px minmax(0, 1fr); gap:7px; }
+    .popup-grid { display:grid; gap:3px; }
+    .popup-row { display:grid; grid-template-columns:58px minmax(0, 1fr); gap:6px; }
     .popup-row span:first-child { color:#53657f; font-weight:900; }
     .popup-row span:last-child { overflow-wrap:anywhere; }
     .customer-flag {
@@ -157,7 +157,11 @@
     #syncRouteButton:hover { background:#1d4ed8; border-color:#1d4ed8; }
     #syncRouteButton:disabled { opacity:.62; cursor:not-allowed; background:#94a3b8; border-color:#94a3b8; color:#fff; }
     .route-status { color:var(--muted); font-size:12px; line-height:1.45; margin:8px 0 0; }
-    .sync-notice { margin-top:8px; border:1px solid #bfdbfe; border-radius:8px; background:#eff6ff; color:#1e3a8a; padding:9px; line-height:1.45; }
+    .route-status .diagnostic-attempt,
+    .route-status .route-unmatched { display:none; }
+    .route-status.show-detail .diagnostic-attempt,
+    .route-status.show-detail .route-unmatched { display:grid; }
+    .sync-notice { margin-top:8px; border:1px solid #bfdbfe; border-radius:8px; background:#eff6ff; color:#1e3a8a; padding:8px 9px; line-height:1.35; }
     .sync-notice.error { border-color:#fecaca; background:#fff7f7; color:#991b1b; }
     .sync-notice.done { border-color:#bbf7d0; background:#f0fdf4; color:#166534; }
     .route-unmatched { display:grid; gap:6px; margin-top:8px; }
@@ -676,15 +680,16 @@
       position:absolute;
       left:14px;
       top:14px;
-      z-index:520;
-      width:min(360px, calc(100% - 420px));
+      z-index:80;
+      width:auto;
+      max-width:300px;
       border:1px solid #cbd5e1;
       border-radius:8px;
       background:rgba(255,255,255,.96);
       box-shadow:0 12px 28px rgba(15,23,42,.16);
       backdrop-filter:blur(8px);
-      padding:12px;
-      gap:10px;
+      padding:9px 10px;
+      gap:8px;
       align-items:center;
       justify-content:space-between;
     }
@@ -703,7 +708,7 @@
       line-height:1.25;
     }
     .route-map-hud small {
-      display:block;
+      display:none;
       color:#667085;
       font-size:12px;
       line-height:1.35;
@@ -714,7 +719,7 @@
       border-radius:6px;
       background:#2563eb;
       color:#fff;
-      padding:8px 10px;
+      padding:7px 9px;
       font-size:12px;
       font-weight:900;
       white-space:nowrap;
@@ -845,9 +850,9 @@
             <input id="routeDateInput" type="date">
           </div>
           <button id="showRouteButton" type="button">동선 보기</button>
-          <button id="syncRouteButton" class="secondary" type="button">최신 동기화</button>
+          <button id="syncRouteButton" class="secondary" type="button">월 데이터 갱신</button>
         </div>
-        <div id="routeStatus" class="route-status">날짜와 호차를 선택하면 동선을 표시합니다.</div>
+        <div id="routeStatus" class="route-status">날짜와 호차를 선택하면 월 데이터 기준으로 동선을 표시합니다.</div>
       </div>
       <section class="new-area-panel new-work" aria-label="신규권역 판단">
         <h2>신규권역 판단</h2>
@@ -1060,12 +1065,13 @@
         }
         syncRouteButton.disabled = true;
         try {
-          await startDailyRouteSync(routeDateInput.value, vehicle);
-          routeStatus.innerHTML = `<div class="sync-notice">프레시온 최신 동기화를 시작했습니다. 기존 저장 동선은 바로 볼 수 있습니다.</div>`;
-          pollDailyRouteSync(routeDateInput.value, vehicle, getVehicleColor(vehicle));
+          const cache = await loadMonthlyDispatchCache();
+          await renderDailyRoute(vehicle, getVehicleColor(vehicle), { skipSync: true });
+          routeStatus.innerHTML += `<div class="sync-notice done"><b>월 데이터 갱신</b><br>${monthlyCacheSummary(cache)}</div>`;
         } catch (error) {
+          routeStatus.innerHTML = `<div class="sync-notice error">월 데이터 확인 실패: ${esc(error.message || String(error))}</div>`;
+        } finally {
           syncRouteButton.disabled = false;
-          routeStatus.innerHTML = `<div class="sync-notice error">프레시온 동기화 시작 실패: ${esc(error.message || String(error))}</div>`;
         }
       });
       routeMapHudButton.addEventListener("click", () => {
@@ -1388,13 +1394,13 @@
           labelLayer,
           () => openInfoWindow(
             new kakao.maps.LatLng(lat, lng),
-            `<b>${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>고객 코드: ${esc(item.code || "-")}<br>주소: ${esc(item.address || "-")}`
+            `<b>${esc(item.code || "-")} / ${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>주소: ${esc(item.address || "-")}`
           )
         );
         setKakaoView(lat, lng, 4);
         openInfoWindow(
           new kakao.maps.LatLng(lat, lng),
-          `<b>${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>고객 코드: ${esc(item.code || "-")}<br>주소: ${esc(item.address || "-")}`
+          `<b>${esc(item.code || "-")} / ${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>주소: ${esc(item.address || "-")}`
         );
       }, 0);
     }
@@ -1431,7 +1437,7 @@
         setKakaoView(customer.lat, customer.lng, 4);
         openInfoWindow(
           new kakao.maps.LatLng(Number(customer.lat), Number(customer.lng)),
-          `<b>${esc(customer.name || "-")}</b><br>배송 호차: ${esc(vehicle.vehicle)}호<br>고객 코드: ${esc(customer.id || "-")}<br>주소: ${esc(customer.address || "-")}`
+          `<b>${esc(customer.id || "-")} / ${esc(customer.name || "-")}</b><br>배송 호차: ${esc(vehicle.vehicle)}호<br>주소: ${esc(customer.address || "-")}`
         );
       }, 0);
     }
@@ -1728,14 +1734,14 @@
       const vehicleNo = vehicle.vehicle || customer.vehicle || "-";
       const pattern = normalizeDeliveryPattern(customer.delivery_pattern) || "월화수목금토";
       const ton = vehicle.ton || vehicle.tonnage || vehicle.tone || "-";
+      const title = `${customer.id || customer.code || "-"} / ${customer.name || "-"}`;
       return `
         <div class="store-popup">
           <div class="popup-title">
-            <b>${esc(customer.name || "-")}</b>
+            <b>${esc(title)}</b>
             <span class="popup-badge">${esc(vehicleNo)}호</span>
           </div>
           <div class="popup-grid">
-            <div class="popup-row"><span>고객코드</span><span>${esc(customer.id || customer.code || "-")}</span></div>
             <div class="popup-row"><span>주소</span><span>${esc(customer.address || "-")}</span></div>
             <div class="popup-row"><span>지역</span><span>${esc(regionFromAddress(customer.address))}</span></div>
             <div class="popup-row"><span>톤수</span><span>${esc(ton)}${String(ton).includes("톤") || ton === "-" ? "" : "톤"}</span></div>
@@ -1835,9 +1841,8 @@
       const vehicleLabel = String(vehicleName).endsWith("호") ? String(vehicleName) : `${vehicleName}호`;
       const routeLabel = Number(sequence) === 1 ? "첫배지" : stop.isLast ? "막배지" : "배송지";
       return `
-        <b>${esc(customerName)}</b><br>
+        <b>${esc(customerCode)} / ${esc(customerName)}</b><br>
         호차: ${esc(vehicleLabel)} / ${esc(routeLabel)} ${esc(sequence || stop.sequence || "-")}<br>
-        고객 코드: ${esc(customerCode)}<br>
         주소: ${esc(address)}<br>
         일 매출액: ${money(dailyAmount)}<br>
         주문 횟수: ${orderCount ? esc(orderCount) : "-"}<br>
@@ -2062,6 +2067,20 @@
       return response.json().catch(() => ({}));
     }
 
+    async function loadMonthlyDispatchCache() {
+      const response = await fetch("/api/fixed-dispatch", { cache: "no-store" });
+      if (!response.ok) throw new Error(`월 데이터 조회 HTTP ${response.status}`);
+      return response.json().catch(() => ({}));
+    }
+
+    function monthlyCacheSummary(cache) {
+      const rowCount = cache?.rowCount || cache?.rows?.length || 0;
+      const generatedAt = cache?.generatedAt || "-";
+      const range = cache?.range || cache?.monthKey || "";
+      if (!rowCount) return "저장된 월 배차 데이터가 없습니다. 관리자에서 월 배차 엑셀을 먼저 업로드해주세요.";
+      return `저장 월 데이터 ${fmt.format(rowCount)}행${range ? ` · 범위 ${esc(range)}` : ""}<br>갱신 기준: ${esc(generatedAt)}`;
+    }
+
     async function getDailyRouteSyncStatus(date, vehicle) {
       const params = new URLSearchParams({ date, vehicle: vehicle.vehicle });
       const response = await fetch(`/api/daily-route-sync?${params.toString()}`, { cache: "no-store" });
@@ -2069,17 +2088,16 @@
     }
 
     function renderSyncNotice(job) {
-      if (!job || job.status === "idle") return "프레시온 최신 동기화 대기 중입니다.";
-      if (job.status === "running") return `프레시온 최신 동기화 중입니다. 시작: ${esc(job.startedAt || "-")}`;
+      if (!job || job.status === "idle") return "월 데이터 기준으로 바로 조회합니다.";
+      if (job.status === "running") return `동기화 중 · 시작 ${esc(job.startedAt || "-")}`;
       if (job.status === "done") {
-        return `프레시온 최신 동기화 완료 · ${esc(job.source || "freshon")} · 착지 ${fmt.format(job.stopCount || 0)}건`
-          + `<br>저장 완료: ${esc(job.savedAt || job.finishedAt || "-")} · 기준: ${esc(job.dateBasis || "배송날짜")} · 월: ${esc(job.monthKey || "-")}`;
+        return `완료 · 착지 ${fmt.format(job.stopCount || 0)}건 · 월 ${esc(job.monthKey || "-")}`;
       }
       if (job.status === "error") {
-        const shortError = String(job.error || "-").split(" / ").slice(0, 3).join(" / ");
-        return `프레시온 최신 동기화 실패 · ${esc(shortError)}`;
+        const shortError = String(job.error || "-").split(" / ").slice(0, 1).join(" / ");
+        return `실패 · ${esc(shortError)}`;
       }
-      return `프레시온 최신 동기화 상태: ${esc(job.status || "-")}`;
+      return `상태: ${esc(job.status || "-")}`;
     }
 
     async function pollDailyRouteSync(date, vehicle, color) {
@@ -2184,15 +2202,15 @@
     async function renderDailyRoute(vehicle, color, options = {}) {
       const date = routeDateInput.value;
       if (!date) {
-        routeStatus.textContent = "날짜를 선택하면 프레시온 일일동선 데이터 기준으로 순번 깃발과 이동선을 표시합니다.";
+        routeStatus.textContent = "날짜를 선택하면 월 데이터 기준으로 동선을 표시합니다.";
         return;
       }
       if (!shouldShowRoute) {
-        routeStatus.textContent = "날짜 선택 후 동선 보기를 누르면 프레시온 일일배차관리 기준으로 조회합니다.";
+        routeStatus.textContent = "동선 보기를 누르면 월 데이터와 운영지도 기준으로 표시합니다.";
         return;
       }
       await renderDailyRoutePayload(vehicle, color, date, buildOperatingRoutePayload(vehicle, date));
-      routeStatus.innerHTML += `<div class="sync-notice">운영지도 기준 동선을 즉시 표시했습니다. 프레시온 최신 자료가 필요할 때만 최신 동기화를 눌러주세요.</div>`;
+      routeStatus.innerHTML += `<div class="sync-notice">운영지도 기준 표시 중 · 월 데이터가 있으면 자동으로 바꿔 표시합니다.</div>`;
       try {
         const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, center: vehicle.region || "" });
         const controller = new AbortController();
@@ -2201,7 +2219,7 @@
         clearTimeout(timer);
         if (!response.ok) {
           const error = await response.json().catch(() => ({}));
-          routeStatus.innerHTML += `<div class="diagnostic-attempt"><b>저장 동선 확인</b><br>${esc(error.error || "아직 표시할 저장 동선이 없습니다.")} 운영지도 기준 동선은 계속 표시합니다.</div>`;
+          routeStatus.innerHTML += `<div class="sync-notice">월 데이터 없음 · 운영지도 기준 유지</div>`;
           return;
         }
         const payload = await response.json();
@@ -2213,10 +2231,10 @@
           }
         }
       } catch (error) {
-        routeStatus.innerHTML += `<div class="sync-notice"><b>저장 동선 확인</b><br>${
+        routeStatus.innerHTML += `<div class="sync-notice">${
           error.name === "AbortError"
-            ? "저장 동선 조회가 4.5초 안에 끝나지 않아 운영지도 기준 동선을 유지합니다."
-            : "저장된 일일동선 데이터를 불러오지 못해 운영지도 기준 동선을 유지합니다."
+            ? "월 데이터 조회 지연 · 운영지도 기준 유지"
+            : "월 데이터를 불러오지 못해 운영지도 기준 유지"
         }</div>`;
       }
     }
