@@ -700,6 +700,11 @@ function normalizeDateValue(value) {
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
+function monthKeyFromDate(date) {
+  const normalized = normalizeDateValue(date);
+  return normalized ? normalized.slice(0, 7) : "";
+}
+
 function normalizeVehicleValue(value) {
   const text = normalizeCell(value).replace(/\s+/g, "");
   if (!text) return "";
@@ -900,14 +905,20 @@ async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" 
     : deliveryItems.length
       ? "uploaded-delivery-history"
       : "uploaded-fixed-dispatch";
+  const monthKey = monthKeyFromDate(date);
   return {
     generatedAt: new Date().toISOString(),
-    source,
+    source: "monthly-dispatch-cache",
+    originalSource: source,
+    cacheHit: true,
+    cacheType: "monthly-dispatch",
+    monthKey,
+    dateBasis: "배송날짜",
     warning: baseItems.length && deliveryItems.length
       ? "Uploaded fixed-dispatch rows were used as the route base, and delivery-history rows were merged only for app completion records."
       : deliveryItems.length
         ? "Uploaded delivery-history Excel data was used because no fixed-dispatch route base rows matched this date and vehicle."
-        : "Uploaded fixed-dispatch Excel data was used for this daily route.",
+        : "Uploaded fixed-dispatch Excel monthly data was used for this daily route.",
     date,
     vehicle,
     center,
@@ -1818,7 +1829,12 @@ function publicDailyRouteSyncJob(job) {
     finishedAt: job.finishedAt || null,
     error: job.error || null,
     source: job.source || null,
-    stopCount: job.stopCount ?? null
+    stopCount: job.stopCount ?? null,
+    saved: Boolean(job.saved),
+    savedAt: job.savedAt || null,
+    monthKey: job.monthKey || monthKeyFromDate(job.date),
+    dateBasis: job.dateBasis || "배송날짜",
+    cacheType: job.cacheType || null
   };
 }
 
@@ -1837,6 +1853,11 @@ async function runDailyRouteSyncJob(job) {
     job.finishedAt = new Date().toISOString();
     job.source = live.source || "freshon";
     job.stopCount = Array.isArray(live.stops) ? live.stops.length : 0;
+    job.saved = true;
+    job.savedAt = job.finishedAt;
+    job.monthKey = monthKeyFromDate(live.date || job.date);
+    job.dateBasis = live.dateBasis || "배송날짜";
+    job.cacheType = live.cacheType || "freshon-sync";
   } catch (error) {
     job.status = "error";
     job.finishedAt = new Date().toISOString();
