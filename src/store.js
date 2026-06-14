@@ -20,8 +20,8 @@ async function readLocalJson(file, fallback) {
 }
 
 async function writeLocalJson(file, payload) {
-  await fs.mkdir(dataDir, { recursive: true });
-  const tmp = `${file}.tmp`;
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(payload), "utf8");
   await fs.rename(tmp, file);
 }
