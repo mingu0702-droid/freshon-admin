@@ -55,6 +55,35 @@ async function maybeLogin(page) {
   }
 }
 
+function parseCookieHeader(cookieHeader) {
+  return String(cookieHeader || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const index = part.indexOf("=");
+      if (index <= 0) return null;
+      return {
+        name: part.slice(0, index).trim(),
+        value: part.slice(index + 1).trim()
+      };
+    })
+    .filter((item) => item?.name && item.value);
+}
+
+async function seedFreshonCookies(context) {
+  const cookies = parseCookieHeader(config.freshonCookie);
+  if (!cookies.length) return;
+  await context.addCookies(cookies.map((cookie) => ({
+    ...cookie,
+    domain: "mis.freshon.co.kr",
+    path: "/",
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax"
+  }))).catch(() => null);
+}
+
 async function createLoggedInContext({ forceLogin = false } = {}) {
   if (config.freshonCookie && !forceLogin) {
     const context = await request.newContext({
@@ -71,7 +100,9 @@ async function createLoggedInContext({ forceLogin = false } = {}) {
 
   assertCredentials();
   const browser = await chromium.launch({ headless: config.headless });
-  const page = await browser.newPage();
+  const context = await browser.newContext();
+  await seedFreshonCookies(context);
+  const page = await context.newPage();
   page.setDefaultTimeout(API_TIMEOUT_MS);
   page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
 
@@ -85,7 +116,7 @@ async function createLoggedInContext({ forceLogin = false } = {}) {
     timeout: NAV_TIMEOUT_MS
   }).catch(() => null);
   await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
-  return { browser, context: page.context(), page };
+  return { browser, context, page };
 }
 
 function addDays(date, days) {
