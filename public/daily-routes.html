@@ -7,11 +7,11 @@
   <style>
     :root { --ink:#172033; --muted:#667085; --line:#2563eb; --panel:#ffffff; --edge:#d8e0eb; --soft:#f6f8fb; --focus:#1d4ed8; --danger:#dc2626; --ok:#047857; --warn:#b45309; }
     * { box-sizing:border-box; }
-    body { margin:0; font-family:Arial, "Malgun Gothic", sans-serif; color:var(--ink); background:#eaf0f6; }
-    .shell { display:grid; grid-template-columns:360px minmax(0, 1fr); height:100vh; min-height:640px; }
-    aside { background:var(--panel); border-right:1px solid var(--edge); padding:14px; overflow:auto; }
-    h1 { font-size:22px; margin:0 0 6px; letter-spacing:0; }
-    .meta { color:var(--muted); font-size:12px; line-height:1.45; margin-bottom:12px; }
+    body { margin:0; font-family:Arial, "Malgun Gothic", sans-serif; color:var(--ink); background:#edf3f8; }
+    .shell { display:grid; grid-template-columns:388px minmax(0, 1fr); height:100vh; min-height:640px; }
+    aside { background:linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%); border-right:1px solid #cbd8e8; padding:16px; overflow:auto; box-shadow:10px 0 28px rgba(15,23,42,.08); }
+    h1 { font-size:26px; margin:0 0 6px; letter-spacing:0; color:#071936; }
+    .meta { color:#40516c; font-size:12px; line-height:1.55; margin-bottom:12px; }
     .section-title { font-size:13px; margin:14px 0 8px; color:#344054; font-weight:900; }
     label { display:block; font-size:11px; font-weight:900; color:#344054; margin:10px 0 5px; }
     select, input { width:100%; border:1px solid var(--edge); border-radius:6px; padding:9px 10px; font-size:13px; background:#fff; color:#172033; }
@@ -38,8 +38,8 @@
     .variable-row b { font-size:13px; }
     .back-button { width:100%; border:1px solid #b7c7e8; background:#eff6ff; color:#1d4ed8; border-radius:6px; padding:9px 10px; font-size:13px; font-weight:900; cursor:pointer; margin:10px 0 2px; }
     .back-button:hover { background:#dbeafe; }
-    .search-results { display:grid; gap:6px; margin:8px 0 4px; }
-    .search-hit { border:1px solid var(--edge); background:#fff; border-radius:6px; padding:8px; cursor:pointer; font-size:12px; }
+    .search-results { display:grid; gap:8px; margin:9px 0 4px; }
+    .search-hit { border:1px solid #d8e4f1; background:#fff; border-radius:10px; padding:10px; cursor:pointer; font-size:12px; box-shadow:0 8px 20px rgba(15,23,42,.04); }
     .search-hit:hover { border-color:#2563eb; background:#eff6ff; }
     .search-hit b { font-size:13px; }
     .search-hit .source-badge { display:inline-flex; align-items:center; margin-left:4px; padding:1px 5px; border-radius:999px; background:#eef2ff; color:#1d4ed8; font-size:11px; font-weight:700; }
@@ -55,7 +55,7 @@
     .area-list { margin:0; padding:8px 10px 8px 26px; font-size:13px; line-height:1.65; border:1px solid var(--edge); border-radius:8px; background:#fff; }
     .area-list:empty { display:none; }
     .customer-list { display:grid; gap:7px; margin-top:8px; }
-    .customer { border:1px solid var(--edge); border-radius:7px; padding:10px; background:#fff; cursor:pointer; transition:border-color .12s ease, background .12s ease, transform .12s ease; }
+    .customer { border:1px solid #d8e4f1; border-radius:10px; padding:10px; background:#fff; cursor:pointer; transition:border-color .12s ease, background .12s ease, transform .12s ease; box-shadow:0 8px 20px rgba(15,23,42,.04); }
     .customer:hover { border-color:#2563eb; background:#f8fbff; transform:translateY(-1px); }
     .customer strong { display:block; font-size:13px; margin-bottom:4px; line-height:1.3; }
     .customer small { color:var(--muted); line-height:1.45; display:block; }
@@ -92,11 +92,29 @@
     }
     .vehicle-pin.new-area-pin {
       background:#dc2626;
+      min-width:46px;
+      min-height:28px;
+      box-shadow:0 10px 20px rgba(220,38,38,.28);
+    }
+    .vehicle-pin.nearby-store-pin {
+      min-width:34px;
+      min-height:28px;
+      border-radius:10px;
+      background:#f97316;
+      box-shadow:0 8px 18px rgba(249,115,22,.30);
     }
     .legend { position:absolute; right:14px; bottom:16px; z-index:500; background:rgba(255,255,255,.94); border:1px solid var(--edge); border-radius:8px; padding:10px 12px; font-size:12px; box-shadow:0 10px 28px rgba(15,23,42,.14); backdrop-filter:blur(6px); }
     .legend div { margin:4px 0; }
     .swatch { display:inline-block; width:18px; height:4px; vertical-align:middle; margin-right:6px; background:#2563eb; }
-    .map-popup { min-width:130px; max-width:230px; padding:6px 8px; font-family:Arial, "Malgun Gothic", sans-serif; font-size:11px; line-height:1.35; color:#111827; }
+    .map-popup { min-width:220px; max-width:360px; padding:10px 12px; font-family:Arial, "Malgun Gothic", sans-serif; font-size:12px; line-height:1.42; color:#111827; }
+    .store-popup { min-width:280px; }
+    .popup-title { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:8px; }
+    .popup-title b { font-size:14px; line-height:1.3; }
+    .popup-badge { display:inline-flex; align-items:center; min-height:22px; padding:3px 8px; border-radius:999px; background:#fff0c2; color:#7c2d12; font-size:11px; font-weight:900; white-space:nowrap; }
+    .popup-grid { display:grid; gap:5px; }
+    .popup-row { display:grid; grid-template-columns:82px minmax(0, 1fr); gap:8px; }
+    .popup-row span:first-child { color:#53657f; font-weight:900; }
+    .popup-row span:last-child { overflow-wrap:anywhere; }
     .customer-flag {
       position:relative;
       width:14px;
@@ -127,7 +145,7 @@
       border-radius:1px 3px 3px 1px;
       box-shadow:0 1px 3px rgba(15,23,42,.3);
     }
-    .control-panel { border:1px solid var(--edge); border-radius:8px; background:var(--soft); padding:10px; margin:10px 0; }
+    .control-panel { border:1px solid #d8e4f1; border-radius:12px; background:#fff; padding:14px; margin:12px 0; box-shadow:0 10px 24px rgba(15,23,42,.06); }
     .route-controls { display:grid; grid-template-columns:1fr auto auto; gap:8px; align-items:end; margin:8px 0 0; }
     .route-controls label { margin:0 0 6px; }
     .route-controls button { border:1px solid #2563eb; background:#2563eb; color:#fff; border-radius:6px; padding:9px 12px; font-size:12px; font-weight:900; cursor:pointer; white-space:nowrap; }
@@ -141,7 +159,7 @@
     .data-actions { position:absolute; right:14px; top:14px; z-index:520; display:flex; gap:8px; }
     .data-actions button, .data-actions a { border:1px solid #cbd5e1; background:rgba(255,255,255,.94); color:#0f172a; border-radius:6px; padding:8px 10px; font-size:12px; font-weight:900; text-decoration:none; box-shadow:0 8px 22px rgba(15,23,42,.13); cursor:pointer; backdrop-filter:blur(6px); }
     .data-actions button:hover, .data-actions a:hover { border-color:#2563eb; color:#1d4ed8; }
-    .new-area-panel, .wms-panel { border:1px solid #cfd9e8; border-radius:8px; background:#f8fafc; padding:10px; margin:10px 0; }
+    .new-area-panel, .wms-panel { border:1px solid #d8e4f1; border-radius:12px; background:#fff; padding:14px; margin:12px 0; box-shadow:0 10px 24px rgba(15,23,42,.06); }
     .new-area-panel h2, .wms-panel h2 { font-size:15px; margin:0 0 6px; }
     .new-area-panel textarea, .wms-panel textarea { width:100%; min-height:92px; resize:vertical; border:1px solid var(--edge); border-radius:6px; padding:9px; font-size:12px; font-family:Arial, "Malgun Gothic", sans-serif; background:#fff; line-height:1.45; }
     .new-area-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; }
@@ -590,10 +608,10 @@
     }
     body[data-work-tab="route"] .route-work.control-panel,
     body[data-work-tab="new"] .new-area-panel {
-      border-radius:8px;
+      border-radius:12px;
       background:#fff;
-      border-color:#d8e0eb;
-      box-shadow:0 1px 4px rgba(15,23,42,.05);
+      border-color:#d8e4f1;
+      box-shadow:0 10px 24px rgba(15,23,42,.06);
     }
     body[data-work-tab="route"] .route-controls {
       display:grid;
@@ -1441,17 +1459,9 @@
           opacity: .75
         });
       }
-      addKakaoLabel([point.lat, point.lng], vehiclePinHtml(judged.vehicle || "검색", "#111827", "new-area-pin"), "customer-pin-wrap", labelLayer);
-      setKakaoView(point.lat, point.lng, 4);
-      openInfoWindow(new kakao.maps.LatLng(point.lat, point.lng), `
-        <b>주소 검색</b><br>
-        결과 주소: ${esc(address)}<br>
-        추천 호차: ${esc(judged.vehicle && judged.vehicle !== "-" ? `${judged.vehicle}호` : "-")}<br>
-        반경 500m 인근 매장: ${fmt.format(judged.radiusCount || 0)}곳<br>
-        사유/요일: ${esc(reason || "전요일 가능")}<br>
-        가까운 배송처: ${esc(judged.nearestName || "-")}
-      `);
-      routeStatus.textContent = `${address}: 가상 핀 표시 · 반경 500m 인근 매장 ${fmt.format(judged.radiusCount || 0)}곳 기준`;
+      showNewAreaContext(judged);
+      const displayedNearby = judged.nearbyStores?.length || judged.candidates?.length || 0;
+      routeStatus.textContent = `${address}: 신규 핀과 주변 매장 ${fmt.format(displayedNearby)}곳 표시 · 반경 500m ${fmt.format(judged.radiusCount || 0)}곳 기준`;
     }
 
     function initWmsMapResizeHandles() {
@@ -1679,6 +1689,97 @@
       const raw = typeof vehicle === "object" ? vehicle?.vehicle : vehicle;
       const text = raw ? `${String(raw).replace(/호$/, "")}호` : "호차";
       return `<span class="vehicle-pin ${esc(extraClass)}" style="--pin-color:${esc(color)}">${esc(text)}</span>`;
+    }
+
+    function kmText(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "-";
+      if (number < 1) return `${Math.round(number * 1000)}m`;
+      return `${number.toFixed(1)}km`;
+    }
+
+    function regionFromAddress(address) {
+      const parts = String(address || "").trim().split(/\s+/).filter(Boolean);
+      return parts.slice(0, 2).join(" ") || "-";
+    }
+
+    function storePopupFromCandidate(item, sourceLabel = "주변 매장") {
+      const vehicle = item?.vehicle || {};
+      const customer = item?.customer || {};
+      const vehicleNo = vehicle.vehicle || customer.vehicle || "-";
+      const pattern = normalizeDeliveryPattern(customer.delivery_pattern) || "월화수목금토";
+      const ton = vehicle.ton || vehicle.tonnage || vehicle.tone || "-";
+      return `
+        <div class="store-popup">
+          <div class="popup-title">
+            <b>${esc(customer.name || "-")}</b>
+            <span class="popup-badge">${esc(vehicleNo)}호</span>
+          </div>
+          <div class="popup-grid">
+            <div class="popup-row"><span>고객코드</span><span>${esc(customer.id || customer.code || "-")}</span></div>
+            <div class="popup-row"><span>주소</span><span>${esc(customer.address || "-")}</span></div>
+            <div class="popup-row"><span>지역</span><span>${esc(regionFromAddress(customer.address))}</span></div>
+            <div class="popup-row"><span>톤수</span><span>${esc(ton)}${String(ton).includes("톤") || ton === "-" ? "" : "톤"}</span></div>
+            <div class="popup-row"><span>배송 패턴</span><span>${esc(pattern)}</span></div>
+            <div class="popup-row"><span>거리</span><span>${esc(kmText(item?.distance))}</span></div>
+            <div class="popup-row"><span>구분</span><span>${esc(sourceLabel)}</span></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function newAreaPopup(row) {
+      const reason = newAreaReasonForOutput(row) || "전요일 가능";
+      const vehicleText = row.vehicle && row.vehicle !== "-" ? `${row.vehicle}호` : "-";
+      return `
+        <div class="store-popup">
+          <div class="popup-title">
+            <b>신규권역 판단</b>
+            <span class="popup-badge">${esc(row.decision || "검토")}</span>
+          </div>
+          <div class="popup-grid">
+            <div class="popup-row"><span>추천 호차</span><span>${esc(vehicleText)}</span></div>
+            <div class="popup-row"><span>주소</span><span>${esc(row.address || "-")}</span></div>
+            <div class="popup-row"><span>고객</span><span>${esc(row.customer || "-")}</span></div>
+            <div class="popup-row"><span>사유/요일</span><span>${esc(reason)}</span></div>
+            <div class="popup-row"><span>가까운 매장</span><span>${esc(row.nearestName || "-")}</span></div>
+            <div class="popup-row"><span>주변 매장</span><span>반경 500m ${fmt.format(row.radiusCount || 0)}곳</span></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function showNewAreaContext(row, options = {}) {
+      if (!Number.isFinite(row?.lat) || !Number.isFinite(row?.lng)) return;
+      const vehicle = findVehicleByNumber(row.vehicle);
+      const color = vehicle ? getVehicleColor(vehicle) : "#dc2626";
+      const nearby = (row.nearbyStores && row.nearbyStores.length ? row.nearbyStores : row.candidates || [])
+        .filter(item => Number.isFinite(item?.customer?.lat) && Number.isFinite(item?.customer?.lng))
+        .slice(0, 20);
+      addKakaoLabel(
+        [row.lat, row.lng],
+        vehiclePinHtml(row.vehicle && row.vehicle !== "-" ? row.vehicle : "신규", "#dc2626", "new-area-pin"),
+        "customer-pin-wrap",
+        labelLayer,
+        () => openInfoWindow(new kakao.maps.LatLng(row.lat, row.lng), newAreaPopup(row))
+      );
+      nearby.forEach(item => {
+        const storeColor = item.vehicle ? getVehicleColor(item.vehicle) : "#f97316";
+        addKakaoLabel(
+          [item.customer.lat, item.customer.lng],
+          vehiclePinHtml(item.vehicle?.vehicle || row.vehicle || "주변", storeColor || "#f97316", "nearby-store-pin"),
+          "customer-pin-wrap",
+          labelLayer,
+          () => openInfoWindow(
+            new kakao.maps.LatLng(Number(item.customer.lat), Number(item.customer.lng)),
+            storePopupFromCandidate(item, "신규권역 주변 매장")
+          )
+        );
+      });
+      const points = [[row.lat, row.lng], ...nearby.map(item => [item.customer.lat, item.customer.lng])];
+      if (points.length > 1) fitKakaoBounds(points);
+      else setKakaoView(row.lat, row.lng, options.level || 4);
+      openInfoWindow(new kakao.maps.LatLng(row.lat, row.lng), newAreaPopup(row));
     }
 
     function addRouteFlagMarker(point, color, vehicleLabel, sequence, total, popupHtml, recordedOverride) {
@@ -2466,6 +2567,8 @@
       const patternSource = radiusCustomers.length ? radiusCustomers : nearest;
       const patternCandidates = nearbyDeliveryPatterns(patternSource);
       const deliveryPatternText = nearbyDeliveryPatternText(patternCandidates);
+      const nearbyStores = (radiusCustomers.length ? radiusCustomers : nearest)
+        .slice(0, radiusCustomers.length ? 20 : 6);
 
       return {
         ...row,
@@ -2480,6 +2583,7 @@
         radiusCount: radiusCustomers.length,
         deliveryPatternText,
         deliveryPatternCandidates: patternCandidates,
+        nearbyStores,
         candidates: nearest
       };
     }
@@ -2643,15 +2747,8 @@
       }
       if (Number.isFinite(row.lat) && Number.isFinite(row.lng)) {
         setTimeout(() => {
-          addKakaoLabel([row.lat, row.lng], vehiclePinHtml(row.vehicle || "신규", "#dc2626", "new-area-pin"), "customer-pin-wrap", labelLayer);
-          setKakaoView(row.lat, row.lng, 4);
-          openInfoWindow(new kakao.maps.LatLng(row.lat, row.lng), `
-            <b>${esc(row.decision)} · ${esc(row.vehicle)}호</b><br>
-            ${esc(row.customer || "-")}<br>
-            ${esc(row.address)}<br>
-            사유: ${esc(newAreaReasonForOutput(row) || "-")}<br>
-            센터/권역: ${esc(row.center)}
-          `);
+          showNewAreaContext(row);
+          routeStatus.textContent = `${esc(row.address || row.customer || "신규권역")}: 신규 핀과 주변 매장을 같이 표시했습니다.`;
         }, 0);
       }
     }
