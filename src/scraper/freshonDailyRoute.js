@@ -85,7 +85,7 @@ async function createLoggedInContext({ forceLogin = false } = {}) {
     timeout: NAV_TIMEOUT_MS
   }).catch(() => null);
   await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
-  return { browser, context: page.context() };
+  return { browser, context: page.context(), page };
 }
 
 function addDays(date, days) {
@@ -225,11 +225,38 @@ async function postDailyDispatchPage(api, endpoint, { page, date, vehicle, cente
       ? { headers: commonHeaders, timeout: API_TIMEOUT_MS }
       : { form, headers: commonHeaders, timeout: API_TIMEOUT_MS };
   const url = variant.type === "query" ? `${freshonOrigin}${endpoint}?${params.toString()}` : `${freshonOrigin}${endpoint}`;
+  if (api && typeof api.evaluate === "function") {
+    const result = await api.evaluate(async ({ url, form, paramsText, headers, variantType }) => {
+      const response = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: variantType === "json" ? JSON.stringify(form) : paramsText
+      });
+      return {
+        ok: response.ok,
+        status: response.status,
+        text: await response.text()
+      };
+    }, {
+      url,
+      form,
+      paramsText: params.toString(),
+      headers: options.headers || commonHeaders,
+      variantType: variant.type
+    });
+    return {
+      ok: () => result.ok,
+      status: () => result.status,
+      json: async () => JSON.parse(result.text),
+      text: async () => result.text
+    };
+  }
   return api.post(url, options);
 }
 
 async function fetchDailyDispatchPage(context, { page, date, vehicle, center }) {
-  const api = context.request || context;
+  const api = typeof context.evaluate === "function" ? context : context.request || context;
   const endpoints = [
     "/bo/wm/dispatch/dailyDsptcGrid1List",
     "/bo/wm/dispatch/dailyDsptcGridList",
@@ -290,9 +317,9 @@ async function scrapeDailyRouteWithContext(context, { date, vehicle, center = ""
 }
 
 export async function withDailyRouteSession(callback, options = {}) {
-  const { browser, context } = await createLoggedInContext(options);
+  const { browser, context, page } = await createLoggedInContext(options);
   try {
-    return await callback((job) => scrapeDailyRouteWithContext(context, job));
+    return await callback((job) => scrapeDailyRouteWithContext(page || context, job));
   } finally {
     await context.close?.();
     await browser?.close();
