@@ -1,7 +1,7 @@
 import { chromium, request } from "playwright";
 import { config } from "../config.js";
 
-const PAGE_SIZE = 1000;
+const PAGE_SIZE = 100;
 const MAX_PAGES = 8;
 const API_TIMEOUT_MS = Math.min(config.navTimeoutMs, 15000);
 const NAV_TIMEOUT_MS = Math.min(Math.max(config.navTimeoutMs, 45000), 90000);
@@ -88,26 +88,41 @@ async function createLoggedInContext({ forceLogin = false } = {}) {
   return { browser, context: page.context() };
 }
 
-function toForm({ page, date, vehicle, center }) {
+function addDays(date, days) {
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  parsed.setDate(parsed.getDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function compactDate(date) {
+  return String(date || "").replace(/\D/g, "");
+}
+
+function toForm({ page, date, vehicle, center, inDate = date }) {
   return {
     page: String(page),
-    isPaging: "true",
+    isPaging: "false",
     isCount: "true",
     size: String(PAGE_SIZE),
-    excelFileNm: `daily_dispatch_${date || ""}_${vehicle || ""}`,
+    sort: ",ASC",
+    excelFileNm: `일일배차 내역_${compactDate(date)}`,
+    sqlType: "LOTSIM003_P01",
     logCd: "011",
+    inDate: inDate || "",
+    closeTrans: "2",
     logCdNm: center || "",
     logisticsCenter: center || "",
     logisticsCenterNm: center || "",
     whCd: "",
     centerCd: "",
     baecha: center || "",
-    startDate: date || "",
-    endDate: date || "",
-    inReqDate: date || "",
-    enteringDate: date || "",
-    reqDate: date || "",
-    dlvyReqDate: date || "",
+    startDate: inDate || "",
+    endDate: inDate || "",
+    inReqDate: inDate || "",
+    enteringDate: inDate || "",
+    reqDate: inDate || "",
+    dlvyReqDate: inDate || "",
     carSeq: vehicle || "",
     carSeqNm: vehicle || "",
     carCd: vehicle || "",
@@ -117,6 +132,8 @@ function toForm({ page, date, vehicle, center }) {
     fixedCarSeqNm: vehicle || "",
     shipGbn: "1",
     shipGbnNm: "night",
+    estCd: "",
+    estName: "",
     tcYn: "",
     tcGbn: ""
   };
@@ -174,6 +191,8 @@ function toStop(row, index) {
     amount: row.avgOrderAmt || row.orderAmt || row.amt || row.saleAmt || "",
     dailyAmount: row.daySaleAmt || row.dailySaleAmt || row.orderAmt || row.amt || "",
     monthlyAmount: row.monthSaleAmt || row.monthlySaleAmt || row.avgOrderAmt || "",
+    ton: row.carTonNm || row.carTon || "",
+    driverName: row.driverName || row.driverNm || "",
     orderCount: row.orderCnt || row.ordCnt || row.totalAlcnt || row.alcnt || row.count || "",
     deliveryPattern: row.mon || row.tue || row.wed || row.thu || row.fri || row.sat || row.sun || ""
   };
@@ -193,25 +212,26 @@ function extractRows(json) {
 }
 
 async function postDailyDispatchPage(api, endpoint, { page, date, vehicle, center }, variant) {
-  const form = toForm({ page, date, vehicle, center });
+  const form = toForm({ page, date, vehicle, center, inDate: variant.inDate || date });
   const params = new URLSearchParams(form);
   const commonHeaders = {
     Accept: "application/json, text/plain, */*",
     Origin: freshonOrigin,
     Referer: `${freshonOrigin}/bo/main#/bo/wm/dispatch/dailyDsptcPage`
   };
-  const options = variant === "json"
+  const options = variant.type === "json"
     ? { data: form, headers: { ...commonHeaders, "Content-Type": "application/json; charset=UTF-8" }, timeout: API_TIMEOUT_MS }
-    : variant === "query"
+    : variant.type === "query"
       ? { headers: commonHeaders, timeout: API_TIMEOUT_MS }
       : { form, headers: commonHeaders, timeout: API_TIMEOUT_MS };
-  const url = variant === "query" ? `${freshonOrigin}${endpoint}?${params.toString()}` : `${freshonOrigin}${endpoint}`;
+  const url = variant.type === "query" ? `${freshonOrigin}${endpoint}?${params.toString()}` : `${freshonOrigin}${endpoint}`;
   return api.post(url, options);
 }
 
 async function fetchDailyDispatchPage(context, { page, date, vehicle, center }) {
   const api = context.request || context;
   const endpoints = [
+    "/bo/wm/dispatch/dailyDsptcGrid1List",
     "/bo/wm/dispatch/dailyDsptcGridList",
     "/bo/wm/dispatch/dailyDsptcList",
     "/bo/wm/dispatch/dailyDsptc/list",
@@ -220,21 +240,26 @@ async function fetchDailyDispatchPage(context, { page, date, vehicle, center }) 
     "/bo/wm/dispatch/dailyDispatchList"
   ];
   const errors = [];
+  const variants = [...new Set([addDays(date, 1), date].filter(Boolean))]
+    .flatMap((inDate) => [
+      { type: "form", label: `freshon-form:${inDate}`, inDate },
+      { type: "json", label: `freshon-json:${inDate}`, inDate }
+    ]);
   for (const endpoint of endpoints) {
-    for (const variant of ["json", "form", "query"]) {
+    for (const variant of variants) {
       const response = await postDailyDispatchPage(api, endpoint, { page, date, vehicle, center }, variant).catch((error) => {
-        errors.push(`${endpoint}:${variant}:${error.message || error}`);
+        errors.push(`${endpoint}:${variant.label}:${error.message || error}`);
         return null;
       });
       if (!response) continue;
       if (!response.ok()) {
-        errors.push(`${endpoint}:${variant}:HTTP ${response.status()}`);
+        errors.push(`${endpoint}:${variant.label}:HTTP ${response.status()}`);
         continue;
       }
       const json = await response.json().catch(async () => ({ raw: await response.text().catch(() => "") }));
       const rows = extractRows(json);
       if (rows.length) return rows;
-      errors.push(`${endpoint}:${variant}:no rows`);
+      errors.push(`${endpoint}:${variant.label}:no rows`);
     }
   }
   throw new Error(`dailyDsptcPage API returned no rows. ${errors.slice(0, 8).join(" / ")}`);
@@ -250,7 +275,7 @@ async function scrapeDailyRouteWithContext(context, { date, vehicle, center = ""
 
   const sourceRows = rows.filter((row) => rowMatchesVehicle(row, vehicle, date));
   const stops = sourceRows
-    .filter((row) => row.address)
+    .filter((row) => row.estCd || row.estName || row.customerCode || row.customerName || row.address)
     .map(toStop);
 
   return {

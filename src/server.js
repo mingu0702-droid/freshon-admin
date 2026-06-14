@@ -1404,15 +1404,31 @@ async function buildDailyRouteFromFreshonLogin({ date, vehicle, center = "" }) {
   }
 }
 
-function freshonDailyRouteForm({ date, vehicle, center = "", page = 0 }) {
+function addDays(date, days) {
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  parsed.setDate(parsed.getDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function compactDate(date) {
+  return String(date || "").replace(/\D/g, "");
+}
+
+function freshonDailyRouteForm({ date, vehicle, center = "", page = 0, inDate = date }) {
   const centerText = center || "";
   return {
     page: String(page),
-    isPaging: "true",
+    isPaging: "false",
     isCount: "true",
-    size: "1000",
-    excelFileNm: `daily_dispatch_${date}_${vehicle}`,
+    size: "100",
+    sort: ",ASC",
+    excelFileNm: `일일배차 내역_${compactDate(date)}`,
+    sqlType: "LOTSIM003_P01",
     logCd: "011",
+    inDate,
+    closeTrans: "2",
+    shipGbn: "1",
     logCdNm: centerText,
     logisticsCenter: centerText,
     logisticsCenterNm: centerText,
@@ -1424,7 +1440,7 @@ function freshonDailyRouteForm({ date, vehicle, center = "", page = 0 }) {
     inReqDate: date,
     enteringDate: date,
     reqDate: date,
-    dlvyReqDate: date,
+    dlvyReqDate: inDate,
     carSeq: vehicle,
     carSeqNm: vehicle,
     carCd: vehicle,
@@ -1432,44 +1448,40 @@ function freshonDailyRouteForm({ date, vehicle, center = "", page = 0 }) {
     carNo: vehicle,
     fixedCarSeq: vehicle,
     fixedCarSeqNm: vehicle,
-    shipGbn: "1",
     shipGbnNm: "night",
+    estCd: "",
+    estName: "",
     tcYn: "",
     tcGbn: ""
   };
 }
 
 function freshonDailyRouteRequestVariants({ date, vehicle, center = "", page = 0 }) {
-  const form = freshonDailyRouteForm({ date, vehicle, center, page });
-  const params = new URLSearchParams(form);
-  return [
-    {
-      label: "json",
-      options: {
-        method: "POST",
-        headers: { "Content-Type": "application/json; charset=UTF-8" },
-        timeoutMs: 15000,
-        body: JSON.stringify(form)
+  const dates = [...new Set([addDays(date, 1), date].filter(Boolean))];
+  return dates.flatMap((inDate) => {
+    const form = freshonDailyRouteForm({ date, vehicle, center, page, inDate });
+    const params = new URLSearchParams(form);
+    return [
+      {
+        label: `freshon-form:${inDate}`,
+        options: {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+          timeoutMs: 10000,
+          body: params.toString()
+        }
+      },
+      {
+        label: `freshon-json:${inDate}`,
+        options: {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=UTF-8" },
+          timeoutMs: 15000,
+          body: JSON.stringify(form)
+        }
       }
-    },
-    {
-      label: "query",
-      suffix: `?${params.toString()}`,
-      options: {
-        method: "GET",
-        timeoutMs: 15000
-      }
-    },
-    {
-      label: "form",
-      options: {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-        timeoutMs: 10000,
-        body: params.toString()
-      }
-    }
-  ];
+    ];
+  });
 }
 
 function extractFreshonRows(payload) {
@@ -1535,6 +1547,8 @@ function buildStopFromFreshonDailyRow(row, vehicle, sequence) {
     amount,
     dailyAmount: amount,
     monthlyAmount: amount,
+    ton: deliveryStopText(row, ["carTonNm", "carTon", "ton", "tonnage"]),
+    driverName: deliveryStopText(row, ["driverName", "driverNm", "기사명"]),
     deliveryTime: "",
     deliveryCompletedAt: "",
     rawDeliveryCompletedAt: "",
@@ -1582,6 +1596,7 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
   const vehicleAreaData = await readVehicleAreaData().catch(() => null);
   const vehicleData = (vehicleAreaData?.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
   const endpoints = [
+    "/bo/wm/dispatch/dailyDsptcGridList",
     "/bo/wm/dispatch/dailyDsptcGrid1List",
     "/bo/wm/dispatch/dailyDsptcGrid2List",
     "/bo/wm/dispatch/dailyDsptcGrid3List",
@@ -1657,7 +1672,7 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
     || diagnostics.find((item) => item.result === "error")
     || diagnostics[0];
   const detail = preferredError?.message || preferredError?.result || "No matching rows returned.";
-  const error = new Error(`Freshon daily dispatch lookup failed. ${detail}`);
+  const error = new Error(`Freshon daily dispatch lookup failed. Current guessed dailyDsptcPage API did not return route rows. ${detail}`);
   error.status = preferredError?.status || 502;
   error.diagnostics = {
     type: "freshon-daily-route",

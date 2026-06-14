@@ -91,10 +91,12 @@
       transform:translate(-18px, -20px);
     }
     .vehicle-pin.new-area-pin {
-      background:#dc2626;
-      min-width:46px;
+      background:rgba(220,38,38,.14);
+      color:#991b1b;
+      border:2px dashed #ef4444;
+      min-width:42px;
       min-height:28px;
-      box-shadow:0 10px 20px rgba(220,38,38,.28);
+      box-shadow:0 10px 20px rgba(220,38,38,.16);
     }
     .vehicle-pin.nearby-store-pin {
       min-width:34px;
@@ -106,13 +108,13 @@
     .legend { position:absolute; right:14px; bottom:16px; z-index:500; background:rgba(255,255,255,.94); border:1px solid var(--edge); border-radius:8px; padding:10px 12px; font-size:12px; box-shadow:0 10px 28px rgba(15,23,42,.14); backdrop-filter:blur(6px); }
     .legend div { margin:4px 0; }
     .swatch { display:inline-block; width:18px; height:4px; vertical-align:middle; margin-right:6px; background:#2563eb; }
-    .map-popup { min-width:220px; max-width:360px; padding:10px 12px; font-family:Arial, "Malgun Gothic", sans-serif; font-size:12px; line-height:1.42; color:#111827; }
-    .store-popup { min-width:280px; }
-    .popup-title { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:8px; }
-    .popup-title b { font-size:14px; line-height:1.3; }
+    .map-popup { min-width:190px; max-width:280px; padding:9px 10px; font-family:Arial, "Malgun Gothic", sans-serif; font-size:12px; line-height:1.38; color:#111827; }
+    .store-popup { min-width:220px; max-width:260px; }
+    .popup-title { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:8px; border-bottom:1px solid #e5edf7; padding-bottom:7px; }
+    .popup-title b { font-size:13px; line-height:1.25; overflow-wrap:anywhere; }
     .popup-badge { display:inline-flex; align-items:center; min-height:22px; padding:3px 8px; border-radius:999px; background:#fff0c2; color:#7c2d12; font-size:11px; font-weight:900; white-space:nowrap; }
-    .popup-grid { display:grid; gap:5px; }
-    .popup-row { display:grid; grid-template-columns:82px minmax(0, 1fr); gap:8px; }
+    .popup-grid { display:grid; gap:4px; }
+    .popup-row { display:grid; grid-template-columns:64px minmax(0, 1fr); gap:7px; }
     .popup-row span:first-child { color:#53657f; font-weight:900; }
     .popup-row span:last-child { overflow-wrap:anywhere; }
     .customer-flag {
@@ -151,7 +153,13 @@
     .route-controls button { border:1px solid #2563eb; background:#2563eb; color:#fff; border-radius:6px; padding:9px 12px; font-size:12px; font-weight:900; cursor:pointer; white-space:nowrap; }
     .route-controls button.secondary { border-color:#cbd5e1; background:#fff; color:#1d4ed8; }
     .route-controls button:hover, .new-area-actions button:hover { background:#1d4ed8; border-color:#1d4ed8; }
+    #syncRouteButton { border-color:#2563eb; background:#2563eb; color:#fff; }
+    #syncRouteButton:hover { background:#1d4ed8; border-color:#1d4ed8; }
+    #syncRouteButton:disabled { opacity:.62; cursor:not-allowed; background:#94a3b8; border-color:#94a3b8; color:#fff; }
     .route-status { color:var(--muted); font-size:12px; line-height:1.45; margin:8px 0 0; }
+    .sync-notice { margin-top:8px; border:1px solid #bfdbfe; border-radius:8px; background:#eff6ff; color:#1e3a8a; padding:9px; line-height:1.45; }
+    .sync-notice.error { border-color:#fecaca; background:#fff7f7; color:#991b1b; }
+    .sync-notice.done { border-color:#bbf7d0; background:#f0fdf4; color:#166534; }
     .route-unmatched { display:grid; gap:6px; margin-top:8px; }
     .route-unmatched-item { border:1px solid #fecaca; border-radius:6px; background:#fff7f7; color:#7f1d1d; padding:7px 8px; line-height:1.35; }
     .route-unmatched-item b { color:#991b1b; }
@@ -351,17 +359,18 @@
     body[data-work-tab="wms"] .page-nav { max-width:540px; grid-template-columns:repeat(3, minmax(120px, 1fr)); margin-bottom:10px; }
     body[data-work-tab="wms"] .page-nav a, body[data-work-tab="wms"] .page-nav button { padding:7px 9px; }
     body[data-work-tab="wms"] .shell { display:block; height:100vh; min-height:640px; }
-    body[data-work-tab="wms"] aside { width:100%; height:100vh; min-width:0; max-width:none; resize:none; padding:14px; border-right:0; overflow:auto; }
+    body[data-work-tab="wms"] aside { width:100%; height:100vh; min-width:0; max-width:none; resize:none; padding:10px 12px; border-right:0; overflow:hidden; }
+    body[data-work-tab="wms"] aside > :not(.page-nav):not(.wms-work) { display:none !important; }
     body[data-work-tab="wms"] main { position:relative; inset:auto; width:100%; height:100%; z-index:auto; min-width:0; border:0; border-radius:0; overflow:hidden; background:#fff; box-shadow:none; }
     body[data-work-tab="wms"] #map { min-width:0; min-height:0; width:100%; height:100%; }
     body[data-work-tab="wms"] .legend { display:none; }
     body[data-work-tab="wms"] .data-actions { display:none; }
     body[data-work-tab="wms"] .wms-panel {
       position:relative;
-      height:calc(100vh - 64px);
+      height:calc(100vh - 54px);
       display:grid;
-      grid-template-columns:minmax(760px, 58fr) minmax(520px, 42fr);
-      grid-template-rows:42px 210px minmax(320px, 1fr);
+      grid-template-columns:minmax(720px, 58fr) minmax(500px, 42fr);
+      grid-template-rows:40px 260px minmax(260px, 1fr);
       grid-template-areas:
         "results tools"
         "results map"
@@ -369,10 +378,10 @@
       gap:8px;
       padding:8px;
       margin:0;
-      background:#f3f6fb;
+      background:#edf3f8;
       overflow:hidden;
-      border:1px solid #d8e0eb;
-      border-radius:8px;
+      border:1px solid #d8e4f1;
+      border-radius:10px;
     }
     body[data-work-tab="wms"] .wms-panel h2,
     body[data-work-tab="wms"] .wms-panel > .meta,
@@ -424,15 +433,15 @@
       max-height:none;
       resize:none;
       border:1px solid var(--edge);
-      border-radius:6px;
+      border-radius:8px;
       overflow:hidden;
-      background:#f8fafc;
-      box-shadow:0 10px 24px rgba(15,23,42,.14);
+      background:#fff;
+      box-shadow:0 6px 16px rgba(15,23,42,.10);
     }
     body[data-work-tab="wms"][data-wms-map-size="small"] .wms-map-slot { height:250px; width:min(520px, 100%); }
     body[data-work-tab="wms"][data-wms-map-size="large"] .wms-map-slot { height:520px; width:100%; }
     body[data-work-tab="wms"] .wms-map-controls { display:none; }
-    body[data-work-tab="wms"] .wms-resize-handle { position:absolute; z-index:25; display:flex; align-items:center; justify-content:center; background:#2563eb; border:2px solid #fff; color:#fff; border-radius:999px; box-shadow:0 3px 12px rgba(15,23,42,.35); font-size:11px; font-weight:900; user-select:none; }
+    body[data-work-tab="wms"] .wms-resize-handle { display:none; }
     body[data-work-tab="wms"] .wms-resize-handle.left { left:6px; top:50%; width:58px; height:26px; transform:translateY(-50%); cursor:ew-resize; }
     body[data-work-tab="wms"] .wms-resize-handle.right { display:none; }
     body[data-work-tab="wms"] .wms-resize-handle.bottom { left:50%; bottom:6px; width:68px; height:26px; transform:translateX(-50%); cursor:ns-resize; }
@@ -446,9 +455,9 @@
       min-height:280px;
       overflow:hidden;
       margin-top:0;
-      border:0;
-      border-radius:0;
-      background:#f3f6fb;
+      border:1px solid #d8e4f1;
+      border-radius:8px;
+      background:#fff;
     }
     body[data-work-tab="wms"] .wms-results:empty::before {
       content:"WMS 배차 검토 대기\\A\\A오른쪽 위에서 상세 파일과 차량톤수 요약 파일 2개를 올린 뒤 분석하세요.\\A분석 후 이 영역은 차량호차 리스트로 채워집니다.";
@@ -1049,9 +1058,15 @@
           routeStatus.textContent = "날짜와 호차를 먼저 선택해주세요.";
           return;
         }
-        await startDailyRouteSync(routeDateInput.value, vehicle);
-        routeStatus.textContent = "프레시온 최신 동기화를 시작했습니다. 기존 저장 동선은 바로 볼 수 있습니다.";
-        pollDailyRouteSync(routeDateInput.value, vehicle, getVehicleColor(vehicle));
+        syncRouteButton.disabled = true;
+        try {
+          await startDailyRouteSync(routeDateInput.value, vehicle);
+          routeStatus.innerHTML = `<div class="sync-notice">프레시온 최신 동기화를 시작했습니다. 기존 저장 동선은 바로 볼 수 있습니다.</div>`;
+          pollDailyRouteSync(routeDateInput.value, vehicle, getVehicleColor(vehicle));
+        } catch (error) {
+          syncRouteButton.disabled = false;
+          routeStatus.innerHTML = `<div class="sync-notice error">프레시온 동기화 시작 실패: ${esc(error.message || String(error))}</div>`;
+        }
       });
       routeMapHudButton.addEventListener("click", () => {
         setWorkTab("route");
@@ -1691,6 +1706,10 @@
       return `<span class="vehicle-pin ${esc(extraClass)}" style="--pin-color:${esc(color)}">${esc(text)}</span>`;
     }
 
+    function virtualNewAreaPinHtml() {
+      return `<span class="vehicle-pin new-area-pin">가상</span>`;
+    }
+
     function kmText(value) {
       const number = Number(value);
       if (!Number.isFinite(number)) return "-";
@@ -1735,7 +1754,7 @@
         <div class="store-popup">
           <div class="popup-title">
             <b>신규권역 판단</b>
-            <span class="popup-badge">${esc(row.decision || "검토")}</span>
+            <span class="popup-badge">가상핀</span>
           </div>
           <div class="popup-grid">
             <div class="popup-row"><span>추천 호차</span><span>${esc(vehicleText)}</span></div>
@@ -1758,7 +1777,7 @@
         .slice(0, 20);
       addKakaoLabel(
         [row.lat, row.lng],
-        vehiclePinHtml(row.vehicle && row.vehicle !== "-" ? row.vehicle : "신규", "#dc2626", "new-area-pin"),
+        virtualNewAreaPinHtml(),
         "customer-pin-wrap",
         labelLayer,
         () => openInfoWindow(new kakao.maps.LatLng(row.lat, row.lng), newAreaPopup(row))
@@ -1776,9 +1795,7 @@
           )
         );
       });
-      const points = [[row.lat, row.lng], ...nearby.map(item => [item.customer.lat, item.customer.lng])];
-      if (points.length > 1) fitKakaoBounds(points);
-      else setKakaoView(row.lat, row.lng, options.level || 4);
+      setKakaoView(row.lat, row.lng, options.level || 4);
       openInfoWindow(new kakao.maps.LatLng(row.lat, row.lng), newAreaPopup(row));
     }
 
@@ -2055,7 +2072,10 @@
       if (!job || job.status === "idle") return "프레시온 최신 동기화 대기 중입니다.";
       if (job.status === "running") return `프레시온 최신 동기화 중입니다. 시작: ${esc(job.startedAt || "-")}`;
       if (job.status === "done") return `프레시온 최신 동기화 완료 · ${esc(job.source || "freshon")} · 착지 ${fmt.format(job.stopCount || 0)}건`;
-      if (job.status === "error") return `프레시온 최신 동기화 실패 · ${esc(job.error || "-")}`;
+      if (job.status === "error") {
+        const shortError = String(job.error || "-").split(" / ").slice(0, 3).join(" / ");
+        return `프레시온 최신 동기화 실패 · ${esc(shortError)}`;
+      }
       return `프레시온 최신 동기화 상태: ${esc(job.status || "-")}`;
     }
 
@@ -2067,21 +2087,25 @@
         await new Promise(resolve => setTimeout(resolve, 5000));
         if (!shouldShowRoute || routeDateInput.value !== date || vehicleSelect.value !== vehicle.vehicle) {
           if (activeRouteSyncPollKey === pollKey) activeRouteSyncPollKey = "";
+          syncRouteButton.disabled = false;
           return;
         }
         const job = await getDailyRouteSyncStatus(date, vehicle);
         if (job.status === "done") {
           if (activeRouteSyncPollKey === pollKey) activeRouteSyncPollKey = "";
+          syncRouteButton.disabled = false;
           await renderDailyRoute(vehicle, color, { skipSync: true });
           return;
         }
         if (job.status === "error") {
           if (activeRouteSyncPollKey === pollKey) activeRouteSyncPollKey = "";
-          routeStatus.innerHTML += `<div class="diagnostic-attempt"><b>동기화 결과</b><br>${renderSyncNotice(job)}</div>`;
+          syncRouteButton.disabled = false;
+          routeStatus.innerHTML += `<div class="sync-notice error"><b>동기화 결과</b><br>${renderSyncNotice(job)}</div>`;
           return;
         }
       }
       if (activeRouteSyncPollKey === pollKey) activeRouteSyncPollKey = "";
+      syncRouteButton.disabled = false;
     }
 
     async function renderDailyRoutePayload(vehicle, color, date, payload) {
@@ -2101,14 +2125,7 @@
       updateRouteHud(vehicle, stops.length, "일일동선");
       renderRouteGroups(stops);
       addRouteGroupBoundaries(stops, color);
-      const recordedStops = stops.filter(stop => stop.appRecorded || stop.deliveryCompletedAt);
-      const recordedPoints = recordedStops.map(stop => [Number(stop.lat), Number(stop.lng)]);
       const allPoints = stops.map(stop => [Number(stop.lat), Number(stop.lng)]);
-      if (recordedPoints.length >= 2) {
-        addKakaoPolyline(recordedPoints, { color:"#5b3aa4", weight:7, opacity:.88 }, spanLayer);
-      } else if (allPoints.length >= 2) {
-        addKakaoPolyline(allPoints, { color:"#64748b", weight:4, opacity:.55, dashArray:"8 8" }, spanLayer);
-      }
       stops.forEach((stop, index) => {
         const sequence = stop.sequence || index + 1;
         const stopWithRouteMeta = {
@@ -2123,12 +2140,11 @@
           sequence,
           stops.length,
           buildStorePopup(stopWithRouteMeta, vehicle, date, sequence),
-          Boolean(stop.appRecorded || stop.deliveryCompletedAt)
+          true
         );
       });
-      const missingCount = stops.length - recordedStops.length;
       const sourceLabel = payload.source === "freshon-daily-dispatch-api" ? "프레시온 저장본" : payload.source === "freshon-id-password-login" ? "프레시온 ID/PW 저장본" : payload.source === "delivery-admin-live" ? "딜리버리 어드민 저장본" : payload.source === "vehicle-area-fallback" ? "운영지도 대체 표시" : "업로드/캐시 데이터";
-      routeStatus.innerHTML = `${date} ${vehicle.vehicle}호 동선 ${fmt.format(stops.length)}건 즉시 표시 중 · ${sourceLabel} · 배송완료 기록 ${fmt.format(recordedStops.length)}건 · 미기록 ${fmt.format(missingCount)}건`
+      routeStatus.innerHTML = `${date} ${vehicle.vehicle}호 동선 ${fmt.format(stops.length)}건 표시 중 · ${sourceLabel}`
         + (payload.generatedAt ? `<br><small>저장 시간: ${esc(payload.generatedAt)}</small>` : "")
         + (unmatchedStops.length ? renderUnmatchedRouteStops(`지도 매칭 실패 ${fmt.format(unmatchedStops.length)}건`, unmatchedStops) : "");
       fitKakaoBounds(allPoints);
@@ -2171,12 +2187,8 @@
         return;
       }
       await renderDailyRoutePayload(vehicle, color, date, buildOperatingRoutePayload(vehicle, date));
-      routeStatus.innerHTML += `<div class="diagnostic-attempt"><b>프레시온 최신 동기화</b><br>운영지도 기준 동선을 먼저 표시했습니다. 프레시온 저장 동선이 확인되면 자동으로 바꿔 표시합니다.</div>`;
+      routeStatus.innerHTML += `<div class="sync-notice">운영지도 기준 동선을 즉시 표시했습니다. 프레시온 최신 자료가 필요할 때만 최신 동기화를 눌러주세요.</div>`;
       try {
-        if (!options.skipSync) {
-          startDailyRouteSync(date, vehicle).catch(() => null);
-          pollDailyRouteSync(date, vehicle, color);
-        }
         const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, center: vehicle.region || "" });
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 4500);
@@ -2191,12 +2203,14 @@
         await renderDailyRoutePayload(vehicle, color, date, payload);
         if (!options.skipSync) {
           const job = await getDailyRouteSyncStatus(date, vehicle).catch(() => null);
-          routeStatus.innerHTML += `<div class="diagnostic-attempt"><b>동기화 상태</b><br>${renderSyncNotice(job)}</div>`;
+          if (job && job.status && job.status !== "idle") {
+            routeStatus.innerHTML += `<div class="sync-notice${job.status === "error" ? " error" : job.status === "done" ? " done" : ""}"><b>동기화 상태</b><br>${renderSyncNotice(job)}</div>`;
+          }
         }
       } catch (error) {
-        routeStatus.innerHTML += `<div class="diagnostic-attempt"><b>저장 동선 확인</b><br>${
+        routeStatus.innerHTML += `<div class="sync-notice"><b>저장 동선 확인</b><br>${
           error.name === "AbortError"
-            ? "저장 동선 조회가 4.5초 안에 끝나지 않아 운영지도 기준 동선을 유지합니다. 프레시온 동기화는 백그라운드에서 계속 진행됩니다."
+            ? "저장 동선 조회가 4.5초 안에 끝나지 않아 운영지도 기준 동선을 유지합니다."
             : "저장된 일일동선 데이터를 불러오지 못해 운영지도 기준 동선을 유지합니다."
         }</div>`;
       }
@@ -2522,9 +2536,17 @@
     function newAreaReasonForOutput(row) {
       const nearbyText = row.deliveryPatternText || "";
       if (row.reason === "아파트" || row.reason === "제주도" || row.reason === "검토필요") return row.reason;
+      if (row.decision === "X") return row.reason || "배송동선 맞지않음";
       if (nearbyText) return nearbyText;
       if (row.reason === "배송동선 맞지않음") return "";
       return row.reason || "";
+    }
+
+    function shortApplyDate(value) {
+      const source = value || new Date().toISOString().slice(0, 10);
+      const match = String(source).match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if (!match) return String(source || "");
+      return `${Number(match[2])}-${Number(match[3])}`;
     }
 
     function judgeNewArea(row, point) {
@@ -3467,7 +3489,7 @@
 
     function buildNewAreaResultRows() {
       const headers = ["주소(X)", "고객정보(Y)", "판단(BV)", "사유(BW)", "적용일자(BX)", "센터/권역(BY)", "추천호차", "가까운 배송처", "거리km"];
-      const date = routeDateInput.value || "";
+      const date = shortApplyDate(routeDateInput.value);
       const rows = newAreaResults.map(row => [
         row.address || "",
         row.customer || "",
