@@ -130,7 +130,8 @@ function compactDate(date) {
   return String(date || "").replace(/\D/g, "");
 }
 
-function toForm({ page, date, vehicle, center, inDate = date, shipGbn = "1", logCd = "011" }) {
+function toForm({ page, date, vehicle, center, inDate = date, shipGbn = "1", logCd = "011", vehicleFilter = vehicle }) {
+  const carValue = vehicleFilter || "";
   return {
     page: String(page),
     isPaging: "false",
@@ -154,13 +155,13 @@ function toForm({ page, date, vehicle, center, inDate = date, shipGbn = "1", log
     enteringDate: inDate || "",
     reqDate: inDate || "",
     dlvyReqDate: inDate || "",
-    carSeq: vehicle || "",
-    carSeqNm: vehicle || "",
-    carCd: vehicle || "",
-    carNm: vehicle || "",
-    carNo: vehicle || "",
-    fixedCarSeq: vehicle || "",
-    fixedCarSeqNm: vehicle || "",
+    carSeq: carValue,
+    carSeqNm: carValue,
+    carCd: carValue,
+    carNm: carValue,
+    carNo: carValue,
+    fixedCarSeq: carValue,
+    fixedCarSeqNm: carValue,
     shipGbn,
     shipGbnNm: shipGbn === "1" ? "night" : "",
     estCd: "",
@@ -250,7 +251,8 @@ async function postDailyDispatchPage(api, endpoint, { page, date, vehicle, cente
     center,
     inDate: variant.inDate || date,
     shipGbn: variant.shipGbn,
-    logCd: variant.logCd
+    logCd: variant.logCd,
+    vehicleFilter: variant.vehicleFilter
   });
   const params = new URLSearchParams(form);
   const commonHeaders = {
@@ -314,8 +316,12 @@ async function fetchDailyDispatchPage(context, { page, date, vehicle, center }) 
       { inDate, shipGbn: "1", logCd: "" }
     ])
     .flatMap((base) => [
-      { ...base, type: "form", label: `form:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}` },
-      { ...base, type: "json", label: `json:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}` }
+      { ...base, vehicleFilter: vehicle },
+      { ...base, vehicleFilter: "" }
+    ])
+    .flatMap((base) => [
+      { ...base, type: "form", label: `form:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}:${base.vehicleFilter ? "car" : "allcar"}` },
+      { ...base, type: "json", label: `json:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}:${base.vehicleFilter ? "car" : "allcar"}` }
     ]);
   for (const endpoint of endpoints) {
     for (const variant of variants) {
@@ -335,7 +341,7 @@ async function fetchDailyDispatchPage(context, { page, date, vehicle, center }) 
     }
   }
   const triedDates = [...new Set(variants.map((variant) => variant.inDate).filter(Boolean))].join(", ");
-  throw new Error(`dailyDsptcPage API returned no rows for date=${date}, vehicle=${vehicle}, tried inDate=${triedDates}, shipGbn=all/1, logCd=011/all. ${errors.slice(0, 8).join(" / ")}`);
+  throw new Error(`dailyDsptcPage API returned no rows for date=${date}, vehicle=${vehicle}, tried inDate=${triedDates}, shipGbn=all/1, logCd=011/all, carSeq=selected/all. ${errors.slice(0, 8).join(" / ")}`);
 }
 
 async function scrapeDailyRouteWithContext(context, { date, vehicle, center = "" }) {

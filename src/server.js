@@ -1419,8 +1419,9 @@ function compactDate(date) {
   return String(date || "").replace(/\D/g, "");
 }
 
-function freshonDailyRouteForm({ date, vehicle, center = "", page = 0, inDate = date, shipGbn = "1", logCd = "011" }) {
+function freshonDailyRouteForm({ date, vehicle, center = "", page = 0, inDate = date, shipGbn = "1", logCd = "011", vehicleFilter = vehicle }) {
   const centerText = center || "";
+  const carValue = vehicleFilter || "";
   return {
     page: String(page),
     isPaging: "false",
@@ -1445,13 +1446,13 @@ function freshonDailyRouteForm({ date, vehicle, center = "", page = 0, inDate = 
     enteringDate: date,
     reqDate: date,
     dlvyReqDate: inDate,
-    carSeq: vehicle,
-    carSeqNm: vehicle,
-    carCd: vehicle,
-    carNm: vehicle,
-    carNo: vehicle,
-    fixedCarSeq: vehicle,
-    fixedCarSeqNm: vehicle,
+    carSeq: carValue,
+    carSeqNm: carValue,
+    carCd: carValue,
+    carNm: carValue,
+    carNo: carValue,
+    fixedCarSeq: carValue,
+    fixedCarSeqNm: carValue,
     shipGbnNm: shipGbn === "1" ? "night" : "",
     estCd: "",
     estName: "",
@@ -1467,13 +1468,18 @@ function freshonDailyRouteRequestVariants({ date, vehicle, center = "", page = 0
       { inDate, shipGbn: "1", logCd: "011" },
       { inDate, shipGbn: "", logCd: "" },
       { inDate, shipGbn: "1", logCd: "" }
+    ])
+    .flatMap((base) => [
+      { ...base, vehicleFilter: vehicle },
+      { ...base, vehicleFilter: "" }
     ]);
   return baseVariants.flatMap((base) => {
     const form = freshonDailyRouteForm({ date, vehicle, center, page, ...base });
     const params = new URLSearchParams(form);
+    const carLabel = base.vehicleFilter ? "car" : "allcar";
     return [
       {
-        label: `form:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}`,
+        label: `form:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}:${carLabel}`,
         options: {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
@@ -1482,7 +1488,7 @@ function freshonDailyRouteRequestVariants({ date, vehicle, center = "", page = 0
         }
       },
       {
-        label: `json:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}`,
+        label: `json:${base.inDate}:ship${base.shipGbn || "all"}:log${base.logCd || "all"}:${carLabel}`,
         options: {
           method: "POST",
           headers: { "Content-Type": "application/json; charset=UTF-8" },
