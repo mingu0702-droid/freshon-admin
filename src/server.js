@@ -549,10 +549,14 @@ function mergeRows(existingRows = [], uploadedRows = []) {
   return [...map.values()];
 }
 
+const DATE_COLUMN_RE = /(date|일자|날짜|입고요청일|배송일|출고일|확정일|requestDate|deliveryDate|inReqDate|enteringDate|outDate)/i;
+
 function inferRange(rows) {
   const dates = [];
   for (const row of rows) {
-    for (const value of Object.values(row || {})) {
+    for (const [key, value] of Object.entries(row || {})) {
+      if (String(key).startsWith("_")) continue;
+      if (!DATE_COLUMN_RE.test(String(key))) continue;
       const normalized = normalizeDateValue(normalizeCell(value));
       if (normalized) dates.push(normalized);
     }

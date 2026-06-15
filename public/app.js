@@ -12,6 +12,10 @@ const uploadButton = document.getElementById("uploadButton");
 const fileInput = document.getElementById("fixedDispatchFiles");
 const uploadStatus = document.getElementById("uploadStatus");
 const table = document.getElementById("dataTable");
+const adminSearchInput = document.getElementById("adminSearchInput");
+const clearSearchButton = document.getElementById("clearSearchButton");
+
+const HIDDEN_COLUMN_RE = /(출입문|잠금|특이사항|배송요청|요청사항|door|lock|request|note|memo)/i;
 
 window.addEventListener("beforeunload", (event) => {
   if (!uploadRunning) return;
@@ -51,14 +55,49 @@ function loadSavedToken() {
   if (token) tokenEl.value = token;
 }
 
+function normalizeSearchText(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[()]/g, "");
+}
+
+function visibleColumns(columns = []) {
+  return columns.filter((column) => !String(column).startsWith("_") && !HIDDEN_COLUMN_RE.test(String(column)));
+}
+
+function getSearchFilteredRows(rows = []) {
+  const query = normalizeSearchText(adminSearchInput?.value || "");
+  if (!query) return rows;
+  return rows.filter((row) => normalizeSearchText(Object.values(row || {}).join(" ")).includes(query));
+}
+
+async function readJsonResponse(response, label = "요청") {
+  const text = await response.text();
+  if (!text.trim()) {
+    if (response.ok) return {};
+    throw new Error(`${label} 실패 · HTTP ${response.status} · 서버 응답이 비어 있습니다.`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    const preview = text.replace(/\s+/g, " ").slice(0, 300);
+    throw new Error(`${label} 실패 · HTTP ${response.status} · JSON 응답이 아닙니다: ${preview || "empty response"}`);
+  }
+}
+
 function render(payload) {
   currentPayload = payload || { columns: [], rows: [] };
   document.getElementById("rangeText").textContent = currentPayload.range ? `${currentPayload.range.startDate} ~ ${currentPayload.range.endDate}` : "-";
   document.getElementById("generatedAt").textContent = currentPayload.generatedAt ? new Date(currentPayload.generatedAt).toLocaleString("ko-KR") : "-";
-  document.getElementById("rowCount").textContent = String(currentPayload.rowCount || currentPayload.rows?.length || 0);
+  const allRows = currentPayload.rows || [];
+  const filteredRows = getSearchFilteredRows(allRows);
+  document.getElementById("rowCount").textContent = adminSearchInput?.value
+    ? `${filteredRows.length.toLocaleString("ko-KR")} / ${allRows.length.toLocaleString("ko-KR")}`
+    : String(currentPayload.rowCount || allRows.length || 0);
 
-  const columns = currentPayload.columns || [];
-  const rows = currentPayload.rows || [];
+  const columns = visibleColumns(currentPayload.columns || []);
+  const rows = filteredRows;
   if (!columns.length) {
     const message = currentPayload.warning || "아직 고정배차 캐시가 없습니다. 월별 엑셀 파일을 업로드해주세요.";
     table.innerHTML = `<tbody><tr><td>${escapeHtml(message)}</td></tr></tbody>`;
@@ -80,7 +119,7 @@ function render(payload) {
 async function loadStatus() {
   const response = await fetch("/api/status");
   if (!response.ok) return null;
-  const json = await response.json();
+  const json = await readJsonResponse(response, "상태 조회");
   if (json.refresh?.running) {
     setStatus("저장 작업이 진행 중입니다.");
   } else if (json.refresh?.lastError) {
@@ -92,7 +131,7 @@ async function loadStatus() {
 async function loadData() {
   setStatus("저장자료 불러오는 중");
   const response = await fetch("/api/fixed-dispatch");
-  render(await response.json());
+  render(await readJsonResponse(response, "저장자료 조회"));
   await loadStatus();
   setStatus("조회 완료");
 }
@@ -100,7 +139,7 @@ async function loadData() {
 function uploadProgressText({ index, total, fileName, fileElapsed, completedTimes }) {
   const done = completedTimes.length;
   if (!done) {
-    return `${index + 1}/${total} 저장 중: ${fileName} · 경과 ${formatSeconds(fileElapsed)} · 첫 파일 완료 후 남은 시간 계산`;
+    return `${index + 1}/${total} 저장 중: ${fileName} · 경과 ${formatSeconds(fileElapsed)} · 남은 시간 계산 중`;
   }
   const avgSeconds = completedTimes.reduce((sum, value) => sum + value, 0) / done;
   const currentRemaining = Math.max(0, avgSeconds - fileElapsed);
@@ -145,7 +184,10 @@ async function waitForUploadJob(jobId, fileName, fileStartedAt) {
     const elapsed = Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000));
     if (refresh.running) {
       const current = refresh.currentFile ? ` · 현재 파일 ${refresh.currentFile}` : "";
-      uploadStatus.textContent = `${fileName} 서버 저장 중 · 경과 ${formatSeconds(elapsed)}${current}`;
+      const totalFiles = Number(refresh.totalFiles || 1);
+      const completedFiles = Number(refresh.completedFiles || 0);
+      const progressText = totalFiles > 1 ? ` · ${completedFiles}/${totalFiles}개 처리` : "";
+      uploadStatus.textContent = `${fileName} 서버 저장 중 · 경과 ${formatSeconds(elapsed)}${progressText}${current}`;
       continue;
     }
     if (refresh.lastError) {
@@ -177,7 +219,10 @@ async function uploadFileInChunks(file, token, fileStartedAt) {
     formData.append("chunk", file.slice(start, end), `${file.name}.part${index}`);
 
     const elapsed = Math.max(1, Math.round((Date.now() - fileStartedAt) / 1000));
-    uploadStatus.textContent = `${file.name} 업로드 중 · ${index + 1}/${totalChunks} 조각 · 경과 ${formatSeconds(elapsed)}`;
+    const progress = (index + 1) / totalChunks;
+    const estimatedTotal = progress > 0 ? elapsed / progress : 0;
+    const remaining = Math.max(0, estimatedTotal - elapsed);
+    uploadStatus.textContent = `${file.name} 업로드 중 · ${index + 1}/${totalChunks} 조각 · 경과 ${formatSeconds(elapsed)} · 예상 남은 ${formatSeconds(remaining)}`;
     accepted = await postChunkWithRetry(formData, file.name, token, index, totalChunks);
   }
 
@@ -196,7 +241,7 @@ async function postChunkWithRetry(formData, fileName, token, index, totalChunks)
         body: formData
       });
       if (response.status === 409) {
-        const json = await response.json().catch(() => null);
+        const json = await readJsonResponse(response, fileName).catch(() => null);
         if (json?.refresh?.jobId) {
           return { ok: true, accepted: true, jobId: json.refresh.jobId, refresh: json.refresh };
         }
@@ -269,8 +314,8 @@ async function uploadFixedDispatchFiles() {
 }
 
 function downloadCsv() {
-  const columns = currentPayload.columns || [];
-  const rows = currentPayload.rows || [];
+  const columns = visibleColumns(currentPayload.columns || []);
+  const rows = getSearchFilteredRows(currentPayload.rows || []);
   if (!columns.length) {
     alert("받을 고정배차 목록이 없습니다. 먼저 엑셀 파일을 업로드해주세요.");
     return;
@@ -306,4 +351,9 @@ saveTokenButton.addEventListener("click", saveToken);
 reloadButton.addEventListener("click", loadData);
 csvButton.addEventListener("click", downloadCsv);
 uploadButton.addEventListener("click", uploadFixedDispatchFiles);
+adminSearchInput?.addEventListener("input", () => render(currentPayload));
+clearSearchButton?.addEventListener("click", () => {
+  if (adminSearchInput) adminSearchInput.value = "";
+  render(currentPayload);
+});
 loadData();
