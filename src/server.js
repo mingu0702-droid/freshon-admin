@@ -715,6 +715,24 @@ function numberFromMoney(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function amountFromDispatchRow(row) {
+  return numberFromMoney(firstValue(row, [
+    "\uB9E4\uCD9C\uAE08\uC561",
+    "\uB9E4\uCD9C\uC561",
+    "\uC6D4\uB9E4\uCD9C\uC561",
+    "\uC6D4\uB9E4\uCD9C",
+    "\uCD1D\uC8FC\uBB38\uAE08\uC561",
+    "\uCD1D\uC8FC\uBB38\uC561",
+    "\uC8FC\uBB38\uAE08\uC561",
+    "\uC8FC\uBB38\uC561",
+    "\uAE08\uC561",
+    "\uCD9C\uACE0\uAE08\uC561",
+    "\uD310\uB9E4\uAE08\uC561",
+    "\uACF5\uAE09\uAC00\uC561",
+    "\uD569\uACC4\uAE08\uC561"
+  ]));
+}
+
 function normalizeVehicleValue(value) {
   const text = normalizeCell(value).replace(/\s+/g, "");
   if (!text) return "";
@@ -843,7 +861,7 @@ function buildStopFromDispatchRow(row, vehicle, sequence) {
   ].filter(Boolean).join(" ").trim();
   const customerCode = firstValue(row, ["\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uACE0\uAC1DERP\uCF54\uB4DC", "ERP\uCF54\uB4DC", "\uAC70\uB798\uCC98\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
   const customerName = firstValue(row, ["\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
-  const amount = firstValue(row, ["\uB9E4\uCD9C\uAE08\uC561", "\uAE08\uC561", "\uCD9C\uACE0\uAE08\uC561", "\uD310\uB9E4\uAE08\uC561"]);
+  const amount = amountFromDispatchRow(row) || firstValue(row, ["\uB9E4\uCD9C\uAE08\uC561", "\uB9E4\uCD9C\uC561", "\uC6D4\uB9E4\uCD9C\uC561", "\uC6D4\uB9E4\uCD9C", "\uAE08\uC561", "\uCD9C\uACE0\uAE08\uC561", "\uD310\uB9E4\uAE08\uC561"]);
   const deliveryTime = firstValue(row, ["\uBC30\uC1A1\uC2DC\uAC04", "\uB3C4\uCC29\uC2DC\uAC04", "\uCD9C\uBC1C\uC2DC\uAC04", "\uC785\uACE0\uC2DC\uAC04", "\uC2DC\uAC04"]);
   const completion = deliveryCompletionInfo(row);
   return {
@@ -1815,7 +1833,7 @@ app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
     const code = firstValue(row, ["\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uACE0\uAC1DERP\uCF54\uB4DC", "ERP\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
     const name = firstValue(row, ["\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
     const address = firstValue(row, ["\uACE0\uAC1D\uC8FC\uC18C", "\uC8FC\uC18C", "\uBC30\uC1A1\uC8FC\uC18C"]);
-    const amount = numberFromMoney(firstValue(row, ["\uB9E4\uCD9C\uAE08\uC561", "\uAE08\uC561", "\uCD9C\uACE0\uAE08\uC561", "\uD310\uB9E4\uAE08\uC561", "\uCD1D\uC8FC\uBB38\uC561"]));
+    const amount = amountFromDispatchRow(row);
     totalAmount += amount;
     if (vehicle) {
       const current = vehicles.get(vehicle) || { vehicle, stopCount: 0, amount: 0, dates: new Set() };

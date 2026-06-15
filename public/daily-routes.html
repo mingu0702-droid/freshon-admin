@@ -1498,17 +1498,11 @@
         const lng = Number(item.lng);
         if (boundaryVisible) {
           if (vehicle) {
-            addVehicleHullLayer(vehicle, {
-              color: getVehicleColor(vehicle),
-              weight: 6,
-              fillOpacity: .08,
-              opacity: .9
-            });
             addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
               color: getVehicleColor(vehicle),
-              weight: 3,
-              fillOpacity: .12,
-              opacity: .8
+              weight: 5,
+              fillOpacity: .10,
+              opacity: .84
             });
           }
           addKakaoLabel(
@@ -1549,17 +1543,11 @@
         clearMapLayers();
         const color = getVehicleColor(vehicle);
         if (boundaryVisible) {
-          addVehicleHullLayer(vehicle, {
-            color,
-            weight: 6,
-            fillOpacity: .08,
-            opacity: .9
-          });
           addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
             color,
-            weight: 3,
-            fillOpacity: .12,
-            opacity: .8
+            weight: 5,
+            fillOpacity: .10,
+            opacity: .84
           });
           addKakaoLabel(
             [customer.lat, customer.lng],
@@ -2029,17 +2017,11 @@
         const color = getVehicleColor(vehicle);
         boundsPoints.push(vehicle.center);
         if (boundaryVisible) {
-          addVehicleHullLayer(vehicle, {
+          addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes?.length ? vehicle.detail_admin_codes : vehicle.overview_admin_codes, {
             color,
-            weight: vehicle.is_variable_vehicle ? 6 : 4,
-            fillOpacity: vehicle.is_variable_vehicle ? .10 : .06,
-            opacity: .88
-          });
-          addAdminBoundaryLayer(vehicle, vehicle.overview_admin_codes, {
-            color,
-            weight: vehicle.is_variable_vehicle ? 3 : 2,
-            fillOpacity: vehicle.is_variable_vehicle ? .08 : .05,
-            opacity: .72
+            weight: vehicle.is_variable_vehicle ? 4 : 3,
+            fillOpacity: vehicle.is_variable_vehicle ? .13 : .08,
+            opacity: .82
           });
           const zoomClass = map.getLevel() >= 8 ? " zoom-far" : "";
           addKakaoLabel(
@@ -2086,17 +2068,11 @@
 
       const color = getVehicleColor(vehicle);
       if (boundaryVisible) {
-        addVehicleHullLayer(vehicle, {
-          color,
-          weight: 6,
-          fillOpacity: routeFocus ? .04 : .08,
-          opacity: .9
-        });
         addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
           color,
-          weight: 3,
-          fillOpacity: routeFocus ? .04 : .08,
-          opacity: routeFocus ? .65 : .78
+          weight: 5,
+          fillOpacity: routeFocus ? .06 : .10,
+          opacity: routeFocus ? .72 : .84
         });
       }
       if (boundaryVisible && !routeFocus && vehicle.span.line.length === 2) {
@@ -2158,7 +2134,9 @@
         }
       }));
 
-      const boundsPoints = customers.map(c => [c.lat, c.lng]);
+      const boundsPoints = customers
+        .filter(c => Number.isFinite(Number(c.lat)) && Number.isFinite(Number(c.lng)))
+        .map(c => [Number(c.lat), Number(c.lng)]);
       fitKakaoBounds(boundsPoints);
     }
 

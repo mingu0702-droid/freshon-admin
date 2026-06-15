@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Freshon 운영데이터 UI 시안 v2</title>
+  <title>Freshon ?댁쁺?곗씠??UI ?쒖븞 v2</title>
   <style>
     :root {
       --bg:#eef2f6; --panel:#fff; --ink:#172033; --muted:#667085; --line:#d7dfeb;
@@ -127,89 +127,89 @@
   <div class="app">
     <header class="top">
       <div>
-        <h1>운영데이터</h1>
-        <p class="caption">지도 화면과 분리한 배차 판단용 데이터센터입니다. 착지수, 매출, 주문 패턴, 좌표 품질, 조정 후보를 따로 봅니다.</p>
+        <h1>?댁쁺?곗씠??/h1>
+        <p class="caption">吏???붾㈃怨?遺꾨━??諛곗감 ?먮떒???곗씠?곗꽱?곗엯?덈떎. 李⑹??? 留ㅼ텧, 二쇰Ц ?⑦꽩, 醫뚰몴 ?덉쭏, 議곗젙 ?꾨낫瑜??곕줈 遊낅땲??</p>
       </div>
       <nav class="nav">
-        <a href="/daily-routes.html">일일동선</a>
+        <a href="/daily-routes.html">?쇱씪?숈꽑</a>
         <a href="/daily-routes.html?tab=wms">WMS</a>
-        <a href="/daily-routes.html?tab=new">신규권역</a>
-        <a class="active" href="/operations-data.html">운영데이터</a>
-        <a href="/admin">관리자</a>
+        <a href="/daily-routes.html?tab=new">?좉퇋沅뚯뿭</a>
+        <a class="active" href="/operations-data.html">?댁쁺?곗씠??/a>
+        <a href="/admin">愿由ъ옄</a>
       </nav>
     </header>
 
     <section class="toolbar">
       <div>
-        <label>분석 월</label>
-        <select><option>2026년 6월</option><option>2026년 5월</option><option>최근 3개월</option></select>
+        <label>遺꾩꽍 ??/label>
+        <select><option>2026??6??/option><option>2026??5??/option><option>理쒓렐 3媛쒖썡</option></select>
       </div>
       <div>
-        <label>센터</label>
-        <select><option>오산센터</option><option>이천센터</option><option>전체 센터</option></select>
+        <label>?쇳꽣</label>
+        <select><option>?ㅼ궛?쇳꽣</option><option>?댁쿇?쇳꽣</option><option>?꾩껜 ?쇳꽣</option></select>
       </div>
       <div>
-        <label>고객/주소/호차 검색</label>
-        <input id="globalSearch" placeholder="101호차, S10922, 할맥, 은평구">
+        <label>怨좉컼/二쇱냼/?몄감 寃??/label>
+        <input id="globalSearch" placeholder="101?몄감, S10922, ?좊㎘, ??됯뎄">
       </div>
       <div>
-        <label>보기 기준</label>
-        <select><option>배차 판단 기준</option><option>매출 기준</option><option>착지수 기준</option></select>
+        <label>蹂닿린 湲곗?</label>
+        <select><option>諛곗감 ?먮떒 湲곗?</option><option>留ㅼ텧 湲곗?</option><option>李⑹???湲곗?</option></select>
       </div>
-      <button class="btn" id="refreshButton" type="button">데이터 갱신</button>
+      <button class="btn" id="refreshButton" type="button">?곗씠??媛깆떊</button>
     </section>
 
     <section class="tabs" style="align-items:center;">
-      <b style="font-size:12px;">데이터 출처</b>
-      <span class="chip blue">운영지도 기준 계산 데이터</span>
-      <span style="font-size:12px;color:var(--muted);">현재는 public/vehicle-data.js의 호차, 착지수, 평균금액, 배송패턴으로 계산합니다. 프레시온 월별 주문/매출 원장 또는 업로드 엑셀을 연결하면 실제 운영데이터 화면으로 확장됩니다.</span>
+      <b style="font-size:12px;">?곗씠??異쒖쿂</b>
+      <span class="chip blue">?댁쁺吏??湲곗? 怨꾩궛 ?곗씠??/span>
+      <span style="font-size:12px;color:var(--muted);">?꾩옱??public/vehicle-data.js???몄감, 李⑹??? ?됯퇏湲덉븸, 諛곗넚?⑦꽩?쇰줈 怨꾩궛?⑸땲?? ?꾨젅?쒖삩 ?붾퀎 二쇰Ц/留ㅼ텧 ?먯옣 ?먮뒗 ?낅줈???묒????곌껐?섎㈃ ?ㅼ젣 ?댁쁺?곗씠???붾㈃?쇰줈 ?뺤옣?⑸땲??</span>
     </section>
 
     <nav class="tabs" id="tabs">
-      <button class="tab active" data-view="vehicle">호차 분석</button>
-      <button class="tab" data-view="store">매장 분석</button>
-      <button class="tab" data-view="weekday">요일 패턴</button>
-      <button class="tab" data-view="new">신규주소 이력</button>
-      <button class="tab" data-view="coord">좌표 관리</button>
-      <button class="tab" data-view="adjust">조정 후보</button>
+      <button class="tab active" data-view="vehicle">?몄감 遺꾩꽍</button>
+      <button class="tab" data-view="store">留ㅼ옣 遺꾩꽍</button>
+      <button class="tab" data-view="weekday">?붿씪 ?⑦꽩</button>
+      <button class="tab" data-view="new">?좉퇋二쇱냼 ?대젰</button>
+      <button class="tab" data-view="coord">醫뚰몴 愿由?/button>
+      <button class="tab" data-view="adjust">議곗젙 ?꾨낫</button>
     </nav>
 
     <section class="monthly-sync">
       <div>
-        <strong>월 배차 데이터</strong>
-        <small id="monthlySyncStatus">저장된 월 배차 데이터를 확인 중입니다.</small>
+        <strong>??諛곗감 ?곗씠??/strong>
+        <small id="monthlySyncStatus">??λ맂 ??諛곗감 ?곗씠?곕? ?뺤씤 以묒엯?덈떎.</small>
       </div>
-      <button id="monthlySyncButton" type="button">월 데이터 갱신</button>
+      <button id="monthlySyncButton" type="button">???곗씠??媛깆떊</button>
     </section>
 
     <main>
       <section class="kpis">
-        <div class="card"><span>월 평균 착지수</span><b>19.8곳</b><small>전월 대비 +1.7곳</small></div>
-        <div class="card"><span>월 평균 매출</span><b>8,920만원</b><small>호차별 평균 기준</small></div>
-        <div class="card"><span>착지당 금액</span><b>46.2만원</b><small>객단가 기준</small></div>
-        <div class="card"><span>끝단 착지 비율</span><b>18%</b><small>조정 후보 신호</small></div>
-        <div class="card"><span>좌표 보정 필요</span><b>17곳</b><small>검색 가능, 지도 미표시</small></div>
-        <div class="card"><span>매출 급변 매장</span><b>23곳</b><small>증가 14 / 감소 9</small></div>
+        <div class="card"><span>???됯퇏 李⑹???/span><b>19.8怨?/b><small>?꾩썡 ?鍮?+1.7怨?/small></div>
+        <div class="card"><span>???됯퇏 留ㅼ텧</span><b>8,920留뚯썝</b><small>?몄감蹂??됯퇏 湲곗?</small></div>
+        <div class="card"><span>李⑹???湲덉븸</span><b>46.2留뚯썝</b><small>媛앸떒媛 湲곗?</small></div>
+        <div class="card"><span>?앸떒 李⑹? 鍮꾩쑉</span><b>18%</b><small>議곗젙 ?꾨낫 ?좏샇</small></div>
+        <div class="card"><span>醫뚰몴 蹂댁젙 ?꾩슂</span><b>17怨?/b><small>寃??媛?? 吏??誘명몴??/small></div>
+        <div class="card"><span>留ㅼ텧 湲됰? 留ㅼ옣</span><b>23怨?/b><small>利앷? 14 / 媛먯냼 9</small></div>
       </section>
 
       <section class="view active" id="view-vehicle">
         <div class="grid">
           <div class="panel">
             <div class="panel-head">
-              <div><h2>호차별 월 평균 착지수</h2><small>착지수, 매출, 착지당 금액, 끝단 비율을 같이 봅니다.</small></div>
-              <span class="chip blue">호차 분석</span>
+              <div><h2>?몄감蹂????됯퇏 李⑹???/h2><small>李⑹??? 留ㅼ텧, 李⑹???湲덉븸, ?앸떒 鍮꾩쑉??媛숈씠 遊낅땲??</small></div>
+              <span class="chip blue">?몄감 遺꾩꽍</span>
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>호차</th><th>평균 착지수</th><th>총 매출</th><th>착지당 금액</th><th>끝단 비율</th><th>상태</th></tr></thead>
+                <thead><tr><th>?몄감</th><th>?됯퇏 李⑹???/th><th>珥?留ㅼ텧</th><th>李⑹???湲덉븸</th><th>?앸떒 鍮꾩쑉</th><th>?곹깭</th></tr></thead>
                 <tbody id="vehicleRows"></tbody>
               </table>
             </div>
           </div>
           <div class="panel">
             <div class="panel-head">
-              <div><h2>월별 운행기록 추적</h2><small>최근 월별 착지수 증가/감소 흐름입니다.</small></div>
-              <span class="chip green">추이</span>
+              <div><h2>?붾퀎 ?댄뻾湲곕줉 異붿쟻</h2><small>理쒓렐 ?붾퀎 李⑹???利앷?/媛먯냼 ?먮쫫?낅땲??</small></div>
+              <span class="chip green">異붿씠</span>
             </div>
             <div class="list" id="monthTimeline"></div>
           </div>
@@ -220,20 +220,20 @@
         <div class="grid">
           <div class="panel">
             <div class="panel-head">
-              <div><h2>매장별 월 평균 매출</h2><small>매장별 금액대, 주문 주기, 매출 변화를 봅니다.</small></div>
-              <span class="chip green">매장 분석</span>
+              <div><h2>留ㅼ옣蹂????됯퇏 留ㅼ텧</h2><small>留ㅼ옣蹂?湲덉븸?, 二쇰Ц 二쇨린, 留ㅼ텧 蹂?붾? 遊낅땲??</small></div>
+              <span class="chip green">留ㅼ옣 遺꾩꽍</span>
             </div>
             <div class="list" id="storeList"></div>
           </div>
           <div class="panel">
             <div class="panel-head">
-              <div><h2 id="storeDetailTitle">S10922 · 할맥 은평점</h2><small>선택 매장의 운영 판단 요약입니다.</small></div>
-              <span class="chip amber" id="storeDetailBadge">금요일 집중</span>
+              <div><h2 id="storeDetailTitle">S10922 쨌 ?좊㎘ ??됱젏</h2><small>?좏깮 留ㅼ옣???댁쁺 ?먮떒 ?붿빟?낅땲??</small></div>
+              <span class="chip amber" id="storeDetailBadge">湲덉슂??吏묒쨷</span>
             </div>
             <div class="wide-grid" style="padding:12px;">
-              <div class="card" style="box-shadow:none;"><span>월 평균 매출</span><b id="avgSales">1,840,000원</b><small>최근 3개월 +8%</small></div>
-              <div class="card" style="box-shadow:none;"><span>주문 주기</span><b id="cycleText">2~3일 간격</b><small>월/수/금 패턴</small></div>
-              <div class="card" style="box-shadow:none;"><span>매출 등급</span><b id="gradeText">B급</b><small>월 100~300만원</small></div>
+              <div class="card" style="box-shadow:none;"><span>???됯퇏 留ㅼ텧</span><b id="avgSales">1,840,000??/b><small>理쒓렐 3媛쒖썡 +8%</small></div>
+              <div class="card" style="box-shadow:none;"><span>二쇰Ц 二쇨린</span><b id="cycleText">2~3??媛꾧꺽</b><small>????湲??⑦꽩</small></div>
+              <div class="card" style="box-shadow:none;"><span>留ㅼ텧 ?깃툒</span><b id="gradeText">B湲?/b><small>??100~300留뚯썝</small></div>
             </div>
             <div class="weekday" id="storeWeekdays"></div>
           </div>
@@ -243,8 +243,8 @@
       <section class="view" id="view-weekday">
         <div class="panel">
           <div class="panel-head">
-            <div><h2>요일별 예상 물량</h2><small>요일마다 과밀해질 호차와 집중 매장을 미리 봅니다.</small></div>
-            <span class="chip purple">요일 패턴</span>
+            <div><h2>?붿씪蹂??덉긽 臾쇰웾</h2><small>?붿씪留덈떎 怨쇰??댁쭏 ?몄감? 吏묒쨷 留ㅼ옣??誘몃━ 遊낅땲??</small></div>
+            <span class="chip purple">?붿씪 ?⑦꽩</span>
           </div>
           <div class="wide-grid" style="padding:12px;" id="weekdayCards"></div>
         </div>
@@ -253,12 +253,12 @@
       <section class="view" id="view-new">
         <div class="panel">
           <div class="panel-head">
-            <div><h2>신규주소 판단 이력</h2><small>신규주소, 추천 호차, 가까운 기존 고객, 실제 반영 여부를 남깁니다.</small></div>
-            <span class="chip amber">신규주소</span>
+            <div><h2>?좉퇋二쇱냼 ?먮떒 ?대젰</h2><small>?좉퇋二쇱냼, 異붿쿇 ?몄감, 媛源뚯슫 湲곗〈 怨좉컼, ?ㅼ젣 諛섏쁺 ?щ?瑜??④퉩?덈떎.</small></div>
+            <span class="chip amber">?좉퇋二쇱냼</span>
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>날짜</th><th>신규주소</th><th>추천 호차</th><th>가까운 기존 고객</th><th>판단</th><th>반영</th></tr></thead>
+              <thead><tr><th>?좎쭨</th><th>?좉퇋二쇱냼</th><th>異붿쿇 ?몄감</th><th>媛源뚯슫 湲곗〈 怨좉컼</th><th>?먮떒</th><th>諛섏쁺</th></tr></thead>
               <tbody id="newRows"></tbody>
             </table>
           </div>
@@ -269,15 +269,15 @@
         <div class="grid">
           <div class="panel">
             <div class="panel-head">
-              <div><h2>좌표 없는 고객 관리</h2><small>검색은 되지만 지도에 안 찍히는 고객을 관리합니다.</small></div>
-              <span class="chip red">좌표 보정</span>
+              <div><h2>醫뚰몴 ?녿뒗 怨좉컼 愿由?/h2><small>寃?됱? ?섏?留?吏?꾩뿉 ??李랁엳??怨좉컼??愿由ы빀?덈떎.</small></div>
+              <span class="chip red">醫뚰몴 蹂댁젙</span>
             </div>
             <div class="list" id="coordList"></div>
           </div>
           <div class="panel">
             <div class="panel-head">
-              <div><h2>주소 품질 점검</h2><small>중복 주소, 고객코드 중복, 주소 불완전 건을 따로 봅니다.</small></div>
-              <span class="chip blue">주소 품질</span>
+              <div><h2>二쇱냼 ?덉쭏 ?먭?</h2><small>以묐났 二쇱냼, 怨좉컼肄붾뱶 以묐났, 二쇱냼 遺덉셿??嫄댁쓣 ?곕줈 遊낅땲??</small></div>
+              <span class="chip blue">二쇱냼 ?덉쭏</span>
             </div>
             <div class="list" id="addressQuality"></div>
           </div>
@@ -287,12 +287,12 @@
       <section class="view" id="view-adjust">
         <div class="panel">
           <div class="panel-head">
-            <div><h2>호차 조정 / 용차 후보</h2><small>끝단 착지, 과밀 호차, 여유 호차를 기준으로 조정 후보를 봅니다.</small></div>
-            <span class="chip red">조정 후보</span>
+            <div><h2>?몄감 議곗젙 / ?⑹감 ?꾨낫</h2><small>?앸떒 李⑹?, 怨쇰? ?몄감, ?ъ쑀 ?몄감瑜?湲곗??쇰줈 議곗젙 ?꾨낫瑜?遊낅땲??</small></div>
+            <span class="chip red">議곗젙 ?꾨낫</span>
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>구분</th><th>대상 호차</th><th>후보 묶음</th><th>착지수</th><th>매출</th><th>추천 조치</th></tr></thead>
+              <thead><tr><th>援щ텇</th><th>????몄감</th><th>?꾨낫 臾띠쓬</th><th>李⑹???/th><th>留ㅼ텧</th><th>異붿쿇 議곗튂</th></tr></thead>
               <tbody id="adjustRows"></tbody>
             </table>
           </div>
@@ -302,151 +302,105 @@
   </div>
 
   <script src="/vehicle-data.js"></script>
-  <script>
+    <script>
     const areaData = window.VEHICLE_AREA_DATA || { vehicles: [] };
     const money = new Intl.NumberFormat("ko-KR");
     const sourceVehicles = (areaData.vehicles || []).filter(vehicle => Number(vehicle.count) > 0);
-    const vehicleStatus = (vehicle) => {
-      if (vehicle.load_status === "\uCD08\uACFC" || Number(vehicle.revenue_usage) >= 1.15) return ["\uCD08\uACFC", "red"];
-      if (vehicle.load_status === "\uC5EC\uC720" || Number(vehicle.revenue_usage) < .75) return ["\uC5EC\uC720", "blue"];
-      return ["\uBCF4\uD1B5", "green"];
-    };
-    const vehicles = sourceVehicles.slice(0, 120).map(vehicle => {
-      const status = vehicleStatus(vehicle);
-      const total = Number(vehicle.total_avg_order_amount || 0);
-      const count = Number(vehicle.count || 0);
-      const avg = count ? Math.round(total / count) : Number(vehicle.avg_order_amount || 0);
-      return [
-        `${vehicle.vehicle}\uD638`,
-        `${money.format(count)}\uACF3`,
-        `${money.format(total)}\uC6D0`,
-        `${money.format(avg)}\uC6D0`,
-        `${Math.round(Number(vehicle.revenue_usage || 0) * 100)}%`,
-        status[0],
-        status[1]
-      ];
-    });
-    function patternDays(pattern) {
-      const text = String(pattern || "");
-      const days = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0", "\uC77C"];
-      return days.map(day => text.includes(day) ? 90 : 12);
-    }
-    function topDayFromPattern(pattern) {
-      const days = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0", "\uC77C"];
-      return days.find(day => String(pattern || "").includes(day)) || "\uAE08";
-    }
-    const stores = sourceVehicles.flatMap(vehicle => (vehicle.customers || []).slice(0, 12).map(customer => {
-      const sales = Number(customer.avg_order_amount || 0);
-      return {
-        code: customer.id || "-",
-        name: customer.name || "-",
-        area: `${vehicle.vehicle}\uD638 \u00B7 ${vehicle.area_label || vehicle.primary_area || ""}`,
-        sales: `${money.format(sales)}\uC6D0`,
-        cycle: customer.delivery_pattern || "\uD328\uD134 \uD655\uC778 \uD544\uC694",
-        grade: sales >= 700000 ? "A\uAE09" : sales >= 250000 ? "B\uAE09" : "C\uAE09",
-        top: topDayFromPattern(customer.delivery_pattern),
-        days: patternDays(customer.delivery_pattern),
-        memo: customer.address || ""
-      };
-    })).slice(0, 500);
-    const dayNames = ["\uC6D4","\uD654","\uC218","\uBAA9","\uAE08","\uD1A0","\uC77C"];
-    let selectedStore = stores[0];
+    const dayNames = ["월", "화", "수", "목", "금", "토", "일"];
+    let selectedStore = null;
 
     function chip(text, cls) {
       return `<span class="chip ${cls}">${text}</span>`;
     }
-    function renderVehicles() {
-      document.getElementById("vehicleRows").innerHTML = vehicles.map(row => `
-        <tr><td><b>${row[0]}</b></td><td class="num">${row[1]}</td><td class="amount">${row[2]}</td><td class="amount">${row[3]}</td><td class="num">${row[4]}</td><td>${chip(row[5], row[6])}</td></tr>
-      `).join("");
+    function vehicleStatus(vehicle) {
+      if (vehicle.load_status === "초과" || Number(vehicle.revenue_usage) >= 1.15) return ["초과", "red"];
+      if (vehicle.load_status === "여유" || Number(vehicle.revenue_usage) < .75) return ["여유", "blue"];
+      return ["보통", "green"];
+    }
+    function patternDays(pattern) {
+      const text = String(pattern || "");
+      return dayNames.map(day => text.includes(day) ? 90 : 12);
+    }
+    function topDayFromPattern(pattern) {
+      return dayNames.find(day => String(pattern || "").includes(day)) || "금";
+    }
+    function buildEmbeddedStores() {
+      return sourceVehicles.flatMap(vehicle => (vehicle.customers || []).slice(0, 20).map(customer => {
+        const sales = Number(customer.avg_order_amount || 0);
+        return {
+          code: customer.id || "-",
+          name: customer.name || "-",
+          area: `${vehicle.vehicle}호 · ${vehicle.area_label || vehicle.primary_area || ""}`,
+          vehicle: vehicle.vehicle,
+          address: customer.address || "",
+          salesAmount: sales,
+          sales: `${money.format(sales)}원`,
+          cycle: customer.delivery_pattern || "패턴 확인 필요",
+          grade: sales >= 700000 ? "A급" : sales >= 250000 ? "B급" : "C급",
+          top: topDayFromPattern(customer.delivery_pattern),
+          days: patternDays(customer.delivery_pattern)
+        };
+      })).slice(0, 500);
+    }
+    let stores = buildEmbeddedStores();
+    selectedStore = stores[0] || null;
+
+    function renderVehicles(rows) {
+      const vehicleRows = rows || sourceVehicles.slice(0, 120).map(vehicle => {
+        const status = vehicleStatus(vehicle);
+        const total = Number(vehicle.total_avg_order_amount || 0);
+        const count = Number(vehicle.count || 0);
+        const avg = count ? Math.round(total / count) : Number(vehicle.avg_order_amount || 0);
+        return { vehicle: vehicle.vehicle, stopCount: count, amount: total, avg, ratio: Math.round(Number(vehicle.revenue_usage || 0) * 100), status: status[0], cls: status[1] };
+      });
+      document.getElementById("vehicleRows").innerHTML = vehicleRows.map(row => {
+        const avg = row.avg ?? (row.stopCount ? Math.round(Number(row.amount || 0) / row.stopCount) : 0);
+        return `<tr><td><b>${row.vehicle}호</b></td><td class="num">${money.format(row.stopCount || 0)}건</td><td class="amount">${money.format(Math.round(row.amount || 0))}원</td><td class="amount">${money.format(avg)}원</td><td class="num">${row.ratio ?? money.format(row.dates || 0)}</td><td>${chip(row.status || "월캐시", row.cls || "blue")}</td></tr>`;
+      }).join("");
     }
     function renderTimeline() {
-      const rows = [["2026.03","17.8곳",70],["2026.04","18.5곳",76],["2026.05","19.4곳",82],["2026.06","21.2곳",92]];
-      document.getElementById("monthTimeline").innerHTML = rows.map(row => `
-        <div class="item"><b>${row[0]} · 평균 ${row[1]}</b><div class="bar"><i style="--w:${row[2]}%"></i></div><small>착지수 기준 추이</small></div>
-      `).join("");
+      const rows = [["2026.03", "17.8곳", 70], ["2026.04", "18.5곳", 76], ["2026.05", "19.4곳", 82], ["2026.06", "21.2곳", 92]];
+      document.getElementById("monthTimeline").innerHTML = rows.map(row => `<div class="item"><b>${row[0]} · 평균 ${row[1]}</b><div class="bar"><i style="--w:${row[2]}%"></i></div><small>착지수 기준 추이</small></div>`).join("");
     }
-    function renderStores() {
+    function renderStores(list = stores) {
       const q = document.getElementById("globalSearch").value.trim().toLowerCase();
-      const list = stores.filter(store => `${store.code} ${store.name} ${store.area}`.toLowerCase().includes(q));
-      document.getElementById("storeList").innerHTML = list.map(store => `
-        <article class="item ${selectedStore.code === store.code ? "active" : ""}" data-code="${store.code}">
-          <b>${store.code} · ${store.name}</b>
-          <small>${store.area}</small>
-          <small>월 평균 ${store.sales} · ${store.top}요일 집중 · ${store.cycle}</small>
-        </article>
-      `).join("") || `<div class="item"><small>검색 결과가 없습니다.</small></div>`;
-      document.querySelectorAll("#storeList .item[data-code]").forEach(card => {
-        card.addEventListener("click", () => {
-          selectedStore = stores.find(store => store.code === card.dataset.code);
-          renderStores();
-          renderStoreDetail();
-        });
-      });
+      const filtered = list.filter(store => `${store.code} ${store.name} ${store.area} ${store.address}`.toLowerCase().includes(q));
+      document.getElementById("storeList").innerHTML = filtered.map(store => `<article class="item ${selectedStore?.code === store.code ? "active" : ""}" data-code="${store.code}"><b>${store.code} / ${store.name}</b><small>${store.area}</small><small>월 평균 ${store.sales} · ${store.top}요일 집중 · ${store.cycle}</small></article>`).join("") || `<div class="item"><small>검색 결과가 없습니다.</small></div>`;
+      document.querySelectorAll("#storeList .item[data-code]").forEach(card => card.addEventListener("click", () => {
+        selectedStore = stores.find(store => store.code === card.dataset.code) || selectedStore;
+        renderStores();
+        renderStoreDetail();
+      }));
     }
     function renderStoreDetail() {
-      document.getElementById("storeDetailTitle").textContent = `${selectedStore.code} · ${selectedStore.name}`;
+      if (!selectedStore) return;
+      document.getElementById("storeDetailTitle").textContent = `${selectedStore.code} / ${selectedStore.name}`;
       document.getElementById("storeDetailBadge").textContent = `${selectedStore.top}요일 집중`;
       document.getElementById("avgSales").textContent = selectedStore.sales;
       document.getElementById("cycleText").textContent = selectedStore.cycle;
       document.getElementById("gradeText").textContent = selectedStore.grade;
-      document.getElementById("storeWeekdays").innerHTML = selectedStore.days.map((value, index) => {
-        const hot = dayNames[index] === selectedStore.top;
-        const normal = value >= 35;
-        return `<div class="day ${hot ? "hot" : normal ? "warn" : ""}"><b>${dayNames[index]}</b><span>${value}%</span></div>`;
-      }).join("");
+      document.getElementById("storeWeekdays").innerHTML = selectedStore.days.map((value, index) => `<div class="day ${dayNames[index] === selectedStore.top ? "hot" : value >= 35 ? "warn" : ""}"><b>${dayNames[index]}</b><span>${value}%</span></div>`).join("");
     }
     function renderWeekday() {
-      const cards = [
-        ["월요일","315호차 과밀 예상","독산 식품, 대방 상회 주문 집중", "red"],
-        ["수요일","101호차 끝단 증가","연신내/구산 묶음 확인 필요", "amber"],
-        ["금요일","전체 물량 최고","할맥 은평점 포함 42곳 집중", "red"],
-        ["토요일","동북권 여유","422호차 신규 흡수 가능", "green"]
-      ];
-      document.getElementById("weekdayCards").innerHTML = cards.map(row => `
-        <div class="item"><b>${row[0]} · ${chip(row[1], row[3])}</b><small>${row[2]}</small></div>
-      `).join("");
+      const cards = [["화요일", "315호차 과밀 예상", "입산/독산 묶음 확인 필요", "red"], ["수요일", "101호차 끝단 증가", "연신내/구산 묶음 확인 필요", "amber"], ["금요일", "전체 물량 최고", "할맥 매장 주문 집중", "red"], ["토요일", "동북권 여유", "422호차 신규 흡수 가능", "green"]];
+      document.getElementById("weekdayCards").innerHTML = cards.map(row => `<div class="item"><b>${row[0]} · ${chip(row[1], row[3])}</b><small>${row[2]}</small></div>`).join("");
     }
     function renderNewRows() {
-      const rows = [
-        ["06-08","서울 은평구 연서로 신규 매장","101호차","S12015 연신내 키친","권역 후보","검토중"],
-        ["06-07","서울 금천구 독산로 신규점","315호차","S31577 독산 식품","용차 후보","미반영"],
-        ["06-05","서울 노원구 동일로 신규점","422호차","S42201 상계 프레시","흡수 가능","반영"]
-      ];
+      const rows = [["06-08", "서울 은평구 연서로 신규 매장", "101호차", "S12015 연신내 키친", "권역 후보", "검토중"], ["06-07", "서울 금천구 독산로 신규점", "315호차", "S31577 독산 식품", "용차 후보", "미반영"], ["06-05", "서울 노원구 동일로 신규점", "422호차", "S42201 상계 프레시", "흡수 가능", "반영"]];
       document.getElementById("newRows").innerHTML = rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("");
     }
     function renderCoord() {
-      document.getElementById("coordList").innerHTML = [
-        ["S12015 연신내 키친","주소 있음, 좌표 확인 필요"],
-        ["S12770 갈현푸드","지도 핀 실패, 수기 보정 필요"],
-        ["S42233 중계 마트","주소 후보 2개, 중복 확인"]
-      ].map(row => `<div class="item"><b>${row[0]}</b><small>${row[1]}</small></div>`).join("");
-      document.getElementById("addressQuality").innerHTML = [
-        ["주소 중복","8건"],
-        ["고객코드 중복","2건"],
-        ["상세주소 누락","11건"]
-      ].map(row => `<div class="item"><b>${row[0]}</b><small>${row[1]} 점검 필요</small></div>`).join("");
+      document.getElementById("coordList").innerHTML = [["S12015 연신내 키친", "주소 있음, 좌표 확인 필요"], ["S12770 갈현푸드", "지오코딩 실패, 수기 보정 필요"], ["S42233 중계 마트", "주소 후보 2개 중복 확인"]].map(row => `<div class="item"><b>${row[0]}</b><small>${row[1]}</small></div>`).join("");
+      document.getElementById("addressQuality").innerHTML = [["주소 중복", "8건"], ["고객코드 중복", "2건"], ["상세주소 누락", "11건"]].map(row => `<div class="item"><b>${row[0]}</b><small>${row[1]} 점검 필요</small></div>`).join("");
     }
     function renderAdjust() {
-      const rows = [
-        ["용차 후보","315호차","시흥/독산 묶음","5곳","214만원","새 용차 분리"],
-        ["호차 이동","101호차","연신내/구산 끝단","4곳","158만원","204호차 인접성 확인"],
-        ["신규 흡수","422호차","상계 신규 주소","2곳","예상 78만원","422호차 흡수 가능"]
-      ];
+      const rows = [["용차 후보", "315호차", "시흥/독산 묶음", "5곳", "214만원", "새 용차 분리"], ["호차 이동", "101호차", "연신내/구산 끝단", "4곳", "158만원", "204호차 인접성 확인"], ["신규 흡수", "422호차", "상계 신규 주소", "2곳", "예상 78만원", "422호차 흡수 가능"]];
       document.getElementById("adjustRows").innerHTML = rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("");
     }
     function switchView(view) {
       document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.view === view));
       document.querySelectorAll(".view").forEach(section => section.classList.toggle("active", section.id === `view-${view}`));
     }
-    document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => switchView(tab.dataset.view)));
-    document.getElementById("globalSearch").addEventListener("input", renderStores);
-    document.getElementById("refreshButton").addEventListener("click", () => {
-      selectedStore = stores[0];
-      renderStores();
-      renderStoreDetail();
-    });
-
     async function refreshMonthlyDispatchSummary() {
       const status = document.getElementById("monthlySyncStatus");
       const button = document.getElementById("monthlySyncButton");
@@ -455,59 +409,45 @@
       try {
         const response = await fetch("/api/monthly-dispatch-summary", { cache: "no-store" });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const summary = await response.json();
-        applyMonthlyDispatchSummary(summary);
+        applyMonthlyDispatchSummary(await response.json());
       } catch (error) {
         if (status) status.textContent = `월 데이터 조회 실패: ${error.message || error}`;
       } finally {
         if (button) button.disabled = false;
       }
     }
-
     function applyMonthlyDispatchSummary(summary) {
       const status = document.getElementById("monthlySyncStatus");
       const rowCount = Number(summary?.rowCount || 0);
       if (!rowCount) {
-        if (status) status.textContent = "저장된 월 배차 데이터가 없습니다. 관리자에서 월 배차 엑셀을 업로드하면 이 화면에 자동 반영됩니다.";
+        if (status) status.textContent = "저장된 월 배차 데이터가 없습니다. 관리자에서 월 배차 엑셀을 업로드하면 자동 반영됩니다.";
         return;
       }
-      if (status) {
-        status.textContent = `월 캐시 ${money.format(rowCount)}행 · 호차 ${money.format(summary.vehicleCount || 0)}대 · 매장 ${money.format(summary.storeCount || 0)}곳 · 갱신 ${summary.generatedAt || "-"}`;
-      }
+      const vehicleCount = Number(summary.vehicleCount || 0);
+      const storeCount = Number(summary.storeCount || 0);
+      const totalAmount = Number(summary.totalAmount || 0);
+      if (status) status.textContent = `월 캐시 ${money.format(rowCount)}행 · 호차 ${money.format(vehicleCount)}대 · 매장 ${money.format(storeCount)}곳 · 갱신 ${summary.generatedAt || "-"}`;
       const cards = document.querySelectorAll(".kpis .card");
-      if (cards[0]) cards[0].querySelector("b").textContent = `${money.format(rowCount)}건`;
-      if (cards[1]) cards[1].querySelector("b").textContent = `${money.format(Math.round(Number(summary.totalAmount || 0) / 10000))}만원`;
-      if (cards[2]) cards[2].querySelector("b").textContent = `${money.format(summary.vehicleCount || 0)}대`;
-      if (cards[3]) cards[3].querySelector("b").textContent = `${money.format(summary.storeCount || 0)}곳`;
-      const vehicleBody = document.getElementById("vehicleRows");
-      if (vehicleBody && Array.isArray(summary.vehicles) && summary.vehicles.length) {
-        vehicleBody.innerHTML = summary.vehicles.map(row => {
-          const avg = row.stopCount ? Math.round(Number(row.amount || 0) / row.stopCount) : 0;
-          return `<tr><td><b>${row.vehicle}호</b></td><td class="num">${money.format(row.stopCount)}건</td><td class="amount">${money.format(Math.round(row.amount || 0))}원</td><td class="amount">${money.format(avg)}원</td><td class="num">${money.format(row.dates || 0)}일</td><td>${chip("월캐시", "blue")}</td></tr>`;
-        }).join("");
-      }
-      const storeList = document.getElementById("storeList");
-      if (storeList && Array.isArray(summary.stores) && summary.stores.length) {
-        storeList.innerHTML = summary.stores.slice(0, 120).map(store => `
-          <article class="item">
-            <b>${store.code || "-"} / ${store.name || "-"}</b>
-            <small>${store.vehicle ? `${store.vehicle}호` : "-"} · ${store.address || ""}</small>
-            <small>월 매출 ${money.format(Math.round(store.amount || 0))}원 · 배송 ${money.format(store.stopCount || 0)}건 · ${money.format(store.dates || 0)}일</small>
-          </article>
-        `).join("");
+      const avgStopsPerVehicle = vehicleCount ? Math.round(rowCount / vehicleCount) : 0;
+      const avgAmountPerVehicle = vehicleCount ? Math.round(totalAmount / vehicleCount) : 0;
+      if (cards[0]) { cards[0].querySelector("span").textContent = "호차당 월 평균 착지수"; cards[0].querySelector("b").textContent = `${money.format(avgStopsPerVehicle)}건`; cards[0].querySelector("small").textContent = `총 ${money.format(rowCount)}건 / ${money.format(vehicleCount)}대`; }
+      if (cards[1]) { cards[1].querySelector("span").textContent = "호차당 월 평균 매출"; cards[1].querySelector("b").textContent = `${money.format(Math.round(avgAmountPerVehicle / 10000))}만원`; cards[1].querySelector("small").textContent = `총 ${money.format(Math.round(totalAmount / 10000))}만원`; }
+      if (cards[2]) { cards[2].querySelector("span").textContent = "월 운행 호차"; cards[2].querySelector("b").textContent = `${money.format(vehicleCount)}대`; }
+      if (cards[3]) { cards[3].querySelector("span").textContent = "월 매장 수"; cards[3].querySelector("b").textContent = `${money.format(storeCount)}곳`; }
+      if (Array.isArray(summary.vehicles) && summary.vehicles.length) renderVehicles(summary.vehicles.map(row => ({ ...row, status: "월캐시", cls: "blue" })));
+      if (Array.isArray(summary.stores) && summary.stores.length) {
+        stores = summary.stores.map(store => ({ code: store.code || "-", name: store.name || "-", area: `${store.vehicle || "-"}호 · ${store.address || ""}`, vehicle: store.vehicle || "", address: store.address || "", salesAmount: Number(store.amount || 0), sales: `${money.format(Math.round(store.amount || 0))}원`, cycle: `${money.format(store.dates || 0)}일`, grade: Number(store.amount || 0) >= 700000 ? "A급" : Number(store.amount || 0) >= 250000 ? "B급" : "C급", top: "금", days: [40, 40, 40, 40, 80, 30, 10] }));
+        selectedStore = stores[0] || selectedStore;
+        renderStores();
+        renderStoreDetail();
       }
     }
-
+    document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => switchView(tab.dataset.view)));
+    document.getElementById("globalSearch").addEventListener("input", renderStores);
+    document.getElementById("refreshButton").addEventListener("click", () => { selectedStore = stores[0] || null; renderStores(); renderStoreDetail(); });
     document.getElementById("monthlySyncButton")?.addEventListener("click", refreshMonthlyDispatchSummary);
-    renderVehicles();
-    renderTimeline();
-    renderStores();
-    renderStoreDetail();
-    renderWeekday();
-    renderNewRows();
-    renderCoord();
-    renderAdjust();
-    refreshMonthlyDispatchSummary();
+    renderVehicles(); renderTimeline(); renderStores(); renderStoreDetail(); renderWeekday(); renderNewRows(); renderCoord(); renderAdjust(); refreshMonthlyDispatchSummary();
   </script>
 </body>
 </html>
+
