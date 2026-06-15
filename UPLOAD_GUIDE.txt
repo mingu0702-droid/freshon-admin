@@ -1,0 +1,15 @@
+﻿이번 수정 업로드 방법
+
+1. GitHub 저장소에서 public 폴더로 들어갑니다.
+2. Add file > Upload files 를 누릅니다.
+3. 이 폴더 안의 public/daily-routes.html 파일만 업로드합니다.
+4. 같은 이름 파일이 있으므로 교체/덮어쓰기 커밋하면 됩니다.
+
+이번 수정 내용:
+- ADMIN_FEATURES 누락으로 운영지도 초기화가 죽는 오류 방어
+- COLORS 누락으로 권역/호차 렌더가 멈추는 오류 수정
+- 카카오 SDK가 진짜 실패할 때만 지도 오류 문구 표시
+
+주의:
+- _check_daily-routes.js, _check_index.js, _daily-routes-inline-check.js 는 올리지 마세요.
+- mockups, outputs, 시안 HTML도 이번 수정에는 필요 없습니다.
