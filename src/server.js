@@ -1,5 +1,6 @@
 ﻿import express from "express";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -565,6 +566,97 @@ function inferRange(rows) {
   if (!dates.length) return null;
   return { startDate: dates[0], endDate: dates[dates.length - 1] };
 }
+
+function base64Url(value) {
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function parseGoogleServiceAccount() {
+  if (!config.googleServiceAccountJsonBase64 || !config.googleSheetId) return null;
+  const json = Buffer.from(config.googleServiceAccountJsonBase64, "base64").toString("utf8");
+  const account = JSON.parse(json);
+  if (!account.client_email || !account.private_key) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 is missing client_email/private_key.");
+  }
+  return account;
+}
+
+async function getGoogleAccessToken() {
+  const account = parseGoogleServiceAccount();
+  if (!account) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const claim = {
+    iss: account.client_email,
+    scope: "https://www.googleapis.com/auth/spreadsheets",
+    aud: "https://oauth2.googleapis.com/token",
+    exp: now + 3600,
+    iat: now
+  };
+  const unsigned = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(claim))}`;
+  const signature = crypto.createSign("RSA-SHA256").update(unsigned).sign(account.private_key, "base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: `${unsigned}.${signature}`
+    })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`Google token failed: ${body.error_description || body.error || response.status}`);
+  return body.access_token;
+}
+
+function buildSheetValues(payload) {
+  const columns = Array.isArray(payload.columns) && payload.columns.length
+    ? payload.columns.filter((column) => !String(column).startsWith("_"))
+    : Object.keys(payload.rows?.[0] || {}).filter((column) => !String(column).startsWith("_"));
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  return [
+    columns,
+    ...rows.map((row) => columns.map((column) => normalizeCell(row[column])))
+  ];
+}
+
+async function syncDispatchToGoogleSheet(payload) {
+  if (!config.googleSheetId || !config.googleServiceAccountJsonBase64) return { skipped: true, reason: "Google Sheets env not configured." };
+  const token = await getGoogleAccessToken();
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}?fields=sheets.properties.title`;
+  const metaResponse = await fetch(metaUrl, { headers });
+  const metaBody = await metaResponse.json().catch(() => ({}));
+  if (!metaResponse.ok) {
+    throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
+  }
+  const sheetTitles = (metaBody.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
+  const wantedSheetName = config.googleSheetName || "customers";
+  const sheetName = sheetTitles.includes(wantedSheetName) ? wantedSheetName : sheetTitles[0];
+  if (!sheetName) throw new Error("Google spreadsheet has no writable sheet tab.");
+  const range = `${sheetName}!A1`;
+  const values = buildSheetValues(payload);
+  const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(sheetName)}:clear`;
+  const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
+  const clearResponse = await fetch(clearUrl, { method: "POST", headers, body: "{}" });
+  if (!clearResponse.ok && clearResponse.status !== 400) {
+    const text = await clearResponse.text();
+    throw new Error(`Google sheet clear failed: HTTP ${clearResponse.status} ${text.slice(0, 200)}`);
+  }
+  const updateResponse = await fetch(updateUrl, { method: "PUT", headers, body: JSON.stringify({ values }) });
+  const updateBody = await updateResponse.json().catch(() => ({}));
+  if (!updateResponse.ok) {
+    throw new Error(`Google sheet update failed: ${updateBody.error?.message || updateResponse.status}`);
+  }
+  return { skipped: false, sheetName, requestedSheetName: wantedSheetName, rows: values.length - 1, columns: values[0]?.length || 0, updatedRange: updateBody.updatedRange };
+}
+
 async function readVehicleAreaData() {
   vehicleAreaDataPromise ||= fs.readFile(vehicleAreaSourceUrl, "utf8")
     .then((text) => {
@@ -2157,6 +2249,8 @@ async function processUploadedDispatchFiles(files, jobId) {
     };
 
     await writeDispatchCache(payload);
+    const googleSheetSync = await syncDispatchToGoogleSheet(payload);
+    console.log("Google Sheets sync result:", googleSheetSync);
     await clearDailyRouteCache("fixed dispatch Excel uploaded");
     refreshState = {
       ...refreshState,
@@ -2169,6 +2263,7 @@ async function processUploadedDispatchFiles(files, jobId) {
       uploadedRows: uploadedRowsCount,
       rowCount: payload.rowCount,
       range: payload.range,
+      googleSheetSync,
       jobId
     };
   } catch (error) {

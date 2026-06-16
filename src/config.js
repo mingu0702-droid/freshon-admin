@@ -22,5 +22,8 @@ export const config = {
   deliveryAdminBaseUrl: process.env.DELIVERY_ADMIN_BASE_URL || "https://delivery-bali.chabyulhwa.com",
   deliveryAdminId: process.env.DELIVERY_ADMIN_ID || "",
   deliveryAdminPassword: process.env.DELIVERY_ADMIN_PASSWORD || "",
-  deliveryAdminCookie: process.env.DELIVERY_ADMIN_COOKIE || ""
+  deliveryAdminCookie: process.env.DELIVERY_ADMIN_COOKIE || "",
+  googleSheetId: process.env.GOOGLE_SHEET_ID || "",
+  googleSheetName: process.env.GOOGLE_SHEET_NAME || "customers",
+  googleServiceAccountJsonBase64: process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 || ""
 };
