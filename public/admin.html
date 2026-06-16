@@ -14,6 +14,7 @@
       <nav class="page-nav" aria-label="페이지 이동">
         <a href="/daily-routes.html">일일동선</a>
         <a href="/daily-routes.html?tab=wms">WMS</a>
+        <a href="/daily-routes.html?tab=new">신규권역</a>
         <a href="/operations-data.html">운영데이터</a>
         <a href="/admin.html">관리자</a>
       </nav>
@@ -25,7 +26,7 @@
     <section class="toolbar">
       <div>
         <label for="adminToken">관리 토큰</label>
-        <input id="adminToken" type="password" placeholder="처음 한 번 저장하면 브라우저에 보관됩니다">
+        <input id="adminToken" type="password" placeholder="처음 한 번 저장하면 브라우저에 보관됩니다.">
       </div>
       <button id="saveTokenButton" class="secondary" type="button">토큰 기억하기</button>
       <button id="reloadButton" type="button">저장자료 보기</button>
@@ -45,7 +46,7 @@
       <div class="wide">
         <label for="adminSearchInput">매장/코드/주소 검색</label>
         <input id="adminSearchInput" type="search" placeholder="예: 할맥, S10922, 은평구, 101호">
-        <p class="help-text">고객코드, 매장명, 주소, 호차로 저장자료를 바로 찾습니다.</p>
+        <p class="help-text">고객코드, 매장명, 주소, 호차로 저장자료와 고객마스터를 바로 찾습니다.</p>
       </div>
       <button id="clearSearchButton" class="secondary" type="button">검색 초기화</button>
     </section>
@@ -70,4 +71,3 @@
   <script src="./app.js"></script>
 </body>
 </html>
-
