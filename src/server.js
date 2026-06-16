@@ -558,7 +558,7 @@ function inferRange(rows) {
       if (String(key).startsWith("_")) continue;
       if (!DATE_COLUMN_RE.test(String(key))) continue;
       const normalized = normalizeDateValue(normalizeCell(value));
-      if (normalized) dates.push(normalized);
+      if (normalized && normalized >= "2025-01-01") dates.push(normalized);
     }
   }
   dates.sort();
@@ -661,6 +661,11 @@ async function buildCustomerSearchItems(query) {
   }
   return results
     .sort((a, b) => b.score - a.score || Number(b.hasCoords) - Number(a.hasCoords))
+    .filter((item, index, array) => {
+      const key = normalizeSearchValue(item.code || item.address || item.name);
+      if (!key) return true;
+      return array.findIndex((other) => normalizeSearchValue(other.code || other.address || other.name) === key) === index;
+    })
     .slice(0, 30);
 }
 
@@ -2120,6 +2125,9 @@ async function processUploadedDispatchFiles(files, jobId) {
       refreshState.totalFiles = files.length;
       try {
         const parsed = await parseWorkbookWithPython(file);
+        parsed.rows.forEach((row, rowIndex) => {
+          row._savedOrder = rows.length + rowIndex + 1;
+        });
         uploadedRowsCount += parsed.rows.length;
         columns = mergeColumns(columns, parsed.columns);
         rows = mergeRows(rows, parsed.rows);

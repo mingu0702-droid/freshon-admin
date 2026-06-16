@@ -396,10 +396,12 @@
       position:relative;
       height:calc(100vh - 54px);
       display:grid;
-      grid-template-columns:318px minmax(680px, 1fr) 380px;
-      grid-template-rows:minmax(0, 1fr);
+      grid-template-columns:minmax(860px, 1fr) 380px;
+      grid-template-rows:auto 380px minmax(0, 1fr);
       grid-template-areas:
-        "tools results map";
+        "results tools"
+        "results map"
+        "results map";
       gap:8px;
       padding:8px;
       margin:0;
@@ -411,6 +413,7 @@
     body[data-work-tab="wms"] .wms-tool-pane {
       grid-area:tools;
       min-height:0;
+      max-height:190px;
       overflow:auto;
       align-content:start;
       border:1px solid #d8e4f1;
@@ -444,6 +447,7 @@
       display:block;
       width:100%;
       height:100%;
+      aspect-ratio:1 / 1;
       min-width:0;
       min-height:0;
       max-width:none;
@@ -1039,28 +1043,6 @@
       boundaryVisible = !boundaryVisible;
       updateBoundaryToggleButton();
       if (!map) return;
-      if (activeCustomerSearchHit) {
-        openCustomerSearchHit(activeCustomerSearchHit);
-        return;
-      }
-      if (activeAddressSearchQuery) {
-        openAddressSearchPin(activeAddressSearchQuery);
-        return;
-      }
-      const customerQuery = customerSearchInput.value.trim();
-      if (customerQuery) {
-        const hit = getCombinedCustomerSearchHits()[0];
-        if (hit?.type === "saved") {
-          openSavedCustomerSearchHit(hit.item);
-          return;
-        }
-        if (hit?.type === "map") {
-          openCustomerSearchHit(hit.item);
-          return;
-        }
-        openAddressSearchPin(customerQuery);
-        return;
-      }
       render();
     }
 
@@ -1297,6 +1279,13 @@
         }
       });
       wmsResultsEl.addEventListener("change", (event) => {
+        const tonMaster = event.target.closest("[data-master-ton-select]");
+        if (tonMaster) {
+          const key = tonMaster.dataset.masterTonSelect;
+          const limitInput = document.querySelector(`[data-master-limit="${CSS.escape(key)}"]`);
+          if (limitInput) limitInput.value = String(revenueLimitByTon(tonMaster.value) || "");
+          return;
+        }
         const select = event.target.closest("select[data-wms-filter]");
         if (!select) return;
         if (select.dataset.wmsFilter === "status") wmsStatusFilter.value = select.value;
@@ -1319,7 +1308,16 @@
           return;
         }
         const button = event.target.closest("[data-load-vehicle]");
-        if (button) openVehicleDetail(button.dataset.loadVehicle);
+        if (button) {
+          openVehicleDetail(button.dataset.loadVehicle);
+          return;
+        }
+        const groupButton = event.target.closest("[data-overview-group]");
+        if (groupButton) {
+          viewMode.value = `overview:${groupButton.dataset.overviewGroup}`;
+          activeLoadStatus = "";
+          render();
+        }
       });
       routeDateInput.addEventListener("change", () => {
         shouldShowRoute = false;
@@ -1389,17 +1387,28 @@
     }
 
     function getCombinedCustomerSearchHits() {
-      const localHits = getCustomerSearchHits().map(item => ({ type: "map", item }));
-      const localKeys = new Set(localHits.map(({ item }) => [
-        item.customer.id,
-        item.customer.name,
-        item.customer.address,
-        item.vehicle.vehicle
-      ].join("|")));
-      const savedHits = getSavedCustomerSearchHits()
-        .filter(item => !localKeys.has([item.code, item.name, item.address, item.vehicle].join("|")))
-        .map(item => ({ type: "saved", item }));
-      return [...localHits, ...savedHits].slice(0, 40);
+      const hasCoords = hit => {
+        const item = hit.type === "saved" ? hit.item : hit.item.customer;
+        return Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng));
+      };
+      const keyOf = hit => {
+        const item = hit.type === "saved" ? hit.item : hit.item.customer;
+        const code = String(item.code || item.id || "").trim().toLowerCase();
+        const address = String(item.address || "").replace(/\s+/g, "").toLowerCase();
+        const name = String(item.name || "").replace(/\s+/g, "").toLowerCase();
+        return code || address || name || Math.random().toString(36);
+      };
+      const hits = [
+        ...getCustomerSearchHits().map(item => ({ type: "map", item })),
+        ...getSavedCustomerSearchHits().map(item => ({ type: "saved", item }))
+      ].sort((a, b) => Number(hasCoords(b)) - Number(hasCoords(a)));
+      const seen = new Set();
+      return hits.filter(hit => {
+        const key = keyOf(hit);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 40);
     }
 
     function scheduleSavedCustomerSearch() {
@@ -1941,10 +1950,17 @@
       if (!Number.isFinite(row?.lat) || !Number.isFinite(row?.lng)) return;
       const vehicle = findVehicleByNumber(row.vehicle);
       const color = vehicle ? getVehicleColor(vehicle) : "#dc2626";
+      clearMapLayers();
+      if (boundaryVisible && vehicle) {
+        addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, { color, weight: 4, fillOpacity: 0, opacity: .94 });
+      }
       setKakaoView(row.lat, row.lng, options.level || 4);
-      const nearby = (row.nearbyStores && row.nearbyStores.length ? row.nearbyStores : row.candidates || [])
+      const vehicleStores = vehicle
+        ? (vehicle.customers || []).map(customer => ({ vehicle, customer }))
+        : [];
+      const nearby = (vehicleStores.length ? vehicleStores : (row.nearbyStores && row.nearbyStores.length ? row.nearbyStores : row.candidates || []))
         .filter(item => Number.isFinite(item?.customer?.lat) && Number.isFinite(item?.customer?.lng))
-        .slice(0, 20);
+        .slice(0, vehicleStores.length ? 180 : 20);
       addTextImageMarker(
         [row.lat, row.lng],
         "신규",
@@ -1961,6 +1977,7 @@
         );
       });
       openInfoWindow(new kakao.maps.LatLng(row.lat, row.lng), newAreaPopup(row));
+      fitKakaoBounds([[row.lat, row.lng], ...nearby.map(item => [item.customer.lat, item.customer.lng])]);
     }
 
     function addRouteFlagMarker(point, color, vehicleLabel, sequence, total, popupHtml, recordedOverride) {
@@ -2084,8 +2101,7 @@
       document.querySelector(".stats .stat:nth-child(2) span").textContent = "권역 최장 폭";
 
       const color = getVehicleColor(vehicle);
-      const showBoundaries = boundaryVisible || boundaryToggleButton?.classList.contains("active") || /ON/.test(boundaryToggleButton?.textContent || "");
-      if (showBoundaries && !boundaryVisible) boundaryVisible = true;
+      const showBoundaries = boundaryVisible;
       if (showBoundaries) {
         addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
           color,
@@ -2120,7 +2136,7 @@
           );
         });
       };
-      if (showBoundaries) drawVehicleDetailLabels();
+      drawVehicleDetailLabels();
 
       if (routeFocus) renderDailyRoute(vehicle, color);
       else routeStatus.textContent = "호차 권역과 고객 위치를 운영지도 기준으로 표시합니다.";
@@ -2162,7 +2178,7 @@
       } else if (vehicle.center) {
         setKakaoView(vehicle.center[0], vehicle.center[1], 7);
       }
-      if (showBoundaries) setTimeout(drawVehicleDetailLabels, 150);
+      setTimeout(drawVehicleDetailLabels, 150);
     }
 
     function freshonDiagnosticReason(errorPayload) {
@@ -2319,7 +2335,7 @@
       currentRouteStops = stops;
       updateRouteHud(vehicle, stops.length, "일일동선");
       renderRouteGroups(stops);
-      addRouteGroupBoundaries(stops, color);
+      if (boundaryVisible) addRouteGroupBoundaries(stops, color, vehicle);
       const allPoints = stops.map(stop => [Number(stop.lat), Number(stop.lng)]);
       stops.forEach((stop, index) => {
         const sequence = stop.sequence || index + 1;
@@ -2360,7 +2376,11 @@
           dailyAmount: customer.avg_order_amount,
           lat: customer.lat,
           lng: customer.lng,
-          deliveryPattern: customer.delivery_pattern
+          deliveryPattern: customer.delivery_pattern,
+          adminCode: customer.admin_code,
+          adminName: customer.admin_name,
+          district: customer.district,
+          dong: customer.dong
         }));
       return {
         generatedAt: null,
@@ -2550,7 +2570,7 @@
       return palette[index] || fallbackColor;
     }
 
-    function addRouteGroupBoundaries(stops, fallbackColor) {
+    function addRouteGroupBoundaries(stops, fallbackColor, vehicle = null) {
       const groups = new Map();
       stops.forEach(stop => {
         const code = String(stop.adminCode || "").trim();
@@ -2576,6 +2596,10 @@
             fillOpacity: .13
           });
           kakao.maps.event.addListener(polygon, "click", (mouseEvent) => {
+            if (vehicle?.vehicle) {
+              openVehicleDetail(vehicle.vehicle);
+              return;
+            }
             openInfoWindow(mouseEvent.latLng, `<b>${esc(group.district)}</b><br>${esc(group.name)}`);
           });
           areaLayer.add(polygon);
@@ -2791,6 +2815,11 @@
           decision = "X";
           reason = "배송동선 맞지않음";
         }
+      } else if (radiusCustomers.length) {
+        vehicle = radiusCustomers[0]?.vehicle || vehicle;
+        distance = radiusCustomers[0]?.distance ?? distance;
+        decision = "O";
+        reason = "";
       } else if (best) {
         if (best.distance <= 1) {
           decision = "O";
@@ -3417,6 +3446,12 @@
       const groups = row.charterGroups || [];
       const overAmount = Math.max(0, row.amount - row.limit);
       const master = vehicleMaster(row.vehicle);
+      const driverName = master.driverName || row.driverName || row.driver || "";
+      const phone = master.phone || row.phone || row.driverPhone || "";
+      const tonValue = normalizeTonLabel(master.ton || row.tonLabel || "");
+      const tonOptions = ["1톤", "1.2톤", "1.4톤", "2.5톤", "3.5톤", "5톤"]
+        .map(ton => `<option value="${esc(ton)}"${normalizeTonLabel(ton) === tonValue ? " selected" : ""}>${esc(ton)}</option>`)
+        .join("");
       const groupChips = groups.length
         ? groups.map(group => `<span class="charter-chip">${esc(group.area)} · ${fmt.format(group.count)}착 · ${fmt.format(Math.round(group.amount))}원</span>`).join("")
         : `<span class="charter-chip">용차 후보 없음</span>`;
@@ -3429,15 +3464,15 @@
           <div class="wms-master">
             <div>
               <label>기사명</label>
-              <input data-master-driver="${esc(row.vehicle)}" value="${esc(master.driverName || "")}" placeholder="예: 김도윤">
+              <input data-master-driver="${esc(row.vehicle)}" value="${esc(driverName)}" placeholder="예: 김도윤">
             </div>
             <div>
               <label>전화번호</label>
-              <input data-master-phone="${esc(row.vehicle)}" value="${esc(master.phone || "")}" placeholder="010-0000-0000">
+              <input data-master-phone="${esc(row.vehicle)}" value="${esc(phone)}" placeholder="010-0000-0000">
             </div>
             <div>
               <label>톤수</label>
-              <input data-master-ton="${esc(row.vehicle)}" value="${esc(master.ton || row.tonLabel || "")}" placeholder="1톤 / 1.2톤">
+              <select data-master-ton="${esc(row.vehicle)}" data-master-ton-select="${esc(row.vehicle)}">${tonOptions}</select>
             </div>
             <div>
               <label>금액 기준</label>
@@ -3666,6 +3701,7 @@
           </div>
         </div>
       `;
+      if (selected) setTimeout(() => showWmsVehicleRoute(selected.vehicle), 0);
     }
 
     async function showWmsCandidatePin(vehicle, index) {
@@ -3901,6 +3937,17 @@
       document.getElementById("summaryCard").innerHTML = `
         <h2>금액 기준 부하 요약</h2>
         <div class="meta">${basisLabel}</div>
+        <div class="summary-grid">
+          ${[
+            ["all", "전체"],
+            ["osan", "오산센터"],
+            ["honam", "호남권역"],
+            ["yeongnam", "영남권역"]
+          ].map(([group, label]) => {
+            const count = group === "all" ? data.vehicles.length : data.vehicles.filter(v => v.group === group).length;
+            return `<div><button class="load-chip" type="button" data-overview-group="${group}">${label}<b>${fmt.format(count)}대</b><span>권역 보기</span></button></div>`;
+          }).join("")}
+        </div>
         <div class="summary-grid">
           ${loadCell("여유", "여유")}
           ${loadCell("보통", "보통")}

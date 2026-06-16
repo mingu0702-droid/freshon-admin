@@ -58,16 +58,32 @@ function visibleColumns(columns = []) {
   return columns.filter((column) => !String(column).startsWith("_") && !HIDDEN_COLUMN_RE.test(String(column)));
 }
 
+function sortRowsBySavedOrder(rows = []) {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => {
+      const left = Number(a.row?._savedOrder || 0);
+      const right = Number(b.row?._savedOrder || 0);
+      if (left && right) return left - right;
+      if (left) return -1;
+      if (right) return 1;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.row);
+}
+
 function getSearchFilteredRows(rows = []) {
   const query = normalizeSearchText(adminSearchInput?.value || "");
-  if (!query) return rows;
-  return rows.filter((row) => normalizeSearchText(Object.values(row || {}).join(" ")).includes(query));
+  if (!query) return sortRowsBySavedOrder(rows);
+  return sortRowsBySavedOrder(rows).filter((row) => normalizeSearchText(Object.values(row || {}).join(" ")).includes(query));
 }
 
 function firstRowValue(row, names) {
+  const entries = Object.entries(row || {});
   for (const name of names) {
-    const value = row?.[name];
-    if (value !== undefined && value !== null && String(value).trim() !== "") return String(value).trim();
+    const target = normalizeSearchText(name);
+    const found = entries.find(([key, value]) => normalizeSearchText(key).includes(target) && String(value ?? "").trim());
+    if (found) return String(found[1]).trim();
   }
   return "";
 }
@@ -75,7 +91,7 @@ function firstRowValue(row, names) {
 function normalizeSearchItem(item) {
   return {
     code: item.code || item.customerCode || firstRowValue(item, ["고객ERP코드", "고객코드", "ERP코드", "매장코드"]),
-    name: item.name || item.customerName || firstRowValue(item, ["고객명(업체명)", "고객명", "매장명", "업체명", "상호"]),
+    name: item.name || item.customerName || firstRowValue(item, ["고객명", "업체명", "매장명", "상호"]),
     address: item.address || firstRowValue(item, ["고객주소", "주소", "배송주소"]),
     vehicle: item.vehicle || firstRowValue(item, ["기준호차", "확정호차", "호차", "배송호차"]),
     route: item.route || item.center || firstRowValue(item, ["물류센터", "센터"]),
@@ -127,7 +143,7 @@ function render(payload = currentPayload) {
     const cardRows = hasSearch ? (filteredRows.length ? filteredRows : remoteSearchResults) : [];
     adminSearchCards.classList.toggle("active", hasSearch);
     adminSearchCards.innerHTML = hasSearch
-      ? cardRows.slice(0, 30).map(adminCardHtml).join("") || `<article class="admin-store-card"><strong>검색 결과가 없습니다.</strong><small>월별 엑셀 업로드 또는 고객마스터 동기화를 확인해주세요.</small></article>`
+      ? cardRows.slice(0, 30).map(adminCardHtml).join("") || `<article class="admin-store-card"><strong>검색 결과가 없습니다.</strong><small>다른 검색어를 입력해주세요.</small></article>`
       : "";
   }
 
@@ -228,8 +244,8 @@ async function uploadFile(file, token) {
   const startedAt = Date.now();
   const chunkSize = 512 * 1024;
   const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
-  const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}-${file.name}`;
-  let last = null;
+  const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  let result = null;
   for (let index = 0; index < totalChunks; index += 1) {
     const formData = new FormData();
     formData.append("uploadId", uploadId);
@@ -237,28 +253,35 @@ async function uploadFile(file, token) {
     formData.append("totalChunks", String(totalChunks));
     formData.append("fileName", file.name);
     formData.append("fileSize", String(file.size));
-    formData.append("chunk", file.slice(index * chunkSize, Math.min(file.size, (index + 1) * chunkSize)), `${file.name}.part${index}`);
+    formData.append("chunk", file.slice(index * chunkSize, Math.min(file.size, (index + 1) * chunkSize)), file.name);
     uploadStatus.textContent = `${file.name} 업로드 중 · ${index + 1}/${totalChunks}`;
-    last = await postUploadChunk(formData, token, file.name);
+    result = await postUploadChunk(formData, token, file.name);
   }
-  return last?.accepted ? waitForUploadJob(last.jobId, file.name, startedAt) : last;
+  if (result?.jobId) {
+    await waitForUploadJob(result.jobId, file.name, startedAt);
+  }
 }
 
-async function uploadFixedDispatchFiles() {
+async function uploadFiles() {
   const token = getToken();
   const files = [...fileInput.files];
-  if (!token) return alert("관리 토큰을 먼저 입력해주세요.");
-  if (!files.length) return alert("업로드할 엑셀 파일을 선택해주세요.");
-  saveToken();
+  if (!token) {
+    alert("관리 토큰을 입력해주세요.");
+    return;
+  }
+  if (!files.length) {
+    alert("업로드할 엑셀 파일을 선택해주세요.");
+    return;
+  }
   uploadRunning = true;
   uploadButton.disabled = true;
   try {
     for (const file of files) await uploadFile(file, token);
-    uploadStatus.textContent = "저장 완료";
     await loadData();
+    setStatus("저장 완료");
   } catch (error) {
-    uploadStatus.textContent = `실패: ${error.message}`;
-    setStatus(`엑셀 저장 실패: ${error.message}`);
+    uploadStatus.textContent = `저장 실패: ${error.message}`;
+    setStatus("저장 실패");
     alert(error.message);
   } finally {
     uploadRunning = false;
@@ -266,37 +289,38 @@ async function uploadFixedDispatchFiles() {
   }
 }
 
-function csvCell(value) {
-  return `"${String(value).replaceAll('"', '""')}"`;
-}
-
 function downloadCsv() {
-  const columns = visibleColumns(currentPayload.columns || []);
   const rows = getSearchFilteredRows(currentPayload.rows || []);
-  if (!columns.length) return alert("받을 고정배차 목록이 없습니다.");
-  const csv = [columns.map(csvCell).join(","), ...rows.map((row) => columns.map((column) => csvCell(row[column] || "")).join(","))].join("\n");
-  const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
+  const columns = visibleColumns(currentPayload.columns || []);
+  const csv = [
+    columns.join(","),
+    ...rows.map((row) => columns.map((column) => `"${String(row[column] || "").replaceAll('"', '""')}"`).join(","))
+  ].join("\n");
+  const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
   const link = document.createElement("a");
-  link.href = url;
+  link.href = URL.createObjectURL(blob);
   link.download = `freshon-fixed-dispatch-${Date.now()}.csv`;
   link.click();
-  URL.revokeObjectURL(url);
+  URL.revokeObjectURL(link.href);
 }
 
-loadSavedToken();
 saveTokenButton.addEventListener("click", saveToken);
 reloadButton.addEventListener("click", loadData);
 csvButton.addEventListener("click", downloadCsv);
-uploadButton.addEventListener("click", uploadFixedDispatchFiles);
-adminSearchInput?.addEventListener("input", () => {
-  clearTimeout(remoteSearchTimer);
-  remoteSearchTimer = setTimeout(refreshRemoteSearch, 250);
-  render(currentPayload);
-});
-clearSearchButton?.addEventListener("click", () => {
+uploadButton.addEventListener("click", uploadFiles);
+clearSearchButton.addEventListener("click", () => {
   adminSearchInput.value = "";
   remoteSearchResults = [];
-  render(currentPayload);
+  render();
 });
-loadData();
+adminSearchInput.addEventListener("input", () => {
+  window.clearTimeout(remoteSearchTimer);
+  remoteSearchTimer = window.setTimeout(refreshRemoteSearch, 250);
+  render();
+});
+
+loadSavedToken();
+loadData().catch((error) => {
+  setStatus(`조회 실패: ${error.message}`);
+  render();
+});
