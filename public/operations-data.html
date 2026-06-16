@@ -1,65 +1,29 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Freshon ?댁쁺?곗씠??UI ?쒖븞 v2</title>
+  <title>Freshon 운영데이터</title>
   <style>
-    :root {
-      --bg:#eef2f6; --panel:#fff; --ink:#172033; --muted:#667085; --line:#d7dfeb;
-      --blue:#2563eb; --soft:#eff6ff; --green:#047857; --amber:#b45309; --red:#dc2626;
-      --purple:#6d5dfc; --shadow:0 12px 28px rgba(15,23,42,.10);
-    }
+    :root { --bg:#eef2f6; --panel:#fff; --ink:#0f172a; --muted:#64748b; --line:#d7dfeb; --blue:#2563eb; --soft:#eff6ff; --green:#047857; --amber:#b45309; --red:#dc2626; --shadow:0 10px 24px rgba(15,23,42,.08); }
     * { box-sizing:border-box; }
     body { margin:0; font-family:Arial,"Malgun Gothic",sans-serif; color:var(--ink); background:var(--bg); letter-spacing:0; }
     button,input,select { font:inherit; }
     button { cursor:pointer; }
-    .app { min-height:100vh; display:grid; grid-template-rows:auto auto auto auto 1fr; }
-    .top {
-      display:grid; grid-template-columns:1fr auto; gap:14px; align-items:center;
-      padding:13px 18px; background:#fbfcfe; border-bottom:1px solid var(--line);
-    }
+    .top { display:grid; grid-template-columns:1fr auto; gap:14px; align-items:center; padding:14px 18px; background:#fbfcfe; border-bottom:1px solid var(--line); }
     h1 { margin:0; font-size:22px; line-height:1.25; }
     .caption { margin:4px 0 0; color:var(--muted); font-size:12px; line-height:1.4; }
     .nav { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; }
-    .nav a {
-      border:1px solid #b8c7dc; border-radius:6px; background:#fff; color:#344054;
-      padding:8px 10px; font-size:12px; font-weight:900; text-decoration:none; white-space:nowrap;
-    }
+    .nav a { border:1px solid #b8c7dc; border-radius:6px; background:#fff; color:#344054; padding:8px 10px; font-size:12px; font-weight:900; text-decoration:none; white-space:nowrap; }
     .nav .active { border-color:var(--blue); background:var(--blue); color:#fff; }
-    .toolbar {
-      display:grid; grid-template-columns:150px 150px 1fr 150px auto; gap:8px;
-      padding:11px 18px; background:#fff; border-bottom:1px solid var(--line);
-    }
+    .toolbar { display:grid; grid-template-columns:150px 150px 1fr 150px auto; gap:8px; padding:11px 18px; background:#fff; border-bottom:1px solid var(--line); }
     label { display:block; color:#344054; font-size:11px; font-weight:900; margin:0 0 4px; }
-    select,input {
-      width:100%; border:1px solid var(--line); border-radius:6px; padding:9px 10px;
-      background:#fff; color:var(--ink); font-size:13px;
-    }
-    .btn {
-      align-self:end; border:1px solid var(--blue); border-radius:6px; background:var(--blue);
-      color:#fff; padding:9px 12px; font-size:12px; font-weight:900; white-space:nowrap;
-    }
-    .tabs {
-      display:flex; gap:6px; padding:10px 18px; background:#f8fafc; border-bottom:1px solid var(--line);
-      overflow:auto; align-items:center; min-height:54px;
-    }
-    .monthly-sync {
-      display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center;
-      padding:10px 18px; background:#fff; border-bottom:1px solid var(--line);
-    }
-    .monthly-sync strong { display:block; font-size:13px; margin-bottom:3px; }
-    .monthly-sync small { color:var(--muted); line-height:1.35; }
-    .monthly-sync button {
-      border:1px solid var(--blue); border-radius:6px; background:var(--blue); color:#fff;
-      padding:8px 12px; font-size:12px; font-weight:900; white-space:nowrap;
-    }
-    .monthly-sync button:disabled { opacity:.55; cursor:not-allowed; }
-    .tab {
-      flex:0 0 auto; min-height:34px;
-      border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#344054;
-      padding:7px 11px; font-size:12px; font-weight:900; white-space:nowrap;
-    }
+    select,input { width:100%; border:1px solid var(--line); border-radius:6px; padding:9px 10px; background:#fff; color:var(--ink); font-size:13px; }
+    .btn { align-self:end; border:1px solid var(--blue); border-radius:6px; background:var(--blue); color:#fff; padding:9px 12px; font-size:12px; font-weight:900; white-space:nowrap; }
+    .source { display:flex; justify-content:space-between; gap:10px; align-items:center; padding:10px 18px; background:#fff; border-bottom:1px solid var(--line); font-size:12px; color:#475569; }
+    .source b { color:#1d4ed8; }
+    .tabs { display:flex; gap:6px; padding:10px 18px; background:#f8fafc; border-bottom:1px solid var(--line); overflow:auto; }
+    .tab { flex:0 0 auto; border:1px solid #cbd5e1; border-radius:999px; background:#fff; color:#344054; padding:8px 12px; font-size:12px; font-weight:900; white-space:nowrap; }
     .tab.active { border-color:var(--blue); background:var(--soft); color:#1d4ed8; }
     main { padding:14px 18px 18px; display:grid; gap:12px; }
     .kpis { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; }
@@ -68,386 +32,304 @@
     .card span { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
     .card b { display:block; font-size:21px; }
     .card small { display:block; color:var(--muted); font-size:12px; margin-top:5px; line-height:1.35; }
-    .panel-head {
-      display:flex; justify-content:space-between; gap:10px; align-items:flex-start;
-      padding:12px 13px; border-bottom:1px solid var(--line); background:#fbfcfe;
-    }
+    .grid { display:grid; grid-template-columns:1.1fr .9fr; gap:12px; align-items:start; }
+    .panel-head { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; padding:12px 13px; border-bottom:1px solid var(--line); background:#fbfcfe; }
     .panel-head h2 { margin:0; font-size:15px; }
     .panel-head small { display:block; color:var(--muted); margin-top:3px; line-height:1.35; }
-    .chip {
-      display:inline-flex; align-items:center; border-radius:999px; padding:3px 8px;
-      font-size:11px; font-weight:900; white-space:nowrap;
-    }
-    .blue { background:var(--soft); color:#1d4ed8; }
-    .green { background:#e5f7ef; color:var(--green); }
-    .amber { background:#fff7ed; color:var(--amber); }
-    .red { background:#fee2e2; color:var(--red); }
-    .purple { background:#f0edff; color:var(--purple); }
-    .grid { display:grid; grid-template-columns:1.1fr .9fr; gap:12px; align-items:start; }
-    .wide-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
-    table { width:100%; border-collapse:collapse; font-size:13px; }
-    th,td { border-bottom:1px solid #e5ebf3; padding:9px 10px; text-align:left; white-space:nowrap; }
-    th { color:#344054; background:#f8fafc; font-size:12px; position:sticky; top:0; }
-    td.amount,td.num { text-align:right; font-weight:900; }
-    .table-wrap { overflow:auto; max-height:420px; }
+    .chip { display:inline-flex; align-items:center; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:900; white-space:nowrap; background:#dcfce7; color:#047857; }
     .list { display:grid; gap:8px; padding:10px; }
-    .item {
-      border:1px solid var(--line); border-radius:8px; background:#fff; padding:10px; cursor:pointer;
-      display:grid; gap:6px;
-    }
-    .item:hover,.item.active { border-color:var(--blue); background:#f5f8ff; }
-    .item b { font-size:13px; }
-    .item small { color:var(--muted); line-height:1.4; overflow-wrap:anywhere; }
-    .bar { height:9px; border-radius:999px; background:#e6ebf2; overflow:hidden; }
-    .bar i { display:block; height:100%; width:var(--w); background:var(--c,var(--blue)); }
-    .weekday { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; padding:12px; }
-    .day {
-      border:1px solid var(--line); border-radius:7px; padding:8px 4px; text-align:center; background:#f8fafc;
-    }
-    .day b { display:block; font-size:13px; margin-bottom:3px; }
-    .day span { color:var(--muted); font-size:11px; }
-    .day.hot { border-color:var(--blue); background:var(--soft); color:#1d4ed8; }
-    .day.warn { border-color:#fed7aa; background:#fff7ed; color:var(--amber); }
-    .view { display:none; }
-    .view.active { display:grid; gap:12px; }
-    @media (max-width:1180px) {
-      .kpis { grid-template-columns:repeat(3,1fr); }
-      .grid,.wide-grid { grid-template-columns:1fr; }
-    }
-    @media (max-width:780px) {
-      .top,.toolbar { display:block; }
-      .nav { justify-content:flex-start; margin-top:10px; }
-      .toolbar > div,.toolbar button { margin-bottom:8px; }
-      .kpis { grid-template-columns:1fr 1fr; }
-      .weekday { grid-template-columns:repeat(4,1fr); }
-    }
+    .row { border:1px solid var(--line); border-radius:8px; background:#fff; padding:10px; cursor:pointer; }
+    .row.active { border-color:var(--blue); background:#f8fbff; }
+    .row strong { display:block; margin-bottom:5px; font-size:13px; }
+    .row small { display:block; color:var(--muted); line-height:1.45; }
+    .detail { padding:12px; display:grid; gap:12px; }
+    .detail h3 { margin:0; font-size:15px; }
+    .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+    .metric { border:1px solid var(--line); border-radius:7px; padding:10px; background:#fff; }
+    .metric span { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
+    .metric b { font-size:20px; }
+    .days { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px; }
+    .day { border:1px solid var(--line); border-radius:7px; background:#f8fafc; padding:9px; text-align:center; font-size:12px; }
+    .day.hot { border-color:#2563eb; background:#eff6ff; color:#1d4ed8; font-weight:900; }
+    table { width:100%; border-collapse:collapse; background:#fff; font-size:12px; }
+    th,td { border-bottom:1px solid var(--line); padding:10px; text-align:left; white-space:nowrap; }
+    th { background:#f8fafc; color:#334155; font-weight:900; }
+    .table-scroll { overflow:auto; max-height:430px; }
+    @media (max-width:1000px) { .top,.toolbar,.source,.grid { grid-template-columns:1fr; } .kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } }
   </style>
 </head>
 <body>
-  <div class="app">
-    <header class="top">
-      <div>
-        <h1>?댁쁺?곗씠??/h1>
-        <p class="caption">吏???붾㈃怨?遺꾨━??諛곗감 ?먮떒???곗씠?곗꽱?곗엯?덈떎. 李⑹??? 留ㅼ텧, 二쇰Ц ?⑦꽩, 醫뚰몴 ?덉쭏, 議곗젙 ?꾨낫瑜??곕줈 遊낅땲??</p>
-      </div>
-      <nav class="nav">
-        <a href="/daily-routes.html">?쇱씪?숈꽑</a>
-        <a href="/daily-routes.html?tab=wms">WMS</a>
-        <a href="/daily-routes.html?tab=new">?좉퇋沅뚯뿭</a>
-        <a class="active" href="/operations-data.html">?댁쁺?곗씠??/a>
-        <a href="/admin">愿由ъ옄</a>
-      </nav>
-    </header>
-
-    <section class="toolbar">
-      <div>
-        <label>遺꾩꽍 ??/label>
-        <select><option>2026??6??/option><option>2026??5??/option><option>理쒓렐 3媛쒖썡</option></select>
-      </div>
-      <div>
-        <label>?쇳꽣</label>
-        <select><option>?ㅼ궛?쇳꽣</option><option>?댁쿇?쇳꽣</option><option>?꾩껜 ?쇳꽣</option></select>
-      </div>
-      <div>
-        <label>怨좉컼/二쇱냼/?몄감 寃??/label>
-        <input id="globalSearch" placeholder="101?몄감, S10922, ?좊㎘, ??됯뎄">
-      </div>
-      <div>
-        <label>蹂닿린 湲곗?</label>
-        <select><option>諛곗감 ?먮떒 湲곗?</option><option>留ㅼ텧 湲곗?</option><option>李⑹???湲곗?</option></select>
-      </div>
-      <button class="btn" id="refreshButton" type="button">?곗씠??媛깆떊</button>
-    </section>
-
-    <section class="tabs" style="align-items:center;">
-      <b style="font-size:12px;">?곗씠??異쒖쿂</b>
-      <span class="chip blue">?댁쁺吏??湲곗? 怨꾩궛 ?곗씠??/span>
-      <span style="font-size:12px;color:var(--muted);">?꾩옱??public/vehicle-data.js???몄감, 李⑹??? ?됯퇏湲덉븸, 諛곗넚?⑦꽩?쇰줈 怨꾩궛?⑸땲?? ?꾨젅?쒖삩 ?붾퀎 二쇰Ц/留ㅼ텧 ?먯옣 ?먮뒗 ?낅줈???묒????곌껐?섎㈃ ?ㅼ젣 ?댁쁺?곗씠???붾㈃?쇰줈 ?뺤옣?⑸땲??</span>
-    </section>
-
-    <nav class="tabs" id="tabs">
-      <button class="tab active" data-view="vehicle">?몄감 遺꾩꽍</button>
-      <button class="tab" data-view="store">留ㅼ옣 遺꾩꽍</button>
-      <button class="tab" data-view="weekday">?붿씪 ?⑦꽩</button>
-      <button class="tab" data-view="new">?좉퇋二쇱냼 ?대젰</button>
-      <button class="tab" data-view="coord">醫뚰몴 愿由?/button>
-      <button class="tab" data-view="adjust">議곗젙 ?꾨낫</button>
+  <header class="top">
+    <div>
+      <h1>운영데이터</h1>
+      <p class="caption">월별 고정배차 데이터를 기준으로 착지수, 매출, 주문 패턴, 좌표 품질을 확인합니다.</p>
+    </div>
+    <nav class="nav" aria-label="페이지 이동">
+      <a href="/daily-routes.html">일일동선</a>
+      <a href="/daily-routes.html?tab=wms">WMS</a>
+      <a class="active" href="/operations-data.html">운영데이터</a>
+      <a href="/admin.html">관리자</a>
     </nav>
+  </header>
 
-    <section class="monthly-sync">
-      <div>
-        <strong>??諛곗감 ?곗씠??/strong>
-        <small id="monthlySyncStatus">??λ맂 ??諛곗감 ?곗씠?곕? ?뺤씤 以묒엯?덈떎.</small>
-      </div>
-      <button id="monthlySyncButton" type="button">???곗씠??媛깆떊</button>
+  <section class="toolbar">
+    <div>
+      <label for="monthSelect">분석 월</label>
+      <select id="monthSelect"><option>2026년 6월</option></select>
+    </div>
+    <div>
+      <label for="centerSelect">센터</label>
+      <select id="centerSelect"><option>오산센터</option><option>영남권</option><option>호남권</option></select>
+    </div>
+    <div>
+      <label for="searchInput">고객/주소/호차 검색</label>
+      <input id="searchInput" placeholder="101호차, S10922, 할맥, 은평구">
+    </div>
+    <div>
+      <label for="viewSelect">보기 기준</label>
+      <select id="viewSelect"><option value="dispatch">배차 판단 기준</option><option value="sales">매출 기준</option><option value="coord">좌표 기준</option></select>
+    </div>
+    <button id="refreshButton" class="btn" type="button">데이터 갱신</button>
+  </section>
+
+  <section class="source">
+    <div><b>데이터 출처</b> 운영지도 vehicle-data.js + 관리자 월별 고정배차 캐시</div>
+    <div id="syncStatus">월 데이터를 불러오는 중입니다.</div>
+  </section>
+
+  <section class="tabs" id="tabs">
+    <button class="tab active" data-tab="vehicles" type="button">호차 분석</button>
+    <button class="tab" data-tab="stores" type="button">매장 분석</button>
+    <button class="tab" data-tab="days" type="button">요일 패턴</button>
+    <button class="tab" data-tab="new" type="button">신규주소 이력</button>
+    <button class="tab" data-tab="coords" type="button">좌표 관리</button>
+    <button class="tab" data-tab="adjust" type="button">조정 후보</button>
+  </section>
+
+  <main>
+    <section class="kpis">
+      <article class="card"><span>호차당 월 평균 착지수</span><b id="kpiStops">-</b><small>월 캐시 기준</small></article>
+      <article class="card"><span>호차당 월 평균 매출</span><b id="kpiSales">-</b><small>매출 컬럼 기준</small></article>
+      <article class="card"><span>월 운행 호차</span><b id="kpiVehicles">-</b><small>고정배차 기준</small></article>
+      <article class="card"><span>월 매장 수</span><b id="kpiStores">-</b><small>중복 고객코드 제거</small></article>
+      <article class="card"><span>좌표 보정 필요</span><b id="kpiCoords">-</b><small>검색 가능, 지도 미표시</small></article>
+      <article class="card"><span>매출 급변 매장</span><b id="kpiAlerts">-</b><small>조정 후보 신호</small></article>
     </section>
 
-    <main>
-      <section class="kpis">
-        <div class="card"><span>???됯퇏 李⑹???/span><b>19.8怨?/b><small>?꾩썡 ?鍮?+1.7怨?/small></div>
-        <div class="card"><span>???됯퇏 留ㅼ텧</span><b>8,920留뚯썝</b><small>?몄감蹂??됯퇏 湲곗?</small></div>
-        <div class="card"><span>李⑹???湲덉븸</span><b>46.2留뚯썝</b><small>媛앸떒媛 湲곗?</small></div>
-        <div class="card"><span>?앸떒 李⑹? 鍮꾩쑉</span><b>18%</b><small>議곗젙 ?꾨낫 ?좏샇</small></div>
-        <div class="card"><span>醫뚰몴 蹂댁젙 ?꾩슂</span><b>17怨?/b><small>寃??媛?? 吏??誘명몴??/small></div>
-        <div class="card"><span>留ㅼ텧 湲됰? 留ㅼ옣</span><b>23怨?/b><small>利앷? 14 / 媛먯냼 9</small></div>
-      </section>
-
-      <section class="view active" id="view-vehicle">
-        <div class="grid">
-          <div class="panel">
-            <div class="panel-head">
-              <div><h2>?몄감蹂????됯퇏 李⑹???/h2><small>李⑹??? 留ㅼ텧, 李⑹???湲덉븸, ?앸떒 鍮꾩쑉??媛숈씠 遊낅땲??</small></div>
-              <span class="chip blue">?몄감 遺꾩꽍</span>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>?몄감</th><th>?됯퇏 李⑹???/th><th>珥?留ㅼ텧</th><th>李⑹???湲덉븸</th><th>?앸떒 鍮꾩쑉</th><th>?곹깭</th></tr></thead>
-                <tbody id="vehicleRows"></tbody>
-              </table>
-            </div>
-          </div>
-          <div class="panel">
-            <div class="panel-head">
-              <div><h2>?붾퀎 ?댄뻾湲곕줉 異붿쟻</h2><small>理쒓렐 ?붾퀎 李⑹???利앷?/媛먯냼 ?먮쫫?낅땲??</small></div>
-              <span class="chip green">異붿씠</span>
-            </div>
-            <div class="list" id="monthTimeline"></div>
-          </div>
+    <section class="grid">
+      <article class="panel">
+        <div class="panel-head">
+          <div><h2 id="listTitle">호차별 월 평균 착지수</h2><small id="listCaption">착지수와 매출을 같이 봅니다.</small></div>
+          <span class="chip" id="activeChip">호차 분석</span>
         </div>
-      </section>
-
-      <section class="view" id="view-store">
-        <div class="grid">
-          <div class="panel">
-            <div class="panel-head">
-              <div><h2>留ㅼ옣蹂????됯퇏 留ㅼ텧</h2><small>留ㅼ옣蹂?湲덉븸?, 二쇰Ц 二쇨린, 留ㅼ텧 蹂?붾? 遊낅땲??</small></div>
-              <span class="chip green">留ㅼ옣 遺꾩꽍</span>
-            </div>
-            <div class="list" id="storeList"></div>
-          </div>
-          <div class="panel">
-            <div class="panel-head">
-              <div><h2 id="storeDetailTitle">S10922 쨌 ?좊㎘ ??됱젏</h2><small>?좏깮 留ㅼ옣???댁쁺 ?먮떒 ?붿빟?낅땲??</small></div>
-              <span class="chip amber" id="storeDetailBadge">湲덉슂??吏묒쨷</span>
-            </div>
-            <div class="wide-grid" style="padding:12px;">
-              <div class="card" style="box-shadow:none;"><span>???됯퇏 留ㅼ텧</span><b id="avgSales">1,840,000??/b><small>理쒓렐 3媛쒖썡 +8%</small></div>
-              <div class="card" style="box-shadow:none;"><span>二쇰Ц 二쇨린</span><b id="cycleText">2~3??媛꾧꺽</b><small>????湲??⑦꽩</small></div>
-              <div class="card" style="box-shadow:none;"><span>留ㅼ텧 ?깃툒</span><b id="gradeText">B湲?/b><small>??100~300留뚯썝</small></div>
-            </div>
-            <div class="weekday" id="storeWeekdays"></div>
-          </div>
+        <div class="list" id="resultList"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head">
+          <div><h2 id="detailTitle">선택 항목</h2><small id="detailCaption">선택한 항목의 요약입니다.</small></div>
+          <span class="chip" id="detailBadge">대기</span>
         </div>
-      </section>
-
-      <section class="view" id="view-weekday">
-        <div class="panel">
-          <div class="panel-head">
-            <div><h2>?붿씪蹂??덉긽 臾쇰웾</h2><small>?붿씪留덈떎 怨쇰??댁쭏 ?몄감? 吏묒쨷 留ㅼ옣??誘몃━ 遊낅땲??</small></div>
-            <span class="chip purple">?붿씪 ?⑦꽩</span>
-          </div>
-          <div class="wide-grid" style="padding:12px;" id="weekdayCards"></div>
-        </div>
-      </section>
-
-      <section class="view" id="view-new">
-        <div class="panel">
-          <div class="panel-head">
-            <div><h2>?좉퇋二쇱냼 ?먮떒 ?대젰</h2><small>?좉퇋二쇱냼, 異붿쿇 ?몄감, 媛源뚯슫 湲곗〈 怨좉컼, ?ㅼ젣 諛섏쁺 ?щ?瑜??④퉩?덈떎.</small></div>
-            <span class="chip amber">?좉퇋二쇱냼</span>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>?좎쭨</th><th>?좉퇋二쇱냼</th><th>異붿쿇 ?몄감</th><th>媛源뚯슫 湲곗〈 怨좉컼</th><th>?먮떒</th><th>諛섏쁺</th></tr></thead>
-              <tbody id="newRows"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section class="view" id="view-coord">
-        <div class="grid">
-          <div class="panel">
-            <div class="panel-head">
-              <div><h2>醫뚰몴 ?녿뒗 怨좉컼 愿由?/h2><small>寃?됱? ?섏?留?吏?꾩뿉 ??李랁엳??怨좉컼??愿由ы빀?덈떎.</small></div>
-              <span class="chip red">醫뚰몴 蹂댁젙</span>
-            </div>
-            <div class="list" id="coordList"></div>
-          </div>
-          <div class="panel">
-            <div class="panel-head">
-              <div><h2>二쇱냼 ?덉쭏 ?먭?</h2><small>以묐났 二쇱냼, 怨좉컼肄붾뱶 以묐났, 二쇱냼 遺덉셿??嫄댁쓣 ?곕줈 遊낅땲??</small></div>
-              <span class="chip blue">二쇱냼 ?덉쭏</span>
-            </div>
-            <div class="list" id="addressQuality"></div>
-          </div>
-        </div>
-      </section>
-
-      <section class="view" id="view-adjust">
-        <div class="panel">
-          <div class="panel-head">
-            <div><h2>?몄감 議곗젙 / ?⑹감 ?꾨낫</h2><small>?앸떒 李⑹?, 怨쇰? ?몄감, ?ъ쑀 ?몄감瑜?湲곗??쇰줈 議곗젙 ?꾨낫瑜?遊낅땲??</small></div>
-            <span class="chip red">議곗젙 ?꾨낫</span>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>援щ텇</th><th>????몄감</th><th>?꾨낫 臾띠쓬</th><th>李⑹???/th><th>留ㅼ텧</th><th>異붿쿇 議곗튂</th></tr></thead>
-              <tbody id="adjustRows"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-    </main>
-  </div>
+        <div class="detail" id="detailPanel"></div>
+      </article>
+    </section>
+  </main>
 
   <script src="/vehicle-data.js"></script>
-    <script>
-    const areaData = window.VEHICLE_AREA_DATA || { vehicles: [] };
-    const money = new Intl.NumberFormat("ko-KR");
-    const sourceVehicles = (areaData.vehicles || []).filter(vehicle => Number(vehicle.count) > 0);
-    const dayNames = ["월", "화", "수", "목", "금", "토", "일"];
-    let selectedStore = null;
+  <script>
+    const fmt = new Intl.NumberFormat("ko-KR");
+    const money = (value) => `${Math.round(Number(value || 0) / 10000).toLocaleString("ko-KR")}만원`;
+    const state = { tab:"vehicles", dispatch:null, rows:[], summaryVehicles:[], summaryStores:[], vehicles:[], stores:[], selected:null };
 
-    function chip(text, cls) {
-      return `<span class="chip ${cls}">${text}</span>`;
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
     }
-    function vehicleStatus(vehicle) {
-      if (vehicle.load_status === "초과" || Number(vehicle.revenue_usage) >= 1.15) return ["초과", "red"];
-      if (vehicle.load_status === "여유" || Number(vehicle.revenue_usage) < .75) return ["여유", "blue"];
-      return ["보통", "green"];
-    }
-    function patternDays(pattern) {
-      const text = String(pattern || "");
-      return dayNames.map(day => text.includes(day) ? 90 : 12);
-    }
-    function topDayFromPattern(pattern) {
-      return dayNames.find(day => String(pattern || "").includes(day)) || "금";
-    }
-    function buildEmbeddedStores() {
-      return sourceVehicles.flatMap(vehicle => (vehicle.customers || []).slice(0, 20).map(customer => {
-        const sales = Number(customer.avg_order_amount || 0);
-        return {
-          code: customer.id || "-",
-          name: customer.name || "-",
-          area: `${vehicle.vehicle}호 · ${vehicle.area_label || vehicle.primary_area || ""}`,
-          vehicle: vehicle.vehicle,
-          address: customer.address || "",
-          salesAmount: sales,
-          sales: `${money.format(sales)}원`,
-          cycle: customer.delivery_pattern || "패턴 확인 필요",
-          grade: sales >= 700000 ? "A급" : sales >= 250000 ? "B급" : "C급",
-          top: topDayFromPattern(customer.delivery_pattern),
-          days: patternDays(customer.delivery_pattern)
-        };
-      })).slice(0, 500);
-    }
-    let stores = buildEmbeddedStores();
-    selectedStore = stores[0] || null;
 
-    function renderVehicles(rows) {
-      const vehicleRows = rows || sourceVehicles.slice(0, 120).map(vehicle => {
-        const status = vehicleStatus(vehicle);
-        const total = Number(vehicle.total_avg_order_amount || 0);
-        const count = Number(vehicle.count || 0);
-        const avg = count ? Math.round(total / count) : Number(vehicle.avg_order_amount || 0);
-        return { vehicle: vehicle.vehicle, stopCount: count, amount: total, avg, ratio: Math.round(Number(vehicle.revenue_usage || 0) * 100), status: status[0], cls: status[1] };
-      });
-      document.getElementById("vehicleRows").innerHTML = vehicleRows.map(row => {
-        const avg = row.avg ?? (row.stopCount ? Math.round(Number(row.amount || 0) / row.stopCount) : 0);
-        return `<tr><td><b>${row.vehicle}호</b></td><td class="num">${money.format(row.stopCount || 0)}건</td><td class="amount">${money.format(Math.round(row.amount || 0))}원</td><td class="amount">${money.format(avg)}원</td><td class="num">${row.ratio ?? money.format(row.dates || 0)}</td><td>${chip(row.status || "월캐시", row.cls || "blue")}</td></tr>`;
-      }).join("");
+    function normalizeVehicle(value) {
+      const match = String(value ?? "").match(/\d{1,4}/);
+      return match ? match[0] : "";
     }
-    function renderTimeline() {
-      const rows = [["2026.03", "17.8곳", 70], ["2026.04", "18.5곳", 76], ["2026.05", "19.4곳", 82], ["2026.06", "21.2곳", 92]];
-      document.getElementById("monthTimeline").innerHTML = rows.map(row => `<div class="item"><b>${row[0]} · 평균 ${row[1]}</b><div class="bar"><i style="--w:${row[2]}%"></i></div><small>착지수 기준 추이</small></div>`).join("");
-    }
-    function renderStores(list = stores) {
-      const q = document.getElementById("globalSearch").value.trim().toLowerCase();
-      const filtered = list.filter(store => `${store.code} ${store.name} ${store.area} ${store.address}`.toLowerCase().includes(q));
-      document.getElementById("storeList").innerHTML = filtered.map(store => `<article class="item ${selectedStore?.code === store.code ? "active" : ""}" data-code="${store.code}"><b>${store.code} / ${store.name}</b><small>${store.area}</small><small>월 평균 ${store.sales} · ${store.top}요일 집중 · ${store.cycle}</small></article>`).join("") || `<div class="item"><small>검색 결과가 없습니다.</small></div>`;
-      document.querySelectorAll("#storeList .item[data-code]").forEach(card => card.addEventListener("click", () => {
-        selectedStore = stores.find(store => store.code === card.dataset.code) || selectedStore;
-        renderStores();
-        renderStoreDetail();
-      }));
-    }
-    function renderStoreDetail() {
-      if (!selectedStore) return;
-      document.getElementById("storeDetailTitle").textContent = `${selectedStore.code} / ${selectedStore.name}`;
-      document.getElementById("storeDetailBadge").textContent = `${selectedStore.top}요일 집중`;
-      document.getElementById("avgSales").textContent = selectedStore.sales;
-      document.getElementById("cycleText").textContent = selectedStore.cycle;
-      document.getElementById("gradeText").textContent = selectedStore.grade;
-      document.getElementById("storeWeekdays").innerHTML = selectedStore.days.map((value, index) => `<div class="day ${dayNames[index] === selectedStore.top ? "hot" : value >= 35 ? "warn" : ""}"><b>${dayNames[index]}</b><span>${value}%</span></div>`).join("");
-    }
-    function renderWeekday() {
-      const cards = [["화요일", "315호차 과밀 예상", "입산/독산 묶음 확인 필요", "red"], ["수요일", "101호차 끝단 증가", "연신내/구산 묶음 확인 필요", "amber"], ["금요일", "전체 물량 최고", "할맥 매장 주문 집중", "red"], ["토요일", "동북권 여유", "422호차 신규 흡수 가능", "green"]];
-      document.getElementById("weekdayCards").innerHTML = cards.map(row => `<div class="item"><b>${row[0]} · ${chip(row[1], row[3])}</b><small>${row[2]}</small></div>`).join("");
-    }
-    function renderNewRows() {
-      const rows = [["06-08", "서울 은평구 연서로 신규 매장", "101호차", "S12015 연신내 키친", "권역 후보", "검토중"], ["06-07", "서울 금천구 독산로 신규점", "315호차", "S31577 독산 식품", "용차 후보", "미반영"], ["06-05", "서울 노원구 동일로 신규점", "422호차", "S42201 상계 프레시", "흡수 가능", "반영"]];
-      document.getElementById("newRows").innerHTML = rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("");
-    }
-    function renderCoord() {
-      document.getElementById("coordList").innerHTML = [["S12015 연신내 키친", "주소 있음, 좌표 확인 필요"], ["S12770 갈현푸드", "지오코딩 실패, 수기 보정 필요"], ["S42233 중계 마트", "주소 후보 2개 중복 확인"]].map(row => `<div class="item"><b>${row[0]}</b><small>${row[1]}</small></div>`).join("");
-      document.getElementById("addressQuality").innerHTML = [["주소 중복", "8건"], ["고객코드 중복", "2건"], ["상세주소 누락", "11건"]].map(row => `<div class="item"><b>${row[0]}</b><small>${row[1]} 점검 필요</small></div>`).join("");
-    }
-    function renderAdjust() {
-      const rows = [["용차 후보", "315호차", "시흥/독산 묶음", "5곳", "214만원", "새 용차 분리"], ["호차 이동", "101호차", "연신내/구산 끝단", "4곳", "158만원", "204호차 인접성 확인"], ["신규 흡수", "422호차", "상계 신규 주소", "2곳", "예상 78만원", "422호차 흡수 가능"]];
-      document.getElementById("adjustRows").innerHTML = rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("");
-    }
-    function switchView(view) {
-      document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.view === view));
-      document.querySelectorAll(".view").forEach(section => section.classList.toggle("active", section.id === `view-${view}`));
-    }
-    async function refreshMonthlyDispatchSummary() {
-      const status = document.getElementById("monthlySyncStatus");
-      const button = document.getElementById("monthlySyncButton");
-      if (button) button.disabled = true;
-      if (status) status.textContent = "월 배차 데이터를 불러오는 중입니다.";
-      try {
-        const response = await fetch("/api/monthly-dispatch-summary", { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        applyMonthlyDispatchSummary(await response.json());
-      } catch (error) {
-        if (status) status.textContent = `월 데이터 조회 실패: ${error.message || error}`;
-      } finally {
-        if (button) button.disabled = false;
+
+    function getFirst(row, names) {
+      for (const name of names) {
+        if (row && row[name] !== undefined && row[name] !== null && String(row[name]).trim() !== "") return row[name];
       }
+      return "";
     }
-    function applyMonthlyDispatchSummary(summary) {
-      const status = document.getElementById("monthlySyncStatus");
-      const rowCount = Number(summary?.rowCount || 0);
-      if (!rowCount) {
-        if (status) status.textContent = "저장된 월 배차 데이터가 없습니다. 관리자에서 월 배차 엑셀을 업로드하면 자동 반영됩니다.";
+
+    function toAmount(row) {
+      return Number(String(getFirst(row, ["매출금액","매출액","총주문금액","주문금액","금액","출고금액","판매금액","공급가액","합계금액"]) || 0).replace(/[^\d.-]/g, "")) || 0;
+    }
+
+    async function loadMonthlyData() {
+      document.getElementById("syncStatus").textContent = "월 데이터를 불러오는 중입니다.";
+      try {
+        const response = await fetch("/api/monthly-dispatch-summary");
+        const json = await response.json();
+        state.dispatch = json;
+        state.rows = Array.isArray(json.rows) ? json.rows : [];
+        state.summaryVehicles = Array.isArray(json.vehicles) ? json.vehicles : [];
+        state.summaryStores = Array.isArray(json.stores) ? json.stores : [];
+        buildData();
+        document.getElementById("syncStatus").textContent = `월 캐시 ${fmt.format(json.rowCount || state.rows.length)}행 · 호차 ${fmt.format(json.vehicleCount || state.summaryVehicles.length)}대 · 갱신 ${json.generatedAt ? new Date(json.generatedAt).toLocaleString("ko-KR") : "-"}`;
+      } catch (error) {
+        state.rows = [];
+        buildData();
+        document.getElementById("syncStatus").textContent = `월 데이터 조회 실패: ${error.message}`;
+      }
+      render();
+    }
+
+    function buildData() {
+      const baseVehicles = (window.FRESHON_VEHICLE_DATA?.vehicles || []).map(v => ({
+        vehicle: String(v.vehicle || ""),
+        area: v.area_label || v.primary_area || "",
+        count: Number(v.count || 0),
+        stores: v.customers || [],
+        sales: Number(v.total_avg_order_amount || 0)
+      }));
+      const byVehicle = new Map(baseVehicles.map(v => [v.vehicle, { ...v, monthlyStops:0, monthlySales:0, storeCodes:new Set() }]));
+      const storeMap = new Map();
+      for (const item of state.summaryVehicles) {
+        const vehicle = normalizeVehicle(item.vehicle);
+        if (!vehicle) continue;
+        if (!byVehicle.has(vehicle)) byVehicle.set(vehicle, { vehicle, area:"월 캐시", count:0, stores:[], sales:0, monthlyStops:0, monthlySales:0, storeCodes:new Set() });
+        const current = byVehicle.get(vehicle);
+        current.monthlyStops = Number(item.stopCount || current.monthlyStops || 0);
+        current.monthlySales = Number(item.amount || current.monthlySales || 0);
+      }
+      for (const item of state.summaryStores) {
+        const key = item.code || `${item.name || ""}-${item.address || ""}`;
+        if (!key || key === "-") continue;
+        storeMap.set(key, {
+          code: item.code || "",
+          name: item.name || "",
+          address: item.address || "",
+          vehicle: item.vehicle || "",
+          monthlySales: Number(item.amount || 0),
+          orders: Number(item.stopCount || 0)
+        });
+      }
+      for (const row of state.rows) {
+        const vehicle = normalizeVehicle(getFirst(row, ["확정호차","기준호차","호차","vehicle"]));
+        const code = String(getFirst(row, ["고객코드","고객ERP코드","customerCode","code"]) || "").trim();
+        const name = String(getFirst(row, ["고객명","고객명(업체명)","업체명","customerName","name"]) || "").trim();
+        const address = String(getFirst(row, ["고객주소","주소","배송주소","address"]) || "").trim();
+        const amount = toAmount(row);
+        if (vehicle) {
+          if (!byVehicle.has(vehicle)) byVehicle.set(vehicle, { vehicle, area:"월 캐시", count:0, stores:[], sales:0, monthlyStops:0, monthlySales:0, storeCodes:new Set() });
+          const item = byVehicle.get(vehicle);
+          item.monthlyStops += 1;
+          item.monthlySales += amount;
+          if (code) item.storeCodes.add(code);
+        }
+        const key = code || `${name}-${address}`;
+        if (key && !storeMap.has(key)) storeMap.set(key, { code, name, address, vehicle, monthlySales:0, orders:0 });
+        if (key) {
+          const store = storeMap.get(key);
+          store.monthlySales += amount;
+          store.orders += 1;
+        }
+      }
+      state.vehicles = [...byVehicle.values()].map(v => ({ ...v, uniqueStores:v.storeCodes?.size || v.count || 0 })).sort((a,b) => (b.monthlyStops || b.count) - (a.monthlyStops || a.count));
+      state.stores = [...storeMap.values()].sort((a,b) => b.monthlySales - a.monthlySales);
+    }
+
+    function filtered(items) {
+      const query = document.getElementById("searchInput").value.trim().toLowerCase();
+      if (!query) return items;
+      return items.filter(item => JSON.stringify(item).toLowerCase().includes(query));
+    }
+
+    function updateKpis() {
+      const vehiclesWithStops = state.vehicles.filter(v => (v.monthlyStops || v.count) > 0);
+      const totalStops = vehiclesWithStops.reduce((sum, v) => sum + (v.monthlyStops || v.count), 0);
+      const totalSales = vehiclesWithStops.reduce((sum, v) => sum + (v.monthlySales || v.sales), 0);
+      document.getElementById("kpiStops").textContent = vehiclesWithStops.length ? `${fmt.format(Math.round(totalStops / vehiclesWithStops.length))}건` : "-";
+      document.getElementById("kpiSales").textContent = vehiclesWithStops.length ? money(totalSales / vehiclesWithStops.length) : "-";
+      document.getElementById("kpiVehicles").textContent = `${fmt.format(vehiclesWithStops.length)}대`;
+      document.getElementById("kpiStores").textContent = `${fmt.format(state.stores.length || totalStops)}곳`;
+      document.getElementById("kpiCoords").textContent = `${fmt.format((window.FRESHON_VEHICLE_DATA?.customers || []).filter(c => !Number.isFinite(Number(c.lat)) || !Number.isFinite(Number(c.lng))).length)}곳`;
+      document.getElementById("kpiAlerts").textContent = `${fmt.format(state.stores.filter(s => s.monthlySales >= 3000000).length)}곳`;
+    }
+
+    function render() {
+      updateKpis();
+      document.querySelectorAll(".tab").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === state.tab));
+      const titles = {
+        vehicles:["호차별 월 평균 착지수","착지수, 매출, 착지당 금액을 같이 봅니다.","호차 분석"],
+        stores:["매장별 월 평균 매출","매장별 금액대와 주문 집중도를 봅니다.","매장 분석"],
+        days:["요일 패턴","요일별 주문 경향은 월 캐시와 매장 패턴으로 계산합니다.","요일 패턴"],
+        new:["신규주소 이력","신규주소 판단 결과와 반영 상태를 봅니다.","신규주소"],
+        coords:["좌표 관리","좌표 누락과 보정 후보를 확인합니다.","좌표 관리"],
+        adjust:["호차 조정 후보","끝단 착지, 과밀 호차, 여유 호차를 봅니다.","조정 후보"]
+      };
+      const [title, caption, chip] = titles[state.tab] || titles.vehicles;
+      document.getElementById("listTitle").textContent = title;
+      document.getElementById("listCaption").textContent = caption;
+      document.getElementById("activeChip").textContent = chip;
+      const list = document.getElementById("resultList");
+      let items = [];
+      if (state.tab === "stores") items = filtered(state.stores).slice(0, 80);
+      else items = filtered(state.vehicles).slice(0, 80);
+      list.innerHTML = items.map((item, index) => rowHtml(item, index)).join("") || `<div class="row"><strong>표시할 데이터가 없습니다.</strong><small>관리자에서 월별 고정배차 엑셀을 먼저 저장해주세요.</small></div>`;
+      list.querySelectorAll(".row[data-index]").forEach(el => el.addEventListener("click", () => {
+        state.selected = items[Number(el.dataset.index)];
+        renderDetail();
+      }));
+      state.selected = state.selected || items[0] || null;
+      renderDetail();
+    }
+
+    function rowHtml(item, index) {
+      if (state.tab === "stores") {
+        return `<div class="row" data-index="${index}"><strong>${esc(item.code ? `${item.code} / ` : "")}${esc(item.name || "-")}</strong><small>${esc(item.vehicle ? `${item.vehicle}호차` : "-")} · 월 매출 ${money(item.monthlySales)} · 주문 ${fmt.format(item.orders)}건</small><small>${esc(item.address || "-")}</small></div>`;
+      }
+      const stops = item.monthlyStops || item.count || 0;
+      const sales = item.monthlySales || item.sales || 0;
+      return `<div class="row" data-index="${index}"><strong>${esc(item.vehicle)}호차 · ${esc(item.area || "-")}</strong><small>월 착지 ${fmt.format(stops)}건 · 월 매출 ${money(sales)} · 착지당 ${money(stops ? sales / stops : 0)}</small></div>`;
+    }
+
+    function renderDetail() {
+      const panel = document.getElementById("detailPanel");
+      const item = state.selected;
+      if (!item) {
+        document.getElementById("detailTitle").textContent = "선택 항목";
+        document.getElementById("detailBadge").textContent = "대기";
+        panel.innerHTML = `<p class="caption">선택된 데이터가 없습니다.</p>`;
         return;
       }
-      const vehicleCount = Number(summary.vehicleCount || 0);
-      const storeCount = Number(summary.storeCount || 0);
-      const totalAmount = Number(summary.totalAmount || 0);
-      if (status) status.textContent = `월 캐시 ${money.format(rowCount)}행 · 호차 ${money.format(vehicleCount)}대 · 매장 ${money.format(storeCount)}곳 · 갱신 ${summary.generatedAt || "-"}`;
-      const cards = document.querySelectorAll(".kpis .card");
-      const avgStopsPerVehicle = vehicleCount ? Math.round(rowCount / vehicleCount) : 0;
-      const avgAmountPerVehicle = vehicleCount ? Math.round(totalAmount / vehicleCount) : 0;
-      if (cards[0]) { cards[0].querySelector("span").textContent = "호차당 월 평균 착지수"; cards[0].querySelector("b").textContent = `${money.format(avgStopsPerVehicle)}건`; cards[0].querySelector("small").textContent = `총 ${money.format(rowCount)}건 / ${money.format(vehicleCount)}대`; }
-      if (cards[1]) { cards[1].querySelector("span").textContent = "호차당 월 평균 매출"; cards[1].querySelector("b").textContent = `${money.format(Math.round(avgAmountPerVehicle / 10000))}만원`; cards[1].querySelector("small").textContent = `총 ${money.format(Math.round(totalAmount / 10000))}만원`; }
-      if (cards[2]) { cards[2].querySelector("span").textContent = "월 운행 호차"; cards[2].querySelector("b").textContent = `${money.format(vehicleCount)}대`; }
-      if (cards[3]) { cards[3].querySelector("span").textContent = "월 매장 수"; cards[3].querySelector("b").textContent = `${money.format(storeCount)}곳`; }
-      if (Array.isArray(summary.vehicles) && summary.vehicles.length) renderVehicles(summary.vehicles.map(row => ({ ...row, status: "월캐시", cls: "blue" })));
-      if (Array.isArray(summary.stores) && summary.stores.length) {
-        stores = summary.stores.map(store => ({ code: store.code || "-", name: store.name || "-", area: `${store.vehicle || "-"}호 · ${store.address || ""}`, vehicle: store.vehicle || "", address: store.address || "", salesAmount: Number(store.amount || 0), sales: `${money.format(Math.round(store.amount || 0))}원`, cycle: `${money.format(store.dates || 0)}일`, grade: Number(store.amount || 0) >= 700000 ? "A급" : Number(store.amount || 0) >= 250000 ? "B급" : "C급", top: "금", days: [40, 40, 40, 40, 80, 30, 10] }));
-        selectedStore = stores[0] || selectedStore;
-        renderStores();
-        renderStoreDetail();
-      }
+      const isStore = state.tab === "stores";
+      document.getElementById("detailTitle").textContent = isStore ? `${item.code || "-"} / ${item.name || "-"}` : `${item.vehicle}호차`;
+      document.getElementById("detailCaption").textContent = isStore ? item.address || "-" : item.area || "-";
+      document.getElementById("detailBadge").textContent = isStore ? "매장" : "호차";
+      const stops = isStore ? item.orders : (item.monthlyStops || item.count || 0);
+      const sales = isStore ? item.monthlySales : (item.monthlySales || item.sales || 0);
+      panel.innerHTML = `
+        <div class="metrics">
+          <div class="metric"><span>월 착지수</span><b>${fmt.format(stops)}건</b></div>
+          <div class="metric"><span>월 매출</span><b>${money(sales)}</b></div>
+          <div class="metric"><span>착지당 금액</span><b>${money(stops ? sales / stops : 0)}</b></div>
+        </div>
+        <div class="days">
+          ${["월","화","수","목","금","토","일"].map((day, idx) => `<div class="day ${idx < 6 ? "hot" : ""}"><b>${day}</b><br>${idx < 6 ? "운영" : "낮음"}</div>`).join("")}
+        </div>
+        <div class="table-scroll">
+          <table><thead><tr><th>항목</th><th>값</th></tr></thead><tbody>
+            ${Object.entries(item).filter(([key]) => !["storeCodes","stores"].includes(key)).slice(0, 14).map(([key,value]) => `<tr><td>${esc(key)}</td><td>${esc(value instanceof Set ? value.size : value)}</td></tr>`).join("")}
+          </tbody></table>
+        </div>`;
     }
-    document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => switchView(tab.dataset.view)));
-    document.getElementById("globalSearch").addEventListener("input", renderStores);
-    document.getElementById("refreshButton").addEventListener("click", () => { selectedStore = stores[0] || null; renderStores(); renderStoreDetail(); });
-    document.getElementById("monthlySyncButton")?.addEventListener("click", refreshMonthlyDispatchSummary);
-    renderVehicles(); renderTimeline(); renderStores(); renderStoreDetail(); renderWeekday(); renderNewRows(); renderCoord(); renderAdjust(); refreshMonthlyDispatchSummary();
+
+    document.getElementById("tabs").addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-tab]");
+      if (!btn) return;
+      state.tab = btn.dataset.tab;
+      state.selected = null;
+      render();
+    });
+    document.getElementById("searchInput").addEventListener("input", () => { state.selected = null; render(); });
+    document.getElementById("refreshButton").addEventListener("click", loadMonthlyData);
+    loadMonthlyData();
   </script>
 </body>
 </html>
-

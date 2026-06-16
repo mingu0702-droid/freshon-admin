@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+﻿import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +8,8 @@ const customerMasterPath = path.join(projectRoot, "public", "customer-master-202
 const restApiKey = process.env.KAKAO_REST_API_KEY || process.env.KAKAO_REST_KEY || "";
 const saveEvery = Number(process.env.GEOCODE_SAVE_EVERY || 100);
 const delayMs = Number(process.env.GEOCODE_DELAY_MS || 120);
+const timeoutMs = Number(process.env.GEOCODE_TIMEOUT_MS || 8000);
+const retryFailed = process.env.GEOCODE_RETRY_FAILED === "1";
 
 if (!restApiKey) {
   console.error("KAKAO_REST_API_KEY is required. Set the Kakao REST API key before running this script.");
@@ -28,14 +30,23 @@ function normalizeAddress(address) {
   return String(address || "").replace(/\s+/g, " ").trim();
 }
 
+function geocodeQueries(address) {
+  const normalized = normalizeAddress(address);
+  const withoutParen = normalizeAddress(normalized.replace(/\([^)]*\)/g, " "));
+  const roadOnly = normalizeAddress(withoutParen.replace(/\s+\d+\s*층.*$/i, "").replace(/\s+\d+호.*$/i, ""));
+  return [...new Set([normalized, withoutParen, roadOnly].filter(Boolean))];
+}
+
 async function writeCustomerMaster(data) {
   await fs.writeFile(customerMasterPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
-async function geocodeAddress(address) {
+async function geocodeOne(query, endpoint = "address") {
   const url = new URL("https://dapi.kakao.com/v2/local/search/address.json");
-  url.searchParams.set("query", address);
+  if (endpoint === "keyword") url.pathname = "/v2/local/search/keyword.json";
+  url.searchParams.set("query", query);
   const response = await fetch(url, {
+    signal: AbortSignal.timeout(timeoutMs),
     headers: {
       Authorization: `KakaoAK ${restApiKey}`
     }
@@ -47,10 +58,22 @@ async function geocodeAddress(address) {
   const first = payload.documents?.[0];
   if (!first) return { lat: null, lng: null, coordSource: "failed" };
   return {
-    lat: Number(first.y),
-    lng: Number(first.x),
-    coordSource: "kakao_address"
+    lat: Number(first.y || first.address?.y || first.road_address?.y),
+    lng: Number(first.x || first.address?.x || first.road_address?.x),
+    coordSource: endpoint === "keyword" ? "kakao_keyword" : "kakao_address"
   };
+}
+
+async function geocodeAddress(address) {
+  for (const query of geocodeQueries(address)) {
+    const byAddress = await geocodeOne(query, "address");
+    if (byAddress.coordSource !== "failed") return byAddress;
+  }
+  for (const query of geocodeQueries(address)) {
+    const byKeyword = await geocodeOne(query, "keyword");
+    if (byKeyword.coordSource !== "failed") return byKeyword;
+  }
+  return { lat: null, lng: null, coordSource: "failed" };
 }
 
 const raw = await fs.readFile(customerMasterPath, "utf8");
@@ -61,10 +84,19 @@ let processed = 0;
 let changed = 0;
 let failed = 0;
 let skipped = 0;
-const targets = customers.filter(customer => !hasCoords(customer));
+let cleaned = 0;
+for (const customer of customers) {
+  if (hasCoords(customer) && (!customer.coordSource || customer.coordSource === "failed")) {
+    customer.coordSource = "existing_coord";
+    cleaned += 1;
+  }
+}
+const targets = customers.filter(customer => !hasCoords(customer) || (retryFailed && customer.coordSource === "failed"));
 
 console.log(`Customer master: ${customers.length.toLocaleString()} rows`);
 console.log(`Missing coordinates: ${targets.length.toLocaleString()} rows`);
+console.log(`Cleaned existing coordinates: ${cleaned.toLocaleString()} rows`);
+console.log(`Start geocoding. timeout ${timeoutMs}ms / delay ${delayMs}ms / save every ${saveEvery} rows`);
 
 for (const customer of targets) {
   const address = normalizeAddress(customer.address);
@@ -98,10 +130,14 @@ for (const customer of targets) {
   if (processed % saveEvery === 0) {
     data.updatedAt = new Date().toISOString();
     await writeCustomerMaster(data);
-    console.log(`Saved ${processed.toLocaleString()}/${targets.length.toLocaleString()} · success ${changed.toLocaleString()} · failed ${failed.toLocaleString()} · duplicate ${skipped.toLocaleString()}`);
+    console.log(`Saved ${processed.toLocaleString()}/${targets.length.toLocaleString()} - success ${changed.toLocaleString()} - failed ${failed.toLocaleString()} - duplicate ${skipped.toLocaleString()}`);
+  } else if (processed % 10 === 0) {
+    console.log(`Progress ${processed.toLocaleString()}/${targets.length.toLocaleString()} - success ${changed.toLocaleString()} - failed ${failed.toLocaleString()} - duplicate ${skipped.toLocaleString()}`);
   }
 }
 
 data.updatedAt = new Date().toISOString();
 await writeCustomerMaster(data);
-console.log(`Done. success ${changed.toLocaleString()} · failed ${failed.toLocaleString()} · duplicate ${skipped.toLocaleString()}`);
+console.log(`Done. success ${changed.toLocaleString()} - failed ${failed.toLocaleString()} - duplicate ${skipped.toLocaleString()}`);
+
+

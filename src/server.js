@@ -621,9 +621,9 @@ async function buildCustomerSearchItems(query) {
       vehicle: normalizeVehicleValue(row.route || row.vehicle || row.vehicleNo),
       route: normalizeCell(row.logisticsCenter || row.center),
       sequence: normalizeCell(row.stopOrder || row.sequence),
-      hasCoords: false,
-      lat: null,
-      lng: null
+      hasCoords: Number.isFinite(Number(row.lat)) && Number.isFinite(Number(row.lng)),
+      lat: Number.isFinite(Number(row.lat)) ? Number(row.lat) : null,
+      lng: Number.isFinite(Number(row.lng)) ? Number(row.lng) : null
     }, query, normalizedQuery);
   }
   const vehicleAreaData = await readVehicleAreaData().catch(() => ({ vehicles: [] }));
@@ -697,10 +697,25 @@ function exactColumnValue(row, columns) {
 }
 
 function normalizeDateValue(value) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    const yyyy = value.getFullYear();
+    if (yyyy < 2020 || yyyy > 2035) return "";
+    return value.toISOString().slice(0, 10);
+  }
   const text = normalizeCell(value);
   if (!text) return "";
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const serial = Number(text);
+    if (Number.isFinite(serial) && serial > 40000 && serial < 60000) {
+      const date = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+      const yyyy = date.getUTCFullYear();
+      if (yyyy >= 2020 && yyyy <= 2035) return date.toISOString().slice(0, 10);
+    }
+  }
   const match = text.match(/(\d{4})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})/);
   if (!match) return "";
+  const yyyy = Number(match[1]);
+  if (!Number.isFinite(yyyy) || yyyy < 2020 || yyyy > 2035) return "";
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 

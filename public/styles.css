@@ -148,6 +148,49 @@ button:disabled { opacity: 0.55; cursor: wait; }
 
 .summary b { font-size: 16px; }
 
+.admin-search-cards {
+  display: none;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.admin-search-cards.active {
+  display: grid;
+}
+
+.admin-store-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .06);
+}
+
+.admin-store-card strong {
+  display: block;
+  font-size: 14px;
+  line-height: 1.35;
+  margin-bottom: 8px;
+}
+
+.admin-store-card small {
+  display: block;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.admin-store-card .pill {
+  display: inline-flex;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 8px;
+  margin: 0 6px 6px 0;
+}
+
 .table-wrap {
   overflow: auto;
   max-height: calc(100vh - 230px);

@@ -14,6 +14,7 @@ const uploadStatus = document.getElementById("uploadStatus");
 const table = document.getElementById("dataTable");
 const adminSearchInput = document.getElementById("adminSearchInput");
 const clearSearchButton = document.getElementById("clearSearchButton");
+const adminSearchCards = document.getElementById("adminSearchCards");
 
 const HIDDEN_COLUMN_RE = /(출입문|잠금|특이사항|배송요청|요청사항|door|lock|request|note|memo)/i;
 
@@ -72,6 +73,32 @@ function getSearchFilteredRows(rows = []) {
   return rows.filter((row) => normalizeSearchText(Object.values(row || {}).join(" ")).includes(query));
 }
 
+function firstRowValue(row, names) {
+  for (const name of names) {
+    const value = row?.[name];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return String(value).trim();
+  }
+  return "";
+}
+
+function adminCardHtml(row) {
+  const code = firstRowValue(row, ["고객ERP코드", "고객코드", "고객", "ERP코드", "매장코드", "customerCode", "code"]);
+  const name = firstRowValue(row, ["고객명(업체명)", "고객명", "매장명", "업체명", "상호", "customerName", "name"]);
+  const address = firstRowValue(row, ["고객주소", "주소", "배송주소", "address"]);
+  const vehicle = firstRowValue(row, ["기준호차", "확정호차", "호차", "배송호차", "vehicle"]);
+  const center = firstRowValue(row, ["물류센터", "센터", "center"]);
+  const file = firstRowValue(row, ["_sourceFile", "sourceFile"]);
+  return `
+    <article class="admin-store-card">
+      <strong>${escapeHtml(code ? `${code} / ${name || "-"}` : name || "-")}</strong>
+      <span class="pill">${escapeHtml(vehicle ? `${vehicle}호차` : "호차 없음")}</span>
+      ${center ? `<span class="pill">${escapeHtml(center)}</span>` : ""}
+      <small>${escapeHtml(address || "-")}</small>
+      ${file ? `<small>원본: ${escapeHtml(file)}</small>` : ""}
+    </article>
+  `;
+}
+
 async function readJsonResponse(response, label = "요청") {
   const text = await response.text();
   if (!text.trim()) {
@@ -98,6 +125,13 @@ function render(payload) {
 
   const columns = visibleColumns(currentPayload.columns || []);
   const rows = filteredRows;
+  const hasSearch = !!adminSearchInput?.value.trim();
+  if (adminSearchCards) {
+    adminSearchCards.classList.toggle("active", hasSearch);
+    adminSearchCards.innerHTML = hasSearch
+      ? rows.slice(0, 24).map(adminCardHtml).join("") || `<article class="admin-store-card"><strong>검색 결과가 없습니다.</strong><small>다른 검색어를 입력해주세요.</small></article>`
+      : "";
+  }
   if (!columns.length) {
     const message = currentPayload.warning || "아직 고정배차 캐시가 없습니다. 월별 엑셀 파일을 업로드해주세요.";
     table.innerHTML = `<tbody><tr><td>${escapeHtml(message)}</td></tr></tbody>`;

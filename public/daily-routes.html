@@ -329,20 +329,21 @@
     .area-label { color:#111827; font-weight:900; text-shadow:0 1px 2px #fff, 0 -1px 2px #fff; }
     .overview-label {
       color:#fff;
-      font-size:12px;
+      font-size:13px;
       font-weight:900;
       line-height:1;
       text-align:center;
       background:var(--label-color, #2563eb);
       border:1px solid rgba(255,255,255,.9);
-      border-radius:3px;
-      padding:4px 7px;
-      box-shadow:0 3px 8px rgba(15,23,42,.30);
+      border-radius:5px;
+      padding:5px 9px;
+      box-shadow:0 4px 10px rgba(15,23,42,.34);
       white-space:nowrap;
     }
     .overview-label .area { display:none; }
+    .overview-label > * { pointer-events:none; }
     .overview-label.zoom-far .area { display:none; }
-    .overview-label.zoom-far { font-size:11px; padding:3px 6px; }
+    .overview-label.zoom-far { font-size:12px; padding:4px 8px; }
     body.map-zooming .overview-label { opacity:.18; pointer-events:none; }
     .detail-label {
       color:#b91c1c;
@@ -761,7 +762,6 @@
       <nav class="page-nav" aria-label="페이지 이동">
         <a href="/daily-routes.html" class="active">일일동선</a>
         <a id="topWmsTab" href="/daily-routes.html?tab=wms">WMS</a>
-        <a id="topNewAreaTab" href="/daily-routes.html?tab=new">신규권역</a>
         <a href="/operations-data.html">운영데이터</a>
         <a href="/admin">관리자</a>
       </nav>
@@ -977,6 +977,7 @@
     let activeCustomerSearchHit = null;
     let activeAddressSearchQuery = "";
     let monthlyDispatchCache = null;
+    const geocodeCache = new Map();
     const viewMode = document.getElementById("viewMode");
     const vehicleSelect = document.getElementById("vehicleSelect");
     const backToOverviewButton = document.getElementById("backToOverviewButton");
@@ -1183,7 +1184,7 @@
         if (!button) return;
         setWorkTab(button.dataset.workTab);
       });
-      topWmsTab.addEventListener("click", (event) => {
+      topWmsTab?.addEventListener("click", (event) => {
         event.preventDefault();
         history.replaceState(null, "", "/daily-routes.html?tab=wms");
         setWorkTab("wms");
@@ -1505,26 +1506,22 @@
               opacity: .84
             });
           }
-          addKakaoLabel(
-            [lat, lng],
-            vehiclePinHtml(item.vehicle || "검색", "#dc2626"),
-            "customer-pin-wrap",
-            labelLayer,
-            () => openInfoWindow(
-              new kakao.maps.LatLng(lat, lng),
-              `<b>${esc(item.code || "-")} / ${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>주소: ${esc(item.address || "-")}`
-            )
-          );
         }
-        setKakaoView(lat, lng, 4);
-        if (boundaryVisible) {
-          openInfoWindow(
+        addKakaoLabel(
+          [lat, lng],
+          vehiclePinHtml(item.vehicle || "검색", vehicle ? getVehicleColor(vehicle) : "#dc2626"),
+          "customer-pin-wrap",
+          labelLayer,
+          () => openInfoWindow(
             new kakao.maps.LatLng(lat, lng),
             `<b>${esc(item.code || "-")} / ${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>주소: ${esc(item.address || "-")}`
-          );
-        } else {
-          closeInfoWindows();
-        }
+          )
+        );
+        setKakaoView(lat, lng, 4);
+        openInfoWindow(
+          new kakao.maps.LatLng(lat, lng),
+          `<b>${esc(item.code || "-")} / ${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>주소: ${esc(item.address || "-")}`
+        );
       }, 0);
     }
 
@@ -1532,10 +1529,12 @@
       activeCustomerSearchHit = hit;
       activeAddressSearchQuery = "";
       const { vehicle, customer } = hit;
+      const lat = Number(customer.lat);
+      const lng = Number(customer.lng);
       openVehicleDetail(vehicle.vehicle);
       customerSearchInput.value = customer.id || customer.name || customer.address || "";
       customerSearchResults.innerHTML = "";
-      if (!Number.isFinite(customer.lat) || !Number.isFinite(customer.lng)) {
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
         routeStatus.textContent = `${customer.name || customer.id || "검색 결과"}: 운영지도 자료에는 있지만 좌표가 없어 지도에는 표시하지 못합니다. 주소 좌표 보정 후 지도에 표시할 수 있습니다.`;
         return;
       }
@@ -1549,31 +1548,27 @@
             fillOpacity: .10,
             opacity: .84
           });
-          addKakaoLabel(
-            [customer.lat, customer.lng],
-            vehiclePinHtml(vehicle, "#dc2626"),
-            "customer-pin-wrap",
-            labelLayer,
-            () => openInfoWindow(
-              new kakao.maps.LatLng(Number(customer.lat), Number(customer.lng)),
-              buildStorePopup({
-                ...customer,
-                code: customer.id,
-                customerCode: customer.id,
-                customerName: customer.name
-              }, vehicle, routeDateInput.value, "-")
-            )
-          );
         }
-        setKakaoView(customer.lat, customer.lng, 4);
-        if (boundaryVisible) {
-          openInfoWindow(
-            new kakao.maps.LatLng(Number(customer.lat), Number(customer.lng)),
-            `<b>${esc(customer.id || "-")} / ${esc(customer.name || "-")}</b><br>배송 호차: ${esc(vehicle.vehicle)}호<br>주소: ${esc(customer.address || "-")}`
-          );
-        } else {
-          closeInfoWindows();
-        }
+        addKakaoLabel(
+          [lat, lng],
+          vehiclePinHtml(vehicle, color),
+          "customer-pin-wrap",
+          labelLayer,
+          () => openInfoWindow(
+            new kakao.maps.LatLng(lat, lng),
+            buildStorePopup({
+              ...customer,
+              code: customer.id,
+              customerCode: customer.id,
+              customerName: customer.name
+            }, vehicle, routeDateInput.value, "-")
+          )
+        );
+        setKakaoView(lat, lng, 4);
+        openInfoWindow(
+          new kakao.maps.LatLng(lat, lng),
+          `<b>${esc(customer.id || "-")} / ${esc(customer.name || "-")}</b><br>배송 호차: ${esc(vehicle.vehicle)}호<br>주소: ${esc(customer.address || "-")}`
+        );
       }, 0);
     }
 
@@ -1686,9 +1681,9 @@
       } else if (mapPanel.parentElement !== document.querySelector(".shell")) {
         mapHome.before(mapPanel);
       }
-      topWmsTab.classList.toggle("active", next === "wms");
-      topNewAreaTab.classList.toggle("active", next === "new");
-      document.querySelector('.page-nav a[href="/daily-routes.html"]').classList.toggle("active", next === "route");
+      topWmsTab?.classList.toggle("active", next === "wms");
+      topNewAreaTab?.classList.toggle("active", next === "new");
+      document.querySelector('.page-nav a[href="/daily-routes.html"]')?.classList.toggle("active", next === "route");
       taskTabs.querySelectorAll("button[data-work-tab]").forEach(button => {
         button.classList.toggle("active", button.dataset.workTab === next);
       });
@@ -1773,16 +1768,30 @@
       return new kakao.maps.LatLng(Number(point[0]), Number(point[1]));
     }
 
+    function relayoutKakaoMap() {
+      if (map && typeof map.relayout === "function") map.relayout();
+    }
+
     function setKakaoView(lat, lng, level = 4) {
-      map.setCenter(new kakao.maps.LatLng(Number(lat), Number(lng)));
+      const safeLat = Number(lat);
+      const safeLng = Number(lng);
+      if (!Number.isFinite(safeLat) || !Number.isFinite(safeLng)) return;
+      relayoutKakaoMap();
+      map.setCenter(new kakao.maps.LatLng(safeLat, safeLng));
       map.setLevel(level);
+      setTimeout(relayoutKakaoMap, 0);
     }
 
     function fitKakaoBounds(points) {
-      if (!points.length) return;
+      const safePoints = (points || [])
+        .map(point => [Number(point?.[0]), Number(point?.[1])])
+        .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+      if (!safePoints.length) return;
+      relayoutKakaoMap();
       const bounds = new kakao.maps.LatLngBounds();
-      points.forEach(point => bounds.extend(toLatLng(point)));
+      safePoints.forEach(point => bounds.extend(toLatLng(point)));
       map.setBounds(bounds);
+      setTimeout(relayoutKakaoMap, 0);
     }
 
     function openInfoWindow(position, html) {
@@ -1803,17 +1812,15 @@
     }
 
     function addKakaoLabel(point, html, className, layer, onClick) {
-      const node = document.createElement("div");
-      node.className = className;
-      node.innerHTML = html;
+      const id = `label-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const overlay = new kakao.maps.CustomOverlay({
         position: toLatLng(point),
-        content: node,
+        content: `<div class="${esc(className)}" data-label-id="${id}">${html}</div>`,
         yAnchor: 0.5,
         zIndex: 20
       });
-      if (onClick) node.addEventListener("click", onClick);
       layer.add(overlay);
+      if (onClick) setTimeout(() => document.querySelector(`[data-label-id="${id}"]`)?.addEventListener("click", onClick), 0);
       return overlay;
     }
 
@@ -1842,6 +1849,21 @@
       node.addEventListener("click", () => openInfoWindow(toLatLng(point), popupHtml));
       markersLayer.add(overlay);
       return overlay;
+    }
+
+    function addTextImageMarker(point, text, color, popupHtml, layer = markersLayer) {
+      const label = String(text || "").trim() || "핀";
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="34"><rect x="2" y="3" width="60" height="26" rx="13" fill="${color}" stroke="white" stroke-width="3"/><text x="32" y="21" text-anchor="middle" font-family="Arial" font-size="13" font-weight="700" fill="white">${text}</text></svg>`;
+      const image = new kakao.maps.MarkerImage(`data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`, new kakao.maps.Size(64, 34), { offset: new kakao.maps.Point(32, 17) });
+      const marker = new kakao.maps.Marker({ position: toLatLng(point), image, title: label });
+      if (popupHtml) kakao.maps.event.addListener(marker, "click", () => openInfoWindow(toLatLng(point), popupHtml));
+      layer.add(marker);
+      return marker;
+    }
+
+    function addVehicleImageMarker(point, vehicle, color, popupHtml, layer = markersLayer) {
+      const text = `${String(vehicle?.vehicle || vehicle || "호차").replace(/호$/, "")}호`;
+      return addTextImageMarker(point, text, color, popupHtml, layer);
     }
 
     function vehiclePinHtml(vehicle, color = "#2563eb", extraClass = "") {
@@ -1917,31 +1939,22 @@
       const vehicle = findVehicleByNumber(row.vehicle);
       const color = vehicle ? getVehicleColor(vehicle) : "#dc2626";
       setKakaoView(row.lat, row.lng, options.level || 4);
-      if (!boundaryVisible) {
-        closeInfoWindows();
-        return;
-      }
       const nearby = (row.nearbyStores && row.nearbyStores.length ? row.nearbyStores : row.candidates || [])
         .filter(item => Number.isFinite(item?.customer?.lat) && Number.isFinite(item?.customer?.lng))
         .slice(0, 20);
-      addKakaoLabel(
+      addTextImageMarker(
         [row.lat, row.lng],
-        virtualNewAreaPinHtml(),
-        "customer-pin-wrap",
-        labelLayer,
-        () => openInfoWindow(new kakao.maps.LatLng(row.lat, row.lng), newAreaPopup(row))
+        "신규",
+        "#dc2626",
+        newAreaPopup(row)
       );
       nearby.forEach(item => {
         const storeColor = item.vehicle ? getVehicleColor(item.vehicle) : "#f97316";
-        addKakaoLabel(
+        addVehicleImageMarker(
           [item.customer.lat, item.customer.lng],
-          vehiclePinHtml(item.vehicle?.vehicle || row.vehicle || "주변", storeColor || "#f97316", "nearby-store-pin"),
-          "customer-pin-wrap",
-          labelLayer,
-          () => openInfoWindow(
-            new kakao.maps.LatLng(Number(item.customer.lat), Number(item.customer.lng)),
-            storePopupFromCandidate(item, "신규권역 주변 매장")
-          )
+          item.vehicle || row.vehicle || "주변",
+          storeColor || "#f97316",
+          storePopupFromCandidate(item, "신규권역 주변 매장")
         );
       });
       openInfoWindow(new kakao.maps.LatLng(row.lat, row.lng), newAreaPopup(row));
@@ -2020,8 +2033,8 @@
           addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes?.length ? vehicle.detail_admin_codes : vehicle.overview_admin_codes, {
             color,
             weight: vehicle.is_variable_vehicle ? 4 : 3,
-            fillOpacity: vehicle.is_variable_vehicle ? .13 : .08,
-            opacity: .82
+            fillOpacity: 0,
+            opacity: .92
           });
           const zoomClass = map.getLevel() >= 8 ? " zoom-far" : "";
           addKakaoLabel(
@@ -2067,29 +2080,31 @@
       document.querySelector(".stats .stat:nth-child(2) span").textContent = "권역 최장 폭";
 
       const color = getVehicleColor(vehicle);
-      if (boundaryVisible) {
+      const showBoundaries = boundaryVisible || boundaryToggleButton?.classList.contains("active") || /ON/.test(boundaryToggleButton?.textContent || "");
+      if (showBoundaries && !boundaryVisible) boundaryVisible = true;
+      if (showBoundaries) {
         addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
           color,
-          weight: 5,
-          fillOpacity: routeFocus ? .06 : .10,
-          opacity: routeFocus ? .72 : .84
+          weight: 4,
+          fillOpacity: 0,
+          opacity: .94
         });
       }
-      if (boundaryVisible && !routeFocus && vehicle.span.line.length === 2) {
+      if (showBoundaries && !routeFocus && vehicle.span.line.length === 2) {
         addKakaoPolyline(vehicle.span.line, { color:"#dc2626", weight:4, opacity:.9, dashArray:"10 8" }, spanLayer);
       }
-      if (boundaryVisible && !routeFocus) {
-        addKakaoLabel(vehicle.center, `${esc(vehicle.vehicle)}호`, "detail-label", labelLayer);
+      const drawVehicleDetailLabels = () => {
+        markersLayer.clearLayers();
+        addVehicleImageMarker(vehicle.center, vehicle, color, buildVehiclePopup(vehicle));
         customers.forEach((customer) => {
-          if (!Number.isFinite(customer.lat) || !Number.isFinite(customer.lng)) return;
-          addKakaoLabel(
-            [customer.lat, customer.lng],
-            vehiclePinHtml(vehicle, color),
-            "customer-pin-wrap",
-            labelLayer,
-            () => openInfoWindow(
-              new kakao.maps.LatLng(Number(customer.lat), Number(customer.lng)),
-              buildStorePopup({
+          const lat = Number(customer.lat);
+          const lng = Number(customer.lng);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+          addVehicleImageMarker(
+            [lat, lng],
+            vehicle,
+            color,
+            buildStorePopup({
                 ...customer,
                 code: customer.id,
                 customerCode: customer.id,
@@ -2098,12 +2113,13 @@
                 dailyAmount: customer.avg_order_amount,
                 orderCount: customer.delivery_pattern
               }, vehicle, routeDateInput.value || "-", "-")
-            )
           );
         });
-      }
+      };
+      if (showBoundaries) drawVehicleDetailLabels();
 
-      renderDailyRoute(vehicle, color);
+      if (routeFocus) renderDailyRoute(vehicle, color);
+      else routeStatus.textContent = "호차 권역과 고객 위치를 운영지도 기준으로 표시합니다.";
 
       document.getElementById("customerCount").textContent = fmt.format(vehicle.count);
       document.getElementById("spanDistance").textContent = `${vehicle.span.distance_km}km`;
@@ -2137,7 +2153,12 @@
       const boundsPoints = customers
         .filter(c => Number.isFinite(Number(c.lat)) && Number.isFinite(Number(c.lng)))
         .map(c => [Number(c.lat), Number(c.lng)]);
-      fitKakaoBounds(boundsPoints);
+      if (boundsPoints.length) {
+        fitKakaoBounds(boundsPoints);
+      } else if (vehicle.center) {
+        setKakaoView(vehicle.center[0], vehicle.center[1], 7);
+      }
+      if (showBoundaries) setTimeout(drawVehicleDetailLabels, 150);
     }
 
     function freshonDiagnosticReason(errorPayload) {
@@ -2576,10 +2597,17 @@
     }
 
     function parseNewAreaRows(text) {
-      return String(text || "")
+      const starters = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충청북도|충남|충청남도|전북|전라북도|전남|전라남도|경북|경상북도|경남|경상남도|제주|S\d+|B\d+)/;
+      const merged = [];
+      String(text || "")
         .split(/\r?\n/)
         .map(line => line.trim())
         .filter(Boolean)
+        .forEach(line => {
+          if (merged.length && !starters.test(line) && !line.includes("\t")) merged[merged.length - 1] += ` ${line}`;
+          else merged.push(line);
+        });
+      return merged
         .map((line, index) => {
           const cells = line.split(/\t/).map(cell => cell.trim());
           if (cells.length >= 2) {
@@ -2613,7 +2641,11 @@
       const rows = [];
       data.vehicles.forEach(vehicle => {
         vehicle.customers.forEach(customer => {
-          if (!Number.isFinite(customer.lat) || !Number.isFinite(customer.lng)) return;
+          const lat = Number(customer.lat);
+          const lng = Number(customer.lng);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+          customer.lat = lat;
+          customer.lng = lng;
           rows.push({ vehicle, customer });
         });
       });
@@ -3931,21 +3963,6 @@
         updateOverviewLabelScale();
         document.body.classList.remove("map-zooming");
       }, 180);
-    }
-
-    function addVehicleHullLayer(vehicle, options) {
-      if (!boundaryVisible || !Array.isArray(vehicle?.hull) || vehicle.hull.length < 3) return;
-      const path = vehicle.hull.map(([lat, lng]) => new kakao.maps.LatLng(lat, lng));
-      const polygon = new kakao.maps.Polygon({
-        path,
-        strokeWeight: options.weight,
-        strokeColor: options.color,
-        strokeOpacity: options.opacity,
-        fillColor: options.color,
-        fillOpacity: options.fillOpacity
-      });
-      kakao.maps.event.addListener(polygon, "click", () => openVehicleDetail(vehicle.vehicle));
-      areaLayer.add(polygon);
     }
 
     function addAdminBoundaryLayer(vehicle, codes, options) {
