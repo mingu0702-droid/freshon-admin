@@ -4,6 +4,7 @@ import { config } from "./config.js";
 
 const dataDir = path.resolve("data");
 const dispatchFile = path.join(dataDir, "fixed-dispatch.json");
+const dispatchMetaFile = path.join(dataDir, "fixed-dispatch-meta.json");
 const dailyRouteFile = path.join(dataDir, "daily-routes.json");
 
 function externalPath(fileName) {
@@ -154,8 +155,33 @@ export async function readDispatchCache() {
   });
 }
 
+export async function readDispatchCacheLocalFirst() {
+  const local = await readLocalJson(dispatchFile, null);
+  if (local) return local;
+  return readDispatchCache();
+}
+
+function dispatchMetaFromPayload(payload) {
+  return {
+    generatedAt: payload?.generatedAt || null,
+    source: payload?.source || null,
+    range: payload?.range || null,
+    rowCount: payload?.rowCount || payload?.rows?.length || 0,
+    warning: payload?.warning || null,
+    columns: Array.isArray(payload?.columns) ? payload.columns : []
+  };
+}
+
+export async function readDispatchMeta() {
+  const meta = await readCache("fixed-dispatch-meta.json", dispatchMetaFile, null);
+  if (meta) return meta;
+  const cache = await readDispatchCache();
+  return dispatchMetaFromPayload(cache);
+}
+
 export async function writeDispatchCache(payload) {
   await writeCache("fixed-dispatch.json", dispatchFile, payload);
+  await writeCache("fixed-dispatch-meta.json", dispatchMetaFile, dispatchMetaFromPayload(payload));
 }
 
 export async function clearDailyRouteCache(reason = "fixed dispatch cache updated") {

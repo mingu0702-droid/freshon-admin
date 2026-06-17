@@ -11,7 +11,7 @@ import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
-import { clearDailyRouteCache, readDailyRoute, readDispatchCache, writeDailyRoute } from "./store.js";
+import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, writeDailyRoute } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1928,7 +1928,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/status", requireView, async (_req, res) => {
-  const cache = await readDispatchCache();
+  const cache = refreshState.running ? null : await readDispatchMeta();
   res.json({
     refresh: refreshState,
     routeRefresh: {
@@ -1939,16 +1939,16 @@ app.get("/api/status", requireView, async (_req, res) => {
       lastError: "Freshon live scraping is disabled. Upload monthly Excel files instead."
     },
     cache: {
-      generatedAt: cache.generatedAt,
-      range: cache.range,
-      rowCount: cache.rowCount || cache.rows?.length || 0,
-      warning: cache.warning || null
+      generatedAt: cache?.generatedAt || null,
+      range: cache?.range || null,
+      rowCount: cache?.rowCount || 0,
+      warning: cache?.warning || null
     }
   });
 });
 
 app.get("/api/fixed-dispatch", requireView, async (req, res) => {
-  const cache = await readDispatchCache();
+  const cache = await readDispatchCacheLocalFirst();
   const rows = Array.isArray(cache.rows) ? cache.rows : [];
   const requestedLimit = Number(req.query.limit ?? 500);
   const limit = Number.isFinite(requestedLimit)
@@ -2055,7 +2055,7 @@ app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
 app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => {
   const q = normalizeCell(req.query.q);
   if (!q) return res.json({ query: q, results: [] });
-  const cache = await readDispatchCache();
+  const cache = await readDispatchCacheLocalFirst();
   res.json({
     query: q,
     generatedAt: cache.generatedAt || null,
