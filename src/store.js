@@ -189,6 +189,12 @@ export async function readMonthlyDispatchSummary() {
   return readCache("monthly-dispatch-summary.json", monthlySummaryFile, null);
 }
 
+export async function readMonthlyDispatchSummaryLocalFirst() {
+  const local = await readLocalJson(monthlySummaryFile, null);
+  if (local) return local;
+  return readMonthlyDispatchSummary();
+}
+
 export async function writeMonthlyDispatchSummary(payload) {
   await writeCache("monthly-dispatch-summary.json", monthlySummaryFile, payload);
 }

@@ -11,7 +11,7 @@ import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
-import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummary, writeDailyRoute, writeMonthlyDispatchSummary } from "./store.js";
+import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2065,10 +2065,13 @@ function buildMonthlyDispatchSummary(cache) {
 }
 
 app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
-  const cached = await readMonthlyDispatchSummary();
-  if (cached) return res.json({ ...cached, source: cached.source || "monthly-dispatch-summary-cache" });
+  const meta = await readDispatchMeta();
+  const cached = await readMonthlyDispatchSummaryLocalFirst();
+  if (cached && (!meta?.generatedAt || cached.cacheGeneratedFrom === meta.generatedAt || cached.generatedAt === meta.generatedAt)) {
+    return res.json({ ...cached, source: cached.source || "monthly-dispatch-summary-cache" });
+  }
   const cache = await readDispatchCacheLocalFirst();
-  const summary = buildMonthlyDispatchSummary(cache);
+  const summary = { ...buildMonthlyDispatchSummary(cache), cacheGeneratedFrom: cache.generatedAt || null };
   await writeMonthlyDispatchSummary(summary).catch(() => null);
   res.json(summary);
 });
@@ -2338,7 +2341,7 @@ async function processUploadedDispatchFiles(files, jobId) {
     };
 
     await writeDispatchCache(payload);
-    await writeMonthlyDispatchSummary(buildMonthlyDispatchSummary(payload));
+    await writeMonthlyDispatchSummary({ ...buildMonthlyDispatchSummary(payload), cacheGeneratedFrom: payload.generatedAt });
     let googleSheetSync = null;
     try {
       googleSheetSync = await syncDispatchToGoogleSheet(payload);
