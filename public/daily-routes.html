@@ -519,14 +519,7 @@
       padding:8px 5px;
       font-size:11px;
     }
-    body[data-work-tab="route"] .route-ops-head {
-      border:1px solid #cbd5e1;
-      border-radius:8px;
-      background:linear-gradient(180deg,#0f172a,#1e3a5f);
-      color:#fff;
-      padding:12px;
-      box-shadow:0 8px 18px rgba(15,23,42,.16);
-    }
+    body[data-work-tab="route"] .route-ops-head { display:none; }
     body[data-work-tab="route"] .route-ops-head span {
       display:inline-flex;
       border:1px solid rgba(255,255,255,.28);
@@ -610,6 +603,23 @@
       grid-template-columns:minmax(0, 1fr) 112px;
       gap:8px;
       align-items:end;
+    }
+    body[data-work-tab="route"] .route-advanced {
+      border:1px solid #d8e4f1;
+      border-radius:8px;
+      padding:8px;
+      background:#f8fafc;
+    }
+    body[data-work-tab="route"] .route-advanced summary {
+      cursor:pointer;
+      font-weight:900;
+      color:#1d4ed8;
+      font-size:12px;
+    }
+    body[data-work-tab="route"] .route-advanced-body {
+      display:grid;
+      gap:8px;
+      padding-top:8px;
     }
     body[data-work-tab="route"] .route-search-panel .search-results {
       max-height:190px;
@@ -781,28 +791,33 @@
         </div>
       </div>
       <div class="control-panel route-search-panel">
-        <div class="route-field-grid">
-          <div>
-            <label for="viewMode">보기</label>
-            <select id="viewMode">
-              <option value="overview:osan">오산센터 권역</option>
-              <option value="overview:yeongnam">영남권 권역</option>
-              <option value="overview:honam">호남권 권역</option>
-              <option value="overview:all">전체 권역</option>
-              <option value="detail">선택 호차 상세</option>
-            </select>
-          </div>
-          <div>
-            <label for="vehicleSelect">호차</label>
-            <select id="vehicleSelect"></select>
-          </div>
-        </div>
-        <label for="vehicleSearchInput">호차 검색</label>
-        <input id="vehicleSearchInput" placeholder="101, 용08, 척01">
-        <div id="vehicleSearchResults" class="search-results"></div>
         <label for="customerSearchInput">고객/주소 검색</label>
         <input id="customerSearchInput" placeholder="고객코드, 고객명, 주소">
         <div id="customerSearchResults" class="search-results"></div>
+        <details class="route-advanced">
+          <summary>호차/권역 선택</summary>
+          <div class="route-advanced-body">
+            <div class="route-field-grid">
+              <div>
+                <label for="viewMode">보기</label>
+                <select id="viewMode">
+                  <option value="overview:osan">오산센터 권역</option>
+                  <option value="overview:yeongnam">영남권 권역</option>
+                  <option value="overview:honam">호남권 권역</option>
+                  <option value="overview:all">전체 권역</option>
+                  <option value="detail">선택 호차 상세</option>
+                </select>
+              </div>
+              <div>
+                <label for="vehicleSelect">호차</label>
+                <select id="vehicleSelect"></select>
+              </div>
+            </div>
+            <label for="vehicleSearchInput">호차 검색</label>
+            <input id="vehicleSearchInput" placeholder="101, 용08, 척01">
+            <div id="vehicleSearchResults" class="search-results"></div>
+          </div>
+        </details>
       </div>
       <div class="task-tabs" id="taskTabs">
         <button type="button" data-work-tab="route">동선</button>
@@ -875,6 +890,7 @@
             <input id="routeDateInput" type="date">
           </div>
           <button id="showRouteButton" type="button">동선 보기</button>
+          <button id="resetOverviewButton" class="secondary" type="button">전체 권역</button>
           <button id="syncRouteButton" class="secondary" type="button">월 데이터 갱신</button>
         </div>
         <div id="routeStatus" class="route-status">날짜와 호차를 선택하면 월 데이터 기준으로 동선을 표시합니다.</div>
@@ -992,6 +1008,7 @@
     const customerSearchResults = document.getElementById("customerSearchResults");
     const routeDateInput = document.getElementById("routeDateInput");
     const showRouteButton = document.getElementById("showRouteButton");
+    const resetOverviewButton = document.getElementById("resetOverviewButton");
     const syncRouteButton = document.getElementById("syncRouteButton");
     const routeStatus = document.getElementById("routeStatus");
     const routeHudVehicle = document.getElementById("routeHudVehicle");
@@ -1114,9 +1131,9 @@
       backToOverviewButton.addEventListener("click", () => {
         activeCustomerSearchHit = null;
         activeAddressSearchQuery = "";
-        viewMode.value = getLastOverviewMode();
-        render();
+        resetToOverview();
       });
+      resetOverviewButton?.addEventListener("click", resetToOverview);
       showRouteButton.addEventListener("click", () => {
         setWorkTab("route");
         shouldShowRoute = true;
@@ -1709,6 +1726,18 @@
       return lastOverviewMode || "overview:osan";
     }
 
+    function resetToOverview() {
+      activeCustomerSearchHit = null;
+      activeAddressSearchQuery = "";
+      shouldShowRoute = false;
+      currentRouteStops = [];
+      viewMode.value = getLastOverviewMode();
+      render();
+      setTimeout(() => {
+        if (map && typeof map.relayout === "function") map.relayout();
+      }, 60);
+    }
+
     function clearMapLayers() {
       closeInfoWindows();
       window.__boundaryDrawCount = 0;
@@ -1787,18 +1816,23 @@
     function setKakaoView(lat, lng, level = 4) {
       const safeLat = Number(lat);
       const safeLng = Number(lng);
-      if (!Number.isFinite(safeLat) || !Number.isFinite(safeLng)) return;
+      if (!map || !window.kakao?.maps || !Number.isFinite(safeLat) || !Number.isFinite(safeLng)) return;
+      const center = new kakao.maps.LatLng(safeLat, safeLng);
       relayoutKakaoMap();
-      map.setCenter(new kakao.maps.LatLng(safeLat, safeLng));
       map.setLevel(level);
-      setTimeout(relayoutKakaoMap, 0);
+      map.setCenter(center);
+      setTimeout(() => {
+        relayoutKakaoMap();
+        map.setLevel(level);
+        map.setCenter(center);
+      }, 80);
     }
 
     function fitKakaoBounds(points) {
       const safePoints = (points || [])
         .map(point => [Number(point?.[0]), Number(point?.[1])])
         .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
-      if (!safePoints.length) return;
+      if (!map || !window.kakao?.maps || !safePoints.length) return;
       relayoutKakaoMap();
       const bounds = new kakao.maps.LatLngBounds();
       safePoints.forEach(point => bounds.extend(toLatLng(point)));
@@ -2094,7 +2128,12 @@
 
     function renderVehicleDetail() {
       const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value) || data.vehicles[0];
-      const customers = vehicle.customers;
+      if (!vehicle) {
+        viewMode.value = "overview:all";
+        renderOverview();
+        return;
+      }
+      const customers = Array.isArray(vehicle.customers) ? vehicle.customers : [];
       const routeFocus = shouldShowRoute && !!routeDateInput.value;
       clearMapLayers();
       updateRouteHud(vehicle, routeFocus ? currentRouteStops.length || customers.length : customers.length, routeFocus ? "일일동선" : "호차 권역");
@@ -2175,8 +2214,11 @@
         .map(c => [Number(c.lat), Number(c.lng)]);
       if (boundsPoints.length) {
         fitKakaoBounds(boundsPoints);
-      } else if (vehicle.center) {
+      } else if (Array.isArray(vehicle.center) && Number.isFinite(Number(vehicle.center[0])) && Number.isFinite(Number(vehicle.center[1]))) {
         setKakaoView(vehicle.center[0], vehicle.center[1], 7);
+      } else {
+        viewMode.value = getLastOverviewMode();
+        renderOverview();
       }
       setTimeout(drawVehicleDetailLabels, 150);
     }

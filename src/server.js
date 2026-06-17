@@ -849,7 +849,7 @@ function numberFromMoney(value) {
 }
 
 function amountFromDispatchRow(row) {
-  return numberFromMoney(firstValue(row, [
+  const direct = numberFromMoney(firstValue(row, [
     "\uB9E4\uCD9C\uAE08\uC561",
     "\uB9E4\uCD9C\uC561",
     "\uC6D4\uB9E4\uCD9C\uC561",
@@ -864,6 +864,16 @@ function amountFromDispatchRow(row) {
     "\uACF5\uAE09\uAC00\uC561",
     "\uD569\uACC4\uAE08\uC561"
   ]));
+  if (direct) return direct;
+  let fallback = 0;
+  for (const [key, value] of Object.entries(row || {})) {
+    const header = normalizeCell(key);
+    if (!/(매출|주문|출고|판매|공급|합계|금액|amount|amt|price)/i.test(header)) continue;
+    if (/(기준|한도|비율|율|수량|중량|착지|건수|전화|연락|코드|호차|톤수)/i.test(header)) continue;
+    const amount = numberFromMoney(value);
+    if (Math.abs(amount) > Math.abs(fallback)) fallback = amount;
+  }
+  return fallback;
 }
 
 function normalizeVehicleValue(value) {
