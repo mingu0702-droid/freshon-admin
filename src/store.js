@@ -5,6 +5,7 @@ import { config } from "./config.js";
 const dataDir = path.resolve("data");
 const dispatchFile = path.join(dataDir, "fixed-dispatch.json");
 const dispatchMetaFile = path.join(dataDir, "fixed-dispatch-meta.json");
+const monthlySummaryFile = path.join(dataDir, "monthly-dispatch-summary.json");
 const dailyRouteFile = path.join(dataDir, "daily-routes.json");
 
 function externalPath(fileName) {
@@ -182,6 +183,14 @@ export async function readDispatchMeta() {
 export async function writeDispatchCache(payload) {
   await writeCache("fixed-dispatch.json", dispatchFile, payload);
   await writeCache("fixed-dispatch-meta.json", dispatchMetaFile, dispatchMetaFromPayload(payload));
+}
+
+export async function readMonthlyDispatchSummary() {
+  return readCache("monthly-dispatch-summary.json", monthlySummaryFile, null);
+}
+
+export async function writeMonthlyDispatchSummary(payload) {
+  await writeCache("monthly-dispatch-summary.json", monthlySummaryFile, payload);
 }
 
 export async function clearDailyRouteCache(reason = "fixed dispatch cache updated") {

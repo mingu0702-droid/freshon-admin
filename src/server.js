@@ -11,7 +11,7 @@ import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
-import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, writeDailyRoute } from "./store.js";
+import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummary, writeDailyRoute, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -850,10 +850,23 @@ function numberFromMoney(value) {
 
 function amountFromDispatchRow(row) {
   const direct = numberFromMoney(firstValue(row, [
+    "amount",
+    "dailyAmount",
+    "monthlyAmount",
+    "salesAmount",
+    "totalAmount",
+    "saleAmt",
+    "orderAmt",
+    "totOrderAmt",
+    "totalOrderAmt",
     "\uB9E4\uCD9C\uAE08\uC561",
     "\uB9E4\uCD9C\uC561",
     "\uC6D4\uB9E4\uCD9C\uC561",
     "\uC6D4\uB9E4\uCD9C",
+    "\uCD1D\uB9E4\uCD9C",
+    "\uCD1D\uB9E4\uCD9C\uAE08\uC561",
+    "\uC77C\uB9E4\uCD9C",
+    "\uC77C\uB9E4\uCD9C\uAE08\uC561",
     "\uCD1D\uC8FC\uBB38\uAE08\uC561",
     "\uCD1D\uC8FC\uBB38\uC561",
     "\uC8FC\uBB38\uAE08\uC561",
@@ -1988,8 +2001,7 @@ app.post("/api/fixed-dispatch/sync-google-sheet", requireAdmin, async (_req, res
   }
 });
 
-app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
-  const cache = await readDispatchCache();
+function buildMonthlyDispatchSummary(cache) {
   const rows = Array.isArray(cache.rows) ? cache.rows : [];
   const vehicles = new Map();
   const stores = new Map();
@@ -2039,7 +2051,7 @@ app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
     .map((item) => ({ ...item, dates: item.dates.size }))
     .sort((a, b) => b.amount - a.amount || b.stopCount - a.stopCount)
     .slice(0, 120);
-  res.json({
+  return {
     generatedAt: cache.generatedAt || null,
     range: cache.range || null,
     rowCount: cache.rowCount || rows.length,
@@ -2049,7 +2061,16 @@ app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
     vehicles: vehicleRows,
     stores: storeRows,
     source: "monthly-dispatch-cache"
-  });
+  };
+}
+
+app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
+  const cached = await readMonthlyDispatchSummary();
+  if (cached) return res.json({ ...cached, source: cached.source || "monthly-dispatch-summary-cache" });
+  const cache = await readDispatchCacheLocalFirst();
+  const summary = buildMonthlyDispatchSummary(cache);
+  await writeMonthlyDispatchSummary(summary).catch(() => null);
+  res.json(summary);
 });
 
 app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => {
@@ -2317,6 +2338,7 @@ async function processUploadedDispatchFiles(files, jobId) {
     };
 
     await writeDispatchCache(payload);
+    await writeMonthlyDispatchSummary(buildMonthlyDispatchSummary(payload));
     let googleSheetSync = null;
     try {
       googleSheetSync = await syncDispatchToGoogleSheet(payload);
