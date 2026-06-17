@@ -618,11 +618,33 @@ function buildSheetValues(payload) {
   const columns = Array.isArray(payload.columns) && payload.columns.length
     ? payload.columns.filter((column) => !String(column).startsWith("_"))
     : Object.keys(payload.rows?.[0] || {}).filter((column) => !String(column).startsWith("_"));
-  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  const rows = dedupeRowsForSheet(Array.isArray(payload.rows) ? payload.rows : []);
   return [
     columns,
     ...rows.map((row) => columns.map((column) => normalizeCell(row[column])))
   ];
+}
+
+function sheetRowIdentity(row) {
+  const code = firstValue(row, ["고객", "고객코드", "고객 코드", "고객ERP코드", "ERP코드", "거래처코드", "매장코드"]);
+  const address = firstValue(row, ["고객주소", "주소", "배송주소"]);
+  const name = firstValue(row, ["고객명", "매장명", "거래처명", "상호"]);
+  const vehicle = firstValue(row, ["기준호차", "확정호차", "호차", "배송호차"]);
+  if (code) return `code:${normalizeSearchValue(code)}`;
+  return `addr:${normalizeSearchValue(address)}|name:${normalizeSearchValue(name)}|vehicle:${normalizeVehicleValue(vehicle)}`;
+}
+
+function dedupeRowsForSheet(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    const key = sheetRowIdentity(row);
+    if (!key || key === "addr:|name:|vehicle:") continue;
+    const previous = map.get(key);
+    const previousScore = previous ? Object.values(previous).filter((value) => normalizeCell(value)).length : -1;
+    const score = Object.values(row || {}).filter((value) => normalizeCell(value)).length;
+    if (!previous || score >= previousScore) map.set(key, row);
+  }
+  return [...map.values()].sort((a, b) => Number(a?._savedOrder || 0) - Number(b?._savedOrder || 0));
 }
 
 async function syncDispatchToGoogleSheet(payload) {
@@ -1917,6 +1939,31 @@ app.get("/api/status", requireView, async (_req, res) => {
 
 app.get("/api/fixed-dispatch", requireView, async (_req, res) => {
   res.json(await readDispatchCache());
+});
+
+app.post("/api/fixed-dispatch/sync-google-sheet", requireAdmin, async (_req, res) => {
+  try {
+    const cache = await readDispatchCache();
+    const rows = Array.isArray(cache.rows) ? cache.rows : [];
+    if (!rows.length) return res.status(400).json({ error: "No fixed-dispatch rows are saved yet." });
+    const googleSheetSync = await syncDispatchToGoogleSheet(cache);
+    refreshState = {
+      ...refreshState,
+      lastError: null,
+      lastFinishedAt: new Date().toISOString(),
+      googleSheetSync
+    };
+    console.log("Manual Google Sheets sync result:", googleSheetSync);
+    res.json({ ok: true, googleSheetSync });
+  } catch (error) {
+    refreshState = {
+      ...refreshState,
+      lastError: error.message,
+      lastFinishedAt: new Date().toISOString()
+    };
+    console.error("Manual Google Sheets sync failed:", error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {

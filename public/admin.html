@@ -10,7 +10,7 @@
   <header>
     <div>
       <h1>Freshon 고정배차 관리자</h1>
-      <p class="version-note">월별 엑셀 업로드 방식으로 고정배차 캐시를 저장합니다.</p>
+      <p class="version-note">월별 엑셀 업로드, 저장자료 조회, 구글시트 동기화를 관리합니다.</p>
       <nav class="page-nav" aria-label="페이지 이동">
         <a href="/daily-routes.html">일일동선</a>
         <a href="/daily-routes.html?tab=wms">WMS</a>
@@ -25,10 +25,11 @@
     <section class="toolbar">
       <div>
         <label for="adminToken">관리 토큰</label>
-        <input id="adminToken" type="password" placeholder="처음 한 번 저장하면 브라우저에 보관됩니다.">
+        <input id="adminToken" type="password" placeholder="Render ADMIN_TOKEN">
       </div>
       <button id="saveTokenButton" class="secondary" type="button">토큰 기억하기</button>
       <button id="reloadButton" type="button">저장자료 보기</button>
+      <button id="sheetSyncButton" type="button">구글시트 동기화</button>
       <button id="csvButton" type="button">엑셀용 파일 받기</button>
     </section>
 

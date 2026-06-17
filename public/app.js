@@ -10,6 +10,7 @@ const saveTokenButton = document.getElementById("saveTokenButton");
 const reloadButton = document.getElementById("reloadButton");
 const csvButton = document.getElementById("csvButton");
 const uploadButton = document.getElementById("uploadButton");
+const sheetSyncButton = document.getElementById("sheetSyncButton");
 const fileInput = document.getElementById("fixedDispatchFiles");
 const uploadStatus = document.getElementById("uploadStatus");
 const table = document.getElementById("dataTable");
@@ -90,7 +91,7 @@ function firstRowValue(row, names) {
 
 function normalizeSearchItem(item) {
   return {
-    code: item.code || item.customerCode || firstRowValue(item, ["고객ERP코드", "고객코드", "ERP코드", "매장코드"]),
+    code: item.code || item.customerCode || firstRowValue(item, ["고객ERP코드", "고객코드", "ERP코드", "매장코드", "고객"]),
     name: item.name || item.customerName || firstRowValue(item, ["고객명", "업체명", "매장명", "상호"]),
     address: item.address || firstRowValue(item, ["고객주소", "주소", "배송주소"]),
     vehicle: item.vehicle || firstRowValue(item, ["기준호차", "확정호차", "호차", "배송호차"]),
@@ -166,8 +167,10 @@ async function loadStatus() {
   const response = await fetch("/api/status");
   if (!response.ok) return null;
   const json = await readJsonResponse(response, "상태 조회");
+  const sync = json.refresh?.googleSheetSync;
   if (json.refresh?.running) setStatus("저장 작업이 진행 중입니다.");
   else if (json.refresh?.lastError) setStatus(`최근 저장 실패: ${json.refresh.lastError}`);
+  else if (sync && !sync.skipped) setStatus(`저장 완료 · 구글시트 ${sync.rows?.toLocaleString("ko-KR") || 0}행 동기화`);
   return json;
 }
 
@@ -257,22 +260,14 @@ async function uploadFile(file, token) {
     uploadStatus.textContent = `${file.name} 업로드 중 · ${index + 1}/${totalChunks}`;
     result = await postUploadChunk(formData, token, file.name);
   }
-  if (result?.jobId) {
-    await waitForUploadJob(result.jobId, file.name, startedAt);
-  }
+  if (result?.jobId) await waitForUploadJob(result.jobId, file.name, startedAt);
 }
 
 async function uploadFiles() {
   const token = getToken();
   const files = [...fileInput.files];
-  if (!token) {
-    alert("관리 토큰을 입력해주세요.");
-    return;
-  }
-  if (!files.length) {
-    alert("업로드할 엑셀 파일을 선택해주세요.");
-    return;
-  }
+  if (!token) return alert("관리 토큰을 입력해주세요.");
+  if (!files.length) return alert("업로드할 엑셀 파일을 선택해주세요.");
   uploadRunning = true;
   uploadButton.disabled = true;
   try {
@@ -286,6 +281,27 @@ async function uploadFiles() {
   } finally {
     uploadRunning = false;
     uploadButton.disabled = false;
+  }
+}
+
+async function syncCurrentSheet() {
+  const token = getToken();
+  if (!token) return alert("관리 토큰을 입력해주세요.");
+  sheetSyncButton.disabled = true;
+  setStatus("구글시트 동기화 중");
+  try {
+    const response = await fetch("/api/fixed-dispatch/sync-google-sheet", {
+      method: "POST",
+      headers: { "x-admin-token": token }
+    });
+    const json = await readJsonResponse(response, "구글시트 동기화");
+    setStatus(`구글시트 동기화 완료 · ${json.googleSheetSync?.rows?.toLocaleString("ko-KR") || 0}행`);
+    await loadStatus();
+  } catch (error) {
+    setStatus(`구글시트 동기화 실패: ${error.message}`);
+    alert(error.message);
+  } finally {
+    sheetSyncButton.disabled = false;
   }
 }
 
@@ -308,6 +324,7 @@ saveTokenButton.addEventListener("click", saveToken);
 reloadButton.addEventListener("click", loadData);
 csvButton.addEventListener("click", downloadCsv);
 uploadButton.addEventListener("click", uploadFiles);
+sheetSyncButton.addEventListener("click", syncCurrentSheet);
 clearSearchButton.addEventListener("click", () => {
   adminSearchInput.value = "";
   remoteSearchResults = [];
