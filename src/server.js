@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import multer from "multer";
 import path from "node:path";
-import { pipeline } from "node:stream/promises";
 import XLSX from "xlsx";
 import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
@@ -2291,7 +2290,26 @@ async function assembleChunkedUpload({ uploadId, totalChunks, fileName, size }) 
   try {
     for (let index = 0; index < totalChunks; index += 1) {
       const chunkPath = path.join(dir, `${index}.part`);
-      await pipeline(fsSync.createReadStream(chunkPath), output, { end: false });
+      await new Promise((resolve, reject) => {
+        const input = fsSync.createReadStream(chunkPath);
+        const cleanup = () => {
+          input.off("error", onError);
+          output.off("error", onError);
+          input.off("end", onEnd);
+        };
+        const onError = (error) => {
+          cleanup();
+          reject(error);
+        };
+        const onEnd = () => {
+          cleanup();
+          resolve();
+        };
+        input.on("error", onError);
+        output.on("error", onError);
+        input.on("end", onEnd);
+        input.pipe(output, { end: false });
+      });
       await fs.rm(chunkPath, { force: true }).catch(() => {});
     }
   } finally {
