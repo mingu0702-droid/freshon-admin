@@ -231,8 +231,9 @@ async function postUploadChunk(formData, token, fileName, attempt = 1) {
     headers: { "x-admin-token": token },
     body: formData
   });
-  if ([502, 503, 504, 524].includes(response.status) && attempt < 5) {
-    await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
+  if ([502, 503, 504, 524].includes(response.status) && attempt < 12) {
+    uploadStatus.textContent = `${fileName} 업로드 재시도 중 · HTTP ${response.status} · ${attempt}/12`;
+    await new Promise((resolve) => setTimeout(resolve, 1800 * attempt));
     return postUploadChunk(formData, token, fileName, attempt + 1);
   }
   return readJsonResponse(response, `${fileName} 업로드`);
@@ -255,7 +256,7 @@ async function waitForUploadJob(jobId, fileName, startedAt) {
 
 async function uploadFile(file, token) {
   const startedAt = Date.now();
-  const chunkSize = 512 * 1024;
+  const chunkSize = 128 * 1024;
   const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
   const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let result = null;
