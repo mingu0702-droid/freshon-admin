@@ -176,7 +176,7 @@ async function loadStatus() {
 
 async function loadData() {
   setStatus("저장자료 불러오는 중");
-  const response = await fetch("/api/fixed-dispatch");
+  const response = await fetch("/api/fixed-dispatch?limit=500");
   render(await readJsonResponse(response, "저장자료 조회"));
   await loadStatus();
   setStatus("조회 완료");
