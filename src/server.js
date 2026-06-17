@@ -2305,8 +2305,18 @@ async function processUploadedDispatchFiles(files, jobId) {
     };
 
     await writeDispatchCache(payload);
-    const googleSheetSync = await syncDispatchToGoogleSheet(payload);
-    console.log("Google Sheets sync result:", googleSheetSync);
+    let googleSheetSync = null;
+    try {
+      googleSheetSync = await syncDispatchToGoogleSheet(payload);
+      console.log("Google Sheets sync result:", googleSheetSync);
+    } catch (syncError) {
+      googleSheetSync = {
+        skipped: true,
+        failed: true,
+        reason: syncError.message
+      };
+      console.error("Google Sheets sync failed after upload:", syncError);
+    }
     await clearDailyRouteCache("fixed dispatch Excel uploaded");
     refreshState = {
       ...refreshState,
