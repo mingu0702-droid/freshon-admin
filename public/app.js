@@ -174,12 +174,22 @@ async function loadStatus() {
   return json;
 }
 
-async function loadData() {
-  setStatus("저장자료 불러오는 중");
-  const response = await fetch("/api/fixed-dispatch?limit=500");
-  render(await readJsonResponse(response, "저장자료 조회"));
-  await loadStatus();
-  setStatus("조회 완료");
+async function loadData(options = {}) {
+  const silent = Boolean(options.silent);
+  try {
+    setStatus("???? ???? ?");
+    const response = await fetch("/api/fixed-dispatch?limit=500");
+    render(await readJsonResponse(response, "???? ??"));
+    await loadStatus();
+    setStatus("?? ??");
+    return true;
+  } catch (error) {
+    await loadStatus().catch(() => null);
+    const message = `???? ?? ??: ${error.message}`;
+    setStatus(message);
+    if (!silent) uploadStatus.textContent = message;
+    return false;
+  }
 }
 
 async function refreshRemoteSearch() {
@@ -272,7 +282,7 @@ async function uploadFiles() {
   uploadButton.disabled = true;
   try {
     for (const file of files) await uploadFile(file, token);
-    await loadData();
+    await loadData({ silent: true });
     setStatus("저장 완료");
   } catch (error) {
     uploadStatus.textContent = `저장 실패: ${error.message}`;
