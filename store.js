@@ -1,0 +1,228 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { config } from "./config.js";
+
+const dataDir = path.resolve("data");
+const dispatchFile = path.join(dataDir, "fixed-dispatch.json");
+const dispatchMetaFile = path.join(dataDir, "fixed-dispatch-meta.json");
+const monthlySummaryFile = path.join(dataDir, "monthly-dispatch-summary.json");
+const dailyRouteFile = path.join(dataDir, "daily-routes.json");
+
+function externalPath(fileName) {
+  return `${config.githubCacheDir.replace(/^\/+|\/+$/g, "")}/${fileName}`;
+}
+
+async function readLocalJson(file, fallback) {
+  try {
+    const text = await fs.readFile(file, "utf8");
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeLocalJson(file, payload) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(payload), "utf8");
+  await fs.rename(tmp, file);
+}
+
+async function readExternalJson(fileName) {
+  if (config.externalCacheBaseUrl) {
+    const url = `${config.externalCacheBaseUrl.replace(/\/+$/g, "")}/${fileName}`;
+    const response = await fetch(url, { cache: "no-store" }).catch(() => null);
+    if (response?.ok) return response.json();
+  }
+
+  if (!config.githubToken || !config.githubRepo) return null;
+  const rawUrl = `https://raw.githubusercontent.com/${config.githubRepo}/${encodeURIComponent(config.githubBranch)}/${externalPath(fileName)}`;
+  const rawResponse = await fetch(rawUrl, {
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${config.githubToken}`,
+      "User-Agent": "freshon-admin-cache"
+    }
+  }).catch(() => null);
+  if (rawResponse?.ok) {
+    return rawResponse.json();
+  }
+
+  const url = `https://api.github.com/repos/${config.githubRepo}/contents/${externalPath(fileName)}?ref=${encodeURIComponent(config.githubBranch)}`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${config.githubToken}`,
+      "User-Agent": "freshon-admin-cache"
+    }
+  }).catch(() => null);
+  if (!response?.ok) return null;
+
+  const json = await response.json();
+  if (json.download_url) {
+    const downloadResponse = await fetch(json.download_url, {
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${config.githubToken}`,
+        "User-Agent": "freshon-admin-cache"
+      }
+    }).catch(() => null);
+    if (downloadResponse?.ok) return downloadResponse.json();
+  }
+  if (!json.content) return null;
+  return JSON.parse(Buffer.from(json.content, "base64").toString("utf8"));
+}
+
+async function getGithubSha(fileName) {
+  if (!config.githubToken || !config.githubRepo) return null;
+  const url = `https://api.github.com/repos/${config.githubRepo}/contents/${externalPath(fileName)}?ref=${encodeURIComponent(config.githubBranch)}`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${config.githubToken}`,
+      "User-Agent": "freshon-admin-cache"
+    }
+  }).catch(() => null);
+  if (!response?.ok) return null;
+  const json = await response.json();
+  return json.sha || null;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function writeExternalJson(fileName, payload) {
+  if (!config.githubToken || !config.githubRepo) return;
+  const url = `https://api.github.com/repos/${config.githubRepo}/contents/${externalPath(fileName)}`;
+  const content = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const sha = await getGithubSha(fileName);
+    const body = {
+      message: `Update Freshon cache ${fileName}`,
+      branch: config.githubBranch,
+      content
+    };
+    if (sha) body.sha = sha;
+
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${config.githubToken}`,
+        "Content-Type": "application/json",
+        "User-Agent": "freshon-admin-cache"
+      },
+      body: JSON.stringify(body)
+    }).catch(() => null);
+
+    if (response?.ok) return;
+
+    const text = await response?.text().catch(() => "");
+    if (response?.status === 409 && attempt < 3) {
+      console.warn(`External cache write conflict for ${fileName}; retrying with latest GitHub sha (${attempt}/3).`);
+      await wait(250 * attempt);
+      continue;
+    }
+    console.warn(`External cache write failed for ${fileName}: ${response?.status || "network"} ${text}`);
+    return;
+  }
+}
+
+async function readCache(fileName, file, fallback) {
+  const external = await readExternalJson(fileName).catch(() => null);
+  if (external) {
+    await writeLocalJson(file, external).catch(() => null);
+    return external;
+  }
+  return readLocalJson(file, fallback);
+}
+
+async function writeCache(fileName, file, payload) {
+  await writeLocalJson(file, payload);
+  await writeExternalJson(fileName, payload).catch((error) => {
+    console.warn(`External cache write failed for ${fileName}: ${error.message}`);
+  });
+}
+
+export async function readDispatchCache() {
+  return readCache("fixed-dispatch.json", dispatchFile, {
+    generatedAt: null,
+    source: "freshon",
+    range: null,
+    rows: [],
+    columns: [],
+    warning: "아직 고정배차 캐시가 없습니다. 관리 토큰 저장 후 고정배차 갱신을 눌러주세요."
+  });
+}
+
+export async function readDispatchCacheLocalFirst() {
+  const local = await readLocalJson(dispatchFile, null);
+  if (local) return local;
+  return readDispatchCache();
+}
+
+function dispatchMetaFromPayload(payload) {
+  return {
+    generatedAt: payload?.generatedAt || null,
+    source: payload?.source || null,
+    range: payload?.range || null,
+    rowCount: payload?.rowCount || payload?.rows?.length || 0,
+    warning: payload?.warning || null,
+    columns: Array.isArray(payload?.columns) ? payload.columns : []
+  };
+}
+
+export async function readDispatchMeta() {
+  const meta = await readCache("fixed-dispatch-meta.json", dispatchMetaFile, null);
+  if (meta) return meta;
+  const cache = await readDispatchCache();
+  return dispatchMetaFromPayload(cache);
+}
+
+export async function writeDispatchCache(payload) {
+  await writeCache("fixed-dispatch.json", dispatchFile, payload);
+  await writeCache("fixed-dispatch-meta.json", dispatchMetaFile, dispatchMetaFromPayload(payload));
+}
+
+export async function readMonthlyDispatchSummary() {
+  return readCache("monthly-dispatch-summary.json", monthlySummaryFile, null);
+}
+
+export async function readMonthlyDispatchSummaryLocalFirst() {
+  const local = await readLocalJson(monthlySummaryFile, null);
+  if (local) return local;
+  return readMonthlyDispatchSummary();
+}
+
+export async function writeMonthlyDispatchSummary(payload) {
+  await writeCache("monthly-dispatch-summary.json", monthlySummaryFile, payload);
+}
+
+export async function clearDailyRouteCache(reason = "fixed dispatch cache updated") {
+  await writeCache("daily-routes.json", dailyRouteFile, {
+    generatedAt: new Date().toISOString(),
+    routes: {},
+    invalidatedReason: reason
+  });
+}
+
+export async function readDailyRouteCache() {
+  return readCache("daily-routes.json", dailyRouteFile, { generatedAt: null, routes: {} });
+}
+
+export async function readDailyRoute(date, vehicle) {
+  const cache = await readDailyRouteCache();
+  return cache.routes?.[date]?.[vehicle] || null;
+}
+
+export async function writeDailyRoute(payload) {
+  const cache = await readDailyRouteCache();
+  const date = payload.date;
+  const vehicle = payload.vehicle;
+  cache.generatedAt = new Date().toISOString();
+  cache.routes ||= {};
+  cache.routes[date] ||= {};
+  cache.routes[date][vehicle] = payload;
+  await writeCache("daily-routes.json", dailyRouteFile, cache);
+}
