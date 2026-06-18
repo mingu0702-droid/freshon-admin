@@ -2067,7 +2067,7 @@ function buildMonthlyDispatchSummary(cache) {
 app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
   const meta = await readDispatchMeta();
   const cached = await readMonthlyDispatchSummaryLocalFirst();
-  if (cached && (!meta?.generatedAt || cached.cacheGeneratedFrom === meta.generatedAt || cached.generatedAt === meta.generatedAt)) {
+  if (cached && cached.cacheGeneratedFrom && meta?.generatedAt && cached.cacheGeneratedFrom === meta.generatedAt) {
     return res.json({ ...cached, source: cached.source || "monthly-dispatch-summary-cache" });
   }
   const cache = await readDispatchCacheLocalFirst();

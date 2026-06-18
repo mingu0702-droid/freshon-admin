@@ -959,7 +959,10 @@
           <strong id="routeMapHudTitle">호차를 선택해주세요</strong>
           <small id="routeMapHudMeta">운영지도 권역 데이터 기준으로 표시 중입니다.</small>
         </div>
-        <button id="routeMapHudButton" type="button">동선 보기</button>
+        <div class="hud-actions">
+          <button id="routeMapOverviewButton" class="secondary hidden" type="button">전체 권역</button>
+          <button id="routeMapHudButton" type="button">동선 보기</button>
+        </div>
       </div>
       <div class="map-layer-actions">
         <button id="boundaryToggleButton" class="boundary-toggle" type="button" aria-pressed="false">권역선 OFF</button>
@@ -1030,6 +1033,7 @@
     const routeMapHudTitle = document.getElementById("routeMapHudTitle");
     const routeMapHudMeta = document.getElementById("routeMapHudMeta");
     const routeMapHudButton = document.getElementById("routeMapHudButton");
+    const routeMapOverviewButton = document.getElementById("routeMapOverviewButton");
     const newAreaInput = document.getElementById("newAreaInput");
     const analyzeNewAreaButton = document.getElementById("analyzeNewAreaButton");
     const clearNewAreaButton = document.getElementById("clearNewAreaButton");
@@ -1144,9 +1148,10 @@
       backToOverviewButton.addEventListener("click", () => {
         activeCustomerSearchHit = null;
         activeAddressSearchQuery = "";
-        resetToOverview();
+        resetToOverview("overview:all");
       });
-      resetOverviewButton?.addEventListener("click", resetToOverview);
+      resetOverviewButton?.addEventListener("click", () => resetToOverview("overview:all"));
+      routeMapOverviewButton?.addEventListener("click", () => resetToOverview("overview:all"));
       showRouteButton.addEventListener("click", () => {
         setWorkTab("route");
         shouldShowRoute = true;
@@ -1711,7 +1716,9 @@
         closeInfoWindows();
         return;
       }
-      backToOverviewButton.classList.toggle("hidden", viewMode.value !== "detail");
+      const needsOverviewReset = !viewMode.value.startsWith("overview") || !!activeCustomerSearchHit || !!activeAddressSearchQuery || shouldShowRoute;
+      backToOverviewButton.classList.toggle("hidden", !needsOverviewReset);
+      routeMapOverviewButton?.classList.toggle("hidden", !needsOverviewReset);
       if (viewMode.value.startsWith("overview")) {
         lastOverviewMode = viewMode.value;
         renderOverview();
@@ -1745,15 +1752,20 @@
       return lastOverviewMode || "overview:osan";
     }
 
-    function resetToOverview() {
+    function resetToOverview(mode = "overview:all") {
       activeCustomerSearchHit = null;
       activeAddressSearchQuery = "";
       shouldShowRoute = false;
       currentRouteStops = [];
-      viewMode.value = getLastOverviewMode();
+      if (vehicleSearchInput) vehicleSearchInput.value = "";
+      if (vehicleSearchResults) vehicleSearchResults.innerHTML = "";
+      if (customerSearchInput) customerSearchInput.value = "";
+      if (customerSearchResults) customerSearchResults.innerHTML = "";
+      viewMode.value = mode || "overview:all";
       render();
       setTimeout(() => {
         if (map && typeof map.relayout === "function") map.relayout();
+        if (viewMode.value.startsWith("overview")) renderOverview();
       }, 60);
     }
 
@@ -2112,7 +2124,7 @@
       const boundsPoints = [];
       vehicles.forEach((vehicle) => {
         const color = getVehicleColor(vehicle);
-        boundsPoints.push(vehicle.center);
+        if (isValidKoreaLatLng(Number(vehicle.center?.[0]), Number(vehicle.center?.[1]))) boundsPoints.push(vehicle.center);
         if (boundaryVisible) {
           addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes?.length ? vehicle.detail_admin_codes : vehicle.overview_admin_codes, {
             color,

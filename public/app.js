@@ -348,7 +348,6 @@ adminSearchInput.addEventListener("input", () => {
 });
 
 loadSavedToken();
-loadData().catch((error) => {
-  setStatus(`조회 실패: ${error.message}`);
-  render();
+loadStatus().catch((error) => {
+  setStatus(`상태 조회 실패: ${error.message}`);
 });
