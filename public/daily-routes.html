@@ -904,7 +904,7 @@
           </div>
           <button id="showRouteButton" type="button">동선 보기</button>
           <button id="resetOverviewButton" class="secondary" type="button">전체 권역</button>
-          <button id="syncRouteButton" class="secondary" type="button">월 데이터 갱신</button>
+          <button id="syncRouteButton" class="secondary" type="button">월 데이터 확인</button>
         </div>
         <div id="routeStatus" class="route-status">날짜와 호차를 선택하면 월 데이터 기준으로 동선을 표시합니다.</div>
       </div>
@@ -1155,6 +1155,7 @@
       showRouteButton.addEventListener("click", () => {
         setWorkTab("route");
         shouldShowRoute = true;
+        if (vehicleSelect.value) viewMode.value = "detail";
         render();
       });
       syncRouteButton.addEventListener("click", async () => {
@@ -1350,10 +1351,10 @@
         }
       });
       routeDateInput.addEventListener("change", () => {
-        shouldShowRoute = !!vehicleSelect.value;
+        shouldShowRoute = false;
         currentRouteStops = [];
         activeRouteSyncPollKey = "";
-        routeStatus.textContent = "날짜 기준 월 데이터 동선을 조회합니다.";
+        routeStatus.textContent = "날짜가 선택되었습니다. 동선 보기를 누르면 월 데이터 기준으로 조회합니다.";
         loadVehicleDriverMaster(routeDateInput.value).then(render).catch(() => render());
       });
       const searchParams = new URLSearchParams(location.search);
@@ -2179,7 +2180,7 @@
         return;
       }
       const customers = Array.isArray(vehicle.customers) ? vehicle.customers : [];
-      const routeFocus = !!routeDateInput.value;
+      const routeFocus = shouldShowRoute && !!routeDateInput.value;
       clearMapLayers();
       updateRouteHud(vehicle, routeFocus ? currentRouteStops.length || customers.length : customers.length, routeFocus ? "일일동선" : "호차 권역");
       document.querySelector(".stats .stat:nth-child(2) span").textContent = "권역 최장 폭";
@@ -3973,7 +3974,7 @@
       viewMode.value = "detail";
       vehicleSearchInput.value = `${vehicle}호`;
       vehicleSearchResults.innerHTML = "";
-      shouldShowRoute = !!routeDateInput.value;
+      shouldShowRoute = false;
       if (shouldShowRoute) {
         loadVehicleDriverMaster(routeDateInput.value).then(render).catch(() => render());
       } else {
