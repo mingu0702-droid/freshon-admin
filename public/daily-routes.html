@@ -2351,13 +2351,15 @@
     }
 
     async function loadVehicleDriverMaster(date = routeDateInput.value) {
-      if (!date || vehicleDriverMasterDate === date) return vehicleDriverMaster;
-      const params = new URLSearchParams({ date });
+      const keyDate = date || "latest";
+      if (vehicleDriverMasterDate === keyDate) return vehicleDriverMaster;
+      const params = new URLSearchParams();
+      if (date) params.set("date", date);
       const response = await fetch(`/api/vehicle-driver-master?${params.toString()}`, { cache: "no-store" });
       if (!response.ok) return vehicleDriverMaster;
       const payload = await response.json().catch(() => ({}));
       vehicleDriverMaster = new Map((payload.vehicles || []).map((item) => [String(item.vehicle), item]));
-      vehicleDriverMasterDate = date;
+      vehicleDriverMasterDate = keyDate;
       return vehicleDriverMaster;
     }
 
@@ -3975,11 +3977,7 @@
       vehicleSearchInput.value = `${vehicle}호`;
       vehicleSearchResults.innerHTML = "";
       shouldShowRoute = false;
-      if (shouldShowRoute) {
-        loadVehicleDriverMaster(routeDateInput.value).then(render).catch(() => render());
-      } else {
-        render();
-      }
+      loadVehicleDriverMaster(routeDateInput.value).then(render).catch(() => render());
     }
 
     function loadClass(vehicle) {

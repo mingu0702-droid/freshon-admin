@@ -749,10 +749,10 @@ async function readDriverMasterFromGoogleSheet({ date = "" } = {}) {
     if (effectiveDate > targetDate) continue;
     const item = {
       vehicle,
-      driverName: firstValue(row, ["기사명", "기사 이름", "배송기사명", "담당기사", "성명"]),
-      phone: firstValue(row, ["전화번호", "연락처", "기사연락처", "휴대폰", "핸드폰"]),
-      carrier: firstValue(row, ["운수사", "업체", "운송사", "소속", "협력사"]),
-      ton: firstValue(row, ["톤수", "차량톤수", "차량 톤수", "톤"]),
+      driverName: firstValue(row, ["기사명", "기사 이름", "배송기사명", "담당기사", "성명", "배송기사명", "기사"]),
+      phone: firstValue(row, ["전화번호", "연락처", "기사연락처", "기사 연락처", "배송기사휴대전화번호", "배송기사 휴대전화번호", "휴대폰", "핸드폰"]),
+      carrier: firstValue(row, ["운수사", "운수사명", "운수회사", "업체", "운송사", "소속", "협력사"]),
+      ton: firstValue(row, ["톤수", "차량톤수", "차량 톤수", "차량톤수", "톤"]),
       effectiveDate
     };
     const prev = byVehicle.get(vehicle);
@@ -2211,7 +2211,7 @@ app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
   const cache = await readDispatchSource(true);
   const meta = cache.source === "google-sheet" ? { generatedAt: cache.generatedAt } : await readDispatchMeta();
   const cached = await readMonthlyDispatchSummaryLocalFirst();
-  if (cached && cached.cacheGeneratedFrom && meta?.generatedAt && cached.cacheGeneratedFrom === meta.generatedAt) {
+  if (cache.source !== "google-sheet" && cached && cached.cacheGeneratedFrom && meta?.generatedAt && cached.cacheGeneratedFrom === meta.generatedAt) {
     return res.json({ ...cached, source: cached.source || "monthly-dispatch-summary-cache" });
   }
   const summary = { ...buildMonthlyDispatchSummary(cache), cacheGeneratedFrom: cache.generatedAt || null, source: cache.source === "google-sheet" ? "google-sheet" : "monthly-dispatch-cache" };
