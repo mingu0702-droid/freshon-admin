@@ -685,38 +685,47 @@ async function readDispatchFromGoogleSheet({ force = false } = {}) {
   }
   const token = await getGoogleAccessToken();
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  const { sheetName } = await getGoogleSheetNameAndHeaders(headers);
-  const range = `${sheetName}!A:ZZ`;
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
-  const response = await fetch(url, { headers });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
-  const values = Array.isArray(body.values) ? body.values : [];
-  const columns = (values[0] || []).map((value) => normalizeCell(value)).filter(Boolean);
-  const rows = values.slice(1)
-    .map((line, index) => {
-      const row = {};
-      columns.forEach((column, columnIndex) => {
-        row[column] = normalizeCell(line[columnIndex]);
-      });
-      row._savedOrder = index + 1;
-      row._sourceSheet = sheetName;
-      return row;
-    })
-    .filter((row) => Object.values(row).some((value) => normalizeCell(value)));
-  if (!columns.length || !rows.length) return null;
-  const payload = {
-    generatedAt: new Date().toISOString(),
-    source: "google-sheet",
-    range: inferRange(rows),
-    columns,
-    rows,
-    rowCount: rows.length,
-    sheetName,
-    warning: null
-  };
-  googleDispatchMemoryCache = { readAt: Date.now(), payload };
-  return payload;
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}?fields=sheets.properties.title`;
+  const metaResponse = await fetch(metaUrl, { headers });
+  const metaBody = await metaResponse.json().catch(() => ({}));
+  if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
+  const titles = (metaBody.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
+  const preferred = config.googleSheetName || "customers";
+  const orderedTitles = [...new Set([preferred, ...titles].filter((title) => titles.includes(title)))];
+  for (const sheetName of orderedTitles) {
+    const range = `${sheetName}!A:ZZ`;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
+    const response = await fetch(url, { headers });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
+    const values = Array.isArray(body.values) ? body.values : [];
+    const columns = (values[0] || []).map((value) => normalizeCell(value)).filter(Boolean);
+    const rows = values.slice(1)
+      .map((line, index) => {
+        const row = {};
+        columns.forEach((column, columnIndex) => {
+          row[column] = normalizeCell(line[columnIndex]);
+        });
+        row._savedOrder = index + 1;
+        row._sourceSheet = sheetName;
+        return row;
+      })
+      .filter((row) => Object.values(row).some((value) => normalizeCell(value)));
+    if (!columns.length || !rows.length) continue;
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      source: "google-sheet",
+      range: inferRange(rows),
+      columns,
+      rows,
+      rowCount: rows.length,
+      sheetName,
+      warning: sheetName === preferred ? null : `Configured sheet "${preferred}" was empty, so "${sheetName}" was used.`
+    };
+    googleDispatchMemoryCache = { readAt: Date.now(), payload };
+    return payload;
+  }
+  return null;
 }
 
 async function readDispatchSource(preferGoogle = true) {
