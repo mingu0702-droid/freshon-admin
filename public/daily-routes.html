@@ -1013,6 +1013,8 @@
     let activeCustomerSearchHit = null;
     let activeAddressSearchQuery = "";
     let monthlyDispatchCache = null;
+    let vehicleDriverMaster = new Map();
+    let vehicleDriverMasterDate = "";
     const geocodeCache = new Map();
     const viewMode = document.getElementById("viewMode");
     const vehicleSelect = document.getElementById("vehicleSelect");
@@ -1348,10 +1350,11 @@
         }
       });
       routeDateInput.addEventListener("change", () => {
-        shouldShowRoute = false;
+        shouldShowRoute = !!vehicleSelect.value;
         currentRouteStops = [];
         activeRouteSyncPollKey = "";
-        routeStatus.textContent = "날짜 선택 후 동선 보기를 누르면 프레시온 일일배차관리 기준으로 조회합니다.";
+        routeStatus.textContent = "날짜 기준 월 데이터 동선을 조회합니다.";
+        loadVehicleDriverMaster(routeDateInput.value).then(render).catch(() => render());
       });
       const searchParams = new URLSearchParams(location.search);
       const requested = searchParams.get("vehicle");
@@ -2098,13 +2101,20 @@
       const date = routeDateInput.value || "-";
       const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}호` : "전체";
       const area = vehicle?.area_label || modeLabel;
+      const driver = getVehicleDriverInfo(vehicle);
+      const driverText = driver ? ` · ${[driver.carrier, driver.driverName, driver.phone].filter(Boolean).join(" / ")}` : "";
       routeHudVehicle.textContent = vehicleLabel;
       routeHudStops.textContent = Number.isFinite(Number(stopCount)) ? fmt.format(Number(stopCount)) : "-";
       routeHudDate.textContent = date;
       routeMapHudTitle.textContent = vehicle?.vehicle ? `${vehicleLabel} · ${area}` : modeLabel;
       routeMapHudMeta.textContent = shouldShowRoute && routeDateInput.value
-        ? `${date} 프레시온 일일배차관리 기준 동선 조회 모드입니다.`
-        : "운영지도 권역 데이터 기준입니다. 날짜 선택 후 동선 보기를 누르면 일일동선이 겹쳐집니다.";
+        ? `${date} 월 데이터 기준 동선 조회 모드입니다.${driverText}`
+        : `운영지도 권역 데이터 기준입니다.${driverText}`;
+    }
+
+    function getVehicleDriverInfo(vehicle) {
+      if (!vehicle || vehicle.group !== "osan") return null;
+      return vehicleDriverMaster.get(String(vehicle.vehicle)) || null;
     }
 
     function renderOverview() {
@@ -2169,7 +2179,7 @@
         return;
       }
       const customers = Array.isArray(vehicle.customers) ? vehicle.customers : [];
-      const routeFocus = shouldShowRoute && !!routeDateInput.value;
+      const routeFocus = !!routeDateInput.value;
       clearMapLayers();
       updateRouteHud(vehicle, routeFocus ? currentRouteStops.length || customers.length : customers.length, routeFocus ? "일일동선" : "호차 권역");
       document.querySelector(".stats .stat:nth-child(2) span").textContent = "권역 최장 폭";
@@ -2339,6 +2349,17 @@
       return response.json().catch(() => ({}));
     }
 
+    async function loadVehicleDriverMaster(date = routeDateInput.value) {
+      if (!date || vehicleDriverMasterDate === date) return vehicleDriverMaster;
+      const params = new URLSearchParams({ date });
+      const response = await fetch(`/api/vehicle-driver-master?${params.toString()}`, { cache: "no-store" });
+      if (!response.ok) return vehicleDriverMaster;
+      const payload = await response.json().catch(() => ({}));
+      vehicleDriverMaster = new Map((payload.vehicles || []).map((item) => [String(item.vehicle), item]));
+      vehicleDriverMasterDate = date;
+      return vehicleDriverMaster;
+    }
+
     function monthlyCacheSummary(cache) {
       const rowCount = cache?.rowCount || cache?.rows?.length || 0;
       const generatedAt = cache?.generatedAt || "-";
@@ -2431,10 +2452,10 @@
           true
         );
       });
-      const sourceLabel = payload.source === "freshon-daily-dispatch-api" ? "프레시온 저장본" : payload.source === "freshon-id-password-login" ? "프레시온 ID/PW 저장본" : payload.source === "delivery-admin-live" ? "딜리버리 어드민 저장본" : payload.source === "monthly-dispatch-cache" ? "월 데이터 캐시" : payload.source === "vehicle-area-fallback" ? "운영지도 대체 표시" : "업로드/캐시 데이터";
+      const sourceLabel = payload.source === "freshon-daily-dispatch-api" ? "프레시온 저장본" : payload.source === "freshon-id-password-login" ? "프레시온 ID/PW 저장본" : payload.source === "delivery-admin-live" ? "딜리버리 어드민 저장본" : payload.source === "google-sheet" ? "구글시트 월 데이터" : payload.source === "monthly-dispatch-cache" ? "월 데이터 캐시" : payload.source === "vehicle-area-fallback" ? "운영지도 대체 표시" : "업로드/캐시 데이터";
       routeStatus.innerHTML = `${date} ${vehicle.vehicle}호 동선 ${fmt.format(stops.length)}건 표시 중 · ${sourceLabel}`
         + (payload.generatedAt ? `<br><small>저장 시간: ${esc(payload.generatedAt)}</small>` : "")
-        + (payload.source === "monthly-dispatch-cache" ? `<div class="sync-notice done"><b>월 데이터 캐시 사용</b><br>${esc(payload.monthKey || date.slice(0, 7))} 월 업로드 데이터에서 배송날짜 ${esc(date)} 기준으로 바로 불러왔습니다.</div>` : "")
+        + ((payload.source === "monthly-dispatch-cache" || payload.source === "google-sheet") ? `<div class="sync-notice done"><b>${esc(sourceLabel)} 사용</b><br>${esc(payload.monthKey || date.slice(0, 7))} 월 데이터에서 배송날짜 ${esc(date)} 기준으로 바로 불러왔습니다.</div>` : "")
         + (unmatchedStops.length ? renderUnmatchedRouteStops(`지도 매칭 실패 ${fmt.format(unmatchedStops.length)}건`, unmatchedStops) : "");
       fitKakaoBounds(allPoints);
     }
@@ -2475,16 +2496,12 @@
         routeStatus.textContent = "날짜를 선택하면 월 데이터 기준으로 동선을 표시합니다.";
         return;
       }
-      if (!shouldShowRoute) {
-        routeStatus.textContent = "동선 보기를 누르면 월 데이터와 운영지도 기준으로 표시합니다.";
-        return;
-      }
       await renderDailyRoutePayload(vehicle, color, date, buildOperatingRoutePayload(vehicle, date));
       routeStatus.innerHTML += `<div class="sync-notice">운영지도 기준 표시 중 · 월 데이터가 있으면 자동으로 바꿔 표시합니다.</div>`;
       try {
         const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, center: vehicle.region || "" });
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 4500);
+        const timer = setTimeout(() => controller.abort(), 20000);
         const response = await fetch(`/api/daily-route?${params.toString()}`, { cache: "no-store", signal: controller.signal });
         clearTimeout(timer);
         if (!response.ok) {
@@ -3956,8 +3973,12 @@
       viewMode.value = "detail";
       vehicleSearchInput.value = `${vehicle}호`;
       vehicleSearchResults.innerHTML = "";
-      shouldShowRoute = false;
-      render();
+      shouldShowRoute = !!routeDateInput.value;
+      if (shouldShowRoute) {
+        loadVehicleDriverMaster(routeDateInput.value).then(render).catch(() => render());
+      } else {
+        render();
+      }
     }
 
     function loadClass(vehicle) {

@@ -75,17 +75,21 @@ async function readExternalJson(fileName) {
 
 async function getGithubSha(fileName) {
   if (!config.githubToken || !config.githubRepo) return null;
-  const url = `https://api.github.com/repos/${config.githubRepo}/contents/${externalPath(fileName)}?ref=${encodeURIComponent(config.githubBranch)}`;
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${config.githubToken}`,
-      "User-Agent": "freshon-admin-cache"
-    }
-  }).catch(() => null);
-  if (!response?.ok) return null;
-  const json = await response.json();
-  return json.sha || null;
+  const baseUrl = `https://api.github.com/repos/${config.githubRepo}/contents/${externalPath(fileName)}`;
+  for (const suffix of [`?ref=${encodeURIComponent(config.githubBranch)}`, ""]) {
+    const response = await fetch(`${baseUrl}${suffix}`, {
+      cache: "no-store",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${config.githubToken}`,
+        "User-Agent": "freshon-admin-cache"
+      }
+    }).catch(() => null);
+    if (!response?.ok) continue;
+    const json = await response.json().catch(() => ({}));
+    if (json.sha) return json.sha;
+  }
+  return null;
 }
 
 function wait(ms) {
@@ -119,7 +123,7 @@ async function writeExternalJson(fileName, payload) {
     if (response?.ok) return;
 
     const text = await response?.text().catch(() => "");
-    if (response?.status === 409 && attempt < 3) {
+    if ((response?.status === 409 || (response?.status === 422 && /sha/i.test(text))) && attempt < 3) {
       console.warn(`External cache write conflict for ${fileName}; retrying with latest GitHub sha (${attempt}/3).`);
       await wait(250 * attempt);
       continue;

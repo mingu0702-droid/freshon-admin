@@ -25,5 +25,8 @@ export const config = {
   deliveryAdminCookie: process.env.DELIVERY_ADMIN_COOKIE || "",
   googleSheetId: process.env.GOOGLE_SHEET_ID || "",
   googleSheetName: process.env.GOOGLE_SHEET_NAME || "customers",
-  googleServiceAccountJsonBase64: process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 || ""
+  googleServiceAccountJsonBase64: process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 || "",
+  googleDriverSheetId: process.env.GOOGLE_DRIVER_SHEET_ID || "1PKyuviFYRKFO9seAvhEmhnlwxKBjjcrpbkPJnK3tFNc",
+  googleDriverSheetName: process.env.GOOGLE_DRIVER_SHEET_NAME || "",
+  googleDriverSheetGid: Number(process.env.GOOGLE_DRIVER_SHEET_GID || 1584114128)
 };

@@ -65,6 +65,7 @@ const dailyRouteSyncJobs = new Map();
 let vehicleAreaDataPromise = null;
 let customerMasterDataPromise = null;
 let googleDispatchMemoryCache = null;
+let googleDriverMemoryCache = null;
 let deliveryAdminSession = {
   cookie: config.deliveryAdminCookie || "",
   authorization: "",
@@ -638,6 +639,45 @@ async function getGoogleSheetNameAndHeaders(headers) {
   return { sheetName, wantedSheetName };
 }
 
+async function getGoogleSheetTab(headers, spreadsheetId, wantedName = "", wantedGid = null, fallbackName = "customers") {
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets.properties(title,sheetId)`;
+  const metaResponse = await fetch(metaUrl, { headers });
+  const metaBody = await metaResponse.json().catch(() => ({}));
+  if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
+  const sheets = (metaBody.sheets || []).map((sheet) => sheet.properties || {}).filter((sheet) => sheet.title);
+  const byGid = Number.isFinite(wantedGid) ? sheets.find((sheet) => Number(sheet.sheetId) === Number(wantedGid)) : null;
+  const titles = sheets.map((sheet) => sheet.title);
+  const wantedSheetName = wantedName || fallbackName;
+  const sheetName = byGid?.title || (titles.includes(wantedSheetName) ? wantedSheetName : titles[0]);
+  if (!sheetName) throw new Error("Google spreadsheet has no readable sheet tab.");
+  return { sheetName, wantedSheetName };
+}
+
+async function readRowsFromGoogleSheet({ spreadsheetId, sheetName, sheetGid, fallbackName, force = false, cacheKey = "" }) {
+  if (!spreadsheetId || !config.googleServiceAccountJsonBase64) return null;
+  if (!force && cacheKey === "driver" && googleDriverMemoryCache && Date.now() - googleDriverMemoryCache.readAt < 60 * 1000) return googleDriverMemoryCache.payload;
+  const token = await getGoogleAccessToken();
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const tab = await getGoogleSheetTab(headers, spreadsheetId, sheetName, sheetGid, fallbackName);
+  const range = `${tab.sheetName}!A:ZZ`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
+  const response = await fetch(url, { headers });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
+  const values = Array.isArray(body.values) ? body.values : [];
+  const columns = (values[0] || []).map((value) => normalizeCell(value)).filter(Boolean);
+  const rows = values.slice(1).map((line, index) => {
+    const row = {};
+    columns.forEach((column, columnIndex) => { row[column] = normalizeCell(line[columnIndex]); });
+    row._savedOrder = index + 1;
+    row._sourceSheet = tab.sheetName;
+    return row;
+  }).filter((row) => Object.values(row).some((value) => normalizeCell(value)));
+  const payload = { generatedAt: new Date().toISOString(), sheetName: tab.sheetName, columns, rows, rowCount: rows.length };
+  if (cacheKey === "driver") googleDriverMemoryCache = { readAt: Date.now(), payload };
+  return payload;
+}
+
 async function readDispatchFromGoogleSheet({ force = false } = {}) {
   if (!config.googleSheetId || !config.googleServiceAccountJsonBase64) return null;
   if (!force && googleDispatchMemoryCache && Date.now() - googleDispatchMemoryCache.readAt < 60 * 1000) {
@@ -686,6 +726,39 @@ async function readDispatchSource(preferGoogle = true) {
     throw new Error("Google sheet dispatch data is empty.");
   }
   return readDispatchCacheLocalFirst();
+}
+
+function effectiveDateFromDriverRow(row) {
+  return parseDispatchDate(firstValue(row, ["적용일", "적용일자", "변경일", "변경일자", "시작일", "시작일자", "기준일"])) || "0000-00-00";
+}
+
+async function readDriverMasterFromGoogleSheet({ date = "" } = {}) {
+  const sheet = await readRowsFromGoogleSheet({
+    spreadsheetId: config.googleDriverSheetId,
+    sheetName: config.googleDriverSheetName,
+    sheetGid: config.googleDriverSheetGid,
+    fallbackName: "기사연락처와 차량톤수",
+    cacheKey: "driver"
+  });
+  const targetDate = parseDispatchDate(date) || "9999-12-31";
+  const byVehicle = new Map();
+  for (const row of sheet?.rows || []) {
+    const vehicle = normalizeVehicleValue(firstValue(row, ["호차", "차량", "차량번호", "운행호차", "기준호차"]));
+    if (!vehicle) continue;
+    const effectiveDate = effectiveDateFromDriverRow(row);
+    if (effectiveDate > targetDate) continue;
+    const item = {
+      vehicle,
+      driverName: firstValue(row, ["기사명", "기사 이름", "배송기사명", "담당기사", "성명"]),
+      phone: firstValue(row, ["전화번호", "연락처", "기사연락처", "휴대폰", "핸드폰"]),
+      carrier: firstValue(row, ["운수사", "업체", "운송사", "소속", "협력사"]),
+      ton: firstValue(row, ["톤수", "차량톤수", "차량 톤수", "톤"]),
+      effectiveDate
+    };
+    const prev = byVehicle.get(vehicle);
+    if (!prev || item.effectiveDate >= prev.effectiveDate) byVehicle.set(vehicle, item);
+  }
+  return { generatedAt: sheet?.generatedAt || null, sheetName: sheet?.sheetName || null, rowCount: sheet?.rowCount || 0, vehicles: [...byVehicle.values()] };
 }
 
 function sheetRowIdentity(row) {
@@ -947,6 +1020,16 @@ function amountFromDispatchRow(row) {
   return fallback;
 }
 
+function parseDispatchDate(value) {
+  const text = normalizeCell(value);
+  if (!text) return "";
+  const iso = text.match(/(20\d{2})[-./년\s]*(\d{1,2})[-./월\s]*(\d{1,2})/);
+  if (iso) return `${iso[1]}-${String(iso[2]).padStart(2, "0")}-${String(iso[3]).padStart(2, "0")}`;
+  const short = text.match(/(\d{1,2})[-./월\s]+(\d{1,2})/);
+  if (short) return `2026-${String(short[1]).padStart(2, "0")}-${String(short[2]).padStart(2, "0")}`;
+  return "";
+}
+
 function normalizeVehicleValue(value) {
   const text = normalizeCell(value).replace(/\s+/g, "");
   if (!text) return "";
@@ -1148,10 +1231,12 @@ async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" 
       ? "uploaded-delivery-history"
       : "uploaded-fixed-dispatch";
   const monthKey = monthKeyFromDate(date);
+  const payloadSource = cache.source === "google-sheet" ? "google-sheet" : "monthly-dispatch-cache";
   return {
     generatedAt: new Date().toISOString(),
-    source: "monthly-dispatch-cache",
+    source: payloadSource,
     originalSource: source,
+    cacheGeneratedFrom: cache.generatedAt || null,
     cacheHit: true,
     cacheType: "monthly-dispatch",
     monthKey,
@@ -1160,7 +1245,7 @@ async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" 
       ? "Uploaded fixed-dispatch rows were used as the route base, and delivery-history rows were merged only for app completion records."
       : deliveryItems.length
         ? "Uploaded delivery-history Excel data was used because no fixed-dispatch route base rows matched this date and vehicle."
-        : "Uploaded fixed-dispatch Excel monthly data was used for this daily route.",
+        : payloadSource === "google-sheet" ? "Google Sheets monthly data was used for this daily route." : "Uploaded fixed-dispatch Excel monthly data was used for this daily route.",
     date,
     vehicle,
     center,
@@ -2118,7 +2203,7 @@ function buildMonthlyDispatchSummary(cache) {
     storeCount: stores.size,
     vehicles: vehicleRows,
     stores: storeRows,
-    source: "monthly-dispatch-cache"
+    source: cache.source === "google-sheet" ? "google-sheet" : "monthly-dispatch-cache"
   };
 }
 
@@ -2132,6 +2217,10 @@ app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
   const summary = { ...buildMonthlyDispatchSummary(cache), cacheGeneratedFrom: cache.generatedAt || null, source: cache.source === "google-sheet" ? "google-sheet" : "monthly-dispatch-cache" };
   await writeMonthlyDispatchSummary(summary).catch(() => null);
   res.json(summary);
+});
+
+app.get("/api/vehicle-driver-master", requireView, async (req, res) => {
+  res.json(await readDriverMasterFromGoogleSheet({ date: String(req.query.date || "") }));
 });
 
 app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => {
@@ -2274,10 +2363,10 @@ app.get("/api/daily-route", requireView, async (req, res) => {
   }
   const cached = await readDailyRoute(date, vehicle);
   if (cached && !forceRefresh) {
-    const dispatchCache = await readDispatchCache();
+    const dispatchCache = await readDispatchSource(true).catch(() => readDispatchCache());
     const cachedAt = cached.generatedAt ? Date.parse(cached.generatedAt) : 0;
     const dispatchAt = dispatchCache.generatedAt ? Date.parse(dispatchCache.generatedAt) : 0;
-    if (cached.source !== "uploaded-delivery-history" && (!dispatchAt || cachedAt >= dispatchAt)) {
+    if (cached.source !== "vehicle-area-fallback" && cached.source !== "uploaded-delivery-history" && (!dispatchAt || cachedAt >= dispatchAt)) {
       return res.json(cached);
     }
   }
