@@ -2042,41 +2042,8 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
 
 async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = "" }) {
   const uploaded = await buildDailyRouteFromUploadedDispatch({ date, vehicle, center });
-  if (uploaded && uploaded.rowCount > 2) return uploaded;
-
-  const data = await readVehicleAreaData();
-  const vehicleData = (data.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
-  const customers = (vehicleData?.customers || []).filter((customer) => Number.isFinite(customer.lat) && Number.isFinite(customer.lng));
-  if (!customers.length) return null;
-
-  return {
-    generatedAt: new Date().toISOString(),
-    source: "vehicle-area-fallback",
-    warning: uploaded
-      ? `Uploaded route rows looked incomplete (${uploaded.rowCount} rows), so vehicle area data was shown instead.`
-      : reason ? `No uploaded route rows for this date; used vehicle area data instead. ${reason}` : "No uploaded route rows for this date; used vehicle area data instead.",
-    date,
-    vehicle,
-    center,
-    rowCount: customers.length,
-    stops: customers.map((customer, index) => ({
-      sequence: index + 1,
-      raw: customer,
-      code: customer.id || "",
-      name: customer.name || "",
-      address: customer.address || "",
-      vehicle: `${vehicle}\uD638`,
-      customerCode: customer.id || "",
-      customerName: customer.name || "",
-      amount: customer.avg_order_amount || "",
-      dailyAmount: customer.avg_order_amount || "",
-      monthlyAmount: customer.avg_order_amount || "",
-      orderCount: customer.delivery_pattern || "",
-      deliveryPattern: customer.delivery_pattern || "",
-      lat: customer.lat,
-      lng: customer.lng
-    }))
-  };
+  if (uploaded && uploaded.rowCount > 0) return uploaded;
+  return null;
 }
 
 app.get("/api/health", (_req, res) => {

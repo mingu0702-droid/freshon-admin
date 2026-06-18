@@ -2114,7 +2114,7 @@
     }
 
     function getVehicleDriverInfo(vehicle) {
-      if (!vehicle || vehicle.group !== "osan") return null;
+      if (!vehicle) return null;
       return vehicleDriverMaster.get(String(vehicle.vehicle)) || null;
     }
 
@@ -2182,7 +2182,7 @@
       const customers = Array.isArray(vehicle.customers) ? vehicle.customers : [];
       const routeFocus = shouldShowRoute && !!routeDateInput.value;
       clearMapLayers();
-      updateRouteHud(vehicle, routeFocus ? currentRouteStops.length || customers.length : customers.length, routeFocus ? "일일동선" : "호차 권역");
+      updateRouteHud(vehicle, routeFocus ? currentRouteStops.length : customers.length, routeFocus ? "일일동선" : "호차 권역");
       document.querySelector(".stats .stat:nth-child(2) span").textContent = "권역 최장 폭";
 
       const color = getVehicleColor(vehicle);
@@ -2221,7 +2221,7 @@
           );
         });
       };
-      drawVehicleDetailLabels();
+      if (!routeFocus) drawVehicleDetailLabels();
 
       if (routeFocus) renderDailyRoute(vehicle, color);
       else routeStatus.textContent = "호차 권역과 고객 위치를 운영지도 기준으로 표시합니다.";
@@ -2499,8 +2499,9 @@
         routeStatus.textContent = "날짜를 선택하면 월 데이터 기준으로 동선을 표시합니다.";
         return;
       }
-      await renderDailyRoutePayload(vehicle, color, date, buildOperatingRoutePayload(vehicle, date));
-      routeStatus.innerHTML += `<div class="sync-notice">운영지도 기준 표시 중 · 월 데이터가 있으면 자동으로 바꿔 표시합니다.</div>`;
+      currentRouteStops = [];
+      updateRouteHud(vehicle, 0, "일일동선");
+      routeStatus.innerHTML = `<div class="sync-notice">월 데이터에서 ${esc(date)} ${esc(vehicle.vehicle)}호 동선을 조회 중입니다.</div>`;
       try {
         const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, center: vehicle.region || "" });
         const controller = new AbortController();
@@ -2509,7 +2510,7 @@
         clearTimeout(timer);
         if (!response.ok) {
           const error = await response.json().catch(() => ({}));
-          routeStatus.innerHTML += `<div class="sync-notice">월 데이터 없음 · 운영지도 기준 유지</div>`;
+          routeStatus.innerHTML = `<div class="sync-notice error">월 데이터에 ${esc(date)} ${esc(vehicle.vehicle)}호 동선이 없습니다.</div>`;
           return;
         }
         const payload = await response.json();
