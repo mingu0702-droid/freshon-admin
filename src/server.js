@@ -64,6 +64,7 @@ const dailyRouteSyncJobs = new Map();
 
 let vehicleAreaDataPromise = null;
 let customerMasterDataPromise = null;
+let googleDispatchMemoryCache = null;
 let deliveryAdminSession = {
   cookie: config.deliveryAdminCookie || "",
   authorization: "",
@@ -625,6 +626,68 @@ function buildSheetValues(payload) {
   ];
 }
 
+async function getGoogleSheetNameAndHeaders(headers) {
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}?fields=sheets.properties.title`;
+  const metaResponse = await fetch(metaUrl, { headers });
+  const metaBody = await metaResponse.json().catch(() => ({}));
+  if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
+  const sheetTitles = (metaBody.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
+  const wantedSheetName = config.googleSheetName || "customers";
+  const sheetName = sheetTitles.includes(wantedSheetName) ? wantedSheetName : sheetTitles[0];
+  if (!sheetName) throw new Error("Google spreadsheet has no readable sheet tab.");
+  return { sheetName, wantedSheetName };
+}
+
+async function readDispatchFromGoogleSheet({ force = false } = {}) {
+  if (!config.googleSheetId || !config.googleServiceAccountJsonBase64) return null;
+  if (!force && googleDispatchMemoryCache && Date.now() - googleDispatchMemoryCache.readAt < 60 * 1000) {
+    return googleDispatchMemoryCache.payload;
+  }
+  const token = await getGoogleAccessToken();
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const { sheetName } = await getGoogleSheetNameAndHeaders(headers);
+  const range = `${sheetName}!A:ZZ`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
+  const response = await fetch(url, { headers });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
+  const values = Array.isArray(body.values) ? body.values : [];
+  const columns = (values[0] || []).map((value) => normalizeCell(value)).filter(Boolean);
+  const rows = values.slice(1)
+    .map((line, index) => {
+      const row = {};
+      columns.forEach((column, columnIndex) => {
+        row[column] = normalizeCell(line[columnIndex]);
+      });
+      row._savedOrder = index + 1;
+      row._sourceSheet = sheetName;
+      return row;
+    })
+    .filter((row) => Object.values(row).some((value) => normalizeCell(value)));
+  if (!columns.length || !rows.length) return null;
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    source: "google-sheet",
+    range: inferRange(rows),
+    columns,
+    rows,
+    rowCount: rows.length,
+    sheetName,
+    warning: null
+  };
+  googleDispatchMemoryCache = { readAt: Date.now(), payload };
+  return payload;
+}
+
+async function readDispatchSource(preferGoogle = true) {
+  if (preferGoogle && config.googleSheetId && config.googleServiceAccountJsonBase64) {
+    const sheetCache = await readDispatchFromGoogleSheet();
+    if (sheetCache?.rows?.length) return sheetCache;
+    throw new Error("Google sheet dispatch data is empty.");
+  }
+  return readDispatchCacheLocalFirst();
+}
+
 function sheetRowIdentity(row) {
   const code = firstValue(row, ["고객", "고객코드", "고객 코드", "고객ERP코드", "ERP코드", "거래처코드", "매장코드"]);
   const address = firstValue(row, ["고객주소", "주소", "배송주소"]);
@@ -651,16 +714,7 @@ async function syncDispatchToGoogleSheet(payload) {
   if (!config.googleSheetId || !config.googleServiceAccountJsonBase64) return { skipped: true, reason: "Google Sheets env not configured." };
   const token = await getGoogleAccessToken();
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}?fields=sheets.properties.title`;
-  const metaResponse = await fetch(metaUrl, { headers });
-  const metaBody = await metaResponse.json().catch(() => ({}));
-  if (!metaResponse.ok) {
-    throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
-  }
-  const sheetTitles = (metaBody.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
-  const wantedSheetName = config.googleSheetName || "customers";
-  const sheetName = sheetTitles.includes(wantedSheetName) ? wantedSheetName : sheetTitles[0];
-  if (!sheetName) throw new Error("Google spreadsheet has no writable sheet tab.");
+  const { sheetName, wantedSheetName } = await getGoogleSheetNameAndHeaders(headers);
   const range = `${sheetName}!A1`;
   const values = buildSheetValues(payload);
   const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(sheetName)}:clear`;
@@ -675,6 +729,10 @@ async function syncDispatchToGoogleSheet(payload) {
   if (!updateResponse.ok) {
     throw new Error(`Google sheet update failed: ${updateBody.error?.message || updateResponse.status}`);
   }
+  googleDispatchMemoryCache = {
+    readAt: Date.now(),
+    payload: { ...payload, source: "google-sheet", sheetName, rowCount: values.length - 1 }
+  };
   return { skipped: false, sheetName, requestedSheetName: wantedSheetName, rows: values.length - 1, columns: values[0]?.length || 0, updatedRange: updateBody.updatedRange };
 }
 
@@ -756,7 +814,7 @@ async function buildCustomerSearchItems(query) {
       }, query, normalizedQuery);
     }
   }
-  const cache = await readDispatchCache().catch(() => ({ rows: [] }));
+  const cache = await readDispatchSource(true).catch(() => ({ rows: [] }));
   for (const row of cache.rows || []) {
     const item = fixedDispatchSearchRow(row);
     pushCustomerSearchItem(results, seen, {
@@ -1064,7 +1122,7 @@ function routeSortValue(row, fallbackIndex) {
 }
 
 async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" }) {
-  const cache = await readDispatchCache();
+  const cache = await readDispatchSource(true);
   const matchedItems = (cache.rows || [])
     .map((row, index) => ({ row, index }))
     .filter((item) => rowMatchesDailyRoute(item.row, date, vehicle));
@@ -1961,7 +2019,7 @@ app.get("/api/status", requireView, async (_req, res) => {
 });
 
 app.get("/api/fixed-dispatch", requireView, async (req, res) => {
-  const cache = await readDispatchCacheLocalFirst();
+  const cache = await readDispatchSource(req.query.source !== "local");
   const rows = Array.isArray(cache.rows) ? cache.rows : [];
   const requestedLimit = Number(req.query.limit ?? 500);
   const limit = Number.isFinite(requestedLimit)
@@ -2065,13 +2123,13 @@ function buildMonthlyDispatchSummary(cache) {
 }
 
 app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
-  const meta = await readDispatchMeta();
+  const cache = await readDispatchSource(true);
+  const meta = cache.source === "google-sheet" ? { generatedAt: cache.generatedAt } : await readDispatchMeta();
   const cached = await readMonthlyDispatchSummaryLocalFirst();
   if (cached && cached.cacheGeneratedFrom && meta?.generatedAt && cached.cacheGeneratedFrom === meta.generatedAt) {
     return res.json({ ...cached, source: cached.source || "monthly-dispatch-summary-cache" });
   }
-  const cache = await readDispatchCacheLocalFirst();
-  const summary = { ...buildMonthlyDispatchSummary(cache), cacheGeneratedFrom: cache.generatedAt || null };
+  const summary = { ...buildMonthlyDispatchSummary(cache), cacheGeneratedFrom: cache.generatedAt || null, source: cache.source === "google-sheet" ? "google-sheet" : "monthly-dispatch-cache" };
   await writeMonthlyDispatchSummary(summary).catch(() => null);
   res.json(summary);
 });
@@ -2079,7 +2137,7 @@ app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
 app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => {
   const q = normalizeCell(req.query.q);
   if (!q) return res.json({ query: q, results: [] });
-  const cache = await readDispatchCacheLocalFirst();
+  const cache = await readDispatchSource(true);
   res.json({
     query: q,
     generatedAt: cache.generatedAt || null,
@@ -2274,7 +2332,7 @@ app.get("/api/daily-route", requireView, async (req, res) => {
     await writeDailyRoute(fallback);
     return res.json(fallback);
   }
-  const dispatchCache = await readDispatchCache();
+  const dispatchCache = await readDispatchSource(true);
   return res.status(404).json({
     error: "No cached daily route.",
     date,

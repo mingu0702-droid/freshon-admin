@@ -961,7 +961,6 @@
         </div>
         <div class="hud-actions">
           <button id="routeMapOverviewButton" class="secondary hidden" type="button">전체 권역</button>
-          <button id="routeMapHudButton" type="button">동선 보기</button>
         </div>
       </div>
       <div class="map-layer-actions">
@@ -1032,7 +1031,6 @@
     const routeHudDate = document.getElementById("routeHudDate");
     const routeMapHudTitle = document.getElementById("routeMapHudTitle");
     const routeMapHudMeta = document.getElementById("routeMapHudMeta");
-    const routeMapHudButton = document.getElementById("routeMapHudButton");
     const routeMapOverviewButton = document.getElementById("routeMapOverviewButton");
     const newAreaInput = document.getElementById("newAreaInput");
     const analyzeNewAreaButton = document.getElementById("analyzeNewAreaButton");
@@ -1167,17 +1165,12 @@
         try {
           const cache = await loadMonthlyDispatchCache();
           await renderDailyRoute(vehicle, getVehicleColor(vehicle), { skipSync: true });
-          routeStatus.innerHTML += `<div class="sync-notice done"><b>월 데이터 갱신</b><br>${monthlyCacheSummary(cache)}</div>`;
+          routeStatus.innerHTML += `<div class="sync-notice done"><b>월 데이터 갱신</b><br>${esc(monthlyCacheSummary(cache))}</div>`;
         } catch (error) {
           routeStatus.innerHTML = `<div class="sync-notice error">월 데이터 확인 실패: ${esc(error.message || String(error))}</div>`;
         } finally {
           syncRouteButton.disabled = false;
         }
-      });
-      routeMapHudButton.addEventListener("click", () => {
-        setWorkTab("route");
-        shouldShowRoute = true;
-        render();
       });
       analyzeNewAreaButton.addEventListener("click", () => {
         setWorkTab("new");
@@ -2349,9 +2342,9 @@
     function monthlyCacheSummary(cache) {
       const rowCount = cache?.rowCount || cache?.rows?.length || 0;
       const generatedAt = cache?.generatedAt || "-";
-      const range = cache?.range || cache?.monthKey || "";
+      const range = typeof cache?.range === "string" ? cache.range : cache?.range?.label || cache?.range?.text || cache?.monthKey || "";
       if (!rowCount) return "저장된 월 배차 데이터가 없습니다. 관리자에서 월 배차 엑셀을 먼저 업로드해주세요.";
-      return `저장 월 데이터 ${fmt.format(rowCount)}행${range ? ` · 범위 ${esc(range)}` : ""}<br>갱신 기준: ${esc(generatedAt)}`;
+      return `저장 월 데이터 ${fmt.format(rowCount)}행${range ? ` · 범위 ${range}` : ""} · 갱신 기준: ${generatedAt}`;
     }
 
     async function getDailyRouteSyncStatus(date, vehicle) {
