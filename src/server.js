@@ -518,7 +518,7 @@ async function parseWorkbookWithPython(file) {
         errors.push(`${command}: ${error.message}`);
       }
     }
-    throw new Error(`Python Excel parse failed. ${errors.join(" / ")}`);
+    return await withFileBuffer(file, parseWorkbookFast);
   } finally {
     await fs.rm(outputPath, { force: true }).catch(() => {});
   }
@@ -706,11 +706,29 @@ function dedupeDispatchSheetRows(rows) {
   return [...map.values()];
 }
 
+function hasDispatchAmountColumn(row) {
+  return Object.keys(row || {}).some((key) => {
+    const header = normalizeCell(key);
+    if (!/(매출|주문|출고|판매|공급|합계|금액|amount|amt|price)/i.test(header)) return false;
+    return !/(기준|한도|비율|율|수량|중량|착지|건수|전화|연락|코드|호차|톤수)/i.test(header);
+  });
+}
+
+function validateDispatchSheetAmounts(sourceRows, normalizedRows) {
+  const amountColumnRows = sourceRows.filter(hasDispatchAmountColumn).length;
+  const nonZeroAmountRows = normalizedRows.filter((row) => Number(row.amount || 0)).length;
+  if (amountColumnRows >= 20 && nonZeroAmountRows === 0) {
+    throw new Error("엑셀에 매출금액 컬럼이 있지만 금액을 0원으로만 읽었습니다. 1~5월/6월 양식 금액 컬럼 파싱을 확인해야 합니다.");
+  }
+}
+
 function buildSheetValues(payload) {
   const generatedAt = payload.generatedAt || new Date().toISOString();
-  const rows = dedupeDispatchSheetRows((Array.isArray(payload.rows) ? payload.rows : [])
+  const sourceRows = Array.isArray(payload.rows) ? payload.rows : [];
+  const rows = dedupeDispatchSheetRows(sourceRows
     .map((row, index) => normalizeDispatchRowForSheet(row, index, generatedAt))
     .filter((row) => row.deliveryDate && row.vehicle && (row.customerCode || row.customerName || row.address)));
+  validateDispatchSheetAmounts(sourceRows, rows);
   const columns = DISPATCH_SHEET_COLUMNS;
   return [
     columns,
@@ -901,19 +919,33 @@ async function syncDispatchToGoogleSheet(payload) {
   const token = await getGoogleAccessToken();
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   const { sheetName, wantedSheetName } = await getGoogleSheetNameAndHeaders(headers);
-  const range = `${sheetName}!A1`;
   const values = buildSheetValues(payload);
   const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(sheetName)}:clear`;
-  const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
   const clearResponse = await fetch(clearUrl, { method: "POST", headers, body: "{}" });
   if (!clearResponse.ok && clearResponse.status !== 400) {
     const text = await clearResponse.text();
     throw new Error(`Google sheet clear failed: HTTP ${clearResponse.status} ${text.slice(0, 200)}`);
   }
-  const updateResponse = await fetch(updateUrl, { method: "PUT", headers, body: JSON.stringify({ values }) });
-  const updateBody = await updateResponse.json().catch(() => ({}));
-  if (!updateResponse.ok) {
-    throw new Error(`Google sheet update failed: ${updateBody.error?.message || updateResponse.status}`);
+  const columns = values[0] || [];
+  const dataRows = values.slice(1);
+  const chunkSize = 5000;
+  let updatedRows = 0;
+  let updatedRange = "";
+  for (let offset = 0; offset < dataRows.length || offset === 0; offset += chunkSize) {
+    const batch = offset === 0
+      ? [columns, ...dataRows.slice(0, chunkSize)]
+      : dataRows.slice(offset, offset + chunkSize);
+    if (!batch.length || (batch.length === 1 && !batch[0].length)) break;
+    const startRow = offset === 0 ? 1 : offset + 2;
+    const range = `${sheetName}!A${startRow}`;
+    const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
+    const updateResponse = await fetch(updateUrl, { method: "PUT", headers, body: JSON.stringify({ values: batch }) });
+    const updateBody = await updateResponse.json().catch(() => ({}));
+    if (!updateResponse.ok) {
+      throw new Error(`Google sheet update failed at row ${startRow}: ${updateBody.error?.message || updateResponse.status}`);
+    }
+    updatedRows += offset === 0 ? Math.max(0, batch.length - 1) : batch.length;
+    updatedRange = updateBody.updatedRange || updatedRange;
   }
   googleDispatchMemoryCache = {
     readAt: Date.now(),
@@ -930,9 +962,9 @@ async function syncDispatchToGoogleSheet(payload) {
     skipped: false,
     sheetName,
     requestedSheetName: wantedSheetName,
-    rows: values.length - 1,
+    rows: updatedRows,
     columns: values[0]?.length || 0,
-    updatedRange: updateBody.updatedRange,
+    updatedRange,
     verifiedRows: verified?.rowCount || 0,
     verifiedRange: verified?.range || null,
     verifiedAt: verified?.generatedAt || null,

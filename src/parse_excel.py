@@ -56,8 +56,9 @@ def workbook_for(path, password):
 
 
 HEADER_KEYWORDS = {
-    "입고요청일", "확정호차", "기준호차", "톤수", "기사명", "연락처", "배송권역",
-    "고객", "고객코드", "고객명", "매출금액", "배송건수", "중량", "고객주소", "상세주소", "운송사"
+    "입고요청일", "배송일", "배송일자", "확정호차", "기준호차", "호차", "톤수",
+    "기사명", "연락처", "배송권역", "고객", "고객코드", "고객명", "매출금액",
+    "매출액", "주문금액", "배송건수", "중량", "고객주소", "상세주소", "운송사",
 }
 
 
@@ -68,7 +69,7 @@ def header_score(values):
 
 def infer_date_from_values(values):
     joined = " ".join(values)
-    match = re.search(r"(\d{2,4})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})", joined)
+    match = re.search(r"(\d{2,4})[.\-/년\s]+(\d{1,2})[.\-/월\s]+(\d{1,2})", joined)
     if not match:
         return ""
     year, month, day = match.groups()
@@ -102,7 +103,7 @@ def rows_from_sheet(sheet, source_file):
         return rows, columns
 
     header = [value or f"column_{index + 1}" for index, value in enumerate(normalized_rows[header_index])]
-    date_column_exists = any("입고요청일" in column or "배송일" in column for column in header)
+    date_column_exists = any(("입고요청일" in column or "배송일" in column) for column in header)
     if inferred_date and not date_column_exists:
         header.append("입고요청일")
     for column in header:
@@ -119,6 +120,8 @@ def rows_from_sheet(sheet, source_file):
             else:
                 row[column] = normalized[index] if index < len(normalized) else ""
         if any(row.values()):
+            row["__rawValues"] = normalized[:len(header)]
+            row["__headers"] = header
             row["_sourceFile"] = source_file
             row["_sourceSheet"] = sheet.title
             rows.append(row)
