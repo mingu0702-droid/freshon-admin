@@ -194,6 +194,9 @@
     .new-area-result:hover { border-color:#2563eb; background:#eff6ff; transform:translateY(-1px); }
     .new-area-result strong { display:block; margin-bottom:4px; line-height:1.25; }
     .new-area-result small { display:block; color:var(--muted); line-height:1.45; overflow-wrap:anywhere; }
+    .new-area-stop-card { display:grid; grid-template-columns:auto 1fr; gap:4px 8px; margin:7px 0; padding:7px 8px; border:1px solid #dbeafe; border-radius:7px; background:#f8fbff; line-height:1.35; }
+    .new-area-stop-card b { color:#1d4ed8; font-size:12px; }
+    .new-area-stop-card span { color:#0f172a; overflow-wrap:anywhere; }
     .wms-file { display:flex; align-items:center; gap:8px; margin-top:6px; min-width:0; }
     .wms-file input[type="file"] { width:100%; min-width:0; padding:7px; background:#fff; }
     .wms-tool-pane { display:grid; gap:8px; min-height:0; }
@@ -687,6 +690,12 @@
     }
     body[data-work-tab="route"] .new-area-results {
       max-height:220px;
+    }
+    body[data-work-tab="route"] .new-area-filters,
+    body[data-work-tab="new"] .new-area-filters,
+    body[data-work-tab="route"] .new-area-actions,
+    body[data-work-tab="new"] .new-area-actions {
+      grid-template-columns:1fr 1fr;
     }
     body[data-work-tab="route"] .insight-work {
       display:none;
@@ -2933,9 +2942,25 @@
       const patternSource = radiusCustomers.length ? radiusCustomers : nearest;
       const patternCandidates = nearbyDeliveryPatterns(patternSource);
       const deliveryPatternText = nearbyDeliveryPatternText(patternCandidates);
-      const nearbyStores = (radiusCustomers.length ? radiusCustomers : nearest)
-        .slice(0, radiusCustomers.length ? 20 : 6);
-      const nearestCustomer = best?.customer || {};
+      const routeStop = hasRouteContext && routeBest?.stop ? routeBest.stop : null;
+      const nearbyStores = routeStop
+        ? currentRouteStops.map(stop => ({
+            vehicle,
+            distance: distanceKm(point.lat, point.lng, Number(stop.lat), Number(stop.lng)),
+            customer: {
+              id: stop.code,
+              code: stop.code,
+              customerCode: stop.code,
+              name: stop.name,
+              customerName: stop.name,
+              address: stop.address,
+              lat: Number(stop.lat),
+              lng: Number(stop.lng),
+              sequence: stop.sequence
+            }
+          })).filter(item => Number.isFinite(item.distance)).sort((a, b) => a.distance - b.distance).slice(0, 20)
+        : (radiusCustomers.length ? radiusCustomers : nearest).slice(0, radiusCustomers.length ? 20 : 6);
+      const nearestCustomer = routeStop || best?.customer || {};
       const nearestStop = nearestCustomer.sequence || nearestCustomer.stopOrder || nearestCustomer.routeOrder || nearestCustomer.order || "";
       const nearestCode = nearestCustomer.id || nearestCustomer.code || nearestCustomer.customerCode || "";
 
@@ -2946,8 +2971,8 @@
         reason,
         vehicle: vehicle?.vehicle || "-",
         center: pasteCenterLabel(vehicle, row),
-        nearestName: best?.customer?.name || "-",
-        nearestAddress: best?.customer?.address || "",
+        nearestName: nearestCustomer.name || nearestCustomer.customerName || "-",
+        nearestAddress: nearestCustomer.address || "",
         nearestCode,
         nearestStop,
         nearestDistance: distance,
@@ -3076,13 +3101,18 @@
         const stopText = row.nearestStop ? `${esc(row.nearestStop)}착 · ` : "";
         const codeText = row.nearestCode ? `${esc(row.nearestCode)} / ` : "";
         const storeText = `${stopText}${codeText}${esc(row.nearestName || "-")}`;
+        const nearestDistance = row.nearestDistance != null ? `${Number(row.nearestDistance).toFixed(1)}km` : "거리 미확인";
         return `
           <div class="new-area-result" data-index="${index}">
             <div class="result-line"><strong><span class="${cls}">${esc(row.decision)}</span> · ${vehicleText}${centerText}</strong>${reasonText}</div>
             <small>${esc(row.customer || "-")}</small>
             <small>${esc(row.address)}</small>
-            <small>가까운 배송처: ${storeText}</small>
-            <small>${esc(row.nearestAddress || "-")} · 반경 500m ${fmt.format(row.radiusCount || 0)}곳</small>
+            <div class="new-area-stop-card">
+              <b>착지</b><span>${esc(row.nearestStop || "-")}착 · ${nearestDistance}</span>
+              <b>고객</b><span>${codeText}${esc(row.nearestName || "-")}</span>
+              <b>주소</b><span>${esc(row.nearestAddress || "-")}</span>
+            </div>
+            <small>가까운 배송처: ${storeText} · 반경 500m ${fmt.format(row.radiusCount || 0)}곳</small>
             ${patternText}
           </div>
         `;

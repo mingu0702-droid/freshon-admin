@@ -175,6 +175,8 @@ function rowsFromSheetValues(values, file, sheetName) {
       row[column] = normalizeCell(rowValues?.[index]);
     });
     if (Object.values(row).some(Boolean)) {
+      row.__rawValues = rowValues.map((value) => normalizeCell(value));
+      row.__headers = headers;
       row._sourceFile = file.originalname;
       row._sourceSheet = sheetName;
       rows.push(row);
@@ -1108,6 +1110,18 @@ function numberFromMoney(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function plausibleAmountFromCell(value, header = "") {
+  const text = normalizeCell(value);
+  if (!text) return 0;
+  const title = normalizeCell(header);
+  if (!/(매출|주문|출고|판매|공급|합계|금액|amount|amt|price)/i.test(title)) return 0;
+  if (/(일자|날짜|전화|연락|휴대|주소|코드|호차|톤수|착지|순번|순서|중량|수량|건수)/i.test(title)) return 0;
+  if (/20\d{2}[-./년\s]\d{1,2}|010[-\d\s]{7,}/.test(text)) return 0;
+  const amount = numberFromMoney(text);
+  if (!Number.isFinite(amount) || Math.abs(amount) < 1000 || Math.abs(amount) > 50000000) return 0;
+  return amount;
+}
+
 function amountFromDispatchRow(row) {
   const direct = numberFromMoney(firstValue(row, [
     "amount",
@@ -1144,6 +1158,13 @@ function amountFromDispatchRow(row) {
     if (!/(매출|주문|출고|판매|공급|합계|금액|amount|amt|price)/i.test(header)) continue;
     if (/(기준|한도|비율|율|수량|중량|착지|건수|전화|연락|코드|호차|톤수)/i.test(header)) continue;
     const amount = numberFromMoney(value);
+    if (Math.abs(amount) > Math.abs(fallback)) fallback = amount;
+  }
+  if (fallback) return fallback;
+  const rawValues = Array.isArray(row?.__rawValues) ? row.__rawValues : [];
+  const rawHeaders = Array.isArray(row?.__headers) ? row.__headers : [];
+  for (let index = 0; index < rawValues.length; index += 1) {
+    const amount = plausibleAmountFromCell(rawValues[index], rawHeaders[index]);
     if (Math.abs(amount) > Math.abs(fallback)) fallback = amount;
   }
   return fallback;
@@ -2769,7 +2790,7 @@ app.post("/api/upload-fixed-dispatch-chunk", requireAdmin, upload.single("chunk"
   }
 });
 
-app.post("/api/upload-fixed-dispatch", requireAdmin, upload.array("files", 12), async (req, res) => {
+app.post("/api/upload-fixed-dispatch", requireAdmin, upload.array("files", 40), async (req, res) => {
   if (refreshState.running) {
     return res.status(409).json({ error: "Upload already running.", refresh: refreshState });
   }
