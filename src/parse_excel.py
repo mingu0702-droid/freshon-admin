@@ -1,11 +1,16 @@
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import date, datetime
 
-import msoffcrypto
 from openpyxl import load_workbook
+
+try:
+    import msoffcrypto
+except ImportError:
+    msoffcrypto = None
 
 
 def normalize_cell(value):
@@ -21,6 +26,8 @@ def load_plain_workbook(path):
 
 
 def load_decrypted_workbook(input_path, password):
+    if msoffcrypto is None:
+        raise RuntimeError("msoffcrypto is not installed")
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
     temp.close()
     try:
@@ -48,27 +55,69 @@ def workbook_for(path, password):
             raise RuntimeError(f"plain open failed: {plain_error} / decrypt failed: {decrypt_error}") from decrypt_error
 
 
+HEADER_KEYWORDS = {
+    "입고요청일", "확정호차", "기준호차", "톤수", "기사명", "연락처", "배송권역",
+    "고객", "고객코드", "고객명", "매출금액", "배송건수", "중량", "고객주소", "상세주소", "운송사"
+}
+
+
+def header_score(values):
+    joined = "|".join(values)
+    return sum(1 for keyword in HEADER_KEYWORDS if keyword in joined)
+
+
+def infer_date_from_values(values):
+    joined = " ".join(values)
+    match = re.search(r"(\d{2,4})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})", joined)
+    if not match:
+        return ""
+    year, month, day = match.groups()
+    if len(year) == 2:
+        year = f"20{year}"
+    return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+
+
 def rows_from_sheet(sheet, source_file):
     rows = []
     columns = set()
-    header = None
+    normalized_rows = [[normalize_cell(value) for value in row_values] for row_values in sheet.iter_rows(values_only=True)]
+    inferred_date = ""
+    header_index = None
+    best_score = 0
 
-    for row_values in sheet.iter_rows(values_only=True):
-        normalized = [normalize_cell(value) for value in row_values]
-        if header is None:
-            if not any(normalized):
-                continue
-            header = [value or f"column_{index + 1}" for index, value in enumerate(normalized)]
-            for column in header:
-                if column and not column.startswith("__EMPTY"):
-                    columns.add(column)
-            continue
+    for index, normalized in enumerate(normalized_rows):
+        if not inferred_date:
+            inferred_date = infer_date_from_values(normalized)
+        score = header_score(normalized)
+        if score > best_score:
+            best_score = score
+            header_index = index
 
+    if header_index is None or best_score < 3:
+        for index, normalized in enumerate(normalized_rows):
+            if any(normalized):
+                header_index = index
+                break
+    if header_index is None:
+        return rows, columns
+
+    header = [value or f"column_{index + 1}" for index, value in enumerate(normalized_rows[header_index])]
+    date_column_exists = any("입고요청일" in column or "배송일" in column for column in header)
+    if inferred_date and not date_column_exists:
+        header.append("입고요청일")
+    for column in header:
+        if column and not column.startswith("__EMPTY"):
+            columns.add(column)
+
+    for normalized in normalized_rows[header_index + 1:]:
         row = {}
         for index, column in enumerate(header):
             if not column or column.startswith("__EMPTY"):
                 continue
-            row[column] = normalized[index] if index < len(normalized) else ""
+            if column == "입고요청일" and index >= len(normalized):
+                row[column] = inferred_date
+            else:
+                row[column] = normalized[index] if index < len(normalized) else ""
         if any(row.values()):
             row["_sourceFile"] = source_file
             row["_sourceSheet"] = sheet.title
