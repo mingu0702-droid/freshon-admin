@@ -236,11 +236,21 @@ function loadSavedToken() {
 }
 
 async function postUploadChunk(formData, token, fileName, attempt = 1) {
-  const response = await fetch("/api/upload-fixed-dispatch-chunk", {
-    method: "POST",
-    headers: { "x-admin-token": token },
-    body: formData
-  });
+  let response;
+  try {
+    response = await fetch("/api/upload-fixed-dispatch-chunk", {
+      method: "POST",
+      headers: { "x-admin-token": token },
+      body: formData
+    });
+  } catch (error) {
+    if (attempt < 12) {
+      uploadStatus.textContent = `${fileName} 업로드 재시도 중 · 네트워크 끊김 · ${attempt}/12`;
+      await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+      return postUploadChunk(formData, token, fileName, attempt + 1);
+    }
+    throw error;
+  }
   if ([502, 503, 504, 524].includes(response.status) && attempt < 12) {
     uploadStatus.textContent = `${fileName} 업로드 재시도 중 · HTTP ${response.status} · ${attempt}/12`;
     await new Promise((resolve) => setTimeout(resolve, 1800 * attempt));
@@ -250,9 +260,27 @@ async function postUploadChunk(formData, token, fileName, attempt = 1) {
 }
 
 async function waitForUploadJob(jobId, fileName, startedAt) {
+  let statusFailures = 0;
   while (true) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
-    const status = await loadStatus();
+    let status = null;
+    try {
+      status = await loadStatus();
+      statusFailures = 0;
+    } catch (error) {
+      statusFailures += 1;
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      uploadStatus.textContent = `${fileName} 상태 확인 재시도 중 · ${formatSeconds(elapsed)} · ${statusFailures}/20`;
+      if (statusFailures < 20) continue;
+      throw error;
+    }
+    if (!status) {
+      statusFailures += 1;
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      uploadStatus.textContent = `${fileName} 서버 상태 대기 중 · ${formatSeconds(elapsed)} · ${statusFailures}/20`;
+      if (statusFailures < 20) continue;
+      throw new Error("서버 상태 조회가 계속 실패했습니다.");
+    }
     const refresh = status?.refresh || {};
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
     if (refresh.running) {
