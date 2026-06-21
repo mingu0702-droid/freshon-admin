@@ -30,6 +30,16 @@ function setStatus(text) {
   statusEl.textContent = text;
 }
 
+function formatGoogleSyncStatus(sync) {
+  if (!sync) return "";
+  if (sync.failed) return `구글시트 실패: ${sync.reason || "원인 없음"}`;
+  if (sync.skipped) return `구글시트 건너뜀: ${sync.reason || "설정 없음"}`;
+  const rows = Number(sync.rows || 0).toLocaleString("ko-KR");
+  const verifiedRows = Number(sync.verifiedRows || 0).toLocaleString("ko-KR");
+  const verifyText = sync.verifyError ? ` · 검증 실패: ${sync.verifyError}` : ` · 검증 ${verifiedRows}행`;
+  return `구글시트 ${rows}행 저장${verifyText}`;
+}
+
 function getToken() {
   return tokenEl.value.trim();
 }
@@ -330,6 +340,79 @@ function downloadCsv() {
   link.click();
   URL.revokeObjectURL(link.href);
 }
+
+loadStatus = async function() {
+  const response = await fetch("/api/status");
+  if (!response.ok) return null;
+  const json = await readJsonResponse(response, "상태 조회");
+  const sync = json.refresh?.googleSheetSync;
+  if (json.refresh?.running) setStatus("저장 작업이 진행 중입니다.");
+  else if (json.refresh?.lastError) setStatus(`최근 저장 실패: ${json.refresh.lastError}`);
+  else if (sync) setStatus(`저장 완료 · ${formatGoogleSyncStatus(sync)}`);
+  return json;
+};
+
+loadData = async function(options = {}) {
+  const silent = Boolean(options.silent);
+  try {
+    if (!silent) setStatus("저장자료 조회 중");
+    const response = await fetch("/api/fixed-dispatch?limit=500");
+    render(await readJsonResponse(response, "저장자료 조회"));
+    const status = await loadStatus();
+    if (!silent && !status?.refresh?.googleSheetSync) setStatus("조회 완료");
+    return true;
+  } catch (error) {
+    await loadStatus().catch(() => null);
+    const message = `저장자료 조회 실패: ${error.message}`;
+    setStatus(message);
+    if (!silent) uploadStatus.textContent = message;
+    return false;
+  }
+};
+
+uploadFiles = async function() {
+  const token = getToken();
+  const files = [...fileInput.files];
+  if (!token) return alert("관리 토큰을 입력해주세요.");
+  if (!files.length) return alert("업로드할 엑셀 파일을 선택해주세요.");
+  uploadRunning = true;
+  uploadButton.disabled = true;
+  try {
+    for (const file of files) await uploadFile(file, token);
+    await loadData({ silent: true });
+    const status = await loadStatus();
+    const syncText = formatGoogleSyncStatus(status?.refresh?.googleSheetSync);
+    uploadStatus.textContent = syncText || "저장 완료.";
+  } catch (error) {
+    uploadStatus.textContent = `저장 실패: ${error.message}`;
+    setStatus("저장 실패");
+    alert(error.message);
+  } finally {
+    uploadRunning = false;
+    uploadButton.disabled = false;
+  }
+};
+
+syncCurrentSheet = async function() {
+  const token = getToken();
+  if (!token) return alert("관리 토큰을 입력해주세요.");
+  sheetSyncButton.disabled = true;
+  setStatus("구글시트 동기화 중");
+  try {
+    const response = await fetch("/api/fixed-dispatch/sync-google-sheet", {
+      method: "POST",
+      headers: { "x-admin-token": token }
+    });
+    const json = await readJsonResponse(response, "구글시트 동기화");
+    setStatus(`저장 완료 · ${formatGoogleSyncStatus(json.googleSheetSync)}`);
+    await loadData({ silent: true });
+  } catch (error) {
+    setStatus(`구글시트 동기화 실패: ${error.message}`);
+    alert(error.message);
+  } finally {
+    sheetSyncButton.disabled = false;
+  }
+};
 
 saveTokenButton.addEventListener("click", saveToken);
 reloadButton.addEventListener("click", loadData);

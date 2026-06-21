@@ -815,7 +815,25 @@ async function syncDispatchToGoogleSheet(payload) {
     readAt: Date.now(),
     payload: { ...payload, source: "google-sheet", sheetName, rowCount: values.length - 1 }
   };
-  return { skipped: false, sheetName, requestedSheetName: wantedSheetName, rows: values.length - 1, columns: values[0]?.length || 0, updatedRange: updateBody.updatedRange };
+  let verified = null;
+  let verifyError = null;
+  try {
+    verified = await readDispatchFromGoogleSheet({ force: true });
+  } catch (error) {
+    verifyError = error.message;
+  }
+  return {
+    skipped: false,
+    sheetName,
+    requestedSheetName: wantedSheetName,
+    rows: values.length - 1,
+    columns: values[0]?.length || 0,
+    updatedRange: updateBody.updatedRange,
+    verifiedRows: verified?.rowCount || 0,
+    verifiedRange: verified?.range || null,
+    verifiedAt: verified?.generatedAt || null,
+    verifyError
+  };
 }
 
 async function readVehicleAreaData() {
