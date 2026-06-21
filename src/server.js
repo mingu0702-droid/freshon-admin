@@ -2248,19 +2248,27 @@ app.get("/api/status", requireView, async (_req, res) => {
 });
 
 app.get("/api/fixed-dispatch", requireView, async (req, res) => {
-  const cache = await readDispatchSource(req.query.source !== "local");
-  const rows = Array.isArray(cache.rows) ? cache.rows : [];
-  const requestedLimit = Number(req.query.limit ?? 500);
-  const limit = Number.isFinite(requestedLimit)
-    ? Math.max(0, Math.min(Math.floor(requestedLimit), 5000))
-    : 500;
-  res.json({
-    ...cache,
-    rows: limit ? rows.slice(0, limit) : rows,
-    rowCount: cache.rowCount || rows.length,
-    totalRows: rows.length,
-    previewLimit: limit
-  });
+  try {
+    const cache = await readDispatchSource(req.query.source !== "local");
+    const rows = Array.isArray(cache.rows) ? cache.rows : [];
+    const requestedLimit = Number(req.query.limit ?? 500);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(0, Math.min(Math.floor(requestedLimit), 5000))
+      : 500;
+    res.json({
+      ...cache,
+      rows: limit ? rows.slice(0, limit) : rows,
+      rowCount: cache.rowCount || rows.length,
+      totalRows: rows.length,
+      previewLimit: limit
+    });
+  } catch (error) {
+    console.error("Fixed dispatch read failed:", error);
+    res.status(500).json({
+      error: "Fixed dispatch read failed.",
+      message: error.message
+    });
+  }
 });
 
 app.post("/api/fixed-dispatch/sync-google-sheet", requireAdmin, async (_req, res) => {
