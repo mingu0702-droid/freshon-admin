@@ -1092,6 +1092,7 @@ function rowMatchesDailyRoute(row, date, vehicle) {
     "\uB0A9\uD488\uC77C\uC790",
     "\uB4F1\uB85D\uC77C"
   ]));
+  if (!rowDate) return false;
   if (rowDate !== date) return false;
   const selected = vehicleTokens(vehicle);
   if (!selected.size) return false;
@@ -2354,6 +2355,13 @@ app.get("/api/daily-route", requireView, async (req, res) => {
   const preferDeliveryAdmin = req.query.source === "delivery-admin";
   if (!date || !vehicle) {
     return res.status(400).json({ error: "date and vehicle are required." });
+  }
+  if (!preferFreshon && !preferDeliveryAdmin) {
+    const monthlyRoute = await buildFallbackDailyRoute({ date, vehicle, center });
+    if (monthlyRoute) {
+      await writeDailyRoute(monthlyRoute).catch(() => {});
+      return res.json(monthlyRoute);
+    }
   }
   const cached = await readDailyRoute(date, vehicle);
   if (cached && !forceRefresh) {

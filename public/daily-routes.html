@@ -2935,6 +2935,9 @@
       const deliveryPatternText = nearbyDeliveryPatternText(patternCandidates);
       const nearbyStores = (radiusCustomers.length ? radiusCustomers : nearest)
         .slice(0, radiusCustomers.length ? 20 : 6);
+      const nearestCustomer = best?.customer || {};
+      const nearestStop = nearestCustomer.sequence || nearestCustomer.stopOrder || nearestCustomer.routeOrder || nearestCustomer.order || "";
+      const nearestCode = nearestCustomer.id || nearestCustomer.code || nearestCustomer.customerCode || "";
 
       return {
         ...row,
@@ -2945,6 +2948,8 @@
         center: pasteCenterLabel(vehicle, row),
         nearestName: best?.customer?.name || "-",
         nearestAddress: best?.customer?.address || "",
+        nearestCode,
+        nearestStop,
         nearestDistance: distance,
         radiusCount: radiusCustomers.length,
         deliveryPatternText,
@@ -3068,12 +3073,16 @@
         const reasonOutput = newAreaReasonForOutput(row);
         const reasonText = reasonOutput ? `<code>${esc(reasonOutput)}</code>` : "";
         const patternText = row.deliveryPatternText ? `<small>${esc(row.deliveryPatternText)}</small>` : "";
+        const stopText = row.nearestStop ? `${esc(row.nearestStop)}착 · ` : "";
+        const codeText = row.nearestCode ? `${esc(row.nearestCode)} / ` : "";
+        const storeText = `${stopText}${codeText}${esc(row.nearestName || "-")}`;
         return `
           <div class="new-area-result" data-index="${index}">
             <div class="result-line"><strong><span class="${cls}">${esc(row.decision)}</span> · ${vehicleText}${centerText}</strong>${reasonText}</div>
             <small>${esc(row.customer || "-")}</small>
             <small>${esc(row.address)}</small>
-            <small>가까운 배송처: ${esc(row.nearestName)} · 반경 500m ${fmt.format(row.radiusCount || 0)}곳</small>
+            <small>가까운 배송처: ${storeText}</small>
+            <small>${esc(row.nearestAddress || "-")} · 반경 500m ${fmt.format(row.radiusCount || 0)}곳</small>
             ${patternText}
           </div>
         `;
@@ -3944,7 +3953,7 @@
     }
 
     function buildNewAreaResultRows() {
-      const headers = ["주소(X)", "고객정보(Y)", "판단(BV)", "사유(BW)", "적용일자(BX)", "센터/권역(BY)", "추천호차", "가까운 배송처", "거리km"];
+      const headers = ["주소(X)", "고객정보(Y)", "판단(BV)", "사유(BW)", "적용일자(BX)", "센터/권역(BY)", "추천호차", "가까운 착순", "가까운 고객코드", "가까운 배송처", "가까운 주소", "거리km"];
       const date = shortApplyDate(routeDateInput.value);
       const rows = newAreaResults.map(row => [
         row.address || "",
@@ -3954,7 +3963,10 @@
         date,
         row.center || "",
         row.vehicle || "",
+        row.nearestStop || "",
+        row.nearestCode || "",
         row.nearestName || "",
+        row.nearestAddress || "",
         row.nearestDistance != null ? row.nearestDistance.toFixed(2) : ""
       ]);
       return [headers, ...rows];
