@@ -64,6 +64,8 @@ const dailyRouteSyncJobs = new Map();
 
 let vehicleAreaDataPromise = null;
 let customerMasterDataPromise = null;
+let googleDispatchMemoryCache = null;
+let googleDriverMemoryCache = null;
 let deliveryAdminSession = {
   cookie: config.deliveryAdminCookie || "",
   authorization: "",
@@ -173,6 +175,8 @@ function rowsFromSheetValues(values, file, sheetName) {
       row[column] = normalizeCell(rowValues?.[index]);
     });
     if (Object.values(row).some(Boolean)) {
+      row.__rawValues = rowValues.map((value) => normalizeCell(value));
+      row.__headers = headers;
       row._sourceFile = file.originalname;
       row._sourceSheet = sheetName;
       rows.push(row);
@@ -514,7 +518,7 @@ async function parseWorkbookWithPython(file) {
         errors.push(`${command}: ${error.message}`);
       }
     }
-    throw new Error(`Python Excel parse failed. ${errors.join(" / ")}`);
+    return await withFileBuffer(file, parseWorkbookFast);
   } finally {
     await fs.rm(outputPath, { force: true }).catch(() => {});
   }
@@ -614,15 +618,282 @@ async function getGoogleAccessToken() {
   return body.access_token;
 }
 
+const DISPATCH_SHEET_COLUMNS = [
+  "deliveryDate",
+  "vehicle",
+  "sequence",
+  "customerCode",
+  "customerName",
+  "address",
+  "lat",
+  "lng",
+  "amount",
+  "dailyAmount",
+  "monthlyAmount",
+  "deliveryPattern",
+  "sourceFile",
+  "savedOrder",
+  "updatedAt"
+];
+
+function coordinateFromDispatchRow(row, type) {
+  const direct = firstValue(row, type === "lat"
+    ? ["lat", "latitude", "위도", "GPS위도"]
+    : ["lng", "lon", "longitude", "경도", "GPS경도"]);
+  if (direct) return direct;
+  const gps = firstValue(row, ["GPS정보", "GPS", "좌표"]);
+  const values = normalizeCell(gps).match(/-?\d+(?:\.\d+)?/g) || [];
+  return values.length >= 2 ? values[type === "lat" ? 0 : 1] : "";
+}
+
+function dispatchDateFromRow(row) {
+  const value = firstValue(row, [
+    "deliveryDate", "date", "requestDate", "inReqDate", "enteringDate", "outDate",
+    "입고요청일(배송일)", "입고요청일", "배송일", "배송일자", "일자", "출고일", "배차일", "배차일자",
+    "운행일자", "납품일자", "배송결과처리일시", "배송결과처리일", "배송완료일시", "배송완료일", "기준일"
+  ]);
+  return normalizeDateValue(value) || parseDispatchDate(value) || parseDispatchDate(row?._sourceFile || row?.sourceFile || "");
+}
+
+function dispatchVehicleFromRow(row) {
+  return normalizeVehicleValue(firstValue(row, [
+    "vehicle", "vehicleNo", "carSeq", "carNm", "fixedCarSeq",
+    "확정호차", "기준호차", "호차", "차량", "차량번호", "차량호차", "배송호차", "배차호차", "운행호차", "변경호차"
+  ]));
+}
+
+function dispatchSequenceFromRow(row, fallback) {
+  return firstValue(row, ["sequence", "routeOrder", "배송순번", "순번", "순서", "배송순서", "착순"]) || String(fallback);
+}
+
+function normalizeDispatchRowForSheet(row, index, generatedAt) {
+  const vehicle = dispatchVehicleFromRow(row);
+  const sequence = dispatchSequenceFromRow(row, index + 1);
+  const stop = buildStopFromDispatchRow(row, vehicle, sequence);
+  const amount = amountFromDispatchRow(row);
+  return {
+    deliveryDate: dispatchDateFromRow(row),
+    vehicle,
+    sequence,
+    customerCode: stop.customerCode || firstValue(row, ["customerCode", "고객코드", "고객", "고객ERP코드", "ERP코드", "매장코드"]),
+    customerName: stop.customerName || firstValue(row, ["customerName", "고객명", "매장명", "거래처명", "상호"]),
+    address: stop.address || firstValue(row, ["address", "고객주소", "주소", "배송주소"]),
+    lat: coordinateFromDispatchRow(row, "lat"),
+    lng: coordinateFromDispatchRow(row, "lng"),
+    amount,
+    dailyAmount: amount,
+    monthlyAmount: amount,
+    deliveryPattern: firstValue(row, ["deliveryPattern", "배송패턴", "배송요일", "요일", "운행요일"]),
+    sourceFile: row._sourceFile || row.sourceFile || "",
+    savedOrder: row._savedOrder || index + 1,
+    updatedAt: generatedAt
+  };
+}
+
+function dedupeDispatchSheetRows(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    const key = [
+      row.deliveryDate,
+      normalizeVehicleValue(row.vehicle),
+      normalizeCell(row.customerCode) || normalizeSearchValue(row.customerName),
+      normalizeSearchValue(row.address)
+    ].join("|");
+    if (!key.replace(/\|/g, "")) continue;
+    const previous = map.get(key);
+    const rowScore = (Number(row.amount || 0) ? 10 : 0) + (row.lat && row.lng ? 5 : 0);
+    const previousScore = previous
+      ? (Number(previous.amount || 0) ? 10 : 0) + (previous.lat && previous.lng ? 5 : 0)
+      : -1;
+    if (!previous || rowScore >= previousScore) map.set(key, row);
+  }
+  return [...map.values()];
+}
+
+function hasDispatchAmountColumn(row) {
+  return Object.keys(row || {}).some((key) => {
+    const header = normalizeCell(key);
+    if (!/(매출|주문|출고|판매|공급|합계|금액|amount|amt|price)/i.test(header)) return false;
+    return !/(기준|한도|비율|율|수량|중량|착지|건수|전화|연락|코드|호차|톤수)/i.test(header);
+  });
+}
+
+function validateDispatchSheetAmounts(sourceRows, normalizedRows) {
+  const amountColumnRows = sourceRows.filter(hasDispatchAmountColumn).length;
+  const nonZeroAmountRows = normalizedRows.filter((row) => Number(row.amount || 0)).length;
+  if (amountColumnRows >= 20 && nonZeroAmountRows === 0) {
+    throw new Error("엑셀에 매출금액 컬럼이 있지만 금액을 0원으로만 읽었습니다. 1~5월/6월 양식 금액 컬럼 파싱을 확인해야 합니다.");
+  }
+}
+
 function buildSheetValues(payload) {
-  const columns = Array.isArray(payload.columns) && payload.columns.length
-    ? payload.columns.filter((column) => !String(column).startsWith("_"))
-    : Object.keys(payload.rows?.[0] || {}).filter((column) => !String(column).startsWith("_"));
-  const rows = dedupeRowsForSheet(Array.isArray(payload.rows) ? payload.rows : []);
+  const generatedAt = payload.generatedAt || new Date().toISOString();
+  const sourceRows = Array.isArray(payload.rows) ? payload.rows : [];
+  const rows = dedupeDispatchSheetRows(sourceRows
+    .map((row, index) => normalizeDispatchRowForSheet(row, index, generatedAt))
+    .filter((row) => row.deliveryDate && row.vehicle && (row.customerCode || row.customerName || row.address)));
+  validateDispatchSheetAmounts(sourceRows, rows);
+  const columns = DISPATCH_SHEET_COLUMNS;
   return [
     columns,
     ...rows.map((row) => columns.map((column) => normalizeCell(row[column])))
   ];
+}
+
+async function getGoogleSheetNameAndHeaders(headers) {
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}?fields=sheets.properties.title`;
+  const metaResponse = await fetch(metaUrl, { headers });
+  const metaBody = await metaResponse.json().catch(() => ({}));
+  if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
+  const sheetTitles = (metaBody.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
+  const wantedSheetName = config.googleSheetName || "customers";
+  const sheetName = sheetTitles.includes(wantedSheetName) ? wantedSheetName : sheetTitles[0];
+  if (!sheetName) throw new Error("Google spreadsheet has no readable sheet tab.");
+  return { sheetName, wantedSheetName };
+}
+
+async function getGoogleSheetTab(headers, spreadsheetId, wantedName = "", wantedGid = null, fallbackName = "customers") {
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets.properties(title,sheetId)`;
+  const metaResponse = await fetch(metaUrl, { headers });
+  const metaBody = await metaResponse.json().catch(() => ({}));
+  if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
+  const sheets = (metaBody.sheets || []).map((sheet) => sheet.properties || {}).filter((sheet) => sheet.title);
+  const byGid = Number.isFinite(wantedGid) ? sheets.find((sheet) => Number(sheet.sheetId) === Number(wantedGid)) : null;
+  const titles = sheets.map((sheet) => sheet.title);
+  const wantedSheetName = wantedName || fallbackName;
+  const sheetName = byGid?.title || (titles.includes(wantedSheetName) ? wantedSheetName : titles[0]);
+  if (!sheetName) throw new Error("Google spreadsheet has no readable sheet tab.");
+  return { sheetName, wantedSheetName };
+}
+
+async function readRowsFromGoogleSheet({ spreadsheetId, sheetName, sheetGid, fallbackName, force = false, cacheKey = "" }) {
+  if (!spreadsheetId || !config.googleServiceAccountJsonBase64) return null;
+  if (!force && cacheKey === "driver" && googleDriverMemoryCache && Date.now() - googleDriverMemoryCache.readAt < 60 * 1000) return googleDriverMemoryCache.payload;
+  const token = await getGoogleAccessToken();
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const tab = await getGoogleSheetTab(headers, spreadsheetId, sheetName, sheetGid, fallbackName);
+  const range = `${tab.sheetName}!A:ZZ`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
+  const response = await fetch(url, { headers });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
+  const values = Array.isArray(body.values) ? body.values : [];
+  const columns = (values[0] || []).map((value) => normalizeCell(value)).filter(Boolean);
+  const rows = values.slice(1).map((line, index) => {
+    const row = {};
+    columns.forEach((column, columnIndex) => { row[column] = normalizeCell(line[columnIndex]); });
+    row._savedOrder = index + 1;
+    row._sourceSheet = tab.sheetName;
+    return row;
+  }).filter((row) => Object.values(row).some((value) => normalizeCell(value)));
+  const payload = { generatedAt: new Date().toISOString(), sheetName: tab.sheetName, columns, rows, rowCount: rows.length };
+  if (cacheKey === "driver") googleDriverMemoryCache = { readAt: Date.now(), payload };
+  return payload;
+}
+
+async function readDispatchFromGoogleSheet({ force = false } = {}) {
+  if (!config.googleSheetId || !config.googleServiceAccountJsonBase64) return null;
+  if (!force && googleDispatchMemoryCache && Date.now() - googleDispatchMemoryCache.readAt < 60 * 1000) {
+    return googleDispatchMemoryCache.payload;
+  }
+  const token = await getGoogleAccessToken();
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}?fields=sheets.properties.title`;
+  const metaResponse = await fetch(metaUrl, { headers });
+  const metaBody = await metaResponse.json().catch(() => ({}));
+  if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
+  const titles = (metaBody.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
+  const preferred = config.googleSheetName || "customers";
+  const orderedTitles = [...new Set([preferred, ...titles].filter((title) => titles.includes(title)))];
+  for (const sheetName of orderedTitles) {
+    const range = `${sheetName}!A:ZZ`;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
+    const response = await fetch(url, { headers });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
+    const values = Array.isArray(body.values) ? body.values : [];
+    const columns = (values[0] || []).map((value) => normalizeCell(value)).filter(Boolean);
+    const rows = values.slice(1)
+      .map((line, index) => {
+        const row = {};
+        columns.forEach((column, columnIndex) => {
+          row[column] = normalizeCell(line[columnIndex]);
+        });
+        row._savedOrder = index + 1;
+        row._sourceSheet = sheetName;
+        return row;
+      })
+      .filter((row) => Object.values(row).some((value) => normalizeCell(value)));
+    if (!columns.length || !rows.length) continue;
+    if (!isDispatchSheet(columns, rows)) continue;
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      source: "google-sheet",
+      range: inferRange(rows),
+      columns,
+      rows,
+      rowCount: rows.length,
+      sheetName,
+      warning: sheetName === preferred ? null : `Configured sheet "${preferred}" was empty, so "${sheetName}" was used.`
+    };
+    googleDispatchMemoryCache = { readAt: Date.now(), payload };
+    return payload;
+  }
+  return null;
+}
+
+async function readDispatchSource(preferGoogle = true) {
+  if (preferGoogle && config.googleSheetId && config.googleServiceAccountJsonBase64) {
+    const sheetCache = await readDispatchFromGoogleSheet();
+    if (sheetCache?.rows?.length) return sheetCache;
+    throw new Error("Google sheet dispatch data is empty. Upload monthly dispatch Excel once to rebuild the sheet cache.");
+  }
+  return readDispatchCacheLocalFirst();
+}
+
+function isDispatchSheet(columns, rows = []) {
+  const normalizedColumns = columns.map((column) => normalizeColumnName(column)).join("|");
+  const hasVehicle = /(확정호차|기준호차|호차|배차호차|배송호차|vehicle)/i.test(normalizedColumns);
+  const hasDate = /(입고요청일|배송일|배송결과처리일시|배차일|운행일자|기준일|date)/i.test(normalizedColumns);
+  const hasAmount = /(매출|주문금액|출고금액|판매금액|금액|amount|amt|price)/i.test(normalizedColumns);
+  const hasCustomer = /(고객|매장|거래처|customer|store|est)/i.test(normalizedColumns);
+  const sampleHasDate = rows.slice(0, 30).some((row) => normalizeDateValue(firstValue(row, [
+    "입고요청일(배송일)", "입고요청일", "배송일", "배송일자", "배송결과처리일시", "배송완료일시", "배차일", "운행일자", "기준일", "date", "deliveryDate", "updatedAt"
+  ])));
+  return hasCustomer && hasVehicle && (hasDate || sampleHasDate || hasAmount);
+}
+
+function effectiveDateFromDriverRow(row) {
+  return parseDispatchDate(firstValue(row, ["적용일", "적용일자", "변경일", "변경일자", "시작일", "시작일자", "기준일"])) || "0000-00-00";
+}
+
+async function readDriverMasterFromGoogleSheet({ date = "" } = {}) {
+  const sheet = await readRowsFromGoogleSheet({
+    spreadsheetId: config.googleDriverSheetId,
+    sheetName: config.googleDriverSheetName,
+    sheetGid: config.googleDriverSheetGid,
+    fallbackName: "기사연락처와 차량톤수",
+    cacheKey: "driver"
+  });
+  const targetDate = parseDispatchDate(date) || "9999-12-31";
+  const byVehicle = new Map();
+  for (const row of sheet?.rows || []) {
+    const vehicle = normalizeVehicleValue(firstValue(row, ["호차", "차량", "차량번호", "운행호차", "기준호차"]));
+    if (!vehicle) continue;
+    const effectiveDate = effectiveDateFromDriverRow(row);
+    if (effectiveDate > targetDate) continue;
+    const item = {
+      vehicle,
+      driverName: firstValue(row, ["기사명", "기사 이름", "배송기사명", "담당기사", "성명", "배송기사명", "기사"]),
+      phone: firstValue(row, ["전화번호", "연락처", "기사연락처", "기사 연락처", "배송기사휴대전화번호", "배송기사 휴대전화번호", "휴대폰", "핸드폰"]),
+      carrier: firstValue(row, ["운수사", "운수사명", "운수회사", "업체", "운송사", "소속", "협력사"]),
+      ton: firstValue(row, ["톤수", "차량톤수", "차량 톤수", "차량톤수", "톤"]),
+      effectiveDate
+    };
+    const prev = byVehicle.get(vehicle);
+    if (!prev || item.effectiveDate >= prev.effectiveDate) byVehicle.set(vehicle, item);
+  }
+  return { generatedAt: sheet?.generatedAt || null, sheetName: sheet?.sheetName || null, rowCount: sheet?.rowCount || 0, vehicles: [...byVehicle.values()] };
 }
 
 function sheetRowIdentity(row) {
@@ -651,31 +922,58 @@ async function syncDispatchToGoogleSheet(payload) {
   if (!config.googleSheetId || !config.googleServiceAccountJsonBase64) return { skipped: true, reason: "Google Sheets env not configured." };
   const token = await getGoogleAccessToken();
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}?fields=sheets.properties.title`;
-  const metaResponse = await fetch(metaUrl, { headers });
-  const metaBody = await metaResponse.json().catch(() => ({}));
-  if (!metaResponse.ok) {
-    throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
-  }
-  const sheetTitles = (metaBody.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
-  const wantedSheetName = config.googleSheetName || "customers";
-  const sheetName = sheetTitles.includes(wantedSheetName) ? wantedSheetName : sheetTitles[0];
-  if (!sheetName) throw new Error("Google spreadsheet has no writable sheet tab.");
-  const range = `${sheetName}!A1`;
+  const { sheetName, wantedSheetName } = await getGoogleSheetNameAndHeaders(headers);
   const values = buildSheetValues(payload);
   const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(sheetName)}:clear`;
-  const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
   const clearResponse = await fetch(clearUrl, { method: "POST", headers, body: "{}" });
   if (!clearResponse.ok && clearResponse.status !== 400) {
     const text = await clearResponse.text();
     throw new Error(`Google sheet clear failed: HTTP ${clearResponse.status} ${text.slice(0, 200)}`);
   }
-  const updateResponse = await fetch(updateUrl, { method: "PUT", headers, body: JSON.stringify({ values }) });
-  const updateBody = await updateResponse.json().catch(() => ({}));
-  if (!updateResponse.ok) {
-    throw new Error(`Google sheet update failed: ${updateBody.error?.message || updateResponse.status}`);
+  const columns = values[0] || [];
+  const dataRows = values.slice(1);
+  const chunkSize = 5000;
+  let updatedRows = 0;
+  let updatedRange = "";
+  for (let offset = 0; offset < dataRows.length || offset === 0; offset += chunkSize) {
+    const batch = offset === 0
+      ? [columns, ...dataRows.slice(0, chunkSize)]
+      : dataRows.slice(offset, offset + chunkSize);
+    if (!batch.length || (batch.length === 1 && !batch[0].length)) break;
+    const startRow = offset === 0 ? 1 : offset + 2;
+    const range = `${sheetName}!A${startRow}`;
+    const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
+    const updateResponse = await fetch(updateUrl, { method: "PUT", headers, body: JSON.stringify({ values: batch }) });
+    const updateBody = await updateResponse.json().catch(() => ({}));
+    if (!updateResponse.ok) {
+      throw new Error(`Google sheet update failed at row ${startRow}: ${updateBody.error?.message || updateResponse.status}`);
+    }
+    updatedRows += offset === 0 ? Math.max(0, batch.length - 1) : batch.length;
+    updatedRange = updateBody.updatedRange || updatedRange;
   }
-  return { skipped: false, sheetName, requestedSheetName: wantedSheetName, rows: values.length - 1, columns: values[0]?.length || 0, updatedRange: updateBody.updatedRange };
+  googleDispatchMemoryCache = {
+    readAt: Date.now(),
+    payload: { ...payload, source: "google-sheet", sheetName, rowCount: values.length - 1 }
+  };
+  let verified = null;
+  let verifyError = null;
+  try {
+    verified = await readDispatchFromGoogleSheet({ force: true });
+  } catch (error) {
+    verifyError = error.message;
+  }
+  return {
+    skipped: false,
+    sheetName,
+    requestedSheetName: wantedSheetName,
+    rows: updatedRows,
+    columns: values[0]?.length || 0,
+    updatedRange,
+    verifiedRows: verified?.rowCount || 0,
+    verifiedRange: verified?.range || null,
+    verifiedAt: verified?.generatedAt || null,
+    verifyError
+  };
 }
 
 async function readVehicleAreaData() {
@@ -756,7 +1054,7 @@ async function buildCustomerSearchItems(query) {
       }, query, normalizedQuery);
     }
   }
-  const cache = await readDispatchCache().catch(() => ({ rows: [] }));
+  const cache = await readDispatchSource(true).catch(() => ({ rows: [] }));
   for (const row of cache.rows || []) {
     const item = fixedDispatchSearchRow(row);
     pushCustomerSearchItem(results, seen, {
@@ -848,6 +1146,18 @@ function numberFromMoney(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function plausibleAmountFromCell(value, header = "") {
+  const text = normalizeCell(value);
+  if (!text) return 0;
+  const title = normalizeCell(header);
+  if (!/(매출|주문|출고|판매|공급|합계|금액|amount|amt|price)/i.test(title)) return 0;
+  if (/(일자|날짜|전화|연락|휴대|주소|코드|호차|톤수|착지|순번|순서|중량|수량|건수)/i.test(title)) return 0;
+  if (/20\d{2}[-./년\s]\d{1,2}|010[-\d\s]{7,}/.test(text)) return 0;
+  const amount = numberFromMoney(text);
+  if (!Number.isFinite(amount) || Math.abs(amount) < 1000 || Math.abs(amount) > 50000000) return 0;
+  return amount;
+}
+
 function amountFromDispatchRow(row) {
   const direct = numberFromMoney(firstValue(row, [
     "amount",
@@ -886,7 +1196,24 @@ function amountFromDispatchRow(row) {
     const amount = numberFromMoney(value);
     if (Math.abs(amount) > Math.abs(fallback)) fallback = amount;
   }
+  if (fallback) return fallback;
+  const rawValues = Array.isArray(row?.__rawValues) ? row.__rawValues : [];
+  const rawHeaders = Array.isArray(row?.__headers) ? row.__headers : [];
+  for (let index = 0; index < rawValues.length; index += 1) {
+    const amount = plausibleAmountFromCell(rawValues[index], rawHeaders[index]);
+    if (Math.abs(amount) > Math.abs(fallback)) fallback = amount;
+  }
   return fallback;
+}
+
+function parseDispatchDate(value) {
+  const text = normalizeCell(value);
+  if (!text) return "";
+  const iso = text.match(/(20\d{2})[-./년\s]*(\d{1,2})[-./월\s]*(\d{1,2})/);
+  if (iso) return `${iso[1]}-${String(iso[2]).padStart(2, "0")}-${String(iso[3]).padStart(2, "0")}`;
+  const short = text.match(/(\d{1,2})[-./월\s]+(\d{1,2})/);
+  if (short) return `2026-${String(short[1]).padStart(2, "0")}-${String(short[2]).padStart(2, "0")}`;
+  return "";
 }
 
 function normalizeVehicleValue(value) {
@@ -922,8 +1249,30 @@ function rowMatchesDailyRoute(row, date, vehicle) {
     "\uBC30\uCC28\uC77C\uC790",
     "\uC6B4\uD589\uC77C\uC790",
     "\uB0A9\uD488\uC77C\uC790",
-    "\uB4F1\uB85D\uC77C"
+    "\uB4F1\uB85D\uC77C",
+    "\uBC30\uC1A1\uACB0\uACFC\uCC98\uB9AC\uC77C\uC2DC",
+    "\uBC30\uC1A1\uACB0\uACFC\uCC98\uB9AC\uC77C",
+    "\uBC30\uC1A1\uC644\uB8CC\uC77C\uC2DC",
+    "\uBC30\uC1A1\uC644\uB8CC\uC77C",
+    "\uBC30\uC1A1\uC694\uCCAD\uC77C",
+    "\uAE30\uC900\uC77C",
+    "deliveryDate",
+    "date",
+    "requestDate",
+    "inReqDate",
+    "enteringDate",
+    "outDate",
+    "updatedAt"
+  ])) || parseDispatchDate(firstValue(row, [
+    "deliveryDate",
+    "date",
+    "\uBC30\uC1A1\uC77C",
+    "\uBC30\uCC28\uC77C",
+    "\uC77C\uC790",
+    "_sourceFile",
+    "sourceFile"
   ]));
+  if (!rowDate) return false;
   if (rowDate !== date) return false;
   const selected = vehicleTokens(vehicle);
   if (!selected.size) return false;
@@ -938,7 +1287,12 @@ function rowMatchesDailyRoute(row, date, vehicle) {
     "\uBC30\uCC28 \uD638\uCC28",
     "\uBC30\uC1A1\uD638\uCC28",
     "\uC6B4\uD589\uD638\uCC28",
-    "\uD638\uCC28\uBA85"
+    "\uD638\uCC28\uBA85",
+    "vehicle",
+    "vehicleNo",
+    "carSeq",
+    "carNm",
+    "fixedCarSeq"
   ];
   for (const column of vehicleColumns) {
     for (const token of vehicleTokens(row[column])) rowTokens.add(token);
@@ -1064,7 +1418,7 @@ function routeSortValue(row, fallbackIndex) {
 }
 
 async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" }) {
-  const cache = await readDispatchCache();
+  const cache = await readDispatchSource(true);
   const matchedItems = (cache.rows || [])
     .map((row, index) => ({ row, index }))
     .filter((item) => rowMatchesDailyRoute(item.row, date, vehicle));
@@ -1090,10 +1444,12 @@ async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" 
       ? "uploaded-delivery-history"
       : "uploaded-fixed-dispatch";
   const monthKey = monthKeyFromDate(date);
+  const payloadSource = cache.source === "google-sheet" ? "google-sheet" : "monthly-dispatch-cache";
   return {
     generatedAt: new Date().toISOString(),
-    source: "monthly-dispatch-cache",
+    source: payloadSource,
     originalSource: source,
+    cacheGeneratedFrom: cache.generatedAt || null,
     cacheHit: true,
     cacheType: "monthly-dispatch",
     monthKey,
@@ -1102,7 +1458,7 @@ async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" 
       ? "Uploaded fixed-dispatch rows were used as the route base, and delivery-history rows were merged only for app completion records."
       : deliveryItems.length
         ? "Uploaded delivery-history Excel data was used because no fixed-dispatch route base rows matched this date and vehicle."
-        : "Uploaded fixed-dispatch Excel monthly data was used for this daily route.",
+        : payloadSource === "google-sheet" ? "Google Sheets monthly data was used for this daily route." : "Uploaded fixed-dispatch Excel monthly data was used for this daily route.",
     date,
     vehicle,
     center,
@@ -1899,41 +2255,8 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
 
 async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = "" }) {
   const uploaded = await buildDailyRouteFromUploadedDispatch({ date, vehicle, center });
-  if (uploaded && uploaded.rowCount > 2) return uploaded;
-
-  const data = await readVehicleAreaData();
-  const vehicleData = (data.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
-  const customers = (vehicleData?.customers || []).filter((customer) => Number.isFinite(customer.lat) && Number.isFinite(customer.lng));
-  if (!customers.length) return null;
-
-  return {
-    generatedAt: new Date().toISOString(),
-    source: "vehicle-area-fallback",
-    warning: uploaded
-      ? `Uploaded route rows looked incomplete (${uploaded.rowCount} rows), so vehicle area data was shown instead.`
-      : reason ? `No uploaded route rows for this date; used vehicle area data instead. ${reason}` : "No uploaded route rows for this date; used vehicle area data instead.",
-    date,
-    vehicle,
-    center,
-    rowCount: customers.length,
-    stops: customers.map((customer, index) => ({
-      sequence: index + 1,
-      raw: customer,
-      code: customer.id || "",
-      name: customer.name || "",
-      address: customer.address || "",
-      vehicle: `${vehicle}\uD638`,
-      customerCode: customer.id || "",
-      customerName: customer.name || "",
-      amount: customer.avg_order_amount || "",
-      dailyAmount: customer.avg_order_amount || "",
-      monthlyAmount: customer.avg_order_amount || "",
-      orderCount: customer.delivery_pattern || "",
-      deliveryPattern: customer.delivery_pattern || "",
-      lat: customer.lat,
-      lng: customer.lng
-    }))
-  };
+  if (uploaded && uploaded.rowCount > 0) return uploaded;
+  return null;
 }
 
 app.get("/api/health", (_req, res) => {
@@ -1961,19 +2284,27 @@ app.get("/api/status", requireView, async (_req, res) => {
 });
 
 app.get("/api/fixed-dispatch", requireView, async (req, res) => {
-  const cache = await readDispatchCacheLocalFirst();
-  const rows = Array.isArray(cache.rows) ? cache.rows : [];
-  const requestedLimit = Number(req.query.limit ?? 500);
-  const limit = Number.isFinite(requestedLimit)
-    ? Math.max(0, Math.min(Math.floor(requestedLimit), 5000))
-    : 500;
-  res.json({
-    ...cache,
-    rows: limit ? rows.slice(0, limit) : rows,
-    rowCount: cache.rowCount || rows.length,
-    totalRows: rows.length,
-    previewLimit: limit
-  });
+  try {
+    const cache = await readDispatchSource(req.query.source !== "local");
+    const rows = Array.isArray(cache.rows) ? cache.rows : [];
+    const requestedLimit = Number(req.query.limit ?? 500);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(0, Math.min(Math.floor(requestedLimit), 5000))
+      : 500;
+    res.json({
+      ...cache,
+      rows: limit ? rows.slice(0, limit) : rows,
+      rowCount: cache.rowCount || rows.length,
+      totalRows: rows.length,
+      previewLimit: limit
+    });
+  } catch (error) {
+    console.error("Fixed dispatch read failed:", error);
+    res.status(500).json({
+      error: "Fixed dispatch read failed.",
+      message: error.message
+    });
+  }
 });
 
 app.post("/api/fixed-dispatch/sync-google-sheet", requireAdmin, async (_req, res) => {
@@ -2060,26 +2391,30 @@ function buildMonthlyDispatchSummary(cache) {
     storeCount: stores.size,
     vehicles: vehicleRows,
     stores: storeRows,
-    source: "monthly-dispatch-cache"
+    source: cache.source === "google-sheet" ? "google-sheet" : "monthly-dispatch-cache"
   };
 }
 
 app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
-  const meta = await readDispatchMeta();
+  const cache = await readDispatchSource(true);
+  const meta = cache.source === "google-sheet" ? { generatedAt: cache.generatedAt } : await readDispatchMeta();
   const cached = await readMonthlyDispatchSummaryLocalFirst();
-  if (cached && cached.cacheGeneratedFrom && meta?.generatedAt && cached.cacheGeneratedFrom === meta.generatedAt) {
+  if (cache.source !== "google-sheet" && cached && cached.cacheGeneratedFrom && meta?.generatedAt && cached.cacheGeneratedFrom === meta.generatedAt) {
     return res.json({ ...cached, source: cached.source || "monthly-dispatch-summary-cache" });
   }
-  const cache = await readDispatchCacheLocalFirst();
-  const summary = { ...buildMonthlyDispatchSummary(cache), cacheGeneratedFrom: cache.generatedAt || null };
+  const summary = { ...buildMonthlyDispatchSummary(cache), cacheGeneratedFrom: cache.generatedAt || null, source: cache.source === "google-sheet" ? "google-sheet" : "monthly-dispatch-cache" };
   await writeMonthlyDispatchSummary(summary).catch(() => null);
   res.json(summary);
+});
+
+app.get("/api/vehicle-driver-master", requireView, async (req, res) => {
+  res.json(await readDriverMasterFromGoogleSheet({ date: String(req.query.date || "") }));
 });
 
 app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => {
   const q = normalizeCell(req.query.q);
   if (!q) return res.json({ query: q, results: [] });
-  const cache = await readDispatchCacheLocalFirst();
+  const cache = await readDispatchSource(true);
   res.json({
     query: q,
     generatedAt: cache.generatedAt || null,
@@ -2214,12 +2549,19 @@ app.get("/api/daily-route", requireView, async (req, res) => {
   if (!date || !vehicle) {
     return res.status(400).json({ error: "date and vehicle are required." });
   }
+  if (!preferFreshon && !preferDeliveryAdmin) {
+    const monthlyRoute = await buildFallbackDailyRoute({ date, vehicle, center });
+    if (monthlyRoute) {
+      await writeDailyRoute(monthlyRoute).catch(() => {});
+      return res.json(monthlyRoute);
+    }
+  }
   const cached = await readDailyRoute(date, vehicle);
   if (cached && !forceRefresh) {
-    const dispatchCache = await readDispatchCache();
+    const dispatchCache = await readDispatchSource(true).catch(() => readDispatchCache());
     const cachedAt = cached.generatedAt ? Date.parse(cached.generatedAt) : 0;
     const dispatchAt = dispatchCache.generatedAt ? Date.parse(dispatchCache.generatedAt) : 0;
-    if (cached.source !== "uploaded-delivery-history" && (!dispatchAt || cachedAt >= dispatchAt)) {
+    if (cached.source !== "vehicle-area-fallback" && cached.source !== "uploaded-delivery-history" && (!dispatchAt || cachedAt >= dispatchAt)) {
       return res.json(cached);
     }
   }
@@ -2274,7 +2616,7 @@ app.get("/api/daily-route", requireView, async (req, res) => {
     await writeDailyRoute(fallback);
     return res.json(fallback);
   }
-  const dispatchCache = await readDispatchCache();
+  const dispatchCache = await readDispatchSource(true);
   return res.status(404).json({
     error: "No cached daily route.",
     date,
@@ -2492,7 +2834,7 @@ app.post("/api/upload-fixed-dispatch-chunk", requireAdmin, upload.single("chunk"
   }
 });
 
-app.post("/api/upload-fixed-dispatch", requireAdmin, upload.array("files", 12), async (req, res) => {
+app.post("/api/upload-fixed-dispatch", requireAdmin, upload.array("files", 40), async (req, res) => {
   if (refreshState.running) {
     return res.status(409).json({ error: "Upload already running.", refresh: refreshState });
   }
