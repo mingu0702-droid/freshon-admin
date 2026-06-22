@@ -5,68 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Freshon 운영데이터</title>
   <style>
-    :root { --bg:#eef3f8; --panel:#fff; --line:#d7e0ec; --ink:#0f172a; --muted:#64748b; --blue:#2563eb; --soft:#eff6ff; --shadow:0 10px 24px rgba(15,23,42,.08); }
-    * { box-sizing:border-box; }
-    body { margin:0; font-family:Arial,"Malgun Gothic",sans-serif; color:var(--ink); background:var(--bg); }
-    button,input,select { font:inherit; }
-    button { cursor:pointer; }
-    .top { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; padding:16px 20px; background:#fbfdff; border-bottom:1px solid var(--line); }
-    h1 { margin:0; font-size:24px; }
-    .caption { margin:5px 0 0; color:var(--muted); font-size:13px; }
-    .nav { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
-    .nav a { border:1px solid #b9c8dc; border-radius:7px; background:#fff; color:#172033; padding:8px 12px; font-size:13px; font-weight:900; text-decoration:none; }
-    .nav .active { background:var(--blue); border-color:var(--blue); color:#fff; }
-    .toolbar { display:grid; grid-template-columns:150px 150px minmax(220px,1fr) 160px auto; gap:9px; padding:12px 20px; background:#fff; border-bottom:1px solid var(--line); }
-    label { display:block; margin:0 0 5px; font-size:12px; font-weight:900; color:#334155; }
-    input,select { width:100%; border:1px solid var(--line); border-radius:7px; padding:10px 11px; background:#fff; }
-    .btn { align-self:end; border:1px solid var(--blue); border-radius:7px; background:var(--blue); color:#fff; padding:10px 14px; font-weight:900; white-space:nowrap; }
-    .source { padding:10px 20px; border-bottom:1px solid var(--line); background:#fff; color:#475569; font-size:13px; }
-    .source b { color:#1d4ed8; }
-    .tabs { display:flex; gap:7px; padding:12px 20px; border-bottom:1px solid var(--line); overflow:auto; }
-    .tab { border:1px solid #cbd5e1; border-radius:999px; background:#fff; padding:8px 13px; font-size:13px; font-weight:900; }
-    .tab.active { border-color:var(--blue); background:var(--soft); color:#1d4ed8; }
-    main { display:grid; gap:14px; padding:16px 20px; }
-    .kpis { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; }
-    .card,.panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
-    .card { padding:14px; min-height:96px; }
-    .card span { color:var(--muted); font-size:12px; }
-    .card b { display:block; margin-top:7px; font-size:23px; }
-    .card small { display:block; margin-top:5px; color:var(--muted); font-size:12px; }
-    .grid { display:grid; grid-template-columns:1.15fr .85fr; gap:14px; align-items:start; }
-    .panel-head { display:flex; justify-content:space-between; gap:10px; padding:14px; border-bottom:1px solid var(--line); background:#fbfdff; }
-    .panel-head h2 { margin:0; font-size:16px; }
-    .panel-head small { display:block; margin-top:4px; color:var(--muted); }
-    .chip { display:inline-flex; align-items:center; height:24px; border-radius:999px; padding:0 9px; background:#dcfce7; color:#047857; font-size:12px; font-weight:900; }
-    .list { display:grid; gap:8px; padding:12px; max-height:520px; overflow:auto; }
-    .row { border:1px solid var(--line); border-radius:8px; background:#fff; padding:11px; cursor:pointer; }
-    .row.active { border-color:var(--blue); background:#f8fbff; }
-    .row strong { display:block; font-size:14px; margin-bottom:5px; }
-    .row small { display:block; color:var(--muted); line-height:1.45; }
-    .detail { padding:14px; display:grid; gap:12px; }
-    .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
-    .metric { border:1px solid var(--line); border-radius:8px; padding:11px; }
-    .metric span { color:var(--muted); font-size:12px; }
-    .metric b { display:block; margin-top:6px; font-size:22px; }
-    table { width:100%; border-collapse:collapse; font-size:13px; }
-    th,td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
-    th { background:#f8fafc; color:#334155; font-weight:900; }
-    .table-scroll { max-height:520px; overflow:auto; }
-    @media (max-width:1100px) { .top,.toolbar,.grid { grid-template-columns:1fr; } .kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    :root{--bg:#eef3f8;--panel:#fff;--line:#d7e0ec;--ink:#0f172a;--muted:#64748b;--blue:#2563eb;--soft:#eff6ff;--shadow:0 10px 24px rgba(15,23,42,.08)}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Malgun Gothic",sans-serif;color:var(--ink);background:var(--bg)}button,input,select{font:inherit}button{cursor:pointer}
+    .top{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:16px 20px;background:#fbfdff;border-bottom:1px solid var(--line)}h1{margin:0;font-size:24px}.caption{margin:5px 0 0;color:var(--muted);font-size:13px}
+    .nav{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.nav a{border:1px solid #b9c8dc;border-radius:7px;background:#fff;color:#172033;padding:8px 12px;font-size:13px;font-weight:900;text-decoration:none}.nav .active{background:var(--blue);border-color:var(--blue);color:#fff}
+    .toolbar{display:grid;grid-template-columns:150px 150px minmax(220px,1fr) 160px auto;gap:9px;padding:12px 20px;background:#fff;border-bottom:1px solid var(--line)}label{display:block;margin:0 0 5px;font-size:12px;font-weight:900;color:#334155}input,select{width:100%;border:1px solid var(--line);border-radius:7px;padding:10px 11px;background:#fff}.btn{align-self:end;border:1px solid var(--blue);border-radius:7px;background:var(--blue);color:#fff;padding:10px 14px;font-weight:900;white-space:nowrap}
+    .source{padding:10px 20px;border-bottom:1px solid var(--line);background:#fff;color:#475569;font-size:13px}.source b{color:#1d4ed8}.tabs{display:flex;gap:7px;padding:12px 20px;border-bottom:1px solid var(--line);overflow:auto}.tab{border:1px solid #cbd5e1;border-radius:999px;background:#fff;padding:8px 13px;font-size:13px;font-weight:900}.tab.active{border-color:var(--blue);background:var(--soft);color:#1d4ed8}
+    main{display:grid;gap:14px;padding:16px 20px}.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}.card{padding:14px;min-height:96px}.card span{color:var(--muted);font-size:12px}.card b{display:block;margin-top:7px;font-size:23px}.card small{display:block;margin-top:5px;color:var(--muted);font-size:12px}
+    .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;align-items:start}.panel-head{display:flex;justify-content:space-between;gap:10px;padding:14px;border-bottom:1px solid var(--line);background:#fbfdff}.panel-head h2{margin:0;font-size:16px}.panel-head small{display:block;margin-top:4px;color:var(--muted)}.chip{display:inline-flex;align-items:center;height:24px;border-radius:999px;padding:0 9px;background:#dcfce7;color:#047857;font-size:12px;font-weight:900}
+    .list{display:grid;gap:8px;padding:12px;max-height:520px;overflow:auto}.row{border:1px solid var(--line);border-radius:8px;background:#fff;padding:11px;cursor:pointer}.row.active{border-color:var(--blue);background:#f8fbff}.row strong{display:block;font-size:14px;margin-bottom:5px}.row small{display:block;color:var(--muted);line-height:1.45}.detail{padding:14px;display:grid;gap:12px}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.metric{border:1px solid var(--line);border-radius:8px;padding:11px}.metric span{color:var(--muted);font-size:12px}.metric b{display:block;margin-top:6px;font-size:22px}
+    table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}th{background:#f8fafc;color:#334155;font-weight:900}.table-scroll{max-height:520px;overflow:auto}
+    @media (max-width:1100px){.top,.toolbar,.grid{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
   </style>
 </head>
 <body>
-  <header class="top">
-    <div>
-      <h1>운영데이터</h1>
-      <p class="caption">관리자 월 캐시와 운영지도 기준 데이터를 합산해서 봅니다.</p>
-    </div>
-    <nav class="nav">
-      <a href="/daily-routes.html">일일동선</a>
-      <a href="/daily-routes.html?tab=wms">WMS</a>
-      <a class="active" href="/operations-data.html">운영데이터</a>
-      <a href="/admin.html">관리자</a>
-    </nav>
-  </header>
+  <header class="top"><div><h1>운영데이터</h1><p class="caption">구글시트 월 배차 데이터를 기준으로 매출, 착지수, 매장, 좌표를 확인합니다.</p></div><nav class="nav"><a href="/daily-routes.html">일일동선</a><a href="/daily-routes.html?tab=wms">WMS</a><a class="active" href="/operations-data.html">운영데이터</a><a href="/admin.html">관리자</a></nav></header>
   <section class="toolbar">
     <div><label for="monthSelect">분석 월</label><select id="monthSelect"><option value="">전체 캐시</option></select></div>
     <div><label for="centerSelect">센터</label><select id="centerSelect"><option value="all">전체</option><option value="osan">오산센터</option><option value="yeongnam">영남권</option><option value="honam">호남권</option></select></div>
@@ -75,168 +28,33 @@
     <button id="refreshButton" class="btn" type="button">데이터 갱신</button>
   </section>
   <div class="source" id="sourceLine">데이터 출처 확인 중...</div>
-  <section class="tabs" id="tabs">
-    <button class="tab active" data-tab="vehicles">호차 분석</button>
-    <button class="tab" data-tab="stores">매장 분석</button>
-    <button class="tab" data-tab="coords">좌표 관리</button>
-    <button class="tab" data-tab="adjust">조정 후보</button>
-  </section>
+  <section class="tabs" id="tabs"><button class="tab active" data-tab="vehicles">호차 분석</button><button class="tab" data-tab="stores">매장 분석</button><button class="tab" data-tab="coords">좌표 관리</button><button class="tab" data-tab="adjust">조정 후보</button></section>
   <main>
     <section class="kpis" id="kpis"></section>
-    <section class="grid">
-      <div class="panel">
-        <div class="panel-head"><div><h2 id="listTitle">호차별 월 데이터</h2><small id="listCaption">매출, 착지수, 착지당 금액 기준입니다.</small></div><span class="chip" id="listChip">호차 분석</span></div>
-        <div class="list" id="list"></div>
-      </div>
-      <div class="panel">
-        <div class="panel-head"><div><h2 id="detailTitle">상세</h2><small id="detailCaption">항목을 선택해주세요.</small></div><span class="chip" id="detailChip">대기</span></div>
-        <div class="detail" id="detail"></div>
-      </div>
-    </section>
-    <section class="panel">
-      <div class="panel-head"><div><h2>원본 미리보기</h2><small>월 캐시에서 최근 순서대로 일부만 표시합니다.</small></div></div>
-      <div class="table-scroll"><table><thead id="rawHead"></thead><tbody id="rawBody"></tbody></table></div>
-    </section>
+    <section class="grid"><div class="panel"><div class="panel-head"><div><h2 id="listTitle">호차별 월 데이터</h2><small id="listCaption">매출, 착지수, 착지당 금액 기준입니다.</small></div><span class="chip" id="listChip">호차 분석</span></div><div class="list" id="list"></div></div><div class="panel"><div class="panel-head"><div><h2 id="detailTitle">상세</h2><small id="detailCaption">항목을 선택해주세요.</small></div><span class="chip" id="detailChip">대기</span></div><div class="detail" id="detail"></div></div></section>
+    <section class="panel"><div class="panel-head"><div><h2>원본 미리보기</h2><small>월 캐시에서 최근 순서대로 일부만 표시합니다.</small></div></div><div class="table-scroll"><table><thead id="rawHead"></thead><tbody id="rawBody"></tbody></table></div></section>
   </main>
   <script src="/vehicle-data.js"></script>
   <script>
-    const fmt = new Intl.NumberFormat("ko-KR");
-    const money = value => `${fmt.format(Math.round(Number(value || 0)))}원`;
-    const state = { tab:"vehicles", summary:null, selected:null };
-    const vehicleData = window.VEHICLE_AREA_DATA || { vehicles:[] };
-
-    function vehicleMeta(vehicle) {
-      return vehicleData.vehicles.find(v => String(v.vehicle) === String(vehicle)) || {};
-    }
-
-    async function loadSummary() {
-      const res = await fetch("/api/monthly-dispatch-summary", { cache:"no-store" });
-      if (!res.ok) throw new Error(`월 데이터 조회 실패 ${res.status}`);
-      state.summary = await res.json();
-      state.selected = null;
-      render();
-    }
-
-    function filteredVehicles() {
-      const q = searchInput.value.trim().toLowerCase();
-      const center = centerSelect.value;
-      let rows = Array.isArray(state.summary?.vehicles) ? [...state.summary.vehicles] : [];
-      rows = rows.map(row => ({ ...row, meta: vehicleMeta(row.vehicle) }));
-      if (center !== "all") rows = rows.filter(row => row.meta.group === center);
-      if (q) rows = rows.filter(row => `${row.vehicle} ${row.meta.area_label || ""}`.toLowerCase().includes(q));
-      rows.sort((a,b) => sortSelect.value === "stops" ? (b.stops||0)-(a.stops||0) : sortSelect.value === "vehicle" ? Number(a.vehicle)-Number(b.vehicle) : (b.amount||0)-(a.amount||0));
-      return rows;
-    }
-
-    function filteredStores() {
-      const q = searchInput.value.trim().toLowerCase();
-      let rows = Array.isArray(state.summary?.stores) ? [...state.summary.stores] : [];
-      if (q) rows = rows.filter(row => `${row.code} ${row.name} ${row.address} ${row.vehicle}`.toLowerCase().includes(q));
-      rows.sort((a,b) => (b.amount||0)-(a.amount||0));
-      return rows;
-    }
-
-    function coordRows() {
-      const rows = [];
-      for (const vehicle of vehicleData.vehicles || []) {
-        for (const customer of vehicle.customers || []) {
-          if (!Number.isFinite(Number(customer.lat)) || !Number.isFinite(Number(customer.lng))) rows.push({ vehicle:vehicle.vehicle, ...customer });
-        }
-      }
-      return rows;
-    }
-
-    function renderKpis() {
-      const s = state.summary || {};
-      const vehicleCount = Number(s.vehicleCount || 0);
-      const totalStops = Number(s.rowCount || 0);
-      const totalAmount = Number(s.totalAmount || 0);
-      const avgStops = vehicleCount ? totalStops / vehicleCount : 0;
-      const avgAmount = vehicleCount ? totalAmount / vehicleCount : 0;
-      const perStop = totalStops ? totalAmount / totalStops : 0;
-      const missingCoords = coordRows().length;
-      kpis.innerHTML = [
-        ["월 평균 착지수", `${fmt.format(Math.round(avgStops))}건`, `총 ${fmt.format(totalStops)}건`],
-        ["월 평균 매출", money(avgAmount), `총 ${money(totalAmount)}`],
-        ["착지당 금액", money(perStop), "매출/착지 기준"],
-        ["운행 호차", `${fmt.format(vehicleCount)}대`, "월 캐시 기준"],
-        ["좌표 보정 필요", `${fmt.format(missingCoords)}곳`, "운영지도 기준"],
-        ["매장 수", `${fmt.format(s.storeCount || 0)}곳`, "중복 코드 합산"]
-      ].map(([a,b,c]) => `<div class="card"><span>${a}</span><b>${b}</b><small>${c}</small></div>`).join("");
-    }
-
-    function renderList() {
-      let rows = state.tab === "stores" ? filteredStores() : state.tab === "coords" ? coordRows() : filteredVehicles();
-      listTitle.textContent = state.tab === "stores" ? "매장별 월 매출" : state.tab === "coords" ? "좌표 보정 필요" : state.tab === "adjust" ? "조정 후보" : "호차별 월 데이터";
-      listChip.textContent = `${fmt.format(rows.length)}건`;
-      if (state.tab === "adjust") rows = filteredVehicles().filter(row => Number(row.amount || 0) > 6100000 || Number(row.stops || 0) > 35);
-      list.innerHTML = rows.slice(0, 300).map((row, index) => {
-        const key = state.tab === "stores" ? row.code : `${row.vehicle}-${index}`;
-        const title = state.tab === "stores" ? `${row.code || "-"} / ${row.name || "-"}` : state.tab === "coords" ? `${row.id || row.code || "-"} / ${row.name || "-"}` : `${row.vehicle}호 · ${row.meta?.area_label || "-"}`;
-        const sub = state.tab === "stores" || state.tab === "coords" ? `${row.address || "-"} · ${row.vehicle || "-"}호` : `${fmt.format(row.stops || 0)}착지 · ${money(row.amount || 0)}`;
-        return `<div class="row" data-index="${index}" data-key="${key}"><strong>${title}</strong><small>${sub}</small><small>${state.tab === "stores" ? `주문 ${fmt.format(row.stops || 0)}건` : state.tab === "coords" ? "좌표 없음" : `착지당 ${money(row.perStop || 0)}`}</small></div>`;
-      }).join("") || `<div class="row"><strong>결과가 없습니다.</strong><small>검색 조건을 바꿔주세요.</small></div>`;
-      document.querySelectorAll(".row[data-index]").forEach((el, i) => el.addEventListener("click", () => {
-        state.selected = rows[i];
-        renderDetail();
-        document.querySelectorAll(".row").forEach(row => row.classList.remove("active"));
-        el.classList.add("active");
-      }));
-      if (!state.selected && rows[0]) { state.selected = rows[0]; renderDetail(); }
-    }
-
-    function renderDetail() {
-      const row = state.selected;
-      if (!row) { detail.innerHTML = "<p>항목을 선택해주세요.</p>"; return; }
-      detailTitle.textContent = state.tab === "stores" ? `${row.code || "-"} / ${row.name || "-"}` : `${row.vehicle || row.id || "-"} 상세`;
-      detailCaption.textContent = state.tab === "stores" ? row.address || "-" : "월 캐시 기준 요약입니다.";
-      detailChip.textContent = state.tab === "stores" ? `${row.vehicle || "-"}호` : "상세";
-      detail.innerHTML = `
-        <div class="metrics">
-          <div class="metric"><span>매출</span><b>${money(row.amount || 0)}</b></div>
-          <div class="metric"><span>착지/주문</span><b>${fmt.format(row.stops || 0)}건</b></div>
-          <div class="metric"><span>착지당 금액</span><b>${money(row.perStop || 0)}</b></div>
-        </div>
-        <div class="table-scroll">
-          <table><tbody>
-            <tr><th>호차</th><td>${row.vehicle || "-"}</td></tr>
-            <tr><th>주소</th><td>${row.address || row.meta?.area_label || "-"}</td></tr>
-            <tr><th>최종일</th><td>${row.lastDate || "-"}</td></tr>
-          </tbody></table>
-        </div>`;
-    }
-
-    function renderRaw() {
-      const rows = Array.isArray(state.summary?.rows) ? state.summary.rows.slice(0, 80) : [];
-      const keys = [...new Set(rows.flatMap(row => Object.keys(row || {})))].slice(0, 8);
-      rawHead.innerHTML = `<tr>${keys.map(key => `<th>${key}</th>`).join("")}</tr>`;
-      rawBody.innerHTML = rows.map(row => `<tr>${keys.map(key => `<td>${row[key] ?? ""}</td>`).join("")}</tr>`).join("");
-    }
-
-    function render() {
-      const s = state.summary || {};
-      sourceLine.innerHTML = `데이터 출처 <b>${s.source || "월 캐시"}</b> · 행 ${fmt.format(s.rowCount || 0)}건 · 매출 ${money(s.totalAmount || 0)} · 갱신 ${s.generatedAt || "-"}`;
-      renderKpis();
-      renderList();
-      renderDetail();
-      renderRaw();
-    }
-
-    tabs.addEventListener("click", event => {
-      const button = event.target.closest("[data-tab]");
-      if (!button) return;
-      state.tab = button.dataset.tab;
-      state.selected = null;
-      document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab === button));
-      render();
-    });
-    [searchInput, centerSelect, sortSelect].forEach(el => el.addEventListener("input", () => { state.selected = null; render(); }));
-    refreshButton.addEventListener("click", loadSummary);
-    loadSummary().catch(error => {
-      sourceLine.textContent = error.message;
-      state.summary = { rows:[], vehicles:[], stores:[], rowCount:0, totalAmount:0, vehicleCount:0, storeCount:0 };
-      render();
-    });
+    const fmt=new Intl.NumberFormat("ko-KR");
+    const money=value=>`${fmt.format(Math.round(Number(value||0)))}원`;
+    const state={tab:"vehicles",summary:null,selected:null};
+    const vehicleData=window.VEHICLE_AREA_DATA||{vehicles:[]};
+    function vehicleMeta(vehicle){return vehicleData.vehicles.find(v=>String(v.vehicle)===String(vehicle))||{}}
+    async function loadSummary(){const res=await fetch("/api/monthly-dispatch-summary",{cache:"no-store"});if(!res.ok)throw new Error(`데이터 조회 실패 ${res.status}`);state.summary=await res.json();state.selected=null;render()}
+    function rowStops(row){return Number(row.stops??row.stopCount??0)}
+    function filteredVehicles(){const q=searchInput.value.trim().toLowerCase();const center=centerSelect.value;let rows=Array.isArray(state.summary?.vehicles)?[...state.summary.vehicles]:[];rows=rows.map(row=>({...row,meta:vehicleMeta(row.vehicle)}));if(center!=="all")rows=rows.filter(row=>row.meta.group===center);if(q)rows=rows.filter(row=>`${row.vehicle} ${row.meta.area_label||""}`.toLowerCase().includes(q));rows.sort((a,b)=>sortSelect.value==="stops"?rowStops(b)-rowStops(a):sortSelect.value==="vehicle"?Number(a.vehicle)-Number(b.vehicle):(b.amount||0)-(a.amount||0));return rows}
+    function filteredStores(){const q=searchInput.value.trim().toLowerCase();let rows=Array.isArray(state.summary?.stores)?[...state.summary.stores]:[];if(q)rows=rows.filter(row=>`${row.code} ${row.name} ${row.address} ${row.vehicle}`.toLowerCase().includes(q));rows.sort((a,b)=>(b.amount||0)-(a.amount||0));return rows}
+    function coordRows(){const rows=Array.isArray(state.summary?.rows)?state.summary.rows:[];return rows.filter(row=>!Number.isFinite(Number(row.lat))||!Number.isFinite(Number(row.lng))).slice(0,500).map(row=>({vehicle:row.vehicle,code:row.customerCode,name:row.customerName,address:row.address}))}
+    function renderKpis(){const s=state.summary||{};const vehicleCount=Number(s.vehicleCount||0);const totalStops=Number(s.rowCount||0);const totalAmount=Number(s.totalAmount||0);const avgStops=vehicleCount?totalStops/vehicleCount:0;const avgAmount=vehicleCount?totalAmount/vehicleCount:0;const perStop=totalStops?totalAmount/totalStops:0;kpis.innerHTML=[["월 평균 착지수",`${fmt.format(Math.round(avgStops))}건`,`총 ${fmt.format(totalStops)}건`],["월 평균 매출",money(avgAmount),`총 ${money(totalAmount)}`],["착지당 금액",money(perStop),"매출/착지 기준"],["운행 호차",`${fmt.format(vehicleCount)}대`,"월 데이터 기준"],["좌표 보정 필요",`${fmt.format(coordRows().length)}곳`,"구글시트 기준"],["매장 수",`${fmt.format(s.storeCount||0)}곳`,"중복 코드 합산"]].map(([a,b,c])=>`<div class="card"><span>${a}</span><b>${b}</b><small>${c}</small></div>`).join("")}
+    function renderList(){let rows=state.tab==="stores"?filteredStores():state.tab==="coords"?coordRows():filteredVehicles();if(state.tab==="adjust")rows=filteredVehicles().filter(row=>Number(row.amount||0)>6100000||rowStops(row)>35);listTitle.textContent=state.tab==="stores"?"매장별 월 매출":state.tab==="coords"?"좌표 보정 필요":state.tab==="adjust"?"호차 조정/용차 후보":"호차별 월 데이터";listChip.textContent=`${fmt.format(rows.length)}건`;list.innerHTML=rows.slice(0,300).map((row,index)=>{const title=state.tab==="stores"?`${row.code||"-"} / ${row.name||"-"}`:state.tab==="coords"?`${row.code||"-"} / ${row.name||"-"}`:`${row.vehicle}호 · ${row.meta?.area_label||"-"}`;const sub=state.tab==="stores"||state.tab==="coords"?`${row.address||"-"} · ${row.vehicle||"-"}호`:`${fmt.format(rowStops(row))}착지 · ${money(row.amount||0)}`;const third=state.tab==="stores"?`주문 ${fmt.format(rowStops(row))}건`:state.tab==="coords"?"좌표 없음":`착지당 ${money(row.perStop||0)}`;return `<div class="row" data-index="${index}"><strong>${title}</strong><small>${sub}</small><small>${third}</small></div>`}).join("")||`<div class="row"><strong>결과가 없습니다.</strong><small>검색 조건을 바꿔주세요.</small></div>`;document.querySelectorAll(".row[data-index]").forEach((el,i)=>el.addEventListener("click",()=>{state.selected=rows[i];renderDetail();document.querySelectorAll(".row").forEach(row=>row.classList.remove("active"));el.classList.add("active")}));if(!state.selected&&rows[0]){state.selected=rows[0];renderDetail()}}
+    function renderDetail(){const row=state.selected;if(!row){detail.innerHTML="<p>항목을 선택해주세요.</p>";return}detailTitle.textContent=state.tab==="stores"?`${row.code||"-"} / ${row.name||"-"}`:`${row.vehicle||row.code||"-"} 상세`;detailCaption.textContent=state.tab==="stores"?row.address||"-":"월 데이터 기준 요약입니다.";detailChip.textContent=state.tab==="stores"?`${row.vehicle||"-"}호`:"상세";detail.innerHTML=`<div class="metrics"><div class="metric"><span>매출</span><b>${money(row.amount||0)}</b></div><div class="metric"><span>착지/주문</span><b>${fmt.format(rowStops(row))}건</b></div><div class="metric"><span>착지당 금액</span><b>${money(row.perStop||0)}</b></div></div><div class="table-scroll"><table><tbody><tr><th>호차</th><td>${row.vehicle||"-"}</td></tr><tr><th>주소</th><td>${row.address||row.meta?.area_label||"-"}</td></tr><tr><th>최종일</th><td>${row.lastDate||"-"}</td></tr></tbody></table></div>`}
+    function renderRaw(){const rows=Array.isArray(state.summary?.rows)?state.summary.rows.slice(0,80):[];const keys=[...new Set(rows.flatMap(row=>Object.keys(row||{})))].filter(key=>!key.startsWith("_")).slice(0,8);rawHead.innerHTML=`<tr>${keys.map(key=>`<th>${key}</th>`).join("")}</tr>`;rawBody.innerHTML=rows.map(row=>`<tr>${keys.map(key=>`<td>${row[key]??""}</td>`).join("")}</tr>`).join("")}
+    function render(){const s=state.summary||{};sourceLine.innerHTML=`데이터 출처 <b>${s.source||"월 캐시"}</b> · 행 ${fmt.format(s.rowCount||0)}건 · 매출 ${money(s.totalAmount||0)} · 갱신 ${s.generatedAt||"-"}`;renderKpis();renderList();renderDetail();renderRaw()}
+    tabs.addEventListener("click",event=>{const button=event.target.closest("[data-tab]");if(!button)return;state.tab=button.dataset.tab;state.selected=null;document.querySelectorAll(".tab").forEach(tab=>tab.classList.toggle("active",tab===button));render()});
+    [searchInput,centerSelect,sortSelect].forEach(el=>el.addEventListener("input",()=>{state.selected=null;render()}));
+    refreshButton.addEventListener("click",loadSummary);
+    loadSummary().catch(error=>{sourceLine.textContent=error.message;state.summary={rows:[],vehicles:[],stores:[],rowCount:0,totalAmount:0,vehicleCount:0,storeCount:0};render()});
   </script>
 </body>
 </html>

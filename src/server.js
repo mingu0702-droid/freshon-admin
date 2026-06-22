@@ -696,12 +696,16 @@ function dedupeDispatchSheetRows(rows) {
     const key = [
       row.deliveryDate,
       normalizeVehicleValue(row.vehicle),
-      normalizeCell(row.customerCode) || normalizeSearchValue(row.address),
-      normalizeCell(row.sequence)
+      normalizeCell(row.customerCode) || normalizeSearchValue(row.customerName),
+      normalizeSearchValue(row.address)
     ].join("|");
     if (!key.replace(/\|/g, "")) continue;
     const previous = map.get(key);
-    if (!previous || Number(row.amount || 0) || !Number(previous.amount || 0)) map.set(key, row);
+    const rowScore = (Number(row.amount || 0) ? 10 : 0) + (row.lat && row.lng ? 5 : 0);
+    const previousScore = previous
+      ? (Number(previous.amount || 0) ? 10 : 0) + (previous.lat && previous.lng ? 5 : 0)
+      : -1;
+    if (!previous || rowScore >= previousScore) map.set(key, row);
   }
   return [...map.values()];
 }
@@ -1234,45 +1238,13 @@ function vehicleTokens(value) {
 }
 
 function rowMatchesDailyRoute(row, date, vehicle) {
-  const rowDate = normalizeDateValue(firstValue(row, [
-    "\uC785\uACE0\uC694\uCCAD\uC77C(\uBC30\uC1A1\uC77C)",
-    "\uC785\uACE0\uC694\uCCAD\uC77C",
-    "\uBC30\uC1A1\uC77C",
-    "\uBC30\uC1A1\uC77C\uC790",
-    "\uC77C\uC790",
-    "\uCD9C\uACE0\uC77C",
-    "\uBC30\uCC28\uC77C",
-    "\uBC30\uCC28\uC77C\uC790",
-    "\uC6B4\uD589\uC77C\uC790",
-    "\uB0A9\uD488\uC77C\uC790",
-    "\uB4F1\uB85D\uC77C",
-    "\uBC30\uC1A1\uACB0\uACFC\uCC98\uB9AC\uC77C\uC2DC",
-    "\uBC30\uC1A1\uACB0\uACFC\uCC98\uB9AC\uC77C",
-    "\uBC30\uC1A1\uC644\uB8CC\uC77C\uC2DC",
-    "\uBC30\uC1A1\uC644\uB8CC\uC77C",
-    "\uBC30\uC1A1\uC694\uCCAD\uC77C",
-    "\uAE30\uC900\uC77C",
-    "deliveryDate",
-    "date",
-    "requestDate",
-    "inReqDate",
-    "enteringDate",
-    "outDate",
-    "updatedAt"
-  ])) || parseDispatchDate(firstValue(row, [
-    "deliveryDate",
-    "date",
-    "\uBC30\uC1A1\uC77C",
-    "\uBC30\uCC28\uC77C",
-    "\uC77C\uC790",
-    "_sourceFile",
-    "sourceFile"
-  ]));
+  const rowDate = dispatchDateFromRow(row);
   if (!rowDate) return false;
   if (rowDate !== date) return false;
   const selected = vehicleTokens(vehicle);
   if (!selected.size) return false;
   const rowTokens = new Set();
+  for (const token of vehicleTokens(dispatchVehicleFromRow(row))) rowTokens.add(token);
   const vehicleColumns = [
     "\uD655\uC815\uD638\uCC28",
     "\uAE30\uC900\uD638\uCC28",
@@ -2334,24 +2306,11 @@ function buildMonthlyDispatchSummary(cache) {
   const stores = new Map();
   let totalAmount = 0;
   for (const row of rows) {
-    const date = normalizeDateValue(firstValue(row, [
-      "\uC785\uACE0\uC694\uCCAD\uC77C(\uBC30\uC1A1\uC77C)",
-      "\uC785\uACE0\uC694\uCCAD\uC77C",
-      "\uBC30\uC1A1\uC77C",
-      "\uBC30\uC1A1\uC77C\uC790",
-      "\uC77C\uC790",
-      "\uBC30\uCC28\uC77C"
-    ]));
-    const vehicle = normalizeVehicleValue(firstValue(row, [
-      "\uD655\uC815\uD638\uCC28",
-      "\uAE30\uC900\uD638\uCC28",
-      "\uD638\uCC28",
-      "\uBC30\uCC28\uD638\uCC28",
-      "\uBC30\uC1A1\uD638\uCC28"
-    ]));
-    const code = firstValue(row, ["\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uACE0\uAC1DERP\uCF54\uB4DC", "ERP\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
-    const name = firstValue(row, ["\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
-    const address = firstValue(row, ["\uACE0\uAC1D\uC8FC\uC18C", "\uC8FC\uC18C", "\uBC30\uC1A1\uC8FC\uC18C"]);
+    const date = dispatchDateFromRow(row);
+    const vehicle = dispatchVehicleFromRow(row);
+    const code = firstValue(row, ["customerCode", "\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uACE0\uAC1DERP\uCF54\uB4DC", "ERP\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
+    const name = firstValue(row, ["customerName", "\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
+    const address = firstValue(row, ["address", "\uACE0\uAC1D\uC8FC\uC18C", "\uC8FC\uC18C", "\uBC30\uC1A1\uC8FC\uC18C"]);
     const amount = amountFromDispatchRow(row);
     totalAmount += amount;
     if (vehicle) {
@@ -2371,11 +2330,23 @@ function buildMonthlyDispatchSummary(cache) {
     }
   }
   const vehicleRows = [...vehicles.values()]
-    .map((item) => ({ ...item, dates: item.dates.size }))
+    .map((item) => ({
+      ...item,
+      stops: item.stopCount,
+      perStop: item.stopCount ? item.amount / item.stopCount : 0,
+      dates: item.dates.size,
+      lastDate: [...item.dates].sort().at(-1) || ""
+    }))
     .sort((a, b) => b.amount - a.amount || b.stopCount - a.stopCount)
     .slice(0, 80);
   const storeRows = [...stores.values()]
-    .map((item) => ({ ...item, dates: item.dates.size }))
+    .map((item) => ({
+      ...item,
+      stops: item.stopCount,
+      perStop: item.stopCount ? item.amount / item.stopCount : 0,
+      dates: item.dates.size,
+      lastDate: [...item.dates].sort().at(-1) || ""
+    }))
     .sort((a, b) => b.amount - a.amount || b.stopCount - a.stopCount)
     .slice(0, 120);
   return {
