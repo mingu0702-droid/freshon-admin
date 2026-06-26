@@ -86,12 +86,34 @@ function normalizeSearchValue(value) {
     .replace(/[()]/g, "");
 }
 
-function pickFirstValue(row, keys) {
+function normalizeLookupKey(value) {
+  return normalizeCell(value)
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[()[\]{}_\-./:竊덌펹]/g, "");
+}
+
+function lookupRowValue(row, keys) {
+  if (!row) return "";
   for (const key of keys) {
-    const value = row?.[key];
-    if (normalizeCell(value)) return normalizeCell(value);
+    const value = normalizeCell(row[key]);
+    if (value) return value;
+  }
+  const entries = Object.entries(row || {});
+  for (const key of keys) {
+    const target = normalizeLookupKey(key);
+    if (!target) continue;
+    const match = entries.find(([entryKey, value]) => {
+      const name = normalizeLookupKey(entryKey);
+      return normalizeCell(value) && (name === target || name.includes(target) || target.includes(name));
+    });
+    if (match) return normalizeCell(match[1]);
   }
   return "";
+}
+
+function pickFirstValue(row, keys) {
+  return lookupRowValue(row, keys);
 }
 
 function toFiniteNumber(value) {
@@ -156,13 +178,53 @@ function buildFixedDispatchSearchItems(cache, query) {
     .slice(0, 50);
 }
 
+function sheetHeaderScore(row) {
+  const joined = (row || []).map((value) => normalizeCell(value)).join("|");
+  return [
+    /고객|매장|거래처/,
+    /주소|배송지/,
+    /호차|차량/,
+    /매출|주문|금액|amount/i,
+    /배송|입고|일자|날짜|date/i,
+    /순번|순서|착순/
+  ].reduce((score, pattern) => score + (pattern.test(joined) ? 1 : 0), 0);
+}
+
+function inferDateFromSheetRows(values, fileName = "") {
+  const source = [
+    normalizeCell(fileName),
+    ...(values || []).slice(0, 30).map((row) => (row || []).map((value) => normalizeCell(value)).join(" "))
+  ].join(" ");
+  const match = source.match(/(\d{2,4})[.\-/년\s]+(\d{1,2})[.\-/월\s]+(\d{1,2})/);
+  if (!match) return "";
+  let [, year, month, day] = match;
+  if (year.length === 2) year = `20${year}`;
+  return `${String(Number(year)).padStart(4, "0")}-${String(Number(month)).padStart(2, "0")}-${String(Number(day)).padStart(2, "0")}`;
+}
+
 function rowsFromSheetValues(values, file, sheetName) {
   const rows = [];
   const columns = new Set();
-  const headerIndex = values.findIndex((row) => Array.isArray(row) && row.some((value) => normalizeCell(value)));
+  let headerIndex = -1;
+  let bestScore = 0;
+  (values || []).slice(0, 120).forEach((row, index) => {
+    if (!Array.isArray(row) || !row.some((value) => normalizeCell(value))) return;
+    const score = sheetHeaderScore(row);
+    if (score > bestScore) {
+      bestScore = score;
+      headerIndex = index;
+    }
+  });
+  if (headerIndex < 0 || bestScore < 3) {
+    headerIndex = values.findIndex((row) => Array.isArray(row) && row.some((value) => normalizeCell(value)));
+  }
   if (headerIndex < 0) return { rows, columns: [] };
 
   const headers = values[headerIndex].map((value, index) => normalizeCell(value) || `column_${index + 1}`);
+  const inferredDate = inferDateFromSheetRows(values, file.originalname);
+  if (inferredDate && !headers.some((header) => /(deliveryDate|date|입고요청일|배송일|배송일자|일자|날짜)/i.test(header))) {
+    headers.push("_inferredDeliveryDate");
+  }
   for (const header of headers) {
     if (header && !header.startsWith("__EMPTY")) columns.add(header);
   }
@@ -172,7 +234,9 @@ function rowsFromSheetValues(values, file, sheetName) {
     headers.forEach((header, index) => {
       const column = normalizeCell(header);
       if (!column || column.startsWith("__EMPTY")) return;
-      row[column] = normalizeCell(rowValues?.[index]);
+      row[column] = header === "_inferredDeliveryDate" && index >= (rowValues?.length || 0)
+        ? inferredDate
+        : normalizeCell(rowValues?.[index]);
     });
     if (Object.values(row).some(Boolean)) {
       row.__rawValues = rowValues.map((value) => normalizeCell(value));
@@ -648,7 +712,7 @@ function coordinateFromDispatchRow(row, type) {
 
 function dispatchDateFromRow(row) {
   const value = firstValue(row, [
-    "deliveryDate", "date", "requestDate", "inReqDate", "enteringDate", "outDate",
+    "deliveryDate", "_inferredDeliveryDate", "date", "requestDate", "inReqDate", "enteringDate", "outDate",
     "입고요청일(배송일)", "입고요청일", "배송일", "배송일자", "일자", "출고일", "배차일", "배차일자",
     "운행일자", "납품일자", "배송결과처리일시", "배송결과처리일", "배송완료일시", "배송완료일", "기준일"
   ]);
@@ -657,13 +721,29 @@ function dispatchDateFromRow(row) {
 
 function dispatchVehicleFromRow(row) {
   return normalizeVehicleValue(firstValue(row, [
-    "vehicle", "vehicleNo", "carSeq", "carNm", "fixedCarSeq",
-    "확정호차", "기준호차", "호차", "차량", "차량번호", "차량호차", "배송호차", "배차호차", "운행호차", "변경호차"
+    "vehicle", "vehicleNo", "carSeq", "carNm", "carNo", "carNumber", "fixedCarSeq", "fixedVehicle", "changedVehicle",
+    "확정호차", "기준호차", "호차", "차량", "차량번호", "차량호차", "배송호차", "배차호차", "운행호차", "변경호차",
+    "확정차", "기준차", "변경차", "배송차", "배차차량", "운행차량", "차량호"
   ]));
 }
 
 function dispatchSequenceFromRow(row, fallback) {
   return firstValue(row, ["sequence", "routeOrder", "배송순번", "순번", "순서", "배송순서", "착순"]) || String(fallback);
+}
+
+function dispatchAddressFromRow(row, fallback = "") {
+  const main = firstValue(row, [
+    "address", "customerAddress", "고객주소", "주소", "배송주소", "도로명주소", "지번주소"
+  ]);
+  const detail = firstValue(row, [
+    "addressDetail", "detailAddress", "상세주소", "상세주소1", "주소상세", "상세주소2", "상세"
+  ]);
+  return [main, detail]
+    .map(normalizeCell)
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim() || normalizeCell(fallback);
 }
 
 function normalizeDispatchRowForSheet(row, index, generatedAt) {
@@ -677,7 +757,7 @@ function normalizeDispatchRowForSheet(row, index, generatedAt) {
     sequence,
     customerCode: stop.customerCode || firstValue(row, ["customerCode", "고객코드", "고객", "고객ERP코드", "ERP코드", "매장코드"]),
     customerName: stop.customerName || firstValue(row, ["customerName", "고객명", "매장명", "거래처명", "상호"]),
-    address: stop.address || firstValue(row, ["address", "고객주소", "주소", "배송주소"]),
+    address: dispatchAddressFromRow(row, stop.address),
     lat: coordinateFromDispatchRow(row, "lat"),
     lng: coordinateFromDispatchRow(row, "lng"),
     amount,
@@ -1081,25 +1161,11 @@ async function buildCustomerSearchItems(query) {
 }
 
 function normalizeColumnName(value) {
-  return normalizeCell(value).replace(/\s+/g, "").replace(/[()竊덌펹]/g, "");
+  return normalizeLookupKey(value);
 }
 
 function firstValue(row, columns) {
-  for (const column of columns) {
-    const value = normalizeCell(row[column]);
-    if (value) return value;
-  }
-  const entries = Object.entries(row);
-  for (const column of columns) {
-    const target = normalizeColumnName(column);
-    if (!target) continue;
-    const match = entries.find(([key, value]) => {
-      const keyName = normalizeColumnName(key);
-      return normalizeCell(value) && (keyName === target || keyName.includes(target));
-    });
-    if (match) return normalizeCell(match[1]);
-  }
-  return "";
+  return lookupRowValue(row, columns);
 }
 
 function exactColumnValue(row, columns) {
@@ -1146,6 +1212,16 @@ function numberFromMoney(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function excelSerialDateToIso(value) {
+  const text = normalizeCell(value);
+  const serial = typeof value === "number"
+    ? value
+    : (/^\d{5}(?:\.\d+)?$/.test(text) ? Number(text) : NaN);
+  if (!Number.isFinite(serial) || serial < 35000 || serial > 60000) return "";
+  const date = new Date(Math.round((serial - 25569) * 86400000));
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+}
+
 function plausibleAmountFromCell(value, header = "") {
   const text = normalizeCell(value);
   if (!text) return 0;
@@ -1153,6 +1229,18 @@ function plausibleAmountFromCell(value, header = "") {
   if (!/(매출|주문|출고|판매|공급|합계|금액|amount|amt|price)/i.test(title)) return 0;
   if (/(일자|날짜|전화|연락|휴대|주소|코드|호차|톤수|착지|순번|순서|중량|수량|건수)/i.test(title)) return 0;
   if (/20\d{2}[-./년\s]\d{1,2}|010[-\d\s]{7,}/.test(text)) return 0;
+  const amount = numberFromMoney(text);
+  if (!Number.isFinite(amount) || Math.abs(amount) < 1000 || Math.abs(amount) > 50000000) return 0;
+  return amount;
+}
+
+function looseAmountFromCell(value, header = "") {
+  const text = normalizeCell(value);
+  if (!text || excelSerialDateToIso(value)) return 0;
+  const title = normalizeCell(header);
+  if (/(일자|날짜|전화|연락|휴대|주소|코드|호차|차량|톤수|착지|순번|순서|중량|수량|건수|위도|경도|lat|lng|gps|savedOrder|sequence|vehicle)/i.test(title)) return 0;
+  if (/20\d{2}[-./년\s]\d{1,2}|010[-\d\s]{7,}|^[SB]\d{4,}$/i.test(text)) return 0;
+  if (/^\d{1,4}$/.test(text)) return 0;
   const amount = numberFromMoney(text);
   if (!Number.isFinite(amount) || Math.abs(amount) < 1000 || Math.abs(amount) > 50000000) return 0;
   return amount;
@@ -1203,10 +1291,17 @@ function amountFromDispatchRow(row) {
     const amount = plausibleAmountFromCell(rawValues[index], rawHeaders[index]);
     if (Math.abs(amount) > Math.abs(fallback)) fallback = amount;
   }
+  if (fallback) return fallback;
+  for (let index = 0; index < rawValues.length; index += 1) {
+    const amount = looseAmountFromCell(rawValues[index], rawHeaders[index]);
+    if (Math.abs(amount) > Math.abs(fallback)) fallback = amount;
+  }
   return fallback;
 }
 
 function parseDispatchDate(value) {
+  const serialDate = excelSerialDateToIso(value);
+  if (serialDate) return serialDate;
   const text = normalizeCell(value);
   if (!text) return "";
   const iso = text.match(/(20\d{2})[-./년\s]*(\d{1,2})[-./월\s]*(\d{1,2})/);
@@ -1333,10 +1428,7 @@ function mergeRouteBaseWithHistory(baseRow, historyRow) {
 }
 
 function buildStopFromDispatchRow(row, vehicle, sequence) {
-  const address = [
-    firstValue(row, ["address", "customerAddress", "\uACE0\uAC1D\uC8FC\uC18C", "\uC8FC\uC18C", "\uBC30\uC1A1\uC8FC\uC18C"]),
-    firstValue(row, ["addressDetail", "detailAddress", "\uC0C1\uC138\uC8FC\uC18C", "\uC0C1\uC138\uC8FC\uC18C1", "\uC0C1\uC138"])
-  ].filter(Boolean).join(" ").trim();
+  const address = dispatchAddressFromRow(row);
   const customerCode = firstValue(row, ["customerCode", "code", "\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uACE0\uAC1DERP\uCF54\uB4DC", "ERP\uCF54\uB4DC", "\uAC70\uB798\uCC98\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
   const customerName = firstValue(row, ["customerName", "name", "\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
   const amount = amountFromDispatchRow(row) || firstValue(row, ["amount", "dailyAmount", "monthlyAmount", "\uB9E4\uCD9C\uAE08\uC561", "\uB9E4\uCD9C\uC561", "\uC6D4\uB9E4\uCD9C\uC561", "\uC6D4\uB9E4\uCD9C", "\uAE08\uC561", "\uCD9C\uACE0\uAE08\uC561", "\uD310\uB9E4\uAE08\uC561"]);
@@ -2309,13 +2401,17 @@ function buildMonthlyDispatchSummary(cache) {
   const vehicles = new Map();
   const stores = new Map();
   let totalAmount = 0;
+  let coordinateMissingCount = 0;
   for (const row of rows) {
     const date = dispatchDateFromRow(row);
     const vehicle = dispatchVehicleFromRow(row);
     const code = firstValue(row, ["customerCode", "\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uACE0\uAC1DERP\uCF54\uB4DC", "ERP\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
     const name = firstValue(row, ["customerName", "\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
-    const address = firstValue(row, ["address", "\uACE0\uAC1D\uC8FC\uC18C", "\uC8FC\uC18C", "\uBC30\uC1A1\uC8FC\uC18C"]);
+    const address = dispatchAddressFromRow(row);
+    const lat = coordinateFromDispatchRow(row, "lat");
+    const lng = coordinateFromDispatchRow(row, "lng");
     const amount = amountFromDispatchRow(row);
+    if (!lat || !lng) coordinateMissingCount += 1;
     totalAmount += amount;
     if (vehicle) {
       const current = vehicles.get(vehicle) || { vehicle, stopCount: 0, amount: 0, dates: new Set() };
@@ -2356,12 +2452,14 @@ function buildMonthlyDispatchSummary(cache) {
   return {
     generatedAt: cache.generatedAt || null,
     range: cache.range || null,
-    rowCount: cache.rowCount || rows.length,
+    rowCount: rows.length || cache.rowCount || 0,
     totalAmount,
     vehicleCount: vehicles.size,
     storeCount: stores.size,
+    coordinateMissingCount,
     vehicles: vehicleRows,
     stores: storeRows,
+    rows: rows.map((row, index) => normalizeDispatchRowForSheet(row, index, cache.generatedAt || new Date().toISOString())),
     source: cache.source === "google-sheet" ? "google-sheet" : "monthly-dispatch-cache"
   };
 }
