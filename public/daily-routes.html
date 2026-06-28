@@ -73,22 +73,46 @@
       box-shadow:0 1px 5px rgba(15,23,42,.34);
     }
     .vehicle-pin {
+      position:relative;
       display:inline-flex;
       align-items:center;
       justify-content:center;
-      min-width:46px;
-      min-height:28px;
-      padding:4px 10px;
-      border:2px solid #fff;
-      border-radius:999px;
-      background:var(--pin-color, #2563eb);
+      width:48px;
+      height:62px;
       color:#fff;
-      box-shadow:0 3px 10px rgba(15,23,42,.32);
-      font-size:12px;
+      font-size:13px;
       font-weight:900;
       line-height:1;
       white-space:nowrap;
-      transform:translate(-18px, -20px);
+      transform:translate(-24px, -62px);
+      filter:drop-shadow(0 8px 12px rgba(15,23,42,.28));
+    }
+    .vehicle-pin::before {
+      content:"";
+      position:absolute;
+      inset:0;
+      background:var(--pin-color, #2563eb);
+      clip-path:path("M24 0 C37 0 48 11 48 25 C48 40 33 53 24 62 C15 53 0 40 0 25 C0 11 11 0 24 0 Z");
+    }
+    .vehicle-pin::after {
+      content:"";
+      position:absolute;
+      left:50%;
+      top:19px;
+      width:27px;
+      height:20px;
+      transform:translate(-50%, -50%);
+      border-radius:999px;
+      background:#fff;
+      opacity:.96;
+    }
+    .vehicle-pin .vehicle-pin-text {
+      position:relative;
+      z-index:1;
+      top:-12px;
+      color:var(--pin-color, #2563eb);
+      font-size:12px;
+      font-weight:900;
     }
     .vehicle-pin.new-area-pin {
       background:rgba(220,38,38,.14);
@@ -108,15 +132,19 @@
     .legend { position:absolute; right:14px; bottom:16px; z-index:500; background:rgba(255,255,255,.94); border:1px solid var(--edge); border-radius:8px; padding:10px 12px; font-size:12px; box-shadow:0 10px 28px rgba(15,23,42,.14); backdrop-filter:blur(6px); }
     .legend div { margin:4px 0; }
     .swatch { display:inline-block; width:18px; height:4px; vertical-align:middle; margin-right:6px; background:#2563eb; }
-    .map-popup { min-width:190px; max-width:250px; padding:8px 9px; font-family:Arial, "Malgun Gothic", sans-serif; font-size:12px; line-height:1.35; color:#111827; }
-    .store-popup { min-width:210px; max-width:240px; }
+    .map-popup { min-width:190px; max-width:340px; padding:0; font-family:Arial, "Malgun Gothic", sans-serif; font-size:12px; line-height:1.35; color:#111827; }
+    .store-popup { width:310px; max-width:310px; padding:12px; border-radius:12px; background:#fff; box-shadow:0 18px 42px rgba(15,23,42,.22); }
     .popup-title { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:7px; border-bottom:1px solid #e5edf7; padding-bottom:6px; }
-    .popup-title b { font-size:13px; line-height:1.25; overflow-wrap:anywhere; }
-    .popup-badge { display:inline-flex; align-items:center; min-height:22px; padding:3px 8px; border-radius:999px; background:#fff0c2; color:#7c2d12; font-size:11px; font-weight:900; white-space:nowrap; }
-    .popup-grid { display:grid; gap:3px; }
-    .popup-row { display:grid; grid-template-columns:58px minmax(0, 1fr); gap:6px; }
+    .popup-title b { font-size:15px; line-height:1.25; overflow-wrap:anywhere; }
+    .popup-badge { display:inline-flex; align-items:center; min-height:22px; padding:3px 8px; border-radius:999px; background:#e0f2fe; color:#075985; font-size:11px; font-weight:900; white-space:nowrap; }
+    .popup-grid { display:grid; gap:6px; }
+    .popup-row { display:grid; grid-template-columns:72px minmax(0, 1fr); gap:8px; }
     .popup-row span:first-child { color:#53657f; font-weight:900; }
     .popup-row span:last-child { overflow-wrap:anywhere; }
+    .popup-metrics { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:9px; }
+    .popup-metrics div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:8px; }
+    .popup-metrics b { display:block; font-size:15px; }
+    .popup-metrics small { color:#64748b; }
     .customer-flag {
       position:relative;
       width:14px;
@@ -657,7 +685,7 @@
     }
     body[data-work-tab="route"] .route-controls {
       display:grid;
-      grid-template-columns:minmax(0, 1fr) auto;
+      grid-template-columns:minmax(0, 1fr) minmax(92px, .7fr) auto auto;
       gap:8px;
       align-items:end;
     }
@@ -666,6 +694,11 @@
       border-radius:6px;
       background:#2563eb;
       border-color:#2563eb;
+    }
+    body[data-work-tab="route"] .route-controls button.secondary {
+      background:#f8fafc;
+      border-color:#cbd5e1;
+      color:#1d4ed8;
     }
     body[data-work-tab="route"] .route-status {
       margin-top:8px;
@@ -947,7 +980,11 @@
             <label for="routeDateInput">일일동선 날짜</label>
             <input id="routeDateInput" type="date">
           </div>
-          <button id="resetOverviewButton" class="secondary" type="button">전체 권역</button>
+          <div>
+            <label for="routeVehicleQuickInput">호차 검색</label>
+            <input id="routeVehicleQuickInput" placeholder="108호">
+          </div>
+          <button id="resetOverviewButton" class="secondary" type="button">착지/매장</button>
           <button id="syncRouteButton" class="secondary" type="button">시트 새로고침</button>
         </div>
         <div id="routeStatus" class="route-status">날짜와 호차를 선택하면 월 데이터 기준으로 동선을 표시합니다.</div>
@@ -1069,6 +1106,7 @@
     const customerSearchInput = document.getElementById("customerSearchInput");
     const customerSearchResults = document.getElementById("customerSearchResults");
     const routeDateInput = document.getElementById("routeDateInput");
+    const routeVehicleQuickInput = document.getElementById("routeVehicleQuickInput");
     const showRouteButton = document.getElementById("showRouteButton");
     const resetOverviewButton = document.getElementById("resetOverviewButton");
     const syncRouteButton = document.getElementById("syncRouteButton");
@@ -1202,10 +1240,33 @@
       backToOverviewButton.addEventListener("click", () => {
         activeCustomerSearchHit = null;
         activeAddressSearchQuery = "";
-        resetToOverview("overview:all");
+        resetToOverview("overview:osan");
       });
-      resetOverviewButton?.addEventListener("click", () => resetToOverview("overview:all"));
-      routeMapOverviewButton?.addEventListener("click", () => resetToOverview("overview:all"));
+      routeVehicleQuickInput?.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        const requested = String(routeVehicleQuickInput.value || "").replace(/\D/g, "");
+        if (!requested) return;
+        const vehicle = data.vehicles.find(v => String(v.vehicle) === requested);
+        if (!vehicle) {
+          routeStatus.textContent = `${requested}호를 찾지 못했습니다.`;
+          return;
+        }
+        vehicleSelect.value = vehicle.vehicle;
+        vehicleSearchInput.value = `${vehicle.vehicle}호`;
+        viewMode.value = "detail";
+        shouldShowRoute = true;
+        renderDailyRoute(vehicle, getVehicleColor(vehicle));
+      });
+      resetOverviewButton?.addEventListener("click", () => {
+        setWorkTab("route");
+        if (routeStopPanel?.innerHTML.trim()) {
+          routeStopPanel.hidden = false;
+          routeStopPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        } else {
+          routeStatus.textContent = "날짜와 호차를 조회하면 착지/매장 정보가 여기에 표시됩니다.";
+        }
+      });
+      routeMapOverviewButton?.addEventListener("click", () => resetToOverview("overview:osan"));
       showRouteButton?.addEventListener("click", () => {
         setWorkTab("route");
         shouldShowRoute = true;
@@ -1969,7 +2030,8 @@
       const iw = new kakao.maps.InfoWindow({
         position,
         content: `<div class="map-popup">${html}</div>`,
-        removable: true
+        removable: true,
+        zIndex: 100
       });
       iw.open(map);
       infoWindows.push(iw);
@@ -1986,7 +2048,8 @@
       const overlay = new kakao.maps.CustomOverlay({
         position: toLatLng(point),
         content: `<div class="${esc(className)}" data-label-id="${id}"${color ? ` style="--label-color:${esc(color)}"` : ""}>${html}</div>`,
-        yAnchor: 0.5,
+        xAnchor: 0.5,
+        yAnchor: 1,
         zIndex: 20
       });
       layer.add(overlay);
@@ -2023,8 +2086,9 @@
 
     function addTextImageMarker(point, text, color, popupHtml, layer = markersLayer) {
       const label = String(text || "").trim() || "핀";
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="34"><rect x="2" y="3" width="60" height="26" rx="13" fill="${color}" stroke="white" stroke-width="3"/><text x="32" y="21" text-anchor="middle" font-family="Arial" font-size="13" font-weight="700" fill="white">${text}</text></svg>`;
-      const image = new kakao.maps.MarkerImage(`data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`, new kakao.maps.Size(64, 34), { offset: new kakao.maps.Point(32, 17) });
+      const clean = label.replace(/호$/, "");
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="76" viewBox="0 0 56 76"><path d="M28 3C43 3 53 14 53 29C53 47 37 62 28 72C19 62 3 47 3 29C3 14 13 3 28 3Z" fill="${color}" stroke="white" stroke-width="4"/><ellipse cx="28" cy="27" rx="16" ry="12" fill="white" opacity=".96"/><text x="28" y="31" text-anchor="middle" font-family="Arial" font-size="13" font-weight="900" fill="${color}">${clean}</text></svg>`;
+      const image = new kakao.maps.MarkerImage(`data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`, new kakao.maps.Size(56, 76), { offset: new kakao.maps.Point(28, 72) });
       const marker = new kakao.maps.Marker({ position: toLatLng(point), image, title: label });
       if (popupHtml) kakao.maps.event.addListener(marker, "click", () => openInfoWindow(toLatLng(point), popupHtml));
       layer.add(marker);
@@ -2038,8 +2102,8 @@
 
     function vehiclePinHtml(vehicle, color = "#2563eb", extraClass = "") {
       const raw = typeof vehicle === "object" ? vehicle?.vehicle : vehicle;
-      const text = raw ? `${String(raw).replace(/호$/, "")}호` : "호차";
-      return `<span class="vehicle-pin ${esc(extraClass)}" style="--pin-color:${esc(color)}">${esc(text)}</span>`;
+      const text = raw ? String(raw).replace(/호$/, "") : "호차";
+      return `<span class="vehicle-pin ${esc(extraClass)}" style="--pin-color:${esc(color)}"><span class="vehicle-pin-text">${esc(text)}</span></span>`;
     }
 
     function virtualNewAreaPinHtml() {
@@ -2223,14 +2287,24 @@
       const orderCount = stop.orderCount || raw.orderCnt || raw.ordCnt || raw.totalAlcnt || raw.alcnt || raw.count || "";
       const vehicleName = stop.vehicle || vehicle.vehicle;
       const vehicleLabel = String(vehicleName).endsWith("호") ? String(vehicleName) : `${vehicleName}호`;
-      const routeLabel = Number(sequence) === 1 ? "첫배지" : stop.isLast ? "막배지" : "배송지";
+      const storeType = raw.storeType || raw.brand || raw.franchise || stop.storeType || stop.brand || "-";
       return `
-        <b>${esc(customerCode)} / ${esc(customerName)}</b><br>
-        호차: ${esc(vehicleLabel)} / ${esc(routeLabel)} ${esc(sequence || stop.sequence || "-")}<br>
-        주소: ${esc(address)}<br>
-        일 매출액: ${money(dailyAmount)}<br>
-        주문 횟수: ${orderCount ? esc(orderCount) : "-"}<br>
-        기준일: ${esc(date || routeDateInput.value || "-")}
+        <div class="store-popup">
+          <div class="popup-title">
+            <b>${esc(customerCode)} / ${esc(customerName)}</b>
+            <span class="popup-badge">${esc(vehicleLabel)}</span>
+          </div>
+          <div class="popup-grid">
+            <div class="popup-row"><span>고객명</span><span>${esc(customerName)}</span></div>
+            <div class="popup-row"><span>점포</span><span>${esc(storeType)}</span></div>
+            <div class="popup-row"><span>주소</span><span>${esc(address)}</span></div>
+            <div class="popup-row"><span>기준일</span><span>${esc(date || routeDateInput.value || "-")} · ${esc(sequence || stop.sequence || "-")}착</span></div>
+          </div>
+          <div class="popup-metrics">
+            <div><b>${orderCount ? esc(orderCount) : "-"}</b><small>주문횟수</small></div>
+            <div><b>${money(dailyAmount)}</b><small>일 매출액</small></div>
+          </div>
+        </div>
       `;
     }
 
@@ -2472,7 +2546,7 @@
     }
 
     async function loadMonthlyDispatchCache({ force = false } = {}) {
-      const response = await fetch(`/api/monthly-dispatch-summary?_=${Date.now()}${force ? "&force=1" : ""}`, { cache: "no-store" });
+      const response = await fetch(`/api/monthly-dispatch-summary?compact=1&_=${Date.now()}${force ? "&force=1" : ""}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`월 데이터 조회 HTTP ${response.status}`);
       return response.json().catch(() => ({}));
     }
