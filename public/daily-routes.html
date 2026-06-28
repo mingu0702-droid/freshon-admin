@@ -754,6 +754,17 @@
     .route-stop-kpis small { display:block; color:#64748b; font-size:10px; }
     .route-stop-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:7px; }
     .route-stop-actions span { display:flex; align-items:center; justify-content:center; height:28px; border:1px solid #cbd5e1; border-radius:7px; background:#fff; color:#1d4ed8; font-weight:900; font-size:11px; }
+    .route-section-no { display:inline-flex; width:18px; height:18px; align-items:center; justify-content:center; border-radius:999px; background:#eff6ff; color:#1d4ed8; font-size:11px; font-weight:900; margin-right:5px; }
+    .route-config-panel h3, .route-search-panel h3, .route-stop-panel-title { margin:0 0 9px; font-size:14px; }
+    .route-config-grid { display:grid; grid-template-columns:minmax(0, 1fr) 92px; gap:7px; align-items:end; }
+    .route-config-grid-wide { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:7px; }
+    .route-config-actions { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:8px; }
+    .route-config-actions button { min-height:36px; border:1px solid #cbd5e1; border-radius:8px; background:#f8fafc; color:#1d4ed8; font-weight:900; }
+    .route-config-actions .primary { background:#2563eb; color:#fff; border-color:#2563eb; }
+    .new-area-panel.compact-new { padding:0; overflow:hidden; }
+    .new-area-panel.compact-new summary { list-style:none; cursor:pointer; padding:12px; font-size:14px; font-weight:900; }
+    .new-area-panel.compact-new summary::-webkit-details-marker { display:none; }
+    .new-area-panel.compact-new .new-area-body { padding:0 12px 12px; }
     body[data-work-tab="route"] .new-area-panel {
       background:#fff;
       box-shadow:0 1px 4px rgba(15,23,42,.05);
@@ -891,38 +902,46 @@
           <div><b id="routeHudDate">-</b><small>기준일</small></div>
         </div>
       </div>
+      <div class="route-work control-panel route-config-panel">
+        <h3><span class="route-section-no">1</span>동선/권역 설정</h3>
+        <div class="route-config-grid">
+          <div>
+            <label for="routeDateInput">날짜</label>
+            <input id="routeDateInput" type="date">
+          </div>
+          <div>
+            <label for="routeVehicleQuickInput">호차</label>
+            <input id="routeVehicleQuickInput" placeholder="108호">
+          </div>
+        </div>
+        <div class="route-config-grid-wide">
+          <div>
+            <label for="viewMode">보기</label>
+            <select id="viewMode">
+              <option value="detail">선택 호차 상세</option>
+              <option value="overview:osan">오산센터 권역</option>
+              <option value="overview:yeongnam">영남권 권역</option>
+              <option value="overview:honam">호남권 권역</option>
+              <option value="overview:all">전체 권역</option>
+            </select>
+          </div>
+          <div>
+            <label for="vehicleSelect">권역</label>
+            <select id="vehicleSelect"></select>
+          </div>
+        </div>
+        <input id="vehicleSearchInput" class="hidden" placeholder="101, 용08, 척01">
+        <div id="vehicleSearchResults" class="search-results hidden"></div>
+        <div class="route-config-actions">
+          <button id="showRouteButton" class="primary" type="button">동선 조회</button>
+          <button id="syncRouteButton" type="button">시트 새로고침</button>
+        </div>
+        <div id="routeStatus" class="route-status">날짜와 호차를 선택하면 월 데이터 기준으로 동선을 표시합니다.</div>
+      </div>
       <div class="control-panel route-search-panel">
-        <label for="customerSearchInput">고객/주소 검색</label>
+        <h3><span class="route-section-no">2</span>고객/주소 검색</h3>
         <input id="customerSearchInput" placeholder="고객코드, 고객명, 주소">
         <div id="customerSearchResults" class="search-results"></div>
-        <details class="route-advanced">
-          <summary>호차/권역 선택</summary>
-          <div class="route-advanced-body">
-            <div class="route-field-grid">
-              <div>
-                <label for="viewMode">보기</label>
-                <select id="viewMode">
-                  <option value="overview:osan">오산센터 권역</option>
-                  <option value="overview:yeongnam">영남권 권역</option>
-                  <option value="overview:honam">호남권 권역</option>
-                  <option value="overview:all">전체 권역</option>
-                  <option value="detail">선택 호차 상세</option>
-                </select>
-              </div>
-              <div>
-                <label for="vehicleSelect">호차</label>
-                <select id="vehicleSelect"></select>
-              </div>
-            </div>
-            <label for="vehicleSearchInput">호차 검색</label>
-            <input id="vehicleSearchInput" placeholder="101, 용08, 척01">
-            <div id="vehicleSearchResults" class="search-results"></div>
-          </div>
-        </details>
-      </div>
-      <div class="task-tabs" id="taskTabs">
-        <button type="button" data-work-tab="route">동선</button>
-        <button type="button" data-work-tab="new">신규권역</button>
       </div>
       <section class="wms-panel wms-work" aria-label="WMS 배차 검토">
         <div class="wms-tool-pane">
@@ -985,25 +1004,9 @@
           </div>
         </div>
       </section>
-      <div class="route-work control-panel">
-        <div class="route-controls">
-          <div>
-            <label for="routeDateInput">일일동선 날짜</label>
-            <input id="routeDateInput" type="date">
-          </div>
-          <div>
-            <label for="routeVehicleQuickInput">호차 검색</label>
-            <input id="routeVehicleQuickInput" placeholder="108호">
-          </div>
-          <button id="resetOverviewButton" class="secondary" type="button">착지/매장</button>
-          <button id="syncRouteButton" class="secondary" type="button">시트 새로고침</button>
-        </div>
-        <div id="routeStatus" class="route-status">날짜와 호차를 선택하면 월 데이터 기준으로 동선을 표시합니다.</div>
-        <div id="routeStopPanel" class="route-stop-panel" hidden></div>
-      </div>
-      <section class="new-area-panel new-work" aria-label="신규권역 판단">
-        <h2>신규권역 판단</h2>
-        <div class="meta">신규 고객 코드, 고객명, 주소를 붙여 넣으면 운영지도 기준으로 추천 호차와 판단 사유를 보여줍니다.</div>
+      <details class="new-area-panel compact-new new-work" aria-label="신규권역 판단">
+        <summary><span class="route-section-no">3</span>신규권역 판단 ▾</summary>
+        <div class="new-area-body">
         <textarea id="newAreaInput" placeholder="주소	고객코드 또는 고객명"></textarea>
         <div class="new-area-actions">
           <button id="analyzeNewAreaButton" type="button">일괄 판단</button>
@@ -1026,7 +1029,9 @@
           <input id="newAreaSearchInput" placeholder="주소, 고객명, 사유 검색">
         </div>
         <div id="newAreaResults" class="new-area-results"></div>
-      </section>
+        </div>
+      </details>
+      <div class="route-work route-stop-panel" id="routeStopPanel" hidden></div>
       <div class="insight-work">
         <button id="backToOverviewButton" class="back-button hidden" type="button">전체 권역으로 돌아가기</button>
         <div id="vehicleNote"></div>
@@ -1320,7 +1325,7 @@
         downloadNewAreaResultsButton.disabled = true;
         setNewAreaFilter("all");
       });
-      taskTabs.addEventListener("click", (event) => {
+      taskTabs?.addEventListener("click", (event) => {
         const button = event.target.closest("button[data-work-tab]");
         if (!button) return;
         setWorkTab(button.dataset.workTab);
@@ -1892,7 +1897,7 @@
       topWmsTab?.classList.toggle("active", next === "wms");
       topNewAreaTab?.classList.toggle("active", next === "new");
       document.querySelector('.page-nav a[href="/daily-routes.html"]')?.classList.toggle("active", next === "route");
-      taskTabs.querySelectorAll("button[data-work-tab]").forEach(button => {
+      taskTabs?.querySelectorAll("button[data-work-tab]").forEach(button => {
         button.classList.toggle("active", button.dataset.workTab === next);
       });
       setTimeout(() => {
@@ -2291,7 +2296,7 @@
       }).join("");
       routeStopPanel.hidden = false;
       const total = (stops || []).length + (unmatchedStops || []).length;
-      routeStopPanel.innerHTML = `<h3>${esc(date)} ${esc(vehicle.vehicle)}호 착지/매장 ${fmt.format(total)}건</h3><div class="route-stop-list">${rows}${missedRows || ""}${(!rows && !missedRows) ? "<div class=\"route-stop-item\">표시할 착지가 없습니다.</div>" : ""}</div>`;
+      routeStopPanel.innerHTML = `<h3><span class="route-section-no">4</span>${esc(date)} ${esc(vehicle.vehicle)}호 착지/매장 ${fmt.format(total)}건</h3><div class="route-stop-list">${rows}${missedRows || ""}${(!rows && !missedRows) ? "<div class=\"route-stop-item\">표시할 착지가 없습니다.</div>" : ""}</div>`;
       routeStopPanel.querySelectorAll("[data-route-stop-index]").forEach(button => {
         button.addEventListener("click", () => focusRouteStop(Number(button.dataset.routeStopIndex)));
       });
