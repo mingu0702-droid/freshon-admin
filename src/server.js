@@ -747,24 +747,29 @@ function dispatchAddressFromRow(row, fallback = "") {
 }
 
 function normalizeDispatchRowForSheet(row, index, generatedAt) {
-  const vehicle = dispatchVehicleFromRow(row);
-  const sequence = dispatchSequenceFromRow(row, index + 1);
+  const vehicle = normalizeVehicleValue(row?.vehicle || row?.vehicleNo || dispatchVehicleFromRow(row));
+  const sequence = normalizeCell(row?.sequence || row?.routeOrder || row?.savedOrder || dispatchSequenceFromRow(row, index + 1));
   const stop = buildStopFromDispatchRow(row, vehicle, sequence);
   const amount = amountFromDispatchRow(row);
+  const sourceFile = row._sourceFile || row.sourceFile || row.sourceFileName || row.fileName || row.excelFileNm || "";
+  const deliveryDate = normalizeDateValue(row?.deliveryDate || row?.date || row?._inferredDeliveryDate || dispatchDateFromRow(row)) || parseDispatchDate(sourceFile);
+  const customerCode = normalizeCell(row?.customerCode || row?.code || stop.customerCode || firstValue(row, ["고객코드", "고객", "고객ERP코드", "ERP코드", "매장코드"]));
+  const customerName = normalizeCell(row?.customerName || row?.name || stop.customerName || firstValue(row, ["고객명", "매장명", "거래처명", "상호"]));
+  const address = normalizeCell(row?.address || stop.address || dispatchAddressFromRow(row, stop.address));
   return {
-    deliveryDate: dispatchDateFromRow(row),
+    deliveryDate,
     vehicle,
     sequence,
-    customerCode: stop.customerCode || firstValue(row, ["customerCode", "고객코드", "고객", "고객ERP코드", "ERP코드", "매장코드"]),
-    customerName: stop.customerName || firstValue(row, ["customerName", "고객명", "매장명", "거래처명", "상호"]),
-    address: dispatchAddressFromRow(row, stop.address),
+    customerCode,
+    customerName,
+    address,
     lat: coordinateFromDispatchRow(row, "lat"),
     lng: coordinateFromDispatchRow(row, "lng"),
     amount,
     dailyAmount: amount,
     monthlyAmount: amount,
     deliveryPattern: firstValue(row, ["deliveryPattern", "배송패턴", "배송요일", "요일", "운행요일"]),
-    sourceFile: row._sourceFile || row.sourceFile || "",
+    sourceFile,
     savedOrder: row._savedOrder || index + 1,
     updatedAt: generatedAt
   };
@@ -873,7 +878,7 @@ async function readRowsFromGoogleSheet({ spreadsheetId, sheetName, sheetGid, fal
 
 async function readDispatchFromGoogleSheet({ force = false } = {}) {
   if (!config.googleSheetId || !config.googleServiceAccountJsonBase64) return null;
-  if (!force && googleDispatchMemoryCache && Date.now() - googleDispatchMemoryCache.readAt < 60 * 1000) {
+  if (!force && googleDispatchMemoryCache && Date.now() - googleDispatchMemoryCache.readAt < 10 * 60 * 1000) {
     return googleDispatchMemoryCache.payload;
   }
   const token = await getGoogleAccessToken();
@@ -893,7 +898,7 @@ async function readDispatchFromGoogleSheet({ force = false } = {}) {
     if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
     const values = Array.isArray(body.values) ? body.values : [];
     const columns = (values[0] || []).map((value) => normalizeCell(value)).filter(Boolean);
-    const rows = values.slice(1)
+    const rawRows = values.slice(1)
       .map((line, index) => {
         const row = {};
         columns.forEach((column, columnIndex) => {
@@ -904,13 +909,17 @@ async function readDispatchFromGoogleSheet({ force = false } = {}) {
         return row;
       })
       .filter((row) => Object.values(row).some((value) => normalizeCell(value)));
-    if (!columns.length || !rows.length) continue;
-    if (!isDispatchSheet(columns, rows)) continue;
+    if (!columns.length || !rawRows.length) continue;
+    if (!isDispatchSheet(columns, rawRows)) continue;
+    const generatedAt = new Date().toISOString();
+    const rows = dedupeDispatchSheetRows(rawRows
+      .map((row, index) => normalizeDispatchRowForSheet(row, index, generatedAt))
+      .filter((row) => row.deliveryDate && row.vehicle && (row.customerCode || row.customerName || row.address)));
     const payload = {
-      generatedAt: new Date().toISOString(),
+      generatedAt,
       source: "google-sheet",
       range: inferRange(rows),
-      columns,
+      columns: DISPATCH_SHEET_COLUMNS,
       rows,
       rowCount: rows.length,
       sheetName,
@@ -922,9 +931,9 @@ async function readDispatchFromGoogleSheet({ force = false } = {}) {
   return null;
 }
 
-async function readDispatchSource(preferGoogle = true) {
+async function readDispatchSource(preferGoogle = true, forceGoogle = false) {
   if (preferGoogle && config.googleSheetId && config.googleServiceAccountJsonBase64) {
-    const sheetCache = await readDispatchFromGoogleSheet();
+    const sheetCache = await readDispatchFromGoogleSheet({ force: forceGoogle });
     if (sheetCache?.rows?.length) return sheetCache;
     throw new Error("Google sheet dispatch data is empty. Upload monthly dispatch Excel once to rebuild the sheet cache.");
   }
@@ -1247,7 +1256,7 @@ function looseAmountFromCell(value, header = "") {
 }
 
 function amountFromDispatchRow(row) {
-  const direct = numberFromMoney(firstValue(row, [
+  const amountKeys = [
     "amount",
     "dailyAmount",
     "monthlyAmount",
@@ -1274,8 +1283,11 @@ function amountFromDispatchRow(row) {
     "\uD310\uB9E4\uAE08\uC561",
     "\uACF5\uAE09\uAC00\uC561",
     "\uD569\uACC4\uAE08\uC561"
-  ]));
-  if (direct) return direct;
+  ];
+  for (const key of amountKeys) {
+    const direct = numberFromMoney(row?.[key]);
+    if (direct) return direct;
+  }
   let fallback = 0;
   for (const [key, value] of Object.entries(row || {})) {
     const header = normalizeCell(key);
@@ -1297,6 +1309,29 @@ function amountFromDispatchRow(row) {
     if (Math.abs(amount) > Math.abs(fallback)) fallback = amount;
   }
   return fallback;
+}
+
+function dispatchSourceFileDateMatches(row, requestedDate) {
+  const date = normalizeDateValue(requestedDate);
+  if (!date) return false;
+  const source = normalizeCell(row?.sourceFile || row?.fileName || row?.excelFileNm || row?.uploadFileName || "");
+  if (!source) return false;
+  const parsed = parseDispatchDate(source);
+  if (parsed === date) return true;
+  const mmddDot = date.slice(5).replace("-", ".");
+  const mmddCompact = date.slice(5).replace("-", "");
+  const mmddKorean = `${Number(date.slice(5, 7))}월`;
+  const dayKorean = `${Number(date.slice(8, 10))}일`;
+  return source.includes(date)
+    || source.includes(mmddDot)
+    || source.includes(mmddCompact)
+    || (source.includes(mmddKorean) && source.includes(dayKorean));
+}
+
+function dispatchRowDateMatches(row, requestedDate) {
+  const date = normalizeDateValue(requestedDate);
+  if (!date) return false;
+  return row.deliveryDate === date || dispatchSourceFileDateMatches(row, date);
 }
 
 function parseDispatchDate(value) {
@@ -1481,9 +1516,12 @@ function routeSortValue(row, fallbackIndex) {
 
 async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" }) {
   const cache = await readDispatchSource(true);
+  const generatedAt = cache.generatedAt || new Date().toISOString();
+  const requestedDate = normalizeDateValue(date);
+  const requestedVehicle = normalizeVehicleValue(vehicle);
   const matchedItems = (cache.rows || [])
-    .map((row, index) => ({ row, index }))
-    .filter((item) => rowMatchesDailyRoute(item.row, date, vehicle));
+    .map((row, index) => ({ row: normalizeDispatchRowForSheet(row, index, generatedAt), index }))
+    .filter((item) => dispatchRowDateMatches(item.row, requestedDate) && normalizeVehicleValue(item.row.vehicle) === requestedVehicle);
   const deliveryItems = matchedItems.filter((item) => isDeliveryHistoryRow(item.row));
   const baseItems = matchedItems.filter((item) => !isDeliveryHistoryRow(item.row));
   const historyByKey = new Map();
@@ -2397,20 +2435,23 @@ app.post("/api/fixed-dispatch/sync-google-sheet", requireAdmin, async (_req, res
 });
 
 function buildMonthlyDispatchSummary(cache) {
-  const rows = Array.isArray(cache.rows) ? cache.rows : [];
+  const generatedAt = cache.generatedAt || new Date().toISOString();
+  const rows = Array.isArray(cache.rows)
+    ? cache.rows.map((row, index) => normalizeDispatchRowForSheet(row, index, generatedAt))
+    : [];
   const vehicles = new Map();
   const stores = new Map();
   let totalAmount = 0;
   let coordinateMissingCount = 0;
   for (const row of rows) {
-    const date = dispatchDateFromRow(row);
-    const vehicle = dispatchVehicleFromRow(row);
-    const code = firstValue(row, ["customerCode", "\uACE0\uAC1D", "\uACE0\uAC1D\uCF54\uB4DC", "\uACE0\uAC1D \uCF54\uB4DC", "\uACE0\uAC1DERP\uCF54\uB4DC", "ERP\uCF54\uB4DC", "\uB9E4\uC7A5\uCF54\uB4DC"]);
-    const name = firstValue(row, ["customerName", "\uACE0\uAC1D\uBA85", "\uB9E4\uC7A5\uBA85", "\uAC70\uB798\uCC98\uBA85", "\uC0C1\uD638"]);
-    const address = dispatchAddressFromRow(row);
-    const lat = coordinateFromDispatchRow(row, "lat");
-    const lng = coordinateFromDispatchRow(row, "lng");
-    const amount = amountFromDispatchRow(row);
+    const date = row.deliveryDate;
+    const vehicle = normalizeVehicleValue(row.vehicle);
+    const code = row.customerCode;
+    const name = row.customerName;
+    const address = row.address;
+    const lat = row.lat;
+    const lng = row.lng;
+    const amount = Number(row.amount || 0);
     if (!lat || !lng) coordinateMissingCount += 1;
     totalAmount += amount;
     if (vehicle) {
@@ -2459,13 +2500,14 @@ function buildMonthlyDispatchSummary(cache) {
     coordinateMissingCount,
     vehicles: vehicleRows,
     stores: storeRows,
-    rows: rows.map((row, index) => normalizeDispatchRowForSheet(row, index, cache.generatedAt || new Date().toISOString())),
+    rows,
     source: cache.source === "google-sheet" ? "google-sheet" : "monthly-dispatch-cache"
   };
 }
 
-app.get("/api/monthly-dispatch-summary", requireView, async (_req, res) => {
-  const cache = await readDispatchSource(true);
+app.get("/api/monthly-dispatch-summary", requireView, async (req, res) => {
+  const forceGoogle = req.query.force === "1" || req.query.force === "true";
+  const cache = await readDispatchSource(true, forceGoogle);
   const meta = cache.source === "google-sheet" ? { generatedAt: cache.generatedAt } : await readDispatchMeta();
   const cached = await readMonthlyDispatchSummaryLocalFirst();
   if (cache.source !== "google-sheet" && cached && cached.cacheGeneratedFrom && meta?.generatedAt && cached.cacheGeneratedFrom === meta.generatedAt) {
@@ -2490,6 +2532,24 @@ app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => 
     rowCount: cache.rowCount || cache.rows?.length || 0,
     results: buildFixedDispatchSearchItems(cache, q)
   });
+});
+
+app.get("/api/monthly-dispatch-route", requireView, async (req, res) => {
+  const date = normalizeDateValue(req.query.date);
+  const vehicle = normalizeVehicleValue(req.query.vehicle);
+  const center = normalizeCell(req.query.center);
+  if (!date || !vehicle) return res.status(400).json({ error: "date and vehicle are required." });
+  const route = await buildFallbackDailyRoute({ date, vehicle, center });
+  if (!route) {
+    return res.status(404).json({
+      error: `월시트에 ${date} ${vehicle}호 동선이 없습니다.`,
+      source: "google-sheet",
+      date,
+      vehicle,
+      center
+    });
+  }
+  return res.json({ ...route, source: route.source || "google-sheet", api: "monthly-dispatch-route" });
 });
 
 app.get("/api/mobile/customer-search", requireView, async (req, res) => {
@@ -2566,46 +2626,8 @@ async function runDailyRouteSyncJob(job) {
   }
 }
 
-app.get("/api/daily-route-sync", requireView, (req, res) => {
-  const date = String(req.query.date || "");
-  const vehicle = String(req.query.vehicle || "");
-  if (!date || !vehicle) {
-    return res.status(400).json({ error: "date and vehicle are required." });
-  }
-  const key = dailyRouteSyncKey({ date, vehicle });
-  return res.json(publicDailyRouteSyncJob(dailyRouteSyncJobs.get(key)) || {
-    key,
-    date,
-    vehicle,
-    status: "idle"
-  });
-});
-
-app.post("/api/daily-route-sync", requireView, async (req, res) => {
-  const date = String(req.body?.date || req.query.date || "");
-  const vehicle = String(req.body?.vehicle || req.query.vehicle || "");
-  const center = String(req.body?.center || req.query.center || "");
-  if (!date || !vehicle) {
-    return res.status(400).json({ error: "date and vehicle are required." });
-  }
-  const key = dailyRouteSyncKey({ date, vehicle });
-  const current = dailyRouteSyncJobs.get(key);
-  if (current?.status === "running") {
-    return res.status(202).json(publicDailyRouteSyncJob(current));
-  }
-  const job = {
-    key,
-    date,
-    vehicle,
-    center,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    finishedAt: null,
-    error: null
-  };
-  dailyRouteSyncJobs.set(key, job);
-  runDailyRouteSyncJob(job);
-  return res.status(202).json(publicDailyRouteSyncJob(job));
+app.all("/api/daily-route-sync", requireView, (_req, res) => {
+  res.status(410).json({ error: "daily-route-sync is disabled. Use /api/monthly-dispatch-route." });
 });
 
 app.get("/api/daily-route", requireView, async (req, res) => {
@@ -2623,6 +2645,15 @@ app.get("/api/daily-route", requireView, async (req, res) => {
     if (monthlyRoute) {
       await writeDailyRoute(monthlyRoute).catch(() => {});
       return res.json(monthlyRoute);
+    }
+    if (req.query.source !== "saved-cache") {
+      return res.status(404).json({
+        error: `월 데이터에 ${date} ${vehicle}호 동선이 없습니다.`,
+        source: "monthly-dispatch-cache",
+        date,
+        vehicle,
+        center
+      });
     }
   }
   const cached = await readDailyRoute(date, vehicle);

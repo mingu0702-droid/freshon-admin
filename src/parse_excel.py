@@ -58,7 +58,8 @@ def workbook_for(path, password):
 HEADER_KEYWORDS = {
     "입고요청일", "배송일", "배송일자", "확정호차", "기준호차", "호차", "톤수",
     "기사명", "연락처", "배송권역", "고객", "고객코드", "고객명", "매출금액",
-    "매출액", "주문금액", "배송건수", "중량", "고객주소", "상세주소", "운송사",
+    "매출액", "주문금액", "총주문금액", "총주문액", "금액", "배송건수", "중량",
+    "고객주소", "상세주소", "주소", "배송주소", "순번", "순서",
 }
 
 
@@ -86,7 +87,7 @@ def rows_from_sheet(sheet, source_file):
     header_index = None
     best_score = 0
 
-    for index, normalized in enumerate(normalized_rows):
+    for index, normalized in enumerate(normalized_rows[:120]):
         if not inferred_date:
             inferred_date = infer_date_from_values(normalized)
         score = header_score(normalized)
@@ -103,7 +104,7 @@ def rows_from_sheet(sheet, source_file):
         return rows, columns
 
     header = [value or f"column_{index + 1}" for index, value in enumerate(normalized_rows[header_index])]
-    date_column_exists = any(("입고요청일" in column or "배송일" in column) for column in header)
+    date_column_exists = any(("입고요청일" in column or "배송일" in column or "배송일자" in column or "일자" in column or "날짜" in column) for column in header)
     if inferred_date and not date_column_exists:
         header.append("입고요청일")
     for column in header:

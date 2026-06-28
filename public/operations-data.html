@@ -41,187 +41,255 @@
 </head>
 <body>
   <header>
-    <div><h1>운영데이터</h1><p>관리자 월 캐시와 운영지도 기준 데이터를 한 화면에서 봅니다.</p></div>
+    <div>
+      <h1>운영데이터</h1>
+      <p>구글시트 월 배차 데이터 기준으로 매출, 착지, 호차 흐름을 봅니다.</p>
+    </div>
     <nav>
-      <a href="/daily-routes.html">일일동선</a><a href="/daily-routes.html?tab=wms">WMS</a><a class="active" href="/operations-data.html">운영데이터</a><a href="/admin.html">관리자</a>
+      <a href="/daily-routes.html">일일동선</a>
+      <a href="/daily-routes.html?tab=wms">WMS</a>
+      <a class="active" href="/operations-data.html">운영데이터</a>
+      <a href="/admin.html">관리자</a>
     </nav>
   </header>
+
   <section class="bar">
-    <div><label>분석 월</label><select id="month"><option value="">전체 캐시</option></select></div>
-    <div><label>센터</label><select id="center"><option>오산센터</option></select></div>
+    <div><label>분석 월</label><select id="month"></select></div>
+    <div><label>센터</label><select id="center"><option value="">전체</option><option selected>오산센터</option><option>호남센터</option><option>영남센터</option></select></div>
     <div><label>고객/주소/호차 검색</label><input id="q" placeholder="101호차, S10922, 할맥, 은평구"></div>
-    <div><label>보기 기준</label><select id="sort"><option value="vehicle">호차순</option><option value="amount">매출 높은 순</option><option value="stops">착지 많은 순</option><option value="coords">좌표 필요 순</option></select></div>
-    <div><label>&nbsp;</label><button class="primary" id="refresh">데이터 갱신</button></div>
+    <div><label>보기 기준</label><select id="sort"><option value="vehicle">호차순</option><option value="amount">매출 높은 순</option><option value="stops">착지 많은 순</option></select></div>
+    <div><label>&nbsp;</label><button class="primary" id="reload">데이터 갱신</button></div>
   </section>
-  <div class="source" id="source">데이터를 불러오는 중입니다.</div>
+  <div class="source" id="source">데이터 로딩 중</div>
+
   <section class="tabs">
     <button class="tab active" data-tab="vehicle">호차 분석</button>
     <button class="tab" data-tab="store">매장 분석</button>
     <button class="tab" data-tab="coord">좌표 관리</button>
     <button class="tab" data-tab="adjust">조정 후보</button>
   </section>
+
   <section class="grid" id="kpis"></section>
-  <section class="main">
-    <div class="panel">
-      <div class="panel-head"><div><b id="listTitle">호차별 월 데이터</b><p id="listSub">매출, 착지수, 착지당 금액 기준입니다.</p></div><span id="listCount"></span></div>
+  <main class="main">
+    <section class="panel">
+      <div class="panel-head"><div><b id="listTitle">호차별 월 데이터</b><p id="listSub">매출, 착지수, 착지당 금액 기준입니다.</p></div><b id="listCount">0건</b></div>
       <div class="list" id="list"></div>
-    </div>
-    <div class="panel">
-      <div class="panel-head"><div><b id="detailTitle">상세</b><p>항목을 선택해주세요.</p></div><span id="detailBadge">대기</span></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><div><b id="detailTitle">상세</b><p id="detailSub">항목을 선택해주세요.</p></div><b id="detailBadge">대기</b></div>
       <div class="detail" id="detail">항목을 선택해주세요.</div>
-    </div>
-  </section>
+    </section>
+  </main>
+
   <section class="panel" style="margin:0 18px 18px;">
     <div class="panel-head"><div><b>원본 미리보기</b><p>월 캐시에서 최근 순서대로 일부만 표시합니다.</p></div></div>
-    <div class="list" id="preview"></div>
+    <div class="list" id="raw"></div>
   </section>
+
   <script>
     const nf = new Intl.NumberFormat("ko-KR");
-    const state = { summary:null, tab:"vehicle", selected:null, computed:null };
-    const $ = (id) => document.getElementById(id);
-    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
-    const num = (v) => Number(String(v ?? "").replace(/[^\d.-]/g, "")) || 0;
     const money = (n) => `${nf.format(Math.round(Number(n) || 0))}원`;
-    const vehicleNo = (v) => String(v ?? "").replace(/\D/g, "");
-    const amountOf = (r) => num(r.amount ?? r.dailyAmount ?? r.monthlyAmount ?? r.salesAmount ?? r.totalAmount ?? r["매출금액"] ?? r["금액"]);
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
+    const numberOf = (v) => {
+      if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+      const n = Number(String(v ?? "").replace(/[^\d.-]/g, ""));
+      return Number.isFinite(n) ? n : 0;
+    };
+    const pick = (row, keys) => {
+      for (const key of keys) {
+        if (row && row[key] !== undefined && row[key] !== null && row[key] !== "") return row[key];
+      }
+      return "";
+    };
+    const vehicleOf = (row) => String(pick(row, ["vehicle","vehicleNo","route","truck","기준호차","확정호차","호차","차량호차"])).replace(/호차|호/g,"").trim();
+    const codeOf = (row) => String(pick(row, ["customerCode","code","customer","고객ERP코드","고객코드","고객"])).trim();
+    const nameOf = (row) => String(pick(row, ["customerName","name","storeName","고객명(업체명)","고객명","매장명"])).trim();
+    const addressOf = (row) => String(pick(row, ["address","addr","customerAddress","고객주소","주소"])).trim();
+    const dateOf = (row) => String(pick(row, ["deliveryDate","date","inDate","입고요청일","배송일","일자"])).slice(0, 10);
+    const amountOf = (row) => numberOf(pick(row, ["amount","dailyAmount","monthlyAmount","salesAmount","totalAmount","매출금액","총주문액","금액","총주문금액"]));
 
-    function computeSummary() {
-      const rows = Array.isArray(state.summary?.rows) ? state.summary.rows : [];
-      const vehicles = new Map();
-      const stores = new Map();
-      const coords = [];
-      let totalAmount = 0;
-      rows.forEach((r, index) => {
-        const vehicle = vehicleNo(r.vehicle) || String(r.vehicle ?? "").trim() || "-";
-        const code = String(r.customerCode ?? r.code ?? "").trim();
-        const name = String(r.customerName ?? r.name ?? "").trim();
-        const address = String(r.address ?? "").trim();
-        const amount = amountOf(r);
-        const date = String(r.deliveryDate ?? r.date ?? "").trim();
-        totalAmount += amount;
-        if (!vehicles.has(vehicle)) vehicles.set(vehicle, { vehicle, stops:0, amount:0, stores:new Set(), lastDate:"", rows:[] });
-        const v = vehicles.get(vehicle);
-        v.stops += 1; v.amount += amount; v.lastDate = date || v.lastDate; v.rows.push(r); if (code || name) v.stores.add(code || `${name}|${address}`);
-        const key = code || `${name}|${address}`;
-        if (key && !stores.has(key)) stores.set(key, { code, name, address, vehicle, amount:0, stops:0, lastDate:"", rows:[] });
-        if (key) { const s = stores.get(key); s.amount += amount; s.stops += 1; s.lastDate = date || s.lastDate; s.rows.push(r); }
-        if (!num(r.lat) || !num(r.lng)) coords.push({ ...r, _index:index });
-      });
-      state.computed = {
-        rows,
-        rowCount: rows.length,
-        totalAmount,
-        vehicleCount: vehicles.size,
-        storeCount: stores.size,
-        coordinateMissingCount: coords.length,
-        vehicles: [...vehicles.values()].map(v => ({ ...v, storeCount:v.stores.size, avg:v.stops ? v.amount / v.stops : 0 })),
-        stores: [...stores.values()].map(s => ({ ...s, avg:s.stops ? s.amount / s.stops : 0 })),
-        coords
-      };
+    const state = { summary:null, rows:[], tab:"vehicle", selected:null };
+
+    function normalizeRows(data) {
+      const rows = data.rows || data.data || data.items || [];
+      return Array.isArray(rows) ? rows : [];
     }
 
-    function filtered(items) {
-      const q = $("q").value.trim().toLowerCase();
-      if (!q) return items;
-      return items.filter((item) => JSON.stringify(item).toLowerCase().includes(q));
+    function selectedMonth() {
+      return document.getElementById("month").value;
     }
 
-    function sorted(items) {
-      const mode = $("sort").value;
-      return [...items].sort((a,b) => {
-        if (mode === "amount") return (b.amount || 0) - (a.amount || 0);
-        if (mode === "stops") return (b.stops || 0) - (a.stops || 0);
-        if (mode === "coords") return (b._index || 0) - (a._index || 0);
-        return String(a.vehicle || a.code || a.name || "").localeCompare(String(b.vehicle || b.code || b.name || ""), "ko", { numeric:true });
+    function monthMatches(row) {
+      const m = selectedMonth();
+      if (!m || m === "all" || m === "전체 캐시") return true;
+      const d = dateOf(row);
+      return d ? d.startsWith(m) : true;
+    }
+
+    function filteredRows() {
+      const q = document.getElementById("q").value.trim().toLowerCase();
+      return state.rows.filter(row => {
+        if (!monthMatches(row)) return false;
+        if (!q) return true;
+        const text = [vehicleOf(row), codeOf(row), nameOf(row), addressOf(row), dateOf(row)].join(" ").toLowerCase();
+        return text.includes(q);
       });
     }
 
-    function currentItems() {
-      const c = state.computed || {};
-      if (state.tab === "store") return sorted(filtered(c.stores || []));
-      if (state.tab === "coord") return sorted(filtered(c.coords || []));
-      if (state.tab === "adjust") return sorted(filtered((c.vehicles || []).filter(v => v.avg > 450000 || v.stops >= 35)));
-      return sorted(filtered(c.vehicles || []));
+    function groupByVehicle(rows) {
+      const map = new Map();
+      rows.forEach(row => {
+        const vehicle = vehicleOf(row);
+        if (!vehicle) return;
+        const item = map.get(vehicle) || { key:vehicle, label:`${vehicle}호`, stops:0, amount:0, stores:new Set(), dates:new Set(), rows:[] };
+        item.stops += 1;
+        item.amount += amountOf(row);
+        if (codeOf(row)) item.stores.add(codeOf(row));
+        if (dateOf(row)) item.dates.add(dateOf(row));
+        item.rows.push(row);
+        map.set(vehicle, item);
+      });
+      return [...map.values()].map(item => ({ ...item, storeCount:item.stores.size, dateCount:item.dates.size }));
     }
 
-    function renderKpis() {
-      const c = state.computed || {};
-      const avg = c.rowCount ? c.totalAmount / c.rowCount : 0;
-      const items = [
-        ["총 착지수", `${nf.format(c.rowCount || 0)}건`, "시트 행 기준"],
-        ["총 매출", money(c.totalAmount || 0), "amount/dailyAmount 기준"],
-        ["착지당 금액", money(avg), "매출/착지 기준"],
-        ["운행 호차", `${nf.format(c.vehicleCount || 0)}대`, "월 캐시 기준"],
-        ["좌표 보정 필요", `${nf.format(c.coordinateMissingCount || 0)}곳`, "lat/lng 누락"],
-        ["매장 수", `${nf.format(c.storeCount || 0)}곳`, "고객코드 합산"]
-      ];
-      $("kpis").innerHTML = items.map(([a,b,c]) => `<div class="card kpi"><span>${a}</span><strong>${b}</strong><p>${c}</p></div>`).join("");
+    function groupByStore(rows) {
+      const map = new Map();
+      rows.forEach(row => {
+        const key = codeOf(row) || `${nameOf(row)}|${addressOf(row)}`;
+        if (!key) return;
+        const item = map.get(key) || { key, label:nameOf(row) || key, code:codeOf(row), address:addressOf(row), vehicle:vehicleOf(row), stops:0, amount:0, dates:new Set(), rows:[] };
+        item.stops += 1;
+        item.amount += amountOf(row);
+        if (dateOf(row)) item.dates.add(dateOf(row));
+        item.rows.push(row);
+        map.set(key, item);
+      });
+      return [...map.values()].map(item => ({ ...item, dateCount:item.dates.size }));
+    }
+
+    function sortItems(items) {
+      const sort = document.getElementById("sort").value;
+      if (sort === "amount") return items.sort((a,b) => b.amount - a.amount);
+      if (sort === "stops") return items.sort((a,b) => b.stops - a.stops);
+      return items.sort((a,b) => String(a.key).localeCompare(String(b.key), "ko", { numeric:true }));
+    }
+
+    function renderKpis(rows) {
+      const vehicles = groupByVehicle(rows);
+      const stores = groupByStore(rows);
+      const totalAmount = rows.reduce((sum, row) => sum + amountOf(row), 0);
+      const totalStops = rows.length;
+      const avgStops = vehicles.length ? Math.round(totalStops / vehicles.length) : 0;
+      const avgAmount = totalStops ? Math.round(totalAmount / totalStops) : 0;
+      const noCoords = rows.filter(row => !numberOf(row.lat) || !numberOf(row.lng)).length;
+      document.getElementById("kpis").innerHTML = [
+        ["월 평균 착지수", `${nf.format(avgStops)}건`, `총 ${nf.format(totalStops)}건`],
+        ["월 매출", money(totalAmount), "구글시트 기준"],
+        ["착지당 금액", money(avgAmount), "매출/착지 기준"],
+        ["운행 호차", `${nf.format(vehicles.length)}대`, "월 데이터 기준"],
+        ["좌표 보정 필요", `${nf.format(noCoords)}곳`, "lat/lng 누락"],
+        ["매장 수", `${nf.format(stores.length)}곳`, "중복 코드 합산"]
+      ].map(([a,b,c]) => `<div class="card kpi"><span>${a}</span><strong>${b}</strong><small>${c}</small></div>`).join("");
     }
 
     function renderList() {
-      const items = currentItems();
-      $("listCount").textContent = `${nf.format(items.length)}건`;
-      $("list").innerHTML = items.length ? items.slice(0,500).map((item, i) => {
-        const title = state.tab === "store" ? `${item.code || "-"} · ${item.name || "-"}` : state.tab === "coord" ? `${item.customerCode || "-"} · ${item.customerName || "-"}` : `${item.vehicle}호`;
-        const meta = state.tab === "coord" ? item.address : `${nf.format(item.stops || 0)}착지 · ${money(item.amount || 0)} · 착지당 ${money(item.avg || 0)}`;
-        return `<div class="row${i===0 ? " active" : ""}" data-i="${i}"><b>${esc(title)}</b><small>${esc(meta)}</small></div>`;
-      }).join("") : `<div class="empty">결과가 없습니다. 검색 조건을 바꿔주세요.</div>`;
-      $("list").querySelectorAll(".row").forEach((el) => el.addEventListener("click", () => {
-        $("list").querySelectorAll(".row").forEach(x => x.classList.remove("active"));
-        el.classList.add("active");
-        renderDetail(items[Number(el.dataset.i)]);
-      }));
-      renderDetail(items[0]);
+      const rows = filteredRows();
+      renderKpis(rows);
+      const mode = state.tab;
+      const items = sortItems(mode === "store" ? groupByStore(rows) : groupByVehicle(rows));
+      document.getElementById("listTitle").textContent = mode === "store" ? "매장별 월 데이터" : "호차별 월 데이터";
+      document.getElementById("listCount").textContent = `${nf.format(items.length)}건`;
+      document.getElementById("list").innerHTML = items.length ? items.slice(0, 500).map(item => `
+        <div class="row ${state.selected?.key === item.key ? "active" : ""}" data-key="${esc(item.key)}">
+          <b>${esc(item.label)}</b>
+          <small>${nf.format(item.stops)}착지 · ${money(item.amount)} · ${mode === "store" ? esc(item.vehicle || "-") + "호" : nf.format(item.storeCount || 0) + "매장"}</small>
+        </div>`).join("") : `<div class="empty">결과가 없습니다. 검색 조건을 바꿔주세요.</div>`;
+      document.querySelectorAll(".row[data-key]").forEach(el => {
+        el.addEventListener("click", () => {
+          state.selected = items.find(item => String(item.key) === el.dataset.key);
+          renderDetail();
+          renderList();
+        });
+      });
+      renderRaw(rows);
+      if (!state.selected && items[0]) {
+        state.selected = items[0];
+        renderDetail();
+      }
     }
 
-    function renderDetail(item) {
-      if (!item) { $("detailTitle").textContent = "상세"; $("detail").textContent = "항목을 선택해주세요."; return; }
-      const title = item.vehicle ? `${item.vehicle}호 상세` : `${item.customerCode || item.code || "-"} 상세`;
-      $("detailTitle").textContent = title;
-      $("detailBadge").textContent = "상세";
-      const rows = item.rows || [item];
-      $("detail").innerHTML = `
+    function renderDetail() {
+      const item = state.selected;
+      if (!item) {
+        document.getElementById("detailTitle").textContent = "상세";
+        document.getElementById("detail").innerHTML = "항목을 선택해주세요.";
+        return;
+      }
+      document.getElementById("detailTitle").textContent = `${item.label} 상세`;
+      document.getElementById("detailSub").textContent = "월 데이터 기준 요약입니다.";
+      document.getElementById("detailBadge").textContent = "상세";
+      const sample = item.rows?.[0] || {};
+      document.getElementById("detail").innerHTML = `
         <div class="detail-grid">
-          <div class="stat"><span>매출</span><strong>${money(item.amount || amountOf(item))}</strong></div>
-          <div class="stat"><span>착지/주문</span><strong>${nf.format(item.stops || rows.length || 0)}건</strong></div>
-          <div class="stat"><span>착지당 금액</span><strong>${money(item.avg || 0)}</strong></div>
+          <div class="stat"><span>매출</span><strong>${money(item.amount)}</strong></div>
+          <div class="stat"><span>착지/주문</span><strong>${nf.format(item.stops)}건</strong></div>
+          <div class="stat"><span>착지당 금액</span><strong>${money(item.stops ? item.amount / item.stops : 0)}</strong></div>
         </div>
         <table>
-          <tr><th>호차</th><td>${esc(item.vehicle || rows[0]?.vehicle || "-")}</td></tr>
-          <tr><th>주소</th><td>${esc(item.address || rows[0]?.address || "-")}</td></tr>
-          <tr><th>최종일</th><td>${esc(item.lastDate || rows[0]?.deliveryDate || "-")}</td></tr>
+          <tr><th>호차</th><td>${esc(item.vehicle || vehicleOf(sample) || item.key)}</td></tr>
+          <tr><th>고객코드</th><td>${esc(item.code || codeOf(sample) || "-")}</td></tr>
+          <tr><th>주소</th><td>${esc(item.address || addressOf(sample) || "-")}</td></tr>
+          <tr><th>최근일</th><td>${esc([...new Set((item.rows || []).map(dateOf).filter(Boolean))].sort().pop() || "-")}</td></tr>
         </table>`;
     }
 
-    function renderPreview() {
-      const rows = (state.computed?.rows || []).slice(-20).reverse();
-      $("preview").innerHTML = rows.map(r => `<div class="row"><b>${esc(r.deliveryDate || "-")} · ${esc(r.vehicle || "-")}호 · ${esc(r.customerName || "-")}</b><small>${esc(r.address || "")} · ${money(amountOf(r))}</small></div>`).join("") || `<div class="empty">원본 데이터가 없습니다.</div>`;
+    function renderRaw(rows) {
+      document.getElementById("raw").innerHTML = rows.slice(0, 80).map(row => `
+        <div class="row">
+          <b>${esc(codeOf(row))} / ${esc(nameOf(row))}</b>
+          <small>${esc(dateOf(row))} · ${esc(vehicleOf(row))}호 · ${money(amountOf(row))} · ${esc(addressOf(row))}</small>
+        </div>`).join("") || `<div class="empty">표시할 원본 데이터가 없습니다.</div>`;
     }
 
-    function render() {
-      const c = state.computed || {};
-      $("source").innerHTML = `데이터 출처 <b>${esc(state.summary?.source || "-")}</b> · 행 ${nf.format(c.rowCount || 0)}건 · 매출 ${money(c.totalAmount || 0)} · 갱신 ${esc(state.summary?.updatedAt || "-")}`;
-      renderKpis(); renderList(); renderPreview();
+    function buildMonthOptions(rows) {
+      const select = document.getElementById("month");
+      const months = [...new Set(rows.map(dateOf).filter(Boolean).map(d => d.slice(0, 7)))].sort().reverse();
+      select.innerHTML = `<option value="">전체 캐시</option>` + months.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
     }
 
-    async function loadSummary() {
-      $("source").textContent = "데이터를 불러오는 중입니다.";
+    async function loadData() {
+      document.getElementById("source").textContent = "데이터 로딩 중";
       const res = await fetch("/api/monthly-dispatch-summary", { cache:"no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      state.summary = await res.json();
-      computeSummary();
-      render();
+      const data = await res.json();
+      state.summary = data;
+      state.rows = normalizeRows(data);
+      buildMonthOptions(state.rows);
+      const totalAmount = state.rows.reduce((sum, row) => sum + amountOf(row), 0);
+      document.getElementById("source").innerHTML = `데이터 출처 <b>${esc(data.source || "monthly-dispatch-summary")}</b> · 행 ${nf.format(state.rows.length)}건 · 매출 ${money(totalAmount)} · 갱신 ${esc(data.generatedAt || data.updatedAt || "-")}`;
+      state.selected = null;
+      renderList();
     }
 
+    document.getElementById("reload").addEventListener("click", () => loadData().catch(err => {
+      document.getElementById("source").textContent = `데이터 조회 실패: ${err.message}`;
+    }));
+    ["q","month","sort","center"].forEach(id => {
+      document.getElementById(id).addEventListener(id === "q" ? "input" : "change", () => {
+        state.selected = null;
+        renderList();
+      });
+    });
     document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-      btn.classList.add("active");
+      document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
       state.tab = btn.dataset.tab;
+      state.selected = null;
       renderList();
     }));
-    ["q","sort"].forEach(id => $(id).addEventListener("input", renderList));
-    $("refresh").addEventListener("click", () => loadSummary().catch(err => { $("source").textContent = `데이터 조회 실패: ${err.message}`; }));
-    loadSummary().catch(err => { $("source").textContent = `데이터 조회 실패: ${err.message}`; });
+
+    loadData().catch(err => {
+      document.getElementById("source").textContent = `데이터 조회 실패: ${err.message}`;
+    });
   </script>
 </body>
 </html>

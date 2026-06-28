@@ -399,8 +399,8 @@
       position:relative;
       height:calc(100vh - 54px);
       display:grid;
-      grid-template-columns:minmax(680px, 1fr) minmax(360px, 420px);
-      grid-template-rows:minmax(190px, 260px) minmax(260px, 1fr);
+      grid-template-columns:minmax(760px, 1fr) minmax(360px, 440px);
+      grid-template-rows:minmax(250px, 34vh) minmax(260px, 1fr);
       grid-template-areas:
         "results tools"
         "results map";
@@ -448,6 +448,7 @@
       display:block;
       width:100%;
       height:100%;
+      aspect-ratio:1 / 1;
       min-width:0;
       min-height:0;
       max-width:none;
@@ -497,7 +498,7 @@
     }
     body[data-work-tab="wms"] .wms-board {
       display:grid;
-      grid-template-columns:220px minmax(520px, 1fr);
+      grid-template-columns:minmax(230px, 18vw) minmax(520px, 1fr);
       height:100%;
       padding:0;
       background:#f3f6fb;
@@ -946,9 +947,8 @@
             <label for="routeDateInput">일일동선 날짜</label>
             <input id="routeDateInput" type="date">
           </div>
-          <button id="showRouteButton" type="button">동선 보기</button>
           <button id="resetOverviewButton" class="secondary" type="button">전체 권역</button>
-          <button id="syncRouteButton" class="secondary" type="button">월 데이터 확인</button>
+          <button id="syncRouteButton" class="secondary" type="button">시트 새로고침</button>
         </div>
         <div id="routeStatus" class="route-status">날짜와 호차를 선택하면 월 데이터 기준으로 동선을 표시합니다.</div>
         <div id="routeStopPanel" class="route-stop-panel" hidden></div>
@@ -1206,7 +1206,7 @@
       });
       resetOverviewButton?.addEventListener("click", () => resetToOverview("overview:all"));
       routeMapOverviewButton?.addEventListener("click", () => resetToOverview("overview:all"));
-      showRouteButton.addEventListener("click", () => {
+      showRouteButton?.addEventListener("click", () => {
         setWorkTab("route");
         shouldShowRoute = true;
         if (vehicleSelect.value) viewMode.value = "detail";
@@ -1220,7 +1220,7 @@
         }
         syncRouteButton.disabled = true;
         try {
-          const cache = await loadMonthlyDispatchCache();
+          const cache = await loadMonthlyDispatchCache({ force: true });
           await renderDailyRoute(vehicle, getVehicleColor(vehicle), { skipSync: true });
           routeStatus.innerHTML += `<div class="sync-notice done"><b>월 데이터 갱신</b><br>${esc(monthlyCacheSummary(cache))}</div>`;
         } catch (error) {
@@ -1408,7 +1408,7 @@
         shouldShowRoute = false;
         currentRouteStops = [];
         activeRouteSyncPollKey = "";
-        routeStatus.textContent = "날짜가 선택되었습니다. 동선 보기를 누르면 월 데이터 기준으로 조회합니다.";
+        routeStatus.textContent = "날짜가 선택되었습니다. 월 데이터 기준으로 조회할 수 있습니다.";
         loadVehicleDriverMaster(routeDateInput.value).then(render).catch(() => render());
       });
       const searchParams = new URLSearchParams(location.search);
@@ -1507,7 +1507,7 @@
       }
       savedCustomerSearchTimer = window.setTimeout(async () => {
         try {
-          const res = await fetch(`/api/fixed-dispatch/customer-search?q=${encodeURIComponent(q)}`);
+          const res = await fetch(`/api/fixed-dispatch/customer-search?q=${encodeURIComponent(q)}&_=${Date.now()}`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const payload = await res.json();
           if (customerSearchInput.value.trim() !== q) return;
@@ -1811,7 +1811,7 @@
       document.querySelectorAll(".new-area-panel.new-work").forEach(panel => {
         panel.hidden = next !== "new";
       });
-      if (routeStopPanel) routeStopPanel.hidden = next !== "route";
+      if (routeStopPanel) routeStopPanel.hidden = next !== "route" || !routeStopPanel.innerHTML.trim();
       if (next === "wms") {
         if (mapPanel.parentElement !== wmsMapSlot) wmsMapSlot.appendChild(mapPanel);
       } else if (mapPanel.parentElement !== document.querySelector(".shell")) {
@@ -2471,17 +2471,8 @@
       `;
     }
 
-    async function startDailyRouteSync(date, vehicle) {
-      const response = await fetch("/api/daily-route-sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date, vehicle: vehicle.vehicle, center: vehicle.region || "" })
-      });
-      return response.json().catch(() => ({}));
-    }
-
-    async function loadMonthlyDispatchCache() {
-      const response = await fetch("/api/fixed-dispatch", { cache: "no-store" });
+    async function loadMonthlyDispatchCache({ force = false } = {}) {
+      const response = await fetch(`/api/monthly-dispatch-summary?_=${Date.now()}${force ? "&force=1" : ""}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`월 데이터 조회 HTTP ${response.status}`);
       return response.json().catch(() => ({}));
     }
@@ -2505,55 +2496,6 @@
       const range = typeof cache?.range === "string" ? cache.range : cache?.range?.label || cache?.range?.text || cache?.monthKey || "";
       if (!rowCount) return "저장된 월 배차 데이터가 없습니다. 관리자에서 월 배차 엑셀을 먼저 업로드해주세요.";
       return `저장 월 데이터 ${fmt.format(rowCount)}행${range ? ` · 범위 ${range}` : ""} · 갱신 기준: ${generatedAt}`;
-    }
-
-    async function getDailyRouteSyncStatus(date, vehicle) {
-      const params = new URLSearchParams({ date, vehicle: vehicle.vehicle });
-      const response = await fetch(`/api/daily-route-sync?${params.toString()}`, { cache: "no-store" });
-      return response.json().catch(() => ({ status: "unknown" }));
-    }
-
-    function renderSyncNotice(job) {
-      if (!job || job.status === "idle") return "월 데이터 기준으로 바로 조회합니다.";
-      if (job.status === "running") return `동기화 중 · 시작 ${esc(job.startedAt || "-")}`;
-      if (job.status === "done") {
-        return `완료 · 착지 ${fmt.format(job.stopCount || 0)}건 · 월 ${esc(job.monthKey || "-")}`;
-      }
-      if (job.status === "error") {
-        const shortError = String(job.error || "-").split(" / ").slice(0, 1).join(" / ");
-        return `실패 · ${esc(shortError)}`;
-      }
-      return `상태: ${esc(job.status || "-")}`;
-    }
-
-    async function pollDailyRouteSync(date, vehicle, color) {
-      const pollKey = `${date}::${vehicle.vehicle}`;
-      if (activeRouteSyncPollKey === pollKey) return;
-      activeRouteSyncPollKey = pollKey;
-      for (let attempt = 0; attempt < 18; attempt += 1) {
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        if (!shouldShowRoute || routeDateInput.value !== date || vehicleSelect.value !== vehicle.vehicle) {
-          if (activeRouteSyncPollKey === pollKey) activeRouteSyncPollKey = "";
-          syncRouteButton.disabled = false;
-          return;
-        }
-        const job = await getDailyRouteSyncStatus(date, vehicle);
-        if (job.status === "done") {
-          if (activeRouteSyncPollKey === pollKey) activeRouteSyncPollKey = "";
-          syncRouteButton.disabled = false;
-          await renderDailyRoute(vehicle, color, { skipSync: true });
-          routeStatus.innerHTML += `<div class="sync-notice done"><b>동기화 결과</b><br>${renderSyncNotice(job)}</div>`;
-          return;
-        }
-        if (job.status === "error") {
-          if (activeRouteSyncPollKey === pollKey) activeRouteSyncPollKey = "";
-          syncRouteButton.disabled = false;
-          routeStatus.innerHTML += `<div class="sync-notice error"><b>동기화 결과</b><br>${renderSyncNotice(job)}</div>`;
-          return;
-        }
-      }
-      if (activeRouteSyncPollKey === pollKey) activeRouteSyncPollKey = "";
-      syncRouteButton.disabled = false;
     }
 
     async function renderDailyRoutePayload(vehicle, color, date, payload) {
@@ -2646,7 +2588,7 @@
         const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, center: vehicle.region || "" });
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 20000);
-        const response = await fetch(`/api/daily-route?${params.toString()}`, { cache: "no-store", signal: controller.signal });
+        const response = await fetch(`/api/monthly-dispatch-route?${params.toString()}`, { cache: "no-store", signal: controller.signal });
         clearTimeout(timer);
         if (!response.ok) {
           const error = await response.json().catch(() => ({}));
@@ -2656,10 +2598,7 @@
         const payload = await response.json();
         await renderDailyRoutePayload(vehicle, color, date, payload);
         if (!options.skipSync) {
-          const job = await getDailyRouteSyncStatus(date, vehicle).catch(() => null);
-          if (job && job.status && job.status !== "idle") {
-            routeStatus.innerHTML += `<div class="sync-notice${job.status === "error" ? " error" : job.status === "done" ? " done" : ""}"><b>동기화 상태</b><br>${renderSyncNotice(job)}</div>`;
-          }
+          routeStatus.innerHTML += `<div class="sync-notice done"><b>월시트 조회 완료</b><br>선택 날짜와 호차 기준으로 표시했습니다.</div>`;
         }
       } catch (error) {
         routeStatus.innerHTML += `<div class="sync-notice">${
@@ -2891,15 +2830,16 @@
       const explicitDongHo = /(^|[^\dA-Za-z가-힣])(?:[A-Za-z]|\d{1,4})\s*동\s*\d{1,4}\s*호(?=$|[^\d가-힣])/;
       const attachedDongHo = /(^|[^\dA-Za-z가-힣])(?:[A-Za-z]|\d{1,4})\s*동\s*\d{2,4}(?=$|[^\d가-힣])/;
       const dongNumberOnly = /(^|[^\dA-Za-z가-힣])(?:[A-Za-z]|\d{1,4})\s*동\s+\d{1,4}(?=$|[^\d가-힣])/;
+      const dongOnly = /(^|[^\dA-Za-z가-힣])(?:[A-Za-z]|\d{1,4})\s*동(?=$|[^\d가-힣])/;
       const apartmentNameHint = /(아파트|APT|apt|맨션|주공|e편한세상|이편한세상|자이|래미안|힐스테이트|푸르지오|더샵|롯데캐슬|아이파크|우미린|두산위브|반도유보라|센트럴파크|오피스텔)/i;
       const hyphenDongHo = /(^|[^\d])\d{1,4}\s*[-\/]\s*\d{2,4}(?=$|[^\d가-힣])/;
       const spaceDongHo = /(^|[^\d])\d{1,4}\s+\d{3,4}(?=$|[^\d가-힣])/;
       const hasDongHo = explicitDongHo.test(text) || dongNumberOnly.test(text);
       const hasAttachedDongHo = attachedDongHo.test(text);
       if ((hyphenDongHo.test(text) || spaceDongHo.test(text)) && apartmentNameHint.test(text)) return "아파트";
-      if ((hasDongHo || hasAttachedDongHo) && apartmentNameHint.test(text)) return "아파트 동/호수";
+      if ((hasDongHo || hasAttachedDongHo || dongOnly.test(text)) && apartmentNameHint.test(text)) return "아파트 동/호수";
       if (commercialHint.test(text)) return "";
-      if (!hasDongHo && !hasAttachedDongHo) return "";
+      if (!hasDongHo && !hasAttachedDongHo && !dongOnly.test(text)) return "";
       return "아파트 동/호수";
     }
 
