@@ -743,6 +743,17 @@
     .route-stop-item:hover { border-color:#2563eb; background:#eff6ff; }
     .route-stop-item b { display:block; font-size:12px; margin-bottom:3px; }
     .route-stop-item small { display:block; color:#64748b; line-height:1.35; }
+    .route-stop-head { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+    .route-stop-code { font-weight:900; font-size:13px; }
+    .route-stop-badges { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; }
+    .route-stop-badge { border-radius:999px; background:#eef2ff; color:#3730a3; font-size:10px; font-weight:900; padding:3px 6px; }
+    .route-stop-address { margin-top:6px; color:#334155; font-size:12px; line-height:1.35; }
+    .route-stop-kpis { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:7px; }
+    .route-stop-kpis div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:6px; }
+    .route-stop-kpis b { font-size:12px; }
+    .route-stop-kpis small { display:block; color:#64748b; font-size:10px; }
+    .route-stop-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:7px; }
+    .route-stop-actions span { display:flex; align-items:center; justify-content:center; height:28px; border:1px solid #cbd5e1; border-radius:7px; background:#fff; color:#1d4ed8; font-weight:900; font-size:11px; }
     body[data-work-tab="route"] .new-area-panel {
       background:#fff;
       box-shadow:0 1px 4px rgba(15,23,42,.05);
@@ -2254,10 +2265,18 @@
         const sequence = stop.sequence || index + 1;
         const code = stop.customerCode || stop.code || stop.id || "-";
         const name = stop.customerName || stop.name || stop.customer || "-";
+        const amount = stop.amount || stop.dailyAmount || stop.monthlyAmount || 0;
+        const orderCount = stop.orderCount || stop.deliveryPattern || stop.delivery_pattern || "-";
+        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}호` : "-";
         return `<button type="button" class="route-stop-item" data-route-stop-index="${index}">
-          <b>${esc(sequence)}착 · ${esc(code)} / ${esc(name)}</b>
-          <small>${esc(stop.address || "-")}</small>
-          <small>${money(stop.amount || stop.dailyAmount || stop.monthlyAmount || 0)}</small>
+          <div class="route-stop-head">
+            <div class="route-stop-code">${esc(sequence)}착 · ${esc(code)}</div>
+            <div class="route-stop-badges"><span class="route-stop-badge">${esc(vehicleLabel)}</span><span class="route-stop-badge">${esc(orderCount)}</span></div>
+          </div>
+          <b>${esc(name)}</b>
+          <div class="route-stop-address">주소: ${esc(stop.address || "-")}</div>
+          <div class="route-stop-kpis"><div><b>${money(amount)}</b><small>일 매출액</small></div><div><b>${esc(orderCount)}</b><small>주문횟수/요일</small></div></div>
+          <div class="route-stop-actions"><span>지도 이동</span><span>상세</span></div>
         </button>`;
       }).join("");
       const missedRows = (unmatchedStops || []).map((stop, index) => {

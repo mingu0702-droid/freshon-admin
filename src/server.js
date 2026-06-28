@@ -124,7 +124,7 @@ function toFiniteNumber(value) {
 function fixedDispatchSearchRow(row) {
   const address = pickFirstValue(row, ["고객주소", "주소", "배송주소", "address", "customerAddress"]);
   const detailAddress = pickFirstValue(row, ["상세주소", "detailAddress"]);
-  const code = pickFirstValue(row, ["고객코드", "고객ERP코드", "고객사코드", "customerCode", "code"]);
+  const code = pickFirstValue(row, ["customerCode", "code", "custCd", "estCd", "erpCode", "customerERPCode", "고객코드", "고객 코드", "고객ERP코드", "고객사코드", "거래처코드", "매장코드"]);
   const name = pickFirstValue(row, ["고객명", "고객명(업체명)", "고객사명", "업체명", "customerName", "name"]);
   const vehicle = normalizeVehicleValue(pickFirstValue(row, ["확정호차", "기준호차", "호차", "vehicle"]));
   const lat = toFiniteNumber(row?.lat ?? row?.위도 ?? row?.latitude);
@@ -753,7 +753,7 @@ function normalizeDispatchRowForSheet(row, index, generatedAt) {
   const amount = amountFromDispatchRow(row);
   const sourceFile = row._sourceFile || row.sourceFile || row.sourceFileName || row.fileName || row.excelFileNm || "";
   const deliveryDate = normalizeDateValue(row?.deliveryDate || row?.date || row?._inferredDeliveryDate || dispatchDateFromRow(row)) || parseDispatchDate(sourceFile);
-  const customerCode = normalizeCell(row?.customerCode || row?.code || stop.customerCode || firstValue(row, ["고객코드", "고객", "고객ERP코드", "ERP코드", "매장코드"]));
+  const customerCode = normalizeCell(row?.customerCode || row?.code || row?.custCd || row?.estCd || row?.erpCode || stop.customerCode || firstValue(row, ["고객코드", "고객 코드", "고객ERP코드", "ERP코드", "거래처코드", "매장코드"]));
   const customerName = normalizeCell(row?.customerName || row?.name || stop.customerName || firstValue(row, ["고객명", "매장명", "거래처명", "상호"]));
   const address = normalizeCell(row?.address || stop.address || dispatchAddressFromRow(row, stop.address));
   return {
@@ -986,7 +986,7 @@ async function readDriverMasterFromGoogleSheet({ date = "" } = {}) {
 }
 
 function sheetRowIdentity(row) {
-  const code = firstValue(row, ["고객", "고객코드", "고객 코드", "고객ERP코드", "ERP코드", "거래처코드", "매장코드"]);
+  const code = firstValue(row, ["customerCode", "code", "custCd", "estCd", "erpCode", "고객코드", "고객 코드", "고객ERP코드", "ERP코드", "거래처코드", "매장코드"]);
   const address = firstValue(row, ["고객주소", "주소", "배송주소"]);
   const name = firstValue(row, ["고객명", "매장명", "거래처명", "상호"]);
   const vehicle = firstValue(row, ["기준호차", "확정호차", "호차", "배송호차"]);
