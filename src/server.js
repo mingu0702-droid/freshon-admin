@@ -933,9 +933,15 @@ async function readDispatchFromGoogleSheet({ force = false } = {}) {
 
 async function readDispatchSource(preferGoogle = true, forceGoogle = false) {
   if (preferGoogle && config.googleSheetId && config.googleServiceAccountJsonBase64) {
-    const sheetCache = await readDispatchFromGoogleSheet({ force: forceGoogle });
-    if (sheetCache?.rows?.length) return sheetCache;
-    throw new Error("Google sheet dispatch data is empty. Upload monthly dispatch Excel once to rebuild the sheet cache.");
+    try {
+      const sheetCache = await readDispatchFromGoogleSheet({ force: forceGoogle });
+      if (sheetCache?.rows?.length) return sheetCache;
+    } catch (error) {
+      if (forceGoogle) console.error("Google sheet dispatch read failed; falling back to local cache:", error.message);
+    }
+    const localCache = await readDispatchCacheLocalFirst();
+    if (localCache?.rows?.length) return { ...localCache, source: localCache.source || "local-dispatch-cache-fallback" };
+    throw new Error("Google sheet dispatch data is empty and no local dispatch cache was found. Upload monthly dispatch Excel once to rebuild the sheet cache.");
   }
   return readDispatchCacheLocalFirst();
 }

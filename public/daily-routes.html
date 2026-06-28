@@ -77,14 +77,14 @@
       display:inline-flex;
       align-items:center;
       justify-content:center;
-      width:14px;
-      height:20px;
+      width:28px;
+      height:36px;
       color:#fff;
-      font-size:8px;
+      font-size:13px;
       font-weight:900;
       line-height:1;
       white-space:nowrap;
-      transform:translate(-7px, -20px);
+      transform:translate(-14px, -36px);
       filter:drop-shadow(0 4px 7px rgba(15,23,42,.24));
     }
     .vehicle-pin::before {
@@ -92,15 +92,15 @@
       position:absolute;
       inset:0;
       background:var(--pin-color, #2563eb);
-      clip-path:path("M7 0 C11 0 14 4 14 8 C14 14 10 17 7 20 C4 17 0 14 0 8 C0 4 3 0 7 0 Z");
+      clip-path:path("M14 0 C22 0 28 7 28 15 C28 25 19 32 14 36 C9 32 0 25 0 15 C0 7 6 0 14 0 Z");
     }
     .vehicle-pin::after {
       content:"";
       position:absolute;
       left:50%;
-      top:6px;
-      width:10px;
-      height:7px;
+      top:11px;
+      width:19px;
+      height:14px;
       transform:translate(-50%, -50%);
       border-radius:999px;
       background:#fff;
@@ -109,9 +109,9 @@
     .vehicle-pin .vehicle-pin-text {
       position:relative;
       z-index:1;
-      top:-5px;
+      top:-8px;
       color:var(--pin-color, #2563eb);
-      font-size:6px;
+      font-size:9px;
       font-weight:900;
     }
     .vehicle-pin.new-area-pin {
@@ -134,13 +134,13 @@
     .swatch { display:inline-block; width:18px; height:4px; vertical-align:middle; margin-right:6px; background:#2563eb; }
     .popup-close { position:absolute; right:6px; top:4px; border:0; background:transparent; font-weight:900; cursor:pointer; }
   .overlay-popup { transform: translateY(-10px); }
-  .map-popup { min-width:190px; max-width:230px; padding:0; font-family:Arial, "Malgun Gothic", sans-serif; font-size:11px; line-height:1.32; color:#111827; }
-    .store-popup { width:220px; max-width:220px; padding:9px 10px; border-radius:10px; background:#fff; box-shadow:0 14px 30px rgba(15,23,42,.20); }
+  .map-popup { min-width:260px; max-width:300px; padding:0; font-family:Arial, "Malgun Gothic", sans-serif; font-size:11px; line-height:1.32; color:#111827; }
+    .store-popup { width:280px; max-width:280px; padding:9px 10px; border-radius:10px; background:#fff; box-shadow:0 14px 30px rgba(15,23,42,.20); }
     .popup-title { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:7px; border-bottom:1px solid #e5edf7; padding-bottom:6px; }
     .popup-title b { font-size:15px; line-height:1.25; overflow-wrap:anywhere; }
     .popup-badge { display:inline-flex; align-items:center; min-height:22px; padding:3px 8px; border-radius:999px; background:#e0f2fe; color:#075985; font-size:11px; font-weight:900; white-space:nowrap; }
     .popup-grid { display:grid; gap:6px; }
-    .popup-row { display:grid; grid-template-columns:72px minmax(0, 1fr); gap:8px; }
+    .popup-row { display:grid; grid-template-columns:54px minmax(0, 1fr); gap:8px; }
     .popup-row span:first-child { color:#53657f; font-weight:900; }
     .popup-row span:last-child { overflow-wrap:anywhere; }
     .popup-metrics { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:9px; }
@@ -149,8 +149,8 @@
     .popup-metrics small { color:#64748b; }
     .customer-flag {
       position:relative;
-      width:14px;
-      height:20px;
+      width:28px;
+      height:36px;
       cursor:pointer;
       transform:translate(-4px, -18px);
     }
@@ -1211,7 +1211,29 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       if (viewMode.value.startsWith("overview")) renderOverview();
     }
 
+
+    async function handleRouteLookupClick() {
+      setWorkTab("route");
+      const requested = String(routeVehicleQuickInput?.value || vehicleSelect.value || "").replace(/\D/g, "");
+      const vehicle = data.vehicles.find(v => String(v.vehicle) === requested || v.vehicle === vehicleSelect.value);
+      if (!vehicle) {
+        routeStatus.textContent = "??? ??? ?? ????? ??????.";
+        return;
+      }
+      vehicleSelect.value = vehicle.vehicle;
+      vehicleSearchInput.value = `${vehicle.vehicle}?`;
+      shouldShowRoute = true;
+      viewMode.value = "detail";
+      await renderDailyRoute(vehicle, getVehicleColor(vehicle));
+    }
+
     boundaryToggleButton?.addEventListener("click", toggleBoundaryVisibility);
+    document.addEventListener("click", (event) => {
+      if (event.target?.closest?.("#showRouteButton")) {
+        event.preventDefault();
+        handleRouteLookupClick();
+      }
+    }, true);
 
     async function init() {
       data = window.VEHICLE_AREA_DATA || EMBEDDED_DATA;
@@ -1306,11 +1328,9 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         }
       });
       routeMapOverviewButton?.addEventListener("click", () => resetToOverview("overview:osan"));
-      showRouteButton?.addEventListener("click", () => {
-        setWorkTab("route");
-        shouldShowRoute = true;
-        if (vehicleSelect.value) viewMode.value = "detail";
-        render();
+      showRouteButton?.addEventListener("click", (event) => {
+        event.preventDefault();
+        handleRouteLookupClick();
       });
       syncRouteButton.addEventListener("click", async () => {
         const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value);
@@ -1518,7 +1538,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         vehicleSearchInput.value = `${requested}호`;
         viewMode.value = "detail";
       }
-      kakao.maps.event.addListener(map, "zoom_changed", scheduleOverviewLabelScale);
+      kakao.maps.event.addListener(map, "zoom_changed", () => { closeInfoWindows(); scheduleOverviewLabelScale(); });
       setWorkTab(searchParams.get("tab") || document.body.dataset.workTab || "route");
       render();
     }
@@ -2071,7 +2091,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         position,
         content: `<div class="map-popup overlay-popup" data-popup-id="${popupId}"><button class="popup-close" type="button">×</button>${html}</div>`,
         xAnchor: 0.5,
-        yAnchor: 1.18,
+        yAnchor: 1.10,
         zIndex: 100
       });
       overlay.setMap(map);
@@ -2134,8 +2154,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
     function addTextImageMarker(point, text, color, popupHtml, layer = markersLayer) {
       const label = String(text || "").trim() || "핀";
       const clean = label.replace(/호$/, "");
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="23" viewBox="0 0 30 42"><path d="M15 1.5C23 1.5 28.5 7.5 28.5 16C28.5 27 20 36 15 41C10 36 1.5 27 1.5 16C1.5 7.5 7 1.5 15 1.5Z" fill="${color}" stroke="white" stroke-width="2.5"/><ellipse cx="15" cy="14" rx="9" ry="6.5" fill="white" opacity=".96"/><text x="15" y="17" text-anchor="middle" font-family="Arial" font-size="8.5" font-weight="900" fill="${color}">${clean}</text></svg>`;
-      const image = new kakao.maps.MarkerImage(`data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`, new kakao.maps.Size(16, 23), { offset: new kakao.maps.Point(8, 22) });
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="42" viewBox="0 0 30 42"><path d="M15 1.5C23 1.5 28.5 7.5 28.5 16C28.5 27 20 36 15 41C10 36 1.5 27 1.5 16C1.5 7.5 7 1.5 15 1.5Z" fill="${color}" stroke="white" stroke-width="2.5"/><ellipse cx="15" cy="14" rx="9" ry="6.5" fill="white" opacity=".96"/><text x="15" y="17" text-anchor="middle" font-family="Arial" font-size="8.5" font-weight="900" fill="${color}">${clean}</text></svg>`;
+      const image = new kakao.maps.MarkerImage(`data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`, new kakao.maps.Size(30, 42), { offset: new kakao.maps.Point(15, 39) });
       const marker = new kakao.maps.Marker({ position: toLatLng(point), image, title: label });
       if (popupHtml) kakao.maps.event.addListener(marker, "click", () => openInfoWindow(toLatLng(point), popupHtml));
       layer.add(marker);
