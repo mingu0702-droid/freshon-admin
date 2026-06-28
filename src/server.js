@@ -1331,7 +1331,17 @@ function dispatchSourceFileDateMatches(row, requestedDate) {
 function dispatchRowDateMatches(row, requestedDate) {
   const date = normalizeDateValue(requestedDate);
   if (!date) return false;
-  return row.deliveryDate === date || dispatchSourceFileDateMatches(row, date);
+  const rowDate = normalizeDateValue(row.deliveryDate || row.date || row._inferredDeliveryDate);
+  return rowDate === date || dispatchSourceFileDateMatches(row, date);
+}
+
+function dispatchVehicleMatches(rowVehicle, requestedVehicle) {
+  const rowTokens = vehicleTokens(rowVehicle);
+  const requestedTokens = vehicleTokens(requestedVehicle);
+  for (const token of requestedTokens) {
+    if (rowTokens.has(token)) return true;
+  }
+  return normalizeVehicleValue(rowVehicle) === normalizeVehicleValue(requestedVehicle);
 }
 
 function parseDispatchDate(value) {
@@ -1521,7 +1531,7 @@ async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" 
   const requestedVehicle = normalizeVehicleValue(vehicle);
   const matchedItems = (cache.rows || [])
     .map((row, index) => ({ row: normalizeDispatchRowForSheet(row, index, generatedAt), index }))
-    .filter((item) => dispatchRowDateMatches(item.row, requestedDate) && normalizeVehicleValue(item.row.vehicle) === requestedVehicle);
+    .filter((item) => dispatchRowDateMatches(item.row, requestedDate) && dispatchVehicleMatches(item.row.vehicle, requestedVehicle));
   const deliveryItems = matchedItems.filter((item) => isDeliveryHistoryRow(item.row));
   const baseItems = matchedItems.filter((item) => !isDeliveryHistoryRow(item.row));
   const historyByKey = new Map();

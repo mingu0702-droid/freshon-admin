@@ -77,30 +77,30 @@
       display:inline-flex;
       align-items:center;
       justify-content:center;
-      width:48px;
-      height:62px;
+      width:28px;
+      height:36px;
       color:#fff;
       font-size:13px;
       font-weight:900;
       line-height:1;
       white-space:nowrap;
-      transform:translate(-24px, -62px);
-      filter:drop-shadow(0 8px 12px rgba(15,23,42,.28));
+      transform:translate(-14px, -36px);
+      filter:drop-shadow(0 4px 7px rgba(15,23,42,.24));
     }
     .vehicle-pin::before {
       content:"";
       position:absolute;
       inset:0;
       background:var(--pin-color, #2563eb);
-      clip-path:path("M24 0 C37 0 48 11 48 25 C48 40 33 53 24 62 C15 53 0 40 0 25 C0 11 11 0 24 0 Z");
+      clip-path:path("M14 0 C22 0 28 7 28 15 C28 25 19 32 14 36 C9 32 0 25 0 15 C0 7 6 0 14 0 Z");
     }
     .vehicle-pin::after {
       content:"";
       position:absolute;
       left:50%;
-      top:19px;
-      width:27px;
-      height:20px;
+      top:11px;
+      width:19px;
+      height:14px;
       transform:translate(-50%, -50%);
       border-radius:999px;
       background:#fff;
@@ -109,9 +109,9 @@
     .vehicle-pin .vehicle-pin-text {
       position:relative;
       z-index:1;
-      top:-12px;
+      top:-8px;
       color:var(--pin-color, #2563eb);
-      font-size:12px;
+      font-size:9px;
       font-weight:900;
     }
     .vehicle-pin.new-area-pin {
@@ -133,7 +133,7 @@
     .legend div { margin:4px 0; }
     .swatch { display:inline-block; width:18px; height:4px; vertical-align:middle; margin-right:6px; background:#2563eb; }
     .map-popup { min-width:190px; max-width:340px; padding:0; font-family:Arial, "Malgun Gothic", sans-serif; font-size:12px; line-height:1.35; color:#111827; }
-    .store-popup { width:310px; max-width:310px; padding:12px; border-radius:12px; background:#fff; box-shadow:0 18px 42px rgba(15,23,42,.22); }
+    .store-popup { width:245px; max-width:245px; padding:9px 10px; border-radius:10px; background:#fff; box-shadow:0 14px 30px rgba(15,23,42,.20); }
     .popup-title { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:7px; border-bottom:1px solid #e5edf7; padding-bottom:6px; }
     .popup-title b { font-size:15px; line-height:1.25; overflow-wrap:anywhere; }
     .popup-badge { display:inline-flex; align-items:center; min-height:22px; padding:3px 8px; border-radius:999px; background:#e0f2fe; color:#075985; font-size:11px; font-weight:900; white-space:nowrap; }
@@ -1179,7 +1179,19 @@
       boundaryVisible = !boundaryVisible;
       updateBoundaryToggleButton();
       if (!map) return;
-      render();
+      if (activeCustomerSearchHit) {
+        const hit = activeCustomerSearchHit;
+        activeCustomerSearchHit = null;
+        openCustomerSearchHit(hit);
+      } else if (activeAddressSearchQuery) {
+        openAddressSearchPin(activeAddressSearchQuery);
+      } else if (shouldShowRoute && currentRouteStops.length) {
+        const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value);
+        if (vehicle) renderDailyRoutePayload(vehicle, getVehicleColor(vehicle), routeDateInput.value, { stops: currentRouteStops, source: "current-route" });
+        else render();
+      } else {
+        render();
+      }
       if (keepCenter) {
         setTimeout(() => {
           map.setLevel(keepLevel);
@@ -2047,7 +2059,8 @@
         position,
         content: `<div class="map-popup">${html}</div>`,
         removable: true,
-        zIndex: 100
+        zIndex: 100,
+        disableAutoPan: true
       });
       iw.open(map);
       infoWindows.push(iw);
@@ -2103,8 +2116,8 @@
     function addTextImageMarker(point, text, color, popupHtml, layer = markersLayer) {
       const label = String(text || "").trim() || "핀";
       const clean = label.replace(/호$/, "");
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="76" viewBox="0 0 56 76"><path d="M28 3C43 3 53 14 53 29C53 47 37 62 28 72C19 62 3 47 3 29C3 14 13 3 28 3Z" fill="${color}" stroke="white" stroke-width="4"/><ellipse cx="28" cy="27" rx="16" ry="12" fill="white" opacity=".96"/><text x="28" y="31" text-anchor="middle" font-family="Arial" font-size="13" font-weight="900" fill="${color}">${clean}</text></svg>`;
-      const image = new kakao.maps.MarkerImage(`data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`, new kakao.maps.Size(56, 76), { offset: new kakao.maps.Point(28, 72) });
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="42" viewBox="0 0 30 42"><path d="M15 1.5C23 1.5 28.5 7.5 28.5 16C28.5 27 20 36 15 41C10 36 1.5 27 1.5 16C1.5 7.5 7 1.5 15 1.5Z" fill="${color}" stroke="white" stroke-width="2.5"/><ellipse cx="15" cy="14" rx="9" ry="6.5" fill="white" opacity=".96"/><text x="15" y="17" text-anchor="middle" font-family="Arial" font-size="8.5" font-weight="900" fill="${color}">${clean}</text></svg>`;
+      const image = new kakao.maps.MarkerImage(`data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`, new kakao.maps.Size(30, 42), { offset: new kakao.maps.Point(15, 40) });
       const marker = new kakao.maps.Marker({ position: toLatLng(point), image, title: label });
       if (popupHtml) kakao.maps.event.addListener(marker, "click", () => openInfoWindow(toLatLng(point), popupHtml));
       layer.add(marker);
