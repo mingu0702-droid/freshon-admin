@@ -1,16 +1,16 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Freshon 고정배차 관리자</title>
+  <title>Freshon 관리자</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <header>
     <div>
       <h1>Freshon 고정배차 관리자</h1>
-      <p class="version-note">월별 엑셀 업로드, 저장자료 조회, 구글시트 동기화를 관리합니다.</p>
+      <p class="version-note">엑셀 업로드, 저장자료 조회, 구글시트 동기화를 관리합니다.</p>
       <nav class="page-nav" aria-label="페이지 이동">
         <a href="/daily-routes.html">일일동선</a>
         <a href="/daily-routes.html?tab=wms">WMS</a>
@@ -24,28 +24,28 @@
   <main>
     <section class="toolbar">
       <div>
-        <label for="adminToken">관리 토큰</label>
+        <label for="adminToken">관리자 토큰</label>
         <input id="adminToken" type="password" placeholder="Render ADMIN_TOKEN">
       </div>
-      <button id="saveTokenButton" class="secondary" type="button">토큰 기억하기</button>
-      <button id="reloadButton" type="button">저장자료 보기</button>
+      <button id="saveTokenButton" class="secondary" type="button">토큰 저장</button>
+      <button id="reloadButton" type="button">저장자료 조회</button>
       <button id="sheetSyncButton" type="button">구글시트 동기화</button>
-      <button id="csvButton" type="button">엑셀용 파일 받기</button>
+      <button id="csvButton" type="button">CSV 다운로드</button>
     </section>
 
     <section class="toolbar upload-toolbar">
       <div class="wide">
-        <label for="fixedDispatchFiles">고정배차 월별 엑셀</label>
+        <label for="fixedDispatchFiles">고정배차 엑셀 업로드</label>
         <input id="fixedDispatchFiles" type="file" multiple accept=".xlsx,.xls,.csv">
-        <p class="help-text">월별 파일을 여러 개 선택해도 하나씩 저장합니다. 기존 데이터와 합쳐 저장하고 중복은 덮어씁니다.</p>
+        <p class="help-text">여러 엑셀 파일을 선택해도 하나로 합쳐 저장합니다. 중복 데이터는 서버에서 병합합니다.</p>
       </div>
-      <button id="uploadButton" type="button">엑셀 저장하기</button>
+      <button id="uploadButton" type="button">엑셀 저장</button>
     </section>
 
     <section class="toolbar search-toolbar">
       <div class="wide">
         <label for="adminSearchInput">매장/코드/주소 검색</label>
-        <input id="adminSearchInput" type="search" placeholder="예: 할맥, S10922, 은평구, 101호">
+        <input id="adminSearchInput" type="search" placeholder="예: 할맥, S10922, 강남구, 101호">
         <p class="help-text">고객코드, 매장명, 주소, 호차로 저장자료를 바로 찾습니다.</p>
       </div>
       <button id="clearSearchButton" class="secondary" type="button">검색 초기화</button>
