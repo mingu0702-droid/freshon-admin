@@ -133,14 +133,15 @@
     .legend div { margin:4px 0; }
     .swatch { display:inline-block; width:18px; height:4px; vertical-align:middle; margin-right:6px; background:#2563eb; }
     .popup-close { position:absolute; right:6px; top:4px; border:0; background:transparent; font-weight:900; cursor:pointer; }
-  .overlay-popup { transform: translateY(-46px); }
-  .map-popup { min-width:250px; max-width:300px; padding:0; font-family:Arial, "Malgun Gothic", sans-serif; font-size:11px; line-height:1.32; color:#111827; }
-    .store-popup { width:270px; max-width:270px; padding:9px 10px; border-radius:10px; background:#fff; box-shadow:0 14px 30px rgba(15,23,42,.20); }
-    .popup-title { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:7px; border-bottom:1px solid #e5edf7; padding-bottom:6px; }
-    .popup-title b { font-size:14px; line-height:1.25; overflow-wrap:anywhere; }
+  .overlay-popup { transform: translateY(-44px); }
+  .map-popup { min-width:242px; max-width:286px; padding:0; font-family:Arial, "Malgun Gothic", sans-serif; font-size:11px; line-height:1.32; color:#111827; }
+    .store-popup { width:252px; max-width:252px; padding:9px 10px; border-radius:10px; background:#fff; box-shadow:0 14px 30px rgba(15,23,42,.20); }
+    .popup-title { display:block; margin-bottom:7px; border-bottom:1px solid #e5edf7; padding-bottom:7px; }
+    .popup-title b { display:block; font-size:15px; line-height:1.25; overflow-wrap:anywhere; }
+    .popup-code { display:block; color:#2563eb; font-size:11px; font-weight:900; margin-bottom:2px; }
     .popup-badge { display:inline-flex; align-items:center; min-height:22px; padding:3px 8px; border-radius:999px; background:#e0f2fe; color:#075985; font-size:11px; font-weight:900; white-space:nowrap; }
     .popup-grid { display:grid; gap:6px; }
-    .popup-row { display:grid; grid-template-columns:46px minmax(0, 1fr); gap:8px; }
+    .popup-row { display:grid; grid-template-columns:40px minmax(0, 1fr); gap:7px; }
     .popup-row span:first-child { color:#53657f; font-weight:900; }
     .popup-row span:last-child { overflow-wrap:anywhere; }
     .popup-metrics { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:9px; }
@@ -2377,8 +2378,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       return `
         <div class="store-popup">
           <div class="popup-title">
+            <span class="popup-code">${esc(customerCode)}</span>
             <b>${esc(customerName)}</b>
-            <span class="popup-badge">${esc(vehicleLabel)}</span>
           </div>
           <div class="popup-grid">
             <div class="popup-row"><span>코드</span><span>${esc(customerCode)}</span></div>
