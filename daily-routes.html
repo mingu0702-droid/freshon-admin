@@ -1201,6 +1201,10 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         if (vehicle) addRouteGroupBoundaries(currentRouteStops, getVehicleColor(vehicle), vehicle);
         return;
       }
+      if (viewMode.value.startsWith("overview")) {
+        renderOverview();
+        return;
+      }
       if (vehicleSelect.value) {
         const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value);
         if (vehicle) addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
@@ -1211,7 +1215,6 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         });
         return;
       }
-      if (viewMode.value.startsWith("overview")) renderOverview();
     }
 
 
@@ -1220,7 +1223,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       const requested = String(routeVehicleQuickInput?.value || vehicleSelect.value || "").replace(/\D/g, "");
       const vehicle = data.vehicles.find(v => String(v.vehicle) === requested || v.vehicle === vehicleSelect.value);
       if (!vehicle) {
-        routeStatus.textContent = "??? ??? ?? ????? ??????.";
+        routeStatus.textContent = "?? ??? ?? ?????.";
         return;
       }
       vehicleSelect.value = vehicle.vehicle;
