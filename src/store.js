@@ -215,6 +215,10 @@ export async function readDailyRouteCache() {
   return readCache("daily-routes.json", dailyRouteFile, { generatedAt: null, routes: {} });
 }
 
+export async function writeDailyRouteCache(payload) {
+  await writeCache("daily-routes.json", dailyRouteFile, payload);
+}
+
 export async function readDailyRoute(date, vehicle) {
   const cache = await readDailyRouteCache();
   return cache.routes?.[date]?.[vehicle] || null;

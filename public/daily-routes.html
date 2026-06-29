@@ -713,49 +713,51 @@
     body[data-work-tab="route"] .new-area-panel.new-work:not(.compact-new) { display:none !important; }
 body[data-work-tab="route"] .new-area-panel.compact-new { display:block !important; }
     .route-stop-panel {
-      margin-top:8px;
-      border:1px solid #d8e0eb;
-      border-radius:8px;
+      margin-top:10px;
+      border:1px solid #d8e4f1;
+      border-radius:10px;
       background:#fff;
       overflow:hidden;
+      box-shadow:0 8px 22px rgba(15,23,42,.05);
     }
     .route-stop-panel[hidden] { display:none; }
     .route-stop-panel h3 {
       margin:0;
-      padding:9px 10px;
-      font-size:13px;
+      padding:10px 12px;
+      font-size:14px;
       border-bottom:1px solid #edf2f7;
+      color:#0f172a;
     }
     .route-stop-list {
       display:grid;
-      gap:6px;
+      gap:8px;
       max-height:260px;
       overflow:auto;
-      padding:8px;
+      padding:8px 10px 10px;
     }
     .route-stop-item {
       width:100%;
       text-align:left;
       border:1px solid #d8e4f1;
-      border-radius:7px;
+      border-radius:10px;
       background:#fff;
       color:#0f172a;
-      padding:8px;
+      padding:10px;
       cursor:pointer;
+      box-shadow:0 6px 16px rgba(15,23,42,.035);
     }
-    .route-stop-item:hover { border-color:#2563eb; background:#eff6ff; }
-    .route-stop-item b { display:block; font-size:12px; margin-bottom:3px; }
-    .route-stop-item small { display:block; color:#64748b; line-height:1.35; }
-    .route-stop-head { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
-    .route-stop-code { font-weight:900; font-size:13px; }
-    .route-stop-badges { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; }
-    .route-stop-badge { border-radius:999px; background:#eef2ff; color:#3730a3; font-size:10px; font-weight:900; padding:3px 6px; }
-    .route-stop-address { margin-top:6px; color:#334155; font-size:11px; line-height:1.32; }
-    .route-stop-kpis { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:7px; }
-    .route-stop-kpis div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:6px; }
-    .route-stop-kpis b { font-size:12px; }
-    .route-stop-kpis small { display:block; color:#64748b; font-size:10px; }
-    .route-stop-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:7px; }
+    .route-stop-item:hover { border-color:#2563eb; background:#f8fbff; }
+    .route-stop-title { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+    .route-stop-title b { font-size:14px; line-height:1.25; overflow-wrap:anywhere; }
+    .route-stop-name { display:block; margin-top:3px; font-weight:900; font-size:13px; color:#0f172a; }
+    .route-stop-address { margin-top:6px; color:#334155; font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
+    .route-stop-badges { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; flex-shrink:0; }
+    .route-stop-badge { border-radius:999px; background:#eef2ff; color:#3730a3; font-size:10px; font-weight:900; padding:4px 7px; white-space:nowrap; }
+    .route-stop-kpis { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:9px; }
+    .route-stop-kpis div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:7px; }
+    .route-stop-kpis b { display:block; font-size:13px; }
+    .route-stop-kpis small { display:block; color:#64748b; font-size:10px; margin-top:2px; }
+    .route-stop-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; }
     .route-stop-actions span { display:flex; align-items:center; justify-content:center; height:28px; border:1px solid #cbd5e1; border-radius:7px; background:#fff; color:#1d4ed8; font-weight:900; font-size:11px; }
     .route-section-no { display:inline-flex; width:18px; height:18px; align-items:center; justify-content:center; border-radius:999px; background:#eff6ff; color:#1d4ed8; font-size:11px; font-weight:900; margin-right:5px; }
     .route-config-panel h3, .route-search-panel h3, .route-stop-panel-title { margin:0 0 9px; font-size:14px; }
@@ -1931,7 +1933,10 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       document.querySelectorAll(".new-area-panel.new-work").forEach(panel => {
         panel.hidden = panel.classList.contains("compact-new") ? next === "wms" : next !== "new";
       });
-      if (routeStopPanel) routeStopPanel.hidden = next !== "route" || !routeStopPanel.innerHTML.trim();
+      if (routeStopPanel) {
+        routeStopPanel.hidden = next !== "route";
+        if (next === "route" && !routeStopPanel.innerHTML.trim()) renderRouteStopPlaceholder();
+      }
       if (next === "wms") {
         if (mapPanel.parentElement !== wmsMapSlot) wmsMapSlot.appendChild(mapPanel);
       } else if (mapPanel.parentElement !== document.querySelector(".shell")) {
@@ -2295,6 +2300,12 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       return `${fmt.format(Math.round(number))}원`;
     }
 
+    function renderRouteStopPlaceholder(message = "??? ??? ???? ?? ?? ??/?? ??? ??? ?????.") {
+      if (!routeStopPanel) return;
+      routeStopPanel.hidden = false;
+      routeStopPanel.innerHTML = `<h3><span class="route-section-no">4</span>착지/매장 정보</h3><div class="route-stop-list"><div class="route-stop-item">${esc(message)}</div></div>`;
+    }
+
     function clearRouteStopPanel() {
       if (!routeStopPanel) return;
       routeStopPanel.hidden = true;
@@ -2323,16 +2334,15 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         const name = stop.customerName || stop.name || stop.customer || "-";
         const amount = stop.amount || stop.dailyAmount || stop.monthlyAmount || 0;
         const orderCount = stop.orderCount || stop.deliveryPattern || stop.delivery_pattern || "-";
-        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}호` : "-";
+        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}?` : "-";
         return `<button type="button" class="route-stop-item" data-route-stop-index="${index}">
-          <div class="route-stop-head">
-            <div class="route-stop-code">${esc(sequence)}착 · ${esc(code)}</div>
+          <div class="route-stop-title">
+            <div><b>${esc(sequence)}착 · ${esc(code)}</b><span class="route-stop-name">${esc(name)}</span></div>
             <div class="route-stop-badges"><span class="route-stop-badge">${esc(vehicleLabel)}</span><span class="route-stop-badge">${esc(orderCount)}</span></div>
           </div>
-          <b>${esc(name)}</b>
-          <div class="route-stop-address">주소: ${esc(stop.address || "-")}</div>
-          <div class="route-stop-kpis"><div><b>${money(amount)}</b><small>일 매출액</small></div><div><b>${esc(orderCount)}</b><small>주문횟수/요일</small></div></div>
-          <div class="route-stop-actions"><span>지도 이동</span><span>상세</span></div>
+          <div class="route-stop-address">??: ${esc(stop.address || "-")}</div>
+          <div class="route-stop-kpis"><div><b>${money(amount)}</b><small>? ???</small></div><div><b>${esc(orderCount)}</b><small>????</small></div></div>
+          <div class="route-stop-actions"><span>?? ??</span><span>??</span></div>
         </button>`;
       }).join("");
       const missedRows = (unmatchedStops || []).map((stop, index) => {
@@ -2347,7 +2357,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       }).join("");
       routeStopPanel.hidden = false;
       const total = (stops || []).length + (unmatchedStops || []).length;
-      routeStopPanel.innerHTML = `<h3><span class="route-section-no">4</span>${esc(date)} ${esc(vehicle.vehicle)}호 착지/매장 ${fmt.format(total)}건</h3><div class="route-stop-list">${rows}${missedRows || ""}${(!rows && !missedRows) ? "<div class=\"route-stop-item\">표시할 착지가 없습니다.</div>" : ""}</div>`;
+      routeStopPanel.innerHTML = `<h3><span class="route-section-no">4</span>착지/매장 정보</h3><div class="route-stop-list">${rows}${missedRows || ""}${(!rows && !missedRows) ? "<div class=\"route-stop-item\">표시할 착지가 없습니다.</div>" : ""}</div>`;
       routeStopPanel.querySelectorAll("[data-route-stop-index]").forEach(button => {
         button.addEventListener("click", () => focusRouteStop(Number(button.dataset.routeStopIndex)));
       });
@@ -4473,6 +4483,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
+
 
 
 

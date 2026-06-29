@@ -11,7 +11,7 @@ import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
-import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeMonthlyDispatchSummary } from "./store.js";
+import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -811,13 +811,65 @@ function validateDispatchSheetAmounts(sourceRows, normalizedRows) {
   }
 }
 
-function buildSheetValues(payload) {
+
+function normalizedDispatchRowsFromPayload(payload) {
   const generatedAt = payload.generatedAt || new Date().toISOString();
   const sourceRows = Array.isArray(payload.rows) ? payload.rows : [];
   const rows = dedupeDispatchSheetRows(sourceRows
     .map((row, index) => normalizeDispatchRowForSheet(row, index, generatedAt))
     .filter((row) => row.deliveryDate && row.vehicle && (row.customerCode || row.customerName || row.address)));
   validateDispatchSheetAmounts(sourceRows, rows);
+  return { generatedAt, sourceRows, rows };
+}
+
+function buildDailyRouteCacheFromNormalizedRows(rows, generatedAt, source = "sheet-index") {
+  const groups = new Map();
+  for (const row of rows || []) {
+    const date = normalizeDateValue(row.deliveryDate);
+    const vehicle = normalizeVehicleValue(row.vehicle);
+    if (!date || !vehicle) continue;
+    const key = `${date}|${vehicle}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const routes = {};
+  for (const [key, groupRows] of groups.entries()) {
+    const [date, vehicle] = key.split("|");
+    const sortedRows = groupRows
+      .map((row, index) => ({ row, index }))
+      .sort((left, right) => routeSortValue(left.row, left.index) - routeSortValue(right.row, right.index))
+      .map((item) => item.row);
+    routes[date] ||= {};
+    routes[date][vehicle] = {
+      generatedAt,
+      source,
+      date,
+      vehicle,
+      center: "",
+      rowCount: sortedRows.length,
+      cacheHit: true,
+      cacheType: "daily-route-index",
+      dateBasis: "????",
+      stops: sortedRows.map((row, index) => buildStopFromDispatchRow(row, vehicle, index + 1))
+    };
+  }
+  return { generatedAt, source, routes, routeCount: [...groups.keys()].length, rowCount: rows.length };
+}
+
+function buildRouteIndexValuesFromNormalizedRows(rows, generatedAt) {
+  const cache = buildDailyRouteCacheFromNormalizedRows(rows, generatedAt, "route-index-preview");
+  const values = [["deliveryDate", "vehicle", "rowCount", "totalAmount", "updatedAt"]];
+  Object.entries(cache.routes || {}).forEach(([date, vehicles]) => {
+    Object.entries(vehicles || {}).forEach(([vehicle, route]) => {
+      const totalAmount = (route.stops || []).reduce((sum, stop) => sum + Number(stop.amount || stop.dailyAmount || 0), 0);
+      values.push([date, vehicle, route.rowCount || route.stops?.length || 0, Math.round(totalAmount), generatedAt]);
+    });
+  });
+  return values;
+}
+
+function buildSheetValues(payload) {
+  const { rows } = normalizedDispatchRowsFromPayload(payload);
   const columns = DISPATCH_SHEET_COLUMNS;
   return [
     columns,
@@ -835,6 +887,54 @@ async function getGoogleSheetNameAndHeaders(headers) {
   const sheetName = sheetTitles.includes(wantedSheetName) ? wantedSheetName : sheetTitles[0];
   if (!sheetName) throw new Error("Google spreadsheet has no readable sheet tab.");
   return { sheetName, wantedSheetName };
+}
+
+
+async function ensureGoogleSheetTab(headers, sheetName) {
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}?fields=sheets.properties.title`;
+  const metaResponse = await fetch(metaUrl, { headers });
+  const metaBody = await metaResponse.json().catch(() => ({}));
+  if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
+  const titles = (metaBody.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
+  if (titles.includes(sheetName)) return;
+  const batchUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}:batchUpdate`;
+  const response = await fetch(batchUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ requests: [{ addSheet: { properties: { title: sheetName } } }] })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok && !String(body.error?.message || "").includes("already exists")) {
+    throw new Error(`Google sheet tab create failed (${sheetName}): ${body.error?.message || response.status}`);
+  }
+}
+
+async function clearAndWriteGoogleSheetValues(headers, sheetName, values) {
+  await ensureGoogleSheetTab(headers, sheetName);
+  const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(sheetName)}:clear`;
+  const clearResponse = await fetch(clearUrl, { method: "POST", headers, body: "{}" });
+  if (!clearResponse.ok && clearResponse.status !== 400) {
+    const text = await clearResponse.text();
+    throw new Error(`Google sheet clear failed (${sheetName}): HTTP ${clearResponse.status} ${text.slice(0, 200)}`);
+  }
+  const columns = values[0] || [];
+  const dataRows = values.slice(1);
+  const chunkSize = 5000;
+  let updatedRows = 0;
+  let updatedRange = "";
+  for (let offset = 0; offset < dataRows.length || offset === 0; offset += chunkSize) {
+    const batch = offset === 0 ? [columns, ...dataRows.slice(0, chunkSize)] : dataRows.slice(offset, offset + chunkSize);
+    if (!batch.length || (batch.length === 1 && !batch[0].length)) break;
+    const startRow = offset === 0 ? 1 : offset + 2;
+    const range = `${sheetName}!A${startRow}`;
+    const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
+    const updateResponse = await fetch(updateUrl, { method: "PUT", headers, body: JSON.stringify({ values: batch }) });
+    const updateBody = await updateResponse.json().catch(() => ({}));
+    if (!updateResponse.ok) throw new Error(`Google sheet update failed (${sheetName}) at row ${startRow}: ${updateBody.error?.message || updateResponse.status}`);
+    updatedRows += offset === 0 ? Math.max(0, batch.length - 1) : batch.length;
+    updatedRange = updateBody.updatedRange || updatedRange;
+  }
+  return { updatedRows, updatedRange, columns: columns.length };
 }
 
 async function getGoogleSheetTab(headers, spreadsheetId, wantedName = "", wantedGid = null, fallbackName = "customers") {
@@ -1018,37 +1118,27 @@ async function syncDispatchToGoogleSheet(payload) {
   const token = await getGoogleAccessToken();
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   const { sheetName, wantedSheetName } = await getGoogleSheetNameAndHeaders(headers);
-  const values = buildSheetValues(payload);
-  const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(sheetName)}:clear`;
-  const clearResponse = await fetch(clearUrl, { method: "POST", headers, body: "{}" });
-  if (!clearResponse.ok && clearResponse.status !== 400) {
-    const text = await clearResponse.text();
-    throw new Error(`Google sheet clear failed: HTTP ${clearResponse.status} ${text.slice(0, 200)}`);
-  }
-  const columns = values[0] || [];
-  const dataRows = values.slice(1);
-  const chunkSize = 5000;
-  let updatedRows = 0;
-  let updatedRange = "";
-  for (let offset = 0; offset < dataRows.length || offset === 0; offset += chunkSize) {
-    const batch = offset === 0
-      ? [columns, ...dataRows.slice(0, chunkSize)]
-      : dataRows.slice(offset, offset + chunkSize);
-    if (!batch.length || (batch.length === 1 && !batch[0].length)) break;
-    const startRow = offset === 0 ? 1 : offset + 2;
-    const range = `${sheetName}!A${startRow}`;
-    const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
-    const updateResponse = await fetch(updateUrl, { method: "PUT", headers, body: JSON.stringify({ values: batch }) });
-    const updateBody = await updateResponse.json().catch(() => ({}));
-    if (!updateResponse.ok) {
-      throw new Error(`Google sheet update failed at row ${startRow}: ${updateBody.error?.message || updateResponse.status}`);
-    }
-    updatedRows += offset === 0 ? Math.max(0, batch.length - 1) : batch.length;
-    updatedRange = updateBody.updatedRange || updatedRange;
-  }
+  const normalized = normalizedDispatchRowsFromPayload(payload);
+  const values = [
+    DISPATCH_SHEET_COLUMNS,
+    ...normalized.rows.map((row) => DISPATCH_SHEET_COLUMNS.map((column) => normalizeCell(row[column])))
+  ];
+  const mainWrite = await clearAndWriteGoogleSheetValues(headers, sheetName, values);
+  const routeIndexValues = buildRouteIndexValuesFromNormalizedRows(normalized.rows, normalized.generatedAt);
+  const routeIndexWrite = await clearAndWriteGoogleSheetValues(headers, "route_index", routeIndexValues);
+  const dailyRouteCache = buildDailyRouteCacheFromNormalizedRows(normalized.rows, normalized.generatedAt, "google-sheet-route-index");
+  await writeDailyRouteCache(dailyRouteCache);
   googleDispatchMemoryCache = {
     readAt: Date.now(),
-    payload: { ...payload, source: "google-sheet", sheetName, rowCount: values.length - 1 }
+    payload: {
+      generatedAt: normalized.generatedAt,
+      source: "google-sheet",
+      sheetName,
+      range: inferRange(normalized.rows),
+      columns: DISPATCH_SHEET_COLUMNS,
+      rows: normalized.rows,
+      rowCount: normalized.rows.length
+    }
   };
   let verified = null;
   let verifyError = null;
@@ -1061,9 +1151,12 @@ async function syncDispatchToGoogleSheet(payload) {
     skipped: false,
     sheetName,
     requestedSheetName: wantedSheetName,
-    rows: updatedRows,
-    columns: values[0]?.length || 0,
-    updatedRange,
+    rows: mainWrite.updatedRows,
+    columns: mainWrite.columns,
+    updatedRange: mainWrite.updatedRange,
+    routeIndexSheetName: "route_index",
+    routeIndexRows: routeIndexWrite.updatedRows,
+    routeCount: dailyRouteCache.routeCount,
     verifiedRows: verified?.rowCount || 0,
     verifiedRange: verified?.range || null,
     verifiedAt: verified?.generatedAt || null,
@@ -2559,6 +2652,10 @@ app.get("/api/monthly-dispatch-route", requireView, async (req, res) => {
   const vehicle = normalizeVehicleValue(req.query.vehicle);
   const center = normalizeCell(req.query.center);
   if (!date || !vehicle) return res.status(400).json({ error: "date and vehicle are required." });
+  const indexedRoute = await readDailyRoute(date, vehicle).catch(() => null);
+  if (indexedRoute?.stops?.length) {
+    return res.json({ ...indexedRoute, source: indexedRoute.source || "google-sheet-route-index", api: "monthly-dispatch-route" });
+  }
   const route = await buildFallbackDailyRoute({ date, vehicle, center });
   if (!route) {
     return res.status(404).json({
@@ -2803,6 +2900,8 @@ async function processUploadedDispatchFiles(files, jobId) {
     };
 
     await writeDispatchCache(payload);
+    const normalizedForRouteIndex = normalizedDispatchRowsFromPayload(payload);
+    await writeDailyRouteCache(buildDailyRouteCacheFromNormalizedRows(normalizedForRouteIndex.rows, normalizedForRouteIndex.generatedAt, "uploaded-dispatch-route-index"));
     await writeMonthlyDispatchSummary({ ...buildMonthlyDispatchSummary(payload), cacheGeneratedFrom: payload.generatedAt });
     let googleSheetSync = null;
     try {
