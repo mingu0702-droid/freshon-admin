@@ -1924,6 +1924,10 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       });
     }
 
+    function renderVehicleDetail() {
+      // legacy render hook: detail rendering is handled by openVehicleDetail/renderVehicleSummary.
+    }
+
     function render() {
       if (document.body.dataset.workTab === "wms") {
         clearMapLayers();
