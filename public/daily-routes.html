@@ -2323,7 +2323,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       return `${fmt.format(Math.round(number))}원`;
     }
 
-    function renderRouteStopPlaceholder(message = "??? ??? ???? ?? ?? ??/?? ??? ??? ?????.") {
+    function renderRouteStopPlaceholder(message = "??? ??? ???? ??/?? ??? ??? ?????.") {
       if (!routeStopPanel) return;
       routeStopPanel.hidden = false;
       routeStopPanel.innerHTML = `<h3><span class="route-section-no">4</span>착지/매장 정보</h3><div class="route-stop-list"><div class="route-stop-item">${esc(message)}</div></div>`;
@@ -2391,265 +2391,26 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       const customerName = stop.name || stop.customerName || raw.estNm || raw.estName || "-";
       const customerCode = stop.code || stop.customerCode || raw.estCd || "-";
       const address = stop.address || raw.address || "-";
-      const dailyAmount = stop.dailyAmount || raw.daySaleAmt || raw.dailySaleAmt || raw.orderAmt || raw.amt || "";
+      const dailyAmount = stop.dailyAmount || stop.amount || raw.daySaleAmt || raw.dailySaleAmt || raw.orderAmt || raw.amt || "";
       const orderCount = stop.orderCount || raw.orderCnt || raw.ordCnt || raw.totalAlcnt || raw.alcnt || raw.count || "";
-      const vehicleName = stop.vehicle || vehicle.vehicle;
-      const vehicleLabel = String(vehicleName).endsWith("호") ? String(vehicleName) : `${vehicleName}호`;
+      const vehicleName = stop.vehicle || vehicle?.vehicle || "";
+      const vehicleLabel = vehicleName ? (String(vehicleName).endsWith("?") ? String(vehicleName) : `${vehicleName}?`) : "-";
       const pattern = normalizeDeliveryPattern(raw.deliveryPattern || raw.delivery_pattern || stop.deliveryPattern || stop.delivery_pattern) || "-";
-      const region = regionFromAddress(address);
+      const region = regionFromAddress(address) || "-";
       return `
-        <div class="store-popup">
-          <div class="popup-title">
-            <span class="popup-code">${esc(customerCode)}</span>
-            <b>${esc(customerName)}</b>
+        <div class="store-popup compact-store-popup">
+          <div class="popup-title compact-title">
+            <div><span class="popup-code">${esc(customerCode)}</span><b>${esc(customerName)}</b></div>
+            <span class="popup-badge">${esc(vehicleLabel)}</span>
           </div>
-          <div class="popup-grid">
-            <div class="popup-row"><span>코드</span><span>${esc(customerCode)}</span></div>
-            <div class="popup-row"><span>주소</span><span>${esc(address)}</span></div>
-            <div class="popup-row"><span>지역</span><span>${esc(region)}</span></div>
-            <div class="popup-row"><span>권역</span><span>${esc(vehicleLabel)}</span></div>
-            <div class="popup-row"><span>패턴</span><span>${esc(pattern)}</span></div>
+          <div class="popup-body compact-body">
+            <div class="popup-line address-line">${esc(address)}</div>
+            <div class="popup-meta-line"><span>??</span><b>${esc(region)}</b></div>
+            <div class="popup-meta-line"><span>??</span><b>${esc(pattern)}</b></div>
           </div>
-          <div class="popup-metrics">
-            <div><b>${orderCount ? esc(orderCount) : "-"}</b><small>주문횟수</small></div>
-            <div><b>${money(dailyAmount)}</b><small>일 매출액</small></div>
-          </div>
-        </div>
-      `;
-    }
-
-    function updateRouteHud(vehicle, stopCount, modeLabel = "운영지도 권역") {
-      const date = routeDateInput.value || "-";
-      const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}호` : "전체";
-      const area = vehicle?.area_label || modeLabel;
-      const driver = getVehicleDriverInfo(vehicle);
-      const driverText = driver ? ` · ${[driver.carrier, driver.driverName, driver.phone].filter(Boolean).join(" / ")}` : "";
-      routeHudVehicle.textContent = vehicleLabel;
-      routeHudStops.textContent = Number.isFinite(Number(stopCount)) ? fmt.format(Number(stopCount)) : "-";
-      routeHudDate.textContent = date;
-      routeMapHudTitle.textContent = vehicle?.vehicle ? `${vehicleLabel} · ${area}` : modeLabel;
-      routeMapHudMeta.textContent = shouldShowRoute && routeDateInput.value
-        ? `${date} 월 데이터 기준 동선 조회 모드입니다.${driverText}`
-        : `운영지도 권역 데이터 기준입니다.${driverText}`;
-    }
-
-    function getVehicleDriverInfo(vehicle) {
-      if (!vehicle) return null;
-      return vehicleDriverMaster.get(String(vehicle.vehicle)) || null;
-    }
-
-    function renderOverview() {
-      clearMapLayers();
-      const group = viewMode.value.split(":")[1] || "all";
-      const baseVehicles = data.vehicles.filter(v => v.count > 0 && (group === "all" || v.group === group));
-      const vehicles = activeLoadStatus
-        ? baseVehicles.filter(v => vehicleWithWmsLoad(v).load_status === activeLoadStatus)
-        : baseVehicles;
-      const boundsPoints = [];
-      vehicles.forEach((vehicle) => {
-        const color = getVehicleColor(vehicle);
-        if (isValidKoreaLatLng(Number(vehicle.center?.[0]), Number(vehicle.center?.[1]))) boundsPoints.push(vehicle.center);
-        if (boundaryVisible) {
-          addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes?.length ? vehicle.detail_admin_codes : vehicle.overview_admin_codes, {
-            color,
-            weight: vehicle.is_variable_vehicle ? 4 : 3,
-            fillOpacity: 0,
-            opacity: .92
-          });
-          const zoomClass = map.getLevel() >= 8 ? " zoom-far" : "";
-          addKakaoLabel(
-            vehicle.center,
-            `${esc(vehicle.vehicle)}호`,
-            `overview-label${zoomClass}`,
-            labelLayer,
-            () => openVehicleDetail(vehicle.vehicle),
-            color
-          );
-        }
-      });
-
-      const groupLabel = group === "osan" ? "오산센터" : group === "yeongnam" ? "영남권" : group === "honam" ? "호남권" : "전체";
-      updateRouteHud(null, vehicles.reduce((sum, v) => sum + v.count, 0), `${groupLabel} 전체 권역`);
-      const filterText = activeLoadStatus ? ` · ${esc(activeLoadStatus)} 호차만 표시 중` : "";
-      document.getElementById("vehicleNote").innerHTML = `<div class="note">${esc(groupLabel)} 보기${filterText}입니다. 권역선 ON 상태에서 지도 위 호차 라벨을 누르면 상세 권역선과 배송처가 보입니다.</div>`;
-      document.getElementById("customerCount").textContent = fmt.format(vehicles.reduce((sum, v) => sum + v.count, 0));
-      document.getElementById("spanDistance").textContent = fmt.format(vehicles.length);
-      document.querySelector(".stats .stat:nth-child(2) span").textContent = "표시 호차";
-      renderOverviewSummary(baseVehicles);
-      renderVariablePanel(data.vehicles.filter(v => v.group === "osan" && v.is_variable_vehicle));
-      document.getElementById("areaList").innerHTML = vehicles.slice(0, 20).map(v => `<li>${esc(v.vehicle)}호 · ${esc(v.area_label)} <b>${fmt.format(v.count)}</b>건</li>`).join("");
-      document.getElementById("dongList").innerHTML = "<li>전체 보기에서는 주 권역만 표시합니다.</li>";
-      document.getElementById("customerList").innerHTML = vehicles.slice(0, 80).map(v => `<div class="customer" data-vehicle="${esc(v.vehicle)}"><strong>${esc(v.vehicle)}호 · ${esc(v.area_label)}</strong><small>${fmt.format(v.count)}개 배송처 · 최장 ${v.span.distance_km}km</small><small>${v.is_variable_vehicle ? "용/척 변동 차량" : "고정 호차"}</small></div>`).join("");
-      document.querySelectorAll(".customer[data-vehicle]").forEach(el => el.addEventListener("click", () => {
-        openVehicleDetail(el.dataset.vehicle);
-      }));
-      if (boundsPoints.length) fitKakaoBounds(boundsPoints);
-    }
-
-    function showLoadStatusVehicles(status) {
-      activeLoadStatus = activeLoadStatus === status ? "" : status;
-      if (!viewMode.value.startsWith("overview")) viewMode.value = "overview:all";
-      render();
-    }
-
-    function renderVehicleDetail() {
-      const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value) || data.vehicles[0];
-      if (!vehicle) {
-        viewMode.value = "overview:all";
-        renderOverview();
-        return;
-      }
-      const customers = Array.isArray(vehicle.customers) ? vehicle.customers : [];
-      const routeFocus = shouldShowRoute && !!routeDateInput.value;
-      clearMapLayers();
-      updateRouteHud(vehicle, routeFocus ? currentRouteStops.length : customers.length, routeFocus ? "일일동선" : "호차 권역");
-      document.querySelector(".stats .stat:nth-child(2) span").textContent = "권역 최장 폭";
-
-      const color = getVehicleColor(vehicle);
-      const showBoundaries = boundaryVisible;
-      if (showBoundaries) {
-        addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
-          color,
-          weight: 4,
-          fillOpacity: 0,
-          opacity: .94
-        });
-      }
-      if (showBoundaries && !routeFocus && vehicle.span.line.length === 2) {
-        addKakaoPolyline(vehicle.span.line, { color:"#dc2626", weight:4, opacity:.9, dashArray:"10 8" }, spanLayer);
-      }
-      const drawVehicleDetailLabels = () => {
-        markersLayer.clearLayers();
-        addVehicleImageMarker(vehicle.center, vehicle, color, buildVehiclePopup(vehicle));
-        customers.forEach((customer) => {
-          const lat = Number(customer.lat);
-          const lng = Number(customer.lng);
-          if (!isValidKoreaLatLng(lat, lng)) return;
-          addVehicleImageMarker(
-            [lat, lng],
-            vehicle,
-            color,
-            buildStorePopup({
-                ...customer,
-                code: customer.id,
-                customerCode: customer.id,
-                customerName: customer.name,
-                monthlyAmount: customer.avg_order_amount,
-                dailyAmount: customer.avg_order_amount,
-                orderCount: customer.delivery_pattern
-              }, vehicle, routeDateInput.value || "-", "-")
-          );
-        });
-      };
-      if (!routeFocus) drawVehicleDetailLabels();
-
-      if (routeFocus) renderDailyRoute(vehicle, color);
-      else routeStatus.textContent = "호차 권역과 고객 위치를 운영지도 기준으로 표시합니다.";
-
-      document.getElementById("customerCount").textContent = fmt.format(vehicle.count);
-      document.getElementById("spanDistance").textContent = `${vehicle.span.distance_km}km`;
-      document.getElementById("vehicleNote").innerHTML = vehicle.is_variable_vehicle ? `<div class="note">${esc(vehicle.variable_note)}</div>` : "";
-      renderVehicleSummary(vehicle);
-      renderVariablePanel(vehicle.is_variable_vehicle ? [vehicle] : []);
-      document.getElementById("areaList").innerHTML = vehicle.top_districts.map(([k,v]) => `<li>${esc(k)} <b>${fmt.format(v)}</b>건</li>`).join("");
-      document.getElementById("dongList").innerHTML = vehicle.top_admin_areas.length ? vehicle.top_admin_areas.slice(0,8).map(x => `<li>${esc(x.name)} <b>${fmt.format(x.count)}</b>건</li>`).join("") : "<li>-</li>";
-      document.getElementById("customerList").innerHTML = customers.slice(0, 180).map(c => `<div class="customer" data-lat="${c.lat}" data-lng="${c.lng}"><strong>${esc(c.name)}</strong><small>${esc(c.id)} · ${esc(c.district)} ${esc(c.dong || "")}</small><small>${esc(c.address)}</small></div>`).join("");
-      document.querySelectorAll(".customer").forEach(el => el.addEventListener("click", () => {
-        const lat = Number(el.dataset.lat);
-        const lng = Number(el.dataset.lng);
-        setKakaoView(lat, lng, 4);
-        const customer = customers.find(c => Number(c.lat) === lat && Number(c.lng) === lng);
-        if (customer) {
-          openInfoWindow(
-            new kakao.maps.LatLng(lat, lng),
-            buildStorePopup({
-              ...customer,
-              code: customer.id,
-              customerCode: customer.id,
-              customerName: customer.name,
-              monthlyAmount: customer.avg_order_amount,
-              dailyAmount: customer.avg_order_amount,
-              orderCount: customer.delivery_pattern
-            }, vehicle, routeDateInput.value || "-", "-")
-          );
-        }
-      }));
-
-      const boundsPoints = customers
-        .filter(c => isValidKoreaLatLng(c.lat, c.lng))
-        .map(c => [Number(c.lat), Number(c.lng)]);
-      if (boundsPoints.length) {
-        fitKakaoBounds(boundsPoints);
-      } else if (Array.isArray(vehicle.center) && isValidKoreaLatLng(vehicle.center[0], vehicle.center[1])) {
-        setKakaoView(vehicle.center[0], vehicle.center[1], 7);
-      } else {
-        viewMode.value = getLastOverviewMode();
-        renderOverview();
-      }
-      setTimeout(drawVehicleDetailLabels, 150);
-    }
-
-    function freshonDiagnosticReason(errorPayload) {
-      const message = String(errorPayload?.error || "");
-      const diagnostics = errorPayload?.diagnostics || {};
-      const attempts = Array.isArray(diagnostics.attempts) ? diagnostics.attempts : [];
-      const firstError = attempts.find(item => item.result === "error") || attempts[0] || {};
-      const type = firstError.type || diagnostics.type || "";
-      if (/FRESHON_COOKIE|missing-cookie/i.test(message) || diagnostics.hasCookie === false) {
-        return "서버에 Freshon 쿠키가 설정되어 있지 않습니다.";
-      }
-      if (/401|Unauthorized|html-or-login-response|login/i.test(`${message} ${type}`)) {
-        return "쿠키는 들어갔지만 Freshon이 로그인 화면/권한 오류를 돌려준 것으로 보입니다.";
-      }
-      if (/json-parse-error|non-JSON/i.test(`${message} ${type}`)) {
-        return "Freshon API가 JSON 데이터가 아닌 다른 형식으로 응답했습니다.";
-      }
-      if (attempts.some(item => item.result === "no-vehicle-match")) {
-        return "Freshon 응답은 왔지만 선택한 날짜/호차와 맞는 행을 찾지 못했습니다.";
-      }
-      return "Freshon 직접 조회 조건 또는 API 응답 구조를 추가 확인해야 합니다.";
-    }
-
-    function renderFreshonDiagnostics(errorPayload) {
-      const diagnostics = errorPayload?.diagnostics || {};
-      const attempts = Array.isArray(diagnostics.attempts) ? diagnostics.attempts : [];
-      const firstItems = attempts.slice(0, 8);
-      const loginFallback = errorPayload?.loginFallback || null;
-      const message = String(errorPayload?.error || "Freshon daily dispatch lookup failed.");
-      const chips = [
-        ["진단", freshonDiagnosticReason(errorPayload)],
-        ["쿠키 설정", diagnostics.hasCookie === false ? "없음" : diagnostics.hasCookie === true ? "있음" : "확인 불가"],
-        ["ID/PW 재시도", loginFallback ? "시도함" : "응답에 없음"],
-        ["시도 횟수", diagnostics.attemptCount || attempts.length || 0],
-        ["조회 조건", `${diagnostics.date || routeDateInput.value || "-"} / ${diagnostics.vehicle || vehicleSelect.value || "-"}호`]
-      ];
-      return `
-        <div class="freshon-diagnostics">
-          <div class="diagnostic-main">프레시온 직접 조회 실패</div>
-          <div>${esc(message.slice(0, 520))}</div>
-          <div class="diagnostic-grid">
-            ${chips.map(([label, value]) => `<div class="diagnostic-chip"><b>${esc(label)}</b><br>${esc(value)}</div>`).join("")}
-          </div>
-          ${loginFallback ? `
-            <div class="diagnostic-attempt">
-              <b>ID/PW 자동 로그인 재시도 결과</b><br>
-              ${esc(String(loginFallback.error || "").slice(0, 420))}
-            </div>
-          ` : `
-            <div class="diagnostic-attempt">
-              <b>ID/PW 자동 로그인 재시도 기록 없음</b><br>
-              현재 응답에 loginFallback 정보가 없습니다. 최신 배포가 반영되지 않았거나, 서버가 ID/PW 재시도 코드까지 도달하지 못한 상태입니다.
-            </div>
-          `}
-          <div class="diagnostic-attempts">
-            ${firstItems.map(item => `
-              <div class="diagnostic-attempt">
-                <b>${esc(item.endpoint || "-")} · ${esc(item.variant || "-")}</b><br>
-                결과: ${esc(item.result || item.type || "-")} · 상태: ${esc(item.status || "-")} · 행: ${esc(item.rowCount ?? "-")} / 매칭: ${esc(item.matchedCount ?? "-")}<br>
-                ${item.message ? `<span>${esc(String(item.message).slice(0, 260))}</span><br>` : ""}
-                ${item.responsePreview ? `<span class="diagnostic-preview">${esc(String(item.responsePreview).slice(0, 260))}</span>` : ""}
-              </div>
-            `).join("") || `<div class="diagnostic-attempt"><b>시도 기록이 없습니다.</b></div>`}
+          <div class="popup-kpi-row">
+            <div><b>${esc(orderCount || "-")}</b><small>????</small></div>
+            <div><b>${money(dailyAmount)}</b><small>? ???</small></div>
           </div>
         </div>
       `;
@@ -4528,6 +4289,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
 
 
 

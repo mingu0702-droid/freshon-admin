@@ -957,7 +957,7 @@ async function readRowsFromGoogleSheet({ spreadsheetId, sheetName, sheetGid, fal
   const token = await getGoogleAccessToken();
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   const tab = await getGoogleSheetTab(headers, spreadsheetId, sheetName, sheetGid, fallbackName);
-  const range = `${tab.sheetName}!A:ZZ`;
+  const range = `${tab.sheetName}!A:O`;
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
   const response = await fetch(url, { headers });
   const body = await response.json().catch(() => ({}));
@@ -991,7 +991,7 @@ async function readDispatchFromGoogleSheet({ force = false } = {}) {
   const preferred = config.googleSheetName || "customers";
   const orderedTitles = [...new Set([preferred, ...titles].filter((title) => titles.includes(title)))];
   for (const sheetName of orderedTitles) {
-    const range = `${sheetName}!A:ZZ`;
+    const range = `${sheetName}!A:O`;
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
     const response = await fetch(url, { headers });
     const body = await response.json().catch(() => ({}));
@@ -3114,6 +3114,7 @@ function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
 
 
 
