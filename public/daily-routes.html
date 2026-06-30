@@ -133,16 +133,18 @@
     .legend div { margin:4px 0; }
     .swatch { display:inline-block; width:18px; height:4px; vertical-align:middle; margin-right:6px; background:#2563eb; }
     .popup-close { position:absolute; right:6px; top:4px; border:0; background:transparent; font-weight:900; cursor:pointer; }
-  .overlay-popup { transform: translateY(-10px); }
-  .map-popup { min-width:260px; max-width:300px; padding:0; font-family:Arial, "Malgun Gothic", sans-serif; font-size:11px; line-height:1.32; color:#111827; }
-    .store-popup { width:280px; max-width:280px; padding:9px 10px; border-radius:10px; background:#fff; box-shadow:0 14px 30px rgba(15,23,42,.20); }
-    .popup-title { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:7px; border-bottom:1px solid #e5edf7; padding-bottom:6px; }
-    .popup-title b { font-size:15px; line-height:1.25; overflow-wrap:anywhere; }
+  .overlay-popup { transform: translateY(-44px); }
+  .map-popup { min-width:292px; max-width:340px; padding:0; font-family:Arial, "Malgun Gothic", sans-serif; font-size:11px; line-height:1.32; color:#111827; }
+    .store-popup { width:312px; max-width:312px; padding:9px 10px; border-radius:10px; background:#fff; box-shadow:0 14px 30px rgba(15,23,42,.20); }
+    .popup-title { display:block; margin-bottom:7px; border-bottom:1px solid #e5edf7; padding-bottom:7px; }
+    .popup-title b { display:block; font-size:14px; line-height:1.25; overflow-wrap:anywhere; }
+    .popup-code { display:block; color:#2563eb; font-size:11px; font-weight:900; margin-bottom:2px; }
     .popup-badge { display:inline-flex; align-items:center; min-height:22px; padding:3px 8px; border-radius:999px; background:#e0f2fe; color:#075985; font-size:11px; font-weight:900; white-space:nowrap; }
-    .popup-grid { display:grid; gap:6px; }
-    .popup-row { display:grid; grid-template-columns:54px minmax(0, 1fr); gap:8px; }
-    .popup-row span:first-child { color:#53657f; font-weight:900; }
-    .popup-row span:last-child { overflow-wrap:anywhere; }
+    .popup-grid { display:grid; gap:5px; }
+    .address-row span:last-child { font-size:10.5px; color:#334155; }
+    .popup-row { display:block; font-size:11px; line-height:1.35; }
+    .popup-row span:first-child { display:none; }
+    .popup-row span:last-child { display:block; overflow-wrap:anywhere; word-break:keep-all; }
     .popup-metrics { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:9px; }
     .popup-metrics div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:8px; }
     .popup-metrics b { display:block; font-size:15px; }
@@ -1200,6 +1202,10 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         if (vehicle) addRouteGroupBoundaries(currentRouteStops, getVehicleColor(vehicle), vehicle);
         return;
       }
+      if (viewMode.value.startsWith("overview")) {
+        renderOverview();
+        return;
+      }
       if (vehicleSelect.value) {
         const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value);
         if (vehicle) addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
@@ -1210,7 +1216,6 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         });
         return;
       }
-      if (viewMode.value.startsWith("overview")) renderOverview();
     }
 
 
@@ -1219,7 +1224,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       const requested = String(routeVehicleQuickInput?.value || vehicleSelect.value || "").replace(/\D/g, "");
       const vehicle = data.vehicles.find(v => String(v.vehicle) === requested || v.vehicle === vehicleSelect.value);
       if (!vehicle) {
-        routeStatus.textContent = "??? ??? ?? ????? ??????.";
+        routeStatus.textContent = "?? ??? ?? ?????.";
         return;
       }
       vehicleSelect.value = vehicle.vehicle;
@@ -1709,38 +1714,46 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       customerSearchInput.value = item.code || item.name || item.address || "";
       customerSearchResults.innerHTML = "";
       if (!item.hasCoords) {
-        routeStatus.textContent = `${item.name || item.code || "검색 결과"}: 주소는 저장자료에 있지만 좌표가 없어 지도에는 표시하지 못합니다. 저장자료 검색 결과로는 확인되었습니다.`;
+        routeStatus.textContent = `${item.name || item.code || "?? ??"}: ??? ????? ??? ??? ?? ???? ???? ????.`;
         return;
       }
       setTimeout(() => {
         clearMapLayers();
         const lat = Number(item.lat);
         const lng = Number(item.lng);
-        if (boundaryVisible) {
-          if (vehicle) {
-            addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
-              color: getVehicleColor(vehicle),
-              weight: 5,
-              fillOpacity: .10,
-              opacity: .84
-            });
-          }
+        const basePoint = { lat, lng };
+        const color = vehicle ? getVehicleColor(vehicle) : "#0f766e";
+        const nearby = nearestCustomers(basePoint, 18)
+          .filter(hit => Number.isFinite(Number(hit?.customer?.lat)) && Number.isFinite(Number(hit?.customer?.lng)))
+          .filter(hit => String(hit.customer?.id || hit.customer?.code || "") !== String(item.code || item.customerCode || "") || String(hit.vehicle?.vehicle || hit.vehicle || "") !== String(item.vehicle || ""))
+          .slice(0, 16);
+        if (boundaryVisible && vehicle) {
+          addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, { color, weight: 5, fillOpacity: .10, opacity: .84 });
         }
         addKakaoLabel(
           [lat, lng],
-          vehiclePinHtml(item.vehicle || "검색", vehicle ? getVehicleColor(vehicle) : "#dc2626"),
+          vehiclePinHtml(item.vehicle || "??", color),
           "customer-pin-wrap",
           labelLayer,
-          () => openInfoWindow(
-            new kakao.maps.LatLng(lat, lng),
-            `<b>${esc(item.code || "-")} / ${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>주소: ${esc(item.address || "-")}`
-          )
+          () => openInfoWindow(new kakao.maps.LatLng(lat, lng), buildStorePopup({ ...item, code:item.code, customerCode:item.code, customerName:item.name }, item.vehicle || "??", routeDateInput.value, "-"))
         );
-        setKakaoView(lat, lng, 4);
-        openInfoWindow(
-          new kakao.maps.LatLng(lat, lng),
-          `<b>${esc(item.code || "-")} / ${esc(item.name || "-")}</b><br>배송 호차: ${esc(item.vehicle ? `${item.vehicle}호` : "-")}<br>주소: ${esc(item.address || "-")}`
-        );
+        nearby.forEach(hit => {
+          const nearbyVehicle = hit.vehicle?.vehicle || hit.vehicle || "??";
+          const nearbyColor = getVehicleColor(hit.vehicle) || "#f97316";
+          addKakaoLabel(
+            [Number(hit.customer.lat), Number(hit.customer.lng)],
+            vehiclePinHtml(nearbyVehicle, nearbyColor),
+            "customer-pin-wrap",
+            labelLayer,
+            () => openInfoWindow(
+              new kakao.maps.LatLng(Number(hit.customer.lat), Number(hit.customer.lng)),
+              buildStorePopup({ ...hit.customer, code: hit.customer.id, customerCode: hit.customer.id, customerName: hit.customer.name }, nearbyVehicle, routeDateInput.value, "-")
+            )
+          );
+        });
+        fitKakaoBounds([[lat, lng], ...nearby.map(hit => [Number(hit.customer.lat), Number(hit.customer.lng)])]);
+        openInfoWindow(new kakao.maps.LatLng(lat, lng), buildStorePopup({ ...item, code:item.code, customerCode:item.code, customerName:item.name }, item.vehicle || "??", routeDateInput.value, "-"));
+        routeStatus.textContent = `${item.code || item.name || "?? ??"}: ??? ?? ?? ${fmt.format(nearby.length)}? ?? ??`;
       }, 0);
     }
 
@@ -2096,7 +2109,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         position,
         content: `<div class="map-popup overlay-popup" data-popup-id="${popupId}"><button class="popup-close" type="button">×</button>${html}</div>`,
         xAnchor: 0.5,
-        yAnchor: 1.10,
+        yAnchor: 1,
         zIndex: 100
       });
       overlay.setMap(map);
@@ -2199,8 +2212,9 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       const customer = item?.customer || {};
       const vehicleNo = vehicle.vehicle || customer.vehicle || "-";
       const pattern = normalizeDeliveryPattern(customer.delivery_pattern) || "월화수목금토";
-      const ton = vehicle.ton || vehicle.tonnage || vehicle.tone || "-";
-      const title = `${customer.id || customer.code || "-"} / ${customer.name || "-"}`;
+      const title = customer.name || customer.customerName || "-";
+      const code = customer.id || customer.code || customer.customerCode || "-";
+      const region = regionFromAddress(customer.address);
       return `
         <div class="store-popup">
           <div class="popup-title">
@@ -2208,12 +2222,11 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
             <span class="popup-badge">${esc(vehicleNo)}호</span>
           </div>
           <div class="popup-grid">
+            <div class="popup-row"><span>코드</span><span>${esc(code)}</span></div>
             <div class="popup-row"><span>주소</span><span>${esc(customer.address || "-")}</span></div>
-            <div class="popup-row"><span>지역</span><span>${esc(regionFromAddress(customer.address))}</span></div>
-            <div class="popup-row"><span>톤수</span><span>${esc(ton)}${String(ton).includes("톤") || ton === "-" ? "" : "톤"}</span></div>
-            <div class="popup-row"><span>배송 패턴</span><span>${esc(pattern)}</span></div>
-            <div class="popup-row"><span>거리</span><span>${esc(kmText(item?.distance))}</span></div>
-            <div class="popup-row"><span>구분</span><span>${esc(sourceLabel)}</span></div>
+            <div class="popup-row"><span>지역</span><span>${esc(region)}</span></div>
+            <div class="popup-row"><span>권역</span><span>${esc(vehicleNo && vehicleNo !== "-" ? `${vehicleNo}호` : "-")}</span></div>
+            <div class="popup-row"><span>패턴</span><span>${esc(pattern)}</span></div>
           </div>
         </div>
       `;
@@ -2252,9 +2265,18 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       const vehicleStores = vehicle
         ? (vehicle.customers || []).map(customer => ({ vehicle, customer }))
         : [];
-      const nearby = (vehicleStores.length ? vehicleStores : (row.nearbyStores && row.nearbyStores.length ? row.nearbyStores : row.candidates || []))
+      const candidateStores = (row.nearbyStores && row.nearbyStores.length ? row.nearbyStores : row.candidates || []);
+      const mergedNearby = [...candidateStores, ...vehicleStores];
+      const seenNearby = new Set();
+      const nearby = mergedNearby
         .filter(item => Number.isFinite(item?.customer?.lat) && Number.isFinite(item?.customer?.lng))
-        .slice(0, vehicleStores.length ? 180 : 20);
+        .filter(item => {
+          const key = [item.vehicle?.vehicle || item.vehicle || row.vehicle || "", item.customer.id || item.customer.code || item.customer.name || "", item.customer.address || ""].join("|");
+          if (seenNearby.has(key)) return false;
+          seenNearby.add(key);
+          return true;
+        })
+        .slice(0, 40);
       addTextImageMarker(
         [row.lat, row.lng],
         "신규",
@@ -2372,18 +2394,20 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       const orderCount = stop.orderCount || raw.orderCnt || raw.ordCnt || raw.totalAlcnt || raw.alcnt || raw.count || "";
       const vehicleName = stop.vehicle || vehicle.vehicle;
       const vehicleLabel = String(vehicleName).endsWith("호") ? String(vehicleName) : `${vehicleName}호`;
-      const storeType = raw.storeType || raw.brand || raw.franchise || stop.storeType || stop.brand || "-";
+      const pattern = normalizeDeliveryPattern(raw.deliveryPattern || raw.delivery_pattern || stop.deliveryPattern || stop.delivery_pattern) || "-";
+      const region = regionFromAddress(address);
       return `
         <div class="store-popup">
           <div class="popup-title">
-            <b>${esc(customerCode)} / ${esc(customerName)}</b>
-            <span class="popup-badge">${esc(vehicleLabel)}</span>
+            <span class="popup-code">${esc(customerCode)}</span>
+            <b>${esc(customerName)}</b>
           </div>
           <div class="popup-grid">
-            <div class="popup-row"><span>고객명</span><span>${esc(customerName)}</span></div>
-            <div class="popup-row"><span>점포</span><span>${esc(storeType)}</span></div>
+            <div class="popup-row"><span>코드</span><span>${esc(customerCode)}</span></div>
             <div class="popup-row"><span>주소</span><span>${esc(address)}</span></div>
-            <div class="popup-row"><span>기준일</span><span>${esc(date || routeDateInput.value || "-")} · ${esc(sequence || stop.sequence || "-")}착</span></div>
+            <div class="popup-row"><span>지역</span><span>${esc(region)}</span></div>
+            <div class="popup-row"><span>권역</span><span>${esc(vehicleLabel)}</span></div>
+            <div class="popup-row"><span>패턴</span><span>${esc(pattern)}</span></div>
           </div>
           <div class="popup-metrics">
             <div><b>${orderCount ? esc(orderCount) : "-"}</b><small>주문횟수</small></div>
@@ -4483,6 +4507,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
+
 
 
 
