@@ -1224,11 +1224,11 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       const requested = String(routeVehicleQuickInput?.value || vehicleSelect.value || "").replace(/\D/g, "");
       const vehicle = data.vehicles.find(v => String(v.vehicle) === requested || v.vehicle === vehicleSelect.value);
       if (!vehicle) {
-        routeStatus.textContent = "?? ??? ?? ?????.";
+        routeStatus.textContent = "해당 호차를 찾지 못했습니다.";
         return;
       }
       vehicleSelect.value = vehicle.vehicle;
-      vehicleSearchInput.value = `${vehicle.vehicle}?`;
+      vehicleSearchInput.value = `${vehicle.vehicle}호`;
       shouldShowRoute = true;
       viewMode.value = "detail";
       await renderDailyRoute(vehicle, getVehicleColor(vehicle));
@@ -1321,7 +1321,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
           return;
         }
         vehicleSelect.value = vehicle.vehicle;
-        vehicleSearchInput.value = `${vehicle.vehicle}호`;
+      vehicleSearchInput.value = `${vehicle.vehicle}호`;
         viewMode.value = "detail";
         shouldShowRoute = true;
         renderDailyRoute(vehicle, getVehicleColor(vehicle));
@@ -1715,7 +1715,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       customerSearchInput.value = item.code || item.name || item.address || "";
       customerSearchResults.innerHTML = "";
       if (!item.hasCoords) {
-        routeStatus.textContent = `${item.name || item.code || "?? ??"}: ??? ????? ??? ??? ?? ???? ???? ????.`;
+        routeStatus.textContent = "해당 호차를 찾지 못했습니다.";
         return;
       }
       setTimeout(() => {
@@ -1924,9 +1924,123 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       });
     }
 
-    function renderVehicleDetail() {
-      // legacy render hook: detail rendering is handled by openVehicleDetail/renderVehicleSummary.
+    function getVehicleDriverInfo(vehicle) {
+      if (!vehicle) return null;
+      return vehicleDriverMaster.get(String(vehicle.vehicle)) || null;
     }
+
+    function updateRouteHud(vehicle, stopCount, modeLabel = "운영지도 권역") {
+      const date = routeDateInput.value || "-";
+      const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}호` : "전체";
+      const area = vehicle?.area_label || modeLabel;
+      const driver = getVehicleDriverInfo(vehicle);
+      const driverText = driver ? ` / ${[driver.carrier, driver.driverName, driver.phone].filter(Boolean).join(" / ")}` : "";
+      if (routeHudVehicle) routeHudVehicle.textContent = vehicleLabel;
+      if (routeHudStops) routeHudStops.textContent = Number.isFinite(Number(stopCount)) ? fmt.format(Number(stopCount)) : "-";
+      if (routeHudDate) routeHudDate.textContent = date;
+      if (routeMapHudTitle) routeMapHudTitle.textContent = vehicle?.vehicle ? `${vehicleLabel} / ${area}` : modeLabel;
+      if (routeMapHudMeta) routeMapHudMeta.textContent = shouldShowRoute && routeDateInput.value
+        ? `${date} 월 데이터 기준 동선 조회 모드입니다.${driverText}`
+        : `운영지도 권역 데이터 기준입니다.${driverText}`;
+    }
+
+    function renderVehicleDetail() {
+      const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value) || data.vehicles[0];
+      if (!vehicle) {
+        viewMode.value = "overview:all";
+        renderOverview();
+        return;
+      }
+      const customers = Array.isArray(vehicle.customers) ? vehicle.customers : [];
+      const routeFocus = shouldShowRoute && !!routeDateInput.value;
+      clearMapLayers();
+      updateRouteHud(vehicle, routeFocus ? currentRouteStops.length : customers.length, routeFocus ? "일일동선" : "호차 권역");
+      document.querySelector(".stats .stat:nth-child(2) span").textContent = "권역 최장 폭";
+
+      const color = getVehicleColor(vehicle);
+      const showBoundaries = boundaryVisible;
+      if (showBoundaries) {
+        addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
+          color,
+          weight: 4,
+          fillOpacity: 0,
+          opacity: .94
+        });
+      }
+      if (showBoundaries && !routeFocus && vehicle.span.line.length === 2) {
+        addKakaoPolyline(vehicle.span.line, { color:"#dc2626", weight:4, opacity:.9, dashArray:"10 8" }, spanLayer);
+      }
+      const drawVehicleDetailLabels = () => {
+        markersLayer.clearLayers();
+        addVehicleImageMarker(vehicle.center, vehicle, color, buildVehiclePopup(vehicle));
+        customers.forEach((customer) => {
+          const lat = Number(customer.lat);
+          const lng = Number(customer.lng);
+          if (!isValidKoreaLatLng(lat, lng)) return;
+          addVehicleImageMarker(
+            [lat, lng],
+            vehicle,
+            color,
+            buildStorePopup({
+                ...customer,
+                code: customer.id,
+                customerCode: customer.id,
+                customerName: customer.name,
+                monthlyAmount: customer.avg_order_amount,
+                dailyAmount: customer.avg_order_amount,
+                orderCount: customer.delivery_pattern
+              }, vehicle, routeDateInput.value || "-", "-")
+          );
+        });
+      };
+      if (!routeFocus) drawVehicleDetailLabels();
+
+      if (routeFocus) renderDailyRoute(vehicle, color);
+      else routeStatus.textContent = "호차 권역과 고객 위치를 운영지도 기준으로 표시합니다.";
+
+      document.getElementById("customerCount").textContent = fmt.format(vehicle.count);
+      document.getElementById("spanDistance").textContent = `${vehicle.span.distance_km}km`;
+      document.getElementById("vehicleNote").innerHTML = vehicle.is_variable_vehicle ? `<div class="note">${esc(vehicle.variable_note)}</div>` : "";
+      renderVehicleSummary(vehicle);
+      renderVariablePanel(vehicle.is_variable_vehicle ? [vehicle] : []);
+      document.getElementById("areaList").innerHTML = vehicle.top_districts.map(([k,v]) => `<li>${esc(k)} <b>${fmt.format(v)}</b>건</li>`).join("");
+      document.getElementById("dongList").innerHTML = vehicle.top_admin_areas.length ? vehicle.top_admin_areas.slice(0,8).map(x => `<li>${esc(x.name)} <b>${fmt.format(x.count)}</b>건</li>`).join("") : "<li>-</li>";
+      document.getElementById("customerList").innerHTML = customers.slice(0, 180).map(c => `<div class="customer" data-lat="${c.lat}" data-lng="${c.lng}"><strong>${esc(c.name)}</strong><small>${esc(c.id)} · ${esc(c.district)} ${esc(c.dong || "")}</small><small>${esc(c.address)}</small></div>`).join("");
+      document.querySelectorAll(".customer").forEach(el => el.addEventListener("click", () => {
+        const lat = Number(el.dataset.lat);
+        const lng = Number(el.dataset.lng);
+        setKakaoView(lat, lng, 4);
+        const customer = customers.find(c => Number(c.lat) === lat && Number(c.lng) === lng);
+        if (customer) {
+          openInfoWindow(
+            new kakao.maps.LatLng(lat, lng),
+            buildStorePopup({
+              ...customer,
+              code: customer.id,
+              customerCode: customer.id,
+              customerName: customer.name,
+              monthlyAmount: customer.avg_order_amount,
+              dailyAmount: customer.avg_order_amount,
+              orderCount: customer.delivery_pattern
+            }, vehicle, routeDateInput.value || "-", "-")
+          );
+        }
+      }));
+
+      const boundsPoints = customers
+        .filter(c => isValidKoreaLatLng(c.lat, c.lng))
+        .map(c => [Number(c.lat), Number(c.lng)]);
+      if (boundsPoints.length) {
+        fitKakaoBounds(boundsPoints);
+      } else if (Array.isArray(vehicle.center) && isValidKoreaLatLng(vehicle.center[0], vehicle.center[1])) {
+        setKakaoView(vehicle.center[0], vehicle.center[1], 7);
+      } else {
+        viewMode.value = getLastOverviewMode();
+        renderOverview();
+      }
+      setTimeout(drawVehicleDetailLabels, 150);
+    }
+
 
     function render() {
       if (document.body.dataset.workTab === "wms") {
@@ -2361,15 +2475,15 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         const name = stop.customerName || stop.name || stop.customer || "-";
         const amount = stop.amount || stop.dailyAmount || stop.monthlyAmount || 0;
         const orderCount = stop.orderCount || stop.deliveryPattern || stop.delivery_pattern || "-";
-        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}?` : "-";
+        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}호` : "-";
         return `<button type="button" class="route-stop-item" data-route-stop-index="${index}">
           <div class="route-stop-title">
             <div><b>${esc(sequence)}착 · ${esc(code)}</b><span class="route-stop-name">${esc(name)}</span></div>
             <div class="route-stop-badges"><span class="route-stop-badge">${esc(vehicleLabel)}</span><span class="route-stop-badge">${esc(orderCount)}</span></div>
           </div>
-          <div class="route-stop-address">??: ${esc(stop.address || "-")}</div>
-          <div class="route-stop-kpis"><div><b>${money(amount)}</b><small>? ???</small></div><div><b>${esc(orderCount)}</b><small>????</small></div></div>
-          <div class="route-stop-actions"><span>?? ??</span><span>??</span></div>
+          <div class="route-stop-address">주소: ${esc(stop.address || "-")}</div>
+          <div class="route-stop-kpis"><div><b>${money(amount)}</b><small>일 매출액</small></div><div><b>${esc(orderCount)}</b><small>주문/패턴</small></div></div>
+          <div class="route-stop-actions"><span>지도 이동</span><span>상세</span></div>
         </button>`;
       }).join("");
       const missedRows = (unmatchedStops || []).map((stop, index) => {
@@ -2398,7 +2512,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       const dailyAmount = stop.dailyAmount || stop.amount || raw.daySaleAmt || raw.dailySaleAmt || raw.orderAmt || raw.amt || "";
       const orderCount = stop.orderCount || raw.orderCnt || raw.ordCnt || raw.totalAlcnt || raw.alcnt || raw.count || "";
       const vehicleName = stop.vehicle || vehicle?.vehicle || "";
-      const vehicleLabel = vehicleName ? (String(vehicleName).endsWith("?") ? String(vehicleName) : `${vehicleName}?`) : "-";
+      const vehicleLabel = vehicleName ? (String(vehicleName).endsWith("호") ? String(vehicleName) : `${vehicleName}호`) : "-";
       const pattern = normalizeDeliveryPattern(raw.deliveryPattern || raw.delivery_pattern || stop.deliveryPattern || stop.delivery_pattern) || "-";
       const region = regionFromAddress(address) || "-";
       return `
@@ -2409,12 +2523,12 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
           </div>
           <div class="popup-body compact-body">
             <div class="popup-line address-line">${esc(address)}</div>
-            <div class="popup-meta-line"><span>??</span><b>${esc(region)}</b></div>
-            <div class="popup-meta-line"><span>??</span><b>${esc(pattern)}</b></div>
+            <div class="popup-meta-line"><span>권역</span><b>${esc(region)}</b></div>
+            <div class="popup-meta-line"><span>패턴</span><b>${esc(pattern)}</b></div>
           </div>
           <div class="popup-kpi-row">
-            <div><b>${esc(orderCount || "-")}</b><small>????</small></div>
-            <div><b>${money(dailyAmount)}</b><small>? ???</small></div>
+            <div><b>${esc(orderCount || "-")}</b><small>주문횟수</small></div>
+            <div><b>${money(dailyAmount)}</b><small>일 매출액</small></div>
           </div>
         </div>
       `;
@@ -2540,8 +2654,9 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         const response = await fetch(`/api/monthly-dispatch-route?${params.toString()}`, { cache: "no-store", signal: controller.signal });
         clearTimeout(timer);
         if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          routeStatus.innerHTML = `<div class="sync-notice error">월 데이터에 ${esc(date)} ${esc(vehicle.vehicle)}호 동선이 없습니다.</div>`;
+          const fallbackPayload = buildOperatingRoutePayload(vehicle, date);
+          await renderDailyRoutePayload(vehicle, color, date, fallbackPayload);
+          routeStatus.innerHTML += `<div class="sync-notice">월 데이터에 ${esc(date)} ${esc(vehicle.vehicle)}호 저장 동선이 없어 운영지도 권역 기준으로 표시했습니다.</div>`;
           return;
         }
         const payload = await response.json();
@@ -2550,10 +2665,12 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
           routeStatus.innerHTML += `<div class="sync-notice done"><b>월시트 조회 완료</b><br>선택 날짜와 호차 기준으로 표시했습니다.</div>`;
         }
       } catch (error) {
+        const fallbackPayload = buildOperatingRoutePayload(vehicle, date);
+        await renderDailyRoutePayload(vehicle, color, date, fallbackPayload);
         routeStatus.innerHTML += `<div class="sync-notice">${
           error.name === "AbortError"
-            ? "월 데이터 조회 지연 · 운영지도 기준 유지"
-            : "월 데이터를 불러오지 못해 운영지도 기준 유지"
+            ? "월 데이터 조회 지연 ? 운영지도 기준으로 표시했습니다."
+            : "월 데이터를 불러오지 못해 운영지도 기준으로 표시했습니다."
         }</div>`;
       }
     }
@@ -4293,6 +4410,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
 
 
 
