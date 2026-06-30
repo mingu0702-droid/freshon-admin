@@ -1094,7 +1094,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       "#65a30d","#b45309","#0e7490","#a21caf","#15803d","#e11d48","#1d4ed8","#7c2d12",
       "#047857","#6d28d9","#b91c1c","#0369a1","#4f46e5","#a16207","#be123c","#0d9488"
     ];
-    let map, markersLayer, areaLayer, spanLayer, labelLayer, data, adminFeaturesByCode, adminPathCache, geocoder;
+    let map, markersLayer, areaLayer, spanLayer, labelLayer, data, adminFeaturesByCode, adminPathCache, geocoder, places;
     let infoWindows = [];
     let shouldShowRoute = false;
     let boundaryVisible = false;
@@ -1268,6 +1268,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         }).observe(wmsMapSlot);
       }
       geocoder = new kakao.maps.services.Geocoder();
+      places = new kakao.maps.services.Places();
       markersLayer = makeLayerGroup();
       areaLayer = makeLayerGroup();
       spanLayer = makeLayerGroup();
@@ -2969,13 +2970,33 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
 
     function geocodeAddress(address) {
       return new Promise(resolve => {
-        if (!geocoder || !address) return resolve(null);
-        geocoder.addressSearch(address, (result, status) => {
+        const keyword = String(address || "").trim();
+        if (!geocoder || !keyword) return resolve(null);
+        const finish = (point) => resolve(point || null);
+        geocoder.addressSearch(keyword, (result, status) => {
           if (status === kakao.maps.services.Status.OK && result[0]) {
-            resolve({ lat: Number(result[0].y), lng: Number(result[0].x) });
+            finish({ lat: Number(result[0].y), lng: Number(result[0].x), source: "address" });
             return;
           }
-          resolve(null);
+          if (!places) return finish(null);
+          places.keywordSearch(keyword, (items, keywordStatus) => {
+            if (keywordStatus === kakao.maps.services.Status.OK && items[0]) {
+              finish({ lat: Number(items[0].y), lng: Number(items[0].x), source: "keyword", placeName: items[0].place_name, addressName: items[0].road_address_name || items[0].address_name });
+              return;
+            }
+            const cleaned = keyword.replace(/\\s*(apt|APT)\\s*$/i, "").trim();
+            if (cleaned && cleaned !== keyword) {
+              places.keywordSearch(cleaned, (items2, status2) => {
+                if (status2 === kakao.maps.services.Status.OK && items2[0]) {
+                  finish({ lat: Number(items2[0].y), lng: Number(items2[0].x), source: "keyword-clean", placeName: items2[0].place_name, addressName: items2[0].road_address_name || items2[0].address_name });
+                  return;
+                }
+                finish(null);
+              });
+              return;
+            }
+            finish(null);
+          });
         });
       });
     }
@@ -4507,6 +4528,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
+
 
 
 
