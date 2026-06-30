@@ -1246,7 +1246,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       data = window.VEHICLE_AREA_DATA || EMBEDDED_DATA;
       flatVehicleCustomerCache = null;
       updateBoundaryToggleButton();
-      const adminFeatures = Array.isArray(window.ADMIN_FEATURES) ? window.ADMIN_FEATURES : (Array.isArray(ADMIN_FEATURES) ? ADMIN_FEATURES : []);
+      const adminFeatures = Array.isArray(window.ADMIN_FEATURES) ? window.ADMIN_FEATURES : ((typeof ADMIN_FEATURES !== "undefined" && Array.isArray(ADMIN_FEATURES)) ? ADMIN_FEATURES : []);
       adminFeaturesByCode = new Map(adminFeatures.map(feature => [String(feature.properties?.code || ""), feature]));
       adminPathCache = new Map();
       if (!window.kakao?.maps) {
@@ -2323,10 +2323,10 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       return `${fmt.format(Math.round(number))}원`;
     }
 
-    function renderRouteStopPlaceholder(message = "??? ??? ???? ??/?? ??? ??? ?????.") {
+    function renderRouteStopPlaceholder(message = "날짜와 호차를 조회하면 착지/매장 정보가 여기에 표시됩니다.") {
       if (!routeStopPanel) return;
       routeStopPanel.hidden = false;
-      routeStopPanel.innerHTML = `<h3><span class="route-section-no">4</span>착지/매장 정보</h3><div class="route-stop-list"><div class="route-stop-item">${esc(message)}</div></div>`;
+      routeStopPanel.innerHTML = `<h3><span class="route-section-no">4</span>착지/매장 정보</h3><div class="route-stop-list"><div class="route-stop-item"><b>조회 대기</b><small>${esc(message)}</small></div></div>`;
     }
 
     function clearRouteStopPanel() {
@@ -4289,6 +4289,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
 
 
 
