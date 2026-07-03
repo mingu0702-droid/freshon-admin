@@ -835,7 +835,7 @@ function buildDailyRouteCacheFromNormalizedRows(rows, generatedAt, source = "she
   const routes = {};
   for (const [key, groupRows] of groups.entries()) {
     const [date, vehicle] = key.split("|");
-    const sortedRows = groupRows
+    const sortedRows = dedupeDispatchSheetRows(groupRows)
       .map((row, index) => ({ row, index }))
       .sort((left, right) => routeSortValue(left.row, left.index) - routeSortValue(right.row, right.index))
       .map((item) => item.row);
@@ -849,7 +849,7 @@ function buildDailyRouteCacheFromNormalizedRows(rows, generatedAt, source = "she
       rowCount: sortedRows.length,
       cacheHit: true,
       cacheType: "daily-route-index",
-      dateBasis: "????",
+      dateBasis: "배송일자",
       stops: sortedRows.map((row, index) => buildStopFromDispatchRow(row, vehicle, index + 1))
     };
   }
@@ -1643,7 +1643,8 @@ async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" 
       row: baseItems.length ? mergeRouteBaseWithHistory(item.row, historyByKey.get(routeIdentity(item.row))) : item.row
     }))
     .sort((left, right) => routeSortValue(left.row, left.index) - routeSortValue(right.row, right.index))
-  const rows = routeItems.map((item) => item.row);
+  const rows = dedupeDispatchSheetRows(routeItems.map((item) => item.row))
+    .sort((left, right) => routeSortValue(left, 0) - routeSortValue(right, 0));
   if (!rows.length) return null;
   const appRecordedCount = rows.filter((row) => deliveryCompletionInfo(row).appRecorded).length;
   const appMissingCount = rows.length - appRecordedCount;
@@ -3114,6 +3115,8 @@ function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+
 
 
 
