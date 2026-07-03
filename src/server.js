@@ -785,20 +785,20 @@ function normalizeDispatchRowForSheet(row, index, generatedAt) {
 
 function dedupeDispatchSheetRows(rows) {
   const map = new Map();
+  const scoreRow = (row) => {
+    const source = normalizeSearchValue(row.sourceFile || row._sourceFile || row.source || "");
+    return (Number(row.amount || row.dailyAmount || row.monthlyAmount || 0) ? 100 : 0)
+      + (source.includes("freshon") || source.includes("프레시온") ? 30 : 0)
+      + (row.lat && row.lng ? 10 : 0)
+      + (normalizeVehicleValue(row.vehicle) ? 3 : 0)
+      + (Number(row.savedOrder || row.sequence || 0) ? 1 : 0);
+  };
   for (const row of rows) {
-    const key = [
-      row.deliveryDate,
-      normalizeVehicleValue(row.vehicle),
-      normalizeCell(row.customerCode) || normalizeSearchValue(row.customerName),
-      normalizeSearchValue(row.address)
-    ].join("|");
+    const customerKey = normalizeCell(row.customerCode) || `${normalizeSearchValue(row.customerName)}|${normalizeSearchValue(row.address)}`;
+    const key = [row.deliveryDate, customerKey].join("|");
     if (!key.replace(/\|/g, "")) continue;
     const previous = map.get(key);
-    const rowScore = (Number(row.amount || 0) ? 10 : 0) + (row.lat && row.lng ? 5 : 0);
-    const previousScore = previous
-      ? (Number(previous.amount || 0) ? 10 : 0) + (previous.lat && previous.lng ? 5 : 0)
-      : -1;
-    if (!previous || rowScore >= previousScore) map.set(key, row);
+    if (!previous || scoreRow(row) >= scoreRow(previous)) map.set(key, row);
   }
   return [...map.values()];
 }
@@ -3123,6 +3123,7 @@ function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
 
 
 

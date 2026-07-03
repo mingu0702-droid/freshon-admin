@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+﻿import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -72,17 +72,15 @@ function hasCoords(row) {
 function rowIdentity(row) {
   return [
     normalize(row.deliveryDate),
-    normalizeVehicle(row.vehicle),
-    normalizeKey(row.customerCode) || normalizeKey(row.customerName),
-    normalizeKey(row.address)
+    normalizeKey(row.customerCode) || `${normalizeKey(row.customerName)}|${normalizeKey(row.address)}`
   ].join("|");
 }
 
 function rowScore(row) {
   return (hasCoords(row) ? 100 : 0)
-    + (numberValue(row.amount) ? 30 : 0)
-    + (numberValue(row.dailyAmount) ? 20 : 0)
-    + (numberValue(row.monthlyAmount) ? 10 : 0)
+    + (numberValue(row.amount) || numberValue(row.dailyAmount) || numberValue(row.monthlyAmount) ? 80 : 0)
+    + (/freshon|프레시온/i.test(normalize(row.sourceFile)) ? 30 : 0)
+    + (normalizeVehicle(row.vehicle) ? 3 : 0)
     + (normalize(row.sourceFile) ? 1 : 0);
 }
 
@@ -350,3 +348,4 @@ console.log(JSON.stringify({
   removed: sourceRows.length - dedupedRows.length,
   coords: coordStats
 }, null, 2));
+
