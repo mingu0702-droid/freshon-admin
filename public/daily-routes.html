@@ -1613,8 +1613,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         return code || address || name || Math.random().toString(36);
       };
       const hits = [
-        ...getCustomerSearchHits().map(item => ({ type: "map", item })),
-        ...getSavedCustomerSearchHits().map(item => ({ type: "saved", item }))
+        ...getSavedCustomerSearchHits().map(item => ({ type: "saved", item })),`n        ...getCustomerSearchHits().map(item => ({ type: "map", item }))
       ].sort((a, b) => Number(hasCoords(b)) - Number(hasCoords(a)));
       const seen = new Set();
       return hits.filter(hit => {
@@ -1635,7 +1634,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       }
       savedCustomerSearchTimer = window.setTimeout(async () => {
         try {
-          const res = await fetch(`/api/fixed-dispatch/customer-search?q=${encodeURIComponent(q)}&_=${Date.now()}`);
+          const res = await fetch(`/api/fixed-dispatch/customer-search?q=${encodeURIComponent(q)}&date=${encodeURIComponent(routeDateInput.value || "")}&_=${Date.now()}`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const payload = await res.json();
           if (customerSearchInput.value.trim() !== q) return;
@@ -4412,6 +4411,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
 
 
 

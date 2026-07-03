@@ -126,7 +126,8 @@ function fixedDispatchSearchRow(row) {
   const detailAddress = pickFirstValue(row, ["상세주소", "detailAddress"]);
   const code = pickFirstValue(row, ["customerCode", "code", "custCd", "estCd", "erpCode", "customerERPCode", "고객코드", "고객 코드", "고객ERP코드", "고객사코드", "거래처코드", "매장코드"]);
   const name = pickFirstValue(row, ["고객명", "고객명(업체명)", "고객사명", "업체명", "customerName", "name"]);
-  const vehicle = normalizeVehicleValue(pickFirstValue(row, ["확정호차", "기준호차", "호차", "vehicle"]));
+  const vehicle = normalizeVehicleValue(pickFirstValue(row, ["확정호차", "기준호차", "호차", "배차호차", "배송호차", "vehicle", "vehicleNo", "carSeq", "carNm"]));
+  const deliveryDate = normalizeDateValue(pickFirstValue(row, ["deliveryDate", "입고요청일(배송일)", "입고요청일", "배송일", "배송일자", "배송결과처리일시", "배차일", "운행일자", "기준일", "date"]));
   const lat = toFiniteNumber(row?.lat ?? row?.위도 ?? row?.latitude);
   const lng = toFiniteNumber(row?.lng ?? row?.경도 ?? row?.longitude);
 
@@ -134,6 +135,7 @@ function fixedDispatchSearchRow(row) {
     code,
     name,
     address: [address, detailAddress].filter(Boolean).join(" "),
+    deliveryDate,
     vehicle,
     center: pickFirstValue(row, ["물류센터", "센터", "center"]),
     sourceFile: pickFirstValue(row, ["_sourceFile", "sourceFile"]),
@@ -157,24 +159,30 @@ function fixedDispatchSearchScore(item, query, normalizedQuery) {
   return 0;
 }
 
-function buildFixedDispatchSearchItems(cache, query) {
+function buildFixedDispatchSearchItems(cache, query, preferredDate = "") {
   const normalizedQuery = normalizeSearchValue(query);
+  const targetDate = normalizeDateValue(preferredDate);
   if (!normalizedQuery) return [];
   const seen = new Set();
   return (cache.rows || [])
     .map(fixedDispatchSearchRow)
     .map((item) => ({
       ...item,
-      score: fixedDispatchSearchScore(item, query, normalizedQuery)
+      score: fixedDispatchSearchScore(item, query, normalizedQuery),
+      dateScore: targetDate && item.deliveryDate === targetDate ? 1000 : 0
     }))
     .filter((item) => item.score > 0 && (item.code || item.name || item.address))
+    .sort((a, b) => b.dateScore - a.dateScore
+      || b.score - a.score
+      || String(b.deliveryDate || "").localeCompare(String(a.deliveryDate || ""))
+      || Number(b.hasCoords) - Number(a.hasCoords))
     .filter((item) => {
-      const key = [item.code, item.name, item.address, item.vehicle].join("|");
+      const key = [normalizeSearchValue(item.code || item.address || item.name), targetDate ? String(item.deliveryDate || "") : ""].join("|");
+      if (!key) return true;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     })
-    .sort((a, b) => b.score - a.score || Number(b.hasCoords) - Number(a.hasCoords))
     .slice(0, 50);
 }
 
@@ -1261,7 +1269,7 @@ async function buildCustomerSearchItems(query) {
   return results
     .sort((a, b) => b.score - a.score || Number(b.hasCoords) - Number(a.hasCoords))
     .filter((item, index, array) => {
-      const key = normalizeSearchValue(item.code || item.address || item.name);
+      const key = [normalizeSearchValue(item.code || item.address || item.name), targetDate ? String(item.deliveryDate || "") : ""].join("|");
       if (!key) return true;
       return array.findIndex((other) => normalizeSearchValue(other.code || other.address || other.name) === key) === index;
     })
@@ -2644,7 +2652,7 @@ app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => 
     query: q,
     generatedAt: cache.generatedAt || null,
     rowCount: cache.rowCount || cache.rows?.length || 0,
-    results: buildFixedDispatchSearchItems(cache, q)
+    results: buildFixedDispatchSearchItems(cache, q, req.query.date)
   });
 });
 
@@ -3115,6 +3123,9 @@ function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+
+
 
 
 
