@@ -1613,7 +1613,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         return code || address || name || Math.random().toString(36);
       };
       const hits = [
-        ...getSavedCustomerSearchHits().map(item => ({ type: "saved", item })),`n        ...getCustomerSearchHits().map(item => ({ type: "map", item }))
+        ...getSavedCustomerSearchHits().map(item => ({ type: "saved", item })),
+        ...getCustomerSearchHits().map(item => ({ type: "map", item }))
       ].sort((a, b) => Number(hasCoords(b)) - Number(hasCoords(a)));
       const seen = new Set();
       return hits.filter(hit => {
@@ -4411,6 +4412,9 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
+
+
 
 
 
