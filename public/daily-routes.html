@@ -2647,7 +2647,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       try {
         const params = new URLSearchParams({ date, vehicle: vehicle.vehicle, center: vehicle.region || "" });
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 20000);
+        const timer = setTimeout(() => controller.abort(), 30000);
         const response = await fetch(`/api/monthly-dispatch-route?${params.toString()}`, { cache: "no-store", signal: controller.signal });
         clearTimeout(timer);
         if (!response.ok) {
@@ -2671,7 +2671,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         updateRouteHud(vehicle, 0, "일일동선");
         routeStatus.innerHTML = `<div class="sync-notice error">${
           error.name === "AbortError"
-            ? "월 데이터 조회 지연으로 실제 동선을 표시하지 못했습니다."
+            ? "시트 응답이 30초를 초과했습니다. route_index 갱신 후 다시 조회해주세요."
             : "월 데이터를 불러오지 못해 실제 동선을 표시하지 못했습니다."
         }</div>`;
       }
@@ -4412,6 +4412,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
+
 
 
 
