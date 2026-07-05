@@ -1224,11 +1224,11 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       const requested = String(routeVehicleQuickInput?.value || vehicleSelect.value || "").replace(/\D/g, "");
       const vehicle = data.vehicles.find(v => String(v.vehicle) === requested || v.vehicle === vehicleSelect.value);
       if (!vehicle) {
-        routeStatus.textContent = "?? ??? ?? ?????.";
+        routeStatus.textContent = "호차를 찾지 못했습니다.";
         return;
       }
       vehicleSelect.value = vehicle.vehicle;
-      vehicleSearchInput.value = `${vehicle.vehicle}?`;
+      vehicleSearchInput.value = `${vehicle.vehicle}호`;
       shouldShowRoute = true;
       viewMode.value = "detail";
       await renderDailyRoute(vehicle, getVehicleColor(vehicle));
@@ -4258,6 +4258,49 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       `;
     }
 
+
+    function getOverviewVehicles() {
+      const mode = String(viewMode.value || "overview:osan");
+      const group = mode.includes(":") ? mode.split(":")[1] : "osan";
+      let vehicles = data.vehicles || [];
+      if (group && group !== "all") vehicles = vehicles.filter(v => v.group === group);
+      if (activeLoadStatus) vehicles = vehicles.map(vehicleWithWmsLoad).filter(v => v.load_status === activeLoadStatus);
+      return vehicles;
+    }
+
+    function renderOverview() {
+      clearMapLayers();
+      shouldShowRoute = false;
+      currentRouteStops = [];
+      const vehicles = getOverviewVehicles();
+      const points = [];
+      vehicles.forEach(vehicle => {
+        const color = getVehicleColor(vehicle);
+        const center = Array.isArray(vehicle.center) ? vehicle.center : null;
+        if (center && isValidKoreaLatLng(center[0], center[1])) {
+          points.push([Number(center[0]), Number(center[1])]);
+          addVehicleImageMarker(center, vehicle, color, buildVehiclePopup(vehicle));
+          addKakaoLabel(center, `<b>${esc(vehicle.vehicle)}호</b><span class="area">${esc(vehicle.area_label || "")}</span>`, "overview-label", labelLayer, () => openVehicleDetail(vehicle.vehicle), color);
+        }
+        if (boundaryVisible) {
+          addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, { color, weight: 3, fillOpacity: .04, opacity: .72 });
+          if (Array.isArray(vehicle.span?.line) && vehicle.span.line.length === 2) {
+            addKakaoPolyline(vehicle.span.line, { color, weight: 2, opacity: .45, dashArray: "8 8" }, spanLayer);
+          }
+        }
+      });
+      const mode = String(viewMode.value || "overview:osan");
+      const label = mode.endsWith(":all") ? "전체 전체 권역" : mode.endsWith(":honam") ? "호남권역" : mode.endsWith(":yeongnam") ? "영남권역" : "오산센터 권역";
+      updateRouteHud(null, vehicles.reduce((sum, v) => sum + Number(v.count || 0), 0), label);
+      routeStatus.textContent = boundaryVisible ? "전체 권역선과 호차 중심 위치를 운영지도 기준으로 표시합니다." : "전체 호차 중심 위치를 운영지도 기준으로 표시합니다.";
+      renderOverviewSummary(vehicles.length ? vehicles : data.vehicles);
+      renderVariablePanel(vehicles.filter(v => v.is_variable_vehicle));
+      document.getElementById("areaList").innerHTML = "";
+      document.getElementById("dongList").innerHTML = "";
+      document.getElementById("customerList").innerHTML = "";
+      if (points.length) fitKakaoBounds(points);
+      scheduleOverviewLabelScale();
+    }
     function renderVehicleSummary(vehicle) {
       const basis = vehicleWithWmsLoad(vehicle);
       const wms = basis.wmsToday;
@@ -4412,6 +4455,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
 
 
 
