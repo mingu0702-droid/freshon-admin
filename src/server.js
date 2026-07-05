@@ -990,10 +990,11 @@ async function readRouteFromGoogleRouteIndex(date, vehicle, { force = false } = 
   const requestedVehicle = normalizeVehicleValue(vehicle);
   if (!requestedDate || !requestedVehicle || !config.googleSheetId || !config.googleServiceAccountJsonBase64) return null;
   const cacheKey = `${requestedDate}|${requestedVehicle}`;
+  const monthTab = `route_index_${requestedDate.slice(0, 7).replace("-", "_")}`;
   const token = await getGoogleAccessToken();
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  if (force || !googleRouteIndexMemoryCache || Date.now() - googleRouteIndexMemoryCache.readAt >= 10 * 60 * 1000) {
-    const indexRange = `route_index!A:E`;
+  async function loadIndexRows(sheetName) {
+    const indexRange = `${sheetName}!A:E`;
     const indexUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(indexRange)}?majorDimension=ROWS`;
     const indexResponse = await fetch(indexUrl, { headers });
     const indexBody = await indexResponse.json().catch(() => ({}));
@@ -1010,12 +1011,19 @@ async function readRouteFromGoogleRouteIndex(date, vehicle, { force = false } = 
         if (rowDate && rowVehicle) rows.set(`${rowDate}|${rowVehicle}`, offset + 2);
       });
     }
-    googleRouteIndexMemoryCache = { readAt: Date.now(), rows, routes: new Map() };
+    return { sheetName, rows };
+  }
+  const cacheTabKey = `${monthTab}|route_index`;
+  if (force || !googleRouteIndexMemoryCache || googleRouteIndexMemoryCache.cacheTabKey !== cacheTabKey || Date.now() - googleRouteIndexMemoryCache.readAt >= 10 * 60 * 1000) {
+    const monthRows = await loadIndexRows(monthTab);
+    const fallbackRows = monthRows?.rows?.size ? null : await loadIndexRows("route_index");
+    const picked = monthRows?.rows?.size ? monthRows : fallbackRows;
+    googleRouteIndexMemoryCache = { readAt: Date.now(), cacheTabKey, sheetName: picked?.sheetName || "route_index", rows: picked?.rows || new Map(), routes: new Map() };
   }
   if (googleRouteIndexMemoryCache.routes.has(cacheKey)) return googleRouteIndexMemoryCache.routes.get(cacheKey);
   const rowNumber = googleRouteIndexMemoryCache.rows.get(cacheKey);
   if (!rowNumber) return null;
-  const payloadRange = `route_index!F${rowNumber}:F${rowNumber}`;
+  const payloadRange = `${googleRouteIndexMemoryCache.sheetName}!F${rowNumber}:F${rowNumber}`;
   const payloadUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(payloadRange)}?majorDimension=ROWS`;
   const payloadResponse = await fetch(payloadUrl, { headers });
   const payloadBody = await payloadResponse.json().catch(() => ({}));
@@ -3275,6 +3283,7 @@ function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
 
 
 
