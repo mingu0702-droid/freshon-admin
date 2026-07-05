@@ -65,6 +65,7 @@ const dailyRouteSyncJobs = new Map();
 let vehicleAreaDataPromise = null;
 let customerMasterDataPromise = null;
 let googleDispatchMemoryCache = null;
+let googleRouteIndexMemoryCache = null;
 let googleDriverMemoryCache = null;
 let deliveryAdminSession = {
   cookie: config.deliveryAdminCookie || "",
@@ -866,11 +867,11 @@ function buildDailyRouteCacheFromNormalizedRows(rows, generatedAt, source = "she
 
 function buildRouteIndexValuesFromNormalizedRows(rows, generatedAt) {
   const cache = buildDailyRouteCacheFromNormalizedRows(rows, generatedAt, "route-index-preview");
-  const values = [["deliveryDate", "vehicle", "rowCount", "totalAmount", "updatedAt"]];
+  const values = [["deliveryDate", "vehicle", "rowCount", "totalAmount", "updatedAt", "payload"]];
   Object.entries(cache.routes || {}).forEach(([date, vehicles]) => {
     Object.entries(vehicles || {}).forEach(([vehicle, route]) => {
       const totalAmount = (route.stops || []).reduce((sum, stop) => sum + Number(stop.amount || stop.dailyAmount || 0), 0);
-      values.push([date, vehicle, route.rowCount || route.stops?.length || 0, Math.round(totalAmount), generatedAt]);
+      values.push([date, vehicle, route.rowCount || route.stops?.length || 0, Math.round(totalAmount), generatedAt, JSON.stringify(route)]);
     });
   });
   return values;
@@ -984,6 +985,53 @@ async function readRowsFromGoogleSheet({ spreadsheetId, sheetName, sheetGid, fal
   return payload;
 }
 
+async function readRouteFromGoogleRouteIndex(date, vehicle, { force = false } = {}) {
+  const requestedDate = normalizeDateValue(date);
+  const requestedVehicle = normalizeVehicleValue(vehicle);
+  if (!requestedDate || !requestedVehicle || !config.googleSheetId || !config.googleServiceAccountJsonBase64) return null;
+  const cacheKey = `${requestedDate}|${requestedVehicle}`;
+  const token = await getGoogleAccessToken();
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  if (force || !googleRouteIndexMemoryCache || Date.now() - googleRouteIndexMemoryCache.readAt >= 10 * 60 * 1000) {
+    const indexRange = `route_index!A:E`;
+    const indexUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(indexRange)}?majorDimension=ROWS`;
+    const indexResponse = await fetch(indexUrl, { headers });
+    const indexBody = await indexResponse.json().catch(() => ({}));
+    if (!indexResponse.ok) return null;
+    const values = Array.isArray(indexBody.values) ? indexBody.values : [];
+    const columns = (values[0] || []).map((value) => normalizeCell(value));
+    const dateIndex = columns.indexOf("deliveryDate");
+    const vehicleIndex = columns.indexOf("vehicle");
+    const rows = new Map();
+    if (dateIndex >= 0 && vehicleIndex >= 0) {
+      values.slice(1).forEach((line, offset) => {
+        const rowDate = normalizeDateValue(line[dateIndex]);
+        const rowVehicle = normalizeVehicleValue(line[vehicleIndex]);
+        if (rowDate && rowVehicle) rows.set(`${rowDate}|${rowVehicle}`, offset + 2);
+      });
+    }
+    googleRouteIndexMemoryCache = { readAt: Date.now(), rows, routes: new Map() };
+  }
+  if (googleRouteIndexMemoryCache.routes.has(cacheKey)) return googleRouteIndexMemoryCache.routes.get(cacheKey);
+  const rowNumber = googleRouteIndexMemoryCache.rows.get(cacheKey);
+  if (!rowNumber) return null;
+  const payloadRange = `route_index!F${rowNumber}:F${rowNumber}`;
+  const payloadUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(payloadRange)}?majorDimension=ROWS`;
+  const payloadResponse = await fetch(payloadUrl, { headers });
+  const payloadBody = await payloadResponse.json().catch(() => ({}));
+  if (!payloadResponse.ok) return null;
+  const payloadText = normalizeCell(payloadBody.values?.[0]?.[0]);
+  if (!payloadText) return null;
+  try {
+    const route = JSON.parse(payloadText);
+    if (!route?.stops?.length) return null;
+    const payload = { ...route, date: requestedDate, vehicle: requestedVehicle, source: "google-sheet-route-index", api: "monthly-dispatch-route" };
+    googleRouteIndexMemoryCache.routes.set(cacheKey, payload);
+    return payload;
+  } catch {
+    return null;
+  }
+}
 async function readDispatchFromGoogleSheet({ force = false } = {}) {
   if (!config.googleSheetId || !config.googleServiceAccountJsonBase64) return null;
   if (!force && googleDispatchMemoryCache && Date.now() - googleDispatchMemoryCache.readAt < 10 * 60 * 1000) {
@@ -2473,6 +2521,91 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
   throw error;
 }
 
+function dateRangeList(startDate, endDate) {
+  const start = normalizeDateValue(startDate);
+  const end = normalizeDateValue(endDate);
+  if (!start || !end) throw new Error("startDate and endDate are required.");
+  const dates = [];
+  let cursor = start;
+  for (let guard = 0; guard < 370 && cursor <= end; guard += 1) {
+    dates.push(cursor);
+    cursor = addDays(cursor, 1);
+  }
+  return dates;
+}
+
+function normalizeFreshonCookie(value) {
+  const text = normalizeCell(value);
+  if (!text) return "";
+  return text.includes("=") ? text : `F_IDF=${text}`;
+}
+
+async function fetchFreshonRowsForDate(date, cookie = "") {
+  const endpoints = [
+    "/bo/wm/dispatch/dailyDsptcGrid1List",
+    "/bo/wm/dispatch/dailyDsptcGridList",
+    "/bo/wm/dispatch/dailyDsptcGrid2List",
+    "/bo/wm/dispatch/dailyDsptcGrid3List",
+    config.freshonFixedDispatchApiUrl || ""
+  ].filter(Boolean);
+  const attempts = [];
+  for (const endpoint of endpoints) {
+    const form = freshonDailyRouteForm({ date, vehicle: "", inDate: date, shipGbn: "2", logCd: "011", vehicleFilter: "" });
+    for (const variant of [
+      { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", ...(cookie ? { Cookie: cookie } : {}) }, body: new URLSearchParams(form).toString() },
+      { method: "POST", headers: { "Content-Type": "application/json; charset=UTF-8", ...(cookie ? { Cookie: cookie } : {}) }, body: JSON.stringify(form) }
+    ]) {
+      try {
+        const payload = await readFreshonJson(endpoint, { ...variant, timeoutMs: 20000 });
+        const rows = extractFreshonRows(payload);
+        attempts.push(`${endpoint}:${rows.length}`);
+        if (rows.length) return { rows, endpoint, attempts };
+      } catch (error) {
+        attempts.push(`${endpoint}:${error.status || "ERR"}`);
+      }
+    }
+  }
+  return { rows: [], endpoint: "", attempts };
+}
+
+function freshonRowsToDispatchRows(rows, date, generatedAt) {
+  return rows.map((row, index) => {
+    const vehicle = freshonRowVehicle(row);
+    const stop = buildStopFromFreshonDailyRow(row, vehicle, index + 1);
+    return {
+      deliveryDate: date,
+      vehicle,
+      sequence: stop.routeOrder || stop.sequence || index + 1,
+      customerCode: stop.customerCode || stop.code,
+      customerName: stop.customerName || stop.name,
+      address: stop.address,
+      amount: stop.amount,
+      dailyAmount: stop.dailyAmount || stop.amount,
+      monthlyAmount: stop.monthlyAmount || stop.amount,
+      deliveryPattern: "",
+      sourceFile: "freshon-month-sync",
+      savedOrder: index + 1,
+      updatedAt: generatedAt,
+      raw: row
+    };
+  }).filter((row) => row.deliveryDate && row.vehicle && (row.customerCode || row.customerName || row.address));
+}
+
+async function fetchFreshonMonthlyRows({ startDate, endDate, cookie = "" }) {
+  const generatedAt = new Date().toISOString();
+  const safeCookie = normalizeFreshonCookie(cookie || config.freshonCookie);
+  if (!safeCookie) throw new Error("FRESHON_COOKIE 또는 요청 cookie가 필요합니다.");
+  const dates = dateRangeList(startDate, endDate);
+  const rows = [];
+  const daily = [];
+  for (const date of dates) {
+    const result = await fetchFreshonRowsForDate(date, safeCookie);
+    const normalizedRows = freshonRowsToDispatchRows(result.rows, date, generatedAt);
+    rows.push(...normalizedRows);
+    daily.push({ date, fetched: result.rows.length, saved: normalizedRows.length, endpoint: result.endpoint, attempts: result.attempts.slice(0, 6) });
+  }
+  return { generatedAt, source: "freshon-month-sync", rows, rowCount: rows.length, range: { startDate: dates[0], endDate: dates.at(-1) }, daily };
+}
 async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = "" }) {
   const uploaded = await buildDailyRouteFromUploadedDispatch({ date, vehicle, center });
   if (uploaded && uploaded.rowCount > 0) return uploaded;
@@ -2549,6 +2682,21 @@ app.post("/api/fixed-dispatch/sync-google-sheet", requireAdmin, async (_req, res
     };
     console.error("Manual Google Sheets sync failed:", error);
     res.status(500).json({ error: error.message });
+  }
+});
+app.post("/api/freshon/month-sync", requireAdmin, async (req, res) => {
+  try {
+    const startDate = normalizeDateValue(req.body?.startDate);
+    const endDate = normalizeDateValue(req.body?.endDate || req.body?.startDate);
+    const cookie = normalizeFreshonCookie(req.body?.cookie || config.freshonCookie);
+    const payload = await fetchFreshonMonthlyRows({ startDate, endDate, cookie });
+    if (!payload.rows.length) return res.status(404).json({ error: "프레시온에서 저장할 행을 찾지 못했습니다.", daily: payload.daily });
+    const googleSheetSync = await syncDispatchToGoogleSheet(payload);
+    refreshState = { ...refreshState, lastError: null, lastFinishedAt: new Date().toISOString(), googleSheetSync };
+    res.json({ ok: true, rowCount: payload.rowCount, range: payload.range, daily: payload.daily, googleSheetSync });
+  } catch (error) {
+    refreshState = { ...refreshState, lastError: error.message, lastFinishedAt: new Date().toISOString() };
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
@@ -2664,6 +2812,10 @@ app.get("/api/monthly-dispatch-route", requireView, async (req, res) => {
   const indexedRoute = await readDailyRoute(date, vehicle).catch(() => null);
   if (indexedRoute?.stops?.length) {
     return res.json({ ...indexedRoute, source: indexedRoute.source || "google-sheet-route-index", api: "monthly-dispatch-route" });
+  }
+  const sheetIndexedRoute = await readRouteFromGoogleRouteIndex(date, vehicle).catch(() => null);
+  if (sheetIndexedRoute?.stops?.length) {
+    return res.json(sheetIndexedRoute);
   }
   const route = await buildFallbackDailyRoute({ date, vehicle, center });
   if (!route) {
@@ -3123,6 +3275,14 @@ function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+
+
+
+
+
+
+
 
 
 
