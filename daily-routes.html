@@ -926,7 +926,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
             <label for="viewMode">보기</label>
             <select id="viewMode">
               <option value="detail">선택 호차 상세</option>
-              <option value="overview:osan">오산센터 권역</option>
+              <option value="overview:osan" selected>오산센터 권역</option>
               <option value="overview:yeongnam">영남권 권역</option>
               <option value="overview:honam">호남권 권역</option>
               <option value="overview:all">전체 권역</option>
@@ -1184,48 +1184,34 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       boundaryVisible = !boundaryVisible;
       updateBoundaryToggleButton();
       if (!map) return;
-      areaLayer.clearLayers();
-      spanLayer.clearLayers();
-      labelLayer.clearLayers();
+      closeInfoWindows();
+      clearMapLayers();
       if (!boundaryVisible) {
-        closeInfoWindows();
-        if (viewMode.value.startsWith("overview")) {
-          markersLayer.clearLayers();
-          routeStatus.textContent = "권역선 OFF: 전체권역 호차 표시를 숨겼습니다.";
-        }
-        return;
-      }
-      if (activeCustomerSearchHit?.vehicle) {
-        const vehicle = activeCustomerSearchHit.vehicle;
-        addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
-          color: getVehicleColor(vehicle),
-          weight: 5,
-          fillOpacity: .10,
-          opacity: .84
+        activeCustomerSearchHit = null;
+        activeAddressSearchQuery = "";
+        shouldShowRoute = false;
+        currentRouteStops = [];
+        if (vehicleSelect) vehicleSelect.value = "";
+        if (routeVehicleQuickInput) routeVehicleQuickInput.value = "";
+        if (vehicleSearchInput) vehicleSearchInput.value = "";
+        if (vehicleSearchResults) vehicleSearchResults.innerHTML = "";
+        if (viewMode) viewMode.value = "overview:osan";
+        updateRouteHud(null, 0, "\uC804\uCCB4 \uAD8C\uC5ED");
+        routeStatus.textContent = "\uAD8C\uC5ED\uC120 OFF: \uD638\uCC28 \uB9C8\uCEE4\uC640 \uAD8C\uC5ED\uC120\uC744 \uBAA8\uB450 \uC228\uACBC\uC2B5\uB2C8\uB2E4.";
+        renderOverviewSummary(data.vehicles || []);
+        renderVariablePanel([]);
+        ["areaList", "dongList", "customerList"].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.innerHTML = "";
         });
         return;
       }
-      if (shouldShowRoute && currentRouteStops.length) {
-        const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value);
-        if (vehicle) addRouteGroupBoundaries(currentRouteStops, getVehicleColor(vehicle), vehicle);
-        return;
+      if (viewMode && !String(viewMode.value || "").startsWith("overview")) {
+        viewMode.value = "overview:osan";
+        if (vehicleSelect) vehicleSelect.value = "";
       }
-      if (viewMode.value.startsWith("overview")) {
-        renderOverview();
-        return;
-      }
-      if (vehicleSelect.value) {
-        const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value);
-        if (vehicle) addAdminBoundaryLayer(vehicle, vehicle.detail_admin_codes, {
-          color: getVehicleColor(vehicle),
-          weight: 5,
-          fillOpacity: .10,
-          opacity: .84
-        });
-        return;
-      }
+      renderOverview();
     }
-
 
     async function handleRouteLookupClick() {
       setWorkTab("route");
@@ -1946,6 +1932,19 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       });
     }
 
+
+    function updateRouteHud(vehicle, stopCount = 0, modeLabel = "") {
+      const vehicleText = vehicle?.vehicle ? `${vehicle.vehicle}\uD638 ? ${vehicle.area_label || ""}` : (modeLabel || "\uC804\uCCB4 \uAD8C\uC5ED");
+      const metaText = vehicle?.vehicle
+        ? `${modeLabel || "\uD638\uCC28 \uAD8C\uC5ED"} ? ${fmt.format(Number(stopCount || 0))}\uCC29\uC9C0`
+        : "\uC6B4\uC601\uC9C0\uB3C4 \uAD8C\uC5ED \uB370\uC774\uD130 \uAE30\uC900\uC73C\uB85C \uD45C\uC2DC \uC911\uC785\uB2C8\uB2E4.";
+      if (routeMapHudTitle) routeMapHudTitle.textContent = vehicleText;
+      if (routeMapHudMeta) routeMapHudMeta.textContent = metaText;
+      if (routeHudVehicle) routeHudVehicle.textContent = vehicle?.vehicle ? `${vehicle.vehicle}\uD638` : (modeLabel || "-");
+      if (routeHudStops) routeHudStops.textContent = fmt.format(Number(stopCount || 0));
+      if (routeHudDate) routeHudDate.textContent = routeDateInput?.value || "-";
+    }
+
     function render() {
       if (document.body.dataset.workTab === "wms") {
         clearMapLayers();
@@ -1995,7 +1994,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       return lastOverviewMode || "overview:osan";
     }
 
-    function resetToOverview(mode = "overview:all") {
+    function resetToOverview(mode = "overview:osan") {
       activeCustomerSearchHit = null;
       activeAddressSearchQuery = "";
       shouldShowRoute = false;
@@ -2006,7 +2005,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       if (vehicleSearchResults) vehicleSearchResults.innerHTML = "";
       if (customerSearchInput) customerSearchInput.value = "";
       if (customerSearchResults) customerSearchResults.innerHTML = "";
-      viewMode.value = mode || "overview:all";
+      viewMode.value = mode || "overview:osan";
       render();
       setTimeout(() => {
         if (map && typeof map.relayout === "function") map.relayout();
@@ -2379,17 +2378,19 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         const sequence = stop.sequence || index + 1;
         const code = stop.customerCode || stop.code || stop.id || "-";
         const name = stop.customerName || stop.name || stop.customer || "-";
-        const amount = stop.amount || stop.dailyAmount || stop.monthlyAmount || 0;
-        const orderCount = stop.orderCount || stop.deliveryPattern || stop.delivery_pattern || "-";
-        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}호` : "-";
+        const address = stop.address || stop.customerAddress || "-";
+        const amount = stop.amount || stop.dailyAmount || stop.salesAmount || stop.monthlyAmount || 0;
+        const orderCount = stop.orderCount || stop.deliveryCount || stop.raw?.baesongCnt || "-";
+        const pattern = normalizeDeliveryPattern(stop.deliveryPattern || stop.delivery_pattern || stop.raw?.deliveryPattern) || "-";
+        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}?` : "-";
         return `<button type="button" class="route-stop-item" data-route-stop-index="${index}">
           <div class="route-stop-title">
-            <div><b>${esc(sequence)}착 · ${esc(code)}</b><span class="route-stop-name">${esc(name)}</span></div>
-            <div class="route-stop-badges"><span class="route-stop-badge">${esc(vehicleLabel)}</span><span class="route-stop-badge">${esc(orderCount)}</span></div>
+            <div><b>${esc(sequence)}? ? ${esc(code)}</b><span class="route-stop-name">${esc(name)}</span></div>
+            <div class="route-stop-badges"><span class="route-stop-badge">${esc(vehicleLabel)}</span><span class="route-stop-badge">${esc(pattern)}</span></div>
           </div>
-          <div class="route-stop-address">주소: ${esc(stop.address || "-")}</div>
-          <div class="route-stop-kpis"><div><b>${money(amount)}</b><small>일 매출액</small></div><div><b>${esc(orderCount)}</b><small>주문횟수</small></div></div>
-          <div class="route-stop-actions"><span>지도 이동</span><span>상세</span></div>
+          <div class="route-stop-address">??: ${esc(address)}</div>
+          <div class="route-stop-kpis"><div><b>${money(amount)}</b><small>\uC77C \uB9E4\uCD9C\uC561</small></div><div><b>${esc(orderCount)}</b><small>\uC8FC\uBB38\uD69F\uC218</small></div></div>
+          <div class="route-stop-actions"><span>?? ??</span><span>??</span></div>
         </button>`;
       }).join("");
       const missedRows = (unmatchedStops || []).map((stop, index) => {
@@ -2397,28 +2398,37 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         const code = stop.customerCode || stop.code || stop.id || "-";
         const name = stop.customerName || stop.name || stop.customer || "-";
         return `<div class="route-stop-item route-unmatched">
-          <b>${esc(sequence)}착 · ${esc(code)} / ${esc(name)}</b>
-          <small>${esc(stop.address || "-")}</small>
-          <small>${money(stop.amount || stop.dailyAmount || stop.monthlyAmount || 0)} · 좌표 없음</small>
+          <b>${esc(sequence)}? ? ${esc(code)}</b>
+          <span>${esc(name)}</span>
+          <small>?? ?? ? ${esc(stop.address || "?? ??")}</small>
         </div>`;
       }).join("");
-      routeStopPanel.hidden = false;
-      const total = (stops || []).length + (unmatchedStops || []).length;
-      routeStopPanel.innerHTML = `<h3><span class="route-section-no">4</span>착지/매장 정보</h3><div class="route-stop-list">${rows}${missedRows || ""}${(!rows && !missedRows) ? "<div class=\"route-stop-item\">표시할 착지가 없습니다.</div>" : ""}</div>`;
-      routeStopPanel.querySelectorAll("[data-route-stop-index]").forEach(button => {
-        button.addEventListener("click", () => focusRouteStop(Number(button.dataset.routeStopIndex)));
+      routeStopPanel.innerHTML = rows || missedRows
+        ? `<div class="route-stop-list">${rows}${missedRows}</div>`
+        : `<div class="route-stop-empty">\uD45C\uC2DC\uD560 \uCC29\uC9C0\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.</div>`;
+      routeStopPanel.querySelectorAll("[data-route-stop-index]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const stop = stops[Number(btn.dataset.routeStopIndex)];
+          if (!stop) return;
+          const lat = Number(stop.lat);
+          const lng = Number(stop.lng);
+          if (isValidKoreaLatLng(lat, lng)) {
+            setKakaoView(lat, lng, 4);
+            openInfoWindow(toLatLng([lat, lng]), buildStorePopup(stop, vehicle, date, stop.sequence));
+          }
+        });
       });
     }
 
     function buildStorePopup(stop, vehicle, date, sequence) {
       const raw = stop.raw || {};
-      const customerName = stop.name || stop.customerName || raw.estNm || raw.estName || "-";
-      const customerCode = stop.code || stop.customerCode || raw.estCd || "-";
-      const address = stop.address || raw.address || "-";
-      const dailyAmount = stop.dailyAmount || stop.amount || raw.daySaleAmt || raw.dailySaleAmt || raw.orderAmt || raw.amt || "";
-      const orderCount = stop.orderCount || raw.orderCnt || raw.ordCnt || raw.totalAlcnt || raw.alcnt || raw.count || "";
-      const vehicleName = stop.vehicle || vehicle?.vehicle || "";
-      const vehicleLabel = vehicleName ? (String(vehicleName).endsWith("호") ? String(vehicleName) : `${vehicleName}호`) : "-";
+      const customerName = stop.name || stop.customerName || raw.estNm || raw.estName || raw.customerName || "-";
+      const customerCode = stop.code || stop.customerCode || raw.estCd || raw.customerCode || "-";
+      const address = stop.address || stop.customerAddress || raw.address || raw.customerAddress || "-";
+      const dailyAmount = stop.dailyAmount || stop.amount || stop.salesAmount || raw.maechul || raw.dailyAmount || raw.daySaleAmt || raw.dailySaleAmt || raw.orderAmt || raw.amt || "";
+      const orderCount = stop.orderCount || stop.deliveryCount || raw.baesongCnt || raw.deliveryCount || raw.orderCnt || raw.ordCnt || raw.totalAlcnt || raw.alcnt || raw.count || "";
+      const vehicleName = stop.vehicle || vehicle?.vehicle || stop.confirmedVehicle || raw.confirmCarSeq || "";
+      const vehicleLabel = vehicleName ? (String(vehicleName).endsWith("\uD638") ? String(vehicleName) : `${vehicleName}\uD638`) : "-";
       const pattern = normalizeDeliveryPattern(raw.deliveryPattern || raw.delivery_pattern || stop.deliveryPattern || stop.delivery_pattern) || "-";
       const region = regionFromAddress(address) || "-";
       return `
@@ -2429,67 +2439,24 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
           </div>
           <div class="popup-body compact-body">
             <div class="popup-line address-line">${esc(address)}</div>
-            <div class="popup-meta-line"><span>권역</span><b>${esc(region)}</b></div>
-            <div class="popup-meta-line"><span>패턴</span><b>${esc(pattern)}</b></div>
+            <div class="popup-meta-line"><span>??</span><b>${esc(region)}</b></div>
+            <div class="popup-meta-line"><span>??</span><b>${esc(pattern)}</b></div>
           </div>
           <div class="popup-kpi-row">
-            <div><b>${esc(orderCount || "-")}</b><small>주문횟수</small></div>
-            <div><b>${money(dailyAmount)}</b><small>일 매출액</small></div>
+            <div><b>${esc(orderCount || "-")}</b><small>\uC8FC\uBB38\uD69F\uC218</small></div>
+            <div><b>${money(dailyAmount)}</b><small>\uC77C \uB9E4\uCD9C\uC561</small></div>
           </div>
         </div>
       `;
     }
 
-    async function loadMonthlyDispatchCache({ force = false } = {}) {
-      const response = await fetch(`/api/monthly-dispatch-summary?compact=1&_=${Date.now()}${force ? "&force=1" : ""}`, { cache: "no-store" });
-      if (!response.ok) throw new Error(`월 데이터 조회 HTTP ${response.status}`);
-      return response.json().catch(() => ({}));
-    }
-
-    async function loadVehicleDriverMaster(date = routeDateInput.value) {
-      const keyDate = date || "latest";
-      if (vehicleDriverMasterDate === keyDate) return vehicleDriverMaster;
-      const params = new URLSearchParams();
-      if (date) params.set("date", date);
-      const response = await fetch(`/api/vehicle-driver-master?${params.toString()}`, { cache: "no-store" });
-      if (!response.ok) return vehicleDriverMaster;
-      const payload = await response.json().catch(() => ({}));
-      vehicleDriverMaster = new Map((payload.vehicles || []).map((item) => [String(item.vehicle), item]));
-      vehicleDriverMasterDate = keyDate;
-      return vehicleDriverMaster;
-    }
-
-    function getVehicleDriverInfo(vehicle) {
-      if (!vehicle) return null;
-      return vehicleDriverMaster.get(String(vehicle.vehicle)) || null;
-    }
-
-    function updateRouteHud(vehicle, stopCount, modeLabel = "운영지도 권역") {
-      const date = routeDateInput.value || "-";
-      const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}호` : "전체";
-      const area = vehicle?.area_label || modeLabel;
-      const driver = getVehicleDriverInfo(vehicle);
-      const driverText = driver ? ` / ${[driver.carrier, driver.driverName, driver.phone].filter(Boolean).join(" / ")}` : "";
-      if (routeHudVehicle) routeHudVehicle.textContent = vehicleLabel;
-      if (routeHudStops) routeHudStops.textContent = Number.isFinite(Number(stopCount)) ? fmt.format(Number(stopCount)) : "-";
-      if (routeHudDate) routeHudDate.textContent = date;
-      if (routeMapHudTitle) routeMapHudTitle.textContent = vehicle?.vehicle ? `${vehicleLabel} · ${area}` : modeLabel;
-      if (routeMapHudMeta) routeMapHudMeta.textContent = shouldShowRoute && routeDateInput.value
-        ? `${date} 월 데이터 기준 동선 조회 모드입니다.${driverText}`
-        : `운영지도 권역 데이터 기준입니다.${driverText}`;
-    }
-    function monthlyCacheSummary(cache) {
-      const rowCount = cache?.rowCount || cache?.rows?.length || 0;
-      const generatedAt = cache?.generatedAt || "-";
-      const range = typeof cache?.range === "string" ? cache.range : cache?.range?.label || cache?.range?.text || cache?.monthKey || "";
-      if (!rowCount) return "저장된 월 배차 데이터가 없습니다. 관리자에서 월 배차 엑셀을 먼저 업로드해주세요.";
-      return `저장 월 데이터 ${fmt.format(rowCount)}행${range ? ` · 범위 ${range}` : ""} · 갱신 기준: ${generatedAt}`;
-    }
-
     function renderVehicleDetail() {
       const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value);
       if (!vehicle) {
-        viewMode.value = "overview:all";
+        if (vehicleSelect) vehicleSelect.value = "";
+        if (routeVehicleQuickInput) routeVehicleQuickInput.value = "";
+        if (vehicleSearchInput) vehicleSearchInput.value = "";
+        viewMode.value = "overview:osan";
         renderOverview();
         return;
       }
@@ -2514,6 +2481,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       }
       const drawVehicleDetailLabels = () => {
         markersLayer.clearLayers();
+        labelLayer.clearLayers();
         addVehicleImageMarker(vehicle.center, vehicle, color, buildVehiclePopup(vehicle));
         customers.forEach((customer) => {
           const lat = Number(customer.lat);
