@@ -149,6 +149,21 @@
     .popup-metrics div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:9px; padding:8px; }
     .popup-metrics b { display:block; font-size:15px; }
     .popup-metrics small { color:#64748b; }
+    .compact-store-popup { width:280px; max-width:280px; padding:10px 12px; border-radius:12px; }
+    .compact-store-popup .compact-title { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:7px; padding-bottom:7px; border-bottom:1px solid #e5edf7; }
+    .compact-store-popup .compact-title b { font-size:13px; line-height:1.22; max-width:198px; white-space:normal; word-break:keep-all; overflow-wrap:anywhere; }
+    .compact-store-popup .popup-code { display:block; font-size:11px; line-height:1; margin-bottom:4px; color:#2563eb; font-weight:900; }
+    .compact-store-popup .popup-badge { flex:0 0 auto; min-height:20px; padding:3px 7px; font-size:10.5px; }
+    .compact-store-popup .compact-body { display:grid; gap:4px; }
+    .compact-store-popup .address-line { font-size:10.8px; line-height:1.32; color:#334155; word-break:keep-all; overflow-wrap:anywhere; }
+    .compact-store-popup .popup-meta-line { display:flex; justify-content:space-between; gap:8px; font-size:10.8px; color:#475569; }
+    .compact-store-popup .popup-meta-line span { color:#64748b; }
+    .compact-store-popup .popup-meta-line b { color:#0f172a; font-size:10.8px; }
+    .compact-store-popup .popup-kpi-row { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:8px; }
+    .compact-store-popup .popup-kpi-row div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:7px; }
+    .compact-store-popup .popup-kpi-row b { display:block; font-size:13px; line-height:1.1; }
+    .compact-store-popup .popup-kpi-row small { display:block; margin-top:3px; font-size:9.5px; color:#64748b; }
+
     .customer-flag {
       position:relative;
       width:28px;
@@ -1195,8 +1210,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         if (routeVehicleQuickInput) routeVehicleQuickInput.value = "";
         if (vehicleSearchInput) vehicleSearchInput.value = "";
         if (vehicleSearchResults) vehicleSearchResults.innerHTML = "";
-        if (viewMode) viewMode.value = "overview:osan";
-        updateRouteHud(null, 0, "\uC804\uCCB4 \uAD8C\uC5ED");
+        updateRouteHud(null, 0, viewMode?.value?.endsWith(":all") ? "\uC804\uCCB4 \uAD8C\uC5ED" : "\uC120\uD0DD \uAD8C\uC5ED");
         routeStatus.textContent = "\uAD8C\uC5ED\uC120 OFF: \uD638\uCC28 \uB9C8\uCEE4\uC640 \uAD8C\uC5ED\uC120\uC744 \uBAA8\uB450 \uC228\uACBC\uC2B5\uB2C8\uB2E4.";
         renderOverviewSummary(data.vehicles || []);
         renderVariablePanel([]);
@@ -1207,9 +1221,10 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         return;
       }
       if (viewMode && !String(viewMode.value || "").startsWith("overview")) {
-        viewMode.value = "overview:osan";
-        if (vehicleSelect) vehicleSelect.value = "";
+        viewMode.value = lastOverviewMode && String(lastOverviewMode).startsWith("overview") ? lastOverviewMode : "overview:all";
       }
+      if (vehicleSelect) vehicleSelect.value = "";
+      if (routeVehicleQuickInput) routeVehicleQuickInput.value = "";
       renderOverview();
     }
 
@@ -2390,7 +2405,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
           </div>
           <div class="route-stop-address">??: ${esc(address)}</div>
           <div class="route-stop-kpis"><div><b>${money(amount)}</b><small>\uC77C \uB9E4\uCD9C\uC561</small></div><div><b>${esc(orderCount)}</b><small>\uC8FC\uBB38\uD69F\uC218</small></div></div>
-          <div class="route-stop-actions"><span>?? ??</span><span>??</span></div>
+          <div class="route-stop-actions"><span>\uC9C0\uB3C4 \uC774\uB3D9</span><span>\uC0C1\uC138</span></div>
         </button>`;
       }).join("");
       const missedRows = (unmatchedStops || []).map((stop, index) => {
@@ -2403,9 +2418,10 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
           <small>?? ?? ? ${esc(stop.address || "?? ??")}</small>
         </div>`;
       }).join("");
+      const panelTitle = `<h3><span class="route-section-no">4</span>\uCC29\uC9C0/\uB9E4\uC7A5 \uC815\uBCF4</h3>`;
       routeStopPanel.innerHTML = rows || missedRows
-        ? `<div class="route-stop-list">${rows}${missedRows}</div>`
-        : `<div class="route-stop-empty">\uD45C\uC2DC\uD560 \uCC29\uC9C0\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.</div>`;
+        ? `${panelTitle}<div class="route-stop-list">${rows}${missedRows}</div>`
+        : `${panelTitle}<div class="route-stop-empty">\uD45C\uC2DC\uD560 \uCC29\uC9C0\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.</div>`;
       routeStopPanel.querySelectorAll("[data-route-stop-index]").forEach(btn => {
         btn.addEventListener("click", () => {
           const stop = stops[Number(btn.dataset.routeStopIndex)];
@@ -2439,8 +2455,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
           </div>
           <div class="popup-body compact-body">
             <div class="popup-line address-line">${esc(address)}</div>
-            <div class="popup-meta-line"><span>??</span><b>${esc(region)}</b></div>
-            <div class="popup-meta-line"><span>??</span><b>${esc(pattern)}</b></div>
+            <div class="popup-meta-line"><span>\uAD8C\uC5ED</span><b>${esc(region)}</b></div>
+            <div class="popup-meta-line"><span>\uD328\uD134</span><b>${esc(pattern)}</b></div>
           </div>
           <div class="popup-kpi-row">
             <div><b>${esc(orderCount || "-")}</b><small>\uC8FC\uBB38\uD69F\uC218</small></div>
