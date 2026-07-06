@@ -2000,6 +2000,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       activeAddressSearchQuery = "";
       shouldShowRoute = false;
       currentRouteStops = [];
+      if (vehicleSelect) vehicleSelect.value = "";
+      if (routeVehicleQuickInput) routeVehicleQuickInput.value = "";
       if (vehicleSearchInput) vehicleSearchInput.value = "";
       if (vehicleSearchResults) vehicleSearchResults.innerHTML = "";
       if (customerSearchInput) customerSearchInput.value = "";
@@ -2485,7 +2487,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
     }
 
     function renderVehicleDetail() {
-      const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value) || data.vehicles[0];
+      const vehicle = data.vehicles.find(v => v.vehicle === vehicleSelect.value);
       if (!vehicle) {
         viewMode.value = "overview:all";
         renderOverview();
@@ -4295,6 +4297,16 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       shouldShowRoute = false;
       currentRouteStops = [];
       const vehicles = getOverviewVehicles();
+      if (!boundaryVisible) {
+        updateRouteHud(null, 0, "?? ??");
+        routeStatus.textContent = "??? OFF: ?? ??? ??? ?? ??? ?????.";
+        renderOverviewSummary(vehicles.length ? vehicles : data.vehicles);
+        renderVariablePanel([]);
+        document.getElementById("areaList").innerHTML = "";
+        document.getElementById("dongList").innerHTML = "";
+        document.getElementById("customerList").innerHTML = "";
+        return;
+      }
       const points = [];
       vehicles.forEach(vehicle => {
         const color = getVehicleColor(vehicle);
