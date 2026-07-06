@@ -1298,7 +1298,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         const vehicle = data.vehicles.find(v => String(v.vehicle) === requested);
         if (!vehicle) return null;
         vehicleSelect.value = vehicle.vehicle;
-        vehicleSearchInput.value = `${vehicle.vehicle}?`;
+        vehicleSearchInput.value = `${vehicle.vehicle}호`;
         viewMode.value = "detail";
         activeLoadStatus = "";
         if (renderDetail) render();
@@ -2381,7 +2381,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         const name = stop.customerName || stop.name || stop.customer || "-";
         const amount = stop.amount || stop.dailyAmount || stop.monthlyAmount || 0;
         const orderCount = stop.orderCount || stop.deliveryPattern || stop.delivery_pattern || "-";
-        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}?` : "-";
+        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}호` : "-";
         return `<button type="button" class="route-stop-item" data-route-stop-index="${index}">
           <div class="route-stop-title">
             <div><b>${esc(sequence)}착 · ${esc(code)}</b><span class="route-stop-name">${esc(name)}</span></div>
@@ -2418,7 +2418,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       const dailyAmount = stop.dailyAmount || stop.amount || raw.daySaleAmt || raw.dailySaleAmt || raw.orderAmt || raw.amt || "";
       const orderCount = stop.orderCount || raw.orderCnt || raw.ordCnt || raw.totalAlcnt || raw.alcnt || raw.count || "";
       const vehicleName = stop.vehicle || vehicle?.vehicle || "";
-      const vehicleLabel = vehicleName ? (String(vehicleName).endsWith("?") ? String(vehicleName) : `${vehicleName}?`) : "-";
+      const vehicleLabel = vehicleName ? (String(vehicleName).endsWith("호") ? String(vehicleName) : `${vehicleName}호`) : "-";
       const pattern = normalizeDeliveryPattern(raw.deliveryPattern || raw.delivery_pattern || stop.deliveryPattern || stop.delivery_pattern) || "-";
       const region = regionFromAddress(address) || "-";
       return `
@@ -4298,8 +4298,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       currentRouteStops = [];
       const vehicles = getOverviewVehicles();
       if (!boundaryVisible) {
-        updateRouteHud(null, 0, "?? ??");
-        routeStatus.textContent = "??? OFF: ?? ??? ??? ?? ??? ?????.";
+        updateRouteHud(null, 0, "전체 권역");
+        routeStatus.textContent = "권역선 OFF: 호차 표시를 숨기고 기본 지도만 표시합니다.";
         renderOverviewSummary(vehicles.length ? vehicles : data.vehicles);
         renderVariablePanel([]);
         document.getElementById("areaList").innerHTML = "";
@@ -4324,7 +4324,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         }
       });
       const mode = String(viewMode.value || "overview:osan");
-      const label = mode.endsWith(":all") ? "전체 전체 권역" : mode.endsWith(":honam") ? "호남권역" : mode.endsWith(":yeongnam") ? "영남권역" : "오산센터 권역";
+      const label = mode.endsWith(":all") ? "전체 권역" : mode.endsWith(":honam") ? "호남권역" : mode.endsWith(":yeongnam") ? "영남권역" : "오산센터 권역";
       updateRouteHud(null, vehicles.reduce((sum, v) => sum + Number(v.count || 0), 0), label);
       routeStatus.textContent = boundaryVisible ? "전체 권역선과 호차 중심 위치를 운영지도 기준으로 표시합니다." : "전체 호차 중심 위치를 운영지도 기준으로 표시합니다.";
       renderOverviewSummary(vehicles.length ? vehicles : data.vehicles);
