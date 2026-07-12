@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
@@ -1136,6 +1136,23 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
     let vehicleDriverMaster = new Map();
     let vehicleDriverMasterDate = "";
     const geocodeCache = new Map();
+    async function loadVehicleDriverMaster(date = "") {
+      const targetDate = String(date || "");
+      if (vehicleDriverMasterDate === targetDate && vehicleDriverMaster.size) return vehicleDriverMaster;
+      try {
+        const res = await fetch(`/api/vehicle-driver-master?date=${encodeURIComponent(targetDate)}&_=${Date.now()}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const payload = await res.json();
+        const rows = Array.isArray(payload.vehicles) ? payload.vehicles : [];
+        vehicleDriverMaster = new Map(rows.map(row => [String(row.vehicle || "").replace(/\D/g, ""), row]));
+        vehicleDriverMasterDate = targetDate;
+      } catch (_) {
+        vehicleDriverMaster = vehicleDriverMaster instanceof Map ? vehicleDriverMaster : new Map();
+        vehicleDriverMasterDate = targetDate;
+      }
+      return vehicleDriverMaster;
+    }
+
     const viewMode = document.getElementById("viewMode");
     const vehicleSelect = document.getElementById("vehicleSelect");
     const backToOverviewButton = document.getElementById("backToOverviewButton");
@@ -1319,15 +1336,10 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         renderCustomerSearchResults();
         scheduleSavedCustomerSearch();
       });
-      customerSearchInput.addEventListener("keydown", (event) => {
+      customerSearchInput.addEventListener("keydown", async (event) => {
         if (event.key !== "Enter") return;
-        const hits = getCombinedCustomerSearchHits();
-        if (!hits.length) {
-          openAddressSearchPin(customerSearchInput.value.trim());
-          return;
-        }
-        if (hits[0].type === "saved") openSavedCustomerSearchHit(hits[0].item);
-        else openCustomerSearchHit(hits[0].item);
+        event.preventDefault();
+        await openFirstCustomerSearchResult();
       });
       backToOverviewButton.addEventListener("click", () => {
         activeCustomerSearchHit = null;
@@ -1648,6 +1660,31 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       }).slice(0, 40);
     }
 
+    async function openFirstCustomerSearchResult() {
+      const q = customerSearchInput.value.trim();
+      if (!q) return;
+      window.clearTimeout(savedCustomerSearchTimer);
+      savedCustomerSearchQuery = "";
+      savedCustomerSearchHits = [];
+      try {
+        const res = await fetch(`/api/fixed-dispatch/customer-search?q=${encodeURIComponent(q)}&date=${encodeURIComponent(routeDateInput.value || "")}&_=${Date.now()}`);
+        if (res.ok) {
+          const payload = await res.json();
+          if (customerSearchInput.value.trim() === q) {
+            savedCustomerSearchQuery = q;
+            savedCustomerSearchHits = Array.isArray(payload.results) ? payload.results : [];
+          }
+        }
+      } catch (_) {}
+      renderCustomerSearchResults();
+      const hits = getCombinedCustomerSearchHits();
+      if (hits.length) {
+        if (hits[0].type === "saved") await openSavedCustomerSearchHit(hits[0].item);
+        else await openCustomerSearchHit(hits[0].item);
+        return;
+      }
+      await openAddressSearchPin(q);
+    }
     function scheduleSavedCustomerSearch() {
       const q = customerSearchInput.value.trim();
       window.clearTimeout(savedCustomerSearchTimer);
@@ -1730,21 +1767,31 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
       return data.vehicles.find(v => String(v.vehicle) === normalized) || null;
     }
 
-    function openSavedCustomerSearchHit(item) {
+    async function openSavedCustomerSearchHit(item) {
       activeCustomerSearchHit = null;
       activeAddressSearchQuery = "";
       const vehicle = findVehicleByNumber(item.vehicle);
-      if (vehicle) openVehicleDetail(vehicle.vehicle);
+      if (vehicle) { vehicleSelect.value = vehicle.vehicle; vehicleSearchInput.value = `${vehicle.vehicle}호`; viewMode.value = "detail"; }
       customerSearchInput.value = item.code || item.name || item.address || "";
       customerSearchResults.innerHTML = "";
-      if (!item.hasCoords) {
+      let lat = Number(item.lat);
+      let lng = Number(item.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        const point = await geocodeAddressCached(item.address || item.name || item.code || "");
+        if (point) {
+          lat = Number(point.lat);
+          lng = Number(point.lng);
+          item.lat = lat;
+          item.lng = lng;
+          item.hasCoords = true;
+        }
+      }
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
         routeStatus.textContent = `${item.name || item.code || "검색 결과"}: 좌표가 없어 지도에 표시하지 못했습니다.`;
         return;
       }
       setTimeout(() => {
         clearMapLayers();
-        const lat = Number(item.lat);
-        const lng = Number(item.lng);
         const basePoint = { lat, lng };
         const color = vehicle ? getVehicleColor(vehicle) : "#0f766e";
         const nearby = nearestCustomers(basePoint, 18)
@@ -1775,23 +1822,33 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
             )
           );
         });
-        fitKakaoBounds([[lat, lng], ...nearby.map(hit => [Number(hit.customer.lat), Number(hit.customer.lng)])]);
+        if (nearby.length) fitKakaoBounds([[lat, lng], ...nearby.map(hit => [Number(hit.customer.lat), Number(hit.customer.lng)])]);
+        setKakaoView(lat, lng, 4);
         openInfoWindow(new kakao.maps.LatLng(lat, lng), buildStorePopup({ ...item, code:item.code, customerCode:item.code, customerName:item.name }, item.vehicle || "-", routeDateInput.value, "-"));
         routeStatus.textContent = `${item.code || item.name || "검색 결과"}: 주변 매장 ${fmt.format(nearby.length)}곳 같이 표시`;
       }, 0);
     }
 
-    function openCustomerSearchHit(hit) {
+    async function openCustomerSearchHit(hit) {
       activeCustomerSearchHit = hit;
       activeAddressSearchQuery = "";
       const { vehicle, customer } = hit;
-      const lat = Number(customer.lat);
-      const lng = Number(customer.lng);
-      openVehicleDetail(vehicle.vehicle);
+      let lat = Number(customer.lat);
+      let lng = Number(customer.lng);
+      vehicleSelect.value = vehicle.vehicle; vehicleSearchInput.value = `${vehicle.vehicle}호`; viewMode.value = "detail";
       customerSearchInput.value = customer.id || customer.name || customer.address || "";
       customerSearchResults.innerHTML = "";
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-        routeStatus.textContent = `${customer.name || customer.id || "검색 결과"}: 운영지도 자료에는 있지만 좌표가 없어 지도에는 표시하지 못합니다. 주소 좌표 보정 후 지도에 표시할 수 있습니다.`;
+        const point = await geocodeAddressCached(customer.address || customer.name || customer.id || "");
+        if (point) {
+          lat = Number(point.lat);
+          lng = Number(point.lng);
+          customer.lat = lat;
+          customer.lng = lng;
+        }
+      }
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        routeStatus.textContent = `${customer.name || customer.id || "검색 결과"}: 좌표가 없어 지도에 표시하지 못했습니다.`;
         return;
       }
       setTimeout(() => {
@@ -2850,7 +2907,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
           });
           kakao.maps.event.addListener(polygon, "click", (mouseEvent) => {
             if (vehicle?.vehicle) {
-              openVehicleDetail(vehicle.vehicle);
+              vehicleSelect.value = vehicle.vehicle; vehicleSearchInput.value = `${vehicle.vehicle}호`; viewMode.value = "detail";
               return;
             }
             openInfoWindow(mouseEvent.latLng, `<b>${esc(group.district)}</b><br>${esc(group.name)}`);
@@ -4398,7 +4455,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
             window.__boundaryDrawCount = (window.__boundaryDrawCount || 0) + 1;
             kakao.maps.event.addListener(polygon, "click", (mouseEvent) => {
               if (viewMode.value.startsWith("overview")) {
-                openVehicleDetail(vehicle.vehicle);
+                vehicleSelect.value = vehicle.vehicle; vehicleSearchInput.value = `${vehicle.vehicle}호`; viewMode.value = "detail";
                 return;
               }
               openInfoWindow(mouseEvent.latLng, `${buildVehiclePopup(vehicle)}<br>행정구역: ${esc(feature.properties.name || "")}`);
@@ -4473,6 +4530,12 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
   </script>
 </body>
 </html>
+
+
+
+
+
+
 
 
 
