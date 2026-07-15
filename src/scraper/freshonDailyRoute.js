@@ -30,6 +30,14 @@ async function fillFirstVisible(page, selectors, value) {
 }
 
 async function maybeLogin(page) {
+  const passwordInput = page.locator("input[type='password']").first();
+  if (!(await passwordInput.isVisible().catch(() => false))) {
+    await page.goto(`${freshonOrigin}/login`, {
+      waitUntil: "domcontentloaded",
+      timeout: NAV_TIMEOUT_MS
+    });
+  }
+
   const idFilled = await fillFirstVisible(page, [
     "input[name='id']",
     "input[name='userId']",
@@ -45,7 +53,7 @@ async function maybeLogin(page) {
 
   if (!idFilled || !pwFilled) return { attempted: false, status: null };
 
-  const submit = page.locator("button[type='submit'], input[type='submit'], button").first();
+  const submit = page.locator("#btn_login, button[type='submit'], input[type='submit'], button").first();
   const responsePromise = page.waitForResponse((response) => response.request().method() === "POST", { timeout: API_TIMEOUT_MS }).catch(() => null);
   if (await submit.count()) {
     await Promise.allSettled([
@@ -181,7 +189,7 @@ function toForm({ page, date, vehicle, center, inDate = date, shipGbn = "1", log
     isCount: "true",
     size: String(PAGE_SIZE),
     sort: ",ASC",
-    excelFileNm: `?쇱씪諛곗감 ?댁뿭_${compactDate(date)}`,
+    excelFileNm: `일일배차 내역_${compactDate(date)}`,
     sqlType: "LOTSIM003_P01",
     logCd,
     inDate: inDate || "",
@@ -424,4 +432,3 @@ export async function withDailyRouteSession(callback, options = {}) {
 export async function refreshDailyRouteData({ date, vehicle, center = "", forceLogin = false }) {
   return withDailyRouteSession((scrape) => scrape({ date, vehicle, center }), { forceLogin });
 }
-
