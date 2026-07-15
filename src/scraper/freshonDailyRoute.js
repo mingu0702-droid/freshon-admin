@@ -76,28 +76,33 @@ export async function loginFreshonSession() {
   if (freshonLoginPromise) return freshonLoginPromise;
   freshonLoginPromise = (async () => {
     assertCredentials();
-    const browser = await chromium.launch({ headless: config.headless });
-    try {
-      const context = await browser.newContext();
-      const page = await context.newPage();
-      page.setDefaultTimeout(API_TIMEOUT_MS);
-      page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-      await page.goto(config.freshonBaseUrl, { waitUntil: "commit", timeout: NAV_TIMEOUT_MS });
-      const login = await maybeLogin(page);
-      await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
-      await page.waitForLoadState("networkidle", { timeout: API_TIMEOUT_MS }).catch(() => null);
-      const passwordStillVisible = await page.locator("input[type='password']").first().isVisible().catch(() => false);
-      const loginPageStillOpen = new URL(page.url()).pathname.startsWith("/login");
-      const cookies = await context.cookies(freshonOrigin);
-      const cookie = serializeCookies(cookies);
-      if (!login.attempted) throw new Error("Freshon login form was not detected.");
-      if (passwordStillVisible || loginPageStillOpen) throw new Error(`Freshon login was rejected (status ${login.status || "unknown"}).`);
-      if (!cookie) throw new Error("Freshon login returned no session cookie.");
-      freshonMemoryCookie = cookie;
-      return { cookie, loginStatus: login.status, cookieCount: cookies.length };
-    } finally {
-      await browser.close().catch(() => null);
+    const body = new URLSearchParams({ userId: config.freshonId, password: config.freshonPassword });
+    const response = await fetch(`${freshonOrigin}/loginProcessing`, {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        Origin: freshonOrigin,
+        Referer: `${freshonOrigin}/login`,
+        "User-Agent": "freshon-admin-auth/1.0"
+      },
+      body: body.toString()
+    });
+    const setCookies = typeof response.headers.getSetCookie === "function"
+      ? response.headers.getSetCookie()
+      : [response.headers.get("set-cookie")].filter(Boolean);
+    const cookie = setCookies
+      .map((value) => String(value || "").split(";", 1)[0].trim())
+      .filter(Boolean)
+      .join("; ");
+    if (![200, 302, 303].includes(response.status) || !cookie) {
+      const error = new Error(`Freshon login was rejected (status ${response.status || "unknown"}).`);
+      error.status = response.status || 401;
+      throw error;
     }
+    freshonMemoryCookie = cookie;
+    return { cookie, loginStatus: response.status, cookieCount: setCookies.length };
   })();
   try {
     return await freshonLoginPromise;
