@@ -6,6 +6,8 @@ const MAX_PAGES = 8;
 const API_TIMEOUT_MS = Math.min(config.navTimeoutMs, 15000);
 const NAV_TIMEOUT_MS = Math.min(Math.max(config.navTimeoutMs, 45000), 90000);
 const freshonOrigin = new URL(config.freshonBaseUrl).origin;
+let freshonLoginPromise = null;
+let freshonMemoryCookie = config.freshonCookie || "";
 
 function assertCredentials() {
   if (!config.freshonId || !config.freshonPassword) {
@@ -41,9 +43,10 @@ async function maybeLogin(page) {
     "input[type='password']"
   ], config.freshonPassword);
 
-  if (!idFilled || !pwFilled) return;
+  if (!idFilled || !pwFilled) return { attempted: false, status: null };
 
   const submit = page.locator("button[type='submit'], input[type='submit'], button").first();
+  const responsePromise = page.waitForResponse((response) => response.request().method() === "POST", { timeout: API_TIMEOUT_MS }).catch(() => null);
   if (await submit.count()) {
     await Promise.allSettled([
       page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }),
@@ -52,6 +55,44 @@ async function maybeLogin(page) {
   } else {
     await page.keyboard.press("Enter").catch(() => null);
     await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
+  }
+  const response = await responsePromise;
+  return { attempted: true, status: response?.status() || null };
+}
+
+function serializeCookies(cookies) {
+  return (cookies || []).filter((cookie) => cookie?.name && cookie?.value).map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+}
+
+export async function loginFreshonSession() {
+  if (freshonLoginPromise) return freshonLoginPromise;
+  freshonLoginPromise = (async () => {
+    assertCredentials();
+    const browser = await chromium.launch({ headless: config.headless });
+    try {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      page.setDefaultTimeout(API_TIMEOUT_MS);
+      page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+      await page.goto(config.freshonBaseUrl, { waitUntil: "commit", timeout: NAV_TIMEOUT_MS });
+      const login = await maybeLogin(page);
+      await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
+      const passwordStillVisible = await page.locator("input[type='password']").first().isVisible().catch(() => false);
+      const cookies = await context.cookies(freshonOrigin);
+      const cookie = serializeCookies(cookies);
+      if (!login.attempted) throw new Error("Freshon login form was not detected.");
+      if (passwordStillVisible) throw new Error(`Freshon login was rejected (status ${login.status || "unknown"}).`);
+      if (!cookie) throw new Error("Freshon login returned no session cookie.");
+      freshonMemoryCookie = cookie;
+      return { cookie, loginStatus: login.status, cookieCount: cookies.length };
+    } finally {
+      await browser.close().catch(() => null);
+    }
+  })();
+  try {
+    return await freshonLoginPromise;
+  } finally {
+    freshonLoginPromise = null;
   }
 }
 
@@ -72,7 +113,7 @@ function parseCookieHeader(cookieHeader) {
 }
 
 async function seedFreshonCookies(context) {
-  const cookies = parseCookieHeader(config.freshonCookie);
+  const cookies = parseCookieHeader(freshonMemoryCookie || config.freshonCookie);
   if (!cookies.length) return;
   await context.addCookies(cookies.map((cookie) => ({
     ...cookie,
@@ -85,12 +126,14 @@ async function seedFreshonCookies(context) {
 }
 
 async function createLoggedInContext({ forceLogin = false } = {}) {
-  if (config.freshonCookie && !forceLogin) {
+  if (forceLogin) await loginFreshonSession();
+  const sessionCookie = freshonMemoryCookie || config.freshonCookie;
+  if (sessionCookie) {
     const context = await request.newContext({
       baseURL: freshonOrigin,
       extraHTTPHeaders: {
         Accept: "application/json, text/plain, */*",
-        Cookie: config.freshonCookie,
+        Cookie: sessionCookie,
         Origin: freshonOrigin,
         Referer: config.freshonBaseUrl
       }
@@ -138,7 +181,7 @@ function toForm({ page, date, vehicle, center, inDate = date, shipGbn = "1", log
     isCount: "true",
     size: String(PAGE_SIZE),
     sort: ",ASC",
-    excelFileNm: `일일배차 내역_${compactDate(date)}`,
+    excelFileNm: `?쇱씪諛곗감 ?댁뿭_${compactDate(date)}`,
     sqlType: "LOTSIM003_P01",
     logCd,
     inDate: inDate || "",
@@ -381,3 +424,4 @@ export async function withDailyRouteSession(callback, options = {}) {
 export async function refreshDailyRouteData({ date, vehicle, center = "", forceLogin = false }) {
   return withDailyRouteSession((scrape) => scrape({ date, vehicle, center }), { forceLogin });
 }
+
