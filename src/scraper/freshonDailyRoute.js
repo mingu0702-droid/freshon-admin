@@ -80,6 +80,7 @@ export async function loginFreshonSession() {
     const response = await fetch(`${freshonOrigin}/loginProcessing`, {
       method: "POST",
       redirect: "manual",
+      signal: AbortSignal.timeout(20000),
       headers: {
         Accept: "text/html,application/xhtml+xml",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
