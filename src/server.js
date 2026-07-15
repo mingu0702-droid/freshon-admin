@@ -2502,7 +2502,7 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
       timeoutMs: 20000,
       body: verifiedForm.toString()
     });
-    const rows = extractFreshonRows(payload);
+    const rows = Array.isArray(payload?.data) ? payload.data : extractFreshonRows(payload);
     if (rows.length) {
       const matched = rows.filter((row) => {
         const tokens = vehicleTokens(freshonRowVehicle(row));
