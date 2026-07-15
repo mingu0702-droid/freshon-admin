@@ -1966,7 +1966,6 @@ function buildStopFromDeliveryTaskRow(row, vehicle, sequence) {
   const coords = extractPoint(row);
   return {
     sequence,
-    raw: row,
     code: customerCode,
     name: customerName,
     address,
@@ -2417,7 +2416,6 @@ function buildStopFromFreshonDailyRow(row, vehicle, sequence) {
   ].filter(Boolean).join(" ").trim();
   return {
     sequence,
-    raw: row,
     code: customerCode,
     name: customerName,
     address,
