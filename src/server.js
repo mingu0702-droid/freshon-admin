@@ -2476,6 +2476,69 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
   const selected = vehicleTokens(vehicle);
   const vehicleAreaData = await readVehicleAreaData().catch(() => null);
   const vehicleData = (vehicleAreaData?.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
+  const verifiedForm = new URLSearchParams({
+    page: "0",
+    isPaging: "true",
+    isCount: "true",
+    size: "3000",
+    sort: "stock_date,ASC",
+    excelFileNm: "baecha_list",
+    logCd: "011",
+    calStartDate: date,
+    calEndDate: date,
+    baecha: "2",
+    shipGbn: "1",
+    estCd: "",
+    estName: "",
+    cboStartCarSeq: "",
+    cboStartCarSeqNm: "",
+    cboEndCarSeq: "",
+    cboEndCarSeqNm: ""
+  });
+  try {
+    const payload = await readFreshonJson("/bo/wm/dispatch/baecha_list", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      timeoutMs: 20000,
+      body: verifiedForm.toString()
+    });
+    const rows = extractFreshonRows(payload);
+    if (rows.length) {
+      const matched = rows.filter((row) => {
+        const tokens = vehicleTokens(freshonRowVehicle(row));
+        if (tokens.size) return [...tokens].some((token) => selected.has(token));
+        return freshonRowMatchesVehicleCustomer(row, vehicleData);
+      });
+      if (!matched.length) {
+        const error = new Error(`Freshon daily dispatch rows were found, but vehicle ${vehicle} was not present for ${date}.`);
+        error.status = 404;
+        throw error;
+      }
+      const stops = matched
+        .map((row, index) => buildStopFromFreshonDailyRow(row, vehicle, index + 1))
+        .filter((stop) => stop.customerCode || stop.customerName || stop.address);
+      if (authDiagnostics.freshon.firstStatus === 401) recordAuthDiagnostic("freshon", { retryStatus: 200, lastError: null });
+      else recordAuthDiagnostic("freshon", { firstStatus: 200, retryStatus: null, lastError: null });
+      return {
+        generatedAt: new Date().toISOString(),
+        source: "freshon-baecha-list",
+        warning: "Freshon verified baecha_list data was used.",
+        date,
+        vehicle,
+        center,
+        rowCount: stops.length,
+        appRecordedCount: 0,
+        appMissingCount: stops.length,
+        stops
+      };
+    }
+  } catch (error) {
+    if (Number(error.status) === 401) {
+      recordAuthDiagnostic("freshon", { firstStatus: 401, lastError: null });
+      throw error;
+    }
+    if (Number(error.status) === 404) throw error;
+  }
   const endpoints = [
     "/bo/wm/dispatch/dailyDsptcGridList",
     "/bo/wm/dispatch/dailyDsptcGrid1List",
