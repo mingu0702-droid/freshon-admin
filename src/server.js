@@ -2226,7 +2226,7 @@ async function buildDailyRouteFromFreshonLogin({ date, vehicle, center = "" }) {
     };
     throw error;
   }
-  const timeoutMs = 65000;
+  const timeoutMs = 120000;
   const timeout = new Promise((_, reject) => {
     setTimeout(() => {
       const error = new Error(`Freshon ID/PW automatic login timed out after ${Math.round(timeoutMs / 1000)}s.`);
@@ -2532,12 +2532,15 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
         stops
       };
     }
+    const noRowsError = new Error(`Freshon baecha_list returned no rows for ${date}.`);
+    noRowsError.status = 404;
+    throw noRowsError;
   } catch (error) {
     if (Number(error.status) === 401) {
       recordAuthDiagnostic("freshon", { firstStatus: 401, lastError: null });
       throw error;
     }
-    if (Number(error.status) === 404) throw error;
+    throw error;
   }
   const endpoints = [
     "/bo/wm/dispatch/dailyDsptcGridList",
