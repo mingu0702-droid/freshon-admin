@@ -2472,8 +2472,7 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
     throw error;
   }
   const selected = vehicleTokens(vehicle);
-  const vehicleAreaData = await readVehicleAreaData().catch(() => null);
-  const vehicleData = (vehicleAreaData?.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
+  const vehicleData = null;
   const verifiedForm = new URLSearchParams({
     page: "0",
     isPaging: "true",
