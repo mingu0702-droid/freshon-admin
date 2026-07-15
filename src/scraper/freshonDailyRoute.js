@@ -57,7 +57,7 @@ async function maybeLogin(page) {
   const responsePromise = page.waitForResponse((response) => response.request().method() === "POST", { timeout: API_TIMEOUT_MS }).catch(() => null);
   if (await submit.count()) {
     await Promise.allSettled([
-      page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }),
+      page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: API_TIMEOUT_MS }),
       submit.click({ timeout: 4000 })
     ]);
   } else {
@@ -85,11 +85,13 @@ export async function loginFreshonSession() {
       await page.goto(config.freshonBaseUrl, { waitUntil: "commit", timeout: NAV_TIMEOUT_MS });
       const login = await maybeLogin(page);
       await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
+      await page.waitForLoadState("networkidle", { timeout: API_TIMEOUT_MS }).catch(() => null);
       const passwordStillVisible = await page.locator("input[type='password']").first().isVisible().catch(() => false);
+      const loginPageStillOpen = new URL(page.url()).pathname.startsWith("/login");
       const cookies = await context.cookies(freshonOrigin);
       const cookie = serializeCookies(cookies);
       if (!login.attempted) throw new Error("Freshon login form was not detected.");
-      if (passwordStillVisible) throw new Error(`Freshon login was rejected (status ${login.status || "unknown"}).`);
+      if (passwordStillVisible || loginPageStillOpen) throw new Error(`Freshon login was rejected (status ${login.status || "unknown"}).`);
       if (!cookie) throw new Error("Freshon login returned no session cookie.");
       freshonMemoryCookie = cookie;
       return { cookie, loginStatus: login.status, cookieCount: cookies.length };
