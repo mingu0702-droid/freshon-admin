@@ -2015,50 +2015,27 @@ function extractDeliveryTaskRows(payload) {
 
 async function fetchDeliveryTaskRows({ date, vehicle }) {
   const selectedTokens = vehicleTokens(vehicle);
-  const variants = [
-    { fromDatedAt: date, toDatedAt: date, searchOption: "FIXED_NO", searchValue: vehicle },
-    { fromDatedAt: date, toDatedAt: date, searchType: "FIXED_NO", searchKeyword: vehicle },
-    { fromDatedAt: date, toDatedAt: date, fixedNo: vehicle },
-    { startDatedAt: date, endDatedAt: date, searchOption: "FIXED_NO", searchValue: vehicle },
-    { "enteringDatedAtBetween[0]": date, "enteringDatedAtBetween[1]": date, searchOption: "FIXED_NO", searchValue: vehicle },
-    { "enteringDatedAtBetween[0]": date, "enteringDatedAtBetween[1]": date, fixedNo: vehicle },
-    { enteringDatedAt: date, searchOption: "FIXED_NO", searchValue: vehicle },
-    { enteringDatedAt: date, fixedNo: vehicle },
-    { fromDatedAt: date, toDatedAt: date },
-    { enteringDatedAtBetween: [date, date] }
-  ];
-
-  let lastRows = [];
-  const errors = [];
-  for (const query of variants) {
-    let payload;
-    try {
-      payload = await deliveryAdminJson(`/api/bali/task/all?${deliveryApiQuery(query)}`, { method: "GET" });
-    } catch (error) {
-      errors.push(error.message || String(error));
-      continue;
-    }
+  const dateParam = `${date}T00:00:00+09:00`;
+  const pageSize = 300;
+  const matchedRows = [];
+  for (let page = 0; page < 20; page += 1) {
+    const query = new URLSearchParams({
+      logisticsCenterId: "1",
+      page: String(page),
+      pageSize: String(pageSize)
+    });
+    query.append("enteringDatedAtBetween", dateParam);
+    query.append("enteringDatedAtBetween", dateParam);
+    const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
     const rows = extractDeliveryTaskRows(payload);
     const matched = rows.filter((row) => {
       const tokens = vehicleTokens(deliveryTaskVehicle(row));
       return [...tokens].some((token) => selectedTokens.has(token));
     });
-    if (matched.length) return matched;
-    if (rows.length) lastRows = rows;
+    matchedRows.push(...matched);
+    if (rows.length < pageSize) break;
   }
-
-  if (lastRows.length) {
-    return lastRows.filter((row) => {
-      const tokens = vehicleTokens(deliveryTaskVehicle(row));
-      return [...tokens].some((token) => selectedTokens.has(token));
-    });
-  }
-  if (errors.length && !lastRows.length) {
-    const error = new Error(`Delivery admin task lookup failed. ${errors[0]}`);
-    error.status = 502;
-    throw error;
-  }
-  return [];
+  return matchedRows;
 }
 
 async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) {
@@ -2087,7 +2064,7 @@ async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) 
   return {
     generatedAt: new Date().toISOString(),
     source: "delivery-admin-live",
-    warning: "Delivery admin task/all data was used from the task lookup screen. No browser automation was started.",
+    warning: "Delivery admin paged task data was used from the task lookup screen. No browser automation was started.",
     date,
     vehicle,
     center,
