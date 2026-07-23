@@ -1706,7 +1706,7 @@ function routeSortValue(row, fallbackIndex) {
 }
 
 async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" }) {
-  const cache = await readDispatchSource(true);
+  const cache = await readDispatchSource(false);
   const generatedAt = cache.generatedAt || new Date().toISOString();
   const requestedDate = normalizeDateValue(date);
   const requestedVehicle = normalizeVehicleValue(vehicle);
@@ -2857,25 +2857,24 @@ app.get("/api/monthly-dispatch-route", requireView, async (req, res) => {
   const vehicle = normalizeVehicleValue(req.query.vehicle);
   const center = normalizeCell(req.query.center);
   if (!date || !vehicle) return res.status(400).json({ error: "date and vehicle are required." });
-  const indexedRoute = await readDailyRoute(date, vehicle).catch(() => null);
-  if (indexedRoute?.stops?.length) {
-    return res.json({ ...indexedRoute, source: indexedRoute.source || "google-sheet-route-index", api: "monthly-dispatch-route" });
+  const localRoute = await buildFallbackDailyRoute({ date, vehicle, center }).catch(() => null);
+  if (localRoute?.stops?.length) {
+    return res.json({ ...localRoute, source: localRoute.source || "monthly-dispatch-cache", api: "monthly-dispatch-route" });
   }
-  const sheetIndexedRoute = await readRouteFromGoogleRouteIndex(date, vehicle).catch(() => null);
+  const sheetIndexedRoute = await Promise.race([
+    readRouteFromGoogleRouteIndex(date, vehicle).catch(() => null),
+    new Promise((resolve) => setTimeout(() => resolve(null), 6500))
+  ]);
   if (sheetIndexedRoute?.stops?.length) {
     return res.json(sheetIndexedRoute);
   }
-  const route = await buildFallbackDailyRoute({ date, vehicle, center });
-  if (!route) {
-    return res.status(404).json({
-      error: `월시트에 ${date} ${vehicle}호 동선이 없습니다.`,
-      source: "google-sheet",
-      date,
-      vehicle,
-      center
-    });
-  }
-  return res.json({ ...route, source: route.source || "google-sheet", api: "monthly-dispatch-route" });
+  return res.status(404).json({
+    error: `월시트에 ${date} ${vehicle}호 동선이 없습니다.`,
+    source: "monthly-dispatch-cache",
+    date,
+    vehicle,
+    center
+  });
 });
 
 app.get("/api/mobile/customer-search", requireView, async (req, res) => {
