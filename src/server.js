@@ -2812,6 +2812,14 @@ function buildMonthlyDispatchSummary(cache) {
 app.get("/api/monthly-dispatch-summary", requireView, async (req, res) => {
   const forceGoogle = req.query.force === "1" || req.query.force === "true";
   const compact = req.query.compact === "1" || req.query.compact === "true";
+  if (!forceGoogle) {
+    const cached = await readMonthlyDispatchSummaryLocalFirst();
+    if (cached) {
+      const payload = { ...cached, source: cached.source || "monthly-dispatch-summary-cache" };
+      if (compact) delete payload.rows;
+      return res.json(payload);
+    }
+  }
   const cache = await readDispatchSource(true, forceGoogle);
   const meta = cache.source === "google-sheet" ? { generatedAt: cache.generatedAt } : await readDispatchMeta();
   const cached = await readMonthlyDispatchSummaryLocalFirst();

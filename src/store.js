@@ -8,6 +8,8 @@ const dispatchMetaFile = path.join(dataDir, "fixed-dispatch-meta.json");
 const monthlySummaryFile = path.join(dataDir, "monthly-dispatch-summary.json");
 const dailyRouteFile = path.join(dataDir, "daily-routes.json");
 const MEMORY_LOG_THRESHOLD_BYTES = 1024 * 1024;
+const localJsonCache = new Map();
+const localJsonReads = new Map();
 
 function stringifyMeasured(label, payload) {
   const before = process.memoryUsage();
@@ -35,8 +37,20 @@ function externalPath(fileName) {
 
 async function readLocalJson(file, fallback) {
   try {
-    const text = await fs.readFile(file, "utf8");
-    return JSON.parse(text);
+    const stat = await fs.stat(file);
+    const cached = localJsonCache.get(file);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.payload;
+    if (localJsonReads.has(file)) return localJsonReads.get(file);
+    const readPromise = fs.readFile(file, "utf8")
+      .then((text) => {
+        const payload = JSON.parse(text);
+        localJsonCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, payload });
+        return payload;
+      })
+      .catch(() => fallback)
+      .finally(() => localJsonReads.delete(file));
+    localJsonReads.set(file, readPromise);
+    return readPromise;
   } catch {
     return fallback;
   }
@@ -47,6 +61,8 @@ async function writeLocalJson(file, payload) {
   const tmp = `${file}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
   await fs.writeFile(tmp, stringifyMeasured(`local:${path.basename(file)}`, payload), "utf8");
   await fs.rename(tmp, file);
+  const stat = await fs.stat(file);
+  localJsonCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, payload });
 }
 
 async function readExternalJson(fileName) {
