@@ -187,6 +187,10 @@ export async function readDispatchCacheLocalFirst() {
   return readDispatchCache();
 }
 
+export async function readDispatchCacheLocalOnly() {
+  return readLocalJson(dispatchFile, null);
+}
+
 function dispatchMetaFromPayload(payload) {
   return {
     generatedAt: payload?.generatedAt || null,

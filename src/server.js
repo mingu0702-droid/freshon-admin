@@ -11,7 +11,7 @@ import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
-import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
+import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchCacheLocalOnly, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { getBrowserGateStatus } from "./scraper/browserGate.js";
 import { recordRequest, runtimeSnapshot } from "./runtimeMetrics.js";
@@ -1706,7 +1706,8 @@ function routeSortValue(row, fallbackIndex) {
 }
 
 async function buildDailyRouteFromUploadedDispatch({ date, vehicle, center = "" }) {
-  const cache = await readDispatchSource(false);
+  const cache = await readDispatchCacheLocalOnly();
+  if (!cache?.rows?.length) return null;
   const generatedAt = cache.generatedAt || new Date().toISOString();
   const requestedDate = normalizeDateValue(date);
   const requestedVehicle = normalizeVehicleValue(vehicle);
