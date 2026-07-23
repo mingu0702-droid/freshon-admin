@@ -1,5 +1,6 @@
 ﻿import express from "express";
 import { spawn } from "node:child_process";
+import compression from "compression";
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -50,6 +51,7 @@ const upload = multer({
   }
 });
 
+app.use(compression({ threshold: 1024 }));
 app.use(express.json({ limit: "10mb" }));
 app.use((req, res, next) => {
   const started = process.hrtime.bigint();
