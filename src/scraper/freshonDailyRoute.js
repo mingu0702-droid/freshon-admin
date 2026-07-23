@@ -1,13 +1,12 @@
 import { chromium, request } from "playwright";
 import { config } from "../config.js";
+import { acquireBrowserPermit } from "./browserGate.js";
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 8;
 const API_TIMEOUT_MS = Math.min(config.navTimeoutMs, 15000);
 const NAV_TIMEOUT_MS = Math.min(Math.max(config.navTimeoutMs, 45000), 90000);
 const freshonOrigin = new URL(config.freshonBaseUrl).origin;
-let freshonLoginPromise = null;
-let freshonMemoryCookie = config.freshonCookie || "";
 
 function assertCredentials() {
   if (!config.freshonId || !config.freshonPassword) {
@@ -30,14 +29,6 @@ async function fillFirstVisible(page, selectors, value) {
 }
 
 async function maybeLogin(page) {
-  const passwordInput = page.locator("input[type='password']").first();
-  if (!(await passwordInput.isVisible().catch(() => false))) {
-    await page.goto(`${freshonOrigin}/login`, {
-      waitUntil: "domcontentloaded",
-      timeout: NAV_TIMEOUT_MS
-    });
-  }
-
   const idFilled = await fillFirstVisible(page, [
     "input[name='id']",
     "input[name='userId']",
@@ -51,64 +42,17 @@ async function maybeLogin(page) {
     "input[type='password']"
   ], config.freshonPassword);
 
-  if (!idFilled || !pwFilled) return { attempted: false, status: null };
+  if (!idFilled || !pwFilled) return;
 
-  const submit = page.locator("#btn_login, button[type='submit'], input[type='submit'], button").first();
-  const responsePromise = page.waitForResponse((response) => response.request().method() === "POST", { timeout: API_TIMEOUT_MS }).catch(() => null);
+  const submit = page.locator("button[type='submit'], input[type='submit'], button").first();
   if (await submit.count()) {
     await Promise.allSettled([
-      page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: API_TIMEOUT_MS }),
+      page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }),
       submit.click({ timeout: 4000 })
     ]);
   } else {
     await page.keyboard.press("Enter").catch(() => null);
     await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
-  }
-  const response = await responsePromise;
-  return { attempted: true, status: response?.status() || null };
-}
-
-function serializeCookies(cookies) {
-  return (cookies || []).filter((cookie) => cookie?.name && cookie?.value).map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
-}
-
-export async function loginFreshonSession() {
-  if (freshonLoginPromise) return freshonLoginPromise;
-  freshonLoginPromise = (async () => {
-    assertCredentials();
-    const body = new URLSearchParams({ userId: config.freshonId, password: config.freshonPassword });
-    const response = await fetch(`${freshonOrigin}/loginProcessing`, {
-      method: "POST",
-      redirect: "manual",
-      signal: AbortSignal.timeout(20000),
-      headers: {
-        Accept: "text/html,application/xhtml+xml",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        Origin: freshonOrigin,
-        Referer: `${freshonOrigin}/login`,
-        "User-Agent": "freshon-admin-auth/1.0"
-      },
-      body: body.toString()
-    });
-    const setCookies = typeof response.headers.getSetCookie === "function"
-      ? response.headers.getSetCookie()
-      : [response.headers.get("set-cookie")].filter(Boolean);
-    const cookie = setCookies
-      .map((value) => String(value || "").split(";", 1)[0].trim())
-      .filter(Boolean)
-      .join("; ");
-    if (![200, 302, 303].includes(response.status) || !cookie) {
-      const error = new Error(`Freshon login was rejected (status ${response.status || "unknown"}).`);
-      error.status = response.status || 401;
-      throw error;
-    }
-    freshonMemoryCookie = cookie;
-    return { cookie, loginStatus: response.status, cookieCount: setCookies.length };
-  })();
-  try {
-    return await freshonLoginPromise;
-  } finally {
-    freshonLoginPromise = null;
   }
 }
 
@@ -129,7 +73,7 @@ function parseCookieHeader(cookieHeader) {
 }
 
 async function seedFreshonCookies(context) {
-  const cookies = parseCookieHeader(freshonMemoryCookie || config.freshonCookie);
+  const cookies = parseCookieHeader(config.freshonCookie);
   if (!cookies.length) return;
   await context.addCookies(cookies.map((cookie) => ({
     ...cookie,
@@ -142,14 +86,12 @@ async function seedFreshonCookies(context) {
 }
 
 async function createLoggedInContext({ forceLogin = false } = {}) {
-  if (forceLogin) await loginFreshonSession();
-  const sessionCookie = freshonMemoryCookie || config.freshonCookie;
-  if (sessionCookie) {
+  if (config.freshonCookie && !forceLogin) {
     const context = await request.newContext({
       baseURL: freshonOrigin,
       extraHTTPHeaders: {
         Accept: "application/json, text/plain, */*",
-        Cookie: sessionCookie,
+        Cookie: config.freshonCookie,
         Origin: freshonOrigin,
         Referer: config.freshonBaseUrl
       }
@@ -158,24 +100,30 @@ async function createLoggedInContext({ forceLogin = false } = {}) {
   }
 
   assertCredentials();
-  const browser = await chromium.launch({ headless: config.headless });
-  const context = await browser.newContext();
-  await seedFreshonCookies(context);
-  const page = await context.newPage();
-  page.setDefaultTimeout(API_TIMEOUT_MS);
-  page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+  const releaseBrowserPermit = await acquireBrowserPermit();
+  try {
+    const browser = await chromium.launch({ headless: config.headless });
+    const context = await browser.newContext();
+    await seedFreshonCookies(context);
+    const page = await context.newPage();
+    page.setDefaultTimeout(API_TIMEOUT_MS);
+    page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
 
-  await page.goto(config.freshonBaseUrl, {
-    waitUntil: "commit",
-    timeout: NAV_TIMEOUT_MS
-  });
-  await maybeLogin(page);
-  await page.goto(`${config.freshonBaseUrl}#/bo/wm/dispatch/dailyDsptcPage`, {
-    waitUntil: "commit",
-    timeout: NAV_TIMEOUT_MS
-  }).catch(() => null);
-  await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
-  return { browser, context, page };
+    await page.goto(config.freshonBaseUrl, {
+      waitUntil: "commit",
+      timeout: NAV_TIMEOUT_MS
+    });
+    await maybeLogin(page);
+    await page.goto(`${config.freshonBaseUrl}#/bo/wm/dispatch/dailyDsptcPage`, {
+      waitUntil: "commit",
+      timeout: NAV_TIMEOUT_MS
+    }).catch(() => null);
+    await page.waitForLoadState("domcontentloaded", { timeout: API_TIMEOUT_MS }).catch(() => null);
+    return { browser, context, page, releaseBrowserPermit };
+  } catch (error) {
+    releaseBrowserPermit();
+    throw error;
+  }
 }
 
 function addDays(date, days) {
@@ -428,12 +376,16 @@ async function scrapeDailyRouteWithContext(context, { date, vehicle, center = ""
 }
 
 export async function withDailyRouteSession(callback, options = {}) {
-  const { browser, context, page } = await createLoggedInContext(options);
+  const { browser, context, page, releaseBrowserPermit } = await createLoggedInContext(options);
   try {
     return await callback((job) => scrapeDailyRouteWithContext(page || context, job));
   } finally {
-    await context.close?.();
-    await browser?.close();
+    try {
+      await context.close?.();
+      await browser?.close();
+    } finally {
+      releaseBrowserPermit?.();
+    }
   }
 }
 

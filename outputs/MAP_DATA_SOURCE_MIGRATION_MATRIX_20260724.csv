@@ -1,0 +1,12 @@
+기능명,현재 데이터 출처,현재 함수/API,필요 Hub API,반환 필드,캐시 정책,fallback 정책,전환 난이도,회귀 테스트
+전체 지도 마커,vehicle-data.js/내장 운영지도 데이터,renderAllOverviewMarkers,/v1/map/markers,"customerCode,vehicle,lat,lng,label,updatedAt",bounds 120초,24시간 stale,상,전체권역 ON/OFF·수량·좌표 비교
+호차 상세 마커,vehicle-data.js/월데이터,renderVehicleDetail,/v1/map/markers,"customerCode,vehicle,lat,lng,label",date+area 120초,24시간 stale,중,호차 선택·초기화·101 자동선택
+핀 고객 상세,vehicle-data.js/검색 결과,openStorePopup,/v1/customers/{customerCode},"주소,전화,브랜드,운영상세,기사",300초,24시간 stale,중,핀·카드 위치/내용
+고객코드·고객명 검색,customer-master/서버 검색,/api/fixed-dispatch/customer-search,/v1/customers/{customerCode},"customerCode,customerName,address,lat,lng,vehicle",300초,최근 정상 상세,중,코드·부분명 검색
+일반주소·주변핀,카카오 검색+내장 주변매장,searchCustomerOrAddress,/v1/map/markers,"bounds 내 최소 마커",bounds 120초,카카오 임시핀+stale,상,주소 엔터·신규핀·주변핀
+신규권역 판단,customer-master/new-area-data,new-area 검색·판단,/v1/map/markers,"vehicle,lat,lng,label,updatedAt",bounds 120초,최근 정상 캐시,상,인근호차·요일판단·CSV
+날짜+호차 착지,월데이터/일일동선 API,/api/monthly-dispatch-route,/v1/routes/stops,"customerCode,sequence,vehicle,lat,lng,dailyAmount",120초,최근 정상 일자 표시,상,날짜·호차·착지 순서
+기사·호차 검색,기사 마스터/내장 데이터,/api/vehicle-driver,/v1/vehicles/search,"vehicle,driverName,driverPhone,center,area",60초,1시간 stale,중,부분검색·일자 기준 기사
+좌표 누락 관리,customer-master 좌표 상태,관리자 조회,/v1/admin/geocodes/missing,"customerCode,address,reason,updatedAt",30초,없음,중,권한·cursor·누락수
+WMS,업로드/서버 저장자료,WMS 탭 API,향후 /v1/wms/*,"customerCode,deliveryDate,vehicle",업무별,기존 업로드 유지,중,WMS 진입·업로드·지도
+운영데이터,월데이터/서버 집계,operations-data API,향후 /v1/dashboard/*,"집계기간,착지수,매출,호차",집계 300초,기준일 표시 stale,중,화면·매출·착지 집계

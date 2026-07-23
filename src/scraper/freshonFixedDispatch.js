@@ -1,6 +1,7 @@
 import { chromium, request } from "playwright";
 import { config } from "../config.js";
 import { getDefaultDispatchRange } from "../dateRange.js";
+import { acquireBrowserPermit } from "./browserGate.js";
 
 const PAGE_SIZE = 1000;
 const MAX_PAGES = 120;
@@ -77,15 +78,21 @@ async function createLoggedInContext() {
     return { browser: null, context };
   }
 
-  const browser = await chromium.launch({ headless: config.headless });
-  const page = await browser.newPage();
-  await page.goto(`${config.freshonBaseUrl}#/bo/wm/standard/driverCarListPage`, {
-    waitUntil: "domcontentloaded",
-    timeout: config.navTimeoutMs
-  });
-  await maybeLogin(page);
-  await page.waitForLoadState("domcontentloaded", { timeout: config.navTimeoutMs }).catch(() => null);
-  return { browser, context: page.context() };
+  const releaseBrowserPermit = await acquireBrowserPermit();
+  try {
+    const browser = await chromium.launch({ headless: config.headless });
+    const page = await browser.newPage();
+    await page.goto(`${config.freshonBaseUrl}#/bo/wm/standard/driverCarListPage`, {
+      waitUntil: "domcontentloaded",
+      timeout: config.navTimeoutMs
+    });
+    await maybeLogin(page);
+    await page.waitForLoadState("domcontentloaded", { timeout: config.navTimeoutMs }).catch(() => null);
+    return { browser, context: page.context(), releaseBrowserPermit };
+  } catch (error) {
+    releaseBrowserPermit();
+    throw error;
+  }
 }
 
 function toForm({ page, range }) {
@@ -156,7 +163,7 @@ async function fetchFixedDispatchPage(context, { page, range }) {
 export async function refreshFixedDispatchData(options = {}) {
   assertCredentials();
   const range = options.range || getDefaultDispatchRange();
-  const { browser, context } = await createLoggedInContext();
+  const { browser, context, releaseBrowserPermit } = await createLoggedInContext();
 
   try {
     const rows = [];
@@ -178,7 +185,11 @@ export async function refreshFixedDispatchData(options = {}) {
       rowCount: rows.length
     };
   } finally {
-    await context.close?.();
-    await browser?.close();
+    try {
+      await context.close?.();
+      await browser?.close();
+    } finally {
+      releaseBrowserPermit?.();
+    }
   }
 }
