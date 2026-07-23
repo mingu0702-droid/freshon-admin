@@ -39,8 +39,8 @@
     .back-button { width:100%; border:1px solid #b7c7e8; background:#eff6ff; color:#1d4ed8; border-radius:6px; padding:9px 10px; font-size:13px; font-weight:900; cursor:pointer; margin:10px 0 2px; }
     .back-button:hover { background:#dbeafe; }
     .search-results { display:grid; gap:8px; margin:9px 0 4px; }
-    .search-hit { border:1px solid #d8e4f1; background:#fff; border-radius:10px; padding:10px; cursor:pointer; font-size:12px; box-shadow:0 8px 20px rgba(15,23,42,.04); }
-    .search-hit:hover { border-color:#2563eb; background:#eff6ff; }
+    .search-hit { border:1px solid #d8e4f1; background:#fff; border-radius:10px; padding:10px; cursor:pointer; font-size:12px; box-shadow:0 8px 20px rgba(15,23,42,.04); transition:border-color .15s,background .15s,transform .15s,box-shadow .15s; }
+    .search-hit:hover,.search-hit:focus-within { border-color:#2563eb; background:#eff6ff; transform:translateY(-1px); box-shadow:0 10px 24px rgba(37,99,235,.12); }
     .search-hit b { font-size:13px; }
     .search-hit .source-badge { display:inline-flex; align-items:center; margin-left:4px; padding:1px 5px; border-radius:999px; background:#eef2ff; color:#1d4ed8; font-size:11px; font-weight:700; }
     .search-hit .no-coord-badge { background:#fff7ed; color:#c2410c; }
@@ -219,6 +219,11 @@
     .boundary-toggle { border:1px solid #cbd5e1; background:rgba(255,255,255,.94); color:#0f172a; border-radius:999px; padding:9px 13px; font-size:12px; font-weight:900; box-shadow:0 8px 22px rgba(15,23,42,.13); cursor:pointer; backdrop-filter:blur(6px); }
     .boundary-toggle:hover { border-color:#2563eb; color:#1d4ed8; }
     .boundary-toggle.active { border-color:#2563eb; background:#2563eb; color:#fff; }
+    .boundary-toggle[aria-busy="true"] { cursor:wait; opacity:.72; }
+    button.is-loading { position:relative; pointer-events:none; color:transparent!important; }
+    button.is-loading::after { content:""; position:absolute; inset:0; margin:auto; width:15px; height:15px; border:2px solid rgba(255,255,255,.55); border-top-color:#fff; border-radius:50%; animation:ui-spin .7s linear infinite; }
+    @keyframes ui-spin { to { transform:rotate(360deg); } }
+    .search-results:empty::after { content:"검색어를 입력하면 결과가 표시됩니다."; display:block; padding:8px 2px; color:#94a3b8; font-size:11px; }
     body.boundary-hidden .legend { display:none; }
     .new-area-panel, .wms-panel { border:1px solid #d8e4f1; border-radius:12px; background:#fff; padding:14px; margin:12px 0; box-shadow:0 10px 24px rgba(15,23,42,.06); }
     .new-area-panel h2, .wms-panel h2 { font-size:15px; margin:0 0 6px; }
@@ -1247,17 +1252,26 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
 
     async function handleRouteLookupClick() {
       setWorkTab("route");
+      showRouteButton?.classList.add("is-loading");
+      showRouteButton?.setAttribute("aria-busy", "true");
       const requested = String(routeVehicleQuickInput?.value || vehicleSelect.value || "").replace(/\D/g, "");
       const vehicle = data.vehicles.find(v => String(v.vehicle) === requested || v.vehicle === vehicleSelect.value);
       if (!vehicle) {
         routeStatus.textContent = "호차를 찾지 못했습니다.";
+        showRouteButton?.classList.remove("is-loading");
+        showRouteButton?.removeAttribute("aria-busy");
         return;
       }
       vehicleSelect.value = vehicle.vehicle;
       vehicleSearchInput.value = `${vehicle.vehicle}호`;
       shouldShowRoute = true;
       viewMode.value = "detail";
-      await renderDailyRoute(vehicle, getVehicleColor(vehicle));
+      try {
+        await renderDailyRoute(vehicle, getVehicleColor(vehicle));
+      } finally {
+        showRouteButton?.classList.remove("is-loading");
+        showRouteButton?.removeAttribute("aria-busy");
+      }
     }
 
     boundaryToggleButton?.addEventListener("click", toggleBoundaryVisibility);
@@ -1704,6 +1718,7 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         return;
       }
       savedCustomerSearchTimer = window.setTimeout(async () => {
+        customerSearchInput.setAttribute("aria-busy", "true");
         try {
           const res = await fetch(`/api/fixed-dispatch/customer-search?q=${encodeURIComponent(q)}&date=${encodeURIComponent(routeDateInput.value || "")}&_=${Date.now()}`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1717,6 +1732,8 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
           savedCustomerSearchQuery = q;
           savedCustomerSearchHits = [];
           renderCustomerSearchResults();
+        } finally {
+          customerSearchInput.removeAttribute("aria-busy");
         }
       }, 250);
     }
@@ -2464,13 +2481,13 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         const amount = stop.amount || stop.dailyAmount || stop.salesAmount || stop.monthlyAmount || 0;
         const orderCount = stop.orderCount || stop.deliveryCount || stop.raw?.baesongCnt || "-";
         const pattern = normalizeDeliveryPattern(stop.deliveryPattern || stop.delivery_pattern || stop.raw?.deliveryPattern) || "-";
-        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}?` : "-";
+        const vehicleLabel = vehicle?.vehicle ? `${vehicle.vehicle}\uD638` : "-";
         return `<button type="button" class="route-stop-item" data-route-stop-index="${index}">
           <div class="route-stop-title">
-            <div><b>${esc(sequence)}? ? ${esc(code)}</b><span class="route-stop-name">${esc(name)}</span></div>
+            <div><b>${esc(sequence)}\uCC29 \u00B7 ${esc(code)}</b><span class="route-stop-name">${esc(name)}</span></div>
             <div class="route-stop-badges"><span class="route-stop-badge">${esc(vehicleLabel)}</span><span class="route-stop-badge">${esc(pattern)}</span></div>
           </div>
-          <div class="route-stop-address">??: ${esc(address)}</div>
+          <div class="route-stop-address">\uC8FC\uC18C: ${esc(address)}</div>
           <div class="route-stop-kpis"><div><b>${money(amount)}</b><small>\uC77C \uB9E4\uCD9C\uC561</small></div><div><b>${esc(orderCount)}</b><small>\uC8FC\uBB38\uD69F\uC218</small></div></div>
           <div class="route-stop-actions"><span>\uC9C0\uB3C4 \uC774\uB3D9</span><span>\uC0C1\uC138</span></div>
         </button>`;
@@ -2480,9 +2497,9 @@ body[data-work-tab="route"] .new-area-panel.compact-new { display:block !importa
         const code = stop.customerCode || stop.code || stop.id || "-";
         const name = stop.customerName || stop.name || stop.customer || "-";
         return `<div class="route-stop-item route-unmatched">
-          <b>${esc(sequence)}? ? ${esc(code)}</b>
+          <b>${esc(sequence)}\uCC29 \u00B7 ${esc(code)}</b>
           <span>${esc(name)}</span>
-          <small>?? ?? ? ${esc(stop.address || "?? ??")}</small>
+          <small>\uC88C\uD45C \uD655\uC778 \uD544\uC694 \u00B7 ${esc(stop.address || "\uC8FC\uC18C \uC5C6\uC74C")}</small>
         </div>`;
       }).join("");
       const panelTitle = `<h3><span class="route-section-no">4</span>\uCC29\uC9C0/\uB9E4\uC7A5 \uC815\uBCF4</h3>`;

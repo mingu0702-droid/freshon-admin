@@ -13,6 +13,8 @@ import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
+import { getBrowserGateStatus } from "./scraper/browserGate.js";
+import { recordRequest, runtimeSnapshot } from "./runtimeMetrics.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,6 +29,13 @@ fsSync.mkdirSync(uploadDir, { recursive: true });
 fsSync.mkdirSync(chunkDir, { recursive: true });
 
 const app = express();
+const GOOGLE_FETCH_TIMEOUT_MS = 8000;
+function fetchWithTimeout(url, options = {}, timeoutMs = GOOGLE_FETCH_TIMEOUT_MS) {
+  return fetch(url, {
+    ...options,
+    signal: options.signal || AbortSignal.timeout(timeoutMs)
+  });
+}
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, callback) => callback(null, uploadDir),
@@ -42,6 +51,13 @@ const upload = multer({
 });
 
 app.use(express.json({ limit: "10mb" }));
+app.use((req, res, next) => {
+  const started = process.hrtime.bigint();
+  res.once("finish", () => {
+    recordRequest(req.path, Number(process.hrtime.bigint() - started) / 1e6, res.statusCode);
+  });
+  next();
+});
 app.use((req, res, next) => {
   if (req.path === "/" || req.path.endsWith(".html")) {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -73,21 +89,6 @@ let deliveryAdminSession = {
   username: "",
   expiresAt: 0
 };
-let deliveryAdminLoginPromise = null;
-let freshonSession = {
-  cookie: config.freshonCookie || "",
-  expiresAt: config.freshonCookie ? Date.now() + 5 * 60 * 1000 : 0,
-  loginPromise: null
-};
-const authDiagnostics = {
-  freshon: { firstStatus: null, loginStatus: null, retryStatus: null, lastError: null, updatedAt: null },
-  delivery: { firstStatus: null, loginStatus: null, retryStatus: null, lastError: null, updatedAt: null }
-};
-
-function recordAuthDiagnostic(source, patch) {
-  authDiagnostics[source] = { ...authDiagnostics[source], ...patch, updatedAt: new Date().toISOString() };
-  console.info(JSON.stringify({ event: `${source}_auth`, ...patch, updatedAt: authDiagnostics[source].updatedAt }));
-}
 
 function normalizeCell(value) {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
@@ -363,8 +364,8 @@ async function readDeliveryAdminJson(pathname, options = {}) {
 }
 
 async function ensureDeliveryAdminSession(force = false) {
-  if (!force && (deliveryAdminSession.cookie || deliveryAdminSession.authorization) && Date.now() < deliveryAdminSession.expiresAt) {
-    return deliveryAdminSession.cookie || deliveryAdminSession.authorization;
+  if (!force && deliveryAdminSession.cookie && Date.now() < deliveryAdminSession.expiresAt) {
+    return deliveryAdminSession.cookie;
   }
   if (config.deliveryAdminCookie && !force) {
     deliveryAdminSession.cookie = config.deliveryAdminCookie;
@@ -374,46 +375,34 @@ async function ensureDeliveryAdminSession(force = false) {
   if (!config.deliveryAdminId || !config.deliveryAdminPassword) {
     throw new Error("DELIVERY_ADMIN_ID and DELIVERY_ADMIN_PASSWORD are not configured.");
   }
-  if (deliveryAdminLoginPromise) return deliveryAdminLoginPromise;
-  deliveryAdminLoginPromise = (async () => {
-    deliveryAdminSession.cookie = "";
-    deliveryAdminSession.authorization = "";
-    const attempts = [
-      { url: "/api/auth/login", body: { username: config.deliveryAdminId, password: config.deliveryAdminPassword } },
-      { url: "/api/auth/login", body: { id: config.deliveryAdminId, password: config.deliveryAdminPassword } },
-      { url: "https://delivery-api.chabyulhwa.com/admin/auth/sign-in", body: { username: config.deliveryAdminId, password: config.deliveryAdminPassword } },
-      { url: "https://delivery-api.chabyulhwa.com/admin/auth/sign-in", body: { id: config.deliveryAdminId, password: config.deliveryAdminPassword } }
-    ];
-    const errors = [];
-    for (const attempt of attempts) {
-      const response = await deliveryAdminFetch(attempt.url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(attempt.body)
-      });
-      const text = await response.text();
-      let payload = {};
-      try { payload = text ? JSON.parse(text) : {}; } catch { payload = {}; }
+  deliveryAdminSession.cookie = "";
+  deliveryAdminSession.authorization = "";
+  const attempts = [
+    { url: "/api/auth/login", body: { username: config.deliveryAdminId, password: config.deliveryAdminPassword } },
+    { url: "/api/auth/login", body: { id: config.deliveryAdminId, password: config.deliveryAdminPassword } },
+    { url: "https://delivery-api.chabyulhwa.com/admin/auth/sign-in", body: { username: config.deliveryAdminId, password: config.deliveryAdminPassword } },
+    { url: "https://delivery-api.chabyulhwa.com/admin/auth/sign-in", body: { id: config.deliveryAdminId, password: config.deliveryAdminPassword } }
+  ];
+  const errors = [];
+  for (const attempt of attempts) {
+    const response = await deliveryAdminFetch(attempt.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(attempt.body)
+    });
+    const text = await response.text();
+    let payload = {};
+    try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: text }; }
+    if (response.ok) {
       const token = payload?.token || payload?.accessToken || payload?.access_token || payload?.data?.token || payload?.data?.accessToken || payload?.data?.access_token;
       if (token) deliveryAdminSession.authorization = `Bearer ${token}`;
-      const redirectWithSession = response.status >= 300 && response.status < 400 && Boolean(deliveryAdminSession.cookie || deliveryAdminSession.authorization);
-      if (response.ok || redirectWithSession) {
-        deliveryAdminSession.username = config.deliveryAdminId;
-        deliveryAdminSession.expiresAt = Date.now() + 20 * 60 * 1000;
-        recordAuthDiagnostic("delivery", { loginStatus: response.status, hasCookie: Boolean(deliveryAdminSession.cookie), hasToken: Boolean(deliveryAdminSession.authorization), lastError: null });
-        return deliveryAdminSession.cookie || deliveryAdminSession.authorization;
-      }
-      errors.push(`${attempt.url}: HTTP ${response.status}${payload?.message ? ` ${payload.message}` : ""}`);
+      deliveryAdminSession.username = config.deliveryAdminId;
+      deliveryAdminSession.expiresAt = Date.now() + 20 * 60 * 1000;
+      return deliveryAdminSession.cookie || deliveryAdminSession.authorization;
     }
-    const error = new Error(`Delivery admin login failed. Tried ${errors.join(" / ")}`);
-    recordAuthDiagnostic("delivery", { loginStatus: Number(errors[0]?.match(/HTTP (\d+)/)?.[1] || 0) || null, lastError: error.message });
-    throw error;
-  })();
-  try {
-    return await deliveryAdminLoginPromise;
-  } finally {
-    deliveryAdminLoginPromise = null;
+    errors.push(`${attempt.url}: HTTP ${response.status}${payload?.message ? ` ${payload.message}` : ""}`);
   }
+  throw new Error(`Delivery admin login failed. Tried ${errors.join(" / ")}`);
 }
 
 function deliveryApiQuery(data) {
@@ -434,21 +423,11 @@ function deliveryApiQuery(data) {
 async function deliveryAdminJson(pathname, options = {}) {
   await ensureDeliveryAdminSession(false);
   try {
-    const payload = await readDeliveryAdminJson(pathname, options);
-    recordAuthDiagnostic("delivery", { firstStatus: 200, retryStatus: null, lastError: null });
-    return payload;
+    return await readDeliveryAdminJson(pathname, options);
   } catch (error) {
     if (error.status !== 401) throw error;
-    recordAuthDiagnostic("delivery", { firstStatus: 401, lastError: null });
     await ensureDeliveryAdminSession(true);
-    try {
-      const payload = await readDeliveryAdminJson(pathname, options);
-      recordAuthDiagnostic("delivery", { retryStatus: 200, lastError: null });
-      return payload;
-    } catch (retryError) {
-      recordAuthDiagnostic("delivery", { retryStatus: retryError.status || null, lastError: retryError.message || String(retryError) });
-      throw retryError;
-    }
+    return readDeliveryAdminJson(pathname, options);
   }
 }
 
@@ -715,7 +694,7 @@ async function getGoogleAccessToken() {
     .replace(/=/g, "")
     .replace(/\+/g, "-")
     .replace(/\//g, "_");
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -925,7 +904,7 @@ function buildSheetValues(payload) {
 
 async function getGoogleSheetNameAndHeaders(headers) {
   const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}?fields=sheets.properties.title`;
-  const metaResponse = await fetch(metaUrl, { headers });
+  const metaResponse = await fetchWithTimeout(metaUrl, { headers });
   const metaBody = await metaResponse.json().catch(() => ({}));
   if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
   const sheetTitles = (metaBody.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
@@ -1005,7 +984,7 @@ async function readRowsFromGoogleSheet({ spreadsheetId, sheetName, sheetGid, fal
   const tab = await getGoogleSheetTab(headers, spreadsheetId, sheetName, sheetGid, fallbackName);
   const range = `${tab.sheetName}!A:O`;
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
-  const response = await fetch(url, { headers });
+  const response = await fetchWithTimeout(url, { headers });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
   const values = Array.isArray(body.values) ? body.values : [];
@@ -1033,7 +1012,7 @@ async function readRouteFromGoogleRouteIndex(date, vehicle, { force = false } = 
   async function loadIndexRows(sheetName) {
     const indexRange = `${sheetName}!A:E`;
     const indexUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(indexRange)}?majorDimension=ROWS`;
-    const indexResponse = await fetch(indexUrl, { headers });
+    const indexResponse = await fetchWithTimeout(indexUrl, { headers });
     const indexBody = await indexResponse.json().catch(() => ({}));
     if (!indexResponse.ok) return null;
     const values = Array.isArray(indexBody.values) ? indexBody.values : [];
@@ -1062,7 +1041,7 @@ async function readRouteFromGoogleRouteIndex(date, vehicle, { force = false } = 
   if (!rowNumber) return null;
   const payloadRange = `${googleRouteIndexMemoryCache.sheetName}!F${rowNumber}:F${rowNumber}`;
   const payloadUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(payloadRange)}?majorDimension=ROWS`;
-  const payloadResponse = await fetch(payloadUrl, { headers });
+  const payloadResponse = await fetchWithTimeout(payloadUrl, { headers });
   const payloadBody = await payloadResponse.json().catch(() => ({}));
   if (!payloadResponse.ok) return null;
   const payloadText = normalizeCell(payloadBody.values?.[0]?.[0]);
@@ -1085,7 +1064,7 @@ async function readDispatchFromGoogleSheet({ force = false } = {}) {
   const token = await getGoogleAccessToken();
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}?fields=sheets.properties.title`;
-  const metaResponse = await fetch(metaUrl, { headers });
+  const metaResponse = await fetchWithTimeout(metaUrl, { headers });
   const metaBody = await metaResponse.json().catch(() => ({}));
   if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
   const titles = (metaBody.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
@@ -1094,7 +1073,7 @@ async function readDispatchFromGoogleSheet({ force = false } = {}) {
   for (const sheetName of orderedTitles) {
     const range = `${sheetName}!A:O`;
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(config.googleSheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
-    const response = await fetch(url, { headers });
+    const response = await fetchWithTimeout(url, { headers });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
     const values = Array.isArray(body.values) ? body.values : [];
@@ -1343,8 +1322,8 @@ async function buildCustomerSearchItems(query) {
       }, query, normalizedQuery);
     }
   }
-  const cache = await readDispatchSource(true).catch(() => ({ rows: [] }));
-  for (const row of cache.rows || []) {
+  const cachedDispatchRows = googleDispatchMemoryCache?.payload?.rows || [];
+  for (const row of cachedDispatchRows) {
     const item = fixedDispatchSearchRow(row);
     pushCustomerSearchItem(results, seen, {
       source: "fixed-dispatch",
@@ -1359,12 +1338,14 @@ async function buildCustomerSearchItems(query) {
       lng: item.lng
     }, query, normalizedQuery);
   }
+  const unique = new Set();
   return results
     .sort((a, b) => b.score - a.score || Number(b.hasCoords) - Number(a.hasCoords))
-    .filter((item, index, array) => {
-      const key = [normalizeSearchValue(item.code || item.address || item.name), targetDate ? String(item.deliveryDate || "") : ""].join("|");
-      if (!key) return true;
-      return array.findIndex((other) => normalizeSearchValue(other.code || other.address || other.name) === key) === index;
+    .filter((item) => {
+      const key = normalizeSearchValue(item.code || item.address || item.name);
+      if (!key || unique.has(key)) return false;
+      unique.add(key);
+      return true;
     })
     .slice(0, 30);
 }
@@ -1966,6 +1947,7 @@ function buildStopFromDeliveryTaskRow(row, vehicle, sequence) {
   const coords = extractPoint(row);
   return {
     sequence,
+    raw: row,
     code: customerCode,
     name: customerName,
     address,
@@ -2014,27 +1996,50 @@ function extractDeliveryTaskRows(payload) {
 
 async function fetchDeliveryTaskRows({ date, vehicle }) {
   const selectedTokens = vehicleTokens(vehicle);
-  const dateParam = `${date}T00:00:00+09:00`;
-  const pageSize = 300;
-  const matchedRows = [];
-  for (let page = 0; page < 20; page += 1) {
-    const query = new URLSearchParams({
-      logisticsCenterId: "1",
-      page: String(page),
-      pageSize: String(pageSize)
-    });
-    query.append("enteringDatedAtBetween", dateParam);
-    query.append("enteringDatedAtBetween", dateParam);
-    const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
+  const variants = [
+    { fromDatedAt: date, toDatedAt: date, searchOption: "FIXED_NO", searchValue: vehicle },
+    { fromDatedAt: date, toDatedAt: date, searchType: "FIXED_NO", searchKeyword: vehicle },
+    { fromDatedAt: date, toDatedAt: date, fixedNo: vehicle },
+    { startDatedAt: date, endDatedAt: date, searchOption: "FIXED_NO", searchValue: vehicle },
+    { "enteringDatedAtBetween[0]": date, "enteringDatedAtBetween[1]": date, searchOption: "FIXED_NO", searchValue: vehicle },
+    { "enteringDatedAtBetween[0]": date, "enteringDatedAtBetween[1]": date, fixedNo: vehicle },
+    { enteringDatedAt: date, searchOption: "FIXED_NO", searchValue: vehicle },
+    { enteringDatedAt: date, fixedNo: vehicle },
+    { fromDatedAt: date, toDatedAt: date },
+    { enteringDatedAtBetween: [date, date] }
+  ];
+
+  let lastRows = [];
+  const errors = [];
+  for (const query of variants) {
+    let payload;
+    try {
+      payload = await deliveryAdminJson(`/api/bali/task/all?${deliveryApiQuery(query)}`, { method: "GET" });
+    } catch (error) {
+      errors.push(error.message || String(error));
+      continue;
+    }
     const rows = extractDeliveryTaskRows(payload);
     const matched = rows.filter((row) => {
       const tokens = vehicleTokens(deliveryTaskVehicle(row));
       return [...tokens].some((token) => selectedTokens.has(token));
     });
-    matchedRows.push(...matched);
-    if (rows.length < pageSize) break;
+    if (matched.length) return matched;
+    if (rows.length) lastRows = rows;
   }
-  return matchedRows;
+
+  if (lastRows.length) {
+    return lastRows.filter((row) => {
+      const tokens = vehicleTokens(deliveryTaskVehicle(row));
+      return [...tokens].some((token) => selectedTokens.has(token));
+    });
+  }
+  if (errors.length && !lastRows.length) {
+    const error = new Error(`Delivery admin task lookup failed. ${errors[0]}`);
+    error.status = 502;
+    throw error;
+  }
+  return [];
 }
 
 async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) {
@@ -2063,7 +2068,7 @@ async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) 
   return {
     generatedAt: new Date().toISOString(),
     source: "delivery-admin-live",
-    warning: "Delivery admin paged task data was used from the task lookup screen. No browser automation was started.",
+    warning: "Delivery admin task/all data was used from the task lookup screen. No browser automation was started.",
     date,
     vehicle,
     center,
@@ -2072,33 +2077,6 @@ async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) 
     appMissingCount: stops.filter((stop) => !stop.appRecorded).length,
     stops
   };
-}
-
-async function ensureFreshonSession(force = false) {
-  if (!force && freshonSession.cookie) return freshonSession.cookie;
-  if (!force && config.freshonCookie && !freshonSession.cookie) {
-    freshonSession.cookie = config.freshonCookie;
-    freshonSession.expiresAt = Date.now() + 5 * 60 * 1000;
-    return freshonSession.cookie;
-  }
-  if (!config.freshonId || !config.freshonPassword) throw new Error("FRESHON_ID and FRESHON_PASSWORD are not configured for automatic Freshon login.");
-  if (freshonSession.loginPromise) return freshonSession.loginPromise;
-  freshonSession.loginPromise = (async () => {
-    const { loginFreshonSession } = await import("./scraper/freshonDailyRoute.js");
-    const result = await loginFreshonSession();
-    freshonSession.cookie = result.cookie;
-    freshonSession.expiresAt = Date.now() + 20 * 60 * 1000;
-    recordAuthDiagnostic("freshon", { loginStatus: result.loginStatus, cookieCount: result.cookieCount, hasCookie: Boolean(result.cookie), lastError: null });
-    return freshonSession.cookie;
-  })();
-  try {
-    return await freshonSession.loginPromise;
-  } catch (error) {
-    recordAuthDiagnostic("freshon", { loginStatus: error.status || null, lastError: error.message || String(error) });
-    throw error;
-  } finally {
-    freshonSession.loginPromise = null;
-  }
 }
 
 async function freshonFetch(pathname, options = {}) {
@@ -2116,7 +2094,7 @@ async function freshonFetch(pathname, options = {}) {
         "User-Agent": "freshon-admin-daily-route/1.0",
         Origin: origin,
         Referer: `${origin}/bo/main#/bo/wm/dispatch/dailyDsptcPage`,
-        ...(freshonSession.cookie ? { Cookie: freshonSession.cookie } : {}),
+        ...(config.freshonCookie ? { Cookie: config.freshonCookie } : {}),
         ...(fetchOptions.headers || {})
       }
     });
@@ -2225,7 +2203,7 @@ async function buildDailyRouteFromFreshonLogin({ date, vehicle, center = "" }) {
     };
     throw error;
   }
-  const timeoutMs = 120000;
+  const timeoutMs = 65000;
   const timeout = new Promise((_, reject) => {
     setTimeout(() => {
       const error = new Error(`Freshon ID/PW automatic login timed out after ${Math.round(timeoutMs / 1000)}s.`);
@@ -2243,7 +2221,11 @@ async function buildDailyRouteFromFreshonLogin({ date, vehicle, center = "" }) {
     }, timeoutMs);
   });
   try {
-    const result = await Promise.race([ensureFreshonSession(true).then(() => buildDailyRouteFromFreshon({ date, vehicle, center })), timeout]);
+    const { refreshDailyRouteData } = await import("./scraper/freshonDailyRoute.js");
+    const result = await Promise.race([
+      refreshDailyRouteData({ date, vehicle, center, forceLogin: true }),
+      timeout
+    ]);
     return {
       ...result,
       source: result?.source || "freshon-id-password-login",
@@ -2416,6 +2398,7 @@ function buildStopFromFreshonDailyRow(row, vehicle, sequence) {
   ].filter(Boolean).join(" ").trim();
   return {
     sequence,
+    raw: row,
     code: customerCode,
     name: customerName,
     address,
@@ -2456,54 +2439,8 @@ function freshonRowMatchesVehicleCustomer(row, vehicleData) {
   });
 }
 
-function freshonCollectorForm(date) {
-  return new URLSearchParams({
-    page: "0", isPaging: "true", isCount: "true", size: "3000", sort: "stock_date,ASC",
-    excelFileNm: "baecha_list", logCd: "011", calStartDate: date, calEndDate: date,
-    baecha: "2", shipGbn: "1", estCd: "", estName: "", cboStartCarSeq: "",
-    cboStartCarSeqNm: "", cboEndCarSeq: "", cboEndCarSeqNm: ""
-  });
-}
-
-async function fetchFreshonCollectorRows(date) {
-  const requestRows = async () => {
-    const payload = await readFreshonJson("/bo/wm/dispatch/baecha_list", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      timeoutMs: 25000,
-      body: freshonCollectorForm(date).toString()
-    });
-    return Array.isArray(payload?.data) ? payload.data : [];
-  };
-  await ensureFreshonSession(false);
-  try {
-    return await requestRows();
-  } catch (error) {
-    if (Number(error.status) !== 401) throw error;
-    recordAuthDiagnostic("freshon", { firstStatus: 401, lastError: null });
-    await ensureFreshonSession(true);
-    const rows = await requestRows();
-    recordAuthDiagnostic("freshon", { retryStatus: 200, lastError: null });
-    return rows;
-  }
-}
-
-async function fetchDeliveryCollectorPage(date, page, pageSize) {
-  const dateParam = `${date}T00:00:00+09:00`;
-  const query = new URLSearchParams({ logisticsCenterId: "1", page: String(page), pageSize: String(pageSize) });
-  query.append("enteringDatedAtBetween", dateParam);
-  query.append("enteringDatedAtBetween", dateParam);
-  const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
-  return {
-    content: extractDeliveryTaskRows(payload),
-    totalElements: Number(payload?.totalElements ?? payload?.data?.totalElements ?? 0),
-    totalPages: Number(payload?.totalPages ?? payload?.data?.totalPages ?? 0)
-  };
-}
-
 async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
-  await ensureFreshonSession(false);
-  if (!freshonSession.cookie) {
+  if (!config.freshonCookie) {
     const error = new Error("FRESHON_COOKIE is not configured. Freshon direct lookup needs the browser session cookie.");
     error.status = 401;
     error.diagnostics = {
@@ -2517,55 +2454,8 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
     throw error;
   }
   const selected = vehicleTokens(vehicle);
-  const vehicleData = null;
-  const verifiedForm = freshonCollectorForm(date);
-  try {
-    const payload = await readFreshonJson("/bo/wm/dispatch/baecha_list", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      timeoutMs: 20000,
-      body: verifiedForm.toString()
-    });
-    const rows = Array.isArray(payload?.data) ? payload.data : extractFreshonRows(payload);
-    if (rows.length) {
-      const matched = rows.filter((row) => {
-        const tokens = vehicleTokens(freshonRowVehicle(row));
-        if (tokens.size) return [...tokens].some((token) => selected.has(token));
-        return freshonRowMatchesVehicleCustomer(row, vehicleData);
-      });
-      if (!matched.length) {
-        const error = new Error(`Freshon daily dispatch rows were found, but vehicle ${vehicle} was not present for ${date}.`);
-        error.status = 404;
-        throw error;
-      }
-      const stops = matched
-        .map((row, index) => buildStopFromFreshonDailyRow(row, vehicle, index + 1))
-        .filter((stop) => stop.customerCode || stop.customerName || stop.address);
-      if (authDiagnostics.freshon.firstStatus === 401) recordAuthDiagnostic("freshon", { retryStatus: 200, lastError: null });
-      else recordAuthDiagnostic("freshon", { firstStatus: 200, retryStatus: null, lastError: null });
-      return {
-        generatedAt: new Date().toISOString(),
-        source: "freshon-baecha-list",
-        warning: "Freshon verified baecha_list data was used.",
-        date,
-        vehicle,
-        center,
-        rowCount: stops.length,
-        appRecordedCount: 0,
-        appMissingCount: stops.length,
-        stops
-      };
-    }
-    const noRowsError = new Error(`Freshon baecha_list returned no rows for ${date}.`);
-    noRowsError.status = 404;
-    throw noRowsError;
-  } catch (error) {
-    if (Number(error.status) === 401) {
-      recordAuthDiagnostic("freshon", { firstStatus: 401, lastError: null });
-      throw error;
-    }
-    throw error;
-  }
+  const vehicleAreaData = await readVehicleAreaData().catch(() => null);
+  const vehicleData = (vehicleAreaData?.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
   const endpoints = [
     "/bo/wm/dispatch/dailyDsptcGridList",
     "/bo/wm/dispatch/dailyDsptcGrid1List",
@@ -2607,8 +2497,6 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
           diagnostics.push(freshonAttemptDiagnostic({ endpoint, variant, result: "matched-without-stop-fields", payload, rows, matched, stops }));
           continue;
         }
-        if (authDiagnostics.freshon.firstStatus === 401) recordAuthDiagnostic("freshon", { retryStatus: 200, lastError: null });
-        else recordAuthDiagnostic("freshon", { firstStatus: 200, retryStatus: null, lastError: null });
         return {
           generatedAt: new Date().toISOString(),
           source: "freshon-daily-dispatch-api",
@@ -2625,7 +2513,6 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
         const diagnostic = freshonAttemptDiagnostic({ endpoint, variant, result: "error", error });
         diagnostics.push(diagnostic);
         if (Number(error.status || diagnostic.status) === 401 || diagnostic.type === "html-or-login-response") {
-          recordAuthDiagnostic("freshon", { firstStatus: 401, lastError: null });
           const authError = new Error(error.message || "Freshon cookie lookup was rejected.");
           authError.status = 401;
           authError.diagnostics = {
@@ -2752,7 +2639,18 @@ async function buildFallbackDailyRoute({ date, vehicle, center = "", reason = ""
 }
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, generatedAt: new Date().toISOString() });
+  const snapshot = runtimeSnapshot({ browserGate: getBrowserGateStatus() });
+  res.json({
+    ok: true,
+    generatedAt: snapshot.generatedAt,
+    uptimeSeconds: snapshot.uptimeSeconds,
+    memory: snapshot.memory,
+    browserGate: snapshot.browserGate
+  });
+});
+
+app.get("/api/runtime-metrics", requireView, (_req, res) => {
+  res.json(runtimeSnapshot({ browserGate: getBrowserGateStatus() }));
 });
 
 app.get("/api/status", requireView, async (_req, res) => {
@@ -2777,7 +2675,7 @@ app.get("/api/status", requireView, async (_req, res) => {
 
 app.get("/api/fixed-dispatch", requireView, async (req, res) => {
   try {
-    const cache = await readDispatchSource(req.query.source !== "local");
+    const cache = await readDispatchSource(req.query.source === "google");
     const rows = Array.isArray(cache.rows) ? cache.rows : [];
     const requestedLimit = Number(req.query.limit ?? 500);
     const limit = Number.isFinite(requestedLimit)
@@ -2934,12 +2832,23 @@ app.get("/api/vehicle-driver-master", requireView, async (req, res) => {
 app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => {
   const q = normalizeCell(req.query.q);
   if (!q) return res.json({ query: q, results: [] });
-  const cache = await readDispatchSource(true);
+  const results = await buildCustomerSearchItems(q);
   res.json({
     query: q,
-    generatedAt: cache.generatedAt || null,
-    rowCount: cache.rowCount || cache.rows?.length || 0,
-    results: buildFixedDispatchSearchItems(cache, q, req.query.date)
+    generatedAt: new Date().toISOString(),
+    rowCount: results.length,
+    results: results.map((item) => ({
+      code: item.code,
+      name: item.name,
+      address: item.address,
+      vehicle: item.vehicle,
+      center: item.route,
+      sequence: item.sequence,
+      lat: item.lat,
+      lng: item.lng,
+      hasCoords: item.hasCoords,
+      source: item.source
+    }))
   });
 });
 
@@ -3150,51 +3059,6 @@ app.get("/api/delivery-admin/status", requireView, async (_req, res) => {
     baseUrl: config.deliveryAdminBaseUrl,
     usernameConfigured: Boolean(config.deliveryAdminId)
   });
-});
-
-app.get("/api/auth-status", requireView, async (_req, res) => {
-  res.json({
-    freshon: {
-      credentialsConfigured: Boolean(config.freshonId && config.freshonPassword),
-      environmentCookieConfigured: Boolean(config.freshonCookie),
-      memoryCookieAvailable: Boolean(freshonSession.cookie),
-      loginInFlight: Boolean(freshonSession.loginPromise),
-      diagnostics: authDiagnostics.freshon
-    },
-    delivery: {
-      credentialsConfigured: Boolean(config.deliveryAdminId && config.deliveryAdminPassword),
-      environmentCookieConfigured: Boolean(config.deliveryAdminCookie),
-      memoryCookieAvailable: Boolean(deliveryAdminSession.cookie),
-      memoryTokenAvailable: Boolean(deliveryAdminSession.authorization),
-      loginInFlight: Boolean(deliveryAdminLoginPromise),
-      sessionExpiresAt: deliveryAdminSession.expiresAt ? new Date(deliveryAdminSession.expiresAt).toISOString() : null,
-      diagnostics: authDiagnostics.delivery
-    }
-  });
-});
-
-app.get("/api/collector/freshon", requireView, async (req, res) => {
-  const date = normalizeDateValue(req.query.date);
-  if (!date) return res.status(400).json({ ok: false, error: "valid date is required" });
-  try {
-    const rows = await fetchFreshonCollectorRows(date);
-    return res.json({ ok: true, date, rows, fetched: rows.length });
-  } catch (error) {
-    return res.status(error.status || 502).json({ ok: false, date, error: error.message || String(error) });
-  }
-});
-
-app.get("/api/collector/delivery", requireView, async (req, res) => {
-  const date = normalizeDateValue(req.query.date);
-  const page = Math.max(0, Number(req.query.page) || 0);
-  const pageSize = Math.min(300, Math.max(1, Number(req.query.pageSize) || 250));
-  if (!date) return res.status(400).json({ ok: false, error: "valid date is required" });
-  try {
-    const result = await fetchDeliveryCollectorPage(date, page, pageSize);
-    return res.json({ ok: true, date, page, pageSize, ...result });
-  } catch (error) {
-    return res.status(error.status || 502).json({ ok: false, date, page, error: error.message || String(error) });
-  }
 });
 
 app.get("/admin", (_req, res) => {
