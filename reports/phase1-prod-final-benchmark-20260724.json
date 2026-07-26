@@ -1,0 +1,611 @@
+﻿{
+  "generatedAt": "2026-07-23T22:47:17.291Z",
+  "commit": "a87377c",
+  "runs": 20,
+  "cases": {
+    "health": {
+      "success": 20,
+      "min": 135.1,
+      "avg": 171.8,
+      "p50": 154.5,
+      "p95": 282,
+      "p99": 282,
+      "max": 394.9,
+      "rows": [
+        {
+          "run": 1,
+          "status": 200,
+          "ms": 282,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 2,
+          "status": 200,
+          "ms": 150.4,
+          "bytes": 248,
+          "error": ""
+        },
+        {
+          "run": 3,
+          "status": 200,
+          "ms": 394.9,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 4,
+          "status": 200,
+          "ms": 154.5,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 5,
+          "status": 200,
+          "ms": 155.2,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 6,
+          "status": 200,
+          "ms": 161.2,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 7,
+          "status": 200,
+          "ms": 171.9,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 8,
+          "status": 200,
+          "ms": 157.1,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 9,
+          "status": 200,
+          "ms": 174.9,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 10,
+          "status": 200,
+          "ms": 154.7,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 11,
+          "status": 200,
+          "ms": 152.2,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 12,
+          "status": 200,
+          "ms": 135.1,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 13,
+          "status": 200,
+          "ms": 150.7,
+          "bytes": 248,
+          "error": ""
+        },
+        {
+          "run": 14,
+          "status": 200,
+          "ms": 156.9,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 15,
+          "status": 200,
+          "ms": 139.7,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 16,
+          "status": 200,
+          "ms": 151,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 17,
+          "status": 200,
+          "ms": 161.3,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 18,
+          "status": 200,
+          "ms": 135.6,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 19,
+          "status": 200,
+          "ms": 153.2,
+          "bytes": 250,
+          "error": ""
+        },
+        {
+          "run": 20,
+          "status": 200,
+          "ms": 143.3,
+          "bytes": 248,
+          "error": ""
+        }
+      ]
+    },
+    "html": {
+      "success": 20,
+      "min": 554.9,
+      "avg": 1060.3,
+      "p50": 1021.1,
+      "p95": 1491.3,
+      "p99": 1491.3,
+      "max": 1601.6,
+      "rows": [
+        {
+          "run": 1,
+          "status": 200,
+          "ms": 1491.3,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 2,
+          "status": 200,
+          "ms": 1088.6,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 3,
+          "status": 200,
+          "ms": 1601.6,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 4,
+          "status": 200,
+          "ms": 561.7,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 5,
+          "status": 200,
+          "ms": 759.4,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 6,
+          "status": 200,
+          "ms": 1103.8,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 7,
+          "status": 200,
+          "ms": 1410.2,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 8,
+          "status": 200,
+          "ms": 1351.5,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 9,
+          "status": 200,
+          "ms": 972,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 10,
+          "status": 200,
+          "ms": 1089.5,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 11,
+          "status": 200,
+          "ms": 1490.5,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 12,
+          "status": 200,
+          "ms": 1444.4,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 13,
+          "status": 200,
+          "ms": 806.7,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 14,
+          "status": 200,
+          "ms": 554.9,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 15,
+          "status": 200,
+          "ms": 656.7,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 16,
+          "status": 200,
+          "ms": 1021.1,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 17,
+          "status": 200,
+          "ms": 960.5,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 18,
+          "status": 200,
+          "ms": 1088.9,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 19,
+          "status": 200,
+          "ms": 757.2,
+          "bytes": 2787867,
+          "error": ""
+        },
+        {
+          "run": 20,
+          "status": 200,
+          "ms": 995.7,
+          "bytes": 2787867,
+          "error": ""
+        }
+      ]
+    },
+    "search": {
+      "success": 20,
+      "min": 683.1,
+      "avg": 982.2,
+      "p50": 837.9,
+      "p95": 1302.2,
+      "p99": 1302.2,
+      "max": 2945.4,
+      "rows": [
+        {
+          "run": 1,
+          "status": 200,
+          "ms": 2945.4,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 2,
+          "status": 200,
+          "ms": 1107.1,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 3,
+          "status": 200,
+          "ms": 987.6,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 4,
+          "status": 200,
+          "ms": 804.7,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 5,
+          "status": 200,
+          "ms": 837.9,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 6,
+          "status": 200,
+          "ms": 984.6,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 7,
+          "status": 200,
+          "ms": 683.1,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 8,
+          "status": 200,
+          "ms": 695.5,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 9,
+          "status": 200,
+          "ms": 906.8,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 10,
+          "status": 200,
+          "ms": 789.3,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 11,
+          "status": 200,
+          "ms": 709.2,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 12,
+          "status": 200,
+          "ms": 696.2,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 13,
+          "status": 200,
+          "ms": 798.9,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 14,
+          "status": 200,
+          "ms": 995.1,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 15,
+          "status": 200,
+          "ms": 1013.8,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 16,
+          "status": 200,
+          "ms": 791.1,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 17,
+          "status": 200,
+          "ms": 802,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 18,
+          "status": 200,
+          "ms": 1302.2,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 19,
+          "status": 200,
+          "ms": 903,
+          "bytes": 355,
+          "error": ""
+        },
+        {
+          "run": 20,
+          "status": 200,
+          "ms": 890,
+          "bytes": 355,
+          "error": ""
+        }
+      ]
+    },
+    "route": {
+      "success": 18,
+      "min": 160.5,
+      "avg": 400.6,
+      "p50": 166.8,
+      "p95": 225.2,
+      "p99": 225.2,
+      "max": 4246.7,
+      "rows": [
+        {
+          "run": 1,
+          "status": 404,
+          "ms": 6686.8,
+          "bytes": 148,
+          "error": ""
+        },
+        {
+          "run": 2,
+          "status": 404,
+          "ms": 6640.9,
+          "bytes": 148,
+          "error": ""
+        },
+        {
+          "run": 3,
+          "status": 200,
+          "ms": 4246.7,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 4,
+          "status": 200,
+          "ms": 225.2,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 5,
+          "status": 200,
+          "ms": 160.5,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 6,
+          "status": 200,
+          "ms": 164.1,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 7,
+          "status": 200,
+          "ms": 160.5,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 8,
+          "status": 200,
+          "ms": 161.9,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 9,
+          "status": 200,
+          "ms": 163.3,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 10,
+          "status": 200,
+          "ms": 165.2,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 11,
+          "status": 200,
+          "ms": 183,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 12,
+          "status": 200,
+          "ms": 199.2,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 13,
+          "status": 200,
+          "ms": 166.8,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 14,
+          "status": 200,
+          "ms": 169,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 15,
+          "status": 200,
+          "ms": 191,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 16,
+          "status": 200,
+          "ms": 166.6,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 17,
+          "status": 200,
+          "ms": 163,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 18,
+          "status": 200,
+          "ms": 180.9,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 19,
+          "status": 200,
+          "ms": 176.5,
+          "bytes": 5399,
+          "error": ""
+        },
+        {
+          "run": 20,
+          "status": 200,
+          "ms": 168,
+          "bytes": 5399,
+          "error": ""
+        }
+      ]
+    }
+  }
+}
