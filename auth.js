@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Freshon 고정배차 관리자</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header>
+    <h1>Freshon 고정배차 관리자</h1>
+    <div id="status">상태 확인 중</div>
+  </header>
+  <main>
+    <section class="toolbar">
+      <div>
+        <label>관리 토큰</label>
+        <input id="adminToken" type="password" placeholder="갱신할 때만 입력">
+      </div>
+      <button id="refreshButton">데이터 갱신</button>
+      <button id="reloadButton">목록 새로고침</button>
+      <button id="csvButton">CSV 다운로드</button>
+    </section>
+    <section class="summary">
+      <div><span>기준 기간</span><b id="rangeText">-</b></div>
+      <div><span>갱신 시각</span><b id="generatedAt">-</b></div>
+      <div><span>행 수</span><b id="rowCount">0</b></div>
+    </section>
+    <section class="table-wrap">
+      <table id="dataTable"></table>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "Freshon 데일리 상차 리포트",
+  "short_name": "상차리포트",
+  "description": "전표와 미상차 사진을 세트로 정리하고 카톡 복사용 문구를 만드는 모바일 리포트 앱",
+  "start_url": "./mobile-report-prototype.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0d3b66",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "./mockups/daily-report-app-flow.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
