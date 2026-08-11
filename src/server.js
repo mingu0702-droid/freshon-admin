@@ -13,6 +13,7 @@ import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
+import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +49,12 @@ app.use((req, res, next) => {
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
   }
+  next();
+});
+app.use((req, res, next) => {
+  if (req.path !== "/map-phase2b-preview.html") return next();
+  const localDemo = req.query.demo === "1" && (req.hostname === "127.0.0.1" || req.hostname === "localhost");
+  if (!previewEnabled() && !localDemo) return res.status(404).send("Not Found");
   next();
 });
 app.use(express.static(publicDir));
@@ -3387,6 +3394,59 @@ app.use((error, _req, res, next) => {
     return res.status(413).json({ error: message });
   }
   return next(error);
+});
+
+app.get("/api/map-phase2b/preview/status", requireView, (_req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  return res.json({ enabled: true, environment: "stage", metrics: hubMetrics() });
+});
+
+app.get("/api/map-phase2b/preview/search", requireView, async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  try {
+    return res.json(await callHub("unifiedSearch", { q: String(req.query.q || ""), limit: 20 }));
+  } catch (error) {
+    return res.status(502).json({ error: error.message });
+  }
+});
+
+app.get("/api/map-phase2b/preview/bounds", requireView, async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  try {
+    const params = {
+      mode: String(req.query.mode || "BASE_90D"),
+      vehicle: String(req.query.vehicle || ""),
+      bounds: {
+        south: Number(req.query.south),
+        west: Number(req.query.west),
+        north: Number(req.query.north),
+        east: Number(req.query.east)
+      },
+      limit: 2000
+    };
+    if (req.query.date) params.date = String(req.query.date);
+    return res.json(await callHub("mapBounds", params));
+  } catch (error) {
+    return res.status(502).json({ error: error.message });
+  }
+});
+
+app.get("/api/map-phase2b/preview/nearest", requireView, async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  try {
+    return res.json(await callHub("nearestVehicles", { lat: Number(req.query.lat), lng: Number(req.query.lng), limit: 3 }));
+  } catch (error) {
+    return res.status(502).json({ error: error.message });
+  }
+});
+
+app.get("/api/map-phase2b/preview/route-plan", requireView, async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  try {
+    return res.json(await callHub("routePlan", { date: String(req.query.date || ""), vehicle: String(req.query.vehicle || "") }));
+  } catch (error) {
+    return res.status(502).json({ error: error.message });
+  }
 });
 
 app.get("*", (_req, res) => {
