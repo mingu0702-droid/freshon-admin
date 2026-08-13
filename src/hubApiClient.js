@@ -37,10 +37,13 @@ export async function callHub(action, params, { useCache = true } = {}) {
   if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
   const started = Date.now();
   state.metrics.requests += 1;
+  const timeoutMs = action === "unifiedSearch"
+    ? Number(process.env.HUB_SEARCH_TIMEOUT_MS || 10000)
+    : Number(process.env.HUB_API_TIMEOUT_MS || 2000);
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Number(process.env.HUB_API_TIMEOUT_MS || 2000));
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(process.env.HUB_API_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(requestBody(action, params)), signal: controller.signal });
       const json = await response.json();
