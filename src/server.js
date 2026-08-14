@@ -3465,7 +3465,6 @@ app.get("/api/map-phase2b/preview/bounds", requireView, async (req, res) => {
   try {
     const params = {
       mode: String(req.query.mode || "BASE_90D"),
-      center: String(req.query.center || ""),
       vehicle: String(req.query.vehicle || ""),
       bounds: {
         south: Number(req.query.south),

@@ -461,19 +461,23 @@
     let rows = [];
     let meta = {};
     try {
-      const params = new URLSearchParams({
-        mode: "BASE_90D",
-        center: state.centerFilter,
-        vehicle: selected.length === 1 ? selected[0] : "",
-        ...previewBounds()
-      });
-      const response = await fetchJson(`/api/map-phase2b/preview/bounds?${params}`);
-      rows = (response.data || []).map(normalizeApiStore);
-      if (selected.length > 1) {
-        const selectedSet = new Set(selected.map(String));
-        rows = rows.filter((row) => selectedSet.has(String(row.vehicle)));
+      if (state.centerFilter) {
+        rows = allStores.filter((row) => row.vehicleGroup === state.centerFilter);
+        meta = { totalStoreCount: rows.length, dataAsOf: inferLatestDate() };
+      } else {
+        const params = new URLSearchParams({
+          mode: "BASE_90D",
+          vehicle: selected.length === 1 ? selected[0] : "",
+          ...previewBounds()
+        });
+        const response = await fetchJson(`/api/map-phase2b/preview/bounds?${params}`);
+        rows = (response.data || []).map(normalizeApiStore);
+        if (selected.length > 1) {
+          const selectedSet = new Set(selected.map(String));
+          rows = rows.filter((row) => selectedSet.has(String(row.vehicle)));
+        }
+        meta = response.meta || {};
       }
-      meta = response.meta || {};
     } catch (error) {
       clearMap();
       state.currentRows = [];
