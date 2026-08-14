@@ -98,8 +98,8 @@ export async function callHub(action, params, { useCache = true } = {}) {
   const started = Date.now();
   state.metrics.requests += 1;
   const actionTimeoutMs = {
-    unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 20000),
-    nearestVehicles: Number(process.env.HUB_NEAREST_TIMEOUT_MS || 15000),
+    unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 30000),
+    nearestVehicles: Number(process.env.HUB_NEAREST_TIMEOUT_MS || 30000),
     mapBounds: Number(process.env.HUB_BOUNDS_TIMEOUT_MS || 30000),
     routePlan: Number(process.env.HUB_ROUTE_TIMEOUT_MS || 25000)
   };
