@@ -2463,6 +2463,51 @@ function freshonRowMatchesVehicleCustomer(row, vehicleData) {
   });
 }
 
+function freshonCollectorForm(date) {
+  return new URLSearchParams({
+    page: "0", isPaging: "true", isCount: "true", size: "3000", sort: "stock_date,ASC",
+    excelFileNm: "baecha_list", logCd: "011", calStartDate: date, calEndDate: date,
+    baecha: "2", shipGbn: "1", estCd: "", estName: "", cboStartCarSeq: "",
+    cboStartCarSeqNm: "", cboEndCarSeq: "", cboEndCarSeqNm: ""
+  });
+}
+
+async function fetchFreshonCollectorRows(date) {
+  const requestRows = async () => {
+    const payload = await readFreshonJson("/bo/wm/dispatch/baecha_list", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      timeoutMs: 25000,
+      body: freshonCollectorForm(date).toString()
+    });
+    return Array.isArray(payload?.data) ? payload.data : [];
+  };
+  await ensureFreshonSession(false);
+  try {
+    return await requestRows();
+  } catch (error) {
+    if (Number(error.status) !== 401) throw error;
+    recordAuthDiagnostic("freshon", { firstStatus: 401, lastError: null });
+    await ensureFreshonSession(true);
+    const rows = await requestRows();
+    recordAuthDiagnostic("freshon", { retryStatus: 200, lastError: null });
+    return rows;
+  }
+}
+
+async function fetchDeliveryCollectorPage(date, page, pageSize) {
+  const dateParam = `${date}T00:00:00+09:00`;
+  const query = new URLSearchParams({ logisticsCenterId: "1", page: String(page), pageSize: String(pageSize) });
+  query.append("enteringDatedAtBetween", dateParam);
+  query.append("enteringDatedAtBetween", dateParam);
+  const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
+  return {
+    content: extractDeliveryTaskRows(payload),
+    totalElements: Number(payload?.totalElements ?? payload?.data?.totalElements ?? 0),
+    totalPages: Number(payload?.totalPages ?? payload?.data?.totalPages ?? 0)
+  };
+}
+
 async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
   await ensureFreshonSession(false);
   if (!freshonSession.cookie) {
@@ -2479,27 +2524,8 @@ async function buildDailyRouteFromFreshon({ date, vehicle, center = "" }) {
     throw error;
   }
   const selected = vehicleTokens(vehicle);
-  const vehicleAreaData = await readVehicleAreaData().catch(() => null);
-  const vehicleData = (vehicleAreaData?.vehicles || []).find((item) => String(item.vehicle) === String(vehicle));
-  const verifiedForm = new URLSearchParams({
-    page: "0",
-    isPaging: "true",
-    isCount: "true",
-    size: "3000",
-    sort: "stock_date,ASC",
-    excelFileNm: "baecha_list",
-    logCd: "011",
-    calStartDate: date,
-    calEndDate: date,
-    baecha: "2",
-    shipGbn: "1",
-    estCd: "",
-    estName: "",
-    cboStartCarSeq: "",
-    cboStartCarSeqNm: "",
-    cboEndCarSeq: "",
-    cboEndCarSeqNm: ""
-  });
+  const vehicleData = null;
+  const verifiedForm = freshonCollectorForm(date);
   try {
     const payload = await readFreshonJson("/bo/wm/dispatch/baecha_list", {
       method: "POST",
@@ -3154,6 +3180,30 @@ app.get("/api/auth-status", requireView, async (_req, res) => {
   });
 });
 
+app.get("/api/collector/freshon", requireView, async (req, res) => {
+  const date = normalizeDateValue(req.query.date);
+  if (!date) return res.status(400).json({ ok: false, error: "valid date is required" });
+  try {
+    const rows = await fetchFreshonCollectorRows(date);
+    return res.json({ ok: true, date, rows, fetched: rows.length });
+  } catch (error) {
+    return res.status(error.status || 502).json({ ok: false, date, error: error.message || String(error) });
+  }
+});
+
+app.get("/api/collector/delivery", requireView, async (req, res) => {
+  const date = normalizeDateValue(req.query.date);
+  const page = Math.max(0, Number(req.query.page) || 0);
+  const pageSize = Math.min(300, Math.max(1, Number(req.query.pageSize) || 250));
+  if (!date) return res.status(400).json({ ok: false, error: "valid date is required" });
+  try {
+    const result = await fetchDeliveryCollectorPage(date, page, pageSize);
+    return res.json({ ok: true, date, page, pageSize, ...result });
+  } catch (error) {
+    return res.status(error.status || 502).json({ ok: false, date, page, error: error.message || String(error) });
+  }
+});
+
 app.get("/admin", (_req, res) => {
   res.sendFile(path.join(publicDir, "admin.html"));
 });
@@ -3447,6 +3497,15 @@ app.get("/api/map-phase2b/preview/route-plan", requireView, async (req, res) => 
   } catch (error) {
     return res.status(502).json({ error: error.message });
   }
+});
+
+app.all("/api/*", (req, res) => {
+  res.status(404).json({
+    ok: false,
+    error: "API route not found.",
+    method: req.method,
+    path: req.path
+  });
 });
 
 app.get("*", (_req, res) => {

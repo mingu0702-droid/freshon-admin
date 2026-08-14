@@ -9,6 +9,7 @@
     "render-build": "python3 -m pip install --user --break-system-packages msoffcrypto-tool openpyxl || python3 -m pip install --user msoffcrypto-tool openpyxl || echo python excel dependency install skipped"
   },
   "dependencies": {
+    "compression": "^1.8.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "multer": "^1.4.5-lts.1",

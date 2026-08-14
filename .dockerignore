@@ -4,3 +4,9 @@ data
 *.log
 playwright-report
 test-results
+public/daily-routes.before-*.html
+public/daily-routes.html.bak-*
+public/daily-routes.corrupt-*.html
+_check_index.js
+_check_daily-routes.js
+_daily-routes-inline-check.js

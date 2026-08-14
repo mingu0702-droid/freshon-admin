@@ -1,236 +1,295 @@
-import crypto from "node:crypto";
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Freshon 운영데이터</title>
+  <style>
+    :root { --blue:#2563eb; --line:#cfdced; --soft:#eef4fb; --text:#071831; --muted:#56667a; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Arial,"Noto Sans KR",sans-serif; color:var(--text); background:#eaf1f8; }
+    header { display:flex; justify-content:space-between; gap:16px; align-items:center; padding:18px 24px; background:#fff; border-bottom:1px solid var(--line); }
+    h1 { margin:0; font-size:28px; } p { margin:6px 0 0; color:var(--muted); }
+    nav { display:flex; gap:8px; flex-wrap:wrap; }
+    nav a, button { border:1px solid #b9c9de; background:#fff; border-radius:7px; padding:10px 16px; font-weight:700; color:#071831; text-decoration:none; cursor:pointer; }
+    nav a.active, button.primary, .tab.active { background:var(--blue); color:#fff; border-color:var(--blue); }
+    .bar { display:grid; grid-template-columns:150px 150px 1fr 170px 120px; gap:10px; padding:14px 18px; background:#fff; border-bottom:1px solid var(--line); }
+    label { display:block; font-size:12px; font-weight:700; margin-bottom:5px; }
+    input, select { width:100%; height:40px; border:1px solid #c9d6e6; border-radius:7px; padding:0 12px; font-size:14px; background:#fff; }
+    .source { padding:10px 18px; background:#f8fbff; border-bottom:1px solid var(--line); color:#39516f; font-size:14px; }
+    .tabs { display:flex; gap:8px; padding:16px 18px 10px; }
+    .grid { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; padding:12px 18px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:16px; box-shadow:0 10px 22px rgba(21,43,70,.04); }
+    .kpi span { display:block; color:var(--muted); font-size:13px; margin-bottom:7px; }
+    .kpi strong { font-size:24px; }
+    .main { display:grid; grid-template-columns:1.35fr 1fr; gap:14px; padding:0 18px 18px; }
+    .panel { background:#fff; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+    .panel-head { display:flex; justify-content:space-between; align-items:center; padding:14px 16px; border-bottom:1px solid var(--line); }
+    .list { max-height:430px; overflow:auto; padding:10px 14px; }
+    .row { border:1px solid #d6e2f0; border-radius:8px; padding:12px; margin-bottom:10px; cursor:pointer; background:#fff; }
+    .row.active { border-color:var(--blue); background:#eef5ff; }
+    .row b { display:block; margin-bottom:5px; } .row small { color:var(--muted); }
+    .detail { padding:16px; min-height:260px; }
+    .detail-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:14px; }
+    .stat { border:1px solid #d5e1ef; border-radius:8px; padding:12px; }
+    .stat span { color:var(--muted); font-size:13px; display:block; } .stat strong { font-size:22px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { border-bottom:1px solid #dbe5f1; padding:9px 8px; text-align:left; }
+    th { background:#f5f8fc; width:120px; } .empty { padding:22px; color:var(--muted); }
+    @media (max-width:1100px) { .bar,.grid,.main { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>운영데이터</h1>
+      <p>구글시트 월 배차 데이터 기준으로 매출, 착지, 호차 흐름을 봅니다.</p>
+    </div>
+    <nav>
+      <a href="/daily-routes.html">일일동선</a>
+      <a href="/daily-routes.html?tab=wms">WMS</a>
+      <a class="active" href="/operations-data.html">운영데이터</a>
+      <a href="/admin.html">관리자</a>
+    </nav>
+  </header>
 
-const SHEET_COLUMNS = [
-  "deliveryDate",
-  "vehicle",
-  "sequence",
-  "customerCode",
-  "customerName",
-  "address",
-  "lat",
-  "lng",
-  "amount",
-  "dailyAmount",
-  "monthlyAmount",
-  "deliveryPattern",
-  "sourceFile",
-  "savedOrder",
-  "updatedAt"
-];
+  <section class="bar">
+    <div><label>분석 월</label><select id="month"></select></div>
+    <div><label>센터</label><select id="center"><option value="">전체</option><option selected>오산센터</option><option>호남센터</option><option>영남센터</option></select></div>
+    <div><label>고객/주소/호차 검색</label><input id="q" placeholder="101호차, S10922, 할맥, 은평구"></div>
+    <div><label>보기 기준</label><select id="sort"><option value="vehicle">호차순</option><option value="amount">매출 높은 순</option><option value="stops">착지 많은 순</option></select></div>
+    <div><label>&nbsp;</label><button class="primary" id="reload">데이터 갱신</button></div>
+  </section>
+  <div class="source" id="source">데이터 로딩 중</div>
 
-const sheetId = process.env.GOOGLE_SHEET_ID || "";
-const sheetName = process.env.GOOGLE_SHEET_NAME || "customers";
-const serviceAccountBase64 = process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 || "";
-const kakaoKey = process.env.KAKAO_REST_API_KEY || process.env.KAKAO_REST_KEY || "";
-const dryRun = process.argv.includes("--dry-run");
-const skipGeocode = process.argv.includes("--skip-geocode");
+  <section class="tabs">
+    <button class="tab active" data-tab="vehicle">호차 분석</button>
+    <button class="tab" data-tab="store">매장 분석</button>
+    <button class="tab" data-tab="coord">좌표 관리</button>
+    <button class="tab" data-tab="adjust">조정 후보</button>
+  </section>
 
-if (!sheetId) throw new Error("GOOGLE_SHEET_ID is required.");
-if (!serviceAccountBase64) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 is required.");
+  <section class="grid" id="kpis"></section>
+  <main class="main">
+    <section class="panel">
+      <div class="panel-head"><div><b id="listTitle">호차별 월 데이터</b><p id="listSub">매출, 착지수, 착지당 금액 기준입니다.</p></div><b id="listCount">0건</b></div>
+      <div class="list" id="list"></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><div><b id="detailTitle">상세</b><p id="detailSub">항목을 선택해주세요.</p></div><b id="detailBadge">대기</b></div>
+      <div class="detail" id="detail">항목을 선택해주세요.</div>
+    </section>
+  </main>
 
-function b64url(value) {
-  return Buffer.from(value).toString("base64url");
-}
+  <section class="panel" style="margin:0 18px 18px;">
+    <div class="panel-head"><div><b>원본 미리보기</b><p>월 캐시에서 최근 순서대로 일부만 표시합니다.</p></div></div>
+    <div class="list" id="raw"></div>
+  </section>
 
-function normalize(value) {
-  return String(value ?? "").trim();
-}
+  <script>
+    const nf = new Intl.NumberFormat("ko-KR");
+    const money = (n) => `${nf.format(Math.round(Number(n) || 0))}원`;
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
+    const numberOf = (v) => {
+      if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+      const n = Number(String(v ?? "").replace(/[^\d.-]/g, ""));
+      return Number.isFinite(n) ? n : 0;
+    };
+    const pick = (row, keys) => {
+      for (const key of keys) {
+        if (row && row[key] !== undefined && row[key] !== null && row[key] !== "") return row[key];
+      }
+      return "";
+    };
+    const vehicleOf = (row) => String(pick(row, ["vehicle","vehicleNo","route","truck","기준호차","확정호차","호차","차량호차"])).replace(/호차|호/g,"").trim();
+    const codeOf = (row) => String(pick(row, ["customerCode","code","customer","고객ERP코드","고객코드","고객"])).trim();
+    const nameOf = (row) => String(pick(row, ["customerName","name","storeName","고객명(업체명)","고객명","매장명"])).trim();
+    const addressOf = (row) => String(pick(row, ["address","addr","customerAddress","고객주소","주소"])).trim();
+    const dateOf = (row) => String(pick(row, ["deliveryDate","date","inDate","입고요청일","배송일","일자"])).slice(0, 10);
+    const amountOf = (row) => numberOf(pick(row, ["amount","dailyAmount","monthlyAmount","salesAmount","totalAmount","매출금액","총주문액","금액","총주문금액"]));
 
-function normalizeKey(value) {
-  return normalize(value).replace(/\s+/g, "").toLowerCase();
-}
+    const state = { summary:null, rows:[], tab:"vehicle", selected:null };
 
-function normalizeVehicle(value) {
-  return normalize(value).replace(/호차/g, "").replace(/\s+/g, "");
-}
-
-function numberValue(value) {
-  const parsed = Number(normalize(value).replace(/[^\d.-]/g, ""));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function hasCoords(row) {
-  const lat = Number(row.lat);
-  const lng = Number(row.lng);
-  return lat >= 32 && lat <= 39 && lng >= 124 && lng <= 132;
-}
-
-function rowIdentity(row) {
-  return [
-    normalize(row.deliveryDate),
-    normalizeVehicle(row.vehicle),
-    normalizeKey(row.customerCode) || normalizeKey(row.customerName),
-    normalizeKey(row.address)
-  ].join("|");
-}
-
-function rowScore(row) {
-  return (hasCoords(row) ? 100 : 0)
-    + (numberValue(row.amount) ? 30 : 0)
-    + (numberValue(row.dailyAmount) ? 20 : 0)
-    + (numberValue(row.monthlyAmount) ? 10 : 0)
-    + (normalize(row.sourceFile) ? 1 : 0);
-}
-
-function parseServiceAccount() {
-  return JSON.parse(Buffer.from(serviceAccountBase64, "base64").toString("utf8"));
-}
-
-async function getAccessToken() {
-  const account = parseServiceAccount();
-  const now = Math.floor(Date.now() / 1000);
-  const header = { alg: "RS256", typ: "JWT" };
-  const claim = {
-    iss: account.client_email,
-    scope: "https://www.googleapis.com/auth/spreadsheets",
-    aud: "https://oauth2.googleapis.com/token",
-    exp: now + 3600,
-    iat: now
-  };
-  const unsigned = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(claim))}`;
-  const signature = crypto.createSign("RSA-SHA256").update(unsigned).sign(account.private_key, "base64url");
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: `${unsigned}.${signature}`
-    })
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`Google token failed: ${body.error_description || body.error || response.status}`);
-  return body.access_token;
-}
-
-async function readSheet(token) {
-  const range = `${sheetName}!A:O`;
-  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(sheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`, {
-    headers: { authorization: `Bearer ${token}` }
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
-  return body.values || [];
-}
-
-function rowsFromValues(values) {
-  const headers = (values[0] || []).map(normalize);
-  const indexByHeader = new Map(headers.map((header, index) => [header, index]));
-  return values.slice(1).map((row, index) => {
-    const obj = { _index: index };
-    for (const column of SHEET_COLUMNS) {
-      const columnIndex = indexByHeader.has(column) ? indexByHeader.get(column) : SHEET_COLUMNS.indexOf(column);
-      obj[column] = normalize(row[columnIndex]);
+    function normalizeRows(data) {
+      const rows = data.rows || data.data || data.items || [];
+      return Array.isArray(rows) ? rows : [];
     }
-    return obj;
-  }).filter((row) => row.deliveryDate && row.vehicle && (row.customerCode || row.customerName || row.address));
-}
 
-function dedupeRows(rows) {
-  const map = new Map();
-  for (const row of rows) {
-    const key = rowIdentity(row);
-    if (!key.replace(/\|/g, "")) continue;
-    const previous = map.get(key);
-    if (!previous || rowScore(row) >= rowScore(previous)) map.set(key, row);
-  }
-  return [...map.values()].sort((a, b) => a._index - b._index);
-}
-
-function buildCoordCache(rows) {
-  const cache = new Map();
-  for (const row of rows) {
-    if (hasCoords(row) && row.address) cache.set(normalizeKey(row.address), { lat: row.lat, lng: row.lng });
-  }
-  return cache;
-}
-
-async function geocodeAddress(address) {
-  if (!kakaoKey || skipGeocode) return null;
-  const query = normalize(address);
-  if (!query) return null;
-  for (const endpoint of ["address", "keyword"]) {
-    const url = endpoint === "address"
-      ? `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(query)}`
-      : `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}`;
-    const response = await fetch(url, { headers: { authorization: `KakaoAK ${kakaoKey}` } });
-    if (!response.ok) continue;
-    const body = await response.json().catch(() => ({}));
-    const doc = body.documents?.[0];
-    if (doc?.y && doc?.x) return { lat: String(doc.y), lng: String(doc.x) };
-  }
-  return null;
-}
-
-async function enrichCoords(rows) {
-  const cache = buildCoordCache(rows);
-  let cached = 0;
-  let geocoded = 0;
-  let failed = 0;
-  for (const row of rows) {
-    if (hasCoords(row)) continue;
-    const key = normalizeKey(row.address);
-    const cachedCoord = cache.get(key);
-    if (cachedCoord) {
-      row.lat = cachedCoord.lat;
-      row.lng = cachedCoord.lng;
-      cached += 1;
-      continue;
+    function selectedMonth() {
+      return document.getElementById("month").value;
     }
-    const coord = await geocodeAddress(row.address);
-    if (coord) {
-      row.lat = coord.lat;
-      row.lng = coord.lng;
-      cache.set(key, coord);
-      geocoded += 1;
-    } else {
-      failed += 1;
+
+    function monthMatches(row) {
+      const m = selectedMonth();
+      if (!m || m === "all" || m === "전체 캐시") return true;
+      const d = dateOf(row);
+      return d ? d.startsWith(m) : true;
     }
-  }
-  return { cached, geocoded, failed };
-}
 
-function valuesFromRows(rows) {
-  return [
-    SHEET_COLUMNS,
-    ...rows.map((row, index) => SHEET_COLUMNS.map((column) => column === "savedOrder" ? String(index + 1) : normalize(row[column])))
-  ];
-}
+    function filteredRows() {
+      const q = document.getElementById("q").value.trim().toLowerCase();
+      return state.rows.filter(row => {
+        if (!monthMatches(row)) return false;
+        if (!q) return true;
+        const text = [vehicleOf(row), codeOf(row), nameOf(row), addressOf(row), dateOf(row)].join(" ").toLowerCase();
+        return text.includes(q);
+      });
+    }
 
-async function writeSheet(token, values) {
-  const range = `${sheetName}!A:O`;
-  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(sheetId)}/values/${encodeURIComponent(range)}:clear`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}` }
-  });
-  for (let start = 0; start < values.length; start += 5000) {
-    const chunk = values.slice(start, start + 5000);
-    const target = `${sheetName}!A${start + 1}`;
-    const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(sheetId)}/values/${encodeURIComponent(target)}?valueInputOption=RAW`, {
-      method: "PUT",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({ values: chunk })
+    function groupByVehicle(rows) {
+      const map = new Map();
+      rows.forEach(row => {
+        const vehicle = vehicleOf(row);
+        if (!vehicle) return;
+        const item = map.get(vehicle) || { key:vehicle, label:`${vehicle}호`, stops:0, amount:0, stores:new Set(), dates:new Set(), rows:[] };
+        item.stops += 1;
+        item.amount += amountOf(row);
+        if (codeOf(row)) item.stores.add(codeOf(row));
+        if (dateOf(row)) item.dates.add(dateOf(row));
+        item.rows.push(row);
+        map.set(vehicle, item);
+      });
+      return [...map.values()].map(item => ({ ...item, storeCount:item.stores.size, dateCount:item.dates.size }));
+    }
+
+    function groupByStore(rows) {
+      const map = new Map();
+      rows.forEach(row => {
+        const key = codeOf(row) || `${nameOf(row)}|${addressOf(row)}`;
+        if (!key) return;
+        const item = map.get(key) || { key, label:nameOf(row) || key, code:codeOf(row), address:addressOf(row), vehicle:vehicleOf(row), stops:0, amount:0, dates:new Set(), rows:[] };
+        item.stops += 1;
+        item.amount += amountOf(row);
+        if (dateOf(row)) item.dates.add(dateOf(row));
+        item.rows.push(row);
+        map.set(key, item);
+      });
+      return [...map.values()].map(item => ({ ...item, dateCount:item.dates.size }));
+    }
+
+    function sortItems(items) {
+      const sort = document.getElementById("sort").value;
+      if (sort === "amount") return items.sort((a,b) => b.amount - a.amount);
+      if (sort === "stops") return items.sort((a,b) => b.stops - a.stops);
+      return items.sort((a,b) => String(a.key).localeCompare(String(b.key), "ko", { numeric:true }));
+    }
+
+    function renderKpis(rows) {
+      const vehicles = groupByVehicle(rows);
+      const stores = groupByStore(rows);
+      const totalAmount = rows.reduce((sum, row) => sum + amountOf(row), 0);
+      const totalStops = rows.length;
+      const avgStops = vehicles.length ? Math.round(totalStops / vehicles.length) : 0;
+      const avgAmount = totalStops ? Math.round(totalAmount / totalStops) : 0;
+      const noCoords = rows.filter(row => !numberOf(row.lat) || !numberOf(row.lng)).length;
+      document.getElementById("kpis").innerHTML = [
+        ["월 평균 착지수", `${nf.format(avgStops)}건`, `총 ${nf.format(totalStops)}건`],
+        ["월 매출", money(totalAmount), "구글시트 기준"],
+        ["착지당 금액", money(avgAmount), "매출/착지 기준"],
+        ["운행 호차", `${nf.format(vehicles.length)}대`, "월 데이터 기준"],
+        ["좌표 보정 필요", `${nf.format(noCoords)}곳`, "lat/lng 누락"],
+        ["매장 수", `${nf.format(stores.length)}곳`, "중복 코드 합산"]
+      ].map(([a,b,c]) => `<div class="card kpi"><span>${a}</span><strong>${b}</strong><small>${c}</small></div>`).join("");
+    }
+
+    function renderList() {
+      const rows = filteredRows();
+      renderKpis(rows);
+      const mode = state.tab;
+      const items = sortItems(mode === "store" ? groupByStore(rows) : groupByVehicle(rows));
+      document.getElementById("listTitle").textContent = mode === "store" ? "매장별 월 데이터" : "호차별 월 데이터";
+      document.getElementById("listCount").textContent = `${nf.format(items.length)}건`;
+      document.getElementById("list").innerHTML = items.length ? items.slice(0, 500).map(item => `
+        <div class="row ${state.selected?.key === item.key ? "active" : ""}" data-key="${esc(item.key)}">
+          <b>${esc(item.label)}</b>
+          <small>${nf.format(item.stops)}착지 · ${money(item.amount)} · ${mode === "store" ? esc(item.vehicle || "-") + "호" : nf.format(item.storeCount || 0) + "매장"}</small>
+        </div>`).join("") : `<div class="empty">결과가 없습니다. 검색 조건을 바꿔주세요.</div>`;
+      document.querySelectorAll(".row[data-key]").forEach(el => {
+        el.addEventListener("click", () => {
+          state.selected = items.find(item => String(item.key) === el.dataset.key);
+          renderDetail();
+          renderList();
+        });
+      });
+      renderRaw(rows);
+      if (!state.selected && items[0]) {
+        state.selected = items[0];
+        renderDetail();
+      }
+    }
+
+    function renderDetail() {
+      const item = state.selected;
+      if (!item) {
+        document.getElementById("detailTitle").textContent = "상세";
+        document.getElementById("detail").innerHTML = "항목을 선택해주세요.";
+        return;
+      }
+      document.getElementById("detailTitle").textContent = `${item.label} 상세`;
+      document.getElementById("detailSub").textContent = "월 데이터 기준 요약입니다.";
+      document.getElementById("detailBadge").textContent = "상세";
+      const sample = item.rows?.[0] || {};
+      document.getElementById("detail").innerHTML = `
+        <div class="detail-grid">
+          <div class="stat"><span>매출</span><strong>${money(item.amount)}</strong></div>
+          <div class="stat"><span>착지/주문</span><strong>${nf.format(item.stops)}건</strong></div>
+          <div class="stat"><span>착지당 금액</span><strong>${money(item.stops ? item.amount / item.stops : 0)}</strong></div>
+        </div>
+        <table>
+          <tr><th>호차</th><td>${esc(item.vehicle || vehicleOf(sample) || item.key)}</td></tr>
+          <tr><th>고객코드</th><td>${esc(item.code || codeOf(sample) || "-")}</td></tr>
+          <tr><th>주소</th><td>${esc(item.address || addressOf(sample) || "-")}</td></tr>
+          <tr><th>최근일</th><td>${esc([...new Set((item.rows || []).map(dateOf).filter(Boolean))].sort().pop() || "-")}</td></tr>
+        </table>`;
+    }
+
+    function renderRaw(rows) {
+      document.getElementById("raw").innerHTML = rows.slice(0, 80).map(row => `
+        <div class="row">
+          <b>${esc(codeOf(row))} / ${esc(nameOf(row))}</b>
+          <small>${esc(dateOf(row))} · ${esc(vehicleOf(row))}호 · ${money(amountOf(row))} · ${esc(addressOf(row))}</small>
+        </div>`).join("") || `<div class="empty">표시할 원본 데이터가 없습니다.</div>`;
+    }
+
+    function buildMonthOptions(rows) {
+      const select = document.getElementById("month");
+      const months = [...new Set(rows.map(dateOf).filter(Boolean).map(d => d.slice(0, 7)))].sort().reverse();
+      select.innerHTML = `<option value="">전체 캐시</option>` + months.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    }
+
+    async function loadData() {
+      document.getElementById("source").textContent = "데이터 로딩 중";
+      const res = await fetch("/api/monthly-dispatch-summary", { cache:"no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      state.summary = data;
+      state.rows = normalizeRows(data);
+      buildMonthOptions(state.rows);
+      const totalAmount = state.rows.reduce((sum, row) => sum + amountOf(row), 0);
+      document.getElementById("source").innerHTML = `데이터 출처 <b>${esc(data.source || "monthly-dispatch-summary")}</b> · 행 ${nf.format(state.rows.length)}건 · 매출 ${money(totalAmount)} · 갱신 ${esc(data.generatedAt || data.updatedAt || "-")}`;
+      state.selected = null;
+      renderList();
+    }
+
+    document.getElementById("reload").addEventListener("click", () => loadData().catch(err => {
+      document.getElementById("source").textContent = `데이터 조회 실패: ${err.message}`;
+    }));
+    ["q","month","sort","center"].forEach(id => {
+      document.getElementById(id).addEventListener(id === "q" ? "input" : "change", () => {
+        state.selected = null;
+        renderList();
+      });
     });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(`Google sheet write failed: ${body.error?.message || response.status}`);
-  }
-}
+    document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
+      state.tab = btn.dataset.tab;
+      state.selected = null;
+      renderList();
+    }));
 
-const token = await getAccessToken();
-const values = await readSheet(token);
-const sourceRows = rowsFromValues(values);
-const dedupedRows = dedupeRows(sourceRows);
-const coordStats = await enrichCoords(dedupedRows);
-const outputValues = valuesFromRows(dedupedRows);
-
-if (!dryRun) await writeSheet(token, outputValues);
-
-console.log(JSON.stringify({
-  dryRun,
-  before: sourceRows.length,
-  after: dedupedRows.length,
-  removed: sourceRows.length - dedupedRows.length,
-  coords: coordStats
-}, null, 2));
+    loadData().catch(err => {
+      document.getElementById("source").textContent = `데이터 조회 실패: ${err.message}`;
+    });
+  </script>
+</body>
+</html>

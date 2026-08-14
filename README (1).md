@@ -1,0 +1,1 @@
+{"generatedAt":null,"range":null,"rowCount":0,"totalAmount":0,"vehicleCount":0,"storeCount":0,"coordinateMissingCount":0,"vehicles":[],"stores":[],"rows":[],"source":"monthly-dispatch-cache","cacheGeneratedFrom":null}
