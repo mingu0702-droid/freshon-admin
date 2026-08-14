@@ -23,8 +23,9 @@ function requestBody(action, params) {
 
 export function hubEnabled() { return process.env.HUB_SHADOW_ENABLED === "true" && Boolean(process.env.HUB_API_URL); }
 export function previewEnabled() {
+  const environment = String(process.env.MAP_PHASE2B_PREVIEW_ENV || "").toLowerCase();
   return process.env.MAP_PHASE2B_PREVIEW_ENABLED === "true"
-    && String(process.env.MAP_PHASE2B_PREVIEW_ENV || "").toLowerCase() === "stage"
+    && (environment === "stage" || environment === "production")
     && Boolean(process.env.HUB_API_URL)
     && String(process.env.HUB_API_SECRET || "").length >= 32;
 }
