@@ -478,9 +478,14 @@
       const ne = bounds.getNorthEast();
       south = sw.getLat(); west = sw.getLng(); north = ne.getLat(); east = ne.getLng();
     }
-    const clamp = (min, max, limit) => max - min <= limit ? [min, max] : [(min + max - limit) / 2, (min + max + limit) / 2];
-    const lat = clamp(south, north, 4.99);
-    const lng = clamp(west, east, 4.99);
+    const clamp = (min, max, limit, absoluteMin, absoluteMax) => {
+      const span = Math.min(Math.max(0, max - min), limit, absoluteMax - absoluteMin);
+      const center = (min + max) / 2;
+      const low = Math.max(absoluteMin, Math.min(center - span / 2, absoluteMax - span));
+      return [low, low + span];
+    };
+    const lat = clamp(south, north, 4.99, 33, 39);
+    const lng = clamp(west, east, 4.99, 124, 132);
     return { south: String(lat[0]), west: String(lng[0]), north: String(lat[1]), east: String(lng[1]) };
   }
 
