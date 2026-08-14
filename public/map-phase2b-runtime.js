@@ -6,7 +6,7 @@
   const SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
   const ADMIN = new Map((window.ADMIN_FEATURES || []).map((feature) => [String(feature.properties?.code || ""), feature]));
   const COLORS = ["#2563eb", "#7c3aed", "#0f766e", "#b45309", "#0891b2", "#db2777", "#dc2626", "#059669", "#9333ea", "#c2410c"];
-  const state = { mode: "BASE_60D", areaOn: true, map: null, overlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [] };
+  const state = { mode: "BASE_60D", areaOn: true, map: null, overlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0 };
   const allStores = [];
   const storeByVehicleAndCode = new Map();
   const storesByCode = new Map();
@@ -55,6 +55,16 @@
     return vehicleChecks().filter((item) => item.checked).map((item) => item.value);
   }
 
+  function setSelectedVehicles(values) {
+    const wanted = new Set((values || []).map(String));
+    vehicleChecks().forEach((item) => { item.checked = wanted.has(item.value); });
+  }
+
+  function requestMapFit() {
+    state.fitRequested = true;
+    state.userMovedMap = false;
+  }
+
   function vehicleChecks() {
     return $$("#vehicleList input[type=checkbox]");
   }
@@ -72,6 +82,7 @@
       select.innerHTML = vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicle)}호</option>`).join("");
       if (vehicles.includes("101")) select.value = "101";
     });
+    $("#mobileBaseVehicle").innerHTML = `<option value="">전체 호차</option>${vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicle)}호</option>`).join("")}`;
     refreshDriverMaster();
   }
 
@@ -101,6 +112,11 @@
       state.map = new kakao.maps.Map($("#map"), { center: new kakao.maps.LatLng(36.7, 127.7), level: 13 });
       window.kakaoGeocoder = new kakao.maps.services.Geocoder();
       window.kakaoPlaces = new kakao.maps.services.Places();
+      kakao.maps.event.addListener(state.map, "dragstart", () => { if (Date.now() >= state.suppressMapEventsUntil) state.userMovedMap = true; });
+      kakao.maps.event.addListener(state.map, "zoom_start", () => { if (Date.now() >= state.suppressMapEventsUntil) state.userMovedMap = true; });
+      kakao.maps.event.addListener(state.map, "zoom_changed", () => $("#map").classList.toggle("mapZoomFar", state.map.getLevel() >= 9));
+      kakao.maps.event.addListener(state.map, "click", clearSelection);
+      if (window.ResizeObserver) new ResizeObserver(() => state.map?.relayout?.()).observe($("#map"));
       loadBaseMap();
     });
   }
@@ -116,6 +132,13 @@
     state.polygons = [];
   }
 
+  function clearSelection() {
+    $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
+    state.selected = null;
+    $("#detail").className = "idle";
+    $("#detail").textContent = "검색하거나 핀을 선택하면 점포정보가 표시됩니다.";
+  }
+
   function markerElement(row, index, kind) {
     const button = document.createElement("button");
     const completed = row.status === "COMPLETED";
@@ -123,7 +146,7 @@
     button.className = `marker${completed ? " done" : pending ? " pending" : ""}${kind === "virtual" ? " virtual" : ""}`;
     button.style.background = !index && row.vehicle ? vehicleColor(row.vehicle) : "";
     button.innerHTML = `${kind === "virtual" ? "신규" : index || esc(row.vehicle || "")}<span class="markerLabel">${esc(row.customerName || row.address || "선택 위치")}</span>`;
-    button.onclick = () => selectStore(row, button);
+    button.onclick = () => selectStore(row, button, true);
     return button;
   }
 
@@ -151,7 +174,12 @@
     });
     if (state.areaOn && options.boundaries !== false) drawSelectedBoundaries(options.vehicles || selectedVehicles());
     const mobileRoute = innerWidth <= 760 && options.numbered;
-    state.map.setBounds(bounds, mobileRoute ? 130 : 55, 40, mobileRoute ? 260 : 55, 40);
+    if (state.fitRequested && !state.userMovedMap) {
+      state.suppressMapEventsUntil = Date.now() + 700;
+      state.map.relayout?.();
+      state.map.setBounds(bounds, mobileRoute ? 130 : 55, 40, mobileRoute ? 260 : 55, 40);
+      state.fitRequested = false;
+    }
   }
 
   function drawSelectedBoundaries(selected) {
@@ -202,10 +230,14 @@
     state.lines.push(line);
   }
 
-  function selectStore(row, element) {
+  function selectStore(row, element, focus) {
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     element?.classList.add("selected");
     state.selected = row;
+    if (focus && state.map && Number.isFinite(Number(row.lat)) && Number.isFinite(Number(row.lng))) {
+      state.suppressMapEventsUntil = Date.now() + 500;
+      state.map.panTo(new kakao.maps.LatLng(Number(row.lat), Number(row.lng)));
+    }
     const routeMode = state.mode === "DATE_ROUTE";
     const vehicle = normalizeVehicle(row.vehicle);
     const orderCard = routeMode && row.order ? `<div class="stat"><strong>${esc(row.order)}</strong><span>착순</span></div>` : "";
@@ -239,22 +271,13 @@
     try {
       const response = await fetchJson(`/api/map-phase2b/preview/nearest?lat=${encodeURIComponent(point.lat)}&lng=${encodeURIComponent(point.lng)}`);
       rows = response.data || [];
-    } catch (_) {
-      rows = nearestVehiclesLocal(point, 3);
+    } catch (error) {
+      $("#nearWrap").innerHTML = `<div class="hint">근접호차 조회 실패: ${esc(error.message)}</div>`;
+      return;
     }
     $("#nearWrap").innerHTML = rows.length
       ? `<div class="label" style="margin-top:10px">가까운 호차 <span class="mini">최대 3개</span></div>${rows.map((row) => `<div class="judgeCard"><b>${esc(normalizeVehicle(row.vehicle))}호</b> · ${formatDistance(row.distanceKm ?? row.distance)} · 주변 배송처 ${esc(row.nearbyCount ?? row.count ?? "-")}곳</div>`).join("")}`
       : `<div class="hint">주변 배송처가 없습니다.</div>`;
-  }
-
-  function nearestVehiclesLocal(point, limit) {
-    const grouped = new Map();
-    nearestStores(point, 120).forEach((row) => {
-      const current = grouped.get(row.vehicle);
-      if (!current) grouped.set(row.vehicle, { vehicle: row.vehicle, distance: row.distance, count: 1 });
-      else { current.distance = Math.min(current.distance, row.distance); current.count += 1; }
-    });
-    return [...grouped.values()].sort((a, b) => a.distance - b.distance).slice(0, limit);
   }
 
   function normalizeSearchText(value) {
@@ -273,16 +296,17 @@
     const target = compact(q);
     if (code === target) return 0;
     if (name === target) return 1;
-    if (name.startsWith(target) || name.includes(target)) return 2;
-    if (tokens.length && tokens.every((token) => name.includes(compact(token)))) return 3;
-    if (tokens.length && tokens.every((token) => address.includes(compact(token)))) return 4;
+    if (code.includes(target)) return 2;
+    if (name.startsWith(target) || name.includes(target)) return 3;
+    if (tokens.length && tokens.every((token) => name.includes(compact(token)))) return 4;
+    if (tokens.length && tokens.every((token) => address.includes(compact(token)))) return 5;
     return 99;
   }
 
   function rankSearchRows(rows, query) {
     const seen = new Set();
     return rows.map((row) => normalizeApiStore(row)).map((row) => ({ row, rank: rankSearchRow(row, query) }))
-      .filter(({ row, rank }) => rank < 99 && !seen.has(`${row.customerCode}|${row.vehicle}`) && seen.add(`${row.customerCode}|${row.vehicle}`))
+      .filter(({ row, rank }) => { const key = row.customerCode || `${normalizeSearchText(row.customerName)}|${normalizeSearchText(row.address)}`; return rank < 99 && !seen.has(key) && seen.add(key); })
       .sort((a, b) => a.rank - b.rank || naturalCompare(a.row.customerName, b.row.customerName))
       .map(({ row }) => row);
   }
@@ -313,21 +337,22 @@
     setSearchState("검색 중", true);
     $("#results").innerHTML = "";
     const candidates = [];
+    const errors = [];
     try {
       const fixed = await fetchJson(`/api/fixed-dispatch/customer-search?q=${encodeURIComponent(text)}&date=${encodeURIComponent($("#date").value || "")}`);
       candidates.push(...(fixed.results || fixed.data || []));
-    } catch (_) { /* local operational data remains available */ }
+    } catch (error) { errors.push(`기존검색:${error.message}`); }
     try {
       const hub = await fetchJson(`/api/map-phase2b/preview/search?q=${encodeURIComponent(text)}`);
       candidates.push(...(hub.data || []));
-    } catch (_) { /* feature flag may be off */ }
-    candidates.push(...allStores);
+    } catch (error) { errors.push(`Hub검색:${error.message}`); }
     const rows = rankSearchRows(candidates, text).slice(0, 20);
     if (!rows.length) {
-      setSearchState("결과 없음");
+      setSearchState(errors.length ? `조회 실패 · ${errors.join(" / ")}` : "결과 없음");
       return;
     }
-    setSearchState(`${rows.length}건`);
+    setSearchState(`${rows.length}건${errors.length ? " · 일부 API 오류" : ""}`);
+    requestMapFit();
     renderResults(rows);
     renderStops(rows, { boundaries: false });
     selectStore(rows[0]);
@@ -338,6 +363,7 @@
     $$("[data-result]").forEach((element) => {
       element.onclick = () => {
         const row = rows[Number(element.dataset.result)];
+        requestMapFit();
         renderStops([row], { boundaries: false });
         selectStore(row);
       };
@@ -345,10 +371,18 @@
   }
 
   async function searchExternalAddress(text) {
-    const existing = rankSearchRows(allStores, text).slice(0, 20);
+    let existing = [];
+    try {
+      const response = await fetchJson(`/api/map-phase2b/preview/search?q=${encodeURIComponent(text)}`);
+      existing = rankSearchRows(response.data || [], text).slice(0, 20);
+    } catch (error) {
+      $("#searchNotice").textContent = `등록 매장 조회 실패: ${error.message} · 주소 검색은 계속합니다.`;
+      $("#searchNotice").classList.add("show");
+    }
     if (existing.length) {
       setSearchState(`${existing.length}건`);
       renderResults(existing);
+      requestMapFit();
       renderStops(existing, { boundaries: false });
       selectStore(existing[0]);
       return;
@@ -390,6 +424,7 @@
     $("#searchNotice").textContent = "Customer에 저장하지 않는 세션 임시핀입니다.";
     $("#searchNotice").classList.add("show");
     $("#results").innerHTML = `<button class="resultItem selected"><div class="resultName">📍 ${esc(row.address)}</div><div class="resultMeta">임시핀 · 주변 배송처/근접호차 표시</div></button>`;
+    requestMapFit();
     renderStops([row], { virtual: true, boundaries: false });
     selectStore(row);
     state.virtual = row;
@@ -403,7 +438,7 @@
     $("#mapStatusTitle").textContent = selected.length === 1 ? `${selected[0]}호 최근 60일 권역` : selected.length > 1 ? `${selected.length}대 호차 권역 비교` : "최근 60일 전체 권역";
     $("#vehicleChips").className = selected.length ? "" : "vehiclePlaceholder";
     $("#vehicleChips").innerHTML = selected.length ? selected.slice(0, 4).map((vehicle) => `<span class="vehicleChip">${vehicle}호</span>`).join("") + (selected.length > 4 ? `<span class="vehicleChip">+${selected.length - 4}</span>` : "") : "전체 권역";
-    if (run) loadBaseMap();
+    if (run) { requestMapFit(); loadBaseMap(); }
   }
 
   async function loadBaseMap() {
@@ -416,29 +451,23 @@
       const response = await fetchJson(`/api/map-phase2b/preview/bounds?${params}`);
       rows = (response.data || []).map(normalizeApiStore);
       meta = response.meta || {};
-    } catch (_) { /* operational source below */ }
-    if (!rows.length) {
-      rows = selected.length ? allStores.filter((row) => selected.includes(row.vehicle)) : vehicleCenters();
-      meta.totalStoreCount = selected.length ? rows.length : allStores.length;
+    } catch (error) {
+      clearMap();
+      state.currentRows = [];
+      $("#mapStatusSub").textContent = `실데이터 조회 실패 · ${error.message}`;
+      return;
     }
-    const count = Number(meta.totalStoreCount ?? meta.matchedCount ?? (selected.length ? rows.length : allStores.length));
+    if (!rows.length) {
+      clearMap();
+      state.currentRows = [];
+      $("#mapStatusSub").textContent = "조회 결과 없음";
+      return;
+    }
+    const count = Number(meta.totalStoreCount ?? meta.matchedCount ?? rows.length);
     renderStops(rows, { vehicles: selected });
       const latest = String(meta.dataAsOf || meta.latestDate || latestDateFromRows(rows) || inferLatestDate()).slice(0, 10);
     updateDateRange(latest);
     $("#mapStatusSub").textContent = `${formatShort(daysBefore(latest, 59))} ~ ${formatShort(latest)} 기준 · ${count}개 매장`;
-  }
-
-  function vehicleCenters() {
-    return SOURCE.vehicles.map((vehicle, index) => ({
-      customerCode: `VEHICLE:${vehicle.vehicle}`,
-      customerName: vehicle.area_label || `${vehicle.vehicle}호 권역`,
-      vehicle: String(vehicle.vehicle),
-      lat: numberOrNull(vehicle.center?.[0]),
-      lng: numberOrNull(vehicle.center?.[1]),
-      areaLabel: vehicle.area_label,
-      deliveryCount90d: vehicle.count,
-      color: COLORS[index % COLORS.length]
-    }));
   }
 
   function previewBounds() {
@@ -476,6 +505,7 @@
   async function loadRoute(source) {
     const date = source === "mobile" ? $("#mobileDate").value : $("#date").value;
     const vehicle = source === "mobile" ? $("#mobileVehicle").value : $("#vehicle").value;
+    requestMapFit();
     setRouteLoading(source, "운행동선 조회 중...");
     let payload = null;
     try {
@@ -548,7 +578,48 @@
     state.mode = "BASE_60D";
     state.routeRows = [];
     document.body.classList.remove("routeSheetOpen");
+    requestMapFit();
     loadBaseMap();
+  }
+
+  function syncBoundaryButtons() {
+    [$("#areaToggle"), $("#mobileAreaToggle")].forEach((button) => {
+      if (!button) return;
+      button.classList.toggle("on", state.areaOn);
+      button.textContent = state.areaOn ? "권역선 ON" : "권역선 OFF";
+      button.setAttribute("aria-pressed", String(state.areaOn));
+    });
+  }
+
+  function rerenderCurrentMap() {
+    renderStops(state.currentRows, { numbered: state.mode === "DATE_ROUTE", boundaries: state.areaOn, vehicles: selectedVehicles() });
+    if (state.mode === "DATE_ROUTE") drawRoute(state.routeRows);
+  }
+
+  function toggleBoundaries() {
+    state.areaOn = !state.areaOn;
+    syncBoundaryButtons();
+    rerenderCurrentMap();
+  }
+
+  function resetMapOverview() {
+    setSelectedVehicles([]);
+    $("#mobileBaseVehicle").value = "";
+    $("#mobileCenter").value = "all";
+    state.mode = "BASE_60D";
+    state.routeRows = [];
+    document.body.classList.remove("routeSheetOpen");
+    clearSelection();
+    refreshVehicleUi(false);
+    requestMapFit();
+    loadBaseMap();
+  }
+
+  function selectCenter(group) {
+    const values = group === "all" ? [] : SOURCE.vehicles.filter((vehicle) => vehicle.group === group).map((vehicle) => String(vehicle.vehicle));
+    setSelectedVehicles(values);
+    $("#mobileBaseVehicle").value = "";
+    refreshVehicleUi(true);
   }
 
   function nearestStores(point, limit = 8) {
@@ -652,7 +723,15 @@
   function esc(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
   function setSearchState(text, spin) { $("#searchState").innerHTML = spin ? `<span class="loading"><span class="spinner"></span>${esc(text)}</span>` : esc(text); }
   async function fetchJson(url) { const response = await fetch(url, { cache: "no-store" }); const json = await response.json(); if (!response.ok || json.error) throw new Error(json.error || `HTTP_${response.status}`); return json; }
-  function showMobileMap() { if (innerWidth <= 760) document.body.classList.add("mobileMap"); }
+  function showMobileMap() {
+    if (innerWidth > 760) return;
+    document.body.classList.add("mobileMap");
+    setTimeout(() => {
+      state.map?.relayout?.();
+      requestMapFit();
+      rerenderCurrentMap();
+    }, 60);
+  }
   function hideMobileMap() { document.body.classList.remove("mobileMap", "routeSheetOpen"); }
 
   function exportNewArea(format) {
@@ -672,7 +751,7 @@
     $("#vehicleQuery").oninput = (event) => { const value = event.target.value.replace(/\D/g, ""); $$(".vehicleItem").forEach((item) => { item.style.display = !value || item.querySelector("input").value.includes(value) ? "flex" : "none"; }); };
     $("#selectAllVehicles").onclick = () => { vehicleChecks().forEach((item) => { if (item.closest("label").style.display !== "none") item.checked = true; }); refreshVehicleUi(true); };
     $("#clearVehicles").onclick = () => { vehicleChecks().forEach((item) => { item.checked = false; }); refreshVehicleUi(true); };
-    $$("[data-center]").forEach((button) => { button.onclick = () => { const group = button.dataset.center; vehicleChecks().forEach((item) => { const vehicle = SOURCE.vehicles.find((row) => String(row.vehicle) === item.value); item.checked = vehicle?.group === group; }); refreshVehicleUi(true); $("#vehicleSelect").classList.remove("open"); }; });
+    $$("[data-center]").forEach((button) => { button.onclick = () => { selectCenter(button.dataset.center); $("#vehicleSelect").classList.remove("open"); }; });
     let composing = false;
     $("#query").oncompositionstart = () => { composing = true; };
     $("#query").oncompositionend = () => { composing = false; };
@@ -687,7 +766,12 @@
     $("#todayBtn").onclick = () => { $("#date").value = inferLatestDate(); };
     $("#routePlan").onclick = () => loadRoute("pc");
     $("#endRoute").onclick = endRoute;
-    $("#areaToggle").onclick = (event) => { state.areaOn = !state.areaOn; event.currentTarget.classList.toggle("on", state.areaOn); if (state.areaOn) state.mode === "DATE_ROUTE" ? loadRoute("pc") : loadBaseMap(); else clearMap(); };
+    $("#areaToggle").onclick = toggleBoundaries;
+    $("#mapReset").onclick = resetMapOverview;
+    $("#mobileAreaToggle").onclick = toggleBoundaries;
+    $("#mobileMapReset").onclick = resetMapOverview;
+    $("#mobileCenter").onchange = (event) => selectCenter(event.target.value);
+    $("#mobileBaseVehicle").onchange = (event) => { setSelectedVehicles(event.target.value ? [event.target.value] : []); $("#mobileCenter").value = "all"; refreshVehicleUi(true); };
     $("#judgeNewAreaBatch").onclick = () => runNewArea("#newAreaBatchInput", "#newAreaBatchStatus", "#newAreaBatchResults");
     $("#clearNewAreaBatch").onclick = () => { $("#newAreaBatchInput").value = ""; $("#newAreaBatchResults").innerHTML = ""; };
     $("#exportNewAreaCsv").onclick = () => exportNewArea("csv");
@@ -700,10 +784,12 @@
     $("#mobileRoutePlan").onclick = () => loadRoute("mobile");
     $("#openWms").onclick = () => { location.href = "/daily-routes.html?tab=wms"; };
     $("#openOperations").onclick = () => { location.href = "/operations-data.html"; };
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape") clearSelection(); });
   }
 
   initVehicles();
   bindEvents();
+  syncBoundaryButtons();
   refreshVehicleUi(false);
   initMap();
 })();

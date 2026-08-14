@@ -2,7 +2,66 @@ import crypto from "node:crypto";
 
 const VERSION = "map-phase2-v1";
 const cache = new Map();
-const state = { failures: 0, openUntil: 0, metrics: { requests: 0, success: 0, timeout: 0, error: 0, match: 0, mismatch: 0, latencyMs: [] } };
+const state = { circuits: new Map(), metrics: { requests: 0, success: 0, timeout: 0, error: 0, match: 0, mismatch: 0, latencyMs: [] } };
+
+function circuitFor(action) {
+  const key = String(action || "unknown");
+  if (!state.circuits.has(key)) state.circuits.set(key, { state: "CLOSED", failures: 0, openUntil: 0, probeInFlight: false, lastFailure: null });
+  return state.circuits.get(key);
+}
+
+function circuitConfig() {
+  return {
+    threshold: Math.max(1, Number(process.env.HUB_CIRCUIT_FAILURE_THRESHOLD || 10)),
+    resetMs: Math.max(1000, Number(process.env.HUB_CIRCUIT_RESET_MS || 300000))
+  };
+}
+
+function circuitLog(action, circuit, timeout, event) {
+  console.info(JSON.stringify({ component: "hub-circuit", action, state: circuit.state, failures: circuit.failures, timeout: Boolean(timeout), event }));
+}
+
+function circuitEnter(action) {
+  const circuit = circuitFor(action);
+  const now = Date.now();
+  if (circuit.state === "OPEN" && now < circuit.openUntil) { circuitLog(action, circuit, false, "REJECT_OPEN"); throw new Error("HUB_CIRCUIT_OPEN"); }
+  if (circuit.state === "OPEN") {
+    if (circuit.probeInFlight) { circuitLog(action, circuit, false, "REJECT_PROBE_IN_FLIGHT"); throw new Error("HUB_CIRCUIT_HALF_OPEN"); }
+    circuit.state = "HALF_OPEN";
+    circuit.probeInFlight = true;
+    circuitLog(action, circuit, false, "HALF_OPEN_PROBE");
+    return { circuit, probe: true };
+  }
+  if (circuit.state === "HALF_OPEN") { circuitLog(action, circuit, false, "REJECT_HALF_OPEN"); throw new Error("HUB_CIRCUIT_HALF_OPEN"); }
+  return { circuit, probe: false };
+}
+
+function circuitSuccess(action, circuit) {
+  const recovered = circuit.state !== "CLOSED" || circuit.failures > 0;
+  circuit.state = "CLOSED";
+  circuit.failures = 0;
+  circuit.openUntil = 0;
+  circuit.probeInFlight = false;
+  circuit.lastFailure = null;
+  if (recovered) circuitLog(action, circuit, false, "CLOSED");
+}
+
+function circuitFailure(action, circuit, timeout, probe) {
+  const config = circuitConfig();
+  circuit.lastFailure = { at: new Date().toISOString(), timeout: Boolean(timeout) };
+  circuit.probeInFlight = false;
+  if (probe) {
+    circuit.state = "OPEN";
+    circuit.openUntil = Date.now() + config.resetMs;
+  } else {
+    circuit.failures += 1;
+    if (circuit.failures >= config.threshold) {
+      circuit.state = "OPEN";
+      circuit.openUntil = Date.now() + config.resetMs;
+    }
+  }
+  circuitLog(action, circuit, timeout, circuit.state === "OPEN" ? "OPEN" : "FAILURE");
+}
 
 function stable(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -32,10 +91,10 @@ export function previewEnabled() {
 
 export async function callHub(action, params, { useCache = true } = {}) {
   if (!process.env.HUB_API_URL) throw new Error("HUB_API_URL_NOT_CONFIGURED");
-  if (Date.now() < state.openUntil) throw new Error("HUB_CIRCUIT_OPEN");
   const key = `${action}:${stable(params || {})}`;
+  const entered = circuitEnter(action);
   const saved = cache.get(key);
-  if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
+  if (!entered.probe && useCache && saved && saved.expiresAt > Date.now()) return saved.value;
   const started = Date.now();
   state.metrics.requests += 1;
   const actionTimeoutMs = {
@@ -45,7 +104,9 @@ export async function callHub(action, params, { useCache = true } = {}) {
   };
   const timeoutMs = actionTimeoutMs[action] || Number(process.env.HUB_API_TIMEOUT_MS || 2000);
   let lastError;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const attempts = entered.probe ? 1 : 2;
+  let timedOut = false;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -53,16 +114,15 @@ export async function callHub(action, params, { useCache = true } = {}) {
       const json = await response.json();
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw new Error("HUB_INVALID_CONTRACT");
       if (!response.ok || !json.ok) throw new Error(`HUB_${json?.error?.code || response.status}`);
-      state.failures = 0; state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
+      circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
       cache.set(key, { expiresAt: Date.now() + 60000, value: json });
       return json;
     } catch (error) {
       lastError = error;
-      if (error.name === "AbortError") state.metrics.timeout += 1; else state.metrics.error += 1;
+      if (error.name === "AbortError") { state.metrics.timeout += 1; timedOut = true; } else state.metrics.error += 1;
     } finally { clearTimeout(timer); }
   }
-  state.failures += 1;
-  if (state.failures >= 10) { state.openUntil = Date.now() + 300000; state.failures = 0; }
+  circuitFailure(action, entered.circuit, timedOut, entered.probe);
   throw lastError;
 }
 
@@ -81,5 +141,7 @@ export function shadowHub(action, params, existing) {
 
 export function hubMetrics() {
   const m = state.metrics, sorted = m.latencyMs.slice().sort((a, b) => a - b);
-  return { ...m, latencyMs: undefined, p50: sorted[Math.floor(sorted.length * 0.5)] || 0, p95: sorted[Math.floor(sorted.length * 0.95)] || 0, circuitOpen: Date.now() < state.openUntil };
+  const circuits = {};
+  state.circuits.forEach((value, action) => { circuits[action] = { state: value.state, failures: value.failures, openUntil: value.openUntil || null, probeInFlight: value.probeInFlight, lastFailure: value.lastFailure }; });
+  return { ...m, latencyMs: undefined, p50: sorted[Math.floor(sorted.length * 0.5)] || 0, p95: sorted[Math.floor(sorted.length * 0.95)] || 0, circuitOpen: Object.values(circuits).some((x) => x.state === "OPEN"), circuits };
 }
