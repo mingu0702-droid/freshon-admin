@@ -6,7 +6,7 @@
   const SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
   const ADMIN = new Map((window.ADMIN_FEATURES || []).map((feature) => [String(feature.properties?.code || ""), feature]));
   const COLORS = ["#2563eb", "#7c3aed", "#0f766e", "#b45309", "#0891b2", "#db2777", "#dc2626", "#059669", "#9333ea", "#c2410c"];
-  const state = { mode: "BASE_60D", areaOn: true, map: null, overlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0 };
+  const state = { mode: "BASE_60D", areaOn: true, centerFilter: "", map: null, overlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0 };
   const allStores = [];
   const storeByVehicleAndCode = new Map();
   const storesByCode = new Map();
@@ -77,7 +77,7 @@
         <span class="vehicleNo">${esc(vehicle.vehicle)}호</span>
         <span class="vehicleArea">${esc(vehicle.area_label || vehicle.primary_area || vehicle.group || "권역")}</span>
       </label>`).join("");
-    vehicleChecks().forEach((input) => { input.onchange = () => refreshVehicleUi(true); });
+    vehicleChecks().forEach((input) => { input.onchange = () => { state.centerFilter = ""; refreshVehicleUi(true); }; });
     [$("#vehicle"), $("#mobileVehicle")].forEach((select) => {
       select.innerHTML = vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicle)}호</option>`).join("");
       if (vehicles.includes("101")) select.value = "101";
@@ -461,9 +461,18 @@
     let rows = [];
     let meta = {};
     try {
-      const params = new URLSearchParams({ mode: "BASE_90D", vehicle: selected.join(","), ...previewBounds() });
+      const params = new URLSearchParams({
+        mode: "BASE_90D",
+        center: state.centerFilter,
+        vehicle: selected.length === 1 ? selected[0] : "",
+        ...previewBounds()
+      });
       const response = await fetchJson(`/api/map-phase2b/preview/bounds?${params}`);
       rows = (response.data || []).map(normalizeApiStore);
+      if (selected.length > 1) {
+        const selectedSet = new Set(selected.map(String));
+        rows = rows.filter((row) => selectedSet.has(String(row.vehicle)));
+      }
       meta = response.meta || {};
     } catch (error) {
       clearMap();
@@ -635,6 +644,7 @@
   }
 
   function selectCenter(group) {
+    state.centerFilter = group === "all" ? "" : group;
     const values = group === "all" ? [] : SOURCE.vehicles.filter((vehicle) => vehicle.group === group).map((vehicle) => String(vehicle.vehicle));
     setSelectedVehicles(values);
     $("#mobileBaseVehicle").value = "";
@@ -768,8 +778,8 @@
     $("#vehicleTrigger").onclick = () => $("#vehicleSelect").classList.toggle("open");
     document.addEventListener("click", (event) => { if (!$("#vehicleSelect").contains(event.target)) $("#vehicleSelect").classList.remove("open"); });
     $("#vehicleQuery").oninput = (event) => { const value = event.target.value.replace(/\D/g, ""); $$(".vehicleItem").forEach((item) => { item.style.display = !value || item.querySelector("input").value.includes(value) ? "flex" : "none"; }); };
-    $("#selectAllVehicles").onclick = () => { vehicleChecks().forEach((item) => { if (item.closest("label").style.display !== "none") item.checked = true; }); refreshVehicleUi(true); };
-    $("#clearVehicles").onclick = () => { vehicleChecks().forEach((item) => { item.checked = false; }); refreshVehicleUi(true); };
+    $("#selectAllVehicles").onclick = () => { state.centerFilter = ""; vehicleChecks().forEach((item) => { if (item.closest("label").style.display !== "none") item.checked = true; }); refreshVehicleUi(true); };
+    $("#clearVehicles").onclick = () => { state.centerFilter = ""; vehicleChecks().forEach((item) => { item.checked = false; }); refreshVehicleUi(true); };
     $$("[data-center]").forEach((button) => { button.onclick = () => { selectCenter(button.dataset.center); $("#vehicleSelect").classList.remove("open"); }; });
     let composing = false;
     $("#query").oncompositionstart = () => { composing = true; };
@@ -790,7 +800,7 @@
     $("#mobileAreaToggle").onclick = toggleBoundaries;
     $("#mobileMapReset").onclick = resetMapOverview;
     $("#mobileCenter").onchange = (event) => selectCenter(event.target.value);
-    $("#mobileBaseVehicle").onchange = (event) => { setSelectedVehicles(event.target.value ? [event.target.value] : []); $("#mobileCenter").value = "all"; refreshVehicleUi(true); };
+    $("#mobileBaseVehicle").onchange = (event) => { state.centerFilter = ""; setSelectedVehicles(event.target.value ? [event.target.value] : []); $("#mobileCenter").value = "all"; refreshVehicleUi(true); };
     $("#judgeNewAreaBatch").onclick = () => runNewArea("#newAreaBatchInput", "#newAreaBatchStatus", "#newAreaBatchResults");
     $("#clearNewAreaBatch").onclick = () => { $("#newAreaBatchInput").value = ""; $("#newAreaBatchResults").innerHTML = ""; };
     $("#exportNewAreaCsv").onclick = () => exportNewArea("csv");
