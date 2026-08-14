@@ -311,6 +311,21 @@
       .map(({ row }) => row);
   }
 
+  async function fixedDispatchSearch(text) {
+    const tokens = searchTokens(text);
+    const queries = tokens.length > 1 ? tokens : [text];
+    const lists = await Promise.all(queries.map(async (query) => {
+      const payload = await fetchJson(`/api/fixed-dispatch/customer-search?q=${encodeURIComponent(query)}&date=${encodeURIComponent($("#date").value || "")}`);
+      return payload.results || payload.data || [];
+    }));
+    if (lists.length === 1) return lists[0];
+    const commonCodes = lists.slice(1).map((rows) => new Set(rows.map((row) => String(row.customerCode || row.code || "").trim()).filter(Boolean)));
+    return lists[0].filter((row) => {
+      const code = String(row.customerCode || row.code || "").trim();
+      return code && commonCodes.every((codes) => codes.has(code));
+    });
+  }
+
   function normalizeApiStore(row) {
     const code = String(row.customerCode || row.code || row.id || "").trim();
     const vehicle = normalizeVehicle(row.vehicle || row.confirmedVehicle || row.primaryVehicle90d);
@@ -339,8 +354,7 @@
     const candidates = [];
     const errors = [];
     try {
-      const fixed = await fetchJson(`/api/fixed-dispatch/customer-search?q=${encodeURIComponent(text)}&date=${encodeURIComponent($("#date").value || "")}`);
-      candidates.push(...(fixed.results || fixed.data || []));
+      candidates.push(...await fixedDispatchSearch(text));
     } catch (error) { errors.push(`기존검색:${error.message}`); }
     try {
       const hub = await fetchJson(`/api/map-phase2b/preview/search?q=${encodeURIComponent(text)}`);
