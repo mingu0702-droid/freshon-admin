@@ -2021,9 +2021,17 @@ function extractDeliveryTaskRows(payload) {
 
 async function fetchDeliveryTaskRows({ date, vehicle }) {
   const selectedTokens = vehicleTokens(vehicle);
+  const rows = await fetchDeliveryTaskRowsForDate(date);
+  return rows.filter((row) => {
+    const tokens = vehicleTokens(deliveryTaskVehicle(row));
+    return [...tokens].some((token) => selectedTokens.has(token));
+  });
+}
+
+async function fetchDeliveryTaskRowsForDate(date) {
   const dateParam = `${date}T00:00:00+09:00`;
   const pageSize = 300;
-  const matchedRows = [];
+  const allRows = [];
   for (let page = 0; page < 20; page += 1) {
     const query = new URLSearchParams({
       logisticsCenterId: "1",
@@ -2034,14 +2042,10 @@ async function fetchDeliveryTaskRows({ date, vehicle }) {
     query.append("enteringDatedAtBetween", dateParam);
     const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
     const rows = extractDeliveryTaskRows(payload);
-    const matched = rows.filter((row) => {
-      const tokens = vehicleTokens(deliveryTaskVehicle(row));
-      return [...tokens].some((token) => selectedTokens.has(token));
-    });
-    matchedRows.push(...matched);
+    allRows.push(...rows);
     if (rows.length < pageSize) break;
   }
-  return matchedRows;
+  return allRows;
 }
 
 async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) {
@@ -3446,6 +3450,90 @@ app.use((error, _req, res, next) => {
   return next(error);
 });
 
+const phase2bTodayCache = new Map();
+const phase2bTodayInflight = new Map();
+
+function phase2bKstDate() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+function phase2bEventTime(row) {
+  const status = deliveryTaskStatus(row);
+  return status.completedAt || deliveryStopText(row, ["updatedAt", "enteringDatedAt", "confirmedAt", "createdAt"]);
+}
+
+function phase2bDriver(row) {
+  const nested = taskRowNested(row);
+  const carrier = nested.carrier || {};
+  return {
+    driverName: deliveryStopText(row, ["driverName", "carrierName"]) || deliveryStopText(carrier, ["driverName", "name"]),
+    driverPhone: deliveryStopText(row, ["driverPhone", "driverTel", "carrierPhone"]) || deliveryStopText(carrier, ["phone", "phoneNumber", "tel"]),
+    carrierName: deliveryStopText(row, ["transportCompany", "carrierCompany"]) || deliveryStopText(carrier, ["companyName", "transportCompany"])
+  };
+}
+
+function phase2bTodayVehicleSummary(vehicle, rows, date) {
+  const sorted = rows.map((row, index) => ({ row, index, sort: deliveryTaskSortValue(row, index) }))
+    .sort((a, b) => a.sort - b.sort);
+  const stops = sorted.map((item, index) => buildStopFromDeliveryTaskRow(item.row, vehicle, index + 1));
+  const completed = stops.filter((stop) => stop.appRecorded);
+  const completedTimes = completed.map((stop) => Date.parse(stop.deliveryCompletedAt || "")).filter(Number.isFinite).sort((a, b) => a - b);
+  const intervals = completedTimes.slice(1).map((time, index) => (time - completedTimes[index]) / 60000).filter((value) => value > 0 && value < 360).slice(-5);
+  const avgMinutesPerStop = intervals.length ? intervals.reduce((sum, value) => sum + value, 0) / intervals.length : null;
+  const totalStops = stops.length;
+  const completedStops = completed.length;
+  const remainingStops = Math.max(0, totalStops - completedStops);
+  const lastCompletedAt = completedTimes.length ? new Date(completedTimes[completedTimes.length - 1]).toISOString() : null;
+  const lastCompletedOrder = completed.reduce((max, stop) => Math.max(max, Number(stop.sequence) || 0), 0) || null;
+  const estimatedEndAt = avgMinutesPerStop && remainingStops ? new Date(Date.now() + avgMinutesPerStop * remainingStops * 60000).toISOString() : null;
+  const idleMinutes = lastCompletedAt ? (Date.now() - Date.parse(lastCompletedAt)) / 60000 : 0;
+  let status = completedStops >= totalStops && totalStops ? "완료" : completedStops ? "배송중" : totalStops ? "출차전" : "데이터없음";
+  if (status === "배송중" && avgMinutesPerStop && idleMinutes > Math.max(30, avgMinutesPerStop * 2)) status = "지연 가능";
+  return {
+    date,
+    vehicle,
+    status,
+    totalStops,
+    completedStops,
+    remainingStops,
+    progressPercent: totalStops ? Math.round(completedStops * 100 / totalStops) : 0,
+    lastCompletedOrder,
+    lastCompletedAt,
+    nextOrder: remainingStops ? (lastCompletedOrder || 0) + 1 : null,
+    recentEventAt: lastCompletedAt || phase2bEventTime(sorted[sorted.length - 1]?.row) || null,
+    avgMinutesPerStop: avgMinutesPerStop == null ? null : Math.round(avgMinutesPerStop * 10) / 10,
+    estimateConfidence: intervals.length >= 3 ? "보통" : intervals.length ? "낮음" : "없음",
+    estimatedEndAt,
+    ...phase2bDriver(sorted[0]?.row || {}),
+    stops
+  };
+}
+
+async function phase2bTodayStatus(date) {
+  const cached = phase2bTodayCache.get(date);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (phase2bTodayInflight.has(date)) return phase2bTodayInflight.get(date);
+  const pending = (async () => {
+    const rows = await fetchDeliveryTaskRowsForDate(date);
+    const byVehicle = new Map();
+    rows.forEach((row) => {
+      const vehicle = deliveryTaskVehicle(row);
+      if (!vehicle) return;
+      if (!byVehicle.has(vehicle)) byVehicle.set(vehicle, []);
+      byVehicle.get(vehicle).push(row);
+    });
+    const value = {
+      date,
+      generatedAt: new Date().toISOString(),
+      vehicles: [...byVehicle].map(([vehicle, vehicleRows]) => phase2bTodayVehicleSummary(vehicle, vehicleRows, date)).sort((a, b) => a.vehicle.localeCompare(b.vehicle, "ko", { numeric: true }))
+    };
+    phase2bTodayCache.set(date, { expiresAt: Date.now() + 60000, value });
+    return value;
+  })();
+  phase2bTodayInflight.set(date, pending);
+  try { return await pending; } finally { phase2bTodayInflight.delete(date); }
+}
+
 app.get("/api/map-phase2b/preview/status", requireView, (_req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   return res.json({ enabled: true, environment: "stage", metrics: hubMetrics() });
@@ -3496,6 +3584,19 @@ app.get("/api/map-phase2b/preview/route-plan", requireView, async (req, res) => 
     return res.json(await callHub("routePlan", { date: String(req.query.date || ""), vehicle: String(req.query.vehicle || "") }));
   } catch (error) {
     return res.status(502).json({ error: error.message });
+  }
+});
+
+app.get("/api/map-phase2b/preview/today-status", requireView, async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  const date = normalizeDateValue(req.query.date) || phase2bKstDate();
+  const vehicle = normalizeVehicleValue(req.query.vehicle);
+  try {
+    const payload = await phase2bTodayStatus(date);
+    const vehicles = vehicle ? payload.vehicles.filter((row) => normalizeVehicleValue(row.vehicle) === vehicle) : payload.vehicles;
+    return res.json({ ok: true, data: { ...payload, vehicles }, error: null });
+  } catch (error) {
+    return res.status(error.status || 502).json({ ok: false, data: null, error: error.message || String(error) });
   }
 });
 
