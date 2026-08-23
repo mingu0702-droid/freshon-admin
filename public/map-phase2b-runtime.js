@@ -7,9 +7,10 @@
   const ADMIN = new Map((window.ADMIN_FEATURES || []).map((feature) => [String(feature.properties?.code || ""), feature]));
   const COLORS = ["#2563eb", "#7c3aed", "#0f766e", "#b45309", "#0891b2", "#db2777", "#dc2626", "#059669", "#9333ea", "#c2410c"];
   const state = { mode: "BASE_60D", areaOn: true, centerFilter: "", map: null, overlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
-  const allStores = [];
+  let allStores = [];
   const storeByVehicleAndCode = new Map();
   const storesByCode = new Map();
+  let snapshotMeta = null;
   const driverByVehicle = new Map();
   const requestControllers = new Map();
   const memoryResponses = new Map();
@@ -22,6 +23,42 @@
       if (!storesByCode.has(row.customerCode)) storesByCode.set(row.customerCode, row);
     });
   });
+
+  function replaceStoreSnapshot(rows, meta) {
+    const vehicleMeta = new Map(SOURCE.vehicles.map((vehicle, index) => [String(vehicle.vehicle), { vehicle, index }]));
+    const previousByCode = new Map(allStores.map((row) => [row.customerCode, row]));
+    const next = [];
+    storeByVehicleAndCode.clear();
+    storesByCode.clear();
+    (rows || []).forEach((item) => {
+      const vehicle = normalizeVehicle(item.vehicle || item.primaryVehicle90d || item.latestVehicle);
+      const found = vehicleMeta.get(vehicle) || { vehicle: { vehicle }, index: 0 };
+      const previous = previousByCode.get(String(item.customerCode || item.code || "")) || {};
+      const row = normalizeStore({ ...item, id: item.customerCode || item.code, name: item.customerName || item.name,
+        address: item.address || item.customerAddress || item.latestAddress || previous.address,
+        delivery_pattern: item.deliveryPattern || item.deliveryPatternText || previous.deliveryPattern,
+        lat: item.lat ?? item.latitude, lng: item.lng ?? item.longitude }, found.vehicle, found.index);
+      row.customerName ||= previous.customerName || "";
+      row.areaLabel ||= previous.areaLabel || "";
+      row.region ||= previous.region || "";
+      row.lastDeliveryDate = item.lastDeliveryDate || item.deliveryDate || "";
+      row.deliveryCount90d = item.deliveryCount90d ?? item.deliveryCount ?? null;
+      next.push(row);
+      storeByVehicleAndCode.set(`${row.vehicle}|${row.customerCode}`, row);
+      if (!storesByCode.has(row.customerCode)) storesByCode.set(row.customerCode, row);
+    });
+    if (next.length) allStores = next;
+    snapshotMeta = meta || snapshotMeta;
+  }
+
+  async function refreshStoreSnapshot() {
+    try {
+      const payload = await fetchJson("/api/map-phase2b/preview/snapshot", { channel: "map-snapshot", ttl: 300000, timeout: 10000 });
+      if (!Array.isArray(payload.data) || !payload.data.length) return;
+      replaceStoreSnapshot(payload.data, payload.meta || null);
+      if (state.mode === "BASE_60D") loadBaseMap();
+    } catch (_) { /* bundled vehicle snapshot remains visible and is marked stale */ }
+  }
 
   function normalizeStore(customer, vehicle, vehicleIndex) {
     return {
@@ -298,9 +335,9 @@
   async function enrichStoreDetail(row, element) {
     const requestId = ++state.detailRequestId;
     try {
-      const payload = await fetchJson(`/api/map-phase2b/preview/search?q=${encodeURIComponent(row.customerCode)}`, { channel: "store-detail", ttl: 300000, timeout: 30000 });
+      const payload = await fetchJson(`/api/map-phase2b/preview/detail?customerCode=${encodeURIComponent(row.customerCode)}`, { channel: "store-detail", ttl: 300000, timeout: 45000 });
       if (requestId !== state.detailRequestId || state.selected?.customerCode !== row.customerCode) return;
-      const exact = (payload.data || []).map(normalizeApiStore).find((item) => item.customerCode === row.customerCode);
+      const exact = payload.data ? normalizeApiStore(payload.data) : null;
       if (exact) selectStore({ ...row, ...exact }, element, false, true);
     } catch (error) { if (!isSilentRequestError(error)) console.warn("store detail unavailable", row.customerCode, error.message); }
   }
@@ -581,11 +618,12 @@
       $("#vehicleModeLabel").textContent = "완료"; return;
     }
     renderStops(rows, { vehicles: selected.length ? selected : state.centerFilter ? SOURCE.vehicles.filter((vehicle) => vehicle.group === state.centerFilter).map((vehicle) => String(vehicle.vehicle)) : [] });
-    const latest = String(latestDateFromRows(stores) || latestDateFromRows(allStores) || inferLatestDate()).slice(0, 10);
+    const latest = String(snapshotMeta?.latestDate || latestDateFromRows(stores) || latestDateFromRows(allStores) || inferLatestDate()).slice(0, 10);
     updateDateRange(latest);
     $("#mapStatusSub").textContent = `${formatShort(daysBefore(latest, 59))} ~ ${formatShort(latest)} 기준 · ${stores.length}개 매장`;
     const ageDays = Math.max(0, Math.floor((Date.now() - Date.parse(`${latest}T00:00:00+09:00`)) / 86400000));
-    $("#freshnessState").textContent = `60일 스냅샷 · ${ageDays <= 1 ? "정상" : `지연 ${ageDays}일`}`;
+    const generated = snapshotMeta?.generatedAt ? new Date(snapshotMeta.generatedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+    $("#freshnessState").textContent = `60일 스냅샷 · ${ageDays <= 1 ? "정상" : `지연 ${ageDays}일`}${generated ? ` · 생성 ${generated}` : ""}`;
     $("#vehicleModeLabel").textContent = "완료 · 스냅샷";
     if (selected.length === 1) refreshSelectedVehicle(selected[0], requestId);
   }
@@ -632,7 +670,7 @@
   function inferLatestDate() {
     const configured = $("#latestDate")?.textContent?.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(configured)) return configured;
-    const snapshot = String(SOURCE.last_new_store_import?.updatedAt || "").slice(0, 10);
+    const snapshot = String(snapshotMeta?.latestDate || SOURCE.last_new_store_import?.updatedAt || "").slice(0, 10);
     return /^\d{4}-\d{2}-\d{2}$/.test(snapshot) ? snapshot : new Date().toISOString().slice(0, 10);
   }
 
@@ -1014,4 +1052,5 @@
   syncBoundaryButtons();
   refreshVehicleUi(false);
   initMap();
+  refreshStoreSnapshot();
 })();
