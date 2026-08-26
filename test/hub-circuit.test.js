@@ -51,6 +51,23 @@ test("Route timeout opens only Route", async () => {
   assert.equal((await client.callHub("mapBounds", { n: 1 }, { useCache: false })).ok, true);
 });
 
+test("concurrent identical Route requests share one Hub call and reuse cache", async () => {
+  const client = await freshClient();
+  let calls = 0;
+  global.fetch = async (_url, options) => {
+    calls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return ok(JSON.parse(options.body).action);
+  };
+  const params = { date: "2026-08-11", vehicle: "101" };
+  const [first, second] = await Promise.all([client.callHub("routePlan", params), client.callHub("routePlan", params)]);
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(calls, 1);
+  assert.equal((await client.callHub("routePlan", params)).ok, true);
+  assert.equal(calls, 1);
+});
+
 test("HALF_OPEN allows one probe and closes on success", async () => {
   const client = await freshClient();
   process.env.HUB_CIRCUIT_FAILURE_THRESHOLD = "1";

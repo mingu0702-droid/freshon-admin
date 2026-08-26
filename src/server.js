@@ -3744,8 +3744,15 @@ app.get("/api/map-phase2b/preview/nearest", requireView, async (req, res) => {
 
 app.get("/api/map-phase2b/preview/route-plan", requireView, async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  const renderReceivedAt = Date.now();
   try {
-    return res.json(await callHub("routePlan", { date: String(req.query.date || ""), vehicle: String(req.query.vehicle || "") }));
+    const payload = await callHub("routePlan", { date: String(req.query.date || ""), vehicle: String(req.query.vehicle || "") });
+    const hubReturnedAt = Date.now();
+    const serializationStartedAt = Date.now();
+    JSON.stringify(payload);
+    const serializationMs = Date.now() - serializationStartedAt;
+    console.info(JSON.stringify({ component: "route-plan-profile", date: String(req.query.date || ""), vehicle: String(req.query.vehicle || ""), renderToHubMs: hubReturnedAt - renderReceivedAt, responseSerializationMs: serializationMs, renderTotalMs: Date.now() - renderReceivedAt, hubDurationMs: Number(payload?.meta?.durationMs || 0), hubProfile: payload?.meta?.routeProfile || null }));
+    return res.json(payload);
   } catch (error) {
     return res.status(502).json({ error: error.message });
   }
