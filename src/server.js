@@ -20,6 +20,8 @@ const __dirname = path.dirname(__filename);
 const publicDir = path.resolve(__dirname, "..", "public");
 const vehicleAreaSourceUrl = path.join(publicDir, "vehicle-data.js");
 const customerMasterSourceUrl = path.join(publicDir, "customer-master-20260604.json");
+const phase2bBundledSnapshotUrl = path.join(publicDir, "map-phase2b-snapshot.json");
+const phase2bRuntimeSnapshotUrl = path.join(os.tmpdir(), "freshon-map-phase2b-snapshot.json");
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
 const parseExcelScriptPath = path.join(__dirname, "parse_excel.py");
 const uploadDir = path.join(os.tmpdir(), "freshon-upload-files");
@@ -74,6 +76,8 @@ let customerMasterDataPromise = null;
 let googleDispatchMemoryCache = null;
 let googleRouteIndexMemoryCache = null;
 let googleDriverMemoryCache = null;
+let phase2bSnapshotMemory = null;
+let phase2bSnapshotRefreshPromise = null;
 let deliveryAdminSession = {
   cookie: config.deliveryAdminCookie || "",
   authorization: "",
@@ -164,6 +168,10 @@ function fixedDispatchSearchRow(row) {
     sourceFile: pickFirstValue(row, ["_sourceFile", "sourceFile"]),
     sourceSheet: pickFirstValue(row, ["_sourceSheet", "sourceSheet"]),
     gps: pickFirstValue(row, ["GPS정보", "gps"]),
+    ownerPhone: pickFirstValue(row, ["점주번호", "점주연락처", "대표전화", "고객전화번호", "customerPhone", "ownerPhone"]),
+    accessInfo: pickFirstValue(row, ["출입정보", "출입방법", "accessInfo", "accessMemo"]),
+    password: pickFirstValue(row, ["비밀번호", "출입비밀번호", "doorPassword", "password"]),
+    specialRemark: pickFirstValue(row, ["특이사항", "배송특이사항", "요청사항", "specialRemark", "deliveryRemark"]),
     lat,
     lng,
     hasCoords: lat !== null && lng !== null
@@ -1928,6 +1936,7 @@ function deliveryTaskStatus(row) {
     "deliveryCompleteAt",
     "taskCompletedAt",
     "deliveredAt",
+    "completeDatedAt",
     "completedDatedAt",
     "deliveryCompletedDatedAt"
   ]);
@@ -2021,9 +2030,126 @@ function extractDeliveryTaskRows(payload) {
 
 async function fetchDeliveryTaskRows({ date, vehicle }) {
   const selectedTokens = vehicleTokens(vehicle);
+  const rows = await fetchDeliveryTaskRowsForDate(date);
+  return rows.filter((row) => {
+    const tokens = vehicleTokens(deliveryTaskVehicle(row));
+    return [...tokens].some((token) => selectedTokens.has(token));
+  });
+}
+
+function phase2bSnapshotTileParts(tile) {
+  const latSpan = tile.north - tile.south;
+  const lngSpan = tile.east - tile.west;
+  if (latSpan >= lngSpan) {
+    const middle = (tile.south + tile.north) / 2;
+    return [{ ...tile, north: middle }, { ...tile, south: middle }];
+  }
+  const middle = (tile.west + tile.east) / 2;
+  return [{ ...tile, east: middle }, { ...tile, west: middle }];
+}
+
+async function phase2bSnapshotTile(tile, depth = 0) {
+  const limit = 2000;
+  const response = await callHub("mapBounds", { mode: "BASE_90D", vehicle: "", bounds: tile, limit }, { useCache: false });
+  const rows = Array.isArray(response.data) ? response.data : [];
+  if (rows.length < limit || depth >= 5 || Math.max(tile.north - tile.south, tile.east - tile.west) <= 0.25) return rows;
+  const parts = phase2bSnapshotTileParts(tile);
+  return [...await phase2bSnapshotTile(parts[0], depth + 1), ...await phase2bSnapshotTile(parts[1], depth + 1)];
+}
+
+function phase2bSnapshotPayload(rows) {
+  const unique = new Map();
+  rows.forEach((row) => {
+    const code = normalizeCell(row?.customerCode || row?.code);
+    if (!code) return;
+    const previous = unique.get(code);
+    if (!previous || String(row.lastDeliveryDate || "") >= String(previous.lastDeliveryDate || "")) unique.set(code, row);
+  });
+  const all = [...unique.values()];
+  const latestDate = all.map((row) => normalizeDateValue(row.lastDeliveryDate || row.deliveryDate)).filter(Boolean).sort().pop() || phase2bKstDate();
+  const start = new Date(`${latestDate}T00:00:00+09:00`);
+  start.setDate(start.getDate() - 59);
+  const startDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(start);
+  const filtered = all.filter((row) => {
+    const date = normalizeDateValue(row.lastDeliveryDate || row.deliveryDate);
+    return !date || date >= startDate;
+  });
+  return { version: "phase2b-map-snapshot-v1", generatedAt: new Date().toISOString(), latestDate, startDate, rowCount: filtered.length, rows: filtered };
+}
+
+function phase2bSnapshotMissingDates(latestDate, today) {
+  const dates = [];
+  const cursor = new Date(`${latestDate}T00:00:00+09:00`);
+  const end = new Date(`${today}T00:00:00+09:00`);
+  while (cursor < end && dates.length < 30) {
+    cursor.setDate(cursor.getDate() + 1);
+    dates.push(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(cursor));
+  }
+  return dates;
+}
+
+async function phase2bSnapshotDateRows(date, tiles) {
+  const rows = [];
+  for (let index = 0; index < tiles.length; index += 2) {
+    const batch = await Promise.all(tiles.slice(index, index + 2).map((bounds) => callHub("mapBounds", { mode: "DATE_ROUTE", date, vehicle: "", bounds, limit: 2000 }, { useCache: false })));
+    batch.forEach((response) => rows.push(...(Array.isArray(response.data) ? response.data : [])));
+  }
+  return rows;
+}
+
+async function readPhase2bSnapshot() {
+  if (phase2bSnapshotMemory) return phase2bSnapshotMemory;
+  for (const file of [phase2bRuntimeSnapshotUrl, phase2bBundledSnapshotUrl]) {
+    try {
+      const payload = JSON.parse(await fs.readFile(file, "utf8"));
+      if (Array.isArray(payload.rows) && payload.rows.length) return (phase2bSnapshotMemory = payload);
+    } catch (_) { /* next source */ }
+  }
+  return null;
+}
+
+async function refreshPhase2bSnapshot() {
+  if (!previewEnabled()) return null;
+  if (phase2bSnapshotRefreshPromise) return phase2bSnapshotRefreshPromise;
+  phase2bSnapshotRefreshPromise = (async () => {
+    const baseTiles = [
+      { south: 33, west: 124, north: 36, east: 128 },
+      { south: 33, west: 128, north: 36, east: 132 },
+      { south: 36, west: 124, north: 39, east: 128 },
+      { south: 36, west: 128, north: 39, east: 132 }
+    ];
+    const rows = [];
+    for (const tile of baseTiles) rows.push(...await phase2bSnapshotTile(tile));
+    const basePayload = phase2bSnapshotPayload(rows);
+    for (const date of phase2bSnapshotMissingDates(basePayload.latestDate, phase2bKstDate())) rows.push(...await phase2bSnapshotDateRows(date, baseTiles));
+    const today = phase2bKstDate();
+    const todayStatus = await phase2bTodayStatus(today).catch(() => null);
+    const knownByCode = new Map(rows.map((row) => [normalizeCell(row.customerCode || row.code), row]));
+    (todayStatus?.vehicles || []).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
+      const code = normalizeCell(stop.customerCode || stop.code);
+      const known = knownByCode.get(code) || {};
+      const lat = Number.isFinite(Number(stop.lat)) ? Number(stop.lat) : Number(known.lat);
+      const lng = Number.isFinite(Number(stop.lng)) ? Number(stop.lng) : Number(known.lng);
+      if (!code || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      rows.push({ ...known, ...stop, customerCode: code, vehicle: vehicle.vehicle, lat, lng, lastDeliveryDate: today });
+    }));
+    const payload = phase2bSnapshotPayload(rows);
+    if (!payload.rows.length) throw new Error("PHASE2B_SNAPSHOT_EMPTY");
+    await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
+    phase2bSnapshotMemory = payload;
+    console.info(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESHED", latestDate: payload.latestDate, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
+    return payload;
+  })().catch((error) => {
+    console.error(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESH_FAILED", error: error.message || String(error) }));
+    return null;
+  }).finally(() => { phase2bSnapshotRefreshPromise = null; });
+  return phase2bSnapshotRefreshPromise;
+}
+
+async function fetchDeliveryTaskRowsForDate(date) {
   const dateParam = `${date}T00:00:00+09:00`;
   const pageSize = 300;
-  const matchedRows = [];
+  const allRows = [];
   for (let page = 0; page < 20; page += 1) {
     const query = new URLSearchParams({
       logisticsCenterId: "1",
@@ -2034,14 +2160,10 @@ async function fetchDeliveryTaskRows({ date, vehicle }) {
     query.append("enteringDatedAtBetween", dateParam);
     const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
     const rows = extractDeliveryTaskRows(payload);
-    const matched = rows.filter((row) => {
-      const tokens = vehicleTokens(deliveryTaskVehicle(row));
-      return [...tokens].some((token) => selectedTokens.has(token));
-    });
-    matchedRows.push(...matched);
+    allRows.push(...rows);
     if (rows.length < pageSize) break;
   }
-  return matchedRows;
+  return allRows;
 }
 
 async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) {
@@ -3446,6 +3568,97 @@ app.use((error, _req, res, next) => {
   return next(error);
 });
 
+const phase2bTodayCache = new Map();
+const phase2bTodayInflight = new Map();
+
+function phase2bKstDate() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+function phase2bEventTime(row) {
+  const status = deliveryTaskStatus(row);
+  const nested = taskRowNested(row);
+  return status.completedAt
+    || deliveryStopText(row, ["completeDatedAt", "updatedAt", "enteringDatedAt", "confirmedAt", "createdAt"])
+    || deliveryStopText(nested.carrier, ["enteringDatedAt", "confirmDatedAt", "confirmedAt"]);
+}
+
+function phase2bDriver(row) {
+  const nested = taskRowNested(row);
+  const carrier = nested.carrier || {};
+  return {
+    driverName: deliveryStopText(row, ["driverName", "carrierName"]) || deliveryStopText(carrier, ["driverName", "name"]),
+    driverPhone: deliveryStopText(row, ["driverPhone", "driverTel", "carrierPhone"]) || deliveryStopText(carrier, ["phone", "phoneNumber", "tel"]),
+    carrierName: deliveryStopText(row, ["transportCompany", "carrierCompany"]) || deliveryStopText(carrier, ["companyName", "transportCompany"])
+  };
+}
+
+function phase2bTodayVehicleSummary(vehicle, rows, date) {
+  const sorted = rows.map((row, index) => ({ row, index, sort: deliveryTaskSortValue(row, index) }))
+    .sort((a, b) => a.sort - b.sort);
+  const stops = sorted.map((item, index) => buildStopFromDeliveryTaskRow(item.row, vehicle, index + 1));
+  const completed = stops.filter((stop) => stop.appRecorded);
+  const completedEvents = completed.map((stop) => ({ stop, time: Date.parse(stop.deliveryCompletedAt || "") })).filter((item) => Number.isFinite(item.time)).sort((a, b) => a.time - b.time);
+  const recentCompletedTimes = completedEvents.slice(-5).map((item) => item.time);
+  const intervals = recentCompletedTimes.slice(1).map((time, index) => (time - recentCompletedTimes[index]) / 60000).filter((value) => value > 0 && value < 360);
+  const avgMinutesPerStop = intervals.length ? intervals.reduce((sum, value) => sum + value, 0) / intervals.length : null;
+  const totalStops = stops.length;
+  const completedStops = completed.length;
+  const remainingStops = Math.max(0, totalStops - completedStops);
+  const latestCompleted = completedEvents[completedEvents.length - 1] || null;
+  const lastCompletedAt = latestCompleted ? new Date(latestCompleted.time).toISOString() : null;
+  const lastCompletedOrder = latestCompleted ? Number(latestCompleted.stop.sequence) || null : completed.reduce((max, stop) => Math.max(max, Number(stop.sequence) || 0), 0) || null;
+  const nextOrder = stops.filter((stop) => !stop.appRecorded).map((stop) => Number(stop.sequence) || 0).filter(Boolean).sort((a, b) => a - b)[0] || null;
+  const estimateBase = lastCompletedAt ? Math.max(Date.now(), Date.parse(lastCompletedAt)) : Date.now();
+  const estimatedEndAt = avgMinutesPerStop && remainingStops ? new Date(estimateBase + avgMinutesPerStop * remainingStops * 60000).toISOString() : null;
+  const idleMinutes = lastCompletedAt ? (Date.now() - Date.parse(lastCompletedAt)) / 60000 : 0;
+  let status = completedStops >= totalStops && totalStops ? "완료" : completedStops ? "배송중" : totalStops ? "출차전" : "데이터없음";
+  if (status === "배송중" && avgMinutesPerStop && idleMinutes > Math.max(30, avgMinutesPerStop * 2)) status = "지연 가능";
+  return {
+    date,
+    vehicle,
+    status,
+    totalStops,
+    completedStops,
+    remainingStops,
+    progressPercent: totalStops ? Math.round(completedStops * 100 / totalStops) : 0,
+    lastCompletedOrder,
+    lastCompletedAt,
+    nextOrder,
+    recentEventAt: lastCompletedAt || phase2bEventTime(sorted[sorted.length - 1]?.row) || null,
+    avgMinutesPerStop: avgMinutesPerStop == null ? null : Math.round(avgMinutesPerStop * 10) / 10,
+    estimateConfidence: completedEvents.length >= 5 ? "보통" : completedEvents.length >= 2 ? "낮음" : "없음",
+    estimatedEndAt,
+    ...phase2bDriver(sorted[0]?.row || {}),
+    stops
+  };
+}
+
+async function phase2bTodayStatus(date) {
+  const cached = phase2bTodayCache.get(date);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (phase2bTodayInflight.has(date)) return phase2bTodayInflight.get(date);
+  const pending = (async () => {
+    const rows = await fetchDeliveryTaskRowsForDate(date);
+    const byVehicle = new Map();
+    rows.forEach((row) => {
+      const vehicle = deliveryTaskVehicle(row);
+      if (!vehicle) return;
+      if (!byVehicle.has(vehicle)) byVehicle.set(vehicle, []);
+      byVehicle.get(vehicle).push(row);
+    });
+    const value = {
+      date,
+      generatedAt: new Date().toISOString(),
+      vehicles: [...byVehicle].map(([vehicle, vehicleRows]) => phase2bTodayVehicleSummary(vehicle, vehicleRows, date)).sort((a, b) => a.vehicle.localeCompare(b.vehicle, "ko", { numeric: true }))
+    };
+    phase2bTodayCache.set(date, { expiresAt: Date.now() + 60000, value });
+    return value;
+  })();
+  phase2bTodayInflight.set(date, pending);
+  try { return await pending; } finally { phase2bTodayInflight.delete(date); }
+}
+
 app.get("/api/map-phase2b/preview/status", requireView, (_req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   return res.json({ enabled: true, environment: "stage", metrics: hubMetrics() });
@@ -3458,6 +3671,45 @@ app.get("/api/map-phase2b/preview/search", requireView, async (req, res) => {
   } catch (error) {
     return res.status(502).json({ error: error.message });
   }
+});
+
+app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
+  if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
+  try {
+    const [hub, dispatch] = await Promise.all([
+      callHub("customerDetail", { customerCode }),
+      readDispatchSource(true).then((cache) => buildFixedDispatchSearchItems(cache, customerCode)[0] || {}).catch(() => ({}))
+    ]);
+    const data = hub.data || {};
+    return res.json({ ok: true, data: {
+      ...data,
+      customerCode,
+      customerName: data.customerName || dispatch.name || null,
+      address: [data.customerAddress || dispatch.address, data.detailAddress].filter(Boolean).join(" ").trim() || null,
+      vehicle: data.confirmedVehicle || dispatch.vehicle || null,
+      ownerPhone: dispatch.ownerPhone || null,
+      accessInfo: dispatch.accessInfo || null,
+      password: dispatch.password || null,
+      specialRemark: dispatch.specialRemark || null,
+      driverName: data.driverName || null,
+      driverPhone: data.driverPhone || null,
+      area: data.area || null,
+      center: data.center || dispatch.center || null,
+      lastDeliveryDate: dispatch.deliveryDate || null
+    }, meta: hub.meta || {}, error: null });
+  } catch (error) {
+    return res.status(502).json({ ok: false, data: null, error: error.message || String(error) });
+  }
+});
+
+app.get("/api/map-phase2b/preview/snapshot", requireView, async (_req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  const payload = await readPhase2bSnapshot();
+  if (!payload) return res.status(503).json({ error: "PHASE2B_SNAPSHOT_NOT_READY" });
+  const ageMs = Math.max(0, Date.now() - Date.parse(payload.generatedAt || 0));
+  return res.json({ ok: true, data: payload.rows, meta: { version: payload.version, latestDate: payload.latestDate, startDate: payload.startDate, generatedAt: payload.generatedAt, rowCount: payload.rowCount, stale: ageMs > 12 * 60 * 60 * 1000 }, error: null });
 });
 
 app.get("/api/map-phase2b/preview/bounds", requireView, async (req, res) => {
@@ -3499,6 +3751,19 @@ app.get("/api/map-phase2b/preview/route-plan", requireView, async (req, res) => 
   }
 });
 
+app.get("/api/map-phase2b/preview/today-status", requireView, async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  const date = normalizeDateValue(req.query.date) || phase2bKstDate();
+  const vehicle = normalizeVehicleValue(req.query.vehicle);
+  try {
+    const payload = await phase2bTodayStatus(date);
+    const vehicles = vehicle ? payload.vehicles.filter((row) => normalizeVehicleValue(row.vehicle) === vehicle) : payload.vehicles;
+    return res.json({ ok: true, data: { ...payload, vehicles }, error: null });
+  } catch (error) {
+    return res.status(error.status || 502).json({ ok: false, data: null, error: error.message || String(error) });
+  }
+});
+
 app.all("/api/*", (req, res) => {
   res.status(404).json({
     ok: false,
@@ -3514,6 +3779,10 @@ app.get("*", (_req, res) => {
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
+  if (previewEnabled()) {
+    setTimeout(() => refreshPhase2bSnapshot(), 5000).unref();
+    setInterval(() => refreshPhase2bSnapshot(), Math.max(60 * 60 * 1000, Number(process.env.MAP_PHASE2B_SNAPSHOT_REFRESH_MS || 6 * 60 * 60 * 1000))).unref();
+  }
 });
 
 function shutdown(signal) {
