@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 const VERSION = "map-phase2-v1";
 const cache = new Map();
+const inFlight = new Map();
 const state = { circuits: new Map(), metrics: { requests: 0, success: 0, timeout: 0, error: 0, match: 0, mismatch: 0, latencyMs: [] } };
 
 function circuitFor(action) {
@@ -92,9 +93,16 @@ export function previewEnabled() {
 export async function callHub(action, params, { useCache = true } = {}) {
   if (!process.env.HUB_API_URL) throw new Error("HUB_API_URL_NOT_CONFIGURED");
   const key = `${action}:${stable(params || {})}`;
-  const entered = circuitEnter(action);
   const saved = cache.get(key);
-  if (!entered.probe && useCache && saved && saved.expiresAt > Date.now()) return saved.value;
+  if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
+  if (useCache && inFlight.has(key)) return inFlight.get(key);
+  const request = callHubUncached(action, params, key);
+  if (useCache) inFlight.set(key, request);
+  try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
+}
+
+async function callHubUncached(action, params, key) {
+  const entered = circuitEnter(action);
   const started = Date.now();
   state.metrics.requests += 1;
   const actionTimeoutMs = {
@@ -109,6 +117,7 @@ export async function callHub(action, params, { useCache = true } = {}) {
   const attempts = entered.probe ? 1 : 2;
   let timedOut = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const attemptStarted = Date.now();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -117,11 +126,14 @@ export async function callHub(action, params, { useCache = true } = {}) {
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw new Error("HUB_INVALID_CONTRACT");
       if (!response.ok || !json.ok) throw new Error(`HUB_${json?.error?.code || response.status}`);
       circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
-      cache.set(key, { expiresAt: Date.now() + 60000, value: json });
+      const ttlMs = action === "routePlan" ? Number(process.env.HUB_ROUTE_CACHE_TTL_MS || 300000) : 60000;
+      cache.set(key, { expiresAt: Date.now() + ttlMs, value: json });
+      if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, totalMs: Date.now() - started, hubDurationMs: Number(json.meta?.durationMs || 0), hubProfile: json.meta?.routeProfile || null, cache: "MISS" }));
       return json;
     } catch (error) {
       lastError = error;
       if (error.name === "AbortError") { state.metrics.timeout += 1; timedOut = true; } else state.metrics.error += 1;
+      if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", result: "FAIL" }));
     } finally { clearTimeout(timer); }
   }
   circuitFailure(action, entered.circuit, timedOut, entered.probe);
