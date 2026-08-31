@@ -46,20 +46,29 @@ function isPhoneLike(value) {
   return /^(?:01[016789]|0\d{1,2})[-\s]?\d{3,4}[-\s]?\d{4}$/.test(text) || (digits.length >= 9 && digits.length <= 11 && /^0/.test(digits));
 }
 
+function stripPhone(value) {
+  return String(value || "").replace(/(?:01[016789]|0\d{1,2})[-\s]?\d{3,4}[-\s]?\d{4}/g, "").replace(/\s{2,}/g, " ").trim();
+}
+
 export function parseAccessMemo(value) {
   const raw = String(value || "").replace(/\r/g, "").trim();
   if (!raw) return { accessInfo: "", password: "", specialRemark: "" };
-  const passwordPattern = /(?:도어락\s*)?(?:비밀번호|출입비번|비번|번호키|보안키|공동현관)\s*(?:[:：=\-]\s*)?([A-Za-z0-9#*\/_-]{2,})/iu;
+  const passwordPattern = /(?:(?:출입문\s*)?도어락(?:\s*비밀번호)?|출입비밀번호|비밀번호|출입비번|비번|번호키|보안키|공동현관)\s*(?:[:：=\-]\s*)?([A-Za-z0-9#*\/_-]{2,})/iu;
   const passwordMatch = raw.match(passwordPattern);
-  const password = passwordMatch && !isPhoneLike(passwordMatch[1]) ? passwordMatch[1] : "";
+  let password = passwordMatch && !isPhoneLike(passwordMatch[1]) ? passwordMatch[1] : "";
   const access = [];
   const notes = [];
-  raw.split(/\n|[;；]+/u).map((line) => line.trim()).filter(Boolean).forEach((line) => {
-    if (isPhoneLike(line) || /(?:점주|대표|고객)\s*(?:전화|연락처|번호)/u.test(line)) return;
+  raw.split(/\n|[;；]+|\s+\/\s+|\/\s+(?=[가-힣*(])/u).map((line) => stripPhone(line).replace(/^[*•\-\s]+/u, "").trim()).filter(Boolean).forEach((line) => {
+    if (isPhoneLike(line) || /^(?:점주|대표|고객)\s*(?:전화|연락처|번호)/u.test(line)) return;
     const cleaned = line.replace(passwordPattern, "").replace(/^[\s,:：=\-]+|[\s,:：=\-]+$/g, "").trim();
-    if (/^(?:출입방법|출입정보)\s*[:：]?/u.test(line)) {
-      const entry = line.replace(/^(?:출입방법|출입정보)\s*[:：]?\s*/u, "").replace(passwordPattern, "").trim();
-      if (entry && !isPhoneLike(entry)) access.push(entry);
+    if (/^(?:가게)?출입방법|^출입정보/u.test(line)) {
+      const entry = line.replace(/^(?:(?:가게)?출입방법|출입정보)\s*[:：]?\s*/u, "").replace(passwordPattern, "").trim();
+      const credential = entry.match(/^['"]?([A-Za-z0-9#*\/_-]{2,})(?=['"\s(]|$)/u)?.[1] || "";
+      if (credential && !isPhoneLike(credential)) {
+        if (!password) password = credential;
+        const remainder = entry.slice(entry.indexOf(credential) + credential.length).replace(/^['"\s]+/, "").trim();
+        if (remainder) access.push(remainder);
+      } else if (entry && !isPhoneLike(entry)) access.push(entry);
     } else if (/^(?:특이사항|메모|비고)\s*[:：]?/u.test(line)) {
       const note = line.replace(/^(?:특이사항|메모|비고)\s*[:：]?\s*/u, "").trim();
       if (note && !isPhoneLike(note)) notes.push(note);
