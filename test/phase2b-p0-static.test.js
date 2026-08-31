@@ -28,7 +28,23 @@ test("search supports partial customer code and customerCode dedupe", () => {
   assert.match(runtime, /const key = row\.customerCode \|\|/);
 });
 
-test("center bounds use verified operating center data without comma-separated Hub vehicles", () => {
+test("base, center and vehicle views use the verified snapshot cache", () => {
   assert.match(runtime, /allStores\.filter\(\(row\) => row\.vehicleGroup === state\.centerFilter\)/);
-  assert.match(runtime, /vehicle:\s*selected\.length === 1 \? selected\[0\] : ""/);
+  assert.match(runtime, /selected\.length === 1 \? stores : representativeRows\(stores\)/);
+  assert.match(runtime, /60일 스냅샷/);
+  assert.match(runtime, /refreshSelectedVehicle/);
+  assert.match(runtime, /ttl:\s*300000/);
+});
+
+test("abort, stale response and timeout handling are explicit", () => {
+  assert.match(runtime, /previous\.controller\.abort\("superseded"\)/);
+  assert.match(runtime, /STALE_RESPONSE/);
+  assert.match(runtime, /요청 시간이 초과되었습니다/);
+  assert.match(runtime, /isSilentRequestError/);
+});
+
+test("single address judging validates input before geocoding", () => {
+  assert.match(runtime, /주소 또는 고객정보를 정확히 입력하세요/);
+  assert.match(runtime, /validNewAreaInput/);
+  assert.doesNotMatch(runtime, /newAreaSingleInput/);
 });
