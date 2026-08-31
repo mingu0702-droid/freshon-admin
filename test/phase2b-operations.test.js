@@ -30,3 +30,17 @@ test("ETA is withheld when completion evidence is insufficient", () => {
     assert.deepEqual(parseAccessMemo(memo), { accessInfo, password, specialRemark });
   });
 });
+
+[
+  ["*출입방법: 1004", "1004"],
+  ["도어락 비밀번호 : 2740*", "2740*"],
+  ["출입문 도어락 : *8822*", "*8822*"],
+  ["*출입비밀번호 : 5188*/ 도어락 뚜껑 닫은 뒤 잠금 확인", "5188*"],
+  ["*출입방법: 건물 우측 전기단자함 보안키 확인 (사용후 제자리) / *특이사항: 4시까지 영업", ""]
+].forEach(([memo, password], index) => {
+  test(`live Customer access memo pattern ${index + 1}`, () => {
+    const parsed = parseAccessMemo(memo);
+    assert.equal(parsed.password, password);
+    assert.doesNotMatch(`${parsed.accessInfo} ${parsed.specialRemark}`, /010[-\s]?\d{3,4}[-\s]?\d{4}/);
+  });
+});
