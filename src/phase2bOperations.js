@@ -54,11 +54,11 @@ export function parseAccessMemo(value) {
   const raw = String(value || "").replace(/\r/g, "").trim();
   if (!raw) return { accessInfo: "", password: "", specialRemark: "" };
   const passwordPattern = /(?:(?:출입문\s*)?도어락(?:\s*비밀번호)?|출입비밀번호|비밀번호|출입비번|비번|번호키|보안키|공동현관)\s*(?:[:：=\-]\s*)?([A-Za-z0-9#*\/_-]{2,})/iu;
-  const passwordMatch = raw.replace(/\/\s+(?=[가-힣*(])/gu, "\n").match(passwordPattern);
+  const passwordMatch = raw.replace(/\/[ \t]+(?=[가-힣*(])/gu, "\n").match(passwordPattern);
   let password = passwordMatch && !isPhoneLike(passwordMatch[1]) ? passwordMatch[1] : "";
   const access = [];
   const notes = [];
-  raw.split(/\n|[;；]+|\s+\/\s+|\/\s+(?=[가-힣*(])/u).map((line) => stripPhone(line).replace(/^[*•\-\s]+/u, "").trim()).filter(Boolean).forEach((line) => {
+  raw.split(/\n|[;；]+|[ \t]+\/[ \t]+|\/[ \t]+(?=[가-힣*(])/u).map((line) => stripPhone(line).replace(/^[*•\-\s]+/u, "").trim()).filter(Boolean).forEach((line) => {
     if (isPhoneLike(line) || /^(?:점주|대표|고객)\s*(?:전화|연락처|번호)/u.test(line)) return;
     const cleaned = line.replace(passwordPattern, "").replace(/^[\s,:：=\-]+|[\s,:：=\-]+$/g, "").trim();
     if (/^(?:가게)?출입방법|^출입정보/u.test(line)) {
