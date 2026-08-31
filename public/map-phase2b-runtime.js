@@ -308,13 +308,12 @@
     $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">${esc(row.customerCode || "외부 주소")}</div><div class="storeName">${esc(row.customerName || "가상 위치")}</div></div>
       <div class="detailBody">
         <div class="detailLine"><b>주소</b><span>${esc(row.address || "-")}</span></div>
+        <div class="detailLine"><b>상세주소</b><span>${esc(row.detailAddress || "-")}</span></div>
         <div class="detailLine"><b>호차</b><span>${vehicle ? `${esc(vehicle)}호` : "-"}</span></div>
-        <div class="detailLine"><b>점주번호</b><span>${esc(row.ownerPhone || row.phone || "-")}</span></div>
         <div class="detailLine"><b>출입정보</b><span>${esc(row.accessInfo || row.accessMemo || "-")}</span></div>
         <div class="detailLine"><b>비밀번호</b><span>${esc(row.password || "-")}</span></div>
         <div class="detailLine"><b>최근배송</b><span>${esc(row.lastDeliveryDate || row.deliveryDate || "-")}</span></div>
         <div class="detailLine"><b>특이사항</b><span>${esc(row.specialRemark || row.deliveryRemark || row.accessMemo || "-")}</span></div>
-        <div class="detailLine"><b>최근 클레임</b><span>${row.claimSummary ? esc(row.claimSummary) : "연결 데이터 없음"}</span></div>
         <div class="detailLine"><b>배송요일</b><span>${esc(row.deliveryPattern || row.deliveryPatternText || "-")}</span></div>
         <div class="detailLine"><b>배송권역</b><span>${esc(row.areaLabel || row.region || "-")}</span></div>
         <div class="stats"><div class="stat"><strong>${row.deliveryCount90d ?? row.deliveryCount ?? "-"}</strong><span>60일 배송</span></div>${orderCard}${statusCard}</div>
@@ -329,7 +328,7 @@
       showMobileMap();
       document.body.classList.add("routeSheetOpen");
     });
-    if (!skipEnrich && row.customerCode && !(row.ownerPhone || row.phone || row.accessInfo || row.password || row.specialRemark)) enrichStoreDetail(row, element);
+    if (!skipEnrich && row.customerCode) enrichStoreDetail(row, element);
   }
 
   async function enrichStoreDetail(row, element) {
@@ -346,6 +345,13 @@
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     element?.classList.add("selected");
     const vehicle = normalizeVehicle(row.vehicle);
+    if (selectedVehicles().length !== 1 || selectedVehicles()[0] !== vehicle) {
+      setSelectedVehicles([vehicle]);
+      if ([...$("#mobileBaseVehicle").options].some((option) => option.value === vehicle)) $("#mobileBaseVehicle").value = vehicle;
+      refreshVehicleUi(false);
+      requestMapFit();
+      await loadBaseMap();
+    }
     $("#detailSection").classList.add("open");
     $("#detail").className = "detailCard";
     $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose">×</button><div class="code">${esc(vehicle)}호</div><div class="storeName">당일 운행 현황 조회 중...</div></div>`;
@@ -356,23 +362,41 @@
       if (requestId !== state.todayRequestId) return;
       const status = payload.data?.vehicles?.[0];
       renderVehiclePanel(vehicle, status, row);
+      renderTodayVehicleRoute(vehicle, status);
     } catch (error) {
       if (isSilentRequestError(error) || requestId !== state.todayRequestId) return;
       renderVehiclePanel(vehicle, null, row, error.message);
     }
   }
 
+  function renderTodayVehicleRoute(vehicle, status) {
+    const stops = (status?.stops || []).map((stop) => normalizeRouteStop({
+      ...stop,
+      status: stop.appRecorded ? "COMPLETED" : "PENDING"
+    }, vehicle)).filter((stop) => Number.isFinite(stop.lat) && Number.isFinite(stop.lng));
+    if (!stops.length) return;
+    requestMapFit();
+    renderStops(stops, { numbered: true, vehicles: [vehicle] });
+    drawRoute(stops);
+    $("#mapStatusTitle").textContent = `${vehicle}호 당일 진행현황`;
+    $("#mapStatusSub").textContent = `${status.date} · ${status.completedStops}/${status.totalStops} 완료`;
+  }
+
   function renderVehiclePanel(vehicle, status, row, error = "") {
     const driver = driverByVehicle.get(vehicle) || {};
     const lastTime = formatTime(status?.lastCompletedAt);
     const end = formatTime(status?.estimatedEndAt);
-    const estimate = end ? `${end}${status.estimateConfidence === "낮음" ? " 전후 · 신뢰도 낮음" : " 예상"}` : "계산 데이터 부족";
+    const estimate = end ? `${end}${status.estimateConfidence === "낮음" ? " 전후 · 신뢰도 낮음" : " 예상"}` : "예상시간 산출 중";
+    const remainingText = status?.remainingMinutes == null ? "예상시간 산출 중" : status.remainingMinutes < 60 ? `약 ${status.remainingMinutes}분` : `약 ${Math.floor(status.remainingMinutes / 60)}시간 ${status.remainingMinutes % 60}분`;
+    const lastStore = status?.lastCompletedStore?.customerName || status?.lastCompletedStore?.customerCode || "";
+    const nextStore = status?.nextStop?.customerName || status?.nextStop?.customerCode || "";
     $("#detailSection").classList.add("open");
     $("#detail").className = "detailCard";
     $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose">×</button><div class="code">${esc(vehicle)}호 · ${esc(status?.driverName || driver.driverName || driver.name || "기사 미확인")}</div><div class="storeName">${esc(status?.status || (error ? "조회 실패" : "데이터없음"))}</div></div><div class="detailBody">
       ${error ? `<div class="notice show">${esc(error)}</div>` : ""}
       <div class="stats"><div class="stat"><strong>${status?.totalStops ?? row.storeCount ?? "-"}</strong><span>총 착지</span></div><div class="stat"><strong>${status?.completedStops ?? "-"}</strong><span>완료</span></div><div class="stat"><strong>${status?.remainingStops ?? "-"}</strong><span>잔여</span></div></div>
-      <div class="detailLine"><b>진행률</b><span>${status ? `${status.progressPercent}%` : "-"}</span></div><div class="detailLine"><b>최근 완료</b><span>${status?.lastCompletedOrder ? `${status.lastCompletedOrder}착 / ${lastTime || "-"}` : "-"}</span></div><div class="detailLine"><b>다음 예정</b><span>${status?.nextOrder ? `${status.nextOrder}착` : "-"}</span></div><div class="detailLine"><b>최근 평균</b><span>${status?.avgMinutesPerStop ? `${status.avgMinutesPerStop}분/착` : "-"}</span></div><div class="detailLine"><b>예상 종료</b><span>${esc(estimate)}</span></div><div class="detailLine"><b>연락처</b><span>${esc(status?.driverPhone || driver.driverPhone || driver.phone || "-")}</span></div><div class="detailLine"><b>운수사</b><span>${esc(status?.carrierName || driver.carrierName || driver.companyName || "-")}</span></div>
+      <div class="progressTrack"><span style="width:${Math.max(0, Math.min(100, status?.progressPercent || 0))}%"></span></div>
+      <div class="detailLine"><b>진행률</b><span>${status ? `${status.progressPercent}%` : "-"}</span></div><div class="detailLine"><b>최근 완료</b><span>${status?.lastCompletedOrder ? `${status.lastCompletedOrder}착${lastStore ? ` · ${esc(lastStore)}` : ""} / ${lastTime || "-"}` : "-"}</span></div><div class="detailLine"><b>다음 예정</b><span>${status?.nextOrder ? `${status.nextOrder}착${nextStore ? ` · ${esc(nextStore)}` : ""}` : "-"}</span></div><div class="detailLine"><b>처리 속도</b><span>${status?.avgMinutesPerStop ? `평균 약 ${status.avgMinutesPerStop}분/착` : "산출 중"}</span></div><div class="detailLine"><b>예상 종료</b><span>${esc(estimate)}</span></div><div class="detailLine"><b>잔여 시간</b><span>${esc(remainingText)}</span></div><div class="detailLine"><b>연락처</b><span>${esc(status?.driverPhone || driver.driverPhone || driver.phone || "-")}</span></div><div class="detailLine"><b>운수사</b><span>${esc(status?.carrierName || driver.carrierName || driver.companyName || "-")}</span></div>
       <button id="vehicleTodayRoute" class="primary" style="width:100%;height:35px;margin-top:7px">실제 운행동선 보기</button></div>`;
     $("#detailClose")?.addEventListener("click", clearSelection);
     $("#vehicleTodayRoute")?.addEventListener("click", () => { $("#date").value = status?.date || localDate(); $("#vehicle").value = vehicle; loadRoute("pc"); });
@@ -449,11 +473,11 @@
       customerCode: code || local.customerCode || "",
       customerName: row.customerName || row.name || local.customerName || "",
       address: row.address || row.customerAddress || local.address || "",
+      detailAddress: row.detailAddress || row.addressDetail || local.detailAddress || "",
       vehicle: vehicle || local.vehicle || "",
       lat: numberOrNull(row.lat ?? row.latitude) ?? local.lat ?? null,
       lng: numberOrNull(row.lng ?? row.longitude) ?? local.lng ?? null,
-      ownerPhone: row.ownerPhone || row.storePhone || row.customerPhone || local.ownerPhone || "",
-      accessInfo: row.accessInfo || row.accessMemo || row.specialRemark || local.accessInfo || "",
+      accessInfo: row.accessInfo || local.accessInfo || "",
       password: row.password || row.doorPassword || local.password || "",
       lastDeliveryDate: row.lastDeliveryDate || row.deliveryDate || local.lastDeliveryDate || ""
     };
@@ -625,7 +649,7 @@
     const generated = snapshotMeta?.generatedAt ? new Date(snapshotMeta.generatedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
     $("#freshnessState").textContent = `60일 스냅샷 · ${ageDays <= 1 ? "정상" : `지연 ${ageDays}일`}${generated ? ` · 생성 ${generated}` : ""}`;
     $("#vehicleModeLabel").textContent = "완료 · 스냅샷";
-    if (selected.length === 1) refreshSelectedVehicle(selected[0], requestId);
+    if (selected.length === 1) await refreshSelectedVehicle(selected[0], requestId);
   }
 
   async function refreshSelectedVehicle(vehicle, requestId) {

@@ -14,6 +14,7 @@ import { requireAdmin, requireView } from "./auth.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
+import { calculateVehicleEta, parseAccessMemo } from "./phase2bOperations.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3599,21 +3600,18 @@ function phase2bTodayVehicleSummary(vehicle, rows, date) {
   const stops = sorted.map((item, index) => buildStopFromDeliveryTaskRow(item.row, vehicle, index + 1));
   const completed = stops.filter((stop) => stop.appRecorded);
   const completedEvents = completed.map((stop) => ({ stop, time: Date.parse(stop.deliveryCompletedAt || "") })).filter((item) => Number.isFinite(item.time)).sort((a, b) => a.time - b.time);
-  const recentCompletedTimes = completedEvents.slice(-5).map((item) => item.time);
-  const intervals = recentCompletedTimes.slice(1).map((time, index) => (time - recentCompletedTimes[index]) / 60000).filter((value) => value > 0 && value < 360);
-  const avgMinutesPerStop = intervals.length ? intervals.reduce((sum, value) => sum + value, 0) / intervals.length : null;
   const totalStops = stops.length;
   const completedStops = completed.length;
   const remainingStops = Math.max(0, totalStops - completedStops);
   const latestCompleted = completedEvents[completedEvents.length - 1] || null;
   const lastCompletedAt = latestCompleted ? new Date(latestCompleted.time).toISOString() : null;
   const lastCompletedOrder = latestCompleted ? Number(latestCompleted.stop.sequence) || null : completed.reduce((max, stop) => Math.max(max, Number(stop.sequence) || 0), 0) || null;
-  const nextOrder = stops.filter((stop) => !stop.appRecorded).map((stop) => Number(stop.sequence) || 0).filter(Boolean).sort((a, b) => a - b)[0] || null;
-  const estimateBase = lastCompletedAt ? Math.max(Date.now(), Date.parse(lastCompletedAt)) : Date.now();
-  const estimatedEndAt = avgMinutesPerStop && remainingStops ? new Date(estimateBase + avgMinutesPerStop * remainingStops * 60000).toISOString() : null;
+  const nextStop = stops.filter((stop) => !stop.appRecorded).sort((a, b) => Number(a.sequence) - Number(b.sequence))[0] || null;
+  const nextOrder = nextStop ? Number(nextStop.sequence) || null : null;
+  const eta = calculateVehicleEta(completedEvents, remainingStops);
   const idleMinutes = lastCompletedAt ? (Date.now() - Date.parse(lastCompletedAt)) / 60000 : 0;
   let status = completedStops >= totalStops && totalStops ? "완료" : completedStops ? "배송중" : totalStops ? "출차전" : "데이터없음";
-  if (status === "배송중" && avgMinutesPerStop && idleMinutes > Math.max(30, avgMinutesPerStop * 2)) status = "지연 가능";
+  if (status === "배송중" && eta.avgMinutesPerStop && idleMinutes > Math.max(30, eta.avgMinutesPerStop * 2)) status = "지연 가능";
   return {
     date,
     vehicle,
@@ -3624,11 +3622,11 @@ function phase2bTodayVehicleSummary(vehicle, rows, date) {
     progressPercent: totalStops ? Math.round(completedStops * 100 / totalStops) : 0,
     lastCompletedOrder,
     lastCompletedAt,
+    lastCompletedStore: latestCompleted ? { order: lastCompletedOrder, customerCode: latestCompleted.stop.customerCode, customerName: latestCompleted.stop.customerName } : null,
     nextOrder,
+    nextStop: nextStop ? { order: nextOrder, customerCode: nextStop.customerCode, customerName: nextStop.customerName } : null,
     recentEventAt: lastCompletedAt || phase2bEventTime(sorted[sorted.length - 1]?.row) || null,
-    avgMinutesPerStop: avgMinutesPerStop == null ? null : Math.round(avgMinutesPerStop * 10) / 10,
-    estimateConfidence: completedEvents.length >= 5 ? "보통" : completedEvents.length >= 2 ? "낮음" : "없음",
-    estimatedEndAt,
+    ...eta,
     ...phase2bDriver(sorted[0]?.row || {}),
     stops
   };
@@ -3683,16 +3681,22 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
       readDispatchSource(true).then((cache) => buildFixedDispatchSearchItems(cache, customerCode)[0] || {}).catch(() => ({}))
     ]);
     const data = hub.data || {};
+    const parsedMemo = parseAccessMemo([
+      data.accessMemo,
+      dispatch.accessInfo,
+      dispatch.password ? `비밀번호: ${dispatch.password}` : "",
+      dispatch.specialRemark
+    ].filter(Boolean).join("\n"));
     return res.json({ ok: true, data: {
       ...data,
       customerCode,
       customerName: data.customerName || dispatch.name || null,
-      address: [data.customerAddress || dispatch.address, data.detailAddress].filter(Boolean).join(" ").trim() || null,
+      address: data.customerAddress || dispatch.address || null,
+      detailAddress: data.detailAddress || null,
       vehicle: data.confirmedVehicle || dispatch.vehicle || null,
-      ownerPhone: dispatch.ownerPhone || null,
-      accessInfo: dispatch.accessInfo || null,
-      password: dispatch.password || null,
-      specialRemark: dispatch.specialRemark || null,
+      accessInfo: parsedMemo.accessInfo || null,
+      password: parsedMemo.password || null,
+      specialRemark: parsedMemo.specialRemark || null,
       driverName: data.driverName || null,
       driverPhone: data.driverPhone || null,
       area: data.area || null,
