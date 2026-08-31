@@ -3676,10 +3676,8 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
   const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
   if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
   try {
-    const [hub, dispatch] = await Promise.all([
-      callHub("customerDetail", { customerCode }),
-      readDispatchSource(true).then((cache) => buildFixedDispatchSearchItems(cache, customerCode)[0] || {}).catch(() => ({}))
-    ]);
+    const hub = await callHub("customerDetail", { customerCode });
+    const dispatch = {};
     const data = hub.data || {};
     const parsedMemo = parseAccessMemo([
       data.accessMemo,
