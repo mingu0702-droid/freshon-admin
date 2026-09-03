@@ -79,6 +79,7 @@ let googleRouteIndexMemoryCache = null;
 let googleDriverMemoryCache = null;
 let phase2bSnapshotMemory = null;
 let phase2bSnapshotRefreshPromise = null;
+let phase2bSnapshotRetryTimer = null;
 let deliveryAdminSession = {
   cookie: config.deliveryAdminCookie || "",
   authorization: "",
@@ -2147,6 +2148,18 @@ async function refreshPhase2bSnapshot() {
   return phase2bSnapshotRefreshPromise;
 }
 
+function schedulePhase2bSnapshotRefresh(delayMs = 5000) {
+  if (phase2bSnapshotRetryTimer) return;
+  phase2bSnapshotRetryTimer = setTimeout(async () => {
+    phase2bSnapshotRetryTimer = null;
+    const payload = await refreshPhase2bSnapshot();
+    if (!payload) {
+      schedulePhase2bSnapshotRefresh(Math.max(60000, Number(process.env.MAP_PHASE2B_SNAPSHOT_RETRY_MS || 60000)));
+    }
+  }, delayMs);
+  phase2bSnapshotRetryTimer.unref();
+}
+
 async function fetchDeliveryTaskRowsForDate(date) {
   const dateParam = `${date}T00:00:00+09:00`;
   const pageSize = 300;
@@ -3782,7 +3795,7 @@ app.get("*", (_req, res) => {
 const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
   if (previewEnabled()) {
-    setTimeout(() => refreshPhase2bSnapshot(), 5000).unref();
+    schedulePhase2bSnapshotRefresh();
     setInterval(() => refreshPhase2bSnapshot(), Math.max(60 * 60 * 1000, Number(process.env.MAP_PHASE2B_SNAPSHOT_REFRESH_MS || 6 * 60 * 60 * 1000))).unref();
   }
 });

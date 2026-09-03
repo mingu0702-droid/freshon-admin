@@ -26,6 +26,8 @@ test("today status exposes progress and event-derived estimate without GPS", () 
 test("rolling snapshot is served immediately and refreshed from Hub plus current Delivery Admin", () => {
   assert.match(server, /\/api\/map-phase2b\/preview\/snapshot/);
   assert.match(server, /refreshPhase2bSnapshot/);
+  assert.match(server, /schedulePhase2bSnapshotRefresh/);
+  assert.match(server, /MAP_PHASE2B_SNAPSHOT_RETRY_MS/);
   assert.match(server, /phase2bSnapshotMissingDates/);
   assert.match(server, /knownByCode/);
   assert.match(runtime, /refreshStoreSnapshot/);
