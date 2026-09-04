@@ -14,7 +14,7 @@ import { requireAdmin, requireView } from "./auth.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
-import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, splitHubBounds } from "./phase2bOperations.js";
+import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, phase2bCacheNamespace, phase2bSnapshotMeta, splitHubBounds } from "./phase2bOperations.js";
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2062,7 +2062,7 @@ async function phase2bSnapshotTile(tile, depth = 0) {
   return [...await phase2bSnapshotTile(parts[0], depth + 1), ...await phase2bSnapshotTile(parts[1], depth + 1)];
 }
 
-function phase2bSnapshotPayload(rows) {
+function phase2bSnapshotPayload(rows, state = {}) {
   const unique = new Map();
   rows.forEach((row) => {
     const code = normalizeCell(row?.customerCode || row?.code);
@@ -2079,7 +2079,7 @@ function phase2bSnapshotPayload(rows) {
     const date = normalizeDateValue(row.lastDeliveryDate || row.deliveryDate);
     return !date || date >= startDate;
   });
-  return { version: "phase2b-map-snapshot-v1", generatedAt: new Date().toISOString(), latestDate, startDate, rowCount: filtered.length, rows: filtered };
+  return { version: "phase2b-map-snapshot-v1", generatedAt: new Date().toISOString(), latestDate, startDate, rowCount: filtered.length, rows: filtered, ...state };
 }
 
 function phase2bSnapshotMissingDates(latestDate, today) {
@@ -2123,11 +2123,19 @@ async function refreshPhase2bSnapshot() {
       { south: 36, west: 124, north: 39, east: 128 },
       { south: 36, west: 128, north: 39, east: 132 }
     ];
-    const rows = [];
-    for (const tile of baseTiles) rows.push(...await phase2bSnapshotTile(tile));
+    const existing = await readPhase2bSnapshot();
+    const rows = Array.isArray(existing?.rows) ? [...existing.rows] : [];
+    if (!rows.length) for (const tile of baseTiles) rows.push(...await phase2bSnapshotTile(tile));
     const basePayload = phase2bSnapshotPayload(rows);
-    for (const date of phase2bSnapshotMissingDates(basePayload.latestDate, phase2bKstDate())) rows.push(...await phase2bSnapshotDateRows(date, baseTiles));
     const today = phase2bKstDate();
+    const refreshFrom = existing?.refreshedThrough || basePayload.latestDate;
+    for (const date of phase2bSnapshotMissingDates(refreshFrom, today)) {
+      rows.push(...await phase2bSnapshotDateRows(date, baseTiles));
+      const checkpoint = phase2bSnapshotPayload(rows, { refreshedThrough: date, refreshComplete: false });
+      await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(checkpoint));
+      phase2bSnapshotMemory = checkpoint;
+      console.info(JSON.stringify({ component: "phase2b-snapshot", event: "CHECKPOINT", latestDate: checkpoint.latestDate, refreshedThrough: date, rowCount: checkpoint.rowCount }));
+    }
     const todayStatus = await phase2bTodayStatus(today).catch(() => null);
     const knownByCode = new Map(rows.map((row) => [normalizeCell(row.customerCode || row.code), row]));
     (todayStatus?.vehicles || []).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
@@ -2138,11 +2146,12 @@ async function refreshPhase2bSnapshot() {
       if (!code || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
       rows.push({ ...known, ...stop, customerCode: code, vehicle: vehicle.vehicle, lat, lng, lastDeliveryDate: today });
     }));
-    const payload = phase2bSnapshotPayload(rows);
+    const payload = phase2bSnapshotPayload(rows, { refreshedThrough: today, refreshComplete: true });
     if (!payload.rows.length) throw new Error("PHASE2B_SNAPSHOT_EMPTY");
     await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
     phase2bSnapshotMemory = payload;
-    console.info(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESHED", latestDate: payload.latestDate, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
+    console.info(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESHED", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
+    setTimeout(() => warmPhase2bBounds().catch(() => {}), 1000).unref();
     return payload;
   })().catch((error) => {
     console.error(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESH_FAILED", error: error.message || String(error) }));
@@ -3708,7 +3717,7 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
   if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
   const started = Date.now();
   try {
-    const namespace = phase2bSnapshotMemory?.latestDate || "none";
+    const namespace = phase2bCacheNamespace(phase2bSnapshotMemory);
     const loaded = await phase2bDetailCache.load(`${namespace}:${customerCode}`, async () => {
       const hubStarted = Date.now();
       const hub = await callHub("customerDetail", { customerCode }, { useCache: false });
@@ -3723,7 +3732,8 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
     console.info(JSON.stringify({ component: "phase2b-detail-profile", customerCode, cache: loaded.cache, totalMs: Date.now() - started, serializationMs: Date.now() - serializationStarted, cacheStats: phase2bDetailCache.stats() }));
     return res.json(loaded.value);
   } catch (error) {
-    return res.status(502).json({ ok: false, data: null, error: error.message || String(error) });
+    const status = Number(error?.upstreamStatus) === 404 && error?.failureType === "upstream" ? 404 : 502;
+    return res.status(status).json({ ok: false, data: null, error: error.message || String(error) });
   }
 });
 
@@ -3731,9 +3741,46 @@ app.get("/api/map-phase2b/preview/snapshot", requireView, async (_req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const payload = await readPhase2bSnapshot();
   if (!payload) return res.status(503).json({ error: "PHASE2B_SNAPSHOT_NOT_READY" });
-  const ageMs = Math.max(0, Date.now() - Date.parse(payload.generatedAt || 0));
-  return res.json({ ok: true, data: payload.rows, meta: { version: payload.version, latestDate: payload.latestDate, startDate: payload.startDate, generatedAt: payload.generatedAt, rowCount: payload.rowCount, stale: ageMs > 12 * 60 * 60 * 1000 }, error: null });
+  return res.json({ ok: true, data: payload.rows, meta: phase2bSnapshotMeta(payload), error: null });
 });
+
+async function loadPhase2bBounds(params) {
+  const namespace = phase2bCacheNamespace(phase2bSnapshotMemory);
+  const cacheKey = `${namespace}:${params.mode}:${params.date || ""}:${params.vehicle}:${params.bounds.south},${params.bounds.west},${params.bounds.north},${params.bounds.east}:${params.limit}`;
+  return phase2bBoundsCache.load(cacheKey, async () => {
+    const tiles = splitHubBounds(params.bounds);
+    const responses = [];
+    const tileProfiles = [];
+    for (let index = 0; index < tiles.length; index += 2) {
+      const batch = await Promise.all(tiles.slice(index, index + 2).map(async (bounds, offset) => {
+        const tileStarted = Date.now();
+        const response = await callHub("mapBounds", { ...params, bounds }, { useCache: false });
+        tileProfiles.push({ tile: index + offset + 1, ms: Date.now() - tileStarted, hubDurationMs: Number(response.meta?.durationMs || 0), rows: Array.isArray(response.data) ? response.data.length : 0 });
+        return response;
+      }));
+      responses.push(...batch);
+    }
+    const mergeStarted = Date.now();
+    const value = responses.length === 1 ? responses[0] : mergeHubBoundsPayloads(responses, params.limit);
+    console.info(JSON.stringify({ component: "phase2b-bounds-profile", cache: "MISS", tileCount: tiles.length, concurrency: 2, tiles: tileProfiles, mergeMs: Date.now() - mergeStarted, rows: Array.isArray(value.data) ? value.data.length : 0 }));
+    return value;
+  });
+}
+
+async function warmPhase2bBounds() {
+  const targets = [
+    { name: "all", bounds: { south: 33, west: 124, north: 39, east: 132 } },
+    { name: "osan", bounds: { south: 36.8, west: 126.8, north: 37.3, east: 127.3 } }
+  ];
+  for (const target of targets) {
+    try {
+      const loaded = await loadPhase2bBounds({ mode: "BASE_90D", vehicle: "", bounds: target.bounds, limit: 2000 });
+      console.info(JSON.stringify({ component: "phase2b-warmup", target: target.name, cache: loaded.cache, result: "OK" }));
+    } catch (error) {
+      console.warn(JSON.stringify({ component: "phase2b-warmup", target: target.name, result: "FAILED", error: error.message || String(error) }));
+    }
+  }
+}
 
 app.get("/api/map-phase2b/preview/bounds", requireView, async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
@@ -3751,26 +3798,7 @@ app.get("/api/map-phase2b/preview/bounds", requireView, async (req, res) => {
       limit: 2000
     };
     if (req.query.date) params.date = String(req.query.date);
-    const namespace = phase2bSnapshotMemory?.latestDate || "none";
-    const cacheKey = `${namespace}:${params.mode}:${params.date || ""}:${params.vehicle}:${params.bounds.south},${params.bounds.west},${params.bounds.north},${params.bounds.east}:${params.limit}`;
-    const loaded = await phase2bBoundsCache.load(cacheKey, async () => {
-      const tiles = splitHubBounds(params.bounds);
-      const responses = [];
-      const tileProfiles = [];
-      for (let index = 0; index < tiles.length; index += 2) {
-        const batch = await Promise.all(tiles.slice(index, index + 2).map(async (bounds, offset) => {
-          const tileStarted = Date.now();
-          const response = await callHub("mapBounds", { ...params, bounds }, { useCache: false });
-          tileProfiles.push({ tile: index + offset + 1, ms: Date.now() - tileStarted, hubDurationMs: Number(response.meta?.durationMs || 0), rows: Array.isArray(response.data) ? response.data.length : 0 });
-          return response;
-        }));
-        responses.push(...batch);
-      }
-      const mergeStarted = Date.now();
-      const value = responses.length === 1 ? responses[0] : mergeHubBoundsPayloads(responses, params.limit);
-      console.info(JSON.stringify({ component: "phase2b-bounds-profile", cache: "MISS", tileCount: tiles.length, concurrency: 2, tiles: tileProfiles, mergeMs: Date.now() - mergeStarted, rows: Array.isArray(value.data) ? value.data.length : 0 }));
-      return value;
-    });
+    const loaded = await loadPhase2bBounds(params);
     const serializationStarted = Date.now();
     JSON.stringify(loaded.value);
     res.setHeader("X-Phase2B-Cache", loaded.cache);

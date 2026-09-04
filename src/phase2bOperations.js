@@ -117,6 +117,25 @@ export function mergeHubBoundsPayloads(payloads, limit = 2000) {
   return { ok: true, data, meta: { source: "hub-tiled", tileCount: payloads.length, rowCount: data.length, returnedCount: data.length }, error: null };
 }
 
+export function phase2bCacheNamespace(snapshot) {
+  return String(snapshot?.latestDate || "none");
+}
+
+export function phase2bSnapshotMeta(payload, now = Date.now()) {
+  const generatedAt = payload?.generatedAt || null;
+  const generatedMs = Date.parse(generatedAt || "");
+  const ageMs = Number.isFinite(generatedMs) ? Math.max(0, now - generatedMs) : Infinity;
+  return {
+    version: payload?.version || null,
+    latestDate: payload?.latestDate || null,
+    startDate: payload?.startDate || null,
+    generatedAt,
+    rowCount: Number(payload?.rowCount || 0),
+    refreshedThrough: payload?.refreshedThrough || payload?.latestDate || null,
+    stale: payload?.refreshComplete === false || ageMs > 12 * 60 * 60 * 1000
+  };
+}
+
 export function normalizePhase2bDetail(data, dispatch = {}) {
   const parsedMemo = parseAccessMemo([
     data?.accessMemo,

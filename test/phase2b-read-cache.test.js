@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createPhase2bReadCache } from "../src/phase2bReadCache.js";
-import { normalizePhase2bDetail } from "../src/phase2bOperations.js";
+import { normalizePhase2bDetail, phase2bCacheNamespace, phase2bSnapshotMeta } from "../src/phase2bOperations.js";
 
 function cache(options = {}) {
   let time = 1000;
@@ -53,6 +53,36 @@ test("failed stale refresh retains the last verified value", async () => {
   const { value, advance } = cache(); await value.load("detail:S3", async () => ({ ok: true })); advance(101);
   const stale = await value.load("detail:S3", async () => { throw new Error("refresh failed"); });
   assert.equal(stale.cache, "STALE"); assert.equal(stale.value.ok, true); await new Promise((resolve) => setImmediate(resolve)); assert.equal(value.stats().entries, 1);
+});
+
+test("SWR upstream 5xx keeps the stale user response successful", async () => {
+  const { value, advance } = cache(); await value.load("bounds:all", async () => ({ ok: true, data: [1] })); advance(101);
+  const stale = await value.load("bounds:all", async () => { throw Object.assign(new Error("HUB_503"), { upstreamStatus: 503 }); });
+  assert.equal(stale.cache, "STALE"); assert.equal(stale.value.ok, true); await new Promise((resolve) => setImmediate(resolve)); assert.equal(value.stats().entries, 1);
+});
+
+test("SWR network failure keeps the stale user response successful", async () => {
+  const { value, advance } = cache(); await value.load("detail:S4", async () => ({ ok: true, data: {} })); advance(101);
+  const stale = await value.load("detail:S4", async () => { throw new TypeError("fetch failed"); });
+  assert.equal(stale.cache, "STALE"); assert.equal(stale.value.ok, true); await new Promise((resolve) => setImmediate(resolve)); assert.equal(value.stats().inFlight, 0);
+});
+
+test("rejected single-flight promise is not reused", async () => {
+  const { value } = cache(); let calls = 0;
+  await assert.rejects(value.load("retry", async () => { calls += 1; throw new Error("first"); }));
+  const recovered = await value.load("retry", async () => ({ call: ++calls }));
+  assert.equal(recovered.value.call, 2); assert.equal(value.stats().inFlight, 0);
+});
+
+test("snapshot latest date changes the cache namespace", () => {
+  assert.notEqual(phase2bCacheNamespace({ latestDate: "2026-09-03" }), phase2bCacheNamespace({ latestDate: "2026-09-04" }));
+});
+
+test("snapshot freshness requires recent generation and completed refresh", () => {
+  const now = Date.parse("2026-09-05T00:00:00Z");
+  assert.equal(phase2bSnapshotMeta({ generatedAt: "2026-09-04T23:00:00Z", latestDate: "2026-09-04", rowCount: 1, refreshComplete: true }, now).stale, false);
+  assert.equal(phase2bSnapshotMeta({ generatedAt: "2026-09-04T23:00:00Z", latestDate: "2026-09-04", rowCount: 1, refreshComplete: false }, now).stale, true);
+  assert.equal(phase2bSnapshotMeta({ generatedAt: "2026-09-03T00:00:00Z", latestDate: "2026-09-03", rowCount: 1, refreshComplete: true }, now).stale, true);
 });
 
 test("max entries uses least-recently-used eviction", async () => {

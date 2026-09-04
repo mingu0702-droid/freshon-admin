@@ -146,3 +146,21 @@ test("transient Hub 503 is retried once with bounded backoff", async () => {
   assert.equal((await client.callHub("mapBounds", { bounds: {} }, { useCache: false })).ok, true);
   assert.equal(calls, 2);
 });
+
+test("cache miss with persistent Hub 503 fails after one retry", async () => {
+  const client = await freshClient(); let calls = 0;
+  global.fetch = async () => {
+    calls += 1;
+    return { ok: false, status: 503, text: async () => JSON.stringify({ ok: false, data: null, meta: { httpStatus: 503 }, error: { code: "TEMPORARY" } }) };
+  };
+  await assert.rejects(client.callHub("mapBounds", { bounds: {} }, { useCache: false }), /HUB_TEMPORARY/);
+  assert.equal(calls, 2);
+});
+
+test("cache miss with network failure retries once and remains uncached", async () => {
+  const client = await freshClient(); let calls = 0;
+  global.fetch = async () => { calls += 1; throw new TypeError("fetch failed"); };
+  await assert.rejects(client.callHub("mapBounds", { bounds: {} }), /fetch failed/);
+  await assert.rejects(client.callHub("mapBounds", { bounds: {} }), /fetch failed/);
+  assert.equal(calls, 4);
+});
