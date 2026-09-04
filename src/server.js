@@ -3675,7 +3675,22 @@ async function phase2bTodayStatus(date) {
 
 app.get("/api/map-phase2b/preview/status", requireView, (_req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
-  return res.json({ enabled: true, environment: "stage", metrics: hubMetrics() });
+  const memory = process.memoryUsage();
+  return res.json({
+    enabled: true,
+    environment: "stage",
+    metrics: hubMetrics(),
+    readCaches: {
+      bounds: phase2bBoundsCache.stats(),
+      detail: phase2bDetailCache.stats()
+    },
+    memory: {
+      rssBytes: memory.rss,
+      heapUsedBytes: memory.heapUsed,
+      heapTotalBytes: memory.heapTotal,
+      externalBytes: memory.external
+    }
+  });
 });
 
 app.get("/api/map-phase2b/preview/search", requireView, async (req, res) => {
