@@ -14,7 +14,8 @@ import { requireAdmin, requireView } from "./auth.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
-import { calculateVehicleEta, mergeHubBoundsPayloads, parseAccessMemo, splitHubBounds } from "./phase2bOperations.js";
+import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, splitHubBounds } from "./phase2bOperations.js";
+import { createPhase2bReadCache } from "./phase2bReadCache.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +24,8 @@ const vehicleAreaSourceUrl = path.join(publicDir, "vehicle-data.js");
 const customerMasterSourceUrl = path.join(publicDir, "customer-master-20260604.json");
 const phase2bBundledSnapshotUrl = path.join(publicDir, "map-phase2b-snapshot.json");
 const phase2bRuntimeSnapshotUrl = path.join(os.tmpdir(), "freshon-map-phase2b-snapshot.json");
+const phase2bBoundsCache = createPhase2bReadCache({ name: "bounds", ttlMs: Number(process.env.PHASE2B_BOUNDS_CACHE_TTL_MS || 600000), staleMs: 120000, maxEntries: 64, maxBytes: 24 * 1024 * 1024 });
+const phase2bDetailCache = createPhase2bReadCache({ name: "detail", ttlMs: Number(process.env.PHASE2B_DETAIL_CACHE_TTL_MS || 1200000), staleMs: 300000, maxEntries: 512, maxBytes: 8 * 1024 * 1024 });
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
 const parseExcelScriptPath = path.join(__dirname, "parse_excel.py");
 const uploadDir = path.join(os.tmpdir(), "freshon-upload-files");
@@ -3688,32 +3691,22 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
   if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
+  const started = Date.now();
   try {
-    const hub = await callHub("customerDetail", { customerCode });
-    const dispatch = {};
-    const data = hub.data || {};
-    const parsedMemo = parseAccessMemo([
-      data.accessMemo,
-      dispatch.accessInfo,
-      dispatch.password ? `비밀번호: ${dispatch.password}` : "",
-      dispatch.specialRemark
-    ].filter(Boolean).join("\n"));
-    return res.json({ ok: true, data: {
-      ...data,
-      customerCode,
-      customerName: data.customerName || dispatch.name || null,
-      address: data.customerAddress || dispatch.address || null,
-      detailAddress: data.detailAddress || null,
-      vehicle: data.confirmedVehicle || dispatch.vehicle || null,
-      accessInfo: parsedMemo.accessInfo || null,
-      password: parsedMemo.password || null,
-      specialRemark: parsedMemo.specialRemark || null,
-      driverName: data.driverName || null,
-      driverPhone: data.driverPhone || null,
-      area: data.area || null,
-      center: data.center || dispatch.center || null,
-      lastDeliveryDate: dispatch.deliveryDate || null
-    }, meta: hub.meta || {}, error: null });
+    const namespace = phase2bSnapshotMemory?.latestDate || "none";
+    const loaded = await phase2bDetailCache.load(`${namespace}:${customerCode}`, async () => {
+      const hubStarted = Date.now();
+      const hub = await callHub("customerDetail", { customerCode }, { useCache: false });
+      const normalizeStarted = Date.now();
+      const value = { ok: true, data: normalizePhase2bDetail(hub.data || {}, { customerCode }), meta: hub.meta || {}, error: null };
+      console.info(JSON.stringify({ component: "phase2b-detail-profile", customerCode, cache: "MISS", hubMs: normalizeStarted - hubStarted, hubDurationMs: Number(hub.meta?.durationMs || 0), normalizeMs: Date.now() - normalizeStarted }));
+      return value;
+    });
+    const serializationStarted = Date.now();
+    JSON.stringify(loaded.value);
+    res.setHeader("X-Phase2B-Cache", loaded.cache);
+    console.info(JSON.stringify({ component: "phase2b-detail-profile", customerCode, cache: loaded.cache, totalMs: Date.now() - started, serializationMs: Date.now() - serializationStarted, cacheStats: phase2bDetailCache.stats() }));
+    return res.json(loaded.value);
   } catch (error) {
     return res.status(502).json({ ok: false, data: null, error: error.message || String(error) });
   }
@@ -3729,6 +3722,7 @@ app.get("/api/map-phase2b/preview/snapshot", requireView, async (_req, res) => {
 
 app.get("/api/map-phase2b/preview/bounds", requireView, async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  const started = Date.now();
   try {
     const params = {
       mode: String(req.query.mode || "BASE_90D"),
@@ -3742,13 +3736,31 @@ app.get("/api/map-phase2b/preview/bounds", requireView, async (req, res) => {
       limit: 2000
     };
     if (req.query.date) params.date = String(req.query.date);
-    const tiles = splitHubBounds(params.bounds);
-    if (tiles.length === 1) return res.json(await callHub("mapBounds", params));
-    const responses = [];
-    for (let index = 0; index < tiles.length; index += 2) {
-      responses.push(...await Promise.all(tiles.slice(index, index + 2).map((bounds) => callHub("mapBounds", { ...params, bounds }))));
-    }
-    return res.json(mergeHubBoundsPayloads(responses, params.limit));
+    const namespace = phase2bSnapshotMemory?.latestDate || "none";
+    const cacheKey = `${namespace}:${params.mode}:${params.date || ""}:${params.vehicle}:${params.bounds.south},${params.bounds.west},${params.bounds.north},${params.bounds.east}:${params.limit}`;
+    const loaded = await phase2bBoundsCache.load(cacheKey, async () => {
+      const tiles = splitHubBounds(params.bounds);
+      const responses = [];
+      const tileProfiles = [];
+      for (let index = 0; index < tiles.length; index += 2) {
+        const batch = await Promise.all(tiles.slice(index, index + 2).map(async (bounds, offset) => {
+          const tileStarted = Date.now();
+          const response = await callHub("mapBounds", { ...params, bounds }, { useCache: false });
+          tileProfiles.push({ tile: index + offset + 1, ms: Date.now() - tileStarted, hubDurationMs: Number(response.meta?.durationMs || 0), rows: Array.isArray(response.data) ? response.data.length : 0 });
+          return response;
+        }));
+        responses.push(...batch);
+      }
+      const mergeStarted = Date.now();
+      const value = responses.length === 1 ? responses[0] : mergeHubBoundsPayloads(responses, params.limit);
+      console.info(JSON.stringify({ component: "phase2b-bounds-profile", cache: "MISS", tileCount: tiles.length, concurrency: 2, tiles: tileProfiles, mergeMs: Date.now() - mergeStarted, rows: Array.isArray(value.data) ? value.data.length : 0 }));
+      return value;
+    });
+    const serializationStarted = Date.now();
+    JSON.stringify(loaded.value);
+    res.setHeader("X-Phase2B-Cache", loaded.cache);
+    console.info(JSON.stringify({ component: "phase2b-bounds-profile", cache: loaded.cache, totalMs: Date.now() - started, serializationMs: Date.now() - serializationStarted, cacheStats: phase2bBoundsCache.stats() }));
+    return res.json(loaded.value);
   } catch (error) {
     return res.status(502).json({ error: error.message });
   }

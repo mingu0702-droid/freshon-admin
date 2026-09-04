@@ -121,3 +121,28 @@ test("customer detail timeout aborts once without duplicate upstream work", asyn
   await assert.rejects(client.callHub("customerDetail", { customerCode: "S222538" }, { useCache: false }), /aborted/);
   assert.equal(calls, 1);
 });
+
+test("map bounds timeout is deterministic and is not retried", async () => {
+  const client = await freshClient(); let calls = 0;
+  global.fetch = async () => { calls += 1; throw Object.assign(new Error("timeout"), { name: "AbortError" }); };
+  await assert.rejects(client.callHub("mapBounds", { bounds: {} }, { useCache: false }));
+  assert.equal(calls, 1);
+});
+
+test("Hub 4xx contract error is not retried", async () => {
+  const client = await freshClient(); let calls = 0;
+  global.fetch = async () => { calls += 1; return { ok: false, status: 400, text: async () => JSON.stringify({ ok: false, data: null, meta: { httpStatus: 400 }, error: { code: "INVALID_PARAMS" } }) }; };
+  await assert.rejects(client.callHub("mapBounds", { bounds: {} }, { useCache: false }), /HUB_INVALID_PARAMS/);
+  assert.equal(calls, 1);
+});
+
+test("transient Hub 503 is retried once with bounded backoff", async () => {
+  const client = await freshClient(); let calls = 0;
+  global.fetch = async (_url, options) => {
+    calls += 1;
+    if (calls === 1) return { ok: false, status: 503, text: async () => JSON.stringify({ ok: false, data: null, meta: { httpStatus: 503 }, error: { code: "TEMPORARY" } }) };
+    return ok(JSON.parse(options.body).action);
+  };
+  assert.equal((await client.callHub("mapBounds", { bounds: {} }, { useCache: false })).ok, true);
+  assert.equal(calls, 2);
+});

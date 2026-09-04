@@ -36,7 +36,7 @@ test("rolling snapshot is served immediately and refreshed from Hub plus current
 
 test("customer detail uses existing Hub and dispatch sources without fake values", () => {
   assert.match(server, /callHub\("customerDetail"/);
-  assert.match(server, /parseAccessMemo/);
+  assert.match(server, /normalizePhase2bDetail/);
   assert.doesNotMatch(server.slice(server.indexOf('app.get("\/api\/map-phase2b\/preview\/detail"'), server.indexOf('app.get("\/api\/map-phase2b\/preview\/snapshot"')), /ownerPhone/);
   assert.match(runtime, /\/api\/map-phase2b\/preview\/detail/);
   assert.doesNotMatch(runtime, /점주번호|최근 클레임/);

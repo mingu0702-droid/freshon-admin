@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 const VERSION = "map-phase2-v1";
 const cache = new Map();
 const inFlight = new Map();
+const HUB_CACHE_MAX_ENTRIES = 256;
 const state = { circuits: new Map(), metrics: { requests: 0, success: 0, timeout: 0, error: 0, match: 0, mismatch: 0, latencyMs: [] } };
 
 function circuitFor(action) {
@@ -101,6 +102,20 @@ export async function callHub(action, params, { useCache = true } = {}) {
   try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
 }
 
+function cacheHubResponse(key, expiresAt, value) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, { expiresAt, value });
+  const now = Date.now();
+  for (const [savedKey, saved] of cache) if (saved.expiresAt <= now) cache.delete(savedKey);
+  while (cache.size > HUB_CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value);
+}
+
+function retryableHubError(error) {
+  if (error?.name === "AbortError") return false;
+  if (!error?.failureType) return true;
+  return error.failureType === "upstream" && Number(error.upstreamStatus) >= 500;
+}
+
 async function callHubUncached(action, params, key) {
   const entered = circuitEnter(action);
   const started = Date.now();
@@ -118,18 +133,32 @@ async function callHubUncached(action, params, key) {
   let timedOut = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const attemptStarted = Date.now();
+    const signingStarted = Date.now();
     const body = requestBody(action, params);
+    const signingMs = Date.now() - signingStarted;
+    const serializationStarted = Date.now();
+    const serializedBody = JSON.stringify(body);
+    const requestSerializationMs = Date.now() - serializationStarted;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(process.env.HUB_API_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: controller.signal });
+      const fetchStarted = Date.now();
+      const response = await fetch(process.env.HUB_API_URL, { method: "POST", headers: { "content-type": "application/json" }, body: serializedBody, signal: controller.signal });
+      const responseHeadersMs = Date.now() - fetchStarted;
+      const bodyReadStarted = Date.now();
+      let responseText = null;
+      if (typeof response.text === "function") responseText = await response.text();
+      const bodyReadMs = Date.now() - bodyReadStarted;
+      const parseStarted = Date.now();
       let json;
-      try { json = await response.json(); } catch (_) { throw Object.assign(new Error("HUB_INVALID_JSON"), { upstreamStatus: response.status, failureType: "parse" }); }
+      try { json = responseText == null ? await response.json() : JSON.parse(responseText); } catch (_) { throw Object.assign(new Error("HUB_INVALID_JSON"), { upstreamStatus: response.status, failureType: "parse" }); }
+      const parseMs = Date.now() - parseStarted;
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
       circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
       const ttlMs = action === "routePlan" ? Number(process.env.HUB_ROUTE_CACHE_TTL_MS || 300000) : 60000;
-      cache.set(key, { expiresAt: Date.now() + ttlMs, value: json });
+      cacheHubResponse(key, Date.now() + ttlMs, json);
+      if (action === "mapBounds" || action === "customerDetail") console.info(JSON.stringify({ component: "hub-api-profile", action, requestId: body.requestId, attempt: attempt + 1, signingMs, requestSerializationMs, responseHeadersMs, bodyReadMs, parseMs, responseBytes: responseText == null ? null : Buffer.byteLength(responseText), hubDurationMs: Number(json.meta?.durationMs || 0), totalMs: Date.now() - attemptStarted }));
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, totalMs: Date.now() - started, hubDurationMs: Number(json.meta?.durationMs || 0), hubProfile: json.meta?.routeProfile || null, cache: "MISS" }));
       return json;
     } catch (error) {
@@ -137,6 +166,8 @@ async function callHubUncached(action, params, key) {
       if (error.name === "AbortError") { state.metrics.timeout += 1; timedOut = true; } else state.metrics.error += 1;
       console.warn(JSON.stringify({ component: "hub-api", action, requestId: body.requestId, attempt: attempt + 1, elapsedMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", upstreamStatus: error.upstreamStatus || null, failureType: error.failureType || (error.name === "AbortError" ? "timeout" : "network"), errorCode: error.name === "AbortError" ? "HUB_TIMEOUT" : String(error.message || "HUB_ERROR").slice(0, 80) }));
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", result: "FAIL" }));
+      if (attempt + 1 >= attempts || !retryableHubError(error)) break;
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
     } finally { clearTimeout(timer); }
   }
   circuitFailure(action, entered.circuit, timedOut, entered.probe);

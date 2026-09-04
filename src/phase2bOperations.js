@@ -116,3 +116,35 @@ export function mergeHubBoundsPayloads(payloads, limit = 2000) {
   const data = [...unique.values()].slice(0, limit);
   return { ok: true, data, meta: { source: "hub-tiled", tileCount: payloads.length, rowCount: data.length, returnedCount: data.length }, error: null };
 }
+
+export function normalizePhase2bDetail(data, dispatch = {}) {
+  const parsedMemo = parseAccessMemo([
+    data?.accessMemo,
+    dispatch.accessInfo,
+    dispatch.password ? `비밀번호: ${dispatch.password}` : "",
+    dispatch.specialRemark
+  ].filter(Boolean).join("\n"));
+  return {
+    customerCode: String(data?.customerCode || dispatch.customerCode || "").trim().toUpperCase(),
+    customerName: data?.customerName || dispatch.name || null,
+    address: data?.customerAddress || data?.address || dispatch.address || null,
+    detailAddress: data?.detailAddress || data?.addressDetail || null,
+    vehicle: data?.confirmedVehicle || data?.vehicle || dispatch.vehicle || null,
+    lat: Number.isFinite(Number(data?.lat ?? data?.latitude)) ? Number(data.lat ?? data.latitude) : null,
+    lng: Number.isFinite(Number(data?.lng ?? data?.longitude)) ? Number(data.lng ?? data.longitude) : null,
+    accessInfo: parsedMemo.accessInfo || null,
+    password: parsedMemo.password || null,
+    specialRemark: parsedMemo.specialRemark || null,
+    driverName: data?.driverName || null,
+    driverPhone: data?.driverPhone || null,
+    area: data?.area || null,
+    areaLabel: data?.areaLabel || null,
+    region: data?.region || null,
+    center: data?.center || dispatch.center || null,
+    lastDeliveryDate: dispatch.deliveryDate || data?.lastDeliveryDate || data?.deliveryDate || null,
+    deliveryPattern: data?.deliveryPattern || null,
+    deliveryPatternText: data?.deliveryPatternText || null,
+    deliveryCount90d: data?.deliveryCount90d ?? null,
+    deliveryCount: data?.deliveryCount ?? null
+  };
+}
