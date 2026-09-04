@@ -85,3 +85,34 @@ export function parseAccessMemo(value) {
     specialRemark: [...new Set(notes)].join(" · ")
   };
 }
+
+export function splitHubBounds(bounds, maxLatSpan = 5, maxLngSpan = 5) {
+  const south = Number(bounds?.south), west = Number(bounds?.west), north = Number(bounds?.north), east = Number(bounds?.east);
+  if (![south, west, north, east].every(Number.isFinite) || north <= south || east <= west) throw new Error("INVALID_BOUNDS");
+  const latParts = Math.max(1, Math.ceil((north - south) / maxLatSpan));
+  const lngParts = Math.max(1, Math.ceil((east - west) / maxLngSpan));
+  const tiles = [];
+  for (let y = 0; y < latParts; y += 1) {
+    for (let x = 0; x < lngParts; x += 1) {
+      tiles.push({
+        south: south + (north - south) * y / latParts,
+        west: west + (east - west) * x / lngParts,
+        north: south + (north - south) * (y + 1) / latParts,
+        east: west + (east - west) * (x + 1) / lngParts
+      });
+    }
+  }
+  return tiles;
+}
+
+export function mergeHubBoundsPayloads(payloads, limit = 2000) {
+  const unique = new Map();
+  for (const payload of payloads) {
+    for (const row of Array.isArray(payload?.data) ? payload.data : []) {
+      const key = [row.customerCode || row.code || "", row.vehicle || row.confirmedVehicle || "", row.lat ?? row.latitude ?? "", row.lng ?? row.longitude ?? ""].join("|");
+      if (!unique.has(key)) unique.set(key, row);
+    }
+  }
+  const data = [...unique.values()].slice(0, limit);
+  return { ok: true, data, meta: { source: "hub-tiled", tileCount: payloads.length, rowCount: data.length, returnedCount: data.length }, error: null };
+}

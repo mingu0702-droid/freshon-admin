@@ -14,7 +14,7 @@ import { requireAdmin, requireView } from "./auth.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
-import { calculateVehicleEta, parseAccessMemo } from "./phase2bOperations.js";
+import { calculateVehicleEta, mergeHubBoundsPayloads, parseAccessMemo, splitHubBounds } from "./phase2bOperations.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3742,7 +3742,13 @@ app.get("/api/map-phase2b/preview/bounds", requireView, async (req, res) => {
       limit: 2000
     };
     if (req.query.date) params.date = String(req.query.date);
-    return res.json(await callHub("mapBounds", params));
+    const tiles = splitHubBounds(params.bounds);
+    if (tiles.length === 1) return res.json(await callHub("mapBounds", params));
+    const responses = [];
+    for (let index = 0; index < tiles.length; index += 2) {
+      responses.push(...await Promise.all(tiles.slice(index, index + 2).map((bounds) => callHub("mapBounds", { ...params, bounds }))));
+    }
+    return res.json(mergeHubBoundsPayloads(responses, params.limit));
   } catch (error) {
     return res.status(502).json({ error: error.message });
   }

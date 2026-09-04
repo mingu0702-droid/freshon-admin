@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { calculateVehicleEta, parseAccessMemo } from "../src/phase2bOperations.js";
+import { calculateVehicleEta, mergeHubBoundsPayloads, parseAccessMemo, splitHubBounds } from "../src/phase2bOperations.js";
 
 test("ETA uses recent and overall valid completion intervals", () => {
   const base = Date.parse("2026-09-01T00:00:00.000Z");
@@ -43,4 +43,34 @@ test("ETA is withheld when completion evidence is insufficient", () => {
     assert.equal(parsed.password, password);
     assert.doesNotMatch(`${parsed.accessInfo} ${parsed.specialRemark}`, /010[-\s]?\d{3,4}[-\s]?\d{4}/);
   });
+});
+
+test("whole-country bounds are split within the Hub five-degree contract", () => {
+  const tiles = splitHubBounds({ south: 33, west: 124, north: 39, east: 132 });
+  assert.equal(tiles.length, 4);
+  tiles.forEach((tile) => {
+    assert.ok(tile.north - tile.south <= 5);
+    assert.ok(tile.east - tile.west <= 5);
+  });
+});
+
+test("Osan bounds remain a single Hub request", () => {
+  assert.equal(splitHubBounds({ south: 36.8, west: 126.6, north: 37.8, east: 127.3 }).length, 1);
+});
+
+test("vehicle 101 bounds remain a single Hub request", () => {
+  assert.equal(splitHubBounds({ south: 37.45, west: 127.0, north: 37.55, east: 127.1 }).length, 1);
+});
+
+test("tiled bounds merge removes overlap duplicates and respects limit", () => {
+  const payload = mergeHubBoundsPayloads([
+    { data: [{ customerCode: "S1", vehicle: "101", lat: 37, lng: 127 }] },
+    { data: [{ customerCode: "S1", vehicle: "101", lat: 37, lng: 127 }, { customerCode: "S2", vehicle: "102", lat: 36, lng: 128 }] }
+  ], 2);
+  assert.equal(payload.meta.tileCount, 2);
+  assert.deepEqual(payload.data.map((row) => row.customerCode), ["S1", "S2"]);
+});
+
+test("null access memo produces an empty safe detail", () => {
+  assert.deepEqual(parseAccessMemo(null), { accessInfo: "", password: "", specialRemark: "" });
 });

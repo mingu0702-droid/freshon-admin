@@ -95,3 +95,29 @@ test("failed HALF_OPEN probe reopens its circuit", async () => {
   assert.equal(client.hubMetrics().circuits.mapBounds.state, "OPEN");
   await assert.rejects(client.callHub("mapBounds", { n: 3 }, { useCache: false }), /HUB_CIRCUIT_OPEN/);
 });
+
+test("customer detail uses one long-running request instead of duplicate retries", async () => {
+  const client = await freshClient();
+  let calls = 0;
+  global.fetch = async (_url, options) => { calls += 1; return ok(JSON.parse(options.body).action); };
+  assert.equal((await client.callHub("customerDetail", { customerCode: "S222538" }, { useCache: false })).ok, true);
+  assert.equal(calls, 1);
+});
+
+test("malformed Hub JSON is classified without exposing response content", async () => {
+  const client = await freshClient();
+  global.fetch = async () => ({ status: 200, json: async () => { throw new SyntaxError("bad json"); } });
+  await assert.rejects(client.callHub("customerDetail", { customerCode: "S222538" }, { useCache: false }), /HUB_INVALID_JSON/);
+});
+
+test("customer detail timeout aborts once without duplicate upstream work", async () => {
+  const client = await freshClient();
+  process.env.HUB_DETAIL_TIMEOUT_MS = "10";
+  let calls = 0;
+  global.fetch = async (_url, options) => {
+    calls += 1;
+    return new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))));
+  };
+  await assert.rejects(client.callHub("customerDetail", { customerCode: "S222538" }, { useCache: false }), /aborted/);
+  assert.equal(calls, 1);
+});
