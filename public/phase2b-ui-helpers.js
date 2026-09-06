@@ -35,5 +35,14 @@
     }
     return [...nearest.values()].sort((a, b) => a.distance - b.distance);
   }
-  root.Phase2bUi = Object.freeze({ addressVariants, addressMatches, distanceKm, nearbyVehicles });
+  function deliveryBoundary(stores) {
+    const unique = new Map(stores.filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng)).map((row) => [`${row.lat}:${row.lng}`, { lat: row.lat, lng: row.lng }]));
+    const points = [...unique.values()].sort((a, b) => a.lng - b.lng || a.lat - b.lat);
+    if (points.length < 3) return [];
+    const cross = (a, b, c) => (b.lng - a.lng) * (c.lat - a.lat) - (b.lat - a.lat) * (c.lng - a.lng);
+    const half = (rows) => { const result = []; for (const row of rows) { while (result.length >= 2 && cross(result.at(-2), result.at(-1), row) <= 0) result.pop(); result.push(row); } return result.slice(0, -1); };
+    const hull = [...half(points), ...half(points.slice().reverse())];
+    return hull.length >= 3 ? hull : [];
+  }
+  root.Phase2bUi = Object.freeze({ addressVariants, addressMatches, distanceKm, nearbyVehicles, deliveryBoundary });
 })(typeof window === "undefined" ? globalThis : window);
