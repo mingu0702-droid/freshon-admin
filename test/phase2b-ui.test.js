@@ -32,6 +32,14 @@ test("30km references use nearest delivery point per vehicle and exclude distant
   assert.equal(rows[0].lat, 37.01);
 });
 
+test("selected-date boundary encloses only supplied assignments, excludes missing coordinates", () => {
+  const stores = [{lat:37,lng:127},{lat:37,lng:128},{lat:38,lng:127},{lat:37.1,lng:127.1},{lat:null,lng:129}];
+  const hull = helpers.deliveryBoundary(stores);
+  assert.equal(hull.length, 3);
+  assert.equal(hull.some((point) => point.lat === 37.1), false);
+  assert.equal(helpers.deliveryBoundary(stores.slice(0,2)).length, 0);
+});
+
 test("500m auto decision does not recommend stores 600m or 30km away", () => {
   const f = fixture();
   f.setStores([{ vehicle: "101", lat: 37.006, lng: 127 }]);

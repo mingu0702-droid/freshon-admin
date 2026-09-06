@@ -17,6 +17,7 @@
   let latestSnapshotRows = [];
   let dateRequestId = 0;
   let dateReady = false;
+  let dateChosenByUser = false;
   const geocodeCache = new Map();
 
   SOURCE.vehicles.forEach((vehicle, vehicleIndex) => {
@@ -57,14 +58,20 @@
 
   async function refreshStoreSnapshot() {
     try {
-      const payload = await fetchJson("/api/map-phase2b/preview/snapshot", { channel: "map-snapshot", ttl: 300000, timeout: 10000 });
+      const payload = await fetchJson("/api/map-phase2b/preview/snapshot", { channel: "map-snapshot", ttl: 0, timeout: 10000 });
       if (!Array.isArray(payload.data) || !payload.data.length) return;
       latestSnapshotRows = payload.data;
       snapshotMeta = payload.meta || null;
       state.latestDate = String(snapshotMeta?.latestDate || "").slice(0, 10);
       $("#selectedDate").max = state.latestDate;
-      await changeSelectedDate(state.selectedDate || state.latestDate);
-    } catch (_) { $("#freshnessState").textContent = "기준일 데이터 확인 실패 · 새로고침 필요"; }
+      if (snapshotMeta?.stale) {
+        $("#freshnessState").textContent = "최신 기준일 동기화 중 · 완료 후 자동 표시";
+        setTimeout(refreshStoreSnapshot, 30000);
+        return;
+      }
+      const target = dateChosenByUser ? state.selectedDate : state.latestDate;
+      if (!dateReady || target !== state.selectedDate) await changeSelectedDate(target);
+    } catch (_) { $("#freshnessState").textContent = "기준일 데이터 확인 실패 · 재확인 중"; setTimeout(refreshStoreSnapshot, 30000); }
   }
 
   async function changeSelectedDate(date) {
@@ -306,7 +313,7 @@
     clearMap();
     state.currentRows = rows.slice();
     if (!state.map) return;
-    const valid = rows.filter((row) => Number.isFinite(Number(row.lat)) && Number.isFinite(Number(row.lng)));
+    const valid = rows.filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng));
     if (!valid.length) {
       $("#mapStatusSub").textContent = "조회 결과 없음";
       return;
@@ -323,7 +330,7 @@
       });
       overlay.setMap(state.map);
       state.overlays.push(overlay);
-      if (row.representative) state.representativeOverlays.push(overlay);
+      if (row.representative || row.nearbyVehicle) state.representativeOverlays.push(overlay);
     });
     if (state.areaOn && options.boundaries !== false) drawSelectedBoundaries(options.vehicles || selectedVehicles());
     if (!state.areaOn) state.representativeOverlays.forEach((overlay) => overlay.setMap(null));
@@ -337,21 +344,21 @@
   }
 
   function drawSelectedBoundaries(selected) {
-    const vehicles = selected.length
-      ? SOURCE.vehicles.filter((vehicle) => selected.includes(String(vehicle.vehicle)))
-      : SOURCE.vehicles;
-    vehicles.forEach((vehicle) => {
-      const color = vehicleColor(vehicle.vehicle);
-      [...new Set(vehicle.detail_admin_codes || [])].forEach((code) => {
-        const feature = ADMIN.get(String(code));
-        if (!feature) return;
-        geometryPaths(feature.geometry).forEach((path) => {
-          if (path.length < 3) return;
-          const polygon = new kakao.maps.Polygon({ path, strokeWeight: selected.length ? 3 : 2, strokeColor: color, strokeOpacity: .76, fillColor: color, fillOpacity: selected.length ? .05 : .015 });
-          polygon.setMap(state.map);
-          state.polygons.push(polygon);
-        });
-      });
+    if (!state.map) return;
+    const groups = new Map();
+    allStores.forEach((row) => {
+      if (!row.vehicle || (selected.length && !selected.includes(row.vehicle))) return;
+      if (!groups.has(row.vehicle)) groups.set(row.vehicle, []);
+      groups.get(row.vehicle).push(row);
+    });
+    groups.forEach((stores, vehicle) => {
+      const hull = Phase2bUi.deliveryBoundary(stores);
+      if (hull.length < 3) return;
+      const path = hull.map((row) => new kakao.maps.LatLng(row.lat, row.lng));
+      const color = vehicleColor(vehicle);
+      const polygon = new kakao.maps.Polygon({ path, strokeWeight: selected.length ? 3 : 2, strokeColor: color, strokeOpacity: .76, fillColor: color, fillOpacity: selected.length ? .05 : .015 });
+      polygon.setMap(state.map);
+      state.polygons.push(polygon);
     });
   }
 
@@ -982,8 +989,6 @@
     const exception = legacyException(`${row.address} ${row.customer}`);
     if (!point) return { ...row, decision: "X", reason: exception || "주소 좌표 확인 불가", deliveryDays: "", facility: facilityReview(`${row.address} ${row.customer}`), nearby: [] };
     const nearby = withinRadius(point, .5);
-    const nearest = nearby.length ? nearby : nearestStores(point, 6);
-    const distance = nearest[0]?.distance ?? null;
     let decision = "X";
     let reason = "배송동선 맞지 않음";
     if (!exception && nearby.length) { decision = "O"; reason = ""; }
@@ -1095,6 +1100,17 @@
       const payload = await fetchJson(url, { channel: "operation-status", ttl: 30000, timeout: 45000 });
       if (requestId !== state.todayRequestId || date !== state.selectedDate) return;
       const status = current ? payload.data?.vehicles?.find((row) => normalizeVehicle(row.vehicle) === vehicle) : payload.data;
+      if (current && refresh) {
+        const byCode = new Map(allStores.map((row) => [row.customerCode, row]));
+        (payload.data?.vehicles || []).forEach((item) => (item.stops || []).forEach((stop) => {
+          const code = String(stop.customerCode || stop.code || "");
+          if (!code) return;
+          const known = byCode.get(code) || {};
+          byCode.set(code, { ...known, ...stop, customerCode: code, vehicle: item.vehicle, lat: stop.lat ?? known.lat, lng: stop.lng ?? known.lng, lastDeliveryDate: date });
+        }));
+        replaceStoreSnapshot([...byCode.values()], snapshotMeta);
+        if (!showRoute) { state.fitRequested = false; await loadBaseMap(); }
+      }
       updateOperationMetrics(status);
       if (showRoute && status) {
         const stops = dedupeRouteStops((status.stops || []).map((stop) => normalizeRouteStop(current ? { ...stop, status: stop.appRecorded ? "COMPLETED" : "PENDING", actualCompletedAt: stop.deliveryCompletedAt } : stop, vehicle)));
@@ -1150,8 +1166,8 @@
     const runAddress = () => { const text = $("#addressQuery").value.trim(); if (text) searchExternalAddress(text); };
     $("#addressBtn").onclick = runAddress;
     $("#addressQuery").onkeydown = (event) => { if (event.key === "Enter" && !addressComposing && !event.isComposing) runAddress(); };
-    $("#todayBtn").onclick = () => changeSelectedDate(inferLatestDate());
-    ["#date", "#mobileDate", "#selectedDate"].forEach((id) => { $(id).onchange = (event) => changeSelectedDate(event.target.value); });
+    $("#todayBtn").onclick = () => { dateChosenByUser = false; changeSelectedDate(inferLatestDate()); };
+    ["#date", "#mobileDate", "#selectedDate"].forEach((id) => { $(id).onchange = (event) => { dateChosenByUser = true; changeSelectedDate(event.target.value); }; });
     $("#operationVehicle").onchange = (event) => { const vehicle = event.target.value; setSelectedVehicles([vehicle]); $("#vehicle").value = vehicle; $("#mobileVehicle").value = vehicle; refreshVehicleUi(true); };
     $("#syncOperation").onclick = () => { state.fitRequested = false; loadOperationStatus(primarySelectedVehicle(), state.mode === "DATE_ROUTE", {}, true); };
     $("#routePlan").onclick = () => loadRoute("pc");
@@ -1169,7 +1185,7 @@
     $("#todayStatusTool")?.addEventListener("toggle", (event) => { if (event.target.open) loadTodayStatus(); });
     $("#mobileBack").onclick = hideMobileMap;
     $("#closeMobileRoute").onclick = () => document.body.classList.remove("routeSheetOpen");
-    $("#mobileToday").onclick = () => changeSelectedDate(inferLatestDate());
+    $("#mobileToday").onclick = () => { dateChosenByUser = false; changeSelectedDate(inferLatestDate()); };
     $("#mobileRoutePlan").onclick = () => loadRoute("mobile");
     $("#openWms").onclick = () => { location.href = "/daily-routes.html?tab=wms"; };
     $("#openOperations").onclick = () => { location.href = "/operations-data.html"; };
