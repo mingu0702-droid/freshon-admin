@@ -30,9 +30,9 @@ test("search supports partial customer code and customerCode dedupe", () => {
 
 test("base, center and vehicle views use the verified snapshot cache", () => {
   assert.match(runtime, /allStores\.filter\(\(row\) => row\.vehicleGroup === state\.centerFilter\)/);
-  assert.match(runtime, /selected\.length === 1 \? stores : representativeRows\(stores\)/);
+  assert.match(runtime, /selected\.length \? stores : representativeRows\(stores\)/);
   assert.match(runtime, /60일 스냅샷/);
-  assert.match(runtime, /refreshSelectedVehicle/);
+  assert.match(runtime, /changeSelectedDate/);
   assert.match(runtime, /ttl:\s*300000/);
 });
 
