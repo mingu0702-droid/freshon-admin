@@ -16,6 +16,7 @@ import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
 import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, phase2bCacheNamespace, phase2bSnapshotMeta, splitHubBounds } from "./phase2bOperations.js";
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
+import { phase2bSnapshotFailure, phase2bSnapshotProgress, phase2bSnapshotWatchdogNeeded } from "./phase2bSnapshotRecovery.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,6 +84,21 @@ let googleDriverMemoryCache = null;
 let phase2bSnapshotMemory = null;
 let phase2bSnapshotRefreshPromise = null;
 let phase2bSnapshotRetryTimer = null;
+let phase2bSnapshotWatchdogTimer = null;
+let phase2bSnapshotAuthProbeTimer = null;
+const phase2bSnapshotAutomation = {
+  phase: "WAITING",
+  hubAuth: "CHECKING",
+  startedFrom: null,
+  latest: null,
+  targetLatest: null,
+  progress: 0,
+  updatedAt: new Date().toISOString(),
+  consecutiveErrors: 0,
+  lastErrorCode: null,
+  lastErrorAt: null,
+  authProbeCount: 0
+};
 let deliveryAdminSession = {
   cookie: config.deliveryAdminCookie || "",
   authorization: "",
@@ -2113,10 +2129,37 @@ async function readPhase2bSnapshot() {
   return null;
 }
 
+function updatePhase2bSnapshotAutomation(patch = {}) {
+  Object.assign(phase2bSnapshotAutomation, patch, { updatedAt: new Date().toISOString() });
+}
+
+function phase2bSnapshotAutomationStatus(payload) {
+  const latest = payload?.latestDate || phase2bSnapshotAutomation.latest || null;
+  const refreshedThrough = payload?.refreshedThrough || latest;
+  const targetLatest = phase2bSnapshotAutomation.targetLatest || phase2bKstDate();
+  return {
+    hubAuth: phase2bSnapshotAutomation.hubAuth,
+    phase: phase2bSnapshotAutomation.phase,
+    latest,
+    targetLatest,
+    refreshedThrough,
+    progress: phase2bSnapshotAutomation.phase === "DONE" ? 100 : phase2bSnapshotProgress(phase2bSnapshotAutomation.startedFrom || latest, refreshedThrough, targetLatest),
+    continuation: phase2bSnapshotRetryTimer || phase2bSnapshotAuthProbeTimer ? "ACTIVE" : "NONE",
+    updatedAt: phase2bSnapshotAutomation.updatedAt,
+    consecutiveErrors: phase2bSnapshotAutomation.consecutiveErrors,
+    lastErrorCode: phase2bSnapshotAutomation.lastErrorCode,
+    lastErrorAt: phase2bSnapshotAutomation.lastErrorAt,
+    stale: phase2bSnapshotMeta(payload).stale
+  };
+}
+
 async function refreshPhase2bSnapshot() {
   if (!previewEnabled()) return null;
+  if (phase2bSnapshotAutomation.phase === "ERROR") return null;
   if (phase2bSnapshotRefreshPromise) return phase2bSnapshotRefreshPromise;
   phase2bSnapshotRefreshPromise = (async () => {
+    const runStartedAt = Date.now();
+    const runBudgetMs = Math.max(60000, Number(process.env.MAP_PHASE2B_SNAPSHOT_RUN_BUDGET_MS || 270000));
     const baseTiles = [
       { south: 33, west: 124, north: 36, east: 128 },
       { south: 33, west: 128, north: 36, east: 132 },
@@ -2125,15 +2168,40 @@ async function refreshPhase2bSnapshot() {
     ];
     const existing = await readPhase2bSnapshot();
     const rows = Array.isArray(existing?.rows) ? [...existing.rows] : [];
-    if (!rows.length) for (const tile of baseTiles) rows.push(...await phase2bSnapshotTile(tile));
+    if (!rows.length) {
+      for (const tile of baseTiles) rows.push(...await phase2bSnapshotTile(tile));
+      updatePhase2bSnapshotAutomation({ hubAuth: "READY", consecutiveErrors: 0, lastErrorCode: null, lastErrorAt: null });
+    }
     const basePayload = phase2bSnapshotPayload(rows);
     const today = phase2bKstDate();
     const refreshFrom = existing?.refreshedThrough || basePayload.latestDate;
-    for (const date of phase2bSnapshotMissingDates(refreshFrom, today)) {
+    updatePhase2bSnapshotAutomation({
+      phase: "RUNNING",
+      startedFrom: phase2bSnapshotAutomation.startedFrom || refreshFrom,
+      latest: existing?.latestDate || basePayload.latestDate,
+      targetLatest: today,
+      progress: phase2bSnapshotProgress(phase2bSnapshotAutomation.startedFrom || refreshFrom, refreshFrom, today)
+    });
+    const missingDates = phase2bSnapshotMissingDates(refreshFrom, today);
+    for (let index = 0; index < missingDates.length; index += 1) {
+      const date = missingDates[index];
+      if (index > 0 && Date.now() - runStartedAt >= runBudgetMs) {
+        updatePhase2bSnapshotAutomation({ phase: "WAITING" });
+        return phase2bSnapshotMemory || existing;
+      }
       rows.push(...await phase2bSnapshotDateRows(date, baseTiles));
       const checkpoint = phase2bSnapshotPayload(rows, { refreshedThrough: date, refreshComplete: false });
       await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(checkpoint));
       phase2bSnapshotMemory = checkpoint;
+      updatePhase2bSnapshotAutomation({
+        phase: "RUNNING",
+        hubAuth: "READY",
+        latest: checkpoint.latestDate,
+        progress: phase2bSnapshotProgress(phase2bSnapshotAutomation.startedFrom || refreshFrom, date, today),
+        consecutiveErrors: 0,
+        lastErrorCode: null,
+        lastErrorAt: null
+      });
       console.info(JSON.stringify({ component: "phase2b-snapshot", event: "CHECKPOINT", latestDate: checkpoint.latestDate, refreshedThrough: date, rowCount: checkpoint.rowCount }));
     }
     const todayStatus = await phase2bTodayStatus(today).catch(() => null);
@@ -2150,26 +2218,86 @@ async function refreshPhase2bSnapshot() {
     if (!payload.rows.length) throw new Error("PHASE2B_SNAPSHOT_EMPTY");
     await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
     phase2bSnapshotMemory = payload;
+    updatePhase2bSnapshotAutomation({
+      phase: "DONE",
+      hubAuth: "READY",
+      latest: payload.latestDate,
+      targetLatest: payload.latestDate,
+      progress: 100,
+      consecutiveErrors: 0,
+      lastErrorCode: null,
+      lastErrorAt: null,
+      authProbeCount: 0
+    });
     console.info(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESHED", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
     setTimeout(() => warmPhase2bBounds().catch(() => {}), 1000).unref();
     return payload;
   })().catch((error) => {
+    const errorCode = String(error?.message || "SNAPSHOT_REFRESH_FAILED").slice(0, 80);
+    const failure = phase2bSnapshotFailure(phase2bSnapshotAutomation, errorCode);
+    updatePhase2bSnapshotAutomation({
+      ...failure,
+      hubAuth: Number(error?.upstreamStatus) === 401 || Number(error?.upstreamStatus) === 403 || error?.failureType === "auth" ? "ERROR" : phase2bSnapshotAutomation.hubAuth
+    });
     console.error(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESH_FAILED", error: error.message || String(error) }));
     return null;
-  }).finally(() => { phase2bSnapshotRefreshPromise = null; });
+  }).finally(() => {
+    phase2bSnapshotRefreshPromise = null;
+    if (phase2bSnapshotAutomation.phase === "WAITING") {
+      schedulePhase2bSnapshotRefresh(phase2bSnapshotAutomation.lastErrorCode ? Math.max(60000, Number(process.env.MAP_PHASE2B_SNAPSHOT_RETRY_MS || 60000)) : 5000);
+    } else if (phase2bSnapshotAutomation.phase === "ERROR" && phase2bSnapshotAutomation.hubAuth === "ERROR") {
+      schedulePhase2bSnapshotAuthProbe();
+    }
+  });
   return phase2bSnapshotRefreshPromise;
 }
 
 function schedulePhase2bSnapshotRefresh(delayMs = 5000) {
-  if (phase2bSnapshotRetryTimer) return;
+  if (phase2bSnapshotRetryTimer || phase2bSnapshotAutomation.phase === "ERROR" || phase2bSnapshotAutomation.phase === "DONE") return;
+  updatePhase2bSnapshotAutomation({ phase: "WAITING" });
   phase2bSnapshotRetryTimer = setTimeout(async () => {
     phase2bSnapshotRetryTimer = null;
-    const payload = await refreshPhase2bSnapshot();
-    if (!payload) {
-      schedulePhase2bSnapshotRefresh(Math.max(60000, Number(process.env.MAP_PHASE2B_SNAPSHOT_RETRY_MS || 60000)));
-    }
+    await refreshPhase2bSnapshot();
   }, delayMs);
   phase2bSnapshotRetryTimer.unref();
+}
+
+function schedulePhase2bSnapshotAuthProbe(delayMs = Math.max(60000, Number(process.env.MAP_PHASE2B_AUTH_PROBE_MS || 300000))) {
+  const maxProbes = Math.max(1, Number(process.env.MAP_PHASE2B_AUTH_PROBE_MAX || 12));
+  if (phase2bSnapshotAuthProbeTimer || phase2bSnapshotAutomation.hubAuth !== "ERROR" || phase2bSnapshotAutomation.authProbeCount >= maxProbes) return;
+  phase2bSnapshotAuthProbeTimer = setTimeout(async () => {
+    phase2bSnapshotAuthProbeTimer = null;
+    updatePhase2bSnapshotAutomation({ authProbeCount: phase2bSnapshotAutomation.authProbeCount + 1 });
+    try {
+      await callHub("mapBounds", { mode: "BASE_90D", vehicle: "", bounds: { south: 36.8, west: 126.8, north: 37.3, east: 127.3 }, limit: 1 }, { useCache: false });
+      updatePhase2bSnapshotAutomation({ phase: "WAITING", hubAuth: "READY", consecutiveErrors: 0, lastErrorCode: null, lastErrorAt: null, authProbeCount: 0 });
+      schedulePhase2bSnapshotRefresh(1000);
+      console.info(JSON.stringify({ component: "phase2b-snapshot", event: "HUB_AUTH_RECOVERED" }));
+    } catch (error) {
+      updatePhase2bSnapshotAutomation({ hubAuth: "ERROR" });
+      schedulePhase2bSnapshotAuthProbe();
+    }
+  }, delayMs);
+  phase2bSnapshotAuthProbeTimer.unref();
+}
+
+function startPhase2bSnapshotWatchdog() {
+  if (phase2bSnapshotWatchdogTimer) return;
+  const intervalMs = Math.max(30000, Number(process.env.MAP_PHASE2B_SNAPSHOT_WATCHDOG_MS || 60000));
+  const stallMs = Math.max(120000, Number(process.env.MAP_PHASE2B_SNAPSHOT_STALL_MS || 7 * 60 * 1000));
+  phase2bSnapshotWatchdogTimer = setInterval(() => {
+    if (phase2bSnapshotWatchdogNeeded(phase2bSnapshotAutomation, {
+      now: Date.now(),
+      stallMs,
+      hasContinuation: Boolean(phase2bSnapshotRetryTimer),
+      running: Boolean(phase2bSnapshotRefreshPromise)
+    })) {
+      updatePhase2bSnapshotAutomation({ phase: "WAITING" });
+      schedulePhase2bSnapshotRefresh(1000);
+      console.warn(JSON.stringify({ component: "phase2b-snapshot", event: "WATCHDOG_CONTINUATION_RESTORED" }));
+    }
+  }, intervalMs);
+  phase2bSnapshotWatchdogTimer.unref();
 }
 
 async function fetchDeliveryTaskRowsForDate(date) {
@@ -3685,9 +3813,12 @@ async function phase2bTodayStatus(date) {
 app.get("/api/map-phase2b/preview/status", requireView, (_req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const memory = process.memoryUsage();
+  const snapshot = phase2bSnapshotAutomationStatus(phase2bSnapshotMemory);
   return res.json({
     enabled: true,
     environment: "stage",
+    hubAuth: snapshot.hubAuth,
+    snapshot,
     metrics: hubMetrics(),
     readCaches: {
       bounds: phase2bBoundsCache.stats(),
@@ -3741,6 +3872,9 @@ app.get("/api/map-phase2b/preview/snapshot", requireView, async (_req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const payload = await readPhase2bSnapshot();
   if (!payload) return res.status(503).json({ error: "PHASE2B_SNAPSHOT_NOT_READY" });
+  if (phase2bSnapshotMeta(payload).stale && !phase2bSnapshotRefreshPromise && !phase2bSnapshotRetryTimer && phase2bSnapshotAutomation.phase !== "ERROR") {
+    schedulePhase2bSnapshotRefresh(1000);
+  }
   return res.json({ ok: true, data: payload.rows, meta: phase2bSnapshotMeta(payload), error: null });
 });
 
@@ -3864,6 +3998,7 @@ const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
   if (previewEnabled()) {
     schedulePhase2bSnapshotRefresh();
+    startPhase2bSnapshotWatchdog();
     setInterval(() => refreshPhase2bSnapshot(), Math.max(60 * 60 * 1000, Number(process.env.MAP_PHASE2B_SNAPSHOT_REFRESH_MS || 6 * 60 * 60 * 1000))).unref();
   }
 });
