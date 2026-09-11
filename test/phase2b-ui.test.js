@@ -53,6 +53,8 @@ test("500m auto decision does not recommend stores 600m or 30km away", () => {
 test("boundary toggle hides only polygons and representatives, never refits or clears stores/routes", () => {
   const f = fixture();
   f.noDraw();
+  assert.equal(f.state.areaOn, false);
+  f.state.areaOn = true; // exercise ON -> OFF, then OFF -> ON
   let storeCalls = 0, lineCalls = 0, polygonCalls = 0, representativeMap = "map";
   f.state.map = { setBounds() { assert.fail("unexpected fit"); } };
   f.state.overlays = [{ setMap() { storeCalls++; } }];

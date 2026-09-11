@@ -4,7 +4,8 @@ export async function readDatedAssignments(date, bounds, loadTile, depth = 0) {
   if (payload?.ok === false || !Array.isArray(payload?.data)) throw new Error("DATED_ASSIGNMENTS_UNAVAILABLE");
   // Hub applies its source limit before the geographic filter. Splitting a tile
   // cannot recover that missing source page, so never report it as complete.
-  if (Number(payload.meta?.sourceCount) >= 2000) throw new Error("DATED_ASSIGNMENTS_SOURCE_TRUNCATED");
+  // HubDataLayer.MAX_LIMIT is 1000 even when mapBounds requests limit=2000.
+  if (Number(payload.meta?.sourceCount) >= 1000) throw new Error("DATED_ASSIGNMENTS_SOURCE_TRUNCATED");
   if (payload.data.length >= 2000) {
     if (depth >= 8) throw new Error("DATED_ASSIGNMENTS_TRUNCATED");
     const axis = bounds.north - bounds.south >= bounds.east - bounds.west ? "lat" : "lng";

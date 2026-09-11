@@ -18,6 +18,7 @@ test("capped tiles subdivide and deduplicate shared edges without truncation", a
 test("partial, wrong-date, and perpetually capped sources fail closed", async () => {
   await assert.rejects(readDatedAssignments(date, bounds, async () => ({ ok: false, data: [] })), /UNAVAILABLE/);
   await assert.rejects(readDatedAssignments(date, bounds, async () => ({ data: [], meta: { sourceCount: 2000 } })), /SOURCE_TRUNCATED/);
+  await assert.rejects(readDatedAssignments(date, bounds, async () => ({ data: [], meta: { sourceCount: 1000 } })), /SOURCE_TRUNCATED/);
   assert.throws(() => uniqueAssignments([{ customerCode: "A", vehicle: "101", deliveryDate: "2026-09-05" }], date), /MISMATCH/);
   await assert.rejects(readDatedAssignments(date, bounds, async () => ({ data: Array(2000).fill({}) }), 8), /TRUNCATED/);
 });
