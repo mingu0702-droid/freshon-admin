@@ -3952,6 +3952,24 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
   try {
     const snapshot = await readPhase2bSnapshot();
     const readDate = (candidate) => phase2bAssignmentCache.load(`${phase2bCacheNamespace(snapshot)}:${candidate}`, async () => {
+      if (candidate === phase2bKstDate()) {
+        // Current dispatch is already available through the approved read-only
+        // Delivery adapter. It is not a rolling Hub vehicle relationship.
+        try {
+          const live = await phase2bTodayStatus(candidate);
+          const coordinates = new Map((snapshot?.rows || []).map((row) => [String(row.customerCode || row.code), row]));
+          const actual = live.vehicles.flatMap((vehicle) => vehicle.stops.map((stop) => {
+            const code = String(stop.customerCode || stop.code || "");
+            const point = coordinates.get(code) || {};
+            return { ...stop, customerCode: code, vehicle: vehicle.vehicle, deliveryDate: candidate,
+              lat: stop.lat ?? point.lat ?? null, lng: stop.lng ?? point.lng ?? null };
+          }));
+          const data = uniqueAssignments(actual, candidate);
+          if (data.length) return { ok: true, data, meta: { date: candidate, source: "Delivery Admin current dispatch", complete: true, rowCount: data.length, generatedAt: live.generatedAt }, error: null };
+        } catch (error) {
+          console.warn(JSON.stringify({ component: "phase2b-assignments", source: "Delivery", error: error.message }));
+        }
+      }
       const tiles = splitHubBounds({ south: 33, west: 124, north: 39, east: 132 });
       const rows = [];
       let emptySource = false;
@@ -3967,12 +3985,12 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
       return { ok: true, data, meta: { date: candidate, source: "Hub DATE_ROUTE", complete: true, rowCount: data.length }, error: null };
     });
     const verifiedSnapshotDate = snapshot && !phase2bSnapshotMeta(snapshot).stale && snapshot.refreshedThrough >= phase2bKstDate() ? snapshot.latestDate : "";
-    let candidate = date === "latest" ? verifiedSnapshotDate || phase2bKstDate() : date;
+    let candidate = date === "latest" ? phase2bKstDate() : date;
     let loaded;
     for (let offset = 0; offset < (date === "latest" ? 8 : 1); offset++) {
       loaded = await readDate(candidate);
       if (loaded.value.data.length || date !== "latest") break;
-      candidate = new Date(Date.parse(`${candidate}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
+      candidate = verifiedSnapshotDate && offset === 0 && verifiedSnapshotDate < candidate ? verifiedSnapshotDate : new Date(Date.parse(`${candidate}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
     }
     if (date === "latest" && !loaded.value.data.length) return res.status(503).json({ ok: false, error: "LATEST_BUSINESS_DATE_UNAVAILABLE" });
     res.setHeader("X-Phase2B-Cache", loaded.cache);
