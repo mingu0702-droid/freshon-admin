@@ -36,6 +36,10 @@ try{
  await page.locator('#query').fill('S222538');await page.locator('#searchBtn').click();await page.waitForFunction(()=>document.querySelector('#searchState').textContent.includes('건'),null,{timeout:60000});await page.waitForTimeout(700);
  await check('codeSearch',await page.locator('#searchState').innerText());
  await check('font',await page.evaluate(()=>getComputedStyle(document.querySelector('.code')).fontFamily===getComputedStyle(document.querySelector('.storeName')).fontFamily));
+ await page.locator('.detailMore > summary').first().click();await page.waitForTimeout(200);
+ await check('detailPrivacy',!/점주전화|Claim|010[- ]?\d{4}[- ]?\d{4}/i.test(await page.locator('#detail').innerText()));
+ await check('accessMemo',await page.locator('#detail').innerText().then(text=>text.includes('출입정보')));
+ await page.locator('.detailMore > summary').first().click();
  await check('wmsAbsent',await page.getByRole('button',{name:'WMS',exact:true}).count()===0);
  await check('layout',await page.evaluate(()=>({barX:document.querySelector('#operationBar').getBoundingClientRect().x,sidebarRight:document.querySelector('#leftPanel').getBoundingClientRect().right,mapTop:document.querySelector('#map').getBoundingClientRect().top,barBottom:document.querySelector('#operationBar').getBoundingClientRect().bottom})));
  await shot('pc');
@@ -45,6 +49,10 @@ try{
  await page.locator('#addressQuery').fill('서울 중구 세종대로 110');await page.locator('#addressBtn').click();await page.waitForFunction(()=>document.querySelector('#addressJudgeResults').textContent.includes('권역판정'),null,{timeout:30000});await check('address',await page.locator('#searchNotice').innerText());await check('500m',await page.locator('#addressJudgeResults').innerText());await check('30km',await page.locator('#nearWrap').innerText());
  await page.locator('#openOperations').click();await page.locator('.diagnosticTable').waitFor({timeout:15000});await check('diagnostics',await page.locator('.diagnosticTable tr').count());
  await page.locator('#selectedDate').fill('2026-08-11');await page.locator('#selectedDate').dispatchEvent('change');await page.waitForFunction(()=>document.querySelector('#freshnessState').textContent.includes('과거')||document.querySelector('#freshnessState').textContent.includes('실패'),null,{timeout:130000});await check('historicalAssignment',await page.locator('#freshnessState').innerText());
- await page.locator('#operationVehicle').selectOption('101');await page.waitForFunction(()=>document.querySelector('#opTotal').textContent==='27',null,{timeout:60000});await check('historicalRoute',await page.evaluate(()=>['opTotal','opCompleted','opRemaining','opEta'].map(id=>document.getElementById(id).textContent)));await shot('historical');
+ await page.locator('#operationVehicle').selectOption('101');await page.waitForFunction(()=>document.querySelector('#opTotal').textContent==='27'||document.querySelector('#mapStatusSub').textContent.includes('운행현황 조회 실패'),null,{timeout:60000});await check('historicalRoute',await page.evaluate(()=>['opTotal','opCompleted','opRemaining','opEta'].map(id=>document.getElementById(id).textContent)));await shot('historical');
+ for(const [label,url] of [['bounds','bounds?mode=BASE_90D&south=36.8&west=126.8&north=37.3&east=127.3'],['detail','detail?customerCode=S222538'],['route','route-plan?date=2026-08-11&vehicle=101']]){
+   const timings=[];for(let i=0;i<2;i++){const start=Date.now();try{const r=await page.request.get(origin+'/api/map-phase2b/preview/'+url,{timeout:65000});timings.push({ms:Date.now()-start,status:r.status(),cache:r.headers()['x-phase2b-cache']||'not-exposed'});}catch(e){timings.push({error:e.message.split('\n')[0]});}}
+   await check('performance-'+label,timings);
+ }
 }catch(error){result.errors.push(error.message);await shot('error').catch(()=>{});}
 finally{await fs.writeFile(path.join(output,'result.json'),JSON.stringify(result,null,2));await browser.close();console.log(JSON.stringify(result));}

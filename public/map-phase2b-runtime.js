@@ -85,6 +85,8 @@
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > localDate()) return;
     const sameDate = date === state.selectedDate;
     state.selectedDate = date;
+    updateDateRange(date);
+    $("#freshnessState").title = "";
     dateReady = false;
     const token = ++dateRequestId;
     ++state.searchRequestId;
@@ -409,7 +411,12 @@
   function positionDetailPopup() {
     const row = state.selected;
     const panel = $("#detailSection");
-    if (!panel?.classList.contains("open") || innerWidth <= 760 || !state.map || !row || numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) return;
+    if (!panel?.classList.contains("open") || innerWidth <= 760 || !state.map || !row) return;
+    if (numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) {
+      const rect = $("#map").getBoundingClientRect();
+      panel.style.left = `${rect.left + rect.width / 2 - 125}px`; panel.style.top = `${rect.top + 50}px`; panel.style.right = "auto";
+      return;
+    }
     const projection = state.map.getProjection?.();
     const point = projection?.containerPointFromCoords?.(new kakao.maps.LatLng(Number(row.lat), Number(row.lng)));
     if (!point) { panel.style.left = ""; panel.style.top = "74px"; return; }
