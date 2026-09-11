@@ -28,10 +28,11 @@ test("search supports partial customer code and customerCode dedupe", () => {
   assert.match(runtime, /const key = row\.customerCode \|\|/);
 });
 
-test("base, center and vehicle views use the verified snapshot cache", () => {
+test("base, center and vehicle views use verified dated assignments with snapshot coordinates", () => {
   assert.match(runtime, /allStores\.filter\(\(row\) => row\.vehicleGroup === state\.centerFilter\)/);
   assert.match(runtime, /selected\.length \? stores : representativeRows\(stores\)/);
-  assert.match(runtime, /60일 스냅샷/);
+  assert.match(runtime, /assignments\?date=/);
+  assert.match(runtime, /실제 배송 편성/);
   assert.match(runtime, /changeSelectedDate/);
   assert.match(runtime, /ttl:\s*300000/);
 });

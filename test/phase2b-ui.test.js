@@ -89,7 +89,7 @@ test("live date uses current Delivery assignment over old snapshot vehicle", asy
   const f = fixture(); f.stubUi();
   const today = f.localDate(); f.state.latestDate = today;
   f.setSnapshot([{ customerCode: "S222538", vehicle: "101", lat: 37, lng: 127 }]);
-  f.setFetch(async () => ({ data: { vehicles: [{ vehicle: "109", stops: [{ customerCode: "S222538" }] }] } }));
+  f.setFetch(async (url) => url.includes("assignments") ? { data: [{ customerCode: "S222538", vehicle: "101", lat: 37, lng: 127 }], meta: { date: today, complete: true } } : { data: { vehicles: [{ vehicle: "109", stops: [{ customerCode: "S222538" }] }] } });
   await f.changeSelectedDate(today);
   assert.equal(f.getStores()[0].vehicle, "109");
   assert.equal(f.getStores()[0].lat, 37);
@@ -99,9 +99,29 @@ test("historical date obtains dated assignments and does not read current Delive
   const f = fixture(); f.stubUi(); f.state.latestDate = "2026-09-05";
   f.setSnapshot([{ customerCode: "S222538", vehicle: "109", lat: 37, lng: 127 }]);
   const urls = [];
-  f.setFetch(async (url) => { urls.push(url); return { data: [{ customerCode: "S222538", vehicle: "101", lat: 37, lng: 127 }] }; });
+  f.setFetch(async (url) => { urls.push(url); return { data: [{ customerCode: "S222538", vehicle: "101", lat: 37, lng: 127 }], meta: { date: "2026-08-11", complete: true } }; });
   await f.changeSelectedDate("2026-08-11");
   assert.equal(f.getStores()[0].vehicle, "101");
-  assert.match(urls[0], /mode=DATE_ROUTE&date=2026-08-11/);
+  assert.match(urls[0], /assignments\?date=2026-08-11/);
   assert.equal(urls.some((url) => url.includes("today-status")), false);
+});
+
+test("latest historical business date uses actual assignments, not the rolling vehicle", async () => {
+  const f = fixture(); f.stubUi(); f.state.latestDate = "2026-09-05";
+  f.setSnapshot([{ customerCode: "S222538", vehicle: "101", lat: 37, lng: 127 }]);
+  f.setFetch(async (url) => {
+    assert.match(url, /assignments\?date=2026-09-05/);
+    return { data: [{ customerCode: "S222538", vehicle: "109" }], meta: { date: "2026-09-05", complete: true } };
+  });
+  await f.changeSelectedDate("2026-09-05");
+  assert.equal(f.getStores()[0].vehicle, "109");
+  assert.equal(f.getStores()[0].lat, 37);
+});
+
+test("empty dated assignments clear previous date stores", async () => {
+  const f = fixture(); f.stubUi(); f.state.latestDate = "2026-09-05";
+  f.setStores([{ customerCode: "OLD", vehicle: "101" }]);
+  f.setFetch(async () => ({ data: [], meta: { date: "2026-09-05", complete: true } }));
+  await f.changeSelectedDate("2026-09-05");
+  assert.equal(f.getStores().length, 0);
 });

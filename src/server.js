@@ -17,6 +17,7 @@ import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
 import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, phase2bCacheNamespace, phase2bSnapshotMeta, splitHubBounds } from "./phase2bOperations.js";
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { phase2bSnapshotFailure, phase2bSnapshotProgress, phase2bSnapshotWatchdogNeeded } from "./phase2bSnapshotRecovery.js";
+import { readDatedAssignments, uniqueAssignments } from "./phase2bAssignments.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,6 +28,7 @@ const phase2bBundledSnapshotUrl = path.join(publicDir, "map-phase2b-snapshot.jso
 const phase2bRuntimeSnapshotUrl = path.join(os.tmpdir(), "freshon-map-phase2b-snapshot.json");
 const phase2bBoundsCache = createPhase2bReadCache({ name: "bounds", ttlMs: Number(process.env.PHASE2B_BOUNDS_CACHE_TTL_MS || 600000), staleMs: 120000, maxEntries: 64, maxBytes: 24 * 1024 * 1024 });
 const phase2bDetailCache = createPhase2bReadCache({ name: "detail", ttlMs: Number(process.env.PHASE2B_DETAIL_CACHE_TTL_MS || 1200000), staleMs: 300000, maxEntries: 512, maxBytes: 8 * 1024 * 1024 });
+const phase2bAssignmentCache = createPhase2bReadCache({ name: "assignments", ttlMs: 60000, staleMs: 120000, maxEntries: 8, maxBytes: 12 * 1024 * 1024 });
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
 const parseExcelScriptPath = path.join(__dirname, "parse_excel.py");
 const uploadDir = path.join(os.tmpdir(), "freshon-upload-files");
@@ -3940,6 +3942,42 @@ app.get("/api/map-phase2b/preview/bounds", requireView, async (req, res) => {
     return res.json(loaded.value);
   } catch (error) {
     return res.status(502).json({ error: error.message });
+  }
+});
+
+app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  const date = String(req.query.date || "");
+  if (date !== "latest" && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || normalizeDateValue(date) !== date || date > phase2bKstDate())) return res.status(400).json({ error: "INVALID_DATE" });
+  try {
+    const snapshot = await readPhase2bSnapshot();
+    const readDate = (candidate) => phase2bAssignmentCache.load(`${phase2bCacheNamespace(snapshot)}:${candidate}`, async () => {
+      const tiles = splitHubBounds({ south: 33, west: 124, north: 39, east: 132 });
+      const rows = [];
+      let emptySource = false;
+      for (const tile of tiles) {
+        rows.push(...await readDatedAssignments(candidate, tile, async (params) => {
+          const value = (await loadPhase2bBounds(params)).value;
+          emptySource = value.meta?.sourceCount === 0;
+          return value;
+        }));
+        if (emptySource) break;
+      }
+      const data = uniqueAssignments(rows, candidate);
+      return { ok: true, data, meta: { date: candidate, source: "Hub DATE_ROUTE", complete: true, rowCount: data.length }, error: null };
+    });
+    let candidate = date === "latest" ? phase2bKstDate() : date;
+    let loaded;
+    for (let offset = 0; offset < (date === "latest" ? 8 : 1); offset++) {
+      loaded = await readDate(candidate);
+      if (loaded.value.data.length || date !== "latest") break;
+      candidate = new Date(Date.parse(`${candidate}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
+    }
+    if (date === "latest" && !loaded.value.data.length) return res.status(503).json({ ok: false, error: "LATEST_BUSINESS_DATE_UNAVAILABLE" });
+    res.setHeader("X-Phase2B-Cache", loaded.cache);
+    return res.json(loaded.value);
+  } catch (error) {
+    return res.status(502).json({ ok: false, data: null, error: error.message });
   }
 });
 
