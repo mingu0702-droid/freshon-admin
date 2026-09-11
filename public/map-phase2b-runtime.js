@@ -589,13 +589,12 @@
   }
 
   async function search() {
-    if (!dateReady) { setSearchState("기준일 데이터 조회 중입니다."); return; }
     const text = $("#query").value.trim();
     if (!text) return;
     setSearchState("검색 중", true);
     $("#results").innerHTML = "";
     const requestId = ++state.searchRequestId;
-    const localRows = rankSearchRows(allStores, text).slice(0, 20);
+    const localRows = dateReady ? rankSearchRows(allStores, text).slice(0, 20) : [];
     if (localRows.length) {
       setSearchState(`${localRows.length}건 · ${state.selectedDate} 편성`);
       requestMapFit(); renderResults(localRows); renderStops(localRows, { boundaries: false }); selectStore(localRows[0]);
@@ -612,7 +611,7 @@
     } catch (error) { if (!isSilentRequestError(error)) errors.push(`Hub검색:${error.message}`); }
     if (requestId !== state.searchRequestId) return;
     // Master search preserves customer lookup, but cannot invent a dated vehicle.
-    const rows = rankSearchRows(candidates, text).slice(0, 20).map((row) => ({ ...row, vehicle: storesByCode.get(row.customerCode)?.vehicle || "", deliveryDate: state.selectedDate }));
+    const rows = rankSearchRows(candidates, text).slice(0, 20).map((row) => ({ ...row, vehicle: dateReady ? storesByCode.get(row.customerCode)?.vehicle || "" : "", deliveryDate: state.selectedDate }));
     if (!rows.length) {
       setSearchState(errors.length ? `조회 실패 · ${errors.join(" / ")}` : "결과 없음");
       return;
@@ -1104,7 +1103,7 @@
   }
 
   async function loadOperationStatus(vehicle, showRoute = false, representative = {}, refresh = false) {
-    if (!dateReady || !vehicle) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(state.selectedDate) || !vehicle) return;
     const date = state.selectedDate;
     const requestId = ++state.todayRequestId;
     const current = date === localDate();

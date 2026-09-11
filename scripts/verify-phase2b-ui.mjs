@@ -75,8 +75,22 @@ try {
   await capture("pc-1440");
   for (const [width, height] of [[390, 844], [412, 915]]) {
     await page.setViewportSize({ width, height });
+    if (await page.locator("#mobileMapView").isVisible()) await page.locator("#mobileMapView").click();
     results[`mobile${width}`] = await page.evaluate(() => ({ noHorizontalOverflow: document.documentElement.scrollWidth <= innerWidth, bar: document.querySelector("#operationBar").getBoundingClientRect().toJSON() }));
     await capture(`mobile-${width}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const beforeClear = { date: await page.locator("#selectedDate").inputValue(), query: await page.locator("#query").inputValue() };
+  await page.locator("#vehicleTrigger").click();
+  await page.locator("#clearVehicles").click();
+  results.clearVehicles = { checked: await page.locator('#vehicleList input:checked').count(), datePreserved: beforeClear.date === await page.locator("#selectedDate").inputValue(), queryPreserved: beforeClear.query === await page.locator("#query").inputValue(), total: await page.locator("#opTotal").innerText() };
+  await page.locator("#addressQuery").fill("서울 중구 세종대로 110");
+  await page.locator("#addressBtn").click();
+  await page.locator(".marker.virtual").waitFor({ timeout: 15000 }).catch(() => {});
+  if (await page.locator(".marker.virtual").count()) {
+    await page.locator(".marker.virtual").click();
+    results.nearby30km = await page.locator("#nearWrap").innerText();
+    results.area500m = await page.locator("#addressJudgeResults").innerText();
   }
   const route = await measure("route-cold", "/api/map-phase2b/preview/route-plan?date=2026-08-11&vehicle=101");
   results.route = { http: route.http, total: route.payload?.data?.totalStops, completed: route.payload?.data?.completedStops, remaining: route.payload?.data?.remainingStops };
