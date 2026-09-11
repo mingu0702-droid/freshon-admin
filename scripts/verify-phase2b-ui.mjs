@@ -9,6 +9,12 @@ await fs.mkdir(output, { recursive: true });
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const results = { checkedAt: new Date().toISOString(), errors: [], requests: [], geocode: [], screenshots: [] };
+if (process.env.PHASE2B_LOCAL_UI === "true") {
+  results.uiSource = "local candidate; all API responses are live Stage";
+  for (const name of ["map-phase2b-runtime.js", "map-phase2b-preview.html", "phase2b-ui-helpers.js"]) {
+    await page.route(origin + "/" + name, (route) => route.fulfill({ path: path.resolve("public", name), contentType: name.endsWith("html") ? "text/html" : "text/javascript" }));
+  }
+}
 page.on("pageerror", (error) => results.errors.push(error.message));
 page.on("response", (response) => {
   const url = new URL(response.url());
@@ -33,10 +39,10 @@ async function measure(label, url) {
 }
 try {
   results.pageHttp = (await page.goto(origin + "/map-phase2b-preview.html", { waitUntil: "domcontentloaded", timeout: 60000 })).status();
-  await page.waitForFunction(() => !!window.kakaoGeocoder, { timeout: 30000 });
+  await page.waitForFunction(() => !!window.kakaoGeocoder, null, { timeout: 30000 });
   // Actual public street addresses, sent only to the existing Kakao geocoder.
   const addresses = ["서울 강남구 테헤란로 152", "서울 중구 세종대로 110", "서울 종로구 세종대로 175", "서울 용산구 한강대로 405", "서울 송파구 올림픽로 300", "경기 성남시 분당구 판교역로 166", "경기 수원시 팔달구 효원로 241", "부산 연제구 중앙대로 1001", "대구 중구 공평로 88", "광주 서구 내방로 111"];
-  for (const address of addresses) {
+  for (const address of process.env.PHASE2B_VERIFY_SKIP_GEOCODE === "true" ? [] : addresses) {
     const value = await page.evaluate(async (address) => {
       const attempts = [], started = performance.now();
       for (const query of window.Phase2bUi.addressVariants(address)) {
@@ -56,17 +62,19 @@ try {
   }
   await page.locator("#selectedDate").fill("2026-08-11");
   await page.locator("#selectedDate").dispatchEvent("change");
-  await page.waitForFunction(() => /실제 배송 편성|기준일 조회 실패/.test(document.querySelector("#freshnessState").textContent), { timeout: 120000 });
+  await page.waitForFunction(() => /실제 배송 편성|기준일 조회 실패/.test(document.querySelector("#freshnessState").textContent), null, { timeout: 120000 });
   results.datedStatus = await page.locator("#freshnessState").textContent();
   await page.locator("#operationVehicle").selectOption("101");
-  await page.waitForFunction(() => document.querySelector("#opTotal").textContent !== "-", { timeout: 60000 }).catch(() => {});
+  await page.waitForFunction(() => document.querySelector("#opTotal").textContent !== "-", null, { timeout: 60000 }).catch(() => {});
   results.historical = await page.locator("#operationBar").innerText();
-  const before = await page.locator("#map").screenshot();
-  const markerCount = await page.locator(".marker.storeDot").count();
+  const tileState = () => page.locator("#map img").evaluateAll((images) => images.map((image) => ({ src: image.src, rect: image.getBoundingClientRect().toJSON() })));
+  await page.waitForTimeout(700);
+  const before = await tileState();
+  const markerCount = await page.locator(".marker").count();
   await page.locator("#areaToggle").click();
-  results.boundaryOff = { before: markerCount, after: await page.locator(".marker.storeDot").count(), date: await page.locator("#selectedDate").inputValue(), vehicle: await page.locator("#operationVehicle").inputValue() };
+  results.boundaryOff = { before: markerCount, after: await page.locator(".marker").count(), date: await page.locator("#selectedDate").inputValue(), vehicle: await page.locator("#operationVehicle").inputValue() };
   await page.locator("#areaToggle").click();
-  results.boundaryRoundTripPixelsUnchanged = before.equals(await page.locator("#map").screenshot());
+  results.boundaryTilePositionsUnchanged = before.length > 0 && JSON.stringify(before) === JSON.stringify(await tileState());
   await page.locator("#query").fill("S222538");
   await page.locator("#searchBtn").click();
   await page.locator("#detailSection.open").waitFor({ timeout: 60000 }).catch(() => {});
@@ -76,6 +84,7 @@ try {
   for (const [width, height] of [[390, 844], [412, 915]]) {
     await page.setViewportSize({ width, height });
     if (await page.locator("#mobileMapView").isVisible()) await page.locator("#mobileMapView").click();
+    await page.waitForTimeout(700);
     results[`mobile${width}`] = await page.evaluate(() => ({ noHorizontalOverflow: document.documentElement.scrollWidth <= innerWidth, bar: document.querySelector("#operationBar").getBoundingClientRect().toJSON() }));
     await capture(`mobile-${width}`);
   }

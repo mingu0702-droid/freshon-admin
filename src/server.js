@@ -3966,7 +3966,8 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
       const data = uniqueAssignments(rows, candidate);
       return { ok: true, data, meta: { date: candidate, source: "Hub DATE_ROUTE", complete: true, rowCount: data.length }, error: null };
     });
-    let candidate = date === "latest" ? phase2bKstDate() : date;
+    const verifiedSnapshotDate = snapshot && !phase2bSnapshotMeta(snapshot).stale && snapshot.refreshedThrough >= phase2bKstDate() ? snapshot.latestDate : "";
+    let candidate = date === "latest" ? verifiedSnapshotDate || phase2bKstDate() : date;
     let loaded;
     for (let offset = 0; offset < (date === "latest" ? 8 : 1); offset++) {
       loaded = await readDate(candidate);

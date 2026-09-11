@@ -15,6 +15,7 @@
   const requestControllers = new Map();
   const memoryResponses = new Map();
   let latestSnapshotRows = [];
+  const coordinateByCode = new Map();
   let dateRequestId = 0;
   let dateReady = false;
   let dateChosenByUser = false;
@@ -61,6 +62,8 @@
       const payload = await fetchJson("/api/map-phase2b/preview/snapshot", { channel: "map-snapshot", ttl: 0, timeout: 10000 });
       if (!Array.isArray(payload.data) || !payload.data.length) return;
       latestSnapshotRows = payload.data;
+      coordinateByCode.clear();
+      latestSnapshotRows.forEach((row) => coordinateByCode.set(String(row.customerCode || row.code), row));
       snapshotMeta = payload.meta || null;
       // The rolling snapshot supplies coordinates, never the default dispatch date.
       const latest = await fetchJson("/api/map-phase2b/preview/assignments?date=latest", { channel: "latest-assignment-date", ttl: 60000, timeout: 120000 });
@@ -68,9 +71,10 @@
       state.latestDate = latest.meta.date;
       memoryResponses.set(`/api/map-phase2b/preview/assignments?date=${state.latestDate}`, { value: latest, expiresAt: Date.now() + 60000 });
       $("#selectedDate").max = localDate();
+      if (dateChosenByUser) return;
       const target = dateChosenByUser ? state.selectedDate : state.latestDate;
       if (!dateReady || target !== state.selectedDate) await changeSelectedDate(target);
-    } catch (error) { $("#freshnessState").textContent = `기준일 데이터 확인 실패 · ${error.message}`; }
+    } catch (error) { if (!dateChosenByUser) $("#freshnessState").textContent = `기준일 데이터 확인 실패 · ${error.message}`; }
   }
 
   async function changeSelectedDate(date) {
@@ -341,7 +345,8 @@
   function drawSelectedBoundaries(selected) {
     if (!state.map) return;
     const groups = new Map();
-    allStores.forEach((row) => {
+    const boundaryStores = dateReady ? allStores : state.mode === "DATE_ROUTE" ? state.routeRows : [];
+    boundaryStores.forEach((row) => {
       if (!row.vehicle || (selected.length && !selected.includes(row.vehicle))) return;
       if (!groups.has(row.vehicle)) groups.set(row.vehicle, []);
       groups.get(row.vehicle).push(row);
@@ -389,7 +394,7 @@
   function positionDetailPopup() {
     const row = state.selected;
     const panel = $("#detailSection");
-    if (!panel?.classList.contains("open") || innerWidth <= 760 || !state.map || !row || !Number.isFinite(Number(row.lat)) || !Number.isFinite(Number(row.lng))) return;
+    if (!panel?.classList.contains("open") || innerWidth <= 760 || !state.map || !row || numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) return;
     const projection = state.map.getProjection?.();
     const point = projection?.containerPointFromCoords?.(new kakao.maps.LatLng(Number(row.lat), Number(row.lng)));
     if (!point) { panel.style.left = ""; panel.style.top = "74px"; return; }
@@ -571,7 +576,7 @@
   function normalizeApiStore(row) {
     const code = String(row.customerCode || row.code || row.id || "").trim();
     const vehicle = normalizeVehicle(row.vehicle || row.confirmedVehicle || row.primaryVehicle90d);
-    const local = storeByVehicleAndCode.get(`${vehicle}|${code}`) || storesByCode.get(code) || {};
+    const local = { ...coordinateByCode.get(code), ...(storeByVehicleAndCode.get(`${vehicle}|${code}`) || storesByCode.get(code) || {}) };
     return {
       ...local,
       ...row,
@@ -599,6 +604,19 @@
       setSearchState(`${localRows.length}건 · ${state.selectedDate} 편성`);
       requestMapFit(); renderResults(localRows); renderStops(localRows, { boundaries: false }); selectStore(localRows[0]);
       return;
+    }
+    if (/^[A-Z]\d{3,}$/i.test(text)) {
+      try {
+        const detail = await fetchJson(`/api/map-phase2b/preview/detail?customerCode=${encodeURIComponent(text.toUpperCase())}`, { channel: "exact-code-search", ttl: 300000, timeout: 45000 });
+        if (requestId !== state.searchRequestId) return;
+        if (detail.data?.customerCode) {
+          const row = normalizeApiStore(detail.data);
+          row.vehicle = dateReady ? storesByCode.get(row.customerCode)?.vehicle || "" : "";
+          setSearchState("1건 · 고객코드 일치");
+          requestMapFit(); renderResults([row]); renderStops([row], { boundaries: false }); selectStore(row, null, false, true);
+          return;
+        }
+      } catch (error) { if (isSilentRequestError(error)) return; }
     }
     const candidates = [];
     const errors = [];
@@ -697,7 +715,7 @@
     state.fitRequested = false;
     renderStops([...retained, row], { virtual: true, boundaries: state.areaOn });
     if (state.routeRows.length) drawRoute(state.routeRows);
-    selectStore(row, null, false);
+    selectStore(row, null, true);
     state.virtual = row;
   }
 
@@ -718,7 +736,10 @@
       chip.onkeydown = (event) => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); remove(event); } };
     });
     $("#operationVehicle").value = selected.length === 1 ? selected[0] : "";
-    if (!selected.length) { ++state.todayRequestId; updateOperationMetrics(null); $("#syncOperation").disabled = false; }
+    if (!selected.length) {
+      ++state.todayRequestId; updateOperationMetrics(null); $("#syncOperation").disabled = false;
+      if (state.mode === "DATE_ROUTE") { state.routeRows = []; state.mode = "BASE_60D"; clearMap(); }
+    }
     if (run) { requestMapFit(); loadBaseMap(); loadOperationStatus(primarySelectedVehicle(), selected.length === 1); }
   }
 
@@ -771,11 +792,7 @@
   }
 
   function inferLatestDate() {
-    if (state.latestDate) return state.latestDate;
-    const configured = $("#latestDate")?.textContent?.trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(configured)) return configured;
-    const snapshot = String(snapshotMeta?.latestDate || SOURCE.last_new_store_import?.updatedAt || "").slice(0, 10);
-    return /^\d{4}-\d{2}-\d{2}$/.test(snapshot) ? snapshot : new Date().toISOString().slice(0, 10);
+    return state.latestDate;
   }
 
   function latestDateFromRows(rows) {
@@ -786,9 +803,9 @@
   function updateDateRange(latest) {
     const start = daysBefore(latest, 59);
     $("#latestDate").textContent = latest;
-    $("#rangeText").textContent = `${formatShort(start)} ~ ${formatShort(latest)} 기준`;
-    $("#date").max = state.latestDate || latest;
-    $("#mobileDate").max = state.latestDate || latest;
+    $("#rangeText").textContent = `${latest} 배송 편성 · 좌표캐시 최근 60일`;
+    $("#date").max = localDate();
+    $("#mobileDate").max = localDate();
   }
 
   async function loadRoute(source) {
@@ -1182,7 +1199,7 @@
       setSelectedVehicles([first.querySelector("input").value]); state.centerFilter = ""; $("#vehicleSelect").classList.remove("open"); refreshVehicleUi(true);
     };
     $("#selectAllVehicles").onclick = () => { state.centerFilter = ""; vehicleChecks().forEach((item) => { if (item.closest("label").style.display !== "none") item.checked = true; }); refreshVehicleUi(true); };
-    $("#clearVehicles").onclick = () => { setSelectedVehicles([]); $("#mobileBaseVehicle").value = ""; refreshVehicleUi(false); state.fitRequested = false; loadBaseMap(); };
+    $("#clearVehicles").onclick = () => { setSelectedVehicles([]); $("#mobileBaseVehicle").value = ""; $("#vehicleSelect").classList.remove("open"); refreshVehicleUi(false); state.fitRequested = false; loadBaseMap(); };
     $$("[data-center]").forEach((button) => { button.onclick = () => { selectCenter(button.dataset.center); $("#vehicleSelect").classList.remove("open"); }; });
     let composing = false;
     $("#query").oncompositionstart = () => { composing = true; };
@@ -1195,7 +1212,7 @@
     const runAddress = () => { const text = $("#addressQuery").value.trim(); if (text) searchExternalAddress(text); };
     $("#addressBtn").onclick = runAddress;
     $("#addressQuery").onkeydown = (event) => { if (event.key === "Enter" && !addressComposing && !event.isComposing) runAddress(); };
-    $("#todayBtn").onclick = () => { dateChosenByUser = false; changeSelectedDate(inferLatestDate()); };
+    $("#todayBtn").onclick = () => { dateChosenByUser = false; if (inferLatestDate()) changeSelectedDate(inferLatestDate()); else refreshStoreSnapshot(); };
     ["#date", "#mobileDate", "#selectedDate"].forEach((id) => { $(id).onchange = (event) => { dateChosenByUser = true; changeSelectedDate(event.target.value); }; });
     $("#operationVehicle").onchange = (event) => { const vehicle = event.target.value; setSelectedVehicles([vehicle]); $("#vehicle").value = vehicle; $("#mobileVehicle").value = vehicle; refreshVehicleUi(true); };
     $("#syncOperation").onclick = refreshSelectedDate;
@@ -1214,7 +1231,7 @@
     $("#todayStatusTool")?.addEventListener("toggle", (event) => { if (event.target.open) loadTodayStatus(); });
     $("#mobileBack").onclick = hideMobileMap;
     $("#closeMobileRoute").onclick = () => document.body.classList.remove("routeSheetOpen");
-    $("#mobileToday").onclick = () => { dateChosenByUser = false; changeSelectedDate(inferLatestDate()); };
+    $("#mobileToday").onclick = () => { dateChosenByUser = false; if (inferLatestDate()) changeSelectedDate(inferLatestDate()); else refreshStoreSnapshot(); };
     $("#mobileRoutePlan").onclick = () => loadRoute("mobile");
     $("#openWms").onclick = () => { location.href = "/daily-routes.html?tab=wms"; };
     $("#openOperations").onclick = () => { location.href = "/operations-data.html"; };

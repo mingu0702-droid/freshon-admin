@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { calculateVehicleEta, mergeHubBoundsPayloads, parseAccessMemo, splitHubBounds } from "../src/phase2bOperations.js";
+import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, parseAccessMemo, splitHubBounds } from "../src/phase2bOperations.js";
 
 test("ETA uses recent and overall valid completion intervals", () => {
   const base = Date.parse("2026-09-01T00:00:00.000Z");
@@ -73,4 +73,10 @@ test("tiled bounds merge removes overlap duplicates and respects limit", () => {
 
 test("null access memo produces an empty safe detail", () => {
   assert.deepEqual(parseAccessMemo(null), { accessInfo: "", password: "", specialRemark: "" });
+});
+
+test("missing detail coordinates stay null instead of inventing a zero-degree pin", () => {
+  const detail = normalizePhase2bDetail({ lat: null, latitude: null, lng: "", longitude: "" });
+  assert.equal(detail.lat, null);
+  assert.equal(detail.lng, null);
 });
