@@ -67,14 +67,14 @@
       if (latest.meta?.complete !== true || !latest.data?.length) throw new Error("최신 영업일 확인 실패");
       state.latestDate = latest.meta.date;
       memoryResponses.set(`/api/map-phase2b/preview/assignments?date=${state.latestDate}`, { value: latest, expiresAt: Date.now() + 60000 });
-      $("#selectedDate").max = state.latestDate;
+      $("#selectedDate").max = localDate();
       const target = dateChosenByUser ? state.selectedDate : state.latestDate;
       if (!dateReady || target !== state.selectedDate) await changeSelectedDate(target);
     } catch (error) { $("#freshnessState").textContent = `기준일 데이터 확인 실패 · ${error.message}`; }
   }
 
   async function changeSelectedDate(date) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > (state.latestDate || localDate())) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > localDate()) return;
     const sameDate = date === state.selectedDate;
     state.selectedDate = date;
     dateReady = false;
@@ -93,7 +93,7 @@
       $("#addressJudgeResults").innerHTML = "";
       $("#results").innerHTML = "";
     }
-    ["#selectedDate", "#date", "#mobileDate"].forEach((id) => { $(id).value = date; $(id).max = state.latestDate || localDate(); });
+    ["#selectedDate", "#date", "#mobileDate"].forEach((id) => { $(id).value = date; $(id).max = localDate(); });
     $("#syncOperation").textContent = date === localDate() ? "↻ 현재상태 동기화" : "↻ 데이터 새로고침";
     $("#freshnessState").textContent = `${date} 편성 조회 중`;
     updateOperationMetrics(null);
@@ -116,7 +116,7 @@
       dateReady = true;
       await loadBaseMap();
       refreshDriverMaster();
-      await loadOperationStatus(primarySelectedVehicle());
+      await loadOperationStatus(primarySelectedVehicle(), selectedVehicles().length === 1);
     } catch (error) {
       if (token !== dateRequestId || isSilentRequestError(error)) return;
       $("#freshnessState").textContent = `기준일 조회 실패 · ${error.message}`;
@@ -720,7 +720,7 @@
     });
     $("#operationVehicle").value = selected.length === 1 ? selected[0] : "";
     if (!selected.length) { ++state.todayRequestId; updateOperationMetrics(null); $("#syncOperation").disabled = false; }
-    if (run) { requestMapFit(); loadBaseMap(); loadOperationStatus(primarySelectedVehicle()); }
+    if (run) { requestMapFit(); loadBaseMap(); loadOperationStatus(primarySelectedVehicle(), selected.length === 1); }
   }
 
   async function loadBaseMap() {
@@ -833,7 +833,7 @@
     renderRouteSummary(payload, source);
     updateOperationMetrics(payload);
     $("#mapStatusTitle").textContent = `${vehicle}호 특정일 운행`;
-    $("#mapStatusSub").textContent = `${date} · 실제 운행동선`;
+    $("#mapStatusSub").textContent = `${date} · 착순 연결선 · 도로 경로 아님`;
     setRouteLoading(source, "");
     if (source === "mobile") showMobileMap();
   }
