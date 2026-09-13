@@ -13,6 +13,7 @@ import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
 import { createMapStaffAuth } from "./mapStaffAuth.js";
 import { staffCustomerDetail } from "./mapStaffDetail.js";
+import { createPeriodJobs, readStaffDriverHistory, validatePeriod } from "./mapPeriod.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
@@ -55,6 +56,7 @@ const upload = multer({
 });
 
 const mapStaff = createMapStaffAuth();
+const periodJobs = createPeriodJobs({ loadPage: params => callHub("periodAssignments", params, { useCache: false }) });
 app.use("/api/map-phase2b/auth", securityAudit, mapStaff.router);
 app.use(express.json({ limit: "10mb" }));
 const requireSensitive = sensitiveAuth(config.adminToken);
@@ -3897,6 +3899,37 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
     const status = Number(error?.upstreamStatus) === 404 && error?.failureType === "upstream" ? 404 : 502;
     return res.status(status).json({ ok: false, data: null, error: "PRIVATE_DETAIL_UNAVAILABLE" });
   }
+});
+
+app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
+  if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
+  const endDate = String(req.query.endDate || req.query.date || phase2bKstDate());
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate) || !Number.isFinite(Date.parse(endDate))) return res.status(400).json({ error: "INVALID_PERIOD" });
+  const startDate = String(req.query.startDate || new Date(Date.parse(endDate) - 59 * 86400000).toISOString().slice(0, 10));
+  try { validatePeriod(startDate, endDate); if (endDate > phase2bKstDate()) throw new Error(); }
+  catch { return res.status(400).json({ error: "INVALID_PERIOD" }); }
+  try {
+    const data = await readStaffDriverHistory({ customerCode, startDate, endDate },
+      params => callHub("staffDriverHistory", params, { useCache: false, privateRead: true }));
+    return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data, meta: { complete: true, startDate, endDate, source: "Customer.daily_routes 배차 이력" } }));
+  } catch { return res.status(502).json({ error: "PRIVATE_HISTORY_UNAVAILABLE" }); }
+});
+
+app.get("/api/map-phase2b/preview/period", requireView, async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  const startDate = String(req.query.startDate || ""), endDate = String(req.query.endDate || "");
+  try { validatePeriod(startDate, endDate); if (endDate > phase2bKstDate()) throw new Error(); }
+  catch { return res.status(400).json({ error: "INVALID_PERIOD" }); }
+  const result = periodJobs.read(startDate, endDate);
+  if (result.meta.complete) {
+    const snapshot = await readPhase2bSnapshot();
+    const coords = new Map((snapshot?.rows || []).map(row => [row.customerCode, row]));
+    result.data = result.data.map(row => ({ ...row, lat: coords.get(row.customerCode)?.lat ?? null, lng: coords.get(row.customerCode)?.lng ?? null }));
+    result.meta.missingCoordinate = result.data.filter(row => row.lat == null || row.lng == null).length;
+  }
+  return res.status(result.meta.phase === "ERROR" ? 502 : result.meta.complete ? 200 : 202).json(result);
 });
 
 app.get("/api/map-phase2b/preview/snapshot", requireView, async (_req, res) => {

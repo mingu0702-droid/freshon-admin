@@ -29,10 +29,10 @@ test("search supports partial customer code and customerCode dedupe", () => {
 });
 
 test("base, center and vehicle views use verified dated assignments with snapshot coordinates", () => {
-  assert.match(runtime, /allStores\.filter\(\(row\) => row\.vehicleGroup === state\.centerFilter\)/);
-  assert.match(runtime, /selected\.length \? stores : representativeRows\(stores\)/);
+  assert.ok(runtime.includes('stores.filter(row => row.vehicleGroup === state.centerFilter)'));
+  assert.ok(runtime.includes('MapPeriodUi.select(allStores, selected, state.driverKey)'));
   assert.match(runtime, /assignments\?date=/);
-  assert.match(runtime, /실제 배송 편성/);
+  assert.ok(runtime.includes('기간 내 최신 배차'));
   assert.match(runtime, /changeSelectedDate/);
   assert.match(runtime, /ttl:\s*300000/);
 });

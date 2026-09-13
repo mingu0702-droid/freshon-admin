@@ -12,7 +12,7 @@ function fixture() {
     if (!nodes.has(id)) nodes.set(id, { textContent: "", innerHTML: "", value: "", style: {}, disabled: false, options: [], classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } }, setAttribute() {}, add() {} });
     return nodes.get(id);
   };
-  const ctx = vm.createContext({ window: { VEHICLE_AREA_DATA: { vehicles: [] } }, document: { querySelector: node, querySelectorAll: () => [] }, console, Intl, Date, Number, URL, URLSearchParams, Map, Set, AbortController, setTimeout, clearTimeout, performance, innerWidth: 1440, innerHeight: 900, requestAnimationFrame: () => {}, Phase2bUi: helpers });
+  const ctx = vm.createContext({ window: { VEHICLE_AREA_DATA: { vehicles: [] } }, document: { body: node('body'), querySelector: node, querySelectorAll: () => [] }, console, Intl, Date, Number, URL, URLSearchParams, Map, Set, AbortController, setTimeout, clearTimeout, performance, innerWidth: 1440, innerHeight: 900, requestAnimationFrame: () => {}, Phase2bUi: helpers });
   vm.runInContext(runtime.slice(0, runtime.lastIndexOf("  initVehicles();")) + `
     window.test = { state, nodes: $, judgeNewAreaPoint, toggleBoundaries, normalizeRouteStop, normalizeApiStore, setStores: (rows) => { allStores = rows; }, setSelected: (values) => { selectedVehicles = () => values; }, ready: () => { dateReady = true; }, loadOperationStatus, changeSelectedDate, setSnapshot: (rows) => { latestSnapshotRows = rows; }, stubUi: () => { loadBaseMap = async () => {}; ensureDateVehicles = () => {}; refreshDriverMaster = () => {}; }, getStores: () => allStores, localDate, setFetch: (fn) => { fetchJson = fn; }, noDraw: () => { drawSelectedBoundaries = () => {}; } };
   })();`, ctx);

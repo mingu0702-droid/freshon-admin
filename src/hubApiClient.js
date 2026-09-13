@@ -137,6 +137,8 @@ async function callHubUncached(action, params, key, privateRead = false) {
     nearestVehicles: Number(process.env.HUB_NEAREST_TIMEOUT_MS || 30000),
     mapBounds: Number(process.env.HUB_BOUNDS_TIMEOUT_MS || 30000),
     datedAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
+    periodAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
+    staffDriverHistory: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
     routePlan: Number(process.env.HUB_ROUTE_TIMEOUT_MS || 25000)
   };
   const timeoutMs = actionTimeoutMs[action] || Number(process.env.HUB_API_TIMEOUT_MS || 2000);
@@ -169,7 +171,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
       circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
       const ttlMs = action === "routePlan" ? Number(process.env.HUB_ROUTE_CACHE_TTL_MS || 300000) : 60000;
-      if (!privateRead && action !== "datedAssignments") cacheHubResponse(key, Date.now() + ttlMs, json);
+      if (!privateRead && !["datedAssignments", "periodAssignments", "staffDriverHistory"].includes(action)) cacheHubResponse(key, Date.now() + ttlMs, json);
       if (action === "mapBounds" || action === "customerDetail") console.info(JSON.stringify({ component: "hub-api-profile", action, requestId: body.requestId, attempt: attempt + 1, signingMs, requestSerializationMs, responseHeadersMs, bodyReadMs, parseMs, responseBytes: responseText == null ? null : Buffer.byteLength(responseText), hubDurationMs: Number(json.meta?.durationMs || 0), totalMs: Date.now() - attemptStarted }));
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, totalMs: Date.now() - started, hubDurationMs: Number(json.meta?.durationMs || 0), hubProfile: json.meta?.routeProfile || null, cache: "MISS" }));
       return json;

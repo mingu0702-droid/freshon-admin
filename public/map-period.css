@@ -1,0 +1,25 @@
+#mapModeBar{position:fixed;top:8px;left:386px;right:12px;z-index:65;display:flex;gap:7px;padding:7px;background:#fff;border:1px solid #dce4ef;border-radius:12px}
+#mapModeBar button{padding:8px 13px;border:1px solid #ccd7e5;border-radius:8px;background:#fff;color:#29405d;font-weight:700}
+#mapModeBar [aria-pressed=true]{background:#215dd1;color:white}
+#staffLogout{margin-left:auto}
+#periodControls{position:fixed;top:64px;left:386px;right:12px;z-index:64;display:flex;align-items:center;gap:8px;padding:8px;background:white;border:1px solid #dce4ef;border-radius:10px;font-size:12px}
+#periodControls[hidden]{display:none}#periodControls input,#periodControls select{max-width:170px;padding:7px;border:1px solid #ccd7e5;border-radius:6px}
+#periodControls label{display:flex;align-items:center;gap:4px}#periodControls select{flex:1}
+.periodMode #operationBar{top:120px!important}.periodMode #operationBar>#selectedDate,.periodMode #operationBar>#currentTime,.periodMode #operationBar>#syncOperation,.periodMode #operationBar>.opMetric{display:none!important}
+body:not(.periodMode) #operationBar{top:64px!important}
+.periodMode .mapStatus{top:170px!important}body:not(.periodMode) .mapStatus{top:118px!important}
+.periodMode #toggleRunList{display:none}.periodMode #runListTool{display:none!important}
+#runListTool:not([open]) #runListPanel{display:none}
+.periodMode .marker.store{--pin-color:#2563eb}.periodMode .marker.store .pinShape path{fill:var(--pin-color)!important}
+.periodMode .legend{display:none}
+.popupMeta{font-size:12px}.detailWrap .code,.detailWrap .storeName{font-size:14px!important;font-weight:700}
+.hiddenLegacyVehicleState{display:block!important}
+@media(max-width:1100px) and (min-width:761px){#periodControls{flex-wrap:wrap}#periodControls select{max-width:100px}.periodMode #operationBar{top:163px!important}.periodMode .mapStatus{top:207px!important}}
+@media(max-width:760px){
+ #mapModeBar{left:6px;right:6px;top:62px;gap:4px;padding:4px;border-radius:9px}#mapModeBar button{font-size:10px;padding:7px 8px}#staffLogout{font-size:9px!important}
+ #periodControls{left:6px;right:6px;top:108px;display:grid;grid-template-columns:1fr 1fr auto;gap:5px;padding:5px;font-size:9px}#periodControls input{width:105px;min-width:0;font-size:10px;padding:4px}#periodControls label{gap:2px}#periodControls select{max-width:none;width:100%;font-size:10px}#periodControls button{font-size:10px;padding:4px}
+ body.mobileMap .mobileMapControls{top:181px!important}.periodMode #operationBar{top:224px!important}body:not(.periodMode) #operationBar{top:151px!important}body:not(.periodMode) .mobileMapControls{top:108px!important}
+ body.mobileMap #map{top:150px}.periodMode.mobileMap #map{top:223px}.mapStatus{display:none!important}
+ body.mobileMap .detailWrap.open{position:fixed!important;left:7px!important;right:7px!important;bottom:calc(22vh + 8px)!important;top:auto!important;width:auto!important;max-height:32vh!important;overflow:auto!important;border-radius:12px;background:white}
+ .detailWrap:after{display:none!important}.staffDetailLine{grid-template-columns:90px 1fr}
+}
