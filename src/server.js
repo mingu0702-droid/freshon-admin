@@ -51,6 +51,11 @@ const upload = multer({
 
 app.use(express.json({ limit: "10mb" }));
 app.use('/api/map-phase2b/preview', generalMapResponse);
+app.use('/api', (req,res,next)=>{
+  if(req.path.startsWith('/collector/') || req.path.startsWith('/map-phase2b/preview/'))return next();
+  const json=res.json.bind(res);res.json=value=>json(redactPublicData(value));
+  res.setHeader('Cache-Control','no-store');next();
+});
 app.use((req, res, next) => {
   if (req.path === "/" || req.path.endsWith(".html")) {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
