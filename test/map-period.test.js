@@ -28,6 +28,12 @@ test('period preserves changed vehicles and dates; driver selection is historica
  const byDriver=MapPeriodUi.select(grouped,[],'driver-a');assert.equal(byDriver.length,1);assert.equal(byDriver[0].history.length,2);
  assert.equal(byDriver[0].status,'');assert.equal(byDriver[0].representativeLabel,'선택 기간 내 최신 배차');
 });
+test('dense period markers cluster without removing underlying stores or selected identity',()=>{
+ const rows=Array.from({length:100},(_,i)=>({customerCode:'S'+i,lat:37,lng:127}));
+ const pins=MapPeriodUi.cluster(rows,()=>({x:100,y:100}),12,'S1');
+ assert.equal(pins.length,2);assert.equal(pins[0].customerCode,'S1');assert.equal(pins[1].clusterCount,99);
+ assert.equal(MapPeriodUi.cluster(rows,()=>({x:100,y:100}),7).length,100);assert.equal(rows.length,100);
+});
 test('background period advances pages automatically, hides partial data, stops third repeated error',async()=>{
  const tasks=[];let calls=0;
  const jobs=createPeriodJobs({schedule:fn=>{tasks.push(fn);return {unref(){}};},loadPage:async()=>++calls===1?page([row(1)],{total:2,more:true}):page([row(2)],{offset:1,total:2})});

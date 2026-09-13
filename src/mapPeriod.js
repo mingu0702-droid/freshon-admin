@@ -90,13 +90,13 @@ export function createPeriodJobs({ loadPage, schedule = setTimeout, now = Date.n
       if (!job) {
         // Avoid unauthenticated range requests exhausting RAM or upstream quota.
         const running = [...jobs.values()].some(item => ['RUNNING','WAITING'].includes(item.phase));
-        if (running) return { ok: false, data: null, meta: { phase: 'BUSY', complete: false }, error: 'PERIOD_BUSY' };
+        if (running) return { ok: true, data: null, meta: { phase: 'BUSY', complete: false }, error: null };
         if (jobs.size >= 2) jobs.delete(jobs.keys().next().value);
         job = { startDate, endDate, phase: 'WAITING', count: 0, total: null, rows: [], data: null, cursor: null,
           keys: new Set(), cursors: new Set(), pages: 0, failures: 0, createdAt: now(), updatedAt: new Date(now()).toISOString() };
         jobs.set(key, job); resume();
       }
-      return { ok: job.phase !== 'ERROR', data: job.phase === 'DONE' ? job.data : null, meta: status(job), error: job.error || null };
+      return { ok: job.phase !== 'ERROR', data: job.phase === 'DONE' ? job.data : null, meta: status(job), error: job.phase === 'ERROR' ? job.error : null };
     }
   };
 }
