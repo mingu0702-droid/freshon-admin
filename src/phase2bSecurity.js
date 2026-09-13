@@ -39,8 +39,9 @@ export function publicResponse(req, res, next) {
 export function securityAudit(req, res, next) {
   if (!req.path.startsWith("/api/")) return next();
   const started = new Date().toISOString();
+  const endpoint = req.path;
   res.on("finish", () => console.info(JSON.stringify({ component: "security-access", timestamp: started,
-    endpoint: req.path, status: res.statusCode, authenticated: !!res.locals.sensitiveAuthenticated,
+    endpoint, status: res.statusCode, authenticated: !!res.locals.sensitiveAuthenticated,
     peerHash: crypto.createHash("sha256").update(String(req.ip || "")).digest("hex").slice(0, 20) })));
   next();
 }

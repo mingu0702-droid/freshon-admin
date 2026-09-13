@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
+import fs from 'node:fs';
 import { sensitiveAuth, publicMapValue, publicCustomerDetail, publicResponse } from "../src/phase2bSecurity.js";
 
 test("sensitive endpoints fail closed independently of PUBLIC_VIEW and preserve authorized collector contract", async () => {
@@ -27,4 +28,12 @@ test("public projection strips nested aliases and memo fields without changing r
   assert.deepEqual(publicCustomerDetail(row),{customerCode:'TEST',customerName:'Synthetic',address:'Test address',vehicle:'101',status:'COMPLETED'});
   const clean=publicMapValue({totalStops:27,completedStops:10,remainingStops:17,stops:[row],location:{message:'synthetic',gps:{lat:1,lng:2}}});
   assert.equal(clean.totalStops,27); assert.equal(clean.stops[0].password,undefined); assert.equal(clean.stops[0].specialRemark,undefined);assert.equal(clean.location.message,undefined);
+});
+test('protected popup requires explicit form submission, never persists token, and clears on close',()=>{
+ const source=fs.readFileSync(new URL('../public/map-phase2b-runtime.js',import.meta.url),'utf8');
+ assert.ok(source.includes('id="privateDetailAuth" autocomplete="off"'));
+ assert.ok(source.includes('headers:{"x-admin-token":credential}'));
+ assert.ok(source.includes('input.value=""'));
+ assert.ok(source.includes('$("#detail").textContent ='));
+ assert.ok(!/localStorage\.setItem\([^\n]*adminToken|sessionStorage\.setItem\([^\n]*adminToken/.test(source));
 });
