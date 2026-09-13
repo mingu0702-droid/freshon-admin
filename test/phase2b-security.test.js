@@ -31,9 +31,12 @@ test("public projection strips nested aliases and memo fields without changing r
 });
 test('protected popup requires explicit form submission, never persists token, and clears on close',()=>{
  const source=fs.readFileSync(new URL('../public/map-phase2b-runtime.js',import.meta.url),'utf8');
- assert.ok(source.includes('id="privateDetailAuth" autocomplete="off"'));
- assert.ok(source.includes('headers:{"x-admin-token":credential}'));
- assert.ok(source.includes('input.value=""'));
+ const staff=fs.readFileSync(new URL('../public/map-staff.js',import.meta.url),'utf8');
+ assert.ok(source.includes('MapStaff?.open'));
+ assert.ok(!source.includes('name="adminToken"'));
+ assert.ok(staff.includes("password.value = ''"));
+ assert.ok(staff.includes("id !== generation"));
+ assert.ok(staff.includes("cache: 'no-store'"));
  assert.ok(source.includes('$("#detail").textContent ='));
  assert.ok(!/localStorage\.setItem\([^\n]*adminToken|sessionStorage\.setItem\([^\n]*adminToken/.test(source));
 });

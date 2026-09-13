@@ -280,6 +280,7 @@
   }
 
   function clearSelection() {
+    window.MapStaff?.clear();
     ++state.detailRequestId;
     requestControllers.get("store-detail")?.controller.abort("superseded");
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
@@ -462,39 +463,18 @@
     $("#detail").className = "detailCard";
     $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">${esc(row.customerCode || "신규 주소")}</div><div class="storeName">${esc(row.customerName || "선택 위치")}</div><div class="popupMeta"><b>${vehicle ? esc(vehicle) + "호" : "선택일 편성 없음"}</b><span class="statusChip ${row.status === "COMPLETED" ? "done" : row.status ? "" : "unknown"}">${row.status === "COMPLETED" ? "완료" : row.status ? "미완료" : "상태 미확인"}</span></div></div>
       <div class="detailBody">
-        <details class="detailMore"${expanded ? " open" : ""}><summary>상세정보 펼치기</summary>
-          ${row.privateAuthorized ? '<div class="detailLine">인증된 보호 상세 · 이 창을 닫으면 제거됩니다.</div>' : '<form id="privateDetailAuth" autocomplete="off"><label>보호 상세 인증 <input name="adminToken" type="password" autocomplete="off" placeholder="관리자 인증 토큰" required></label><button type="submit">인증된 상세보기</button><span id="privateDetailState"></span></form>'}
-          <div class="detailLine"><b>기준일 / 호차</b><span>${esc(state.selectedDate)} / ${vehicle ? `${esc(vehicle)}호` : "선택일 편성 없음"}</span></div>
-          <div class="stats">${orderCard}${statusCard}</div>
-          <div class="detailLine"><b>주소</b><span>${esc(row.address || "-")}</span></div>
-          <div class="detailLine"><b>상세주소</b><span>${esc(row.detailAddress || "-")}</span></div>
-          <div class="detailLine"><b>출입정보</b><span>${esc(row.accessInfo || "-")}</span></div>
-          <div class="detailLine"><b>비밀번호</b><span>${esc(row.password || "-")}</span></div>
-          <div class="detailLine"><b>특이사항</b><span>${esc(row.specialRemark || "-")}</span></div>
-          ${row.rawMemo ? `<div class="detailLine"><b>배송요청사항 원문</b><span>${esc(row.rawMemo)}</span></div>` : ""}
-          ${unlocated ? '<div class="detailLine coordinateWarning">좌표 미확인</div>' : ""}
-          <div class="detailLine"><b>배송요일</b><span>${esc(row.deliveryPattern || row.deliveryPatternText || "-")}${row.deliveryPatternReference ? " · 기존 운영지도 기준" : ""}</span></div>
-          <div class="detailLine"><b>배송권역</b><span>${esc(row.areaLabel || row.region || "-")}</span></div>
-          ${row.status ? `<div class="detailLine"><b>완료시각</b><span>${esc(formatTime(row.actualCompletedAt || row.deliveryCompletedAt) || "미완료")}</span></div>` : ""}
-        </details>
+        <div class="detailLine"><span>${esc(row.address || "주소 미등록")}</span></div>
+        <div class="staffActions"><button id="staffHistory">최근 배송기사</button><button id="staffNotes">출입·배송 메모</button></div>
+        ${unlocated ? '<div class="coordinateWarning">좌표 미확인</div>' : ""}
         <div class="mobileActions"><button id="mobileMapView" class="primary">지도 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicle || "선택")}호 운행동선</button></div>
         <div id="nearWrap"></div>
       </div>`;
     requestAnimationFrame(positionDetailPopup);
     $(".detailMore")?.addEventListener("toggle", positionDetailPopup);
-    $("#privateDetailAuth")?.addEventListener("submit", async event => {
-      event.preventDefault();
-      const form=event.currentTarget,input=form.elements.adminToken,credential=input.value;
-      input.value="";
-      const requestId=++state.detailRequestId,date=state.selectedDate;
-      try {
-        const payload=await fetchJson(`/api/map-phase2b/private/customer-detail?customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:"store-detail",timeout:60000,headers:{"x-admin-token":credential}});
-        if(requestId!==state.detailRequestId || state.selected?.customerCode!==row.customerCode || date!==state.selectedDate)return;
-        selectStore({...row,...payload.data,privateAuthorized:true,lat:row.lat,lng:row.lng,vehicle:row.vehicle,status:row.status},element,false,true);
-      } catch(error) {
-        if(!isSilentRequestError(error) && requestId===state.detailRequestId && $("#privateDetailState")) $("#privateDetailState").textContent=error.message==="AUTHENTICATION_REQUIRED"?"인증이 필요합니다.":"보호 상세 조회에 실패했습니다.";
-      }
-    });
+    const openStaff = kind => window.MapStaff?.open({ kind, customerCode: row.customerCode, date: row.lastDeliveryDate || state.selectedDate,
+      rangeStart: state.rangeStart, rangeEnd: state.rangeEnd });
+    $("#staffHistory")?.addEventListener("click", () => openStaff("history"));
+    $("#staffNotes")?.addEventListener("click", () => openStaff("notes"));
     if (innerWidth <= 760) { showMobileMap(); activateSheet("detail"); }
     $("#detailClose")?.addEventListener("click", clearSelection);
     if (numberOrNull(row.lat) !== null && numberOrNull(row.lng) !== null) renderNearest(row);

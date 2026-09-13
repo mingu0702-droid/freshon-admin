@@ -101,13 +101,14 @@ export function previewEnabled() {
     && String(process.env.HUB_API_SECRET || "").length >= 32;
 }
 
-export async function callHub(action, params, { useCache = true } = {}) {
+export async function callHub(action, params, { useCache = true, privateRead = false } = {}) {
   if (!process.env.HUB_API_URL) throw new Error("HUB_API_URL_NOT_CONFIGURED");
   const key = `${action}:${stable(params || {})}`;
+  if (privateRead || action === 'customerDetail') useCache = false;
   const saved = cache.get(key);
   if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
   if (useCache && inFlight.has(key)) return inFlight.get(key);
-  const request = callHubUncached(action, params, key);
+  const request = callHubUncached(action, params, key, privateRead || action === 'customerDetail');
   if (useCache) inFlight.set(key, request);
   try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
 }
@@ -126,7 +127,7 @@ function retryableHubError(error) {
   return error.failureType === "upstream" && Number(error.upstreamStatus) >= 500;
 }
 
-async function callHubUncached(action, params, key) {
+async function callHubUncached(action, params, key, privateRead = false) {
   const entered = circuitEnter(action);
   const started = Date.now();
   state.metrics.requests += 1;
@@ -168,7 +169,7 @@ async function callHubUncached(action, params, key) {
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
       circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
       const ttlMs = action === "routePlan" ? Number(process.env.HUB_ROUTE_CACHE_TTL_MS || 300000) : 60000;
-      if (action !== "datedAssignments") cacheHubResponse(key, Date.now() + ttlMs, json);
+      if (!privateRead && action !== "datedAssignments") cacheHubResponse(key, Date.now() + ttlMs, json);
       if (action === "mapBounds" || action === "customerDetail") console.info(JSON.stringify({ component: "hub-api-profile", action, requestId: body.requestId, attempt: attempt + 1, signingMs, requestSerializationMs, responseHeadersMs, bodyReadMs, parseMs, responseBytes: responseText == null ? null : Buffer.byteLength(responseText), hubDurationMs: Number(json.meta?.durationMs || 0), totalMs: Date.now() - attemptStarted }));
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, totalMs: Date.now() - started, hubDurationMs: Number(json.meta?.durationMs || 0), hubProfile: json.meta?.routeProfile || null, cache: "MISS" }));
       return json;

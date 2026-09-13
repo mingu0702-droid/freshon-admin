@@ -13,7 +13,7 @@ test("weekday reference is explicit and conflicting old rows are not guessed",()
  assert.equal(existingWeekdayReference(source,"S1234"),"월수금");
  source.vehicles[0].customers.push({id:"S1234",delivery_pattern:"화목토"});
  assert.equal(existingWeekdayReference(source,"S1234"),"");
- assert.match(runtime,/기존 운영지도 기준/);
+ assert.ok(!runtime.includes('기존 운영지도 기준'));
 });
 for(const password of ["103891#/","TEST_ONLY_1*","0001#","*8822*"])test("password string preserved: "+password,()=>{
  assert.equal(parse("도어락 비밀번호: "+password).password,password);
@@ -24,7 +24,7 @@ test("location fields and cold/frozen/ambient notes parse",()=>{
 });
 test("claim/center text and owner phone never survive fallback",()=>{
  const p=parse("후문 이용 / 클레임: 비공개\n점주전화: 010-1234-5678\n(센터) 비공개\n(영업) 알 수 없는 배송지시");
- const text=JSON.stringify(p);assert.doesNotMatch(text,/클레임|센터|010|비공개|\(영업\)/);assert.match(p.rawMemo,/배송지시/);
+ const text=JSON.stringify(p);assert.doesNotMatch(text,/클레임|센터|010|비공개|\(영업\)/);assert.equal(p.rawMemo,"");
 });
 test("source is location.message only, center fragment stripped, no completion memo",()=>{
  const row={customer:{erpCode:"S1234"},completeTypeText:"COMPLETE_SECRET",location:{message:"출입방법: 후문 / CENTER_SECRET",messageByCenter:"CENTER_SECRET",messageBySales:"SALES_SECRET"}};
@@ -34,12 +34,12 @@ test("source is location.message only, center fragment stripped, no completion m
 test("empty location.message does not resurrect combined legacy accessMemo",()=>{
  const data=locationDetailsFromTasks([{customer:{erpCode:"S1234"},location:{message:"",messageBySales:"private",messageByCenter:"private"}}],"2026-09-12");
  assert.equal(data.S1234.password,"");assert.equal(data.S1234.rawMemo,"");
- assert.match(server,/Never expose legacy combined sales\/center memo/);
+ assert.ok(server.includes('staffCustomerDetail(hub.data'));
 });
 test("operational weekday source is explicit; raw fallback is sanitized",()=>{
  assert.match(parse("배송요일: 월화수목금토").deliveryPattern,/월화수목금토/);
- assert.equal(parse("규격외 배송 요청").rawMemo,"규격외 배송 요청");
- assert.match(server,/deliveryPatternSource/);
+ assert.equal(parse("규격외 배송 요청").rawMemo,"");
+ assert.ok(!server.includes('phase2bLocationDetailCache'));
 });
 test("normal SVG pin anchors to the point without double transforms",()=>{
  assert.match(runtime,/viewBox="0 0 28 34"/);assert.match(runtime,/xAnchor: \.5/);assert.match(runtime,/yAnchor: 1,/);

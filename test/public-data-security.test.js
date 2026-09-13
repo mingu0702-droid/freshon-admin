@@ -12,8 +12,8 @@ test('collector guards use existing authenticated automation token contract',()=
 });
 test('sensitive namespaces require admin before public views and SPA fallback',()=>{
  const src=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8');
- for(const namespace of ['/api/collector','/api/map-phase2b/private']) {
-  const gate=src.indexOf(`app.use('${namespace}', requireAdmin`);
+ for(const [namespace,guard] of [['/api/collector','requireAdmin'],['/api/map-phase2b/private','mapStaff.requireStaff']]) {
+  const gate=src.indexOf(`app.use('${namespace}', ${guard}`);
   assert.ok(gate>=0);
   assert.ok(gate<src.indexOf('app.use(express.static(publicDir))'));
  }

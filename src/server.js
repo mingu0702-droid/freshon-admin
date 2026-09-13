@@ -11,7 +11,8 @@ import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
-import { generalMapResponse, redactPublicData } from "./publicDataSecurity.js";
+import { createMapStaffAuth } from "./mapStaffAuth.js";
+import { staffCustomerDetail } from "./mapStaffDetail.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
@@ -19,7 +20,6 @@ import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, ph
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { phase2bSnapshotFailure, phase2bSnapshotProgress, phase2bSnapshotWatchdogNeeded } from "./phase2bSnapshotRecovery.js";
 import { readPaginatedDatedAssignments, uniqueAssignments } from "./phase2bAssignments.js";
-import { locationDetailsFromTasks, existingWeekdayReference } from "./phase2bLocationDetail.js";
 import { sensitiveAuth, publicMapValue, publicCustomerDetail, publicResponse, securityAudit } from "./phase2bSecurity.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,10 +30,8 @@ const customerMasterSourceUrl = path.join(publicDir, "customer-master-20260604.j
 const phase2bBundledSnapshotUrl = path.join(publicDir, "map-phase2b-snapshot.json");
 const phase2bRuntimeSnapshotUrl = path.join(os.tmpdir(), "freshon-map-phase2b-snapshot.json");
 const phase2bBoundsCache = createPhase2bReadCache({ name: "bounds", ttlMs: Number(process.env.PHASE2B_BOUNDS_CACHE_TTL_MS || 600000), staleMs: 120000, maxEntries: 64, maxBytes: 24 * 1024 * 1024 });
-const phase2bDetailCache = createPhase2bReadCache({ name: "detail", ttlMs: Number(process.env.PHASE2B_DETAIL_CACHE_TTL_MS || 1200000), staleMs: 300000, maxEntries: 512, maxBytes: 8 * 1024 * 1024 });
 const phase2bAssignmentCache = createPhase2bReadCache({ name: "assignments", ttlMs: 60000, staleMs: 120000, maxEntries: 8, maxBytes: 12 * 1024 * 1024 });
 const phase2bDatedAssignmentCache = createPhase2bReadCache({ name: "datedAssignments", ttlMs: 600000, staleMs: 0, maxEntries: 16, maxBytes: 24 * 1024 * 1024 });
-const phase2bLocationDetailCache = createPhase2bReadCache({ name: "locationDetails", ttlMs: 300000, staleMs: 0, maxEntries: 3, maxBytes: 8 * 1024 * 1024 });
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
 const parseExcelScriptPath = path.join(__dirname, "parse_excel.py");
 const uploadDir = path.join(os.tmpdir(), "freshon-upload-files");
@@ -56,11 +54,13 @@ const upload = multer({
   }
 });
 
+const mapStaff = createMapStaffAuth();
+app.use("/api/map-phase2b/auth", securityAudit, mapStaff.router);
 app.use(express.json({ limit: "10mb" }));
 const requireSensitive = sensitiveAuth(config.adminToken);
 const requireLegacySensitive = sensitiveAuth(config.adminToken, { allowLegacyQuery: true });
 app.use('/api/collector', requireAdmin);
-app.use('/api/map-phase2b/private', requireAdmin);
+app.use('/api/map-phase2b/private', mapStaff.requireStaff);
 app.use(securityAudit);
 app.use(publicResponse);
 // Legacy collectors retain their existing x-admin-token/query-token contract.
@@ -3851,7 +3851,7 @@ app.get("/api/map-phase2b/preview/status", requireView, (_req, res) => {
     metrics: hubMetrics(),
     readCaches: {
       bounds: phase2bBoundsCache.stats(),
-      detail: phase2bDetailCache.stats()
+      detail: { storage: "NONE", policy: "staff-private-no-store" }
     },
     memory: {
       rssBytes: memory.rss,
@@ -3883,45 +3883,19 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
   } catch { return res.status(503).json({ ok: false, error: "PUBLIC_DETAIL_UNAVAILABLE" }); }
 });
 
-app.get("/api/map-phase2b/private/customer-detail", requireSensitive, async (req, res) => {
+app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
   if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
   const detailDate = req.query.date ? normalizeDateValue(req.query.date) : phase2bSnapshotMemory?.latestDate || phase2bKstDate();
   if (!detailDate || detailDate > phase2bKstDate()) return res.status(400).json({ error: "INVALID_DATE" });
-  const started = Date.now();
   try {
-    const namespace = phase2bCacheNamespace(phase2bSnapshotMemory);
-    const loaded = await phase2bDetailCache.load(`${namespace}:${detailDate}:${customerCode}`, async () => {
-      const hubStarted = Date.now();
-      const [hub, locations] = await Promise.all([
-        callHub("customerDetail", { customerCode }, { useCache: false }),
-        phase2bLocationDetailCache.load(detailDate, async () => locationDetailsFromTasks(await fetchDeliveryTaskRowsForDate(detailDate), detailDate))
-      ]);
-      const normalizeStarted = Date.now();
-      const value = { ok: true, data: normalizePhase2bDetail(hub.data || {}, { customerCode }), meta: hub.meta || {}, error: null };
-      // Never expose legacy combined sales/center memo as a fallback.
-      const location = locations.value[customerCode];
-      Object.assign(value.data, { accessInfo: null, password: null, specialRemark: null, rawMemo: null, memoSource: location ? "location.message" : "UNAVAILABLE", memoDate: detailDate });
-      if (location) {
-        const pattern = location.deliveryPattern || value.data.deliveryPattern || value.data.deliveryPatternText;
-        Object.assign(value.data, location, { deliveryPattern: pattern || null, deliveryPatternSource: location.deliveryPattern ? "location.message" : pattern ? "Hub deliveryPattern" : "UNAVAILABLE" });
-      }
-      if (!value.data.deliveryPattern) {
-        const reference = existingWeekdayReference(await readVehicleAreaData(), customerCode);
-        if (reference) Object.assign(value.data, { deliveryPattern: reference, deliveryPatternSource: "operating-map delivery_pattern (reference)", deliveryPatternReference: true });
-      }
-      console.info(JSON.stringify({ component: "phase2b-detail-profile", customerCode, cache: "MISS", hubMs: normalizeStarted - hubStarted, hubDurationMs: Number(hub.meta?.durationMs || 0), normalizeMs: Date.now() - normalizeStarted }));
-      return value;
-    });
-    const serializationStarted = Date.now();
-    JSON.stringify(loaded.value);
-    res.setHeader("X-Phase2B-Cache", loaded.cache);
-    console.info(JSON.stringify({ component: "phase2b-detail-profile", customerCode, cache: loaded.cache, totalMs: Date.now() - started, serializationMs: Date.now() - serializationStarted, cacheStats: phase2bDetailCache.stats() }));
-    return res.json(loaded.value);
+    const hub = await callHub("customerDetail", { customerCode, date: detailDate }, { useCache: false, privateRead: true });
+    // Recheck after slow Hub reads: logout/expiry must revoke in-flight responses.
+    return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data: staffCustomerDetail(hub.data || {}, { customerCode, date: detailDate }), error: null }));
   } catch (error) {
     const status = Number(error?.upstreamStatus) === 404 && error?.failureType === "upstream" ? 404 : 502;
-    return res.status(status).json({ ok: false, data: null, error: error.message || String(error) });
+    return res.status(status).json({ ok: false, data: null, error: "PRIVATE_DETAIL_UNAVAILABLE" });
   }
 });
 
