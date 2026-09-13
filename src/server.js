@@ -11,6 +11,7 @@ import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
+import { generalMapResponse, redactPublicData } from "./publicDataSecurity.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
@@ -49,6 +50,7 @@ const upload = multer({
 });
 
 app.use(express.json({ limit: "10mb" }));
+app.use('/api/map-phase2b/preview', generalMapResponse);
 app.use((req, res, next) => {
   if (req.path === "/" || req.path.endsWith(".html")) {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -62,6 +64,15 @@ app.use((req, res, next) => {
   const localDemo = req.query.demo === "1" && (req.hostname === "127.0.0.1" || req.hostname === "localhost");
   if (!previewEnabled() && !localDemo) return res.status(404).send("Not Found");
   next();
+});
+app.get('/vehicle-data.js', async (_req,res)=>{
+  try {
+    const raw=await fs.readFile(path.join(publicDir,'vehicle-data.js'),'utf8');
+    const match=raw.match(/^\s*(window\.[A-Z_]+)\s*=\s*([\s\S]*?);?\s*$/);
+    if(!match)throw new Error('INVALID_PUBLIC_DATA');
+    res.setHeader('Cache-Control','no-store');
+    return res.type('application/javascript').send(`${match[1]} = ${JSON.stringify(redactPublicData(JSON.parse(match[2])))};`);
+  }catch{return res.status(503).json({error:'PUBLIC_DATA_UNAVAILABLE'});}
 });
 app.use(express.static(publicDir));
 
@@ -3328,7 +3339,7 @@ app.get("/api/auth-status", requireView, async (_req, res) => {
   });
 });
 
-app.get("/api/collector/freshon", requireView, async (req, res) => {
+app.get("/api/collector/freshon", requireAdmin, async (req, res) => {
   const date = normalizeDateValue(req.query.date);
   if (!date) return res.status(400).json({ ok: false, error: "valid date is required" });
   try {
@@ -3339,7 +3350,7 @@ app.get("/api/collector/freshon", requireView, async (req, res) => {
   }
 });
 
-app.get("/api/collector/delivery", requireView, async (req, res) => {
+app.get("/api/collector/delivery", requireAdmin, async (req, res) => {
   const date = normalizeDateValue(req.query.date);
   const page = Math.max(0, Number(req.query.page) || 0);
   const pageSize = Math.min(300, Math.max(1, Number(req.query.pageSize) || 250));
