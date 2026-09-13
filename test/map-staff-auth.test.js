@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import crypto from 'node:crypto';
+import { promisify } from 'node:util';
 import { createMapStaffAuth, createStaffPasswordHash, verifyStaffPassword, STAFF_IDLE_MS, STAFF_MAX_MS } from '../src/mapStaffAuth.js';
 import { staffSetupValues } from '../scripts/setup-map-staff.mjs';
 import { staffCustomerDetail } from '../src/mapStaffDetail.js';
@@ -8,6 +10,18 @@ import { staffLatency } from '../src/staffLatency.js';
 
 // Synthetic credentials only: exercise the requested six-character minimum.
 const password = 'Ab12cd';
+test('Argon2id baseline and legacy scrypt coexist; hash-only leaves other credentials untouched', async () => {
+  const values = await staffSetupValues(password,password,{hashOnly:true});
+  assert.deepEqual(Object.keys(values),['hash']);
+  assert.match(values.hash,/^\$argon2id\$v=19\$m=19456,/);
+  assert.equal(await verifyStaffPassword(password,values.hash),true);
+  assert.equal(await verifyStaffPassword('incorrect',values.hash),false);
+  assert.equal(await verifyStaffPassword(password,values.hash.replace('m=19456','m=8192')),false);
+  const salt=crypto.randomBytes(16), derived=await promisify(crypto.scrypt)(password,salt,32,{N:131072,r:8,p:1,maxmem:192*1024*1024});
+  const legacy=['scrypt',131072,8,1,salt.toString('base64url'),derived.toString('base64url')].join('$');
+  assert.equal(await verifyStaffPassword(password,legacy),true);
+  assert.equal(await verifyStaffPassword('incorrect',legacy),false);
+});
 test('staff sessions: public/private/admin separation, Origin, expiry, logout, rotation, throttling', async t => {
   const values = await staffSetupValues(password, password);
   assert.equal(await verifyStaffPassword(password, values.hash), true);

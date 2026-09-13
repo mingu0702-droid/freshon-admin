@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { fetchPrivateHub, privateResponseKind } from './privateHubTransport.js';
 
 const VERSION = "map-phase2-v1";
 const cache = new Map();
@@ -132,11 +133,12 @@ function retryableHubError(error) {
 async function callHubUncached(action, params, key, privateRead = false) {
   const entered = circuitEnter(action);
   const started = Date.now();
+  const staffDetail = action === 'staffCustomerDetail';
   state.metrics.requests += 1;
   const actionTimeoutMs = {
     unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 30000),
     customerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
-    staffCustomerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
+    staffCustomerDetail: 4800,
     nearestVehicles: Number(process.env.HUB_NEAREST_TIMEOUT_MS || 30000),
     mapBounds: Number(process.env.HUB_BOUNDS_TIMEOUT_MS || 30000),
     datedAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
@@ -146,9 +148,12 @@ async function callHubUncached(action, params, key, privateRead = false) {
   };
   const timeoutMs = actionTimeoutMs[action] || Number(process.env.HUB_API_TIMEOUT_MS || 2000);
   let lastError;
-  const attempts = entered.probe || action === "customerDetail" || action === "staffCustomerDetail" ? 1 : 2;
+  const attempts = entered.probe || action === "customerDetail" ? 1 : 2;
   let timedOut = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const remaining = staffDetail ? timeoutMs - (Date.now() - started) : timeoutMs;
+    if (remaining <= 0) { lastError = Object.assign(new Error('DETAIL_UPSTREAM_TIMEOUT'), {name:'AbortError'}); timedOut = true; break; }
+    const profile = { attempt: attempt + 1, responseHeadersMs:0, bodyReadMs:0, parseMs:0, upstreamStatus:null, contentType:'unknown', responseKind:'none' };
     const attemptStarted = Date.now();
     const signingStarted = Date.now();
     const body = requestBody(action, params);
@@ -157,25 +162,43 @@ async function callHubUncached(action, params, key, privateRead = false) {
     const serializedBody = JSON.stringify(body);
     const requestSerializationMs = Date.now() - serializationStarted;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), remaining);
     try {
       const fetchStarted = Date.now();
-      const response = await fetch(process.env.HUB_API_URL, { method: "POST", headers: { "content-type": "application/json" }, body: serializedBody, signal: controller.signal });
+      const fetchOptions = { method: "POST", headers: { "content-type": "application/json" }, body: serializedBody, signal: controller.signal };
+      const response = staffDetail ? await fetchPrivateHub(process.env.HUB_API_URL, fetchOptions, profile) : await fetch(process.env.HUB_API_URL, fetchOptions);
       const responseHeadersMs = Date.now() - fetchStarted;
+      profile.responseHeadersMs = responseHeadersMs; profile.upstreamStatus = response.status;
+      const contentType = response.headers?.get('content-type') || '';
+      profile.contentType = /json/i.test(contentType) ? 'json' : /html/i.test(contentType) ? 'html' : 'other';
       const bodyReadStarted = Date.now();
+      profile.phase = 'BODY';
       let responseText = null;
       if (typeof response.text === "function") responseText = await response.text();
       const bodyReadMs = Date.now() - bodyReadStarted;
+      profile.bodyReadMs = bodyReadMs;
       const parseStarted = Date.now();
+      profile.phase = 'PARSE';
       let json;
-      try { json = responseText == null ? await response.json() : JSON.parse(responseText); } catch (_) { throw Object.assign(new Error("HUB_INVALID_JSON"), { upstreamStatus: response.status, failureType: "parse", responseKind: /^\s*</.test(responseText || "") ? "html" : "invalid-json" }); }
+      try { json = responseText == null ? await response.json() : JSON.parse(responseText); } catch (_) {
+        profile.responseKind = privateResponseKind(responseText);
+        if (staffDetail && response.status >= 500) throw Object.assign(new Error('DETAIL_UPSTREAM_5XX'), {upstreamStatus:response.status,failureType:'upstream',responseKind:profile.responseKind});
+        throw Object.assign(new Error("HUB_INVALID_JSON"), { upstreamStatus: response.status, failureType: "parse", responseKind: profile.responseKind });
+      }
       const parseMs = Date.now() - parseStarted;
-      if (json && typeof json === 'object') requestProfiles.set(json, { responseHeadersMs, bodyReadMs, parseMs });
+      profile.phase = 'CONTRACT';
+      profile.parseMs = parseMs; profile.responseKind = privateResponseKind(responseText,json);
+      profile.hubDurationMs = Number(json?.meta?.durationMs || 0);
+      if (json && typeof json === 'object') requestProfiles.set(json, profile);
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
       if (action === 'staffCustomerDetail' && (json.meta.requestId !== body.requestId || String(json.data?.customerCode || '').toUpperCase() !== String(params.customerCode).toUpperCase())) {
+        profile.requestIdMatch = json.meta.requestId === body.requestId;
+        profile.customerMatch = String(json.data?.customerCode || '').toUpperCase() === String(params.customerCode).toUpperCase();
         throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'), { upstreamStatus: response.status, failureType: 'contract' });
       }
+      profile.phase = 'DONE';
+      if (staffDetail) console.info(JSON.stringify({component:'private-hub-profile',...profile,result:'OK',totalMs:Date.now()-started}));
       circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
       const ttlMs = action === "routePlan" ? Number(process.env.HUB_ROUTE_CACHE_TTL_MS || 300000) : 60000;
       if (!privateRead && !["datedAssignments", "periodAssignments", "staffDriverHistory"].includes(action)) cacheHubResponse(key, Date.now() + ttlMs, json);
@@ -184,11 +207,17 @@ async function callHubUncached(action, params, key, privateRead = false) {
       return json;
     } catch (error) {
       lastError = error;
+      if (staffDetail) {
+        profile.totalMs = Date.now()-started;
+        if (controller.signal.aborted) {error.name='AbortError';error.message='DETAIL_UPSTREAM_TIMEOUT';}
+        requestProfiles.set(error, profile);
+        console.warn(JSON.stringify({component:'private-hub-profile',...profile,result:classifyHubFailure(error)}));
+      }
       console.warn(JSON.stringify({ component: "hub-failure-classification", action, classification: classifyHubFailure(error), upstreamStatus: error.upstreamStatus || null }));
       if (error.name === "AbortError") { state.metrics.timeout += 1; timedOut = true; } else state.metrics.error += 1;
       console.warn(JSON.stringify({ component: "hub-api", action, requestId: body.requestId, attempt: attempt + 1, elapsedMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", upstreamStatus: error.upstreamStatus || null, failureType: error.failureType || (error.name === "AbortError" ? "timeout" : "network"), errorCode: error.name === "AbortError" ? "HUB_TIMEOUT" : String(error.message || "HUB_ERROR").slice(0, 80) }));
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", result: "FAIL" }));
-      if (attempt + 1 >= attempts || !retryableHubError(error)) break;
+      if (attempt + 1 >= attempts || !retryableHubError(error) || (staffDetail && Date.now()-started+150>=timeoutMs)) break;
       await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
     } finally { clearTimeout(timer); }
   }

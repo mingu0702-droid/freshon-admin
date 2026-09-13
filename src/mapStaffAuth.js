@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import express from 'express';
+import argon2 from 'argon2';
 import { addStaffTiming } from './staffLatency.js';
 
 const scrypt = promisify(crypto.scrypt);
@@ -10,17 +11,21 @@ export const STAFF_MAX_MS = 8 * 60 * 60 * 1000;
 const params = { N: 131072, r: 8, p: 1, maxmem: 192 * 1024 * 1024 };
 const digest = value => crypto.createHash('sha256').update(String(value)).digest();
 const equal = (a, b) => crypto.timingSafeEqual(digest(a), digest(b));
-const validHash = hash => /^scrypt\$131072\$8\$1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/.test(hash || '');
+const legacyHash = hash => /^scrypt\$131072\$8\$1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/.test(hash || '');
+const argonHash = hash => /^\$argon2id\$v=19\$m=19456,(?:t=2,p=1|p=1,t=2)\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$/.test(hash || '');
+const validHash = hash => legacyHash(hash) || argonHash(hash);
+const argonParams = { type: argon2.argon2id, version: 0x13, memoryCost: 19456, timeCost: 2, parallelism: 1, hashLength: 32 };
 
-// Node 20 has no built-in Argon2. OWASP's scrypt N=2^17, r=8, p=1 baseline.
+// OWASP Argon2id baseline; native async worker, never on the JS event loop.
+// Existing scrypt hashes remain valid until the operator replaces only the hash.
 export async function createStaffPasswordHash(password) {
   if (typeof password !== 'string' || password.length < 6 || Buffer.byteLength(password) > 1024) throw new Error('PASSWORD_LENGTH');
   const salt = crypto.randomBytes(16);
-  const derived = await scrypt(password, salt, 32, params);
-  return `scrypt$131072$8$1$${salt.toString('base64url')}$${derived.toString('base64url')}`;
+  return argon2.hash(password, { ...argonParams, salt });
 }
 export async function verifyStaffPassword(password, hash) {
   if (!validHash(hash) || typeof password !== 'string' || Buffer.byteLength(password) > 1024) return false;
+  if (argonHash(hash)) return argon2.verify(hash, password);
   const parts = hash.split('$');
   const result = await scrypt(password, Buffer.from(parts[4], 'base64url'), 32, params);
   return crypto.timingSafeEqual(result, Buffer.from(parts[5], 'base64url'));

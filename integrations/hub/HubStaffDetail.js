@@ -31,7 +31,7 @@ function hubStaffDetailRow_(sheet,code,date,profile) {
   if (columns<1 || columns>128) throw new Error('PRIVATE_SOURCE_HEADER_INVALID');
   const headers=sheet.getRange(1,1,1,columns).getValues()[0], codeColumn=headers.indexOf('customerCode')+1, dateColumn=headers.indexOf('deliveryDate')+1;
   if (!codeColumn || !dateColumn || headers.indexOf('accessMemo')<0) throw new Error('PRIVATE_SOURCE_HEADER_INVALID');
-  const key=['staff_row_v1',sheet.getParent().getId(),sheet.getSheetId(),last,columns,date,code].join('|');
+  const key=['staff_row_v2',sheet.getParent().getId(),sheet.getSheetId(),columns,date,code].join('|');
   const cache=CacheService.getScriptCache(); let cached=null;
   try{cached=JSON.parse(cache.get(key)||'null');}catch(ignored){}
   function read(rowNumber) {
@@ -46,16 +46,17 @@ function hubStaffDetailRow_(sheet,code,date,profile) {
     cache.remove(key);
   }
   // TextFinder executes on the date/key columns, never reads full assignment rows.
-  const dates=sheet.getRange(2,dateColumn,last-1,1).createTextFinder(date).matchEntireCell(true).useRegularExpression(false).findAll();
-  if(!dates.length){profile.lookupMs+=Date.now()-lookupAt;return null;}
-  const positions=dates.map(function(cell){return cell.getRow();}), first=Math.min.apply(null,positions), end=Math.max.apply(null,positions);
-  const candidates=sheet.getRange(first,codeColumn,end-first+1,1).createTextFinder(code).matchEntireCell(true).useRegularExpression(false).findAll().map(function(cell){return cell.getRow();}).sort(function(a,b){return a-b;});
+  // Search only the exact customer code column, never all rows for a date.
+  // customer_index has no dated source-row locator; using its memo would change
+  // the requested date contract. Cache only validated Current/Archive positions.
+  const candidates=sheet.getRange(2,codeColumn,last-1,1).createTextFinder(code).matchEntireCell(true).useRegularExpression(false).findAll().map(function(cell){return cell.getRow();}).sort(function(a,b){return b-a;});
   if(candidates.length>100)throw new Error('PRIVATE_LOOKUP_AMBIGUOUS');
   profile.lookupMs+=Date.now()-lookupAt;
   for(let i=0;i<candidates.length;i++){
+    const candidateDate=sheet.getRange(candidates[i],dateColumn,1,1).getValues()[0][0];
+    if(hubStaffDetailDate_(candidateDate)!==date)continue;
     const row=read(candidates[i]);
-    if(row){cache.put(key,JSON.stringify({row:candidates[i]}),120);return row;}
+    if(row){cache.put(key,JSON.stringify({row:candidates[i]}),600);return row;}
   }
   return null;
 }
-

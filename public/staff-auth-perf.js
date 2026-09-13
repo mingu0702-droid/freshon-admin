@@ -4,7 +4,7 @@
   const form = document.querySelector('#probeForm'), state = document.querySelector('#state'), output = document.querySelector('#results');
   const opened = performance.now(); let running = false, cancelled = false, controller;
   const results = [];
-  const median = a => { const s = a.slice().sort((a,b)=>a-b); return s.length ? s[Math.floor(s.length/2)] : null; };
+  const median = a => { const s = a.slice().sort((a,b)=>a-b), n=s.length; return n ? (s[Math.floor((n-1)/2)]+s[Math.floor(n/2)])/2 : null; };
   const sensitive = key => /password|passwd|rawmemo|accessinfo|accessmemo|phone|telephone|detailaddress|specialremark/i.test(key.replace(/[_\s-]/g,''));
   function countSensitive(value, parent='') {
     if (!value || typeof value !== 'object') return 0;
@@ -18,6 +18,12 @@
       const res = await fetch(path,{...options,credentials:'same-origin',cache:'no-store',signal:controller.signal});
       row.headersMs = +(performance.now()-start).toFixed(2); row.status=res.status;
       row.receivedAt=res.headers.get('x-request-received-at'); row.processUptimeMs=Number(res.headers.get('x-app-uptime-ms'))||null;
+      if(label==='private') {
+        row.upstreamStatus=Number(res.headers.get('x-detail-upstream-status'))||null;
+        const kind=res.headers.get('x-detail-response-kind'), phase=res.headers.get('x-detail-failure-phase');
+        row.responseKind=['json','health-json','html','invalid-json','none','unknown'].includes(kind)?kind:null;
+        row.failurePhase=['HEADERS','BODY','PARSE','CONTRACT','unknown'].includes(phase)?phase:null;
+      }
       row.serverTiming={};
       for (const part of (res.headers.get('server-timing')||'').split(',')) { const match=part.trim().match(/^([A-Za-z]+);dur=([\d.]+)$/); if(match)row.serverTiming[match[1]]=Number(match[2]); }
       const policy=res.headers.get('x-staff-cookie-policy'); if(policy)try{const p=JSON.parse(policy);row.cookie={httpOnly:p.httpOnly===true,secure:p.secure===true,sameSite:p.sameSite==='Strict'?'Strict':'OTHER'};}catch{}
@@ -44,8 +50,8 @@
     const delivery='/api/collector/delivery?date=2026-08-28&page=0&pageSize=1';
     try {
       // No preliminary network request: an idle first login can be measured as cold.
-      for(let i=0;i<5&&!cancelled;i++){
-        state.textContent=(i+1)+'/5회 · 인증 및 단일 고객 조회 계측 중';
+      for(let i=0;i<10&&!cancelled;i++){
+        state.textContent=(i+1)+'/10회 · 인증 및 단일 고객 조회 계측 중';
         const login=await request('login','/api/map-phase2b/auth/login',post({id,password}));
         login.iteration=i+1;login.coldCandidate=i===0&&coldEligible&&login.processUptimeMs!=null&&login.processUptimeMs<60000;
         if(login.status!==200)break;
@@ -64,13 +70,15 @@
       password='';id='';adminToken='';
       if(!cancelled){
         await request('anonymousCollector',delivery);
-        await request('wrongLogin','/api/map-phase2b/auth/login',post({id:'INVALID_SYNTHETIC_ID',password:'INVALID_SYNTHETIC_PASSWORD'}));
+        // Ten login attempts use the unchanged 15-minute budget. The next
+        // attempt must be throttled; do not weaken rate limits for benchmarks.
+        await request('rateLimitProbe','/api/map-phase2b/auth/login',post({id:'INVALID_SYNTHETIC_ID',password:'INVALID_SYNTHETIC_PASSWORD'}));
       }
     } finally {
       id='';password='';adminToken='';form.reset();
       // Cancellation must not leave a verification session behind.
       try {await fetch('/api/map-phase2b/auth/logout',{...post({}),credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(10000)});}catch{}
-      const summaries={};for(const label of ['login','session','logout','private','public']){const rows=results.filter(r=>r.label===label&&!r.coldCandidate);summaries[label]={count:rows.length,ms:rows.map(r=>r.browserTotalMs),medianMs:median(rows.map(r=>r.browserTotalMs))};}
+      const summaries={};for(const label of ['login','session','logout','private','public']){const rows=results.filter(r=>r.label===label&&!r.coldCandidate), ms=rows.map(r=>r.browserTotalMs),sorted=ms.slice().sort((a,b)=>a-b), successful=rows.filter(r=>r.status===200);summaries[label]={count:rows.length,success:successful.length,statuses:rows.map(r=>r.status),ms,minMs:sorted[0]??null,medianMs:median(ms),maxMs:sorted.at(-1)??null,p95Ms:sorted[Math.max(0,Math.ceil(sorted.length*.95)-1)]??null,successfulMedianMs:median(successful.map(r=>r.browserTotalMs))};}
       output.textContent=JSON.stringify({requests:results,summaries,coldMeasured:results.some(r=>r.coldCandidate),cancelled},null,2);
       state.textContent=cancelled?'중지됨 · 비밀값 제거 완료':'측정 완료 · 비밀값 제거 완료';running=false;form.querySelector('button').disabled=false;
     }

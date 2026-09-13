@@ -9,6 +9,7 @@
     "render-build": "python3 -m pip install --user --break-system-packages msoffcrypto-tool openpyxl || python3 -m pip install --user msoffcrypto-tool openpyxl || echo python excel dependency install skipped"
   },
   "dependencies": {
+    "argon2": "0.45.1",
     "compression": "^1.8.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

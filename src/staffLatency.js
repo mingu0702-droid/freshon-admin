@@ -9,7 +9,7 @@ export function addStaffTiming(res, name, duration) {
 }
 export function staffLatency(req, res, next) {
   if (!endpoints.has(req.path)) return next();
-  const started = performance.now(), receivedAt = new Date().toISOString();
+  const started = performance.now(), receivedAt = new Date().toISOString(), endpoint = req.path;
   const timings = res.locals.staffTiming = { authVerify: 0, session: 0, upstream: 0, parseNormalize: 0, hub: 0 };
   const original = res.writeHead;
   res.writeHead = function (...args) {
@@ -24,7 +24,7 @@ export function staffLatency(req, res, next) {
     return original.apply(this, args);
   };
   res.once('finish', () => console.info(JSON.stringify({
-    component: 'staff-latency', endpoint: req.path, status: res.statusCode, receivedAt,
+    component: 'staff-latency', endpoint, status: res.statusCode, receivedAt,
     ...Object.fromEntries(Object.entries(timings).map(([key, ms]) => [key + 'Ms', Math.round(ms * 100) / 100])),
     processUptimeMs: Math.round(process.uptime() * 1000)
   })));

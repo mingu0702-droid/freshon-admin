@@ -3,9 +3,9 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createStaffPasswordHash } from '../src/mapStaffAuth.js';
 
-export async function staffSetupValues(first, second) {
+export async function staffSetupValues(first, second, { hashOnly = false } = {}) {
   if (first !== second) throw new Error('PASSWORD_MISMATCH');
-  return { hash: await createStaffPasswordHash(first), secret: randomBytes(32).toString('base64url') };
+  return { hash: await createStaffPasswordHash(first), ...(hashOnly ? {} : { secret: randomBytes(32).toString('base64url') }) };
 }
 function hidden(prompt) {
   process.stdout.write(prompt);
@@ -33,14 +33,18 @@ function clipboard(value) {
   });
 }
 async function main() {
-  if (process.platform !== 'win32' || !process.stdin.isTTY || process.argv.length !== 2) throw new Error('WINDOWS_INTERACTIVE_ONLY');
-  process.stdout.write('Stage 전용 · Render freshon-admin-stage-preview-template → Environment\nMAP_STAFF_ID는 3글자도 가능합니다. 원하시는 공용 아이디를 직접 설정하세요.\n비밀번호는 최소 6자리입니다. 영문+숫자 혼합 및 다른 계정과 다른 값을 권장합니다.\n로그인 세션은 최대 8시간이며, 로그인 실패 제한은 유지됩니다.\n');
+  const hashOnly = process.argv.length === 3 && process.argv[2] === '--hash-only';
+  if (process.platform !== 'win32' || !process.stdin.isTTY || (process.argv.length !== 2 && !hashOnly)) throw new Error('WINDOWS_INTERACTIVE_ONLY');
+  if (hashOnly) process.stdout.write('해시만 교체합니다. 같은 비밀번호를 입력하세요. 기존 ID / SESSION_SECRET / ADMIN_TOKEN은 변경하지 마세요.\n');
+  process.stdout.write('Stage 전용 · Render freshon-admin-stage-preview-template → Environment\n' + (hashOnly ? '' : 'MAP_STAFF_ID는 3글자도 가능합니다. 원하시는 공용 아이디를 직접 설정하세요.\n') + '비밀번호는 최소 6자리입니다. 영문+숫자 혼합 및 다른 계정과 다른 값을 권장합니다.\n로그인 세션은 최대 8시간이며, 로그인 실패 제한은 유지됩니다.\n');
   let first = await hidden('공용 비밀번호 (숨김): '), second = await hidden('다시 입력 (숨김): ');
-  const values = await staffSetupValues(first, second); first = ''; second = '';
+  const values = await staffSetupValues(first, second, { hashOnly }); first = ''; second = '';
   await clipboard(values.hash); values.hash = '';
   await hidden('MAP_STAFF_PASSWORD_HASH 값이 복사됐습니다. Stage에 붙여넣은 뒤 Enter: ');
-  await clipboard(values.secret); values.secret = '';
-  await hidden('MAP_STAFF_SESSION_SECRET 값이 복사됐습니다. Stage에 붙여넣은 뒤 Enter: ');
+  if (!hashOnly) {
+    await clipboard(values.secret); values.secret = '';
+    await hidden('MAP_STAFF_SESSION_SECRET 값이 복사됐습니다. Stage에 붙여넣은 뒤 Enter: ');
+  }
   await clipboard('');
   process.stdout.write('클립보드를 비웠습니다. Stage 지정 SHA를 확인하고 저장하세요. 재시작 후에는 재로그인이 필요합니다.\n');
 }

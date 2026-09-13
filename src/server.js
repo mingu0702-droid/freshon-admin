@@ -3919,8 +3919,14 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
     // Recheck after slow Hub reads: logout/expiry must revoke in-flight responses.
     return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data: detail, error: null }));
   } catch (error) {
-    const status = Number(error?.upstreamStatus) === 404 && error?.failureType === "upstream" ? 404 : 502;
-    return res.status(status).json({ ok: false, data: null, error: "PRIVATE_DETAIL_UNAVAILABLE" });
+    const profile = hubRequestProfile(error);
+    res.set('X-Detail-Upstream-Status', String(Number(profile.upstreamStatus) || 0));
+    res.set('X-Detail-Response-Kind', ['json','health-json','html','invalid-json','none'].includes(profile.responseKind) ? profile.responseKind : 'unknown');
+    res.set('X-Detail-Failure-Phase', ['HEADERS','BODY','PARSE','CONTRACT'].includes(profile.phase) ? profile.phase : 'unknown');
+    for (const key of ['responseHeadersMs','bodyReadMs','parseMs']) addStaffTiming(res, 'hub' + key.replace(/Ms$/, ''), Number(profile[key] || 0));
+    const timeout = error?.name === 'AbortError';
+    const status = timeout ? 504 : Number(error?.upstreamStatus) === 404 && error?.failureType === "upstream" ? 404 : 502;
+    return res.status(status).json({ ok: false, data: null, error: timeout ? 'DETAIL_UPSTREAM_TIMEOUT' : 'PRIVATE_DETAIL_UNAVAILABLE' });
   }
 });
 

@@ -174,3 +174,26 @@ test("cache miss with network failure retries once and remains uncached", async 
   await assert.rejects(client.callHub("mapBounds", { bounds: {} }), /fetch failed/);
   assert.equal(calls, 4);
 });
+
+test('private successes and failure classes: five synthetic requests each; never retry parse/contract/4xx', async () => {
+  const cases=[['success',200,'json',1],['parse',200,'html',1],['contract',200,'health',1],['auth',403,'json',1],['upstream',503,'html',2],['network',0,'network',2]];
+  for(const [name,status,kind,expectedAttempts] of cases){
+    for(let i=0;i<5;i++){
+      const client=await freshClient();let calls=0;
+      global.fetch=async(_url,options)=>{calls++;if(kind==='network')throw new TypeError('fetch failed');if(kind==='html')return new Response('<html>SYNTHETIC</html>',{status,headers:{'content-type':'text/html'}});
+        const body=JSON.parse(options.body),json=kind==='health'?{ok:true,data:{service:'hub-map-api',status:'UP'},meta:{requestId:''}}:status===403?{ok:false,error:{code:'AUTH_FAILED'},meta:{httpStatus:403}}:{ok:true,data:{customerCode:'S1234'},meta:{requestId:body.requestId,durationMs:1}};
+        return new Response(JSON.stringify(json),{status,headers:{'content-type':'application/json'}});
+      };
+      const p=client.callHub('staffCustomerDetail',{customerCode:'S1234',date:'2026-08-28'});
+      if(name==='success')assert.equal((await p).ok,true);else await assert.rejects(p);
+      assert.equal(calls,expectedAttempts);
+    }
+  }
+});
+test('private shared 4.8s deadline aborts once, including stalled body; timeout never retries', async () => {
+  const client=await freshClient();let calls=0;
+  global.fetch=async(_url,options)=>{calls++;return {ok:true,status:200,headers:new Headers({'content-type':'application/json'}),text:()=>new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'}))))};};
+  const started=performance.now();
+  await assert.rejects(client.callHub('staffCustomerDetail',{customerCode:'S1234'}),e=>e.name==='AbortError'&&e.message==='DETAIL_UPSTREAM_TIMEOUT'&&client.hubRequestProfile(e).phase==='BODY');
+  assert.equal(calls,1);assert.ok(performance.now()-started<5500);
+});

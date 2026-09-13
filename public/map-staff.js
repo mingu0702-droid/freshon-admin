@@ -105,7 +105,8 @@
     } catch (error) {
       if (error.name === 'AbortError' || id !== generation) return;
       if (error.status === 401) { sessionHint = null; loginForm(id); return; }
-      shell('보호 상세 조회 실패'); node('p', '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      shell('보호 상세 조회 실패'); node('p', error.status === 504 ? '상세정보 조회가 지연되고 있습니다. 다시 시도해 주세요.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      node('button', '다시 시도').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
     } finally { if (id === generation) detailPending = false; }
   }
   async function open(target) {
