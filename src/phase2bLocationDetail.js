@@ -52,3 +52,11 @@ export function locationDetailsFromTasks(rows, date) {
   }
   return result;
 }
+
+export function existingWeekdayReference(source, code) {
+  const patterns = new Set((source.vehicles || []).flatMap(vehicle => vehicle.customers || [])
+    .filter(customer => String(customer.id || customer.customerCode) === code)
+    .map(customer => String(customer.delivery_pattern || "").trim()).filter(Boolean));
+  // Conflicting old assignments must not be presented as a known weekday.
+  return patterns.size === 1 ? [...patterns][0] : "";
+}

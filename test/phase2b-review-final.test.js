@@ -2,12 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
-import {parseLocationMessage as parse,sanitizeLocationMessage,locationDetailsFromTasks} from "../src/phase2bLocationDetail.js";
+import {parseLocationMessage as parse,sanitizeLocationMessage,locationDetailsFromTasks,existingWeekdayReference} from "../src/phase2bLocationDetail.js";
 import "../public/phase2b-ui-helpers.js";
 const runtime=fs.readFileSync(new URL("../public/map-phase2b-runtime.js",import.meta.url),"utf8");
 const html=fs.readFileSync(new URL("../public/map-phase2b-preview.html",import.meta.url),"utf8");
 const css=fs.readFileSync(new URL("../public/phase2b-review-final.css",import.meta.url),"utf8");
 const server=fs.readFileSync(new URL("../src/server.js",import.meta.url),"utf8");
+test("weekday reference is explicit and conflicting old rows are not guessed",()=>{
+ const source={vehicles:[{customers:[{id:"S1234",delivery_pattern:"월수금"}]}]};
+ assert.equal(existingWeekdayReference(source,"S1234"),"월수금");
+ source.vehicles[0].customers.push({id:"S1234",delivery_pattern:"화목토"});
+ assert.equal(existingWeekdayReference(source,"S1234"),"");
+ assert.match(runtime,/기존 운영지도 기준/);
+});
 for(const password of ["103891#/","3488*","0001#","*8822*"])test("password string preserved: "+password,()=>{
  assert.equal(parse("도어락 비밀번호: "+password).password,password);
 });

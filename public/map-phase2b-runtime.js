@@ -472,7 +472,7 @@
           <div class="detailLine"><b>특이사항</b><span>${esc(row.specialRemark || "-")}</span></div>
           ${row.rawMemo ? `<div class="detailLine"><b>배송요청사항 원문</b><span>${esc(row.rawMemo)}</span></div>` : ""}
           ${unlocated ? '<div class="detailLine coordinateWarning">좌표 미확인</div>' : ""}
-          <div class="detailLine"><b>배송요일</b><span>${esc(row.deliveryPattern || row.deliveryPatternText || "-")}</span></div>
+          <div class="detailLine"><b>배송요일</b><span>${esc(row.deliveryPattern || row.deliveryPatternText || "-")}${row.deliveryPatternReference ? " · 기존 운영지도 기준" : ""}</span></div>
           <div class="detailLine"><b>배송권역</b><span>${esc(row.areaLabel || row.region || "-")}</span></div>
           ${row.status ? `<div class="detailLine"><b>완료시각</b><span>${esc(formatTime(row.actualCompletedAt || row.deliveryCompletedAt) || "미완료")}</span></div>` : ""}
         </details>

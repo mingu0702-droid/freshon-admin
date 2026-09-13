@@ -18,7 +18,7 @@ import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, ph
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { phase2bSnapshotFailure, phase2bSnapshotProgress, phase2bSnapshotWatchdogNeeded } from "./phase2bSnapshotRecovery.js";
 import { readPaginatedDatedAssignments, uniqueAssignments } from "./phase2bAssignments.js";
-import { locationDetailsFromTasks } from "./phase2bLocationDetail.js";
+import { locationDetailsFromTasks, existingWeekdayReference } from "./phase2bLocationDetail.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3870,6 +3870,10 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
       if (location) {
         const pattern = location.deliveryPattern || value.data.deliveryPattern || value.data.deliveryPatternText;
         Object.assign(value.data, location, { deliveryPattern: pattern || null, deliveryPatternSource: location.deliveryPattern ? "location.message" : pattern ? "Hub deliveryPattern" : "UNAVAILABLE" });
+      }
+      if (!value.data.deliveryPattern) {
+        const reference = existingWeekdayReference(await readVehicleAreaData(), customerCode);
+        if (reference) Object.assign(value.data, { deliveryPattern: reference, deliveryPatternSource: "operating-map delivery_pattern (reference)", deliveryPatternReference: true });
       }
       console.info(JSON.stringify({ component: "phase2b-detail-profile", customerCode, cache: "MISS", hubMs: normalizeStarted - hubStarted, hubDurationMs: Number(hub.meta?.durationMs || 0), normalizeMs: Date.now() - normalizeStarted }));
       return value;
