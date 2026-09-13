@@ -15,7 +15,7 @@ test("weekday reference is explicit and conflicting old rows are not guessed",()
  assert.equal(existingWeekdayReference(source,"S1234"),"");
  assert.match(runtime,/기존 운영지도 기준/);
 });
-for(const password of ["103891#/","3488*","0001#","*8822*"])test("password string preserved: "+password,()=>{
+for(const password of ["103891#/","TEST_ONLY_1*","0001#","*8822*"])test("password string preserved: "+password,()=>{
  assert.equal(parse("도어락 비밀번호: "+password).password,password);
 });
 test("location fields and cold/frozen/ambient notes parse",()=>{
