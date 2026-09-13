@@ -44,5 +44,14 @@
     const hull = [...half(points), ...half(points.slice().reverse())];
     return hull.length >= 3 ? hull : [];
   }
-  root.Phase2bUi = Object.freeze({ addressVariants, addressMatches, distanceKm, nearbyVehicles, deliveryBoundary });
+  function requestError(error, { stale = false, aborted = false, reason } = {}) {
+    if (stale || (aborted && reason !== "timeout") || (error?.name === "AbortError" && reason !== "timeout")) {
+      return Object.assign(new Error("REQUEST_CANCELLED"), { silent: true, code: "REQUEST_CANCELLED" });
+    }
+    if (reason === "timeout" || /This operation was aborted|AbortError/i.test(error?.message || "")) {
+      return Object.assign(new Error("요청 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."), { code: "REQUEST_TIMEOUT" });
+    }
+    return error;
+  }
+  root.Phase2bUi = Object.freeze({ addressVariants, addressMatches, distanceKm, nearbyVehicles, deliveryBoundary, requestError });
 })(typeof window === "undefined" ? globalThis : window);

@@ -40,7 +40,7 @@ test("base, center and vehicle views use verified dated assignments with snapsho
 test("abort, stale response and timeout handling are explicit", () => {
   assert.match(runtime, /previous\.controller\.abort\("superseded"\)/);
   assert.match(runtime, /STALE_RESPONSE/);
-  assert.match(runtime, /요청 시간이 초과되었습니다/);
+  assert.match(runtime, /Phase2bUi.requestError/);
   assert.match(runtime, /isSilentRequestError/);
 });
 

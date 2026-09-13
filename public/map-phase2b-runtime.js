@@ -47,7 +47,7 @@
       const row = normalizeStore({ ...item, id: item.customerCode || item.code, name: item.customerName || item.name,
         address: item.address || item.customerAddress || item.latestAddress || previous.address,
         delivery_pattern: item.deliveryPattern || item.deliveryPatternText || previous.deliveryPattern,
-        lat: item.lat ?? item.latitude ?? previous.lat, lng: item.lng ?? item.longitude ?? previous.lng }, found.vehicle, found.index);
+        lat: item.lat === null ? null : item.lat ?? item.latitude ?? previous.lat, lng: item.lng === null ? null : item.lng ?? item.longitude ?? previous.lng }, found.vehicle, found.index);
       row.customerName ||= previous.customerName || "";
       row.areaLabel ||= previous.areaLabel || "";
       row.region ||= previous.region || "";
@@ -78,7 +78,7 @@
       if (dateChosenByUser) return;
       const target = dateChosenByUser ? state.selectedDate : state.latestDate;
       if (!dateReady || target !== state.selectedDate) await changeSelectedDate(target);
-    } catch (error) { if (!dateChosenByUser) $("#freshnessState").textContent = `기준일 데이터 확인 실패 · ${error.message}`; }
+    } catch (error) { if (!dateChosenByUser && !isSilentRequestError(error)) $("#freshnessState").textContent = `기준일 데이터 확인 실패 · ${error.message}`; }
   }
 
   async function changeSelectedDate(date) {
@@ -280,6 +280,8 @@
   }
 
   function clearSelection() {
+    ++state.detailRequestId;
+    requestControllers.get("store-detail")?.controller.abort("superseded");
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     state.selected = null;
     renderRunList();
@@ -299,7 +301,8 @@
     button.title = `${row.vehicle ? row.vehicle + "호 · " : ""}${row.customerName || row.address || ""}`;
     button.setAttribute("aria-label", `${button.title} · ${completed ? "완료" : pending ? "미완료" : "상태 미확인"}`);
     if (kind === "representative" || kind === "nearbyVehicle") button.style.setProperty("--pin-color", vehicleColor(row.vehicle));
-    button.innerHTML = `${kind === "virtual" ? "신규" : index || esc(row.vehicle || "")}<span class="markerLabel">${esc(row.vehicle ? `${row.vehicle}호 · ` : "")}${esc(row.customerName || row.address || "선택 위치")}</span>`;
+    const label = kind === "virtual" ? "신규" : index || (["representative", "nearbyVehicle"].includes(kind) ? row.vehicle : "");
+    button.innerHTML = `<svg class="pinShape" viewBox="0 0 28 34" aria-hidden="true"><path d="M14 1C6.8 1 1 6.8 1 14C1 23 14 34 14 34S27 23 27 14C27 6.8 21.2 1 14 1Z"/></svg><span class="pinNumber">${esc(label)}</span><span class="markerLabel">${esc(button.title)}</span>`;
     button.onclick = () => row.virtual ? showNearbyReference(row) : row.representative || row.nearbyVehicle ? selectVehicleStatus(row, button) : selectStore(row, button, false);
     return button;
   }
@@ -411,22 +414,27 @@
   function positionDetailPopup() {
     const row = state.selected;
     const panel = $("#detailSection");
-    if (!panel?.classList.contains("open") || innerWidth <= 760 || !state.map || !row) return;
+    if (!panel?.classList.contains("open") || !state.map || !row) return;
     if (numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) {
       const rect = $("#map").getBoundingClientRect();
       panel.style.left = `${rect.left + rect.width / 2 - 125}px`; panel.style.top = `${rect.top + 50}px`; panel.style.right = "auto";
+      panel.style.setProperty("--popup-left", panel.style.left); panel.style.setProperty("--popup-top", panel.style.top);
       return;
     }
     const projection = state.map.getProjection?.();
     const point = projection?.containerPointFromCoords?.(new kakao.maps.LatLng(Number(row.lat), Number(row.lng)));
     if (!point) { panel.style.left = ""; panel.style.top = "74px"; return; }
     const mapRect = $("#map").getBoundingClientRect();
+    const sheetTop = innerWidth <= 760 ? $("#mobileWorkspace")?.getBoundingClientRect().top : innerHeight;
+    panel.style.maxHeight = `${Math.max(100, Math.min(400, (sheetTop || innerHeight) - mapRect.top - 16))}px`;
     const width = panel.offsetWidth || 250;
     const left = Math.max(mapRect.left + 5, Math.min(innerWidth - width - 5, mapRect.left + point.x - width / 2));
     const top = Math.max(mapRect.top + 5, mapRect.top + point.y - panel.offsetHeight - 40);
     panel.style.left = `${left}px`;
     panel.style.right = "auto";
     panel.style.top = `${top}px`;
+    panel.style.setProperty("--popup-left", panel.style.left); panel.style.setProperty("--popup-top", panel.style.top);
+    panel.style.setProperty("--popup-tail", `${Math.max(14, Math.min(width - 14, mapRect.left + point.x - left))}px`);
   }
 
   function selectStore(row, element, focus, skipEnrich = false) {
@@ -438,8 +446,12 @@
     state.selected = row;
     $$(".marker").forEach((pin) => pin.classList.toggle("selected", Boolean(row.customerCode) && pin.dataset.customerCode === row.customerCode && pin.dataset.vehicle === row.vehicle));
     renderRunList();
+    if (element?.classList.contains("marker")) requestAnimationFrame(() => $(".runStop.selected")?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }));
+    const unlocated = numberOrNull(row.lat) === null || numberOrNull(row.lng) === null;
+    if (unlocated) $("#mapStatusSub").textContent = "좌표 미확인 · 지도 위치를 변경하지 않습니다.";
     if (focus && state.map && numberOrNull(row.lat) !== null && numberOrNull(row.lng) !== null) {
       state.suppressMapEventsUntil = Date.now() + 500;
+      if (state.map.getLevel() > 5) state.map.setLevel(5);
       state.map.panTo(new kakao.maps.LatLng(Number(row.lat), Number(row.lng)));
     }
     const routeMode = state.mode === "DATE_ROUTE";
@@ -455,9 +467,11 @@
           <div class="stats">${orderCard}${statusCard}</div>
           <div class="detailLine"><b>주소</b><span>${esc(row.address || "-")}</span></div>
           <div class="detailLine"><b>상세주소</b><span>${esc(row.detailAddress || "-")}</span></div>
-          <div class="detailLine"><b>출입정보</b><span>${esc(row.accessInfo || row.accessMemo || "-")}</span></div>
+          <div class="detailLine"><b>출입정보</b><span>${esc(row.accessInfo || "-")}</span></div>
           <div class="detailLine"><b>비밀번호</b><span>${esc(row.password || "-")}</span></div>
-          <div class="detailLine"><b>특이사항</b><span>${esc(row.specialRemark || row.deliveryRemark || row.accessMemo || "-")}</span></div>
+          <div class="detailLine"><b>특이사항</b><span>${esc(row.specialRemark || "-")}</span></div>
+          ${row.rawMemo ? `<div class="detailLine"><b>배송요청사항 원문</b><span>${esc(row.rawMemo)}</span></div>` : ""}
+          ${unlocated ? '<div class="detailLine coordinateWarning">좌표 미확인</div>' : ""}
           <div class="detailLine"><b>배송요일</b><span>${esc(row.deliveryPattern || row.deliveryPatternText || "-")}</span></div>
           <div class="detailLine"><b>배송권역</b><span>${esc(row.areaLabel || row.region || "-")}</span></div>
           ${row.status ? `<div class="detailLine"><b>완료시각</b><span>${esc(formatTime(row.actualCompletedAt || row.deliveryCompletedAt) || "미완료")}</span></div>` : ""}
@@ -482,10 +496,11 @@
   async function enrichStoreDetail(row, element) {
     const requestId = ++state.detailRequestId;
     try {
-      const payload = await fetchJson(`/api/map-phase2b/preview/detail?customerCode=${encodeURIComponent(row.customerCode)}`, { channel: "store-detail", ttl: 300000, timeout: 45000 });
+      const detailDate = state.selectedDate;
+      const payload = await fetchJson(`/api/map-phase2b/preview/detail?customerCode=${encodeURIComponent(row.customerCode)}&date=${detailDate}`, { channel: "store-detail", ttl: 300000, timeout: 60000 });
       if (requestId !== state.detailRequestId || state.selected?.customerCode !== row.customerCode) return;
       const exact = payload.data ? normalizeApiStore(payload.data) : null;
-      if (exact) selectStore({ ...row, ...exact, vehicle: row.vehicle, order: row.order, status: row.status, actualCompletedAt: row.actualCompletedAt, deliveryCompletedAt: row.deliveryCompletedAt, lastDeliveryDate: row.lastDeliveryDate }, element, false, true);
+      if (exact && detailDate === state.selectedDate) selectStore({ ...row, ...exact, lat: row.lat, lng: row.lng, vehicle: row.vehicle, order: row.order, status: row.status, actualCompletedAt: row.actualCompletedAt, deliveryCompletedAt: row.deliveryCompletedAt, lastDeliveryDate: row.lastDeliveryDate }, element, false, true);
     } catch (error) { if (!isSilentRequestError(error)) console.warn("store detail unavailable", row.customerCode, error.message); }
   }
 
@@ -556,16 +571,27 @@
   }
 
   function renderRunList() {
+    const selectedVehicle = primarySelectedVehicle();
+    if ($("#runListTitle")) $("#runListTitle").textContent = selectedVehicle ? `${selectedVehicle}호 운행 목록` : "운행 목록";
+    if ($("#selectedVehicleBadge")) $("#selectedVehicleBadge").textContent = selectedVehicle ? `선택 호차: ${selectedVehicle}호` : "호차 선택";
+    if ($("#runListTool")) $("#runListTool").hidden = !selectedVehicle;
     const shown = operationStops.filter((row) => runFilter === "ALL" || row.status === runFilter);
     $("#runListCount").textContent = operationStops.length ? `${shown.length}/${operationStops.length}착` : "호차 선택 대기";
     $("#runList").innerHTML = shown.length ? shown.map((row) => {
       const next = operationStops[operationStops.indexOf(row) + 1];
       const distance = next ? distanceKm(row, next) : Infinity;
       const selected = state.selected?.customerCode === row.customerCode && state.selected?.vehicle === row.vehicle;
-      return `<button class="runStop${selected ? " selected" : ""}" data-run-code="${esc(row.customerCode)}" aria-pressed="${selected}"><span class="runOrder">${esc(row.order || "-")}</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName || "점포명 미확인")}</div><span class="runMeta"><span class="statusChip ${row.status === "COMPLETED" ? "done" : ""}">${row.status === "COMPLETED" ? "완료" : "미완료"}</span><span>${esc(formatTime(row.actualCompletedAt) || "-")}</span><span class="runDistance">${Number.isFinite(distance) ? "다음 " + formatDistance(distance) : "-"}</span></span></span></button>`;
+      return `<button class="runStop${selected ? " selected" : ""}" data-run-code="${esc(row.customerCode)}" aria-pressed="${selected}"><span class="runOrder">${esc(row.order || "-")}</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName || "점포명 미확인")}</div><span class="runMeta"><span class="statusChip ${row.status === "COMPLETED" ? "done" : ""}">${row.status === "COMPLETED" ? "완료" : "미완료"}</span><span>${esc(formatTime(row.actualCompletedAt || row.deliveryCompletedAt) || "-")}</span><span class="runDistance">${row.lat == null || row.lng == null ? "좌표 미확인" : Number.isFinite(distance) ? "다음 직선 " + formatDistance(distance) : "-"}</span></span></span></button>`;
     }).join("") : "선택한 상태의 착지가 없습니다.";
+    // Historical Hub route totals exclude unlocated rows. Keep those source
+    // assignments in a clearly separate list without inventing route order/status.
+    const extraStops = dateReady ? allStores.filter(row => row.vehicle === selectedVehicle && (row.lat == null || row.lng == null) && !operationStops.some(stop => stop.customerCode === row.customerCode)) : [];
+    if (extraStops.length) {
+      $("#runListCount").textContent += ` · 좌표 미확인 ${extraStops.length}`;
+      $("#runList").innerHTML += `<div class="unlocatedHeading">좌표 미확인 착지 ${extraStops.length} · 운행집계 제외</div>` + extraStops.map(row => `<button class="unlocatedStop${state.selected?.customerCode === row.customerCode ? " selected" : ""}" data-run-code="${esc(row.customerCode)}"><span class="runOrder">—</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName)}</div><span class="coordinateWarning">좌표 미확인 · 상태 미확인</span></span></button>`).join("");
+    }
     $$('[data-run-code]').forEach((button) => button.onclick = () => {
-      const row = operationStops.find((stop) => stop.customerCode === button.dataset.runCode);
+      const row = [...operationStops, ...extraStops].find((stop) => stop.customerCode === button.dataset.runCode);
       if (!row) return;
       state.fitRequested = false;
       renderStops(state.routeRows, { numbered: true }); drawRoute(state.routeRows);
@@ -580,7 +606,7 @@
     const mobile = innerWidth <= 760;
     for (const [key, panel] of Object.entries(panels)) {
       if (!panelHomes.has(key)) { const anchor = document.createComment(`panel-${key}`); panel.parentNode.insertBefore(anchor, panel); panelHomes.set(key, anchor); }
-      if (mobile && key === tab) $("#mobileSheetContent").append(panel);
+      if (mobile && key === tab && key !== "detail") $("#mobileSheetContent").append(panel);
       else { const anchor = panelHomes.get(key); anchor.parentNode.insertBefore(panel, anchor.nextSibling); }
     }
     $$('[data-sheet-tab]').forEach((button) => { button.classList.toggle("active", button.dataset.sheetTab === tab); button.setAttribute("aria-selected", String(button.dataset.sheetTab === tab)); });
@@ -824,6 +850,11 @@
 
   function refreshVehicleUi(run) {
     const selected = selectedVehicles();
+    if (run) {
+      ++state.todayRequestId; ++state.routeRequestId;
+      requestControllers.get("operation-status")?.controller.abort("superseded");
+      clearSelection(); updateOperationMetrics(null);
+    }
     $("#selectedVehicleCount").textContent = selected.length ? `${selected.length}대` : "전체";
     $("#vehicleModeLabel").textContent = selected.length === 1 ? "해당 호차 집중모드" : selected.length > 1 ? "선택 호차 권역 비교" : "기준일 전체 권역";
     $("#mapStatusTitle").textContent = selected.length === 1 ? `${selected[0]}호 ${state.selectedDate} 권역` : selected.length > 1 ? `${selected.length}대 호차 권역 비교` : "기준일 전체 권역";
@@ -1173,10 +1204,10 @@
   function isSilentRequestError(error) { return Boolean(error?.silent || error?.name === "AbortError"); }
   async function fetchJson(url, options = {}) {
     const { channel = new URL(url, location.href).pathname, timeout = 30000, ttl = 0 } = options;
-    const cached = memoryResponses.get(url);
-    if (ttl && cached?.expiresAt > Date.now()) return cached.value;
     const previous = requestControllers.get(channel);
     if (previous) previous.controller.abort("superseded");
+    const cached = memoryResponses.get(url);
+    if (ttl && cached?.expiresAt > Date.now()) { requestControllers.delete(channel); return cached.value; }
     const controller = new AbortController();
     const token = Symbol(channel);
     requestControllers.set(channel, { controller, token });
@@ -1184,19 +1215,15 @@
     const started = performance.now();
     try {
       const response = await fetch(url, { cache: "no-store", signal: controller.signal });
-      const json = await response.json().catch(() => ({}));
+      const json = await response.json();
       apiDiagnostics.set(new URL(url, location.href).pathname.split("/").pop(), { ms: Math.round(performance.now() - started), status: response.status, cache: response.headers.get("X-Phase2B-Cache") || "미제공" });
       if (requestControllers.get(channel)?.token !== token) { const stale = new Error("STALE_RESPONSE"); stale.silent = true; throw stale; }
       if (!response.ok || json.error) throw new Error(json.error || `HTTP_${response.status}`);
       if (ttl) memoryResponses.set(url, { value: json, expiresAt: Date.now() + ttl });
       return json;
     } catch (error) {
-      if (error?.name === "AbortError" || controller.signal.aborted) {
-        const aborted = new Error(controller.signal.reason === "timeout" ? "요청 시간이 초과되었습니다. 잠시 후 다시 시도해주세요." : "REQUEST_CANCELLED");
-        aborted.silent = controller.signal.reason !== "timeout";
-        throw aborted;
-      }
-      throw error;
+      throw Phase2bUi.requestError(error, { stale: requestControllers.get(channel)?.token !== token,
+        aborted: controller.signal.aborted, reason: controller.signal.reason });
     } finally {
       clearTimeout(timer);
       if (requestControllers.get(channel)?.token === token) requestControllers.delete(channel);

@@ -18,6 +18,7 @@ import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, ph
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { phase2bSnapshotFailure, phase2bSnapshotProgress, phase2bSnapshotWatchdogNeeded } from "./phase2bSnapshotRecovery.js";
 import { readPaginatedDatedAssignments, uniqueAssignments } from "./phase2bAssignments.js";
+import { locationDetailsFromTasks } from "./phase2bLocationDetail.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,6 +31,7 @@ const phase2bBoundsCache = createPhase2bReadCache({ name: "bounds", ttlMs: Numbe
 const phase2bDetailCache = createPhase2bReadCache({ name: "detail", ttlMs: Number(process.env.PHASE2B_DETAIL_CACHE_TTL_MS || 1200000), staleMs: 300000, maxEntries: 512, maxBytes: 8 * 1024 * 1024 });
 const phase2bAssignmentCache = createPhase2bReadCache({ name: "assignments", ttlMs: 60000, staleMs: 120000, maxEntries: 8, maxBytes: 12 * 1024 * 1024 });
 const phase2bDatedAssignmentCache = createPhase2bReadCache({ name: "datedAssignments", ttlMs: 600000, staleMs: 0, maxEntries: 16, maxBytes: 24 * 1024 * 1024 });
+const phase2bLocationDetailCache = createPhase2bReadCache({ name: "locationDetails", ttlMs: 300000, staleMs: 0, maxEntries: 3, maxBytes: 8 * 1024 * 1024 });
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
 const parseExcelScriptPath = path.join(__dirname, "parse_excel.py");
 const uploadDir = path.join(os.tmpdir(), "freshon-upload-files");
@@ -3849,14 +3851,26 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
   if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
+  const detailDate = req.query.date ? normalizeDateValue(req.query.date) : phase2bSnapshotMemory?.latestDate || phase2bKstDate();
+  if (!detailDate || detailDate > phase2bKstDate()) return res.status(400).json({ error: "INVALID_DATE" });
   const started = Date.now();
   try {
     const namespace = phase2bCacheNamespace(phase2bSnapshotMemory);
-    const loaded = await phase2bDetailCache.load(`${namespace}:${customerCode}`, async () => {
+    const loaded = await phase2bDetailCache.load(`${namespace}:${detailDate}:${customerCode}`, async () => {
       const hubStarted = Date.now();
-      const hub = await callHub("customerDetail", { customerCode }, { useCache: false });
+      const [hub, locations] = await Promise.all([
+        callHub("customerDetail", { customerCode }, { useCache: false }),
+        phase2bLocationDetailCache.load(detailDate, async () => locationDetailsFromTasks(await fetchDeliveryTaskRowsForDate(detailDate), detailDate))
+      ]);
       const normalizeStarted = Date.now();
       const value = { ok: true, data: normalizePhase2bDetail(hub.data || {}, { customerCode }), meta: hub.meta || {}, error: null };
+      // Never expose legacy combined sales/center memo as a fallback.
+      const location = locations.value[customerCode];
+      Object.assign(value.data, { accessInfo: null, password: null, specialRemark: null, rawMemo: null, memoSource: location ? "location.message" : "UNAVAILABLE", memoDate: detailDate });
+      if (location) {
+        const pattern = location.deliveryPattern || value.data.deliveryPattern || value.data.deliveryPatternText;
+        Object.assign(value.data, location, { deliveryPattern: pattern || null, deliveryPatternSource: location.deliveryPattern ? "location.message" : pattern ? "Hub deliveryPattern" : "UNAVAILABLE" });
+      }
       console.info(JSON.stringify({ component: "phase2b-detail-profile", customerCode, cache: "MISS", hubMs: normalizeStarted - hubStarted, hubDurationMs: Number(hub.meta?.durationMs || 0), normalizeMs: Date.now() - normalizeStarted }));
       return value;
     });
