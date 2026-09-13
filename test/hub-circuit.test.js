@@ -192,7 +192,7 @@ test('private successes and failure classes: five synthetic requests each; never
 });
 test('private shared 4.8s deadline aborts once, including stalled body; timeout never retries', async () => {
   const client=await freshClient();let calls=0;
-  global.fetch=async(_url,options)=>{calls++;return {ok:true,status:200,headers:new Headers({'content-type':'application/json'}),text:()=>new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'}))))};};
+  global.fetch=async(_url,options)=>{calls++;return {ok:true,status:200,headers:new Headers({'content-type':'application/json'}),text:()=>new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError'))))};};
   const started=performance.now();
   await assert.rejects(client.callHub('staffCustomerDetail',{customerCode:'S1234'}),e=>e.name==='AbortError'&&e.message==='DETAIL_UPSTREAM_TIMEOUT'&&client.hubRequestProfile(e).phase==='BODY');
   assert.equal(calls,1);assert.ok(performance.now()-started<5500);

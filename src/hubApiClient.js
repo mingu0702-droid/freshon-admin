@@ -209,7 +209,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
       lastError = error;
       if (staffDetail) {
         profile.totalMs = Date.now()-started;
-        if (controller.signal.aborted) {error.name='AbortError';error.message='DETAIL_UPSTREAM_TIMEOUT';}
+        if (controller.signal.aborted) {error=Object.assign(new Error('DETAIL_UPSTREAM_TIMEOUT'),{name:'AbortError'});lastError=error;}
         requestProfiles.set(error, profile);
         console.warn(JSON.stringify({component:'private-hub-profile',...profile,result:classifyHubFailure(error)}));
       }
