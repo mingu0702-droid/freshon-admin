@@ -34,7 +34,7 @@ function clipboard(value) {
 }
 async function main() {
   if (process.platform !== 'win32' || !process.stdin.isTTY || process.argv.length !== 2) throw new Error('WINDOWS_INTERACTIVE_ONLY');
-  process.stdout.write('Stage 전용 · Render freshon-admin-stage-preview-template → Environment\nMAP_STAFF_ID는 원하시는 공용 아이디를 직접 설정하세요.\n비밀번호는 16자 이상, 다른 계정과 다른 값을 사용하세요.\n');
+  process.stdout.write('Stage 전용 · Render freshon-admin-stage-preview-template → Environment\nMAP_STAFF_ID는 3글자도 가능합니다. 원하시는 공용 아이디를 직접 설정하세요.\n비밀번호는 최소 6자리입니다. 영문+숫자 혼합 및 다른 계정과 다른 값을 권장합니다.\n로그인 세션은 최대 8시간이며, 로그인 실패 제한은 유지됩니다.\n');
   let first = await hidden('공용 비밀번호 (숨김): '), second = await hidden('다시 입력 (숨김): ');
   const values = await staffSetupValues(first, second); first = ''; second = '';
   await clipboard(values.hash); values.hash = '';

@@ -13,7 +13,7 @@ const validHash = hash => /^scrypt\$131072\$8\$1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_
 
 // Node 20 has no built-in Argon2. OWASP's scrypt N=2^17, r=8, p=1 baseline.
 export async function createStaffPasswordHash(password) {
-  if (typeof password !== 'string' || password.length < 16 || Buffer.byteLength(password) > 1024) throw new Error('PASSWORD_LENGTH');
+  if (typeof password !== 'string' || password.length < 6 || Buffer.byteLength(password) > 1024) throw new Error('PASSWORD_LENGTH');
   const salt = crypto.randomBytes(16);
   const derived = await scrypt(password, salt, 32, params);
   return `scrypt$131072$8$1$${salt.toString('base64url')}$${derived.toString('base64url')}`;

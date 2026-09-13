@@ -5,14 +5,17 @@ import { createMapStaffAuth, createStaffPasswordHash, verifyStaffPassword, STAFF
 import { staffSetupValues } from '../scripts/setup-map-staff.mjs';
 import { staffCustomerDetail } from '../src/mapStaffDetail.js';
 
-const password = 'SYNTHETIC-only-test-credential-2026';
+// Synthetic credentials only: exercise the requested six-character minimum.
+const password = 'Ab12cd';
 test('staff sessions: public/private/admin separation, Origin, expiry, logout, rotation, throttling', async t => {
   const values = await staffSetupValues(password, password);
   assert.equal(await verifyStaffPassword(password, values.hash), true);
   assert.equal(await verifyStaffPassword('incorrect synthetic', values.hash), false);
   assert.equal(values.secret.length, 43);
   await assert.rejects(staffSetupValues(password, 'different'));
-  const env = { MAP_STAFF_ID: 'synthetic-staff', MAP_STAFF_PASSWORD_HASH: values.hash, MAP_STAFF_SESSION_SECRET: values.secret,
+  assert.equal(STAFF_MAX_MS, 8 * 60 * 60 * 1000);
+  await assert.rejects(staffSetupValues('Ab123', 'Ab123'), /PASSWORD_LENGTH/);
+  const env = { MAP_STAFF_ID: 'abc', MAP_STAFF_PASSWORD_HASH: values.hash, MAP_STAFF_SESSION_SECRET: values.secret,
     RENDER_EXTERNAL_URL: 'https://stage.example.test', PUBLIC_VIEW: 'true', ADMIN_TOKEN: 'SYNTHETIC-machine-only' };
   let time = 1000;
   const auth = createMapStaffAuth({ env, now: () => time }), app = express();
@@ -57,6 +60,12 @@ test('staff sessions: public/private/admin separation, Origin, expiry, logout, r
   assert.equal((await login()).status, 503);
   env.WEB_CONCURRENCY = '1'; env.MAP_STAFF_PASSWORD_HASH = '';
   assert.equal((await login()).status, 503);
+});
+
+test('six-character password allows digits without forcing a mixed composition', async () => {
+  const hash = await createStaffPasswordHash('123456');
+  assert.equal(await verifyStaffPassword('123456', hash), true);
+  assert.notEqual(hash, '123456');
 });
 
 test('private projection excludes raw prose, claims and owner phones; exact password string', () => {
