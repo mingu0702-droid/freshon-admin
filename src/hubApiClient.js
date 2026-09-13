@@ -134,6 +134,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
   const entered = circuitEnter(action);
   const started = Date.now();
   const staffDetail = action === 'staffCustomerDetail';
+  const sourceRead = ['periodAssignments','staffDriverHistory'].includes(action);
   state.metrics.requests += 1;
   const actionTimeoutMs = {
     unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 30000),
@@ -166,7 +167,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
     try {
       const fetchStarted = Date.now();
       const fetchOptions = { method: "POST", headers: { "content-type": "application/json" }, body: serializedBody, signal: controller.signal };
-      const response = staffDetail ? await fetchPrivateHub(process.env.HUB_API_URL, fetchOptions, profile) : await fetch(process.env.HUB_API_URL, fetchOptions);
+      const response = staffDetail || sourceRead ? await fetchPrivateHub(process.env.HUB_API_URL, fetchOptions, profile) : await fetch(process.env.HUB_API_URL, fetchOptions);
       const responseHeadersMs = Date.now() - fetchStarted;
       profile.responseHeadersMs = responseHeadersMs; profile.upstreamStatus = response.status;
       const contentType = response.headers?.get('content-type') || '';
@@ -189,6 +190,8 @@ async function callHubUncached(action, params, key, privateRead = false) {
       profile.phase = 'CONTRACT';
       profile.parseMs = parseMs; profile.responseKind = privateResponseKind(responseText,json);
       profile.hubDurationMs = Number(json?.meta?.durationMs || 0);
+      profile.responseBytes = responseText == null ? null : Buffer.byteLength(responseText);
+      if(sourceRead){profile.sourceReadMs=Number(json?.meta?.historyProfile?.readMs||0);profile.sourceLookupMs=Number(json?.meta?.historyProfile?.lookupMs||0);profile.sourceRows=Number(json?.meta?.historyProfile?.sourceRows||json?.meta?.sourceReadCount||0);}
       if (json && typeof json === 'object') requestProfiles.set(json, profile);
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
@@ -198,6 +201,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
         throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'), { upstreamStatus: response.status, failureType: 'contract' });
       }
       profile.phase = 'DONE';
+      if(sourceRead)console.info(JSON.stringify({component:'hub-source-profile',action,...profile,count:Array.isArray(json.data)?json.data.length:0,totalMs:Date.now()-started,result:'OK'}));
       if (staffDetail) console.info(JSON.stringify({component:'private-hub-profile',...profile,result:'OK',totalMs:Date.now()-started}));
       circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
       const ttlMs = action === "routePlan" ? Number(process.env.HUB_ROUTE_CACHE_TTL_MS || 300000) : 60000;
@@ -207,6 +211,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
       return json;
     } catch (error) {
       lastError = error;
+      if(sourceRead){requestProfiles.set(error,profile);console.warn(JSON.stringify({component:'hub-source-profile',action,...profile,totalMs:Date.now()-started,result:classifyHubFailure(error)}));}
       if (staffDetail) {
         profile.totalMs = Date.now()-started;
         if (controller.signal.aborted) {error=Object.assign(new Error('DETAIL_UPSTREAM_TIMEOUT'),{name:'AbortError'});lastError=error;}

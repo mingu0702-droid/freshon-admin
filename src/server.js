@@ -14,7 +14,7 @@ import { requireAdmin, requireView } from "./auth.js";
 import { createMapStaffAuth } from "./mapStaffAuth.js";
 import { staffLatency, addStaffTiming } from "./staffLatency.js";
 import { staffCustomerDetail } from "./mapStaffDetail.js";
-import { createPeriodJobs, readStaffDriverHistory, validatePeriod } from "./mapPeriod.js";
+import { createPeriodJobs, readStaffDriverHistory, validatePeriod, selectPeriodStores } from "./mapPeriod.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled, hubRequestProfile } from "./hubApiClient.js";
@@ -3943,16 +3943,25 @@ app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
     const data = await readStaffDriverHistory({ customerCode, startDate, endDate },
       params => callHub("staffDriverHistory", params, { useCache: false, privateRead: true }));
     return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data, meta: { complete: true, startDate, endDate, source: "Customer.daily_routes 배차 이력" } }));
-  } catch { return res.status(502).json({ error: "PRIVATE_HISTORY_UNAVAILABLE" }); }
+  } catch(error) {
+    const profile=hubRequestProfile(error),timeout=error?.name==='AbortError';
+    res.set('X-History-Upstream-Status',String(Number(error?.upstreamStatus||profile.upstreamStatus)||0));
+    res.set('X-History-Failure',timeout?'TIMEOUT':error?.failureType==='parse'?'INVALID_JSON':error?.message==='PERIOD_HISTORY_INCOMPLETE'?'INCOMPLETE':Number(error?.upstreamStatus)>=500?'HUB_5XX':'CONTRACT');
+    return res.status(timeout?504:502).json({ error: timeout?'HISTORY_UPSTREAM_TIMEOUT':"PRIVATE_HISTORY_UNAVAILABLE" });
+  }
 });
 
 app.get("/api/map-phase2b/preview/period", requireView, async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const startDate = String(req.query.startDate || ""), endDate = String(req.query.endDate || "");
+  const vehicle=String(req.query.vehicle||''),driverKey=String(req.query.driverKey||'');
+  if((vehicle&&driverKey)||(vehicle&&!/^\d{1,3}$/.test(vehicle))||(driverKey&&!/^[A-Za-z0-9_-]{1,128}$/.test(driverKey)))return res.status(400).json({error:'INVALID_PERIOD_FILTER'});
   try { validatePeriod(startDate, endDate); if (endDate > phase2bKstDate()) throw new Error(); }
   catch { return res.status(400).json({ error: "INVALID_PERIOD" }); }
-  const result = periodJobs.read(startDate, endDate);
+  const result = periodJobs.read(startDate, endDate,{retry:req.query.retry==='1'});
   if (result.meta.complete) {
+    result.data=selectPeriodStores(result.data,{vehicle,driverKey});
+    result.meta.storeCount=result.data.length;result.meta.filterMode=driverKey?'driver':vehicle?'vehicle':'all';
     const snapshot = await readPhase2bSnapshot();
     const coords = new Map((snapshot?.rows || []).map(row => [row.customerCode, row]));
     result.data = result.data.map(row => ({ ...row, lat: coords.get(row.customerCode)?.lat ?? null, lng: coords.get(row.customerCode)?.lng ?? null }));

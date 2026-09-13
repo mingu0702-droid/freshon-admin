@@ -122,7 +122,7 @@
       await changePeriod(state.rangeStart, state.rangeEnd);
     } catch (error) { if (!dateChosenByUser && !isSilentRequestError(error)) $("#freshnessState").textContent = "기간 기준일 확인 실패"; }
   }
-  async function changePeriod(start, end) {
+  async function changePeriod(start, end, retry = false) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end || end > localDate() || (Date.parse(end)-Date.parse(start))/86400000 > 89) {
       $("#freshnessState").textContent = "시작일과 종료일을 확인하세요. 최대 90일입니다."; return;
     }
@@ -139,10 +139,12 @@
     }
     dateReady = false; periodListLimit = 100; clearMap(); state.currentRows = []; renderPeriodStoreList([]);
     $("#periodIdentity").textContent = "기간 이력 준비 중";
+    let retryRequested = retry;
     async function read() {
       if (id !== periodRequestId || state.mode !== "BASE_60D") return;
       try {
-        const payload = await fetchJson(`/api/map-phase2b/preview/period?startDate=${start}&endDate=${end}`, { channel: "period", ttl: 0, timeout: 15000 });
+        const retryQuery = retryRequested ? '&retry=1' : ''; retryRequested = false;
+        const payload = await fetchJson(`/api/map-phase2b/preview/period?startDate=${start}&endDate=${end}${retryQuery}`, { channel: "period", ttl: 0, timeout: 15000 });
         if (id !== periodRequestId || state.mode !== "BASE_60D") return;
         if (payload.meta?.phase === "ERROR") throw new Error("기간 원천 확인 실패");
         if (payload.meta?.complete !== true) {
@@ -165,7 +167,8 @@
           $("#freshnessState").textContent = "기간 조회 실패 · 신규권역 판단 보류";
           $("#periodIdentity").textContent = "기간 원천 조회 실패 · 매장 수 미확인";
           $("#periodStoreListCount").textContent = "미확인";
-          $("#periodStoreList").innerHTML = '<p class="notice show">기간 원천을 불러오지 못했습니다. 조회 실패를 매장 0개로 판단하지 마세요.</p>';
+          $("#periodStoreList").innerHTML = '<p class="notice show">기간 데이터를 불러오지 못했습니다. 조회 실패를 매장 0개로 판단하지 마세요.</p>';
+          const retryButton=document.createElement('button');retryButton.textContent='재시도';retryButton.onclick=()=>void changePeriod(start,end,true);$("#periodStoreList").append(retryButton);
         }
       }
     }

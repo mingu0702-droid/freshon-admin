@@ -13,6 +13,8 @@ function fixture(rows, total, nextToken=null) {
    hubMapHttpText_:x=>{if(x.length>200)throw new Error('INVALID_PARAMS');return x;}, hubMapHttpDateOrNull_:x=>x,
    hubMapHttpRequireHubOk_:x=>assert.equal(x.ok,true),hubMapHttpObjects_:x=>x.data,
    hubMapHttpRaise_:code=>{throw new Error(code);},getDailyRoutes:read,CustomerDataApi:{getDailyRoutes:read},
+   hubStaffHistorySource_:(code,start,end)=>{request={customerCode:code,startDate:start,endDate:end};return{rows,profile:{}};},
+   hubPeriodSourcePage_:read,
    PropertiesService:{getScriptProperties:()=>({getProperty:()=> 'SYNTHETIC_HMAC_KEY'})},
    Utilities:{base64EncodeWebSafe:x=>Buffer.from(x).toString('base64url'),base64DecodeWebSafe:x=>Buffer.from(x,'base64url'),
      newBlob:x=>({getDataAsString:()=>Buffer.from(x).toString()}),computeHmacSha256Signature:(text,key)=>crypto.createHmac('sha256',key).update(text).digest()}
