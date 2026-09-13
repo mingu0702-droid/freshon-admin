@@ -12,7 +12,7 @@ test('collector guards use existing authenticated automation token contract',()=
 });
 test('public detail has only five general fields',()=>{
  let result;const res={setHeader(){},json:v=>{result=v;}};
- generalMapResponse({path:'/detail'},res,()=>{});
+ const req={path:'/detail'};generalMapResponse(req,res,()=>{});req.path='/api/map-phase2b/preview/detail';
  res.json({ok:true,data:{customerCode:'TEST',password:'synthetic',lat:1}});
  assert.deepEqual(Object.keys(result.data),['customerCode','customerName','address','vehicle','status']);
 });
