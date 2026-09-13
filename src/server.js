@@ -3845,7 +3845,8 @@ app.get("/api/map-phase2b/preview/status", requireView, (_req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const state = phase2bSnapshotAutomationStatus(phase2bSnapshotMemory);
   const snapshot = Object.fromEntries(["phase", "latest", "targetLatest", "progress", "continuation", "stale", "updatedAt"].map(key => [key, state[key] ?? null]));
-  return res.json({ enabled: true, hubAuth: state.hubAuth, snapshot });
+  return res.json({ enabled: true, hubAuth: state.hubAuth, snapshot,
+    routing: { status: "ROUTING CONFIG PENDING", enabled: false, reason: "Approved provider credentials, terms and combined quota not verified", autoDecisionMetric: "SPATIAL_500M" } });
 });
 
 app.get("/api/map-phase2b/admin/status", requireSensitive, (_req, res) => {
