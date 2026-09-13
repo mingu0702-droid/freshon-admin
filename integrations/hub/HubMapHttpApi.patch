@@ -1,10 +1,22 @@
 --- a/HubMapHttpApi.js
 +++ b/HubMapHttpApi.js
-@@
+@@ -75,7 +75,8 @@ function doPost(e) {
+       mapBounds: hubMapHttpHandleMapBoundsDispatch_,
+       unifiedSearch: hubMapPhase2BHandleUnifiedSearch_,
+       nearestVehicles: hubMapPhase2BHandleNearestVehicles_,
 -      routePlan: hubMapPhase2BHandleRoutePlan_
 +      routePlan: hubMapPhase2BHandleRoutePlan_,
 +      datedAssignments: hubDatedAssignmentsPage_
-@@
+     };
+     const handler = handlers[action];
+     if (!handler) hubMapHttpRaise_('INVALID_ACTION', 'The requested action is not available.', 404, false);
+@@ -786,7 +787,8 @@ function hubMapHttpSafeError_(error) {
+   const allowed = [
+     'INVALID_REQUEST', 'INVALID_VERSION', 'INVALID_ACTION', 'INVALID_PARAMS',
+     'UNAUTHORIZED', 'NOT_FOUND', 'RATE_LIMITED', 'TIMEOUT', 'UPSTREAM_TIMEOUT',
 -    'QUERY_LIMIT_EXCEEDED', 'INTERNAL_ERROR'
 +    'QUERY_LIMIT_EXCEEDED', 'INTERNAL_ERROR', 'INVALID_CURSOR',
 +    'DATED_SOURCE_COUNT_MISMATCH', 'DATED_SOURCE_DATE_MISMATCH', 'DATED_SOURCE_IDENTITY_MISSING'
+   ];
+   if (allowed.indexOf(code) < 0) {
+     return {code: 'INTERNAL_ERROR', message: 'An internal error occurred.', httpStatus: 500, retryable: false};
