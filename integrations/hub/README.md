@@ -1,11 +1,12 @@
 # Stage dated assignments deployment
 
-- Apps Script version 40; Stage-only new deployment:
+- Apps Script version 41; Stage-only new deployment:
   AKfycby2GWkBTo3v1u9YsDIpmwGUNIGP4UHuaAnP2HAujA4oKgsWV0sj68wjxP_H1iL5Opu2
 - Existing Production v39 deployment is unchanged.
 - Pulled source backup: sibling work/hub-dated-assignments-stage/reference-before-pagination-20260913.
-- Added HubDatedAssignments.js. Only other Hub edit registers
-  `datedAssignments: hubDatedAssignmentsPage_` in HubMapHttpApi.js handlers.
+- Added HubDatedAssignments.js. Only other Hub edits register
+  `datedAssignments: hubDatedAssignmentsPage_` and allow its safe cursor/count/date/identity
+  error codes in HubMapHttpApi.js. The exact registration patch is stored alongside this file.
 - Uses existing HubDataLayer.getDailyRoutes / CustomerDataApi v42 nextToken,
   date boundaries and bulk coordinate lookup. No data/trigger/index rebuild execution.
 - Actual source is Customer daily_routes (current/archive selected by existing library),

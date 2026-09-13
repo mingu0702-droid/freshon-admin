@@ -1,0 +1,10 @@
+--- a/HubMapHttpApi.js
++++ b/HubMapHttpApi.js
+@@
+-      routePlan: hubMapPhase2BHandleRoutePlan_
++      routePlan: hubMapPhase2BHandleRoutePlan_,
++      datedAssignments: hubDatedAssignmentsPage_
+@@
+-    'QUERY_LIMIT_EXCEEDED', 'INTERNAL_ERROR'
++    'QUERY_LIMIT_EXCEEDED', 'INTERNAL_ERROR', 'INVALID_CURSOR',
++    'DATED_SOURCE_COUNT_MISMATCH', 'DATED_SOURCE_DATE_MISMATCH', 'DATED_SOURCE_IDENTITY_MISSING'

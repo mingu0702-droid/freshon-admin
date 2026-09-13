@@ -4,7 +4,17 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { readPaginatedDatedAssignments as read } from "../src/phase2bAssignments.js";
 import { createPhase2bReadCache } from "../src/phase2bReadCache.js";
+import { classifyHubFailure } from "../src/hubApiClient.js";
 const date = "2026-08-11";
+test("502 diagnostics distinguish timeout, HTML, JSON, execution, auth and 5xx without changing retry",()=>{
+ assert.equal(classifyHubFailure({name:"AbortError"}),"timeout");
+ assert.equal(classifyHubFailure({responseKind:"html",failureType:"parse"}),"hub-html");
+ assert.equal(classifyHubFailure({failureType:"parse"}),"invalid-json-contract");
+ assert.equal(classifyHubFailure({message:"HUB_INTERNAL_ERROR",upstreamStatus:500}),"apps-script-execution");
+ assert.equal(classifyHubFailure({upstreamStatus:403,responseKind:"html"}),"auth");
+ assert.equal(classifyHubFailure({upstreamStatus:503}),"upstream-5xx");
+ assert.equal(classifyHubFailure({}),"network");
+});
 function source(total, change = p => p) {
   let count = 0;
   return async ({cursor, limit}) => {
@@ -89,4 +99,3 @@ test("Hub validates source actual row date before returning complete",()=>{
  const {ctx}=hubContext(1);ctx.getDailyRoutes=()=>({ok:true,data:[{deliveryDate:"2026-08-12",customerCode:"X"}],meta:{total:1,returned:1}});
  assert.throws(()=>ctx.hubDatedAssignmentsPage_({date,limit:1000}),/DATE_MISMATCH/);
 });
-
