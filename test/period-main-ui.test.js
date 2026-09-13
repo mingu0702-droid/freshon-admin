@@ -19,7 +19,7 @@ function fixture(){
  activateSheet=()=>{}; clearMap=()=>{};
  window.test={state,switchMode,selectedVehicles,setSelectedVehicles,filteredPeriodStores,searchPeriod,
  setBasis:value=>periodBasis=value,setScope:value=>periodVehicleScope=value,
- setRows:rows=>{allStores=rows;periodRows=rows;dateReady=true;},setSnapshot:rows=>latestSnapshotRows=rows};
+ setRows:rows=>{allStores=rows;periodRows=rows;dateReady=true;periodMeta={complete:true,startDate:state.rangeStart,endDate:state.rangeEnd};},setSnapshot:rows=>latestSnapshotRows=rows};
  })();`,ctx);
  return {...ctx.window.test,node};
 }
@@ -65,4 +65,10 @@ test('period view has one header, no daily ETA/status; mobile has distinct filte
 test('recent sixty days never regresses to a stale coordinate snapshot date',()=>{
  assert.ok(runtime.includes('state.rangeEnd = state.rangeEnd || localDate()'));
  assert.ok(runtime.includes('changePeriod(daysBefore(localDate(),59), localDate())'));
+});
+
+test('incomplete period cannot claim a customer has no period history',async()=>{
+ const f=fixture();await f.searchPeriod('S1234');
+ assert.match(f.node('#searchState').innerHTML,/기간 이력 준비 중/);
+ assert.equal(f.node('#results').innerHTML,'');
 });
