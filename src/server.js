@@ -19,6 +19,7 @@ import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { phase2bSnapshotFailure, phase2bSnapshotProgress, phase2bSnapshotWatchdogNeeded } from "./phase2bSnapshotRecovery.js";
 import { readPaginatedDatedAssignments, uniqueAssignments } from "./phase2bAssignments.js";
 import { locationDetailsFromTasks, existingWeekdayReference } from "./phase2bLocationDetail.js";
+import { sensitiveAuth, publicMapValue, publicCustomerDetail, publicResponse, securityAudit } from "./phase2bSecurity.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,6 +56,16 @@ const upload = multer({
 });
 
 app.use(express.json({ limit: "10mb" }));
+const requireSensitive = sensitiveAuth(config.adminToken);
+const requireLegacySensitive = sensitiveAuth(config.adminToken, { allowLegacyQuery: true });
+app.use(securityAudit);
+app.use(publicResponse);
+// Legacy collectors retain their existing x-admin-token/query-token contract.
+// Internal collectors call functions directly and do not traverse this HTTP gate.
+app.use("/api", (req, res, next) => {
+  if (req.path === "/health" || req.path.startsWith("/map-phase2b/preview/") || req.path.startsWith("/map-phase2b/private/")) return next();
+  return requireLegacySensitive(req, res, next);
+});
 app.use((req, res, next) => {
   if (req.path === "/" || req.path.endsWith(".html")) {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -68,6 +79,16 @@ app.use((req, res, next) => {
   const localDemo = req.query.demo === "1" && (req.hostname === "127.0.0.1" || req.hostname === "localhost");
   if (!previewEnabled() && !localDemo) return res.status(404).send("Not Found");
   next();
+});
+// Data assets must not bypass the public API response boundary through static hosting.
+app.get(["/map-phase2b-snapshot.json", "/customer-master-20260604.json", "/vehicle-data.js", "/new-area-data.js"], async (req, res) => {
+  try {
+    const raw = await fs.readFile(path.join(publicDir, path.basename(req.path)), "utf8");
+    const assignment = raw.match(/^\s*(window\.[A-Z_]+)\s*=\s*([\s\S]*?);?\s*$/);
+    const clean = publicMapValue(JSON.parse(assignment ? assignment[2] : raw));
+    res.setHeader("Cache-Control", "no-store");
+    return assignment ? res.type("application/javascript").send(`${assignment[1]} = ${JSON.stringify(clean)};`) : res.json(clean);
+  } catch { return res.status(503).json({ error: "PUBLIC_DATA_UNAVAILABLE" }); }
 });
 app.use(express.static(publicDir));
 
@@ -3848,6 +3869,18 @@ app.get("/api/map-phase2b/preview/search", requireView, async (req, res) => {
 });
 
 app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
+  if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
+  try {
+    const snapshot = await readPhase2bSnapshot();
+    const row = snapshot?.rows?.find(item => String(item.customerCode || item.code) === customerCode);
+    if (!row) return res.status(404).json({ ok: false, error: "CUSTOMER_NOT_FOUND" });
+    return res.json({ ok: true, data: publicCustomerDetail({ ...row, customerCode }), error: null });
+  } catch { return res.status(503).json({ ok: false, error: "PUBLIC_DETAIL_UNAVAILABLE" }); }
+});
+
+app.get("/api/map-phase2b/private/customer-detail", requireSensitive, async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
   if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
