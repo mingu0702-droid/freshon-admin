@@ -116,7 +116,8 @@
       $("#selectedDate").max = localDate();
       if (dateChosenByUser) return;
       state.routeDate = state.routeDate || state.latestDate; state.selectedDate = state.routeDate;
-      state.rangeEnd = state.rangeEnd || state.latestDate;
+      // A stale coordinate snapshot must not move the recent-60-day window backwards.
+      state.rangeEnd = state.rangeEnd || localDate();
       state.rangeStart = state.rangeStart || daysBefore(state.rangeEnd, 59);
       await changePeriod(state.rangeStart, state.rangeEnd);
     } catch (error) { if (!dateChosenByUser && !isSilentRequestError(error)) $("#freshnessState").textContent = "기간 기준일 확인 실패"; }
@@ -1470,10 +1471,10 @@
   }
 
   function bindEvents() {
-    $("#modePeriod").onclick = () => changePeriod(state.rangeStart || daysBefore(state.latestDate,59), state.rangeEnd || state.latestDate);
+    $("#modePeriod").onclick = () => changePeriod(state.rangeStart || daysBefore(localDate(),59), state.rangeEnd || localDate());
     $("#modeDaily").onclick = () => { dateChosenByUser = true; changeSelectedDate(state.routeDate || state.latestDate); };
     $("#applyPeriod").onclick = () => changePeriod($("#rangeStart").value, $("#rangeEnd").value);
-    $("#recent60").onclick = () => changePeriod(daysBefore(state.latestDate,59), state.latestDate);
+    $("#recent60").onclick = () => changePeriod(daysBefore(localDate(),59), localDate());
     $("#periodDriver").onchange = event => { state.driverKey = event.target.value; clearSelection(); periodListLimit = 100; requestMapFit(); loadBaseMap(); };
     $$('input[name="periodBasis"]').forEach(input => input.onchange = () => { periodBasis = input.value; syncPeriodBasis(); clearSelection(); periodListLimit = 100; requestMapFit(); loadBaseMap(); });
     $("#periodListMore").onclick = () => { periodListLimit += 100; renderPeriodStoreList(); };

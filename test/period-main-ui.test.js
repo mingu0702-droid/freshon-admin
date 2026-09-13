@@ -61,3 +61,8 @@ test('period view has one header, no daily ETA/status; mobile has distinct filte
  assert.match(runtime,/routeMode && !skipEnrich/);
  assert.match(runtime,/rangeStart: routeMode \? daysBefore\(state.selectedDate, 59\)/);
 });
+
+test('recent sixty days never regresses to a stale coordinate snapshot date',()=>{
+ assert.ok(runtime.includes('state.rangeEnd = state.rangeEnd || localDate()'));
+ assert.ok(runtime.includes('changePeriod(daysBefore(localDate(),59), localDate())'));
+});
