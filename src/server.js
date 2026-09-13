@@ -11,6 +11,7 @@ import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
+import { generalMapResponse, redactPublicData } from "./publicDataSecurity.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
@@ -58,6 +59,8 @@ const upload = multer({
 app.use(express.json({ limit: "10mb" }));
 const requireSensitive = sensitiveAuth(config.adminToken);
 const requireLegacySensitive = sensitiveAuth(config.adminToken, { allowLegacyQuery: true });
+app.use('/api/collector', requireAdmin);
+app.use('/api/map-phase2b/private', requireAdmin);
 app.use(securityAudit);
 app.use(publicResponse);
 // Legacy collectors retain their existing x-admin-token/query-token contract.
@@ -3482,7 +3485,7 @@ app.get("/api/auth-status", requireView, async (_req, res) => {
   });
 });
 
-app.get("/api/collector/freshon", requireView, async (req, res) => {
+app.get("/api/collector/freshon", requireAdmin, async (req, res) => {
   const date = normalizeDateValue(req.query.date);
   if (!date) return res.status(400).json({ ok: false, error: "valid date is required" });
   try {
@@ -3493,7 +3496,7 @@ app.get("/api/collector/freshon", requireView, async (req, res) => {
   }
 });
 
-app.get("/api/collector/delivery", requireView, async (req, res) => {
+app.get("/api/collector/delivery", requireAdmin, async (req, res) => {
   const date = normalizeDateValue(req.query.date);
   const page = Math.max(0, Number(req.query.page) || 0);
   const pageSize = Math.min(300, Math.max(1, Number(req.query.pageSize) || 250));
