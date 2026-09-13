@@ -7,6 +7,9 @@
   dialog.id = 'mapStaffDialog';
   dialog.setAttribute('aria-label', '직원용 보호 상세');
   document.body.append(dialog);
+  const loadingStyle = document.createElement('style');
+  loadingStyle.textContent = '#mapStaffDialog .staffLoadingSpinner{display:inline-block;width:1em;height:1em;margin-right:.5em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:middle;animation:staffLoadingSpin .8s linear infinite}@keyframes staffLoadingSpin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){#mapStaffDialog .staffLoadingSpinner{animation:none}}';
+  document.head.append(loadingStyle);
   const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('map-staff-session') : null;
   function clear() {
     generation++; controller?.abort(); authController?.abort(); controller = null; clearTimeout(expiryTimer);
@@ -83,7 +86,14 @@
     const target = requested;
     if (!target || id !== generation) return;
     detailPending = true;
-    shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모'); node('p', '상세정보 불러오는 중…');
+    const detailStarted = performance.now();
+    shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
+    const loading = node('p', ''); loading.setAttribute('role', 'status'); loading.setAttribute('aria-live', 'polite');
+    const spinner = node('span', '', loading); spinner.className = 'staffLoadingSpinner'; spinner.setAttribute('aria-hidden', 'true');
+    node('span', '상세정보 불러오는 중...', loading);
+    const delayNotice = setTimeout(() => {
+      if (id === generation && detailPending) loading.textContent = '상세정보 조회가 지연되고 있습니다. 잠시만 기다려 주세요.';
+    }, 5000);
     try {
       const query = new URLSearchParams({ customerCode: target.customerCode, date: target.date || '' });
       if (target.rangeStart) query.set('startDate', target.rangeStart);
@@ -105,9 +115,9 @@
     } catch (error) {
       if (error.name === 'AbortError' || id !== generation) return;
       if (error.status === 401) { sessionHint = null; loginForm(id); return; }
-      shell('보호 상세 조회 실패'); node('p', error.status === 504 ? '상세정보 조회가 지연되고 있습니다. 다시 시도해 주세요.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      shell('보호 상세 조회 실패'); node('p', error.status === 504 && performance.now() - detailStarted >= 5000 ? '상세정보 조회가 지연되고 있습니다. 다시 시도해 주세요.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
       node('button', '다시 시도').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
-    } finally { if (id === generation) detailPending = false; }
+    } finally { clearTimeout(delayNotice); if (id === generation) detailPending = false; }
   }
   async function open(target) {
     if (detailPending && JSON.stringify(requested) === JSON.stringify(target)) return;
