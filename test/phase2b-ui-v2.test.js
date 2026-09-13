@@ -30,7 +30,7 @@ test('current stop status comes from real app recording, not missing-coordinate 
 test('one operation control, WMS UI removed, list and mobile tabs present',()=>{
  assert.equal((html.match(/id="operationVehicle"/g)||[]).length,1);assert.doesNotMatch(html,/openWms|>WMS</);assert.doesNotMatch(runtime,/openWms|tab=wms/);
  for(const value of ['runList','runListPanel','mobileWorkspace','operationsPanel'])assert.match(html,new RegExp(`id="${value}"`));
- for(const value of ['detail','runs','new'])assert.match(html,new RegExp(`data-sheet-tab="${value}"`));
+ for(const value of ['filters','stores','runs','new'])assert.match(html,new RegExp(`data-sheet-tab="${value}"`));
 });
 test('popup centers above pointed pin; same font family; map header has no gap',()=>{
  assert.match(runtime,/point\.x - width \/ 2/);assert.match(runtime,/point\.y - panel\.offsetHeight - 40/);assert.match(runtime,/xAnchor: \.5/);assert.match(runtime,/yAnchor: 1,/);assert.match(css,/\.code,\.storeName\{font-family:var\(--font\)/);assert.match(css,/#map\{top:var\(--bar\)/);

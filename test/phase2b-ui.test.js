@@ -9,12 +9,12 @@ const runtime = await readFile(new URL("../public/map-phase2b-runtime.js", impor
 function fixture() {
   const nodes = new Map();
   const node = (id) => {
-    if (!nodes.has(id)) nodes.set(id, { textContent: "", innerHTML: "", value: "", style: {}, disabled: false, options: [], classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } }, setAttribute() {}, add() {} });
+    if (!nodes.has(id)) nodes.set(id, { textContent: "", innerHTML: "", value: "", style: {}, disabled: false, options: [], classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } }, setAttribute() {}, toggleAttribute() {}, add() {} });
     return nodes.get(id);
   };
   const ctx = vm.createContext({ window: { VEHICLE_AREA_DATA: { vehicles: [] } }, document: { body: node('body'), querySelector: node, querySelectorAll: () => [] }, console, Intl, Date, Number, URL, URLSearchParams, Map, Set, AbortController, setTimeout, clearTimeout, performance, innerWidth: 1440, innerHeight: 900, requestAnimationFrame: () => {}, Phase2bUi: helpers });
   vm.runInContext(runtime.slice(0, runtime.lastIndexOf("  initVehicles();")) + `
-    window.test = { state, setPeriod: (rows) => { state.rangeStart = "2026-08-01"; state.rangeEnd = "2026-08-28"; periodRows = rows.map(row => ({...row, history:[{vehicle:row.vehicle}]})); periodMeta = {complete:true,startDate:state.rangeStart,endDate:state.rangeEnd,missingCoordinate:0}; }, nodes: $, judgeNewAreaPoint, toggleBoundaries, normalizeRouteStop, normalizeApiStore, setStores: (rows) => { allStores = rows; }, setSelected: (values) => { selectedVehicles = () => values; }, ready: () => { dateReady = true; }, loadOperationStatus, changeSelectedDate, setSnapshot: (rows) => { latestSnapshotRows = rows; }, stubUi: () => { loadBaseMap = async () => {}; ensureDateVehicles = () => {}; refreshDriverMaster = () => {}; }, getStores: () => allStores, localDate, setFetch: (fn) => { fetchJson = fn; }, noDraw: () => { drawSelectedBoundaries = () => {}; } };
+    window.test = { state, setPeriod: (rows) => { state.rangeStart = "2026-08-01"; state.rangeEnd = "2026-08-28"; periodRows = rows.map(row => ({...row, history:[{vehicle:row.vehicle}]})); periodMeta = {complete:true,startDate:state.rangeStart,endDate:state.rangeEnd,missingCoordinate:0}; }, nodes: $, judgeNewAreaPoint, toggleBoundaries, normalizeRouteStop, normalizeApiStore, setStores: (rows) => { allStores = rows; }, setSelected: (values) => { selectedVehicles = () => values; }, ready: () => { dateReady = true; }, loadOperationStatus, changeSelectedDate, setSnapshot: (rows) => { latestSnapshotRows = rows; }, stubUi: () => { activateSheet = () => {}; loadBaseMap = async () => {}; ensureDateVehicles = () => {}; refreshDriverMaster = () => {}; }, getStores: () => allStores, localDate, setFetch: (fn) => { fetchJson = fn; }, noDraw: () => { drawSelectedBoundaries = () => {}; } };
   })();`, ctx);
   return ctx.window.test;
 }

@@ -3,7 +3,7 @@
 .marker .pinShape{position:absolute;inset:0;width:100%;height:100%;overflow:visible;fill:var(--pin-color,#f59e0b);stroke:#fff;stroke-width:1.5;pointer-events:none}
 .marker .pinNumber{position:absolute;top:6px;left:0;width:100%;text-align:center;color:#fff;font-size:10px;font-weight:800;pointer-events:none}
 .marker.done{--pin-color:#14825d}.marker.pending{--pin-color:#f59e0b}
-.marker.selected{--pin-color:#2563eb!important;transform:none;filter:drop-shadow(0 0 3px #2563ebaa)}.marker.selected .pinShape{stroke:#174da1;stroke-width:2}
+.marker.selected{transform:none;filter:drop-shadow(0 0 3px #2563ebaa)}body:not(.periodMode) .marker.selected{--pin-color:#2563eb!important}.marker.selected .pinShape{stroke:#174da1;stroke-width:2}
 .marker.storeDot{width:21px;min-width:21px;height:28px}.marker.virtual,.marker.nearbyVehicle{width:32px;min-width:32px;height:39px}.marker:hover{filter:drop-shadow(0 0 3px #17203388)}
 .vehicleControl{min-width:0;display:flex;flex-direction:column;gap:1px;padding:2px 5px;border-radius:7px;background:#eaf1ff;border:1px solid #bfd0f2}
 #selectedVehicleBadge{font-size:10px;font-weight:800;color:#174da1;white-space:nowrap}
