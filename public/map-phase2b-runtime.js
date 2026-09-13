@@ -147,6 +147,7 @@
         if (payload.meta?.phase === "ERROR") throw new Error("기간 원천 확인 실패");
         if (payload.meta?.complete !== true) {
           $("#freshnessState").textContent = payload.meta?.phase === "BUSY" ? "이전 기간 조회 완료 대기" : `기간 이력 준비 ${payload.meta?.progress || 0}% · 자동 이어받기`;
+          $("#periodIdentity").textContent = $("#freshnessState").textContent;
           periodTimer = setTimeout(read, 5000); return;
         }
         if (payload.meta.startDate !== start || payload.meta.endDate !== end || !Array.isArray(payload.data)) throw new Error("기간 계약 불일치");
@@ -162,6 +163,9 @@
       } catch (error) {
         if (id === periodRequestId && !isSilentRequestError(error)) {
           $("#freshnessState").textContent = "기간 조회 실패 · 신규권역 판단 보류";
+          $("#periodIdentity").textContent = "기간 원천 조회 실패 · 매장 수 미확인";
+          $("#periodStoreListCount").textContent = "미확인";
+          $("#periodStoreList").innerHTML = '<p class="notice show">기간 원천을 불러오지 못했습니다. 조회 실패를 매장 0개로 판단하지 마세요.</p>';
         }
       }
     }
@@ -1466,6 +1470,11 @@
 
   function renderPeriodStoreList(rows = state.currentRows) {
     const panel = $("#periodStoreList"); if (!panel) return;
+    if (state.mode === "BASE_60D" && !dateReady) {
+      $("#periodStoreListCount").textContent = "준비 중";
+      panel.innerHTML = '<p class="hint" role="status">기간 이력을 준비하고 있습니다. 완료 후 목록이 표시됩니다.</p>';
+      $("#periodListMore").hidden = true; return;
+    }
     const stores = rows.filter(row => !row.virtual);
     $("#periodStoreListCount").textContent = stores.length + "개 매장";
     panel.innerHTML = stores.slice(0, periodListLimit).map(row => `<button class="resultItem periodStore${state.selected?.customerCode === row.customerCode ? " selected" : ""}" aria-pressed="${state.selected?.customerCode === row.customerCode}" data-period-store="${esc(row.customerCode)}"><span class="periodCode">${esc(row.customerCode)}</span><b>${esc(row.customerName || row.customerCode)}</b><span>${esc(row.lastDeliveryDate || "")} · ${esc(row.vehicle)}호</span><span>${esc(row.driverName || "기사 미등록")} · ${row.visitCount || row.history?.length || 0}회</span></button>`).join("") || '<p class="hint">조회 조건에 맞는 매장이 없습니다.</p>';

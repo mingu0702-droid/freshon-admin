@@ -72,3 +72,9 @@ test('incomplete period cannot claim a customer has no period history',async()=>
  assert.match(f.node('#searchState').innerHTML,/기간 이력 준비 중/);
  assert.equal(f.node('#results').innerHTML,'');
 });
+
+test('source failure is explicit on mobile and must not report zero stores',()=>{
+ assert.ok(runtime.includes('기간 원천 조회 실패 · 매장 수 미확인'));
+ assert.ok(runtime.includes('조회 실패를 매장 0개로 판단하지 마세요.'));
+ assert.ok(runtime.includes('$("#periodIdentity").textContent = $("#freshnessState").textContent'));
+});
