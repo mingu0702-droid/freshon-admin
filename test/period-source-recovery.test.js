@@ -19,6 +19,25 @@ test('vehicle filter uses matching latest history, not overall representative',(
 test('one historical driver across multiple vehicles stays one identity',()=>{const rows=groupPeriodRows([row(1),row(2,{vehicle:'202',deliveryDate:'2026-08-02',lastDeliveryDate:'2026-08-02'})]);const selected=MapPeriodUi.select(rows,[],'A');assert.equal(selected.length,1);assert.equal(selected[0].history.length,2);});
 test('latest representative never overwritten by an older row',()=>{const rows=groupPeriodRows([row(2,{vehicle:'202',deliveryDate:'2026-08-02',lastDeliveryDate:'2026-08-02'}),row(1)]);assert.equal(rows[0].vehicle,'202');});
 const historySource=fs.readFileSync(new URL('../integrations/hub/HubStaffHistory.js',import.meta.url),'utf8');
+test('source append invalidates incomplete aggregate and automatically restarts bounded read',async()=>{
+ const scheduled=[];let n=0;
+ const jobs=createPeriodJobs({schedule:f=>(scheduled.push(f),{unref(){}}),loadPage:async()=>{
+  n++;if(n===1)return page([row(1)],{total:2,more:true});
+  if(n===2)throw new Error('HUB_PERIOD_SOURCE_CHANGED');
+  return page([row(3),row(4)]);
+ }});
+ jobs.read('2026-07-17','2026-09-14');
+ for(let i=0;i<2;i++){scheduled.shift()();await new Promise(setImmediate);}
+ const pending=jobs.read('2026-07-17','2026-09-14');assert.equal(pending.data,null);assert.equal(pending.meta.count,0);assert.equal(pending.meta.sourceRestarts,1);
+ scheduled.shift()();await new Promise(setImmediate);
+ const done=jobs.read('2026-07-17','2026-09-14');assert.equal(done.meta.complete,true);assert.equal(done.meta.totalCount,2);
+});
+test('three source changes stop rather than retrying forever',async()=>{
+ const scheduled=[];const jobs=createPeriodJobs({schedule:f=>(scheduled.push(f),{unref(){}}),loadPage:async()=>{throw new Error('HUB_PERIOD_SOURCE_CHANGED');}});
+ jobs.read('2026-07-17','2026-09-14');
+ for(let i=0;i<3;i++){scheduled.shift()();await new Promise(setImmediate);}
+ const result=jobs.read('2026-07-17','2026-09-14');assert.equal(result.meta.phase,'ERROR');assert.equal(result.meta.sourceRestarts,3);assert.equal(result.data,null);assert.equal(scheduled.length,0);
+});
 function historyFixture({phone='SYNTHETIC_CONTACT',http=200,invalidJson=false}={}){
  const headers=['deliveryDate','confirmedVehicle','baseVehicle','truckTon','driverName','driverPhone','deliveryArea','customerCode','customerName','salesAmount','deliveryCount','customerAddress','detailAddress','accessMemo','createdAt','updatedAt','hashKey'];
  const rows=[['2026. 8. 1','101','','','HISTORICAL',phone,'','S1234'],['8/2/2026','202','','','HISTORICAL',phone,'','S1234']];
@@ -48,5 +67,5 @@ test('bounded period reads only allowlisted columns within the established physi
   UrlFetchApp:{fetch:(url,options)=>{calls++;const body=JSON.parse(options.payload);assert.ok(body.dataFilters.every(f=>f.gridRange.endRowIndex-f.gridRange.startRowIndex<=1000));assert.ok(body.dataFilters.every(f=>!(f.gridRange.startColumnIndex<=13&&f.gridRange.endColumnIndex>13)));return{getResponseCode:()=>200,getContentText:()=>JSON.stringify({valueRanges:body.dataFilters.map(f=>({dataFilters:[f],valueRange:{values:values.map(r=>r.slice(f.gridRange.startColumnIndex,f.gridRange.endColumnIndex))}}))})};}}});
  vm.runInContext(fs.readFileSync(new URL('../integrations/hub/HubPeriodSource.js',import.meta.url),'utf8'),context);
  const result=context.hubPeriodReadBounded_({first:2,total:2,last:3,sheetId:9},0,1000);assert.equal(result.data.length,2);assert.equal(result.data[1].customerCode,'S1234');assert.equal('accessMemo'in result.data[1],false);assert.equal(result.meta.nextToken,null);assert.equal(calls,1);
- assert.throws(()=>context.hubPeriodReadBounded_({first:2,total:2,last:4,sheetId:9},0,1000),/PERIOD_SOURCE_INCOMPLETE/);
+ assert.throws(()=>context.hubPeriodReadBounded_({first:2,total:2,last:4,sheetId:9},0,1000),/PERIOD_SOURCE_CHANGED/);
 });

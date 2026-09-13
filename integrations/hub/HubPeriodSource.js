@@ -13,7 +13,7 @@ function hubPeriodSourcePage_(filters,cursor){
 }
 function hubPeriodReadBounded_(bounds,offset,limit){
   const sheet=SpreadsheetApp.openById(HUB_DEFAULT_SOURCE_ID).getSheetByName('daily_routes');
-  if(!sheet||sheet.getSheetId()!==bounds.sheetId||sheet.getLastRow()!==bounds.last)hubMapHttpRaise_('PERIOD_SOURCE_INCOMPLETE','Source row positions changed.',502,false);
+  if(!sheet||sheet.getSheetId()!==bounds.sheetId||sheet.getLastRow()!==bounds.last)hubMapHttpRaise_('PERIOD_SOURCE_CHANGED','Source row positions changed.',409,false);
   if(!Number.isInteger(bounds.first)||bounds.first<2||!Number.isInteger(bounds.total)||bounds.total<0||bounds.first+bounds.total-1>bounds.last||offset<0||offset>=bounds.total)hubMapHttpRaise_('INVALID_CURSOR','Invalid bounded source cursor.',400,false);
   const count=Math.min(limit,bounds.total-offset),start=bounds.first+offset,columns=sheet.getLastColumn();
   if(columns<1||columns>128)throw new Error('PERIOD_HEADER_INVALID');

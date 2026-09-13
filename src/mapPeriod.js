@@ -81,7 +81,7 @@ export function createPeriodJobs({ loadPage, schedule = setTimeout, now = Date.n
   function status(job) {
     return { startDate: job.startDate, endDate: job.endDate, phase: job.phase, count: job.count, totalCount: job.total,
       progress: job.phase === 'DONE' ? 100 : job.sourceTotal ? Math.floor(job.scannedCount/job.sourceTotal*100) : job.total ? Math.floor(job.count / job.total * 100) : 0,
-      scannedCount:job.scannedCount||0,sourceTotal:job.sourceTotal??null,
+      scannedCount:job.scannedCount||0,sourceTotal:job.sourceTotal??null,sourceRestarts:job.sourceRestarts||0,
       complete: job.phase === 'DONE', truncated: false, error: job.error || null, updatedAt: job.updatedAt,
       actualVisitsAvailable: false, source: 'Customer.daily_routes assignment history' };
   }
@@ -108,6 +108,13 @@ export function createPeriodJobs({ loadPage, schedule = setTimeout, now = Date.n
       } else job.phase = 'WAITING';
       job.error = null;
     } catch (error) {
+      if(error.message==='HUB_PERIOD_SOURCE_CHANGED'){
+        job.sourceRestarts=(job.sourceRestarts||0)+1;
+        // Invalidate ONLY this in-memory read job. Never touch collection checkpoints.
+        Object.assign(job,{count:0,total:null,rows:[],data:null,cursor:null,keys:new Set(),cursors:new Set(),pages:0,scannedCount:0,sourceTotal:null,failures:0});
+        job.phase=job.sourceRestarts>=3?'ERROR':'WAITING';job.error='PERIOD_SOURCE_CHANGED';
+        return;
+      }
       const code = /^PERIOD_/.test(error.message || '') ? error.message : 'PERIOD_SOURCE_UNAVAILABLE';
       job.failures = job.lastError === code ? job.failures + 1 : 1; job.lastError = code;
       job.phase = job.failures >= 3 || code === 'PERIOD_CAPACITY_LIMIT' ? 'ERROR' : 'WAITING'; job.error = code;
