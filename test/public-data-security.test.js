@@ -10,6 +10,28 @@ test('collector guards use existing authenticated automation token contract',()=
  const src=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8');
  for(const name of ['delivery','freshon'])assert.ok(src.includes(`app.get("/api/collector/${name}", requireAdmin,`));
 });
+test('sensitive namespaces require admin before public views and SPA fallback',()=>{
+ const src=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8');
+ for(const namespace of ['/api/collector','/api/map-phase2b/private']) {
+  const gate=src.indexOf(`app.use('${namespace}', requireAdmin`);
+  assert.ok(gate>=0);
+  assert.ok(gate<src.indexOf('app.use(express.static(publicDir))'));
+ }
+});
+test('PUBLIC_VIEW never bypasses requireAdmin',async()=>{
+ process.env.ADMIN_TOKEN='synthetic-test-only-token';
+ process.env.PUBLIC_VIEW='true';
+ const {requireAdmin,requireView}=await import('../src/auth.js');
+ let status=0,passed=false;
+ const res={status(v){status=v;return this;},json(){return this;}};
+ const req={get:()=>'',query:{}};
+ requireView(req,res,()=>{passed=true;});
+ assert.equal(passed,true);
+ passed=false;requireAdmin(req,res,()=>{passed=true;});
+ assert.equal(status,401);assert.equal(passed,false);
+ requireAdmin({get:()=>process.env.ADMIN_TOKEN,query:{}},res,()=>{passed=true;});
+ assert.equal(passed,true);
+});
 test('public detail has only five general fields',()=>{
  let result;const res={setHeader(){},json:v=>{result=v;}};
  const req={path:'/detail'};generalMapResponse(req,res,()=>{});req.path='/api/map-phase2b/preview/detail';

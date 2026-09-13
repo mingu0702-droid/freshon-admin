@@ -50,6 +50,12 @@ const upload = multer({
 });
 
 app.use(express.json({ limit: "10mb" }));
+// Sensitive namespaces must never inherit PUBLIC_VIEW or the SPA fallback.
+app.use('/api/collector', requireAdmin);
+app.use('/api/map-phase2b/private', requireAdmin, (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(404).json({ error: 'PRIVATE_ENDPOINT_NOT_AVAILABLE' });
+});
 app.use('/api/map-phase2b/preview', generalMapResponse);
 app.use('/api', (req,res,next)=>{
   if(req.path.startsWith('/collector/') || req.path.startsWith('/map-phase2b/preview/'))return next();
