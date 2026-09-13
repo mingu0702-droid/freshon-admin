@@ -22,6 +22,16 @@ test.afterEach(() => {
   process.env = { ...originalEnv };
 });
 
+test('private one-row action rejects health/foreign customer responses and never caches sensitive rows', async () => {
+  const client = await freshClient(); let calls=0;
+  global.fetch = async (_url, options) => {calls++;const body=JSON.parse(options.body);return {ok:true,status:200,text:async()=>JSON.stringify({ok:true,data:{customerCode:body.params.customerCode,accessMemo:'SYNTHETIC_ONLY'},meta:{requestId:body.requestId,durationMs:1}})};};
+  await client.callHub('staffCustomerDetail',{customerCode:'S1234',date:'2026-08-28'});
+  await client.callHub('staffCustomerDetail',{customerCode:'S1234',date:'2026-08-28'});
+  assert.equal(calls,2);
+  global.fetch=async()=>({ok:true,status:200,text:async()=>JSON.stringify({ok:true,data:{service:'hub-map-api',status:'UP'},meta:{requestId:'',durationMs:1}})});
+  await assert.rejects(client.callHub('staffCustomerDetail',{customerCode:'S1234'}),/HUB_INVALID_DETAIL_CONTRACT/);
+});
+
 test("Search OPEN does not block Route", async () => {
   const client = await freshClient();
   global.fetch = async (_url, options) => {

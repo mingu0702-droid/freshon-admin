@@ -12,11 +12,12 @@ import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
 import { createMapStaffAuth } from "./mapStaffAuth.js";
+import { staffLatency, addStaffTiming } from "./staffLatency.js";
 import { staffCustomerDetail } from "./mapStaffDetail.js";
 import { createPeriodJobs, readStaffDriverHistory, validatePeriod } from "./mapPeriod.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
-import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
+import { callHub, hubMetrics, previewEnabled, hubRequestProfile } from "./hubApiClient.js";
 import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, phase2bCacheNamespace, phase2bSnapshotMeta, splitHubBounds } from "./phase2bOperations.js";
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { phase2bSnapshotFailure, phase2bSnapshotProgress, phase2bSnapshotWatchdogNeeded } from "./phase2bSnapshotRecovery.js";
@@ -56,6 +57,7 @@ const upload = multer({
 });
 
 const mapStaff = createMapStaffAuth();
+app.use(staffLatency);
 const periodJobs = createPeriodJobs({ loadPage: params => callHub("periodAssignments", params, { useCache: false }) });
 app.use("/api/map-phase2b/auth", securityAudit, mapStaff.router);
 app.use(express.json({ limit: "10mb" }));
@@ -3886,10 +3888,13 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
   const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
   if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
   try {
+    const publicStarted = performance.now();
     const snapshot = await readPhase2bSnapshot();
     const row = snapshot?.rows?.find(item => String(item.customerCode || item.code) === customerCode);
     if (!row) return res.status(404).json({ ok: false, error: "CUSTOMER_NOT_FOUND" });
-    return res.json({ ok: true, data: publicCustomerDetail({ ...row, customerCode }), error: null });
+    const data = publicCustomerDetail({ ...row, customerCode });
+    addStaffTiming(res, 'parseNormalize', performance.now() - publicStarted);
+    return res.json({ ok: true, data, error: null });
   } catch { return res.status(503).json({ ok: false, error: "PUBLIC_DETAIL_UNAVAILABLE" }); }
 });
 
@@ -3900,9 +3905,19 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
   const detailDate = req.query.date ? normalizeDateValue(req.query.date) : phase2bSnapshotMemory?.latestDate || phase2bKstDate();
   if (!detailDate || detailDate > phase2bKstDate()) return res.status(400).json({ error: "INVALID_DATE" });
   try {
-    const hub = await callHub("customerDetail", { customerCode, date: detailDate }, { useCache: false, privateRead: true });
+    const upstreamStarted = performance.now();
+    let hub;
+    try { hub = await callHub("staffCustomerDetail", { customerCode, date: detailDate }, { useCache: false, privateRead: true }); }
+    finally { addStaffTiming(res, 'upstream', performance.now() - upstreamStarted); }
+    addStaffTiming(res, 'hub', Number(hub.meta?.durationMs || 0));
+    for (const key of ['responseHeadersMs','bodyReadMs','parseMs']) addStaffTiming(res, 'hub' + key.replace(/Ms$/, ''), Number(hubRequestProfile(hub)[key] || 0));
+    for (const key of ['openMs','lookupMs','rowReadMs','normalizeMs']) addStaffTiming(res, 'source' + key.replace(/Ms$/, ''), Number(hub.meta?.detailProfile?.[key] || 0));
+    if (String(hub.data?.customerCode || '').toUpperCase() !== customerCode) throw new Error('HUB_INVALID_DETAIL_CONTRACT');
+    const normalizeStarted = performance.now();
+    const detail = staffCustomerDetail(hub.data, { customerCode, date: detailDate });
+    addStaffTiming(res, 'parseNormalize', performance.now() - normalizeStarted);
     // Recheck after slow Hub reads: logout/expiry must revoke in-flight responses.
-    return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data: staffCustomerDetail(hub.data || {}, { customerCode, date: detailDate }), error: null }));
+    return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data: detail, error: null }));
   } catch (error) {
     const status = Number(error?.upstreamStatus) === 404 && error?.failureType === "upstream" ? 404 : 502;
     return res.status(status).json({ ok: false, data: null, error: "PRIVATE_DETAIL_UNAVAILABLE" });

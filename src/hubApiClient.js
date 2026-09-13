@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 const VERSION = "map-phase2-v1";
 const cache = new Map();
 const inFlight = new Map();
+const requestProfiles = new WeakMap();
+export const hubRequestProfile = result => requestProfiles.get(result) || {};
 const HUB_CACHE_MAX_ENTRIES = 256;
 const state = { circuits: new Map(), metrics: { requests: 0, success: 0, timeout: 0, error: 0, match: 0, mismatch: 0, latencyMs: [] } };
 
@@ -104,11 +106,11 @@ export function previewEnabled() {
 export async function callHub(action, params, { useCache = true, privateRead = false } = {}) {
   if (!process.env.HUB_API_URL) throw new Error("HUB_API_URL_NOT_CONFIGURED");
   const key = `${action}:${stable(params || {})}`;
-  if (privateRead || action === 'customerDetail') useCache = false;
+  if (privateRead || ['customerDetail','staffCustomerDetail'].includes(action)) useCache = false;
   const saved = cache.get(key);
   if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
   if (useCache && inFlight.has(key)) return inFlight.get(key);
-  const request = callHubUncached(action, params, key, privateRead || action === 'customerDetail');
+  const request = callHubUncached(action, params, key, privateRead || ['customerDetail','staffCustomerDetail'].includes(action));
   if (useCache) inFlight.set(key, request);
   try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
 }
@@ -134,6 +136,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
   const actionTimeoutMs = {
     unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 30000),
     customerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
+    staffCustomerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
     nearestVehicles: Number(process.env.HUB_NEAREST_TIMEOUT_MS || 30000),
     mapBounds: Number(process.env.HUB_BOUNDS_TIMEOUT_MS || 30000),
     datedAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
@@ -143,7 +146,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
   };
   const timeoutMs = actionTimeoutMs[action] || Number(process.env.HUB_API_TIMEOUT_MS || 2000);
   let lastError;
-  const attempts = entered.probe || action === "customerDetail" ? 1 : 2;
+  const attempts = entered.probe || action === "customerDetail" || action === "staffCustomerDetail" ? 1 : 2;
   let timedOut = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const attemptStarted = Date.now();
@@ -167,8 +170,12 @@ async function callHubUncached(action, params, key, privateRead = false) {
       let json;
       try { json = responseText == null ? await response.json() : JSON.parse(responseText); } catch (_) { throw Object.assign(new Error("HUB_INVALID_JSON"), { upstreamStatus: response.status, failureType: "parse", responseKind: /^\s*</.test(responseText || "") ? "html" : "invalid-json" }); }
       const parseMs = Date.now() - parseStarted;
+      if (json && typeof json === 'object') requestProfiles.set(json, { responseHeadersMs, bodyReadMs, parseMs });
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
+      if (action === 'staffCustomerDetail' && (json.meta.requestId !== body.requestId || String(json.data?.customerCode || '').toUpperCase() !== String(params.customerCode).toUpperCase())) {
+        throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'), { upstreamStatus: response.status, failureType: 'contract' });
+      }
       circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
       const ttlMs = action === "routePlan" ? Number(process.env.HUB_ROUTE_CACHE_TTL_MS || 300000) : 60000;
       if (!privateRead && !["datedAssignments", "periodAssignments", "staffDriverHistory"].includes(action)) cacheHubResponse(key, Date.now() + ttlMs, json);

@@ -1,5 +1,6 @@
 #mapStaffDialog{width:min(460px,calc(100vw - 32px));max-height:80vh;overflow:auto;border:1px solid #dce2ec;border-radius:16px;padding:22px;color:#182436;box-shadow:0 12px 60px #14253a40}
 #mapStaffDialog::backdrop{background:#172c4666}
+#mapStaffDialog[data-modal="false"]{position:fixed;inset:auto 16px 24px auto;margin:0;z-index:2000;max-height:65vh}
 #mapStaffDialog h2{font-size:19px;margin:0 0 16px}
 #mapStaffDialog label{display:block;margin:12px 0}
 #mapStaffDialog input{display:block;width:100%;box-sizing:border-box;padding:10px;margin-top:5px}

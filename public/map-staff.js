@@ -1,40 +1,59 @@
 (() => {
   'use strict';
-  let generation = 0, controller = null, expiryTimer = null, requested = null;
+  let generation = 0, controller = null, authController = null, expiryTimer = null, requested = null, sessionHint = null, detailPending = false;
+  const metrics = [];
+  const trace = document.createElement('output'); trace.id = 'staffRequestMetrics'; trace.hidden = true; document.body.append(trace);
   const dialog = document.createElement('dialog');
   dialog.id = 'mapStaffDialog';
   dialog.setAttribute('aria-label', '직원용 보호 상세');
   document.body.append(dialog);
   const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('map-staff-session') : null;
   function clear() {
-    generation++; controller?.abort(); controller = null; clearTimeout(expiryTimer);
-    requested = null; dialog.replaceChildren(); if (dialog.open) dialog.close();
+    generation++; controller?.abort(); authController?.abort(); controller = null; clearTimeout(expiryTimer);
+    requested = null; detailPending = false; dialog.replaceChildren(); if (dialog.open) dialog.close();
   }
   function node(tag, text, parent = dialog) { const item = document.createElement(tag); item.textContent = text; parent.append(item); return item; }
-  function shell(title) {
+  function shell(title, modal = false) {
+    if (dialog.open) dialog.close();
     dialog.replaceChildren();
+    dialog.dataset.modal = String(modal);
     node('h2', title);
     const close = node('button', '닫기'); close.type = 'button'; close.addEventListener('click', clear);
-    if (!dialog.open) dialog.showModal();
+    if (modal) dialog.showModal(); else dialog.show();
   }
   async function request(path, options = {}) {
-    controller?.abort(); controller = new AbortController();
-    const response = await fetch('/api/map-phase2b/' + path, { ...options, cache: 'no-store', credentials: 'same-origin',
-      signal: controller.signal, headers: { 'content-type': 'application/json', ...options.headers } });
-    if (!response.ok) throw Object.assign(new Error('REQUEST_FAILED'), { status: response.status });
-    return response.json();
+    const isDetail = path.startsWith('private/'), isLogout = path === 'auth/logout', local = new AbortController();
+    if (isDetail) { controller?.abort(); controller = local; }
+    else if (!isLogout) { authController?.abort(); authController = local; }
+    const start = performance.now(); let status = 0, receivedAt = null, serverTiming = '', headersMs = 0, parseMs = 0;
+    const timer = isDetail ? null : setTimeout(() => local.abort(), 10000);
+    try {
+      const response = await fetch('/api/map-phase2b/' + path, { ...options, cache: 'no-store', credentials: 'same-origin',
+        signal: local.signal, headers: { 'content-type': 'application/json', ...options.headers } });
+      status = response.status; headersMs = performance.now() - start; receivedAt = response.headers.get('x-request-received-at'); serverTiming = response.headers.get('server-timing') || '';
+      if (!response.ok) throw Object.assign(new Error('REQUEST_FAILED'), { status });
+      const parsedAt = performance.now(), value = await response.json(); parseMs = performance.now() - parsedAt;
+      const expiresAt = Number(response.headers.get('x-staff-expires-at')), idleExpiresAt = Number(response.headers.get('x-staff-idle-expires-at'));
+      if (isDetail && expiresAt && idleExpiresAt && !local.signal.aborted) deadline({ authenticated: true, expiresAt, idleExpiresAt });
+      return value;
+    } finally {
+      clearTimeout(timer);
+      metrics.push({ endpoint: path.split('?')[0], status, browserTotalMs: +(performance.now()-start).toFixed(2), headersMs: +headersMs.toFixed(2), parseMs: +parseMs.toFixed(2), receivedAt, serverTiming });
+      if (metrics.length > 25) metrics.shift(); trace.textContent = JSON.stringify(metrics);
+    }
   }
   function deadline(session) {
+    sessionHint = session;
     clearTimeout(expiryTimer);
-    if (session?.authenticated) expiryTimer = setTimeout(clear, Math.max(0, Math.min(session.expiresAt, session.idleExpiresAt) - Date.now()));
+    if (session?.authenticated) expiryTimer = setTimeout(() => { sessionHint = null; clear(); }, Math.max(0, Math.min(session.expiresAt, session.idleExpiresAt) - Date.now()));
   }
   async function logout() {
-    clear(); channel?.postMessage('logout');
+    sessionHint = null; clear(); channel?.postMessage('logout');
     try { await request('auth/logout', { method: 'POST', body: '{}' }); }
     catch (error) { if (error.name !== 'AbortError') { shell('로그아웃 확인 필요'); node('p', '화면 정보는 지웠지만 서버 로그아웃을 확인하지 못했습니다. 다시 시도해 주세요.'); node('button', '로그아웃 재시도').onclick = logout; } }
   }
   function loginForm(id) {
-    shell('직원 공용 로그인');
+    shell('직원 공용 로그인', true);
     node('p', '지도 보호 상세 읽기 전용 · 관리자 권한은 제공되지 않습니다.');
     const form = node('form', '');
     const accountLabel = node('label', '공용 아이디', form), account = document.createElement('input');
@@ -49,7 +68,10 @@
       try {
         const session = await request('auth/login', { method: 'POST', body }); body = '';
         if (id !== generation) return;
-        deadline(session); await showRequested(id);
+        deadline(session);
+        dialog.close(); shell('로그인 완료'); node('p', '상세정보 불러오는 중…');
+        // Login is complete; the explicitly requested detail runs independently.
+        void showRequested(id);
       } catch (error) {
         if (error.name !== 'AbortError' && id === generation) message.textContent = error.status === 429 ? '시도가 많습니다. 잠시 후 다시 시도해 주세요.' : error.status === 503 ? '직원 로그인 설정이 필요합니다.' : '로그인하지 못했습니다. 아이디와 비밀번호를 확인해 주세요.';
       } finally { body = ''; password.value = ''; submit.disabled = false; }
@@ -60,17 +82,16 @@
   async function showRequested(id) {
     const target = requested;
     if (!target || id !== generation) return;
-    shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모'); node('p', '불러오는 중…');
+    detailPending = true;
+    shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모'); node('p', '상세정보 불러오는 중…');
     try {
       const query = new URLSearchParams({ customerCode: target.customerCode, date: target.date || '' });
       if (target.rangeStart) query.set('startDate', target.rangeStart);
       if (target.rangeEnd) query.set('endDate', target.rangeEnd);
       const payload = await request('private/' + (target.kind === 'history' ? 'driver-history' : 'customer-detail') + '?' + query);
       if (id !== generation) return;
-      const session = await request('auth/session');
-      if (id !== generation) return;
-      if (!session.authenticated) { clear(); return; }
-      deadline(session); shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
+      // Server validates the session again after the upstream read.
+      shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
       node('button', '로그아웃').onclick = logout;
       if (target.kind === 'history') {
         const rows = Array.isArray(payload.data) ? payload.data : [];
@@ -83,20 +104,22 @@
       }
     } catch (error) {
       if (error.name === 'AbortError' || id !== generation) return;
-      if (error.status === 401) { loginForm(id); return; }
+      if (error.status === 401) { sessionHint = null; loginForm(id); return; }
       shell('보호 상세 조회 실패'); node('p', '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
-    }
+    } finally { if (id === generation) detailPending = false; }
   }
   async function open(target) {
+    if (detailPending && JSON.stringify(requested) === JSON.stringify(target)) return;
     clear(); requested = { ...target }; const id = generation;
-    shell('직원 인증 확인'); node('p', '불러오는 중…');
+    if (sessionHint?.authenticated && Date.now() < Math.min(sessionHint.expiresAt, sessionHint.idleExpiresAt)) { void showRequested(id); return; }
+    loginForm(id);
     try {
       const session = await request('auth/session');
       if (id !== generation) return;
-      if (!session.authenticated) loginForm(id); else { deadline(session); await showRequested(id); }
-    } catch (error) { if (error.name !== 'AbortError' && id === generation) { shell('인증 상태 확인 실패'); node('p', '잠시 후 다시 시도해 주세요.'); } }
+      if (session.authenticated) { deadline(session); void showRequested(id); }
+    } catch (error) { /* Keep the login form; never display raw cancellation text. */ }
   }
-  channel?.addEventListener('message', event => { if (event.data === 'logout') clear(); });
+  channel?.addEventListener('message', event => { if (event.data === 'logout') { sessionHint = null; clear(); } });
   dialog.addEventListener('cancel', clear);
   window.addEventListener('pagehide', clear);
   document.addEventListener('visibilitychange', () => { if (document.hidden) clear(); });

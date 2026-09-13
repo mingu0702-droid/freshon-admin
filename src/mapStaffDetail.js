@@ -17,5 +17,5 @@ export function staffCustomerDetail(source, { customerCode, date }) {
   const deliveryPattern = safeText(source.deliveryPattern || source.deliveryPatternText) || null;
   return { customerCode, memoDate: date, accessInfo, password, specialRemark, deliveryPattern,
     memoState: accessInfo || password || specialRemark ? 'REGISTERED' : source.accessMemo ? 'NEEDS_CONFIRMATION' : 'UNREGISTERED',
-    source: 'Customer → Hub customerDetail (explicit operational fields only)' };
+    source: 'Customer → Hub staffCustomerDetail (one source row; no sensitive cache)' };
 }

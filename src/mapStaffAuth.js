@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import express from 'express';
+import { addStaffTiming } from './staffLatency.js';
 
 const scrypt = promisify(crypto.scrypt);
 export const STAFF_COOKIE = '__Host-map-staff';
@@ -65,10 +66,14 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
     return { key, ...session };
   }
   const requireStaff = (req, res, next) => noStore(req, res, () => {
+    const started = performance.now();
     const session = readSession(req);
+    addStaffTiming(res, 'session', performance.now() - started);
     if (!session) return res.status(401).json({ error: 'STAFF_LOGIN_REQUIRED' });
     res.locals.sensitiveAuthenticated = true;
     res.locals.staffSession = session;
+    res.set('X-Staff-Expires-At', String(session.expiresAt));
+    res.set('X-Staff-Idle-Expires-At', String(session.idleExpiresAt));
     next();
   });
   function limited(req) {
@@ -88,7 +93,9 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
   router.use(express.json({ limit: '4kb' }));
   router.get('/session', (req, res) => {
     // Status polling must not extend the idle deadline.
+    const started = performance.now();
     const session = readSession(req, false);
+    addStaffTiming(res, 'session', performance.now() - started);
     return res.json({ authenticated: Boolean(session), configured: configuration().ready,
       expiresAt: session?.expiresAt || null, idleExpiresAt: session?.idleExpiresAt || null });
   });
@@ -100,10 +107,12 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
     if (typeof req.body?.id !== 'string' || req.body.id.length > 128 || typeof req.body?.password !== 'string' || Buffer.byteLength(req.body.password) > 1024) return res.status(401).json({ error: 'LOGIN_FAILED' });
     verifying = true;
     try {
+      const verifyStarted = performance.now();
       const valid = await verifyStaffPassword(req.body.password, config.hash);
+      addStaffTiming(res, 'authVerify', performance.now() - verifyStarted);
       const current = configuration();
       if (!valid || !equal(req.body.id, config.id) || !current.ready || !equal(current.hash, config.hash) || !equal(current.secret, config.secret) || !equal(current.id, config.id)) return res.status(401).json({ error: 'LOGIN_FAILED' });
-      const time = now();
+      const sessionStarted = performance.now(), time = now();
       for (const [key, session] of sessions) if (time >= session.expiresAt || time >= session.idleExpiresAt) sessions.delete(key);
       if (sessions.size >= 1000) return res.status(503).json({ error: 'LOGIN_RETRY_LATER' });
       sessions.delete(sessionKey(req, config));
@@ -112,15 +121,18 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
       const session = { expiresAt: time + STAFF_MAX_MS, idleExpiresAt: time + STAFF_IDLE_MS };
       sessions.set(key, session);
       res.cookie(STAFF_COOKIE, token, { ...cookieOptions, maxAge: STAFF_MAX_MS });
+      addStaffTiming(res, 'session', performance.now() - sessionStarted);
       return res.json({ authenticated: true, ...session });
     } catch { return res.status(503).json({ error: 'LOGIN_UNAVAILABLE' }); }
     finally { verifying = false; if (req.body) req.body.password = ''; }
   });
   router.post('/logout', (req, res) => {
+    const started = performance.now();
     const config = configuration();
     if (!config.ready || !sameOrigin(req, config)) return res.status(403).json({ error: 'ORIGIN_REJECTED' });
     sessions.delete(sessionKey(req, config));
     res.clearCookie(STAFF_COOKIE, cookieOptions);
+    addStaffTiming(res, 'session', performance.now() - started);
     return res.json({ authenticated: false });
   });
   return { router, requireStaff };

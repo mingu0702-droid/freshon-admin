@@ -4,6 +4,7 @@ import express from 'express';
 import { createMapStaffAuth, createStaffPasswordHash, verifyStaffPassword, STAFF_IDLE_MS, STAFF_MAX_MS } from '../src/mapStaffAuth.js';
 import { staffSetupValues } from '../scripts/setup-map-staff.mjs';
 import { staffCustomerDetail } from '../src/mapStaffDetail.js';
+import { staffLatency } from '../src/staffLatency.js';
 
 // Synthetic credentials only: exercise the requested six-character minimum.
 const password = 'Ab12cd';
@@ -19,6 +20,7 @@ test('staff sessions: public/private/admin separation, Origin, expiry, logout, r
     RENDER_EXTERNAL_URL: 'https://stage.example.test', PUBLIC_VIEW: 'true', ADMIN_TOKEN: 'SYNTHETIC-machine-only' };
   let time = 1000;
   const auth = createMapStaffAuth({ env, now: () => time }), app = express();
+  app.use(staffLatency);
   app.use('/api/map-phase2b/auth', auth.router);
   app.get('/api/map-phase2b/private/detail', auth.requireStaff, (_req, res) => res.json({ privateRead: true }));
   app.get('/api/collector/delivery', (req, res) => res.sendStatus(req.get('x-admin-token') === env.ADMIN_TOKEN ? 200 : 401));
@@ -34,6 +36,8 @@ test('staff sessions: public/private/admin separation, Origin, expiry, logout, r
   assert.equal((await login(undefined, 'https://attacker.invalid')).status, 403);
   assert.equal((await login({ id: 'wrong', password })).status, 401);
   const ok = await login(); assert.equal(ok.status, 200);
+  assert.match(ok.headers.get('server-timing'), /authVerify;dur=/);
+  assert.deepEqual(JSON.parse(ok.headers.get('x-staff-cookie-policy')), {httpOnly:true,secure:true,sameSite:'Strict'});
   const header = ok.headers.get('set-cookie');
   for (const flag of ['__Host-map-staff=', 'HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/']) assert.ok(header.includes(flag));
   assert.ok(!header.includes('Domain='));
