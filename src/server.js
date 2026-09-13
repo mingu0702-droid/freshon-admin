@@ -17,7 +17,7 @@ import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
 import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, phase2bCacheNamespace, phase2bSnapshotMeta, splitHubBounds } from "./phase2bOperations.js";
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { phase2bSnapshotFailure, phase2bSnapshotProgress, phase2bSnapshotWatchdogNeeded } from "./phase2bSnapshotRecovery.js";
-import { readDatedAssignments, uniqueAssignments } from "./phase2bAssignments.js";
+import { readPaginatedDatedAssignments, uniqueAssignments } from "./phase2bAssignments.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +29,7 @@ const phase2bRuntimeSnapshotUrl = path.join(os.tmpdir(), "freshon-map-phase2b-sn
 const phase2bBoundsCache = createPhase2bReadCache({ name: "bounds", ttlMs: Number(process.env.PHASE2B_BOUNDS_CACHE_TTL_MS || 600000), staleMs: 120000, maxEntries: 64, maxBytes: 24 * 1024 * 1024 });
 const phase2bDetailCache = createPhase2bReadCache({ name: "detail", ttlMs: Number(process.env.PHASE2B_DETAIL_CACHE_TTL_MS || 1200000), staleMs: 300000, maxEntries: 512, maxBytes: 8 * 1024 * 1024 });
 const phase2bAssignmentCache = createPhase2bReadCache({ name: "assignments", ttlMs: 60000, staleMs: 120000, maxEntries: 8, maxBytes: 12 * 1024 * 1024 });
+const phase2bDatedAssignmentCache = createPhase2bReadCache({ name: "datedAssignments", ttlMs: 600000, staleMs: 0, maxEntries: 16, maxBytes: 24 * 1024 * 1024 });
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
 const parseExcelScriptPath = path.join(__dirname, "parse_excel.py");
 const uploadDir = path.join(os.tmpdir(), "freshon-upload-files");
@@ -3951,7 +3952,7 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
   if (date !== "latest" && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || normalizeDateValue(date) !== date || date > phase2bKstDate())) return res.status(400).json({ error: "INVALID_DATE" });
   try {
     const snapshot = await readPhase2bSnapshot();
-    const readDate = (candidate) => phase2bAssignmentCache.load(`${phase2bCacheNamespace(snapshot)}:${candidate}`, async () => {
+    const readDate = (candidate) => (candidate === phase2bKstDate() ? phase2bAssignmentCache : phase2bDatedAssignmentCache).load(`datedAssignments:${candidate}`, async () => {
       if (candidate === phase2bKstDate()) {
         // Current dispatch is already available through the approved read-only
         // Delivery adapter. It is not a rolling Hub vehicle relationship.
@@ -3970,19 +3971,8 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
           console.warn(JSON.stringify({ component: "phase2b-assignments", source: "Delivery", error: error.message }));
         }
       }
-      const tiles = splitHubBounds({ south: 33, west: 124, north: 39, east: 132 });
-      const rows = [];
-      let emptySource = false;
-      for (const tile of tiles) {
-        rows.push(...await readDatedAssignments(candidate, tile, async (params) => {
-          const value = (await loadPhase2bBounds(params)).value;
-          emptySource = value.meta?.sourceCount === 0;
-          return value;
-        }));
-        if (emptySource) break;
-      }
-      const data = uniqueAssignments(rows, candidate);
-      return { ok: true, data, meta: { date: candidate, source: "Hub DATE_ROUTE", complete: true, rowCount: data.length }, error: null };
+      // Only a verified final page resolves this loader and enters the cache.
+      return readPaginatedDatedAssignments(candidate, params => callHub("datedAssignments", params, { useCache: false }));
     });
     const verifiedSnapshotDate = snapshot && !phase2bSnapshotMeta(snapshot).stale && snapshot.refreshedThrough >= phase2bKstDate() ? snapshot.latestDate : "";
     let candidate = date === "latest" ? phase2bKstDate() : date;

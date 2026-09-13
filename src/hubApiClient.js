@@ -65,6 +65,16 @@ function circuitFailure(action, circuit, timeout, probe) {
   circuitLog(action, circuit, timeout, circuit.state === "OPEN" ? "OPEN" : "FAILURE");
 }
 
+export function classifyHubFailure(error) {
+  if (error?.name === "AbortError") return "timeout";
+  if ([401, 403].includes(Number(error?.upstreamStatus)) || error?.failureType === "auth") return "auth";
+  if (error?.responseKind === "html") return "hub-html";
+  if (error?.failureType === "parse" || error?.failureType === "contract") return "invalid-json-contract";
+  if (/HUB_INTERNAL_ERROR|HUB_EXECUTION/.test(error?.message || "")) return "apps-script-execution";
+  if (Number(error?.upstreamStatus) >= 500) return "upstream-5xx";
+  return error?.failureType || "network";
+}
+
 function stable(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
@@ -125,6 +135,7 @@ async function callHubUncached(action, params, key) {
     customerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
     nearestVehicles: Number(process.env.HUB_NEAREST_TIMEOUT_MS || 30000),
     mapBounds: Number(process.env.HUB_BOUNDS_TIMEOUT_MS || 30000),
+    datedAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
     routePlan: Number(process.env.HUB_ROUTE_TIMEOUT_MS || 25000)
   };
   const timeoutMs = actionTimeoutMs[action] || Number(process.env.HUB_API_TIMEOUT_MS || 2000);
@@ -151,18 +162,19 @@ async function callHubUncached(action, params, key) {
       const bodyReadMs = Date.now() - bodyReadStarted;
       const parseStarted = Date.now();
       let json;
-      try { json = responseText == null ? await response.json() : JSON.parse(responseText); } catch (_) { throw Object.assign(new Error("HUB_INVALID_JSON"), { upstreamStatus: response.status, failureType: "parse" }); }
+      try { json = responseText == null ? await response.json() : JSON.parse(responseText); } catch (_) { throw Object.assign(new Error("HUB_INVALID_JSON"), { upstreamStatus: response.status, failureType: "parse", responseKind: /^\s*</.test(responseText || "") ? "html" : "invalid-json" }); }
       const parseMs = Date.now() - parseStarted;
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
       circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
       const ttlMs = action === "routePlan" ? Number(process.env.HUB_ROUTE_CACHE_TTL_MS || 300000) : 60000;
-      cacheHubResponse(key, Date.now() + ttlMs, json);
+      if (action !== "datedAssignments") cacheHubResponse(key, Date.now() + ttlMs, json);
       if (action === "mapBounds" || action === "customerDetail") console.info(JSON.stringify({ component: "hub-api-profile", action, requestId: body.requestId, attempt: attempt + 1, signingMs, requestSerializationMs, responseHeadersMs, bodyReadMs, parseMs, responseBytes: responseText == null ? null : Buffer.byteLength(responseText), hubDurationMs: Number(json.meta?.durationMs || 0), totalMs: Date.now() - attemptStarted }));
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, totalMs: Date.now() - started, hubDurationMs: Number(json.meta?.durationMs || 0), hubProfile: json.meta?.routeProfile || null, cache: "MISS" }));
       return json;
     } catch (error) {
       lastError = error;
+      console.warn(JSON.stringify({ component: "hub-failure-classification", action, classification: classifyHubFailure(error), upstreamStatus: error.upstreamStatus || null }));
       if (error.name === "AbortError") { state.metrics.timeout += 1; timedOut = true; } else state.metrics.error += 1;
       console.warn(JSON.stringify({ component: "hub-api", action, requestId: body.requestId, attempt: attempt + 1, elapsedMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", upstreamStatus: error.upstreamStatus || null, failureType: error.failureType || (error.name === "AbortError" ? "timeout" : "network"), errorCode: error.name === "AbortError" ? "HUB_TIMEOUT" : String(error.message || "HUB_ERROR").slice(0, 80) }));
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", result: "FAIL" }));
