@@ -19,7 +19,10 @@ function hubStaffPeriodPage_(params, privateHistory) {
   let cursor = null;
   if (params.cursor) {
     try {
-      cursor = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(hubMapHttpText_(params.cursor, 'cursor', 3000))).getDataAsString());
+      // This encoded envelope is longer than the shared 200-character text limit.
+      // Keep the exception local to this read-only cursor, not global validation.
+      if (typeof params.cursor !== 'string' || params.cursor.length > 3000 || !/^[A-Za-z0-9_-]+={0,2}$/.test(params.cursor)) throw new Error('INVALID_CURSOR');
+      cursor = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(params.cursor)).getDataAsString());
       if (cursor.v !== 1 || cursor.start !== start || cursor.end !== end || cursor.code !== code || cursor.limit !== limit
           || !cursor.nextToken || !Number.isInteger(cursor.offset) || cursor.offset < 0 || !Number.isInteger(cursor.total)) throw new Error('INVALID_CURSOR');
     } catch (_) { hubMapHttpRaise_('INVALID_CURSOR', 'Range cursor mismatch.', 400, false); }
