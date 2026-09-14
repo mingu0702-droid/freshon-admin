@@ -19,7 +19,7 @@ import { staffCustomerDetail } from "./mapStaffDetail.js";
 import { createPeriodJobs, readStaffDriverHistory, validatePeriod, selectPeriodStores, compactPeriodStores } from "./mapPeriod.js";
 import { historyDeadline } from './readDeadline.js';
 import { validateDeliveryLivePage } from './deliveryLiveContract.js';
-import { createStageReadModel } from './stageReadModel.js';
+import { createStageReadModel, stageReadModelPending } from './stageReadModel.js';
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled, hubRequestProfile } from "./hubApiClient.js";
@@ -4002,7 +4002,7 @@ app.get("/api/map-phase2b/preview/period", requireView, compression({ threshold:
   catch { return res.status(400).json({ error: "INVALID_PERIOD" }); }
   let result;
   try { result = stageReadModelEnabled ? stageReadModel.period(startDate,endDate) : periodJobs.read(startDate, endDate,{retry:req.query.retry==='1'}); }
-  catch(error){if(/^READ_MODEL_/.test(error.message))return res.status(202).json({ok:true,data:[],meta:{...stageReadModel.status(),complete:false},error:error.message});throw error;}
+  catch(error){if(/^READ_MODEL_/.test(error.message)){const pending=stageReadModelPending(stageReadModel,error);return res.status(pending.status).json(pending.body);}throw error;}
   if (result.meta.complete) {
     result.data=selectPeriodStores(result.data,{vehicle,driverKey});
     result.meta.storeCount=result.data.length;result.meta.filterMode=driverKey?'driver':vehicle?'vehicle':'all';

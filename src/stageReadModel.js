@@ -7,6 +7,11 @@ const fail = code => { throw new Error(code); };
 const historyFields = ['deliveryDate','customerCode','deliveryId','vehicle','driverName','driverPhone','kind','sourceVersion','updatedAt'];
 const periodFields = ['deliveryDate','customerCode','vehicle','driverName','driverKey','driverIdentity'];
 
+export function stageReadModelPending(model, error) {
+  const meta={...model.status(),complete:false},failed=meta.phase==='ERROR';
+  return {status:failed?503:202,body:{ok:!failed,data:[],meta,error:failed?'READ_MODEL_BUILD_FAILED':null,pendingReason:failed?null:error.message}};
+}
+
 // Only the explicitly approved minimal lookup lives in memory. No raw payload,
 // filesystem persistence, public response cache, or Google request on UI reads.
 export function createStageReadModel({ secret, now = Date.now } = {}) {
