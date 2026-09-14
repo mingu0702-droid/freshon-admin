@@ -59,10 +59,12 @@ export function createStageReadModel({ secret, now = Date.now } = {}) {
       }
     }
     for(const rows of history.values())rows.sort((a,b)=>b.deliveryDate.localeCompare(a.deliveryDate)||a.deliveryId.localeCompare(b.deliveryId));
-    live={generation:m.generation,history,period,startDate:m.startDate,endDate:m.endDate,updatedAt:new Date(now()).toISOString()};
+    const historyDates=m.manifest.filter(e=>e.key.startsWith('history:')&&e.count>0).map(e=>e.key.slice(8)).sort();
+    const periodDates=m.manifest.filter(e=>e.key.startsWith('period:')&&e.count>0).map(e=>e.key.slice(7)).sort();
+    live={generation:m.generation,history,period,historyLatest:historyDates.at(-1)||null,periodLatest:periodDates.at(-1)||null,startDate:m.startDate,endDate:m.endDate,updatedAt:new Date(now()).toISOString()};
     pending=null;lastStatus={phase:'DONE',complete:true,updatedAt:live.updatedAt};
   }
-  function status(){return {...lastStatus,progress:lastStatus.complete?100:0,ready:!!live,source:'Hub.StageReadModel',generation:live?.generation||null,startDate:live?.startDate||null,endDate:live?.endDate||null,historyRows:live?[...live.history.values()].reduce((n,r)=>n+r.length,0):0,periodRows:live?.period.length||0};}
+  function status(){return {...lastStatus,progress:lastStatus.complete?100:0,ready:!!live,source:'Hub.StageReadModel',generation:live?.generation||null,startDate:live?.startDate||null,endDate:live?.endDate||null,historyLatest:live?.historyLatest||null,periodLatest:live?.periodLatest||null,historyRows:live?[...live.history.values()].reduce((n,r)=>n+r.length,0):0,periodRows:live?.period.length||0};}
   function ready(start,end){validatePeriod(start,end);if(!live)fail('READ_MODEL_NOT_READY');if(start<live.startDate||end>live.endDate)fail('READ_MODEL_RANGE_NOT_READY');}
   function history({customerCode,startDate,endDate}){
     ready(startDate,endDate);

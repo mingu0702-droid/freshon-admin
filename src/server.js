@@ -3976,7 +3976,7 @@ app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
     for (let at = Date.parse(startDate); at <= Date.parse(endDate); at += 86400000) unconfirmedDates.push(new Date(at).toISOString().slice(0,10));
     // A stored task proves that task, not completeness of a whole business date.
     return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data, meta: { complete: true, coverageComplete: false,
-      coverage: stageReadModelEnabled ? 'AUDITED_STORED_TASKS_DATE_COMPLETENESS_UNCONFIRMED' : 'PARTIAL_UNAUDITED', availableRecordDates: dates, unconfirmedDates, startDate, endDate, source: stageReadModelEnabled ? 'Delivery.delivery_admin_raw via Hub.StageReadModel' : 'Delivery.delivery_admin_raw' } }));
+      coverage: stageReadModelEnabled ? 'AUDITED_STORED_TASKS_DATE_COMPLETENESS_UNCONFIRMED' : 'PARTIAL_UNAUDITED', availableRecordDates: dates, unconfirmedDates, startDate, endDate, source: 'Delivery.delivery_admin_raw', readModel:stageReadModelEnabled?'Hub.StageReadModel':null } }));
   } catch(error) {
     if(stageReadModelEnabled && /^READ_MODEL_/.test(error.message))return res.status(503).json({error:error.message,retryable:true});
     const failure = mapReadFailure(error, 'HISTORY');
