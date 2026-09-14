@@ -41,7 +41,7 @@ function hubStaffPeriodPage_(params, privateHistory) {
   // Bypass HubDataLayer's shared response cache for private contact history.
   let result, historyProfile=null;
   if(privateHistory){
-    const source=hubStaffHistorySource_(code,start,end),offset=cursor?cursor.offset:0;
+    const source=hubDeliveryHistorySource_(code,start,end),offset=cursor?cursor.offset:0;
     if(offset>source.rows.length)hubMapHttpRaise_('INVALID_CURSOR','History cursor changed.',400,false);
     const data=source.rows.slice(offset,offset+limit);historyProfile=source.profile;
     result={ok:true,data:data,meta:{total:source.rows.length,returned:data.length,nextToken:offset+data.length<source.rows.length?'CUSTOMER_ROWS':null}};
@@ -76,8 +76,8 @@ function hubStaffPeriodPage_(params, privateHistory) {
       driverName: name, driverKey: driverKey, driverIdentity: phone ? 'NAME_CONTACT' : 'UNVERIFIED',
       area: row.deliveryArea || '', center: row.center || '', kind: 'ASSIGNED'};
     // daily_routes is an assignment source; it does NOT certify actual visits.
-    if (privateHistory) return {customerCode: customer, deliveryDate: date, vehicle: vehicle,
-      driverName: name || null, driverPhone: phone || null, kind: 'ASSIGNED', sourceKey: record.sourceKey};
+    if (privateHistory) return {customerCode: customer, deliveryDate: date, deliveryId: row.deliveryId, vehicle: vehicle,
+      driverName: name || null, driverPhone: phone || null, kind: row.deliveryStatus === 'COMPLETED' ? 'COMPLETED' : 'ASSIGNED', sourceKey: record.sourceKey};
     return record;
   });
   const hasMore = Boolean(next);
@@ -88,5 +88,6 @@ function hubStaffPeriodPage_(params, privateHistory) {
     pageOffset: emitted, count: data.length, pageSize: limit, hasMore: hasMore, complete: !hasMore, truncated: false,
     nextCursor: hasMore ? Utilities.base64EncodeWebSafe(JSON.stringify({v: privateHistory?1:2, start: start, end: end, code: code, limit: limit,
       nextToken: next, offset: offset + rows.length, emitted:emitted+data.length,total: total,fast:meta.fast||null})) : null,
-    source: 'Customer.daily_routes assignment history', historyProfile:historyProfile, actualVisitsAvailable: false}};
+    source: privateHistory ? 'Delivery.delivery_admin_raw' : 'Customer.daily_routes assignment history', historyProfile:historyProfile,
+    coverageComplete: false, actualVisitsAvailable: privateHistory}};
 }

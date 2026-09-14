@@ -106,7 +106,13 @@
       node('button', '로그아웃').onclick = logout;
       if (target.kind === 'history') {
         const rows = Array.isArray(payload.data) ? payload.data : [];
-        if (!rows.length) node('p', '선택 기간의 원천 이력이 없습니다.');
+        if (!payload.meta?.coverageComplete) {
+          node('p', 'Delivery 기사정보 확인 중 · 전체 기간 수집 완전성 미확인');
+          line('원천', payload.meta?.source || '미확인');
+          line('기록 확인일', (payload.meta?.availableRecordDates || []).join(', ') || '없음');
+          line('완전성 미확인일', (payload.meta?.unconfirmedDates || []).join(', ') || '미확인');
+        }
+        if (!rows.length) node('p', '선택 기간에 확인된 Delivery 기록이 없습니다.');
         rows.forEach(row => line(row.deliveryDate + ' · ' + (row.vehicle || '미등록') + '호 · ' + (row.kind === 'COMPLETED' ? '방문 완료' : '배차'), [row.driverName || '기사 미등록', row.driverPhone || '연락처 미등록'].join(' · ')));
       } else {
         const data = payload.data || {};

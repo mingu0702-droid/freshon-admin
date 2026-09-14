@@ -1,0 +1,4 @@
+다음 UI 합본: 호차는 “용38호”, “용20호”처럼 붙여 표시하고 중간 줄바꿈 금지.
+최근 배송기사: 실제 dated Delivery task의 customerCode+deliveryDate+deliveryId로만 연결.
+Freshon 기간 지도 배차정보와 Delivery 실제 기사 이력을 혼용하지 않음.
+실시간 현황: 현재 Delivery API 업무일·조회시각·완전성 검증. 실패를 0건 완료로 대체하지 않음.

@@ -6,6 +6,7 @@ export async function fetchPrivateHub(url, options, profile) {
   profile.redirects = [];
   profile.hops = [];
   for (let hop = 0; hop <= 4; hop++) {
+    options.signal?.throwIfAborted();
     const started = performance.now();
     profile.phase = 'HEADERS';
     const response = await fetch(current.href, { ...options, method,

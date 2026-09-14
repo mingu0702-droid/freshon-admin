@@ -104,14 +104,14 @@ export function previewEnabled() {
     && String(process.env.HUB_API_SECRET || "").length >= 32;
 }
 
-export async function callHub(action, params, { useCache = true, privateRead = false } = {}) {
+export async function callHub(action, params, { useCache = true, privateRead = false, deadline, signal, page } = {}) {
   if (!process.env.HUB_API_URL) throw new Error("HUB_API_URL_NOT_CONFIGURED");
   const key = `${action}:${stable(params || {})}`;
   if (privateRead || ['customerDetail','staffCustomerDetail'].includes(action)) useCache = false;
   const saved = cache.get(key);
   if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
   if (useCache && inFlight.has(key)) return inFlight.get(key);
-  const request = callHubUncached(action, params, key, privateRead || ['customerDetail','staffCustomerDetail'].includes(action));
+  const request = callHubUncached(action, params, key, privateRead || ['customerDetail','staffCustomerDetail'].includes(action), { deadline, signal, page });
   if (useCache) inFlight.set(key, request);
   try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
 }
@@ -130,7 +130,7 @@ function retryableHubError(error) {
   return error.failureType === "upstream" && Number(error.upstreamStatus) >= 500;
 }
 
-async function callHubUncached(action, params, key, privateRead = false) {
+async function callHubUncached(action, params, key, privateRead = false, { deadline, signal, page } = {}) {
   const entered = circuitEnter(action);
   const started = Date.now();
   const staffDetail = action === 'staffCustomerDetail';
@@ -144,25 +144,31 @@ async function callHubUncached(action, params, key, privateRead = false) {
     mapBounds: Number(process.env.HUB_BOUNDS_TIMEOUT_MS || 30000),
     datedAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
     periodAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
-    staffDriverHistory: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
+    staffDriverHistory: 5000,
     routePlan: Number(process.env.HUB_ROUTE_TIMEOUT_MS || 25000)
   };
   const timeoutMs = actionTimeoutMs[action] || Number(process.env.HUB_API_TIMEOUT_MS || 2000);
+  const sharedDeadline = Math.min(deadline ?? Infinity, staffDetail || action === 'staffDriverHistory' ? started + timeoutMs : Infinity);
   let lastError;
   const attempts = entered.probe || action === "customerDetail" ? 1 : 2;
   let timedOut = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const remaining = staffDetail ? timeoutMs - (Date.now() - started) : timeoutMs;
+    signal?.throwIfAborted();
+    const remaining = Math.min(timeoutMs, sharedDeadline - Date.now());
     if (remaining <= 0) { lastError = Object.assign(new Error('DETAIL_UPSTREAM_TIMEOUT'), {name:'AbortError'}); timedOut = true; break; }
     const profile = { attempt: attempt + 1, sentAt:Date.now(), phase:'HEADERS', responseHeadersMs:0, bodyReadMs:0, parseMs:0, upstreamStatus:null, contentType:'unknown', responseKind:'none' };
     const attemptStarted = Date.now();
     const signingStarted = Date.now();
     const body = requestBody(action, params);
+    Object.assign(profile, { requestId: body.requestId, page: page ?? 0, remainingMs: remaining });
     const signingMs = Date.now() - signingStarted;
     const serializationStarted = Date.now();
     const serializedBody = JSON.stringify(body);
     const requestSerializationMs = Date.now() - serializationStarted;
     const controller = new AbortController();
+    const cancel = () => controller.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) cancel();
     const timer = setTimeout(() => controller.abort(), remaining);
     try {
       const fetchStarted = Date.now();
@@ -176,6 +182,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
       profile.phase = 'BODY';
       let responseText = null;
       if (typeof response.text === "function") responseText = await response.text();
+      controller.signal.throwIfAborted();
       const bodyReadMs = Date.now() - bodyReadStarted;
       profile.bodyReadMs = bodyReadMs;
       const parseStarted = Date.now();
@@ -183,6 +190,9 @@ async function callHubUncached(action, params, key, privateRead = false) {
       let json;
       try { json = responseText == null ? await response.json() : JSON.parse(responseText); } catch (_) {
         profile.responseKind = privateResponseKind(responseText);
+        if (response.status === 404 && profile.hops?.at(-1)?.target === 'OUTPUT' && profile.responseKind === 'html') {
+          throw Object.assign(new Error('HUB_OUTPUT_HTML_404'), { upstreamStatus: 404, failureType: 'output', responseKind: 'html' });
+        }
         if (staffDetail && response.status >= 500) throw Object.assign(new Error('DETAIL_UPSTREAM_5XX'), {upstreamStatus:response.status,failureType:'upstream',responseKind:profile.responseKind});
         throw Object.assign(new Error("HUB_INVALID_JSON"), { upstreamStatus: response.status, failureType: "parse", responseKind: profile.responseKind });
       }
@@ -208,6 +218,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
         throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'), { upstreamStatus: response.status, failureType: 'contract' });
       }
       profile.phase = 'DONE';
+      if (Date.now() >= sharedDeadline) throw Object.assign(new Error('HUB_TIMEOUT'), {name:'AbortError'});
       if(sourceRead)console.info(JSON.stringify({component:'hub-source-profile',action,...profile,count:Array.isArray(json.data)?json.data.length:0,totalMs:Date.now()-started,result:'OK'}));
       if (staffDetail) console.info(JSON.stringify({component:'private-hub-profile',...profile,result:'OK',totalMs:Date.now()-started}));
       circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
@@ -232,9 +243,9 @@ async function callHubUncached(action, params, key, privateRead = false) {
       if (error.name === "AbortError") { state.metrics.timeout += 1; timedOut = true; } else state.metrics.error += 1;
       console.warn(JSON.stringify({ component: "hub-api", action, requestId: body.requestId, attempt: attempt + 1, elapsedMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", upstreamStatus: error.upstreamStatus || null, failureType: error.failureType || (error.name === "AbortError" ? "timeout" : "network"), errorCode: error.name === "AbortError" ? "HUB_TIMEOUT" : String(error.message || "HUB_ERROR").slice(0, 80) }));
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", result: "FAIL" }));
-      if (attempt + 1 >= attempts || !retryableHubError(error) || (staffDetail && Date.now()-started+150>=timeoutMs)) break;
+      if (attempt + 1 >= attempts || signal?.aborted || !retryableHubError(error) || Date.now()+150>=sharedDeadline) break;
       await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
   }
   circuitFailure(action, entered.circuit, timedOut, entered.probe);
   throw lastError;

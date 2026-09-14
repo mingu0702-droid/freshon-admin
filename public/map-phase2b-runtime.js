@@ -70,7 +70,7 @@
       row.areaLabel ||= previous.areaLabel || "";
       row.region ||= previous.region || "";
       row.lastDeliveryDate = item.lastDeliveryDate || item.deliveryDate || "";
-      row.history = item.history || [];
+      row.history = item.relations || item.history || [];
       row.driverKey = item.driverKey || "";
       row.driverName = item.driverName || "";
       row.deliveryCount90d = item.deliveryCount90d ?? item.deliveryCount ?? null;
@@ -156,7 +156,7 @@
         periodRows = payload.data; periodMeta = payload.meta;
         replaceStoreSnapshot(periodRows, snapshotMeta); ensureDateVehicles(); dateReady = true;
         const drivers = new Map();
-        periodRows.forEach(row => (row.history || []).forEach(item => { if (item.driverKey) drivers.set(item.driverKey, (item.driverName || "미등록") + (item.driverIdentity === "UNVERIFIED" ? " · 동일인 확인 필요" : "")); }));
+        periodRows.forEach(row => (row.relations || row.history || []).forEach(item => { if (item.driverKey) drivers.set(item.driverKey, (item.driverName || "미등록") + (item.driverIdentity === "UNVERIFIED" ? " · 동일인 확인 필요" : "")); }));
         $("#periodDriver").replaceChildren(new Option("전체 기사", ""));
         [...drivers].sort((a,b) => a[1].localeCompare(b[1], "ko")).forEach(([key,name]) => $("#periodDriver").add(new Option(name,key)));
         if (!drivers.has(state.driverKey)) state.driverKey = "";
@@ -1216,7 +1216,7 @@
 
   function comparisonStores() {
     if (!periodMeta?.complete || periodMeta.startDate !== state.rangeStart || periodMeta.endDate !== state.rangeEnd) return [];
-    return periodRows.flatMap(row => [...new Set((row.history || []).map(h => h.vehicle).filter(Boolean))].map(vehicle => ({ ...row, vehicle })));
+    return periodRows.flatMap(row => [...new Set((row.relations || row.history || []).map(h => h.vehicle).filter(Boolean))].map(vehicle => ({ ...row, vehicle })));
   }
   function nearestStores(point, limit = 8) {
     return comparisonStores().map((row) => ({ ...row, distance: distanceKm(point, row) })).filter((row) => Number.isFinite(row.distance)).sort((a, b) => a.distance - b.distance).slice(0, limit);
@@ -1421,7 +1421,7 @@
         if (!showRoute) { state.fitRequested = false; await loadBaseMap(); }
       }
       updateOperationMetrics(status);
-      lastRefreshedAt = formatTime(new Date());
+      lastRefreshedAt = current ? payload.data?.fetchedAt || '' : new Date().toISOString();
       if (showRoute && status) {
         const stops = dedupeRouteStops((status.stops || []).map((stop) => normalizeRouteStop(current ? { ...stop, status: stop.appRecorded ? "COMPLETED" : "PENDING", actualCompletedAt: stop.deliveryCompletedAt } : stop, vehicle)));
         operationStops = stops; renderRunList();
@@ -1438,7 +1438,7 @@
       updateOperationMetrics(null);
       operationStops = []; renderRunList();
       $("#runList").textContent = "운행 목록을 불러오지 못했습니다. 상단 동기화로 재시도해주세요.";
-      $("#mapStatusSub").textContent = `운행현황 조회 실패 · ${error.message}`;
+      $("#mapStatusSub").textContent = `운행현황 조회 실패 · ${error.message}${lastRefreshedAt ? ' · 마지막 확인 시각 ' + lastRefreshedAt : ''}`;
     } finally {
       if (requestId === state.todayRequestId) $("#syncOperation").disabled = false;
     }

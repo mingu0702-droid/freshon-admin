@@ -67,10 +67,11 @@ test('bounded period reads only allowlisted columns within the established physi
  const headers=['deliveryDate','confirmedVehicle','baseVehicle','truckTon','driverName','driverPhone','deliveryArea','customerCode','customerName','salesAmount','deliveryCount','customerAddress','detailAddress','accessMemo','createdAt','updatedAt','hashKey'];
  const values=[['2026. 8. 1','101','','','TEST','SYNTHETIC_CONTACT','','S1234','TEST','','','TEST ADDRESS','','FORBIDDEN','','','K1'],['2026. 8. 2','202','','','TEST','SYNTHETIC_CONTACT','','S1234','TEST','','','TEST ADDRESS','','FORBIDDEN','','','K2']];let calls=0;
  const context=vm.createContext({Date,Number,String,Array,Set,JSON,Error,HUB_DEFAULT_SOURCE_ID:'CURRENT',
+  DriveApp:{getFileById:()=>({getLastUpdated:()=>new Date(1000)})},
   SpreadsheetApp:{openById:()=>({getSheetByName:()=>({getLastRow:()=>3,getSheetId:()=>9,getLastColumn:()=>headers.length,getRange:()=>({getValues:()=>[headers]})})})},
   ScriptApp:{getOAuthToken:()=> 'SYNTHETIC'},hubMapHttpRaise_:code=>{throw new Error(code);},hubStaffHistoryDate_:value=>String(value).replace(/\. /g,'-').replace(/-(\d)(?=-|$)/g,'-0$1'),
   UrlFetchApp:{fetch:(url,options)=>{calls++;const body=JSON.parse(options.payload);assert.ok(body.dataFilters.every(f=>f.gridRange.endRowIndex-f.gridRange.startRowIndex<=1000));assert.ok(body.dataFilters.every(f=>!(f.gridRange.startColumnIndex<=13&&f.gridRange.endColumnIndex>13)));return{getResponseCode:()=>200,getContentText:()=>JSON.stringify({valueRanges:body.dataFilters.map(f=>({dataFilters:[f],valueRange:{values:values.map(r=>r.slice(f.gridRange.startColumnIndex,f.gridRange.endColumnIndex))}}))})};}}});
  vm.runInContext(fs.readFileSync(new URL('../integrations/hub/HubPeriodSource.js',import.meta.url),'utf8'),context);
- const result=context.hubPeriodReadBounded_({first:2,total:2,last:3,sheetId:9},0,1000);assert.equal(result.data.length,2);assert.equal(result.data[1].customerCode,'S1234');assert.equal('accessMemo'in result.data[1],false);assert.equal(result.meta.nextToken,null);assert.equal(calls,1);
+ const result=context.hubPeriodReadBounded_({first:2,total:2,last:3,sheetId:9,version:1000},0,1000);assert.equal(result.data.length,2);assert.equal(result.data[1].customerCode,'S1234');assert.equal('accessMemo'in result.data[1],false);assert.equal(result.meta.nextToken,null);assert.equal(calls,1);
  assert.throws(()=>context.hubPeriodReadBounded_({first:2,total:2,last:4,sheetId:9},0,1000),/PERIOD_SOURCE_CHANGED/);
 });

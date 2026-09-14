@@ -20,8 +20,8 @@
       if (!history.length) return [];
       const latest = history[0];
       return [{ ...row, vehicle: latest.vehicle, driverKey: latest.driverKey, driverName: latest.driverName,
-        lastDeliveryDate: latest.deliveryDate, visitCount: history.length,
-        periodVisitCount: row.history.length, vehicles: [...new Set(row.history.map(item => item.vehicle))],
+        lastDeliveryDate: latest.deliveryDate, visitCount: history.reduce((n,item)=>n+(item.count || 1),0),
+        periodVisitCount: row.history.reduce((n,item)=>n+(item.count || 1),0), vehicles: [...new Set(row.history.map(item => item.vehicle))],
         drivers: [...new Set(row.history.map(item => item.driverKey).filter(Boolean))],
         status: '', order: null, representativeLabel: '선택 기간 내 최신 배차', history: row.history }];
     });

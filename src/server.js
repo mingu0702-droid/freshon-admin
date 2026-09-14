@@ -16,7 +16,9 @@ import { createMapStaffAuth } from "./mapStaffAuth.js";
 import { staffLatency, addStaffTiming, addHubReadTiming } from "./staffLatency.js";
 import { mapReadFailure } from "./mapReadFailure.js";
 import { staffCustomerDetail } from "./mapStaffDetail.js";
-import { createPeriodJobs, readStaffDriverHistory, validatePeriod, selectPeriodStores } from "./mapPeriod.js";
+import { createPeriodJobs, readStaffDriverHistory, validatePeriod, selectPeriodStores, compactPeriodStores } from "./mapPeriod.js";
+import { historyDeadline } from './readDeadline.js';
+import { validateDeliveryLivePage } from './deliveryLiveContract.js';
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled, hubRequestProfile } from "./hubApiClient.js";
@@ -60,6 +62,7 @@ const upload = multer({
 
 const mapStaff = createMapStaffAuth();
 app.use(staffLatency);
+app.use('/api/map-phase2b/private/driver-history', historyDeadline);
 const periodJobs = createPeriodJobs({ loadPage: params => callHub("periodAssignments", params, { useCache: false }) });
 app.use("/api/map-phase2b/auth", securityAudit, mapStaff.router);
 app.use(express.json({ limit: "10mb" }));
@@ -2335,7 +2338,7 @@ function startPhase2bSnapshotWatchdog() {
   phase2bSnapshotWatchdogTimer.unref();
 }
 
-async function fetchDeliveryTaskRowsForDate(date) {
+async function fetchDeliveryTaskRowsForDate(date, { verifyLive = false } = {}) {
   const dateParam = `${date}T00:00:00+09:00`;
   const pageSize = 300;
   const allRows = [];
@@ -2349,9 +2352,13 @@ async function fetchDeliveryTaskRowsForDate(date) {
     query.append("enteringDatedAtBetween", dateParam);
     const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
     const rows = extractDeliveryTaskRows(payload);
+    const verified = verifyLive ? validateDeliveryLivePage(payload, rows, { date, page, pageSize, received: allRows.length }) : null;
     allRows.push(...rows);
+    if (verified?.complete) return allRows;
+    if (verifyLive) continue;
     if (rows.length < pageSize) break;
   }
+  if (verifyLive) throw new Error('DELIVERY_LIVE_PAGE_INCOMPLETE');
   return allRows;
 }
 
@@ -3825,7 +3832,7 @@ async function phase2bTodayStatus(date) {
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   if (phase2bTodayInflight.has(date)) return phase2bTodayInflight.get(date);
   const pending = (async () => {
-    const rows = await fetchDeliveryTaskRowsForDate(date);
+    const rows = await fetchDeliveryTaskRowsForDate(date, { verifyLive: true });
     const byVehicle = new Map();
     rows.forEach((row) => {
       const vehicle = deliveryTaskVehicle(row);
@@ -3835,6 +3842,7 @@ async function phase2bTodayStatus(date) {
     });
     const value = {
       date,
+      requestedBusinessDate: date, responseBusinessDate: date, complete: true, source: 'Delivery.current-task-api', fetchedAt: new Date().toISOString(),
       generatedAt: new Date().toISOString(),
       vehicles: [...byVehicle].map(([vehicle, vehicleRows]) => phase2bTodayVehicleSummary(vehicle, vehicleRows, date)).sort((a, b) => a.vehicle.localeCompare(b.vehicle, "ko", { numeric: true }))
     };
@@ -3943,22 +3951,34 @@ app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
   catch { return res.status(400).json({ error: "INVALID_PERIOD" }); }
   try {
     const readAt = performance.now(); let upstreamMs = 0;
-    const data = await readStaffDriverHistory({ customerCode, startDate, endDate }, async params => {
+    const data = await readStaffDriverHistory({ customerCode, startDate, endDate }, async (params, options) => {
       const at = performance.now();
       try {
-        const payload = await callHub("staffDriverHistory", params, { useCache: false, privateRead: true });
+        const payload = await callHub("staffDriverHistory", params, { useCache: false, privateRead: true, ...options });
         addHubReadTiming(res, hubRequestProfile(payload));
         return payload;
       } finally { const elapsed = performance.now() - at; upstreamMs += elapsed; addStaffTiming(res, 'upstream', elapsed); }
-    });
+    }, { budget: req.historyBudget, requireDelivery: true });
     addStaffTiming(res, 'parseNormalize', Math.max(0, performance.now() - readAt - upstreamMs));
-    return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data, meta: { complete: true, startDate, endDate, source: "Customer.daily_routes 배차 이력" } }));
+    const dates = [...new Set(data.map(row => row.deliveryDate))].sort();
+    const unconfirmedDates = [];
+    for (let at = Date.parse(startDate); at <= Date.parse(endDate); at += 86400000) unconfirmedDates.push(new Date(at).toISOString().slice(0,10));
+    // A stored task proves that task, not completeness of a whole business date.
+    return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data, meta: { complete: true, coverageComplete: false,
+      coverage: 'PARTIAL_UNAUDITED', availableRecordDates: dates, unconfirmedDates, startDate, endDate, source: 'Delivery.delivery_admin_raw' } }));
   } catch(error) {
     const failure = mapReadFailure(error, 'HISTORY');
+    if (res.destroyed) return;
     addHubReadTiming(res, hubRequestProfile(error));
     res.set('X-History-Failure', failure.code);
     return res.status(failure.status).json({ error: failure.code, retryable: failure.retryable });
   }
+});
+
+app.get('/api/map-phase2b/preview/period-status', requireView, (req, res) => {
+  if (!previewEnabled()) return res.status(404).json({error:'PREVIEW_DISABLED'});
+  try { return res.json(periodJobs.peek(String(req.query.startDate || ''), String(req.query.endDate || ''))); }
+  catch { return res.status(400).json({error:'INVALID_PERIOD'}); }
 });
 
 app.get("/api/map-phase2b/preview/period", requireView, compression({ threshold: 1024 }), async (req, res) => {
@@ -3976,6 +3996,7 @@ app.get("/api/map-phase2b/preview/period", requireView, compression({ threshold:
     const coords = new Map((snapshot?.rows || []).map(row => [row.customerCode, row]));
     result.data = result.data.map(row => ({ ...row, lat: coords.get(row.customerCode)?.lat ?? null, lng: coords.get(row.customerCode)?.lng ?? null }));
     result.meta.missingCoordinate = result.data.filter(row => row.lat == null || row.lng == null).length;
+    result.data = compactPeriodStores(result.data); result.meta.summaryContract = 'period-store-relations-v1';
   }
   return res.status(result.meta.phase === "ERROR" ? mapReadFailure(new Error(result.error),'PERIOD').status : result.meta.complete ? 200 : 202).json(result);
 });
@@ -4140,7 +4161,8 @@ app.get("/api/map-phase2b/preview/today-status", requireView, async (req, res) =
     const vehicles = vehicle ? payload.vehicles.filter((row) => normalizeVehicleValue(row.vehicle) === vehicle) : payload.vehicles;
     return res.json({ ok: true, data: { ...payload, vehicles }, error: null });
   } catch (error) {
-    return res.status(error.status || 502).json({ ok: false, data: null, error: error.message || String(error) });
+    const code = /^DELIVERY_LIVE_[A-Z_]+$/.test(error.message || '') ? error.message : 'DELIVERY_LIVE_UNAVAILABLE';
+    return res.status(502).json({ ok: false, data: null, error: code, requestedBusinessDate: date, complete: false });
   }
 });
 

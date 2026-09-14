@@ -1,6 +1,7 @@
 /** Reuse the legacy date-bound envelope once, then read only required columns. */
 function hubPeriodSourcePage_(filters,cursor){
   if(cursor&&cursor.fast)return hubPeriodReadBounded_(cursor.fast,cursor.offset,filters.limit);
+  const version=DriveApp.getFileById(HUB_DEFAULT_SOURCE_ID).getLastUpdated().getTime();
   const result=CustomerDataApi.getDailyRoutes(filters);
   if(!result||!result.ok||cursor||!result.meta||result.meta.source!=='Current'||!result.meta.nextToken)return result;
   const count=Number(result.meta.returned),total=Number(result.meta.total);
@@ -8,10 +9,12 @@ function hubPeriodSourcePage_(filters,cursor){
   if(token.sourceIndex!==0||!Number.isInteger(token.row)||count!==filters.limit||!Number.isInteger(total))return result;
   const sheet=SpreadsheetApp.openById(HUB_DEFAULT_SOURCE_ID).getSheetByName('daily_routes'),first=token.row-count,last=sheet.getLastRow();
   if(first<2||first+total-1>last)return result;
-  result.meta.fast={first:first,total:total,last:last,sheetId:sheet.getSheetId()};
+  if(DriveApp.getFileById(HUB_DEFAULT_SOURCE_ID).getLastUpdated().getTime()!==version)hubMapHttpRaise_('PERIOD_SOURCE_CHANGED','Source changed during first page.',409,false);
+  result.meta.fast={first:first,total:total,last:last,sheetId:sheet.getSheetId(),version:version};
   return result;
 }
 function hubPeriodReadBounded_(bounds,offset,limit){
+  if(!Number.isFinite(bounds.version)||DriveApp.getFileById(HUB_DEFAULT_SOURCE_ID).getLastUpdated().getTime()!==bounds.version)hubMapHttpRaise_('PERIOD_SOURCE_CHANGED','Source version changed.',409,false);
   const sheet=SpreadsheetApp.openById(HUB_DEFAULT_SOURCE_ID).getSheetByName('daily_routes');
   if(!sheet||sheet.getSheetId()!==bounds.sheetId||sheet.getLastRow()!==bounds.last)hubMapHttpRaise_('PERIOD_SOURCE_CHANGED','Source row positions changed.',409,false);
   if(!Number.isInteger(bounds.first)||bounds.first<2||!Number.isInteger(bounds.total)||bounds.total<0||bounds.first+bounds.total-1>bounds.last||offset<0||offset>=bounds.total)hubMapHttpRaise_('INVALID_CURSOR','Invalid bounded source cursor.',400,false);
@@ -38,6 +41,7 @@ function hubPeriodReadBounded_(bounds,offset,limit){
     if(values.length>count)throw new Error('PERIOD_RANGE_INVALID');
     for(let i=0;i<count;i++)for(let c=group.start;c<group.end;c++)rows[i][headers[c]]=values[i]&&values[i][c-group.start]||'';
   });
-  rows.forEach(function(row){row.deliveryDate=hubStaffHistoryDate_(row.deliveryDate);});
+  rows.forEach(function(row){row.deliveryDate=hubStaffHistoryDate_(row.deliveryDate);if(!row.deliveryDate||!String(row.customerCode||'').trim()||!String(row.hashKey||'').trim())hubMapHttpRaise_('PERIOD_ROW_INVALID','Source row identity invalid.',422,false);});
+  if(DriveApp.getFileById(HUB_DEFAULT_SOURCE_ID).getLastUpdated().getTime()!==bounds.version)hubMapHttpRaise_('PERIOD_SOURCE_CHANGED','Source changed during page.',409,false);
   return{ok:true,data:rows,meta:{total:bounds.total,returned:rows.length,nextToken:offset+rows.length<bounds.total?'BOUNDED_ROWS':null,fast:bounds,source:'Current'}};
 }
