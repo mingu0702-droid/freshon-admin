@@ -83,10 +83,13 @@ function hubStageModelBuildBatch_(s){
   // Detect concurrent retention moving the cursor before reading another batch.
   if(source.tail){const actual=sheet.getRange(source.next-1,1,1,Math.min(width,5)).getDisplayValues()[0];if(hubStageModelHash_(actual)!==source.tail)throw new Error('MODEL_SOURCE_MOVED');}
   if(source.next>source.end){s.source++;return;}
-  const count=Math.min(HUB_STAGE_MODEL.batch,source.end-source.next+1),before=DriveApp.getFileById(source.id).getLastUpdated().getTime();
-  const dates=sheet.getRange(source.next,dateCol+1,count,1).getValues().map(function(r){return hubStaffHistoryDate_(r[0]);});
+  const scanCount=Math.min(5000,source.end-source.next+1),before=DriveApp.getFileById(source.id).getLastUpdated().getTime();
+  const dates=sheet.getRange(source.next,dateCol+1,scanCount,1).getValues().map(function(r){return hubStaffHistoryDate_(r[0]);});
+  const inRange=function(d){return d&&d>=s.startDate&&d<=s.endDate;};
+  // Skip out-of-window blocks using ONE date column; projected task reads stay <=1000.
+  const count=dates.some(inRange)?Math.min(HUB_STAGE_MODEL.batch,scanCount):scanCount;
   let rows=[];
-  if(dates.some(function(d){return d&&d>=s.startDate&&d<=s.endDate;})){
+  if(dates.slice(0,count).some(inRange)){
     const wanted=source.kind==='history'?['deliveryDate','customerCode','deliveryId','confirmedVehicle','driverName','driverPhone','deliveryStatus','rawHash','updatedAt']:['deliveryDate','customerCode','confirmedVehicle','baseVehicle','driverName','driverPhone'];
     rows=hubStageModelReadColumns_(source,sheet,headers,source.next,count,wanted);
   }
