@@ -22,7 +22,7 @@ test('durable builder is isolated and avoids full RAW copying and Customer write
 test('maintenance runs multiple chunks, persists each and preserves state across execution objects',()=>{
  const source=fs.readFileSync(new URL('../integrations/hub/HubStageReadModel.js',import.meta.url),'utf8');
  let stored={phase:'BUILD',source:0,sources:[{},{},{}],shards:{},generation:1,scanned:0},writes=0,batches=0,triggers=[],released=0;
- const ctx=vm.createContext({console:{warn(){}},Date,LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock:()=>released++})},ScriptApp:{getProjectTriggers:()=>triggers,deleteTrigger:t=>{triggers=triggers.filter(x=>x!==t);},newTrigger:name=>({timeBased(){return this;},after(){return this;},create(){triggers.push({getHandlerFunction:()=>name});}})}});
+ const ctx=vm.createContext({console:{warn(){}},Date,LockService:{getUserLock:()=>({tryLock:()=>true,releaseLock:()=>released++})},ScriptApp:{getProjectTriggers:()=>triggers,deleteTrigger:t=>{triggers=triggers.filter(x=>x!==t);},newTrigger:name=>({timeBased(){return this;},after(){return this;},create(){triggers.push({getHandlerFunction:()=>name});}})}});
  vm.runInContext(source,ctx);ctx.hubStageModelLoad_=()=>JSON.parse(JSON.stringify(stored));ctx.hubStageModelSave_=s=>{writes++;stored=JSON.parse(JSON.stringify(s));};ctx.hubStageModelBuildBatch_=s=>{batches++;s.scanned+=1000;s.source++;};ctx.hubStageModelSend_=()=>{};
  ctx.hubStageReadModelContinue();assert.equal(batches,3);assert.equal(stored.phase,'DONE');assert.ok(writes>=5);assert.equal(triggers.length,0);assert.equal(released,1);
  stored={...stored,phase:'BUILD',source:0};ctx.hubStageModelBuildBatch_=()=>{throw Error('MODEL_SOURCE_HTTP_503');};

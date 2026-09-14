@@ -4196,7 +4196,13 @@ app.get("*", (_req, res) => {
 const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
   if (previewEnabled()) {
-    if(stageReadModelEnabled)callHub('stageReadModelRequest',{}, {useCache:false}).catch(()=>console.warn('Stage lookup continuation request not acknowledged. No interactive raw fallback.'));
+    if(stageReadModelEnabled){
+      const requestModel = async attempt => {
+        try{const r=await callHub('stageReadModelRequest',{}, {useCache:false});if(r.data?.phase==='BUSY'&&attempt<3)setTimeout(()=>requestModel(attempt+1),120000).unref();}
+        catch{console.warn('Stage lookup continuation request not acknowledged. No interactive raw fallback.');}
+      };
+      void requestModel(1);
+    }
     schedulePhase2bSnapshotRefresh();
     startPhase2bSnapshotWatchdog();
     setInterval(() => refreshPhase2bSnapshot(), Math.max(60 * 60 * 1000, Number(process.env.MAP_PHASE2B_SNAPSHOT_REFRESH_MS || 6 * 60 * 60 * 1000))).unref();

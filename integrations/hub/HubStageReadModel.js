@@ -25,16 +25,23 @@ function hubStageModelSend_(message){
 }
 function hubStageModelRequest_(params){
   hubMapHttpValidateOnlyKeys_(params,[]);
-  const lock=LockService.getScriptLock();if(!lock.tryLock(1000))return{data:{phase:'BUSY'},cached:false};
+  // Migration fence only: never overlap an older Stage worker using ScriptLock.
+  // Long-running Stage work uses UserLock, separate from Production Hub ScriptLock.
+  const fence=LockService.getScriptLock();if(!fence.tryLock(1000))return{data:{phase:'BUSY'},cached:false};
+  const lock=LockService.getUserLock();if(!lock.tryLock(1000)){fence.releaseLock();return{data:{phase:'BUSY'},cached:false};}
   try{
     let s=hubStageModelLoad_();
+    if(s&&s.workerVersion!==2){
+      ScriptApp.getProjectTriggers().filter(function(t){return [HUB_STAGE_MODEL.continuation,HUB_STAGE_MODEL.watchdog].indexOf(t.getHandlerFunction())>=0;}).forEach(function(t){ScriptApp.deleteTrigger(t);});
+      s.workerVersion=2;hubStageModelSave_(s);
+    }
     if(!s){
       const folder=DriveApp.createFolder('Phase2B_Stage_ReadModel_v1');
       // Newly-created folder inherits only the executing owner's private My Drive.
       if(folder.getSharingAccess()!==DriveApp.Access.PRIVATE)throw new Error('MODEL_STORAGE_NOT_PRIVATE');
       const stateFile=folder.createFile('checkpoint.json','{}',MimeType.PLAIN_TEXT);
       const end=Utilities.formatDate(new Date(),'Asia/Seoul','yyyy-MM-dd'),start=new Date(Date.parse(end)-89*86400000).toISOString().slice(0,10);
-      s={v:1,stateId:stateFile.getId(),folderId:folder.getId(),phase:'BUILD',startDate:start,endDate:end,generation:Date.now(),source:0,scanned:0,shards:{},sources:[
+      s={v:1,workerVersion:2,stateId:stateFile.getId(),folderId:folder.getId(),phase:'BUILD',startDate:start,endDate:end,generation:Date.now(),source:0,scanned:0,shards:{},sources:[
         {id:HUB_STAFF_DETAIL_ARCHIVE,sheet:'delivery_admin_raw',kind:'history',next:2},
         {id:HUB_DEFAULT_SOURCE_ID,sheet:'delivery_admin_raw',kind:'history',next:2},
         {id:HUB_STAFF_DETAIL_ARCHIVE,sheet:'daily_routes',kind:'period',next:2},
@@ -48,7 +55,7 @@ function hubStageModelRequest_(params){
     if(!ScriptApp.getProjectTriggers().some(function(t){return t.getHandlerFunction()===HUB_STAGE_MODEL.watchdog;}))
       ScriptApp.newTrigger(HUB_STAGE_MODEL.watchdog).timeBased().everyMinutes(15).create();
     return{data:{phase:s.phase,scanned:s.scanned,continuation:s.phase==='ERROR'?'NONE':'ACTIVE'},cached:false};
-  }finally{lock.releaseLock();}
+  }finally{lock.releaseLock();fence.releaseLock();}
 }
 function hubStageModelReadColumns_(source,sheet,headers,start,count,wanted){
   if(count<1||count>HUB_STAGE_MODEL.batch)throw new Error('MODEL_BATCH_LIMIT');
@@ -120,7 +127,7 @@ function hubStageModelBuildBatch_(s){
   source.next+=count;source.tail=hubStageModelHash_(tail);s.scanned+=count;
 }
 function hubStageReadModelContinue(){
-  const lock=LockService.getScriptLock();if(!lock.tryLock(1000))return;
+  const lock=LockService.getUserLock();if(!lock.tryLock(1000))return;
   let s;
   try{
     ScriptApp.getProjectTriggers().filter(function(t){return t.getHandlerFunction()===HUB_STAGE_MODEL.continuation;}).forEach(function(t){ScriptApp.deleteTrigger(t);});
@@ -147,11 +154,12 @@ function hubStageReadModelContinue(){
   }finally{
     if(s&&(s.phase==='DONE'||s.phase==='ERROR'))ScriptApp.getProjectTriggers().filter(function(t){return t.getHandlerFunction()===HUB_STAGE_MODEL.continuation;}).forEach(function(t){ScriptApp.deleteTrigger(t);});
     else if(s)hubStageModelSchedule_();
+    if(s&&s.phase==='ERROR')try{hubStageModelSend_({type:'status',phase:'ERROR',scanned:s.scanned,total:0});}catch(ignored){}
     lock.releaseLock();
   }
 }
 function hubStageReadModelWatchdog(){
-  const lock=LockService.getScriptLock();if(!lock.tryLock(1000))return;
+  const lock=LockService.getUserLock();if(!lock.tryLock(1000))return;
   try{
     const s=hubStageModelLoad_();if(!s||s.phase==='ERROR')return;
     if(s.phase==='DONE'){
