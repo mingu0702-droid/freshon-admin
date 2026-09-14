@@ -112,8 +112,14 @@
           line('기록 확인일', (payload.meta?.availableRecordDates || []).join(', ') || '없음');
           line('완전성 미확인일', (payload.meta?.unconfirmedDates || []).join(', ') || '미확인');
         }
-        if (!rows.length) node('p', '선택 기간에 확인된 Delivery 기록이 없습니다.');
-        rows.forEach(row => line(row.deliveryDate + ' · ' + (row.vehicle || '미등록') + '호 · ' + (row.kind === 'COMPLETED' ? '방문 완료' : '배차'), [row.driverName || '기사 미등록', row.driverPhone || '연락처 미등록'].join(' · ')));
+        if (!rows.length) node('p', 'Delivery 기사정보 미확인');
+        rows.forEach(row => {
+          const entry = node('div', ''); entry.className = 'staffDetailLine';
+          const heading = node('b', row.deliveryDate + ' · ', entry);
+          node('span', window.Phase2bUi.normalizeVehicleLabel(row.vehicle) || '미등록', heading).className = 'vehicleLabel';
+          node('span', ' · ' + (row.kind === 'COMPLETED' ? '방문 완료' : '배차'), heading);
+          node('span', [row.driverName || '기사 미등록', row.driverPhone || '연락처 미등록'].join(' · '), entry);
+        });
       } else {
         const data = payload.data || {};
         if (data.memoState === 'NEEDS_CONFIRMATION') node('p', '허용 항목을 확실히 구분할 수 없어 원천 확인이 필요합니다.');

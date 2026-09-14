@@ -1,6 +1,7 @@
 (function () {
   "use strict";
 
+  const vehicleLabel = value => Phase2bUi.normalizeVehicleLabel(value);
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   const SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
@@ -237,10 +238,10 @@
       if (known.has(vehicle)) return;
       const label = document.createElement("label");
       label.className = "vehicleItem";
-      label.innerHTML = `<input type="checkbox" value="${esc(vehicle)}"><span class="vehicleNo">${esc(vehicle)}호</span><span class="vehicleArea">기준일 편성</span>`;
+      label.innerHTML = `<input type="checkbox" value="${esc(vehicle)}"><span class="vehicleNo">${esc(vehicleLabel(vehicle))}</span><span class="vehicleArea">기준일 편성</span>`;
       label.querySelector("input").onchange = () => { periodVehicleScope = "selected"; refreshVehicleUi(true); };
       $("#vehicleList").append(label);
-      ["#vehicle", "#mobileVehicle", "#operationVehicle", "#mobileBaseVehicle"].forEach((id) => $(id).add(new Option(`${vehicle}호`, vehicle)));
+      ["#vehicle", "#mobileVehicle", "#operationVehicle", "#mobileBaseVehicle"].forEach((id) => $(id).add(new Option(`${vehicleLabel(vehicle)}`, vehicle)));
     });
   }
 
@@ -307,15 +308,15 @@
     $("#vehicleList").innerHTML = SOURCE.vehicles.slice().sort((a, b) => naturalCompare(a.vehicle, b.vehicle)).map((vehicle) => `
       <label class="vehicleItem" data-group="${esc(vehicle.group || "")}">
         <input type="checkbox" value="${esc(vehicle.vehicle)}">
-        <span class="vehicleNo">${esc(vehicle.vehicle)}호</span>
+        <span class="vehicleNo">${esc(vehicleLabel(vehicle.vehicle))}</span>
         <span class="vehicleArea">${esc(vehicle.area_label || vehicle.primary_area || vehicle.group || "권역")}</span>
       </label>`).join("");
     vehicleChecks().forEach((input) => { input.onchange = () => { state.centerFilter = ""; periodVehicleScope = "selected"; refreshVehicleUi(true); }; });
     [$("#vehicle"), $("#mobileVehicle"), $("#operationVehicle")].forEach((select) => {
-      select.innerHTML = vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicle)}호</option>`).join("");
+      select.innerHTML = vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicleLabel(vehicle))}</option>`).join("");
       if (vehicles.includes("101")) select.value = "101";
     });
-    $("#mobileBaseVehicle").innerHTML = `<option value="">전체 호차</option>${vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicle)}호</option>`).join("")}`;
+    $("#mobileBaseVehicle").innerHTML = `<option value="">전체 호차</option>${vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicleLabel(vehicle))}</option>`).join("")}`;
     $("#operationVehicle").insertAdjacentHTML("afterbegin", '<option value="">호차 선택</option>');
     $("#operationVehicle").value = "";
     refreshDriverMaster();
@@ -401,7 +402,7 @@
     button.className = `marker${completed ? " done" : pending ? " pending" : ""}${kind === "virtual" ? " virtual" : ""}${kind === "nearbyVehicle" ? " nearbyVehicle" : ""}${compact ? " storeDot" : ""}`;
     button.dataset.customerCode = row.customerCode || "";
     button.dataset.vehicle = row.vehicle || "";
-    button.title = `${row.vehicle ? row.vehicle + "호 · " : ""}${row.customerName || row.address || ""}`;
+    button.title = `${row.vehicle ? vehicleLabel(row.vehicle) + " · " : ""}${row.customerName || row.address || ""}`;
     button.setAttribute("aria-label", state.mode === "BASE_60D" ? button.title : `${button.title} · ${completed ? "완료" : pending ? "미완료" : "상태 미확인"}`);
     if (row.customerCode && row.customerCode === state.selected?.customerCode) button.classList.add("selected");
     if (kind === "representative" || kind === "nearbyVehicle" || (kind === "store" && state.mode === "BASE_60D")) button.style.setProperty("--pin-color", vehicleColor(row.vehicle));
@@ -427,7 +428,7 @@
     });
     return [...grouped].map(([vehicle, stores]) => ({
       vehicle,
-      customerName: `${vehicle}호`,
+      customerName: `${vehicleLabel(vehicle)}`,
       address: stores[0]?.areaLabel || stores[0]?.vehicleGroup || "",
       lat: stores.reduce((sum, row) => sum + row.lat, 0) / stores.length,
       lng: stores.reduce((sum, row) => sum + row.lng, 0) / stores.length,
@@ -579,13 +580,13 @@
     const statusCard = row.status ? `<div class="stat"><strong>${row.status === "COMPLETED" ? "완료" : "잔여"}</strong><span>상태</span></div>` : "";
     $("#detailSection").classList.add("open");
     $("#detail").className = "detailCard";
-    $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">${esc(row.customerCode || "신규 주소")}</div><div class="storeName">${esc(row.customerName || "선택 위치")}</div><div class="popupMeta"><b>${vehicle ? esc(vehicle) + "호" : routeMode ? "선택일 편성 없음" : esc(row.outsideReason || "선택 기간 이력 없음")}</b>${routeMode ? `<span class="statusChip ${row.status === "COMPLETED" ? "done" : "unknown"}">${row.status === "COMPLETED" ? "완료" : row.status === "PENDING" ? "미완료" : "상태 미확인"}</span>` : `<span>${esc(row.driverName || (row.history?.length ? "기사 미등록" : ""))}</span>`}</div></div>
+    $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">${esc(row.customerCode || "신규 주소")}</div><div class="storeName">${esc(row.customerName || "선택 위치")}</div><div class="popupMeta"><b>${vehicle ? esc(vehicleLabel(vehicle)) : routeMode ? "선택일 편성 없음" : esc(row.outsideReason || "선택 기간 이력 없음")}</b>${routeMode ? `<span class="statusChip ${row.status === "COMPLETED" ? "done" : "unknown"}">${row.status === "COMPLETED" ? "완료" : row.status === "PENDING" ? "미완료" : "상태 미확인"}</span>` : `<span>${esc(row.driverName || (row.history?.length ? "기사 미등록" : ""))}</span>`}</div></div>
       <div class="detailBody">
         <div class="detailLine"><span>${esc(row.address || "주소 미등록")}</span></div>
         ${!routeMode && row.history?.length ? `<div class="periodRecent">최근배송 ${esc(row.lastDeliveryDate)} · ${row.visitCount || row.history.length}회 이력</div>` : ""}
         <div class="staffActions"><button id="staffHistory">최근 배송기사</button><button id="staffNotes">출입·배송 정보</button></div>
         ${unlocated ? '<div class="coordinateWarning">좌표 미확인</div>' : ""}
-        <div class="mobileActions"><button id="mobileMapView" class="primary">지도 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicle || "선택")}호 운행동선</button></div>
+        <div class="mobileActions"><button id="mobileMapView" class="primary">지도 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicleLabel(vehicle) || "선택 호차")} 운행동선</button></div>
         <div id="nearWrap"></div>
       </div>`;
     requestAnimationFrame(positionDetailPopup);
@@ -642,7 +643,7 @@
     requestMapFit();
     renderStops(stops, { numbered: true, vehicles: [vehicle] });
     drawRoute(stops);
-    $("#mapStatusTitle").textContent = `${vehicle}호 ${state.selectedDate === localDate() ? "당일" : "과거"} 진행현황`;
+    $("#mapStatusTitle").textContent = `${vehicleLabel(vehicle)} ${state.selectedDate === localDate() ? "당일" : "과거"} 진행현황`;
     $("#mapStatusSub").textContent = `${status.date} · ${status.completedStops}/${status.totalStops} 완료`;
   }
 
@@ -656,7 +657,7 @@
     const nextStore = status?.nextStop?.customerName || status?.nextStop?.customerCode || "";
     $("#detailSection").classList.add("open");
     $("#detail").className = "detailCard";
-    $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose">×</button><div class="code">${esc(vehicle)}호 · ${esc(status?.driverName || driver.driverName || driver.name || "기사 미확인")}</div><div class="storeName">${esc(status?.status || (error ? "조회 실패" : "데이터없음"))}</div></div><div class="detailBody">
+    $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose">×</button><div class="code">${esc(vehicleLabel(vehicle))} · ${esc(status?.driverName || driver.driverName || driver.name || "기사 미확인")}</div><div class="storeName">${esc(status?.status || (error ? "조회 실패" : "데이터없음"))}</div></div><div class="detailBody">
       ${error ? `<div class="notice show">${esc(error)}</div>` : ""}
       <div class="stats"><div class="stat"><strong>${status?.totalStops ?? row.storeCount ?? "-"}</strong><span>총 착지</span></div><div class="stat"><strong>${status?.completedStops ?? "-"}</strong><span>완료</span></div><div class="stat"><strong>${status?.remainingStops ?? "-"}</strong><span>잔여</span></div></div>
       <div class="progressTrack"><span style="width:${Math.max(0, Math.min(100, status?.progressPercent || 0))}%"></span></div>
@@ -671,7 +672,7 @@
     if (!dateReady) { $("#nearWrap").textContent = "기준일 편성 확인 전 주변호차 판단 보류"; return; }
     const rows = Phase2bUi.nearbyVehicles(point, comparisonStores(), 30);
     $("#nearWrap").innerHTML = rows.length
-      ? `<details class="detailMore"><summary>30km 주변 호차 ${rows.length}대 · 참고용</summary>${rows.map((row) => `<div class="judgeCard"><b>${esc(row.vehicle)}호</b> · ${formatDistance(row.distance)}<br>최근접 배송점 ${esc(row.customerName)}</div>`).join("")}</details>`
+      ? `<details class="detailMore"><summary>30km 주변 호차 ${rows.length}대 · 참고용</summary>${rows.map((row) => `<div class="judgeCard"><b>${esc(vehicleLabel(row.vehicle))}</b> · ${formatDistance(row.distance)}<br>최근접 배송점 ${esc(row.customerName)}</div>`).join("")}</details>`
       : `<div class="hint">30km 내 주변 호차가 없습니다.</div>`;
   }
 
@@ -871,7 +872,7 @@
   }
 
   function renderResults(rows) {
-    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem ${index === 0 ? "selected" : ""}" data-result="${index}"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName || "-")}</div><div class="resultMeta"><span class="chip">${esc(row.vehicle || "-")}호</span>${esc(row.address || "-")}</div></button>`).join("");
+    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem ${index === 0 ? "selected" : ""}" data-result="${index}"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName || "-")}</div><div class="resultMeta"><span class="chip">${esc(vehicleLabel(row.vehicle || "-"))}</span>${esc(row.address || "-")}</div></button>`).join("");
     $$("[data-result]").forEach((element) => {
       element.onclick = () => {
         const row = rows[Number(element.dataset.result)];
@@ -926,7 +927,7 @@
       vehicle: "", driverName: "", history: [], lastDeliveryDate: "",
       outsideReason: period.has(item.customerCode) ? "현재 호차/기사 조건의 이력 없음" : "선택 기간 이력 없음" });
     setSearchState(`${rows.length}건 · 기간/조회 조건 유지`);
-    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-period-result="${index}"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName)}</div><div class="resultMeta">${esc(row.outsideReason || row.vehicle + "호 · " + row.lastDeliveryDate)}</div></button>`).join("");
+    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-period-result="${index}"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName)}</div><div class="resultMeta">${esc(row.outsideReason || vehicleLabel(row.vehicle) + " · " + row.lastDeliveryDate)}</div></button>`).join("");
     $$("[data-period-result]").forEach(button => button.onclick = () => {
       const row = rows[Number(button.dataset.periodResult)];
       selectStore(row, null, true, true);
@@ -991,7 +992,7 @@
   }
 
   function renderAddressJudge(row) {
-    $("#addressJudgeResults").innerHTML = `<div class="judgeCard"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : row.decision === "검토" ? "review" : "no"}">${esc(row.decision)}</span><b>${esc(row.customer || "신규 주소")}</b></div><div>권역판정: <b>${row.decision === "O" ? "가능" : esc(row.reason)}</b></div><div>배송요일: <b>${esc(row.deliveryDays || "")}</b></div><div>근접호차: <b>${esc(row.vehicle || "-")}호</b>${row.nearestDistance == null ? "" : ` · ${formatDistance(row.nearestDistance)}`}</div>${row.facility ? `<span class="facility">차량 진입 확인 필요</span>` : ""}</div>`;
+    $("#addressJudgeResults").innerHTML = `<div class="judgeCard"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : row.decision === "검토" ? "review" : "no"}">${esc(row.decision)}</span><b>${esc(row.customer || "신규 주소")}</b></div><div>권역판정: <b>${row.decision === "O" ? "가능" : esc(row.reason)}</b></div><div>배송요일: <b>${esc(row.deliveryDays || "")}</b></div><div>근접호차: <b>${esc(vehicleLabel(row.vehicle || "-"))}</b>${row.nearestDistance == null ? "" : ` · ${formatDistance(row.nearestDistance)}`}</div>${row.facility ? `<span class="facility">차량 진입 확인 필요</span>` : ""}</div>`;
   }
 
   function refreshVehicleUi(run) {
@@ -1006,7 +1007,7 @@
     $("#vehicleModeLabel").textContent = selected.length === 1 ? "해당 호차 집중모드" : selected.length > 1 ? "선택 호차 권역 비교" : "기준일 전체 권역";
     $("#mapStatusTitle").textContent = selected.length === 1 ? `${selected[0]}호 ${state.selectedDate} 권역` : selected.length > 1 ? `${selected.length}대 호차 권역 비교` : "기준일 전체 권역";
     $("#vehicleChips").className = selected.length ? "" : "vehiclePlaceholder";
-    $("#vehicleChips").innerHTML = selected.length ? (selected.length > 3 ? `${selected.length}개 호차 선택` : selected.map((vehicle) => `<span class="vehicleChip" role="button" tabindex="0" data-remove-vehicle="${esc(vehicle)}" aria-label="${esc(vehicle)}호 선택 해제">${esc(vehicle)}호 ×</span>`).join("")) : periodVehicleScope === "all" ? "전체 호차" : "호차를 선택하세요";
+    $("#vehicleChips").innerHTML = selected.length ? (selected.length > 3 ? `${selected.length}개 호차 선택` : selected.map((vehicle) => `<span class="vehicleChip" role="button" tabindex="0" data-remove-vehicle="${esc(vehicle)}" aria-label="${esc(vehicleLabel(vehicle))} 선택 해제">${esc(vehicleLabel(vehicle))} ×</span>`).join("")) : periodVehicleScope === "all" ? "전체 호차" : "호차를 선택하세요";
     $$('[data-remove-vehicle]').forEach((chip) => {
       const remove = (event) => { event.stopPropagation(); setSelectedVehicles(selectedVehicles().filter((vehicle) => vehicle !== chip.dataset.removeVehicle)); refreshVehicleUi(false); state.fitRequested = false; loadBaseMap(); };
       chip.onclick = remove;
@@ -1123,7 +1124,7 @@
     drawRoute(stops);
     renderRouteSummary(payload, source);
     updateOperationMetrics(payload);
-    $("#mapStatusTitle").textContent = `${vehicle}호 특정일 운행`;
+    $("#mapStatusTitle").textContent = `${vehicleLabel(vehicle)} 특정일 운행`;
     $("#mapStatusSub").textContent = `${date} · 착순 연결선 · 도로 경로 아님`;
     setRouteLoading(source, "");
     if (source === "mobile") showMobileMap();
@@ -1316,7 +1317,7 @@
     }
     state.newAreaResults = judged;
     $(statusId).textContent = `입력 ${rows.length} · 완료 ${judged.length} · 권역 내 ${judged.filter((r) => r.decision === "O").length} · 동선 없음 ${judged.filter((r) => r.reason === "배송동선 맞지 않음").length} · 확인 필요 ${judged.filter((r) => r.decision !== "O" && r.reason !== "배송동선 맞지 않음").length}`;
-    $(resultId).innerHTML = judged.map((row, index) => `<button class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(["주소 확인 필요", "배송동선 맞지 않음"].includes(row.reason) ? row.reason : "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>${esc(row.address)}</div><div>${row.decision === "O" ? "500m 내 배송점" : esc(row.reason)} · ${esc(row.vehicle)}호 ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.deliveryDays || "")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`).join("");
+    $(resultId).innerHTML = judged.map((row, index) => `<button class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(["주소 확인 필요", "배송동선 맞지 않음"].includes(row.reason) ? row.reason : "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>${esc(row.address)}</div><div>${row.decision === "O" ? "500m 내 배송점" : esc(row.reason)} · ${esc(vehicleLabel(row.vehicle))} ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.deliveryDays || "")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`).join("");
     $$('[data-judged]').forEach((button) => button.onclick = () => {
       const row = judged[Number(button.dataset.judged)];
       if (!Number.isFinite(row.lat) || !Number.isFinite(row.lng)) return;
@@ -1430,7 +1431,7 @@
         renderStops(state.routeRows, { numbered: true, vehicles: [vehicle] });
         drawRoute(state.routeRows);
         renderRouteSummary(status, innerWidth <= 760 ? "mobile" : "pc");
-        $("#mapStatusTitle").textContent = `${vehicle}호 운행현황`;
+        $("#mapStatusTitle").textContent = `${vehicleLabel(vehicle)} 운행현황`;
         $("#mapStatusSub").textContent = `${date} · ${current ? "Delivery 현재상태" : "Hub 과거 완료기록"}`;
       }
     } catch (error) {
@@ -1480,7 +1481,7 @@
     }
     const stores = rows.filter(row => !row.virtual);
     $("#periodStoreListCount").textContent = stores.length + "개 매장";
-    panel.innerHTML = stores.slice(0, periodListLimit).map(row => `<button class="resultItem periodStore${state.selected?.customerCode === row.customerCode ? " selected" : ""}" aria-pressed="${state.selected?.customerCode === row.customerCode}" data-period-store="${esc(row.customerCode)}"><span class="periodCode">${esc(row.customerCode)}</span><b>${esc(row.customerName || row.customerCode)}</b><span>${esc(row.lastDeliveryDate || "")} · ${esc(row.vehicle)}호</span><span>${esc(row.driverName || "기사 미등록")} · ${row.visitCount || row.history?.length || 0}회</span></button>`).join("") || '<p class="hint">조회 조건에 맞는 매장이 없습니다.</p>';
+    panel.innerHTML = stores.slice(0, periodListLimit).map(row => `<button class="resultItem periodStore${state.selected?.customerCode === row.customerCode ? " selected" : ""}" aria-pressed="${state.selected?.customerCode === row.customerCode}" data-period-store="${esc(row.customerCode)}"><span class="periodCode">${esc(row.customerCode)}</span><b>${esc(row.customerName || row.customerCode)}</b><span>${esc(row.lastDeliveryDate || "")} · ${esc(vehicleLabel(row.vehicle))}</span><span>${esc(row.driverName || "기사 미등록")} · ${row.visitCount || row.history?.length || 0}회</span></button>`).join("") || '<p class="hint">조회 조건에 맞는 매장이 없습니다.</p>';
     $("#periodListMore").hidden = stores.length <= periodListLimit;
     $$("[data-period-store]").forEach(button => button.onclick = () => { const row = stores.find(item => item.customerCode === button.dataset.periodStore); if (row) selectStore(row, null, true); });
   }

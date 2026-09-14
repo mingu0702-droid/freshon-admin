@@ -1,6 +1,6 @@
 --- a/HubMapHttpApi.js
 +++ b/HubMapHttpApi.js
-@@ -75,7 +75,11 @@ function doPost(e) {
+@@ -75,7 +75,12 @@ function doPost(e) {
        mapBounds: hubMapHttpHandleMapBoundsDispatch_,
        unifiedSearch: hubMapPhase2BHandleUnifiedSearch_,
        nearestVehicles: hubMapPhase2BHandleNearestVehicles_,
@@ -9,6 +9,7 @@
 +      datedAssignments: hubDatedAssignmentsPage_,
 +      periodAssignments: hubPeriodAssignmentsPage_,
 +      staffDriverHistory: hubStaffDriverHistoryPage_,
++      stageReadModelRequest: hubStageModelRequest_,
 +      staffCustomerDetail: hubStaffCustomerDetail_
      };
      const handler = handlers[action];

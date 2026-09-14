@@ -1,5 +1,12 @@
 (function (root) {
   "use strict";
+  // Display only: callers must keep the original vehicle value for keys/requests.
+  function normalizeVehicleLabel(value) {
+    const label = String(value ?? "").replace(/\s+/g, "");
+    if (!label || label === "-") return label;
+    const number = label.replace(/(?:호(?:차)?)+$/, "");
+    return /\d$/.test(number) ? number + "호" : label;
+  }
   function addressVariants(input) {
     const original = String(input || "").replace(/\s+/g, " ").trim();
     const cleaned = original.replace(/\([^)]*\)|\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim();
@@ -53,5 +60,5 @@
     }
     return error;
   }
-  root.Phase2bUi = Object.freeze({ addressVariants, addressMatches, distanceKm, nearbyVehicles, deliveryBoundary, requestError });
+  root.Phase2bUi = Object.freeze({ normalizeVehicleLabel, addressVariants, addressMatches, distanceKm, nearbyVehicles, deliveryBoundary, requestError });
 })(typeof window === "undefined" ? globalThis : window);

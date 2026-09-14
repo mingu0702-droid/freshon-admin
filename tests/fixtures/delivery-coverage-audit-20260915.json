@@ -1,0 +1,1077 @@
+{
+  "auditedAt": "2026-09-15",
+  "identity": "deliveryDate|deliveryId|customerCode",
+  "completeness": "Count equality is not task-set completeness; no complete dates claimed.",
+  "days": [
+    {
+      "date": "2026-06-01",
+      "Current": 0,
+      "Archive": 1599,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1599,
+      "knownApiCount": 1599,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-02",
+      "Current": 0,
+      "Archive": 1877,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1877,
+      "knownApiCount": 1877,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-03",
+      "Current": 0,
+      "Archive": 1782,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1782,
+      "knownApiCount": 1782,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-04",
+      "Current": 0,
+      "Archive": 1605,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1605,
+      "knownApiCount": 1605,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-05",
+      "Current": 0,
+      "Archive": 2036,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 2036,
+      "knownApiCount": 2036,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-06",
+      "Current": 0,
+      "Archive": 1717,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1717,
+      "knownApiCount": 1717,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-07",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": 0,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-08",
+      "Current": 0,
+      "Archive": 1574,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1574,
+      "knownApiCount": 1574,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-09",
+      "Current": 0,
+      "Archive": 1667,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1667,
+      "knownApiCount": 1667,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-10",
+      "Current": 0,
+      "Archive": 1803,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1803,
+      "knownApiCount": 1803,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-11",
+      "Current": 0,
+      "Archive": 1620,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1620,
+      "knownApiCount": 1620,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-12",
+      "Current": 0,
+      "Archive": 1894,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1894,
+      "knownApiCount": 1894,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-13",
+      "Current": 0,
+      "Archive": 1671,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1671,
+      "knownApiCount": 1671,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-14",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": 0,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-15",
+      "Current": 0,
+      "Archive": 1507,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1507,
+      "knownApiCount": 1507,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-16",
+      "Current": 0,
+      "Archive": 1799,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1799,
+      "knownApiCount": 1799,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-17",
+      "Current": 0,
+      "Archive": 1754,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1754,
+      "knownApiCount": 1754,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-18",
+      "Current": 0,
+      "Archive": 1706,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1706,
+      "knownApiCount": 1706,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-19",
+      "Current": 0,
+      "Archive": 1898,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1898,
+      "knownApiCount": 1898,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-20",
+      "Current": 0,
+      "Archive": 1673,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1673,
+      "knownApiCount": 1673,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-21",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": 0,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-22",
+      "Current": 0,
+      "Archive": 1541,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1541,
+      "knownApiCount": 1541,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-23",
+      "Current": 0,
+      "Archive": 1742,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1742,
+      "knownApiCount": 1742,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-24",
+      "Current": 0,
+      "Archive": 1720,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1720,
+      "knownApiCount": 1720,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-25",
+      "Current": 0,
+      "Archive": 1658,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1658,
+      "knownApiCount": 1658,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-26",
+      "Current": 0,
+      "Archive": 1918,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1918,
+      "knownApiCount": 1918,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-27",
+      "Current": 0,
+      "Archive": 1643,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1643,
+      "knownApiCount": 1643,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-28",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": 0,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-29",
+      "Current": 0,
+      "Archive": 2356,
+      "duplicate": 834,
+      "invalidIdentity": 0,
+      "unique": 1522,
+      "knownApiCount": 1522,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-06-30",
+      "Current": 0,
+      "Archive": 1670,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1670,
+      "knownApiCount": 1670,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-07-01",
+      "Current": 0,
+      "Archive": 1704,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1704,
+      "knownApiCount": 1704,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-07-02",
+      "Current": 0,
+      "Archive": 1674,
+      "duplicate": 9,
+      "invalidIdentity": 0,
+      "unique": 1665,
+      "knownApiCount": 1665,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-07-03",
+      "Current": 0,
+      "Archive": 1967,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1967,
+      "knownApiCount": 1967,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-07-04",
+      "Current": 0,
+      "Archive": 1965,
+      "duplicate": 250,
+      "invalidIdentity": 0,
+      "unique": 1715,
+      "knownApiCount": 1715,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-07-05",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": 0,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-07-06",
+      "Current": 0,
+      "Archive": 1531,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1531,
+      "knownApiCount": 1531,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-07-07",
+      "Current": 0,
+      "Archive": 1671,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1671,
+      "knownApiCount": 1671,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-07-08",
+      "Current": 0,
+      "Archive": 1685,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1685,
+      "knownApiCount": 1685,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-07-09",
+      "Current": 0,
+      "Archive": 1585,
+      "duplicate": 2,
+      "invalidIdentity": 0,
+      "unique": 1583,
+      "knownApiCount": 1583,
+      "coverage": "COUNT_MATCH_ONLY"
+    },
+    {
+      "date": "2026-07-10",
+      "Current": 0,
+      "Archive": 1823,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1823,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-11",
+      "Current": 0,
+      "Archive": 1665,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1665,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-12",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-13",
+      "Current": 0,
+      "Archive": 1554,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1554,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-14",
+      "Current": 0,
+      "Archive": 1710,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1710,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-15",
+      "Current": 0,
+      "Archive": 1786,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1786,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-16",
+      "Current": 0,
+      "Archive": 1608,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1608,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-17",
+      "Current": 0,
+      "Archive": 1776,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1776,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-18",
+      "Current": 0,
+      "Archive": 1559,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1559,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-19",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-20",
+      "Current": 0,
+      "Archive": 1525,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1525,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-21",
+      "Current": 0,
+      "Archive": 1603,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1603,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-22",
+      "Current": 0,
+      "Archive": 1688,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1688,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-23",
+      "Current": 0,
+      "Archive": 1626,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1626,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-24",
+      "Current": 0,
+      "Archive": 1896,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1896,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-25",
+      "Current": 0,
+      "Archive": 1631,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1631,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-26",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-27",
+      "Current": 0,
+      "Archive": 1556,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1556,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-28",
+      "Current": 0,
+      "Archive": 1622,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1622,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-29",
+      "Current": 0,
+      "Archive": 1629,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1629,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-30",
+      "Current": 0,
+      "Archive": 1565,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1565,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-07-31",
+      "Current": 0,
+      "Archive": 1747,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1747,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-01",
+      "Current": 0,
+      "Archive": 1442,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1442,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-02",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-03",
+      "Current": 1358,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1358,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-04",
+      "Current": 1520,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1520,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-05",
+      "Current": 2014,
+      "Archive": 0,
+      "duplicate": 459,
+      "invalidIdentity": 0,
+      "unique": 1555,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-06",
+      "Current": 1502,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1502,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-07",
+      "Current": 1634,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1634,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-08",
+      "Current": 1470,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1470,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-09",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-10",
+      "Current": 1396,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1396,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-11",
+      "Current": 1518,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1518,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-12",
+      "Current": 1525,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1525,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-13",
+      "Current": 1161,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1161,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-14",
+      "Current": 27,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 27,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-15",
+      "Current": 1466,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1466,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-16",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-17",
+      "Current": 232,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 232,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-18",
+      "Current": 1485,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1485,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-19",
+      "Current": 1584,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1584,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-20",
+      "Current": 1461,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1461,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-21",
+      "Current": 1656,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1656,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-22",
+      "Current": 1477,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1477,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-23",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-24",
+      "Current": 1328,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1328,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-25",
+      "Current": 1544,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1544,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-26",
+      "Current": 1474,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1474,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-27",
+      "Current": 1388,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1388,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-28",
+      "Current": 1797,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1797,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-29",
+      "Current": 1547,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1547,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-30",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-08-31",
+      "Current": 1432,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1432,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-01",
+      "Current": 689,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 689,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-02",
+      "Current": 1657,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1657,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-03",
+      "Current": 1498,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1498,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-04",
+      "Current": 1990,
+      "Archive": 0,
+      "duplicate": 250,
+      "invalidIdentity": 0,
+      "unique": 1740,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-05",
+      "Current": 1519,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1519,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-06",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-07",
+      "Current": 1393,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1393,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-08",
+      "Current": 1499,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1499,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-09",
+      "Current": 1521,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1521,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-10",
+      "Current": 1499,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1499,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-11",
+      "Current": 1156,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 1156,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-12",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-13",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-14",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    },
+    {
+      "date": "2026-09-15",
+      "Current": 0,
+      "Archive": 0,
+      "duplicate": 0,
+      "invalidIdentity": 0,
+      "unique": 0,
+      "knownApiCount": null,
+      "coverage": "UNKNOWN"
+    }
+  ]
+}

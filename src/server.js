@@ -19,6 +19,7 @@ import { staffCustomerDetail } from "./mapStaffDetail.js";
 import { createPeriodJobs, readStaffDriverHistory, validatePeriod, selectPeriodStores, compactPeriodStores } from "./mapPeriod.js";
 import { historyDeadline } from './readDeadline.js';
 import { validateDeliveryLivePage } from './deliveryLiveContract.js';
+import { createStageReadModel } from './stageReadModel.js';
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
 import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled, hubRequestProfile } from "./hubApiClient.js";
@@ -64,8 +65,16 @@ const mapStaff = createMapStaffAuth();
 app.use(staffLatency);
 app.use('/api/map-phase2b/private/driver-history', historyDeadline);
 const periodJobs = createPeriodJobs({ loadPage: params => callHub("periodAssignments", params, { useCache: false }) });
+const stageReadModelEnabled = String(process.env.MAP_PHASE2B_PREVIEW_ENV || '').toLowerCase() === 'stage';
+const stageReadModel = createStageReadModel({secret:process.env.HUB_API_SECRET});
 app.use("/api/map-phase2b/auth", securityAudit, mapStaff.router);
 app.use(express.json({ limit: "10mb" }));
+app.post('/internal/stage-read-model', (req,res) => {
+  res.set('Cache-Control','private, no-store');
+  if(!stageReadModelEnabled)return res.status(404).end();
+  try{stageReadModel.ingest(req.body,req.get('x-stage-model-signature'));return res.json({ok:true});}
+  catch(error){return res.status(['MODEL_AUTH','MODEL_REPLAY'].includes(error.message)?401:409).json({ok:false,error:'MODEL_REJECTED'});}
+});
 const requireSensitive = sensitiveAuth(config.adminToken);
 const requireLegacySensitive = sensitiveAuth(config.adminToken, { allowLegacyQuery: true });
 app.use('/api/collector', requireAdmin);
@@ -3951,7 +3960,8 @@ app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
   catch { return res.status(400).json({ error: "INVALID_PERIOD" }); }
   try {
     const readAt = performance.now(); let upstreamMs = 0;
-    const data = await readStaffDriverHistory({ customerCode, startDate, endDate }, async (params, options) => {
+    req.historyBudget.check();
+    const data = stageReadModelEnabled ? stageReadModel.history({customerCode,startDate,endDate}) : await readStaffDriverHistory({ customerCode, startDate, endDate }, async (params, options) => {
       const at = performance.now();
       try {
         const payload = await callHub("staffDriverHistory", params, { useCache: false, privateRead: true, ...options });
@@ -3960,13 +3970,15 @@ app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
       } finally { const elapsed = performance.now() - at; upstreamMs += elapsed; addStaffTiming(res, 'upstream', elapsed); }
     }, { budget: req.historyBudget, requireDelivery: true });
     addStaffTiming(res, 'parseNormalize', Math.max(0, performance.now() - readAt - upstreamMs));
+    req.historyBudget.check();
     const dates = [...new Set(data.map(row => row.deliveryDate))].sort();
     const unconfirmedDates = [];
     for (let at = Date.parse(startDate); at <= Date.parse(endDate); at += 86400000) unconfirmedDates.push(new Date(at).toISOString().slice(0,10));
     // A stored task proves that task, not completeness of a whole business date.
     return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data, meta: { complete: true, coverageComplete: false,
-      coverage: 'PARTIAL_UNAUDITED', availableRecordDates: dates, unconfirmedDates, startDate, endDate, source: 'Delivery.delivery_admin_raw' } }));
+      coverage: stageReadModelEnabled ? 'AUDITED_STORED_TASKS_DATE_COMPLETENESS_UNCONFIRMED' : 'PARTIAL_UNAUDITED', availableRecordDates: dates, unconfirmedDates, startDate, endDate, source: stageReadModelEnabled ? 'Delivery.delivery_admin_raw via Hub.StageReadModel' : 'Delivery.delivery_admin_raw' } }));
   } catch(error) {
+    if(stageReadModelEnabled && /^READ_MODEL_/.test(error.message))return res.status(503).json({error:error.message,retryable:true});
     const failure = mapReadFailure(error, 'HISTORY');
     if (res.destroyed) return;
     addHubReadTiming(res, hubRequestProfile(error));
@@ -3977,7 +3989,7 @@ app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
 
 app.get('/api/map-phase2b/preview/period-status', requireView, (req, res) => {
   if (!previewEnabled()) return res.status(404).json({error:'PREVIEW_DISABLED'});
-  try { return res.json(periodJobs.peek(String(req.query.startDate || ''), String(req.query.endDate || ''))); }
+  try { return res.json(stageReadModelEnabled ? stageReadModel.status() : periodJobs.peek(String(req.query.startDate || ''), String(req.query.endDate || ''))); }
   catch { return res.status(400).json({error:'INVALID_PERIOD'}); }
 });
 
@@ -3988,13 +4000,15 @@ app.get("/api/map-phase2b/preview/period", requireView, compression({ threshold:
   if((vehicle&&driverKey)||(vehicle&&!/^\d{1,3}$/.test(vehicle))||(driverKey&&!/^[A-Za-z0-9_-]{1,128}$/.test(driverKey)))return res.status(400).json({error:'INVALID_PERIOD_FILTER'});
   try { validatePeriod(startDate, endDate); if (endDate > phase2bKstDate()) throw new Error(); }
   catch { return res.status(400).json({ error: "INVALID_PERIOD" }); }
-  const result = periodJobs.read(startDate, endDate,{retry:req.query.retry==='1'});
+  let result;
+  try { result = stageReadModelEnabled ? stageReadModel.period(startDate,endDate) : periodJobs.read(startDate, endDate,{retry:req.query.retry==='1'}); }
+  catch(error){if(/^READ_MODEL_/.test(error.message))return res.status(202).json({ok:true,data:[],meta:{...stageReadModel.status(),complete:false},error:error.message});throw error;}
   if (result.meta.complete) {
     result.data=selectPeriodStores(result.data,{vehicle,driverKey});
     result.meta.storeCount=result.data.length;result.meta.filterMode=driverKey?'driver':vehicle?'vehicle':'all';
     const snapshot = await readPhase2bSnapshot();
     const coords = new Map((snapshot?.rows || []).map(row => [row.customerCode, row]));
-    result.data = result.data.map(row => ({ ...row, lat: coords.get(row.customerCode)?.lat ?? null, lng: coords.get(row.customerCode)?.lng ?? null }));
+    result.data = result.data.map(row => ({ ...row, customerName: row.customerName || coords.get(row.customerCode)?.customerName || '', address: row.address || coords.get(row.customerCode)?.address || '', lat: coords.get(row.customerCode)?.lat ?? null, lng: coords.get(row.customerCode)?.lng ?? null }));
     result.meta.missingCoordinate = result.data.filter(row => row.lat == null || row.lng == null).length;
     result.data = compactPeriodStores(result.data); result.meta.summaryContract = 'period-store-relations-v1';
   }
@@ -4182,6 +4196,7 @@ app.get("*", (_req, res) => {
 const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
   if (previewEnabled()) {
+    if(stageReadModelEnabled)callHub('stageReadModelRequest',{}, {useCache:false}).catch(()=>console.warn('Stage lookup continuation request not acknowledged. No interactive raw fallback.'));
     schedulePhase2bSnapshotRefresh();
     startPhase2bSnapshotWatchdog();
     setInterval(() => refreshPhase2bSnapshot(), Math.max(60 * 60 * 1000, Number(process.env.MAP_PHASE2B_SNAPSHOT_REFRESH_MS || 6 * 60 * 60 * 1000))).unref();

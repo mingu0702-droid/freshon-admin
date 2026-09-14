@@ -1,4 +1,5 @@
 /* Period-first layout: filters in the sidebar, one thin map toolbar. */
+.vehicleLabel,.vehicleNo,.vehicleChip,.pinNumber{white-space:nowrap;overflow-wrap:normal;word-break:keep-all}
 :root{--left:320px}
 #mapModeBar{position:fixed;top:0;left:var(--left);right:0;height:58px;z-index:65;display:flex;align-items:center;gap:7px;padding:8px 10px;background:#fff;border-bottom:1px solid #dce4ef;box-sizing:border-box}
 #mapModeBar button{padding:8px 10px;border:1px solid #ccd7e5;border-radius:8px;background:#fff;color:#29405d;font-weight:700;white-space:nowrap;font-size:12px;min-height:36px}
