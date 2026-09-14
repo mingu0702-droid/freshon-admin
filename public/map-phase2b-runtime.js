@@ -148,7 +148,7 @@
         if (id !== periodRequestId || state.mode !== "BASE_60D") return;
         if (payload.meta?.phase === "ERROR") throw new Error("기간 원천 확인 실패");
         if (payload.meta?.complete !== true) {
-          $("#freshnessState").textContent = payload.meta?.phase === "BUSY" ? "이전 기간 조회 완료 대기" : `기간 이력 준비 ${payload.meta?.progress || 0}% · 자동 이어받기`;
+          $("#freshnessState").textContent = payload.meta?.error === "PERIOD_SOURCE_CHANGED" ? `원천 변경 · 자동 재시작 중 (${payload.meta?.sourceRestarts || 0}/3)` : payload.meta?.error ? "기간 원천 조회 지연 · 자동 재시도 중" : payload.meta?.phase === "BUSY" ? "이전 기간 조회 완료 대기" : `기간 이력 준비 ${payload.meta?.progress || 0}% · 자동 이어받기`;
           $("#periodIdentity").textContent = $("#freshnessState").textContent;
           periodTimer = setTimeout(read, 5000); return;
         }
