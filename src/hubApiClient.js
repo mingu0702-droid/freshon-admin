@@ -154,7 +154,7 @@ async function callHubUncached(action, params, key, privateRead = false) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const remaining = staffDetail ? timeoutMs - (Date.now() - started) : timeoutMs;
     if (remaining <= 0) { lastError = Object.assign(new Error('DETAIL_UPSTREAM_TIMEOUT'), {name:'AbortError'}); timedOut = true; break; }
-    const profile = { attempt: attempt + 1, responseHeadersMs:0, bodyReadMs:0, parseMs:0, upstreamStatus:null, contentType:'unknown', responseKind:'none' };
+    const profile = { attempt: attempt + 1, sentAt:Date.now(), phase:'HEADERS', responseHeadersMs:0, bodyReadMs:0, parseMs:0, upstreamStatus:null, contentType:'unknown', responseKind:'none' };
     const attemptStarted = Date.now();
     const signingStarted = Date.now();
     const body = requestBody(action, params);
@@ -190,8 +190,15 @@ async function callHubUncached(action, params, key, privateRead = false) {
       profile.phase = 'CONTRACT';
       profile.parseMs = parseMs; profile.responseKind = privateResponseKind(responseText,json);
       profile.hubDurationMs = Number(json?.meta?.durationMs || 0);
+      const generatedAt=Date.parse(json?.meta?.generatedAt||'');
+      if(Number.isFinite(generatedAt)){
+        profile.hubExecutionStartAt=generatedAt-profile.hubDurationMs;
+        profile.beforeHubMs=Math.max(0,profile.hubExecutionStartAt-profile.sentAt);
+        profile.afterHubMs=Math.max(0,Date.now()-generatedAt);
+      }
       profile.responseBytes = responseText == null ? null : Buffer.byteLength(responseText);
       if(sourceRead){profile.sourceReadMs=Number(json?.meta?.historyProfile?.readMs||0);profile.sourceLookupMs=Number(json?.meta?.historyProfile?.lookupMs||0);profile.sourceRows=Number(json?.meta?.historyProfile?.sourceRows||json?.meta?.sourceReadCount||0);}
+      if(action==='staffDriverHistory')for(const k of ['openMs','headerMs','selectMs','discoverMs','normalizeMs','metadataHits','headerHits','selectionHit'])profile['history'+k[0].toUpperCase()+k.slice(1)]=Number(json?.meta?.historyProfile?.[k]||0);
       if (json && typeof json === 'object') requestProfiles.set(json, profile);
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
@@ -210,7 +217,10 @@ async function callHubUncached(action, params, key, privateRead = false) {
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, totalMs: Date.now() - started, hubDurationMs: Number(json.meta?.durationMs || 0), hubProfile: json.meta?.routeProfile || null, cache: "MISS" }));
       return json;
     } catch (error) {
+      // Abort exceptions may be immutable. Preserve only a safe new error object.
+      if(controller.signal.aborted && error.name !== 'AbortError')error=Object.assign(new Error('HUB_TIMEOUT'),{name:'AbortError'});
       lastError = error;
+      if(action==='routePlan')requestProfiles.set(error,profile);
       if(sourceRead){requestProfiles.set(error,profile);console.warn(JSON.stringify({component:'hub-source-profile',action,...profile,totalMs:Date.now()-started,result:classifyHubFailure(error)}));}
       if (staffDetail) {
         profile.totalMs = Date.now()-started;

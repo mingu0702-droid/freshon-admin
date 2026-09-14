@@ -1,5 +1,6 @@
 ﻿import express from "express";
 import { spawn } from "node:child_process";
+import compression from "compression";
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -12,7 +13,8 @@ import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
 import { createMapStaffAuth } from "./mapStaffAuth.js";
-import { staffLatency, addStaffTiming } from "./staffLatency.js";
+import { staffLatency, addStaffTiming, addHubReadTiming } from "./staffLatency.js";
+import { mapReadFailure } from "./mapReadFailure.js";
 import { staffCustomerDetail } from "./mapStaffDetail.js";
 import { createPeriodJobs, readStaffDriverHistory, validatePeriod, selectPeriodStores } from "./mapPeriod.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
@@ -3940,18 +3942,26 @@ app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
   try { validatePeriod(startDate, endDate); if (endDate > phase2bKstDate()) throw new Error(); }
   catch { return res.status(400).json({ error: "INVALID_PERIOD" }); }
   try {
-    const data = await readStaffDriverHistory({ customerCode, startDate, endDate },
-      params => callHub("staffDriverHistory", params, { useCache: false, privateRead: true }));
+    const readAt = performance.now(); let upstreamMs = 0;
+    const data = await readStaffDriverHistory({ customerCode, startDate, endDate }, async params => {
+      const at = performance.now();
+      try {
+        const payload = await callHub("staffDriverHistory", params, { useCache: false, privateRead: true });
+        addHubReadTiming(res, hubRequestProfile(payload));
+        return payload;
+      } finally { const elapsed = performance.now() - at; upstreamMs += elapsed; addStaffTiming(res, 'upstream', elapsed); }
+    });
+    addStaffTiming(res, 'parseNormalize', Math.max(0, performance.now() - readAt - upstreamMs));
     return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data, meta: { complete: true, startDate, endDate, source: "Customer.daily_routes 배차 이력" } }));
   } catch(error) {
-    const profile=hubRequestProfile(error),timeout=error?.name==='AbortError';
-    res.set('X-History-Upstream-Status',String(Number(error?.upstreamStatus||profile.upstreamStatus)||0));
-    res.set('X-History-Failure',timeout?'TIMEOUT':error?.failureType==='parse'?'INVALID_JSON':error?.message==='PERIOD_HISTORY_INCOMPLETE'?'INCOMPLETE':Number(error?.upstreamStatus)>=500?'HUB_5XX':'CONTRACT');
-    return res.status(timeout?504:502).json({ error: timeout?'HISTORY_UPSTREAM_TIMEOUT':"PRIVATE_HISTORY_UNAVAILABLE" });
+    const failure = mapReadFailure(error, 'HISTORY');
+    addHubReadTiming(res, hubRequestProfile(error));
+    res.set('X-History-Failure', failure.code);
+    return res.status(failure.status).json({ error: failure.code, retryable: failure.retryable });
   }
 });
 
-app.get("/api/map-phase2b/preview/period", requireView, async (req, res) => {
+app.get("/api/map-phase2b/preview/period", requireView, compression({ threshold: 1024 }), async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const startDate = String(req.query.startDate || ""), endDate = String(req.query.endDate || "");
   const vehicle=String(req.query.vehicle||''),driverKey=String(req.query.driverKey||'');
@@ -3967,7 +3977,7 @@ app.get("/api/map-phase2b/preview/period", requireView, async (req, res) => {
     result.data = result.data.map(row => ({ ...row, lat: coords.get(row.customerCode)?.lat ?? null, lng: coords.get(row.customerCode)?.lng ?? null }));
     result.meta.missingCoordinate = result.data.filter(row => row.lat == null || row.lng == null).length;
   }
-  return res.status(result.meta.phase === "ERROR" ? 502 : result.meta.complete ? 200 : 202).json(result);
+  return res.status(result.meta.phase === "ERROR" ? mapReadFailure(new Error(result.error),'PERIOD').status : result.meta.complete ? 200 : 202).json(result);
 });
 
 app.get("/api/map-phase2b/preview/snapshot", requireView, async (_req, res) => {
@@ -4104,13 +4114,20 @@ app.get("/api/map-phase2b/preview/route-plan", requireView, async (req, res) => 
   try {
     const payload = await callHub("routePlan", { date: String(req.query.date || ""), vehicle: String(req.query.vehicle || "") });
     const hubReturnedAt = Date.now();
+    addStaffTiming(res, 'upstream', hubReturnedAt - renderReceivedAt);
+    const routeProfile = hubRequestProfile(payload);
+    if (routeProfile.sentAt >= renderReceivedAt) addHubReadTiming(res, routeProfile, 'Route');
+    else res.set('X-Route-Cache', 'HIT');
     const serializationStartedAt = Date.now();
     JSON.stringify(payload);
     const serializationMs = Date.now() - serializationStartedAt;
     console.info(JSON.stringify({ component: "route-plan-profile", date: String(req.query.date || ""), vehicle: String(req.query.vehicle || ""), renderToHubMs: hubReturnedAt - renderReceivedAt, responseSerializationMs: serializationMs, renderTotalMs: Date.now() - renderReceivedAt, hubDurationMs: Number(payload?.meta?.durationMs || 0), hubProfile: payload?.meta?.routeProfile || null }));
     return res.json(payload);
   } catch (error) {
-    return res.status(502).json({ error: error.message });
+    const failure = mapReadFailure(error, 'ROUTE');
+    addStaffTiming(res, 'upstream', Date.now() - renderReceivedAt);
+    addHubReadTiming(res, hubRequestProfile(error), 'Route');
+    return res.status(failure.status).json({ error: failure.code, retryable: failure.retryable });
   }
 });
 

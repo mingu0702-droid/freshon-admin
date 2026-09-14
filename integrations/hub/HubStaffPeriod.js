@@ -8,6 +8,10 @@ function hubPeriodAssignmentsPage_(params) {
 function hubStaffDriverHistoryPage_(params) {
   try{return hubStaffPeriodPage_(params, true);}catch(error){
     if(error.safeCode)throw error;
+    const code=String(error.message||'');
+    if(['HISTORY_SOURCE_CHANGED','HISTORY_LOCATOR_CHANGED'].indexOf(code)>=0)hubMapHttpRaise_('PERIOD_SOURCE_CHANGED','Historical source changed.',409,true);
+    if(['HISTORY_HEADER_INVALID','HISTORY_DATE_INVALID'].indexOf(code)>=0)hubMapHttpRaise_('PERIOD_ROW_INVALID','Historical source schema is invalid.',422,false);
+    if(code==='HISTORY_BATCH_INCOMPLETE')hubMapHttpRaise_('PERIOD_SOURCE_INCOMPLETE','Historical read is incomplete.',409,true);
     hubMapHttpRaise_('HISTORY_SOURCE_ERROR',/^HISTORY_[A-Z_0-9]+$/.test(String(error.message||''))?error.message:'HISTORY_SOURCE_FAILED',502,false);
   }
 }

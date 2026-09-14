@@ -1,30 +1,43 @@
 /** Read-only historical contact lookup. Cache ONLY source row positions. */
 function hubStaffHistorySource_(code, start, end) {
-  const profile={lookupMs:0,readMs:0,sourceRows:0,metadataHits:0}, rows=[];
+  const profile={lookupMs:0,readMs:0,sourceRows:0,metadataHits:0,openMs:0,headerMs:0,selectMs:0,discoverMs:0,normalizeMs:0,selectionHit:false,headerHits:0}, rows=[];
+  const cache=CacheService.getScriptCache(),opened={};
+  function open(id){if(opened[id])return opened[id];const at=Date.now(),sheet=SpreadsheetApp.openById(id).getSheetByName('daily_routes');profile.openMs+=Date.now()-at;if(!sheet)throw new Error('HISTORY_SOURCE_MISSING');return opened[id]=sheet;}
   // Reuse the existing retention/date-bounded source selection; no archive-wide
   // history lookup when the requested dates are wholly in Current.
-  const selection=CustomerDataApi.getDailyRoutes({startDate:start,endDate:end,limit:1});
-  if(!selection||!selection.ok)throw new Error('HISTORY_SOURCE_SELECTION_FAILED');
-  const source=String(selection.meta&&selection.meta.source||'');
+  const current=open(HUB_DEFAULT_SOURCE_ID),currentLast=current.getLastRow();
+  const selectionKey=hubDataCacheKey_('staff_history_source_v2',{start:start,end:end,id:HUB_DEFAULT_SOURCE_ID,sheet:current.getSheetId(),last:currentLast,columns:current.getLastColumn()});
+  const selectAt=Date.now();let source=cache.get(selectionKey);
+  if(/^(Current|Archive|Archive\+Current)$/.test(source||''))profile.selectionHit=true;
+  else{const selection=CustomerDataApi.getDailyRoutes({startDate:start,endDate:end,limit:1});
+    if(!selection||!selection.ok)throw new Error('HISTORY_SOURCE_SELECTION_FAILED');
+    source=String(selection.meta&&selection.meta.source||'');
+    if(/^(Current|Archive|Archive\+Current)$/.test(source))cache.put(selectionKey,source,60);
+  }
+  profile.selectMs=Date.now()-selectAt;profile.source=source;
   if(!/^(Current|Archive|Archive\+Current)$/.test(source))throw new Error('HISTORY_SOURCE_SELECTION_INVALID');
   const ids=[];if(source.indexOf('Current')>=0)ids.push(HUB_DEFAULT_SOURCE_ID);if(source.indexOf('Archive')>=0)ids.push(HUB_STAFF_DETAIL_ARCHIVE);
   ids.forEach(function(id){
-    const at=Date.now(),ss=SpreadsheetApp.openById(id),sheet=ss.getSheetByName('daily_routes');
+    const at=Date.now(),sheet=open(id);
     if(!sheet)throw new Error('HISTORY_SOURCE_MISSING');
     const last=sheet.getLastRow(),columns=sheet.getLastColumn();
     if(last<2)return;
     if(columns<1||columns>128)throw new Error('HISTORY_HEADER_INVALID');
-    const headers=sheet.getRange(1,1,1,columns).getValues()[0].map(String);
+    const headerAt=Date.now(),headerKey=hubDataCacheKey_('staff_history_header_v2',{id:id,sheet:sheet.getSheetId(),last:last,columns:columns});
+    let headers=null;try{headers=JSON.parse(cache.get(headerKey)||'null');}catch(ignored){}
+    if(!Array.isArray(headers)||headers.length!==columns){headers=sheet.getRange(1,1,1,columns).getValues()[0].map(String);cache.put(headerKey,JSON.stringify(headers),60);}else profile.headerHits++;
+    profile.headerMs+=Date.now()-headerAt;
     const required=['deliveryDate','customerCode','confirmedVehicle','baseVehicle','driverName','driverPhone'];
     if(required.some(function(k){return headers.indexOf(k)<0;}))throw new Error('HISTORY_HEADER_INVALID');
     const key=hubDataCacheKey_('staff_history_positions_v1',{id:id,sheet:sheet.getSheetId(),last:last,columns:columns,code:code});
-    const cache=CacheService.getScriptCache();let positions=null;
+    let positions=null;
     try{positions=JSON.parse(cache.get(key)||'null');}catch(ignored){}
     if(!Array.isArray(positions)||positions.some(function(n){return!Number.isInteger(n)||n<2||n>last;})){
-      positions=sheet.getRange(2,headers.indexOf('customerCode')+1,last-1,1).createTextFinder(code)
+      const discoverAt=Date.now();positions=sheet.getRange(2,headers.indexOf('customerCode')+1,last-1,1).createTextFinder(code)
         .matchEntireCell(true).useRegularExpression(false).findAll().map(function(cell){return cell.getRow();});
       if(positions.length>2000)throw new Error('HISTORY_CUSTOMER_CAPACITY');
       cache.put(key,JSON.stringify(positions),300);
+      profile.discoverMs+=Date.now()-discoverAt;
     }else profile.metadataHits++;
     profile.lookupMs+=Date.now()-at;
     if(!positions.length)return;
@@ -34,6 +47,7 @@ function hubStaffHistorySource_(code, start, end) {
     // Only the historical columns above are requested; memo/owner contacts never read.
     const objects=hubStaffHistoryBatchRead_(id,sheet.getSheetId(),headers,positions,requested);
     profile.readMs+=Date.now()-readAt;profile.sourceRows+=objects.length;
+    if(sheet.getLastRow()!==last){cache.remove(key);cache.remove(selectionKey);throw new Error('HISTORY_SOURCE_CHANGED');}
     objects.forEach(function(row){
       if(String(row.customerCode||'').trim()!==code){cache.remove(key);throw new Error('HISTORY_LOCATOR_CHANGED');}
       const date=hubStaffHistoryDate_(row.deliveryDate);row.deliveryDate=date;
@@ -41,11 +55,12 @@ function hubStaffHistorySource_(code, start, end) {
       if(date>=start&&date<=end)rows.push(row);
     });
   });
-  const seen=new Set(),unique=rows.filter(function(row){
+  const normalizeAt=Date.now(),seen=new Set(),unique=rows.filter(function(row){
     const key=JSON.stringify([hubStaffDetailDate_(row.deliveryDate),String(row.customerCode),String(row.confirmedVehicle||row.baseVehicle||''),String(row.driverName||''),String(row.driverPhone||'')]);
     if(seen.has(key))return false;seen.add(key);return true;
   });
   unique.sort(function(a,b){return hubStaffDetailDate_(b.deliveryDate).localeCompare(hubStaffDetailDate_(a.deliveryDate));});
+  profile.normalizeMs=Date.now()-normalizeAt;
   return {rows:unique,profile:profile};
 }
 function hubStaffHistoryDate_(value){

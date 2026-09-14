@@ -1,4 +1,5 @@
 import { publicMapValue } from './phase2bSecurity.js';
+import { mapReadFailure } from './mapReadFailure.js';
 
 export function validatePeriod(startDate, endDate) {
   const valid = date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && new Date(date).toISOString().slice(0, 10) === date;
@@ -115,7 +116,7 @@ export function createPeriodJobs({ loadPage, schedule = setTimeout, now = Date.n
         job.phase=job.sourceRestarts>=3?'ERROR':'WAITING';job.error='PERIOD_SOURCE_CHANGED';
         return;
       }
-      const code = /^PERIOD_/.test(error.message || '') ? error.message : 'PERIOD_SOURCE_UNAVAILABLE';
+      const code = /^PERIOD_/.test(error.message || '') ? error.message : mapReadFailure(error,'PERIOD').code;
       job.failures = job.lastError === code ? job.failures + 1 : 1; job.lastError = code;
       job.phase = job.failures >= 3 || code === 'PERIOD_CAPACITY_LIMIT' ? 'ERROR' : 'WAITING'; job.error = code;
     } finally { job.updatedAt = new Date(now()).toISOString(); active = null; resume(); }

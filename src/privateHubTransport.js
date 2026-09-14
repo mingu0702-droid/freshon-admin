@@ -4,6 +4,7 @@
 export async function fetchPrivateHub(url, options, profile) {
   const execution = new URL(url); let current = execution, method = 'POST';
   profile.redirects = [];
+  profile.hops = [];
   for (let hop = 0; hop <= 4; hop++) {
     const started = performance.now();
     profile.phase = 'HEADERS';
@@ -12,6 +13,7 @@ export async function fetchPrivateHub(url, options, profile) {
       headers: method === 'POST' ? options.headers : {}, redirect: 'manual' });
     profile.responseHeadersMs = (profile.responseHeadersMs || 0) + performance.now() - started;
     profile.upstreamStatus = response.status;
+    profile.hops.push({target:current.origin===execution.origin?'EXEC':'OUTPUT',method,status:response.status,headersMs:Math.round((performance.now()-started)*100)/100});
     if (![301,302,303,307,308].includes(response.status)) return response;
     const location = response.headers.get('location');
     await response.body?.cancel();
@@ -20,7 +22,8 @@ export async function fetchPrivateHub(url, options, profile) {
     const sameExecution = next.origin === execution.origin && next.pathname === execution.pathname;
     const output = next.protocol === 'https:' && next.hostname === 'script.googleusercontent.com' && next.pathname === '/macros/echo';
     const nextMethod = sameExecution && method === 'POST' ? 'POST' : output ? 'GET' : null;
-    profile.redirects.push({status:response.status,from:method,to:nextMethod || 'BLOCKED',target:sameExecution?'EXEC':output?'OUTPUT':'OTHER'});
+    profile.redirects.push({status:response.status,from:method,to:nextMethod || 'BLOCKED',target:sameExecution?'EXEC':output?'OUTPUT':'OTHER',
+      blockedKind:nextMethod?null:next.hostname==='accounts.google.com'?'LOGIN':next.hostname==='script.google.com'?'GOOGLE_EXEC_OTHER':next.hostname==='script.googleusercontent.com'?'GOOGLE_OUTPUT_OTHER':'UNTRUSTED'});
     if (!nextMethod) throw Object.assign(new Error('DETAIL_REDIRECT_REJECTED'), {failureType:next.hostname==='accounts.google.com'?'auth':'contract',upstreamStatus:response.status});
     current = next; method = nextMethod;
   }

@@ -34,7 +34,8 @@
       const response = await fetch('/api/map-phase2b/' + path, { ...options, cache: 'no-store', credentials: 'same-origin',
         signal: local.signal, headers: { 'content-type': 'application/json', ...options.headers } });
       status = response.status; headersMs = performance.now() - start; receivedAt = response.headers.get('x-request-received-at'); serverTiming = response.headers.get('server-timing') || '';
-      if (!response.ok) throw Object.assign(new Error('REQUEST_FAILED'), { status });
+      if (!response.ok) throw Object.assign(new Error('REQUEST_FAILED'), { status,
+        sourceChanged: ['PERIOD_SOURCE_CHANGED','HISTORY_SOURCE_CHANGED','HISTORY_LOCATOR_CHANGED'].includes(response.headers.get('x-history-failure')) });
       const parsedAt = performance.now(), value = await response.json(); parseMs = performance.now() - parsedAt;
       const expiresAt = Number(response.headers.get('x-staff-expires-at')), idleExpiresAt = Number(response.headers.get('x-staff-idle-expires-at'));
       if (isDetail && expiresAt && idleExpiresAt && !local.signal.aborted) deadline({ authenticated: true, expiresAt, idleExpiresAt });
@@ -115,7 +116,7 @@
     } catch (error) {
       if (error.name === 'AbortError' || id !== generation) return;
       if (error.status === 401) { sessionHint = null; loginForm(id); return; }
-      shell(target.kind === 'history' ? '기사 이력 조회 실패' : '보호 상세 조회 실패'); node('p', error.status === 504 && performance.now() - detailStarted >= 5000 ? '상세정보 조회가 지연되고 있습니다. 다시 시도해 주세요.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      shell(target.kind === 'history' ? '기사 이력 조회 실패' : '보호 상세 조회 실패'); node('p', error.sourceChanged ? '조회 중 원천 데이터가 변경되었습니다. 다시 시도해 주세요.' : error.status === 504 && performance.now() - detailStarted >= 5000 ? '상세정보 조회가 지연되고 있습니다. 다시 시도해 주세요.' : error.status === 422 ? '원천 데이터 확인이 필요합니다.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
       node('button', '다시 시도').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
     } finally { clearTimeout(delayNotice); if (id === generation) detailPending = false; }
   }
