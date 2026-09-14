@@ -12,6 +12,7 @@ const periodFields = ['deliveryDate','customerCode','vehicle','driverName','driv
 export function createStageReadModel({ secret, now = Date.now } = {}) {
   let live = null, pending = null, lastStatus = { phase: 'WAITING', complete: false };
   const nonces = new Map();
+  const publicPeriods = new Map();
   function ingest(body, signature) {
     if (!secret || secret.length < 32) fail('MODEL_AUTH');
     const text = JSON.stringify(body);
@@ -63,6 +64,7 @@ export function createStageReadModel({ secret, now = Date.now } = {}) {
     const periodDates=m.manifest.filter(e=>e.key.startsWith('period:')&&e.count>0).map(e=>e.key.slice(7)).sort();
     live={generation:m.generation,history,period,historyLatest:historyDates.at(-1)||null,periodLatest:periodDates.at(-1)||null,startDate:m.startDate,endDate:m.endDate,updatedAt:new Date(now()).toISOString()};
     pending=null;lastStatus={phase:'DONE',complete:true,updatedAt:live.updatedAt};
+    publicPeriods.clear();
   }
   function status(){return {...lastStatus,progress:lastStatus.complete?100:0,ready:!!live,source:'Hub.StageReadModel',generation:live?.generation||null,startDate:live?.startDate||null,endDate:live?.endDate||null,historyLatest:live?.historyLatest||null,periodLatest:live?.periodLatest||null,historyRows:live?[...live.history.values()].reduce((n,r)=>n+r.length,0):0,periodRows:live?.period.length||0};}
   function ready(start,end){validatePeriod(start,end);if(!live)fail('READ_MODEL_NOT_READY');if(start<live.startDate||end>live.endDate)fail('READ_MODEL_RANGE_NOT_READY');}
@@ -72,7 +74,13 @@ export function createStageReadModel({ secret, now = Date.now } = {}) {
   }
   function period(startDate,endDate){
     ready(startDate,endDate);
-    return {ok:true,data:groupPeriodRows(live.period.filter(r=>r.deliveryDate>=startDate&&r.deliveryDate<=endDate).map(r=>({...r,lastDeliveryDate:r.deliveryDate}))),meta:{...status(),complete:true,phase:'DONE',startDate,endDate,source:'Customer.daily_routes via Hub.StageReadModel',coverageComplete:false}};
+    const key=startDate+':'+endDate;
+    if(!publicPeriods.has(key)){
+      const rows=groupPeriodRows(live.period.filter(r=>r.deliveryDate>=startDate&&r.deliveryDate<=endDate).map(r=>({...r,lastDeliveryDate:r.deliveryDate})));
+      if(publicPeriods.size>=3)publicPeriods.delete(publicPeriods.keys().next().value);
+      publicPeriods.set(key,rows);
+    }
+    return {ok:true,data:publicPeriods.get(key),meta:{...status(),complete:true,phase:'DONE',startDate,endDate,source:'Customer.daily_routes via Hub.StageReadModel',coverageComplete:false}};
   }
   return {ingest,status,history,period};
 }
