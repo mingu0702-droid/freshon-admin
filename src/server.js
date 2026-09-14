@@ -4198,8 +4198,14 @@ const server = app.listen(config.port, config.host, () => {
   if (previewEnabled()) {
     if(stageReadModelEnabled){
       const requestModel = async attempt => {
+        if(stageReadModel.status().ready)return;
         try{const r=await callHub('stageReadModelRequest',{}, {useCache:false});if(r.data?.phase==='BUSY'&&attempt<3)setTimeout(()=>requestModel(attempt+1),120000).unref();}
-        catch{console.warn('Stage lookup continuation request not acknowledged. No interactive raw fallback.');}
+        catch(error){
+          // Idempotent job request only, never a retry of an interactive RAW read.
+          // At most three attempts; a published model stops any pending retry.
+          if(attempt<3&&(error.name==='AbortError'||error.message==='HUB_TIMEOUT'))setTimeout(()=>requestModel(attempt+1),120000).unref();
+          console.warn('Stage lookup continuation request not acknowledged. No interactive raw fallback.');
+        }
       };
       void requestModel(1);
     }

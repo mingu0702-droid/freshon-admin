@@ -27,4 +27,27 @@ test('maintenance runs multiple chunks, persists each and preserves state across
  ctx.hubStageReadModelContinue();assert.equal(batches,3);assert.equal(stored.phase,'DONE');assert.ok(writes>=5);assert.equal(triggers.length,0);assert.equal(released,1);
  stored={...stored,phase:'BUILD',source:0};ctx.hubStageModelBuildBatch_=()=>{throw Error('MODEL_SOURCE_HTTP_503');};
  for(let i=0;i<3;i++)ctx.hubStageReadModelContinue();assert.equal(stored.phase,'ERROR');assert.equal(stored.errors,3);assert.equal(triggers.length,0);assert.equal(stored.scanned,3000);
+ // A fired one-shot trigger can still be listed. Force replacement, not reuse.
+ const stale={getHandlerFunction:()=> 'hubStageReadModelContinue'};triggers=[stale];ctx.hubStageModelSchedule_(true);assert.equal(triggers.length,1);assert.notEqual(triggers[0],stale);
+});
+
+test('real builder projection is bounded, append retry is idempotent, and failed verify never advances cursor',()=>{
+ const code=fs.readFileSync(new URL('../integrations/hub/HubStageReadModel.js',import.meta.url),'utf8');
+ const headers=['deliveryDate','customerCode','deliveryId','confirmedVehicle','driverName','driverPhone','deliveryStatus','rawHash','updatedAt'];
+ const rows=Array.from({length:2007},(_,i)=>['2026-09-01','S1001','T'+i,'101','SYNTHETIC','SYNTHETIC','COMPLETED','v'+i,'2026-09-02']);
+ const files=new Map(),ranges=[],projected=[];let failVerify=false;
+ function file(name,text){return{id:name,getId(){return name;},setContent(v){text=v;},getBlob(){return{getDataAsString(){if(failVerify)throw Error('MODEL_WRITE_VERIFY');return text;}};}};}
+ const sheet={getLastRow:()=>rows.length+1,getLastColumn:()=>headers.length,getSheetId:()=>1,getRange(start,col,count,width){ranges.push({start,col,count,width});const values=start===1?[headers.slice(col-1,col-1+width)]:rows.slice(start-2,start-2+count).map(r=>r.slice(col-1,col-1+width));return{getValues:()=>values,getDisplayValues:()=>values};}};
+ const folder={getFilesByName:name=>({hasNext:()=>files.has(name),next:()=>files.get(name)}),createFile(name,text){const f=file(name,text);files.set(name,f);return f;}};
+ const ctx=vm.createContext({Date,console,SpreadsheetApp:{openById:()=>({getSheetByName:()=>sheet})},PropertiesService:{getScriptProperties:()=>({getProperty:()=>secret})},HUB_MAP_HTTP_API:{SECRET_PROPERTY:'synthetic'},MimeType:{PLAIN_TEXT:'text/plain'},
+  DriveApp:{getFileById:id=>id==='source'?{getLastUpdated:()=>new Date(0)}:files.get(id),getFolderById:()=>folder},
+  Utilities:{DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(_,v)=>[...crypto.createHash('sha256').update(v).digest()]},
+  ScriptApp:{getOAuthToken:()=> 'SYNTHETIC'},UrlFetchApp:{fetch(url,options){const payload=JSON.parse(options.payload);return{getResponseCode:()=>200,getContentText:()=>JSON.stringify({valueRanges:payload.dataFilters.map(filter=>{const g=filter.gridRange;projected.push(g);return{dataFilters:[filter],valueRange:{values:rows.slice(g.startRowIndex-1,g.endRowIndex-1).map(r=>[r[g.startColumnIndex]])}};})})};}},hubStaffHistoryDate_:v=>v});
+ vm.runInContext(code,ctx);let s={source:0,sources:[{id:'source',sheet:'delivery_admin_raw',kind:'history',next:2}],folderId:'folder',shards:{},startDate:'2026-08-01',endDate:'2026-09-15',scanned:0};
+ const checkpoint=JSON.stringify(s);ctx.hubStageModelBuildBatch_(s);assert.equal(s.scanned,1000);assert.equal(s.sources[0].next,1002);
+ s=JSON.parse(checkpoint);ctx.hubStageModelBuildBatch_(s);assert.equal(s.shards['history:2026-09-01'].count,1000);
+ failVerify=true;assert.throws(()=>ctx.hubStageModelBuildBatch_(s),/MODEL_WRITE_VERIFY/);assert.equal(s.sources[0].next,1002);failVerify=false;
+ ctx.hubStageModelBuildBatch_(s);ctx.hubStageModelBuildBatch_(s);assert.equal(s.scanned,2007);assert.equal(s.shards['history:2026-09-01'].count,2007);
+ assert.ok(projected.every(g=>g.endRowIndex-g.startRowIndex<=1000&&g.endColumnIndex-g.startColumnIndex===1));assert.ok(ranges.every(r=>r.count<=5000&&(r.width===1||r.count===1)));
+ const stored=JSON.parse(files.get('history:2026-09-01.json').getBlob().getDataAsString());assert.equal(stored.length,2007);assert.ok(stored.every(r=>Object.keys(r).length===9&&!('rawPayload'in r)));
 });

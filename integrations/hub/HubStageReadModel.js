@@ -10,7 +10,9 @@ function hubStageModelHash_(value){return Utilities.computeDigest(Utilities.Dige
 function hubStageModelUpdated_(value){const d=hubStaffHistoryDate_(value);if(!d)return 0;const t=String(value).match(/(?:T|\s)(\d{1,2}):(\d\d)(?::(\d\d))?/);return Date.parse(d)+(t?Number(t[1])*3600000+Number(t[2])*60000+Number(t[3]||0)*1000:0);}
 function hubStageModelSave_(s){s.updatedAt=new Date().toISOString();const f=DriveApp.getFileById(s.stateId),text=JSON.stringify(s);f.setContent(text);if(f.getBlob().getDataAsString()!==text)throw new Error('MODEL_CHECKPOINT_VERIFY');}
 function hubStageModelLoad_(){const id=PropertiesService.getScriptProperties().getProperty(HUB_STAGE_MODEL.property);return id?JSON.parse(DriveApp.getFileById(id).getBlob().getDataAsString()):null;}
-function hubStageModelSchedule_(){
+function hubStageModelSchedule_(replace){
+  // Expired one-shot triggers can remain listed after a lock collision.
+  if(replace)ScriptApp.getProjectTriggers().filter(function(t){return t.getHandlerFunction()===HUB_STAGE_MODEL.continuation;}).forEach(function(t){ScriptApp.deleteTrigger(t);});
   if(!ScriptApp.getProjectTriggers().some(function(t){return t.getHandlerFunction()===HUB_STAGE_MODEL.continuation;}))
     ScriptApp.newTrigger(HUB_STAGE_MODEL.continuation).timeBased().after(60000).create();
 }
@@ -31,9 +33,9 @@ function hubStageModelRequest_(params){
   const lock=LockService.getUserLock();if(!lock.tryLock(1000)){fence.releaseLock();return{data:{phase:'BUSY'},cached:false};}
   try{
     let s=hubStageModelLoad_();
-    if(s&&s.workerVersion!==2){
+    if(s&&s.workerVersion!==3){
       ScriptApp.getProjectTriggers().filter(function(t){return [HUB_STAGE_MODEL.continuation,HUB_STAGE_MODEL.watchdog].indexOf(t.getHandlerFunction())>=0;}).forEach(function(t){ScriptApp.deleteTrigger(t);});
-      s.workerVersion=2;hubStageModelSave_(s);
+      s.workerVersion=3;hubStageModelSave_(s);
     }
     if(!s){
       const folder=DriveApp.createFolder('Phase2B_Stage_ReadModel_v1');
@@ -41,7 +43,7 @@ function hubStageModelRequest_(params){
       if(folder.getSharingAccess()!==DriveApp.Access.PRIVATE)throw new Error('MODEL_STORAGE_NOT_PRIVATE');
       const stateFile=folder.createFile('checkpoint.json','{}',MimeType.PLAIN_TEXT);
       const end=Utilities.formatDate(new Date(),'Asia/Seoul','yyyy-MM-dd'),start=new Date(Date.parse(end)-89*86400000).toISOString().slice(0,10);
-      s={v:1,workerVersion:2,stateId:stateFile.getId(),folderId:folder.getId(),phase:'BUILD',startDate:start,endDate:end,generation:Date.now(),source:0,scanned:0,shards:{},sources:[
+      s={v:1,workerVersion:3,stateId:stateFile.getId(),folderId:folder.getId(),phase:'BUILD',startDate:start,endDate:end,generation:Date.now(),source:0,scanned:0,shards:{},sources:[
         {id:HUB_STAFF_DETAIL_ARCHIVE,sheet:'delivery_admin_raw',kind:'history',next:2},
         {id:HUB_DEFAULT_SOURCE_ID,sheet:'delivery_admin_raw',kind:'history',next:2},
         {id:HUB_STAFF_DETAIL_ARCHIVE,sheet:'daily_routes',kind:'period',next:2},
@@ -156,7 +158,7 @@ function hubStageReadModelContinue(){
     console.warn('Stage read model maintenance failed; inspect safe checkpoint status.');
   }finally{
     if(s&&(s.phase==='DONE'||s.phase==='ERROR'))ScriptApp.getProjectTriggers().filter(function(t){return t.getHandlerFunction()===HUB_STAGE_MODEL.continuation;}).forEach(function(t){ScriptApp.deleteTrigger(t);});
-    else if(s)hubStageModelSchedule_();
+    else if(s)hubStageModelSchedule_(true);
     if(s&&s.phase==='ERROR')try{hubStageModelSend_({type:'status',phase:'ERROR',scanned:s.scanned,total:0});}catch(ignored){}
     lock.releaseLock();
   }
@@ -172,7 +174,7 @@ function hubStageReadModelWatchdog(){
       s.sources.forEach(function(src){const sh=SpreadsheetApp.openById(src.id).getSheetByName(src.sheet);if(sh.getLastRow()<src.end)throw new Error('MODEL_SOURCE_MOVED');if(sh.getLastRow()>src.end)changed=true;src.end=sh.getLastRow();});
       if(!changed)return;s.endDate=today;s.startDate=new Date(Date.parse(today)-89*86400000).toISOString().slice(0,10);s.phase='BUILD';s.source=0;s.generation=Date.now();s.errors=0;hubStageModelSave_(s);
     }
-    hubStageModelSchedule_();
+    hubStageModelSchedule_(Date.now()-Date.parse(s.updatedAt||0)>300000);
   }catch(e){const s=hubStageModelLoad_();if(s){s.phase='ERROR';s.lastError='MODEL_SOURCE_MOVED';hubStageModelSave_(s);}}
   finally{lock.releaseLock();}
 }
