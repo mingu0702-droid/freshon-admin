@@ -28,18 +28,19 @@ test("search supports partial customer code and customerCode dedupe", () => {
   assert.match(runtime, /const key = row\.customerCode \|\|/);
 });
 
-test("base, center and vehicle views use the verified snapshot cache", () => {
-  assert.match(runtime, /allStores\.filter\(\(row\) => row\.vehicleGroup === state\.centerFilter\)/);
-  assert.match(runtime, /selected\.length === 1 \? stores : representativeRows\(stores\)/);
-  assert.match(runtime, /60일 스냅샷/);
-  assert.match(runtime, /refreshSelectedVehicle/);
+test("base, center and vehicle views use verified dated assignments with snapshot coordinates", () => {
+  assert.ok(runtime.includes('stores.filter(row => row.vehicleGroup === state.centerFilter)'));
+  assert.ok(runtime.includes('MapPeriodUi.select(allStores, periodBasis === "vehicle" ? selectedVehicles() : [], periodBasis === "driver" ? state.driverKey : "")'));
+  assert.match(runtime, /assignments\?date=/);
+  assert.ok(runtime.includes('기간 내 최신 배차'));
+  assert.match(runtime, /changeSelectedDate/);
   assert.match(runtime, /ttl:\s*300000/);
 });
 
 test("abort, stale response and timeout handling are explicit", () => {
   assert.match(runtime, /previous\.controller\.abort\("superseded"\)/);
   assert.match(runtime, /STALE_RESPONSE/);
-  assert.match(runtime, /요청 시간이 초과되었습니다/);
+  assert.match(runtime, /Phase2bUi.requestError/);
   assert.match(runtime, /isSilentRequestError/);
 });
 

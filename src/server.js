@@ -17,6 +17,8 @@ import { writeDispatchCache } from "./store.js";
 import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
 import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, phase2bCacheNamespace, phase2bSnapshotMeta, splitHubBounds } from "./phase2bOperations.js";
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
+import { mountProductionMapApi } from './productionMapIntegration.js';
+import { mountMapMainPage } from './mapMainPage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,6 +51,11 @@ const upload = multer({
   }
 });
 
+const productionMap = mountProductionMapApi(app, {
+  previewEnabled, requireView, readPhase2bSnapshot, getSnapshotMemory: () => phase2bSnapshotMemory,
+  phase2bKstDate, normalizeCell, normalizeDateValue, phase2bSnapshotMeta, phase2bTodayStatus, publicDir,
+  getSnapshotWorkerState: () => ({running:!!phase2bSnapshotRefreshPromise,continuation:!!phase2bSnapshotRetryTimer})
+});
 app.use(express.json({ limit: "10mb" }));
 // Sensitive namespaces must never inherit PUBLIC_VIEW or the SPA fallback.
 app.use('/api/collector', requireAdmin);
@@ -85,6 +92,7 @@ app.get('/vehicle-data.js', async (_req,res)=>{
     return res.type('application/javascript').send(`${match[1]} = ${JSON.stringify(redactPublicData(JSON.parse(match[2])))};`);
   }catch{return res.status(503).json({error:'PUBLIC_DATA_UNAVAILABLE'});}
 });
+mountMapMainPage(app, { publicDir, enabled: previewEnabled });
 app.use(express.static(publicDir));
 
 let refreshState = {
@@ -3884,6 +3892,7 @@ app.get("*", (_req, res) => {
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
+  void productionMap.requestPublishedModel();
   if (previewEnabled()) {
     schedulePhase2bSnapshotRefresh();
     setInterval(() => refreshPhase2bSnapshot(), Math.max(60 * 60 * 1000, Number(process.env.MAP_PHASE2B_SNAPSHOT_REFRESH_MS || 6 * 60 * 60 * 1000))).unref();

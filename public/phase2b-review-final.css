@@ -1,0 +1,17 @@
+/* Standard round pin; the SVG tip and overlay bottom anchor coincide. */
+.marker,.marker.storeDot{width:26px;min-width:26px;height:34px;padding:0;border:0;border-radius:0;clip-path:none;background:transparent!important;transform:none;filter:drop-shadow(0 2px 2px #17203335)}
+.marker .pinShape{position:absolute;inset:0;width:100%;height:100%;overflow:visible;fill:var(--pin-color,#f59e0b);stroke:#fff;stroke-width:1.5;pointer-events:none}
+.marker .pinNumber{position:absolute;top:6px;left:0;width:100%;text-align:center;color:#fff;font-size:10px;font-weight:800;pointer-events:none}
+.marker.done{--pin-color:#14825d}.marker.pending{--pin-color:#f59e0b}
+.marker.selected{transform:none;filter:drop-shadow(0 0 3px #2563ebaa)}body:not(.periodMode) .marker.selected{--pin-color:#2563eb!important}.marker.selected .pinShape{stroke:#174da1;stroke-width:2}
+.marker.storeDot{width:21px;min-width:21px;height:28px}.marker.virtual,.marker.nearbyVehicle{width:32px;min-width:32px;height:39px}.marker:hover{filter:drop-shadow(0 0 3px #17203388)}
+.vehicleControl{min-width:0;display:flex;flex-direction:column;gap:1px;padding:2px 5px;border-radius:7px;background:#eaf1ff;border:1px solid #bfd0f2}
+#selectedVehicleBadge{font-size:10px;font-weight:800;color:#174da1;white-space:nowrap}
+.vehicleControl #operationVehicle{height:21px;min-height:21px!important;border:0;background:transparent;padding:0;font-size:11px}
+#runListTitle{font-size:13px;font-weight:800;color:#174da1}.operationsButton{width:auto;font-size:10px;min-height:25px;border:0;color:#607086;background:transparent}
+.detailWrap:after{left:calc(var(--popup-tail,50%) - 8px)}.detailLine span{overflow-wrap:anywhere;white-space:pre-line}
+.coordinateWarning,.unlocatedHeading{color:#805c22;font-size:10px}.unlocatedHeading{margin-top:9px;font-weight:700}
+.unlocatedStop{display:grid;grid-template-columns:25px 1fr;gap:7px;padding:8px;text-align:left;border:1px dashed #c8af87;border-radius:8px;background:#fffcf5}
+.unlocatedStop.selected{outline:2px solid #2563eb}
+@media(max-width:760px){.operationBar .vehicleControl{grid-column:15/21;grid-row:1;min-width:0;padding:1px 3px}#selectedVehicleBadge{font-size:8px}.vehicleControl #operationVehicle{height:17px!important;min-height:17px!important;font-size:10px!important}.unlocatedStop{width:100%}}
+@media(max-width:760px){body.mobileMap .detailWrap.open{position:fixed!important;left:var(--popup-left,70px)!important;top:var(--popup-top,180px)!important;right:auto!important;bottom:auto!important;width:250px;margin:0;overflow:visible;z-index:56;box-shadow:none}body.mobileMap .detailWrap .detailCard{max-height:inherit;overflow:auto}.detailWrap:after{display:block}}

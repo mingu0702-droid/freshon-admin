@@ -1,0 +1,272 @@
+import crypto from "node:crypto";
+import { fetchPrivateHub, privateResponseKind } from './privateHubTransport.js';
+
+const VERSION = "map-phase2-v1";
+const cache = new Map();
+const inFlight = new Map();
+const requestProfiles = new WeakMap();
+export const hubRequestProfile = result => requestProfiles.get(result) || {};
+const HUB_CACHE_MAX_ENTRIES = 256;
+const state = { circuits: new Map(), metrics: { requests: 0, success: 0, timeout: 0, error: 0, match: 0, mismatch: 0, latencyMs: [] } };
+
+function circuitFor(action) {
+  const key = String(action || "unknown");
+  if (!state.circuits.has(key)) state.circuits.set(key, { state: "CLOSED", failures: 0, openUntil: 0, probeInFlight: false, lastFailure: null });
+  return state.circuits.get(key);
+}
+
+function circuitConfig() {
+  return {
+    threshold: Math.max(1, Number(process.env.HUB_CIRCUIT_FAILURE_THRESHOLD || 10)),
+    resetMs: Math.max(1000, Number(process.env.HUB_CIRCUIT_RESET_MS || 300000))
+  };
+}
+
+function circuitLog(action, circuit, timeout, event) {
+  console.info(JSON.stringify({ component: "hub-circuit", action, state: circuit.state, failures: circuit.failures, timeout: Boolean(timeout), event }));
+}
+
+function circuitEnter(action) {
+  const circuit = circuitFor(action);
+  const now = Date.now();
+  if (circuit.state === "OPEN" && now < circuit.openUntil) { circuitLog(action, circuit, false, "REJECT_OPEN"); throw new Error("HUB_CIRCUIT_OPEN"); }
+  if (circuit.state === "OPEN") {
+    if (circuit.probeInFlight) { circuitLog(action, circuit, false, "REJECT_PROBE_IN_FLIGHT"); throw new Error("HUB_CIRCUIT_HALF_OPEN"); }
+    circuit.state = "HALF_OPEN";
+    circuit.probeInFlight = true;
+    circuitLog(action, circuit, false, "HALF_OPEN_PROBE");
+    return { circuit, probe: true };
+  }
+  if (circuit.state === "HALF_OPEN") { circuitLog(action, circuit, false, "REJECT_HALF_OPEN"); throw new Error("HUB_CIRCUIT_HALF_OPEN"); }
+  return { circuit, probe: false };
+}
+
+function circuitSuccess(action, circuit) {
+  const recovered = circuit.state !== "CLOSED" || circuit.failures > 0;
+  circuit.state = "CLOSED";
+  circuit.failures = 0;
+  circuit.openUntil = 0;
+  circuit.probeInFlight = false;
+  circuit.lastFailure = null;
+  if (recovered) circuitLog(action, circuit, false, "CLOSED");
+}
+
+function circuitFailure(action, circuit, timeout, probe) {
+  const config = circuitConfig();
+  circuit.lastFailure = { at: new Date().toISOString(), timeout: Boolean(timeout) };
+  circuit.probeInFlight = false;
+  if (probe) {
+    circuit.state = "OPEN";
+    circuit.openUntil = Date.now() + config.resetMs;
+  } else {
+    circuit.failures += 1;
+    if (circuit.failures >= config.threshold) {
+      circuit.state = "OPEN";
+      circuit.openUntil = Date.now() + config.resetMs;
+    }
+  }
+  circuitLog(action, circuit, timeout, circuit.state === "OPEN" ? "OPEN" : "FAILURE");
+}
+
+export function classifyHubFailure(error) {
+  if (error?.name === "AbortError") return "timeout";
+  if ([401, 403].includes(Number(error?.upstreamStatus)) || error?.failureType === "auth") return "auth";
+  if (error?.responseKind === "html") return "hub-html";
+  if (error?.failureType === "parse" || error?.failureType === "contract") return "invalid-json-contract";
+  if (/HUB_INTERNAL_ERROR|HUB_EXECUTION/.test(error?.message || "")) return "apps-script-execution";
+  if (Number(error?.upstreamStatus) >= 500) return "upstream-5xx";
+  return error?.failureType || "network";
+}
+
+function stable(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}`;
+}
+
+function requestBody(action, params) {
+  const secret = String(process.env.HUB_API_SECRET || "");
+  if (secret.length < 32) throw new Error("HUB_API_SECRET_NOT_CONFIGURED");
+  const requestId = crypto.randomUUID();
+  const timestamp = String(Date.now());
+  const nonce = crypto.randomBytes(18).toString("base64url");
+  const canonical = [VERSION, action, requestId, timestamp, nonce, stable(params || {})].join("\n");
+  const signature = crypto.createHmac("sha256", secret).update(canonical).digest("base64url");
+  return { version: VERSION, action, requestId, params: params || {}, auth: { timestamp, nonce, signature } };
+}
+
+export function hubEnabled() { return process.env.HUB_SHADOW_ENABLED === "true" && Boolean(process.env.HUB_API_URL); }
+export function previewEnabled() {
+  const environment = String(process.env.MAP_PHASE2B_PREVIEW_ENV || "").toLowerCase();
+  return process.env.MAP_PHASE2B_PREVIEW_ENABLED === "true"
+    && (environment === "stage" || environment === "production")
+    && Boolean(process.env.HUB_API_URL)
+    && String(process.env.HUB_API_SECRET || "").length >= 32;
+}
+
+export async function callHub(action, params, { useCache = true, privateRead = false, deadline, signal, page } = {}) {
+  if (!process.env.HUB_API_URL) throw new Error("HUB_API_URL_NOT_CONFIGURED");
+  const key = `${action}:${stable(params || {})}`;
+  if (privateRead || ['customerDetail','staffCustomerDetail'].includes(action)) useCache = false;
+  const saved = cache.get(key);
+  if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
+  if (useCache && inFlight.has(key)) return inFlight.get(key);
+  const request = callHubUncached(action, params, key, privateRead || ['customerDetail','staffCustomerDetail'].includes(action), { deadline, signal, page });
+  if (useCache) inFlight.set(key, request);
+  try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
+}
+
+function cacheHubResponse(key, expiresAt, value) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, { expiresAt, value });
+  const now = Date.now();
+  for (const [savedKey, saved] of cache) if (saved.expiresAt <= now) cache.delete(savedKey);
+  while (cache.size > HUB_CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value);
+}
+
+function retryableHubError(error) {
+  if (error?.name === "AbortError") return false;
+  if (!error?.failureType) return true;
+  return error.failureType === "upstream" && Number(error.upstreamStatus) >= 500;
+}
+
+async function callHubUncached(action, params, key, privateRead = false, { deadline, signal, page } = {}) {
+  const entered = circuitEnter(action);
+  const started = Date.now();
+  const staffDetail = action === 'staffCustomerDetail';
+  const sourceRead = ['periodAssignments','staffDriverHistory'].includes(action);
+  state.metrics.requests += 1;
+  const actionTimeoutMs = {
+    unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 30000),
+    customerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
+    staffCustomerDetail: 4800,
+    nearestVehicles: Number(process.env.HUB_NEAREST_TIMEOUT_MS || 30000),
+    mapBounds: Number(process.env.HUB_BOUNDS_TIMEOUT_MS || 30000),
+    datedAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
+    periodAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
+    staffDriverHistory: 5000,
+    routePlan: Number(process.env.HUB_ROUTE_TIMEOUT_MS || 25000)
+  };
+  const timeoutMs = actionTimeoutMs[action] || Number(process.env.HUB_API_TIMEOUT_MS || 2000);
+  const sharedDeadline = Math.min(deadline ?? Infinity, staffDetail || action === 'staffDriverHistory' ? started + timeoutMs : Infinity);
+  let lastError;
+  const attempts = entered.probe || action === "customerDetail" ? 1 : 2;
+  let timedOut = false;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    signal?.throwIfAborted();
+    const remaining = Math.min(timeoutMs, sharedDeadline - Date.now());
+    if (remaining <= 0) { lastError = Object.assign(new Error('DETAIL_UPSTREAM_TIMEOUT'), {name:'AbortError'}); timedOut = true; break; }
+    const profile = { attempt: attempt + 1, sentAt:Date.now(), phase:'HEADERS', responseHeadersMs:0, bodyReadMs:0, parseMs:0, upstreamStatus:null, contentType:'unknown', responseKind:'none' };
+    const attemptStarted = Date.now();
+    const signingStarted = Date.now();
+    const body = requestBody(action, params);
+    Object.assign(profile, { requestId: body.requestId, page: page ?? 0, remainingMs: remaining });
+    const signingMs = Date.now() - signingStarted;
+    const serializationStarted = Date.now();
+    const serializedBody = JSON.stringify(body);
+    const requestSerializationMs = Date.now() - serializationStarted;
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) cancel();
+    const timer = setTimeout(() => controller.abort(), remaining);
+    try {
+      const fetchStarted = Date.now();
+      const fetchOptions = { method: "POST", headers: { "content-type": "application/json" }, body: serializedBody, signal: controller.signal };
+      const response = staffDetail || sourceRead ? await fetchPrivateHub(process.env.HUB_API_URL, fetchOptions, profile) : await fetch(process.env.HUB_API_URL, fetchOptions);
+      const responseHeadersMs = Date.now() - fetchStarted;
+      profile.responseHeadersMs = responseHeadersMs; profile.upstreamStatus = response.status;
+      const contentType = response.headers?.get('content-type') || '';
+      profile.contentType = /json/i.test(contentType) ? 'json' : /html/i.test(contentType) ? 'html' : 'other';
+      const bodyReadStarted = Date.now();
+      profile.phase = 'BODY';
+      let responseText = null;
+      if (typeof response.text === "function") responseText = await response.text();
+      controller.signal.throwIfAborted();
+      const bodyReadMs = Date.now() - bodyReadStarted;
+      profile.bodyReadMs = bodyReadMs;
+      const parseStarted = Date.now();
+      profile.phase = 'PARSE';
+      let json;
+      try { json = responseText == null ? await response.json() : JSON.parse(responseText); } catch (_) {
+        profile.responseKind = privateResponseKind(responseText);
+        if (response.status === 404 && profile.hops?.at(-1)?.target === 'OUTPUT' && profile.responseKind === 'html') {
+          throw Object.assign(new Error('HUB_OUTPUT_HTML_404'), { upstreamStatus: 404, failureType: 'output', responseKind: 'html' });
+        }
+        if (staffDetail && response.status >= 500) throw Object.assign(new Error('DETAIL_UPSTREAM_5XX'), {upstreamStatus:response.status,failureType:'upstream',responseKind:profile.responseKind});
+        throw Object.assign(new Error("HUB_INVALID_JSON"), { upstreamStatus: response.status, failureType: "parse", responseKind: profile.responseKind });
+      }
+      const parseMs = Date.now() - parseStarted;
+      profile.phase = 'CONTRACT';
+      profile.parseMs = parseMs; profile.responseKind = privateResponseKind(responseText,json);
+      profile.hubDurationMs = Number(json?.meta?.durationMs || 0);
+      const generatedAt=Date.parse(json?.meta?.generatedAt||'');
+      if(Number.isFinite(generatedAt)){
+        profile.hubExecutionStartAt=generatedAt-profile.hubDurationMs;
+        profile.beforeHubMs=Math.max(0,profile.hubExecutionStartAt-profile.sentAt);
+        profile.afterHubMs=Math.max(0,Date.now()-generatedAt);
+      }
+      profile.responseBytes = responseText == null ? null : Buffer.byteLength(responseText);
+      if(sourceRead){profile.sourceReadMs=Number(json?.meta?.historyProfile?.readMs||0);profile.sourceLookupMs=Number(json?.meta?.historyProfile?.lookupMs||0);profile.sourceRows=Number(json?.meta?.historyProfile?.sourceRows||json?.meta?.sourceReadCount||0);}
+      if(action==='staffDriverHistory')for(const k of ['openMs','headerMs','selectMs','discoverMs','normalizeMs','metadataHits','headerHits','selectionHit'])profile['history'+k[0].toUpperCase()+k.slice(1)]=Number(json?.meta?.historyProfile?.[k]||0);
+      if (json && typeof json === 'object') requestProfiles.set(json, profile);
+      if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
+      if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
+      if (action === 'staffCustomerDetail' && (json.meta.requestId !== body.requestId || String(json.data?.customerCode || '').toUpperCase() !== String(params.customerCode).toUpperCase())) {
+        profile.requestIdMatch = json.meta.requestId === body.requestId;
+        profile.customerMatch = String(json.data?.customerCode || '').toUpperCase() === String(params.customerCode).toUpperCase();
+        throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'), { upstreamStatus: response.status, failureType: 'contract' });
+      }
+      profile.phase = 'DONE';
+      if (Date.now() >= sharedDeadline) throw Object.assign(new Error('HUB_TIMEOUT'), {name:'AbortError'});
+      if(sourceRead)console.info(JSON.stringify({component:'hub-source-profile',action,...profile,count:Array.isArray(json.data)?json.data.length:0,totalMs:Date.now()-started,result:'OK'}));
+      if (staffDetail) console.info(JSON.stringify({component:'private-hub-profile',...profile,result:'OK',totalMs:Date.now()-started}));
+      circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
+      const ttlMs = action === "routePlan" ? Number(process.env.HUB_ROUTE_CACHE_TTL_MS || 300000) : 60000;
+      if (!privateRead && !["datedAssignments", "periodAssignments", "staffDriverHistory"].includes(action)) cacheHubResponse(key, Date.now() + ttlMs, json);
+      if (action === "mapBounds" || action === "customerDetail") console.info(JSON.stringify({ component: "hub-api-profile", action, requestId: body.requestId, attempt: attempt + 1, signingMs, requestSerializationMs, responseHeadersMs, bodyReadMs, parseMs, responseBytes: responseText == null ? null : Buffer.byteLength(responseText), hubDurationMs: Number(json.meta?.durationMs || 0), totalMs: Date.now() - attemptStarted }));
+      if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, totalMs: Date.now() - started, hubDurationMs: Number(json.meta?.durationMs || 0), hubProfile: json.meta?.routeProfile || null, cache: "MISS" }));
+      return json;
+    } catch (error) {
+      // Abort exceptions may be immutable. Preserve only a safe new error object.
+      if(controller.signal.aborted && error.name !== 'AbortError')error=Object.assign(new Error('HUB_TIMEOUT'),{name:'AbortError'});
+      lastError = error;
+      if(action==='routePlan')requestProfiles.set(error,profile);
+      if(sourceRead){requestProfiles.set(error,profile);console.warn(JSON.stringify({component:'hub-source-profile',action,...profile,totalMs:Date.now()-started,result:classifyHubFailure(error)}));}
+      if (staffDetail) {
+        profile.totalMs = Date.now()-started;
+        if (controller.signal.aborted) {error=Object.assign(new Error('DETAIL_UPSTREAM_TIMEOUT'),{name:'AbortError'});lastError=error;}
+        requestProfiles.set(error, profile);
+        console.warn(JSON.stringify({component:'private-hub-profile',...profile,result:classifyHubFailure(error)}));
+      }
+      console.warn(JSON.stringify({ component: "hub-failure-classification", action, classification: classifyHubFailure(error), upstreamStatus: error.upstreamStatus || null }));
+      if (error.name === "AbortError") { state.metrics.timeout += 1; timedOut = true; } else state.metrics.error += 1;
+      console.warn(JSON.stringify({ component: "hub-api", action, requestId: body.requestId, attempt: attempt + 1, elapsedMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", upstreamStatus: error.upstreamStatus || null, failureType: error.failureType || (error.name === "AbortError" ? "timeout" : "network"), errorCode: error.name === "AbortError" ? "HUB_TIMEOUT" : String(error.message || "HUB_ERROR").slice(0, 80) }));
+      if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", result: "FAIL" }));
+      if (attempt + 1 >= attempts || signal?.aborted || !retryableHubError(error) || Date.now()+150>=sharedDeadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
+  }
+  circuitFailure(action, entered.circuit, timedOut, entered.probe);
+  throw lastError;
+}
+
+export function shadowHub(action, params, existing) {
+  if (!hubEnabled()) return;
+  callHub(action, params).then((hub) => {
+    const localRows = Array.isArray(existing?.results) ? existing.results : Array.isArray(existing?.stops) ? existing.stops : Array.isArray(existing) ? existing : [];
+    const hubRows = Array.isArray(hub.data) ? hub.data : Array.isArray(hub.data?.stops) ? hub.data.stops : [];
+    const localCodes = new Set(localRows.map((x) => String(x.customerCode || x.code || "")).filter(Boolean));
+    const hubCodes = new Set(hubRows.map((x) => String(x.customerCode || "")).filter(Boolean));
+    const match = localRows.length === hubRows.length && [...localCodes].every((code) => hubCodes.has(code));
+    state.metrics[match ? "match" : "mismatch"] += 1;
+    console.info(JSON.stringify({ requestId: hub.meta.requestId, action, duration: hub.meta.durationMs, result: match ? "MATCH" : "MISMATCH" }));
+  }).catch((error) => console.info(JSON.stringify({ requestId: crypto.randomUUID(), action, duration: null, result: error.name === "AbortError" ? "HUB_TIMEOUT" : "HUB_ERROR" })));
+}
+
+export function hubMetrics() {
+  const m = state.metrics, sorted = m.latencyMs.slice().sort((a, b) => a - b);
+  const circuits = {};
+  state.circuits.forEach((value, action) => { circuits[action] = { state: value.state, failures: value.failures, openUntil: value.openUntil || null, probeInFlight: value.probeInFlight, lastFailure: value.lastFailure }; });
+  return { ...m, latencyMs: undefined, p50: sorted[Math.floor(sorted.length * 0.5)] || 0, p95: sorted[Math.floor(sorted.length * 0.95)] || 0, circuitOpen: Object.values(circuits).some((x) => x.state === "OPEN"), circuits };
+}
