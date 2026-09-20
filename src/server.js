@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { requireAdmin, requireView } from "./auth.js";
 import { createMapStaffAuth } from "./mapStaffAuth.js";
+import { mountMapMainPage } from "./mapMainPage.js";
 import { staffLatency, addStaffTiming, addHubReadTiming } from "./staffLatency.js";
 import { mapReadFailure } from "./mapReadFailure.js";
 import { staffCustomerDetail } from "./mapStaffDetail.js";
@@ -111,6 +112,7 @@ app.get(["/map-phase2b-snapshot.json", "/customer-master-20260604.json", "/vehic
     return assignment ? res.type("application/javascript").send(`${assignment[1]} = ${JSON.stringify(clean)};`) : res.json(clean);
   } catch { return res.status(503).json({ error: "PUBLIC_DATA_UNAVAILABLE" }); }
 });
+mountMapMainPage(app, { publicDir, enabled: previewEnabled });
 app.use(express.static(publicDir));
 
 let refreshState = {

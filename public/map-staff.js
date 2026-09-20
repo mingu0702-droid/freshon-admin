@@ -34,8 +34,15 @@
       const response = await fetch('/api/map-phase2b/' + path, { ...options, cache: 'no-store', credentials: 'same-origin',
         signal: local.signal, headers: { 'content-type': 'application/json', ...options.headers } });
       status = response.status; headersMs = performance.now() - start; receivedAt = response.headers.get('x-request-received-at'); serverTiming = response.headers.get('server-timing') || '';
-      if (!response.ok) throw Object.assign(new Error('REQUEST_FAILED'), { status,
-        sourceChanged: ['PERIOD_SOURCE_CHANGED','HISTORY_SOURCE_CHANGED','HISTORY_LOCATOR_CHANGED'].includes(response.headers.get('x-history-failure')) });
+      if (!response.ok) {
+        // Classify only known availability codes; never display or retain the body.
+        let notReady = false;
+        if (path.startsWith('private/driver-history') && status === 503) {
+          try { notReady = ['READ_MODEL_NOT_READY', 'READ_MODEL_RANGE_NOT_READY'].includes((await response.json()).error); } catch (_) { /* HTTP error remains an error */ }
+        }
+        throw Object.assign(new Error('REQUEST_FAILED'), { status, notReady,
+          sourceChanged: ['PERIOD_SOURCE_CHANGED','HISTORY_SOURCE_CHANGED','HISTORY_LOCATOR_CHANGED'].includes(response.headers.get('x-history-failure')) });
+      }
       const parsedAt = performance.now(), value = await response.json(); parseMs = performance.now() - parsedAt;
       const expiresAt = Number(response.headers.get('x-staff-expires-at')), idleExpiresAt = Number(response.headers.get('x-staff-idle-expires-at'));
       if (isDetail && expiresAt && idleExpiresAt && !local.signal.aborted) deadline({ authenticated: true, expiresAt, idleExpiresAt });
@@ -89,6 +96,7 @@
     detailPending = true;
     const detailStarted = performance.now();
     shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
+    dialog.dataset.state = 'loading';
     const loading = node('p', ''); loading.setAttribute('role', 'status'); loading.setAttribute('aria-live', 'polite');
     const spinner = node('span', '', loading); spinner.className = 'staffLoadingSpinner'; spinner.setAttribute('aria-hidden', 'true');
     node('span', '상세정보 불러오는 중...', loading);
@@ -105,14 +113,20 @@
       shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
       node('button', '로그아웃').onclick = logout;
       if (target.kind === 'history') {
+        if (payload.meta?.complete === false) {
+          dialog.dataset.state = 'not-ready';
+          node('p', '기사 이력이 아직 준비되지 않았습니다. 기사 없음으로 판단하지 마세요.');
+          return;
+        }
         const rows = Array.isArray(payload.data) ? payload.data : [];
+        dialog.dataset.state = rows.length ? 'ready' : payload.meta?.coverageComplete === true ? 'empty' : 'not-ready';
         if (!payload.meta?.coverageComplete) {
           node('p', 'Delivery 기사정보 확인 중 · 전체 기간 수집 완전성 미확인');
           line('원천', payload.meta?.source || '미확인');
           line('기록 확인일', (payload.meta?.availableRecordDates || []).join(', ') || '없음');
           line('완전성 미확인일', (payload.meta?.unconfirmedDates || []).join(', ') || '미확인');
         }
-        if (!rows.length) node('p', 'Delivery 기사정보 미확인');
+        if (!rows.length) node('p', payload.meta?.coverageComplete === true ? '선택 기간의 기사 이력이 없습니다.' : 'Delivery 기사정보 미확인 · 원천 완전성 확인 중 (기사 없음 아님)');
         rows.forEach(row => {
           const entry = node('div', ''); entry.className = 'staffDetailLine';
           const heading = node('b', row.deliveryDate + ' · ', entry);
@@ -121,6 +135,7 @@
           node('span', [row.driverName || '기사 미등록', row.driverPhone || '연락처 미등록'].join(' · '), entry);
         });
       } else {
+        dialog.dataset.state = 'ready';
         const data = payload.data || {};
         if (data.memoState === 'NEEDS_CONFIRMATION') node('p', '허용 항목을 확실히 구분할 수 없어 원천 확인이 필요합니다.');
         line('출입방법', data.accessInfo); line('비밀번호', data.password); line('배송 특이사항', data.specialRemark); line('배송요일', data.deliveryPattern || '미등록');
@@ -128,7 +143,15 @@
     } catch (error) {
       if (error.name === 'AbortError' || id !== generation) return;
       if (error.status === 401) { sessionHint = null; loginForm(id); return; }
+      if (error.notReady) {
+        shell('기사 이력 준비 중'); dialog.dataset.state = 'not-ready';
+        node('p', '기사 이력이 아직 준비되지 않았습니다. 기사 없음으로 판단하지 마세요. 공개 고객정보와 지도는 계속 사용할 수 있습니다.');
+        node('button', '다시 확인').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
+        return;
+      }
       shell(target.kind === 'history' ? '기사 이력 조회 실패' : '보호 상세 조회 실패'); node('p', error.sourceChanged ? '조회 중 원천 데이터가 변경되었습니다. 다시 시도해 주세요.' : error.status === 504 && performance.now() - detailStarted >= 5000 ? '상세정보 조회가 지연되고 있습니다. 다시 시도해 주세요.' : error.status === 422 ? '원천 데이터 확인이 필요합니다.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      dialog.dataset.state = 'error';
+      node('p', '공개 고객정보와 지도는 계속 사용할 수 있습니다.');
       node('button', '다시 시도').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
     } finally { clearTimeout(delayNotice); if (id === generation) detailPending = false; }
   }

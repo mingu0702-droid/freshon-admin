@@ -37,7 +37,8 @@
     <section class="grid">
       <div class="panel">
         <div class="head"><div><h2>호차별 기사/차량 정보</h2><small>여기서 바꾸는 값이 모든 화면의 기준값입니다.</small></div><span class="chip blue">마스터</span></div>
-        <div class="toolbar"><input id="search" placeholder="호차, 기사명, 전화번호 검색"><select><option>전체 톤수</option><option>1.0톤</option><option>1.2톤</option><option>1.4톤</option><option>2.5톤</option></select><button class="btn" id="saveBtn">변경 저장</button></div>
+        <p role="note">화면 시안입니다. 입력 내용은 영구 저장되지 않으며 운영 데이터에 반영되지 않습니다.</p>
+        <div class="toolbar"><input id="search" placeholder="호차, 기사명, 전화번호 검색"><select><option>전체 톤수</option><option>1.0톤</option><option>1.2톤</option><option>1.4톤</option><option>2.5톤</option></select><button class="btn" id="saveBtn" disabled title="시안 전용 · 저장 기능 없음">저장 미지원 (시안)</button></div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>호차</th><th>기사명</th><th>전화번호</th><th>톤수</th><th>상태</th><th>최근 반영</th></tr></thead>
@@ -84,7 +85,6 @@
       document.getElementById("routePreview").textContent=`101호차 지도 라벨과 기사 연락처에 ${driver} / ${phone} 표시`;
     }
     document.getElementById("search").addEventListener("input",render);
-    document.getElementById("saveBtn").addEventListener("click",()=>{document.getElementById("saveBtn").textContent="저장 완료";setTimeout(()=>document.getElementById("saveBtn").textContent="변경 저장",1200)});
     render();
   </script>
 </body>

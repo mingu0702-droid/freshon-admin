@@ -132,14 +132,15 @@
     $("#rangeStart").value = start; $("#rangeEnd").value = end;
     syncModeUi(); clearSelection(); clearTimeout(periodTimer);
     ++state.searchRequestId; ++state.addressRequestId; $("#results").innerHTML = "";
-    state.newAreaResults = []; $("#newAreaBatchResults").innerHTML = "";
+    clearNewAreaBatch();
     operationStops = []; renderRunList(); updateOperationMetrics(null);
     const id = ++periodRequestId;
     if (periodMeta?.complete && periodMeta.startDate === start && periodMeta.endDate === end) {
       replaceStoreSnapshot(periodRows, snapshotMeta); dateReady = true; await loadBaseMap(); return;
     }
-    dateReady = false; periodListLimit = 100; clearMap(); state.currentRows = []; renderPeriodStoreList([]);
-    $("#periodIdentity").textContent = "기간 이력 준비 중";
+    dateReady = false; periodListLimit = 100;
+    setPeriodViewState("loading"); renderPeriodStoreList([]);
+    $("#periodIdentity").textContent = "기간 이력 조회 중 · 이전 지도 유지 (선택 기간 결과 아님)";
     let retryRequested = retry;
     async function read() {
       if (id !== periodRequestId || state.mode !== "BASE_60D") return;
@@ -149,7 +150,8 @@
         if (id !== periodRequestId || state.mode !== "BASE_60D") return;
         if (payload.meta?.phase === "ERROR") throw new Error("기간 원천 확인 실패");
         if (payload.meta?.complete !== true) {
-          $("#freshnessState").textContent = payload.meta?.error === "PERIOD_SOURCE_CHANGED" ? `원천 변경 · 자동 재시작 중 (${payload.meta?.sourceRestarts || 0}/3)` : payload.meta?.error ? "기간 원천 조회 지연 · 자동 재시도 중" : payload.meta?.phase === "BUSY" ? "이전 기간 조회 완료 대기" : `기간 이력 준비 ${payload.meta?.progress || 0}% · 자동 이어받기`;
+          setPeriodViewState("not-ready"); renderPeriodStoreList([]);
+          $("#freshnessState").textContent = "기간 이력 준비 중 · 완료 여부 확인 중 · 이전 지도 유지";
           $("#periodIdentity").textContent = $("#freshnessState").textContent;
           periodTimer = setTimeout(read, 5000); return;
         }
@@ -165,11 +167,13 @@
         await loadBaseMap();
       } catch (error) {
         if (id === periodRequestId && !isSilentRequestError(error)) {
+          setPeriodViewState("error");
           $("#freshnessState").textContent = "기간 조회 실패 · 신규권역 판단 보류";
           $("#periodIdentity").textContent = "기간 원천 조회 실패 · 매장 수 미확인";
+          $("#periodIdentity").textContent += " · 이전 지도 유지";
           $("#periodStoreListCount").textContent = "미확인";
           $("#periodStoreList").innerHTML = '<p class="notice show">기간 데이터를 불러오지 못했습니다. 조회 실패를 매장 0개로 판단하지 마세요.</p>';
-          const retryButton=document.createElement('button');retryButton.textContent='재시도';retryButton.onclick=()=>void changePeriod(start,end,true);$("#periodStoreList").append(retryButton);
+          const retryButton=document.createElement('button');retryButton.textContent='재시도';retryButton.onclick=()=>void changePeriod(start,end);$("#periodStoreList").append(retryButton);
         }
       }
     }
@@ -195,10 +199,9 @@
     operationStops = []; renderRunList();
     state.mode = "DATE_ROUTE";
     clearSelection();
-    clearMap();
+    $("#mapStatusSub").textContent = "새 기준일 조회 중 · 이전 지도 유지";
     if (!sameDate) {
-      state.newAreaResults = [];
-      $("#newAreaBatchResults").innerHTML = "";
+      clearNewAreaBatch();
       $("#addressJudgeResults").innerHTML = "";
       $("#results").innerHTML = "";
     }
@@ -211,6 +214,7 @@
       if (response.meta?.complete !== true || response.meta.date !== date) throw new Error("날짜별 편성 검증 실패");
       let rows = response.data || [];
       if (date === localDate()) {
+        try {
           const live = await fetchJson(`/api/map-phase2b/preview/today-status?date=${date}`, { channel: "selected-date-live", ttl: 30000, timeout: 45000 });
           const byCode = new Map(rows.map((row) => [String(row.customerCode || row.code), row]));
           (live.data?.vehicles || []).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
@@ -218,6 +222,10 @@
             if (code) byCode.set(code, { ...byCode.get(code), ...stop, vehicle: vehicle.vehicle, lastDeliveryDate: date });
           }));
           rows = [...byCode.values()];
+        } catch (error) {
+          if (isSilentRequestError(error) || token !== dateRequestId) return;
+          // Dated assignments remain usable when the optional live status fails.
+        }
       }
       if (token !== dateRequestId) return;
       replaceStoreSnapshot(rows, snapshotMeta);
@@ -382,16 +390,19 @@
   }
 
   function clearSelection() {
+    const temporarySelection = Boolean(state.selected?.outsideReason);
     window.MapStaff?.clear();
     ++state.detailRequestId;
     requestControllers.get("store-detail")?.controller.abort("superseded");
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     state.selected = null;
+    $$("[data-search-code]").forEach(button => { button.classList.remove("selected"); button.setAttribute("aria-pressed", "false"); });
     $$("[data-period-store]").forEach(button => { button.classList.remove("selected"); button.setAttribute("aria-pressed", "false"); });
     renderRunList();
     $("#detailSection").classList.remove("open");
     $("#detail").className = "idle";
     $("#detail").textContent = "검색하거나 핀을 선택하면 점포정보가 표시됩니다.";
+    if (temporarySelection && state.mode === "BASE_60D") { state.fitRequested = false; renderStops(state.currentRows); }
   }
 
   function markerElement(row, index, kind) {
@@ -443,6 +454,10 @@
     state.currentRows = rows.slice();
     if (!state.map) return;
     const valid = rows.filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng));
+    // A searched store outside the filters is a temporary selection pin, not a
+    // new period membership. Keep state.currentRows and list counts unchanged.
+    if (state.mode === "BASE_60D" && state.selected?.outsideReason && Number.isFinite(state.selected.lat) && Number.isFinite(state.selected.lng)
+      && !valid.some(row => row.customerCode === state.selected.customerCode)) valid.push(state.selected);
     if (!valid.length) {
       $("#mapStatusSub").textContent = "조회 결과 없음";
       return;
@@ -558,6 +573,10 @@
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     element?.classList.add("selected");
     state.selected = row;
+    $$("[data-search-code]").forEach(button => {
+      const active = button.dataset.searchCode === row.customerCode;
+      button.classList.toggle("selected", active); button.setAttribute("aria-pressed", String(active));
+    });
     $$(".marker").forEach((pin) => pin.classList.toggle("selected", Boolean(row.customerCode) && pin.dataset.customerCode === row.customerCode && pin.dataset.vehicle === row.vehicle));
     renderRunList();
     if (state.mode === "BASE_60D") {
@@ -573,6 +592,7 @@
       state.suppressMapEventsUntil = Date.now() + 500;
       if (state.map.getLevel() > 5) state.map.setLevel(5);
       state.map.panTo(new kakao.maps.LatLng(Number(row.lat), Number(row.lng)));
+      if (state.mode === "BASE_60D") { state.fitRequested = false; renderStops(state.currentRows); }
     }
     const routeMode = state.mode === "DATE_ROUTE";
     const vehicle = normalizeVehicle(row.vehicle);
@@ -734,10 +754,21 @@
     const panel = $("#operationsPanel"); panel.hidden = !panel.hidden;
     if (panel.hidden) return;
     panel.textContent = "상태 확인 중…";
-    let status = {};
-    try { status = await fetchJson("/api/map-phase2b/preview/status", { channel: "diagnostics", ttl: 15000, timeout: 10000 }); } catch (_) { /* local observations remain useful */ }
+    const [status, periodStatus] = await Promise.all([
+      fetchJson("/api/map-phase2b/preview/status", { channel: "diagnostics", ttl: 15000, timeout: 10000 }).catch(() => ({})),
+      fetchJson("/api/map-phase2b/preview/period-status", { channel: "period-diagnostics", ttl: 15000, timeout: 10000 }).catch(() => ({}))
+    ]);
+    if (panel.hidden) return;
     const snap = status.snapshot || {};
-    const rows = [ ["기준일", state.selectedDate], ["선택 호차", primarySelectedVehicle() || "없음"], ["Hub 최신일", "현 상태 API 미제공"], ["Snapshot 목표일", snap.targetLatest || "미제공"], ["Snapshot 최신일", snap.latest || snapshotMeta?.latestDate || "미제공"], ["Snapshot stale", String(snap.stale ?? snapshotMeta?.stale ?? "미제공")], ["최근 조회", lastRefreshedAt], ["Customer 최신일", "현 경로 미제공"], ["Delivery 조회일", state.selectedDate === localDate() ? state.selectedDate : "과거 조회 — 미호출"], ["Hub 인증", status.hubAuth || "미확인"], ["Circuit", Object.entries(status.metrics?.circuits || {}).map(([k,v]) => `${k}: ${v.state}`).join(" / ") || "미확인"], ["총착 / 완료 / 잔여", ["#opTotal", "#opCompleted", "#opRemaining"].map((id) => $(id).textContent).join(" / ")], ["주소 좌표 조회", geocodeDiagnostic], ...[...apiDiagnostics].map(([key, value]) => [key, `${value.ms}ms · ${value.cache} · HTTP ${value.status}`]) ];
+    const rows = [ ["조회 범위", state.mode === "BASE_60D" ? `${state.rangeStart} ~ ${state.rangeEnd}` : state.selectedDate],
+      ["선택 호차", primarySelectedVehicle() || "없음"], ["Hub 인증", status.hubAuth || "확인 중"],
+      ["Snapshot 상태", snap.phase || "확인 중"], ["Snapshot 목표일", snap.targetLatest || "확인 중"],
+      ["Snapshot 최신일", snap.latest || "확인 중"], ["Snapshot stale", snap.stale === true ? "true · 최신 상태 아님" : snap.stale === false ? "false · 최신 상태" : "확인 중"],
+      ["Snapshot 이어받기", snap.continuation || "확인 중"],
+      ["기간 모델 상태", periodStatus.ready === true || periodStatus.complete === true ? "준비 완료" : periodStatus.phase === "ERROR" ? "조회 오류" : periodStatus.phase ? "준비 중 · " + periodStatus.phase : "확인 중"],
+      ["기간 모델 범위", periodStatus.startDate && periodStatus.endDate ? `${periodStatus.startDate} ~ ${periodStatus.endDate}` : "확인 중"],
+      ["현재 목록", periodViewState], ["최근 운행 조회", lastRefreshedAt || "확인 중"],
+      ["주소 좌표 조회", geocodeDiagnostic], ...[...apiDiagnostics].map(([key, value]) => [key, `${value.ms}ms · ${value.cache} · HTTP ${value.status}`]) ];
     panel.innerHTML = `<table class="diagnosticTable"><tbody>${rows.map(([label, value]) => `<tr><th>${esc(label)}</th><td>${esc(value || "미제공")}</td></tr>`).join("")}</tbody></table>`;
   }
 
@@ -835,6 +866,7 @@
       requestMapFit(); renderResults(localRows); renderStops(localRows, { boundaries: false }); selectStore(localRows[0], null, true);
       return;
     }
+    const errors = [];
     if (/^[A-Z]\d{3,}$/i.test(text)) {
       try {
         const detail = await fetchJson(`/api/map-phase2b/preview/detail?customerCode=${encodeURIComponent(text.toUpperCase())}`, { channel: "exact-code-search", ttl: 300000, timeout: 45000 });
@@ -843,36 +875,35 @@
           const row = normalizeApiStore(detail.data);
           row.vehicle = dateReady ? storesByCode.get(row.customerCode)?.vehicle || "" : "";
           setSearchState("1건 · 고객코드 일치");
-          requestMapFit(); renderResults([row]); renderStops([row], { boundaries: false }); selectStore(row, null, false, true);
+          requestMapFit(); renderResults([row]); renderStops([row], { boundaries: false }); selectStore(row, null, true, true);
           return;
         }
-      } catch (error) { if (isSilentRequestError(error)) return; }
+      } catch (error) { if (isSilentRequestError(error)) return; errors.push(error); }
     }
     const candidates = [];
-    const errors = [];
     try {
       candidates.push(...await fixedDispatchSearch(text));
-    } catch (error) { if (!isSilentRequestError(error)) errors.push(`기존검색:${error.message}`); }
+    } catch (error) { if (!isSilentRequestError(error)) errors.push(error); }
     try {
       const hub = await fetchJson(`/api/map-phase2b/preview/search?q=${encodeURIComponent(text)}`, { channel: "hub-search", ttl: 60000, timeout: 30000 });
       candidates.push(...(hub.data || []));
-    } catch (error) { if (!isSilentRequestError(error)) errors.push(`Hub검색:${error.message}`); }
+    } catch (error) { if (!isSilentRequestError(error)) errors.push(error); }
     if (requestId !== state.searchRequestId) return;
     // Master search preserves customer lookup, but cannot invent a dated vehicle.
     const rows = rankSearchRows(candidates, text).slice(0, 20).map((row) => ({ ...row, vehicle: dateReady ? storesByCode.get(row.customerCode)?.vehicle || "" : "", deliveryDate: state.selectedDate }));
     if (!rows.length) {
-      setSearchState(errors.length ? "검색에 실패했습니다. 잠시 후 다시 시도해주세요." : "결과 없음");
+      setSearchState(errors.length ? searchFailureMessage(errors) : "검색 결과 0건 · 현재 지도 유지");
       return;
     }
     setSearchState(`${rows.length}건${errors.length ? " · 일부 API 오류" : ""}`);
     requestMapFit();
     renderResults(rows);
     renderStops(rows, { boundaries: false });
-    selectStore(rows[0]);
+    selectStore(rows[0], null, true);
   }
 
   function renderResults(rows) {
-    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem ${index === 0 ? "selected" : ""}" data-result="${index}"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName || "-")}</div><div class="resultMeta"><span class="chip">${esc(vehicleLabel(row.vehicle || "-"))}</span>${esc(row.address || "-")}</div></button>`).join("");
+    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName || "-")}</div><div class="resultMeta"><span class="chip">${esc(vehicleLabel(row.vehicle || "-"))}</span>${esc(row.address || "-")}</div></button>`).join("");
     $$("[data-result]").forEach((element) => {
       element.onclick = () => {
         const row = rows[Number(element.dataset.result)];
@@ -912,13 +943,14 @@
     }
     const token = ++state.searchRequestId;
     setSearchState("검색 중", true);
+    $("#results").innerHTML = "";
     const known = rankSearchRows([...periodRows, ...latestSnapshotRows], text);
     let matches = known;
     if (!matches.length) {
       try {
         const response = await fetchJson(`/api/map-phase2b/preview/search?q=${encodeURIComponent(text)}`, { channel: "period-search", ttl: 60000, timeout: 30000 });
         matches = rankSearchRows(response.data || [], text);
-      } catch (error) { if (token === state.searchRequestId && !isSilentRequestError(error)) setSearchState("검색 실패 · 다시 시도해주세요."); return; }
+      } catch (error) { if (token === state.searchRequestId && !isSilentRequestError(error)) setSearchState(searchFailureMessage([error])); return; }
     }
     if (token !== state.searchRequestId || state.mode !== "BASE_60D") return;
     const matching = new Map(filteredPeriodStores().map(row => [row.customerCode, row]));
@@ -926,8 +958,8 @@
     const rows = matches.slice(0, 40).map(item => matching.get(item.customerCode) || { ...item,
       vehicle: "", driverName: "", history: [], lastDeliveryDate: "",
       outsideReason: period.has(item.customerCode) ? "현재 호차/기사 조건의 이력 없음" : "선택 기간 이력 없음" });
-    setSearchState(`${rows.length}건 · 기간/조회 조건 유지`);
-    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-period-result="${index}"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName)}</div><div class="resultMeta">${esc(row.outsideReason || vehicleLabel(row.vehicle) + " · " + row.lastDeliveryDate)}</div></button>`).join("");
+    setSearchState(rows.length ? `${rows.length}건 · 기간/조회 조건 유지` : "검색 결과 0건 · 현재 지도 유지");
+    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-period-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName)}</div><div class="resultMeta">${esc(row.outsideReason || vehicleLabel(row.vehicle) + " · " + row.lastDeliveryDate)}</div></button>`).join("");
     $$("[data-period-result]").forEach(button => button.onclick = () => {
       const row = rows[Number(button.dataset.periodResult)];
       selectStore(row, null, true, true);
@@ -1032,6 +1064,7 @@
     renderStops(stores, { numbered: state.mode === "DATE_ROUTE", vehicles: selected });
     const period = state.mode === "BASE_60D";
     if (period) {
+      setPeriodViewState(stores.length ? "ready" : "empty");
       const subject = periodBasis === "driver" ? ($("#periodDriver").selectedOptions[0]?.textContent || "전체 기사") : periodVehicleScope === "all" ? "전체 호차" : selected.length === 1 ? selected[0] + "호" : selected.length ? selected.length + "개 호차" : "호차 선택 없음";
       const range = state.rangeStart === daysBefore(state.rangeEnd, 59) ? "최근 60일" : state.rangeStart.slice(5) + " ~ " + state.rangeEnd.slice(5);
       $("#periodIdentity").textContent = `${subject} · ${range} · ${stores.length}개 매장`;
@@ -1303,19 +1336,38 @@
       vehicle: nearby[0]?.vehicle || "-", nearestDistance: nearby[0]?.distance ?? null };
   }
 
+  let newAreaRequestId = 0;
+  function clearNewAreaBatch(clearInput = true) {
+    ++newAreaRequestId;
+    state.newAreaResults = [];
+    if (clearInput) $("#newAreaBatchInput").value = "";
+    $("#newAreaBatchResults").innerHTML = "";
+    $("#newAreaBatchStatus").textContent = "입력 0 · 완료 0";
+    $("#exportNewAreaCsv").disabled = true;
+    $("#exportNewAreaExcel").disabled = true;
+  }
+
   async function runNewArea(inputId, statusId, resultId) {
-    if (!periodMeta?.complete) { $(statusId).textContent = "기간 비교 데이터 미완료 · 판단 보류"; return; }
+    clearNewAreaBatch(false);
+    const requestId = newAreaRequestId;
+    if (!dateReady || !periodMeta?.complete || periodMeta.startDate !== state.rangeStart || periodMeta.endDate !== state.rangeEnd || state.mode !== "BASE_60D") { $(statusId).textContent = "기간 비교 데이터 미완료 · 판단 보류"; return; }
     const periodKey = state.rangeStart + "|" + state.rangeEnd;
     const rows = parseNewArea(inputId);
     if (!rows.length) { $(statusId).textContent = "주소를 입력해주세요."; return; }
     $(statusId).textContent = `${rows.length}건 판단 중...`;
     const judged = [];
     for (const row of rows) {
-      judged.push(await judgeNewAreaRow(row));
-      if (periodKey !== state.rangeStart + "|" + state.rangeEnd || state.mode !== "BASE_60D") return;
+      try { judged.push(await judgeNewAreaRow(row)); }
+      catch (error) {
+        if (requestId === newAreaRequestId && !isSilentRequestError(error)) $(statusId).textContent = "신규권역 조회 실패 · 다시 시도해주세요. 지도는 유지됩니다.";
+        return;
+      }
+      if (requestId !== newAreaRequestId || periodKey !== state.rangeStart + "|" + state.rangeEnd || state.mode !== "BASE_60D") return;
       $(statusId).textContent = `입력 ${rows.length} · 완료 ${judged.length}`;
     }
     state.newAreaResults = judged;
+    $("#exportNewAreaCsv").disabled = !judged.length;
+    $("#exportNewAreaExcel").disabled = !judged.length;
     $(statusId).textContent = `입력 ${rows.length} · 완료 ${judged.length} · 권역 내 ${judged.filter((r) => r.decision === "O").length} · 동선 없음 ${judged.filter((r) => r.reason === "배송동선 맞지 않음").length} · 확인 필요 ${judged.filter((r) => r.decision !== "O" && r.reason !== "배송동선 맞지 않음").length}`;
     $(resultId).innerHTML = judged.map((row, index) => `<button class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(["주소 확인 필요", "배송동선 맞지 않음"].includes(row.reason) ? row.reason : "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>${esc(row.address)}</div><div>${row.decision === "O" ? "500m 내 배송점" : esc(row.reason)} · ${esc(vehicleLabel(row.vehicle))} ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.deliveryDays || "")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`).join("");
     $$('[data-judged]').forEach((button) => button.onclick = () => {
@@ -1346,6 +1398,11 @@
   function daysBefore(value, count) { const date = new Date(`${value}T00:00:00`); date.setDate(date.getDate() - count); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
   function esc(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
   function setSearchState(text, spin) { $("#searchState").innerHTML = spin ? `<span class="loading"><span class="spinner"></span>${esc(text)}</span>` : esc(text); }
+  function searchFailureMessage(errors) {
+    return errors.some(error => Number(error.status) >= 500)
+      ? "검색 서버 오류 · 잠시 후 다시 시도해주세요. 현재 지도 유지"
+      : "검색 요청 실패 · 연결 상태를 확인하고 다시 시도해주세요. 현재 지도 유지";
+  }
   function isSilentRequestError(error) { return Boolean(error?.silent || error?.name === "AbortError"); }
   async function fetchJson(url, options = {}) {
     const { channel = new URL(url, location.href).pathname, timeout = 30000, ttl = 0 } = options;
@@ -1363,7 +1420,7 @@
       const json = await response.json();
       apiDiagnostics.set(new URL(url, location.href).pathname.split("/").pop(), { ms: Math.round(performance.now() - started), status: response.status, cache: response.headers.get("X-Phase2B-Cache") || "미제공" });
       if (requestControllers.get(channel)?.token !== token) { const stale = new Error("STALE_RESPONSE"); stale.silent = true; throw stale; }
-      if (!response.ok || json.error) throw new Error(json.error || `HTTP_${response.status}`);
+      if (!response.ok || json.error) throw Object.assign(new Error(json.error || `HTTP_${response.status}`), { status: response.status });
       if (ttl) memoryResponses.set(url, { value: json, expiresAt: Date.now() + ttl });
       return json;
     } catch (error) {
@@ -1408,7 +1465,7 @@
     $("#syncOperation").disabled = true;
     try {
       const payload = await fetchJson(url, { channel: "operation-status", ttl: 30000, timeout: 45000 });
-      if (requestId !== state.todayRequestId || date !== state.selectedDate) return;
+      if (requestId !== state.todayRequestId || date !== state.selectedDate || state.mode !== "DATE_ROUTE") return;
       const status = current ? payload.data?.vehicles?.find((row) => normalizeVehicle(row.vehicle) === vehicle) : payload.data;
       if (current && refresh) {
         const byCode = new Map(allStores.map((row) => [row.customerCode, row]));
@@ -1435,7 +1492,7 @@
         $("#mapStatusSub").textContent = `${date} · ${current ? "Delivery 현재상태" : "Hub 과거 완료기록"}`;
       }
     } catch (error) {
-      if (isSilentRequestError(error) || requestId !== state.todayRequestId) return;
+      if (isSilentRequestError(error) || requestId !== state.todayRequestId || date !== state.selectedDate || state.mode !== "DATE_ROUTE") return;
       updateOperationMetrics(null);
       operationStops = []; renderRunList();
       $("#runList").textContent = "운행 목록을 불러오지 못했습니다. 상단 동기화로 재시도해주세요.";
@@ -1472,11 +1529,19 @@
     const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" })); link.download = "신규권역판정.csv"; link.click(); URL.revokeObjectURL(link.href);
   }
 
+  let periodViewState = "loading";
+  function setPeriodViewState(value) {
+    periodViewState = value;
+    $("#periodStoreList").setAttribute("data-state", value);
+    $("#periodStoreList").setAttribute("aria-busy", String(value === "loading"));
+    $("#periodIdentity").setAttribute("role", "status");
+    if (["loading", "not-ready", "error"].includes(value)) $("#mapStatusSub").textContent = "조회 완료 전 · 이전 지도 유지 (선택 기간 결과 아님)";
+  }
   function renderPeriodStoreList(rows = state.currentRows) {
     const panel = $("#periodStoreList"); if (!panel) return;
     if (state.mode === "BASE_60D" && !dateReady) {
-      $("#periodStoreListCount").textContent = "준비 중";
-      panel.innerHTML = '<p class="hint" role="status">기간 이력을 준비하고 있습니다. 완료 후 목록이 표시됩니다.</p>';
+      $("#periodStoreListCount").textContent = periodViewState === "loading" ? "조회 중" : periodViewState === "error" ? "미확인" : "준비 중";
+      panel.innerHTML = `<p class="hint" role="status">${periodViewState === "loading" ? "기간 이력 조회 중입니다." : periodViewState === "error" ? "기간 조회 실패 · 매장 수 미확인" : "기간 이력이 아직 준비되지 않았습니다. 빈 결과가 아닙니다."} 이전 지도는 유지되며 선택 기간의 결과가 아닙니다.</p>`;
       $("#periodListMore").hidden = true; return;
     }
     const stores = rows.filter(row => !row.virtual);
@@ -1532,7 +1597,7 @@
     $("#mobileCenter").onchange = (event) => selectCenter(event.target.value);
     $("#mobileBaseVehicle").onchange = (event) => { state.centerFilter = ""; setSelectedVehicles(event.target.value ? [event.target.value] : []); $("#mobileCenter").value = "all"; refreshVehicleUi(true); };
     $("#judgeNewAreaBatch").onclick = () => runNewArea("#newAreaBatchInput", "#newAreaBatchStatus", "#newAreaBatchResults");
-    $("#clearNewAreaBatch").onclick = () => { $("#newAreaBatchInput").value = ""; $("#newAreaBatchResults").innerHTML = ""; };
+    $("#clearNewAreaBatch").onclick = () => clearNewAreaBatch();
     $("#exportNewAreaCsv").onclick = () => exportNewArea("csv");
     $("#exportNewAreaExcel").onclick = () => exportNewArea("xlsx");
     $("#todayStatusTool")?.addEventListener("toggle", (event) => { if (event.target.open) loadTodayStatus(); });
@@ -1549,6 +1614,7 @@
   }
 
   initVehicles();
+  clearNewAreaBatch();
   syncModeUi();
   $("#runListTool").open = false;
   $("#mapModeBar").insertBefore($("#areaToggle"), $("#staffLogout"));
