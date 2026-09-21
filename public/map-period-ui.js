@@ -76,5 +76,17 @@
     for (const [key, old] of previous) if (!next.has(key)) { remove(old.value); removed++; }
     return { next, created, removed, reused };
   }
-  root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile });
+  function parseAreaInput(text) {
+    const records=[];let cells=[],cell='',quoted=false,raw='';
+    const finish=()=>{cells.push(cell.trim());if(cells.some(Boolean))records.push({address:cells[0]||'',customer:cells.slice(1).join(' '),originalInput:raw.trim(),inputAmbiguous:quoted||cells.length>2});cells=[];cell='';raw='';};
+    const input=String(text||'').replace(/\r\n/g,'\n');
+    for(let i=0;i<input.length;i++){
+      const c=input[i];raw+=c;
+      if(c==='"'&&(quoted||!cell.trim())){if(quoted&&input[i+1]==='"'){cell+='"';raw+=input[++i];}else quoted=!quoted;}
+      else if(c==='\t'&&!quoted){cells.push(cell.trim());cell='';}
+      else if(c==='\n'&&!quoted)finish();else cell+=c;
+    }
+    finish();return records;
+  }
+  root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile, parseAreaInput });
 })(typeof window === 'undefined' ? globalThis : window);

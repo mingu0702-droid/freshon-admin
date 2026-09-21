@@ -25,3 +25,10 @@ test('empty viewport removes pins without changing source rows',()=>{
  assert.equal(index.valid.length,1);const old=reconcile(new Map(),[{key:'x',fingerprint:'x'}],()=>1,()=>{});
  const cleared=reconcile(old.next,[],()=>1,()=>{});assert.equal(cleared.removed,1);assert.equal(cleared.next.size,0);
 });
+test('new area TSV preserves quoted lines and unit suffixes without splitting double spaces',()=>{
+ const rows=MapPeriodUi.parseAreaInput('서울 강남구 테스트로 12  3층 301호\n"경기 오산시 테스트로 3\n2층"\t"합성 매장"\nS259514');
+ assert.equal(rows.length,3);assert.equal(rows[0].address,'서울 강남구 테스트로 12  3층 301호');assert.equal(rows[0].customer,'');
+ assert.equal(rows[1].address,'경기 오산시 테스트로 3\n2층');assert.equal(rows[1].customer,'합성 매장');assert.equal(rows[2].address,'S259514');
+ assert.equal(MapPeriodUi.parseAreaInput('주소\t고객\t알수없는열')[0].inputAmbiguous,true);
+ assert.equal(MapPeriodUi.parseAreaInput('"닫히지 않은 주소')[0].inputAmbiguous,true);
+});

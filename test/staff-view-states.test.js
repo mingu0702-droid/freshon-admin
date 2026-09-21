@@ -19,7 +19,7 @@ function fixture(){
   });
   vm.runInNewContext(source,{window,document,fetch,AbortController,URLSearchParams,Date,performance,setTimeout:(fn,ms)=>{timers.set(++sequence,{fn,ms});return sequence;},clearTimeout:id=>timers.delete(id)});
   const text=e=>e.textContent+e.children.map(text).join('');
-  return {window,dialog:()=>elements.find(e=>e.tag==='dialog'),text:()=>text(elements.find(e=>e.tag==='dialog')),finish:(...args)=>finish(...args),body:document.body};
+  return {window,element:tag=>new Element(tag),textAt:text,dialog:()=>elements.find(e=>e.tag==='dialog'),text:()=>text(elements.find(e=>e.tag==='dialog')),finish:(...args)=>finish(...args),body:document.body};
 }
 const flush=async()=>{for(let i=0;i<20;i++)await Promise.resolve();};
 const open=async(f,kind='history')=>{await f.window.MapStaff.open({kind,customerCode:'S900001',date:'2026-08-28'});await flush();};
@@ -47,4 +47,19 @@ test('closing during history request silently ignores aborted response',async()=
 });
 test('401 still uses the existing login form rather than a not-ready view',async()=>{
   const f=fixture();await open(f);f.finish(401,{error:'UNAUTHORIZED'});await flush();assert.equal(f.dialog().modal,true);assert.match(f.text(),/직원 공용 로그인/);
+});
+test('protected content stays inside selected card; collapse removes it and aborts late response',async()=>{
+ const f=fixture(),host=f.element('div'),button=f.element('button'),target={kind:'notes',customerCode:'S900001',date:'2026-08-28'};
+ assert.equal(f.textAt(host),'');await f.window.MapStaff.open(target,host,button);await flush();
+ assert.equal(host.dataset.state,'loading');assert.equal(f.dialog().open,false);assert.equal(button.attrs['aria-expanded'],'true');
+ await f.window.MapStaff.open(target,host,button);await flush();f.finish(200,{data:{accessInfo:'SYNTHETIC_ONLY'}});await flush();
+ assert.equal(host.hidden,true);assert.equal(f.textAt(host),'');assert.equal(button.attrs['aria-expanded'],'false');assert.equal(f.text(),'');
+});
+test('inline history shows records before collapsed completeness details and clears on selection change',async()=>{
+ const f=fixture(),host=f.element('div'),button=f.element('button');
+ await f.window.MapStaff.open({kind:'history',customerCode:'S900001'},host,button);await flush();
+ f.finish(200,{data:[{deliveryDate:'2026-08-28',vehicle:'101',driverName:'합성기사'}],meta:{complete:true,coverageComplete:false}});await flush();
+ assert.equal(host.dataset.state,'ready');const text=f.textAt(host);assert.ok(text.indexOf('합성기사')<text.indexOf('검증 상태 상세'));
+ assert.equal(host.children.find(e=>e.tag==='details').open,undefined);
+ f.window.MapStaff.clear();assert.equal(f.textAt(host),'');assert.equal(host.hidden,true);
 });

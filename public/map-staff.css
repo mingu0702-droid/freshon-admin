@@ -7,4 +7,8 @@
 #mapStaffDialog button{min-height:40px;margin:5px 8px 5px 0}
 .staffDetailLine{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid #e5eaf0;white-space:pre-wrap;overflow-wrap:anywhere}
 .staffActions{display:flex;gap:6px;margin:10px 0}.staffActions button{flex:1;min-height:36px;font-size:12px}
+.staffActions{display:grid;grid-template-columns:minmax(0,1fr)}
+.staffInline[hidden]{display:none}.staffInline{font-size:12px;max-height:290px;overflow:auto;border-top:1px solid #dce2ec;padding:6px 0}
+.staffInline h2{font-size:14px}.staffInline .staffDetailLine{grid-template-columns:80px minmax(0,1fr);gap:6px;padding:8px 0}
+.staffInline details{margin-top:8px}.staffInline summary{cursor:pointer}
 @media(max-width:760px){#mapStaffDialog{margin:auto 0 0;width:100%;max-width:100%;box-sizing:border-box;border-radius:18px 18px 0 0;max-height:75dvh}}

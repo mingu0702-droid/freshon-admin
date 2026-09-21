@@ -15,6 +15,7 @@ function fixture() {
   const ctx = vm.createContext({ window: { VEHICLE_AREA_DATA: { vehicles: [] } }, document: { body: node('body'), querySelector: node, querySelectorAll: () => [] }, console, Intl, Date, Number, URL, URLSearchParams, Map, Set, AbortController, setTimeout, clearTimeout, performance, innerWidth: 1440, innerHeight: 900, requestAnimationFrame: () => {}, Phase2bUi: helpers });
   vm.runInContext(runtime.slice(0, runtime.lastIndexOf("  initVehicles();")) + `
     window.test = { state, setPeriod: (rows) => { state.rangeStart = "2026-08-01"; state.rangeEnd = "2026-08-28"; periodRows = rows.map(row => ({...row, history:[{vehicle:row.vehicle}]})); periodMeta = {complete:true,startDate:state.rangeStart,endDate:state.rangeEnd,missingCoordinate:0}; }, nodes: $, judgeNewAreaPoint, toggleBoundaries, normalizeRouteStop, normalizeApiStore, setStores: (rows) => { allStores = rows; }, setSelected: (values) => { selectedVehicles = () => values; }, ready: () => { dateReady = true; }, loadOperationStatus, changeSelectedDate, setSnapshot: (rows) => { latestSnapshotRows = rows; }, stubUi: () => { activateSheet = () => {}; loadBaseMap = async () => {}; ensureDateVehicles = () => {}; refreshDriverMaster = () => {}; }, getStores: () => allStores, localDate, setFetch: (fn) => { fetchJson = fn; }, noDraw: () => { drawSelectedBoundaries = () => {}; } };
+    window.test.setMeta = patch => Object.assign(periodMeta,patch);
   })();`, ctx);
   return ctx.window.test;
 }
@@ -44,10 +45,23 @@ test("500m auto decision does not recommend stores 600m or 30km away", () => {
   const f = fixture();
   f.setPeriod([{ vehicle: "101", lat: 37.006, lng: 127 }]);
   const outside = f.judgeNewAreaPoint({ address: "경기 오산시 테스트로 1" }, { lat: 37, lng: 127 });
-  assert.equal(outside.reason, "배송동선 맞지 않음");
+  assert.equal(outside.reason, "판단 보류"); // No whole-source coverage proof in this fixture.
+  assert.match(outside.evidence,/완전성 미검증/);
   assert.equal(outside.vehicle, "-");
   f.setPeriod([{ vehicle: "109", lat: 37.003, lng: 127 }]);
   assert.equal(f.judgeNewAreaPoint({ address: "경기 오산시 테스트로 1" }, { lat: 37, lng: 127 }).decision, "O");
+});
+test('missing coordinates elsewhere do not erase a reliable nearby positive, but prevent negative certainty',()=>{
+ const f=fixture();f.setPeriod([{customerCode:'S900001',vehicle:'101',lat:37.001,lng:127}]);f.setMeta({missingCoordinate:4,coverageComplete:false});
+ const near=f.judgeNewAreaPoint({address:'경기 오산시 테스트로 1'},{lat:37,lng:127});assert.equal(near.decision,'O');assert.equal(near.evidenceCount,1);assert.match(near.dataLimits,/좌표 누락/);
+ const far=f.judgeNewAreaPoint({address:'경기 오산시 테스트로 1'},{lat:38,lng:127});assert.equal(far.decision,'검토');assert.match(far.evidence,/부재 확정 불가/);
+ f.setMeta({missingCoordinate:0,coverageComplete:true});assert.equal(f.judgeNewAreaPoint({address:'경기 오산시 테스트로 1'},{lat:38,lng:127}).decision,'X');
+});
+test('address ambiguity and existing region exceptions stay distinct from coverage holds',()=>{
+ const f=fixture();f.setPeriod([{vehicle:'101',lat:37.001,lng:127}]);
+ assert.equal(f.judgeNewAreaPoint({address:'합성'},null).reason,'주소 확인 필요');
+ assert.equal(f.judgeNewAreaPoint({address:'합성'},{candidates:[{}]}).reason,'주소 복수 후보');
+ assert.equal(f.judgeNewAreaPoint({address:'제주 테스트로 1'},{lat:37,lng:127}).reason,'제주도');
 });
 
 test("boundary toggle hides only polygons and representatives, never refits or clears stores/routes", () => {

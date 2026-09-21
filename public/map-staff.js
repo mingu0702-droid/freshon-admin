@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   let generation = 0, controller = null, authController = null, expiryTimer = null, requested = null, sessionHint = null, detailPending = false;
+  let inlineHost = null, inlineButton = null, surface = null;
   const metrics = [];
   const trace = document.createElement('output'); trace.id = 'staffRequestMetrics'; trace.hidden = true; document.body.append(trace);
   const dialog = document.createElement('dialog');
@@ -14,15 +15,20 @@
   function clear() {
     generation++; controller?.abort(); authController?.abort(); controller = null; clearTimeout(expiryTimer);
     requested = null; detailPending = false; dialog.replaceChildren(); if (dialog.open) dialog.close();
+    if (inlineHost) { inlineHost.replaceChildren(); inlineHost.hidden = true; }
+    inlineButton?.setAttribute('aria-expanded','false');
+    inlineHost = null; inlineButton = null; surface = dialog;
   }
-  function node(tag, text, parent = dialog) { const item = document.createElement(tag); item.textContent = text; parent.append(item); return item; }
+  function node(tag, text, parent = surface || dialog) { const item = document.createElement(tag); item.textContent = text; parent.append(item); return item; }
   function shell(title, modal = false) {
     if (dialog.open) dialog.close();
     dialog.replaceChildren();
+    surface = !modal && inlineHost ? inlineHost : dialog;
+    surface.replaceChildren();
     dialog.dataset.modal = String(modal);
     node('h2', title);
     const close = node('button', '닫기'); close.type = 'button'; close.addEventListener('click', clear);
-    if (modal) dialog.showModal(); else dialog.show();
+    if (modal) dialog.showModal(); else if (surface === dialog) dialog.show();
   }
   async function request(path, options = {}) {
     const isDetail = path.startsWith('private/'), isLogout = path === 'auth/logout', local = new AbortController();
@@ -89,14 +95,14 @@
     });
     account.focus();
   }
-  function line(label, value) { const dl = node('div', ''); dl.className = 'staffDetailLine'; node('b', label, dl); node('span', value || '원천 미등록', dl); }
+  function line(label, value, fallback = '원천 미등록', parent = surface || dialog) { const dl = node('div', '', parent); dl.className = 'staffDetailLine'; node('b', label, dl); node('span', value || fallback, dl); }
   async function showRequested(id) {
     const target = requested;
     if (!target || id !== generation) return;
     detailPending = true;
     const detailStarted = performance.now();
     shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
-    dialog.dataset.state = 'loading';
+    surface.dataset.state = 'loading';
     const loading = node('p', ''); loading.setAttribute('role', 'status'); loading.setAttribute('aria-live', 'polite');
     const spinner = node('span', '', loading); spinner.className = 'staffLoadingSpinner'; spinner.setAttribute('aria-hidden', 'true');
     node('span', '상세정보 불러오는 중...', loading);
@@ -114,18 +120,12 @@
       node('button', '로그아웃').onclick = logout;
       if (target.kind === 'history') {
         if (payload.meta?.complete === false) {
-          dialog.dataset.state = 'not-ready';
+          surface.dataset.state = 'not-ready';
           node('p', '기사 이력이 아직 준비되지 않았습니다. 기사 없음으로 판단하지 마세요.');
           return;
         }
         const rows = Array.isArray(payload.data) ? payload.data : [];
-        dialog.dataset.state = rows.length ? 'ready' : payload.meta?.coverageComplete === true ? 'empty' : 'not-ready';
-        if (!payload.meta?.coverageComplete) {
-          node('p', 'Delivery 기사정보 확인 중 · 전체 기간 수집 완전성 미확인');
-          line('원천', payload.meta?.source || '미확인');
-          line('기록 확인일', (payload.meta?.availableRecordDates || []).join(', ') || '없음');
-          line('완전성 미확인일', (payload.meta?.unconfirmedDates || []).join(', ') || '미확인');
-        }
+        surface.dataset.state = rows.length ? 'ready' : payload.meta?.coverageComplete === true ? 'empty' : 'not-ready';
         if (!rows.length) node('p', payload.meta?.coverageComplete === true ? '선택 기간의 기사 이력이 없습니다.' : 'Delivery 기사정보 미확인 · 원천 완전성 확인 중 (기사 없음 아님)');
         rows.forEach(row => {
           const entry = node('div', ''); entry.className = 'staffDetailLine';
@@ -134,30 +134,42 @@
           node('span', ' · ' + (row.kind === 'COMPLETED' ? '방문 완료' : '배차'), heading);
           node('span', [row.driverName || '기사 미등록', row.driverPhone || '연락처 미등록'].join(' · '), entry);
         });
+        if (!payload.meta?.coverageComplete) {
+          node('p', '전체 기간 수집 완전성 미확인 · 고객 미방문·배송 누락을 뜻하지 않습니다.');
+          const coverage = node('details',''); node('summary','검증 상태 상세',coverage);
+          line('원천',payload.meta?.source || '미확인','미확인',coverage);
+          line('기록 확인일',(payload.meta?.availableRecordDates || []).join(', '),'기록 없음',coverage);
+          line('미확인 사유','게시 모델과 연결된 날짜별 완료 증빙 미제공','미확인',coverage);
+          line('완전성 미확인일',(payload.meta?.unconfirmedDates || []).join(', '),'미확인',coverage);
+        }
       } else {
-        dialog.dataset.state = 'ready';
+        surface.dataset.state = 'ready';
         const data = payload.data || {};
         if (data.memoState === 'NEEDS_CONFIRMATION') node('p', '허용 항목을 확실히 구분할 수 없어 원천 확인이 필요합니다.');
-        line('출입방법', data.accessInfo); line('비밀번호', data.password); line('배송 특이사항', data.specialRemark); line('배송요일', data.deliveryPattern || '미등록');
+        const missing = data.memoState === 'NEEDS_CONFIRMATION' ? '원천 확인 필요' : '원천 미등록';
+        line('출입방법', data.accessInfo, missing); line('비밀번호', data.password, missing); line('배송 특이사항', data.specialRemark, missing); line('배송요일', data.deliveryPattern, missing);
       }
     } catch (error) {
       if (error.name === 'AbortError' || id !== generation) return;
       if (error.status === 401) { sessionHint = null; loginForm(id); return; }
       if (error.notReady) {
-        shell('기사 이력 준비 중'); dialog.dataset.state = 'not-ready';
+        shell('기사 이력 준비 중'); surface.dataset.state = 'not-ready';
         node('p', '기사 이력이 아직 준비되지 않았습니다. 기사 없음으로 판단하지 마세요. 공개 고객정보와 지도는 계속 사용할 수 있습니다.');
         node('button', '다시 확인').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
         return;
       }
       shell(target.kind === 'history' ? '기사 이력 조회 실패' : '보호 상세 조회 실패'); node('p', error.sourceChanged ? '조회 중 원천 데이터가 변경되었습니다. 다시 시도해 주세요.' : error.status === 504 && performance.now() - detailStarted >= 5000 ? '상세정보 조회가 지연되고 있습니다. 다시 시도해 주세요.' : error.status === 422 ? '원천 데이터 확인이 필요합니다.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
-      dialog.dataset.state = 'error';
+      surface.dataset.state = 'error';
       node('p', '공개 고객정보와 지도는 계속 사용할 수 있습니다.');
       node('button', '다시 시도').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
     } finally { clearTimeout(delayNotice); if (id === generation) detailPending = false; }
   }
-  async function open(target) {
+  async function open(target, host = null, button = null) {
+    if (host && inlineHost === host && requested) { clear(); return; }
     if (detailPending && JSON.stringify(requested) === JSON.stringify(target)) return;
-    clear(); requested = { ...target }; const id = generation;
+    clear(); requested = { ...target }; inlineHost = host; inlineButton = button;
+    if (host) { host.hidden=false; button?.setAttribute('aria-expanded','true'); }
+    const id = generation;
     if (sessionHint?.authenticated && Date.now() < Math.min(sessionHint.expiresAt, sessionHint.idleExpiresAt)) { void showRequested(id); return; }
     loginForm(id);
     try {
