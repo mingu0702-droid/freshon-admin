@@ -9,7 +9,7 @@
   dialog.setAttribute('aria-label', '직원용 보호 상세');
   document.body.append(dialog);
   const loadingStyle = document.createElement('style');
-  loadingStyle.textContent = '#mapStaffDialog .staffLoadingSpinner{display:inline-block;width:1em;height:1em;margin-right:.5em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:middle;animation:staffLoadingSpin .8s linear infinite}@keyframes staffLoadingSpin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){#mapStaffDialog .staffLoadingSpinner{animation:none}}';
+  loadingStyle.textContent = '.staffLoadingSpinner{display:inline-block;width:1em;height:1em;margin-right:.5em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:middle;animation:staffLoadingSpin .8s linear infinite}@keyframes staffLoadingSpin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.staffLoadingSpinner{animation:none}}';
   document.head.append(loadingStyle);
   const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('map-staff-session') : null;
   function clear() {

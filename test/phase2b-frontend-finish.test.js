@@ -106,7 +106,8 @@ test('date controls stay above map; address retains original single DOM/events; 
  const html=file('map-phase2b-preview.html');assert.ok(html.indexOf('id="mapDateBar"')<html.indexOf('id="map"'));
  assert.equal(html.split('id="selectedDate"').length-1,1);assert.equal(html.split('id="todayBtn"').length-1,1);
  assert.ok(runtime.includes('$("#results").before(addressPanel)'));assert.ok(!runtime.includes('filters.append($("#legacyVehicleState"), $("#periodDriver"), $("#periodControls"))'));
- for(const asset of ['map-period.css','map-period-ui.js','map-phase2b-runtime.js'])assert.ok(html.includes(asset+'?v=20260922-perf1'));
+ for(const asset of ['map-period-ui.js','map-phase2b-runtime.js','map-staff.js','map-staff.css'])assert.ok(html.includes(asset+'?v=20260922-card2'));
+ assert.ok(html.includes('map-period.css?v=20260922-perf1'));
 });
 test('recent range never exceeds available model start and never guesses absent latest',()=>{
  assert.deepEqual(MapPeriodUi.recentRange({...model,startDate:'2026-09-01'}),{start:'2026-09-01',end:'2026-09-19'});
