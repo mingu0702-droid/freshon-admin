@@ -9,17 +9,18 @@
   const COLORS = ["#2563eb", "#7c3aed", "#0f766e", "#b45309", "#0891b2", "#db2777", "#dc2626", "#059669", "#9333ea", "#c2410c"];
   const state = { mode: "BASE_60D", rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", areaOn: false, centerFilter: "", selectedDate: "", latestDate: "", map: null, overlays: [], representativeOverlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
   let operationStops = [], runFilter = "ALL";
-  const modeViews = { BASE_60D: { vehicles: ["101"], areaOn: false, centerFilter: "" }, DATE_ROUTE: { vehicles: ["101"], areaOn: false, centerFilter: "" } };
-  let periodBasis = "vehicle", periodVehicleScope = "selected", periodListLimit = 100;
+  const modeViews = { BASE_60D: { vehicles: [], scope: "all", areaOn: false, centerFilter: "" }, DATE_ROUTE: { vehicles: [], scope: "all", areaOn: false, centerFilter: "" } };
+  let periodBasis = "vehicle", periodVehicleScope = "all", periodListLimit = 100;
   let modeViewInitialized = false, markerFrame = null;
   function switchMode(next) {
     if (modeViewInitialized && state.mode !== next) {
-      modeViews[state.mode] = { vehicles: selectedVehicles().slice(), areaOn: state.areaOn, centerFilter: state.centerFilter,
+      modeViews[state.mode] = { vehicles: selectedVehicles().slice(), scope: periodVehicleScope, areaOn: state.areaOn, centerFilter: state.centerFilter,
         center: state.map?.getCenter(), level: state.map?.getLevel() };
     }
     if (!modeViewInitialized || state.mode !== next) {
       const view = modeViews[next]; state.mode = next;
       setSelectedVehicles(view.vehicles); state.areaOn = view.areaOn; state.centerFilter = view.centerFilter;
+      periodVehicleScope = view.scope;
       if (view.center && state.map) { state.map.setLevel(view.level); state.map.setCenter(view.center); state.fitRequested = false; }
       else requestMapFit();
       modeViewInitialized = true;
@@ -84,14 +85,24 @@
   }
 
   let periodRows = [], periodMeta = null, periodRequestId = 0, periodTimer = null;
+  let modelStatus = null, initialRequestId = 0, initialTimer = null;
+  function syncDateHeading() {
+    const period = state.mode === "BASE_60D";
+    const start = $("#rangeStart").value, end = $("#rangeEnd").value;
+    if ($("#dateHeading")) $("#dateHeading").textContent = period ? "조회기간" : "기준일";
+    $("#latestDate").textContent = period ? (start && end ? `${start} ~ ${end}` : "데이터 확인 중") : (state.selectedDate || "데이터 확인 중");
+    $("#rangeText").textContent = period && modelStatus?.periodLatest ? `기간 데이터 최신 ${modelStatus.periodLatest}` : "";
+  }
   function syncModeUi() {
     document.body.classList.toggle("periodMode", state.mode === "BASE_60D");
     $("#periodControls").hidden = state.mode !== "BASE_60D";
+    if ($("#dailyControls")) $("#dailyControls").hidden = state.mode !== "DATE_ROUTE";
     $("#modePeriod").setAttribute("aria-pressed", String(state.mode === "BASE_60D"));
     $("#modeDaily").setAttribute("aria-pressed", String(state.mode === "DATE_ROUTE"));
     $("#periodFilterPanel")?.toggleAttribute("hidden", state.mode !== "BASE_60D");
     $("#periodStoreListSection").hidden = state.mode !== "BASE_60D";
     document.body.classList.toggle("historicalMode", state.selectedDate !== localDate());
+    syncDateHeading();
   }
   function syncPeriodBasis() {
     const driver = periodBasis === "driver";
@@ -115,18 +126,55 @@
       snapshotMeta = payload.meta || {};
       state.latestDate = snapshotMeta.latestDate || latestDateFromRows(latestSnapshotRows);
       $("#selectedDate").max = localDate();
-      if (dateChosenByUser) return;
-      state.routeDate = state.routeDate || state.latestDate; state.selectedDate = state.routeDate;
-      // A stale coordinate snapshot must not move the recent-60-day window backwards.
-      state.rangeEnd = state.rangeEnd || localDate();
-      state.rangeStart = state.rangeStart || daysBefore(state.rangeEnd, 59);
-      await changePeriod(state.rangeStart, state.rangeEnd);
-    } catch (error) { if (!dateChosenByUser && !isSilentRequestError(error)) $("#freshnessState").textContent = "기간 기준일 확인 실패"; }
+      // Coordinates and Snapshot freshness never select the Period or Daily date.
+    } catch (_) { /* Existing coordinates remain available; Period owns its loading state. */ }
+  }
+  async function initializePeriod() {
+    const id = ++initialRequestId; clearTimeout(initialTimer);
+    ++periodRequestId; ++dateRequestId; clearTimeout(periodTimer); dateReady = false;
+    switchMode("BASE_60D"); syncModeUi();
+    setPeriodViewState("loading"); renderPeriodStoreList([]);
+    $("#periodIdentity").textContent = "데이터 확인 중";
+    try {
+      const response = await fetchJson("/api/map-phase2b/preview/period-status", { channel: "period-status", ttl: 0, timeout: 15000 });
+      if (id !== initialRequestId || state.mode !== "BASE_60D") return;
+      modelStatus = response.data || response;
+      if (!modelStatus.ready) {
+        if (modelStatus.phase === "ERROR") throw new Error("기간 모델 확인 실패");
+        setPeriodViewState("not-ready"); renderPeriodStoreList([]);
+        $("#periodIdentity").textContent = $("#freshnessState").textContent = "기간 데이터를 준비 중입니다";
+        initialTimer = setTimeout(() => { if (id === initialRequestId) initializePeriod(); }, 15000);
+        return;
+      }
+      const range = MapPeriodUi.recentRange(modelStatus);
+      if (!range) throw new Error("기간 모델 날짜 확인 실패");
+      await refreshStoreSnapshot();
+      if (id !== initialRequestId || state.mode !== "BASE_60D") return;
+      await changePeriod(range.start, range.end);
+    } catch (error) {
+      if (id !== initialRequestId || isSilentRequestError(error)) return;
+      setPeriodViewState("error"); renderPeriodStoreList([]);
+      $("#periodIdentity").textContent = $("#freshnessState").textContent = "기간 조회에 실패했습니다 · 최근 60일 버튼으로 재시도";
+    }
+  }
+  async function selectLatestRoute() {
+    ++initialRequestId; clearTimeout(initialTimer); clearTimeout(periodTimer); ++periodRequestId;
+    switchMode("DATE_ROUTE"); syncModeUi();
+    const id = ++dateRequestId;
+    $("#freshnessState").textContent = "운행 가능일 확인 중";
+    try {
+      const response = await fetchJson("/api/map-phase2b/preview/assignments?date=latest", { channel: "latest-route-date", ttl: 0, timeout: 120000 });
+      if (id !== dateRequestId || state.mode !== "DATE_ROUTE") return;
+      const date = response.meta?.date;
+      if (response.meta?.complete !== true || !/^\d{4}-\d{2}-\d{2}$/.test(date || "")) throw new Error("운행일 확인 실패");
+      await changeSelectedDate(date);
+    } catch (error) { if (id === dateRequestId && !isSilentRequestError(error)) $("#freshnessState").textContent = "운행 가능일 조회 실패 · 이전 지도 유지"; }
   }
   async function changePeriod(start, end, retry = false) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end || end > localDate() || (Date.parse(end)-Date.parse(start))/86400000 > 89) {
       $("#freshnessState").textContent = "시작일과 종료일을 확인하세요. 최대 90일입니다."; return;
     }
+    ++initialRequestId; clearTimeout(initialTimer);
     ++dateRequestId; ++state.todayRequestId; ++state.routeRequestId;
     switchMode("BASE_60D"); state.rangeStart = start; state.rangeEnd = end;
     $("#rangeStart").value = start; $("#rangeEnd").value = end;
@@ -150,8 +198,13 @@
         if (id !== periodRequestId || state.mode !== "BASE_60D") return;
         if (payload.meta?.phase === "ERROR") throw new Error("기간 원천 확인 실패");
         if (payload.meta?.complete !== true) {
+          if (payload.pendingReason === "READ_MODEL_RANGE_NOT_READY") {
+            setPeriodViewState("out-of-range"); renderPeriodStoreList([]);
+            $("#periodIdentity").textContent = $("#freshnessState").textContent = "조회 가능한 기간 범위 밖입니다";
+            return;
+          }
           setPeriodViewState("not-ready"); renderPeriodStoreList([]);
-          $("#freshnessState").textContent = "기간 이력 준비 중 · 완료 여부 확인 중 · 이전 지도 유지";
+          $("#freshnessState").textContent = "기간 데이터를 준비 중입니다";
           $("#periodIdentity").textContent = $("#freshnessState").textContent;
           periodTimer = setTimeout(read, 5000); return;
         }
@@ -182,6 +235,7 @@
 
   async function changeSelectedDate(date) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > localDate()) return;
+    ++initialRequestId; clearTimeout(initialTimer);
     clearTimeout(periodTimer); ++periodRequestId;
     switchMode("DATE_ROUTE"); state.routeDate = date; syncModeUi();
     const sameDate = date === state.selectedDate;
@@ -321,11 +375,10 @@
       </label>`).join("");
     vehicleChecks().forEach((input) => { input.onchange = () => { state.centerFilter = ""; periodVehicleScope = "selected"; refreshVehicleUi(true); }; });
     [$("#vehicle"), $("#mobileVehicle"), $("#operationVehicle")].forEach((select) => {
-      select.innerHTML = vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicleLabel(vehicle))}</option>`).join("");
-      if (vehicles.includes("101")) select.value = "101";
+      select.innerHTML = '<option value="">전체 호차</option>' + vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicleLabel(vehicle))}</option>`).join("");
+      select.value = "";
     });
     $("#mobileBaseVehicle").innerHTML = `<option value="">전체 호차</option>${vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicleLabel(vehicle))}</option>`).join("")}`;
-    $("#operationVehicle").insertAdjacentHTML("afterbegin", '<option value="">호차 선택</option>');
     $("#operationVehicle").value = "";
     refreshDriverMaster();
   }
@@ -387,6 +440,7 @@
   function clearBoundaries() {
     state.polygons.forEach((item) => item.setMap?.(null));
     state.polygons = [];
+    $("#areaToggle").setAttribute("data-geometry-count", "0");
   }
 
   function clearSelection() {
@@ -459,6 +513,7 @@
     if (state.mode === "BASE_60D" && state.selected?.outsideReason && Number.isFinite(state.selected.lat) && Number.isFinite(state.selected.lng)
       && !valid.some(row => row.customerCode === state.selected.customerCode)) valid.push(state.selected);
     if (!valid.length) {
+      if (state.areaOn) drawSelectedBoundaries(selectedVehicles());
       $("#mapStatusSub").textContent = "조회 결과 없음";
       return;
     }
@@ -493,6 +548,29 @@
 
   function drawSelectedBoundaries(selected) {
     if (!state.map) return;
+    selected = selected.length ? selected : selectedVehicles();
+    if (state.mode === "BASE_60D" && periodBasis === "vehicle" && periodVehicleScope === "selected" && !selected.length) return;
+    if (state.mode === "BASE_60D" && periodBasis === "driver" && state.driverKey) {
+      selected = [...new Set(filteredPeriodStores().map(row => row.vehicle))];
+      if (!selected.length) return;
+    }
+    const seen = new Set();
+    SOURCE.vehicles.filter(vehicle => (!selected.length || selected.includes(String(vehicle.vehicle))) && (!state.centerFilter || vehicle.group === state.centerFilter)).forEach(vehicle => {
+      const codes = vehicle.overview_admin_codes || vehicle.detail_admin_codes || [];
+      codes.forEach(code => {
+        const feature = ADMIN.get(String(code));
+        if (!feature?.geometry || seen.has(String(code))) return;
+        seen.add(String(code));
+        const geometries = feature.geometry.type === "MultiPolygon" ? feature.geometry.coordinates.map(coordinates => ({ type: "Polygon", coordinates })) : [feature.geometry];
+        geometries.forEach(geometry => {
+          const path = geometryPaths(geometry); if (!path.length) return;
+          const color = vehicleColor(vehicle.vehicle);
+          const polygon = new kakao.maps.Polygon({ path, strokeWeight: 2, strokeColor: color, strokeOpacity: .76, fillColor: color, fillOpacity: .035 });
+          polygon.setMap(state.map); state.polygons.push(polygon);
+        });
+      });
+    });
+    // Keep the verified delivery hull only for vehicles without administrative geometry.
     const groups = new Map();
     const boundaryStores = state.mode === "BASE_60D" ? filteredPeriodStores() : state.routeRows;
     boundaryStores.forEach((row) => {
@@ -501,6 +579,7 @@
       groups.get(row.vehicle).push(row);
     });
     groups.forEach((stores, vehicle) => {
+      if ((SOURCE.vehicles.find(item => String(item.vehicle) === String(vehicle))?.overview_admin_codes || []).some(code => ADMIN.has(String(code)))) return;
       const hull = Phase2bUi.deliveryBoundary(stores);
       if (hull.length < 3) return;
       const path = hull.map((row) => new kakao.maps.LatLng(row.lat, row.lng));
@@ -509,6 +588,8 @@
       polygon.setMap(state.map);
       state.polygons.push(polygon);
     });
+    $("#areaToggle").setAttribute("data-geometry-count", String(state.polygons.length));
+    $("#areaToggle").title = `표시 권역 geometry ${state.polygons.length}개`;
   }
 
   function geometryPaths(geometry) {
@@ -1072,10 +1153,9 @@
     $("#mapStatusTitle").textContent = period ? "매장·권역 지도" : "일자별 운행";
     $("#mapStatusSub").textContent = period ? `${state.rangeStart} ~ ${state.rangeEnd} · ${stores.length}개 매장 · 대표: 기간 내 최신 배차`
       : `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
-    $("#freshnessState").textContent = period ? `기간 조회 완료 · 원천 ${periodMeta?.count || 0}건 · 좌표 누락 ${periodMeta?.missingCoordinate || 0}개` : `${state.selectedDate} 편성 조회 완료`;
-    $("#rangeText").textContent = period ? state.rangeStart + " ~ " + state.rangeEnd : state.selectedDate;
+    $("#freshnessState").textContent = period ? `기간 데이터 최신 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}${periodMeta?.coverageComplete === false ? " · 전체 원천 완전성 미확인" : ""}` : `${state.selectedDate} 편성 조회 완료`;
+    syncDateHeading();
     $("#vehicleModeLabel").textContent = period ? "기간별 매장" : "날짜별 편성";
-    $("#latestDate").textContent = state.latestDate;
     if (selected.length === 1) $("#operationVehicle").value = selected[0];
     renderPeriodStoreList(stores);
   }
@@ -1110,9 +1190,7 @@
   }
 
   function updateDateRange(latest) {
-    const start = daysBefore(latest, 59);
-    $("#latestDate").textContent = latest;
-    $("#rangeText").textContent = "";
+    syncDateHeading();
     $("#date").max = localDate();
     $("#mobileDate").max = localDate();
   }
@@ -1240,9 +1318,6 @@
 
   function selectCenter(group) {
     state.centerFilter = group === "all" ? "" : group;
-    const values = group === "all" ? [] : SOURCE.vehicles.filter((vehicle) => vehicle.group === group).map((vehicle) => String(vehicle.vehicle));
-    setSelectedVehicles(values);
-    periodVehicleScope = group === "all" ? "all" : "selected";
     $$(".vehicleItem").forEach((item) => { item.style.display = group === "all" || item.dataset.group === group ? "flex" : "none"; });
     $("#mobileBaseVehicle").value = "";
     refreshVehicleUi(true);
@@ -1540,6 +1615,11 @@
   function renderPeriodStoreList(rows = state.currentRows) {
     const panel = $("#periodStoreList"); if (!panel) return;
     if (state.mode === "BASE_60D" && !dateReady) {
+      if (periodViewState === "out-of-range") {
+        $("#periodStoreListCount").textContent = "범위 밖";
+        panel.innerHTML = '<p class="notice show">조회 가능한 기간 범위 밖입니다. 조회 기간을 변경해 주세요.</p>';
+        $("#periodListMore").hidden = true; return;
+      }
       $("#periodStoreListCount").textContent = periodViewState === "loading" ? "조회 중" : periodViewState === "error" ? "미확인" : "준비 중";
       panel.innerHTML = `<p class="hint" role="status">${periodViewState === "loading" ? "기간 이력 조회 중입니다." : periodViewState === "error" ? "기간 조회 실패 · 매장 수 미확인" : "기간 이력이 아직 준비되지 않았습니다. 빈 결과가 아닙니다."} 이전 지도는 유지되며 선택 기간의 결과가 아닙니다.</p>`;
       $("#periodListMore").hidden = true; return;
@@ -1548,14 +1628,16 @@
     $("#periodStoreListCount").textContent = stores.length + "개 매장";
     panel.innerHTML = stores.slice(0, periodListLimit).map(row => `<button class="resultItem periodStore${state.selected?.customerCode === row.customerCode ? " selected" : ""}" aria-pressed="${state.selected?.customerCode === row.customerCode}" data-period-store="${esc(row.customerCode)}"><span class="periodCode">${esc(row.customerCode)}</span><b>${esc(row.customerName || row.customerCode)}</b><span>${esc(row.lastDeliveryDate || "")} · ${esc(vehicleLabel(row.vehicle))}</span><span>${esc(row.driverName || "기사 미등록")} · ${row.visitCount || row.history?.length || 0}회</span></button>`).join("") || '<p class="hint">조회 조건에 맞는 매장이 없습니다.</p>';
     $("#periodListMore").hidden = stores.length <= periodListLimit;
+    if (periodMeta?.coverageComplete === false) panel.innerHTML = '<p class="periodCoverage" role="note">전체 원천 완전성 미확인</p>' + panel.innerHTML;
     $$("[data-period-store]").forEach(button => button.onclick = () => { const row = stores.find(item => item.customerCode === button.dataset.periodStore); if (row) selectStore(row, null, true); });
   }
 
   function bindEvents() {
-    $("#modePeriod").onclick = () => changePeriod(state.rangeStart || daysBefore(localDate(),59), state.rangeEnd || localDate());
-    $("#modeDaily").onclick = () => { dateChosenByUser = true; changeSelectedDate(state.routeDate || state.latestDate); };
+    $("#modePeriod").onclick = () => state.rangeStart && state.rangeEnd ? changePeriod(state.rangeStart, state.rangeEnd) : initializePeriod();
+    $("#modeDaily").onclick = () => { dateChosenByUser = true; state.routeDate ? changeSelectedDate(state.routeDate) : selectLatestRoute(); };
     $("#applyPeriod").onclick = () => changePeriod($("#rangeStart").value, $("#rangeEnd").value);
-    $("#recent60").onclick = () => changePeriod(daysBefore(localDate(),59), localDate());
+    $("#recent60").onclick = () => initializePeriod();
+    ["#rangeStart", "#rangeEnd"].forEach(id => { $(id).oninput = syncDateHeading; });
     $("#periodDriver").onchange = event => { state.driverKey = event.target.value; clearSelection(); periodListLimit = 100; requestMapFit(); loadBaseMap(); };
     $$('input[name="periodBasis"]').forEach(input => input.onchange = () => { periodBasis = input.value; syncPeriodBasis(); clearSelection(); periodListLimit = 100; requestMapFit(); loadBaseMap(); });
     $("#periodListMore").onclick = () => { periodListLimit += 100; renderPeriodStoreList(); };
@@ -1568,7 +1650,7 @@
       if (event.key !== "Enter") return;
       const first = $$(".vehicleItem").find((item) => item.style.display !== "none");
       if (!first) return;
-      setSelectedVehicles([first.querySelector("input").value]); state.centerFilter = ""; $("#vehicleSelect").classList.remove("open"); refreshVehicleUi(true);
+      setSelectedVehicles([first.querySelector("input").value]); periodVehicleScope = "selected"; state.centerFilter = ""; $("#vehicleSelect").classList.remove("open"); refreshVehicleUi(true);
     };
     $("#selectAllVehicles").onclick = () => { state.centerFilter = ""; $("#periodCenter").value = "all"; setSelectedVehicles([]); periodVehicleScope = "all"; refreshVehicleUi(true); };
     $("#clearVehicles").onclick = () => { setSelectedVehicles([]); periodVehicleScope = "selected"; $("#mobileBaseVehicle").value = ""; $("#vehicleSelect").classList.remove("open"); clearSelection(); refreshVehicleUi(false); state.fitRequested = false; loadBaseMap(); };
@@ -1584,7 +1666,7 @@
     const runAddress = () => { const text = $("#addressQuery").value.trim(); if (text) searchExternalAddress(text); };
     $("#addressBtn").onclick = runAddress;
     $("#addressQuery").onkeydown = (event) => { if (event.key === "Enter" && !addressComposing && !event.isComposing) runAddress(); };
-    $("#todayBtn").onclick = () => { dateChosenByUser = false; if (inferLatestDate()) changeSelectedDate(inferLatestDate()); else refreshStoreSnapshot(); };
+    $("#todayBtn").onclick = selectLatestRoute;
     ["#date", "#mobileDate", "#selectedDate"].forEach((id) => { $(id).onchange = (event) => { dateChosenByUser = true; changeSelectedDate(event.target.value); }; });
     $("#operationVehicle").onchange = (event) => { const vehicle = event.target.value; setSelectedVehicles([vehicle]); $("#vehicle").value = vehicle; $("#mobileVehicle").value = vehicle; refreshVehicleUi(true); };
     $("#syncOperation").onclick = refreshSelectedDate;
@@ -1595,7 +1677,7 @@
     $("#mobileAreaToggle").onclick = toggleBoundaries;
     $("#mobileMapReset").onclick = resetMapOverview;
     $("#mobileCenter").onchange = (event) => selectCenter(event.target.value);
-    $("#mobileBaseVehicle").onchange = (event) => { state.centerFilter = ""; setSelectedVehicles(event.target.value ? [event.target.value] : []); $("#mobileCenter").value = "all"; refreshVehicleUi(true); };
+    $("#mobileBaseVehicle").onchange = (event) => { state.centerFilter = ""; periodVehicleScope = event.target.value ? "selected" : "all"; setSelectedVehicles(event.target.value ? [event.target.value] : []); $("#mobileCenter").value = "all"; refreshVehicleUi(true); };
     $("#judgeNewAreaBatch").onclick = () => runNewArea("#newAreaBatchInput", "#newAreaBatchStatus", "#newAreaBatchResults");
     $("#clearNewAreaBatch").onclick = () => clearNewAreaBatch();
     $("#exportNewAreaCsv").onclick = () => exportNewArea("csv");
@@ -1603,7 +1685,7 @@
     $("#todayStatusTool")?.addEventListener("toggle", (event) => { if (event.target.open) loadTodayStatus(); });
     $("#mobileBack").onclick = hideMobileMap;
     $("#closeMobileRoute").onclick = () => document.body.classList.remove("routeSheetOpen");
-    $("#mobileToday").onclick = () => { dateChosenByUser = false; if (inferLatestDate()) changeSelectedDate(inferLatestDate()); else refreshStoreSnapshot(); };
+    $("#mobileToday").onclick = selectLatestRoute;
     $("#mobileRoutePlan").onclick = () => loadRoute("mobile");
     $("#openOperations").onclick = showDiagnostics;
     $$('[data-run-filter]').forEach((button) => button.onclick = () => { runFilter = button.dataset.runFilter; renderRunList(); });
@@ -1619,8 +1701,9 @@
   $("#runListTool").open = false;
   $("#mapModeBar").insertBefore($("#areaToggle"), $("#staffLogout"));
   ["Total", "Completed", "Remaining", "Eta"].forEach((name) => { $("#op" + name).parentNode.id = name.toLowerCase() + "Metric"; });
-  $("#newAreaBatchTool > summary").textContent = "⑤ 신규권역 일괄조회";
-  $(".addressBlock .label span").textContent = "④ 주소 검색";
+  $("#newAreaBatchTool > summary").textContent = "④ 신규권역 일괄조회";
+  $('[data-sheet-tab="new"]').textContent = "신규권역";
+  $(".addressBlock .label").hidden = true;
   $("#addressBtn").textContent = "위치 찾기";
   $(".addressBlock .hint").textContent = "임시핀 · 30km 주변 호차 확인 (공간거리)";
   $("#selectAllVehicles").textContent = "전체 호차"; $("#clearVehicles").textContent = "선택 해제";
@@ -1630,14 +1713,14 @@
   const filters = document.createElement("section"); filters.id = "periodFilterPanel"; filters.className = "block";
   filters.innerHTML = '<div class="label">② 조회 기준</div><div class="periodBasis" role="group" aria-label="조회 기준"><label><input type="radio" name="periodBasis" value="vehicle" checked>호차 기준</label><label><input type="radio" name="periodBasis" value="driver">기사 기준</label></div>';
   $(".customerBlock").after(filters);
-  filters.append($("#legacyVehicleState"), $("#periodDriver"), $("#periodControls"));
+  filters.append($("#legacyVehicleState"), $("#periodDriver"));
   filters.after($("#periodStoreListSection"));
   $("#periodStoreListSection").after($("#runListTool"));
   const periodCenter = $("#mobileCenter").cloneNode(true); periodCenter.id = "periodCenter";
   periodCenter.setAttribute("aria-label", "기간별 센터"); periodCenter.onchange = event => selectCenter(event.target.value);
-  $("#periodControls").append(periodCenter);
+  filters.append(periodCenter);
   const newAreaTools = document.createElement("div"); newAreaTools.id = "newAreaTools";
-  addressPanel.before(newAreaTools); newAreaTools.append(addressPanel, $("#newAreaBatchTool"));
+  $("#results").before(addressPanel); newAreaTools.append($("#newAreaBatchTool"));
   $("#runListTool").after(newAreaTools);
   $("#vehicleSelect").after($("#selectAllVehicles"), $("#clearVehicles"));
   syncPeriodBasis();
@@ -1650,5 +1733,5 @@
   setInterval(() => { $("#currentTime").textContent = formatTime(new Date()); }, 10000);
   refreshVehicleUi(false);
   initMap();
-  refreshStoreSnapshot();
+  initializePeriod();
 })();

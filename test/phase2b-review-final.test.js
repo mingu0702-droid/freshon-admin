@@ -94,5 +94,7 @@ test("superseded late network error is silent, current errors remain errors",()=
  const genuine=new Error("HTTP_500");assert.equal(Phase2bUi.requestError(genuine),genuine);
 });
 test("initial snapshot catch also suppresses cancellations",()=>{
- assert.match(runtime,/!dateChosenByUser && !isSilentRequestError\(error\)/);
+ const snapshot = runtime.slice(runtime.indexOf('async function refreshStoreSnapshot'),runtime.indexOf('async function initializePeriod'));
+ assert.match(snapshot,/catch \(_\)/);
+ assert.doesNotMatch(snapshot,/textContent\s*=/);
 });

@@ -37,7 +37,7 @@ test('disabled feature preserves the previous entry document', async t => {
 test('main HTML keeps one copy of each existing shared UI bundle', async () => {
   const html = await fs.readFile(path.join(publicDir, 'map-phase2b-preview.html'), 'utf8');
   for (const asset of ['map-staff.js', 'map-period-ui.js', 'map-phase2b-runtime.js', 'map-period.css']) {
-    assert.equal(html.split('"' + asset + '"').length - 1, 1);
+    assert.equal([...html.matchAll(/(?:src|href)="([^"]+)"/g)].filter(match=>match[1].split('?')[0]===asset).length, 1);
   }
   for (const id of ['modePeriod', 'modeDaily', 'rangeStart', 'rangeEnd', 'query', 'legacyVehicleState', 'periodDriver', 'mobileWorkspace']) {
     assert.ok(html.includes('id="' + id + '"'), id);

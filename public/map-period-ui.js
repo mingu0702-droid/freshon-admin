@@ -40,5 +40,11 @@
     }
     return [...selected, ...[...buckets.values()].flatMap(group => group.length === 1 ? group : [{ ...group[0], clusterCount: group.length }])];
   }
-  root.MapPeriodUi = Object.freeze({ select, cluster });
+  function recentRange(status) {
+    const end = status?.periodLatest || status?.endDate;
+    if (!status?.ready || !/^\d{4}-\d{2}-\d{2}$/.test(end || '')) return null;
+    const start = new Date(Date.parse(end + 'T00:00:00Z') - 59 * 86400000).toISOString().slice(0,10);
+    return { start: status.startDate && status.startDate > start ? status.startDate : start, end };
+  }
+  root.MapPeriodUi = Object.freeze({ select, cluster, recentRange });
 })(typeof window === 'undefined' ? globalThis : window);

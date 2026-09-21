@@ -1,4 +1,4 @@
-/* Period-first layout: filters in the sidebar, one thin map toolbar. */
+/* Period-first layout: one shared date bar directly below the mode toolbar. */
 .vehicleLabel,.vehicleNo,.vehicleChip,.pinNumber{white-space:nowrap;overflow-wrap:normal;word-break:keep-all}
 :root{--left:320px}
 #mapModeBar{position:fixed;top:0;left:var(--left);right:0;height:58px;z-index:65;display:flex;align-items:center;gap:7px;padding:8px 10px;background:#fff;border-bottom:1px solid #dce4ef;box-sizing:border-box}
@@ -87,4 +87,40 @@ button:disabled{cursor:not-allowed;opacity:.5}
  .sheetTabs button{min-height:30px}
  body.mobileMap .detailWrap.open{position:fixed!important;left:7px!important;right:7px!important;bottom:54px!important;top:auto!important;width:auto!important;max-height:36vh!important;overflow:auto!important;border-radius:12px;background:white;z-index:62}
  .detailWrap:after{display:none!important}.staffDetailLine{grid-template-columns:90px 1fr}
+}
+
+/* UI-only production finish; controls retain their original DOM and events. */
+#mapDateBar{position:fixed;z-index:64;top:58px;left:var(--left);right:0;height:76px;background:#fff;border-bottom:1px solid #dce4ef;padding:6px 10px;box-sizing:border-box}
+#mapDateBar #periodControls{display:grid;grid-template-columns:minmax(130px,190px) minmax(130px,190px) auto auto;align-items:end;gap:8px;padding:0;max-width:660px}
+#mapDateBar [hidden],.customerBlock .addressBlock .label[hidden]{display:none!important}
+#dailyControls{display:flex;align-items:center;gap:10px;height:100%;font-size:12px}
+#dailyControls label{display:flex;align-items:center;gap:7px}#todayBtn{padding:8px;border:1px solid #ccd7e5;border-radius:7px;background:white}
+#periodCenter{width:100%;padding:8px;margin-top:8px;border:1px solid #ccd7e5;border-radius:7px;background:white}
+.customerBlock .addressBlock{padding:8px 0 0!important;border:0;background:transparent}.customerBlock>.hint{display:none}
+.customerBlock .addressBlock .hint{font-size:10px;margin-top:5px}
+#addressBtn{white-space:nowrap;min-width:70px;padding-left:8px;padding-right:8px}
+.addressBlock .searchLine{grid-template-columns:minmax(0,1fr) 70px}
+.periodCoverage{font-size:11px;color:#826119;background:#fff8e6;padding:6px;border-radius:6px;margin:0 0 6px}
+#map{top:134px}.periodMode .mapStatus{top:142px!important}
+body:not(.periodMode) #operationBar{top:134px!important}body:not(.periodMode) #map{top:192px}body:not(.periodMode) .mapStatus{top:200px!important}
+.fresh #latestDate{overflow-wrap:anywhere}.fresh #rangeText{font-size:10px}
+@media(max-width:760px){
+ #mapModeBar{height:76px}body:not(.periodMode) #mapModeBar{height:44px}
+ #mapDateBar{left:0;top:76px;height:94px;padding:5px 8px}
+ #mapDateBar #periodControls{grid-template-columns:1fr 1fr;gap:4px;max-width:none}
+ #periodControls label{flex-direction:row;align-items:center;white-space:nowrap;gap:4px}
+ #mapDateBar #periodControls input{width:100%;padding:6px 3px;font-size:12px;height:32px}
+ #mapDateBar #periodControls button{padding:6px;min-height:30px}
+ body:not(.periodMode) #mapDateBar{top:44px;height:50px}
+ body.mobileMap .leftPanel{top:170px!important;height:94px!important}
+ body.mobileMap .customerBlock{padding:5px 8px!important}
+ body.mobileMap .customerBlock .addressBlock{display:block!important;padding-top:5px!important}
+ body.mobileMap .customerBlock .addressBlock>.hint{display:none}
+ body.mobileMap .customerBlock .searchLine{height:36px}
+ body.mobileMap .customerBlock #results:not(:empty){top:88px}
+ body.mobileMap .customerBlock #addressJudgeResults:not(:empty){position:absolute;top:88px;left:8px;right:8px;max-height:30vh;overflow:auto;background:#fff}
+ body.mobileMap #map,.periodMode.mobileMap #map{top:264px;bottom:47px}
+ body:not(.periodMode) #operationBar{top:94px!important;height:78px}
+ body:not(.periodMode).mobileMap .leftPanel{top:172px!important}
+ body:not(.periodMode).mobileMap #map{top:266px}
 }

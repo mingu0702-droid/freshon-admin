@@ -33,12 +33,12 @@ test('vehicle and driver criteria are exclusive; clear differs from all vehicles
  const f=fixture();f.setRows(rows);f.state.driverKey='new';
  assert.equal(f.filteredPeriodStores()[0].vehicle,'101');
  f.setBasis('driver');assert.equal(f.filteredPeriodStores()[0].vehicle,'202');
- f.setBasis('vehicle');f.setSelectedVehicles([]);assert.equal(f.filteredPeriodStores().length,0);
+ f.setBasis('vehicle');f.setScope('selected');f.setSelectedVehicles([]);assert.equal(f.filteredPeriodStores().length,0);
  f.setScope('all');assert.equal(f.filteredPeriodStores()[0].vehicle,'202');
 });
 test('mode changes restore independent vehicle, area and center filters',()=>{
  const f=fixture();f.switchMode('BASE_60D');f.setSelectedVehicles(['202']);f.state.areaOn=true;f.state.centerFilter='osan';
- f.switchMode('DATE_ROUTE');assert.equal(f.selectedVehicles()[0],'101');assert.equal(f.state.areaOn,false);
+ f.switchMode('DATE_ROUTE');assert.equal(f.selectedVehicles().length,0);assert.equal(f.state.areaOn,false);
  f.switchMode('BASE_60D');assert.equal(f.selectedVehicles()[0],'202');assert.equal(f.state.areaOn,true);assert.equal(f.state.centerFilter,'osan');
 });
 test('period customer search retains map rows and excludes latest master assignment',async()=>{
@@ -63,8 +63,8 @@ test('period view has one header, no daily ETA/status; mobile has distinct filte
 });
 
 test('recent sixty days never regresses to a stale coordinate snapshot date',()=>{
- assert.ok(runtime.includes('state.rangeEnd = state.rangeEnd || localDate()'));
- assert.ok(runtime.includes('changePeriod(daysBefore(localDate(),59), localDate())'));
+ assert.deepEqual(MapPeriodUi.recentRange({ready:true,startDate:'2026-06-22',periodLatest:'2026-09-19'}),{start:'2026-07-22',end:'2026-09-19'});
+ assert.ok(!runtime.includes('changePeriod(daysBefore(localDate(),59), localDate())'));
 });
 
 test('incomplete period cannot claim a customer has no period history',async()=>{

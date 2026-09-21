@@ -9,7 +9,8 @@ const file = name => fs.readFileSync(new URL('../public/' + name, import.meta.ur
 const range = {startDate:'2026-08-01', endDate:'2026-08-28', complete:true};
 const sample = {customerCode:'S900001',customerName:'합성 매장',vehicle:'101',lat:37.1,lng:127.1,
   history:[{deliveryDate:'2026-08-28',vehicle:'101',driverKey:'SYNTHETIC',driverName:'합성기사'}]};
-function fixture() {
+const model = {ready:true,periodLatest:'2026-09-19',startDate:'2026-06-22',endDate:'2026-09-19'};
+function fixture(windowData = {}) {
   const nodes = new Map(), selectors = new Map(), timers = new Map(), drawn = []; let seq = 0, downloads = 0;
   const node = id => {
     if (!nodes.has(id)) {
@@ -22,14 +23,14 @@ function fixture() {
     return nodes.get(id);
   };
   const checks=[{value:'101',checked:true}]; selectors.set('#vehicleList input[type=checkbox]', checks);
-  const ctx = vm.createContext({window:{},document:{body:node('body'),querySelector:node,querySelectorAll:s=>selectors.get(s)||[],createElement:t=>node('created-'+t+'-'+(++seq))},
+  const ctx = vm.createContext({window:windowData,document:{body:node('body'),querySelector:node,querySelectorAll:s=>selectors.get(s)||[],createElement:t=>node('created-'+t+'-'+(++seq))},
     MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,Date,Intl,Map,Set,URL,URLSearchParams,Number,Symbol,AbortController,performance,console,
     setTimeout:(fn,ms)=>{timers.set(++seq,{fn,ms});return seq;},clearTimeout:id=>timers.delete(id),requestAnimationFrame(){},innerWidth:1440,innerHeight:900,
-    kakao:{maps:{LatLng:class {constructor(lat,lng){this.lat=lat;this.lng=lng;}},LatLngBounds:class {extend(){}},CustomOverlay:class {constructor(options){this.options=options;}setMap(map){if(map)drawn.push(this.options.content);}}}},
+    kakao:{maps:{LatLng:class {constructor(lat,lng){this.lat=lat;this.lng=lng;}},LatLngBounds:class {extend(){}},Polygon:class {constructor(options){this.options=options;}setMap(map){this.map=map;}},CustomOverlay:class {constructor(options){this.options=options;}setMap(map){if(map)drawn.push(this.options.content);}}}},
     Option:class {constructor(text,value){this.textContent=text;this.value=value;}},location:{href:'http://local.test/'}});
   vm.runInContext(runtime.slice(0,runtime.lastIndexOf('  initVehicles();')) + `
     activateSheet=()=>{}; refreshVehicleUi=()=>{};
-    window.test={state,changePeriod,changeSelectedDate,clearNewAreaBatch,runNewArea,exportNewArea,selectStore,clearSelection,renderStops,search,searchPeriod,loadOperationStatus,showDiagnostics,renderPeriodStoreList,
+    window.test={state,initializePeriod,selectLatestRoute,syncDateHeading,drawSelectedBoundaries,clearBoundaries,changePeriod,changeSelectedDate,clearNewAreaBatch,runNewArea,exportNewArea,selectStore,clearSelection,renderStops,search,searchPeriod,loadOperationStatus,showDiagnostics,renderPeriodStoreList,
       setReady:()=>{dateReady=true;periodMeta=${JSON.stringify(range)};state.rangeStart=periodMeta.startDate;state.rangeEnd=periodMeta.endDate;},
       setRows:rows=>{periodRows=rows;replaceStoreSnapshot(rows,{});},
       setFetch:fn=>fetchJson=fn,setJudge:fn=>judgeNewAreaRow=fn,setInput:rows=>parseNewArea=()=>rows,
@@ -37,6 +38,67 @@ function fixture() {
   })();`, ctx);
   return {...ctx.window.test,node,selectors,timers,drawn,downloads:()=>downloads};
 }
+test('startup uses model latest after status, not stale Snapshot or today',async()=>{
+ const f=fixture(),urls=[];
+ f.setFetch(async url=>{urls.push(url);if(url.endsWith('period-status'))return model;if(url.endsWith('snapshot'))return {data:[],meta:{latestDate:'2026-08-24'}};return {data:[sample],meta:{complete:true,startDate:'2026-07-22',endDate:'2026-09-19',coverageComplete:false}};});
+ await f.initializePeriod();
+ assert.equal(urls.length,3);assert.ok(urls[0].endsWith('period-status'));assert.ok(urls[2].includes('startDate=2026-07-22&endDate=2026-09-19'));
+ assert.equal(f.state.rangeEnd,'2026-09-19');assert.equal(f.node('#latestDate').textContent,'2026-07-22 ~ 2026-09-19');
+ assert.equal(f.node('#periodStoreList').attrs['data-state'],'ready');assert.equal(f.node('#periodStoreListCount').textContent,'1개 매장');
+ assert.match(f.node('#freshnessState').textContent,/전체 원천 완전성 미확인/);assert.doesNotMatch(f.node('#freshnessState').textContent,/원천 0건/);
+ assert.equal(f.selectors.get('#vehicleList input[type=checkbox]').filter(x=>x.checked).length,0);
+});
+test('model not ready polls status only and transitions to ready automatically',async()=>{
+ const f=fixture(),urls=[];let ready=false;
+ f.setFetch(async url=>{urls.push(url);if(url.endsWith('period-status'))return {...model,ready};if(url.endsWith('snapshot'))return {data:[]};return {data:[sample],meta:{complete:true,startDate:'2026-07-22',endDate:'2026-09-19'}};});
+ await f.initializePeriod();assert.equal(urls.length,1);assert.equal(f.node('#periodStoreList').attrs['data-state'],'not-ready');
+ ready=true;await [...f.timers.values()][0].fn();await new Promise(r=>setImmediate(r));
+ assert.equal(f.ready(),true);assert.equal(f.node('#periodStoreList').attrs['data-state'],'ready');
+});
+test('late bootstrap NOT_READY cannot overwrite a newer successful period',async()=>{
+ const f=fixture();let done;f.setFetch(()=>new Promise(r=>done=r));const initial=f.initializePeriod();
+ f.setFetch(async()=>({data:[sample],meta:range}));await f.changePeriod(range.startDate,range.endDate);
+ done({ready:false});await initial;assert.equal(f.node('#periodStoreList').attrs['data-state'],'ready');assert.equal(f.timers.size,0);
+});
+test('late old Period NOT_READY cannot overwrite newer successful period',async()=>{
+ const f=fixture();let done;f.setFetch(()=>new Promise(r=>done=r));const old=f.changePeriod('2026-08-02',range.endDate);
+ f.setFetch(async()=>({data:[sample],meta:range}));await f.changePeriod(range.startDate,range.endDate);
+ done({meta:{complete:false},pendingReason:'READ_MODEL_NOT_READY'});await old;
+ assert.equal(f.node('#periodStoreList').attrs['data-state'],'ready');assert.equal(f.timers.size,0);
+});
+test('out-of-range is distinct from not-ready and never loops retry',async()=>{
+ const f=fixture();f.setFetch(async()=>({data:[],meta:{complete:false},pendingReason:'READ_MODEL_RANGE_NOT_READY'}));
+ await f.changePeriod(range.startDate,range.endDate);assert.equal(f.node('#periodStoreList').attrs['data-state'],'out-of-range');
+ assert.match(f.node('#periodStoreList').innerHTML,/기간 범위 밖/);assert.equal(f.timers.size,0);
+});
+test('draft Period heading updates immediately; Daily uses only selectedDate',()=>{
+ const f=fixture();f.state.latestDate='2026-08-24';f.node('#rangeStart').value='2026-06-22';f.node('#rangeEnd').value='2026-09-19';f.syncDateHeading();
+ assert.equal(f.node('#latestDate').textContent,'2026-06-22 ~ 2026-09-19');
+ f.state.mode='DATE_ROUTE';f.state.selectedDate='2026-09-21';f.syncDateHeading();assert.equal(f.node('#latestDate').textContent,'2026-09-21');
+});
+test('latest Daily resolves actual assignments API date, never Snapshot fallback',async()=>{
+ const f=fixture(),urls=[];f.state.latestDate='2026-08-24';
+ f.setFetch(async url=>{urls.push(url);return {data:[sample],meta:{date:'2026-09-19',complete:true}};});await f.selectLatestRoute();
+ assert.ok(urls[0].endsWith('assignments?date=latest'));assert.equal(f.state.selectedDate,'2026-09-19');assert.equal(f.node('#periodControls').hidden,true);assert.equal(f.node('#dailyControls').hidden,false);
+});
+test('all-vehicle Osan administrative geometry attaches, toggles without selection/camera mutations',()=>{
+ const f=fixture({VEHICLE_AREA_DATA:{vehicles:[{vehicle:'101',group:'osan',overview_admin_codes:['A']},{vehicle:'202',group:'honam',overview_admin_codes:['B']}]},ADMIN_FEATURES:[{properties:{code:'A'},geometry:{type:'Polygon',coordinates:[[[127,37],[128,37],[128,38],[127,37]]]}}]});
+ f.selectors.get('#vehicleList input[type=checkbox]').forEach(x=>x.checked=false);
+ f.state.map={center:'unchanged',level:5};f.state.centerFilter='osan';f.state.selected=sample;const map=f.state.map;
+ f.drawSelectedBoundaries([]);assert.equal(f.state.polygons.length,1);assert.equal(f.state.polygons[0].map,map);assert.equal(f.node('#areaToggle').attrs['data-geometry-count'],'1');
+ f.clearBoundaries();assert.equal(f.state.polygons.length,0);assert.equal(f.state.selected,sample);assert.equal(map.level,5);assert.equal(map.center,'unchanged');assert.equal(f.state.mode,'BASE_60D');
+});
+test('date controls stay above map; address retains original single DOM/events; assets versioned',()=>{
+ const html=file('map-phase2b-preview.html');assert.ok(html.indexOf('id="mapDateBar"')<html.indexOf('id="map"'));
+ assert.equal(html.split('id="selectedDate"').length-1,1);assert.equal(html.split('id="todayBtn"').length-1,1);
+ assert.ok(runtime.includes('$("#results").before(addressPanel)'));assert.ok(!runtime.includes('filters.append($("#legacyVehicleState"), $("#periodDriver"), $("#periodControls"))'));
+ for(const asset of ['map-period.css','map-period-ui.js','map-phase2b-runtime.js'])assert.ok(html.includes(asset+'?v=20260921-ui2'));
+});
+test('recent range never exceeds available model start and never guesses absent latest',()=>{
+ assert.deepEqual(MapPeriodUi.recentRange({...model,startDate:'2026-09-01'}),{start:'2026-09-01',end:'2026-09-19'});
+ assert.equal(MapPeriodUi.recentRange({ready:false}),null);assert.equal(MapPeriodUi.recentRange({ready:true}),null);
+});
+
 test('batch analysis -> clear -> both exports cannot resurrect prior results', async () => {
   const f=fixture();f.setReady();f.setInput([{address:'합성 주소'}]);f.setJudge(async row=>({...row,decision:'O'}));
   f.node('#newAreaBatchInput').value='합성 주소';
