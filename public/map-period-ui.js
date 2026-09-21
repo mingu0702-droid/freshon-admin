@@ -46,5 +46,35 @@
     const start = new Date(Date.parse(end + 'T00:00:00Z') - 59 * 86400000).toISOString().slice(0,10);
     return { start: status.startDate && status.startDate > start ? status.startDate : start, end };
   }
-  root.MapPeriodUi = Object.freeze({ select, cluster, recentRange });
+  function spatialIndex(rows) {
+    const bins = new Map(), valid = rows.filter(row => Number.isFinite(row.lat) && Number.isFinite(row.lng));
+    for (const row of valid) {
+      const key = Math.floor(row.lat * 10) + ':' + Math.floor(row.lng * 10);
+      if (!bins.has(key)) bins.set(key, []);
+      bins.get(key).push(row);
+    }
+    return { valid, query(bounds) {
+      if (!bounds) return valid;
+      const {south,north,west,east} = bounds;
+      if (![south,north,west,east].every(Number.isFinite) || east < west) return valid;
+      const result = [];
+      for (const [key, bucket] of bins) {
+        const [lat,lng] = key.split(':').map(Number);
+        if ((lat+1)/10 < south || lat/10 > north || (lng+1)/10 < west || lng/10 > east) continue;
+        for (const row of bucket) if (row.lat >= south && row.lat <= north && row.lng >= west && row.lng <= east) result.push(row);
+      }
+      return result;
+    }};
+  }
+  function reconcile(previous, entries, create, remove) {
+    const next = new Map(); let created = 0, removed = 0, reused = 0;
+    for (const entry of entries) {
+      const old = previous.get(entry.key);
+      if (old && old.fingerprint === entry.fingerprint) { next.set(entry.key,old); reused++; }
+      else { if (old) { remove(old.value); removed++; } next.set(entry.key,{fingerprint:entry.fingerprint,value:create(entry)}); created++; }
+    }
+    for (const [key, old] of previous) if (!next.has(key)) { remove(old.value); removed++; }
+    return { next, created, removed, reused };
+  }
+  root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile });
 })(typeof window === 'undefined' ? globalThis : window);

@@ -47,6 +47,12 @@ button:disabled{cursor:not-allowed;opacity:.5}
 #periodStoreList[data-state=not-ready],#periodStoreList[data-state=error]{border-left:3px solid #d59b27;padding-left:8px}
 @media(min-width:761px){
  :root{--left:clamp(280px,23vw,320px)}
+ .marker.store,.marker.virtual,.marker.nearbyVehicle{width:32px!important;min-width:32px!important;height:40px!important;padding:0!important}
+ .marker .pinShape{width:32px!important;height:40px!important}
+ .marker .pinNumber{font-size:13px!important}
+ .marker.periodCluster{border-radius:50%!important;width:36px!important;height:36px!important;background:#334c6a!important}
+ .marker.periodCluster .pinShape{display:none}
+ .marker.periodCluster .pinNumber:after{content:'개';font-size:9px;margin-left:1px}
  #runListTool:not([open]) #runListPanel{display:none}
  #leftPanel{overflow-x:hidden;overscroll-behavior:contain}
  #leftPanel .head{padding:12px 14px}#leftPanel .block{padding:11px 14px}

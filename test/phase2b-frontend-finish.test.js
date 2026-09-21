@@ -48,6 +48,20 @@ test('startup uses model latest after status, not stale Snapshot or today',async
  assert.match(f.node('#freshnessState').textContent,/전체 원천 완전성 미확인/);assert.doesNotMatch(f.node('#freshnessState').textContent,/원천 0건/);
  assert.equal(f.selectors.get('#vehicleList input[type=checkbox]').filter(x=>x.checked).length,0);
 });
+test('default Period creates zero cards; selecting a late store creates only its card',()=>{
+ const f=fixture();f.setReady();const rows=Array.from({length:6000},(_,i)=>({...sample,customerCode:'S'+(900000+i)}));
+ f.state.currentRows=rows;f.renderPeriodStoreList();assert.equal((f.node('#periodStoreList').innerHTML.match(/data-period-store=/g)||[]).length,0);
+ f.selectStore(rows[5999],null,false);assert.equal((f.node('#periodStoreList').innerHTML.match(/data-period-store=/g)||[]).length,1);
+ f.clearSelection();assert.equal((f.node('#periodStoreList').innerHTML.match(/data-period-store=/g)||[]).length,0);
+ assert.equal(f.state.currentRows.length,6000);
+});
+test('repeated map idle reuses pins, preserves polygons and never fetches',()=>{
+ const f=fixture();f.setReady();f.state.fitRequested=false;let calls=0;f.setFetch(()=>{calls++;throw Error('must not fetch');});
+ f.state.map={getLevel:()=>5,getProjection:()=>({containerPointFromCoords:()=>({x:100,y:100})})};
+ const rows=[sample];f.renderStops(rows);const overlay=f.state.overlays[0];const boundary={setMap(){throw Error('must not rebuild');}};f.state.polygons=[boundary];
+ f.renderStops(rows,{viewportOnly:true});assert.equal(f.state.overlays[0],overlay);assert.equal(f.state.polygons[0],boundary);assert.equal(calls,0);
+ const metrics=JSON.parse(f.node('#map').attrs['data-render-metrics']);assert.equal(metrics.created,1);assert.equal(metrics.removed,0);assert.equal(metrics.reused,1);
+});
 test('model not ready polls status only and transitions to ready automatically',async()=>{
  const f=fixture(),urls=[];let ready=false;
  f.setFetch(async url=>{urls.push(url);if(url.endsWith('period-status'))return {...model,ready};if(url.endsWith('snapshot'))return {data:[]};return {data:[sample],meta:{complete:true,startDate:'2026-07-22',endDate:'2026-09-19'}};});
@@ -92,7 +106,7 @@ test('date controls stay above map; address retains original single DOM/events; 
  const html=file('map-phase2b-preview.html');assert.ok(html.indexOf('id="mapDateBar"')<html.indexOf('id="map"'));
  assert.equal(html.split('id="selectedDate"').length-1,1);assert.equal(html.split('id="todayBtn"').length-1,1);
  assert.ok(runtime.includes('$("#results").before(addressPanel)'));assert.ok(!runtime.includes('filters.append($("#legacyVehicleState"), $("#periodDriver"), $("#periodControls"))'));
- for(const asset of ['map-period.css','map-period-ui.js','map-phase2b-runtime.js'])assert.ok(html.includes(asset+'?v=20260921-ui2'));
+ for(const asset of ['map-period.css','map-period-ui.js','map-phase2b-runtime.js'])assert.ok(html.includes(asset+'?v=20260922-perf1'));
 });
 test('recent range never exceeds available model start and never guesses absent latest',()=>{
  assert.deepEqual(MapPeriodUi.recentRange({...model,startDate:'2026-09-01'}),{start:'2026-09-01',end:'2026-09-19'});
