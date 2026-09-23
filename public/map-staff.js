@@ -139,6 +139,7 @@
           const coverage = node('details',''); node('summary','검증 상태 상세',coverage);
           line('원천',payload.meta?.source || '미확인','미확인',coverage);
           line('기록 확인일',(payload.meta?.availableRecordDates || []).join(', '),'기록 없음',coverage);
+          line('원천 검증일',(payload.meta?.verifiedDates || []).join(', '),'게시 세대와 일치하는 증빙 없음',coverage);
           line('미확인 사유','게시 모델과 연결된 날짜별 완료 증빙 미제공','미확인',coverage);
           line('완전성 미확인일',(payload.meta?.unconfirmedDates || []).join(', '),'미확인',coverage);
         }

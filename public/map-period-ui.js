@@ -1,6 +1,6 @@
 /* Pure period selection: driver history never comes from today's vehicle master. */
 (function(root) {
-  function select(rows, vehicles = [], driverKey = '') {
+  function select(rows, vehicles = [], driverKey = '', options = {}) {
     const wanted = new Set(vehicles);
     const unique = new Map();
     for (const row of rows) {
@@ -15,11 +15,13 @@
         const key = item.sourceKey || [item.deliveryDate, item.vehicle, item.driverKey].join('|');
         if (seen.has(key)) return false; seen.add(key); return true;
       }).sort((a,b) => b.deliveryDate.localeCompare(a.deliveryDate));
-      const history = (row.history || []).filter(item => (!wanted.size || wanted.has(String(item.vehicle))) && (!driverKey || item.driverKey === driverKey))
+      const useBase=options.vehicleBasis==='base';
+      if(useBase&&wanted.size&&!wanted.has(String(row.baseVehicle||'')))return [];
+      const history = (row.history || []).filter(item => (useBase || !wanted.size || wanted.has(String(item.vehicle))) && (!driverKey || item.driverKey === driverKey))
         .sort((a,b) => b.deliveryDate.localeCompare(a.deliveryDate));
       if (!history.length) return [];
       const latest = history[0];
-      return [{ ...row, vehicle: latest.vehicle, driverKey: latest.driverKey, driverName: latest.driverName,
+      return [{ ...row, vehicle: useBase ? String(row.baseVehicle||'') : latest.vehicle, actualVehicle:latest.vehicle, driverKey: latest.driverKey, driverName: latest.driverName,
         lastDeliveryDate: latest.deliveryDate, visitCount: history.reduce((n,item)=>n+(item.count || 1),0),
         periodVisitCount: row.history.reduce((n,item)=>n+(item.count || 1),0), vehicles: [...new Set(row.history.map(item => item.vehicle))],
         drivers: [...new Set(row.history.map(item => item.driverKey).filter(Boolean))],

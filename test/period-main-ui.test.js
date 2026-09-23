@@ -30,11 +30,11 @@ test('period unique stores preserve full history and latest matching driver/vehi
  assert.equal(MapPeriodUi.select(rows,[],'new')[0].vehicle,'202');
 });
 test('vehicle and driver criteria are exclusive; clear differs from all vehicles',()=>{
- const f=fixture();f.setRows(rows);f.state.driverKey='new';
+ const f=fixture();f.setRows(rows.map(r=>({...r,baseVehicle:'101'})));f.state.driverKey='new';
  assert.equal(f.filteredPeriodStores()[0].vehicle,'101');
  f.setBasis('driver');assert.equal(f.filteredPeriodStores()[0].vehicle,'202');
  f.setBasis('vehicle');f.setScope('selected');f.setSelectedVehicles([]);assert.equal(f.filteredPeriodStores().length,0);
- f.setScope('all');assert.equal(f.filteredPeriodStores()[0].vehicle,'202');
+ f.setScope('all');assert.equal(f.filteredPeriodStores()[0].vehicle,'101');assert.equal(f.filteredPeriodStores()[0].actualVehicle,'202');
 });
 test('mode changes restore independent vehicle, area and center filters',()=>{
  const f=fixture();f.switchMode('BASE_60D');f.setSelectedVehicles(['202']);f.state.areaOn=true;f.state.centerFilter='osan';

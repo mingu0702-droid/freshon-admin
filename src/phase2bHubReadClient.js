@@ -137,6 +137,9 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
   const sourceRead = ['periodAssignments','staffDriverHistory'].includes(action);
   state.metrics.requests += 1;
   const actionTimeoutMs = {
+    mapModelStatus: 15000,
+    mapModelIncrementalRequest: 30000,
+    mapBaseVehicles: 225000,
     unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 30000),
     customerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
     staffCustomerDetail: 4800,

@@ -42,7 +42,7 @@ test('startup uses model latest after status, not stale Snapshot or today',async
  const f=fixture(),urls=[];
  f.setFetch(async url=>{urls.push(url);if(url.endsWith('period-status'))return model;if(url.endsWith('snapshot'))return {data:[],meta:{latestDate:'2026-08-24'}};return {data:[sample],meta:{complete:true,startDate:'2026-07-22',endDate:'2026-09-19',coverageComplete:false}};});
  await f.initializePeriod();
- assert.equal(urls.length,3);assert.ok(urls[0].endsWith('period-status'));assert.ok(urls[2].includes('startDate=2026-07-22&endDate=2026-09-19'));
+ assert.equal(urls.length,4);assert.ok(urls[0].endsWith('period-status'));assert.ok(urls[2].includes('startDate=2026-07-22&endDate=2026-09-19'));assert.ok(urls[3].endsWith('base-vehicles'));
  assert.equal(f.state.rangeEnd,'2026-09-19');assert.equal(f.node('#latestDate').textContent,'2026-07-22 ~ 2026-09-19');
  assert.equal(f.node('#periodStoreList').attrs['data-state'],'ready');assert.equal(f.node('#periodStoreListCount').textContent,'1개 매장');
  assert.match(f.node('#freshnessState').textContent,/전체 원천 완전성 미확인/);assert.doesNotMatch(f.node('#freshnessState').textContent,/원천 0건/);
@@ -106,7 +106,8 @@ test('date controls stay above map; address retains original single DOM/events; 
  const html=file('map-phase2b-preview.html');assert.ok(html.indexOf('id="mapDateBar"')<html.indexOf('id="map"'));
  assert.equal(html.split('id="selectedDate"').length-1,1);assert.equal(html.split('id="todayBtn"').length-1,1);
  assert.ok(runtime.includes('$("#results").before(addressPanel)'));assert.ok(!runtime.includes('filters.append($("#legacyVehicleState"), $("#periodDriver"), $("#periodControls"))'));
- for(const asset of ['map-period-ui.js','map-phase2b-runtime.js','map-staff.js','map-staff.css'])assert.ok(html.includes(asset+'?v=20260922-card2'));
+ for(const asset of ['map-period-ui.js','map-phase2b-runtime.js','map-data-sync.js'])assert.ok(html.includes(asset+'?v=20260922-sync3'));
+ for(const asset of ['map-staff.js','map-staff.css'])assert.ok(html.includes(asset+'?v=20260922-card2'));
  assert.ok(html.includes('map-period.css?v=20260922-perf1'));
 });
 test('recent range never exceeds available model start and never guesses absent latest',()=>{

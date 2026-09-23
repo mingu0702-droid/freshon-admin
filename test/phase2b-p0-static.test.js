@@ -30,9 +30,9 @@ test("search supports partial customer code and customerCode dedupe", () => {
 
 test("base, center and vehicle views use verified dated assignments with snapshot coordinates", () => {
   assert.ok(runtime.includes('stores.filter(row => row.vehicleGroup === state.centerFilter)'));
-  assert.ok(runtime.includes('MapPeriodUi.select(allStores, periodBasis === "vehicle" ? selectedVehicles() : [], periodBasis === "driver" ? state.driverKey : "")'));
+  assert.ok(runtime.includes('MapPeriodUi.select(allStores, periodBasis === "vehicle" ? selectedVehicles() : [], periodBasis === "driver" ? state.driverKey : "", {vehicleBasis:periodBasis === "vehicle" ? "base" : "actual"})'));
   assert.match(runtime, /assignments\?date=/);
-  assert.ok(runtime.includes('기간 내 최신 배차'));
+  assert.ok(runtime.includes('현재 기준호차'));
   assert.match(runtime, /changeSelectedDate/);
   assert.match(runtime, /ttl:\s*300000/);
 });

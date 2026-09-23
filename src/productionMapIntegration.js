@@ -15,6 +15,7 @@ import {publicResponse,publicCustomerDetail,publicMapValue,securityAudit} from '
 import {callHub as verifiedHubRead,hubRequestProfile} from './phase2bHubReadClient.js';
 import {createPhase2bReadCache} from './phase2bReadCache.js';
 import {readPaginatedDatedAssignments,uniqueAssignments} from './phase2bAssignments.js';
+import {mountMapDataFreshness} from './mapDataFreshness.js';
 
 export function mountProductionMapApi(app,{
   previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
@@ -32,6 +33,7 @@ export function mountProductionMapApi(app,{
   app.use('/api/map-phase2b/private',mapStaff.requireStaff);
   app.use('/api/map-phase2b/private/driver-history',historyDeadline);
   app.use(publicResponse);
+  const mapFreshness=mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus:stageReadModel.status});
   if(publicDir)app.get(['/map-phase2b-snapshot.json','/customer-master-20260604.json','/vehicle-data.js','/new-area-data.js'],async(req,res)=>{
     try{
       const raw=await fs.readFile(path.join(publicDir,path.basename(req.path)),'utf8');
@@ -128,8 +130,8 @@ app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
     const unconfirmedDates = [];
     for (let at = Date.parse(startDate); at <= Date.parse(endDate); at += 86400000) unconfirmedDates.push(new Date(at).toISOString().slice(0,10));
     // A stored task proves that task, not completeness of a whole business date.
-    return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data, meta: { complete: true, coverageComplete: false,
-      coverage: stageReadModelEnabled ? 'AUDITED_STORED_TASKS_DATE_COMPLETENESS_UNCONFIRMED' : 'PARTIAL_UNAUDITED', availableRecordDates: dates, unconfirmedDates, startDate, endDate, source: 'Delivery.delivery_admin_raw', readModel:stageReadModelEnabled?'Hub.StageReadModel':null } }));
+    return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data, meta: { complete: true, ...mapFreshness.coverage(startDate,endDate,'history'),
+      coverage: stageReadModelEnabled ? 'AUDITED_STORED_TASKS_DATE_COMPLETENESS_UNCONFIRMED' : 'PARTIAL_UNAUDITED', availableRecordDates: dates, startDate, endDate, source: 'Delivery.delivery_admin_raw', readModel:stageReadModelEnabled?'Hub.StageReadModel':null } }));
   } catch(error) {
     if(stageReadModelEnabled && /^READ_MODEL_/.test(error.message))return res.status(503).json({error:error.message,retryable:true});
     const failure = mapReadFailure(error, 'HISTORY');
@@ -157,6 +159,7 @@ app.get("/api/map-phase2b/preview/period", requireView, compression({ threshold:
   try { result = stageReadModelEnabled ? stageReadModel.period(startDate,endDate) : periodJobs.read(startDate, endDate,{retry:req.query.retry==='1'}); }
   catch(error){if(/^READ_MODEL_/.test(error.message)){const pending=stageReadModelPending(stageReadModel,error);return res.status(pending.status).json(pending.body);}throw error;}
   if (result.meta.complete) {
+    Object.assign(result.meta,mapFreshness.coverage(startDate,endDate,'period'));
     result.data=selectPeriodStores(result.data,{vehicle,driverKey});
     result.meta.storeCount=result.data.length;result.meta.filterMode=driverKey?'driver':vehicle?'vehicle':'all';
     const snapshot = await readPhase2bSnapshot();
