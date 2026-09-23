@@ -82,11 +82,17 @@ function hubStageModelRestoreRequest_(published,target){
   const id=r?r.stateId:DriveApp.getFolderById(published.folderId).createFile(c.file,'{}',MimeType.PLAIN_TEXT).getId();
   r={v:1,target:target,endpoint:c.endpoint,stateId:id,publishedStateId:published.stateId,generation:published.generation,phase:'RESTORE',fingerprint:m.fingerprint,
     startDate:published.startDate,endDate:published.endDate,sendAt:0,begun:false,verified:0,errors:0,lastError:'',totals:m.totals};
-  hubReadModelRestoreSave_(r);PropertiesService.getScriptProperties().setProperty(c.property,id);hubStageRestoreSchedule_(false,target);
+  if(target==='production'){r.recoveryVersion=1;r.worker='PRODUCTION_RESTORE_V2';}
+  if(target==='production'){PropertiesService.getScriptProperties().setProperty(c.property,id);hubProductionRestoreSave_(r);}
+  else{hubReadModelRestoreSave_(r);PropertiesService.getScriptProperties().setProperty(c.property,id);}
+  hubStageRestoreSchedule_(false,target);
   return{data:{phase:'RESTORE',generation:r.generation,sendAt:0,shards:m.keys.length,continuation:'ACTIVE'},cached:false};
 }
 function hubStageReadModelRestoreContinue(){return hubReadModelRestoreContinue_('stage');}
-function hubProductionReadModelRestoreContinue(){return hubReadModelRestoreContinue_('production');}
+function hubProductionReadModelRestoreContinue(){
+  try{return hubProductionRestoreWorker_();}
+  catch(error){if(typeof hubProductionRestoreAudit_==='function')hubProductionRestoreAudit_(null,'CHECKPOINT_READ',hubProductionRestoreCode_(error,'CHECKPOINT_READ'),null);}
+}
 function hubReadModelRestoreContinue_(target){
   const lock=LockService.getUserLock();
   if(!lock.tryLock(1000)){
