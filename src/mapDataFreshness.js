@@ -40,10 +40,10 @@ export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,mo
           baseVehicleState:['VERIFIED_MASTER','UNASSIGNED','VERIFIED_STORED','CONFLICT','UNKNOWN'].includes(x.baseVehicleState)?x.baseVehicleState:'UNKNOWN',
           baseVehicleSource:readBaseVehicleMaster?'FIXED_DISPATCH_PRIMARY':'Delivery.carrier.basedNo → Customer.delivery_admin_raw'}));
         baseAt=Date.now();
-        baseReadMeta=result.meta?{authRetried:result.meta.authRetried===true,firstHttp:Number(result.meta.firstHttp)||null,authReason:['HTML_OR_LOGIN','HTTP_401'].includes(result.meta.authReason)?result.meta.authReason:null,readHttp:Number(result.meta.readHttp)||null,sourceRows:Number(result.meta.sourceRows)||0,pagingFieldRows:Number(result.meta.pagingFieldRows)||0}:null;
-      }).catch(error=>{baseError='BASE_VEHICLE_SOURCE_UNAVAILABLE';baseErrorAt=Date.now();baseReadMeta={code:/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_UNAVAILABLE',http:Number(error.status)||null,step:['READ','PARSE','SESSION'].includes(error.step)?error.step:'READ'};}).finally(()=>{basePending=null;});
+        baseReadMeta=result.meta?{authRetried:result.meta.authRetried===true,firstHttp:Number(result.meta.firstHttp)||null,authReason:['HTML_OR_LOGIN','HTTP_401'].includes(result.meta.authReason)?result.meta.authReason:null,readHttp:Number(result.meta.readHttp)||null,sourceRows:Number(result.meta.sourceRows)||0,pagingFieldRows:Number(result.meta.pagingFieldRows)||0,retries:Number(result.meta.retries)||0}:null;
+      }).catch(error=>{baseError='BASE_VEHICLE_SOURCE_UNAVAILABLE';baseErrorAt=Date.now();baseReadMeta={code:/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_UNAVAILABLE',http:Number(error.status)||null,kind:['LOCAL_TIMEOUT','NETWORK','UPSTREAM_HTTP','APPLICATION_STATUS'].includes(error.kind)?error.kind:'UNKNOWN',step:['READ','PARSE','SESSION'].includes(error.step)?error.step:'READ'};}).finally(()=>{basePending=null;});
     }
-    return r.status(baseError?503:202).json({ok:false,error:baseError||null,phase:baseError?'ERROR':'LOADING',read:baseError?baseReadMeta:null});
+    return r.status(baseError?503:202).json({ok:false,error:baseError||null,phase:baseError?'ERROR':'LOADING',read:baseError?baseReadMeta:null,progress:readBaseVehicleMaster?.getProgress?.()||null});
   });
   app.post('/api/map-phase2b/admin/model-sync',enabled,express.json({limit:'1kb'}),(q,r,n)=>{
     r.set('Cache-Control','private, no-store');

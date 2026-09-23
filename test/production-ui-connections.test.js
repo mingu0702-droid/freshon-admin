@@ -68,6 +68,26 @@ test('login HTML preserves actual HTTP separately from authentication classifica
  const result=await reader();assert.equal(result.meta.firstHttp,200);assert.equal(result.meta.authReason,'HTML_OR_LOGIN');assert.equal(result.meta.readHttp,200);
  assert.equal(JSON.stringify(result).includes('PRIVATE_BODY'),false);
 });
+
+test('local master timeout retries only the failed page, never reports synthetic upstream 504',async()=>{
+ const calls=[],waits=[];let attempts=0;
+ const reader=createFixedVehicleReader({ensureSession:async()=>{},sleep:async ms=>waits.push(ms),extractRows:()=>[],readJson:async(_url,options)=>{
+  const q=new URLSearchParams(options.body),page=Number(q.get('page')),center=q.get('logCd');calls.push(center+':'+page);
+  if(center==='011'&&page===1&&++attempts<3)throw Object.assign(Error('Freshon request timed out after 25s (/synthetic)'),{status:504});
+  return {data:center==='011'?Array.from({length:page===0?1000:1},(_,i)=>({estCd:'S'+(page*1000+i+1),mainCarSeqNm:'221'})):[]};
+ }});
+ const result=await reader();assert.equal(result.data.length,1001);assert.equal(calls.filter(x=>x==='011:0').length,1);assert.equal(calls.filter(x=>x==='011:1').length,3);assert.deepEqual(waits,[1000,2000]);assert.equal(reader.getProgress().retries,2);assert.equal(reader.getProgress().phase,'DONE');
+});
+
+test('exhausted local timeout is bounded and carries no original message or synthetic HTTP',async()=>{
+ let calls=0;const reader=createFixedVehicleReader({ensureSession:async()=>{},sleep:async()=>{},extractRows:()=>[],readJson:async()=>{calls++;throw Object.assign(Error('Freshon request timed out after 25s (/synthetic-private)'),{status:504});}});
+ await assert.rejects(reader(),e=>e.code==='FIXED_MASTER_LOCAL_TIMEOUT'&&e.status===0&&e.kind==='LOCAL_TIMEOUT'&&!e.message.includes('synthetic-private'));assert.equal(calls,3);
+});
+
+for(const status of [429,502,504])test('actual upstream '+status+' uses bounded same-page retries without authentication refresh',async()=>{
+ let calls=0,login=0;const reader=createFixedVehicleReader({ensureSession:async()=>login++,sleep:async()=>{},extractRows:()=>[],readJson:async()=>{calls++;throw Object.assign(Error('PRIVATE_BODY'),{status,diagnostic:{type:'http-error',status}});}});
+ await assert.rejects(reader(),e=>e.status===status&&e.kind==='UPSTREAM_HTTP'&&!e.message.includes('PRIVATE_BODY'));assert.equal(calls,3);assert.equal(login,1);
+});
 test('late empty/unverified base responses cannot erase verified master',()=>{
   const old=new Map([['S1',{customerCode:'S1',baseVehicle:'221',baseVehicleState:'VERIFIED_MASTER'}]]);
   for(const incoming of [{baseVehicle:''},{baseVehicle:'838',baseVehicleState:'VERIFIED_STORED'}])assert.equal(ui.mergeBaseVehicles(old,[{customerCode:'S1',...incoming}]).get('S1').baseVehicle,'221');

@@ -22,12 +22,14 @@ export function projectFixedVehicles(rows) {
   return [...result.values()];
 }
 
-export function createFixedVehicleReader({ensureSession, readJson, extractRows}) {
-  return async function readFixedVehicleMaster() {
-    const failure=(code,http=0,step='READ')=>Object.assign(new Error(code),{code,status:Number(http)||0,step});
+export function createFixedVehicleReader({ensureSession, readJson, extractRows, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
+  let progress=null;
+  const reader=async function readFixedVehicleMaster() {
+    progress={phase:'SESSION',center:null,page:0,sourceRows:0,retries:0};
+    const failure=(code,http=0,step='READ',kind='UNKNOWN')=>Object.assign(new Error(code),{code,status:Number(http)||0,step,kind});
     try{await ensureSession();}catch(error){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',error.status);}
     let authRetried=false,firstHttp=200,authReason=null;
-    async function readPage(options){
+    async function readPage(options,attempt=0){
       try{
         const payload=await readJson('/bo/wm/standard/fixedAlctnList',options);
         if(Number(payload?.status)>=400)throw {status:Number(payload.status)};
@@ -35,16 +37,24 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows})
       }catch(error){
         // Same one-time expired-session recovery as the existing Freshon reader.
         // Reuse existing credentials; never retry a 403 or change permissions.
-        const http=Number(error.diagnostic?.status)||Number(error.status)||0;
+        // The shared reader maps its own AbortError to 504. Do not report that
+        // synthesized value as an upstream HTTP response or expose its message.
+        const localTimeout=!error.diagnostic&&error.status===504&&/^Freshon request timed out after \d+s \(/.test(String(error.message||''));
+        const network=!error.diagnostic&&!error.status&&['ECONNRESET','ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT','UND_ERR_SOCKET'].includes(error.cause?.code||error.code);
+        const http=localTimeout||network?0:Number(error.diagnostic?.status)||Number(error.status)||0;
         const loginHtml=error.diagnostic?.type==='html-or-login-response'&&http===200&&/loginProcessing|j_username|name=["']userId["']/i.test(String(error.payload?.raw||''));
         if((http===401||loginHtml)&&!authRetried){
           authRetried=true;
           firstHttp=http||null;
           authReason=loginHtml?'HTML_OR_LOGIN':'HTTP_401';
           try{await ensureSession(true);}catch(e){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',e.status);}
-          return readPage(options);
+          return readPage(options,attempt);
         }
-        throw failure(http===401||loginHtml?'FIXED_MASTER_AUTH_REQUIRED':http===403?'FIXED_MASTER_FORBIDDEN':error.diagnostic?.type==='html-or-login-response'?'FIXED_MASTER_NON_JSON':'FIXED_MASTER_READ_FAILED',http,error.diagnostic?.type==='html-or-login-response'?'PARSE':'READ');
+        // Retry only the failed read-only page; successful prior pages remain
+        // in memory. No login retries for transient failures or HTTP 403.
+        const transient=localTimeout||network||http===429||error.diagnostic?.type==='http-error'&&[500,502,503,504].includes(http);
+        if(transient&&attempt<2){progress.retries++;await sleep(1000*(attempt+1));return readPage(options,attempt+1);}
+        throw failure(http===401||loginHtml?'FIXED_MASTER_AUTH_REQUIRED':http===403?'FIXED_MASTER_FORBIDDEN':localTimeout?'FIXED_MASTER_LOCAL_TIMEOUT':network?'FIXED_MASTER_NETWORK_FAILED':error.diagnostic?.type==='html-or-login-response'?'FIXED_MASTER_NON_JSON':'FIXED_MASTER_READ_FAILED',http,error.diagnostic?.type==='html-or-login-response'?'PARSE':'READ',localTimeout?'LOCAL_TIMEOUT':network?'NETWORK':error.diagnostic?'UPSTREAM_HTTP':'APPLICATION_STATUS');
       }
     }
     const projected = [];
@@ -53,6 +63,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows})
       let complete = false;
       // Same bounded paging contract as scraper/freshonFixedDispatch.js.
       for (let page = 0; page < 120; page++) {
+        progress={...progress,phase:'READ',center:logCd,page,sourceRows};
         const body = new URLSearchParams({page: String(page), size: '1000', isPaging: 'true', isCount: 'true',
           sort: 'est_cd,ASC', logCd, estCd: '', estName: '', estNm: '', estGbn: '', startDate: '', endDate: '',
           carCd: '', carNm: '', shipGbn: '1', baecha: ''});
@@ -73,6 +84,9 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows})
       if (!complete) throw failure('FIXED_MASTER_INCOMPLETE');
     }
     if (!projected.length) throw failure('FIXED_MASTER_EMPTY');
-    return {data: projectFixedVehicles(projected),meta:{authRetried,firstHttp,authReason,readHttp:200,sourceRows,pagingFieldRows}};
+    progress={...progress,phase:'DONE',sourceRows};
+    return {data: projectFixedVehicles(projected),meta:{authRetried,firstHttp,authReason,readHttp:200,sourceRows,pagingFieldRows,retries:progress.retries}};
   };
+  reader.getProgress=()=>progress?{...progress}:null;
+  return reader;
 }
