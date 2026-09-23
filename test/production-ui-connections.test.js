@@ -17,10 +17,11 @@ test('missing primary is not inferred from weekday or delivery assignment; confl
 });
 test('fixed master reader uses read-only bounded center batches, strips sensitive fields',async()=>{
   const calls=[];const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:p=>p.data,readJson:async(url,options)=>{
-    calls.push({url,form:new URLSearchParams(options.body)});return {data:[{estCd:'S'+(calls.length+1),mainCarSeqNm:'221',accessInfo:'synthetic-private'}]};
+    calls.push({url,timeoutMs:options.timeoutMs,form:new URLSearchParams(options.body)});return {data:[{estCd:'S'+(calls.length+1),mainCarSeqNm:'221',accessInfo:'synthetic-private'}]};
   }});
   const result=await reader();assert.equal(result.data.length,3);assert.deepEqual(calls.map(x=>x.form.get('logCd')),['011','012','013']);
   assert.ok(calls.every(x=>x.url==='/bo/wm/standard/fixedAlctnList'&&x.form.get('size')==='1000'));
+  assert.ok(calls.every(x=>x.timeoutMs===60000));
   assert.equal(JSON.stringify(result).includes('synthetic-private'),false);
 });
 

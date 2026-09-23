@@ -67,7 +67,9 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         const body = new URLSearchParams({page: String(page), size: '1000', isPaging: 'true', isCount: 'true',
           sort: 'est_cd,ASC', logCd, estCd: '', estName: '', estNm: '', estGbn: '', startDate: '', endDate: '',
           carCd: '', carNm: '', shipGbn: '1', baecha: ''});
-        const payload = await readPage({method: 'POST',timeoutMs:25000,
+        // Large existing master offset pages exceed the daily-reader 25s
+        // deadline. Keep this read-only master budget separate from collectors.
+        const payload = await readPage({method: 'POST',timeoutMs:60000,
           headers: {'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}, body: body.toString()});
         // fixedAlctnList's existing master contract is data: Row[]. Master rows
         // inherit paging fields (totalCnt/etc.); the daily-dispatch fallback
