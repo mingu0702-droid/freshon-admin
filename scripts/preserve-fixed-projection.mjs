@@ -7,7 +7,8 @@ try {
   const payload=await response.json();
   if(response.status!==200){console.log(JSON.stringify({http:response.status,phase:payload.phase,progress:payload.progress}));process.exitCode=2;}
   else {
-    if(payload.meta?.basis!=='FIXED_DISPATCH_PRIMARY'||payload.meta?.read?.readHttp!==200||payload.data?.length!==87972||payload.meta.read.sourceRows!==87982)throw Error('BASELINE_MISMATCH');
+    // Completed Production read, 2026-09-24: four master rows added since the prior baseline.
+    if(payload.meta?.basis!=='FIXED_DISPATCH_PRIMARY'||payload.meta?.read?.readHttp!==200||payload.data?.length!==87976||payload.meta.read.sourceRows!==87986)throw Error('BASELINE_MISMATCH');
     const envelope=fixedEnvelope(payload.data,payload.meta.checkedAt);
     const auth=execFileSync('git',['credential','fill'],{input:'protocol=https\nhost=github.com\n\n',encoding:'utf8',stdio:['pipe','pipe','pipe']});
     const token=auth.split('\n').find(line=>line.startsWith('password='))?.slice(9);
