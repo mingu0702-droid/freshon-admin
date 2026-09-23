@@ -48,6 +48,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows})
       }
     }
     const projected = [];
+    let sourceRows=0, pagingFieldRows=0;
     for (const logCd of ['011', '012', '013']) {
       let complete = false;
       for (let page = 0; page < 20; page++) {
@@ -61,6 +62,8 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows})
         // treats those as paging-only records and can discard real customers.
         const rows = Array.isArray(payload?.data) ? payload.data : extractRows(payload);
         if (!Array.isArray(rows)) throw failure('FIXED_MASTER_CONTRACT');
+        sourceRows+=rows.length;
+        pagingFieldRows+=rows.filter(row=>row&&row.estCd&&(row.totalCnt!=null||row.totalPages!=null||row.isPaging!=null||row.sortName!=null)).length;
         // Keep no contact/access/memo values between batches.
         projected.push(...rows.map(row => ({logCd,...Object.fromEntries(['estCd','mainCarSeqNm',
           ...['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm')].map(key=>[key,row[key]]))})));
@@ -69,6 +72,6 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows})
       if (!complete) throw failure('FIXED_MASTER_INCOMPLETE');
     }
     if (!projected.length) throw failure('FIXED_MASTER_EMPTY');
-    return {data: projectFixedVehicles(projected),meta:{authRetried,firstHttp,authReason,readHttp:200}};
+    return {data: projectFixedVehicles(projected),meta:{authRetried,firstHttp,authReason,readHttp:200,sourceRows,pagingFieldRows}};
   };
 }

@@ -36,7 +36,7 @@ test('expired fixed master session refreshes existing login once; no raw error r
 test('fixed master direct data array bypasses daily paging-row filter without leaking fields',async()=>{
  let fallbackCalls=0;
  const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:()=>{fallbackCalls++;return [];},readJson:async(_url,options)=>({status:200,data:new URLSearchParams(options.body).get('logCd')==='011'?[{estCd:'S10001',mainCarSeqNm:'221',totalCnt:1,totalPages:1,isPaging:true,sortName:'est_cd',password:'SYNTHETIC_PRIVATE'}]:[]})});
- const result=await reader();assert.equal(fallbackCalls,0);assert.equal(result.data.length,1);assert.equal(result.data[0].baseVehicle,'221');assert.equal(JSON.stringify(result).includes('SYNTHETIC_PRIVATE'),false);
+ const result=await reader();assert.equal(fallbackCalls,0);assert.equal(result.data.length,1);assert.equal(result.data[0].baseVehicle,'221');assert.equal(result.meta.sourceRows,1);assert.equal(result.meta.pagingFieldRows,1);assert.equal(JSON.stringify(result).includes('SYNTHETIC_PRIVATE'),false);
 });
 test('an empty fixed master data array never falls back to unrelated nested rows',async()=>{
  let fallbackCalls=0;
