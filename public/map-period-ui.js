@@ -80,15 +80,49 @@
   }
   function parseAreaInput(text) {
     const records=[];let cells=[],cell='',quoted=false,raw='';
-    const finish=()=>{cells.push(cell.trim());if(cells.some(Boolean))records.push({address:cells[0]||'',customer:cells.slice(1).join(' '),originalInput:raw.trim(),inputAmbiguous:quoted||cells.length>2});cells=[];cell='';raw='';};
+    const finish=()=>{cells.push(cell);records.push({address:(cells[0]||'').trim(),customer:cells[1]||'',originalAddress:cells[0]||'',originalCustomer:cells[1]||'',originalInput:raw.replace(/\n$/,''),inputAmbiguous:quoted||cells.length>2});cells=[];cell='';raw='';};
     const input=String(text||'').replace(/\r\n/g,'\n');
     for(let i=0;i<input.length;i++){
       const c=input[i];raw+=c;
       if(c==='"'&&(quoted||!cell.trim())){if(quoted&&input[i+1]==='"'){cell+='"';raw+=input[++i];}else quoted=!quoted;}
-      else if(c==='\t'&&!quoted){cells.push(cell.trim());cell='';}
+      else if(c==='\t'&&!quoted){cells.push(cell);cell='';}
       else if(c==='\n'&&!quoted)finish();else cell+=c;
     }
-    finish();return records;
+    if(raw||cells.length||cell)finish();return records;
   }
-  root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile, parseAreaInput });
+  function regionForAddress(address) {
+    const province=String(address||'').trim().split(/\s+/)[0];
+    if (/^(제주|제주도|제주특별자치도)$/.test(province)) return '제주도';
+    if (/^(부산|대구|울산)(광역시)?$|^경(상)?[남북](도)?$/.test(province)) return '영남권';
+    if (/^광주(광역시)?$|^전(라)?[남북](도)?$|^전북특별자치도$/.test(province)) return '호남권';
+    return '';
+  }
+  function areaExportRows(rows, applyDate) {
+    const date=/^\d{4}-\d{2}-\d{2}$/.test(applyDate||'')?Number(applyDate.slice(5,7))+'-'+Number(applyDate.slice(8)):'';
+    return rows.map(row=>{
+      const decision=['O','X'].includes(row.decision)?row.decision:'검토필요';
+      const reason=decision==='검토필요'?'검토필요':String(row.reason||'').replace('배송동선 맞지 않음','배송동선 맞지않음');
+      return [row.originalAddress??row.address??'',row.originalCustomer??row.customer??'',decision,reason,date,
+        regionForAddress(row.address),row.vehicle&&row.vehicle!=='-'?row.vehicle:'',
+        row.nearestStore||row.nearby?.[0]?.customerName||'',Number.isFinite(row.nearestDistance)?Number(row.nearestDistance.toFixed(3)):''];
+    });
+  }
+  function areaTsv(rows, applyDate, kind) {
+    return areaExportRows(rows,applyDate).map(row=>(kind==='matching'?row.slice(7,9):row.slice(2,6))
+      .map(v=>{const s=String(v??'');return /[\t\n\r"]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}).join('\t')).join('\r\n');
+  }
+  function mergeBaseVehicles(previous, rows) {
+    const next=new Map(previous);
+    for(const row of rows){
+      const old=next.get(row.customerCode);
+      if(old?.baseVehicle&&(!row.baseVehicle||old.baseVehicleState==='VERIFIED_MASTER'&&row.baseVehicleState!=='VERIFIED_MASTER'))continue;
+      next.set(row.customerCode,row);
+    }
+    return next;
+  }
+  function baseVehicleLabel(row) {
+    return row.baseVehicle?row.baseVehicle+'호':row.baseVehicleState==='UNASSIGNED'?'미지정':'확인 필요';
+  }
+  root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile, parseAreaInput,
+    regionForAddress, areaExportRows, areaTsv, mergeBaseVehicles, baseVehicleLabel });
 })(typeof window === 'undefined' ? globalThis : window);

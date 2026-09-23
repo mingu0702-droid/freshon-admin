@@ -18,6 +18,7 @@
     if (inlineHost) { inlineHost.replaceChildren(); inlineHost.hidden = true; }
     inlineButton?.setAttribute('aria-expanded','false');
     inlineHost = null; inlineButton = null; surface = dialog;
+    document.body.classList.remove('staffAuxOpen');
   }
   function node(tag, text, parent = surface || dialog) { const item = document.createElement(tag); item.textContent = text; parent.append(item); return item; }
   function shell(title, modal = false) {
@@ -25,6 +26,7 @@
     dialog.replaceChildren();
     surface = !modal && inlineHost ? inlineHost : dialog;
     surface.replaceChildren();
+    if(surface!==dialog)document.body.classList.add('staffAuxOpen');
     dialog.dataset.modal = String(modal);
     node('h2', title);
     const close = node('button', '닫기'); close.type = 'button'; close.addEventListener('click', clear);
@@ -135,13 +137,8 @@
           node('span', [row.driverName || '기사 미등록', row.driverPhone || '연락처 미등록'].join(' · '), entry);
         });
         if (!payload.meta?.coverageComplete) {
-          node('p', '전체 기간 수집 완전성 미확인 · 고객 미방문·배송 누락을 뜻하지 않습니다.');
-          const coverage = node('details',''); node('summary','검증 상태 상세',coverage);
-          line('원천',payload.meta?.source || '미확인','미확인',coverage);
-          line('기록 확인일',(payload.meta?.availableRecordDates || []).join(', '),'기록 없음',coverage);
-          line('원천 검증일',(payload.meta?.verifiedDates || []).join(', '),'게시 세대와 일치하는 증빙 없음',coverage);
-          line('미확인 사유','게시 모델과 연결된 날짜별 완료 증빙 미제공','미확인',coverage);
-          line('완전성 미확인일',(payload.meta?.unconfirmedDates || []).join(', '),'미확인',coverage);
+          const coverage = node('details',''); node('summary','데이터 안내',coverage);
+          node('p','현재 저장된 자료 기준입니다. 일부 날짜의 수집 완료 여부는 별도 확인이 필요합니다.',coverage);
         }
       } else {
         surface.dataset.state = 'ready';
@@ -166,7 +163,7 @@
     } finally { clearTimeout(delayNotice); if (id === generation) detailPending = false; }
   }
   async function open(target, host = null, button = null) {
-    if (host && inlineHost === host && requested) { clear(); return; }
+    if (host && inlineHost === host && requested?.kind===target.kind && requested.customerCode===target.customerCode) { clear(); return; }
     if (detailPending && JSON.stringify(requested) === JSON.stringify(target)) return;
     clear(); requested = { ...target }; inlineHost = host; inlineButton = button;
     if (host) { host.hidden=false; button?.setAttribute('aria-expanded','true'); }

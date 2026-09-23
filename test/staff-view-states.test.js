@@ -6,7 +6,7 @@ const source=fs.readFileSync(new URL('../public/map-staff.js',import.meta.url),'
 function fixture(){
   const elements=[],timers=new Map();let sequence=0,finish;
   class Element{
-    constructor(tag){this.tag=tag;this.children=[];this.attrs={};this.dataset={};this.textContent='';elements.push(this);}
+    constructor(tag){this.tag=tag;this.children=[];this.attrs={};this.dataset={};this.textContent='';const classes=new Set();this.classList={add:k=>classes.add(k),remove:k=>classes.delete(k),contains:k=>classes.has(k)};elements.push(this);}
     append(x){this.children.push(x);}replaceChildren(){this.children=[];this.textContent='';}
     setAttribute(k,v){this.attrs[k]=v;}addEventListener(){}focus(){}
     show(){this.open=true;this.modal=false;}showModal(){this.open=true;this.modal=true;}close(){this.open=false;}
@@ -35,7 +35,7 @@ test('successful empty complete history differs from incomplete coverage and pen
 });
 test('available partial history remains ready with a coverage warning',async()=>{
   const f=fixture();await open(f);f.finish(200,{data:[{deliveryDate:'2026-08-28',vehicle:'101',driverName:'합성기사'}],meta:{complete:true,coverageComplete:false}});await flush();
-  assert.equal(f.dialog().dataset.state,'ready');assert.match(f.text(),/전체 기간 수집 완전성 미확인/);assert.match(f.text(),/합성기사/);
+  assert.equal(f.dialog().dataset.state,'ready');assert.match(f.text(),/일부 날짜의 수집 완료 여부는 별도 확인/);assert.match(f.text(),/합성기사/);
 });
 for(const kind of ['history','notes'])test(kind+' failure leaves the public detail outside the dialog untouched',async()=>{
   const f=fixture();const publicCard={textContent:'합성 공개 고객정보'};f.body.append(publicCard);await open(f,kind);
@@ -59,7 +59,16 @@ test('inline history shows records before collapsed completeness details and cle
  const f=fixture(),host=f.element('div'),button=f.element('button');
  await f.window.MapStaff.open({kind:'history',customerCode:'S900001'},host,button);await flush();
  f.finish(200,{data:[{deliveryDate:'2026-08-28',vehicle:'101',driverName:'합성기사'}],meta:{complete:true,coverageComplete:false}});await flush();
- assert.equal(host.dataset.state,'ready');const text=f.textAt(host);assert.ok(text.indexOf('합성기사')<text.indexOf('검증 상태 상세'));
+ assert.equal(host.dataset.state,'ready');const text=f.textAt(host);assert.ok(text.indexOf('합성기사')<text.indexOf('데이터 안내'));
  assert.equal(host.children.find(e=>e.tag==='details').open,undefined);
  f.window.MapStaff.clear();assert.equal(f.textAt(host),'');assert.equal(host.hidden,true);
+});
+
+test('one shared auxiliary switches kind, same button closes, no stale protected response',async()=>{
+ const f=fixture(),host=f.element('section'),history=f.element('button'),notes=f.element('button');
+ await f.window.MapStaff.open({kind:'history',customerCode:'S900001'},host,history);await flush();
+ await f.window.MapStaff.open({kind:'notes',customerCode:'S900001'},host,notes);await flush();
+ assert.equal(history.attrs['aria-expanded'],'false');assert.equal(notes.attrs['aria-expanded'],'true');assert.equal(host.hidden,false);
+ f.finish(200,{data:{accessInfo:'SYNTHETIC_ONLY'}});await flush();assert.match(f.textAt(host),/SYNTHETIC_ONLY/);
+ await f.window.MapStaff.open({kind:'notes',customerCode:'S900001'},host,notes);assert.equal(host.hidden,true);assert.equal(f.textAt(host),'');assert.equal(f.body.classList.contains('staffAuxOpen'),false);
 });

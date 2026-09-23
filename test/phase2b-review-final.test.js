@@ -59,7 +59,7 @@ test("unlocated source assignment survives separately without invented status/or
  assert.match(runtime,/지도 위치를 변경하지 않습니다/);assert.match(runtime,/lat: item.lat === null \? null/);
 });
 test("row-to-pin and pin-to-row maintain viewport focus and scroll",()=>{
- assert.match(runtime,/selectStore\(row, null, true\)/);assert.match(runtime,/scrollIntoView\?/);assert.match(runtime,/state.map.setLevel\(5\)/);
+ assert.match(runtime,/selectStore\(row, null, true\)/);assert.match(runtime,/scrollSelectedInside/);assert.doesNotMatch(runtime,/scrollIntoView/);assert.match(runtime,/state.map.setLevel\(5\)/);
 });
 test("routing unavailable preserves straight-line policy, no browser directions fan-out",()=>{
  assert.match(runtime,/다음 직선/);assert.doesNotMatch(runtime,/apis-navi|\/directions/);

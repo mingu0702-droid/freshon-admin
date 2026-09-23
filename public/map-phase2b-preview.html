@@ -29,7 +29,7 @@
 </head>
 <body>
   <nav id="mapModeBar" aria-label="지도 조회 모드"><button id="modePeriod" aria-pressed="true">매장·권역 지도</button><button id="modeDaily" aria-pressed="false">일자별 운행</button><span id="periodIdentity" aria-live="polite">기간 확인 중</span><button id="toggleRunList">운행목록</button><button id="staffLogout">직원 로그아웃</button></nav>
-  <div id="mapDateBar"><div id="periodControls"><label>시작일 <input id="rangeStart" type="date"></label><label>종료일 <input id="rangeEnd" type="date"></label><button id="applyPeriod">기간 적용</button><button id="recent60">최근 60일</button></div><div id="dailyControls" hidden><label>운행일 <input id="selectedDate" class="operationField" type="date" aria-label="운행일"></label><button id="todayBtn">최신 운행일</button></div></div>
+  <div id="mapDateBar"><div id="periodControls"><label>시작일 <input id="rangeStart" type="date"></label><label>종료일 <input id="rangeEnd" type="date"></label><button id="applyPeriod">기간 적용</button><button id="recent60">최근 60일</button></div><div id="dailyControls" hidden><label>운행일 <input id="selectedDate" class="operationField" type="date" aria-label="운행일"></label><button id="todayBtn">최신 운행일</button></div><details class="dataHelp"><summary>데이터 안내</summary><p>현재 저장된 자료 기준입니다. 일부 날짜의 수집 완료 여부는 별도 확인이 필요합니다.</p></details></div>
   <select id="periodDriver" aria-label="기간별 기사" hidden><option value="">전체 기사</option></select>
   <div id="map"></div>
   <div class="app">
@@ -41,9 +41,9 @@
       <section class="block addressBlock"><div class="label"><span>③ 신규매장/신규권역</span><span class="mini">임시핀 지원</span></div><div class="searchLine"><input id="addressQuery" class="field" autocomplete="off" placeholder="도로명 · 지번 주소"><button id="addressBtn" class="ghost">판단</button></div><div class="hint">임시핀·주변 배송처·근접호차·권역/요일을 함께 판단</div><div id="searchNotice" class="notice"></div><div id="addressJudgeResults" class="judgeList"></div></section>
       <div id="detailSection" class="detailWrap"><div id="detail" class="idle">검색하거나 핀을 선택하면 점포정보가 표시됩니다.</div></div>
       <div hidden id="routeTool"><input id="date" type="date"><select id="vehicle"></select><button id="routePlan"></button><button id="endRoute"></button><div id="loadingNotice"></div><div id="routeSummary"></div></div>
-      <details id="newAreaBatchTool" class="tool"><summary>⑤ 신규권역 일괄조회</summary><div class="toolBody"><textarea id="newAreaBatchInput" class="newInput" placeholder="주소&#9;고객코드 또는 고객명&#10;주소&#9;고객명"></textarea><div class="newActions"><button id="judgeNewAreaBatch" class="primary">일괄 판단</button><button id="clearNewAreaBatch" class="ghost">비우기</button></div><div id="newAreaBatchStatus" class="hint">권역·배송요일·차량 진입 확인을 분리해 표시합니다.</div><div id="newAreaBatchResults" class="judgeList"></div><div class="dropdownFoot"><button id="exportNewAreaCsv" class="tiny">결과 CSV</button><button id="exportNewAreaExcel" class="tiny">결과 Excel</button></div></div></details>
+      <details id="newAreaBatchTool" class="tool"><summary>⑤ 신규권역 일괄조회</summary><div class="toolBody"><label>적용일 <input id="newAreaApplyDate" type="date" required></label><textarea id="newAreaBatchInput" class="newInput" placeholder="주소(X열)&#9;상세주소/고객정보(Y열)"></textarea><div class="newActions"><button id="judgeNewAreaBatch" class="primary">일괄 판단</button><button id="clearNewAreaBatch" class="ghost">비우기</button></div><div id="newAreaBatchStatus" class="hint">권역·배송요일·차량 진입 확인을 분리해 표시합니다.</div><div id="newAreaBatchResults" class="judgeList"></div><div class="newActions"><button id="copyAreaDecision" disabled>판정 결과 복사</button><button id="copyAreaMatching" disabled>매칭정보 복사</button></div><div class="dropdownFoot"><button id="exportNewAreaCsv" class="tiny">결과 CSV</button><button id="exportNewAreaExcel" class="tiny">결과 Excel</button></div></div></details>
       <section class="block"><button id="openOperations" class="ghost operationsButton">진단/상태</button><div id="operationsPanel" hidden></div></section>
-      <section id="periodStoreListSection" class="block"><div class="label">③ 매장 목록 <span id="periodStoreListCount" class="mini"></span></div><div id="periodStoreList" class="resultList"></div><button id="periodListMore" class="ghost" hidden>매장 더 보기</button></section>
+      <section id="periodStoreListSection" class="block"><div class="label">③ 매장 목록 <span id="periodStoreListCount" class="mini"></span><button id="togglePeriodList" class="tiny" aria-expanded="false" aria-controls="periodStoreList">펼치기</button></div><div id="periodStoreList" class="resultList"></div><button id="periodListMore" class="ghost" hidden>매장 더 보기</button></section>
     </aside>
     <button id="mobileBack" class="mobileBack">목록</button>
     <div id="operationBar" class="operationBar"><span id="currentTime" class="clock">--:--</span><button id="syncOperation" class="primary operationSync">↻ 현재상태 동기화</button><div class="vehicleControl"><span id="selectedVehicleBadge">전체 호차</span><select id="operationVehicle" class="operationField" aria-label="운행 호차"></select></div><span class="opMetric"><b id="opTotal">-</b><small>총착</small></span><span class="opMetric"><b id="opCompleted">-</b><small>완료</small></span><span class="opMetric"><b id="opRemaining">-</b><small>잔여</small></span><span class="opMetric"><b id="opEta">-</b><small>ETA</small></span></div>
@@ -54,16 +54,17 @@
   </div>
   <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=8f1459975e9f3b3aa62089837a2aeb85&libraries=services&autoload=false"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <section id="mobileWorkspace" class="mobileWorkspace"><button id="sheetExpand" class="sheetHandle" aria-label="패널 펼치기">━</button><nav class="sheetTabs" aria-label="지도 패널"><button data-sheet-tab="filters">조회 조건</button><button data-sheet-tab="stores" class="active">매장 목록</button><button data-sheet-tab="runs">운행목록</button><button data-sheet-tab="new">주소·신규권역</button></nav><div id="mobileSheetContent"></div></section>
+  <section id="staffAuxContent" class="staffAuxCard" aria-label="직원 보호 상세" hidden></section>
+  <section id="mobileWorkspace" class="mobileWorkspace"><button id="sheetExpand" class="sheetHandle" aria-label="패널 펼치기">━</button><nav class="sheetTabs" aria-label="지도 패널"><button data-sheet-tab="filters">조회 조건</button><button data-sheet-tab="stores" class="active">매장 목록</button><button data-sheet-tab="runs">운행목록</button><button data-sheet-tab="new">주소·신규권역</button></nav><div id="mobileDateHome"></div><div id="mobileSheetContent"></div></section>
   <script src="vehicle-data.js"></script>
   <script src="admin-features.js"></script>
   <script src="phase2b-ui-helpers.js"></script>
-  <link rel="stylesheet" href="map-staff.css?v=20260922-card2">
-  <link rel="stylesheet" href="map-period.css?v=20260922-perf1">
-  <script src="map-staff.js?v=20260922-card2"></script>
-  <script src="map-period-ui.js?v=20260922-sync3"></script>
-  <script src="map-data-sync.js?v=20260922-sync3"></script>
-  <script src="map-phase2b-runtime.js?v=20260922-sync3"></script>
+  <link rel="stylesheet" href="map-staff.css?v=20260924-ui1">
+  <link rel="stylesheet" href="map-period.css?v=20260924-ui1">
+  <script src="map-staff.js?v=20260924-ui1"></script>
+  <script src="map-period-ui.js?v=20260924-ui1"></script>
+  <script src="map-data-sync.js?v=20260924-ui1"></script>
+  <script src="map-phase2b-runtime.js?v=20260924-ui1"></script>
 
 </body>
 </html>

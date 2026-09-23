@@ -17,7 +17,7 @@ function fixture(windowData = {}) {
       const classes = new Set();
       nodes.set(id, {value:'',innerHTML:'',textContent:'',hidden:false,disabled:false,attrs:{},dataset:{},style:{setProperty(){}},clientWidth:1000,clientHeight:700,options:[],selectedOptions:[],children:[],
         classList:{add:k=>classes.add(k),remove:k=>classes.delete(k),contains:k=>classes.has(k),toggle(k,v){ if(v ?? !classes.has(k))classes.add(k);else classes.delete(k); }},
-        setAttribute(k,v){this.attrs[k]=v;},toggleAttribute(){},append(x){this.children.push(x);},replaceChildren(...x){this.children=x;},add(){},addEventListener(){},
+        setAttribute(k,v){this.attrs[k]=v;},removeAttribute(k){delete this.attrs[k];},toggleAttribute(){},append(x){this.children.push(x);},replaceChildren(...x){this.children=x;},add(){},addEventListener(){},
         click(){downloads++;},getBoundingClientRect(){return {left:320,width:1000,top:58};}});
     }
     return nodes.get(id);
@@ -30,7 +30,7 @@ function fixture(windowData = {}) {
     Option:class {constructor(text,value){this.textContent=text;this.value=value;}},location:{href:'http://local.test/'}});
   vm.runInContext(runtime.slice(0,runtime.lastIndexOf('  initVehicles();')) + `
     activateSheet=()=>{}; refreshVehicleUi=()=>{};
-    window.test={state,initializePeriod,selectLatestRoute,syncDateHeading,drawSelectedBoundaries,clearBoundaries,changePeriod,changeSelectedDate,clearNewAreaBatch,runNewArea,exportNewArea,selectStore,clearSelection,renderStops,search,searchPeriod,loadOperationStatus,showDiagnostics,renderPeriodStoreList,
+    window.test={state,initializePeriod,selectLatestRoute,syncDateHeading,drawSelectedBoundaries,clearBoundaries,changePeriod,changeSelectedDate,clearNewAreaBatch,runNewArea,exportNewArea,selectStore,clearSelection,renderStops,search,searchPeriod,loadOperationStatus,showDiagnostics,renderPeriodStoreList,selectCenter,comparisonStores,judgeNewAreaPoint,
       setReady:()=>{dateReady=true;periodMeta=${JSON.stringify(range)};state.rangeStart=periodMeta.startDate;state.rangeEnd=periodMeta.endDate;},
       setRows:rows=>{periodRows=rows;replaceStoreSnapshot(rows,{});},
       setFetch:fn=>fetchJson=fn,setJudge:fn=>judgeNewAreaRow=fn,setInput:rows=>parseNewArea=()=>rows,
@@ -38,6 +38,25 @@ function fixture(windowData = {}) {
   })();`, ctx);
   return {...ctx.window.test,node,selectors,timers,drawn,downloads:()=>downloads};
 }
+
+test('center round trip clears hidden driver/vehicle filters and invalidates old search',()=>{
+ const f=fixture();f.setReady();
+ for(const center of ['osan','yeongnam','honam','all','osan']){
+  f.state.driverKey='OLD';f.node('#periodDriver').value='OLD';f.selectors.get('#vehicleList input[type=checkbox]')[0].checked=true;
+  const before=f.state.searchRequestId;f.selectCenter(center);
+  assert.equal(f.state.driverKey,'');assert.equal(f.node('#periodDriver').value,'');assert.equal(f.selectors.get('#vehicleList input[type=checkbox]')[0].checked,false);
+  assert.ok(f.state.searchRequestId>before);assert.equal(f.node('#periodCenter').value,center);
+ }
+});
+test('new area uses other centers existing points, preserves apartment/Jeju exclusions',()=>{
+ const f=fixture();f.setReady();f.state.centerFilter='osan';f.setRows([{...sample,address:'부산광역시 가로 1',lat:35.17,lng:129.07}]);
+ assert.equal(f.comparisonStores().length,1);
+ for(const address of ['부산광역시 가로 2','광주광역시 가로 2','경기도 광주시 가로 2'])assert.equal(f.judgeNewAreaPoint({address},{lat:35.17,lng:129.07}).decision,'O');
+ assert.equal(f.judgeNewAreaPoint({address:'제주특별자치도 제주시 가로 1'},{lat:35.17,lng:129.07}).decision,'X');
+ assert.equal(f.judgeNewAreaPoint({address:'부산광역시 자이 아파트 101동 102호'},{lat:35.17,lng:129.07}).reason,'아파트');
+ assert.equal(f.judgeNewAreaPoint({address:'부산광역시 상가동 가로 1'},{lat:35.17,lng:129.07}).decision,'O');
+ assert.equal(f.judgeNewAreaPoint({address:'전라남도 가로 1'},{lat:33,lng:126}).reason,'해당 센터 비교자료 부족');
+});
 test('startup uses model latest after status, not stale Snapshot or today',async()=>{
  const f=fixture(),urls=[];
  f.setFetch(async url=>{urls.push(url);if(url.endsWith('period-status'))return model;if(url.endsWith('snapshot'))return {data:[],meta:{latestDate:'2026-08-24'}};return {data:[sample],meta:{complete:true,startDate:'2026-07-22',endDate:'2026-09-19',coverageComplete:false}};});
@@ -45,7 +64,7 @@ test('startup uses model latest after status, not stale Snapshot or today',async
  assert.equal(urls.length,4);assert.ok(urls[0].endsWith('period-status'));assert.ok(urls[2].includes('startDate=2026-07-22&endDate=2026-09-19'));assert.ok(urls[3].endsWith('base-vehicles'));
  assert.equal(f.state.rangeEnd,'2026-09-19');assert.equal(f.node('#latestDate').textContent,'2026-07-22 ~ 2026-09-19');
  assert.equal(f.node('#periodStoreList').attrs['data-state'],'ready');assert.equal(f.node('#periodStoreListCount').textContent,'1개 매장');
- assert.match(f.node('#freshnessState').textContent,/전체 원천 완전성 미확인/);assert.doesNotMatch(f.node('#freshnessState').textContent,/원천 0건/);
+ assert.equal(f.node('#freshnessState').textContent,'지도 반영일 2026-09-19');assert.doesNotMatch(f.node('#freshnessState').textContent,/원천 0건/);
  assert.equal(f.selectors.get('#vehicleList input[type=checkbox]').filter(x=>x.checked).length,0);
 });
 test('default Period creates zero cards; selecting a late store creates only its card',()=>{
@@ -102,13 +121,13 @@ test('all-vehicle Osan administrative geometry attaches, toggles without selecti
  f.drawSelectedBoundaries([]);assert.equal(f.state.polygons.length,1);assert.equal(f.state.polygons[0].map,map);assert.equal(f.node('#areaToggle').attrs['data-geometry-count'],'1');
  f.clearBoundaries();assert.equal(f.state.polygons.length,0);assert.equal(f.state.selected,sample);assert.equal(map.level,5);assert.equal(map.center,'unchanged');assert.equal(f.state.mode,'BASE_60D');
 });
-test('date controls stay above map; address retains original single DOM/events; assets versioned',()=>{
+test('date controls move as one DOM into sidebar; address retains original DOM/events; assets versioned',()=>{
  const html=file('map-phase2b-preview.html');assert.ok(html.indexOf('id="mapDateBar"')<html.indexOf('id="map"'));
  assert.equal(html.split('id="selectedDate"').length-1,1);assert.equal(html.split('id="todayBtn"').length-1,1);
  assert.ok(runtime.includes('$("#results").before(addressPanel)'));assert.ok(!runtime.includes('filters.append($("#legacyVehicleState"), $("#periodDriver"), $("#periodControls"))'));
- for(const asset of ['map-period-ui.js','map-phase2b-runtime.js','map-data-sync.js'])assert.ok(html.includes(asset+'?v=20260922-sync3'));
- for(const asset of ['map-staff.js','map-staff.css'])assert.ok(html.includes(asset+'?v=20260922-card2'));
- assert.ok(html.includes('map-period.css?v=20260922-perf1'));
+ assert.ok(runtime.includes("$('#leftPanel .head').append($('#mapDateBar'))"));
+ for(const asset of ['map-period-ui.js','map-phase2b-runtime.js','map-data-sync.js','map-staff.js','map-staff.css'])assert.ok(html.includes(asset+'?v=20260924-ui1'));
+ assert.ok(html.includes('map-period.css?v=20260924-ui1'));
 });
 test('recent range never exceeds available model start and never guesses absent latest',()=>{
  assert.deepEqual(MapPeriodUi.recentRange({...model,startDate:'2026-09-01'}),{start:'2026-09-01',end:'2026-09-19'});
@@ -135,7 +154,7 @@ test('clear invalidates an in-flight batch and prevents late export enablement',
 test('a failed replacement analysis cannot export the previous successful batch',async()=>{
   const f=fixture();f.setReady();f.state.newAreaResults=[sample];f.setInput([{}]);f.setJudge(async()=>{throw Error('synthetic');});
   await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
-  assert.equal(f.state.newAreaResults.length,0);assert.match(f.node('#newAreaBatchStatus').textContent,/조회 실패/);assert.equal(f.downloads(),0);
+  assert.equal(f.state.newAreaResults.length,1);assert.match(f.state.newAreaResults[0].reason,/조회 실패/);assert.equal(f.state.newAreaResults[0].customerCode,undefined);assert.equal(f.downloads(),0);
 });
 test('Period not-ready retains old overlays and does not claim empty or start recovery',async()=>{
   const f=fixture();let removed=0;const old=[sample];f.state.currentRows=old;f.state.overlays=[{setMap:()=>removed++}];

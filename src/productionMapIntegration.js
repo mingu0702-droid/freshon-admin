@@ -21,7 +21,7 @@ export function mountProductionMapApi(app,{
   previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
   normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus,
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
-  publicDir,getSnapshotWorkerState=()=>({})
+  publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const stageReadModelEnabled=true;
@@ -33,7 +33,7 @@ export function mountProductionMapApi(app,{
   app.use('/api/map-phase2b/private',mapStaff.requireStaff);
   app.use('/api/map-phase2b/private/driver-history',historyDeadline);
   app.use(publicResponse);
-  const mapFreshness=mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus:stageReadModel.status});
+  const mapFreshness=mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus:stageReadModel.status,readBaseVehicleMaster});
   if(publicDir)app.get(['/map-phase2b-snapshot.json','/customer-master-20260604.json','/vehicle-data.js','/new-area-data.js'],async(req,res)=>{
     try{
       const raw=await fs.readFile(path.join(publicDir,path.basename(req.path)),'utf8');

@@ -16,6 +16,7 @@
   let periodSelectionCache = null;
   let baseVehicles = new Map(), baseVehicleRequest = null, baseVehicleTimer = null, baseVehicleTries = 0;
   let recentPeriodMode = true;
+  let baseVehicleStatus='LOADING';
   const renderMetrics = { renders: 0, created: 0, removed: 0, reused: 0, lastMs: 0 };
   if (window.PerformanceObserver) {
     try { new window.PerformanceObserver(list => {
@@ -131,7 +132,7 @@
     const key = [periodBasis,periodVehicleScope,selectedVehicles().join(','),state.driverKey,state.centerFilter].join('|');
     if (periodSelectionCache?.source === allStores && periodSelectionCache.key === key) return periodSelectionCache.rows;
     const rows = MapPeriodUi.select(allStores, periodBasis === "vehicle" ? selectedVehicles() : [], periodBasis === "driver" ? state.driverKey : "", {vehicleBasis:periodBasis === "vehicle" ? "base" : "actual"})
-      .filter(row => !state.centerFilter || periodBasis === "driver" || SOURCE.vehicles.find(v => String(v.vehicle) === row.vehicle)?.group === state.centerFilter);
+      .filter(row => !state.centerFilter || periodBasis === "driver" || (row.baseVehicleGroup||SOURCE.vehicles.find(v => String(v.vehicle) === row.vehicle)?.group) === state.centerFilter);
     periodSelectionCache = {source:allStores,key,rows}; return rows;
   }
   async function refreshStoreSnapshot() {
@@ -261,13 +262,13 @@
           if(payload.phase==='LOADING'&&++baseVehicleTries<16){clearTimeout(baseVehicleTimer);baseVehicleTimer=setTimeout(loadBaseVehicles,15000);}
           return;
         }
-        baseVehicles=new Map(payload.data.map(row=>[row.customerCode,row]));
+        baseVehicles=MapPeriodUi.mergeBaseVehicles(baseVehicles,payload.data);baseVehicleStatus='READY';
         if(state.mode==='BASE_60D'&&dateReady){
           replaceStoreSnapshot(periodRows,snapshotMeta);ensureDateVehicles();periodSelectionCache=null;
           state.fitRequested=false;await loadBaseMap();
-          if(state.selected){const selected=filteredPeriodStores().find(row=>row.customerCode===state.selected.customerCode);if(selected)selectStore(selected,null,false,true);}
+          if(state.selected){const selected=filteredPeriodStores().find(row=>row.customerCode===state.selected.customerCode);if(selected){Object.assign(state.selected,selected);const label=$('#detailBaseVehicle');if(label)label.textContent=MapPeriodUi.baseVehicleLabel(selected);}}
         }
-      }catch(_){/* Missing base source is never replaced with actual delivery vehicle. */}
+      }catch(_){baseVehicleStatus='ERROR';if(state.mode==='BASE_60D'&&dateReady)await loadBaseMap();}
       finally{baseVehicleRequest=null;}
     })();return baseVehicleRequest;
   }
@@ -339,11 +340,13 @@
       if (known.has(vehicle)) return;
       const label = document.createElement("label");
       label.className = "vehicleItem";
+      label.dataset.group=allStores.find(row=>row.baseVehicle===vehicle&&row.baseVehicleGroup)?.baseVehicleGroup||'';
       label.innerHTML = `<input type="checkbox" value="${esc(vehicle)}"><span class="vehicleNo">${esc(vehicleLabel(vehicle))}</span><span class="vehicleArea">기준일 편성</span>`;
       label.querySelector("input").onchange = () => { periodVehicleScope = "selected"; refreshVehicleUi(true); };
       $("#vehicleList").append(label);
       ["#vehicle", "#mobileVehicle", "#operationVehicle", "#mobileBaseVehicle"].forEach((id) => $(id).add(new Option(`${vehicleLabel(vehicle)}`, vehicle)));
     });
+    $$('.vehicleItem').forEach(label=>{const group=allStores.find(row=>row.baseVehicle===label.querySelector('input')?.value&&row.baseVehicleGroup)?.baseVehicleGroup;if(group)label.dataset.group=group;});
   }
 
   function normalizeStore(customer, vehicle, vehicleIndex) {
@@ -683,27 +686,28 @@
   function positionDetailPopup() {
     const row = state.selected;
     const panel = $("#detailSection");
-    if (!panel?.classList.contains("open") || !state.map || !row) return;
-    if (numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) {
-      const rect = $("#map").getBoundingClientRect();
-      panel.style.left = `${rect.left + rect.width / 2 - 125}px`; panel.style.top = `${rect.top + 50}px`; panel.style.right = "auto";
-      panel.style.setProperty("--popup-left", panel.style.left); panel.style.setProperty("--popup-top", panel.style.top);
-      return;
-    }
-    const projection = state.map.getProjection?.();
-    const point = projection?.containerPointFromCoords?.(new kakao.maps.LatLng(Number(row.lat), Number(row.lng)));
-    if (!point) { panel.style.left = ""; panel.style.top = "74px"; return; }
+    if (!panel?.classList.contains("open") || !row) return;
     const mapRect = $("#map").getBoundingClientRect();
+    const projection = state.map?.getProjection?.();
+    const point = numberOrNull(row.lat)!==null&&numberOrNull(row.lng)!==null ? projection?.containerPointFromCoords?.(new kakao.maps.LatLng(Number(row.lat), Number(row.lng)))||{x:mapRect.width/2,y:200} : {x:mapRect.width/2,y:200};
     const sheetTop = innerWidth <= 760 ? $("#mobileWorkspace")?.getBoundingClientRect().top : innerHeight;
     panel.style.maxHeight = `${Math.max(100, Math.min(400, (sheetTop || innerHeight) - mapRect.top - 16))}px`;
     const width = panel.offsetWidth || 250;
-    const left = Math.max(mapRect.left + 5, Math.min(innerWidth - width - 5, mapRect.left + point.x - width / 2));
+    let left = Math.max(mapRect.left + 5, Math.min(innerWidth - width - 5, mapRect.left + point.x - width / 2));
+    const auxiliary=$('#staffAuxContent');
+    if(auxiliary&&!auxiliary.hidden&&innerWidth>760&&mapRect.width>=618&&left+width+328>innerWidth-8&&left-328<mapRect.left+5)left=mapRect.left+333;
     const top = Math.max(mapRect.top + 5, mapRect.top + point.y - panel.offsetHeight - 40);
     panel.style.left = `${left}px`;
     panel.style.right = "auto";
     panel.style.top = `${top}px`;
     panel.style.setProperty("--popup-left", panel.style.left); panel.style.setProperty("--popup-top", panel.style.top);
     panel.style.setProperty("--popup-tail", `${Math.max(14, Math.min(width - 14, mapRect.left + point.x - left))}px`);
+    if(auxiliary){
+      const right=left+width+8;
+      auxiliary.style.left=`${right+320<=innerWidth-8?right:Math.max(mapRect.left+4,left-328)}px`;
+      auxiliary.style.top=`${Math.min(top,Math.max(mapRect.top+5,innerHeight-340))}px`;
+      auxiliary.style.maxHeight=`${Math.max(120,innerHeight-parseFloat(auxiliary.style.top)-12)}px`;
+    }
   }
 
   function selectStore(row, element, focus, skipEnrich = false) {
@@ -723,9 +727,9 @@
     if (state.mode === "BASE_60D") {
       renderPeriodStoreList();
       $$("[data-period-store]").forEach(button => { const active = button.dataset.periodStore === row.customerCode; button.classList.toggle("selected", active); button.setAttribute("aria-pressed", String(active)); });
-      if (element?.classList.contains("marker")) requestAnimationFrame(() => $(".periodStore.selected")?.scrollIntoView?.({ block: "nearest" }));
+      if (element?.classList.contains("marker")) scrollSelectedInside('#periodStoreList','.periodStore.selected');
     }
-    if (element?.classList.contains("marker")) requestAnimationFrame(() => $(".runStop.selected")?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }));
+    if (element?.classList.contains("marker")) scrollSelectedInside('#runList','.runStop.selected');
     const unlocated = numberOrNull(row.lat) === null || numberOrNull(row.lng) === null;
     if (unlocated) $("#mapStatusSub").textContent = "좌표 미확인 · 지도 위치를 변경하지 않습니다.";
     if (focus && state.map && numberOrNull(row.lat) !== null && numberOrNull(row.lng) !== null) {
@@ -740,20 +744,20 @@
     const statusCard = row.status ? `<div class="stat"><strong>${row.status === "COMPLETED" ? "완료" : "잔여"}</strong><span>상태</span></div>` : "";
     $("#detailSection").classList.add("open");
     $("#detail").className = "detailCard";
-    $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">${esc(row.customerCode || "신규 주소")}</div><div class="storeName">${esc(row.customerName || "선택 위치")}</div><div class="popupMeta"><b>${vehicle ? esc(vehicleLabel(vehicle)) : routeMode ? "선택일 편성 없음" : esc(row.outsideReason || "선택 기간 이력 없음")}</b>${routeMode ? `<span class="statusChip ${row.status === "COMPLETED" ? "done" : "unknown"}">${row.status === "COMPLETED" ? "완료" : row.status === "PENDING" ? "미완료" : "상태 미확인"}</span>` : `<span>${esc(row.driverName || (row.history?.length ? "기사 미등록" : ""))}</span>`}</div></div>
+    $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">${esc(row.customerCode || "신규 주소")}</div><div class="storeName">${esc(row.customerName || "선택 위치")}</div><div class="popupMeta">${routeMode ? `<b>${esc(vehicleLabel(vehicle)||'선택일 편성 없음')}</b><span class="statusChip ${row.status === "COMPLETED" ? "done" : "unknown"}">${row.status === "COMPLETED" ? "완료" : row.status === "PENDING" ? "미완료" : "상태 미확인"}</span>` : `<b>기준호차 <span id="detailBaseVehicle">${esc(MapPeriodUi.baseVehicleLabel(row))}</span></b>`}</div></div>
       <div class="detailBody">
-        ${!routeMode ? `<div class="detailLine"><b>현재 기준호차 ${esc(row.baseVehicle ? vehicleLabel(row.baseVehicle) : '미확인')}</b><br>최근 실제 배송호차 ${esc(vehicleLabel(row.actualVehicle || row.history?.[0]?.vehicle || '미확인'))}<br><small>${esc(row.baseVehicleSource || '기준호차 원천 미확인')} ${esc(row.baseVehicleDate || '')} 저장 기준 · 과거 배차와 별도</small></div>` : ''}
+        ${!routeMode && (row.actualVehicle||row.history?.[0]?.vehicle) && normalizeVehicle(row.actualVehicle||row.history?.[0]?.vehicle)!==normalizeVehicle(row.baseVehicle) ? `<div class="detailLine">최근 실제 배송 ${esc(vehicleLabel(row.actualVehicle||row.history?.[0]?.vehicle))}</div>` : ''}
         <div class="detailLine"><span>${esc(row.address || "주소 미등록")}</span></div>
         ${!routeMode && row.history?.length ? `<div class="periodRecent">최근배송 ${esc(row.lastDeliveryDate)} · ${row.visitCount || row.history.length}회 이력</div>` : ""}
-        <div class="staffActions"><button id="staffHistory" aria-expanded="false" aria-controls="staffHistoryContent">최근 배송기사 펼치기/접기 ▾</button><div id="staffHistoryContent" class="staffInline" hidden></div><button id="staffNotes" aria-expanded="false" aria-controls="staffNotesContent">출입·배송 정보 펼치기/접기 ▾</button><div id="staffNotesContent" class="staffInline" hidden></div></div>
+        <div class="staffActions"><button id="staffHistory" aria-expanded="false" aria-controls="staffAuxContent">최근 배송기사 ▸</button><button id="staffNotes" aria-expanded="false" aria-controls="staffAuxContent">출입·배송 정보 ▸</button></div>
         ${unlocated ? '<div class="coordinateWarning">좌표 미확인</div>' : ""}
         <div class="mobileActions"><button id="mobileMapView" class="primary">지도 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicleLabel(vehicle) || "선택 호차")} 운행동선</button></div>
         <div id="nearWrap"></div>
       </div>`;
     requestAnimationFrame(positionDetailPopup);
     $(".detailMore")?.addEventListener("toggle", positionDetailPopup);
-    const openStaff = kind => window.MapStaff?.open({ kind, customerCode: row.customerCode, date: row.lastDeliveryDate || state.selectedDate,
-      rangeStart: routeMode ? daysBefore(state.selectedDate, 59) : state.rangeStart, rangeEnd: routeMode ? state.selectedDate : state.rangeEnd }, kind === 'history' ? $("#staffHistoryContent") : $("#staffNotesContent"), kind === 'history' ? $("#staffHistory") : $("#staffNotes"));
+    const openStaff = kind => {window.MapStaff?.open({ kind, customerCode: row.customerCode, date: row.lastDeliveryDate || state.selectedDate,
+      rangeStart: routeMode ? daysBefore(state.selectedDate, 59) : state.rangeStart, rangeEnd: routeMode ? state.selectedDate : state.rangeEnd }, $("#staffAuxContent"), kind === 'history' ? $("#staffHistory") : $("#staffNotes"));positionDetailPopup();};
     $("#staffHistory")?.addEventListener("click", () => openStaff("history"));
     $("#staffNotes")?.addEventListener("click", () => openStaff("notes"));
     if (innerWidth <= 760) { showMobileMap(); $("#mobileWorkspace").classList.add("collapsed"); }
@@ -777,6 +781,13 @@
       const exact = payload.data ? normalizeApiStore(payload.data) : null;
       if (exact && detailDate === state.selectedDate) selectStore({ ...row, ...exact, lat: row.lat, lng: row.lng, vehicle: row.vehicle, order: row.order, status: row.status, actualCompletedAt: row.actualCompletedAt, deliveryCompletedAt: row.deliveryCompletedAt, lastDeliveryDate: row.lastDeliveryDate }, element, false, true);
     } catch (error) { if (!isSilentRequestError(error)) console.warn("store detail unavailable", row.customerCode, error.message); }
+  }
+
+  function scrollSelectedInside(containerSelector,rowSelector){
+    requestAnimationFrame(()=>{const container=$(containerSelector),row=$(rowSelector);if(!container||!row)return;
+      const a=container.getBoundingClientRect(),b=row.getBoundingClientRect();
+      if(b.top<a.top)container.scrollTop+=b.top-a.top;else if(b.bottom>a.bottom)container.scrollTop+=b.bottom-a.bottom;
+    });
   }
 
   async function selectVehicleStatus(row, element) {
@@ -882,6 +893,8 @@
     sheetTab = tab;
     const panels = { filters: $("#periodFilterPanel"), stores: $("#periodStoreListSection"), runs: $("#runListPanel"), new: $("#newAreaTools") };
     const mobile = innerWidth <= 760;
+    const dates=$('#mapDateBar');
+    if(dates)(mobile?$('#mobileDateHome'):$('#leftPanel .head')).append(dates);
     for (const [key, panel] of Object.entries(panels)) {
       if (!panelHomes.has(key)) { const anchor = document.createComment(`panel-${key}`); panel.parentNode.insertBefore(anchor, panel); panelHomes.set(key, anchor); }
       if (mobile && key === tab && key !== "detail") $("#mobileSheetContent").append(panel);
@@ -982,7 +995,8 @@
       customerName: row.customerName || row.name || local.customerName || "",
       address: row.address || row.customerAddress || local.address || "",
       detailAddress: row.detailAddress || row.addressDetail || local.detailAddress || "",
-      vehicle: vehicle || local.vehicle || "",
+      vehicle: state.mode==='BASE_60D'&&periodBasis!=='driver' ? baseVehicles.get(code)?.baseVehicle||'' : vehicle || local.vehicle || "",
+      ...(state.mode==='BASE_60D'?baseVehicles.get(code)||{baseVehicle:'',baseVehicleState:'UNKNOWN'}:{}),
       lat: numberOrNull(row.lat ?? row.latitude) ?? local.lat ?? null,
       lng: numberOrNull(row.lng ?? row.longitude) ?? local.lng ?? null,
       accessInfo: row.accessInfo || local.accessInfo || "",
@@ -1213,7 +1227,8 @@
     $("#mapStatusTitle").textContent = period ? "매장·권역 지도" : "일자별 운행";
     $("#mapStatusSub").textContent = period ? `${state.rangeStart} ~ ${state.rangeEnd} · ${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 실제 배차' : '현재 기준호차 · 미확인 ?'}`
       : `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
-    $("#freshnessState").textContent = period ? `기간 데이터 최신 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}${periodMeta?.coverageComplete === false ? " · 전체 원천 완전성 미확인" : ""}` : `${state.selectedDate} 편성 조회 완료`;
+    $("#freshnessState").textContent = period ? `지도 반영일 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}` : `${state.selectedDate} 편성 조회 완료`;
+    if(period&&periodBasis==='vehicle'&&baseVehicleStatus!=='READY')$('#mapStatusSub').textContent=baseVehicleStatus==='ERROR'?'기준호차 조회 실패 · 확인 필요 · 기존 지도 유지':'기준호차 확인 중 · 미지정으로 판단하지 마세요.';
     syncDateHeading();
     $("#vehicleModeLabel").textContent = period ? "기간별 매장" : "날짜별 편성";
     if (selected.length === 1) $("#operationVehicle").value = selected[0];
@@ -1377,7 +1392,12 @@
   }
 
   function selectCenter(group) {
+    ++state.searchRequestId; ++state.addressRequestId; ++state.detailRequestId;
+    $('#results').replaceChildren();$('#addressJudgeResults').replaceChildren();
+    setSelectedVehicles([]);state.driverKey='';$('#periodDriver').value='';periodVehicleScope='all';periodListLimit=0;periodSelectionCache=null;
+    clearSelection();
     state.centerFilter = group === "all" ? "" : group;
+    $('#periodCenter').value=group;$('#mobileCenter').value=group;
     $$(".vehicleItem").forEach((item) => { item.style.display = group === "all" || item.dataset.group === group ? "flex" : "none"; });
     $("#mobileBaseVehicle").value = "";
     refreshVehicleUi(true);
@@ -1385,8 +1405,10 @@
 
   function comparisonStores() {
     if (!periodMeta?.complete || periodMeta.startDate !== state.rangeStart || periodMeta.endDate !== state.rangeEnd) return [];
-    return periodRows.map(row => ({...row,vehicle:baseVehicles.get(row.customerCode)?.baseVehicle||''}))
-      .filter(row=>!state.centerFilter||SOURCE.vehicles.find(v=>String(v.vehicle)===row.vehicle)?.group===state.centerFilter);
+    return periodRows.map(row => ({...row,
+      lat:numberOrNull(row.lat)??coordinateByCode.get(row.customerCode)?.lat,
+      lng:numberOrNull(row.lng)??coordinateByCode.get(row.customerCode)?.lng,
+      vehicle:baseVehicles.get(row.customerCode)?.baseVehicle||''}));
   }
   function nearestStores(point, limit = 8) {
     return comparisonStores().map((row) => ({ ...row, distance: distanceKm(point, row) })).filter((row) => Number.isFinite(row.distance)).sort((a, b) => a.distance - b.distance).slice(0, limit);
@@ -1424,10 +1446,8 @@
 
   function legacyException(text) {
     const value = String(text || "");
-    if (/제주/.test(value)) return "제주도";
+    if (MapPeriodUi.regionForAddress(value)==='제주도') return "제주도";
     if (apartmentUnitReason(value)) return "아파트";
-    if (/부산|대구|울산|경남|경북|영남/.test(value)) return "영남권";
-    if (/광주|전남|전북|호남/.test(value)) return "호남권";
     if (/동선외|배송동선\s*맞지/.test(value)) return "배송동선 맞지않음";
     return "";
   }
@@ -1465,11 +1485,12 @@
     const references = Phase2bUi.nearbyVehicles(point, comparisonStores(), 30);
     const exception = legacyException(`${row.address} ${row.customer}`);
     const limits=[periodMeta.missingCoordinate>0?'비교 원천 좌표 누락':null,periodMeta.coverageComplete!==true?'전체 원천 완전성 미검증':null].filter(Boolean);
-    const facts={...base,nearby,evidenceCount:nearby.length,dataLimits:limits.join(' · '),deliveryDays:combineNearbyPatterns(nearby),vehicle:nearby[0]?.vehicle||'-',nearestDistance:nearby[0]?.distance??nearestStores(point,1)[0]?.distance??null};
+    const nearest=nearestStores(point,1)[0];
+    const facts={...base,nearby,evidenceCount:nearby.length,dataLimits:limits.join(' · '),deliveryDays:combineNearbyPatterns(nearby),vehicle:nearby[0]?.vehicle||'-',nearestStore:nearest?.customerName||'',nearestDistance:nearest?.distance??null};
     if(exception)return {...facts,decision:'X',reason:exception,evidence:'기존 지역/시설 업무 제외 규칙'};
     if(base.facility)return {...facts,reason:'차량 진입 확인 필요',evidence:nearby.length?'500m 내 기존 배송점 확인 · 시설 진입 별도 확인':'시설 진입 확인 전 확정 불가'};
     if(nearby.length)return {...facts,decision:'O',reason:'',evidence:'500m 내 기존 배송점 확인 · 직선/공간거리 기준'};
-    if(limits.length)return {...facts,reason:'판단 보류',evidence:limits.join(' · ')+' · 인근 배송점 부재 확정 불가'};
+    if(limits.length)return {...facts,reason:!references.length?'해당 센터 비교자료 부족':'검토필요',evidence:limits.join(' · ')+' · 인근 배송점 부재 확정 불가'};
     return {...facts,decision:'X',reason:'배송동선 맞지 않음',evidence:references.length?'검증된 비교 범위의 500m 내 배송점 없음':'검증된 비교 범위의 30km 내 배송점 없음 · 도로 진입 판정 아님'};
   }
 
@@ -1482,6 +1503,7 @@
     $("#newAreaBatchStatus").textContent = "입력 0 · 완료 0";
     $("#exportNewAreaCsv").disabled = true;
     $("#exportNewAreaExcel").disabled = true;
+    $('#copyAreaDecision')?.setAttribute('disabled','');$('#copyAreaMatching')?.setAttribute('disabled','');
   }
 
   async function runNewArea(inputId, statusId, resultId) {
@@ -1496,8 +1518,8 @@
     for (const row of rows) {
       try { judged.push(await judgeNewAreaRow(row)); }
       catch (error) {
-        if (requestId === newAreaRequestId && !isSilentRequestError(error)) $(statusId).textContent = "신규권역 조회 실패 · 다시 시도해주세요. 지도는 유지됩니다.";
-        return;
+        if (requestId !== newAreaRequestId || isSilentRequestError(error)) return;
+        judged.push({...row,decision:'검토',reason:'조회 실패 · 검토필요',evidence:'주소 조회 실패 · 원문 보존',nearby:[]});
       }
       if (requestId !== newAreaRequestId || periodKey !== state.rangeStart + "|" + state.rangeEnd || state.mode !== "BASE_60D") return;
       $(statusId).textContent = `입력 ${rows.length} · 완료 ${judged.length}`;
@@ -1505,6 +1527,7 @@
     state.newAreaResults = judged;
     $("#exportNewAreaCsv").disabled = !judged.length;
     $("#exportNewAreaExcel").disabled = !judged.length;
+    if(judged.length){$('#copyAreaDecision')?.removeAttribute('disabled');$('#copyAreaMatching')?.removeAttribute('disabled');}
     $(statusId).textContent = `입력 ${rows.length} · 완료 ${judged.length} · 권역 내 ${judged.filter((r) => r.decision === "O").length} · 동선 없음 ${judged.filter((r) => r.reason === "배송동선 맞지 않음").length} · 확인 필요 ${judged.filter((r) => r.decision !== "O" && r.reason !== "배송동선 맞지 않음").length}`;
     $(resultId).innerHTML = judged.map((row, index) => `<button class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(row.reason || "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>사용 주소: ${esc(row.address)}</div><div>${esc(row.evidence || "")} · ${esc(vehicleLabel(row.vehicle))} ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.rangeStart || state.rangeStart)} ~ ${esc(row.rangeEnd || state.rangeEnd)}${Number.isFinite(row.evidenceCount) ? ` · 500m 근거 ${row.evidenceCount}개` : ''}</div><div>${esc(row.dataLimits || '')}</div><div>${esc(row.deliveryDays || "")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`).join("");
     $$('[data-judged]').forEach((button) => button.onclick = () => {
@@ -1657,7 +1680,9 @@
 
   function exportNewArea(format) {
     if (!state.newAreaResults.length) { $("#newAreaBatchStatus").textContent = "먼저 일괄 판단을 실행해주세요."; return; }
-    const rows = state.newAreaResults.map((row) => ({ 기준시작일: row.rangeStart || state.rangeStart, 기준종료일: row.rangeEnd || state.rangeEnd, 원본입력:row.originalInput||row.address, 판정근거: row.evidence || "", 근거수:row.evidenceCount??'', 데이터제한:row.dataLimits||'', 고객: row.customer, 주소: row.address, 권역판정: row.decision === "O" ? "가능" : row.reason, 배송요일: row.deliveryDays || "", 근접호차: row.vehicle || "", 거리: row.nearestDistance == null ? "" : formatDistance(row.nearestDistance), 시설확인: row.facility ? "차량 진입 확인 필요" : "" }));
+    if(!$('#newAreaApplyDate').value){$('#newAreaBatchStatus').textContent='적용일을 선택해 주세요.';return;}
+    const headings=['주소(X)','고객정보(Y)','판단(BV)','사유(BW)','적용일자(BX)','센터/권역(BY)','추천호차','가까운 배송처','거리km'];
+    const rows=MapPeriodUi.areaExportRows(state.newAreaResults,$('#newAreaApplyDate').value).map(values=>Object.fromEntries(headings.map((key,i)=>[key,values[i]])));
     if (format === "xlsx" && window.XLSX) {
       const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rows), "신규권역판정"); XLSX.writeFile(book, "신규권역판정.xlsx"); return;
     }
@@ -1687,12 +1712,15 @@
       $("#periodListMore").hidden = true; return;
     }
     const stores = rows.filter(row => !row.virtual);
+    if(!stores.length&&state.centerFilter&&baseVehicleStatus!=='READY'){
+      $('#periodStoreListCount').textContent='미확인';panel.textContent=baseVehicleStatus==='ERROR'?'기준호차 조회 실패 · 센터 매장 수 확인 필요':'기준호차 확인 중 · 센터 매장 수 미확인';$('#periodListMore').hidden=true;return;
+    }
     const visibleStores = periodListLimit ? stores.slice(Math.max(0,periodListLimit-100),periodListLimit) : state.selected && !state.selected.virtual ? [state.selected] : [];
     $("#periodStoreListCount").textContent = stores.length + "개 매장";
     panel.innerHTML = visibleStores.map(row => `<button class="resultItem periodStore${state.selected?.customerCode === row.customerCode ? " selected" : ""}" aria-pressed="${state.selected?.customerCode === row.customerCode}" data-period-store="${esc(row.customerCode)}"><span class="periodCode">${esc(row.customerCode)}</span><b>${esc(row.customerName || row.customerCode)}</b><span>${esc(row.lastDeliveryDate || "")} · ${esc(vehicleLabel(row.vehicle))}</span><span>${esc(row.driverName || "기사 미등록")} · ${row.visitCount || row.history?.length || 0}회</span></button>`).join("") || `<p class="hint">${stores.length ? '검색하거나 지도 핀을 선택하세요. 전체 목록은 요청할 때만 표시합니다.' : '조회 조건에 맞는 매장이 없습니다.'}</p>`;
-    $("#periodListMore").hidden = stores.length <= periodListLimit;
+    $("#periodListMore").hidden = !periodListLimit || stores.length <= periodListLimit;
+    const toggle=$('#togglePeriodList');if(toggle){toggle.textContent=periodListLimit?'접기':'펼치기';toggle.setAttribute('aria-expanded',String(!!periodListLimit));}
     $("#periodListMore").textContent = periodListLimit ? '다음 100개 매장' : '목록 보기 (100개씩)';
-    if (periodMeta?.coverageComplete === false) panel.innerHTML = '<p class="periodCoverage" role="note">전체 원천 완전성 미확인</p>' + panel.innerHTML;
     $$("[data-period-store]").forEach(button => button.onclick = () => { const row = stores.find(item => item.customerCode === button.dataset.periodStore); if (row) selectStore(row, null, true); });
   }
 
@@ -1705,6 +1733,7 @@
     $("#periodDriver").onchange = event => { state.driverKey = event.target.value; clearSelection(); periodListLimit = 0; requestMapFit(); loadBaseMap(); };
     $$('input[name="periodBasis"]').forEach(input => input.onchange = () => { periodBasis = input.value; syncPeriodBasis(); clearSelection(); periodListLimit = 0; requestMapFit(); loadBaseMap(); });
     $("#periodListMore").onclick = () => { periodListLimit += 100; renderPeriodStoreList(); };
+    $('#togglePeriodList').onclick=()=>{periodListLimit=periodListLimit?0:100;renderPeriodStoreList();};
     $("#staffLogout").onclick = () => window.MapStaff?.logout();
     $("#toggleRunList").onclick = () => { $("#runListTool").open = !$("#runListTool").open; if (innerWidth <= 760) activateSheet("runs"); };
     $("#vehicleTrigger").onclick = () => $("#vehicleSelect").classList.toggle("open");
@@ -1746,6 +1775,12 @@
     $("#clearNewAreaBatch").onclick = () => clearNewAreaBatch();
     $("#exportNewAreaCsv").onclick = () => exportNewArea("csv");
     $("#exportNewAreaExcel").onclick = () => exportNewArea("xlsx");
+    for(const [id,kind] of [['#copyAreaDecision','decision'],['#copyAreaMatching','matching']])$(id).onclick=async()=>{
+      if(!state.newAreaResults.length)return;
+      if(!$('#newAreaApplyDate').value){$('#newAreaBatchStatus').textContent='적용일을 선택해 주세요.';return;}
+      try{await navigator.clipboard.writeText(MapPeriodUi.areaTsv(state.newAreaResults,$('#newAreaApplyDate').value,kind));$('#newAreaBatchStatus').textContent=`${state.newAreaResults.length}행 · ${kind==='decision'?'BV:BY 4열':'BJ:BK 2열'} 복사 완료`;}
+      catch{$('#newAreaBatchStatus').textContent='클립보드 권한을 확인해 주세요. 결과 Excel 내보내기도 사용할 수 있습니다.';}
+    };
     $("#todayStatusTool")?.addEventListener("toggle", (event) => { if (event.target.open) loadTodayStatus(); });
     $("#mobileBack").onclick = hideMobileMap;
     $("#closeMobileRoute").onclick = () => document.body.classList.remove("routeSheetOpen");
@@ -1760,6 +1795,9 @@
   }
 
   initVehicles();
+  $('#newAreaApplyDate').value=localDate();
+  $('#leftPanel .head').append($('#mapDateBar'));
+  for(const card of [$('#detailSection'),$('#staffAuxContent')])for(const type of ['click','dblclick','pointerdown','wheel','touchstart'])card.addEventListener(type,event=>event.stopPropagation(),{passive:true});
   if(window.MapDataSync)window.MapDataSync.onPublished=async status=>{
     modelStatus=status;periodMeta=null;baseVehicleTries=0;
     if(state.mode!=='BASE_60D')return;

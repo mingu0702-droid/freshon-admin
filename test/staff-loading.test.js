@@ -6,7 +6,7 @@ const source=fs.readFileSync(new URL('../public/map-staff.js',import.meta.url),'
 function fixture(){
  let clock=0,seq=0,finishDetail;const timers=new Map(),elements=[];
  class Element{
-  constructor(tag){this.tag=tag;this.children=[];this.attrs={};this.open=false;this.dataset={};this.textContent='';elements.push(this);}
+  constructor(tag){this.tag=tag;this.children=[];this.attrs={};this.open=false;this.dataset={};this.textContent='';this.classList={add(){},remove(){}};elements.push(this);}
   append(x){this.children.push(x);}replaceChildren(){this.children=[];this.textContent='';}
   setAttribute(k,v){this.attrs[k]=v;}addEventListener(){}focus(){}
   show(){this.open=true;this.modal=false;}showModal(){this.open=true;this.modal=true;}close(){this.open=false;}

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 import "../public/phase2b-ui-helpers.js";
+import "../public/map-period-ui.js";
 
 const helpers = globalThis.Phase2bUi;
 const runtime = await readFile(new URL("../public/map-phase2b-runtime.js", import.meta.url), "utf8");
@@ -13,6 +14,7 @@ function fixture() {
     return nodes.get(id);
   };
   const ctx = vm.createContext({ window: { VEHICLE_AREA_DATA: { vehicles: [] } }, document: { body: node('body'), querySelector: node, querySelectorAll: () => [] }, console, Intl, Date, Number, URL, URLSearchParams, Map, Set, AbortController, setTimeout, clearTimeout, performance, innerWidth: 1440, innerHeight: 900, requestAnimationFrame: () => {}, Phase2bUi: helpers });
+  ctx.MapPeriodUi=globalThis.MapPeriodUi;
   vm.runInContext(runtime.slice(0, runtime.lastIndexOf("  initVehicles();")) + `
     window.test = { state, setPeriod: (rows) => { state.rangeStart = "2026-08-01"; state.rangeEnd = "2026-08-28"; periodRows = rows.map(row => ({...row, history:[{vehicle:row.vehicle}]})); periodMeta = {complete:true,startDate:state.rangeStart,endDate:state.rangeEnd,missingCoordinate:0}; }, nodes: $, judgeNewAreaPoint, toggleBoundaries, normalizeRouteStop, normalizeApiStore, setStores: (rows) => { allStores = rows; }, setSelected: (values) => { selectedVehicles = () => values; }, ready: () => { dateReady = true; }, loadOperationStatus, changeSelectedDate, setSnapshot: (rows) => { latestSnapshotRows = rows; }, stubUi: () => { activateSheet = () => {}; loadBaseMap = async () => {}; ensureDateVehicles = () => {}; refreshDriverMaster = () => {}; }, getStores: () => allStores, localDate, setFetch: (fn) => { fetchJson = fn; }, noDraw: () => { drawSelectedBoundaries = () => {}; } };
     window.test.setMeta = patch => Object.assign(periodMeta,patch);
@@ -45,7 +47,7 @@ test("500m auto decision does not recommend stores 600m or 30km away", () => {
   const f = fixture();
   f.setPeriod([{ vehicle: "101", lat: 37.006, lng: 127 }]);
   const outside = f.judgeNewAreaPoint({ address: "경기 오산시 테스트로 1" }, { lat: 37, lng: 127 });
-  assert.equal(outside.reason, "판단 보류"); // No whole-source coverage proof in this fixture.
+  assert.equal(outside.reason, "해당 센터 비교자료 부족"); // No base vehicle or whole-source coverage proof in this fixture.
   assert.match(outside.evidence,/완전성 미검증/);
   assert.equal(outside.vehicle, "-");
   f.setPeriod([{ vehicle: "109", lat: 37.003, lng: 127 }]);

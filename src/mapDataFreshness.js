@@ -3,7 +3,7 @@
 import express from 'express';
 import {requireAdmin} from './auth.js';
 
-export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus,env=process.env,adminGuard=requireAdmin}){
+export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus,readBaseVehicleMaster,env=process.env,adminGuard=requireAdmin}){
   let statusCache=null,statusAt=0,statusPending=null,baseCache=null,baseAt=0,basePending=null,baseError='',baseErrorAt=0;
   const cleanDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:null;
   const code=v=>/^[A-Z0-9_]+$/.test(v||'')?v:'UNKNOWN';
@@ -29,14 +29,15 @@ export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,mo
   app.get('/api/map-phase2b/preview/base-vehicles',requireView,enabled,(_q,r)=>{
     r.set('Cache-Control','no-store');
     if(baseError&&Date.now()-baseErrorAt>=300000)baseError='';
-    if(baseCache&&Date.now()-baseAt<1800000)return r.json({ok:true,data:baseCache,meta:{basis:'LATEST_STORED_DELIVERY_BASE',checkedAt:new Date(baseAt).toISOString()}});
+    if(baseCache&&Date.now()-baseAt<1800000)return r.json({ok:true,data:baseCache,meta:{basis:readBaseVehicleMaster?'FIXED_DISPATCH_PRIMARY':'LATEST_STORED_DELIVERY_BASE',checkedAt:new Date(baseAt).toISOString()}});
     if(!basePending&&!baseError){
-      basePending=callHub('mapBaseVehicles',{}, {useCache:false}).then(result=>{
+      basePending=(readBaseVehicleMaster?readBaseVehicleMaster():callHub('mapBaseVehicles',{}, {useCache:false})).then(result=>{
         if(!Array.isArray(result.data))throw new Error('CONTRACT');
         baseCache=result.data.filter(x=>/^[A-Z]\d+$/.test(x.customerCode)).map(x=>({
           customerCode:x.customerCode,baseVehicle:String(x.baseVehicle||'').slice(0,20),baseVehicleDate:cleanDate(x.baseVehicleDate),
-          baseVehicleState:['VERIFIED_STORED','CONFLICT','UNKNOWN'].includes(x.baseVehicleState)?x.baseVehicleState:'UNKNOWN',
-          baseVehicleSource:'Delivery.carrier.basedNo → Customer.delivery_admin_raw'}));
+          baseVehicleGroup:['osan','yeongnam','honam'].includes(x.baseVehicleGroup)?x.baseVehicleGroup:'',
+          baseVehicleState:['VERIFIED_MASTER','UNASSIGNED','VERIFIED_STORED','CONFLICT','UNKNOWN'].includes(x.baseVehicleState)?x.baseVehicleState:'UNKNOWN',
+          baseVehicleSource:readBaseVehicleMaster?'FIXED_DISPATCH_PRIMARY':'Delivery.carrier.basedNo → Customer.delivery_admin_raw'}));
         baseAt=Date.now();
       }).catch(()=>{baseError='BASE_VEHICLE_SOURCE_UNAVAILABLE';baseErrorAt=Date.now();}).finally(()=>{basePending=null;});
     }

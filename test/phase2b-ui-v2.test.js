@@ -21,6 +21,7 @@ test('route filters retain unlocated stops, date order, status and selected row'
 });
 test('name index supports partial Korean, code, multi-token and dated-first dedupe',()=>{
  const f=fixture();const rows=[{customerCode:'S222538',customerName:'준코 구리 수택점',vehicle:'109'},{customerCode:'S222538',customerName:'준코 구리 수택점',vehicle:'101'}];
+ f.state.mode='DATE_ROUTE';
  for(const q of ['S222','준코','준코 구리']){const result=f.rankSearchRows(rows,q);assert.equal(result.length,1);assert.equal(result[0].vehicle,'109');}
  assert.equal(f.rankSearchRows(rows,'없는 점포').length,0);
 });

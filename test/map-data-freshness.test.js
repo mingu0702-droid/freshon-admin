@@ -21,6 +21,16 @@ test('base vehicle separates current basedNo from selected driver/actual charter
  assert.equal(MapPeriodUi.select([{...rows[0],baseVehicle:''}],['용10'],'',{vehicleBasis:'base'}).length,0);
  assert.equal(MapPeriodUi.select([{...rows[0],baseVehicle:''}],[],'',{vehicleBasis:'base'})[0].vehicle,'');
 });
+
+test('current master projection is single-flight, cached and allowlisted; no stored delivery fallback',async t=>{
+ const app=express();let reads=0,resolve;
+ mountMapDataFreshness(app,{callHub:()=>{throw Error('No Delivery fallback');},readBaseVehicleMaster:()=>{reads++;return new Promise(r=>resolve=r);},requireView:(_q,_r,n)=>n(),previewEnabled:()=>true,modelStatus:()=>({})});
+ const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>server.close());
+ const url='http://127.0.0.1:'+server.address().port+'/api/map-phase2b/preview/base-vehicles';
+ assert.equal((await fetch(url)).status,202);assert.equal((await fetch(url)).status,202);assert.equal(reads,1);
+ resolve({data:[{customerCode:'S99731',baseVehicle:'221',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',password:'SYNTHETIC'}]});await new Promise(r=>setImmediate(r));
+ const r=await fetch(url),p=await r.json();assert.equal(r.status,200);assert.equal(p.data[0].baseVehicle,'221');assert.equal(p.data[0].baseVehicleGroup,'osan');assert.equal(p.meta.basis,'FIXED_DISPATCH_PRIMARY');assert.equal(JSON.stringify(p).includes('SYNTHETIC'),false);assert.equal(reads,1);
+});
 test('freshness requests are read-only; admin POST requires header, same origin, fixed target',async t=>{
  const calls=[],app=express(),origin='https://freshon-admin-1.onrender.com';
  mountMapDataFreshness(app,{callHub:async(a,p)=>{calls.push({a,p});return {data:a==='mapModelStatus'?{customer:{freshon:'2026-09-21',delivery:'2026-09-21'},published:{generation:5,endDate:'2026-09-19'},token:'SYNTHETIC'}:{phase:'BUILD',generation:6}};},

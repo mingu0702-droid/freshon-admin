@@ -130,3 +130,34 @@ body:not(.periodMode) #operationBar{top:134px!important}body:not(.periodMode) #m
  body:not(.periodMode).mobileMap .leftPanel{top:172px!important}
  body:not(.periodMode).mobileMap #map{top:266px}
 }
+
+/* Main-page layout: one date controller, cards in screen pixels, no map panning. */
+#leftPanel .head{flex-wrap:wrap;align-items:flex-start}
+#mapDateBar{position:static;inset:auto;width:100%;height:auto!important;padding:8px 0 0;border:0;flex-basis:100%;font-size:12px}
+#mapDateBar #periodControls{grid-template-columns:minmax(0,1fr) minmax(0,1fr);max-width:none;gap:6px}
+#mapDateBar #periodControls input{box-sizing:border-box;width:100%;min-width:0;height:32px;font-size:12px}
+#mapDateBar button{min-height:32px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;padding:5px 8px;font-size:12px}
+#mapDataSync{width:100%;margin-top:7px}#mapDataHealth{font-size:11px;overflow-wrap:anywhere;padding:8px!important}
+.dataHelp{font-size:11px;margin-top:6px;color:#64748b}.dataHelp summary{cursor:pointer}.dataHelp p{line-height:1.6}
+#dailyControls{flex-wrap:wrap;height:auto}#dailyControls input{max-width:150px}
+#map{top:58px}.periodMode .mapStatus{top:66px!important}
+body:not(.periodMode) #operationBar{top:58px!important}body:not(.periodMode) #map{top:116px}body:not(.periodMode) .mapStatus{top:124px!important}
+#detailSection.open{position:fixed!important;width:280px!important;min-width:280px!important;max-width:280px!important;box-sizing:border-box;transform:none!important;font-size:12px;overflow:auto;overscroll-behavior:contain;z-index:110}
+#detailSection .storeName{font-size:16px}#detailSection .detailLine{font-size:12px}#detailSection .detailHead{padding:10px}#detailSection .detailBody{padding:10px}
+#togglePeriodList{margin-left:auto}.staffActions{grid-template-columns:1fr 1fr}
+.staffAuxCard{position:fixed;z-index:111;width:320px;box-sizing:border-box;padding:14px;background:#fff;color:#182436;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 6px 24px #17203330;overflow:auto;overscroll-behavior:contain;font:12px/1.5 Arial,sans-serif;transform:none}
+.staffAuxCard[hidden]{display:none!important}.staffAuxCard h2{font-size:15px;margin:0 0 8px}.staffAuxCard button{min-height:32px;margin-right:6px}.staffAuxCard .staffDetailLine{grid-template-columns:75px minmax(0,1fr);gap:6px}
+#mobileDateHome{padding:0 8px}.mobileWorkspace.collapsed #mobileDateHome{display:none}
+@media(max-width:760px){
+ body.mobileMap .leftPanel{top:76px!important;height:94px!important}
+ body.mobileMap #map,.periodMode.mobileMap #map{top:170px;bottom:47px}
+ body:not(.periodMode) #operationBar{top:44px!important;height:78px}
+ body:not(.periodMode).mobileMap .leftPanel{top:122px!important}
+ body:not(.periodMode).mobileMap #map{top:216px}
+ #mapDateBar{position:static;inset:auto;padding:6px 0}
+ #detailSection.open{left:7px!important;right:7px!important;top:auto!important;bottom:54px!important;width:auto!important;min-width:0!important;max-width:none!important;max-height:46dvh!important}
+ .staffAuxCard{left:7px!important;right:7px!important;top:auto!important;bottom:54px!important;width:auto;max-height:60dvh!important}
+ body.staffAuxOpen #detailSection.open{visibility:hidden}
+ #mobileWorkspace{overflow:auto;overscroll-behavior:contain}
+ body:not(.periodMode) [data-sheet-tab=filters]{display:block}
+}

@@ -19,6 +19,7 @@ import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, ph
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { mountProductionMapApi } from './productionMapIntegration.js';
 import { mountMapMainPage } from './mapMainPage.js';
+import { createFixedVehicleReader } from './fixedVehicleProjection.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,6 +53,7 @@ const upload = multer({
 });
 
 const productionMap = mountProductionMapApi(app, {
+  readBaseVehicleMaster: createFixedVehicleReader({ensureSession: ensureFreshonSession, readJson: readFreshonJson, extractRows: extractFreshonRows}),
   previewEnabled, requireView, readPhase2bSnapshot, getSnapshotMemory: () => phase2bSnapshotMemory,
   phase2bKstDate, normalizeCell, normalizeDateValue, phase2bSnapshotMeta, phase2bTodayStatus, publicDir,
   getSnapshotWorkerState: () => ({running:!!phase2bSnapshotRefreshPromise,continuation:!!phase2bSnapshotRetryTimer})
