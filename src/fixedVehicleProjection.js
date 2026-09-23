@@ -56,7 +56,10 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows})
           carCd: '', carNm: '', shipGbn: '1', baecha: ''});
         const payload = await readPage({method: 'POST',timeoutMs:25000,
           headers: {'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}, body: body.toString()});
-        const rows = extractRows(payload);
+        // fixedAlctnList's existing master contract is data: Row[]. Master rows
+        // inherit paging fields (totalCnt/etc.); the daily-dispatch fallback
+        // treats those as paging-only records and can discard real customers.
+        const rows = Array.isArray(payload?.data) ? payload.data : extractRows(payload);
         if (!Array.isArray(rows)) throw failure('FIXED_MASTER_CONTRACT');
         // Keep no contact/access/memo values between batches.
         projected.push(...rows.map(row => ({logCd,...Object.fromEntries(['estCd','mainCarSeqNm',

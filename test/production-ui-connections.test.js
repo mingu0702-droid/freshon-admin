@@ -33,6 +33,16 @@ test('expired fixed master session refreshes existing login once; no raw error r
  const result=await reader();assert.deepEqual(sessions,[false,true]);assert.equal(result.meta.firstHttp,401);assert.equal(result.meta.readHttp,200);assert.equal(result.meta.authRetried,true);
  assert.equal(JSON.stringify(result).includes('PRIVATE_RESPONSE'),false);
 });
+test('fixed master direct data array bypasses daily paging-row filter without leaking fields',async()=>{
+ let fallbackCalls=0;
+ const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:()=>{fallbackCalls++;return [];},readJson:async(_url,options)=>({status:200,data:new URLSearchParams(options.body).get('logCd')==='011'?[{estCd:'S10001',mainCarSeqNm:'221',totalCnt:1,totalPages:1,isPaging:true,sortName:'est_cd',password:'SYNTHETIC_PRIVATE'}]:[]})});
+ const result=await reader();assert.equal(fallbackCalls,0);assert.equal(result.data.length,1);assert.equal(result.data[0].baseVehicle,'221');assert.equal(JSON.stringify(result).includes('SYNTHETIC_PRIVATE'),false);
+});
+test('an empty fixed master data array never falls back to unrelated nested rows',async()=>{
+ let fallbackCalls=0;
+ const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:()=>{fallbackCalls++;return [{estCd:'S1',mainCarSeqNm:'999'}];},readJson:async()=>({status:200,data:[]})});
+ await assert.rejects(reader(),e=>e.code==='FIXED_MASTER_EMPTY');assert.equal(fallbackCalls,0);
+});
 for(const status of [401,403])test('fixed master repeated '+status+' is bounded, classified, never permission bypass',async()=>{
  let calls=0;const sessions=[];const reader=createFixedVehicleReader({ensureSession:async force=>sessions.push(!!force),extractRows:()=>[],readJson:async()=>{calls++;throw Object.assign(Error('PRIVATE_BODY'),{status});}});
  await assert.rejects(reader(),e=>e.status===status&&e.code===(status===401?'FIXED_MASTER_AUTH_REQUIRED':'FIXED_MASTER_FORBIDDEN')&&!e.message.includes('PRIVATE_BODY'));
