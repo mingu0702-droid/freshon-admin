@@ -24,25 +24,27 @@ export function projectFixedVehicles(rows) {
 
 export function createFixedVehicleReader({ensureSession, readJson, extractRows}) {
   return async function readFixedVehicleMaster() {
-    const failure=(code,http=0)=>Object.assign(new Error(code),{code,status:Number(http)||0});
+    const failure=(code,http=0,step='READ')=>Object.assign(new Error(code),{code,status:Number(http)||0,step});
     try{await ensureSession();}catch(error){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',error.status);}
     let authRetried=false,firstHttp=200,authReason=null;
     async function readPage(options){
       try{
         const payload=await readJson('/bo/wm/standard/fixedAlctnList',options);
-        if(payload?.status&&Number(payload.status)!==200)throw {status:Number(payload.status)};
+        if(Number(payload?.status)>=400)throw {status:Number(payload.status)};
         return payload;
       }catch(error){
         // Same one-time expired-session recovery as the existing Freshon reader.
         // Reuse existing credentials; never retry a 403 or change permissions.
-        if(Number(error.status)===401&&!authRetried){
+        const http=Number(error.diagnostic?.status)||Number(error.status)||0;
+        const loginHtml=error.diagnostic?.type==='html-or-login-response'&&http===200&&/loginProcessing|j_username|name=["']userId["']/i.test(String(error.payload?.raw||''));
+        if((http===401||loginHtml)&&!authRetried){
           authRetried=true;
-          firstHttp=Number(error.diagnostic?.status)||Number(error.status)||null;
-          authReason=error.diagnostic?.type==='html-or-login-response'?'HTML_OR_LOGIN':'HTTP_401';
+          firstHttp=http||null;
+          authReason=loginHtml?'HTML_OR_LOGIN':'HTTP_401';
           try{await ensureSession(true);}catch(e){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',e.status);}
           return readPage(options);
         }
-        throw failure(Number(error.status)===401?'FIXED_MASTER_AUTH_REQUIRED':Number(error.status)===403?'FIXED_MASTER_FORBIDDEN':'FIXED_MASTER_READ_FAILED',error.status);
+        throw failure(http===401||loginHtml?'FIXED_MASTER_AUTH_REQUIRED':http===403?'FIXED_MASTER_FORBIDDEN':error.diagnostic?.type==='html-or-login-response'?'FIXED_MASTER_NON_JSON':'FIXED_MASTER_READ_FAILED',http,error.diagnostic?.type==='html-or-login-response'?'PARSE':'READ');
       }
     }
     const projected = [];

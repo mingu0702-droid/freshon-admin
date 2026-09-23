@@ -41,7 +41,7 @@ export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,mo
           baseVehicleSource:readBaseVehicleMaster?'FIXED_DISPATCH_PRIMARY':'Delivery.carrier.basedNo → Customer.delivery_admin_raw'}));
         baseAt=Date.now();
         baseReadMeta=result.meta?{authRetried:result.meta.authRetried===true,firstHttp:Number(result.meta.firstHttp)||null,authReason:['HTML_OR_LOGIN','HTTP_401'].includes(result.meta.authReason)?result.meta.authReason:null,readHttp:Number(result.meta.readHttp)||null}:null;
-      }).catch(error=>{baseError='BASE_VEHICLE_SOURCE_UNAVAILABLE';baseErrorAt=Date.now();baseReadMeta={code:/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_UNAVAILABLE',http:Number(error.status)||null};}).finally(()=>{basePending=null;});
+      }).catch(error=>{baseError='BASE_VEHICLE_SOURCE_UNAVAILABLE';baseErrorAt=Date.now();baseReadMeta={code:/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_UNAVAILABLE',http:Number(error.status)||null,step:['READ','PARSE','SESSION'].includes(error.step)?error.step:'READ'};}).finally(()=>{basePending=null;});
     }
     return r.status(baseError?503:202).json({ok:false,error:baseError||null,phase:baseError?'ERROR':'LOADING',read:baseError?baseReadMeta:null});
   });

@@ -41,7 +41,7 @@ for(const status of [401,403])test('fixed master repeated '+status+' is bounded,
 test('login HTML preserves actual HTTP separately from authentication classification',async()=>{
  let calls=0;
  const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:p=>p.data,readJson:async()=>{
-  if(++calls===1)throw Object.assign(Error('PRIVATE_BODY'),{status:401,diagnostic:{status:200,type:'html-or-login-response'}});
+  if(++calls===1)throw Object.assign(Error('PRIVATE_BODY'),{status:401,diagnostic:{status:200,type:'html-or-login-response'},payload:{raw:'<form action="loginProcessing">SYNTHETIC</form>'}});
   return {data:[{estCd:'S'+calls,mainCarSeqNm:'221'}]};
  }});
  const result=await reader();assert.equal(result.meta.firstHttp,200);assert.equal(result.meta.authReason,'HTML_OR_LOGIN');assert.equal(result.meta.readHttp,200);
@@ -52,6 +52,11 @@ test('late empty/unverified base responses cannot erase verified master',()=>{
   for(const incoming of [{baseVehicle:''},{baseVehicle:'838',baseVehicleState:'VERIFIED_STORED'}])assert.equal(ui.mergeBaseVehicles(old,[{customerCode:'S1',...incoming}]).get('S1').baseVehicle,'221');
   assert.equal(ui.mergeBaseVehicles(old,[{customerCode:'S1',baseVehicle:'222',baseVehicleState:'VERIFIED_MASTER'}]).get('S1').baseVehicle,'222');
   assert.equal(ui.baseVehicleLabel({baseVehicleState:'UNASSIGNED'}),'미지정');assert.equal(ui.baseVehicleLabel({baseVehicleState:'UNKNOWN'}),'확인 필요');
+});
+for(const http of [200,403,500])test('non-login HTML '+http+' is classified by actual HTTP without login retry',async()=>{
+ let reads=0,login=0;const reader=createFixedVehicleReader({ensureSession:async()=>login++,extractRows:()=>[],readJson:async()=>{reads++;throw Object.assign(Error('PRIVATE_BODY'),{status:401,diagnostic:{status:http,type:'html-or-login-response'},payload:{raw:'<html>generic error</html>'}});}});
+ await assert.rejects(reader(),e=>e.status===http&&e.code===(http===403?'FIXED_MASTER_FORBIDDEN':'FIXED_MASTER_NON_JSON'));
+ assert.equal(reads,1);assert.equal(login,1);
 });
 test('base pins/card/filter agree while driver mode keeps actual historical vehicle',()=>{
   const rows=[{customerCode:'S99731',baseVehicle:'221',history:[{vehicle:'838',driverKey:'D',deliveryDate:'2026-09-19'}]}];
