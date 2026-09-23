@@ -23,6 +23,30 @@ test('fixed master reader uses read-only bounded center batches, strips sensitiv
   assert.ok(calls.every(x=>x.url==='/bo/wm/standard/fixedAlctnList'&&x.form.get('size')==='1000'));
   assert.equal(JSON.stringify(result).includes('synthetic-private'),false);
 });
+
+test('expired fixed master session refreshes existing login once; no raw error returned',async()=>{
+ const sessions=[];let calls=0;
+ const reader=createFixedVehicleReader({ensureSession:async force=>sessions.push(!!force),extractRows:p=>p.data,readJson:async()=>{
+  if(++calls===1)throw Object.assign(Error('PRIVATE_RESPONSE_NEVER_EXPOSE'),{status:401});
+  return {data:[{estCd:'S'+calls,mainCarSeqNm:'221'}]};
+ }});
+ const result=await reader();assert.deepEqual(sessions,[false,true]);assert.equal(result.meta.firstHttp,401);assert.equal(result.meta.readHttp,200);assert.equal(result.meta.authRetried,true);
+ assert.equal(JSON.stringify(result).includes('PRIVATE_RESPONSE'),false);
+});
+for(const status of [401,403])test('fixed master repeated '+status+' is bounded, classified, never permission bypass',async()=>{
+ let calls=0;const sessions=[];const reader=createFixedVehicleReader({ensureSession:async force=>sessions.push(!!force),extractRows:()=>[],readJson:async()=>{calls++;throw Object.assign(Error('PRIVATE_BODY'),{status});}});
+ await assert.rejects(reader(),e=>e.status===status&&e.code===(status===401?'FIXED_MASTER_AUTH_REQUIRED':'FIXED_MASTER_FORBIDDEN')&&!e.message.includes('PRIVATE_BODY'));
+ assert.equal(calls,status===401?2:1);assert.equal(sessions.length,status===401?2:1);
+});
+test('login HTML preserves actual HTTP separately from authentication classification',async()=>{
+ let calls=0;
+ const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:p=>p.data,readJson:async()=>{
+  if(++calls===1)throw Object.assign(Error('PRIVATE_BODY'),{status:401,diagnostic:{status:200,type:'html-or-login-response'}});
+  return {data:[{estCd:'S'+calls,mainCarSeqNm:'221'}]};
+ }});
+ const result=await reader();assert.equal(result.meta.firstHttp,200);assert.equal(result.meta.authReason,'HTML_OR_LOGIN');assert.equal(result.meta.readHttp,200);
+ assert.equal(JSON.stringify(result).includes('PRIVATE_BODY'),false);
+});
 test('late empty/unverified base responses cannot erase verified master',()=>{
   const old=new Map([['S1',{customerCode:'S1',baseVehicle:'221',baseVehicleState:'VERIFIED_MASTER'}]]);
   for(const incoming of [{baseVehicle:''},{baseVehicle:'838',baseVehicleState:'VERIFIED_STORED'}])assert.equal(ui.mergeBaseVehicles(old,[{customerCode:'S1',...incoming}]).get('S1').baseVehicle,'221');
