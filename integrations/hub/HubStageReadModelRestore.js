@@ -62,8 +62,12 @@ function hubStageRestoreUnschedule_(target){const c=HUB_MODEL_TARGETS[target||'s
 function hubStageModelRestoreRequest_(published,target){
   target=target||'stage';const c=hubReadModelTarget_(target),m=hubStageRestoreManifest_(published);
   if(!PropertiesService.getScriptProperties().getProperty(c.secretProperty))throw new Error('MODEL_AUTH_MISSING');
-  if(target==='production'&&(published.generation!==1789933588775||m.keys.length!==156
-    ||m.totals.historyFiles!==78||m.totals.periodFiles!==78||m.totals.historyRows!==120035||m.totals.periodRows!==147689))
+  const approvedBaseline=published.generation===1789933588775&&m.keys.length===156
+    &&m.totals.historyFiles===78&&m.totals.periodFiles===78&&m.totals.historyRows===120035&&m.totals.periodRows===147689;
+  const verifiedIncrement=published.operation==='MAP_INCREMENTAL'&&published.publishTarget==='production'
+    &&published.commitHttp===200&&published.verifiedFingerprint===m.fingerprint&&published.verifyAt===m.keys.length
+    &&published.stateId===PropertiesService.getScriptProperties().getProperty(HUB_STAGE_MODEL.property);
+  if(target==='production'&&!approvedBaseline&&!verifiedIncrement)
     throw new Error('MODEL_RESTORE_APPROVED_BASELINE');
   const props=PropertiesService.getScriptProperties(),ownId=props.getProperty(c.property),otherId=props.getProperty(HUB_MODEL_TARGETS[target==='stage'?'production':'stage'].property);
   if(ownId&&(ownId===otherId||ownId===published.stateId||m.keys.some(function(k){return published.shards[k].id===ownId;})))throw new Error('MODEL_RESTORE_TARGET_CONFLICT');
