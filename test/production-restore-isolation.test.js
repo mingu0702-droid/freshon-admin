@@ -104,6 +104,12 @@ test('legacy RESTORE continuation cannot route back to generic production worker
  const f=fixture(true);f.request('production');let r=f.job('production');delete r.recoveryVersion;delete r.worker;f.files.set('restore-production',JSON.stringify(r));
  f.ctx.hubReadModelRestoreContinue_=()=>assert.fail('legacy worker called');runRecovery(f);assert.equal(f.job('production').phase,'DONE');assert.equal(f.job('production').worker,'PRODUCTION_RESTORE_V2');f.unchanged();
 });
+test('production dispatcher rejects aliased Stage checkpoint before any catch can write it',()=>{
+ const f=fixture(true);f.request('stage');const before=f.files.get('restore-stage'),n=f.writes.length;
+ f.props.set('PHASE2B_PRODUCTION_RESTORE_V1','restore-stage');runRecovery(f);
+ assert.equal(f.files.get('restore-stage'),before);assert.equal(f.writes.length,n);assert.equal(f.requests.length,0);
+ assert.equal(f.audits.at(-1).code,'MODEL_RESTORE_TARGET_CONFLICT');
+});
 test('first failure survives failure-checkpoint save error; continuation cannot retry',()=>{
  const f=recoveryFixture();recover(f);const original=f.ctx.hubProductionRestoreSave_;
  f.ctx.hubProductionRestoreSave_=r=>{if(r.lastFailure)throw Error('MODEL_CHECKPOINT_VERIFY');return original(r);};

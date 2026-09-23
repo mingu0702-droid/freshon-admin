@@ -11,7 +11,7 @@ function hubProductionRestoreCode_(error,step){
   return 'MODEL_'+step+'_FAILED';
 }
 function hubProductionRestoreAudit_(r,step,code,http){
-  const audit={target:'production',generation:r&&r.generation||null,worker:r&&r.worker||'PRODUCTION_RESTORE_V2',sendAt:r&&r.sendAt||0,verified:r&&r.verified||0,step:step,failedStep:r&&r.failedStep||null,http:Number(http)||null,code:code,at:new Date().toISOString()};
+  const audit={target:'production',generation:r&&r.generation||null,worker:r&&r.worker||(r&&r.recoveryVersion===1?'PRODUCTION_RESTORE_V1':'LEGACY_UNRECORDED'),sendAt:r&&r.sendAt||0,verified:r&&r.verified||0,step:step,failedStep:r&&r.failedStep||null,http:Number(http)||null,code:code,at:new Date().toISOString()};
   console.log(JSON.stringify(audit));return audit;
 }
 function hubProductionRestoreOp_(r,step,fn){
@@ -103,7 +103,10 @@ function hubProductionRestoreWorker_(){
   const lock=LockService.getUserLock();if(!lock.tryLock(1000)){const waiting=hubStageRestoreLoad_('production');if(waiting&&waiting.phase==='RESTORE'&&!waiting.authHalt)hubProductionRestoreSchedule_(waiting);return;}
   let r;
   try{
-    r=hubStageRestoreLoad_('production');if(!r||r.phase!=='RESTORE'||r.authHalt)return;
+    const loaded=hubStageRestoreLoad_('production');if(!loaded||loaded.phase!=='RESTORE'||loaded.authHalt)return;
+    const props=PropertiesService.getScriptProperties();
+    if(loaded.target!=='production'||loaded.stateId!==props.getProperty(HUB_MODEL_TARGETS.production.property)||loaded.stateId===props.getProperty(HUB_MODEL_TARGETS.stage.property)||loaded.stateId===props.getProperty(HUB_STAGE_MODEL.property))throw new Error('MODEL_RESTORE_TARGET_CONFLICT');
+    r=loaded;r.worker='PRODUCTION_RESTORE_V2';
     const halt=PropertiesService.getScriptProperties().getProperty('PHASE2B_PRODUCTION_RESTORE_HALT_V2');
     if(halt&&JSON.parse(halt).generation===r.generation){hubProductionRestoreAudit_(r,'HALT','MODEL_FAILURE_PERSISTENCE_HALTED',null);return;}
     if(r.retryAfter>Date.now())return;
