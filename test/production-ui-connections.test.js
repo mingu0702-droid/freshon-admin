@@ -43,6 +43,17 @@ test('an empty fixed master data array never falls back to unrelated nested rows
  const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:()=>{fallbackCalls++;return [{estCd:'S1',mainCarSeqNm:'999'}];},readJson:async()=>({status:200,data:[]})});
  await assert.rejects(reader(),e=>e.code==='FIXED_MASTER_EMPTY');assert.equal(fallbackCalls,0);
 });
+test('fixed master covers more than 20000 rows using existing bounded 120-page contract',async()=>{
+ const pages=[];const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:()=>[],readJson:async(_url,options)=>{
+  const q=new URLSearchParams(options.body),page=Number(q.get('page'));pages.push({center:q.get('logCd'),page});
+  return {data:q.get('logCd')==='011'?Array.from({length:page<21?1000:7},(_,i)=>({estCd:'S'+(page*1000+i+1),mainCarSeqNm:'221'})):[]};
+ }});
+ const result=await reader();assert.equal(result.data.length,21007);assert.equal(result.meta.sourceRows,21007);assert.equal(pages.length,24);assert.equal(pages.filter(p=>p.center==='011').at(-1).page,21);
+});
+test('fixed master never publishes a partial result when the 120-page bound is exhausted',async()=>{
+ let calls=0;const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:()=>[],readJson:async()=>{calls++;return{data:Array.from({length:1000},()=>({estCd:'S1',mainCarSeqNm:'221'}))};}});
+ await assert.rejects(reader(),e=>e.code==='FIXED_MASTER_INCOMPLETE');assert.equal(calls,120);
+});
 for(const status of [401,403])test('fixed master repeated '+status+' is bounded, classified, never permission bypass',async()=>{
  let calls=0;const sessions=[];const reader=createFixedVehicleReader({ensureSession:async force=>sessions.push(!!force),extractRows:()=>[],readJson:async()=>{calls++;throw Object.assign(Error('PRIVATE_BODY'),{status});}});
  await assert.rejects(reader(),e=>e.status===status&&e.code===(status===401?'FIXED_MASTER_AUTH_REQUIRED':'FIXED_MASTER_FORBIDDEN')&&!e.message.includes('PRIVATE_BODY'));

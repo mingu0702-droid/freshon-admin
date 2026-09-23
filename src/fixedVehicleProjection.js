@@ -51,7 +51,8 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows})
     let sourceRows=0, pagingFieldRows=0;
     for (const logCd of ['011', '012', '013']) {
       let complete = false;
-      for (let page = 0; page < 20; page++) {
+      // Same bounded paging contract as scraper/freshonFixedDispatch.js.
+      for (let page = 0; page < 120; page++) {
         const body = new URLSearchParams({page: String(page), size: '1000', isPaging: 'true', isCount: 'true',
           sort: 'est_cd,ASC', logCd, estCd: '', estName: '', estNm: '', estGbn: '', startDate: '', endDate: '',
           carCd: '', carNm: '', shipGbn: '1', baecha: ''});
