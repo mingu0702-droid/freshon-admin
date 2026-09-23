@@ -115,13 +115,15 @@
     const next=new Map(previous);
     for(const row of rows){
       const old=next.get(row.customerCode);
-      if(old?.baseVehicle&&(!row.baseVehicle||old.baseVehicleState==='VERIFIED_MASTER'&&row.baseVehicleState!=='VERIFIED_MASTER'))continue;
+      const verifiedChange=row.baseVehicleVersion&&['VERIFIED_MASTER','UNASSIGNED','CONFLICT','NOT_IN_MASTER'].includes(row.baseVehicleState);
+      if(!verifiedChange&&old?.baseVehicle&&(!row.baseVehicle||old.baseVehicleState==='VERIFIED_MASTER'&&row.baseVehicleState!=='VERIFIED_MASTER'))continue;
       next.set(row.customerCode,row);
     }
     return next;
   }
   function baseVehicleLabel(row) {
-    return row.baseVehicle?row.baseVehicle+'호':row.baseVehicleState==='UNASSIGNED'?'미지정':'확인 필요';
+    const label=row.baseVehicle?row.baseVehicle+'호':row.baseVehicleState==='UNASSIGNED'?'미지정':row.baseVehicleState==='NOT_IN_MASTER'?'마스터 미등록':row.baseVehicleState==='CONFLICT'?'기준 충돌':'확인 필요';
+    return label+(row.baseVehicleStale?' · 이전 확인값':'');
   }
   root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile, parseAreaInput,
     regionForAddress, areaExportRows, areaTsv, mergeBaseVehicles, baseVehicleLabel });

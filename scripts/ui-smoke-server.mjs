@@ -5,13 +5,19 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public');
 const app=express();
+app.use(express.json({limit:'128kb'}));
 const rows=Array.from({length:240},(_,i)=>({customerCode:i?'S'+(91000+i):'S99731',customerName:'합성검수 '+i,
   address:['경기도 수원시 테스트로 1','부산광역시 테스트로 1','광주광역시 테스트로 1'][i%3],lat:[37.28,35.17,35.15][i%3]+i*.00001,lng:[127.01,129.07,126.85][i%3]+i*.00001,
   relations:[{deliveryDate:'2026-09-19',vehicle:i%3===0?'838':String(501+i%2),driverKey:'TEST'+i%3,driverName:'합성기사',count:1}]}));
 const model={ready:true,generation:1789933588775,startDate:'2026-06-22',endDate:'2026-09-19',periodLatest:'2026-09-19'};
 app.get('/api/map-phase2b/preview/period-status',(_q,r)=>r.json(model));
 app.get('/api/map-phase2b/preview/period',(q,r)=>r.json({data:rows,meta:{complete:true,startDate:q.query.startDate,endDate:q.query.endDate,coverageComplete:false,periodLatest:'2026-09-19',missingCoordinate:0}}));
-app.get('/api/map-phase2b/preview/base-vehicles',(_q,r)=>r.json({data:rows.map((x,i)=>({customerCode:x.customerCode,baseVehicle:['221','501','502'][i%3],baseVehicleState:'VERIFIED_MASTER'}))}));
+let baseStarted=0;
+app.all('/api/map-phase2b/preview/base-vehicles',(q,r)=>{
+  baseStarted ||= Date.now();const updated=Date.now()-baseStarted>30000,version=updated?'synthetic-v2':'synthetic-v1';
+  const wanted=new Set(q.body?.customerCodes||rows.map(x=>x.customerCode));
+  r.json({data:rows.flatMap((x,i)=>wanted.has(x.customerCode)?[{customerCode:x.customerCode,baseVehicle:i===0&&updated?'222':['221','501','502'][i%3],baseVehicleGroup:['osan','yeongnam','honam'][i%3],baseVehicleState:'VERIFIED_MASTER',baseVehicleVersion:version,baseVehicleStale:!updated}]:[]),meta:{version,checkedAt:new Date(baseStarted).toISOString(),stale:!updated,refresh:updated?'IDLE':'RUNNING'}});
+});
 app.get('/api/map-phase2b/preview/snapshot',(_q,r)=>r.json({data:rows,meta:{latestDate:'2026-09-19'}}));
 app.get('/api/map-phase2b/preview/status',(_q,r)=>r.json({snapshot:{phase:'DONE',latest:'2026-09-19',stale:false}}));
 app.get('/api/map-phase2b/preview/data-status',(_q,r)=>r.json({data:{customer:{freshon:'2026-09-21',delivery:'2026-09-21'},published:{endDate:'2026-09-19'},live:model,automatic:'NOT_CONFIGURED'}}));

@@ -1,5 +1,5 @@
 // Read-only, allowlisted projection of the current fixed-dispatch master.
-// No persistence, collector, Customer write, or historical assignment mutation.
+// Raw rows never persist; only the separately allowlisted projection may persist.
 export function projectFixedVehicles(rows) {
   const result = new Map();
   for (const row of rows) {
@@ -24,12 +24,13 @@ export function projectFixedVehicles(rows) {
 
 export function createFixedVehicleReader({ensureSession, readJson, extractRows, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
   let progress=null;
-  const reader=async function readFixedVehicleMaster() {
+  const reader=async function readFixedVehicleMaster({signal}={}) {
     progress={phase:'SESSION',center:null,page:0,sourceRows:0,retries:0};
     const failure=(code,http=0,step='READ',kind='UNKNOWN')=>Object.assign(new Error(code),{code,status:Number(http)||0,step,kind});
     try{await ensureSession();}catch(error){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',error.status);}
     let authRetried=false,firstHttp=200,authReason=null;
     async function readPage(options,attempt=0){
+      signal?.throwIfAborted();
       try{
         const payload=await readJson('/bo/wm/standard/fixedAlctnList',options);
         if(Number(payload?.status)>=400)throw {status:Number(payload.status)};
@@ -60,7 +61,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
     const projected = [];
     let sourceRows=0, pagingFieldRows=0;
     for (const logCd of ['011', '012', '013']) {
-      let complete = false;
+      let complete = false,centerRows=0,expectedRows=null;
       // Same bounded paging contract as scraper/freshonFixedDispatch.js.
       for (let page = 0; page < 120; page++) {
         progress={...progress,phase:'READ',center:logCd,page,sourceRows};
@@ -76,12 +77,19 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         // treats those as paging-only records and can discard real customers.
         const rows = Array.isArray(payload?.data) ? payload.data : extractRows(payload);
         if (!Array.isArray(rows)) throw failure('FIXED_MASTER_CONTRACT');
+        const declared=rows[0]?.totalCnt;
+        if(declared!=null){
+          const count=Number(declared);
+          if(!Number.isSafeInteger(count)||count<0||expectedRows!==null&&expectedRows!==count)throw failure('FIXED_MASTER_COUNT_CHANGED');
+          expectedRows=count;
+        }
+        centerRows+=rows.length;
         sourceRows+=rows.length;
         pagingFieldRows+=rows.filter(row=>row&&row.estCd&&(row.totalCnt!=null||row.totalPages!=null||row.isPaging!=null||row.sortName!=null)).length;
         // Keep no contact/access/memo values between batches.
         projected.push(...rows.map(row => ({logCd,...Object.fromEntries(['estCd','mainCarSeqNm',
           ...['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm')].map(key=>[key,row[key]]))})));
-        if (rows.length < 1000) { complete = true; break; }
+        if (rows.length < 1000) { if(expectedRows!==null&&centerRows!==expectedRows)throw failure('FIXED_MASTER_INCOMPLETE');complete = true; break; }
       }
       if (!complete) throw failure('FIXED_MASTER_INCOMPLETE');
     }

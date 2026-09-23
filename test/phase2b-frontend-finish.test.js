@@ -30,7 +30,8 @@ function fixture(windowData = {}) {
     Option:class {constructor(text,value){this.textContent=text;this.value=value;}},location:{href:'http://local.test/'}});
   vm.runInContext(runtime.slice(0,runtime.lastIndexOf('  initVehicles();')) + `
     activateSheet=()=>{}; refreshVehicleUi=()=>{};
-    window.test={state,initializePeriod,selectLatestRoute,syncDateHeading,drawSelectedBoundaries,clearBoundaries,changePeriod,changeSelectedDate,clearNewAreaBatch,runNewArea,exportNewArea,selectStore,clearSelection,renderStops,search,searchPeriod,loadOperationStatus,showDiagnostics,renderPeriodStoreList,selectCenter,comparisonStores,judgeNewAreaPoint,
+    window.test={state,initializePeriod,selectLatestRoute,syncDateHeading,drawSelectedBoundaries,clearBoundaries,changePeriod,changeSelectedDate,clearNewAreaBatch,runNewArea,exportNewArea,selectStore,clearSelection,renderStops,search,searchPeriod,loadOperationStatus,showDiagnostics,renderPeriodStoreList,selectCenter,comparisonStores,judgeNewAreaPoint,loadBaseVehicles,
+      baseRows:()=>[...baseVehicles.values()],
       setReady:()=>{dateReady=true;periodMeta=${JSON.stringify(range)};state.rangeStart=periodMeta.startDate;state.rangeEnd=periodMeta.endDate;},
       setRows:rows=>{periodRows=rows;replaceStoreSnapshot(rows,{});},
       setFetch:fn=>fetchJson=fn,setJudge:fn=>judgeNewAreaRow=fn,setInput:rows=>parseNewArea=()=>rows,
@@ -47,6 +48,33 @@ test('center round trip clears hidden driver/vehicle filters and invalidates old
   assert.equal(f.state.driverKey,'');assert.equal(f.node('#periodDriver').value,'');assert.equal(f.selectors.get('#vehicleList input[type=checkbox]')[0].checked,false);
   assert.ok(f.state.searchRequestId>before);assert.equal(f.node('#periodCenter').value,center);
  }
+});
+
+test('base refresh queries visible-period codes only and preserves selection/range/center/camera',async()=>{
+ const f=fixture();f.setReady();f.setRows([sample]);f.state.selected={...sample};f.state.centerFilter='osan';f.state.fitRequested=false;
+ const requests=[];let version='v1',vehicle='101';
+ f.setFetch(async(url,options)=>{requests.push({url,body:JSON.parse(options.body)});return {data:[{customerCode:sample.customerCode,baseVehicle:vehicle,baseVehicleGroup:'osan',baseVehicleState:vehicle?'VERIFIED_MASTER':'UNASSIGNED',baseVehicleVersion:version,baseVehicleStale:true}],meta:{version,stale:true,refresh:'RUNNING',checkedAt:'2026-09-23T00:00:00Z'}};});
+ await f.loadBaseVehicles();assert.deepEqual(requests[0].body.customerCodes,[sample.customerCode]);
+ assert.equal(f.state.selected.customerCode,sample.customerCode);assert.equal(f.state.rangeStart,range.startDate);assert.equal(f.state.centerFilter,'osan');assert.equal(f.state.fitRequested,false);assert.match(f.node('#detailBaseVehicle').textContent,/101호.*이전 확인값/);
+ version='v2';vehicle='';await [...f.timers.values()].at(-1).fn();await new Promise(r=>setImmediate(r));
+ assert.equal(f.state.selected.baseVehicle,'');assert.equal(f.state.selected.vehicle,'');assert.match(f.node('#detailBaseVehicle').textContent,/미지정/);assert.equal(f.state.selected.customerCode,sample.customerCode);assert.equal(f.state.centerFilter,'osan');
+});
+test('outside-period customer code is included without requesting all master customers',async()=>{
+ const f=fixture();f.setReady();f.setRows([sample]);let codes;
+ f.setFetch(async(_u,o)=>{codes=JSON.parse(o.body).customerCodes;return {data:codes.map(customerCode=>({customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleVersion:'v1'})),meta:{version:'v1'}};});
+ await f.loadBaseVehicles(['S123456']);assert.deepEqual(codes,[sample.customerCode,'S123456']);assert.equal(f.baseRows().length,2);
+});
+test('failed refresh keeps verified label and schedules non-blocking retry',async()=>{
+ const f=fixture();f.setReady();f.setRows([sample]);
+ f.setFetch(async()=>({data:[{customerCode:sample.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleVersion:'v1'}],meta:{version:'v1',refresh:'IDLE'}}));
+ await f.loadBaseVehicles();f.setFetch(async()=>{throw Error('NETWORK');});await f.loadBaseVehicles();assert.equal(f.baseRows()[0].baseVehicle,'101');assert.equal(f.timers.size,1);
+});
+test('period change during a base request loads newly required customers immediately',async()=>{
+ const f=fixture();f.setReady();f.setRows([sample]);let resolve,calls=0;
+ const result=code=>({data:[{customerCode:code,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleVersion:'v1'}],meta:{version:'v1'}});
+ f.setFetch(async()=>{calls++;return calls===1?new Promise(r=>resolve=r):result('S123456');});
+ const first=f.loadBaseVehicles();f.setRows([{...sample,customerCode:'S123456'}]);const second=f.loadBaseVehicles();resolve(result(sample.customerCode));await Promise.all([first,second]);
+ assert.equal(calls,2);assert(f.baseRows().some(r=>r.customerCode==='S123456'));
 });
 test('new area uses other centers existing points, preserves apartment/Jeju exclusions',()=>{
  const f=fixture();f.setReady();f.state.centerFilter='osan';f.setRows([{...sample,address:'부산광역시 가로 1',lat:35.17,lng:129.07}]);
@@ -126,7 +154,8 @@ test('date controls move as one DOM into sidebar; address retains original DOM/e
  assert.equal(html.split('id="selectedDate"').length-1,1);assert.equal(html.split('id="todayBtn"').length-1,1);
  assert.ok(runtime.includes('$("#results").before(addressPanel)'));assert.ok(!runtime.includes('filters.append($("#legacyVehicleState"), $("#periodDriver"), $("#periodControls"))'));
  assert.ok(runtime.includes("$('#leftPanel .head').append($('#mapDateBar'))"));
- for(const asset of ['map-period-ui.js','map-phase2b-runtime.js','map-data-sync.js','map-staff.js','map-staff.css'])assert.ok(html.includes(asset+'?v=20260924-ui1'));
+ for(const asset of ['map-data-sync.js','map-staff.js','map-staff.css'])assert.ok(html.includes(asset+'?v=20260924-ui1'));
+ for(const asset of ['map-period-ui.js','map-phase2b-runtime.js'])assert.ok(html.includes(asset+'?v=20260924-fixed-cache1'));
  assert.ok(html.includes('map-period.css?v=20260924-ui1'));
 });
 test('recent range never exceeds available model start and never guesses absent latest',()=>{

@@ -2,6 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {projectFixedVehicles,createFixedVehicleReader} from '../src/fixedVehicleProjection.js';
+
+test('short page contradicting declared master count is never accepted as complete',async()=>{
+ const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:p=>p.data,readJson:async()=>({data:[{estCd:'S1',mainCarSeqNm:'221',totalCnt:4}]})});
+ await assert.rejects(()=>reader(),e=>e.code==='FIXED_MASTER_INCOMPLETE');
+});
+test('lost durable refresh lease stops before another master page request',async()=>{
+ const controller=new AbortController();let reads=0;
+ const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:p=>p.data,readJson:async()=>{reads++;controller.abort();return {data:Array.from({length:1000},(_,i)=>({estCd:'S'+i,mainCarSeqNm:'221'}))};}});
+ await assert.rejects(()=>reader({signal:controller.signal}));assert.equal(reads,1);
+});
 import '../public/map-period-ui.js';
 const ui=globalThis.MapPeriodUi;
 test('fixed primary outranks actual/rental and Sunday assignment, never customer-specific hardcoding',()=>{

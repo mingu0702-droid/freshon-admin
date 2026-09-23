@@ -17,6 +17,8 @@
   let baseVehicles = new Map(), baseVehicleRequest = null, baseVehicleTimer = null, baseVehicleTries = 0;
   let recentPeriodMode = true;
   let baseVehicleStatus='LOADING';
+  let baseVehicleMeta=null;
+  const baseVehicleExtraCodes=new Set();
   const renderMetrics = { renders: 0, created: 0, removed: 0, reused: 0, lastMs: 0 };
   if (window.PerformanceObserver) {
     try { new window.PerformanceObserver(list => {
@@ -253,22 +255,54 @@
     await read();
   }
 
-  async function loadBaseVehicles(){
-    if(baseVehicleRequest)return baseVehicleRequest;
+  async function loadBaseVehicles(extraCodes=[]){
+    extraCodes=extraCodes.filter(code=>/^[A-Z]\d+$/.test(code));
+    extraCodes.forEach(code=>{if(/^[A-Z]\d+$/.test(code))baseVehicleExtraCodes.add(code);});
+    if(!baseVehicleExtraCodes.size&&!periodRows.some(r=>/^[A-Z]\d+$/.test(r.customerCode))&&!/^[A-Z]\d+$/.test(state.selected?.customerCode))return;
+    if(baseVehicleRequest){await baseVehicleRequest;if(baseVehicleStatus==='READY'&&[...periodRows.map(r=>r.customerCode),...extraCodes].some(code=>/^[A-Z]\d+$/.test(code)&&!baseVehicles.has(code)))return loadBaseVehicles(extraCodes);return;}
     baseVehicleRequest=(async()=>{
+      const baseStarted=performance.now();
       try{
-        const payload=await fetchJson('/api/map-phase2b/preview/base-vehicles',{channel:'base-vehicles',ttl:0,timeout:15000});
+        const customerCodes=[...new Set([...periodRows.map(r=>r.customerCode),...baseVehicleExtraCodes,state.selected?.customerCode].filter(code=>/^[A-Z]\d+$/.test(code)))];
+        const batches=[];for(let i=0;i<customerCodes.length;i+=10000)batches.push(customerCodes.slice(i,i+10000));
+        let payload,rows=[],version;
+        for(const batch of batches){
+          payload=await fetchJson('/api/map-phase2b/preview/base-vehicles',{channel:'base-vehicles',ttl:0,timeout:30000,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customerCodes:batch})});
+          if(!Array.isArray(payload.data))break;
+          if(version&&version!==payload.meta?.version)throw new Error('BASE_VERSION_CHANGED');
+          version=payload.meta?.version;rows.push(...payload.data);
+        }
+        const previousMeta=baseVehicleMeta;baseVehicleMeta=payload.meta||null;
+        clearTimeout(baseVehicleTimer);
+        // Last verified rows remain usable throughout a long background refresh.
+        // This is status checking, not extending a blocking UI timeout.
+        if(payload.meta?.refresh||payload.phase==='LOADING')baseVehicleTimer=setTimeout(()=>void loadBaseVehicles(),payload.meta?.refresh==='RUNNING'||payload.phase==='LOADING'?60000:300000);
         if(!Array.isArray(payload.data)){
-          if(payload.phase==='LOADING'&&++baseVehicleTries<16){clearTimeout(baseVehicleTimer);baseVehicleTimer=setTimeout(loadBaseVehicles,15000);}
+          baseVehicleStatus=baseVehicles.size?'READY':payload.phase==='ERROR'?'ERROR':'LOADING';
           return;
         }
-        baseVehicles=MapPeriodUi.mergeBaseVehicles(baseVehicles,payload.data);baseVehicleStatus='READY';
+        const previous=baseVehicles;
+        if(baseVehicleMeta?.version&&[...baseVehicles.values()].some(r=>r.baseVehicleVersion&&r.baseVehicleVersion!==baseVehicleMeta.version))baseVehicles=new Map();
+        baseVehicles=MapPeriodUi.mergeBaseVehicles(baseVehicles,rows);baseVehicleStatus='READY';
+        const changed=JSON.stringify(previousMeta)!==JSON.stringify(baseVehicleMeta)||rows.some(r=>JSON.stringify(previous.get(r.customerCode))!==JSON.stringify(r));
+        if(!changed)return;
         if(state.mode==='BASE_60D'&&dateReady){
           replaceStoreSnapshot(periodRows,snapshotMeta);ensureDateVehicles();periodSelectionCache=null;
+          if(state.selected){const selected=baseVehicles.get(state.selected.customerCode);if(selected){Object.assign(state.selected,selected);if(periodBasis==='vehicle')state.selected.vehicle=selected.baseVehicle;const label=$('#detailBaseVehicle');if(label)label.textContent=MapPeriodUi.baseVehicleLabel(selected);}}
           state.fitRequested=false;await loadBaseMap();
-          if(state.selected){const selected=filteredPeriodStores().find(row=>row.customerCode===state.selected.customerCode);if(selected){Object.assign(state.selected,selected);const label=$('#detailBaseVehicle');if(label)label.textContent=MapPeriodUi.baseVehicleLabel(selected);}}
+          $('#map').setAttribute('data-base-vehicle-metrics',JSON.stringify({apiMs:apiDiagnostics.get('base-vehicles')?.ms??null,appliedMs:Math.round(performance.now()-baseStarted),rows:rows.length,stale:!!baseVehicleMeta?.stale,refresh:baseVehicleMeta?.refresh||null}));
         }
-      }catch(_){baseVehicleStatus='ERROR';if(state.mode==='BASE_60D'&&dateReady)await loadBaseMap();}
+      }catch(error){
+        if(isSilentRequestError(error))return;
+        baseVehicleStatus=baseVehicles.size?'READY':'ERROR';baseVehicleMeta={...baseVehicleMeta,stale:true,refresh:'ERROR'};
+        baseVehicles=new Map([...baseVehicles].map(([code,row])=>[code,{...row,baseVehicleStale:true}]));
+        if(state.mode==='BASE_60D'&&dateReady){
+          replaceStoreSnapshot(periodRows,snapshotMeta);periodSelectionCache=null;
+          if(state.selected){state.selected.baseVehicleStale=true;const label=$('#detailBaseVehicle');if(label)label.textContent=MapPeriodUi.baseVehicleLabel(state.selected);}
+          state.fitRequested=false;await loadBaseMap();
+        }
+        clearTimeout(baseVehicleTimer);baseVehicleTimer=setTimeout(()=>void loadBaseVehicles(),300000);
+      }
       finally{baseVehicleRequest=null;}
     })();return baseVehicleRequest;
   }
@@ -1108,10 +1142,12 @@
       } catch (error) { if (token === state.searchRequestId && !isSilentRequestError(error)) setSearchState(searchFailureMessage([error])); return; }
     }
     if (token !== state.searchRequestId || state.mode !== "BASE_60D") return;
+    await loadBaseVehicles(matches.slice(0,40).map(r=>r.customerCode));
+    if (token !== state.searchRequestId || state.mode !== "BASE_60D") return;
     const matching = new Map(filteredPeriodStores().map(row => [row.customerCode, row]));
     const period = new Map(MapPeriodUi.select(periodRows).map(row => [row.customerCode, row]));
     const rows = matches.slice(0, 40).map(item => matching.get(item.customerCode) || { ...item,
-      vehicle: "", driverName: "", history: [], lastDeliveryDate: "",
+      vehicle: baseVehicles.get(item.customerCode)?.baseVehicle||"", ...(baseVehicles.get(item.customerCode)||{}), driverName: "", history: [], lastDeliveryDate: "",
       outsideReason: period.has(item.customerCode) ? "현재 호차/기사 조건의 이력 없음" : "선택 기간 이력 없음" });
     setSearchState(rows.length ? `${rows.length}건 · 기간/조회 조건 유지` : "검색 결과 0건 · 현재 지도 유지");
     $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-period-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName)}</div><div class="resultMeta">${esc(row.outsideReason || vehicleLabel(row.vehicle) + " · " + row.lastDeliveryDate)}</div></button>`).join("");
@@ -1229,6 +1265,7 @@
       : `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
     $("#freshnessState").textContent = period ? `지도 반영일 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}` : `${state.selectedDate} 편성 조회 완료`;
     if(period&&periodBasis==='vehicle'&&baseVehicleStatus!=='READY')$('#mapStatusSub').textContent=baseVehicleStatus==='ERROR'?'기준호차 조회 실패 · 확인 필요 · 기존 지도 유지':'기준호차 확인 중 · 미지정으로 판단하지 마세요.';
+    if(period&&periodBasis==='vehicle'&&baseVehicleStatus==='READY'&&baseVehicleMeta?.stale)$('#mapStatusSub').textContent+=` · 기준호차 이전 확인값 (${baseVehicleMeta.checkedAt||'시각 미확인'}) · ${baseVehicleMeta.refresh==='RUNNING'?'별도 갱신 중':baseVehicleMeta.refresh==='ERROR'?'갱신 실패 · 기존값 유지':'갱신 대기'} · 기간 최신화와 별개`;
     syncDateHeading();
     $("#vehicleModeLabel").textContent = period ? "기간별 매장" : "날짜별 편성";
     if (selected.length === 1) $("#operationVehicle").value = selected[0];
@@ -1576,7 +1613,7 @@
     const timer = setTimeout(() => controller.abort("timeout"), timeout);
     const started = performance.now();
     try {
-      const response = await fetch(url, { cache: "no-store", signal: controller.signal, headers: options.headers });
+      const response = await fetch(url, { cache: "no-store", signal: controller.signal, headers: options.headers, method:options.method,body:options.body });
       const json = await response.json();
       apiDiagnostics.set(new URL(url, location.href).pathname.split("/").pop(), { ms: Math.round(performance.now() - started), status: response.status, cache: response.headers.get("X-Phase2B-Cache") || "미제공" });
       if (requestControllers.get(channel)?.token !== token) { const stale = new Error("STALE_RESPONSE"); stale.silent = true; throw stale; }

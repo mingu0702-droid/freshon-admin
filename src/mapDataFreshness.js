@@ -1,11 +1,14 @@
 // Read-only status/projection and one administrator-only stored-data job request.
 // This module never calls a collector or writes Customer data.
 import express from 'express';
+import compression from 'compression';
 import {requireAdmin} from './auth.js';
+import {createFixedVehicleCache} from './fixedVehicleCache.js';
+import {createFixedVehicleStore} from './fixedVehicleStore.js';
 
-export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus,readBaseVehicleMaster,env=process.env,adminGuard=requireAdmin}){
-  let statusCache=null,statusAt=0,statusPending=null,baseCache=null,baseAt=0,basePending=null,baseError='',baseErrorAt=0;
-  let baseReadMeta=null;
+export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus,readBaseVehicleMaster,env=process.env,adminGuard=requireAdmin,baseStore=env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
+  let statusCache=null,statusAt=0,statusPending=null;
+  const base=createFixedVehicleCache({reader:readBaseVehicleMaster||(()=>{throw new Error('FIXED_MASTER_UNAVAILABLE');}),store:baseStore});
   const cleanDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:null;
   const code=v=>/^[A-Z0-9_]+$/.test(v||'')?v:'UNKNOWN';
   async function readStatus(){
@@ -27,24 +30,15 @@ export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,mo
     r.set('Cache-Control','no-store');
     try{return r.json({ok:true,data:{...await readStatus(),live:modelStatus()}});}catch{return r.status(503).json({error:'MAP_DATA_STATUS_UNAVAILABLE'});}
   });
-  app.get('/api/map-phase2b/preview/base-vehicles',requireView,enabled,(_q,r)=>{
+  async function baseResponse(q,r){
     r.set('Cache-Control','no-store');
-    if(baseError&&Date.now()-baseErrorAt>=300000)baseError='';
-    if(baseCache&&Date.now()-baseAt<1800000)return r.json({ok:true,data:baseCache,meta:{basis:readBaseVehicleMaster?'FIXED_DISPATCH_PRIMARY':'LATEST_STORED_DELIVERY_BASE',checkedAt:new Date(baseAt).toISOString(),read:baseReadMeta}});
-    if(!basePending&&!baseError){
-      basePending=(readBaseVehicleMaster?readBaseVehicleMaster():callHub('mapBaseVehicles',{}, {useCache:false})).then(result=>{
-        if(!Array.isArray(result.data))throw new Error('CONTRACT');
-        baseCache=result.data.filter(x=>/^[A-Z]\d+$/.test(x.customerCode)).map(x=>({
-          customerCode:x.customerCode,baseVehicle:String(x.baseVehicle||'').slice(0,20),baseVehicleDate:cleanDate(x.baseVehicleDate),
-          baseVehicleGroup:['osan','yeongnam','honam'].includes(x.baseVehicleGroup)?x.baseVehicleGroup:'',
-          baseVehicleState:['VERIFIED_MASTER','UNASSIGNED','VERIFIED_STORED','CONFLICT','UNKNOWN'].includes(x.baseVehicleState)?x.baseVehicleState:'UNKNOWN',
-          baseVehicleSource:readBaseVehicleMaster?'FIXED_DISPATCH_PRIMARY':'Delivery.carrier.basedNo → Customer.delivery_admin_raw'}));
-        baseAt=Date.now();
-        baseReadMeta=result.meta?{authRetried:result.meta.authRetried===true,firstHttp:Number(result.meta.firstHttp)||null,authReason:['HTML_OR_LOGIN','HTTP_401'].includes(result.meta.authReason)?result.meta.authReason:null,readHttp:Number(result.meta.readHttp)||null,sourceRows:Number(result.meta.sourceRows)||0,pagingFieldRows:Number(result.meta.pagingFieldRows)||0,retries:Number(result.meta.retries)||0}:null;
-      }).catch(error=>{baseError='BASE_VEHICLE_SOURCE_UNAVAILABLE';baseErrorAt=Date.now();baseReadMeta={code:/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_UNAVAILABLE',http:Number(error.status)||null,kind:['LOCAL_TIMEOUT','NETWORK','UPSTREAM_HTTP','APPLICATION_STATUS'].includes(error.kind)?error.kind:'UNKNOWN',step:['READ','PARSE','SESSION'].includes(error.step)?error.step:'READ'};}).finally(()=>{basePending=null;});
-    }
-    return r.status(baseError?503:202).json({ok:false,error:baseError||null,phase:baseError?'ERROR':'LOADING',read:baseError?baseReadMeta:null,progress:readBaseVehicleMaster?.getProgress?.()||null});
-  });
+    const requested=q.method==='POST'?q.body?.customerCodes:q.query.customerCode?[q.query.customerCode]:[];
+    if(!Array.isArray(requested)||requested.length>10000||requested.some(v=>typeof v!=='string'||!/^[A-Z]\d+$/.test(v)))return r.status(400).json({error:'INVALID_CUSTOMER_CODES'});
+    const payload=await base.get([...new Set(requested)]);
+    return r.status(payload.ok?200:payload.phase==='ERROR'?503:202).json({...payload,progress:readBaseVehicleMaster?.getProgress?.()||null});
+  }
+  app.get('/api/map-phase2b/preview/base-vehicles',requireView,enabled,compression({threshold:1024}),baseResponse);
+  app.post('/api/map-phase2b/preview/base-vehicles',requireView,enabled,express.json({limit:'128kb'}),compression({threshold:1024}),baseResponse);
   app.post('/api/map-phase2b/admin/model-sync',enabled,express.json({limit:'1kb'}),(q,r,n)=>{
     r.set('Cache-Control','private, no-store');
     if(!q.get('x-admin-token')||q.query.token)return r.status(401).json({error:'ADMIN_HEADER_REQUIRED'});
@@ -54,7 +48,7 @@ export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,mo
   },async(_q,r)=>{
     try{
       const result=await callHub('mapModelIncrementalRequest',{target:'production'},{useCache:false});
-      statusCache=null;statusAt=0;baseError='';
+      statusCache=null;statusAt=0;
       const d=result.data||{};
       return r.status(d.phase==='ERROR'?409:202).json({ok:d.phase!=='ERROR',data:{phase:d.phase,generation:d.generation||null,sendAt:d.sendAt??null,endDate:cleanDate(d.endDate),lastError:code(d.lastError)}});
     }catch{return r.status(502).json({error:'MODEL_SYNC_REQUEST_UNCONFIRMED'});}

@@ -26,7 +26,7 @@ test('current master projection is single-flight, cached and allowlisted; no sto
  const app=express();let reads=0,resolve;
  mountMapDataFreshness(app,{callHub:()=>{throw Error('No Delivery fallback');},readBaseVehicleMaster:()=>{reads++;return new Promise(r=>resolve=r);},requireView:(_q,_r,n)=>n(),previewEnabled:()=>true,modelStatus:()=>({})});
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>server.close());
- const url='http://127.0.0.1:'+server.address().port+'/api/map-phase2b/preview/base-vehicles';
+ const url='http://127.0.0.1:'+server.address().port+'/api/map-phase2b/preview/base-vehicles?customerCode=S99731';
  assert.equal((await fetch(url)).status,202);assert.equal((await fetch(url)).status,202);assert.equal(reads,1);
  resolve({data:[{customerCode:'S99731',baseVehicle:'221',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',password:'SYNTHETIC'}]});await new Promise(r=>setImmediate(r));
  const r=await fetch(url),p=await r.json();assert.equal(r.status,200);assert.equal(p.data[0].baseVehicle,'221');assert.equal(p.data[0].baseVehicleGroup,'osan');assert.equal(p.meta.basis,'FIXED_DISPATCH_PRIMARY');assert.equal(JSON.stringify(p).includes('SYNTHETIC'),false);assert.equal(reads,1);
