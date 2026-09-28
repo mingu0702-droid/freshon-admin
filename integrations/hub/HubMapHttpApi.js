@@ -83,6 +83,7 @@ function doPost(e) {
       mapModelStatus: hubMapIncrementalStatus_,
       mapModelIncrementalRequest: hubMapIncrementalRequest_,
       mapBaseVehicles: hubMapBaseVehicleProjection_,
+      mapCoordinateSupplement: hubProductionCoordinateRead_,
       staffCustomerDetail: hubStaffCustomerDetail_
     };
     const handler = handlers[action];

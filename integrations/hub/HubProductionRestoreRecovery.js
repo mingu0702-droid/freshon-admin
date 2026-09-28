@@ -40,6 +40,7 @@ function hubProductionRestoreSend_(r,message){
   });return http;
 }
 function hubProductionRestoreSave_(r){
+  if(typeof hubProductionCheckpointSave_==='function')return hubProductionCheckpointSave_(r);
   try{return hubProductionRestoreOp_(r,'CHECKPOINT_SAVE',function(){return hubReadModelRestoreSave_(r);});}
   catch(error){
     if(error.message==='MODEL_CHECKPOINT_VERIFY'){
@@ -71,7 +72,10 @@ function hubProductionRestoreBaseline_(r){
   const props=PropertiesService.getScriptProperties(),id=props.getProperty(HUB_STAGE_MODEL.property);
   const published=hubProductionRestoreOp_(r,'MANIFEST_READ',function(){return hubStageModelLoad_();});
   const manifest=hubProductionRestoreOp_(r,'HASH_COUNT',function(){return hubStageRestoreManifest_(published);});
-  if(!published||published.generation!==1789933588775||manifest.keys.length!==156||manifest.totals.historyRows!==120035||manifest.totals.periodRows!==147689||manifest.totals.historyFiles!==78||manifest.totals.periodFiles!==78)throw new Error('MODEL_RECOVERY_BASELINE');
+  const original=published&&published.generation===1789933588775&&manifest.keys.length===156&&manifest.totals.historyRows===120035&&manifest.totals.periodRows===147689&&manifest.totals.historyFiles===78&&manifest.totals.periodFiles===78;
+  const incremental=published&&published.operation==='MAP_INCREMENTAL'&&published.publishTarget==='production'&&published.phase==='DONE'
+    &&published.commitHttp===200&&published.verifiedFingerprint===manifest.fingerprint&&published.verifyAt===manifest.keys.length&&published.stateId===id;
+  if(!original&&!incremental)throw new Error('MODEL_RECOVERY_BASELINE');
   if(r.publishedStateId!==id||r.generation!==published.generation||r.fingerprint!==manifest.fingerprint)throw new Error('MODEL_RESTORE_CONFLICT');
   if(r.stateId!==props.getProperty(HUB_MODEL_TARGETS.production.property)||r.stateId===id||r.stateId===props.getProperty(HUB_MODEL_TARGETS.stage.property)||r.target!=='production')throw new Error('MODEL_RESTORE_TARGET_CONFLICT');
   return {published:published,manifest:manifest};
@@ -113,12 +117,12 @@ function hubProductionRestoreWorker_(){
     hubStageRestoreUnschedule_('production');
     const b=hubProductionRestoreBaseline_(r),p=b.published,m=b.manifest,deadline=Date.now()+210000;
     r.recoveryVersion=1;r.worker='PRODUCTION_RESTORE_V2';
-    if(r.verified!==r.sendAt||!Number.isInteger(r.sendAt)||r.sendAt<0||r.sendAt>156)throw new Error('MODEL_RESTORE_CONFLICT');
+    if(r.verified!==r.sendAt||!Number.isInteger(r.sendAt)||r.sendAt<0||r.sendAt>m.keys.length)throw new Error('MODEL_RESTORE_CONFLICT');
     hubProductionRestoreSchedule_(r); // crash safety; lock prevents simultaneous workers
     const live=hubProductionRestoreOp_(r,'RECEIVER_STATUS',hubProductionRestoreStatus_);
     if(live.ready&&live.generation===r.generation){
-      if(live.historyRows!==120035||live.periodRows!==147689||live.startDate!==p.startDate||live.endDate!==p.endDate)throw new Error('MODEL_READBACK_MISMATCH');
-      r.sendAt=156;r.verified=156;r.phase='DONE';r.lastError='';r.completionEvidence='RECEIVER_ALREADY_COMMITTED';hubProductionRestoreSave_(r);return;
+      if(live.historyRows!==m.totals.historyRows||live.periodRows!==m.totals.periodRows||live.startDate!==p.startDate||live.endDate!==p.endDate)throw new Error('MODEL_READBACK_MISMATCH');
+      r.sendAt=m.keys.length;r.verified=m.keys.length;r.phase='DONE';r.lastError='';r.completionEvidence='RECEIVER_ALREADY_COMMITTED';hubProductionRestoreSave_(r);return;
     }
     if(live.generation&&live.generation!==r.generation)throw new Error('MODEL_GENERATION_CONFLICT');
     if(!r.begun){r.firstHttp=hubProductionRestoreSend_(r,{type:'begin',generation:r.generation});r.begun=true;hubProductionRestoreSave_(r);hubProductionRestoreAudit_(r,'BEGIN','MODEL_BEGIN_ACK',r.firstHttp);}
@@ -131,11 +135,11 @@ function hubProductionRestoreWorker_(){
       r.sendAt++;r.verified++;r.retryAtCount=0;r.retryAfter=0;r.lastError='';hubProductionRestoreSave_(r);
       hubProductionRestoreAudit_(r,'CHECKPOINT_SAVE','MODEL_SHARD_ACK',http);
     }
-    if(r.sendAt===156){
+    if(r.sendAt===m.keys.length){
       hubProductionRestoreBaseline_(r);
       r.commitHttp=hubProductionRestoreSend_(r,{type:'commit',generation:r.generation,startDate:r.startDate,endDate:r.endDate,manifest:m.keys.map(function(key){return{key:key,count:p.shards[key].count,hash:p.shards[key].hash};})});
       const after=hubProductionRestoreOp_(r,'READBACK',hubProductionRestoreStatus_);
-      if(!after.ready||after.generation!==r.generation||after.historyRows!==120035||after.periodRows!==147689||after.startDate!==r.startDate||after.endDate!==r.endDate)throw new Error('MODEL_READBACK_MISMATCH');
+      if(!after.ready||after.generation!==r.generation||after.historyRows!==m.totals.historyRows||after.periodRows!==m.totals.periodRows||after.startDate!==r.startDate||after.endDate!==r.endDate)throw new Error('MODEL_READBACK_MISMATCH');
       r.phase='DONE';r.errors=0;r.lastError='';hubProductionRestoreSave_(r);hubProductionRestoreAudit_(r,'COMMIT','MODEL_COMMITTED',200);
     }
   }catch(error){

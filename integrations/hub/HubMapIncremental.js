@@ -1,5 +1,5 @@
 /** Production-only stored-data candidate. No collector or source-sheet writes. */
-const HUB_MAP_INCREMENTAL=Object.freeze({property:'PHASE2B_PRODUCTION_INCREMENTAL_V1',handler:'hubMapIncrementalContinue',maxDates:7});
+const HUB_MAP_INCREMENTAL=Object.freeze({property:'PHASE2B_PRODUCTION_INCREMENTAL_V1',handler:'hubMapIncrementalContinue',maxDates:90});
 function hubMapIncrementalLoad_(){const id=PropertiesService.getScriptProperties().getProperty(HUB_MAP_INCREMENTAL.property);return id?JSON.parse(DriveApp.getFileById(id).getBlob().getDataAsString('UTF-8')):null;}
 function hubMapIncrementalSummary_(c){return c?{phase:c.phase,publication:c.publication||null,generation:c.generation,baseGeneration:c.baseGeneration,startDate:c.startDate,endDate:c.endDate,buildAt:c.buildAt,verifyAt:c.verifyAt,sendAt:c.sendAt,shards:Object.keys(c.shards).length,totals:c.totals||null,days:c.days,lastError:c.lastError||'',firstHttp:c.firstHttp||null,commitHttp:c.commitHttp||null,updatedAt:c.updatedAt}:null;}
 function hubMapReadOnlyStatus(){const r=hubMapIncrementalStatus_({});console.log(JSON.stringify(r.data));return r;}
@@ -7,7 +7,7 @@ function hubMapRequestProductionIncrement(){const r=hubMapIncrementalRequest_({t
 function hubMapIncrementalStatus_(params){
   hubMapHttpValidateOnlyKeys_(params,[]);const p=hubStageModelLoad_(),c=hubMapIncrementalLoad_();
   return {data:{customer:hubMapCollectionStatus_(),published:p?{generation:p.generation,startDate:p.startDate,endDate:p.endDate,status:p.phase}:null,
-    job:hubMapIncrementalSummary_(c),coverage:hubMapIncrementalCoverage_(p),automatic:'NOT_CONFIGURED',continuation:ScriptApp.getProjectTriggers().some(function(t){return t.getHandlerFunction()===HUB_MAP_INCREMENTAL.handler;})?'ACTIVE':'NONE'},cached:false};
+    job:hubMapIncrementalSummary_(c),coverage:hubMapIncrementalCoverage_(p),automatic:typeof hubMapAutomationStatus_==='function'?hubMapAutomationStatus_():{configured:false,status:'NOT_CONFIGURED'},continuation:ScriptApp.getProjectTriggers().some(function(t){return t.getHandlerFunction()===HUB_MAP_INCREMENTAL.handler;})?'ACTIVE':'NONE'},cached:false};
 }
 function hubMapIncrementalCoverage_(p){
   const result={generation:p&&p.generation,history:[],period:[],proof:'NO_GENERATION_MATCHED_COMPLETION_EVIDENCE'};
@@ -42,7 +42,11 @@ function hubMapIncrementalSchedule_(active){
   ScriptApp.getProjectTriggers().filter(function(t){return t.getHandlerFunction()===HUB_MAP_INCREMENTAL.handler;}).forEach(function(t){ScriptApp.deleteTrigger(t);});
   if(active)ScriptApp.newTrigger(HUB_MAP_INCREMENTAL.handler).timeBased().after(60000).create();
 }
-function hubMapIncrementalRequest_(params){
+function hubMapIncrementalSave_(c){
+  if(typeof hubMapCandidateCheckpointSave_==='function')return hubMapCandidateCheckpointSave_(c);
+  return hubStageModelSave_(c);
+}
+function hubMapIncrementalRequest_(params,origin){
   hubMapHttpValidateOnlyKeys_(params,['target']);if(params.target!=='production')throw new Error('MODEL_TARGET_INVALID');
   const lock=LockService.getUserLock();if(!lock.tryLock(1000))return {data:{phase:'BUSY'},cached:false};
   try{
@@ -58,9 +62,9 @@ function hubMapIncrementalRequest_(params){
     const plan=hubMapIncrementalPlan_(base,target),folder=DriveApp.createFolder('Production_Map_Incremental_'+target);
     if(folder.getSharingAccess()!==DriveApp.Access.PRIVATE)throw new Error('MODEL_STORAGE_NOT_PRIVATE');
     const file=folder.createFile('incremental-checkpoint.json','{}',MimeType.PLAIN_TEXT);
-    const next={operation:'MAP_INCREMENTAL',publishTarget:'production',phase:'BUILD',generation:Math.max(Date.now(),base.generation+1),baseGeneration:base.generation,baseStateId:base.stateId,
+    const next={operation:'MAP_INCREMENTAL',origin:origin==='AUTO'?'AUTO':'MANUAL',publishTarget:'production',phase:'BUILD',generation:Math.max(Date.now(),base.generation+1),baseGeneration:base.generation,baseStateId:base.stateId,
       stateId:file.getId(),folderId:folder.getId(),...plan,buildAt:0,verifyAt:0,sendAt:0,days:{},errors:0,lastError:''};
-    hubMapIncrementalBase_(next);hubStageModelSave_(next);PropertiesService.getScriptProperties().setProperty(HUB_MAP_INCREMENTAL.property,next.stateId);
+    hubMapIncrementalBase_(next);hubMapIncrementalSave_(next);PropertiesService.getScriptProperties().setProperty(HUB_MAP_INCREMENTAL.property,next.stateId);
     hubMapIncrementalSchedule_(true);return {data:hubMapIncrementalSummary_(next),cached:false};
   }finally{lock.releaseLock();}
 }
@@ -118,7 +122,7 @@ function hubMapIncrementalBuild_(c,deadline){
     const end=c.days[c.endDate];if(!end.history.stats.generatedRows||!end.period.stats.generatedRows)throw new Error('MODEL_INCREMENTAL_TARGET_NOT_STORED');
     const m=hubMapIncrementalManifest_(c);c.totals=m.totals;c.phase='VERIFY';
   }
-  hubStageModelSave_(c);
+  hubMapIncrementalSave_(c);
 }
 function hubMapIncrementalVerifyCompletion_(c){
   c.dates.forEach(function(date){
@@ -134,7 +138,7 @@ function hubMapIncrementalPublish_(c){
   const props=PropertiesService.getScriptProperties(),current=props.getProperty(HUB_STAGE_MODEL.property);
   if(current!==c.stateId){hubMapIncrementalBase_(c);props.setProperty(HUB_STAGE_MODEL.property,c.stateId);}
   if(props.getProperty(HUB_STAGE_MODEL.property)!==c.stateId)throw new Error('MODEL_INCREMENTAL_POINTER_READBACK');
-  c.publication='PUBLISHED';hubStageModelSave_(c);
+  c.publication='PUBLISHED';hubMapIncrementalSave_(c);
 }
 function hubMapIncrementalCommit_(c,m){
   if(c.sendAt!==m.keys.length||c.verifyAt!==m.keys.length||c.verifiedFingerprint!==m.fingerprint)throw new Error('MODEL_INCREMENTAL_NOT_VERIFIED');
@@ -145,7 +149,7 @@ function hubMapIncrementalCommit_(c,m){
   }
   const after=hubMapIncrementalLive_();
   if(!after.ready||after.generation!==c.generation||after.historyRows!==m.totals.historyRows||after.periodRows!==m.totals.periodRows||after.startDate!==c.startDate||after.endDate!==c.endDate)throw new Error('MODEL_INCREMENTAL_READBACK');
-  hubMapIncrementalBase_(c);c.commitHttp=200;c.phase='DONE';c.publication='PENDING';c.lastError='';hubStageModelSave_(c);
+  hubMapIncrementalBase_(c);c.commitHttp=200;c.phase='DONE';c.publication='PENDING';c.lastError='';hubMapIncrementalSave_(c);
   hubMapIncrementalPublish_(c);
 }
 function hubMapIncrementalContinue(){
@@ -158,18 +162,18 @@ function hubMapIncrementalContinue(){
     if(c.phase==='BUILD'){hubMapIncrementalBuild_(c,deadline);return;}
     const m=hubMapIncrementalManifest_(c);
     if(c.phase==='VERIFY'){
-      while(c.verifyAt<m.keys.length&&Date.now()<deadline){const key=m.keys[c.verifyAt];hubMapIncrementalShard_(key,c.shards[key]);c.verifyAt++;hubStageModelSave_(c);}
-      if(c.verifyAt===m.keys.length){hubMapIncrementalVerifyCompletion_(c);c.verifiedFingerprint=m.fingerprint;c.phase='SEND';hubStageModelSave_(c);}return;
+      while(c.verifyAt<m.keys.length&&Date.now()<deadline){const key=m.keys[c.verifyAt];hubMapIncrementalShard_(key,c.shards[key]);c.verifyAt++;hubMapIncrementalSave_(c);}
+      if(c.verifyAt===m.keys.length){hubMapIncrementalVerifyCompletion_(c);c.verifiedFingerprint=m.fingerprint;c.phase='SEND';hubMapIncrementalSave_(c);}return;
     }
     if(c.phase!=='SEND'||c.verifiedFingerprint!==m.fingerprint)throw new Error('MODEL_INCREMENTAL_PHASE');
     const live=hubMapIncrementalLive_();if(live.ready&&live.generation===c.generation){hubMapIncrementalCommit_(c,m);return;}
     if(!live.ready||live.generation!==c.baseGeneration)throw new Error('MODEL_INCREMENTAL_LIVE_CHANGED');
-    if(!c.begun){c.firstHttp=hubStageModelSend_({type:'begin',generation:c.generation},'production');c.begun=true;hubStageModelSave_(c);}
-    while(c.sendAt<m.keys.length&&Date.now()<deadline){const key=m.keys[c.sendAt],e=c.shards[key],rows=hubMapIncrementalShard_(key,e);hubStageModelSend_({type:'shard',generation:c.generation,kind:key.split(':')[0],date:key.split(':')[1],hash:e.hash,rows:rows},'production');c.sendAt++;hubStageModelSave_(c);}
+    if(!c.begun){c.firstHttp=hubStageModelSend_({type:'begin',generation:c.generation},'production');c.begun=true;hubMapIncrementalSave_(c);}
+    while(c.sendAt<m.keys.length&&Date.now()<deadline){const key=m.keys[c.sendAt],e=c.shards[key],rows=hubMapIncrementalShard_(key,e);hubStageModelSend_({type:'shard',generation:c.generation,kind:key.split(':')[0],date:key.split(':')[1],hash:e.hash,rows:rows},'production');c.sendAt++;hubMapIncrementalSave_(c);}
     if(c.sendAt===m.keys.length)hubMapIncrementalCommit_(c,m);
   }catch(e){if(c){c.errors=(c.errors||0)+1;c.lastError=/^MODEL_[A-Z0-9_]+$/.test(String(e.message))?e.message:'MODEL_INCREMENTAL_FAILED';
     if(c.phase==='DONE'){c.publication=c.errors>=3?'ERROR':'PENDING';}
     else if(e.modelAuthFatal||/HTTP_(401|403)$/.test(c.lastError)){c.authHaltGeneration=c.generation;c.phase='ERROR';}
-    else if(!/^MODEL_STAGE_HTTP_5\d\d$/.test(c.lastError)||c.errors>=3)c.phase='ERROR';hubStageModelSave_(c);}}
+    else if(!/^MODEL_STAGE_HTTP_5\d\d$/.test(c.lastError)||c.errors>=3)c.phase='ERROR';hubMapIncrementalSave_(c);}}
   finally{hubMapIncrementalSchedule_(!!c&&(c.publication==='PENDING'||c.phase!=='DONE'&&c.phase!=='ERROR'));if(c)console.log(JSON.stringify(hubMapIncrementalSummary_(c)));lock.releaseLock();}
 }
