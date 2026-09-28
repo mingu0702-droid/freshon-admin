@@ -1,5 +1,15 @@
 /** Private one-customer read. No Customer/Archive writes or memo cache. */
 const HUB_STAFF_DETAIL_ARCHIVE = '1qsDxyjlNNUeT990VxrsfWfiBC6Q2h_7u2DL8E-Z6Xwg';
+// Editor-only bounded diagnostic. Discard private data; log only timings/code.
+function hubProductionPrivateDetailDiagnostic(){
+  ['S99731','S222538'].forEach(function(code){
+    const started=Date.now();
+    try{
+      const result=hubStaffCustomerDetail_({customerCode:code,date:'2026-09-19'}),p=result.meta.detailProfile;
+      console.log(JSON.stringify({component:'private-source-diagnostic',customerCode:code,date:'2026-09-19',status:'FOUND',durationMs:Date.now()-started,openMs:p.openMs,lookupMs:p.lookupMs,rowReadMs:p.rowReadMs,sourceRowReads:p.sourceRowReads,metadataHit:p.metadataHit,candidateReads:p.candidateReads}));
+    }catch(e){console.log(JSON.stringify({component:'private-source-diagnostic',customerCode:code,date:'2026-09-19',status:'ERROR',durationMs:Date.now()-started,code:/^[A-Z_]+$/.test(e.safeCode||'')?e.safeCode:'PRIVATE_LOOKUP_FAILED'}));}
+  });
+}
 function hubStaffCustomerDetail_(params) {
   hubMapHttpValidateOnlyKeys_(params, ['customerCode','date']);
   const code=hubMapHttpCustomerCode_(params.customerCode),date=hubMapHttpDate_(params.date,'date');
