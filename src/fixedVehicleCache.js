@@ -1,9 +1,9 @@
 import crypto from 'node:crypto';
-import {fixedEnvelope,validateFixedEnvelope} from './fixedVehicleStore.js';
+import {fixedEnvelope,validateFixedEnvelope,fixedTupleData} from './fixedVehicleStore.js';
 
 export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000}) {
   let current=null,index=new Map(),loadPending=null,loaded=false,pending=null,error=null,retryAt=0,refreshStartedAt=null,refreshMs=null;
-  function install(envelope){const checked=validateFixedEnvelope(envelope);current=checked.envelope;index=new Map(checked.data.map(r=>[r.customerCode,r]));}
+  function install(envelope){const checked=validateFixedEnvelope(envelope,{materialize:false});current=checked.envelope;index=new Map(checked.envelope.rows.map(r=>[r[0],r]));}
   async function initialize(){
     if(loaded||now()<retryAt&&(current||error))return;if(loadPending)return loadPending;
     loadPending=(async()=>{if(store){const saved=await store.load();if(saved)install(saved);}loaded=true;})().finally(()=>{loadPending=null;});
@@ -33,7 +33,7 @@ export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000})
     const meta={basis:'FIXED_DISPATCH_PRIMARY',checkedAt:current?.checkedAt||null,version:current?.version||null,total:current?.count||0,stale,
       refresh:pending?'RUNNING':error?'ERROR':retryAt>now()?'WAITING':'IDLE',lastError:error,refreshStartedAt,refreshMs,persistent:!!store};
     if(!current)return {ok:false,phase:pending?'LOADING':error?'ERROR':'LOADING',meta};
-    const rows=codes===null?[...index.values()]:(codes||[]).map(customerCode=>index.get(customerCode)||{customerCode,baseVehicle:'',baseVehicleGroup:'',baseVehicleState:'NOT_IN_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'});
+    const rows=codes===null?[...index.values()].map(fixedTupleData):(codes||[]).map(customerCode=>index.has(customerCode)?fixedTupleData(index.get(customerCode)):{customerCode,baseVehicle:'',baseVehicleGroup:'',baseVehicleState:'NOT_IN_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'});
     return {ok:true,data:rows.map(r=>({...r,baseVehicleCheckedAt:meta.checkedAt,baseVehicleVersion:meta.version,baseVehicleStale:stale})),meta};
   }
   return {get,settled:()=>pending,refresh};

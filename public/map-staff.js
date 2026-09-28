@@ -44,11 +44,14 @@
       status = response.status; headersMs = performance.now() - start; receivedAt = response.headers.get('x-request-received-at'); serverTiming = response.headers.get('server-timing') || '';
       if (!response.ok) {
         // Classify only known availability codes; never display or retain the body.
-        let notReady = false;
+        let notReady = false, loginCode = '';
+        if(path==='auth/login'&&status===503){
+          try{const code=(await response.json()).error;if(['STAFF_AUTH_NOT_CONFIGURED','LOGIN_RETRY_LATER','LOGIN_UNAVAILABLE'].includes(code))loginCode=code;}catch(_){/* Proxy failures are not configuration evidence. */}
+        }
         if (path.startsWith('private/driver-history') && status === 503) {
           try { notReady = ['READ_MODEL_NOT_READY', 'READ_MODEL_RANGE_NOT_READY'].includes((await response.json()).error); } catch (_) { /* HTTP error remains an error */ }
         }
-        throw Object.assign(new Error('REQUEST_FAILED'), { status, notReady,
+        throw Object.assign(new Error('REQUEST_FAILED'), { status, notReady, loginCode,
           sourceChanged: ['PERIOD_SOURCE_CHANGED','HISTORY_SOURCE_CHANGED','HISTORY_LOCATOR_CHANGED'].includes(response.headers.get('x-history-failure')) });
       }
       const parsedAt = performance.now(), value = await response.json(); parseMs = performance.now() - parsedAt;
@@ -92,7 +95,7 @@
         // Login is complete; the explicitly requested detail runs independently.
         void showRequested(id);
       } catch (error) {
-        if (error.name !== 'AbortError' && id === generation) message.textContent = error.status === 429 ? '시도가 많습니다. 잠시 후 다시 시도해 주세요.' : error.status === 503 ? '직원 로그인 설정이 필요합니다.' : '로그인하지 못했습니다. 아이디와 비밀번호를 확인해 주세요.';
+        if (error.name !== 'AbortError' && id === generation) message.textContent = error.status === 429 ? '시도가 많습니다. 잠시 후 다시 시도해 주세요.' : error.loginCode === 'STAFF_AUTH_NOT_CONFIGURED' ? '직원 로그인 설정이 필요합니다.' : error.status >= 500 ? '일시적인 로그인 서비스 오류입니다. 설정을 바꾸지 말고 잠시 후 다시 시도해 주세요.' : '로그인하지 못했습니다. 아이디와 비밀번호를 확인해 주세요.';
       } finally { body = ''; password.value = ''; submit.disabled = false; }
     });
     account.focus();

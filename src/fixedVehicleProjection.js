@@ -1,5 +1,6 @@
 // Read-only, allowlisted projection of the current fixed-dispatch master.
 // Raw rows never persist; only the separately allowlisted projection may persist.
+import crypto from 'node:crypto';
 export function projectFixedVehicles(rows) {
   const result = new Map();
   for (const row of rows) {
@@ -60,18 +61,25 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
     }
     const projected = [];
     let sourceRows=0, pagingFieldRows=0;
+    const centers=[];
     for (const logCd of ['011', '012', '013']) {
+      let accepted=false;
+      for(let scan=0;scan<2&&!accepted;scan++){
+      const centerProjection=[],pageHashes=new Set();let centerPagingRows=0,firstPageHash=null,firstReadOptions=null;
       let complete = false,centerRows=0,expectedRows=null;
+      try{
       // Same bounded paging contract as scraper/freshonFixedDispatch.js.
       for (let page = 0; page < 120; page++) {
-        progress={...progress,phase:'READ',center:logCd,page,sourceRows};
+        progress={...progress,phase:'READ',center:logCd,page,sourceRows:sourceRows+centerRows,scan,expectedRows};
         const body = new URLSearchParams({page: String(page), size: '1000', isPaging: 'true', isCount: 'true',
           sort: 'est_cd,ASC', logCd, estCd: '', estName: '', estNm: '', estGbn: '', startDate: '', endDate: '',
           carCd: '', carNm: '', shipGbn: '1', baecha: ''});
         // Large existing master offset pages exceed the daily-reader 25s
         // deadline. Keep this read-only master budget separate from collectors.
-        const payload = await readPage({method: 'POST',timeoutMs:60000,
-          headers: {'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}, body: body.toString()});
+        const options={method: 'POST',timeoutMs:60000,
+          headers: {'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}, body: body.toString()};
+        if(page===0)firstReadOptions=options;
+        const payload = await readPage(options);
         // fixedAlctnList's existing master contract is data: Row[]. Master rows
         // inherit paging fields (totalCnt/etc.); the daily-dispatch fallback
         // treats those as paging-only records and can discard real customers.
@@ -80,22 +88,46 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         const declared=rows[0]?.totalCnt;
         if(declared!=null){
           const count=Number(declared);
-          if(!Number.isSafeInteger(count)||count<0||expectedRows!==null&&expectedRows!==count)throw failure('FIXED_MASTER_COUNT_CHANGED');
+          if(!Number.isSafeInteger(count)||count<0)throw failure('FIXED_MASTER_COUNT_INVALID');
+          if(expectedRows!==null&&expectedRows!==count){progress={...progress,expectedRows,declaredRows:count,failureStep:'PAGE_COUNT'};throw failure('FIXED_MASTER_COUNT_CHANGED');}
           expectedRows=count;
         }
         centerRows+=rows.length;
-        sourceRows+=rows.length;
-        pagingFieldRows+=rows.filter(row=>row&&row.estCd&&(row.totalCnt!=null||row.totalPages!=null||row.isPaging!=null||row.sortName!=null)).length;
+        centerPagingRows+=rows.filter(row=>row&&row.estCd&&(row.totalCnt!=null||row.totalPages!=null||row.isPaging!=null||row.sortName!=null)).length;
         // Keep no contact/access/memo values between batches.
-        projected.push(...rows.map(row => ({logCd,...Object.fromEntries(['estCd','mainCarSeqNm',
-          ...['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm')].map(key=>[key,row[key]]))})));
+        const minimal=rows.map(row => ({logCd,...Object.fromEntries(['estCd','mainCarSeqNm',
+          ...['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm')].map(key=>[key,row[key]]))}));
+        if(minimal.some(row=>!/^[A-Z]\d+$/.test(String(row.estCd||'').trim().toUpperCase())))throw failure('FIXED_MASTER_KEY_INVALID');
+        const pageHash=crypto.createHash('sha256').update(JSON.stringify(minimal)).digest('hex');
+        // A repeated full page cannot prove pagination completeness. Source
+        // row count is deliberately NOT compared with customerCode unique count.
+        if(rows.length&&pageHashes.has(pageHash))throw failure('FIXED_MASTER_PAGE_REPEATED');
+        if(rows.length)pageHashes.add(pageHash);
+        if(page===0)firstPageHash=pageHash;
+        centerProjection.push(...minimal);
         if (rows.length < 1000) { if(expectedRows!==null&&centerRows!==expectedRows)throw failure('FIXED_MASTER_INCOMPLETE');complete = true; break; }
       }
       if (!complete) throw failure('FIXED_MASTER_INCOMPLETE');
+      if(expectedRows!==null&&centerRows>=1000){
+        progress={...progress,phase:'VERIFY',center:logCd,scan};
+        const check=await readPage(firstReadOptions),rows=Array.isArray(check?.data)?check.data:extractRows(check);
+        if(!Array.isArray(rows)||Number(rows[0]?.totalCnt)!==expectedRows)throw failure('FIXED_MASTER_COUNT_CHANGED');
+        const minimal=rows.map(row=>({logCd,...Object.fromEntries(['estCd','mainCarSeqNm',...['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm')].map(key=>[key,row[key]]))}));
+        if(crypto.createHash('sha256').update(JSON.stringify(minimal)).digest('hex')!==firstPageHash)throw failure('FIXED_MASTER_SOURCE_CHANGED');
+      }
+      projected.push(...centerProjection);sourceRows+=centerRows;pagingFieldRows+=centerPagingRows;
+      centers.push({center:logCd,sourceRows:centerRows,declaredRows:expectedRows,pages:pageHashes.size,scan,firstPageHash});accepted=true;
+      }catch(error){
+        if(!['FIXED_MASTER_COUNT_CHANGED','FIXED_MASTER_SOURCE_CHANGED'].includes(error.code)||scan===1)throw error;
+        // Discard only the unstable candidate for this center. The existing
+        // persisted projection is never changed by a failed or partial scan.
+        progress={...progress,phase:'REVALIDATING',scan:scan+1};await sleep(1000);
+      }
+      }
     }
     if (!projected.length) throw failure('FIXED_MASTER_EMPTY');
     progress={...progress,phase:'DONE',sourceRows};
-    return {data: projectFixedVehicles(projected),meta:{authRetried,firstHttp,authReason,readHttp:200,sourceRows,pagingFieldRows,retries:progress.retries}};
+    return {data: projectFixedVehicles(projected),meta:{authRetried,firstHttp,authReason,readHttp:200,sourceRows,pagingFieldRows,retries:progress.retries,centers}};
   };
   reader.getProgress=()=>progress?{...progress}:null;
   return reader;

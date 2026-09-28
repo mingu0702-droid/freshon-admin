@@ -272,7 +272,11 @@
           if(version&&version!==payload.meta?.version)throw new Error('BASE_VERSION_CHANGED');
           version=payload.meta?.version;rows.push(...payload.data);
         }
-        const previousMeta=baseVehicleMeta;baseVehicleMeta=payload.meta||null;
+        const previousMeta=baseVehicleMeta;
+        if(!MapPeriodUi.acceptsBaseVersion(previousMeta,payload.meta)){
+          clearTimeout(baseVehicleTimer);baseVehicleTimer=setTimeout(()=>void loadBaseVehicles(),60000);return;
+        }
+        baseVehicleMeta=payload.meta||null;
         clearTimeout(baseVehicleTimer);
         // Last verified rows remain usable throughout a long background refresh.
         // This is status checking, not extending a blocking UI timeout.
@@ -290,6 +294,9 @@
           replaceStoreSnapshot(periodRows,snapshotMeta);ensureDateVehicles();periodSelectionCache=null;
           if(state.selected){const selected=baseVehicles.get(state.selected.customerCode);if(selected){Object.assign(state.selected,selected);if(periodBasis==='vehicle')state.selected.vehicle=selected.baseVehicle;const label=$('#detailBaseVehicle');if(label)label.textContent=MapPeriodUi.baseVehicleLabel(selected);}}
           state.fitRequested=false;await loadBaseMap();
+          if(state.selected&&periodBasis==='vehicle'&&!filteredPeriodStores().some(row=>row.customerCode===state.selected.customerCode)){
+            $('#mapStatusSub').textContent+=' · 선택 고객의 기준호차/센터가 갱신되어 현재 필터에서 제외됐습니다. 선택 정보는 유지합니다.';
+          }
           $('#map').setAttribute('data-base-vehicle-metrics',JSON.stringify({apiMs:apiDiagnostics.get('base-vehicles')?.ms??null,appliedMs:Math.round(performance.now()-baseStarted),rows:rows.length,stale:!!baseVehicleMeta?.stale,refresh:baseVehicleMeta?.refresh||null}));
         }
       }catch(error){

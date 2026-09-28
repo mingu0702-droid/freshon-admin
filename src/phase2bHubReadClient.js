@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { fetchPrivateHub, privateResponseKind } from './privateHubTransport.js';
+import { fetchPrivateHub, privateResponseKind, privateOutputDeadline } from './privateHubTransport.js';
 
 const VERSION = "map-phase2-v1";
 const cache = new Map();
@@ -134,12 +134,13 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
   const entered = circuitEnter(action);
   const started = Date.now();
   const staffDetail = action === 'staffCustomerDetail';
-  const sourceRead = ['periodAssignments','staffDriverHistory'].includes(action);
+  const sourceRead = ['periodAssignments','staffDriverHistory','mapCoordinateSupplement'].includes(action);
   state.metrics.requests += 1;
   const actionTimeoutMs = {
     mapModelStatus: 15000,
     mapModelIncrementalRequest: 30000,
     mapBaseVehicles: 225000,
+    mapCoordinateSupplement: 8000,
     unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 30000),
     customerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
     staffCustomerDetail: 4800,
@@ -151,7 +152,8 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
     routePlan: Number(process.env.HUB_ROUTE_TIMEOUT_MS || 25000)
   };
   const timeoutMs = actionTimeoutMs[action] || Number(process.env.HUB_API_TIMEOUT_MS || 2000);
-  const sharedDeadline = Math.min(deadline ?? Infinity, staffDetail || action === 'staffDriverHistory' ? started + timeoutMs : Infinity);
+  let sharedDeadline = Math.min(deadline ?? Infinity, staffDetail || action === 'staffDriverHistory' ? started + timeoutMs : Infinity);
+  let outputAllowanceUsed=false;
   let lastError;
   const attempts = entered.probe || action === "customerDetail" ? 1 : 2;
   let timedOut = false;
@@ -172,11 +174,17 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
     const cancel = () => controller.abort();
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) cancel();
-    const timer = setTimeout(() => controller.abort(), remaining);
+    let timer = setTimeout(() => controller.abort(), remaining);
+    const allowOutput=staffDetail?()=>{
+      if(outputAllowanceUsed||controller.signal.aborted)return;outputAllowanceUsed=true;
+      const next=privateOutputDeadline(started,sharedDeadline,Date.now(),deadline??Infinity);
+      profile.outputAllowanceMs=Math.max(0,next-sharedDeadline);sharedDeadline=next;
+      clearTimeout(timer);timer=setTimeout(()=>controller.abort(),Math.max(0,sharedDeadline-Date.now()));
+    }:undefined;
     try {
       const fetchStarted = Date.now();
       const fetchOptions = { method: "POST", headers: { "content-type": "application/json" }, body: serializedBody, signal: controller.signal };
-      const response = staffDetail || sourceRead ? await fetchPrivateHub(process.env.HUB_API_URL, fetchOptions, profile) : await fetch(process.env.HUB_API_URL, fetchOptions);
+      const response = staffDetail || sourceRead ? await fetchPrivateHub(process.env.HUB_API_URL, fetchOptions, profile,allowOutput) : await fetch(process.env.HUB_API_URL, fetchOptions);
       const responseHeadersMs = Date.now() - fetchStarted;
       profile.responseHeadersMs = responseHeadersMs; profile.upstreamStatus = response.status;
       const contentType = response.headers?.get('content-type') || '';

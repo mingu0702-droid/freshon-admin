@@ -111,10 +111,18 @@
     return areaExportRows(rows,applyDate).map(row=>(kind==='matching'?row.slice(7,9):row.slice(2,6))
       .map(v=>{const s=String(v??'');return /[\t\n\r"]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}).join('\t')).join('\r\n');
   }
+  function acceptsBaseVersion(previous, incoming) {
+    if(!previous?.version)return true;
+    const before=Date.parse(previous.checkedAt),after=Date.parse(incoming?.checkedAt);
+    if(!Number.isFinite(after))return incoming?.version===previous.version;
+    if(Number.isFinite(before)&&after<before)return false;
+    return !Number.isFinite(before)||after!==before||incoming?.version===previous.version;
+  }
   function mergeBaseVehicles(previous, rows) {
     const next=new Map(previous);
     for(const row of rows){
       const old=next.get(row.customerCode);
+      if(old?.baseVehicleVersion&&!acceptsBaseVersion({version:old.baseVehicleVersion,checkedAt:old.baseVehicleCheckedAt},{version:row.baseVehicleVersion,checkedAt:row.baseVehicleCheckedAt}))continue;
       const verifiedChange=row.baseVehicleVersion&&['VERIFIED_MASTER','UNASSIGNED','CONFLICT','NOT_IN_MASTER'].includes(row.baseVehicleState);
       if(!verifiedChange&&old?.baseVehicle&&(!row.baseVehicle||old.baseVehicleState==='VERIFIED_MASTER'&&row.baseVehicleState!=='VERIFIED_MASTER'))continue;
       next.set(row.customerCode,row);
@@ -126,5 +134,5 @@
     return label+(row.baseVehicleStale?' · 이전 확인값':'');
   }
   root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile, parseAreaInput,
-    regionForAddress, areaExportRows, areaTsv, mergeBaseVehicles, baseVehicleLabel });
+    regionForAddress, areaExportRows, areaTsv, acceptsBaseVersion, mergeBaseVehicles, baseVehicleLabel });
 })(typeof window === 'undefined' ? globalThis : window);

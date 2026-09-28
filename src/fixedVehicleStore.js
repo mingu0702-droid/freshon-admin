@@ -21,13 +21,21 @@ export function fixedEnvelope(data, checkedAt) {
   const body={schema:FIXED_SCHEMA,checkedAt:new Date(checkedAt).toISOString(),rows};
   return {...body,count:rows.length,version:hash(body)};
 }
-export function validateFixedEnvelope(value) {
+export function fixedTupleData(r){return {customerCode:r[0],baseVehicle:r[1],baseVehicleGroup:r[2],baseVehicleState:r[3],
+  ...(r[4]?{weekdays:Object.fromEntries(DAYS.map((d,i)=>[d,r[4][i]]))}:{}),baseVehicleSource:'FIXED_DISPATCH_PRIMARY'};}
+export function validateFixedEnvelope(value,{materialize=true}={}) {
   if(value?.schema!==FIXED_SCHEMA || !Array.isArray(value.rows) || value.rows.some(r=>!Array.isArray(r)||r.length!==5||r[4]!==null&&(!Array.isArray(r[4])||r[4].length!==7)))fail('FIXED_STORE_INVALID');
-  const data=value.rows.map(r=>({customerCode:r[0],baseVehicle:r[1],baseVehicleGroup:r[2],baseVehicleState:r[3],
-    ...(r[4]?{weekdays:Object.fromEntries(DAYS.map((d,i)=>[d,r[4][i]]))}:{}),baseVehicleSource:'FIXED_DISPATCH_PRIMARY'}));
-  const expected=fixedEnvelope(data,value.checkedAt);
-  if(expected.version!==value.version || expected.count!==value.count || JSON.stringify(expected)!==JSON.stringify(value))fail('FIXED_STORE_INTEGRITY');
-  return {envelope:expected,data};
+  if(!value.rows.length||!Number.isFinite(Date.parse(value.checkedAt))||new Date(value.checkedAt).toISOString()!==value.checkedAt||Date.parse(value.checkedAt)>Date.now()+300000)fail('FIXED_STORE_INVALID');
+  let previous='';
+  for(const r of value.rows){
+    if(typeof r[0]!=='string'||!/^[A-Z]\d+$/.test(r[0])||r[0]<=previous||typeof r[1]!=='string'||!/^\d*$/.test(r[1])||!['','osan','yeongnam','honam'].includes(r[2])||!['VERIFIED_MASTER','UNASSIGNED','CONFLICT'].includes(r[3])||(r[3]==='VERIFIED_MASTER')!==!!r[1]||r[4]?.some(v=>typeof v!=='string'||!/^\d*$/.test(v)))fail('FIXED_STORE_INVALID');
+    previous=r[0];
+  }
+  // Validate the same canonical bytes without materializing 88k customer
+  // objects and a second tuple tree on every load/save/read-back.
+  const body={schema:FIXED_SCHEMA,checkedAt:value.checkedAt,rows:value.rows};
+  if(value.version!==hash(body)||value.count!==value.rows.length||Object.keys(value).join('|')!=='schema|checkedAt|rows|count|version')fail('FIXED_STORE_INTEGRITY');
+  return {envelope:value,...(materialize?{data:value.rows.map(fixedTupleData)}:{})};
 }
 
 // Reuses existing GITHUB_* credentials. Explicitly refuses public repositories.
@@ -70,12 +78,12 @@ export function createFixedVehicleStore({env=process.env,fetchImpl=fetch,now=Dat
   }
   const file='fixed-vehicle-projection-v1.json',leaseFile='fixed-vehicle-refresh-lease-v1.json';
   return {
-    async load(){const {value}=await read(file);return value?validateFixedEnvelope(value).envelope:null;},
+    async load(){const {value}=await read(file);return value?validateFixedEnvelope(value,{materialize:false}).envelope:null;},
     async save(envelope){
-      validateFixedEnvelope(envelope);const old=await read(file);
-      if(old.value){validateFixedEnvelope(old.value);if(Date.parse(old.value.checkedAt)>Date.parse(envelope.checkedAt))fail('FIXED_STORE_SUPERSEDED');if(old.value.version===envelope.version)return;}
+      validateFixedEnvelope(envelope,{materialize:false});const old=await read(file);
+      if(old.value){validateFixedEnvelope(old.value,{materialize:false});if(Date.parse(old.value.checkedAt)>Date.parse(envelope.checkedAt))fail('FIXED_STORE_SUPERSEDED');if(old.value.version===envelope.version)return;}
       await write(file,envelope,old.sha);
-      const saved=await read(file);if(saved.value?.version!==envelope.version)fail('FIXED_STORE_VERIFY');validateFixedEnvelope(saved.value);
+      const saved=await read(file);if(saved.value?.version!==envelope.version)fail('FIXED_STORE_VERIFY');validateFixedEnvelope(saved.value,{materialize:false});
     },
     async acquire(owner){
       const old=await read(leaseFile);

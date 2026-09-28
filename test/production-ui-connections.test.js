@@ -62,7 +62,7 @@ test('fixed master covers more than 20000 rows using existing bounded 120-page c
  const result=await reader();assert.equal(result.data.length,21007);assert.equal(result.meta.sourceRows,21007);assert.equal(pages.length,24);assert.equal(pages.filter(p=>p.center==='011').at(-1).page,21);
 });
 test('fixed master never publishes a partial result when the 120-page bound is exhausted',async()=>{
- let calls=0;const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:()=>[],readJson:async()=>{calls++;return{data:Array.from({length:1000},()=>({estCd:'S1',mainCarSeqNm:'221'}))};}});
+ let calls=0;const reader=createFixedVehicleReader({ensureSession:async()=>{},extractRows:()=>[],readJson:async()=>{calls++;return{data:Array.from({length:1000},(_,i)=>({estCd:'S'+(calls*1000+i),mainCarSeqNm:'221'}))};}});
  await assert.rejects(reader(),e=>e.code==='FIXED_MASTER_INCOMPLETE');assert.equal(calls,120);
 });
 for(const status of [401,403])test('fixed master repeated '+status+' is bounded, classified, never permission bypass',async()=>{

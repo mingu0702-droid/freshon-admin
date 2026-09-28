@@ -16,6 +16,7 @@ import {callHub as verifiedHubRead,hubRequestProfile} from './phase2bHubReadClie
 import {createPhase2bReadCache} from './phase2bReadCache.js';
 import {readPaginatedDatedAssignments,uniqueAssignments} from './phase2bAssignments.js';
 import {mountMapDataFreshness} from './mapDataFreshness.js';
+import {createCoordinateSupplement} from './mapCoordinateSupplement.js';
 
 export function mountProductionMapApi(app,{
   previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
@@ -34,6 +35,8 @@ export function mountProductionMapApi(app,{
   app.use('/api/map-phase2b/private/driver-history',historyDeadline);
   app.use(publicResponse);
   const mapFreshness=mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus:stageReadModel.status,readBaseVehicleMaster});
+  const coordinateSupplement=createCoordinateSupplement({callHub});
+  if(process.env.RENDER_EXTERNAL_URL==='https://freshon-admin-1.onrender.com')void coordinateSupplement.refresh();
   if(publicDir)app.get(['/map-phase2b-snapshot.json','/customer-master-20260604.json','/vehicle-data.js','/new-area-data.js'],async(req,res)=>{
     try{
       const raw=await fs.readFile(path.join(publicDir,path.basename(req.path)),'utf8');
@@ -97,6 +100,7 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
     res.set('X-Detail-Upstream-Status', String(Number(profile.upstreamStatus) || 0));
     res.set('X-Detail-Response-Kind', ['json','health-json','html','invalid-json','none'].includes(profile.responseKind) ? profile.responseKind : 'unknown');
     res.set('X-Detail-Failure-Phase', ['HEADERS','BODY','PARSE','CONTRACT'].includes(profile.phase) ? profile.phase : 'unknown');
+    res.set('X-Detail-Failure-Target', ['EXEC','OUTPUT'].includes(profile.requestStage)?profile.requestStage:'unknown');
     for (const key of ['responseHeadersMs','bodyReadMs','parseMs']) addStaffTiming(res, 'hub' + key.replace(/Ms$/, ''), Number(profile[key] || 0));
     const timeout = error?.name === 'AbortError';
     const status = timeout ? 504 : Number(error?.upstreamStatus) === 404 && error?.failureType === "upstream" ? 404 : 502;
@@ -165,6 +169,10 @@ app.get("/api/map-phase2b/preview/period", requireView, compression({ threshold:
     const snapshot = await readPhase2bSnapshot();
     const coords = new Map((snapshot?.rows || []).map(row => [row.customerCode, row]));
     result.data = result.data.map(row => ({ ...row, customerName: row.customerName || coords.get(row.customerCode)?.customerName || '', address: row.address || coords.get(row.customerCode)?.address || '', lat: coords.get(row.customerCode)?.lat ?? null, lng: coords.get(row.customerCode)?.lng ?? null }));
+    // Separate evidence is preloaded; no full source read blocks a Period query.
+    if(process.env.RENDER_EXTERNAL_URL==='https://freshon-admin-1.onrender.com')void coordinateSupplement.refresh();
+    result.data=coordinateSupplement.join(result.data);
+    result.meta.coordinateSupplement=coordinateSupplement.status();
     result.meta.missingCoordinate = result.data.filter(row => row.lat == null || row.lng == null).length;
     result.data = compactPeriodStores(result.data); result.meta.summaryContract = 'period-store-relations-v1';
   }

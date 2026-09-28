@@ -19,7 +19,7 @@
       status.textContent='Customer Freshon '+(d.customer.freshon||'미확인')+' / Delivery '+(d.customer.delivery||'미확인')
         +' · 게시모델 '+(d.published.endDate||'미확인')+' · 현재 지도 '+(d.live.periodLatest||'준비 중')
         +' · Snapshot '+(snap?.latest||'미확인')+(snap?.stale?' (stale)':'')
-        +' · 자동 최신화 미설정 · 화면 확인 '+new Date().toLocaleTimeString('ko-KR')
+        +(d.automation?.configured?' · 자동 최신화 '+d.automation.status+' · 마지막 자동 게시 성공 '+(d.automation.lastSuccess||'아직 확인 안 됨')+(d.automation.lastError?' · '+d.automation.lastError:''):' · 자동 최신화 미설정')+' · 화면 확인 '+new Date().toLocaleTimeString('ko-KR')
         +(job?' · 작업 '+job.phase+(job.publication==='PENDING'?' (게시 포인터 확인 중)':'')+' '+(job.sendAt||0)+'/'+(job.shards||0)+(job.lastError?' · '+job.lastError:''):'');
       action.disabled=!target||!d.live.ready||target<=d.published.endDate||active||job?.phase==='ERROR'||job?.publication==='ERROR';
       action.textContent=!d.live.ready?'지도 복원 중 · 동기화 대기':active?'동기화 진행 중':job?.phase==='ERROR'||job?.publication==='ERROR'?'이전 작업 실패 · 관리자 확인 필요':!target?'수집 완료일 확인 필요':target<=d.published.endDate?'저장분이 이미 반영되어 있습니다':'관리자 로그인 필요 · 저장분 증분 요청';

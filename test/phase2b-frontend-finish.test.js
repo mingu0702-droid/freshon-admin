@@ -53,7 +53,7 @@ test('center round trip clears hidden driver/vehicle filters and invalidates old
 test('base refresh queries visible-period codes only and preserves selection/range/center/camera',async()=>{
  const f=fixture();f.setReady();f.setRows([sample]);f.state.selected={...sample};f.state.centerFilter='osan';f.state.fitRequested=false;
  const requests=[];let version='v1',vehicle='101';
- f.setFetch(async(url,options)=>{requests.push({url,body:JSON.parse(options.body)});return {data:[{customerCode:sample.customerCode,baseVehicle:vehicle,baseVehicleGroup:'osan',baseVehicleState:vehicle?'VERIFIED_MASTER':'UNASSIGNED',baseVehicleVersion:version,baseVehicleStale:true}],meta:{version,stale:true,refresh:'RUNNING',checkedAt:'2026-09-23T00:00:00Z'}};});
+ f.setFetch(async(url,options)=>{requests.push({url,body:JSON.parse(options.body)});const checkedAt=version==='v1'?'2026-09-23T00:00:00Z':'2026-09-24T00:00:00Z';return {data:[{customerCode:sample.customerCode,baseVehicle:vehicle,baseVehicleGroup:'osan',baseVehicleState:vehicle?'VERIFIED_MASTER':'UNASSIGNED',baseVehicleVersion:version,baseVehicleCheckedAt:checkedAt,baseVehicleStale:true}],meta:{version,stale:true,refresh:'RUNNING',checkedAt}};});
  await f.loadBaseVehicles();assert.deepEqual(requests[0].body.customerCodes,[sample.customerCode]);
  assert.equal(f.state.selected.customerCode,sample.customerCode);assert.equal(f.state.rangeStart,range.startDate);assert.equal(f.state.centerFilter,'osan');assert.equal(f.state.fitRequested,false);assert.match(f.node('#detailBaseVehicle').textContent,/101호.*이전 확인값/);
  version='v2';vehicle='';await [...f.timers.values()].at(-1).fn();await new Promise(r=>setImmediate(r));

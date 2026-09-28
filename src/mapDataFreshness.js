@@ -21,7 +21,8 @@ export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,mo
         job:j?Object.fromEntries(['phase','generation','baseGeneration','startDate','endDate','buildAt','verifyAt','sendAt','shards','lastError','updatedAt','commitHttp','publication'].map(k=>[k,j[k]??null])):null,
         coverage:{generation:Number(raw.coverage?.generation)||null,proof:code(raw.coverage?.proof),
           history:(raw.coverage?.history||[]).filter(cleanDate),period:(raw.coverage?.period||[]).filter(cleanDate)},
-        automatic:'NOT_CONFIGURED',continuation:raw.continuation==='ACTIVE'?'ACTIVE':'NONE',checkedAt:new Date().toISOString()};
+        automatic:raw.automatic&&typeof raw.automatic==='object'?code(raw.automatic.status):'NOT_CONFIGURED',
+        automation:raw.automatic&&typeof raw.automatic==='object'?{configured:raw.automatic.configured===true,status:code(raw.automatic.status),lastCheck:raw.automatic.lastCheck||null,lastRequest:raw.automatic.lastRequest||null,lastSuccess:raw.automatic.lastSuccess||null,lastError:raw.automatic.lastError?code(raw.automatic.lastError):null,generation:Number(raw.automatic.generation)||null}:{configured:false,status:'NOT_CONFIGURED'},continuation:raw.continuation==='ACTIVE'?'ACTIVE':'NONE',checkedAt:new Date().toISOString()};
       statusAt=Date.now();return statusCache;
     })().finally(()=>{statusPending=null;});return statusPending;
   }

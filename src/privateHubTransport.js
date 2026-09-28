@@ -1,7 +1,10 @@
 // Follow only the configured execution endpoint and Google's output redirect.
 // A temporary exec redirect must not silently turn an authenticated POST into
 // an unauthenticated health GET. Never send the signed body to the output host.
-export async function fetchPrivateHub(url, options, profile) {
+export function privateOutputDeadline(started,current,now,callerDeadline=Infinity){
+  return Math.min(callerDeadline,started+6300,Math.max(current,now+1500));
+}
+export async function fetchPrivateHub(url, options, profile, onOutputRedirect) {
   const execution = new URL(url); let current = execution, method = 'POST';
   profile.redirects = [];
   profile.hops = [];
@@ -9,6 +12,7 @@ export async function fetchPrivateHub(url, options, profile) {
     options.signal?.throwIfAborted();
     const started = performance.now();
     profile.phase = 'HEADERS';
+    profile.requestStage = current.origin===execution.origin?'EXEC':'OUTPUT';
     const response = await fetch(current.href, { ...options, method,
       body: method === 'POST' ? options.body : undefined,
       headers: method === 'POST' ? options.headers : {}, redirect: 'manual' });
@@ -26,6 +30,7 @@ export async function fetchPrivateHub(url, options, profile) {
     profile.redirects.push({status:response.status,from:method,to:nextMethod || 'BLOCKED',target:sameExecution?'EXEC':output?'OUTPUT':'OTHER',
       blockedKind:nextMethod?null:next.hostname==='accounts.google.com'?'LOGIN':next.hostname==='script.google.com'?'GOOGLE_EXEC_OTHER':next.hostname==='script.googleusercontent.com'?'GOOGLE_OUTPUT_OTHER':'UNTRUSTED'});
     if (!nextMethod) throw Object.assign(new Error('DETAIL_REDIRECT_REJECTED'), {failureType:next.hostname==='accounts.google.com'?'auth':'contract',upstreamStatus:response.status});
+    if(output&&method==='POST')onOutputRedirect?.();
     current = next; method = nextMethod;
   }
 }
