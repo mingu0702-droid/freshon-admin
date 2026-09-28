@@ -14,7 +14,8 @@ export function stageReadModelPending(model, error) {
 
 // Only the explicitly approved minimal lookup lives in memory. No raw payload,
 // filesystem persistence, public response cache, or Google request on UI reads.
-export function createStageReadModel({ secret, now = Date.now } = {}) {
+export function createStageReadModel({ secret, now = Date.now, publicPeriodCacheEntries = 3 } = {}) {
+  const periodCacheEntries=[1,2,3].includes(publicPeriodCacheEntries)?publicPeriodCacheEntries:3;
   let live = null, pending = null, lastStatus = { phase: 'WAITING', complete: false };
   const nonces = new Map();
   const publicPeriods = new Map();
@@ -82,7 +83,7 @@ export function createStageReadModel({ secret, now = Date.now } = {}) {
     const key=startDate+':'+endDate;
     if(!publicPeriods.has(key)){
       const rows=groupPeriodRows(live.period.filter(r=>r.deliveryDate>=startDate&&r.deliveryDate<=endDate).map(r=>({...r,lastDeliveryDate:r.deliveryDate})));
-      if(publicPeriods.size>=3)publicPeriods.delete(publicPeriods.keys().next().value);
+      if(publicPeriods.size>=periodCacheEntries)publicPeriods.delete(publicPeriods.keys().next().value);
       publicPeriods.set(key,rows);
     }
     return {ok:true,data:publicPeriods.get(key),meta:{...status(),complete:true,phase:'DONE',startDate,endDate,source:'Customer.daily_routes via Hub.StageReadModel',coverageComplete:false}};

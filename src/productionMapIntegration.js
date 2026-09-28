@@ -26,7 +26,7 @@ export function mountProductionMapApi(app,{
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const stageReadModelEnabled=true;
-  const stageReadModel=createStageReadModel({secret});
+  const stageReadModel=createStageReadModel({secret,publicPeriodCacheEntries:1});
   const phase2bAssignmentCache=createPhase2bReadCache({name:'assignments',ttlMs:60000,staleMs:120000,maxEntries:8,maxBytes:12*1024*1024});
   const phase2bDatedAssignmentCache=createPhase2bReadCache({name:'datedAssignments',ttlMs:600000,staleMs:0,maxEntries:16,maxBytes:24*1024*1024});
   app.use(staffLatency);
