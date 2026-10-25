@@ -90,7 +90,7 @@
  .dotRestored .maptop,.dotRestored.daily-mode .maptop{top:12px;left:12px;right:12px;justify-content:flex-end}
  .dotRestored.daily-mode .maptop>.row{position:static}
  .dotRestored #layoutDock{order:initial}
- .dotRestored #detailSection,.dotRestored.daily-mode #detailSection{position:absolute!important;right:12px!important;left:auto!important;top:64px!important;bottom:12px!important;width:340px!important;max-width:calc(100% - 24px);max-height:calc(100% - 76px)!important;margin:0}
+ .dotRestored #detailSection,.dotRestored.daily-mode #detailSection{position:absolute!important;right:12px!important;left:auto!important;top:64px!important;bottom:12px!important;width:340px!important;max-width:calc(100% - 24px);max-height:min(calc(100% - 76px),var(--opsmap-review-detail-room,calc(100% - 76px)))!important;margin:0}
  .dotRestored .detailCard{padding:16px}
  .dotRestored #mapReferenceDataNotice{order:5;width:100%;max-width:none;text-align:center}
  .dotRestored #staffAuxContent{margin:0 16px 16px}
