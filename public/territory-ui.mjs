@@ -10,8 +10,8 @@ function renderForSelection(){
  const selected=bridge.state.selectedVehicles,key=JSON.stringify([model.version,selected,bridge.state.centerFilter,bridge.state.mode]);if(key===renderKey)return;
  clear();renderKey=key;draws++;
  const groups=model.groups.filter(g=>(!selected.length||selected.includes(g.vehicle))&&(!bridge.state.centerFilter||g.center===bridge.state.centerFilter));
- for(const g of groups){if(g.state!=='ready')continue;const color=window.Phase2bUi.vehicleColor(g.vehicle);const p=new kakao.maps.Polygon({path:g.boundary.map(p=>new kakao.maps.LatLng(p.lat,p.lng)),strokeWeight:2,strokeColor:color,strokeOpacity:.8,fillColor:color,fillOpacity:.09});p.setMap(bridge.state.map);polygons.push(p);}
- const list=$('#territoryVehicles');if(list){list.replaceChildren();for(const g of groups){const item=document.createElement('li');item.textContent=g.vehicle+'호차 · '+(g.state==='ready'?g.locatedCount+'개 기준 매장':'미확인 · 좌표 3곳 이상 필요');list.append(item);}}
+ for(const g of groups){if(g.state!=='ready'||!['osan','yeongnam','honam'].includes(g.center))continue;const color=window.Phase2bUi.vehicleColor(g.vehicle);const p=new kakao.maps.Polygon({path:g.boundary.map(p=>new kakao.maps.LatLng(p.lat,p.lng)),strokeWeight:2,strokeColor:color,strokeOpacity:.8,fillColor:color,fillOpacity:.09});p.setMap(bridge.state.map);polygons.push(p);}
+ const list=$('#territoryVehicles');if(list){list.replaceChildren();for(const g of groups){const item=document.createElement('li');item.textContent=g.vehicle+'호차 · '+(g.reason==='CENTER_UNCONFIRMED'?'센터 미확인':g.state==='ready'?g.locatedCount+'개 기준 매장':'미확인 · 좌표 3곳 이상 필요');list.append(item);}}
  status(groups.length?`고정배차 기준 · ${polygons.length}개 호차 표시${groups.some(g=>g.state!=='ready')?' · 일부 좌표 미확인':''}`:'확인된 기준호차 자료가 없습니다.');
 }
 async function load(){
