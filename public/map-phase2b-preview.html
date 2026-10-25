@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" data-reference-data-optional="true">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -63,7 +63,7 @@
     <div class="legend"><div class="legendRow"><span class="pinSample"></span> 기준일 배송범위/착순</div><div class="legendRow"><span class="line"></span> 완료 착지 연결</div><div class="legendRow"><span class="line estimated"></span> 잔여 착지 연결</div></div>
     <section id="mobileRouteSheet" class="mobileRouteSheet"><div class="toolBody"><div class="sheetHead"><b>특정일 운행 조회</b><button id="closeMobileRoute" class="ghost">×</button></div><div class="routeGrid"><input id="mobileDate" type="date" value=""><button id="mobileToday" class="tiny">최신일</button></div><div class="routeGrid"><select id="mobileVehicle"><option value="101">101호</option><option value="110">110호</option><option value="221">221호</option></select><button id="mobileRoutePlan" class="primary">동선 조회</button></div><div id="mobileRouteSummary" class="idle" style="margin-top:7px">날짜와 호차를 선택해 조회하세요.</div></div></section>
   </div>
-  <script id="kakaoMapsSdk" data-sdk-src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=REDACTED_SECRET&amp;libraries=services&amp;autoload=false" src="kakao-maps-adapter.js"></script>
+  <script id="kakaoMapsSdk" data-sdk-src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=8f1459975e9f3b3aa62089837a2aeb85&amp;libraries=services&amp;autoload=false" src="kakao-maps-adapter.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <section id="staffAuxContent" class="staffAuxCard" aria-label="직원 보호 상세" hidden></section>
   <section id="mobileWorkspace" class="mobileWorkspace"><button id="sheetExpand" class="sheetHandle" aria-label="패널 펼치기">━</button><nav class="sheetTabs" aria-label="지도 패널"><button data-sheet-tab="filters">호차·조건</button><button data-sheet-tab="stores" class="active">매장 목록</button><button data-sheet-tab="runs">운행목록</button><button data-sheet-tab="new">주소·신규권역</button><button data-sheet-tab="manual">경유 내비</button></nav><div id="mobileDateHome"></div><div id="mobileSheetContent"></div></section>

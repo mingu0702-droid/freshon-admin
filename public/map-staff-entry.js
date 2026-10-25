@@ -66,6 +66,16 @@
   async function loadData(owner) {
     for (const [url, name] of [['vehicle-data.js', 'VEHICLE_AREA_DATA'], ['admin-features.js', 'ADMIN_FEATURES']]) {
       const response = await window.fetch('/' + url, { credentials: 'same-origin', cache: 'no-store' });
+      if (document.documentElement.dataset.referenceDataOptional === 'true' && [404,503].includes(response.status)) {
+        await response.body?.cancel();
+        if (owner !== epoch || !session) throw new DOMException('Session changed', 'AbortError');
+        window[name] = null;
+        document.body.dataset.mapReferenceDataState = 'unconfirmed';
+        let notice = document.getElementById('mapReferenceDataNotice');
+        if (!notice) { notice = document.createElement('p'); notice.id='mapReferenceDataNotice'; notice.setAttribute('role','status'); notice.style.cssText='position:fixed;bottom:8px;left:12px;z-index:2000;background:#fff4d6;padding:6px 10px;border:1px solid #d6a64e;font-size:12px'; document.body.append(notice); }
+        notice.textContent='기준자료 미확인 · 표시 건수를 정상 0건이나 기간 완료로 판단하지 마세요.';
+        continue;
+      }
       if (!response.ok) throw Error('MAP_DATA_UNAVAILABLE');
       const text = await response.text();
       if (owner !== epoch || !session) throw new DOMException('Session changed', 'AbortError');
