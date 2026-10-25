@@ -25,6 +25,9 @@
     const raw=$('#packageReadState'),fresh=$('#freshnessState'),status=$('#dotDataStatus');if(!status)return;
     const state=raw?.dataset.state;
     let text=({error:'연결 실패 · 저장 자료 표시 중',held:'저장 자료 표시 중',preparing:'자료 준비 중',legacy:'기본 자료 표시 중',unknown:'자료 상태 확인 중','logged-out':'로그아웃되었습니다.'})[state];
+    if(state==='legacy'&&document.body.dataset.mapReferenceDataState==='unconfirmed')text='기준자료 미확인';
+    const review=window.LOCAL_REVIEW_CONFIG;
+    if(review?.currentStoredReview&&/^\d{4}-\d{2}-\d{2}$/.test(review.date)&&!['error','preparing','logged-out'].includes(state))text='확보 배송일 '+review.date+' · 미게시 · 완전성 미확인';
     const bridge=window.MapUiLocalBridge;
     if(!text){const value=fresh?.textContent||'';text=/실패|오류|취소|부분|없음|준비|대기/.test(value)?value:'기준일 '+((bridge?.state.mode==='DATE_ROUTE'?bridge.state.selectedDate:bridge?.state.rangeEnd)||'확인 중');}
     if(status.textContent!==text)status.textContent=text;
@@ -44,7 +47,7 @@
       if(planner.previousElementSibling!==$('.generalCenters'))$('.generalCenters').after(planner);
       if(context.previousElementSibling!==planner)planner.after(context);
       if($('#periodStoreListSection').previousElementSibling!==context)context.after($('#periodStoreListSection'));
-      planner.hidden=false;visits.hidden=true;
+      planner.hidden=true;visits.hidden=true;
     }
     const state=window.MapUiLocalBridge.state,vehicles=state.selectedVehicles;
     $('#dotRouteSelection').textContent=(vehicles.length===1?vehicles[0]+'호차':vehicles.length?vehicles.length+'개 호차':'전체 호차')+' · '+state.currentRows.length+'개 매장';
@@ -68,6 +71,10 @@
     summary.querySelector('.sectiontitle').after(selection,origin);
     for(const [id,label]of [['navDistance','주행거리'],['navDuration','예상 소요']]){const value=$('#'+id),wrap=document.createElement('span');wrap.append(label+' ',value);summary.querySelector('.navTotals').append(wrap);}
     summary.append($('#syncOperation'));
+    const referenceNotice=$('#mapReferenceDataNotice');
+    if(referenceNotice)$('#approvedSiteHeader').append(referenceNotice);
+    const obsoleteRoutePanel=$('#roadRoutePanel');
+    if(obsoleteRoutePanel){obsoleteRoutePanel.hidden=true;obsoleteRoutePanel.inert=true;obsoleteRoutePanel.dataset.modeHidden='true';}
     const options=document.createElement('details');options.id='dotRoadOptions';options.innerHTML='<summary>경로 표시·저장 순서</summary>';
     options.append(summary.querySelector('.navToggles'),$('#queryRecordedRoute'),$('#navLegs'));summary.append(options);
     const controls=document.createElement('details');controls.id='territoryControls';

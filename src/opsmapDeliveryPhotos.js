@@ -113,7 +113,10 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
 
 export function createDeliveryPhotoService({ source = null, enabled = false, now = Date.now, maxHandles = 128, handleTtlMs = 5 * 60000 } = {}) {
   const handles = new Map();
-  function ready() { if (!(typeof enabled === 'function' ? enabled() === true : enabled === true) || !source?.list || !source?.openMedia) fail('UNVERIFIED', 503); }
+  function ready() {
+    if (!(typeof enabled === 'function' ? enabled() === true : enabled === true)) fail('PHOTO_SOURCE_DISABLED', 503);
+    if (!source?.list || !source?.openMedia) fail('SOURCE_UNAVAILABLE', 503);
+  }
   function prune() { for (const [key, value] of handles) if (now() >= value.expiresAt) handles.delete(key); }
   return {
     async list(query, sessionKey, { signal } = {}) {

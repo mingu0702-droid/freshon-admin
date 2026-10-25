@@ -45,8 +45,11 @@
    if(daily){if(planner.parentNode!==workspace)workspace.insertBefore(planner,missing);if(routeList.parentNode!==workspace)workspace.prepend(routeList);planner.hidden=false;routeList.hidden=false;}
    else{if(planner.parentNode!==plannerAnchor.parentNode)plannerAnchor.after(planner);if(routeList.parentNode!==routeAnchor.parentNode)routeAnchor.after(routeList);planner.hidden=true;}
   }
-  const vehicles=bridge.state.selectedVehicles,rows=bridge.stores().filter(r=>(!vehicles.length||vehicles.includes(String(r.vehicle)))&&(!Number.isFinite(r.lat)||!Number.isFinite(r.lng)||r.coordinateStatus==='CONFLICT'));
-  missing.querySelector('summary').textContent='좌표 미확인 매장 '+rows.length+'개';const list=missing.querySelector('div');list.replaceChildren();for(const row of rows.slice(0,100)){const b=document.createElement('button');b.textContent=row.customerCode+' · '+row.customerName+' · 좌표 미확인';b.onclick=()=>bridge.selectNavigationStore(row.customerCode);list.append(b);}
+  const vehicles=bridge.state.selectedVehicles,unlocatedRows=bridge.stores().filter(r=>(!vehicles.length||vehicles.includes(String(r.vehicle)))&&(!Number.isFinite(r.lat)||!Number.isFinite(r.lng)||r.coordinateStatus==='CONFLICT'));
+  const rows=[...new Map(unlocatedRows.map((row,index)=>[row.customerCode?'code:'+String(row.customerCode):'row:'+index,row])).values()];
+  missing.querySelector('summary').textContent='좌표 미확인 매장 '+rows.length+'개';const list=missing.querySelector('div');list.replaceChildren();
+  function appendPage(start){for(const row of rows.slice(start,start+100)){const b=document.createElement('button');b.textContent=row.customerCode+' · '+row.customerName+' · 좌표 미확인';b.onclick=()=>bridge.selectNavigationStore(row.customerCode);list.append(b);}if(start+100<rows.length){const more=document.createElement('button');more.textContent='미확인 매장 더 보기 ('+Math.min(100,rows.length-start-100)+'개)';more.onclick=()=>{more.remove();appendPage(start+100);};list.append(more);}}
+  appendPage(0);
   if(bridge.state.map)requestAnimationFrame(()=>bridge.state.map?.relayout());
  }
  const onManual=e=>showResult(e.detail),onRecorded=e=>{const data=e.detail;$('#navRouteStatus').textContent=MapDotUi.describeRoute(data);const m=RoadRouteUi.metrics(data);$('#navDistance').textContent=m.distance;$('#navDuration').textContent=m.duration;},onSelected=()=>{updateSelected();},onReady=()=>{drawCenters();sync();},onLogout=()=>{editor.clear();showResult({state:'idle'});};

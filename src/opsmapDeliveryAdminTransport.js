@@ -58,6 +58,8 @@ async function readJson(response, limit, signal) {
     catch { fail('INVALID_PHOTO_RESPONSE'); }
   } finally { cancel(reader); try { reader.releaseLock(); } catch {} }
 }
+// Reuse the same bounded JSON reader for an explicitly approved existing login.
+export { readJson as readBoundedPhotoLoginJson };
 
 // approvedRequest must be an existing, authorized, raw-Response requester that
 // uses an already active Delivery Admin session. Do not inject the legacy

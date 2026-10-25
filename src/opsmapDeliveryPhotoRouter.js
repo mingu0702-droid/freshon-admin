@@ -1,6 +1,6 @@
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createDeliveryPhotoService, DeliveryPhotoError } from './opsmapDeliveryPhotos.js';
+import { createDeliveryPhotoService, DeliveryPhotoError, validatePhotoQuery } from './opsmapDeliveryPhotos.js';
 
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 // Cleanup must never delay the bounded HTTP error when an upstream cancel hook
@@ -18,7 +18,7 @@ function failure(error, res) {
   else res.destroy();
 }
 // Dependency injection preserves A's existing staff session and makes the feature default OFF.
-export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCurrent = () => false, source = null, enabled = false,
+export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCurrent = () => false, source = null, enabled = false, prepareSource,
   timeoutMs = 8000, maxImageBytes = 4 * 1024 * 1024, maxConcurrent = 3, now = Date.now } = {}) {
   if (!app?.get || typeof requireStaff !== 'function') throw new Error('STAFF_AUTH_INJECTION_REQUIRED');
   const service = createDeliveryPhotoService({ source, enabled, now });
@@ -40,6 +40,13 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
       .finally(() => { clearTimeout(timer); req.off('aborted', abort); res.off('close', abort); active--; });
   };
   app.get('/api/map-phase2b/private/delivery-photos', secure, handler(async (req, res, signal, sessionKey) => {
+    const identity = validatePhotoQuery(req.query);
+    if (identity.deliveryId && typeof prepareSource === 'function') {
+      // Discovery never starts login; only a staff-authorized exact record may.
+      if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
+      await prepareSource(identity, { signal });
+      if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
+    }
     const data = await service.list(req.query, sessionKey, { signal });
     // Session can expire or be revoked while the upstream request is in flight.
     requireStaff(req, res, () => res.json({ ok: true, data }));

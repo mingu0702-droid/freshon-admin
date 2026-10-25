@@ -90,3 +90,9 @@
 .approvedShellCandidate .marker.approvedMarker .pin>span{font-size:11px;letter-spacing:-.4px}
 .approvedShellCandidate .marker.approvedMarker .clusterpin{background:var(--pin,#64748b);box-shadow:0 0 0 5px #64748b29,0 3px 9px #13264c55}
 
+
+/* Role separation wins over legacy forced display rules. */
+.approvedShellCandidate [data-mode-hidden="true"]{display:none!important}
+.approvedShellCandidate #baseVehiclePicker{margin-top:10px}
+.approvedShellCandidate #baseVehiclePicker>#vehicleList{display:flex;flex-wrap:wrap;max-height:240px;overflow:auto}
+.approvedShellCandidate #roadRoutePanel[data-mode-hidden="true"]{display:none!important}

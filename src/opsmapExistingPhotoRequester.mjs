@@ -3,6 +3,16 @@ const rejected = (code, status) => Object.assign(new Error(code), { code, status
 const cancelBody = response => { try { Promise.resolve(response?.body?.cancel?.()).catch(() => {}); } catch {} };
 export const APPROVED_SINGLE_PHOTO_SCOPE = Object.freeze({ customerCode: 'S91260', date: '2026-10-23', deliveryId: '2293136' });
 
+// Stage read-only exception is narrower than the legacy source requester. It
+// never starts/refreshes login, and requires an existing unexpired memory session.
+export function isApprovedSinglePhotoRawRead({enabled, hasMemorySession, pathname, options={}}={}) {
+  return enabled === true && hasMemorySession === true
+    && pathname === `/api/bali/task/${APPROVED_SINGLE_PHOTO_SCOPE.deliveryId}`
+    && (options.method ?? 'GET') === 'GET' && options.redirect === 'error' && options.cache === 'no-store'
+    && options.timeoutMs === 8000
+    && Object.keys(options).every(key=>['method','signal','redirect','cache','timeoutMs'].includes(key));
+}
+
 // Bind only to A's existing in-process raw deliveryAdminFetch function.
 // Credentials remain in its existing closure. This module cannot start login.
 export function createExistingDeliveryAdminPhotoRequester({ enabled = false, rawRequest,
@@ -100,13 +110,13 @@ export function restrictApprovedSinglePhotoSource(source, scope) {
 // Attach inside the existing server process. The caller supplies its unchanged
 // raw requester/session closure and existing authenticated C extension factory.
 // No standalone authentication server, login, worker, or credential bridge starts.
-export function createApprovedExistingPhotoMount({ enabled = false, rawRequest,
+export function createApprovedExistingPhotoMount({ enabled = false, rawRequest, prepareSource,
   hasMemorySession = () => false, baseUrl = ORIGIN, createExtension } = {}) {
   if (typeof createExtension !== 'function') throw rejected('PHOTO_BINDING_CONFIG_REJECTED', 503);
   const scope = APPROVED_SINGLE_PHOTO_SCOPE;
   const binding = createExistingDeliveryAdminPhotoRequester({ enabled, rawRequest, hasMemorySession,
     baseUrl, allowedDeliveryId: scope.deliveryId, maxTaskReads: 2 });
-  return createExtension({ ...binding, enabled,
+  return createExtension({ ...binding, enabled, prepareSource,
     listDeliveryMetadata: createApprovedDeliveryMetadata(scope),
     firstPhotoKind: 'REFRIGERATOR_DOOR',
     restrictSource: source => restrictApprovedSinglePhotoSource(source, scope),

@@ -20,6 +20,8 @@ _daily-routes-inline-check.js
 !src/
 !src/**
 !public/
+!public/assets/
+!public/assets/smartfoodnetworks-logo-official.svg
 !public/approved-site-source.css
 !public/approved-ui.css
 !public/hybrid-cache-contract.mjs
@@ -44,6 +46,7 @@ _daily-routes-inline-check.js
 !public/map-phase2b-runtime.js
 !public/map-staff-entry.css
 !public/map-staff-entry.js
+!public/stage-saved-review-boot.js
 !public/map-staff.css
 !public/map-staff.js
 !public/navigation-ui.css
@@ -74,3 +77,5 @@ public/*.json
 public/**/*.json
 **/*.zip
 **/*.log
+opsmap-20261023-review.json
+**/opsmap-20261023-review.json

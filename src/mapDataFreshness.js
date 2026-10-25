@@ -25,7 +25,7 @@ export function mapPublicationConnection(hubStatus,liveStatus){
 
 export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus,readBaseVehicleMaster,env=process.env,adminGuard=requireAdmin,baseStore=env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
   let statusCache=null,statusAt=0,statusPending=null;
-  const base=createFixedVehicleCache({reader:readBaseVehicleMaster||(()=>{throw new Error('FIXED_MASTER_UNAVAILABLE');}),store:baseStore});
+  const base=createFixedVehicleCache({reader:readBaseVehicleMaster||(()=>{throw new Error('FIXED_MASTER_UNAVAILABLE');}),store:baseStore,readOnly:env.OPSMAP_STAGE_VERIFY_ONLY==='1'});
   const cleanDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:null;
   const code=v=>/^[A-Z0-9_]+$/.test(v||'')?v:'UNKNOWN';
   async function readStatus(){
@@ -50,7 +50,8 @@ export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,mo
   });
   async function baseResponse(q,r){
     r.set('Cache-Control','no-store');
-    const requested=q.method==='POST'?q.body?.customerCodes:q.query.customerCode?[q.query.customerCode]:[];
+    const requested=q.method==='POST'?q.body?.customerCodes:q.query.customerCodes?String(q.query.customerCodes).split(','):q.query.customerCode?[q.query.customerCode]:[];
+    if(q.method==='GET'&&(q.query.customerCodes?.length>8000||requested.length>500))return r.status(400).json({error:'INVALID_CUSTOMER_CODES'});
     if(!Array.isArray(requested)||requested.length>10000||requested.some(v=>typeof v!=='string'||!/^[A-Z]\d+$/.test(v)))return r.status(400).json({error:'INVALID_CUSTOMER_CODES'});
     const payload=await base.get([...new Set(requested)]);
     return r.status(payload.ok?200:payload.phase==='ERROR'?503:202).json({...payload,progress:readBaseVehicleMaster?.getProgress?.()||null});

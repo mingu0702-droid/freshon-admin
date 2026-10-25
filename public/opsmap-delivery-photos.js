@@ -104,7 +104,7 @@
         response = await fetcher(path, { cache: 'no-store', credentials: 'same-origin', redirect: 'error', ...options, signal: timeout.signal });
         if (!response.ok) {
           let code = '';
-          if (response.status === 503 || response.status === 422) { try { const body = JSON.parse(new TextDecoder().decode(await readBody(response, 4096, timeout.signal))); code = typeof body.error === 'string' ? body.error : body.error?.code || ''; } catch (_) { /* No raw server body retained. */ } }
+          try { const body = JSON.parse(new TextDecoder().decode(await readBody(response, 4096, timeout.signal))); const candidate = typeof body.error === 'string' ? body.error : body.error?.code || ''; code = /^[A-Z_]{1,64}$/.test(candidate) ? candidate : ''; } catch (_) { /* No raw server body retained. */ }
           throw Object.assign(Error(code || 'REQUEST_FAILED'), { status: response.status });
         }
         return await consume(response, timeout.signal);
@@ -122,6 +122,8 @@
       if (id !== generation) return;
       if (error.status === 401) { block(); return; }
       purge(); const current = generation;
+      if (error.message === 'UPSTREAM_AUTH_REQUIRED') { shell('Delivery Admin 인증 연결이 필요합니다. 직원 로그인은 유지됩니다.', 'upstream-auth-required'); return; }
+      if (error.message === 'PHOTO_SOURCE_DISABLED') { shell('납품 사진 연결이 비활성 상태입니다.', 'source-disabled'); return; }
       const forbidden = error.status === 403, unverified = ['UNVERIFIED', 'SOURCE_UNAVAILABLE', 'NOT_CONFIGURED', 'INVALID_SOURCE_RESPONSE'].includes(error.message) || error.status === 404 || error.status === 422 || error.status === 503;
       shell(forbidden ? '사진 조회 권한이 없습니다.' : unverified ? '사진 미확인 · 배송 사진 원천 또는 연결 상태를 확인해 주세요.' : '사진 조회 실패 · 잠시 후 다시 시도해 주세요.', forbidden ? 'forbidden' : unverified ? 'unverified' : 'error', forbidden ? null : { label: '다시 조회', run: () => current === generation && target && open(target) });
     }

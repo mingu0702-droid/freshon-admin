@@ -72,8 +72,8 @@
         window[name] = null;
         document.body.dataset.mapReferenceDataState = 'unconfirmed';
         let notice = document.getElementById('mapReferenceDataNotice');
-        if (!notice) { notice = document.createElement('p'); notice.id='mapReferenceDataNotice'; notice.setAttribute('role','status'); notice.style.cssText='position:fixed;bottom:8px;left:12px;z-index:2000;background:#fff4d6;padding:6px 10px;border:1px solid #d6a64e;font-size:12px'; document.body.append(notice); }
-        notice.textContent='기준자료 미확인 · 표시 건수를 정상 0건이나 기간 완료로 판단하지 마세요.';
+        if (!notice) { notice = document.createElement('p'); notice.id='mapReferenceDataNotice'; notice.setAttribute('role','status'); notice.setAttribute('aria-live','polite'); (document.getElementById('approvedSiteHeader') || document.body).prepend(notice); }
+        notice.textContent='기준자료 미확인 · 기간 완전성 미검증';
         continue;
       }
       if (!response.ok) throw Error('MAP_DATA_UNAVAILABLE');

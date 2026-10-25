@@ -6,11 +6,11 @@ export function projectFixedVehicles(rows) {
   for (const row of rows) {
     const customerCode = String(row.estCd || '').trim().toUpperCase();
     if (!/^[A-Z]\d+$/.test(customerCode)) continue;
-    const primary = String(row.mainCarSeqNm || '').trim().replace(/호$/, '');
-    const baseVehicle = /^\d+$/.test(primary) ? String(Number(primary)) : '';
+    const primary = String(row.mainCarSeqNm || '').trim().replace(/호(?:차)?$/, '');
+    const baseVehicle = /^[\p{L}\p{N}_-]{1,64}$/u.test(primary) ? primary : '';
     const weekdays = Object.fromEntries(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => {
-      const v = String(row['carSeq' + day + 'Nm'] || '').trim().replace(/호$/, '');
-      return [day, /^\d+$/.test(v) ? String(Number(v)) : ''];
+      const v = String(row['carSeq' + day + 'Nm'] || '').trim().replace(/호(?:차)?$/, '');
+      return [day, /^[\p{L}\p{N}_-]{1,64}$/u.test(v) ? v : ''];
     }));
     const baseVehicleGroup=({'011':'osan','012':'yeongnam','013':'honam'})[row.logCd]||'';
     const previous = result.get(customerCode);

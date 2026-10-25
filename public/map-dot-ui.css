@@ -11,7 +11,7 @@
 .dotRestored .dotQueryActions{display:flex;flex-wrap:wrap;gap:6px;margin:0 16px 16px}
 .dotRestored .dotQueryActions button{width:100%;font-size:12px}
 .approvedShellCandidate.dotRestored.daily-mode .navigationWorkspace{display:block;grid-template-columns:none;grid-row:auto;margin:0;padding:0;border:0;background:none;max-height:none;overflow:visible}
-.dotRestored:not(.daily-mode) #waypointPlanner{display:block!important}
+.dotRestored:not(.daily-mode) #waypointPlanner{display:none!important}
 .dotRestored:not(.daily-mode) .navigationPicker{display:none}
 .dotRestored.daily-mode .generalCenters{display:none}
 .dotRestored .navigationWorkspace>section,.dotRestored .navigationWorkspace>details{margin:0 16px;padding:16px 0;border:0;border-top:1px solid var(--line);border-radius:0}
@@ -50,29 +50,28 @@
 .dotRestored #refreshTerritories{font-size:11px;padding:5px 8px}
 .dotRestored #dotDataStatus{font-size:11px;color:#728097;margin:4px 0 0;overflow-wrap:anywhere}
 .dotRestored #dotDataStatus[data-state=error]{color:#a33a16}
-.dotRestored #detailSection{position:absolute!important;right:20px!important;left:auto!important;top:84px!important;bottom:78px!important;width:318px!important;max-width:calc(100% - 40px);max-height:calc(100% - 162px)!important;margin:0;padding:0;border:1px solid #dce4ee;border-radius:12px;background:#fff;box-shadow:0 12px 40px #18354b25;overflow:auto;z-index:450;transform:none!important}
+.dotRestored #detailSection{position:absolute!important;right:20px!important;left:auto!important;top:84px!important;bottom:78px!important;width:340px!important;max-width:calc(100% - 40px);max-height:calc(100% - 162px)!important;margin:0;padding:0;border:1px solid #dce4ee;border-radius:12px;background:#fff;box-shadow:0 12px 40px #18354b25;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;z-index:450;transform:none!important}
 .dotRestored #detailSection:not(.open){display:none}
 .dotRestored .detailCard{padding:20px}
-.dotRestored .detailClose{float:right;border:0;padding:0 5px;font-size:22px;line-height:1.2}
-.dotRestored .detailHead .code{font-size:12px;color:var(--blue);margin-bottom:6px}
-.dotRestored .detailHead .storeName{font-size:20px;font-weight:700;margin:4px 0 12px}
-.dotRestored .detailHead{padding-bottom:14px}
-.dotRestored .detailHead .code,.dotRestored .detailHead .storeName{display:inline;margin:0;font-size:12px;font-weight:400;color:#8390a0}
-.dotRestored .detailHead .storeName::before{content:' · '}
+.dotRestored .detailClose{position:absolute;right:0;top:0;width:32px;height:32px;border:1px solid var(--line);border-radius:7px;padding:0;font-size:22px;line-height:1;background:#fff}
+.dotRestored .detailHead{position:relative;display:flex;flex-direction:column;gap:6px;padding:0 40px 16px 0;background:#fff}
+.dotRestored .detailHead .storeName{order:-1;display:block;font-size:20px;line-height:1.4;font-weight:700;color:var(--ink);margin:0;overflow-wrap:anywhere}
+.dotRestored .detailHead .code{display:block;font-size:12px;line-height:1.5;font-weight:500;color:var(--blue);margin:0;overflow-wrap:anywhere}
 .dotRestored .popupMeta{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:#68778c}
 .dotRestored .popupMeta{display:none}
-.dotRestored .dotDetailFacts{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px 4px;margin:0;padding:18px 0;border-block:1px solid var(--line);font-size:13px}
+.dotRestored .dotDetailFacts{display:grid;grid-template-columns:78px minmax(0,1fr);gap:12px 8px;margin:0;padding:18px 0;border-block:1px solid var(--line);font-size:13px}
 .dotRestored .dotDetailFacts dt{color:#8390a0}
 .dotRestored .dotDetailFacts dd{margin:0;overflow-wrap:anywhere}
-.dotRestored .detailBody{font-size:13px}
+.dotRestored .detailBody{font-size:13px;padding:0;line-height:1.6}
 .dotRestored .detailLine{padding:16px 0;color:#718096;border-bottom:1px solid var(--line)}
 .dotRestored .periodRecent{font-size:12px;color:#718096;padding:12px 0}
 .dotRestored .staffActions{display:flex;flex-direction:column;gap:7px;margin:14px 0}
-.dotRestored .staffActions button{font-size:13px;text-align:left;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:14px 0;background:white}
+.dotRestored .staffActions button{min-height:40px;font-size:13px;line-height:1.4;text-align:left;border:1px solid var(--line);border-radius:7px;padding:10px 12px;background:white}
 .dotRestored .coordinateWarning{font-size:12px;color:#986022}
 .dotRestored .mobileActions{display:block;margin-top:16px}
 .dotRestored #mobileRouteView{display:none}
 .dotRestored #mobileMapView{width:100%;font-size:13px;background:white;color:var(--ink);border-color:var(--line)}
+.dotRestored #mapReferenceDataNotice{position:static;margin:0;max-width:220px;flex-shrink:1;color:#986022;font-size:11px;line-height:1.4;overflow-wrap:anywhere}
 .dotRestored #staffAuxContent{position:static!important;width:auto!important;max-width:100%!important;margin:0 20px 20px;padding:12px;border:1px solid var(--line);max-height:none!important;box-shadow:none;transform:none!important;overflow-wrap:anywhere}
 .dotRestored #staffAuxContent[hidden]{display:none!important}
 .dotRestored .staffActions #staffAuxContent{margin:0 0 14px;width:100%!important}
@@ -91,7 +90,9 @@
  .dotRestored .maptop,.dotRestored.daily-mode .maptop{top:12px;left:12px;right:12px;justify-content:flex-end}
  .dotRestored.daily-mode .maptop>.row{position:static}
  .dotRestored #layoutDock{order:initial}
- .dotRestored #detailSection,.dotRestored.daily-mode #detailSection{position:absolute!important;right:12px!important;left:auto!important;top:12px!important;bottom:auto!important;width:318px!important;max-width:calc(100% - 24px);max-height:calc(100% - 24px)!important;margin:0}
+ .dotRestored #detailSection,.dotRestored.daily-mode #detailSection{position:absolute!important;right:12px!important;left:auto!important;top:64px!important;bottom:12px!important;width:340px!important;max-width:calc(100% - 24px);max-height:calc(100% - 76px)!important;margin:0}
  .dotRestored .detailCard{padding:16px}
+ .dotRestored #mapReferenceDataNotice{order:5;width:100%;max-width:none;text-align:center}
+ .dotRestored #staffAuxContent{margin:0 16px 16px}
 }
 

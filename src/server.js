@@ -20,8 +20,10 @@ import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { mountProductionMapApi } from './productionMapIntegration.js';
 import { createOpsmapCAuthenticatedPhotoExtension } from './opsmapCIntegration.js';
 import { createOpsmapCoordinateRegistration } from './opsmapCoordinateRegistration.mjs';
-import { createApprovedExistingPhotoMount } from './opsmapExistingPhotoRequester.mjs';
+import { createApprovedExistingPhotoMount, isApprovedSinglePhotoRawRead, APPROVED_SINGLE_PHOTO_SCOPE } from './opsmapExistingPhotoRequester.mjs';
+import { readBoundedPhotoLoginJson } from './opsmapDeliveryAdminTransport.js';
 import { mountMapMainPage } from './mapMainPage.js';
+import { createStageSavedReview } from './stageSavedReview.js';
 import { createFixedVehicleReader } from './fixedVehicleProjection.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -70,13 +72,28 @@ const approvedPhotoEnabled = process.env.OPSMAP_APPROVED_PHOTO_VERIFY === '1';
 // Do not bind the fetch-only /api/collector/freshon route as a Customer success.
 const coordinateSuccessCallbacks = createOpsmapCoordinateRegistration({enabled:false});
 const approvedPhotoMount = createApprovedExistingPhotoMount({
-  enabled: approvedPhotoEnabled, rawRequest: deliveryAdminFetch,
+  prepareSource: async (identity, {signal}) => {
+    if (!stageVerificationOnly || !approvedPhotoEnabled) return;
+    if (identity.customerCode !== APPROVED_SINGLE_PHOTO_SCOPE.customerCode || identity.date !== APPROVED_SINGLE_PHOTO_SCOPE.date || identity.deliveryId !== APPROVED_SINGLE_PHOTO_SCOPE.deliveryId) throw Object.assign(Error('PHOTO_FORBIDDEN'), {status:403});
+    await ensureDeliveryAdminSession(false, {maxAttempts:1,retryAfter401:false,allowSessionWrite:'memoryOnly',timeoutMs:8000,maxResponseBytes:16384,signal});
+  },
+
+  enabled: approvedPhotoEnabled, rawRequest: (pathname, options) => {
+    if (!stageVerificationOnly) return deliveryAdminFetch(pathname, options);
+    const hasMemorySession = Boolean((deliveryAdminSession.cookie || deliveryAdminSession.authorization)
+      && Number.isFinite(deliveryAdminSession.expiresAt) && Date.now() < deliveryAdminSession.expiresAt);
+    if (!isApprovedSinglePhotoRawRead({enabled:approvedPhotoEnabled,hasMemorySession,pathname,options})) {
+      throw Object.assign(Error('UPSTREAM_AUTH_REQUIRED'), {status:401});
+    }
+    return deliveryAdminRawFetch(pathname, options);
+  },
   baseUrl: config.deliveryAdminBaseUrl, createExtension: createOpsmapCAuthenticatedPhotoExtension,
   hasMemorySession: () => Boolean((deliveryAdminSession.cookie || deliveryAdminSession.authorization)
     && Number.isFinite(deliveryAdminSession.expiresAt) && Date.now() < deliveryAdminSession.expiresAt),
 });
+const savedStageReview=createStageSavedReview({publicDir});
 const productionMap = mountProductionMapApi(app, {
-  mountPrivateExtensions: approvedPhotoMount,
+  mountPrivateExtensions: binding => { approvedPhotoMount(binding); savedStageReview.mount(binding); },
   // Default OFF; exact approved hashes are required before legacy restoration is suppressed.
   hybridStoredIoEnabled: !!process.env.MAP_HUB_PUBLISHED_READS_APPROVAL,
   hubPublicationCutover: process.env.MAP_HUB_PUBLISHED_READS_APPROVAL || null,
@@ -149,6 +166,8 @@ let deliveryAdminSession = {
   expiresAt: 0
 };
 let deliveryAdminLoginPromise = null;
+let approvedPhotoLoginAttempted = false;
+let approvedPhotoLoginPending = false;
 let freshonSession = {
   cookie: config.freshonCookie || "",
   expiresAt: config.freshonCookie ? Date.now() + 5 * 60 * 1000 : 0,
@@ -386,6 +405,10 @@ function getSetCookieHeaders(response) {
 
 async function deliveryAdminFetch(pathname, options = {}) {
   if (stageVerificationOnly) throw Object.assign(Error('STAGE_SOURCE_AUTOMATION_DISABLED'), {status:403});
+  return deliveryAdminRawFetch(pathname, options);
+}
+
+async function deliveryAdminRawFetch(pathname, options = {}) {
   const baseUrl = normalizeBaseUrl(config.deliveryAdminBaseUrl);
   const url = pathname.startsWith("http") ? pathname : `${baseUrl}${pathname.startsWith("/") ? "" : "/"}${pathname}`;
   const { timeoutMs = 25000, ...fetchOptions } = options;
@@ -442,19 +465,29 @@ async function readDeliveryAdminJson(pathname, options = {}) {
   return payload;
 }
 
-async function ensureDeliveryAdminSession(force = false) {
+async function ensureDeliveryAdminSession(force = false, photoPolicy) {
+  const photo = photoPolicy !== undefined;
+  if (photo && (!stageVerificationOnly || !approvedPhotoEnabled || force || photoPolicy.maxAttempts !== 1 || photoPolicy.retryAfter401 !== false || photoPolicy.allowSessionWrite !== 'memoryOnly' || photoPolicy.timeoutMs !== 8000 || photoPolicy.maxResponseBytes !== 16384)) throw Object.assign(Error('PHOTO_BINDING_CONFIG_REJECTED'), {status:503});
+  if (photo && normalizeBaseUrl(config.deliveryAdminBaseUrl) !== 'https://delivery-bali.chabyulhwa.com') throw Object.assign(Error('PHOTO_BINDING_CONFIG_REJECTED'), {status:503});
+  if (photo && (typeof config.deliveryAdminId !== 'string' || config.deliveryAdminId.length > 128 || typeof config.deliveryAdminPassword !== 'string' || config.deliveryAdminPassword.length > 1024)) throw Object.assign(Error('PHOTO_BINDING_CONFIG_REJECTED'), {status:503});
   if (!force && (deliveryAdminSession.cookie || deliveryAdminSession.authorization) && Date.now() < deliveryAdminSession.expiresAt) {
     return deliveryAdminSession.cookie || deliveryAdminSession.authorization;
   }
-  if (config.deliveryAdminCookie && !force) {
+  if (config.deliveryAdminCookie && !force && !photo) {
     deliveryAdminSession.cookie = config.deliveryAdminCookie;
     deliveryAdminSession.expiresAt = Date.now() + 20 * 60 * 1000;
     return deliveryAdminSession.cookie;
   }
   if (!config.deliveryAdminId || !config.deliveryAdminPassword) {
+    if (photo) throw Object.assign(Error('UPSTREAM_AUTH_REQUIRED'), {status:401});
     throw new Error("DELIVERY_ADMIN_ID and DELIVERY_ADMIN_PASSWORD are not configured.");
   }
-  if (deliveryAdminLoginPromise) return deliveryAdminLoginPromise;
+  if (deliveryAdminLoginPromise) {
+    if (photo && !approvedPhotoLoginPending) throw Object.assign(Error('PHOTO_RATE_LIMITED'), {status:429});
+    return deliveryAdminLoginPromise;
+  }
+  if (photo && approvedPhotoLoginAttempted) throw Object.assign(Error('UPSTREAM_AUTH_REQUIRED'), {status:401});
+  if (photo) { approvedPhotoLoginAttempted = true; approvedPhotoLoginPending = true; }
   deliveryAdminLoginPromise = (async () => {
     deliveryAdminSession.cookie = "";
     deliveryAdminSession.authorization = "";
@@ -465,17 +498,36 @@ async function ensureDeliveryAdminSession(force = false) {
       { url: "https://delivery-api.chabyulhwa.com/admin/auth/sign-in", body: { id: config.deliveryAdminId, password: config.deliveryAdminPassword } }
     ];
     const errors = [];
-    for (const attempt of attempts) {
-      const response = await deliveryAdminFetch(attempt.url, {
+    for (const attempt of (photo ? attempts.slice(0,1) : attempts)) {
+      const requestOptions = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(attempt.body)
-      });
-      const text = await response.text();
+      };
+      const controller = photo ? new AbortController() : null;
+      const abort = () => controller?.abort();
+      photoPolicy?.signal?.addEventListener('abort', abort, {once:true});
+      if (photoPolicy?.signal?.aborted) abort();
+      const timer = photo ? setTimeout(abort, photoPolicy.timeoutMs) : null;
+      let response;
       let payload = {};
-      try { payload = text ? JSON.parse(text) : {}; } catch { payload = {}; }
+      try {
+        response = photo ? await deliveryAdminRawFetch(attempt.url, {...requestOptions,signal:controller.signal,redirect:'error',timeoutMs:photoPolicy.timeoutMs,cache:'no-store'}) : await deliveryAdminFetch(attempt.url, requestOptions);
+        if (photo) {
+          if (!response.ok || response.redirected) { void response.body?.cancel().catch(()=>{}); throw Object.assign(Error('UPSTREAM_AUTH_REQUIRED'), {status:401}); }
+          payload = await readBoundedPhotoLoginJson(response, photoPolicy.maxResponseBytes, controller.signal);
+        } else {
+          const text = await response.text();
+          try { payload = text ? JSON.parse(text) : {}; } catch { payload = {}; }
+        }
+      } catch (error) {
+        if (!photo) throw error;
+        deliveryAdminSession.cookie='';deliveryAdminSession.authorization='';deliveryAdminSession.expiresAt=0;
+        throw Object.assign(Error(controller.signal.aborted?'PHOTO_TIMEOUT':'UPSTREAM_AUTH_REQUIRED'), {status:controller.signal.aborted?504:401});
+      } finally { if(timer)clearTimeout(timer);photoPolicy?.signal?.removeEventListener('abort',abort); }
       const token = payload?.token || payload?.accessToken || payload?.access_token || payload?.data?.token || payload?.data?.accessToken || payload?.data?.access_token;
       if (token) deliveryAdminSession.authorization = `Bearer ${token}`;
+      if (photo && !(deliveryAdminSession.cookie || deliveryAdminSession.authorization)) throw Object.assign(Error('UPSTREAM_AUTH_REQUIRED'), {status:401});
       const redirectWithSession = response.status >= 300 && response.status < 400 && Boolean(deliveryAdminSession.cookie || deliveryAdminSession.authorization);
       if (response.ok || redirectWithSession) {
         deliveryAdminSession.username = config.deliveryAdminId;
@@ -493,6 +545,7 @@ async function ensureDeliveryAdminSession(force = false) {
     return await deliveryAdminLoginPromise;
   } finally {
     deliveryAdminLoginPromise = null;
+    if (photo) approvedPhotoLoginPending = false;
   }
 }
 
@@ -3378,11 +3431,17 @@ app.get("/api/daily-route", requireView, async (req, res) => {
 });
 
 app.get("/api/delivery-admin/status", requireView, async (_req, res) => {
+  const memorySessionValid = Boolean((deliveryAdminSession.cookie || deliveryAdminSession.authorization)
+    && Number.isFinite(deliveryAdminSession.expiresAt) && Date.now() < deliveryAdminSession.expiresAt);
   res.json({
     configured: Boolean((config.deliveryAdminId && config.deliveryAdminPassword) || config.deliveryAdminCookie),
     hasCookie: Boolean(deliveryAdminSession.cookie || config.deliveryAdminCookie),
     baseUrl: config.deliveryAdminBaseUrl,
-    usernameConfigured: Boolean(config.deliveryAdminId)
+    usernameConfigured: Boolean(config.deliveryAdminId),
+    passwordConfigured: Boolean(config.deliveryAdminPassword),
+    approvedPhotoEnabled,
+    memorySessionValid,
+    photoConnection: !approvedPhotoEnabled ? 'PHOTO_SOURCE_DISABLED' : !memorySessionValid ? 'UPSTREAM_AUTH_REQUIRED' : 'APPROVED_SINGLE_PHOTO_READY'
   });
 });
 
