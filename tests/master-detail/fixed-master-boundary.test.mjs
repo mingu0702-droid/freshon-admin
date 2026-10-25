@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import {gzipSync} from 'node:zlib';
+import {fixedEnvelope,createFixedVehicleFileStore} from '../../src/fixedVehicleStore.js';
+import {createFixedVehicleCache} from '../../src/fixedVehicleCache.js';
+import {projectFixedVehicles} from '../../src/fixedVehicleProjection.js';
+const results=[];async function test(name,fn){await fn();results.push({name,status:'PASS'});}
+const checkedAt=new Date().toISOString();
+const data=projectFixedVehicles([{estCd:'S1',mainCarSeqNm:'101',carSeqMonNm:'용01',logCd:'011'},{estCd:'S2',mainCarSeqNm:'',logCd:'011'},{estCd:'S3',mainCarSeqNm:'102',logCd:'012'},{estCd:'S3',mainCarSeqNm:'203',logCd:'013'}]);
+const envelope=fixedEnvelope(data,checkedAt),raw=Buffer.from(JSON.stringify(envelope));
+const pin=crypto.createHash('sha256').update(raw).digest('hex');
+const file='C:/private/fixed-master.txt',appRoot='C:/image/app';
+const env={OPSMAP_STAGE_VERIFY_ONLY:'1',OPSMAP_STAGE_FIXED_MASTER_FILE:file,OPSMAP_STAGE_FIXED_MASTER_SHA256:pin};
+const factory=(bytes,overrides={})=>createFixedVehicleFileStore({env,appRoot,readFile:()=>bytes,stat:()=>({size:bytes.length}),...overrides});
+await test('existing projection preserves PRIMARY vs daily vehicle and conflict states',()=>{assert.equal(data[0].baseVehicle,'101');assert.equal(data[0].weekdays.Mon,'용01');assert.equal(data[1].baseVehicleState,'UNASSIGNED');assert.equal(data[2].baseVehicleState,'CONFLICT');});
+await test('private pinned plain envelope loads',async()=>assert.equal((await factory(raw).load()).version,envelope.version));
+const carrier=Buffer.from('OPSMAP_GZIP_BASE64_V1\n'+gzipSync(raw).toString('base64'));
+await test('bounded compressed carrier loads canonical envelope',async()=>assert.deepEqual(await factory(carrier).load(),envelope));
+await test('readOnly cache uses file, never reader/write/refresh',async()=>{let calls=0;const cache=createFixedVehicleCache({readOnly:true,store:factory(carrier),reader:()=>{calls++;throw Error('MUST_NOT_CALL');}});const result=await cache.get(['S1','S2','S3','S4']);assert.equal(calls,0);assert.equal(result.ok,true);assert.deepEqual(result.data.map(r=>r.baseVehicleState),['VERIFIED_MASTER','UNASSIGNED','CONFLICT','NOT_IN_MASTER']);await cache.refresh();assert.equal(calls,0);assert.equal(result.meta.refresh,'READ_ONLY');});
+await test('missing readonly projection is NOT_READY, not a source-empty success',async()=>{const r=await createFixedVehicleCache({readOnly:true,reader:()=>assert.fail('source read')}).get(['S1']);assert.equal(r.ok,false);assert.equal(r.phase,'NOT_READY');assert.equal(r.meta.cacheState,'NOT_CONFIGURED');});
+await test('pin mismatch, oversized carrier, image path and invalid envelope reject',async()=>{await assert.rejects(factory(Buffer.from(raw.toString().replace('101','102'))).load(),/FIXED_STORE_FILE_PIN/);await assert.rejects(factory(Buffer.alloc(512001)).load(),/FIXED_STORE_FILE_LIMIT/);assert.throws(()=>factory(raw,{env:{...env,OPSMAP_STAGE_FIXED_MASTER_FILE:'C:/image/app/public/fixed.txt'}}),/FIXED_STORE_FILE_PRIVATE/);assert.throws(()=>factory(raw,{env:{...env,OPSMAP_STAGE_VERIFY_ONLY:'0'}}),/FIXED_STORE_FILE_CONFIG/);});
+await test('decompression hard limit rejects large output before JSON use',async()=>{const bytes=Buffer.from('OPSMAP_GZIP_BASE64_V1\n'+gzipSync(Buffer.alloc(33554433)).toString('base64'));await assert.rejects(factory(bytes).load(),/FIXED_STORE_FILE_LIMIT/);});
+console.log(JSON.stringify({scope:'changed private read-only fixed store/cache boundary; synthetic evidence, not live master',passed:results.length,failed:0,results},null,2));

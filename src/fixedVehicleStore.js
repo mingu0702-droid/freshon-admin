@@ -1,5 +1,8 @@
 // Dedicated, private fixed-master projection. Never stores source payloads.
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import {gunzipSync} from 'node:zlib';
 export const FIXED_SCHEMA = 1;
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const fail = code => { throw Object.assign(new Error(code), {code}); };
@@ -37,6 +40,31 @@ export function validateFixedEnvelope(value,{materialize=true}={}) {
   const body={schema:FIXED_SCHEMA,checkedAt:value.checkedAt,rows:value.rows};
   if(value.version!==hash(body)||value.count!==value.rows.length||Object.keys(value).join('|')!=='schema|checkedAt|rows|count|version')fail('FIXED_STORE_INTEGRITY');
   return {envelope:value,...(materialize?{data:value.rows.map(fixedTupleData)}:{})};
+}
+
+// Stage consumes an already verified private projection. Loading this file
+// never starts a FreshOn session, refresh lease, GitHub write or collector.
+export function createFixedVehicleFileStore({env=process.env,appRoot=process.cwd(),readFile=fs.readFileSync,stat=fs.statSync}={}) {
+  const file=env.OPSMAP_STAGE_FIXED_MASTER_FILE,pin=env.OPSMAP_STAGE_FIXED_MASTER_SHA256;
+  if(env.OPSMAP_STAGE_VERIFY_ONLY!=='1'||!file||!path.isAbsolute(file)||!/^([a-f0-9]{64})$/.test(pin||''))fail('FIXED_STORE_FILE_CONFIG');
+  const relative=path.relative(path.resolve(appRoot),path.resolve(file));
+  if(relative===''||(!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative)))fail('FIXED_STORE_FILE_PRIVATE');
+  return {async load(){
+    const size=stat(file).size;
+    if(!Number.isSafeInteger(size)||size<1||size>512000)fail('FIXED_STORE_FILE_LIMIT');
+    const stored=readFile(file);
+    if(!Buffer.isBuffer(stored)||stored.length!==size)fail('FIXED_STORE_FILE_CHANGED');
+    const prefix=Buffer.from('OPSMAP_GZIP_BASE64_V1\n');let raw=stored;
+    if(stored.subarray(0,prefix.length).equals(prefix)){
+      const text=stored.subarray(prefix.length).toString('utf8');
+      if(!text||text.length%4||!/^[A-Za-z0-9+/]+={0,2}$/.test(text))fail('FIXED_STORE_FILE_ENCODING');
+      const compressed=Buffer.from(text,'base64');if(compressed.toString('base64')!==text)fail('FIXED_STORE_FILE_ENCODING');
+      try{raw=gunzipSync(compressed,{maxOutputLength:33554432});}catch{fail('FIXED_STORE_FILE_LIMIT');}
+    }
+    if(crypto.createHash('sha256').update(raw).digest('hex')!==pin)fail('FIXED_STORE_FILE_PIN');
+    let value;try{value=JSON.parse(raw);}catch{fail('FIXED_STORE_INVALID');}
+    return validateFixedEnvelope(value,{materialize:false}).envelope;
+  }};
 }
 
 // Reuses existing GITHUB_* credentials. Explicitly refuses public repositories.

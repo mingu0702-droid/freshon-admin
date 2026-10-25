@@ -425,6 +425,32 @@
     await read();
   }
 
+  async function collectBaseVehicleBatches(batches,fetchBatch){
+    const rows=[];let identity=null,last;
+    for(const batch of batches){
+      const payload=await fetchBatch(batch);last=payload;
+      if(!Array.isArray(payload?.data)){
+        if(rows.length)throw new Error('BASE_BATCH_INCOMPLETE');
+        return payload;
+      }
+      const meta=payload.meta||{};
+      if(payload.ok!==true||!/^[a-f0-9]{64}$/.test(meta.version||'')||meta.basis!=='FIXED_DISPATCH_PRIMARY'
+        ||!Number.isFinite(Date.parse(meta.checkedAt))||typeof meta.stale!=='boolean')throw new Error('BASE_BATCH_EVIDENCE');
+      const current=JSON.stringify([meta.version,meta.checkedAt,meta.basis,meta.stale]);
+      if(identity!==null&&identity!==current)throw new Error('BASE_VERSION_CHANGED');
+      identity=current;
+      const expected=new Set(batch),seen=new Set();
+      for(const row of payload.data){
+        if(!expected.has(row.customerCode)||seen.has(row.customerCode)||row.baseVehicleVersion!==meta.version
+          ||row.baseVehicleCheckedAt!==meta.checkedAt||row.baseVehicleStale!==meta.stale||row.baseVehicleSource!==meta.basis)throw new Error('BASE_BATCH_ROW_EVIDENCE');
+        seen.add(row.customerCode);
+      }
+      if(seen.size!==expected.size)throw new Error('BASE_BATCH_INCOMPLETE');
+      rows.push(...payload.data);
+    }
+    return {...last,data:rows};
+  }
+
   async function loadBaseVehicles(extraCodes=[]){
     extraCodes=extraCodes.filter(code=>/^[A-Z]\d+$/.test(code));
     extraCodes.forEach(code=>{if(/^[A-Z]\d+$/.test(code))baseVehicleExtraCodes.add(code);});
@@ -437,14 +463,13 @@
         const stageReadOnly=location.origin==='https://freshon-admin-stage-preview-template.onrender.com';
         const batchSize=stageReadOnly?500:10000;
         const batches=[];for(let i=0;i<customerCodes.length;i+=batchSize)batches.push(customerCodes.slice(i,i+batchSize));
-        let payload,rows=[],version;
-        for(const batch of batches){
-          payload=stageReadOnly
+        const payload=await collectBaseVehicleBatches(batches,async batch=>stageReadOnly
             ?await fetchJson('/api/map-phase2b/preview/base-vehicles?customerCodes='+encodeURIComponent(batch.join(',')),{channel:'base-vehicles',ttl:0,timeout:30000})
-            :await fetchJson('/api/map-phase2b/preview/base-vehicles',{channel:'base-vehicles',ttl:0,timeout:30000,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customerCodes:batch})});
-          if(!Array.isArray(payload.data))break;
-          if(version&&version!==payload.meta?.version)throw new Error('BASE_VERSION_CHANGED');
-          version=payload.meta?.version;rows.push(...payload.data);
+            :await fetchJson('/api/map-phase2b/preview/base-vehicles',{channel:'base-vehicles',ttl:0,timeout:30000,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customerCodes:batch})}));
+        const rows=Array.isArray(payload?.data)?payload.data:[];
+        if(stageReadOnly&&payload?.meta?.refresh==='READ_ONLY'&&!Array.isArray(payload.data)){
+          clearTimeout(baseVehicleTimer);baseVehicleMeta=payload.meta;
+          baseVehicleStatus=baseVehicles.size?'READY':payload.phase==='ERROR'?'ERROR':'NOT_READY';return;
         }
         const previousMeta=baseVehicleMeta;
         if(!MapPeriodUi.acceptsBaseVersion(previousMeta,payload.meta)){
@@ -959,18 +984,30 @@
       setSelectedVehicles(vehicle ? [vehicle] : []); refreshVehicleUi(true);
       showMobileMap(); activateSheet("runs");
     });
-    if (routeMode && !skipEnrich && row.customerCode) enrichStoreDetail(row, element);
+    if (!skipEnrich && row.customerCode) enrichStoreDetail(row, element);
   }
 
   async function enrichStoreDetail(row, element) {
     const requestId = ++state.detailRequestId, detailMode=state.mode, detailVehicle=row.vehicle;
     try {
-      const detailDate = state.selectedDate;
-      const payload = await fetchJson(`/api/map-phase2b/preview/detail?customerCode=${encodeURIComponent(row.customerCode)}&date=${detailDate}`, { channel: "store-detail", ttl: 300000, timeout: 60000 });
-      if (requestId !== state.detailRequestId || state.mode!==detailMode || state.mode!=="DATE_ROUTE" || state.selected?.customerCode !== row.customerCode || state.selected?.vehicle!==detailVehicle) return;
-      const exact = payload.data ? normalizeApiStore(payload.data) : null;
-      if (exact && exact.customerCode===row.customerCode && detailDate === state.selectedDate) selectStore({ ...row, ...exact, lat: row.lat, lng: row.lng, vehicle: row.vehicle, order: row.order, status: row.status, actualCompletedAt: row.actualCompletedAt, deliveryCompletedAt: row.deliveryCompletedAt, lastDeliveryDate: row.lastDeliveryDate }, element, false, true);
-    } catch (error) { if (!isSilentRequestError(error)) void error; }
+      const detailDate = detailMode === 'DATE_ROUTE' ? state.selectedDate : row.lastDeliveryDate || snapshotMeta?.latestDate || state.latestDate || state.selectedDate;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(detailDate || '') || !Number.isFinite(Date.parse(detailDate)) || new Date(detailDate).toISOString().slice(0,10)!==detailDate) throw Error('DETAIL_DATE_UNCONFIRMED');
+      const payload = await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${detailDate}`, { channel: "store-detail", ttl: 0, timeout: 60000 });
+      if (requestId !== state.detailRequestId || state.mode!==detailMode || state.selected?.customerCode !== row.customerCode || state.selected?.vehicle!==detailVehicle || document.body.dataset.mapStaffState!=='authenticated') return;
+      const exact = payload.data;
+      if (!exact || exact.customerCode!==row.customerCode || exact.detailDate!==detailDate) return;
+      // DOM only: never merge Customer addresses into rows, public summaries or IndexedDB.
+      const title=$('#detail .storeName');if(title&&exact.customerName)title.textContent=exact.customerName;
+      const facts=$('#detail .dotDetailFacts');
+      const addressLabel=facts&&[...facts.querySelectorAll('dt')].find(node=>node.textContent==='주소');
+      if(addressLabel?.nextElementSibling)addressLabel.nextElementSibling.textContent=exact.address||'원천 주소 미확인';
+      if(exact.detailAddress&&facts){const label=document.createElement('dt'),value=document.createElement('dd');label.textContent='상세주소';value.textContent=exact.detailAddress;facts.append(label,value);}
+      positionDetailPopup();
+    } catch (error) {
+      if (isSilentRequestError(error) || requestId!==state.detailRequestId || state.selected?.customerCode!==row.customerCode || document.body.dataset.mapStaffState!=='authenticated') return;
+      const label=[...($('#detail .dotDetailFacts')?.querySelectorAll('dt')||[])].find(node=>node.textContent==='주소');
+      if(label?.nextElementSibling)label.nextElementSibling.textContent='매장정보 조회 실패 · 원천 확인 필요';
+    }
   }
 
   function scrollSelectedInside(containerSelector,rowSelector){
@@ -1341,7 +1378,7 @@
     if(!rows.length)offerExternalAddressResult(text);
     $$("[data-period-result]").forEach(button => button.onclick = () => {
       const row = rows[Number(button.dataset.periodResult)];
-      selectStore(row, null, true, true);
+      selectStore(row, null, true);
       if (row.outsideReason) $("#mapStatusSub").textContent = row.outsideReason;
       if (innerWidth <= 760) $("#results").innerHTML = "";
     });
@@ -1474,7 +1511,7 @@
     $("#mapStatusSub").textContent = period ? `${state.rangeStart} ~ ${state.rangeEnd} · ${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 실제 배차' : '현재 기준호차 · 미확인 ?'}`
       : `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
     $("#freshnessState").textContent = period ? `지도 반영일 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}` : `${state.selectedDate} 편성 조회 완료`;
-    if(period&&periodBasis==='vehicle'&&baseVehicleStatus!=='READY')$('#mapStatusSub').textContent=baseVehicleStatus==='ERROR'?'기준호차 조회 실패 · 확인 필요 · 기존 지도 유지':'기준호차 확인 중 · 미지정으로 판단하지 마세요.';
+    if(period&&periodBasis==='vehicle'&&baseVehicleStatus!=='READY')$('#mapStatusSub').textContent=baseVehicleStatus==='ERROR'?'기준호차 조회 실패 · 확인 필요 · 기존 지도 유지':baseVehicleStatus==='NOT_READY'?'검증된 기준호차 자료 미연결 · 기존 지도 유지':'기준호차 확인 중 · 미지정으로 판단하지 마세요.';
     if(period&&periodBasis==='vehicle'&&baseVehicleStatus==='READY'&&baseVehicleMeta?.stale)$('#mapStatusSub').textContent+=` · 기준호차 이전 확인값 (${baseVehicleMeta.checkedAt||'시각 미확인'}) · ${baseVehicleMeta.refresh==='RUNNING'?'별도 갱신 중':baseVehicleMeta.refresh==='ERROR'?'갱신 실패 · 기존값 유지':'갱신 대기'} · 기간 최신화와 별개`;
     syncDateHeading();
     $("#vehicleModeLabel").textContent = period ? "기간별 매장" : "날짜별 편성";
@@ -2191,7 +2228,7 @@
     fixedTerritoryStores:()=>window.MapUiLocalBridge.navigationStores().map(row=>({...row,...(baseVehicles.get(String(row.customerCode))||{baseVehicle:'',baseVehicleState:'UNKNOWN'})})),
     loadBaseVehicleMasterForTerritory:()=>loadBaseVehicles(window.MapUiLocalBridge.navigationStores().map(row=>String(row.customerCode||''))),
     navigationStores:()=>{if(state.mode==='DATE_ROUTE')return filteredDateStores(allStores).map(row=>({...row}));const list=new Map(latestSnapshotRows.map(r=>[r.customerCode,r]));for(const row of allStores){const prior=list.get(row.customerCode);const conflict=prior&&row.address&&prior.address&&row.address.replace(/\s/g,'')!==prior.address.replace(/\s/g,'');list.set(row.customerCode,{...row,...(conflict?{coordinateStatus:'CONFLICT'}:{})});}return [...list.values()];},
-    selectNavigationStore:code=>{const row=(state.mode==='DATE_ROUTE'?filteredDateStores(allStores):allStores).find(r=>r.customerCode===code)||(state.mode==='BASE_60D'?latestSnapshotRows.find(r=>r.customerCode===code):null);if(row)selectStore(row,null,true,true);},
+    selectNavigationStore:code=>{const row=(state.mode==='DATE_ROUTE'?filteredDateStores(allStores):allStores).find(r=>r.customerCode===code)||(state.mode==='BASE_60D'?latestSnapshotRows.find(r=>r.customerCode===code):null);if(row)selectStore(row,null,true);},
     queryRecordedRoute:()=>{cancelManualRoadRoute();const v=primarySelectedVehicle();if(!v||!operationStops.length||operationStops.some(s=>!Number.isSafeInteger(s.order)||s.order<1)){roadResult={state:'error',error:'RECORDED_ORDER_REQUIRED'};window.dispatchEvent(new CustomEvent('map-recorded-route',{detail:roadResult}));syncRoadRoutePanel();return;}loadRoadRoute(v,{explicit:true});},
     toggleConnections:()=>{state.connectionLines=false;state.lines.forEach(line=>line.setMap(null));state.lines=[];return {shown:false};},
     toggleRoadLines:value=>{if(!value){manualRoadLayer?.clear();roadLayer?.clear();}else{if(state.map){manualRoadLayer ||= window.RoadRouteUi.createLayer({map:state.map});manualRoadLayer.render(manualRoadResult);roadLayer ||= window.RoadRouteUi.createLayer({map:state.map});roadLayer.render(roadResult);}}},

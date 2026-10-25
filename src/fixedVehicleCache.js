@@ -32,8 +32,8 @@ export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000,r
     const stale=!current||now()-Date.parse(current.checkedAt)>=ttl;
     if(!readOnly&&stale&&(!store||loaded))void refresh();
     const meta={basis:'FIXED_DISPATCH_PRIMARY',checkedAt:current?.checkedAt||null,version:current?.version||null,total:current?.count||0,stale,
-      refresh:readOnly?'READ_ONLY':pending?'RUNNING':error?'ERROR':retryAt>now()?'WAITING':'IDLE',lastError:error,refreshStartedAt,refreshMs,persistent:!!store};
-    if(!current)return {ok:false,phase:pending?'LOADING':error?'ERROR':'LOADING',meta};
+      refresh:readOnly?'READ_ONLY':pending?'RUNNING':error?'ERROR':retryAt>now()?'WAITING':'IDLE',lastError:error,refreshStartedAt,refreshMs,persistent:!!store,cacheState:current?'PRESENT':error?'READ_FAILED':store?'MISSING':'NOT_CONFIGURED'};
+    if(!current)return {ok:false,phase:pending?'LOADING':error?'ERROR':readOnly?'NOT_READY':'LOADING',meta};
     const rows=codes===null?[...index.values()].map(fixedTupleData):(codes||[]).map(customerCode=>index.has(customerCode)?fixedTupleData(index.get(customerCode)):{customerCode,baseVehicle:'',baseVehicleGroup:'',baseVehicleState:'NOT_IN_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'});
     return {ok:true,data:rows.map(r=>({...r,baseVehicleCheckedAt:meta.checkedAt,baseVehicleVersion:meta.version,baseVehicleStale:stale})),meta};
   }

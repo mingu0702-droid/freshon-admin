@@ -7,7 +7,7 @@ import path from 'node:path';
 import {createMapStaffAuth} from './mapStaffAuth.js';
 import {mountMapStaffEntryGate} from './mapStaffEntryGate.js';
 import {staffLatency,addStaffTiming,addHubReadTiming} from './staffLatency.js';
-import {staffCustomerDetail} from './mapStaffDetail.js';
+import {staffCustomerDetail,staffStoreDetail} from './mapStaffDetail.js';
 import {validatePeriod,selectPeriodStores,compactPeriodStores,readStaffDriverHistory} from './mapPeriod.js';
 import {mapReadFailure} from './mapReadFailure.js';
 import {historyDeadline} from './readDeadline.js';
@@ -108,19 +108,21 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
   if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
+  const storeView = req.query.view === 'store';
+  if (req.query.view && !storeView) return res.status(400).json({error:'INVALID_DETAIL_VIEW'});
   const detailDate = req.query.date ? normalizeDateValue(req.query.date) : getSnapshotMemory()?.latestDate || phase2bKstDate();
   if (!detailDate || detailDate > phase2bKstDate()) return res.status(400).json({ error: "INVALID_DATE" });
   try {
     const upstreamStarted = performance.now();
     let hub;
-    try { hub = await callHub("staffCustomerDetail", { customerCode, date: detailDate }, { useCache: false, privateRead: true }); }
+    try { hub = await callHub(storeView ? "customerDetail" : "staffCustomerDetail", { customerCode, date: detailDate }, { useCache: false, privateRead: true, ...(storeView ? {maxResponseBytes:65536, deadline:Date.now()+15000} : {}) }); }
     finally { addStaffTiming(res, 'upstream', performance.now() - upstreamStarted); }
     addStaffTiming(res, 'hub', Number(hub.meta?.durationMs || 0));
     for (const key of ['responseHeadersMs','bodyReadMs','parseMs']) addStaffTiming(res, 'hub' + key.replace(/Ms$/, ''), Number(hubRequestProfile(hub)[key] || 0));
     for (const key of ['openMs','lookupMs','rowReadMs','normalizeMs']) addStaffTiming(res, 'source' + key.replace(/Ms$/, ''), Number(hub.meta?.detailProfile?.[key] || 0));
     if (String(hub.data?.customerCode || '').toUpperCase() !== customerCode) throw new Error('HUB_INVALID_DETAIL_CONTRACT');
     const normalizeStarted = performance.now();
-    const detail = staffCustomerDetail(hub.data, { customerCode, date: detailDate });
+    const detail = (storeView ? staffStoreDetail : staffCustomerDetail)(hub.data, { customerCode, date: detailDate });
     addStaffTiming(res, 'parseNormalize', performance.now() - normalizeStarted);
     // Recheck after slow Hub reads: logout/expiry must revoke in-flight responses.
     return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data: detail, error: null }));

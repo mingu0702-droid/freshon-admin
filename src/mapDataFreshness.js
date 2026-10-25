@@ -4,7 +4,7 @@ import express from 'express';
 import compression from 'compression';
 import {requireAdmin} from './auth.js';
 import {createFixedVehicleCache} from './fixedVehicleCache.js';
-import {createFixedVehicleStore} from './fixedVehicleStore.js';
+import {createFixedVehicleStore,createFixedVehicleFileStore} from './fixedVehicleStore.js';
 
 // Stage preparation / loaded period-model metadata is NOT the public map root.
 // Hub's field called "published" does not certify a Production publication,
@@ -23,7 +23,7 @@ export function mapPublicationConnection(hubStatus,liveStatus){
     sourceBoundCompletionVerified:false,privateSealedBindingVerified:false,oneDateValidationAllowed:false};
 }
 
-export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus,readBaseVehicleMaster,env=process.env,adminGuard=requireAdmin,baseStore=env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
+export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus,readBaseVehicleMaster,env=process.env,adminGuard=requireAdmin,baseStore=env.OPSMAP_STAGE_FIXED_MASTER_FILE?createFixedVehicleFileStore({env}):env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
   let statusCache=null,statusAt=0,statusPending=null;
   const base=createFixedVehicleCache({reader:readBaseVehicleMaster||(()=>{throw new Error('FIXED_MASTER_UNAVAILABLE');}),store:baseStore,readOnly:env.OPSMAP_STAGE_VERIFY_ONLY==='1'});
   const cleanDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:null;
