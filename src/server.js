@@ -3936,6 +3936,7 @@ app.all("/api/*", (req, res) => {
 });
 
 app.get("*", (_req, res) => {
+  if (stageVerificationOnly) return res.status(404).json({error:'STAGE_ROUTE_UNAVAILABLE'});
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
