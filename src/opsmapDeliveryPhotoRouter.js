@@ -74,7 +74,7 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
     const length = Number(upstream.headers?.get?.('content-length') || 0);
     if (!MEDIA_TYPES.has(type) || !Number.isFinite(length) || length < 0 || length > maxImageBytes) {
       cancelBody(upstream.body);
-      throw new DeliveryPhotoError(!MEDIA_TYPES.has(type) ? 'INVALID_MEDIA_TYPE' : 'MEDIA_TOO_LARGE', !MEDIA_TYPES.has(type) ? 502 : 413);
+      throw new DeliveryPhotoError(!MEDIA_TYPES.has(type) ? 'INVALID_MEDIA_TYPE' : 'MEDIA_TOO_LARGE', !MEDIA_TYPES.has(type) ? 502 : 413,{stage:!MEDIA_TYPES.has(type)?'source-media':'source-size',sourceHttpStatus:upstream.status});
     }
     let permitted = false;
     requireStaff(req, res, () => { permitted = true; });

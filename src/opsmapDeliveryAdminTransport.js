@@ -107,7 +107,7 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
           maxResponseBytes: Math.min(maxResponseBytes, maxJsonBytes)
         })), requestSignal, response => cancel(response?.body));
         try { approved(); } catch (error) { cancel(response?.body); throw error; }
-        if (response?.redirected) { cancel(response.body); fail('UPSTREAM_REDIRECT_REJECTED'); }
+        if (response?.redirected) { cancel(response.body); fail('UPSTREAM_REDIRECT_REJECTED',502,{stage:'source-http',sourceHttpStatus:safeHttp(response.status)}); }
         if (response?.status !== 200) { cancel(response?.body); statusError(response?.status); }
         const json = await readJson(response, Math.min(maxResponseBytes, maxJsonBytes), requestSignal);
         approved(); return json;
@@ -125,7 +125,7 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
           headers: { Accept: 'image/jpeg,image/png,image/webp,image/gif' }, signal: requestSignal
         })), requestSignal, response => cancel(response?.body));
         try { approved(); } catch (error) { cancel(response?.body); throw error; }
-        if (response?.redirected) { cancel(response.body); fail('MEDIA_ORIGIN_REJECTED', 403); }
+        if (response?.redirected) { cancel(response.body); fail('MEDIA_ORIGIN_REJECTED',403,{stage:'source-media',sourceHttpStatus:safeHttp(response.status)}); }
         return response; // The existing router streams and bounds image bytes.
       });
     }
