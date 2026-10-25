@@ -49,7 +49,7 @@ export function mountProductionMapApi(app,{
   // Existing paged B client must be verified before the explicit cutover pin is set.
   // Never emulate the old whole-snapshot response by concatenating all Hub chunks.
   app.get('/api/map-phase2b/preview/snapshot',requireView,(_req,res,next)=>publishedReads.isActive()?pagedRequired(res):next());
-  const mapFreshness=mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus:stageReadModel.status,readBaseVehicleMaster});
+  const mapFreshness=mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicleView:mapStaff.requireStaff,previewEnabled,modelStatus:stageReadModel.status,readBaseVehicleMaster});
   const coordinateSupplement=createCoordinateSupplement({callHub});
   if(process.env.RENDER_EXTERNAL_URL==='https://freshon-admin-1.onrender.com')void coordinateSupplement.refresh();
   if(publicDir)app.get(['/map-phase2b-snapshot.json','/customer-master-20260604.json','/vehicle-data.js','/new-area-data.js'],async(req,res)=>{

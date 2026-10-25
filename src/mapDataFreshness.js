@@ -23,7 +23,7 @@ export function mapPublicationConnection(hubStatus,liveStatus){
     sourceBoundCompletionVerified:false,privateSealedBindingVerified:false,oneDateValidationAllowed:false};
 }
 
-export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus,readBaseVehicleMaster,env=process.env,adminGuard=requireAdmin,baseStore=env.OPSMAP_STAGE_FIXED_MASTER_FILE?createFixedVehicleFileStore({env}):env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
+export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicleView=requireView,previewEnabled,modelStatus,readBaseVehicleMaster,env=process.env,adminGuard=requireAdmin,baseStore=env.OPSMAP_STAGE_FIXED_MASTER_FILE?createFixedVehicleFileStore({env}):env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
   let statusCache=null,statusAt=0,statusPending=null;
   const base=createFixedVehicleCache({reader:readBaseVehicleMaster||(()=>{throw new Error('FIXED_MASTER_UNAVAILABLE');}),store:baseStore,readOnly:env.OPSMAP_STAGE_VERIFY_ONLY==='1'});
   const cleanDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:null;
@@ -56,8 +56,8 @@ export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,mo
     const payload=await base.get([...new Set(requested)]);
     return r.status(payload.ok?200:payload.phase==='ERROR'?503:202).json({...payload,progress:readBaseVehicleMaster?.getProgress?.()||null});
   }
-  app.get('/api/map-phase2b/preview/base-vehicles',requireView,enabled,compression({threshold:1024}),baseResponse);
-  app.post('/api/map-phase2b/preview/base-vehicles',requireView,enabled,express.json({limit:'128kb'}),compression({threshold:1024}),baseResponse);
+  app.get('/api/map-phase2b/preview/base-vehicles',requireBaseVehicleView,enabled,compression({threshold:1024}),baseResponse);
+  app.post('/api/map-phase2b/preview/base-vehicles',requireBaseVehicleView,enabled,express.json({limit:'128kb'}),compression({threshold:1024}),baseResponse);
   app.post('/api/map-phase2b/admin/model-sync',enabled,express.json({limit:'1kb'}),(q,r,n)=>{
     r.set('Cache-Control','private, no-store');
     if(!q.get('x-admin-token')||q.query.token)return r.status(401).json({error:'ADMIN_HEADER_REQUIRED'});
