@@ -1,0 +1,97 @@
+/* Keep approved-site-source.css tokens, header, sidebar and native map. */
+.dotRestored .sidebar{width:310px;min-width:310px}
+.dotRestored .workspace{height:calc(100dvh - 72px)}
+.dotRestored .sidehead{padding-left:18px;padding-right:18px}
+.dotRestored .scrollside>section{margin-left:16px;margin-right:16px}
+.dotRestored.daily-mode #layoutDock{margin-left:16px;margin-right:16px}
+.dotRestored.daily-mode .maparea{display:block;overflow:hidden}
+.dotRestored.daily-mode #map{position:absolute;inset:0;height:100%;min-height:0}
+.dotRestored .maptop{justify-content:flex-end}
+.dotRestored.daily-mode .mapbottom{top:auto;bottom:28px}
+.dotRestored .dotQueryActions{display:flex;flex-wrap:wrap;gap:6px;margin:0 16px 16px}
+.dotRestored .dotQueryActions button{width:100%;font-size:12px}
+.approvedShellCandidate.dotRestored.daily-mode .navigationWorkspace{display:block;grid-template-columns:none;grid-row:auto;margin:0;padding:0;border:0;background:none;max-height:none;overflow:visible}
+.dotRestored:not(.daily-mode) #waypointPlanner{display:block!important}
+.dotRestored:not(.daily-mode) .navigationPicker{display:none}
+.dotRestored.daily-mode .generalCenters{display:none}
+.dotRestored .navigationWorkspace>section,.dotRestored .navigationWorkspace>details{margin:0 16px;padding:16px 0;border:0;border-top:1px solid var(--line);border-radius:0}
+.dotRestored .sourceItinerary{margin-left:16px;margin-right:16px}
+.dotRestored.daily-mode #navigationSummary{margin:10px 0 0;padding:10px 0 12px;border-top:1px solid var(--line)}
+.dotRestored.daily-mode #navigationSummary .sectiontitle{margin-bottom:3px}
+.dotRestored.daily-mode #navigationSummary h2{font-size:13px}
+.dotRestored #dotRouteSelection,.dotRestored #dotRouteOrigin{margin:3px 0;font-size:11px;color:#728097}
+.dotRestored #navigationSummary .navTotals{font-size:12px;margin:6px 0;gap:14px;color:#8290a2}
+.dotRestored #navigationSummary .navTotals b{font-size:14px;color:#39495f}
+.dotRestored #navigationSummary #navRouteStatus{font-size:11px;color:#728097;margin:5px 0}
+.dotRestored #navigationSummary>#syncOperation{font-size:11px;padding:5px 8px;margin-top:3px}
+.dotRestored #dotRoadOptions{font-size:11px;margin-top:6px;color:#728097}
+.dotRestored #dotRoadOptions:not([open]){display:inline-block;margin:3px 0 0 6px;vertical-align:middle}
+.dotRestored #dotRoadOptions:not([open])>summary{font-size:10px}
+.dotRestored.daily-mode #navigationSummary .sectiontitle{margin-bottom:0}
+.dotRestored #dotRouteSelection,.dotRestored #dotRouteOrigin{margin:2px 0}
+.dotRestored #navigationSummary .navTotals{margin:4px 0}
+.dotRestored #navigationSummary #navRouteStatus{margin:3px 0}
+.dotRestored:not(.daily-mode) #waypointPlanner{padding-top:24px}
+.dotRestored #navigationSummary{position:static}
+.dotRestored #navigationSummary,.dotRestored #waypointPlanner{width:auto}
+.dotRestored #navigationSummary .sectiontitle{gap:8px;flex-wrap:wrap}
+.dotRestored #navigationSummary .sectiontitle #syncOperation{font-size:11px;padding:5px 7px;margin-left:auto}
+.dotRestored #navigationMeaning{display:none}
+.dotRestored .navigationPicker{padding:9px;margin:10px 0}
+.dotRestored .navigationPicker label{font-size:12px}
+.dotRestored .navPickActions button{font-size:11px;min-width:0;padding:7px 5px}
+.dotRestored .plannerMetrics{display:none}
+.dotRestored .navToggles{margin:8px 0}
+.dotRestored #queryRecordedRoute{font-size:12px;width:100%}
+.dotRestored #navSelectedStore,.dotRestored #navPointStatus,.dotRestored #plannerStatus{font-size:12px}
+.dotRestored #territoryControls{margin-top:12px;font-size:12px}
+.dotRestored #territoryControls p{font-size:11px;color:#728097}
+.dotRestored #territoryVehicles{padding-left:18px;color:#728097}
+.dotRestored #refreshTerritories{font-size:11px;padding:5px 8px}
+.dotRestored #dotDataStatus{font-size:11px;color:#728097;margin:4px 0 0;overflow-wrap:anywhere}
+.dotRestored #dotDataStatus[data-state=error]{color:#a33a16}
+.dotRestored #detailSection{position:absolute!important;right:20px!important;left:auto!important;top:84px!important;bottom:78px!important;width:318px!important;max-width:calc(100% - 40px);max-height:calc(100% - 162px)!important;margin:0;padding:0;border:1px solid #dce4ee;border-radius:12px;background:#fff;box-shadow:0 12px 40px #18354b25;overflow:auto;z-index:450;transform:none!important}
+.dotRestored #detailSection:not(.open){display:none}
+.dotRestored .detailCard{padding:20px}
+.dotRestored .detailClose{float:right;border:0;padding:0 5px;font-size:22px;line-height:1.2}
+.dotRestored .detailHead .code{font-size:12px;color:var(--blue);margin-bottom:6px}
+.dotRestored .detailHead .storeName{font-size:20px;font-weight:700;margin:4px 0 12px}
+.dotRestored .detailHead{padding-bottom:14px}
+.dotRestored .detailHead .code,.dotRestored .detailHead .storeName{display:inline;margin:0;font-size:12px;font-weight:400;color:#8390a0}
+.dotRestored .detailHead .storeName::before{content:' · '}
+.dotRestored .popupMeta{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:#68778c}
+.dotRestored .popupMeta{display:none}
+.dotRestored .dotDetailFacts{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px 4px;margin:0;padding:18px 0;border-block:1px solid var(--line);font-size:13px}
+.dotRestored .dotDetailFacts dt{color:#8390a0}
+.dotRestored .dotDetailFacts dd{margin:0;overflow-wrap:anywhere}
+.dotRestored .detailBody{font-size:13px}
+.dotRestored .detailLine{padding:16px 0;color:#718096;border-bottom:1px solid var(--line)}
+.dotRestored .periodRecent{font-size:12px;color:#718096;padding:12px 0}
+.dotRestored .staffActions{display:flex;flex-direction:column;gap:7px;margin:14px 0}
+.dotRestored .staffActions button{font-size:13px;text-align:left;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:14px 0;background:white}
+.dotRestored .coordinateWarning{font-size:12px;color:#986022}
+.dotRestored .mobileActions{display:block;margin-top:16px}
+.dotRestored #mobileRouteView{display:none}
+.dotRestored #mobileMapView{width:100%;font-size:13px;background:white;color:var(--ink);border-color:var(--line)}
+.dotRestored #staffAuxContent{position:static!important;width:auto!important;max-width:100%!important;margin:0 20px 20px;padding:12px;border:1px solid var(--line);max-height:none!important;box-shadow:none;transform:none!important;overflow-wrap:anywhere}
+.dotRestored #staffAuxContent[hidden]{display:none!important}
+.dotRestored .staffActions #staffAuxContent{margin:0 0 14px;width:100%!important}
+@media(min-width:901px){.dotRestored #approvedSiteHeader{height:72px;min-height:72px;flex-wrap:nowrap;padding-left:20px;padding-right:20px}}
+@media(max-width:900px){
+ .dotRestored #approvedSiteHeader{display:flex;height:auto;min-height:76px;gap:8px;padding:10px 14px;flex-wrap:wrap}
+ .dotRestored #approvedSiteHeader .brand{width:auto;min-width:0;flex:1}
+ .dotRestored #staffLogout{font-size:11px;padding:6px}
+ .dotRestored #approvedSiteHeader>nav{order:3;width:100%;justify-content:center}
+ .dotRestored #approvedSiteHeader .headerLinks{order:4;width:100%;justify-content:center}
+ .dotRestored .workspace,.dotRestored.daily-mode .workspace{display:flex;flex-direction:column;height:auto;overflow:visible;min-height:0}
+ .dotRestored .maparea,.dotRestored.daily-mode .maparea{order:0;width:100%;height:460px!important;min-height:0;flex:none;display:block;overflow:hidden}
+ .dotRestored #map,.dotRestored.daily-mode #map{position:absolute;height:100%;min-height:0}
+ .dotRestored .sidebar,.dotRestored.daily-mode .sidebar{order:1;width:100%;min-width:0;height:auto}
+ .dotRestored .scrollside,.dotRestored.daily-mode .scrollside{display:block;overflow:visible}
+ .dotRestored .maptop,.dotRestored.daily-mode .maptop{top:12px;left:12px;right:12px;justify-content:flex-end}
+ .dotRestored.daily-mode .maptop>.row{position:static}
+ .dotRestored #layoutDock{order:initial}
+ .dotRestored #detailSection,.dotRestored.daily-mode #detailSection{position:absolute!important;right:12px!important;left:auto!important;top:12px!important;bottom:auto!important;width:318px!important;max-width:calc(100% - 24px);max-height:calc(100% - 24px)!important;margin:0}
+ .dotRestored .detailCard{padding:16px}
+}
+

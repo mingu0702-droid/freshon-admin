@@ -1,0 +1,12 @@
+body[data-map-staff-state]:not([data-map-staff-state="authenticated"]) > :not(#mapStaffEntry):not(script):not(style):not(link){visibility:hidden!important;pointer-events:none!important}
+#mapStaffEntry{position:fixed;inset:0;z-index:20000;display:grid;place-items:center;padding:24px;background:#f4f7fb;color:#172033;font:14px/1.5 Pretendard,"Noto Sans KR",Arial,sans-serif}
+#mapStaffEntry[hidden]{display:none}
+#mapStaffEntry form{width:min(360px,100%);padding:30px;border:1px solid #dde4ec;border-radius:16px;background:#fff;box-shadow:0 7px 22px #0f172a1c}
+#mapStaffEntry h1{margin:0 0 8px;font-size:24px}
+#mapStaffEntry label{display:block;margin:16px 0 0;font-weight:600}
+#mapStaffEntry input{display:block;width:100%;box-sizing:border-box;min-height:44px;margin-top:6px;padding:10px;border:1px solid #cbd6e3;border-radius:8px;font:inherit}
+#mapStaffEntry button{width:100%;min-height:44px;margin-top:20px;border:0;border-radius:8px;background:#2463eb;color:#fff;font:inherit;font-weight:700}
+#mapStaffEntry button:disabled{opacity:.55}
+#mapStaffEntry [role="status"]{min-height:40px;margin:14px 0 0;color:#536174}
+#mapStaffSessionState{font-size:11px;color:#536174;white-space:nowrap}
+@media(max-width:760px){#mapStaffEntry{padding:18px}#mapStaffEntry form{padding:24px}#mapStaffSessionState{font-size:10px}}

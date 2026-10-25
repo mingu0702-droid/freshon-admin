@@ -1,0 +1,5 @@
+#roadRoutePanel { margin: 7px 0; padding: 7px; border: 1px solid var(--line); border-radius: 8px; }
+#roadRoutePanel[hidden] { display: none; }
+#roadRoutePanel .routeSummary { grid-template-columns: 1fr 1fr; }
+#roadRoutePanel[data-state="partial"], #roadRoutePanel[data-state="error"] { border-color: #e5ae65; }
+
