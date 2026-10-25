@@ -12,6 +12,33 @@ const knownSources = new Set(['MANUAL_VERIFIED', 'STORED_MATCH', 'KAKAO_EXACT_AD
 // Exactly the Customer map_coordinate_cache_v2 addressHash normalization.
 export const normalizeCoordinateAddress = value => typeof value === 'string' ? value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim() : '';
 export const coordinateAddressHash = value => { const text = normalizeCoordinateAddress(value); return text ? sha(text) : ''; };
+// Private preparation only: never serialize rawBasic/rawDetail to a map/cache response.
+// Identity uses the unchanged Customer hash rule; a simplified search is separate evidence.
+export function preparePrivateCoordinateAddress(basicAddress, detailAddress = '') {
+  const rawBasic = typeof basicAddress === 'string' ? basicAddress : '';
+  const rawDetail = typeof detailAddress === 'string' ? detailAddress : '';
+  const normalizedBasic = normalizeCoordinateAddress(rawBasic), normalizedDetail = normalizeCoordinateAddress(rawDetail);
+  const buildingHints = [];
+  let query = rawBasic.normalize('NFKC').replace(/\s+/g, ' ').trim();
+  // Numeric land/building identifiers in the actual address are never rewritten.
+  query = query.replace(/\(([^()]*)\)/g, (whole, text) => {
+    if (/(?:빌딩|상가|아파트|타워|건물|센터|오피스텔)/.test(text) && !sensitive.test(text)) { buildingHints.push(text.trim()); return ' '; }
+    return whole;
+  }).replace(/\s+/g, ' ').trim();
+  const suffix = query.match(/\s+((?:지하\s*)?\d+\s*층(?:\s*\d+\s*호)?|\d+\s*호)\s*$/);
+  const prefix = suffix ? query.slice(0, suffix.index).trim() : '';
+  const separableUnit = suffix && /(?:(?:대로|로|길)\s+(?:지하\s+)?|(?:동|읍|면|리)\s+(?:산\s*)?)\d+(?:-\d+)?/.test(prefix);
+  const unitHint = separableUnit ? suffix[1] : null;
+  if (separableUnit) query = prefix;
+  const safeQuery = externalCoordinateAddress(query);
+  const addressKind = /(?:대로|로|길)\s+(?:지하\s+)?\d+(?:-\d+)?/.test(query) ? 'ROAD' : /(?:동|읍|면|리)\s+(?:산\s*)?\d+(?:-\d+)?/.test(query) ? 'LOT' : 'UNCONFIRMED';
+  return { rawBasic, rawDetail, normalizedBasic, normalizedDetail,
+    addressHash: coordinateAddressHash(rawBasic), ruleVersion: 'NFKC_LOWERCASE_WS_TRIM_SHA256_UTF8_V1',
+    query: safeQuery, queryHash: safeQuery ? coordinateAddressHash(safeQuery) : null,
+    queryRuleVersion: 'NFKC_WS_BUILDING_UNIT_SPLIT_V1', addressKind, buildingHints, unitHint,
+    status: safeQuery ? 'QUERY_PREPARED' : 'PRIVATE_OR_AMBIGUOUS_ADDRESS',
+    geocodedAccuracy: 'BUILDING_OR_ENTRANCE', storeInteriorVerified: false };
+}
 export function externalCoordinateAddress(value) {
   if (typeof value !== 'string' || sensitive.test(value)) return null;
   const text = value.normalize('NFKC').trim().replace(/\s+/g, ' ');

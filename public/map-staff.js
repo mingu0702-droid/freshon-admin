@@ -139,11 +139,18 @@
         dialog.dataset.state = 'ready';
         const data = payload.data || {};
         if (data.memoState === 'NEEDS_CONFIRMATION') node('p', '허용 항목을 확실히 구분할 수 없어 원천 확인이 필요합니다.');
-        line('출입방법', data.accessInfo); line('비밀번호', data.password); line('배송 특이사항', data.specialRemark); line('배송요일', data.deliveryPattern || '미등록');
+        line('출입방법', data.accessInfo); line('비밀번호', data.password); line('배송 특이사항', data.specialRemark); line('배송요일', data.deliveryPattern || '미확인');
       }
     } catch (error) {
       if (error.name === 'AbortError' || id !== generation) return;
-      if (error.status === 401) { sessionHint = null; void window.MapStaffEntry?.expire(); return; }
+      if (error.status === 401) {
+        sessionHint = null;
+        if (!window.MapStaffEntry?.session()?.authenticated) { void window.MapStaffEntry?.expire(); return; }
+        shell('원천 인증 확인 필요'); dialog.dataset.state = 'source-auth';
+        node('p', '직원 로그인은 유지 중입니다. 선택 매장의 원천 조회 권한 또는 원천 인증을 확인해야 합니다.');
+        node('button', '다시 확인').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
+        return;
+      }
       if (error.notReady) {
         shell('기사 이력 준비 중'); dialog.dataset.state = 'not-ready';
         node('p', '기사 이력이 아직 준비되지 않았습니다. 기사 없음으로 판단하지 마세요. 공개 고객정보와 지도는 계속 사용할 수 있습니다.');

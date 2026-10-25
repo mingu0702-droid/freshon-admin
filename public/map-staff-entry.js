@@ -1,7 +1,7 @@
 (() => {
   'use strict';
-  const rawFetch = window.fetch.bind(window), IDLE_MS = 30 * 60 * 1000;
-  let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivity = Date.now(), checking = null, signingOut = null, logoutRequired = false;
+  const rawFetch = window.fetch.bind(window), ACTIVITY_THROTTLE_MS = 60000;
+  let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivityCheck = 0, checking = null, checkingOwner = -1, confirming = null, confirmingOwner = -1, signingOut = null, logoutRequired = false;
   const requests = new Set(), purges = new Set();
   const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('map-staff-session') : null;
   const entry = document.createElement('section'); entry.id = 'mapStaffEntry';
@@ -19,12 +19,13 @@
       || /^\/(?:vehicle-data|new-area-data|admin-features)\.js$/.test(url.pathname);
   }
   function status() {
+    const unknown = document.body.dataset.mapStaffState === 'checking';
     const button = document.querySelector('#staffLogout');
-    if (button) { button.textContent = session ? '직원 로그아웃' : '직원 로그인'; button.onclick = session ? logout : () => account.focus(); }
+    if (button) { button.textContent = session ? '직원 로그아웃' : unknown ? '연결 재확인' : '직원 로그인'; button.onclick = session ? logout : unknown ? () => void check() : () => account.focus(); }
     const header = document.querySelector('#approvedSiteHeader');
     let label = document.querySelector('#mapStaffSessionState');
     if (header && !label) { label = document.createElement('span'); label.id = 'mapStaffSessionState'; label.setAttribute('role', 'status'); header.append(label); }
-    if (label) label.textContent = session ? '직원 로그인됨' : '직원 로그인 필요';
+    if (label) label.textContent = session ? '직원 로그인됨' : unknown ? '직원 인증 확인 중' : '직원 로그인 필요';
   }
   function deadline(value) {
     if (!session || value?.authenticated !== true) return;
@@ -32,8 +33,8 @@
     if (!Number.isFinite(expiresAt) || !Number.isFinite(idleExpiresAt)) return;
     session = { authenticated: true, expiresAt, idleExpiresAt };
     clearTimeout(timer);
-    // Background status reads never keep an inactive browser signed in.
-    const end = Math.min(expiresAt, idleExpiresAt, lastActivity + IDLE_MS);
+    // Server deadlines include activity from other tabs of this same session.
+    const end = Math.min(expiresAt, idleExpiresAt);
     timer = setTimeout(() => expire('직원 인증이 만료되었습니다. 다시 로그인해 주세요.'), Math.max(0, end - Date.now()));
   }
   function observe(response) {
@@ -42,16 +43,22 @@
     const idleExpiresAt = Number(response.headers.get('x-staff-idle-expires-at'));
     if (expiresAt && idleExpiresAt) deadline({ authenticated: true, expiresAt, idleExpiresAt });
   }
-  function revoke(text) {
+  function revoke(text, unknown = false) {
     epoch++; session = null; clearTimeout(timer); password.value = '';
     for (const controller of requests) controller.abort(); requests.clear();
     delete window.VEHICLE_AREA_DATA; delete window.ADMIN_FEATURES;
-    document.body.dataset.mapStaffState = 'signed-out'; entry.hidden = false; submit.disabled = false;
+    document.body.dataset.mapStaffState = unknown ? 'checking' : 'signed-out'; entry.hidden = false; submit.disabled = unknown;
+    account.disabled = unknown; password.disabled = unknown;
     message.textContent = text || '직원 로그인 후 지도를 사용할 수 있습니다.'; status();
     window.MapStaff?.clear();
     window.dispatchEvent(new CustomEvent('map-staff-signed-out'));
     window.dispatchEvent(new CustomEvent('map-navigation-logout'));
     return Promise.allSettled([...purges].map(purge => Promise.resolve().then(purge)));
+  }
+  async function unavailable() {
+    await revoke('네트워크 문제로 직원 인증을 확인하지 못했습니다. 보호정보는 잠시 차단됩니다.', true);
+    const retry=document.createElement('button');retry.type='button';retry.textContent='연결 재확인';
+    retry.onclick=()=>{retry.disabled=true;void check();};message.append(retry);
   }
   async function auth(path, options = {}) {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
@@ -63,10 +70,18 @@
       return value;
     } finally { clearTimeout(timeout); }
   }
+  function confirmSession(activity = false) {
+    // This promise covers only the status request, never the map bootstrap.
+    // A map401 during bootstrap must not await its own enclosing check().
+    if (confirming && confirmingOwner===epoch) return confirming;
+    const owner=epoch;confirmingOwner=owner;
+    confirming=auth('session', activity ? {headers:{'x-map-staff-activity':'1'}} : {}).finally(()=>{if(confirmingOwner===owner)confirming=null;});
+    return confirming;
+  }
   async function loadData(owner) {
     for (const [url, name] of [['vehicle-data.js', 'VEHICLE_AREA_DATA'], ['admin-features.js', 'ADMIN_FEATURES']]) {
       const response = await window.fetch('/' + url, { credentials: 'same-origin', cache: 'no-store' });
-      if (document.documentElement.dataset.referenceDataOptional === 'true' && [404,503].includes(response.status)) {
+      if (document.documentElement.dataset.referenceDataOptional === 'true' && [401,403,404,503].includes(response.status)) {
         await response.body?.cancel();
         if (owner !== epoch || !session) throw new DOMException('Session changed', 'AbortError');
         window[name] = null;
@@ -107,7 +122,7 @@
   }
   async function accept(value) {
     if (value?.authenticated !== true) { await revoke('직원 로그인 후 지도를 사용할 수 있습니다.'); return false; }
-    session = value; lastActivity = Date.now(); deadline(value);
+    session = value; lastActivityCheck = Date.now(); account.disabled = false; password.disabled = false; deadline(value);
     const owner = epoch; document.body.dataset.mapStaffState = 'loading'; message.textContent = '지도 불러오는 중…';
     booting = bootstrap(owner);
     try { await booting; return true; }
@@ -116,27 +131,29 @@
       return false;
     } finally { booting = null; }
   }
-  async function check() {
+  async function check({activity = false} = {}) {
     if (logoutRequired) return null;
-    if (checking) return checking;
+    if (checking && checkingOwner===epoch) return checking;
     const owner = epoch;
+    checkingOwner=owner;
     checking = (async () => {
       try {
-        const value = await auth('session');
+        const value = await confirmSession(activity);
         if (owner !== epoch) return null;
-        if (!value.authenticated) { await revoke('직원 로그인 후 지도를 사용할 수 있습니다.'); return null; }
+        if (!value.authenticated) { await revoke(value.reason === 'SESSION_UNAVAILABLE' ? '서버 재시작 또는 세션 종료로 다시 로그인이 필요합니다.' : '직원 로그인 후 지도를 사용할 수 있습니다.'); return null; }
         if (session) { deadline(value); return session; }
         await accept(value); return session;
       } catch {
-        if (owner === epoch) await revoke('로그인 상태를 확인하지 못했습니다. 다시 로그인해 주세요.');
+        if (owner === epoch) await unavailable();
         return null;
-      } finally { checking = null; }
+      } finally { if(checkingOwner===owner)checking = null; }
     })();
     return checking;
   }
   function signOut(text) {
     if (signingOut) return signingOut;
     logoutRequired = true; const pending = revoke(text), owner = epoch; submit.disabled = true;
+    channel?.postMessage('logout-pending');
     signingOut = (async () => {
       try {
         await auth('logout', { method: 'POST', body: '{}' }); await pending;
@@ -149,7 +166,8 @@
     })();
     return signingOut;
   }
-  const expire = text => signOut(text || '직원 인증이 만료되었습니다. 다시 로그인해 주세요.');
+  // An availability/source error never sends an employee logout request.
+  const expire = () => check();
   const logout = () => signOut('로그아웃되었습니다.');
   window.fetch = async (input, options = {}) => {
     if (!isMapRequest(input)) return rawFetch(input, options);
@@ -162,7 +180,15 @@
     try {
       const response = await rawFetch(input, { ...options, signal: controller.signal });
       if (owner !== epoch || !session) { void response.body?.cancel().catch(() => {}); throw new DOMException('Session changed', 'AbortError'); }
-      if (response.status === 401) { void expire('직원 인증이 만료되었습니다. 다시 로그인해 주세요.'); throw Object.assign(Error('STAFF_LOGIN_REQUIRED'), { status: 401 }); }
+      if (response.status === 401) {
+        let verified;
+        try { verified = await confirmSession(); }
+        catch { if(owner===epoch)await unavailable(); }
+        if(owner===epoch&&verified?.authenticated===false)await revoke(verified.reason==='SESSION_UNAVAILABLE'?'서버 재시작 또는 세션 종료로 다시 로그인이 필요합니다.':'직원 인증이 만료되었습니다. 다시 로그인해 주세요.');
+        if (!verified?.authenticated || owner !== epoch || !session) { void response.body?.cancel().catch(() => {}); throw Object.assign(Error('STAFF_LOGIN_REQUIRED'), { status: 401 }); }
+        deadline(verified);
+        // Staff session is valid: preserve the original source/permission response.
+      }
       observe(response);
       if (!response.body) return response;
       const reader = response.body.getReader();
@@ -201,11 +227,13 @@
             : '로그인하지 못했습니다. 아이디와 비밀번호를 확인해 주세요.';
     } finally { body = ''; password.value = ''; if (!session && !logoutRequired) submit.disabled = false; }
   });
-  for (const name of ['pointerdown', 'keydown']) document.addEventListener(name, event => {
-    if (session && event.isTrusted) { lastActivity = Date.now(); deadline(session); }
+  for (const name of ['pointerdown', 'keydown', 'wheel', 'touchstart']) document.addEventListener(name, event => {
+    if (session && event.isTrusted && Date.now()-lastActivityCheck>=ACTIVITY_THROTTLE_MS) { lastActivityCheck=Date.now();void check({activity:true}); }
   }, { passive: true, capture: true });
   channel?.addEventListener('message', event => {
-    if (event.data === 'session-changed' || event.data === 'logout') void check();
+    if (event.data === 'logout-pending') { logoutRequired=true;void revoke('다른 탭에서 로그아웃 중입니다.');submit.disabled=true;return; }
+    if (event.data === 'session-changed') { logoutRequired=false;submit.disabled=false;void check(); }
+    else if (event.data === 'logout') void check();
   });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && session) void check(); });
   window.addEventListener('pageshow', event => { if (event.persisted) void check(); });

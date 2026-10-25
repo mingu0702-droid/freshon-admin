@@ -6,8 +6,8 @@ import { addStaffTiming } from './staffLatency.js';
 
 const scrypt = promisify(crypto.scrypt);
 export const STAFF_COOKIE = '__Host-map-staff';
-export const STAFF_IDLE_MS = 30 * 60 * 1000;
-export const STAFF_MAX_MS = 8 * 60 * 60 * 1000;
+export const STAFF_IDLE_MS = 8 * 60 * 60 * 1000;
+export const STAFF_MAX_MS = 12 * 60 * 60 * 1000;
 const params = { N: 131072, r: 8, p: 1, maxmem: 192 * 1024 * 1024 };
 const digest = value => crypto.createHash('sha256').update(String(value)).digest();
 const equal = (a, b) => crypto.timingSafeEqual(digest(a), digest(b));
@@ -72,7 +72,9 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
   }
   const requireStaff = (req, res, next) => noStore(req, res, () => {
     const started = performance.now();
-    const session = readSession(req);
+    // Ordinary/background map reads do not manufacture employee activity.
+    // Only the explicit same-origin activity check below renews the idle lease.
+    const session = readSession(req, false);
     addStaffTiming(res, 'session', performance.now() - started);
     if (!session) return res.status(401).json({ error: 'STAFF_LOGIN_REQUIRED' });
     res.locals.sensitiveAuthenticated = true;
@@ -97,12 +99,16 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
   router.use(noStore);
   router.use(express.json({ limit: '4kb' }));
   router.get('/session', (req, res) => {
-    // Status polling must not extend the idle deadline.
+    // A trusted UI activity check can renew idle time; background status cannot.
     const started = performance.now();
-    const session = readSession(req, false);
+    const activity = req.get('x-map-staff-activity') === '1'
+      && (req.get('sec-fetch-site') === 'same-origin' || req.get('origin') === configuration().origin);
+    const session = readSession(req, activity);
     addStaffTiming(res, 'session', performance.now() - started);
     return res.json({ authenticated: Boolean(session), configured: configuration().ready,
-      expiresAt: session?.expiresAt || null, idleExpiresAt: session?.idleExpiresAt || null });
+      expiresAt: session?.expiresAt || null, idleExpiresAt: session?.idleExpiresAt || null,
+      reason: session ? null : sessionKey(req, configuration()) ? 'SESSION_UNAVAILABLE' : 'SIGNED_OUT',
+      policy: { maxMs: STAFF_MAX_MS, idleMs: STAFF_IDLE_MS, persistence: 'PROCESS_MEMORY' } });
   });
   router.post('/login', async (req, res) => {
     const config = configuration();

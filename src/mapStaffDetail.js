@@ -14,9 +14,14 @@ export function staffStoreDetail(source, { customerCode, date }) {
     if (typeof value !== 'string' || value.length > 500 || /[\r\n]|비밀번호|비번|출입|도어락|보안키|password|token|secret|(?:01[016789])[- ]?\d{3,4}[- ]?\d{4}/i.test(value)) return null;
     return value.trim() || null;
   };
+  const detailValue = source.detailAddress ?? source.addressDetail;
+  const detailAddressState = detailValue == null && !Object.hasOwn(source,'detailAddress') && !Object.hasOwn(source,'addressDetail') ? 'UNOBSERVED'
+    : detailValue == null || typeof detailValue==='string'&&!detailValue.trim() ? 'EMPTY' : location(detailValue) ? 'PRESENT' : 'WITHHELD';
   return { customerCode, customerName: location(source.customerName),
     address: location(source.customerAddress || source.address),
     detailAddress: location(source.detailAddress || source.addressDetail),
+    detailAddressState,
+    deliveryPattern: safeText(source.deliveryPattern || source.deliveryPatternText) || null,
     detailDate: date, source: 'Customer → Hub customerDetail',
     locationState: location(source.customerAddress || source.address) ? 'SOURCE_ROW' : 'UNCONFIRMED',
     businessCoverageVerified: false };
@@ -30,7 +35,7 @@ export function staffCustomerDetail(source, { customerCode, date }) {
   const password = typeof source.password === 'string' && /^[A-Za-z0-9#*/_-]{2,100}$/.test(source.password)
     ? source.password : parsed.password || null;
   const specialRemark = safeText(source.specialRemark) || safeText(parsed.specialRemark);
-  const deliveryPattern = safeText(source.deliveryPattern || source.deliveryPatternText) || null;
+  const deliveryPattern = safeText(source.deliveryPattern || source.deliveryPatternText) || safeText(parsed.deliveryPattern) || null;
   return { customerCode, memoDate: date, accessInfo, password, specialRemark, deliveryPattern,
     memoState: accessInfo || password || specialRemark ? 'REGISTERED' : source.accessMemo ? 'NEEDS_CONFIRMATION' : 'UNREGISTERED',
     source: 'Customer → Hub staffCustomerDetail (one source row; no sensitive cache)' };

@@ -487,6 +487,8 @@
         const previous=baseVehicles;
         if(baseVehicleMeta?.version&&[...baseVehicles.values()].some(r=>r.baseVehicleVersion&&r.baseVehicleVersion!==baseVehicleMeta.version))baseVehicles=new Map();
         baseVehicles=MapPeriodUi.mergeBaseVehicles(baseVehicles,rows);baseVehicleStatus='READY';
+        const reviewNote=document.querySelector('#reviewBanner small');
+        if(reviewNote&&baseVehicleMeta?.stale===true){reviewNote.dataset.masterReference='stale';reviewNote.textContent=`10/23 저장자료 · 기준호차 ${String(baseVehicleMeta.checkedAt||'').slice(0,10)||'시점 미확인'} 이전 확인값 · 현재 기준 미확인 · 미게시`;window.dispatchEvent(new Event('resize'));}
         const changed=JSON.stringify(previousMeta)!==JSON.stringify(baseVehicleMeta)||rows.some(r=>JSON.stringify(previous.get(r.customerCode))!==JSON.stringify(r));
         if(!changed)return;
         if(state.mode==='BASE_60D'&&dateReady){
@@ -604,6 +606,9 @@
       areaLabel: vehicle.area_label || "",
       lat: numberOrNull(customer.lat),
       lng: numberOrNull(customer.lng),
+      coordinateSource: customer.coordinateSource || '',
+      coordinateAccuracy: customer.coordinateAccuracy || '',
+      storeInteriorVerified: customer.storeInteriorVerified === true,
       deliveryPattern: customer.delivery_pattern || "",
       region: customer.region || "",
       ton: customer.ton || vehicle.primary_ton || "",
@@ -757,6 +762,7 @@
     button.dataset.customerCode = row.customerCode || "";
     button.dataset.vehicle = row.vehicle || "";
     button.title = `${row.vehicle ? vehicleLabel(row.vehicle) + " · " : ""}${row.customerName || row.address || ""}`;
+    if(state.mode==='BASE_60D'&&row.baseVehicleStale===true)button.title=`${String(row.baseVehicleCheckedAt||'').slice(0,10)||'시점 미확인'} 이전 확인값 · ${button.title} · 현재 기준 미확인`;
     button.setAttribute("aria-label", state.mode === "BASE_60D" ? button.title : `${button.title} · ${completed ? "완료" : pending ? "미완료" : "상태 미확인"}`);
     if (row.customerCode && row.customerCode === state.selected?.customerCode) button.classList.add("selected");
     button.style.setProperty("--pin-color", vehicleColor(row.clusterCount ? '' : row.vehicle));
@@ -966,6 +972,7 @@
         ${!routeMode && row.history?.length ? `<div class="periodRecent">최근배송 ${esc(row.lastDeliveryDate)} · ${row.visitCount===null?'전체 기간 횟수 미확인':(row.visitCount??row.history.length)+'회 이력'}</div>` : ""}
         <div class="staffActions"><button id="staffHistory" ${routeMode?'':'hidden inert'} aria-expanded="false" aria-controls="staffAuxContent">최근 배송기사이력 ▸</button><button id="staffNotes" aria-expanded="false" aria-controls="staffAuxContent">출입배송정보 ▸</button></div>
         ${unlocated ? '<div class="coordinateWarning">좌표 미확인</div>' : ""}
+        ${!unlocated && row.coordinateSource==='KAKAO_BUILDING_EXACT_ADDRESS' ? '<div class="coordinateEvidence">주소 검색으로 확인한 건물 위치 · 매장 내부 위치 미확인</div>' : ""}
         <div class="mobileActions"><button id="mobileMapView" class="primary">매장 위치 중심으로 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicleLabel(vehicle) || "선택 호차")} 운행동선</button></div>
         <div id="nearWrap"></div>
       </div>`;
@@ -1001,7 +1008,13 @@
       const facts=$('#detail .dotDetailFacts');
       const addressLabel=facts&&[...facts.querySelectorAll('dt')].find(node=>node.textContent==='주소');
       if(addressLabel?.nextElementSibling)addressLabel.nextElementSibling.textContent=exact.address||'원천 주소 미확인';
-      if(exact.detailAddress&&facts){const label=document.createElement('dt'),value=document.createElement('dd');label.textContent='상세주소';value.textContent=exact.detailAddress;facts.append(label,value);}
+      if(facts){
+        const detailAddressLabel=exact.detailAddress||({EMPTY:'원천 상세주소 공란',WITHHELD:'보호정보 혼합 가능 · 별도 확인',UNOBSERVED:'원천 상세주소 미확인'})[exact.detailAddressState]||'원천 상세주소 미확인';
+        for(const [name,value] of [['상세주소',detailAddressLabel],['배송요일',exact.deliveryPattern||'원천 미확인']]){
+          const label=document.createElement('dt'),node=document.createElement('dd');label.textContent=name;node.textContent=value;facts.append(label,node);
+        }
+        if(exact.sourceBasis==='STORED_DAY'){const label=document.createElement('dt'),node=document.createElement('dd');label.textContent='매장정보 기준';node.textContent=exact.sourceDate+' 저장 원천 · 현재 마스터와 별도';facts.append(label,node);}
+      }
       positionDetailPopup();
     } catch (error) {
       if (isSilentRequestError(error) || requestId!==state.detailRequestId || state.selected?.customerCode!==row.customerCode || document.body.dataset.mapStaffState!=='authenticated') return;
@@ -1361,8 +1374,15 @@
     let matches = known;
     if (!matches.length) {
       try {
-        const response = await fetchJson(`/api/map-phase2b/preview/search?q=${encodeURIComponent(text)}`, { channel: "period-search", ttl: 60000, timeout: 30000 });
-        matches = rankSearchRows(response.data || [], text);
+        if(window.LOCAL_REVIEW_CONFIG?.privateCustomerSearch===true){
+          const response=await fetchJson('/api/map-phase2b/private/customer-search',{channel:'period-search',ttl:0,timeout:30000,headers:{'x-map-customer-query':encodeURIComponent(text)}});
+          // The authenticated server matched private basic addresses; the public rows intentionally omit them.
+          const available=new Map([...latestSnapshotRows,...periodRows,...allStores].map(row=>[row.customerCode,row]));
+          matches=(response.data||[]).slice(0,20).map(row=>available.get(row.customerCode)).filter(Boolean);
+        }else{
+          const response = await fetchJson(`/api/map-phase2b/preview/search?q=${encodeURIComponent(text)}`, { channel: "period-search", ttl: 60000, timeout: 30000 });
+          matches = rankSearchRows(response.data || [], text);
+        }
       } catch (error) { if (token === state.searchRequestId && !isSilentRequestError(error)) setSearchState(searchFailureMessage([error])); return; }
     }
     if (token !== state.searchRequestId || state.mode !== "BASE_60D") return;
@@ -1508,7 +1528,7 @@
       if (generalAllStores && snapshotReadState === 'error') $('#periodIdentity').textContent = '전체 매장 원천 조회 실패 · 전체 매장 수 미확인';
     }
     $("#mapStatusTitle").textContent = period ? "매장·권역 지도" : "일자별 운행";
-    $("#mapStatusSub").textContent = period ? `${state.rangeStart} ~ ${state.rangeEnd} · ${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 실제 배차' : '현재 기준호차 · 미확인 ?'}`
+    $("#mapStatusSub").textContent = period ? `${state.rangeStart} ~ ${state.rangeEnd} · ${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 실제 배차' : (baseVehicleMeta?.stale?'이전 확인 기준호차 · 현재 미확인':'현재 기준호차 · 미확인 ?')}`
       : `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
     $("#freshnessState").textContent = period ? `지도 반영일 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}` : `${state.selectedDate} 편성 조회 완료`;
     if(period&&periodBasis==='vehicle'&&baseVehicleStatus!=='READY')$('#mapStatusSub').textContent=baseVehicleStatus==='ERROR'?'기준호차 조회 실패 · 확인 필요 · 기존 지도 유지':baseVehicleStatus==='NOT_READY'?'검증된 기준호차 자료 미연결 · 기존 지도 유지':'기준호차 확인 중 · 미지정으로 판단하지 마세요.';
