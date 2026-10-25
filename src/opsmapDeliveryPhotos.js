@@ -1,7 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 export class DeliveryPhotoError extends Error {
-  constructor(code, status = 503) { super(code); this.code = code; this.status = status; }
+  constructor(code, status = 503, detail = {}) { super(code); this.code = code; this.status = status;
+    if (typeof detail.stage === 'string') this.stage = detail.stage;
+    if (Number.isInteger(detail.sourceHttpStatus)) this.sourceHttpStatus = detail.sourceHttpStatus;
+  }
 }
 export const PHOTO_KINDS = new Set(['REFRIGERATOR_DOOR', 'ENTRANCE_LOCK']);
 const fail = (code, status) => { throw new DeliveryPhotoError(code, status); };
@@ -39,7 +42,7 @@ function exact(task, expected) {
   const actual = identityOf(task);
   if (actual.customerCode !== expected.customerCode || (expected.date && actual.date !== expected.date)
     || (expected.deliveryId && actual.deliveryId !== expected.deliveryId)) fail('DELIVERY_IDENTITY_MISMATCH', 409);
-  if (!actual.date || !/^\d{1,20}$/.test(actual.deliveryId)) fail('UNVERIFIED', 503);
+  if (!actual.date || !/^\d{1,20}$/.test(actual.deliveryId)) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
   return actual;
 }
 function unwrap(payload) { return payload?.data ?? payload; }
@@ -70,7 +73,8 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
   async function detail(identity, signal) {
     const task = unwrap(await bounded(requestJson(`/api/bali/task/${identity.deliveryId}`, { method: 'GET', signal, maxResponseBytes: 65536 }), signal));
     exact(task, identity);
-    if (!Array.isArray(task.taskAttachments) || task.taskAttachments.length > 20) fail('UNVERIFIED', 503);
+    if (!Array.isArray(task.taskAttachments)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
+    if (task.taskAttachments.length > 20) fail('PHOTO_ATTACHMENT_LIMIT_EXCEEDED', 503);
     return task;
   }
   return {
@@ -79,7 +83,8 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
         const task = await detail(identity, signal), photos = [], notes = [];
         let unverified = false;
         for (const [attachmentIndex, attachment] of task.taskAttachments.entries()) {
-          if (!Array.isArray(attachment.images) || attachment.images.length > 24) fail('UNVERIFIED', 503);
+          if (!attachment || typeof attachment !== 'object' || !Array.isArray(attachment.images)) fail('PHOTO_IMAGES_INVALID', 503);
+          if (attachment.images.length > 24) fail('PHOTO_IMAGE_LIMIT_EXCEEDED', 503);
           if (attachment.text) notes.push(cleanText(attachment.text));
           const kind = kinds[attachment.typeText];
           if (!kind && attachment.images.length) { unverified = true; continue; }

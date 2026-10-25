@@ -7,17 +7,19 @@ export const DELIVERY_ADMIN_PHOTO_CATEGORY_MAP = Object.freeze({
   '매장 출입문은 잘 잠궜나요?': 'ENTRANCE_LOCK'
 });
 export const DELIVERY_ADMIN_PHOTO_HOSTS = Object.freeze(['static.chabyulhwa.com']);
-const fail = (code, status = 502) => { throw new DeliveryPhotoError(code, status); };
+const fail = (code, status = 502, detail = {}) => { throw new DeliveryPhotoError(code, status, detail); };
+const safeHttp = value => [200,400,401,403,404,409,410,413,422,429,500,502,503,504].includes(value) ? value : undefined;
 // An upstream cancel hook is untrusted too: initiate cleanup without waiting
 // for a noncooperative cancellation promise or retaining this request forever.
 const cancel = body => { try { Promise.resolve(body?.cancel?.()).catch(() => {}); } catch {} };
 
 function statusError(status) {
-  if (status === 401) fail('UPSTREAM_AUTH_REQUIRED');
-  if (status === 403) fail('PHOTO_FORBIDDEN', 403);
-  if (status === 404 || status === 410) fail('PHOTO_NOT_FOUND', status);
-  if (status === 429) fail('PHOTO_RATE_LIMITED', 429);
-  fail('PHOTO_LOOKUP_FAILED');
+  const detail = {stage:'source-http',sourceHttpStatus:safeHttp(status)};
+  if (status === 401) fail('UPSTREAM_AUTH_REQUIRED',502,detail);
+  if (status === 403) fail('PHOTO_FORBIDDEN',403,detail);
+  if (status === 404 || status === 410) fail('PHOTO_NOT_FOUND',status,detail);
+  if (status === 429) fail('PHOTO_RATE_LIMITED',429,detail);
+  fail('PHOTO_LOOKUP_FAILED',502,detail);
 }
 async function guarded(promise, signal, onLate) {
   let abort;
@@ -35,27 +37,27 @@ async function guarded(promise, signal, onLate) {
 async function readJson(response, limit, signal) {
   const type = (response.headers?.get?.('content-type') || '').split(';')[0].trim();
   if (!/^application\/(?:json|[a-z0-9.+-]+\+json)$/i.test(type)) {
-    cancel(response.body); fail('INVALID_PHOTO_RESPONSE');
+    cancel(response.body); fail('PHOTO_CONTENT_TYPE_INVALID',502,{stage:'source-content-type',sourceHttpStatus:safeHttp(response.status)});
   }
   const rawLength = response.headers?.get?.('content-length');
   if (rawLength !== null && rawLength !== undefined && (!/^\d+$/.test(rawLength) || Number(rawLength) > limit)) {
-    cancel(response.body); fail('PHOTO_JSON_TOO_LARGE', 413);
+    cancel(response.body); fail('PHOTO_JSON_TOO_LARGE',413,{stage:'source-size',sourceHttpStatus:safeHttp(response.status)});
   }
   const reader = response.body?.getReader?.();
-  if (!reader) { cancel(response.body); fail('INVALID_PHOTO_RESPONSE'); }
+  if (!reader) { cancel(response.body); fail('PHOTO_BODY_UNAVAILABLE',502,{stage:'source-json',sourceHttpStatus:safeHttp(response.status)}); }
   const chunks = []; let size = 0;
   try {
     while (true) {
       const item = await guarded(reader.read(), signal);
       if (item.done) break;
       size += item.value.byteLength;
-      if (size > limit) fail('PHOTO_JSON_TOO_LARGE', 413);
+      if (size > limit) fail('PHOTO_JSON_TOO_LARGE',413,{stage:'source-size',sourceHttpStatus:safeHttp(response.status)});
       chunks.push(item.value);
     }
     const bytes = new Uint8Array(size); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
-    catch { fail('INVALID_PHOTO_RESPONSE'); }
+    catch { fail('PHOTO_JSON_INVALID',502,{stage:'source-json',sourceHttpStatus:safeHttp(response.status)}); }
   } finally { cancel(reader); try { reader.releaseLock(); } catch {} }
 }
 // Reuse the same bounded JSON reader for an explicitly approved existing login.
@@ -74,7 +76,7 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
     fail('INVALID_PHOTO_TRANSPORT_CONFIG', 503);
   }
   const hosts = new Set(allowedImageHosts);
-  const approved = () => { if (hasApprovedSession() !== true) fail('UPSTREAM_AUTH_REQUIRED'); };
+  const approved = () => { if (hasApprovedSession() !== true) fail('UPSTREAM_AUTH_REQUIRED',502,{stage:'source-session'}); };
   async function run(signal, action) {
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -90,14 +92,14 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
       if (controller.signal.aborted || error?.name === 'AbortError') fail('PHOTO_TIMEOUT', 504);
       // Preserve only a safe status from approved requesters, never their text,
       // headers, payloads, URLs or signed media details.
-      if ([401, 403, 404, 410, 429].includes(error?.status)) statusError(error.status);
+      if (safeHttp(error?.status)) statusError(error.status);
       fail('PHOTO_LOOKUP_FAILED');
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
   }
   return {
     async requestJson(path, { method = 'GET', signal, maxResponseBytes = maxJsonBytes } = {}) {
       if (method !== 'GET' || !/^\/api\/bali\/task\/\d{1,20}$/.test(path || '')) fail('INVALID_PHOTO_REQUEST', 400);
-      if (typeof approvedRequest !== 'function') fail('UNVERIFIED', 503);
+      if (typeof approvedRequest !== 'function') fail('SOURCE_UNAVAILABLE',503,{stage:'source-session'});
       if (!Number.isInteger(maxResponseBytes) || maxResponseBytes < 1) fail('INVALID_PHOTO_REQUEST', 400);
       return run(signal, async requestSignal => {
         const response = await guarded(Promise.resolve().then(() => approvedRequest(path, {

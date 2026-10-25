@@ -6,16 +6,28 @@ const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif
 // Cleanup must never delay the bounded HTTP error when an upstream cancel hook
 // does not settle. Promise rejection is consumed without logging private data.
 const cancelBody = body => { try { Promise.resolve(body?.cancel?.()).catch(() => {}); } catch {} };
+const SAFE_STAGES = new Set(['source-session','source-login','source-http','source-content-type','source-json','source-identity','source-attachments','source-category','source-media','source-timeout','source-size','staff-session']);
+const SAFE_SOURCE_CODES = new Set(['PHOTO_LOGIN_HTTP_ERROR','PHOTO_LOGIN_REDIRECT_REJECTED','PHOTO_LOGIN_NETWORK_ERROR','PHOTO_LOGIN_SESSION_MISSING','PHOTO_CONTENT_TYPE_INVALID','PHOTO_JSON_INVALID','PHOTO_BODY_UNAVAILABLE','PHOTO_JSON_TOO_LARGE','PHOTO_TIMEOUT']);
+const SAFE_LOG_CODES = new Set([...SAFE_SOURCE_CODES,'STAFF_LOGIN_REQUIRED','UPSTREAM_AUTH_REQUIRED','DELIVERY_IDENTITY_MISMATCH','PHOTO_IDENTITY_UNVERIFIED','PHOTO_ATTACHMENTS_INVALID','PHOTO_ATTACHMENT_LIMIT_EXCEEDED','PHOTO_IMAGES_INVALID','PHOTO_IMAGE_LIMIT_EXCEEDED','PHOTO_FORBIDDEN','PHOTO_NOT_FOUND','PHOTO_RATE_LIMITED','PHOTO_LOOKUP_FAILED','INVALID_MEDIA_TYPE','MEDIA_TOO_LARGE','MEDIA_ORIGIN_REJECTED','INVALID_PHOTO_RESPONSE','PHOTO_SOURCE_DISABLED','SOURCE_UNAVAILABLE','UNVERIFIED']);
+const sourceStage = error => SAFE_STAGES.has(error?.photoStage) ? error.photoStage : SAFE_STAGES.has(error?.stage) ? error.stage : ({UPSTREAM_AUTH_REQUIRED:'source-session',STAFF_LOGIN_REQUIRED:'staff-session',DELIVERY_IDENTITY_MISMATCH:'source-identity',PHOTO_IDENTITY_UNVERIFIED:'source-identity',PHOTO_ATTACHMENTS_INVALID:'source-attachments',PHOTO_ATTACHMENT_LIMIT_EXCEEDED:'source-attachments',PHOTO_IMAGES_INVALID:'source-attachments',PHOTO_IMAGE_LIMIT_EXCEEDED:'source-attachments',PHOTO_TIMEOUT:'source-timeout',PHOTO_JSON_TOO_LARGE:'source-size',MEDIA_TOO_LARGE:'source-size',MEDIA_ORIGIN_REJECTED:'source-media',INVALID_MEDIA_TYPE:'source-media'})[error?.code] || undefined;
 function failure(error, res) {
   const status = error instanceof DeliveryPhotoError ? error.status
-    : error?.name === 'AbortError' ? 504 : [401, 403, 404, 410, 429].includes(error?.status) ? error.status : 502;
+    : error?.name === 'AbortError' ? 504 : SAFE_SOURCE_CODES.has(error?.code) && [413,504].includes(error?.status) ? error.status : [401, 403, 404, 410, 429].includes(error?.status) ? error.status : 502;
   const code = error instanceof DeliveryPhotoError ? error.code
+    : SAFE_SOURCE_CODES.has(error?.code) ? error.code
     : status === 504 ? 'PHOTO_TIMEOUT' : status === 401 ? 'UPSTREAM_AUTH_REQUIRED'
       : status === 403 ? 'PHOTO_FORBIDDEN' : [404, 410].includes(status) ? 'PHOTO_NOT_FOUND' : status === 429 ? 'PHOTO_RATE_LIMITED' : 'PHOTO_LOOKUP_FAILED';
   // Upstream login failure must not log out a valid map staff session in the UI.
-  const responseStatus = !(error instanceof DeliveryPhotoError) && error?.status === 401 ? 502 : status;
-  if (!res.headersSent) res.status(responseStatus).json({ ok: false, error: { code } });
-  else res.destroy();
+  const responseStatus = code === 'UPSTREAM_AUTH_REQUIRED' ? 502 : status;
+  const safe={code};const stage=sourceStage(error)||sourceStage({code});if(stage)safe.stage=stage;
+  if([200,400,401,403,404,409,410,413,422,429,500,502,503,504].includes(error?.sourceHttpStatus))safe.sourceHttpStatus=error.sourceHttpStatus;
+  if (!res.headersSent) res.status(responseStatus).json({ ok: false, error: safe });
+  else {
+    // Stream errors cannot replace already-sent headers. Emit only fixed safe enums.
+    const record={event:'OPSMAP_PHOTO_STREAM_FAILURE',stage:stage||'source-media',code:SAFE_LOG_CODES.has(code)?code:'PHOTO_LOOKUP_FAILED',httpStatus:[400,401,403,404,409,410,413,422,429,500,502,503,504].includes(responseStatus)?responseStatus:502,responseStarted:true};
+    if(safe.sourceHttpStatus!==undefined)record.sourceHttpStatus=safe.sourceHttpStatus;
+    console.warn(JSON.stringify(record)); res.destroy();
+  }
 }
 // Dependency injection preserves A's existing staff session and makes the feature default OFF.
 export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCurrent = () => false, source = null, enabled = false, prepareSource,
@@ -56,7 +68,7 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
     if (!upstream || upstream.status !== 200) {
       cancelBody(upstream?.body);
       const status = [401, 403, 404, 410, 429].includes(upstream?.status) ? upstream.status : 502;
-      throw Object.assign(new Error('UPSTREAM_MEDIA_FAILED'), { status });
+      throw new DeliveryPhotoError(status===401?'UPSTREAM_AUTH_REQUIRED':status===403?'PHOTO_FORBIDDEN':[404,410].includes(status)?'PHOTO_NOT_FOUND':status===429?'PHOTO_RATE_LIMITED':'PHOTO_LOOKUP_FAILED',status===401?502:status,{stage:'source-http',sourceHttpStatus:upstream?.status});
     }
     const type = (upstream.headers?.get?.('content-type') || '').split(';')[0].trim();
     const length = Number(upstream.headers?.get?.('content-length') || 0);

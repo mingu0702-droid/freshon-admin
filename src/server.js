@@ -514,7 +514,7 @@ async function ensureDeliveryAdminSession(force = false, photoPolicy) {
       try {
         response = photo ? await deliveryAdminRawFetch(attempt.url, {...requestOptions,signal:controller.signal,redirect:'error',timeoutMs:photoPolicy.timeoutMs,cache:'no-store'}) : await deliveryAdminFetch(attempt.url, requestOptions);
         if (photo) {
-          if (!response.ok || response.redirected) { void response.body?.cancel().catch(()=>{}); throw Object.assign(Error('UPSTREAM_AUTH_REQUIRED'), {status:401}); }
+          if (!response.ok || response.redirected) { void response.body?.cancel().catch(()=>{}); const code=response.redirected?'PHOTO_LOGIN_REDIRECT_REJECTED':response.status===401?'UPSTREAM_AUTH_REQUIRED':'PHOTO_LOGIN_HTTP_ERROR'; throw Object.assign(Error(code), {status:response.status===401?401:502}); }
           payload = await readBoundedPhotoLoginJson(response, photoPolicy.maxResponseBytes, controller.signal);
         } else {
           const text = await response.text();
@@ -523,11 +523,15 @@ async function ensureDeliveryAdminSession(force = false, photoPolicy) {
       } catch (error) {
         if (!photo) throw error;
         deliveryAdminSession.cookie='';deliveryAdminSession.authorization='';deliveryAdminSession.expiresAt=0;
-        throw Object.assign(Error(controller.signal.aborted?'PHOTO_TIMEOUT':'UPSTREAM_AUTH_REQUIRED'), {status:controller.signal.aborted?504:401});
+        const safeCodes=new Set(['UPSTREAM_AUTH_REQUIRED','PHOTO_FORBIDDEN','PHOTO_TIMEOUT','PHOTO_JSON_TOO_LARGE','PHOTO_CONTENT_TYPE_INVALID','PHOTO_JSON_INVALID','PHOTO_BODY_UNAVAILABLE','PHOTO_LOGIN_HTTP_ERROR','PHOTO_LOGIN_REDIRECT_REJECTED']);
+        const code=controller.signal.aborted?'PHOTO_TIMEOUT':safeCodes.has(error?.message)?error.message:'PHOTO_LOGIN_NETWORK_ERROR';
+        const failure=Object.assign(Error(code), {code,status:code==='PHOTO_TIMEOUT'?504:code==='UPSTREAM_AUTH_REQUIRED'?401:code==='PHOTO_JSON_TOO_LARGE'?413:502,photoStage:'source-login'});
+        if(Number.isInteger(response?.status)&&response.status>=100&&response.status<=599)failure.sourceHttpStatus=response.status;
+        throw failure;
       } finally { if(timer)clearTimeout(timer);photoPolicy?.signal?.removeEventListener('abort',abort); }
       const token = payload?.token || payload?.accessToken || payload?.access_token || payload?.data?.token || payload?.data?.accessToken || payload?.data?.access_token;
       if (token) deliveryAdminSession.authorization = `Bearer ${token}`;
-      if (photo && !(deliveryAdminSession.cookie || deliveryAdminSession.authorization)) throw Object.assign(Error('UPSTREAM_AUTH_REQUIRED'), {status:401});
+      if (photo && !(deliveryAdminSession.cookie || deliveryAdminSession.authorization)) throw Object.assign(Error('PHOTO_LOGIN_SESSION_MISSING'), {code:'PHOTO_LOGIN_SESSION_MISSING',status:502,photoStage:'source-login',...(Number.isInteger(response?.status)&&response.status>=100&&response.status<=599?{sourceHttpStatus:response.status}:{})});
       const redirectWithSession = response.status >= 300 && response.status < 400 && Boolean(deliveryAdminSession.cookie || deliveryAdminSession.authorization);
       if (response.ok || redirectWithSession) {
         deliveryAdminSession.username = config.deliveryAdminId;

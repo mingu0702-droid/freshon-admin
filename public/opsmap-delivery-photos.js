@@ -4,6 +4,13 @@
   const API = '/api/map-phase2b/private/delivery-photos';
   const KINDS = Object.freeze({ REFRIGERATOR_DOOR: '냉장고 문 확인', ENTRANCE_LOCK: '출입문 잠금 확인' });
   const MAX_PHOTOS = 40, MAX_IMAGE_BYTES = 4 * 1024 * 1024, MAX_JSON_BYTES = 256 * 1024;
+  const SAFE_FAILURE_CODES = new Set(['UNVERIFIED', 'SOURCE_UNAVAILABLE', 'NOT_CONFIGURED', 'INVALID_SOURCE_RESPONSE',
+    'UPSTREAM_AUTH_REQUIRED', 'PHOTO_SOURCE_DISABLED', 'PHOTO_LOOKUP_FAILED', 'PHOTO_FORBIDDEN', 'PHOTO_NOT_FOUND',
+    'PHOTO_RATE_LIMITED', 'PHOTO_TIMEOUT', 'INVALID_PHOTO_RESPONSE', 'DELIVERY_IDENTITY_MISMATCH',
+    'PHOTO_IDENTITY_UNVERIFIED', 'PHOTO_ATTACHMENTS_INVALID', 'PHOTO_ATTACHMENT_LIMIT_EXCEEDED',
+    'PHOTO_IMAGES_INVALID', 'PHOTO_IMAGE_LIMIT_EXCEEDED', 'PHOTO_LOGIN_HTTP_ERROR', 'PHOTO_LOGIN_REDIRECT_REJECTED', 'PHOTO_LOGIN_NETWORK_ERROR', 'PHOTO_LOGIN_SESSION_MISSING', 'PHOTO_CONTENT_TYPE_INVALID', 'PHOTO_JSON_INVALID', 'PHOTO_BODY_UNAVAILABLE',
+    'PHOTO_JSON_TOO_LARGE', 'INVALID_PHOTO_REQUEST', 'PHOTO_LIMIT_EXCEEDED', 'MEDIA_ORIGIN_REJECTED', 'INVALID_MEDIA_TYPE', 'MEDIA_TOO_LARGE', 'UPSTREAM_REDIRECT_REJECTED']);
+  const SAFE_STAGES=new Set(['source-session','source-login','source-http','source-content-type','source-json','source-identity','source-attachments','source-category','source-media','source-timeout','source-size','staff-session']);
   const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
   const safeText = (value, maximum) => typeof value === 'string' && value.length <= maximum;
   function mediaPath(value) {
@@ -57,6 +64,8 @@
     }
     function purge() {
       generation++; requestController?.abort(); requestController = null; clearTimeout(timer); closeViewer();
+      delete host.dataset.failureCode;
+      delete host.dataset.failureStage; delete host.dataset.failureHttp; delete host.dataset.failureSourceHttp;
       for (const url of urls) URL.revokeObjectURL(url); urls.clear();
       imagePromises.clear();
       deliveries = []; selected = null; photoList = []; host.replaceChildren();
@@ -97,17 +106,21 @@
     async function request(path, options = {}, consume = async (response, signal) => JSON.parse(new TextDecoder().decode(await readBody(response, MAX_JSON_BYTES, signal)))) {
       const timeout = new AbortController(), timeoutId = setTimeout(() => timeout.abort(), requestTimeoutMs);
       const signal = options.signal || requestController?.signal;
+      const photoStage = path === '/api/map-phase2b/auth/session' ? 'staff-session' : path.includes('/media/') ? 'image' : path.includes('deliveryId=') ? 'task' : 'discovery';
       const abort = () => timeout.abort(); signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) timeout.abort();
       let response;
       try {
         response = await fetcher(path, { cache: 'no-store', credentials: 'same-origin', redirect: 'error', ...options, signal: timeout.signal });
         if (!response.ok) {
-          let code = '';
-          try { const body = JSON.parse(new TextDecoder().decode(await readBody(response, 4096, timeout.signal))); const candidate = typeof body.error === 'string' ? body.error : body.error?.code || ''; code = /^[A-Z_]{1,64}$/.test(candidate) ? candidate : ''; } catch (_) { /* No raw server body retained. */ }
-          throw Object.assign(Error(code || 'REQUEST_FAILED'), { status: response.status });
+          let code = '', detail = {};
+          try { const body = JSON.parse(new TextDecoder().decode(await readBody(response, 4096, timeout.signal))); const candidate = typeof body.error === 'string' ? body.error : body.error?.code || ''; code = /^[A-Z_]{1,64}$/.test(candidate) ? candidate : '';
+            if (SAFE_STAGES.has(body.error?.stage)) detail.sourceStage=body.error.stage;
+            if ([200,400,401,403,404,409,410,413,422,429,500,502,503,504].includes(body.error?.sourceHttpStatus)) detail.sourceHttpStatus=body.error.sourceHttpStatus; } catch (_) { /* No raw server body retained. */ }
+          throw Object.assign(Error(code || 'REQUEST_FAILED'), { status: response.status, ...detail });
         }
         return await consume(response, timeout.signal);
+      } catch (error) { error.photoStage = photoStage; throw error;
       } finally { clearTimeout(timeoutId); signal?.removeEventListener('abort', abort); if (response?.body && !response.body.locked) void response.body.cancel().catch(() => {}); }
     }
     async function authorize(id) {
@@ -120,10 +133,25 @@
     }
     function failure(error, id) {
       if (id !== generation) return;
-      if (error.status === 401) { block(); return; }
+      if (error.status === 401 && error.message !== 'UPSTREAM_AUTH_REQUIRED') { block(); return; }
       purge(); const current = generation;
+      host.dataset.failureCode = SAFE_FAILURE_CODES.has(error.message) ? error.message : 'PHOTO_LOOKUP_FAILED';
+      host.dataset.failureStage = SAFE_STAGES.has(error.sourceStage) ? error.sourceStage : ['staff-session', 'discovery', 'task', 'image'].includes(error.photoStage) ? error.photoStage : 'ui-response';
+      if (Number.isInteger(error.status) && error.status >= 100 && error.status <= 599) host.dataset.failureHttp = String(error.status);
+      if ([200,400,401,403,404,409,410,413,422,429,500,502,503,504].includes(error.sourceHttpStatus)) host.dataset.failureSourceHttp=String(error.sourceHttpStatus);
       if (error.message === 'UPSTREAM_AUTH_REQUIRED') { shell('Delivery Admin 인증 연결이 필요합니다. 직원 로그인은 유지됩니다.', 'upstream-auth-required'); return; }
       if (error.message === 'PHOTO_SOURCE_DISABLED') { shell('납품 사진 연결이 비활성 상태입니다.', 'source-disabled'); return; }
+      const sourceContractErrors = {
+        PHOTO_CONTENT_TYPE_INVALID: '사진 원천 응답 형식이 JSON이 아닙니다.',
+        PHOTO_JSON_INVALID: '사진 원천의 JSON 형식을 확인하지 못했습니다.',
+        PHOTO_BODY_UNAVAILABLE: '사진 원천의 응답 내용을 읽지 못했습니다.',
+        PHOTO_IDENTITY_UNVERIFIED: '사진 원천의 고객·배송일·배송 기록을 확인하지 못했습니다.',
+        PHOTO_ATTACHMENTS_INVALID: '사진 원천의 첨부 목록 형식을 확인하지 못했습니다.',
+        PHOTO_ATTACHMENT_LIMIT_EXCEEDED: '사진 원천의 첨부 목록이 허용 범위를 초과했습니다.',
+        PHOTO_IMAGES_INVALID: '사진 원천의 이미지 목록 형식을 확인하지 못했습니다.',
+        PHOTO_IMAGE_LIMIT_EXCEEDED: '사진 원천의 이미지 목록이 허용 범위를 초과했습니다.'
+      };
+      if (sourceContractErrors[error.message]) { shell(sourceContractErrors[error.message], 'unverified'); return; }
       const forbidden = error.status === 403, unverified = ['UNVERIFIED', 'SOURCE_UNAVAILABLE', 'NOT_CONFIGURED', 'INVALID_SOURCE_RESPONSE'].includes(error.message) || error.status === 404 || error.status === 422 || error.status === 503;
       shell(forbidden ? '사진 조회 권한이 없습니다.' : unverified ? '사진 미확인 · 배송 사진 원천 또는 연결 상태를 확인해 주세요.' : '사진 조회 실패 · 잠시 후 다시 시도해 주세요.', forbidden ? 'forbidden' : unverified ? 'unverified' : 'error', forbidden ? null : { label: '다시 조회', run: () => current === generation && target && open(target) });
     }
