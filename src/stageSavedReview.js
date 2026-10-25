@@ -2,16 +2,30 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {gunzipSync} from 'node:zlib';
 const ORIGIN='https://freshon-admin-stage-preview-template.onrender.com';
 const INPUT_SHA='5c61b55560c1774ad68f45b258e990816527c7fee1acaedb01b22cf53b5b6b2b';
 const digest=v=>createHash('sha256').update(v).digest('hex');
+const CARRIER_PREFIX=Buffer.from('OPSMAP_GZIP_BASE64_V1\n','ascii');
+export function decodeStageReviewInput(stored) {
+  const bytes=Buffer.isBuffer(stored)?stored:Buffer.from(stored);
+  if(bytes.length>1048576)throw Error('REVIEW_INPUT_LIMIT');
+  if(!bytes.subarray(0,CARRIER_PREFIX.length).equals(CARRIER_PREFIX))return bytes;
+  if(bytes.length>512000)throw Error('REVIEW_INPUT_CARRIER_LIMIT');
+  const encoded=bytes.subarray(CARRIER_PREFIX.length).toString('utf8');
+  if(!encoded||encoded.length%4!==0||!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))throw Error('REVIEW_INPUT_BASE64');
+  const compressed=Buffer.from(encoded,'base64');
+  if(compressed.toString('base64')!==encoded)throw Error('REVIEW_INPUT_BASE64');
+  try{return gunzipSync(compressed,{maxOutputLength:1048576});}
+  catch{throw Error('REVIEW_INPUT_COMPRESSION');}
+}
 export function createStageSavedReview({env=process.env,publicDir,appRoot=path.resolve(publicDir,'..'),readFile=fs.readFileSync,stat=fs.statSync}={}) {
   if(!env.OPSMAP_STAGE_SAVED_REVIEW_FILE)return {enabled:false,reason:'PRIVATE_INPUT_NOT_CONFIGURED',mount(){}};
   if(env.OPSMAP_STAGE_VERIFY_ONLY!=='1'||env.RENDER_EXTERNAL_URL!==ORIGIN)throw Error('EXACT_STAGE_REVIEW_REQUIRED');
   const file=env.OPSMAP_STAGE_SAVED_REVIEW_FILE;
   if(!path.isAbsolute(file)||path.resolve(file).startsWith(path.resolve(appRoot)+path.sep))throw Error('REVIEW_INPUT_OUTSIDE_IMAGE_REQUIRED');
   if(stat(file).size>1048576)throw Error('REVIEW_INPUT_LIMIT');
-  const raw=readFile(file);if(digest(raw)!==INPUT_SHA)throw Error('REVIEW_INPUT_PIN');
+  const raw=decodeStageReviewInput(readFile(file));if(raw.length!==675467||digest(raw)!==INPUT_SHA)throw Error('REVIEW_INPUT_PIN');
   const input=JSON.parse(raw),data=input.data;
   if(input.meta?.date!=='2026-10-23'||input.meta.published!==false||input.meta.businessCoverageVerified!==false||!Array.isArray(data)||data.length!==2036
     ||data.some(r=>!Array.isArray(r)||r.length!==10||r[2]!==''||r[8]!==null)
