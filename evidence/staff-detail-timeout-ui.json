@@ -1,0 +1,22 @@
+{
+  "scope": "Local HTTP replay of observed Stage 4805ms HTTP504; actual entry and detail UI scripts; synthetic local session only",
+  "stageRequests": 0,
+  "credentialReads": 0,
+  "stageAuthOrSourcePassEstablished": false,
+  "replayDelayMs": 4805,
+  "status": 504,
+  "browserElapsedMs": 4822.1,
+  "timeoutMessage": "원천 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.",
+  "clientSessionRetained": true,
+  "nextPublicStatus": 200,
+  "automaticDetailRetry": false,
+  "calls": {
+    "session": 2,
+    "login": 0,
+    "logout": 0,
+    "protectedDetail": 1,
+    "publicDetail": 1,
+    "nonLoopback": 0
+  },
+  "result": "PASS"
+}

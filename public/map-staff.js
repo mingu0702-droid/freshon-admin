@@ -95,7 +95,6 @@
     const target = requested;
     if (!target || id !== generation) return;
     detailPending = true;
-    const detailStarted = performance.now();
     shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
     dialog.dataset.state = 'loading';
     const loading = node('p', ''); loading.setAttribute('role', 'status'); loading.setAttribute('aria-live', 'polite');
@@ -157,7 +156,7 @@
         node('button', '다시 확인').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
         return;
       }
-      shell(target.kind === 'history' ? '기사 이력 조회 실패' : '보호 상세 조회 실패'); node('p', error.sourceChanged ? '조회 중 원천 데이터가 변경되었습니다. 다시 시도해 주세요.' : error.status === 504 && performance.now() - detailStarted >= 5000 ? '상세정보 조회가 지연되고 있습니다. 다시 시도해 주세요.' : error.status === 422 ? '원천 데이터 확인이 필요합니다.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      shell(target.kind === 'history' ? '기사 이력 조회 실패' : '보호 상세 조회 실패'); node('p', error.sourceChanged ? '조회 중 원천 데이터가 변경되었습니다. 다시 시도해 주세요.' : error.status === 504 ? '원천 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.' : error.status === 422 ? '원천 데이터 확인이 필요합니다.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
       dialog.dataset.state = 'error';
       node('p', '공개 고객정보와 지도는 계속 사용할 수 있습니다.');
       node('button', '다시 시도').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
