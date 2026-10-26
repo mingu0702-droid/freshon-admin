@@ -1,0 +1,89 @@
+{
+  "scope": "Local browser rendering of real HTTP failure responses; does not establish Stage login or real credential validity",
+  "realCredentialReads": 0,
+  "stageRequests": 0,
+  "nonLoopbackRequests": 0,
+  "localLoginPosts": 11,
+  "results": [
+    {
+      "case": "credential_rejection",
+      "responseStatus": 401,
+      "message": "로그인하지 못했습니다. 아이디와 비밀번호를 확인해 주세요.",
+      "passwordCleared": true,
+      "retryEnabled": true,
+      "result": "PASS"
+    },
+    {
+      "case": "origin_rejection",
+      "responseStatus": 403,
+      "message": "현재 접속 주소에서 로그인을 허용하지 않습니다. 직원용 지도 주소를 확인해 주세요.",
+      "passwordCleared": true,
+      "retryEnabled": true,
+      "result": "PASS"
+    },
+    {
+      "case": "rate_limit",
+      "responseStatus": 429,
+      "message": "로그인 요청이 일시 제한되었습니다. 잠시 후 다시 시도해 주세요.",
+      "passwordCleared": true,
+      "retryEnabled": true,
+      "result": "PASS"
+    },
+    {
+      "case": "configuration_unavailable",
+      "responseStatus": 503,
+      "message": "직원 로그인 설정이 필요합니다.",
+      "passwordCleared": true,
+      "retryEnabled": true,
+      "result": "PASS"
+    },
+    {
+      "case": "verification_unavailable",
+      "responseStatus": 503,
+      "message": "로그인 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+      "passwordCleared": true,
+      "retryEnabled": true,
+      "result": "PASS"
+    },
+    {
+      "case": "non_json_rate_limit",
+      "responseStatus": 429,
+      "message": "로그인 요청이 일시 제한되었습니다. 잠시 후 다시 시도해 주세요.",
+      "passwordCleared": true,
+      "retryEnabled": true,
+      "result": "PASS"
+    },
+    {
+      "case": "null_json_rate_limit",
+      "responseStatus": 429,
+      "message": "로그인 요청이 일시 제한되었습니다. 잠시 후 다시 시도해 주세요.",
+      "passwordCleared": true,
+      "retryEnabled": true,
+      "result": "PASS"
+    },
+    {
+      "case": "non_json_server_failure",
+      "responseStatus": 502,
+      "message": "로그인 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+      "passwordCleared": true,
+      "retryEnabled": true,
+      "result": "PASS"
+    },
+    {
+      "case": "invalid_success_response",
+      "responseStatus": 200,
+      "message": "로그인 응답을 확인하지 못했습니다. 연결 상태를 확인한 후 다시 시도해 주세요.",
+      "passwordCleared": true,
+      "retryEnabled": true,
+      "result": "PASS"
+    },
+    {
+      "case": "connection_failure",
+      "responseStatus": null,
+      "message": "로그인 응답을 확인하지 못했습니다. 연결 상태를 확인한 후 다시 시도해 주세요.",
+      "passwordCleared": true,
+      "retryEnabled": true,
+      "result": "PASS"
+    }
+  ]
+}

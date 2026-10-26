@@ -1,0 +1,60 @@
+{
+  "baseCommit": "2775b835cc13ca59802da85e90e4aba2437b71f1",
+  "scope": "Tracked source comparison only; no environment file, runtime credential, hash value, remote login, service mutation or deployment access",
+  "credentialReads": 0,
+  "remoteRequests": 0,
+  "stageLoginValidated": false,
+  "authSourceSha256": "400733293e8d398bb626995eb9930f101f604ab6a9f2450bfe380786ed651e20",
+  "entrySourceSha256": "9d8c5cac073f8e32aa75a9034a116b6395f786ebd5cf6672eadaec976db58b7b",
+  "comparison": [
+    {
+      "baseline": "c0e5ee7e64e48cb4c7e285e19a72114e753510cc",
+      "section": "hash_format_and_verification",
+      "unchanged": true
+    },
+    {
+      "baseline": "c0e5ee7e64e48cb4c7e285e19a72114e753510cc",
+      "section": "configuration_and_origin",
+      "unchanged": true
+    },
+    {
+      "baseline": "c0e5ee7e64e48cb4c7e285e19a72114e753510cc",
+      "section": "rate_limit",
+      "unchanged": true
+    },
+    {
+      "baseline": "c0e5ee7e64e48cb4c7e285e19a72114e753510cc",
+      "section": "login_handler",
+      "unchanged": true
+    },
+    {
+      "baseline": "a2ce400543323692a162f8201c72a3b57715dd77",
+      "section": "hash_format_and_verification",
+      "unchanged": true
+    },
+    {
+      "baseline": "a2ce400543323692a162f8201c72a3b57715dd77",
+      "section": "configuration_and_origin",
+      "unchanged": true
+    },
+    {
+      "baseline": "a2ce400543323692a162f8201c72a3b57715dd77",
+      "section": "rate_limit",
+      "unchanged": true
+    },
+    {
+      "baseline": "a2ce400543323692a162f8201c72a3b57715dd77",
+      "section": "login_handler",
+      "unchanged": true
+    }
+  ],
+  "observations": {
+    "environmentLoad": "src/server.js imports config.js; src/config.js:3 invokes dotenv.config; productionMapIntegration.js:33 calls createMapStaffAuth(authOptions) whose default env is process.env",
+    "origin": "src/mapStaffAuth.js:46 prefers RENDER_EXTERNAL_URL to MAP_STAFF_ORIGIN; :52 rejects mismatched Origin or cross-site sec-fetch-site; login returns 403 ORIGIN_REJECTED before password verification",
+    "argon2": "Exact accepted Argon2id parameters and native argon2.verify remain identical to both baselines; generated settings are not newly changed",
+    "retry": "Per-socket 10/global 30 attempts per 15 minutes, plus single in-flight verification, return 429 LOGIN_RETRY_LATER; Retry-After is a fixed 60 seconds and does not establish limiter expiry",
+    "injection": "Auth reads process.env directly rather than config.envValue normalization; adding trim/unquoting would change credential semantics and is outside this UI patch",
+    "changedUi": "public/map-staff-entry.js:70 preserves HTTP status for non-JSON responses; :226 only reports credential rejection for 401 LOGIN_FAILED; origin/service/transport/limiter are separately displayed",
+    "limitation": "Local error rendering evidence cannot identify the actual Stage response status or prove the real password is accepted"
+  }
+}

@@ -65,8 +65,10 @@
     try {
       const response = await rawFetch('/api/map-phase2b/auth/' + path, { cache: 'no-store', credentials: 'same-origin',
         ...options, signal: controller.signal, headers: { 'content-type': 'application/json', ...options.headers } });
-      const value = await response.json();
-      if (!response.ok) throw Object.assign(Error('STAFF_AUTH_FAILED'), { status: response.status, code: typeof value.error === 'string' ? value.error : '' });
+      let value;
+      try { value = await response.json(); }
+      catch { throw Object.assign(Error('STAFF_AUTH_RESPONSE_INVALID'), { status: response.status }); }
+      if (!response.ok) throw Object.assign(Error('STAFF_AUTH_FAILED'), { status: response.status, code: typeof value?.error === 'string' ? value.error : '' });
       return value;
     } finally { clearTimeout(timeout); }
   }
@@ -221,10 +223,12 @@
       await accept(value);
     } catch (error) {
       if (owner !== epoch) return;
-      message.textContent = error.status === 429 ? '시도가 많습니다. 잠시 후 다시 시도해 주세요.'
+      message.textContent = error.status === 401 && error.code === 'LOGIN_FAILED' ? '로그인하지 못했습니다. 아이디와 비밀번호를 확인해 주세요.'
+        : error.status === 429 ? '로그인 요청이 일시 제한되었습니다. 잠시 후 다시 시도해 주세요.'
         : error.code === 'STAFF_AUTH_NOT_CONFIGURED' ? '직원 로그인 설정이 필요합니다.'
+          : error.status === 403 && error.code === 'ORIGIN_REJECTED' ? '현재 접속 주소에서 로그인을 허용하지 않습니다. 직원용 지도 주소를 확인해 주세요.'
           : error.status >= 500 ? '로그인 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.'
-            : '로그인하지 못했습니다. 아이디와 비밀번호를 확인해 주세요.';
+            : '로그인 응답을 확인하지 못했습니다. 연결 상태를 확인한 후 다시 시도해 주세요.';
     } finally { body = ''; password.value = ''; if (!session && !logoutRequired) submit.disabled = false; }
   });
   for (const name of ['pointerdown', 'keydown', 'wheel', 'touchstart']) document.addEventListener(name, event => {
