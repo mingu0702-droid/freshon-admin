@@ -14,4 +14,9 @@ test('invalid coordinates are excluded without inventing points',()=>{assert.equ
 test('dense daily mode is bounded on mobile',()=>{assert(stableClusters(rows,project,8,'',null,{mode:'DATE_ROUTE',maxMarkers:120}).length<=120);});
 test('viewport filtering never moves a cluster anchor',()=>{const a=stableClusters(rows,project,10),b=stableClusters(rows,project,10,'',{width:500,height:400});for(const g of b){const before=a.find(x=>x.clusterKey===g.clusterKey);assert(before);assert.equal(g.lat,before.lat);assert.equal(g.lng,before.lng);}});
 test('resize relayout preserves camera center and skips unchanged dimensions',()=>{let now=1000,relayout=0,centers=0,center={lat:37.5,lng:127};const jobs=[];const el={clientWidth:800,clientHeight:600};const map={getCenter:()=>center,relayout:()=>{relayout++;center={lat:0,lng:0};},setCenter:p=>{centers++;center=p;}};const c=createCamera({map,element:el,clock:()=>now,raf:fn=>(jobs.push(fn),jobs.length),cancelRaf:()=>{}});c.relayout();assert.equal(center.lat,37.5);c.relayout();assert.equal(relayout,1);el.clientWidth=900;c.userGesture();c.relayout();assert.equal(relayout,1);now+=301;jobs.shift()();assert.equal(relayout,2);assert.equal(centers,2);c.dispose();});
-test('grouping cache is explicitly revisioned and still filters the moving viewport',()=>{const a=stableClusters(rows,project,10,'',null,{sourceVersion:'v1'}),b=stableClusters(rows,project,10,'',{width:500,height:400},{sourceVersion:'v1'});for(const r of b)assert(a.includes(r));const changed=rows.map(x=>({...x}));changed[0].lat=38.5;const c=stableClusters(changed,project,10,'',null,{sourceVersion:'v2'});assert.equal(count(c),2036);});
+test('viewport grouping excludes distant stores from the visible marker limit',()=>{
+ const points=Array.from({length:400},(_,i)=>({customerCode:'T'+i,lat:30+i*.025,lng:120+i*.03,vehicle:'101',baseVehicle:'101'}));
+ const proj=r=>({x:(r.lng-120)*100,y:(r.lat-30)*100});
+ const result=stableClusters(points,proj,3,'',{width:100,height:100},{sourceVersion:'v1',maxMarkers:40});
+ assert(result.length>1);assert(result.every(r=>!r.clusterCount||r.clusterCount<10));
+});

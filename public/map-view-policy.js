@@ -33,7 +33,7 @@
       const p = project(row);
       return Number.isFinite(p?.x) && Number.isFinite(p?.y) && p.x >= -80 && p.y >= -80 && p.x <= viewport.width + 80 && p.y <= viewport.height + 80;
     };
-    const cacheKey=options.sourceVersion===undefined?null:JSON.stringify([options.sourceVersion,mode,band,limit,[...protectedCodes].sort()]);
+    const cacheKey=viewport||options.sourceVersion===undefined?null:JSON.stringify([options.sourceVersion,mode,band,limit,[...protectedCodes].sort()]);
     const saved=cacheKey&&groupingCache.get(rows)?.get(cacheKey);
     if(saved)return saved.filter(visible);
     const remember=result=>{if(cacheKey){let entries=groupingCache.get(rows);if(!entries){entries=new Map();groupingCache.set(rows,entries);}while(entries.size>=12)entries.delete(entries.keys().next().value);entries.set(cacheKey,result);}return result.filter(visible);};
@@ -55,7 +55,10 @@
         group.south=Math.min(group.south,row.lat); group.north=Math.max(group.north,row.lat);
         group.west=Math.min(group.west,row.lng); group.east=Math.max(group.east,row.lng);
       }
-      if (grouped.size + pinned.length <= limit) break;
+      // The marker limit applies to the current viewport. Counting nationwide
+      // groups here makes close zooms merge distant stores into huge clusters.
+      const visibleGroups = viewport ? [...grouped.values()].filter(g => visible({lat:g.lat/g.rows.length,lng:g.lng/g.rows.length})).length : grouped.size;
+      if (visibleGroups + pinned.filter(visible).length <= limit) break;
     }
     const result = [...pinned];
     for (const group of grouped.values()) {
