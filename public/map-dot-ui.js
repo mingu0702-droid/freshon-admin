@@ -9,7 +9,7 @@
     if(data.state==='success')return '자동차 경로 · 현재 교통 기준';
     if(data.state==='partial')return '일부 구간만 조회되었습니다.';
     if(data.state==='empty'||data.error==='NO_ROAD_ROUTE')return '이 지점을 잇는 자동차 경로가 없습니다.';
-    const errors={STAFF_LOGIN_REQUIRED:'직원 로그인이 필요합니다.',AUTHENTICATION_FAILED:'직원 로그인이 필요합니다.',PERMISSION_DENIED:'경로 조회 권한이 없습니다.',QUOTA_EXCEEDED:'경로 조회 한도에 도달했습니다.',TIMEOUT:'경로 조회 시간이 초과되었습니다.',PROVIDER_UNAVAILABLE:'경로 서비스에 연결할 수 없습니다.',RECORDED_ORDER_REQUIRED:'호차와 저장된 방문 순서를 선택해 주세요.',INVALID_RESPONSE:'경로 응답을 확인할 수 없습니다.',ROAD_ROUTE_FAILED:'경로를 불러오지 못했습니다.'};
+    const errors={STAFF_LOGIN_REQUIRED:'직원 로그인이 필요합니다.',AUTHENTICATION_FAILED:'길찾기 제공자 인증 연결을 확인해야 합니다.',PERMISSION_DENIED:'길찾기 API 이용 권한을 확인해야 합니다.',STAGE_VERIFICATION_READ_ONLY:'검토 서버에서 경로 POST 요청이 차단됐습니다.',ORIGIN_REJECTED:'경로 요청 출처를 확인해야 합니다.',KEY_MISSING:'길찾기 서버 키가 연결되지 않았습니다.',FEATURE_DISABLED:'길찾기 서버 연결이 비활성화돼 있습니다.',QUOTA_EXCEEDED:'경로 조회 한도에 도달했습니다.',TIMEOUT:'경로 조회 시간이 초과되었습니다.',PROVIDER_UNAVAILABLE:'경로 서비스에 연결할 수 없습니다.',RECORDED_ORDER_REQUIRED:'호차와 저장된 방문 순서를 선택해 주세요.',INVALID_RESPONSE:'경로 응답을 확인할 수 없습니다.',ROAD_ROUTE_FAILED:'경로를 불러오지 못했습니다.'};
     if(errors[data.error])return errors[data.error];
     if(data.state==='disabled'||data.error==='CALL_POLICY_BLOCKED')return '도로 경로 연결 대기';
     return '경로를 조회하지 못했습니다. 잠시 후 다시 시도해 주세요.';
@@ -86,7 +86,7 @@
     dockDetail();syncStatus();arrangeNavigation();
     window.addEventListener('map-manual-route',arrangeNavigation);
     observer=new MutationObserver(syncStatus);for(const node of [$('#packageReadState'),$('#freshnessState')])observer.observe(node,{attributes:true,childList:true,subtree:true,characterData:true});
-    resizeObserver=new ResizeObserver(()=>{window.MapUiLocalBridge?.state.map?.relayout();dockDetail();});resizeObserver.observe($('.maparea'));
+    resizeObserver=new ResizeObserver(()=>{window.MapUiLocalBridge?.relayoutPreservingView?.();dockDetail();});resizeObserver.observe($('.maparea'));
     window.addEventListener('pagehide',e=>{if(e.persisted)return;observer.disconnect();resizeObserver.disconnect();window.removeEventListener('map-manual-route',arrangeNavigation);},{once:true});
   }
   window.MapDotUi=Object.freeze({mount,dockDetail,describeRoute,arrangeNavigation});

@@ -12,8 +12,8 @@
   async function refresh(){
     if(busy||!window.MapStaffEntry?.session())return;const owner=generation;busy=true;button.disabled=true;
     try{
-      const [r,s]=await Promise.all([fetch('/api/map-phase2b/preview/data-status',{cache:'no-store'}),fetch('/api/map-phase2b/preview/status',{cache:'no-store'})]);
-      if(!r.ok)throw new Error('STATUS');const d=(await r.json()).data,snap=s.ok?(await s.json()).snapshot:null;
+      const [r,s]=await Promise.all([fetch('/api/map-phase2b/preview/data-status',{cache:'no-store'}),fetch('/api/map-phase2b/preview/status?metadataOnly=1',{cache:'no-store'})]);
+      if(!r.ok)throw new Error('STATUS');const d=(await r.json()).data,statusData=s.ok?await s.json():null,snap=statusData?.snapshot||statusData&&{latest:statusData.latestDate,stale:statusData.stale};
       if(owner!==generation||!window.MapStaffEntry?.session())return;
       const target=d.customer.freshon&&d.customer.delivery?[d.customer.freshon,d.customer.delivery].sort()[0]:null,job=d.job;
       const active=job&&(job.publication==='PENDING'||!['DONE','ERROR','UP_TO_DATE'].includes(job.phase));

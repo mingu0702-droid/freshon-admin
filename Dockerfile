@@ -18,4 +18,4 @@ ENV NODE_OPTIONS=--max-old-space-size=320
 
 EXPOSE 10000
 
-CMD ["node", "src/stageVerificationEntry.js"]
+CMD ["node", "src/startup.js"]

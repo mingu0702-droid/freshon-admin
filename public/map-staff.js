@@ -29,7 +29,7 @@
     if (isDetail) { controller?.abort(); controller = local; }
     else if (!isLogout) { authController?.abort(); authController = local; }
     const start = performance.now(); let status = 0, receivedAt = null, serverTiming = '', headersMs = 0, parseMs = 0;
-    const timer = isDetail ? null : setTimeout(() => local.abort(), 10000);
+    const timer = setTimeout(() => local.abort(), isDetail ? 20000 : 10000);
     try {
       const response = await fetch('/api/map-phase2b/' + path, { ...options, cache: 'no-store', credentials: 'same-origin',
         signal: local.signal, headers: { 'content-type': 'application/json', ...options.headers } });
@@ -106,6 +106,7 @@
     }, 5000);
     try {
       const query = new URLSearchParams({ customerCode: target.customerCode, date: target.date || '' });
+      if (target.refresh===true) query.set('refresh','1');
       if (target.rangeStart) query.set('startDate', target.rangeStart);
       if (target.rangeEnd) query.set('endDate', target.rangeEnd);
       const payload = await request('private/' + (target.kind === 'history' ? 'driver-history' : 'customer-detail') + '?' + query);
@@ -138,6 +139,8 @@
       } else {
         dialog.dataset.state = 'ready';
         const data = payload.data || {};
+        if(payload.meta?.cache){const c=payload.meta.cache;const note=node('p',(c.stale?'저장된 이전 확인값':'확인된 저장값')+' · '+new Date(c.checkedAt).toLocaleString('ko-KR')+(c.refreshing?' · 최신 정보 확인 중':''));note.className='staffCacheNotice';note.dataset.stale=String(c.stale);const refresh=node('button','최신 정보 확인');refresh.onclick=()=>{if(id===generation&&!detailPending){requested={...requested,refresh:true};void showRequested(id);}};}
+
         if (data.memoState === 'NEEDS_CONFIRMATION') node('p', '허용 항목을 확실히 구분할 수 없어 원천 확인이 필요합니다.');
         line('출입방법', data.accessInfo); line('비밀번호', data.password); line('배송 특이사항', data.specialRemark); line('배송요일', data.deliveryPattern || '미확인');
       }

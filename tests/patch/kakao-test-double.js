@@ -1,0 +1,30 @@
+// Offline SDK test double. It verifies application camera calls/DOM, NOT real Kakao tiles or provider routing.
+(()=>{
+const listeners=new WeakMap();
+function emit(o,n,v){for(const f of listeners.get(o)?.get(n)||[])f(v);}
+const event={addListener(o,n,f){let all=listeners.get(o);if(!all){all=new Map();listeners.set(o,all);}if(!all.has(n))all.set(n,new Set());all.get(n).add(f);},removeListener(o,n,f){listeners.get(o)?.get(n)?.delete(f);},trigger:emit,preventMap(){}};
+class LatLng{constructor(lat,lng){this.lat=Number(lat);this.lng=Number(lng);}getLat(){return this.lat;}getLng(){return this.lng;}}
+class Point{constructor(x,y){this.x=x;this.y=y;}}
+class Bounds{constructor(sw,ne){this.s=sw?.lat??Infinity;this.w=sw?.lng??Infinity;this.n=ne?.lat??-Infinity;this.e=ne?.lng??-Infinity;}extend(p){this.s=Math.min(this.s,p.lat);this.n=Math.max(this.n,p.lat);this.w=Math.min(this.w,p.lng);this.e=Math.max(this.e,p.lng);}getSouthWest(){return new LatLng(this.s,this.w);}getNorthEast(){return new LatLng(this.n,this.e);}isEmpty(){return !isFinite(this.s);}contain(p){return p.lat>=this.s&&p.lat<=this.n&&p.lng>=this.w&&p.lng<=this.e;}}
+const metrics=window.__sdkCalls={relayout:0,setCenter:0,setBounds:0,setLevel:0,overlays:0,lines:0};
+class MapDouble{
+ constructor(el,{center,level}){this.el=el;this.center=center;this.level=level;this.items=new Set();this.draggable=true;this.idleTimer=null;el.style.background='linear-gradient(135deg,#edf3f6,#dbe9e3)';const note=document.createElement('span');note.textContent='합성 데이터 · 오프라인 SDK 대역';note.style.cssText='position:absolute;bottom:8px;left:12px;font-size:11px;color:#475569;z-index:1';el.append(note);el.addEventListener('wheel',e=>{e.preventDefault();emit(this,'zoom_start');const r=el.getBoundingClientRect(),cursor=new Point(e.clientX-r.left,e.clientY-r.top),before=this.getProjection().coordsFromContainerPoint(cursor);this.level=Math.max(1,Math.min(14,this.level+(e.deltaY>0?1:-1)));const after=this.getProjection().coordsFromContainerPoint(cursor);this.center=new LatLng(this.center.lat+before.lat-after.lat,this.center.lng+before.lng-after.lng);this.changed(true);},{passive:false});}
+ scale(){return Math.pow(2,15-this.level)*500;}
+ getProjection(){const m=this;return {containerPointFromCoords(p){return new Point((p.lng-m.center.lng)*m.scale()+m.el.clientWidth/2,(m.center.lat-p.lat)*m.scale()+m.el.clientHeight/2);},coordsFromContainerPoint(p){return new LatLng(m.center.lat-(p.y-m.el.clientHeight/2)/m.scale(),m.center.lng+(p.x-m.el.clientWidth/2)/m.scale());}};}
+ changed(zoom=false){for(const o of this.items)o.paint?.();emit(this,'center_changed');if(zoom)emit(this,'zoom_changed');clearTimeout(this.idleTimer);this.idleTimer=setTimeout(()=>emit(this,'idle'),5);}
+ getCenter(){return this.center;}setCenter(p){metrics.setCenter++;this.center=p;this.changed();}panTo(p){this.setCenter(p);}
+ getLevel(){return this.level;}setLevel(v){metrics.setLevel++;emit(this,'zoom_start');this.level=v;this.changed(true);}
+ getBounds(){return new Bounds(this.getProjection().coordsFromContainerPoint(new Point(0,this.el.clientHeight)),this.getProjection().coordsFromContainerPoint(new Point(this.el.clientWidth,0)));}
+ setBounds(b,t=0,r=0,bot=0,l=0){if(b.isEmpty())return;metrics.setBounds++;this.center=new LatLng((b.s+b.n)/2,(b.w+b.e)/2);const lng=Math.max(b.e-b.w,.001),lat=Math.max(b.n-b.s,.001),scale=Math.min(Math.max(50,this.el.clientWidth-r-l)/lng,Math.max(50,this.el.clientHeight-t-bot)/lat);this.level=Math.max(1,Math.min(14,Math.ceil(15-Math.log2(scale/500))));this.changed(true);}
+ relayout(){metrics.relayout++;for(const x of this.items)x.paint?.();}getDraggable(){return this.draggable;}setDraggable(v){this.draggable=v;}
+ addControl(){}setZoomable(){}setMinLevel(){}setMaxLevel(){}
+}
+class Overlay{constructor(o){this.position=o.position;this.options=o;this.div=document.createElement('div');this.div.style.cssText='position:absolute;pointer-events:auto;transform:translate(-50%,-100%);';this.div.style.zIndex=String(o.zIndex||1);if(o.content instanceof Node)this.div.append(o.content);else if(o.content)this.div.innerHTML=o.content;if(o.map)this.setMap(o.map);}
+ setMap(m){if(this.map){this.map.items.delete(this);this.div.remove();metrics.overlays--;}this.map=m;if(m){m.items.add(this);m.el.append(this.div);metrics.overlays++;this.paint();}}
+ paint(){if(!this.map)return;const p=this.map.getProjection().containerPointFromCoords(this.position);this.div.style.left=p.x+'px';this.div.style.top=p.y+'px';}
+ setPosition(p){this.position=p;this.paint();}getPosition(){return this.position;}setContent(n){this.div.replaceChildren(n);}setZIndex(n){this.div.style.zIndex=String(n);}
+}
+class Marker extends Overlay{constructor(o){super({...o,content:'📍'});}setDraggable(){}setImage(){}}
+class Polyline{constructor(o){this.options=o;this.path=o.path||[];if(o.map)this.setMap(o.map);}setMap(m){if(this.map){this.map.items.delete(this);this.svg?.remove();metrics.lines--;}this.map=m;if(m){m.items.add(this);this.svg=document.createElementNS('http://www.w3.org/2000/svg','svg');this.svg.style.cssText='position:absolute;inset:0;width:100%;height:100%;pointer-events:none;';this.line=document.createElementNS('http://www.w3.org/2000/svg','polyline');this.line.setAttribute('fill','none');this.line.setAttribute('stroke',this.options.strokeColor||'#2563eb');this.line.setAttribute('stroke-width',this.options.strokeWeight||4);this.svg.append(this.line);m.el.append(this.svg);metrics.lines++;this.paint();}}paint(){if(!this.map)return;const ps=this.path.flat().filter(p=>p?.getLat).map(p=>this.map.getProjection().containerPointFromCoords(p));this.line.setAttribute('points',ps.map(p=>p.x+','+p.y).join(' '));}setPath(p){this.path=p;this.paint();}getLength(){return 1000;}}
+window.kakao={maps:{load:f=>f(),Map:MapDouble,LatLng,LatLngBounds:Bounds,Point,CustomOverlay:Overlay,Marker,Polyline,Polygon:Polyline,Size:Point,MarkerImage:class{},event,services:{Status:{OK:'OK',ZERO_RESULT:'ZERO_RESULT'},Geocoder:class{addressSearch(q,cb){cb([{x:'127',y:'37.5',address_name:q,address:{address_name:q},road_address:{address_name:q}}],'OK');}},Places:class{keywordSearch(q,cb){cb([],'ZERO_RESULT');}}}}};
+})();

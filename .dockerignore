@@ -63,6 +63,11 @@ _daily-routes-inline-check.js
 !public/territory-policy.mjs
 !public/territory-ui.mjs
 !public/verified-coordinate-overlay.mjs
+!public/map-location-contract.mjs
+!public/manual-map-pins.mjs
+!public/manual-map-pins.css
+!public/map-view-policy.js
+!public/map-performance.css
 .git
 **/.git/**
 **/.env*

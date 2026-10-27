@@ -45,7 +45,8 @@
         status: '', order: null, representativeLabel: options.periodComplete===false?'표시 페이지 내 최신 배차 · 전체 기간 미확인':'선택 기간 내 최신 배차', history: row.history }];
     });
   }
-  function cluster(rows, project, level, selectedCode = '', viewport = null) {
+  function cluster(rows, project, level, selectedCode = '', viewport = null, options = {}) {
+    if(root.MapViewPolicy)return root.MapViewPolicy.stableClusters(rows,project,level,selectedCode,viewport,options);
     const points = rows.map(row => ({ row, point: project(row) })).filter(({ row, point }) =>
       row.customerCode === selectedCode || !viewport ||
       (point.x >= -60 && point.y >= -60 && point.x <= viewport.width + 60 && point.y <= viewport.height + 60));
