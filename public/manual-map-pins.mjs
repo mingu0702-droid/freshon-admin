@@ -1,4 +1,4 @@
-import{addressRegion,dispatchCenter,manualPinTargetCodes}from'./map-location-contract.mjs';
+import{addressRegion,dispatchCenter,manualPinTargetCodes}from'./map-location-contract.mjs?v=20261028-r4';
 window.MapLocationContract={addressRegion,dispatchCenter};
 const bridge=window.MapUiLocalBridge;if(!bridge)throw Error('EXISTING_MAP_BRIDGE_REQUIRED');
 let targets=[];

@@ -9,13 +9,13 @@ class Bounds{constructor(sw,ne){this.s=sw?.lat??Infinity;this.w=sw?.lng??Infinit
 const metrics=window.__sdkCalls={relayout:0,setCenter:0,setBounds:0,setLevel:0,overlays:0,lines:0};
 class MapDouble{
  constructor(el,{center,level}){this.el=el;this.center=center;this.level=level;this.items=new Set();this.draggable=true;this.idleTimer=null;el.style.background='linear-gradient(135deg,#edf3f6,#dbe9e3)';const note=document.createElement('span');note.textContent='합성 데이터 · 오프라인 SDK 대역';note.style.cssText='position:absolute;bottom:8px;left:12px;font-size:11px;color:#475569;z-index:1';el.append(note);el.addEventListener('wheel',e=>{e.preventDefault();emit(this,'zoom_start');const r=el.getBoundingClientRect(),cursor=new Point(e.clientX-r.left,e.clientY-r.top),before=this.getProjection().coordsFromContainerPoint(cursor);this.level=Math.max(1,Math.min(14,this.level+(e.deltaY>0?1:-1)));const after=this.getProjection().coordsFromContainerPoint(cursor);this.center=new LatLng(this.center.lat+before.lat-after.lat,this.center.lng+before.lng-after.lng);this.changed(true);},{passive:false});}
- scale(){return Math.pow(2,15-this.level)*500;}
+ scale(){return Math.pow(2,15-this.level)*100;}
  getProjection(){const m=this;return {containerPointFromCoords(p){return new Point((p.lng-m.center.lng)*m.scale()+m.el.clientWidth/2,(m.center.lat-p.lat)*m.scale()+m.el.clientHeight/2);},coordsFromContainerPoint(p){return new LatLng(m.center.lat-(p.y-m.el.clientHeight/2)/m.scale(),m.center.lng+(p.x-m.el.clientWidth/2)/m.scale());}};}
  changed(zoom=false){for(const o of this.items)o.paint?.();emit(this,'center_changed');if(zoom)emit(this,'zoom_changed');clearTimeout(this.idleTimer);this.idleTimer=setTimeout(()=>emit(this,'idle'),5);}
  getCenter(){return this.center;}setCenter(p){metrics.setCenter++;this.center=p;this.changed();}panTo(p){this.setCenter(p);}
  getLevel(){return this.level;}setLevel(v){metrics.setLevel++;emit(this,'zoom_start');this.level=v;this.changed(true);}
  getBounds(){return new Bounds(this.getProjection().coordsFromContainerPoint(new Point(0,this.el.clientHeight)),this.getProjection().coordsFromContainerPoint(new Point(this.el.clientWidth,0)));}
- setBounds(b,t=0,r=0,bot=0,l=0){if(b.isEmpty())return;metrics.setBounds++;this.center=new LatLng((b.s+b.n)/2,(b.w+b.e)/2);const lng=Math.max(b.e-b.w,.001),lat=Math.max(b.n-b.s,.001),scale=Math.min(Math.max(50,this.el.clientWidth-r-l)/lng,Math.max(50,this.el.clientHeight-t-bot)/lat);this.level=Math.max(1,Math.min(14,Math.ceil(15-Math.log2(scale/500))));this.changed(true);}
+ setBounds(b,t=0,r=0,bot=0,l=0){if(b.isEmpty())return;metrics.setBounds++;this.center=new LatLng((b.s+b.n)/2,(b.w+b.e)/2);const lng=Math.max(b.e-b.w,.001),lat=Math.max(b.n-b.s,.001),scale=Math.min(Math.max(50,this.el.clientWidth-r-l)/lng,Math.max(50,this.el.clientHeight-t-bot)/lat);this.level=Math.max(1,Math.min(14,Math.ceil(15-Math.log2(scale/100))));this.changed(true);}
  relayout(){metrics.relayout++;for(const x of this.items)x.paint?.();}getDraggable(){return this.draggable;}setDraggable(v){this.draggable=v;}
  addControl(){}setZoomable(){}setMinLevel(){}setMaxLevel(){}
 }

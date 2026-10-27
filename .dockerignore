@@ -19,6 +19,9 @@ _daily-routes-inline-check.js
 !package-lock.json
 !src/
 !src/**
+!integrations/
+!integrations/hub/
+!integrations/hub/HubCustomerDetailContract.js
 !public/
 !public/assets/
 !public/assets/smartfoodnetworks-logo-official.svg

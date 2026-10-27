@@ -5,11 +5,21 @@ export function addressRegion(address){
  return '주소 권역 미확인';
 }
 export function dispatchCenter(row={}){
- const code=({osan:'011',yeongnam:'012',honam:'013','011':'011','012':'012','013':'013'})[row.baseVehicleGroup||row.dispatchCenterCode];
+ const codes={osan:'011',yeongnam:'012',honam:'013','011':'011','012':'012','013':'013','오산':'011','오산센터':'011','영남':'012','영남센터':'012','호남':'013','호남센터':'013'};
+ const code=codes[row.baseVehicleGroup];
  const sourceVerified=row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'')&&['VERIFIED_MASTER','UNASSIGNED'].includes(row.baseVehicleState);
- if(!sourceVerified||!code)return {code:null,name:'담당 센터 미확인',state:'UNCONFIRMED',label:'담당 센터 미확인'};
- const name=({'011':'오산','012':'영남','013':'호남'})[code],latest=row.baseVehicleStale===false;
- return {code,name,state:latest?'LATEST_VERIFIED':'PREVIOUS_VERIFIED',checkedAt:row.baseVehicleCheckedAt||null,label:code+' '+name+' · '+(latest?'최신 검증값':String(row.baseVehicleCheckedAt||'').slice(0,10)+' 이전 확인값 · 최신 미검증')};
+ if(sourceVerified&&code){
+  const name=({'011':'오산','012':'영남','013':'호남'})[code],latest=row.baseVehicleStale===false;
+  const checked=String(row.baseVehicleCheckedAt||'').slice(0,10);
+  return {code,name,state:latest?'LATEST_VERIFIED':'PREVIOUS_VERIFIED',checkedAt:row.baseVehicleCheckedAt||null,label:name+'센터'+(latest?'':checked?' · '+checked+' 기준':' · 이전 자료')};
+ }
+ // An explicit center field describes the source record, not master freshness.
+ // Never infer dispatch centers from an address or a delivery route's region.
+ for(const value of [row.dispatchCenterCode,row.centerCode,row.center,row.centerName,row.raw?.dispatchCenterCode,row.raw?.center,row.raw?.centerName]){
+  const explicit=codes[String(value||'').trim()];
+  if(explicit){const name=({'011':'오산','012':'영남','013':'호남'})[explicit];return {code:explicit,name,state:'SOURCE_RECORD',label:name+'센터'};}
+ }
+ return {code:null,name:'센터 정보 없음',state:'UNCONFIRMED',label:'센터 정보 없음'};
 }
 
 // Targets come from current rows/manual records, never a fixed historical list.

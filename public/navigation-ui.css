@@ -32,3 +32,36 @@
 
 @media(min-width:901px){.approvedShellCandidate #navigationSummary{position:sticky;top:0;align-self:start}.approvedShellCandidate .navigationWorkspace{align-items:start}}
 
+
+/* Route entry is one consistent set of searchable fields. */
+.approvedShellCandidate .navigationPicker{padding:12px;background:#f5f7fb;border:1px solid #e1e7ee;border-radius:9px;margin:12px 0}
+.approvedShellCandidate .navSelectedHeading{font-size:11px;font-weight:600;color:#6b7889}
+.approvedShellCandidate #navSelectedStore{margin:6px 0 9px;line-height:1.5}
+.approvedShellCandidate #navSelectedStore strong{display:block;font-size:13px;color:#24364b}
+.approvedShellCandidate #navSelectedStore small{display:block;font-size:11px;color:#718097;overflow-wrap:anywhere}
+.approvedShellCandidate .navPickActions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.approvedShellCandidate .navPickActions button{min-width:0;min-height:34px;font-size:12px;padding:7px 5px}
+.approvedShellCandidate #navPointStatus:empty{display:none}
+.approvedShellCandidate #navPointStatus{margin:8px 0 0;line-height:1.5;color:#426185}
+.approvedShellCandidate .navFieldDetail{display:block;margin:5px 0 0 28px;color:#6d7a8c;font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+.approvedShellCandidate .navFieldDetail[hidden]{display:none}
+.approvedShellCandidate .navEditorField input[data-resolved=true]{border-color:#a1bcd7;background:#f9fbfd}
+.approvedShellCandidate .navSearchResults{margin:-1px 0 12px;padding:4px;border:1px solid #b6c9dc;background:white;border-radius:8px;box-shadow:0 5px 14px #213d5d14;max-height:245px;overflow-y:auto;overscroll-behavior:contain}
+.approvedShellCandidate .navSearchResults[hidden]{display:none}
+.approvedShellCandidate .navSearchResults button{display:block;width:100%;text-align:left;margin:0;padding:9px 10px;border:0;border-radius:5px;background:transparent;white-space:normal;line-height:1.4}
+.approvedShellCandidate .navSearchResults button:hover,.approvedShellCandidate .navSearchResults button[aria-selected=true]{background:#edf3fc}
+.approvedShellCandidate .navSearchResults strong{display:block;font-size:12px;font-weight:600;color:#24364b}
+.approvedShellCandidate .navSearchResults small{display:block;font-size:10px;color:#718097;overflow-wrap:anywhere}
+.approvedShellCandidate .navSearchResults p{margin:8px;font-size:12px;color:#718097;line-height:1.5}
+.approvedShellCandidate .navCenterChoices{display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.approvedShellCandidate .navCenterChoices[hidden]{display:none}
+.approvedShellCandidate .navCenterChoices>span{font-size:11px;color:#718097;margin-right:2px}
+.approvedShellCandidate .navCenterChoices button{font-size:11px;padding:5px 8px;min-height:28px;border:1px solid #d6e0e8;background:white}
+.approvedShellCandidate .navRoutePointGroup{display:flex;flex-direction:column;align-items:center;gap:2px;max-width:150px}
+.approvedShellCandidate .navRoutePoint{min-height:31px;max-width:150px;display:flex;align-items:center;gap:6px;border-radius:7px;padding:5px 8px;line-height:1.2;font-size:11px;background:#4b66a4;box-shadow:0 2px 5px #15304a33}
+.approvedShellCandidate .navRoutePoint small{max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:500;color:#fff}
+.approvedShellCandidate .navRoutePoint[data-role=origin]{background:#1e7c63}
+.approvedShellCandidate .navRoutePoint[data-role=destination]{background:#bf514b}
+.approvedShellCandidate #navLegs button{font-size:11px;line-height:1.5;padding:8px 9px}
+.approvedShellCandidate #navMissingStores{font-size:12px;color:#6c7b8e}
+@media(max-width:480px){.approvedShellCandidate .navSearchResults{max-height:210px}.approvedShellCandidate .navPickActions button{min-height:38px}}

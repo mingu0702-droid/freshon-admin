@@ -10,8 +10,9 @@
         const lat = point.lat, lng = point.lng;
         if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng)
           || lat < -90 || lat > 90 || lng < -180 || lng > 180) throw new Error('확인된 위도·경도가 필요합니다.');
-        if (stops.some(stop => stop.lat === lat && stop.lng === lng)) throw new Error('이미 추가한 위치입니다.');
-        stops.push({ id: 'manual-' + ++sequence, label: String(point.label || point.customerName || point.address || '선택 위치'), lat, lng });
+        // Visits are identities, not coordinates. Two shops in one building and
+        // returning to the origin must retain their own position in the route.
+        stops.push({ id: 'manual-' + ++sequence, customerCode: String(point.customerCode || ''), label: String(point.label || point.customerName || point.address || '선택 위치'), lat, lng });
         return copy();
       },
       remove(id) { stops = stops.filter(stop => stop.id !== id); return copy(); },

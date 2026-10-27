@@ -23,6 +23,8 @@ import {createPublishedDayPageReader} from './hybridDayIndex.js';
 import {createRollingHubIo} from './rollingHubIo.js';
 import {createPrivateDetailCache,loadEncryptedPrivateSnapshot} from './privateDetailCache.js';
 import {createRoadRouteService,mountRoadRouteRoutes} from './roadRouteService.js';
+import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
+import {createHubRoadBudget} from './hubRoadBudget.js';
 
 export function mountProductionMapApi(app,{
   previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
@@ -34,6 +36,8 @@ export function mountProductionMapApi(app,{
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
+  const preparedCustomerDetails=createPreparedCustomerDetailReader({callHub});
+  roadRouteBudget??=createHubRoadBudget({callHub});
   const privateCacheEnabled=env.OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED==='1';
   const privateDetails=privateCacheEnabled
     ? createPrivateDetailCache({freshMs:60000,maxStaleMs:Math.min(86400000,Math.max(60000,Number(env.OPSMAP_PRIVATE_DETAIL_MAX_AGE_MS)||3600000)),maxEntries:512})
@@ -131,7 +135,8 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
   if (!detailDate || detailDate > phase2bKstDate()) return res.status(400).json({ error: "INVALID_DATE" });
   try {
     await privateSnapshotReady;
-    const result=await privateDetails.get({customerCode,date:detailDate,view:storeView?'store':'notes'},{preferFresh:req.query.refresh==='1',loader:async()=>{
+    const detailIdentity={customerCode,date:detailDate,view:storeView?'store':'notes'};
+    const legacyLoader=()=>privateDetails.get(detailIdentity,{preferFresh:req.query.refresh==='1',loader:async()=>{
       const upstreamStarted=performance.now();
       let hub;
       try{hub=await callHub(storeView?'customerDetail':'staffCustomerDetail',{customerCode,date:detailDate},{useCache:false,privateRead:true,...(storeView?{maxResponseBytes:65536,deadline:Date.now()+15000}:{})});}
@@ -140,6 +145,7 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
       const detail=(storeView?staffStoreDetail:staffCustomerDetail)(hub.data,{customerCode,date:detailDate});
       return {value:detail,sourceVersion:hub.meta?.version||hub.meta?.sourceVersion||null};
     }});
+    const result=await preparedCustomerDetails.read(detailIdentity,{legacyLoader,refresh:req.query.refresh==='1'});
     // Even a cache HIT must recheck the employee session. Plaintext is never
     // sent to public snapshots, browser persistent storage, or response caches.
     return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:result.value,meta:{cache:result.meta},error:null}));

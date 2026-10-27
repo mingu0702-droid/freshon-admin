@@ -33,7 +33,7 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
   const key=()=>String(env.KAKAO_MOBILITY_REST_API_KEY||env.KAKAO_REST_API_KEY||'').trim();
   const ttl=Math.min(300000,Math.max(0,Number(env.OPSMAP_ROAD_ROUTE_CACHE_MS)||60000));
   const remove=k=>{const row=cache.get(k);if(row)bytes-=row.bytes;cache.delete(k);};
-  function configuration(){return {enabled:configured(),keyConfigured:!!key()&&!/REDACTED|PLACEHOLDER|YOUR_|<|>/i.test(key()),maxWaypoints:30,requestLimit:limit,used,remaining:Math.max(0,limit-used),budgetScope:budget?'EXTERNAL_APPROVED_BUDGET':'PROCESS_SAFETY_LIMIT_NOT_ACCOUNT_QUOTA'};}
+  function configuration(){return {enabled:configured(),keyConfigured:!!key()&&!/REDACTED|PLACEHOLDER|YOUR_|<|>/i.test(key()),maxWaypoints:30,requestLimit:limit,used,remaining:Math.max(0,limit-used),durableBudgetRequired:requireDurableBudget,persistentBudgetConfigured:!!budget&&budget.durable===true&&typeof budget.reserve==='function',budgetScope:budget?'EXTERNAL_APPROVED_BUDGET':'PROCESS_SAFETY_LIMIT_NOT_ACCOUNT_QUOTA'};}
   async function load(clean,plan){
     if(active>=3)throw error('PROVIDER_UNAVAILABLE',503);
     if(used>=limit)throw error('QUOTA_EXCEEDED',429);
@@ -53,11 +53,14 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
     finally{clearTimeout(timer);active--;}
   }
   async function route(input){
+    let clean,plan;try{clean=validRoadRouteRequest(input);plan=adapter.plan(clean);}catch(e){throw error(e.code||'INVALID_MANUAL_ROUTE',400);}
+    if(plan.zeroDistance)return {ok:true,data:{...adapter.fromProvider(null,clean),calculatedAt:new Date(now()).toISOString()},meta:{cache:'NOT_NEEDED',...configuration()}};
     if(!configured())throw error('FEATURE_DISABLED',503);
     if(!configuration().keyConfigured)throw error('KEY_MISSING',503);
+    // Preserve the deployed Stage call-authorization boundary. A process-only
+    // counter cannot stand in for the caller's durable, approved API budget.
     if(requireDurableBudget&&(!budget||budget.durable!==true||typeof budget.reserve!=='function'))throw error('PERSISTENT_BUDGET_REQUIRED',503);
-    let clean,plan;try{clean=validRoadRouteRequest(input);plan=adapter.plan(clean);}catch(e){throw error(e.code||'INVALID_MANUAL_ROUTE',400);}
-    const id=createHash('sha256').update(JSON.stringify(plan)).digest('hex');
+    const id=createHash('sha256').update(JSON.stringify({plan,stationaryLegs:adapter.routePlan(clean).stationaryLegs})).digest('hex');
     for(const[k,v]of cache)if(v.until<=now())remove(k);
     const saved=cache.get(id);
     if(saved)return {ok:true,data:{...structuredClone(saved.value),requestId:clean.requestId},meta:{cache:'HIT',...configuration()}};
@@ -95,7 +98,7 @@ export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=proc
       return requireStaff(req,res,()=>res.json(result));
     }catch(e){return requireStaff(req,res,()=>res.status(e.status||502).json({ok:false,error:e.code||'ROAD_ROUTE_FAILED'}));}
   };
-  app.get('/api/map-phase2b/private/road-route/config',requireStaff,(_q,r)=>r.set('Cache-Control','private, no-store').json({ok:true,data:service.configuration()}));
+  app.get('/api/map-phase2b/private/road-route/config',requireStaff,(_q,r)=>r.set('Cache-Control','private, no-store').json({ok:true,data:{...service.configuration(),recordedRouteConfigured:typeof readRecordedRoute==='function'}}));
   app.post('/api/map-phase2b/private/manual-road-route',requireStaff,sameOrigin,jsonBody,(q,r)=>respond(q,r,false));
   app.post('/api/map-phase2b/private/road-route',requireStaff,sameOrigin,jsonBody,(q,r)=>respond(q,r,true));
 }

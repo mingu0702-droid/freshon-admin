@@ -1,28 +1,34 @@
 (() => {
   'use strict';
-  let generation = 0, controller = null, authController = null, expiryTimer = null, requested = null, sessionHint = null, detailPending = false;
+  let generation = 0, controller = null, authController = null, expiryTimer = null, requested = null, sessionHint = null, detailPending = false, refreshTimer = null, inlineHost = null, inlineTrigger = null;
   const metrics = [];
   const trace = document.createElement('output'); trace.id = 'staffRequestMetrics'; trace.hidden = true; document.body.append(trace);
   const dialog = document.createElement('dialog');
+  let surface=dialog;
   dialog.id = 'mapStaffDialog';
   dialog.setAttribute('aria-label', '직원용 보호 상세');
   document.body.append(dialog);
   const loadingStyle = document.createElement('style');
-  loadingStyle.textContent = '#mapStaffDialog .staffLoadingSpinner{display:inline-block;width:1em;height:1em;margin-right:.5em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:middle;animation:staffLoadingSpin .8s linear infinite}@keyframes staffLoadingSpin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){#mapStaffDialog .staffLoadingSpinner{animation:none}}';
+  loadingStyle.textContent = '.staffLoadingSpinner{display:inline-block;width:1em;height:1em;margin-right:.5em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:middle;animation:staffLoadingSpin .8s linear infinite}@keyframes staffLoadingSpin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.staffLoadingSpinner{animation:none}}';
   document.head.append(loadingStyle);
   const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('map-staff-session') : null;
   function clear() {
     generation++; controller?.abort(); authController?.abort(); controller = null; clearTimeout(expiryTimer);
+    clearTimeout(refreshTimer);refreshTimer=null;
+    if(inlineHost){inlineHost.replaceChildren();inlineHost.hidden=true;}
+    if(inlineTrigger)inlineTrigger.setAttribute('aria-expanded','false');
+    inlineHost=null;inlineTrigger=null;surface=dialog;
     requested = null; detailPending = false; dialog.replaceChildren(); if (dialog.open) dialog.close();
   }
-  function node(tag, text, parent = dialog) { const item = document.createElement(tag); item.textContent = text; parent.append(item); return item; }
+  function node(tag, text, parent = surface) { const item = document.createElement(tag); item.textContent = text; parent.append(item); return item; }
   function shell(title, modal = false) {
-    if (dialog.open) dialog.close();
-    dialog.replaceChildren();
-    dialog.dataset.modal = String(modal);
-    node('h2', title);
-    const close = node('button', '닫기'); close.type = 'button'; close.addEventListener('click', clear);
-    if (modal) dialog.showModal(); else dialog.show();
+    if(dialog.open)dialog.close();dialog.replaceChildren();
+    surface=!modal&&inlineHost?.isConnected?inlineHost:dialog;
+    surface.replaceChildren();surface.dataset.modal=String(modal);
+    if(surface!==dialog){surface.hidden=false;surface.classList.add('staffAuxCard');inlineTrigger?.setAttribute('aria-expanded','true');}
+    node('h2',title);
+    const close=node('button','접기');close.type='button';close.addEventListener('click',clear);
+    if(surface===dialog){if(modal)dialog.showModal();else dialog.show();}
   }
   async function request(path, options = {}) {
     const isDetail = path.startsWith('private/'), isLogout = path === 'auth/logout', local = new AbortController();
@@ -90,13 +96,13 @@
     });
     account.focus();
   }
-  function line(label, value) { const dl = node('div', ''); dl.className = 'staffDetailLine'; node('b', label, dl); node('span', value || '원천 미등록', dl); }
+  function line(label, value, state) { const dl=node('div','');dl.className='staffDetailLine';node('b',label,dl);const blank=state==='CLEARED'?'삭제 확인':state==='DELETED'?'삭제된 정보':state==='CONFLICT'?'변경값 확인 필요':state==='UNOBSERVED'?'확인된 자료 없음':'미등록';node('span',value===true?'있음':value===false?'없음':value||blank,dl); }
   async function showRequested(id) {
     const target = requested;
     if (!target || id !== generation) return;
     detailPending = true;
     shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
-    dialog.dataset.state = 'loading';
+    surface.dataset.state = 'loading';
     const loading = node('p', ''); loading.setAttribute('role', 'status'); loading.setAttribute('aria-live', 'polite');
     const spinner = node('span', '', loading); spinner.className = 'staffLoadingSpinner'; spinner.setAttribute('aria-hidden', 'true');
     node('span', '상세정보 불러오는 중...', loading);
@@ -109,23 +115,23 @@
       if (target.rangeStart) query.set('startDate', target.rangeStart);
       if (target.rangeEnd) query.set('endDate', target.rangeEnd);
       const payload = await request('private/' + (target.kind === 'history' ? 'driver-history' : 'customer-detail') + '?' + query);
-      if (id !== generation) return;
+      if (id !== generation || (inlineHost && !inlineHost.isConnected)) return;
       // Server validates the session again after the upstream read.
       shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
       node('button', '로그아웃').onclick = logout;
       if (target.kind === 'history') {
         if (payload.meta?.complete === false) {
-          dialog.dataset.state = 'not-ready';
+          surface.dataset.state = 'not-ready';
           node('p', '기사 이력이 아직 준비되지 않았습니다. 기사 없음으로 판단하지 마세요.');
           return;
         }
         const rows = Array.isArray(payload.data) ? payload.data : [];
-        dialog.dataset.state = rows.length ? 'ready' : payload.meta?.coverageComplete === true ? 'empty' : 'not-ready';
+        surface.dataset.state = rows.length ? 'ready' : payload.meta?.coverageComplete === true ? 'empty' : 'not-ready';
         if (!payload.meta?.coverageComplete) {
-          node('p', 'Delivery 기사정보 확인 중 · 전체 기간 수집 완전성 미확인');
-          line('원천', payload.meta?.source || '미확인');
-          line('기록 확인일', (payload.meta?.availableRecordDates || []).join(', ') || '없음');
-          line('완전성 미확인일', (payload.meta?.unconfirmedDates || []).join(', ') || '미확인');
+          node('p','전체 수집 완전성은 별도 미검증입니다.');
+          const details=node('details','');node('summary','검증 상태 상세',details);
+          node('p','기록 확인일: '+((payload.meta?.availableRecordDates||[]).join(', ')||'확인된 날짜 없음'),details);
+          node('p','검증 미확인일: '+((payload.meta?.unconfirmedDates||[]).join(', ')||'확인 필요'),details);
         }
         if (!rows.length) node('p', payload.meta?.coverageComplete === true ? '선택 기간의 기사 이력이 없습니다.' : 'Delivery 기사정보 미확인 · 원천 완전성 확인 중 (기사 없음 아님)');
         rows.forEach(row => {
@@ -136,39 +142,52 @@
           node('span', [row.driverName || '기사 미등록', row.driverPhone || '연락처 미등록'].join(' · '), entry);
         });
       } else {
-        dialog.dataset.state = 'ready';
+        surface.dataset.state = 'ready';
         const data = payload.data || {};
-        if(payload.meta?.cache){const c=payload.meta.cache;const note=node('p',(c.stale?'저장된 이전 확인값':'확인된 저장값')+' · '+new Date(c.checkedAt).toLocaleString('ko-KR')+(c.refreshing?' · 최신 정보 확인 중':''));note.className='staffCacheNotice';note.dataset.stale=String(c.stale);const refresh=node('button','최신 정보 확인');refresh.onclick=()=>{if(id===generation&&!detailPending){requested={...requested,refresh:true};void showRequested(id);}};}
+        const c=payload.meta?.cache||{};
+        const checked=typeof c.checkedAt==='string'&&Number.isFinite(Date.parse(c.checkedAt))?new Date(c.checkedAt).toLocaleString('ko-KR'):null;
+        const note=node('p',(c.stale?'저장된 이전 확인값':'저장된 정보')+(checked?' · '+checked:' · 확인시각 없음')+(c.currentness==='SOURCE_CHANGED'?' · 원천 변경 반영 대기':''));
+        note.className='staffCacheNotice';note.dataset.stale=String(c.stale!==false);
+        const refresh=node('button','최신 정보 확인');refresh.type='button';refresh.onclick=()=>{if(id===generation&&!detailPending){requested={...requested,refresh:true};void showRequested(id);}};
+        if(data.memoState==='NEEDS_CONFIRMATION')node('p','구분되지 않거나 충돌한 항목은 확인이 필요합니다.');
+        if(data.memoState==='DELETED')node('p','원천에서 삭제가 확인된 정보입니다.');
+        const fields=data.fieldState||{};
+        line('출입방법',data.accessInfo,fields.accessInfo);line('비밀번호',data.password,fields.password);
+        line('보안키',data.securityKey,fields.securityKey||'UNOBSERVED');line('일반 키',data.generalKey,fields.generalKey||'UNOBSERVED');
+        line('배송 특이사항',data.specialRemark,fields.specialRemark);line('배송요일',data.deliveryPattern,fields.deliveryPattern||'UNOBSERVED');
+        clearTimeout(refreshTimer);
+        refreshTimer=setTimeout(()=>{if(id===generation&&requested&&!document.hidden&&!detailPending){requested={...requested,refresh:true};void showRequested(id);}},60000);
 
-        if (data.memoState === 'NEEDS_CONFIRMATION') node('p', '허용 항목을 확실히 구분할 수 없어 원천 확인이 필요합니다.');
-        line('출입방법', data.accessInfo); line('비밀번호', data.password); line('배송 특이사항', data.specialRemark); line('배송요일', data.deliveryPattern || '미확인');
       }
     } catch (error) {
       if (error.name === 'AbortError' || id !== generation) return;
       if (error.status === 401) {
         sessionHint = null;
         if (!window.MapStaffEntry?.session()?.authenticated) { void window.MapStaffEntry?.expire(); return; }
-        shell('원천 인증 확인 필요'); dialog.dataset.state = 'source-auth';
+        shell('원천 인증 확인 필요'); surface.dataset.state = 'source-auth';
         node('p', '직원 로그인은 유지 중입니다. 선택 매장의 원천 조회 권한 또는 원천 인증을 확인해야 합니다.');
         node('button', '다시 확인').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
         return;
       }
       if (error.notReady) {
-        shell('기사 이력 준비 중'); dialog.dataset.state = 'not-ready';
+        shell('기사 이력 준비 중'); surface.dataset.state = 'not-ready';
         node('p', '기사 이력이 아직 준비되지 않았습니다. 기사 없음으로 판단하지 마세요. 공개 고객정보와 지도는 계속 사용할 수 있습니다.');
         node('button', '다시 확인').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
         return;
       }
       shell(target.kind === 'history' ? '기사 이력 조회 실패' : '보호 상세 조회 실패'); node('p', error.sourceChanged ? '조회 중 원천 데이터가 변경되었습니다. 다시 시도해 주세요.' : error.status === 504 ? '원천 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.' : error.status === 422 ? '원천 데이터 확인이 필요합니다.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
-      dialog.dataset.state = 'error';
+      surface.dataset.state = 'error';
       node('p', '공개 고객정보와 지도는 계속 사용할 수 있습니다.');
       node('button', '다시 시도').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
     } finally { clearTimeout(delayNotice); if (id === generation) detailPending = false; }
   }
-  async function open(target) {
-    if (detailPending && JSON.stringify(requested) === JSON.stringify(target)) return;
-    clear(); requested = { ...target }; const id = generation;
-    if (sessionHint?.authenticated && Date.now() < Math.min(sessionHint.expiresAt, sessionHint.idleExpiresAt)) { void showRequested(id); return; }
+  async function open(target, host=null, trigger=null) {
+    if(host&&host===inlineHost&&trigger===inlineTrigger&&requested?.kind===target.kind&&requested?.customerCode===target.customerCode){clear();return;}
+    if(detailPending&&!host&&JSON.stringify(requested)===JSON.stringify(target))return;
+    clear();inlineHost=host?.isConnected?host:null;inlineTrigger=trigger||null;
+    if(inlineHost){inlineHost.hidden=false;inlineTrigger?.setAttribute('aria-expanded','true');}
+    requested={...target};const id=generation;
+    if (sessionHint?.authenticated && Date.now() < Math.min(sessionHint.expiresAt, sessionHint.idleExpiresAt)) { deadline(sessionHint); void showRequested(id); return; }
     if(window.MapStaffEntry){
       const session=await window.MapStaffEntry.check();
       if(id!==generation||!session?.authenticated)return;
@@ -184,7 +203,10 @@
   channel?.addEventListener('message', event => { if (event.data === 'logout') { sessionHint = null; clear(); } });
   dialog.addEventListener('cancel', clear);
   window.addEventListener('pagehide', clear);
+  window.addEventListener('map-staff-signed-out',()=>{sessionHint=null;clear();});
+  window.addEventListener('map-staff-session',event=>{if(event.detail?.authenticated===false){sessionHint=null;clear();}});
   document.addEventListener('visibilitychange', () => { if (document.hidden) clear(); });
+  const hostWatcher=new MutationObserver(()=>{if(inlineHost&&!inlineHost.isConnected)clear();});hostWatcher.observe(document.body,{childList:true,subtree:true});
   window.MapStaff = Object.freeze({ open, clear, logout });
 })();
 

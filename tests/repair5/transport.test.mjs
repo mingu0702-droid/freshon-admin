@@ -1,0 +1,10 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+const original=globalThis.fetch;process.env.HUB_API_URL='https://script.google.com/macros/s/SYNTHETIC_ONLY/exec';process.env.HUB_API_SECRET='synthetic-unit-test-secret-not-real';
+const {callHub}=await import('../../src/phase2bHubReadClient.js');
+const response=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
+test.after(()=>globalThis.fetch=original);
+test('prepared read never joins public cache and checks signed request/customer identity',async()=>{let n=0;globalThis.fetch=async(_url,opt)=>{n++;assert.equal(opt.redirect,'manual');const request=JSON.parse(opt.body);return response({ok:true,data:{customerCode:request.params.customerCode,password:'SYNTHETIC'},meta:{requestId:request.requestId}});};for(let i=0;i<2;i++)await callHub('customerDetailPrepared',{customerCode:'S1000'});assert.equal(n,2);});
+test('prepared read rejects cross-customer or stale request envelopes',async()=>{globalThis.fetch=async()=>response({ok:true,data:{customerCode:'S2000'},meta:{requestId:'old'}});await assert.rejects(callHub('customerDetailPrepared',{customerCode:'S1000'}),/INVALID_DETAIL_CONTRACT/);});
+test('budget reservation transport makes exactly one attempt on upstream failure',async()=>{let n=0;globalThis.fetch=async()=>{n++;return response({ok:false,error:{code:'INTERNAL'},meta:{httpStatus:503}},503);};await assert.rejects(callHub('mapRoadBudgetReserve',{reservationId:'fixture-reservation',cost:1,provider:'kakao-directions'}));assert.equal(n,1);});
+test('prepared sync request is not retried after lost response',async()=>{let n=0;globalThis.fetch=async()=>{n++;throw Error('network');};await assert.rejects(callHub('customerDetailsSyncRequest',{}));assert.equal(n,1);});
+test('protected request never forwards signed body to an untrusted redirect',async()=>{let n=0;globalThis.fetch=async()=>{n++;return new Response('',{status:302,headers:{location:'https://untrusted.invalid/'}});};await assert.rejects(callHub('customerDetailPrepared',{customerCode:'S1000'}),/REDIRECT_REJECTED/);assert.equal(n,1);});

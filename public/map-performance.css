@@ -1,22 +1,138 @@
-/* Clear role/territory labels, fixed card order, and GPU-friendly marker states. */
-#detail .detailHead{display:flex!important;flex-direction:column!important;align-items:stretch;gap:7px;padding-right:40px;position:relative}
-#detail .detailHead>.code{order:0!important;color:#334155;font-weight:700;font-size:15px;line-height:1.45;margin:0}
-#detail .detailHead>.storeName{order:1!important;font-size:17px;line-height:1.45;font-weight:700;margin:0;overflow-wrap:anywhere}
-#detail .detailHead>.detailClose{position:absolute;right:0;top:0}
-.dotDetailFacts dd{min-width:0;overflow-wrap:anywhere}
-.marker.periodCluster .clusterpin{width:auto!important;min-width:66px;max-width:132px;height:auto!important;min-height:45px;display:flex;flex-direction:column;gap:2px;align-items:center;justify-content:center;padding:7px 10px;border-radius:12px!important;border:2px solid #fff;box-shadow:0 2px 7px #0f172a30;background:var(--pin,#2563eb)!important;color:white;transform:none!important}
-.marker.periodCluster .clusterpin b{font-size:13px;line-height:1.2;white-space:nowrap}
-.marker.periodCluster .clusterpin small{font-size:11px;line-height:1.25;white-space:nowrap;opacity:.95}
-.marker.periodCluster .clusterpin:before,.marker.periodCluster .clusterpin:after{display:none!important}
-.marker.periodCluster{contain:layout style}
-.marker.navAssigned{visibility:hidden!important;pointer-events:none!important}
-.navRoutePoint{min-width:58px;padding:8px 11px;border-radius:10px;border:2px solid white;background:#1d4ed8;color:white;font-weight:800;box-shadow:0 2px 6px #0f172a40;white-space:pre-line;line-height:1.25}
-.navRoutePoint[data-role="origin"]{background:#047857}
-.navRoutePoint[data-role="destination"]{background:#b91c1c}
-.navRoutePoint[data-role="waypoint"]{background:#1d4ed8}
-.navRoutePoint small{display:block;font-size:10px;font-weight:500;max-width:135px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.detailSourceState{margin:8px 0;font-size:12px;color:#64748b}
-.staffCacheNotice{padding:8px 10px;background:#f1f5f9;border-radius:8px;font-size:12px;line-height:1.5}
-.staffCacheNotice[data-stale="true"]{background:#fff7ed;color:#9a3412}
-#mapStaffDialog{max-width:min(430px,calc(100vw - 24px))}
-@media(max-width:760px){#detail .detailHead>.code,#detail .detailHead>.storeName{font-size:15px}.navRoutePoint{padding:7px 9px}.marker.periodCluster .clusterpin{min-width:58px;padding:6px 8px}}
+/* Final presentation layer. Keep this sheet enabled after the approved B shell. */
+.approvedShellCandidate { --ink:#243247; --line:#e4e9f0; --blue:#275dd8; color:var(--ink); }
+.approvedShellCandidate button { font-weight:550; }
+.approvedShellCandidate button:disabled { cursor:not-allowed; opacity:.5; }
+.approvedShellCandidate .scrollside { scrollbar-width:thin; scrollbar-color:#cbd3df transparent; }
+.approvedShellCandidate #approvedSiteHeader { box-shadow:0 1px 5px #182b4306; }
+.approvedShellCandidate #approvedSiteHeader .tab { font-weight:650; }
+.approvedShellCandidate .sidehead { gap:8px; padding-top:18px; padding-bottom:16px; }
+.approvedShellCandidate .sidehead .eyebrow { font-size:11px; letter-spacing:0; color:#6f7f93; }
+.approvedShellCandidate .sidehead h1 { margin-top:4px; font-size:19px; letter-spacing:-.4px; }
+.approvedShellCandidate .sourceCount { border:0; font-size:11px; min-width:52px; padding:5px 8px; }
+.approvedShellCandidate .sourceSearchLabel { font-size:13px; color:#35455d; }
+.approvedShellCandidate #query { height:38px; font-size:13px; }
+.approvedShellCandidate .customerBlock .row { align-items:stretch; }
+.approvedShellCandidate .customerBlock .row button { min-width:48px; }
+.approvedShellCandidate .sectiontitle h2 { font-size:13px; font-weight:650; }
+.approvedShellCandidate .centers { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:5px; }
+.approvedShellCandidate .centers button { padding:7px 4px; font-size:12px; text-align:center; }
+.approvedShellCandidate #sourceCenterReset { display:none; }
+.approvedShellCandidate #baseVehiclePicker { padding-top:11px; }
+.approvedShellCandidate #baseVehiclePicker>summary { display:flex; justify-content:space-between; align-items:center; padding:6px 0; font-size:12px; color:#526279; }
+.approvedShellCandidate #baseVehiclePicker>summary::after { content:'⌄'; margin-left:6px; }
+.approvedShellCandidate #baseVehiclePicker[open]>summary::after { content:'⌃'; }
+.approvedShellCandidate #baseVehicleCount { margin-left:auto; color:#275dd8; font-size:11px; font-weight:500; }
+.approvedShellCandidate #baseVehiclePicker>#vehicleList { gap:5px; padding:8px 0; }
+.approvedShellCandidate #baseVehiclePicker .vehicleItem { padding:5px 6px; border:1px solid #e3e9f1; border-radius:6px; background:#fff; font-size:12px; }
+.approvedShellCandidate #baseVehiclePicker .vehicleItem:has(input:checked) { background:#eef4ff; border-color:#aabfe8; color:#1d4fae; }
+.approvedShellCandidate #baseVehiclePicker .vehicleItem input { margin:0; }
+.approvedShellCandidate #baseVehiclePicker #selectAllVehicles,.approvedShellCandidate #baseVehiclePicker #clearVehicles { font-size:11px; padding:5px 8px; margin:3px 4px 3px 0; }
+.approvedShellCandidate #periodStoreList { display:grid; gap:1px; }
+.approvedShellCandidate .storeitem { gap:8px; align-items:flex-start; padding:11px 6px; border-radius:7px; border-bottom:1px solid #f0f3f7; }
+.approvedShellCandidate .storeitem .icon { width:25px; height:25px; min-width:25px; font-size:12px; border-radius:7px; color:#526f9b; background:#f6f8fb; }
+.approvedShellCandidate .storeitem .itemtxt b { line-height:1.4; font-size:13px; font-weight:600; }
+.approvedShellCandidate .storeitem .itemtxt small { display:block; margin-top:4px; font-size:10.5px; color:#718096; line-height:1.45; }
+.approvedShellCandidate .storeitem .itemtxt .storeAddress { color:#8390a2; font-size:10.5px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.approvedShellCandidate .storeitem .vehicleColorBadge { font-weight:550; }
+.approvedShellCandidate .storeitem .status { padding-top:3px; font-size:10px; white-space:nowrap; }
+.approvedShellCandidate .storeitem.selected { background:#eef4ff; box-shadow:inset 3px 0 #3b6ed8; }
+.approvedShellCandidate #loadMore { font-size:12px; padding:8px; }
+.approvedShellCandidate .sourceItinerary .runFilters { margin-bottom:8px; }
+.approvedShellCandidate .sidefoot { box-shadow:0 -2px 8px #172b4304; }
+.approvedShellCandidate #dotDataStatus { color:#718096; line-height:1.5; }
+.approvedShellCandidate #dotDataStatus:empty { display:none; }
+.approvedShellCandidate #sourceBatch { min-height:36px; font-size:12px; margin-top:7px; }
+.approvedShellCandidate #sourceFooterLinks { gap:4px; }
+.approvedShellCandidate #sourceFooterLinks>button { padding:7px 4px; }
+
+/* Selected store: natural content height; the customer code always precedes its name. */
+.approvedShellCandidate.dotRestored #detailSection {
+  top:66px!important; right:16px!important; bottom:auto!important; width:348px!important;
+  max-width:calc(100% - 32px); max-height:calc(100% - 84px)!important;
+  border:1px solid #dce4ee; border-radius:12px; box-shadow:0 8px 28px #18354b1c;
+}
+.approvedShellCandidate.dotRestored .detailCard { padding:17px; border:0; border-radius:0; }
+#detail .detailHead { display:flex!important; flex-direction:column!important; align-items:stretch; gap:4px; padding:0 37px 14px 0; position:relative; }
+#detail .detailHead>.code { order:0!important; color:#566b89; font-weight:600; font-size:12px; line-height:1.45; margin:0; }
+#detail .detailHead>.storeName { order:1!important; color:#202f44; font-size:18px; line-height:1.45; font-weight:700; margin:0; overflow-wrap:anywhere; }
+#detail .detailHead>.detailClose { position:absolute; right:0; top:0; width:28px; height:28px; font-size:20px; color:#78879a; border:0; background:#f3f6fa; }
+.approvedShellCandidate.dotRestored .dotDetailFacts { grid-template-columns:72px minmax(0,1fr); gap:10px 10px; padding:14px 0; font-size:12px; line-height:1.6; }
+.approvedShellCandidate.dotRestored .dotDetailFacts dt { color:#7b889b; }
+.approvedShellCandidate.dotRestored .dotDetailFacts dd { min-width:0; color:#34465e; overflow-wrap:anywhere; }
+.approvedShellCandidate.dotRestored .detailBody { font-size:12px; }
+.approvedShellCandidate.dotRestored .detailLine { padding:11px 0; font-size:12px; }
+.approvedShellCandidate.dotRestored .periodRecent { font-size:11px; padding:10px 0; }
+.approvedShellCandidate.dotRestored .staffActions { display:flex; flex-direction:row; flex-wrap:wrap; gap:6px; margin:12px 0 0; }
+.approvedShellCandidate.dotRestored .staffActions button { flex:1 1 calc(50% - 6px); min-width:0; min-height:35px; padding:8px 9px; font-size:11px; line-height:1.4; text-align:center; }
+.approvedShellCandidate.dotRestored .staffActions #staffAuxContent { flex-basis:100%; }
+.approvedShellCandidate.dotRestored #staffAuxContent { padding:12px; margin:0 17px 17px; border-radius:8px; background:#fafbfd; font-size:12px; }
+.approvedShellCandidate .staffDetailLine { grid-template-columns:77px minmax(0,1fr); gap:8px; padding:10px 0; font-size:12px; }
+.approvedShellCandidate .detailSourceState { margin:8px 0; font-size:11px; color:#718096; line-height:1.5; }
+.approvedShellCandidate .staffCacheNotice { padding:8px 10px; background:#f1f5f9; border-radius:7px; font-size:11px; line-height:1.5; }
+.approvedShellCandidate .staffCacheNotice[data-stale="true"] { background:#fff7ed; color:#995224; }
+
+/* Map groups stay legible without obscuring surrounding roads. */
+.approvedShellCandidate .marker.approvedMarker { width:30px; height:33px; min-width:0; }
+.approvedShellCandidate .marker.approvedMarker .pin { width:30px; height:30px; border-width:2px; box-shadow:0 1px 4px #152a4540; }
+.approvedShellCandidate .marker.approvedMarker .pin>span { font-size:10px; letter-spacing:-.2px; }
+.approvedShellCandidate .marker.approvedMarker.selected .pin { width:34px; height:34px; outline:4px solid #2c64da26; }
+.approvedShellCandidate .marker.periodCluster { width:max-content!important; height:auto!important; min-width:0; contain:layout style; }
+.approvedShellCandidate .marker.periodCluster .clusterpin {
+  width:auto!important; min-width:44px; max-width:128px; height:auto!important; min-height:32px;
+  display:flex; flex-direction:column; gap:1px; align-items:center; justify-content:center;
+  padding:5px 8px; border-radius:8px!important; border:1.5px solid var(--pin,#667a95);
+  box-shadow:0 1px 5px #0f172a24; background:#fffffff5!important; color:var(--pin,#315888); transform:none!important;
+}
+.approvedShellCandidate .marker.periodCluster .clusterpin b { font-size:11px; line-height:1.2; font-weight:700; white-space:nowrap; }
+.approvedShellCandidate .marker.periodCluster .clusterpin small { font-size:9px; line-height:1.2; white-space:nowrap; color:#67788f; }
+.approvedShellCandidate .marker.periodCluster .clusterpin:before,.approvedShellCandidate .marker.periodCluster .clusterpin:after { display:none!important; }
+.approvedShellCandidate .marker.periodCluster:hover .clusterpin { box-shadow:0 2px 8px #1c3d6e40; background:#f7faff!important; }
+.approvedShellCandidate .marker.navAssigned { visibility:hidden!important; pointer-events:none!important; }
+.approvedShellCandidate .navRoutePoint { min-width:42px; padding:6px 8px; border-radius:8px; border:2px solid white; background:#275dd8; color:white; font-size:11px; font-weight:700; box-shadow:0 2px 6px #0f172a30; white-space:pre-line; line-height:1.25; }
+.approvedShellCandidate .navRoutePoint[data-role="origin"] { background:#138364; }
+.approvedShellCandidate .navRoutePoint[data-role="destination"] { background:#c44146; }
+.approvedShellCandidate .navRoutePoint[data-role="waypoint"] { background:#275dd8; }
+.approvedShellCandidate .navRoutePoint small { display:block; margin-top:2px; font-size:9px; font-weight:500; max-width:108px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* A clicked group exposes every store, including shops at the same coordinates. */
+.approvedShellCandidate .mapClusterPanel { position:absolute; z-index:440; left:16px; top:66px; width:290px; max-width:calc(100% - 32px); max-height:calc(100% - 84px); overflow:auto; overscroll-behavior:contain; border:1px solid #dce4ee; border-radius:12px; padding:14px; background:#fff; box-shadow:0 8px 28px #18354b1c; }
+.approvedShellCandidate .mapClusterPanel[hidden] { display:none!important; }
+.approvedShellCandidate .clusterPanelHeading { display:flex; justify-content:space-between; align-items:center; gap:10px; padding-bottom:10px; border-bottom:1px solid var(--line); }
+.approvedShellCandidate .clusterPanelHeading h3 { margin:0; font-size:14px; font-weight:650; }
+.approvedShellCandidate .clusterPanelHeading button { width:28px; height:28px; padding:0; font-size:20px; border:0; color:#78879a; background:#f3f6fa; }
+.approvedShellCandidate .clusterPanelActions { display:flex; flex-wrap:wrap; gap:6px; padding:10px 0; }
+.approvedShellCandidate .clusterPanelActions button { flex:1; font-size:11px; padding:7px 9px; }
+.approvedShellCandidate .clusterMemberList { display:grid; gap:2px; }
+.approvedShellCandidate .clusterMemberList button { display:flex; flex-direction:column; align-items:flex-start; gap:3px; padding:10px 8px; border:0; border-bottom:1px solid #eef2f7; border-radius:5px; text-align:left; white-space:normal; }
+.approvedShellCandidate .clusterMemberList button:hover { background:#f2f6ff; }
+.approvedShellCandidate .clusterMemberCode { color:#6a7e99; font-size:10px; font-weight:500; }
+.approvedShellCandidate .clusterMemberList strong { font-size:12px; line-height:1.4; font-weight:600; }
+.approvedShellCandidate .clusterMemberList small { font-size:10.5px; line-height:1.4; color:#7a889c; overflow-wrap:anywhere; }
+
+/* Navigation fields identify roles directly and keep editing controls beside each value. */
+.approvedShellCandidate .navEditorField { margin:14px 0 0; }
+.approvedShellCandidate .navEditorField label { display:flex; align-items:center; gap:6px; font-size:12px; margin:0 0 7px; color:#485c77; }
+.approvedShellCandidate .pointRole { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 5px; border-radius:5px; background:#eef3ff; color:#275dd8; font-size:10px; font-weight:700; }
+.approvedShellCandidate .pointRole.origin { color:#13745b; background:#eaf7f1; }
+.approvedShellCandidate .pointRole.destination { color:#b83f46; background:#fceef0; }
+.approvedShellCandidate .pointInputRow { display:flex; align-items:stretch; gap:4px; }
+.approvedShellCandidate .pointInputRow input { flex:1; min-width:0; min-height:37px; font-size:12px; padding:8px; }
+.approvedShellCandidate .pointInputRow button { flex:none; min-width:25px; width:25px; padding:4px; color:#7a8ca4; background:#f8fafc; border-color:#e5ebf2; }
+.approvedShellCandidate .pointInputRow button:hover { background:#edf3ff; color:#275dd8; }
+.approvedShellCandidate .addWaypoint { margin-top:10px; padding:7px; background:#f8fafc; border:1px dashed #cbd6e4; font-size:12px; color:#5d7494; }
+.approvedShellCandidate .reversePlanner { display:block; margin:10px 0 0 auto; padding:4px 0; color:#677f9f; font-size:11px; }
+.approvedShellCandidate .plannerActions { margin-top:12px; }
+.approvedShellCandidate .plannerActions button { min-height:37px; font-size:12px; }
+.approvedShellCandidate .plannerHelp { font-size:11px; line-height:1.5; margin:0 0 10px; color:#798ba3; }
+.approvedShellCandidate .plannerStatus { font-size:11px; line-height:1.6; padding:10px; }
+.approvedShellCandidate #mapStaffDialog { max-width:min(430px,calc(100vw - 24px)); }
+@media(max-width:900px) {
+ .approvedShellCandidate.dotRestored #detailSection { top:58px!important; right:12px!important; bottom:auto!important; max-height:calc(100% - 70px)!important; max-width:calc(100% - 24px); }
+ .approvedShellCandidate .mapClusterPanel { left:12px; right:12px; top:auto; bottom:12px; width:auto; max-width:none; max-height:58%; }
+ .approvedShellCandidate.dotRestored .detailCard { padding:14px; }
+ #detail .detailHead>.storeName { font-size:16px; }
+ .approvedShellCandidate.dotRestored .dotDetailFacts { gap:8px 10px; }
+ .approvedShellCandidate .navRoutePoint { padding:5px 7px; }
+ .approvedShellCandidate .marker.periodCluster .clusterpin { min-width:40px; padding:4px 6px; }
+}
+@media(prefers-reduced-motion:reduce) { .approvedShellCandidate * { scroll-behavior:auto!important; } }

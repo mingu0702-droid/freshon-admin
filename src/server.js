@@ -27,6 +27,9 @@ import { createStageSavedReview } from './stageSavedReview.js';
 import { createManualMapPins, isManualPinWriteRequest } from './manualMapPins.js';
 import { createManualPinGithubStore } from './manualPinGithubStore.js';
 import { createFixedVehicleReader } from './fixedVehicleProjection.js';
+import {createManualPinAuthorizer} from './manualPinAuthorization.js';
+import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
+import {callHub as manualPinVerifiedHubRead} from './phase2bHubReadClient.js';
 import {isRoadRouteRequest} from './roadRouteService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -101,7 +104,13 @@ let manualPinStore;
 if(stageVerificationOnly&&process.env.OPSMAP_MANUAL_PIN_STORE_KIND==='github'&&process.env.GITHUB_CACHE_REPO&&process.env.GITHUB_TOKEN&&process.env.OPSMAP_MANUAL_PIN_GITHUB_BRANCH){
   try{manualPinStore=createManualPinGithubStore({repo:process.env.GITHUB_CACHE_REPO,token:process.env.GITHUB_TOKEN,branch:process.env.OPSMAP_MANUAL_PIN_GITHUB_BRANCH,productionBranch:process.env.GITHUB_CACHE_BRANCH||'main'});}catch{manualPinStore=undefined;}
 }
-const manualMapPins=createManualMapPins({appRoot:path.resolve(publicDir,'..'),readCustomer:code=>savedStageReview.getCustomer?.(code),readCoordinate:code=>savedStageReview.getCoordinate?.(code),store:manualPinStore,backupStore:manualPinStore?.backupStore});
+const manualPinCustomerReader=createPreparedCustomerDetailReader({callHub:manualPinVerifiedHubRead});
+const manualMapPins=createManualMapPins({appRoot:path.resolve(publicDir,'..'),authorizeWrite:createManualPinAuthorizer(),readCustomer:async code=>{
+  const saved=savedStageReview.getCustomer?.(code);if(saved)return saved;
+  const detail=await manualPinCustomerReader.read({customerCode:code,view:'store',date:phase2bKstDate()});
+  if(detail.meta.stale)throw Error('MANUAL_PIN_CUSTOMER_SOURCE_STALE');
+  return {...detail.value,sourceDriveVersion:detail.meta.sourceVersion};
+},readCoordinate:code=>savedStageReview.getCoordinate?.(code),store:manualPinStore,backupStore:manualPinStore?.backupStore});
 const productionMap = mountProductionMapApi(app, {
   mountPrivateExtensions: binding => { manualMapPins.mount(binding); approvedPhotoMount(binding); savedStageReview.mount(binding); },
   // Default OFF; exact approved hashes are required before legacy restoration is suppressed.
