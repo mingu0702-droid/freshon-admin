@@ -24,7 +24,10 @@ import { createApprovedExistingPhotoMount, isApprovedSinglePhotoRawRead, APPROVE
 import { readBoundedPhotoLoginJson } from './opsmapDeliveryAdminTransport.js';
 import { mountMapMainPage } from './mapMainPage.js';
 import { createStageSavedReview } from './stageSavedReview.js';
+import { createManualMapPins, isManualPinWriteRequest } from './manualMapPins.js';
+import { createManualPinGithubStore } from './manualPinGithubStore.js';
 import { createFixedVehicleReader } from './fixedVehicleProjection.js';
+import {isRoadRouteRequest} from './roadRouteService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,7 +52,7 @@ if (stageVerificationOnly) {
   app.use((req, res, next) => {
     const authWrite = /^\/api\/map-phase2b\/auth\/(?:login|logout)$/.test(req.path);
     if (/^\/(?:internal(?:\/|$)|api\/(?:collector(?:\/|$)|map-phase2b\/admin(?:\/|$)))/.test(req.path)
-      || (!['GET', 'HEAD'].includes(req.method) && !authWrite)) return res.status(403).json({error:'STAGE_VERIFICATION_READ_ONLY'});
+      || (!['GET', 'HEAD'].includes(req.method) && !authWrite && !(['1','true'].includes(process.env.OPSMAP_ROAD_ROUTE_ENABLED)&&isRoadRouteRequest(req)) && !(process.env.OPSMAP_MANUAL_PIN_WRITES==='1'&&isManualPinWriteRequest(req)))) return res.status(403).json({error:'STAGE_VERIFICATION_READ_ONLY'});
     return next();
   });
 }
@@ -92,8 +95,15 @@ const approvedPhotoMount = createApprovedExistingPhotoMount({
     && Number.isFinite(deliveryAdminSession.expiresAt) && Date.now() < deliveryAdminSession.expiresAt),
 });
 const savedStageReview=createStageSavedReview({publicDir});
+// Existing cache credentials are used only after explicit Stage opt-in. A separate
+// write-authorization provider remains required; shared staff login grants none.
+let manualPinStore;
+if(stageVerificationOnly&&process.env.OPSMAP_MANUAL_PIN_STORE_KIND==='github'&&process.env.GITHUB_CACHE_REPO&&process.env.GITHUB_TOKEN&&process.env.OPSMAP_MANUAL_PIN_GITHUB_BRANCH){
+  try{manualPinStore=createManualPinGithubStore({repo:process.env.GITHUB_CACHE_REPO,token:process.env.GITHUB_TOKEN,branch:process.env.OPSMAP_MANUAL_PIN_GITHUB_BRANCH,productionBranch:process.env.GITHUB_CACHE_BRANCH||'main'});}catch{manualPinStore=undefined;}
+}
+const manualMapPins=createManualMapPins({appRoot:path.resolve(publicDir,'..'),readCustomer:code=>savedStageReview.getCustomer?.(code),readCoordinate:code=>savedStageReview.getCoordinate?.(code),store:manualPinStore,backupStore:manualPinStore?.backupStore});
 const productionMap = mountProductionMapApi(app, {
-  mountPrivateExtensions: binding => { approvedPhotoMount(binding); savedStageReview.mount(binding); },
+  mountPrivateExtensions: binding => { manualMapPins.mount(binding); approvedPhotoMount(binding); savedStageReview.mount(binding); },
   // Default OFF; exact approved hashes are required before legacy restoration is suppressed.
   hybridStoredIoEnabled: !!process.env.MAP_HUB_PUBLISHED_READS_APPROVAL,
   hubPublicationCutover: process.env.MAP_HUB_PUBLISHED_READS_APPROVAL || null,

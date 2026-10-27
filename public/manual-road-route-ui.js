@@ -14,13 +14,13 @@
     function cancel(){generation++;active?.abort();active=null;onChange({state:'idle'});}
     async function load(draft){
       if(active)return; // Explicit duplicate clicks do not reserve another call.
-      if(blocked){onChange({state:'error',error:blocked});return;}
+      blocked=null;
       const requestId=++generation,body=requestBody(draft,requestId),controller=new AbortController();active=controller;
       let timer,stop;const timeout=new Promise((_,reject)=>{stop=()=>reject(Error('TIMEOUT'));controller.signal.addEventListener('abort',stop,{once:true});timer=setTimeout(()=>controller.abort(),timeoutMs);});onChange({state:'loading',requestId});
       try{
         const response=await Promise.race([timeout,fetchImpl('/api/map-phase2b/private/manual-road-route',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal})]);
         if(requestId!==generation)return;
-        if(!response.ok){const code=root.KakaoDirectionsAdapter.httpError(response.status);if(terminal.has(code))blocked=code;onChange({state:'error',error:code});return;}
+        if(!response.ok){const code=await root.KakaoDirectionsAdapter.responseError(response);if(terminal.has(code))blocked=code;onChange({state:'error',error:code});return;}
         const payload=await Promise.race([timeout,(async()=>{if(!response.body?.getReader)throw Error('INVALID_RESPONSE');const reader=response.body.getReader(),parts=[];let bytes=0;try{for(;;){const item=await Promise.race([timeout,reader.read()]);if(item.done)break;bytes+=item.value.byteLength;if(bytes>8388608)throw Error('RESPONSE_TOO_LARGE');parts.push(item.value);}}finally{void reader.cancel().catch(()=>{});reader.releaseLock();}const joined=new Uint8Array(bytes);let offset=0;for(const part of parts){joined.set(part,offset);offset+=part.byteLength;}return JSON.parse(new TextDecoder().decode(joined));})()]);if(requestId!==generation)return;
         if(controller.signal.aborted)throw Error('TIMEOUT');
         if(!response.ok||payload.ok!==true){const allowed=new Set(['STAFF_LOGIN_REQUIRED','AUTHENTICATION_FAILED','PERMISSION_DENIED','QUOTA_EXCEEDED','CALL_POLICY_BLOCKED','FEATURE_DISABLED','KEY_MISSING','CALL_POLICY_UNCONFIRMED','NO_ROAD_ROUTE']);const code=response.ok&&allowed.has(payload.error)?payload.error:root.KakaoDirectionsAdapter.httpError(response.status);if(terminal.has(code))blocked=code;onChange({state:'error',error:code});return;}

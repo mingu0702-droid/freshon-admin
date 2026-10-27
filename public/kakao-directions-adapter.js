@@ -29,6 +29,15 @@
   return {mode:body.mode,requestId:body.requestId,source:'kakao-directions',isGpsActual:false,state:'success',complete:true,totalLegs,coveredLegs:totalLegs,distanceMeters:distance,durationSeconds:duration,legs,chunks:[{state:'success',startLeg:0,endLeg:totalLegs-1,geometry}]};
  }
  const httpError=status=>status===401?'STAFF_LOGIN_REQUIRED':status===403?'PERMISSION_DENIED':status===429?'QUOTA_EXCEEDED':status===504?'TIMEOUT':status>=500?'PROVIDER_UNAVAILABLE':status===404?'FEATURE_DISABLED':'ROAD_ROUTE_FAILED';
- root.KakaoDirectionsAdapter=Object.freeze({plan,fromProvider,httpError,coordinate});
+ async function responseError(response){
+  const allowed=new Set(['STAFF_LOGIN_REQUIRED','ORIGIN_REJECTED','STAGE_VERIFICATION_READ_ONLY','AUTHENTICATION_FAILED','PERMISSION_DENIED','QUOTA_EXCEEDED','CALL_POLICY_BLOCKED','CALL_POLICY_UNCONFIRMED','FEATURE_DISABLED','KEY_MISSING','TIMEOUT','PROVIDER_UNAVAILABLE','NO_ROAD_ROUTE','INVALID_MANUAL_ROUTE','WAYPOINT_LIMIT','ROAD_ROUTE_FAILED','RECORDED_ORDER_REQUIRED','STOP_COORDINATES_MISSING']);
+  try{
+   const reader=response.body?.getReader();if(!reader)return httpError(response.status);
+   const parts=[];let count=0;try{for(;;){const r=await reader.read();if(r.done)break;count+=r.value.byteLength;if(count>4096)throw Error();parts.push(r.value);}}finally{void reader.cancel().catch(()=>{});reader.releaseLock();}
+   const bytes=new Uint8Array(count);let offset=0;for(const p of parts){bytes.set(p,offset);offset+=p.length;}
+   const body=JSON.parse(new TextDecoder().decode(bytes));const code=typeof body.error==='string'?body.error:body.error?.code;
+   if(allowed.has(code))return code;
+  }catch{}return httpError(response.status);
+ }
+ root.KakaoDirectionsAdapter=Object.freeze({plan,fromProvider,httpError,responseError,coordinate});
 })(typeof window==='object'?window:globalThis);
-

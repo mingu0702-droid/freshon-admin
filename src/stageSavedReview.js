@@ -5,6 +5,7 @@ import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {staffStoreDetail} from './mapStaffDetail.js';
 import {applyVerifiedCoordinateOverlay} from '../public/verified-coordinate-overlay.mjs';
+import {addressRegion} from '../public/map-location-contract.mjs';
 const ORIGIN='https://freshon-admin-stage-preview-template.onrender.com';
 const INPUT_SHA='5c61b55560c1774ad68f45b258e990816527c7fee1acaedb01b22cf53b5b6b2b';
 const digest=v=>createHash('sha256').update(v).digest('hex');
@@ -48,9 +49,9 @@ export function createStagePrivateCustomerDetails({env=process.env,appRoot,readF
     for(const [field,projected] of [['customerName','customerName'],['customerAddress','address'],['detailAddress','detailAddress']]){
       if(row[field]!=null&&row[field]!==''&&detail[projected]!==String(row[field]).trim())throw Error('PRIVATE_CUSTOMER_UNSAFE_FIELD');
     }
-    index.set(row.customerCode,Object.freeze({...detail,source:'Customer daily_routes stored-day private read',sourceBasis:'STORED_DAY',sourceDate:date,sourceDriveVersion:m.versionAfter}));
+    index.set(row.customerCode,Object.freeze({...detail,addressRegion:addressRegion(detail.address),source:'Customer daily_routes stored-day private read',sourceBasis:'STORED_DAY',sourceDate:date,sourceDriveVersion:m.versionAfter}));
   }
-  return {enabled:true,date,sourceVersion:m.versionAfter,rows:index.size,hash:pin,mount({app,requireStaff}){
+  return {enabled:true,date,sourceVersion:m.versionAfter,rows:index.size,hash:pin,getCustomer:code=>index.get(code)||null,addressRegions:()=>Object.fromEntries([...index].map(([code,r])=>[code,r.addressRegion])),mount({app,requireStaff}){
     if(typeof requireStaff!=='function')throw Error('EXISTING_STAFF_AUTH_REQUIRED');
     app.get('/api/map-phase2b/private/customer-search',requireStaff,(q,r)=>{
       // Keep staff-entered location text out of URL/query logs and all responses.
@@ -85,10 +86,11 @@ export function createStageSavedReview({env=process.env,publicDir,appRoot=path.r
     ||data.some(r=>!Array.isArray(r)||r.length!==10||r[2]!==''||r[8]!==null)
     ||data.reduce((n,r)=>n+r[9].reduce((s,h)=>s+h[2],0),0)!==2038
     ||data.filter(r=>Number.isFinite(r[3])&&Number.isFinite(r[4])).length!==1839)throw Error('REVIEW_INPUT_CONTRACT');
-  const coordinateHash=digest(JSON.stringify(data)),namespace='opsmap-isolated-stage-20261023-'+INPUT_SHA.slice(0,12);
-  let envelope={data,meta:{date:'2026-10-23',sourceVersion:String(input.meta.sourceVersion),sourceCandidateHash:input.meta.sourceCandidateHash,sourceDriveVersion:String(input.meta.sourceDriveVersion),published:false,productionEligible:false,businessCoverageVerified:false,coverageComplete:false,reviewOnly:true,cacheNamespace:namespace,localManifestHash:INPUT_SHA,currentCoordinateEvidenceHash:INPUT_SHA,coordinateDataHash:coordinateHash}};
+  const coordinateHash=digest(JSON.stringify(data)),namespace='opsmap-isolated-stage-20261023-'+INPUT_SHA.slice(0,12)+'-location-v1';
+  let envelope={data,meta:{date:'2026-10-23',sourceVersion:String(input.meta.sourceVersion),sourceCandidateHash:input.meta.sourceCandidateHash,sourceDriveVersion:String(input.meta.sourceDriveVersion),published:false,productionEligible:false,businessCoverageVerified:false,coverageComplete:false,reviewOnly:true,cacheNamespace:namespace,localManifestHash:INPUT_SHA,currentCoordinateEvidenceHash:INPUT_SHA,coordinateDataHash:coordinateHash,addressRegions:selectedCustomerSource.addressRegions?.()||{}}};
   const cfg={date:'2026-10-23',startDate:'2026-07-27',endDate:'2026-10-24',historyStartDate:'2026-07-26',offset:89,rows:2036,visits:2038,inputHash:INPUT_SHA,cacheNamespace:namespace,currentStoredReview:true,fixedMasterVerified:false,sourceRows:2036,currentCoordinateEvidenceHash:INPUT_SHA,coordinateDataHash:coordinateHash,recent90Evidence:{completeDays:0,storedDays:54,emptyUnconfirmedDays:11,dateOnlyDays:1,unobservedDays:24}};
   cfg.privateCustomerSearch=selectedCustomerSource.enabled;
+  const originalEnvelope=envelope;let initialOverlay=null;
   let ready=Promise.resolve(),overlayFailure=null;
   if(env.OPSMAP_STAGE_COORDINATE_OVERLAY_FILE){
     const f=env.OPSMAP_STAGE_COORDINATE_OVERLAY_FILE,pin=env.OPSMAP_STAGE_COORDINATE_OVERLAY_SHA256;
@@ -96,16 +98,53 @@ export function createStageSavedReview({env=process.env,publicDir,appRoot=path.r
     if(!path.isAbsolute(f)||relative===''||(!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative))||!/^[a-f0-9]{64}$/.test(pin||''))throw Error('REVIEW_OVERLAY_CONFIG');
     const size=stat(f).size;if(!Number.isSafeInteger(size)||size<1||size>131072)throw Error('REVIEW_OVERLAY_LIMIT');
     const stored=readFile(f);if(stored.length!==size||digest(stored)!==pin)throw Error('REVIEW_OVERLAY_PIN');
-    const overlay=JSON.parse(stored);
+    const overlay=JSON.parse(stored);initialOverlay=overlay;
     if(!selectedCustomerSource.enabled||overlay.verification?.sourceVersion!==selectedCustomerSource.sourceVersion)throw Error('REVIEW_OVERLAY_CUSTOMER_VERSION');
     ready=applyVerifiedCoordinateOverlay(envelope,overlay,{expectedOverlayHash:overlay.hash,expectedSourceVersion:selectedCustomerSource.sourceVersion}).then(value=>{
-      const nextNamespace=namespace+'-building-'+overlay.hash.slice(0,12),nextHash=digest(JSON.stringify(value.data));
-      envelope={...value,meta:{...value.meta,cacheNamespace:nextNamespace,coordinateDataHash:nextHash,buildingCoordinateCodes:overlay.rows.map(p=>p.customerCode)}};
+      const addressPoints=overlay.rows.filter(p=>p.accuracy==='ADDRESS_POINT'),buildings=overlay.rows.filter(p=>p.accuracy==='BUILDING');
+      const nextNamespace=namespace+(addressPoints.length?'-coordinates-':'-building-')+overlay.hash.slice(0,12),nextHash=digest(JSON.stringify(value.data));
+      envelope={...value,meta:{...value.meta,cacheNamespace:nextNamespace,coordinateDataHash:nextHash,buildingCoordinateCodes:buildings.map(p=>p.customerCode),...(addressPoints.length?{addressCoordinateCodes:addressPoints.map(p=>p.customerCode)}:{})}};
       Object.assign(cfg,{cacheNamespace:nextNamespace,coordinateDataHash:nextHash,buildingCoordinateOverlayHash:overlay.hash,buildingCoordinateSourceVersion:selectedCustomerSource.sourceVersion});
+      if(addressPoints.length)Object.assign(cfg,{addressCoordinateOverlayHash:overlay.hash,coordinateOverlayAccuracyCounts:{BUILDING:buildings.length,ADDRESS_POINT:addressPoints.length}});
     }).catch(()=>{overlayFailure='REVIEW_OVERLAY_VALIDATION_FAILED';});
   }
+  if(env.OPSMAP_STAGE_COORDINATE_RECOVERY_FILE){
+    const f=env.OPSMAP_STAGE_COORDINATE_RECOVERY_FILE,pin=env.OPSMAP_STAGE_COORDINATE_RECOVERY_SHA256,version=env.OPSMAP_STAGE_COORDINATE_RECOVERY_SOURCE_VERSION;
+    const relative=path.relative(path.resolve(appRoot),path.resolve(f));
+    if(!path.isAbsolute(f)||relative===''||(!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative))||!/^[a-f0-9]{64}$/.test(pin||'')||!/^\d+$/.test(version||''))throw Error('REVIEW_RECOVERY_CONFIG');
+    const size=stat(f).size;if(!Number.isSafeInteger(size)||size<1||size>131072)throw Error('REVIEW_RECOVERY_FILE_LIMIT');
+    const stored=readFile(f);if(stored.length!==size||digest(stored)!==pin)throw Error('REVIEW_RECOVERY_PIN');
+    const decoded=decodeStageReviewInput(stored);if(decoded.length>524288)throw Error('REVIEW_RECOVERY_DECODED_LIMIT');
+    const bundle=JSON.parse(decoded),recovery=bundle?.recovery;
+    if(bundle?.schema!=='opsmap-stage-coordinate-recovery-bundle-v1'||Object.keys(bundle).some(k=>!['schema','legacyOverlayHash','expandedOverlayHash','previousAddressPoint','recovery'].includes(k))||
+      !/^[a-f0-9]{64}$/.test(bundle.legacyOverlayHash||'')||!/^[a-f0-9]{64}$/.test(bundle.expandedOverlayHash||'')||!/^[A-Za-z0-9_-]{1,64}$/.test(bundle.previousAddressPoint?.customerCode||''))throw Error('REVIEW_RECOVERY_BUNDLE');
+    ready=ready.then(async()=>{
+      if(overlayFailure)return;
+      // Keep the currently deployed35 file and its environment SHA untouched.
+      // The optional new bundle carries the one historical address-point proof.
+      if(envelope.meta.coordinatePresentCount===1874){
+        if(initialOverlay?.hash!==bundle.legacyOverlayHash||initialOverlay.rows.length!==35||initialOverlay.rows.some(p=>p.customerCode===bundle.previousAddressPoint.customerCode))throw Error('REVIEW_RECOVERY_LEGACY_BASIS');
+        const expanded={...initialOverlay,rows:[...initialOverlay.rows,bundle.previousAddressPoint],hash:bundle.expandedOverlayHash};
+        const value=await applyVerifiedCoordinateOverlay(originalEnvelope,expanded,{expectedOverlayHash:bundle.expandedOverlayHash,expectedSourceVersion:selectedCustomerSource.sourceVersion});
+        const namespace=cfg.cacheNamespace+'-point-'+bundle.expandedOverlayHash.slice(0,12),dataHash=digest(JSON.stringify(value.data));
+        envelope={...value,meta:{...envelope.meta,...value.meta,cacheNamespace:namespace,coordinateDataHash:dataHash,buildingCoordinateCodes:initialOverlay.rows.map(p=>p.customerCode),addressCoordinateCodes:[bundle.previousAddressPoint.customerCode]}};
+        Object.assign(cfg,{cacheNamespace:namespace,coordinateDataHash:dataHash,buildingCoordinateOverlayHash:bundle.expandedOverlayHash,addressCoordinateOverlayHash:bundle.expandedOverlayHash,coordinateOverlayAccuracyCounts:{BUILDING:35,ADDRESS_POINT:1}});
+      }else if(initialOverlay?.hash!==bundle.expandedOverlayHash)throw Error('REVIEW_RECOVERY_EXPANDED_BASIS');
+      if(envelope.meta.coordinatePresentCount!==1875||!Array.isArray(recovery.rows)||recovery.rows.length<141||recovery.rows.length>161||recovery.rows.some(p=>!['HISTORICAL_GPS_SAME_BUILDING','KAKAO_VERIFIED_BUILDING'].includes(p.coordinateSource)))throw Error('REVIEW_RECOVERY_BASE_OR_SCOPE');
+      const value=await applyVerifiedCoordinateOverlay(envelope,recovery,{expectedOverlayHash:recovery.hash,expectedSourceVersion:version});
+      const sources=Object.fromEntries(recovery.rows.map(p=>[p.customerCode,p.coordinateSource])),codes=Object.keys(sources);
+      const before=envelope.meta,namespace=before.cacheNamespace+'-recovery-'+recovery.hash.slice(0,12),dataHash=digest(JSON.stringify(value.data));
+      // The original36 proof stays historical40132; each recovered proof has
+      // its own40603 source window. Never relabel all2036 as a current snapshot.
+      const total=1875+codes.length;
+      envelope={...value,meta:{...before,cacheNamespace:namespace,coordinateDataHash:dataHash,coordinatePresentCount:total,coordinateMissingCount:envelope.data.length-total,
+        recoveredBuildingCodes:codes,recoveredCoordinateSources:sources,coordinateRecovery:{hash:recovery.hash,sourceVersion:version,added:codes.length,accuracy:'BUILDING',fieldAccuracyVerified:false,storeInteriorVerified:false,businessCoverageVerified:false}}};
+      Object.assign(cfg,{cacheNamespace:namespace,coordinateDataHash:dataHash,coordinateRecoveryHash:recovery.hash,coordinateRecoverySourceVersion:version,
+        coordinateRecoveryCount:codes.length,recoveredCoordinateSourcesHash:digest(JSON.stringify(sources)),expectedCoordinateCount:total});
+    }).catch(()=>{overlayFailure='REVIEW_RECOVERY_VALIDATION_FAILED';});
+  }
   const boot=readFile(path.join(publicDir,'stage-saved-review-boot.js'),'utf8');
-  return {enabled:true,ready,date:cfg.date,rows:2036,visits:2038,get coordinates(){return envelope.meta.coordinatePresentCount||1839;},inputSha256:INPUT_SHA,mount({app,requireStaff}){
+  return {enabled:true,ready,date:cfg.date,rows:2036,visits:2038,getCustomer:code=>selectedCustomerSource.getCustomer?.(code)||null,getCoordinate:code=>{const r=envelope.data.find(r=>r[0]===code);return r?{latitude:r[3],longitude:r[4],coordinateSource:envelope.meta.recoveredCoordinateSources?.[code]||(Number.isFinite(r[3])?'EXISTING_VERIFIED_COORDINATE':'UNCONFIRMED')}:null;},get coordinates(){return envelope.meta.coordinatePresentCount||1839;},inputSha256:INPUT_SHA,mount({app,requireStaff}){
     if(typeof requireStaff!=='function')throw Error('EXISTING_STAFF_AUTH_REQUIRED');
     selectedCustomerSource.mount({app,requireStaff});
     // mapStaffEntryGate also guards both existing /api/map-phase2b paths.

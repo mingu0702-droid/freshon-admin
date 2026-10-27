@@ -8,7 +8,7 @@
     async function load({ date, vehicle }) {
       cancel();
       const id = generation, identity = { date, vehicle };
-      if (blocked) { onChange({ ...identity, state: 'error', error: blocked }); return; }
+      blocked = null;
       const controller = new AbortController(); active = controller;
       const timer = setTimeout(() => controller.abort('timeout'), 60000);
       onChange({ ...identity, state: 'loading' });
@@ -16,7 +16,7 @@
         const response = await fetchImpl('/api/map-phase2b/private/road-route', { method: 'POST', credentials: 'same-origin', cache: 'no-store',
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(identity), signal: controller.signal });
         if (id !== generation) return;
-        if(!response.ok){const error=root.KakaoDirectionsAdapter?.httpError(response.status)||'ROAD_ROUTE_FAILED';if(TERMINAL.has(error))blocked=error;onChange({...identity,state:'error',error});return;}
+        if(!response.ok){const error=await root.KakaoDirectionsAdapter.responseError(response);if(TERMINAL.has(error))blocked=error;onChange({...identity,state:'error',error});return;}
         const payload = await response.json();
         if (id !== generation) return;
         if (!response.ok || payload.ok !== true) {
@@ -58,30 +58,42 @@
     return { distance: valid && Number.isFinite(data.distanceMeters) && data.distanceMeters >= 0 ? (data.distanceMeters / 1000).toFixed(1) + ' km' : '—',
       duration: valid && Number.isFinite(data.durationSeconds) && data.durationSeconds >= 0 ? Math.ceil(data.durationSeconds / 60) + '분' : '—' };
   }
+  // Join adjacent provider road pieces only when their endpoints exactly
+  // meet. Disjoint pieces remain separate: no invented connector segments.
+  function roadSegments(data) {
+    const out=[];
+    for(const chunk of data?.chunks||[]){
+      if(chunk.state!=='success')continue;
+      let current=null;
+      for(const road of chunk.geometry||[]){
+        const leg=chunk.startLeg+road.legOffset,points=road.latLngs;
+        if(Number.isInteger(data.selectedLeg)&&leg!==data.selectedLeg)continue;
+        if(!Array.isArray(points)||points.length<2||!points.every(p=>Array.isArray(p)&&p.length===2&&p.every(Number.isFinite)&&p[0]>=33&&p[0]<=39.5&&p[1]>=124&&p[1]<=132)){current=null;continue;}
+        const end=current?.latLngs.at(-1),start=points[0];
+        if(current&&current.leg===leg&&current.latLngs.length+points.length<=12000&&end[0]===start[0]&&end[1]===start[1])current.latLngs.push(...points.slice(1));
+        else {current={leg,latLngs:points.map(p=>p.slice())};out.push(current);}
+      }
+    }
+    return out;
+  }
   function createLayer({ map, leaflet = root.L, kakao = root.kakao }) {
     let lines = [];
     function clear() { lines.forEach(line => leaflet && typeof line.remove === 'function' ? line.remove() : line.setMap(null)); lines = []; }
     function render(data) {
       clear();
       if (!map || data?.source !== 'kakao-directions' || !['success', 'partial'].includes(data.state)) return;
-      for (const chunk of data.chunks || []) {
-        if (chunk.state !== 'success') continue;
-        for (const road of chunk.geometry || []) {
-          const leg=chunk.startLeg+road.legOffset;if(Number.isInteger(data.selectedLeg)&&leg!==data.selectedLeg)continue;
-          const color=data.vehicle&&root.Phase2bUi?.vehicleColor?root.Phase2bUi.vehicleColor(data.vehicle):['#2463eb','#0d9a83','#9a61d3','#c77713'][leg%4]||'#2463eb';
-          if (!Array.isArray(road.latLngs) || road.latLngs.length < 2 || !road.latLngs.every(p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) && p[0] >= 33 && p[0] <= 39.5 && p[1] >= 124 && p[1] <= 132)) continue;
-          if (leaflet && typeof map.addLayer === 'function') {
-            lines.push(leaflet.polyline(road.latLngs, { color, weight: 5, opacity: .9 }).addTo(map)
-              .bindTooltip('카카오 도로경로 예상 · GPS 실주행 아님'));
-          } else if (kakao?.maps?.Polyline) {
-            const line = new kakao.maps.Polyline({ path: road.latLngs.map(p => new kakao.maps.LatLng(p[0], p[1])), strokeColor:color, strokeWeight: 5, strokeOpacity: .9, strokeStyle: 'solid' });
-            line.setMap(map); lines.push(line);
-          }
+      for (const road of roadSegments(data)) {
+        const leg=road.leg,color=data.vehicle&&root.Phase2bUi?.vehicleColor?root.Phase2bUi.vehicleColor(data.vehicle):['#2463eb','#0d9a83','#9a61d3','#c77713'][leg%4];
+        if(leaflet&&typeof map.addLayer==='function')lines.push(leaflet.polyline(road.latLngs,{color,weight:5,opacity:.9}).addTo(map).bindTooltip('자동차 도로경로'));
+        else if(kakao?.maps?.Polyline){
+          const line=new kakao.maps.Polyline({path:road.latLngs.map(p=>new kakao.maps.LatLng(p[0],p[1])),strokeColor:color,strokeWeight:5,strokeOpacity:.9,strokeStyle:'solid'});
+          line.setMap(map);lines.push(line);
         }
       }
     }
+
     return { clear, render };
   }
-  root.RoadRouteUi = { createController, describe, metrics, createLayer };
+  root.RoadRouteUi = { createController, describe, metrics, roadSegments, createLayer };
 })(typeof window === 'object' ? window : globalThis);
 

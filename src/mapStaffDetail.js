@@ -31,12 +31,12 @@ export function staffStoreDetail(source, { customerCode, date }) {
 // labels are parsed; ambiguous prose and rawMemo never leave the server.
 export function staffCustomerDetail(source, { customerCode, date }) {
   const parsed = parseLocationMessage(source.accessMemo || '');
-  const accessInfo = safeText(source.accessInfo) || safeText(parsed.accessInfo);
+  const accessInfo = Object.hasOwn(source,'accessInfo') ? safeText(source.accessInfo) : safeText(parsed.accessInfo);
   const password = typeof source.password === 'string' && /^[A-Za-z0-9#*/_-]{2,100}$/.test(source.password)
-    ? source.password : parsed.password || null;
-  const specialRemark = safeText(source.specialRemark) || safeText(parsed.specialRemark);
+    ? source.password : Object.hasOwn(source,'password') ? null : parsed.password || null;
+  const specialRemark = Object.hasOwn(source,'specialRemark') ? safeText(source.specialRemark) : safeText(parsed.specialRemark);
   const deliveryPattern = safeText(source.deliveryPattern || source.deliveryPatternText) || safeText(parsed.deliveryPattern) || null;
   return { customerCode, memoDate: date, accessInfo, password, specialRemark, deliveryPattern,
     memoState: accessInfo || password || specialRemark ? 'REGISTERED' : source.accessMemo ? 'NEEDS_CONFIRMATION' : 'UNREGISTERED',
-    source: 'Customer → Hub staffCustomerDetail (one source row; no sensitive cache)' };
+    source: 'Customer → Hub staffCustomerDetail (authorized server-only projection)' };
 }

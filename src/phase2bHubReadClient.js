@@ -152,7 +152,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
     mapCoordinateSupplement: 8000,
     unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 30000),
     customerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
-    staffCustomerDetail: 4800,
+    staffCustomerDetail: Math.max(4800,Math.min(15000,Number(process.env.OPSMAP_PRIVATE_DETAIL_TIMEOUT_MS)||12000)),
     nearestVehicles: Number(process.env.HUB_NEAREST_TIMEOUT_MS || 30000),
     mapBounds: Number(process.env.HUB_BOUNDS_TIMEOUT_MS || 30000),
     datedAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
@@ -164,7 +164,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
   let sharedDeadline = Math.min(deadline ?? Infinity, staffDetail || action === 'staffDriverHistory' ? started + timeoutMs : Infinity);
   let outputAllowanceUsed=false;
   let lastError;
-  const attempts = entered.probe || action === "customerDetail" || ['rollingDateCatalog','rollingDateText'].includes(action) ? 1 : 2;
+  const attempts = entered.probe || staffDetail || action === "customerDetail" || ['rollingDateCatalog','rollingDateText'].includes(action) ? 1 : 2;
   let timedOut = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     signal?.throwIfAborted();

@@ -21,6 +21,8 @@ import {createCoordinateSupplement} from './mapCoordinateSupplement.js';
 import {mountHybridMapReadApi} from './hybridMapRouter.js';
 import {createPublishedDayPageReader} from './hybridDayIndex.js';
 import {createRollingHubIo} from './rollingHubIo.js';
+import {createPrivateDetailCache,loadEncryptedPrivateSnapshot} from './privateDetailCache.js';
+import {createRoadRouteService,mountRoadRouteRoutes} from './roadRouteService.js';
 
 export function mountProductionMapApi(app,{
   previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
@@ -28,9 +30,18 @@ export function mountProductionMapApi(app,{
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
   publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,
   hybridEnabled=()=>process.env.MAP_HYBRID_90DAY_ENABLED==='true',hybridReadIndexedDay,hybridUiReadiness,hybridReadDateCatalog,hybridReadDatePage,hybridReadVerifiedDayText,hybridStoredIoEnabled=false,hubPublicationCutover=null,
-  mountPrivateExtensions
+  mountPrivateExtensions,readRecordedRoadRoute,roadRouteService,roadRouteBudget
 }){
   const mapStaff=createMapStaffAuth(authOptions);
+  const env=authOptions.env||process.env;
+  const privateCacheEnabled=env.OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED==='1';
+  const privateDetails=privateCacheEnabled
+    ? createPrivateDetailCache({freshMs:60000,maxStaleMs:Math.min(86400000,Math.max(60000,Number(env.OPSMAP_PRIVATE_DETAIL_MAX_AGE_MS)||3600000)),maxEntries:512})
+    : {get:async(_identity,{loader})=>{const loaded=await loader();return {value:loaded.value,meta:{cache:'DISABLED'}};}};
+  const privateSnapshotReady=privateCacheEnabled
+    ? loadEncryptedPrivateSnapshot({env,appRoot:publicDir?path.resolve(publicDir,'..'):process.cwd(),cache:privateDetails,normalize:staffCustomerDetail})
+      .catch(error=>({loaded:false,reason:/^PRIVATE_CACHE_[A-Z_]+$/.test(error.code||'')?error.code:'PRIVATE_CACHE_UNAVAILABLE'}))
+    : Promise.resolve({loaded:false,reason:'PRIVATE_CACHE_DISABLED'});
   const stageReadModelEnabled=true;
   const stageReadModel=createStageReadModel({secret,publicPeriodCacheEntries:1});
   const phase2bAssignmentCache=createPhase2bReadCache({name:'assignments',ttlMs:60000,staleMs:120000,maxEntries:8,maxBytes:12*1024*1024});
@@ -39,6 +50,12 @@ export function mountProductionMapApi(app,{
   app.use('/api/map-phase2b/auth',securityAudit,mapStaff.router);
   mountMapStaffEntryGate(app,mapStaff.requireStaff);
   app.use('/api/map-phase2b/private',mapStaff.requireStaff);
+  app.get('/api/map-phase2b/private/map-sdk-config',(req,res)=>{
+    const javascriptKey=String(env.KAKAO_MAP_JAVASCRIPT_KEY||'').trim();
+    if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED'});
+    return res.set('Cache-Control','private, no-store').json({javascriptKey});
+  });
+  mountRoadRouteRoutes({app,requireStaff:mapStaff.requireStaff,jsonBody:express.json({limit:'16kb'}),service:roadRouteService||createRoadRouteService({env,budget:roadRouteBudget,requireDurableBudget:true}),env,readRecordedRoute:readRecordedRoadRoute});
   mountPrivateExtensions?.({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,previewEnabled});
   app.use('/api/map-phase2b/private/driver-history',historyDeadline);
   app.use(publicResponse);
@@ -113,19 +130,19 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
   const detailDate = req.query.date ? normalizeDateValue(req.query.date) : getSnapshotMemory()?.latestDate || phase2bKstDate();
   if (!detailDate || detailDate > phase2bKstDate()) return res.status(400).json({ error: "INVALID_DATE" });
   try {
-    const upstreamStarted = performance.now();
-    let hub;
-    try { hub = await callHub(storeView ? "customerDetail" : "staffCustomerDetail", { customerCode, date: detailDate }, { useCache: false, privateRead: true, ...(storeView ? {maxResponseBytes:65536, deadline:Date.now()+15000} : {}) }); }
-    finally { addStaffTiming(res, 'upstream', performance.now() - upstreamStarted); }
-    addStaffTiming(res, 'hub', Number(hub.meta?.durationMs || 0));
-    for (const key of ['responseHeadersMs','bodyReadMs','parseMs']) addStaffTiming(res, 'hub' + key.replace(/Ms$/, ''), Number(hubRequestProfile(hub)[key] || 0));
-    for (const key of ['openMs','lookupMs','rowReadMs','normalizeMs']) addStaffTiming(res, 'source' + key.replace(/Ms$/, ''), Number(hub.meta?.detailProfile?.[key] || 0));
-    if (String(hub.data?.customerCode || '').toUpperCase() !== customerCode) throw new Error('HUB_INVALID_DETAIL_CONTRACT');
-    const normalizeStarted = performance.now();
-    const detail = (storeView ? staffStoreDetail : staffCustomerDetail)(hub.data, { customerCode, date: detailDate });
-    addStaffTiming(res, 'parseNormalize', performance.now() - normalizeStarted);
-    // Recheck after slow Hub reads: logout/expiry must revoke in-flight responses.
-    return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data: detail, error: null }));
+    await privateSnapshotReady;
+    const result=await privateDetails.get({customerCode,date:detailDate,view:storeView?'store':'notes'},{preferFresh:req.query.refresh==='1',loader:async()=>{
+      const upstreamStarted=performance.now();
+      let hub;
+      try{hub=await callHub(storeView?'customerDetail':'staffCustomerDetail',{customerCode,date:detailDate},{useCache:false,privateRead:true,...(storeView?{maxResponseBytes:65536,deadline:Date.now()+15000}:{})});}
+      finally{if(!res.headersSent)addStaffTiming(res,'upstream',performance.now()-upstreamStarted);}
+      if(String(hub.data?.customerCode||'').toUpperCase()!==customerCode)throw new Error('HUB_INVALID_DETAIL_CONTRACT');
+      const detail=(storeView?staffStoreDetail:staffCustomerDetail)(hub.data,{customerCode,date:detailDate});
+      return {value:detail,sourceVersion:hub.meta?.version||hub.meta?.sourceVersion||null};
+    }});
+    // Even a cache HIT must recheck the employee session. Plaintext is never
+    // sent to public snapshots, browser persistent storage, or response caches.
+    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:result.value,meta:{cache:result.meta},error:null}));
   } catch (error) {
     const profile = hubRequestProfile(error);
     res.set('X-Detail-Upstream-Status', String(Number(profile.upstreamStatus) || 0));

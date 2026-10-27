@@ -2,7 +2,7 @@
 // A temporary exec redirect must not silently turn an authenticated POST into
 // an unauthenticated health GET. Never send the signed body to the output host.
 export function privateOutputDeadline(started,current,now,callerDeadline=Infinity){
-  return Math.min(callerDeadline,started+6300,Math.max(current,now+1500));
+  return Math.min(callerDeadline,Math.max(started+6300,current),Math.max(current,now+1500));
 }
 export async function fetchPrivateHub(url, options, profile, onOutputRedirect) {
   const execution = new URL(url); let current = execution, method = 'POST';

@@ -1,0 +1,22 @@
+/* Clear role/territory labels, fixed card order, and GPU-friendly marker states. */
+#detail .detailHead{display:flex!important;flex-direction:column!important;align-items:stretch;gap:7px;padding-right:40px;position:relative}
+#detail .detailHead>.code{order:0!important;color:#334155;font-weight:700;font-size:15px;line-height:1.45;margin:0}
+#detail .detailHead>.storeName{order:1!important;font-size:17px;line-height:1.45;font-weight:700;margin:0;overflow-wrap:anywhere}
+#detail .detailHead>.detailClose{position:absolute;right:0;top:0}
+.dotDetailFacts dd{min-width:0;overflow-wrap:anywhere}
+.marker.periodCluster .clusterpin{width:auto!important;min-width:66px;max-width:132px;height:auto!important;min-height:45px;display:flex;flex-direction:column;gap:2px;align-items:center;justify-content:center;padding:7px 10px;border-radius:12px!important;border:2px solid #fff;box-shadow:0 2px 7px #0f172a30;background:var(--pin,#2563eb)!important;color:white;transform:none!important}
+.marker.periodCluster .clusterpin b{font-size:13px;line-height:1.2;white-space:nowrap}
+.marker.periodCluster .clusterpin small{font-size:11px;line-height:1.25;white-space:nowrap;opacity:.95}
+.marker.periodCluster .clusterpin:before,.marker.periodCluster .clusterpin:after{display:none!important}
+.marker.periodCluster{contain:layout style}
+.marker.navAssigned{visibility:hidden!important;pointer-events:none!important}
+.navRoutePoint{min-width:58px;padding:8px 11px;border-radius:10px;border:2px solid white;background:#1d4ed8;color:white;font-weight:800;box-shadow:0 2px 6px #0f172a40;white-space:pre-line;line-height:1.25}
+.navRoutePoint[data-role="origin"]{background:#047857}
+.navRoutePoint[data-role="destination"]{background:#b91c1c}
+.navRoutePoint[data-role="waypoint"]{background:#1d4ed8}
+.navRoutePoint small{display:block;font-size:10px;font-weight:500;max-width:135px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.detailSourceState{margin:8px 0;font-size:12px;color:#64748b}
+.staffCacheNotice{padding:8px 10px;background:#f1f5f9;border-radius:8px;font-size:12px;line-height:1.5}
+.staffCacheNotice[data-stale="true"]{background:#fff7ed;color:#9a3412}
+#mapStaffDialog{max-width:min(430px,calc(100vw - 24px))}
+@media(max-width:760px){#detail .detailHead>.code,#detail .detailHead>.storeName{font-size:15px}.navRoutePoint{padding:7px 9px}.marker.periodCluster .clusterpin{min-width:58px;padding:6px 8px}}
