@@ -145,7 +145,9 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
       const detail=(storeView?staffStoreDetail:staffCustomerDetail)(hub.data,{customerCode,date:detailDate});
       return {value:detail,sourceVersion:hub.meta?.version||hub.meta?.sourceVersion||null};
     }});
-    const result=await preparedCustomerDetails.read(detailIdentity,{legacyLoader,refresh:req.query.refresh==='1'});
+    const result=env.OPSMAP_PREPARED_DETAILS_ENABLED==='1'
+      ?await preparedCustomerDetails.read(detailIdentity,{legacyLoader,refresh:req.query.refresh==='1'})
+      :await legacyLoader();
     // Even a cache HIT must recheck the employee session. Plaintext is never
     // sent to public snapshots, browser persistent storage, or response caches.
     return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:result.value,meta:{cache:result.meta},error:null}));

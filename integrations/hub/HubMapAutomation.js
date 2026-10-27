@@ -1,8 +1,5 @@
 /** Production map only. Customer and Stage triggers/state are never mutated. */
 const HUB_MAP_AUTO=Object.freeze({handler:'hubProductionMapAutoTick',property:'PHASE2B_PRODUCTION_MAP_AUTOMATION_V1'});
-// Local rolling route remains OFF until an actual source-bound completion and
-// correction/deletion provider exists. Legacy path is not silently reused as one.
-const HUB_MAP_ROLLING_AUTO_ENABLED=false;
 function hubMapAutomationLoad_(){
   const text=PropertiesService.getScriptProperties().getProperty(HUB_MAP_AUTO.property);return text?JSON.parse(text):{};
 }
@@ -27,16 +24,15 @@ function hubProductionMapAutoTick(){
   // Request helper acquires the same user lock as restore/candidate workers.
   // No implicit retry of ERROR, no source collection, no force-resume.
   const s=hubMapAutomationLoad_();s.lastCheck=new Date().toISOString();
-  if(typeof hubMapCustomerDetailsAutoStep_==='function')s.customerDetails=hubMapCustomerDetailsAutoStep_();
+  // Additive opt-in only. A Customer preparation failure never cancels the
+  // already-installed production tick or changes its locks/trigger contract.
+  if(PropertiesService.getScriptProperties().getProperty('OPSMAP_CUSTOMER_DETAILS_AUTO_ENABLED')==='1'&&typeof hubMapCustomerDetailsAutoStep_==='function'){
+    try{s.customerDetails=hubMapCustomerDetailsAutoStep_();}
+    catch(e){s.customerDetails={status:'ERROR',error:'CUSTOMER_DETAILS_AUTO_FAILED'};}
+  }
   try{
-    if(HUB_MAP_ROLLING_AUTO_ENABLED){
-      const observed=hubMapCollectionProvenanceRead_({afterSequence:s.provenanceSequence||0,previousHash:s.provenanceHash||null,limit:1});
-      s.status='PROOF_REQUIRED';s.lastError='MODEL_ROLLING_SOURCE_VERSION_CHANGE_PROOF_MISSING';
-      return {status:s.status,publication:'HELD',requestIssued:false,reason:s.lastError,provenanceStatus:observed.status};
-    }
     const r=hubStageRestoreLoad_('production'),job=hubMapIncrementalLoad_(),published=hubStageModelLoad_();
-    if(job&&['UNCERTAIN','CONFLICT','NOT_APPLIED'].indexOf(job.pointerStatus)>=0){s.status='PROOF_REQUIRED';s.lastError='MODEL_INCREMENTAL_POINTER_RECONCILE_REQUIRED';}
-    else if(r&&r.phase==='RESTORE'){s.status='WAITING_RESTORE';}
+    if(r&&r.phase==='RESTORE'){s.status='WAITING_RESTORE';}
     else if(r&&r.phase==='ERROR'){s.status='ERROR';s.lastError='MODEL_RESTORE_REQUIRES_REVIEW';}
     else if(job&&(job.phase==='ERROR'||job.publication==='ERROR')){s.status='ERROR';s.lastError=job.lastError||'MODEL_INCREMENTAL_REQUIRES_REVIEW';}
     else if(job&&(job.phase!=='DONE'||job.publication==='PENDING')){s.status='RUNNING';s.generation=job.generation;}

@@ -28,6 +28,7 @@ import { createManualMapPins, isManualPinWriteRequest } from './manualMapPins.js
 import { createManualPinGithubStore } from './manualPinGithubStore.js';
 import { createFixedVehicleReader } from './fixedVehicleProjection.js';
 import {createManualPinAuthorizer} from './manualPinAuthorization.js';
+import {createStoreRoadBudget} from './hubRoadBudget.js';
 import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
 import {callHub as manualPinVerifiedHubRead} from './phase2bHubReadClient.js';
 import {isRoadRouteRequest} from './roadRouteService.js';
@@ -101,7 +102,7 @@ const savedStageReview=createStageSavedReview({publicDir});
 // Existing cache credentials are used only after explicit Stage opt-in. A separate
 // write-authorization provider remains required; shared staff login grants none.
 let manualPinStore;
-if(stageVerificationOnly&&process.env.OPSMAP_MANUAL_PIN_STORE_KIND==='github'&&process.env.GITHUB_CACHE_REPO&&process.env.GITHUB_TOKEN&&process.env.OPSMAP_MANUAL_PIN_GITHUB_BRANCH){
+if(stageVerificationOnly&&(process.env.OPSMAP_MANUAL_PIN_STORE_KIND==='github'||process.env.OPSMAP_ROAD_BUDGET_STORE_KIND==='github-stage')&&process.env.GITHUB_CACHE_REPO&&process.env.GITHUB_TOKEN&&process.env.OPSMAP_MANUAL_PIN_GITHUB_BRANCH){
   try{manualPinStore=createManualPinGithubStore({repo:process.env.GITHUB_CACHE_REPO,token:process.env.GITHUB_TOKEN,branch:process.env.OPSMAP_MANUAL_PIN_GITHUB_BRANCH,productionBranch:process.env.GITHUB_CACHE_BRANCH||'main'});}catch{manualPinStore=undefined;}
 }
 const manualPinCustomerReader=createPreparedCustomerDetailReader({callHub:manualPinVerifiedHubRead});
@@ -112,6 +113,8 @@ const manualMapPins=createManualMapPins({appRoot:path.resolve(publicDir,'..'),au
   return {...detail.value,sourceDriveVersion:detail.meta.sourceVersion};
 },readCoordinate:code=>savedStageReview.getCoordinate?.(code),store:manualPinStore,backupStore:manualPinStore?.backupStore});
 const productionMap = mountProductionMapApi(app, {
+  roadRouteBudget:stageVerificationOnly&&process.env.OPSMAP_ROAD_BUDGET_STORE_KIND==='github-stage'
+    ?createStoreRoadBudget({store:manualPinStore,accountHash:process.env.OPSMAP_ROAD_BUDGET_ACCOUNT_SHA256}):undefined,
   mountPrivateExtensions: binding => { manualMapPins.mount(binding); approvedPhotoMount(binding); savedStageReview.mount(binding); },
   // Default OFF; exact approved hashes are required before legacy restoration is suppressed.
   hybridStoredIoEnabled: !!process.env.MAP_HUB_PUBLISHED_READS_APPROVAL,
