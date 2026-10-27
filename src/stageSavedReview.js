@@ -152,8 +152,9 @@ export function createStageSavedReview({env=process.env,publicDir,appRoot=path.r
     app.get('/api/map-phase2b/preview/saved-review/boot.js',requireStaff,async(q,r)=>{await ready;if(overlayFailure)return r.status(503).set('Cache-Control','no-store').json({ok:false,error:overlayFailure});return requireStaff(q,r,()=>r.set('Cache-Control','private, no-store').type('js').send('window.LOCAL_REVIEW_CONFIG='+JSON.stringify(cfg)+';\n'+boot));});
     app.get(['/', '/map-phase2b-preview.html'],(_q,r)=>{
       let html=readFile(path.join(publicDir,'map-phase2b-preview.html'),'utf8');
-      if(!html.includes('data-src="hybrid-map-ui-boot.js"'))throw Error('EXISTING_REVIEW_BOOT_SLOT_REQUIRED');
-      html=html.replace('data-src="hybrid-map-ui-boot.js"','data-src="/api/map-phase2b/preview/saved-review/boot.js"');
+      const slots=[...html.matchAll(/data-src="hybrid-map-ui-boot\.js(\?[^"\s]*)?"/g)];
+      if(slots.length!==1)throw Error('EXISTING_REVIEW_BOOT_SLOT_REQUIRED');
+      html=html.replace(slots[0][0],'data-src="/api/map-phase2b/preview/saved-review/boot.js'+(slots[0][1]||'')+'"');
       const banner='<div id="reviewBanner" role="status">10/23 저장자료 · 미게시 · 완전성 미확인<small>주소·보호정보 제외 · 기준호차 미확인</small></div>';
       html=html.replace(/<body([^>]*)>/,'<body$1>'+banner);
       return r.set('Cache-Control','no-store').type('html').send(html);
