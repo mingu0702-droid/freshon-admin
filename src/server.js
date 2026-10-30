@@ -2,6 +2,7 @@
 import {mountProductionOpsmapCandidate} from "./productionOpsmapCandidate.js";
 import {createStageReadModel} from "./stageReadModel.js";
 import {createCoordinateSupplement} from "./mapCoordinateSupplement.js";
+import {callHub as verifiedMapHubRead} from "./phase2bHubReadClient.js";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fsSync from "node:fs";
@@ -56,7 +57,7 @@ const upload = multer({
 });
 
 const sharedReadModel=createStageReadModel({secret:process.env.HUB_API_SECRET,publicPeriodCacheEntries:1});
-const sharedCoordinateSupplement=createCoordinateSupplement({callHub});
+const sharedCoordinateSupplement=createCoordinateSupplement({callHub:verifiedMapHubRead});
 const sharedFixedVehicleReader=createFixedVehicleReader({ensureSession: ensureFreshonSession, readJson: readFreshonJson, extractRows: extractFreshonRows});
 const productionMap = mountProductionMapApi(app, {
   sharedReadModel,sharedCoordinateSupplement,
