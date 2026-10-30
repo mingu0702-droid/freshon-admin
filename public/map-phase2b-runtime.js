@@ -963,10 +963,14 @@
         || (state.mode === 'DATE_ROUTE' && periodBasis === 'driver'));
     const projectPin = row => state.map.getProjection().containerPointFromCoords(new kakao.maps.LatLng(row.lat,row.lng));
     const viewport = state.fitRequested ? null : {width:$('#map').clientWidth,height:$('#map').clientHeight};
-    const markerSource = vehicleOverview ? representativeRows(valid) : valid;
+    const protectedOverviewCodes = new Set([...navCodes, state.selected?.customerCode].filter(Boolean));
+    const markerSource = vehicleOverview
+      ? [...representativeRows(valid), ...valid.filter(row => protectedOverviewCodes.has(row.customerCode))]
+      : valid;
     const pins = vehicleOverview
       ? markerSource.filter(row => {
           if (!viewport) return true;
+          if (protectedOverviewCodes.has(row.customerCode)) return true;
           const p = projectPin(row);
           return Number.isFinite(p?.x) && Number.isFinite(p?.y) &&
             p.x >= -80 && p.y >= -80 && p.x <= viewport.width + 80 && p.y <= viewport.height + 80;
