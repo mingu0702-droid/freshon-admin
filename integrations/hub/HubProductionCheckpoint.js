@@ -12,7 +12,13 @@ function hubProductionCheckpointWrite_(r,expected){
   const props=PropertiesService.getScriptProperties();
   if(r.target!=='production'||r.stateId!==props.getProperty(HUB_MODEL_TARGETS.production.property)||r.stateId===props.getProperty(HUB_MODEL_TARGETS.stage.property)||r.stateId===props.getProperty(HUB_STAGE_MODEL.property))throw new Error('MODEL_RESTORE_TARGET_CONFLICT');
   let file;
-  try{file=DriveApp.getFileById(r.stateId);}catch(e){throw hubProductionCheckpointError_(e,'CHECKPOINT_FILE_ACCESS');}
+  for(let attempt=0;attempt<3;attempt++){
+    try{file=DriveApp.getFileById(r.stateId);break;}catch(e){
+      const safe=hubProductionCheckpointError_(e,'CHECKPOINT_FILE_ACCESS');
+      if(safe.message!=='MODEL_DRIVE_SERVICE_ERROR'||attempt===2)throw safe;
+      Utilities.sleep(500*(attempt+1));
+    }
+  }
   let writeError=null;
   try{file.setContent(expected);}catch(e){writeError=hubProductionCheckpointError_(e,'CHECKPOINT_WRITE');}
   if(writeError&&['MODEL_PERMISSION_DENIED','MODEL_QUOTA_LIMIT'].indexOf(writeError.message)>=0)throw writeError;
@@ -110,5 +116,40 @@ function hubProductionCheckpointRearmInterrupted(){
     hubProductionRestoreSchedule_(r);
     hubProductionRestoreAudit_(r,'CONTINUATION','MODEL_STALLED_CONTINUATION_REARMED',null);
   }catch(e){const safe=hubProductionCheckpointError_(e,e.step||'REARM_PRECHECK');hubProductionRestoreAudit_(r,safe.step,safe.message,safe.http);}
+  finally{lock.releaseLock();}
+}
+
+// Exact observed ERROR48 only. The receiver does not expose pending receipts:
+// verify and replay the SAME files; begin/shard ingestion is idempotent.
+function hubProductionCheckpointRecoverDrive48(){
+  const lock=LockService.getUserLock();if(!lock.tryLock(1000))throw new Error('MODEL_WORKER_BUSY');
+  let r;
+  try{
+    r=hubStageRestoreLoad_('production');
+    const live=hubProductionRestoreStatus_();
+    if(live.ready&&r&&live.generation===r.generation){hubProductionRestoreAudit_(r,'READBACK','MODEL_ALREADY_COMMITTED',200);return;}
+    if(r&&r.phase==='RESTORE'){hubProductionRestoreAudit_(r,'PRECHECK','MODEL_ALREADY_RUNNING',null);return;}
+    if(!r||r.target!=='production'||r.generation!==1789933588775||r.phase!=='ERROR'||r.sendAt!==48||r.verified!==48||r.lastError!=='MODEL_DRIVE_SERVICE_ERROR'||r.failedStep!=='CHECKPOINT_FILE_ACCESS'||r.authHalt||r.drive48Repair)throw new Error('MODEL_CHECKPOINT_BASELINE_CHANGED');
+    if(PropertiesService.getScriptProperties().getProperty('PHASE2B_PRODUCTION_RESTORE_HALT_V2'))throw new Error('MODEL_RESTORE_HALT_REQUIRES_DIAGNOSIS');
+    if(live.generation&&live.generation!==r.generation)throw new Error('MODEL_GENERATION_CONFLICT');
+    const job=typeof hubMapIncrementalLoad_==='function'?hubMapIncrementalLoad_():null;
+    if(job&&job.phase!=='DONE'&&job.phase!=='ERROR')throw new Error('MODEL_INCREMENTAL_BUSY');
+    const before=hubProductionRestoreFreshText_(r),b=hubProductionRestoreBaseline_(JSON.parse(JSON.stringify(r))),deadline=Date.now()+240000;
+    if(before!==JSON.stringify(r))throw new Error('MODEL_CHECKPOINT_CHANGED');
+    b.manifest.keys.forEach(function(key){
+      if(Date.now()>deadline)throw new Error('MODEL_PREFLIGHT_TIME_LIMIT');
+      const e=b.published.shards[key],rows=JSON.parse(DriveApp.getFileById(e.id).getBlob().getDataAsString('UTF-8'));
+      if(!Array.isArray(rows)||rows.length!==e.count||hubStageModelHash_(rows)!==e.hash)throw new Error('MODEL_RESTORE_SHARD_CHANGED');
+    });
+    if(hubProductionRestoreFreshText_(r)!==before)throw new Error('MODEL_CHECKPOINT_CHANGED');
+    const backup=DriveApp.getFolderById(b.published.folderId).createFile('production-restore-before-drive48-'+Date.now()+'.json',before,MimeType.PLAIN_TEXT);
+    if(backup.getBlob().getDataAsString('UTF-8')!==before)throw new Error('MODEL_BACKUP_VERIFY');
+    if(hubProductionRestoreFreshText_(r)!==before)throw new Error('MODEL_CHECKPOINT_CHANGED');
+    hubProductionCheckpointWrite_(r,before);
+    r.drive48Repair=true;r.drive48BackupId=backup.getId();r.recoveryReason='DRIVE_ACCESS_RETRY_VERIFIED_PENDING_RECEIPTS_UNAVAILABLE';
+    r.phase='RESTORE';r.sendAt=0;r.verified=0;r.begun=false;r.errors=0;r.lastError='';r.commitHttp=null;r.retryAfter=0;r.totalRetries=0;r.retryAtCount=0;
+    hubProductionCheckpointSave_(r);hubProductionRestoreSchedule_(r);
+    hubProductionRestoreAudit_(r,'CHECKPOINT_VERIFY','MODEL_EXISTING_FILES_RETRANSFER',200);
+  }catch(e){const safe=hubProductionCheckpointError_(e,e.step||'PRECHECK');hubProductionRestoreAudit_(r,safe.step,safe.message,safe.http);}
   finally{lock.releaseLock();}
 }
