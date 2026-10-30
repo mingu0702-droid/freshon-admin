@@ -13,6 +13,36 @@
     const key = String(value ?? "").trim().replace(/호(?:차)?$/, "");
     return /^(?:|[-?]|미확인|호차 미확인)$/.test(key) ? "" : key;
   }
+  function compareVehicles(left, right) {
+    const parse = value => {
+      const key = vehicleColorKey(value).normalize('NFKC');
+      const regular = key.match(/^(\d+(?:-\d+)*)$/);
+      const charter = key.match(/^(?:용차|용)(\d+(?:-\d+)*)$/);
+      return { key, rank: regular ? 0 : charter ? 1 : 2, parts: (regular || charter)?.[1].split('-').map(Number) || [] };
+    };
+    const a = parse(left), b = parse(right);
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    for (let i = 0; i < Math.max(a.parts.length, b.parts.length); i++) {
+      if (a.parts[i] === undefined) return -1;
+      if (b.parts[i] === undefined) return 1;
+      if (a.parts[i] !== b.parts[i]) return a.parts[i] - b.parts[i];
+    }
+    return a.key.localeCompare(b.key, 'ko', { numeric: true }) || a.key.localeCompare(b.key, 'ko');
+  }
+  function vehicleFacet(rows, vehicle, { dated = false } = {}) {
+    const centers = { osan:'osan', yeongnam:'yeongnam', honam:'honam', '011':'osan', '012':'yeongnam', '013':'honam' };
+    const valid = rows.filter(row => vehicleColorKey(dated ? row.vehicle : row.baseVehicle) === vehicleColorKey(vehicle) &&
+      (dated || (row.baseVehicleState === 'VERIFIED_MASTER' && row.baseVehicleSource === 'FIXED_DISPATCH_PRIMARY' && /^[a-f0-9]{64}$/.test(row.baseVehicleVersion || ''))));
+    const observed = new Set(valid.map(row => centers[dated ? (row.dispatchCenterCode || row.centerCode || row.vehicleGroup) : row.baseVehicleGroup] || ''));
+    const versions = new Set(valid.map(row => row.baseVehicleVersion).filter(Boolean));
+    const center = observed.size === 1 && versions.size <= 1 ? [...observed][0] : '';
+    // Address regions and historic source labels are not dispatch-master territory evidence.
+    const regions = new Set(valid.map(row => String(row.baseVehicleArea || '').trim()));
+    const region = !dated && regions.size === 1 ? [...regions][0] : '';
+    return { center, region, stale: valid.some(row => row.baseVehicleStale !== false),
+      checkedAt: valid.map(row => String(row.baseVehicleCheckedAt || '').slice(0, 10)).filter(Boolean).sort()[0] || '',
+      conflict: observed.size > 1 || versions.size > 1, verified: !!center };
+  }
   function vehicleMatches(query, vehicle) {
     const key = vehicleColorKey(query).toLocaleLowerCase();
     return !key || vehicleColorKey(vehicle).toLocaleLowerCase().includes(key);
@@ -93,6 +123,6 @@
     }
     return error;
   }
-  root.Phase2bUi = Object.freeze({ normalizeVehicleLabel, vehicleColorKey, vehicleMatches, vehicleColor, addressVariants, addressMatches, distanceKm, nearbyVehicles, deliveryBoundary, requestError });
+  root.Phase2bUi = Object.freeze({ normalizeVehicleLabel, vehicleColorKey, compareVehicles, vehicleFacet, vehicleMatches, vehicleColor, addressVariants, addressMatches, distanceKm, nearbyVehicles, deliveryBoundary, requestError });
 })(typeof window === "undefined" ? globalThis : window);
 

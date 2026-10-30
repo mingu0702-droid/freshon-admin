@@ -202,7 +202,7 @@
   function syncModeControls(daily,historyDialog=false){
     for(const node of [search,address,filters,stores,$('#sourceBatch'),$('#sourceAreaShortcut'),$('#sourceManualShortcut'),$('#areaToggle')])modeVisible(node,!daily&&node!==address&&node.id!=='sourceManualShortcut');
     modeVisible(planner,daily);modeVisible(periodButton,!daily);modeVisible(context,false);
-    const host=daily?dailyForm:basePicker;for(const node of [routeChecks,$('#selectAllVehicles'),$('#clearVehicles')])if(node.parentNode!==host)host.append(node);
+    const host=daily?dailyForm:basePicker;const pickerBody=window.MapVehiclePicker?.element;for(const node of pickerBody?[pickerBody]:[routeChecks,$('#selectAllVehicles'),$('#clearVehicles')])if(node.parentNode!==host)host.append(node);
     modeVisible($('#legacyVehicleState'),!daily);if(!daily&&$('#legacyVehicleState').parentNode!==basePicker)basePicker.append($('#legacyVehicleState'));
     const rangeRow=$('#rangeStart').parentNode,applyRow=$('#applyPeriod').parentNode;modeVisible(rangeRow,!daily);modeVisible(applyRow,!daily);modeVisible(basis,false);modeVisible($('#periodDriver'),false);
     modeVisible(queryRoutes,daily);modeVisible(routeHelp,daily);modeVisible(advancedRoutes,daily);

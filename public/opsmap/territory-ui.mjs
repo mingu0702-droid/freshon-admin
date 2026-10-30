@@ -2,7 +2,7 @@ import {buildBaseTerritories} from './territory-policy.mjs';
 const bridge=window.MapUiLocalBridge,$=s=>document.querySelector(s),button=$('#areaToggle');
 let enabled=false,busy=false,epoch=0,model=null,polygons=[],renderKey='',draws=0,requests=0;
 const clear=()=>{for(const p of polygons)p.setMap(null);polygons=[];renderKey='';};
-function status(text){const label=$('#territoryStatus');if(label)label.textContent=text;button.textContent=!enabled?'기준호차 권역선 OFF':model?.version?`기준호차 권역선 ON (${polygons.length})`:'기준호차 권역 미확인';button.setAttribute('aria-pressed',String(enabled&&!!model?.version));button.dataset.geometryCount=String(polygons.length);}
+function status(text){const label=$('#territoryStatus');if(label)label.textContent=text;button.title=text;button.textContent=!enabled?'기준호차 권역선 OFF':model?.version?`기준호차 권역선 ON (${polygons.length})`:'기준호차 권역 미확인';button.setAttribute('aria-pressed',String(enabled&&!!model?.version));button.dataset.geometryCount=String(polygons.length);}
 function renderForSelection(){
  if(bridge.state.mode!=='BASE_60D'){clear();status('기준호차 권역선은 매장·권역 지도에서 조회합니다.');return;}
  if(!enabled||!model||!bridge.state.map)return;
@@ -19,10 +19,11 @@ async function load(){
  busy=true;button.disabled=true;const id=++epoch;status('기준호차 확인 중');
  try{
   if(typeof bridge.fixedTerritoryStores!=='function')throw Error('TERRITORY_BINDING_MISSING');
+  const master=bridge.fixedTerritoryMasterState?.();if(master?.version&&master.stale)throw Error('TERRITORY_MASTER_STALE');
   if(typeof bridge.loadBaseVehicleMasterForTerritory==='function'){requests++;await bridge.loadBaseVehicleMasterForTerritory();}
   if(id!==epoch||bridge.state.mode!=='BASE_60D')return;
-  model=buildBaseTerritories(bridge.fixedTerritoryStores());if(!model.version)throw Error('TERRITORY_MASTER_UNVERIFIED');renderForSelection();
- }catch{if(id===epoch){clear();model=null;status('기준호차·좌표 검증자료 미확인 · 실제 배차를 권역으로 사용하지 않습니다.');}}
+  model=buildBaseTerritories(bridge.fixedTerritoryStores());if(!model.version)throw Error('TERRITORY_MASTER_UNVERIFIED');button.dataset.territoryStatus='VERIFIED_MASTER';renderForSelection();
+ }catch(error){if(id===epoch){clear();model=null;button.dataset.territoryStatus=error?.message==='TERRITORY_MASTER_STALE'?'TERRITORY_MASTER_STALE':'TERRITORY_UNCONFIRMED';status(error?.message==='TERRITORY_MASTER_STALE'?'기준호차 이전 확인값 · 최신 권역선 미확인':'기준호차·좌표 검증자료 미확인 · 실제 배차를 권역으로 사용하지 않습니다.');}}
  finally{if(id===epoch){busy=false;button.disabled=false;}}
 }
 async function toggle(){if(bridge.state.mode!=='BASE_60D')return;enabled=!enabled;bridge.state.areaOn=false;if(!enabled){epoch++;busy=false;button.disabled=false;clear();status('고정배차 기준 권역');return;}await load();}
