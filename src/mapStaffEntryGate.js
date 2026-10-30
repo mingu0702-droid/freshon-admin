@@ -26,7 +26,11 @@ export function mountMapStaffEntryGate(app, requireStaff) {
       const checked = operation => {
         if (checking) return operation();
         checking = true;
-        try { return requireStaff(req, res, operation); } finally { checking = false; }
+        try {
+          const result=requireStaff(req,res,operation);
+          if(result&&typeof result.finally==='function')return result.finally(()=>{checking=false;});
+          checking=false;return result;
+        } catch(error) { checking=false;throw error; }
       };
       res.json = value => checked(() => json(value));
       res.send = value => checked(() => send(value));
