@@ -17,5 +17,60 @@
   "r5Installed": false,
   "requiredInstallScope": "https://www.googleapis.com/auth/script.projects",
   "requiredDeploymentUpdateScope": "https://www.googleapis.com/auth/script.deployments",
-  "approval": "Separate exact Hub one-function installation/deployment approval required; no OAuth scope expansion performed"
+  "approval": "Separate exact Hub one-function installation/deployment approval required; no OAuth scope expansion performed",
+  "modules": [
+    {
+      "module": "HubSearch",
+      "operation": "REPLACE_EXACT_FUNCTION_ONLY",
+      "functions": [
+        "hubSearchObjects_"
+      ],
+      "sourceModuleSHA256": "f812b43cca7bd354bcc8169e6fdd5c42b2d42f67e35c668b8a903e24a0630329",
+      "candidateModuleSHA256": "8ef39506444f3341f2a1a775a4190364cb15478be661604390167c68b058f943",
+      "sourceFunctionSHA256": {
+        "hubSearchObjects_": "7a9d87ca1ebaa5f0cd618546d12485aa3dd7c047b8759173d8fbd87f319755f9"
+      },
+      "candidateFunctionSHA256": {
+        "hubSearchObjects_": "d1fc388e83ba184e8ebda2e362bfbb29b22f3178c2221055b6f5fbcf1b00a8c2"
+      }
+    },
+    {
+      "module": "HubMapAdapter",
+      "operation": "REPLACE_EXACT_FUNCTION_ONLY",
+      "functions": [
+        "hubGetMapMarkerDetail"
+      ],
+      "sourceModuleSHA256": "a480a779df3741d9885e05fd19d88dbe434b3d0299d1d22402e532bc7cc25d7d",
+      "candidateModuleSHA256": "0fa1a8b059e6ae7e5e405f6cc80325b606c6f467657e809b23ed28ce22134a10",
+      "sourceFunctionSHA256": {
+        "hubGetMapMarkerDetail": "80b8ed97881af25d4d7d2a1ad050032835c510c6b2b8cc3ca1291b0e66ae4ef8"
+      },
+      "candidateFunctionSHA256": {
+        "hubGetMapMarkerDetail": "08bcb527c15981a97508e5880147cfbd3eafe20a8d2d1e538d19c83790da14f0"
+      }
+    },
+    {
+      "module": "HubMapHttpApi",
+      "operation": "REPLACE_EXACT_FUNCTION_ONLY",
+      "functions": [
+        "hubMapHttpHandleCustomerDetail_"
+      ],
+      "sourceModuleSHA256": "7ebbf2b5f0f08b6399a65ccb490e9dceeecbe2bf4ca1701d244905ccb18b567c",
+      "candidateModuleSHA256": "3efcfaec2497f1cf0c280c61d73a0eb7c8b444673974bf84a332a76ed77d301e",
+      "sourceFunctionSHA256": {
+        "hubMapHttpHandleCustomerDetail_": "d43fee3eafc6814738796d259548af846c24e6876d5c8ad55d50e3a288f6659c"
+      },
+      "candidateFunctionSHA256": {
+        "hubMapHttpHandleCustomerDetail_": "46a467bf81886cdbd25020e1cee4f4f045c3f0a6f8a30cd3ea0831abe7719f01"
+      }
+    }
+  ],
+  "customerDetailPatch": "HUB_V64_CUSTOMER_DETAIL_MINIMAL.diff",
+  "customerDataApiActualPayloadObserved": false,
+  "notFoundSoleRootCauseProven": false,
+  "existingHttpHandlerAlreadyChecksUpstreamOk": true,
+  "undatedCustomerPolicy": "getCustomers only; no unbounded delivery scan",
+  "datedPolicy": "existing route-first dated filters and field precedence; exact customer identity; upstream errors never become empty success",
+  "localBoundaryTests": 4,
+  "remoteCallsForThisPatch": 0
 }
