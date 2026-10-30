@@ -1,0 +1,1136 @@
+{
+  "status": "V64_PLUS_EXACT_APPROVED_THREE_FUNCTIONS_LOCAL_ONLY",
+  "sourceProjectId": "1QCfJSuAIHwGcDxlCQhCGART40D2ULlmP2KmD7GuA0c7KIoFFRC9qOBbP",
+  "sourceVersion": 64,
+  "sourceFiles": 35,
+  "candidateFiles": 35,
+  "sourceSHA256": "ea640799fbae81b25464f6e4120b83a32782ebe31cb5bab1a6ed4e1f7d56cd00",
+  "candidateSHA256": "e6f18e04447cab90477801de23da9d920e92640572ae62e2895b35deb9cea6ad",
+  "modifiedModules": [
+    {
+      "module": "HubSearch",
+      "sourceSHA256": "f812b43cca7bd354bcc8169e6fdd5c42b2d42f67e35c668b8a903e24a0630329",
+      "candidateSHA256": "8ef39506444f3341f2a1a775a4190364cb15478be661604390167c68b058f943",
+      "functions": [
+        {
+          "name": "hubSearchObjects_",
+          "v64SHA256": "7a9d87ca1ebaa5f0cd618546d12485aa3dd7c047b8759173d8fbd87f319755f9",
+          "candidateSHA256": "d1fc388e83ba184e8ebda2e362bfbb29b22f3178c2221055b6f5fbcf1b00a8c2",
+          "headSHA256": "7a9d87ca1ebaa5f0cd618546d12485aa3dd7c047b8759173d8fbd87f319755f9",
+          "headTargetMatchesV64": true
+        }
+      ]
+    },
+    {
+      "module": "HubMapAdapter",
+      "sourceSHA256": "a480a779df3741d9885e05fd19d88dbe434b3d0299d1d22402e532bc7cc25d7d",
+      "candidateSHA256": "0fa1a8b059e6ae7e5e405f6cc80325b606c6f467657e809b23ed28ce22134a10",
+      "functions": [
+        {
+          "name": "hubGetMapMarkerDetail",
+          "v64SHA256": "80b8ed97881af25d4d7d2a1ad050032835c510c6b2b8cc3ca1291b0e66ae4ef8",
+          "candidateSHA256": "08bcb527c15981a97508e5880147cfbd3eafe20a8d2d1e538d19c83790da14f0",
+          "headSHA256": "80b8ed97881af25d4d7d2a1ad050032835c510c6b2b8cc3ca1291b0e66ae4ef8",
+          "headTargetMatchesV64": true
+        }
+      ]
+    },
+    {
+      "module": "HubMapHttpApi",
+      "sourceSHA256": "7ebbf2b5f0f08b6399a65ccb490e9dceeecbe2bf4ca1701d244905ccb18b567c",
+      "candidateSHA256": "3efcfaec2497f1cf0c280c61d73a0eb7c8b444673974bf84a332a76ed77d301e",
+      "functions": [
+        {
+          "name": "hubMapHttpHandleCustomerDetail_",
+          "v64SHA256": "d43fee3eafc6814738796d259548af846c24e6876d5c8ad55d50e3a288f6659c",
+          "candidateSHA256": "46a467bf81886cdbd25020e1cee4f4f045c3f0a6f8a30cd3ea0831abe7719f01",
+          "headSHA256": "d43fee3eafc6814738796d259548af846c24e6876d5c8ad55d50e3a288f6659c",
+          "headTargetMatchesV64": true
+        }
+      ]
+    }
+  ],
+  "wholeProjectDiff": [
+    {
+      "name": "appsscript",
+      "type": "JSON",
+      "change": "UNCHANGED",
+      "sourceSHA256": "c8c6e4256b2dba1655893c5abb3645241a75700730191f8b4bbf749c8a4fbe5a",
+      "candidateSHA256": "c8c6e4256b2dba1655893c5abb3645241a75700730191f8b4bbf749c8a4fbe5a"
+    },
+    {
+      "name": "Code",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "59ea8f74f720a0449f8f274b11a27b3daae473d2cc11997915ba128c38d4d6c4",
+      "candidateSHA256": "59ea8f74f720a0449f8f274b11a27b3daae473d2cc11997915ba128c38d4d6c4"
+    },
+    {
+      "name": "HubClaimDataLayer",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "d3ffbff77c4c250c2f219021220a25ac81b01be516b36f149ed5f422c330a64e",
+      "candidateSHA256": "d3ffbff77c4c250c2f219021220a25ac81b01be516b36f149ed5f422c330a64e"
+    },
+    {
+      "name": "HubDashboard",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "8fa3e301b314ee39f526ef3f5d3a06800e6bfa064eacc2f0d4c33952d31aa2bc",
+      "candidateSHA256": "8fa3e301b314ee39f526ef3f5d3a06800e6bfa064eacc2f0d4c33952d31aa2bc"
+    },
+    {
+      "name": "HubDataLayer",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "6e2ad77159b8ce0414a09c5f08c1f8add04f17688fc94d031982ffe8849014d4",
+      "candidateSHA256": "6e2ad77159b8ce0414a09c5f08c1f8add04f17688fc94d031982ffe8849014d4"
+    },
+    {
+      "name": "HubDatedAssignments",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "a9bdc6e8292f854ca16464b64bd3c0d2b4946dff557a6d1f6e2021d2822f597c",
+      "candidateSHA256": "a9bdc6e8292f854ca16464b64bd3c0d2b4946dff557a6d1f6e2021d2822f597c"
+    },
+    {
+      "name": "HubDeliveryHistory",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "3e54dfbbc80f779c22355171c80015193920ca5bbb8020515dc776cad8eafff4",
+      "candidateSHA256": "3e54dfbbc80f779c22355171c80015193920ca5bbb8020515dc776cad8eafff4"
+    },
+    {
+      "name": "HubHealthCheck",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "3de428a505cbc4833635a18e7c5a9b84963aed839026fee5748cf8a66127ec29",
+      "candidateSHA256": "3de428a505cbc4833635a18e7c5a9b84963aed839026fee5748cf8a66127ec29"
+    },
+    {
+      "name": "HubKpi",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "ef0e70f28dfea2d80041851ab34b230676daa974b59d183855f3b7f1a1fabc48",
+      "candidateSHA256": "ef0e70f28dfea2d80041851ab34b230676daa974b59d183855f3b7f1a1fabc48"
+    },
+    {
+      "name": "HubMapAdapter",
+      "type": "SERVER_JS",
+      "change": "APPROVED_FUNCTION_ONLY",
+      "sourceSHA256": "a480a779df3741d9885e05fd19d88dbe434b3d0299d1d22402e532bc7cc25d7d",
+      "candidateSHA256": "0fa1a8b059e6ae7e5e405f6cc80325b606c6f467657e809b23ed28ce22134a10"
+    },
+    {
+      "name": "HubMapHttpApi",
+      "type": "SERVER_JS",
+      "change": "APPROVED_FUNCTION_ONLY",
+      "sourceSHA256": "7ebbf2b5f0f08b6399a65ccb490e9dceeecbe2bf4ca1701d244905ccb18b567c",
+      "candidateSHA256": "3efcfaec2497f1cf0c280c61d73a0eb7c8b444673974bf84a332a76ed77d301e"
+    },
+    {
+      "name": "HubMapIncremental",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "4eded1f100f88450cc27a99b12fb4cd11e14fb4802ddaa6eda86f58e88e2e42b",
+      "candidateSHA256": "4eded1f100f88450cc27a99b12fb4cd11e14fb4802ddaa6eda86f58e88e2e42b"
+    },
+    {
+      "name": "HubMapPhase2B",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "4747a91cbd2bd6401b78ecf4c93c338c3434fb2a8250dce89b93ddd68fd045ec",
+      "candidateSHA256": "4747a91cbd2bd6401b78ecf4c93c338c3434fb2a8250dce89b93ddd68fd045ec"
+    },
+    {
+      "name": "HubMapReadProjection",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "1b2b7cfd622372291f5360a700622f7a93d2e72ba0319d9bd3eb51941a8d80b4",
+      "candidateSHA256": "1b2b7cfd622372291f5360a700622f7a93d2e72ba0319d9bd3eb51941a8d80b4"
+    },
+    {
+      "name": "HubPeriodDiagnostics",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "2904d03d58693f7627666811f2044b3f9f1f0584cb84161f26f6b2caae9aa44c",
+      "candidateSHA256": "2904d03d58693f7627666811f2044b3f9f1f0584cb84161f26f6b2caae9aa44c"
+    },
+    {
+      "name": "HubPeriodSource",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "8d33c2862b097c338046d96e37e3da8c3e910082cd097aac8cad83d167b6456c",
+      "candidateSHA256": "8d33c2862b097c338046d96e37e3da8c3e910082cd097aac8cad83d167b6456c"
+    },
+    {
+      "name": "HubProductionRestoreRecovery",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "9730f2d2bc0752c85e73abb25b3600d49074648384b5357aab0e3bb198ca2be5",
+      "candidateSHA256": "9730f2d2bc0752c85e73abb25b3600d49074648384b5357aab0e3bb198ca2be5"
+    },
+    {
+      "name": "HubSearch",
+      "type": "SERVER_JS",
+      "change": "APPROVED_FUNCTION_ONLY",
+      "sourceSHA256": "f812b43cca7bd354bcc8169e6fdd5c42b2d42f67e35c668b8a903e24a0630329",
+      "candidateSHA256": "8ef39506444f3341f2a1a775a4190364cb15478be661604390167c68b058f943"
+    },
+    {
+      "name": "HubSearchSidebar",
+      "type": "HTML",
+      "change": "UNCHANGED",
+      "sourceSHA256": "ce2ca38d5d7a9326e751c2b73c8da83a3485bc44fd8c08c3cba060235f256c45",
+      "candidateSHA256": "ce2ca38d5d7a9326e751c2b73c8da83a3485bc44fd8c08c3cba060235f256c45"
+    },
+    {
+      "name": "HubStaffDetail",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "6d1a11c41055d0bd5340df92c58eac076ed93908820cc1c8ab273867ae13d432",
+      "candidateSHA256": "6d1a11c41055d0bd5340df92c58eac076ed93908820cc1c8ab273867ae13d432"
+    },
+    {
+      "name": "HubStaffHistory",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "113b34f36b532aff83ab92d21a70e815f6c7ffce896b6cfc64b2ec4926d468fa",
+      "candidateSHA256": "113b34f36b532aff83ab92d21a70e815f6c7ffce896b6cfc64b2ec4926d468fa"
+    },
+    {
+      "name": "HubStaffPeriod",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "c0be3ccab94a5fb8cf41e9769f180e57c9b3d61239a1ad7f8448e3c92ab96187",
+      "candidateSHA256": "c0be3ccab94a5fb8cf41e9769f180e57c9b3d61239a1ad7f8448e3c92ab96187"
+    },
+    {
+      "name": "HubStageReadModel",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "51bf8c12362616498ff661315c7bc4314b72800cf66317ef95eddd5aeec0be2d",
+      "candidateSHA256": "51bf8c12362616498ff661315c7bc4314b72800cf66317ef95eddd5aeec0be2d"
+    },
+    {
+      "name": "HubStageReadModelCandidate",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "dfc08092e56657b22a740db5e9cb845b9ac2301fd6c25f7301c3095781519432",
+      "candidateSHA256": "dfc08092e56657b22a740db5e9cb845b9ac2301fd6c25f7301c3095781519432"
+    },
+    {
+      "name": "HubStageReadModelIncremental",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "a0011d564b53c44037891312514109a2cd22fb34662de894c167ac9783b77953",
+      "candidateSHA256": "a0011d564b53c44037891312514109a2cd22fb34662de894c167ac9783b77953"
+    },
+    {
+      "name": "HubStageReadModelRestore",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "a50d22038aad2c2a2b0b0be22363cdf6bf6bc4b002f07cf24fc6845b20045e30",
+      "candidateSHA256": "a50d22038aad2c2a2b0b0be22363cdf6bf6bc4b002f07cf24fc6845b20045e30"
+    },
+    {
+      "name": "HubStageReadModelResume",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "33f2e4937ccc0816df7333ec536319cb1c02d98177e3e4b7d52460e78806663d",
+      "candidateSHA256": "33f2e4937ccc0816df7333ec536319cb1c02d98177e3e4b7d52460e78806663d"
+    },
+    {
+      "name": "HubStageReadModelUtf8Migration",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "eed7af16e4036598a24df828295284170ff1f83293b9b7811cf40a9ff221d068",
+      "candidateSHA256": "eed7af16e4036598a24df828295284170ff1f83293b9b7811cf40a9ff221d068"
+    },
+    {
+      "name": "HubViews",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "dfbc37d51de5a240d8b894a6710e4a02a717f810cb168534603e26b607a998c6",
+      "candidateSHA256": "dfbc37d51de5a240d8b894a6710e4a02a717f810cb168534603e26b607a998c6"
+    },
+    {
+      "name": "RecoveryCenter",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "7d151a1a989da84b70505076f0f3355fc0f0048db4e771d71cef9929b34e3eca",
+      "candidateSHA256": "7d151a1a989da84b70505076f0f3355fc0f0048db4e771d71cef9929b34e3eca"
+    },
+    {
+      "name": "VerifyStageHubApi",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "2666d3bf62ec0124e2f8563e258e86c5dc6b653d733c20d3b184543f58512f2e",
+      "candidateSHA256": "2666d3bf62ec0124e2f8563e258e86c5dc6b653d733c20d3b184543f58512f2e"
+    },
+    {
+      "name": "HubProductionCheckpoint",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "bed44bc5a573dd9698e417bc4e5fc55b03cf5d118c78425073454bcde843f204",
+      "candidateSHA256": "bed44bc5a573dd9698e417bc4e5fc55b03cf5d118c78425073454bcde843f204"
+    },
+    {
+      "name": "HubProductionCoordinates",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "22e8d2c075f06e074f9a367fd44ba331e09d2a87327c072153e8ac3df17e199e",
+      "candidateSHA256": "22e8d2c075f06e074f9a367fd44ba331e09d2a87327c072153e8ac3df17e199e"
+    },
+    {
+      "name": "HubMapAutomation",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "96d52004e24fd34ea6707e0faaafb2b867a84e0da6f91949d47d456440681e8c",
+      "candidateSHA256": "96d52004e24fd34ea6707e0faaafb2b867a84e0da6f91949d47d456440681e8c"
+    },
+    {
+      "name": "HubProductionCoordinateStore",
+      "type": "SERVER_JS",
+      "change": "UNCHANGED",
+      "sourceSHA256": "06acc5ca66e20325f0a33d51323af130fb7f4ecfbc60d2f5aec6128b61811a9d",
+      "candidateSHA256": "06acc5ca66e20325f0a33d51323af130fb7f4ecfbc60d2f5aec6128b61811a9d"
+    }
+  ],
+  "syntaxFiles": 33,
+  "dependencies": [
+    {
+      "module": "HubSearch",
+      "function": "hubSearchObjects_",
+      "dependencies": [
+        {
+          "name": "hubMapHttpObjects_",
+          "definedIn": [
+            "HubMapHttpApi"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "HubMapAdapter",
+      "function": "hubGetMapMarkerDetail",
+      "dependencies": [
+        {
+          "name": "hubSearchObjects_",
+          "definedIn": [
+            "HubSearch"
+          ]
+        },
+        {
+          "name": "getDailyRoutes",
+          "definedIn": [
+            "HubDataLayer"
+          ]
+        },
+        {
+          "name": "getCustomers",
+          "definedIn": [
+            "HubDataLayer"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "HubMapHttpApi",
+      "function": "hubMapHttpHandleCustomerDetail_",
+      "dependencies": [
+        {
+          "name": "hubMapHttpValidateOnlyKeys_",
+          "definedIn": [
+            "HubMapHttpApi"
+          ]
+        },
+        {
+          "name": "hubMapHttpCustomerCode_",
+          "definedIn": [
+            "HubMapHttpApi"
+          ]
+        },
+        {
+          "name": "hubMapHttpDate_",
+          "definedIn": [
+            "HubMapHttpApi"
+          ]
+        },
+        {
+          "name": "hubGetMapMarkerDetail",
+          "definedIn": [
+            "HubMapAdapter"
+          ]
+        },
+        {
+          "name": "hubMapHttpRequireHubOk_",
+          "definedIn": [
+            "HubMapHttpApi"
+          ]
+        },
+        {
+          "name": "hubMapHttpRaise_",
+          "definedIn": [
+            "HubMapHttpApi"
+          ]
+        },
+        {
+          "name": "hubMapHttpNullableText_",
+          "definedIn": [
+            "HubMapHttpApi"
+          ]
+        }
+      ]
+    }
+  ],
+  "manifestUnchanged": true,
+  "headFileCount": 109,
+  "headChanges": [
+    {
+      "name": "appsscript",
+      "type": "JSON",
+      "change": "CHANGED",
+      "sourceSHA256": "c8c6e4256b2dba1655893c5abb3645241a75700730191f8b4bbf749c8a4fbe5a",
+      "headSHA256": "fd28d0f15cd3ba8fa109bcbe08952f023b6218b78cb310a7641627c4e2ae49e5",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapHttpApi",
+      "type": "SERVER_JS",
+      "change": "CHANGED",
+      "sourceSHA256": "7ebbf2b5f0f08b6399a65ccb490e9dceeecbe2bf4ca1701d244905ccb18b567c",
+      "headSHA256": "28859415f29095022769862ef671d46b828dd44794dd2e37a34d843abfb4da13",
+      "changedFunctions": [
+        {
+          "name": "doPost",
+          "change": "CHANGED",
+          "sourceSHA256": "743d9383127e4a65f6f76ebf786a210c67dfbffe96ba81dba2ed94a370d9f4cf",
+          "headSHA256": "e45ec3ac896ed95b471b30177bc9439ae903a42ea890c874d09623ad1bfa81eb"
+        }
+      ]
+    },
+    {
+      "name": "HubProductionRestoreRecovery",
+      "type": "SERVER_JS",
+      "change": "CHANGED",
+      "sourceSHA256": "9730f2d2bc0752c85e73abb25b3600d49074648384b5357aab0e3bb198ca2be5",
+      "headSHA256": "fb47b1648c31ea639bb88848a7897eb683f80a5456edda31a624140097a81690",
+      "changedFunctions": [
+        {
+          "name": "hubProductionRestoreWorker_",
+          "change": "CHANGED",
+          "sourceSHA256": "3ba501f7054a515778ac1343c22bce41ad1d30ddc9100611e174b96cc5782df9",
+          "headSHA256": "8ad22c3bcb6e1a5add2d56db7988a359cfff652571a3b6ec455c27affd2204ca"
+        }
+      ]
+    },
+    {
+      "name": "HubStageReadModelIncremental",
+      "type": "SERVER_JS",
+      "change": "CHANGED",
+      "sourceSHA256": "a0011d564b53c44037891312514109a2cd22fb34662de894c167ac9783b77953",
+      "headSHA256": "ce3d2e814ce6d44408d29d3e12c95251b1677137043f4172474e97b0d32f7c23",
+      "changedFunctions": [
+        {
+          "name": "hubStageIncrementalRow_",
+          "change": "CHANGED",
+          "sourceSHA256": "97defdf8e90ba8bdf1608e5ac2c3bdd5b3634ba8cbe531468280bb744e5865be",
+          "headSHA256": "f5bad91dda7e34e04345119946fdba5b4aa429d60df56eb43f0ca12434d02ba2"
+        }
+      ]
+    },
+    {
+      "name": "ApiAttemptBudget",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "9fe81878e277c37c96d494254997f1c12e15b43639ec1440cbf3b2566637673c",
+      "changedFunctions": []
+    },
+    {
+      "name": "CollectorPrefixChainReader",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "32115b730b82abbabc1e4987f7e87536773f1a207a4d42c43c314a2026e10154",
+      "changedFunctions": []
+    },
+    {
+      "name": "CustomerDiagnosticDateCodec",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "b6235c2e47f5c92920697e6e4cf29f496764a532387496d9f8b304f305b41702",
+      "changedFunctions": []
+    },
+    {
+      "name": "CustomerPageReader",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "6c1c97fec41e8ce4d5f7c2a4a86c1fa841670112d89bc284f5c2081381e471eb",
+      "changedFunctions": []
+    },
+    {
+      "name": "DirectCustomerSourceProbe",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "989b213eab16dc349136746fa0f7dcdb194ed1039ca49213f321ebd0f1e2484a",
+      "changedFunctions": []
+    },
+    {
+      "name": "DirectCustomerSourceProbeNative",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "8f285345cb15796dd8e5f47209bec53065d781756bbe42c49b788bcd40b851bc",
+      "changedFunctions": []
+    },
+    {
+      "name": "EditorAttemptGate",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "9341d6c54f47819fbf0c6923c9da06b352def9d89cbd2328730a5de777ced200",
+      "changedFunctions": []
+    },
+    {
+      "name": "EmptyRunProof",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "f7401a80129424912fbeff4d8f8335518954fa0d909aa58bb38e2cc091a8065a",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubCompatibility",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "e8ce2e512c58705cc2fb50724cc6a4d0c4947392358df7f65b0d7817f02267ae",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubDirectCustomerReadOnlyDiagnostic",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "548a1c7ca17f8a27a30c19ee6479392989cda23b817615830cd3d39f5e1550e6",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapIncrementalPrepareOnly",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "d37d703a46125a72c2ce1441d9eb217e2ae390b712e05f25e52e89fcab3996cf",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDiagnostics",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "39bf125acd7b8427bd338a0193e4507523cf42e240bce4c91e1219a01a0945f8",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDriverAssignment",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "52608ccb8936ff85e8dee47b1a63a4183553f3b8ac2394920e1899af29880b2f",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDriverAssignmentRecovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "dab80730fe2a1cc6c89198d2df4fc74c6587d4670d03a8b05053ff4be19518da",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDriverBucket4Recovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "20b39e27035a3b75b5e6c6ced39d3bfc5f397994864754e60b88e60392aea29d",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDriverBucketBudget",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "bb26aa8f3fb6bc6693676190f71effa26108826046480d0fd8f60d580646688b",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDriverError41Recovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "0a6ac9cdd46a2f0a5843ccb87b75c15c2eb2ae572b25e524cbfeca14530507ba",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDriverKeyDiagnostic",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "86adbb19d70f2849d4528655debb7beeb2b81ff51eccd9368a137162b0f3c164",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDriverReadOnlyPreflight",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "11158ab99d00e1b97f77f6b7c205e8c4395d95a38bde695ee7041bf7cabe14a5",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDriverRecovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "69afcec49f9adaa2da2bc856dfe4540b2e60f055d2b42c7637afe23f266773c5",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDriverSourceRecovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "a6c27a65f57df81b21c85436484204207b3ed429ce362aef9d8a8314d8401014",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageDriverVisitRecovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "c28732cd601154920aaa89c398faa8be87007329c972e2d54ddf6651092e4622",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageHistoryBudget",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "9fee68d1bb553d23b25b1dd9ad9ae240abfd98eee3f5dc4106132c058d9af5b0",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageMaterialize",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "962186498e3b2e1799ddcf6f747448e0185e2f751084623bd3c6f2d46d698985",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageMetadata",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "f704fbbac7a7affd2d508d98c04ab27ea48e3dfbcf9b329046c747d975537def",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePreparation",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "d7fe087d59f0a45eb38c9ce806ec4f20e9e368496560ad36289df274e6e2acdc",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateBuild",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "1fe64fa789a5831d65466f10e6d5d3025f01fd0187b3ec10b816204015602d02",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateDateRecovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "7f785797aba73b47397931a25548987e68f3b7b146ed83dda076fe387416d258",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateFieldRecovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "db3ed6537420a0f24b58209e90cd8f4c12d01d2876add02c032a25fae09fd0a6",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateParser",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "71cd507886805a1d8245421058216c49f6a062e8476ca4715bb610f10a6eb677",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateReadBenchmark",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "cb5c7d75ec261a27ceafa0f867fa32caf1b340d6b0c5c135d60d0f9e2c1f0e00",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateSnapshot",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "2aa01c53a5e17c9a3c8b0ec4c5a5a06b0377fd2eb9dfb4e7fd0a70f30cff9017",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateSnapshotCutoffRecovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "5bc2ca5a820bf35b81f5792cfe1fde17bd4119531b2337ed6ce33bdc4c3bedf7",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateSnapshotFrozenSelected",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "087593c01f47a0513d94b04799db14f888a5cf448282d1b1b72a7b1453798d85",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateSnapshotInternal",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "68ebd984908c9831a7467d0941ef1bc737bbe1eb73ba653718301297468db8f4",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateSnapshotNative",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "b756bf6ef11779b9bac0ea473f249b69c110350b30c362320ada3e1815848b1d",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateSnapshotRuntime",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "7f13d231390c2d4f7da8ead5997773b1400833f9758fba43b8ad363069333101",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePrivateSnapshotZeroRecovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "6b9a5a2148f8a667923d38d96b432877bbc1f4c3c1d363459da32c672852f21c",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageProbeRemaining811",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "6b8ec6d785d11b21613ff1d89ca665fbc0edc71503fa2c6c88b4e0accf444b77",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackagePublication",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "0442fda262c8382402a2ae1e25cad07395d1288015810e372a4a4f5677e9433b",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageRecovery143",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "df1b1808fc86fdd879046de3ac37ecbafb8c34d65a4e98cfcc34ac5014850907",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageRecovery151",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "885cb3d5960ab177b5dc189135262d2794199752a2d6c3eea2319c9d405f856b",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageScopedRecovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "42373351fbbf0dce31aab8b431db5f965e7a332e3d60e27362674dbefd429131",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageSingleProbe143",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "08b84ceced20e3a078d28a2c3f72b2b27200cfb99369daff277dc13a078bf576",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageSourceRead",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "4dc6a5b52d02bedf586c16af2450fd609c8525aa6be5c28549fe3e29682e1cd4",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageStore",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "d8f256f86f86f98de3527e777b376ce9f90e9a1454c63077db941a02105c3619",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageVehicleResume",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "3257c5f1a7197a090ac8e1ebb092a3e37bbd767c6f93914b317c4f351869873e",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPackageVerification",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "6f835c4c4a897314948ad1d1700a9775f74926a3d19d3771ddd3da97399852e4",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPrepareOnlyBatchedRead",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "a60bde3a9143a5c10d635c58e9e3ed3deeb6c617afe891e7ab1fa760f25af5ae",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPrepareOnlyExecutionRenewal",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "b05830111b34a5f23ab947295f138d68c18538b40af69dab74a3e11a13eb86ab",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapPrepareOnlyReadOnlyLog",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "cc3b9230983658c03c43afa7c2062ace1376f6982bff8bf03248eec8fceef8f8",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubMapRecoveryReadOnlyInspection",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "9a1fdeb6e8d7e2bb03b6c0109be699ae62497ad2dc30f54f0754b1cc408c864c",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubOneClick",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "712a3adbade5a28ed82d58d925741f7e2853b77b1a01168c27295a7346f19d5c",
+      "changedFunctions": []
+    },
+    {
+      "name": "MeteredGasServices",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "2eaf45be18fa975a1aa113d12bae9d818b7c9c4c93167606c4d564b5cdfe113c",
+      "changedFunctions": []
+    },
+    {
+      "name": "MixedContinuation",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "878a958a5da2bdc351fd761edb24224756828a11668d80c56cd1b5bc06c433b7",
+      "changedFunctions": []
+    },
+    {
+      "name": "MixedHubNative",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "1db32e10d68b53a9423efe94a26f28c24ac8fffae82b477a3cd488598ca7e522",
+      "changedFunctions": []
+    },
+    {
+      "name": "MixedSealedInput",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "e18bea2105785dcd87570db21c354d3a017523e309148a66d175f248c044c484",
+      "changedFunctions": []
+    },
+    {
+      "name": "OpenMeteredGasInvocation",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "543efaa16a4a8275624d66feacb3411cf3101b455e28891de2868ce6ca4dec9a",
+      "changedFunctions": []
+    },
+    {
+      "name": "PreparedBudget",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "01221701feb63cc016161b019fe052a642b4bf528bdb87c8efefa1a64e9420b0",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeActivationV4",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "9b9be0eb8b28ba4efa5dbdbde914103b14f9be4996c2343ed4f8404880921fe8",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeAdmissionFinalize",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "91789a0dc75054990c96f32d00846d581bbb31eca8d8b6b5f6940cff8c0a1d4e",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeAdmissionRecovery",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "0d669806e1ee197e18eb0844e2dc2912e3d91303583a44622fb4f34048c452d0",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeAdmissionV4",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "952a5419afeede311126bf789682c5a679fe000aa62f2729325c996c4494af31",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeAlgorithmV4",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "9eb9fbb14021e9bddee823734eefb39613f05e44ae4cd6142a9b1fd3f0cec8cc",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeBootstrapV4",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "151f5b349280259a745d1592c22ce8d9be1efdf37e59871f89f4b01448546c1f",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeCleanupV4",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "5f64175e5a307d7fdf2c9a3a14bd5e3c09a83fd0d1c12f9322e8fb010ff7b82f",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeControl",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "8fab05666e3ddf495bb6fb3109f77768718ca77475a081da26fdef41df57b61d",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeControlV4",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "bed5593b84ab04f64e5aaed2db7ecde276b175dbcb73cb405045c998fd546f45",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeDriveAdapter",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "f12afc023db1c34f0869d3d553329487a14a2c8bdb09edc5b294cec94ac48b3a",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeEngine",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "d2aaf9862f5cd5e936fd010cba44668eebf9401e61be47472229c413036f3e3d",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeNativeV4",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "32c403284130965d1034a6bef0f5f33c3b4f5842c94e942315e2db89eac5c56a",
+      "changedFunctions": []
+    },
+    {
+      "name": "RangeWorkerV4",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "99403a9ca89a41137b1fd6175e500082cf7bb00d77a95ecbab5cb118b8011fbe",
+      "changedFunctions": []
+    },
+    {
+      "name": "SealedV4Input",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "e68873eaed143cc0b3cf02629e42490c925594920ed88321717eebcc33da8073",
+      "changedFunctions": []
+    },
+    {
+      "name": "HubRollingDateRead",
+      "type": "SERVER_JS",
+      "change": "ADDED",
+      "sourceSHA256": null,
+      "headSHA256": "eea5a773674b5e04c651bc16eb14e40f7ba900c965dffe606ddc5f7db194bbcb",
+      "changedFunctions": []
+    }
+  ],
+  "headPreserved": true,
+  "remoteCalls": 0,
+  "remoteWrites": 0,
+  "versionsCreated": 0,
+  "deploymentsUpdated": 0,
+  "actualInstall": false,
+  "r5Installed": false,
+  "oauthApprovalRequired": false,
+  "deployableWithoutEditorReplacement": false,
+  "blocker": "APPS_SCRIPT_VERSION_SNAPSHOTS_ENTIRE_HEAD_WITH_UNAPPROVED_CHANGES",
+  "singleRequiredDecision": "Project owner must resolve the existing undeployed HEAD delta and designate an approved deployable HEAD while preserving those changes. Until then keep this exact three-function candidate local; no blanket 109-file deployment, editor overwrite, project substitution, or repeated OAuth request.",
+  "officialContracts": [
+    "https://developers.google.com/apps-script/api/reference/rest/v1/projects.versions/create",
+    "https://developers.google.com/apps-script/api/reference/rest/v1/projects/updateContent"
+  ],
+  "headExecutionRisk": "updateContent replaces the whole HEAD used by triggers/editor/development executions; temporarily replacing it with v64 is not an isolated deployment operation.",
+  "approvedDiffSHA256": "d0de3ff64d3fd6685534fc184de53bb8120bf4fee66f9a5029a8b39d29d094e1",
+  "fullDiffMatchesCandidate": true,
+  "regression": {
+    "scope": "ISOLATED_VM_ACTUAL_V64_CANDIDATE_WITH_SYNTHETIC_RESPONSES_NOT_LIVE_HUB",
+    "pass": 12,
+    "fail": 0,
+    "checks": [
+      {
+        "name": "current_customer_payload_0",
+        "pass": true
+      },
+      {
+        "name": "current_customer_payload_1",
+        "pass": true
+      },
+      {
+        "name": "current_customer_payload_2",
+        "pass": true
+      },
+      {
+        "name": "current_customer_payload_3",
+        "pass": true
+      },
+      {
+        "name": "dated_precedence_and_exact_filters",
+        "pass": true
+      },
+      {
+        "name": "explicit_empty",
+        "pass": true
+      },
+      {
+        "name": "source_failure",
+        "pass": true
+      },
+      {
+        "name": "source_timeout",
+        "pass": true
+      },
+      {
+        "name": "identity_mismatch",
+        "pass": true
+      },
+      {
+        "name": "conflict",
+        "pass": true
+      },
+      {
+        "name": "unknown_contract",
+        "pass": true
+      },
+      {
+        "name": "dated_route_failure_stops_without_customer_read",
+        "pass": true
+      }
+    ]
+  },
+  "encryptedReadbackEqual": true,
+  "headObservation": {
+    "capturedAt": "2026-10-30T20:22:31.731Z",
+    "recordedSHA256": "363600cd0c5703e86aca39511db7b539aabd72b788660a7c5012f8555cdb6e99",
+    "metadataSource": "Existing PREPARE_RESULT.json and HEAD.before.encrypted.json reused; no new source read",
+    "currentHeadRefetched": false,
+    "warning": "No assertion that the editor HEAD remained unchanged after this captured read"
+  },
+  "originalAuthorizedPatchUnchanged": true,
+  "retainedActualDeploymentVersion": 64,
+  "headConflictSummary": {
+    "targetFunctionTextConflicts": 0,
+    "unapprovedAddedFiles": 74,
+    "unapprovedChangedExistingFiles": [
+      "appsscript",
+      "HubMapHttpApi",
+      "HubProductionRestoreRecovery",
+      "HubStageReadModelIncremental"
+    ],
+    "changedExistingFunctions": [
+      "doPost",
+      "hubProductionRestoreWorker_",
+      "hubStageIncrementalRow_"
+    ],
+    "approvedPatchNeedsNewDependency": false,
+    "approvedPatchNeedsManifestChange": false
+  }
+}

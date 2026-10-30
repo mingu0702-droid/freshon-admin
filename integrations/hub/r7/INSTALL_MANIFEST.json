@@ -17,7 +17,7 @@
   "r5Installed": false,
   "requiredInstallScope": "https://www.googleapis.com/auth/script.projects",
   "requiredDeploymentUpdateScope": "https://www.googleapis.com/auth/script.deployments",
-  "approval": "Separate exact Hub one-function installation/deployment approval required; no OAuth scope expansion performed",
+  "approval": "USER_APPROVED_EXACT_THREE_FUNCTIONS_ALREADY_GRANTED; no approval to publish unrelated HEAD109 changes or replace editor content",
   "modules": [
     {
       "module": "HubSearch",
@@ -72,5 +72,13 @@
   "undatedCustomerPolicy": "getCustomers only; no unbounded delivery scan",
   "datedPolicy": "existing route-first dated filters and field precedence; exact customer identity; upstream errors never become empty success",
   "localBoundaryTests": 4,
-  "remoteCallsForThisPatch": 0
+  "remoteCallsForThisPatch": 0,
+  "approvedFunctionNames": [
+    "hubSearchObjects_",
+    "hubGetMapMarkerDetail",
+    "hubMapHttpHandleCustomerDetail_"
+  ],
+  "oauthApprovalAlreadyGranted": true,
+  "followupVerification": "FOLLOWUP_DEPLOYMENT_GUARD_FINAL.json",
+  "safeInstallBlockedBy": "Current same-project version creation would snapshot the unrelated HEAD delta; no editor overwrite or HEAD109 publication permitted"
 }
