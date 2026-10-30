@@ -42,3 +42,9 @@ test('switching customers aborts first read and rejects its late protected respo
  f.pending[1].finish(200,{ok:true,data:{customerCode:'S970002',memoDate:target.date,accessInfo:'SECOND_SYNTHETIC_ONLY'}});await flush();
  assert.equal(host.dataset.state,'ready');assert.match(f.text(host),/SECOND_SYNTHETIC_ONLY/);assert.doesNotMatch(f.text(host),/SYNTHETIC_AUTHORISED_ONLY/);
 });
+
+test('future protected source remains pending without clearing the employee session or exposing fields',async()=>{
+ const f=fixture(),host=f.host();await f.window.MapStaff.open({...target,date:'2026-11-01'},host,f.button());await flush();
+ f.pending[0].finish(202,{ok:false,data:null,error:'PLANNED_SOURCE_UNOBSERVED'});await flush();
+ assert.equal(host.dataset.state,'not-ready');assert.match(f.text(host),/예정 자료/);assert.doesNotMatch(f.text(host),/비밀번호|미등록/);assert.equal(f.expired(),0);assert.equal(f.logouts(),0);assert.equal(f.pending.length,1);
+});

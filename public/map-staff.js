@@ -54,6 +54,7 @@
       }
       const parsedAt = performance.now(), value = await response.json(); parseMs = performance.now() - parsedAt;
       local.signal.throwIfAborted();
+      if(isDetail&&status===202&&value?.error==='PLANNED_SOURCE_UNOBSERVED')throw Object.assign(new Error('PLANNED_SOURCE_UNOBSERVED'),{status,detailCode:'PLANNED_SOURCE_UNOBSERVED'});
       if (isDetail && (value?.ok !== true || value.data == null)) throw Object.assign(new Error('DETAIL_INVALID_RESPONSE'),{status:502,detailCode:'DETAIL_INVALID_RESPONSE'});
       const expiresAt = Number(response.headers.get('x-staff-expires-at')), idleExpiresAt = Number(response.headers.get('x-staff-idle-expires-at'));
       if (isDetail && expiresAt && idleExpiresAt && !local.signal.aborted) deadline({ authenticated: true, expiresAt, idleExpiresAt });
@@ -167,6 +168,10 @@
       }
     } catch (error) {
       if (error.name === 'AbortError' || id !== generation) return;
+      if(error.detailCode==='PLANNED_SOURCE_UNOBSERVED'){
+        shell('예정 배차자료 확인 대기');surface.dataset.state='not-ready';
+        node('p','선택한 배송일의 예정 자료를 아직 확인하지 못했습니다. 보호정보 조회 완료로 처리하지 않았습니다.');return;
+      }
       if (['DETAIL_SOURCE_AUTH_REQUIRED','DETAIL_SOURCE_FORBIDDEN'].includes(error.detailCode)) {
         shell('원천 조회 권한 확인 필요'); surface.dataset.state='source-auth';
         node('p','직원 로그인은 유지 중입니다. 원천 인증 또는 선택 매장의 조회 권한을 확인해야 합니다.');
