@@ -1,0 +1,98 @@
+/* Only compatibility for preserved controller IDs; Site design lives in the unchanged source CSS. */
+.approvedShellCandidate .compatibilityHidden{display:none!important}
+.approvedShellCandidate #map{position:absolute;inset:0;width:100%;height:100%}
+.approvedShellCandidate .leftPanel{position:static;padding:0;overflow:hidden;border-radius:0}
+.approvedShellCandidate .scrollside{scrollbar-gutter:stable}
+.approvedShellCandidate #approvedSiteHeader .tab[aria-pressed=true]{background:#eaf0ff;color:#2059dc}
+.approvedShellCandidate .officialBrand{object-fit:contain}
+.approvedShellCandidate .sourceSearchLabel{font-weight:600;margin:0 0 7px}
+.approvedShellCandidate .customerBlock>.hint,.approvedShellCandidate #searchState,.approvedShellCandidate .addressBlock .mini{display:none}
+.approvedShellCandidate .addressBlock{margin-top:16px}
+.approvedShellCandidate section.addressBlock{margin:16px 0 0;padding:0;border:0}
+.approvedShellCandidate .addressBlock .label{font-weight:600;margin:0 0 7px}
+.approvedShellCandidate #query,.approvedShellCandidate #addressQuery{flex:1}
+.approvedShellCandidate #approvedShortcuts{margin-left:auto}
+.approvedShellCandidate #staffLogout{font-size:13px;margin-left:2px}
+.approvedShellCandidate #dailyQuerybar #todayBtn{grid-column:2;grid-row:1;border:0;text-align:right;padding:0;font-size:11px;background:none;color:#78879c}
+.approvedShellCandidate #dailyQuerybar #selectedDate{grid-column:1;grid-row:2;padding:6px;font-size:12px}
+.approvedShellCandidate #dailySummary b{font-size:19px;line-height:1.25;font-weight:650}
+.approvedShellCandidate #roadRoutePanel[hidden]{display:contents!important}
+.approvedShellCandidate #roadRouteCoverage:empty{display:none}
+.approvedShellCandidate #roadRoutePanel{margin:0;padding:0;border:0}
+.approvedShellCandidate #periodStoreListSection .sectiontitle{position:relative}
+.approvedShellCandidate #periodStoreListSection .sectiontitle>h2{flex:1}
+.approvedShellCandidate #periodStoreListSection .sectiontitle>.mini{display:none}
+.approvedShellCandidate #periodStoreListSection .sectiontitle{font-size:0}
+.approvedShellCandidate #periodStoreListSection .sectiontitle h2{font-size:14px}
+.approvedShellCandidate .storeitem{white-space:normal;overflow-wrap:anywhere}
+.approvedShellCandidate .sourceItinerary{margin:0 20px;padding:18px 0;border-top:1px solid var(--line)}
+.approvedShellCandidate .runStop{display:flex;align-items:center;gap:10px;border:0;width:100%;white-space:normal;text-align:left}
+.approvedShellCandidate .runInfo{min-width:0;flex:1}.approvedShellCandidate .runName{font-weight:600}.approvedShellCandidate .runMeta{font-size:12px;color:#8a95a5}
+.approvedShellCandidate .runOrder{width:30px;height:30px;border:1px solid #e5eaf0;background:#f9fafc;display:grid;place-items:center;border-radius:8px;color:var(--blue)}
+.approvedShellCandidate .marker{position:relative;width:36px;height:43px;border:0;background:transparent;padding:0;filter:drop-shadow(0 2px 4px #14294455)}
+.approvedShellCandidate .marker .pinShape{position:absolute;inset:0;width:100%;height:100%;fill:var(--pin-color,#2862e9);stroke:white;stroke-width:2}
+.approvedShellCandidate .marker .pinNumber{position:absolute;left:0;top:6px;width:100%;color:white;font-size:13px;font-weight:750;text-align:center}
+.approvedShellCandidate .markerLabel{display:none}
+.approvedShellCandidate #detailSection{position:absolute;z-index:450;background:white;max-width:318px;max-height:70vh;overflow:auto;border-radius:12px}
+.approvedShellCandidate #newAreaBatchTool[hidden]{display:none}.approvedShellCandidate #newAreaBatchTool{padding:14px;border:1px solid var(--line);border-radius:8px}
+.approvedShellCandidate .sidefoot .dataHelp{font-size:12px;flex:1;color:#6a778a}.approvedShellCandidate .sidefoot .dataHelp>summary{text-align:center;font-weight:550;list-style:none;padding:8px 0}
+.approvedShellCandidate .sidefoot .dataHelp[open]{max-height:55vh;overflow:auto}
+.approvedShellCandidate .sidefoot .dataHelp[open] input,.approvedShellCandidate .sidefoot .dataHelp[open] button{max-width:100%;white-space:normal}
+.approvedShellCandidate .sourceCount{font-weight:400;cursor:pointer;line-height:18px}
+.approvedShellCandidate #runListPanel{display:contents}
+.approvedShellCandidate #runListTool>summary{list-style:none;margin:0 0 12px;cursor:default}
+.approvedShellCandidate #runListCount{font-weight:400}
+.approvedShellCandidate #roadRoutePanel>.hint{font-size:11px;line-height:1.4;margin:5px 0}
+.approvedShellCandidate #roadRoutePanel>.row{margin-top:6px;flex-wrap:wrap}
+.approvedShellCandidate #roadRoutePanel>.row button{padding:5px 8px;font-size:11px;flex:none}
+.approvedShellCandidate #navigationPreview .row{margin-top:6px}
+.approvedShellCandidate .sidefoot .dataHelp>summary{padding:8px 11px;font-size:12px;font-weight:550;line-height:18px;border:0;border-radius:7px}
+.approvedShellCandidate.daily-mode .sidefoot{padding-top:7px;padding-bottom:16px}
+.approvedShellCandidate #sourceRoutePicker[hidden]{display:none!important}
+.approvedShellCandidate .sidefoot .dataHelp{flex:1 1 22px}
+.approvedShellCandidate .detailWrap{display:none;right:20px;top:84px;bottom:78px;width:318px}
+.approvedShellCandidate .detailWrap.open{display:block}
+.approvedShellCandidate #periodIdentity,.approvedShellCandidate #mapStatusSub{white-space:normal;overflow-wrap:anywhere}
+.approvedShellCandidate #legacyVehicleState .vehicleList{max-height:200px;overflow:auto}
+.approvedShellCandidate #legacyVehicleState .vehicleItem{display:flex;align-items:center;gap:6px;padding:5px}
+.approvedShellCandidate #vehicleTrigger,.approvedShellCandidate #vehicleQuery{width:100%}
+.approvedShellCandidate .vehicleDropdown{display:none}.approvedShellCandidate #vehicleSelect.open .vehicleDropdown{display:block}
+.approvedShellCandidate #routeDialog #dailyControls[hidden]{display:block!important}
+.approvedShellCandidate #routeDialog #periodDriver[hidden]{display:block!important}
+.approvedShellCandidate #routeDialog #vehicleList{display:flex;max-height:200px;overflow:auto}
+.approvedShellCandidate #routeDialog .vehicleItem{font-weight:400;margin:0;padding:5px 8px;font-size:14px;background:#f5f7fb;border-radius:5px}
+.approvedShellCandidate #routeDialog .vehicleArea{display:none}
+.approvedShellCandidate #routeDialog .periodBasis{display:flex!important}
+.approvedShellCandidate #routeDialog #periodDriver{height:41px}
+.approvedShellCandidate #routeDialog .sourceAdvancedRoutes{margin-top:12px;font-size:12px;color:#728097}
+.approvedShellCandidate #mapBatchDialog #newAreaBatchTool{border:0;padding:0}
+.approvedShellCandidate #mapBatchDialog #newAreaBatchTool>summary{display:none}
+.approvedShellCandidate #mapBatchDialog textarea{min-height:100px;resize:vertical;margin:12px 0}
+.approvedShellCandidate #mapBatchDialog .newActions,.approvedShellCandidate #mapBatchDialog .dropdownFoot{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}
+.approvedShellCandidate #mapBatchDialog .judgeCard{width:100%;white-space:normal;overflow-wrap:anywhere;text-align:left;margin:8px 0}
+.approvedShellCandidate .marker.approvedMarker{width:36px;height:36px;filter:none}
+.approvedShellCandidate .marker.approvedMarker.periodCluster{width:44px;height:44px}
+.approvedShellCandidate .marker.approvedMarker.selected .pin{width:40px;height:40px;outline:5px solid #2962ed40}
+.approvedShellCandidate #sourceCollectedAt,.approvedShellCandidate #mapAppliedRange,.approvedShellCandidate #packageReadState{font-size:12px;overflow-wrap:anywhere}
+.approvedShellCandidate #sourceRoutePicker{padding:8px;border:1px solid var(--line);margin-top:8px}
+.approvedShellCandidate .manualCoordinates,.approvedShellCandidate .manualActions{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.approvedShellCandidate #manualStops{list-style:none;padding:0}
+.approvedShellCandidate .detailCard{padding:18px;overflow-wrap:anywhere}
+.approvedShellCandidate .mapSourceStatus{position:absolute;z-index:410;right:22px;bottom:56px;max-width:min(640px,calc(100% - 44px));padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:7px;font-size:12px;overflow-wrap:anywhere;box-shadow:0 2px 8px #18345912}
+.approvedShellCandidate .mapSourceStatus #packageReadState[data-state="held"],.approvedShellCandidate .mapSourceStatus #packageReadState[data-state="error"]{color:#a33a16;font-weight:700}
+.approvedShellCandidate .mapSourceStatus #freshnessState{display:block;font-size:12px}
+.approvedShellCandidate .vehicleColorBadge{white-space:nowrap;color:var(--vehicle-color,#64748b);font-weight:650}
+.approvedShellCandidate .vehicleColorBadge::before{content:'';display:inline-block;width:8px;height:8px;margin-right:4px;border-radius:50%;background:var(--vehicle-color,#64748b)}
+.approvedShellCandidate .mapbottom .vehicleLegend{display:none}
+.approvedShellCandidate .vehicleLegend strong{font-size:11px;color:#64748b}
+.approvedShellCandidate .vehicleLegend span{white-space:nowrap;font-size:11px}
+.approvedShellCandidate .vehicleLegend .clusterLegend{color:#64748b}
+.approvedShellCandidate .marker.approvedMarker .pin>span{font-size:11px;letter-spacing:-.4px}
+.approvedShellCandidate .marker.approvedMarker .clusterpin{background:var(--pin,#64748b);box-shadow:0 0 0 5px #64748b29,0 3px 9px #13264c55}
+
+
+/* Role separation wins over legacy forced display rules. */
+.approvedShellCandidate [data-mode-hidden="true"]{display:none!important}
+.approvedShellCandidate #baseVehiclePicker{margin-top:10px}
+.approvedShellCandidate #baseVehiclePicker>#vehicleList{display:flex;flex-wrap:wrap;max-height:240px;overflow:auto}
+.approvedShellCandidate #roadRoutePanel[data-mode-hidden="true"]{display:none!important}

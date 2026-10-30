@@ -22,11 +22,11 @@ export function mountProductionMapApi(app,{
   previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
   normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus,
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
-  publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster
+  publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const stageReadModelEnabled=true;
-  const stageReadModel=createStageReadModel({secret,publicPeriodCacheEntries:1});
+  const stageReadModel=sharedReadModel||createStageReadModel({secret,publicPeriodCacheEntries:1});
   const phase2bAssignmentCache=createPhase2bReadCache({name:'assignments',ttlMs:60000,staleMs:120000,maxEntries:8,maxBytes:12*1024*1024});
   const phase2bDatedAssignmentCache=createPhase2bReadCache({name:'datedAssignments',ttlMs:600000,staleMs:0,maxEntries:16,maxBytes:24*1024*1024});
   app.use(staffLatency);
@@ -35,7 +35,7 @@ export function mountProductionMapApi(app,{
   app.use('/api/map-phase2b/private/driver-history',historyDeadline);
   app.use(publicResponse);
   const mapFreshness=mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus:stageReadModel.status,readBaseVehicleMaster});
-  const coordinateSupplement=createCoordinateSupplement({callHub});
+  const coordinateSupplement=sharedCoordinateSupplement||createCoordinateSupplement({callHub});
   if(process.env.RENDER_EXTERNAL_URL==='https://freshon-admin-1.onrender.com')void coordinateSupplement.refresh();
   if(publicDir)app.get(['/map-phase2b-snapshot.json','/customer-master-20260604.json','/vehicle-data.js','/new-area-data.js'],async(req,res)=>{
     try{
@@ -237,5 +237,5 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
       console.warn('Production published lookup restore request not acknowledged.');
     }
   }
-  return {requestPublishedModel,status:stageReadModel.status};
+  return {requestPublishedModel,status:stageReadModel.status,baseCache:mapFreshness.baseCache};
 }

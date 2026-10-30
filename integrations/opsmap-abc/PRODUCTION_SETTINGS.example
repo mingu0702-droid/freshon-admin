@@ -1,0 +1,20 @@
+# No operational values. Configure in the Production service only after review.
+OPSMAP_PRODUCTION_CANDIDATE_ENABLED=0
+OPSMAP_AUTH_ORIGIN=https://freshon-admin-1.onrender.com
+# Existing Production MAP_STAFF_ID/PASSWORD_HASH are reused; no new employee account.
+OPSMAP_AUTH_SESSION_SECRET=
+OPSMAP_AUTH_STORE_REPO=
+OPSMAP_AUTH_STORE_TOKEN=
+OPSMAP_AUTH_STORE_BRANCH=production/opsmap-auth
+# Require private repository distinct from Stage freshon-cache; no Stage-file migration.
+# Session file: opsmap-production/staff-sessions-v1.json
+OPSMAP_PIN_STORE_REPO=
+OPSMAP_PIN_STORE_TOKEN=
+OPSMAP_PIN_STORE_BRANCH=production/opsmap-manual-pins
+# Pin file: opsmap-production/manual-pins-v1.json
+OPSMAP_PRODUCTION_PIN_WRITES=0
+OPSMAP_PIN_WRITER_ID=
+OPSMAP_PIN_WRITE_AUTHORIZATION=
+OPSMAP_PIN_WRITE_APPROVAL_ID=
+# Unverified Hub R5 prepared reads/cache, photo and Directions remain OFF in code.
+# Preserve existing HUB_API_URL/HUB_API_SECRET, collector settings and Hub triggers.

@@ -62,5 +62,5 @@ export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,mo
     return {generation:live.generation,verifiedDates,unconfirmedDates,coverageComplete:unconfirmedDates.length===0,
       coverageReason:unconfirmedDates.length?'NO_GENERATION_MATCHED_COMPLETION_EVIDENCE_FOR_SOME_DATES':'GENERATION_SHARD_HASH_AND_COLLECTION_LOG_MATCH'};
   }
-  return {readStatus,coverage};
+  return {readStatus,coverage,baseCache:base};
 }

@@ -1,0 +1,67 @@
+/* B layout: the existing map and controls are reused, including on small screens. */
+.approvedShellCandidate .navigationWorkspace[hidden]{display:none!important}
+.approvedShellCandidate.daily-mode .maparea{display:grid;grid-template-rows:minmax(320px,1fr) auto;overflow:auto;min-width:0}
+.approvedShellCandidate.daily-mode #map{position:relative;inset:auto;min-height:360px;height:100%;grid-row:1}
+.approvedShellCandidate.daily-mode .navigationWorkspace{grid-row:2;display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,1fr);gap:16px;padding:18px;background:#fff;border-top:1px solid #dfe7f2;max-height:50vh;overflow:auto}
+.approvedShellCandidate .navigationWorkspace>section,.approvedShellCandidate .navigationWorkspace>details{min-width:0;margin:0;padding:12px;border:1px solid #e3e8ef;border-radius:8px}
+.approvedShellCandidate .navigationWorkspace #runListTool,.approvedShellCandidate #navMissingStores{grid-column:1/-1}
+.approvedShellCandidate #navigationPreview{display:none}
+.approvedShellCandidate .navTotals{display:flex;gap:18px;font-size:20px;color:#2454a4;margin:12px 0}
+.approvedShellCandidate .navToggles{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin:12px 0}
+.approvedShellCandidate .navToggles input{width:auto;height:auto}
+.approvedShellCandidate #navRouteStatus,.approvedShellCandidate #navPointStatus{font-size:12px;overflow-wrap:anywhere}
+.approvedShellCandidate #navLegs{display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:200px;overflow:auto}
+.approvedShellCandidate #navLegs button{white-space:normal;text-align:left;font-size:12px}
+.approvedShellCandidate #navLegs button[aria-pressed=true]{background:#eaf0ff;color:#2059dc;outline:1px solid #8fb2fb}
+.approvedShellCandidate .navigationPicker{padding:10px;background:#f3f7fd;border-radius:7px;margin:10px 0}
+.approvedShellCandidate .navPickActions{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.approvedShellCandidate .navPickActions button{font-size:12px;flex:1;min-width:75px}
+.approvedShellCandidate #navAmbiguous{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+.approvedShellCandidate .mapCenters{display:flex;gap:4px;flex-wrap:wrap;max-width:100%}
+.approvedShellCandidate .mapCenters button{font-size:11px;padding:5px 8px;background:white}
+.approvedShellCandidate .centerMarker{font-size:11px;background:#fff;border:2px solid #345f99;border-radius:5px;padding:4px}
+.approvedShellCandidate .navRoutePoint{font-size:11px;font-weight:700;background:#234f94;color:#fff;border:2px solid #fff;box-shadow:0 1px 6px #16365d55;border-radius:12px;padding:4px 8px}
+.approvedShellCandidate #navMissingStores button{display:block;text-align:left;margin:5px 0;width:100%;white-space:normal}
+.approvedShellCandidate #navigationMeaning{font-size:11px;color:#65768b}
+.approvedShellCandidate #navigationSummary button,.approvedShellCandidate #navigationSummary label{max-width:100%}
+.approvedShellCandidate.daily-mode .mapSourceStatus{top:270px;bottom:auto;max-height:78px;overflow:auto;font-size:10px}
+.approvedShellCandidate.daily-mode .mapbottom{top:320px;bottom:auto}
+@media(max-width:900px){.approvedShellCandidate #approvedSiteHeader{height:auto;min-height:76px;flex-wrap:wrap;gap:8px;padding:10px 14px}.approvedShellCandidate #approvedSiteHeader .brand{width:auto;flex:1;min-width:160px}.approvedShellCandidate #approvedSiteHeader>nav{order:3}.approvedShellCandidate #approvedSiteHeader .headerLinks{order:4;width:100%;justify-content:center}.approvedShellCandidate.daily-mode .workspace{flex-direction:column}.approvedShellCandidate.daily-mode .sidebar{width:100%;min-width:0}.approvedShellCandidate.daily-mode .maparea{width:100%;min-width:0}.approvedShellCandidate.daily-mode #detailSection{position:static!important;grid-row:3;left:auto!important;right:auto!important;top:auto!important;width:100%;max-width:none;max-height:400px!important;margin:0}.approvedShellCandidate.daily-mode #detailSection:not(.open){display:none}.approvedShellCandidate.daily-mode .maptop{flex-wrap:wrap;gap:6px;left:12px;right:12px}.approvedShellCandidate.daily-mode .mapCenters{width:100%;max-width:none;justify-content:flex-end}}
+@media(max-width:900px){.approvedShellCandidate.daily-mode .navigationWorkspace{grid-template-columns:minmax(0,1fr);max-height:none;overflow:visible}.approvedShellCandidate.daily-mode .maparea{height:auto!important;min-height:900px;overflow:visible;grid-template-rows:360px auto}.approvedShellCandidate.daily-mode #map{min-height:360px;height:360px}.approvedShellCandidate.daily-mode .workspace{height:auto;overflow:visible}.approvedShellCandidate .navigationWorkspace #runListTool{grid-column:1}.approvedShellCandidate #navigationSummary,.approvedShellCandidate #waypointPlanner{width:100%;box-sizing:border-box}}
+@media(max-width:480px){.approvedShellCandidate .navigationWorkspace{padding:10px!important;gap:10px!important}.approvedShellCandidate .mapCenters{max-width:180px}.approvedShellCandidate .maptop{gap:5px}.approvedShellCandidate .navPickActions button{padding:7px 5px}.approvedShellCandidate .navigationPicker input{min-width:0;width:100%;box-sizing:border-box}}
+
+@media(min-width:901px){.approvedShellCandidate #navigationSummary{position:sticky;top:0;align-self:start}.approvedShellCandidate .navigationWorkspace{align-items:start}}
+
+
+/* Route entry is one consistent set of searchable fields. */
+.approvedShellCandidate .navigationPicker{padding:12px;background:#f5f7fb;border:1px solid #e1e7ee;border-radius:9px;margin:12px 0}
+.approvedShellCandidate .navSelectedHeading{font-size:11px;font-weight:600;color:#6b7889}
+.approvedShellCandidate #navSelectedStore{margin:6px 0 9px;line-height:1.5}
+.approvedShellCandidate #navSelectedStore strong{display:block;font-size:13px;color:#24364b}
+.approvedShellCandidate #navSelectedStore small{display:block;font-size:11px;color:#718097;overflow-wrap:anywhere}
+.approvedShellCandidate .navPickActions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.approvedShellCandidate .navPickActions button{min-width:0;min-height:34px;font-size:12px;padding:7px 5px}
+.approvedShellCandidate #navPointStatus:empty{display:none}
+.approvedShellCandidate #navPointStatus{margin:8px 0 0;line-height:1.5;color:#426185}
+.approvedShellCandidate .navFieldDetail{display:block;margin:5px 0 0 28px;color:#6d7a8c;font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+.approvedShellCandidate .navFieldDetail[hidden]{display:none}
+.approvedShellCandidate .navEditorField input[data-resolved=true]{border-color:#a1bcd7;background:#f9fbfd}
+.approvedShellCandidate .navSearchResults{margin:-1px 0 12px;padding:4px;border:1px solid #b6c9dc;background:white;border-radius:8px;box-shadow:0 5px 14px #213d5d14;max-height:245px;overflow-y:auto;overscroll-behavior:contain}
+.approvedShellCandidate .navSearchResults[hidden]{display:none}
+.approvedShellCandidate .navSearchResults button{display:block;width:100%;text-align:left;margin:0;padding:9px 10px;border:0;border-radius:5px;background:transparent;white-space:normal;line-height:1.4}
+.approvedShellCandidate .navSearchResults button:hover,.approvedShellCandidate .navSearchResults button[aria-selected=true]{background:#edf3fc}
+.approvedShellCandidate .navSearchResults strong{display:block;font-size:12px;font-weight:600;color:#24364b}
+.approvedShellCandidate .navSearchResults small{display:block;font-size:10px;color:#718097;overflow-wrap:anywhere}
+.approvedShellCandidate .navSearchResults p{margin:8px;font-size:12px;color:#718097;line-height:1.5}
+.approvedShellCandidate .navCenterChoices{display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.approvedShellCandidate .navCenterChoices[hidden]{display:none}
+.approvedShellCandidate .navCenterChoices>span{font-size:11px;color:#718097;margin-right:2px}
+.approvedShellCandidate .navCenterChoices button{font-size:11px;padding:5px 8px;min-height:28px;border:1px solid #d6e0e8;background:white}
+.approvedShellCandidate .navRoutePointGroup{display:flex;flex-direction:column;align-items:center;gap:2px;max-width:150px}
+.approvedShellCandidate .navRoutePoint{min-height:31px;max-width:150px;display:flex;align-items:center;gap:6px;border-radius:7px;padding:5px 8px;line-height:1.2;font-size:11px;background:#4b66a4;box-shadow:0 2px 5px #15304a33}
+.approvedShellCandidate .navRoutePoint small{max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:500;color:#fff}
+.approvedShellCandidate .navRoutePoint[data-role=origin]{background:#1e7c63}
+.approvedShellCandidate .navRoutePoint[data-role=destination]{background:#bf514b}
+.approvedShellCandidate #navLegs button{font-size:11px;line-height:1.5;padding:8px 9px}
+.approvedShellCandidate #navMissingStores{font-size:12px;color:#6c7b8e}
+@media(max-width:480px){.approvedShellCandidate .navSearchResults{max-height:210px}.approvedShellCandidate .navPickActions button{min-height:38px}}

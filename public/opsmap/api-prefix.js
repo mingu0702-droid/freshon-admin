@@ -1,0 +1,2 @@
+// Document-local API routing only; existing WMS documents never load this file.
+(()=>{const raw=window.fetch.bind(window);window.fetch=(input,options)=>{const u=new URL(input instanceof Request?input.url:String(input),location.href);if(u.origin===location.origin&&(/^\/api\//.test(u.pathname)||/^\/(?:vehicle-data|admin-features|new-area-data)\.js$/.test(u.pathname))){u.pathname='/opsmap'+u.pathname;input=input instanceof Request?new Request(u,input):u.href;}return raw(input,options);};})();

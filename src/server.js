@@ -1,4 +1,7 @@
 ﻿import express from "express";
+import {mountProductionOpsmapCandidate} from "./productionOpsmapCandidate.js";
+import {createStageReadModel} from "./stageReadModel.js";
+import {createCoordinateSupplement} from "./mapCoordinateSupplement.js";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fsSync from "node:fs";
@@ -52,12 +55,17 @@ const upload = multer({
   }
 });
 
+const sharedReadModel=createStageReadModel({secret:process.env.HUB_API_SECRET,publicPeriodCacheEntries:1});
+const sharedCoordinateSupplement=createCoordinateSupplement({callHub});
+const sharedFixedVehicleReader=createFixedVehicleReader({ensureSession: ensureFreshonSession, readJson: readFreshonJson, extractRows: extractFreshonRows});
 const productionMap = mountProductionMapApi(app, {
-  readBaseVehicleMaster: createFixedVehicleReader({ensureSession: ensureFreshonSession, readJson: readFreshonJson, extractRows: extractFreshonRows}),
+  sharedReadModel,sharedCoordinateSupplement,
+  readBaseVehicleMaster: sharedFixedVehicleReader,
   previewEnabled, requireView, readPhase2bSnapshot, getSnapshotMemory: () => phase2bSnapshotMemory,
   phase2bKstDate, normalizeCell, normalizeDateValue, phase2bSnapshotMeta, phase2bTodayStatus, publicDir,
   getSnapshotWorkerState: () => ({running:!!phase2bSnapshotRefreshPromise,continuation:!!phase2bSnapshotRetryTimer})
 });
+mountProductionOpsmapCandidate(app,{publicDir,readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),callHub,sharedBaseCache:productionMap.baseCache,readBaseVehicleMaster:sharedFixedVehicleReader,sharedReadModel,sharedCoordinateSupplement,readPhase2bSnapshot,getSnapshotMemory:()=>phase2bSnapshotMemory,phase2bKstDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus});
 app.use(express.json({ limit: "10mb" }));
 // Sensitive namespaces must never inherit PUBLIC_VIEW or the SPA fallback.
 app.use('/api/collector', requireAdmin);

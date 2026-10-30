@@ -1,0 +1,7 @@
+/* Retain the approved controls and mobile panel routing. */
+#sourceCollectedAt,#mapAppliedRange,#packageReadState{font-size:11px;line-height:1.5}
+#packageReadState[data-state="held"],#packageReadState[data-state="error"]{color:#8a4500}
+body.dailyWorkspace #manualRouteTool,body.dailyWorkspace #periodStoreListSection{display:block!important}
+body.dailyWorkspace [data-sheet-tab=manual]{display:inline-block!important}
+body:not(.dailyWorkspace) .periodBasis,body:not(.dailyWorkspace) #periodDriver{display:none!important}
+

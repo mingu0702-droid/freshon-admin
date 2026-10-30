@@ -1,0 +1,40 @@
+/* Approved workbench layout, preserving existing operational panels. */
+#approvedShortcuts{display:flex;gap:4px;margin-left:auto}
+#approvedShortcuts a{display:inline-flex;align-items:center;justify-content:center;min-height:34px;border:1px solid #ccd7e5;border-radius:7px;background:#fff;color:#29405d;font-size:10px;padding:7px;text-decoration:none;white-space:nowrap}
+#approvedShortcuts a:hover{background:#edf4ff;border-color:#2463eb}
+#approvedShortcuts a:focus-visible{outline:2px solid #2463eb;outline-offset:2px}
+.officialBrand{display:block;width:120px;height:42px;object-fit:contain}
+#manualRouteTool>summary{justify-content:space-between}
+#manualRouteTool .toolBody{display:grid;gap:8px}
+#manualRouteTool .hint{margin:0;font-size:11px;line-height:1.5}
+#manualRouteTool button{min-height:34px;border-radius:6px}
+.manualCoordinates,.manualActions{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.manualCoordinates input{width:100%;min-width:0;border:1px solid #cbd6e3;border-radius:6px;padding:7px}
+#manualStops{padding:0;list-style:none;margin:0;display:grid;gap:6px}
+#manualStops li{padding:7px;border:1px solid #dce4ef;border-radius:8px;overflow-wrap:anywhere}
+.manualStopControls{display:flex;gap:5px;margin-top:5px}
+.manualStopControls button{border:1px solid #cbd6e3;background:white;padding:5px 9px}
+#manualStatus{font-size:11px;color:#52647b;margin:0;line-height:1.5}
+#newAreaBatchTool .newActions{grid-template-columns:1fr auto auto}
+body:not(.periodMode) #manualRouteTool{display:none!important}
+body:not(.periodMode) [data-sheet-tab=manual]{display:none!important}
+#allStoresControl{display:block;margin:8px 0;font-size:12px}
+@media(min-width:761px){
+ #mapModeBar{flex-wrap:wrap;height:86px;align-content:center}
+ #periodIdentity{flex-basis:100%;order:5}
+ #map{top:86px}.periodMode .mapStatus{top:94px!important}
+ body:not(.periodMode) #operationBar{top:86px!important}
+ body:not(.periodMode) #map{top:144px}
+ body:not(.periodMode) .mapStatus{top:152px!important}
+}
+@media(max-width:760px){
+ #approvedShortcuts{display:flex;flex-wrap:wrap;gap:4px;margin:10px 0 0}
+ #periodFilterPanel>.officialBrand{margin:0 0 12px}
+ .sheetTabs{display:flex!important;overflow-x:auto;gap:2px}
+ .sheetTabs button{flex:1 0 auto;font-size:11px;padding:8px 7px}
+ body.mobileMap #leftPanel>#manualRouteTool{display:none!important}
+ #mobileSheetContent>#manualRouteTool{display:block!important}
+ #mobileSheetContent>#manualRouteTool>summary{display:none}
+ #mobileSheetContent>#manualRouteTool>.toolBody{display:grid}
+}
+
