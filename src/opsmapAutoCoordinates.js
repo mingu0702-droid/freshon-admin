@@ -7,7 +7,7 @@ const codeValid = value => typeof value === 'string' && /^[A-Z]\d{1,20}$/.test(v
 const pointValid = row => typeof row?.lat === 'number' && typeof row?.lng === 'number' &&
   Number.isFinite(row.lat) && Number.isFinite(row.lng) && row.lat >= 33 && row.lat <= 39.5 && row.lng >= 124 && row.lng <= 132;
 const sensitive = /[\r\n\x00-\x1f]|비밀|비번|암호|출입|공동현관|현관|도어|잠금|패스워드|연락처|전화|연락|password|passcode|access\s*code|https?:|@|(?:\+?82[- ]?)?01[016789][- ]?\d{3,4}[- ]?\d{4}|[#*]/i;
-const knownSources = new Set(['MANUAL_VERIFIED', 'STORED_MATCH', 'KAKAO_EXACT_ADDRESS', 'RAW_GPS', 'GEOCODE_EXACT']);
+const knownSources = new Set(['MANUAL_PIN', 'MANUAL_VERIFIED', 'STORED_MATCH', 'KAKAO_EXACT_ADDRESS', 'RAW_GPS', 'GEOCODE_EXACT']);
 
 // Exactly the Customer map_coordinate_cache_v2 addressHash normalization.
 export const normalizeCoordinateAddress = value => typeof value === 'string' ? value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim() : '';
@@ -37,7 +37,7 @@ export function preparePrivateCoordinateAddress(basicAddress, detailAddress = ''
     query: safeQuery, queryHash: safeQuery ? coordinateAddressHash(safeQuery) : null,
     queryRuleVersion: 'NFKC_WS_BUILDING_UNIT_SPLIT_V1', addressKind, buildingHints, unitHint,
     status: safeQuery ? 'QUERY_PREPARED' : 'PRIVATE_OR_AMBIGUOUS_ADDRESS',
-    geocodedAccuracy: 'BUILDING_OR_ENTRANCE', storeInteriorVerified: false };
+    geocodedAccuracy: 'BUILDING', storeInteriorVerified: false };
 }
 export function externalCoordinateAddress(value) {
   if (typeof value !== 'string' || sensitive.test(value)) return null;
@@ -67,6 +67,7 @@ function settings(input = {}) {
     externalEnabled: input.externalEnabled === true && input.externalApproved === true,
     maxRequestsPerRun: integer('maxRequestsPerRun', 25, 0, 1000),
     maxDailyRequests: integer('maxDailyRequests', 100, 0, 10000),
+    maxTotalRequests: integer('maxTotalRequests', 0, 0, 1000000),
     maxDailyCostMicros: integer('maxDailyCostMicros', 0, 0, 1e12),
     unitCostMicros: integer('unitCostMicros', 0, 0, 1e9),
     maxAttempts: integer('maxAttempts', 3, 1, 5),
@@ -75,26 +76,33 @@ function settings(input = {}) {
     retryBaseMs: integer('retryBaseMs', 60000, 1, 3600000)
   };
 }
+const sourcePriority = source => source === 'MANUAL_PIN' || source === 'MANUAL_VERIFIED' ? 0 : source === 'RAW_GPS' ? 1 : source === 'STORED_MATCH' ? 2 : 3;
+const sourceAccuracy = (source, declared) => declared || (sourcePriority(source) === 0 ? 'MANUAL_POINT' : source === 'RAW_GPS' ? 'GPS' : sourcePriority(source) === 3 ? 'BUILDING' : 'UNCONFIRMED');
 function evidenceIndex(rows) {
   if (!Array.isArray(rows) || rows.length > 50000) throw Error('COORDINATE_EVIDENCE_INVALID');
   const byKey = new Map();
   for (const row of rows) {
-    if (!row || !codeValid(row.customerCode) || !pointValid(row)) continue;
+    if (!row || !codeValid(row.customerCode)) continue;
     const source = row.coordinateSource || row.source;
-    if (!knownSources.has(source) || row.geocodeStatus && row.geocodeStatus !== 'OK' || row.verified === false) continue;
-    const hash = row.address ? coordinateAddressHash(row.address) : row.addressHash;
-    if (!/^[a-f0-9]{64}$/.test(hash || '') || row.addressHash && row.addressHash !== hash) continue;
+    const normalized = { lat: row.lat ?? row.latitude, lng: row.lng ?? row.longitude };
+    if (!knownSources.has(source) || !pointValid(normalized) || row.geocodeStatus && row.geocodeStatus !== 'OK' || row.verified === false) continue;
+    // The existing authenticated manual projection has no raw Customer address.
+    if (source === 'MANUAL_PIN' && (row.resolutionStatus !== 'MANUAL_CONFIRMED' || !Number.isSafeInteger(row.revision) || row.revision < 1)) continue;
+    const suppliedHash = source === 'MANUAL_PIN' ? row.originalAddressHash : row.addressHash;
+    const hash = row.address ? coordinateAddressHash(row.address) : suppliedHash;
+    if (!/^[a-f0-9]{64}$/.test(hash || '') || suppliedHash && suppliedHash !== hash) continue;
     const key = row.customerCode + ':' + hash;
     const group = byKey.get(key) || [];
-    group.push({ lat: row.lat, lng: row.lng, source, manual: source === 'MANUAL_VERIFIED' || row.manual === true });
+    group.push({ ...normalized, source, coordinateAccuracy: sourceAccuracy(source, row.coordinateAccuracy), manual: sourcePriority(source) === 0 });
     byKey.set(key, group);
   }
   return byKey;
 }
 function choice(index, code, hash) {
-  const all = index.get(code + ':' + hash) || [], manual = all.filter(row => row.manual);
-  const rows = manual.length ? manual : all;
-  if (!rows.length) return null;
+  const all = index.get(code + ':' + hash) || [];
+  if (!all.length) return null;
+  const priority = Math.min(...all.map(row => sourcePriority(row.source)));
+  const rows = all.filter(row => sourcePriority(row.source) === priority);
   if (rows.some(row => Math.abs(row.lat - rows[0].lat) > 0.00001 || Math.abs(row.lng - rows[0].lng) > 0.00001)) return { conflict: true };
   return rows[0];
 }
@@ -175,6 +183,11 @@ async function resolveIncremental({ events = [], verifiedCoordinates = [], addre
   const cfg = settings(policy);
   if (state?.schema !== 1 || !state.customers || !state.requests || !state.budgets ||
       !Array.isArray(events) || events.length > 5000 || Object.keys(state.customers).length > 50000 || Object.keys(state.requests).length > 100000) throw Error('COORDINATE_STATE_INVALID');
+  let totalAttempts = 0;
+  for (const budget of Object.values(state.budgets)) {
+    if (!Number.isSafeInteger(budget?.attempts) || budget.attempts < 0 || !Number.isSafeInteger(totalAttempts + budget.attempts)) throw Error('COORDINATE_STATE_INVALID');
+    totalAttempts += budget.attempts;
+  }
   const evidence = evidenceIndex(verifiedCoordinates), addressCache = addressCacheIndex(addressCoordinateCache), candidates = [], review = [];
   const metrics = { received: events.length, changed: 0, reused: 0, addressCacheReused: 0, geocoded: 0, requests: 0, deduplicated: 0, stale: 0, inactive: 0, reviewRequired: 0 };
   const grouped = new Map();
@@ -193,7 +206,7 @@ async function resolveIncremental({ events = [], verifiedCoordinates = [], addre
       state.customers[event.code] = record; review.push({ ...record });
     };
     const addCandidate = (point, source) => {
-      const record = { customerCode: event.code, addressHash: event.hash, revision: event.revision, revisionSource: event.revisionSource, deliveryDate: event.deliveryDate, sourceUpdatedAt: event.sourceUpdatedAt, status: 'READY', source, lat: point.lat, lng: point.lng };
+      const record = { customerCode: event.code, addressHash: event.hash, revision: event.revision, revisionSource: event.revisionSource, deliveryDate: event.deliveryDate, sourceUpdatedAt: event.sourceUpdatedAt, status: 'READY', source, coordinateAccuracy: sourceAccuracy(source, point.coordinateAccuracy), lat: point.lat, lng: point.lng };
       state.customers[event.code] = record; candidates.push({ ...record, geocodeStatus: 'OK' });
     };
     if (!Number.isFinite(event.revision)) { addReview('SOURCE_TIME_REQUIRED'); continue; }
@@ -209,6 +222,11 @@ async function resolveIncremental({ events = [], verifiedCoordinates = [], addre
     if (!event.hash) { addReview('ADDRESS_REQUIRED'); continue; }
     const stored = choice(evidence, event.code, event.hash);
     if (stored?.conflict) { addReview('VERIFIED_COORDINATE_CONFLICT'); continue; }
+    // Existing manual/GPS evidence outranks lower-priority automatic matches.
+    // A new authoritative manual projection can replace a prior manual point.
+    if (previous?.status === 'READY' && previous.addressHash === event.hash && pointValid(previous) && (!stored || sourcePriority(previous.source) < sourcePriority(stored.source))) {
+      addCandidate(previous, previous.source); metrics.deduplicated++; continue;
+    }
     if (stored) { addCandidate(stored, stored.source); metrics.reused++; continue; }
     if (previous?.status === 'READY' && previous.addressHash === event.hash && pointValid(previous)) {
       addCandidate(previous, previous.source); metrics.deduplicated++; continue;
@@ -218,15 +236,19 @@ async function resolveIncremental({ events = [], verifiedCoordinates = [], addre
       if (cached.some(row => Math.abs(row.lat - cached[0].lat) > 0.00001 || Math.abs(row.lng - cached[0].lng) > 0.00001)) { addReview('ADDRESS_CACHE_CONFLICT'); continue; }
       addCandidate(cached[0], cached[0].coordinateSource || cached[0].source); metrics.addressCacheReused++; continue;
     }
-    const address = externalCoordinateAddress(event.address);
+    const address = preparePrivateCoordinateAddress(event.address).query;
     if (!address) { addReview('ADDRESS_UNSAFE_OR_AMBIGUOUS'); continue; }
-    const key = sha(event.code + ':' + event.hash), request = state.requests[key];
+    // Share exact building-address lookups across customers and process restarts.
+    const key = sha('EXACT_ADDRESS:' + coordinateAddressHash(address));
+    const request = state.requests[key] || state.requests[sha(event.code + ':' + event.hash)];
     if (request?.status === 'READY' && pointValid(request)) { addCandidate(request, 'GEOCODE_EXACT'); metrics.deduplicated++; continue; }
     if (request?.status === 'PERMANENT_FAILURE') { addReview(request.reason); continue; }
     if (request?.attempts >= cfg.maxAttempts) { addReview('RETRY_EXHAUSTED'); continue; }
     if (request && request.nextAttemptAt > stamp) { addReview(request.status === 'IN_FLIGHT' ? 'REQUEST_IN_FLIGHT' : 'RETRY_PENDING'); continue; }
     const allowed = geocoder && typeof geocoder.lookup === 'function' && (geocoder.kind === 'mock' || geocoder.kind === 'external' && cfg.externalEnabled);
     if (!allowed) { addReview('GEOCODER_NOT_APPROVED'); continue; }
+    if (geocoder.kind === 'external' && cfg.maxTotalRequests < 1) { addReview('GEOCODER_BUDGET_UNVERIFIED'); continue; }
+    if (geocoder.kind === 'external' && totalAttempts >= cfg.maxTotalRequests) { addReview('BUDGET_LIMIT'); continue; }
     if (providerStopped) { addReview('PROVIDER_BLOCKED'); continue; }
     const day = dayKst(stamp), budget = state.budgets[day] || { attempts: 0, costMicros: 0, lastAttemptAt: null };
     const cost = geocoder.kind === 'mock' ? 0 : cfg.unitCostMicros;
@@ -234,6 +256,7 @@ async function resolveIncremental({ events = [], verifiedCoordinates = [], addre
     if (budget.lastAttemptAt !== null && stamp - budget.lastAttemptAt < cfg.minIntervalMs) { addReview('RATE_LIMIT_PENDING'); continue; }
     const attempt = { status: 'IN_FLIGHT', attempts: (request?.attempts || 0) + 1, nextAttemptAt: stamp + cfg.timeoutMs + cfg.retryBaseMs, reason: 'REQUEST_IN_FLIGHT' };
     state.requests[key] = attempt;
+    totalAttempts++;
     state.budgets[day] = { attempts: budget.attempts + 1, costMicros: budget.costMicros + cost, lastAttemptAt: stamp };
     // Atomic durable reservation precedes any provider call, including every retry.
     await checkpoint(state);

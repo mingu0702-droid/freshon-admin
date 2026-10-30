@@ -139,10 +139,10 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
     const legacyLoader=()=>privateDetails.get(detailIdentity,{preferFresh:req.query.refresh==='1',loader:async()=>{
       const upstreamStarted=performance.now();
       let hub;
-      try{hub=await callHub(storeView?'customerDetail':'staffCustomerDetail',{customerCode,date:detailDate},{useCache:false,privateRead:true,...(storeView?{maxResponseBytes:65536,deadline:Date.now()+15000}:{})});}
+      try{hub=await callHub(storeView?'customerDetail':'staffCustomerDetail',storeView?{customerCode}:{customerCode,date:detailDate},{useCache:false,privateRead:true,...(storeView?{maxResponseBytes:65536,deadline:Date.now()+15000}:{})});}
       finally{if(!res.headersSent)addStaffTiming(res,'upstream',performance.now()-upstreamStarted);}
       if(String(hub.data?.customerCode||'').toUpperCase()!==customerCode)throw new Error('HUB_INVALID_DETAIL_CONTRACT');
-      const detail=(storeView?staffStoreDetail:staffCustomerDetail)(hub.data,{customerCode,date:detailDate});
+      const detail=(storeView?staffStoreDetail:staffCustomerDetail)(hub.data,{customerCode,date:storeView?null:detailDate});
       return {value:detail,sourceVersion:hub.meta?.version||hub.meta?.sourceVersion||null};
     }});
     const result=env.OPSMAP_PREPARED_DETAILS_ENABLED==='1'

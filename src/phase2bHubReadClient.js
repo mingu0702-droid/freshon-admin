@@ -115,9 +115,11 @@ export async function callHub(action, params, { useCache = true, privateRead = f
   if (privateRead || ['customerDetail','staffCustomerDetail','customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action)) useCache = false;
   const saved = cache.get(key);
   if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
-  if (useCache && inFlight.has(key)) return inFlight.get(key);
+  // Coalesce status/restore acknowledgements without caching private source values.
+  const coalesce = useCache || (['mapModelStatus','stageReadModelRequest'].includes(action) && deadline === undefined && !signal);
+  if (coalesce && inFlight.has(key)) return inFlight.get(key);
   const request = callHubUncached(action, params, key, privateRead || maxResponseBytes!==undefined || ['customerDetail','staffCustomerDetail','customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action), { deadline, signal, page, maxResponseBytes });
-  if (useCache) inFlight.set(key, request);
+  if (coalesce) inFlight.set(key, request);
   try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
 }
 
@@ -139,8 +141,9 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
   const entered = circuitEnter(action);
   const started = Date.now();
   const staffDetail = action === 'staffCustomerDetail';
+  const controlRequest = ['mapModelStatus','stageReadModelRequest'].includes(action);
   const preparedPrivate=['customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action);
-  const sourceRead = maxResponseBytes!==undefined || ['periodAssignments','staffDriverHistory','mapCoordinateSupplement'].includes(action);
+  const sourceRead = maxResponseBytes!==undefined || ['periodAssignments','staffDriverHistory','mapCoordinateSupplement'].includes(action) || controlRequest;
   state.metrics.requests += 1;
   const actionTimeoutMs = {
     customerDetailPrepared:8000,
@@ -153,6 +156,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
     rollingDateCatalog: 10000,
     rollingDateText: 10000,
     mapModelStatus: 15000,
+    stageReadModelRequest: 30000,
     mapModelIncrementalRequest: 30000,
     mapBaseVehicles: 225000,
     mapCoordinateSupplement: 8000,
@@ -167,10 +171,10 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
     routePlan: Number(process.env.HUB_ROUTE_TIMEOUT_MS || 25000)
   };
   const timeoutMs = actionTimeoutMs[action] || Number(process.env.HUB_API_TIMEOUT_MS || 2000);
-  let sharedDeadline = Math.min(deadline ?? Infinity, staffDetail || preparedPrivate || action === 'staffDriverHistory' ? started + timeoutMs : Infinity);
+  let sharedDeadline = Math.min(deadline ?? Infinity, staffDetail || preparedPrivate || controlRequest || action === 'staffDriverHistory' ? started + timeoutMs : Infinity);
   let outputAllowanceUsed=false;
   let lastError;
-  const attempts = entered.probe || staffDetail || preparedPrivate || action === "customerDetail" || ['rollingDateCatalog','rollingDateText'].includes(action) ? 1 : 2;
+  const attempts = entered.probe || controlRequest || staffDetail || preparedPrivate || action === "customerDetail" || ['rollingDateCatalog','rollingDateText'].includes(action) ? 1 : 2;
   let timedOut = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     signal?.throwIfAborted();
@@ -238,6 +242,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
       if(action==='staffDriverHistory')for(const k of ['openMs','headerMs','selectMs','discoverMs','normalizeMs','metadataHits','headerHits','selectionHit'])profile['history'+k[0].toUpperCase()+k.slice(1)]=Number(json?.meta?.historyProfile?.[k]||0);
       if (json && typeof json === 'object') requestProfiles.set(json, profile);
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
+      if (controlRequest && profile.responseKind === 'health-json') throw Object.assign(new Error('HUB_INVALID_CONTROL_CONTRACT'), {upstreamStatus:response.status,failureType:'contract',responseKind:'health-json'});
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
       if ((action === 'staffCustomerDetail'||action==='customerDetailPrepared') && (json.meta.requestId !== body.requestId || String(json.data?.customerCode || '').toUpperCase() !== String(params.customerCode).toUpperCase())) {
         profile.requestIdMatch = json.meta.requestId === body.requestId;

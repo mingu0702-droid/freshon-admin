@@ -51,17 +51,19 @@ export function createFileCoordinateStore({ filePath, maxBytes = 16 * 1024 * 102
   } };
 }
 
-export function createCoordinateIngestion({ store, verifiedCoordinates = [], addressCoordinateCache = [], geocoder, policy = {}, now = Date.now } = {}) {
+export function createCoordinateIngestion({ store, verifiedCoordinates = [], manualCoordinates = [], addressCoordinateCache = [], geocoder, policy = {}, now = Date.now } = {}) {
   if (!store || typeof store.transaction !== 'function') throw Error('COORDINATE_STORE_REQUIRED');
   async function ingest(events) {
     const evidence = typeof verifiedCoordinates === 'function' ? await verifiedCoordinates() : verifiedCoordinates;
+    const manual = typeof manualCoordinates === 'function' ? await manualCoordinates() : manualCoordinates;
+    if (!Array.isArray(manual)) throw Error('COORDINATE_MANUAL_EVIDENCE_INVALID');
     const cache = typeof addressCoordinateCache === 'function' ? await addressCoordinateCache() : addressCoordinateCache;
     return store.transaction(async (state, checkpoint) => {
       // Hash/point-only proof of the previous tuple; never retain raw addresses.
       const incomingCodes = new Set(events.map(row => row.customerCode));
       const previousCoordinates = Object.fromEntries(Object.entries(state.customers || {})
         .filter(([code, row]) => incomingCodes.has(code) && row.status === 'READY').map(([code, row]) => [code, { ...row }]));
-      const resolved = await runIncremental({ events, verifiedCoordinates: evidence, addressCoordinateCache: cache, state, checkpoint, geocoder, policy, now });
+      const resolved = await runIncremental({ events, verifiedCoordinates: [...manual, ...evidence], addressCoordinateCache: cache, state, checkpoint, geocoder, policy, now });
       return { ...resolved, previousCoordinates };
     });
   }
@@ -90,9 +92,13 @@ export function applyCoordinateCandidates(rows, result) {
     if (!record) return { ...row };
     const address = row.customerAddress ?? row.address;
     const hash = coordinateAddressHash(address);
+    // The source address must still match; automatic results never replace an
+    // existing manually confirmed point for the same unchanged Customer address.
+    const manualHash = row.originalAddressHash || row.addressHash;
+    if (row.coordinateSource === 'MANUAL_PIN' && row.resolutionStatus === 'MANUAL_CONFIRMED' && hash && hash === manualHash && typeof row.lat === 'number' && typeof row.lng === 'number' && Number.isFinite(row.lat) && Number.isFinite(row.lng) && row.lat >= 33 && row.lat <= 39.5 && row.lng >= 124 && row.lng <= 132 && record.status !== 'INACTIVE') return { ...row };
     if (record.status === 'INACTIVE') return { ...row, lat: null, lng: null, hasCoordinate: false, geocodeStatus: 'INACTIVE', coordinateSource: null };
     // Address-free Hub shards and an address mismatch are never proof of a match.
     if (!hash || hash !== record.addressHash || record.status !== 'READY') return { ...row, lat: null, lng: null, hasCoordinate: false, geocodeStatus: 'REVIEW_REQUIRED', coordinateSource: null };
-    return { ...row, lat: record.lat, lng: record.lng, hasCoordinate: true, geocodeStatus: 'OK', coordinateSource: record.source };
+    return { ...row, lat: record.lat, lng: record.lng, hasCoordinate: true, geocodeStatus: 'OK', coordinateSource: record.source, coordinateAccuracy: record.coordinateAccuracy };
   });
 }

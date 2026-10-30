@@ -139,3 +139,26 @@
  .approvedShellCandidate .marker.approvedMarker .pin { width:42px; height:42px; }
 }
 @media(prefers-reduced-motion:reduce) { .approvedShellCandidate * { scroll-behavior:auto!important; } }
+
+/* The same picker moves between the sidebar and the dated-query dialog. */
+.approvedShellCandidate .vehiclePickerControls { width:100%; min-width:0; }
+.approvedShellCandidate .vehicleSearchLine { display:flex; gap:5px; margin:6px 0; }
+.approvedShellCandidate .vehicleSearchLine #vehicleQuery { margin:0; flex:1; min-width:0; font-size:12px; }
+.approvedShellCandidate .vehicleSearchLine button { padding:6px; font-size:11px; white-space:nowrap; }
+.approvedShellCandidate .vehiclePickerActions { display:flex; flex-wrap:wrap; align-items:center; gap:3px; }
+.approvedShellCandidate #vehiclePickerSelectedCount { margin-left:auto; font-size:11px; color:#526279; }
+.approvedShellCandidate #vehicleList.routechecks { display:block; max-height:330px; overflow:auto; padding:5px 0; }
+.approvedShellCandidate #vehicleList .vehicleCenterGroup { margin:5px 0; border:1px solid #e4e9f0; border-radius:7px; }
+.approvedShellCandidate #vehicleList summary { display:flex; align-items:center; gap:6px; padding:8px; font-size:12px; cursor:pointer; }
+.approvedShellCandidate #vehicleList summary::before { content:'›'; }
+.approvedShellCandidate #vehicleList details[open]>summary::before { transform:rotate(90deg); }
+.approvedShellCandidate #vehicleList summary small { margin-left:auto; color:#718096; }
+.approvedShellCandidate .vehicleRegionGroup { margin:0 6px 6px; border-top:1px solid #edf0f5; }
+.approvedShellCandidate .vehicleRegionGroup>summary { font-weight:400; color:#64748b; }
+.approvedShellCandidate .vehicleGroupActions { display:flex; gap:4px; padding:0 7px 5px; }
+.approvedShellCandidate .vehicleGroupActions button { padding:4px 7px; font-size:11px; }
+.approvedShellCandidate .vehicleGroupChecks { display:flex; flex-wrap:wrap; gap:5px; padding:0 6px 7px; }
+.approvedShellCandidate #vehicleList .vehicleItem { margin:0; }
+.approvedShellCandidate #vehicleList .vehicleItem[hidden],.approvedShellCandidate #vehicleList details[hidden] { display:none!important; }
+.approvedShellCandidate #vehicleList .vehicleArea:empty { display:none; }
+.approvedShellCandidate #vehicleEvidenceNote { font-size:10.5px; margin:6px 0; line-height:1.5; }

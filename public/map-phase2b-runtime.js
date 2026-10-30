@@ -614,12 +614,30 @@
       const label = document.createElement("label");
       label.className = "vehicleItem";
       label.dataset.group=allStores.find(row=>row.baseVehicle===vehicle&&row.baseVehicleGroup)?.baseVehicleGroup||'';
-      label.innerHTML = `<input type="checkbox" value="${esc(vehicle)}"><span class="vehicleNo">${esc(vehicleLabel(vehicle))}</span><span class="vehicleArea">기준일 편성</span>`;
+      label.innerHTML = `<input type="checkbox" value="${esc(vehicle)}"><span class="vehicleNo">${esc(vehicleLabel(vehicle))}</span><span class="vehicleArea"></span>`;
       label.querySelector("input").onchange = () => { periodVehicleScope = "selected"; refreshVehicleUi(true); };
       $("#vehicleList").append(label);
       ["#vehicle", "#mobileVehicle", "#operationVehicle", "#mobileBaseVehicle"].forEach((id) => $(id).add(new Option(`${vehicleLabel(vehicle)}`, vehicle)));
     });
-    $$('.vehicleItem').forEach(label=>{const group=allStores.find(row=>row.baseVehicle===label.querySelector('input')?.value&&row.baseVehicleGroup)?.baseVehicleGroup;if(group)label.dataset.group=group;});
+    synchronizeVehicleCatalog();
+  }
+
+  function vehicleCatalog() {
+    const evidence = state.mode === 'DATE_ROUTE' ? (isDailyDataReady()?allStores:[]) : [...baseVehicles.values()];
+    return vehicleChecks().map(input => ({ vehicle: input.value, ...Phase2bUi.vehicleFacet(evidence, input.value, { dated: state.mode === 'DATE_ROUTE' }) })).sort((a,b)=>Phase2bUi.compareVehicles(a.vehicle,b.vehicle));
+  }
+  function synchronizeVehicleCatalog() {
+    const list = $('#vehicleList');
+    const labels = $$('.vehicleItem').sort((a,b)=>Phase2bUi.compareVehicles(a.querySelector('input').value,b.querySelector('input').value));
+    // Append into the current parent: a later picker may have grouped the same nodes.
+    for (const label of labels) list.append(label);
+    for (const id of ['#vehicle','#mobileVehicle','#operationVehicle','#mobileBaseVehicle']) {
+      const select=$(id),value=select.value;
+      const options=[...select.options].sort((a,b)=>!a.value?-1:!b.value?1:Phase2bUi.compareVehicles(a.value,b.value));
+      for(const option of options)select.append(option);
+      select.value=value;
+    }
+    window.dispatchEvent(new CustomEvent('map-vehicle-catalog'));
   }
 
   function normalizeStore(customer, vehicle, vehicleIndex) {
@@ -663,13 +681,14 @@
   }
 
   function selectedVehicles() {
-    state.selectedVehicles = vehicleChecks().filter((item) => item.checked).map((item) => item.value);
+    state.selectedVehicles = periodVehicleScope === 'all' ? [] : vehicleChecks().filter((item) => item.checked).map((item) => item.value);
     return state.selectedVehicles;
   }
 
   function setSelectedVehicles(values) {
     resetRoadRoute();
     const wanted = new Set((values || []).map(String));
+    if (wanted.size) periodVehicleScope = 'selected';
     vehicleChecks().forEach((item) => { item.checked = wanted.has(item.value); });
   }
 
@@ -701,6 +720,7 @@
     });
     $("#mobileBaseVehicle").innerHTML = `<option value="">전체 호차</option>${vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicleLabel(vehicle))}</option>`).join("")}`;
     $("#operationVehicle").value = "";
+    synchronizeVehicleCatalog();
     refreshDriverMaster();
   }
 
@@ -765,7 +785,7 @@
   window.addEventListener('pagehide',event=>{if(!event.persisted)mapCamera?.dispose();});
 
   function naturalCompare(a, b) {
-    return String(a).localeCompare(String(b), "ko", { numeric: true });
+    return Phase2bUi.compareVehicles(a,b);
   }
 
   function initMap() {
@@ -1664,7 +1684,9 @@
   function refreshVehicleUi(run) {
     if (run) {closeClusterPanel();resetRoadRoute();}
     syncRoadRoutePanel();
+    if (periodVehicleScope === 'all') vehicleChecks().forEach(input=>{input.checked=true;});
     const selected = selectedVehicles();
+    window.dispatchEvent(new CustomEvent('map-vehicle-selection'));
     if (run) {
       ++state.todayRequestId; ++state.routeRequestId;
       requestControllers.get("operation-status")?.controller.abort("superseded");
@@ -2450,6 +2472,13 @@
   // Local design shell uses the same controllers; it cannot authorize API calls.
   window.MapUiLocalBridge={
     state,
+    vehicleCatalog,
+    vehicleSelectionScope:()=>periodVehicleScope,
+    selectVehicleGroup(values,checked){
+      const wanted=new Set(periodVehicleScope==='all'&&!checked?vehicleChecks().map(input=>input.value):selectedVehicles());
+      for(const vehicle of values){if(checked)wanted.add(vehicle);else wanted.delete(vehicle);}
+      periodVehicleScope='selected';setSelectedVehicles([...wanted]);refreshVehicleUi(true);
+    },
     isDataReady:()=>state.mode==='DATE_ROUTE'?isDailyDataReady():dateReady,
     initMap,
     stores:()=>allStores.slice(),
