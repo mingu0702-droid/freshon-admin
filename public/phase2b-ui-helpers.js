@@ -114,6 +114,12 @@
     const hull = [...half(points), ...half(points.slice().reverse())];
     return hull.length >= 3 ? hull : [];
   }
+  function storeDetailMatches(detail, customerCode, requestedDate) {
+    if (!detail || detail.customerCode !== customerCode) return false;
+    if (detail.sourceBasis === 'CURRENT_CUSTOMER_LOOKUP') return detail.detailDate === null;
+    if (detail.sourceBasis === 'STORED_DAY' && detail.sourceDate !== requestedDate) return false;
+    return detail.detailDate === requestedDate;
+  }
   function requestError(error, { stale = false, aborted = false, reason } = {}) {
     if (stale || (aborted && reason !== "timeout") || (error?.name === "AbortError" && reason !== "timeout")) {
       return Object.assign(new Error("REQUEST_CANCELLED"), { silent: true, code: "REQUEST_CANCELLED" });
@@ -123,6 +129,6 @@
     }
     return error;
   }
-  root.Phase2bUi = Object.freeze({ normalizeVehicleLabel, vehicleColorKey, compareVehicles, vehicleFacet, vehicleMatches, vehicleColor, addressVariants, addressMatches, distanceKm, nearbyVehicles, deliveryBoundary, requestError });
+  root.Phase2bUi = Object.freeze({ storeDetailMatches, normalizeVehicleLabel, vehicleColorKey, compareVehicles, vehicleFacet, vehicleMatches, vehicleColor, addressVariants, addressMatches, distanceKm, nearbyVehicles, deliveryBoundary, requestError });
 })(typeof window === "undefined" ? globalThis : window);
 

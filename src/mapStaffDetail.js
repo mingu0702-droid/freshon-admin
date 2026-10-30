@@ -22,7 +22,7 @@ export function staffStoreDetail(source, { customerCode, date }) {
     detailAddress: location(source.detailAddress || source.addressDetail),
     detailAddressState,
     deliveryPattern: safeText(source.deliveryPattern || source.deliveryPatternText) || null,
-    detailDate: date, source: 'Customer → Hub customerDetail',
+    detailDate: date, sourceBasis: date == null ? 'CURRENT_CUSTOMER_LOOKUP' : 'DATED_CUSTOMER_LOOKUP', source: 'Customer → Hub customerDetail',
     locationState: location(source.customerAddress || source.address) ? 'SOURCE_ROW' : 'UNCONFIRMED',
     businessCoverageVerified: false };
 }

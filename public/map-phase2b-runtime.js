@@ -1211,7 +1211,7 @@
       const payload = await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${detailDate}`, { channel: "store-detail", ttl: 0, timeout: 60000 });
       if (requestId !== state.detailRequestId || state.mode!==detailMode || state.selected?.customerCode !== row.customerCode || state.selected?.vehicle!==detailVehicle || document.body.dataset.mapStaffState!=='authenticated') return;
       const exact = payload.data;
-      if (!exact || exact.customerCode!==row.customerCode || exact.detailDate!==detailDate) return;
+      if (!Phase2bUi.storeDetailMatches(exact,row.customerCode,detailDate)) throw Error('DETAIL_RESPONSE_CONTRACT');
       // DOM only: never merge Customer addresses into rows, public summaries or IndexedDB.
       const title=$('#detail .storeName');if(title&&exact.customerName)title.textContent=exact.customerName;
       const facts=$('#detail .dotDetailFacts');
