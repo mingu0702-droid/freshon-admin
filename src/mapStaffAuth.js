@@ -39,7 +39,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
   const processStartedAt = new Date(now()).toISOString();
   let fingerprint = '', verifying = false;
   const cookieOptions = { httpOnly: true, secure: true, sameSite: 'strict', path: '/' };
-  const noStore = (_req, res, next) => { res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache'); res.set('Vary', 'Cookie'); next(); };
+  const noStore = (_req, res, next) => { res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache'); res.set('Vary', 'Cookie'); return next(); };
   function configuration() {
     const id = env.MAP_STAFF_ID || '', hash = env.MAP_STAFF_PASSWORD_HASH || '', secret = env.MAP_STAFF_SESSION_SECRET || '';
     const nextFingerprint = digest([id, hash, secret, env.RENDER_EXTERNAL_URL || env.MAP_STAFF_ORIGIN || '',sessionStore?'DURABLE_SESSION_V2':'PROCESS_MEMORY'].join('\n')).toString('hex');
