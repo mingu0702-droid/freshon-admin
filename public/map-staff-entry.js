@@ -72,7 +72,7 @@
     retry.onclick=()=>{retry.disabled=true;void check();};message.append(retry);
   }
   async function auth(path, options = {}) {
-    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), ['login','logout'].includes(path)?60000:10000);
     try {
       const response = await rawFetch('/api/map-phase2b/auth/' + path, { cache: 'no-store', credentials: 'same-origin',
         ...options, signal: controller.signal, headers: { 'content-type': 'application/json', ...options.headers } });
@@ -174,8 +174,12 @@
   }
   function signOut(text) {
     if (signingOut) return signingOut;
-    logoutRequired = true; const pending = revoke(text), owner = epoch; submit.disabled = true;
-    channel?.postMessage('logout-pending');
+    logoutRequired = true;
+    let pending;
+    try { pending = revoke(text); }
+    catch { session=null;epoch++;password.value='';document.body.dataset.mapStaffState='signed-out';entry.hidden=false;entryMode('signed-out');pending=Promise.resolve(); }
+    const owner = epoch; submit.disabled = true;
+    try { channel?.postMessage('logout-pending'); } catch { /* Server revocation must still run if a tab channel closed. */ }
     signingOut = (async () => {
       try {
         await auth('logout', { method: 'POST', body: '{}' }); await pending;

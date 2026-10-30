@@ -9,9 +9,10 @@ with sync_playwright() as p:
     page=browser.new_page()
     page.set_content('<html data-reference-data-optional="true"><body><header id="approvedSiteHeader"></header></body></html>')
     page.evaluate("""() => {
-      window.loginPosts=0;window.mapReads=0;
+      window.loginPosts=0;window.logoutPosts=0;window.mapReads=0;
       window.fetch=async (url,options={})=>{
         if(url.endsWith('/auth/login')){loginPosts++;throw Error('UNEXPECTED_LOGIN');}
+        if(url.endsWith('/auth/logout')){logoutPosts++;return new Response(JSON.stringify({authenticated:false}),{headers:{'content-type':'application/json'}});}
         if(url.endsWith('/auth/session'))return new Response(JSON.stringify({authenticated:true,expiresAt:Date.now()+3600000,idleExpiresAt:Date.now()+1800000}),{headers:{'content-type':'application/json'}});
         mapReads++;await new Promise(resolve=>{(window.pendingReads ||= []).push(resolve);});
         return new Response('unavailable',{status:503});
@@ -28,4 +29,9 @@ with sync_playwright() as p:
     assert page.locator('#mapStaffEntry').is_hidden()
     assert page.evaluate('loginPosts')==0
     print('PASS: existing session bootstrap hides credential form and performs no login POST')
+    page.evaluate("window.MapStaff={clear(){throw Error('SYNTHETIC_CLEANUP_FAILURE');}}")
+    page.evaluate('MapStaffEntry.logout()')
+    assert page.evaluate('logoutPosts')==1
+    assert page.evaluate('MapStaffEntry.session()') is None
+    print('PASS: server logout executes even if protected-view cleanup throws')
     browser.close()
