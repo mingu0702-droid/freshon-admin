@@ -35,6 +35,7 @@ export async function verifyStaffPassword(password, hash) {
 // Scaling this service requires a shared store first; never enable cluster workers.
 export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
   const sessions = new Map(), attempts = new Map();
+  const processStartedAt = new Date(now()).toISOString();
   let fingerprint = '', verifying = false;
   const cookieOptions = { httpOnly: true, secure: true, sameSite: 'strict', path: '/' };
   const noStore = (_req, res, next) => { res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache'); res.set('Vary', 'Cookie'); next(); };
@@ -103,12 +104,14 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
     const started = performance.now();
     const activity = req.get('x-map-staff-activity') === '1'
       && (req.get('sec-fetch-site') === 'same-origin' || req.get('origin') === configuration().origin);
+    const prior = sessions.get(sessionKey(req, configuration()));
+    const expired = Boolean(prior && (now() >= prior.expiresAt || now() >= prior.idleExpiresAt));
     const session = readSession(req, activity);
     addStaffTiming(res, 'session', performance.now() - started);
     return res.json({ authenticated: Boolean(session), configured: configuration().ready,
       expiresAt: session?.expiresAt || null, idleExpiresAt: session?.idleExpiresAt || null,
-      reason: session ? null : sessionKey(req, configuration()) ? 'SESSION_UNAVAILABLE' : 'SIGNED_OUT',
-      policy: { maxMs: STAFF_MAX_MS, idleMs: STAFF_IDLE_MS, persistence: 'PROCESS_MEMORY' } });
+      reason: session ? null : expired ? 'SESSION_EXPIRED' : sessionKey(req, configuration()) ? 'SESSION_UNAVAILABLE' : 'SIGNED_OUT',
+      policy: { maxMs: STAFF_MAX_MS, idleMs: STAFF_IDLE_MS, persistence: 'PROCESS_MEMORY', processStartedAt } });
   });
   router.post('/login', async (req, res) => {
     const config = configuration();
