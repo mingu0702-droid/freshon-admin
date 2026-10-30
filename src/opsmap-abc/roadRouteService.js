@@ -4,6 +4,7 @@ import '../../public/opsmap/kakao-directions-adapter.js';
 const adapter=globalThis.KakaoDirectionsAdapter;
 const origin='https://apis-navi.kakaomobility.com';
 const error=(code,status=400)=>Object.assign(new Error(code),{code,status});
+export const roadRouteEnabledSetting=env=>['1','true'].includes(env?.OPSMAP_ROAD_ROUTE_ENABLED)?'1':'0';
 export function validRoadRouteRequest(body){
   if(!body||body.mode!=='MANUAL_WAYPOINTS'||!Array.isArray(body.waypoints)||body.waypoints.length>30)throw error('WAYPOINT_LIMIT');
   if(!(Number.isSafeInteger(body.requestId)&&body.requestId>=0)&&!(typeof body.requestId==='string'&&/^[\w-]{1,80}$/.test(body.requestId)))throw error('INVALID_MANUAL_ROUTE');
@@ -29,7 +30,7 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
   const cache=new Map(),pending=new Map();let bytes=0,used=0,active=0;
   const rawLimit=Number(env.OPSMAP_ROAD_ROUTE_REQUEST_LIMIT);
   const limit=env.OPSMAP_ROAD_ROUTE_REQUEST_LIMIT!==undefined&&Number.isSafeInteger(rawLimit)&&rawLimit>=0?Math.min(30000,rawLimit):30000;
-  const configured=()=>env.OPSMAP_ROAD_ROUTE_ENABLED==='1'||env.OPSMAP_ROAD_ROUTE_ENABLED==='true';
+  const configured=()=>roadRouteEnabledSetting(env)==='1';
   const key=()=>String(env.KAKAO_MOBILITY_REST_API_KEY||env.KAKAO_REST_API_KEY||'').trim();
   const ttl=Math.min(300000,Math.max(0,Number(env.OPSMAP_ROAD_ROUTE_CACHE_MS)||60000));
   const remove=k=>{const row=cache.get(k);if(row)bytes-=row.bytes;cache.delete(k);};
@@ -54,7 +55,7 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
     if(used>=limit)throw error('QUOTA_EXCEEDED',429);
     // Reserve the local slot before yielding to an optional shared budget.
     used++;active++;
-    try{if(budget)await budget.reserve({cost:1,provider:'kakao-directions'});}catch(e){used--;active--;throw error(e.code==='QUOTA_EXCEEDED'?'QUOTA_EXCEEDED':'CALL_POLICY_BLOCKED',429);}
+    try{if(budget){const reservation=await budget.reserve({cost:1,provider:'kakao-directions'});if(reservation?.reserved!==true||reservation.scope!=='CUMULATIVE_APPROVED_ACCOUNT'||!Number.isSafeInteger(reservation.remaining)||reservation.remaining<0)throw error('CALL_POLICY_BLOCKED',429);}}catch(e){used--;active--;throw error(e.code==='QUOTA_EXCEEDED'?'QUOTA_EXCEEDED':'CALL_POLICY_BLOCKED',429);}
     const timeout=Math.min(45000,Math.max(1000,Number(env.OPSMAP_ROAD_ROUTE_TIMEOUT_MS)||15000));
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
     try{
