@@ -5,8 +5,14 @@ const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const browser=await chromium.launch({headless:true});const page=await browser.newPage();page.on('pageerror',error=>console.error('FIXTURE_PAGE_ERROR',error.message));
 const root=new URL('../public/',import.meta.url);let assertions=0;const check=(condition,message)=>{assert.ok(condition,message);assertions++;};
 try{
-  await page.setContent('<body class="approvedShellCandidate"><details id="baseVehiclePicker" open><summary>호차 선택</summary></details><input id="vehicleQuery"><button id="selectAllVehicles">전체</button><button id="clearVehicles">해제</button><div id="vehicleList" class="routechecks"></div></body>');
-  await page.addStyleTag({content:await fs.readFile(new URL('map-performance.css',root),'utf8')});
+  await page.setContent('<body class="approvedShellCandidate layout-B dotRestored"><div id="r7PickerHost" style="width:267px;max-width:100%"><details id="baseVehiclePicker" open><summary>호차 선택</summary><div id="legacyVehicleState">선택 없음기간별 매장</div></details></div><input id="vehicleQuery"><button id="selectAllVehicles">전체</button><button id="clearVehicles">해제</button><div id="vehicleList" class="routechecks"></div></body>');
+  const shell=await fs.readFile(new URL('map-approved-shell-candidate.js',root),'utf8');
+  const retainedStyles=JSON.parse(shell.match(/const retainedStyles=(\[[^;]+\]);/)[1].replaceAll("'",'"'));
+  const html=await fs.readFile(new URL('map-phase2b-preview.html',root),'utf8');
+  const stylesheetOrder=[...html.matchAll(/<link\b[^>]*href="([^"?]+)[^"]*"/g)].map(match=>match[1]).filter(name=>retainedStyles.includes(name));
+  check(new Set(stylesheetOrder).size===retainedStyles.length,'all retained real-page stylesheets included');
+  // Preserve the actual HTML cascade order instead of testing the final CSS alone.
+  for(const name of stylesheetOrder)await page.addStyleTag({content:await fs.readFile(new URL(name,root),'utf8')});
   await page.addScriptTag({content:await fs.readFile(new URL('phase2b-ui-helpers.js',root),'utf8')});
   await page.evaluate(()=>{
     const catalog=[['용34',''],['202-2','yeongnam'],['101','osan'],['202','yeongnam'],['202-1','yeongnam'],['122','honam'],['용01','osan']].map(([vehicle,center])=>({vehicle,center,region:'',stale:true,checkedAt:'2026-09-24',verified:!!center}));
@@ -18,6 +24,12 @@ try{
     document.querySelector('#selectAllVehicles').onclick=()=>{scope='all';sync();};document.querySelector('#clearVehicles').onclick=()=>{scope='selected';for(const input of inputs())input.checked=false;sync();};
   });
   await page.addScriptTag({content:await fs.readFile(new URL('vehicle-picker.js',root),'utf8')});
+  const panel=await page.locator('#baseVehiclePicker').evaluate(e=>{const c=e.querySelector('.vehiclePickerControls'),s=getComputedStyle(c);return{width:e.clientWidth,scrollWidth:e.scrollWidth,marginLeft:s.marginLeft,marginRight:s.marginRight};});
+  check(panel.width===267&&panel.scrollWidth<=panel.width,'267px actual-styles picker has no horizontal clipping: '+JSON.stringify(panel));
+  check(panel.marginLeft==='0px'&&panel.marginRight==='0px','picker section does not inherit global horizontal section margins');
+  check(!(await page.locator('#legacyVehicleState').isVisible()),'legacy state controller retained in DOM without duplicate visible summary');
+  const unclipped=await page.locator('#baseVehiclePicker').evaluate(e=>{const box=e.getBoundingClientRect();return[...e.querySelectorAll('#vehicleQuery,.vehicleSearchLine button,#vehicleList,#selectAllVehicles,#clearVehicles')].every(n=>{const r=n.getBoundingClientRect();return r.left>=box.left-1&&r.right<=box.right+1;});});
+  check(unclipped,'search/reset/list/actions remain inside the 267px picker');
   check(await page.getByRole('searchbox',{name:'호차번호 검색',exact:true}).isVisible(),'search is visible above actual checkbox list');
   check((await page.locator('.vehicleCenterGroup>summary').allTextContents()).map(x=>x.replace(/\d+대$/,'')).join('|')==='오산센터|영남센터|호남센터|센터 미확인','verified center groups ordered');
   check((await page.locator('.vehicleCenterGroup[data-vehicle-group="center:yeongnam"] input').evaluateAll(inputs=>inputs.map(x=>x.value))).join(',')==='202,202-1,202-2','sub-vehicles numeric ordered');
