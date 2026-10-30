@@ -925,7 +925,7 @@
     });
     return [...grouped].map(([vehicle, stores]) => ({
       vehicle,
-      customerName: `${vehicleLabel(vehicle)}`,
+      customerName: `${vehicleLabel(vehicle)} · ${stores.length}개 매장`,
       address: stores[0]?.areaLabel || stores[0]?.vehicleGroup || "",
       lat: stores.reduce((sum, row) => sum + row.lat, 0) / stores.length,
       lng: stores.reduce((sum, row) => sum + row.lng, 0) / stores.length,
@@ -952,11 +952,30 @@
       && !valid.some(row => row.customerCode === state.selected.customerCode)) valid=[...valid,state.selected];
     const bounds = new kakao.maps.LatLngBounds();
     const navCodes=window.MapNavigationEditor?.values?.().filter(Boolean)||[];
-    const pins = window.MapViewPolicy.stableClusters(valid,
-      row=>state.map.getProjection().containerPointFromCoords(new kakao.maps.LatLng(row.lat,row.lng)),
-      state.map.getLevel(),state.selected?.customerCode,
-      state.fitRequested?null:{width:$('#map').clientWidth,height:$('#map').clientHeight},
-      {mode:state.mode,maxMarkers:innerWidth<=760?120:180,protectedCodes:navCodes,sourceVersion:markerSourceVersion});
+    // Overview: one selectable pin per hocha, never one synthetic badge that
+    // hides multiple vehicles. Focus: every actual store pin (same-coordinate
+    // stores remain reachable through the co-located store selector).
+    const chosenVehicles = selectedVehicles();
+    const vehicleOverview = periodBasis === 'vehicle' &&
+      (periodVehicleScope === 'all' || chosenVehicles.length > 1);
+    const focusedStops = !vehicleOverview &&
+      ((periodBasis === 'vehicle' && periodVehicleScope === 'selected' && chosenVehicles.length === 1)
+        || (state.mode === 'DATE_ROUTE' && periodBasis === 'driver'));
+    const projectPin = row => state.map.getProjection().containerPointFromCoords(new kakao.maps.LatLng(row.lat,row.lng));
+    const viewport = state.fitRequested ? null : {width:$('#map').clientWidth,height:$('#map').clientHeight};
+    const markerSource = vehicleOverview ? representativeRows(valid) : valid;
+    const pins = vehicleOverview
+      ? markerSource.filter(row => {
+          if (!viewport) return true;
+          const p = projectPin(row);
+          return Number.isFinite(p?.x) && Number.isFinite(p?.y) &&
+            p.x >= -80 && p.y >= -80 && p.x <= viewport.width + 80 && p.y <= viewport.height + 80;
+        })
+      : window.MapViewPolicy.stableClusters(markerSource, projectPin,
+          state.map.getLevel(), state.selected?.customerCode, viewport,
+          {mode:state.mode,maxMarkers:innerWidth<=760?120:180,
+            grouping:focusedStops?'individual':'territory',
+            protectedCodes:navCodes,sourceVersion:markerSourceVersion});
     if (state.fitRequested) pointIndex.valid.forEach(row => bounds.extend(new kakao.maps.LatLng(row.lat,row.lng)));
     const entries = pins.map((row,index) => ({row,index,key:row.clusterKey||[row.virtual?'virtual':'store',row.customerCode || row.vehicle || '',row.lat,row.lng].join('|'),
       fingerprint:JSON.stringify([row.lat,row.lng,row.clusterBounds,row.clusterMemberKey,row.vehicle,row.customerName,row.address,row.status,row.order,row.clusterCount,row.lastDeliveryDate,row.visitCount,row.driverKey,row.clusterLabel,row.clusterColorKey,state.selected?.customerCode===row.customerCode,navCodes.includes(row.customerCode),Boolean(options.numbered),Boolean(row.virtual),Boolean(row.representative),Boolean(row.nearbyVehicle),state.mode,state.rangeStart,state.rangeEnd])}));
@@ -981,7 +1000,9 @@
       clearBoundaries(); state.representativeOverlays.forEach(overlay=>overlay.setMap(null)); state.representativeOverlays=[];
     }
     if (state.areaOn && boundaryKey !== nextBoundaryKey) { if (!state.polygons.length) drawSelectedBoundaries([]); boundaryKey=nextBoundaryKey; }
-    if (state.areaOn && !state.representativeOverlays.length) addComparisonPins();
+    // Vehicle overview already renders one representative per hocha.
+    // Avoid duplicating those markers when a territory polygon is enabled.
+    if (state.areaOn && !vehicleOverview && !state.representativeOverlays.length) addComparisonPins();
     if (!state.areaOn) state.representativeOverlays.forEach((overlay) => overlay.setMap(null));
     const mobileRoute = innerWidth <= 760 && options.numbered;
     if (pointIndex.valid.length && state.fitRequested && !state.userMovedMap) {
@@ -1178,15 +1199,22 @@
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     element?.classList.add("selected");
     const vehicle = normalizeVehicle(row.vehicle);
-    if (selectedVehicles().length !== 1 || selectedVehicles()[0] !== vehicle) {
-      if (state.mode === "BASE_60D") { periodBasis = "vehicle"; syncPeriodBasis(); }
+    if (state.mode === 'BASE_60D') {
+      // A baseline hocha pin must show all of its stored shops. The historical
+      // period view has no confirmed stop order: do not invent a road route.
+      periodBasis = 'vehicle'; periodVehicleScope = 'selected'; syncPeriodBasis();
       setSelectedVehicles([vehicle]);
-      if ([...$("#mobileBaseVehicle").options].some((option) => option.value === vehicle)) $("#mobileBaseVehicle").value = vehicle;
-      refreshVehicleUi(false);
-      requestMapFit();
-      await loadBaseMap();
+      if ([...$('#mobileBaseVehicle').options].some(option => option.value === vehicle)) $('#mobileBaseVehicle').value = vehicle;
+      refreshVehicleUi(false); requestMapFit(); await loadBaseMap();
+      $('#mapStatusSub').textContent = `${vehicleLabel(vehicle)} 전체 매장 · 실제 운행순서는 일자별 운행에서 확인`;
+      return;
     }
-    $("#operationVehicle").value = vehicle;
+    if (selectedVehicles().length !== 1 || selectedVehicles()[0] !== vehicle) {
+      setSelectedVehicles([vehicle]);
+      if ([...$('#mobileBaseVehicle').options].some(option => option.value === vehicle)) $('#mobileBaseVehicle').value = vehicle;
+      refreshVehicleUi(false); requestMapFit(); await loadBaseMap();
+    }
+    $('#operationVehicle').value = vehicle;
     await loadOperationStatus(vehicle, true, row);
   }
 

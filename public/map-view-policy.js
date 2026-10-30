@@ -99,6 +99,20 @@
       if(cacheKey){let entries=groupingCache.get(rows);if(!entries){entries=new Map();groupingCache.set(rows,entries);}while(entries.size>=12)entries.delete(entries.keys().next().value);entries.set(cacheKey,result);}
       return result;
     };
+    // A focused vehicle/dated-driver view is a stop map, not a territory
+    // overview. Preserve every distinct positioned stop, irrespective of the
+    // generic overview marker cap. Only truly co-located stores share a
+    // selectable same-location card so none becomes inaccessible.
+    if (options.grouping === 'individual') {
+      const places = new Map();
+      for (const row of ordinary) {
+        const key = `${mode}:same-location:${row.lat}:${row.lng}`;
+        let group = places.get(key);
+        if (!group) { group = makeGroup(key); places.set(key, group); }
+        addRow(group, row);
+      }
+      return [...pinned, ...[...places.values()].map(group => clusterRow(group, mode, band))].filter(visible);
+    }
     const available=Math.max(1,limit-pinned.length);
     const ordinaryCount=result=>result.reduce((count,row)=>count+(!protectedCodes.has(row.customerCode)&&visible(row)?1:0),0);
     // Close-up maps still need a selectable group for colocated stores. Two

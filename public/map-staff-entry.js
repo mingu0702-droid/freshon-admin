@@ -247,7 +247,8 @@
     if (event.data === 'session-changed') { logoutRequired=false;submit.disabled=false;void check(); }
     else if (event.data === 'logout') void check();
   });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && session) void check(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !logoutRequired) void check(); });
+  window.addEventListener('online', () => { if (!logoutRequired) void check(); });
   window.addEventListener('pageshow', event => { if (event.persisted) void check(); });
   window.MapStaffEntry = Object.freeze({ check, logout, expire, observe, status,
     session: () => session && { ...session }, registerPurge: purge => { purges.add(purge); return () => purges.delete(purge); } });

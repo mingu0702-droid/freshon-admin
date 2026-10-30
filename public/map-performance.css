@@ -71,11 +71,11 @@
 .approvedShellCandidate .staffCacheNotice { padding:8px 10px; background:#f1f5f9; border-radius:7px; font-size:11px; line-height:1.5; }
 .approvedShellCandidate .staffCacheNotice[data-stale="true"] { background:#fff7ed; color:#995224; }
 
-/* Map groups stay legible without obscuring surrounding roads. */
-.approvedShellCandidate .marker.approvedMarker { width:30px; height:33px; min-width:0; }
-.approvedShellCandidate .marker.approvedMarker .pin { width:30px; height:30px; border-width:2px; box-shadow:0 1px 4px #152a4540; }
-.approvedShellCandidate .marker.approvedMarker .pin>span { font-size:10px; letter-spacing:-.2px; }
-.approvedShellCandidate .marker.approvedMarker.selected .pin { width:34px; height:34px; outline:4px solid #2c64da26; }
+/* Vehicle pins: clear hocha numbers and a touch-capable hit target. */
+.approvedShellCandidate .marker.approvedMarker { width:42px; height:46px; min-width:42px; padding:0; }
+.approvedShellCandidate .marker.approvedMarker .pin { width:40px; height:40px; border-width:2px; box-shadow:0 2px 6px #152a4540; }
+.approvedShellCandidate .marker.approvedMarker .pin>span { font-size:13px; letter-spacing:-.15px; font-weight:750; }
+.approvedShellCandidate .marker.approvedMarker.selected .pin { width:44px; height:44px; outline:4px solid #2c64da26; }
 .approvedShellCandidate .marker.periodCluster { width:max-content!important; height:auto!important; min-width:0; contain:layout style; }
 .approvedShellCandidate .marker.periodCluster .clusterpin {
   width:auto!important; min-width:44px; max-width:128px; height:auto!important; min-height:32px;
@@ -87,7 +87,8 @@
 .approvedShellCandidate .marker.periodCluster .clusterpin small { font-size:9px; line-height:1.2; white-space:nowrap; color:#67788f; }
 .approvedShellCandidate .marker.periodCluster .clusterpin:before,.approvedShellCandidate .marker.periodCluster .clusterpin:after { display:none!important; }
 .approvedShellCandidate .marker.periodCluster:hover .clusterpin { box-shadow:0 2px 8px #1c3d6e40; background:#f7faff!important; }
-.approvedShellCandidate .marker.navAssigned { visibility:hidden!important; pointer-events:none!important; }
+.approvedShellCandidate .marker.navAssigned { visibility:visible!important; pointer-events:auto!important; }
+.approvedShellCandidate .marker.navAssigned .pin { outline:3px solid #f59e0b66; }
 .approvedShellCandidate .navRoutePoint { min-width:42px; padding:6px 8px; border-radius:8px; border:2px solid white; background:#275dd8; color:white; font-size:11px; font-weight:700; box-shadow:0 2px 6px #0f172a30; white-space:pre-line; line-height:1.25; }
 .approvedShellCandidate .navRoutePoint[data-role="origin"] { background:#138364; }
 .approvedShellCandidate .navRoutePoint[data-role="destination"] { background:#c44146; }
@@ -133,6 +134,8 @@
  #detail .detailHead>.storeName { font-size:16px; }
  .approvedShellCandidate.dotRestored .dotDetailFacts { gap:8px 10px; }
  .approvedShellCandidate .navRoutePoint { padding:5px 7px; }
- .approvedShellCandidate .marker.periodCluster .clusterpin { min-width:40px; padding:4px 6px; }
+ .approvedShellCandidate .marker.periodCluster .clusterpin { min-width:44px; padding:5px 7px; }
+ .approvedShellCandidate .marker.approvedMarker { min-width:44px; min-height:48px; }
+ .approvedShellCandidate .marker.approvedMarker .pin { width:42px; height:42px; }
 }
 @media(prefers-reduced-motion:reduce) { .approvedShellCandidate * { scroll-behavior:auto!important; } }
