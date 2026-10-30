@@ -6,11 +6,21 @@ import {createProductionManualPinGithubStore} from './opsmap-abc/manualPinGithub
 import {createManualPinAuthorizer} from './opsmap-abc/manualPinAuthorization.js';
 import {createManualMapPins} from './opsmap-abc/manualMapPins.js';
 import {redactPublicData} from './publicDataSecurity.js';
+import {staffStoreDetail} from './opsmap-abc/mapStaffDetail.js';
 function existingJavaScriptKey(publicDir){try{const f=path.join(publicDir,'daily-routes.html');if(fsSync.statSync(f).size>1048576)return '';const keys=[...new Set([...fsSync.readFileSync(f,'utf8').matchAll(/appkey=([a-f0-9]{32})/gi)].map(m=>m[1]))];return keys.length===1?keys[0]:'';}catch{return '';}}
 export function resolveProductionCredentials(env){
  // Explicit opt-in reuses only this Production process credentials; never reads Stage configuration.
  const reuse=env.OPSMAP_PRODUCTION_REUSE_EXISTING_CREDENTIALS==='1';
  return {sessionSecret:env.OPSMAP_AUTH_SESSION_SECRET||(reuse?env.MAP_STAFF_SESSION_SECRET:undefined),authToken:env.OPSMAP_AUTH_STORE_TOKEN||(reuse?env.GITHUB_TOKEN:undefined),pinToken:env.OPSMAP_PIN_STORE_TOKEN||(reuse?env.GITHUB_TOKEN:undefined)};
+}
+export async function readProductionManualPinCustomer(readers,code){
+ const snapshot=await readers.readPhase2bSnapshot();
+ const row=snapshot?.rows?.find(r=>r.customerCode===code);
+ if(row?.address)return row;
+ // An older map Snapshot is not the Customer registry. Read only this selected customer.
+ if(!readers.readManualPinCustomer)return null;
+ const hub=await readers.readManualPinCustomer(code);
+ return staffStoreDetail(hub?.data,{customerCode:code,date:readers.phase2bKstDate()});
 }
 export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,sessionStore:isolatedTestStore,...readers}){
  const router=express.Router(),root=path.join(publicDir,'opsmap');app.get(['/','/index.html','/daily-routes.html'],(q,r,n)=>env.OPSMAP_PRODUCTION_CANDIDATE_ENABLED==='1'?r.redirect(302,'/opsmap/'):n());app.use('/opsmap',router);
@@ -22,7 +32,7 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  router.use('/internal',(_q,r)=>r.status(404).end());
  let pinStore;try{if(env.OPSMAP_PIN_STORE_REPO&&credentials.pinToken)pinStore=createProductionManualPinGithubStore({repo:env.OPSMAP_PIN_STORE_REPO,token:credentials.pinToken,branch:env.OPSMAP_PIN_STORE_BRANCH});}catch{/* Remain closed; an invalid store never falls back to Stage. */}
  const pinEnv={...authEnv,OPSMAP_MANUAL_PIN_STORE_FILE:undefined,OPSMAP_MANUAL_PIN_WRITES:env.OPSMAP_PRODUCTION_PIN_WRITES==='1'?'1':'0',OPSMAP_MANUAL_PIN_DURABLE_CONFIRMED:pinStore?'1':'0',OPSMAP_MANUAL_PIN_WRITER_ID:env.OPSMAP_PIN_WRITER_ID,OPSMAP_MANUAL_PIN_WRITE_AUTHORIZATION:env.OPSMAP_PIN_WRITE_AUTHORIZATION,OPSMAP_MANUAL_PIN_WRITE_APPROVAL_ID:env.OPSMAP_PIN_WRITE_APPROVAL_ID};
- const manual=createManualMapPins({env:pinEnv,appRoot:path.resolve(publicDir,'..'),store:pinStore,backupStore:pinStore?.backupStore,authorizeWrite:createManualPinAuthorizer({env:pinEnv}),readCoordinate:code=>{const row=readers.getSnapshotMemory()?.rows?.find(r=>r.customerCode===code);return row?{latitude:row.lat,longitude:row.lng}:null;},readCustomer:async code=>{const snapshot=await readers.readPhase2bSnapshot();return snapshot?.rows?.find(r=>r.customerCode===code)||null;}});
+ const manual=createManualMapPins({env:pinEnv,appRoot:path.resolve(publicDir,'..'),store:pinStore,backupStore:pinStore?.backupStore,authorizeWrite:createManualPinAuthorizer({env:pinEnv}),readCoordinate:code=>{const row=readers.getSnapshotMemory()?.rows?.find(r=>r.customerCode===code);return row?{latitude:row.lat,longitude:row.lng}:null;},readCustomer:code=>readProductionManualPinCustomer(readers,code)});
  const api=mountProductionMapApi(router,{...readers,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,mountPrivateExtensions:binding=>{
   manual.mount(binding);
   router.get('/api/vehicle-driver-master',binding.requireStaff,async(q,r)=>{try{if(!readers.readDriverMaster)return r.status(503).json({error:'DRIVER_SOURCE_NOT_CONFIGURED'});const value=await readers.readDriverMaster(String(q.query.date||''));return binding.requireStaff(q,r,()=>r.json(redactPublicData(value)));}catch{return r.status(503).json({error:'DRIVER_SOURCE_UNAVAILABLE'});}});

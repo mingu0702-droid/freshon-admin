@@ -24,3 +24,13 @@ test('Production credential reuse is explicit, local to supplied environment and
  assert.deepEqual(resolveProductionCredentials(enabled),{sessionSecret:existing.MAP_STAFF_SESSION_SECRET,authToken:existing.GITHUB_TOKEN,pinToken:existing.GITHUB_TOKEN});
  assert.deepEqual(resolveProductionCredentials({...enabled,OPSMAP_AUTH_STORE_TOKEN:'synthetic-own-auth',OPSMAP_PIN_STORE_TOKEN:'synthetic-own-pins',OPSMAP_AUTH_SESSION_SECRET:'synthetic-own-secret'}),{sessionSecret:'synthetic-own-secret',authToken:'synthetic-own-auth',pinToken:'synthetic-own-pins'});
 });
+
+
+test('manual pin selected Customer fallback does not mistake missing old Snapshot row for missing Customer',async()=>{
+ const {readProductionManualPinCustomer}=await import('../src/productionOpsmapCandidate.js');let calls=0;
+ const readers={phase2bKstDate:()=> '2026-10-31',readPhase2bSnapshot:async()=>({rows:[]}),readManualPinCustomer:async code=>{calls++;return {data:{customerCode:code,customerName:'SYNTHETIC_ONLY',customerAddress:'서울특별시 가상로 10',password:'NEVER_RETURN',accessInfo:'NEVER_RETURN'}};}};
+ const r=await readProductionManualPinCustomer(readers,'S970001');assert.equal(calls,1);assert.equal(r.customerCode,'S970001');assert.equal(r.address,'서울특별시 가상로 10');assert.equal(r.password,undefined);assert.equal(r.accessInfo,undefined);
+ await assert.rejects(readProductionManualPinCustomer({...readers,readManualPinCustomer:async()=>({data:{customerCode:'S970002'}})},'S970001'),/HUB_INVALID_DETAIL_CONTRACT/);
+ const cached={customerCode:'S970001',address:'서울특별시 가상로 10'};
+ assert.equal(await readProductionManualPinCustomer({...readers,readPhase2bSnapshot:async()=>({rows:[cached]}),readManualPinCustomer:async()=>{throw Error('duplicate read');}},'S970001'),cached);
+});
