@@ -3,12 +3,12 @@ OPSMAP_PRODUCTION_CANDIDATE_ENABLED=0
 OPSMAP_AUTH_ORIGIN=https://freshon-admin-1.onrender.com
 # Existing Production MAP_STAFF_ID/PASSWORD_HASH are reused; no new employee account.
 OPSMAP_AUTH_SESSION_SECRET=
-OPSMAP_AUTH_STORE_REPO=
+OPSMAP_AUTH_STORE_REPO=mingu0702-droid/freshon-cache
 OPSMAP_AUTH_STORE_TOKEN=
 OPSMAP_AUTH_STORE_BRANCH=production/opsmap-auth
-# Require private repository distinct from Stage freshon-cache; no Stage-file migration.
+# Existing approved private repo, distinct Production branches/files and service credentials. No Stage-record fallback or migration.
 # Session file: opsmap-production/staff-sessions-v1.json
-OPSMAP_PIN_STORE_REPO=
+OPSMAP_PIN_STORE_REPO=mingu0702-droid/freshon-cache
 OPSMAP_PIN_STORE_TOKEN=
 OPSMAP_PIN_STORE_BRANCH=production/opsmap-manual-pins
 # Pin file: opsmap-production/manual-pins-v1.json

@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
 
-// Production-only authentication scope; never uses the Stage repository or pin file.
+// Production-only branch/file in the approved private cache repo; never Stage records.
 // Stores only HMAC session identifiers, signed expiry metadata and credential revision.
 export function createProductionStaffSessionStore({env=process.env,fetchImpl=fetch,now=Date.now}={}){
   if(env.OPSMAP_PRODUCTION_SESSION_ENABLED!=='1')return undefined;
-  if(!/^[-\w.]+\/[-\w.]+$/.test(env.GITHUB_CACHE_REPO||'')||env.GITHUB_CACHE_REPO==='mingu0702-droid/freshon-cache'||!env.GITHUB_TOKEN||env.OPSMAP_MANUAL_PIN_GITHUB_BRANCH!=='production/opsmap-auth'||!env.MAP_STAFF_SESSION_SECRET)throw Error('STAFF_SESSION_STORE_CONFIG');
+  if(env.GITHUB_CACHE_REPO!=='mingu0702-droid/freshon-cache'||!env.GITHUB_TOKEN||env.OPSMAP_MANUAL_PIN_GITHUB_BRANCH!=='production/opsmap-auth'||!env.MAP_STAFF_SESSION_SECRET)throw Error('STAFF_SESSION_STORE_CONFIG');
   const root='https://api.github.com/repos/'+env.GITHUB_CACHE_REPO;
   const branch='production/opsmap-auth',file=root+'/contents/opsmap-production/staff-sessions-v1.json';
   const headers={Authorization:'Bearer '+env.GITHUB_TOKEN,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'opsmap-production-staff-session'};

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 const fail=(code,status=503)=>{throw Object.assign(new Error(code),{code,status});};
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 export function createProductionManualPinGithubStore({repo,token,branch,productionBranch='main',fetchImpl=fetch}={}){
- if(repo==='mingu0702-droid/freshon-cache'||!/^[-\w.]+\/[-\w.]+$/.test(repo||'')||!token||branch!=='production/opsmap-manual-pins'||branch===productionBranch)fail('MANUAL_PIN_GITHUB_CONFIG');
+ if(repo!=='mingu0702-droid/freshon-cache'||!token||branch!=='production/opsmap-manual-pins'||branch===productionBranch)fail('MANUAL_PIN_GITHUB_CONFIG');
  const root='https://api.github.com/repos/'+repo,api=root+'/contents/opsmap-production/manual-pins-v1.json',headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'opsmap-manual-pin-stage'};
  async function request(url,options={}){try{return await fetchImpl(url,{...options,headers,signal:AbortSignal.timeout(12000)});}catch{fail(options.method==='PUT'?'MANUAL_PIN_WRITE_OUTCOME_UNKNOWN':'MANUAL_PIN_GITHUB_NETWORK');}}
  async function read(){

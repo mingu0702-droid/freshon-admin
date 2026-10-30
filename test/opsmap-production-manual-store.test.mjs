@@ -3,20 +3,20 @@ import {createProductionManualPinGithubStore} from '../src/opsmap-abc/manualPinG
 const sha=n=>String(n).padStart(40,'0');
 function fakeGithub(){let revision=1,value={manualPins:{schema:1,operations:0,customers:{}}},writes=0,unknown=false;
  const response=(status,body)=>({status,ok:status>=200&&status<300,json:async()=>structuredClone(body)});
- const fetchImpl=async(url,opts)=>{if(url==='https://api.github.com/repos/fixture/private')return response(200,{private:true,permissions:{push:true}});
-  assert(url.startsWith('https://api.github.com/repos/fixture/private/contents/opsmap-production/manual-pins-v1.json'));
+ const fetchImpl=async(url,opts)=>{if(url==='https://api.github.com/repos/mingu0702-droid/freshon-cache')return response(200,{private:true,permissions:{push:true}});
+  assert(url.startsWith('https://api.github.com/repos/mingu0702-droid/freshon-cache/contents/opsmap-production/manual-pins-v1.json'));
   if(opts.method==='PUT'){writes++;if(unknown)throw Error('lost response');const b=JSON.parse(opts.body);assert.equal(b.branch,'production/opsmap-manual-pins');if(b.sha!==sha(revision))return response(409,{});value=JSON.parse(Buffer.from(b.content,'base64'));revision++;return response(200,{});}
   assert(url.endsWith('?ref=production%2Fopsmap-manual-pins'));return response(200,{sha:sha(revision),encoding:'base64',content:Buffer.from(JSON.stringify(value)).toString('base64')});};
  return {fetchImpl,get writes(){return writes;},set unknown(v){unknown=v;},get value(){return value;}};
 }
 test('private GitHub Production CAS, readback, conflict, unknown outcome and private fields',async()=>{
- const fake=fakeGithub(),store=createProductionManualPinGithubStore({repo:'fixture/private',token:'synthetic',branch:'production/opsmap-manual-pins',fetchImpl:fake.fetchImpl});let saveA,saveB;
+ const fake=fakeGithub(),store=createProductionManualPinGithubStore({repo:'mingu0702-droid/freshon-cache',token:'synthetic',branch:'production/opsmap-manual-pins',fetchImpl:fake.fetchImpl});let saveA,saveB;
  await store.transaction(async(s,save)=>{saveA=()=>save({...s,manualPins:{...s.manualPins,operations:1}});});await store.transaction(async(s,save)=>{saveB=()=>save({...s,manualPins:{...s.manualPins,operations:2}});});
  await saveA();await assert.rejects(saveB(),e=>e.code==='MANUAL_PIN_GITHUB_CONFLICT');assert.equal(fake.value.manualPins.operations,1);
  await assert.rejects(store.transaction(async(s,save)=>save({...s,originalAddress:'private'})),e=>e.code==='MANUAL_PIN_GITHUB_PRIVATE_FIELD');
  const before=fake.writes;fake.unknown=true;await assert.rejects(store.transaction(async(s,save)=>save(s)),e=>e.code==='MANUAL_PIN_WRITE_OUTCOME_UNKNOWN');assert.equal(fake.writes,before+1);
- assert.throws(()=>createProductionManualPinGithubStore({repo:'fixture/private',token:'synthetic',branch:'main'}),e=>e.code==='MANUAL_PIN_GITHUB_CONFIG');
- const publicStore=createProductionManualPinGithubStore({repo:'fixture/private',token:'synthetic',branch:'production/opsmap-manual-pins',fetchImpl:async()=>({ok:true,json:async()=>({private:false,permissions:{push:true}})})});await assert.rejects(publicStore.transaction(()=>{}),e=>e.code==='MANUAL_PIN_GITHUB_PRIVATE_WRITE_REQUIRED');
+ assert.throws(()=>createProductionManualPinGithubStore({repo:'mingu0702-droid/freshon-cache',token:'synthetic',branch:'main'}),e=>e.code==='MANUAL_PIN_GITHUB_CONFIG');
+ const publicStore=createProductionManualPinGithubStore({repo:'mingu0702-droid/freshon-cache',token:'synthetic',branch:'production/opsmap-manual-pins',fetchImpl:async()=>({ok:true,json:async()=>({private:false,permissions:{push:true}})})});await assert.rejects(publicStore.transaction(()=>{}),e=>e.code==='MANUAL_PIN_GITHUB_PRIVATE_WRITE_REQUIRED');
 });
 test('shared staff session cannot write without independent coordinate permission',async()=>{
  const env={MAP_STAFF_ID:'fixture',MAP_STAFF_SESSION_SECRET:'a'.repeat(43),RENDER_EXTERNAL_URL:'https://localhost:3000',OPSMAP_MANUAL_PIN_STORE_FILE:'C:/outside/fixture.json',OPSMAP_MANUAL_PIN_WRITES:'1',OPSMAP_MANUAL_PIN_DURABLE_CONFIRMED:'1',OPSMAP_MANUAL_PIN_WRITER_ID:'fixture'};
@@ -34,7 +34,7 @@ test('shared staff session cannot write without independent coordinate permissio
  }finally{await new Promise(r=>server.close(r));}
 });
 test('manual pin real service persists, reloads and reverts through isolated CAS adapter',async()=>{
- const remote=fakeGithub(),store=createProductionManualPinGithubStore({repo:'fixture/private',token:'synthetic',branch:'production/opsmap-manual-pins',fetchImpl:remote.fetchImpl});
+ const remote=fakeGithub(),store=createProductionManualPinGithubStore({repo:'mingu0702-droid/freshon-cache',token:'synthetic',branch:'production/opsmap-manual-pins',fetchImpl:remote.fetchImpl});
  const env={RENDER:'true',RENDER_SERVICE_ID:'fixture',MAP_STAFF_ID:'fixture',OPSMAP_MANUAL_PIN_WRITER_ID:'fixture',OPSMAP_MANUAL_PIN_WRITES:'1',OPSMAP_MANUAL_PIN_DURABLE_CONFIRMED:'1'};
  const source={customerCode:'S970003',customerName:'fixture',address:'서울특별시 가상로 10'},options={env,appRoot:'C:/app',store,backupStore:store.backupStore,authorizeWrite:()=>true,readCustomer:async()=>source,readCoordinate:()=>({latitude:null,longitude:null})};
  const service=createManualMapPins(options),body={originalAddressHash:coordinateAddressHash(source.address),expectedRevision:0,requestId:crypto.randomUUID(),latitude:37.5,longitude:127};

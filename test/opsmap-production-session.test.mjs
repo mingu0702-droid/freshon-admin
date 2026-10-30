@@ -10,7 +10,7 @@ function github(){let file=null,sha=0,failed=false;const requests=[];return {req
  return file?Response.json({sha:sha.toString(16).padStart(40,'0'),size:JSON.stringify(file).length,encoding:'base64',content:Buffer.from(JSON.stringify(file)).toString('base64')}):Response.json({},{status:404});
  }};}
 test('durable signed sessions survive restart; logout, expiry, rotation and store failures deny access',async()=>{
- let time=Date.now();const g=github(),env={OPSMAP_PRODUCTION_SESSION_ENABLED:'1',GITHUB_CACHE_REPO:'fixture/private-production-auth',GITHUB_TOKEN:'synthetic-only',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'production/opsmap-auth',MAP_STAFF_ID:'fixture',MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash('synthetic-password'),MAP_STAFF_SESSION_SECRET:'a'.repeat(43),MAP_STAFF_ORIGIN:'https://localhost:3000'};
+ let time=Date.now();const g=github(),env={OPSMAP_PRODUCTION_SESSION_ENABLED:'1',GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',GITHUB_TOKEN:'synthetic-only',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'production/opsmap-auth',MAP_STAFF_ID:'fixture',MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash('synthetic-password'),MAP_STAFF_SESSION_SECRET:'a'.repeat(43),MAP_STAFF_ORIGIN:'https://localhost:3000'};
  const servers=[];async function start(){const auth=createMapStaffAuth({env,now:()=>time,sessionStore:createProductionStaffSessionStore({env,fetchImpl:g.fetch,now:()=>time})}),app=express();app.use('/auth',auth.router);app.get('/private',auth.requireStaff,(_q,r)=>r.json({ok:true}));const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});servers.push(server);return 'http://127.0.0.1:'+server.address().port;}
  try{
  const a=await start();const login=async url=>{const r=await fetch(url+'/auth/login',{method:'POST',headers:{origin:env.MAP_STAFF_ORIGIN,'content-type':'application/json'},body:JSON.stringify({id:'fixture',password:'synthetic-password'})});assert.equal(r.status,200);return r.headers.get('set-cookie').split(';')[0];};
@@ -28,7 +28,7 @@ test('durable signed sessions survive restart; logout, expiry, rotation and stor
  }finally{await Promise.all(servers.map(s=>new Promise(resolve=>s.close(resolve))));}
 });
 test('late activity after durable logout cannot recreate a revoked session',async()=>{
- const g=github(),env={OPSMAP_PRODUCTION_SESSION_ENABLED:'1',GITHUB_CACHE_REPO:'fixture/private-production-auth',GITHUB_TOKEN:'synthetic-only',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'production/opsmap-auth',MAP_STAFF_SESSION_SECRET:'a'.repeat(43)};
+ const g=github(),env={OPSMAP_PRODUCTION_SESSION_ENABLED:'1',GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',GITHUB_TOKEN:'synthetic-only',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'production/opsmap-auth',MAP_STAFF_SESSION_SECRET:'a'.repeat(43)};
  const a=createProductionStaffSessionStore({env,fetchImpl:g.fetch}),b=createProductionStaffSessionStore({env,fetchImpl:g.fetch}),key='b'.repeat(64),fp='c'.repeat(64),s={expiresAt:Date.now()+60000,idleExpiresAt:Date.now()+30000};
  await a.set(key,s,fp);const prior=await b.get(key,fp);assert.ok(prior);await a.delete(key);assert.equal(await b.touch(key,prior,fp),false);assert.equal(await a.get(key,fp),null);
  await a.set(key,s,fp);await Promise.all([a.delete(key),a.touch(key,s,fp)]);assert.equal(await b.get(key,fp),null);
