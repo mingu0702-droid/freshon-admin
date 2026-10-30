@@ -141,7 +141,8 @@
 @media(prefers-reduced-motion:reduce) { .approvedShellCandidate * { scroll-behavior:auto!important; } }
 
 /* The same picker moves between the sidebar and the dated-query dialog. */
-.approvedShellCandidate .vehiclePickerControls { width:100%; min-width:0; }
+.approvedShellCandidate .vehiclePickerControls { width:100%; min-width:0; margin:0; }
+.approvedShellCandidate #baseVehiclePicker>#legacyVehicleState { display:none; }
 .approvedShellCandidate .vehicleSearchLine { display:flex; gap:5px; margin:6px 0; }
 .approvedShellCandidate .vehicleSearchLine #vehicleQuery { margin:0; flex:1; min-width:0; font-size:12px; }
 .approvedShellCandidate .vehicleSearchLine button { padding:6px; font-size:11px; white-space:nowrap; }
