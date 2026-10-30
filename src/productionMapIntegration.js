@@ -25,6 +25,7 @@ import {createPrivateDetailCache,loadEncryptedPrivateSnapshot} from './privateDe
 import {createRoadRouteService,mountRoadRouteRoutes} from './roadRouteService.js';
 import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
 import {createHubRoadBudget} from './hubRoadBudget.js';
+import {createPrivateDetailReadScope,privateDetailFailure} from './privateDetailRequest.js';
 
 export function mountProductionMapApi(app,{
   previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
@@ -132,16 +133,24 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
   const storeView = req.query.view === 'store';
   if (req.query.view && !storeView) return res.status(400).json({error:'INVALID_DETAIL_VIEW'});
   const detailDate = req.query.date ? normalizeDateValue(req.query.date) : getSnapshotMemory()?.latestDate || phase2bKstDate();
-  if (!detailDate || detailDate > phase2bKstDate()) return res.status(400).json({ error: "INVALID_DATE" });
+  if (!detailDate) return res.status(400).json({ error: "INVALID_DATE" });
+  // A current Customer lookup is independent of a delivery day. For a planned
+  // delivery, notes require observed dated evidence rather than an echoed date.
+  if (!storeView && detailDate > phase2bKstDate()) {
+    let observed=false;
+    try { observed=stageReadModel.period(detailDate,detailDate).data.some(row=>row.customerCode===customerCode); } catch {}
+    if(!observed)return res.status(202).set('Cache-Control','private, no-store').json({ok:false,data:null,error:'PLANNED_SOURCE_UNOBSERVED',meta:{date:detailDate,planned:true,sourceObserved:false}});
+  }
+  const scope=createPrivateDetailReadScope(req,res,{deadline:Date.now()+(storeView?15000:20000)});
   try {
     await privateSnapshotReady;
     const detailIdentity={customerCode,date:detailDate,view:storeView?'store':'notes'};
     const legacyLoader=()=>privateDetails.get(detailIdentity,{preferFresh:req.query.refresh==='1',loader:async()=>{
       const upstreamStarted=performance.now();
       let hub;
-      try{hub=await callHub(storeView?'customerDetail':'staffCustomerDetail',storeView?{customerCode}:{customerCode,date:detailDate},{useCache:false,privateRead:true,...(storeView?{maxResponseBytes:65536,deadline:Date.now()+15000}:{})});}
+      try{hub=await callHub(storeView?'customerDetail':'staffCustomerDetail',storeView?{customerCode}:{customerCode,date:detailDate},{useCache:false,privateRead:true,maxResponseBytes:65536,signal:scope.signal,deadline:scope.deadline});}
       finally{if(!res.headersSent)addStaffTiming(res,'upstream',performance.now()-upstreamStarted);}
-      if(String(hub.data?.customerCode||'').toUpperCase()!==customerCode)throw new Error('HUB_INVALID_DETAIL_CONTRACT');
+      if(hub?.ok===false || String(hub?.data?.customerCode||'').toUpperCase()!==customerCode || !storeView && ['memoDate','deliveryDate'].some(key=>hub.data[key] && hub.data[key]!==detailDate))throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'),{failureType:'contract'});
       const detail=(storeView?staffStoreDetail:staffCustomerDetail)(hub.data,{customerCode,date:storeView?null:detailDate});
       return {value:detail,sourceVersion:hub.meta?.version||hub.meta?.sourceVersion||null};
     }});
@@ -150,18 +159,20 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
       :await legacyLoader();
     // Even a cache HIT must recheck the employee session. Plaintext is never
     // sent to public snapshots, browser persistent storage, or response caches.
-    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:result.value,meta:{cache:result.meta},error:null}));
+    if(!scope.canRespond())return;
+    return await mapStaff.requireStaff(req,res,()=>scope.canRespond()&&res.set('Cache-Control','private, no-store').json({ok:true,data:result.value,meta:{cache:result.meta},error:null}));
   } catch (error) {
-    const profile = hubRequestProfile(error);
+    const profile = {...hubRequestProfile(error),...(scope.signal.aborted?{cancelledBy:'CALLER'}:{})};
+    const failure=privateDetailFailure(error,profile);
+    console.warn(JSON.stringify({component:'private-detail-read',...failure,totalMs:Number(profile.totalMs)||0}));
+    if(!scope.canRespond())return;
     res.set('X-Detail-Upstream-Status', String(Number(profile.upstreamStatus) || 0));
     res.set('X-Detail-Response-Kind', ['json','health-json','html','invalid-json','none'].includes(profile.responseKind) ? profile.responseKind : 'unknown');
     res.set('X-Detail-Failure-Phase', ['HEADERS','BODY','PARSE','CONTRACT'].includes(profile.phase) ? profile.phase : 'unknown');
     res.set('X-Detail-Failure-Target', ['EXEC','OUTPUT'].includes(profile.requestStage)?profile.requestStage:'unknown');
     for (const key of ['responseHeadersMs','bodyReadMs','parseMs']) addStaffTiming(res, 'hub' + key.replace(/Ms$/, ''), Number(profile[key] || 0));
-    const timeout = error?.name === 'AbortError';
-    const status = timeout ? 504 : Number(error?.upstreamStatus) === 404 && error?.failureType === "upstream" ? 404 : 502;
-    return res.status(status).json({ ok: false, data: null, error: timeout ? 'DETAIL_UPSTREAM_TIMEOUT' : 'PRIVATE_DETAIL_UNAVAILABLE' });
-  }
+    return res.status(failure.status).json({ ok: false, data: null, error:failure.code,meta:{failure} });
+  } finally {scope.dispose();}
 });
 
 app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
@@ -242,7 +253,7 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
   if(publishedReads.isActive())return pagedRequired(res);
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const date = String(req.query.date || "");
-  if (date !== "latest" && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || normalizeDateValue(date) !== date || date > phase2bKstDate())) return res.status(400).json({ error: "INVALID_DATE" });
+  if (date !== "latest" && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || normalizeDateValue(date) !== date)) return res.status(400).json({ error: "INVALID_DATE" });
   try {
     const snapshot = await readPhase2bSnapshot();
     const readDate = (candidate) => (candidate === phase2bKstDate() ? phase2bAssignmentCache : phase2bDatedAssignmentCache).load(`datedAssignments:${candidate}`, async () => {
@@ -277,6 +288,10 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
     }
     if (date === "latest" && !loaded.value.data.length) return res.status(503).json({ ok: false, error: "LATEST_BUSINESS_DATE_UNAVAILABLE" });
     res.setHeader("X-Phase2B-Cache", loaded.cache);
+    if(candidate>phase2bKstDate()){
+      const observed=loaded.value.data.length>0;
+      return res.status(observed?200:202).json({...loaded.value,...(!observed?{ok:false,error:'PLANNED_SOURCE_UNOBSERVED'}:{}),meta:{...loaded.value.meta,planned:true,sourceObserved:observed,...(!observed?{sourceReadComplete:true,complete:false,phase:'PENDING'}:{})}});
+    }
     return res.json(loaded.value);
   } catch (error) {
     return res.status(502).json({ ok: false, data: null, error: error.message });

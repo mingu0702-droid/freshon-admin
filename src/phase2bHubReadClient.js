@@ -70,6 +70,7 @@ function circuitFailure(action, circuit, timeout, probe) {
 }
 
 export function classifyHubFailure(error) {
+  if (error?.failureType === "cancelled") return "cancelled";
   if (error?.name === "AbortError") return "timeout";
   if ([401, 403].includes(Number(error?.upstreamStatus)) || error?.failureType === "auth") return "auth";
   if (error?.responseKind === "html") return "hub-html";
@@ -110,6 +111,7 @@ export async function callHub(action, params, { useCache = true, privateRead = f
     if(!Number.isSafeInteger(maxResponseBytes)||maxResponseBytes<1||maxResponseBytes>2*1048576)throw new Error('HUB_RESPONSE_LIMIT_INVALID');
     useCache=false;
   }
+  signal?.throwIfAborted();
   if (!process.env.HUB_API_URL) throw new Error("HUB_API_URL_NOT_CONFIGURED");
   const key = `${action}:${stable(params || {})}`;
   if (privateRead || ['customerDetail','staffCustomerDetail','customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action)) useCache = false;
@@ -180,7 +182,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
     signal?.throwIfAborted();
     const remaining = Math.min(timeoutMs, sharedDeadline - Date.now());
     if (remaining <= 0) { lastError = Object.assign(new Error('DETAIL_UPSTREAM_TIMEOUT'), {name:'AbortError'}); timedOut = true; break; }
-    const profile = { attempt: attempt + 1, sentAt:Date.now(), phase:'HEADERS', responseHeadersMs:0, bodyReadMs:0, parseMs:0, upstreamStatus:null, contentType:'unknown', responseKind:'none' };
+    const profile = { action, attempt: attempt + 1, sentAt:Date.now(), phase:'HEADERS', responseHeadersMs:0, bodyReadMs:0, parseMs:0, upstreamStatus:null, contentType:'unknown', responseKind:'none' };
     const attemptStarted = Date.now();
     const signingStarted = Date.now();
     const body = requestBody(action, params);
@@ -211,7 +213,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
       const bodyReadStarted = Date.now();
       profile.phase = 'BODY';
       let responseText = null;
-      if (maxResponseBytes!==undefined) responseText = await readBoundedHubText(response,maxResponseBytes,controller.signal);
+      if (staffDetail || maxResponseBytes!==undefined) responseText = await readBoundedHubText(response,maxResponseBytes ?? 65536,controller.signal);
       else if (typeof response.text === "function") responseText = await response.text();
       controller.signal.throwIfAborted();
       const bodyReadMs = Date.now() - bodyReadStarted;
@@ -263,22 +265,28 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
     } catch (error) {
       // Abort exceptions may be immutable. Preserve only a safe new error object.
       if(controller.signal.aborted && error.name !== 'AbortError')error=Object.assign(new Error('HUB_TIMEOUT'),{name:'AbortError'});
+      profile.cancelledBy = signal?.aborted ? 'CALLER' : controller.signal.aborted ? 'DEADLINE' : null;
+      if(signal?.aborted)error=Object.assign(new Error('DETAIL_REQUEST_CANCELLED'),{name:'AbortError',failureType:'cancelled'});
       lastError = error;
       if(action==='routePlan')requestProfiles.set(error,profile);
       if(sourceRead){requestProfiles.set(error,profile);console.warn(JSON.stringify({component:'hub-source-profile',action,...profile,totalMs:Date.now()-started,result:classifyHubFailure(error)}));}
       if (staffDetail) {
         profile.totalMs = Date.now()-started;
-        if (controller.signal.aborted) {error=Object.assign(new Error('DETAIL_UPSTREAM_TIMEOUT'),{name:'AbortError'});lastError=error;}
+        if (controller.signal.aborted && !signal?.aborted) {error=Object.assign(new Error('DETAIL_UPSTREAM_TIMEOUT'),{name:'AbortError'});lastError=error;}
         requestProfiles.set(error, profile);
         console.warn(JSON.stringify({component:'private-hub-profile',...profile,result:classifyHubFailure(error)}));
       }
       console.warn(JSON.stringify({ component: "hub-failure-classification", action, classification: classifyHubFailure(error), upstreamStatus: error.upstreamStatus || null }));
-      if (error.name === "AbortError") { state.metrics.timeout += 1; timedOut = true; } else state.metrics.error += 1;
-      console.warn(JSON.stringify({ component: "hub-api", action, requestId: body.requestId, attempt: attempt + 1, elapsedMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", upstreamStatus: error.upstreamStatus || null, failureType: error.failureType || (error.name === "AbortError" ? "timeout" : "network"), errorCode: error.name === "AbortError" ? "HUB_TIMEOUT" : String(error.message || "HUB_ERROR").slice(0, 80) }));
+      if (!signal?.aborted) { if (error.name === "AbortError") { state.metrics.timeout += 1; timedOut = true; } else state.metrics.error += 1; }
+      console.warn(JSON.stringify({ component: "hub-api", action, requestId: body.requestId, attempt: attempt + 1, elapsedMs: Date.now() - attemptStarted, timeout: error.name === "AbortError" && !signal?.aborted, upstreamStatus: error.upstreamStatus || null, failureType: error.failureType || (error.name === "AbortError" ? "timeout" : "network"), errorCode: signal?.aborted ? "DETAIL_REQUEST_CANCELLED" : error.name === "AbortError" ? "HUB_TIMEOUT" : String(error.message || "HUB_ERROR").slice(0, 80) }));
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, timeout: error.name === "AbortError", result: "FAIL" }));
       if (attempt + 1 >= attempts || signal?.aborted || !retryableHubError(error) || Date.now()+150>=sharedDeadline) break;
       await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
+  }
+  if(signal?.aborted){
+    if(entered.probe){entered.circuit.probeInFlight=false;entered.circuit.state='OPEN';entered.circuit.openUntil=Date.now();}
+    throw lastError;
   }
   circuitFailure(action, entered.circuit, timedOut, entered.probe);
   throw lastError;

@@ -42,14 +42,19 @@
       status = response.status; headersMs = performance.now() - start; receivedAt = response.headers.get('x-request-received-at'); serverTiming = response.headers.get('server-timing') || '';
       if (!response.ok) {
         // Classify only known availability codes; never display or retain the body.
-        let notReady = false;
+        let notReady = false, detailCode = null;
+        if (path.startsWith('private/customer-detail')) {
+          try { const code=(await response.json()).error; if(['DETAIL_UPSTREAM_TIMEOUT','DETAIL_SOURCE_AUTH_REQUIRED','DETAIL_SOURCE_FORBIDDEN','DETAIL_NOT_FOUND','DETAIL_INVALID_RESPONSE','DETAIL_SOURCE_RATE_LIMITED'].includes(code))detailCode=code; } catch (_) { /* No raw body is retained. */ }
+        }
         if (path.startsWith('private/driver-history') && status === 503) {
           try { notReady = ['READ_MODEL_NOT_READY', 'READ_MODEL_RANGE_NOT_READY'].includes((await response.json()).error); } catch (_) { /* HTTP error remains an error */ }
         }
-        throw Object.assign(new Error('REQUEST_FAILED'), { status, notReady,
+        throw Object.assign(new Error('REQUEST_FAILED'), { status, notReady, detailCode,
           sourceChanged: ['PERIOD_SOURCE_CHANGED','HISTORY_SOURCE_CHANGED','HISTORY_LOCATOR_CHANGED'].includes(response.headers.get('x-history-failure')) });
       }
       const parsedAt = performance.now(), value = await response.json(); parseMs = performance.now() - parsedAt;
+      local.signal.throwIfAborted();
+      if (isDetail && (value?.ok !== true || value.data == null)) throw Object.assign(new Error('DETAIL_INVALID_RESPONSE'),{status:502,detailCode:'DETAIL_INVALID_RESPONSE'});
       const expiresAt = Number(response.headers.get('x-staff-expires-at')), idleExpiresAt = Number(response.headers.get('x-staff-idle-expires-at'));
       if (isDetail && expiresAt && idleExpiresAt && !local.signal.aborted) deadline({ authenticated: true, expiresAt, idleExpiresAt });
       return value;
@@ -116,6 +121,7 @@
       if (target.rangeEnd) query.set('endDate', target.rangeEnd);
       const payload = await request('private/' + (target.kind === 'history' ? 'driver-history' : 'customer-detail') + '?' + query);
       if (id !== generation || (inlineHost && !inlineHost.isConnected)) return;
+      if(target.kind !== 'history' && (payload.data?.customerCode !== target.customerCode || target.date && payload.data?.memoDate !== target.date)) throw Object.assign(new Error('DETAIL_INVALID_RESPONSE'),{status:502,detailCode:'DETAIL_INVALID_RESPONSE'});
       // Server validates the session again after the upstream read.
       shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
       node('button', '로그아웃').onclick = logout;
@@ -161,6 +167,12 @@
       }
     } catch (error) {
       if (error.name === 'AbortError' || id !== generation) return;
+      if (['DETAIL_SOURCE_AUTH_REQUIRED','DETAIL_SOURCE_FORBIDDEN'].includes(error.detailCode)) {
+        shell('원천 조회 권한 확인 필요'); surface.dataset.state='source-auth';
+        node('p','직원 로그인은 유지 중입니다. 원천 인증 또는 선택 매장의 조회 권한을 확인해야 합니다.');
+        node('button','다시 확인').onclick=()=>{if(id===generation&&!detailPending)void showRequested(id);};
+        return;
+      }
       if (error.status === 401) {
         sessionHint = null;
         if (!window.MapStaffEntry?.session()?.authenticated) { void window.MapStaffEntry?.expire(); return; }
@@ -175,7 +187,7 @@
         node('button', '다시 확인').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };
         return;
       }
-      shell(target.kind === 'history' ? '기사 이력 조회 실패' : '보호 상세 조회 실패'); node('p', error.sourceChanged ? '조회 중 원천 데이터가 변경되었습니다. 다시 시도해 주세요.' : error.status === 504 ? '원천 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.' : error.status === 422 ? '원천 데이터 확인이 필요합니다.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      shell(target.kind === 'history' ? '기사 이력 조회 실패' : '보호 상세 조회 실패'); node('p', error.sourceChanged ? '조회 중 원천 데이터가 변경되었습니다. 다시 시도해 주세요.' : error.detailCode === 'DETAIL_NOT_FOUND' ? '선택한 고객·배송일의 보호정보를 확인하지 못했습니다. 정보가 삭제된 것으로 처리하지 않습니다.' : error.detailCode === 'DETAIL_INVALID_RESPONSE' ? '원천 응답이 선택한 고객·배송일과 일치하지 않아 표시하지 않았습니다.' : error.detailCode === 'DETAIL_SOURCE_RATE_LIMITED' ? '원천 조회가 일시 제한되었습니다. 잠시 후 다시 시도해 주세요.' : error.status === 504 ? '원천 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.' : error.status === 422 ? '원천 데이터 확인이 필요합니다.' : '원천 조회를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
       surface.dataset.state = 'error';
       node('p', '공개 고객정보와 지도는 계속 사용할 수 있습니다.');
       node('button', '다시 시도').onclick = () => { if (id === generation && !detailPending) void showRequested(id); };

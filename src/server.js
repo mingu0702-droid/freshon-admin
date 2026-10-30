@@ -1,3 +1,4 @@
+import {assertDatedAssignmentSource} from './phase2bAssignments.js';
 ﻿import express from "express";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -2194,13 +2195,14 @@ function phase2bSnapshotTileParts(tile) {
   return [{ ...tile, east: middle }, { ...tile, west: middle }];
 }
 
-async function phase2bSnapshotTile(tile, depth = 0) {
+async function phase2bSnapshotTile(tile, depth = 0, sourceIdentity = {seen:false,identity:null}) {
   const limit = 2000;
   const response = await callHub("mapBounds", { mode: "BASE_90D", vehicle: "", bounds: tile, limit }, { useCache: false });
-  const rows = Array.isArray(response.data) ? response.data : [];
-  if (rows.length < limit || depth >= 5 || Math.max(tile.north - tile.south, tile.east - tile.west) <= 0.25) return rows;
+  const rows = assertDatedAssignmentSource(response, null, {sourceIdentity,limit,allowCapped:true});
+  if (rows.length < limit) return rows;
+  if(depth>=5 || Math.max(tile.north-tile.south,tile.east-tile.west)<=0.25)throw new Error('PHASE2B_SNAPSHOT_TILE_TRUNCATED');
   const parts = phase2bSnapshotTileParts(tile);
-  return [...await phase2bSnapshotTile(parts[0], depth + 1), ...await phase2bSnapshotTile(parts[1], depth + 1)];
+  return [...await phase2bSnapshotTile(parts[0], depth + 1,sourceIdentity), ...await phase2bSnapshotTile(parts[1], depth + 1,sourceIdentity)];
 }
 
 function phase2bSnapshotPayload(rows, state = {}) {
@@ -2236,9 +2238,14 @@ function phase2bSnapshotMissingDates(latestDate, today) {
 
 async function phase2bSnapshotDateRows(date, tiles) {
   const rows = [];
+  const sourceIdentity={seen:false,identity:null};
   for (let index = 0; index < tiles.length; index += 2) {
     const batch = await Promise.all(tiles.slice(index, index + 2).map((bounds) => callHub("mapBounds", { mode: "DATE_ROUTE", date, vehicle: "", bounds, limit: 2000 }, { useCache: false })));
-    batch.forEach((response) => rows.push(...(Array.isArray(response.data) ? response.data : [])));
+    batch.forEach((response) => {
+      const page=assertDatedAssignmentSource(response,date,{sourceIdentity});
+      if(page.some(row=>(row.deliveryDate||row.lastDeliveryDate) && (row.deliveryDate||row.lastDeliveryDate)!==date))throw new Error('DATED_ASSIGNMENTS_DATE_MISMATCH');
+      rows.push(...page);
+    });
   }
   return rows;
 }
@@ -2266,45 +2273,59 @@ async function refreshPhase2bSnapshot() {
       { south: 36, west: 124, north: 39, east: 128 },
       { south: 36, west: 128, north: 39, east: 132 }
     ];
-    const existing = await readPhase2bSnapshot();
+    const live = await readPhase2bSnapshot();
+    const baseHash=crypto.createHash('sha256').update(JSON.stringify(live)).digest('hex');
+    const progressFile=phase2bRuntimeSnapshotUrl+'.checkpoint.json';
+    let existing=live;
+    try {
+      const progress=JSON.parse(await fs.readFile(progressFile,'utf8'));
+      if(progress.schema!==1 || !Array.isArray(progress.payload?.rows) || !/^\d{4}-\d{2}-\d{2}$/.test(progress.payload?.refreshedThrough||'') || progress.payload.refreshComplete!==false)throw new Error('PHASE2B_CHECKPOINT_INVALID');
+      if(progress.baseHash===baseHash){
+        const codes=progress.payload.rows.map(row=>normalizeCell(row.customerCode||row.code));
+        if(codes.some(code=>!code)||new Set(codes).size!==codes.length)throw new Error('PHASE2B_CHECKPOINT_DUPLICATE');
+        existing=progress.payload;
+      }
+    }catch(error){if(error.code!=='ENOENT')throw error;}
     const rows = Array.isArray(existing?.rows) ? [...existing.rows] : [];
-    if (!rows.length) for (const tile of baseTiles) rows.push(...await phase2bSnapshotTile(tile));
+    const baseIdentity={seen:false,identity:null};
+    if (!rows.length) for (const tile of baseTiles) rows.push(...await phase2bSnapshotTile(tile,0,baseIdentity));
     const basePayload = phase2bSnapshotPayload(rows);
     const today = phase2bKstDate();
     const refreshFrom = existing?.refreshedThrough || basePayload.latestDate;
-    if (refreshFrom > today) throw new Error("PHASE2B_SNAPSHOT_FUTURE_CHECKPOINT");
-    const missingDates = phase2bSnapshotMissingDates(refreshFrom, today);
-    for (const date of missingDates) {
+    if(refreshFrom>today)throw new Error('PHASE2B_SNAPSHOT_FUTURE_CHECKPOINT');
+    let refreshedThrough = refreshFrom;
+    for (const date of phase2bSnapshotMissingDates(refreshFrom, today)) {
       rows.push(...await phase2bSnapshotDateRows(date, baseTiles));
       const checkpoint = phase2bSnapshotPayload(rows, { refreshedThrough: date, refreshComplete: false });
-      await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(checkpoint));
-      phase2bSnapshotMemory = checkpoint;
+      await fs.writeFile(progressFile+'.next', JSON.stringify({schema:1,baseHash,payload:checkpoint}));
+      await fs.rename(progressFile+'.next',progressFile);
+      refreshedThrough = date;
       console.info(JSON.stringify({ component: "phase2b-snapshot", event: "CHECKPOINT", latestDate: checkpoint.latestDate, refreshedThrough: date, rowCount: checkpoint.rowCount }));
     }
-    // A refresh reads at most 30 days. Never mark skipped days as complete.
-    // Continue on the existing bounded retry timer, preserving the last checkpoint.
-    const checkedThrough = missingDates.at(-1) || refreshFrom;
-    if (checkedThrough < today) {
-      if (!phase2bSnapshotMemory || phase2bSnapshotMemory.refreshedThrough !== checkedThrough) {
-        throw new Error("PHASE2B_SNAPSHOT_CHECKPOINT_MISSING");
-      }
-      schedulePhase2bSnapshotRefresh(Math.max(60000, Number(process.env.MAP_PHASE2B_SNAPSHOT_RETRY_MS || 60000)));
-      console.info(JSON.stringify({ component: "phase2b-snapshot", event: "PARTIAL_HELD", refreshedThrough: checkedThrough, targetDate: today }));
-      return phase2bSnapshotMemory;
+    // A bounded date batch is a checkpoint, never proof that later dates were read.
+    if (refreshedThrough < today) {
+      console.info(JSON.stringify({ component: "phase2b-snapshot", event: "PARTIAL_RANGE", refreshedThrough, targetDate: today }));
+      schedulePhase2bSnapshotRefresh(Math.max(60000,Number(process.env.MAP_PHASE2B_SNAPSHOT_RETRY_MS||60000)));
+      return live;
     }
-    const todayStatus = await phase2bTodayStatus(today).catch(() => null);
+    const todayStatus = await phase2bTodayStatus(today);
+    if (todayStatus?.date !== today || !Array.isArray(todayStatus.vehicles)) throw new Error("PHASE2B_TODAY_STATUS_INVALID");
     const knownByCode = new Map(rows.map((row) => [normalizeCell(row.customerCode || row.code), row]));
     (todayStatus?.vehicles || []).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
       const code = normalizeCell(stop.customerCode || stop.code);
       const known = knownByCode.get(code) || {};
-      const lat = Number.isFinite(Number(stop.lat)) ? Number(stop.lat) : Number(known.lat);
-      const lng = Number.isFinite(Number(stop.lng)) ? Number(stop.lng) : Number(known.lng);
-      if (!code || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
-      rows.push({ ...known, ...stop, customerCode: code, vehicle: vehicle.vehicle, lat, lng, lastDeliveryDate: today });
+      const usable = value => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+      const validPair=row=>usable(row.lat)&&usable(row.lng)&&Number(row.lat)>=33&&Number(row.lat)<=39.5&&Number(row.lng)>=124&&Number(row.lng)<=132;
+      const point=validPair(stop)?stop:validPair(known)?known:{};
+      const lat=usable(point.lat)?Number(point.lat):null,lng=usable(point.lng)?Number(point.lng):null;
+      if (!code) return;
+      const located=Number.isFinite(lat)&&Number.isFinite(lng)&&lat>=33&&lat<=39.5&&lng>=124&&lng<=132;
+      rows.push({ ...known, ...stop, customerCode: code, vehicle: vehicle.vehicle, lat:located?lat:null, lng:located?lng:null, lastDeliveryDate: today });
     }));
     const payload = phase2bSnapshotPayload(rows, { refreshedThrough: today, refreshComplete: true });
     if (!payload.rows.length) throw new Error("PHASE2B_SNAPSHOT_EMPTY");
-    await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
+    await fs.writeFile(phase2bRuntimeSnapshotUrl+'.next', JSON.stringify(payload));
+    await fs.rename(phase2bRuntimeSnapshotUrl+'.next',phase2bRuntimeSnapshotUrl);
     phase2bSnapshotMemory = payload;
     console.info(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESHED", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
     setTimeout(() => warmPhase2bBounds().catch(() => {}), 1000).unref();
@@ -2343,11 +2364,13 @@ async function fetchDeliveryTaskRowsForDate(date) {
     query.append("enteringDatedAtBetween", dateParam);
     query.append("enteringDatedAtBetween", dateParam);
     const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
-    const rows = extractDeliveryTaskRows(payload);
+    if(payload?.ok===false || payload?.success===false || payload?.error)throw new Error('DELIVERY_TASK_PAGE_FAILED');
+    const rows=[payload,payload?.data,payload?.data?.content,payload?.data?.items,payload?.data?.list,payload?.data?.rows,payload?.content,payload?.items,payload?.list,payload?.rows].find(Array.isArray);
+    if(!rows || rows.some(row=>!row || typeof row!=='object' || Array.isArray(row)))throw new Error('DELIVERY_TASK_PAGE_INVALID');
     allRows.push(...rows);
-    if (rows.length < pageSize) break;
+    if (rows.length < pageSize) return allRows;
   }
-  return allRows;
+  throw new Error('DELIVERY_TASK_PAGE_LIMIT');
 }
 
 async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) {
@@ -3831,8 +3854,7 @@ async function phase2bTodayStatus(date) {
     const rows = await fetchDeliveryTaskRowsForDate(date);
     const byVehicle = new Map();
     rows.forEach((row) => {
-      const vehicle = deliveryTaskVehicle(row);
-      if (!vehicle) return;
+      const vehicle = String(deliveryTaskVehicle(row)||'');
       if (!byVehicle.has(vehicle)) byVehicle.set(vehicle, []);
       byVehicle.get(vehicle).push(row);
     });
