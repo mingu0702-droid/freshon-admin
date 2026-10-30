@@ -26,15 +26,17 @@ export function createStageStaffSessionStore({env=process.env,fetchImpl=fetch,no
   }
   let pendingRead=null,writeTail=Promise.resolve();
   async function sharedRead(){if(!pendingRead){const p=read();pendingRead=p;try{return await p;}finally{if(pendingRead===p)pendingRead=null;}}return pendingRead;}
-  async function write(key,entry){
+  async function write(key,entry,requireExisting=false){
     const work=writeTail.catch(()=>{}).then(async()=>{
       pendingRead=null;const {sha,state}=await read();
       for(const [id,value]of Object.entries(state.sessions))if(!valid(id,value)||now()>=value.expiresAt||now()>=value.idleExpiresAt)delete state.sessions[id];
+      if(requireExisting&&(!valid(key,state.sessions[key])||state.sessions[key].fingerprint!==entry.fingerprint||state.credentialFingerprint!==entry.fingerprint))return false;
       if(entry){if(state.credentialFingerprint!==entry.fingerprint){state.sessions={};state.credentialFingerprint=entry.fingerprint;}if(Object.keys(state.sessions).length>=1000&&!state.sessions[key])fail();state.sessions[key]={...entry,signature:mac({key,...entry})};}else delete state.sessions[key];
       const bytes=Buffer.from(JSON.stringify(state));if(bytes.length>512000)fail();
       const result=await request(file,{method:'PUT',body:JSON.stringify({message:'Update isolated Stage staff session metadata',branch,...(sha?{sha}:{}),content:bytes.toString('base64')})});if(!result.ok)fail();
       pendingRead=null;const saved=await read();if(JSON.stringify(saved.state.sessions[key]||null)!==JSON.stringify(state.sessions[key]||null))fail();
+      return true;
     });writeTail=work;return work;
   }
-  return {kind:'PRIVATE_GITHUB_CAS',async get(key,fingerprint){await writeTail.catch(()=>{});const {state}=await sharedRead(),entry=state.sessions[key];if(state.credentialFingerprint!==fingerprint||!valid(key,entry)||entry.fingerprint!==fingerprint)return null;return {expiresAt:entry.expiresAt,idleExpiresAt:entry.idleExpiresAt};},set:(key,session,fingerprint)=>write(key,{...session,fingerprint}),delete:key=>write(key,null)};
+  return {kind:'PRIVATE_GITHUB_CAS',async get(key,fingerprint){await writeTail.catch(()=>{});const {state}=await sharedRead(),entry=state.sessions[key];if(state.credentialFingerprint!==fingerprint||!valid(key,entry)||entry.fingerprint!==fingerprint)return null;return {expiresAt:entry.expiresAt,idleExpiresAt:entry.idleExpiresAt};},set:(key,session,fingerprint)=>write(key,{...session,fingerprint}),touch:(key,session,fingerprint)=>write(key,{...session,fingerprint},true),delete:key=>write(key,null)};
 }

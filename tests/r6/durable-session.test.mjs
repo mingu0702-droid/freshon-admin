@@ -27,3 +27,9 @@ test('durable signed sessions survive restart; logout, expiry, rotation and stor
  assert.ok(g.requests.filter(r=>r.method==='PUT').every(r=>r.path.endsWith('/opsmap-stage/staff-sessions-v1.json')));
  }finally{await Promise.all(servers.map(s=>new Promise(resolve=>s.close(resolve))));}
 });
+test('late activity after durable logout cannot recreate a revoked session',async()=>{
+ const g=github(),env={OPSMAP_STAGE_VERIFY_ONLY:'1',GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',GITHUB_TOKEN:'synthetic-only',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'stage/opsmap-manual-pins',MAP_STAFF_SESSION_SECRET:'a'.repeat(43)};
+ const a=createStageStaffSessionStore({env,fetchImpl:g.fetch}),b=createStageStaffSessionStore({env,fetchImpl:g.fetch}),key='b'.repeat(64),fp='c'.repeat(64),s={expiresAt:Date.now()+60000,idleExpiresAt:Date.now()+30000};
+ await a.set(key,s,fp);const prior=await b.get(key,fp);assert.ok(prior);await a.delete(key);assert.equal(await b.touch(key,prior,fp),false);assert.equal(await a.get(key,fp),null);
+ await a.set(key,s,fp);await Promise.all([a.delete(key),a.touch(key,s,fp)]);assert.equal(await b.get(key,fp),null);
+});

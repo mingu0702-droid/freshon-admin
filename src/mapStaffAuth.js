@@ -42,7 +42,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
   const noStore = (_req, res, next) => { res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache'); res.set('Vary', 'Cookie'); next(); };
   function configuration() {
     const id = env.MAP_STAFF_ID || '', hash = env.MAP_STAFF_PASSWORD_HASH || '', secret = env.MAP_STAFF_SESSION_SECRET || '';
-    const nextFingerprint = digest([id, hash, secret, env.RENDER_EXTERNAL_URL || ''].join('\n')).toString('hex');
+    const nextFingerprint = digest([id, hash, secret, env.RENDER_EXTERNAL_URL || env.MAP_STAFF_ORIGIN || '',sessionStore?'DURABLE_SESSION_V2':'PROCESS_MEMORY'].join('\n')).toString('hex');
     if (fingerprint !== nextFingerprint) { sessions.clear(); fingerprint = nextFingerprint; }
     let origin = '';
     try { const u = new URL(env.RENDER_EXTERNAL_URL || env.MAP_STAFF_ORIGIN || ''); if (u.protocol === 'https:' && u.pathname === '/') origin = u.origin; } catch {}
@@ -76,7 +76,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
     if(!config.ready||!key||revoked.has(key)||req.get('origin')&&req.get('origin')!==config.origin||req.get('sec-fetch-site')&&!['same-origin','none'].includes(req.get('sec-fetch-site')))return null;
     if(sessionStore){const saved=await sessionStore.get(key,revision);if(revoked.has(key)||configuration().secret!==config.secret||fingerprint!==revision)return null;if(saved)sessions.set(key,saved);else sessions.delete(key);}
     const current=readMemorySession(req);if(!current)return null;
-    if(touch){const updated={expiresAt:current.expiresAt,idleExpiresAt:Math.min(current.expiresAt,now()+STAFF_IDLE_MS)};if(sessionStore)await sessionStore.set(key,updated,revision);if(revoked.has(key)||fingerprint!==revision)return null;sessions.set(key,updated);return {key,...updated};}
+    if(touch){const updated={expiresAt:current.expiresAt,idleExpiresAt:Math.min(current.expiresAt,now()+STAFF_IDLE_MS)};if(revoked.has(key))return null;if(sessionStore&&!(await sessionStore.touch(key,updated,revision)))return null;if(revoked.has(key)||fingerprint!==revision)return null;sessions.set(key,updated);return {key,...updated};}
     return current;
   }
   const requireStaff = (req, res, next) => noStore(req, res, async () => {
