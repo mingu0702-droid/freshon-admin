@@ -33,8 +33,9 @@ export async function verifyStaffPassword(password, hash) {
 
 // Deliberately single-process. A restart/credential rotation revokes all sessions.
 // Scaling this service requires a shared store first; never enable cluster workers.
-export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
+export function createMapStaffAuth({ env = process.env, now = Date.now, sessionStore } = {}) {
   const sessions = new Map(), attempts = new Map();
+  const revoked = new Set();
   const processStartedAt = new Date(now()).toISOString();
   let fingerprint = '', verifying = false;
   const cookieOptions = { httpOnly: true, secure: true, sameSite: 'strict', path: '/' };
@@ -61,21 +62,28 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
     if (!/^[A-Za-z0-9_-]{43}$/.test(value)) return '';
     return crypto.createHmac('sha256', config.secret).update(value).digest('hex');
   }
-  function readSession(req, touch = true) {
+  function readMemorySession(req) {
     const config = configuration();
     if (!config.ready) return null;
     if (req.get('origin') && req.get('origin') !== config.origin) return null;
     if (req.get('sec-fetch-site') && !['same-origin', 'none'].includes(req.get('sec-fetch-site'))) return null;
     const key = sessionKey(req, config), session = sessions.get(key), time = now();
-    if (!session || time >= session.expiresAt || time >= session.idleExpiresAt) { sessions.delete(key); return null; }
-    if (touch) session.idleExpiresAt = Math.min(session.expiresAt, time + STAFF_IDLE_MS);
+    if (revoked.has(key) || !session || time >= session.expiresAt || time >= session.idleExpiresAt) { sessions.delete(key); return null; }
     return { key, ...session };
   }
-  const requireStaff = (req, res, next) => noStore(req, res, () => {
+  async function readSession(req,touch=false){
+    const config=configuration(),key=sessionKey(req,config),revision=fingerprint;
+    if(!config.ready||!key||revoked.has(key)||req.get('origin')&&req.get('origin')!==config.origin||req.get('sec-fetch-site')&&!['same-origin','none'].includes(req.get('sec-fetch-site')))return null;
+    if(sessionStore){const saved=await sessionStore.get(key,revision);if(revoked.has(key)||configuration().secret!==config.secret||fingerprint!==revision)return null;if(saved)sessions.set(key,saved);else sessions.delete(key);}
+    const current=readMemorySession(req);if(!current)return null;
+    if(touch){const updated={expiresAt:current.expiresAt,idleExpiresAt:Math.min(current.expiresAt,now()+STAFF_IDLE_MS)};if(sessionStore)await sessionStore.set(key,updated,revision);if(revoked.has(key)||fingerprint!==revision)return null;sessions.set(key,updated);return {key,...updated};}
+    return current;
+  }
+  const requireStaff = (req, res, next) => noStore(req, res, async () => {
     const started = performance.now();
     // Ordinary/background map reads do not manufacture employee activity.
     // Only the explicit same-origin activity check below renews the idle lease.
-    const session = readSession(req, false);
+    let session;try{session=await readSession(req,false);}catch{return res.status(503).json({error:'STAFF_SESSION_STORE_UNAVAILABLE'});}
     addStaffTiming(res, 'session', performance.now() - started);
     if (!session) return res.status(401).json({ error: 'STAFF_LOGIN_REQUIRED' });
     res.locals.sensitiveAuthenticated = true;
@@ -99,19 +107,19 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
   const router = express.Router();
   router.use(noStore);
   router.use(express.json({ limit: '4kb' }));
-  router.get('/session', (req, res) => {
+  router.get('/session', async (req, res) => {
     // A trusted UI activity check can renew idle time; background status cannot.
     const started = performance.now();
     const activity = req.get('x-map-staff-activity') === '1'
       && (req.get('sec-fetch-site') === 'same-origin' || req.get('origin') === configuration().origin);
     const prior = sessions.get(sessionKey(req, configuration()));
     const expired = Boolean(prior && (now() >= prior.expiresAt || now() >= prior.idleExpiresAt));
-    const session = readSession(req, activity);
+    let session;try{session=await readSession(req,activity);}catch{return res.status(503).json({error:'STAFF_SESSION_STORE_UNAVAILABLE'});}
     addStaffTiming(res, 'session', performance.now() - started);
     return res.json({ authenticated: Boolean(session), configured: configuration().ready,
       expiresAt: session?.expiresAt || null, idleExpiresAt: session?.idleExpiresAt || null,
       reason: session ? null : expired ? 'SESSION_EXPIRED' : sessionKey(req, configuration()) ? 'SESSION_UNAVAILABLE' : 'SIGNED_OUT',
-      policy: { maxMs: STAFF_MAX_MS, idleMs: STAFF_IDLE_MS, persistence: 'PROCESS_MEMORY', processStartedAt } });
+      policy: { maxMs: STAFF_MAX_MS, idleMs: STAFF_IDLE_MS, persistence: sessionStore?.kind||'PROCESS_MEMORY', processStartedAt } });
   });
   router.post('/login', async (req, res) => {
     const config = configuration();
@@ -129,10 +137,12 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
       const sessionStarted = performance.now(), time = now();
       for (const [key, session] of sessions) if (time >= session.expiresAt || time >= session.idleExpiresAt) sessions.delete(key);
       if (sessions.size >= 1000) return res.status(503).json({ error: 'LOGIN_RETRY_LATER' });
-      sessions.delete(sessionKey(req, config));
+      const previousKey=sessionKey(req,config);if(previousKey){revoked.add(previousKey);sessions.delete(previousKey);if(sessionStore)await sessionStore.delete(previousKey);}
       const token = crypto.randomBytes(32).toString('base64url');
       const key = crypto.createHmac('sha256', config.secret).update(token).digest('hex');
       const session = { expiresAt: time + STAFF_MAX_MS, idleExpiresAt: time + STAFF_IDLE_MS };
+      if(sessionStore)await sessionStore.set(key,session,fingerprint);
+      const afterSave=configuration();if(!afterSave.ready||!equal(afterSave.hash,config.hash)||!equal(afterSave.secret,config.secret))return res.status(503).json({error:'LOGIN_UNAVAILABLE'});
       sessions.set(key, session);
       res.cookie(STAFF_COOKIE, token, { ...cookieOptions, maxAge: STAFF_MAX_MS });
       addStaffTiming(res, 'session', performance.now() - sessionStarted);
@@ -140,18 +150,18 @@ export function createMapStaffAuth({ env = process.env, now = Date.now } = {}) {
     } catch { return res.status(503).json({ error: 'LOGIN_UNAVAILABLE' }); }
     finally { verifying = false; if (req.body) req.body.password = ''; }
   });
-  router.post('/logout', (req, res) => {
+  router.post('/logout', async (req, res) => {
     const started = performance.now();
     const config = configuration();
     if (!config.ready || !sameOrigin(req, config)) return res.status(403).json({ error: 'ORIGIN_REJECTED' });
-    sessions.delete(sessionKey(req, config));
+    const key=sessionKey(req,config);if(key){revoked.add(key);sessions.delete(key);try{if(sessionStore)await sessionStore.delete(key);}catch{return res.status(503).json({error:'STAFF_SESSION_STORE_UNAVAILABLE'});}}
     res.clearCookie(STAFF_COOKIE, cookieOptions);
     addStaffTiming(res, 'session', performance.now() - started);
     return res.json({ authenticated: false });
   });
   return { router, requireStaff, isSessionCurrent: (req, expectedKey) => {
     // Do not extend idle time or write headers while rechecking a media stream.
-    const current = readSession(req, false);
+    const current = readMemorySession(req);
     return Boolean(current && current.key === expectedKey);
   } };
 }

@@ -32,6 +32,7 @@ import {createStoreRoadBudget} from './hubRoadBudget.js';
 import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
 import {callHub as manualPinVerifiedHubRead} from './phase2bHubReadClient.js';
 import {isRoadRouteRequest} from './roadRouteService.js';
+import {createStageStaffSessionStore} from './staffSessionStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -113,6 +114,7 @@ const manualMapPins=createManualMapPins({appRoot:path.resolve(publicDir,'..'),au
   return {...detail.value,sourceDriveVersion:detail.meta.sourceVersion};
 },readCoordinate:code=>savedStageReview.getCoordinate?.(code),store:manualPinStore,backupStore:manualPinStore?.backupStore});
 const productionMap = mountProductionMapApi(app, {
+  authOptions:{sessionStore:createStageStaffSessionStore()},
   roadRouteBudget:stageVerificationOnly&&process.env.OPSMAP_ROAD_BUDGET_STORE_KIND==='github-stage'
     ?createStoreRoadBudget({store:manualPinStore,accountHash:process.env.OPSMAP_ROAD_BUDGET_ACCOUNT_SHA256}):undefined,
   mountPrivateExtensions: binding => { manualMapPins.mount(binding); approvedPhotoMount(binding); savedStageReview.mount(binding); },
