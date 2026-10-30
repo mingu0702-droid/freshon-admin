@@ -46,7 +46,7 @@ test('audit tamper is rejected and coordinate edits do not affect another custom
 });
 test('real browser overlay keeps manual priority across new snapshots and isolates other stores',async()=>{
  const source=await fs.readFile(new URL('../public/manual-map-pins.mjs',import.meta.url),'utf8'),text=source.slice(source.indexOf('function apply(row){'),source.indexOf('\nasync function refresh()'));
- const records=new Map([['S970003',{resolutionStatus:'MANUAL_CONFIRMED',latitude:37.55,longitude:127.1}]]),apply=vm.runInNewContext('('+text+')',{records,bases:new WeakMap()});
+ const records=new Map([['S970003',{resolutionStatus:'MANUAL_CONFIRMED',latitude:37.55,longitude:127.1}]]),apply=vm.runInNewContext('('+text+')',{records,bases:new WeakMap(),ORIGINAL_PIN_BASE:Symbol('opsmap-original-pin-base')});
  const automatic={customerCode:'S970003',lat:37.1,lng:127.2,coordinateSource:'RAW_GPS'},neighbor={customerCode:'S970004',lat:36.1,lng:128.1,coordinateSource:'RAW_GPS'};apply(automatic);assert.equal(automatic.lat,37.55);assert.equal(automatic.coordinateSource,'MANUAL_PIN');
  const refreshed={customerCode:'S970003',lat:37.2,lng:127.3,coordinateSource:'KAKAO_VERIFIED_BUILDING'};apply(refreshed);assert.equal(refreshed.lat,37.55);apply(neighbor);assert.equal(neighbor.lat,36.1);assert.equal(neighbor.coordinateSource,'RAW_GPS');
  records.clear();apply(refreshed);assert.equal(refreshed.lat,37.2);assert.equal(refreshed.coordinateSource,'KAKAO_VERIFIED_BUILDING');
