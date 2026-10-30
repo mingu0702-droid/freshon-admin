@@ -29,6 +29,7 @@ async function fixture({source=async()=>({ok:true,data:{...sourceRow},meta:{sour
  const login=await fetch(base+'/api/map-phase2b/auth/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({id:env.MAP_STAFF_ID,password:'synthetic-password'})});
  assert.equal(login.status,200);await login.json();const cookie=login.headers.get('set-cookie').split(';')[0],headers={cookie,origin};
  return {calls,sessions,
+  assignments:date=>fetch(base+'/api/map-phase2b/preview/assignments?date='+date,{headers}),
   read:(date=day,view='',options={})=>fetch(base+'/api/map-phase2b/private/customer-detail?customerCode='+code+'&date='+date+(view?'&view='+view:''),{...options,headers:{...headers,...options.headers}}),
   session:async()=>{const r=await fetch(base+'/api/map-phase2b/auth/session',{headers});assert.equal(r.status,200);return r.json();},
   logout:()=>fetch(base+'/api/map-phase2b/auth/logout',{method:'POST',headers}),
@@ -88,4 +89,16 @@ test('future protected notes stay PENDING until dated source evidence exists; no
   const r=await f.read(future);assert.equal(r.status,202);const body=await r.json();assert.equal(body.error,'PLANNED_SOURCE_UNOBSERVED');assert.equal(body.data,null);assert.equal(body.meta.date,future);assert.equal(body.meta.planned,true);assert.equal(body.meta.sourceObserved,false);assert.equal(f.calls.length,0);
   assert.equal((await f.session()).authenticated,true);
  }finally{await f.close();}
+});
+
+test('future assignments require real dated page evidence and an observed empty source stays PENDING',async()=>{
+ for(const count of [0,1]){
+  const f=await fixture({source:async(action,params)=>{
+   assert.equal(action,'datedAssignments');assert.equal(params.date,future);
+   const data=count?[{customerCode:code,deliveryDate:future,sourceKey:'synthetic-future',vehicle:'',lat:null,lng:null}]:[];
+   return {ok:true,data,meta:{contract:'dated-assignments-v1',date:future,totalCount:count,sourceCount:count,pageOffset:0,count,pageSize:1000,truncated:false,hasMore:false,complete:true,nextCursor:null,sourceVersion:'SYNTHETIC_VERSION'}};
+  }});
+  try{const r=await f.assignments(future),body=await r.json();assert.equal(r.status,count?200:202);assert.equal(body.meta.planned,true);assert.equal(body.meta.sourceObserved,!!count);assert.equal(body.meta.complete,!!count);assert.equal(body.data.length,count);if(count){assert.equal(body.data[0].vehicle,'');assert.equal(body.data[0].lat,null);}else assert.equal(body.error,'PLANNED_SOURCE_UNOBSERVED');}
+  finally{await f.close();}
+ }
 });

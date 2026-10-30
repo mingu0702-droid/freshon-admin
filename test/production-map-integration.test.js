@@ -41,9 +41,9 @@ test('production routes: signed Unicode ingest, Period, staff auth, protected hi
  const logout=await fetch(base+'/api/map-phase2b/auth/logout',{method:'POST',headers:{Cookie:cookie,Origin:env.RENDER_EXTERNAL_URL}});assert.equal(logout.status,200);assert.equal((await auth('/api/map-phase2b/private/customer-detail?customerCode=S12345')).status,401);
  assert(calls.every(c=>['staffCustomerDetail','stageReadModelRequest'].includes(c.action)));
 });
-test('Production collector, refresh scheduler, ETA and legacy routes remain unchanged outside the tested checkpoint fix',()=>{
+test('Production collector, refresh scheduler, ETA and legacy routes remain unchanged outside the tested checkpoint and daily-source integrity fixes',()=>{
  const original=execFileSync('git',['show','2b346cfc7d0341d819369f4b1c35cac3e7aeb4f8:src/server.js'],{encoding:'utf8'}).replaceAll('\r\n','\n');
  const current=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8').replaceAll('\r\n','\n');
- for(const [start,end]of [['function schedulePhase2bSnapshotRefresh','async function fetchDeliveryTaskRowsForDate'],['app.get("/api/collector/delivery"','app.get("/api/map-phase2b/preview/status"'],['app.get("/api/map-phase2b/preview/route-plan"','app.all("/api/*"']]){const a=original.indexOf(start),b=original.indexOf(end,a);assert(a>=0&&b>a);assert.equal(current.slice(current.indexOf(start),current.indexOf(end,current.indexOf(start))),original.slice(a,b));}
+ for(const [start,end]of [['function schedulePhase2bSnapshotRefresh','async function fetchDeliveryTaskRowsForDate'],['app.get("/api/collector/delivery"','app.get("/api/map-phase2b/preview/status"'],['app.get("/api/map-phase2b/preview/route-plan"','app.all("/api/*"']]){const a=original.indexOf(start),b=original.indexOf(end,a);assert(a>=0&&b>a);const stripDailyIntegrity=s=>s.replace(/async function phase2bTodayStatus\(date\) \{[\s\S]*?\n\}\n/, '');assert.equal(stripDailyIntegrity(current.slice(current.indexOf(start),current.indexOf(end,current.indexOf(start)))),stripDailyIntegrity(original.slice(a,b)));}
  for(const file of ['src/auth.js','src/store.js','src/hubApiClient.js','src/phase2bOperations.js','src/config.js'])assert.equal(fs.readFileSync(new URL('../'+file,import.meta.url),'utf8').replaceAll('\r\n','\n'),execFileSync('git',['show','2b346cf:'+file],{encoding:'utf8'}).replaceAll('\r\n','\n'));
 });
