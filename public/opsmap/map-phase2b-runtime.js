@@ -228,7 +228,7 @@
   function syncDateHeading() {
     const period = state.mode === "BASE_60D";
     const start = $("#rangeStart").value, end = $("#rangeEnd").value;
-    if ($("#dateHeading")) $("#dateHeading").textContent = period ? "조회기간" : "기준일";
+    if ($("#dateHeading")) $("#dateHeading").textContent = period ? "조회기간" : state.selectedDate>localDate()?"예정 배차일":"기준일";
     $("#latestDate").textContent = period ? (start && end ? `${start} ~ ${end}` : "데이터 확인 중") : (state.selectedDate || "데이터 확인 중");
     $("#rangeText").textContent = period && modelStatus?.periodLatest ? `기간 데이터 최신 ${modelStatus.periodLatest}` : "";
   }
@@ -284,7 +284,7 @@
       snapshotMeta = payload.meta || {};
       syncSourceFreshness();
       state.latestDate = snapshotMeta.latestDate || latestDateFromRows(latestSnapshotRows);
-      $("#selectedDate").max = localDate();
+      $("#selectedDate").max = '';
       // Coordinates and Snapshot freshness never select the Period or Daily date.
     } catch (error) { if(isSilentRequestError(error))throw error; snapshotReadState = 'error'; }
   }
@@ -534,7 +534,7 @@
   }
 
   async function changeSelectedDate(date,queryConditions=null) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date+'T00:00:00Z')) || new Date(date+'T00:00:00Z').toISOString().slice(0,10)!==date || date > localDate()) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date+'T00:00:00Z')) || new Date(date+'T00:00:00Z').toISOString().slice(0,10)!==date) return;
     const contextChanged=state.mode!=='DATE_ROUTE'||date!==state.selectedDate;
     generalMap=false;resetRoadRoute();cancelManualRoadRoute();
     dateReady=false;datedSourceDate='';dailyMeta=null;
@@ -560,21 +560,22 @@
     operationStops = []; renderRunList();
     state.mode = "DATE_ROUTE";
     clearSelection();
-    $("#mapStatusSub").textContent = `${date} 배송지를 불러오는 중입니다.`;
+    $("#mapStatusSub").textContent = `${date} ${date>localDate()?'예정 ':''}배송지를 불러오는 중입니다.`;
     if (!sameDate) {
       clearNewAreaBatch();
       $("#addressJudgeResults").innerHTML = "";
       $("#results").innerHTML = "";
     }
-    ["#selectedDate", "#date", "#mobileDate"].forEach((id) => { $(id).value = date; $(id).max = localDate(); });
+    ["#selectedDate", "#date", "#mobileDate"].forEach((id) => { $(id).value = date; $(id).max = ''; });
     $("#syncOperation").textContent = date === localDate() ? "↻ 현재상태 동기화" : "↻ 데이터 새로고침";
-    $("#freshnessState").textContent = `${date} 편성 조회 중`;
+    $("#freshnessState").textContent = `${date} ${date>localDate()?'예정 ':''}편성 조회 중`;
     updateOperationMetrics(null);
     try {
       const adapter=typeof hybridUiReady==='undefined'?null:await hybridUiReady;
       if(token!==dateRequestId)return;
       const response = await adapter?.readDate(date) || await fetchJson(`/api/map-phase2b/preview/assignments?date=${date}`, { channel: "selected-date", ttl: 60000, timeout: 120000 });
       if(token!==dateRequestId||state.mode!=='DATE_ROUTE'||state.selectedDate!==date)return;
+      if(response.error==='PLANNED_SOURCE_UNOBSERVED'||response.meta?.planned&&response.meta?.sourceObserved===false)throw new Error('PLANNED_SOURCE_UNOBSERVED');
       if (response.meta?.complete !== true || response.meta.date !== date) throw new Error("날짜별 편성 검증 실패");
       let rows = response.data || [];
       if(!Array.isArray(rows)||rows.some(row=>!row||row.deliveryDate&&row.deliveryDate!==date))throw new Error('배송일이 일치하지 않습니다.');
@@ -599,11 +600,11 @@
       datedSourceDate=date;dateReady = true;
       await loadBaseMap();
       // Historical driver identity comes from assignment history, not today's master.
-      await loadOperationStatus(primarySelectedVehicle(), selectedVehicles().length === 1);
+      if(date<=localDate())await loadOperationStatus(primarySelectedVehicle(), selectedVehicles().length === 1);
     } catch (error) {
       if (token !== dateRequestId || isSilentRequestError(error)) return;
       dateReady=false;datedSourceDate='';state.currentRows=[];state.routeRows=[];operationStops=[];clearMap();renderRunList();
-      $("#freshnessState").textContent = `${date} 배송지를 불러오지 못했습니다. 다시 조회해 주세요.`;
+      $("#freshnessState").textContent = error.message==='PLANNED_SOURCE_UNOBSERVED'?`${date} 예정 배차자료 미확인 · 완료로 처리하지 않았습니다.`:`${date} 배송지를 불러오지 못했습니다. 다시 조회해 주세요.`;
     }
   }
 
@@ -1758,7 +1759,7 @@
     $("#mapStatusTitle").textContent = period ? "매장·권역 지도" : "일자별 운행";
     $("#mapStatusSub").textContent = period ? `${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 배송지' : (baseVehicleMeta?.stale?'이전 기준호차':'기준호차')}`
       : `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
-    $("#freshnessState").textContent = period ? `지도 반영일 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}` : `${state.selectedDate} 편성 조회 완료`;
+    $("#freshnessState").textContent = period ? `지도 반영일 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}` : `${state.selectedDate} ${state.selectedDate>localDate()?'예정 ':''}편성 조회 완료`;
     if(period&&periodBasis==='vehicle'&&baseVehicleStatus!=='READY')$('#mapStatusSub').textContent=baseVehicleStatus==='ERROR'?'기준호차를 불러오지 못했습니다.':baseVehicleStatus==='NOT_READY'?'기준호차 자료를 확인해 주세요.':'기준호차를 불러오는 중입니다.';
     if(period&&periodBasis==='vehicle'&&baseVehicleStatus==='READY'&&baseVehicleMeta?.stale)$('#mapStatusSub').textContent+=` · 기준호차 이전 확인값 (${baseVehicleMeta.checkedAt||'시각 미확인'}) · ${baseVehicleMeta.refresh==='RUNNING'?'별도 갱신 중':baseVehicleMeta.refresh==='ERROR'?'갱신 실패 · 기존값 유지':'갱신 대기'} · 기간 최신화와 별개`;
     syncDateHeading();
@@ -1798,8 +1799,8 @@
 
   function updateDateRange(latest) {
     syncDateHeading();
-    $("#date").max = localDate();
-    $("#mobileDate").max = localDate();
+    $("#date").max = '';
+    $("#mobileDate").max = '';
   }
 
   async function loadRoute(source) {
