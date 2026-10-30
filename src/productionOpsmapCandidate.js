@@ -7,6 +7,7 @@ import {createManualPinAuthorizer} from './opsmap-abc/manualPinAuthorization.js'
 import {createManualMapPins} from './opsmap-abc/manualMapPins.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {staffStoreDetail} from './opsmap-abc/mapStaffDetail.js';
+import {roadRouteEnabledSetting} from './opsmap-abc/roadRouteService.js';
 function existingJavaScriptKey(publicDir){try{const f=path.join(publicDir,'daily-routes.html');if(fsSync.statSync(f).size>1048576)return '';const keys=[...new Set([...fsSync.readFileSync(f,'utf8').matchAll(/appkey=([a-f0-9]{32})/gi)].map(m=>m[1]))];return keys.length===1?keys[0]:'';}catch{return '';}}
 export function resolveProductionCredentials(env){
  // Explicit opt-in reuses only this Production process credentials; never reads Stage configuration.
@@ -27,7 +28,7 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  if(env.OPSMAP_PRODUCTION_CANDIDATE_ENABLED!=='1'){router.use((_q,r)=>r.status(503).json({error:'OPSMAP_DISABLED'}));return {enabled:false};}
  const credentials=resolveProductionCredentials(env);
  const authEnv={...env,KAKAO_MAP_JAVASCRIPT_KEY:env.KAKAO_MAP_JAVASCRIPT_KEY||existingJavaScriptKey(publicDir),MAP_STAFF_ID:env.OPSMAP_AUTH_ID||env.MAP_STAFF_ID,MAP_STAFF_PASSWORD_HASH:env.OPSMAP_AUTH_PASSWORD_HASH||env.MAP_STAFF_PASSWORD_HASH,MAP_STAFF_SESSION_SECRET:credentials.sessionSecret,MAP_STAFF_ORIGIN:env.OPSMAP_AUTH_ORIGIN,
-  GITHUB_TOKEN:credentials.authToken,GITHUB_CACHE_REPO:env.OPSMAP_AUTH_STORE_REPO,OPSMAP_MANUAL_PIN_GITHUB_BRANCH:env.OPSMAP_AUTH_STORE_BRANCH,OPSMAP_PRODUCTION_SESSION_ENABLED:'1',OPSMAP_ROAD_ROUTE_ENABLED:'0',OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',OPSMAP_PREPARED_DETAILS_ENABLED:'0',OPSMAP_APPROVED_PHOTO_VERIFY:'0',MAP_HYBRID_90DAY_ENABLED:'false'};
+  GITHUB_TOKEN:credentials.authToken,GITHUB_CACHE_REPO:env.OPSMAP_AUTH_STORE_REPO,OPSMAP_MANUAL_PIN_GITHUB_BRANCH:env.OPSMAP_AUTH_STORE_BRANCH,OPSMAP_PRODUCTION_SESSION_ENABLED:'1',OPSMAP_ROAD_ROUTE_ENABLED:roadRouteEnabledSetting(env),OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',OPSMAP_PREPARED_DETAILS_ENABLED:'0',OPSMAP_APPROVED_PHOTO_VERIFY:'0',MAP_HYBRID_90DAY_ENABLED:'false'};
  let store;try{if(!authEnv.MAP_STAFF_ID||!authEnv.MAP_STAFF_PASSWORD_HASH||!authEnv.MAP_STAFF_SESSION_SECRET)throw Error();store=isolatedTestStore||createProductionSessionStore({env:authEnv});if(!store)throw Error();}catch{router.use((_q,r)=>r.status(503).json({error:'OPSMAP_AUTH_CONFIGURATION_REQUIRED'}));return {enabled:false};}
  router.use('/internal',(_q,r)=>r.status(404).end());
  let pinStore;try{if(env.OPSMAP_PIN_STORE_REPO&&credentials.pinToken)pinStore=createProductionManualPinGithubStore({repo:env.OPSMAP_PIN_STORE_REPO,token:credentials.pinToken,branch:env.OPSMAP_PIN_STORE_BRANCH});}catch{/* Remain closed; an invalid store never falls back to Stage. */}

@@ -3,6 +3,7 @@ import {mountProductionOpsmapCandidate} from "./productionOpsmapCandidate.js";
 import {createStageReadModel} from "./stageReadModel.js";
 import {createCoordinateSupplement} from "./mapCoordinateSupplement.js";
 import {callHub as verifiedMapHubRead} from "./phase2bHubReadClient.js";
+import {callHub as verifiedOpsmapHubRead} from "./opsmap-abc/phase2bHubReadClient.js";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fsSync from "node:fs";
@@ -66,7 +67,7 @@ const productionMap = mountProductionMapApi(app, {
   phase2bKstDate, normalizeCell, normalizeDateValue, phase2bSnapshotMeta, phase2bTodayStatus, publicDir,
   getSnapshotWorkerState: () => ({running:!!phase2bSnapshotRefreshPromise,continuation:!!phase2bSnapshotRetryTimer})
 });
-mountProductionOpsmapCandidate(app,{publicDir,readManualPinCustomer:customerCode=>verifiedMapHubRead('customerDetail',{customerCode},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000}),readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),callHub,sharedBaseCache:productionMap.baseCache,readBaseVehicleMaster:sharedFixedVehicleReader,sharedReadModel,sharedCoordinateSupplement,readPhase2bSnapshot,getSnapshotMemory:()=>phase2bSnapshotMemory,phase2bKstDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus});
+mountProductionOpsmapCandidate(app,{publicDir,readManualPinCustomer:customerCode=>verifiedOpsmapHubRead('customerDetail',{customerCode},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000}),readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),callHub:verifiedOpsmapHubRead,sharedBaseCache:productionMap.baseCache,readBaseVehicleMaster:sharedFixedVehicleReader,sharedReadModel,sharedCoordinateSupplement,readPhase2bSnapshot,getSnapshotMemory:()=>phase2bSnapshotMemory,phase2bKstDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus});
 app.use(express.json({ limit: "10mb" }));
 // Sensitive namespaces must never inherit PUBLIC_VIEW or the SPA fallback.
 app.use('/api/collector', requireAdmin);
@@ -2170,21 +2171,30 @@ async function refreshPhase2bSnapshot() {
     const basePayload = phase2bSnapshotPayload(rows);
     const today = phase2bKstDate();
     const refreshFrom = existing?.refreshedThrough || basePayload.latestDate;
+    let refreshedThrough = refreshFrom;
     for (const date of phase2bSnapshotMissingDates(refreshFrom, today)) {
       rows.push(...await phase2bSnapshotDateRows(date, baseTiles));
       const checkpoint = phase2bSnapshotPayload(rows, { refreshedThrough: date, refreshComplete: false });
       await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(checkpoint));
       phase2bSnapshotMemory = checkpoint;
+      refreshedThrough = date;
       console.info(JSON.stringify({ component: "phase2b-snapshot", event: "CHECKPOINT", latestDate: checkpoint.latestDate, refreshedThrough: date, rowCount: checkpoint.rowCount }));
     }
-    const todayStatus = await phase2bTodayStatus(today).catch(() => null);
+    // A bounded date batch is a checkpoint, never proof that later dates were read.
+    if (refreshedThrough < today) {
+      console.info(JSON.stringify({ component: "phase2b-snapshot", event: "PARTIAL_RANGE", refreshedThrough, targetDate: today }));
+      return phase2bSnapshotMemory;
+    }
+    const todayStatus = await phase2bTodayStatus(today);
+    if (todayStatus?.date !== today || !Array.isArray(todayStatus.vehicles)) throw new Error("PHASE2B_TODAY_STATUS_INVALID");
     const knownByCode = new Map(rows.map((row) => [normalizeCell(row.customerCode || row.code), row]));
     (todayStatus?.vehicles || []).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
       const code = normalizeCell(stop.customerCode || stop.code);
       const known = knownByCode.get(code) || {};
-      const lat = Number.isFinite(Number(stop.lat)) ? Number(stop.lat) : Number(known.lat);
-      const lng = Number.isFinite(Number(stop.lng)) ? Number(stop.lng) : Number(known.lng);
-      if (!code || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const usable = value => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+      const lat = usable(stop.lat) ? Number(stop.lat) : usable(known.lat) ? Number(known.lat) : null;
+      const lng = usable(stop.lng) ? Number(stop.lng) : usable(known.lng) ? Number(known.lng) : null;
+      if (!code || !Number.isFinite(lat) || !Number.isFinite(lng) || lat < 33 || lat > 39.5 || lng < 124 || lng > 132) return;
       rows.push({ ...known, ...stop, customerCode: code, vehicle: vehicle.vehicle, lat, lng, lastDeliveryDate: today });
     }));
     const payload = phase2bSnapshotPayload(rows, { refreshedThrough: today, refreshComplete: true });
