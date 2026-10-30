@@ -1462,7 +1462,7 @@
         if (detail.data?.customerCode) {
           const row = normalizeApiStore(detail.data);
           row.vehicle = dateReady ? storesByCode.get(row.customerCode)?.vehicle || "" : "";
-          setSearchState("1건 · 고객코드 일치");
+          setSearchState("검색 결과 1건");
           requestMapFit(); renderResults([row]); renderStops([row], { boundaries: false }); selectStore(row, null, true, true);
           return;
         }
@@ -1491,7 +1491,7 @@
   }
 
   function renderResults(rows) {
-    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName || "-")}</div><div class="resultMeta"><span class="chip">${esc(vehicleLabel(row.vehicle || "-"))}</span>${esc(row.address || "-")}</div></button>`).join("");
+    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName || "-")}</div></button>`).join("");
     $$("[data-result]").forEach((element) => {
       element.onclick = () => {
         const row = rows[Number(element.dataset.result)];
@@ -1573,7 +1573,7 @@
       vehicle: baseVehicles.get(item.customerCode)?.baseVehicle||"", ...(baseVehicles.get(item.customerCode)||{}), driverName: "", history: [], lastDeliveryDate: "",
       outsideReason: period.has(item.customerCode) ? "현재 호차/기사 조건의 이력 없음" : "선택 기간 이력 없음" });
     setSearchState(rows.length ? `${rows.length}건 · 기간/조회 조건 유지` : "검색 결과 0건 · 현재 지도 유지");
-    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-period-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName)}</div><div class="resultMeta">${esc((rankSearchRow(row,text)===0?'고객코드 정확 일치':rankSearchRow(row,text)<=4?'매장명':'주소')+' · '+(row.outsideReason || vehicleLabel(row.vehicle) + ' · ' + row.lastDeliveryDate))}</div></button>`).join("");
+    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-period-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName)}</div></button>`).join("");
     if(!rows.length)offerExternalAddressResult(text);
     $$("[data-period-result]").forEach(button => button.onclick = () => {
       const row = rows[Number(button.dataset.periodResult)];
