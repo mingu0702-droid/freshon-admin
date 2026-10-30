@@ -12,7 +12,7 @@ test('refresh preserves a valid session, expiry never renews it, reconstructed p
     const login=await fetch(first.url+'/auth/login',{method:'POST',headers:{origin:env.MAP_STAFF_ORIGIN,'content-type':'application/json'},body:JSON.stringify({id:env.MAP_STAFF_ID,password:'synthetic-password-only'})});assert.equal(login.status,200);
     const cookie=login.headers.get('set-cookie').split(';')[0];const headers={cookie,origin:env.MAP_STAFF_ORIGIN};
     const read=async origin=>(await fetch(origin+'/auth/session',{headers})).json();
-    const before=await read(first.url);assert.equal(before.authenticated,true);
+    const before=await read(first.url);assert.equal(before.authenticated,true);assert.equal(before.policy.persistence,'PROCESS_MEMORY');
     assert.equal((await read(first.url)).authenticated,true);
     second=await start();const restarted=await read(second.url);assert.equal(restarted.authenticated,false);assert.equal(restarted.reason,'SESSION_UNAVAILABLE');
     time+=STAFF_IDLE_MS+1;const expired=await read(first.url);assert.equal(expired.authenticated,false);assert.equal(expired.reason,'SESSION_EXPIRED');assert.equal(expired.expiresAt,null);

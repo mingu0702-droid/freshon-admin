@@ -65,5 +65,4 @@ test('network recovery rechecks staff cookie but does not disable deliberate log
   const auth=fs.readFileSync(path.join(root,'src/mapStaffAuth.js'),'utf8');
   assert.match(auth,/STAFF_IDLE_MS = 8 \* 60/);
   assert.match(auth,/STAFF_MAX_MS = 12 \* 60/);
-  assert.match(auth,/persistence: 'PROCESS_MEMORY'/);
 });
