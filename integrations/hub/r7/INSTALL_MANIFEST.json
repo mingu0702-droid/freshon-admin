@@ -1,0 +1,21 @@
+{
+  "sourceProjectId": "1QCfJSuAIHwGcDxlCQhCGART40D2ULlmP2KmD7GuA0c7KIoFFRC9qOBbP",
+  "sourceVersion": 64,
+  "sourceModule": "HubSearch",
+  "sourceModuleSHA256": "f812b43cca7bd354bcc8169e6fdd5c42b2d42f67e35c668b8a903e24a0630329",
+  "candidateModuleSHA256": "8ef39506444f3341f2a1a775a4190364cb15478be661604390167c68b058f943",
+  "function": "hubSearchObjects_",
+  "operation": "REPLACE_EXACT_FUNCTION_ONLY",
+  "existingDecoder": "hubMapHttpObjects_",
+  "sourceContractRisk": "Legacy decoder silently discards data arrays, items and object rows. Actual failing response body not inspected or logged; this risk is not asserted as proven sole cause of live NOT_FOUND.",
+  "deployedVersion64Ids": [
+    "AKfycby2GWkBTo3v1u9YsDIpmwGUNIGP4UHuaAnP2HAujA4oKgsWV0sj68wjxP_H1iL5Opu2"
+  ],
+  "actualInstall": false,
+  "sourceWrites": 0,
+  "triggersChanged": false,
+  "r5Installed": false,
+  "requiredInstallScope": "https://www.googleapis.com/auth/script.projects",
+  "requiredDeploymentUpdateScope": "https://www.googleapis.com/auth/script.deployments",
+  "approval": "Separate exact Hub one-function installation/deployment approval required; no OAuth scope expansion performed"
+}
