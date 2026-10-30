@@ -1,0 +1,5 @@
+기준 d05930c014b8a5634181876f7ab80f80b2fd02db의 인증/수동핀 및 UI를 보존합니다. 이전 B 커밋을 이 기준으로 재적용했으며 A/C 파일 차이는 없습니다.
+Hub 설치본은 v64·R5 미설치입니다. v64/MERGE_MANIFEST.json의 6모듈 후보만 검토하며 Production/Stage에 직접 배포하지 않았습니다.
+실자료 버전42553→42578, 5979고객 준비 유지·값 변경0·명시삭제0. 비공개 암호화 current2/previous1 보존, 실제자료 로컬 자동/수동 공통 경로 및 NOOP/실패 보존을 운영 실행과 구분하세요.
+도로 REST는 승인 예산 없음/키 미위임으로 호출0건입니다. SDK 합성 경로 검증을 실제 Directions 성공으로 합산하지 마세요. OAuth 추가승인은 요청하지 않았습니다.
+연결은 createCustomerPrivateRefreshWorker(manual===automatic), bindPreparedCustomerPrivateReads를 기존 인증 의존성에 주입합니다. 비공개 자료는 AppData/Local/OpsmapAuth/opsmap-customer-route-final-b-20261031에 있으며 키/자료는 Git에 없습니다.

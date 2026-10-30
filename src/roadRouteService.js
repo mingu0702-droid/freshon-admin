@@ -34,6 +34,21 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
   const ttl=Math.min(300000,Math.max(0,Number(env.OPSMAP_ROAD_ROUTE_CACHE_MS)||60000));
   const remove=k=>{const row=cache.get(k);if(row)bytes-=row.bytes;cache.delete(k);};
   function configuration(){return {enabled:configured(),keyConfigured:!!key()&&!/REDACTED|PLACEHOLDER|YOUR_|<|>/i.test(key()),maxWaypoints:30,requestLimit:limit,used,remaining:Math.max(0,limit-used),durableBudgetRequired:requireDurableBudget,persistentBudgetConfigured:!!budget&&budget.durable===true&&typeof budget.reserve==='function',budgetScope:budget?'EXTERNAL_APPROVED_BUDGET':'PROCESS_SAFETY_LIMIT_NOT_ACCOUNT_QUOTA'};}
+  async function readiness(){
+    const config=configuration(),blocked=[];
+    if(!config.enabled)blocked.push('FEATURE_DISABLED');
+    if(!config.keyConfigured)blocked.push('KEY_MISSING');
+    if(config.remaining===0)blocked.push('QUOTA_EXCEEDED');
+    if(requireDurableBudget&&!config.persistentBudgetConfigured)blocked.push('PERSISTENT_BUDGET_REQUIRED');
+    let approvedRemaining=null;
+    // Configuration inspection is read-only and never reserves or calls Kakao.
+    if(!blocked.length&&budget){
+      if(typeof budget.status!=='function')blocked.push('ROAD_BUDGET_UNVERIFIED');
+      else try{const status=await budget.status();if(status.durable!==true||status.scope!=='CUMULATIVE_APPROVED_ACCOUNT'||!Number.isSafeInteger(status.remaining)||status.remaining<0)throw Error('INVALID_BUDGET');approvedRemaining=status.remaining;if(!approvedRemaining)blocked.push('QUOTA_EXCEEDED');}
+      catch{blocked.push('ROAD_BUDGET_UNVERIFIED');}
+    }
+    return {...config,canRequest:blocked.length===0,blockedReasons:blocked,approvedRemaining};
+  }
   async function load(clean,plan){
     if(active>=3)throw error('PROVIDER_UNAVAILABLE',503);
     if(used>=limit)throw error('QUOTA_EXCEEDED',429);
@@ -74,7 +89,7 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
     const result=await pending.get(id);
     return {ok:true,data:{...structuredClone(result),requestId:clean.requestId},meta:{cache:'MISS_OR_SHARED',...configuration()}};
   }
-  return {route,configuration,clear(){cache.clear();bytes=0;}};
+  return {route,configuration,readiness,clear(){cache.clear();bytes=0;}};
 }
 export function isRoadRouteRequest(req){return req.method==='POST'&&['/api/map-phase2b/private/manual-road-route','/api/map-phase2b/private/road-route'].includes(req.path);}
 export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=process.env,readRecordedRoute}={}){
@@ -98,7 +113,10 @@ export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=proc
       return requireStaff(req,res,()=>res.json(result));
     }catch(e){return requireStaff(req,res,()=>res.status(e.status||502).json({ok:false,error:e.code||'ROAD_ROUTE_FAILED'}));}
   };
-  app.get('/api/map-phase2b/private/road-route/config',requireStaff,(_q,r)=>r.set('Cache-Control','private, no-store').json({ok:true,data:{...service.configuration(),recordedRouteConfigured:typeof readRecordedRoute==='function'}}));
+  app.get('/api/map-phase2b/private/road-route/config',requireStaff,async(_q,r)=>{
+    const config=typeof service.readiness==='function'?await service.readiness():service.configuration();
+    return r.set('Cache-Control','private, no-store').json({ok:true,data:{...config,recordedRouteConfigured:typeof readRecordedRoute==='function'}});
+  });
   app.post('/api/map-phase2b/private/manual-road-route',requireStaff,sameOrigin,jsonBody,(q,r)=>respond(q,r,false));
   app.post('/api/map-phase2b/private/road-route',requireStaff,sameOrigin,jsonBody,(q,r)=>respond(q,r,true));
 }

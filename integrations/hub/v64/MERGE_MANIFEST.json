@@ -1,0 +1,227 @@
+{
+  "schema": 1,
+  "moduleHashEncoding": "UTF8_LF_NORMALIZED",
+  "sourceVersion": 64,
+  "sourceFileCount": 35,
+  "sourceContentSha256": "eabd5bfa8e65ece7d3f063c3f858afdcf98715d15171186a6b1815ed92620811",
+  "candidateFileCount": 39,
+  "runtimeSyntax": "PASS",
+  "remoteInstall": false,
+  "remoteDeploy": false,
+  "oauthScopesChanged": false,
+  "library42Changed": false,
+  "triggersChanged": false,
+  "defaultAutoEnabled": false,
+  "requiredPrivateProperties": {
+    "OPSMAP_CUSTOMER_DETAILS_SCOPE_MODE": "CUSTOMER_MASTER",
+    "OPSMAP_CUSTOMER_DETAILS_FOLDER_ID": "Existing operator-approved private Hub output folder; do not use Customer or Archive folders"
+  },
+  "requiresPublicMapRoot": false,
+  "modules": [
+    {
+      "name": "HubMapHttpApi",
+      "path": "integrations/hub/v64/HubMapHttpApi.js",
+      "operation": "REPLACE_EXACT_V64_ONLY",
+      "baseSha256": "7ebbf2b5f0f08b6399a65ccb490e9dceeecbe2bf4ca1701d244905ccb18b567c",
+      "sha256": "17614996b5312b18789c68f1be8676f282f7819503c526af74ebc20fa585a1b1"
+    },
+    {
+      "name": "HubMapAutomation",
+      "path": "integrations/hub/v64/HubMapAutomation.js",
+      "operation": "REPLACE_EXACT_V64_ONLY",
+      "baseSha256": "96d52004e24fd34ea6707e0faaafb2b867a84e0da6f91949d47d456440681e8c",
+      "sha256": "ac58fbc117b14d26009338ad94ac0bd212390e647bf5da755ac2050fa73e74ac"
+    },
+    {
+      "name": "HubMapPackageStore",
+      "path": "integrations/hub/HubMapPackageStore.js",
+      "operation": "ADD_IF_ABSENT",
+      "sha256": "d8f256f86f86f98de3527e777b376ce9f90e9a1454c63077db941a02105c3619"
+    },
+    {
+      "name": "HubCustomerDetailContract",
+      "path": "integrations/hub/HubCustomerDetailContract.js",
+      "operation": "ADD_IF_ABSENT",
+      "sha256": "8fc16996db2b11eddc09c3331381b189a0b21981474bc25efe53deb0ebccbd31"
+    },
+    {
+      "name": "HubCustomerDetailStore",
+      "path": "integrations/hub/HubCustomerDetailStore.js",
+      "operation": "ADD_IF_ABSENT",
+      "sha256": "a009db83a5678d3c265432cff64f966271c348725ea272eff4760eeb1c921d80"
+    },
+    {
+      "name": "HubMapRoadBudget",
+      "path": "integrations/hub/HubMapRoadBudget.js",
+      "operation": "ADD_IF_ABSENT",
+      "sha256": "bcd851d8222ec5476466ce62c9a1b28edfbf2032788cc13c2115660707164eff"
+    }
+  ],
+  "untouchedVersion64Modules": [
+    {
+      "name": "appsscript",
+      "type": "JSON",
+      "sha256": "c8c6e4256b2dba1655893c5abb3645241a75700730191f8b4bbf749c8a4fbe5a"
+    },
+    {
+      "name": "Code",
+      "type": "SERVER_JS",
+      "sha256": "99d38ebf09fa0504a76c57a3328eef4644a1ca71fd08c6ed6f6df5047199fd4c"
+    },
+    {
+      "name": "HubClaimDataLayer",
+      "type": "SERVER_JS",
+      "sha256": "d3ffbff77c4c250c2f219021220a25ac81b01be516b36f149ed5f422c330a64e"
+    },
+    {
+      "name": "HubDashboard",
+      "type": "SERVER_JS",
+      "sha256": "8fa3e301b314ee39f526ef3f5d3a06800e6bfa064eacc2f0d4c33952d31aa2bc"
+    },
+    {
+      "name": "HubDataLayer",
+      "type": "SERVER_JS",
+      "sha256": "6e2ad77159b8ce0414a09c5f08c1f8add04f17688fc94d031982ffe8849014d4"
+    },
+    {
+      "name": "HubDatedAssignments",
+      "type": "SERVER_JS",
+      "sha256": "a9bdc6e8292f854ca16464b64bd3c0d2b4946dff557a6d1f6e2021d2822f597c"
+    },
+    {
+      "name": "HubDeliveryHistory",
+      "type": "SERVER_JS",
+      "sha256": "3e54dfbbc80f779c22355171c80015193920ca5bbb8020515dc776cad8eafff4"
+    },
+    {
+      "name": "HubHealthCheck",
+      "type": "SERVER_JS",
+      "sha256": "5c8355b8306a95a21a168b98a0ddc40af9721b8dce785f2b784b12b1ba402dec"
+    },
+    {
+      "name": "HubKpi",
+      "type": "SERVER_JS",
+      "sha256": "ef0e70f28dfea2d80041851ab34b230676daa974b59d183855f3b7f1a1fabc48"
+    },
+    {
+      "name": "HubMapAdapter",
+      "type": "SERVER_JS",
+      "sha256": "a480a779df3741d9885e05fd19d88dbe434b3d0299d1d22402e532bc7cc25d7d"
+    },
+    {
+      "name": "HubMapIncremental",
+      "type": "SERVER_JS",
+      "sha256": "4eded1f100f88450cc27a99b12fb4cd11e14fb4802ddaa6eda86f58e88e2e42b"
+    },
+    {
+      "name": "HubMapPhase2B",
+      "type": "SERVER_JS",
+      "sha256": "4747a91cbd2bd6401b78ecf4c93c338c3434fb2a8250dce89b93ddd68fd045ec"
+    },
+    {
+      "name": "HubMapReadProjection",
+      "type": "SERVER_JS",
+      "sha256": "1b2b7cfd622372291f5360a700622f7a93d2e72ba0319d9bd3eb51941a8d80b4"
+    },
+    {
+      "name": "HubPeriodDiagnostics",
+      "type": "SERVER_JS",
+      "sha256": "2904d03d58693f7627666811f2044b3f9f1f0584cb84161f26f6b2caae9aa44c"
+    },
+    {
+      "name": "HubPeriodSource",
+      "type": "SERVER_JS",
+      "sha256": "8d33c2862b097c338046d96e37e3da8c3e910082cd097aac8cad83d167b6456c"
+    },
+    {
+      "name": "HubProductionRestoreRecovery",
+      "type": "SERVER_JS",
+      "sha256": "9730f2d2bc0752c85e73abb25b3600d49074648384b5357aab0e3bb198ca2be5"
+    },
+    {
+      "name": "HubSearch",
+      "type": "SERVER_JS",
+      "sha256": "f812b43cca7bd354bcc8169e6fdd5c42b2d42f67e35c668b8a903e24a0630329"
+    },
+    {
+      "name": "HubSearchSidebar",
+      "type": "HTML",
+      "sha256": "ce2ca38d5d7a9326e751c2b73c8da83a3485bc44fd8c08c3cba060235f256c45"
+    },
+    {
+      "name": "HubStaffDetail",
+      "type": "SERVER_JS",
+      "sha256": "6d1a11c41055d0bd5340df92c58eac076ed93908820cc1c8ab273867ae13d432"
+    },
+    {
+      "name": "HubStaffHistory",
+      "type": "SERVER_JS",
+      "sha256": "113b34f36b532aff83ab92d21a70e815f6c7ffce896b6cfc64b2ec4926d468fa"
+    },
+    {
+      "name": "HubStaffPeriod",
+      "type": "SERVER_JS",
+      "sha256": "c0be3ccab94a5fb8cf41e9769f180e57c9b3d61239a1ad7f8448e3c92ab96187"
+    },
+    {
+      "name": "HubStageReadModel",
+      "type": "SERVER_JS",
+      "sha256": "51bf8c12362616498ff661315c7bc4314b72800cf66317ef95eddd5aeec0be2d"
+    },
+    {
+      "name": "HubStageReadModelCandidate",
+      "type": "SERVER_JS",
+      "sha256": "dfc08092e56657b22a740db5e9cb845b9ac2301fd6c25f7301c3095781519432"
+    },
+    {
+      "name": "HubStageReadModelIncremental",
+      "type": "SERVER_JS",
+      "sha256": "a0011d564b53c44037891312514109a2cd22fb34662de894c167ac9783b77953"
+    },
+    {
+      "name": "HubStageReadModelRestore",
+      "type": "SERVER_JS",
+      "sha256": "a50d22038aad2c2a2b0b0be22363cdf6bf6bc4b002f07cf24fc6845b20045e30"
+    },
+    {
+      "name": "HubStageReadModelResume",
+      "type": "SERVER_JS",
+      "sha256": "33f2e4937ccc0816df7333ec536319cb1c02d98177e3e4b7d52460e78806663d"
+    },
+    {
+      "name": "HubStageReadModelUtf8Migration",
+      "type": "SERVER_JS",
+      "sha256": "eed7af16e4036598a24df828295284170ff1f83293b9b7811cf40a9ff221d068"
+    },
+    {
+      "name": "HubViews",
+      "type": "SERVER_JS",
+      "sha256": "dfbc37d51de5a240d8b894a6710e4a02a717f810cb168534603e26b607a998c6"
+    },
+    {
+      "name": "RecoveryCenter",
+      "type": "SERVER_JS",
+      "sha256": "7d151a1a989da84b70505076f0f3355fc0f0048db4e771d71cef9929b34e3eca"
+    },
+    {
+      "name": "VerifyStageHubApi",
+      "type": "SERVER_JS",
+      "sha256": "2666d3bf62ec0124e2f8563e258e86c5dc6b653d733c20d3b184543f58512f2e"
+    },
+    {
+      "name": "HubProductionCheckpoint",
+      "type": "SERVER_JS",
+      "sha256": "bed44bc5a573dd9698e417bc4e5fc55b03cf5d118c78425073454bcde843f204"
+    },
+    {
+      "name": "HubProductionCoordinates",
+      "type": "SERVER_JS",
+      "sha256": "22e8d2c075f06e074f9a367fd44ba331e09d2a87327c072153e8ac3df17e199e"
+    },
+    {
+      "name": "HubProductionCoordinateStore",
+      "type": "SERVER_JS",
+      "sha256": "06acc5ca66e20325f0a33d51323af130fb7f4ecfbc60d2f5aec6128b61811a9d"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+--- a/HubMapHttpApi.js
++++ b/HubMapHttpApi.js
+@@ -73,0 +74,5 @@
++      customerDetailPrepared: function(p){return hubMapCustomerDetailPrepared_(p);},
++      customerDetailsStatus: function(p){hubMapHttpValidateOnlyKeys_(p,[]);return hubCustomerDetailStatus_();},
++      customerDetailsSyncRequest: function(p){return hubMapCustomerDetailsSyncRequest_(p);},
++      mapRoadBudgetStatus: function(p){return hubMapRoadBudgetStatus_(p);},
++      mapRoadBudgetReserve: function(p){return hubMapRoadBudgetReserve_(p);},
+@@ -790,0 +796,2 @@
++  const preparedCode=String(error&&error.code||error&&error.message||'');
++  if(/^(?:CUSTOMER_DETAILS|ROAD_BUDGET)_[A-Z_]+$/.test(preparedCode))return {code:preparedCode,message:'Prepared source is not available for this request.',httpStatus:/EXHAUSTED/.test(preparedCode)?429:/NOT_READY|NOT_APPROVED|REQUIRED|UNOBSERVED/.test(preparedCode)?503:409,retryable:false};
+--- a/HubMapAutomation.js
++++ b/HubMapAutomation.js
+@@ -8 +8 @@
+-  return {configured:count===1,status:count===0?'NOT_CONFIGURED':count>1?'DUPLICATE_TRIGGER':s.status||'REGISTERED_NOT_RUN',lastCheck:s.lastCheck||null,lastRequest:s.lastRequest||null,lastSuccess:s.lastSuccess||null,lastError:s.lastError||null,generation:s.generation||null};
++  return {configured:count===1,status:count===0?'NOT_CONFIGURED':count>1?'DUPLICATE_TRIGGER':s.status||'REGISTERED_NOT_RUN',lastCheck:s.lastCheck||null,lastRequest:s.lastRequest||null,lastSuccess:s.lastSuccess||null,lastError:s.lastError||null,generation:s.generation||null,customerDetails:s.customerDetails||null};
+@@ -26,0 +27,5 @@
++  // Opt-in only; never installs triggers or changes the existing map worker.
++  if(PropertiesService.getScriptProperties().getProperty('OPSMAP_CUSTOMER_DETAILS_AUTO_ENABLED')==='1'&&typeof hubMapCustomerDetailsAutoStep_==='function'){
++    try{s.customerDetails=hubMapCustomerDetailsAutoStep_();}
++    catch(e){s.customerDetails={status:'ERROR',error:'CUSTOMER_DETAILS_AUTO_FAILED'};}
++  }

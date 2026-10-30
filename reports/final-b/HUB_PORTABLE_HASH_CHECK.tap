@@ -1,0 +1,13 @@
+✔ v64 Customer-master preparation works without any public publication root or Archive (27.175ms)
+✔ sparse Hub source read excludes driver contacts, authentication and raw JSON (3.2645ms)
+✔ native v64 generated dispatcher keeps original staff actions and adds only R5 actions (3.8755ms)
+✔ native v64 automation hook is opt-in and does not install a trigger (0.9793ms)
+✔ actual v64 doPost executes prepared actions with unchanged HMAC and nonce replay rejection (20.7228ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 286.4606

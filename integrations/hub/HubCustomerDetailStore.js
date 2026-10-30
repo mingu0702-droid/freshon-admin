@@ -3,7 +3,7 @@
  * no collection calls, no public files, no full-sheet scan on a customer click.
  * Uses the existing Hub auto tick; installs no trigger and does not publish map data.
  */
-const HUB_CUSTOMER_DETAILS=Object.freeze({pointer:'OPSMAP_CUSTOMER_DETAILS_V1',job:'OPSMAP_CUSTOMER_DETAILS_JOB_V1',summary:'OPSMAP_CUSTOMER_DETAILS_STATUS_V1',folder:'OPSMAP_CUSTOMER_DETAILS_FOLDER_ID',maxStateBytes:16777216,maxBucketBytes:1048576,batchRows:500,maxRunRows:8000});
+const HUB_CUSTOMER_DETAILS=Object.freeze({pointer:'OPSMAP_CUSTOMER_DETAILS_V1',job:'OPSMAP_CUSTOMER_DETAILS_JOB_V1',summary:'OPSMAP_CUSTOMER_DETAILS_STATUS_V1',folder:'OPSMAP_CUSTOMER_DETAILS_FOLDER_ID',scopeMode:'OPSMAP_CUSTOMER_DETAILS_SCOPE_MODE',maxStateBytes:16777216,maxBucketBytes:1048576,batchRows:500,maxRunRows:8000});
 function hubCustomerDetailFail_(code){throw Object.assign(new Error(code),{code:code});}
 function hubCustomerDetailSafeError_(e){return /^CUSTOMER_DETAILS_[A-Z_]+$/.test(String(e&&e.message))?e.message:'CUSTOMER_DETAILS_FAILED';}
 function hubCustomerDetailNow_(){return new Date().toISOString();}
@@ -51,16 +51,33 @@ function hubCustomerDetailStatus_(){
  return {data:{prepared:!!p.value,version:p.value?p.value.current.version:null,job:job,automatic:typeof hubMapAutomationStatus_==='function'?hubMapAutomationStatus_().configured:false},cached:false};
 }
 function hubCustomerDetailScope_(){
+ if(PropertiesService.getScriptProperties().getProperty(HUB_CUSTOMER_DETAILS.scopeMode)==='CUSTOMER_MASTER')return hubCustomerDetailMasterScope_();
  const root=hubMapPackageRoot_();hubMapPackageCheckManifest_(root.manifest);const codes=[];
  root.manifest.chunks.forEach(function(chunk){const rows=hubCustomerDetailRead_(root.public[chunk.key],HUB_MAP_PACKAGES.maxChunk);hubMapPackageCheckPublic_(rows,root.manifest,chunk);rows.forEach(function(row){codes.push(row[0]);});});
  if(new Set(codes).size!==codes.length||codes.length>15000)hubCustomerDetailFail_('CUSTOMER_DETAILS_SCOPE_INVALID');
  return {codes:codes.sort(),version:root.version,startDate:root.manifest.startDate,endDate:root.manifest.endDate};
 }
+// Explicit opt-in for v64, which has no PRODUCTION_MAP_PACKAGES_V1 root.
+// Existing saved customers only. No collector, Archive, public pointer or trigger IO.
+function hubCustomerDetailMasterScope_(){
+ const before=hubCustomerDetailMarkers_([HUB_DEFAULT_SOURCE_ID]),sheet=SpreadsheetApp.openById(HUB_DEFAULT_SOURCE_ID).getSheetByName('customers');
+ if(!sheet||sheet.getLastRow()<2||sheet.getLastRow()>20001)hubCustomerDetailFail_('CUSTOMER_DETAILS_SOURCE_NOT_READY');
+ const width=sheet.getLastColumn();if(width<1||width>100)hubCustomerDetailFail_('CUSTOMER_DETAILS_SOURCE_SCHEMA');
+ const headers=sheet.getRange(1,1,1,width).getDisplayValues()[0].map(function(v){return String(v).trim();}),col=headers.indexOf('customerCode');
+ if(col<0||new Set(headers).size!==headers.length)hubCustomerDetailFail_('CUSTOMER_DETAILS_SOURCE_SCHEMA');
+ const codes=new Set(),last=sheet.getLastRow();
+ for(let at=2;at<=last;at+=HUB_CUSTOMER_DETAILS.batchRows){
+  sheet.getRange(at,col+1,Math.min(HUB_CUSTOMER_DETAILS.batchRows,last-at+1),1).getValues().forEach(function(row){const code=String(row[0]||'').trim().toUpperCase();if(!code)return;if(!/^[A-Z]\d{1,20}$/.test(code))hubCustomerDetailFail_('CUSTOMER_DETAILS_SCOPE_INVALID');codes.add(code);});
+ }
+ if(!codes.size||!hubCustomerDetailSourceUnchanged_(before))hubCustomerDetailFail_('CUSTOMER_DETAILS_SOURCE_CHANGED');
+ return {codes:Array.from(codes).sort(),version:hubCustomerDetailHash_(JSON.stringify(before)+':customers:'+last+':'+JSON.stringify(headers)),startDate:'1970-01-01',endDate:Utilities.formatDate(new Date(),'Asia/Seoul','yyyy-MM-dd'),sourceMarkers:before};
+}
 function hubCustomerDetailSources_(){
- const ids=[HUB_DEFAULT_SOURCE_ID];if(typeof HUB_STAFF_DETAIL_ARCHIVE!=='undefined'&&HUB_STAFF_DETAIL_ARCHIVE&&HUB_STAFF_DETAIL_ARCHIVE!==HUB_DEFAULT_SOURCE_ID)ids.push(HUB_STAFF_DETAIL_ARCHIVE);
+ const masterOnly=PropertiesService.getScriptProperties().getProperty(HUB_CUSTOMER_DETAILS.scopeMode)==='CUSTOMER_MASTER';
+ const ids=[HUB_DEFAULT_SOURCE_ID];if(!masterOnly&&typeof HUB_STAFF_DETAIL_ARCHIVE!=='undefined'&&HUB_STAFF_DETAIL_ARCHIVE&&HUB_STAFF_DETAIL_ARCHIVE!==HUB_DEFAULT_SOURCE_ID)ids.push(HUB_STAFF_DETAIL_ARCHIVE);
  const markers=hubCustomerDetailMarkers_(ids),sources=[];
  ids.forEach(function(id){const ss=SpreadsheetApp.openById(id);
-  ['customers','daily_routes','delivery_admin_raw'].forEach(function(name){const sheet=ss.getSheetByName(name);if(!sheet||sheet.getLastRow()<2)return;
+  (masterOnly?['customers']:['customers','daily_routes','delivery_admin_raw']).forEach(function(name){const sheet=ss.getSheetByName(name);if(!sheet||sheet.getLastRow()<2)return;
    const columns=sheet.getLastColumn();if(columns<1||columns>100)hubCustomerDetailFail_('CUSTOMER_DETAILS_SOURCE_SCHEMA');
    const headers=sheet.getRange(1,1,1,columns).getDisplayValues()[0].map(function(v){return String(v).trim();});
    // Raw JSON-only sheets and unrelated legacy formats are not guessed/parsing targets.
@@ -70,11 +87,24 @@ function hubCustomerDetailSources_(){
   });
  });if(!sources.length)hubCustomerDetailFail_('CUSTOMER_DETAILS_SOURCE_NOT_READY');return {sources:sources,markers:markers};
 }
+function hubCustomerDetailReadSourcePage_(sheet,source,start,size){
+ const allowed=new Set(['customerCode','customerName','customerAddress','address','detailAddress','addressDetail','accessMemo','accessInfo','password','securityKey','hasSecurityKey','generalKey','hasGeneralKey','hasKey','specialRemark','deliveryPattern','deliveryPatternText','deliveryDays','updatedAt','modifiedAt','deliveryDate','correctionVerified','deleted','clearedFields']);
+ const columns=[];source.headers.forEach(function(h,i){if(allowed.has(h))columns.push(i);});
+ const rows=Array.from({length:size},function(){return {};});
+ // Sparse contiguous blocks deliberately exclude rawPayload, driver contacts and auth.
+ for(let at=0;at<columns.length;){let end=at+1;while(end<columns.length&&columns[end]===columns[end-1]+1)end++;
+  const first=columns[at],width=end-at,values=sheet.getRange(start,first+1,size,width).getValues();
+  if(values.length!==size)hubCustomerDetailFail_('CUSTOMER_DETAILS_SOURCE_PAGE');
+  values.forEach(function(values,row){for(let i=0;i<width;i++){const h=source.headers[first+i],v=values[i];rows[row][h]=v instanceof Date?(h==='deliveryDate'?Utilities.formatDate(v,'Asia/Seoul','yyyy-MM-dd'):v.toISOString()):v;}});at=end;
+ }
+ return rows;
+}
 function hubMapCustomerDetailsSyncRequest_(params){
  hubMapHttpValidateOnlyKeys_(params||{},[]);const lock=LockService.getUserLock();if(!lock.tryLock(1000))return {data:{phase:'BUSY'},cached:false};
  try{
   const existing=hubCustomerDetailLoadJob_();if(existing&&['BUILD','VERIFY'].includes(existing.phase))return {data:hubCustomerDetailSummary_(existing),cached:false};
   const scope=hubCustomerDetailScope_(),source=hubCustomerDetailSources_(),before=hubCustomerDetailPointer_();
+  if(scope.sourceMarkers&&JSON.stringify(scope.sourceMarkers)!==JSON.stringify(source.markers))hubCustomerDetailFail_('CUSTOMER_DETAILS_SOURCE_CHANGED');
   if(before.value){const root=hubCustomerDetailRead_(before.value.current,262144);if(root.scopeVersion===scope.version&&JSON.stringify(root.sourceMarkers)===JSON.stringify(source.markers))return {data:{phase:'NOOP',version:root.version},cached:false};}
   const folder=hubCustomerDetailFolder_(),job={schema:1,id:null,phase:'BUILD',createdAt:hubCustomerDetailNow_(),updatedAt:hubCustomerDetailNow_(),sourceIndex:0,scannedRows:0,sources:source.sources,sourceMarkers:source.markers,activeCodes:scope.codes,scopeVersion:scope.version,startDate:scope.startDate,endDate:scope.endDate,basePointer:before.raw,version:before.value?before.value.current.version+1:1,records:{},changedFields:0,conflicts:0,lastError:null,folderId:folder.getId()};
   // Preserve prior verified values; omissions and blank cells never erase them.
@@ -117,9 +147,9 @@ function hubMapCustomerDetailsContinue(options){
    const source=job.sources[job.sourceIndex],sheet=SpreadsheetApp.openById(source.id).getSheetByName(source.sheet);
    if(!sheet||sheet.getLastRow()!==source.rows||JSON.stringify(sheet.getRange(1,1,1,source.headers.length).getDisplayValues()[0].map(String))!==JSON.stringify(source.headers))hubCustomerDetailFail_('CUSTOMER_DETAILS_SOURCE_CHANGED');
    if(source.nextRow>source.rows){job.sourceIndex++;continue;}
-   const size=Math.min(HUB_CUSTOMER_DETAILS.batchRows,source.rows-source.nextRow+1),rows=sheet.getRange(source.nextRow,1,size,source.headers.length).getValues();
+   const size=Math.min(HUB_CUSTOMER_DETAILS.batchRows,source.rows-source.nextRow+1),rows=hubCustomerDetailReadSourcePage_(sheet,source,source.nextRow,size);
    if(rows.length!==size)hubCustomerDetailFail_('CUSTOMER_DETAILS_SOURCE_PAGE');
-   rows.forEach(function(values){const row={};source.headers.forEach(function(h,i){const value=values[i];row[h]=value instanceof Date?(h==='deliveryDate'?Utilities.formatDate(value,'Asia/Seoul','yyyy-MM-dd'):value.toISOString()):value;});const code=String(row.customerCode||'').trim().toUpperCase();if(!active.has(code))return;row.customerCode=code;
+   rows.forEach(function(row){const code=String(row.customerCode||'').trim().toUpperCase();if(!active.has(code))return;row.customerCode=code;
     let date=row.deliveryDate;if(date instanceof Date)date=Utilities.formatDate(date,'Asia/Seoul','yyyy-MM-dd');else if(typeof date==='string')date=date.slice(0,10);
     if(source.sheet!=='customers'&&(!/^\d{4}-\d{2}-\d{2}$/.test(date||'')||date<job.startDate||date>Utilities.formatDate(new Date(job.createdAt),'Asia/Seoul','yyyy-MM-dd')))return;
     const marker=job.sourceMarkers.find(function(m){return m.id===source.id;}),input=OpsmapCustomerDetailContract.observation(row,{source:source.kind,sourceVersion:hubCustomerDetailHash_(source.id+':'+marker.modifiedAt),observedAt:job.createdAt,modifiedAt:row.updatedAt||row.modifiedAt,sourceRecordDate:date||null,correctionVerified:row.correctionVerified===true,deleted:row.deleted===true,clearedFields:row.correctionVerified===true&&typeof row.clearedFields==='string'&&row.clearedFields.trim()?JSON.parse(row.clearedFields):[]});

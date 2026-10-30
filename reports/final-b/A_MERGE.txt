@@ -1,0 +1,5 @@
+기준 279d731698239fe0cb4ff4c0dc698d4676adaa79; A 담당 4파일과 src/server.js 변경 0, Stage/Production 배포 0입니다.
+Hub는 integrations/hub/v64/MERGE_MANIFEST.json의 6모듈만 해당 v64 해시 일치 시 통합하세요. 기존 HEAD 전체 덮어쓰기는 금지합니다.
+보호자료는 Git 외부 비공개 암호화 저장소에 준비됐습니다. src/customerPrivatePreparation.js의 bindPreparedCustomerPrivateReads를 기존 callHub 의존성에 선택 주입할 수 있습니다. 인증 경로·세션·Stage 설정은 A가 관리합니다.
+도로경로는 승인 예산 없음으로 실제 호출 0건입니다. 설정 진단은 src/roadRouteService.js의 readiness()이며 쿼터·키를 만들거나 변경하지 않습니다.
+Node 81 PASS·Chromium 8 PASS; 실제 SDK와 합성 API는 분리했습니다. 실 Hub 적재·최신화·명시삭제·실 Directions 응답은 운영 완료로 표시하지 마세요.

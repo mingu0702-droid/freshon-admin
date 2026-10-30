@@ -1,0 +1,82 @@
+{
+  "stageBase": "d05930c014b8a5634181876f7ab80f80b2fd02db",
+  "date": "2026-10-31",
+  "status": "LOCAL_REFRESH_VERIFIED_LIVE_HUB_AND_DIRECTIONS_NOT_COMPLETE",
+  "hub": {
+    "installedVersion": 64,
+    "r5Installed": false,
+    "candidateOriginalFiles": 35,
+    "candidateFiles": 39,
+    "deploymentMetadataRead": "PASS_ACTUAL",
+    "remoteExecution": "NOT_RUN",
+    "existingAutomationChanged": false
+  },
+  "customer": {
+    "actualSourceVersionBefore": "42553",
+    "actualSourceVersionAfter": "42578",
+    "sourceStableDuringRead": true,
+    "observations": 17035,
+    "preparedCustomers": 5979,
+    "newCustomers": 0,
+    "changedCustomers": 0,
+    "changedFields": 0,
+    "explicitDeletes": 0,
+    "currentPrivateVersion": 2,
+    "previousPrivateVersion": 1,
+    "privateSelectedReads": 6,
+    "fieldCounts": {
+      "customerName": 5979,
+      "address": 5979,
+      "detailAddress": 5455,
+      "accessInfo": 1407,
+      "password": 23,
+      "securityKey": 0,
+      "generalKey": 0,
+      "specialRemark": 522,
+      "deliveryPattern": 0
+    },
+    "unobservedKeyFlags": "Not guessed from free text",
+    "artifacts": "Encrypted outside repository; not deployed",
+    "actualLiveHubLatestPasswordRead": "NOT_RUN_R5_NOT_INSTALLED"
+  },
+  "automation": {
+    "localActualSnapshotCommonWorker": "20261031_ACTUAL_REFRESH.json",
+    "remoteAutomatic": "NOT_RUN",
+    "remoteManual": "NOT_RUN",
+    "syntheticUpdateClearDeleteResume": "PASS_NODE_TESTS"
+  },
+  "road": {
+    "realResponse": "BLOCKED_NO_CONFIRMED_APPROVED_ALLOWANCE",
+    "providerCalls": 0,
+    "stageQuotaLedgerPresent": false,
+    "restKeyNotDelegated": true,
+    "realSdkPreviousEvidence": "ROAD_BROWSER_RESULT.json",
+    "apiSyntheticEvidenceKeptSeparate": true,
+    "waypointReorderRoundTripLateResponses": "Existing adapters retained; no new actual API PASS claimed"
+  },
+  "oauth": {
+    "additionalConsentRequested": false,
+    "existingReadGrant": "PASS",
+    "writeGrantVerified": false,
+    "conditionalInstallScope": "https://www.googleapis.com/auth/script.projects",
+    "conditionalDeploymentScope": "https://www.googleapis.com/auth/script.deployments",
+    "procedure": "Only if operator separately approves installation/deployment: project owner authorizes the existing OAuth client for the required scope. No new consent or deployment performed here."
+  },
+  "tests": {
+    "nodePass": 83,
+    "nodeFail": 0,
+    "priorRealSdkFixtureAssertions": 8,
+    "newRealDirectionsPass": 0
+  },
+  "safety": {
+    "sourceWrites": 0,
+    "collectorChanges": 0,
+    "triggerChanges": 0,
+    "archiveChanges": 0,
+    "stageEnvironmentChanges": 0,
+    "staffSessionChanges": 0,
+    "stageDeployments": 0,
+    "productionDeployments": 0,
+    "AAndCFilesChanged": 0
+  }
+}
