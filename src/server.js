@@ -66,7 +66,7 @@ const productionMap = mountProductionMapApi(app, {
   phase2bKstDate, normalizeCell, normalizeDateValue, phase2bSnapshotMeta, phase2bTodayStatus, publicDir,
   getSnapshotWorkerState: () => ({running:!!phase2bSnapshotRefreshPromise,continuation:!!phase2bSnapshotRetryTimer})
 });
-mountProductionOpsmapCandidate(app,{publicDir,readManualPinCustomer:customerCode=>verifiedMapHubRead('customerDetail',{customerCode,date:phase2bKstDate()},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000}),readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),callHub,sharedBaseCache:productionMap.baseCache,readBaseVehicleMaster:sharedFixedVehicleReader,sharedReadModel,sharedCoordinateSupplement,readPhase2bSnapshot,getSnapshotMemory:()=>phase2bSnapshotMemory,phase2bKstDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus});
+mountProductionOpsmapCandidate(app,{publicDir,readManualPinCustomer:customerCode=>verifiedMapHubRead('customerDetail',{customerCode},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000}),readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),callHub,sharedBaseCache:productionMap.baseCache,readBaseVehicleMaster:sharedFixedVehicleReader,sharedReadModel,sharedCoordinateSupplement,readPhase2bSnapshot,getSnapshotMemory:()=>phase2bSnapshotMemory,phase2bKstDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus});
 app.use(express.json({ limit: "10mb" }));
 // Sensitive namespaces must never inherit PUBLIC_VIEW or the SPA fallback.
 app.use('/api/collector', requireAdmin);

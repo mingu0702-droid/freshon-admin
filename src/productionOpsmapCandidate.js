@@ -20,7 +20,7 @@ export async function readProductionManualPinCustomer(readers,code){
  // An older map Snapshot is not the Customer registry. Read only this selected customer.
  if(!readers.readManualPinCustomer)return null;
  const hub=await readers.readManualPinCustomer(code);
- return staffStoreDetail(hub?.data,{customerCode:code,date:readers.phase2bKstDate()});
+ return staffStoreDetail(hub?.data,{customerCode:code,date:null});
 }
 export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,sessionStore:isolatedTestStore,...readers}){
  const router=express.Router(),root=path.join(publicDir,'opsmap');app.get(['/','/index.html','/daily-routes.html'],(q,r,n)=>env.OPSMAP_PRODUCTION_CANDIDATE_ENABLED==='1'?r.redirect(302,'/opsmap/'):n());app.use('/opsmap',router);
