@@ -8,12 +8,15 @@ test('isolated real-file pin survives browser reconnect; failed projection keeps
  app.use('/assets',express.static(fileURLToPath(new URL('../../public',import.meta.url))));
  app.get('/',(_q,r)=>r.type('html').send(`<div id="periodStoreListSection"></div><output id="source"></output><script>window.row={customerCode:'S970003',customerName:'SYNTHETIC_ONLY',lat:37.4,lng:127,coordinateSource:'KAKAO_BUILDING_EXACT_ADDRESS'};window.MapUiLocalBridge={state:{selected:null},stores:()=>[row],refreshManualCoordinates(){MapManualPins.apply(row);document.querySelector('#source').textContent=row.coordinateSource;}};</script><script type="module" src="/assets/manual-map-pins.mjs"></script>`));
  const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));}),origin='http://127.0.0.1:'+server.address().port;env.MAP_STAFF_ORIGIN=origin;
- const browser=await chromium.launch({headless:true,executablePath:'C:/Users/SFN/AppData/Local/ms-playwright/chromium-1223/chrome-win64/chrome.exe'});
- try{const page=await browser.newPage();await page.goto(origin);await page.waitForFunction(()=>window.MapManualPins?.verified());
+ let browser;
+ try{
+ const executablePath=process.env.OPSMAP_TEST_CHROMIUM;
+ browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
+ const page=await browser.newPage();await page.goto(origin);await page.waitForFunction(()=>window.MapManualPins?.verified());
  const saved=await page.evaluate(async()=>{const b='/api/map-phase2b/private/manual-pins/S970003',s=await(await fetch(b)).json();const r=await fetch(b+'/save',{method:'POST',headers:{'content-type':'application/json','x-map-pin-csrf':s.csrfToken},body:JSON.stringify({originalAddressHash:s.data.originalAddressHash,expectedRevision:0,requestId:crypto.randomUUID(),latitude:37.5,longitude:127})});return {status:r.status,value:await r.json()};});assert.equal(saved.status,200);assert.equal(saved.value.data.current.coordinateSource,'MANUAL_PIN');
  await page.evaluate(()=>MapManualPins.refresh());await page.waitForFunction(()=>document.querySelector('#source').textContent==='MANUAL_PIN');await page.reload();await page.waitForFunction(()=>document.querySelector('#source').textContent==='MANUAL_PIN');
  const next=await browser.newContext(),reconnected=await next.newPage();await reconnected.goto(origin);await reconnected.waitForFunction(()=>document.querySelector('#source').textContent==='MANUAL_PIN');const before=await fs.readFile(file,'utf8');
  available=false;assert.equal(await reconnected.evaluate(async()=>{try{await MapManualPins.refresh();return false;}catch{return true;}}),true);assert.equal(await reconnected.locator('#source').textContent(),'MANUAL_PIN');assert.equal(await reconnected.locator('#manualPinProjectionStatus').isVisible(),true);assert.equal(await fs.readFile(file,'utf8'),before);
  available=true;await reconnected.evaluate(()=>MapManualPins.refresh());assert.equal(await reconnected.locator('#manualPinProjectionStatus').isVisible(),false);
- }finally{await browser.close();await new Promise(r=>server.close(r));await fs.rm(dir,{recursive:true,force:true});}
+ }finally{await browser?.close();await new Promise(r=>server.close(r));await fs.rm(dir,{recursive:true,force:true});}
 });

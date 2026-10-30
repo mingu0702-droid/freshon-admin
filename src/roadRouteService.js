@@ -115,7 +115,7 @@ export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=proc
   };
   app.get('/api/map-phase2b/private/road-route/config',requireStaff,async(_q,r)=>{
     const config=typeof service.readiness==='function'?await service.readiness():service.configuration();
-    return r.set('Cache-Control','private, no-store').json({ok:true,data:{...config,recordedRouteConfigured:typeof readRecordedRoute==='function'}});
+    return requireStaff(_q,r,()=>r.set('Cache-Control','private, no-store').json({ok:true,data:{...config,recordedRouteConfigured:typeof readRecordedRoute==='function'}}));
   });
   app.post('/api/map-phase2b/private/manual-road-route',requireStaff,sameOrigin,jsonBody,(q,r)=>respond(q,r,false));
   app.post('/api/map-phase2b/private/road-route',requireStaff,sameOrigin,jsonBody,(q,r)=>respond(q,r,true));

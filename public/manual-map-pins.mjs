@@ -3,6 +3,8 @@ window.MapLocationContract={addressRegion,dispatchCenter};
 const bridge=window.MapUiLocalBridge;if(!bridge)throw Error('EXISTING_MAP_BRIDGE_REQUIRED');
 let targets=[];
 let projectionVerified=false;
+// Enumerable symbols survive object-spread search/detail copies, but not JSON export.
+const ORIGINAL_PIN_BASE=Symbol('opsmap-original-pin-base');
 const $=s=>document.querySelector(s),base='/api/map-phase2b/private/manual-pins';let records=new Map(),bases=new WeakMap(),generation=0,edit=null,marker=null,mapClick=null,pending=null,refreshing=null,refreshingOwner=-1,touchClose=null,ignoreClickUntil=0;
 const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('map-manual-pins'):null;
 const panel=document.createElement('section');panel.id='manualPinEditor';panel.hidden=true;panel.setAttribute('role','dialog');panel.setAttribute('aria-label','배송지 핀 위치 수정');document.body.append(panel);
@@ -17,7 +19,12 @@ const button=(text,parent,fn)=>{const b=node('button',text,parent);b.type='butto
 const stateText={MANUAL_PIN_STORE_NOT_CONFIGURED:'수동 위치 저장소가 연결되지 않았습니다.',MANUAL_PIN_WRITE_PERMISSION_REQUIRED:'수동 위치 수정 권한이 없습니다.',MANUAL_PIN_GEOCODER_BUDGET_EXHAUSTED:'주소 검색 예산이 소진됐습니다. 지도 클릭·핀 드래그는 사용할 수 있습니다.',MANUAL_PIN_REVISION_CONFLICT:'다른 수정이 먼저 저장됐습니다. 다시 열어 비교해 주세요.',MANUAL_PIN_ADDRESS_CHANGED:'원본 주소가 변경됐습니다. 다시 열어 비교해 주세요.',MANUAL_PIN_OPERATION_SUPERSEDED:'이미 후속 수정이 있습니다. 현재 저장본을 다시 확인해 주세요.',MANUAL_PIN_SESSION_EXPIRED:'직원 세션이 만료됐습니다.',MANUAL_PIN_CSRF_REJECTED:'수정 권한을 다시 확인해 주세요.'};
 async function request(url,options={}){const response=await fetch(url,{cache:'no-store',credentials:'same-origin',...options});let value;try{value=await response.json();}catch{throw Error('저장 결과를 확인하지 못했습니다. 현재 저장본을 다시 조회해 주세요.');}if(!response.ok||value.ok!==true)throw Error(stateText[value.error]||'위치 조회·저장을 완료하지 못했습니다. 다시 열어 현재 저장본을 확인해 주세요.');return value;}
 function apply(row){
- if(!bases.has(row))bases.set(row,{lat:row.lat,lng:row.lng,coordinateSource:row.coordinateSource,coordinateAccuracy:row.coordinateAccuracy,coordinateStatus:row.coordinateStatus});
+ if(!bases.has(row)){
+  const inherited=row[ORIGINAL_PIN_BASE];
+  const original=inherited?.customerCode===row.customerCode?inherited.coordinates:{lat:row.lat,lng:row.lng,coordinateSource:row.coordinateSource,coordinateAccuracy:row.coordinateAccuracy,coordinateStatus:row.coordinateStatus};
+  bases.set(row,original);
+  Object.defineProperty(row,ORIGINAL_PIN_BASE,{value:Object.freeze({customerCode:row.customerCode,coordinates:Object.freeze(original)}),enumerable:true,configurable:true});
+ }
  const r=records.get(row.customerCode),original=bases.get(row);Object.assign(row,original);delete row.resolutionStatus;
  if(r?.resolutionStatus==='MANUAL_CONFIRMED'){row.lat=r.latitude;row.lng=r.longitude;row.coordinateSource='MANUAL_PIN';row.coordinateAccuracy='MANUAL_PIN';row.coordinateStatus='CONFIRMED';row.resolutionStatus='MANUAL_CONFIRMED';}
  else if(r?.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'){row.lat=null;row.lng=null;row.coordinateStatus='CONFLICT';row.resolutionStatus=r.resolutionStatus;}

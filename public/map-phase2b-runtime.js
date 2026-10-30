@@ -1088,6 +1088,27 @@
     window.MapDotUi?.dockDetail();
   }
 
+  function coordinateEvidenceLabel(row) {
+    if (numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) return '';
+    if (row.coordinateSource === 'MANUAL_PIN') return '사용자 수동 확정 위치 · 원본 주소 보존';
+    if (['KAKAO_BUILDING_EXACT_ADDRESS','KAKAO_VERIFIED_BUILDING','KAKAO_ADDRESS_REVALIDATION'].includes(row.coordinateSource)) return '주소 기준 위치';
+    if (row.coordinateSource === 'HISTORICAL_GPS_SAME_BUILDING') return '동일 주소의 저장 위치';
+    return '';
+  }
+  function refreshCoordinateEvidence(row) {
+    const body = $('#detail .detailBody');
+    if (!body) return;
+    body.querySelectorAll('.coordinateEvidence,.coordinateWarning').forEach(node => node.remove());
+    const unlocated = numberOrNull(row.lat) === null || numberOrNull(row.lng) === null;
+    const text = unlocated ? '좌표 미확인' : coordinateEvidenceLabel(row);
+    if (!text) return;
+    const node = document.createElement('div');
+    node.className = unlocated ? 'coordinateWarning' : 'coordinateEvidence';
+    node.textContent = text;
+    const actions = body.querySelector('.mobileActions');
+    if (actions) body.insertBefore(node, actions); else body.append(node);
+  }
+
   function selectStore(row, element, focus, skipEnrich = false) {
     closeClusterPanel();
     ++state.detailRequestId;requestControllers.get("store-detail")?.controller.abort("superseded");
@@ -1140,10 +1161,7 @@
         ${!routeMode && row.history?.length ? `<div class="periodRecent">최근배송 ${esc(row.lastDeliveryDate)} · ${row.visitCount===null?'전체 기간 횟수 미확인':(row.visitCount??row.history.length)+'회 이력'}</div>` : ""}
         <div class="staffActions"><button id="staffHistory" aria-expanded="false" aria-controls="staffAuxContent">최근 배송기사이력 ▸</button><button id="staffNotes" aria-expanded="false" aria-controls="staffAuxContent">출입배송정보 ▸</button></div>
         ${unlocated ? '<div class="coordinateWarning">좌표 미확인</div>' : ""}
-        ${row.coordinateSource==='MANUAL_PIN'?'<div class="coordinateEvidence">사용자 수동 확정 위치 · 원본 주소 보존</div>':''}
-        ${!unlocated && ['KAKAO_BUILDING_EXACT_ADDRESS','KAKAO_VERIFIED_BUILDING'].includes(row.coordinateSource) ? '<div class="coordinateEvidence">주소 기준 위치</div>' : ""}
-        ${!unlocated && row.coordinateSource==='HISTORICAL_GPS_SAME_BUILDING' ? '<div class="coordinateEvidence">동일 주소의 저장 위치</div>' : ""}
-        ${!unlocated && row.coordinateSource==='KAKAO_ADDRESS_REVALIDATION' ? '<div class="coordinateEvidence">주소 기준 위치</div>' : ""}
+        ${coordinateEvidenceLabel(row) ? `<div class="coordinateEvidence">${esc(coordinateEvidenceLabel(row))}</div>` : ""}
         <div class="mobileActions"><button id="mobileMapView" class="primary">매장 위치 중심으로 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicleLabel(vehicle) || "선택 호차")} 운행동선</button></div>
         <div id="nearWrap"></div>
       </div>`;
@@ -2435,7 +2453,7 @@
     isDataReady:()=>state.mode==='DATE_ROUTE'?isDailyDataReady():dateReady,
     initMap,
     stores:()=>allStores.slice(),
-    refreshManualCoordinates(){indexedRows=null;pointIndex=null;for(const row of allStores)window.MapManualPins?.apply(row);if(state.selected){window.MapManualPins?.apply(state.selected);const body=$('#detail .detailBody');if(body&&state.selected.coordinateSource==='MANUAL_PIN'){body.querySelectorAll('.coordinateEvidence').forEach(e=>e.remove());const evidence=document.createElement('div');evidence.className='coordinateEvidence';evidence.textContent='사용자 수동 확정 위치 · 원본 주소 보존';body.append(evidence);}}cancelManualRoadRoute();state.fitRequested=false;void loadBaseMap();window.dispatchEvent(new Event('map-coordinate-updated'));},
+    refreshManualCoordinates(){indexedRows=null;pointIndex=null;for(const row of allStores)window.MapManualPins?.apply(row);if(state.selected){window.MapManualPins?.apply(state.selected);refreshCoordinateEvidence(state.selected);}cancelManualRoadRoute();state.fitRequested=false;void loadBaseMap();window.dispatchEvent(new Event('map-coordinate-updated'));},
     fixedTerritoryMasterState:()=>({version:baseVehicleMeta?.version||null,stale:baseVehicleMeta?.stale!==false}),
     fixedTerritoryStores:()=>window.MapUiLocalBridge.navigationStores().map(row=>({...row,...(baseVehicles.get(String(row.customerCode))||{baseVehicle:'',baseVehicleState:'UNKNOWN'})})),
     loadBaseVehicleMasterForTerritory:()=>loadBaseVehicles(window.MapUiLocalBridge.navigationStores().map(row=>String(row.customerCode||''))),
