@@ -1,0 +1,42 @@
+{
+  "sdk": "REAL_KAKAO_MAPS",
+  "directionsApi": "SYNTHETIC_FIXTURE_ONLY",
+  "actualDirections": "BLOCKED_APPROVED_ALLOWANCE_ABSENT",
+  "realDirectionsCalls": 0,
+  "sourceWrites": 0,
+  "stageSessionsTouched": false,
+  "assertions": [
+    "REAL_KAKAO_NATIVE_MAP",
+    "NO_AUTOMATIC_ROUTE_REQUEST",
+    "TWO_NATIVE_SOLID_POLYLINES_USE_PROVIDER_VERTICES",
+    "DISTANCE_DURATION_MATCH_FIXTURE_RESPONSE",
+    "SAME_REQUEST_CACHE_NO_DUPLICATE_PROVIDER_FETCH",
+    "CLEAR_REMOVES_LINES",
+    "NO_BROWSER_SCRIPT_ERRORS",
+    "NO_UNAPPROVED_EXTERNAL_ENDPOINT"
+  ],
+  "network": [],
+  "status": "PASS",
+  "browser": "156.0.8078.4",
+  "nativeDraw": {
+    "lines": [
+      {
+        "points": 3,
+        "style": "solid",
+        "native": true,
+        "onMap": true
+      },
+      {
+        "points": 3,
+        "style": "solid",
+        "native": true,
+        "onMap": true
+      }
+    ],
+    "distance": 2400,
+    "duration": 540,
+    "covered": 2,
+    "metrics": "2.4 km · 9분"
+  },
+  "fixtureProviderFetches": 1
+}

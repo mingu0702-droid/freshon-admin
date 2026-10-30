@@ -1,7 +1,7 @@
 import fs from 'node:fs';import vm from 'node:vm';import crypto from 'node:crypto';
 export const clone=v=>JSON.parse(JSON.stringify(v));
 export function hubHarness({rows,activeCodes=['S1000'],endDate='2026-10-23'}={}){
- const files=new Map(),props=new Map(),tables=new Map();let seq=0;const metrics={fileReads:0,sourceReads:0,sourceWrites:0,created:0};
+ const files=new Map(),props=new Map(),tables=new Map();let seq=0;const metrics={fileReads:0,sourceReads:0,sourceWrites:0,created:0,sourceRanges:[]};
  const headers=['customerCode','customerName','customerAddress','detailAddress','password','securityKey','generalKey','accessInfo','specialRemark','deliveryDays','updatedAt','deliveryDate','correctionVerified','deleted','clearedFields'];
  const records=rows||[{customerCode:'S1000',customerName:'합성 매장',customerAddress:'경기도 오산시 합성로 1',password:'INITIAL',securityKey:true,generalKey:false,updatedAt:'2026-10-22T10:00:00+09:00',deliveryDate:'2026-10-22'}];
  const locks={user:false,script:false};const lock=kind=>({tryLock(){if(locks[kind])return false;locks[kind]=true;return true;},releaseLock(){locks[kind]=false;}});
@@ -19,7 +19,7 @@ export function hubHarness({rows,activeCodes=['S1000'],endDate='2026-10-23'}={})
   PropertiesService:{getScriptProperties:()=>properties},LockService:{getUserLock:()=>lock('user'),getScriptLock:()=>lock('script')},
   DriveApp:{Access:{PRIVATE:'PRIVATE'},getFolderById:id=>{if(id!=='private-folder')throw Error('NO_FOLDER');return folder;},getFileById:id=>{if(!files.has(id))throw Error('NO_FILE');return files.get(id);}},MimeType:{PLAIN_TEXT:'text/plain'},
   Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_a,text)=>[...crypto.createHash('sha256').update(text).digest()],newBlob:text=>({getBytes:()=>Buffer.from(text)}),formatDate:(date,_zone)=>new Date(date.getTime()+9*3600000).toISOString().slice(0,10)},
-  SpreadsheetApp:{openById(id){if(id!=='customer-source')throw Error('NO_SOURCE');return {getSheetByName(name){if(!tables.has(name))return null;return {getLastRow:()=>tables.get(name).length,getLastColumn:()=>headers.length,getRange(row,_column,count,columns){metrics.sourceReads++;const values=tables.get(name).slice(row-1,row-1+count).map(a=>a.slice(0,columns));return {getValues:()=>values,getDisplayValues:()=>values.map(a=>a.map(String))};}};}};}},
+  SpreadsheetApp:{openById(id){if(id!=='customer-source')throw Error('NO_SOURCE');return {getSheetByName(name){if(!tables.has(name))return null;return {getLastRow:()=>tables.get(name).length,getLastColumn:()=>headers.length,getRange(row,_column,count,columns){metrics.sourceReads++;metrics.sourceRanges.push({sheet:name,row,column:_column,count,columns});const values=tables.get(name).slice(row-1,row-1+count).map(a=>a.slice(_column-1,_column-1+columns));return {getValues:()=>values,getDisplayValues:()=>values.map(a=>a.map(String))};}};}};}},
   hubMapHttpValidateOnlyKeys_:(p,allowed)=>{if(Object.keys(p).some(k=>!allowed.includes(k)))throw Error('INVALID_PARAM');},hubMapHttpCustomerCode_:s=>{if(!/^[A-Z]\d+$/.test(s))throw Error('INVALID_CUSTOMER_CODE');return s;},hubMapHttpDate_:s=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(s)||new Date(s).toISOString().slice(0,10)!==s)throw Error('INVALID_DATE');return s;}
  });
  for(const name of ['HubMapPackageStore.js','HubCustomerDetailContract.js','HubCustomerDetailStore.js','HubMapRoadBudget.js'])vm.runInContext(fs.readFileSync(new URL('../../integrations/hub/'+name,import.meta.url),'utf8'),context,{filename:name});

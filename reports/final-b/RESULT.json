@@ -1,0 +1,151 @@
+{
+  "status": "LOCAL_IMPLEMENTATION_COMPLETE_REMOTE_GATES_BLOCKED",
+  "baseStageSha": "279d731698239fe0cb4ff4c0dc698d4676adaa79",
+  "productionBaseline": "7e20b87bd1a6e536f18a9208da5e0e6a458c40db",
+  "branch": "work/opsmap-final-hub-route-b",
+  "hub": {
+    "sourceRead": "PASS_ACTUAL_V64_35_FILES",
+    "r5Integration": "PASS_LOCAL_NATIVE_V64_CANDIDATE",
+    "candidateFiles": 39,
+    "existingModulesChanged": 2,
+    "r5ModulesAdded": 4,
+    "hmacAndNonceRegression": "PASS_LOCAL_ACTUAL_V64_CODE",
+    "publicPackageRootRequired": false,
+    "installation": "NOT_RUN",
+    "deployment": "NOT_RUN",
+    "oauthScopesAdded": 0,
+    "library42Changed": false
+  },
+  "customer": {
+    "preparation": "PASS_REAL_SAVED_SOURCE_ENCRYPTED_LOCAL",
+    "sourceVersion": "42553",
+    "sourceMarkerConsistent": true,
+    "sourceRows": 17035,
+    "customers": 5979,
+    "duplicateObservations": 11056,
+    "preparedFieldCounts": {
+      "customerName": 5979,
+      "address": 5979,
+      "detailAddress": 5455,
+      "accessInfo": 1407,
+      "password": 23,
+      "securityKey": 0,
+      "generalKey": 0,
+      "specialRemark": 522,
+      "deliveryPattern": 0
+    },
+    "conflicts": 0,
+    "sourceUpdatesPerformed": 0,
+    "explicitSourceDeletesPerformed": 0,
+    "sameSnapshotChangedCustomers": 0,
+    "sameSnapshotNoop": "PASS_ACTUAL_SAME_SNAPSHOT",
+    "injectedFailureNormalPreservation": "PASS_ACTUAL_PRIVATE_POINTER",
+    "privateProjectionsChecked": 11958,
+    "latestUpdateClearDeleteRetry": "PASS_LOCAL_SYNTHETIC_LIFECYCLE_TESTS",
+    "nativeWorkerCapturedRows": {
+      "mode": "REAL_CAPTURED_CUSTOMER_ROWS_WITH_LOCAL_GAS_IO_HARNESS",
+      "customers": 5979,
+      "continues": 34,
+      "buildCheckpoints": 2,
+      "fieldsChecked": 59790,
+      "noop": "PASS",
+      "remoteHubExecution": false
+    },
+    "sourceCompletenessVerified": false,
+    "currentness": "UNCONFIRMED_AFTER_CAPTURE",
+    "missingKeyFlags": "UNOBSERVED; never inferred from free text",
+    "privateArtifactIncludedInGit": false
+  },
+  "road": {
+    "actualDirections": "BLOCKED",
+    "verifiedBlocker": "APPROVED_DURABLE_ALLOWANCE_ABSENT",
+    "stageRestKey": "NOT_DELEGATED_TO_B; Stage env not read/changed",
+    "stageFeatureFlag": "NOT_CHANGED_BY_B",
+    "stageBudgetReadOnly": true,
+    "stageBudgetPresent": false,
+    "providerRequests": 0,
+    "actualResponse": null,
+    "readiness": "IMPLEMENTED_READ_ONLY_CAUSE_CHECKS_NO_RESERVATION",
+    "browserSdk": "PASS_REAL_KAKAO",
+    "browserDirections": "SYNTHETIC_FIXTURE_ONLY",
+    "nativePolylineLegs": 2,
+    "fixtureDistanceMeters": 2400,
+    "fixtureDurationSeconds": 540
+  },
+  "tests": {
+    "nodePass": 81,
+    "nodeFail": 0,
+    "chromiumAssertions": 8,
+    "chromiumFail": 0,
+    "syntaxChecks": 5
+  },
+  "blocked": [
+    {
+      "item": "Live Hub installation and private pointer activation",
+      "reason": "Not executed under Stage/Production direct-deployment prohibition; verified native candidate supplied. No additional OAuth consent requested."
+    },
+    {
+      "item": "Live Directions connection and response",
+      "reason": "Existing approved durable allowance is absent; REST key and activation not delegated. No quota initialization, paid request or Stage env mutation."
+    },
+    {
+      "item": "Render environment inspection through connector",
+      "reason": "No workspace selected; no workspace was guessed or changed."
+    },
+    {
+      "item": "Remote automatic latest/clear/delete cycle",
+      "reason": "Hub candidate not installed; captured source and local lifecycle checks are reported separately."
+    }
+  ],
+  "safety": {
+    "stageWrites": 0,
+    "productionDeployments": 0,
+    "customerWrites": 0,
+    "archiveReads": 0,
+    "archiveWrites": 0,
+    "collectorChanges": 0,
+    "triggerChanges": 0,
+    "staffSessionsTouched": false,
+    "mainPushes": 0,
+    "privateValuesInGit": 0,
+    "sourceSecretsPrinted": false,
+    "oauthCredentialWrites": 0
+  },
+  "protectedFiles": [
+    {
+      "file": "src/mapStaffAuth.js",
+      "checkoutSha256": "400733293e8d398bb626995eb9930f101f604ab6a9f2450bfe380786ed651e20",
+      "normalizedGitSourceSha256": "3abf712eb878b75ce822583839f82fa0dc556a3371920d8838e818a88a38ef9c",
+      "unchanged": true,
+      "windowsCheckoutLineEndings": true
+    },
+    {
+      "file": "public/map-staff-entry.js",
+      "checkoutSha256": "39532d3fcd773b667fa03257781416cba5a7b8f2542b8e13bce9b1e12d2d22bb",
+      "normalizedGitSourceSha256": "d24584bf45d6be0b0641af77126cc43569539e2f2ff895ec61adbe58d0b8144e",
+      "unchanged": true,
+      "windowsCheckoutLineEndings": true
+    },
+    {
+      "file": "src/manualMapPins.js",
+      "checkoutSha256": "01e2c48144670b6afdc589e9a0dd28a8cecb60536240e8e18f369b121cbf0274",
+      "normalizedGitSourceSha256": "59051848ae00e0b19c6be33901596c1212efb7eba51e4b4e042a050d1a26a7bb",
+      "unchanged": true,
+      "windowsCheckoutLineEndings": true
+    },
+    {
+      "file": "public/manual-map-pins.mjs",
+      "checkoutSha256": "daea105c89d858748be892c343c6c00cbbd28f645ec75d194a1f88799a5620d2",
+      "normalizedGitSourceSha256": "5afe3631609b63bac452c574f1614b912cc13e5b13280cb2527c1fb534e83b6d",
+      "unchanged": true,
+      "windowsCheckoutLineEndings": true
+    },
+    {
+      "file": "src/server.js",
+      "checkoutSha256": "61db63f66fe6bb803dcffee45cf2e6524c3371dd30ab2a2d290163ff06c462ff",
+      "normalizedGitSourceSha256": "a5dd3b1d3f011ca37af7e3813f020479e120c0f860380dda60e4a6ca390029f8",
+      "unchanged": true,
+      "windowsCheckoutLineEndings": true
+    }
+  ]
+}
