@@ -623,7 +623,7 @@
   }
 
   function vehicleCatalog() {
-    const evidence = state.mode === 'DATE_ROUTE' ? allStores : [...baseVehicles.values()];
+    const evidence = state.mode === 'DATE_ROUTE' ? (isDailyDataReady()?allStores:[]) : [...baseVehicles.values()];
     return vehicleChecks().map(input => ({ vehicle: input.value, ...Phase2bUi.vehicleFacet(evidence, input.value, { dated: state.mode === 'DATE_ROUTE' }) })).sort((a,b)=>Phase2bUi.compareVehicles(a.vehicle,b.vehicle));
   }
   function synchronizeVehicleCatalog() {

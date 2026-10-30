@@ -12,7 +12,7 @@
   const selectAll=$('#selectAllVehicles'),clear=$('#clearVehicles');selectAll.textContent='전체 선택';actions.append(selectAll,clear,count);
   const note=document.createElement('p');note.id='vehicleEvidenceNote';note.className='hint';
   body.append(search,actions,note,list);$('#baseVehiclePicker').append(body);
-  const openGroups=new Map();let catalogKey='',groups=[];
+  const openGroups=new Map();let catalogKey='',renderedMode='',groups=[];
   function rememberGroups(){for(const item of list.querySelectorAll('details[data-vehicle-group]'))openGroups.set(item.dataset.vehicleGroup,item.open);}
   function createGroup(key,title,labels,{nested=false}={}){
     const details=document.createElement('details');details.dataset.vehicleGroup=key;details.className=nested?'vehicleRegionGroup':'vehicleCenterGroup';details.open=openGroups.get(key)??true;
@@ -42,7 +42,7 @@
     const catalog=bridge.vehicleCatalog?.()||[],labels=[...list.querySelectorAll('.vehicleItem')];
     const key=JSON.stringify([bridge.state.mode,catalog]);
     if(key===catalogKey&&labels.every(node=>node.closest('details[data-vehicle-group]'))){filter();return;}
-    catalogKey=key;rememberGroups();groups=[];
+    catalogKey=key;renderedMode=bridge.state.mode;rememberGroups();groups=[];
     const byVehicle=new Map(labels.map(node=>[node.querySelector('input').value,node])),records=[];
     for(const item of catalog){const label=byVehicle.get(item.vehicle);if(!label)continue;label.dataset.group=item.center||'';
       label.title=item.conflict?'담당 센터 충돌':item.verified?(item.stale?'이전 확인값':'기준호차 확인값')+(item.checkedAt?' · '+item.checkedAt:''):'담당 센터 미확인';
@@ -62,7 +62,7 @@
     filter();
   }
   query.oninput=filter;query.onkeydown=event=>{if(event.key==='Enter')event.preventDefault();};reset.onclick=()=>{query.value='';filter();query.focus();};
-  window.addEventListener('map-vehicle-catalog',rebuild);window.addEventListener('map-vehicle-selection',filter);
+  window.addEventListener('map-vehicle-catalog',rebuild);window.addEventListener('map-vehicle-selection',()=>{if(renderedMode!==bridge.state.mode)rebuild();else filter();});
   window.addEventListener('map-navigation-logout',()=>{query.value='';catalogKey='';groups=[];list.replaceChildren();count.textContent='';note.textContent='';});
   window.MapVehiclePicker=Object.freeze({element:body,refresh:rebuild,filter});rebuild();
 })();

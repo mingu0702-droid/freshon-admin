@@ -41,7 +41,7 @@ try{
     const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],state=MapUiLocalBridge.state;
     const initial=MapUiLocalBridge.vehicleCatalog();
     let allStores=[],baseVehicles=new Map(initial.map((x,i)=>[String(i),{baseVehicle:x.vehicle,baseVehicleGroup:x.center,baseVehicleState:'VERIFIED_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:'a'.repeat(64),baseVehicleStale:true,baseVehicleCheckedAt:'2026-09-24T00:00:00Z'}]));
-    const vehicleChecks=()=>$$('#vehicleList input[type=checkbox]'),vehicleLabel=Phase2bUi.normalizeVehicleLabel;
+    const vehicleChecks=()=>$$('#vehicleList input[type=checkbox]'),vehicleLabel=Phase2bUi.normalizeVehicleLabel,isDailyDataReady=()=>false;
     const esc=x=>String(x).replace(/[&<>"']/g,'');const refreshVehicleUi=()=>{};let periodVehicleScope='selected';
     ${dynamicFunctions}
     for(const id of ['vehicle','mobileVehicle','operationVehicle','mobileBaseVehicle']){const select=document.createElement('select');select.id=id;select.append(new Option('전체',''));document.body.append(select);}
@@ -54,6 +54,10 @@ try{
   check(added.filter(x=>x.startsWith('202')).join(',')==='202,202-1,202-2,202-3,202-10','dated additions re-sort existing labels');
   await page.evaluate(()=>r7AppendVehicles([{baseVehicle:'202-10',vehicle:'용02',history:[{vehicle:'202-3'}]}]));
   check(await page.locator('#vehicleList input').count()===10,'repeated dated refresh creates no duplicate checkbox');
+  await page.evaluate(()=>{MapUiLocalBridge.state.mode='DATE_ROUTE';window.dispatchEvent(new Event('map-vehicle-selection'));});
+  check(await page.locator('.vehicleCenterGroup').count()===1&&(await page.locator('.vehicleCenterGroup>summary').innerText()).startsWith('센터 미확인'),'unready dated assignments do not inherit historical fixed-center groups');
+  check((await page.locator('#vehicleEvidenceNote').textContent()).includes('선택한 배송일'),'mode change updates evidence without waiting for a successful dated fetch');
+  await page.evaluate(()=>{MapUiLocalBridge.state.mode='BASE_60D';window.dispatchEvent(new Event('map-vehicle-selection'));});
   check(!(await page.locator('#vehicleList').innerText()).includes('기준일 편성'),'per-row repeated source text removed');
   check((await page.locator('#vehicleEvidenceNote').textContent()).includes('이전 확인값'),'stale evidence is not current master');
   console.log(JSON.stringify({scope:'LOCAL_CHROMIUM_SYNTHETIC_COMPONENT_ONLY',pass:assertions,fail:0,realKakao:'NOT_TESTED',Production:'NOT_CHANGED'}));
