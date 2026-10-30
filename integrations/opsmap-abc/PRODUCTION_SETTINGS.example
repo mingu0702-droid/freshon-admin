@@ -2,6 +2,8 @@
 OPSMAP_PRODUCTION_CANDIDATE_ENABLED=0
 OPSMAP_AUTH_ORIGIN=https://freshon-admin-1.onrender.com
 # Existing Production MAP_STAFF_ID/PASSWORD_HASH are reused; no new employee account.
+# Explicit opt-in permits this Production service existing GITHUB_TOKEN and MAP_STAFF_SESSION_SECRET; no secret copying.
+OPSMAP_PRODUCTION_REUSE_EXISTING_CREDENTIALS=0
 OPSMAP_AUTH_SESSION_SECRET=
 OPSMAP_AUTH_STORE_REPO=mingu0702-droid/freshon-cache
 OPSMAP_AUTH_STORE_TOKEN=

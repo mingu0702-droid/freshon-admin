@@ -14,3 +14,13 @@ test('same real candidate defaults to ABC and fails closed without separate auth
  fs.mkdirSync('reports/production',{recursive:true});fs.writeFileSync('reports/production/LOCAL_SERVER.json',JSON.stringify({scope:'REAL_CANDIDATE_PROCESS',root:'302_TO_ABC',health:200,uploadUnauthorized:401,newAuthUnconfigured:503,map:'BLOCKED_INDEPENDENT_AUTH_CONFIGURATION_NOT_VERIFIED'},null,2));
  }finally{await browser?.close();child.kill('SIGTERM');await new Promise(r=>child.once('exit',r));}
 });
+
+
+test('Production credential reuse is explicit, local to supplied environment and preserves dedicated overrides',async()=>{
+ const {resolveProductionCredentials}=await import('../src/productionOpsmapCandidate.js');
+ const existing={GITHUB_TOKEN:'synthetic-existing-service-token',MAP_STAFF_SESSION_SECRET:'synthetic-production-secret'};
+ assert.deepEqual(resolveProductionCredentials(existing),{sessionSecret:undefined,authToken:undefined,pinToken:undefined});
+ const enabled={...existing,OPSMAP_PRODUCTION_REUSE_EXISTING_CREDENTIALS:'1'};
+ assert.deepEqual(resolveProductionCredentials(enabled),{sessionSecret:existing.MAP_STAFF_SESSION_SECRET,authToken:existing.GITHUB_TOKEN,pinToken:existing.GITHUB_TOKEN});
+ assert.deepEqual(resolveProductionCredentials({...enabled,OPSMAP_AUTH_STORE_TOKEN:'synthetic-own-auth',OPSMAP_PIN_STORE_TOKEN:'synthetic-own-pins',OPSMAP_AUTH_SESSION_SECRET:'synthetic-own-secret'}),{sessionSecret:'synthetic-own-secret',authToken:'synthetic-own-auth',pinToken:'synthetic-own-pins'});
+});
