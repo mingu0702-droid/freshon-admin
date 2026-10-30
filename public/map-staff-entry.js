@@ -10,7 +10,17 @@
   document.body.append(entry);
   const form = entry.querySelector('form'), account = form.elements.username, password = form.elements.password;
   const submit = form.querySelector('button'), message = form.querySelector('[role="status"]');
+  function entryMode(mode) {
+    const loading=mode!=='signed-out';
+    for(const label of form.querySelectorAll('label'))label.style.display=loading?'none':'';
+    submit.style.display=loading?'none':'';
+    account.disabled=loading;password.disabled=loading;
+    if(loading)password.value='';
+    form.querySelector('h1').textContent=loading?'운영지도 여는 중':'운영지도';
+    form.querySelector('p').textContent=mode==='loading'?'직원 인증이 확인됐습니다. 지도 자료를 준비하고 있습니다.':loading?'직원 로그인 상태를 확인하고 있습니다.':'직원 로그인 후 지도를 사용할 수 있습니다.';
+  }
   document.body.dataset.mapStaffState = 'checking'; submit.disabled = true;
+  entryMode('checking');
   function isMapRequest(input) {
     let url; try { url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href); } catch { return false; }
     if (url.origin !== location.origin) return false;
@@ -48,6 +58,7 @@
     for (const controller of requests) controller.abort(); requests.clear();
     delete window.VEHICLE_AREA_DATA; delete window.ADMIN_FEATURES;
     document.body.dataset.mapStaffState = unknown ? 'checking' : 'signed-out'; entry.hidden = false; submit.disabled = unknown;
+    entryMode(unknown?'checking':'signed-out');
     account.disabled = unknown; password.disabled = unknown;
     message.textContent = text || '직원 로그인 후 지도를 사용할 수 있습니다.'; status();
     window.MapStaff?.clear();
@@ -134,6 +145,7 @@
     if (value?.authenticated !== true) { await revoke('직원 로그인 후 지도를 사용할 수 있습니다.'); return false; }
     session = value; lastActivityCheck = Date.now(); account.disabled = false; password.disabled = false; deadline(value);
     const owner = epoch; document.body.dataset.mapStaffState = 'loading'; message.textContent = '지도 불러오는 중…';
+    entryMode('loading');
     booting = bootstrap(owner);
     try { await booting; return true; }
     catch (error) {

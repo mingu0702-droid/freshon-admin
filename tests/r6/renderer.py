@@ -53,7 +53,7 @@ window.fetch=async(input,options={})=>{
  if(path.endsWith('/private/driver-history'))return send({ok:true,data:[],meta:{complete:true,coverageComplete:false,unconfirmedDates:['2026-09-01']}});
  if(path.endsWith('/manual-road-route')){await pause(__fixture.routeDelay);abort();return __fixture.routeMode==='error'?send({error:'PROVIDER_UNAVAILABLE'},503):send(manualFixture(JSON.parse(options.body)));}
  if(path.endsWith('/vehicle-driver-master'))return send({vehicles:Array.from({length:16},(_,i)=>({vehicle:String(101+i),driverName:'합성 기사 '+(101+i),driverKey:'FIXTURE_'+(101+i)}))});
- if(path.endsWith('/manual-pins/projection'))return send({ok:true,data:[]});
+ if(path.endsWith('/manual-pins/projection'))return __fixture.projectionFailed?send({error:'MANUAL_PIN_STORAGE_UNAVAILABLE'},503):send({ok:true,data:__fixture.pins||[]});
  if(path.endsWith('/delivery-photos'))return send({ok:true,data:{deliveries:[]}});
  if(path.endsWith('/private/road-route/config'))return send({ok:true,data:{enabled:true,keyConfigured:true,maxWaypoints:30,persistentBudgetConfigured:true,requestLimit:30000}});
  if(fixtures[key])return send(fixtures[key]);
@@ -105,6 +105,19 @@ with sync_playwright() as p:
  check('actual shipped controllers initialize with 2036 synthetic rows',lambda:(wait('window.MapUiLocalBridge?.isDataReady()'),expect(page.evaluate('MapUiLocalBridge.state.currentRows.length')==2036)))
  check('R6 overview shows every vehicle and focuses all positioned stores (SDK double)',lambda:(expect(page.locator('#map .marker[data-vehicle]').count()==16),page.locator('#map .marker[data-vehicle="101"]').first.dispatch_event('click'),wait('document.querySelectorAll("#map .marker.store").length>1')))
  check('same-building stores independently selectable',lambda:(select('S9901000'),select('S9901001'),expect(page.locator('#map .marker.selected[data-customer-code="S9901001"]').count()==1)))
+ def manual_reload():
+  page.evaluate("__fixture.pins=[{customerCode:'S9901000',resolutionStatus:'MANUAL_CONFIRMED',latitude:37.4,longitude:127.1,revision:7}]")
+  page.evaluate('MapManualPins.refresh()');select('S9901000')
+  expect(page.evaluate('MapUiLocalBridge.state.selected.coordinateSource')=='MANUAL_PIN')
+  expect(page.evaluate('MapUiLocalBridge.state.selected.lat')==37.4)
+  expect('사용자 수동 확정 위치' in page.locator('#detail').inner_text())
+ check('saved projection overrides a newly searched source row and card',manual_reload)
+ def projection_failure():
+  page.evaluate('__fixture.projectionFailed=true');page.evaluate('MapManualPins.refresh().catch(()=>{})')
+  expect(page.locator('#manualPinProjectionStatus').is_visible())
+  expect(page.evaluate('MapUiLocalBridge.state.selected.coordinateSource')=='MANUAL_PIN')
+  page.evaluate('__fixture.projectionFailed=false');page.evaluate('MapManualPins.refresh()')
+ check('failed projection is visible and preserves last confirmed manual coordinate',projection_failure)
  check('Customer code is visually ordered above store name',lambda:expect(page.evaluate('getComputedStyle(document.querySelector("#detail .code")).order')=='0'))
  check('collapsed card does not prefetch password endpoint',lambda:expect(page.locator('#staffAuxContent').inner_text()==''))
  def open_notes():page.locator('#staffNotes').click();wait('document.querySelector("#staffAuxContent").textContent.includes("DEMO1")')

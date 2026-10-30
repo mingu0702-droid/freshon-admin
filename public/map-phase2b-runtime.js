@@ -1094,6 +1094,9 @@
     window.MapStaff?.clear();
     const routeStop = state.mode === "DATE_ROUTE" && operationStops.find((stop) => stop.customerCode === row.customerCode && stop.vehicle === row.vehicle);
     if (routeStop) row = { ...row, ...routeStop, ...Object.fromEntries(["accessInfo", "accessMemo", "password", "detailAddress", "specialRemark"].filter((key) => row[key]).map((key) => [key, row[key]])) };
+    // Search and dated stops may be fresh copies of the stored source rows.
+    // Apply the confirmed overlay again before rendering their coordinate origin.
+    window.MapManualPins?.apply(row);
     const expanded = state.selected?.customerCode === row.customerCode && $(".detailMore")?.open;
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     element?.classList.add("selected");
@@ -2432,7 +2435,7 @@
     isDataReady:()=>state.mode==='DATE_ROUTE'?isDailyDataReady():dateReady,
     initMap,
     stores:()=>allStores.slice(),
-    refreshManualCoordinates(){indexedRows=null;pointIndex=null;for(const row of allStores)window.MapManualPins?.apply(row);cancelManualRoadRoute();state.fitRequested=false;void loadBaseMap();window.dispatchEvent(new Event('map-coordinate-updated'));},
+    refreshManualCoordinates(){indexedRows=null;pointIndex=null;for(const row of allStores)window.MapManualPins?.apply(row);if(state.selected){window.MapManualPins?.apply(state.selected);const body=$('#detail .detailBody');if(body&&state.selected.coordinateSource==='MANUAL_PIN'){body.querySelectorAll('.coordinateEvidence').forEach(e=>e.remove());const evidence=document.createElement('div');evidence.className='coordinateEvidence';evidence.textContent='사용자 수동 확정 위치 · 원본 주소 보존';body.append(evidence);}}cancelManualRoadRoute();state.fitRequested=false;void loadBaseMap();window.dispatchEvent(new Event('map-coordinate-updated'));},
     fixedTerritoryMasterState:()=>({version:baseVehicleMeta?.version||null,stale:baseVehicleMeta?.stale!==false}),
     fixedTerritoryStores:()=>window.MapUiLocalBridge.navigationStores().map(row=>({...row,...(baseVehicles.get(String(row.customerCode))||{baseVehicle:'',baseVehicleState:'UNKNOWN'})})),
     loadBaseVehicleMasterForTerritory:()=>loadBaseVehicles(window.MapUiLocalBridge.navigationStores().map(row=>String(row.customerCode||''))),
