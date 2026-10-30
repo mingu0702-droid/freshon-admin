@@ -75,3 +75,19 @@ export function bindPreparedCustomerPrivateReads({store,callHub}={}){
   return {...await store.read(params.customerCode,{view:params.view??'notes',requestedDate:params.requestedDate??null}),cached:false};
  };
 }
+// Both operator and scheduler invoke exactly the same bounded, single-flight job.
+// Scheduling, authentication and deployment remain the caller's responsibility.
+export function createCustomerPrivateRefreshWorker({store,readSnapshot,confirmSource}={}){
+ if(!store?.loadRecords||!store?.commit||typeof readSnapshot!=='function'||typeof confirmSource!=='function')fail('CUSTOMER_REFRESH_CONFIG');
+ let running=null;
+ const refresh=()=>{
+  if(running)return running;
+  running=Promise.resolve().then(async()=>{
+   const snapshot=await readSnapshot();
+   if(!snapshot||typeof snapshot.sourceMarker?.version!=='string')fail('CUSTOMER_REFRESH_SNAPSHOT');
+   const prepared=buildCustomerPrivateRecords({rows:snapshot.rows,previous:await store.loadRecords(),sourceVersion:snapshot.sourceMarker.version,observedAt:snapshot.observedAt});
+   return store.commit({...prepared,sourceVersion:snapshot.sourceMarker.version,sourceMarker:snapshot.sourceMarker,confirmSource});
+  }).finally(()=>{running=null;});return running;
+ };
+ return Object.freeze({manual:refresh,automatic:refresh});
+}

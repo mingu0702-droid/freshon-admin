@@ -1,0 +1,16 @@
+{
+  "mode": "ACTUAL_CAPTURED_DATA_LOCAL_PRIVATE_STORE_NOT_REMOTE_HUB",
+  "customers": 5979,
+  "passwordsObserved": 23,
+  "automaticManualCommonPath": "PASS",
+  "concurrentSnapshotReads": 1,
+  "noop": "PASS",
+  "injectedFailurePreservesNormal": "PASS",
+  "previousNormalVersion": 1,
+  "currentVersion": 2,
+  "sourceVersion": "42578",
+  "rawValuesPrinted": false,
+  "sourceWrites": 0,
+  "remoteScheduledExecution": "NOT_RUN",
+  "pointerSha256": "2aac1d25e25f8fc5a04cd4487ef8aee2f32f910f0b7d99b0bf8151f84660ba19"
+}
