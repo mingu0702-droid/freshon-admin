@@ -1,0 +1,59 @@
+diff --git a/public/map-phase2b-runtime.js b/public/map-phase2b-runtime.js
+index 324d809..94a11bb 100644
+--- a/public/map-phase2b-runtime.js
++++ b/public/map-phase2b-runtime.js
+@@ -25,7 +25,7 @@
+       if(value.external)queueMicrotask(()=>void window.MapDataSync?.onPublished?.({}).catch(()=>{}));
+       if(value.state==='logged-out')purgeStaffData();
+       const panel = $('#packageReadState');
+-      if (panel) { panel.dataset.state=value.state;panel.textContent=({cached:'저장된 정상 지도 · 최신 게시본 확인 중', 'logged-out':'로그아웃 · 브라우저 저장본 정리됨', held:'새 패키지 검증·공개 보류 — 기존 지도 사용',error:'패키지 조회 실패 · 이전 정상본 유지',loading:'패키지 확인 중',legacy:'기존 지도 데이터 사용 · 새 패키지 미연결',ready:'새 패키지 읽기 검증 완료 · 전체 매장 원천 완전성은 별도 확인',empty:'검증된 선택 범위 0건',checking:'페이지 확인 중 · 전체 집계 미완료',unconfirmed:'기간 완전성 미확인',missing:'저장자료 없음 · 원천 손실 판정 아님',preparing:'수집·자료 준비 중', 'latest-available':'새 게시본 있음 · 선택 기간 유지',cancelled:'조회 취소 · 이전 지도 상태 유지'})[value.state]||'패키지 상태 미확인'; }
++      if (panel) { panel.dataset.state=value.state;panel.textContent=({cached:'저장된 지도 표시 중 · 최신 자료 확인 중', 'logged-out':'로그아웃되었습니다', held:'최신 자료 확인 중 · 이전 지도 표시',error:'자료 조회 실패 · 이전 지도 표시',loading:'자료 확인 중',legacy:'저장된 지도 표시 중',ready:'지도 자료 확인 완료 · 전체 자료 확인 필요',empty:'선택 범위에 매장이 없습니다',checking:'자료 확인 중',unconfirmed:'기간 자료 확인 필요',missing:'저장된 자료가 없습니다',preparing:'자료 준비 중', 'latest-available':'새 자료가 있습니다 · 선택 기간 유지',cancelled:'조회 취소 · 이전 지도 표시'})[value.state]||'자료 확인 필요'; }
+     }});
+     return hybridUi;
+   });
+@@ -1178,14 +1178,14 @@
+       const title=$('#detail .storeName');if(title&&exact.customerName)title.textContent=exact.customerName;
+       const facts=$('#detail .dotDetailFacts');
+       const addressLabel=facts&&[...facts.querySelectorAll('dt')].find(node=>node.textContent==='주소');
+-      if(addressLabel?.nextElementSibling)addressLabel.nextElementSibling.textContent=exact.address||'원천 주소 미확인';
++      if(addressLabel?.nextElementSibling)addressLabel.nextElementSibling.textContent=exact.address||'주소 미확인';
+       const regionNode=$('#detailAddressRegion');if(regionNode)regionNode.textContent=exact.addressRegion||window.MapLocationContract?.addressRegion(exact.address)||'주소 권역 미확인';
+       if(facts){
+-        const detailAddressLabel=exact.detailAddress||({EMPTY:'원천 상세주소 공란',WITHHELD:'보호정보 혼합 가능 · 별도 확인',UNOBSERVED:'원천 상세주소 미확인'})[exact.detailAddressState]||'원천 상세주소 미확인';
+-        for(const [name,value] of [['상세주소',detailAddressLabel],['배송요일',exact.deliveryPattern||'원천 미확인']]){
++        const detailAddressLabel=exact.detailAddress||({EMPTY:'상세주소 없음',WITHHELD:'상세주소 별도 확인 필요',UNOBSERVED:'상세주소 미확인'})[exact.detailAddressState]||'상세주소 미확인';
++        for(const [name,value] of [['상세주소',detailAddressLabel],['배송요일',exact.deliveryPattern||'미확인']]){
+           const label=document.createElement('dt'),node=document.createElement('dd');label.textContent=name;node.textContent=value;facts.append(label,node);
+         }
+-        if(exact.sourceBasis==='STORED_DAY'){const label=document.createElement('dt'),node=document.createElement('dd');label.textContent='매장정보 기준';node.textContent=exact.sourceDate+' 저장 원천 · 현재 마스터와 별도';facts.append(label,node);}
++        if(exact.sourceBasis==='STORED_DAY'){const label=document.createElement('dt'),node=document.createElement('dd');label.textContent='매장정보 기준';node.textContent=exact.sourceDate+' 기준 · 현재 정보 확인 필요';facts.append(label,node);}
+       }
+       positionDetailPopup();
+     } catch (error) {
+@@ -1462,7 +1462,7 @@
+         if (detail.data?.customerCode) {
+           const row = normalizeApiStore(detail.data);
+           row.vehicle = dateReady ? storesByCode.get(row.customerCode)?.vehicle || "" : "";
+-          setSearchState("1건 · 고객코드 일치");
++          setSearchState("검색 결과 1건");
+           requestMapFit(); renderResults([row]); renderStops([row], { boundaries: false }); selectStore(row, null, true, true);
+           return;
+         }
+@@ -1491,7 +1491,7 @@
+   }
+ 
+   function renderResults(rows) {
+-    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName || "-")}</div><div class="resultMeta"><span class="chip">${esc(vehicleLabel(row.vehicle || "-"))}</span>${esc(row.address || "-")}</div></button>`).join("");
++    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName || "-")}</div></button>`).join("");
+     $$("[data-result]").forEach((element) => {
+       element.onclick = () => {
+         const row = rows[Number(element.dataset.result)];
+@@ -1573,7 +1573,7 @@
+       vehicle: baseVehicles.get(item.customerCode)?.baseVehicle||"", ...(baseVehicles.get(item.customerCode)||{}), driverName: "", history: [], lastDeliveryDate: "",
+       outsideReason: period.has(item.customerCode) ? "현재 호차/기사 조건의 이력 없음" : "선택 기간 이력 없음" });
+     setSearchState(rows.length ? `${rows.length}건 · 기간/조회 조건 유지` : "검색 결과 0건 · 현재 지도 유지");
+-    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-period-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName)}</div><div class="resultMeta">${esc((rankSearchRow(row,text)===0?'고객코드 정확 일치':rankSearchRow(row,text)<=4?'매장명':'주소')+' · '+(row.outsideReason || vehicleLabel(row.vehicle) + ' · ' + row.lastDeliveryDate))}</div></button>`).join("");
++    $("#results").innerHTML = rows.map((row, index) => `<button class="resultItem" data-period-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName)}</div></button>`).join("");
+     if(!rows.length)offerExternalAddressResult(text);
+     $$("[data-period-result]").forEach(button => button.onclick = () => {
+       const row = rows[Number(button.dataset.periodResult)];
