@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { fetchPrivateHub, privateResponseKind, privateOutputDeadline } from './privateHubTransport.js';
 import { readBoundedHubText } from './boundedHubResponse.js';
+import { privateReaderEndpoint } from './privateReaderEndpoint.js';
 
 const VERSION = "map-phase2-v1";
 const cache = new Map();
@@ -86,8 +87,8 @@ function stable(value) {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}`;
 }
 
-function requestBody(action, params) {
-  const secret = String(process.env.HUB_API_SECRET || "");
+function requestBody(action, params, endpointSecret) {
+  const secret = String(endpointSecret || process.env.HUB_API_SECRET || "");
   if (secret.length < 32) throw new Error("HUB_API_SECRET_NOT_CONFIGURED");
   const requestId = crypto.randomUUID();
   const timestamp = String(Date.now());
@@ -140,6 +141,7 @@ function retryableHubError(error) {
 }
 
 async function callHubUncached(action, params, key, privateRead = false, { deadline, signal, page, maxResponseBytes } = {}) {
+  const endpoint=privateReaderEndpoint(action);
   const entered = circuitEnter(action);
   const started = Date.now();
   const staffDetail = action === 'staffCustomerDetail';
@@ -185,7 +187,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
     const profile = { action, attempt: attempt + 1, sentAt:Date.now(), phase:'HEADERS', responseHeadersMs:0, bodyReadMs:0, parseMs:0, upstreamStatus:null, contentType:'unknown', responseKind:'none' };
     const attemptStarted = Date.now();
     const signingStarted = Date.now();
-    const body = requestBody(action, params);
+    const body = requestBody(action, params, endpoint.secret);
     Object.assign(profile, { requestId: body.requestId, page: page ?? 0, remainingMs: remaining });
     const signingMs = Date.now() - signingStarted;
     const serializationStarted = Date.now();
@@ -205,7 +207,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
     try {
       const fetchStarted = Date.now();
       const fetchOptions = { method: "POST", headers: { "content-type": "application/json" }, body: serializedBody, signal: controller.signal };
-      const response = staffDetail || preparedPrivate || sourceRead ? await fetchPrivateHub(process.env.HUB_API_URL, fetchOptions, profile,allowOutput) : await fetch(process.env.HUB_API_URL, fetchOptions);
+      const response = staffDetail || preparedPrivate || sourceRead ? await fetchPrivateHub(endpoint.url, fetchOptions, profile,allowOutput) : await fetch(endpoint.url, fetchOptions);
       const responseHeadersMs = Date.now() - fetchStarted;
       profile.responseHeadersMs = responseHeadersMs; profile.upstreamStatus = response.status;
       const contentType = response.headers?.get('content-type') || '';
@@ -251,6 +253,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
         profile.customerMatch = String(json.data?.customerCode || '').toUpperCase() === String(params.customerCode).toUpperCase();
         throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'), { upstreamStatus: response.status, failureType: 'contract' });
       }
+      if(endpoint.isolated&&(json.meta.requestId!==body.requestId||json.meta.detailDate!==(params.date||null)||String(json.data?.customerCode||'').toUpperCase()!==String(params.customerCode).toUpperCase()||(staffDetail&&json.data?.deliveryDate!==params.date)))throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'),{upstreamStatus:502,failureType:'contract'});
       profile.phase = 'DONE';
       if (Date.now() >= sharedDeadline) throw Object.assign(new Error('HUB_TIMEOUT'), {name:'AbortError'});
       if(sourceRead)console.info(JSON.stringify({component:'hub-source-profile',action,...profile,count:Array.isArray(json.data)?json.data.length:0,totalMs:Date.now()-started,result:'OK'}));
@@ -258,7 +261,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
       circuitSuccess(action, entered.circuit); state.metrics.success += 1; state.metrics.latencyMs.push(Date.now() - started);
       if(maxResponseBytes!==undefined&&state.metrics.latencyMs.length>1024)state.metrics.latencyMs.splice(0,state.metrics.latencyMs.length-1024);
       const ttlMs = action === "routePlan" ? Number(process.env.HUB_ROUTE_CACHE_TTL_MS || 300000) : 60000;
-      if (!privateRead && !preparedPrivate && !["datedAssignments", "periodAssignments", "staffDriverHistory"].includes(action)) cacheHubResponse(key, Date.now() + ttlMs, json);
+      if (!privateRead && !preparedPrivate && !["customerDetail", "datedAssignments", "periodAssignments", "staffDriverHistory"].includes(action)) cacheHubResponse(key, Date.now() + ttlMs, json);
       if (action === "mapBounds" || action === "customerDetail") console.info(JSON.stringify({ component: "hub-api-profile", action, requestId: body.requestId, attempt: attempt + 1, signingMs, requestSerializationMs, responseHeadersMs, bodyReadMs, parseMs, responseBytes: responseText == null ? null : Buffer.byteLength(responseText), hubDurationMs: Number(json.meta?.durationMs || 0), totalMs: Date.now() - attemptStarted }));
       if (action === "routePlan") console.info(JSON.stringify({ component: "hub-route", action, attempt: attempt + 1, attemptMs: Date.now() - attemptStarted, totalMs: Date.now() - started, hubDurationMs: Number(json.meta?.durationMs || 0), hubProfile: json.meta?.routeProfile || null, cache: "MISS" }));
       return json;
