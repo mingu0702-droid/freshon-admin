@@ -156,21 +156,24 @@
     const header=cameraRect(headerRect),top=Math.max(map.top,viewport.top,header&&header.width>=viewport.width/2?header.bottom:viewport.top);
     let visible=cameraRect({left:Math.max(map.left,viewport.left),right:Math.min(map.right,viewport.right),top,bottom:Math.min(map.bottom,viewport.bottom)});if(!visible)return null;
     let blocks=occluders.map(cameraRect).filter(Boolean);
-    const inside=(r,p)=>p.x>=r.left&&p.x<=r.right&&p.y>=r.top&&p.y<=r.bottom;
-    const preferred={x:(viewport.left+viewport.right)/2,y:(Math.max(viewport.top,header?.bottom||viewport.top)+viewport.bottom)/2};
-    if(!mobile&&inside(visible,preferred)&&!blocks.some(r=>inside(r,preferred)))return {...visible,...preferred,basis:'VIEWPORT_BELOW_HEADER'};
     if(mobile){
       const half=Math.min(visible.width/3,Math.max(0,Number(anchorWidth)||0)/2),height=Math.min(visible.height/2,Math.max(0,Number(anchorHeight)||0));
       visible=cameraRect({left:visible.left+half,right:visible.right-half,top:visible.top+height,bottom:visible.bottom});if(!visible)return null;
       blocks=blocks.map(r=>({...r,left:r.left-half,right:r.right+half,bottom:r.bottom+height}));
     }
-    let spaces=[visible];
-    for(const block of blocks)spaces=spaces.flatMap(area=>{
-      const l=Math.max(area.left,block.left),r=Math.min(area.right,block.right),t=Math.max(area.top,block.top),b=Math.min(area.bottom,block.bottom);
-      if(l>=r||t>=b)return [area];
-      return [{left:area.left,right:area.right,top:area.top,bottom:t},{left:area.left,right:area.right,top:b,bottom:area.bottom},{left:area.left,right:l,top:t,bottom:b},{left:r,right:area.right,top:t,bottom:b}].map(cameraRect).filter(Boolean);
-    });
-    spaces.sort((a,b)=>b.width*b.height-a.width*a.height||a.top-b.top||a.left-b.left);const area=spaces[0];
+    // The map's own centre can sit behind a floating detail card. Use the
+    // largest genuinely visible rectangle, including full-height space beside
+    // a card rather than the narrower strips produced by successive cuts.
+    blocks=blocks.map(block=>cameraRect({left:Math.max(visible.left,block.left),right:Math.min(visible.right,block.right),top:Math.max(visible.top,block.top),bottom:Math.min(visible.bottom,block.bottom)})).filter(Boolean);
+    const xs=[...new Set([visible.left,visible.right,...blocks.flatMap(block=>[block.left,block.right])])].sort((a,b)=>a-b);
+    const ys=[...new Set([visible.top,visible.bottom,...blocks.flatMap(block=>[block.top,block.bottom])])].sort((a,b)=>a-b);
+    let area=null;
+    for(let l=0;l<xs.length-1;l++)for(let r=l+1;r<xs.length;r++)for(let t=0;t<ys.length-1;t++)for(let b=t+1;b<ys.length;b++){
+      const candidate=cameraRect({left:xs[l],right:xs[r],top:ys[t],bottom:ys[b]});
+      if(blocks.some(block=>candidate.left<block.right&&candidate.right>block.left&&candidate.top<block.bottom&&candidate.bottom>block.top))continue;
+      const size=candidate.width*candidate.height,best=area?area.width*area.height:-1;
+      if(size>best||size===best&&(candidate.top<area.top||candidate.top===area.top&&candidate.left<area.left))area=candidate;
+    }
     return area?{...area,x:(area.left+area.right)/2,y:(area.top+area.bottom)/2,basis:'UNOBSCURED_MAP'}:null;
   }
   function cameraDomLayout(element) {
@@ -179,7 +182,7 @@
     const rect=node=>node?.getClientRects?.().length&&!node.hidden?node.getBoundingClientRect():null;
     const pin=rect(doc?.querySelector('#map .marker.selected'))||[...(doc?.querySelectorAll('#map .marker')||[])].map(rect).find(Boolean);
     return {mapRect:element?.getBoundingClientRect?.(),viewportRect,headerRect:rect(doc?.querySelector('#approvedSiteHeader')),
-      occluders:[...(doc?.querySelectorAll('#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#areaToggle,#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
+      occluders:[...(doc?.querySelectorAll('#leftPanel,#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#areaToggle,#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
       anchorHeight:pin?.height||0,
       anchorWidth:pin?.width||0,
       mobile:win.matchMedia?.('(max-width: 760px)')?.matches??Number(viewportRect.width)<=760};

@@ -32,6 +32,7 @@ export function baseTerritoryAvailability(stores,master,model=null){
  const reason=!master?.version?'MASTER_UNAVAILABLE':master.stale!==false?'MASTER_STALE':!model?.version?'MASTER_UNVERIFIED':master.version!==model.version?'MASTER_VERSION_CHANGED':null;
  const grouped=new Map();for(const row of stores){if(typeof row?.baseVehicle==='string'&&row.baseVehicle){const v=grouped.get(row.baseVehicle)||{vehicle:row.baseVehicle,storeCount:0,locatedCount:0};v.storeCount++;if(validPoint(row))v.locatedCount++;grouped.set(row.baseVehicle,v);}}
  for(const g of model?.groups||[])grouped.set(g.vehicle,{vehicle:g.vehicle,storeCount:g.storeCount,locatedCount:g.locatedCount,state:g.state,reason:g.reason,center:g.center});
- return {reason,checkedAt,version:master?.version||null,vehicles:[...grouped.values()].map(g=>({...g,state:reason?'unconfirmed':g.state||'unconfirmed',reason:reason||g.reason||null})).sort((a,b)=>a.vehicle.localeCompare(b.vehicle,'ko',{numeric:true}))};
+ const sourceError=/^FIXED_(?:MASTER|STORE)_[A-Z_]+$/.test(master?.lastError||'')?master.lastError:null;
+ return {reason,checkedAt,version:master?.version||null,sourceError,refresh:typeof master?.refresh==='string'&&/^[A-Z_]+$/.test(master.refresh)?master.refresh:null,vehicles:[...grouped.values()].map(g=>({...g,state:reason?'unconfirmed':g.state||'unconfirmed',reason:reason||g.reason||null})).sort((a,b)=>a.vehicle.localeCompare(b.vehicle,'ko',{numeric:true}))};
 }
 

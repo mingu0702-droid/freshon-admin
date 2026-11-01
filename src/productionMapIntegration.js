@@ -314,5 +314,5 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
       console.warn('Production published lookup restore request not acknowledged.');
     }
   }
-  return {requestPublishedModel,status:stageReadModel.status,initializePublishedReads:publishedReads.initialize,usePublishedHubReads:publishedReads.isActive,publishedReadStatus:publishedReads.status};
+  return {baseCache:mapFreshness.baseCache,requestPublishedModel,status:stageReadModel.status,initializePublishedReads:publishedReads.initialize,usePublishedHubReads:publishedReads.isActive,publishedReadStatus:publishedReads.status};
 }

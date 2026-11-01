@@ -11,6 +11,12 @@ function status(text){label.textContent=text;label.hidden=!enabled;for(const b o
 function renderForSelection(){
  if(bridge.state.mode!=='BASE_60D'){clear();status('기준호차 권역선은 매장·권역 지도에서 조회합니다.');return;}
  if(!enabled)return;
+ const current=bridge.fixedTerritoryMasterState?.();
+ if((!model||model.version!==current?.version)&&current?.stale===false){
+  try{const stores=bridge.fixedTerritoryStores(),candidate=buildBaseTerritories(stores);availability=baseTerritoryAvailability(stores,current,candidate);
+   if(!availability.reason){clear();model=candidate;lastReason=null;}
+  }catch{clear();model=null;lastReason='MASTER_VERSION_CHANGED';status(unavailable());return;}
+ }
  if(!model){status(unavailable());return;}
  if(!bridge.state.map||typeof kakao==='undefined'||typeof kakao.maps?.Polygon!=='function'){clear();lastReason='SDK_UNAVAILABLE';status(unavailable());return;}
  const master=bridge.fixedTerritoryMasterState?.();if(!master||master.stale!==false||master.version!==model.version){clear();lastReason=master?.stale!==false?'MASTER_STALE':'MASTER_VERSION_CHANGED';model=null;status(unavailable());return;}
@@ -37,5 +43,7 @@ async function load(){
 async function toggle(){if(bridge.state.mode!=='BASE_60D')return;enabled=!enabled;bridge.state.areaOn=false;if(!enabled){epoch++;busy=false;button.disabled=false;clear();status('고정배차 기준 권역');return;}await load();}
 for(const b of buttons){b.onclick=toggle;b.disabled=false;}const refresh=$('#refreshTerritories');if(refresh)refresh.onclick=()=>{if(bridge.state.mode!=='BASE_60D')return;enabled=true;model=null;clear();void load();};
 const logout=()=>{epoch++;enabled=false;busy=false;model=null;availability=null;lastReason=null;clear();$('#territoryVehicles')?.replaceChildren();status('고정배차 기준 권역');};
-window.addEventListener('map-navigation-logout',logout);window.addEventListener('pagehide',e=>{if(e.persisted)return;logout();window.removeEventListener('map-navigation-logout',logout);});
+const coordinatesChanged=()=>{if(!enabled)return;model=null;clear();renderForSelection();};
+window.addEventListener('map-coordinate-updated',coordinatesChanged);
+window.addEventListener('map-navigation-logout',logout);window.addEventListener('pagehide',e=>{if(e.persisted)return;logout();window.removeEventListener('map-navigation-logout',logout);window.removeEventListener('map-coordinate-updated',coordinatesChanged);});
 window.MapTerritoryUi=Object.freeze({toggle,renderForSelection,refresh:load,state:()=>({enabled,busy,vehicles:availability?.vehicles||[],reason:lastReason||availability?.reason||null,source:'FIXED_DISPATCH_PRIMARY',checkedAt:availability?.checkedAt||null,version:availability?.version||null,polygons:polygons.length,draws,requests})});status('고정배차 기준 권역');

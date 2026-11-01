@@ -33,6 +33,8 @@ import {createStoreRoadBudget} from './hubRoadBudget.js';
 import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
 import {callHub as manualPinVerifiedHubRead} from './phase2bHubReadClient.js';
 import {isRoadRouteRequest} from './roadRouteService.js';
+import {mountPrivateDriverContact,createDriverAssignmentReader} from "./privateDriverContact.js";
+import {parseDriverSheetValues} from "./driverSheetRows.js";
 import {createStageStaffSessionStore} from './staffSessionStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -118,7 +120,7 @@ const productionMap = mountProductionMapApi(app, {
   authOptions:{sessionStore:createStageStaffSessionStore()},
   roadRouteBudget:stageVerificationOnly&&process.env.OPSMAP_ROAD_BUDGET_STORE_KIND==='github-stage'
     ?createStoreRoadBudget({store:manualPinStore,accountHash:process.env.OPSMAP_ROAD_BUDGET_ACCOUNT_SHA256}):undefined,
-  mountPrivateExtensions: binding => { manualMapPins.mount(binding); approvedPhotoMount(binding); savedStageReview.mount(binding); },
+  mountPrivateExtensions: binding => { manualMapPins.mount(binding); approvedPhotoMount(binding); savedStageReview.mount(binding); mountPrivateDriverContact({...binding,readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),readAssignment:createDriverAssignmentReader({readBaseVehicles:codes=>productionMap.baseCache.get(codes),readStoredRoute:(date,vehicle)=>readRouteFromGoogleRouteIndex(date,vehicle)})}); },
   // Default OFF; exact approved hashes are required before legacy restoration is suppressed.
   hybridStoredIoEnabled: !!process.env.MAP_HUB_PUBLISHED_READS_APPROVAL,
   hubPublicationCutover: process.env.MAP_HUB_PUBLISHED_READS_APPROVAL || null,
@@ -1165,12 +1167,19 @@ async function readRowsFromGoogleSheet({ spreadsheetId, sheetName, sheetGid, fal
   const token = await getGoogleAccessToken();
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   const tab = await getGoogleSheetTab(headers, spreadsheetId, sheetName, sheetGid, fallbackName);
-  const range = `${tab.sheetName}!A:O`;
+  const range = `${tab.sheetName}!${cacheKey === "driver" ? "A1:S1001" : "A:O"}`;
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
   const response = await fetch(url, { headers });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
   const values = Array.isArray(body.values) ? body.values : [];
+  if (cacheKey === "driver") {
+    const parsed = parseDriverSheetValues(values);
+    const payload = { generatedAt: new Date().toISOString(), sheetName: tab.sheetName, columns: parsed.columns,
+      rows: parsed.rows.map(row => ({ ...row, _sourceSheet: tab.sheetName })), rowCount: parsed.rows.length, driverLayout: parsed.meta };
+    googleDriverMemoryCache = { readAt: Date.now(), payload };
+    return payload;
+  }
   const columns = (values[0] || []).map((value) => normalizeCell(value)).filter(Boolean);
   const rows = values.slice(1).map((line, index) => {
     const row = {};
@@ -1232,7 +1241,8 @@ async function readRouteFromGoogleRouteIndex(date, vehicle, { force = false } = 
   try {
     const route = JSON.parse(payloadText);
     if (!route?.stops?.length) return null;
-    const payload = { ...route, date: requestedDate, vehicle: requestedVehicle, source: "google-sheet-route-index", api: "monthly-dispatch-route" };
+    const sourceRouteIdentityVerified=normalizeDateValue(route.date||route.deliveryDate)===requestedDate&&normalizeVehicleValue(route.vehicle)===requestedVehicle;
+    const payload = { ...route, date: requestedDate, vehicle: requestedVehicle, source: "google-sheet-route-index", api: "monthly-dispatch-route", sourceRouteIdentityVerified };
     googleRouteIndexMemoryCache.routes.set(cacheKey, payload);
     return payload;
   } catch {
@@ -1349,9 +1359,13 @@ async function readDriverMasterFromGoogleSheet({ date = "" } = {}) {
       effectiveDate
     };
     const prev = byVehicle.get(vehicle);
-    if (!prev || item.effectiveDate >= prev.effectiveDate) byVehicle.set(vehicle, item);
+    if (!prev || item.effectiveDate >= prev.effectiveDate) {
+      const sameDate=prev&&item.effectiveDate===prev.effectiveDate;
+      const conflict=sameDate&&(prev.conflict||String(item.driverName||'').trim()!==String(prev.driverName||'').trim()||String(item.phone||'').replace(/\D/g,'')!==String(prev.phone||'').replace(/\D/g,''));
+      byVehicle.set(vehicle,{...item,conflict:!!conflict});
+    }
   }
-  return { generatedAt: sheet?.generatedAt || null, sheetName: sheet?.sheetName || null, rowCount: sheet?.rowCount || 0, vehicles: [...byVehicle.values()] };
+  return { generatedAt: sheet?.generatedAt || null, sheetName: sheet?.sheetName || null, rowCount: sheet?.rowCount || 0, vehicles: [...byVehicle.values()], driverLayout: sheet?.driverLayout || null };
 }
 
 function sheetRowIdentity(row) {

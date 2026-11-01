@@ -10,8 +10,7 @@ export function dispatchCenter(row={}){
  const sourceVerified=row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'')&&['VERIFIED_MASTER','UNASSIGNED'].includes(row.baseVehicleState);
  if(sourceVerified&&code){
   const name=({'011':'오산','012':'영남','013':'호남'})[code],latest=row.baseVehicleStale===false;
-  const checked=String(row.baseVehicleCheckedAt||'').slice(0,10);
-  return {code,name,state:latest?'LATEST_VERIFIED':'PREVIOUS_VERIFIED',checkedAt:row.baseVehicleCheckedAt||null,label:name+'센터'+(latest?'':checked?' · '+checked+' 기준':' · 이전 자료')};
+  return {code,name,state:latest?'LATEST_VERIFIED':'PREVIOUS_VERIFIED',checkedAt:row.baseVehicleCheckedAt||null,label:name+'센터'};
  }
  // An explicit center field describes the source record, not master freshness.
  // Never infer dispatch centers from an address or a delivery route's region.

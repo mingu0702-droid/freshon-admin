@@ -11,7 +11,7 @@ function fixture({stores=rows(),stale=false,fail=null}={}){
  const kakao={maps:{LatLng:function(lat,lng){this.lat=lat;this.lng=lng;},Polygon:class{constructor(options){this.options=options;polys.push(this);}setMap(map){this.map=map;}}}};
  const document={querySelector:s=>nodes.get(s)||null,createElement:()=>new Element()};
  vm.runInNewContext(fs.readFileSync(new URL('../public/territory-ui.mjs',import.meta.url),'utf8').replace(/^import[^\n]+\n/,''),{window,document,kakao,buildBaseTerritories,baseTerritoryAvailability});
- return {nodes,polys,state,master,events,ui:window.MapTerritoryUi,reads:()=>reads};
+ return {nodes,polys,state,master,events,stores,ui:window.MapTerritoryUi,reads:()=>reads};
 }
 test('stale master cannot draw current polygons and the missing HTML status is visibly created',async()=>{
  const f=fixture({stale:true});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'MASTER_STALE');assert.equal(f.reads(),0);assert.equal(f.nodes.get('#territoryStatus').hidden,false);assert.match(f.nodes.get('#territoryStatus').textContent,/2026-09-24/);assert.match(f.nodes.get('#territoryStatus').textContent,/이전 확인값/);assert.equal(f.ui.state().vehicles[0].reason,'MASTER_STALE');
@@ -36,4 +36,19 @@ test('same selection render reuses polygons and mode switch removes polygons onl
 });
 test('missing centers, too few points and collinear points remain unconfirmed',()=>{
  for(const stores of [rows('101','unknown'),rows().slice(0,2),rows().map((r,i)=>({...r,lat:37+i/10,lng:127+i/10}))]){const model=buildBaseTerritories(stores),a=baseTerritoryAvailability(stores,{version,stale:false},model);assert.equal(a.vehicles[0].state,'unconfirmed');assert.ok(a.vehicles[0].reason);}
+});
+
+// Resume-only boundaries: new source availability must not require another remote read.
+test('fresh source arriving after stale rejection builds boundaries on the next render without refetch',async()=>{
+ const f=fixture({stale:true});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);f.master.stale=false;f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().reason,null);assert.equal(f.reads(),0);
+});
+test('manual coordinate event rebuilds only territory geometry while preserving the map and pin owner',async()=>{
+ const f=fixture();await f.ui.toggle();const previous=f.polys[0],map=f.state.map;f.stores[0].lat=37.05;f.events.get('map-coordinate-updated')();assert.equal(previous.map,null);assert.equal(f.ui.state().polygons,1);assert.equal(f.state.map,map);assert(f.polys.at(-1).options.path.some(p=>p.lat===37.05));assert.equal(f.reads(),0);
+});
+test('four selected verified vehicles draw independently and center changes remove only excluded boundaries',async()=>{
+ const stores=[...rows('101'),...rows('122'),...rows('172'),...rows('202','yeongnam')],f=fixture({stores});f.state.selectedVehicles=['101','122','172','202'];await f.ui.toggle();assert.equal(f.ui.state().polygons,4);f.state.centerFilter='osan';f.ui.renderForSelection();assert.equal(f.ui.state().polygons,3);assert.equal(f.state.selectedVehicles.length,4);
+});
+test('source refresh error is safe metadata and does not upgrade historical source evidence',()=>{
+ const a=baseTerritoryAvailability(rows(),{version,stale:true,lastError:'FIXED_MASTER_FORBIDDEN',refresh:'ERROR'});assert.equal(a.reason,'MASTER_STALE');assert.equal(a.sourceError,'FIXED_MASTER_FORBIDDEN');assert.equal(a.refresh,'ERROR');assert(a.vehicles.every(g=>g.state==='unconfirmed'));
+ const b=baseTerritoryAvailability(rows(),{version,stale:true,lastError:'unsafe source response'});assert.equal(b.sourceError,null);
 });
