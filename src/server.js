@@ -16,6 +16,7 @@ import XLSX from "xlsx";
 import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
+import {attachDatedStopDriver} from './privateDriverContact.js';
 import {parseDriverSheetValues} from "./driverSheetRows.js";
 import { requireAdmin, requireView } from "./auth.js";
 import { generalMapResponse, redactPublicData } from "./publicDataSecurity.js";
@@ -3742,7 +3743,7 @@ function phase2bDriver(row) {
 function phase2bTodayVehicleSummary(vehicle, rows, date) {
   const sorted = rows.map((row, index) => ({ row, index, sort: deliveryTaskSortValue(row, index) }))
     .sort((a, b) => a.sort - b.sort);
-  const stops = sorted.map((item, index) => buildStopFromDeliveryTaskRow(item.row, vehicle, index + 1));
+  const stops = sorted.map((item, index) => attachDatedStopDriver(buildStopFromDeliveryTaskRow(item.row, vehicle, index + 1),phase2bDriver(item.row)));
   const completed = stops.filter((stop) => stop.appRecorded);
   const completedEvents = completed.map((stop) => ({ stop, time: Date.parse(stop.deliveryCompletedAt || "") })).filter((item) => Number.isFinite(item.time)).sort((a, b) => a.time - b.time);
   const totalStops = stops.length;
