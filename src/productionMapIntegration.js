@@ -26,6 +26,7 @@ import {createPrivateDetailCache,loadEncryptedPrivateSnapshot} from './privateDe
 import {createRoadRouteService,mountRoadRouteRoutes} from './roadRouteService.js';
 import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
 import {createHubRoadBudget} from './hubRoadBudget.js';
+import {assertDeliverySourceObservation} from './snapshotRefreshEvidence.js';
 import {createPrivateDetailReadScope,privateDetailFailure} from './privateDetailRequest.js';
 
 export function mountProductionMapApi(app,{
@@ -264,6 +265,9 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
         // Delivery adapter. It is not a rolling Hub vehicle relationship.
         try {
           const live = await phase2bTodayStatus(candidate);
+          if(live?.date!==candidate)throw new Error('DELIVERY_SOURCE_DATE_MISMATCH');
+          assertDeliverySourceObservation(live.sourceObservation,candidate);
+          if(live.sourceObservation.dateVerified!==true)throw new Error('DELIVERY_SOURCE_DATE_UNVERIFIED');
           const coordinates = new Map((snapshot?.rows || []).map((row) => [String(row.customerCode || row.code), row]));
           const actual = live.vehicles.flatMap((vehicle) => vehicle.stops.map((stop) => {
             const code = String(stop.customerCode || stop.code || "");
