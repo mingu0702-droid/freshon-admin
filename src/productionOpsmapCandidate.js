@@ -17,13 +17,14 @@ export function resolveProductionCredentials(env){
  const reuse=env.OPSMAP_PRODUCTION_REUSE_EXISTING_CREDENTIALS==='1';
  return {sessionSecret:env.OPSMAP_AUTH_SESSION_SECRET||(reuse?env.MAP_STAFF_SESSION_SECRET:undefined),authToken:env.OPSMAP_AUTH_STORE_TOKEN||(reuse?env.GITHUB_TOKEN:undefined),pinToken:env.OPSMAP_PIN_STORE_TOKEN||(reuse?env.GITHUB_TOKEN:undefined)};
 }
-export async function readProductionManualPinCustomer(readers,code){
+export async function readProductionManualPinCustomer(readers,code,{env=process.env,protectedRead=protectedHubRead}={}){
  const snapshot=await readers.readPhase2bSnapshot();
  const row=snapshot?.rows?.find(r=>r.customerCode===code);
  if(row?.address)return row;
  // An older map Snapshot is not the Customer registry. Read only this selected customer.
- if(!readers.readManualPinCustomer)return null;
- const hub=await readers.readManualPinCustomer(code);
+ const read=env.OPSMAP_PRIVATE_READER_ENABLED==='true'?customerCode=>protectedRead('customerDetail',{customerCode},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000}):readers.readManualPinCustomer;
+ if(!read)return null;
+ const hub=await read(code);
  return staffStoreDetail(hub?.data,{customerCode:code,date:null});
 }
 export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,sessionStore:isolatedTestStore,...readers}){
