@@ -2200,6 +2200,7 @@ async function readPhase2bSnapshot() {
 }
 
 async function refreshPhase2bSnapshot() {
+  if(phase2bDurableSnapshotStore&&process.env.OPSMAP_SNAPSHOT_INCREMENTAL_ENABLED!=='1')return null;
   if (!previewEnabled()) return null;
   if (phase2bSnapshotRefreshPromise) return phase2bSnapshotRefreshPromise;
   phase2bSnapshotRefreshPromise = (async () => {
@@ -2237,7 +2238,7 @@ async function refreshPhase2bSnapshot() {
       const code = normalizeCell(stop.customerCode || stop.code);
       const known = knownByCode.get(code) || {};
       if (!code) return;
-      const coordinates=snapshotStopCoordinates(stop,known);
+      const coordinates=snapshotStopCoordinates(stop,known,{preserveObserved:true});
       rows.push({ ...known, ...stop, customerCode: code, vehicle: vehicle.vehicle, ...coordinates, lastDeliveryDate: today });
     }));
     const next=phase2bSnapshotPayload(rows,refreshEvidence);
