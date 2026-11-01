@@ -36,7 +36,7 @@ test('dated matching driver phone requires a valid applicable date or actual ass
 });
 test('stored date/customer/vehicle mismatch and repeated conflicting dated records are rejected',async()=>{
  const normal={date:identity.date,vehicle:'101',stops:[{customerCode:identity.customerCode,driverName:name,driverPhone:phone}]};
- for(const route of [{...normal,date:'2026-11-01'},{...normal,vehicle:'122'},{...normal,stops:[{customerCode:'T900002'}]},{...normal,stops:[...normal.stops,{customerCode:identity.customerCode,driverName:'다른합성기사'}]}]){
+ for(const route of [{...normal,sourceRouteIdentityVerified:false},{...normal,date:'2026-11-01'},{...normal,vehicle:'122'},{...normal,stops:[{customerCode:'T900002'}]},{...normal,stops:[...normal.stops,{customerCode:identity.customerCode,driverName:'다른합성기사'}]}]){
   const read=createDriverAssignmentReader({readStoredRoute:async()=>route});await assert.rejects(()=>read({...identity,context:'DATE_ROUTE'}),e=>[404,409].includes(e.status));
  }
 });
