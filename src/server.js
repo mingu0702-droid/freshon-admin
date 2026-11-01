@@ -36,6 +36,7 @@ import {isRoadRouteRequest} from './roadRouteService.js';
 import {mountPrivateDriverContact,createDriverAssignmentReader} from "./privateDriverContact.js";
 import {parseDriverSheetValues} from "./driverSheetRows.js";
 import {createStageStaffSessionStore} from './staffSessionStore.js';
+import {createProductionSnapshotStore,materializeSnapshot} from './productionSnapshotStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +45,8 @@ const vehicleAreaSourceUrl = path.join(publicDir, "vehicle-data.js");
 const customerMasterSourceUrl = path.join(publicDir, "customer-master-20260604.json");
 const phase2bBundledSnapshotUrl = path.join(publicDir, "map-phase2b-snapshot.json");
 const phase2bRuntimeSnapshotUrl = path.join(os.tmpdir(), "freshon-map-phase2b-snapshot.json");
+const phase2bDurableSnapshotStore=(()=>{try{return createProductionSnapshotStore({token:process.env.OPSMAP_SNAPSHOT_STORE_TOKEN||process.env.GITHUB_TOKEN});}catch(error){console.warn(JSON.stringify({component:'phase2b-snapshot',event:'DURABLE_STORE_UNAVAILABLE',code:error.code||'SNAPSHOT_STORE_CONFIG'}));return null;}})();
+let phase2bDurableSnapshotLoad=null;
 const phase2bBoundsCache = createPhase2bReadCache({ name: "bounds", ttlMs: Number(process.env.PHASE2B_BOUNDS_CACHE_TTL_MS || 600000), staleMs: 120000, maxEntries: 64, maxBytes: 24 * 1024 * 1024 });
 const phase2bDetailCache = createPhase2bReadCache({ name: "detail", ttlMs: Number(process.env.PHASE2B_DETAIL_CACHE_TTL_MS || 1200000), staleMs: 300000, maxEntries: 512, maxBytes: 8 * 1024 * 1024 });
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
@@ -2289,6 +2292,10 @@ async function phase2bSnapshotDateRows(date, tiles) {
 
 async function readPhase2bSnapshot() {
   if (phase2bSnapshotMemory) return phase2bSnapshotMemory;
+  if(phase2bDurableSnapshotStore){
+    phase2bDurableSnapshotLoad ||= phase2bDurableSnapshotStore.load().then(value=>value?materializeSnapshot(value):null).catch(error=>{console.warn(JSON.stringify({component:'phase2b-snapshot',event:'DURABLE_READ_FAILED',code:error.code||'SNAPSHOT_STORE_READ'}));return null;});
+    const saved=await phase2bDurableSnapshotLoad;if(saved)return (phase2bSnapshotMemory=saved);
+  }
   for (const file of [phase2bRuntimeSnapshotUrl, phase2bBundledSnapshotUrl]) {
     try {
       const payload = JSON.parse(await fs.readFile(file, "utf8"));
@@ -4091,6 +4098,10 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
+if(phase2bDurableSnapshotStore){
+  const saved=await readPhase2bSnapshot();
+  console.info(JSON.stringify({component:'phase2b-snapshot',event:saved?.preservation?'DURABLE_LOADED':'DURABLE_NOT_LOADED',rowCount:saved?.preservation?saved.rowCount:null,version:saved?.preservation?.version||null,revision:saved?.preservation?.revision||null,automaticSyncVerified:false}));
+}
 const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
   // Four bounded metadata reads at most when an explicit pin is configured.

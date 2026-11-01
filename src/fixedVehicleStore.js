@@ -69,7 +69,7 @@ export function createFixedVehicleFileStore({env=process.env,appRoot=process.cwd
 
 // Reuses existing GITHUB_* credentials. Explicitly refuses public repositories.
 // Contents API SHA CAS gives atomic replace/lease across overlapping processes.
-export function createFixedVehicleStore({env=process.env,fetchImpl=fetch,now=Date.now}={}) {
+export function createPrivateGithubJsonStore({env=process.env,fetchImpl=fetch,now=Date.now}={}) {
   const repo=env.GITHUB_CACHE_REPO,token=env.GITHUB_TOKEN,branch=env.GITHUB_CACHE_BRANCH||'main';
   const prefix=(env.GITHUB_CACHE_DIR||'freshon-cache').replace(/^\/+|\/+$/g,'');
   const root=`https://api.github.com/repos/${repo}`;
@@ -105,6 +105,11 @@ export function createFixedVehicleStore({env=process.env,fetchImpl=fetch,now=Dat
     await guard();const r=await request(url(name),{method:'PUT',body:JSON.stringify({message:'Update private fixed vehicle projection',branch,content:Buffer.from(JSON.stringify(value),'utf8').toString('base64'),...(sha?{sha}:{})})});
     if([409,422].includes(r.status))fail('FIXED_STORE_CONFLICT');if(!r.ok)fail('FIXED_STORE_WRITE');
   }
+  return {read,write};
+}
+
+export function createFixedVehicleStore(options={}) {
+  const {read,write}=createPrivateGithubJsonStore(options),now=options.now||Date.now;
   const file='fixed-vehicle-projection-v1.json',leaseFile='fixed-vehicle-refresh-lease-v1.json';
   return {
     async load(){const {value}=await read(file);return value?validateFixedEnvelope(value,{materialize:false}).envelope:null;},
