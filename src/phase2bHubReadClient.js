@@ -119,7 +119,7 @@ export async function callHub(action, params, { useCache = true, privateRead = f
   const saved = cache.get(key);
   if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
   // Coalesce status/restore acknowledgements without caching private source values.
-  const coalesce = useCache || (['mapModelStatus','stageReadModelRequest'].includes(action) && deadline === undefined && !signal);
+  const coalesce = useCache || (['mapModelStatus','stageReadModelRequest'].includes(action) && deadline === undefined && !signal) || (action==='mapBounds'&&!privateRead&&maxResponseBytes===undefined&&deadline===undefined&&!signal);
   if (coalesce && inFlight.has(key)) return inFlight.get(key);
   const request = callHubUncached(action, params, key, privateRead || maxResponseBytes!==undefined || ['customerDetail','staffCustomerDetail','customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action), { deadline, signal, page, maxResponseBytes });
   if (coalesce) inFlight.set(key, request);

@@ -25,4 +25,13 @@ export function buildTerritories(facts,stores,{startDate,endDate}){
  for(const [code,r]of latest)for(const key of r.vehicles){if(!groups.has(key))groups.set(key,{vehicle:key,codes:new Set(),points:new Map(),latestDate:r.date});const g=groups.get(key);g.codes.add(code);if(r.date>g.latestDate)g.latestDate=r.date;const p=master.get(code);if(p&&r.vehicles.size===1)g.points.set(code,{customerCode:code,lat:p.lat,lng:p.lng});}
  return [...groups.values()].map(g=>{const points=[...g.points.values()],boundary=hull(points);return {vehicle:g.vehicle,storeCount:g.codes.size,locatedCount:points.length,latestDate:g.latestDate,points,boundary,state:boundary.length?'ready':'unconfirmed',reason:points.length<3?'LOCATIONS_REQUIRED':'NON_COLLINEAR_LOCATIONS_REQUIRED'};}).sort((a,b)=>Number(a.vehicle)-Number(b.vehicle));
 }
+// Safe status metadata explains rejection; it never promotes stale assignments.
+export function baseTerritoryAvailability(stores,master,model=null){
+ if(!Array.isArray(stores)||stores.length>15000)throw Error('TERRITORY_LIMIT');
+ const checkedAt=typeof master?.checkedAt==='string'&&/^\d{4}-\d{2}-\d{2}/.test(master.checkedAt)?master.checkedAt.slice(0,10):null;
+ const reason=!master?.version?'MASTER_UNAVAILABLE':master.stale!==false?'MASTER_STALE':!model?.version?'MASTER_UNVERIFIED':master.version!==model.version?'MASTER_VERSION_CHANGED':null;
+ const grouped=new Map();for(const row of stores){if(typeof row?.baseVehicle==='string'&&row.baseVehicle){const v=grouped.get(row.baseVehicle)||{vehicle:row.baseVehicle,storeCount:0,locatedCount:0};v.storeCount++;if(validPoint(row))v.locatedCount++;grouped.set(row.baseVehicle,v);}}
+ for(const g of model?.groups||[])grouped.set(g.vehicle,{vehicle:g.vehicle,storeCount:g.storeCount,locatedCount:g.locatedCount,state:g.state,reason:g.reason,center:g.center});
+ return {reason,checkedAt,version:master?.version||null,vehicles:[...grouped.values()].map(g=>({...g,state:reason?'unconfirmed':g.state||'unconfirmed',reason:reason||g.reason||null})).sort((a,b)=>a.vehicle.localeCompare(b.vehicle,'ko',{numeric:true}))};
+}
 

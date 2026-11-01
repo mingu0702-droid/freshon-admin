@@ -61,7 +61,7 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
     }
     const data = await service.list(req.query, sessionKey, { signal });
     // Session can expire or be revoked while the upstream request is in flight.
-    requireStaff(req, res, () => res.json({ ok: true, data }));
+    await requireStaff(req, res, () => res.json({ ok: true, data }));
   }));
   app.get('/api/map-phase2b/private/delivery-photos/media/:id', secure, handler(async (req, res, signal, sessionKey) => {
     const upstream = await service.openMedia(req.params.id, sessionKey, { signal });
@@ -77,7 +77,7 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
       throw new DeliveryPhotoError(!MEDIA_TYPES.has(type) ? 'INVALID_MEDIA_TYPE' : 'MEDIA_TOO_LARGE', !MEDIA_TYPES.has(type) ? 502 : 413,{stage:!MEDIA_TYPES.has(type)?'source-media':'source-size',sourceHttpStatus:upstream.status});
     }
     let permitted = false;
-    requireStaff(req, res, () => { permitted = true; });
+    await requireStaff(req, res, () => { permitted = true; });
     if (!permitted) { cancelBody(upstream.body); return; }
     if (!isSessionCurrent(req, sessionKey)) { cancelBody(upstream.body); throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401); }
     res.set('Content-Type', type);

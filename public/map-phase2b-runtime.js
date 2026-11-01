@@ -7,7 +7,7 @@
   let SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
   const ADMIN = new Map((window.ADMIN_FEATURES || []).map((feature) => [String(feature.properties?.code || ""), feature]));
   const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", areaOn: false, centerFilter: "", selectedDate: "", latestDate: "", map: null, overlays: [], representativeOverlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
-  let mapInitializing=null,mapObserver=null,mapHandlers=[],mapCamera=null;
+  let mapInitializing=null,mapObserver=null,mapHandlers=[],mapCamera=null,cameraSelection=0;
   let clusterPanel=null;
   let routeCameraEpoch=null;
   let operationStops = [], runFilter = "ALL";
@@ -314,7 +314,10 @@
       $('#freshnessState').textContent='전체 저장 매장 반영됨 — 운영 전체 매장 완전성 미검증';syncSourceFreshness();
     }catch(error){if(id!==initialRequestId||isSilentRequestError(error))return;setPeriodViewState('error');renderPeriodStoreList([]);$('#freshnessState').textContent='일반지도 조회 실패 — 매장 수 미확인';}
   }
-  async function initializePeriod() {
+  function pendingPeriodDelay(attempt) {
+    return Number.isInteger(attempt) && attempt >= 0 && attempt < 3 ? [15000, 30000, 60000][attempt] : null;
+  }
+  async function initializePeriod(pendingAttempt = 0) {
     generalMap=false;
     recentPeriodMode = true;
     const id = ++initialRequestId; clearTimeout(initialTimer);
@@ -332,7 +335,9 @@
         if (modelStatus.phase === "ERROR") throw new Error("기간 모델 확인 실패");
         setPeriodViewState("not-ready"); renderPeriodStoreList([]);
         $("#periodIdentity").textContent = $("#freshnessState").textContent = "기간 데이터를 준비 중입니다";
-        initialTimer = setTimeout(() => { if (id === initialRequestId) initializePeriod(); }, 15000);
+        const delay = pendingPeriodDelay(pendingAttempt);
+        if (delay !== null) initialTimer = setTimeout(() => { if (id === initialRequestId) initializePeriod(pendingAttempt + 1); }, delay);
+        else $("#freshnessState").textContent = "기간 자료를 준비 중입니다 · 기간 적용으로 다시 확인하세요";
         return;
       }
       const range = MapPeriodUi.recentRange(modelStatus);
@@ -390,7 +395,7 @@
     dateReady = false; periodListLimit = 0;
     setPeriodViewState("loading"); renderPeriodStoreList([]);
     $("#periodIdentity").textContent = "기간 이력 조회 중 · 이전 지도 유지 (선택 기간 결과 아님)";
-    let retryRequested = retry;
+    let retryRequested = retry, pendingAttempt = 0;
     async function read() {
       if (id !== periodRequestId || state.mode !== "BASE_60D") return;
       try {
@@ -410,7 +415,10 @@
           setPeriodViewState("not-ready"); renderPeriodStoreList([]);
           $("#freshnessState").textContent = "기간 데이터를 준비 중입니다";
           $("#periodIdentity").textContent = $("#freshnessState").textContent;
-          periodTimer = setTimeout(read, 5000); return;
+          const delay = pendingPeriodDelay(pendingAttempt++);
+          if (delay !== null) periodTimer = setTimeout(read, delay);
+          else $("#freshnessState").textContent = "기간 자료를 준비 중입니다 · 기간 적용으로 다시 확인하세요";
+          return;
         }
         if (payload.meta.startDate !== start || payload.meta.endDate !== end || !Array.isArray(payload.data)) throw new Error("기간 계약 불일치");
         periodRows = payload.data; periodMeta = payload.meta;
@@ -698,6 +706,7 @@
   }
 
   function requestMapFit() {
+    mapCamera?.releaseFocus();
     state.fitRequested = true;
     state.userMovedMap = false;
   }
@@ -807,7 +816,7 @@
       listen('center_changed',scheduleDetailPosition);listen('zoom_changed',scheduleDetailPosition);
       listen('idle',()=>{if(dateReady&&!markerFrame)markerFrame=requestAnimationFrame(()=>{markerFrame=null;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});});});
       listen('click',clearSelection);
-      if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});mapObserver.observe($('#map'));}
+      if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});for(const node of [$('#map'),$('#detailSection'),$('#approvedSiteHeader')])if(node)mapObserver.observe(node);}
       loadBaseMap();window.dispatchEvent(new CustomEvent('map-sdk-ready'));return state.map;
     }).catch(()=>{state.map=null;$('#map').dataset.sdkState='error';setMapMessage('카카오 지도 연결을 확인해 주세요. 매장 검색·목록은 계속 사용할 수 있습니다.');const retry=document.createElement('button');retry.id='retryMapSdk';retry.textContent='지도 다시 연결';retry.onclick=()=>{window.KakaoMapsAdapter.reset();void initMap();};$('#map').append(retry);loadBaseMap();return null;}).finally(()=>{mapInitializing=null;});
     return mapInitializing;
@@ -830,10 +839,11 @@
     state.polygons.forEach((item) => item.setMap?.(null));
     state.polygons = [];
     boundaryKey = "";
-    $("#areaToggle").setAttribute("data-geometry-count", "0");
+    if(!window.MapTerritoryUi)$("#areaToggle").setAttribute("data-geometry-count", "0");
   }
 
   function clearSelection() {
+    ++cameraSelection;mapCamera?.releaseFocus();
     closeClusterPanel();
     cancelAddressLookup();
     const temporarySelection = Boolean(state.selected?.outsideReason);
@@ -1044,7 +1054,7 @@
   }
 
   function drawSelectedBoundaries(selected) {
-    if (!state.map) return;
+    if (window.MapTerritoryUi || !state.map) return;
     selected = selected.length ? selected : selectedVehicles();
     if (state.mode === "BASE_60D" && periodBasis === "vehicle" && periodVehicleScope === "selected" && !selected.length) return;
     if (state.mode === "BASE_60D" && periodBasis === "driver" && state.driverKey) {
@@ -1106,7 +1116,15 @@
   }
   function positionDetailPopup() {
     // Screen-space right panel: map projection and zoom never set panel geometry.
-    window.MapDotUi?.dockDetail();
+    window.MapDotUi?.dockDetail();mapCamera?.scheduleFocus();
+  }
+
+  function focusMapPoint(row,{zoom=false,key=''}={}) {
+    if(!state.map||numberOrNull(row.lat)===null||numberOrNull(row.lng)===null)return;
+    state.fitRequested=false;state.suppressMapEventsUntil=Date.now()+700;
+    if(zoom&&state.map.getLevel()>5)state.map.setLevel(5);
+    const point=new kakao.maps.LatLng(Number(row.lat),Number(row.lng));
+    if(!mapCamera?.focus(point,{key:key||row.customerCode||row.vehicle||'selection'}))state.map.panTo(point);
   }
 
   function coordinateEvidenceLabel(row) {
@@ -1131,6 +1149,7 @@
   }
 
   function selectStore(row, element, focus, skipEnrich = false) {
+    ++cameraSelection;
     closeClusterPanel();
     ++state.detailRequestId;requestControllers.get("store-detail")?.controller.abort("superseded");
     window.MapStaff?.clear();
@@ -1157,11 +1176,6 @@
     if (element?.classList.contains("marker")) scrollSelectedInside('#runList','.runStop.selected');
     const unlocated = numberOrNull(row.lat) === null || numberOrNull(row.lng) === null;
     if (unlocated) $("#mapStatusSub").textContent = "좌표 미확인 · 지도 위치를 변경하지 않습니다.";
-    if (focus && state.map && numberOrNull(row.lat) !== null && numberOrNull(row.lng) !== null) {
-      state.suppressMapEventsUntil = Date.now() + 500;
-      if (state.map.getLevel() > 5) state.map.setLevel(5);
-      state.map.panTo(new kakao.maps.LatLng(Number(row.lat), Number(row.lng)));
-    }
     // Rebuild the selected entry in both views, even if it was inside a cluster
     // or outside the current vehicle filter. Its overlay must be above peers.
     if(state.map&&!unlocated){state.fitRequested=false;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});}
@@ -1195,12 +1209,13 @@
     if (innerWidth <= 760) { showMobileMap(); $("#mobileWorkspace").classList.add("collapsed"); }
     $("#detailClose")?.addEventListener("click", clearSelection);
     if ((routeMode || row.virtual) && numberOrNull(row.lat) !== null && numberOrNull(row.lng) !== null) renderNearest(row);
-    $("#mobileMapView")?.addEventListener("click", () => {showMobileMap();if(!unlocated&&state.map){state.suppressMapEventsUntil=Date.now()+500;state.map.panTo(new kakao.maps.LatLng(Number(row.lat),Number(row.lng)));}});
+    $("#mobileMapView")?.addEventListener("click", () => {showMobileMap();if(!unlocated)focusMapPoint(row);});
     $("#mobileRouteView")?.addEventListener("click", () => {
       if (vehicle && [...$("#mobileVehicle").options].some((option) => option.value === vehicle)) $("#mobileVehicle").value = vehicle;
       setSelectedVehicles(vehicle ? [vehicle] : []); refreshVehicleUi(true);
       showMobileMap(); activateSheet("runs");
     });
+    if(!unlocated)focusMapPoint(row,{zoom:focus});
     if (!skipEnrich && row.customerCode) enrichStoreDetail(row, element);
   }
 
@@ -1244,7 +1259,8 @@
   async function selectVehicleStatus(row, element) {
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     element?.classList.add("selected");
-    const vehicle = normalizeVehicle(row.vehicle);
+    const vehicle = normalizeVehicle(row.vehicle),focusOwner=++cameraSelection,focusInteraction=mapCamera?.interaction();
+    const focusRepresentative=()=>{if(focusOwner===cameraSelection&&focusInteraction===mapCamera?.interaction()&&selectedVehicles().includes(vehicle))focusMapPoint(row,{key:'vehicle:'+vehicle});};
     if (state.mode === 'BASE_60D') {
       // A baseline hocha pin must show all of its stored shops. The historical
       // period view has no confirmed stop order: do not invent a road route.
@@ -1253,7 +1269,7 @@
       if ([...$('#mobileBaseVehicle').options].some(option => option.value === vehicle)) $('#mobileBaseVehicle').value = vehicle;
       refreshVehicleUi(false); requestMapFit(); await loadBaseMap();
       $('#mapStatusSub').textContent = `${vehicleLabel(vehicle)} 전체 매장 · 실제 운행순서는 일자별 운행에서 확인`;
-      return;
+      focusRepresentative();return;
     }
     if (selectedVehicles().length !== 1 || selectedVehicles()[0] !== vehicle) {
       setSelectedVehicles([vehicle]);
@@ -1261,7 +1277,7 @@
       refreshVehicleUi(false); requestMapFit(); await loadBaseMap();
     }
     $('#operationVehicle').value = vehicle;
-    await loadOperationStatus(vehicle, true, row);
+    await loadOperationStatus(vehicle, true, row);focusRepresentative();
   }
 
   function renderTodayVehicleRoute(vehicle, status) {
@@ -2134,15 +2150,19 @@
   function isSilentRequestError(error) { return Boolean(error?.silent || error?.name === "AbortError"); }
   async function fetchJson(url, options = {}) {
     const { channel = new URL(url, location.href).pathname, timeout = 30000, ttl = 0 } = options;
+    const shareable = (!options.method || options.method === "GET") && !options.headers && !options.body && !new URL(url, location.href).pathname.includes("/private/");
     const previous = requestControllers.get(channel);
+    if (shareable && previous?.shareable && previous.url === url && previous.promise) return previous.promise;
     if (previous) previous.controller.abort("superseded");
     const cached = memoryResponses.get(url);
     if (ttl && cached?.expiresAt > Date.now()) { requestControllers.delete(channel); return cached.value; }
     const controller = new AbortController();
     const token = Symbol(channel);
-    requestControllers.set(channel, { controller, token });
+    const entry = { controller, token, url, shareable, promise: null };
+    requestControllers.set(channel, entry);
     const timer = setTimeout(() => controller.abort("timeout"), timeout);
     const started = performance.now();
+    const pending = (async () => {
     try {
       const response = await fetch(url, { cache: "no-store", signal: controller.signal, headers: options.headers, method:options.method,body:options.body });
       const json = await response.json();
@@ -2162,6 +2182,9 @@
       clearTimeout(timer);
       if (requestControllers.get(channel)?.token === token) requestControllers.delete(channel);
     }
+    })();
+    entry.promise = pending;
+    return pending;
   }
   function showMobileMap() {
     if (innerWidth > 760) return;
@@ -2484,7 +2507,7 @@
     initMap,
     stores:()=>allStores.slice(),
     refreshManualCoordinates(){indexedRows=null;pointIndex=null;for(const row of allStores)window.MapManualPins?.apply(row);if(state.selected){window.MapManualPins?.apply(state.selected);refreshCoordinateEvidence(state.selected);}cancelManualRoadRoute();state.fitRequested=false;void loadBaseMap();window.dispatchEvent(new Event('map-coordinate-updated'));},
-    fixedTerritoryMasterState:()=>({version:baseVehicleMeta?.version||null,stale:baseVehicleMeta?.stale!==false}),
+    fixedTerritoryMasterState:()=>({version:baseVehicleMeta?.version||null,stale:baseVehicleMeta?.stale!==false,checkedAt:baseVehicleMeta?.checkedAt||null}),
     fixedTerritoryStores:()=>window.MapUiLocalBridge.navigationStores().map(row=>({...row,...(baseVehicles.get(String(row.customerCode))||{baseVehicle:'',baseVehicleState:'UNKNOWN'})})),
     loadBaseVehicleMasterForTerritory:()=>loadBaseVehicles(window.MapUiLocalBridge.navigationStores().map(row=>String(row.customerCode||''))),
     navigationStores:()=>{if(state.mode==='DATE_ROUTE')return isDailyDataReady()?allStores.map(row=>({...row})):[];const list=new Map(latestSnapshotRows.map(r=>[r.customerCode,r]));for(const row of allStores){const prior=list.get(row.customerCode);const conflict=prior&&row.address&&prior.address&&row.address.replace(/\s/g,'')!==prior.address.replace(/\s/g,'');list.set(row.customerCode,{...row,...(conflict?{coordinateStatus:'CONFLICT'}:{})});}return [...list.values()];},
