@@ -177,10 +177,11 @@
     const doc=element?.ownerDocument,win=doc?.defaultView||root,visual=win.visualViewport;
     const viewportRect={left:visual?.offsetLeft||0,top:visual?.offsetTop||0,width:visual?.width||win.innerWidth,height:visual?.height||win.innerHeight};
     const rect=node=>node?.getClientRects?.().length&&!node.hidden?node.getBoundingClientRect():null;
+    const pin=rect(doc?.querySelector('#map .marker.selected'))||[...(doc?.querySelectorAll('#map .marker')||[])].map(rect).find(Boolean);
     return {mapRect:element?.getBoundingClientRect?.(),viewportRect,headerRect:rect(doc?.querySelector('#approvedSiteHeader')),
       occluders:[...(doc?.querySelectorAll('#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#areaToggle,#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
-      anchorHeight:rect(doc?.querySelector('#map .marker.selected'))?.height||0,
-      anchorWidth:rect(doc?.querySelector('#map .marker.selected'))?.width||0,
+      anchorHeight:pin?.height||0,
+      anchorWidth:pin?.width||0,
       mobile:win.matchMedia?.('(max-width: 760px)')?.matches??Number(viewportRect.width)<=760};
   }
   function createCamera({map, element, clock=Date.now, raf=fn=>requestAnimationFrame(fn), cancelRaf=id=>cancelAnimationFrame(id),layout=()=>cameraDomLayout(element),pixel=(x,y)=>root.kakao?.maps?.Point?new root.kakao.maps.Point(x,y):{x,y}}={}) {
