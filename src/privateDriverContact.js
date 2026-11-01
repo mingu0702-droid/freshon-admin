@@ -33,7 +33,7 @@ export function createDriverAssignmentReader({ readBaseVehicles, readStoredRoute
     }
     if (!readStoredRoute) throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
     const route = await readStoredRoute(date, vehicle);
-    if (!route || clean(route.date || route.deliveryDate) !== date || driverVehicle(route.vehicle) !== vehicle)
+    if (!route || route.sourceRouteIdentityVerified===false || clean(route.date || route.deliveryDate) !== date || driverVehicle(route.vehicle) !== vehicle)
       throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED', 409);
     const matches = (route.stops || []).filter(row => clean(row.customerCode || row.code) === customerCode);
     if (!matches.length) throw fail('DRIVER_ASSIGNMENT_NOT_FOUND', 404);

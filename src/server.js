@@ -1144,7 +1144,8 @@ async function readRouteFromGoogleRouteIndex(date, vehicle, { force = false } = 
   try {
     const route = JSON.parse(payloadText);
     if (!route?.stops?.length) return null;
-    const payload = { ...route, date: requestedDate, vehicle: requestedVehicle, source: "google-sheet-route-index", api: "monthly-dispatch-route" };
+    const sourceRouteIdentityVerified=normalizeDateValue(route.date||route.deliveryDate)===requestedDate&&normalizeVehicleValue(route.vehicle)===requestedVehicle;
+    const payload = { ...route, date: requestedDate, vehicle: requestedVehicle, source: "google-sheet-route-index", api: "monthly-dispatch-route", sourceRouteIdentityVerified };
     googleRouteIndexMemoryCache.routes.set(cacheKey, payload);
     return payload;
   } catch {
