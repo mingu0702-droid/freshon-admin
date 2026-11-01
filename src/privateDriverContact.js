@@ -1,4 +1,4 @@
-import {assertDeliverySourceObservation} from './snapshotRefreshEvidence.js';
+import {assertDeliverySourceObservation,sourceTaskDate} from './snapshotRefreshEvidence.js';
 // Selected-customer employee projection. Phone fields never enter publicMapValue.
 const clean = value => String(value ?? '').normalize('NFKC').trim();
 const key = value => clean(value).replace(/\s+/g, '').toLowerCase();
@@ -45,7 +45,7 @@ export function createDatedDriverRouteReader({ today, readTodayStatus, readStore
     if (!route) throw fail('DRIVER_ASSIGNMENT_NOT_FOUND', 404);
     if (route.date !== date || !Array.isArray(route.stops) || route.stops.some(row => driverVehicle(row.vehicle) !== vehicle))
       throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED', 409);
-    return { ...route, driverName: '', driverPhone: null, sourceRouteIdentityVerified: true };
+    return { ...route, driverName: '', driverPhone: null, sourceRouteIdentityVerified: true, currentDeliveryVerified: true };
   };
 }
 
@@ -75,6 +75,7 @@ export function createDriverAssignmentReader({ readBaseVehicles, readStoredRoute
     if (identities.size > 1 || phones.size > 1) throw fail('DRIVER_ASSIGNMENT_CONFLICT', 409);
     const row = matches[0];
     return { vehicle, basis: 'DATED_ASSIGNMENT', date,
+      currentDeliveryVerified: route.currentDeliveryVerified === true,
       driverName: clean(row.driverName || route.driverName),
       driverPhone: driverPhone(row.driverPhone || route.driverPhone), stale: false };
   };
@@ -103,13 +104,19 @@ export function createDriverContactReader({ readDriverMaster, readAssignment } =
     const name = context === 'DATE_ROUTE' ? assignedName : masterName;
     // A different historical driver's current phone is never substituted.
     const sameDriver = assignedName && key(assignedName) === key(masterName);
+    const currentSnapshot = assignment.currentDeliveryVerified === true
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(master.generatedAt || '')
+      && sourceTaskDate(master.generatedAt) === date;
+    const assignmentPhone = driverPhone(assignment.driverPhone);
     const phone = context === 'DATE_ROUTE'
-      ? driverPhone(assignment.driverPhone) || (sameDriver && effectiveDate ? driverPhone(row?.phone) : null)
+      ? assignmentPhone || (sameDriver && (effectiveDate || currentSnapshot) ? driverPhone(row?.phone) : null)
       : driverPhone(row?.phone);
+    const phoneBasis = !name || !phone ? 'UNAVAILABLE' : context === 'BASE' ? 'DRIVER_MASTER'
+      : assignmentPhone ? 'DATED_ASSIGNMENT' : effectiveDate ? 'EFFECTIVE_DATED_MASTER' : 'CURRENT_DELIVERY_MATCHED_MASTER';
     return { ok: true, data: { driverName: name || null, phone: name ? phone : null },
       meta: { ...identity, state: name ? phone ? 'REGISTERED' : 'PHONE_UNREGISTERED' : 'UNREGISTERED',
         source: context === 'DATE_ROUTE' ? 'DATED_ASSIGNMENT' : 'DRIVER_MASTER',
-        effectiveDate, checkedAt: master.generatedAt || null,
+        effectiveDate, phoneBasis, checkedAt: master.generatedAt || null,
         assignmentVersion: assignment.version || null, assignmentCheckedAt: assignment.checkedAt || null,
         assignmentStale: assignment.stale === true, effectiveDateVerified: !!effectiveDate } };
   };
