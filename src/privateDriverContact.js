@@ -15,6 +15,11 @@ export function driverPhone(value) {
   const text = clean(value), compact = text.replace(/[\s()-]/g, '');
   return /^(?:0\d{8,10}|\+82\d{8,10})$/.test(compact) ? text : null;
 }
+export function attachDatedStopDriver(stop, driver = {}) {
+  stop.driverName = clean(driver.driverName);
+  Object.defineProperty(stop, 'driverPhone', { value: driverPhone(driver.driverPhone), enumerable: false });
+  return stop;
+}
 const fail = (code, status = 503) => Object.assign(Error(code), { code, status });
 
 // Today's existing Delivery read is authoritative; failed proof never falls back.
