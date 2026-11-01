@@ -1,3 +1,4 @@
+import {assertDeliverySourceObservation} from './snapshotRefreshEvidence.js';
 // Selected-customer employee projection. Phone fields never enter publicMapValue.
 const clean = value => String(value ?? '').normalize('NFKC').trim();
 const key = value => clean(value).replace(/\s+/g, '').toLowerCase();
@@ -15,6 +16,33 @@ export function driverPhone(value) {
   return /^(?:0\d{8,10}|\+82\d{8,10})$/.test(compact) ? text : null;
 }
 const fail = (code, status = 503) => Object.assign(Error(code), { code, status });
+
+// Today's existing Delivery read is authoritative; failed proof never falls back.
+export function createDatedDriverRouteReader({ today, readTodayStatus, readStoredRoute } = {}) {
+  return async (date, vehicle) => {
+    if (typeof today !== 'function') throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
+    const current = today();
+    if (!validDate(current) || !validDate(date) || date > current) throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED', 409);
+    if (date !== current) {
+      if (!readStoredRoute) throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
+      return readStoredRoute(date, vehicle);
+    }
+    if (!readTodayStatus) throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
+    let status;
+    try { status = await readTodayStatus(date); }
+    catch { throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE'); }
+    try { assertDeliverySourceObservation(status?.sourceObservation, date); }
+    catch { throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED', 409); }
+    if (status?.date !== date || !Array.isArray(status.vehicles)) throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED', 409);
+    const matches = status.vehicles.filter(row => driverVehicle(row.vehicle) === vehicle);
+    if (matches.length > 1) throw fail('DRIVER_ASSIGNMENT_CONFLICT', 409);
+    const route = matches[0];
+    if (!route) throw fail('DRIVER_ASSIGNMENT_NOT_FOUND', 404);
+    if (route.date !== date || !Array.isArray(route.stops) || route.stops.some(row => driverVehicle(row.vehicle) !== vehicle))
+      throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED', 409);
+    return { ...route, sourceRouteIdentityVerified: true };
+  };
+}
 
 // Use existing cached fixed-dispatch evidence or a stored dated route; no collection.
 export function createDriverAssignmentReader({ readBaseVehicles, readStoredRoute } = {}) {
