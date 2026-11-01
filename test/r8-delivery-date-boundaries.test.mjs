@@ -42,3 +42,10 @@ test('actual dated rows do not certify collection, publication or automatic sync
  assert.equal(result.sourceFreshness.sourceDateVerified,true);
  assert.equal(result.sourceFreshness.collectionVerified,false);assert.equal(result.sourceFreshness.publicationVerified,false);assert.equal(result.sourceFreshness.automaticSyncVerified,false);
 });
+test('explicit partial display can retain only date-verified nonempty rows without completion claims',()=>{
+ const partial=observe([{deliveryDate:date}],{complete:false});
+ assert.equal(assertDeliverySourceObservation(partial,date,{requireComplete:false}),partial);
+ assert.equal(deliverySourceReadState(partial,{date}),'SOURCE_INCOMPLETE');
+ assert.throws(()=>assertDeliverySourceObservation(observe([],{complete:false}),date,{requireComplete:false}),{code:'DELIVERY_SOURCE_INCOMPLETE'});
+ assert.throws(()=>assertDeliverySourceObservation(observe([{deliveryDate:'2026-10-31'}],{complete:false}),date,{requireComplete:false}),{code:'DELIVERY_SOURCE_DATE_MISMATCH'});
+});

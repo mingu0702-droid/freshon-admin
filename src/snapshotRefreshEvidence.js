@@ -18,14 +18,14 @@ export function deliverySourceObservation(rows,{date,complete=false,pages=0,reso
  }
  return {source:'DELIVERY_ADMIN_READ',requestedDate:date,complete:complete===true,pages,responseRows:rows.length,matchingDateRows,wrongDateRows,unverifiedDateRows,unassignedRows,conflictingDateRows,dateVerified:rows.length>0&&matchingDateRows===rows.length&&conflictingDateRows===0};
 }
-export function assertDeliverySourceObservation(value,date){
+export function assertDeliverySourceObservation(value,date,{requireComplete=true}={}){
  const fail=code=>{throw Object.assign(Error(code),{code});};
  if(!validDay(date)||value?.source!=='DELIVERY_ADMIN_READ'||value.requestedDate!==date)fail('DELIVERY_SOURCE_OBSERVATION_CONTRACT');
  const counts=['responseRows','matchingDateRows','wrongDateRows','unverifiedDateRows','unassignedRows'];
  if(counts.some(key=>!Number.isSafeInteger(value[key])||value[key]<0)||value.responseRows!==value.matchingDateRows+value.wrongDateRows+value.unverifiedDateRows||value.unassignedRows>value.responseRows||!Number.isSafeInteger(value.conflictingDateRows??0)||(value.conflictingDateRows??0)<0||(value.conflictingDateRows??0)>value.responseRows||!Number.isSafeInteger(value.pages)||value.pages<1||value.pages>20)fail('DELIVERY_SOURCE_OBSERVATION_CONTRACT');
  if(value.wrongDateRows||(value.conflictingDateRows||0)>0)fail('DELIVERY_SOURCE_DATE_MISMATCH');
  if(value.unverifiedDateRows)fail('DELIVERY_SOURCE_DATE_UNVERIFIED');
- if(value.complete!==true)fail('DELIVERY_SOURCE_INCOMPLETE');
+ if(value.complete!==true&&(requireComplete||value.responseRows===0))fail('DELIVERY_SOURCE_INCOMPLETE');
  if(value.responseRows>0&&(value.dateVerified!==true||value.matchingDateRows!==value.responseRows))fail('DELIVERY_SOURCE_DATE_UNVERIFIED');
  return value;
 }
