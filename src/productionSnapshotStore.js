@@ -4,11 +4,12 @@ import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
 const fail=code=>{throw Object.assign(Error(code),{code});};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const day=value=>{const s=typeof value==='string'?value.slice(0,10):'';return /^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s?s:null;};
+const coordinateValue=value=>typeof value==='number'||typeof value==='string'&&value.trim()!=='';
 const textFields=['customerName','vehicle','baseVehicle','confirmedVehicle','primaryVehicle90d','baseVehicleGroup','baseVehicleState','baseVehicleSource','baseVehicleVersion','baseVehicleCheckedAt','centerCode','centerGroup','areaLabel','region','coordinateSource','coordinateAccuracy','coordinateStatus','resolutionStatus','addressHash','originalAddressHash','deliveryStatus','status','appUsageGroup','routeOrder','sequence'];
 export function snapshotStopCoordinates(stop,known={}){
  const point=row=>{
   const lat=row?.lat,lng=row?.lng;
-  return lat!==null&&lat!==undefined&&lat!==''&&lng!==null&&lng!==undefined&&lng!==''&&Number.isFinite(Number(lat))&&Number.isFinite(Number(lng))&&Math.abs(Number(lat))<=90&&Math.abs(Number(lng))<=180?{lat:Number(lat),lng:Number(lng)}:null;
+  return coordinateValue(lat)&&coordinateValue(lng)&&Number.isFinite(Number(lat))&&Number.isFinite(Number(lng))&&Math.abs(Number(lat))<=90&&Math.abs(Number(lng))<=180?{lat:Number(lat),lng:Number(lng)}:null;
  };
  const oldHash=known.originalAddressHash||known.addressHash,newHash=stop.originalAddressHash||stop.addressHash;
  const changed=!!oldHash&&!!newHash&&oldHash!==newHash,old=point(known),fresh=point(stop);
@@ -27,7 +28,7 @@ function projectRow(input){
  for(const key of ['appRecorded','isActualDateStop','baseVehicleStale'])if(typeof input[key]==='boolean')row[key]=input[key];
  for(const key of ['lastDeliveryDate','deliveryDate']){const d=day(input[key]);if(d)row[key]=d;}
  const lat=input.lat??input.latitude,lng=input.lng??input.longitude;
- if(lat!==null&&lat!==undefined&&lat!==''&&lng!==null&&lng!==undefined&&lng!==''&&Number.isFinite(Number(lat))&&Number.isFinite(Number(lng))&&Math.abs(Number(lat))<=90&&Math.abs(Number(lng))<=180){row.lat=Number(lat);row.lng=Number(lng);}else {row.lat=null;row.lng=null;}
+ if(coordinateValue(lat)&&coordinateValue(lng)&&Number.isFinite(Number(lat))&&Number.isFinite(Number(lng))&&Math.abs(Number(lat))<=90&&Math.abs(Number(lng))<=180){row.lat=Number(lat);row.lng=Number(lng);}else {row.lat=null;row.lng=null;}
  return row;
 }
 function rowsOf(input){
