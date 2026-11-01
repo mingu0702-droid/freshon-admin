@@ -35,7 +35,8 @@
     if (isDetail) { controller?.abort(); controller = local; }
     else if (!isLogout) { authController?.abort(); authController = local; }
     const start = performance.now(); let status = 0, receivedAt = null, serverTiming = '', headersMs = 0, parseMs = 0;
-    const timer = setTimeout(() => local.abort(), isDetail ? 20000 : 10000);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; local.abort(); }, isDetail ? 20000 : 10000);
     try {
       const response = await fetch('/api/map-phase2b/' + path, { ...options, cache: 'no-store', credentials: 'same-origin',
         signal: local.signal, headers: { 'content-type': 'application/json', ...options.headers } });
@@ -53,6 +54,9 @@
       const expiresAt = Number(response.headers.get('x-staff-expires-at')), idleExpiresAt = Number(response.headers.get('x-staff-idle-expires-at'));
       if (isDetail && expiresAt && idleExpiresAt && !local.signal.aborted) deadline({ authenticated: true, expiresAt, idleExpiresAt });
       return value;
+    } catch (error) {
+      if (timedOut && error.name === 'AbortError') throw Object.assign(new Error('REQUEST_TIMEOUT'), {status:504});
+      throw error;
     } finally {
       clearTimeout(timer);
       metrics.push({ endpoint: path.split('?')[0], status, browserTotalMs: +(performance.now()-start).toFixed(2), headersMs: +headersMs.toFixed(2), parseMs: +parseMs.toFixed(2), receivedAt, serverTiming });

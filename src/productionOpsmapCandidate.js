@@ -7,6 +7,10 @@ import {createManualPinAuthorizer} from './opsmap-abc/manualPinAuthorization.js'
 import {createManualMapPins} from './opsmap-abc/manualMapPins.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {staffStoreDetail} from './opsmap-abc/mapStaffDetail.js';
+import {callHub as protectedHubRead} from './opsmap-abc/phase2bHubReadClient.js';
+export function createProductionDetailReader(existing,{env=process.env,protectedRead=protectedHubRead}={}){
+ return (action,params,options)=>env.OPSMAP_PRIVATE_READER_ENABLED==='true'&&['customerDetail','staffCustomerDetail'].includes(action)?protectedRead(action,params,options):existing(action,params,options);
+}
 function existingJavaScriptKey(publicDir){try{const f=path.join(publicDir,'daily-routes.html');if(fsSync.statSync(f).size>1048576)return '';const keys=[...new Set([...fsSync.readFileSync(f,'utf8').matchAll(/appkey=([a-f0-9]{32})/gi)].map(m=>m[1]))];return keys.length===1?keys[0]:'';}catch{return '';}}
 export function resolveProductionCredentials(env){
  // Explicit opt-in reuses only this Production process credentials; never reads Stage configuration.
@@ -33,7 +37,7 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  let pinStore;try{if(env.OPSMAP_PIN_STORE_REPO&&credentials.pinToken)pinStore=createProductionManualPinGithubStore({repo:env.OPSMAP_PIN_STORE_REPO,token:credentials.pinToken,branch:env.OPSMAP_PIN_STORE_BRANCH});}catch{/* Remain closed; an invalid store never falls back to Stage. */}
  const pinEnv={...authEnv,OPSMAP_MANUAL_PIN_STORE_FILE:undefined,OPSMAP_MANUAL_PIN_WRITES:env.OPSMAP_PRODUCTION_PIN_WRITES==='1'?'1':'0',OPSMAP_MANUAL_PIN_DURABLE_CONFIRMED:pinStore?'1':'0',OPSMAP_MANUAL_PIN_WRITER_ID:env.OPSMAP_PIN_WRITER_ID,OPSMAP_MANUAL_PIN_WRITE_AUTHORIZATION:env.OPSMAP_PIN_WRITE_AUTHORIZATION,OPSMAP_MANUAL_PIN_WRITE_APPROVAL_ID:env.OPSMAP_PIN_WRITE_APPROVAL_ID};
  const manual=createManualMapPins({env:pinEnv,appRoot:path.resolve(publicDir,'..'),store:pinStore,backupStore:pinStore?.backupStore,authorizeWrite:createManualPinAuthorizer({env:pinEnv}),readCoordinate:code=>{const row=readers.getSnapshotMemory()?.rows?.find(r=>r.customerCode===code);return row?{latitude:row.lat,longitude:row.lng}:null;},readCustomer:code=>readProductionManualPinCustomer(readers,code)});
- const api=mountProductionMapApi(router,{...readers,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,mountPrivateExtensions:binding=>{
+ const api=mountProductionMapApi(router,{...readers,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,mountPrivateExtensions:binding=>{
   manual.mount(binding);
   router.get('/api/vehicle-driver-master',binding.requireStaff,async(q,r)=>{try{if(!readers.readDriverMaster)return r.status(503).json({error:'DRIVER_SOURCE_NOT_CONFIGURED'});const value=await readers.readDriverMaster(String(q.query.date||''));return binding.requireStaff(q,r,()=>r.json(redactPublicData(value)));}catch{return r.status(503).json({error:'DRIVER_SOURCE_UNAVAILABLE'});}});
   router.get('/api/map-phase2b/preview/search',binding.requireStaff,async(q,r)=>{const text=String(q.query.q||'').trim();if(!text||text.length>200)return r.status(400).json({error:'INVALID_QUERY'});try{const value=await (readers.readUnifiedSearch?readers.readUnifiedSearch(text):readers.callHub?.('unifiedSearch',{q:text,limit:20}));if(!value)return r.status(503).json({error:'SEARCH_SOURCE_NOT_CONFIGURED'});return binding.requireStaff(q,r,()=>r.json(redactPublicData(value)));}catch{return r.status(503).json({error:'SEARCH_SOURCE_UNAVAILABLE'});}});
