@@ -7,7 +7,7 @@
   let SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
   const ADMIN = new Map((window.ADMIN_FEATURES || []).map((feature) => [String(feature.properties?.code || ""), feature]));
   const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", areaOn: false, centerFilter: "", selectedDate: "", latestDate: "", map: null, overlays: [], representativeOverlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
-  let mapInitializing=null,mapObserver=null,mapHandlers=[],mapCamera=null;
+  let mapInitializing=null,mapObserver=null,mapHandlers=[],mapCamera=null,cameraSelection=0;
   let clusterPanel=null;
   let routeCameraEpoch=null;
   let operationStops = [], runFilter = "ALL";
@@ -678,6 +678,7 @@
   }
 
   function requestMapFit() {
+    mapCamera?.releaseFocus();
     state.fitRequested = true;
     state.userMovedMap = false;
   }
@@ -786,7 +787,7 @@
       listen('center_changed',scheduleDetailPosition);listen('zoom_changed',scheduleDetailPosition);
       listen('idle',()=>{if(dateReady&&!markerFrame)markerFrame=requestAnimationFrame(()=>{markerFrame=null;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});});});
       listen('click',clearSelection);
-      if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});mapObserver.observe($('#map'));}
+      if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});for(const node of [$('#map'),$('#leftPanel'),$('#detailSection'),$('#approvedSiteHeader')])if(node)mapObserver.observe(node);}
       loadBaseMap();window.dispatchEvent(new CustomEvent('map-sdk-ready'));return state.map;
     }).catch(()=>{state.map=null;$('#map').dataset.sdkState='error';setMapMessage('카카오 지도 연결을 확인해 주세요. 매장 검색·목록은 계속 사용할 수 있습니다.');const retry=document.createElement('button');retry.id='retryMapSdk';retry.textContent='지도 다시 연결';retry.onclick=()=>{window.KakaoMapsAdapter.reset();void initMap();};$('#map').append(retry);loadBaseMap();return null;}).finally(()=>{mapInitializing=null;});
     return mapInitializing;
@@ -813,6 +814,7 @@
   }
 
   function clearSelection() {
+    ++cameraSelection;mapCamera?.releaseFocus();
     closeClusterPanel();
     cancelAddressLookup();
     const temporarySelection = Boolean(state.selected?.outsideReason);
@@ -1085,7 +1087,15 @@
   }
   function positionDetailPopup() {
     // Screen-space right panel: map projection and zoom never set panel geometry.
-    window.MapDotUi?.dockDetail();
+    window.MapDotUi?.dockDetail();mapCamera?.scheduleFocus();
+  }
+
+  function focusMapPoint(row,{zoom=false,key=''}={}) {
+    if(!state.map||numberOrNull(row.lat)===null||numberOrNull(row.lng)===null)return;
+    state.fitRequested=false;state.suppressMapEventsUntil=Date.now()+700;
+    if(zoom&&state.map.getLevel()>5)state.map.setLevel(5);
+    const point=new kakao.maps.LatLng(Number(row.lat),Number(row.lng));
+    if(!mapCamera?.focus(point,{key:key||row.customerCode||row.vehicle||'selection'}))state.map.panTo(point);
   }
 
   function coordinateEvidenceLabel(row) {
@@ -1110,6 +1120,7 @@
   }
 
   function selectStore(row, element, focus, skipEnrich = false) {
+    ++cameraSelection;
     closeClusterPanel();
     ++state.detailRequestId;requestControllers.get("store-detail")?.controller.abort("superseded");
     window.MapStaff?.clear();
@@ -1136,11 +1147,6 @@
     if (element?.classList.contains("marker")) scrollSelectedInside('#runList','.runStop.selected');
     const unlocated = numberOrNull(row.lat) === null || numberOrNull(row.lng) === null;
     if (unlocated) $("#mapStatusSub").textContent = "좌표 미확인 · 지도 위치를 변경하지 않습니다.";
-    if (focus && state.map && numberOrNull(row.lat) !== null && numberOrNull(row.lng) !== null) {
-      state.suppressMapEventsUntil = Date.now() + 500;
-      if (state.map.getLevel() > 5) state.map.setLevel(5);
-      state.map.panTo(new kakao.maps.LatLng(Number(row.lat), Number(row.lng)));
-    }
     // Rebuild the selected entry in both views, even if it was inside a cluster
     // or outside the current vehicle filter. Its overlay must be above peers.
     if(state.map&&!unlocated){state.fitRequested=false;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});}
@@ -1174,12 +1180,13 @@
     if (innerWidth <= 760) { showMobileMap(); $("#mobileWorkspace").classList.add("collapsed"); }
     $("#detailClose")?.addEventListener("click", clearSelection);
     if ((routeMode || row.virtual) && numberOrNull(row.lat) !== null && numberOrNull(row.lng) !== null) renderNearest(row);
-    $("#mobileMapView")?.addEventListener("click", () => {showMobileMap();if(!unlocated&&state.map){state.suppressMapEventsUntil=Date.now()+500;state.map.panTo(new kakao.maps.LatLng(Number(row.lat),Number(row.lng)));}});
+    $("#mobileMapView")?.addEventListener("click", () => {showMobileMap();if(!unlocated)focusMapPoint(row);});
     $("#mobileRouteView")?.addEventListener("click", () => {
       if (vehicle && [...$("#mobileVehicle").options].some((option) => option.value === vehicle)) $("#mobileVehicle").value = vehicle;
       setSelectedVehicles(vehicle ? [vehicle] : []); refreshVehicleUi(true);
       showMobileMap(); activateSheet("runs");
     });
+    if(!unlocated)focusMapPoint(row,{zoom:focus});
     if (!skipEnrich && row.customerCode) enrichStoreDetail(row, element);
   }
 
@@ -1223,7 +1230,8 @@
   async function selectVehicleStatus(row, element) {
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     element?.classList.add("selected");
-    const vehicle = normalizeVehicle(row.vehicle);
+    const vehicle = normalizeVehicle(row.vehicle),focusOwner=++cameraSelection,focusInteraction=mapCamera?.interaction();
+    const focusRepresentative=()=>{if(focusOwner===cameraSelection&&focusInteraction===mapCamera?.interaction()&&selectedVehicles().includes(vehicle))focusMapPoint(row,{key:'vehicle:'+vehicle});};
     if (state.mode === 'BASE_60D') {
       // A baseline hocha pin must show all of its stored shops. The historical
       // period view has no confirmed stop order: do not invent a road route.
@@ -1232,7 +1240,7 @@
       if ([...$('#mobileBaseVehicle').options].some(option => option.value === vehicle)) $('#mobileBaseVehicle').value = vehicle;
       refreshVehicleUi(false); requestMapFit(); await loadBaseMap();
       $('#mapStatusSub').textContent = `${vehicleLabel(vehicle)} 전체 매장 · 실제 운행순서는 일자별 운행에서 확인`;
-      return;
+      focusRepresentative();return;
     }
     if (selectedVehicles().length !== 1 || selectedVehicles()[0] !== vehicle) {
       setSelectedVehicles([vehicle]);
@@ -1240,7 +1248,7 @@
       refreshVehicleUi(false); requestMapFit(); await loadBaseMap();
     }
     $('#operationVehicle').value = vehicle;
-    await loadOperationStatus(vehicle, true, row);
+    await loadOperationStatus(vehicle, true, row);focusRepresentative();
   }
 
   function renderTodayVehicleRoute(vehicle, status) {
@@ -2361,6 +2369,7 @@
     $$('[data-sheet-tab]').forEach((button) => button.onclick = () => activateSheet(button.dataset.sheetTab));
     $("#sheetExpand").onclick = () => { if ($("#mobileWorkspace").classList.contains("collapsed")) $("#mobileWorkspace").classList.remove("collapsed"); else $("#mobileWorkspace").classList.toggle("expanded"); };
     window.addEventListener("resize", () => { if (innerWidth <= 760) showMobileMap(); else hideMobileMap(); activateSheet(); requestAnimationFrame(positionDetailPopup); });
+    for(const event of ['resize','scroll'])window.visualViewport?.addEventListener(event,()=>{mapCamera?.scheduleRelayout();scheduleDetailPosition();});
     document.addEventListener("keydown", (event) => { if (event.key === "Escape") {cancelManualRoadRoute(); cancelNewAreaWork(); clearSelection(); } });
   }
 
