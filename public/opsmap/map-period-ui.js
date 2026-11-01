@@ -148,7 +148,7 @@
   }
   function baseVehicleLabel(row) {
     const label=row.baseVehicle?row.baseVehicle+'호':row.baseVehicleState==='UNASSIGNED'?'미지정':row.baseVehicleState==='NOT_IN_MASTER'?'마스터 미등록':row.baseVehicleState==='CONFLICT'?'기준 충돌':'확인 필요';
-    return label+(row.baseVehicleStale?' · 이전 확인값':'');
+    return label;
   }
   root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile, parseAreaInput,
     regionForAddress, areaExportRows, areaTsv, acceptsBaseVersion, mergeBaseVehicles, baseVehicleLabel });
