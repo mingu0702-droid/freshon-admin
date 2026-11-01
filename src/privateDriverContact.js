@@ -45,7 +45,7 @@ export function createDatedDriverRouteReader({ today, readTodayStatus, readStore
     if (!route) throw fail('DRIVER_ASSIGNMENT_NOT_FOUND', 404);
     if (route.date !== date || !Array.isArray(route.stops) || route.stops.some(row => driverVehicle(row.vehicle) !== vehicle))
       throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED', 409);
-    return { ...route, sourceRouteIdentityVerified: true };
+    return { ...route, driverName: '', driverPhone: null, sourceRouteIdentityVerified: true };
   };
 }
 
