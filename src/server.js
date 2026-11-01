@@ -1,3 +1,4 @@
+import {deliverySourceObservation,assertDeliverySourceObservation} from "./snapshotRefreshEvidence.js";
 import {assertDatedAssignmentSource} from './phase2bAssignments.js';
 ﻿import express from "express";
 import { spawn } from "node:child_process";
@@ -123,7 +124,7 @@ const productionMap = mountProductionMapApi(app, {
   authOptions:{sessionStore:createStageStaffSessionStore()},
   roadRouteBudget:stageVerificationOnly&&process.env.OPSMAP_ROAD_BUDGET_STORE_KIND==='github-stage'
     ?createStoreRoadBudget({store:manualPinStore,accountHash:process.env.OPSMAP_ROAD_BUDGET_ACCOUNT_SHA256}):undefined,
-  mountPrivateExtensions: binding => { manualMapPins.mount(binding); approvedPhotoMount(binding); savedStageReview.mount(binding); mountPrivateDriverContact({...binding,readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),readAssignment:createDriverAssignmentReader({readBaseVehicles:codes=>productionMap.baseCache.get(codes),readStoredRoute:(date,vehicle)=>readRouteFromGoogleRouteIndex(date,vehicle)})}); },
+  mountPrivateExtensions: binding => { manualMapPins.mount(binding); approvedPhotoMount(binding); savedStageReview.mount(binding); mountPrivateDriverContact({...binding,enabled:()=>process.env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),readAssignment:createDriverAssignmentReader({readBaseVehicles:codes=>productionMap.baseCache.get(codes),readStoredRoute:(date,vehicle)=>readRouteFromGoogleRouteIndex(date,vehicle)})}); },
   // Default OFF; exact approved hashes are required before legacy restoration is suppressed.
   hybridStoredIoEnabled: !!process.env.MAP_HUB_PUBLISHED_READS_APPROVAL,
   hubPublicationCutover: process.env.MAP_HUB_PUBLISHED_READS_APPROVAL || null,
@@ -2395,10 +2396,12 @@ function schedulePhase2bSnapshotRefresh(delayMs = 5000) {
   phase2bSnapshotRetryTimer.unref();
 }
 
-async function fetchDeliveryTaskRowsForDate(date) {
+async function fetchDeliveryTaskRowsForDate(date,{requireComplete=true}={}) {
   const dateParam = `${date}T00:00:00+09:00`;
   const pageSize = 300;
   const allRows = [];
+  let completed = false, pages = 0,declaredTotal=null,declaredPages=null,pagingValid=true,identityComplete=true;
+  const seenIds=new Set();
   for (let page = 0; page < 20; page += 1) {
     const query = new URLSearchParams({
       logisticsCenterId: "1",
@@ -2408,13 +2411,23 @@ async function fetchDeliveryTaskRowsForDate(date) {
     query.append("enteringDatedAtBetween", dateParam);
     query.append("enteringDatedAtBetween", dateParam);
     const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
-    if(payload?.ok===false || payload?.success===false || payload?.error)throw new Error('DELIVERY_TASK_PAGE_FAILED');
-    const rows=[payload,payload?.data,payload?.data?.content,payload?.data?.items,payload?.data?.list,payload?.data?.rows,payload?.content,payload?.items,payload?.list,payload?.rows].find(Array.isArray);
-    if(!rows || rows.some(row=>!row || typeof row!=='object' || Array.isArray(row)))throw new Error('DELIVERY_TASK_PAGE_INVALID');
+    if(payload?.ok===false||payload?.success===false||payload?.error)throw Object.assign(Error('DELIVERY_TASK_PAGE_FAILED'),{code:'DELIVERY_TASK_PAGE_FAILED'});
+    pages++;
+    const rows = extractDeliveryTaskRows(payload);
+    if(!rows.length&&![payload,payload?.data,payload?.data?.content,payload?.data?.items,payload?.data?.list,payload?.data?.rows,payload?.content,payload?.items,payload?.list,payload?.rows].some(Array.isArray))throw Object.assign(Error('DELIVERY_TASK_PAGE_INVALID'),{code:'DELIVERY_TASK_PAGE_INVALID'});
+    const total=Number(payload?.totalElements??payload?.data?.totalElements),pageCount=Number(payload?.totalPages??payload?.data?.totalPages);
+    if(!Number.isSafeInteger(total)||total<0||!Number.isSafeInteger(pageCount)||pageCount<0)pagingValid=false;
+    else if(declaredTotal!==null&&(declaredTotal!==total||declaredPages!==pageCount))pagingValid=false;
+    else{declaredTotal=total;declaredPages=pageCount;}
+    for(const row of rows){const id=String(row?.id??row?.taskId??'');if(!/^\d+$/.test(id)||seenIds.has(id))identityComplete=false;seenIds.add(id);}
     allRows.push(...rows);
-    if (rows.length < pageSize) return allRows;
+    if(pagingValid&&identityComplete&&allRows.length===declaredTotal&&pages===declaredPages){completed=true;break;}
+    if (rows.length < pageSize) { completed = pagingValid&&identityComplete&&declaredTotal===0&&allRows.length===0&&pages===1; break; }
   }
-  throw new Error('DELIVERY_TASK_PAGE_LIMIT');
+  const observation=deliverySourceObservation(allRows,{date,complete:completed,pages,resolveVehicle:deliveryTaskVehicle});
+  try{assertDeliverySourceObservation(observation,date,{requireComplete});}catch(error){error.sourceObservation=observation;throw error;}
+  Object.defineProperty(allRows,"sourceObservation",{value:observation,enumerable:false});
+  return allRows;
 }
 
 async function buildDailyRouteFromDeliveryAdmin({ date, vehicle, center = "" }) {
@@ -3310,6 +3323,7 @@ app.get("/api/monthly-dispatch-summary", requireView, async (req, res) => {
 });
 
 app.get("/api/vehicle-driver-master", requireView, async (req, res) => {
+  if(stageVerificationOnly&&process.env.OPSMAP_DRIVER_CONTACT_ENABLED!=='1')return res.status(503).set('Cache-Control','private, no-store').json({ok:false,error:'DRIVER_CONTACT_DISABLED'});
   try {
     res.json(await readDriverMasterFromGoogleSheet({ date: String(req.query.date || "") }));
   } catch (error) {
@@ -3900,16 +3914,18 @@ async function phase2bTodayStatus(date) {
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   if (phase2bTodayInflight.has(date)) return phase2bTodayInflight.get(date);
   const pending = (async () => {
-    const rows = await fetchDeliveryTaskRowsForDate(date);
+    const rows = await fetchDeliveryTaskRowsForDate(date,{requireComplete:false});
     const byVehicle = new Map();
     rows.forEach((row) => {
-      const vehicle = String(deliveryTaskVehicle(row)||'');
+      const vehicle = deliveryTaskVehicle(row);
+      if (!vehicle) return;
       if (!byVehicle.has(vehicle)) byVehicle.set(vehicle, []);
       byVehicle.get(vehicle).push(row);
     });
     const value = {
       date,
       generatedAt: new Date().toISOString(),
+      sourceObservation: rows.sourceObservation,
       vehicles: [...byVehicle].map(([vehicle, vehicleRows]) => phase2bTodayVehicleSummary(vehicle, vehicleRows, date)).sort((a, b) => a.vehicle.localeCompare(b.vehicle, "ko", { numeric: true }))
     };
     phase2bTodayCache.set(date, { expiresAt: Date.now() + 60000, value });
@@ -4080,7 +4096,8 @@ app.get("/api/map-phase2b/preview/today-status", requireView, async (req, res) =
     const vehicles = vehicle ? payload.vehicles.filter((row) => normalizeVehicleValue(row.vehicle) === vehicle) : payload.vehicles;
     return res.json({ ok: true, data: { ...payload, vehicles }, error: null });
   } catch (error) {
-    return res.status(error.status || 502).json({ ok: false, data: null, error: error.message || String(error) });
+    const sourceCode=error.message==='STAGE_SOURCE_AUTOMATION_DISABLED'?'DELIVERY_SOURCE_DISABLED':/^DELIVERY_(?:SOURCE|TASK)_[A-Z_]+$/.test(error.code||'')?error.code:'SOURCE_FAILED';
+    return res.status(503).json({ok:false,data:null,error:'DELIVERY_STATUS_UNAVAILABLE',sourceCode,sourceHttp:[400,401,403,404,429,500,502,503,504].includes(error.diagnostic?.status)?error.diagnostic.status:null,sourceObservation:error.sourceObservation?.source==='DELIVERY_ADMIN_READ'&&error.sourceObservation.requestedDate===date?error.sourceObservation:null});
   }
 });
 

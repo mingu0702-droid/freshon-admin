@@ -743,6 +743,7 @@
   }
   const selectedDriverContact=window.MapDriverContact?.create({getTarget:()=>$('#detailDriver'),onRender:()=>positionDetailPopup()});
   function refreshSelectedDriverContact(){
+    if(window.OPSMAP_DRIVER_CONTACT_ENABLED!==true)return;
     const row=state.selected;if(!row||!selectedDriverContact)return;
     const route=state.mode==='DATE_ROUTE',vehicle=normalizeVehicle(route?row.vehicle:row.baseVehicle),date=driverReferenceDate();
     const verifiedBase=row.baseVehicleState==='VERIFIED_MASTER'&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'');
@@ -757,6 +758,7 @@
     if(!routeMode&&(!verifiedBase||!vehicle)){detail.text+=' · 기준호차 확인 필요';return detail;}
     // A historical delivery driver is never the current base-vehicle assignment.
     if(routeMode)return {...detail,text:String(row.driverName||'').trim()||'담당 기사 정보 없음',title:'',source:'ASSIGNMENT'};
+    if(window.OPSMAP_DRIVER_CONTACT_ENABLED!==true)return {...detail,text:'기사 연락처 미연결',source:'DISABLED'};
     const driver=driverMasterDate===date?driverByVehicle.get(vehicle):null;
     const name=String(driver?.driverName||driver?.name||'').trim();
     if(!name){
@@ -778,6 +780,7 @@
     if(state.selected&&label&&value){const detail=storeDriverDetail(state.selected);label.textContent=detail.label;value.textContent=detail.text;value.title=detail.title;value.dataset.source=detail.source;refreshSelectedDriverContact();}
   }
   async function refreshDriverMaster() {
+    if(window.OPSMAP_DRIVER_CONTACT_ENABLED!==true){driverMasterState='disabled';driverByVehicle.clear();syncDriverMasterUi();return;}
     const observedDate=driverReferenceDate(),observedMode=state.mode;
     if(!observedDate)return;
     if(driverMasterDate===observedDate&&['ready','error'].includes(driverMasterState)&&Date.now()-driverMasterCheckedAt<300000){syncDriverMasterUi();return;}
@@ -797,6 +800,7 @@
     } finally {if(driverMasterPending?.id===requestId)driverMasterPending=null;}
   }
 
+  window.addEventListener('map-driver-capability',()=>{selectedDriverContact?.clear();void refreshDriverMaster();});
   window.addEventListener('pagehide',event=>{if(!event.persisted)mapCamera?.dispose();});
 
   function naturalCompare(a, b) {

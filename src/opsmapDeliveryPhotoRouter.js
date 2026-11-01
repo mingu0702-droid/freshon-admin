@@ -53,6 +53,8 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
   };
   app.get('/api/map-phase2b/private/delivery-photos', secure, handler(async (req, res, signal, sessionKey) => {
     const identity = validatePhotoQuery(req.query);
+    // OFF blocks upstream authentication preparation as well as media reads.
+    if (!(typeof enabled === 'function' ? enabled() === true : enabled === true)) throw new DeliveryPhotoError('PHOTO_SOURCE_DISABLED', 503);
     if (identity.deliveryId && typeof prepareSource === 'function') {
       // Discovery never starts login; only a staff-authorized exact record may.
       if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);

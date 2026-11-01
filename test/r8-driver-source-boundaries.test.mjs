@@ -110,7 +110,7 @@ test('real generic driver route returns safe 503 and remains alive for health an
   const end=source.indexOf('\n});',start);
   assert.ok(end>=start,'Missing route terminator');
   vm.runInNewContext(source.slice(start,end+'\n});'.length),{
-    app,requireView:(_req,_res,next)=>next(),
+    app,stageVerificationOnly:false,requireView:(_req,_res,next)=>next(),
     readDriverMasterFromGoogleSheet:async()=>{throw Object.assign(Error(marker),{code:'DRIVER_CREDENTIALS_MISSING'});}
   });
   app.get('/health',(_req,res)=>res.json({ok:true}));

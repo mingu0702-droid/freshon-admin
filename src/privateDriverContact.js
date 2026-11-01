@@ -82,10 +82,11 @@ export function createDriverContactReader({ readDriverMaster, readAssignment } =
   };
 }
 
-export function mountPrivateDriverContact({ app, requireStaff, readDriverMaster, readAssignment }) {
+export function mountPrivateDriverContact({ app, requireStaff, readDriverMaster, readAssignment, enabled=()=>true }) {
   const read = createDriverContactReader({ readDriverMaster, readAssignment });
   app.get('/api/map-phase2b/private/driver-contact', requireStaff, async (req, res) => {
     res.set('Cache-Control', 'private, no-store');
+    if(enabled()!==true)return res.status(503).json({ok:false,error:'DRIVER_CONTACT_DISABLED'});
     try {
       const result = await read(req.query);
       return requireStaff(req, res, () => res.json(result));
