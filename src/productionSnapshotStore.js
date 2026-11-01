@@ -60,7 +60,11 @@ export function mergePreservedSnapshot(previous,incoming,{now=Date.now}={}){
  }
  const rows=rowsOf([...merged.values()]);
  const latestDate=rows.map(r=>r.lastDeliveryDate||r.deliveryDate).filter(Boolean).sort().pop()||previous.latestDate;
- const body={...fresh,latestDate,startDate:[previous.startDate,fresh.startDate].filter(Boolean).sort()[0]||null,rowCount:rows.length,rows};delete body.sha256;
+ // A stale writer may contain new rows but an older completed-read cursor.
+ // Preserve the validated frontier independently from selected-date observations.
+ const checkpointDate=[previous.checkpointDate,fresh.checkpointDate].filter(Boolean).sort().pop()||null;
+ const evidence=previous.sourceEvidence.targetDate&&(!fresh.sourceEvidence.targetDate||previous.sourceEvidence.targetDate>fresh.sourceEvidence.targetDate)?previous.sourceEvidence:fresh.sourceEvidence;
+ const body={...fresh,latestDate,startDate:[previous.startDate,fresh.startDate].filter(Boolean).sort()[0]||null,checkpointDate,sourceEvidence:{...evidence,checkedThrough:checkpointDate},rowCount:rows.length,rows};delete body.sha256;
  return {...body,sha256:hash(body)};
 }
 export function materializeSnapshot(value){
