@@ -3976,6 +3976,10 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
+if(phase2bDurableSnapshotStore){
+  const saved=await readPhase2bSnapshot();
+  console.info(JSON.stringify({component:'phase2b-snapshot',event:saved?.preservation?'DURABLE_LOADED':'DURABLE_NOT_LOADED',rowCount:saved?.preservation?saved.rowCount:null,version:saved?.preservation?.version||null,revision:saved?.preservation?.revision||null,automaticSyncVerified:false}));
+}
 const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
   void productionMap.requestPublishedModel();
