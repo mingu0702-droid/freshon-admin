@@ -136,7 +136,7 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
   try {
     await privateSnapshotReady;
     const detailIdentity={customerCode,date:detailDate,view:storeView?'store':'notes'};
-    const legacyLoader=()=>privateDetails.get(detailIdentity,{preferFresh:req.query.refresh==='1',loader:async()=>{
+    const legacyLoader=()=>privateDetails.get(detailIdentity,{preferFresh:req.query.refresh==='1'||env.OPSMAP_PRIVATE_READER_ENABLED==='true',loader:async()=>{
       const upstreamStarted=performance.now();
       let hub;
       try{hub=await callHub(storeView?'customerDetail':'staffCustomerDetail',storeView?{customerCode}:{customerCode,date:detailDate},{useCache:false,privateRead:true,...(storeView?{maxResponseBytes:65536,deadline:Date.now()+15000}:{})});}
