@@ -26,6 +26,7 @@ import {createRoadRouteService,mountRoadRouteRoutes} from './roadRouteService.js
 import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
 import {createHubRoadBudget} from './hubRoadBudget.js';
 import {createPrivateDetailReadScope,privateDetailFailure} from './privateDetailRequest.js';
+import {mountCurrentCustomerDetailRoute} from './currentCustomerDetailRoute.js';
 
 export function mountProductionMapApi(app,{
   previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
@@ -55,6 +56,7 @@ export function mountProductionMapApi(app,{
   app.use('/api/map-phase2b/auth',securityAudit,mapStaff.router);
   mountMapStaffEntryGate(app,mapStaff.requireStaff);
   app.use('/api/map-phase2b/private',mapStaff.requireStaff);
+  mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
   app.get('/api/map-phase2b/private/map-sdk-config',(req,res)=>{
     const javascriptKey=String(env.KAKAO_MAP_JAVASCRIPT_KEY||'').trim();
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED'});

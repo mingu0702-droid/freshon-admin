@@ -1188,7 +1188,7 @@
       </div>`;
     requestAnimationFrame(positionDetailPopup);
     $(".detailMore")?.addEventListener("toggle", positionDetailPopup);
-    const openStaff = kind => {const trigger=kind==='history'?$("#staffHistory"):$("#staffNotes");trigger.after($("#staffAuxContent"));window.MapStaff?.open({ kind, customerCode: row.customerCode, date: routeMode ? state.selectedDate : row.lastDeliveryDate || state.selectedDate,
+    const openStaff = kind => {const trigger=kind==='history'?$("#staffHistory"):$("#staffNotes");trigger.after($("#staffAuxContent"));window.MapStaff?.open({ kind, current:kind==='notes'&&!routeMode, customerCode: row.customerCode, date: routeMode ? state.selectedDate : row.lastDeliveryDate || state.selectedDate,
       rangeStart: routeMode ? daysBefore(state.selectedDate, 59) : state.rangeStart, rangeEnd: routeMode ? state.selectedDate : state.rangeEnd }, $("#staffAuxContent"), trigger);positionDetailPopup();};
     $("#staffHistory")?.addEventListener("click", () => openStaff("history"));
     $("#staffNotes")?.addEventListener("click", () => openStaff("notes"));
