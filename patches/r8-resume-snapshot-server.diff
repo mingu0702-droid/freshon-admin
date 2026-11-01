@@ -30,7 +30,7 @@
    for (const file of [phase2bRuntimeSnapshotUrl, phase2bBundledSnapshotUrl]) {
      try {
        const payload = JSON.parse(await fs.readFile(file, "utf8"));
-@@ -2170,16 +2179,25 @@
+@@ -2170,29 +2179,44 @@
      const basePayload = phase2bSnapshotPayload(rows);
      const today = phase2bKstDate();
      const refreshFrom = existing?.refreshedThrough || basePayload.latestDate;
@@ -58,8 +58,10 @@
 +    (refreshEvidence.sourceFreshness.sourceDateVerified?todayStatus.vehicles:[]).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
        const code = normalizeCell(stop.customerCode || stop.code);
        const known = knownByCode.get(code) || {};
-       const lat = Number.isFinite(Number(stop.lat)) ? Number(stop.lat) : Number(known.lat);
-@@ -2187,7 +2205,13 @@
+-      const lat = Number.isFinite(Number(stop.lat)) ? Number(stop.lat) : Number(known.lat);
+-      const lng = Number.isFinite(Number(stop.lng)) ? Number(stop.lng) : Number(known.lng);
++      const lat = stop.lat!==null&&stop.lat!==undefined&&stop.lat!==''&&Number.isFinite(Number(stop.lat)) ? Number(stop.lat) : known.lat!==null&&known.lat!==undefined&&known.lat!==''?Number(known.lat):NaN;
++      const lng = stop.lng!==null&&stop.lng!==undefined&&stop.lng!==''&&Number.isFinite(Number(stop.lng)) ? Number(stop.lng) : known.lng!==null&&known.lng!==undefined&&known.lng!==''?Number(known.lng):NaN;
        if (!code || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
        rows.push({ ...known, ...stop, customerCode: code, vehicle: vehicle.vehicle, lat, lng, lastDeliveryDate: today });
      }));
@@ -74,6 +76,13 @@
      if (!payload.rows.length) throw new Error("PHASE2B_SNAPSHOT_EMPTY");
      await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
      phase2bSnapshotMemory = payload;
+-    console.info(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESHED", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
+-    setTimeout(() => warmPhase2bBounds().catch(() => {}), 1000).unref();
++    console.info(JSON.stringify({ component: "phase2b-snapshot", event: payload.refreshComplete ? "REFRESHED" : "REFRESH_PENDING", sourceDateVerified:payload.sourceFreshness?.sourceDateVerified===true, refreshPhase:payload.sourceFreshness?.phase||"UNVERIFIED", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
++    // Bounds remain lazy; a snapshot update does not fetch every nationwide tile.
+     return payload;
+   })().catch((error) => {
+     console.error(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESH_FAILED", error: error.message || String(error) }));
 @@ -2217,6 +2241,8 @@
    const dateParam = `${date}T00:00:00+09:00`;
    const pageSize = 300;
