@@ -90,7 +90,15 @@ export function createProductionSnapshotStore({env=process.env,token=env.OPSMAP_
  if(env.OPSMAP_SNAPSHOT_STORE_ENABLED!=='1')return undefined;
  const repo=env.OPSMAP_SNAPSHOT_STORE_REPO,branch=env.OPSMAP_SNAPSHOT_STORE_BRANCH;
  if(repo!=='mingu0702-droid/freshon-cache'||!['production/opsmap-snapshots','stage/opsmap-snapshots'].includes(branch)||!token)fail('SNAPSHOT_STORE_CONFIG');
- const production=env.OPSMAP_PRODUCTION_CANDIDATE_ENABLED==='1';
+ const serviceScopes={'srv-d87gc5rtqb8s7398t37g':'production','srv-da47hugu01pc73etpfa0':'stage'};
+ const originScopes={'https://freshon-admin-1.onrender.com':'production','https://freshon-admin-stage-preview-template.onrender.com':'stage'};
+ const serviceScope=env.RENDER_SERVICE_ID?serviceScopes[env.RENDER_SERVICE_ID]:null;
+ let originScope=null;
+ if(env.RENDER_EXTERNAL_URL){try{const u=new URL(env.RENDER_EXTERNAL_URL);if(u.pathname!=='/'||u.search||u.hash)fail('SNAPSHOT_STORE_ENVIRONMENT');originScope=originScopes[u.origin];}catch{fail('SNAPSHOT_STORE_ENVIRONMENT');}}
+ // The same /opsmap app flag is enabled on Stage. It is not a storage namespace.
+ if(env.RENDER_SERVICE_ID&&!serviceScope||env.RENDER_EXTERNAL_URL&&!originScope||serviceScope&&originScope&&serviceScope!==originScope)fail('SNAPSHOT_STORE_ENVIRONMENT');
+ const scope=serviceScope||originScope||(env.OPSMAP_PRODUCTION_CANDIDATE_ENABLED==='1'?'production':'stage');
+ const production=scope==='production';
  if(branch!==(production?'production/opsmap-snapshots':'stage/opsmap-snapshots'))fail('SNAPSHOT_STORE_ENVIRONMENT');
  const prefix=production?'opsmap-production':'opsmap-stage';
  const adapter=createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_TOKEN:token,GITHUB_CACHE_BRANCH:branch,GITHUB_CACHE_DIR:prefix},fetchImpl,now}),file='map-snapshot-v1.json';
