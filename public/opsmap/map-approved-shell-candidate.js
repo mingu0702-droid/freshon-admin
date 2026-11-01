@@ -217,7 +217,7 @@
   function sourceCenterLabel(row){
     const names={osan:'오산',yeongnam:'영남',honam:'호남','011':'오산','012':'영남','013':'호남','오산':'오산','영남':'영남','호남':'호남','오산센터':'오산','영남센터':'영남','호남센터':'호남'};
     const verified=['VERIFIED_MASTER','UNASSIGNED'].includes(row.baseVehicleState)&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'');
-    if(verified&&names[row.baseVehicleGroup]){const name=names[row.baseVehicleGroup];if(row.baseVehicleStale===false)return name;const date=String(row.baseVehicleCheckedAt||'').match(/^(\d{4})-(\d{2})-(\d{2})/);return name+(date?` · ${Number(date[2])}/${Number(date[3])} 기준`:' · 이전 자료');}
+    if(verified&&names[row.baseVehicleGroup])return names[row.baseVehicleGroup];
     // Only explicit dispatch-center fields may supply a center. The address is never a center source.
     for(const raw of [row.dispatchCenterCode,row.centerId,row.centerCode,row.centerName,typeof row.center==='string'?row.center:row.center?.id,typeof row.center==='object'?row.center?.name:null]){const name=names[String(raw||'').trim()];if(name)return name;}
     return '';
@@ -225,7 +225,7 @@
   function sourceVehicleLabel(row,daily,vehicle){
     if(daily)return vehicle?`${vehicle}호차`:'호차 확인 필요';
     const label=vehicle?`${vehicle}호차`:({UNASSIGNED:'호차 미지정',NOT_IN_MASTER:'기준표 미등록',CONFLICT:'기준호차 충돌'}[row.baseVehicleState]||'호차 확인 필요');
-    return label+(row.baseVehicleStale?' · 이전 확인값':'');
+    return label;
   }
   function sourceCard(button,row,daily){
     if(!row)return;const vehicle=String((daily?row.vehicle:Object.hasOwn(row,'baseVehicle')?row.baseVehicle:row.vehicle)||'').trim();const key=JSON.stringify([row.customerName,row.customerCode,vehicle,row.status,daily,row.address,row.customerAddress,row.baseVehicleState,row.baseVehicleSource,row.baseVehicleVersion,row.baseVehicleStale,row.baseVehicleGroup,row.baseVehicleCheckedAt,row.dispatchCenterCode,row.centerCode,row.centerId,row.center,row.centerName]);if(button.dataset.sourceCard===key)return;
