@@ -6,7 +6,7 @@ const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).dige
 const day=value=>{const s=typeof value==='string'?value.slice(0,10):'';return /^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s?s:null;};
 const coordinateValue=value=>typeof value==='number'||typeof value==='string'&&value.trim()!=='';
 const textFields=['customerName','vehicle','baseVehicle','confirmedVehicle','primaryVehicle90d','baseVehicleGroup','baseVehicleState','baseVehicleSource','baseVehicleVersion','baseVehicleCheckedAt','centerCode','centerGroup','areaLabel','region','coordinateSource','coordinateAccuracy','coordinateStatus','resolutionStatus','addressHash','originalAddressHash','deliveryStatus','status','appUsageGroup','routeOrder','sequence'];
-export function snapshotStopCoordinates(stop,known={}){
+export function snapshotStopCoordinates(stop,known={}, {preserveObserved=false}={}){
  const point=row=>{
   const lat=row?.lat,lng=row?.lng;
   return coordinateValue(lat)&&coordinateValue(lng)&&Number.isFinite(Number(lat))&&Number.isFinite(Number(lng))&&Math.abs(Number(lat))<=90&&Math.abs(Number(lng))<=180?{lat:Number(lat),lng:Number(lng)}:null;
@@ -14,7 +14,7 @@ export function snapshotStopCoordinates(stop,known={}){
  const oldHash=known.originalAddressHash||known.addressHash,newHash=stop.originalAddressHash||stop.addressHash;
  // A newly available hash cannot certify the address of an older hashless seed.
  const blocksReuse=!!newHash&&(!oldHash||oldHash!==newHash),old=point(known),fresh=point(stop);
- if(!blocksReuse&&old&&(known.coordinateSource==='MANUAL_PIN'||known.coordinateSource==='RAW_GPS'))return {...old,coordinateSource:known.coordinateSource,coordinateAccuracy:known.coordinateAccuracy};
+ if(!blocksReuse&&old&&(preserveObserved||known.coordinateSource==='MANUAL_PIN'||known.coordinateSource==='RAW_GPS'))return {...old,coordinateSource:known.coordinateSource,coordinateAccuracy:known.coordinateAccuracy};
  if(fresh)return {...fresh,coordinateSource:stop.coordinateSource||'DELIVERY_RECORDED',coordinateAccuracy:stop.coordinateAccuracy||'UNVERIFIED'};
  if(!blocksReuse&&old)return {...old,coordinateSource:known.coordinateSource,coordinateAccuracy:known.coordinateAccuracy};
  return {lat:null,lng:null,coordinateSource:'UNRESOLVED',coordinateAccuracy:'UNVERIFIED'};
