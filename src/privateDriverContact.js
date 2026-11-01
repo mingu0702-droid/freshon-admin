@@ -90,7 +90,7 @@ export function mountPrivateDriverContact({ app, requireStaff, readDriverMaster,
       const result = await read(req.query);
       return requireStaff(req, res, () => res.json(result));
     } catch (error) {
-      const code = /^DRIVER_[A-Z_]+$/.test(error.code || '') ? error.code : 'DRIVER_SOURCE_UNAVAILABLE';
+      const code = /^DRIVER_[A-Z_0-9]+$/.test(error.code || '') ? error.code : 'DRIVER_SOURCE_UNAVAILABLE';
       return res.status([400, 404, 409].includes(error.status) ? error.status : 503).json({ ok: false, error: code });
     }
   });
