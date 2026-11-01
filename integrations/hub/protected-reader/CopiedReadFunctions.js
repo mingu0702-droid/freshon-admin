@@ -421,7 +421,7 @@ function hubStaffDetailRow_(sheet,code,date,profile){
     const row=read(cached.row);if(row){profile.metadataHit=true;profile.lookupMs+=Math.max(0,Date.now()-lookupAt-profile.rowReadMs);return row;}cache.remove(key);
   }
   // Reuse the existing history locator cache. It contains row numbers only.
-  const positionsKey=hubDataCacheKey_("staff_history_positions_v1",{id:sheet.getParent().getId(),sheet:sheet.getSheetId(),last:last,columns:columns,code:code});
+  const positionsKey=hubDataCacheKey_("staff_detail_date_positions_v1",{id:sheet.getParent().getId(),sheet:sheet.getSheetId(),last:last,columns:columns,code:code,date:date});
   let positions=null;try{positions=JSON.parse(cache.get(positionsKey)||'null');}catch(ignored){}
   let fromIndex=Array.isArray(positions)&&positions.length<=100&&positions.every(function(n){return Number.isInteger(n)&&n>=2&&n<=last;});
   for(let pass=0;pass<2;pass++){

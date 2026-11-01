@@ -1,7 +1,7 @@
 // SpreadsheetApp.openById requires a write-capable OAuth scope. Use Sheets reads
 // with spreadsheets.readonly, retaining the existing exact-row locator contract.
 var protectedReaderSheetTitles_={};
-function protectedReaderReadOnlyBook_(id){
+function protectedReaderReadOnlyBook_(id,dateFilter){
   const metadata=Sheets.Spreadsheets.get(id,{fields:'sheets.properties'}),headers={},localReads={};
   (metadata.sheets||[]).forEach(function(s){protectedReaderSheetTitles_[id+':'+s.properties.sheetId]=s.properties.title;});
   function column(n){let s='';for(;n>0;n=Math.floor((n-1)/26))s=String.fromCharCode(65+(n-1)%26)+s;return s;}
@@ -12,18 +12,33 @@ function protectedReaderReadOnlyBook_(id){
       if(!Number.isInteger(row)||!Number.isInteger(col)||!Number.isInteger(count)||!Number.isInteger(width)||row<1||col<1||count<1||width<1||width>128||count*width>300000)throw Error('READ_RANGE_INVALID');
       if(count>1&&(width!==1||!headers[name]||headers[name][col-1]!=='customerCode'))throw Error('BULK_PRIVATE_READ_FORBIDDEN');
       const a1="'"+name.replace(/'/g,"''")+"'!"+column(col)+row+':'+column(col+width-1)+(row+count-1);
-      function values(){
+      function rawValues(){
         let source=localReads[a1];if(!source){const started=Date.now(),response=Sheets.Spreadsheets.Values.get(id,a1,{valueRenderOption:'UNFORMATTED_VALUE',dateTimeRenderOption:'SERIAL_NUMBER'});source=response.values||[];localReads[a1]=source;
           if(protectedReaderProfile_){protectedReaderProfile_.sheetsReadMs=(protectedReaderProfile_.sheetsReadMs||0)+Date.now()-started;protectedReaderProfile_.sheetsReadCalls=(protectedReaderProfile_.sheetsReadCalls||0)+1;}}
+        return source;
+      }
+      function values(){
+        const source=rawValues();
         const rows=Array.from({length:count},function(_,offset){return Array.from({length:width},function(_,c){let value=source[offset]&&source[offset][c];if(value==null)value='';const header=headers[name]&&headers[name][col+c-1];if(row>1&&typeof value==='number'&&['deliveryDate','updatedAt','createdAt'].indexOf(header)>=0)value=new Date(Date.UTC(1899,11,30)+Math.round(value*86400000)-9*3600000);return value;});});
         if(row===1&&col===1&&count===1)headers[name]=rows[0];return rows;
       }
       return {getValues:values,createTextFinder:function(code){
         if(width!==1||!headers[name]||headers[name][col-1]!=='customerCode')throw Error('CODE_LOCATOR_ONLY');
-        const finder={matchEntireCell:function(yes){if(yes!==true)throw Error('EXACT_CODE_REQUIRED');return finder;},useRegularExpression:function(yes){if(yes!==false)throw Error('REGEX_CODE_FORBIDDEN');return finder;},findAll:function(){return values().map(function(r,i){return String(r[0]||'')===code?{getRow:function(){return row+i;}}:null;}).filter(Boolean);}};return finder;
+        const finder={matchEntireCell:function(yes){if(yes!==true)throw Error('EXACT_CODE_REQUIRED');return finder;},useRegularExpression:function(yes){if(yes!==false)throw Error('REGEX_CODE_FORBIDDEN');return finder;},findAll:function(){const raw=rawValues();let positions=[];for(let i=0;i<raw.length;i++)if(String(raw[i]&&raw[i][0]||'')===code)positions.push(row+i);if(dateFilter)positions=protectedReaderDateScopedRows_(id,props.sheetId,headers[name],positions,dateFilter);return positions.map(function(n){return {getRow:function(){return n;}};});}};return finder;
       }};
     }};return sheet;
   }};return book;
+}
+function protectedReaderDateScopedRows_(id,sheetId,headers,positions,date){
+  const dateColumn=headers.indexOf('deliveryDate'),title=protectedReaderSheetTitles_[id+':'+sheetId];if(dateColumn<0||!title)throw Error('PRIVATE_SOURCE_HEADER_INVALID');if(!positions.length)return [];
+  if(protectedReaderProfile_&&Date.now()-protectedReaderProfile_.readStartedAt>8000)hubMapHttpRaise_('TIMEOUT','Source read deadline exceeded.',504,true);
+  const first=Math.min.apply(null,positions),last=Math.max.apply(null,positions);if(last-first+1>300000)throw Error('DATE_METADATA_RANGE_LIMIT');
+  let column='',n=dateColumn+1;for(;n>0;n=Math.floor((n-1)/26))column=String.fromCharCode(65+(n-1)%26)+column;
+  // A single bounded date-only GET avoids hundreds of sparse range evaluations.
+  // No memo/address/credential column is read here; the protected candidate cap stays 100.
+  const range="'"+title.replace(/'/g,"''")+"'!"+column+first+':'+column+last,started=Date.now(),response=Sheets.Spreadsheets.Values.get(id,range,{valueRenderOption:'UNFORMATTED_VALUE',dateTimeRenderOption:'SERIAL_NUMBER'}),values=response.values||[];
+  if(protectedReaderProfile_){protectedReaderProfile_.dateMetadataReadMs=Date.now()-started;protectedReaderProfile_.dateMetadataReads=1;}
+  return positions.filter(function(row){return hubStaffHistoryDate_(values[row-first]&&values[row-first][0])===date;});
 }
 function protectedReaderBatchKeys_(id,sheetId,filters){
   const title=protectedReaderSheetTitles_[id+':'+sheetId];if(!title||!filters.length||filters.length>200)throw Error('HISTORY_RANGE_CONTRACT');
