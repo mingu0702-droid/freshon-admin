@@ -33,7 +33,7 @@ export function projectFixedVehicles(rows) {
   const result = new Map();
   for (const row of rows) {
     const customerCode = normalizeFixedMasterCustomerKey(row.estCd);
-    if (!/^[A-Z]\d+$/.test(customerCode)) continue;
+    if (!masterKey(customerCode)) continue;
     const primary = String(row.mainCarSeqNm || '').trim().replace(/호(?:차)?$/, '');
     const baseVehicle = /^[\p{L}\p{N}_-]{1,64}$/u.test(primary) ? primary : '';
     const weekdays = Object.fromEntries(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => {
