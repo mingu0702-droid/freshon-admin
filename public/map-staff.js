@@ -43,7 +43,7 @@
       if (!response.ok) {
         // Classify only known availability codes; never display or retain the body.
         let notReady = false, detailCode = null;
-        if (path.startsWith('private/customer-detail')) {
+        if (/^private\/customer-(?:current-)?detail/.test(path)) {
           try { const code=(await response.json()).error; if(['DETAIL_UPSTREAM_TIMEOUT','DETAIL_SOURCE_AUTH_REQUIRED','DETAIL_SOURCE_FORBIDDEN','DETAIL_NOT_FOUND','DETAIL_INVALID_RESPONSE','DETAIL_SOURCE_RATE_LIMITED'].includes(code))detailCode=code; } catch (_) { /* No raw body is retained. */ }
         }
         if (path.startsWith('private/driver-history') && status === 503) {
@@ -116,13 +116,13 @@
       if (id === generation && detailPending) loading.textContent = '상세정보 조회가 지연되고 있습니다. 잠시만 기다려 주세요.';
     }, 5000);
     try {
-      const query = new URLSearchParams({ customerCode: target.customerCode, date: target.date || '' });
+      const query = new URLSearchParams({ customerCode: target.customerCode, date: target.current?'':target.date || '' });
       if (target.refresh===true) query.set('refresh','1');
       if (target.rangeStart) query.set('startDate', target.rangeStart);
       if (target.rangeEnd) query.set('endDate', target.rangeEnd);
-      const payload = await request('private/' + (target.kind === 'history' ? 'driver-history' : 'customer-detail') + '?' + query);
+      const payload = await request('private/' + (target.kind === 'history' ? 'driver-history' : target.current?'customer-current-detail':'customer-detail') + '?' + query);
       if (id !== generation || (inlineHost && !inlineHost.isConnected)) return;
-      if(target.kind !== 'history' && (payload.data?.customerCode !== target.customerCode || target.date && payload.data?.memoDate !== target.date)) throw Object.assign(new Error('DETAIL_INVALID_RESPONSE'),{status:502,detailCode:'DETAIL_INVALID_RESPONSE'});
+      if(target.kind !== 'history' && (payload.data?.customerCode !== target.customerCode || (target.current?payload.data?.memoDate!==null||payload.data?.sourceBasis!=='CURRENT_CUSTOMER_LOOKUP':target.date&&payload.data?.memoDate!==target.date))) throw Object.assign(new Error('DETAIL_INVALID_RESPONSE'),{status:502,detailCode:'DETAIL_INVALID_RESPONSE'});
       // Server validates the session again after the upstream read.
       shell(target.kind === 'history' ? '최근 배송기사 이력' : '출입·배송 메모');
       node('button', '로그아웃').onclick = logout;
@@ -153,7 +153,7 @@
         const data = payload.data || {};
         const c=payload.meta?.cache||{};
         const checked=typeof c.checkedAt==='string'&&Number.isFinite(Date.parse(c.checkedAt))?new Date(c.checkedAt).toLocaleString('ko-KR'):null;
-        const note=node('p',(c.stale?'저장된 이전 확인값':'저장된 정보')+(checked?' · '+checked:' · 확인시각 없음')+(c.currentness==='SOURCE_CHANGED'?' · 원천 변경 반영 대기':''));
+        const note=node('p',(target.current?'현재 매장 확인값':c.stale?'저장된 이전 확인값':'저장된 정보')+(checked?' · '+checked:' · 확인시각 없음')+(c.currentness==='SOURCE_CHANGED'?' · 원천 변경 반영 대기':''));
         note.className='staffCacheNotice';note.dataset.stale=String(c.stale!==false);
         const refresh=node('button','최신 정보 확인');refresh.type='button';refresh.onclick=()=>{if(id===generation&&!detailPending){requested={...requested,refresh:true};void showRequested(id);}};
         if(data.memoState==='NEEDS_CONFIRMATION')node('p','구분되지 않거나 충돌한 항목은 확인이 필요합니다.');
