@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createProductionSnapshotStore,snapshotProjection,materializeSnapshot} from '../src/productionSnapshotStore.js';
+import {createProductionSnapshotStore,snapshotProjection,materializeSnapshot,snapshotStopCoordinates,mergePreservedSnapshot} from '../src/productionSnapshotStore.js';
 import {deliverySourceObservation,snapshotRefreshEvidence} from '../src/snapshotRefreshEvidence.js';
 const env={OPSMAP_SNAPSHOT_STORE_ENABLED:'1',OPSMAP_PRODUCTION_CANDIDATE_ENABLED:'1',OPSMAP_SNAPSHOT_STORE_REPO:'mingu0702-droid/freshon-cache',OPSMAP_SNAPSHOT_STORE_BRANCH:'production/opsmap-snapshots'};
 const snap=(name='SYNTHETIC')=>({version:'phase2b-map-snapshot-v1',rows:[{customerCode:'T900001',customerName:name,lat:37.5,lng:127,lastDeliveryDate:'2026-10-31'}],rowCount:1,startDate:'2026-09-01'});
@@ -42,4 +42,26 @@ test('source versions remain exact strings and numeric approximations are not ce
  const exact='18446744073709551615';const valid=snapshotProjection({...snap(),sourceFreshness:{sourceVersion:exact}});
  assert.equal(valid.sourceEvidence.sourceVersion,exact);
  const approximate=snapshotProjection({...snap(),sourceFreshness:{sourceVersion:Number(exact)}});assert.equal(approximate.sourceEvidence.sourceVersion,null);
+});
+
+test('new address evidence cannot reuse hashless seed coordinates as unchanged',()=>{
+ const seed={customerCode:'T900001',lat:37.5,lng:127,coordinateSource:'RAW_GPS',coordinateAccuracy:'GPS',lastDeliveryDate:'2026-10-31'};
+ for(const coordinateSource of ['RAW_GPS','MANUAL_PIN','KAKAO_BUILDING']){
+  const old={...seed,coordinateSource};
+  const fresh={customerCode:old.customerCode,lat:null,lng:null,lastDeliveryDate:'2026-11-02',originalAddressHash:'b'.repeat(64)};
+  const point=snapshotStopCoordinates(fresh,old);assert.equal(point.lat,null);assert.equal(point.coordinateSource,'UNRESOLVED');
+  const previous=snapshotProjection({...snap(),rows:[old]});
+  const merged=mergePreservedSnapshot(previous,{...snap(),rows:[fresh]});
+  assert.equal(merged.rows[0].lat,null);assert.equal(merged.rows[0].coordinateSource,'UNRESOLVED');
+  assert.equal(previous.rows[0].lat,37.5);assert.equal(previous.rows[0].coordinateSource,coordinateSource);
+ }
+});
+test('hashless seed remains observed state and independently evidenced fresh coordinates can replace it',()=>{
+ const old={...snap().rows[0],coordinateSource:'RAW_GPS'};
+ assert.equal(snapshotStopCoordinates({lat:null,lng:null},old).lat,old.lat);
+ const fresh={...old,lat:38,lng:128,coordinateSource:'KAKAO_BUILDING',coordinateAccuracy:'BUILDING',originalAddressHash:'a'.repeat(64),lastDeliveryDate:'2026-11-02'};
+ const point=snapshotStopCoordinates(fresh,old);assert.equal(point.lat,38);assert.equal(point.coordinateSource,'KAKAO_BUILDING');
+ const previous=snapshotProjection({...snap(),rows:[old]});const merged=mergePreservedSnapshot(previous,{...snap(),rows:[fresh]});
+ assert.equal(merged.rows[0].lat,38);assert.equal(merged.rows[0].coordinateAccuracy,'BUILDING');
+ assert.equal(materializeSnapshot(merged).sourceFreshness.automaticSyncVerified,false);
 });

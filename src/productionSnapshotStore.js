@@ -12,10 +12,11 @@ export function snapshotStopCoordinates(stop,known={}){
   return coordinateValue(lat)&&coordinateValue(lng)&&Number.isFinite(Number(lat))&&Number.isFinite(Number(lng))&&Math.abs(Number(lat))<=90&&Math.abs(Number(lng))<=180?{lat:Number(lat),lng:Number(lng)}:null;
  };
  const oldHash=known.originalAddressHash||known.addressHash,newHash=stop.originalAddressHash||stop.addressHash;
- const changed=!!oldHash&&!!newHash&&oldHash!==newHash,old=point(known),fresh=point(stop);
- if(!changed&&old&&(known.coordinateSource==='MANUAL_PIN'||known.coordinateSource==='RAW_GPS'))return {...old,coordinateSource:known.coordinateSource,coordinateAccuracy:known.coordinateAccuracy};
+ // A newly available hash cannot certify the address of an older hashless seed.
+ const blocksReuse=!!newHash&&(!oldHash||oldHash!==newHash),old=point(known),fresh=point(stop);
+ if(!blocksReuse&&old&&(known.coordinateSource==='MANUAL_PIN'||known.coordinateSource==='RAW_GPS'))return {...old,coordinateSource:known.coordinateSource,coordinateAccuracy:known.coordinateAccuracy};
  if(fresh)return {...fresh,coordinateSource:stop.coordinateSource||'DELIVERY_RECORDED',coordinateAccuracy:stop.coordinateAccuracy||'UNVERIFIED'};
- if(!changed&&old)return {...old,coordinateSource:known.coordinateSource,coordinateAccuracy:known.coordinateAccuracy};
+ if(!blocksReuse&&old)return {...old,coordinateSource:known.coordinateSource,coordinateAccuracy:known.coordinateAccuracy};
  return {lat:null,lng:null,coordinateSource:'UNRESOLVED',coordinateAccuracy:'UNVERIFIED'};
 }
 const numberFields=['visitCount','deliveryCount90d','amount','dailyAmount','monthlyAmount','orderCount','weight','cbm'];
@@ -66,9 +67,10 @@ export function mergePreservedSnapshot(previous,incoming,{now=Date.now}={}){
  for(const row of fresh.rows){
   const old=merged.get(row.customerCode);if(!old){merged.set(row.customerCode,row);continue;}
   if((row.lastDeliveryDate||row.deliveryDate||'')<(old.lastDeliveryDate||old.deliveryDate||''))continue;
-  const oldHash=old.originalAddressHash||old.addressHash,newHash=row.originalAddressHash||row.addressHash,changed=!!oldHash&&!!newHash&&oldHash!==newHash;
+  const oldHash=old.originalAddressHash||old.addressHash,newHash=row.originalAddressHash||row.addressHash,blocksReuse=!!newHash&&(!oldHash||oldHash!==newHash);
   const next={...old,...row};
-  if(!changed&&Number.isFinite(old.lat)&&Number.isFinite(old.lng)&&(row.lat===null||row.lng===null||old.coordinateSource==='MANUAL_PIN'||old.coordinateSource==='RAW_GPS'&&row.coordinateSource!=='RAW_GPS'))Object.assign(next,{lat:old.lat,lng:old.lng,coordinateSource:old.coordinateSource,coordinateAccuracy:old.coordinateAccuracy});
+  if(!blocksReuse&&Number.isFinite(old.lat)&&Number.isFinite(old.lng)&&(row.lat===null||row.lng===null||old.coordinateSource==='MANUAL_PIN'||old.coordinateSource==='RAW_GPS'&&row.coordinateSource!=='RAW_GPS'))Object.assign(next,{lat:old.lat,lng:old.lng,coordinateSource:old.coordinateSource,coordinateAccuracy:old.coordinateAccuracy});
+  if(blocksReuse&&(row.lat===null||row.lng===null))Object.assign(next,{coordinateSource:'UNRESOLVED',coordinateAccuracy:'UNVERIFIED'});
   merged.set(row.customerCode,next);
  }
  const rows=rowsOf([...merged.values()]);
