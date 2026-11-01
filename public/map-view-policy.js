@@ -151,14 +151,19 @@
     const left=Number(rect?.left),top=Number(rect?.top),right=Number(rect?.right??left+Number(rect?.width)),bottom=Number(rect?.bottom??top+Number(rect?.height));
     return [left,top,right,bottom].every(Number.isFinite)&&right>left&&bottom>top?{left,top,right,bottom,width:right-left,height:bottom-top}:null;
   };
-  function cameraFocusViewport({mapRect,viewportRect,headerRect,occluders=[],mobile=false}={}) {
+  function cameraFocusViewport({mapRect,viewportRect,headerRect,occluders=[],mobile=false,anchorHeight=0,anchorWidth=0}={}) {
     const map=cameraRect(mapRect),viewport=cameraRect(viewportRect);if(!map||!viewport)return null;
     const header=cameraRect(headerRect),top=Math.max(map.top,viewport.top,header&&header.width>=viewport.width/2?header.bottom:viewport.top);
-    const visible=cameraRect({left:Math.max(map.left,viewport.left),right:Math.min(map.right,viewport.right),top,bottom:Math.min(map.bottom,viewport.bottom)});if(!visible)return null;
-    const blocks=occluders.map(cameraRect).filter(Boolean);
+    let visible=cameraRect({left:Math.max(map.left,viewport.left),right:Math.min(map.right,viewport.right),top,bottom:Math.min(map.bottom,viewport.bottom)});if(!visible)return null;
+    let blocks=occluders.map(cameraRect).filter(Boolean);
     const inside=(r,p)=>p.x>=r.left&&p.x<=r.right&&p.y>=r.top&&p.y<=r.bottom;
     const preferred={x:(viewport.left+viewport.right)/2,y:(Math.max(viewport.top,header?.bottom||viewport.top)+viewport.bottom)/2};
     if(!mobile&&inside(visible,preferred)&&!blocks.some(r=>inside(r,preferred)))return {...visible,...preferred,basis:'VIEWPORT_BELOW_HEADER'};
+    if(mobile){
+      const half=Math.min(visible.width/3,Math.max(0,Number(anchorWidth)||0)/2),height=Math.min(visible.height/2,Math.max(0,Number(anchorHeight)||0));
+      visible=cameraRect({left:visible.left+half,right:visible.right-half,top:visible.top+height,bottom:visible.bottom});if(!visible)return null;
+      blocks=blocks.map(r=>({...r,left:r.left-half,right:r.right+half,bottom:r.bottom+height}));
+    }
     let spaces=[visible];
     for(const block of blocks)spaces=spaces.flatMap(area=>{
       const l=Math.max(area.left,block.left),r=Math.min(area.right,block.right),t=Math.max(area.top,block.top),b=Math.min(area.bottom,block.bottom);
@@ -173,7 +178,9 @@
     const viewportRect={left:visual?.offsetLeft||0,top:visual?.offsetTop||0,width:visual?.width||win.innerWidth,height:visual?.height||win.innerHeight};
     const rect=node=>node?.getClientRects?.().length&&!node.hidden?node.getBoundingClientRect():null;
     return {mapRect:element?.getBoundingClientRect?.(),viewportRect,headerRect:rect(doc?.querySelector('#approvedSiteHeader')),
-      occluders:[...(doc?.querySelectorAll('#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden])')||[])].map(rect).filter(Boolean),
+      occluders:[...(doc?.querySelectorAll('#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#areaToggle,#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
+      anchorHeight:rect(doc?.querySelector('#map .marker.selected'))?.height||0,
+      anchorWidth:rect(doc?.querySelector('#map .marker.selected'))?.width||0,
       mobile:win.matchMedia?.('(max-width: 760px)')?.matches??Number(viewportRect.width)<=760};
   }
   function createCamera({map, element, clock=Date.now, raf=fn=>requestAnimationFrame(fn), cancelRaf=id=>cancelAnimationFrame(id),layout=()=>cameraDomLayout(element),pixel=(x,y)=>root.kakao?.maps?.Point?new root.kakao.maps.Point(x,y):{x,y}}={}) {

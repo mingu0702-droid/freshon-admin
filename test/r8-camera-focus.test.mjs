@@ -32,3 +32,8 @@ test('new selection cancels pending old focus; invalid coordinates never move th
 test('CSS scaling and visual viewport offsets use actual DOM rectangles rather than fixed sidebar offsets',()=>{
  const f=cameraFixture();f.setLayout({mapRect:rect(200,100,1720,800),viewportRect:rect(0,20,1920,880),headerRect:rect(0,20,1920,80),occluders:[rect(1500,180,380,700)],mobile:false});f.element.clientWidth=860;f.element.clientHeight=400;f.camera.focus({lat:37.2,lng:127.2});f.flush();assert.equal(f.camera.focusState().expectedX,960);assert.equal(f.camera.focusState().expectedY,500);assert(f.camera.focusState().errorPx<=30);
 });
+
+test('mobile measured pin height keeps its body below the header and away from map controls',()=>{
+ const target=cameraFocusViewport({mapRect:rect(0,151,375,443),viewportRect:rect(0,0,390,855),headerRect:rect(0,0,375,151),occluders:[rect(16,210,332,372),rect(160,162,68,36),rect(228,162,120,36)],mobile:true,anchorHeight:48,anchorWidth:44});
+ assert(target.x<160);assert(target.y-48>=151);assert(target.y<210);
+});
