@@ -1,0 +1,24 @@
+--- a/src/server.js
++++ b/src/server.js
+@@ -2191,10 +2191,10 @@
+     if (!rows.length) for (const tile of baseTiles) rows.push(...await phase2bSnapshotTile(tile));
+     const basePayload = phase2bSnapshotPayload(rows);
+     const today = phase2bKstDate();
+-    const refreshFrom = existing?.refreshedThrough || basePayload.latestDate;
++    const refreshFrom = existing?.sourceFreshness?.checkedThrough || null;
+     const completedDates=[];
+     // Historical catchup is explicit and checkpoints persist; startup never replays it.
+-    const catchupDates=process.env.OPSMAP_BACKGROUND_SNAPSHOT_CATCHUP==='1'?phase2bSnapshotMissingDates(refreshFrom,today):[];
++    const catchupDates=process.env.OPSMAP_BACKGROUND_SNAPSHOT_CATCHUP==='1'&&refreshFrom?phase2bSnapshotMissingDates(refreshFrom,today):[];
+     for (const date of catchupDates) {
+       rows.push(...await phase2bSnapshotDateRows(date, baseTiles));
+       completedDates.push(date);
+@@ -2227,7 +2227,7 @@
+     if (!payload.rows.length) throw new Error("PHASE2B_SNAPSHOT_EMPTY");
+     await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
+     phase2bSnapshotMemory = payload;
+-    console.info(JSON.stringify({ component: "phase2b-snapshot", event: payload.refreshComplete ? "REFRESHED" : "REFRESH_PENDING", sourceDateVerified:payload.sourceFreshness?.sourceDateVerified===true, refreshPhase:payload.sourceFreshness?.phase||"UNVERIFIED", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
++    console.info(JSON.stringify({ component: "phase2b-snapshot", event: payload.refreshComplete ? "REFRESHED" : "REFRESH_PENDING", sourceDateVerified:payload.sourceFreshness?.sourceDateVerified===true, refreshPhase:payload.sourceFreshness?.phase||"UNVERIFIED", persistence:phase2bDurableSnapshotStore?.status?.()||null, latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
+     // Bounds remain lazy after a snapshot update.
+     return payload;
+   })().catch((error) => {

@@ -59,7 +59,7 @@ export function mountProductionMapApi(app,{
   app.get('/api/map-phase2b/private/map-sdk-config',(req,res)=>{
     const javascriptKey=String(env.KAKAO_MAP_JAVASCRIPT_KEY||'').trim();
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED'});
-    return res.set('Cache-Control','private, no-store').json({javascriptKey});
+    return res.set('Cache-Control','private, no-store').json({javascriptKey,driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1'});
   });
   mountRoadRouteRoutes({app,requireStaff:mapStaff.requireStaff,jsonBody:express.json({limit:'16kb'}),service:roadRouteService||createRoadRouteService({env,budget:roadRouteBudget,requireDurableBudget:true}),env,readRecordedRoute:readRecordedRoadRoute});
   mountPrivateExtensions?.({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,previewEnabled});

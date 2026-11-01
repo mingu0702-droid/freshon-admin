@@ -1,0 +1,40 @@
+--- a/src/server.js
++++ b/src/server.js
+@@ -14,6 +14,7 @@
+ import XlsxPopulate from "xlsx-populate";
+ import { fileURLToPath } from "node:url";
+ import { config } from "./config.js";
++import {parseDriverSheetValues} from "./driverSheetRows.js";
+ import { requireAdmin, requireView } from "./auth.js";
+ import { generalMapResponse, redactPublicData } from "./publicDataSecurity.js";
+ import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
+@@ -1064,12 +1065,19 @@
+   const token = await getGoogleAccessToken();
+   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+   const tab = await getGoogleSheetTab(headers, spreadsheetId, sheetName, sheetGid, fallbackName);
+-  const range = `${tab.sheetName}!A:O`;
++  const range = `${tab.sheetName}!${cacheKey === "driver" ? "A1:S1001" : "A:O"}`;
+   const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
+   const response = await fetch(url, { headers });
+   const body = await response.json().catch(() => ({}));
+   if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
+   const values = Array.isArray(body.values) ? body.values : [];
++  if (cacheKey === "driver") {
++    const parsed = parseDriverSheetValues(values);
++    const payload = { generatedAt: new Date().toISOString(), sheetName: tab.sheetName, columns: parsed.columns,
++      rows: parsed.rows.map(row => ({ ...row, _sourceSheet: tab.sheetName })), rowCount: parsed.rows.length, driverLayout: parsed.meta };
++    googleDriverMemoryCache = { readAt: Date.now(), payload };
++    return payload;
++  }
+   const columns = (values[0] || []).map((value) => normalizeCell(value)).filter(Boolean);
+   const rows = values.slice(1).map((line, index) => {
+     const row = {};
+@@ -1250,7 +1258,7 @@
+     const prev = byVehicle.get(vehicle);
+     if (!prev || item.effectiveDate >= prev.effectiveDate) byVehicle.set(vehicle, item);
+   }
+-  return { generatedAt: sheet?.generatedAt || null, sheetName: sheet?.sheetName || null, rowCount: sheet?.rowCount || 0, vehicles: [...byVehicle.values()] };
++  return { generatedAt: sheet?.generatedAt || null, sheetName: sheet?.sheetName || null, rowCount: sheet?.rowCount || 0, vehicles: [...byVehicle.values()], driverLayout: sheet?.driverLayout || null };
+ }
+ 
+ function sheetRowIdentity(row) {

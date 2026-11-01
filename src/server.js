@@ -1,5 +1,7 @@
 ﻿import express from "express";
-import {mountProductionOpsmapCandidate} from "./productionOpsmapCandidate.js";
+import {mountProductionOpsmapCandidate,resolveProductionCredentials} from "./productionOpsmapCandidate.js";
+import {createProductionSnapshotStore,materializeSnapshot,snapshotProjection,mergePreservedSnapshot,snapshotStopCoordinates} from "./productionSnapshotStore.js";
+import {deliverySourceObservation,snapshotRefreshEvidence,assertDeliverySourceObservation} from "./snapshotRefreshEvidence.js";
 import {createStageReadModel} from "./stageReadModel.js";
 import {createCoordinateSupplement} from "./mapCoordinateSupplement.js";
 import {callHub as verifiedMapHubRead} from "./phase2bHubReadClient.js";
@@ -14,6 +16,7 @@ import XLSX from "xlsx";
 import XlsxPopulate from "xlsx-populate";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
+import {parseDriverSheetValues} from "./driverSheetRows.js";
 import { requireAdmin, requireView } from "./auth.js";
 import { generalMapResponse, redactPublicData } from "./publicDataSecurity.js";
 import { clearDailyRouteCache, readDailyRoute, readDispatchCache, readDispatchCacheLocalFirst, readDispatchMeta, readMonthlyDispatchSummaryLocalFirst, writeDailyRoute, writeDailyRouteCache, writeMonthlyDispatchSummary } from "./store.js";
@@ -32,6 +35,9 @@ const vehicleAreaSourceUrl = path.join(publicDir, "vehicle-data.js");
 const customerMasterSourceUrl = path.join(publicDir, "customer-master-20260604.json");
 const phase2bBundledSnapshotUrl = path.join(publicDir, "map-phase2b-snapshot.json");
 const phase2bRuntimeSnapshotUrl = path.join(os.tmpdir(), "freshon-map-phase2b-snapshot.json");
+const phase2bDurableSnapshotStore=(()=>{try{return createProductionSnapshotStore({token:resolveProductionCredentials(process.env).authToken});}catch(error){console.warn(JSON.stringify({component:'phase2b-snapshot',event:'DURABLE_STORE_UNAVAILABLE',code:error.code||'SNAPSHOT_STORE_CONFIG'}));return null;}})();
+let phase2bDurableSnapshotLoad=null;
+
 const phase2bBoundsCache = createPhase2bReadCache({ name: "bounds", ttlMs: Number(process.env.PHASE2B_BOUNDS_CACHE_TTL_MS || 600000), staleMs: 120000, maxEntries: 64, maxBytes: 24 * 1024 * 1024 });
 const phase2bDetailCache = createPhase2bReadCache({ name: "detail", ttlMs: Number(process.env.PHASE2B_DETAIL_CACHE_TTL_MS || 1200000), staleMs: 300000, maxEntries: 512, maxBytes: 8 * 1024 * 1024 });
 const decryptScriptPath = path.join(__dirname, "decrypt_office.py");
@@ -66,7 +72,7 @@ const productionMap = mountProductionMapApi(app, {
   phase2bKstDate, normalizeCell, normalizeDateValue, phase2bSnapshotMeta, phase2bTodayStatus, publicDir,
   getSnapshotWorkerState: () => ({running:!!phase2bSnapshotRefreshPromise,continuation:!!phase2bSnapshotRetryTimer})
 });
-mountProductionOpsmapCandidate(app,{publicDir,readManualPinCustomer:customerCode=>verifiedMapHubRead('customerDetail',{customerCode},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000}),readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),callHub,sharedBaseCache:productionMap.baseCache,readBaseVehicleMaster:sharedFixedVehicleReader,sharedReadModel,sharedCoordinateSupplement,readPhase2bSnapshot,getSnapshotMemory:()=>phase2bSnapshotMemory,phase2bKstDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus});
+mountProductionOpsmapCandidate(app,{publicDir,readManualPinCustomer:customerCode=>verifiedMapHubRead('customerDetail',{customerCode},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000}),readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),readStoredDriverRoute:(date,vehicle)=>readRouteFromGoogleRouteIndex(date,vehicle),callHub,sharedBaseCache:productionMap.baseCache,readBaseVehicleMaster:sharedFixedVehicleReader,sharedReadModel,sharedCoordinateSupplement,readPhase2bSnapshot,getSnapshotMemory:()=>phase2bSnapshotMemory,phase2bKstDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus});
 app.use(express.json({ limit: "10mb" }));
 // Sensitive namespaces must never inherit PUBLIC_VIEW or the SPA fallback.
 app.use('/api/collector', requireAdmin);
@@ -750,7 +756,7 @@ function base64Url(value) {
 }
 
 function parseGoogleServiceAccount() {
-  if (!config.googleServiceAccountJsonBase64 || !config.googleSheetId) return null;
+  if (!config.googleServiceAccountJsonBase64) return null;
   const json = Buffer.from(config.googleServiceAccountJsonBase64, "base64").toString("utf8");
   const account = JSON.parse(json);
   if (!account.client_email || !account.private_key) {
@@ -759,14 +765,14 @@ function parseGoogleServiceAccount() {
   return account;
 }
 
-async function getGoogleAccessToken() {
+async function getGoogleAccessToken({ driverRead = false } = {}) {
   const account = parseGoogleServiceAccount();
   if (!account) return null;
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT" };
   const claim = {
     iss: account.client_email,
-    scope: "https://www.googleapis.com/auth/spreadsheets",
+    scope: driverRead ? "https://www.googleapis.com/auth/spreadsheets.readonly" : "https://www.googleapis.com/auth/spreadsheets",
     aud: "https://oauth2.googleapis.com/token",
     exp: now + 3600,
     iat: now
@@ -778,6 +784,7 @@ async function getGoogleAccessToken() {
     .replace(/\//g, "_");
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
+    ...(driverRead ? {signal: AbortSignal.timeout(15000)} : {}),
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -785,7 +792,10 @@ async function getGoogleAccessToken() {
     })
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`Google token failed: ${body.error_description || body.error || response.status}`);
+  if (!response.ok) {
+    if (driverRead) throw Object.assign(Error('DRIVER_TOKEN_HTTP_' + response.status), {code:'DRIVER_TOKEN_HTTP_' + response.status});
+    throw new Error(`Google token failed: ${body.error_description || body.error || response.status}`);
+  }
   return body.access_token;
 }
 
@@ -1044,13 +1054,17 @@ async function clearAndWriteGoogleSheetValues(headers, sheetName, values) {
   return { updatedRows, updatedRange, columns: columns.length };
 }
 
-async function getGoogleSheetTab(headers, spreadsheetId, wantedName = "", wantedGid = null, fallbackName = "customers") {
+async function getGoogleSheetTab(headers, spreadsheetId, wantedName = "", wantedGid = null, fallbackName = "customers", {driverRead = false} = {}) {
   const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets.properties(title,sheetId)`;
-  const metaResponse = await fetch(metaUrl, { headers });
-  const metaBody = await metaResponse.json().catch(() => ({}));
+  const metaResponse = await fetch(metaUrl, { headers, ...(driverRead ? {signal:AbortSignal.timeout(15000)} : {}) });
+  if (driverRead && !metaResponse.ok) throw Object.assign(Error('DRIVER_SHEET_METADATA_HTTP_' + metaResponse.status), {code:'DRIVER_SHEET_METADATA_HTTP_' + metaResponse.status});
+  let metaBody;
+  try { metaBody = await metaResponse.json(); }
+  catch (error) { if (driverRead) throw Object.assign(Error('DRIVER_SHEET_METADATA_JSON_INVALID'), {code:'DRIVER_SHEET_METADATA_JSON_INVALID'}); metaBody = {}; }
   if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
   const sheets = (metaBody.sheets || []).map((sheet) => sheet.properties || {}).filter((sheet) => sheet.title);
   const byGid = Number.isFinite(wantedGid) ? sheets.find((sheet) => Number(sheet.sheetId) === Number(wantedGid)) : null;
+  if (driverRead && Number.isFinite(wantedGid) && !byGid) throw Object.assign(Error('DRIVER_SHEET_TAB_NOT_FOUND'), {code:'DRIVER_SHEET_TAB_NOT_FOUND'});
   const titles = sheets.map((sheet) => sheet.title);
   const wantedSheetName = wantedName || fallbackName;
   const sheetName = byGid?.title || (titles.includes(wantedSheetName) ? wantedSheetName : titles[0]);
@@ -1059,17 +1073,39 @@ async function getGoogleSheetTab(headers, spreadsheetId, wantedName = "", wanted
 }
 
 async function readRowsFromGoogleSheet({ spreadsheetId, sheetName, sheetGid, fallbackName, force = false, cacheKey = "" }) {
-  if (!spreadsheetId || !config.googleServiceAccountJsonBase64) return null;
+  const driverRead = cacheKey === 'driver';
+  const driverFailure = code => Object.assign(Error(code), {code});
+  if (!spreadsheetId || !config.googleServiceAccountJsonBase64) {
+    if (driverRead) throw driverFailure('DRIVER_CREDENTIALS_MISSING');
+    return null;
+  }
   if (!force && cacheKey === "driver" && googleDriverMemoryCache && Date.now() - googleDriverMemoryCache.readAt < 60 * 1000) return googleDriverMemoryCache.payload;
-  const token = await getGoogleAccessToken();
+  let token;
+  try { token = await getGoogleAccessToken({driverRead}); }
+  catch (error) { if (driverRead) throw driverFailure(/^DRIVER_[A-Z_0-9]+$/.test(error.code || '') ? error.code : error.name === 'TimeoutError' ? 'DRIVER_TOKEN_TIMEOUT' : 'DRIVER_TOKEN_FAILED'); throw error; }
+  if (driverRead && !token) throw driverFailure('DRIVER_CREDENTIALS_MISSING');
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  const tab = await getGoogleSheetTab(headers, spreadsheetId, sheetName, sheetGid, fallbackName);
-  const range = `${tab.sheetName}!A:O`;
+  let tab;
+  try { tab = await getGoogleSheetTab(headers, spreadsheetId, sheetName, sheetGid, fallbackName, {driverRead}); }
+  catch (error) { if (driverRead) throw driverFailure(/^DRIVER_[A-Z_0-9]+$/.test(error.code || '') ? error.code : error.name === 'TimeoutError' ? 'DRIVER_SHEET_METADATA_TIMEOUT' : 'DRIVER_SHEET_METADATA_FAILED'); throw error; }
+  const range = `${tab.sheetName}!${cacheKey === "driver" ? "A1:S1001" : "A:O"}`;
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
-  const response = await fetch(url, { headers });
-  const body = await response.json().catch(() => ({}));
+  let response;
+  try { response = await fetch(url, { headers, ...(driverRead ? {signal: AbortSignal.timeout(15000)} : {}) }); }
+  catch (error) { if (driverRead) throw driverFailure(error.name === 'TimeoutError' ? 'DRIVER_SHEET_VALUES_TIMEOUT' : 'DRIVER_SHEET_VALUES_FAILED'); throw error; }
+  if (driverRead && !response.ok) throw driverFailure('DRIVER_SHEET_VALUES_HTTP_' + response.status);
+  let body;
+  try { body = await response.json(); }
+  catch (error) { if (driverRead) throw driverFailure('DRIVER_SHEET_JSON_INVALID'); body = {}; }
   if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
   const values = Array.isArray(body.values) ? body.values : [];
+  if (cacheKey === "driver") {
+    const parsed = parseDriverSheetValues(values);
+    const payload = { generatedAt: new Date().toISOString(), sheetName: tab.sheetName, columns: parsed.columns,
+      rows: parsed.rows.map(row => ({ ...row, _sourceSheet: tab.sheetName })), rowCount: parsed.rows.length, driverLayout: parsed.meta };
+    googleDriverMemoryCache = { readAt: Date.now(), payload };
+    return payload;
+  }
   const columns = (values[0] || []).map((value) => normalizeCell(value)).filter(Boolean);
   const rows = values.slice(1).map((line, index) => {
     const row = {};
@@ -1131,7 +1167,8 @@ async function readRouteFromGoogleRouteIndex(date, vehicle, { force = false } = 
   try {
     const route = JSON.parse(payloadText);
     if (!route?.stops?.length) return null;
-    const payload = { ...route, date: requestedDate, vehicle: requestedVehicle, source: "google-sheet-route-index", api: "monthly-dispatch-route" };
+    const sourceRouteIdentityVerified=normalizeDateValue(route.date||route.deliveryDate)===requestedDate&&normalizeVehicleValue(route.vehicle)===requestedVehicle;
+    const payload = { ...route, date: requestedDate, vehicle: requestedVehicle, source: "google-sheet-route-index", api: "monthly-dispatch-route", sourceRouteIdentityVerified };
     googleRouteIndexMemoryCache.routes.set(cacheKey, payload);
     return payload;
   } catch {
@@ -1248,9 +1285,13 @@ async function readDriverMasterFromGoogleSheet({ date = "" } = {}) {
       effectiveDate
     };
     const prev = byVehicle.get(vehicle);
-    if (!prev || item.effectiveDate >= prev.effectiveDate) byVehicle.set(vehicle, item);
+    if (!prev || item.effectiveDate >= prev.effectiveDate) {
+      const sameDate=prev&&item.effectiveDate===prev.effectiveDate;
+      const conflict=sameDate&&(prev.conflict||String(item.driverName||'').trim()!==String(prev.driverName||'').trim()||String(item.phone||'').replace(/\D/g,'')!==String(prev.phone||'').replace(/\D/g,''));
+      byVehicle.set(vehicle,{...item,conflict:!!conflict});
+    }
   }
-  return { generatedAt: sheet?.generatedAt || null, sheetName: sheet?.sheetName || null, rowCount: sheet?.rowCount || 0, vehicles: [...byVehicle.values()] };
+  return { generatedAt: sheet?.generatedAt || null, sheetName: sheet?.sheetName || null, rowCount: sheet?.rowCount || 0, vehicles: [...byVehicle.values()], driverLayout: sheet?.driverLayout || null };
 }
 
 function sheetRowIdentity(row) {
@@ -2145,6 +2186,10 @@ async function phase2bSnapshotDateRows(date, tiles) {
 
 async function readPhase2bSnapshot() {
   if (phase2bSnapshotMemory) return phase2bSnapshotMemory;
+  if(phase2bDurableSnapshotStore){
+    phase2bDurableSnapshotLoad ||= phase2bDurableSnapshotStore.load().then(value=>value?materializeSnapshot(value):null).catch(error=>{console.warn(JSON.stringify({component:'phase2b-snapshot',event:'DURABLE_READ_FAILED',code:error.code||'SNAPSHOT_STORE_READ'}));return null;});
+    const saved=await phase2bDurableSnapshotLoad;if(saved)return (phase2bSnapshotMemory=saved);
+  }
   for (const file of [phase2bRuntimeSnapshotUrl, phase2bBundledSnapshotUrl]) {
     try {
       const payload = JSON.parse(await fs.readFile(file, "utf8"));
@@ -2155,6 +2200,7 @@ async function readPhase2bSnapshot() {
 }
 
 async function refreshPhase2bSnapshot() {
+  if(phase2bDurableSnapshotStore&&process.env.OPSMAP_SNAPSHOT_INCREMENTAL_ENABLED!=='1')return null;
   if (!previewEnabled()) return null;
   if (phase2bSnapshotRefreshPromise) return phase2bSnapshotRefreshPromise;
   phase2bSnapshotRefreshPromise = (async () => {
@@ -2169,30 +2215,44 @@ async function refreshPhase2bSnapshot() {
     if (!rows.length) for (const tile of baseTiles) rows.push(...await phase2bSnapshotTile(tile));
     const basePayload = phase2bSnapshotPayload(rows);
     const today = phase2bKstDate();
-    const refreshFrom = existing?.refreshedThrough || basePayload.latestDate;
-    for (const date of phase2bSnapshotMissingDates(refreshFrom, today)) {
+    const refreshFrom = existing?.sourceFreshness?.checkedThrough || null;
+    const completedDates=[];
+    // Historical catchup is explicit and checkpoints persist; startup never replays it.
+    const catchupDates=process.env.OPSMAP_BACKGROUND_SNAPSHOT_CATCHUP==='1'&&refreshFrom?phase2bSnapshotMissingDates(refreshFrom,today):[];
+    for (const date of catchupDates) {
       rows.push(...await phase2bSnapshotDateRows(date, baseTiles));
+      completedDates.push(date);
       const checkpoint = phase2bSnapshotPayload(rows, { refreshedThrough: date, refreshComplete: false });
+      const preserved=materializeSnapshot(mergePreservedSnapshot(snapshotProjection(existing||basePayload),checkpoint));
+      checkpoint.rows=preserved.rows;checkpoint.rowCount=preserved.rowCount;checkpoint.startDate=preserved.startDate;
+      if(phase2bDurableSnapshotStore)await phase2bDurableSnapshotStore.save({...checkpoint,sourceFreshness:{checkedThrough:date,phase:'PARTIAL'}});
       await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(checkpoint));
       phase2bSnapshotMemory = checkpoint;
       console.info(JSON.stringify({ component: "phase2b-snapshot", event: "CHECKPOINT", latestDate: checkpoint.latestDate, refreshedThrough: date, rowCount: checkpoint.rowCount }));
     }
-    const todayStatus = await phase2bTodayStatus(today).catch(() => null);
+    let todayReadFailed=false;
+    const todayStatus = await phase2bTodayStatus(today).catch(() => {todayReadFailed=true;return null;});
+    const refreshEvidence=snapshotRefreshEvidence({targetDate:today,previousThrough:refreshFrom,completedDates,todayStatus,sourceFailed:todayReadFailed});
     const knownByCode = new Map(rows.map((row) => [normalizeCell(row.customerCode || row.code), row]));
-    (todayStatus?.vehicles || []).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
+    (refreshEvidence.sourceFreshness.sourceDateVerified?todayStatus.vehicles:[]).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
       const code = normalizeCell(stop.customerCode || stop.code);
       const known = knownByCode.get(code) || {};
-      const lat = Number.isFinite(Number(stop.lat)) ? Number(stop.lat) : Number(known.lat);
-      const lng = Number.isFinite(Number(stop.lng)) ? Number(stop.lng) : Number(known.lng);
-      if (!code || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
-      rows.push({ ...known, ...stop, customerCode: code, vehicle: vehicle.vehicle, lat, lng, lastDeliveryDate: today });
+      if (!code) return;
+      const coordinates=snapshotStopCoordinates(stop,known,{preserveObserved:true});
+      rows.push({ ...known, ...stop, customerCode: code, vehicle: vehicle.vehicle, ...coordinates, lastDeliveryDate: today });
     }));
-    const payload = phase2bSnapshotPayload(rows, { refreshedThrough: today, refreshComplete: true });
+    const next=phase2bSnapshotPayload(rows,refreshEvidence);
+    // Preserve the complete previously observed customer set across an unread date gap.
+    const payload=materializeSnapshot(mergePreservedSnapshot(snapshotProjection(existing||basePayload),next));
+    if(phase2bDurableSnapshotStore){
+      const saved=await phase2bDurableSnapshotStore.save(payload);
+      Object.assign(payload,materializeSnapshot(saved));
+    }
     if (!payload.rows.length) throw new Error("PHASE2B_SNAPSHOT_EMPTY");
     await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
     phase2bSnapshotMemory = payload;
-    console.info(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESHED", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
-    setTimeout(() => warmPhase2bBounds().catch(() => {}), 1000).unref();
+    console.info(JSON.stringify({ component: "phase2b-snapshot", event: payload.refreshComplete ? "REFRESHED" : "REFRESH_PENDING", sourceDateVerified:payload.sourceFreshness?.sourceDateVerified===true, refreshPhase:payload.sourceFreshness?.phase||"UNVERIFIED", persistence:phase2bDurableSnapshotStore?.status?.()||null, latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
+    // Bounds remain lazy after a snapshot update.
     return payload;
   })().catch((error) => {
     console.error(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESH_FAILED", error: error.message || String(error) }));
@@ -2213,10 +2273,12 @@ function schedulePhase2bSnapshotRefresh(delayMs = 5000) {
   phase2bSnapshotRetryTimer.unref();
 }
 
-async function fetchDeliveryTaskRowsForDate(date) {
+async function fetchDeliveryTaskRowsForDate(date,{requireComplete=true}={}) {
   const dateParam = `${date}T00:00:00+09:00`;
   const pageSize = 300;
   const allRows = [];
+  let completed = false, pages = 0,declaredTotal=null,declaredPages=null,pagingValid=true,identityComplete=true;
+  const seenIds=new Set();
   for (let page = 0; page < 20; page += 1) {
     const query = new URLSearchParams({
       logisticsCenterId: "1",
@@ -2226,10 +2288,22 @@ async function fetchDeliveryTaskRowsForDate(date) {
     query.append("enteringDatedAtBetween", dateParam);
     query.append("enteringDatedAtBetween", dateParam);
     const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
+    if(payload?.ok===false||payload?.success===false||payload?.error)throw Object.assign(Error('DELIVERY_TASK_PAGE_FAILED'),{code:'DELIVERY_TASK_PAGE_FAILED'});
+    pages++;
     const rows = extractDeliveryTaskRows(payload);
+    if(!rows.length&&![payload,payload?.data,payload?.data?.content,payload?.data?.items,payload?.data?.list,payload?.data?.rows,payload?.content,payload?.items,payload?.list,payload?.rows].some(Array.isArray))throw Object.assign(Error('DELIVERY_TASK_PAGE_INVALID'),{code:'DELIVERY_TASK_PAGE_INVALID'});
+    const total=Number(payload?.totalElements??payload?.data?.totalElements),pageCount=Number(payload?.totalPages??payload?.data?.totalPages);
+    if(!Number.isSafeInteger(total)||total<0||!Number.isSafeInteger(pageCount)||pageCount<0)pagingValid=false;
+    else if(declaredTotal!==null&&(declaredTotal!==total||declaredPages!==pageCount))pagingValid=false;
+    else{declaredTotal=total;declaredPages=pageCount;}
+    for(const row of rows){const id=String(row?.id??row?.taskId??'');if(!/^\d+$/.test(id)||seenIds.has(id))identityComplete=false;seenIds.add(id);}
     allRows.push(...rows);
-    if (rows.length < pageSize) break;
+    if(pagingValid&&identityComplete&&allRows.length===declaredTotal&&pages===declaredPages){completed=true;break;}
+    if (rows.length < pageSize) { completed = pagingValid&&identityComplete&&declaredTotal===0&&allRows.length===0&&pages===1; break; }
   }
+  const observation=deliverySourceObservation(allRows,{date,complete:completed,pages,resolveVehicle:deliveryTaskVehicle});
+  try{assertDeliverySourceObservation(observation,date,{requireComplete});}catch(error){error.sourceObservation=observation;throw error;}
+  Object.defineProperty(allRows,"sourceObservation",{value:observation,enumerable:false});
   return allRows;
 }
 
@@ -3124,7 +3198,12 @@ app.get("/api/monthly-dispatch-summary", requireView, async (req, res) => {
 });
 
 app.get("/api/vehicle-driver-master", requireView, async (req, res) => {
-  res.json(await readDriverMasterFromGoogleSheet({ date: String(req.query.date || "") }));
+  try {
+    res.json(await readDriverMasterFromGoogleSheet({ date: String(req.query.date || "") }));
+  } catch (error) {
+    const code = /^DRIVER_[A-Z_0-9]+$/.test(error.code || '') ? error.code : 'DRIVER_SOURCE_UNAVAILABLE';
+    res.status(503).set('Cache-Control', 'private, no-store').json({ok:false,error:code});
+  }
 });
 
 app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => {
@@ -3703,7 +3782,7 @@ async function phase2bTodayStatus(date) {
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   if (phase2bTodayInflight.has(date)) return phase2bTodayInflight.get(date);
   const pending = (async () => {
-    const rows = await fetchDeliveryTaskRowsForDate(date);
+    const rows = await fetchDeliveryTaskRowsForDate(date,{requireComplete:false});
     const byVehicle = new Map();
     rows.forEach((row) => {
       const vehicle = deliveryTaskVehicle(row);
@@ -3714,6 +3793,7 @@ async function phase2bTodayStatus(date) {
     const value = {
       date,
       generatedAt: new Date().toISOString(),
+      sourceObservation: rows.sourceObservation,
       vehicles: [...byVehicle].map(([vehicle, vehicleRows]) => phase2bTodayVehicleSummary(vehicle, vehicleRows, date)).sort((a, b) => a.vehicle.localeCompare(b.vehicle, "ko", { numeric: true }))
     };
     phase2bTodayCache.set(date, { expiresAt: Date.now() + 60000, value });
@@ -3901,6 +3981,10 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
+if(phase2bDurableSnapshotStore){
+  const saved=await readPhase2bSnapshot();
+  console.info(JSON.stringify({component:'phase2b-snapshot',event:saved?.preservation?'DURABLE_LOADED':'DURABLE_NOT_LOADED',rowCount:saved?.preservation?saved.rowCount:null,version:saved?.preservation?.version||null,revision:saved?.preservation?.revision||null,automaticSyncVerified:false}));
+}
 const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
   void productionMap.requestPublishedModel();
