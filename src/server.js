@@ -1,7 +1,7 @@
 ﻿import express from "express";
 import {mountProductionOpsmapCandidate,resolveProductionCredentials} from "./productionOpsmapCandidate.js";
 import {createProductionSnapshotStore,materializeSnapshot,snapshotProjection,mergePreservedSnapshot,snapshotStopCoordinates} from "./productionSnapshotStore.js";
-import {deliverySourceObservation,snapshotRefreshEvidence} from "./snapshotRefreshEvidence.js";
+import {deliverySourceObservation,snapshotRefreshEvidence,assertDeliverySourceObservation} from "./snapshotRefreshEvidence.js";
 import {createStageReadModel} from "./stageReadModel.js";
 import {createCoordinateSupplement} from "./mapCoordinateSupplement.js";
 import {callHub as verifiedMapHubRead} from "./phase2bHubReadClient.js";
@@ -2272,7 +2272,7 @@ function schedulePhase2bSnapshotRefresh(delayMs = 5000) {
   phase2bSnapshotRetryTimer.unref();
 }
 
-async function fetchDeliveryTaskRowsForDate(date) {
+async function fetchDeliveryTaskRowsForDate(date,{requireComplete=true}={}) {
   const dateParam = `${date}T00:00:00+09:00`;
   const pageSize = 300;
   const allRows = [];
@@ -2287,8 +2287,10 @@ async function fetchDeliveryTaskRowsForDate(date) {
     query.append("enteringDatedAtBetween", dateParam);
     query.append("enteringDatedAtBetween", dateParam);
     const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
+    if(payload?.ok===false||payload?.success===false||payload?.error)throw Object.assign(Error('DELIVERY_TASK_PAGE_FAILED'),{code:'DELIVERY_TASK_PAGE_FAILED'});
     pages++;
     const rows = extractDeliveryTaskRows(payload);
+    if(!rows.length&&![payload,payload?.data,payload?.data?.content,payload?.data?.items,payload?.data?.list,payload?.data?.rows,payload?.content,payload?.items,payload?.list,payload?.rows].some(Array.isArray))throw Object.assign(Error('DELIVERY_TASK_PAGE_INVALID'),{code:'DELIVERY_TASK_PAGE_INVALID'});
     const total=Number(payload?.totalElements??payload?.data?.totalElements),pageCount=Number(payload?.totalPages??payload?.data?.totalPages);
     if(!Number.isSafeInteger(total)||total<0||!Number.isSafeInteger(pageCount)||pageCount<0)pagingValid=false;
     else if(declaredTotal!==null&&(declaredTotal!==total||declaredPages!==pageCount))pagingValid=false;
@@ -2298,7 +2300,9 @@ async function fetchDeliveryTaskRowsForDate(date) {
     if(pagingValid&&identityComplete&&allRows.length===declaredTotal&&pages===declaredPages){completed=true;break;}
     if (rows.length < pageSize) { completed = pagingValid&&identityComplete&&declaredTotal===0&&allRows.length===0&&pages===1; break; }
   }
-  Object.defineProperty(allRows,"sourceObservation",{value:deliverySourceObservation(allRows,{date,complete:completed,pages,resolveVehicle:deliveryTaskVehicle}),enumerable:false});
+  const observation=deliverySourceObservation(allRows,{date,complete:completed,pages,resolveVehicle:deliveryTaskVehicle});
+  try{assertDeliverySourceObservation(observation,date,{requireComplete});}catch(error){error.sourceObservation=observation;throw error;}
+  Object.defineProperty(allRows,"sourceObservation",{value:observation,enumerable:false});
   return allRows;
 }
 
@@ -3777,7 +3781,7 @@ async function phase2bTodayStatus(date) {
   if (cached && cached.expiresAt > Date.now()) return cached.value;
   if (phase2bTodayInflight.has(date)) return phase2bTodayInflight.get(date);
   const pending = (async () => {
-    const rows = await fetchDeliveryTaskRowsForDate(date);
+    const rows = await fetchDeliveryTaskRowsForDate(date,{requireComplete:false});
     const byVehicle = new Map();
     rows.forEach((row) => {
       const vehicle = deliveryTaskVehicle(row);

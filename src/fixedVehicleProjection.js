@@ -110,7 +110,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         const rows = Array.isArray(payload?.data) ? payload.data : extractRows(payload);
         if (!Array.isArray(rows)) throw failure('FIXED_MASTER_CONTRACT');
         const keyProfile=inspectFixedMasterKeys(rows);
-        progress={...progress,readHttp:200,pageRows:rows.length,keyProfile};
+        progress={...progress,readHttp:200,pageRows:rows.length,declaredRows:rows[0]?.totalCnt!=null&&Number.isSafeInteger(Number(rows[0].totalCnt))&&Number(rows[0].totalCnt)>=0?Number(rows[0].totalCnt):null,keyProfile};
         if(keyProfile.invalid){
           progress={...progress,phase:'ERROR',failureStep:'KEY_CONTRACT',failureCode:'FIXED_MASTER_KEY_INVALID',complete:false};
           throw failure('FIXED_MASTER_KEY_INVALID',200,'KEY_CONTRACT','SOURCE_CONTRACT');
