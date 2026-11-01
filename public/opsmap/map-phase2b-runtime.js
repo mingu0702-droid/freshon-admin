@@ -896,7 +896,7 @@
     button.dataset.customerCode = row.customerCode || "";
     button.dataset.vehicle = row.vehicle || "";
     button.title = `${row.vehicle ? vehicleLabel(row.vehicle) + " · " : ""}${row.customerName || row.address || ""}`;
-    if(state.mode==='BASE_60D'&&row.baseVehicleStale===true)button.title=`${String(row.baseVehicleCheckedAt||'').slice(0,10)||'시점 미확인'} 이전 확인값 · ${button.title} · 현재 기준 미확인`;
+    button.dataset.masterCheckedAt=row.baseVehicleCheckedAt||'';button.dataset.masterStale=String(row.baseVehicleStale===true);
     button.setAttribute("aria-label", state.mode === "BASE_60D" ? button.title : `${button.title} · ${completed ? "완료" : pending ? "미완료" : "상태 미확인"}`);
     if (row.customerCode && row.customerCode === state.selected?.customerCode) button.classList.add("selected");
     const pinColor=row.clusterCount?(window.MapViewPolicy.regionColors[row.clusterColorKey]||vehicleColor(row.vehicle)):vehicleColor(row.vehicle);
@@ -1216,7 +1216,7 @@
         for(const [name,value] of [['상세주소',detailAddressLabel],['배송요일',exact.deliveryPattern||'미확인']]){
           const label=document.createElement('dt'),node=document.createElement('dd');label.textContent=name;node.textContent=value;facts.append(label,node);
         }
-        if(exact.sourceBasis==='STORED_DAY'){const label=document.createElement('dt'),node=document.createElement('dd');label.textContent='매장정보 기준';node.textContent=exact.sourceDate+' 기준 · 현재 정보 확인 필요';facts.append(label,node);}
+        facts.dataset.sourceBasis=exact.sourceBasis||'';facts.dataset.sourceDate=exact.sourceDate||'';
       }
       positionDetailPopup();
     } catch (error) {
