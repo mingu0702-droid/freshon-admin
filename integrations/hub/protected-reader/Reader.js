@@ -4,7 +4,7 @@ var protectedReaderProfile_;
 function doGet(){return hubMapHttpJson_(hubMapHttpFailure_('UNAUTHORIZED','Authentication is required.',false,'',Date.now(),401));}
 function doPost(e){
   const started=Date.now();let request=null;
-  protectedReaderProfile_={openMs:0,lookupMs:0,rowReadMs:0,normalizeMs:0,metadataHit:false,sourceRowReads:0,candidateReads:0};
+  protectedReaderProfile_={openMs:0,lookupMs:0,rowReadMs:0,normalizeMs:0,metadataHit:false,sourceRowReads:0,candidateReads:0,readStartedAt:started};
   try{
     request=hubMapHttpParseRequest_(e);hubMapHttpValidateEnvelope_(request);
     const lock=LockService.getScriptLock();if(!lock.tryLock(1000))hubMapHttpRaise_('RATE_LIMITED','Please retry later.',429,true);
@@ -26,10 +26,10 @@ function doPost(e){
     response.meta.detailProfile=protectedReaderProfile_;return hubMapHttpJson_(response);
   }finally{protectedReaderProfile_=null;}
 }
-function protectedReaderSource_(archive){
+function protectedReaderSource_(archive,dateFilter){
   const id=PropertiesService.getScriptProperties().getProperty(archive?'PROTECTED_ARCHIVE_ID':'PROTECTED_CUSTOMER_ID');
   if(!id)hubMapHttpRaise_('INTERNAL_ERROR','Read source is not configured.',503,false);
-  const at=Date.now(),book=protectedReaderReadOnlyBook_(id);protectedReaderProfile_.openMs+=Date.now()-at;return book;
+  const at=Date.now(),book=protectedReaderReadOnlyBook_(id,dateFilter);protectedReaderProfile_.openMs+=Date.now()-at;return book;
 }
 function protectedReaderObject_(headers,values){
   const row={};headers.forEach(function(h,i){row[String(h)]=values[i];});return row;
@@ -55,7 +55,7 @@ function getDailyRoutes(params){
   const code=hubMapHttpCustomerCode_(params.customerCode),date=hubMapHttpDate_(params.startDate,'date');
   if(params.endDate!==date||params.limit!==1)hubMapHttpRaise_('INVALID_PARAMS','An exact date and customer are required.',400,false);
   for(let archive=0;archive<2;archive++){
-    const book=protectedReaderSource_(archive===1),sheet=book.getSheetByName('daily_routes');if(!sheet||sheet.getLastRow()<2)continue;
+    const book=protectedReaderSource_(archive===1,date),sheet=book.getSheetByName('daily_routes');if(!sheet||sheet.getLastRow()<2)continue;
     const row=hubStaffDetailRow_(sheet,code,date,protectedReaderProfile_);if(!row)continue;
     const value=protectedReaderProjection_(row);if(value.customerCode!==code||value.deliveryDate!==date)hubMapHttpRaise_('INTERNAL_ERROR','Selected customer or date did not match.',409,false);
     return {ok:true,data:[value]};
