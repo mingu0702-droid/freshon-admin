@@ -58,6 +58,10 @@ test('public repo / cross-environment / CAS conflict fail closed; current remain
 test('readback failure does not claim successful storage',async()=>{
  const gh=fakeGithub({readFail:true});await assert.rejects(createProductionSnapshotStore({env,token:'SYNTHETIC_ONLY',fetchImpl:gh.fetchImpl,now}).save(snapshot([row(0)])),{code:'FIXED_STORE_READ'});
 });
+test('corrupt current restores verified previous read-only and refuses blind overwrite',async()=>{
+ const gh=fakeGithub(),store=createProductionSnapshotStore({env,token:'SYNTHETIC_ONLY',fetchImpl:gh.fetchImpl,now});const first=await store.save(snapshot([row(0)]));await store.save(snapshot([row(1)]));gh.state.current.rows[0].lat+=1;
+ const restarted=createProductionSnapshotStore({env,token:'SYNTHETIC_ONLY',fetchImpl:gh.fetchImpl,now});assert.equal((await restarted.load()).sha256,first.sha256);await assert.rejects(restarted.save(snapshot([row(2)])),{code:'SNAPSHOT_INTEGRITY'});assert.equal(gh.puts,2);
+});
 test('refactored fixed master store still saves/loads with unchanged envelope contract',async()=>{
  let value=null,sha=null;const fetchImpl=async(url,options={})=>{if(url.endsWith('/freshon-cache'))return new Response(JSON.stringify({private:true}));if(options.method==='PUT'){const body=JSON.parse(options.body);value=JSON.parse(Buffer.from(body.content,'base64'));sha='1'.repeat(40);return new Response('{}');}return value?new Response(JSON.stringify({sha,content:Buffer.from(JSON.stringify(value)).toString('base64')})):new Response('{}',{status:404});};
  const store=createFixedVehicleStore({env:{GITHUB_CACHE_REPO:env.OPSMAP_SNAPSHOT_STORE_REPO,GITHUB_TOKEN:'SYNTHETIC_ONLY'},fetchImpl,now});const envelope=fixedEnvelope([{customerCode:'S100001',baseVehicle:'101',baseVehicleGroup:'osan',baseVehicleState:'VERIFIED_MASTER'}],new Date(Date.now()-1000).toISOString());await store.save(envelope);assert.equal((await store.load()).version,envelope.version);

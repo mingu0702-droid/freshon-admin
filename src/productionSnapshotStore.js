@@ -76,8 +76,8 @@ export function createProductionSnapshotStore({env=process.env,token=env.OPSMAP_
  const prefix=production?'opsmap-production':'opsmap-stage';
  const adapter=createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_TOKEN:token,GITHUB_CACHE_BRANCH:branch,GITHUB_CACHE_DIR:prefix},fetchImpl,now}),file='map-snapshot-v1.json';
  let saving=Promise.resolve();
- async function read(){const result=await adapter.read(file);if(result.value===null)return {...result,state:{schema:1,current:null,previous:null}};const state=result.value;if(state.schema!==1||Object.keys(state).join('|')!=='schema|current|previous')fail('SNAPSHOT_STORE_FORMAT');if(state.current)validateSnapshotProjection(state.current);if(state.previous)validateSnapshotProjection(state.previous);return {...result,state};}
- return {kind:'PRIVATE_GITHUB_CAS',async load(){const {state}=await read();return state.current;},async save(input){
+ async function read({allowPrevious=false}={}){const result=await adapter.read(file);if(result.value===null)return {...result,state:{schema:1,current:null,previous:null}};const state=result.value;if(state.schema!==1||Object.keys(state).join('|')!=='schema|current|previous')fail('SNAPSHOT_STORE_FORMAT');if(state.previous)validateSnapshotProjection(state.previous);if(state.current){try{validateSnapshotProjection(state.current);}catch(error){if(!allowPrevious||!state.previous)throw error;return {...result,state:{...state,current:state.previous},recoveredPrevious:true};}}return {...result,state};}
+ return {kind:'PRIVATE_GITHUB_CAS',async load(){const {state}=await read({allowPrevious:true});return state.current;},async save(input){
   const work=saving.catch(()=>{}).then(async()=>{const old=await read(),current=mergePreservedSnapshot(old.state.current,input,{now});
    const state={schema:1,current,previous:old.state.current};
    // One SHA CAS updates current+previous atomically; the Git commit is another backup.
