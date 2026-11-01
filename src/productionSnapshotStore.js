@@ -39,7 +39,7 @@ function rowsOf(input){
 }
 function sourceEvidence(value){
  const e=value?.sourceFreshness||{},complete=e.sourceReadComplete===true&&e.sourceDateVerified===true&&e.automaticSyncVerified===true;
- return {targetDate:day(e.targetDate),checkedThrough:day(e.checkedThrough),sourceVersion:/^(?:\d{1,30}|[a-f0-9]{64})$/.test(e.sourceVersion||'')?e.sourceVersion:null,sourceReadComplete:e.sourceReadComplete===true,sourceDateVerified:e.sourceDateVerified===true,collectionVerified:e.collectionVerified===true,publicationVerified:e.publicationVerified===true,automaticSyncVerified:complete,phase:/^[A-Z_]{1,64}$/.test(e.phase||'')?e.phase:'UNVERIFIED'};
+ return {targetDate:day(e.targetDate),checkedThrough:day(e.checkedThrough),sourceVersion:typeof e.sourceVersion==='string'&&/^(?:\d{1,30}|[a-f0-9]{64})$/.test(e.sourceVersion)?e.sourceVersion:null,sourceReadComplete:e.sourceReadComplete===true,sourceDateVerified:e.sourceDateVerified===true,collectionVerified:e.collectionVerified===true,publicationVerified:e.publicationVerified===true,automaticSyncVerified:complete,phase:/^[A-Z_]{1,64}$/.test(e.phase||'')?e.phase:'UNVERIFIED'};
 }
 export function snapshotProjection(input,{revision=1,now=Date.now}={}){
  if(!input||input.version!=='phase2b-map-snapshot-v1'||!Number.isSafeInteger(revision)||revision<1)fail('SNAPSHOT_CONTRACT');
@@ -92,14 +92,17 @@ export function createProductionSnapshotStore({env=process.env,token=env.OPSMAP_
  if(branch!==(production?'production/opsmap-snapshots':'stage/opsmap-snapshots'))fail('SNAPSHOT_STORE_ENVIRONMENT');
  const prefix=production?'opsmap-production':'opsmap-stage';
  const adapter=createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_TOKEN:token,GITHUB_CACHE_BRANCH:branch,GITHUB_CACHE_DIR:prefix},fetchImpl,now}),file='map-snapshot-v1.json';
- let saving=Promise.resolve();
+ let saving=Promise.resolve(),lastSaveState='IDLE';
+ const content=value=>{const {revision,observedAt,sha256,...body}=value;return JSON.stringify(body);};
  async function read({allowPrevious=false}={}){const result=await adapter.read(file);if(result.value===null)return {...result,state:{schema:1,current:null,previous:null}};const state=result.value;if(state.schema!==1||Object.keys(state).join('|')!=='schema|current|previous')fail('SNAPSHOT_STORE_FORMAT');if(state.previous)validateSnapshotProjection(state.previous);if(state.current){try{validateSnapshotProjection(state.current);}catch(error){if(!allowPrevious||!state.previous)throw error;return {...result,state:{...state,current:state.previous},recoveredPrevious:true};}}return {...result,state};}
- return {kind:'PRIVATE_GITHUB_CAS',async load(){const {state}=await read({allowPrevious:true});return state.current;},async save(input){
-  const work=saving.catch(()=>{}).then(async()=>{const old=await read(),current=mergePreservedSnapshot(old.state.current,input,{now});
+ return {kind:'PRIVATE_GITHUB_CAS',status:()=>({lastSaveState}),async load(){const {state}=await read({allowPrevious:true});return state.current;},async save(input){
+  const work=saving.catch(()=>{}).then(async()=>{lastSaveState='PENDING';const old=await read(),current=mergePreservedSnapshot(old.state.current,input,{now});
+   // Projection NOOP never certifies unchanged Customer data or synchronization.
+   if(old.state.current&&content(old.state.current)===content(current)){lastSaveState='PROJECTION_NOOP';return old.state.current;}
    const state={schema:1,current,previous:old.state.current};
    // One SHA CAS updates current+previous atomically; the Git commit is another backup.
    await adapter.write(file,state,old.sha);
-   const saved=await read();if(saved.state.current?.sha256!==current.sha256)fail('SNAPSHOT_STORE_READBACK_UNKNOWN');return current;
-  });saving=work;return work;
+   const saved=await read();if(saved.state.current?.sha256!==current.sha256)fail('SNAPSHOT_STORE_READBACK_UNKNOWN');lastSaveState='STORED';return current;
+  });saving=work;return work.catch(error=>{lastSaveState='FAILED';throw error;});
  }};
 }

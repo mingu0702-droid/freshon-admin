@@ -17,14 +17,14 @@ export function deliverySourceObservation(rows,{date,complete=false,pages=0,reso
  return {source:'DELIVERY_ADMIN_READ',requestedDate:date,complete:complete===true,pages,responseRows:rows.length,matchingDateRows,wrongDateRows,unverifiedDateRows,unassignedRows,dateVerified:rows.length>0&&matchingDateRows===rows.length};
 }
 export function snapshotRefreshEvidence({targetDate,previousThrough,completedDates=[],todayStatus=null,sourceFailed=false,checkedAt=new Date().toISOString()}={}){
- if(!validDay(targetDate)||!validDay(previousThrough)||previousThrough>targetDate||!Array.isArray(completedDates)||!Number.isFinite(Date.parse(checkedAt)))throw Error('SNAPSHOT_REFRESH_EVIDENCE_CONTRACT');
+ if(!validDay(targetDate)||previousThrough!==null&&(!validDay(previousThrough)||previousThrough>targetDate)||!Array.isArray(completedDates)||!Number.isFinite(Date.parse(checkedAt)))throw Error('SNAPSHOT_REFRESH_EVIDENCE_CONTRACT');
  let through=previousThrough;
- for(const date of completedDates){if(!validDay(date)||date!==nextDay(through)||date>targetDate)throw Error('SNAPSHOT_CHECKPOINT_NOT_CONTIGUOUS');through=date;}
- const backlog=through<targetDate,e=todayStatus?.sourceObservation;
+ for(const date of completedDates){if(through===null||!validDay(date)||date!==nextDay(through)||date>targetDate)throw Error('SNAPSHOT_CHECKPOINT_NOT_CONTIGUOUS');through=date;}
+ const backlog=through===null||through<targetDate,e=todayStatus?.sourceObservation;
  const sourceRead=e?.source==='DELIVERY_ADMIN_READ'&&e.requestedDate===targetDate&&todayStatus?.date===targetDate;
  const actualCurrent=sourceRead&&e.complete===true&&e.dateVerified===true&&Number.isSafeInteger(e.responseRows)&&e.responseRows>0&&e.matchingDateRows===e.responseRows&&e.wrongDateRows===0&&e.unverifiedDateRows===0;
  const holiday=new Date(targetDate+'T00:00:00Z').getUTCDay()===0?'OSAN_SUNDAY':null;
- const phase=backlog?'PARTIAL':sourceFailed?'SOURCE_FAILED':actualCurrent?'SOURCE_DATE_OBSERVED':sourceRead&&e.complete===true&&e.responseRows===0?'NO_DISPATCH_OBSERVED':'SOURCE_UNVERIFIED';
+ const phase=sourceFailed?'SOURCE_FAILED':through===null?'CHECKPOINT_UNVERIFIED':backlog?'PARTIAL':actualCurrent?'SOURCE_DATE_OBSERVED':sourceRead&&e.complete===true&&e.responseRows===0?'NO_DISPATCH_OBSERVED':'SOURCE_UNVERIFIED';
  return {refreshedThrough:through,refreshComplete:!backlog&&!sourceFailed&&actualCurrent,
   sourceFreshness:{targetDate,checkedThrough:through,checkedAt,phase,holiday,sourceDateVerified:actualCurrent,sourceRows:sourceRead&&Number.isSafeInteger(e.responseRows)?e.responseRows:null,sourceReadComplete:sourceRead&&e.complete===true,collectionVerified:false,publicationVerified:false,automaticSyncVerified:false}};
 }
