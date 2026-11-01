@@ -5,7 +5,7 @@ import {inspectFixedMasterKeys,createFixedVehicleReader} from '../src/fixedVehic
 test('key profile classifies invalid forms without exposing identifiers or payloads',()=>{
  const rows=[{estCd:'S1'},{estCd:' s1 '},{totalCnt:7},{estCd:null},{estCd:' '},{estCd:123},{estCd:'123'},{estCd:'PRIVATE_INVALID',address:'PRIVATE_ADDRESS',mainCarSeqNm:'221'},null];
  const p=inspectFixedMasterKeys(rows);
- assert.deepEqual(p,{rows:9,valid:2,invalid:7,missing:1,nullValue:1,blank:1,nonString:1,numericOnly:1,otherFormat:1,nonObject:1,metadataOnly:1,customerFieldsPresent:1,duplicateValid:1});
+ assert.deepEqual(p,{rows:9,valid:3,invalid:6,missing:1,nullValue:1,blank:1,nonString:1,numericOnly:1,acceptedNumeric:1,unsupportedNumeric:0,otherFormat:1,nonObject:1,metadataOnly:1,customerFieldsPresent:1,duplicateValid:1});
  assert.ok(!/PRIVATE|S1|221/.test(JSON.stringify(p)));
 });
 

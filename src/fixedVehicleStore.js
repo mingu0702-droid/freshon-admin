@@ -1,5 +1,6 @@
 // Dedicated, private fixed-master projection. Never stores source payloads.
 import crypto from 'node:crypto';
+import {isFixedMasterCustomerKey} from './fixedMasterCustomerKey.js';
 export const FIXED_SCHEMA = 1;
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const fail = code => { throw Object.assign(new Error(code), {code}); };
@@ -8,11 +9,11 @@ export function fixedEnvelope(data, checkedAt) {
   if (!Array.isArray(data) || !data.length || !Number.isFinite(Date.parse(checkedAt)) || Date.parse(checkedAt)>Date.now()+300000) fail('FIXED_STORE_INVALID');
   const seen = new Set();
   const rows = data.map(row => {
-    const code = String(row.customerCode || '');
+    const code = row.customerCode;
     const vehicle = String(row.baseVehicle || '');
     const group = String(row.baseVehicleGroup || '');
     const state = row.baseVehicleState;
-    if (!/^[A-Z]\d+$/.test(code) || seen.has(code) || !/^\d*$/.test(vehicle) || !['','osan','yeongnam','honam'].includes(group)
+    if (!isFixedMasterCustomerKey(code) || seen.has(code) || !/^\d*$/.test(vehicle) || !['','osan','yeongnam','honam'].includes(group)
       || !['VERIFIED_MASTER','UNASSIGNED','CONFLICT'].includes(state) || (state==='VERIFIED_MASTER') !== !!vehicle) fail('FIXED_STORE_INVALID');
     seen.add(code);
     const days = row.weekdays ? DAYS.map(day => {const v=String(row.weekdays[day]||'');if(!/^\d*$/.test(v))fail('FIXED_STORE_INVALID');return v;}) : null;
@@ -28,7 +29,7 @@ export function validateFixedEnvelope(value,{materialize=true}={}) {
   if(!value.rows.length||!Number.isFinite(Date.parse(value.checkedAt))||new Date(value.checkedAt).toISOString()!==value.checkedAt||Date.parse(value.checkedAt)>Date.now()+300000)fail('FIXED_STORE_INVALID');
   let previous='';
   for(const r of value.rows){
-    if(typeof r[0]!=='string'||!/^[A-Z]\d+$/.test(r[0])||r[0]<=previous||typeof r[1]!=='string'||!/^\d*$/.test(r[1])||!['','osan','yeongnam','honam'].includes(r[2])||!['VERIFIED_MASTER','UNASSIGNED','CONFLICT'].includes(r[3])||(r[3]==='VERIFIED_MASTER')!==!!r[1]||r[4]?.some(v=>typeof v!=='string'||!/^\d*$/.test(v)))fail('FIXED_STORE_INVALID');
+    if(!isFixedMasterCustomerKey(r[0])||r[0]<=previous||typeof r[1]!=='string'||!/^\d*$/.test(r[1])||!['','osan','yeongnam','honam'].includes(r[2])||!['VERIFIED_MASTER','UNASSIGNED','CONFLICT'].includes(r[3])||(r[3]==='VERIFIED_MASTER')!==!!r[1]||r[4]?.some(v=>typeof v!=='string'||!/^\d*$/.test(v)))fail('FIXED_STORE_INVALID');
     previous=r[0];
   }
   // Validate the same canonical bytes without materializing 88k customer
