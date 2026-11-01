@@ -1,11 +1,35 @@
 // Read-only, allowlisted projection of the current fixed-dispatch master.
 // Raw rows never persist; only the separately allowlisted projection may persist.
 import crypto from 'node:crypto';
+const masterKey = value => /^[A-Z]\d+$/.test(String(value || '').trim().toUpperCase());
+const pagingKeys = new Set(['totalCnt','totalPages','isPaging','sortName','sortOrder','page','size','number','numberOfElements','first','last','empty']);
+// Counts only: never include customer identifiers, payload values, or raw rows
+// in progress/errors. Unknown rows remain a hard failure, not discarded data.
+export function inspectFixedMasterKeys(rows) {
+  const counts={rows:rows.length,valid:0,invalid:0,missing:0,nullValue:0,blank:0,nonString:0,numericOnly:0,otherFormat:0,nonObject:0,metadataOnly:0,customerFieldsPresent:0,duplicateValid:0};
+  const seen=new Set();
+  for(const row of rows){
+    if(!row||typeof row!=='object'||Array.isArray(row)){counts.invalid++;counts.nonObject++;continue;}
+    const value=row.estCd;
+    if(masterKey(value)){counts.valid++;const code=String(value).trim().toUpperCase();if(seen.has(code))counts.duplicateValid++;seen.add(code);continue;}
+    counts.invalid++;
+    if(!Object.hasOwn(row,'estCd'))counts.missing++;
+    else if(value==null)counts.nullValue++;
+    else if(typeof value!=='string')counts.nonString++;
+    else if(!value.trim())counts.blank++;
+    else if(/^\d+$/.test(value.trim()))counts.numericOnly++;
+    else counts.otherFormat++;
+    const keys=Object.keys(row);
+    if(keys.length&&keys.every(key=>pagingKeys.has(key)))counts.metadataOnly++;
+    if(['estNm','estName','address','mainCarSeqNm','carCd',...['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm')].some(key=>row[key]!=null&&String(row[key]).trim()))counts.customerFieldsPresent++;
+  }
+  return counts;
+}
 export function projectFixedVehicles(rows) {
   const result = new Map();
   for (const row of rows) {
     const customerCode = String(row.estCd || '').trim().toUpperCase();
-    if (!/^[A-Z]\d+$/.test(customerCode)) continue;
+    if (!masterKey(customerCode)) continue;
     const primary = String(row.mainCarSeqNm || '').trim().replace(/호$/, '');
     const baseVehicle = /^\d+$/.test(primary) ? String(Number(primary)) : '';
     const weekdays = Object.fromEntries(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => {
@@ -26,7 +50,7 @@ export function projectFixedVehicles(rows) {
 export function createFixedVehicleReader({ensureSession, readJson, extractRows, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
   let progress=null;
   const reader=async function readFixedVehicleMaster({signal}={}) {
-    progress={phase:'SESSION',center:null,page:0,sourceRows:0,retries:0};
+    progress={phase:'SESSION',center:null,page:0,sourceRows:0,retries:0,completedCenters:[]};
     const failure=(code,http=0,step='READ',kind='UNKNOWN')=>Object.assign(new Error(code),{code,status:Number(http)||0,step,kind});
     try{await ensureSession();}catch(error){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',error.status);}
     let authRetried=false,firstHttp=200,authReason=null;
@@ -85,6 +109,12 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         // treats those as paging-only records and can discard real customers.
         const rows = Array.isArray(payload?.data) ? payload.data : extractRows(payload);
         if (!Array.isArray(rows)) throw failure('FIXED_MASTER_CONTRACT');
+        const keyProfile=inspectFixedMasterKeys(rows);
+        progress={...progress,readHttp:200,pageRows:rows.length,keyProfile};
+        if(keyProfile.invalid){
+          progress={...progress,phase:'ERROR',failureStep:'KEY_CONTRACT',failureCode:'FIXED_MASTER_KEY_INVALID',complete:false};
+          throw failure('FIXED_MASTER_KEY_INVALID',200,'KEY_CONTRACT','SOURCE_CONTRACT');
+        }
         const declared=rows[0]?.totalCnt;
         if(declared!=null){
           const count=Number(declared);
@@ -97,7 +127,6 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         // Keep no contact/access/memo values between batches.
         const minimal=rows.map(row => ({logCd,...Object.fromEntries(['estCd','mainCarSeqNm',
           ...['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm')].map(key=>[key,row[key]]))}));
-        if(minimal.some(row=>!/^[A-Z]\d+$/.test(String(row.estCd||'').trim().toUpperCase())))throw failure('FIXED_MASTER_KEY_INVALID');
         const pageHash=crypto.createHash('sha256').update(JSON.stringify(minimal)).digest('hex');
         // A repeated full page cannot prove pagination completeness. Source
         // row count is deliberately NOT compared with customerCode unique count.
@@ -117,6 +146,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
       }
       projected.push(...centerProjection);sourceRows+=centerRows;pagingFieldRows+=centerPagingRows;
       centers.push({center:logCd,sourceRows:centerRows,declaredRows:expectedRows,pages:pageHashes.size,scan,firstPageHash});accepted=true;
+      progress={...progress,completedCenters:centers.map(({center,sourceRows,declaredRows,pages,scan})=>({center,sourceRows,declaredRows,pages,scan}))};
       }catch(error){
         if(!['FIXED_MASTER_COUNT_CHANGED','FIXED_MASTER_SOURCE_CHANGED'].includes(error.code)||scan===1)throw error;
         // Discard only the unstable candidate for this center. The existing
@@ -126,7 +156,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
       }
     }
     if (!projected.length) throw failure('FIXED_MASTER_EMPTY');
-    progress={...progress,phase:'DONE',sourceRows};
+    progress={...progress,phase:'DONE',sourceRows,complete:true};
     return {data: projectFixedVehicles(projected),meta:{authRetried,firstHttp,authReason,readHttp:200,sourceRows,pagingFieldRows,retries:progress.retries,centers}};
   };
   reader.getProgress=()=>progress?{...progress}:null;
