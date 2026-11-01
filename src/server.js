@@ -756,7 +756,7 @@ function base64Url(value) {
 }
 
 function parseGoogleServiceAccount() {
-  if (!config.googleServiceAccountJsonBase64 || !config.googleSheetId) return null;
+  if (!config.googleServiceAccountJsonBase64) return null;
   const json = Buffer.from(config.googleServiceAccountJsonBase64, "base64").toString("utf8");
   const account = JSON.parse(json);
   if (!account.client_email || !account.private_key) {
@@ -765,14 +765,14 @@ function parseGoogleServiceAccount() {
   return account;
 }
 
-async function getGoogleAccessToken() {
+async function getGoogleAccessToken({ driverRead = false } = {}) {
   const account = parseGoogleServiceAccount();
   if (!account) return null;
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT" };
   const claim = {
     iss: account.client_email,
-    scope: "https://www.googleapis.com/auth/spreadsheets",
+    scope: driverRead ? "https://www.googleapis.com/auth/spreadsheets.readonly" : "https://www.googleapis.com/auth/spreadsheets",
     aud: "https://oauth2.googleapis.com/token",
     exp: now + 3600,
     iat: now
@@ -784,6 +784,7 @@ async function getGoogleAccessToken() {
     .replace(/\//g, "_");
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
+    ...(driverRead ? {signal: AbortSignal.timeout(15000)} : {}),
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -791,7 +792,10 @@ async function getGoogleAccessToken() {
     })
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`Google token failed: ${body.error_description || body.error || response.status}`);
+  if (!response.ok) {
+    if (driverRead) throw Object.assign(Error('DRIVER_TOKEN_HTTP_' + response.status), {code:'DRIVER_TOKEN_HTTP_' + response.status});
+    throw new Error(`Google token failed: ${body.error_description || body.error || response.status}`);
+  }
   return body.access_token;
 }
 
@@ -1050,13 +1054,17 @@ async function clearAndWriteGoogleSheetValues(headers, sheetName, values) {
   return { updatedRows, updatedRange, columns: columns.length };
 }
 
-async function getGoogleSheetTab(headers, spreadsheetId, wantedName = "", wantedGid = null, fallbackName = "customers") {
+async function getGoogleSheetTab(headers, spreadsheetId, wantedName = "", wantedGid = null, fallbackName = "customers", {driverRead = false} = {}) {
   const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets.properties(title,sheetId)`;
-  const metaResponse = await fetch(metaUrl, { headers });
-  const metaBody = await metaResponse.json().catch(() => ({}));
+  const metaResponse = await fetch(metaUrl, { headers, ...(driverRead ? {signal:AbortSignal.timeout(15000)} : {}) });
+  if (driverRead && !metaResponse.ok) throw Object.assign(Error('DRIVER_SHEET_METADATA_HTTP_' + metaResponse.status), {code:'DRIVER_SHEET_METADATA_HTTP_' + metaResponse.status});
+  let metaBody;
+  try { metaBody = await metaResponse.json(); }
+  catch (error) { if (driverRead) throw Object.assign(Error('DRIVER_SHEET_METADATA_JSON_INVALID'), {code:'DRIVER_SHEET_METADATA_JSON_INVALID'}); metaBody = {}; }
   if (!metaResponse.ok) throw new Error(`Google sheet metadata failed: ${metaBody.error?.message || metaResponse.status}`);
   const sheets = (metaBody.sheets || []).map((sheet) => sheet.properties || {}).filter((sheet) => sheet.title);
   const byGid = Number.isFinite(wantedGid) ? sheets.find((sheet) => Number(sheet.sheetId) === Number(wantedGid)) : null;
+  if (driverRead && Number.isFinite(wantedGid) && !byGid) throw Object.assign(Error('DRIVER_SHEET_TAB_NOT_FOUND'), {code:'DRIVER_SHEET_TAB_NOT_FOUND'});
   const titles = sheets.map((sheet) => sheet.title);
   const wantedSheetName = wantedName || fallbackName;
   const sheetName = byGid?.title || (titles.includes(wantedSheetName) ? wantedSheetName : titles[0]);
@@ -1065,15 +1073,30 @@ async function getGoogleSheetTab(headers, spreadsheetId, wantedName = "", wanted
 }
 
 async function readRowsFromGoogleSheet({ spreadsheetId, sheetName, sheetGid, fallbackName, force = false, cacheKey = "" }) {
-  if (!spreadsheetId || !config.googleServiceAccountJsonBase64) return null;
+  const driverRead = cacheKey === 'driver';
+  const driverFailure = code => Object.assign(Error(code), {code});
+  if (!spreadsheetId || !config.googleServiceAccountJsonBase64) {
+    if (driverRead) throw driverFailure('DRIVER_CREDENTIALS_MISSING');
+    return null;
+  }
   if (!force && cacheKey === "driver" && googleDriverMemoryCache && Date.now() - googleDriverMemoryCache.readAt < 60 * 1000) return googleDriverMemoryCache.payload;
-  const token = await getGoogleAccessToken();
+  let token;
+  try { token = await getGoogleAccessToken({driverRead}); }
+  catch (error) { if (driverRead) throw driverFailure(/^DRIVER_[A-Z_0-9]+$/.test(error.code || '') ? error.code : error.name === 'TimeoutError' ? 'DRIVER_TOKEN_TIMEOUT' : 'DRIVER_TOKEN_FAILED'); throw error; }
+  if (driverRead && !token) throw driverFailure('DRIVER_CREDENTIALS_MISSING');
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  const tab = await getGoogleSheetTab(headers, spreadsheetId, sheetName, sheetGid, fallbackName);
+  let tab;
+  try { tab = await getGoogleSheetTab(headers, spreadsheetId, sheetName, sheetGid, fallbackName, {driverRead}); }
+  catch (error) { if (driverRead) throw driverFailure(/^DRIVER_[A-Z_0-9]+$/.test(error.code || '') ? error.code : error.name === 'TimeoutError' ? 'DRIVER_SHEET_METADATA_TIMEOUT' : 'DRIVER_SHEET_METADATA_FAILED'); throw error; }
   const range = `${tab.sheetName}!${cacheKey === "driver" ? "A1:S1001" : "A:O"}`;
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`;
-  const response = await fetch(url, { headers });
-  const body = await response.json().catch(() => ({}));
+  let response;
+  try { response = await fetch(url, { headers, ...(driverRead ? {signal: AbortSignal.timeout(15000)} : {}) }); }
+  catch (error) { if (driverRead) throw driverFailure(error.name === 'TimeoutError' ? 'DRIVER_SHEET_VALUES_TIMEOUT' : 'DRIVER_SHEET_VALUES_FAILED'); throw error; }
+  if (driverRead && !response.ok) throw driverFailure('DRIVER_SHEET_VALUES_HTTP_' + response.status);
+  let body;
+  try { body = await response.json(); }
+  catch (error) { if (driverRead) throw driverFailure('DRIVER_SHEET_JSON_INVALID'); body = {}; }
   if (!response.ok) throw new Error(`Google sheet read failed: ${body.error?.message || response.status}`);
   const values = Array.isArray(body.values) ? body.values : [];
   if (cacheKey === "driver") {
@@ -2191,10 +2214,10 @@ async function refreshPhase2bSnapshot() {
     if (!rows.length) for (const tile of baseTiles) rows.push(...await phase2bSnapshotTile(tile));
     const basePayload = phase2bSnapshotPayload(rows);
     const today = phase2bKstDate();
-    const refreshFrom = existing?.refreshedThrough || basePayload.latestDate;
+    const refreshFrom = existing?.sourceFreshness?.checkedThrough || null;
     const completedDates=[];
     // Historical catchup is explicit and checkpoints persist; startup never replays it.
-    const catchupDates=process.env.OPSMAP_BACKGROUND_SNAPSHOT_CATCHUP==='1'?phase2bSnapshotMissingDates(refreshFrom,today):[];
+    const catchupDates=process.env.OPSMAP_BACKGROUND_SNAPSHOT_CATCHUP==='1'&&refreshFrom?phase2bSnapshotMissingDates(refreshFrom,today):[];
     for (const date of catchupDates) {
       rows.push(...await phase2bSnapshotDateRows(date, baseTiles));
       completedDates.push(date);
@@ -2227,7 +2250,7 @@ async function refreshPhase2bSnapshot() {
     if (!payload.rows.length) throw new Error("PHASE2B_SNAPSHOT_EMPTY");
     await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
     phase2bSnapshotMemory = payload;
-    console.info(JSON.stringify({ component: "phase2b-snapshot", event: payload.refreshComplete ? "REFRESHED" : "REFRESH_PENDING", sourceDateVerified:payload.sourceFreshness?.sourceDateVerified===true, refreshPhase:payload.sourceFreshness?.phase||"UNVERIFIED", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
+    console.info(JSON.stringify({ component: "phase2b-snapshot", event: payload.refreshComplete ? "REFRESHED" : "REFRESH_PENDING", sourceDateVerified:payload.sourceFreshness?.sourceDateVerified===true, refreshPhase:payload.sourceFreshness?.phase||"UNVERIFIED", persistence:phase2bDurableSnapshotStore?.status?.()||null, latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
     // Bounds remain lazy after a snapshot update.
     return payload;
   })().catch((error) => {
