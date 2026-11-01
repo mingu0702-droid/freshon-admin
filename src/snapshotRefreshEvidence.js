@@ -9,14 +9,22 @@ export function sourceTaskDate(value){
 export function deliverySourceObservation(rows,{date,complete=false,pages=0,resolveVehicle=()=>''}={}){
  if(!validDay(date)||!Array.isArray(rows)||!Number.isInteger(pages)||pages<0||pages>20)throw Error('DELIVERY_OBSERVATION_CONTRACT');
  let matchingDateRows=0,wrongDateRows=0,unverifiedDateRows=0,unassignedRows=0,conflictingDateRows=0;
+ const primaryDates=new Map(),secondaryDates=new Map();
+ const count=(map,day)=>{if(day)map.set(day,(map.get(day)||0)+1);};
+ const limited=map=>[...map].sort(([a],[b])=>a.localeCompare(b)).slice(0,10).map(([date,rows])=>({date,rows}));
  for(const row of rows){
-  const observed=sourceTaskDate(row?.enteringDatedAt??row?.deliveryDate??row?.carrier?.enteringDatedAt);
-  const knownDates=[row?.enteringDatedAt,row?.deliveryDate,row?.carrier?.enteringDatedAt].map(sourceTaskDate).filter(Boolean);
+  const values=[row?.enteringDatedAt,row?.deliveryDate,row?.carrier?.enteringDatedAt];
+  const primaryIndex=values.findIndex(value=>value!==null&&value!==undefined);
+  const observed=sourceTaskDate(values[primaryIndex]);
+  const knownDates=values.map(sourceTaskDate).filter(Boolean);
+  count(primaryDates,observed);
+  for(const secondary of new Set(values.filter((_,index)=>index!==primaryIndex).map(sourceTaskDate).filter(Boolean)))count(secondaryDates,secondary);
   if(new Set(knownDates).size>1)conflictingDateRows++;
   if(!observed)unverifiedDateRows++;else if(observed===date)matchingDateRows++;else wrongDateRows++;
   if(!resolveVehicle(row))unassignedRows++;
  }
- return {source:'DELIVERY_ADMIN_READ',requestedDate:date,complete:complete===true,pages,responseRows:rows.length,matchingDateRows,wrongDateRows,unverifiedDateRows,unassignedRows,conflictingDateRows,dateVerified:rows.length>0&&matchingDateRows===rows.length&&conflictingDateRows===0};
+ return {source:'DELIVERY_ADMIN_READ',requestedDate:date,complete:complete===true,pages,responseRows:rows.length,matchingDateRows,wrongDateRows,unverifiedDateRows,unassignedRows,conflictingDateRows,dateVerified:rows.length>0&&matchingDateRows===rows.length&&conflictingDateRows===0,
+  dateCountBasis:'PRIMARY_FIRST_NON_NULLISH_SECONDARY_DISTINCT_DATES_PER_ROW',dateFieldPrecedence:['enteringDatedAt','deliveryDate','carrier.enteringDatedAt'],observedDateCounts:limited(primaryDates),observedDateCountsTruncated:primaryDates.size>10,secondaryDateCounts:limited(secondaryDates),secondaryDateCountsTruncated:secondaryDates.size>10};
 }
 export function assertDeliverySourceObservation(value,date,{requireComplete=true}={}){
  const fail=code=>{throw Object.assign(Error(code),{code});};

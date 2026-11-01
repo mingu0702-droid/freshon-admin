@@ -49,3 +49,18 @@ test('explicit partial display can retain only date-verified nonempty rows witho
  assert.throws(()=>assertDeliverySourceObservation(observe([],{complete:false}),date,{requireComplete:false}),{code:'DELIVERY_SOURCE_INCOMPLETE'});
  assert.throws(()=>assertDeliverySourceObservation(observe([{deliveryDate:'2026-10-31'}],{complete:false}),date,{requireComplete:false}),{code:'DELIVERY_SOURCE_DATE_MISMATCH'});
 });
+test('safe date observations contain only bounded primary and distinct secondary calendar counts',()=>{
+ const rows=Array.from({length:12},(_,i)=>({enteringDatedAt:`2026-11-${String(i+1).padStart(2,'0')}`,deliveryDate:'2026-11-02',carrier:{enteringDatedAt:'2026-11-02'},customerCode:'PRIVATE_CUSTOMER',password:'PRIVATE_PASSWORD'}));
+ rows.push({enteringDatedAt:'invalid',deliveryDate:date},{deliveryDate:'2026-11-01T15:00:00Z'},{enteringDatedAt:'invalid',deliveryDate:'PRIVATE_RAW_DATE'});
+ const e=observe(rows);
+ assert.equal(e.dateCountBasis,'PRIMARY_FIRST_NON_NULLISH_SECONDARY_DISTINCT_DATES_PER_ROW');
+ assert.deepEqual(e.dateFieldPrecedence,['enteringDatedAt','deliveryDate','carrier.enteringDatedAt']);
+ assert.equal(e.observedDateCounts.length,10);assert.equal(e.observedDateCountsTruncated,true);
+ assert.deepEqual(e.observedDateCounts.find(x=>x.date===date),{date,rows:2});
+ assert.deepEqual(e.secondaryDateCounts,[{date,rows:13}]);assert.equal(e.secondaryDateCountsTruncated,false);
+ assert.equal(e.unverifiedDateRows,2);assert.equal(e.conflictingDateRows,11);assert.equal(e.dateVerified,false);
+ assert.equal(JSON.stringify(e).includes('PRIVATE_'),false);
+ const secondary=observe(Array.from({length:12},(_,i)=>({enteringDatedAt:date,deliveryDate:`2026-10-${String(i+1).padStart(2,'0')}`})));
+ assert.equal(secondary.secondaryDateCounts.length,10);assert.equal(secondary.secondaryDateCountsTruncated,true);
+ assert.deepEqual(secondary.observedDateCounts,[{date,rows:12}]);
+});
