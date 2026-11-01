@@ -8,6 +8,12 @@ const scrypt = promisify(crypto.scrypt);
 export const STAFF_COOKIE = '__Host-opsmap-staff';
 export const STAFF_IDLE_MS = 8 * 60 * 60 * 1000;
 export const STAFF_MAX_MS = 12 * 60 * 60 * 1000;
+export function staffSessionPolicy(env={}) {
+  const idleHours=env.MAP_STAFF_IDLE_HOURS===undefined?8:Number(env.MAP_STAFF_IDLE_HOURS);
+  const maxHours=env.MAP_STAFF_MAX_HOURS===undefined?12:Number(env.MAP_STAFF_MAX_HOURS);
+  if(!Number.isInteger(idleHours)||!Number.isInteger(maxHours)||idleHours<1||idleHours>72||maxHours<idleHours||maxHours>168)throw Error('STAFF_SESSION_POLICY_INVALID');
+  return {idleMs:idleHours*3600000,maxMs:maxHours*3600000};
+}
 const params = { N: 131072, r: 8, p: 1, maxmem: 192 * 1024 * 1024 };
 const digest = value => crypto.createHash('sha256').update(String(value)).digest();
 const equal = (a, b) => crypto.timingSafeEqual(digest(a), digest(b));
@@ -31,9 +37,9 @@ export async function verifyStaffPassword(password, hash) {
   return crypto.timingSafeEqual(result, Buffer.from(parts[5], 'base64url'));
 }
 
-// Deliberately single-process. A restart/credential rotation revokes all sessions.
-// Scaling this service requires a shared store first; never enable cluster workers.
+// The approved persistent store survives restarts; credential rotation still revokes sessions.
 export function createMapStaffAuth({ env = process.env, now = Date.now, sessionStore } = {}) {
+  const policy=staffSessionPolicy(env);
   const sessions = new Map(), attempts = new Map();
   const revoked = new Set();
   const processStartedAt = new Date(now()).toISOString();
@@ -76,7 +82,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
     if(!config.ready||!key||revoked.has(key)||req.get('origin')&&req.get('origin')!==config.origin||req.get('sec-fetch-site')&&!['same-origin','none'].includes(req.get('sec-fetch-site')))return null;
     if(sessionStore){const saved=await sessionStore.get(key,revision);if(revoked.has(key)||configuration().secret!==config.secret||fingerprint!==revision)return null;if(saved)sessions.set(key,saved);else sessions.delete(key);}
     const current=readMemorySession(req);if(!current)return null;
-    if(touch){const updated={expiresAt:current.expiresAt,idleExpiresAt:Math.min(current.expiresAt,now()+STAFF_IDLE_MS)};if(revoked.has(key))return null;if(sessionStore&&!(await sessionStore.touch(key,updated,revision)))return null;if(revoked.has(key)||fingerprint!==revision)return null;sessions.set(key,updated);return {key,...updated};}
+    if(touch){const updated={expiresAt:current.expiresAt,idleExpiresAt:Math.min(current.expiresAt,now()+policy.idleMs)};if(revoked.has(key))return null;if(sessionStore&&!(await sessionStore.touch(key,updated,revision)))return null;if(revoked.has(key)||fingerprint!==revision)return null;sessions.set(key,updated);return {key,...updated};}
     return current;
   }
   const requireStaff = (req, res, next) => noStore(req, res, async () => {
@@ -119,7 +125,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
     return res.json({ authenticated: Boolean(session), configured: configuration().ready,
       expiresAt: session?.expiresAt || null, idleExpiresAt: session?.idleExpiresAt || null,
       reason: session ? null : expired ? 'SESSION_EXPIRED' : sessionKey(req, configuration()) ? 'SESSION_UNAVAILABLE' : 'SIGNED_OUT',
-      policy: { maxMs: STAFF_MAX_MS, idleMs: STAFF_IDLE_MS, persistence: sessionStore?.kind||'PROCESS_MEMORY', processStartedAt } });
+      policy: { ...policy, persistence: sessionStore?.kind||'PROCESS_MEMORY', processStartedAt } });
   });
   router.post('/login', async (req, res) => {
     const config = configuration();
@@ -140,11 +146,11 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
       const previousKey=sessionKey(req,config);if(previousKey){revoked.add(previousKey);sessions.delete(previousKey);if(sessionStore)await sessionStore.delete(previousKey);}
       const token = crypto.randomBytes(32).toString('base64url');
       const key = crypto.createHmac('sha256', config.secret).update(token).digest('hex');
-      const session = { expiresAt: time + STAFF_MAX_MS, idleExpiresAt: time + STAFF_IDLE_MS };
+      const session = { expiresAt: time + policy.maxMs, idleExpiresAt: time + policy.idleMs };
       if(sessionStore)await sessionStore.set(key,session,fingerprint);
       const afterSave=configuration();if(!afterSave.ready||!equal(afterSave.hash,config.hash)||!equal(afterSave.secret,config.secret))return res.status(503).json({error:'LOGIN_UNAVAILABLE'});
       sessions.set(key, session);
-      res.cookie(STAFF_COOKIE, token, { ...cookieOptions, maxAge: STAFF_MAX_MS });
+      res.cookie(STAFF_COOKIE, token, { ...cookieOptions, maxAge: policy.maxMs });
       addStaffTiming(res, 'session', performance.now() - sessionStarted);
       return res.json({ authenticated: true, ...session });
     } catch { return res.status(503).json({ error: 'LOGIN_UNAVAILABLE' }); }
