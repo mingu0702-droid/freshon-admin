@@ -22,6 +22,7 @@ import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
 import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, phase2bCacheNamespace, phase2bSnapshotMeta, splitHubBounds } from "./phase2bOperations.js";
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { mountProductionMapApi } from './productionMapIntegration.js';
+import {deliverySourceObservation,snapshotRefreshEvidence} from "./snapshotRefreshEvidence.js";
 import { mountMapMainPage } from './mapMainPage.js';
 import { createFixedVehicleReader } from './fixedVehicleProjection.js';
 
@@ -66,7 +67,7 @@ const productionMap = mountProductionMapApi(app, {
   phase2bKstDate, normalizeCell, normalizeDateValue, phase2bSnapshotMeta, phase2bTodayStatus, publicDir,
   getSnapshotWorkerState: () => ({running:!!phase2bSnapshotRefreshPromise,continuation:!!phase2bSnapshotRetryTimer})
 });
-mountProductionOpsmapCandidate(app,{publicDir,readManualPinCustomer:customerCode=>verifiedMapHubRead('customerDetail',{customerCode},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000}),readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),callHub,sharedBaseCache:productionMap.baseCache,readBaseVehicleMaster:sharedFixedVehicleReader,sharedReadModel,sharedCoordinateSupplement,readPhase2bSnapshot,getSnapshotMemory:()=>phase2bSnapshotMemory,phase2bKstDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus});
+mountProductionOpsmapCandidate(app,{publicDir,deliveryPhotoSource:{rawRequest:deliveryAdminFetch,hasMemorySession:()=>Boolean((deliveryAdminSession.cookie||deliveryAdminSession.authorization)&&Date.now()<deliveryAdminSession.expiresAt),extractRows:extractDeliveryTaskRows},readManualPinCustomer:customerCode=>verifiedMapHubRead('customerDetail',{customerCode},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000}),readDriverMaster:date=>readDriverMasterFromGoogleSheet({date}),callHub,sharedBaseCache:productionMap.baseCache,readBaseVehicleMaster:sharedFixedVehicleReader,sharedReadModel,sharedCoordinateSupplement,readPhase2bSnapshot,getSnapshotMemory:()=>phase2bSnapshotMemory,phase2bKstDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus});
 app.use(express.json({ limit: "10mb" }));
 // Sensitive namespaces must never inherit PUBLIC_VIEW or the SPA fallback.
 app.use('/api/collector', requireAdmin);
@@ -2170,16 +2171,22 @@ async function refreshPhase2bSnapshot() {
     const basePayload = phase2bSnapshotPayload(rows);
     const today = phase2bKstDate();
     const refreshFrom = existing?.refreshedThrough || basePayload.latestDate;
-    for (const date of phase2bSnapshotMissingDates(refreshFrom, today)) {
+    const completedDates = [];
+    // Historical catch-up is explicit. A restart must not replay nationwide date tiles.
+    const catchupDates=process.env.OPSMAP_PRODUCTION_CANDIDATE_ENABLED==='1'&&process.env.OPSMAP_BACKGROUND_SNAPSHOT_CATCHUP!=='1'?[]:phase2bSnapshotMissingDates(refreshFrom,today);
+    for (const date of catchupDates) {
       rows.push(...await phase2bSnapshotDateRows(date, baseTiles));
+      completedDates.push(date);
       const checkpoint = phase2bSnapshotPayload(rows, { refreshedThrough: date, refreshComplete: false });
       await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(checkpoint));
       phase2bSnapshotMemory = checkpoint;
       console.info(JSON.stringify({ component: "phase2b-snapshot", event: "CHECKPOINT", latestDate: checkpoint.latestDate, refreshedThrough: date, rowCount: checkpoint.rowCount }));
     }
-    const todayStatus = await phase2bTodayStatus(today).catch(() => null);
+    let todayReadFailed = false;
+    const todayStatus = await phase2bTodayStatus(today).catch(() => { todayReadFailed = true; return null; });
+    const refreshEvidence = snapshotRefreshEvidence({targetDate:today,previousThrough:refreshFrom,completedDates,todayStatus,sourceFailed:todayReadFailed});
     const knownByCode = new Map(rows.map((row) => [normalizeCell(row.customerCode || row.code), row]));
-    (todayStatus?.vehicles || []).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
+    (refreshEvidence.sourceFreshness.sourceDateVerified ? todayStatus.vehicles : []).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
       const code = normalizeCell(stop.customerCode || stop.code);
       const known = knownByCode.get(code) || {};
       const lat = Number.isFinite(Number(stop.lat)) ? Number(stop.lat) : Number(known.lat);
@@ -2187,12 +2194,12 @@ async function refreshPhase2bSnapshot() {
       if (!code || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
       rows.push({ ...known, ...stop, customerCode: code, vehicle: vehicle.vehicle, lat, lng, lastDeliveryDate: today });
     }));
-    const payload = phase2bSnapshotPayload(rows, { refreshedThrough: today, refreshComplete: true });
+    const payload = phase2bSnapshotPayload(rows, refreshEvidence);
     if (!payload.rows.length) throw new Error("PHASE2B_SNAPSHOT_EMPTY");
     await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
     phase2bSnapshotMemory = payload;
-    console.info(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESHED", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
-    setTimeout(() => warmPhase2bBounds().catch(() => {}), 1000).unref();
+    console.info(JSON.stringify({ component: "phase2b-snapshot", event: payload.refreshComplete ? "REFRESHED" : "REFRESH_PENDING", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, refreshPhase:payload.sourceFreshness.phase, sourceDateVerified:payload.sourceFreshness.sourceDateVerified, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
+    // Snapshot reads stay lazy; do not prefetch all nationwide tiles after refresh.
     return payload;
   })().catch((error) => {
     console.error(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESH_FAILED", error: error.message || String(error) }));
@@ -2217,6 +2224,8 @@ async function fetchDeliveryTaskRowsForDate(date) {
   const dateParam = `${date}T00:00:00+09:00`;
   const pageSize = 300;
   const allRows = [];
+  let completed = false, pages = 0,declaredTotal=null,declaredPages=null,pagingValid=true,identityComplete=true;
+  const seenIds=new Set();
   for (let page = 0; page < 20; page += 1) {
     const query = new URLSearchParams({
       logisticsCenterId: "1",
@@ -2226,10 +2235,18 @@ async function fetchDeliveryTaskRowsForDate(date) {
     query.append("enteringDatedAtBetween", dateParam);
     query.append("enteringDatedAtBetween", dateParam);
     const payload = await deliveryAdminJson(`/api/bali/task?${query.toString()}`, { method: "GET" });
+    pages++;
     const rows = extractDeliveryTaskRows(payload);
+    const total=Number(payload?.totalElements??payload?.data?.totalElements),pageCount=Number(payload?.totalPages??payload?.data?.totalPages);
+    if(!Number.isSafeInteger(total)||total<0||!Number.isSafeInteger(pageCount)||pageCount<0)pagingValid=false;
+    else if(declaredTotal!==null&&(declaredTotal!==total||declaredPages!==pageCount))pagingValid=false;
+    else{declaredTotal=total;declaredPages=pageCount;}
+    for(const row of rows){const id=String(row?.id??row?.taskId??'');if(!/^\d+$/.test(id)||seenIds.has(id))identityComplete=false;seenIds.add(id);}
     allRows.push(...rows);
-    if (rows.length < pageSize) break;
+    if(pagingValid&&identityComplete&&allRows.length===declaredTotal&&pages===declaredPages){completed=true;break;}
+    if (rows.length < pageSize) { completed = pagingValid&&identityComplete&&declaredTotal===0&&allRows.length===0&&pages===1; break; }
   }
+  Object.defineProperty(allRows,"sourceObservation",{value:deliverySourceObservation(allRows,{date,complete:completed,pages,resolveVehicle:deliveryTaskVehicle}),enumerable:false});
   return allRows;
 }
 
@@ -3714,6 +3731,7 @@ async function phase2bTodayStatus(date) {
     const value = {
       date,
       generatedAt: new Date().toISOString(),
+      sourceObservation: rows.sourceObservation,
       vehicles: [...byVehicle].map(([vehicle, vehicleRows]) => phase2bTodayVehicleSummary(vehicle, vehicleRows, date)).sort((a, b) => a.vehicle.localeCompare(b.vehicle, "ko", { numeric: true }))
     };
     phase2bTodayCache.set(date, { expiresAt: Date.now() + 60000, value });

@@ -1,0 +1,12 @@
+--- a/src/server.js
++++ b/src/server.js
+@@ -2192,7 +2192,8 @@
+     await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
+     phase2bSnapshotMemory = payload;
+     console.info(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESHED", latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
+-    setTimeout(() => warmPhase2bBounds().catch(() => {}), 1000).unref();
++    // Bounds remain lazy: the refreshed snapshot already serves the general map.
++    // Eager nationwide tiles duplicated slow Hub reads after every restart.
+     return payload;
+   })().catch((error) => {
+     console.error(JSON.stringify({ component: "phase2b-snapshot", event: "REFRESH_FAILED", error: error.message || String(error) }));

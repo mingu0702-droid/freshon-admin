@@ -1,0 +1,39 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
+import {buildBaseTerritories,baseTerritoryAvailability} from '../public/opsmap/territory-policy.mjs';
+const version='a'.repeat(64),rows=(vehicle='101',center='osan')=>[[37.1,127.1],[37.2,127.1],[37.1,127.2]].map(([lat,lng],i)=>({customerCode:'S'+vehicle+i,baseVehicle:vehicle,baseVehicleGroup:center,baseVehicleState:'VERIFIED_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:version,baseVehicleStale:false,lat,lng}));
+function fixture({stores=rows(),stale=false,fail=null}={}){
+ const nodes=new Map(),polys=[],events=new Map();let reads=0;
+ class Element{constructor(){this.children=[];this.attrs={};this.dataset={};this.hidden=false;this.parentElement=this;this.textContent='';}set id(v){this._id=v;nodes.set('#'+v,this);}get id(){return this._id;}append(e){this.children.push(e);}after(e){this.parentElement.append(e);}replaceChildren(){this.children=[];}setAttribute(k,v){this.attrs[k]=v;}}
+ for(const id of ['areaToggle','mobileAreaToggle','periodFilterPanel','territoryVehicles']){const e=new Element();e.id=id;}
+ const master={version,stale,checkedAt:'2026-09-24T00:00:00Z'},state={mode:'BASE_60D',selectedVehicles:[],centerFilter:'',map:{},areaOn:false};
+ const bridge={state,fixedTerritoryStores:()=>stores,fixedTerritoryMasterState:()=>master,loadBaseVehicleMasterForTerritory:async()=>{reads++;if(fail)throw Object.assign(Error(),{status:fail});}};
+ const window={MapUiLocalBridge:bridge,Phase2bUi:{vehicleColor:v=>'color-'+v},addEventListener:(n,fn)=>events.set(n,fn),removeEventListener(){}};
+ const kakao={maps:{LatLng:function(lat,lng){this.lat=lat;this.lng=lng;},Polygon:class{constructor(options){this.options=options;polys.push(this);}setMap(map){this.map=map;}}}};
+ const document={querySelector:s=>nodes.get(s)||null,createElement:()=>new Element()};
+ vm.runInNewContext(fs.readFileSync(new URL('../public/opsmap/territory-ui.mjs',import.meta.url),'utf8').replace(/^import[^\n]+\n/,''),{window,document,kakao,buildBaseTerritories,baseTerritoryAvailability});
+ return {nodes,polys,state,master,events,ui:window.MapTerritoryUi,reads:()=>reads};
+}
+test('stale master cannot draw current polygons and the missing HTML status is visibly created',async()=>{
+ const f=fixture({stale:true});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'MASTER_STALE');assert.equal(f.reads(),0);assert.equal(f.nodes.get('#territoryStatus').hidden,false);assert.match(f.nodes.get('#territoryStatus').textContent,/2026-09-24/);assert.match(f.nodes.get('#territoryStatus').textContent,/이전 확인값/);assert.equal(f.ui.state().vehicles[0].reason,'MASTER_STALE');
+});
+test('fresh verified master creates exact vehicle polygons; OFF removes only those polygons',async()=>{
+ const f=fixture();await f.ui.toggle();assert.equal(f.ui.state().polygons,1);assert.equal(f.reads(),0);assert.equal(f.polys[0].options.strokeColor,'color-101');const map=f.state.map;await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.polys[0].map,null);assert.equal(f.state.map,map);
+});
+test('single/multiple vehicle and center selection filter boundaries without moving or clearing pins',async()=>{
+ const f=fixture({stores:[...rows(),...rows('122','yeongnam')]});await f.ui.toggle();assert.equal(f.ui.state().polygons,2);f.state.selectedVehicles=['122'];f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.polys.at(-1).options.strokeColor,'color-122');f.state.centerFilter='osan';f.ui.renderForSelection();assert.equal(f.ui.state().polygons,0);
+});
+test('mobile and desktop controls share one toggle owner and checked state',async()=>{
+ const f=fixture();await f.nodes.get('#mobileAreaToggle').onclick();assert.equal(f.ui.state().polygons,1);assert.equal(f.nodes.get('#areaToggle').attrs['aria-pressed'],'true');assert.equal(f.nodes.get('#mobileAreaToggle').attrs['aria-pressed'],'true');await f.nodes.get('#areaToggle').onclick();assert.equal(f.ui.state().polygons,0);assert.equal(f.nodes.get('#mobileAreaToggle').attrs['aria-pressed'],'false');
+});
+test('version or staleness change invalidates existing polygons immediately',async()=>{
+ const f=fixture();await f.ui.toggle();f.master.version='b'.repeat(64);f.ui.renderForSelection();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'MASTER_VERSION_CHANGED');
+});
+test('source auth denial remains distinct from insufficient locations and cannot draw',async()=>{
+ const f=fixture({stale:true,fail:403});f.master.version=null;await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'SOURCE_AUTH_REQUIRED');assert.match(f.nodes.get('#territoryStatus').textContent,/권한/);
+});
+test('same selection render reuses polygons and mode switch removes polygons only',async()=>{
+ const f=fixture();await f.ui.toggle();const n=f.polys.length;f.ui.renderForSelection();assert.equal(f.polys.length,n);f.state.mode='DATE_ROUTE';f.ui.renderForSelection();assert.equal(f.ui.state().polygons,0);assert.equal(f.state.map!==null,true);
+});
+test('missing centers, too few points and collinear points remain unconfirmed',()=>{
+ for(const stores of [rows('101','unknown'),rows().slice(0,2),rows().map((r,i)=>({...r,lat:37+i/10,lng:127+i/10}))]){const model=buildBaseTerritories(stores),a=baseTerritoryAvailability(stores,{version,stale:false},model);assert.equal(a.vehicles[0].state,'unconfirmed');assert.ok(a.vehicles[0].reason);}
+});

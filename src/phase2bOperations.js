@@ -132,7 +132,10 @@ export function phase2bSnapshotMeta(payload, now = Date.now()) {
     generatedAt,
     rowCount: Number(payload?.rowCount || 0),
     refreshedThrough: payload?.refreshedThrough || payload?.latestDate || null,
-    stale: payload?.refreshComplete === false || ageMs > 12 * 60 * 60 * 1000
+    cacheStale: ageMs > 12 * 60 * 60 * 1000,
+    sourceVerified: payload?.sourceFreshness?.sourceDateVerified===true&&payload?.sourceFreshness?.targetDate===payload?.refreshedThrough&&payload?.sourceFreshness?.checkedThrough===payload?.refreshedThrough&&payload?.refreshComplete===true,
+    sourcePhase: payload?.sourceFreshness?.phase||'SOURCE_UNVERIFIED',
+    stale: payload?.refreshComplete!==true||payload?.sourceFreshness?.sourceDateVerified!==true||payload?.sourceFreshness?.targetDate!==payload?.refreshedThrough||payload?.sourceFreshness?.checkedThrough!==payload?.refreshedThrough||ageMs>12*60*60*1000
   };
 }
 

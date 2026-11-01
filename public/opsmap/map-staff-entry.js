@@ -244,7 +244,7 @@
     try {
       const value = await auth('login', { method: 'POST', body }); body = '';
       if (owner !== epoch) return;
-      await accept(value);
+      if(await accept(value))channel?.postMessage('session-changed');
     } catch (error) {
       if (owner !== epoch) return;
       message.textContent = error.status === 401 && error.code === 'LOGIN_FAILED' ? '로그인하지 못했습니다. 아이디와 비밀번호를 확인해 주세요.'

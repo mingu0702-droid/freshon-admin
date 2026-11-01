@@ -110,9 +110,12 @@ export async function callHub(action, params, { useCache = true, privateRead = f
   if (privateRead || ['customerDetail','staffCustomerDetail'].includes(action)) useCache = false;
   const saved = cache.get(key);
   if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
-  if (useCache && inFlight.has(key)) return inFlight.get(key);
+  // Coalesce only identical concurrent general bounds reads, even when callers
+  // require a fresh result. Private or caller-cancellable reads stay independent.
+  const shareRead = useCache || action === "mapBounds" && !privateRead && !signal && deadline === undefined;
+  if (shareRead && inFlight.has(key)) return inFlight.get(key);
   const request = callHubUncached(action, params, key, privateRead || ['customerDetail','staffCustomerDetail'].includes(action), { deadline, signal, page });
-  if (useCache) inFlight.set(key, request);
+  if (shareRead) inFlight.set(key, request);
   try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
 }
 

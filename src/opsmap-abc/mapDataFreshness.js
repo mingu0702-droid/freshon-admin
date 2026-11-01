@@ -23,32 +23,37 @@ export function mapPublicationConnection(hubStatus,liveStatus){
     sourceBoundCompletionVerified:false,privateSealedBindingVerified:false,oneDateValidationAllowed:false};
 }
 
-export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicleView=requireView,previewEnabled,modelStatus,readBaseVehicleMaster,baseCache,env=process.env,adminGuard=requireAdmin,baseStore=env.OPSMAP_STAGE_FIXED_MASTER_FILE?createFixedVehicleFileStore({env}):env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
-  let statusCache=null,statusAt=0,statusPending=null;
+export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicleView=requireView,previewEnabled,modelStatus,readBaseVehicleMaster,baseCache,env=process.env,adminGuard=requireAdmin,now=Date.now,baseStore=env.OPSMAP_STAGE_FIXED_MASTER_FILE?createFixedVehicleFileStore({env}):env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
+  let statusCache=null,statusAt=0,statusPending=null,statusRetryAt=0;
   const base=baseCache||createFixedVehicleCache({reader:readBaseVehicleMaster||(()=>{throw new Error('FIXED_MASTER_UNAVAILABLE');}),store:baseStore,readOnly:env.OPSMAP_STAGE_VERIFY_ONLY==='1'});
   const cleanDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:null;
   const code=v=>/^[A-Z0-9_]+$/.test(v||'')?v:'UNKNOWN';
   async function readStatus(){
-    if(statusCache&&Date.now()-statusAt<20000)return statusCache;
+    if(statusCache&&now()-statusAt<20000)return statusCache;
     if(statusPending)return statusPending;
+    if(now()<statusRetryAt)throw Error('MAP_DATA_STATUS_UNAVAILABLE');
     statusPending=(async()=>{
-      const [model,details]=await Promise.all([callHub('mapModelStatus',{}, {useCache:false}),env.OPSMAP_PREPARED_DETAILS_ENABLED==='1'?callHub('customerDetailsStatus',{}, {useCache:false,privateRead:true,maxResponseBytes:8192}):Promise.resolve({data:{phase:'DISABLED'}}).catch(()=>null)]);
+      let detailsFailed=false;
+      const detailsRead=env.OPSMAP_PREPARED_DETAILS_ENABLED==='1'
+        ?Promise.resolve().then(()=>callHub('customerDetailsStatus',{}, {useCache:false,privateRead:true,maxResponseBytes:8192})).catch(()=>{detailsFailed=true;return null;})
+        :Promise.resolve({data:{phase:'DISABLED'}});
+      const [model,details]=await Promise.all([callHub('mapModelStatus',{}, {useCache:false}),detailsRead]);
       const raw=model.data||{},c=raw.customer||{},p=raw.published||{},j=raw.job,detail=details?.data;
       const customerDetails=detail?{prepared:detail.prepared===true,version:Number.isSafeInteger(detail.version)?detail.version:null,automatic:detail.automatic===true,phase:code(detail.job?.phase||'NOT_STARTED'),preparedCustomers:Number.isSafeInteger(detail.job?.preparedCustomers)?detail.job.preparedCustomers:null,updatedAt:typeof detail.job?.updatedAt==='string'&&Number.isFinite(Date.parse(detail.job.updatedAt))?detail.job.updatedAt:null,lastError:detail.job?.lastError?code(detail.job.lastError):null}:null;
-      statusCache={customerDetails,customer:{freshon:cleanDate(c.freshon),delivery:cleanDate(c.delivery),proof:code(c.proof)},
+      statusCache={customerDetails,customerDetailsState:detailsFailed?'UNAVAILABLE':env.OPSMAP_PREPARED_DETAILS_ENABLED==='1'?'AVAILABLE':'DISABLED',customer:{freshon:cleanDate(c.freshon),delivery:cleanDate(c.delivery),proof:code(c.proof)},
         published:{generation:Number(p.generation)||null,startDate:cleanDate(p.startDate),endDate:cleanDate(p.endDate),status:code(p.status)},
         job:j?Object.fromEntries(['phase','generation','baseGeneration','startDate','endDate','buildAt','verifyAt','sendAt','shards','lastError','updatedAt','commitHttp','publication'].map(k=>[k,j[k]??null])):null,
         coverage:{generation:Number(raw.coverage?.generation)||null,proof:code(raw.coverage?.proof),
           history:(raw.coverage?.history||[]).filter(cleanDate),period:(raw.coverage?.period||[]).filter(cleanDate)},
         automatic:raw.automatic&&typeof raw.automatic==='object'?code(raw.automatic.status):'NOT_CONFIGURED',
-        automation:raw.automatic&&typeof raw.automatic==='object'?{configured:raw.automatic.configured===true,status:code(raw.automatic.status),lastCheck:raw.automatic.lastCheck||null,lastRequest:raw.automatic.lastRequest||null,lastSuccess:raw.automatic.lastSuccess||null,lastError:raw.automatic.lastError?code(raw.automatic.lastError):null,generation:Number(raw.automatic.generation)||null}:{configured:false,status:'NOT_CONFIGURED'},continuation:raw.continuation==='ACTIVE'?'ACTIVE':'NONE',checkedAt:new Date().toISOString()};
-      statusAt=Date.now();return statusCache;
-    })().finally(()=>{statusPending=null;});return statusPending;
+        automation:raw.automatic&&typeof raw.automatic==='object'?{configured:raw.automatic.configured===true,status:code(raw.automatic.status),lastCheck:raw.automatic.lastCheck||null,lastRequest:raw.automatic.lastRequest||null,lastSuccess:raw.automatic.lastSuccess||null,lastError:raw.automatic.lastError?code(raw.automatic.lastError):null,generation:Number(raw.automatic.generation)||null}:{configured:false,status:'NOT_CONFIGURED'},continuation:raw.continuation==='ACTIVE'?'ACTIVE':'NONE',checkedAt:new Date(now()).toISOString()};
+      statusAt=now();statusRetryAt=0;return statusCache;
+    })().catch(()=>{statusRetryAt=now()+10000;throw Error('MAP_DATA_STATUS_UNAVAILABLE');}).finally(()=>{statusPending=null;});return statusPending;
   }
   const enabled=(_q,r,n)=>previewEnabled()?n():r.sendStatus(404);
   app.get('/api/map-phase2b/preview/data-status',requireView,enabled,async(_q,r)=>{
     r.set('Cache-Control','no-store');
-    try{const status=await readStatus(),live=modelStatus();return r.json({ok:true,data:{...status,live,publicationConnection:mapPublicationConnection(status,live)}});}catch{return r.status(503).json({error:'MAP_DATA_STATUS_UNAVAILABLE'});}
+    try{const status=await readStatus(),live=modelStatus();return r.json({ok:true,data:{...status,live,publicationConnection:mapPublicationConnection(status,live)}});}catch{return r.set('Retry-After',String(Math.max(1,Math.ceil((statusRetryAt-now())/1000)))).status(503).json({error:'MAP_DATA_STATUS_UNAVAILABLE'});}
   });
   async function baseResponse(q,r){
     r.set('Cache-Control','no-store');

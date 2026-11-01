@@ -1,0 +1,77 @@
+--- a/public/opsmap/map-phase2b-runtime.js
++++ b/public/opsmap/map-phase2b-runtime.js
+@@ -314,7 +314,10 @@
+       $('#freshnessState').textContent='전체 저장 매장 반영됨 — 운영 전체 매장 완전성 미검증';syncSourceFreshness();
+     }catch(error){if(id!==initialRequestId||isSilentRequestError(error))return;setPeriodViewState('error');renderPeriodStoreList([]);$('#freshnessState').textContent='일반지도 조회 실패 — 매장 수 미확인';}
+   }
+-  async function initializePeriod() {
++  function pendingPeriodDelay(attempt) {
++    return Number.isInteger(attempt) && attempt >= 0 && attempt < 3 ? [15000, 30000, 60000][attempt] : null;
++  }
++  async function initializePeriod(pendingAttempt = 0) {
+     generalMap=false;
+     recentPeriodMode = true;
+     const id = ++initialRequestId; clearTimeout(initialTimer);
+@@ -332,7 +335,9 @@
+         if (modelStatus.phase === "ERROR") throw new Error("기간 모델 확인 실패");
+         setPeriodViewState("not-ready"); renderPeriodStoreList([]);
+         $("#periodIdentity").textContent = $("#freshnessState").textContent = "기간 데이터를 준비 중입니다";
+-        initialTimer = setTimeout(() => { if (id === initialRequestId) initializePeriod(); }, 15000);
++        const delay = pendingPeriodDelay(pendingAttempt);
++        if (delay !== null) initialTimer = setTimeout(() => { if (id === initialRequestId) initializePeriod(pendingAttempt + 1); }, delay);
++        else $("#freshnessState").textContent = "기간 자료를 준비 중입니다 · 기간 적용으로 다시 확인하세요";
+         return;
+       }
+       const range = MapPeriodUi.recentRange(modelStatus);
+@@ -390,7 +395,7 @@
+     dateReady = false; periodListLimit = 0;
+     setPeriodViewState("loading"); renderPeriodStoreList([]);
+     $("#periodIdentity").textContent = "기간 이력 조회 중 · 이전 지도 유지 (선택 기간 결과 아님)";
+-    let retryRequested = retry;
++    let retryRequested = retry, pendingAttempt = 0;
+     async function read() {
+       if (id !== periodRequestId || state.mode !== "BASE_60D") return;
+       try {
+@@ -410,7 +415,10 @@
+           setPeriodViewState("not-ready"); renderPeriodStoreList([]);
+           $("#freshnessState").textContent = "기간 데이터를 준비 중입니다";
+           $("#periodIdentity").textContent = $("#freshnessState").textContent;
+-          periodTimer = setTimeout(read, 5000); return;
++          const delay = pendingPeriodDelay(pendingAttempt++);
++          if (delay !== null) periodTimer = setTimeout(read, delay);
++          else $("#freshnessState").textContent = "기간 자료를 준비 중입니다 · 기간 적용으로 다시 확인하세요";
++          return;
+         }
+         if (payload.meta.startDate !== start || payload.meta.endDate !== end || !Array.isArray(payload.data)) throw new Error("기간 계약 불일치");
+         periodRows = payload.data; periodMeta = payload.meta;
+@@ -2111,15 +2119,19 @@
+   function isSilentRequestError(error) { return Boolean(error?.silent || error?.name === "AbortError"); }
+   async function fetchJson(url, options = {}) {
+     const { channel = new URL(url, location.href).pathname, timeout = 30000, ttl = 0 } = options;
++    const shareable = (!options.method || options.method === "GET") && !options.headers && !options.body && !new URL(url, location.href).pathname.includes("/private/");
+     const previous = requestControllers.get(channel);
++    if (shareable && previous?.shareable && previous.url === url && previous.promise) return previous.promise;
+     if (previous) previous.controller.abort("superseded");
+     const cached = memoryResponses.get(url);
+     if (ttl && cached?.expiresAt > Date.now()) { requestControllers.delete(channel); return cached.value; }
+     const controller = new AbortController();
+     const token = Symbol(channel);
+-    requestControllers.set(channel, { controller, token });
++    const entry = { controller, token, url, shareable, promise: null };
++    requestControllers.set(channel, entry);
+     const timer = setTimeout(() => controller.abort("timeout"), timeout);
+     const started = performance.now();
++    const pending = (async () => {
+     try {
+       const response = await fetch(url, { cache: "no-store", signal: controller.signal, headers: options.headers, method:options.method,body:options.body });
+       const json = await response.json();
+@@ -2139,6 +2151,9 @@
+       clearTimeout(timer);
+       if (requestControllers.get(channel)?.token === token) requestControllers.delete(channel);
+     }
++    })();
++    entry.promise = pending;
++    return pending;
+   }
+   function showMobileMap() {
+     if (innerWidth > 760) return;

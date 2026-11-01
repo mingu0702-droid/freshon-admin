@@ -147,23 +147,91 @@
     }
     return result.filter(visible);
   }
-  function createCamera({map, element, clock=Date.now, raf=fn=>requestAnimationFrame(fn), cancelRaf=id=>cancelAnimationFrame(id)}={}) {
-    let width=-1,height=-1, frame=null, disposed=false, interaction=0, movingUntil=0;
+  const cameraRect = rect => {
+    const left=Number(rect?.left),top=Number(rect?.top),right=Number(rect?.right??left+Number(rect?.width)),bottom=Number(rect?.bottom??top+Number(rect?.height));
+    return [left,top,right,bottom].every(Number.isFinite)&&right>left&&bottom>top?{left,top,right,bottom,width:right-left,height:bottom-top}:null;
+  };
+  function cameraFocusViewport({mapRect,viewportRect,headerRect,occluders=[],mobile=false,anchorHeight=0,anchorWidth=0}={}) {
+    const map=cameraRect(mapRect),viewport=cameraRect(viewportRect);if(!map||!viewport)return null;
+    const header=cameraRect(headerRect),top=Math.max(map.top,viewport.top,header&&header.width>=viewport.width/2?header.bottom:viewport.top);
+    let visible=cameraRect({left:Math.max(map.left,viewport.left),right:Math.min(map.right,viewport.right),top,bottom:Math.min(map.bottom,viewport.bottom)});if(!visible)return null;
+    let blocks=occluders.map(cameraRect).filter(Boolean);
+    const inside=(r,p)=>p.x>=r.left&&p.x<=r.right&&p.y>=r.top&&p.y<=r.bottom;
+    const preferred={x:(viewport.left+viewport.right)/2,y:(Math.max(viewport.top,header?.bottom||viewport.top)+viewport.bottom)/2};
+    if(!mobile&&inside(visible,preferred)&&!blocks.some(r=>inside(r,preferred)))return {...visible,...preferred,basis:'VIEWPORT_BELOW_HEADER'};
+    if(mobile){
+      const half=Math.min(visible.width/3,Math.max(0,Number(anchorWidth)||0)/2),height=Math.min(visible.height/2,Math.max(0,Number(anchorHeight)||0));
+      visible=cameraRect({left:visible.left+half,right:visible.right-half,top:visible.top+height,bottom:visible.bottom});if(!visible)return null;
+      blocks=blocks.map(r=>({...r,left:r.left-half,right:r.right+half,bottom:r.bottom+height}));
+    }
+    let spaces=[visible];
+    for(const block of blocks)spaces=spaces.flatMap(area=>{
+      const l=Math.max(area.left,block.left),r=Math.min(area.right,block.right),t=Math.max(area.top,block.top),b=Math.min(area.bottom,block.bottom);
+      if(l>=r||t>=b)return [area];
+      return [{left:area.left,right:area.right,top:area.top,bottom:t},{left:area.left,right:area.right,top:b,bottom:area.bottom},{left:area.left,right:l,top:t,bottom:b},{left:r,right:area.right,top:t,bottom:b}].map(cameraRect).filter(Boolean);
+    });
+    spaces.sort((a,b)=>b.width*b.height-a.width*a.height||a.top-b.top||a.left-b.left);const area=spaces[0];
+    return area?{...area,x:(area.left+area.right)/2,y:(area.top+area.bottom)/2,basis:'UNOBSCURED_MAP'}:null;
+  }
+  function cameraDomLayout(element) {
+    const doc=element?.ownerDocument,win=doc?.defaultView||root,visual=win.visualViewport;
+    const viewportRect={left:visual?.offsetLeft||0,top:visual?.offsetTop||0,width:visual?.width||win.innerWidth,height:visual?.height||win.innerHeight};
+    const rect=node=>node?.getClientRects?.().length&&!node.hidden?node.getBoundingClientRect():null;
+    const pin=rect(doc?.querySelector('#map .marker.selected'))||[...(doc?.querySelectorAll('#map .marker')||[])].map(rect).find(Boolean);
+    return {mapRect:element?.getBoundingClientRect?.(),viewportRect,headerRect:rect(doc?.querySelector('#approvedSiteHeader')),
+      occluders:[...(doc?.querySelectorAll('#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#areaToggle,#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
+      anchorHeight:pin?.height||0,
+      anchorWidth:pin?.width||0,
+      mobile:win.matchMedia?.('(max-width: 760px)')?.matches??Number(viewportRect.width)<=760};
+  }
+  function createCamera({map, element, clock=Date.now, raf=fn=>requestAnimationFrame(fn), cancelRaf=id=>cancelAnimationFrame(id),layout=()=>cameraDomLayout(element),pixel=(x,y)=>root.kakao?.maps?.Point?new root.kakao.maps.Point(x,y):{x,y}}={}) {
+    let width=-1,height=-1, frame=null, focusFrame=null, disposed=false, interaction=0, movingUntil=0,active=null,sequence=0,lastFocus=null;
     const measure=()=>({w:Math.round(element?.clientWidth||0),h:Math.round(element?.clientHeight||0)});
-    function userGesture(){interaction++;movingUntil=clock()+300;}
+    const validPoint=point=>Number.isFinite(point?.getLat?.()??point?.lat)&&Number.isFinite(point?.getLng?.()??point?.lng);
+    function releaseFocus(){active=null;sequence++;if(focusFrame!==null)cancelRaf(focusFrame);focusFrame=null;}
+    function userGesture(){interaction++;movingUntil=clock()+300;releaseFocus();}
+    function report(value){lastFocus=value;if(element?.dataset){for(const [key,v]of Object.entries({focusState:value.state,focusExpectedX:value.expectedX,focusExpectedY:value.expectedY,focusActualX:value.actualX,focusActualY:value.actualY,focusErrorPx:value.errorPx,focusBasis:value.basis}))if(v!==undefined)element.dataset[key]=String(v);}}
+    function geometry(){const raw=layout(),target=cameraFocusViewport(raw);return target?{raw,target,key:JSON.stringify([raw.mapRect?.left,raw.mapRect?.top,raw.mapRect?.width,raw.mapRect?.height,target.x,target.y,target.basis])}:null;}
+    function scheduleFocus(force=false){
+      if(disposed||!active||active.interaction!==interaction||focusFrame!==null)return;
+      const g=geometry();if(!g||!force&&g.key===active.geometry)return;
+      const owner=active.id;focusFrame=raf(()=>{focusFrame=null;alignFocus(owner);});
+    }
+    function alignFocus(owner){
+      if(disposed||!active||active.id!==owner||active.interaction!==interaction)return;
+      const g=geometry(),size=measure(),projection=map.getProjection?.();if(!g||size.w<1||size.h<1||!projection)return;
+      if(width!==size.w||height!==size.h){width=size.w;height=size.h;map.relayout?.();}
+      if(active.geometry!==g.key)active.corrections=0;active.geometry=g.key;
+      const rect=cameraRect(g.raw.mapRect),sx=rect.width/size.w,sy=rect.height/size.h;
+      let actual=projection.containerPointFromCoords(active.point);if(!Number.isFinite(actual?.x)||!Number.isFinite(actual?.y))return;
+      const wanted={x:(g.target.x-rect.left)/sx,y:(g.target.y-rect.top)/sy};
+      const error=Math.hypot((actual.x-wanted.x)*sx,(actual.y-wanted.y)*sy);
+      if(error>.5&&active.corrections<3){
+        const next=projection.coordsFromContainerPoint(pixel(size.w/2+actual.x-wanted.x,size.h/2+actual.y-wanted.y));
+        active.corrections++;map.setCenter(next);
+        report({state:'adjusting',expectedX:g.target.x,expectedY:g.target.y,actualX:rect.left+actual.x*sx,actualY:rect.top+actual.y*sy,errorPx:error,basis:g.target.basis});
+        scheduleFocus(true);return;
+      }
+      report({state:error<=30?'centered':'deviation',expectedX:g.target.x,expectedY:g.target.y,actualX:rect.left+actual.x*sx,actualY:rect.top+actual.y*sy,errorPx:Math.round(error*100)/100,basis:g.target.basis});
+    }
+    function focus(point,{key='',reason='selection'}={}){
+      if(disposed||!validPoint(point))return false;
+      releaseFocus();active={point,key,reason,id:++sequence,interaction,geometry:null,corrections:0};report({state:'pending'});scheduleFocus(true);return true;
+    }
     function relayout(){
       if(disposed)return;
-      const {w,h}=measure(); if(w<1||h<1||w===width&&h===height)return;
+      const {w,h}=measure(); if(w<1||h<1)return;
+      if(w===width&&h===height){scheduleFocus();return;}
       if(clock()<movingUntil){if(frame===null)frame=raf(()=>{frame=null;relayout();});return;}
       width=w;height=h;
-      const center=map.getCenter?.();
-      map.relayout?.();
-      if(center)map.setCenter?.(center);
+      const center=map.getCenter?.();map.relayout?.();if(center)map.setCenter?.(center);
+      if(active){active.corrections=0;scheduleFocus(true);}
     }
     function scheduleRelayout(){if(frame===null&&!disposed)frame=raf(()=>{frame=null;relayout();});}
-    return { userGesture, interaction:()=>interaction, scheduleRelayout, relayout,
-      dispose(){disposed=true;if(frame!==null)cancelRaf(frame);frame=null;},
+    return { userGesture, interaction:()=>interaction, scheduleRelayout, relayout,focus,scheduleFocus,releaseFocus,
+      focusState:()=>lastFocus,
+      dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,zoomBand,createCamera,regionColors});
+  root.MapViewPolicy=Object.freeze({stableClusters,zoomBand,createCamera,regionColors,cameraFocusViewport});
 })(typeof window==='object'?window:globalThis);
