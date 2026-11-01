@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import {APPROVED_FUNCTIONS,prepareThreeFunctionCandidate,applyApprovedUnifiedDiff} from '../integrations/hub/r7/verify-three-function-candidate.mjs';
+import {APPROVED_FUNCTIONS,prepareThreeFunctionCandidate,preparePreservedHeadCandidate,applyApprovedUnifiedDiff} from '../integrations/hub/r7/verify-three-function-candidate.mjs';
 const hash=s=>crypto.createHash('sha256').update(s).digest('hex');
 function fixture(){
   const modules=[],templates={},files=[];
@@ -17,6 +17,26 @@ function fixture(){
   head.files.push({name:'SYNTHETIC_UNDEPLOYED',type:'SERVER_JS',source:'function syntheticUndeployed(){return null;}'});
   return{source,head,manifest:{sourceProjectId:source.scriptId,sourceVersion:64,modules},templates};
 }
+
+test('full editor candidate retains all109 files and unrelated pending source bytes without authorizing publication',()=>{
+ const f=fixture();while(f.head.files.length<109)f.head.files.push({name:'PENDING_'+f.head.files.length,type:'SERVER_JS',source:'function pending'+f.head.files.length+'(){return null;}'});
+ f.head.files[0].source='// unrelated pending comment\n'+f.head.files[0].source;
+ f.head.files.find(file=>file.name==='appsscript').source='{"timeZone":"UTC"}';
+ const before=JSON.stringify(f.head),r=preparePreservedHeadCandidate({...f,expectedHeadSHA256:hash(before)});
+ assert.equal(r.candidate.files.length,109);assert.equal(r.report.untouchedFiles,106);assert.equal(r.report.untouchedByteIdentical,true);
+ assert.equal(r.report.deployAllowed,false);assert.equal(r.report.actualInstall,false);assert.equal(r.report.remoteWrites,0);
+ assert.equal(r.candidate.files[0].source.startsWith('// unrelated pending comment\n'),true);
+ assert.equal(r.candidate.files.find(file=>file.name==='appsscript').source,'{"timeZone":"UTC"}');assert.equal(JSON.stringify(f.head),before);
+});
+
+test('editor merge fails closed for stale baseline, duplicate file, target edits and shadowed function',()=>{
+ for(const [change,expected]of [
+  [f=>f.head.files[0].source+='// concurrent edit','EDITOR_BASELINE_CHANGED'],
+  [f=>f.head.files.push(structuredClone(f.head.files[0])),'DUPLICATE_SOURCE_FILE'],
+  [f=>f.head.files[0].source=f.head.files[0].source.replace('return value;','return false;'),'EDITOR_APPROVED_FUNCTION_CONFLICT'],
+  [f=>f.head.files.push({name:'SHADOW',type:'SERVER_JS',source:'function hubSearchObjects_(value){return value;}'}),'EDITOR_APPROVED_FUNCTION_SHADOWED']
+ ]){const f=fixture(),original=hash(JSON.stringify(f.head));change(f);assert.throws(()=>preparePreservedHeadCandidate({...f,expectedHeadSHA256:expected==='EDITOR_BASELINE_CHANGED'?original:hash(JSON.stringify(f.head))}),e=>e.code===expected);}
+});
 test('offline candidate preserves every non-target file and blocks unrelated HEAD publication',()=>{
   const f=fixture(),before=JSON.stringify(f.head),{candidate,report}=prepareThreeFunctionCandidate(f);
   assert.equal(candidate.files.length,35);assert.equal(report.wholeProjectDiff.filter(x=>x.change!=='UNCHANGED').length,3);

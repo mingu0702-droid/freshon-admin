@@ -107,6 +107,38 @@ export function prepareThreeFunctionCandidate({source,head,manifest,templates}){
   return {candidate,report:{status:'V64_PLUS_EXACT_APPROVED_THREE_FUNCTIONS_LOCAL_ONLY',sourceProjectId:source.scriptId,sourceVersion:64,sourceFiles:source.files.length,candidateFiles:candidate.files.length,sourceSHA256:sha(JSON.stringify(source)),candidateSHA256:sha(JSON.stringify(candidate)),modifiedModules:changes,wholeProjectDiff:wholeDiff,syntaxFiles,dependencies,manifestUnchanged:original.get('appsscript')?.source===patched.get('appsscript')?.source,headFileCount:head.files.length,headChanges,headPreserved:true,remoteCalls:0,remoteWrites:0,versionsCreated:0,deploymentsUpdated:0,actualInstall:false,r5Installed:false,oauthApprovalRequired:false,deployableWithoutEditorReplacement:false,blocker:'APPS_SCRIPT_VERSION_SNAPSHOTS_ENTIRE_HEAD_WITH_UNAPPROVED_CHANGES',singleRequiredDecision:'Project owner must resolve the existing undeployed HEAD delta and designate an approved deployable HEAD while preserving those changes. Until then keep this exact three-function candidate local; no blanket 109-file deployment, editor overwrite, project substitution, or repeated OAuth request.',officialContracts:['https://developers.google.com/apps-script/api/reference/rest/v1/projects.versions/create','https://developers.google.com/apps-script/api/reference/rest/v1/projects/updateContent'],headExecutionRisk:'updateContent replaces the whole HEAD used by triggers/editor/development executions; temporarily replacing it with v64 is not an isolated deployment operation.'}};
 }
 
+// A local full-content request body must retain the actual editor baseline,
+// including every unrelated unpublished file. This is NOT deploy permission:
+// versions.create would also publish that unrelated editor delta.
+export function preparePreservedHeadCandidate({source,head,manifest,templates,expectedHeadSHA256}){
+  if(!/^[a-f0-9]{64}$/.test(expectedHeadSHA256||'')||sha(JSON.stringify(head))!==expectedHeadSHA256)fail('EDITOR_BASELINE_CHANGED');
+  for(const project of [source,head])if(new Set(project.files.map(file=>file.name)).size!==project.files.length)fail('DUPLICATE_SOURCE_FILE');
+  const verified=prepareThreeFunctionCandidate({source,head,manifest,templates});
+  if(verified.report.modifiedModules.some(module=>module.functions.some(fn=>!fn.headTargetMatchesV64)))fail('EDITOR_APPROVED_FUNCTION_CONFLICT');
+  const candidate=structuredClone(head),before=filesByName(head),after=filesByName(candidate),approved=filesByName(verified.candidate);
+  for(const [module,names]of Object.entries(APPROVED_FUNCTIONS))for(const name of names){
+    const original=exactFunction(before.get(module).source,name),replacement=exactFunction(approved.get(module).source,name);
+    after.get(module).source=after.get(module).source.replace(original,replacement);
+    if(after.get(module).source.replace(replacement,'<APPROVED_FUNCTION>')!==before.get(module).source.replace(original,'<APPROVED_FUNCTION>'))fail('EDITOR_OUTSIDE_FUNCTION_CHANGE');
+  }
+  const untouched=head.files.filter(file=>!Object.hasOwn(APPROVED_FUNCTIONS,file.name));
+  if(candidate.files.length!==head.files.length||untouched.some(file=>JSON.stringify(file)!==JSON.stringify(after.get(file.name))))fail('EDITOR_FILE_LOSS');
+  const globalNames=candidate.files.filter(file=>file.type==='SERVER_JS').flatMap(file=>namedFunctions(file.source));
+  for(const names of Object.values(APPROVED_FUNCTIONS))for(const name of names)if(globalNames.filter(value=>value===name).length!==1)fail('EDITOR_APPROVED_FUNCTION_SHADOWED');
+  let syntaxFiles=0;for(const file of candidate.files.filter(file=>file.type==='SERVER_JS')){new vm.Script(file.source,{filename:file.name+'.gs'});syntaxFiles++;}
+  let dependencies=null,dependencyFailure=null;
+  try{dependencies=dependencyReport(candidate);}catch(error){dependencyFailure=error.code||'EDITOR_DEPENDENCY_CONFLICT';}
+  return {candidate,report:{status:'PRESERVED_EDITOR_CANDIDATE_LOCAL_ONLY',sourceVersion:manifest.sourceVersion,
+    sourceSHA256:verified.report.sourceSHA256,headSHA256:expectedHeadSHA256,candidateSHA256:sha(JSON.stringify(candidate)),
+    editorFiles:head.files.length,candidateFiles:candidate.files.length,untouchedFiles:untouched.length,untouchedByteIdentical:true,
+    modifiedFunctions:APPROVED_FUNCTIONS,syntaxFiles,dependencies,dependencyFailure,
+    unrelatedUnpublishedChanges:verified.report.headChanges,
+    fullContentRequestOmissions:0,editorBackupRequired:true,preWriteFullHashRecheckRequired:true,postWriteFullReadbackRequired:true,
+    atomicRemoteCompareAndSwapAvailable:false,exclusiveEditorWindowRequired:true,
+    remoteWrites:0,versionsCreated:0,deploymentsUpdated:0,actualInstall:false,
+    deployAllowed:false,blocker:'APPROVAL_REQUIRED_FOR_EXISTING_UNPUBLISHED_EDITOR_DELTA_AND_EXACT_INSTALL_UNIT'}};
+}
+
 function run(){
   const args=Object.fromEntries(process.argv.slice(2).map(arg=>{const [key,...value]=arg.split('=');return[key,value.join('=')];}));
   for(const name of ['--v64','--head-encrypted','--key-file','--output-encrypted','--report'])if(!args[name])fail('REQUIRED_LOCAL_PATH_MISSING');
