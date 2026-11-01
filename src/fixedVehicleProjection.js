@@ -1,23 +1,26 @@
 // Read-only, allowlisted projection of the current fixed-dispatch master.
 // Raw rows never persist; only the separately allowlisted projection may persist.
 import crypto from 'node:crypto';
-const masterKey = value => /^[A-Z]\d+$/.test(String(value || '').trim().toUpperCase());
+import {normalizeFixedMasterCustomerKey} from './fixedMasterCustomerKey.js';
+const masterKey = value => !!normalizeFixedMasterCustomerKey(value);
 const pagingKeys = new Set(['totalCnt','totalPages','isPaging','sortName','sortOrder','page','size','number','numberOfElements','first','last','empty']);
 // Counts only: never include customer identifiers, payload values, or raw rows
 // in progress/errors. Unknown rows remain a hard failure, not discarded data.
 export function inspectFixedMasterKeys(rows) {
-  const counts={rows:rows.length,valid:0,invalid:0,missing:0,nullValue:0,blank:0,nonString:0,numericOnly:0,otherFormat:0,nonObject:0,metadataOnly:0,customerFieldsPresent:0,duplicateValid:0};
+  const counts={rows:rows.length,valid:0,invalid:0,missing:0,nullValue:0,blank:0,nonString:0,numericOnly:0,acceptedNumeric:0,unsupportedNumeric:0,otherFormat:0,nonObject:0,metadataOnly:0,customerFieldsPresent:0,duplicateValid:0};
   const seen=new Set();
   for(const row of rows){
     if(!row||typeof row!=='object'||Array.isArray(row)){counts.invalid++;counts.nonObject++;continue;}
     const value=row.estCd;
-    if(masterKey(value)){counts.valid++;const code=String(value).trim().toUpperCase();if(seen.has(code))counts.duplicateValid++;seen.add(code);continue;}
+    const numericOnly=typeof value==='string'&&/^\d+$/.test(value.trim());
+    if(numericOnly)counts.numericOnly++;
+    if(masterKey(value)){counts.valid++;if(numericOnly)counts.acceptedNumeric++;const code=normalizeFixedMasterCustomerKey(value);if(seen.has(code))counts.duplicateValid++;seen.add(code);continue;}
     counts.invalid++;
     if(!Object.hasOwn(row,'estCd'))counts.missing++;
     else if(value==null)counts.nullValue++;
     else if(typeof value!=='string')counts.nonString++;
     else if(!value.trim())counts.blank++;
-    else if(/^\d+$/.test(value.trim()))counts.numericOnly++;
+    else if(numericOnly)counts.unsupportedNumeric++;
     else counts.otherFormat++;
     const keys=Object.keys(row);
     if(keys.length&&keys.every(key=>pagingKeys.has(key)))counts.metadataOnly++;
@@ -29,7 +32,7 @@ export function inspectFixedMasterKeys(rows) {
 export function projectFixedVehicles(rows) {
   const result = new Map();
   for (const row of rows) {
-    const customerCode = String(row.estCd || '').trim().toUpperCase();
+    const customerCode = normalizeFixedMasterCustomerKey(row.estCd);
     if (!/^[A-Z]\d+$/.test(customerCode)) continue;
     const primary = String(row.mainCarSeqNm || '').trim().replace(/호(?:차)?$/, '');
     const baseVehicle = /^[\p{L}\p{N}_-]{1,64}$/u.test(primary) ? primary : '';
