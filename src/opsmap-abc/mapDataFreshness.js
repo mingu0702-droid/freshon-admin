@@ -25,7 +25,7 @@ export function mapPublicationConnection(hubStatus,liveStatus){
 
 export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicleView=requireView,previewEnabled,modelStatus,readBaseVehicleMaster,baseCache,env=process.env,adminGuard=requireAdmin,baseStore=env.OPSMAP_STAGE_FIXED_MASTER_FILE?createFixedVehicleFileStore({env}):env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
   let statusCache=null,statusAt=0,statusPending=null;
-  const base=baseCache||createFixedVehicleCache({reader:readBaseVehicleMaster||(()=>{throw new Error('FIXED_MASTER_UNAVAILABLE');}),store:baseStore,readOnly:env.OPSMAP_STAGE_VERIFY_ONLY==='1'});
+  const base=baseCache||createFixedVehicleCache({reader:readBaseVehicleMaster||(()=>{throw new Error('FIXED_MASTER_UNAVAILABLE');}),store:baseStore,readOnly:env.OPSMAP_STAGE_VERIFY_ONLY==='1'||env.OPSMAP_FIXED_MASTER_REFRESH_ENABLED==='0'});
   const cleanDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:null;
   const code=v=>/^[A-Z0-9_]+$/.test(v||'')?v:'UNKNOWN';
   async function readStatus(){
