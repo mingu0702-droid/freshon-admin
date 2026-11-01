@@ -3303,7 +3303,12 @@ app.get("/api/monthly-dispatch-summary", requireView, async (req, res) => {
 });
 
 app.get("/api/vehicle-driver-master", requireView, async (req, res) => {
-  res.json(await readDriverMasterFromGoogleSheet({ date: String(req.query.date || "") }));
+  try {
+    res.json(await readDriverMasterFromGoogleSheet({ date: String(req.query.date || "") }));
+  } catch (error) {
+    const code = /^DRIVER_[A-Z_0-9]+$/.test(error.code || '') ? error.code : 'DRIVER_SOURCE_UNAVAILABLE';
+    res.status(503).set('Cache-Control', 'private, no-store').json({ok:false,error:code});
+  }
 });
 
 app.get("/api/fixed-dispatch/customer-search", requireView, async (req, res) => {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import {createRequire} from 'node:module';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 // Extract actual server functions without starting collectors, HTTP listeners or source requests.
@@ -99,4 +100,33 @@ test('missing credential blocks before any external request',async()=>{
   const h=harness([],{googleServiceAccountJsonBase64:''});
   await assert.rejects(h.read(),error=>error.code==='DRIVER_CREDENTIALS_MISSING');
   assert.equal(h.requests.length,0);
+});
+
+test('real generic driver route returns safe 503 and remains alive for health and repeated reads',async()=>{
+  const express=createRequire(serverFile)('express');
+  const app=express();
+  const start=source.indexOf('app.get("/api/vehicle-driver-master",');
+  assert.ok(start>=0,'Missing existing generic driver route');
+  const end=source.indexOf('\n});',start);
+  assert.ok(end>=start,'Missing route terminator');
+  vm.runInNewContext(source.slice(start,end+'\n});'.length),{
+    app,requireView:(_req,_res,next)=>next(),
+    readDriverMasterFromGoogleSheet:async()=>{throw Object.assign(Error(marker),{code:'DRIVER_CREDENTIALS_MISSING'});}
+  });
+  app.get('/health',(_req,res)=>res.json({ok:true}));
+  const server=await new Promise(resolve=>{const instance=app.listen(0,'127.0.0.1',()=>resolve(instance));});
+  const origin=`http://127.0.0.1:${server.address().port}`;
+  try {
+    for(let attempt=0;attempt<2;attempt++){
+      const response=await fetch(`${origin}/api/vehicle-driver-master?date=2026-11-02`);
+      assert.equal(response.status,503);
+      assert.equal(response.headers.get('cache-control'),'private, no-store');
+      const body=await response.text();
+      assert.deepEqual(JSON.parse(body),{ok:false,error:'DRIVER_CREDENTIALS_MISSING'});
+      assert.ok(!body.includes(marker));
+      const health=await fetch(`${origin}/health`);
+      assert.equal(health.status,200);
+      assert.deepEqual(await health.json(),{ok:true});
+    }
+  } finally {server.closeAllConnections();await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
 });
