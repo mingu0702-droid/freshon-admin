@@ -1563,15 +1563,19 @@
       $('#detailSection').classList.remove('open');$('#detail').className='idle';
       $('#detail').textContent='검색하거나 핀을 선택하면 점포정보가 표시됩니다.';
     }
+    if($('#results [data-search-address-link]'))closeUnifiedSearchResults();
     $('#map').removeAttribute('data-search-position-pending');
     if(restoreView&&state.map){state.fitRequested=false;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});}
   }
 
   function waitForSearchMapPoint(text,{owner=state.searchRequestId,reason='외부 주소검색 미승인',customerMatchState='UNCONFIRMED'}={}) {
     if(owner!==state.searchRequestId||state.mode!=='BASE_60D')return;
+    const regionMissing=!/^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주|[가-힣]+(?:시|군|구))/.test(text);
+    const results=$('#results');results.hidden=false;
+    results.innerHTML=`<a class="resultItem" data-search-address-link href="https://map.kakao.com/link/search/${esc(encodeURIComponent(text))}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">카카오맵에서 주소 후보 확인 ↗</a><div class="resultMeta" data-search-address-guide>${regionMissing?'지역이 빠진 주소는 여러 곳일 수 있습니다. 시·군·구를 입력하세요.':'주소 후보의 시·군·구를 확인하세요.'} 지도 클릭으로 임시 위치를 지정할 수 있습니다.</div>`;
+    $('#query').setAttribute('aria-expanded','true');
     if(!state.map){setSearchState('지도 연결 후 임시 위치를 지정해 주세요.');return;}
     const requestId=state.addressRequestId;
-    $('#results').replaceChildren();
     $('#map').setAttribute('data-search-position-pending','true');
     setSearchState(reason+' · 지도에서 임시 위치를 선택하세요.');
     searchTemporaryClick=event=>{

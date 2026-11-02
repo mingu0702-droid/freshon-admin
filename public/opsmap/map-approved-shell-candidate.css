@@ -19,6 +19,8 @@
 .approvedShellCandidate #results.unifiedSearchResults{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:460;box-sizing:border-box;width:100%;max-width:100%;max-height:260px;overflow:auto;overscroll-behavior:contain;margin:0;padding:4px;background:#fff;border:1px solid #d9e2ef;border-radius:7px;box-shadow:0 5px 16px #18345916}
 .approvedShellCandidate #results.unifiedSearchResults>button{display:block;width:100%;min-width:0;max-width:100%;padding:8px 9px;border:0;text-align:left;white-space:normal;overflow-wrap:anywhere;background:#fff}
 .approvedShellCandidate #results.unifiedSearchResults>button:hover{background:#f0f5ff}
+.approvedShellCandidate #results.unifiedSearchResults>[data-search-address-link]{display:block;box-sizing:border-box;width:100%;padding:8px 9px;color:#2059dc;font-size:12px;line-height:18px;white-space:normal;overflow-wrap:anywhere;text-decoration:none}
+.approvedShellCandidate #results.unifiedSearchResults>[data-search-address-guide]{padding:4px 9px 8px;font-size:11px;line-height:17px;white-space:normal;overflow-wrap:anywhere}
 .approvedShellCandidate #results.unifiedSearchResults small{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .approvedShellCandidate #approvedShortcuts{margin-left:auto}
 .approvedShellCandidate #staffLogout{font-size:13px;margin-left:2px}
