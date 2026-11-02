@@ -19,7 +19,13 @@ export function prepareAdminBoundaries(data){
   }
   return {feature:f,bbox,code};
  });
- return {metadata:m,features};
+ let exactJoins=null;
+ if(m.geometryRole==='DISPLAY_ONLY'&&m.coverage==='QUERY'){
+  if(m.pointJoinGeometry!=='FULL_RESOLUTION'||!Array.isArray(data.queryPoints)||data.queryPoints.length>15000||!Array.isArray(data.matches)||data.matches.length!==data.queryPoints.length)throw Error('ADMIN_BOUNDARIES_INVALID');
+  exactJoins=new Map();const byCode=new Map(features.map(row=>[row.code,row.feature])),indices=new Set();
+  for(const join of data.matches){const i=join?.index,p=data.queryPoints[i];if(!Number.isInteger(i)||indices.has(i)||!p||!Number.isFinite(p.lat)||!Number.isFinite(p.lng)||p.lat<33||p.lat>39.5||p.lng<124||p.lng>132||!Array.isArray(join.adminCodes)||join.adminCodes.some(code=>!byCode.has(code)))throw Error('ADMIN_BOUNDARIES_INVALID');indices.add(i);exactJoins.set(p.lat+','+p.lng,join.adminCodes.map(code=>byCode.get(code)));}
+ }
+ return {metadata:m,features,exactJoins};
 }
 // Ring interiors and their edges are distinguished so a lake/hole never becomes land.
 function ringLocation([x,y],ring){
@@ -37,5 +43,6 @@ export function pointInGeometry(point,geometry){
 }
 export function matchingAdminFeatures(point,prepared){
  if(!prepared||!Number.isFinite(point?.lat)||!Number.isFinite(point?.lng))return [];
+ if(prepared.metadata.geometryRole==='DISPLAY_ONLY')return prepared.exactJoins?.get(point.lat+','+point.lng)||[];
  return prepared.features.filter(({bbox,feature})=>point.lng>=bbox[0]&&point.lng<=bbox[2]&&point.lat>=bbox[1]&&point.lat<=bbox[3]&&pointInGeometry([point.lng,point.lat],feature.geometry)).map(row=>row.feature);
 }

@@ -9,7 +9,8 @@ function queryPlan(){
  const selected=bridge.state.selectedVehicles||[],center=bridge.state.centerFilter,bounds=bridge.state.map?.getBounds?.(),sw=bounds?.getSouthWest?.(),ne=bounds?.getNorthEast?.();
  const box=sw&&ne?[sw.getLng(),sw.getLat(),ne.getLng(),ne.getLat()]:null;
  const points=[...new Map(base.groups.filter(g=>(!selected.length||selected.includes(g.vehicle))&&(!center||g.center===center)).flatMap(g=>g.points).filter(p=>!box||p.lng>=box[0]&&p.lat>=box[1]&&p.lng<=box[2]&&p.lat<=box[3]).map(p=>[pointKey(p),{lat:p.lat,lng:p.lng}])).values()];
- return {stores,base,all,points,lookupKey:JSON.stringify(all),key:JSON.stringify([base.version,selected,center,box,points])};
+ const detail=(bridge.state.map?.getLevel?.()||0)>=9?'overview':'detail';
+ return {stores,base,all,points,detail,lookupKey:JSON.stringify(all),key:JSON.stringify([base.version,selected,center,box,points,detail])};
 }
 function completeAvailability(plan){
  if(!availability||!lookupData)return;
@@ -48,7 +49,7 @@ function renderForSelection(){
  if(!groups.some(g=>g.state==='ready'))lastReason=availability?.vehicles.find(v=>groups.some(g=>g.vehicle===v.vehicle))?.reason||groups[0]?.reason||'ADMIN_BOUNDARY_NO_MATCH';
  for(const g of groups){if(g.state!=='ready'||!['osan','yeongnam','honam'].includes(g.center))continue;const color=window.Phase2bUi.vehicleColor(g.vehicle);for(const feature of g.features){const geometry=feature.geometry,parts=geometry.type==='MultiPolygon'?geometry.coordinates:[geometry.coordinates];for(const rings of parts){const p=new kakao.maps.Polygon({path:rings.map(ring=>ring.map(([lng,lat])=>new kakao.maps.LatLng(lat,lng))),strokeWeight:2,strokeColor:color,strokeOpacity:.8,fillColor:color,fillOpacity:.09});p.setMap(bridge.state.map);polygons.push(p);}}}
  const list=$('#territoryVehicles');if(list){list.replaceChildren();for(const g of groups){const item=document.createElement('li');item.textContent=g.vehicle+'호차 · '+(g.reason==='CENTER_UNCONFIRMED'?'센터 미확인':g.state==='ready'?g.features.length+'개 행정 읍면동 · '+g.matchedCount+'개 기준 매장'+(g.sharedAdminCodes.length?' · 공동 담당 '+g.sharedAdminCodes.length+'곳':'')+(g.matchedCount<g.storeCount?' · 일부 좌표·경계 미확인':''):'미확인 · 공식 경계·검증 좌표 필요');list.append(item);}}
- status(polygons.length?`전체 ${availability.totalVehicleCount}개 호차 · 현재 지도 ${availability.displayedVehicleCount}개 호차 표시 · 공식 행정 읍면동 경계 (2025-06-30)${groups.some(g=>g.state!=='ready'||g.matchedCount<g.storeCount)?' · 일부 센터·좌표·경계 미확인':''}`:unavailable());
+ status(polygons.length?`전체 ${availability.totalVehicleCount}개 호차 · 현재 지도 ${availability.displayedVehicleCount}개 호차 표시 · 공식 행정 읍면동 경계 (2025-06-30)${boundaryData?.metadata.displayDetail==='overview'?' · 전국 보기':''}${groups.some(g=>g.state!=='ready'||g.matchedCount<g.storeCount)?' · 일부 센터·좌표·경계 미확인':''}`:unavailable());
 }
 async function load(){
  if(busy||bridge.state.mode!=='BASE_60D')return;
@@ -60,7 +61,7 @@ async function load(){
   if(id!==epoch||bridge.state.mode!=='BASE_60D')return;
   const plan=queryPlan(),master=bridge.fixedTerritoryMasterState?.();
   if(listeningMap!==bridge.state.map&&bridge.state.map&&typeof kakao!=='undefined'&&kakao.maps?.event?.addListener){listeningMap=bridge.state.map;kakao.maps.event.addListener(listeningMap,'idle',()=>{if(enabled&&bridge.state.mode==='BASE_60D')renderForSelection();});}
-  async function query(points,geometry){requests++;const response=await fetch('/api/map-phase2b/private/admin-boundaries/query',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({points,geometry})});if(!response.ok)throw Object.assign(Error(response.status===413?'ADMIN_BOUNDARIES_QUERY_TOO_WIDE':'ADMIN_BOUNDARIES_UNAVAILABLE'),{status:response.status});return (await response.json()).data;}
+  async function query(points,geometry){requests++;const response=await fetch('/api/map-phase2b/private/admin-boundaries/query',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({points,geometry,detail:geometry?plan.detail:'detail'})});if(!response.ok)throw Object.assign(Error(response.status===413?'ADMIN_BOUNDARIES_QUERY_TOO_WIDE':'ADMIN_BOUNDARIES_UNAVAILABLE'),{status:response.status});return (await response.json()).data;}
   if(lookupKey!==plan.lookupKey){const result=await query(plan.all,false);if(id!==epoch||bridge.state.mode!=='BASE_60D')return;lookupData=result;lookupKey=plan.lookupKey;}
   if(!boundaryData||queryKey!==plan.key){clear();model=null;availability=baseTerritoryAvailability(plan.stores,master,buildBaseTerritories(plan.stores,lookupData));completeAvailability(plan);const result=await query(plan.points,true);if(id!==epoch||bridge.state.mode!=='BASE_60D')return;boundaryData=result;queryKey=plan.key;}
   if(queryPlan().key!==plan.key){queryKey='';return;}

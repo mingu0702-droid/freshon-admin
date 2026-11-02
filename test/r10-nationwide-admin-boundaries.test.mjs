@@ -6,9 +6,12 @@ import {gunzipSync} from 'node:zlib';
 import express from 'express';
 import {createOfficialAdminBoundaryQuery,validateBoundaryQuery} from '../src/officialAdminBoundaryQuery.js';
 import {mountOfficialAdminBoundaries} from '../src/officialAdminBoundaries.js';
-import {prepareAdminBoundaries,pointInGeometry} from '../public/opsmap/admin-boundaries.mjs';
+import {prepareAdminBoundaries,pointInGeometry,matchingAdminFeatures} from '../public/opsmap/admin-boundaries.mjs';
+import {buildBaseTerritories} from '../public/opsmap/territory-policy.mjs';
+import {boundaries} from './fixtures/admin-boundaries.mjs';
 const directory=new URL('../integrations/official-boundaries/sgis-adm-20250630-nationwide/',import.meta.url);
 const manifest=JSON.parse(await fs.readFile(new URL('manifest.json',directory),'utf8'));
+const overviewDirectory=new URL('../integrations/official-boundaries/sgis-adm-20250630-overview/',import.meta.url);
 
 test('all 3559 official source records and every regional checksum validate with original islands and holes',async()=>{
  assert.equal(manifest.featureCount,3559);assert.equal(manifest.shards.length,286);
@@ -40,8 +43,32 @@ test('geometry response limit explicitly rejects a wide query while count querie
 });
 
 test('invalid coordinate payloads and altered source proofs fail closed',async()=>{
- for(const body of [{points:[{lat:37,lng:127,customerCode:'S1'}]},{points:[{lat:NaN,lng:127}]},{points:[{lat:31,lng:127}]},{points:[],geometry:'false'},{points:[],extra:true},{points:Array(15001).fill({lat:37,lng:127})}])assert.throws(()=>validateBoundaryQuery(body),/QUERY_INVALID/);
+ for(const body of [{points:[{lat:37,lng:127,customerCode:'S1'}]},{points:[{lat:NaN,lng:127}]},{points:[{lat:31,lng:127}]},{points:[],geometry:'false'},{points:[],detail:'hull'},{points:[],extra:true},{points:Array(15001).fill({lat:37,lng:127})}])assert.throws(()=>validateBoundaryQuery(body),/QUERY_INVALID/);
  await assert.rejects(createOfficialAdminBoundaryQuery({expectedManifestHash:'a'.repeat(64)})([]),/ADMIN_BOUNDARIES_INVALID/);
+});
+
+test('display-only overview preserves every original polygon, island and hole without introducing triangular rings',async()=>{
+ const overview=JSON.parse(await fs.readFile(new URL('manifest.json',overviewDirectory),'utf8'));
+ assert.equal(overview.sourceManifestSha256,'36e2325be7867461450314b0f3071e11f3e67dce556879b5d5846fa7649a6e2a');assert.equal(overview.featureCount,3559);assert.equal(overview.toleranceMeters,75);assert.equal(overview.metadata.geometryRole,'DISPLAY_ONLY');
+ let polygons=0,holes=0,vertices=0,count=0;
+ for(const proof of overview.shards){
+  const bytes=await fs.readFile(new URL(proof.file,overviewDirectory));assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),proof.sha256);assert.equal(bytes.length,proof.gzipBytes);const raw=gunzipSync(bytes);assert.equal(raw.length,proof.jsonBytes);
+  const reduced=JSON.parse(raw),full=JSON.parse(gunzipSync(await fs.readFile(new URL(proof.file,directory))));prepareAdminBoundaries(reduced);const byCode=new Map(full.features.map(f=>[f.properties.adm_cd,f]));
+  for(const f of reduced.features){count++;const source=byCode.get(f.properties.adm_cd);assert(source);assert.equal(f.geometry.type,source.geometry.type);const old=source.geometry.type==='Polygon'?[source.geometry.coordinates]:source.geometry.coordinates,next=f.geometry.type==='Polygon'?[f.geometry.coordinates]:f.geometry.coordinates;assert.equal(next.length,old.length);polygons+=next.length;
+   for(let i=0;i<next.length;i++){assert.equal(next[i].length,old[i].length);holes+=next[i].length-1;for(let j=0;j<next[i].length;j++){const ring=next[i][j];assert(ring.length>=4);assert(!(ring.length<5&&old[i][j].length>=5));vertices+=ring.length;}}
+  }
+ }
+ assert.equal(count,3559);assert.equal(polygons,17214);assert.equal(holes,7);assert.equal(vertices,overview.verification.vertexCount);assert(vertices<manifest.verification.vertexCount);assert.equal(overview.verification.noIntroducedTriangleRings,true);
+});
+
+test('overview reuses full-resolution point matches and never determines membership from display geometry',async()=>{
+ const reads=[],query=createOfficialAdminBoundaryQuery({readFile:async(...args)=>{reads.push(args[0]);return fs.readFile(...args);}}),points=[{lat:37.5665,lng:126.978},{lat:35.1796,lng:129.0756}];
+ const exact=await query(points,{geometry:false}),at=reads.length,overview=await query(points,{detail:'overview'});assert.deepEqual(overview.matches,exact.matches);assert.equal(overview.metadata.geometryRole,'DISPLAY_ONLY');assert.equal(overview.metadata.pointJoinGeometry,'FULL_RESOLUTION');assert(reads.slice(at).every(name=>name.includes('sgis-adm-20250630-overview')));assert.equal(overview.features.length,2);const prepared=prepareAdminBoundaries(overview);assert(points.every(p=>matchingAdminFeatures(p,prepared).length===1));
+ const display=structuredClone(boundaries),p={lat:37.1,lng:127.1};display.metadata={...display.metadata,coverage:'QUERY',geometryRole:'DISPLAY_ONLY',pointJoinGeometry:'FULL_RESOLUTION'};display.queryPoints=[p];display.matches=[{index:0,adminCodes:[display.features[0].properties.adm_cd]}];display.features[0].geometry.coordinates[0]=display.features[0].geometry.coordinates[0].map(([lng,lat])=>[lng+.2,lat]);
+ assert.equal(pointInGeometry([p.lng,p.lat],display.features[0].geometry),false);assert.equal(matchingAdminFeatures(p,prepareAdminBoundaries(display)).length,1);assert.equal(matchingAdminFeatures({lat:37.3,lng:127.3},prepareAdminBoundaries(display)).length,0);
+ const model=buildBaseTerritories([{...p,customerCode:'S1',baseVehicle:'101',baseVehicleGroup:'osan',baseVehicleState:'VERIFIED_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:'a'.repeat(64),baseVehicleStale:false}],display);assert.equal(model.groups[0].state,'ready');assert.equal(model.groups[0].matchedCount,1);
+ delete display.matches;assert.throws(()=>prepareAdminBoundaries(display),/ADMIN_BOUNDARIES_INVALID/);
+ await assert.rejects(createOfficialAdminBoundaryQuery({expectedOverviewHash:'a'.repeat(64)})(points,{detail:'overview'}),/ADMIN_BOUNDARIES_INVALID/);
 });
 
 test('private POST checks authentication and origin before query, limits input, and rechecks the session',async t=>{

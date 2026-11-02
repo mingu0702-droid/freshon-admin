@@ -35,7 +35,7 @@ export function mountOfficialAdminBoundaries({app,requireStaff,readBoundaries=cr
   if(Number(req.get('content-length'))>1024*1024)return res.status(413).json({ok:false,error:'ADMIN_BOUNDARIES_QUERY_TOO_LARGE'});
   next();
  },express.json({limit:'1mb'}),compression({threshold:1024}),async(req,res)=>{
-  try{const points=validateBoundaryQuery(req.body),data=await queryBoundaries(points,{geometry:req.body.geometry!==false});return requireStaff(req,res,()=>res.json({ok:true,data}));}
+  try{const points=validateBoundaryQuery(req.body),data=await queryBoundaries(points,{geometry:req.body.geometry!==false,detail:req.body.detail||'detail'});return requireStaff(req,res,()=>res.json({ok:true,data}));}
   catch(error){const status=[400,413].includes(error.status)?error.status:503;return res.status(status).json({ok:false,error:status===400?'ADMIN_BOUNDARIES_QUERY_INVALID':status===413?'ADMIN_BOUNDARIES_QUERY_TOO_WIDE':'ADMIN_BOUNDARIES_UNAVAILABLE'});}
  });
  app.get('/api/map-phase2b/private/admin-boundaries',requireStaff,async(req,res)=>{
