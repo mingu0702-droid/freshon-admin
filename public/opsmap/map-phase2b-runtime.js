@@ -898,7 +898,8 @@
     const map=state.map,mapNode=$('#map'),position=new kakao.maps.LatLng(row.lat,row.lng);
     const anchor=document.createElement('div');anchor.className='mapClusterAnchor';anchor.append(panel);
     panel.classList.add('mapClusterPopup');panel.setAttribute('role','dialog');
-    const overlay=new kakao.maps.CustomOverlay({position,content:anchor,clickable:true,xAnchor:.5,yAnchor:1,zIndex:60});
+    // Keep SDK anchor dimensions invariant: Kakao caches initial content size.
+    const overlay=new kakao.maps.CustomOverlay({position,content:anchor,clickable:true,xAnchor:0,yAnchor:0,zIndex:60});
     let frame=null,disposed=false,adjustCamera=true;
     const rect=node=>node?.getClientRects().length&&!node.hidden?node.getBoundingClientRect():null;
     function layout(){

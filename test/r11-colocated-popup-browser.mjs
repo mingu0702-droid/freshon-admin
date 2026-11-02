@@ -45,9 +45,10 @@ class FakeMap{
 }
 class Overlay{
  constructor(o){this.opts=o;this.position=o.position;this.wrapper=document.createElement('div');this.wrapper.style.position='absolute';this.wrapper.style.zIndex=String(o.zIndex||0);this.wrapper.append(o.content);window.overlays.push(this);}
- setMap(m){this.map=m;this.wrapper.remove();if(m){m.el.append(this.wrapper);this.draw();}}
+ // Match Kakao: setPosition does not remeasure initial anchor dimensions.
+ setMap(m){this.map=m;this.wrapper.remove();if(m){m.el.append(this.wrapper);this.cachedSize={width:this.opts.content.offsetWidth,height:this.opts.content.offsetHeight};this.draw();}}
  setPosition(p){this.position=p;if(this.map)this.draw();}
- draw(){const p=this.map.getProjection().containerPointFromCoords(this.position);this.wrapper.style.left=(p.x-this.opts.content.offsetWidth*this.opts.xAnchor)+'px';this.wrapper.style.top=(p.y-this.opts.content.offsetHeight*this.opts.yAnchor)+'px';}
+ draw(){const p=this.map.getProjection().containerPointFromCoords(this.position);this.wrapper.style.left=(p.x-this.cachedSize.width*this.opts.xAnchor)+'px';this.wrapper.style.top=(p.y-this.cachedSize.height*this.opts.yAnchor)+'px';}
 }
 window.kakao={maps:{CustomOverlay:Overlay,LatLng:Coord,LatLngBounds:Bounds,Point,event:events}};
 state.map=new FakeMap();
@@ -80,13 +81,17 @@ try{
  const page=await browser.newPage({viewport:{width:1180,height:800}});
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',r=>{requests.push(r.request().url());return r.abort();});
- await page.setContent('<!doctype html><html><head><style>'+base+css+'</style></head><body class="approvedShellCandidate"><header id="approvedSiteHeader"></header><div id="map"><div id="syntheticPin"></div></div><div id="mobileWorkspace" class="collapsed"></div><div id="detailSection"><div id="detail"></div><div id="staffAuxContent"></div></div></body></html>');
+ await page.setContent('<!doctype html><html><head><style>section{margin:0 20px}'+base+css+'</style></head><body class="approvedShellCandidate"><header id="approvedSiteHeader"></header><div id="map"><div id="syntheticPin"></div></div><div id="mobileWorkspace" class="collapsed"></div><div id="detailSection"><div id="detail"></div><div id="staffAuxContent"></div></div></body></html>');
  await page.addScriptTag({content:policy});await page.addScriptTag({content:fixture});
  const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))));
  const show=async(data=rows,extra={})=>{await page.evaluate(({data,extra})=>harness.show(data,extra),{data,extra});await settle();};
  const geometry=()=>page.evaluate(()=>{const p=document.querySelector('.mapClusterPopup').getBoundingClientRect(),m=document.querySelector('#map').getBoundingClientRect(),pin=document.querySelector('#syntheticPin').getBoundingClientRect();return{left:p.left,right:p.right,top:p.top,bottom:p.bottom,width:p.width,height:p.height,mapLeft:m.left,mapRight:m.right,mapTop:m.top,mapBottom:m.bottom,pinX:(pin.left+pin.right)/2,pinY:pin.bottom,below:document.querySelector('.mapClusterAnchor').classList.contains('clusterBelow')};});
  await show();
  check('same-coordinate group uses one CustomOverlay without changing zoom',(await page.evaluate(()=>harness.stats())).active===1&&(await page.evaluate(()=>harness.stats())).level===4);
+ check('SDK caches a zero-size anchor while popup resets inherited section margins',await page.evaluate(()=>{
+  const o=window.overlays.find(o=>o.map&&o.opts.content.classList.contains('mapClusterAnchor')),a=o.opts.content,p=a.querySelector('.mapClusterPopup'),style=getComputedStyle(p);
+  return o.cachedSize.width===0&&o.cachedSize.height===0&&a.offsetWidth===0&&a.offsetHeight===0&&o.opts.xAnchor===0&&o.opts.yAnchor===0&&style.marginLeft==='0px'&&style.marginRight==='0px';
+ }));
  check('initial batch contains 40 actual customer codes',await page.locator('[data-cluster-code]').count()===40);
  check('code, duplicate name and hocha remain visible',(await page.locator('[data-cluster-code="S00000"]').innerText()).includes('101호차')&&(await page.locator('[data-cluster-code="S00001"]').innerText()).includes('동일한 매장명'));
  let g=await geometry();check('popup starts above the selected pin inside the map',g.bottom<=g.pinY-51&&g.top>=g.mapTop+7&&g.left>=g.mapLeft+7&&g.right<=g.mapRight-7);
@@ -128,6 +133,7 @@ try{
  await page.locator('[data-fixture-role="selected-store"]').click();await page.waitForTimeout(100);
  check('normal click on the overlapping real pin opens all six customer codes',await page.locator('.mapClusterPopup [data-cluster-code]').count()===6);
  check('overlapping popup includes the previously selected code',await page.locator('.mapClusterPopup [data-cluster-code="S00000"]').count()===1);
+ g=await geometry();check('six-code popup remains above pin and within viewport with cached SDK offsets',g.top>=g.mapTop+7&&g.bottom<=g.mapBottom-7&&Math.abs(g.pinY-g.bottom-52)<2);
  await page.screenshot({path:path.join(out,'selected-pin-overlap.png')});
  await page.locator('[data-cluster-code="S00005"]').click();check('a formerly hidden code reaches existing detail selection',(await page.evaluate(()=>harness.stats())).selected.code==='S00005');
  check('pin click does not mutate rows or coordinates',await page.evaluate(()=>harness.source())===originalSource);
