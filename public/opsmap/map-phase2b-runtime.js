@@ -1211,7 +1211,7 @@
       const detailDate = detailMode === 'DATE_ROUTE' ? state.selectedDate : row.lastDeliveryDate || snapshotMeta?.latestDate || state.latestDate || state.selectedDate;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(detailDate || '') || !Number.isFinite(Date.parse(detailDate)) || new Date(detailDate).toISOString().slice(0,10)!==detailDate) throw Error('DETAIL_DATE_UNCONFIRMED');
       const payload = await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${detailDate}`, { channel: "store-detail", ttl: 0, timeout: 60000 });
-      if (requestId !== state.detailRequestId || state.mode!==detailMode || state.selected?.customerCode !== row.customerCode || state.selected?.vehicle!==detailVehicle || document.body.dataset.mapStaffState!=='authenticated') return;
+      if (requestId !== state.detailRequestId || state.mode!==detailMode || state.selected?.customerCode !== row.customerCode || detailMode==='DATE_ROUTE'&&state.selected?.vehicle!==detailVehicle || document.body.dataset.mapStaffState!=='authenticated') return;
       const exact = payload.data;
       if (!Phase2bUi.storeDetailMatches(exact,row.customerCode,detailDate)) throw Error('DETAIL_RESPONSE_CONTRACT');
       // DOM only: never merge Customer addresses into rows, public summaries or IndexedDB.
