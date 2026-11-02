@@ -144,7 +144,7 @@
           const heading = node('b', row.deliveryDate + ' · ', entry);
           node('span', window.Phase2bUi.normalizeVehicleLabel(row.vehicle) || '미등록', heading).className = 'vehicleLabel';
           node('span', ' · ' + (row.kind === 'COMPLETED' ? '방문 완료' : '배차'), heading);
-          node('span', [row.driverName || '기사 미등록', row.driverPhone || '연락처 미등록'].join(' · '), entry);
+          node('span', [row.driverName || '기사 미확인', row.driverPhone || '연락처 미확인'].join(' · '), entry);
         });
       } else {
         surface.dataset.state = 'ready';

@@ -34,7 +34,7 @@ export function mountProductionMapApi(app,{
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
   publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement,sharedBaseCache,
   hybridEnabled=()=>process.env.MAP_HYBRID_90DAY_ENABLED==='true',hybridReadIndexedDay,hybridUiReadiness,hybridReadDateCatalog,hybridReadDatePage,hybridReadVerifiedDayText,hybridStoredIoEnabled=false,hubPublicationCutover=null,
-  mountPrivateExtensions,readRecordedRoadRoute,roadRouteService,roadRouteBudget
+  mountPrivateExtensions,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
@@ -55,6 +55,7 @@ export function mountProductionMapApi(app,{
   app.use(staffLatency);
   app.use('/api/map-phase2b/auth',securityAudit,mapStaff.router);
   mountMapStaffEntryGate(app,mapStaff.requireStaff);
+  app.use('/api/map-phase2b/private/driver-history',(req,res,next)=>historyDeadline(req,res,next,{milliseconds:readStoredStaffHistory?20000:5000}));
   app.use('/api/map-phase2b/private',mapStaff.requireStaff);
   mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
   app.get('/api/map-phase2b/private/map-sdk-config',(req,res)=>{
@@ -64,7 +65,6 @@ export function mountProductionMapApi(app,{
   });
   mountRoadRouteRoutes({app,requireStaff:mapStaff.requireStaff,jsonBody:express.json({limit:'16kb'}),service:roadRouteService||createRoadRouteService({env,budget:roadRouteBudget,requireDurableBudget:true}),env,readRecordedRoute:readRecordedRoadRoute});
   mountPrivateExtensions?.({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,previewEnabled});
-  app.use('/api/map-phase2b/private/driver-history',historyDeadline);
   app.use(publicResponse);
   if(hybridStoredIoEnabled){const stored=createRollingHubIo({callHub});hybridReadDateCatalog??=stored.readDateCatalog;hybridReadDatePage??=stored.readDatePage;}
   const hybrid=mountHybridMapReadApi(app,{enabled:hybridEnabled,requireStaff:mapStaff.requireStaff,previewEnabled,callHub,today:phase2bKstDate,readIndexedDay:hybridReadIndexedDay,readDateCatalog:hybridReadDateCatalog,readDatePage:hybridReadDatePage||(hybridReadVerifiedDayText?createPublishedDayPageReader({readVerifiedText:hybridReadVerifiedDayText}):undefined),uiReadiness:hybridUiReadiness,publicationCutover:hubPublicationCutover,legacyBusy:()=>!!getSnapshotWorkerState().running});
@@ -169,6 +169,7 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
 });
 
 app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
+  res.set('Cache-Control','private, no-store');
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
   if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
@@ -180,7 +181,18 @@ app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
   try {
     const readAt = performance.now(); let upstreamMs = 0;
     req.historyBudget.check();
-    const data = stageReadModelEnabled ? stageReadModel.history({customerCode,startDate,endDate}) : await readStaffDriverHistory({ customerCode, startDate, endDate }, async (params, options) => {
+    let storedMeta=null;
+    let data;
+    if(stageReadModelEnabled){
+      try{data=stageReadModel.history({customerCode,startDate,endDate});}
+      catch(error){
+        if(!readStoredStaffHistory||!['READ_MODEL_NOT_READY','READ_MODEL_RANGE_NOT_READY'].includes(error.message))throw error;
+        const at=performance.now();
+        const stored=await readStoredStaffHistory({customerCode,startDate,endDate},{budget:req.historyBudget});
+        upstreamMs+=performance.now()-at;addStaffTiming(res,'upstream',performance.now()-at);
+        data=stored.data;storedMeta=stored.meta;
+      }
+    }else data = await readStaffDriverHistory({ customerCode, startDate, endDate }, async (params, options) => {
       const at = performance.now();
       try {
         const payload = await callHub("staffDriverHistory", params, { useCache: false, privateRead: true, ...options });
@@ -194,9 +206,10 @@ app.get("/api/map-phase2b/private/driver-history", async (req, res) => {
     const unconfirmedDates = [];
     for (let at = Date.parse(startDate); at <= Date.parse(endDate); at += 86400000) unconfirmedDates.push(new Date(at).toISOString().slice(0,10));
     // A stored task proves that task, not completeness of a whole business date.
-    return mapStaff.requireStaff(req, res, () => res.json({ ok: true, data, meta: { complete: true, ...mapFreshness.coverage(startDate,endDate,'history'),
-      coverage: stageReadModelEnabled ? 'AUDITED_STORED_TASKS_DATE_COMPLETENESS_UNCONFIRMED' : 'PARTIAL_UNAUDITED', availableRecordDates: dates, startDate, endDate, source: 'Delivery.delivery_admin_raw', readModel:stageReadModelEnabled?'Hub.StageReadModel':null } }));
+    return mapStaff.requireStaff(req, res, () => res.set('Cache-Control','private, no-store').json({ ok: true, data, meta: { complete: true, ...mapFreshness.coverage(startDate,endDate,'history'),
+      coverage: stageReadModelEnabled ? 'AUDITED_STORED_TASKS_DATE_COMPLETENESS_UNCONFIRMED' : 'PARTIAL_UNAUDITED', availableRecordDates: dates,...(storedMeta?{unconfirmedDates}:{}), startDate, endDate, source: 'Delivery.delivery_admin_raw', readModel:stageReadModelEnabled?'Hub.StageReadModel':null,...storedMeta } }));
   } catch(error) {
+    if(/^HISTORY_[A-Z_]+$/.test(error.code||'')&&[400,409,503].includes(error.status))return res.status(error.status).json({error:error.code,retryable:error.status!==400});
     if(stageReadModelEnabled && /^READ_MODEL_/.test(error.message))return res.status(503).json({error:error.message,retryable:true});
     const failure = mapReadFailure(error, 'HISTORY');
     if (res.destroyed) return;

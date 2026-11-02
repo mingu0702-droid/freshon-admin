@@ -8,8 +8,8 @@ export function createReadDeadline({ milliseconds = 5000, now = Date.now } = {})
 }
 
 // Installed BEFORE session verification: auth and all upstream pages share a budget.
-export function historyDeadline(req, res, next) {
-  const budget = createReadDeadline(); req.historyBudget = budget;
+export function historyDeadline(req, res, next, {milliseconds=5000}={}) {
+  const budget = createReadDeadline({milliseconds:Math.min(20000,Math.max(1,Number(milliseconds)||5000))}); req.historyBudget = budget;
   const close = () => { if (!res.writableFinished) budget.abort(); cleanup(); };
   const cleanup = () => { budget.dispose(); req.off('aborted', close); res.off('close', close); res.off('finish', cleanup); };
   req.once('aborted', close); res.once('close', close); res.once('finish', cleanup); next();
