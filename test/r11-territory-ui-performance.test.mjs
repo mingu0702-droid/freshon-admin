@@ -48,4 +48,3 @@ test('master changes never reuse geometry from another version and source expiry
  const f=fixture();await f.ui.toggle();f.master.version='b'.repeat(64);await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'MASTER_VERSION_CHANGED');
  const checkedAt='2026-11-02T18:28:48.039Z',g=fixture({stores:rows().map(r=>({...r,baseVehicleStale:true,baseVehicleCheckedAt:checkedAt})),stale:true,checkedAt,now:Date.parse(checkedAt)+86400000-10});await g.ui.toggle();assert.equal(g.ui.state().polygons,1);g.advanceTime(11);await g.flush();assert.equal(g.ui.state().polygons,0);assert.equal(g.ui.state().reason,'MASTER_STALE');
 });
-
