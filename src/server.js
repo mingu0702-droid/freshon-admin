@@ -2188,7 +2188,11 @@ async function phase2bSnapshotDateRows(date, tiles) {
 async function readPhase2bSnapshot() {
   if (phase2bSnapshotMemory) return phase2bSnapshotMemory;
   if(phase2bDurableSnapshotStore){
-    phase2bDurableSnapshotLoad ||= phase2bDurableSnapshotStore.load().then(value=>value?materializeSnapshot(value):null).catch(error=>{console.warn(JSON.stringify({component:'phase2b-snapshot',event:'DURABLE_READ_FAILED',code:error.code||'SNAPSHOT_STORE_READ'}));return null;});
+    phase2bDurableSnapshotLoad ||= phase2bDurableSnapshotStore.load().then(async value=>{
+      if(!value)return null;
+      const selectedDateCheckpoint=await phase2bDurableSnapshotStore.loadSelectedDateCheckpoint(value).catch(error=>{console.warn(JSON.stringify({component:'phase2b-snapshot',event:'DATE_CHECKPOINT_READ_FAILED',code:/^[A-Z_]{1,80}$/.test(error.code||'')?error.code:'SNAPSHOT_DATE_CHECKPOINT_READ'}));return null;});
+      return materializeSnapshot(value,{selectedDateCheckpoint});
+    }).catch(error=>{console.warn(JSON.stringify({component:'phase2b-snapshot',event:'DURABLE_READ_FAILED',code:error.code||'SNAPSHOT_STORE_READ'}));return null;});
     const saved=await phase2bDurableSnapshotLoad;if(saved)return (phase2bSnapshotMemory=saved);
   }
   for (const file of [phase2bRuntimeSnapshotUrl, phase2bBundledSnapshotUrl]) {
@@ -2247,12 +2251,16 @@ async function refreshPhase2bSnapshot() {
     const payload=materializeSnapshot(mergePreservedSnapshot(snapshotProjection(existing||basePayload),next));
     if(phase2bDurableSnapshotStore){
       const saved=await phase2bDurableSnapshotStore.save(payload);
-      Object.assign(payload,materializeSnapshot(saved));
+      let selectedDateCheckpoint=null;
+      if(refreshEvidence.sourceFreshness.sourceDateVerified)try{
+        selectedDateCheckpoint=await phase2bDurableSnapshotStore.recordSelectedDateCheckpoint(todayStatus,saved);
+      }catch(error){console.warn(JSON.stringify({component:'phase2b-snapshot',event:'DATE_CHECKPOINT_UNVERIFIED',code:/^[A-Z_]{1,80}$/.test(error.code||'')?error.code:'SNAPSHOT_DATE_CHECKPOINT_WRITE'}));}
+      Object.assign(payload,materializeSnapshot(saved,{selectedDateCheckpoint}));
     }
     if (!payload.rows.length) throw new Error("PHASE2B_SNAPSHOT_EMPTY");
     await fs.writeFile(phase2bRuntimeSnapshotUrl, JSON.stringify(payload));
     phase2bSnapshotMemory = payload;
-    console.info(JSON.stringify({ component: "phase2b-snapshot", event: payload.refreshComplete ? "REFRESHED" : "REFRESH_PENDING", sourceDateVerified:payload.sourceFreshness?.sourceDateVerified===true, refreshPhase:payload.sourceFreshness?.phase||"UNVERIFIED", persistence:phase2bDurableSnapshotStore?.status?.()||null, latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
+    console.info(JSON.stringify({ component: "phase2b-snapshot", event: payload.refreshComplete ? "REFRESHED" : "REFRESH_PENDING", sourceDateVerified:payload.sourceFreshness?.sourceDateVerified===true, refreshPhase:payload.sourceFreshness?.phase||"UNVERIFIED", selectedDateCheckpoint:payload.selectedDateCheckpoint||null, persistence:phase2bDurableSnapshotStore?.status?.()||null, latestDate: payload.latestDate, refreshedThrough: payload.refreshedThrough, rowCount: payload.rowCount, generatedAt: payload.generatedAt }));
     // Bounds remain lazy after a snapshot update.
     return payload;
   })().catch((error) => {

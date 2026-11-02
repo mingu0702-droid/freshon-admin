@@ -100,6 +100,7 @@ export function mountProductionMapApi(app,{
         latestDate:day(meta.latestDate),startDate:day(meta.startDate),refreshedThrough:day(meta.refreshedThrough),
         generatedAt:typeof meta.generatedAt==='string'&&meta.generatedAt.length<=40&&Number.isFinite(Date.parse(meta.generatedAt))?new Date(meta.generatedAt).toISOString():null,
         rowCount:payload!=null&&Number.isSafeInteger(meta.rowCount)&&meta.rowCount>=0?meta.rowCount:null,stale:meta.stale!==false,
+        preservation:meta.preservation||null,selectedDateCheckpoint:meta.selectedDateCheckpoint||null,
         publicPointerVerified:false,sourceCompletenessVerified:false,privateSealedVerified:false});
     }
     const worker=getSnapshotWorkerState();
