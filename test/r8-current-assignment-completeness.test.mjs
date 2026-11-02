@@ -13,6 +13,9 @@ test('current assignment HTTP loader accepts only complete date-verified live ob
  const passwordHash=await createStaffPasswordHash('synthetic-test-password');
  const cases=[
   {name:'complete source is accepted directly',observation:verified(),hub:'FORBIDDEN',status:200,source:'Delivery Admin current dispatch',calls:0},
+  {name:'explicit business date survives midnight without an unrelated Hub read',today:'2026-11-03',observation:verified(),hub:'FORBIDDEN',status:200,source:'Delivery Admin date-verified dispatch',calls:0},
+  {name:'historical date still rejects incomplete source observations',today:'2026-11-03',observation:{...verified(),complete:false},hub:'FAIL',status:502,calls:1},
+  {name:'historical date still rejects another source date',today:'2026-11-03',observation:{...verified(),requestedDate:'2026-11-01'},hub:'FAIL',status:502,calls:1},
   {name:'partial live source needs a complete paginated fallback',observation:{...verified(),complete:false},hub:'VALID',status:200,source:'Hub datedAssignments pagination',calls:1},
   {name:'missing observation and failed fallback are never cached as complete',observation:undefined,hub:'FAIL',status:502,calls:2,repeat:true},
   {name:'partial live rows and incomplete fallback fail closed',observation:{...verified(),complete:false},hub:'INCOMPLETE',status:502,calls:1},
@@ -21,8 +24,8 @@ test('current assignment HTTP loader accepts only complete date-verified live ob
  ];
  for(const scenario of cases)await t.test(scenario.name,async()=>{
   const env={MAP_STAFF_ID:'fixture',MAP_STAFF_PASSWORD_HASH:passwordHash,MAP_STAFF_SESSION_SECRET:'s'.repeat(43),MAP_STAFF_ORIGIN:'https://localhost:3000',OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',OPSMAP_ROAD_ROUTE_ENABLED:'0'};
-  const calls=[],app=express(),previous=process.env.RENDER_EXTERNAL_URL;delete process.env.RENDER_EXTERNAL_URL;
-  try{mountProductionMapApi(app,{previewEnabled:()=>true,requireView:(_req,_res,next)=>next(),readPhase2bSnapshot:async()=>({rows:[]}),getSnapshotMemory:()=>null,phase2bKstDate:()=>date,normalizeCell:v=>String(v||'').trim(),normalizeDateValue:v=>String(v||''),phase2bSnapshotMeta:()=>({stale:true}),phase2bTodayStatus:async()=>live(scenario.observation),authOptions:{env},hybridEnabled:()=>false,callHub:async(action)=>{
+  const calls=[],liveCalls=[],app=express(),previous=process.env.RENDER_EXTERNAL_URL;delete process.env.RENDER_EXTERNAL_URL;
+  try{mountProductionMapApi(app,{previewEnabled:()=>true,requireView:(_req,_res,next)=>next(),readPhase2bSnapshot:async()=>({rows:[]}),getSnapshotMemory:()=>null,phase2bKstDate:()=>scenario.today||date,normalizeCell:v=>String(v||'').trim(),normalizeDateValue:v=>String(v||''),phase2bSnapshotMeta:()=>({stale:true}),phase2bTodayStatus:async selected=>{liveCalls.push(selected);return live(scenario.observation);},authOptions:{env},hybridEnabled:()=>false,callHub:async(action)=>{
    calls.push(action);assert.equal(action,'datedAssignments');
    if(scenario.hub==='VALID')return hubPage();
    if(scenario.hub==='INCOMPLETE'){const page=hubPage();page.meta.complete=false;return page;}
@@ -38,6 +41,7 @@ test('current assignment HTTP loader accepts only complete date-verified live ob
     else{assert.equal(body.ok,false);assert.equal(body.data,null);}
    }
    assert.equal(calls.length,scenario.calls);
+   assert.deepEqual(liveCalls,Array(scenario.repeat?2:1).fill(date));
   }finally{await new Promise(resolve=>server.close(resolve));}
  });
 });

@@ -250,9 +250,9 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
   try {
     const snapshot = await readPhase2bSnapshot();
     const readDate = (candidate) => (candidate === phase2bKstDate() ? phase2bAssignmentCache : phase2bDatedAssignmentCache).load(`datedAssignments:${candidate}`, async () => {
-      if (candidate === phase2bKstDate()) {
-        // Current dispatch is already available through the approved read-only
-        // Delivery adapter. It is not a rolling Hub vehicle relationship.
+      if (candidate === phase2bKstDate() || date !== 'latest') {
+        // An explicitly selected business date remains readable after midnight.
+        // Reuse the bounded, date-verified Delivery reader; never scan a period.
         try {
           const live = await phase2bTodayStatus(candidate);
           if(live?.date!==candidate)throw new Error('DELIVERY_SOURCE_DATE_MISMATCH');
@@ -266,9 +266,9 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
               lat: stop.lat ?? point.lat ?? null, lng: stop.lng ?? point.lng ?? null };
           }));
           const data = uniqueAssignments(actual, candidate);
-          if (data.length) return { ok: true, data, meta: { date: candidate, source: "Delivery Admin current dispatch", complete: true, rowCount: data.length, generatedAt: live.generatedAt }, error: null };
+          if (data.length) return { ok: true, data, meta: { date: candidate, source: candidate === phase2bKstDate() ? "Delivery Admin current dispatch" : "Delivery Admin date-verified dispatch", complete: true, rowCount: data.length, generatedAt: live.generatedAt }, error: null };
         } catch (error) {
-          console.warn(JSON.stringify({ component: "phase2b-assignments", source: "Delivery", error: error.message }));
+          console.warn(JSON.stringify({ component: "phase2b-assignments", source: "Delivery", error: /^DELIVERY_[A-Z_]+$/.test(error.code || error.message || '') ? error.code || error.message : 'DELIVERY_READ_UNAVAILABLE' }));
         }
       }
       // Only a verified final page resolves this loader and enters the cache.
