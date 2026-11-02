@@ -50,15 +50,17 @@ export function projectFixedVehicles(rows) {
   return [...result.values()];
 }
 
-export function createFixedVehicleReader({ensureSession, readJson, extractRows, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
+export function createFixedVehicleReader({ensureSession, readJson, extractRows, pageConcurrency=1, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
+  if(![1,2].includes(pageConcurrency))throw Object.assign(Error('FIXED_MASTER_CONCURRENCY_INVALID'),{code:'FIXED_MASTER_CONCURRENCY_INVALID'});
   let progress=null;
   const reader=async function readFixedVehicleMaster({signal}={}) {
-    progress={phase:'SESSION',center:null,page:0,sourceRows:0,retries:0,completedCenters:[]};
+    progress={phase:'SESSION',center:null,page:0,sourceRows:0,retries:0,completedCenters:[],pageConcurrency};
     const failure=(code,http=0,step='READ',kind='UNKNOWN')=>Object.assign(new Error(code),{code,status:Number(http)||0,step,kind});
     try{await ensureSession();}catch(error){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',error.status);}
-    let authRetried=false,firstHttp=200,authReason=null;
+    let authRetried=false,firstHttp=200,authReason=null,authEpoch=0,authRecovery=null;
     async function readPage(options,attempt=0){
       signal?.throwIfAborted();
+      const requestAuthEpoch=authEpoch;
       try{
         const payload=await readJson('/bo/wm/standard/fixedAlctnList',options);
         if(Number(payload?.status)>=400)throw {status:Number(payload.status)};
@@ -72,11 +74,12 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         const network=!error.diagnostic&&!error.status&&['ECONNRESET','ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT','UND_ERR_SOCKET'].includes(error.cause?.code||error.code);
         const http=localTimeout||network?0:Number(error.diagnostic?.status)||Number(error.status)||0;
         const loginHtml=error.diagnostic?.type==='html-or-login-response'&&http===200&&/loginProcessing|j_username|name=["']userId["']/i.test(String(error.payload?.raw||''));
-        if((http===401||loginHtml)&&!authRetried){
-          authRetried=true;
-          firstHttp=http||null;
-          authReason=loginHtml?'HTML_OR_LOGIN':'HTTP_401';
-          try{await ensureSession(true);}catch(e){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',e.status);}
+        if((http===401||loginHtml)&&requestAuthEpoch===0){
+          if(!authRetried){
+            authRetried=true;firstHttp=http||null;authReason=loginHtml?'HTML_OR_LOGIN':'HTTP_401';
+            authRecovery=Promise.resolve().then(()=>ensureSession(true)).then(()=>{authEpoch=1;});
+          }
+          try{await authRecovery;}catch(e){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',e.status);}
           return readPage(options,attempt);
         }
         // Retry only the failed read-only page; successful prior pages remain
@@ -92,12 +95,12 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
     for (const logCd of ['011', '012', '013']) {
       let accepted=false;
       for(let scan=0;scan<2&&!accepted;scan++){
-      const centerProjection=[],pageHashes=new Set();let centerPagingRows=0,firstPageHash=null,firstReadOptions=null;
+      const centerProjection=[],pageHashes=new Set(),centerCustomerKeys=new Set(),duplicateCustomerKeys=new Set(),batch=new Map();let centerPagingRows=0,firstPageHash=null,firstReadOptions=null;
       let complete = false,centerRows=0,expectedRows=null;
       try{
       // Same bounded paging contract as scraper/freshonFixedDispatch.js.
       for (let page = 0; page < 120; page++) {
-        progress={...progress,phase:'READ',center:logCd,page,sourceRows:sourceRows+centerRows,scan,expectedRows};
+        progress={...progress,phase:'READ',center:logCd,page,sourceRows:sourceRows+centerRows,scan,expectedRows,complete:false,failureCode:null,failureStep:null};
         const body = new URLSearchParams({page: String(page), size: '1000', isPaging: 'true', isCount: 'true',
           sort: 'est_cd,ASC', logCd, estCd: '', estName: '', estNm: '', estGbn: '', startDate: '', endDate: '',
           carCd: '', carNm: '', shipGbn: '1', baecha: ''});
@@ -106,12 +109,25 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         const options={method: 'POST',timeoutMs:60000,
           headers: {'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}, body: body.toString()};
         if(page===0)firstReadOptions=options;
-        const payload = await readPage(options);
+        // Only the existing numbered-page contract is used. A known count may
+        // fill one bounded batch; no new batch starts before the old one drains.
+        if(!batch.size){
+          const declaredPages=expectedRows===null?0:Math.ceil(expectedRows/1000);
+          const width=pageConcurrency===2&&page>0&&page+1<declaredPages&&page+1<120?2:1;
+          for(let offset=0;offset<width;offset++){
+            const pageNumber=page+offset,body=new URLSearchParams(options.body);body.set('page',String(pageNumber));
+            batch.set(pageNumber,readPage({...options,body:body.toString()}).then(payload=>({payload}),error=>({error})));
+          }
+        }
+        const outcome=await batch.get(page);batch.delete(page);
+        if(outcome.error)throw outcome.error;
+        const payload = outcome.payload;
         // fixedAlctnList's existing master contract is data: Row[]. Master rows
         // inherit paging fields (totalCnt/etc.); the daily-dispatch fallback
         // treats those as paging-only records and can discard real customers.
         const rows = Array.isArray(payload?.data) ? payload.data : extractRows(payload);
         if (!Array.isArray(rows)) throw failure('FIXED_MASTER_CONTRACT');
+        if(rows.length>1000)throw failure('FIXED_MASTER_PAGE_SIZE_INVALID',200,'PAGE_SIZE','SOURCE_CONTRACT');
         const keyProfile=inspectFixedMasterKeys(rows);
         progress={...progress,readHttp:200,pageRows:rows.length,declaredRows:rows[0]?.totalCnt!=null&&Number.isSafeInteger(Number(rows[0].totalCnt))&&Number(rows[0].totalCnt)>=0?Number(rows[0].totalCnt):null,keyProfile};
         if(keyProfile.invalid){
@@ -130,6 +146,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         // Keep no contact/access/memo values between batches.
         const minimal=rows.map(row => ({logCd,...Object.fromEntries(['estCd','mainCarSeqNm',
           ...['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm')].map(key=>[key,row[key]]))}));
+        for(const row of minimal){const code=normalizeFixedMasterCustomerKey(row.estCd);if(centerCustomerKeys.has(code))duplicateCustomerKeys.add(code);centerCustomerKeys.add(code);}
         const pageHash=crypto.createHash('sha256').update(JSON.stringify(minimal)).digest('hex');
         // A repeated full page cannot prove pagination completeness. Source
         // row count is deliberately NOT compared with customerCode unique count.
@@ -148,9 +165,13 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         if(crypto.createHash('sha256').update(JSON.stringify(minimal)).digest('hex')!==firstPageHash)throw failure('FIXED_MASTER_SOURCE_CHANGED');
       }
       projected.push(...centerProjection);sourceRows+=centerRows;pagingFieldRows+=centerPagingRows;
-      centers.push({center:logCd,sourceRows:centerRows,declaredRows:expectedRows,pages:pageHashes.size,scan,firstPageHash});accepted=true;
-      progress={...progress,completedCenters:centers.map(({center,sourceRows,declaredRows,pages,scan})=>({center,sourceRows,declaredRows,pages,scan}))};
+      centers.push({center:logCd,sourceRows:centerRows,declaredRows:expectedRows,pages:pageHashes.size,scan,firstPageHash,uniqueCustomers:centerCustomerKeys.size,duplicateCustomerRows:centerRows-centerCustomerKeys.size,duplicateCustomers:duplicateCustomerKeys.size});accepted=true;
+      progress={...progress,completedCenters:centers.map(({center,sourceRows,declaredRows,pages,scan,uniqueCustomers,duplicateCustomerRows,duplicateCustomers})=>({center,sourceRows,declaredRows,pages,scan,uniqueCustomers,duplicateCustomerRows,duplicateCustomers}))};
       }catch(error){
+        // Drain at most one remaining read before discarding this failed scan.
+        // Outcome promises never reject, so unused failed pages cannot crash Node.
+        await Promise.all(batch.values());batch.clear();
+        progress={...progress,phase:'ERROR',complete:false,failureCode:/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_READ_FAILED'};
         if(!['FIXED_MASTER_COUNT_CHANGED','FIXED_MASTER_SOURCE_CHANGED'].includes(error.code)||scan===1)throw error;
         // Discard only the unstable candidate for this center. The existing
         // persisted projection is never changed by a failed or partial scan.
@@ -160,7 +181,8 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
     }
     if (!projected.length) throw failure('FIXED_MASTER_EMPTY');
     progress={...progress,phase:'DONE',sourceRows,complete:true};
-    return {data: projectFixedVehicles(projected),meta:{authRetried,firstHttp,authReason,readHttp:200,sourceRows,pagingFieldRows,retries:progress.retries,centers}};
+    const data=projectFixedVehicles(projected),withinCenterDuplicateRows=centers.reduce((sum,center)=>sum+center.duplicateCustomerRows,0);
+    return {data,meta:{authRetried,firstHttp,authReason,readHttp:200,sourceRows,pagingFieldRows,retries:progress.retries,centers,pageConcurrency,uniqueCustomers:data.length,withinCenterDuplicateRows,crossCenterDuplicateOccurrences:centers.reduce((sum,center)=>sum+center.uniqueCustomers,0)-data.length,conflictingCustomers:data.filter(row=>row.baseVehicleState==='CONFLICT').length,snapshotIsolationVerified:false}};
   };
   reader.getProgress=()=>progress?{...progress}:null;
   return reader;
