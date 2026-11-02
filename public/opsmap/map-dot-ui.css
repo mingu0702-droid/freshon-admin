@@ -11,8 +11,6 @@
 .dotRestored .dotQueryActions{display:flex;flex-wrap:wrap;gap:6px;margin:0 16px 16px}
 .dotRestored .dotQueryActions button{width:100%;font-size:12px}
 .approvedShellCandidate.dotRestored.daily-mode .navigationWorkspace{display:block;grid-template-columns:none;grid-row:auto;margin:0;padding:0;border:0;background:none;max-height:none;overflow:visible}
-.dotRestored:not(.daily-mode) #waypointPlanner{display:none!important}
-.dotRestored:not(.daily-mode) .navigationPicker{display:none}
 .dotRestored.daily-mode .generalCenters{display:none}
 .dotRestored .navigationWorkspace>section,.dotRestored .navigationWorkspace>details{margin:0 16px;padding:16px 0;border:0;border-top:1px solid var(--line);border-radius:0}
 .dotRestored .sourceItinerary{margin-left:16px;margin-right:16px}
@@ -106,3 +104,5 @@
 .dotRestored .plannerActions{flex-wrap:wrap}
 .dotRestored .plannerActions>button{min-width:0;flex:1}
 @media(max-width:900px){.dotRestored #waypointPlanner{min-width:0}.dotRestored #waypointPlanner input{min-width:0;max-width:100%}}
+
+.dotRestored #waypointPlanner:not([open])>:not(summary){display:none!important}

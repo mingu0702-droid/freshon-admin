@@ -43,7 +43,7 @@ try{
  const check=(name,value)=>{assert(value,name);checks.push(name);};
  await page.evaluate(()=>{MapUiLocalBridge.selectNavigationStore('SYNTHETIC_1');});
  check('period detail has no duplicate standalone Kakao action',await page.locator('#navSelectedKakao').count()===0);
- await page.locator('#modeDaily').click();
+ await page.locator('#modeDaily').click();await page.locator('#waypointPlanner>summary').click();
  await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-11-02','2026-11-02'));await page.waitForFunction(()=>MapUiLocalBridge.navigationStores().length===32);
  await page.evaluate(()=>{MapUiLocalBridge.selectNavigationStore('SYNTHETIC_1');MapNavigation.sync();});
  check('daily route actions share the existing planner',await page.locator('#waypointPlanner #navKakaoDirections').count()===1&&await page.locator('#waypointPlanner #navigationSummary').count()===1);

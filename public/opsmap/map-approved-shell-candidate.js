@@ -43,7 +43,7 @@
   const vehicleQuery=$('#vehicleQuery');vehicleQuery.type='search';vehicleQuery.placeholder='호차번호 검색';vehicleQuery.setAttribute('aria-label','호차번호 검색');
   function setCenter(key){if(bridge.state.mode!=='BASE_60D')return;$('#periodCenter').value=key;$('#periodCenter').dispatchEvent(new Event('change'));centers.querySelectorAll('button').forEach(button=>button.classList.toggle('active',button.dataset.sourceCenter===key));}
   centers.querySelectorAll('button').forEach(button=>button.onclick=()=>setCenter(button.dataset.sourceCenter));$('#sourceCenterReset').onclick=()=>setCenter('all');
-  const planner=document.createElement('details');planner.id='waypointPlanner';planner.open=true;
+  const planner=document.createElement('details');planner.id='waypointPlanner';
   planner.innerHTML=`<summary class="sectiontitle"><h2>경로 설정</h2><span class="muted">자동차</span></summary>
     <p class="hint plannerHelp">매장이나 주소를 검색해 각 지점을 지정하세요.</p>
     <div class="navEditorField" data-point-role="origin"><label for="plannerStart"><span class="pointRole origin">출발</span> 출발지</label><div class="pointInputRow"><input id="plannerStart" data-nav-role="origin" aria-label="출발지 검색" placeholder="고객코드·매장명·주소 검색" autocomplete="off"><button id="clearOrigin" type="button" class="pointClear" aria-label="출발지 지우기" title="출발지 지우기">×</button></div></div>
@@ -209,7 +209,7 @@
   let controlsMode=null;
   function syncModeControls(daily,historyDialog=false){
     for(const node of [search,address,filters,stores,$('#sourceBatch'),$('#sourceAreaShortcut'),$('#sourceManualShortcut'),$('#areaToggle')])modeVisible(node,!daily&&node!==address&&node.id!=='sourceManualShortcut');
-    modeVisible(planner,daily);modeVisible(periodButton,!daily);modeVisible(context,false);
+    modeVisible(planner,true);modeVisible(periodButton,!daily);modeVisible(context,false);
     const host=daily?dailyForm:basePicker;for(const node of [routeChecks,$('#selectAllVehicles'),$('#clearVehicles')])if(node.parentNode!==host)host.append(node);
     if(daily){if(vehicleQuery.parentNode!==host||vehicleQuery.nextSibling!==routeChecks)host.insertBefore(vehicleQuery,routeChecks);}
     else if(vehicleQuery.parentNode!==basePicker||vehicleQuery.nextSibling!==routeChecks)basePicker.insertBefore(vehicleQuery,routeChecks);
@@ -262,7 +262,7 @@
     syncVehicleLegend();
     $('#periodDriver').disabled=$('input[name="periodBasis"][value="vehicle"]').checked;
     for(const name of routeChecks.querySelectorAll('.vehicleNo'))if(name.textContent.endsWith('호'))name.textContent+='차';
-    const daily=document.body.classList.contains('daily-mode');planner.hidden=!daily;stores.hidden=daily;$('#sourceBatch').hidden=daily;
+    const daily=document.body.classList.contains('daily-mode');planner.hidden=false;stores.hidden=daily;$('#sourceBatch').hidden=daily;
     const centerValue=$('#periodCenter').value||'all';for(const button of centers.querySelectorAll('button')){const active=button.dataset.sourceCenter===centerValue;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}
     const selected=bridge.state.selectedVehicles;const selectedText=selected.length===1?selected[0]+'호차':selected.length?selected.length+'개 선택':'전체';if($('#baseVehicleCount').textContent!==selectedText)$('#baseVehicleCount').textContent=selectedText;
     // Reconcile only presentation of disabled state; operational partial/error messages remain.

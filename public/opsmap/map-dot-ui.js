@@ -47,7 +47,7 @@
       if(planner.previousElementSibling!==$('.generalCenters'))$('.generalCenters').after(planner);
       if(context.previousElementSibling!==planner)planner.after(context);
       if($('#periodStoreListSection').previousElementSibling!==context)context.after($('#periodStoreListSection'));
-      planner.hidden=true;visits.hidden=true;
+      planner.hidden=false;visits.hidden=true;
     }
     const state=window.MapUiLocalBridge.state,vehicles=state.selectedVehicles;
     $('#dotRouteSelection').textContent=(vehicles.length===1?vehicles[0]+'호차':vehicles.length?vehicles.length+'개 호차':'전체 호차')+' · '+state.currentRows.length+'개 매장';
