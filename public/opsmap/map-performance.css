@@ -109,6 +109,19 @@
 .approvedShellCandidate .clusterMemberCode { color:#6a7e99; font-size:10px; font-weight:500; }
 .approvedShellCandidate .clusterMemberList strong { font-size:12px; line-height:1.4; font-weight:600; }
 .approvedShellCandidate .clusterMemberList small { font-size:10.5px; line-height:1.4; color:#7a889c; overflow-wrap:anywhere; }
+.mapClusterAnchor { position:relative; padding-bottom:52px; }
+.approvedShellCandidate .mapClusterPanel.mapClusterPopup { position:relative; inset:auto; display:flex; flex-direction:column; gap:8px; box-sizing:border-box; max-width:none; min-height:0; padding:12px; overflow:visible; white-space:normal; }
+.approvedShellCandidate .mapClusterPopup .clusterPanelHeading { flex:none; padding-bottom:8px; }
+.approvedShellCandidate .mapClusterPopup .clusterPanelHeading h3 { font-size:13px; overflow-wrap:anywhere; }
+.approvedShellCandidate .mapClusterPopup .clusterPanelHeading button { flex:none; }
+.approvedShellCandidate .mapClusterPopup .clusterPanelActions { flex:none; padding:0; }
+.approvedShellCandidate .mapClusterPopup input { flex:none; width:100%; min-width:0; height:32px; border:1px solid #dce4ee; border-radius:6px; padding:6px 8px; }
+.approvedShellCandidate .mapClusterPopup .clusterMemberList { flex:1 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+.approvedShellCandidate .mapClusterPopup>button { flex:none; min-height:28px; }
+.approvedShellCandidate .mapClusterPopup:after { content:""; position:absolute; left:var(--cluster-tail-x,50%); bottom:-6px; width:10px; height:10px; border-right:1px solid #dce4ee; border-bottom:1px solid #dce4ee; background:#fff; transform:translateX(-50%) rotate(45deg); }
+.approvedShellCandidate .clusterBelow .mapClusterPopup:after { top:-6px; bottom:auto; transform:translateX(-50%) rotate(225deg); }
+.approvedShellCandidate .clusterLocationGroups { display:grid; gap:4px; margin:8px 0; }
+.approvedShellCandidate .clusterLocationGroups button { text-align:left; padding:8px; font-size:11px; white-space:normal; color:#275dd8; background:#f2f6ff; border:1px solid #dce4ee; border-radius:6px; }
 
 /* Navigation fields identify roles directly and keep editing controls beside each value. */
 .approvedShellCandidate .navEditorField { margin:14px 0 0; }

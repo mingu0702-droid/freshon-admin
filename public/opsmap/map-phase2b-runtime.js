@@ -9,7 +9,7 @@
   const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", areaOn: false, centerFilter: "", selectedDate: "", latestDate: "", map: null, overlays: [], representativeOverlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
   let mapInitializing=null,mapObserver=null,mapHandlers=[],mapCamera=null,cameraSelection=0;
   let searchTemporaryOverlay=null,searchTemporaryRadius=null,searchTemporaryClick=null;
-  let clusterPanel=null;
+  let clusterPanel=null,clusterPopupCleanup=null;
   let routeCameraEpoch=null;
   let operationStops = [], runFilter = "ALL";
   let approvedMarkerOrder = new Map();
@@ -852,6 +852,7 @@
   }
 
   function clearMap() {
+    closeClusterPanel();
     [...state.overlays, ...state.representativeOverlays, ...state.lines, ...state.polygons].forEach((item) => item.setMap?.(null));
     state.overlays = [];
     state.representativeOverlays = [];
@@ -889,7 +890,67 @@
   }
 
   function closeClusterPanel(){
+    clusterPopupCleanup?.();clusterPopupCleanup=null;
     clusterPanel?.remove();clusterPanel=null;
+  }
+
+  function anchorClusterPanel(panel,row){
+    const map=state.map,mapNode=$('#map'),position=new kakao.maps.LatLng(row.lat,row.lng);
+    const anchor=document.createElement('div');anchor.className='mapClusterAnchor';anchor.append(panel);
+    panel.classList.add('mapClusterPopup');panel.setAttribute('role','dialog');
+    const overlay=new kakao.maps.CustomOverlay({position,content:anchor,clickable:true,xAnchor:.5,yAnchor:1,zIndex:60});
+    let frame=null,disposed=false,adjustCamera=true;
+    const rect=node=>node?.getClientRects().length&&!node.hidden?node.getBoundingClientRect():null;
+    function layout(){
+      frame=null;if(disposed)return;
+      const mapRect=mapNode.getBoundingClientRect(),visual=window.visualViewport;
+      const viewport={left:visual?.offsetLeft||0,top:visual?.offsetTop||0,width:visual?.width||innerWidth,height:visual?.height||innerHeight};
+      const area=window.MapViewPolicy?.cameraFocusViewport({mapRect,viewportRect:viewport,headerRect:rect($('#approvedSiteHeader')),
+        occluders:$$('#leftPanel,#detailSection.open,#mobileWorkspace,#manualPinEditor:not([hidden]),.mobileMapControls').map(rect).filter(Boolean)})||mapRect;
+      const width=Math.max(0,Math.min(292,area.width-16)),gap=52;
+      panel.style.width=width+'px';panel.style.maxHeight=Math.max(0,Math.min(360,area.height*.48,area.height-gap-16))+'px';
+      overlay.setPosition(position);
+      const height=panel.getBoundingClientRect().height;
+      const point=map.getProjection().containerPointFromCoords(position),x=mapRect.left+point.x,y=mapRect.top+point.y;
+      const minX=area.left+8+width/2,maxX=area.right-8-width/2,minY=area.top+8+height+gap,maxY=area.bottom-8;
+      if(adjustCamera){
+        adjustCamera=false;
+        const dx=Math.max(minX,Math.min(maxX,x))-x,dy=Math.max(Math.min(minY,maxY),Math.min(maxY,y))-y;
+        if(Math.abs(dx)>1||Math.abs(dy)>1){
+          const projection=map.getProjection();
+          const center=projection.coordsFromContainerPoint(new kakao.maps.Point(mapRect.width/2-dx,mapRect.height/2-dy));
+          state.suppressMapEventsUntil=Date.now()+700;map.setCenter(center);schedule();return;
+        }
+      }
+      const shift=Math.max(minX-x,Math.min(maxX-x,0));
+      const below=y-height-gap<area.top+8&&y+height+gap<=area.bottom-8;
+      anchor.style.transform=`translate(${Math.round(shift)}px,${below?Math.round(height+gap*2):0}px)`;
+      anchor.style.setProperty('--cluster-tail-x',Math.max(12,Math.min(width-12,width/2-shift))+'px');
+      anchor.classList.toggle('clusterBelow',below);
+      // A panned-away pin must not leave a detached list fixed over the map.
+      anchor.style.visibility=x<area.left||x>area.right||y<area.top||y>area.bottom||width<160?'hidden':'visible';
+    }
+    function schedule(){if(!disposed&&frame===null)frame=requestAnimationFrame(layout);}
+    function resize(){adjustCamera=true;schedule();}
+    const escape=event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeClusterPanel();}};
+    const stop=event=>{event.stopPropagation();kakao.maps.event.preventMap?.();};
+    for(const name of ['pointerdown','click','dblclick','wheel','touchstart'])anchor.addEventListener(name,stop,{passive:true});
+    const names=['center_changed','zoom_changed','bounds_changed','idle'];
+    names.forEach(name=>kakao.maps.event.addListener(map,name,schedule));
+    const observer=window.ResizeObserver?new ResizeObserver(entries=>{if(entries.some(entry=>entry.target===mapNode))adjustCamera=true;schedule();}):null;
+    observer?.observe(mapNode);observer?.observe(panel);
+    window.addEventListener('resize',resize);window.visualViewport?.addEventListener('resize',resize);
+    document.addEventListener('keydown',escape,true);
+    const cleanupEvents=['map-navigation-context-changed','map-navigation-logout','pagehide'];
+    cleanupEvents.forEach(name=>window.addEventListener(name,closeClusterPanel));
+    clusterPopupCleanup=()=>{
+      disposed=true;if(frame!==null)cancelAnimationFrame(frame);observer?.disconnect();
+      names.forEach(name=>kakao.maps.event.removeListener(map,name,schedule));
+      window.removeEventListener('resize',resize);window.visualViewport?.removeEventListener('resize',resize);
+      document.removeEventListener('keydown',escape,true);cleanupEvents.forEach(name=>window.removeEventListener(name,closeClusterPanel));
+      overlay.setMap(null);anchor.remove();
+    };
+    mapCamera?.releaseFocus();overlay.setMap(map);schedule();
   }
 
   function showCluster(row){
@@ -897,10 +958,16 @@
     if(!members.length||!state.map)return;
     closeClusterPanel();
     state.fitRequested=false;state.suppressMapEventsUntil=Date.now()+700;
+    const locations=new Map();
+    for(const item of members){
+      if(!Number.isFinite(item.lat)||!Number.isFinite(item.lng))continue;
+      const key=item.lat+':'+item.lng;if(!locations.has(key))locations.set(key,[]);locations.get(key).push(item);
+    }
+    const sameLocation=locations.size===1&&[...locations.values()][0].length===members.length;
     const b=row.clusterBounds;
-    if(b&&(b.north-b.south>0.00001||b.east-b.west>0.00001)){
+    if(!sameLocation&&b&&(b.north-b.south>0.00001||b.east-b.west>0.00001)){
       const bounds=new kakao.maps.LatLngBounds();bounds.extend(new kakao.maps.LatLng(b.south,b.west));bounds.extend(new kakao.maps.LatLng(b.north,b.east));state.map.setBounds(bounds,90,80,90,80);
-    }else{
+    }else if(!sameLocation){
       state.map.setLevel(Math.min(4,state.map.getLevel()));state.map.panTo(new kakao.maps.LatLng(row.lat,row.lng));
     }
     const panel=document.createElement('section');panel.id='mapClusterPanel';panel.className='mapClusterPanel';panel.setAttribute('aria-label','묶음 매장 목록');
@@ -915,6 +982,18 @@
     }
     const all=document.createElement('button');all.type='button';all.textContent='전체 호차';all.onclick=()=>{closeClusterPanel();$('#selectAllVehicles').click();};actions.append(all);panel.append(actions);
     const query=document.createElement('input');query.type='search';query.placeholder='이 묶음에서 매장 검색';query.setAttribute('aria-label','묶음 매장 검색');panel.append(query);
+    // Region clusters keep their zoom action, with co-located stores reachable first.
+    if(!sameLocation){
+      const groups=[...locations.values()].filter(items=>items.length>1).sort((a,b)=>b.length-a.length);
+      if(groups.length){
+        const groupList=document.createElement('div');groupList.className='clusterLocationGroups';groupList.setAttribute('aria-label','같은 위치 매장 묶음');
+        for(const items of groups){
+          const button=document.createElement('button');button.type='button';button.textContent=`같은 위치 · ${items.length}개 매장 · ${items[0].customerName||items[0].customerCode}`;
+          button.onclick=()=>showCluster({lat:items[0].lat,lng:items[0].lng,clusterLabel:'같은 위치',clusterRows:items,clusterVehicles:[...new Set(items.map(item=>item.vehicle||item.baseVehicle).filter(Boolean))]});groupList.append(button);
+        }
+        panel.append(groupList);
+      }
+    }
     const list=document.createElement('div');list.className='clusterMemberList';panel.append(list);
     const more=document.createElement('button');more.type='button';more.textContent='더 보기';panel.append(more);
     let limit=40;
@@ -933,7 +1012,9 @@
     }
     query.oninput=()=>{limit=40;paint();};more.onclick=()=>{limit+=40;paint();};
     panel.addEventListener('keydown',event=>{if(event.key==='Escape'){event.stopPropagation();closeClusterPanel();}});
-    clusterPanel=panel;($('#map').parentElement||document.body).append(panel);paint();
+    clusterPanel=panel;paint();
+    if(sameLocation)anchorClusterPanel(panel,{lat:members[0].lat,lng:members[0].lng});
+    else ($('#map').parentElement||document.body).append(panel);
   }
 
   function markerElement(row, index, kind) {
@@ -1243,6 +1324,7 @@
   }
 
   async function selectVehicleStatus(row, element) {
+    closeClusterPanel();
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     element?.classList.add("selected");
     const vehicle = normalizeVehicle(row.vehicle),focusOwner=++cameraSelection,focusInteraction=mapCamera?.interaction();
@@ -1399,6 +1481,7 @@
   }
 
   function showNearbyReference(point) {
+    closeClusterPanel();
     if(point?.searchTemporary){renderSearchTemporaryNearby(point);focusMapPoint(point,{zoom:false,key:'search-temporary'});return;}
     if (!dateReady) { selectStore(point, null, false); return; }
     const retained = state.currentRows.filter((row) => !row.nearbyVehicle && !row.virtual);
