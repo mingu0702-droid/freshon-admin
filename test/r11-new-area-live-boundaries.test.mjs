@@ -196,3 +196,31 @@ test('proxy preserves safe backend code/status and forwards cancellation without
   assert.equal(options.signal,controller.signal);assert.equal(options.body,JSON.stringify({query:'경기도 화성시 합성로 1'}));
   assert.equal(geocoder.blockedReason,'GEOCODE_DAILY_LIMIT');assert.equal(window.KAKAO_MAP_CONFIG.allowExternalAddressLookup,false);
 });
+
+
+test('anonymous temporary points never enter manual-pin projection and complete all 60 rows',async()=>{
+  const f=fixture();let manualCalls=0;
+  f.window.MapManualPins={apply(row){manualCalls++;if(!/^[A-Z]\d+$/.test(row.customerCode||''))throw TypeError('SYNTHETIC_ANONYMOUS_MANUAL_PROJECTION');}};
+  for(const code of [undefined,null,'','invalid']){
+    const row=f.judgeNewAreaPoint({address:'경기도 화성시 합성로 90'},{customerCode:code,lat:37.2,lng:127});
+    assert.equal(row.lookupStatus,'SUCCESS');
+  }
+  await f.run(Array.from({length:60},(_,i)=>`경기도 화성시 합성로 ${i+100}\t합성고객${i}`).join('\n'));
+  assert.equal(f.state.newAreaResults.length,60);assert.equal(f.queries.length,60);
+  assert.ok(f.state.newAreaResults.every(row=>row.lookupStatus==='SUCCESS'&&!row.lookupError));
+  assert.match(f.node('#newAreaBatchStatus').textContent,/완료 60 · 성공 60 · 보류 0 · 실패 0 · 한도대기 0/);
+  assert.equal(manualCalls,0,'anonymous points must bypass the customer-only manual projection');
+});
+
+test('only valid customer codes enter manual-pin projection and still reuse confirmed manual coordinates',async()=>{
+  const f=fixture({rows:[{...saved,lat:null,lng:null}]});const calls=[];
+  f.window.MapManualPins={apply(row){
+    if(!/^[A-Z]\d+$/.test(row.customerCode||''))throw TypeError('SYNTHETIC_ANONYMOUS_MANUAL_PROJECTION');
+    calls.push(row.customerCode);row.lat=saved.lat;row.lng=saved.lng;row.coordinateStatus='CONFIRMED';row.coordinateSource='MANUAL_PIN';
+  }};
+  await f.run(`${saved.customerCode}\t합성 수동좌표 고객`);
+  assert.ok(calls.length>0);assert.ok(calls.every(code=>code===saved.customerCode));
+  assert.equal(f.state.newAreaResults.length,1);assert.equal(f.state.newAreaResults[0].lookupStatus,'SUCCESS');
+  assert.equal(f.state.newAreaResults[0].coordinateSource,'MANUAL_PIN');assert.equal(f.state.newAreaResults[0].lat,saved.lat);
+  assert.equal(f.queries.length,0);assert.equal(f.headers.length,0);
+});
