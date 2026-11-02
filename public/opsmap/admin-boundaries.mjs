@@ -2,7 +2,7 @@ const official='https://www.data.go.kr/data/15129688/fileData.do';
 const own=(o,k)=>Object.prototype.hasOwnProperty.call(o,k);
 export function prepareAdminBoundaries(data){
  const m=data?.metadata;
- if(data?.type!=='FeatureCollection'||!Array.isArray(data.features)||!data.features.length||data.features.length>4000||m?.sourceUrl!==official||m.boundaryType!=='ADMINISTRATIVE_EMD'||m.codeSystem!=='SGIS_ADM_8'||m.crs!=='EPSG:4326'||m.sourceCrs!=='EPSG:5179'||m.baseDate!=='2025-06-30'||m.license!=='PUBLIC_DATA_UNRESTRICTED')throw Error('ADMIN_BOUNDARIES_INVALID');
+ if(data?.type!=='FeatureCollection'||!Array.isArray(data.features)||(!data.features.length&&m?.coverage!=='QUERY')||data.features.length>4000||m?.sourceUrl!==official||m.boundaryType!=='ADMINISTRATIVE_EMD'||m.codeSystem!=='SGIS_ADM_8'||m.crs!=='EPSG:4326'||m.sourceCrs!=='EPSG:5179'||m.baseDate!=='2025-06-30'||m.license!=='PUBLIC_DATA_UNRESTRICTED')throw Error('ADMIN_BOUNDARIES_INVALID');
  let vertices=0;const seen=new Set();
  const features=data.features.map(f=>{
   const code=f?.properties?.adm_cd,geometry=f?.geometry;
