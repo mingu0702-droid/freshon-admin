@@ -1,0 +1,91 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import '../public/opsmap/map-period-ui.js';
+import '../public/opsmap/phase2b-ui-helpers.js';
+import '../public/opsmap/manual-waypoints.js';
+import '../public/opsmap/new-area-requests.js';
+
+const source = fs.readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js',import.meta.url),'utf8');
+const exposure = `
+  window.test={state,judgeNewAreaPoint,judgeNewAreaRow,runNewArea,clearNewAreaBatch,exportNewArea,
+    setup(rows=[],meta={},snapshot=[]){state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';dateReady=false;
+      periodRows=rows;periodMeta={startDate:state.rangeStart,endDate:state.rangeEnd,complete:false,...meta};
+      latestSnapshotRows=snapshot;allStores=rows;storesByCode.clear();coordinateByCode.clear();
+      for(const row of [...snapshot,...rows]){storesByCode.set(row.customerCode,row);coordinateByCode.set(row.customerCode,row);}
+      for(const row of rows)if(row.vehicle)baseVehicles.set(row.customerCode,{baseVehicle:row.vehicle});},
+    ready(){dateReady=true;},manual:point=>manualDraft.add(point),
+    setJudge:fn=>judgeNewAreaRow=fn};
+})();`;
+export const newAreaTestRuntime = source.slice(0,source.indexOf('\n  initVehicles();')) + exposure;
+const near = {customerCode:'S990001',customerName:'합성 인근 배송처',address:'경기도 화성시 합성로 1',lat:37.2,lng:127,vehicle:'101',deliveryPattern:'월수금',lastDeliveryDate:'2026-11-02'};
+function fixture() {
+  const nodes=new Map();
+  const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',innerHTML:'',textContent:'',disabled:false,setAttribute(){},removeAttribute(){},classList:{add(){},remove(){}}});return nodes.get(id);};
+  let calls=0;
+  const window={addEventListener(){},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,KAKAO_MAP_CONFIG:{allowExternalAddressLookup:false},kakaoGeocoder:{addressSearch(){calls++;throw Error('EXTERNAL_LOOKUP_FORBIDDEN');}}};
+  const ctx=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],body:node('body')},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
+  vm.runInContext(newAreaTestRuntime,ctx);
+  return {...window.test,node,externalCalls:()=>calls,window};
+}
+test('partial selected period retains 500m, 30km and weekday evidence without O/X',()=>{
+  const f=fixture();f.setup([near],{segmented:true,displayComplete:true,aggregateComplete:false,coverageComplete:false});
+  const row=f.judgeNewAreaPoint({address:'경기도 화성시 합성로 2'},{lat:37.201,lng:127});
+  assert.equal(row.decision,'검토');assert.equal(row.evidenceCount,1);assert.equal(row.references[0].vehicle,'101');assert.equal(row.deliveryDays,'월수금');assert.match(row.evidence,/도로 진입 판정 아님/);
+  assert.equal(f.judgeNewAreaPoint({address:'제주특별자치도 합성로 1'},{lat:33.4,lng:126.5}).decision,'검토');
+  assert.equal(f.judgeNewAreaPoint({address:'서울특별시 합성아파트 101동 102호'},{lat:37.5,lng:127}).decision,'검토');
+});
+test('only fully verified whole period enables definitive geographic rules',()=>{
+  const f=fixture();f.setup([near],{complete:true,coverageComplete:true,missingCoordinate:0});f.ready();
+  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.201,lng:127}).decision,'O');
+  assert.equal(f.judgeNewAreaPoint({address:'경상북도 안동시 합성로 1'},{lat:36.56,lng:128.73}).decision,'검토');
+  f.setup([near],{complete:true,segmented:true,aggregateComplete:false,coverageComplete:true});f.ready();
+  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.201,lng:127}).decision,'검토');
+});
+test('wrong-period rows never count, while dated snapshot delivery remains partial evidence',()=>{
+  const f=fixture();f.setup([{...near,customerCode:'S990009'}],{startDate:'2025-01-01'},[near,{...near,customerCode:'S990002',lastDeliveryDate:'2025-01-01'}]);
+  const row=f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127});assert.equal(row.evidenceCount,1);assert.equal(row.decision,'검토');
+});
+test('empty partial page still uses dated snapshot evidence and does not revive conflicted same-code rows',()=>{
+  const f=fixture();f.setup([],{complete:false},[near]);
+  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127}).evidenceCount,1);
+  f.setup([{...near,coordinateStatus:'CONFLICT'}],{complete:false},[near]);
+  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127}).evidenceCount,0);
+});
+test('conflicting, blank and out-of-country coordinates cannot become nearby evidence',()=>{
+  const f=fixture();f.setup([{...near,coordinateStatus:'CONFLICT'},{...near,lat:null},{...near,lat:0}]);
+  const row=f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127});assert.equal(row.evidenceCount,0);
+  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:NaN,lng:127}).reason,'주소 확인 필요');
+});
+test('customer code, stored address and existing manual coordinate input require zero lookup calls',async()=>{
+  const f=fixture();f.setup([near]);
+  assert.equal((await f.judgeNewAreaRow({address:near.customerCode,customer:''})).evidenceCount,1);
+  assert.equal((await f.judgeNewAreaRow({address:near.address,customer:''})).evidenceCount,1);
+  f.manual({label:'대구광역시 동구 합성로 2',lat:35.9,lng:128.65});
+  assert.equal((await f.judgeNewAreaRow({address:'대구광역시 동구 합성로 2'})).coordinateSource,'MANUAL_WAYPOINT');
+  const unknown=await f.judgeNewAreaRow({address:'서울특별시 영등포구 합성로 2'});assert.equal(unknown.reason,'주소 확인 필요');assert.equal(unknown.lookupError,undefined);
+  assert.equal(f.externalCalls(),0);
+});
+test('confirmed manual pin projection is reused without pin writes',async()=>{
+  const f=fixture();f.setup([{...near,lat:null,lng:null}]);f.window.MapManualPins={apply(row){row.lat=near.lat;row.lng=near.lng;row.coordinateStatus='CONFIRMED';row.coordinateSource='MANUAL_PIN';}};
+  assert.equal((await f.judgeNewAreaRow({address:near.customerCode})).evidenceCount,1);assert.equal(f.externalCalls(),0);
+});
+test('TSV multiline preserves X/Y order and separates invalid addresses and row errors',async()=>{
+  const f=fixture();f.setup([near]);f.node('#newAreaBatchInput').value=`${near.customerCode}\t"합성 고객\n상세주소"\n서울특별시 영등포구 합성로 2\t합성 고객2\n잘못된 입력\t오류\t추가열`;
+  await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
+  const rows=f.state.newAreaResults;assert.equal(rows.length,3);assert.equal(rows[0].originalCustomer,'합성 고객\n상세주소');assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
+  assert.equal(f.node('#exportNewAreaCsv').disabled,false);assert.match(f.node('#newAreaBatchResults').innerHTML,/30km 근접호차/);
+  const output=globalThis.MapPeriodUi.areaExportRows(rows,'2026-11-02');assert.equal(output[0][0],near.customerCode);assert.equal(output[0][2],'검토필요');assert.equal(output[0][1],'합성 고객\n상세주소');
+  assert.equal(globalThis.MapPeriodUi.areaTsv(rows,'2026-11-02','decision').split('\r\n').length,3);
+  f.setJudge(async row=>{if(row.address==='실패')throw Error('SYNTHETIC_ROW_FAILURE');return {...row,decision:'검토',reason:'주소 확인 필요',nearby:[]};});
+  f.node('#newAreaBatchInput').value='실패\t고객1\n경기도 화성시 합성로 2\t고객2';await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
+  assert.equal(f.state.newAreaResults.length,2);assert.equal(f.state.newAreaResults[0].lookupError,true);assert.equal(f.state.newAreaResults[1].lookupError,undefined);assert.match(f.node('#newAreaBatchStatus').textContent,/행 실패 1/);
+});
+test('cancel pending batch then rerun keeps input and suppresses stale completion',async()=>{
+  const f=fixture();f.setup([near]);f.node('#newAreaBatchInput').value=near.customerCode;
+  let finish;f.setJudge(row=>new Promise(resolve=>{finish=()=>resolve({...row,decision:'검토',nearby:[]});}));
+  const pending=f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');f.clearNewAreaBatch(false);finish();await pending;
+  assert.equal(f.state.newAreaResults.length,0);assert.equal(f.node('#newAreaBatchInput').value,near.customerCode);
+  f.setJudge(async row=>({...row,decision:'검토',nearby:[]}));await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');assert.equal(f.state.newAreaResults.length,1);
+});

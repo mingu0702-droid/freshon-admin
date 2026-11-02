@@ -1,7 +1,8 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
 import {buildBaseTerritories,baseTerritoryAvailability} from '../public/opsmap/territory-policy.mjs';
+import {boundaries} from './fixtures/admin-boundaries.mjs';
 const version='a'.repeat(64),rows=(vehicle='101',center='osan')=>[[37.1,127.1],[37.2,127.1],[37.1,127.2]].map(([lat,lng],i)=>({customerCode:'S'+vehicle+i,baseVehicle:vehicle,baseVehicleGroup:center,baseVehicleState:'VERIFIED_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:version,baseVehicleStale:false,lat,lng}));
-function fixture({stores=rows(),stale=false,fail=null}={}){
+function fixture({stores=rows(),stale=false,fail=null,boundaryFailure=null,boundaryPayload=boundaries}={}){
  const nodes=new Map(),polys=[],events=new Map();let reads=0;
  class Element{constructor(){this.children=[];this.attrs={};this.dataset={};this.hidden=false;this.parentElement=this;this.textContent='';}set id(v){this._id=v;nodes.set('#'+v,this);}get id(){return this._id;}append(e){this.children.push(e);}after(e){this.parentElement.append(e);}replaceChildren(){this.children=[];}setAttribute(k,v){this.attrs[k]=v;}}
  for(const id of ['areaToggle','mobileAreaToggle','periodFilterPanel','territoryVehicles']){const e=new Element();e.id=id;}
@@ -10,7 +11,7 @@ function fixture({stores=rows(),stale=false,fail=null}={}){
  const window={MapUiLocalBridge:bridge,Phase2bUi:{vehicleColor:v=>'color-'+v},addEventListener:(n,fn)=>events.set(n,fn),removeEventListener(){}};
  const kakao={maps:{LatLng:function(lat,lng){this.lat=lat;this.lng=lng;},Polygon:class{constructor(options){this.options=options;polys.push(this);}setMap(map){this.map=map;}}}};
  const document={querySelector:s=>nodes.get(s)||null,createElement:()=>new Element()};
- vm.runInNewContext(fs.readFileSync(new URL('../public/opsmap/territory-ui.mjs',import.meta.url),'utf8').replace(/^import[^\n]+\n/,''),{window,document,kakao,buildBaseTerritories,baseTerritoryAvailability});
+ vm.runInNewContext(fs.readFileSync(new URL('../public/opsmap/territory-ui.mjs',import.meta.url),'utf8').replace(/^import[^\n]+\n/,''),{window,document,kakao,buildBaseTerritories,baseTerritoryAvailability,fetch:async()=>({ok:!boundaryFailure,status:boundaryFailure||200,json:async()=>({data:boundaryPayload})})});
  return {nodes,polys,state,master,events,stores,ui:window.MapTerritoryUi,reads:()=>reads};
 }
 test('stale master cannot draw current polygons and the missing HTML status is visibly created',async()=>{
@@ -34,8 +35,8 @@ test('source auth denial remains distinct from insufficient locations and cannot
 test('same selection render reuses polygons and mode switch removes polygons only',async()=>{
  const f=fixture();await f.ui.toggle();const n=f.polys.length;f.ui.renderForSelection();assert.equal(f.polys.length,n);f.state.mode='DATE_ROUTE';f.ui.renderForSelection();assert.equal(f.ui.state().polygons,0);assert.equal(f.state.map!==null,true);
 });
-test('missing centers, too few points and collinear points remain unconfirmed',()=>{
- for(const stores of [rows('101','unknown'),rows().slice(0,2),rows().map((r,i)=>({...r,lat:37+i/10,lng:127+i/10}))]){const model=buildBaseTerritories(stores),a=baseTerritoryAvailability(stores,{version,stale:false},model);assert.equal(a.vehicles[0].state,'unconfirmed');assert.ok(a.vehicles[0].reason);}
+test('missing centers and conflicting GPS remain unconfirmed',()=>{
+ for(const stores of [rows('101','unknown'),rows().map(r=>({...r,coordinateStatus:'CONFLICT'}))]){const model=buildBaseTerritories(stores,boundaries),a=baseTerritoryAvailability(stores,{version,stale:false},model);assert.equal(a.vehicles[0].state,'unconfirmed');assert.ok(a.vehicles[0].reason);}
 });
 
 // Resume-only boundaries: new source availability must not require another remote read.
@@ -43,7 +44,7 @@ test('fresh source arriving after stale rejection builds boundaries on the next 
  const f=fixture({stale:true});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);f.master.stale=false;f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().reason,null);assert.equal(f.reads(),0);
 });
 test('manual coordinate event rebuilds only territory geometry while preserving the map and pin owner',async()=>{
- const f=fixture();await f.ui.toggle();const previous=f.polys[0],map=f.state.map;f.stores[0].lat=37.05;f.events.get('map-coordinate-updated')();assert.equal(previous.map,null);assert.equal(f.ui.state().polygons,1);assert.equal(f.state.map,map);assert(f.polys.at(-1).options.path.some(p=>p.lat===37.05));assert.equal(f.reads(),0);
+ const f=fixture();await f.ui.toggle();const previous=f.polys[0],map=f.state.map;f.stores[0].lat=37.05;f.events.get('map-coordinate-updated')();assert.equal(previous.map,null);assert.equal(f.ui.state().polygons,1);assert.equal(f.state.map,map);assert.equal(f.polys.at(-1).options.path[0][0].lat,37);assert.equal(f.polys.at(-1).options.path[0][0].lng,127);assert.equal(f.reads(),0);
 });
 test('four selected verified vehicles draw independently and center changes remove only excluded boundaries',async()=>{
  const stores=[...rows('101'),...rows('122'),...rows('172'),...rows('202','yeongnam')],f=fixture({stores});f.state.selectedVehicles=['101','122','172','202'];await f.ui.toggle();assert.equal(f.ui.state().polygons,4);f.state.centerFilter='osan';f.ui.renderForSelection();assert.equal(f.ui.state().polygons,3);assert.equal(f.state.selectedVehicles.length,4);
@@ -51,4 +52,21 @@ test('four selected verified vehicles draw independently and center changes remo
 test('source refresh error is safe metadata and does not upgrade historical source evidence',()=>{
  const a=baseTerritoryAvailability(rows(),{version,stale:true,lastError:'FIXED_MASTER_FORBIDDEN',refresh:'ERROR'});assert.equal(a.reason,'MASTER_STALE');assert.equal(a.sourceError,'FIXED_MASTER_FORBIDDEN');assert.equal(a.refresh,'ERROR');assert(a.vehicles.every(g=>g.state==='unconfirmed'));
  const b=baseTerritoryAvailability(rows(),{version,stale:true,lastError:'unsafe source response'});assert.equal(b.sourceError,null);
+});
+
+
+test('missing official geometry never turns three customer points into a territory',async()=>{
+ const f=fixture({boundaryFailure:503});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'ADMIN_BOUNDARIES_UNAVAILABLE');assert.match(f.nodes.get('#territoryStatus').textContent,/공식 읍면동 경계/);
+});
+test('one verified GPS is sufficient for a real administrative polygon and shared responsibility stays visible',async()=>{
+ const f=fixture({stores:[rows('101')[0],rows('122')[0]]});await f.ui.toggle();assert.equal(f.ui.state().polygons,2);assert.deepEqual(f.polys.map(p=>p.options.strokeColor),['color-101','color-122']);assert.match(f.nodes.get('#territoryVehicles').children[0].textContent,/공동 담당/);
+});
+test('GPS outside bundled subset stays unconfirmed with explicit coverage reason',async()=>{
+ const f=fixture({stores:rows().map(r=>({...r,lat:35,lng:128}))});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'ADMIN_BOUNDARY_NO_MATCH');assert.equal(f.ui.state().partialCoverage,true);
+});
+
+test('Kakao receives separate islands and complete nested outer/hole paths',async()=>{
+ const data=structuredClone(boundaries),outer=[[127,37],[127.5,37],[127.5,37.5],[127,37.5],[127,37]],hole=[[127.3,37.3],[127.4,37.3],[127.4,37.4],[127.3,37.4],[127.3,37.3]],island=[[128,37],[128.1,37],[128.1,37.1],[128,37.1],[128,37]];
+ data.features[0].geometry={type:'MultiPolygon',coordinates:[[outer,hole],[island]]};
+ const f=fixture({boundaryPayload:data});await f.ui.toggle();assert.equal(f.ui.state().polygons,2);assert.equal(f.polys[0].options.path.length,2);assert.equal(f.polys[0].options.path[1].length,hole.length);assert.equal(f.polys[1].options.path[0][0].lng,128);
 });

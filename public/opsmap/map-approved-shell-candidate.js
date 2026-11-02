@@ -32,7 +32,8 @@
   const filters=$('#periodFilterPanel');filters.className='generalCenters';
   const filterTitle=filters.querySelector('.label');filterTitle.className='sectiontitle';filterTitle.innerHTML='<h2>담당 센터</h2><button id="sourceCenterReset" class="textbtn">전체 보기</button>';
   const centers=document.createElement('div');centers.className='centers';centers.id='centers';centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남']].map(([key,label])=>`<button data-source-center="${key}" class="${key==='all'?'active':''}">${label}</button>`).join('');filters.append(centers);
-  const basePicker=document.createElement('details');basePicker.id='baseVehiclePicker';basePicker.innerHTML='<summary>호차 선택 <span id="baseVehicleCount">전체</span></summary>';filters.append(basePicker);
+  const basePicker=document.createElement('details');basePicker.id='baseVehiclePicker';basePicker.open=true;basePicker.innerHTML='<summary>호차 선택 <span id="baseVehicleCount">전체</span></summary>';filters.append(basePicker);
+  const vehicleQuery=$('#vehicleQuery');vehicleQuery.type='search';vehicleQuery.placeholder='호차번호 검색';vehicleQuery.setAttribute('aria-label','호차번호 검색');
   function setCenter(key){if(bridge.state.mode!=='BASE_60D')return;$('#periodCenter').value=key;$('#periodCenter').dispatchEvent(new Event('change'));centers.querySelectorAll('button').forEach(button=>button.classList.toggle('active',button.dataset.sourceCenter===key));}
   centers.querySelectorAll('button').forEach(button=>button.onclick=()=>setCenter(button.dataset.sourceCenter));$('#sourceCenterReset').onclick=()=>setCenter('all');
   const planner=document.createElement('details');planner.id='waypointPlanner';planner.open=true;
@@ -182,7 +183,7 @@
   const queryStatus=document.createElement('p');queryStatus.id='querySubmitStatus';queryStatus.className='hint';queryStatus.setAttribute('role','status');dailyForm.append(queryStatus);
   queryRoutes.onclick=async()=>{if(queryRoutes.disabled||bridge.state.mode!=='DATE_ROUTE')return;queryRoutes.disabled=true;queryStatus.textContent='운행 내역을 불러오고 있습니다.';try{const result=await bridge.submitDailyQuery($('#selectedDate').value,$('#selectedDate').value);if(result.ok){queryStatus.textContent='';routeDialog.close();}else queryStatus.textContent=result.message;}catch(error){queryStatus.textContent='조회 실패 · '+error.message;}finally{queryRoutes.disabled=false;}};
   const routeHelp=document.createElement('p');routeHelp.className='hint';routeHelp.textContent='선택 배송일의 확정호차와 방문 순서를 표시합니다.';dailyForm.append(routeHelp);
-  const advancedRoutes=document.createElement('details');advancedRoutes.className='sourceAdvancedRoutes';advancedRoutes.innerHTML='<summary>호차 단일 선택·검색</summary>';advancedRoutes.append($('#operationVehicle'),$('#vehicleTrigger'),$('#vehicleQuery'));dailyForm.append(advancedRoutes);
+  const advancedRoutes=document.createElement('details');advancedRoutes.className='sourceAdvancedRoutes';advancedRoutes.innerHTML='<summary>호차 단일 선택</summary>';advancedRoutes.append($('#operationVehicle'),$('#vehicleTrigger'));dailyForm.append(advancedRoutes);
   $('#sourceRoutePicker').hidden=true;document.body.append(routeDialog);$('#closeRoutes').onclick=()=>routeDialog.close();
   $('#chooseRoutes').onclick=()=>{if(bridge.state.mode!=='DATE_ROUTE')return;syncModeControls(true);routeDialog.showModal();};
   const periodButton=document.createElement('button');periodButton.id='openPeriodQuery';periodButton.textContent='기간별 조회';context.append(periodButton);
@@ -203,6 +204,8 @@
     for(const node of [search,address,filters,stores,$('#sourceBatch'),$('#sourceAreaShortcut'),$('#sourceManualShortcut'),$('#areaToggle')])modeVisible(node,!daily&&node!==address&&node.id!=='sourceManualShortcut');
     modeVisible(planner,daily);modeVisible(periodButton,!daily);modeVisible(context,false);
     const host=daily?dailyForm:basePicker;for(const node of [routeChecks,$('#selectAllVehicles'),$('#clearVehicles')])if(node.parentNode!==host)host.append(node);
+    if(daily){if(vehicleQuery.parentNode!==host||vehicleQuery.nextSibling!==routeChecks)host.insertBefore(vehicleQuery,routeChecks);}
+    else if(vehicleQuery.parentNode!==basePicker.querySelector('summary'))basePicker.querySelector('summary').append(vehicleQuery);
     modeVisible($('#legacyVehicleState'),!daily);if(!daily&&$('#legacyVehicleState').parentNode!==basePicker)basePicker.append($('#legacyVehicleState'));
     const rangeRow=$('#rangeStart').parentNode,applyRow=$('#applyPeriod').parentNode;modeVisible(rangeRow,!daily);modeVisible(applyRow,!daily);modeVisible(basis,false);modeVisible($('#periodDriver'),false);
     modeVisible(queryRoutes,daily);modeVisible(routeHelp,daily);modeVisible(advancedRoutes,daily);

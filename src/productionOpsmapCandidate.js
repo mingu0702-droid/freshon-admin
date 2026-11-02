@@ -1,3 +1,4 @@
+import {mountOfficialAdminBoundaries} from './officialAdminBoundaries.js';
 import fsSync from 'node:fs';
 import express from 'express';import path from 'node:path';import fs from 'node:fs/promises';
 import {mountProductionMapApi} from './opsmap-abc/productionMapIntegration.js';
@@ -40,6 +41,7 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  const pinEnv={...authEnv,OPSMAP_MANUAL_PIN_STORE_FILE:undefined,OPSMAP_MANUAL_PIN_WRITES:env.OPSMAP_PRODUCTION_PIN_WRITES==='1'?'1':'0',OPSMAP_MANUAL_PIN_DURABLE_CONFIRMED:pinStore?'1':'0',OPSMAP_MANUAL_PIN_WRITER_ID:env.OPSMAP_PIN_WRITER_ID,OPSMAP_MANUAL_PIN_WRITE_AUTHORIZATION:env.OPSMAP_PIN_WRITE_AUTHORIZATION,OPSMAP_MANUAL_PIN_WRITE_APPROVAL_ID:env.OPSMAP_PIN_WRITE_APPROVAL_ID};
  const manual=createManualMapPins({env:pinEnv,appRoot:path.resolve(publicDir,'..'),store:pinStore,backupStore:pinStore?.backupStore,authorizeWrite:createManualPinAuthorizer({env:pinEnv}),readCoordinate:code=>{const row=readers.getSnapshotMemory()?.rows?.find(r=>r.customerCode===code);return row?{latitude:row.lat,longitude:row.lng}:null;},readCustomer:code=>readProductionManualPinCustomer(readers,code)});
  const api=mountProductionMapApi(router,{...readers,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,mountPrivateExtensions:binding=>{
+  mountOfficialAdminBoundaries(binding);
   manual.mount(binding);
   mountPrivateDriverContact({...binding,enabled:()=>env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',readDriverMaster:readers.readDriverMaster,readAssignment:createDriverAssignmentReader({readBaseVehicles:codes=>readers.sharedBaseCache?.get(codes),readStoredRoute:createDatedDriverRouteReader({today:readers.phase2bKstDate,readTodayStatus:readers.phase2bTodayStatus,readStoredRoute:readers.readStoredDriverRoute})})});
   router.get('/api/vehicle-driver-master',binding.requireStaff,async(q,r)=>{try{if(env.OPSMAP_DRIVER_CONTACT_ENABLED!=='1')return r.status(503).json({error:'DRIVER_CONTACT_DISABLED'});if(!readers.readDriverMaster)return r.status(503).json({error:'DRIVER_SOURCE_NOT_CONFIGURED'});const value=await readers.readDriverMaster(String(q.query.date||''));return binding.requireStaff(q,r,()=>r.json(redactPublicData(value)));}catch{return r.status(503).json({error:'DRIVER_SOURCE_UNAVAILABLE'});}});

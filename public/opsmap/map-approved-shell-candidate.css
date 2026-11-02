@@ -95,4 +95,10 @@
 .approvedShellCandidate [data-mode-hidden="true"]{display:none!important}
 .approvedShellCandidate #baseVehiclePicker{margin-top:10px}
 .approvedShellCandidate #baseVehiclePicker>#vehicleList{display:flex;flex-wrap:wrap;max-height:240px;overflow:auto}
+.approvedShellCandidate #baseVehiclePicker>summary{flex-wrap:wrap}
+.approvedShellCandidate #baseVehiclePicker>summary::after{order:1}
+.approvedShellCandidate #baseVehiclePicker>summary>#vehicleQuery{order:2;flex-basis:100%}
+.approvedShellCandidate #vehicleQuery{box-sizing:border-box;margin:6px 0}
+.approvedShellCandidate #vehicleList{flex-wrap:wrap}
+.approvedShellCandidate #vehicleList .vehicleGroupHeading{flex-basis:100%;font-size:11px;color:var(--muted);padding:5px 0}
 .approvedShellCandidate #roadRoutePanel[data-mode-hidden="true"]{display:none!important}

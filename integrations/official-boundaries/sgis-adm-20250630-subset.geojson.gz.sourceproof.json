@@ -1,0 +1,46 @@
+{
+  "metadata": {
+    "sourceUrl": "https://www.data.go.kr/data/15129688/fileData.do",
+    "provider": "국가데이터처 통계지리정보서비스(SGIS)",
+    "boundaryType": "ADMINISTRATIVE_EMD",
+    "codeSystem": "SGIS_ADM_8",
+    "baseDate": "2025-06-30",
+    "crs": "EPSG:4326",
+    "sourceCrs": "EPSG:5179",
+    "license": "PUBLIC_DATA_UNRESTRICTED",
+    "licenseUrl": "https://www.data.go.kr/ugs/selectPortalPolicyView.do",
+    "coverage": "SUBSET",
+    "partialCoverage": true,
+    "sourceproof": {
+      "archiveSha256": "f1cf0f9de453ac7eaacb273f39cee52851183372b9ddfda428a967c3a670b2c6",
+      "shpSha256": "8f5dec93ce06be03402d24c69b7f4643386945ba291cbc9e0b59b4fee992371d",
+      "dbfSha256": "55ef3b6114e10424bc2e0e35e99b4ae0cf0d2c55ab9a8afe9a063337c894f266",
+      "prjSha256": "e21b26451491c617318aab7d28abf4d07f5facc2aed1564e082ec8d4268cfa3b",
+      "catalogModifiedDate": "2026-07-23",
+      "geometryBaseDateEvidence": "DBF.BASE_DATE=20250630; bundled official db_schema identifies administrative EMD June 2025",
+      "crsEvidence": "official PRJ resolves EPSG:5179",
+      "licenseEvidence": "official catalog: free, unrestricted use"
+    },
+    "transform": "pyproj always_xy EPSG:5179 to EPSG:4326; no simplification, rounding, clipping, repair or dissolve"
+  },
+  "sourceArchiveSha256": "f1cf0f9de453ac7eaacb273f39cee52851183372b9ddfda428a967c3a670b2c6",
+  "sourceFiles": [
+    {
+      "name": "bnd_dong_00_2025_2Q.shp",
+      "sha256": "8f5dec93ce06be03402d24c69b7f4643386945ba291cbc9e0b59b4fee992371d"
+    },
+    {
+      "name": "bnd_dong_00_2025_2Q.dbf",
+      "sha256": "55ef3b6114e10424bc2e0e35e99b4ae0cf0d2c55ab9a8afe9a063337c894f266"
+    },
+    {
+      "name": "bnd_dong_00_2025_2Q.prj",
+      "sha256": "e21b26451491c617318aab7d28abf4d07f5facc2aed1564e082ec8d4268cfa3b"
+    }
+  ],
+  "featureCount": 43,
+  "jsonBytes": 729918,
+  "gzipBytes": 256459,
+  "sha256": "beb1c28af32755901627f79a5c0d237957670d5ce533540a8f378052f182d30e",
+  "verification": "BASE_DATE=20250630; ADM_CD width=8; PRJ EPSG=5179; original Polygon/MultiPolygon rings retained; data.go.kr needCaptcha=false anonymous download"
+}
