@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {renderReport, privatePath, privateRoot} from './r11-ui-report.mjs';
 import path from 'node:path';
+import fs from 'node:fs';
 
 test('separates production, synthetic, and local candidates; missing before/after remains blocked', () => {
   const html = renderReport({sha:'b'.repeat(40),runs:[{scope:'SYNTHETIC',status:'PASS'}, {scope:'LOCAL_READ_CANDIDATES',status:'BLOCKED'}, {scope:'PRODUCTION_BROWSER',status:'BLOCKED',checks:[{name:'QA_CONTEXT_UNAVAILABLE_NOT_AUTH_FAILURE',status:'BLOCKED'}]}]});
@@ -31,4 +32,14 @@ test('production cannot claim PASS without every before/after screenshot and pre
   const html=renderReport({runs:[{scope:'PRODUCTION_BROWSER',status:'PASS'}]});
   assert(html.includes('PRODUCTION_BROWSER <b class="BLOCKED">BLOCKED</b>'));
   assert(!html.includes('class="PASS"'));
+});
+test('complete production evidence preserves BLOCKED checks and observed overflow overrides a claimed PASS',context=>{
+  context.mock.method(fs,'existsSync',()=>true);
+  const views=[1920,1366,768,390].map(width=>({width,horizontalOverflow:false,screenshot:path.join(privateRoot,'synthetic-'+width+'.png')}));
+  const run={scope:'PRODUCTION_BROWSER',status:'PASS',before:{viewports:views},after:{viewports:views},checks:[{name:'SYNTHETIC_COMPLETE_EVIDENCE',status:'PASS'}],preservation:{sourceWrites:0,pinChanges:0,quotaOperations:0,logoutOperations:0}};
+  assert(renderReport({runs:[run]}).includes('PRODUCTION_BROWSER <b class="PASS">PASS</b>'));
+  run.checks.push({name:'SYNTHETIC_FEATURE_OFF_NOT_API_FAILURE',status:'BLOCKED'});
+  assert(renderReport({runs:[run]}).includes('PRODUCTION_BROWSER <b class="BLOCKED">BLOCKED</b>'));
+  run.after={viewports:[{...views[0],horizontalOverflow:true},...views.slice(1)]};
+  assert(renderReport({runs:[run]}).includes('PRODUCTION_BROWSER <b class="FAIL">FAIL</b>'));
 });

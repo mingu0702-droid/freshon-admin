@@ -15,8 +15,9 @@ const label = value => {
 };
 const badge = value => `<b class="${status(value)}">${status(value)}</b>`;
 function runStatus(run) {
-  if (run.status === 'FAIL' || run.checks?.some(check => check.status === 'FAIL')) return 'FAIL';
+  if (run.status === 'FAIL' || run.checks?.some(check => check.status === 'FAIL') || ['before','after'].some(phase=>run[phase]?.viewports?.some(view=>view.horizontalOverflow===true))) return 'FAIL';
   if (run.scope !== 'PRODUCTION_BROWSER' || run.status !== 'PASS') return status(run.status);
+  if (!run.checks?.length || run.checks.some(check=>check.status!=='PASS')) return 'BLOCKED';
   const complete = ['before','after'].every(phase => [1920,1366,768,390].every(width => {
     const view=run[phase]?.viewports?.find(item=>item.width===width);
     return view && view.horizontalOverflow === false && view.screenshot && fs.existsSync(privatePath(view.screenshot));
