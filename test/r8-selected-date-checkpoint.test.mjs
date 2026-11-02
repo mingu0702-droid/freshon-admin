@@ -69,3 +69,10 @@ test('corruption, older source observations and superseded snapshot hashes fail 
  const updated=await store.save(snap([{...row(),customerName:'SYNTHETIC UPDATE'}]));await assert.rejects(store.recordSelectedDateCheckpoint(live(),projection),{code:'SNAPSHOT_DATE_CHECKPOINT_SUPERSEDED'});assert.equal(await store.loadSelectedDateCheckpoint(updated),null);
  const envelope=selectedDateCheckpointEnvelope(current);envelope.current.sourceVisitCount++;assert.throws(()=>validateSelectedDateCheckpointEnvelope(envelope),{code:'SNAPSHOT_DATE_CHECKPOINT_INTEGRITY'});
 });
+
+test('a previous-day worker cannot regress the latest verified date after D+1 rollover',()=>{
+ const projection=snapshotProjection(snap(),{now:()=>start}),previous=buildSelectedDateCheckpoint(live(),projection,{checkedAt:new Date(start+1000).toISOString()});
+ const earlier=structuredClone(live());earlier.date='2026-11-01';earlier.sourceObservation=deliverySourceObservation([{deliveryDate:'2026-11-01'}],{date:'2026-11-01',complete:true,pages:1,resolveVehicle:()=> '101'});
+ const oldProjection=snapshotProjection(snap([{...row(),lastDeliveryDate:'2026-11-01'}]),{now:()=>start});
+ assert.throws(()=>buildSelectedDateCheckpoint(earlier,oldProjection,{previous,checkedAt:new Date(start+2000).toISOString()}),{code:'SNAPSHOT_DATE_CHECKPOINT_SOURCE_SUPERSEDED'});
+});

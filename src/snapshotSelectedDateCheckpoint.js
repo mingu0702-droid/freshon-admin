@@ -21,6 +21,7 @@ export function buildSelectedDateCheckpoint(live,snapshot,{checkedAt=new Date().
  const date=live?.date;assertDeliverySourceObservation(live?.sourceObservation,date);
  if(live.sourceObservation.dateVerified!==true||!isTime(live.generatedAt)||!isTime(checkedAt)||Date.parse(live.generatedAt)>Date.parse(checkedAt)||!Array.isArray(live.vehicles)||!Array.isArray(snapshot?.rows)||!isHash(snapshot.sha256))fail('SNAPSHOT_DATE_CHECKPOINT_SOURCE');
  if(previous)validateSelectedDateCheckpoint(previous);
+ if(previous&&previous.date>date)fail('SNAPSHOT_DATE_CHECKPOINT_SOURCE_SUPERSEDED');
  const projected=new Map(),triples=new Map(),vehiclesByCustomer=new Map();let visits=0;
  for(const group of live.vehicles){
   const actualVehicle=vehicle(group?.vehicle);if(!actualVehicle||!Array.isArray(group?.stops))fail('SNAPSHOT_DATE_CHECKPOINT_SOURCE');
