@@ -150,6 +150,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
   const sourceRead = maxResponseBytes!==undefined || ['periodAssignments','staffDriverHistory','mapCoordinateSupplement'].includes(action) || controlRequest;
   state.metrics.requests += 1;
   const actionTimeoutMs = {
+    customerSearch:15000,
     customerDetailPrepared:8000,
     customerDetailsStatus:8000,
     customerDetailsSyncRequest:20000,
@@ -178,7 +179,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
   let sharedDeadline = Math.min(deadline ?? Infinity, staffDetail || preparedPrivate || controlRequest || action === 'staffDriverHistory' ? started + timeoutMs : Infinity);
   let outputAllowanceUsed=false;
   let lastError;
-  const attempts = entered.probe || controlRequest || staffDetail || preparedPrivate || action === "customerDetail" || ['rollingDateCatalog','rollingDateText'].includes(action) ? 1 : 2;
+  const attempts = entered.probe || controlRequest || staffDetail || preparedPrivate || action === "customerDetail" || action === "customerSearch" || ['rollingDateCatalog','rollingDateText'].includes(action) ? 1 : 2;
   let timedOut = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     signal?.throwIfAborted();
@@ -248,12 +249,15 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
       if (controlRequest && profile.responseKind === 'health-json') throw Object.assign(new Error('HUB_INVALID_CONTROL_CONTRACT'), {upstreamStatus:response.status,failureType:'contract',responseKind:'health-json'});
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
+      if (action==='customerSearch' && json.meta?.requestId!==body.requestId) throw new Error('HUB_INVALID_SEARCH_CONTRACT');
       if ((action === 'staffCustomerDetail'||action==='customerDetailPrepared') && (json.meta.requestId !== body.requestId || String(json.data?.customerCode || '').toUpperCase() !== String(params.customerCode).toUpperCase())) {
         profile.requestIdMatch = json.meta.requestId === body.requestId;
         profile.customerMatch = String(json.data?.customerCode || '').toUpperCase() === String(params.customerCode).toUpperCase();
         throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'), { upstreamStatus: response.status, failureType: 'contract' });
       }
-      if(endpoint.isolated&&(json.meta.requestId!==body.requestId||json.meta.detailDate!==(params.date||null)||String(json.data?.customerCode||'').toUpperCase()!==String(params.customerCode).toUpperCase()||(staffDetail&&json.data?.deliveryDate!==params.date)))throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'),{upstreamStatus:502,failureType:'contract'});
+      if(endpoint.isolated&&action==='customerSearch'){
+        if(json.meta.requestId!==body.requestId||json.meta.detailDate!==null||json.data?.contract!=='customer-search-v1'||json.data?.queryHash!==crypto.createHash('sha256').update(String(params.q||'').normalize('NFKC').trim()).digest('hex')||!Array.isArray(json.data?.rows)||json.data.rows.length>50)throw Object.assign(new Error('HUB_INVALID_SEARCH_CONTRACT'),{upstreamStatus:502,failureType:'contract'});
+      }else if(endpoint.isolated&&(json.meta.requestId!==body.requestId||json.meta.detailDate!==(params.date||null)||String(json.data?.customerCode||'').toUpperCase()!==String(params.customerCode).toUpperCase()||(staffDetail&&json.data?.deliveryDate!==params.date)))throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'),{upstreamStatus:502,failureType:'contract'});
       profile.phase = 'DONE';
       if (Date.now() >= sharedDeadline) throw Object.assign(new Error('HUB_TIMEOUT'), {name:'AbortError'});
       if(sourceRead)console.info(JSON.stringify({component:'hub-source-profile',action,...profile,count:Array.isArray(json.data)?json.data.length:0,totalMs:Date.now()-started,result:'OK'}));

@@ -6,11 +6,20 @@
 .approvedShellCandidate #approvedSiteHeader .tab[aria-pressed=true]{background:#eaf0ff;color:#2059dc}
 .approvedShellCandidate .officialBrand{object-fit:contain}
 .approvedShellCandidate .sourceSearchLabel{font-weight:600;margin:0 0 7px}
-.approvedShellCandidate .customerBlock>.hint,.approvedShellCandidate #searchState,.approvedShellCandidate .addressBlock .mini{display:none}
-.approvedShellCandidate .addressBlock{margin-top:16px}
-.approvedShellCandidate section.addressBlock{margin:16px 0 0;padding:0;border:0}
-.approvedShellCandidate .addressBlock .label{font-weight:600;margin:0 0 7px}
-.approvedShellCandidate #query,.approvedShellCandidate #addressQuery{flex:1}
+.approvedShellCandidate .customerBlock>.hint,.approvedShellCandidate .addressBlock,.approvedShellCandidate #searchNotice,.approvedShellCandidate #addressJudgeResults,.approvedShellCandidate .externalAddressResult{display:none!important}
+.approvedShellCandidate .customerBlock{min-width:0;overflow:visible}
+.approvedShellCandidate .unifiedSearchField{position:relative;min-width:0}
+.approvedShellCandidate .unifiedSearchLine{align-items:stretch;min-width:0}
+.approvedShellCandidate .unifiedSearchInput{position:relative;flex:1;min-width:0}
+.approvedShellCandidate #query{width:100%;min-width:0;padding-right:30px}
+.approvedShellCandidate #clearQuery{position:absolute;right:3px;top:3px;bottom:3px;width:25px;border:0;padding:0;background:transparent;color:#7b8799;font-size:20px;font-weight:400;line-height:1}
+.approvedShellCandidate #clearQuery:hover{background:#eef3fb;color:#263a57}
+.approvedShellCandidate #searchState{display:block;min-width:0;max-width:100%;margin:7px 0 0;color:#728097;font-size:12px;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.approvedShellCandidate #searchState:empty{display:none}
+.approvedShellCandidate #results.unifiedSearchResults{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:460;box-sizing:border-box;width:100%;max-width:100%;max-height:260px;overflow:auto;overscroll-behavior:contain;margin:0;padding:4px;background:#fff;border:1px solid #d9e2ef;border-radius:7px;box-shadow:0 5px 16px #18345916}
+.approvedShellCandidate #results.unifiedSearchResults>button{display:block;width:100%;min-width:0;max-width:100%;padding:8px 9px;border:0;text-align:left;white-space:normal;overflow-wrap:anywhere;background:#fff}
+.approvedShellCandidate #results.unifiedSearchResults>button:hover{background:#f0f5ff}
+.approvedShellCandidate #results.unifiedSearchResults small{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .approvedShellCandidate #approvedShortcuts{margin-left:auto}
 .approvedShellCandidate #staffLogout{font-size:13px;margin-left:2px}
 .approvedShellCandidate #dailyQuerybar #todayBtn{grid-column:2;grid-row:1;border:0;text-align:right;padding:0;font-size:11px;background:none;color:#78879c}

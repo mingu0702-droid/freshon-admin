@@ -1,4 +1,5 @@
 import {mountOfficialAdminBoundaries} from './officialAdminBoundaries.js';
+import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 // Production integration of the verified Stage lookup/auth routes only.
 // Existing collector, Snapshot worker, ETA, route planner and data sources stay in server.js.
 import express from 'express';
@@ -66,6 +67,7 @@ export function mountProductionMapApi(app,{
     return res.set('Cache-Control','private, no-store').json({javascriptKey,driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1'});
   });
   mountRoadRouteRoutes({app,requireStaff:mapStaff.requireStaff,jsonBody:express.json({limit:'16kb'}),service:roadRouteService||createRoadRouteService({env,budget:roadRouteBudget,requireDurableBudget:true}),env,readRecordedRoute:readRecordedRoadRoute});
+  if(env.OPSMAP_PRIVATE_READER_ENABLED==='true')mountPrivateCustomerSearch({app,requireStaff:mapStaff.requireStaff,readSnapshot:async()=>({rows:[]}),searchMaster:(q,options)=>verifiedHubRead('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
   mountPrivateExtensions?.({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,previewEnabled});
   app.use('/api/map-phase2b/private/driver-history',historyDeadline);
   app.use(publicResponse);
