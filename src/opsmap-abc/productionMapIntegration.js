@@ -26,6 +26,7 @@ import {createPrivateDetailCache,loadEncryptedPrivateSnapshot} from './privateDe
 import {createRoadRouteService,mountRoadRouteRoutes} from './roadRouteService.js';
 import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
 import {createHubRoadBudget} from './hubRoadBudget.js';
+import {createKakaoCoordinateConnection,mountKakaoCoordinateConnection} from './kakaoCoordinateConnection.js';
 import {assertDeliverySourceObservation} from '../snapshotRefreshEvidence.js';
 
 export function mountProductionMapApi(app,{
@@ -34,10 +35,11 @@ export function mountProductionMapApi(app,{
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
   publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement,sharedBaseCache,
   hybridEnabled=()=>process.env.MAP_HYBRID_90DAY_ENABLED==='true',hybridReadIndexedDay,hybridUiReadiness,hybridReadDateCatalog,hybridReadDatePage,hybridReadVerifiedDayText,hybridStoredIoEnabled=false,hubPublicationCutover=null,
-  mountPrivateExtensions,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory
+  mountPrivateExtensions,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
+  addressLookupService??=createKakaoCoordinateConnection({env});
   const preparedCustomerDetails=createPreparedCustomerDetailReader({callHub});
   roadRouteBudget??=createHubRoadBudget({callHub});
   const privateCacheEnabled=env.OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED==='1';
@@ -58,10 +60,16 @@ export function mountProductionMapApi(app,{
   app.use('/api/map-phase2b/private/driver-history',(req,res,next)=>historyDeadline(req,res,next,{milliseconds:readStoredStaffHistory?20000:5000}));
   app.use('/api/map-phase2b/private',mapStaff.requireStaff);
   mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
-  app.get('/api/map-phase2b/private/map-sdk-config',(req,res)=>{
+  app.get('/api/map-phase2b/private/map-sdk-config',async(req,res)=>{
     const javascriptKey=String(env.KAKAO_MAP_JAVASCRIPT_KEY||'').trim();
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED'});
-    return res.set('Cache-Control','private, no-store').json({javascriptKey,driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1'});
+    const lookup=await addressLookupService.status();
+    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({javascriptKey,driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowExternalAddressLookup:lookup.enabled===true,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true}));
+  });
+  mountKakaoCoordinateConnection({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,service:addressLookupService,jsonBody:express.json({limit:'4kb'}),origin:env.MAP_STAFF_ORIGIN||env.RENDER_EXTERNAL_URL});
+  app.get('/api/map-phase2b/private/address-lookup/config',async(req,res)=>{
+    const value=await addressLookupService.configuration({javascriptKey:env.KAKAO_MAP_JAVASCRIPT_KEY});
+    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:value}));
   });
   mountRoadRouteRoutes({app,requireStaff:mapStaff.requireStaff,jsonBody:express.json({limit:'16kb'}),service:roadRouteService||createRoadRouteService({env,budget:roadRouteBudget,requireDurableBudget:true}),env,readRecordedRoute:readRecordedRoadRoute});
   mountPrivateExtensions?.({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,previewEnabled});

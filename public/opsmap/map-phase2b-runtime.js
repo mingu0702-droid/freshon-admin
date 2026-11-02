@@ -833,7 +833,7 @@
       mapCamera=window.MapViewPolicy?.createCamera({map:state.map,element:$('#map')});
       const userGesture=()=>{mapCamera?.userGesture();state.userMovedMap=true;state.fitRequested=false;};
       for(const type of ['wheel','pointerdown','touchstart'])$('#map').addEventListener(type,userGesture,{passive:true});
-      if(kakao.maps.services){window.kakaoGeocoder=new kakao.maps.services.Geocoder();window.kakaoPlaces=new kakao.maps.services.Places();}
+      if(kakao.maps.services){window.kakaoGeocoder=window.KakaoMapsAdapter?.geocoder?.()||new kakao.maps.services.Geocoder();window.kakaoPlaces=new kakao.maps.services.Places();}
       const listen=(name,fn)=>{kakao.maps.event.addListener(state.map,name,fn);mapHandlers.push([name,fn]);};
       listen('dragstart',userGesture);
       listen('zoom_start',()=>{if(Date.now()>=state.suppressMapEventsUntil)userGesture();});
@@ -1696,8 +1696,9 @@
     if(window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup!==true)throw Error('저장된 고객코드·점포명·주소를 선택해 주세요. 외부 주소 조회는 승인되지 않았습니다.');
     const started = performance.now();
     const attempts = [];
-    if (geocodeCache.has(address)) return geocodeCache.get(address);
-    for (const query of Phase2bUi.addressVariants(address)) {
+    const serverProxy=window.kakaoGeocoder?.serverProxy===true;
+    if (!serverProxy&&geocodeCache.has(address)) return geocodeCache.get(address);
+    for (const query of serverProxy?[Phase2bUi.addressVariants(address)[0].replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)$/,'$1 $2')]:Phase2bUi.addressVariants(address)) {
       const attemptStarted = performance.now();
       const result = await NewAreaRequests.lookup(window.kakaoGeocoder, query, { signal });
       if(signal?.aborted)throw Object.assign(Error('조회 취소'),{name:'AbortError'});
@@ -1711,7 +1712,7 @@
       const row = exact[0];
       const point = { lat: Number(row.y), lng: Number(row.x), address: row.road_address?.address_name || row.address_name, geocodeMs: Math.round(performance.now() - started), attempts, query };
       if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)||point.lat<33||point.lat>39.5||point.lng<124||point.lng>132) continue;
-      while(geocodeCache.size>=128)geocodeCache.delete(geocodeCache.keys().next().value);geocodeCache.set(address, point);
+      if(!serverProxy){while(geocodeCache.size>=128)geocodeCache.delete(geocodeCache.keys().next().value);geocodeCache.set(address, point);}
       geocodeDiagnostic = `성공 · ${point.geocodeMs}ms · ${attempts.length}회 조회`;
 
       return point;

@@ -1,0 +1,104 @@
+// One staff-only REST path; only request hashes/counts are durable, never API coordinates.
+import {createHash} from 'node:crypto';
+import {coordinateAddressHash,externalCoordinateAddress,kakaoCoordinateResult} from './opsmapAutoCoordinates.js';
+export const KAKAO_GEOCODE_EPOCH='R10_USER_CONFIRMED_20261103';
+export const KAKAO_DIAGNOSTIC_ADDRESS='경기도 오산시 원동 380-38';
+export const KAKAO_EXPECTED_APP_ID='1464792';
+export const createKakaoGeocodeLedger=()=>({schema:1,epoch:KAKAO_GEOCODE_EPOCH,historicalConsumed:250,used:0,days:{},queries:{},diagnosticUsed:false,diagnosticPassed:false,blocked:false});
+const hash=text=>createHash('sha256').update(text,'utf8').digest('hex');
+const fail=(code,status=503)=>{throw Object.assign(Error(code),{code,status});};
+const day=stamp=>new Date(stamp+32400000).toISOString().slice(0,10);
+export function createKakaoCoordinateConnection({env=process.env,store,now=Date.now,fetchImpl=globalThis.fetch}={}) {
+ let blocked=false;const pending=new Map();
+ const proof=()=>{
+  const key=String(env.KAKAO_REST_API_KEY||'').trim();
+  return /^[a-f0-9]{32}$/i.test(key)&&env.OPSMAP_KAKAO_FREE_QUOTA_VERIFIED==='1'&&env.OPSMAP_KAKAO_PAID_API_DISABLED==='1'&&
+   env.KAKAO_MAP_APP_ID===KAKAO_EXPECTED_APP_ID&&hash(key)===env.OPSMAP_KAKAO_REST_KEY_SHA256;
+ };
+ const validate=state=>{
+  if(state?.schema!==1||state.epoch!==KAKAO_GEOCODE_EPOCH||state.historicalConsumed!==250||!Number.isSafeInteger(state.used)||state.used<0||
+   !state.days||!state.queries||typeof state.diagnosticUsed!=='boolean'||typeof state.diagnosticPassed!=='boolean'||typeof state.blocked!=='boolean')fail('GEOCODE_LEDGER_INVALID');
+  return state;
+ };
+ const transaction=work=>{if(!store?.durable||typeof store.transaction!=='function')fail('GEOCODE_DURABLE_LEDGER_REQUIRED');return store.transaction((state,commit)=>work(validate(state),commit));};
+ const status=async()=>{
+  if(!proof())return {enabled:false,reason:'TARGET_APP_FREE_QUOTA_UNVERIFIED',retention:'REQUEST_ONLY'};
+  try{return await transaction(async state=>({enabled:env.OPSMAP_KAKAO_GEOCODING_ENABLED==='1'&&state.diagnosticPassed&&!state.blocked&&!blocked,
+   diagnosticAvailable:env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED==='1'&&!state.diagnosticUsed&&!state.blocked&&!blocked,
+   reason:state.blocked||blocked?'GEOCODE_AUTOMATICALLY_BLOCKED':state.diagnosticPassed?'READY':'DIAGNOSTIC_REQUIRED',
+   dailyLimit:100,dailyUsed:Number(state.days[day(now())]||0),epoch:state.epoch,retention:'REQUEST_ONLY'}));}
+  catch{return {enabled:false,reason:'GEOCODE_DURABLE_LEDGER_REQUIRED',retention:'REQUEST_ONLY'};}
+ };
+ const lookup=async(query,{diagnostic=false,assertCurrent=async()=>{}}={})=>{
+  if(typeof query!=='string'||query.normalize('NFKC').trim().length>200)fail('GEOCODE_QUERY_INVALID',400);
+  const address=externalCoordinateAddress(query.normalize('NFKC').replace(/\s+/g,' ').trim().replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)$/,'$1 $2'));
+  if(!address)fail('GEOCODE_QUERY_INVALID',400);
+  if(!proof())fail('TARGET_APP_FREE_QUOTA_UNVERIFIED');
+  if(blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
+  if(diagnostic&&address!==KAKAO_DIAGNOSTIC_ADDRESS)fail('DIAGNOSTIC_ADDRESS_REJECTED',400);
+  const queryHash=coordinateAddressHash(address),key=(diagnostic?'diagnostic:':'lookup:')+queryHash;
+  if(pending.has(key))return pending.get(key);
+  const task=(async()=>{
+   await assertCurrent();
+   await transaction(async(state,commit)=>{
+    if(state.blocked||blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
+    if(diagnostic){if(env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED!=='1'||state.diagnosticUsed)fail('DIAGNOSTIC_ALREADY_USED',429);}
+    else if(env.OPSMAP_KAKAO_GEOCODING_ENABLED!=='1'||!state.diagnosticPassed)fail('GEOCODING_DISABLED');
+    const today=day(now()),count=Number(state.days[today]||0);
+    if(!Number.isSafeInteger(count)||count<0||count>=100)fail('GEOCODE_DAILY_LIMIT',429);
+    await assertCurrent();
+    state.used++;state.days[today]=count+1;state.queries[today+':'+queryHash]=Number(state.queries[today+':'+queryHash]||0)+1;
+    if(diagnostic)state.diagnosticUsed=true;
+    await commit(state);
+   });
+   try{
+    await assertCurrent();
+    const url=new URL('https://dapi.kakao.com/v2/local/search/address.json');url.searchParams.set('query',address);url.searchParams.set('analyze_type','exact');url.searchParams.set('size','30');
+    const response=await fetchImpl(url,{method:'GET',headers:{Authorization:'KakaoAK '+String(env.KAKAO_REST_API_KEY).trim()},signal:AbortSignal.timeout(6000),redirect:'error',cache:'no-store'});
+    if(!response.ok)fail('KAKAO_HTTP_REJECTED',502);
+    const appHeader=['x-kakao-app-id','x-kakao-appid'].map(name=>response.headers?.get?.(name)).find(value=>value!=null);
+    if(appHeader!==undefined&&appHeader!==KAKAO_EXPECTED_APP_ID)fail('KAKAO_RESPONSE_APP_MISMATCH',502);
+    const body=await response.json();if(!Array.isArray(body?.documents)||typeof body.meta?.is_end!=='boolean')fail('KAKAO_RESPONSE_INVALID',502);
+    const point=kakaoCoordinateResult(body,address);
+    if(diagnostic&&!point)fail('KAKAO_DIAGNOSTIC_NOT_EXACT',409);
+    if(diagnostic)await transaction(async(state,commit)=>{state.diagnosticPassed=true;await commit(state);});
+    await assertCurrent();
+    return {ok:true,data:{documents:point?[{address_name:address,x:String(point.lng),y:String(point.lat)}]:[],status:point?'OK':'ZERO_RESULT',exact:!!point,
+     diagnostic,providerHttp:200,responseAppId:appHeader||null,retention:'REQUEST_ONLY',coordinatePersistence:false}};
+   }catch(error){
+    if(error?.code==='GEOCODE_SESSION_EXPIRED')throw error;
+    blocked=true;try{await transaction(async(state,commit)=>{state.blocked=true;await commit(state);});}catch{/* Local circuit stays closed even if storage is unavailable. */}
+    fail(/^KAKAO_[A-Z_]+$/.test(error?.code||'')?error.code:'KAKAO_LOOKUP_FAILED',502);
+   }
+  })();pending.set(key,task);try{return await task;}finally{pending.delete(key);}
+ };
+ const configuration=async({javascriptKey=env.KAKAO_MAP_JAVASCRIPT_KEY}={})=>{
+  const key=String(env.KAKAO_REST_API_KEY||'').trim(),js=String(javascriptKey||'').trim();
+  const missing=[];
+  if(!/^[a-f0-9]{32}$/i.test(key))missing.push('KAKAO_REST_API_KEY');
+  if(env.KAKAO_MAP_APP_ID!==KAKAO_EXPECTED_APP_ID)missing.push('KAKAO_MAP_APP_ID');
+  if(!key||hash(key)!==env.OPSMAP_KAKAO_REST_KEY_SHA256)missing.push('OPSMAP_KAKAO_REST_KEY_SHA256');
+  if(env.OPSMAP_KAKAO_FREE_QUOTA_VERIFIED!=='1')missing.push('OPSMAP_KAKAO_FREE_QUOTA_VERIFIED');
+  if(env.OPSMAP_KAKAO_PAID_API_DISABLED!=='1')missing.push('OPSMAP_KAKAO_PAID_API_DISABLED');
+  if(env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED!=='1')missing.push('OPSMAP_KAKAO_DIAGNOSTIC_ENABLED');
+  return {restKeySettingName:'KAKAO_REST_API_KEY',restKeyPresent:!!key,restKeySha256:key?hash(key):null,javascriptKeySha256:js?hash(js):null,
+   expectedAppId:KAKAO_EXPECTED_APP_ID,configuredAppId:env.KAKAO_MAP_APP_ID||null,sameAppVerification:'USER_CONFIRMED_CONSOLE_AND_PRODUCTION_KEY_SOURCE_HASH_PIN',
+   evidence:{source:'USER_DEVELOPER_CONSOLE_20261103',appId:KAKAO_EXPECTED_APP_ID,addressDailyUsed:0,addressDailyQuota:100000,mapSdkUsed:14,mapSdkQuota:300000,paidApiEnabled:false},
+   missingGateSettings:missing,...await status()};
+ };
+ return {status,lookup,configuration};
+}
+export function mountKakaoCoordinateConnection({app,requireStaff,isSessionCurrent,service,jsonBody,origin}){
+ const respond=diagnostic=>async(req,res)=>{
+  res.set('Cache-Control','private, no-store');
+  try{
+   if(!origin||req.get('origin')!==new URL(origin).origin||req.get('sec-fetch-site')&&!['same-origin','none'].includes(req.get('sec-fetch-site')))fail('GEOCODE_ORIGIN_REJECTED',403);
+   if(!req.is('application/json')||Object.keys(req.body||{}).join('|')!=='query')fail('GEOCODE_QUERY_INVALID',400);
+   const sessionKey=res.locals.staffSession?.key;
+   const assertCurrent=async()=>{if(isSessionCurrent&&!await isSessionCurrent(req,sessionKey))fail('GEOCODE_SESSION_EXPIRED',401);};
+   const value=await service.lookup(req.body.query,{diagnostic,assertCurrent});return requireStaff(req,res,()=>res.json(value));
+  }catch(error){return requireStaff(req,res,()=>res.status(error.status||503).json({ok:false,error:/^[A-Z_]+$/.test(error.code||'')?error.code:'GEOCODE_FAILED'}));}
+ };
+ app.post('/api/map-phase2b/private/address-lookup',requireStaff,jsonBody,respond(false));
+ app.post('/api/map-phase2b/private/address-lookup-diagnostic',requireStaff,jsonBody,respond(true));
+}

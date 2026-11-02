@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
   const failure = code => Object.assign(new Error(code), { code });
-  function lookup(geocoder, query, { signal, timeout = 7000 } = {}) {
+  function lookup(geocoder, query, { signal, timeout = geocoder?.serverProxy?45000:7000 } = {}) {
     return new Promise((resolve, reject) => {
       let settled = false, timer;
       const finish = (error, rows) => {

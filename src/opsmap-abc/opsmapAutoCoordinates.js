@@ -137,9 +137,14 @@ export function exactCoordinateResult(result, address) {
   return { lat: result.lat, lng: result.lng };
 }
 export function kakaoCoordinateResult(body, address) {
-  if (!body || !Array.isArray(body.documents) || body.documents.length > 30 || body.meta?.is_end === false) return null;
-  const hash = coordinateAddressHash(address);
-  const matches = body.documents.filter(row => [row.address_name, row.road_address?.address_name, row.address?.address_name].some(value => coordinateAddressHash(value) === hash));
+  if (!body || !Array.isArray(body.documents) || body.documents.length !== 1 || body.meta?.is_end === false || body.meta?.total_count !== undefined && body.meta.total_count !== 1) return null;
+  // Search equality permits official province aliases/spacing only. Customer identity hashes stay unchanged.
+  const searchAddress=value=>normalizeCoordinateAddress(value).replace(/서울특별시|서울시/g,'서울').replace(/경기도/g,'경기')
+    .replace(/(부산|대구|인천|광주|대전|울산)광역시/g,'$1').replace(/세종특별자치시/g,'세종')
+    .replace(/강원특별자치도|강원도/g,'강원').replace(/전북특별자치도|전라북도/g,'전북').replace(/전라남도/g,'전남')
+    .replace(/충청북도/g,'충북').replace(/충청남도/g,'충남').replace(/경상북도/g,'경북').replace(/경상남도/g,'경남').replace(/제주특별자치도|제주도/g,'제주').replace(/\s/g,'');
+  const query=searchAddress(address);
+  const matches = body.documents.filter(row => [row.address_name, row.road_address?.address_name, row.address?.address_name].some(value => value&&searchAddress(value)===query));
   if (matches.length !== 1) return null;
   const point = { lat: Number(matches[0].y), lng: Number(matches[0].x), exact: true, matchedAddress: address };
   return pointValid(point) ? point : null;

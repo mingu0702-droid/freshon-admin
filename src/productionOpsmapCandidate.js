@@ -4,7 +4,8 @@ import fsSync from 'node:fs';
 import express from 'express';import path from 'node:path';import fs from 'node:fs/promises';
 import {mountProductionMapApi} from './opsmap-abc/productionMapIntegration.js';
 import {createProductionStaffSessionStore as createProductionSessionStore} from './opsmap-abc/staffSessionStore.js';
-import {createProductionManualPinGithubStore} from './opsmap-abc/manualPinGithubStore.js';
+import {createProductionManualPinGithubStore,createProductionGeocodeBudgetGithubStore} from './opsmap-abc/manualPinGithubStore.js';
+import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
 import {createManualPinAuthorizer} from './opsmap-abc/manualPinAuthorization.js';
 import {createManualMapPins} from './opsmap-abc/manualMapPins.js';
 import {redactPublicData} from './publicDataSecurity.js';
@@ -40,6 +41,8 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  let store;try{if(!authEnv.MAP_STAFF_ID||!authEnv.MAP_STAFF_PASSWORD_HASH||!authEnv.MAP_STAFF_SESSION_SECRET)throw Error();store=isolatedTestStore||createProductionSessionStore({env:authEnv});if(!store)throw Error();}catch{router.use((_q,r)=>r.status(503).json({error:'OPSMAP_AUTH_CONFIGURATION_REQUIRED'}));return {enabled:false};}
  router.use('/internal',(_q,r)=>r.status(404).end());
  let pinStore;try{if(env.OPSMAP_PIN_STORE_REPO&&credentials.pinToken)pinStore=createProductionManualPinGithubStore({repo:env.OPSMAP_PIN_STORE_REPO,token:credentials.pinToken,branch:env.OPSMAP_PIN_STORE_BRANCH});}catch{/* Remain closed; an invalid store never falls back to Stage. */}
+ let geocodeStore;try{if(env.OPSMAP_PIN_STORE_REPO&&credentials.pinToken)geocodeStore=createProductionGeocodeBudgetGithubStore({repo:env.OPSMAP_PIN_STORE_REPO,token:credentials.pinToken,branch:env.OPSMAP_PIN_STORE_BRANCH});}catch{/* A missing ledger never creates a fresh allowance. */}
+ readers.addressLookupService=createKakaoCoordinateConnection({env,store:geocodeStore});
  const pinEnv={...authEnv,OPSMAP_MANUAL_PIN_STORE_FILE:undefined,OPSMAP_MANUAL_PIN_WRITES:env.OPSMAP_PRODUCTION_PIN_WRITES==='1'?'1':'0',OPSMAP_MANUAL_PIN_DURABLE_CONFIRMED:pinStore?'1':'0',OPSMAP_MANUAL_PIN_WRITER_ID:env.OPSMAP_PIN_WRITER_ID,OPSMAP_MANUAL_PIN_WRITE_AUTHORIZATION:env.OPSMAP_PIN_WRITE_AUTHORIZATION,OPSMAP_MANUAL_PIN_WRITE_APPROVAL_ID:env.OPSMAP_PIN_WRITE_APPROVAL_ID};
  const manual=createManualMapPins({env:pinEnv,appRoot:path.resolve(publicDir,'..'),store:pinStore,backupStore:pinStore?.backupStore,authorizeWrite:createManualPinAuthorizer({env:pinEnv}),readCoordinate:code=>{const row=readers.getSnapshotMemory()?.rows?.find(r=>r.customerCode===code);return row?{latitude:row.lat,longitude:row.lng}:null;},readCustomer:code=>readProductionManualPinCustomer(readers,code)});
  const readStoredStaffHistory=createStoredStaffDriverHistoryReader({readSnapshot:readers.readPhase2bSnapshot,readObservedDeliveryDate:readers.phase2bTodayStatus});
