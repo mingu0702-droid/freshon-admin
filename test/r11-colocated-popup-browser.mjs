@@ -11,6 +11,8 @@ const runtime=fs.readFileSync(path.join(root,'map-phase2b-runtime.js'),'utf8');
 const popup=runtime.slice(runtime.indexOf('  function closeClusterPanel(){'),runtime.indexOf('  function markerElement('));
 assert(popup.includes('function anchorClusterPanel('));
 const clearMap=runtime.slice(runtime.indexOf('  function clearMap() {'),runtime.indexOf('  function clearBoundaries()'));
+const clearSelection=runtime.slice(runtime.indexOf('  function clearSelection('),runtime.indexOf('  function closeClusterPanel(){'));
+const marker=runtime.slice(runtime.indexOf('  function markerElement('),runtime.indexOf('  function representativeRows('));
 const css=fs.readFileSync(path.join(root,'map-performance.css'),'utf8');
 const policy=fs.readFileSync(path.join(root,'map-view-policy.js'),'utf8');
 const out=fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r11-popup-'));
@@ -18,11 +20,16 @@ const fixture=`
 const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));
 let clusterPanel=null,clusterPopupCleanup=null,periodBasis='vehicle',periodVehicleScope='all';
 let markerEntries=new Map(),indexedRows=null,pointIndex=null,boundaryKey='';
-const state={fitRequested:true,suppressMapEventsUntil:0,overlays:[],representativeOverlays:[],lines:[],polygons:[]};
+const state={mode:'BASE_60D',currentRows:[],selected:null,detailRequestId:0,fitRequested:true,suppressMapEventsUntil:0,overlays:[],representativeOverlays:[],lines:[],polygons:[]};
+let cameraSelection=0,selectedDriverContact=null;const requestControllers=new Map();
+const invalidateUnifiedSearch=()=>{},closeUnifiedSearchResults=()=>{},cancelAddressLookup=()=>{},renderRunList=()=>{},renderPeriodStoreList=()=>{};
 const mapCamera={releaseFocus(){}};
 const vehicleLabel=v=>v?v+'호차':'';
+const vehicleColor=()=>'#275dd8',esc=v=>String(v).replace(/[&<>"']/g,'');
 const syncPeriodBasis=()=>{},setSelectedVehicles=()=>{},refreshVehicleUi=()=>{};
-function selectStore(row,element,focus){window.selection={code:row.customerCode,name:row.customerName,focus};}
+function selectStore(row,element,focus){state.selected=row;window.selection={code:row.customerCode,name:row.customerName,focus};}
+function selectVehicleStatus(){window.markerAction='vehicle';}function showNearbyReference(){window.markerAction='virtual';}
+window.MapNavigationEditor={values:()=>['S00000']};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
 class Point{constructor(x,y){this.x=x;this.y=y}}
 class Bounds{constructor(){this.points=[]}extend(p){this.points.push(p)}}
@@ -37,7 +44,7 @@ class FakeMap{
  draw(){for(const o of window.overlays)if(o.map)o.draw();const p=this.getProjection().containerPointFromCoords(window.pinCoord||new Coord(37.5,127));$('#syntheticPin').style.left=p.x+'px';$('#syntheticPin').style.top=p.y+'px';}
 }
 class Overlay{
- constructor(o){this.opts=o;this.position=o.position;this.wrapper=document.createElement('div');this.wrapper.style.position='absolute';this.wrapper.append(o.content);window.overlays.push(this);}
+ constructor(o){this.opts=o;this.position=o.position;this.wrapper=document.createElement('div');this.wrapper.style.position='absolute';this.wrapper.style.zIndex=String(o.zIndex||0);this.wrapper.append(o.content);window.overlays.push(this);}
  setMap(m){this.map=m;this.wrapper.remove();if(m){m.el.append(this.wrapper);this.draw();}}
  setPosition(p){this.position=p;if(this.map)this.draw();}
  draw(){const p=this.map.getProjection().containerPointFromCoords(this.position);this.wrapper.style.left=(p.x-this.opts.content.offsetWidth*this.opts.xAnchor)+'px';this.wrapper.style.top=(p.y-this.opts.content.offsetHeight*this.opts.yAnchor)+'px';}
@@ -46,9 +53,21 @@ window.kakao={maps:{CustomOverlay:Overlay,LatLng:Coord,LatLngBounds:Bounds,Point
 state.map=new FakeMap();
 ${popup}
 ${clearMap}
+${clearSelection}
+${marker}
 window.harness={
  show(rows,extra={}){window.pinCoord=new Coord(rows[0].lat,rows[0].lng);showCluster({lat:rows[0].lat,lng:rows[0].lng,clusterRows:rows,clusterLabel:'같은 위치',clusterVehicles:['101'],...extra});state.map.draw();},
- close:closeClusterPanel,clearMap,
+ close:closeClusterPanel,clearMap,clearSelection,
+ seedOverlap(rows){
+  clearMap();state.mode='BASE_60D';state.currentRows=Object.freeze(rows.map(r=>Object.freeze(r)));state.selected=state.currentRows[0];window.selection=null;
+  const first=state.currentRows[0],group={lat:first.lat,lng:first.lng,clusterCount:rows.length-1,clusterRows:state.currentRows.slice(1),clusterLabel:'같은 위치',clusterVehicles:['204']};
+  window.pinCoord=new Coord(first.lat,first.lng);state.map.setCenter(window.pinCoord);
+  const add=(row,z,role)=>{const content=markerElement(row,null,'store');content.dataset.fixtureRole=role;const o=new Overlay({position:window.pinCoord,content,xAnchor:.5,yAnchor:1,zIndex:z});o.setMap(state.map);return o;};
+  state.overlays=[add(group,3,'underlying-cluster'),add(first,40,'selected-store')];state.map.draw();
+ },
+ clickCase(rows,mode='BASE_60D',extra={}){clearMap();state.mode=mode;state.currentRows=rows;state.selected=null;window.selection=null;window.markerAction=null;const row={...rows[0],...extra};const marker=markerElement(row,mode==='DATE_ROUTE'?1:null,row.virtual?'virtual':row.representative?'representative':row.nearbyVehicle?'nearbyVehicle':'store');marker.click();return{selected:window.selection,action:window.markerAction,navAssigned:marker.classList.contains('navAssigned')};},
+ directSearch(row){closeClusterPanel();window.selection=null;selectStore(row,null,true);},
+ source:()=>JSON.stringify(state.currentRows),
  pan(x,y){const r=$('#map').getBoundingClientRect(),c=window.pinCoord;state.map.setCenter(new Coord(c.lat+(y-r.height/2)/100,c.lng-(x-r.width/2)/100));},
  stats(){return{active:window.overlays.filter(o=>o.map).length,listeners:Object.values(state.map.listeners).reduce((n,v)=>n+v.length,0),boundsCalls:state.map.boundsCalls,level:state.map.level,selected:window.selection};}
 };state.map.draw();`;
@@ -61,9 +80,10 @@ try{
  const page=await browser.newPage({viewport:{width:1180,height:800}});
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',r=>{requests.push(r.request().url());return r.abort();});
- await page.setContent('<!doctype html><html><head><style>'+base+css+'</style></head><body class="approvedShellCandidate"><header id="approvedSiteHeader"></header><div id="map"><div id="syntheticPin"></div></div><div id="mobileWorkspace" class="collapsed"></div></body></html>');
+ await page.setContent('<!doctype html><html><head><style>'+base+css+'</style></head><body class="approvedShellCandidate"><header id="approvedSiteHeader"></header><div id="map"><div id="syntheticPin"></div></div><div id="mobileWorkspace" class="collapsed"></div><div id="detailSection"><div id="detail"></div><div id="staffAuxContent"></div></div></body></html>');
  await page.addScriptTag({content:policy});await page.addScriptTag({content:fixture});
- const show=async(data=rows,extra={})=>{await page.evaluate(({data,extra})=>harness.show(data,extra),{data,extra});await page.waitForTimeout(100);};
+ const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))));
+ const show=async(data=rows,extra={})=>{await page.evaluate(({data,extra})=>harness.show(data,extra),{data,extra});await settle();};
  const geometry=()=>page.evaluate(()=>{const p=document.querySelector('.mapClusterPopup').getBoundingClientRect(),m=document.querySelector('#map').getBoundingClientRect(),pin=document.querySelector('#syntheticPin').getBoundingClientRect();return{left:p.left,right:p.right,top:p.top,bottom:p.bottom,width:p.width,height:p.height,mapLeft:m.left,mapRight:m.right,mapTop:m.top,mapBottom:m.bottom,pinX:(pin.left+pin.right)/2,pinY:pin.bottom,below:document.querySelector('.mapClusterAnchor').classList.contains('clusterBelow')};});
  await show();
  check('same-coordinate group uses one CustomOverlay without changing zoom',(await page.evaluate(()=>harness.stats())).active===1&&(await page.evaluate(()=>harness.stats())).level===4);
@@ -82,7 +102,7 @@ try{
  check('map movement carries the overlay with its coordinate',Math.abs(g.left-(before-80))<2);
  await page.evaluate(()=>{const r=document.querySelector('#map').getBoundingClientRect();harness.pan(r.width-12,450)});await page.waitForTimeout(60);g=await geometry();check('right-edge clamp keeps the popup inside the map',g.right<=g.mapRight-7&&g.left>=g.mapLeft+7);
  await page.evaluate(()=>harness.pan(12,20));await page.waitForTimeout(60);g=await geometry();check('top-left edge retains the pin tether using below placement',g.below&&g.left>=g.mapLeft+7&&g.top>g.pinY);
- await page.evaluate(()=>harness.pan(-60,300));await page.waitForTimeout(60);check('off-map pin hides its popup',await page.locator('.mapClusterAnchor').evaluate(e=>getComputedStyle(e).visibility==='hidden'));
+ await page.evaluate(()=>harness.pan(-60,300));await settle();check('off-map pin hides its popup',await page.locator('.mapClusterAnchor').evaluate(e=>getComputedStyle(e).visibility==='hidden'));
  await show();await page.mouse.click(5,5);await page.keyboard.press('Escape');s=await page.evaluate(()=>harness.stats());check('global Escape closes unfocused popup and removes SDK listeners',s.active===0&&s.listeners===0);
  await show();await show(rows.slice(0,2).map(r=>({...r,lat:37.6,lng:127.1})));s=await page.evaluate(()=>harness.stats());check('another group replaces the previous overlay',s.active===1&&s.listeners===4);
  await page.getByRole('button',{name:'묶음 목록 닫기'}).click();s=await page.evaluate(()=>harness.stats());check('close button removes popup and listeners',s.active===0&&s.listeners===0);
@@ -99,6 +119,26 @@ try{
  check('mobile popup avoids the bottom workspace and leaves most map visible',g.left>=7&&g.right<=383&&g.top>=63&&g.bottom<=sheetTop-7&&g.height<=(sheetTop-g.mapTop)*.48+1);
  await page.screenshot({path:path.join(out,'mobile.png')});
  await page.getByRole('searchbox').fill('S00084');await page.locator('[data-cluster-code="S00084"]').click();check('mobile lazy-result selection preserves the original customer code',(await page.evaluate(()=>harness.stats())).selected.code==='S00084');
+ await page.setViewportSize({width:1180,height:800});
+ const colocated=rows.slice(0,6).map(r=>({...r,vehicle:'204'}));
+ await page.evaluate(data=>{harness.seedOverlap(data);harness.clearSelection();},colocated);await page.waitForTimeout(60);
+ const hit=await page.locator('[data-fixture-role="selected-store"]').evaluate(e=>{const r=e.getBoundingClientRect(),top=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{role:top.closest('[data-fixture-role]')?.dataset.fixtureRole,z:e.parentElement.style.zIndex,selected:e.classList.contains('selected')};});
+ check('after actual clearSelection the z40 store still intercepts the z3 cluster',hit.role==='selected-store'&&hit.z==='40'&&!hit.selected);
+ const originalSource=await page.evaluate(()=>harness.source());
+ await page.locator('[data-fixture-role="selected-store"]').click();await page.waitForTimeout(100);
+ check('normal click on the overlapping real pin opens all six customer codes',await page.locator('.mapClusterPopup [data-cluster-code]').count()===6);
+ check('overlapping popup includes the previously selected code',await page.locator('.mapClusterPopup [data-cluster-code="S00000"]').count()===1);
+ await page.screenshot({path:path.join(out,'selected-pin-overlap.png')});
+ await page.locator('[data-cluster-code="S00005"]').click();check('a formerly hidden code reaches existing detail selection',(await page.evaluate(()=>harness.stats())).selected.code==='S00005');
+ check('pin click does not mutate rows or coordinates',await page.evaluate(()=>harness.source())===originalSource);
+ await page.evaluate(row=>harness.directSearch(row),colocated[0]);check('direct customer search still selects detail without a group popup',(await page.evaluate(()=>harness.stats())).selected.code==='S00000'&&await page.locator('.mapClusterPopup').count()===0);
+ await page.evaluate(data=>harness.clickCase([...data,data[0],{...data[1],virtual:true},{...data[2],representative:true},{...data[3],nearbyVehicle:true}]),colocated);await page.waitForTimeout(60);
+ check('same-location marker grouping keeps distinct codes and ignores synthetic markers',await page.locator('.mapClusterPopup [data-cluster-code]').count()===6);
+ let action=await page.evaluate(row=>harness.clickCase([row,{...row}], 'BASE_60D'),colocated[0]);check('duplicate copies of one customer code select its detail',action.selected?.code==='S00000'&&await page.locator('.mapClusterPopup').count()===0);
+ action=await page.evaluate(data=>harness.clickCase(data,'DATE_ROUTE'),[colocated[0],{...colocated[0],order:2},colocated[1]]);check('dated visits keep their existing detail path and nav protection',action.selected?.code==='S00000'&&action.navAssigned&&await page.locator('.mapClusterPopup').count()===0);
+ for(const [extra,expected]of [[{representative:true},'vehicle'],[{nearbyVehicle:true},'vehicle'],[{virtual:true},'virtual']]){action=await page.evaluate(({data,extra})=>harness.clickCase(data,'BASE_60D',extra),{data:colocated,extra});check(Object.keys(extra)[0]+' marker keeps its existing action',action.action===expected&&await page.locator('.mapClusterPopup').count()===0);}
+ action=await page.evaluate(data=>harness.clickCase(data.map(r=>({...r,lat:91})),'BASE_60D'),colocated);check('invalid coordinates do not create a group popup',action.selected?.code==='S00000'&&await page.locator('.mapClusterPopup').count()===0);
+ await page.evaluate(()=>harness.clearMap());
  check('no runtime errors',errors.length===0);check('no HTTP, external SDK or API requests',requests.length===0);
  console.log(JSON.stringify({result:'PASS',scope:'synthetic browser + pixel-map only; real Kakao map not tested',checks:checks.length,details:checks,artifacts:out},null,2));
 }finally{await browser.close();}

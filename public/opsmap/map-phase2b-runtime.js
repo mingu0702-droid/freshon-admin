@@ -1017,6 +1017,22 @@
     else ($('#map').parentElement||document.body).append(panel);
   }
 
+  function selectStoreMarker(row,element){
+    // A selected/nav-protected store can sit above its same-location cluster.
+    // Let that real pin expose the complete customer-code group as well.
+    if(state.mode==='BASE_60D'&&row.customerCode&&Number.isFinite(row.lat)&&Math.abs(row.lat)<=90&&Number.isFinite(row.lng)&&Math.abs(row.lng)<=180){
+      const members=[],codes=new Set();
+      for(const item of [row,...state.currentRows]){
+        if(!item.customerCode||item.virtual||item.representative||item.nearbyVehicle||item.clusterCount||item.lat!==row.lat||item.lng!==row.lng)continue;
+        const code=String(item.customerCode);if(codes.has(code))continue;codes.add(code);members.push(item);
+      }
+      if(members.length>1){
+        showCluster({lat:row.lat,lng:row.lng,clusterLabel:'같은 위치',clusterRows:members,clusterVehicles:[...new Set(members.map(item=>item.vehicle||item.baseVehicle).filter(Boolean))]});return;
+      }
+    }
+    selectStore(row,element,false);
+  }
+
   function markerElement(row, index, kind) {
     const button = document.createElement("button");
     const completed = state.mode === "DATE_ROUTE" && row.status === "COMPLETED";
@@ -1034,7 +1050,7 @@
     const label = kind === "virtual" ? "임시" : index || (["representative", "nearbyVehicle"].includes(kind) ? row.vehicle : "");
     if (kind === "store" && state.mode === "BASE_60D") button.classList.add("store");
     button.innerHTML = `<svg class="pinShape" viewBox="0 0 28 34" aria-hidden="true"><path d="M14 1C6.8 1 1 6.8 1 14C1 23 14 34 14 34S27 23 27 14C27 6.8 21.2 1 14 1Z"/></svg><span class="pinNumber">${esc(kind === "store" && state.mode === "BASE_60D" ? row.vehicle || '?' : label)}</span><span class="markerLabel">${esc(button.title)}</span>`;
-    button.onclick = () => row.virtual ? showNearbyReference(row) : row.representative || row.nearbyVehicle ? selectVehicleStatus(row, button) : selectStore(row, button, false);
+    button.onclick = () => row.virtual ? showNearbyReference(row) : row.representative || row.nearbyVehicle ? selectVehicleStatus(row, button) : selectStoreMarker(row, button);
     if (row.clusterCount) {
       button.classList.add("periodCluster");
       button.querySelector(".pinNumber").textContent = String(row.clusterCount);
