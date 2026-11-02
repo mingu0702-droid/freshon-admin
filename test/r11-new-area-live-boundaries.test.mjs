@@ -36,6 +36,7 @@ function fixture({rows=[],customer=()=>({data:[],meta:{complete:true}}),lookup=(
   return {...window.qa,window,node,run,headers,queries};
 }
 const query=address=>globalThis.NewAreaRequests.addressQuery(address,globalThis.Phase2bUi.addressVariants);
+const queryChoices=address=>globalThis.NewAreaRequests.addressQueries(address,globalThis.Phase2bUi.addressVariants);
 const tsvCell=value=>'"'+value.replace(/"/g,'""')+'"';
 
 test('basic query reuses existing variants, keeps road/lot numbers and scopes official aliases',()=>{
@@ -56,7 +57,10 @@ test('basic query reuses existing variants, keeps road/lot numbers and scopes of
     ['전남광주통합특별시 북구 합성로 21 (다른동)','전남광주통합특별시 북구 합성로 21'],
     ['경기도 화성시 합성동 산 21-3 [합성건물]','경기도 화성시 합성동 산 21-3']
   ];
-  for(const [input,expected] of cases)assert.equal(query(input),expected,input);
+  for(const [input,expected] of cases){
+    assert.equal(queryChoices(input).at(-1),expected,input);assert.ok(queryChoices(input).length<=2);
+    assert.equal(query(input),globalThis.Phase2bUi.addressVariants(input.normalize('NFKC').replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)(?=\s|\(|\[|$)/g,'$1 $2')).at(-1));
+  }
   assert.equal(query('합성건물 고객정보만'), '');
 });
 
@@ -81,11 +85,50 @@ test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with n
 });
 
 test('same normalized query is reused only within its run; all original rows and Y values remain distinct',async()=>{
-  const f=fixture();
+  const f=fixture({lookup:(query,callback)=>query.includes('만세구')?callback([],'ZERO_RESULT'):callback([{address_name:query,x:'127',y:'37.2'}],'OK')});
   const input='경기도 화성시 만세구 합성로 12 (합성동)\t합성 고객1\n경기도 화성시 합성로12 (합성상가)\t합성 고객2';
-  await f.run(input);assert.equal(f.queries.length,1);assert.equal(f.headers.length,1);
+  await f.run(input);assert.equal(f.queries.length,2);assert.equal(f.headers.length,2);
+  assert.deepEqual(f.queries,['경기도 화성시 만세구 합성로 12','경기도 화성시 합성로 12']);
   assert.equal(f.state.newAreaResults.length,2);assert.notEqual(f.state.newAreaResults[0].originalCustomer,f.state.newAreaResults[1].originalCustomer);
-  await f.run(input);assert.equal(f.queries.length,2);assert.equal(f.headers.length,2,'no cross-run coordinate response cache');
+  await f.run(input);assert.equal(f.queries.length,4);assert.equal(f.headers.length,4,'no cross-run coordinate response cache');
+});
+
+test('modern exact response wins; only explicit ZERO_RESULT permits the one official alias',async()=>{
+  const input='인천광역시 제물포구 합성로 12 (송림동, 합성상가)\t합성 고객 010-0000-0000';
+  const modern='인천광역시 제물포구 합성로 12',alias='인천광역시 동구 합성로 12';
+  const current=fixture();await current.run(input);
+  assert.deepEqual(current.queries,[modern]);assert.equal(current.state.newAreaResults[0].resolvedAddress,modern);
+  const legacy=fixture({lookup:(query,callback)=>query===modern?callback([],'ZERO_RESULT'):callback([{address_name:alias,x:'127',y:'37.2'}],'OK')});
+  await legacy.run(input);assert.deepEqual(legacy.queries,[modern,alias]);assert.equal(legacy.state.newAreaResults[0].resolvedAddress,alias);
+  assert.equal(legacy.state.newAreaResults[0].originalAddress,'인천광역시 제물포구 합성로 12 (송림동, 합성상가)');
+  assert.equal(legacy.state.newAreaResults[0].originalCustomer,'합성 고객 010-0000-0000');
+  const empty=fixture({lookup:(_query,callback)=>callback([],'ZERO_RESULT')});await empty.run(input);
+  assert.deepEqual(empty.queries,[modern,alias]);assert.equal(empty.state.newAreaResults[0].lookupStatus,'DEFERRED');
+});
+
+test('alias is never retried after failure, limit, ambiguity, nonexact rows, invalid coordinates or empty OK',async()=>{
+  const input='경기도 화성시 만세구 합성로 12 (합성동)\t합성 고객';
+  const modern='경기도 화성시 만세구 합성로 12';
+  const outcomes=[
+    (_query,callback)=>callback([],'ERROR',{code:'GEOCODE_DAILY_LIMIT',status:429}),
+    (_query,callback)=>callback([],'ERROR',{code:'KAKAO_HTTP_REJECTED',status:502}),
+    (_query,callback)=>callback([],'ERROR',{code:'GEOCODE_QUERY_INVALID',status:400}),
+    (query,callback)=>callback([{address_name:query,x:'127',y:'37.2'},{address_name:query,x:'127.1',y:'37.3'}],'OK'),
+    (_query,callback)=>callback([{address_name:'경기도 화성시 합성로 120',x:'127',y:'37.2'}],'OK'),
+    (query,callback)=>callback([{address_name:query,x:'120',y:'10'}],'OK'),
+    (_query,callback)=>callback([],'OK'),
+    ()=>{throw Error('SYNTHETIC_FAILURE');}
+  ];
+  for(const lookup of outcomes){const f=fixture({lookup});await f.run(input);assert.deepEqual(f.queries,[modern]);assert.equal(f.state.newAreaResults.length,1);}
+});
+
+test('modern or official old customer metadata reuses saved coordinates without a provider call',async()=>{
+  const input='경기도 화성시 만세구 합성로 12\t합성 고객';
+  for(const supported of ['경기도 화성시 만세구 합성로 12','경기도 화성시 합성로 12']){
+    const f=fixture({customer:query=>({data:query===supported?[{...saved,matchedBy:'ADDRESS'}]:[],meta:{complete:true}})});
+    await f.run(input);assert.equal(f.queries.length,0);assert.equal(f.state.newAreaResults[0].lookupStatus,'SUCCESS');
+    assert.equal(f.headers.length,supported.includes('만세구')?1:2);
+  }
 });
 
 test('authenticated address match reuses existing manual coordinates with redacted public addresses',async()=>{

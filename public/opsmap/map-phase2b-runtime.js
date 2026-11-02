@@ -1775,7 +1775,7 @@
     setSearchState('임시 위치 표시 · 고객정보에 저장하지 않습니다.');
   }
 
-  async function geocodeAddress(address, signal) {
+  async function geocodeAddress(address, signal, requestCache = null) {
     if(signal?.aborted)throw Object.assign(Error('조회 취소'),{name:'AbortError'});
     const stored=[...new Map([...latestSnapshotRows,...allStores].filter(r=>[r.customerCode,r.customerName,r.address].includes(address)).map(r=>[r.customerCode,r])).values()].map(newAreaCoordinate).filter(Boolean);
     if(stored.length===1)return {...stored[0],lat:stored[0].lat,lng:stored[0].lng,address:stored[0].address};
@@ -1785,9 +1785,11 @@
     const attempts = [];
     const serverProxy=window.kakaoGeocoder?.serverProxy===true;
     if (!serverProxy&&geocodeCache.has(address)) return geocodeCache.get(address);
-    for (const query of serverProxy?[NewAreaRequests.addressQuery(address,Phase2bUi.addressVariants)].filter(Boolean):Phase2bUi.addressVariants(address)) {
+    for (const query of serverProxy?NewAreaRequests.addressQueries(address,Phase2bUi.addressVariants):Phase2bUi.addressVariants(address)) {
       const attemptStarted = performance.now();
-      const result = await NewAreaRequests.lookup(window.kakaoGeocoder, query, { signal });
+      const key=query.normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
+      if(serverProxy&&requestCache&&!requestCache.has(key))requestCache.set(key,NewAreaRequests.lookup(window.kakaoGeocoder, query, { signal }));
+      const result = await (serverProxy&&requestCache?requestCache.get(key):NewAreaRequests.lookup(window.kakaoGeocoder, query, { signal }));
       if(signal?.aborted)throw Object.assign(Error('조회 취소'),{name:'AbortError'});
       const exact = result.filter((row) => Phase2bUi.addressMatches(query, row.road_address?.address_name || row.address_name) || Phase2bUi.addressMatches(query, row.address?.address_name || ""));
       attempts.push({ query, ms: Math.round(performance.now() - attemptStarted), candidates: result.length, exact: exact.length });
@@ -1795,10 +1797,10 @@
         geocodeDiagnostic = `후보 선택 · ${Math.round(performance.now() - started)}ms`;
         return { candidates: exact.map((row) => ({ lat: Number(row.y), lng: Number(row.x), address: row.road_address?.address_name || row.address_name, geocodeMs: Math.round(performance.now() - started) })) };
       }
-      if (exact.length !== 1) continue;
+      if (exact.length !== 1) { if(serverProxy&&!result.zeroResult)break; continue; }
       const row = exact[0];
       const point = { lat: Number(row.y), lng: Number(row.x), address: row.road_address?.address_name || row.address_name, geocodeMs: Math.round(performance.now() - started), attempts, query };
-      if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)||point.lat<33||point.lat>39.5||point.lng<124||point.lng>132) continue;
+      if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)||point.lat<33||point.lat>39.5||point.lng<124||point.lng>132) { if(serverProxy)break; continue; }
       if(!serverProxy){while(geocodeCache.size>=128)geocodeCache.delete(geocodeCache.keys().next().value);geocodeCache.set(address, point);}
       geocodeDiagnostic = `성공 · ${point.geocodeMs}ms · ${attempts.length}회 조회`;
 
@@ -2232,9 +2234,10 @@
     // Reuse saved/manual coordinates while external address lookup remains off.
     const stored = [...new Map([...latestSnapshotRows,...allStores].filter(store => [store.customerCode,store.customerName,store.address].includes(row.address)).map(store => [store.customerCode,store])).values()].map(newAreaCoordinate).filter(Boolean);
     if (stored.length) return judgeNewAreaPoint(row,stored.length === 1 ? stored[0] : {candidates:stored});
-    const query=NewAreaRequests.addressQuery(row.address,Phase2bUi.addressVariants);
-    if (!query) return {...judgeNewAreaPoint(row,null),evidence:'검색용 기본주소 확인 필요 · 원문 보존'};
-    const matched=await newAreaCustomerMatch(query,signal,batch);
+    const queries=NewAreaRequests.addressQueries(row.address,Phase2bUi.addressVariants);
+    if (!queries.length) return {...judgeNewAreaPoint(row,null),evidence:'검색용 기본주소 확인 필요 · 원문 보존'};
+    let matched=null;
+    for(const query of queries){matched=await newAreaCustomerMatch(query,signal,batch);if(matched)break;}
     if(matched?.candidates)return judgeNewAreaPoint(row,matched);
     if(matched){
       const saved=newAreaCoordinate(matched);
@@ -2245,9 +2248,7 @@
     if(blocked)throw Object.assign(Error(blocked),{code:blocked==='GEOCODE_DAILY_LIMIT'?blocked:'GEOCODE_AUTOMATICALLY_BLOCKED'});
     if (window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup !== true) return {...judgeNewAreaPoint(row,null),evidence:'저장 위치 미확인 · 기존 좌표 직접 수정 또는 주소를 이름으로 지정한 수동 경유 좌표를 확인해 주세요.'};
     // Request-scoped reuse only. Neither the input nor response coordinates are persisted.
-    const key=query.normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
-    if(!batch.queries.has(key))batch.queries.set(key,geocodeAddress(query, signal));
-    const point = await batch.queries.get(key);
+    const point = await geocodeAddress(row.address, signal,batch.queries);
     return judgeNewAreaPoint(row, point);
   }
 
