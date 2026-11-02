@@ -15,7 +15,7 @@ test('Hub model failure preserves prepared detail and local status with safe fai
 });
 test('prepared detail failure preserves successful model status; timeout uses allowed enum',async t=>{
  const result=await request(t,{details:true,callHub:async action=>{if(action==='customerDetailsStatus')throw Object.assign(Error('PRIVATE'),{name:'AbortError'});return {data:{customer:{freshon:'2026-11-02'},published:{generation:7}}};}});
- assert.equal(result.status,200);assert.equal(result.body.data.customer.freshon,'2026-11-02');assert.equal(result.body.data.customerDetails,null);assert.equal(result.body.data.partial,true);assert.equal(result.body.data.sources.find(s=>s.action==='customerDetailsStatus').failureType,'timeout');
+ assert.equal(result.status,200);assert.equal(result.body.data.customer.freshon,'2026-11-02');assert.equal(result.body.data.customerDetails,null);assert.equal(result.body.data.partial,true);assert.equal(result.body.data.sources.find(s=>s.action==='customerDetailsStatus').failureType,'timeout');assert.equal(result.body.data.sources.find(s=>s.action==='customerDetailsStatus').errorCode,'HUB_TIMEOUT');
 });
 test('disabled detail is not fabricated success and complete upstream/local failure returns 503',async t=>{
  const calls=[];const result=await request(t,{callHub:async action=>{calls.push(action);throw privateFailure();},modelStatus:()=>{throw Error('PRIVATE_LOCAL');}});
