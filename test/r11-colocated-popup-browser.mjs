@@ -23,7 +23,7 @@ let markerEntries=new Map(),indexedRows=null,pointIndex=null,boundaryKey='';
 const state={mode:'BASE_60D',currentRows:[],selected:null,detailRequestId:0,fitRequested:true,suppressMapEventsUntil:0,overlays:[],representativeOverlays:[],lines:[],polygons:[]};
 let cameraSelection=0,selectedDriverContact=null;const requestControllers=new Map();
 const invalidateUnifiedSearch=()=>{},closeUnifiedSearchResults=()=>{},cancelAddressLookup=()=>{},renderRunList=()=>{},renderPeriodStoreList=()=>{};
-const mapCamera={releaseFocus(){}};
+let mapCamera={releaseFocus(){}};
 const vehicleLabel=v=>v?v+'호차':'';
 const vehicleColor=()=>'#275dd8',esc=v=>String(v).replace(/[&<>"']/g,'');
 const syncPeriodBasis=()=>{},setSelectedVehicles=()=>{},refreshVehicleUi=()=>{};
@@ -38,8 +38,8 @@ const events={addListener(t,n,f){(t.listeners[n]||=[]).push(f)},removeListener(t
 class FakeMap{
  constructor(){this.el=$('#map');this.center=new Coord(37.5,127);this.level=4;this.listeners={};this.boundsCalls=0;}
  getLevel(){return this.level}setLevel(n){this.level=n;this.emit('zoom_changed');}
- getProjection(){const r=this.el.getBoundingClientRect();return{containerPointFromCoords:p=>new Point(r.width/2+(p.lng-this.center.lng)*100,r.height/2-(p.lat-this.center.lat)*100),coordsFromContainerPoint:p=>new Coord(this.center.lat-(p.y-r.height/2)/100,this.center.lng+(p.x-r.width/2)/100)}}
- setCenter(p){this.center=p;this.draw();this.emit('center_changed');}panTo(p){this.setCenter(p)}
+ getProjection(){if(window.resizeRace?.pending)window.resizeRace.earlyProjections++;const r=this.el.getBoundingClientRect();return{containerPointFromCoords:p=>new Point(r.width/2+(p.lng-this.center.lng)*100,r.height/2-(p.lat-this.center.lat)*100),coordsFromContainerPoint:p=>new Coord(this.center.lat-(p.y-r.height/2)/100,this.center.lng+(p.x-r.width/2)/100)}}
+ setCenter(p){if(window.resizeRace?.pending)window.resizeRace.earlyWrites++;this.center=p;this.draw();this.emit('center_changed');}panTo(p){this.setCenter(p)}
  setBounds(){this.boundsCalls++;}emit(n){for(const f of [...this.listeners[n]||[]])f();}
  draw(){for(const o of window.overlays)if(o.map)o.draw();const p=this.getProjection().containerPointFromCoords(window.pinCoord||new Coord(37.5,127));$('#syntheticPin').style.left=p.x+'px';$('#syntheticPin').style.top=p.y+'px';}
 }
@@ -68,6 +68,17 @@ window.harness={
  },
  clickCase(rows,mode='BASE_60D',extra={}){clearMap();state.mode=mode;state.currentRows=rows;state.selected=null;window.selection=null;window.markerAction=null;const row={...rows[0],...extra};const marker=markerElement(row,mode==='DATE_ROUTE'?1:null,row.virtual?'virtual':row.representative?'representative':row.nearbyVehicle?'nearbyVehicle':'store');marker.click();return{selected:window.selection,action:window.markerAction,navAssigned:marker.classList.contains('navAssigned')};},
  directSearch(row){closeClusterPanel();window.selection=null;selectStore(row,null,true);},
+ beginResizeRace(){
+  const map=state.map,savedCenter=map.center,oldSize={width:map.el.clientWidth,height:map.el.clientHeight};
+  const race=window.resizeRace={pending:true,released:false,relayoutCalls:0,earlyProjections:0,earlyWrites:0,restored:false};
+  // Model camera center restoration happening after SDK/DOM dimensions diverge.
+  mapCamera={releaseFocus(){},dimensions:()=>race.pending?oldSize:{width:map.el.clientWidth,height:map.el.clientHeight},relayout(){
+   race.relayoutCalls++;if(!race.pending||!race.released)return;
+   race.pending=false;map.setCenter(savedCenter);race.restored=true;
+  }};
+ },
+ releaseResizeRace(){window.resizeRace.released=true;},
+ finishResizeRace(){mapCamera={releaseFocus(){}};window.resizeRace=null;},
  source:()=>JSON.stringify(state.currentRows),
  pan(x,y){const r=$('#map').getBoundingClientRect(),c=window.pinCoord;state.map.setCenter(new Coord(c.lat+(y-r.height/2)/100,c.lng-(x-r.width/2)/100));},
  stats(){return{active:window.overlays.filter(o=>o.map).length,listeners:Object.values(state.map.listeners).reduce((n,v)=>n+v.length,0),boundsCalls:state.map.boundsCalls,level:state.map.level,selected:window.selection};}
@@ -144,6 +155,14 @@ try{
  action=await page.evaluate(data=>harness.clickCase(data,'DATE_ROUTE'),[colocated[0],{...colocated[0],order:2},colocated[1]]);check('dated visits keep their existing detail path and nav protection',action.selected?.code==='S00000'&&action.navAssigned&&await page.locator('.mapClusterPopup').count()===0);
  for(const [extra,expected]of [[{representative:true},'vehicle'],[{nearbyVehicle:true},'vehicle'],[{virtual:true},'virtual']]){action=await page.evaluate(({data,extra})=>harness.clickCase(data,'BASE_60D',extra),{data:colocated,extra});check(Object.keys(extra)[0]+' marker keeps its existing action',action.action===expected&&await page.locator('.mapClusterPopup').count()===0);}
  action=await page.evaluate(data=>harness.clickCase(data.map(r=>({...r,lat:91})),'BASE_60D'),colocated);check('invalid coordinates do not create a group popup',action.selected?.code==='S00000'&&await page.locator('.mapClusterPopup').count()===0);
+ await show(colocated);await page.evaluate(()=>harness.beginResizeRace());
+ await page.setViewportSize({width:390,height:780});await settle();
+ const race=await page.evaluate(()=>window.resizeRace);
+ check('popup waits without projection or camera writes while resized camera dimensions are unsettled',race.relayoutCalls>0&&race.pending&&race.earlyProjections===0&&race.earlyWrites===0);
+ await page.evaluate(()=>harness.releaseResizeRace());await settle();g=await geometry();
+ const restored=await page.evaluate(()=>window.resizeRace);
+ check('popup readjusts after saved camera center restoration without clipping',restored.restored&&!restored.pending&&g.top>=g.mapTop+7&&g.left>=g.mapLeft+7&&g.right<=g.mapRight-7&&Math.abs(g.pinY-g.bottom-52)<2);
+ await page.evaluate(()=>harness.finishResizeRace());
  await page.evaluate(()=>harness.clearMap());
  check('no runtime errors',errors.length===0);check('no HTTP, external SDK or API requests',requests.length===0);
  console.log(JSON.stringify({result:'PASS',scope:'synthetic browser + pixel-map only; real Kakao map not tested',checks:checks.length,details:checks,artifacts:out},null,2));
