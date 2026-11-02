@@ -73,6 +73,15 @@ test('task identity, missing attachments, unknown category, and verified empty a
   [task({taskAttachments:[{typeText:'매장 출입문은 잘 잠궜나요?',images:[{url:'https://static.chabyulhwa.com/a.jpg'}]}]}),200,null,'UNVERIFIED']
  ]){const s=await server({getTask:()=>Response.json({data:payload})});try{const v=await json(s);assert.equal(v.status,status);if(code)assert.equal(v.body.error.code,code);else assert.equal(v.body.data.deliveries[0].status,state);assert.equal(s.stats().mediaReads,0);}finally{await s.close();}}
 });
+test('one nested images group preserves the exact identity and returns/revalidates only its first image',async()=>{
+ const nested=task({taskAttachments:[{typeText:'냉장고 문은 잘 닫았나요?',images:[{images:[{url:'https://static.chabyulhwa.com/nested-first.jpg'},{url:'https://static.chabyulhwa.com/nested-second.jpg'}]}]}]});
+ const s=await server({getTask:()=>Response.json({data:nested})});try{const v=await json(s);assert.equal(v.status,200);assert.equal(v.body.data.deliveries[0].photos.length,1);const media=await fetch(s.url+v.body.data.deliveries[0].photos[0].url,{headers});assert.equal(media.status,200);await media.arrayBuffer();assert.equal(s.stats().rawReads,2);assert.equal(s.stats().mediaReads,1);}finally{await s.close();}
+});
+test('ambiguous/deeper nested image groups are unverified, never an empty delivery',async()=>{
+ for(const image of [{url:'https://static.chabyulhwa.com/a.jpg',images:[]},{images:[{images:[]}]},{typeText:'매장 출입문은 잘 잠궜나요?',images:[{url:'https://static.chabyulhwa.com/a.jpg'}]}]){
+  const s=await server({getTask:()=>Response.json({data:task({taskAttachments:[{typeText:'냉장고 문은 잘 닫았나요?',images:[image]}]})})});try{const v=await json(s);assert.equal(v.status,503);assert.equal(v.body.error.code,'PHOTO_IMAGES_INVALID');assert.equal(s.stats().mediaReads,0);}finally{await s.close();}
+ }
+});
 test('JSON/content-type errors expose only allowed code/stage/http, never body',async()=>{
  for(const [response,code] of [[new Response('PRIVATE_SENTINEL',{headers:{'content-type':'text/html'}}),'PHOTO_CONTENT_TYPE_INVALID'],[new Response('PRIVATE_SENTINEL',{headers:{'content-type':'application/json'}}),'PHOTO_JSON_INVALID']]){
   const s=await server({getTask:()=>response});try{const v=await json(s);assert.equal(v.status,502);assert.equal(v.body.error.code,code);assert.equal(v.body.error.sourceHttpStatus,200);assert(!JSON.stringify(v).includes('PRIVATE_SENTINEL'));}finally{await s.close();}

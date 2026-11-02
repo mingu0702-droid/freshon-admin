@@ -30,7 +30,7 @@ export function createProductionPhotoExtension({enabled=false,rawRequest,hasMemo
  }
  async function reserve(operation,identity,signal){
   if(signal?.aborted)fail('PHOTO_TIMEOUT',504,'source-timeout');
-  let value;try{value=await reserveRead({approvalId,operation,customerCode:identity.customerCode,date:identity.date,deliveryId:identity.deliveryId},{signal});}catch{fail('PHOTO_APPROVAL_REQUIRED',503,'source-session');}
+  let value;try{value=await reserveRead({approvalId,operation,customerCode:identity.customerCode,date:identity.date,deliveryId:identity.deliveryId,firstKind:identity.firstKind},{signal});}catch(error){if(/^PHOTO_BUDGET_[A-Z_]+$/.test(error?.code||''))fail(error.code,[409,429,503].includes(error.status)?error.status:503,'source-session');fail('PHOTO_APPROVAL_REQUIRED',503,'source-session');}
   if(value?.reserved!==true||value.approvalId!==approvalId||value.operation!==operation||value.customerCode!==identity.customerCode||value.date!==identity.date||value.deliveryId!==identity.deliveryId)fail('PHOTO_APPROVAL_REQUIRED',503,'source-session');
   if(signal?.aborted)fail('PHOTO_TIMEOUT',504,'source-timeout');
  }
@@ -40,11 +40,11 @@ export function createProductionPhotoExtension({enabled=false,rawRequest,hasMemo
    approvedRequest:async(path,options)=>{
     permitted(identity);session(approved);
     if(path!=='/api/bali/task/'+identity.deliveryId||options.method!=='GET')fail('INVALID_PHOTO_REQUEST',400,'source-identity');
-    if(taskReads>=maxTaskReads)fail('PHOTO_RATE_LIMITED',429);await reserve('detail',identity,options.signal);taskReads++;
+    if(taskReads>=maxTaskReads)fail('PHOTO_RATE_LIMITED',429);await reserve('detail',identity,options.signal);session(approved);taskReads++;
     return rawRequest(path,{method:'GET',signal:options.signal,redirect:'error',cache:'no-store',timeoutMs:8000});
    },imageFetch:async(url,options)=>{
     permitted(identity);session(approved);
-    if(mediaReads>=maxMediaReads)fail('PHOTO_RATE_LIMITED',429,'source-media');await reserve('media',identity,options.signal);mediaReads++;
+    if(mediaReads>=maxMediaReads)fail('PHOTO_RATE_LIMITED',429,'source-media');await reserve('media',identity,options.signal);session(approved);mediaReads++;
     return imageFetch(url,options);
    }});
   sources.set(key,createDeliveryAdminPhotoSource({...transport,firstPhotoKind:identity.firstKind,

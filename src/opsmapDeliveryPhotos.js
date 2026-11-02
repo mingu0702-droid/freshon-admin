@@ -56,10 +56,36 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
   if (firstPhotoKind !== null && !PHOTO_KINDS.has(firstPhotoKind)) fail('UNVERIFIED', 503);
   const hosts = new Set(allowedImageHosts);
   const kinds = Object.fromEntries(Object.entries(categoryMap).filter(([, kind]) => PHOTO_KINDS.has(kind)));
-  function permitted(task, attachmentIndex, imageIndex) {
+  function attachmentImages(attachment) {
+    if (!attachment || typeof attachment !== 'object' || !Array.isArray(attachment.images)) fail('PHOTO_IMAGES_INVALID', 503);
+    if (attachment.images.length > 24) fail('PHOTO_IMAGE_LIMIT_EXCEEDED', 503);
+    const rows = [];
+    for (const [imageIndex, image] of attachment.images.entries()) {
+      if (!image || typeof image !== 'object' || Array.isArray(image)) fail('PHOTO_IMAGES_INVALID', 503);
+      if (Object.hasOwn(image, 'images')) {
+        // Existing source groups may contain one nested images array. No arbitrary recursion.
+        if (Object.hasOwn(image, 'url') || !Array.isArray(image.images) || Object.hasOwn(image, 'typeText') && image.typeText !== attachment.typeText) fail('PHOTO_IMAGES_INVALID', 503);
+        if (image.images.length > 24) fail('PHOTO_IMAGE_LIMIT_EXCEEDED', 503);
+        for (const [childImageIndex, child] of image.images.entries()) {
+          if (!child || typeof child !== 'object' || Array.isArray(child) || Object.hasOwn(child, 'images') || typeof child.url !== 'string' || Object.hasOwn(child, 'typeText') && child.typeText !== attachment.typeText) fail('PHOTO_IMAGES_INVALID', 503);
+          rows.push({imageIndex, childImageIndex, image: child});
+        }
+      } else {
+        if (typeof image.url !== 'string' || Object.hasOwn(image, 'typeText') && image.typeText !== attachment.typeText) fail('PHOTO_IMAGES_INVALID', 503);
+        rows.push({imageIndex, childImageIndex: null, image});
+      }
+      if (rows.length > 24) fail('PHOTO_IMAGE_LIMIT_EXCEEDED', 503);
+    }
+    return rows;
+  }
+  function permitted(task, attachmentIndex, imageIndex, childImageIndex = null) {
     if (firstPhotoKind === null) return true;
-    const first = task.taskAttachments.findIndex(attachment => kinds[attachment?.typeText] === firstPhotoKind && Array.isArray(attachment.images) && attachment.images.length);
-    return first === attachmentIndex && imageIndex === 0;
+    for (const [index, attachment] of task.taskAttachments.entries()) {
+      if (kinds[attachment?.typeText] !== firstPhotoKind) continue;
+      const first = attachmentImages(attachment)[0];
+      if (first) return index === attachmentIndex && first.imageIndex === imageIndex && first.childImageIndex === childImageIndex;
+    }
+    return false;
   }
   function mediaAsset(raw) {
     let url;
@@ -83,20 +109,19 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
         const task = await detail(identity, signal), photos = [], notes = [];
         let unverified = false;
         for (const [attachmentIndex, attachment] of task.taskAttachments.entries()) {
-          if (!attachment || typeof attachment !== 'object' || !Array.isArray(attachment.images)) fail('PHOTO_IMAGES_INVALID', 503);
-          if (attachment.images.length > 24) fail('PHOTO_IMAGE_LIMIT_EXCEEDED', 503);
+          const images = attachmentImages(attachment);
           if (attachment.text) notes.push(cleanText(attachment.text));
           const kind = kinds[attachment.typeText];
-          if (!kind && attachment.images.length) { unverified = true; continue; }
-          for (const [imageIndex, image] of attachment.images.entries()) {
-            if (!permitted(task, attachmentIndex, imageIndex)) continue;
+          if (!kind && images.length) { unverified = true; continue; }
+          for (const {imageIndex, childImageIndex, image} of images) {
+            if (!permitted(task, attachmentIndex, imageIndex, childImageIndex)) continue;
             const { fingerprint } = mediaAsset(image?.url);
-            photos.push({ kind, ref: { attachmentIndex, imageIndex, fingerprint } });
+            photos.push({ kind, ref: { attachmentIndex, imageIndex, ...(childImageIndex === null ? {} : {childImageIndex}), fingerprint } });
           }
         }
         if (photos.length > 40) fail('PHOTO_LIMIT_EXCEEDED', 503);
         // A narrowed verification category is not evidence that other photos are absent.
-        if (!photos.length && firstPhotoKind !== null && task.taskAttachments.some(a => a.images.length)) unverified = true;
+        if (!photos.length && firstPhotoKind !== null && task.taskAttachments.some(a => attachmentImages(a).length)) unverified = true;
         return [{ ...exact(task, identity), notes: notes.join('\n').slice(0, 4000), status: unverified ? 'UNVERIFIED' : photos.length ? 'READY' : 'EMPTY', photos }];
       }
       // Date discovery uses approved existing metadata only; never scan live delivery history.
@@ -108,10 +133,12 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
     },
     async openMedia(identity, ref, { signal } = {}) {
       const task = await detail(identity, signal);
-      if (!permitted(task, ref.attachmentIndex, ref.imageIndex)) fail('PHOTO_FORBIDDEN', 403);
+      if (!permitted(task, ref.attachmentIndex, ref.imageIndex, ref.childImageIndex ?? null)) fail('PHOTO_FORBIDDEN', 403);
       const attachment = task.taskAttachments[ref.attachmentIndex];
       if (!kinds[attachment?.typeText]) fail('UNVERIFIED', 503);
-      const { url, fingerprint } = mediaAsset(attachment?.images?.[ref.imageIndex]?.url);
+      const entry = attachmentImages(attachment).find(r => r.imageIndex === ref.imageIndex && r.childImageIndex === (ref.childImageIndex ?? null));
+      if (!entry) fail('PHOTO_NOT_FOUND', 404);
+      const { url, fingerprint } = mediaAsset(entry.image.url);
       if (!/^[a-f0-9]{64}$/.test(ref.fingerprint || '') || fingerprint !== ref.fingerprint) fail('PHOTO_NOT_FOUND', 404);
       return bounded(fetchImage(url.href, { method: 'GET', redirect: 'error', credentials: 'omit', signal }), signal);
     }
