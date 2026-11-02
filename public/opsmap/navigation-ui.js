@@ -84,7 +84,10 @@
   }
   function kakaoLegLinks(rows){
     kakaoRouteLinks(rows); // Validate the complete route before making any fallback link.
-    return rows.slice(0,-1).map((origin,start)=>({start,end:start+1,url:kakaoDestinationLink(rows[start+1],origin)}));
+    return rows.slice(0,-1).map((origin,start)=>{
+      const destination=rows[start+1],sameCoordinate=origin.lat===destination.lat&&origin.lng===destination.lng;
+      return {start,end:start+1,sameCoordinate,url:kakaoDestinationLink(destination,sameCoordinate?undefined:origin)};
+    });
   }
   root.MapNavigationLookup=Object.freeze({normalize,located,unique,resolve,search,visitCodes,createTemporaryPlaces,kakaoDestinationLink,kakaoRouteLinks,kakaoLegLinks});
 })(typeof window==='object'?window:globalThis);
@@ -166,8 +169,8 @@
       if(rows.length>2){
         fallback.hidden=false;legHint.hidden=false;
         for(const leg of lookup.kakaoLegLinks(rows)){
-          const link=document.createElement('a');link.target='_blank';link.rel='noopener noreferrer';link.href=leg.url;
-          link.textContent=(leg.start+1)+' → '+(leg.end+1)+' · '+(rows[leg.start].customerName||rows[leg.start].customerCode)+' → '+(rows[leg.end].customerName||rows[leg.end].customerCode);legLinks.append(link);
+          const link=document.createElement('a');link.target='_blank';link.rel='noopener noreferrer';link.href=leg.url;link.dataset.sameCoordinate=String(leg.sameCoordinate);
+          link.textContent=(leg.start+1)+' → '+(leg.end+1)+' · '+(rows[leg.start].customerName||rows[leg.start].customerCode)+' → '+(rows[leg.end].customerName||rows[leg.end].customerCode)+(leg.sameCoordinate?' · 같은 좌표 · 목적지로 열기':'');legLinks.append(link);
         }
       }
     }catch(error){$('#navKakaoStatus').textContent=error.message;}

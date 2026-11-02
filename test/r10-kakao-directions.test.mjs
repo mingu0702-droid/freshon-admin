@@ -31,10 +31,18 @@ test('adjacent fallback preserves every ordered pair with official from/to links
     const points=rows(size),legs=lookup.kakaoLegLinks(points);assert.equal(legs.length,size-1);
     for(let i=0;i<legs.length;i++){
       assert.equal(legs[i].start,i);assert.equal(legs[i].end,i+1);
+      assert.equal(legs[i].sameCoordinate,false);
       assert.equal(legs[i].url,'https://map.kakao.com/link/from/'+encodeURIComponent(points[i].customerName)+','+points[i].lat+','+points[i].lng+'/to/'+encodeURIComponent(points[i+1].customerName)+','+points[i+1].lat+','+points[i+1].lng);
     }
   }
   const invalid=rows(32);invalid[20]={...invalid[20],coordinateStatus:'CONFLICT'};assert.throws(()=>lookup.kakaoLegLinks(invalid));assert.throws(()=>lookup.kakaoLegLinks(rows(33)));
+});
+test('distinct customers at the same coordinates keep both visits and use destination-only fallback',()=>{
+  const points=rows(3);points[1]={...points[1],lat:points[0].lat,lng:points[0].lng};
+  const legs=lookup.kakaoLegLinks(points);assert.equal(legs.length,2);assert.equal(legs[0].sameCoordinate,true);assert.equal(legs[0].start,0);assert.equal(legs[0].end,1);
+  assert.equal(legs[0].url,'https://map.kakao.com/link/to/'+encodeURIComponent(points[1].customerName)+','+points[1].lat+','+points[1].lng);
+  assert.equal(legs[1].sameCoordinate,false);assert.equal(legs[1].url,lookup.kakaoDestinationLink(points[2],points[1]));
+  const combined=lookup.kakaoRouteLinks(points)[0].url.split('/car/')[1].split('/');assert.equal(combined.length,3);assert(combined[0].startsWith(encodeURIComponent(points[0].customerName)));assert(combined[1].startsWith(encodeURIComponent(points[1].customerName)));
 });
 test('internal max 30 via contract remains separate and disabled routing never reaches provider',async()=>{
   const points=rows(32).map((r,i)=>({id:'p'+i,lat:r.lat,lng:r.lng})),request={mode:'MANUAL_WAYPOINTS',requestId:1,origin:points[0],destination:points.at(-1),waypoints:points.slice(1,-1).map((p,i)=>({...p,order:i+1}))};
