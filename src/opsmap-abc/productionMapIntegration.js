@@ -41,7 +41,7 @@ export function mountProductionMapApi(app,{
   const env=authOptions.env||process.env;
   addressLookupService??=createKakaoCoordinateConnection({env});
   const preparedCustomerDetails=createPreparedCustomerDetailReader({callHub});
-  roadRouteBudget??=createHubRoadBudget({callHub});
+  if(roadRouteBudget===undefined)roadRouteBudget=createHubRoadBudget({callHub}); // Explicit null requires a separately configured backend.
   const privateCacheEnabled=env.OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED==='1';
   const privateDetails=privateCacheEnabled
     ? createPrivateDetailCache({freshMs:60000,maxStaleMs:Math.min(86400000,Math.max(60000,Number(env.OPSMAP_PRIVATE_DETAIL_MAX_AGE_MS)||3600000)),maxEntries:512})

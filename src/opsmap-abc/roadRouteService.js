@@ -33,28 +33,28 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
   const key=()=>String(env.KAKAO_MOBILITY_REST_API_KEY||env.KAKAO_REST_API_KEY||'').trim();
   const ttl=Math.min(300000,Math.max(0,Number(env.OPSMAP_ROAD_ROUTE_CACHE_MS)||60000));
   const remove=k=>{const row=cache.get(k);if(row)bytes-=row.bytes;cache.delete(k);};
-  function configuration(){return {enabled:configured(),keyConfigured:!!key()&&!/REDACTED|PLACEHOLDER|YOUR_|<|>/i.test(key()),maxWaypoints:30,requestLimit:limit,used,remaining:Math.max(0,limit-used),durableBudgetRequired:requireDurableBudget,persistentBudgetConfigured:!!budget&&budget.durable===true&&typeof budget.reserve==='function',budgetScope:budget?'EXTERNAL_APPROVED_BUDGET':'PROCESS_SAFETY_LIMIT_NOT_ACCOUNT_QUOTA'};}
+  function configuration(){return {enabled:configured(),keyConfigured:!!key()&&!/REDACTED|PLACEHOLDER|YOUR_|<|>/i.test(key()),keySource:env.KAKAO_MOBILITY_REST_API_KEY?'KAKAO_MOBILITY_REST_API_KEY':env.KAKAO_REST_API_KEY?'KAKAO_REST_API_KEY':'NONE',maxWaypoints:30,requestLimit:limit,used,remaining:Math.max(0,limit-used),usageScope:'PROCESS_SAFETY_COUNTER_NOT_PROVIDER_QUOTA',durableBudgetRequired:requireDurableBudget,persistentBudgetConfigured:!!budget&&budget.durable===true&&typeof budget.reserve==='function',budgetBackend:budget?.kind|| (budget?'HUB_ACTIONS_UNVERIFIED':'NONE'),budgetScope:budget?'EXTERNAL_APPROVED_BUDGET':'PROCESS_SAFETY_LIMIT_NOT_ACCOUNT_QUOTA'};}
   async function readiness(){
     const config=configuration(),blocked=[];
     if(!config.enabled)blocked.push('FEATURE_DISABLED');
     if(!config.keyConfigured)blocked.push('KEY_MISSING');
     if(config.remaining===0)blocked.push('QUOTA_EXCEEDED');
     if(requireDurableBudget&&!config.persistentBudgetConfigured)blocked.push('PERSISTENT_BUDGET_REQUIRED');
-    let approvedRemaining=null;
+    let approvedRemaining=null,budgetVerified=false,budgetError=null,apiRemaining=null;
     // Configuration inspection is read-only and never reserves or calls Kakao.
-    if(!blocked.length&&budget){
+    if(budget&&(!blocked.length||budget.inspectWhenDisabled===true&&config.persistentBudgetConfigured)){
       if(typeof budget.status!=='function')blocked.push('ROAD_BUDGET_UNVERIFIED');
-      else try{const status=await budget.status();if(status.durable!==true||status.scope!=='CUMULATIVE_APPROVED_ACCOUNT'||!Number.isSafeInteger(status.remaining)||status.remaining<0)throw Error('INVALID_BUDGET');approvedRemaining=status.remaining;if(!approvedRemaining)blocked.push('QUOTA_EXCEEDED');}
-      catch{blocked.push('ROAD_BUDGET_UNVERIFIED');}
+      else try{const status=await budget.status();if(status.durable!==true||status.scope!=='CUMULATIVE_APPROVED_ACCOUNT'||!Number.isSafeInteger(status.remaining)||status.remaining<0)throw Error('INVALID_BUDGET');approvedRemaining=status.remaining;apiRemaining=status.apiRemaining||null;budgetVerified=true;if(!approvedRemaining)blocked.push('QUOTA_EXCEEDED');}
+      catch(e){blocked.push('ROAD_BUDGET_UNVERIFIED');budgetError=/^ROAD_BUDGET_[A-Z_]+$/.test(e?.code||'')?e.code:'ROAD_BUDGET_UNVERIFIED';}
     }
-    return {...config,canRequest:blocked.length===0,blockedReasons:blocked,approvedRemaining};
+    return {...config,canRequest:blocked.length===0,blockedReasons:blocked,approvedRemaining,apiRemaining,budgetVerified,budgetError};
   }
   async function load(clean,plan){
     if(active>=3)throw error('PROVIDER_UNAVAILABLE',503);
     if(used>=limit)throw error('QUOTA_EXCEEDED',429);
     // Reserve the local slot before yielding to an optional shared budget.
     used++;active++;
-    try{if(budget)await budget.reserve({cost:1,provider:'kakao-directions'});}catch(e){used--;active--;throw error(e.code==='QUOTA_EXCEEDED'?'QUOTA_EXCEEDED':'CALL_POLICY_BLOCKED',429);}
+    try{if(budget)await budget.reserve({cost:1,provider:'kakao-directions',api:plan.path==='/v1/waypoints/directions'?'waypoints':'directions'});}catch(e){used--;active--;throw error(e.code==='QUOTA_EXCEEDED'?'QUOTA_EXCEEDED':'CALL_POLICY_BLOCKED',429);}
     const timeout=Math.min(45000,Math.max(1000,Number(env.OPSMAP_ROAD_ROUTE_TIMEOUT_MS)||15000));
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
     try{

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {createRoadRouteService,validRoadRouteRequest} from '../src/opsmap-abc/roadRouteService.js';
+import {productionRoadRouteFlag} from '../src/opsmap-abc/productionRoadBudget.js';
 const context=vm.createContext({});vm.runInContext(fs.readFileSync(new URL('../public/opsmap/navigation-ui.js',import.meta.url),'utf8'),context);
 const lookup=context.MapNavigationLookup;
 const row=i=>({customerCode:'SYNTHETIC_'+i,customerName:'합성 / 매장, '+i,lat:37+i*.001,lng:127+i*.001});
@@ -50,5 +51,5 @@ test('internal max 30 via contract remains separate and disabled routing never r
   let calls=0;const service=createRoadRouteService({env:{OPSMAP_ROAD_ROUTE_ENABLED:'0'},requireDurableBudget:true,fetchImpl:async()=>{calls++;throw Error('UNEXPECTED_NETWORK');}});
   const readiness=await service.readiness();assert.equal(readiness.canRequest,false);assert(readiness.blockedReasons.includes('FEATURE_DISABLED'));assert(readiness.blockedReasons.includes('KEY_MISSING'));assert(readiness.blockedReasons.includes('PERSISTENT_BUDGET_REQUIRED'));
   await assert.rejects(service.route(request),e=>e.code==='FEATURE_DISABLED');assert.equal(calls,0);
-  const production=fs.readFileSync(new URL('../src/productionOpsmapCandidate.js',import.meta.url),'utf8');assert.match(production,/OPSMAP_ROAD_ROUTE_ENABLED:'0'/);
+  const production=fs.readFileSync(new URL('../src/productionOpsmapCandidate.js',import.meta.url),'utf8');assert.match(production,/OPSMAP_ROAD_ROUTE_ENABLED:productionRoadRouteFlag\(env\)/);assert.equal(productionRoadRouteFlag({}), '0');assert.equal(productionRoadRouteFlag({OPSMAP_ROAD_ROUTE_ENABLED:'1'}),'0');
 });
