@@ -904,6 +904,10 @@
     const rect=node=>node?.getClientRects().length&&!node.hidden?node.getBoundingClientRect():null;
     function layout(){
       frame=null;if(disposed)return;
+      // Resize must settle before projecting or adjusting the popup's camera.
+      mapCamera?.relayout?.();
+      const cameraSize=mapCamera?.dimensions?.();
+      if(cameraSize&&(cameraSize.width!==mapNode.clientWidth||cameraSize.height!==mapNode.clientHeight)){schedule();return;}
       const mapRect=mapNode.getBoundingClientRect(),visual=window.visualViewport;
       const viewport={left:visual?.offsetLeft||0,top:visual?.offsetTop||0,width:visual?.width||innerWidth,height:visual?.height||innerHeight};
       const area=window.MapViewPolicy?.cameraFocusViewport({mapRect,viewportRect:viewport,headerRect:rect($('#approvedSiteHeader')),
