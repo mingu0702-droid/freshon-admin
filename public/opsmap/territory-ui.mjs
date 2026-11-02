@@ -56,7 +56,7 @@ async function load(){
  try{
   if(typeof bridge.fixedTerritoryStores!=='function')throw Error('TERRITORY_BINDING_MISSING');
   const current=bridge.fixedTerritoryMasterState?.();
-  if(!current?.version&&typeof bridge.loadBaseVehicleMasterForTerritory==='function'){requests++;await bridge.loadBaseVehicleMasterForTerritory();}
+  if((!current?.version||current.stale===true)&&typeof bridge.loadBaseVehicleMasterForTerritory==='function'){requests++;await bridge.loadBaseVehicleMasterForTerritory();}
   if(id!==epoch||bridge.state.mode!=='BASE_60D')return;
   const plan=queryPlan(),master=bridge.fixedTerritoryMasterState?.();
   if(listeningMap!==bridge.state.map&&bridge.state.map&&typeof kakao!=='undefined'&&kakao.maps?.event?.addListener){listeningMap=bridge.state.map;kakao.maps.event.addListener(listeningMap,'idle',()=>{if(enabled&&bridge.state.mode==='BASE_60D')renderForSelection();});}

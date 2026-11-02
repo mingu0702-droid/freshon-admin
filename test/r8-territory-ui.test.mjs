@@ -3,12 +3,12 @@ import {buildBaseTerritories,baseTerritoryAvailability} from '../public/opsmap/t
 import {boundaries} from './fixtures/admin-boundaries.mjs';
 import {prepareAdminBoundaries,matchingAdminFeatures} from '../public/opsmap/admin-boundaries.mjs';
 const version='a'.repeat(64),rows=(vehicle='101',center='osan')=>[[37.1,127.1],[37.2,127.1],[37.1,127.2]].map(([lat,lng],i)=>({customerCode:'S'+vehicle+i,baseVehicle:vehicle,baseVehicleGroup:center,baseVehicleState:'VERIFIED_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:version,baseVehicleStale:false,lat,lng}));
-function fixture({stores=rows(),stale=false,fail=null,boundaryFailure=null,geometryFailure=null,boundaryPayload=boundaries,box=null}={}){
+function fixture({stores=rows(),stale=false,fail=null,boundaryFailure=null,geometryFailure=null,boundaryPayload=boundaries,box=null,refreshMaster=null}={}){
  const nodes=new Map(),polys=[],events=new Map(),queries=[];let reads=0;
  class Element{constructor(){this.children=[];this.attrs={};this.dataset={};this.hidden=false;this.parentElement=this;this.textContent='';}set id(v){this._id=v;nodes.set('#'+v,this);}get id(){return this._id;}append(e){this.children.push(e);}after(e){this.parentElement.append(e);}replaceChildren(){this.children=[];}setAttribute(k,v){this.attrs[k]=v;}}
  for(const id of ['areaToggle','mobileAreaToggle','periodFilterPanel','territoryVehicles']){const e=new Element();e.id=id;}
  const master={version,stale,checkedAt:'2026-09-24T00:00:00Z'},state={mode:'BASE_60D',selectedVehicles:[],centerFilter:'',map:{getBounds:()=>box?{getSouthWest:()=>({getLng:()=>box[0],getLat:()=>box[1]}),getNorthEast:()=>({getLng:()=>box[2],getLat:()=>box[3]})}:null},areaOn:false};
- const bridge={state,fixedTerritoryStores:()=>stores,fixedTerritoryMasterState:()=>master,loadBaseVehicleMasterForTerritory:async()=>{reads++;if(fail)throw Object.assign(Error(),{status:fail});}};
+ const bridge={state,fixedTerritoryStores:()=>stores,fixedTerritoryMasterState:()=>master,loadBaseVehicleMasterForTerritory:async()=>{reads++;if(fail)throw Object.assign(Error(),{status:fail});await refreshMaster?.(master,stores);}};
  const window={MapUiLocalBridge:bridge,Phase2bUi:{vehicleColor:v=>'color-'+v},addEventListener:(n,fn)=>events.set(n,fn),removeEventListener(){}};
  const kakao={maps:{LatLng:function(lat,lng){this.lat=lat;this.lng=lng;},Polygon:class{constructor(options){this.options=options;polys.push(this);}setMap(map){this.map=map;}}}};
  const document={querySelector:s=>nodes.get(s)||null,createElement:()=>new Element()};
@@ -16,7 +16,27 @@ function fixture({stores=rows(),stale=false,fail=null,boundaryFailure=null,geome
  return {nodes,polys,state,master,events,stores,queries,setBox:value=>{box=value;},ui:window.MapTerritoryUi,reads:()=>reads};
 }
 test('stale master cannot draw current polygons and the missing HTML status is visibly created',async()=>{
- const f=fixture({stale:true});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'MASTER_STALE');assert.equal(f.reads(),0);assert.equal(f.nodes.get('#territoryStatus').hidden,false);assert.match(f.nodes.get('#territoryStatus').textContent,/2026-09-24/);assert.match(f.nodes.get('#territoryStatus').textContent,/이전 확인값/);assert.equal(f.ui.state().vehicles[0].reason,'MASTER_STALE');
+ const f=fixture({stale:true});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'MASTER_STALE');assert.equal(f.reads(),1);assert.equal(f.nodes.get('#territoryStatus').hidden,false);assert.match(f.nodes.get('#territoryStatus').textContent,/2026-09-24/);assert.match(f.nodes.get('#territoryStatus').textContent,/이전 확인값/);assert.equal(f.ui.state().vehicles[0].reason,'MASTER_STALE');
+});
+
+test('an existing stale version reuses the master loader once and draws only after it confirms freshness',async()=>{
+ const f=fixture({stale:true,refreshMaster:master=>{assert.equal(master.version,version);master.stale=false;master.checkedAt='2026-11-03T00:00:00Z';}});
+ await f.ui.toggle();assert.equal(f.reads(),1);assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().reason,null);assert.equal(f.ui.state().checkedAt,'2026-11-03');await f.ui.renderForSelection();assert.equal(f.reads(),1);
+});
+
+test('manual refresh retries an existing stale version once without automatic repeated master reads',async()=>{
+ let attempt=0;const f=fixture({stale:true,refreshMaster:master=>{if(++attempt===2)master.stale=false;}});
+ await f.ui.toggle();assert.equal(f.reads(),1);assert.equal(f.ui.state().reason,'MASTER_STALE');await f.ui.renderForSelection();assert.equal(f.reads(),1);
+ await f.ui.refresh();assert.equal(f.reads(),2);assert.equal(f.ui.state().reason,null);assert.equal(f.ui.state().polygons,1);await f.ui.renderForSelection();assert.equal(f.reads(),2);
+});
+
+test('overlapping stale refreshes share the active UI load and remain unconfirmed if the cache is still stale',async()=>{
+ let finish;const f=fixture({stale:true,refreshMaster:()=>new Promise(resolve=>{finish=resolve;})});const pending=f.ui.toggle();
+ await f.ui.refresh();assert.equal(f.reads(),1);assert.equal(f.ui.state().polygons,0);finish();await pending;assert.equal(f.reads(),1);assert.equal(f.ui.state().reason,'MASTER_STALE');assert.equal(f.ui.state().vehicles[0].reason,'MASTER_STALE');await f.ui.renderForSelection();assert.equal(f.reads(),1);
+});
+
+test('a missing master version still uses the existing loader once',async()=>{
+ const f=fixture({refreshMaster:master=>{master.version=version;}});f.master.version=null;await f.ui.toggle();assert.equal(f.reads(),1);assert.equal(f.ui.state().polygons,1);
 });
 test('fresh verified master creates exact vehicle polygons; OFF removes only those polygons',async()=>{
  const f=fixture();await f.ui.toggle();assert.equal(f.ui.state().polygons,1);assert.equal(f.reads(),0);assert.equal(f.polys[0].options.strokeColor,'color-101');const map=f.state.map;await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.polys[0].map,null);assert.equal(f.state.map,map);
@@ -31,7 +51,7 @@ test('version or staleness change invalidates existing polygons immediately',asy
  const f=fixture();await f.ui.toggle();f.master.version='b'.repeat(64);await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'MASTER_VERSION_CHANGED');
 });
 test('source auth denial remains distinct from insufficient locations and cannot draw',async()=>{
- const f=fixture({stale:true,fail:403});f.master.version=null;await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'SOURCE_AUTH_REQUIRED');assert.match(f.nodes.get('#territoryStatus').textContent,/권한/);
+ const f=fixture({stale:true,fail:403});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'SOURCE_AUTH_REQUIRED');assert.equal(f.reads(),1);assert.match(f.nodes.get('#territoryStatus').textContent,/권한/);
 });
 test('same selection render reuses polygons and mode switch removes polygons only',async()=>{
  const f=fixture();await f.ui.toggle();const n=f.polys.length;await f.ui.renderForSelection();assert.equal(f.polys.length,n);f.state.mode='DATE_ROUTE';await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,0);assert.equal(f.state.map!==null,true);
@@ -42,7 +62,7 @@ test('missing centers and conflicting GPS remain unconfirmed',()=>{
 
 // Resume-only boundaries: new source availability must not require another remote read.
 test('fresh source arriving after stale rejection builds boundaries on the next render without refetch',async()=>{
- const f=fixture({stale:true});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);f.master.stale=false;await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().reason,null);assert.equal(f.reads(),0);
+ const f=fixture({stale:true});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);f.master.stale=false;await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().reason,null);assert.equal(f.reads(),1);
 });
 test('manual coordinate event rebuilds only territory geometry while preserving the map and pin owner',async()=>{
  const f=fixture();await f.ui.toggle();const previous=f.polys[0],map=f.state.map;f.stores[0].lat=37.05;await f.events.get('map-coordinate-updated')();assert.equal(previous.map,null);assert.equal(f.ui.state().polygons,1);assert.equal(f.state.map,map);assert.equal(f.polys.at(-1).options.path[0][0].lat,37);assert.equal(f.polys.at(-1).options.path[0][0].lng,127);assert.equal(f.reads(),0);
