@@ -14,21 +14,22 @@
     if(busy||!window.MapStaffEntry?.session())return;const owner=generation;busy=true;button.disabled=true;
     try{
       const [r,s]=await Promise.all([fetch('/api/map-phase2b/preview/data-status',{cache:'no-store'}),fetch('/api/map-phase2b/preview/status?metadataOnly=1',{cache:'no-store'})]);
-      if(!r.ok)throw new Error('STATUS');const d=(await r.json()).data,statusData=s.ok?await s.json():null,snap=statusData?.snapshot||statusData&&{latest:statusData.latestDate,stale:statusData.stale};
+      if(!r.ok)throw new Error('STATUS');const d=(await r.json()).data,statusData=s.ok?await s.json():null,snap=statusData?.snapshot||statusData&&{latest:statusData.latestDate,stale:statusData.stale,selectedDateCheckpoint:statusData.selectedDateCheckpoint},live=d.live||{ready:false,generation:null,periodLatest:null};
       if(owner!==generation||!window.MapStaffEntry?.session())return;
-      detailAction.disabled=['BUILD','VERIFY','HELD'].includes(d.customerDetails?.phase);
+      detailAction.disabled=d.partial===true||['BUILD','VERIFY','HELD'].includes(d.customerDetails?.phase);
       const target=d.customer.freshon&&d.customer.delivery?[d.customer.freshon,d.customer.delivery].sort()[0]:null,job=d.job;
       const active=job&&(job.publication==='PENDING'||!['DONE','ERROR','UP_TO_DATE'].includes(job.phase));
-      status.textContent='Customer Freshon '+(d.customer.freshon||'미확인')+' / Delivery '+(d.customer.delivery||'미확인')
-        +' · 게시모델 '+(d.published.endDate||'미확인')+' · 현재 지도 '+(d.live.periodLatest||'준비 중')
+      status.textContent=(d.partial===true?'일부 상태 미확인 · ':'')+'Customer Freshon '+(d.customer.freshon||'미확인')+' / Delivery '+(d.customer.delivery||'미확인')
+        +' · 게시모델 '+(d.published.endDate||'미확인')+' · 현재 지도 '+(live.periodLatest||'준비 중')
         +' · Snapshot '+(snap?.latest||'미확인')+(snap?.stale?' (stale)':'')
-        +(d.automation?.configured?' · 자동 최신화 '+d.automation.status+' · 마지막 자동 게시 성공 '+(d.automation.lastSuccess||'아직 확인 안 됨')+(d.automation.lastError?' · '+d.automation.lastError:''):' · 자동 최신화 미설정')+' · 화면 확인 '+new Date().toLocaleTimeString('ko-KR')
+        +(snap?.selectedDateCheckpoint?.selectedDateStorageVerified===true?' · 당일 저장 확인 '+snap.selectedDateCheckpoint.date+' / '+snap.selectedDateCheckpoint.sourceVisitCount+'건':'')
+        +(d.automation?.configured===true?' · 자동 최신화 '+d.automation.status+' · 마지막 자동 게시 성공 '+(d.automation.lastSuccess||'아직 확인 안 됨')+(d.automation.lastError?' · '+d.automation.lastError:''):d.automation?.configured===false?' · 자동 최신화 미설정':' · 자동 최신화 상태 미확인')+' · 화면 확인 '+new Date().toLocaleTimeString('ko-KR')
         +(d.customerDetails?' · 출입정보 '+(d.customerDetails.prepared?'저장본 있음':'최초 준비 필요')+' / '+d.customerDetails.phase+(d.customerDetails.automatic?'':' · 자동 갱신 미설정'):' · 출입정보 저장 상태 미확인')
         +(job?' · 작업 '+job.phase+(job.publication==='PENDING'?' (게시 포인터 확인 중)':'')+' '+(job.sendAt||0)+'/'+(job.shards||0)+(job.lastError?' · '+job.lastError:''):'');
-      action.disabled=!target||!d.live.ready||target<=d.published.endDate||active||job?.phase==='ERROR'||job?.publication==='ERROR';
-      action.textContent=!d.live.ready?'지도 복원 중 · 동기화 대기':active?'동기화 진행 중':job?.phase==='ERROR'||job?.publication==='ERROR'?'이전 작업 실패 · 관리자 확인 필요':!target?'수집 완료일 확인 필요':target<=d.published.endDate?'저장분이 이미 반영되어 있습니다':'관리자 로그인 필요 · 저장분 증분 요청';
+      action.disabled=d.partial===true||!target||!live.ready||target<=d.published.endDate||active||job?.phase==='ERROR'||job?.publication==='ERROR';
+      action.textContent=d.partial===true?'일부 상태 미확인 · 관리자 확인 필요':!live.ready?'지도 복원 중 · 동기화 대기':active?'동기화 진행 중':job?.phase==='ERROR'||job?.publication==='ERROR'?'이전 작업 실패 · 관리자 확인 필요':!target?'수집 완료일 확인 필요':target<=d.published.endDate?'저장분이 이미 반영되어 있습니다':'관리자 로그인 필요 · 저장분 증분 요청';
       if(!active)submitted=false;
-      if(last!==d.live.generation&&d.live.ready){const old=last;last=d.live.generation;if(old!==null)await api.onPublished?.(d.live);}
+      if(last!==live.generation&&live.ready){const old=last;last=live.generation;if(old!==null)await api.onPublished?.(live);}
       // Staff idle deadlines are not extended by automatic background polling.
       return d;
     }catch{if(owner===generation&&window.MapStaffEntry?.session()){status.textContent='최신화 상태 확인 실패 · 기존 지도 유지 · 다시 버튼을 눌러 확인해 주세요.';action.disabled=true;action.textContent='상태 확인 후 관리자 요청 가능';}}
