@@ -1,6 +1,7 @@
 // Reuses the existing private Github Contents SHA CAS. No Customer/Delivery writes.
 import crypto from 'node:crypto';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
+import {buildSelectedDateCheckpoint,validateSelectedDateCheckpoint,selectedDateCheckpointEnvelope,validateSelectedDateCheckpointEnvelope} from './snapshotSelectedDateCheckpoint.js';
 const fail=code=>{throw Object.assign(Error(code),{code});};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const day=value=>{const s=typeof value==='string'?value.slice(0,10):'';return /^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s?s:null;};
@@ -82,9 +83,10 @@ export function mergePreservedSnapshot(previous,incoming,{now=Date.now}={}){
  const body={...fresh,latestDate,startDate:[previous.startDate,fresh.startDate].filter(Boolean).sort()[0]||null,checkpointDate,sourceEvidence:{...evidence,checkedThrough:checkpointDate},rowCount:rows.length,rows};delete body.sha256;
  return {...body,sha256:hash(body)};
 }
-export function materializeSnapshot(value){
+export function materializeSnapshot(value,{selectedDateCheckpoint=null}={}){
  validateSnapshotProjection(value);
- return {version:'phase2b-map-snapshot-v1',generatedAt:value.observedAt,latestDate:value.latestDate,startDate:value.startDate,rowCount:value.rowCount,rows:structuredClone(value.rows),refreshedThrough:value.checkpointDate,refreshComplete:false,sourceFreshness:{...value.sourceEvidence,checkedThrough:value.checkpointDate,automaticSyncVerified:false,preservationOnly:true},preservation:{version:value.sha256,revision:value.revision,source:'PRIVATE_GITHUB_CAS',scope:value.scope}};
+ if(selectedDateCheckpoint)validateSelectedDateCheckpoint(selectedDateCheckpoint,{snapshot:value});
+ return {version:'phase2b-map-snapshot-v1',generatedAt:value.observedAt,latestDate:value.latestDate,startDate:value.startDate,rowCount:value.rowCount,rows:structuredClone(value.rows),refreshedThrough:value.checkpointDate,refreshComplete:false,sourceFreshness:{...value.sourceEvidence,checkedThrough:value.checkpointDate,automaticSyncVerified:false,preservationOnly:true},preservation:{version:value.sha256,revision:value.revision,source:'PRIVATE_GITHUB_CAS',scope:value.scope},...(selectedDateCheckpoint?{selectedDateCheckpoint}:{} )};
 }
 export function createProductionSnapshotStore({env=process.env,token=env.OPSMAP_SNAPSHOT_STORE_TOKEN,fetchImpl=fetch,now=Date.now}={}){
  if(env.OPSMAP_SNAPSHOT_STORE_ENABLED!=='1')return undefined;
@@ -103,9 +105,28 @@ export function createProductionSnapshotStore({env=process.env,token=env.OPSMAP_
  const prefix=production?'opsmap-production':'opsmap-stage';
  const adapter=createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_TOKEN:token,GITHUB_CACHE_BRANCH:branch,GITHUB_CACHE_DIR:prefix},fetchImpl,now}),file='map-snapshot-v1.json';
  let saving=Promise.resolve(),lastSaveState='IDLE';
+ const dateCheckpointFile='map-date-checkpoint-v1.json';
  const content=value=>{const {revision,observedAt,sha256,...body}=value;return JSON.stringify(body);};
  async function read({allowPrevious=false}={}){const result=await adapter.read(file);if(result.value===null)return {...result,state:{schema:1,current:null,previous:null}};const state=result.value;if(state.schema!==1||Object.keys(state).join('|')!=='schema|current|previous')fail('SNAPSHOT_STORE_FORMAT');if(state.previous)validateSnapshotProjection(state.previous);if(state.current){try{validateSnapshotProjection(state.current);}catch(error){if(!allowPrevious||!state.previous)throw error;return {...result,state:{...state,current:state.previous},recoveredPrevious:true};}}return {...result,state};}
- return {kind:'PRIVATE_GITHUB_CAS',status:()=>({lastSaveState}),async load(){const {state}=await read({allowPrevious:true});return state.current;},async save(input){
+ return {kind:'PRIVATE_GITHUB_CAS',status:()=>({lastSaveState}),async load(){const {state}=await read({allowPrevious:true});return state.current;},
+  async loadSelectedDateCheckpoint(snapshot){
+   validateSnapshotProjection(snapshot);const result=await adapter.read(dateCheckpointFile);if(result.value===null)return null;
+   const state=validateSelectedDateCheckpointEnvelope(result.value);
+   for(const value of [state.current,state.previous])if(value&&value.snapshotSha256===snapshot.sha256&&value.snapshotRevision===snapshot.revision)return validateSelectedDateCheckpoint(value,{snapshot});
+   return null;
+  },
+  async recordSelectedDateCheckpoint(live,snapshot){
+   const work=saving.catch(()=>{}).then(async()=>{
+    validateSnapshotProjection(snapshot);const stored=await read();if(stored.state.current?.sha256!==snapshot.sha256)fail('SNAPSHOT_DATE_CHECKPOINT_SUPERSEDED');
+    const old=await adapter.read(dateCheckpointFile),previous=old.value?validateSelectedDateCheckpointEnvelope(old.value).current:null;
+    const checkpoint=buildSelectedDateCheckpoint(live,stored.state.current,{checkedAt:new Date(now()).toISOString(),previous});
+    if(checkpoint===previous)return checkpoint;
+    const state=selectedDateCheckpointEnvelope(checkpoint,previous);await adapter.write(dateCheckpointFile,state,old.sha);
+    const saved=await adapter.read(dateCheckpointFile);if(validateSelectedDateCheckpointEnvelope(saved.value).sha256!==state.sha256)fail('SNAPSHOT_DATE_CHECKPOINT_READBACK');
+    const latest=await read();if(latest.state.current?.sha256!==snapshot.sha256)fail('SNAPSHOT_DATE_CHECKPOINT_SUPERSEDED');
+    return checkpoint;
+   });saving=work;return work;
+  },async save(input){
   const work=saving.catch(()=>{}).then(async()=>{lastSaveState='PENDING';const old=await read(),current=mergePreservedSnapshot(old.state.current,input,{now});
    // Projection NOOP never certifies unchanged Customer data or synchronization.
    if(old.state.current&&content(old.state.current)===content(current)){lastSaveState='PROJECTION_NOOP';return old.state.current;}
