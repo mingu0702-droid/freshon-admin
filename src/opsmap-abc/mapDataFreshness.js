@@ -42,6 +42,7 @@ export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicl
         } catch(error) {
           const allowed=['auth','parse','contract','upstream','network','output'];
           sources.push({action,state:'UNKNOWN',durationMs:Date.now()-started,
+            errorCode:typeof error?.message==='string'&&/^HUB_[A-Z0-9_]{1,80}$/.test(error.message)?error.message:'UNKNOWN',
             failureType:error?.name==='AbortError'?'timeout':allowed.includes(error?.failureType)?error.failureType:'unknown',
             upstreamStatus:[400,401,403,404,408,409,413,429,500,502,503,504].includes(error?.upstreamStatus)?error.upstreamStatus:null});
           throw error;
