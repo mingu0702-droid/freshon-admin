@@ -2373,6 +2373,7 @@
         $('#manualLat').focus();
         return;
       }
+      $('#mapBatchDialog')?.close();
       showVirtual({ ...row, customerName: row.customer || "신규 주소", customerCode: "", virtual: true });
       showNearbyReference(state.virtual);
       if (state.map) state.map.panTo(new kakao.maps.LatLng(row.lat, row.lng));
