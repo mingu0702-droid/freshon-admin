@@ -1,3 +1,4 @@
+import {mountOfficialAdminBoundaries} from './officialAdminBoundaries.js';
 // Production integration of the verified Stage lookup/auth routes only.
 // Existing collector, Snapshot worker, ETA, route planner and data sources stay in server.js.
 import express from 'express';
@@ -57,6 +58,7 @@ export function mountProductionMapApi(app,{
   app.use('/api/map-phase2b/auth',securityAudit,mapStaff.router);
   mountMapStaffEntryGate(app,mapStaff.requireStaff);
   app.use('/api/map-phase2b/private',mapStaff.requireStaff);
+  mountOfficialAdminBoundaries({app,requireStaff:mapStaff.requireStaff});
   mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
   app.get('/api/map-phase2b/private/map-sdk-config',(req,res)=>{
     const javascriptKey=String(env.KAKAO_MAP_JAVASCRIPT_KEY||'').trim();
