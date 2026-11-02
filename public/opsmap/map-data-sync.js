@@ -1,5 +1,28 @@
-/* Read-only freshness is public. Candidate mutation requires the existing admin token. */
+/* Metadata presentation only; a timestamp does not prove period completeness. */
+((root)=>{
+ const date=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value?value:null;
+ const stamp=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?value:null;
+ root.MapFreshnessSummary=Object.freeze({summarize(data,snapshot,{now=Date.now(),failed=false}={}){
+  const d=data||{},s=snapshot?.snapshot||snapshot||{},cp=s.selectedDateCheckpoint||{},publication=d.publicationConnection;
+  const today=new Date(now+9*3600000).toISOString().slice(0,10);
+  const start=date(s.startDate),end=date(s.latestDate||s.latest);
+  const selectedStored=cp.sourceReadComplete===true&&cp.sourceDateVerified===true&&cp.selectedDateStorageVerified===true&&date(cp.date)===today;
+  const publicationVerified=publication?.servingGenerationMatch===true&&publication.rollingRootVerified===true&&publication.sourceBoundCompletionVerified===true&&publication.privateSealedBindingVerified===true&&date(d.published?.endDate)===today;
+  const phase=d.job?.phase,active=!!phase&&!['DONE','ERROR','UP_TO_DATE','NOOP','HELD','NOT_STARTED'].includes(phase)||d.job?.publication==='PENDING';
+  const incomplete=s.sourceCompletenessVerified!==true||cp.historicalCompletenessVerified!==true||d.partial===true;
+  const state=failed?'QUERY_FAILED':active?'UPDATING':selectedStored?'TODAY_STORED':publicationVerified?'PUBLISHED_VERIFIED':'INCOMPLETE';
+  const label={QUERY_FAILED:'조회 실패',UPDATING:'갱신 중',TODAY_STORED:'당일 저장 확인',PUBLISHED_VERIFIED:'최신 게시 확인',INCOMPLETE:'일부 기간 검증 미완료'}[state];
+  const sync=selectedStored?stamp(cp.checkedAt)||stamp(cp.sourceObservedAt):publicationVerified?stamp(d.automation?.lastSuccess):null;
+  const clock=sync?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(sync)):'미확인';
+  const range=start&&end?start.replaceAll('-','.')+' ~ '+end.replaceAll('-','.'):'기간 확인 중';
+  return {state,startDate:start,endDate:end,lastSync:sync,partial:incomplete,selectedDateStored:selectedStored,publicationVerified,
+   text:'매장자료 '+range+' · 마지막 동기화 '+clock+' · '+label+(incomplete&&['TODAY_STORED','PUBLISHED_VERIFIED'].includes(state)?' · 일부 기간 검증 미완료':''),
+   title:'저장된 관측자료의 범위입니다. 당일 저장 확인과 과거 전체 기간 완료는 별도로 검증합니다.'};
+ }});
+})(typeof window==='object'?window:globalThis);
+/* Read-only status and the existing explicitly authenticated administrator action. */
 (() => {
+  if(typeof document==='undefined')return;
   const button=document.createElement('button');button.id='mapDataSync';button.textContent='지도 데이터 동기화';
   document.querySelector('#mapDateBar').append(button);
   const panel=document.createElement('details');panel.id='mapDataHealth';panel.className='block';
@@ -8,14 +31,38 @@
   const action=document.createElement('button');action.textContent='관리자 로그인 필요 · 저장분 증분 요청';action.disabled=true;panel.append(action);
   const detailAction=document.createElement('button');detailAction.textContent='Customer 상세정보 저장자료 갱신 요청';detailAction.disabled=true;panel.append(detailAction);
   document.querySelector('#leftPanel .head').after(panel);
-  let busy=false,last=null,poll=null,pollCount=0,dialogOpen=false,submitted=false,generation=0;
+  const strip=document.createElement('button');strip.id='mapFreshnessStatus';strip.className='mapFreshnessStrip';strip.type='button';strip.textContent='매장자료 확인 중';strip.setAttribute('aria-label','지도 데이터 최신화 상태 및 상세 안내');
+  const style=document.createElement('style');style.id='r11FreshnessStyle';style.textContent=`
+   #approvedSiteHeader{height:auto!important;flex-wrap:wrap!important;row-gap:2px!important;padding-top:8px!important;padding-bottom:5px!important}
+   .mapFreshnessStrip{display:block;flex:0 0 100%;order:10;width:100%;min-width:0;max-width:100%;border:0;border-radius:0;background:transparent!important;padding:2px 0 0;text-align:right;color:#68768c;font-size:11px;line-height:1.45;white-space:normal;overflow-wrap:anywhere;font-weight:400}
+   .mapFreshnessStrip[data-state="QUERY_FAILED"]{color:#a64a32}.mapFreshnessStrip[data-state="TODAY_STORED"],.mapFreshnessStrip[data-state="PUBLISHED_VERIFIED"]{color:#386c58}
+   #dotDataStatus{display:none!important}
+   @media(min-width:901px){.dotRestored .workspace{height:calc(100dvh - var(--r11-header-height,96px))}}
+   @media(max-width:900px){.mapFreshnessStrip{text-align:left;font-size:10px}}
+  `;
+  let headerObserver=null,headerResize=null,headerHeight=0;
+  function attachSummary(){
+   const header=document.querySelector('#approvedSiteHeader');
+   if(!header){if(!strip.isConnected)document.querySelector('#mapDateBar').prepend(strip);return;}
+   if(strip.parentElement!==header)header.append(strip);
+   if(!style.isConnected)document.head.append(style);if(style.sheet)style.sheet.disabled=false;
+   headerObserver?.disconnect();
+   const resize=()=>{const value=Math.ceil(header.getBoundingClientRect().height);if(value&&value!==headerHeight){headerHeight=value;document.documentElement.style.setProperty('--r11-header-height',value+'px');window.MapUiLocalBridge?.relayoutPreservingView?.();}};
+   if(!headerResize&&typeof ResizeObserver==='function'){headerResize=new ResizeObserver(resize);headerResize.observe(header);}resize();
+  }
+  attachSummary();if(!document.querySelector('#approvedSiteHeader')){headerObserver=new MutationObserver(attachSummary);headerObserver.observe(document.body,{childList:true,subtree:true});}
+  const showDetails=()=>{const help=document.querySelector('.dataHelp');if(help)help.open=true;panel.open=true;void refresh();};strip.onclick=showDetails;
+  function renderSummary(d,snapshot,failed=false){const value=MapFreshnessSummary.summarize(d,snapshot,{failed});strip.textContent=value.text;strip.title=value.title;strip.dataset.state=value.state;strip.dataset.partial=String(value.partial);api.summary=value;}
+  let busy=false,last=null,poll=null,pollCount=0,dialogOpen=false,submitted=false,generation=0,lastMetadata=null;
   const api=window.MapDataSync={onPublished:null};
   async function refresh(){
     if(busy||!window.MapStaffEntry?.session())return;const owner=generation;busy=true;button.disabled=true;
     try{
       const [r,s]=await Promise.all([fetch('/api/map-phase2b/preview/data-status',{cache:'no-store'}),fetch('/api/map-phase2b/preview/status?metadataOnly=1',{cache:'no-store'})]);
-      if(!r.ok)throw new Error('STATUS');const d=(await r.json()).data,statusData=s.ok?await s.json():null,snap=statusData?.snapshot||statusData&&{latest:statusData.latestDate,stale:statusData.stale,selectedDateCheckpoint:statusData.selectedDateCheckpoint},live=d.live||{ready:false,generation:null,periodLatest:null};
+      const statusData=s.ok?await s.json():null;if(statusData)lastMetadata=statusData;
+      if(!r.ok)throw new Error('STATUS');const d=(await r.json()).data,snap=statusData?.snapshot||statusData&&{latest:statusData.latestDate,stale:statusData.stale,selectedDateCheckpoint:statusData.selectedDateCheckpoint},live=d.live||{ready:false,generation:null,periodLatest:null};
       if(owner!==generation||!window.MapStaffEntry?.session())return;
+      renderSummary(d,statusData,!s.ok);
       detailAction.disabled=d.partial===true||['BUILD','VERIFY','HELD'].includes(d.customerDetails?.phase);
       const target=d.customer.freshon&&d.customer.delivery?[d.customer.freshon,d.customer.delivery].sort()[0]:null,job=d.job;
       const active=job&&(job.publication==='PENDING'||!['DONE','ERROR','UP_TO_DATE'].includes(job.phase));
@@ -32,7 +79,7 @@
       if(last!==live.generation&&live.ready){const old=last;last=live.generation;if(old!==null)await api.onPublished?.(live);}
       // Staff idle deadlines are not extended by automatic background polling.
       return d;
-    }catch{if(owner===generation&&window.MapStaffEntry?.session()){status.textContent='최신화 상태 확인 실패 · 기존 지도 유지 · 다시 버튼을 눌러 확인해 주세요.';action.disabled=true;action.textContent='상태 확인 후 관리자 요청 가능';}}
+    }catch{if(owner===generation&&window.MapStaffEntry?.session()){renderSummary(null,lastMetadata,true);status.textContent='최신화 상태 확인 실패 · 기존 지도 유지 · 다시 버튼을 눌러 확인해 주세요.';action.disabled=true;action.textContent='상태 확인 후 관리자 요청 가능';}}
     finally{busy=false;button.disabled=false;}
   }
   button.onclick=()=>{document.querySelector('#mapDateBar').append(panel);panel.open=true;void refresh();};
@@ -57,7 +104,7 @@
       finally{token='';input.value='';submit.disabled=false;}
     };dialog.showModal();
   };
-  window.addEventListener('map-staff-signed-out',()=>{generation++;clearTimeout(poll);status.textContent='직원 로그인 필요';action.disabled=true;detailAction.disabled=true;});
+  window.addEventListener('map-staff-signed-out',()=>{generation++;clearTimeout(poll);strip.textContent='직원 로그인 필요';delete strip.dataset.state;status.textContent='직원 로그인 필요';action.disabled=true;detailAction.disabled=true;});
   window.addEventListener('map-staff-authenticated',()=>void refresh());
   void refresh();
 })();
