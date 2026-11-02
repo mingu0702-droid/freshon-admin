@@ -1,3 +1,4 @@
+import {mountProductionPhotoBinding} from './opsmapProductionPhotos.js';
 import {mountOfficialAdminBoundaries} from './officialAdminBoundaries.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import fsSync from 'node:fs';
@@ -61,7 +62,7 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
   mountPrivateCustomerSearch({app:router,requireStaff:binding.requireStaff,readSnapshot:readers.readPhase2bSnapshot,searchMaster:env.OPSMAP_PRIVATE_READER_ENABLED==='true'?(q,options)=>protectedHubRead('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536}):null});
   router.get('/api/map-phase2b/preview/route-plan',binding.requireStaff,async(q,r)=>{const date=readers.normalizeDateValue(q.query.date),vehicle=String(q.query.vehicle||'');if(!date||!vehicle||vehicle.length>40)return r.status(400).json({error:'INVALID_ROUTE'});try{const payload=await (readers.readStoredRoute?readers.readStoredRoute(date,vehicle):readers.callHub?.('routePlan',{date,vehicle}));if(!payload)return r.status(503).json({error:'ROUTE_SOURCE_NOT_CONFIGURED'});return binding.requireStaff(q,r,()=>r.json(redactPublicData(payload)));}catch{return r.status(503).json({error:'ROUTE_SOURCE_UNAVAILABLE'});}});
 
-  router.use('/api/map-phase2b/private/delivery-photos',binding.requireStaff,(_q,r)=>r.status(503).json({ok:false,error:'PHOTO_SOURCE_DISABLED'}));
+  mountProductionPhotoBinding({...binding,env,rawRequest:readers.photoRawRequest,hasMemorySession:readers.photoHasMemorySession,reserveRead:readers.reservePhotoRead});
   router.get('/admin-features.js',binding.requireStaff,(_q,r)=>r.type('js').set('Cache-Control','private,no-store').send('window.ADMIN_FEATURES=[];window.OPSMAP_OPTIONAL_FEATURE_STATUS={state:"DISABLED",reason:"NOT_CONFIGURED"};'));
   router.get('/vehicle-data.js',binding.requireStaff,async(_q,r)=>{try{const text=await fs.readFile(path.join(publicDir,'vehicle-data.js'),'utf8'),match=text.match(/^\s*window\.[A-Z_]+\s*=\s*([\s\S]*?);?\s*$/);if(!match)throw Error();r.type('js').set('Cache-Control','private,no-store').send('window.VEHICLE_AREA_DATA='+JSON.stringify(redactPublicData(JSON.parse(match[1])))+';');}catch{r.status(503).json({error:'REFERENCE_DATA_UNAVAILABLE'});}});
  }});
