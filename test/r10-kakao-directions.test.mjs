@@ -26,6 +26,16 @@ test('any missing/conflicting/unlocated point blocks the complete external route
   for(const invalid of [null,{...row(4),lat:NaN},{...row(4),coordinateStatus:'CONFLICT'},{...row(4),lng:140}]){const points=rows(14);points[8]=invalid;assert.throws(()=>lookup.kakaoRouteLinks(points));}
   assert.throws(()=>lookup.kakaoRouteLinks(rows(33)));assert.throws(()=>lookup.kakaoRouteLinks(rows(1)));assert.throws(()=>lookup.kakaoDestinationLink({...row(1),coordinateStatus:'CONFLICT'}));
 });
+test('adjacent fallback preserves every ordered pair with official from/to links through thirty via points',()=>{
+  for(const size of [2,3,7,8,32]){
+    const points=rows(size),legs=lookup.kakaoLegLinks(points);assert.equal(legs.length,size-1);
+    for(let i=0;i<legs.length;i++){
+      assert.equal(legs[i].start,i);assert.equal(legs[i].end,i+1);
+      assert.equal(legs[i].url,'https://map.kakao.com/link/from/'+encodeURIComponent(points[i].customerName)+','+points[i].lat+','+points[i].lng+'/to/'+encodeURIComponent(points[i+1].customerName)+','+points[i+1].lat+','+points[i+1].lng);
+    }
+  }
+  const invalid=rows(32);invalid[20]={...invalid[20],coordinateStatus:'CONFLICT'};assert.throws(()=>lookup.kakaoLegLinks(invalid));assert.throws(()=>lookup.kakaoLegLinks(rows(33)));
+});
 test('internal max 30 via contract remains separate and disabled routing never reaches provider',async()=>{
   const points=rows(32).map((r,i)=>({id:'p'+i,lat:r.lat,lng:r.lng})),request={mode:'MANUAL_WAYPOINTS',requestId:1,origin:points[0],destination:points.at(-1),waypoints:points.slice(1,-1).map((p,i)=>({...p,order:i+1}))};
   assert.equal(validRoadRouteRequest(request).waypoints.length,30);

@@ -82,7 +82,11 @@
     }
     return segments;
   }
-  root.MapNavigationLookup=Object.freeze({normalize,located,unique,resolve,search,visitCodes,createTemporaryPlaces,kakaoDestinationLink,kakaoRouteLinks});
+  function kakaoLegLinks(rows){
+    kakaoRouteLinks(rows); // Validate the complete route before making any fallback link.
+    return rows.slice(0,-1).map((origin,start)=>({start,end:start+1,url:kakaoDestinationLink(rows[start+1],origin)}));
+  }
+  root.MapNavigationLookup=Object.freeze({normalize,located,unique,resolve,search,visitCodes,createTemporaryPlaces,kakaoDestinationLink,kakaoRouteLinks,kakaoLegLinks});
 })(typeof window==='object'?window:globalThis);
 
 (()=>{
@@ -103,7 +107,7 @@
   const selectedKakao=document.createElement('a');selectedKakao.id='navSelectedKakao';selectedKakao.target='_blank';selectedKakao.rel='noopener noreferrer';selectedKakao.textContent='선택 매장 카카오 길찾기';selectedKakao.hidden=true;selectedKakaoActions.append(selectedKakao);
   const selectedKakaoHint=document.createElement('p');selectedKakaoHint.id='navSelectedKakaoHint';selectedKakaoHint.className='hint';selectedKakaoActions.append(selectedKakaoHint);
   const externalDirections=document.createElement('section');externalDirections.id='navKakaoDirections';externalDirections.setAttribute('aria-label','외부 카카오 길찾기');
-  externalDirections.innerHTML='<h3>카카오맵에서 길찾기</h3><p class="hint">PC 카카오맵·모바일웹으로 연결됩니다. 링크당 경유지 최대 5개이며, 거리·시간은 카카오맵에서 확인해 주세요.</p><p id="navKakaoStatus" role="status"></p><div id="navKakaoLinks"></div>';
+  externalDirections.innerHTML='<h3>카카오맵에서 길찾기</h3><p class="hint">PC 카카오맵·모바일웹으로 연결됩니다. 링크당 경유지 최대 5개이며, 거리·시간은 카카오맵에서 확인해 주세요.</p><p id="navKakaoStatus" role="status"></p><div id="navKakaoLinks"></div><p id="navKakaoLegHint" class="hint" hidden>경유지가 표시되지 않으면 구간별로 열어 주세요.</p><details id="navKakaoLegFallback" hidden><summary>구간별로 열기</summary><div id="navKakaoLegLinks"></div></details>';
   $('#queryRecordedRoute').after(externalDirections);
   planner.querySelector('.plannerHelp').after(picker);
   const centerChoices=document.createElement('div');centerChoices.className='navCenterChoices';centerChoices.setAttribute('aria-label','센터에서 출발');picker.before(centerChoices);
@@ -144,7 +148,7 @@
         selectedKakaoHint.textContent=origin?(origin.customerName||origin.customerCode)+' → '+(selectedCandidate.customerName||selectedCandidate.customerCode)+' · 경유지 없이 연결':'선택 매장을 목적지로 전달합니다. 출발지는 카카오맵에서 지정해 주세요.';
       }
     }
-    const links=$('#navKakaoLinks');links.replaceChildren();
+    const links=$('#navKakaoLinks'),legLinks=$('#navKakaoLegLinks'),fallback=$('#navKakaoLegFallback'),legHint=$('#navKakaoLegHint');links.replaceChildren();legLinks.replaceChildren();fallback.hidden=true;legHint.hidden=true;
     try{
       const rows=values.map((value,index)=>{
         const label=index===0?'출발지':index===values.length-1?'목적지':'경유지 '+index;
@@ -158,6 +162,13 @@
         const link=document.createElement('a');link.target='_blank';link.rel='noopener noreferrer';link.href=segment.url;
         link.textContent=(segments.length===1?'입력 순서로 카카오 길찾기':(index+1)+'구간 카카오 길찾기')+' · '+(rows[segment.start].customerName||rows[segment.start].customerCode)+' → '+(rows[segment.end].customerName||rows[segment.end].customerCode);
         links.append(link);
+      }
+      if(rows.length>2){
+        fallback.hidden=false;legHint.hidden=false;
+        for(const leg of lookup.kakaoLegLinks(rows)){
+          const link=document.createElement('a');link.target='_blank';link.rel='noopener noreferrer';link.href=leg.url;
+          link.textContent=(leg.start+1)+' → '+(leg.end+1)+' · '+(rows[leg.start].customerName||rows[leg.start].customerCode)+' → '+(rows[leg.end].customerName||rows[leg.end].customerCode);legLinks.append(link);
+        }
       }
     }catch(error){$('#navKakaoStatus').textContent=error.message;}
   }
