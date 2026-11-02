@@ -97,12 +97,13 @@
   }
   function parseAreaInput(text) {
     const records=[];let cells=[],cell='',quoted=false,raw='';
-    const finish=()=>{cells.push(cell);records.push({address:(cells[0]||'').trim(),customer:cells[1]||'',originalAddress:cells[0]||'',originalCustomer:cells[1]||'',originalInput:raw.replace(/\n$/,''),inputAmbiguous:quoted||cells.length>2});cells=[];cell='';raw='';};
-    const input=String(text||'').replace(/\r\n/g,'\n');
+    const finish=()=>{cells.push(cell);records.push({address:(cells[0]||'').trim(),customer:cells[1]||'',originalAddress:cells[0]||'',originalCustomer:cells[1]||'',originalInput:raw.replace(/\r?\n$/,''),inputAmbiguous:quoted||cells.length>2});cells=[];cell='';raw='';};
+    const input=String(text||'');
     for(let i=0;i<input.length;i++){
       const c=input[i];raw+=c;
       if(c==='"'&&(quoted||!cell.trim())){if(quoted&&input[i+1]==='"'){cell+='"';raw+=input[++i];}else quoted=!quoted;}
       else if(c==='\t'&&!quoted){cells.push(cell);cell='';}
+      else if(c==='\r'&&input[i+1]==='\n'&&!quoted){raw+=input[++i];finish();}
       else if(c==='\n'&&!quoted)finish();else cell+=c;
     }
     if(raw||cells.length||cell)finish();return records;

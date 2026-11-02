@@ -1785,7 +1785,7 @@
     const attempts = [];
     const serverProxy=window.kakaoGeocoder?.serverProxy===true;
     if (!serverProxy&&geocodeCache.has(address)) return geocodeCache.get(address);
-    for (const query of serverProxy?[Phase2bUi.addressVariants(address)[0].replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)$/,'$1 $2')]:Phase2bUi.addressVariants(address)) {
+    for (const query of serverProxy?[NewAreaRequests.addressQuery(address,Phase2bUi.addressVariants)].filter(Boolean):Phase2bUi.addressVariants(address)) {
       const attemptStarted = performance.now();
       const result = await NewAreaRequests.lookup(window.kakaoGeocoder, query, { signal });
       if(signal?.aborted)throw Object.assign(Error('조회 취소'),{name:'AbortError'});
@@ -2198,7 +2198,24 @@
     }).filter(Boolean);
   }
 
-  async function judgeNewAreaRow(row, signal) {
+  async function newAreaCustomerMatch(query, signal, batch) {
+    if (!window.kakaoGeocoder?.serverProxy || !query) return null;
+    const key=query.normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
+    if (!batch.customers.has(key)) batch.customers.set(key,fetchJson('/api/map-phase2b/private/customer-search',{
+      channel:'new-area-customer-search',ttl:0,timeout:30000,headers:{'x-map-customer-query':encodeURIComponent(query)}
+    }).then(result=>{
+      if (!Array.isArray(result.data)) throw Object.assign(Error('CUSTOMER_SEARCH_CONTRACT'),{code:'CUSTOMER_SEARCH_CONTRACT'});
+      return result;
+    }));
+    const result=await batch.customers.get(key);
+    if(signal?.aborted)throw Object.assign(Error('조회 취소'),{name:'AbortError'});
+    const rows=result.data.filter(store=>/^[A-Z]\d{3,}$/.test(store.customerCode||'') && (store.matchedBy==='ADDRESS'||store.matchedBy==='CODE'));
+    if(result.meta?.truncated || rows.length>1)return {candidates:rows};
+    if(!rows.length)return null;
+    return {...storesByCode.get(rows[0].customerCode),...rows[0]};
+  }
+
+  async function judgeNewAreaRow(row, signal, batch = {customers:new Map(),queries:new Map(),blocked:null}) {
     if (row.inputAmbiguous) return {...row,decision:'검토',reason:'입력 열 확인 필요',evidence:'주소/고객명 열 또는 따옴표를 확인해 주세요.',nearby:[]};
     if (/^[SB]\d{3,}$/i.test(row.address.trim())) {
       const code=row.address.trim().toUpperCase(),store=storesByCode.get(code)||latestSnapshotRows.find(item=>(item.customerCode||item.code)===code);
@@ -2209,29 +2226,48 @@
       if (store.coordinateStatus === 'CONFLICT' || store.raw?.coordinateStatus === 'CONFLICT') return {...row,decision:'검토',reason:'주소·좌표 재확인 필요',evidence:'기존 좌표 직접 수정에서 위치를 확인해 주세요.',nearby:[]};
       if (!store.address) return {...row,decision:'검토',reason:'고객 주소·좌표 미확인',nearby:[]};
     }
-    if (!validNewAreaInput(row.address) && !validNewAreaInput(row.customer)) return { ...row, decision: "검토", reason: "주소 확인 필요", deliveryDays: "", facility: false, nearby: [] };
+    if (!validNewAreaInput(row.address)) return { ...row, decision: "검토", reason: "주소 확인 필요", deliveryDays: "", facility: false, nearby: [] };
     const manual = (manualDraft?.stops() || []).filter(stop => stop.label === row.address).map(newAreaCoordinate).filter(Boolean);
     if (manual.length) return judgeNewAreaPoint(row,manual.length === 1 ? {...manual[0],coordinateSource:'MANUAL_WAYPOINT'} : {candidates:manual});
     // Reuse saved/manual coordinates while external address lookup remains off.
     const stored = [...new Map([...latestSnapshotRows,...allStores].filter(store => [store.customerCode,store.customerName,store.address].includes(row.address)).map(store => [store.customerCode,store])).values()].map(newAreaCoordinate).filter(Boolean);
     if (stored.length) return judgeNewAreaPoint(row,stored.length === 1 ? stored[0] : {candidates:stored});
+    const query=NewAreaRequests.addressQuery(row.address,Phase2bUi.addressVariants);
+    if (!query) return {...judgeNewAreaPoint(row,null),evidence:'검색용 기본주소 확인 필요 · 원문 보존'};
+    const matched=await newAreaCustomerMatch(query,signal,batch);
+    if(matched?.candidates)return judgeNewAreaPoint(row,matched);
+    if(matched){
+      const saved=newAreaCoordinate(matched);
+      if(saved)return judgeNewAreaPoint({...row,customerCode:matched.customerCode},saved);
+      return {...judgeNewAreaPoint({...row,customerCode:matched.customerCode},null),reason:'기존 고객 좌표 확인 필요',evidence:'인증된 고객 주소 매칭 · 저장·수동 좌표 확인 필요 · 외부 좌표로 대체하지 않음'};
+    }
+    const blocked=batch.blocked||window.kakaoGeocoder?.blockedReason;
+    if(blocked)throw Object.assign(Error(blocked),{code:blocked==='GEOCODE_DAILY_LIMIT'?blocked:'GEOCODE_AUTOMATICALLY_BLOCKED'});
     if (window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup !== true) return {...judgeNewAreaPoint(row,null),evidence:'저장 위치 미확인 · 기존 좌표 직접 수정 또는 주소를 이름으로 지정한 수동 경유 좌표를 확인해 주세요.'};
-    const point = await geocodeAddress(row.address, signal);
+    // Request-scoped reuse only. Neither the input nor response coordinates are persisted.
+    const key=query.normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
+    if(!batch.queries.has(key))batch.queries.set(key,geocodeAddress(query, signal));
+    const point = await batch.queries.get(key);
     return judgeNewAreaPoint(row, point);
   }
 
   function judgeNewAreaPoint(row, point) {
-    const base = { ...row, ...point, addressRegion:row.addressRegion||window.MapLocationContract?.addressRegion(row.address)||'주소 권역 미확인',actualDispatchCenter:row.actualDispatchCenter||{state:'UNCONFIRMED',label:'담당 센터 미확인'},rangeStart: state.rangeStart, rangeEnd: state.rangeEnd, decision: "검토", nearby: [], vehicle: "-", nearestDistance: null, facility: facilityReview(`${row.address} ${row.customer}`) };
+    const base = { ...row, ...point, address:row.address,customer:row.customer,originalAddress:row.originalAddress,originalCustomer:row.originalCustomer,resolvedAddress:point?.address,lookupStatus:newAreaCoordinate(point)?'SUCCESS':'DEFERRED',addressRegion:row.addressRegion||window.MapLocationContract?.addressRegion(row.address)||'주소 권역 미확인',actualDispatchCenter:row.actualDispatchCenter||{state:'UNCONFIRMED',label:'담당 센터 미확인'},rangeStart: state.rangeStart, rangeEnd: state.rangeEnd, decision: "검토", nearby: [], vehicle: "-", nearestDistance: null, facility: facilityReview(`${row.address} ${row.customer}`) };
     if (!point || point.candidates || !newAreaCoordinate(point)) return { ...base, reason: point?.candidates ? "주소 복수 후보" : "주소 확인 필요", evidence: point?.candidates ? "주소 후보를 먼저 확정해 주세요." : "검증된 저장·수동 좌표 미확인" };
     const comparisons = newAreaComparisonStores();
     const distances = comparisons.map(store => ({...store,distance:distanceKm(point,store)})).sort((a,b) => a.distance-b.distance);
     const nearby = distances.filter(store => store.distance <= .5);
-    const references = Phase2bUi.nearbyVehicles(point, comparisons, 30);
+    const conflicting=new Set(periodRows.filter(store=>['CONFLICT','UNVERIFIED','MISSING'].includes(store.coordinateStatus||store.raw?.coordinateStatus)||store.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED').map(store=>store.customerCode));
+    const locationRows=[...new Map([...latestSnapshotRows.filter(store=>!conflicting.has(store.customerCode)),...comparisons].map(store=>[store.customerCode,store])).values()]
+      .map(newAreaCoordinate).filter(Boolean).map(store=>({...store,vehicle:baseVehicles.get(store.customerCode)?.baseVehicle||store.vehicle||''}));
+    const locationDistances=locationRows.map(store=>({...store,distance:distanceKm(point,store)})).sort((a,b)=>a.distance-b.distance);
+    const storedNearby=locationDistances.filter(store=>store.distance<=.5);
+    const references = Phase2bUi.nearbyVehicles(point, locationRows, 30);
     const exception = legacyException(`${row.address} ${row.customer}`);
     const periodComplete = dateReady && periodMeta?.complete === true && periodMeta.startDate === state.rangeStart && periodMeta.endDate === state.rangeEnd && (periodMeta.segmented !== true || periodMeta.aggregateComplete === true);
     const limits=[!periodComplete?'전체 기간 비교 미완료':null,periodMeta?.missingCoordinate>0 || periodComplete && comparisons.length < periodRows.length?'비교 원천 좌표 누락':null,periodMeta?.coverageComplete!==true?'전체 원천 완전성 미검증':null].filter(Boolean);
-    const nearest=distances[0];
-    const facts={...base,nearby,references,evidenceCount:nearby.length,dataLimits:limits.join(' · '),deliveryDays:combineNearbyPatterns(nearby),vehicle:nearby[0]?.vehicle||references[0]?.vehicle||'-',nearestStore:nearest?.customerName||'',nearestDistance:nearest?.distance??null};
+    const nearest=locationDistances[0];
+    const facts={...base,nearby,references,storedNearbyCount:storedNearby.length,evidenceCount:nearby.length,dataLimits:limits.join(' · '),deliveryDays:combineNearbyPatterns(nearby),vehicle:nearby[0]?.vehicle||references[0]?.vehicle||'-',nearestStore:nearest?.customerName||'',nearestDistance:nearest?.distance??null};
     if(limits.length)return {...facts,reason:nearby.length?'근접 근거 확인 · 검토필요':exception?exception+' · 검토필요':!references.length?'해당 센터 비교자료 부족':'검토필요',evidence:(nearby.length?'500m 내 기존 배송점 확인 · ':references.length?'30km 내 근접호차 확인 · ':'')+limits.join(' · ')+' · 인근 배송점 부재 확정 불가 · 직선거리이며 도로 진입 판정 아님'};
     if(exception)return {...facts,decision:'X',reason:exception,evidence:'기존 지역/시설 업무 제외 규칙'};
     if(base.facility)return {...facts,reason:'차량 진입 확인 필요',evidence:nearby.length?'500m 내 기존 배송점 확인 · 시설 진입 별도 확인':'시설 진입 확인 전 확정 불가'};
@@ -2285,22 +2321,26 @@
     setNewAreaBusy(true);
     $(statusId).textContent = `${rows.length}건 판단 중...`;
     const judged = [];
+    const batch={customers:new Map(),queries:new Map(),blocked:null};
+    const progress=()=>`입력 ${rows.length} · 완료 ${judged.length} · 성공 ${judged.filter(row=>row.lookupStatus==='SUCCESS'||newAreaCoordinate(row)).length} · 보류 ${judged.filter(row=>!['SUCCESS','FAILED','LIMIT'].includes(row.lookupStatus)&&!newAreaCoordinate(row)).length} · 실패 ${judged.filter(row=>row.lookupStatus==='FAILED').length} · 한도대기 ${judged.filter(row=>row.lookupStatus==='LIMIT').length}`;
     for (const row of rows) {
-      try { judged.push(await judgeNewAreaRow(row, signal)); }
+      try { judged.push(await judgeNewAreaRow(row, signal,batch)); }
       catch (error) {
         if (requestId !== newAreaRequestId || isSilentRequestError(error)) return;
-        judged.push({...row,decision:'검토',reason:'조회 실패 · 검토필요',evidence:NewAreaRequests.message(error)+' · 원문 보존',lookupError:true,nearby:[]});
+        if(NewAreaRequests.stopsExternal(error)||window.kakaoGeocoder?.blockedReason)batch.blocked=error.code||'GEOCODE_AUTOMATICALLY_BLOCKED';
+        const lookupStatus=NewAreaRequests.outcome(error);
+        judged.push({...row,decision:'검토',reason:lookupStatus==='LIMIT'?'일일 주소 조회 한도 대기':lookupStatus==='DEFERRED'?'주소 조회 차단 · 보류':'조회 실패 · 검토필요',evidence:NewAreaRequests.message(error)+' · 원문 보존',lookupStatus,lookupError:lookupStatus==='FAILED',nearby:[]});
       }
       if (requestId !== newAreaRequestId || periodKey !== state.rangeStart + "|" + state.rangeEnd || state.mode !== "BASE_60D") return;
-      $(statusId).textContent = `입력 ${rows.length} · 완료 ${judged.length}`;
+      $(statusId).textContent = progress();
     }
     state.newAreaResults = judged;
     setNewAreaBusy(false); batchController = null;
     $("#exportNewAreaCsv").disabled = !judged.length;
     $("#exportNewAreaExcel").disabled = !judged.length;
     if(judged.length){$('#copyAreaDecision')?.removeAttribute('disabled');$('#copyAreaMatching')?.removeAttribute('disabled');}
-    $(statusId).textContent = `입력 ${rows.length} · 완료 ${judged.length} · 권역 내 ${judged.filter((r) => r.decision === "O").length} · 동선 없음 ${judged.filter((r) => r.reason === "배송동선 맞지 않음").length} · 확인 필요 ${judged.filter((r) => r.decision !== "O" && r.reason !== "배송동선 맞지 않음").length} · 행 실패 ${judged.filter(r => r.lookupError).length}`;
-    $(resultId).innerHTML = judged.map((row, index) => `<button class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(row.reason || "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>사용 주소: ${esc(row.address)}</div>${!Number.isFinite(row.lat) || !Number.isFinite(row.lng) ? "<div>클릭하여 확인된 위치 입력</div>" : ""}<div>주소 권역: ${esc(row.addressRegion||"주소 권역 미확인")} · 실제 담당 센터: ${esc(row.actualDispatchCenter?.label||"담당 센터 미확인")}</div><div>${esc(row.evidence || "")} · ${esc(vehicleLabel(row.vehicle))} ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.rangeStart || state.rangeStart)} ~ ${esc(row.rangeEnd || state.rangeEnd)}${Number.isFinite(row.evidenceCount) ? ` · 500m 근거 ${row.evidenceCount}개` : ''}</div><div>${esc(row.dataLimits || '')}</div><div>30km 근접호차: ${esc((row.references || []).map(item => vehicleLabel(item.vehicle) + " " + formatDistance(item.distance)).join(" · ") || "확인 근거 없음")}</div><div>${esc(row.deliveryDays || "")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`).join("");
+    $(statusId).textContent = progress()+` · 권역 내 ${judged.filter(row=>row.decision==='O').length} · 행 실패 ${judged.filter(row=>row.lookupError).length}`;
+    $(resultId).innerHTML = judged.map((row, index) => `<button class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(row.reason || "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>사용 주소: ${esc(row.address)}</div>${!Number.isFinite(row.lat) || !Number.isFinite(row.lng) ? "<div>클릭하여 확인된 위치 입력</div>" : ""}<div>500m 저장위치 ${Number.isFinite(row.storedNearbyCount)?row.storedNearbyCount:'미확인'}개 · 기간 배송근거 ${Number.isFinite(row.evidenceCount)?row.evidenceCount:'미확인'}개</div><div>주소 권역: ${esc(row.addressRegion||"주소 권역 미확인")} · 실제 담당 센터: ${esc(row.actualDispatchCenter?.label||"담당 센터 미확인")}</div><div>${esc(row.evidence || "")} · ${esc(vehicleLabel(row.vehicle))} ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.rangeStart || state.rangeStart)} ~ ${esc(row.rangeEnd || state.rangeEnd)}${Number.isFinite(row.evidenceCount) ? ` · 500m 근거 ${row.evidenceCount}개` : ''}</div><div>${esc(row.dataLimits || '')}</div><div>30km 근접호차: ${esc((row.references || []).map(item => vehicleLabel(item.vehicle) + " " + formatDistance(item.distance)).join(" · ") || "확인 근거 없음")}</div><div>인근 배송점 요일 자료(실배송요일 미확정): ${esc(row.deliveryDays || "확인 근거 없음")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`).join("");
     $$('[data-judged]').forEach((button) => button.onclick = () => {
       const row = judged[Number(button.dataset.judged)];
       if (!Number.isFinite(row.lat) || !Number.isFinite(row.lng)) {

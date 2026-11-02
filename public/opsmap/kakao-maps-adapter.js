@@ -20,11 +20,14 @@
   });return pending;
  }
  function reset(){script?.remove();script=null;pending=null;}
- function geocoder(){return {serverProxy:true,addressSearch(query,callback){
-  fetch('/api/map-phase2b/private/address-lookup',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})})
-   .then(async response=>{const payload=await response.json();if(!response.ok||payload.ok!==true)throw Error('LOOKUP_FAILED');callback(payload.data.documents,payload.data.status);})
-   .catch(()=>{root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false};callback([],'ERROR');});
- }};}
+ function geocoder(){const proxy={serverProxy:true,blockedReason:null,addressSearch(query,callback,{signal}={}){
+  fetch('/api/map-phase2b/private/address-lookup',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({query}),signal})
+   .then(async response=>{const payload=await response.json();if(!response.ok||payload.ok!==true)throw Object.assign(Error('LOOKUP_FAILED'),{code:/^[A-Z_]+$/.test(payload?.error||'')?payload.error:'GEOCODER_FAILED',status:response.status});callback(payload.data.documents,payload.data.status);})
+   .catch(error=>{if(signal?.aborted)return;
+    const code=error.code||'GEOCODER_FAILED';
+    if(code!=='GEOCODE_QUERY_INVALID'){proxy.blockedReason=code;root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false};}
+    callback([],'ERROR',{code,status:error.status});});
+ }};return proxy;}
  root.KakaoMapsAdapter=Object.freeze({ready,reset,geocoder});
 })(typeof window==='object'?window:globalThis);
 
