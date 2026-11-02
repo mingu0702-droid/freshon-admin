@@ -5,6 +5,7 @@ import compression from 'compression';
 import {requireAdmin} from './auth.js';
 import {createFixedVehicleCache} from './fixedVehicleCache.js';
 import {createFixedVehicleStore} from './fixedVehicleStore.js';
+import {mapPublicationConnection} from './opsmap-abc/mapDataFreshness.js';
 
 export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus,readBaseVehicleMaster,env=process.env,adminGuard=requireAdmin,baseStore=env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
   let statusCache=null,statusAt=0,statusPending=null;
@@ -15,21 +16,46 @@ export function mountMapDataFreshness(app,{callHub,requireView,previewEnabled,mo
     if(statusCache&&Date.now()-statusAt<20000)return statusCache;
     if(statusPending)return statusPending;
     statusPending=(async()=>{
-      const raw=(await callHub('mapModelStatus',{}, {useCache:false})).data||{},c=raw.customer||{},p=raw.published||{},j=raw.job;
-      statusCache={customer:{freshon:cleanDate(c.freshon),delivery:cleanDate(c.delivery),proof:code(c.proof)},
+      const sources=[];
+      const read=async(action,options)=>{
+        const started=Date.now();
+        try {
+          const value=await callHub(action,{},options);
+          if(!value?.data||typeof value.data!=='object'||Array.isArray(value.data))throw Object.assign(Error(),{failureType:'contract'});
+          sources.push({action,state:'AVAILABLE',durationMs:Date.now()-started});return value;
+        } catch(error) {
+          const allowed=['auth','parse','contract','upstream','network','output'];
+          sources.push({action,state:'UNKNOWN',durationMs:Date.now()-started,
+            errorCode:typeof error?.message==='string'&&/^HUB_[A-Z0-9_]{1,80}$/.test(error.message)?error.message:'UNKNOWN',
+            failureType:error?.name==='AbortError'?'timeout':allowed.includes(error?.failureType)?error.failureType:'unknown',
+            upstreamStatus:[400,401,403,404,408,409,413,429,500,502,503,504].includes(error?.upstreamStatus)?error.upstreamStatus:null});
+          throw error;
+        }
+      };
+      const [modelResult,detailResult]=await Promise.allSettled([read('mapModelStatus',{useCache:false}),env.OPSMAP_PREPARED_DETAILS_ENABLED==='1'?read('customerDetailsStatus',{useCache:false,privateRead:true,maxResponseBytes:8192}):Promise.resolve(null)]);
+      const model=modelResult.status==='fulfilled'?modelResult.value:null,details=detailResult.status==='fulfilled'?detailResult.value:null;
+      const raw=model?.data||{},c=raw.customer||{},p=raw.published||{},j=raw.job,detail=details?.data;
+      const customerDetails=detail?{prepared:detail.prepared===true,version:Number.isSafeInteger(detail.version)?detail.version:null,automatic:detail.automatic===true,phase:code(detail.job?.phase||'NOT_STARTED'),preparedCustomers:Number.isSafeInteger(detail.job?.preparedCustomers)?detail.job.preparedCustomers:null,updatedAt:typeof detail.job?.updatedAt==='string'&&Number.isFinite(Date.parse(detail.job.updatedAt))?detail.job.updatedAt:null,lastError:detail.job?.lastError?code(detail.job.lastError):null}:null;
+      statusCache={partial:sources.some(source=>source.state==='UNKNOWN'),sources,customerDetails,customer:{freshon:cleanDate(c.freshon),delivery:cleanDate(c.delivery),proof:code(c.proof)},
         published:{generation:Number(p.generation)||null,startDate:cleanDate(p.startDate),endDate:cleanDate(p.endDate),status:code(p.status)},
         job:j?Object.fromEntries(['phase','generation','baseGeneration','startDate','endDate','buildAt','verifyAt','sendAt','shards','lastError','updatedAt','commitHttp','publication'].map(k=>[k,j[k]??null])):null,
         coverage:{generation:Number(raw.coverage?.generation)||null,proof:code(raw.coverage?.proof),
           history:(raw.coverage?.history||[]).filter(cleanDate),period:(raw.coverage?.period||[]).filter(cleanDate)},
-        automatic:raw.automatic&&typeof raw.automatic==='object'?code(raw.automatic.status):'NOT_CONFIGURED',
-        automation:raw.automatic&&typeof raw.automatic==='object'?{configured:raw.automatic.configured===true,status:code(raw.automatic.status),lastCheck:raw.automatic.lastCheck||null,lastRequest:raw.automatic.lastRequest||null,lastSuccess:raw.automatic.lastSuccess||null,lastError:raw.automatic.lastError?code(raw.automatic.lastError):null,generation:Number(raw.automatic.generation)||null}:{configured:false,status:'NOT_CONFIGURED'},continuation:raw.continuation==='ACTIVE'?'ACTIVE':'NONE',checkedAt:new Date().toISOString()};
+        automatic:raw.automatic&&typeof raw.automatic==='object'?code(raw.automatic.status):model?'NOT_CONFIGURED':'UNKNOWN',
+        automation:raw.automatic&&typeof raw.automatic==='object'?{configured:raw.automatic.configured===true,status:code(raw.automatic.status),lastCheck:raw.automatic.lastCheck||null,lastRequest:raw.automatic.lastRequest||null,lastSuccess:raw.automatic.lastSuccess||null,lastError:raw.automatic.lastError?code(raw.automatic.lastError):null,generation:Number(raw.automatic.generation)||null}:model?{configured:false,status:'NOT_CONFIGURED'}:{configured:null,status:'UNKNOWN'},continuation:!model?'UNKNOWN':raw.continuation==='ACTIVE'?'ACTIVE':'NONE',checkedAt:new Date().toISOString()};
       statusAt=Date.now();return statusCache;
     })().finally(()=>{statusPending=null;});return statusPending;
   }
   const enabled=(_q,r,n)=>previewEnabled()?n():r.sendStatus(404);
   app.get('/api/map-phase2b/preview/data-status',requireView,enabled,async(_q,r)=>{
     r.set('Cache-Control','no-store');
-    try{return r.json({ok:true,data:{...await readStatus(),live:modelStatus()}});}catch{return r.status(503).json({error:'MAP_DATA_STATUS_UNAVAILABLE'});}
+    try{
+      const status=await readStatus();let live=null,liveAvailable=false;
+      try{live=await modelStatus();liveAvailable=!!live&&typeof live==='object'&&!Array.isArray(live);}catch{/* Independent local status remains unknown. */}
+      const sources=[...status.sources,{action:'localModelStatus',state:liveAvailable?'AVAILABLE':'UNKNOWN'}];
+      const available=sources.some(source=>source.state==='AVAILABLE');
+      return r.status(available?200:503).json({ok:available,...(!available?{error:'MAP_DATA_STATUS_UNAVAILABLE'}:{}),data:{...status,partial:sources.some(source=>source.state==='UNKNOWN'),sources,live,publicationConnection:mapPublicationConnection(status,live)}});
+    }catch{return r.status(503).json({error:'MAP_DATA_STATUS_UNAVAILABLE'});}
   });
   async function baseResponse(q,r){
     r.set('Cache-Control','no-store');

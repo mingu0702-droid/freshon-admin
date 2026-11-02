@@ -65,7 +65,7 @@ const upload = multer({
 
 const sharedReadModel=createStageReadModel({secret:process.env.HUB_API_SECRET,publicPeriodCacheEntries:1});
 const sharedCoordinateSupplement=createCoordinateSupplement({callHub:verifiedMapHubRead});
-const sharedFixedVehicleReader=createFixedVehicleReader({ensureSession: ensureFreshonSession, readJson: readFreshonJson, extractRows: extractFreshonRows});
+const sharedFixedVehicleReader=createFixedVehicleReader({ensureSession: ensureFreshonSession, readJson: readFreshonJson, extractRows: extractFreshonRows,pageConcurrency:process.env.OPSMAP_FIXED_MASTER_PAGE_CONCURRENCY==='2'?2:1});
 const productionMap = mountProductionMapApi(app, {
   sharedReadModel,sharedCoordinateSupplement,
   readBaseVehicleMaster: sharedFixedVehicleReader,
