@@ -61,7 +61,28 @@
       clear(){rows.clear();}
     };
   }
-  root.MapNavigationLookup=Object.freeze({normalize,located,unique,resolve,search,visitCodes,createTemporaryPlaces});
+  // Official Web guide: map.kakao.com/link (PC / mobile web), max five via points.
+  // These links never query Mobility Directions or calculate distance/time here.
+  function kakaoPoint(row){
+    if(!located(row))throw Error('카카오 길찾기에 전달할 지점의 위치를 확인해 주세요.');
+    const name=String(row.customerName||row.address||row.customerCode||'선택한 위치').trim();
+    return encodeURIComponent(name)+','+row.lat+','+row.lng;
+  }
+  function kakaoDestinationLink(destination,origin){
+    const to=kakaoPoint(destination);
+    return 'https://map.kakao.com/link/'+(origin?'from/'+kakaoPoint(origin)+'/to/':'to/')+to;
+  }
+  function kakaoRouteLinks(rows){
+    if(!Array.isArray(rows)||rows.length<2||rows.length>32)throw Error('출발지와 목적지를 포함해 2~32개 지점을 확인해 주세요.');
+    // Validate every point before splitting; an unresolved point is never skipped.
+    const points=rows.map(kakaoPoint),segments=[];
+    for(let start=0;start<points.length-1;start+=6){
+      const end=Math.min(start+6,points.length-1);
+      segments.push({start,end,url:'https://map.kakao.com/link/by/car/'+points.slice(start,end+1).join('/')});
+    }
+    return segments;
+  }
+  root.MapNavigationLookup=Object.freeze({normalize,located,unique,resolve,search,visitCodes,createTemporaryPlaces,kakaoDestinationLink,kakaoRouteLinks});
 })(typeof window==='object'?window:globalThis);
 
 (()=>{
@@ -78,6 +99,12 @@
   if($('#syncOperation'))$('#navigationSummary').append($('#syncOperation'));
   const picker=document.createElement('section');picker.className='navigationPicker';picker.setAttribute('aria-label','지도에서 선택한 매장');
   picker.innerHTML='<div class="navSelectedHeading">지도에서 선택한 매장</div><p id="navSelectedStore" role="status">매장을 선택하면 경로에 추가할 수 있습니다.</p><div class="navPickActions"><button type="button" data-nav-pick="origin">출발지로</button><button type="button" data-nav-pick="waypoint">경유지로</button><button type="button" data-nav-pick="destination">목적지로</button></div><p id="navPointStatus" role="status"></p>';
+  const selectedKakaoActions=document.createElement('div');selectedKakaoActions.id='navSelectedKakaoActions';picker.append(selectedKakaoActions);
+  const selectedKakao=document.createElement('a');selectedKakao.id='navSelectedKakao';selectedKakao.target='_blank';selectedKakao.rel='noopener noreferrer';selectedKakao.textContent='선택 매장 카카오 길찾기';selectedKakao.hidden=true;selectedKakaoActions.append(selectedKakao);
+  const selectedKakaoHint=document.createElement('p');selectedKakaoHint.id='navSelectedKakaoHint';selectedKakaoHint.className='hint';selectedKakaoActions.append(selectedKakaoHint);
+  const externalDirections=document.createElement('section');externalDirections.id='navKakaoDirections';externalDirections.setAttribute('aria-label','외부 카카오 길찾기');
+  externalDirections.innerHTML='<h3>카카오맵에서 길찾기</h3><p class="hint">PC 카카오맵·모바일웹으로 연결됩니다. 링크당 경유지 최대 5개이며, 거리·시간은 카카오맵에서 확인해 주세요.</p><p id="navKakaoStatus" role="status"></p><div id="navKakaoLinks"></div>';
+  $('#queryRecordedRoute').after(externalDirections);
   planner.querySelector('.plannerHelp').after(picker);
   const centerChoices=document.createElement('div');centerChoices.className='navCenterChoices';centerChoices.setAttribute('aria-label','센터에서 출발');picker.before(centerChoices);
   const suggestions=document.createElement('div');suggestions.id='navSearchResults';suggestions.className='navSearchResults';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label','매장 검색 결과');
@@ -102,6 +129,37 @@
       const meta=document.createElement('small');meta.textContent=[candidate.virtual?'임시 위치':candidate.customerCode,candidate.address,!lookup.located(candidate)?'위치 확인 필요':''].filter(Boolean).join(' · ');target.append(name,meta);
     }
     picker.querySelectorAll('[data-nav-pick]').forEach(button=>button.disabled=!candidate||!lookup.located(candidate));
+    syncExternalDirections();
+  }
+  function syncExternalDirections(){
+    const selectedHost=bridge.state.mode==='DATE_ROUTE'?picker:$('#detailSection');if(selectedHost&&selectedKakaoActions.parentNode!==selectedHost)selectedHost.append(selectedKakaoActions);
+    selectedKakao.hidden=true;selectedKakao.removeAttribute('href');selectedKakaoHint.textContent='';
+    const values=editor.values(),originValue=String(values[0]||'').trim(),origins=originValue?resolve(originValue):[],origin=origins.length===1&&lookup.located(origins[0])?origins[0]:null;
+    if(selectedCandidate&&lookup.located(selectedCandidate)){
+      const current=resolve(selectedCandidate.customerCode),valid=current.length===1&&lookup.located(current[0])&&current[0].lat===selectedCandidate.lat&&current[0].lng===selectedCandidate.lng;
+      if(!valid)selectedKakaoHint.textContent='선택 매장의 현재 위치를 확인한 뒤 다시 선택해 주세요.';
+      else if(originValue&&!origin)selectedKakaoHint.textContent='입력한 출발지를 확인하거나 지운 뒤 선택 매장 길찾기를 열어 주세요.';
+      else {
+        selectedKakao.href=lookup.kakaoDestinationLink(selectedCandidate,origin);selectedKakao.hidden=false;
+        selectedKakaoHint.textContent=origin?(origin.customerName||origin.customerCode)+' → '+(selectedCandidate.customerName||selectedCandidate.customerCode)+' · 경유지 없이 연결':'선택 매장을 목적지로 전달합니다. 출발지는 카카오맵에서 지정해 주세요.';
+      }
+    }
+    const links=$('#navKakaoLinks');links.replaceChildren();
+    try{
+      const rows=values.map((value,index)=>{
+        const label=index===0?'출발지':index===values.length-1?'목적지':'경유지 '+index;
+        if(!String(value||'').trim())throw Error(label+'를 선택해 주세요.');
+        const found=resolve(value);if(found.length!==1||!lookup.located(found[0]))throw Error(label+'의 검색 결과와 위치를 확인해 주세요.');
+        return found[0];
+      });
+      const segments=lookup.kakaoRouteLinks(rows);
+      $('#navKakaoStatus').textContent=segments.length===1?'입력한 출발·경유·목적지 순서로 연결합니다.':'경유지가 5개를 초과하여 '+segments.length+'개 연속 구간으로 나눕니다. 모든 지점을 보존하며, 각 구간을 순서대로 열어 주세요.';
+      for(const [index,segment]of segments.entries()){
+        const link=document.createElement('a');link.target='_blank';link.rel='noopener noreferrer';link.href=segment.url;
+        link.textContent=(segments.length===1?'입력 순서로 카카오 길찾기':(index+1)+'구간 카카오 길찾기')+' · '+(rows[segment.start].customerName||rows[segment.start].customerCode)+' → '+(rows[segment.end].customerName||rows[segment.end].customerCode);
+        links.append(link);
+      }
+    }catch(error){$('#navKakaoStatus').textContent=error.message;}
   }
   function choosePoint(role,row,index){
     row=temporaryPlaces.add(row);
@@ -264,10 +322,10 @@
       if(daily){if(planner.parentNode!==workspace)workspace.insertBefore(planner,missing);if(routeList.parentNode!==workspace)workspace.prepend(routeList);planner.hidden=false;routeList.hidden=false;}
       else{if(planner.parentNode!==plannerAnchor.parentNode)plannerAnchor.after(planner);if(routeList.parentNode!==routeAnchor.parentNode)routeAnchor.after(routeList);planner.hidden=true;}
     }
-    syncMissing();describeInputs();renderRolePins();bridge.relayoutPreservingView?.();
+    syncMissing();describeInputs();renderRolePins();syncExternalDirections();bridge.relayoutPreservingView?.();
   }
   const onManual=event=>showResult(event.detail,'manual'),onRecorded=event=>showResult(event.detail,'recorded'),onSelected=()=>updateSelected(),onReady=()=>{roleSignature='';drawCenters();sync();};
-  const onDraft=()=>{status('');roleSignature='';hideSuggestions();describeInputs();renderRolePins();window.MapDotUi?.arrangeNavigation?.();};
+  const onDraft=()=>{status('');roleSignature='';hideSuggestions();describeInputs();renderRolePins();syncExternalDirections();window.MapDotUi?.arrangeNavigation?.();};
   const onContext=()=>{hideSuggestions();temporaryPlaces.clear();editor.clear();selectedCandidate=null;updateSelected(null);lastResult=null;lastKind='manual';showResult({state:'idle'});roleSignature='';sync();};
   const events=[['map-manual-route',onManual],['map-recorded-route',onRecorded],['map-store-selected',onSelected],['map-sdk-ready',onReady],['map-navigation-logout',onContext],['map-navigation-context-changed',onContext],['map-navigation-draft',onDraft],['map-coordinate-updated',sync]];
   events.forEach(([name,listener])=>window.addEventListener(name,listener));
