@@ -40,12 +40,12 @@ try{
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapUiLocalBridge?.isDataReady());
  const check=(name,condition)=>{assert(condition,name);checks.push(name);};
  await page.waitForFunction(()=>document.querySelector('#vehicleList .vehicleItem')?.dataset.listGroup==='osan');
- const query=page.locator('#vehicleQuery');check('single visible search below vehicle heading',await query.count()===1&&await query.isVisible()&&await query.getAttribute('placeholder')==='호차번호 검색');
+ const query=page.locator('#vehicleQuery');check('single search is initially inside folded picker',await query.count()===1&&!await query.isVisible()&&await page.locator('#baseVehiclePicker').getAttribute('open')===null);
+ await page.locator('#baseVehiclePicker>summary').click();check('single visible search below vehicle heading',await query.isVisible()&&await query.getAttribute('placeholder')==='호차번호 검색');
  const values=()=>page.locator('#vehicleList .vehicleItem:visible input').evaluateAll(inputs=>inputs.map(i=>i.value));
  assert.deepEqual(await values(),['101','102','202','202-1','203','용2','용10','301','310','410','미확인']);checks.push('center groups, numeric and hired numeric order');
- await page.locator('#baseVehiclePicker>summary').click({position:{x:10,y:10}});check('search remains visible when picker folded',await query.isVisible());
- await query.fill('202');check('typing does not toggle folded picker',await page.locator('#baseVehiclePicker').getAttribute('open')===null);
- await page.locator('#baseVehiclePicker>summary').click({position:{x:10,y:10}});assert.deepEqual(await values(),['202','202-1']);checks.push('partial query updates immediately');
+ await page.locator('#baseVehiclePicker>summary').click({position:{x:10,y:10}});check('search is hidden when picker folded',!await query.isVisible());
+ await page.locator('#baseVehiclePicker>summary').click({position:{x:10,y:10}});await query.fill('202');check('typing preserves open picker',await page.locator('#baseVehiclePicker').getAttribute('open')!==null);assert.deepEqual(await values(),['202','202-1']);checks.push('partial query updates immediately');
  await page.locator('#vehicleList input[value="202"]').check();await query.fill('');check('clearing search preserves selection',await page.locator('#vehicleList input[value="202"]').isChecked());
  await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===1&&MapUiLocalBridge.state.overlays.length===1);
  check('selection still drives map pins and territory rendering',await page.evaluate(()=>MapUiLocalBridge.state.currentRows[0].vehicle==='202'&&window.territoryRenders>0));

@@ -106,12 +106,9 @@
   if($('#syncOperation'))$('#navigationSummary').append($('#syncOperation'));
   const picker=document.createElement('section');picker.className='navigationPicker';picker.setAttribute('aria-label','지도에서 선택한 매장');
   picker.innerHTML='<div class="navSelectedHeading">지도에서 선택한 매장</div><p id="navSelectedStore" role="status">매장을 선택하면 경로에 추가할 수 있습니다.</p><div class="navPickActions"><button type="button" data-nav-pick="origin">출발지로</button><button type="button" data-nav-pick="waypoint">경유지로</button><button type="button" data-nav-pick="destination">목적지로</button></div><p id="navPointStatus" role="status"></p>';
-  const selectedKakaoActions=document.createElement('div');selectedKakaoActions.id='navSelectedKakaoActions';picker.append(selectedKakaoActions);
-  const selectedKakao=document.createElement('a');selectedKakao.id='navSelectedKakao';selectedKakao.target='_blank';selectedKakao.rel='noopener noreferrer';selectedKakao.textContent='선택 매장 카카오 길찾기';selectedKakao.hidden=true;selectedKakaoActions.append(selectedKakao);
-  const selectedKakaoHint=document.createElement('p');selectedKakaoHint.id='navSelectedKakaoHint';selectedKakaoHint.className='hint';selectedKakaoActions.append(selectedKakaoHint);
   const externalDirections=document.createElement('section');externalDirections.id='navKakaoDirections';externalDirections.setAttribute('aria-label','외부 카카오 길찾기');
-  externalDirections.innerHTML='<h3>카카오맵에서 길찾기</h3><p class="hint">PC 카카오맵·모바일웹으로 연결됩니다. 링크당 경유지 최대 5개이며, 거리·시간은 카카오맵에서 확인해 주세요.</p><p id="navKakaoStatus" role="status"></p><div id="navKakaoLinks"></div><p id="navKakaoLegHint" class="hint" hidden>경유지가 표시되지 않으면 구간별로 열어 주세요.</p><details id="navKakaoLegFallback" hidden><summary>구간별로 열기</summary><div id="navKakaoLegLinks"></div></details>';
-  $('#queryRecordedRoute').after(externalDirections);
+  externalDirections.innerHTML='<h3>카카오맵 열기</h3><p class="hint">PC 카카오맵·모바일웹으로 연결됩니다. 링크당 경유지 최대 5개이며, 거리·시간은 카카오맵에서 확인해 주세요.</p><p id="navKakaoStatus" role="status"></p><div id="navKakaoLinks"></div><p id="navKakaoLegHint" class="hint" hidden>경유지가 표시되지 않으면 구간별로 열어 주세요.</p><details id="navKakaoLegFallback" hidden><summary>구간별로 열기</summary><div id="navKakaoLegLinks"></div></details>';
+  planner.querySelector('.plannerActions').after(externalDirections);
   planner.querySelector('.plannerHelp').after(picker);
   const centerChoices=document.createElement('div');centerChoices.className='navCenterChoices';centerChoices.setAttribute('aria-label','센터에서 출발');picker.before(centerChoices);
   const suggestions=document.createElement('div');suggestions.id='navSearchResults';suggestions.className='navSearchResults';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label','매장 검색 결과');
@@ -139,18 +136,7 @@
     syncExternalDirections();
   }
   function syncExternalDirections(){
-    const selectedHost=bridge.state.mode==='DATE_ROUTE'?picker:$('#detailSection');if(selectedHost&&selectedKakaoActions.parentNode!==selectedHost)selectedHost.append(selectedKakaoActions);
-    selectedKakao.hidden=true;selectedKakao.removeAttribute('href');selectedKakaoHint.textContent='';
-    const values=editor.values(),originValue=String(values[0]||'').trim(),origins=originValue?resolve(originValue):[],origin=origins.length===1&&lookup.located(origins[0])?origins[0]:null;
-    if(selectedCandidate&&lookup.located(selectedCandidate)){
-      const current=resolve(selectedCandidate.customerCode),valid=current.length===1&&lookup.located(current[0])&&current[0].lat===selectedCandidate.lat&&current[0].lng===selectedCandidate.lng;
-      if(!valid)selectedKakaoHint.textContent='선택 매장의 현재 위치를 확인한 뒤 다시 선택해 주세요.';
-      else if(originValue&&!origin)selectedKakaoHint.textContent='입력한 출발지를 확인하거나 지운 뒤 선택 매장 길찾기를 열어 주세요.';
-      else {
-        selectedKakao.href=lookup.kakaoDestinationLink(selectedCandidate,origin);selectedKakao.hidden=false;
-        selectedKakaoHint.textContent=origin?(origin.customerName||origin.customerCode)+' → '+(selectedCandidate.customerName||selectedCandidate.customerCode)+' · 경유지 없이 연결':'선택 매장을 목적지로 전달합니다. 출발지는 카카오맵에서 지정해 주세요.';
-      }
-    }
+    const values=editor.values();
     const links=$('#navKakaoLinks'),legLinks=$('#navKakaoLegLinks'),fallback=$('#navKakaoLegFallback'),legHint=$('#navKakaoLegHint');links.replaceChildren();legLinks.replaceChildren();fallback.hidden=true;legHint.hidden=true;
     try{
       const rows=values.map((value,index)=>{
@@ -163,7 +149,7 @@
       $('#navKakaoStatus').textContent=segments.length===1?'입력한 출발·경유·목적지 순서로 연결합니다.':'경유지가 5개를 초과하여 '+segments.length+'개 연속 구간으로 나눕니다. 모든 지점을 보존하며, 각 구간을 순서대로 열어 주세요.';
       for(const [index,segment]of segments.entries()){
         const link=document.createElement('a');link.target='_blank';link.rel='noopener noreferrer';link.href=segment.url;
-        link.textContent=(segments.length===1?'입력 순서로 카카오 길찾기':(index+1)+'구간 카카오 길찾기')+' · '+(rows[segment.start].customerName||rows[segment.start].customerCode)+' → '+(rows[segment.end].customerName||rows[segment.end].customerCode);
+        link.textContent=(segments.length===1?'카카오맵 열기':(index+1)+'구간 카카오 길찾기')+' · '+(rows[segment.start].customerName||rows[segment.start].customerCode)+' → '+(rows[segment.end].customerName||rows[segment.end].customerCode);
         links.append(link);
       }
       if(rows.length>2){
@@ -287,7 +273,7 @@
     if(result?.state==='idle'&&lastKind!==kind&&['loading','success','partial'].includes(lastResult?.state))return;
     lastResult=result;lastKind=kind;renderRolePins();
     const metric=RoadRouteUi.metrics(result);$('#navDistance').textContent=metric.distance==='—'?'— km':metric.distance;$('#navDuration').textContent=metric.duration==='—'?'— 분':metric.duration;
-    $('#navRouteStatus').textContent=result?.noDrivingRequired?'방문지가 같은 위치에 있습니다. 이동 거리는 0 km입니다.':MapDotUi.describeRoute(result);$('#navigationSummary').dataset.state=result?.state||'idle';
+    $('#navRouteStatus').textContent=['success','partial'].includes(result?.state)&&result?.noDrivingRequired?'방문지가 같은 위치에 있습니다. 이동 거리는 0 km입니다.':MapDotUi.describeRoute(result);$('#navigationSummary').dataset.state=result?.state||'idle';
     const legs=$('#navLegs');legs.replaceChildren();if(!['success','partial'].includes(result?.state))return;
     const labels=kind==='manual'?editor.values().map((value,index)=>displayLabel(value,index===0?'출발지':'방문지 '+index)):(result.routePoints||[]).map(row=>row.customerName||row.customerCode);
     const highlight=index=>kind==='recorded'?bridge.highlightRecordedLeg?.(index):bridge.highlightManualLeg(index);

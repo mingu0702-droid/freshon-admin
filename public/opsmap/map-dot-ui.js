@@ -37,13 +37,13 @@
     if(!mounted)return false;
     const daily=window.MapUiLocalBridge.state.mode==='DATE_ROUTE',planner=$('#waypointPlanner'),summary=$('#navigationSummary'),visits=$('#runListTool'),workspace=$('#navigationWorkspace'),context=$('#generalMapContext');
     if(daily){
-      if(summary.parentNode!==$('#layoutDock'))$('#layoutDock').append(summary);
+      if(summary.parentNode!==planner)planner.append(summary);
       if(visits.previousElementSibling!==$('.customerBlock'))$('.customerBlock').after(visits);
       if(workspace.previousElementSibling!==visits)visits.after(workspace);
       if(planner.parentNode!==workspace)workspace.prepend(planner);
       planner.hidden=false;visits.hidden=false;
     }else{
-      if(summary.parentNode!==workspace)workspace.prepend(summary);
+      if(summary.parentNode!==planner)planner.append(summary);
       if(planner.previousElementSibling!==$('.generalCenters'))$('.generalCenters').after(planner);
       if(context.previousElementSibling!==planner)planner.after(context);
       if($('#periodStoreListSection').previousElementSibling!==context)context.after($('#periodStoreListSection'));
@@ -65,7 +65,7 @@
     document.querySelectorAll('option[value="other"]').forEach(n=>n.remove());
     const planner=$('#waypointPlanner');planner.querySelector('.sectiontitle .muted').textContent='자동차';
     planner.querySelector('.plannerHelp').textContent='선택한 순서로 자동차 경로를 조회합니다.';
-    const summary=$('#navigationSummary');summary.querySelector('h2').textContent='내비 도로경로';
+    const summary=$('#navigationSummary');summary.querySelector('h2').textContent='도로 경로 결과';
     const selection=document.createElement('p');selection.id='dotRouteSelection';
     const origin=document.createElement('p');origin.id='dotRouteOrigin';
     summary.querySelector('.sectiontitle').after(selection,origin);

@@ -1203,7 +1203,7 @@
     if (!body) return;
     body.querySelectorAll('.coordinateEvidence,.coordinateWarning').forEach(node => node.remove());
     const unlocated = numberOrNull(row.lat) === null || numberOrNull(row.lng) === null;
-    const text = unlocated ? '좌표 미확인' : coordinateEvidenceLabel(row);
+    const text = unlocated ? '좌표 미확인 · 위치를 확인해 주세요.' : '';
     if (!text) return;
     const node = document.createElement('div');
     node.className = unlocated ? 'coordinateWarning' : 'coordinateEvidence';
@@ -1257,12 +1257,11 @@
     if($("#detail").contains($("#staffAuxContent")))$("#detailSection").append($("#staffAuxContent"));
     $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">${esc(row.customerCode || "신규 주소")}</div><div class="storeName">${esc(row.customerName || "선택 위치")}</div></div>
       <div class="detailBody">
-        <dl class="dotDetailFacts"><dt>담당 센터</dt><dd>${esc(detailCenter)}</dd><dt>주소 권역</dt><dd id="detailAddressRegion">${esc(detailAddressRegion)}</dd><dt>${routeMode?"확정호차":"기준호차"}</dt><dd${routeMode?'':' id="detailBaseVehicle"'}>${esc(routeMode?vehicleLabel(vehicle)||'선택일 편성 없음':MapPeriodUi.baseVehicleLabel(row))}</dd><dt id="detailDriverLabel">${esc(detailDriver.label)}</dt><dd id="detailDriver" title="${esc(detailDriver.title)}" data-source="${esc(detailDriver.source)}">${esc(detailDriver.text)}</dd><dt>주소</dt><dd>${esc(row.address||'주소 불러오는 중…')}</dd></dl>
+        <dl class="dotDetailFacts"><dt>담당 센터</dt><dd>${esc(detailCenter)}</dd><dt hidden>주소 권역</dt><dd id="detailAddressRegion" hidden>${esc(detailAddressRegion)}</dd><dt>${routeMode?"확정호차":"기준호차"}</dt><dd${routeMode?'':' id="detailBaseVehicle"'}>${esc(routeMode?vehicleLabel(vehicle)||'선택일 편성 없음':MapPeriodUi.baseVehicleLabel(row))}</dd><dt id="detailDeliveryDaysLabel" hidden>배송요일</dt><dd id="detailDeliveryDaysValue" hidden></dd><dt id="detailDriverLabel">${esc(detailDriver.label)}</dt><dd id="detailDriver" title="${esc(detailDriver.title)}" data-source="${esc(detailDriver.source)}">${esc(detailDriver.text)}</dd><dt>주소</dt><dd>${esc(row.address||'주소 불러오는 중…')}</dd><dt id="detailAddressLabel" hidden>상세주소</dt><dd id="detailAddressValue" hidden></dd></dl>
 
         ${!routeMode && row.history?.length ? `<div class="periodRecent">최근배송 ${esc(row.lastDeliveryDate)} · ${row.visitCount===null?'전체 기간 횟수 미확인':(row.visitCount??row.history.length)+'회 이력'}</div>` : ""}
         <div class="staffActions"><button id="staffHistory" aria-expanded="false" aria-controls="staffAuxContent">최근 배송기사이력 ▸</button><button id="staffNotes" aria-expanded="false" aria-controls="staffAuxContent">출입배송정보 ▸</button></div>
         ${unlocated ? '<div class="coordinateWarning">좌표 미확인</div>' : ""}
-        ${coordinateEvidenceLabel(row) ? `<div class="coordinateEvidence">${esc(coordinateEvidenceLabel(row))}</div>` : ""}
         <div class="mobileActions"><button id="mobileMapView" class="primary">매장 위치 중심으로 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicleLabel(vehicle) || "선택 호차")} 운행동선</button></div>
         <div id="nearWrap"></div>
       </div>`;
@@ -1302,10 +1301,15 @@
       if(addressLabel?.nextElementSibling)addressLabel.nextElementSibling.textContent=exact.address||'주소 미확인';
       const regionNode=$('#detailAddressRegion');if(regionNode)regionNode.textContent=exact.addressRegion||window.MapLocationContract?.addressRegion(exact.address)||'주소 권역 미확인';
       if(facts){
-        const detailAddressLabel=exact.detailAddress||({EMPTY:'상세주소 없음',WITHHELD:'상세주소 별도 확인 필요',UNOBSERVED:'상세주소 미확인'})[exact.detailAddressState]||'상세주소 미확인';
-        for(const [name,value] of [['상세주소',detailAddressLabel],['배송요일',exact.deliveryPattern||'미확인']]){
-          const label=document.createElement('dt'),node=document.createElement('dd');label.textContent=name;node.textContent=value;facts.append(label,node);
-        }
+        const detailAddress=String(exact.detailAddress||'').trim();
+        const detailAddressLabel=$('#detailAddressLabel'),detailAddressValue=$('#detailAddressValue');
+        if(detailAddressLabel&&detailAddressValue){detailAddressLabel.hidden=detailAddressValue.hidden=!detailAddress;detailAddressValue.textContent=detailAddress;}
+        // Mon~Sun fixed-dispatch values are vehicle assignments, never delivery weekdays.
+        const pattern=typeof exact.deliveryPattern==='string'?exact.deliveryPattern.trim():'';
+        const days=['CURRENT_CUSTOMER_LOOKUP','DATED_CUSTOMER_LOOKUP'].includes(exact.sourceBasis)&&exact.locationState==='SOURCE_ROW'&&!/^(?:미확인|확인\s*필요|unknown|unconfirmed|[-—])$/i.test(pattern)?pattern:'';
+        const daysLabel=$('#detailDeliveryDaysLabel'),daysValue=$('#detailDeliveryDaysValue');
+        if(daysLabel&&daysValue){daysLabel.hidden=daysValue.hidden=!days;daysValue.textContent=days;}
+        facts.dataset.deliveryPattern=exact.deliveryPattern||'';facts.dataset.detailAddressState=exact.detailAddressState||'';
         facts.dataset.sourceBasis=exact.sourceBasis||'';facts.dataset.sourceDate=exact.sourceDate||'';
       }
       positionDetailPopup();
@@ -2514,7 +2518,7 @@
     if(!stores.length&&state.centerFilter&&baseVehicleStatus!=='READY'){
       $('#periodStoreListCount').textContent='미확인';panel.textContent=baseVehicleStatus==='ERROR'?'기준호차 조회 실패 · 센터 매장 수 확인 필요':'기준호차 확인 중 · 센터 매장 수 미확인';$('#periodListMore').hidden=true;return;
     }
-    const visibleStores = periodListLimit ? stores.slice(Math.max(0,periodListLimit-100),periodListLimit) : state.selected && !state.selected.virtual ? [state.selected] : [];
+    const visibleStores = periodListLimit ? stores.slice(Math.max(0,periodListLimit-100),periodListLimit) : [];
     $("#periodStoreListCount").textContent = stores.length + "개 매장";
     panel.innerHTML = visibleStores.map(row => `<button class="resultItem periodStore${state.selected?.customerCode === row.customerCode ? " selected" : ""}" aria-pressed="${state.selected?.customerCode === row.customerCode}" data-period-store="${esc(row.customerCode)}"><span class="periodCode">${esc(row.customerCode)}</span><b>${esc(row.customerName || row.customerCode)}</b><span>${esc(row.lastDeliveryDate || "")} · ${esc(vehicleLabel(row.vehicle))}</span><span>${esc(row.driverName || "기사 미등록")} · ${row.visitCount===null?'방문횟수 미확인':(row.visitCount??row.history?.length??0)+'회'}</span></button>`).join("") || `<p class="hint">${stores.length ? '검색하거나 지도 핀을 선택하세요. 전체 목록은 요청할 때만 표시합니다.' : '조회 조건에 맞는 매장이 없습니다.'}</p>`;
     $("#periodListMore").hidden = !periodListLimit || stores.length <= periodListLimit;

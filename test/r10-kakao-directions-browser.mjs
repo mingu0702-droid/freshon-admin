@@ -42,11 +42,11 @@ try{
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady());
  const check=(name,value)=>{assert(value,name);checks.push(name);};
  await page.evaluate(()=>{MapUiLocalBridge.selectNavigationStore('SYNTHETIC_1');});
- check('period selected store exposes an official destination link in existing detail',await page.locator('#detailSection #navSelectedKakao').isVisible()&&(await page.locator('#navSelectedKakao').getAttribute('href')).includes('/link/to/'));
+ check('period detail has no duplicate standalone Kakao action',await page.locator('#navSelectedKakao').count()===0);
  await page.locator('#modeDaily').click();
  await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-11-02','2026-11-02'));await page.waitForFunction(()=>MapUiLocalBridge.navigationStores().length===32);
  await page.evaluate(()=>{MapUiLocalBridge.selectNavigationStore('SYNTHETIC_1');MapNavigation.sync();});
- check('daily selected store reuses the same button in existing planner',await page.locator('.navigationPicker #navSelectedKakao').count()===1);
+ check('daily route actions share the existing planner',await page.locator('#waypointPlanner #navKakaoDirections').count()===1&&await page.locator('#waypointPlanner #navigationSummary').count()===1);
  const apply=async count=>page.evaluate(n=>MapNavigationEditor.replacePoints(Array.from({length:n},(_,i)=>'SYNTHETIC_'+i)),count);
  await apply(2);check('two endpoints keep the combined link without a redundant fallback',await page.locator('#navKakaoLinks a').count()===1&&!await page.locator('#navKakaoLegFallback').isVisible()&&await page.locator('#navKakaoLegLinks a').count()===0);
  await apply(3);check('three points expose a short hint and initially collapsed adjacent fallback',await page.locator('#navKakaoLegHint').textContent()==='경유지가 표시되지 않으면 구간별로 열어 주세요.'&&await page.locator('#navKakaoLegFallback').isVisible()&&await page.locator('#navKakaoLegFallback').getAttribute('open')===null&&await page.locator('#navKakaoLegLinks a').count()===2&&!await page.locator('#navKakaoLegLinks a').first().isVisible());
@@ -54,14 +54,16 @@ try{
  check('same-coordinate first pair keeps both visit names and uses a labeled official destination link',adjacent[0].href==='https://map.kakao.com/link/to/'+encodeURIComponent(rows[1].customerName)+','+rows[1].lat+','+rows[1].lng&&adjacent[0].sameCoordinate==='true'&&adjacent[0].text.startsWith('1 → 2')&&adjacent[0].text.includes(rows[0].customerName)&&adjacent[0].text.includes(rows[1].customerName)&&adjacent[0].text.endsWith('같은 좌표 · 목적지로 열기'));
  check('different-coordinate second pair retains exact official from/to endpoints and visit order',adjacent[1].href==='https://map.kakao.com/link/from/'+encodeURIComponent(rows[1].customerName)+','+rows[1].lat+','+rows[1].lng+'/to/'+encodeURIComponent(rows[2].customerName)+','+rows[2].lat+','+rows[2].lng&&adjacent[1].sameCoordinate==='false'&&adjacent[1].text.startsWith('2 → 3')&&!adjacent[1].text.includes('같은 좌표'));
  await apply(7);check('five waypoint boundary opens one complete official car link',await page.locator('#navKakaoLinks a').count()===1&&(await page.locator('#navKakaoLinks a').getAttribute('href')).split('/car/')[1].split('/').length===7);
- check('selected store link forwards verified origin and destination without hidden via points',(await page.locator('#navSelectedKakao').getAttribute('href')).includes('/link/from/')&&(await page.locator('#navSelectedKakaoHint').textContent()).includes('경유지 없이'));
+ check('one integrated Kakao section preserves input sequence',await page.locator('#navKakaoDirections').count()===1&&await page.locator('#navSelectedKakao').count()===0);
  await apply(8);check('six waypoint boundary explicitly splits into two continuous links',await page.locator('#navKakaoLinks a').count()===2&&(await page.locator('#navKakaoStatus').textContent()).includes('모든 지점을 보존'));
  await apply(32);check('internal thirty waypoint editor is preserved with six external segments',await page.locator('#plannerStops input').count()===30&&await page.locator('#navKakaoLinks a').count()===6);
  check('thirty waypoint fallback preserves all thirty-one adjacent links with no extra provider',await page.locator('#navKakaoLegLinks a').count()===31&&await page.locator('#navKakaoLegLinks a').last().textContent().then(t=>t.startsWith('31 → 32')));
  const links=await page.locator('#navKakaoLinks a').evaluateAll(nodes=>nodes.map(n=>({href:n.href,target:n.target,rel:n.rel})));
  check('all anchors are explicit isolated user navigation with no API key',links.every(x=>x.href.startsWith('https://map.kakao.com/link/by/car/')&&x.target==='_blank'&&x.rel.includes('noreferrer')&&!/appkey|apikey|token/i.test(x.href)));
+ await page.evaluate(()=>window.dispatchEvent(new CustomEvent('map-manual-route',{detail:{state:'disabled',error:'FEATURE_DISABLED',noDrivingRequired:true}})));
+ check('Directions OFF cannot claim zero driving distance',!/(?:0 km|0분)/.test(await page.locator('#navRouteStatus').textContent()));
  check('external links do not fabricate distance or duration',await page.locator('#navDistance').textContent()==='— km'&&await page.locator('#navDuration').textContent()==='— 분');
- for(const width of [1366,390]){
+ for(const width of [1920,1366,768,390]){
   await page.setViewportSize({width,height:900});await page.locator('#navKakaoDirections').scrollIntoViewIfNeeded();
   check(width+'px links remain within viewport',await page.locator('#navKakaoDirections').evaluate(n=>{const r=n.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1}));
   await page.screenshot({path:path.join(output,'directions-'+width+'.png')});
@@ -69,8 +71,8 @@ try{
  await page.locator('#navKakaoLegFallback summary').click();check('mobile user can expand adjacent links inside the existing panel',await page.locator('#navKakaoLegLinks a').first().isVisible()&&await page.locator('#navKakaoLegLinks a').evaluateAll(nodes=>nodes.every(n=>n.getBoundingClientRect().right<=innerWidth+1)));
  await page.locator('#navKakaoLegFallback').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(output,'directions-fallback-390.png')});
  await page.locator('#plannerWaypoint8').fill('UNKNOWN_SYNTHETIC');check('unresolved via point blocks all combined and fallback links',await page.locator('#navKakaoLinks a').count()===0&&await page.locator('#navKakaoLegLinks a').count()===0&&!await page.locator('#navKakaoLegFallback').isVisible()&&!await page.locator('#navKakaoLegHint').isVisible());
- await page.locator('#plannerStart').fill('UNKNOWN_ORIGIN');check('unresolved explicit origin also blocks selected-store link',!await page.locator('#navSelectedKakao').isVisible());
- await page.evaluate(()=>MapNavigationEditor.clear());check('clear removes all route links and restores destination-only selected link',await page.locator('#navKakaoLinks a').count()===0&&await page.locator('#navKakaoLegLinks a').count()===0&&(await page.locator('#navSelectedKakao').getAttribute('href')).includes('/link/to/'));
+ await page.locator('#plannerStart').fill('UNKNOWN_ORIGIN');check('unresolved explicit origin leaves no standalone bypass',await page.locator('#navSelectedKakao').count()===0&&await page.locator('#navKakaoLinks a').count()===0);
+ await page.evaluate(()=>MapNavigationEditor.clear());check('clear removes all combined and fallback route links',await page.locator('#navKakaoLinks a').count()===0&&await page.locator('#navKakaoLegLinks a').count()===0&&await page.locator('#navSelectedKakao').count()===0);
  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('map-navigation-logout')));check('logout clears selected destination and route links',!await page.locator('#navSelectedKakao').isVisible()&&await page.locator('#navKakaoLinks a').count()===0);
  check('no provider requests, geocoding, route POSTs or JavaScript errors',external.length===0&&!requests.some(r=>r.path.includes('road-route'))&&errors.length===0);
  const result={pass:checks.length,fail:0,scope:'LOCAL_REAL_EDGE_SYNTHETIC_SHELL_EDITOR_NO_PROVIDER',checks,externalCalls:external.length,errors,artifacts:output};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));

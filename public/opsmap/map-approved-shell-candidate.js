@@ -39,7 +39,7 @@
   const filters=$('#periodFilterPanel');filters.className='generalCenters';
   const filterTitle=filters.querySelector('.label');filterTitle.className='sectiontitle';filterTitle.innerHTML='<h2>담당 센터</h2><button id="sourceCenterReset" class="textbtn">전체 보기</button>';
   const centers=document.createElement('div');centers.className='centers';centers.id='centers';centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남']].map(([key,label])=>`<button data-source-center="${key}" class="${key==='all'?'active':''}">${label}</button>`).join('');filters.append(centers);
-  const basePicker=document.createElement('details');basePicker.id='baseVehiclePicker';basePicker.open=true;basePicker.innerHTML='<summary>호차 선택 <span id="baseVehicleCount">전체</span></summary>';filters.append(basePicker);
+  const basePicker=document.createElement('details');basePicker.id='baseVehiclePicker';basePicker.innerHTML='<summary>호차 선택 <span id="baseVehicleCount">전체</span></summary>';filters.append(basePicker);
   const vehicleQuery=$('#vehicleQuery');vehicleQuery.type='search';vehicleQuery.placeholder='호차번호 검색';vehicleQuery.setAttribute('aria-label','호차번호 검색');
   function setCenter(key){if(bridge.state.mode!=='BASE_60D')return;$('#periodCenter').value=key;$('#periodCenter').dispatchEvent(new Event('change'));centers.querySelectorAll('button').forEach(button=>button.classList.toggle('active',button.dataset.sourceCenter===key));}
   centers.querySelectorAll('button').forEach(button=>button.onclick=()=>setCenter(button.dataset.sourceCenter));$('#sourceCenterReset').onclick=()=>setCenter('all');
@@ -212,7 +212,7 @@
     modeVisible(planner,daily);modeVisible(periodButton,!daily);modeVisible(context,false);
     const host=daily?dailyForm:basePicker;for(const node of [routeChecks,$('#selectAllVehicles'),$('#clearVehicles')])if(node.parentNode!==host)host.append(node);
     if(daily){if(vehicleQuery.parentNode!==host||vehicleQuery.nextSibling!==routeChecks)host.insertBefore(vehicleQuery,routeChecks);}
-    else if(vehicleQuery.parentNode!==basePicker.querySelector('summary'))basePicker.querySelector('summary').append(vehicleQuery);
+    else if(vehicleQuery.parentNode!==basePicker||vehicleQuery.nextSibling!==routeChecks)basePicker.insertBefore(vehicleQuery,routeChecks);
     modeVisible($('#legacyVehicleState'),!daily);if(!daily&&$('#legacyVehicleState').parentNode!==basePicker)basePicker.append($('#legacyVehicleState'));
     const rangeRow=$('#rangeStart').parentNode,applyRow=$('#applyPeriod').parentNode;modeVisible(rangeRow,!daily);modeVisible(applyRow,!daily);modeVisible(basis,false);modeVisible($('#periodDriver'),false);
     modeVisible(queryRoutes,daily);modeVisible(routeHelp,daily);modeVisible(advancedRoutes,daily);
@@ -277,13 +277,15 @@
     const countMatch=controllerCount.textContent.match(/^([\d,]+)/),countText=countMatch?countMatch[1]:controllerCount.textContent;if(displayCount.textContent!==countText)displayCount.textContent=countText;
     const toggle=$('#togglePeriodList'),toggleText=toggle.getAttribute('aria-expanded')==='true'?'접기 −':'펼치기 ＋';if(toggle.textContent!==toggleText)toggle.textContent=toggleText;
     for(const [index,button] of [...$('#periodStoreList').querySelectorAll('[data-period-store]')].entries()){sourceCard(button,bridge.lookupStore(button.dataset.periodStore)[0],false);button.hidden=index>=visibleStoreLimit;}
-    loadMore.hidden=!countMatch||Number(countMatch[1].replaceAll(',',''))<=visibleStoreLimit;
+    const listExpanded=toggle.getAttribute('aria-expanded')==='true';
+    $('#periodStoreList').hidden=!listExpanded;$('#periodListMore').hidden=!listExpanded||$('#periodListMore').hidden;
+    loadMore.hidden=!listExpanded||!countMatch||Number(countMatch[1].replaceAll(',',''))<=visibleStoreLimit;
     for(const button of $('#runList').querySelectorAll('[data-run-code]'))sourceCard(button,bridge.state.routeRows.find(row=>row.customerCode===button.dataset.runCode),true);
   }
   for(const node of [$('#runList'),$('#dailySummary'),$('#roadRoutePanel'),$('#periodStoreList')])new MutationObserver(sourceSync).observe(node,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
+  new MutationObserver(sourceSync).observe($('#togglePeriodList'),{attributes:true,attributeFilter:['aria-expanded']});
   new MutationObserver(sourceSync).observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});sourceSync();
   new MutationObserver(sync).observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});new MutationObserver(sync).observe($('#periodStoreListCount'),{childList:true,subtree:true,characterData:true});sync();
-  if($('#togglePeriodList').getAttribute('aria-expanded')==='false')$('#togglePeriodList').click();
   window.MapStaffEntry?.status();
 })();
 
