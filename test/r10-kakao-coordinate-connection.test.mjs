@@ -9,9 +9,9 @@ import {createProductionGeocodeBudgetGithubStore} from '../src/opsmap-abc/manual
 // All credentials, staff sessions, sources and provider responses are synthetic.
 const hash=text=>createHash('sha256').update(text).digest('hex'),stamp=Date.parse('2026-11-03T06:00:00Z');
 const doc=address=>({address_name:address,x:'127.01',y:'37.51'}),body=address=>({documents:[doc(address)],meta:{is_end:true,total_count:1}});
-function fixture({ledger=createKakaoGeocodeLedger(),reply,enabled='0'}={}){
+function fixture({ledger=createKakaoGeocodeLedger(),reply,enabled='0',dailyLimit}={}){
  const env={KAKAO_REST_API_KEY:'a'.repeat(32),KAKAO_MAP_APP_ID:'1464792',OPSMAP_KAKAO_REST_KEY_SHA256:hash('a'.repeat(32)),
-  OPSMAP_KAKAO_FREE_QUOTA_VERIFIED:'1',OPSMAP_KAKAO_PAID_API_DISABLED:'1',OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:'1',OPSMAP_KAKAO_GEOCODING_ENABLED:enabled};
+  OPSMAP_KAKAO_FREE_QUOTA_VERIFIED:'1',OPSMAP_KAKAO_PAID_API_DISABLED:'1',OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:'1',OPSMAP_KAKAO_GEOCODING_ENABLED:enabled,...(dailyLimit===undefined?{}:{OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT:dailyLimit})};
  const calls=[],store={...createMemoryCoordinateStore(ledger),durable:true};let clock=stamp;
  const service=createKakaoCoordinateConnection({env,store,now:()=>clock,fetchImpl:async(url,options)=>{calls.push({url,options});return reply?reply(url,options):{ok:true,json:async()=>body(url.searchParams.get('query'))};}});
  return {env,calls,store,service,advance:ms=>clock+=ms};
@@ -60,6 +60,18 @@ test('daily100 cap survives process replacement and counts diagnostic reservatio
  const ledger=createKakaoGeocodeLedger();ledger.diagnosticPassed=true;ledger.days['2026-11-03']=100;ledger.used=100;
  const f=fixture({ledger,enabled:'1'});await assert.rejects(f.service.lookup('경기도 오산시 원동 18'),/GEOCODE_DAILY_LIMIT/);assert.equal(f.calls.length,0);assert.equal(f.store.snapshot().used,100);
  f.advance(86400000);await f.service.lookup('경기도 오산시 원동 18');assert.equal(f.store.snapshot().used,101);assert.equal(f.store.snapshot().historicalConsumed,250);
+});
+
+test('explicit daily1000 approval preserves consumed counters and still stops at1000',async()=>{
+ const ledger=createKakaoGeocodeLedger();ledger.diagnosticPassed=true;ledger.used=100;ledger.days['2026-11-03']=100;
+ const f=fixture({ledger,enabled:'1',dailyLimit:'1000'});assert.equal((await f.service.status()).dailyLimit,1000);
+ await f.service.lookup('경기도 오산시 원동 18');assert.equal(f.store.snapshot().used,101);assert.equal(f.store.snapshot().days['2026-11-03'],101);assert.equal(f.store.snapshot().historicalConsumed,250);
+ const full=f.store.snapshot();full.used=1000;full.days['2026-11-03']=1000;const next=fixture({ledger:full,enabled:'1',dailyLimit:'1000'});
+ await assert.rejects(next.service.lookup('경기도 오산시 원동 18'),/GEOCODE_DAILY_LIMIT/);assert.equal(next.calls.length,0);assert.equal(next.store.snapshot().used,1000);
+});
+
+test('missing or invalid daily-limit settings retain the original100 ceiling',async()=>{
+ for(const dailyLimit of [undefined,'0','1001','10000','invalid','3.5'])assert.equal((await fixture({dailyLimit}).service.status()).dailyLimit,100);
 });
 test('HTTP errors automatically close the shared circuit and are never retried',async()=>{
  const f=fixture({reply:async()=>({ok:false,status:429})});await assert.rejects(f.service.lookup(KAKAO_DIAGNOSTIC_ADDRESS,{diagnostic:true}),/KAKAO_HTTP_REJECTED/);
