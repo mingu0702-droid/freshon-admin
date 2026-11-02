@@ -2194,7 +2194,7 @@
   function newAreaCoordinate(row) {
     if (!row) return null;
     const point = {...row};
-    window.MapManualPins?.apply(point);
+    if (/^[A-Z]\d+$/.test(point.customerCode||'')) window.MapManualPins?.apply(point);
     const status = point.coordinateStatus || point.raw?.coordinateStatus;
     const lat = numberOrNull(point.lat), lng = numberOrNull(point.lng);
     if (['CONFLICT','UNVERIFIED','MISSING'].includes(status) || point.resolutionStatus === 'ADDRESS_CHANGED_REVIEW_REQUIRED' || lat === null || lng === null || lat < 33 || lat > 39.5 || lng < 124 || lng > 132) return null;
