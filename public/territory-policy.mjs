@@ -1,7 +1,7 @@
 import {prepareAdminBoundaries,matchingAdminFeatures} from './admin-boundaries.mjs';
 const day=v=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(v)&&Number.isFinite(Date.parse(v))&&new Date(v).toISOString().slice(0,10)===v;
 export function recentTerritoryRange(end){if(!day(end))throw Error('TERRITORY_DATE_REQUIRED');return {startDate:new Date(Date.parse(end)-9*86400000).toISOString().slice(0,10),endDate:end};}
-const validPoint=p=>p&&!['CONFLICT','UNVERIFIED','MISSING'].includes(p.coordinateStatus||p.raw?.coordinateStatus)&&p.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'&&p.currentMasterStatus!=='UNAVAILABLE'&&Number.isFinite(p.lat)&&Number.isFinite(p.lng)&&p.lat>=33&&p.lat<=39.5&&p.lng>=124&&p.lng<=132;
+const validPoint=p=>p&&!['CONFLICT','UNVERIFIED','MISSING'].includes(p.coordinateStatus||p.raw?.coordinateStatus)&&p.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'&&Number.isFinite(p.lat)&&Number.isFinite(p.lng)&&p.lat>=33&&p.lat<=39.5&&p.lng>=124&&p.lng<=132;
 // Fixed territory is a projection of the verified fixed master, never of dated visits.
 // A missing/stale/master-conflicting row remains unconfirmed; actual vehicle is ignored.
 export function buildBaseTerritories(stores,boundaries=null){
