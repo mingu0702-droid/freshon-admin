@@ -9,6 +9,8 @@ const hash=text=>createHash('sha256').update(text,'utf8').digest('hex');
 const fail=(code,status=503)=>{throw Object.assign(Error(code),{code,status});};
 const day=stamp=>new Date(stamp+32400000).toISOString().slice(0,10);
 export function createKakaoCoordinateConnection({env=process.env,store,now=Date.now,fetchImpl=globalThis.fetch}={}) {
+ const configuredLimit=Number(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT||100);
+ const dailyLimit=Number.isSafeInteger(configuredLimit)&&configuredLimit>=1&&configuredLimit<=1000?configuredLimit:100;
  let blocked=false;const pending=new Map();
  const proof=()=>{
   const key=String(env.KAKAO_REST_API_KEY||'').trim();
@@ -26,7 +28,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,now=Date.
   try{return await transaction(async state=>({enabled:env.OPSMAP_KAKAO_GEOCODING_ENABLED==='1'&&state.diagnosticPassed&&!state.blocked&&!blocked,
    diagnosticAvailable:env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED==='1'&&!state.diagnosticUsed&&!state.blocked&&!blocked,
    reason:state.blocked||blocked?'GEOCODE_AUTOMATICALLY_BLOCKED':state.diagnosticPassed?'READY':'DIAGNOSTIC_REQUIRED',
-   dailyLimit:100,dailyUsed:Number(state.days[day(now())]||0),epoch:state.epoch,retention:'REQUEST_ONLY',lastAttempt:state.lastAttempt||null}));}
+   dailyLimit,dailyUsed:Number(state.days[day(now())]||0),epoch:state.epoch,retention:'REQUEST_ONLY',lastAttempt:state.lastAttempt||null}));}
   catch{return {enabled:false,reason:'GEOCODE_DURABLE_LEDGER_REQUIRED',retention:'REQUEST_ONLY'};}
  };
  const lookup=async(query,{diagnostic=false,assertCurrent=async()=>{}}={})=>{
@@ -45,7 +47,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,now=Date.
     if(diagnostic){if(env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED!=='1'||state.diagnosticUsed)fail('DIAGNOSTIC_ALREADY_USED',429);}
     else if(env.OPSMAP_KAKAO_GEOCODING_ENABLED!=='1'||!state.diagnosticPassed)fail('GEOCODING_DISABLED');
     const today=day(now()),count=Number(state.days[today]||0);
-    if(!Number.isSafeInteger(count)||count<0||count>=100)fail('GEOCODE_DAILY_LIMIT',429);
+    if(!Number.isSafeInteger(count)||count<0||count>=dailyLimit)fail('GEOCODE_DAILY_LIMIT',429);
     await assertCurrent();
     state.used++;state.days[today]=count+1;state.queries[today+':'+queryHash]=Number(state.queries[today+':'+queryHash]||0)+1;
     if(diagnostic)state.diagnosticUsed=true;
