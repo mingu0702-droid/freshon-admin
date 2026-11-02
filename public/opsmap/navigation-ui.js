@@ -57,6 +57,7 @@
         return {...rows.get(key)};
       },
       values:()=>[...rows.values()].map(row=>({...row})),
+      retainSearchPoints(codes){const keep=new Set(codes);for(const [key,row]of rows)if(row.searchTemporary&&!keep.has(row.customerCode))rows.delete(key);},
       clear(){rows.clear();}
     };
   }
@@ -89,7 +90,10 @@
   function all(){return lookup.unique([...bridge.navigationStores(),...centers,...temporaryPlaces.values()]);}
   const resolve=value=>lookup.resolve(value,all());
   const status=text=>{$('#navPointStatus').textContent=text;};
-  function updateSelected(candidate=bridge.state.selected){
+  function updateSelected(candidate=bridge.state.selected||bridge.state.virtual){
+    // A search preview is not a saved route stop. Drop it when selection changes,
+    // while retaining temporary points explicitly assigned to the route.
+    temporaryPlaces.retainSearchPoints(editor.values());
     candidate=temporaryPlaces.add(candidate);selectedCandidate=candidate||null;
     const target=$('#navSelectedStore');target.replaceChildren();
     if(!candidate)target.textContent='매장을 선택하면 경로에 추가할 수 있습니다.';

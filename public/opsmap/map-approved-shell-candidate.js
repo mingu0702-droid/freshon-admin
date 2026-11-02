@@ -26,9 +26,16 @@
   const road=$('#roadRoutePanel');road.innerHTML='<div><span class="eyebrow">길찾기</span><h2>도로 경로 <span>자동차</span></h2><p id="navSelection"></p><p id="osanOrigin">출발지를 선택해 주세요.</p></div><div class="navMetrics"><span>주행거리 <b id="roadRouteDistance">— km</b></span><span>예상 소요 <b id="roadRouteDuration">— 분</b></span></div><p class="hint" id="roadRouteStatus">출발지와 목적지를 선택해 주세요.</p><p class="hint" id="roadRouteCoverage"></p>';
   const syncRow=document.createElement('div');syncRow.className='row';const syncButton=$('#syncOperation');syncRow.append(syncButton);syncButton.textContent='운행 새로고침';road.append(syncRow);navigation.append(road);
   dock.append(dailyQuery,summary,navigation);scroll.prepend(dock);
-  const search=$('.customerBlock');search.className='customerBlock';search.querySelector('.label > span').textContent='매장 검색';search.querySelector('.label').className='sourceSearchLabel';search.querySelector('.searchLine').classList.add('row');$('#query').placeholder='고객코드 · 매장명 · 도로명·지번';$('#searchBtn').className='primary';
-  const address=$('.addressBlock');address.querySelector('.label').hidden=false;address.querySelector('.label > span').textContent='도로명·지번 주소';address.querySelector('.searchLine').classList.add('row');$('#addressQuery').placeholder='예: 수원시청';$('#addressBtn').textContent='위치 찾기';address.querySelector('.hint').textContent='위치 기준 30km 주변 호차 · 참고용';
-  search.append($('#searchNotice'),$('#addressJudgeResults'));
+  const search=$('.customerBlock');search.className='customerBlock';search.querySelector('.label > span').textContent='매장·주소 검색';search.querySelector('.label').className='sourceSearchLabel';
+  const searchLine=search.querySelector('.searchLine');searchLine.classList.add('row','unifiedSearchLine');
+  const query=$('#query');query.placeholder='고객코드 · 매장명 · 도로명·지번 주소';query.setAttribute('aria-label','매장·주소 검색');query.setAttribute('aria-controls','results');$('#searchBtn').className='primary';
+  const inputWrap=document.createElement('div');inputWrap.className='unifiedSearchInput';searchLine.insertBefore(inputWrap,query);inputWrap.append(query);
+  const clearQuery=document.createElement('button');clearQuery.id='clearQuery';clearQuery.type='button';clearQuery.textContent='×';clearQuery.title='검색어 지우기';clearQuery.setAttribute('aria-label','검색어 지우기');inputWrap.append(clearQuery);
+  const syncClearQuery=()=>{clearQuery.hidden=!query.value;};query.addEventListener('input',syncClearQuery);window.addEventListener('map-unified-search-clear',()=>queueMicrotask(syncClearQuery));clearQuery.onclick=()=>{window.dispatchEvent(new Event('map-unified-search-clear'));queueMicrotask(syncClearQuery);query.focus();};syncClearQuery();
+  const searchField=document.createElement('div');searchField.className='unifiedSearchField';searchLine.before(searchField);searchField.append(searchLine,$('#results'));
+  const searchState=$('#searchState');searchState.setAttribute('role','status');searchState.setAttribute('aria-live','polite');if(searchState.textContent==='검색 대기')searchState.textContent='';searchField.after(searchState);
+  const address=$('.addressBlock');address.classList.add('compatibilityHidden');address.hidden=true;address.inert=true;address.setAttribute('aria-hidden','true');
+  for(const node of [$('#searchNotice'),$('#addressJudgeResults')]){node.hidden=true;node.inert=true;node.classList.add('compatibilityHidden');address.append(node);}
   const filters=$('#periodFilterPanel');filters.className='generalCenters';
   const filterTitle=filters.querySelector('.label');filterTitle.className='sectiontitle';filterTitle.innerHTML='<h2>담당 센터</h2><button id="sourceCenterReset" class="textbtn">전체 보기</button>';
   const centers=document.createElement('div');centers.className='centers';centers.id='centers';centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남']].map(([key,label])=>`<button data-source-center="${key}" class="${key==='all'?'active':''}">${label}</button>`).join('');filters.append(centers);
@@ -168,7 +175,7 @@
   const areaShortcut=document.createElement('button');areaShortcut.id='sourceAreaShortcut';areaShortcut.textContent='신규권역 일괄조회';areaShortcut.onclick=()=>$('#sourceBatch').click();data.append(areaShortcut);
   advanced.append($('#periodControls'),$('#operationsPanel'));$('#mapDateBar').classList.add('compatibilityHidden');
   const controllerCount=$('#periodStoreListCount'),displayCount=document.createElement('span');displayCount.id='sourceListCount';controllerCount.replaceWith(displayCount);advanced.append(controllerCount);
-  const result=$('#results');result.className='results';result.hidden=!result.childNodes.length;new MutationObserver(()=>result.hidden=!result.childNodes.length).observe(result,{childList:true});
+  const result=$('#results');result.className='results unifiedSearchResults';result.hidden=true;result.setAttribute('aria-label','매장 검색 후보');
   maparea.append($('#detailSection'));$('#legacyVehicleState').hidden=false;
   for(const section of scroll.querySelectorAll(':scope>section'))if(!section.children.length)section.remove();
   const routeDialog=document.createElement('dialog');routeDialog.id='routeDialog';routeDialog.innerHTML='<div class="modalhead"><div><span class="eyebrow">운행 조회</span><h2>운행 조회 조건</h2></div><button id="closeRoutes" aria-label="운행 조건 닫기">✕</button></div>';

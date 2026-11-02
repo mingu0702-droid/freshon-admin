@@ -1,4 +1,5 @@
 import {mountOfficialAdminBoundaries} from './officialAdminBoundaries.js';
+import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import fsSync from 'node:fs';
 import express from 'express';import path from 'node:path';import fs from 'node:fs/promises';
 import {mountProductionMapApi} from './opsmap-abc/productionMapIntegration.js';
@@ -50,7 +51,7 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
 
   const safeRows=rows=>(rows||[]).map(row=>{const clean=redactPublicData(row);for(const field of ['address','customerAddress','detailAddress','addressDetail'])delete clean[field];return clean;});
   router.get('/api/map-phase2b/preview/snapshot',binding.requireStaff,async(_q,r)=>{try{const snap=await readers.readPhase2bSnapshot();if(!snap)return r.status(503).json({error:'PHASE2B_SNAPSHOT_NOT_READY'});return binding.requireStaff(_q,r,()=>r.json({ok:true,data:safeRows(snap.rows),meta:readers.phase2bSnapshotMeta(snap),error:null}));}catch{return r.status(503).json({error:'PHASE2B_SNAPSHOT_UNAVAILABLE'});}});
-  router.get('/api/map-phase2b/private/customer-search',binding.requireStaff,async(q,r)=>{let text;try{text=decodeURIComponent(q.get('x-map-customer-query')||'').normalize('NFKC').trim().toLowerCase();}catch{return r.status(400).json({error:'INVALID_QUERY'});}if(!text||text.length>200)return r.status(400).json({error:'INVALID_QUERY'});try{const snap=await readers.readPhase2bSnapshot();const rows=(snap?.rows||[]).filter(v=>[v.customerCode,v.customerName,v.address,v.customerAddress].some(t=>String(t||'').normalize('NFKC').toLowerCase().includes(text))).slice(0,100);return binding.requireStaff(q,r,()=>r.json({ok:true,data:safeRows(rows),meta:{source:'EXISTING_PRODUCTION_SNAPSHOT',currentness:'UNCONFIRMED'}}));}catch{return r.status(503).json({error:'CUSTOMER_LOOKUP_UNAVAILABLE'});}});
+  mountPrivateCustomerSearch({app:router,requireStaff:binding.requireStaff,readSnapshot:readers.readPhase2bSnapshot,searchMaster:env.OPSMAP_PRIVATE_READER_ENABLED==='true'?(q,options)=>protectedHubRead('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536}):null});
   router.get('/api/map-phase2b/preview/route-plan',binding.requireStaff,async(q,r)=>{const date=readers.normalizeDateValue(q.query.date),vehicle=String(q.query.vehicle||'');if(!date||!vehicle||vehicle.length>40)return r.status(400).json({error:'INVALID_ROUTE'});try{const payload=await (readers.readStoredRoute?readers.readStoredRoute(date,vehicle):readers.callHub?.('routePlan',{date,vehicle}));if(!payload)return r.status(503).json({error:'ROUTE_SOURCE_NOT_CONFIGURED'});return binding.requireStaff(q,r,()=>r.json(redactPublicData(payload)));}catch{return r.status(503).json({error:'ROUTE_SOURCE_UNAVAILABLE'});}});
 
   router.use('/api/map-phase2b/private/delivery-photos',binding.requireStaff,(_q,r)=>r.status(503).json({ok:false,error:'PHOTO_SOURCE_DISABLED'}));

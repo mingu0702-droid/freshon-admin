@@ -1,8 +1,8 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {privateReaderEndpoint} from '../src/opsmap-abc/privateReaderEndpoint.js';
 const env={HUB_API_URL:'https://existing.example/exec',HUB_API_SECRET:'SYNTHETIC_OLD_SECRET_'.repeat(3),OPSMAP_PRIVATE_READER_ENABLED:'true',OPSMAP_PRIVATE_READER_URL:'https://script.google.com/macros/s/SYNTHETIC_DEPLOYMENT_REFERENCE_1234/exec',OPSMAP_PRIVATE_READER_SECRET:'SYNTHETIC_NEW_SECRET_'.repeat(3)};
-test('only the two selected-customer reads use the dedicated endpoint and HMAC secret',()=>{
- for(const action of ['customerDetail','staffCustomerDetail'])assert.deepEqual(privateReaderEndpoint(action,env),{url:env.OPSMAP_PRIVATE_READER_URL,secret:env.OPSMAP_PRIVATE_READER_SECRET,isolated:true});
+test('only selected-customer reads and bounded metadata search use the dedicated endpoint and HMAC secret',()=>{
+ for(const action of ['customerDetail','staffCustomerDetail','customerSearch'])assert.deepEqual(privateReaderEndpoint(action,env),{url:env.OPSMAP_PRIVATE_READER_URL,secret:env.OPSMAP_PRIVATE_READER_SECRET,isolated:true});
  for(const action of ['mapBounds','periodAssignments','datedAssignments','customerDetailPrepared','customerDetailsSyncRequest','mapRoadBudgetReserve'])assert.deepEqual(privateReaderEndpoint(action,env),{url:env.HUB_API_URL,secret:env.HUB_API_SECRET,isolated:false});
 });
 test('enabled misconfiguration fails closed without falling back to the old secret or URL',()=>{
