@@ -26,7 +26,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,now=Date.
   try{return await transaction(async state=>({enabled:env.OPSMAP_KAKAO_GEOCODING_ENABLED==='1'&&state.diagnosticPassed&&!state.blocked&&!blocked,
    diagnosticAvailable:env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED==='1'&&!state.diagnosticUsed&&!state.blocked&&!blocked,
    reason:state.blocked||blocked?'GEOCODE_AUTOMATICALLY_BLOCKED':state.diagnosticPassed?'READY':'DIAGNOSTIC_REQUIRED',
-   dailyLimit:100,dailyUsed:Number(state.days[day(now())]||0),epoch:state.epoch,retention:'REQUEST_ONLY'}));}
+   dailyLimit:100,dailyUsed:Number(state.days[day(now())]||0),epoch:state.epoch,retention:'REQUEST_ONLY',lastAttempt:state.lastAttempt||null}));}
   catch{return {enabled:false,reason:'GEOCODE_DURABLE_LEDGER_REQUIRED',retention:'REQUEST_ONLY'};}
  };
  const lookup=async(query,{diagnostic=false,assertCurrent=async()=>{}}={})=>{
@@ -51,24 +51,31 @@ export function createKakaoCoordinateConnection({env=process.env,store,now=Date.
     if(diagnostic)state.diagnosticUsed=true;
     await commit(state);
    });
+   let stage='PROVIDER_REQUEST',providerHttp=null;const started=now();
    try{
     await assertCurrent();
     const url=new URL('https://dapi.kakao.com/v2/local/search/address.json');url.searchParams.set('query',address);url.searchParams.set('analyze_type','exact');url.searchParams.set('size','30');
     const response=await fetchImpl(url,{method:'GET',headers:{Authorization:'KakaoAK '+String(env.KAKAO_REST_API_KEY).trim()},signal:AbortSignal.timeout(6000),redirect:'error',cache:'no-store'});
+    providerHttp=response.status;stage='PROVIDER_HEADERS';
     if(!response.ok)fail('KAKAO_HTTP_REJECTED',502);
     const appHeader=['x-kakao-app-id','x-kakao-appid'].map(name=>response.headers?.get?.(name)).find(value=>value!=null);
     if(appHeader!==undefined&&appHeader!==KAKAO_EXPECTED_APP_ID)fail('KAKAO_RESPONSE_APP_MISMATCH',502);
-    const body=await response.json();if(!Array.isArray(body?.documents)||typeof body.meta?.is_end!=='boolean')fail('KAKAO_RESPONSE_INVALID',502);
+    stage='PROVIDER_BODY';let body;try{body=await response.json();}catch{fail('KAKAO_JSON_INVALID',502);}
+    stage='CONTRACT';if(!Array.isArray(body?.documents)||typeof body.meta?.is_end!=='boolean')fail('KAKAO_RESPONSE_INVALID',502);
     const point=kakaoCoordinateResult(body,address);
     if(diagnostic&&!point)fail('KAKAO_DIAGNOSTIC_NOT_EXACT',409);
-    if(diagnostic)await transaction(async(state,commit)=>{state.diagnosticPassed=true;await commit(state);});
+    stage='LEDGER_COMPLETION';if(diagnostic)await transaction(async(state,commit)=>{state.diagnosticPassed=true;await commit(state);});
+    stage='SESSION_RECHECK';
     await assertCurrent();
     return {ok:true,data:{documents:point?[{address_name:address,x:String(point.lng),y:String(point.lat)}]:[],status:point?'OK':'ZERO_RESULT',exact:!!point,
      diagnostic,providerHttp:200,responseAppId:appHeader||null,retention:'REQUEST_ONLY',coordinatePersistence:false}};
    }catch(error){
     if(error?.code==='GEOCODE_SESSION_EXPIRED')throw error;
-    blocked=true;try{await transaction(async(state,commit)=>{state.blocked=true;await commit(state);});}catch{/* Local circuit stays closed even if storage is unavailable. */}
-    fail(/^KAKAO_[A-Z_]+$/.test(error?.code||'')?error.code:'KAKAO_LOOKUP_FAILED',502);
+    const transportCode=['UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_SOCKET','ENOTFOUND','EAI_AGAIN','ETIMEDOUT','ECONNREFUSED','ECONNRESET','CERT_HAS_EXPIRED','UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(error?.cause?.code)?error.cause.code:null;
+    const code=/^KAKAO_[A-Z_]+$/.test(error?.code||'')?error.code:stage==='LEDGER_COMPLETION'?'KAKAO_LEDGER_COMPLETION_FAILED':['TimeoutError','AbortError'].includes(error?.name)?'KAKAO_TIMEOUT':stage==='PROVIDER_REQUEST'?'KAKAO_NETWORK_FAILED':'KAKAO_LOOKUP_FAILED';
+    const lastAttempt={stage,code,providerHttp:Number.isInteger(providerHttp)?providerHttp:null,transportCode,elapsedMs:Math.max(0,now()-started)};
+    blocked=true;try{await transaction(async(state,commit)=>{state.blocked=true;state.lastAttempt=lastAttempt;await commit(state);});}catch{/* Local circuit stays closed even if storage is unavailable. */}
+    fail(code,502);
    }
   })();pending.set(key,task);try{return await task;}finally{pending.delete(key);}
  };

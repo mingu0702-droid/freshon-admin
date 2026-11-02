@@ -65,6 +65,19 @@ test('HTTP errors automatically close the shared circuit and are never retried',
  const f=fixture({reply:async()=>({ok:false,status:429})});await assert.rejects(f.service.lookup(KAKAO_DIAGNOSTIC_ADDRESS,{diagnostic:true}),/KAKAO_HTTP_REJECTED/);
  await assert.rejects(f.service.lookup(KAKAO_DIAGNOSTIC_ADDRESS,{diagnostic:true}),/GEOCODE_AUTOMATICALLY_BLOCKED/);assert.equal(f.calls.length,1);assert(f.store.snapshot().blocked);assert.equal(f.store.snapshot().used,1);
 });
+
+test('transport timeout preserves only its safe stage/code and never an upstream secret message',async()=>{
+ const f=fixture({reply:async()=>{throw Object.assign(Error('SYNTHETIC_PRIVATE_PROVIDER_MESSAGE'),{name:'TimeoutError',cause:{code:'UND_ERR_CONNECT_TIMEOUT'}});}});
+ await assert.rejects(f.service.lookup(KAKAO_DIAGNOSTIC_ADDRESS,{diagnostic:true}),/KAKAO_TIMEOUT/);
+ const failure=f.store.snapshot().lastAttempt;assert.equal(failure.stage,'PROVIDER_REQUEST');assert.equal(failure.providerHttp,null);assert.equal(failure.transportCode,'UND_ERR_CONNECT_TIMEOUT');assert(!JSON.stringify(f.store.snapshot()).includes('SYNTHETIC_PRIVATE_PROVIDER_MESSAGE'));
+});
+
+test('a provider HTTP200 followed by ledger failure stays distinct from a provider failure',async()=>{
+ const f=fixture(),original=f.store.transaction;let transactions=0;
+ f.store.transaction=async work=>{transactions++;if(transactions===2)throw Error('SYNTHETIC_STORAGE_FAILURE');return original(work);};
+ await assert.rejects(f.service.lookup(KAKAO_DIAGNOSTIC_ADDRESS,{diagnostic:true}),/KAKAO_LEDGER_COMPLETION_FAILED/);
+ const failure=f.store.snapshot().lastAttempt;assert.equal(failure.stage,'LEDGER_COMPLETION');assert.equal(failure.providerHttp,null);assert.equal(f.calls.length,1);assert.equal(f.store.snapshot().diagnosticPassed,false);
+});
 test('multiple results, partial pagination and invalid Korea coordinates remain unresolved',()=>{
  for(const response of [{documents:[doc(KAKAO_DIAGNOSTIC_ADDRESS),doc(KAKAO_DIAGNOSTIC_ADDRESS)],meta:{is_end:true,total_count:2}},
   {documents:[doc(KAKAO_DIAGNOSTIC_ADDRESS)],meta:{is_end:false,total_count:1}},
