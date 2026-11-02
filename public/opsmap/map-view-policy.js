@@ -191,6 +191,20 @@
     let width=-1,height=-1, frame=null, focusFrame=null, disposed=false, interaction=0, movingUntil=0,active=null,sequence=0,lastFocus=null;
     const measure=()=>({w:Math.round(element?.clientWidth||0),h:Math.round(element?.clientHeight||0)});
     const validPoint=point=>Number.isFinite(point?.getLat?.()??point?.lat)&&Number.isFinite(point?.getLng?.()??point?.lng);
+    let centerSize=measure(),lastKnownCenter=map.getCenter?.(),layingOut=false;
+    const cameraEvents=root.kakao?.maps?.event;
+    function rememberCenter(){
+      const size=measure();if(disposed||layingOut||size.w<1||size.h<1||size.w!==centerSize.w||size.h!==centerSize.h)return;
+      const center=map.getCenter?.();if(validPoint(center))lastKnownCenter=center;
+    }
+    if(typeof cameraEvents?.addListener==='function')cameraEvents.addListener(map,'center_changed',rememberCenter);
+    function resizeMap(w,h){
+      // After DOM resize, getCenter may already include the SDK's old pixel offset.
+      const center=lastKnownCenter;layingOut=true;
+      try{width=w;height=h;map.relayout?.();if(validPoint(center))map.setCenter?.(center);centerSize={w,h};}
+      finally{layingOut=false;}
+      rememberCenter();
+    }
     function releaseFocus(){active=null;sequence++;if(focusFrame!==null)cancelRaf(focusFrame);focusFrame=null;}
     function userGesture(){interaction++;movingUntil=clock()+300;releaseFocus();}
     function report(value){lastFocus=value;if(element?.dataset){for(const [key,v]of Object.entries({focusState:value.state,focusExpectedX:value.expectedX,focusExpectedY:value.expectedY,focusActualX:value.actualX,focusActualY:value.actualY,focusErrorPx:value.errorPx,focusBasis:value.basis}))if(v!==undefined)element.dataset[key]=String(v);}}
@@ -203,7 +217,7 @@
     function alignFocus(owner){
       if(disposed||!active||active.id!==owner||active.interaction!==interaction)return;
       const g=geometry(),size=measure(),projection=map.getProjection?.();if(!g||size.w<1||size.h<1||!projection)return;
-      if(width!==size.w||height!==size.h){width=size.w;height=size.h;map.relayout?.();}
+      if(width!==size.w||height!==size.h)resizeMap(size.w,size.h);
       if(active.geometry!==g.key)active.corrections=0;active.geometry=g.key;
       const rect=cameraRect(g.raw.mapRect),sx=rect.width/size.w,sy=rect.height/size.h;
       let actual=projection.containerPointFromCoords(active.point);if(!Number.isFinite(actual?.x)||!Number.isFinite(actual?.y))return;
@@ -211,7 +225,7 @@
       const error=Math.hypot((actual.x-wanted.x)*sx,(actual.y-wanted.y)*sy);
       if(error>.5&&active.corrections<3){
         const next=projection.coordsFromContainerPoint(pixel(size.w/2+actual.x-wanted.x,size.h/2+actual.y-wanted.y));
-        active.corrections++;map.setCenter(next);
+        active.corrections++;map.setCenter(next);rememberCenter();
         report({state:'adjusting',expectedX:g.target.x,expectedY:g.target.y,actualX:rect.left+actual.x*sx,actualY:rect.top+actual.y*sy,errorPx:error,basis:g.target.basis});
         scheduleFocus(true);return;
       }
@@ -224,16 +238,15 @@
     function relayout(){
       if(disposed)return;
       const {w,h}=measure(); if(w<1||h<1)return;
-      if(w===width&&h===height){scheduleFocus();return;}
+      if(w===width&&h===height){rememberCenter();scheduleFocus();return;}
       if(clock()<movingUntil){if(frame===null)frame=raf(()=>{frame=null;relayout();});return;}
-      width=w;height=h;
-      const center=map.getCenter?.();map.relayout?.();if(center)map.setCenter?.(center);
+      resizeMap(w,h);
       if(active){active.corrections=0;scheduleFocus(true);}
     }
     function scheduleRelayout(){if(frame===null&&!disposed)frame=raf(()=>{frame=null;relayout();});}
     return { userGesture, interaction:()=>interaction, scheduleRelayout, relayout,focus,scheduleFocus,releaseFocus,
       focusState:()=>lastFocus,
-      dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;},
+      dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
   root.MapViewPolicy=Object.freeze({stableClusters,zoomBand,createCamera,regionColors,cameraFocusViewport});
