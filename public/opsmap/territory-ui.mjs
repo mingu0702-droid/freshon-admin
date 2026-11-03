@@ -26,7 +26,8 @@ function queryPlan(){
  return {stores,base,all,points,detail,lookupKey:JSON.stringify([base.version,all]),key:JSON.stringify([base.version,base.currentness,[...selected].sort(),center,points,detail])};
 }
 function completeAvailability(plan){
- if(!availability||!lookupData)return;
+ // Match indices belong to the exact queried coordinate set, not a later mode's rows.
+ if(!availability||!lookupData||lookupKey!==plan.lookupKey)return;
  const joins=new Map(lookupData.matches.map(j=>[pointKey(plan.all[j.index]),j.adminCodes]));
  const selected=bridge.state.selectedVehicles||[],center=bridge.state.centerFilter;
  for(const v of availability.vehicles){const group=plan.base.groups.find(g=>g.vehicle===v.vehicle);if(!group){if(!availability.reason)v.reason='MASTER_ASSIGNMENT_UNVERIFIED';continue;}const codes=new Set();v.matchedCount=0;for(const p of group.points){const matches=joins.get(pointKey(p))||[];if(matches.length)v.matchedCount++;for(const c of matches)codes.add(c);}v.adminCount=codes.size;v.displayedAdminCount=model?.groups.find(g=>g.vehicle===v.vehicle)?.features.length||0;

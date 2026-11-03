@@ -42,7 +42,7 @@ test('fresh verified master creates exact vehicle polygons; OFF removes only tho
  const f=fixture();await f.ui.toggle();assert.equal(f.ui.state().polygons,1);assert.equal(f.reads(),0);assert.equal(f.polys[0].options.strokeColor,'color-101');const map=f.state.map;await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.polys[0].map,null);assert.equal(f.state.map,map);
 });
 test('single/multiple vehicle and center selection filter boundaries without moving or clearing pins',async()=>{
- const f=fixture({stores:[...rows(),...rows('122','yeongnam')]});await f.ui.toggle();assert.equal(f.ui.state().polygons,2);f.state.selectedVehicles=['122'];await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.polys.at(-1).options.strokeColor,'color-122');f.state.centerFilter='osan';await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,0);
+ const f=fixture({stores:[...rows(),...rows('122','yeongnam')]});await f.ui.toggle();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().sharedTerritories[0].vehicles.length,2);f.state.selectedVehicles=['122'];await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.polys.at(-1).options.strokeColor,'color-122');f.state.centerFilter='osan';await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,0);
 });
 test('mobile and desktop controls share one toggle owner and checked state',async()=>{
  const f=fixture();await f.nodes.get('#mobileAreaToggle').onclick();assert.equal(f.ui.state().polygons,1);assert.equal(f.nodes.get('#areaToggle').attrs['aria-pressed'],'true');assert.equal(f.nodes.get('#mobileAreaToggle').attrs['aria-pressed'],'true');await f.nodes.get('#areaToggle').onclick();assert.equal(f.ui.state().polygons,0);assert.equal(f.nodes.get('#mobileAreaToggle').attrs['aria-pressed'],'false');
@@ -68,7 +68,7 @@ test('manual coordinate event rebuilds only territory geometry while preserving 
  const f=fixture();await f.ui.toggle();const previous=f.polys[0],map=f.state.map;f.stores[0].lat=37.05;await f.events.get('map-coordinate-updated')();assert.equal(previous.map,null);assert.equal(f.ui.state().polygons,1);assert.equal(f.state.map,map);assert.equal(f.polys.at(-1).options.path[0][0].lat,37);assert.equal(f.polys.at(-1).options.path[0][0].lng,127);assert.equal(f.reads(),0);
 });
 test('four selected verified vehicles draw independently and center changes remove only excluded boundaries',async()=>{
- const stores=[...rows('101'),...rows('122'),...rows('172'),...rows('202','yeongnam')],f=fixture({stores});f.state.selectedVehicles=['101','122','172','202'];await f.ui.toggle();assert.equal(f.ui.state().polygons,4);f.state.centerFilter='osan';await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,3);assert.equal(f.state.selectedVehicles.length,4);
+ const stores=[...rows('101'),...rows('122'),...rows('172'),...rows('202','yeongnam')],f=fixture({stores});f.state.selectedVehicles=['101','122','172','202'];await f.ui.toggle();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().sharedTerritories[0].vehicles.length,4);f.state.centerFilter='osan';await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().sharedTerritories[0].vehicles.length,3);assert.equal(f.state.selectedVehicles.length,4);
 });
 test('source refresh error is safe metadata and does not upgrade historical source evidence',()=>{
  const a=baseTerritoryAvailability(rows(),{version,stale:true,lastError:'FIXED_MASTER_FORBIDDEN',refresh:'ERROR'});assert.equal(a.reason,'MASTER_STALE');assert.equal(a.sourceError,'FIXED_MASTER_FORBIDDEN');assert.equal(a.refresh,'ERROR');assert(a.vehicles.every(g=>g.state==='unconfirmed'));
@@ -105,8 +105,8 @@ test('wide geometry rejection keeps all vehicles counted and asks for a smaller 
 });
 
 test('national zoom draws all selected vehicles with overview and switches to exact geometry on zoom in',async()=>{
- const f=fixture({stores:[rows('101')[0],rows('122')[0]],level:12});await f.ui.toggle();assert.equal(f.queries[0].geometry,false);assert.equal(f.queries[1].detail,'overview');assert.equal(f.ui.state().totalVehicleCount,2);assert.equal(f.ui.state().displayedVehicleCount,2);assert.equal(f.ui.state().polygons,2);assert.equal(f.ui.state().boundarySource.geometryRole,'DISPLAY_ONLY');assert.match(f.nodes.get('#territoryStatus').textContent,/전국 보기/);
- const n=f.queries.length;f.setLevel(8);await f.ui.renderForSelection();assert.equal(f.queries.length,n+1);assert.equal(f.queries.at(-1).detail,'detail');assert.equal(f.ui.state().displayedVehicleCount,2);assert.equal(f.ui.state().polygons,2);assert.equal(f.ui.state().boundarySource.geometryRole,undefined);
+ const f=fixture({stores:[rows('101')[0],rows('122')[0]],level:12});await f.ui.toggle();assert.equal(f.queries[0].geometry,false);assert.equal(f.queries[1].detail,'overview');assert.equal(f.ui.state().totalVehicleCount,2);assert.equal(f.ui.state().displayedVehicleCount,2);assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().sharedTerritories[0].vehicles.length,2);assert.equal(f.ui.state().boundarySource.geometryRole,'DISPLAY_ONLY');assert.match(f.nodes.get('#territoryStatus').textContent,/전국 보기/);
+ const n=f.queries.length;f.setLevel(8);await f.ui.renderForSelection();assert.equal(f.queries.length,n+1);assert.equal(f.queries.at(-1).detail,'detail');assert.equal(f.ui.state().displayedVehicleCount,2);assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().boundarySource.geometryRole,undefined);
 });
 
 test('a recent verified reference remains visible while preserving stale and checkedAt source evidence',async()=>{
@@ -125,4 +125,19 @@ test('reference visibility expires after 24h and source-version changes stay blo
 test('a newly current source removes the reference label without changing source rows',async()=>{
  const checkedAt='2026-11-02T18:28:48.039Z',stores=rows().map(r=>({...r,baseVehicleStale:true,baseVehicleCheckedAt:checkedAt})),f=fixture({stores,stale:true,checkedAt,now:Date.parse(checkedAt)+3600000});await f.ui.toggle();assert.equal(f.ui.state().currentness,'VERIFIED_SNAPSHOT_REFRESHING');
  f.master.stale=false;for(const r of stores)r.baseVehicleStale=false;await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().currentness,'CURRENT_VERIFIED_MASTER');assert.equal(f.ui.state().stale,false);assert.doesNotMatch(f.nodes.get('#territoryStatus').textContent,/마지막 검증본/);assert.equal(f.timers.size,0);assert.match(f.nodes.get('#areaToggle').textContent,/^기준호차 권역선 ON/);
+});
+
+test('point lookup indices never cross a shorter store snapshot during a mode transition',async()=>{
+ const f=fixture();await f.ui.toggle();const original=f.stores.map(r=>({...r})),map=f.state.map;
+ f.state.mode='DATE_ROUTE';await f.ui.renderForSelection();
+ f.stores.splice(0,f.stores.length,{...original[0],lat:37.3,lng:127.3});f.state.mode='BASE_60D';
+ await f.ui.renderForSelection();await f.flush();
+ assert.equal(f.ui.state().reason,null);assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().vehicles[0].matchedCount,1);assert.equal(f.state.map,map);
+ f.stores.splice(0,f.stores.length,...original);await f.ui.renderForSelection();await f.flush();
+ assert.equal(f.ui.state().vehicles[0].matchedCount,3);assert.equal(f.ui.state().polygons,1);
+});
+
+test('point lookup indices are refreshed when the same-size store snapshot changes coordinates',async()=>{
+ const f=fixture();await f.ui.toggle();f.stores.splice(0,f.stores.length,...rows().map(r=>({...r,lat:35,lng:128})));
+ await f.ui.renderForSelection();await f.flush();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().vehicles[0].matchedCount,0);assert.equal(f.ui.state().reason,'ADMIN_BOUNDARY_NO_MATCH');
 });
