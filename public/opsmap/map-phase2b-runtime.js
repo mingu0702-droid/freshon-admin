@@ -179,7 +179,16 @@
     readPage:async({cursor,signal,limit})=>{if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});const params=new URLSearchParams({limit:String(limit)});if(cursor)params.set('cursor',cursor);else if(customerRegistry.summary().version)params.set('since',customerRegistry.summary().version);const result=await fetchJson('/api/map-phase2b/private/customer-registry?'+params,{channel:'customer-registry-page',ttl:0,timeout:30000});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});if(Number.isFinite(Date.parse(result.meta?.checkedAt)))customerRegistrySourceCheckedAt=result.meta.checkedAt;return result;}
   });
   const registrySelection=()=>({customerCode:state.selected?.customerCode||'',query:$('#query')?.value||'',center:state.centerFilter,vehicles:selectedVehicles()});
-  function scheduleVisibleAddressRows(rows){const candidates=rows.filter(row=>row.coordinateSearch||!(Number.isFinite(row.lat)&&Number.isFinite(row.lng)));liveAddressLocations?.schedule(customerRegistry?[...candidates.filter(row=>!row.customerOnly),...customerRegistry.locationRows(candidates.filter(row=>row.customerOnly),registrySelection(),{limit:40})]:rows);}
+  function scheduleVisibleAddressRows(rows){
+    const candidates=rows.filter(row=>row.coordinateSearch||!(Number.isFinite(row.lat)&&Number.isFinite(row.lng)));
+    const registry=customerRegistry?.summary();
+    // Wait for the already requested bulk address projection instead of racing
+    // hundreds of selected-customer reads during the same initial load.
+    if(registry&&!registry.complete&&['idle','loading'].includes(registry.status)){
+      liveAddressLocations?.schedule(candidates.filter(row=>row.customerCode===state.selected?.customerCode),{priority:true});return;
+    }
+    liveAddressLocations?.schedule(customerRegistry?[...candidates.filter(row=>!row.customerOnly),...customerRegistry.locationRows(candidates.filter(row=>row.customerOnly),registrySelection(),{limit:40})]:rows);
+  }
   async function syncCustomerRegistry(){
     if(!customerRegistry||customerRegistryBusy||!generalMap||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return;
     customerRegistryBusy=true;const owner=initialRequestId,before=customerRegistry.summary().version,known=new Set(allStores.map(r=>r.customerCode));
