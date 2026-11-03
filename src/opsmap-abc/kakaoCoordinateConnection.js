@@ -1,6 +1,7 @@
 // One staff-only REST path; only request hashes/counts are durable, never API coordinates.
 import {createHash} from 'node:crypto';
-import {coordinateAddressHash,externalCoordinateAddress,kakaoCoordinateResult} from './opsmapAutoCoordinates.js';
+import {coordinateAddressHash,externalCoordinateAddress} from './opsmapAutoCoordinates.js';
+import {classifyCoordinateLookup,prepareRecoveryCoordinateAddress} from '../coordinateLookupOutcome.js';
 export const KAKAO_GEOCODE_EPOCH='R10_USER_CONFIRMED_20261103';
 export const KAKAO_DIAGNOSTIC_ADDRESS='경기도 오산시 원동 380-38';
 export const KAKAO_EXPECTED_APP_ID='1464792';
@@ -33,7 +34,8 @@ export function createKakaoCoordinateConnection({env=process.env,store,now=Date.
  };
  const lookup=async(query,{diagnostic=false,assertCurrent=async()=>{}}={})=>{
   if(typeof query!=='string'||query.normalize('NFKC').trim().length>200)fail('GEOCODE_QUERY_INVALID',400);
-  const address=externalCoordinateAddress(query.normalize('NFKC').replace(/\s+/g,' ').trim().replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)$/,'$1 $2'));
+  const safe=externalCoordinateAddress(query.normalize('NFKC').replace(/\s+/g,' ').trim().replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)$/,'$1 $2'));
+  const address=safe?prepareRecoveryCoordinateAddress(safe).query:null;
   if(!address)fail('GEOCODE_QUERY_INVALID',400);
   if(!proof())fail('TARGET_APP_FREE_QUOTA_UNVERIFIED');
   if(blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
@@ -64,20 +66,20 @@ export function createKakaoCoordinateConnection({env=process.env,store,now=Date.
     if(appHeader!==undefined&&appHeader!==KAKAO_EXPECTED_APP_ID)fail('KAKAO_RESPONSE_APP_MISMATCH',502);
     stage='PROVIDER_BODY';let body;try{body=await response.json();}catch{fail('KAKAO_JSON_INVALID',502);}
     stage='CONTRACT';if(!Array.isArray(body?.documents)||typeof body.meta?.is_end!=='boolean')fail('KAKAO_RESPONSE_INVALID',502);
-    const point=kakaoCoordinateResult(body,address);
+    const {point,resolution}=classifyCoordinateLookup(body,address);
     if(diagnostic&&!point)fail('KAKAO_DIAGNOSTIC_NOT_EXACT',409);
     stage='LEDGER_COMPLETION';if(diagnostic)await transaction(async(state,commit)=>{state.diagnosticPassed=true;await commit(state);});
     stage='SESSION_RECHECK';
     await assertCurrent();
     return {ok:true,data:{documents:point?[{address_name:address,x:String(point.lng),y:String(point.lat)}]:[],status:point?'OK':'ZERO_RESULT',exact:!!point,
-     diagnostic,providerHttp:200,responseAppId:appHeader||null,retention:'REQUEST_ONLY',coordinatePersistence:false}};
+     diagnostic,providerHttp:200,responseAppId:appHeader||null,resolution,retention:'REQUEST_ONLY',coordinatePersistence:false}};
    }catch(error){
     if(error?.code==='GEOCODE_SESSION_EXPIRED')throw error;
     const transportCode=['UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_SOCKET','ENOTFOUND','EAI_AGAIN','ETIMEDOUT','ECONNREFUSED','ECONNRESET','CERT_HAS_EXPIRED','UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(error?.cause?.code)?error.cause.code:null;
     const code=/^KAKAO_[A-Z_]+$/.test(error?.code||'')?error.code:stage==='LEDGER_COMPLETION'?'KAKAO_LEDGER_COMPLETION_FAILED':['TimeoutError','AbortError'].includes(error?.name)?'KAKAO_TIMEOUT':stage==='PROVIDER_REQUEST'?'KAKAO_NETWORK_FAILED':'KAKAO_LOOKUP_FAILED';
     const lastAttempt={stage,code,providerHttp:Number.isInteger(providerHttp)?providerHttp:null,transportCode,elapsedMs:Math.max(0,now()-started)};
     blocked=true;try{await transaction(async(state,commit)=>{state.blocked=true;state.lastAttempt=lastAttempt;await commit(state);});}catch{/* Local circuit stays closed even if storage is unavailable. */}
-    fail(code,502);
+    throw Object.assign(Error(code),{code,status:502,providerHttp:lastAttempt.providerHttp});
    }
   })();pending.set(key,task);try{return await task;}finally{pending.delete(key);}
  };
@@ -106,7 +108,7 @@ export function mountKakaoCoordinateConnection({app,requireStaff,isSessionCurren
    const sessionKey=res.locals.staffSession?.key;
    const assertCurrent=async()=>{if(isSessionCurrent&&!await isSessionCurrent(req,sessionKey))fail('GEOCODE_SESSION_EXPIRED',401);};
    const value=await service.lookup(req.body.query,{diagnostic,assertCurrent});return requireStaff(req,res,()=>res.json(value));
-  }catch(error){return requireStaff(req,res,()=>res.status(error.status||503).json({ok:false,error:/^[A-Z_]+$/.test(error.code||'')?error.code:'GEOCODE_FAILED'}));}
+  }catch(error){return requireStaff(req,res,()=>res.status(error.status||503).json({ok:false,error:/^[A-Z_]+$/.test(error.code||'')?error.code:'GEOCODE_FAILED',providerHttp:Number.isInteger(error.providerHttp)?error.providerHttp:null}));}
  };
  app.post('/api/map-phase2b/private/address-lookup',requireStaff,jsonBody,respond(false));
  app.post('/api/map-phase2b/private/address-lookup-diagnostic',requireStaff,jsonBody,respond(true));

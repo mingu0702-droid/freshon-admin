@@ -43,8 +43,12 @@
       timer = setTimeout(() => finish(failure('GEOCODER_TIMEOUT')), timeout);
       try {
         geocoder.addressSearch(query, (rows, status, meta) => {
-          if (status === 'ZERO_RESULT') return finish(null, Object.defineProperty([], 'zeroResult', { value:true }));
-          if (status !== 'OK' || !Array.isArray(rows)) return finish(Object.assign(failure(/^[A-Z_]+$/.test(meta?.code || '') ? meta.code : 'GEOCODER_FAILED'), { status: meta?.status }));
+          const problem=code=>Object.assign(failure(code),{status:meta?.status??meta?.httpStatus,httpStatus:meta?.httpStatus??meta?.status,providerHttp:Number.isInteger(meta?.providerHttp)?meta.providerHttp:null});
+          if (status === 'ZERO_RESULT') {
+            const reasons={MULTIPLE_CANDIDATES:'GEOCODER_MULTIPLE_CANDIDATES',TRUNCATED:'GEOCODER_RESULT_TRUNCATED',ADDRESS_OR_COORDINATE_MISMATCH:'GEOCODER_ADDRESS_MISMATCH',INVALID_RESPONSE:'GEOCODER_INVALID_RESPONSE'};
+            return reasons[meta?.resolution?.kind]?finish(problem(reasons[meta.resolution.kind])):finish(null, Object.defineProperty([], 'zeroResult', { value:true }));
+          }
+          if (status !== 'OK' || !Array.isArray(rows)) return finish(problem(/^[A-Z_]+$/.test(meta?.code || '')?meta.code:/^GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED)$/.test(status)?status:'GEOCODER_FAILED'));
           const valid = row => row && row.x != null && row.y != null && String(row.x).trim() !== '' && String(row.y).trim() !== ''
             && Number.isFinite(Number(row.x)) && Number.isFinite(Number(row.y)) && Math.abs(Number(row.x)) <= 180 && Math.abs(Number(row.y)) <= 90;
           if (!rows.every(valid)) return finish(failure('GEOCODER_INVALID_COORDINATES'));
@@ -56,7 +60,10 @@
   function message(error) {
     return ({ GEOCODE_DAILY_LIMIT: '일일 주소 조회 한도 대기', GEOCODE_AUTOMATICALLY_BLOCKED: '주소 조회 차단 · 보류',
       GEOCODE_QUERY_INVALID: '검색용 기본주소 확인 필요', GEOCODER_UNAVAILABLE: '주소 조회 서비스 미연결', GEOCODER_TIMEOUT: '주소 조회 시간 초과',
-      GEOCODER_FAILED: '주소 조회 오류', GEOCODER_INVALID_COORDINATES: '주소 좌표 응답 오류' })[error?.code] || '주소 조회 실패';
+      GEOCODER_FAILED: '주소 조회 오류', GEOCODER_INVALID_COORDINATES: '주소 좌표 응답 오류',
+      GEOCODE_SESSION_EXPIRED:'직원 인증이 만료되었습니다',GEOCODE_ORIGIN_REJECTED:'주소 조회 권한 확인 필요',
+      GEOCODER_MULTIPLE_CANDIDATES:'주소 후보 복수 · 선택 필요',GEOCODER_RESULT_TRUNCATED:'주소 범위 확인 필요',
+      GEOCODER_ADDRESS_MISMATCH:'원본 주소와 위치 불일치',GEOCODER_INVALID_RESPONSE:'주소 응답 형식 확인 필요' })[error?.code] || '주소 조회 실패';
   }
   root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, stopsExternal, outcome };
 })(typeof window === 'object' ? window : globalThis);
