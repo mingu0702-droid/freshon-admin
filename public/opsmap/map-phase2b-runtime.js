@@ -360,7 +360,7 @@
     ++periodRequestId;++dateRequestId;++state.routeRequestId;++state.todayRequestId;
     clearTimeout(initialTimer);clearTimeout(periodTimer);hybridUi?.closePeriod();hybridUi?.cancel();resetRoadRoute();
     cancelNewAreaWork();clearSelection();selectedDriverKeys=[];
-    generalMap=true;generalAllStores=true;periodBasis='vehicle';state.driverKey='';state.centerFilter='';periodVehicleScope='all';
+    generalMap=true;generalAllStores=true;periodBasis='vehicle';state.driverKey='';
     switchMode('BASE_60D');refreshVehicleUi(false);syncModeUi();syncPeriodBasis();
     $('#includeUnvisitedStores').checked=true;dateReady=false;setPeriodViewState('loading');
     try {
@@ -682,7 +682,7 @@
       label.className = "vehicleItem";
       label.dataset.group=allStores.find(row=>row.baseVehicle===vehicle&&row.baseVehicleGroup)?.baseVehicleGroup||'';
       label.innerHTML = `<input type="checkbox" value="${esc(vehicle)}"><span class="vehicleNo">${esc(vehicleLabel(vehicle))}</span><span class="vehicleArea"></span>`;
-      label.querySelector("input").onchange = () => { state.centerFilter = ""; periodVehicleScope = "selected"; refreshVehicleUi(true); };
+      label.querySelector("input").onchange = () => { periodVehicleScope = selectedVehicles().length ? "selected" : "all"; refreshVehicleUi(true); };
       $("#vehicleList").append(label);
       ["#vehicle", "#mobileVehicle", "#operationVehicle", "#mobileBaseVehicle"].forEach((id) => $(id).add(new Option(`${vehicleLabel(vehicle)}`, vehicle)));
     });
@@ -804,7 +804,7 @@
         <span class="vehicleNo">${esc(vehicleLabel(vehicle.vehicle))}</span>
         <span class="vehicleArea">${esc(vehicle.area_label || vehicle.primary_area || vehicle.group || "권역")}</span>
       </label>`).join("");
-    vehicleChecks().forEach((input) => { input.onchange = () => { state.centerFilter = ""; periodVehicleScope = "selected"; refreshVehicleUi(true); }; });
+    vehicleChecks().forEach((input) => { input.onchange = () => { periodVehicleScope = selectedVehicles().length ? "selected" : "all"; refreshVehicleUi(true); }; });
     [$("#vehicle"), $("#mobileVehicle"), $("#operationVehicle")].forEach((select) => {
       select.innerHTML = '<option value="">전체 호차</option>' + vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicleLabel(vehicle))}</option>`).join("");
       select.value = "";
@@ -1349,8 +1349,8 @@
       <div class="detailBody">
         <dl class="dotDetailFacts"><dt>담당 센터</dt><dd>${esc(detailCenter)}</dd><dt hidden>주소 권역</dt><dd id="detailAddressRegion" hidden>${esc(detailAddressRegion)}</dd><dt>${routeMode?"확정호차":"기준호차"}</dt><dd${routeMode?'':' id="detailBaseVehicle"'}>${esc(routeMode?vehicleLabel(vehicle)||'선택일 편성 없음':MapPeriodUi.baseVehicleLabel(row))}</dd><dt id="detailDeliveryDaysLabel" hidden>배송요일</dt><dd id="detailDeliveryDaysValue" hidden></dd><dt id="detailDriverLabel">${esc(detailDriver.label)}</dt><dd id="detailDriver" title="${esc(detailDriver.title)}" data-source="${esc(detailDriver.source)}">${esc(detailDriver.text)}</dd><dt>주소</dt><dd>${esc(row.address||'주소 불러오는 중…')}</dd><dt id="detailAddressLabel" hidden>상세주소</dt><dd id="detailAddressValue" hidden></dd></dl>
 
+        <div class="staffActions"><button id="staffNotes" aria-expanded="false" aria-controls="staffAuxContent">출입배송정보 ▸</button><button id="staffHistory" aria-expanded="false" aria-controls="staffAuxContent">최근 배송기사이력 ▸</button></div>
         ${!routeMode && row.history?.length ? `<div class="periodRecent">최근배송 ${esc(row.lastDeliveryDate)} · ${row.visitCount===null?'전체 기간 횟수 미확인':(row.visitCount??row.history.length)+'회 이력'}</div>` : ""}
-        <div class="staffActions"><button id="staffHistory" aria-expanded="false" aria-controls="staffAuxContent">최근 배송기사이력 ▸</button><button id="staffNotes" aria-expanded="false" aria-controls="staffAuxContent">출입배송정보 ▸</button></div>
         ${unlocated ? '<div class="coordinateWarning">위치 확인 필요</div>' : row.coordinateSource==='KAKAO_ADDRESS_LIVE'?'<small class="coordinateEvidence">주소 기준 위치</small>':""}
         <div class="mobileActions"><button id="mobileMapView" class="primary">매장 위치 중심으로 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicleLabel(vehicle) || "선택 호차")} 운행동선</button></div>
         <div id="nearWrap"></div>
@@ -1962,7 +1962,7 @@
     $("#vehicleChips").className = selected.length ? "" : "vehiclePlaceholder";
     $("#vehicleChips").innerHTML = selected.length ? (selected.length > 3 ? `${selected.length}개 호차 선택` : selected.map((vehicle) => `<span class="vehicleChip" role="button" tabindex="0" data-remove-vehicle="${esc(vehicle)}" aria-label="${esc(vehicleLabel(vehicle))} 선택 해제">${esc(vehicleLabel(vehicle))} ×</span>`).join("")) : periodVehicleScope === "all" ? "전체 호차" : "호차를 선택하세요";
     $$('[data-remove-vehicle]').forEach((chip) => {
-      const remove = (event) => { event.stopPropagation(); setSelectedVehicles(selectedVehicles().filter((vehicle) => vehicle !== chip.dataset.removeVehicle)); refreshVehicleUi(false); state.fitRequested = false; loadBaseMap(); };
+      const remove = (event) => { event.stopPropagation(); setSelectedVehicles(selectedVehicles().filter((vehicle) => vehicle !== chip.dataset.removeVehicle)); if (!selectedVehicles().length) periodVehicleScope = 'all'; refreshVehicleUi(true); };
       chip.onclick = remove;
       chip.onkeydown = (event) => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); remove(event); } };
     });
@@ -2688,10 +2688,10 @@
       if (event.key !== "Enter") return;
       const first = $$(".vehicleItem").find((item) => item.style.display !== "none");
       if (!first) return;
-      setSelectedVehicles([first.querySelector("input").value]); periodVehicleScope = "selected"; state.centerFilter = ""; $("#vehicleSelect").classList.remove("open"); refreshVehicleUi(true);
+      setSelectedVehicles([first.querySelector("input").value]); periodVehicleScope = "selected"; $("#vehicleSelect").classList.remove("open"); refreshVehicleUi(true);
     };
     $("#selectAllVehicles").onclick = () => { state.centerFilter = ""; $("#periodCenter").value = "all"; setSelectedVehicles([]); periodVehicleScope = "all"; refreshVehicleUi(true); };
-    $("#clearVehicles").onclick = () => { setSelectedVehicles([]); periodVehicleScope = "selected"; $("#mobileBaseVehicle").value = ""; $("#vehicleSelect").classList.remove("open"); clearSelection(); refreshVehicleUi(false); state.fitRequested = false; loadBaseMap(); };
+    $("#clearVehicles").onclick = () => { setSelectedVehicles([]); periodVehicleScope = "all"; $("#mobileBaseVehicle").value = ""; $("#vehicleSelect").classList.remove("open"); refreshVehicleUi(true); };
     $$("[data-center]").forEach((button) => { button.onclick = () => { selectCenter(button.dataset.center); $("#vehicleSelect").classList.remove("open"); }; });
     let composing = false;
     $("#query").oncompositionstart = () => { composing = true; };

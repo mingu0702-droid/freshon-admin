@@ -6,12 +6,12 @@ import os from 'node:os';
 const {chromium}=await import(process.env.OPSMAP_TEST_PLAYWRIGHT_MODULE||'playwright');
 // Real existing shell/editor/navigation controllers, synthetic rows and SDK only.
 const root=path.resolve('public/opsmap'),output=fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r11-shell-detail-'));
-const rows=Array.from({length:32},(_,i)=>({customerCode:'S990'+String(i).padStart(3,'0'),customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
+const rows=Array.from({length:32},(_,i)=>({customerCode:'S990'+String(i).padStart(3,'0'),customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:i<20?'101':i<24?'2':i<26?'10':i<29?'501':'721',lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
 // Two separate customers at one shop-in-shop coordinate remain two visits.
 rows[1].lat=rows[0].lat;rows[1].lng=rows[0].lng;
 const requests=[],external=[],errors=[],checks=[],version='e'.repeat(64);
 const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','map-driver-contact.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
-const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
+const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'11',group:'osan',customers:[]},{vehicle:'101',group:'osan',customers:[]},{vehicle:'2',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
 document.body.dataset.mapStaffState='authenticated';window.OPSMAP_DRIVER_CONTACT_ENABLED=true;window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){},toggle(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
 class Bounds{extend(){}getSouthWest(){return new Coord(33,124)}getNorthEast(){return new Coord(39.5,132)}}
@@ -25,7 +25,7 @@ const server=http.createServer((req,res)=>{
  if(u.pathname.startsWith('/api/')){
   requests.push({path:u.pathname,method:req.method});let data={data:[],meta:{}};
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-11-02',startDate:'2026-09-04',endDate:'2026-11-02'}};
-  if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:version,baseVehicleCheckedAt:'2026-11-02T00:00:00.000Z',baseVehicleStale:false})),meta:{version,checkedAt:'2026-11-02T00:00:00.000Z',basis:'FIXED_DISPATCH_PRIMARY',stale:false}};
+  if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:r.vehicle,baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:r.vehicle==='501'?'yeongnam':r.vehicle==='721'?'honam':'osan',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:version,baseVehicleCheckedAt:'2026-11-02T00:00:00.000Z',baseVehicleStale:false})),meta:{version,checkedAt:'2026-11-02T00:00:00.000Z',basis:'FIXED_DISPATCH_PRIMARY',stale:false}};
   if(u.pathname.endsWith('/private/customer-detail')){const code=u.searchParams.get('customerCode');const index=rows.findIndex(r=>r.customerCode===code);data={ok:true,data:{customerCode:code,customerName:'합성 매장 '+index,address:'합성주소 '+index,detailDate:index===3?u.searchParams.get('date'):null,sourceDate:index===3?u.searchParams.get('date'):undefined,detailAddress:index===0?'합성 상세주소 2층':null,detailAddressState:index===0?'PRESENT':'EMPTY',sourceBasis:index===3?'STORED_DAY':'CURRENT_CUSTOMER_LOOKUP',locationState:index===4?'UNCONFIRMED':'SOURCE_ROW',deliveryPattern:index===0?'월수금':index===2?'미확인':index===3||index===4?'월화':'',businessCoverageVerified:false}};}
   if(u.pathname.endsWith('/private/driver-contact'))data={ok:true,data:{driverName:'합성 기사',phone:'010-1234-5678'},meta:{...Object.fromEntries(u.searchParams),state:'REGISTERED',source:'SYNTHETIC_ONLY'}};
   if(u.pathname.endsWith('/assignments'))data={data:rows.map(r=>({...r,deliveryDate:u.searchParams.get('date')})),meta:{complete:true,date:u.searchParams.get('date')}};
@@ -48,6 +48,29 @@ try{
  await page.locator('#waypointPlanner>summary').click();check('BASE route editor opens the same searchable route fields',await page.locator('#plannerStart').isVisible()&&await page.locator('#plannerEnd').isVisible()&&await page.locator('#waypointPlanner').count()===1);await page.evaluate(()=>MapNavigationEditor.replacePoints(['S990000','S990001']));check('BASE can configure endpoints and open the integrated Kakao link',await page.locator('#plannerStart').inputValue()==='S990000'&&await page.locator('#plannerEnd').inputValue()==='S990001'&&await page.locator('#waypointPlanner #navKakaoLinks a').isVisible());await page.evaluate(()=>MapNavigationEditor.clear());await page.locator('#waypointPlanner>summary').click();
  check('search, centers, picker button, two tabs and map stay available',await page.locator('#query').isVisible()&&await page.locator('#centers').isVisible()&&await page.locator('#baseVehiclePicker>summary').isVisible()&&await page.locator('#approvedSiteHeader .tab:visible').count()===2&&await page.locator('#map').isVisible());
  await page.locator('#togglePeriodList').click();check('store list opens only by explicit action',await page.locator('#periodStoreList').isVisible()&&await page.locator('#periodStoreList [data-period-store]:visible').count()===5);await page.locator('#togglePeriodList').click();
+ await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===32&&document.querySelector('#vehicleList input[value="721"]')?.closest('label').dataset.group==='honam');
+ await page.locator('#baseVehiclePicker>summary').click();
+ assert.deepEqual(await page.locator('#vehicleList input').evaluateAll(nodes=>nodes.map(n=>n.value)),['2','10','11','101','501','721']);checks.push('center groups retain numeric vehicle order including newly discovered vehicles');
+ assert.deepEqual(await page.locator('.vehicleGroupHeading').allTextContents(),['오산','영남','호남']);checks.push('three dispatch centers have separate vehicle groups');
+ await page.locator('[data-source-center="osan"]').click();await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===26);
+ await page.locator('#vehicleList input[value="2"]').check();await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===4);
+ await page.locator('#vehicleList input[value="10"]').check();await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===6);
+ check('initial and dynamically added checkboxes preserve selected center and display only both vehicles',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter==='osan'&&MapUiLocalBridge.state.currentRows.every(r=>['2','10'].includes(r.baseVehicle))));
+ await page.locator('#vehicleList input[value="10"]').uncheck();await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===4);
+ await page.locator('#vehicleList input[value="2"]').uncheck();await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===26);
+ check('unchecking the last vehicle restores the selected center map',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter==='osan'&&MapUiLocalBridge.state.selectedVehicles.length===0));
+ await page.locator('#vehicleQuery').fill('10');await page.locator('#vehicleQuery').press('Enter');await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===2);
+ check('vehicle search Enter preserves center and selects the numeric result',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter==='osan'&&MapUiLocalBridge.state.selectedVehicles.join(',')==='10'));
+ await page.locator('#query').fill('합성 검색 유지');await page.locator('#modePeriod').click();await page.waitForFunction(()=>MapUiLocalBridge.isDataReady()&&MapUiLocalBridge.state.currentRows.length===2);
+ check('reopening the current map retains center, vehicle and search text',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter==='osan'&&MapUiLocalBridge.state.selectedVehicles.join(',')==='10'&&document.querySelector('#query').value==='합성 검색 유지'));
+ await page.locator('#clearVehicles').click();await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===26);
+ check('clear selection restores all center stores and removes every selected checkbox',await page.locator('#vehicleList input:checked').count()===0&&await page.evaluate(()=>MapUiLocalBridge.state.centerFilter==='osan'));
+ await page.locator('#vehicleQuery').fill('2');await page.locator('#vehicleQuery').press('Enter');await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===4);
+ await page.locator('[data-remove-vehicle="2"]').evaluate(node=>node.click());await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===26);
+ check('legacy last-chip handler restores the center map',await page.evaluate(()=>MapUiLocalBridge.state.selectedVehicles.length===0));
+ await page.locator('#selectAllVehicles').click();await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===32);
+ check('all vehicles explicitly restores all centers',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter===''));
+ await page.locator('#vehicleQuery').fill('');await page.locator('#query').fill('');await page.locator('#baseVehiclePicker>summary').click();
  await page.waitForFunction(()=>MapUiLocalBridge.navigationStores().some(r=>r.customerCode==='S990000'&&r.baseVehicleState==='VERIFIED_MASTER'));await page.evaluate(()=>MapUiLocalBridge.selectNavigationStore('S990000'));await page.waitForFunction(()=>document.querySelector('#detailAddressValue')?.textContent==='합성 상세주소 2층'&&document.querySelector('#detailDriver a')?.getAttribute('href')==='tel:01012345678');
  check('selected card keeps folded store list folded',!await page.locator('#periodStoreList').isVisible());
  const labels=await page.locator('.dotDetailFacts dt:visible').allTextContents();assert.deepEqual(labels,['담당 센터','기준호차','배송요일','담당 기사','주소','상세주소']);checks.push('detail fact order is center, vehicle, actual weekdays, driver, address and detail address');
@@ -55,6 +78,7 @@ try{
  check('code is above name and both remain readable',await page.locator('#detail .detailHead').evaluate(n=>{const a=n.querySelector('.code').getBoundingClientRect(),b=n.querySelector('.storeName').getBoundingClientRect();return a.bottom<=b.top&&b.width>30}));
  check('private metadata and authenticated tel action are retained',await page.locator('.dotDetailFacts').getAttribute('data-source-basis')==='CURRENT_CUSTOMER_LOOKUP'&&await page.locator('#detailDriver a').getAttribute('href')==='tel:01012345678');
  check('history and protected information follow address fields',await page.locator('#detail').evaluate(n=>Boolean(n.querySelector('.dotDetailFacts').compareDocumentPosition(n.querySelector('.staffActions'))&Node.DOCUMENT_POSITION_FOLLOWING))&&await page.locator('#staffHistory').isVisible()&&await page.locator('#staffNotes').isVisible());
+ check('protected delivery information precedes driver history',await page.locator('#detail').evaluate(n=>Boolean(n.querySelector('#staffNotes').compareDocumentPosition(n.querySelector('#staffHistory'))&Node.DOCUMENT_POSITION_FOLLOWING)));
  check('verified coordinate success text is omitted from selected card',await page.locator('#detail .coordinateEvidence').count()===0);
  for(const width of [1920,1366,768,390]){
   await page.setViewportSize({width,height:900});
