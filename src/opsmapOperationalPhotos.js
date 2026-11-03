@@ -1,6 +1,7 @@
 import {createDeliveryAdminPhotoSource, DeliveryPhotoError, deliveryDate, validatePhotoQuery} from './opsmapDeliveryPhotos.js';
 import {createDeliveryAdminPhotoTransport, DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, DELIVERY_ADMIN_PHOTO_HOSTS} from './opsmapDeliveryAdminTransport.js';
 import {mountOpsmapDeliveryPhotoRoutes} from './opsmapDeliveryPhotoRouter.js';
+export {createOperationalPhotoTaskReader} from './opsmapOperationalPhotoTaskReader.js';
 
 const fail = (code, status = 503) => { throw new DeliveryPhotoError(code, status); };
 
@@ -24,14 +25,14 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate}
     for (const task of rows) {
       const customerCode = task?.customer?.erpCode ?? task?.customerErpCode;
       if (customerCode !== query.customerCode) continue;
-      const observedDate = deliveryDate(task?.carrier?.enteringDatedAt ?? task?.enteringDatedAt);
+      const observedDate = deliveryDate(task?.carrier?.enteringDatedAt ?? task?.enteringDatedAt ?? task?.deliveryDate);
       const deliveryId = String(task?.id ?? '');
       if (observedDate !== date || !/^\d{1,20}$/.test(deliveryId)) fail('PHOTO_IDENTITY_UNVERIFIED');
       records.set(deliveryId, {customerCode, date, deliveryId});
       if (records.size > 32) fail('HISTORY_LIMIT_EXCEEDED', 422);
     }
     // A partial day may prove a matching record, never the absence of one.
-    if (!records.size && rows.sourceObservation?.complete === false) fail('SOURCE_UNAVAILABLE');
+    if (!records.size && rows.sourceObservation?.complete !== true) fail('SOURCE_UNAVAILABLE');
     while (identities.size >= 32) identities.delete(identities.keys().next().value);
     const result = [...records.values()];
     identities.set(key, {expiresAt:now + 30000, records:result});
