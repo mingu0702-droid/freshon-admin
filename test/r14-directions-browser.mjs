@@ -55,6 +55,7 @@ try{
  await page.evaluate(()=>{MapNavigationEditor.setPoint('origin','CENTER_osan');MapNavigationEditor.setPoint('destination','SYNTHETIC_3');});
  check('verified Osan center is selectable',await page.locator('#plannerStart').inputValue()==='CENTER_osan');
  await page.evaluate(()=>MapNavigationEditor.replacePoints(['SYNTHETIC_0','SYNTHETIC_1','SYNTHETIC_2','SYNTHETIC_3']));
+ await page.evaluate(()=>{window.__stableKakaoLink=document.querySelector('#navKakaoLinks a');for(let i=0;i<20;i++)window.dispatchEvent(new Event('map-coordinate-updated'));});await page.waitForTimeout(100);check('background coordinate updates preserve the same clickable external route link',await page.evaluate(()=>window.__stableKakaoLink===document.querySelector('#navKakaoLinks a')));
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);await page.locator('#planRoute').click();
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  check('explicit request renders provider geometry, distance and duration',requests.length===1&&providerCalls===1&&reservations===1&&await page.evaluate(()=>__routeLines>0)&&await page.locator('#navDistance').textContent()==='0.3 km'&&await page.locator('#navDuration').textContent()==='3분');

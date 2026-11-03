@@ -124,6 +124,7 @@
   let addressSearchController=null,addressSearchGeneration=0;
   let recalculateTimer=null,autoRecalculate=false;
   let centers=[],centerOverlays=[],routePointOverlays=[],lastResult=null,lastKind='manual',disposed=false,selectedCandidate=null,activeInput=null,roleSignature='',missingSignature='',suggestTimer=null,suggestionIndex=-1;
+  let externalDirectionsSignature='';
   function centerRows(){return (window.KAKAO_MAP_CONFIG?.centers||[]).filter(row=>centerNames[row.id]&&row.verified===true&&typeof row.sourceVersion==='string'&&row.sourceVersion&&lookup.located(row)).map(row=>({...row,customerCode:'CENTER_'+row.id,customerName:centerNames[row.id],address:row.address||'',coordinateStatus:'VERIFIED'}));}
   function all(){return lookup.unique([...bridge.navigationStores(),...centers,...temporaryPlaces.values()]);}
   const resolve=value=>lookup.resolve(value,all());
@@ -144,12 +145,15 @@
   }
   function syncExternalDirections(){
     const values=editor.values();
+    const resolved=values.map(resolve),signature=JSON.stringify([values,resolved.map(matches=>matches.map(row=>[row.customerCode,row.customerName,row.address,row.lat,row.lng,lookup.located(row)]))]);
+    if(signature===externalDirectionsSignature)return;
+    externalDirectionsSignature=signature;
     const links=$('#navKakaoLinks'),legLinks=$('#navKakaoLegLinks'),fallback=$('#navKakaoLegFallback'),legHint=$('#navKakaoLegHint');links.replaceChildren();legLinks.replaceChildren();fallback.hidden=true;legHint.hidden=true;
     try{
       const rows=values.map((value,index)=>{
         const label=index===0?'출발지':index===values.length-1?'목적지':'경유지 '+index;
         if(!String(value||'').trim())throw Error(label+'를 선택해 주세요.');
-        const found=resolve(value);if(found.length!==1||!lookup.located(found[0]))throw Error(label+'의 검색 결과와 위치를 확인해 주세요.');
+        const found=resolved[index];if(found.length!==1||!lookup.located(found[0]))throw Error(label+'의 검색 결과와 위치를 확인해 주세요.');
         return found[0];
       });
       const segments=lookup.kakaoRouteLinks(rows);
