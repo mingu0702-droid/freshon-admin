@@ -62,7 +62,9 @@
   async function drain(){
    if(running)return;running=true;const owner=epoch;
    const worker=async()=>{while(queue.size&&enabled()&&owner===epoch){const [key,row]=queue.entries().next().value;queue.delete(key);active.add(key);try{await ensure(row);}finally{active.delete(key);}if(queue.size&&owner===epoch)await new Promise(resolve=>setTimeout(resolve,spacingMs));}};
-   try{await worker();}
+   // The shared server queue paces Customer reads; two workers overlap only
+   // source waiting with the separate durable Kakao-budget transaction.
+   try{await Promise.all([worker(),worker()]);}
    finally{running=false;if(queue.size&&owner!==epoch)void drain();}
   }
   function schedule(rows,{priority=false}={}){
