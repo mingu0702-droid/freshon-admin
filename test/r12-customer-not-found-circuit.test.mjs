@@ -9,3 +9,9 @@ test('authenticated matching NOT_FOUND remains 404 but never closes other Custom
 test('mismatched response identity and genuine source failures retain circuit protection',async()=>{const client=await fixture();global.fetch=async()=>new Response(JSON.stringify({ok:false,error:{code:'NOT_FOUND'},meta:{httpStatus:404,requestId:'WRONG'}}),{status:200,headers:{'content-type':'application/json'}});
  await assert.rejects(client.callHub('customerDetail',{customerCode:'S990001'},{privateRead:true}),/HUB_NOT_FOUND/);await assert.rejects(client.callHub('customerDetail',{customerCode:'S990002'},{privateRead:true}),/HUB_NOT_FOUND/);await assert.rejects(client.callHub('customerDetail',{customerCode:'S990003'},{privateRead:true}),/HUB_CIRCUIT_OPEN/);
 });
+test('background source failures cannot block an interactive authenticated Customer detail',async()=>{const client=await fixture();let broken=true;global.fetch=async(_url,options)=>{const request=JSON.parse(options.body);return new Response(JSON.stringify(broken?{ok:false,error:{code:'INTERNAL_ERROR'},meta:{httpStatus:500,requestId:request.requestId}}:{ok:true,data:{customerCode:request.params.customerCode},meta:{requestId:request.requestId,detailDate:null}}),{status:200,headers:{'content-type':'application/json'}});};
+ for(let i=0;i<2;i++)await assert.rejects(client.callHub('customerDetail',{customerCode:'S990001'},{privateRead:true,addressLocationRead:true}),/HUB_INTERNAL_ERROR/);
+ await assert.rejects(client.callHub('customerDetail',{customerCode:'S990001'},{privateRead:true,addressLocationRead:true}),/HUB_CIRCUIT_OPEN/);broken=false;
+ assert.equal((await client.callHub('customerDetail',{customerCode:'S990002'},{privateRead:true})).ok,true);
+ assert.equal(client.hubMetrics().circuits['customerDetail:address-location'].state,'OPEN');assert.equal(client.hubMetrics().circuits.customerDetail.state,'CLOSED');
+});

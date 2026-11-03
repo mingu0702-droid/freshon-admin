@@ -173,7 +173,7 @@
   const geocodeCache = new Map();
   let addressLocationFrame=null;
   const liveAddressLocations=window.MapAddressLocations?.create({
-    readAddress:async(row,signal)=>{const date=row.lastDeliveryDate||snapshotMeta?.latestDate||localDate();const response=await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:'auto-address-'+row.customerCode,ttl:0,timeout:20000});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});if(response.data?.customerCode!==row.customerCode||response.data?.sourceBasis!=='CURRENT_CUSTOMER_LOOKUP'||response.data?.locationState!=='SOURCE_ROW')throw Error('CURRENT_ADDRESS_UNCONFIRMED');return response.data;},
+    readAddress:async(row,signal)=>{const date=row.lastDeliveryDate||snapshotMeta?.latestDate||localDate();const response=await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:'auto-address-'+row.customerCode,ttl:0,timeout:30000,headers:{'x-map-address-location':'1'}});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});if(response.data?.customerCode!==row.customerCode||response.data?.sourceBasis!=='CURRENT_CUSTOMER_LOOKUP'||response.data?.locationState!=='SOURCE_ROW')throw Error('CURRENT_ADDRESS_UNCONFIRMED');return response.data;},
     lookup:(address,signal)=>geocodeAddress(address,signal),
     queryFor:address=>NewAreaRequests.addressQuery(address,Phase2bUi.addressVariants),
     enabled:()=>document.body.dataset.mapStaffState==='authenticated'&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&window.MapManualPins?.verified?.()===true,

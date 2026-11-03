@@ -137,11 +137,14 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
   } catch { return res.status(503).json({ ok: false, error: "PUBLIC_DETAIL_UNAVAILABLE" }); }
 });
 
+let automaticAddressQueue=Promise.resolve(),automaticAddressStarted=0;
+const queueAutomaticAddressRead=work=>{const task=automaticAddressQueue.catch(()=>{}).then(async()=>{const delay=6000-(Date.now()-automaticAddressStarted);if(delay>0)await new Promise(r=>setTimeout(r,delay));automaticAddressStarted=Date.now();return work();});automaticAddressQueue=task;return task;};
 app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const customerCode = normalizeCell(req.query.customerCode).toUpperCase();
   if (!/^[A-Z]\d{3,}$/.test(customerCode)) return res.status(400).json({ error: "INVALID_CUSTOMER_CODE" });
   const storeView = req.query.view === 'store';
+  const addressLocationRead=storeView&&req.get('x-map-address-location')==='1';
   if (req.query.view && !storeView) return res.status(400).json({error:'INVALID_DETAIL_VIEW'});
   const detailDate = req.query.date ? normalizeDateValue(req.query.date) : getSnapshotMemory()?.latestDate || phase2bKstDate();
   if (!detailDate || detailDate > phase2bKstDate()) return res.status(400).json({ error: "INVALID_DATE" });
@@ -151,15 +154,16 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
     const legacyLoader=()=>privateDetails.get(detailIdentity,{preferFresh:req.query.refresh==='1'||env.OPSMAP_PRIVATE_READER_ENABLED==='true',loader:async()=>{
       const upstreamStarted=performance.now();
       let hub;
-      try{hub=await callHub(storeView?'customerDetail':'staffCustomerDetail',storeView?{customerCode}:{customerCode,date:detailDate},{useCache:false,privateRead:true,...(storeView?{maxResponseBytes:65536,deadline:Date.now()+15000}:{})});}
+      try{hub=await callHub(storeView?'customerDetail':'staffCustomerDetail',storeView?{customerCode}:{customerCode,date:detailDate},{useCache:false,privateRead:true,addressLocationRead,...(storeView?{maxResponseBytes:65536,deadline:Date.now()+15000}:{})});}
       finally{if(!res.headersSent)addStaffTiming(res,'upstream',performance.now()-upstreamStarted);}
       if(String(hub.data?.customerCode||'').toUpperCase()!==customerCode)throw new Error('HUB_INVALID_DETAIL_CONTRACT');
       const detail=(storeView?staffStoreDetail:staffCustomerDetail)(hub.data,{customerCode,date:storeView?null:detailDate});
       return {value:detail,sourceVersion:hub.meta?.version||hub.meta?.sourceVersion||null};
     }});
-    const result=env.OPSMAP_PREPARED_DETAILS_ENABLED==='1'
+    const loadDetail=async()=>env.OPSMAP_PREPARED_DETAILS_ENABLED==='1'
       ?await preparedCustomerDetails.read(detailIdentity,{legacyLoader,refresh:req.query.refresh==='1'})
       :await legacyLoader();
+    const result=addressLocationRead?await queueAutomaticAddressRead(loadDetail):await loadDetail();
     // Even a cache HIT must recheck the employee session. Plaintext is never
     // sent to public snapshots, browser persistent storage, or response caches.
     return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:result.value,meta:{cache:result.meta},error:null}));

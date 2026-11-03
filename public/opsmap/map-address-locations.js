@@ -4,7 +4,7 @@
  const SOURCE='KAKAO_ADDRESS_LIVE',normalize=v=>String(v||'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
  const valid=r=>typeof r?.lat==='number'&&typeof r?.lng==='number'&&Number.isFinite(r.lat)&&Number.isFinite(r.lng)&&r.lat>=33&&r.lat<=39.5&&r.lng>=124&&r.lng<=132;
  const established=r=>valid(r)&&!['CONFLICT','MISSING','UNVERIFIED'].includes(r.coordinateStatus)&&r.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'&&r.coordinateSource!==SOURCE;
- function create({lookup,readAddress,queryFor,enabled=()=>true,onChange=()=>{},now=Date.now,spacingMs=350}={}){
+ function create({lookup,readAddress,queryFor,enabled=()=>true,onChange=()=>{},now=Date.now,spacingMs=4000}={}){
   let epoch=0,running=false,controller=new AbortController();
   const points=new Map(),pending=new Map(),outcomes=new Map(),queue=new Map(),bindings=new Map(),addresses=new Map(),active=new Set(),attempts=new Map();
   const sourceHash=row=>row.originalAddressHash||row.addressHash||row.raw?.originalAddressHash||row.raw?.addressHash||'';
@@ -62,7 +62,7 @@
   async function drain(){
    if(running)return;running=true;const owner=epoch;
    const worker=async()=>{while(queue.size&&enabled()&&owner===epoch){const [key,row]=queue.entries().next().value;queue.delete(key);active.add(key);try{await ensure(row);}finally{active.delete(key);}if(queue.size&&owner===epoch)await new Promise(resolve=>setTimeout(resolve,spacingMs));}};
-   try{await Promise.all([worker(),worker()]);}
+   try{await worker();}
    finally{running=false;if(queue.size&&owner!==epoch)void drain();}
   }
   function schedule(rows,{priority=false}={}){

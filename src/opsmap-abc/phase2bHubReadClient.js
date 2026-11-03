@@ -106,7 +106,7 @@ export function previewEnabled() {
     && String(process.env.HUB_API_SECRET || "").length >= 32;
 }
 
-export async function callHub(action, params, { useCache = true, privateRead = false, deadline, signal, page, maxResponseBytes } = {}) {
+export async function callHub(action, params, { useCache = true, privateRead = false, deadline, signal, page, maxResponseBytes, addressLocationRead=false } = {}) {
   if(maxResponseBytes!==undefined){
     if(!Number.isSafeInteger(maxResponseBytes)||maxResponseBytes<1||maxResponseBytes>2*1048576)throw new Error('HUB_RESPONSE_LIMIT_INVALID');
     useCache=false;
@@ -117,7 +117,7 @@ export async function callHub(action, params, { useCache = true, privateRead = f
   const saved = cache.get(key);
   if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
   if (useCache && inFlight.has(key)) return inFlight.get(key);
-  const request = callHubUncached(action, params, key, privateRead || maxResponseBytes!==undefined || ['customerDetail','staffCustomerDetail','customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action), { deadline, signal, page, maxResponseBytes });
+  const request = callHubUncached(action, params, key, privateRead || maxResponseBytes!==undefined || ['customerDetail','staffCustomerDetail','customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action), { deadline, signal, page, maxResponseBytes, addressLocationRead });
   if (useCache) inFlight.set(key, request);
   try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
 }
@@ -136,9 +136,9 @@ function retryableHubError(error) {
   return error.failureType === "upstream" && Number(error.upstreamStatus) >= 500;
 }
 
-async function callHubUncached(action, params, key, privateRead = false, { deadline, signal, page, maxResponseBytes } = {}) {
+async function callHubUncached(action, params, key, privateRead = false, { deadline, signal, page, maxResponseBytes, addressLocationRead=false } = {}) {
   const endpoint=privateReaderEndpoint(action);
-  const entered = circuitEnter(action);
+  const entered = circuitEnter(endpoint.isolated&&action==='customerDetail'&&addressLocationRead?'customerDetail:address-location':action);
   const started = Date.now();
   const staffDetail = action === 'staffCustomerDetail';
   const preparedPrivate=['customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action);
