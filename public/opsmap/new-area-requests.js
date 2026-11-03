@@ -65,6 +65,12 @@
       GEOCODER_MULTIPLE_CANDIDATES:'주소 후보 복수 · 선택 필요',GEOCODER_RESULT_TRUNCATED:'주소 범위 확인 필요',
       GEOCODER_ADDRESS_MISMATCH:'원본 주소와 위치 불일치',GEOCODER_INVALID_RESPONSE:'주소 응답 형식 확인 필요' })[error?.code] || '주소 조회 실패';
   }
-  root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, stopsExternal, outcome };
+  function singleStoredLocation(rows) {
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const first=rows[0];
+    if (!rows.every(row=>typeof row.lat==='number'&&typeof row.lng==='number'&&Number.isFinite(row.lat)&&Number.isFinite(row.lng)&&row.lat===first.lat&&row.lng===first.lng)) return {candidates:rows};
+    return {...first,coordinateReferenceCustomers:[...new Set(rows.map(row=>row.customerCode).filter(Boolean))]};
+  }
+  root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, stopsExternal, outcome, singleStoredLocation };
 })(typeof window === 'object' ? window : globalThis);
 

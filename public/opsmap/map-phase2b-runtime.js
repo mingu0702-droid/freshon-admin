@@ -2344,7 +2344,7 @@
     if (manual.length) return judgeNewAreaPoint(row,manual.length === 1 ? {...manual[0],coordinateSource:'MANUAL_WAYPOINT'} : {candidates:manual});
     // Reuse saved/manual coordinates while external address lookup remains off.
     const stored = [...new Map([...latestSnapshotRows,...allStores].filter(store => [store.customerCode,store.customerName,store.address].includes(row.address)).map(store => [store.customerCode,store])).values()].map(newAreaCoordinate).filter(Boolean);
-    if (stored.length) return judgeNewAreaPoint(row,stored.length === 1 ? stored[0] : {candidates:stored});
+    if (stored.length) return judgeNewAreaPoint(row,NewAreaRequests.singleStoredLocation(stored));
     const queries=NewAreaRequests.addressQueries(row.address,Phase2bUi.addressVariants);
     if (!queries.length) return {...judgeNewAreaPoint(row,null),evidence:'검색용 기본주소 확인 필요 · 원문 보존'};
     let matched=null;
