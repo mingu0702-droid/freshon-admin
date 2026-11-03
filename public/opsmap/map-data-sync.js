@@ -54,7 +54,7 @@
   const showDetails=()=>{const help=document.querySelector('.dataHelp');if(help)help.open=true;panel.open=true;void refresh();};strip.onclick=showDetails;
   function renderSummary(d,snapshot,failed=false){const value=MapFreshnessSummary.summarize(d,snapshot,{failed});strip.textContent=value.text;strip.title=value.title;strip.dataset.state=value.state;strip.dataset.partial=String(value.partial);api.summary=value;}
   let busy=false,last=null,poll=null,pollCount=0,dialogOpen=false,submitted=false,generation=0,lastMetadata=null;
-  const api=window.MapDataSync={onPublished:null};
+  const api=window.MapDataSync={onPublished:null,refresh:()=>refresh()};
   async function refresh(){
     if(busy||!window.MapStaffEntry?.session())return;const owner=generation;busy=true;button.disabled=true;
     try{

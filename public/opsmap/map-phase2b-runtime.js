@@ -35,7 +35,7 @@
     cancelManualRoadRoute();manualDraft?.clear();window.dispatchEvent(new CustomEvent('map-navigation-logout'));
     ++initialRequestId;++periodRequestId;++dateRequestId;
     for(const key of ['baseRequestId','routeRequestId','searchRequestId','addressRequestId','detailRequestId','todayRequestId'])++state[key];
-    clearTimeout(initialTimer);clearTimeout(periodTimer);clearTimeout(baseVehicleTimer);
+    clearTimeout(initialTimer);clearTimeout(periodTimer);clearTimeout(baseVehicleTimer);clearInterval(generalSnapshotPoll);generalSnapshotPoll=null;
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
     latestSnapshotRows=[];periodRows=[];allStores=[];operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();approvedMarkerOrder.clear();
@@ -244,6 +244,7 @@
 
   let periodRows = [], periodMeta = null, periodRequestId = 0, periodTimer = null;
   let modelStatus = null, initialRequestId = 0, initialTimer = null;
+  let generalSnapshotPoll=null,generalSnapshotPolling=false;
   function syncDateHeading() {
     const period = state.mode === "BASE_60D";
     const start = $("#rangeStart").value, end = $("#rangeEnd").value;
@@ -307,7 +308,31 @@
       // Coordinates and Snapshot freshness never select the Period or Daily date.
     } catch (error) { if(isSilentRequestError(error))throw error; snapshotReadState = 'error'; }
   }
+  async function pollGeneralSnapshot(){
+    if(generalSnapshotPolling||!generalMap||state.mode!=='BASE_60D'||document.hidden||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
+    generalSnapshotPolling=true;const owner=initialRequestId,oldRows=latestSnapshotRows,oldMeta=snapshotMeta;
+    const version=m=>JSON.stringify([m?.preservation?.version,m?.sourceGeneration,m?.version,m?.generatedAt,m?.rowCount]);
+    try{
+      await refreshStoreSnapshot();
+      if(owner!==initialRequestId||!generalMap||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
+      if(snapshotReadState!=='ready')throw Error('SNAPSHOT_READ_FAILED');
+      if(version(oldMeta)===version(snapshotMeta)&&oldRows.length===latestSnapshotRows.length)return{ok:true,changed:false};
+      const merged=new Map(oldRows.map(r=>[String(r.customerCode||r.code),r])),added=[];
+      for(const row of latestSnapshotRows){const code=String(row.customerCode||row.code),prior=merged.get(code);if(prior&&(prior.lastDeliveryDate||'')>(row.lastDeliveryDate||''))continue;if(!prior)added.push(code);merged.set(code,row);}
+      latestSnapshotRows=[...merged.values()];coordinateByCode.clear();latestSnapshotRows.forEach(row=>coordinateByCode.set(String(row.customerCode||row.code),row));
+      periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;
+      if(state.selected){const next=storesByCode.get(state.selected.customerCode);if(next){state.selected={...state.selected,...next};refreshCoordinateEvidence(state.selected);void enrichStoreDetail(state.selected);}}
+      state.fitRequested=false;await loadBaseMap();if(added.length)void loadBaseVehicles(added);
+      void window.MapDataSync?.refresh?.();return{ok:true,changed:true,added:added.length,stores:allStores.length};
+    }catch(error){
+      if(owner!==initialRequestId||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
+      latestSnapshotRows=oldRows;snapshotMeta=oldMeta;coordinateByCode.clear();oldRows.forEach(row=>coordinateByCode.set(String(row.customerCode||row.code),row));
+      const label=$('#mapFreshnessStatus');if(label)label.title='자동 매장 조회 지연 · 기존 지도 유지';return{ok:false,changed:false};
+    }finally{generalSnapshotPolling=false;}
+  }
+  function startGeneralSnapshotPolling(){if(generalSnapshotPoll===null)generalSnapshotPoll=setInterval(()=>void pollGeneralSnapshot(),60000);}
   async function initializeGeneral() {
+    startGeneralSnapshotPolling();
     recentPeriodMode=true;
     const id=++initialRequestId;
     ++periodRequestId;++dateRequestId;++state.routeRequestId;++state.todayRequestId;
@@ -2736,7 +2761,7 @@
       return;
     }
     modelStatus=status;periodMeta=null;baseVehicleTries=0;
-    if(generalMap){await initializeGeneral();return;}
+    if(generalMap){await pollGeneralSnapshot();return;}
     if(state.mode!=='BASE_60D')return;
     if(recentPeriodMode){const range=MapPeriodUi.recentRange(status);if(range)await changePeriod(range.start,range.end);}
     else await changePeriod(state.rangeStart,state.rangeEnd);
@@ -2793,6 +2818,7 @@
   // Local design shell uses the same controllers; it cannot authorize API calls.
   window.MapUiLocalBridge={
     state,
+    refreshGeneralSnapshot:pollGeneralSnapshot,
     isDataReady:()=>state.mode==='DATE_ROUTE'?isDailyDataReady():dateReady,
     initMap,
     stores:()=>allStores.slice(),
