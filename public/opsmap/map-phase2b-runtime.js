@@ -2290,7 +2290,7 @@
     const limits=[!periodComplete?'전체 기간 비교 미완료':null,periodMeta?.missingCoordinate>0 || periodComplete && comparisons.length < periodRows.length?'비교 원천 좌표 누락':null,periodMeta?.coverageComplete!==true?'전체 원천 완전성 미검증':null].filter(Boolean);
     const nearest=locationDistances[0];
     const facts={...base,nearby,references,storedNearbyCount:storedNearby.length,evidenceCount:nearby.length,dataLimits:limits.join(' · '),deliveryDays:combineNearbyPatterns(nearby),vehicle:nearby[0]?.vehicle||references[0]?.vehicle||'-',nearestStore:nearest?.customerName||'',nearestDistance:nearest?.distance??null};
-    if(limits.length)return {...facts,reason:nearby.length?'근접 근거 확인 · 검토필요':exception?exception+' · 검토필요':!references.length?'해당 센터 비교자료 부족':'검토필요',evidence:(nearby.length?'500m 내 기존 배송점 확인 · ':references.length?'30km 내 근접호차 확인 · ':'')+limits.join(' · ')+' · 인근 배송점 부재 확정 불가 · 직선거리이며 도로 진입 판정 아님'};
+    if(limits.length)return {...facts,reason:'위치 확인 완료 · 배송판정 검토',evidence:(exception?exception+' · ':'')+(nearby.length?'500m 내 기존 배송점 확인 · ':references.length?'30km 내 근접호차 확인 · ':'')+limits.join(' · ')+' · 인근 배송점 부재 확정 불가 · 직선거리이며 도로 진입 판정 아님'};
     if(exception)return {...facts,decision:'X',reason:exception,evidence:'기존 지역/시설 업무 제외 규칙'};
     if(base.facility)return {...facts,reason:'차량 진입 확인 필요',evidence:nearby.length?'500m 내 기존 배송점 확인 · 시설 진입 별도 확인':'시설 진입 확인 전 확정 불가'};
     if(nearby.length)return {...facts,decision:'O',reason:'',evidence:'500m 내 기존 배송점 확인 · 직선/공간거리 기준 · 도로 진입 별도 확인'};
@@ -2344,14 +2344,14 @@
     $(statusId).textContent = `${rows.length}건 판단 중...`;
     const judged = [];
     const batch={customers:new Map(),queries:new Map(),blocked:null};
-    const progress=()=>`입력 ${rows.length} · 완료 ${judged.length} · 성공 ${judged.filter(row=>row.lookupStatus==='SUCCESS'||newAreaCoordinate(row)).length} · 보류 ${judged.filter(row=>!['SUCCESS','FAILED','LIMIT'].includes(row.lookupStatus)&&!newAreaCoordinate(row)).length} · 실패 ${judged.filter(row=>row.lookupStatus==='FAILED').length} · 한도대기 ${judged.filter(row=>row.lookupStatus==='LIMIT').length}`;
+    const progress=()=>`입력 ${rows.length} · 완료 ${judged.length} · 위치 확인 ${judged.filter(row=>row.lookupStatus==='SUCCESS'||newAreaCoordinate(row)).length} · 보류 ${judged.filter(row=>!['SUCCESS','FAILED','LIMIT'].includes(row.lookupStatus)&&!newAreaCoordinate(row)).length} · 실패 ${judged.filter(row=>row.lookupStatus==='FAILED').length} · 한도대기 ${judged.filter(row=>row.lookupStatus==='LIMIT').length}`;
     for (const row of rows) {
       try { judged.push(await judgeNewAreaRow(row, signal,batch)); }
       catch (error) {
         if (requestId !== newAreaRequestId || isSilentRequestError(error)) return;
         if(NewAreaRequests.stopsExternal(error)||window.kakaoGeocoder?.blockedReason)batch.blocked=error.code||'GEOCODE_AUTOMATICALLY_BLOCKED';
         const lookupStatus=NewAreaRequests.outcome(error);
-        judged.push({...row,decision:'검토',reason:lookupStatus==='LIMIT'?'일일 주소 조회 한도 대기':lookupStatus==='DEFERRED'?'주소 조회 차단 · 보류':'조회 실패 · 검토필요',evidence:NewAreaRequests.message(error)+' · 원문 보존',lookupStatus,lookupError:lookupStatus==='FAILED',nearby:[]});
+        judged.push({...row,decision:'검토',reason:lookupStatus==='LIMIT'?'일일 주소 조회 한도 대기':lookupStatus==='DEFERRED'?/^GEOCODER_/.test(error.code||'')?'주소 결과 확인 필요 · 보류':'주소 조회 차단 · 보류':'조회 실패 · 검토필요',evidence:NewAreaRequests.message(error)+' · 원문 보존',lookupStatus,lookupError:lookupStatus==='FAILED',nearby:[]});
       }
       if (requestId !== newAreaRequestId || periodKey !== state.rangeStart + "|" + state.rangeEnd || state.mode !== "BASE_60D") return;
       $(statusId).textContent = progress();

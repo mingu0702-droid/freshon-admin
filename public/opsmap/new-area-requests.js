@@ -27,7 +27,7 @@
   function stopsExternal(error) {
     return /^(?:KAKAO_|GEOCODE_(?:DAILY_LIMIT|AUTOMATICALLY_BLOCKED|LEDGER_|DURABLE_|SESSION_|ORIGIN_)|GEOCODING_DISABLED|TARGET_APP_)/.test(error?.code || '');
   }
-  function outcome(error) { return error?.code === 'GEOCODE_DAILY_LIMIT' ? 'LIMIT' : error?.code === 'GEOCODE_AUTOMATICALLY_BLOCKED' ? 'DEFERRED' : 'FAILED'; }
+  function outcome(error) { return error?.code === 'GEOCODE_DAILY_LIMIT' ? 'LIMIT' : error?.code === 'GEOCODE_AUTOMATICALLY_BLOCKED'||/^GEOCODER_(?:MULTIPLE_CANDIDATES|RESULT_TRUNCATED|ADDRESS_MISMATCH)$/.test(error?.code||'') ? 'DEFERRED' : 'FAILED'; }
   function lookup(geocoder, query, { signal, timeout = geocoder?.serverProxy?45000:7000 } = {}) {
     return new Promise((resolve, reject) => {
       let settled = false, timer;

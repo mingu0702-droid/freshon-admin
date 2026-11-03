@@ -73,12 +73,13 @@ test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with n
     assert.equal(row.originalAddress,cells[i].x);assert.equal(row.originalCustomer,cells[i].y);
     assert.equal(row.address,cells[i].x.trim());assert.equal(row.customer,cells[i].y);assert.equal(row.decision,'검토');
     assert.equal(row.lookupStatus,'SUCCESS');assert.equal(row.storedNearbyCount,1);assert.equal(row.references[0].vehicle,'101');
+    assert.equal(row.reason,'위치 확인 완료 · 배송판정 검토');assert.match(row.evidence,/전체 기간 비교 미완료/);
     assert.equal(row.evidenceCount,0);assert.equal(row.deliveryDays,'');
     assert.equal(f.queries[i],`경기도 화성시 합성로 ${i+100}`);assert.equal(f.headers[i],f.queries[i]);
   }
   const exported=globalThis.MapPeriodUi.areaExportRows(f.state.newAreaResults,'2026-11-03');
   assert.deepEqual(Array.from(exported,row=>Array.from(row).slice(0,2)),cells.map(({x,y})=>[x,y]));
-  assert.match(f.node('#newAreaBatchStatus').textContent,/완료 60 · 성공 60 · 보류 0 · 실패 0 · 한도대기 0/);
+  assert.match(f.node('#newAreaBatchStatus').textContent,/완료 60 · 위치 확인 60 · 보류 0 · 실패 0 · 한도대기 0/);
   assert.match(f.node('#newAreaBatchResults').innerHTML,/500m 저장위치 1개 · 기간 배송근거 0개/);
   assert.match(f.node('#newAreaBatchResults').innerHTML,/실배송요일 미확정/);
   assert.equal(JSON.stringify(f.saved()),original,'REST coordinates never mutate the saved snapshot');
@@ -155,7 +156,7 @@ test('zero result, ambiguous response and individual query failure do not stop l
   await f.run([2,3,4,5,1].map(i=>`경기도 화성시 합성로 ${i}\t합성${i}`).join('\n'));
   assert.equal(f.state.newAreaResults.length,5);assert.equal(f.state.newAreaResults[0].reason,'주소 확인 필요');assert.equal(f.state.newAreaResults[1].reason,'주소 복수 후보');
   assert.equal(f.state.newAreaResults[2].lookupStatus,'FAILED');assert.equal(f.state.newAreaResults[3].lookupStatus,'SUCCESS');assert.equal(f.state.newAreaResults[4].lookupStatus,'SUCCESS');
-  assert.equal(f.queries.length,4);assert.match(f.node('#newAreaBatchStatus').textContent,/성공 2 · 보류 2 · 실패 1 · 한도대기 0/);
+  assert.equal(f.queries.length,4);assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 2 · 보류 2 · 실패 1 · 한도대기 0/);
 });
 
 for(const code of ['KAKAO_HTTP_REJECTED','GEOCODE_DAILY_LIMIT'])test(`${code} stops subsequent REST calls but finishes every row and reuses saved coordinates`,async()=>{
@@ -164,10 +165,10 @@ for(const code of ['KAKAO_HTTP_REJECTED','GEOCODE_DAILY_LIMIT'])test(`${code} st
   assert.equal(f.state.newAreaResults.length,3);assert.equal(f.queries.length,1);assert.equal(f.state.newAreaResults[2].lookupStatus,'SUCCESS');
   if(code==='GEOCODE_DAILY_LIMIT'){
     assert.equal(f.state.newAreaResults[0].lookupStatus,'LIMIT');assert.equal(f.state.newAreaResults[1].lookupStatus,'LIMIT');
-    assert.match(f.node('#newAreaBatchStatus').textContent,/성공 1 · 보류 0 · 실패 0 · 한도대기 2/);
+    assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 1 · 보류 0 · 실패 0 · 한도대기 2/);
   }else{
     assert.equal(f.state.newAreaResults[0].lookupStatus,'FAILED');assert.equal(f.state.newAreaResults[1].lookupStatus,'DEFERRED');
-    assert.match(f.node('#newAreaBatchStatus').textContent,/성공 1 · 보류 1 · 실패 1 · 한도대기 0/);
+    assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 1 · 보류 1 · 실패 1 · 한도대기 0/);
   }
 });
 
@@ -208,7 +209,7 @@ test('anonymous temporary points never enter manual-pin projection and complete 
   await f.run(Array.from({length:60},(_,i)=>`경기도 화성시 합성로 ${i+100}\t합성고객${i}`).join('\n'));
   assert.equal(f.state.newAreaResults.length,60);assert.equal(f.queries.length,60);
   assert.ok(f.state.newAreaResults.every(row=>row.lookupStatus==='SUCCESS'&&!row.lookupError));
-  assert.match(f.node('#newAreaBatchStatus').textContent,/완료 60 · 성공 60 · 보류 0 · 실패 0 · 한도대기 0/);
+  assert.match(f.node('#newAreaBatchStatus').textContent,/완료 60 · 위치 확인 60 · 보류 0 · 실패 0 · 한도대기 0/);
   assert.equal(manualCalls,0,'anonymous points must bypass the customer-only manual projection');
 });
 
