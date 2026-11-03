@@ -63,7 +63,7 @@ const css=`
 export function mountVehiclePrintUi({win=window,doc=document,bridge=win.MapUiLocalBridge}={}){
  if(!bridge||doc.getElementById('vehiclePrintDialog'))return null;
  const make=(tag,content,parent)=>{const node=doc.createElement(tag);if(content!==undefined)node.textContent=content;parent?.append(node);return node;};
- const style=make('style',css,doc.head),trigger=make('button','호차별 인쇄',doc.querySelector('#mapDateBar')||doc.querySelector('#mapModeBar'));trigger.id='vehiclePrintButton';trigger.type='button';
+ const style=make('style',css,doc.head),trigger=make('button','호차별 인쇄',doc.querySelector('#sourceFooterLinks')||doc.querySelector('#mapDateBar')||doc.querySelector('#mapModeBar'));trigger.id='vehiclePrintButton';trigger.type='button';
  const dialog=make('dialog',undefined,doc.body);dialog.id='vehiclePrintDialog';dialog.setAttribute('aria-label','호차별 지도 인쇄 미리보기');
  const controls=make('div',undefined,dialog);controls.className='print-controls';
  const field=(label,tag,id)=>{const wrap=make('label',label,controls),node=make(tag,undefined,wrap);node.id=id;return node;};
@@ -133,10 +133,12 @@ export function mountVehiclePrintUi({win=window,doc=document,bridge=win.MapUiLoc
  trigger.onclick=()=>{cancel();basis.value=bridge.state.mode==='DATE_ROUTE'?'DATED':'FIXED';date.value=validPrintDate(bridge.state.selectedDate)&&basis.value==='DATED'?bridge.state.selectedDate:today();center.value=PRINT_CENTERS[bridge.state.centerFilter]?bridge.state.centerFilter:'osan';refreshCars();status.textContent='센터와 호차를 선택한 뒤 미리보기를 눌러 주세요.';dialog.showModal();};
  for(const control of [basis,date,center,car])control.onchange=()=>{cancel();preview.disabled=false;if(control===center)refreshCars();status.textContent='조건이 변경되었습니다. 미리보기를 다시 눌러 주세요.';};
  preview.onclick=runPreview;close.onclick=dismiss;dialog.addEventListener('cancel',event=>{event.preventDefault();dismiss();});
- print.onclick=()=>{if(!model||print.disabled)return;printTitle=doc.title;doc.title=`${model.date}_${model.centerName}_${model.vehicle}호차`;doc.body.classList.add('map-vehicle-printing');try{win.print();}finally{restore();}};
+ const preparePrint=()=>{if(!model||print.disabled||!dialog.open)return false;if(printTitle===null)printTitle=doc.title;doc.title=`${model.date}_${model.centerName}_${model.vehicle}호차`;doc.body.classList.add('map-vehicle-printing');return true;};
+ print.onclick=()=>{if(!preparePrint())return;try{win.print();}finally{restore();}};
+ win.addEventListener('beforeprint',preparePrint);
  win.addEventListener('afterprint',restore);
  const unregister=win.MapStaffEntry?.registerPurge?.(()=>{cancel();restore();if(dialog.open)dialog.close();});
- return {open:()=>trigger.click(),dispose(){cancel();restore();unregister?.();win.removeEventListener('afterprint',restore);trigger.remove();dialog.remove();style.remove();}};
+ return {open:()=>trigger.click(),dispose(){cancel();restore();unregister?.();win.removeEventListener('beforeprint',preparePrint);win.removeEventListener('afterprint',restore);trigger.remove();dialog.remove();style.remove();}};
 }
 
 if(typeof window!=='undefined'&&typeof document!=='undefined')window.MapVehiclePrintUi=mountVehiclePrintUi();

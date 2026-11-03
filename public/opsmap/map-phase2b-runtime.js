@@ -201,6 +201,9 @@
   }
   let addressLocationFrame=null,addressFocusRequest=null;
   const liveAddressLocations=window.MapAddressLocations?.create({
+    // The shared server still serializes provider calls and enforces the daily
+    // ledger. Avoid an additional four-second delay for every visible store.
+    spacingMs:400,
     readAddress:async(row,signal)=>{const observedDate=row.raw?.lastDeliveryDate||storesByCode.get(row.customerCode)?.lastDeliveryDate||row.lastDeliveryDate||'',date=state.mode==='DATE_ROUTE'?row.deliveryDate||state.selectedDate:observedDate||snapshotMeta?.latestDate||localDate();const response=await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:'auto-address-'+row.customerCode,ttl:0,timeout:30000,headers:{'x-map-address-location':'1'}});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});const source=response.data,current=source?.sourceBasis==='CURRENT_CUSTOMER_LOOKUP',dated=source?.sourceBasis==='DATED_DELIVERY_LOOKUP'&&source.currentMasterState==='NOT_FOUND'&&source.detailDate===date&&observedDate===date;if(source?.customerCode!==row.customerCode||!current&&!dated||source?.locationState!=='SOURCE_ROW')throw Error('CURRENT_ADDRESS_UNCONFIRMED');return source;},
     lookup:(address,signal)=>geocodeAddress(address,signal),
     queryFor:address=>NewAreaRequests.addressQuery(address,Phase2bUi.addressVariants),
@@ -2679,7 +2682,7 @@
   }
 
   function bindEvents() {
-    $("#modePeriod").onclick = () => initializeGeneral();
+    $("#modePeriod").onclick = () => { if(state.mode==='BASE_60D'&&generalMap&&dateReady)return;void initializeGeneral(); };
     $("#modeDaily").onclick = () => { dateChosenByUser = true; state.routeDate ? changeSelectedDate(state.routeDate) : selectLatestRoute(); };
     $("#applyPeriod").onclick = () => { if(state.mode!=="BASE_60D")return;recentPeriodMode=false; return changePeriod($("#rangeStart").value, $("#rangeEnd").value); };
     $("#recent60").onclick = () => {if(state.mode==="BASE_60D")return initializePeriod();};
