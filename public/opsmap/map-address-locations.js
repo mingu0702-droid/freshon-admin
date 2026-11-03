@@ -8,6 +8,7 @@
   let epoch=0,running=false,controller=new AbortController(),syncToken='';
   const points=new Map(),pending=new Map(),outcomes=new Map(),queue=new Map(),bindings=new Map(),addresses=new Map(),active=new Set(),attempts=new Map();
   const sourceHash=row=>row.originalAddressHash||row.addressHash||row.raw?.originalAddressHash||row.raw?.addressHash||'';
+  const observedDate=row=>row.raw?.lastDeliveryDate||row.lastDeliveryDate||'';
   const conflicted=row=>row.searchAddressConflict===true||row.addressChanged===true||row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED';
   const addressFor=row=>{const cached=addresses.get(row.customerCode),bound=cached?.sourceHash===sourceHash(row);return conflicted(row)?bound&&cached.conflict?cached.address:'':bound?cached.address:row.address||'';};
   const identity=row=>/^[A-Z]\d+$/.test(row?.customerCode||'')&&row.currentMasterStatus!=='UNAVAILABLE'?normalize(addressFor(row)):'';
@@ -32,7 +33,7 @@
     const attemptKey=code+'|'+sourceBinding;attempts.set(attemptKey,(attempts.get(attemptKey)||0)+1);
     try{const source=await readAddress(row,signal);if(owner!==epoch||signal.aborted||sourceHash(row)!==sourceBinding)return row;
      if(source?.customerCode!==code||!source.address)throw Object.assign(Error('CUSTOMER_ADDRESS_UNAVAILABLE'),{code:'CUSTOMER_ADDRESS_UNAVAILABLE'});
-     addresses.set(code,{address:source.address,sourceHash:sourceBinding,observedDate:row.lastDeliveryDate||'',conflict:conflicted(row)});
+     addresses.set(code,{address:source.address,sourceHash:sourceBinding,observedDate:observedDate(row),conflict:conflicted(row)});
     }catch(error){if(owner===epoch&&!signal.aborted){const notFound=error?.status===404;outcomes.set(code,{sourceHash:sourceBinding,state:!notFound&&attempts.get(attemptKey)<2?'RETRY':'REVIEW',reason:notFound?'CUSTOMER_NOT_FOUND':'CUSTOMER_ADDRESS_UNAVAILABLE',retryAt:now()+60000});onChange(code);}return row;}
    }
    const address=identity(row),query=queryFor?.(addressFor(row)),key=normalize(query);
@@ -80,7 +81,7 @@
   function onSourceSync(token,rows=[]){
    if(!token||token===syncToken)return;syncToken=token;
    // Compare the canonical synced row, never a temporary filtered/date copy.
-   for(const row of rows){const cached=addresses.get(row.customerCode);if(cached?.observedDate&&row.lastDeliveryDate&&cached.observedDate!==row.lastDeliveryDate){addresses.delete(row.customerCode);bindings.delete(row.customerCode);outcomes.delete(row.customerCode);}}
+   for(const row of rows){const cached=addresses.get(row.customerCode),date=observedDate(row);if(cached?.observedDate&&date&&cached.observedDate!==date){addresses.delete(row.customerCode);bindings.delete(row.customerCode);outcomes.delete(row.customerCode);}}
    for(const [code,outcome]of outcomes){
     if(!/^(?:CUSTOMER_NOT_FOUND|CUSTOMER_ADDRESS_UNAVAILABLE|KAKAO_TIMEOUT|KAKAO_NETWORK_FAILED|GEOCODE_RETRY_COOLDOWN|GEOCODER_TIMEOUT)$/.test(outcome.reason)||now()<(outcome.retryAt||0)+240000)continue;
     outcomes.delete(code);for(const key of attempts.keys())if(key.startsWith(code+'|')||key.startsWith('lookup:'+code+'|'))attempts.delete(key);
@@ -89,10 +90,10 @@
   function clear(){epoch++;controller.abort();controller=new AbortController();points.clear();pending.clear();queue.clear();bindings.clear();outcomes.clear();addresses.clear();attempts.clear();syncToken='';}
   function acceptAddress(row,source){
    if(!row||established(row)||source?.customerCode!==row.customerCode||!source.address||source.locationState!=='SOURCE_ROW')return;
-   const current=source.sourceBasis==='CURRENT_CUSTOMER_LOOKUP',dated=source.sourceBasis==='DATED_DELIVERY_LOOKUP'&&source.currentMasterState==='NOT_FOUND'&&source.detailDate===row.lastDeliveryDate;
+   const current=source.sourceBasis==='CURRENT_CUSTOMER_LOOKUP',dated=source.sourceBasis==='DATED_DELIVERY_LOOKUP'&&source.currentMasterState==='NOT_FOUND'&&source.detailDate===observedDate(row);
    if(!current&&!dated)return;
    if(normalize(addressFor(row))===normalize(source.address))return;
-   addresses.set(row.customerCode,{address:source.address,sourceHash:sourceHash(row),observedDate:row.lastDeliveryDate||'',conflict:conflicted(row)});bindings.delete(row.customerCode);outcomes.delete(row.customerCode);apply(row);onChange(row.customerCode);
+   addresses.set(row.customerCode,{address:source.address,sourceHash:sourceHash(row),observedDate:observedDate(row),conflict:conflicted(row)});bindings.delete(row.customerCode);outcomes.delete(row.customerCode);apply(row);onChange(row.customerCode);
   }
   return Object.freeze({apply,ensure,schedule,clear,onSourceSync,acceptAddress,source:SOURCE,summary:()=>({located:[...outcomes.values()].filter(r=>r.state==='LOCATED').length,review:[...outcomes.values()].filter(r=>r.state==='REVIEW').length,retry:[...outcomes.values()].filter(r=>r.state==='RETRY').length,queued:queue.size,pending:pending.size,retention:'PAGE_MEMORY_ONLY'})});
  }

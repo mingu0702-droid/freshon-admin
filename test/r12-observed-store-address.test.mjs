@@ -20,3 +20,11 @@ test('the existing Delivery task builder reads the verified location.address con
  const value=context.buildStopFromDeliveryTaskRow(input,'101',1);assert.equal(value.address,'합성시 합성로 10 2층');assert(!JSON.stringify(value).includes('SYNTHETIC_PROTECTED_NOTE'));
  assert.equal(context.buildStopFromDeliveryTaskRow({...input,address:'합성시 우선로 12'},'101',1).address,'합성시 우선로 12 2층');
 });
+test('an unvisited period row retains its raw observed date for private address lookup',async()=>{
+ const runtime=fs.readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js',import.meta.url),'utf8'),line=runtime.split('\n').find(l=>l.includes('readAddress:async(row,signal)'));
+ const source={customerCode:code,address:'합성시 합성로 10',sourceBasis:'DATED_DELIVERY_LOOKUP',currentMasterState:'NOT_FOUND',detailDate:date,locationState:'SOURCE_ROW'};
+ let url;const c={state:{mode:'BASE_60D'},snapshotMeta:{latestDate:date},storesByCode:new Map([[code,row]]),localDate:()=>date,fetchJson:async u=>{url=u;return{data:source};}};
+ const read=vm.runInNewContext('({'+line+'}).readAddress',c);assert.equal((await read({customerCode:code,lastDeliveryDate:'',raw:{lastDeliveryDate:date}},{aborted:false})).customerCode,code);assert(url.endsWith('date='+date));
+ source.detailDate='2026-11-03';await assert.rejects(read({...row,lastDeliveryDate:'',raw:{lastDeliveryDate:date}},{aborted:false}),/CURRENT_ADDRESS_UNCONFIRMED/);
+ c.state={mode:'DATE_ROUTE',selectedDate:'2026-11-03'};source.detailDate=date;await assert.rejects(read({...row,raw:{lastDeliveryDate:date}},{aborted:false}),/CURRENT_ADDRESS_UNCONFIRMED/);
+});
