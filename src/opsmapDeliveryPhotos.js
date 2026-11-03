@@ -99,7 +99,12 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
   async function detail(identity, signal) {
     const task = unwrap(await bounded(requestJson(`/api/bali/task/${identity.deliveryId}`, { method: 'GET', signal, maxResponseBytes: 65536 }), signal));
     exact(task, identity);
-    if (!Array.isArray(task.taskAttachments)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
+    if (!Array.isArray(task.taskAttachments)) {
+      const error=new DeliveryPhotoError('PHOTO_ATTACHMENTS_INVALID',503,{stage:'source-attachments'});
+      // Fixed shape enums only; no attachment body, URL or protected text.
+      error.attachmentState=!Object.hasOwn(task,'taskAttachments')?'MISSING':task.taskAttachments===null?'NULL':typeof task.taskAttachments==='object'?'OBJECT':'SCALAR';
+      throw error;
+    }
     if (task.taskAttachments.length > 20) fail('PHOTO_ATTACHMENT_LIMIT_EXCEEDED', 503);
     return task;
   }
