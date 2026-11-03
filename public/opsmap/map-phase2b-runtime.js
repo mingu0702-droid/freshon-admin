@@ -171,7 +171,7 @@
   let datedSourceDate = '', dailyMeta = null;
   let dateChosenByUser = false;
   const geocodeCache = new Map();
-  let addressLocationFrame=null;
+  let addressLocationFrame=null,addressFocusRequest=null;
   const liveAddressLocations=window.MapAddressLocations?.create({
     readAddress:async(row,signal)=>{const date=row.lastDeliveryDate||snapshotMeta?.latestDate||localDate();const response=await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:'auto-address-'+row.customerCode,ttl:0,timeout:30000,headers:{'x-map-address-location':'1'}});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});if(response.data?.customerCode!==row.customerCode||response.data?.sourceBasis!=='CURRENT_CUSTOMER_LOOKUP'||response.data?.locationState!=='SOURCE_ROW')throw Error('CURRENT_ADDRESS_UNCONFIRMED');return response.data;},
     lookup:(address,signal)=>geocodeAddress(address,signal),
@@ -180,7 +180,7 @@
     onChange:()=>{if(addressLocationFrame)return;addressLocationFrame=requestAnimationFrame(()=>{
       addressLocationFrame=null;if(document.body.dataset.mapStaffState!=='authenticated')return;
       for(const row of allStores)liveAddressLocations.apply(row);
-      if(state.selected){const missing=!Number.isFinite(state.selected.lat)||!Number.isFinite(state.selected.lng);liveAddressLocations.apply(state.selected);refreshCoordinateEvidence(state.selected);if(state.selected.coordinateSource==='KAKAO_ADDRESS_LIVE'&&/좌표 미확인|좌표 정확성 미확인|GPS 없음/.test($('#searchState')?.textContent||''))setSearchState('매장 선택');if(missing&&Number.isFinite(state.selected.lat))focusMapPoint(state.selected,{zoom:true});}
+      if(state.selected){liveAddressLocations.apply(state.selected);refreshCoordinateEvidence(state.selected);if(state.selected.coordinateSource==='KAKAO_ADDRESS_LIVE'){if(/좌표 미확인|좌표 정확성 미확인|GPS 없음/.test($('#searchState')?.textContent||''))setSearchState('매장 선택');if(addressFocusRequest?.code===state.selected.customerCode){if(addressFocusRequest.interaction==null||addressFocusRequest.interaction===mapCamera?.interaction())focusMapPoint(state.selected,{zoom:true});addressFocusRequest=null;}}}
       indexedRows=null;pointIndex=null;markerSourceVersion++;state.fitRequested=false;void loadBaseMap();
       window.dispatchEvent(new Event('map-coordinate-updated'));
     });}
@@ -886,6 +886,7 @@
   }
 
   function clearSelection({preserveSearch=false}={}) {
+    addressFocusRequest=null;
     if(!preserveSearch){invalidateUnifiedSearch();if(typeof clearSearchTemporaryPin==='function')clearSearchTemporaryPin({restoreView:false});closeUnifiedSearchResults();cancelAddressLookup();}
     ++cameraSelection;mapCamera?.releaseFocus();
     closeClusterPanel();
@@ -1282,6 +1283,7 @@
     if (element?.classList.contains("marker")) scrollSelectedInside('#runList','.runStop.selected');
     const unlocated = numberOrNull(row.lat) === null || numberOrNull(row.lng) === null;
     if (unlocated) $("#mapStatusSub").textContent = "좌표 미확인 · 지도 위치를 변경하지 않습니다.";
+    addressFocusRequest=unlocated?{code:row.customerCode,interaction:mapCamera?.interaction()}:null;
     // Rebuild the selected entry in both views, even if it was inside a cluster
     // or outside the current vehicle filter. Its overlay must be above peers.
     if(state.map&&!unlocated){state.fitRequested=false;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});}
