@@ -1,12 +1,16 @@
 // Read-only, page-memory print projection. No directions, geocoding or persistence.
 export const PRINT_CENTERS=Object.freeze({osan:'오산',yeongnam:'영남',honam:'호남'});
+export const PRINT_UNPROVIDED_CENTER='unprovided';
+const unprovidedCenterLabel='센터 미구분(원천 미제공)';
 const centerCodes={'011':'osan','012':'yeongnam','013':'honam','오산':'osan','오산센터':'osan','영남':'yeongnam','영남센터':'yeongnam','호남':'honam','호남센터':'honam'};
 const text=value=>String(value??'').trim();
 const vehicle=value=>text(value).replace(/호(?:차)?$/,'');
 export const validPrintDate=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
 const today=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 function centerOf(row,fixed){
- const values=(fixed?[row.baseVehicleGroup]:[row.vehicleGroup,row.dispatchCenterCode,row.centerCode,row.center,row.centerName]).filter(v=>text(v)).map(v=>PRINT_CENTERS[v]?v:centerCodes[text(v)]).filter(Boolean);
+ const source=(fixed?[row.baseVehicleGroup]:[row.vehicleGroup,row.dispatchCenterCode,row.centerCode,row.center,row.centerName]).filter(v=>text(v));
+ if(!fixed&&!source.length)return PRINT_UNPROVIDED_CENTER;
+ const values=source.map(v=>PRINT_CENTERS[v]?v:centerCodes[text(v)]).filter(Boolean);
  return new Set(values).size===1?values[0]:'';
 }
 const verifiedFixed=(row,master)=>row.baseVehicleState==='VERIFIED_MASTER'&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'')&&row.baseVehicleVersion===master?.version&&row.baseVehicleCheckedAt===master?.checkedAt;
@@ -19,7 +23,7 @@ export function validateDatedPrintResponse(payload,date){
 }
 
 export function buildVehiclePrintModel({basis,date,center,selectedVehicle,rows,master=null,nowDate=today()}){
- if(!['FIXED','DATED'].includes(basis)||!validPrintDate(date)||date>nowDate||!PRINT_CENTERS[center]||!vehicle(selectedVehicle)||vehicle(selectedVehicle).length>64||!Array.isArray(rows))throw Error('SELECTION_REQUIRED');
+ if(!['FIXED','DATED'].includes(basis)||!validPrintDate(date)||date>nowDate||!(PRINT_CENTERS[center]||basis==='DATED'&&center===PRINT_UNPROVIDED_CENTER)||!vehicle(selectedVehicle)||vehicle(selectedVehicle).length>64||!Array.isArray(rows))throw Error('SELECTION_REQUIRED');
  const fixed=basis==='FIXED',wanted=vehicle(selectedVehicle),conflicts=new Set(),seen=new Map();
  if(fixed&&(!master?.version||!master.checkedAt||!Number.isFinite(Date.parse(master.checkedAt))))throw Error('MASTER_UNVERIFIED');
  if(!fixed&&rows.some(r=>r?.deliveryDate!==date))throw Error('DATE_UNVERIFIED');
@@ -37,10 +41,10 @@ export function buildVehiclePrintModel({basis,date,center,selectedVehicle,rows,m
   output.set(code,{customerCode:code,customerName:text(row.customerName||row.name),address:text(row.address||row.customerAddress),order:fixed?null:orderOf(row),lat:safePoint(row)?row.lat:null,lng:safePoint(row)?row.lng:null});
  }
  const stores=[...output.values()].sort((a,b)=>(a.order??Infinity)-(b.order??Infinity)||a.customerCode.localeCompare(b.customerCode,'ko',{numeric:true}));
- return {basis,date,center,centerName:PRINT_CENTERS[center],vehicle:wanted,checkedAt:fixed?master.checkedAt:null,stale:fixed&&master.stale!==false,stores,
+ return {basis,date,center,centerName:center===PRINT_UNPROVIDED_CENTER?unprovidedCenterLabel:PRINT_CENTERS[center],vehicle:wanted,checkedAt:fixed?master.checkedAt:null,stale:fixed&&master.stale!==false,stores,
   locatedCount:stores.filter(r=>r.lat!==null).length,unlocatedCount:stores.filter(r=>r.lat===null).length,
   basisLabel:fixed?'현재 기준호차 매장 목록':'해당일 저장 배차 매장 목록',
-  note:fixed?'기준일은 출력 기준일입니다. 과거 배차·과거 기준호차를 복원한 자료가 아니며 방문 순서는 미확정입니다.':'해당 배송일이 검증된 저장 배차입니다. 방문 순서는 원천에 기록된 값만 표시하며 실제 주행 경로·완료 순서를 뜻하지 않습니다.'};
+  note:fixed?'기준일은 출력 기준일입니다. 과거 배차·과거 기준호차를 복원한 자료가 아니며 방문 순서는 미확정입니다.':(center===PRINT_UNPROVIDED_CENTER?'배차 원천에 센터가 제공되지 않은 매장만 포함합니다. 현재 기준호차 센터로 추정하지 않았습니다. ':'')+'해당 배송일이 검증된 저장 배차입니다. 방문 순서는 원천에 기록된 값만 표시하며 실제 주행 경로·완료 순서를 뜻하지 않습니다.'};
 }
 
 const css=`
@@ -80,8 +84,14 @@ export function mountVehiclePrintUi({win=window,doc=document,bridge=win.MapUiLoc
  const restore=()=>{doc.body.classList.remove('map-vehicle-printing');if(printTitle!==null){doc.title=printTitle;printTitle=null;}};
  const refreshCars=()=>{
   const old=car.value,wanted=bridge.state.selectedVehicles?.length===1?vehicle(bridge.state.selectedVehicles[0]):'',fixed=bridge.fixedTerritoryStores?.()||[],daily=bridge.stores?.()||[];
-  const values=[...new Set([...fixed.filter(r=>centerOf(r,true)===center.value).map(r=>vehicle(r.baseVehicle)),...daily.filter(r=>centerOf(r,false)===center.value).map(r=>vehicle(r.vehicle))].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
+  const unknown=basis.value==='DATED'&&center.value===PRINT_UNPROVIDED_CENTER;
+  const values=[...new Set([...fixed.filter(r=>unknown?verifiedFixed(r,bridge.fixedTerritoryMasterState?.()):centerOf(r,true)===center.value).map(r=>vehicle(r.baseVehicle)),...daily.filter(r=>unknown||centerOf(r,false)===center.value).map(r=>vehicle(r.vehicle))].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
   car.replaceChildren();const blank=make('option','호차를 선택하세요',car);blank.value='';for(const v of values){const o=make('option',v+'호차',car);o.value=v;}car.value=values.includes(old)?old:values.includes(wanted)?wanted:'';
+ };
+ const syncCenterOptions=()=>{
+  const existing=center.querySelector('option[value="'+PRINT_UNPROVIDED_CENTER+'"]');
+  if(basis.value==='DATED'){if(!existing){const option=make('option',unprovidedCenterLabel,center);option.value=PRINT_UNPROVIDED_CENTER;}center.value=PRINT_UNPROVIDED_CENTER;}
+  else{existing?.remove();if(!PRINT_CENTERS[center.value])center.value=PRINT_CENTERS[bridge.state.centerFilter]?bridge.state.centerFilter:'osan';}
  };
  const drawMap=(host,data,note,requestId)=>{
   const points=data.stores.filter(r=>r.lat!==null);if(!points.length){make('p','검증된 위치가 있는 매장이 없습니다. 주소는 아래 목록을 확인해 주세요.',host);note.textContent='위치 미확인 매장은 임의 좌표에 표시하지 않습니다.';print.disabled=false;return;}
@@ -102,7 +112,7 @@ export function mountVehiclePrintUi({win=window,doc=document,bridge=win.MapUiLoc
   note.textContent='좌표 분포도 · 배경 지도 연결 안 됨 · 핀 번호는 목록 번호입니다. 저장 방문 순서는 별도 열을 확인해 주세요. 거리·도로 경로를 나타내지 않습니다.';print.disabled=false;
  };
  const render=(data,id)=>{
-  section.hidden=false;make('h2',data.centerName+'센터 '+data.vehicle+'호차 지도·매장 목록',section);
+  section.hidden=false;make('h2',data.centerName+(data.center===PRINT_UNPROVIDED_CENTER?'':'센터')+' '+data.vehicle+'호차 지도·매장 목록',section);
   make('p','기준일 '+data.date+' · '+data.basisLabel+' · 매장 '+data.stores.length+'곳 · 위치 '+data.locatedCount+'곳 / 미확인 '+data.unlocatedCount+'곳',section);
   make('p',data.note+(data.checkedAt?' 기준호차 확인시각 '+data.checkedAt+(data.stale?' · 이전 확인값, 현재 기준 미확인':''):'')+' 주소·매장명은 현재 확인된 매장정보를 포함합니다.',section);
   const host=make('div',undefined,section);host.className='print-map';const note=make('p','지도 준비 중',section);note.className='print-map-note';
@@ -130,8 +140,8 @@ export function mountVehiclePrintUi({win=window,doc=document,bridge=win.MapUiLoc
   finally{win.clearTimeout(timeout);if(id===epoch)preview.disabled=false;if(controller===ownController)controller=null;}
  };
  const dismiss=()=>{cancel();restore();preview.disabled=false;dialog.close();};
- trigger.onclick=()=>{cancel();basis.value=bridge.state.mode==='DATE_ROUTE'?'DATED':'FIXED';date.value=validPrintDate(bridge.state.selectedDate)&&basis.value==='DATED'?bridge.state.selectedDate:today();center.value=PRINT_CENTERS[bridge.state.centerFilter]?bridge.state.centerFilter:'osan';refreshCars();status.textContent='센터와 호차를 선택한 뒤 미리보기를 눌러 주세요.';dialog.showModal();};
- for(const control of [basis,date,center,car])control.onchange=()=>{cancel();preview.disabled=false;if(control===center)refreshCars();status.textContent='조건이 변경되었습니다. 미리보기를 다시 눌러 주세요.';};
+ trigger.onclick=()=>{cancel();basis.value=bridge.state.mode==='DATE_ROUTE'?'DATED':'FIXED';date.value=validPrintDate(bridge.state.selectedDate)&&basis.value==='DATED'?bridge.state.selectedDate:today();center.value=PRINT_CENTERS[bridge.state.centerFilter]?bridge.state.centerFilter:'osan';syncCenterOptions();refreshCars();status.textContent='센터와 호차를 선택한 뒤 미리보기를 눌러 주세요.';dialog.showModal();};
+ for(const control of [basis,date,center,car])control.onchange=()=>{cancel();preview.disabled=false;if(control===basis)syncCenterOptions();if(control===center||control===basis)refreshCars();status.textContent='조건이 변경되었습니다. 미리보기를 다시 눌러 주세요.';};
  preview.onclick=runPreview;close.onclick=dismiss;dialog.addEventListener('cancel',event=>{event.preventDefault();dismiss();});
  const preparePrint=()=>{if(!model||print.disabled||!dialog.open)return false;if(printTitle===null)printTitle=doc.title;doc.title=`${model.date}_${model.centerName}_${model.vehicle}호차`;doc.body.classList.add('map-vehicle-printing');return true;};
  print.onclick=()=>{if(!preparePrint())return;try{win.print();}finally{restore();}};
