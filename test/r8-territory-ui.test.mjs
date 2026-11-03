@@ -141,3 +141,10 @@ test('point lookup indices are refreshed when the same-size store snapshot chang
  const f=fixture();await f.ui.toggle();f.stores.splice(0,f.stores.length,...rows().map(r=>({...r,lat:35,lng:128})));
  await f.ui.renderForSelection();await f.flush();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().vehicles[0].matchedCount,0);assert.equal(f.ui.state().reason,'ADMIN_BOUNDARY_NO_MATCH');
 });
+
+test('point lookup indices refresh after offscreen coordinates change without reloading cached geometry',async()=>{
+ const stores=[rows()[0],{...rows()[1],lat:37.4,lng:127.4}],f=fixture({stores,box:[127,37,127.3,37.3]});await f.ui.toggle();
+ const geometryQueries=f.queries.filter(q=>q.geometry).length;stores[1].lat=37.45;
+ await f.ui.renderForSelection();await f.flush();
+ assert.equal(f.queries.filter(q=>!q.geometry).length,2);assert.equal(f.queries.filter(q=>q.geometry).length,geometryQueries);assert.equal(f.ui.state().vehicles[0].matchedCount,2);assert.equal(f.ui.state().polygons,1);
+});

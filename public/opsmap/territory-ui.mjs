@@ -87,7 +87,7 @@ function renderForSelection(){
   if(model.currentness!==plan.base.currentness){const candidate=territoryModel(plan.stores,boundaryData,master);if(!available(plan.stores,master,candidate).reason){model=candidate;availability=available(plan.stores,master,model);completeAvailability(plan);syncReferenceExpiry();}}
   const key=JSON.stringify([model.version,model.currentness,plan.key]);if(key!==renderKey){renderModel(plan);renderKey=key;}displayStatus();
  }
- if(queryKey!==plan.key||!model)return load();
+ if(queryKey!==plan.key||lookupKey!==plan.lookupKey||!model)return load();
 }
 function lookupCodes(plan,points){const joins=new Map(lookupData.matches.map(join=>[pointKey(plan.all[join.index]),join.adminCodes]));return [...new Set(points.flatMap(point=>joins.get(pointKey(point))||[]))].sort();}
 function cachedBoundary(plan,version,codes){
@@ -137,7 +137,7 @@ function load(){
   if([401,403].includes(error?.status)){clear();model=null;geometryCache.clear();metadataCache.clear();}
   let plan;try{plan=queryPlan();}catch{clear();model=null;lastReason='MASTER_VERSION_CHANGED';status(unavailable());return;}
   if(usable(plan))displayStatus();else{availability=available(plan.stores,bridge.fixedTerritoryMasterState?.(),territoryModel(plan.stores,lookupData));completeAvailability(plan);if(availability)for(const v of availability.vehicles){if(!v.reason||v.reason==='OUTSIDE_VIEWPORT'||v.reason==='ADMIN_BOUNDARY_NO_MATCH'){v.reason=lastReason;v.state='unconfirmed';}}if(availability){availability.displayedVehicleCount=0;availability.unshownReasons=Object.fromEntries([...new Set(availability.vehicles.map(v=>v.reason||lastReason))].map(reason=>[reason,availability.vehicles.filter(v=>(v.reason||lastReason)===reason).length]));}status(unavailable());}
- }}finally{if(valid()){busy=false;controller=null;activeLoad=null;activeKey='';if(polygons.length)displayStatus();else status(unavailable());if(refreshState!=='FAILED'&&enabled&&!lastReason){let next;try{next=queryPlan();}catch{clear();model=null;lastReason='MASTER_VERSION_CHANGED';status(unavailable());}if(next&&queryKey!==next.key)void load();}}}})();
+ }}finally{if(valid()){busy=false;controller=null;activeLoad=null;activeKey='';if(polygons.length)displayStatus();else status(unavailable());if(refreshState!=='FAILED'&&enabled&&!lastReason){let next;try{next=queryPlan();}catch{clear();model=null;lastReason='MASTER_VERSION_CHANGED';status(unavailable());}if(next&&(queryKey!==next.key||lookupKey!==next.lookupKey))void load();}}}})();
  return activeLoad;
 }
 async function toggle(){if(bridge.state.mode!=='BASE_60D')return;enabled=!enabled;bridge.state.areaOn=false;if(!enabled){cancelLoad();stopListening();clear();refreshState='IDLE';syncReferenceExpiry();status('고정배차 기준 권역');return;}await load();}
