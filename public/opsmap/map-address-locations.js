@@ -5,7 +5,7 @@
  const valid=r=>typeof r?.lat==='number'&&typeof r?.lng==='number'&&Number.isFinite(r.lat)&&Number.isFinite(r.lng)&&r.lat>=33&&r.lat<=39.5&&r.lng>=124&&r.lng<=132;
  const established=r=>valid(r)&&!['CONFLICT','MISSING','UNVERIFIED'].includes(r.coordinateStatus)&&r.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'&&r.coordinateSource!==SOURCE;
  function create({lookup,readAddress,queryFor,enabled=()=>true,onChange=()=>{},now=Date.now,spacingMs=4000}={}){
-  let epoch=0,running=false,controller=new AbortController();
+  let epoch=0,running=false,controller=new AbortController(),syncToken='';
   const points=new Map(),pending=new Map(),outcomes=new Map(),queue=new Map(),bindings=new Map(),addresses=new Map(),active=new Set(),attempts=new Map();
   const sourceHash=row=>row.originalAddressHash||row.addressHash||row.raw?.originalAddressHash||row.raw?.addressHash||'';
   const conflicted=row=>row.searchAddressConflict===true||row.addressChanged===true||row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED';
@@ -77,8 +77,15 @@
    else{queue.clear();for(const entry of additions)queue.set(...entry);}
    void drain();
   }
-  function clear(){epoch++;controller.abort();controller=new AbortController();points.clear();pending.clear();queue.clear();bindings.clear();outcomes.clear();addresses.clear();attempts.clear();}
-  return Object.freeze({apply,ensure,schedule,clear,source:SOURCE,summary:()=>({located:[...outcomes.values()].filter(r=>r.state==='LOCATED').length,review:[...outcomes.values()].filter(r=>r.state==='REVIEW').length,retry:[...outcomes.values()].filter(r=>r.state==='RETRY').length,queued:queue.size,pending:pending.size,retention:'PAGE_MEMORY_ONLY'})});
+  function onSourceSync(token){
+   if(!token||token===syncToken)return;syncToken=token;
+   for(const [code,outcome]of outcomes){
+    if(!/^(?:CUSTOMER_NOT_FOUND|CUSTOMER_ADDRESS_UNAVAILABLE|KAKAO_TIMEOUT|KAKAO_NETWORK_FAILED|GEOCODE_RETRY_COOLDOWN|GEOCODER_TIMEOUT)$/.test(outcome.reason)||now()<(outcome.retryAt||0)+240000)continue;
+    outcomes.delete(code);for(const key of attempts.keys())if(key.startsWith(code+'|')||key.startsWith('lookup:'+code+'|'))attempts.delete(key);
+   }
+  }
+  function clear(){epoch++;controller.abort();controller=new AbortController();points.clear();pending.clear();queue.clear();bindings.clear();outcomes.clear();addresses.clear();attempts.clear();syncToken='';}
+  return Object.freeze({apply,ensure,schedule,clear,onSourceSync,source:SOURCE,summary:()=>({located:[...outcomes.values()].filter(r=>r.state==='LOCATED').length,review:[...outcomes.values()].filter(r=>r.state==='REVIEW').length,retry:[...outcomes.values()].filter(r=>r.state==='RETRY').length,queued:queue.size,pending:pending.size,retention:'PAGE_MEMORY_ONLY'})});
  }
  root.MapAddressLocations=Object.freeze({create,source:SOURCE});
 })(typeof window==='object'?window:globalThis);

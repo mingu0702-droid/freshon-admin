@@ -237,6 +237,7 @@
       if (!storesByCode.has(row.customerCode)) storesByCode.set(row.customerCode, row);
     });
     allStores = next;
+    liveAddressLocations?.onSourceSync(JSON.stringify([meta?.preservation?.version,meta?.sourceGeneration,meta?.sourceObservedAt,meta?.generatedAt]));
     window.dispatchEvent(new Event('map-stores-replaced'));
     snapshotMeta = meta || snapshotMeta;
   }
