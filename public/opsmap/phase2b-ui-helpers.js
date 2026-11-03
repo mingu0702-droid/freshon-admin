@@ -41,7 +41,8 @@
     return "#" + channels.map(v => v.toString(16).padStart(2, "0")).join("");
   }
   function addressVariants(input) {
-    const original = String(input || "").replace(/\s+/g, " ").trim();
+    const original = String(input || "").normalize('NFKC').replace(/\s+/g, " ").trim()
+      .replace(/(대로|로)\s+(\d+(?:번)?길)(?=\s|\d|$)/g,'$1$2');
     const cleaned = original.replace(/\([^)]*\)|\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim();
     const core = cleaned.match(/^.*?(?:[가-힣\d·.]+(?:대로|로|길)|[가-힣\d·.]+(?:동|리|읍|면|가))\s+(?:산\s*)?\d+(?:-\d+)?/);
     return [...new Set([original, cleaned, core?.[0]].filter(Boolean))];

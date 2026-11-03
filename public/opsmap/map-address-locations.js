@@ -7,7 +7,7 @@
  function create({lookup,readAddress,queryFor,enabled=()=>true,onChange=()=>{},now=Date.now,spacingMs=4000}={}){
   let epoch=0,running=false,controller=new AbortController(),syncToken='';
   const points=new Map(),pending=new Map(),outcomes=new Map(),queue=new Map(),bindings=new Map(),addresses=new Map(),active=new Set(),attempts=new Map();
-  const sourceHash=row=>row.originalAddressHash||row.addressHash||row.raw?.originalAddressHash||row.raw?.addressHash||'';
+  const sourceHash=row=>row.originalAddressHash||row.addressHash||row.raw?.originalAddressHash||row.raw?.addressHash||('observed-date:'+String(row.lastDeliveryDate||''));
   const conflicted=row=>row.searchAddressConflict===true||row.addressChanged===true||row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED';
   const addressFor=row=>{const cached=addresses.get(row.customerCode),bound=cached?.sourceHash===sourceHash(row);return conflicted(row)?bound&&cached.conflict?cached.address:'':bound?cached.address:row.address||'';};
   const identity=row=>/^[A-Z]\d+$/.test(row?.customerCode||'')&&row.currentMasterStatus!=='UNAVAILABLE'?normalize(addressFor(row)):'';
