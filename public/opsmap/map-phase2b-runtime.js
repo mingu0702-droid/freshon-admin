@@ -1950,7 +1950,7 @@
     const selected = selectedVehicles();
     let stores = state.mode === "BASE_60D" ? filteredPeriodStores()
       : filteredDateStores(allStores);
-    stores.forEach(row=>liveAddressLocations?.apply(row));
+    stores.forEach(row=>{window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);});
     liveAddressLocations?.schedule(state.selected?[state.selected,...stores]:stores);
     if (state.mode === "BASE_60D") stores = stores.map(row => ({ ...row, color: vehicleColor(row.vehicle) }));
     renderStops(stores, { numbered: state.mode === "DATE_ROUTE", vehicles: selected });
