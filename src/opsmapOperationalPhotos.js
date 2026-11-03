@@ -4,6 +4,14 @@ import {mountOpsmapDeliveryPhotoRoutes} from './opsmapDeliveryPhotoRouter.js';
 export {createOperationalPhotoTaskReader} from './opsmapOperationalPhotoTaskReader.js';
 
 const fail = (code, status = 503) => { throw new DeliveryPhotoError(code, status); };
+async function waitForPhotoOperation(work, signal) {
+  if (signal?.aborted) fail('PHOTO_TIMEOUT', 504);
+  if (!signal) return work();
+  let abort;
+  const stopped = new Promise((_, reject) => { abort = () => reject(new DeliveryPhotoError('PHOTO_TIMEOUT', 504)); signal.addEventListener('abort', abort, {once:true}); });
+  try { return await Promise.race([Promise.resolve().then(() => { if (signal.aborted) fail('PHOTO_TIMEOUT', 504); return work(); }), stopped]); }
+  finally { signal.removeEventListener('abort', abort); }
+}
 
 // Read only the selected day through the existing Delivery reader; never scan history.
 // Only three identity fields leave this adapter, without retaining source rows.
@@ -18,7 +26,7 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate}
     for (const [id, entry] of identities) if (entry.expiresAt <= now) identities.delete(id);
     if (identities.has(key)) return identities.get(key).records.map(row => ({...row}));
     if (!active.has(date)) active.set(date, Promise.resolve().then(() => readTaskRows(date, {signal})).finally(() => active.delete(date)));
-    const rows = await active.get(date);
+    const rows = await waitForPhotoOperation(() => active.get(date), signal);
     if (!Array.isArray(rows) || rows.length > 10000) fail('INVALID_PHOTO_RESPONSE', 502);
     if (signal?.aborted) fail('PHOTO_TIMEOUT', 504);
     const records = new Map();
@@ -51,7 +59,7 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
     validatePhotoQuery({customerCode:identity.customerCode, ...(identity.date ? {date:identity.date} : {}), ...(identity.deliveryId ? {deliveryId:identity.deliveryId} : {})});
     // The injected routine is the existing Delivery Admin authentication flow.
     // This feature contains no credential store, login endpoint or retry login.
-    if (!hasSession() && typeof prepareSession === 'function') await prepareSession({signal});
+    if (!hasSession() && typeof prepareSession === 'function') await waitForPhotoOperation(() => prepareSession({signal}), signal);
     if (!hasSession()) fail('UPSTREAM_AUTH_REQUIRED', 502);
   };
   const transport = createDeliveryAdminPhotoTransport({approvedRequest: rawRequest, hasApprovedSession: hasSession, imageFetch});

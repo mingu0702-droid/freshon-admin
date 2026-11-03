@@ -76,7 +76,11 @@ export function createProductionPhotoExtension({enabled=false,rawRequest,hasMemo
    enabled:()=>isEnabled()&&previewEnabled()===true,timeoutMs:8000,maxConcurrent:1,maxImageBytes:4*1024*1024})};
 }
 
-export function mountProductionPhotoBinding({env=process.env,rawRequest,hasMemorySession,reserveRead,prepareSession,listDeliveryMetadata,...binding}={}){
+export function mountProductionPhotoBinding({env=process.env,rawRequest,hasMemorySession,reserveRead,prepareSession,listDeliveryMetadata,sourceConfiguration,...binding}={}){
+ binding.app.get('/api/map-phase2b/private/delivery-photos/config',binding.requireStaff,(req,res)=>{
+  const source=typeof sourceConfiguration==='function'?sourceConfiguration():{};
+  return binding.requireStaff(req,res,()=>res.set('Cache-Control','private,no-store').json({ok:true,data:{enabled:env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',credentialsConfigured:source.credentialsConfigured===true,environmentCookieConfigured:source.environmentCookieConfigured===true,sourceSession:typeof hasMemorySession==='function'&&hasMemorySession()===true,metadataConfigured:typeof listDeliveryMetadata==='function'}}));
+ });
  if(env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1'){
   const extension=createOperationalPhotoExtension({enabled:()=>env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',rawRequest,hasMemorySession,prepareSession,listDeliveryMetadata});
   extension.mount(binding);return extension;
