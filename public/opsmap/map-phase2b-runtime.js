@@ -179,7 +179,7 @@
     readPage:async({cursor,signal,limit})=>{if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});const params=new URLSearchParams({limit:String(limit)});if(cursor)params.set('cursor',cursor);else if(customerRegistry.summary().version)params.set('since',customerRegistry.summary().version);const result=await fetchJson('/api/map-phase2b/private/customer-registry?'+params,{channel:'customer-registry-page',ttl:0,timeout:30000});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});if(Number.isFinite(Date.parse(result.meta?.checkedAt)))customerRegistrySourceCheckedAt=result.meta.checkedAt;return result;}
   });
   const registrySelection=()=>({customerCode:state.selected?.customerCode||'',query:$('#query')?.value||'',center:state.centerFilter,vehicles:selectedVehicles()});
-  function scheduleVisibleAddressRows(rows){liveAddressLocations?.schedule(customerRegistry?customerRegistry.locationRows(rows.filter(row=>row.coordinateSearch||!(Number.isFinite(row.lat)&&Number.isFinite(row.lng))),registrySelection(),{limit:40}):rows);}
+  function scheduleVisibleAddressRows(rows){const candidates=rows.filter(row=>row.coordinateSearch||!(Number.isFinite(row.lat)&&Number.isFinite(row.lng)));liveAddressLocations?.schedule(customerRegistry?[...candidates.filter(row=>!row.customerOnly),...customerRegistry.locationRows(candidates.filter(row=>row.customerOnly),registrySelection(),{limit:40})]:rows);}
   async function syncCustomerRegistry(){
     if(!customerRegistry||customerRegistryBusy||!generalMap||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return;
     customerRegistryBusy=true;const owner=initialRequestId,before=customerRegistry.summary().version,known=new Set(allStores.map(r=>r.customerCode));
@@ -221,7 +221,7 @@
       rows = [...merged.values()];
     }
     const previousByCode = new Map([...latestSnapshotRows, ...(generalMap&&state.mode==='BASE_60D'?generalRegistryRows.values():allStores)].map((row) => [String(row.customerCode || row.code), row]));
-    if(generalMap&&state.mode==='BASE_60D'&&customerRegistry){const observed=new Map(rows.map(row=>[String(row.customerCode||row.code),{...previousByCode.get(String(row.customerCode||row.code)),...row}]));for(const row of generalRegistryRows.values())if(row.customerOnly&&!observed.has(row.customerCode))observed.set(row.customerCode,row);rows=customerRegistry.merge([...observed.values()]);}
+    if(generalMap&&state.mode==='BASE_60D'&&customerRegistry){const observed=new Map(rows.map(row=>[String(row.customerCode||row.code),{...previousByCode.get(String(row.customerCode||row.code)),...row,customerOnly:false,deliveryObserved:true}]));for(const row of generalRegistryRows.values())if(row.customerOnly&&!observed.has(row.customerCode))observed.set(row.customerCode,row);rows=customerRegistry.merge([...observed.values()]);}
     const vehicleMeta = new Map(SOURCE.vehicles.map((vehicle, index) => [String(vehicle.vehicle), { vehicle, index }]));
     const next = [];
     storeByVehicleAndCode.clear();
