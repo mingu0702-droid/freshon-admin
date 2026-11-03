@@ -1,0 +1,62 @@
+{
+  "task": "R14-A",
+  "baseProductionSha": "477dca6562edb2d7f5fa65fc0f11cc8e8cecc348",
+  "implementation": "PASS",
+  "liveKakaoDirections": "BLOCKED",
+  "liveKakaoDirectionsCalls": 0,
+  "productionStateSource": "Main agent authenticated read-only verification",
+  "productionState": {
+    "configurationHttp": 200,
+    "enabled": false,
+    "keyConfigured": true,
+    "keySource": "KAKAO_REST_API_KEY",
+    "persistentBudgetConfigured": false,
+    "budgetBackend": "NONE",
+    "existingLedgerHttp": 404,
+    "providerRemainingQuotaVerified": false,
+    "providerDirectionsPermissionVerified": false,
+    "blockedReasons": ["FEATURE_DISABLED", "PERSISTENT_BUDGET_REQUIRED"]
+  },
+  "verification": {
+    "nodeTests": {"pass": 25, "fail": 0},
+    "existingExternalLinksEdgeChecks": {"pass": 24, "fail": 0},
+    "newDirectionsEdgeChecks": {"pass": 16, "fail": 0},
+    "browserScope": "LOCAL_REAL_EDGE_SYNTHETIC_PROVIDER_NOT_LIVE_KAKAO",
+    "viewports": [1920, 1366, 768, 390],
+    "newBrowserArtifactDirectory": "C:/Users/SFN/AppData/Local/Temp/opsmap-r14-directions-g6Fx8o",
+    "existingBrowserArtifactDirectory": "C:/Users/SFN/AppData/Local/Temp/opsmap-r10-directions-wEAYkI"
+  },
+  "changes": [
+    "Ignore obsolete process environment request limits while preserving the existing cumulative approved 30000-call ceiling",
+    "Preserve legacy daily approval and add explicit verified monthly approval with durable KST daily accounting",
+    "Preserve CAS reservations, account matching, private-store checks, unknown-write blocking and failure accounting",
+    "Automatically recalculate complete edited routes after the first successful explicit request; no initial, incomplete or error retry calls",
+    "Import a single selected vehicle's saved numeric visit order, retain a verified center origin, reject mixed or unknown order and never truncate visits"
+  ],
+  "liveEnablePrerequisites": [
+    "Verify the existing REST key belongs to the intended application without printing the key",
+    "Verify that application's Directions permission, daily remaining per endpoint and monthly remaining account quota",
+    "Verify paid billing remains disabled for the applicable service",
+    "Provision the existing private ledger only from actual approved quota evidence; preserve prior usage and reservations",
+    "Enable the dedicated Production feature and durable budget flags through the main integration agent",
+    "For monthly opt-in, verify exclusive Directions use through the ledger and keep expiry within the same KST calendar month"
+  ],
+  "officialSourcesChecked": [
+    "https://developers.kakaomobility.com/price/",
+    "https://developers.kakao.com/docs/ko/getting-started/quota",
+    "https://developers.kakaomobility.com/guide/navi-api/start.html",
+    "https://devtalk.kakao.com/t/api/152546"
+  ],
+  "officialLimits": {
+    "directionsDaily": 10000,
+    "waypointsDaily": 5000,
+    "commonApiMonthly": 3000000,
+    "existingApprovedContractCeilingPreserved": 30000,
+    "addressAndMapQuotasAreSeparate": true
+  },
+  "sharedFilesModified": [],
+  "remoteWrites": 0,
+  "sourceDataChanges": 0,
+  "coordinateChanges": 0,
+  "productionDeploymentPerformed": false
+}

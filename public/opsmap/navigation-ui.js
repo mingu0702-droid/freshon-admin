@@ -46,6 +46,12 @@
     }
     return codes;
   }
+  function recordedVisitCodes(rows,currentRows,vehicle,origin){
+    if(!vehicle||!Array.isArray(rows)||rows.some(row=>!Number.isSafeInteger(row?.order)||row.order<1||String(row.vehicle||'')!==String(vehicle))||new Set(rows.map(row=>row.order)).size!==rows.length)throw Error('선택한 호차의 저장된 방문 순서를 확인해 주세요.');
+    const ordered=[...rows].sort((a,b)=>a.order-b.order);
+    if(origin){if(!String(origin.customerCode||'').startsWith('CENTER_')||!located(origin))throw Error('센터 출발지의 위치를 확인해 주세요.');ordered.unshift(origin);}
+    return visitCodes(ordered,currentRows);
+  }
   function createTemporaryPlaces(){
     const rows=new Map();let sequence=0;
     return {
@@ -89,7 +95,7 @@
       return {start,end:start+1,sameCoordinate,url:kakaoDestinationLink(destination,sameCoordinate?undefined:origin)};
     });
   }
-  root.MapNavigationLookup=Object.freeze({normalize,located,unique,resolve,search,visitCodes,createTemporaryPlaces,kakaoDestinationLink,kakaoRouteLinks,kakaoLegLinks});
+  root.MapNavigationLookup=Object.freeze({normalize,located,unique,resolve,search,visitCodes,recordedVisitCodes,createTemporaryPlaces,kakaoDestinationLink,kakaoRouteLinks,kakaoLegLinks});
 })(typeof window==='object'?window:globalThis);
 
 (()=>{
@@ -116,6 +122,7 @@
   const centerNames={osan:'오산센터',yeongnam:'영남센터',honam:'호남센터'};
   const temporaryPlaces=lookup.createTemporaryPlaces();
   let addressSearchController=null,addressSearchGeneration=0;
+  let recalculateTimer=null,autoRecalculate=false;
   let centers=[],centerOverlays=[],routePointOverlays=[],lastResult=null,lastKind='manual',disposed=false,selectedCandidate=null,activeInput=null,roleSignature='',missingSignature='',suggestTimer=null,suggestionIndex=-1;
   function centerRows(){return (window.KAKAO_MAP_CONFIG?.centers||[]).filter(row=>centerNames[row.id]&&row.verified===true&&typeof row.sourceVersion==='string'&&row.sourceVersion&&lookup.located(row)).map(row=>({...row,customerCode:'CENTER_'+row.id,customerName:centerNames[row.id],address:row.address||'',coordinateStatus:'VERIFIED'}));}
   function all(){return lookup.unique([...bridge.navigationStores(),...centers,...temporaryPlaces.values()]);}
@@ -291,7 +298,10 @@
   $('#queryRecordedRoute').onclick=()=>{
     hideSuggestions();
     try{
-      const codes=lookup.visitCodes(bridge.navigationVisitRows?.(),all());
+      const vehicles=bridge.state.selectedVehicles;
+      if(vehicles.length!==1)throw Error('방문 순서를 가져올 호차를 하나 선택해 주세요.');
+      const origins=resolve(editor.values()[0]),origin=origins.length===1&&origins[0].customerCode.startsWith('CENTER_')?origins[0]:undefined;
+      const codes=lookup.recordedVisitCodes(bridge.navigationVisitRows?.(),all(),vehicles[0],origin);
       if(typeof editor.replacePoints!=='function')throw Error('경로 설정을 새로고침한 뒤 다시 시도해 주세요.');
       editor.replacePoints(codes);planner.open=true;
       status('방문 목록 순서로 '+codes.length+'개 지점을 적용했습니다. 확인 후 경로를 조회해 주세요.');
@@ -324,13 +334,19 @@
     }
     syncMissing();describeInputs();renderRolePins();syncExternalDirections();bridge.relayoutPreservingView?.();
   }
-  const onManual=event=>showResult(event.detail,'manual'),onRecorded=event=>showResult(event.detail,'recorded'),onSelected=()=>updateSelected(),onReady=()=>{roleSignature='';drawCenters();sync();};
-  const onDraft=()=>{status('');roleSignature='';hideSuggestions();describeInputs();renderRolePins();syncExternalDirections();window.MapDotUi?.arrangeNavigation?.();};
-  const onContext=()=>{hideSuggestions();temporaryPlaces.clear();editor.clear();selectedCandidate=null;updateSelected(null);lastResult=null;lastKind='manual';showResult({state:'idle'});roleSignature='';sync();};
+  const onManual=event=>{if(event.detail?.state==='loading')clearTimeout(recalculateTimer);if(['success','partial'].includes(event.detail?.state))autoRecalculate=true;else if(['error','disabled'].includes(event.detail?.state))autoRecalculate=false;showResult(event.detail,'manual');},onRecorded=event=>showResult(event.detail,'recorded'),onSelected=()=>updateSelected(),onReady=()=>{roleSignature='';drawCenters();sync();};
+  const onDraft=()=>{
+    clearTimeout(recalculateTimer);status('');roleSignature='';hideSuggestions();describeInputs();renderRolePins();syncExternalDirections();window.MapDotUi?.arrangeNavigation?.();
+    const values=editor.values();if(values.every(value=>!String(value||'').trim()))autoRecalculate=false;
+    // Only a route explicitly queried successfully enables recalculation.
+    // Incomplete text, initial load and provider errors never cause API calls.
+    if(autoRecalculate&&values.length>=2&&roleRows().length===values.length)recalculateTimer=setTimeout(()=>{if(!disposed&&autoRecalculate&&roleRows().length===editor.values().length)$('#planRoute').click();},450);
+  };
+  const onContext=()=>{autoRecalculate=false;clearTimeout(recalculateTimer);hideSuggestions();temporaryPlaces.clear();editor.clear();selectedCandidate=null;updateSelected(null);lastResult=null;lastKind='manual';showResult({state:'idle'});roleSignature='';sync();};
   const events=[['map-manual-route',onManual],['map-recorded-route',onRecorded],['map-store-selected',onSelected],['map-sdk-ready',onReady],['map-navigation-logout',onContext],['map-navigation-context-changed',onContext],['map-navigation-draft',onDraft],['map-coordinate-updated',sync]];
   events.forEach(([name,listener])=>window.addEventListener(name,listener));
   const observer=new MutationObserver(sync);if($('#modeDaily'))observer.observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});if($('#runList'))observer.observe($('#runList'),{childList:true});
-  window.addEventListener('pagehide',event=>{if(event.persisted)return;disposed=true;cancelAddressSearch();clearTimeout(suggestTimer);observer.disconnect();events.forEach(([name,listener])=>window.removeEventListener(name,listener));document.removeEventListener('pointerdown',outsidePointer);[...centerOverlays,...routePointOverlays].forEach(overlay=>overlay.setMap(null));centerOverlays=[];routePointOverlays=[];},{once:true});
+  window.addEventListener('pagehide',event=>{if(event.persisted)return;disposed=true;cancelAddressSearch();clearTimeout(suggestTimer);clearTimeout(recalculateTimer);observer.disconnect();events.forEach(([name,listener])=>window.removeEventListener(name,listener));document.removeEventListener('pointerdown',outsidePointer);[...centerOverlays,...routePointOverlays].forEach(overlay=>overlay.setMap(null));centerOverlays=[];routePointOverlays=[];},{once:true});
   window.MapNavigation=Object.freeze({resolve,search:value=>lookup.search(value,all()),sync,metrics:()=>({centerOverlays:centerOverlays.length,routePointOverlays:routePointOverlays.length,routePointCount:roleRows().length,temporaryPointCount:temporaryPlaces.values().length,routeState:lastResult?.state||'idle'})});
   drawCenters();updateSelected();sync();
 })();

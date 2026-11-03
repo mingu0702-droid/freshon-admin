@@ -27,8 +27,9 @@ async function boundedJson(response,maxBytes=8388608){
 }
 export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date.now,budget=null,requireDurableBudget=false,maxCacheBytes=12*1024*1024}={}){
   const cache=new Map(),pending=new Map();let bytes=0,used=0,active=0;
-  const rawLimit=Number(env.OPSMAP_ROAD_ROUTE_REQUEST_LIMIT);
-  const limit=env.OPSMAP_ROAD_ROUTE_REQUEST_LIMIT!==undefined&&Number.isSafeInteger(rawLimit)&&rawLimit>=0?Math.min(30000,rawLimit):30000;
+  // The shared ledger enforces the approved account allowance. Old smoke-test
+  // environment limits (100/300) must not impose a second, restart-local quota.
+  const limit=30000;
   const configured=()=>env.OPSMAP_ROAD_ROUTE_ENABLED==='1'||env.OPSMAP_ROAD_ROUTE_ENABLED==='true';
   const key=()=>String(env.KAKAO_MOBILITY_REST_API_KEY||env.KAKAO_REST_API_KEY||'').trim();
   const ttl=Math.min(300000,Math.max(0,Number(env.OPSMAP_ROAD_ROUTE_CACHE_MS)||60000));
