@@ -82,6 +82,15 @@ test('transport timeout preserves only its safe stage/code and never an upstream
  const f=fixture({reply:async()=>{throw Object.assign(Error('SYNTHETIC_PRIVATE_PROVIDER_MESSAGE'),{name:'TimeoutError',cause:{code:'UND_ERR_CONNECT_TIMEOUT'}});}});
  await assert.rejects(f.service.lookup(KAKAO_DIAGNOSTIC_ADDRESS,{diagnostic:true}),/KAKAO_TIMEOUT/);
  const failure=f.store.snapshot().lastAttempt;assert.equal(failure.stage,'PROVIDER_REQUEST');assert.equal(failure.providerHttp,null);assert.equal(failure.transportCode,'UND_ERR_CONNECT_TIMEOUT');assert(!JSON.stringify(f.store.snapshot()).includes('SYNTHETIC_PRIVATE_PROVIDER_MESSAGE'));
+ assert.equal(f.store.snapshot().blocked,false);
+});
+
+test('R12 transient provider failure backs off without resetting usage or blocking the day',async()=>{
+ const ledger=createKakaoGeocodeLedger();ledger.diagnosticPassed=true;let calls=0;
+ const f=fixture({ledger,enabled:'1',dailyLimit:'1000',reply:async url=>{if(++calls===1)throw Object.assign(Error('PRIVATE'),{name:'TimeoutError'});return{ok:true,json:async()=>body(url.searchParams.get('query'))};}});
+ await assert.rejects(f.service.lookup(KAKAO_DIAGNOSTIC_ADDRESS),/KAKAO_TIMEOUT/);assert.equal(f.store.snapshot().blocked,false);
+ await assert.rejects(f.service.lookup(KAKAO_DIAGNOSTIC_ADDRESS),/GEOCODE_RETRY_COOLDOWN/);assert.equal(calls,1);
+ f.advance(30001);await f.service.lookup(KAKAO_DIAGNOSTIC_ADDRESS);assert.equal(calls,2);assert.equal(f.store.snapshot().used,2);assert.equal((await f.service.status()).enabled,true);
 });
 
 test('a provider HTTP200 followed by ledger failure stays distinct from a provider failure',async()=>{

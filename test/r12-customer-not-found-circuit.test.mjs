@@ -1,0 +1,11 @@
+import test from'node:test';import assert from'node:assert/strict';
+const original={...process.env},fetchOriginal=global.fetch;let id=0;
+test.afterEach(()=>{process.env={...original};global.fetch=fetchOriginal;});
+async function fixture(){Object.assign(process.env,{HUB_API_URL:'https://synthetic.example/exec',HUB_API_SECRET:'x'.repeat(32),HUB_CIRCUIT_FAILURE_THRESHOLD:'2',OPSMAP_PRIVATE_READER_ENABLED:'true',OPSMAP_PRIVATE_READER_URL:'https://script.google.com/macros/s/SYNTHETIC_PRIVATE_READER_DEPLOYMENT_123/exec',OPSMAP_PRIVATE_READER_SECRET:'y'.repeat(32)});return import('../src/opsmap-abc/phase2bHubReadClient.js?r12='+id++);}
+test('authenticated matching NOT_FOUND remains 404 but never closes other Customer reads',async()=>{const client=await fixture();let found=false;global.fetch=async(_url,options)=>{const request=JSON.parse(options.body);return new Response(JSON.stringify(found?{ok:true,data:{customerCode:request.params.customerCode},meta:{requestId:request.requestId,detailDate:null}}:{ok:false,error:{code:'NOT_FOUND'},meta:{httpStatus:404,requestId:request.requestId}}),{status:200,headers:{'content-type':'application/json'}});};
+ for(let i=0;i<4;i++)await assert.rejects(client.callHub('customerDetail',{customerCode:'S99000'+i},{useCache:false,privateRead:true}),{message:'HUB_NOT_FOUND',upstreamStatus:404});
+ assert.equal(client.hubMetrics().circuits.customerDetail.state,'CLOSED');found=true;assert.equal((await client.callHub('customerDetail',{customerCode:'S990009'},{privateRead:true})).ok,true);
+});
+test('mismatched response identity and genuine source failures retain circuit protection',async()=>{const client=await fixture();global.fetch=async()=>new Response(JSON.stringify({ok:false,error:{code:'NOT_FOUND'},meta:{httpStatus:404,requestId:'WRONG'}}),{status:200,headers:{'content-type':'application/json'}});
+ await assert.rejects(client.callHub('customerDetail',{customerCode:'S990001'},{privateRead:true}),/HUB_NOT_FOUND/);await assert.rejects(client.callHub('customerDetail',{customerCode:'S990002'},{privateRead:true}),/HUB_NOT_FOUND/);await assert.rejects(client.callHub('customerDetail',{customerCode:'S990003'},{privateRead:true}),/HUB_CIRCUIT_OPEN/);
+});

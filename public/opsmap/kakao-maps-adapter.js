@@ -20,15 +20,24 @@
   });return pending;
  }
  function reset(){script?.remove();script=null;pending=null;}
- function geocoder(){const proxy={serverProxy:true,blockedReason:null,addressSearch(query,callback,{signal}={}){
-  fetch('/api/map-phase2b/private/address-lookup',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({query}),signal})
-   .then(async response=>{const payload=await response.json();if(!response.ok||payload.ok!==true)throw Object.assign(Error('LOOKUP_FAILED'),{code:/^[A-Z_]+$/.test(payload?.error||'')?payload.error:'GEOCODER_FAILED',status:response.status,providerHttp:Number.isInteger(payload.providerHttp)?payload.providerHttp:null});callback(payload.data.documents,payload.data.status,{status:response.status,httpStatus:response.status,providerHttp:payload.data.providerHttp,resolution:payload.data.resolution});})
-   .catch(error=>{if(signal?.aborted)return;
-    const code=error.code||'GEOCODER_FAILED';
-    if(code!=='GEOCODE_QUERY_INVALID'){proxy.blockedReason=code;root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false};}
-    const known=['GEOCODE_DAILY_LIMIT','GEOCODE_SESSION_EXPIRED','GEOCODE_ORIGIN_REJECTED','GEOCODE_AUTOMATICALLY_BLOCKED'];
-    callback([],known.includes(code)?code:'ERROR',{code,status:error.status,httpStatus:error.status||null,providerHttp:Number.isInteger(error.providerHttp)?error.providerHttp:null});});
- }};return proxy;}
+ function geocoder(){
+  const cache=new Map(),inflight=new Map();let epoch=0;
+  const clear=()=>{epoch++;cache.clear();inflight.clear();};root.addEventListener('map-staff-signed-out',clear);root.addEventListener('pagehide',clear,{once:true});
+  const proxy={serverProxy:true,blockedReason:null,addressSearch(query,callback,{signal}={}){
+   const key=String(query||'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim(),owner=epoch;
+   if(!inflight.has(key)&&!cache.has(key)){
+    const task=fetch('/api/map-phase2b/private/address-lookup',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})})
+     .then(async response=>{const payload=await response.json();if(!response.ok||payload.ok!==true)throw Object.assign(Error('LOOKUP_FAILED'),{code:/^[A-Z_]+$/.test(payload?.error||'')?payload.error:'GEOCODER_FAILED',status:response.status,providerHttp:Number.isInteger(payload.providerHttp)?payload.providerHttp:null});
+      if(owner===epoch){while(cache.size>=512)cache.delete(cache.keys().next().value);cache.set(key,payload.data);}return payload.data;})
+     .finally(()=>{if(inflight.get(key)===task)inflight.delete(key);});inflight.set(key,task);
+   }
+   Promise.resolve(cache.get(key)||inflight.get(key)).then(data=>{if(signal?.aborted||owner!==epoch)return;callback(data.documents,data.status,{status:200,httpStatus:200,providerHttp:data.providerHttp,resolution:data.resolution});})
+    .catch(error=>{if(signal?.aborted||owner!==epoch)return;
+     const code=error.code||'GEOCODER_FAILED';
+     if(/^(?:GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED|DURABLE_LEDGER_REQUIRED|LEDGER_INVALID)|GEOCODING_DISABLED|TARGET_APP_FREE_QUOTA_UNVERIFIED)$/.test(code)||error.providerHttp===401||error.providerHttp===403||error.providerHttp===429){proxy.blockedReason=code;root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false};}
+     callback([],'ERROR',{code,status:error.status,httpStatus:error.status||null,providerHttp:Number.isInteger(error.providerHttp)?error.providerHttp:null});});
+  }};return proxy;
+ }
  root.KakaoMapsAdapter=Object.freeze({ready,reset,geocoder});
 })(typeof window==='object'?window:globalThis);
 

@@ -31,6 +31,7 @@
     return hybridUi;
   });
   function purgeStaffData(){
+    liveAddressLocations?.clear();
     cancelManualRoadRoute();manualDraft?.clear();window.dispatchEvent(new CustomEvent('map-navigation-logout'));
     ++initialRequestId;++periodRequestId;++dateRequestId;
     for(const key of ['baseRequestId','routeRequestId','searchRequestId','addressRequestId','detailRequestId','todayRequestId'])++state[key];
@@ -170,6 +171,20 @@
   let datedSourceDate = '', dailyMeta = null;
   let dateChosenByUser = false;
   const geocodeCache = new Map();
+  let addressLocationFrame=null;
+  const liveAddressLocations=window.MapAddressLocations?.create({
+    readAddress:async(row,signal)=>{const date=row.lastDeliveryDate||snapshotMeta?.latestDate||localDate();const response=await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:'auto-address-'+row.customerCode,ttl:0,timeout:20000});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});if(response.data?.customerCode!==row.customerCode||response.data?.sourceBasis!=='CURRENT_CUSTOMER_LOOKUP'||response.data?.locationState!=='SOURCE_ROW')throw Error('CURRENT_ADDRESS_UNCONFIRMED');return response.data;},
+    lookup:(address,signal)=>geocodeAddress(address,signal),
+    queryFor:address=>NewAreaRequests.addressQuery(address,Phase2bUi.addressVariants),
+    enabled:()=>document.body.dataset.mapStaffState==='authenticated'&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&window.MapManualPins?.verified?.()===true,
+    onChange:()=>{if(addressLocationFrame)return;addressLocationFrame=requestAnimationFrame(()=>{
+      addressLocationFrame=null;if(document.body.dataset.mapStaffState!=='authenticated')return;
+      for(const row of allStores)liveAddressLocations.apply(row);
+      if(state.selected){const missing=!Number.isFinite(state.selected.lat)||!Number.isFinite(state.selected.lng);liveAddressLocations.apply(state.selected);refreshCoordinateEvidence(state.selected);if(missing&&Number.isFinite(state.selected.lat))focusMapPoint(state.selected,{zoom:true});}
+      indexedRows=null;pointIndex=null;markerSourceVersion++;state.fitRequested=false;void loadBaseMap();
+      window.dispatchEvent(new Event('map-coordinate-updated'));
+    });}
+  });
 
   SOURCE.vehicles.forEach((vehicle, vehicleIndex) => {
     (vehicle.customers || []).forEach((customer) => {
@@ -199,7 +214,7 @@
       const row = normalizeStore({ ...item, id: item.customerCode || item.code, name: item.customerName || item.name,
         address: item.address || item.customerAddress || item.latestAddress || previous.address,
         delivery_pattern: item.deliveryPattern || item.deliveryPatternText || previous.deliveryPattern,
-        lat: item.lat === null ? null : item.lat ?? item.latitude ?? (sameAddress?previous.lat:null), lng: item.lng === null ? null : item.lng ?? item.longitude ?? (sameAddress?previous.lng:null) }, found.vehicle, found.index);
+        lat: item.lat === null ? null : item.lat ?? item.latitude ?? (sameAddress&&previous.coordinateSource!=='KAKAO_ADDRESS_LIVE'?previous.lat:null), lng: item.lng === null ? null : item.lng ?? item.longitude ?? (sameAddress&&previous.coordinateSource!=='KAKAO_ADDRESS_LIVE'?previous.lng:null) }, found.vehicle, found.index);
       if(!sameAddress&&(item.lat==null||item.lng==null))row.coordinateStatus='CONFLICT';
       row.customerName ||= previous.customerName || "";
       row.areaLabel ||= previous.areaLabel || "";
@@ -215,6 +230,7 @@
       row.driverName = item.driverName || "";
       Object.assign(row, baseVehicles.get(String(row.customerCode)) || {baseVehicle:normalizeVehicle(item.baseVehicle||''),baseVehicleState:item.baseVehicle?'PUBLISHED_ONLY':'UNKNOWN'});
       window.MapManualPins?.apply(row);
+      liveAddressLocations?.apply(row);
       row.deliveryCount90d = item.deliveryCount90d ?? item.deliveryCount ?? null;
       next.push(row);
       storeByVehicleAndCode.set(`${row.vehicle}|${row.customerCode}`, row);
@@ -839,7 +855,7 @@
       listen('zoom_start',()=>{if(Date.now()>=state.suppressMapEventsUntil)userGesture();});
       listen('zoom_changed',()=>$('#map').classList.toggle('mapZoomFar',state.map.getLevel()>=9));
       listen('center_changed',scheduleDetailPosition);listen('zoom_changed',scheduleDetailPosition);
-      listen('idle',()=>{if(dateReady&&!markerFrame)markerFrame=requestAnimationFrame(()=>{markerFrame=null;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});});});
+      listen('idle',()=>{if(dateReady&&!markerFrame)markerFrame=requestAnimationFrame(()=>{markerFrame=null;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});liveAddressLocations?.schedule(state.currentRows);});});
       listen('click',event=>{if(searchTemporaryClick)return searchTemporaryClick(event);clearSelection();});
       if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});for(const node of [$('#map'),$('#leftPanel'),$('#detailSection'),$('#approvedSiteHeader')])if(node)mapObserver.observe(node);}
       loadBaseMap();window.dispatchEvent(new CustomEvent('map-sdk-ready'));return state.map;
@@ -1045,6 +1061,7 @@
     const compact = kind === "store" && !index;
     button.className = `marker${completed ? " done" : pending ? " pending" : ""}${kind === "virtual" ? " virtual" : ""}${kind === "nearbyVehicle" ? " nearbyVehicle" : ""}${compact ? " storeDot" : ""}`;
     button.dataset.customerCode = row.customerCode || "";
+    button.dataset.coordinateSource=row.coordinateSource||'';
     button.dataset.vehicle = row.vehicle || "";
     button.title = `${row.vehicle ? vehicleLabel(row.vehicle) + " · " : ""}${row.customerName || row.address || ""}`;
     button.dataset.masterCheckedAt=row.baseVehicleCheckedAt||'';button.dataset.masterStale=String(row.baseVehicleStale===true);
@@ -1215,7 +1232,7 @@
   function coordinateEvidenceLabel(row) {
     if (numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) return '';
     if (row.coordinateSource === 'MANUAL_PIN') return '사용자 수동 확정 위치 · 원본 주소 보존';
-    if (['KAKAO_BUILDING_EXACT_ADDRESS','KAKAO_VERIFIED_BUILDING','KAKAO_ADDRESS_REVALIDATION'].includes(row.coordinateSource)) return '주소 기준 위치';
+    if (['KAKAO_ADDRESS_LIVE','KAKAO_BUILDING_EXACT_ADDRESS','KAKAO_VERIFIED_BUILDING','KAKAO_ADDRESS_REVALIDATION'].includes(row.coordinateSource)) return '주소 기준 위치';
     if (row.coordinateSource === 'HISTORICAL_GPS_SAME_BUILDING') return '동일 주소의 저장 위치';
     return '';
   }
@@ -1224,7 +1241,7 @@
     if (!body) return;
     body.querySelectorAll('.coordinateEvidence,.coordinateWarning').forEach(node => node.remove());
     const unlocated = numberOrNull(row.lat) === null || numberOrNull(row.lng) === null;
-    const text = unlocated ? '좌표 미확인 · 위치를 확인해 주세요.' : '';
+    const text = unlocated ? '위치 확인 필요' : row.coordinateSource==='KAKAO_ADDRESS_LIVE'?'주소 기준 위치':'';
     if (!text) return;
     const node = document.createElement('div');
     node.className = unlocated ? 'coordinateWarning' : 'coordinateEvidence';
@@ -1245,6 +1262,7 @@
     // Apply the confirmed overlay again before rendering their coordinate origin.
     window.MapManualPins?.apply(row);
     applyUnifiedSearchCoordinateGuard(row);
+    liveAddressLocations?.apply(row);
     const expanded = state.selected?.customerCode === row.customerCode && $(".detailMore")?.open;
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     element?.classList.add("selected");
@@ -1282,7 +1300,7 @@
 
         ${!routeMode && row.history?.length ? `<div class="periodRecent">최근배송 ${esc(row.lastDeliveryDate)} · ${row.visitCount===null?'전체 기간 횟수 미확인':(row.visitCount??row.history.length)+'회 이력'}</div>` : ""}
         <div class="staffActions"><button id="staffHistory" aria-expanded="false" aria-controls="staffAuxContent">최근 배송기사이력 ▸</button><button id="staffNotes" aria-expanded="false" aria-controls="staffAuxContent">출입배송정보 ▸</button></div>
-        ${unlocated ? '<div class="coordinateWarning">좌표 미확인</div>' : ""}
+        ${unlocated ? '<div class="coordinateWarning">위치 확인 필요</div>' : row.coordinateSource==='KAKAO_ADDRESS_LIVE'?'<small class="coordinateEvidence">주소 기준 위치</small>':""}
         <div class="mobileActions"><button id="mobileMapView" class="primary">매장 위치 중심으로 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicleLabel(vehicle) || "선택 호차")} 운행동선</button></div>
         <div id="nearWrap"></div>
       </div>`;
@@ -1296,7 +1314,7 @@
     if (innerWidth <= 760) { showMobileMap(); $("#mobileWorkspace").classList.add("collapsed"); }
     $("#detailClose")?.addEventListener("click", clearSelection);
     if ((routeMode || row.virtual) && numberOrNull(row.lat) !== null && numberOrNull(row.lng) !== null) renderNearest(row);
-    $("#mobileMapView")?.addEventListener("click", () => {showMobileMap();if(!unlocated)focusMapPoint(row);});
+    $("#mobileMapView")?.addEventListener("click", () => {showMobileMap();if(Number.isFinite(row.lat)&&Number.isFinite(row.lng))focusMapPoint(row);});
     $("#mobileRouteView")?.addEventListener("click", () => {
       if (vehicle && [...$("#mobileVehicle").options].some((option) => option.value === vehicle)) $("#mobileVehicle").value = vehicle;
       setSelectedVehicles(vehicle ? [vehicle] : []); refreshVehicleUi(true);
@@ -1304,6 +1322,7 @@
     });
     if(!unlocated)focusMapPoint(row,{zoom:focus});
     if (!skipEnrich && row.customerCode) enrichStoreDetail(row, element);
+    if(row.customerCode)liveAddressLocations?.schedule([row],{priority:true});
   }
 
   async function enrichStoreDetail(row, element) {
@@ -1565,6 +1584,7 @@
     const code = String(row.customerCode || row.code || row.id || "").trim();
     const vehicle = normalizeVehicle(row.vehicle || row.confirmedVehicle || row.primaryVehicle90d);
     const local = { ...coordinateByCode.get(code), ...(storeByVehicleAndCode.get(`${vehicle}|${code}`) || storesByCode.get(code) || {}) };
+    const liveFallback=local.coordinateSource==='KAKAO_ADDRESS_LIVE'&&(numberOrNull(row.lat??row.latitude)===null||numberOrNull(row.lng??row.longitude)===null);
     return {
       ...local,
       ...row,
@@ -1578,7 +1598,8 @@
       lng: numberOrNull(row.lng ?? row.longitude) ?? local.lng ?? null,
       accessInfo: row.accessInfo || local.accessInfo || "",
       password: row.password || row.doorPassword || local.password || "",
-      lastDeliveryDate: row.lastDeliveryDate || row.deliveryDate || local.lastDeliveryDate || ""
+      lastDeliveryDate: row.lastDeliveryDate || row.deliveryDate || local.lastDeliveryDate || "",
+      ...(liveFallback?{coordinateSource:'KAKAO_ADDRESS_LIVE',coordinateAccuracy:'BUILDING'}:{})
     };
   }
 
@@ -1929,6 +1950,8 @@
     const selected = selectedVehicles();
     let stores = state.mode === "BASE_60D" ? filteredPeriodStores()
       : filteredDateStores(allStores);
+    stores.forEach(row=>liveAddressLocations?.apply(row));
+    liveAddressLocations?.schedule(state.selected?[state.selected,...stores]:stores);
     if (state.mode === "BASE_60D") stores = stores.map(row => ({ ...row, color: vehicleColor(row.vehicle) }));
     renderStops(stores, { numbered: state.mode === "DATE_ROUTE", vehicles: selected });
     if(state.mode==='DATE_ROUTE'){
@@ -2199,6 +2222,7 @@
     if (!row) return null;
     const point = {...row};
     if (/^[A-Z]\d+$/.test(point.customerCode||'')) window.MapManualPins?.apply(point);
+    liveAddressLocations?.apply(point);
     const status = point.coordinateStatus || point.raw?.coordinateStatus;
     const lat = numberOrNull(point.lat), lng = numberOrNull(point.lng);
     if (['CONFLICT','UNVERIFIED','MISSING'].includes(status) || point.resolutionStatus === 'ADDRESS_CHANGED_REVIEW_REQUIRED' || lat === null || lng === null || lat < 33 || lat > 39.5 || lng < 124 || lng > 132) return null;
@@ -2244,6 +2268,7 @@
       const code=row.address.trim().toUpperCase(),store=storesByCode.get(code)||latestSnapshotRows.find(item=>(item.customerCode||item.code)===code);
       if (!store) return {...row,decision:'검토',reason:'고객코드 확인 필요',evidence:'기존 고객 조회에서 코드 미확인 · 코드 문자열 지오코딩 안 함',nearby:[]};
       row={...row,customerCode:code,address:store.address||row.address,customer:row.customer||store.customerName,addressRegion:store.addressRegion,actualDispatchCenter:window.MapLocationContract?.dispatchCenter(store)};
+      await liveAddressLocations?.ensure(store);
       const saved = newAreaCoordinate(store);
       if (saved) return judgeNewAreaPoint(row,saved);
       if (store.coordinateStatus === 'CONFLICT' || store.raw?.coordinateStatus === 'CONFLICT') return {...row,decision:'검토',reason:'주소·좌표 재확인 필요',evidence:'기존 좌표 직접 수정에서 위치를 확인해 주세요.',nearby:[]};
@@ -2261,6 +2286,7 @@
     for(const query of queries){matched=await newAreaCustomerMatch(query,signal,batch);if(matched)break;}
     if(matched?.candidates)return judgeNewAreaPoint(row,matched);
     if(matched){
+      await liveAddressLocations?.ensure(matched);
       const saved=newAreaCoordinate(matched);
       if(saved)return judgeNewAreaPoint({...row,customerCode:matched.customerCode},saved);
       return {...judgeNewAreaPoint({...row,customerCode:matched.customerCode},null),reason:'기존 고객 좌표 확인 필요',evidence:'인증된 고객 주소 매칭 · 저장·수동 좌표 확인 필요 · 외부 좌표로 대체하지 않음'};
@@ -2766,11 +2792,12 @@
     isDataReady:()=>state.mode==='DATE_ROUTE'?isDailyDataReady():dateReady,
     initMap,
     stores:()=>allStores.slice(),
-    refreshManualCoordinates(){indexedRows=null;pointIndex=null;for(const row of allStores)window.MapManualPins?.apply(row);if(state.selected){window.MapManualPins?.apply(state.selected);applyUnifiedSearchCoordinateGuard(state.selected);refreshCoordinateEvidence(state.selected);}cancelManualRoadRoute();state.fitRequested=false;void loadBaseMap();window.dispatchEvent(new Event('map-coordinate-updated'));},
+    refreshManualCoordinates(){indexedRows=null;pointIndex=null;for(const row of allStores){window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);}if(state.selected){window.MapManualPins?.apply(state.selected);applyUnifiedSearchCoordinateGuard(state.selected);liveAddressLocations?.apply(state.selected);refreshCoordinateEvidence(state.selected);}cancelManualRoadRoute();state.fitRequested=false;void loadBaseMap();window.dispatchEvent(new Event('map-coordinate-updated'));},
+    addressLocationStatus:()=>liveAddressLocations?.summary()||{located:0,review:0,retention:'PAGE_MEMORY_ONLY'},
     fixedTerritoryMasterState:()=>({version:baseVehicleMeta?.version||null,stale:baseVehicleMeta?.stale!==false,checkedAt:baseVehicleMeta?.checkedAt||null,lastError:baseVehicleMeta?.lastError||null,refresh:baseVehicleMeta?.refresh||null}),
     fixedTerritoryStores:()=>window.MapUiLocalBridge.navigationStores().map(row=>({...row,...(baseVehicles.get(String(row.customerCode))||{baseVehicle:'',baseVehicleState:'UNKNOWN'})})),
     loadBaseVehicleMasterForTerritory:()=>loadBaseVehicles(window.MapUiLocalBridge.navigationStores().map(row=>String(row.customerCode||''))),
-    navigationStores:()=>{if(state.mode==='DATE_ROUTE')return isDailyDataReady()?allStores.map(row=>({...row})):[];const list=new Map(latestSnapshotRows.map(r=>[r.customerCode,r]));for(const row of allStores){const prior=list.get(row.customerCode);const conflict=prior&&row.address&&prior.address&&row.address.replace(/\s/g,'')!==prior.address.replace(/\s/g,'');list.set(row.customerCode,{...row,...(conflict?{coordinateStatus:'CONFLICT'}:{})});}return [...list.values()];},
+    navigationStores:()=>{if(state.mode==='DATE_ROUTE')return isDailyDataReady()?allStores.map(row=>liveAddressLocations?.apply({...row})||{...row}):[];const list=new Map(latestSnapshotRows.map(r=>[r.customerCode,r]));for(const row of allStores){const prior=list.get(row.customerCode);const conflict=prior&&row.address&&prior.address&&row.address.replace(/\s/g,'')!==prior.address.replace(/\s/g,'');list.set(row.customerCode,{...row,...(conflict?{coordinateStatus:'CONFLICT'}:{})});}return [...list.values()].map(row=>liveAddressLocations?.apply({...row})||row);},
     selectNavigationStore:code=>{const row=(state.mode==='DATE_ROUTE'&&!isDailyDataReady()?[]:allStores).find(r=>r.customerCode===code)||(state.mode==='BASE_60D'?latestSnapshotRows.find(r=>r.customerCode===code):null);if(row)selectStore(row,null,true);},
     queryRecordedRoute:()=>{cancelManualRoadRoute();const v=primarySelectedVehicle();if(!v||!operationStops.length||operationStops.some(s=>!Number.isSafeInteger(s.order)||s.order<1)){roadResult={state:'error',error:'RECORDED_ORDER_REQUIRED'};window.dispatchEvent(new CustomEvent('map-recorded-route',{detail:roadResult}));syncRoadRoutePanel();return;}loadRoadRoute(v,{explicit:true});},
     toggleConnections:()=>{state.connectionLines=false;state.lines.forEach(line=>line.setMap(null));state.lines=[];return {shown:false};},

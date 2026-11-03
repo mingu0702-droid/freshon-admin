@@ -133,7 +133,7 @@ test('clear search removes only search state and invokes the existing overview r
 
 test('manual projection refresh preserves an already verified search address conflict',()=>{
  const f=fixture({manual:r=>{r.lat=37.6;r.lng=127.2;r.coordinateStatus='CONFIRMED';delete r.resolutionStatus;}});
- Object.assign(f.context,{indexedRows:null,pointIndex:null,refreshCoordinateEvidence(){},cancelManualRoadRoute(){},loadBaseMap:async()=>{}});
+ Object.assign(f.context,{indexedRows:null,pointIndex:null,liveAddressLocations:null,refreshCoordinateEvidence(){},cancelManualRoadRoute(){},loadBaseMap:async()=>{}});
  f.context.window.dispatchEvent=()=>{};
  f.context.state.selected={customerCode:'S990017',searchAddressConflict:true,lat:null,lng:null};
  const start=source.indexOf('refreshManualCoordinates(){'),end=source.indexOf('},',start)+1;

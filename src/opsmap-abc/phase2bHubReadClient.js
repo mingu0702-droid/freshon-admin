@@ -241,7 +241,8 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
       if(action==='staffDriverHistory')for(const k of ['openMs','headerMs','selectMs','discoverMs','normalizeMs','metadataHits','headerHits','selectionHit'])profile['history'+k[0].toUpperCase()+k.slice(1)]=Number(json?.meta?.historyProfile?.[k]||0);
       if (json && typeof json === 'object') requestProfiles.set(json, profile);
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
-      if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream" });
+      if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream",
+        sourceNotFound: endpoint.isolated&&action==='customerDetail'&&response.ok&&json?.error?.code==='NOT_FOUND'&&json.meta.httpStatus===404&&json.meta.requestId===body.requestId });
       if (action==='customerSearch' && json.meta?.requestId!==body.requestId) throw new Error('HUB_INVALID_SEARCH_CONTRACT');
       if ((action === 'staffCustomerDetail'||action==='customerDetailPrepared') && (json.meta.requestId !== body.requestId || String(json.data?.customerCode || '').toUpperCase() !== String(params.customerCode).toUpperCase())) {
         profile.requestIdMatch = json.meta.requestId === body.requestId;
@@ -282,7 +283,8 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
       await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
   }
-  circuitFailure(action, entered.circuit, timedOut, entered.probe);
+  if(lastError?.sourceNotFound===true)circuitSuccess(action,entered.circuit);
+  else circuitFailure(action, entered.circuit, timedOut, entered.probe);
   throw lastError;
 }
 

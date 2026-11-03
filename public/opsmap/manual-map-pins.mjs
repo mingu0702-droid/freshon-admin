@@ -106,7 +106,7 @@ function renderTargets(){
  targets=manualPinTargetCodes(bridge.stores(),[...records.values()],targets);
  const stores=new Map(bridge.stores().map(r=>[r.customerCode,r])),unresolved=list.querySelector('.manualPinPending'),resolved=list.querySelector('.manualPinResolved');unresolved.replaceChildren();resolved.replaceChildren();let count=0;
  for(const code of targets){const row=stores.get(code);if(!row)continue;const manual=records.get(code)?.resolutionStatus==='MANUAL_CONFIRMED',located=Number.isFinite(row.lat)&&Number.isFinite(row.lng)&&row.coordinateStatus!=='CONFLICT';const parent=located?resolved:unresolved;if(!located)count++;
-  const item=node('div',undefined,parent);item.className='manualPinTarget';item.dataset.manualTarget=code;node('b',code+' · '+row.customerName,item);node('p',manual?'수동 확정 완료':located?'건물·기존 좌표 확인됨 · 재수정 가능':'주소 검색 또는 지도 클릭으로 위치를 지정해 주세요.',item);
+  const item=node('div',undefined,parent);item.className='manualPinTarget';item.dataset.manualTarget=code;node('b',code+' · '+row.customerName,item);node('p',manual?'수동 확정 완료':located?row.coordinateSource==='KAKAO_ADDRESS_LIVE'?'주소 기준 위치':'건물·기존 좌표 확인됨 · 재수정 가능':'위치 확인 필요 · 주소 검색 또는 지도에서 핀을 지정해 주세요.',item);
   button('주소 검색',item,()=>open(code,{searchNow:true}));button(manual||located?'핀 위치 수정':'지도에서 핀 지정',item,()=>open(code));
  }
  list.querySelector('summary').textContent='좌표 직접 수정 · 미확인 '+count+'개';

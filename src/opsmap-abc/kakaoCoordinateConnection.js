@@ -12,7 +12,9 @@ const day=stamp=>new Date(stamp+32400000).toISOString().slice(0,10);
 export function createKakaoCoordinateConnection({env=process.env,store,now=Date.now,fetchImpl=globalThis.fetch}={}) {
  const configuredLimit=Number(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT||100);
  const dailyLimit=Number.isSafeInteger(configuredLimit)&&configuredLimit>=1&&configuredLimit<=1000?configuredLimit:100;
- let blocked=false;const pending=new Map();
+ let blocked=false,cooldownUntil=0,lastProviderAt=0,providerQueue=Promise.resolve();const pending=new Map();
+ const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+ const providerRequest=work=>{const task=providerQueue.catch(()=>{}).then(async()=>{const delay=250-(Date.now()-lastProviderAt);if(delay>0)await wait(delay);lastProviderAt=Date.now();return work();});providerQueue=task;return task;};
  const proof=()=>{
   const key=String(env.KAKAO_REST_API_KEY||'').trim();
   return /^[a-f0-9]{32}$/i.test(key)&&env.OPSMAP_KAKAO_FREE_QUOTA_VERIFIED==='1'&&env.OPSMAP_KAKAO_PAID_API_DISABLED==='1'&&
@@ -39,6 +41,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,now=Date.
   if(!address)fail('GEOCODE_QUERY_INVALID',400);
   if(!proof())fail('TARGET_APP_FREE_QUOTA_UNVERIFIED');
   if(blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
+  if(now()<cooldownUntil)fail('GEOCODE_RETRY_COOLDOWN',503);
   if(diagnostic&&address!==KAKAO_DIAGNOSTIC_ADDRESS)fail('DIAGNOSTIC_ADDRESS_REJECTED',400);
   const queryHash=coordinateAddressHash(address),key=(diagnostic?'diagnostic:':'lookup:')+queryHash;
   if(pending.has(key))return pending.get(key);
@@ -59,7 +62,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,now=Date.
    try{
     await assertCurrent();
     const url=new URL('https://dapi.kakao.com/v2/local/search/address.json');url.searchParams.set('query',address);url.searchParams.set('analyze_type','exact');url.searchParams.set('size','30');
-    const response=await fetchImpl(url,{method:'GET',headers:{Authorization:'KakaoAK '+String(env.KAKAO_REST_API_KEY).trim()},signal:AbortSignal.timeout(6000),redirect:'error',cache:'no-store'});
+    const response=await providerRequest(()=>fetchImpl(url,{method:'GET',headers:{Authorization:'KakaoAK '+String(env.KAKAO_REST_API_KEY).trim()},signal:AbortSignal.timeout(6000),redirect:'error',cache:'no-store'}));
     providerHttp=response.status;stage='PROVIDER_HEADERS';
     if(!response.ok)fail('KAKAO_HTTP_REJECTED',502);
     const appHeader=['x-kakao-app-id','x-kakao-appid'].map(name=>response.headers?.get?.(name)).find(value=>value!=null);
@@ -78,7 +81,11 @@ export function createKakaoCoordinateConnection({env=process.env,store,now=Date.
     const transportCode=['UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_SOCKET','ENOTFOUND','EAI_AGAIN','ETIMEDOUT','ECONNREFUSED','ECONNRESET','CERT_HAS_EXPIRED','UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(error?.cause?.code)?error.cause.code:null;
     const code=/^KAKAO_[A-Z_]+$/.test(error?.code||'')?error.code:stage==='LEDGER_COMPLETION'?'KAKAO_LEDGER_COMPLETION_FAILED':['TimeoutError','AbortError'].includes(error?.name)?'KAKAO_TIMEOUT':stage==='PROVIDER_REQUEST'?'KAKAO_NETWORK_FAILED':'KAKAO_LOOKUP_FAILED';
     const lastAttempt={stage,code,providerHttp:Number.isInteger(providerHttp)?providerHttp:null,transportCode,elapsedMs:Math.max(0,now()-started)};
-    blocked=true;try{await transaction(async(state,commit)=>{state.blocked=true;state.lastAttempt=lastAttempt;await commit(state);});}catch{/* Local circuit stays closed even if storage is unavailable. */}
+    // Authentication/quota/unsafe contracts stop shared calls. A transport outage
+    // only backs off: one network error must not disable the rest of the day.
+    const transient=['KAKAO_TIMEOUT','KAKAO_NETWORK_FAILED'].includes(code)||Number.isInteger(providerHttp)&&providerHttp>=500;
+    if(transient)cooldownUntil=now()+30000;else blocked=true;
+    try{await transaction(async(state,commit)=>{if(!transient)state.blocked=true;state.lastAttempt=lastAttempt;await commit(state);});}catch{blocked=true;}
     throw Object.assign(Error(code),{code,status:502,providerHttp:lastAttempt.providerHttp});
    }
   })();pending.set(key,task);try{return await task;}finally{pending.delete(key);}
