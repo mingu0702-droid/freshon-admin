@@ -15,7 +15,7 @@ async function fixture({enabled=true, session=true, empty=false, status=200, mis
   const requireStaff=(q,r,n)=>{if(!loggedIn||q.get('x-staff')!=='yes')return r.status(401).json({error:'STAFF_LOGIN_REQUIRED'});r.locals.staffSession={key:'synthetic-session',expiresAt:Date.now()+60000,idleExpiresAt:Date.now()+60000};return n();};
   const extension=createOperationalPhotoExtension({enabled,hasMemorySession:()=>sourceSession,prepareSession:async()=>{auths++;sourceSession=true;},
     listDeliveryMetadata:createOperationalPhotoMetadataReader({defaultDate:()=>record.date,readTaskRows:async()=>{metadataReads++;return [task(),task('990002','S990002')];}}),
-    rawRequest:async(path,options)=>{details++;assert.equal(options.cache,'no-store');assert.equal(options.method,'GET');assert.match(path,/^\/api\/bali\/task\/\d+$/);if(status!==200)return new Response(null,{status});const value=task(path.split('/').at(-1),mismatch?'S990002':record.customerCode);if(empty)value.taskAttachments=[];return Response.json({data:value});},
+    rawRequest:async(path,options)=>{const statusRecord=path.endsWith('/status-record');if(!statusRecord)details++;assert.equal(options.cache,'no-store');assert.equal(options.method,'GET');assert.match(path,/^\/api\/bali\/task\/\d+(?:\/status-record)?$/);if(status!==200)return new Response(null,{status});const id=path.split('/')[4],value=task(id,mismatch?'S990002':record.customerCode);if(empty)value.taskAttachments=[];return Response.json({data:statusRecord?[{id:'1990001',taskId:id,taskAttachments:value.taskAttachments}]:value});},
     imageFetch:async(_url,options)=>{medias++;assert.equal(options.credentials,'omit');assert(!options.headers.Cookie);return new Response(new Uint8Array([255,216,255,217]),{headers:{'content-type':'image/jpeg'}});}});
   extension.mount({app,requireStaff,isSessionCurrent:()=>loggedIn,previewEnabled:()=>true});
   const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
@@ -55,4 +55,26 @@ test('metadata rejects malformed selected identities and filters other customers
   await assert.rejects(read({...record,date:'2026-02-30'}),{code:'INVALID_DATE'});assert.equal(count,1);
   const partial=[];Object.defineProperty(partial,'sourceObservation',{value:{complete:false}});
   await assert.rejects(createOperationalPhotoMetadataReader({readTaskRows:async()=>partial})(record),{code:'SOURCE_UNAVAILABLE'});
+});
+
+test('aborting a photo request releases its concurrency slot while the existing shared login remains in progress',async()=>{
+  const app=express();let prepared=false,preparations=0,details=0,resolveShared;
+  const sharedLogin=new Promise(r=>{resolveShared=r;});
+  const extension=createOperationalPhotoExtension({enabled:true,hasMemorySession:()=>prepared,
+    prepareSession:()=>{preparations++;return sharedLogin;},
+    listDeliveryMetadata:async()=>[record],rawRequest:async path=>{if(path.endsWith('/status-record'))return Response.json({data:[{id:'1990001',taskAttachments:task().taskAttachments}]});details++;return Response.json({data:task()});}});
+  extension.mount({app,requireStaff:(_q,r,n)=>{r.locals.staffSession={key:'synthetic-staff'};return n();},isSessionCurrent:()=>true,previewEnabled:()=>true});
+  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+  const url='http://127.0.0.1:'+server.address().port+endpoint+query(record),controllers=Array.from({length:3},()=>new AbortController());
+  const pending=controllers.map(controller=>fetch(url,{signal:controller.signal}).catch(()=>null));
+  try{
+    for(let i=0;i<100&&preparations<3;i++)await new Promise(r=>setTimeout(r,5));
+    assert.equal(preparations,3);controllers[0].abort();await pending[0];
+    await new Promise(r=>setTimeout(r,20));prepared=true;
+    const response=await fetch(url);assert.equal(response.status,200);await response.json();assert.equal(details,1);
+    assert.equal(preparations,3); // No retry/new login after an aborted waiter.
+  }finally{
+    controllers.forEach(controller=>controller.abort());await Promise.allSettled(pending);resolveShared();
+    await new Promise(r=>server.close(r));
+  }
 });

@@ -60,6 +60,7 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
     // The injected routine is the existing Delivery Admin authentication flow.
     // This feature contains no credential store, login endpoint or retry login.
     if (!hasSession() && typeof prepareSession === 'function') await waitForPhotoOperation(() => prepareSession({signal}), signal);
+    if (signal?.aborted) fail('PHOTO_TIMEOUT', 504);
     if (!hasSession()) fail('UPSTREAM_AUTH_REQUIRED', 502);
   };
   const transport = createDeliveryAdminPhotoTransport({approvedRequest: rawRequest, hasApprovedSession: hasSession, imageFetch});
@@ -79,7 +80,7 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
     return listDeliveryMetadata(identity, options);
   };
   const source = createDeliveryAdminPhotoSource({...transport, requestJson, listDeliveryMetadata: metadata,
-    categoryMap: DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, allowedImageHosts: DELIVERY_ADMIN_PHOTO_HOSTS});
+    categoryMap: DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, allowedImageHosts: DELIVERY_ADMIN_PHOTO_HOSTS, readTaskStatusRecords:true});
   return {
     diagnostics: () => ({enabled: isEnabled(), sourceSession: hasSession(), metadataConfigured: typeof listDeliveryMetadata === 'function'}),
     mount: ({app, requireStaff, isSessionCurrent, previewEnabled}) => mountOpsmapDeliveryPhotoRoutes({app, requireStaff, isSessionCurrent,

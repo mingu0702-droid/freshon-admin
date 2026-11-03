@@ -159,7 +159,7 @@
         PHOTO_IMAGES_INVALID: '사진 원천의 이미지 목록 형식을 확인하지 못했습니다.',
         PHOTO_IMAGE_LIMIT_EXCEEDED: '사진 원천의 이미지 목록이 허용 범위를 초과했습니다.'
       };
-      if (sourceContractErrors[error.message]) { shell(sourceContractErrors[error.message], 'unverified'); return; }
+      if (sourceContractErrors[error.message]) { shell(sourceContractErrors[error.message], 'unverified'); dateSearch(); return; }
       const forbidden = error.status === 403, unverified = ['UNVERIFIED', 'SOURCE_UNAVAILABLE', 'NOT_CONFIGURED', 'INVALID_SOURCE_RESPONSE'].includes(error.message) || error.status === 404 || error.status === 422 || error.status === 503;
       shell(forbidden ? '사진 조회 권한이 없습니다.' : unverified ? '사진 미확인 · 배송 사진 원천 또는 연결 상태를 확인해 주세요.' : '사진 조회 실패 · 잠시 후 다시 시도해 주세요.', forbidden ? 'forbidden' : unverified ? 'unverified' : 'error', forbidden ? null : { label: '다시 조회', run: () => current === generation && target && open(target) });
     }

@@ -98,7 +98,7 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
   }
   return {
     async requestJson(path, { method = 'GET', signal, maxResponseBytes = maxJsonBytes } = {}) {
-      if (method !== 'GET' || !/^\/api\/bali\/task\/\d{1,20}$/.test(path || '')) fail('INVALID_PHOTO_REQUEST', 400);
+      if (method !== 'GET' || !/^\/api\/bali\/task\/\d{1,20}(?:\/status-record)?$/.test(path || '')) fail('INVALID_PHOTO_REQUEST', 400);
       if (typeof approvedRequest !== 'function') fail('SOURCE_UNAVAILABLE',503,{stage:'source-session'});
       if (!Number.isInteger(maxResponseBytes) || maxResponseBytes < 1) fail('INVALID_PHOTO_REQUEST', 400);
       return run(signal, async requestSignal => {

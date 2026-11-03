@@ -51,7 +51,7 @@ function unwrap(payload) { return payload?.data ?? payload; }
 // carrier.enteringDatedAt and taskAttachments[{typeText,text,images:[{url}]}].
 // Live task ID equivalence and category labels require an authenticated one-record check.
 // This adapter performs no login and makes no request until explicitly injected and enabled.
-export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDeliveryMetadata, allowedImageHosts = [], categoryMap = {}, firstPhotoKind = null } = {}) {
+export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDeliveryMetadata, allowedImageHosts = [], categoryMap = {}, firstPhotoKind = null, readTaskStatusRecords = false } = {}) {
   if (typeof requestJson !== 'function' || typeof fetchImage !== 'function') fail('UNVERIFIED', 503);
   if (firstPhotoKind !== null && !PHOTO_KINDS.has(firstPhotoKind)) fail('UNVERIFIED', 503);
   const hosts = new Set(allowedImageHosts);
@@ -97,8 +97,36 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
     return { url, fingerprint };
   }
   async function detail(identity, signal) {
-    const task = unwrap(await bounded(requestJson(`/api/bali/task/${identity.deliveryId}`, { method: 'GET', signal, maxResponseBytes: 65536 }), signal));
+    let task = unwrap(await bounded(requestJson(`/api/bali/task/${identity.deliveryId}`, { method: 'GET', signal, maxResponseBytes: 65536 }), signal));
     exact(task, identity);
+    if (readTaskStatusRecords === true) {
+      // Public task screen reads attachments from taskStatusRecord, separately
+      // from its parent task. Parent identity must pass before this second GET.
+      const payload = unwrap(await bounded(requestJson(`/api/bali/task/${identity.deliveryId}/status-record`, {method:'GET', signal, maxResponseBytes:65536}), signal));
+      const records = Array.isArray(payload) ? payload : payload && typeof payload === 'object' && !Array.isArray(payload) && Object.hasOwn(payload, 'taskAttachments') ? [payload] : null;
+      if (!records || records.length > 32) fail('PHOTO_ATTACHMENTS_INVALID', 503);
+      const attachments = [];
+      const validateExplicit = (value, root = false) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
+        // record.id is the status event ID. Only explicit parent-task IDs bind it.
+        if ((!root && Object.hasOwn(value, 'id') && String(value.id) !== identity.deliveryId)
+          || Object.hasOwn(value, 'taskId') && String(value.taskId) !== identity.deliveryId) fail('DELIVERY_IDENTITY_MISMATCH', 409);
+        for (const code of [value.customerCode, value.customerErpCode, value.customer?.erpCode]) if (code !== undefined && code !== identity.customerCode) fail('DELIVERY_IDENTITY_MISMATCH', 409);
+        for (const date of [value.enteringDatedAt, value.deliveryDate, value.carrier?.enteringDatedAt]) if (date !== undefined && deliveryDate(date) !== identity.date) fail('DELIVERY_IDENTITY_MISMATCH', 409);
+      };
+      for (const [recordIndex, record] of records.entries()) {
+        validateExplicit(record, true);
+        if (Object.hasOwn(record, 'task')) validateExplicit(record.task);
+        if (!Array.isArray(record.taskAttachments)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
+        const recordFingerprint = createHash('sha256').update(JSON.stringify({source:'TASK_STATUS_RECORD', ...identity, recordIndex, id:record.id ?? null})).digest('hex');
+        for (const attachment of record.taskAttachments) {
+          if (!attachment || typeof attachment !== 'object' || Array.isArray(attachment)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
+          attachments.push({...attachment, photoRecordFingerprint:recordFingerprint});
+          if (attachments.length > 20) fail('PHOTO_ATTACHMENT_LIMIT_EXCEEDED', 503);
+        }
+      }
+      task = {...task, taskAttachments:attachments};
+    }
     if (!Array.isArray(task.taskAttachments)) {
       const error=new DeliveryPhotoError('PHOTO_ATTACHMENTS_INVALID',503,{stage:'source-attachments'});
       // Fixed shape enums only; no attachment body, URL or protected text.
@@ -121,7 +149,8 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
           for (const {imageIndex, childImageIndex, image} of images) {
             if (!permitted(task, attachmentIndex, imageIndex, childImageIndex)) continue;
             const { fingerprint } = mediaAsset(image?.url);
-            photos.push({ kind, ref: { attachmentIndex, imageIndex, ...(childImageIndex === null ? {} : {childImageIndex}), fingerprint } });
+            photos.push({ kind, ref: { attachmentIndex, imageIndex, ...(childImageIndex === null ? {} : {childImageIndex}), fingerprint,
+              ...(readTaskStatusRecords === true ? {recordFingerprint:attachment.photoRecordFingerprint} : {}) } });
           }
         }
         if (photos.length > 40) fail('PHOTO_LIMIT_EXCEEDED', 503);
@@ -140,6 +169,7 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
       const task = await detail(identity, signal);
       if (!permitted(task, ref.attachmentIndex, ref.imageIndex, ref.childImageIndex ?? null)) fail('PHOTO_FORBIDDEN', 403);
       const attachment = task.taskAttachments[ref.attachmentIndex];
+      if (readTaskStatusRecords === true && attachment?.photoRecordFingerprint !== ref.recordFingerprint) fail('PHOTO_NOT_FOUND', 404);
       if (!kinds[attachment?.typeText]) fail('UNVERIFIED', 503);
       const entry = attachmentImages(attachment).find(r => r.imageIndex === ref.imageIndex && r.childImageIndex === (ref.childImageIndex ?? null));
       if (!entry) fail('PHOTO_NOT_FOUND', 404);
