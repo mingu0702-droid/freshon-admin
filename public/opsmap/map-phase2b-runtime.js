@@ -180,7 +180,7 @@
     onChange:()=>{if(addressLocationFrame)return;addressLocationFrame=requestAnimationFrame(()=>{
       addressLocationFrame=null;if(document.body.dataset.mapStaffState!=='authenticated')return;
       for(const row of allStores)liveAddressLocations.apply(row);
-      if(state.selected){const missing=!Number.isFinite(state.selected.lat)||!Number.isFinite(state.selected.lng);liveAddressLocations.apply(state.selected);refreshCoordinateEvidence(state.selected);if(missing&&Number.isFinite(state.selected.lat))focusMapPoint(state.selected,{zoom:true});}
+      if(state.selected){const missing=!Number.isFinite(state.selected.lat)||!Number.isFinite(state.selected.lng);liveAddressLocations.apply(state.selected);refreshCoordinateEvidence(state.selected);if(state.selected.coordinateSource==='KAKAO_ADDRESS_LIVE'&&/좌표 미확인|좌표 정확성 미확인|GPS 없음/.test($('#searchState')?.textContent||''))setSearchState('매장 선택');if(missing&&Number.isFinite(state.selected.lat))focusMapPoint(state.selected,{zoom:true});}
       indexedRows=null;pointIndex=null;markerSourceVersion++;state.fitRequested=false;void loadBaseMap();
       window.dispatchEvent(new Event('map-coordinate-updated'));
     });}
