@@ -37,7 +37,7 @@
     for(const key of ['baseRequestId','routeRequestId','searchRequestId','addressRequestId','detailRequestId','todayRequestId'])++state[key];
     clearTimeout(initialTimer);clearTimeout(periodTimer);clearTimeout(baseVehicleTimer);clearInterval(generalSnapshotPoll);generalSnapshotPoll=null;clearTimeout(customerRegistryRetry);customerRegistryRetry=null;customerRegistry?.purge();
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
-    latestSnapshotRows=[];periodRows=[];allStores=[];operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
+    latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();approvedMarkerOrder.clear();
     indexedRows=null;pointIndex=null;baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
     SOURCE={vehicles:[]};ADMIN.clear();state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
@@ -165,6 +165,7 @@
   let unifiedSearchController = null, unifiedSelectionActive = false, unifiedResetting = false;
   const memoryResponses = new Map();
   let latestSnapshotRows = [];
+  let generalRegistryRows = new Map();
   const coordinateByCode = new Map();
   let dateRequestId = 0;
   let dateReady = false;
@@ -218,8 +219,8 @@
       for (const row of rows || []) merged.set(String(row.customerCode || row.code), row);
       rows = [...merged.values()];
     }
-    const previousByCode = new Map([...latestSnapshotRows, ...allStores].map((row) => [String(row.customerCode || row.code), row]));
-    if(generalMap&&state.mode==='BASE_60D'&&customerRegistry){const observed=new Map(rows.map(row=>[String(row.customerCode||row.code),{...previousByCode.get(String(row.customerCode||row.code)),...row}]));for(const row of allStores)if(row.customerOnly&&!observed.has(row.customerCode))observed.set(row.customerCode,row);rows=customerRegistry.merge([...observed.values()]);}
+    const previousByCode = new Map([...latestSnapshotRows, ...(generalMap&&state.mode==='BASE_60D'?generalRegistryRows.values():allStores)].map((row) => [String(row.customerCode || row.code), row]));
+    if(generalMap&&state.mode==='BASE_60D'&&customerRegistry){const observed=new Map(rows.map(row=>[String(row.customerCode||row.code),{...previousByCode.get(String(row.customerCode||row.code)),...row}]));for(const row of generalRegistryRows.values())if(row.customerOnly&&!observed.has(row.customerCode))observed.set(row.customerCode,row);rows=customerRegistry.merge([...observed.values()]);}
     const vehicleMeta = new Map(SOURCE.vehicles.map((vehicle, index) => [String(vehicle.vehicle), { vehicle, index }]));
     const next = [];
     storeByVehicleAndCode.clear();
@@ -256,6 +257,7 @@
       if (!storesByCode.has(row.customerCode)) storesByCode.set(row.customerCode, row);
     });
     allStores = next;
+    if(generalMap&&state.mode==='BASE_60D')generalRegistryRows=new Map(next.map(row=>[row.customerCode,row]));
     liveAddressLocations?.onSourceSync(JSON.stringify([meta?.preservation?.version,meta?.sourceGeneration,meta?.sourceObservedAt,meta?.generatedAt,customerRegistry?.summary().version]),allStores);
     window.dispatchEvent(new Event('map-stores-replaced'));
     snapshotMeta = meta || snapshotMeta;
