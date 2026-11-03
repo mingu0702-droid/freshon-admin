@@ -15,6 +15,10 @@ import {staffStoreDetail} from './opsmap-abc/mapStaffDetail.js';
 import {mountPrivateDriverContact,createDriverAssignmentReader,createDatedDriverRouteReader} from './privateDriverContact.js';
 import {createStoredStaffDriverHistoryReader} from './storedStaffDriverHistory.js';
 import {createObservedStoreAddressReader} from './observedStoreAddressReader.js';
+import {createCustomerRegistry} from './customerRegistry.js';
+import {createCustomerRegistryStorage} from './customerRegistryStorage.js';
+import {mountPrivateCustomerRegistry} from './privateCustomerRegistry.js';
+import {prepareApprovedCoordinateSearch} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {callHub as protectedHubRead} from './opsmap-abc/phase2bHubReadClient.js';
 export function createProductionDetailReader(existing,{env=process.env,protectedRead=protectedHubRead}={}){
  return (action,params,options)=>env.OPSMAP_PRIVATE_READER_ENABLED==='true'&&['customerDetail','staffCustomerDetail'].includes(action)?protectedRead(action,params,options):existing(action,params,options);
@@ -39,6 +43,10 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  const router=express.Router(),root=path.join(publicDir,'opsmap');app.get(['/','/index.html','/daily-routes.html'],(q,r,n)=>env.OPSMAP_PRODUCTION_CANDIDATE_ENABLED==='1'?r.redirect(302,'/opsmap/'):n());app.use('/opsmap',router);
  if(env.OPSMAP_PRODUCTION_CANDIDATE_ENABLED!=='1'){router.use((_q,r)=>r.status(503).json({error:'OPSMAP_DISABLED'}));return {enabled:false};}
  const credentials=resolveProductionCredentials(env);
+ let customerStorage;try{customerStorage=createCustomerRegistryStorage({env,token:credentials.authToken});}catch{/* Missing optional Customer state never prevents the verified map. */}
+ const approvedRules=()=>customerStorage?.readRules().catch(()=>({}))||Promise.resolve({});
+ const readApprovedCoordinateSearch=async detail=>prepareApprovedCoordinateSearch({customerCode:detail.customerCode,originalAddress:detail.address,rules:await approvedRules()});
+ const customerRegistry=env.OPSMAP_PRIVATE_READER_ENABLED==='true'&&customerStorage?createCustomerRegistry({callHub:(action,params,options)=>protectedHubRead(action,params,{...options,useCache:false,privateRead:true,maxResponseBytes:524288}),readState:()=>customerStorage.readState(),writeState:value=>customerStorage.writeState(value)}):null;
  const authEnv={...env,MAP_STAFF_IDLE_HOURS:env.OPSMAP_AUTH_IDLE_HOURS||'24',MAP_STAFF_MAX_HOURS:env.OPSMAP_AUTH_MAX_HOURS||'168',KAKAO_MAP_JAVASCRIPT_KEY:env.KAKAO_MAP_JAVASCRIPT_KEY||existingJavaScriptKey(publicDir),MAP_STAFF_ID:env.OPSMAP_AUTH_ID||env.MAP_STAFF_ID,MAP_STAFF_PASSWORD_HASH:env.OPSMAP_AUTH_PASSWORD_HASH||env.MAP_STAFF_PASSWORD_HASH,MAP_STAFF_SESSION_SECRET:credentials.sessionSecret,MAP_STAFF_ORIGIN:env.OPSMAP_AUTH_ORIGIN,
   GITHUB_TOKEN:credentials.authToken,GITHUB_CACHE_REPO:env.OPSMAP_AUTH_STORE_REPO,OPSMAP_MANUAL_PIN_GITHUB_BRANCH:env.OPSMAP_AUTH_STORE_BRANCH,OPSMAP_PRODUCTION_SESSION_ENABLED:'1',OPSMAP_ROAD_ROUTE_ENABLED:productionRoadRouteFlag(env),OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',OPSMAP_PREPARED_DETAILS_ENABLED:'0',OPSMAP_APPROVED_PHOTO_VERIFY:'0',MAP_HYBRID_90DAY_ENABLED:'false'};
  let store;try{if(!authEnv.MAP_STAFF_ID||!authEnv.MAP_STAFF_PASSWORD_HASH||!authEnv.MAP_STAFF_SESSION_SECRET)throw Error();store=isolatedTestStore||createProductionSessionStore({env:authEnv});if(!store)throw Error();}catch{router.use((_q,r)=>r.status(503).json({error:'OPSMAP_AUTH_CONFIGURATION_REQUIRED'}));return {enabled:false};}
@@ -51,7 +59,8 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  const readStoredStaffHistory=createStoredStaffDriverHistoryReader({readSnapshot:readers.readPhase2bSnapshot,readObservedDeliveryDate:readers.phase2bTodayStatus});
  const readObservedStoreAddress=createObservedStoreAddressReader({readSnapshot:readers.readPhase2bSnapshot,readObservedDeliveryDate:readers.phase2bTodayStatus});
  const roadRouteBudget=createProductionRoadBudget({env,token:credentials.authToken});
- const api=mountProductionMapApi(router,{...readers,roadRouteBudget,readStoredStaffHistory,readObservedStoreAddress,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,mountPrivateExtensions:binding=>{
+ const api=mountProductionMapApi(router,{...readers,roadRouteBudget,readStoredStaffHistory,readObservedStoreAddress,readApprovedCoordinateSearch,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,mountPrivateExtensions:binding=>{
+  if(customerRegistry)mountPrivateCustomerRegistry({...binding,registry:customerRegistry,secret:credentials.sessionSecret,readRules:approvedRules});
   mountOfficialAdminBoundaries({...binding,origin:authEnv.MAP_STAFF_ORIGIN});
   manual.mount(binding);
   mountPrivateDriverContact({...binding,enabled:()=>env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',readDriverMaster:readers.readDriverMaster,readAssignment:createDriverAssignmentReader({readBaseVehicles:codes=>readers.sharedBaseCache?.get(codes),readStoredRoute:createDatedDriverRouteReader({today:readers.phase2bKstDate,readTodayStatus:readers.phase2bTodayStatus,readStoredRoute:readers.readStoredDriverRoute})})});

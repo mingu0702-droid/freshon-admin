@@ -35,7 +35,7 @@
     cancelManualRoadRoute();manualDraft?.clear();window.dispatchEvent(new CustomEvent('map-navigation-logout'));
     ++initialRequestId;++periodRequestId;++dateRequestId;
     for(const key of ['baseRequestId','routeRequestId','searchRequestId','addressRequestId','detailRequestId','todayRequestId'])++state[key];
-    clearTimeout(initialTimer);clearTimeout(periodTimer);clearTimeout(baseVehicleTimer);clearInterval(generalSnapshotPoll);generalSnapshotPoll=null;
+    clearTimeout(initialTimer);clearTimeout(periodTimer);clearTimeout(baseVehicleTimer);clearInterval(generalSnapshotPoll);generalSnapshotPoll=null;clearTimeout(customerRegistryRetry);customerRegistryRetry=null;customerRegistry?.purge();
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
     latestSnapshotRows=[];periodRows=[];allStores=[];operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();approvedMarkerOrder.clear();
@@ -171,6 +171,23 @@
   let datedSourceDate = '', dailyMeta = null;
   let dateChosenByUser = false;
   const geocodeCache = new Map();
+  let customerRegistryBusy=false,customerRegistryRetry=null,customerRegistryCheckedAt='',customerRegistrySourceCheckedAt='';
+  const customerRegistry=window.MapCustomerRegistry?.create({
+    authenticated:()=>document.body.dataset.mapStaffState==='authenticated',
+    readPage:async({cursor,signal,limit})=>{if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});const params=new URLSearchParams({limit:String(limit)});if(cursor)params.set('cursor',cursor);else if(customerRegistry.summary().version)params.set('since',customerRegistry.summary().version);const result=await fetchJson('/api/map-phase2b/private/customer-registry?'+params,{channel:'customer-registry-page',ttl:0,timeout:30000});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});if(Number.isFinite(Date.parse(result.meta?.checkedAt)))customerRegistrySourceCheckedAt=result.meta.checkedAt;return result;}
+  });
+  const registrySelection=()=>({customerCode:state.selected?.customerCode||'',query:$('#query')?.value||'',center:state.centerFilter,vehicles:selectedVehicles()});
+  function scheduleVisibleAddressRows(rows){liveAddressLocations?.schedule(customerRegistry?customerRegistry.locationRows(rows.filter(row=>row.coordinateSearch||!(Number.isFinite(row.lat)&&Number.isFinite(row.lng))),registrySelection(),{limit:40}):rows);}
+  async function syncCustomerRegistry(){
+    if(!customerRegistry||customerRegistryBusy||!generalMap||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return;
+    customerRegistryBusy=true;const owner=initialRequestId,before=customerRegistry.summary().version,known=new Set(allStores.map(r=>r.customerCode));
+    try{const options={selection:registrySelection(),maxPages:100},result=await (customerRegistry.summary().status==='logged-out'?customerRegistry.reconnect(options):customerRegistry.sync(options));if(owner!==initialRequestId||document.body.dataset.mapStaffState!=='authenticated'||state.mode!=='BASE_60D')return;
+      customerRegistryCheckedAt=customerRegistrySourceCheckedAt;
+      if(result.complete&&result.version!==before){replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();if(state.selected){const next=storesByCode.get(state.selected.customerCode);if(next)state.selected={...state.selected,...next};}state.fitRequested=false;await loadBaseMap();const added=allStores.filter(r=>!known.has(r.customerCode)).map(r=>r.customerCode);if(added.length)void loadBaseVehicles(added);window.dispatchEvent(new CustomEvent('map-customer-registry-updated',{detail:{count:result.count,checkedAt:customerRegistryCheckedAt,version:result.version}}));}
+      syncSourceFreshness();
+    }catch(error){if(owner===initialRequestId&&document.body.dataset.mapStaffState==='authenticated'){clearTimeout(customerRegistryRetry);customerRegistryRetry=setTimeout(()=>void syncCustomerRegistry(),15000);}}
+    finally{customerRegistryBusy=false;}
+  }
   let addressLocationFrame=null,addressFocusRequest=null;
   const liveAddressLocations=window.MapAddressLocations?.create({
     readAddress:async(row,signal)=>{const observedDate=row.raw?.lastDeliveryDate||storesByCode.get(row.customerCode)?.lastDeliveryDate||row.lastDeliveryDate||'',date=state.mode==='DATE_ROUTE'?row.deliveryDate||state.selectedDate:observedDate||snapshotMeta?.latestDate||localDate();const response=await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:'auto-address-'+row.customerCode,ttl:0,timeout:30000,headers:{'x-map-address-location':'1'}});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});const source=response.data,current=source?.sourceBasis==='CURRENT_CUSTOMER_LOOKUP',dated=source?.sourceBasis==='DATED_DELIVERY_LOOKUP'&&source.currentMasterState==='NOT_FOUND'&&source.detailDate===date&&observedDate===date;if(source?.customerCode!==row.customerCode||!current&&!dated||source?.locationState!=='SOURCE_ROW')throw Error('CURRENT_ADDRESS_UNCONFIRMED');return source;},
@@ -201,8 +218,9 @@
       for (const row of rows || []) merged.set(String(row.customerCode || row.code), row);
       rows = [...merged.values()];
     }
-    const vehicleMeta = new Map(SOURCE.vehicles.map((vehicle, index) => [String(vehicle.vehicle), { vehicle, index }]));
     const previousByCode = new Map([...latestSnapshotRows, ...allStores].map((row) => [String(row.customerCode || row.code), row]));
+    if(generalMap&&state.mode==='BASE_60D'&&customerRegistry){const observed=new Map(rows.map(row=>[String(row.customerCode||row.code),{...previousByCode.get(String(row.customerCode||row.code)),...row}]));for(const row of allStores)if(row.customerOnly&&!observed.has(row.customerCode))observed.set(row.customerCode,row);rows=customerRegistry.merge([...observed.values()]);}
+    const vehicleMeta = new Map(SOURCE.vehicles.map((vehicle, index) => [String(vehicle.vehicle), { vehicle, index }]));
     const next = [];
     storeByVehicleAndCode.clear();
     storesByCode.clear();
@@ -225,6 +243,7 @@
       if(item.periodAggregate?.verified===true)row.periodAggregate=item.periodAggregate;
       if(item.historyCoverage)row.historyCoverage=item.historyCoverage;
       if(item.currentMasterStatus)row.currentMasterStatus=item.currentMasterStatus;
+      for(const key of ['customerOnly','deliveryObserved','currentAddressHash','customerRegistryAddressHash','customerRegistryStatus','customerRegistryUpdatedAt','customerRegistryVersion','customerLifecycle','coordinateSearch','coordinateEvidence','addressChanged','coordinateStatus','resolutionStatus','addressLocationKey'])if(item[key]!==undefined)row[key]=item[key];
       row.driverKey = item.driverKey || "";
       row.driverIdentity = item.driverIdentity || '';
       row.driverName = item.driverName || "";
@@ -237,7 +256,7 @@
       if (!storesByCode.has(row.customerCode)) storesByCode.set(row.customerCode, row);
     });
     allStores = next;
-    liveAddressLocations?.onSourceSync(JSON.stringify([meta?.preservation?.version,meta?.sourceGeneration,meta?.sourceObservedAt,meta?.generatedAt]),allStores);
+    liveAddressLocations?.onSourceSync(JSON.stringify([meta?.preservation?.version,meta?.sourceGeneration,meta?.sourceObservedAt,meta?.generatedAt,customerRegistry?.summary().version]),allStores);
     window.dispatchEvent(new Event('map-stores-replaced'));
     snapshotMeta = meta || snapshotMeta;
   }
@@ -268,7 +287,7 @@
   }
   function syncSourceFreshness() {
     const meta=snapshotMeta||{};
-    $('#sourceCollectedAt').textContent=`최신 원천 수집일: ${meta.sourceObservedAt||meta.sourceCollectedAt||'미확인'}`;
+    $('#sourceCollectedAt').textContent=`최신 원천 수집일: ${meta.sourceObservedAt||meta.sourceCollectedAt||'미확인'}${customerRegistryCheckedAt?' · Customer 확인 '+new Date(customerRegistryCheckedAt).toLocaleTimeString('ko-KR',{hour12:false}):''}`;
     $('#mapAppliedRange').textContent=`현재 지도 반영기간: ${!generalMap?state.mode==='DATE_ROUTE'?state.selectedDate||'미확인':state.rangeStart&&state.rangeEnd?`${state.rangeStart} ~ ${state.rangeEnd}`:'미확인':meta.startDate&&meta.endDate?`${meta.startDate} ~ ${meta.endDate}`:'기간 미확인'}`;
   }
   function syncPeriodBasis() {
@@ -286,7 +305,7 @@
     const driverKeys=selectedDriverKeys.length?selectedDriverKeys:[state.driverKey];
     const candidates=periodBasis==='driver'&&driverKeys.length>1?[...new Map(driverKeys.flatMap(key=>MapPeriodUi.select(allStores,[],key,{vehicleBasis:'actual'})).map(row=>[row.customerCode,row])).values()]:MapPeriodUi.select(allStores, periodBasis === "vehicle" ? selectedVehicles() : [], periodBasis === "driver" ? state.driverKey : "", {vehicleBasis:periodBasis === "vehicle" ? "base" : "actual", includeUnvisited:generalAllStores && periodBasis === 'vehicle',useResidentSummary:generalMap&&window.MAP_ROLLING_DATE_INDEX_ENABLED===true&&periodBasis==='vehicle',periodComplete:generalMap||periodMeta?.segmented!==true||periodMeta.aggregateComplete===true});
     const rows = candidates
-      .filter(row => !state.centerFilter || periodBasis === "driver" || row.baseVehicleGroup === state.centerFilter);
+      .filter(row => (!generalMap||row.customerRegistryStatus!=='DELETED')&&(!state.centerFilter || periodBasis === "driver" || row.baseVehicleGroup === state.centerFilter));
     periodSelectionCache = {source:allStores,key,rows}; return rows;
   }
   async function refreshStoreSnapshot() {
@@ -330,7 +349,7 @@
       const label=$('#mapFreshnessStatus');if(label)label.title='자동 매장 조회 지연 · 기존 지도 유지';return{ok:false,changed:false};
     }finally{generalSnapshotPolling=false;}
   }
-  function startGeneralSnapshotPolling(){if(generalSnapshotPoll===null)generalSnapshotPoll=setInterval(()=>void pollGeneralSnapshot(),60000);}
+  function startGeneralSnapshotPolling(){if(generalSnapshotPoll===null)generalSnapshotPoll=setInterval(()=>{void pollGeneralSnapshot();void syncCustomerRegistry();},60000);}
   async function initializeGeneral() {
     startGeneralSnapshotPolling();
     recentPeriodMode=true;
@@ -356,6 +375,7 @@
       setPeriodViewState(allStores.length?'ready':'empty');await loadBaseMap();
       if(id!==initialRequestId||!generalMap)return;
       $('#freshnessState').textContent='전체 저장 매장 반영됨 — 운영 전체 매장 완전성 미검증';syncSourceFreshness();
+      void syncCustomerRegistry();
     }catch(error){if(id!==initialRequestId||isSilentRequestError(error))return;setPeriodViewState('error');renderPeriodStoreList([]);$('#freshnessState').textContent='일반지도 조회 실패 — 매장 수 미확인';}
   }
   async function initializePeriod() {
@@ -881,7 +901,7 @@
       listen('zoom_start',()=>{if(Date.now()>=state.suppressMapEventsUntil)userGesture();});
       listen('zoom_changed',()=>$('#map').classList.toggle('mapZoomFar',state.map.getLevel()>=9));
       listen('center_changed',scheduleDetailPosition);listen('zoom_changed',scheduleDetailPosition);
-      listen('idle',()=>{if(dateReady&&!markerFrame)markerFrame=requestAnimationFrame(()=>{markerFrame=null;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});liveAddressLocations?.schedule(state.selected?[state.selected,...state.currentRows]:state.currentRows);});});
+      listen('idle',()=>{if(dateReady&&!markerFrame)markerFrame=requestAnimationFrame(()=>{markerFrame=null;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});scheduleVisibleAddressRows(state.selected?[state.selected,...state.currentRows]:state.currentRows);});});
       listen('click',event=>{if(searchTemporaryClick)return searchTemporaryClick(event);clearSelection();});
       if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});for(const node of [$('#map'),$('#leftPanel'),$('#detailSection'),$('#approvedSiteHeader')])if(node)mapObserver.observe(node);}
       loadBaseMap();window.dispatchEvent(new CustomEvent('map-sdk-ready'));return state.map;
@@ -1980,7 +2000,8 @@
     let stores = state.mode === "BASE_60D" ? filteredPeriodStores()
       : filteredDateStores(allStores);
     stores.forEach(row=>{window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);});
-    liveAddressLocations?.schedule(state.selected?[state.selected,...stores]:stores);
+    const addressCandidates=state.selected?[state.selected,...stores]:stores;
+    scheduleVisibleAddressRows(addressCandidates);
     if (state.mode === "BASE_60D") stores = stores.map(row => ({ ...row, color: vehicleColor(row.vehicle) }));
     renderStops(stores, { numbered: state.mode === "DATE_ROUTE", vehicles: selected });
     if(state.mode==='DATE_ROUTE'){
@@ -2819,6 +2840,8 @@
   window.MapUiLocalBridge={
     state,
     refreshGeneralSnapshot:pollGeneralSnapshot,
+    refreshCustomerRegistry:syncCustomerRegistry,
+    customerRegistryStatus:()=>customerRegistry?.summary(),
     isDataReady:()=>state.mode==='DATE_ROUTE'?isDailyDataReady():dateReady,
     initMap,
     stores:()=>allStores.slice(),

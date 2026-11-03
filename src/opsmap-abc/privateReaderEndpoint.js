@@ -1,5 +1,6 @@
-const protectedActions=new Set(['customerDetail','staffCustomerDetail','customerSearch']);
+const protectedActions=new Set(['customerDetail','staffCustomerDetail','customerSearch','customerRegistry']);
 export function privateReaderEndpoint(action,env=process.env){
+  if(action==='customerRegistry'&&env.OPSMAP_PRIVATE_READER_ENABLED!=='true')throw Error('PRIVATE_READER_CONFIGURATION_REQUIRED');
   if(!protectedActions.has(action)||env.OPSMAP_PRIVATE_READER_ENABLED!=='true')return {url:env.HUB_API_URL,secret:env.HUB_API_SECRET,isolated:false};
   const raw=String(env.OPSMAP_PRIVATE_READER_URL||''),secret=String(env.OPSMAP_PRIVATE_READER_SECRET||'');let url;
   try{url=new URL(raw);}catch{throw Error('PRIVATE_READER_CONFIGURATION_REQUIRED');}

@@ -12,6 +12,19 @@ const knownSources = new Set(['MANUAL_VERIFIED', 'STORED_MATCH', 'KAKAO_EXACT_AD
 // Exactly the Customer map_coordinate_cache_v2 addressHash normalization.
 export const normalizeCoordinateAddress = value => typeof value === 'string' ? value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim() : '';
 export const coordinateAddressHash = value => { const text = normalizeCoordinateAddress(value); return text ? sha(text) : ''; };
+// Staff-only callers inject explicitly approved search rules from private storage.
+// The public module contains no customer bindings or address corrections.
+export function prepareApprovedCoordinateSearch({ customerCode, originalAddress, originalAddressHash, rules = {} } = {}) {
+  if (!codeValid(customerCode) || !rules || typeof rules !== 'object' || Array.isArray(rules) || !Object.hasOwn(rules, customerCode)) return null;
+  const approved = rules[customerCode];
+  const hash = coordinateAddressHash(originalAddress);
+  if (!approved || typeof approved !== 'object' || Array.isArray(approved) || !['BUILDING', 'CAMPUS'].includes(approved.accuracy) ||
+      !/^[a-f0-9]{64}$/.test(hash) || hash !== approved.originalAddressHash || originalAddressHash !== undefined && originalAddressHash !== hash) return null;
+  const query = externalCoordinateAddress(approved.query);
+  if (!query) return null;
+  return { customerCode, originalAddressHash: hash, query, queryHash: coordinateAddressHash(query),
+    accuracy: approved.accuracy, storeInteriorVerified: false, ruleVersion: 'USER_CONFIRMED_SEARCH_ADDRESS_20261104' };
+}
 // Private preparation only: never serialize rawBasic/rawDetail to a map/cache response.
 // Identity uses the unchanged Customer hash rule; a simplified search is separate evidence.
 export function preparePrivateCoordinateAddress(basicAddress, detailAddress = '') {

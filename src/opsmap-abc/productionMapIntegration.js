@@ -35,7 +35,7 @@ export function mountProductionMapApi(app,{
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
   publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement,sharedBaseCache,
   hybridEnabled=()=>process.env.MAP_HYBRID_90DAY_ENABLED==='true',hybridReadIndexedDay,hybridUiReadiness,hybridReadDateCatalog,hybridReadDatePage,hybridReadVerifiedDayText,hybridStoredIoEnabled=false,hubPublicationCutover=null,
-  mountPrivateExtensions,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,readObservedStoreAddress
+  mountPrivateExtensions,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,readObservedStoreAddress,readApprovedCoordinateSearch
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
@@ -166,6 +166,7 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
       ?await preparedCustomerDetails.read(detailIdentity,{legacyLoader,refresh:req.query.refresh==='1'})
       :await legacyLoader();
     const result=addressLocationRead?await queueAutomaticAddressRead(loadDetail):await loadDetail();
+    if(storeView&&readApprovedCoordinateSearch){const coordinateSearch=await readApprovedCoordinateSearch(result.value);if(coordinateSearch)result.value={...result.value,coordinateSearch};}
     // Even a cache HIT must recheck the employee session. Plaintext is never
     // sent to public snapshots, browser persistent storage, or response caches.
     return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:result.value,meta:{cache:result.meta},error:null}));

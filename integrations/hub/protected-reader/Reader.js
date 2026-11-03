@@ -9,9 +9,10 @@ function doPost(e){
     request=hubMapHttpParseRequest_(e);hubMapHttpValidateEnvelope_(request);
     const lock=LockService.getScriptLock();if(!lock.tryLock(1000))hubMapHttpRaise_('RATE_LIMITED','Please retry later.',429,true);
     try{hubMapHttpAuthenticate_(request);hubMapHttpRateLimit_();}finally{lock.releaseLock();}
-    if(request.action!=='customerDetail'&&request.action!=='staffCustomerDetail'&&request.action!=='customerSearch')hubMapHttpRaise_('INVALID_ACTION','This read action is not supported.',404,false);
+    if(request.action!=='customerDetail'&&request.action!=='staffCustomerDetail'&&request.action!=='customerSearch'&&request.action!=='customerRegistry')hubMapHttpRaise_('INVALID_ACTION','This read action is not supported.',404,false);
     let result;
-    if(request.action==='customerSearch'){hubMapHttpValidateOnlyKeys_(request.params,['q','limit']);result={data:protectedReaderSearch_(request.params),cached:false};}
+    if(request.action==='customerRegistry'){hubMapHttpValidateOnlyKeys_(request.params,['afterVersion','cursor','limit']);result={data:protectedReaderRegistry_(request.params),cached:false};}
+    else if(request.action==='customerSearch'){hubMapHttpValidateOnlyKeys_(request.params,['q','limit']);result={data:protectedReaderSearch_(request.params),cached:false};}
     else if(request.action==='customerDetail'){hubMapHttpValidateOnlyKeys_(request.params,['customerCode','date']);result=hubMapHttpHandleCustomerDetail_(request.params);}
     else{
       hubMapHttpValidateOnlyKeys_(request.params,['customerCode','date']);
