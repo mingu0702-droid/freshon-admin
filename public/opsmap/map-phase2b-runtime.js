@@ -856,7 +856,7 @@
       listen('zoom_start',()=>{if(Date.now()>=state.suppressMapEventsUntil)userGesture();});
       listen('zoom_changed',()=>$('#map').classList.toggle('mapZoomFar',state.map.getLevel()>=9));
       listen('center_changed',scheduleDetailPosition);listen('zoom_changed',scheduleDetailPosition);
-      listen('idle',()=>{if(dateReady&&!markerFrame)markerFrame=requestAnimationFrame(()=>{markerFrame=null;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});liveAddressLocations?.schedule(state.currentRows);});});
+      listen('idle',()=>{if(dateReady&&!markerFrame)markerFrame=requestAnimationFrame(()=>{markerFrame=null;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});liveAddressLocations?.schedule(state.selected?[state.selected,...state.currentRows]:state.currentRows);});});
       listen('click',event=>{if(searchTemporaryClick)return searchTemporaryClick(event);clearSelection();});
       if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});for(const node of [$('#map'),$('#leftPanel'),$('#detailSection'),$('#approvedSiteHeader')])if(node)mapObserver.observe(node);}
       loadBaseMap();window.dispatchEvent(new CustomEvent('map-sdk-ready'));return state.map;

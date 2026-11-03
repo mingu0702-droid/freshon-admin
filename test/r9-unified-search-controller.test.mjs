@@ -47,6 +47,16 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual}={}){
 }
 const store=(customerCode,customerName,address,more={})=>({customerCode,customerName,address,lat:37.5,lng:127.1,vehicle:'101',lastDeliveryDate:'2026-11-02',...more});
 
+test('map idle keeps an out-of-filter selected customer in the address queue',()=>{
+ const registration=source.split('\n').find(line=>line.includes("listen('idle',")&&line.includes('liveAddressLocations'));
+ assert(registration);
+ const selected=store('S990100','합성 선택점','',{vehicle:'223',lat:null,lng:null}),visible=store('S990101','합성 필터점','',{vehicle:'101'});
+ let idle,queued;
+ const c={dateReady:true,markerFrame:null,state:{mode:'BASE_60D',selected,currentRows:[visible]},listen:(name,callback)=>{idle=callback;},requestAnimationFrame:callback=>callback(),renderStops:()=>{},liveAddressLocations:{schedule:rows=>{queued=rows;}}};
+ vm.runInNewContext(registration,c);idle();
+ assert.equal(queued[0],selected);assert(queued.includes(visible));
+});
+
 test('search address normalization preserves building numbers and province aliases',()=>{
  const {context:c}=fixture();
  assert.equal(c.normalizeSearchAddress('서울특별시 강남구 합성로 14 (합성동)'),c.normalizeSearchAddress('서울 강남구 합성로14'));
