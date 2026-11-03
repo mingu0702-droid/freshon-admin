@@ -18,7 +18,8 @@
     "blockedReasons": ["FEATURE_DISABLED", "PERSISTENT_BUDGET_REQUIRED"]
   },
   "verification": {
-    "nodeTests": {"pass": 25, "fail": 0},
+    "nodeTests": {"pass": 27, "fail": 0},
+    "processLimitRegression": "Same durable service dispatches beyond 30000 only after ledger allowance renews; non-durable fallback stops at 30000",
     "existingExternalLinksEdgeChecks": {"pass": 24, "fail": 0},
     "newDirectionsEdgeChecks": {"pass": 16, "fail": 0},
     "browserScope": "LOCAL_REAL_EDGE_SYNTHETIC_PROVIDER_NOT_LIVE_KAKAO",
@@ -27,7 +28,7 @@
     "existingBrowserArtifactDirectory": "C:/Users/SFN/AppData/Local/Temp/opsmap-r10-directions-wEAYkI"
   },
   "changes": [
-    "Ignore obsolete process environment request limits while preserving the existing cumulative approved 30000-call ceiling",
+    "Ignore obsolete process environment request limits; durable mode uses ledger-only quota enforcement and keeps process usage as observation while preserving the ledger's approved 30000-call ceiling",
     "Preserve legacy daily approval and add explicit verified monthly approval with durable KST daily accounting",
     "Preserve CAS reservations, account matching, private-store checks, unknown-write blocking and failure accounting",
     "Automatically recalculate complete edited routes after the first successful explicit request; no initial, incomplete or error retry calls",

@@ -37,7 +37,7 @@ test('Production flag defaults OFF and rejects the generic/Stage flag',()=>{
 test('readiness separates local count, actual ledger verification and feature flag without provider requests',async()=>{
  const r=remote(),b=budget(r);let providerCalls=0;
  const s=service(b,async()=>{providerCalls++;return payload();},{env:{...env,OPSMAP_ROAD_ROUTE_ENABLED:'0'}});
- const status=await s.readiness();assert.equal(status.enabled,false);assert.equal(status.keyConfigured,true);assert.equal(status.keySource,'KAKAO_MOBILITY_REST_API_KEY');assert.equal(status.remaining,30000);assert.equal(status.approvedRemaining,1);assert.equal(status.budgetVerified,true);assert.equal(status.canRequest,false);assert.deepEqual(status.blockedReasons,['FEATURE_DISABLED']);assert.match(status.usageScope,/NOT_PROVIDER_QUOTA/);
+ const status=await s.readiness();assert.equal(status.enabled,false);assert.equal(status.keyConfigured,true);assert.equal(status.keySource,'KAKAO_MOBILITY_REST_API_KEY');assert.equal(status.remaining,null);assert.equal(status.requestLimit,null);assert.equal(status.processLimitEnforced,false);assert.equal(status.approvedRemaining,1);assert.equal(status.budgetVerified,true);assert.equal(status.canRequest,false);assert.deepEqual(status.blockedReasons,['FEATURE_DISABLED']);assert.match(status.usageScope,/NOT_PROVIDER_QUOTA/);
  assert.equal(r.writes,0);assert.equal(providerCalls,0);assert(!JSON.stringify(status).includes(key));assert(!JSON.stringify(status).includes(token));assert(!JSON.stringify(status).includes(ledger().roadBudget.accountHash));
 });
 test('missing ledger, private/write denial and unapproved branch never create or reserve anything',async()=>{

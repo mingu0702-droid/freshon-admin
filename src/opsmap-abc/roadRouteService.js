@@ -27,14 +27,15 @@ async function boundedJson(response,maxBytes=8388608){
 }
 export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date.now,budget=null,requireDurableBudget=false,maxCacheBytes=12*1024*1024}={}){
   const cache=new Map(),pending=new Map();let bytes=0,used=0,active=0;
-  // The shared ledger enforces the approved account allowance. Old smoke-test
-  // environment limits (100/300) must not impose a second, restart-local quota.
-  const limit=30000;
+  // A durable ledger owns account limits and period rollover. The local counter
+  // observes dispatches only; its fallback limit must not block a later month.
+  const durableBudget=!!budget&&budget.durable===true&&typeof budget.reserve==='function';
+  const limit=durableBudget?null:30000;
   const configured=()=>env.OPSMAP_ROAD_ROUTE_ENABLED==='1'||env.OPSMAP_ROAD_ROUTE_ENABLED==='true';
   const key=()=>String(env.KAKAO_MOBILITY_REST_API_KEY||env.KAKAO_REST_API_KEY||'').trim();
   const ttl=Math.min(300000,Math.max(0,Number(env.OPSMAP_ROAD_ROUTE_CACHE_MS)||60000));
   const remove=k=>{const row=cache.get(k);if(row)bytes-=row.bytes;cache.delete(k);};
-  function configuration(){return {enabled:configured(),keyConfigured:!!key()&&!/REDACTED|PLACEHOLDER|YOUR_|<|>/i.test(key()),keySource:env.KAKAO_MOBILITY_REST_API_KEY?'KAKAO_MOBILITY_REST_API_KEY':env.KAKAO_REST_API_KEY?'KAKAO_REST_API_KEY':'NONE',maxWaypoints:30,requestLimit:limit,used,remaining:Math.max(0,limit-used),usageScope:'PROCESS_SAFETY_COUNTER_NOT_PROVIDER_QUOTA',durableBudgetRequired:requireDurableBudget,persistentBudgetConfigured:!!budget&&budget.durable===true&&typeof budget.reserve==='function',budgetBackend:budget?.kind|| (budget?'HUB_ACTIONS_UNVERIFIED':'NONE'),budgetScope:budget?'EXTERNAL_APPROVED_BUDGET':'PROCESS_SAFETY_LIMIT_NOT_ACCOUNT_QUOTA'};}
+  function configuration(){return {enabled:configured(),keyConfigured:!!key()&&!/REDACTED|PLACEHOLDER|YOUR_|<|>/i.test(key()),keySource:env.KAKAO_MOBILITY_REST_API_KEY?'KAKAO_MOBILITY_REST_API_KEY':env.KAKAO_REST_API_KEY?'KAKAO_REST_API_KEY':'NONE',maxWaypoints:30,requestLimit:limit,used,remaining:limit===null?null:Math.max(0,limit-used),processLimitEnforced:!durableBudget,usageScope:durableBudget?'PROCESS_OBSERVABILITY_COUNTER_NOT_PROVIDER_QUOTA':'PROCESS_SAFETY_COUNTER_NOT_PROVIDER_QUOTA',durableBudgetRequired:requireDurableBudget,persistentBudgetConfigured:durableBudget,budgetBackend:budget?.kind|| (budget?'HUB_ACTIONS_UNVERIFIED':'NONE'),budgetScope:durableBudget?'DURABLE_APPROVED_ACCOUNT_LEDGER':budget?'EXTERNAL_APPROVED_BUDGET':'PROCESS_SAFETY_LIMIT_NOT_ACCOUNT_QUOTA'};}
   async function readiness(){
     const config=configuration(),blocked=[];
     if(!config.enabled)blocked.push('FEATURE_DISABLED');
@@ -52,8 +53,8 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
   }
   async function load(clean,plan){
     if(active>=3)throw error('PROVIDER_UNAVAILABLE',503);
-    if(used>=limit)throw error('QUOTA_EXCEEDED',429);
-    // Reserve the local slot before yielding to an optional shared budget.
+    if(limit!==null&&used>=limit)throw error('QUOTA_EXCEEDED',429);
+    // Bound concurrency before yielding; reserve durable allowance before dispatch.
     used++;active++;
     try{if(budget)await budget.reserve({cost:1,provider:'kakao-directions',api:plan.path==='/v1/waypoints/directions'?'waypoints':'directions'});}catch(e){used--;active--;throw error(e.code==='QUOTA_EXCEEDED'?'QUOTA_EXCEEDED':'CALL_POLICY_BLOCKED',429);}
     const timeout=Math.min(45000,Math.max(1000,Number(env.OPSMAP_ROAD_ROUTE_TIMEOUT_MS)||15000));
