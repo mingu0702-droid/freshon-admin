@@ -20,3 +20,16 @@ test('current Customer basic lookup is code-only; dated protected notes retain t
   const notes=await fetch(base+path,{headers:{cookie}});assert.equal(notes.status,200);await notes.json();assert.deepEqual(calls[1],{action:'staffCustomerDetail',params:{customerCode:'S970001',date:'2026-10-23'},privateRead:true});
  }finally{await new Promise(resolve=>server.close(resolve));}
 });
+
+test('only an authenticated verified Customer NOT_FOUND may use dated Delivery address projection',async()=>{
+ const env={MAP_STAFF_ID:'fixture',MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash('synthetic-password'),MAP_STAFF_SESSION_SECRET:'a'.repeat(43),MAP_STAFF_ORIGIN:'https://localhost:3000',OPSMAP_PREPARED_DETAILS_ENABLED:'0',OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0'};
+ let calls=0,notFound=true;const app=express();mountProductionMapApi(app,{previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),readPhase2bSnapshot:async()=>({rows:[]}),getSnapshotMemory:()=>({latestDate:'2026-11-04'}),phase2bKstDate:()=> '2026-11-04',normalizeCell:v=>String(v||'').trim(),normalizeDateValue:v=>v,phase2bSnapshotMeta:()=>({}),phase2bTodayStatus:async()=>({}),authOptions:{env},callHub:async()=>{throw Object.assign(Error('HUB_NOT_FOUND'),{upstreamStatus:404,sourceNotFound:notFound});},readObservedStoreAddress:async()=>{calls++;return{customerCode:'S990001',customerAddress:'합성시 합성로 10',deliveryDate:'2026-11-04',password:'SYNTHETIC_WITHHELD',accessMemo:'SYNTHETIC_WITHHELD'};}});
+ const server=await new Promise(r=>{const s=app.listen(0,'127.0.0.1',()=>r(s));}),base='http://127.0.0.1:'+server.address().port,path='/api/map-phase2b/private/customer-detail?view=store&customerCode=S990001&date=2026-11-04';
+ try{
+  assert.equal((await fetch(base+path)).status,401);assert.equal(calls,0);
+  const login=await fetch(base+'/api/map-phase2b/auth/login',{method:'POST',headers:{origin:env.MAP_STAFF_ORIGIN,'content-type':'application/json'},body:JSON.stringify({id:'fixture',password:'synthetic-password'})});assert.equal(login.status,200);const cookie=login.headers.get('set-cookie').split(';')[0],headers={cookie};
+  const result=await fetch(base+path,{headers});assert.equal(result.status,200);const value=await result.json();assert.equal(value.data.sourceBasis,'DATED_DELIVERY_LOOKUP');assert.equal(value.data.detailDate,'2026-11-04');assert.equal(value.data.currentMasterState,'NOT_FOUND');assert(!JSON.stringify(value).includes('SYNTHETIC_WITHHELD'));
+  notFound=false;await fetch(base+path,{headers});assert.equal(calls,1);
+  notFound=true;await fetch(base+path.replace('view=store&',''),{headers});assert.equal(calls,1);
+ }finally{await new Promise(r=>server.close(r));}
+});

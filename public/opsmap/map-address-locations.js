@@ -9,7 +9,7 @@
   const points=new Map(),pending=new Map(),outcomes=new Map(),queue=new Map(),bindings=new Map(),addresses=new Map(),active=new Set(),attempts=new Map();
   const sourceHash=row=>row.originalAddressHash||row.addressHash||row.raw?.originalAddressHash||row.raw?.addressHash||'';
   const conflicted=row=>row.searchAddressConflict===true||row.addressChanged===true||row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED';
-  const addressFor=row=>{const cached=addresses.get(row.customerCode),bound=cached?.sourceHash===sourceHash(row);return conflicted(row)?bound&&cached.conflict?cached.address:'':row.address||(bound?cached.address:'');};
+  const addressFor=row=>{const cached=addresses.get(row.customerCode),bound=cached?.sourceHash===sourceHash(row);return conflicted(row)?bound&&cached.conflict?cached.address:'':bound?cached.address:row.address||'';};
   const identity=row=>/^[A-Z]\d+$/.test(row?.customerCode||'')&&row.currentMasterStatus!=='UNAVAILABLE'?normalize(addressFor(row)):'';
   function apply(row){
    if(!row)return row;
@@ -85,7 +85,14 @@
    }
   }
   function clear(){epoch++;controller.abort();controller=new AbortController();points.clear();pending.clear();queue.clear();bindings.clear();outcomes.clear();addresses.clear();attempts.clear();syncToken='';}
-  return Object.freeze({apply,ensure,schedule,clear,onSourceSync,source:SOURCE,summary:()=>({located:[...outcomes.values()].filter(r=>r.state==='LOCATED').length,review:[...outcomes.values()].filter(r=>r.state==='REVIEW').length,retry:[...outcomes.values()].filter(r=>r.state==='RETRY').length,queued:queue.size,pending:pending.size,retention:'PAGE_MEMORY_ONLY'})});
+  function acceptAddress(row,source){
+   if(!row||established(row)||source?.customerCode!==row.customerCode||!source.address||source.locationState!=='SOURCE_ROW')return;
+   const current=source.sourceBasis==='CURRENT_CUSTOMER_LOOKUP',dated=source.sourceBasis==='DATED_DELIVERY_LOOKUP'&&source.currentMasterState==='NOT_FOUND'&&source.detailDate===row.lastDeliveryDate;
+   if(!current&&!dated)return;
+   if(normalize(addressFor(row))===normalize(source.address))return;
+   addresses.set(row.customerCode,{address:source.address,sourceHash:sourceHash(row),conflict:conflicted(row)});bindings.delete(row.customerCode);outcomes.delete(row.customerCode);apply(row);onChange(row.customerCode);
+  }
+  return Object.freeze({apply,ensure,schedule,clear,onSourceSync,acceptAddress,source:SOURCE,summary:()=>({located:[...outcomes.values()].filter(r=>r.state==='LOCATED').length,review:[...outcomes.values()].filter(r=>r.state==='REVIEW').length,retry:[...outcomes.values()].filter(r=>r.state==='RETRY').length,queued:queue.size,pending:pending.size,retention:'PAGE_MEMORY_ONLY'})});
  }
  root.MapAddressLocations=Object.freeze({create,source:SOURCE});
 })(typeof window==='object'?window:globalThis);

@@ -35,7 +35,7 @@ export function mountProductionMapApi(app,{
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
   publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement,sharedBaseCache,
   hybridEnabled=()=>process.env.MAP_HYBRID_90DAY_ENABLED==='true',hybridReadIndexedDay,hybridUiReadiness,hybridReadDateCatalog,hybridReadDatePage,hybridReadVerifiedDayText,hybridStoredIoEnabled=false,hubPublicationCutover=null,
-  mountPrivateExtensions,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService
+  mountPrivateExtensions,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,readObservedStoreAddress
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
@@ -153,11 +153,13 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
     const detailIdentity={customerCode,date:detailDate,view:storeView?'store':'notes'};
     const legacyLoader=()=>privateDetails.get(detailIdentity,{preferFresh:req.query.refresh==='1'||env.OPSMAP_PRIVATE_READER_ENABLED==='true',loader:async()=>{
       const upstreamStarted=performance.now();
-      let hub;
+      let hub,observed=null;
       try{hub=await callHub(storeView?'customerDetail':'staffCustomerDetail',storeView?{customerCode}:{customerCode,date:detailDate},{useCache:false,privateRead:true,addressLocationRead,...(storeView?{maxResponseBytes:65536,deadline:Date.now()+15000}:{})});}
+      catch(error){if(!storeView||error.sourceNotFound!==true||!readObservedStoreAddress)throw error;observed=await readObservedStoreAddress({customerCode,date:detailDate});if(!observed)throw error;hub={data:observed,meta:{sourceVersion:null}};}
       finally{if(!res.headersSent)addStaffTiming(res,'upstream',performance.now()-upstreamStarted);}
       if(String(hub.data?.customerCode||'').toUpperCase()!==customerCode)throw new Error('HUB_INVALID_DETAIL_CONTRACT');
-      const detail=(storeView?staffStoreDetail:staffCustomerDetail)(hub.data,{customerCode,date:storeView?null:detailDate});
+      const detail=(storeView?staffStoreDetail:staffCustomerDetail)(hub.data,{customerCode,date:storeView&&!observed?null:detailDate});
+      if(observed)Object.assign(detail,{sourceBasis:'DATED_DELIVERY_LOOKUP',source:'Delivery Admin verified date',currentMasterState:'NOT_FOUND',sourceObservedAt:observed.sourceObservedAt});
       return {value:detail,sourceVersion:hub.meta?.version||hub.meta?.sourceVersion||null};
     }});
     const loadDetail=async()=>env.OPSMAP_PREPARED_DETAILS_ENABLED==='1'

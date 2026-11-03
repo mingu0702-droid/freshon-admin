@@ -2061,9 +2061,11 @@ function buildStopFromDeliveryTaskRow(row, vehicle, sequence) {
     || deliveryStopText(nested.customer, ["name", "customerName", "customerNm", "storeName"]);
   const address = [
     deliveryStopText(row, ["address", "customerAddress", "roadAddress", "jibunAddress", "addr"])
-      || deliveryStopText(nested.customer, ["address", "roadAddress", "jibunAddress", "addr"]),
+      || deliveryStopText(nested.customer, ["address", "roadAddress", "jibunAddress", "addr"])
+      || deliveryStopText(row?.location, ["address", "roadAddress", "jibunAddress", "addr"]),
     deliveryStopText(row, ["addressDetail", "detailAddress", "customerAddressDetail"])
       || deliveryStopText(nested.customer, ["addressDetail", "detailAddress"])
+      || deliveryStopText(row?.location, ["addressDetail", "detailAddress"])
   ].filter(Boolean).join(" ").trim();
   const amount = deliveryStopText(row, ["salesAmount", "amount", "sales", "price", "totalAmount"])
     || deliveryStopText(nested.order, ["salesAmount", "amount", "price", "totalAmount"]);

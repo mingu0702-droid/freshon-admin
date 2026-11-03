@@ -142,7 +142,12 @@ export function kakaoCoordinateResult(body, address) {
   const searchAddress=value=>normalizeCoordinateAddress(value).replace(/서울특별시|서울시/g,'서울').replace(/경기도/g,'경기')
     .replace(/(부산|대구|인천|광주|대전|울산)광역시/g,'$1').replace(/세종특별자치시/g,'세종')
     .replace(/강원특별자치도|강원도/g,'강원').replace(/전북특별자치도|전라북도/g,'전북').replace(/전라남도/g,'전남')
-    .replace(/충청북도/g,'충북').replace(/충청남도/g,'충남').replace(/경상북도/g,'경북').replace(/경상남도/g,'경남').replace(/제주특별자치도|제주도/g,'제주').replace(/\s/g,'');
+    .replace(/충청북도/g,'충북').replace(/충청남도/g,'충남').replace(/경상북도/g,'경북').replace(/경상남도/g,'경남').replace(/제주특별자치도|제주도/g,'제주')
+    // Official splits only; exact city, road/lot and building number still match.
+    // https://www.incheon.go.kr/IC01070101 ; https://www.hscity.go.kr/manse/index.do
+    .replace(/^인천\s+(?:서구|서해구|검단구)\s+/,'인천 서구 ')
+    .replace(/^인천\s+(?:중구|영종구)\s+/,'인천 중구 ')
+    .replace(/^(경기\s+화성시)\s+(?:만세구|효행구|병점구|동탄구)\s+/,'$1 ').replace(/\s/g,'');
   const query=searchAddress(address);
   const matches = body.documents.filter(row => [row.address_name, row.road_address?.address_name, row.address?.address_name].some(value => value&&searchAddress(value)===query));
   if (matches.length !== 1) return null;

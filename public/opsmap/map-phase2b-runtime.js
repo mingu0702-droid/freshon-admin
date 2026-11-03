@@ -173,7 +173,7 @@
   const geocodeCache = new Map();
   let addressLocationFrame=null,addressFocusRequest=null;
   const liveAddressLocations=window.MapAddressLocations?.create({
-    readAddress:async(row,signal)=>{const date=row.lastDeliveryDate||snapshotMeta?.latestDate||localDate();const response=await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:'auto-address-'+row.customerCode,ttl:0,timeout:30000,headers:{'x-map-address-location':'1'}});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});if(response.data?.customerCode!==row.customerCode||response.data?.sourceBasis!=='CURRENT_CUSTOMER_LOOKUP'||response.data?.locationState!=='SOURCE_ROW')throw Error('CURRENT_ADDRESS_UNCONFIRMED');return response.data;},
+    readAddress:async(row,signal)=>{const date=row.lastDeliveryDate||snapshotMeta?.latestDate||localDate();const response=await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:'auto-address-'+row.customerCode,ttl:0,timeout:30000,headers:{'x-map-address-location':'1'}});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});const source=response.data,current=source?.sourceBasis==='CURRENT_CUSTOMER_LOOKUP',dated=source?.sourceBasis==='DATED_DELIVERY_LOOKUP'&&source.currentMasterState==='NOT_FOUND'&&source.detailDate===date&&row.lastDeliveryDate===date;if(source?.customerCode!==row.customerCode||!current&&!dated||source?.locationState!=='SOURCE_ROW')throw Error('CURRENT_ADDRESS_UNCONFIRMED');return source;},
     lookup:(address,signal)=>geocodeAddress(address,signal),
     queryFor:address=>NewAreaRequests.addressQuery(address,Phase2bUi.addressVariants),
     enabled:()=>document.body.dataset.mapStaffState==='authenticated'&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&window.MapManualPins?.verified?.()===true,
@@ -1337,6 +1337,7 @@
       if (requestId !== state.detailRequestId || state.mode!==detailMode || state.selected?.customerCode !== row.customerCode || detailMode==='DATE_ROUTE'&&state.selected?.vehicle!==detailVehicle || document.body.dataset.mapStaffState!=='authenticated') return;
       const exact = payload.data;
       if (!Phase2bUi.storeDetailMatches(exact,row.customerCode,detailDate)) throw Error('DETAIL_RESPONSE_CONTRACT');
+      liveAddressLocations?.acceptAddress(row,exact);liveAddressLocations?.schedule([row],{priority:true});
       // DOM only: never merge Customer addresses into rows, public summaries or IndexedDB.
       const title=$('#detail .storeName');if(title&&exact.customerName)title.textContent=exact.customerName;
       const facts=$('#detail .dotDetailFacts');
