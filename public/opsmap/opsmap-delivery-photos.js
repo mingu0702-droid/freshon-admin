@@ -76,6 +76,14 @@
       const status = node('p', message, host, 'deliveryPhotoStatus'); status.setAttribute('role', 'status');
       if (action) { const button = node('button', action.label, host); button.type = 'button'; button.onclick = action.run; }
     }
+    function dateSearch() {
+      const controls = node('div', undefined, host, 'deliveryPhotoControls');
+      const label = node('label', '배송일 ', controls), input = node('input', undefined, label);
+      input.type = 'date'; input.setAttribute('aria-label', '납품 사진 조회 배송일');
+      input.value = target?.date || new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+      const button = node('button', '배송일 조회', controls); button.type = 'button';
+      button.onclick = () => { if (target && validDate(input.value)) void open({customerCode: target.customerCode, date: input.value}); };
+    }
     function block(message = '직원 인증이 만료되었습니다. 로그인 후 다시 조회해 주세요.') {
       purge(); deadline = 0;
       shell(message, 'auth-required', { label: '직원 로그인', run: () => window.MapStaff?.open({ kind: 'notes', customerCode: target?.customerCode, date: target?.date }) });
@@ -162,7 +170,7 @@
         imagePromises.set(path, (async () => {
           const blob = await request(path, { signal: viewSignal }, async (response, requestSignal) => {
             const type = (response.headers.get('content-type') || '').split(';')[0].toLowerCase();
-            if (!/^image\/(jpeg|png|webp)$/.test(type)) throw Error('UNVERIFIED');
+            if (!/^image\/(jpeg|png|webp|gif)$/.test(type)) throw Error('UNVERIFIED');
             return new Blob([await readBody(response, MAX_IMAGE_BYTES, requestSignal)], { type });
           });
           if (id !== generation || viewSignal?.aborted || deadline <= Date.now()) throw Object.assign(Error('AUTH_REQUIRED'), { status: 401 });
@@ -198,6 +206,7 @@
     }
     function renderList() {
       host.replaceChildren(); host.dataset.state = 'ready'; node('h3', '납품 사진', host);
+      dateSearch();
       const label = node('label', '배송일 · 배송 기록', host), select = node('select', undefined, label); select.setAttribute('aria-label', '납품 사진 배송일');
       deliveries.forEach((delivery, i) => { const option = node('option', delivery.date + ' · ' + delivery.deliveryId, select); option.value = String(i); });
       const button = node('button', '조회', host); button.type = 'button'; button.onclick = () => selectDelivery(deliveries[Number(select.value)]);
@@ -209,6 +218,7 @@
       const list = deliveries.slice(); purge(); deliveries = list;
       const id = generation; selected = delivery; requestController = new AbortController();
       const { select, body } = renderList(); select.value = String(deliveries.findIndex(d => d.date === delivery.date && d.deliveryId === delivery.deliveryId));
+      host.dataset.state = 'loading';
       node('p', '사진 불러오는 중…', body, 'deliveryPhotoStatus');
       try {
         if (!await authorize(id)) return;
@@ -233,9 +243,21 @@
           }
         }
         node('p', selected.notes ? '배송 특이사항\n' + selected.notes : '배송 특이사항 없음', body, 'deliveryPhotoNotes');
-        // At most two thumbnail bodies are in flight; no preload of other dates or originals.
-        const work = async () => { while (tasks.length && alive(id)) await tasks.shift()(); };
-        await Promise.all([work(), work()]);
+        // Six thumbnails per explicit batch, at most two bodies in flight.
+        // Other dates and remaining originals never preload in the background.
+        let loadingBatch = false;
+        const more = node('button', '사진 더 보기', body); more.type = 'button';
+        const loadBatch = async () => {
+          if (loadingBatch || !alive(id)) return;
+          loadingBatch = true; more.disabled = true;
+          const batch = tasks.splice(0, 6);
+          const work = async () => { while (batch.length && alive(id)) await batch.shift()(); };
+          await Promise.all([work(), work()]);
+          loadingBatch = false; more.disabled = false; more.hidden = !tasks.length;
+        };
+        more.onclick = () => void loadBatch();
+        await loadBatch();
+        if (alive(id) && photoList.length && selected.status === 'READY') host.dataset.state = 'ready';
       } catch (error) { if (!requestController?.signal.aborted) failure(error, id); }
     }
     async function open(value) {
@@ -247,7 +269,7 @@
         const list = normalize(await request(API + '?' + new URLSearchParams(target)), target);
         if (!alive(id)) return;
         deliveries = list;
-        if (!list.length) { shell('사진 없음 · 조회 가능한 배송 기록이 없습니다.', 'empty'); return; }
+        if (!list.length) { shell('사진 없음 · 선택한 배송일에 조회 가능한 배송 기록이 없습니다.', 'empty'); dateSearch(); return; }
         const selectedDelivery = list.find(d => d.date === target.date) || list[0];
         await selectDelivery(selectedDelivery);
       } catch (error) { if (!requestController?.signal.aborted) failure(error, id); }

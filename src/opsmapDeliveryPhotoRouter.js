@@ -31,7 +31,7 @@ function failure(error, res) {
 }
 // Dependency injection preserves A's existing staff session and makes the feature default OFF.
 export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCurrent = () => false, source = null, enabled = false, prepareSource,
-  timeoutMs = 8000, maxImageBytes = 4 * 1024 * 1024, maxConcurrent = 3, now = Date.now } = {}) {
+  prepareDiscovery = false, timeoutMs = 8000, maxImageBytes = 4 * 1024 * 1024, maxConcurrent = 3, now = Date.now } = {}) {
   if (!app?.get || typeof requireStaff !== 'function') throw new Error('STAFF_AUTH_INJECTION_REQUIRED');
   const service = createDeliveryPhotoService({ source, enabled, now });
   let active = 0;
@@ -55,7 +55,7 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
     // OFF must block validation, session preparation and any source activity.
     if (!(typeof enabled === 'function' ? enabled() === true : enabled === true)) throw new DeliveryPhotoError('PHOTO_SOURCE_DISABLED', 503);
     const identity = validatePhotoQuery(req.query);
-    if (identity.deliveryId && typeof prepareSource === 'function') {
+    if ((identity.deliveryId || prepareDiscovery) && typeof prepareSource === 'function') {
       // Discovery never starts login; only a staff-authorized exact record may.
       if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
       await prepareSource(identity, { signal });
