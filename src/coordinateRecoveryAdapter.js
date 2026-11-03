@@ -21,7 +21,8 @@ export function rebindGpsRecoveryCheckpoint(previous,next,checkpoint,allowedCust
   const old=previous.rows[i],row=next.rows[i];
   if(unchanged(old)!==unchanged(row))fail('GPS_CHECKPOINT_MEMBERSHIP_CHANGED');
   if(JSON.stringify(old)===JSON.stringify(row))continue;
-  if(!allowed.has(old.customerCode)||point(old)||old.coordinateSource==='MANUAL_PIN'||!point(row)||row.coordinateSource!=='RAW_GPS'||row.coordinateAccuracy!=='UNVERIFIED'||!hash(row.originalAddressHash))fail('GPS_CHECKPOINT_LOCATION_CHANGED');
+  const gpsAccuracy=row.coordinateSource==='RAW_GPS'&&row.coordinateAccuracy==='UNVERIFIED'||row.coordinateSource==='HISTORICAL_GPS_SAME_BUILDING'&&row.coordinateAccuracy==='BUILDING';
+  if(!allowed.has(old.customerCode)||point(old)||old.coordinateSource==='MANUAL_PIN'||!point(row)||!gpsAccuracy||!hash(row.originalAddressHash))fail('GPS_CHECKPOINT_LOCATION_CHANGED');
   changed++;
  }
  if(changed!==allowed.size)fail('GPS_CHECKPOINT_COUNT');

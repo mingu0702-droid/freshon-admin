@@ -4,7 +4,10 @@ import crypto from 'node:crypto';
 const fail=(code,status=503)=>{throw Object.assign(new Error(code),{code,status});};
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 const geocodeLedger=Symbol('separate-geocode-ledger');
-export function createProductionGeocodeBudgetGithubStore(options={}){return createProductionManualPinGithubStore({...options,[geocodeLedger]:true});}
+export function createProductionGeocodeBudgetGithubStore(options={}){
+ const store=createProductionManualPinGithubStore({...options,[geocodeLedger]:true});let tail=Promise.resolve();
+ return {...store,transaction(work){const result=tail.then(()=>store.transaction(work));tail=result.catch(()=>{});return result;}};
+}
 export function createProductionManualPinGithubStore({repo,token,branch,productionBranch='main',fetchImpl=fetch,[geocodeLedger]:geocode=false}={}){
  if(repo!=='mingu0702-droid/freshon-cache'||!token||branch!=='production/opsmap-manual-pins'||branch===productionBranch)fail('MANUAL_PIN_GITHUB_CONFIG');
  const root='https://api.github.com/repos/'+repo,api=root+'/contents/opsmap-production/'+(geocode?'geocode-budget-v1.json':'manual-pins-v1.json'),headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'opsmap-manual-pin-stage'};
