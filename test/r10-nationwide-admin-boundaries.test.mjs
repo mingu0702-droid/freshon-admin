@@ -42,6 +42,23 @@ test('geometry response limit explicitly rejects a wide query while count querie
  assert.equal((await query([{lat:37.5665,lng:126.978}],{geometry:false})).metadata.matchedPointCount,1);
 });
 
+test('a complex coastal feature keeps exact joins, names and every original polygon',async()=>{
+ const entry=manifest.entries.find(e=>e.code==='36670360');
+ const [feature]=JSON.parse(gunzipSync(await fs.readFile(new URL(entry.shard,directory)))).features;
+ const [lng,lat]=feature.geometry.coordinates[0][0][0],points=[{lat,lng}];
+ const query=createOfficialAdminBoundaryQuery();
+ const joined=await query(points,{geometry:false});
+ assert.deepEqual(joined.matches,[{index:0,adminCodes:[entry.code]}]);
+ assert.deepEqual(joined.features,[]);
+ const detail=await query(points);
+ assert.deepEqual(detail.matches,joined.matches);
+ assert.deepEqual(detail.features,[feature]);
+ const overviewSource=JSON.parse(gunzipSync(await fs.readFile(new URL(entry.shard,overviewDirectory))));
+ const overview=await query(points,{detail:'overview'});
+ assert.deepEqual(overview.matches,joined.matches);
+ assert.deepEqual(overview.features,overviewSource.features);
+});
+
 test('invalid coordinate payloads and altered source proofs fail closed',async()=>{
  for(const body of [{points:[{lat:37,lng:127,customerCode:'S1'}]},{points:[{lat:NaN,lng:127}]},{points:[{lat:31,lng:127}]},{points:[],geometry:'false'},{points:[],detail:'hull'},{points:[],extra:true},{points:Array(15001).fill({lat:37,lng:127})}])assert.throws(()=>validateBoundaryQuery(body),/QUERY_INVALID/);
  await assert.rejects(createOfficialAdminBoundaryQuery({expectedManifestHash:'a'.repeat(64)})([]),/ADMIN_BOUNDARIES_INVALID/);
