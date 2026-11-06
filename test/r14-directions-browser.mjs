@@ -89,7 +89,7 @@ try{
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  assert.deepEqual(providerRequests[0],{method:'GET',points:[[127,37],[rows[3].lng,rows[3].lat]]});
  check('Osan center to one store displays synthetic road geometry, distance and duration',requests.length===1&&await page.evaluate(()=>__routeLines.size===1)&&await page.locator('#navDistance').textContent()==='0.1 km'&&await page.locator('#navDuration').textContent()==='1분');
- check('desktop totals are visible on the map and absent from route settings',await page.locator('.maparea > #mapRouteTotals').isVisible()&&await page.locator('#waypointPlanner #navDistance, #navigationSummary #navDuration').count()===0);
+ check('desktop totals are visible on the map and absent from route settings',await page.locator('.maparea > #mapRouteTotals').isVisible()&&await page.locator('#waypointPlanner #navDistance, #waypointPlanner #navDuration, #waypointPlanner .plannerMetrics').count()===0);
  await totals.screenshot({path:path.join(output,'map-route-totals-1366.png')});
  await page.locator('#clearPlanner').click();
  await page.evaluate(()=>MapNavigationEditor.replacePoints(['SYNTHETIC_0','SYNTHETIC_1','SYNTHETIC_2','SYNTHETIC_3']));

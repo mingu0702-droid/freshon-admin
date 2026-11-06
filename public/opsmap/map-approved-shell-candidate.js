@@ -54,7 +54,6 @@
     <div id="plannerStops"></div><button id="addWaypoint" type="button" class="full addWaypoint">＋ 경유지 추가</button>
     <div class="navEditorField" data-point-role="destination"><label for="plannerEnd"><span class="pointRole destination">도착</span> 목적지</label><div class="pointInputRow"><input id="plannerEnd" data-nav-role="destination" aria-label="목적지 검색" placeholder="고객코드·매장명·주소 검색" autocomplete="off"><button id="clearDestination" type="button" class="pointClear" aria-label="목적지 지우기" title="목적지 지우기">×</button></div></div>
     <button id="reversePlanner" type="button" class="textbtn reversePlanner">⇅ 순서 뒤집기</button>
-    <div class="plannerMetrics"><span>총거리 <b>— km</b></span><span>예상시간 <b>— 분</b></span></div>
     <div class="row plannerActions"><button id="planRoute" type="button" class="primary">경로 조회</button><button id="clearPlanner" type="button">전체 지우기</button></div>
     <div id="plannerStatus" class="plannerStatus" role="status" aria-live="polite" hidden></div>`;
   filters.after(planner);

@@ -69,14 +69,12 @@
   }});
   function renderManualRoadState(){
     if(!window.ManualRoadRouteUi)return;
-    const result=manualRoadResult,metrics=window.RoadRouteUi.metrics(result);
-    const count=manualDraft?.stops().length||0;
+    const result=manualRoadResult;
     const text=window.MapDotUi.describeRoute(result);
     $('#manualStatus').textContent=text;
     const status=$('#plannerStatus');if(status){status.hidden=!result||result.state==='idle';status.textContent=text;status.dataset.state=result?.state||'idle';}
     const button=$('#planRoute');if(button)button.disabled=result?.state==='loading';
     const advanced=$('#manualValidate');if(advanced)advanced.disabled=result?.state==='loading';
-    const values=$$('.plannerMetrics b');if(values.length===2){values[0].textContent=metrics.distance==='—'?'— km':metrics.distance;values[1].textContent=metrics.duration==='—'?'— 분':metrics.duration;}
     const badge=$('#waypointPlanner .sectiontitle .muted');if(badge)badge.textContent=['success','partial'].includes(result?.state)?'자동차 경로':result?.state==='loading'?'조회 중':result?.state==='error'?'조회 실패':result?.state==='empty'?'경로 없음':result?.state==='disabled'?'연결 대기':'자동차';
   }
   function cancelManualRoadRoute(){manualRoadController?.cancel();manualRoadLayer?.clear();}
