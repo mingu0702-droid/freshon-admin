@@ -37,18 +37,26 @@ const service=createRoadRouteService({env:{OPSMAP_ROAD_ROUTE_ENABLED:'1',KAKAO_R
  return new Response(JSON.stringify({routes:[{result_code:0,summary:{distance:sections.length*100,duration:sections.length*60},sections}]}),{headers:{'content-type':'application/json'}});
 }});
 const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
-const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false,centers:[{id:'osan',verified:true,sourceVersion:'SYNTHETIC',lat:37,lng:127}]};window.__routeLines=new Set();
+const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false,centers:[{id:'osan',verified:true,sourceVersion:'SYNTHETIC',lat:37,lng:127,address:'합성 오산센터 주소'},{id:'osan',verified:true,sourceVersion:'SYNTHETIC',lat:37,lng:127,address:'합성 오산센터 주소'},{id:'yeongnam',verified:true,sourceVersion:'SYNTHETIC',lat:35,lng:128}]};window.__routeLines=new Set();
 document.body.dataset.mapStaffState='authenticated';window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){},toggle(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
-class Bounds{extend(){}getSouthWest(){return new Coord(33,124)}getNorthEast(){return new Coord(39.5,132)}}
+class Bounds{constructor(){this.points=[]}extend(p){this.points.push([p.lat,p.lng])}getSouthWest(){return new Coord(33,124)}getNorthEast(){return new Coord(39.5,132)}}
 const listeners=new WeakMap();
 const event={
  addListener(target,name,fn){if(!listeners.has(target))listeners.set(target,new Map());const map=listeners.get(target);if(!map.has(name))map.set(name,new Set());map.get(name).add(fn);},
  removeListener(target,name,fn){listeners.get(target)?.get(name)?.delete(fn);},
  trigger(target,name){for(const fn of listeners.get(target)?.get(name)||[])fn();}
 };
-class FixtureMap{constructor(el,o){this.el=el;this.center=o.center;this.level=5}getCenter(){return this.center}setCenter(p){this.center=p;event.trigger(this,'center_changed');event.trigger(this,'idle')}panTo(p){this.setCenter(p)}getLevel(){return this.level}setLevel(v){this.level=v;event.trigger(this,'zoom_changed');event.trigger(this,'idle')}getBounds(){return new Bounds()}setBounds(){}relayout(){}getProjection(){return{containerPointFromCoords:p=>({x:350,y:300}),coordsFromContainerPoint:p=>new Coord(37,127)}}}
-class Overlay{constructor(o){this.opts=o}setMap(m){this.opts.content?.remove();if(m&&this.opts.content)m.el.append(this.opts.content)}}
+class FixtureMap{constructor(el,o){this.el=el;this.center=o.center;this.level=5;this.overlays=new Set()}getCenter(){return this.center}setCenter(p){this.center=p;event.trigger(this,'center_changed');event.trigger(this,'idle')}panTo(p){this.setCenter(p)}getLevel(){return this.level}setLevel(v){this.level=v;event.trigger(this,'zoom_changed');event.trigger(this,'idle')}getBounds(){return new Bounds()}setBounds(bounds){window.__lastFit=bounds.points}relayout(){this.overlays.forEach(overlay=>overlay.move())}getProjection(){return{containerPointFromCoords:p=>({x:this.el.clientWidth/2+(p.lng-127)*24000,y:210-(p.lat-37)*24000}),coordsFromContainerPoint:p=>new Coord(37,127)}}}
+class Overlay{constructor(o){this.opts=o;this.wrapper=document.createElement('div')}setMap(m){
+ this.wrapper.remove();this.map?.overlays.delete(this);if(!m||!this.opts.content)return;
+ this.map=m;m.overlays.add(this);
+ const {position,content,xAnchor=.5,yAnchor=.5,zIndex=0}=this.opts;
+ this.wrapper.style.cssText='position:absolute;z-index:'+zIndex+';transform:translate('+(-100*xAnchor)+'%,'+(-100*yAnchor)+'%)';
+ this.wrapper.dataset.fixtureCoords=position.lat+','+position.lng;
+ this.move=()=>{const point=m.getProjection().containerPointFromCoords(position);this.wrapper.style.left=point.x+'px';this.wrapper.style.top=point.y+'px';};
+ this.wrapper.append(content);m.el.append(this.wrapper);this.move();
+ }}
 class RoadLine extends Overlay{setMap(m){if(m){if(this.opts.path.length<3)throw Error('SYNTHETIC_GEOMETRY_MISSING');window.__routeLines.add(this);}else window.__routeLines.delete(this);}}
 window.kakao={maps:{LatLng:Coord,LatLngBounds:Bounds,Map:FixtureMap,CustomOverlay:Overlay,Polygon:Overlay,Polyline:RoadLine,event}};window.KakaoMapsAdapter={ready:()=>Promise.resolve(),reset(){}};`;
 let html=fs.readFileSync(path.join(root,'map-phase2b-preview.html'),'utf8').replace(/<script\b[\s\S]*?<\/script>/gi,'');
@@ -79,6 +87,40 @@ try{
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady());
  const check=(name,value)=>{assert(value,name);checks.push(name);};
  const totals=page.locator('#mapRouteTotals');
+ const marker=page.locator('#map .osanCenterMarker'),card=page.locator('#osanCenterCard');
+ await marker.waitFor();
+ await page.evaluate(()=>{window.__stableOsanMarker=document.querySelector('.osanCenterMarker');});
+ const stableMarker=()=>page.evaluate(()=>MapNavigation.metrics().centerOverlays===1&&
+   document.querySelectorAll('.centerMarker').length===1&&__stableOsanMarker===document.querySelector('.osanCenterMarker'));
+ check('exactly one warehouse marker uses the registered Osan coordinate',await marker.evaluate(node=>{
+  const anchor=node.closest('.osanCenterAnchor');
+  return anchor.parentElement.dataset.fixtureCoords==='37,127'&&node.querySelector('svg').getBoundingClientRect().width===28;
+ })&&await stableMarker());
+ await page.locator('#periodCenter').evaluate(node=>{node.value='all';node.dispatchEvent(new Event('change'));});
+ await page.evaluate(()=>{
+  const input=document.querySelector('#vehicleList input[value="101"]');
+  input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));
+ });
+ await marker.click();
+ check('warehouse card opens and marker survives all-center and truck filters',await stableMarker()&&await card.isVisible()&&
+   (await card.textContent()).includes('합성 오산센터 주소')&&await page.evaluate(()=>!MapUiLocalBridge.state.selected));
+ await card.locator('[data-center-origin]').click();
+ check('warehouse card sets the existing origin without a provider call',await page.locator('#plannerStart').inputValue()==='CENTER_osan'&&requests.length===0);
+ await page.screenshot({path:path.join(output,'osan-center-1366.png')});
+ await card.locator('[data-center-close]').click();
+ await page.evaluate(()=>{kakao.maps.event.trigger(MapUiLocalBridge.state.map,'click');MapNavigationEditor.clear();});
+ await page.setViewportSize({width:390,height:900});
+ await page.waitForFunction(()=>{
+  const map=document.querySelector('#map').getBoundingClientRect(),marker=document.querySelector('.osanCenterMarker').getBoundingClientRect();
+  return Math.abs((map.left+map.right-marker.left-marker.right)/2)<2;
+ });
+ await marker.click();
+ check('mobile warehouse marker and card remain visible after resize',await card.evaluate(node=>{
+  const r=node.getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth;
+ })&&await stableMarker());
+ await page.screenshot({path:path.join(output,'osan-center-390.png')});
+ await card.locator('[data-center-close]').click();
+ await page.setViewportSize({width:1366,height:900});
  await page.screenshot({path:path.join(output,'before-1366.png')});
  check('initial visit does not query Directions or show route totals',requests.length===0&&providerRequests.length===0&&!await totals.isVisible());
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
@@ -103,7 +145,7 @@ try{
  await page.evaluate(()=>{const map=MapUiLocalBridge.state.map;map.panTo(new kakao.maps.LatLng(37.02,127.02));map.setLevel(6);});
  await page.waitForFunction(()=>MapUiLocalBridge.state.map.getLevel()===6&&MapUiLocalBridge.state.map.getCenter().getLat()===37.02);
  assert.deepEqual(await page.evaluate(()=>Array.from(__routeLines,l=>l.opts.path.map(p=>[p.getLat(),p.getLng()]))),geometry);
- check('pan and zoom keep the synthetic path and map totals without a new call',requests.length===2&&await totals.isVisible());
+ check('pan and zoom keep the synthetic path, map totals and warehouse marker without a new call',requests.length===2&&await totals.isVisible()&&await stableMarker());
  await page.locator('[aria-label="경유지 2 위로"]').click();await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  await page.waitForFunction(()=>document.querySelector('#navLegs').textContent.includes('합성 매장 0 → 합성 매장 2'));
  check('waypoint reorder automatically recalculates exact new sequence once',requests.length===3&&requests[2].waypoints[0].lat===rows[2].lat&&requests[2].waypoints[1].lat===rows[1].lat&&providerRequests.length===3);
@@ -136,6 +178,13 @@ try{
  await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-11-02','2026-11-02'));
  await page.evaluate(()=>{const input=document.querySelector('#vehicleList input[value="101"]');input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));});
  await page.waitForFunction(()=>MapUiLocalBridge.navigationVisitRows().length===4);
+ check('date and vehicle selection preserve the same warehouse marker',await stableMarker());
+ const overlappingStore=page.locator('#map .marker[data-customer-code="SYNTHETIC_0"]');
+ await marker.click();
+ check('warehouse can be selected beside a coincident store',await card.isVisible()&&await page.evaluate(()=>!MapUiLocalBridge.state.selected));
+ await card.locator('[data-center-close]').click();
+ await overlappingStore.click();
+ check('coincident store remains directly selectable',await page.evaluate(()=>MapUiLocalBridge.state.selected?.customerCode==='SYNTHETIC_0')&&await stableMarker());
  await page.evaluate(()=>{MapNavigationEditor.setPoint('origin','CENTER_osan');document.querySelector('#waypointPlanner').open=true;document.querySelector('#dotRoadOptions').open=true;});
  await page.locator('#queryRecordedRoute').click();
  check('mobile saved visits sort by order and retain center origin',JSON.stringify(await page.evaluate(()=>MapNavigationEditor.values()))===JSON.stringify(['CENTER_osan','SYNTHETIC_3','SYNTHETIC_2','SYNTHETIC_1','SYNTHETIC_0'])&&requests.length===8);

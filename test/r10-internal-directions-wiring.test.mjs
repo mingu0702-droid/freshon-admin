@@ -32,6 +32,29 @@ async function fixture(extra={}){
  const route=async(requestId=1)=>realFetch(base+'/api/map-phase2b/private/manual-road-route',{method:'POST',headers,body:JSON.stringify({mode:'MANUAL_WAYPOINTS',requestId,origin:{id:'o',lat:37,lng:127},waypoints:[],destination:{id:'d',lat:37.01,lng:127.01}})});
  return {base,headers,get,route,calls,get state(){return state;},close:()=>new Promise(r=>server.close(r))};
 }
+test('staff SDK configuration projects only verified registered Osan data without outbound calls',async()=>{
+ const point={verified:true,lat:37.001234567,lng:127.001234567,sourceVersion:'SYNTHETIC:v1',address:'Synthetic warehouse',ignored:'never-project'};
+ const path='/api/map-phase2b/private/map-sdk-config?sdkOnly=1';
+ for(const [setting,expected] of [
+  [JSON.stringify(point),[{id:'osan',verified:true,lat:point.lat,lng:point.lng,sourceVersion:point.sourceVersion,address:point.address}]],
+  [undefined,undefined],
+  ['{',undefined],
+  [JSON.stringify({...point,verified:false}),undefined],
+  [JSON.stringify({...point,lat:String(point.lat)}),undefined],
+  [JSON.stringify({...point,lng:150}),undefined],
+  [JSON.stringify({...point,sourceVersion:' '}),undefined]
+ ]){
+  const f=await fixture({env:{KAKAO_MAP_JAVASCRIPT_KEY:'a'.repeat(32),OPSMAP_VERIFIED_OSAN_CENTER_JSON:setting}});
+  try{
+   assert.equal((await realFetch(f.base+path)).status,401);
+   const response=await realFetch(f.base+path,{headers:f.headers});
+   assert.equal(response.status,200);
+   assert.match(response.headers.get('cache-control'),/\bno-store\b/);
+   assert.deepEqual((await response.json()).centers,expected);
+   assert.deepEqual(f.calls,[]);
+  }finally{await f.close();}
+ }
+});
 test('Production defaults OFF with no inferred Hub budget backend',async()=>{
  const f=await fixture({env:{OPSMAP_ROAD_ROUTE_ENABLED:'1'}});try{assert.equal((await realFetch(f.base+'/api/map-phase2b/private/road-route/config')).status,401);const s=await f.get();assert.equal(s.enabled,false);assert.equal(s.persistentBudgetConfigured,false);assert.equal(s.budgetBackend,'NONE');assert.equal(s.approvedRemaining,null);assert(s.blockedReasons.includes('FEATURE_DISABLED'));assert(s.blockedReasons.includes('PERSISTENT_BUDGET_REQUIRED'));assert.equal((await f.route()).status,503);assert.equal(f.calls.length,0);}finally{await f.close();}
 });

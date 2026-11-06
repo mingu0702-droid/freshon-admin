@@ -31,6 +31,14 @@
       return {row,rank};
     }).filter(item=>item.rank<99).sort((a,b)=>a.rank-b.rank||String(a.row.customerName).localeCompare(String(b.row.customerName),'ko')).slice(0,limit).map(item=>item.row);
   }
+  const centerNames={osan:'오산센터',yeongnam:'영남센터',honam:'호남센터'};
+  function registeredCenters(){
+    const rows=root.KAKAO_MAP_CONFIG?.centers;
+    if(!Array.isArray(rows))return [];
+    return unique(rows.filter(row=>row&&Object.hasOwn(centerNames,row.id)&&row.verified===true&&
+      typeof row.sourceVersion==='string'&&row.sourceVersion.trim()&&located(row))
+      .map(row=>({...row,customerCode:'CENTER_'+row.id,customerName:centerNames[row.id],address:row.address||'',coordinateStatus:'VERIFIED'}))).filter(located);
+  }
   function visitCodes(rows,currentRows){
     if(!Array.isArray(rows)||rows.length<2)throw Error('방문 목록에서 두 개 이상의 매장을 선택해 주세요.');
     if(rows.length>32)throw Error('방문 목록이 '+rows.length+'개입니다. 출발지와 목적지를 포함해 32개까지 적용할 수 있습니다.');
@@ -95,7 +103,7 @@
       return {start,end:start+1,sameCoordinate,url:kakaoDestinationLink(destination,sameCoordinate?undefined:origin)};
     });
   }
-  root.MapNavigationLookup=Object.freeze({normalize,located,unique,resolve,search,visitCodes,recordedVisitCodes,createTemporaryPlaces,kakaoDestinationLink,kakaoRouteLinks,kakaoLegLinks});
+  root.MapNavigationLookup=Object.freeze({normalize,located,unique,resolve,search,registeredCenters,visitCodes,recordedVisitCodes,createTemporaryPlaces,kakaoDestinationLink,kakaoRouteLinks,kakaoLegLinks});
 })(typeof window==='object'?window:globalThis);
 
 (()=>{
@@ -123,13 +131,11 @@
   const centerChoices=document.createElement('div');centerChoices.className='navCenterChoices';centerChoices.setAttribute('aria-label','센터에서 출발');picker.before(centerChoices);
   const suggestions=document.createElement('div');suggestions.id='navSearchResults';suggestions.className='navSearchResults';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label','매장 검색 결과');
   const missing=document.createElement('details');missing.id='navMissingStores';missing.innerHTML='<summary>위치 확인이 필요한 매장</summary><div></div>';workspace.append(missing);
-  const centerNames={osan:'오산센터',yeongnam:'영남센터',honam:'호남센터'};
   const temporaryPlaces=lookup.createTemporaryPlaces();
   let addressSearchController=null,addressSearchGeneration=0;
   let recalculateTimer=null,autoRecalculate=false;
-  let centers=[],centerOverlays=[],routePointOverlays=[],lastResult=null,lastKind='manual',disposed=false,selectedCandidate=null,activeInput=null,roleSignature='',missingSignature='',suggestTimer=null,suggestionIndex=-1;
+  let centers=[],centerMarker=null,routePointOverlays=[],lastResult=null,lastKind='manual',disposed=false,selectedCandidate=null,activeInput=null,roleSignature='',missingSignature='',suggestTimer=null,suggestionIndex=-1;
   let externalDirectionsSignature='';
-  function centerRows(){return (window.KAKAO_MAP_CONFIG?.centers||[]).filter(row=>centerNames[row.id]&&row.verified===true&&typeof row.sourceVersion==='string'&&row.sourceVersion&&lookup.located(row)).map(row=>({...row,customerCode:'CENTER_'+row.id,customerName:centerNames[row.id],address:row.address||'',coordinateStatus:'VERIFIED'}));}
   function all(){return lookup.unique([...bridge.navigationStores(),...centers,...temporaryPlaces.values()]);}
   const resolve=value=>lookup.resolve(value,all());
   const status=text=>{$('#navPointStatus').textContent=text;};
@@ -319,12 +325,50 @@
     }catch(error){status(error.message);planner.open=true;}
   };
   function drawCenters(){
-    centerOverlays.forEach(overlay=>overlay.setMap(null));centerOverlays=[];centers=centerRows();centerChoices.replaceChildren();centerChoices.hidden=!centers.length;
+    centers=lookup.registeredCenters();
+    centerChoices.replaceChildren();centerChoices.hidden=!centers.length;
     if(centers.length){const label=document.createElement('span');label.textContent='센터에서 출발';centerChoices.append(label);}
     for(const center of centers){
       const button=document.createElement('button');button.type='button';button.textContent=center.customerName;button.onclick=()=>choosePoint('origin',center);centerChoices.append(button);
-      if(bridge.state.map){const label=document.createElement('button');label.type='button';label.className='centerMarker';label.textContent=center.customerName;label.onclick=()=>{updateSelected(center);if(bridge.state.mode==='DATE_ROUTE')planner.open=true;};const overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(center.lat,center.lng),content:label,zIndex:2});overlay.setMap(bridge.state.map);centerOverlays.push(overlay);}
     }
+    const center=centers.find(row=>row.id==='osan'),map=bridge.state.map;
+    const signature=center&&JSON.stringify([center.lat,center.lng,center.address,center.sourceVersion]);
+    if(centerMarker?.map===map&&centerMarker.signature===signature)return;
+    removeCenterMarker();
+    if(!center||!map)return;
+
+    const anchor=document.createElement('div');anchor.className='osanCenterAnchor';
+    const button=document.createElement('button');button.type='button';button.className='centerMarker osanCenterMarker';
+    button.setAttribute('aria-controls','osanCenterCard');button.setAttribute('aria-expanded','false');
+    button.innerHTML='<svg viewBox="0 0 28 28" aria-hidden="true"><path d="M3 12l11-7 11 7v11H3z" fill="currentColor"/><path d="M10 23v-8h8v8m-8-5h8m-8 3h8" fill="none" stroke="#1852a2" stroke-width="1.2"/></svg><span></span>';
+    button.querySelector('span').textContent=center.customerName;anchor.append(button);
+    const card=document.createElement('section');card.id='osanCenterCard';card.hidden=true;card.setAttribute('aria-label',center.customerName);
+    card.innerHTML='<strong></strong><p></p><div><button type="button" data-center-origin>출발지로</button><button type="button" data-center-close>닫기</button></div><small role="status"></small>';
+    card.querySelector('strong').textContent=center.customerName;
+    const address=card.querySelector('p');address.textContent=center.address;address.hidden=!center.address;
+    const feedback=card.querySelector('[role=status]');
+    button.onclick=event=>{
+      event.stopPropagation();
+      const open=card.hidden;card.hidden=!open;button.setAttribute('aria-expanded',String(open));
+      if(open){feedback.textContent='';updateSelected(center);}
+    };
+    card.querySelector('[data-center-close]').onclick=()=>closeCenterCard(true);
+    card.querySelector('[data-center-origin]').onclick=()=>{
+      autoRecalculate=false;
+      if(choosePoint('origin',center))feedback.textContent='출발지로 지정했습니다.';
+    };
+    card.onkeydown=button.onkeydown=event=>{if(event.key==='Escape')closeCenterCard(true);};
+    mapArea.append(card);
+    const overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(center.lat,center.lng),content:anchor,clickable:true,xAnchor:0,yAnchor:0,zIndex:42});
+    overlay.setMap(map);centerMarker={map,signature,button,card,overlay};
+  }
+  function closeCenterCard(restoreFocus=false){
+    if(!centerMarker||centerMarker.card.hidden)return;
+    centerMarker.card.hidden=true;centerMarker.button.setAttribute('aria-expanded','false');
+    if(restoreFocus)centerMarker.button.focus();
+  }
+  function removeCenterMarker(){
+    centerMarker?.overlay.setMap(null);centerMarker?.card.remove();centerMarker=null;
   }
   function syncMissing(){
     const vehicles=bridge.state.selectedVehicles,rows=lookup.unique(bridge.state.mode==='DATE_ROUTE'?bridge.navigationStores():bridge.stores()).filter(row=>(!vehicles.length||vehicles.includes(String(row.vehicle)))&&!lookup.located(row));
@@ -344,7 +388,7 @@
     }
     syncMissing();describeInputs();renderRolePins();syncExternalDirections();bridge.relayoutPreservingView?.();
   }
-  const onManual=event=>{if(event.detail?.state==='loading')clearTimeout(recalculateTimer);if(['success','partial'].includes(event.detail?.state))autoRecalculate=true;else if(['error','disabled'].includes(event.detail?.state))autoRecalculate=false;showResult(event.detail,'manual');},onRecorded=event=>showResult(event.detail,'recorded'),onSelected=()=>updateSelected(),onReady=()=>{roleSignature='';drawCenters();sync();};
+  const onManual=event=>{if(event.detail?.state==='loading')clearTimeout(recalculateTimer);if(['success','partial'].includes(event.detail?.state))autoRecalculate=true;else if(['error','disabled'].includes(event.detail?.state))autoRecalculate=false;showResult(event.detail,'manual');},onRecorded=event=>showResult(event.detail,'recorded'),onSelected=()=>{closeCenterCard();updateSelected();},onReady=()=>{roleSignature='';drawCenters();sync();};
   const onDraft=()=>{
     clearTimeout(recalculateTimer);status('');roleSignature='';hideSuggestions();describeInputs();renderRolePins();syncExternalDirections();window.MapDotUi?.arrangeNavigation?.();
     const values=editor.values();if(values.every(value=>!String(value||'').trim()))autoRecalculate=false;
@@ -352,11 +396,11 @@
     // Incomplete text, initial load and provider errors never cause API calls.
     if(autoRecalculate&&values.length>=2&&roleRows().length===values.length)recalculateTimer=setTimeout(()=>{if(!disposed&&autoRecalculate&&roleRows().length===editor.values().length)$('#planRoute').click();},450);
   };
-  const onContext=()=>{autoRecalculate=false;clearTimeout(recalculateTimer);hideSuggestions();temporaryPlaces.clear();editor.clear();selectedCandidate=null;updateSelected(null);lastResult=null;lastKind='manual';showResult({state:'idle'});roleSignature='';sync();};
+  const onContext=()=>{closeCenterCard();autoRecalculate=false;clearTimeout(recalculateTimer);hideSuggestions();temporaryPlaces.clear();editor.clear();selectedCandidate=null;updateSelected(null);lastResult=null;lastKind='manual';showResult({state:'idle'});roleSignature='';sync();};
   const events=[['map-manual-route',onManual],['map-recorded-route',onRecorded],['map-store-selected',onSelected],['map-sdk-ready',onReady],['map-navigation-logout',onContext],['map-navigation-context-changed',onContext],['map-navigation-draft',onDraft],['map-coordinate-updated',sync]];
   events.forEach(([name,listener])=>window.addEventListener(name,listener));
   const observer=new MutationObserver(sync);if($('#modeDaily'))observer.observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});if($('#runList'))observer.observe($('#runList'),{childList:true});
-  window.addEventListener('pagehide',event=>{if(event.persisted)return;disposed=true;cancelAddressSearch();clearTimeout(suggestTimer);clearTimeout(recalculateTimer);observer.disconnect();events.forEach(([name,listener])=>window.removeEventListener(name,listener));document.removeEventListener('pointerdown',outsidePointer);[...centerOverlays,...routePointOverlays].forEach(overlay=>overlay.setMap(null));centerOverlays=[];routePointOverlays=[];},{once:true});
-  window.MapNavigation=Object.freeze({resolve,search:value=>lookup.search(value,all()),sync,metrics:()=>({centerOverlays:centerOverlays.length,routePointOverlays:routePointOverlays.length,routePointCount:roleRows().length,temporaryPointCount:temporaryPlaces.values().length,routeState:lastResult?.state||'idle'})});
+  window.addEventListener('pagehide',event=>{if(event.persisted)return;disposed=true;cancelAddressSearch();clearTimeout(suggestTimer);clearTimeout(recalculateTimer);observer.disconnect();events.forEach(([name,listener])=>window.removeEventListener(name,listener));document.removeEventListener('pointerdown',outsidePointer);removeCenterMarker();routePointOverlays.forEach(overlay=>overlay.setMap(null));routePointOverlays=[];},{once:true});
+  window.MapNavigation=Object.freeze({resolve,search:value=>lookup.search(value,all()),sync,metrics:()=>({centerOverlays:Number(Boolean(centerMarker)),routePointOverlays:routePointOverlays.length,routePointCount:roleRows().length,temporaryPointCount:temporaryPlaces.values().length,routeState:lastResult?.state||'idle'})});
   drawCenters();updateSelected();sync();
 })();

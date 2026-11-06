@@ -3,6 +3,13 @@ const source=fs.readFileSync(new URL('../public/opsmap/kakao-maps-adapter.js',im
 function fixture(reply){let loads=0;const root={KAKAO_MAP_CONFIG:{},kakao:{maps:{load:callback=>{loads++;callback();}}},dispatchEvent(){}};
  vm.runInNewContext(source,{window:root,document:{getElementById:()=>null},fetch:reply,setTimeout,clearTimeout,AbortController,CustomEvent:class{}});
  return{root,loads:()=>loads};}
+test('registered center is carried by the existing SDK-only request',async()=>{
+ const centers=[{id:'osan',verified:true,sourceVersion:'SYNTHETIC',lat:37.001234567,lng:127.001234567}];
+ const calls=[],f=fixture(async url=>{calls.push(url);return {ok:true,json:async()=>({centers})};});
+ await f.root.KakaoMapsAdapter.ready();
+ assert.deepEqual(f.root.KAKAO_MAP_CONFIG.centers,centers);
+ assert.deepEqual(calls,['/api/map-phase2b/private/map-sdk-config?sdkOnly=1']);
+});
 test('authenticated configuration waiting does not consume the SDK initialization deadline',async()=>{
  const f=fixture(async()=>{await new Promise(r=>setTimeout(r,30));return{ok:true,json:async()=>({allowExternalAddressLookup:true,addressLookupServerProxy:true})};});
  await f.root.KakaoMapsAdapter.ready({timeoutMs:5,configTimeoutMs:500});assert.equal(f.loads(),1);assert.equal(f.root.KAKAO_MAP_CONFIG.allowExternalAddressLookup,true);

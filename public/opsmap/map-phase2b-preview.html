@@ -66,7 +66,7 @@
     <div class="legend"><div class="legendRow"><span class="pinSample"></span> 기준일 배송범위/착순</div><div class="legendRow"><span class="line"></span> 완료 착지 연결</div><div class="legendRow"><span class="line estimated"></span> 잔여 착지 연결</div></div>
     <section id="mobileRouteSheet" class="mobileRouteSheet"><div class="toolBody"><div class="sheetHead"><b>특정일 운행 조회</b><button id="closeMobileRoute" class="ghost">×</button></div><div class="routeGrid"><input id="mobileDate" type="date" value=""><button id="mobileToday" class="tiny">최신일</button></div><div class="routeGrid"><select id="mobileVehicle"><option value="101">101호</option><option value="110">110호</option><option value="221">221호</option></select><button id="mobileRoutePlan" class="primary">동선 조회</button></div><div id="mobileRouteSummary" class="idle" style="margin-top:7px">날짜와 호차를 선택해 조회하세요.</div></div></section>
   </div>
-  <script id="kakaoMapsSdk" data-sdk-src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=&amp;libraries=services&amp;autoload=false" src="kakao-maps-adapter.js?v=20261106-r15"></script>
+  <script id="kakaoMapsSdk" data-sdk-src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=&amp;libraries=services&amp;autoload=false" src="kakao-maps-adapter.js?v=20261107-r19-osan"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <section id="staffAuxContent" class="staffAuxCard" aria-label="직원 보호 상세" hidden></section>
   <section id="mobileWorkspace" class="mobileWorkspace"><button id="sheetExpand" class="sheetHandle" aria-label="패널 펼치기">━</button><nav class="sheetTabs" aria-label="지도 패널"><button data-sheet-tab="filters">호차·조건</button><button data-sheet-tab="stores" class="active">매장 목록</button><button data-sheet-tab="runs">운행목록</button><button data-sheet-tab="new">주소·신규권역</button><button data-sheet-tab="manual">경유 내비</button></nav><div id="mobileDateHome"></div><div id="mobileSheetContent"></div></section>
@@ -92,13 +92,13 @@
   <script type="application/x-map-staff" data-src="customer-registry.js?v=20261106-stale-gps"></script>
   <script type="application/x-map-staff" data-src="map-address-locations.js?v=20261106-stale-gps"></script>
   <script type="application/x-map-staff" data-src="vehicle-picker-regions.js?v=20261106"></script>
-  <script type="application/x-map-staff" data-src="map-phase2b-runtime.js?v=20261107-r18-no-territory"></script>
+  <script type="application/x-map-staff" data-src="map-phase2b-runtime.js?v=20261107-r19-osan"></script>
 
 <link rel="stylesheet" href="approved-site-source.css?v=20261028-r5">
 <link rel="stylesheet" href="map-approved-shell-candidate.css?v=20261106-vehicle-picker">
 <script type="application/x-map-staff" data-src="map-approved-shell-candidate.js?v=20261107-r18-no-territory"></script>
-<link rel="stylesheet" href="navigation-ui.css?v=20261107-route-totals">
-<script type="application/x-map-staff" data-src="navigation-ui.js?v=20261107-route-totals"></script>
+<link rel="stylesheet" href="navigation-ui.css?v=20261107-r19-osan">
+<script type="application/x-map-staff" data-src="navigation-ui.js?v=20261107-r19-osan"></script>
 <link rel="stylesheet" href="manual-map-pins.css?v=20261028-r5">
 <script type="application/x-map-staff" data-module="1" data-src="manual-map-pins.mjs?v=20261106-stale-gps"></script>
 <link rel="stylesheet" href="opsmap-delivery-photos.css?v=20261104-r14">

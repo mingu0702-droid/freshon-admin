@@ -1321,7 +1321,11 @@
           {mode:state.mode,maxMarkers:innerWidth<=760?120:180,
             grouping:focusedStops?'individual':'territory',
             protectedCodes:navCodes,sourceVersion:markerSourceVersion});
-    if (state.fitRequested) pointIndex.valid.forEach(row => bounds.extend(new kakao.maps.LatLng(row.lat,row.lng)));
+    const osanCenter=state.fitRequested&&window.MapNavigationLookup?.registeredCenters?.().find(row=>row.id==='osan');
+    if (state.fitRequested) {
+      if(osanCenter)bounds.extend(new kakao.maps.LatLng(osanCenter.lat,osanCenter.lng));
+      pointIndex.valid.forEach(row => bounds.extend(new kakao.maps.LatLng(row.lat,row.lng)));
+    }
     const entries = pins.map((row,index) => ({row,index,key:row.clusterKey||[row.virtual?'virtual':'store',row.customerCode || row.vehicle || '',row.lat,row.lng].join('|'),
       fingerprint:JSON.stringify([row.lat,row.lng,row.clusterBounds,row.clusterMemberKey,row.vehicle,row.customerName,row.address,row.status,row.order,row.clusterCount,row.lastDeliveryDate,row.visitCount,row.driverKey,row.clusterLabel,row.clusterColorKey,state.selected?.customerCode===row.customerCode,navCodes.includes(row.customerCode),Boolean(options.numbered),Boolean(row.virtual),Boolean(row.representative),Boolean(row.nearbyVehicle),state.mode,state.rangeStart,state.rangeEnd])}));
     const reconciled = MapPeriodUi.reconcile(markerEntries, entries, ({row,index}) => {
@@ -1341,7 +1345,7 @@
     markerEntries = reconciled.next;
     state.overlays = [...markerEntries.values()].map(entry=>entry.value);
     const mobileRoute = innerWidth <= 760 && options.numbered;
-    if (pointIndex.valid.length && state.fitRequested && !state.userMovedMap) {
+    if ((pointIndex.valid.length || osanCenter) && state.fitRequested && !state.userMovedMap) {
       state.suppressMapEventsUntil = Date.now() + 700;
       mapCamera?.relayout();
       state.map.setBounds(bounds, mobileRoute ? 130 : 55, 40, mobileRoute ? 260 : 55, 40);
