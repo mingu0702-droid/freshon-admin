@@ -4,13 +4,14 @@ import http from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
 import {createRoadRouteService} from '../src/opsmap-abc/roadRouteService.js';
+import {REGISTERED_OSAN_CENTER as osanCenter} from '../src/opsmap-abc/centerSettings.js';
 const {chromium}=await import(process.env.OPSMAP_TEST_PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve('public/opsmap'),output=process.env.OPSMAP_R14_DIRECTIONS_OUTPUT||fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r14-directions-'));
 fs.mkdirSync(output,{recursive:true});
-const rows=Array.from({length:8},(_,i)=>({customerCode:'SYNTHETIC_'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',order:8-i,lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
+const rows=Array.from({length:8},(_,i)=>({customerCode:'SYNTHETIC_'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',order:8-i,lat:osanCenter.lat+i*.001,lng:osanCenter.lng+i*.001,lastDeliveryDate:'2026-11-02'}));
 const dailyRows=rows.slice(0,4);
 const requests=[],providerRequests=[],reservations=[],external=[],errors=[],checks=[];
-let budgetDepleted=false;
+let budgetDepleted=false,snapshotRevision=1;
 const budget={
  durable:true,
  status:async()=>({durable:true,scope:'CUMULATIVE_APPROVED_ACCOUNT',remaining:budgetDepleted?0:30000-reservations.length}),
@@ -37,7 +38,8 @@ const service=createRoadRouteService({env:{OPSMAP_ROAD_ROUTE_ENABLED:'1',KAKAO_R
  return new Response(JSON.stringify({routes:[{result_code:0,summary:{distance:sections.length*100,duration:sections.length*60},sections}]}),{headers:{'content-type':'application/json'}});
 }});
 const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
-const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false,centers:[{id:'osan',verified:true,sourceVersion:'SYNTHETIC',lat:37,lng:127,address:'합성 오산센터 주소'},{id:'osan',verified:true,sourceVersion:'SYNTHETIC',lat:37,lng:127,address:'합성 오산센터 주소'},{id:'yeongnam',verified:true,sourceVersion:'SYNTHETIC',lat:35,lng:128}]};window.__routeLines=new Set();
+const centers=[osanCenter,osanCenter,{id:'yeongnam',verified:true,sourceVersion:'SYNTHETIC',lat:35,lng:128}];
+const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false,centers:${JSON.stringify(centers)}};window.__routeLines=new Set();
 document.body.dataset.mapStaffState='authenticated';window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){},toggle(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
 class Bounds{constructor(){this.points=[]}extend(p){this.points.push([p.lat,p.lng])}getSouthWest(){return new Coord(33,124)}getNorthEast(){return new Coord(39.5,132)}}
@@ -47,7 +49,7 @@ const event={
  removeListener(target,name,fn){listeners.get(target)?.get(name)?.delete(fn);},
  trigger(target,name){for(const fn of listeners.get(target)?.get(name)||[])fn();}
 };
-class FixtureMap{constructor(el,o){this.el=el;this.center=o.center;this.level=5;this.overlays=new Set()}getCenter(){return this.center}setCenter(p){this.center=p;event.trigger(this,'center_changed');event.trigger(this,'idle')}panTo(p){this.setCenter(p)}getLevel(){return this.level}setLevel(v){this.level=v;event.trigger(this,'zoom_changed');event.trigger(this,'idle')}getBounds(){return new Bounds()}setBounds(bounds){window.__lastFit=bounds.points}relayout(){this.overlays.forEach(overlay=>overlay.move())}getProjection(){return{containerPointFromCoords:p=>({x:this.el.clientWidth/2+(p.lng-127)*24000,y:210-(p.lat-37)*24000}),coordsFromContainerPoint:p=>new Coord(37,127)}}}
+class FixtureMap{constructor(el,o){this.el=el;this.center=o.center;this.level=5;this.overlays=new Set()}getCenter(){return this.center}setCenter(p){this.center=p;event.trigger(this,'center_changed');event.trigger(this,'idle')}panTo(p){this.setCenter(p)}getLevel(){return this.level}setLevel(v){this.level=v;event.trigger(this,'zoom_changed');event.trigger(this,'idle')}getBounds(){return new Bounds()}setBounds(bounds){window.__lastFit=bounds.points}relayout(){this.overlays.forEach(overlay=>overlay.move())}getProjection(){return{containerPointFromCoords:p=>({x:this.el.clientWidth/2+(p.lng-${osanCenter.lng})*24000,y:210-(p.lat-${osanCenter.lat})*24000}),coordsFromContainerPoint:p=>new Coord(${osanCenter.lat},${osanCenter.lng})}}}
 class Overlay{constructor(o){this.opts=o;this.wrapper=document.createElement('div')}setMap(m){
  this.wrapper.remove();this.map?.overlays.delete(this);if(!m||!this.opts.content)return;
  this.map=m;m.overlays.add(this);
@@ -70,7 +72,7 @@ const server=http.createServer(async(req,res)=>{
    try{data=await service.route(body);}catch(e){res.statusCode=e.status||500;data={ok:false,error:e.code};}
   }
   if(u.pathname.endsWith('/customer-search'))data={data:[{...rows[0],customerCode:'S100000'}]};
-  if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-11-02',startDate:'2026-09-04',endDate:'2026-11-02'}};
+  if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,version:String(snapshotRevision),latestDate:'2026-11-02',startDate:'2026-09-04',endDate:'2026-11-02'}};
   if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:'e'.repeat(64),baseVehicleStale:false})),meta:{version:'e'.repeat(64),stale:false}};
   if(u.pathname.endsWith('/assignments'))data={data:dailyRows.map(r=>({...r,deliveryDate:u.searchParams.get('date')})),meta:{complete:true,date:u.searchParams.get('date')}};
   if(u.pathname.endsWith('/route-plan'))data={data:{vehicle:'101',stops:dailyRows,totalStops:4},meta:{complete:true}};
@@ -93,10 +95,10 @@ try{
  await page.evaluate(()=>{window.__stableOsanMarker=document.querySelector('.osanCenterMarker');});
  const stableMarker=()=>page.evaluate(()=>MapNavigation.metrics().osanCenterOverlays===1&&MapNavigation.metrics().centerOverlays===2&&
    document.querySelectorAll('.centerMarker:not(.osanCenterMarker)').length===1&&__stableOsanMarker===document.querySelector('.osanCenterMarker'));
- check('exactly one warehouse marker uses the registered Osan coordinate',await marker.evaluate(node=>{
+ check('exactly one warehouse marker uses the registered Osan coordinate',await marker.evaluate((node,coords)=>{
   const anchor=node.closest('.osanCenterAnchor');
-  return anchor.parentElement.dataset.fixtureCoords==='37,127'&&node.querySelector('svg').getBoundingClientRect().width===28;
- })&&await stableMarker());
+  return anchor.parentElement.dataset.fixtureCoords===coords&&node.querySelector('svg').getBoundingClientRect().width===40;
+ },[osanCenter.lat,osanCenter.lng].join(','))&&await stableMarker());
  await page.locator('#periodCenter').evaluate(node=>{node.value='all';node.dispatchEvent(new Event('change'));});
  await page.evaluate(()=>{
   const input=document.querySelector('#vehicleList input[value="101"]');
@@ -104,7 +106,7 @@ try{
  });
  await marker.click();
  check('warehouse card opens and marker survives all-center and truck filters',await stableMarker()&&await card.isVisible()&&
-   (await card.textContent()).includes('합성 오산센터 주소')&&await page.evaluate(()=>!MapUiLocalBridge.state.selected));
+   (await card.textContent()).includes(osanCenter.address)&&await page.evaluate(()=>!MapUiLocalBridge.state.selected));
  await card.locator('[data-center-origin]').click();
  check('warehouse card sets the existing origin without a provider call',await page.locator('#plannerStart').inputValue()==='CENTER_osan'&&requests.length===0);
  await page.screenshot({path:path.join(output,'osan-center-1366.png')});
@@ -117,7 +119,8 @@ try{
  });
  await marker.click();
  check('mobile warehouse marker and card remain visible after resize',await card.evaluate(node=>{
-  const r=node.getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth;
+  const r=node.getBoundingClientRect(),label=document.querySelector('.osanCenterMarker span').getBoundingClientRect();
+  return r.width>0&&r.left>=0&&r.right<=innerWidth&&label.bottom<=r.top;
  })&&await stableMarker());
  await page.screenshot({path:path.join(output,'osan-center-390.png')});
  await card.locator('[data-center-close]').click();
@@ -126,6 +129,9 @@ try{
  await page.locator('#searchBtn').click();
  await page.waitForFunction(()=>MapUiLocalBridge.state.selected?.customerCode==='S100000');
  check('store search preserves the warehouse overlay while selecting a store',await stableMarker());
+ snapshotRevision++;
+ const refreshed=await page.evaluate(()=>MapUiLocalBridge.refreshGeneralSnapshot());
+ check('a new store snapshot retains the existing warehouse overlay',refreshed.ok&&refreshed.changed&&await stableMarker());
  await page.evaluate(()=>kakao.maps.event.trigger(MapUiLocalBridge.state.map,'click'));
  await page.screenshot({path:path.join(output,'before-1366.png')});
  check('initial visit does not query Directions or show route totals',requests.length===0&&providerRequests.length===0&&!await totals.isVisible());
@@ -135,7 +141,7 @@ try{
  check('verified Osan center is selectable',await page.locator('#plannerStart').inputValue()==='CENTER_osan');
  await page.locator('#planRoute').click();
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
- assert.deepEqual(providerRequests[0],{method:'GET',points:[[127,37],[rows[3].lng,rows[3].lat]]});
+ assert.deepEqual(providerRequests[0],{method:'GET',points:[[osanCenter.lng,osanCenter.lat],[rows[3].lng,rows[3].lat]]});
  check('Osan center to one store displays synthetic road geometry, distance and duration',requests.length===1&&await page.evaluate(()=>__routeLines.size===1)&&await page.locator('#navDistance').textContent()==='0.1 km'&&await page.locator('#navDuration').textContent()==='1분');
  check('desktop totals are visible on the map and absent from route settings',await page.locator('.maparea > #mapRouteTotals').isVisible()&&await page.locator('#waypointPlanner #navDistance, #waypointPlanner #navDuration, #waypointPlanner .plannerMetrics').count()===0);
  await totals.screenshot({path:path.join(output,'map-route-totals-1366.png')});
@@ -186,6 +192,10 @@ try{
  await page.waitForFunction(()=>MapUiLocalBridge.navigationVisitRows().length===4);
  check('date and vehicle selection preserve the same warehouse marker',await stableMarker());
  const overlappingStore=page.locator('#map .marker[data-customer-code="SYNTHETIC_0"]');
+ check('mobile warehouse icon matches a regular store pin size',await page.evaluate(()=>{
+   const warehouse=document.querySelector('.osanCenterMarker svg'),store=document.querySelector('.marker[data-customer-code="SYNTHETIC_0"] .pin');
+   return warehouse&&store&&getComputedStyle(warehouse).width===getComputedStyle(store).width&&getComputedStyle(warehouse).height===getComputedStyle(store).height;
+ }));
  await marker.click();
  check('warehouse can be selected beside a coincident store',await card.isVisible()&&await page.evaluate(()=>!MapUiLocalBridge.state.selected));
  await card.locator('[data-center-close]').click();
@@ -199,7 +209,8 @@ try{
  const providerCount=providerRequests.length;
  await page.reload();
  await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady());
- check('reconnect restores staff map without dispatch or old route',requests.length===requestCount&&await page.evaluate(()=>document.body.dataset.mapStaffState==='authenticated'&&MapNavigation.metrics().routeState==='idle'&&__routeLines.size===0));
+ check('reconnect restores the registered warehouse marker, staff map and no old route',requests.length===requestCount&&await page.evaluate(()=>document.body.dataset.mapStaffState==='authenticated'&&MapNavigation.metrics().osanCenterOverlays===1&&MapNavigation.metrics().routeState==='idle'&&__routeLines.size===0)&&
+   await marker.evaluate((node,coords)=>node.closest('.osanCenterAnchor').parentElement.dataset.fixtureCoords===coords,[osanCenter.lat,osanCenter.lng].join(',')));
  budgetDepleted=true;
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
  await page.evaluate(()=>MapNavigationEditor.replacePoints(['CENTER_osan','SYNTHETIC_6']));

@@ -27,6 +27,7 @@ import {createRoadRouteService,mountRoadRouteRoutes} from './roadRouteService.js
 import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
 import {createHubRoadBudget} from './hubRoadBudget.js';
 import {createKakaoCoordinateConnection,mountKakaoCoordinateConnection} from './kakaoCoordinateConnection.js';
+import {REGISTERED_OSAN_CENTER} from './centerSettings.js';
 import {assertDeliverySourceObservation} from '../snapshotRefreshEvidence.js';
 
 function registeredOsanCenter(setting){
@@ -50,7 +51,9 @@ export function mountProductionMapApi(app,{
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
-  const osanCenter=registeredOsanCenter(env.OPSMAP_VERIFIED_OSAN_CENTER_JSON);
+  const osanCenter=env.OPSMAP_VERIFIED_OSAN_CENTER_JSON===undefined
+    ? REGISTERED_OSAN_CENTER
+    : registeredOsanCenter(env.OPSMAP_VERIFIED_OSAN_CENTER_JSON);
   addressLookupService??=createKakaoCoordinateConnection({env});
   const preparedCustomerDetails=createPreparedCustomerDetailReader({callHub});
   if(roadRouteBudget===undefined)roadRouteBudget=createHubRoadBudget({callHub}); // Explicit null requires a separately configured backend.

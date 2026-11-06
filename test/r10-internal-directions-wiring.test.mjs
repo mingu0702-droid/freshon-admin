@@ -37,7 +37,7 @@ test('staff SDK configuration projects only verified registered Osan data withou
  const path='/api/map-phase2b/private/map-sdk-config?sdkOnly=1';
  for(const [setting,expected] of [
   [JSON.stringify(point),[{id:'osan',verified:true,lat:point.lat,lng:point.lng,sourceVersion:point.sourceVersion,address:point.address}]],
-  [undefined,undefined],
+  [undefined,[{id:'osan',verified:true,lat:37.1420107,lng:127.0794408,sourceVersion:'operator-confirmed:2026-11-07',address:'경기도 오산시 동부대로 446'}]],
   ['{',undefined],
   [JSON.stringify({...point,verified:false}),undefined],
   [JSON.stringify({...point,id:'yeongnam'}),undefined],
