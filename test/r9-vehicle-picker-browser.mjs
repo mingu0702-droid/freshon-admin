@@ -18,7 +18,9 @@ const stores=[
  ['203','서울 중구 합성로 13']
 ];
 const rows=stores.map(([vehicle,address],i)=>({customerCode:'S9800'+String(i+1).padStart(2,'0'),customerName:'SYNTHETIC_ONLY_'+i,address,vehicle,baseVehicle:vehicle,lat:35+i*.15,lng:127+i*.04,lastDeliveryDate:'2026-10-20'}));
-const today='2026-11-07', repeatedCode=rows[0].customerCode;
+const today='2026-11-07', routeFailureDate='2026-11-06', repeatedCode=rows[0].customerCode;
+let releaseRoutePlan;
+const heldRoutePlan=new Promise(resolve=>{releaseRoutePlan=resolve;});
 const todayRows=[
  {...rows[0],deliveryDate:today,sequence:1},
  {...rows[0],vehicle:'122',deliveryDate:today,sequence:2,address:'서울 동작구 합성중복길 2',lat:36.1,lng:127.1},
@@ -46,8 +48,12 @@ const server=http.createServer((req,res)=>{
   requests.push(u.pathname);let data={data:[],meta:{}};
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-10-20',startDate:'2026-08-01',endDate:'2026-10-20'}};
   else if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:r.vehicle,baseVehicleGroup:vehicles.find(v=>v.vehicle===r.vehicle).group,baseVehicleState:r.vehicle==='203'?'CONFLICT':'VERIFIED_MASTER',baseVehicleSource:basis,baseVehicleVersion:version,baseVehicleCheckedAt:checkedAt,baseVehicleStale:false})),meta:{version,basis,checkedAt,stale:false}};
-  else if(u.pathname.endsWith('/assignments')){const date=u.searchParams.get('date');data=date===today?{data:todayRows,meta:{complete:true,date}}:{data:[...rows.map(r=>({...r,deliveryDate:date,lastDeliveryDate:date})),{customerCode:'S980099',customerName:'SYNTHETIC_NEW_103',address:'인천 영종구 합성로 12',vehicle:'103',lat:36,lng:127,deliveryDate:date}],meta:{complete:true,date,reviewOnly:true}};}
+  else if(u.pathname.endsWith('/assignments')){const date=u.searchParams.get('date');data=date===today?{data:todayRows,meta:{complete:true,date}}:{data:[...rows.map(r=>({...r,deliveryDate:date,lastDeliveryDate:date})),{customerCode:'S980099',customerName:'SYNTHETIC_NEW_103',address:'인천 영종구 합성로 12',vehicle:'103',lat:36,lng:127,deliveryDate:date}],meta:{complete:true,date,reviewOnly:date!==routeFailureDate}};}
   else if(u.pathname.endsWith('/today-status')&&u.searchParams.get('date')===today)data={data:{vehicles:liveVehicles}};
+  else if(u.pathname.endsWith('/route-plan')&&u.searchParams.get('date')===routeFailureDate){
+   void heldRoutePlan.then(()=>{res.writeHead(503,{'content-type':'application/json'});res.end(JSON.stringify({error:'SYNTHETIC_ROUTE_FAILURE'}));});
+   return;
+  }
   res.setHeader('content-type','application/json');res.end(JSON.stringify(data));return;
  }
  if(u.pathname==='/opsmap/'||u.pathname==='/'){res.setHeader('content-type','text/html');res.end(html);return;}
@@ -152,10 +158,23 @@ try{
  await page.locator('#syncOperation').evaluate(button=>button.click());
  await page.waitForFunction(()=>!document.querySelector('#syncOperation').disabled&&MapUiLocalBridge.state.selected?.vehicle==='122');
  assert.deepEqual(await repeatedVisits(),expectedVisits);
- check('refresh preserves both assignments and restores the selected confirmed vehicle',requests.filter(p=>p.endsWith('/today-status')).length>liveBefore);
+ check('refresh reads current status once and restores the selected confirmed vehicle',requests.filter(p=>p.endsWith('/today-status')).length===liveBefore+1);
  await page.locator('#operationVehicle').evaluate(select=>{select.value='';});
  await changeDate('2026-10-21');
  check('historical date transition replaces both current assignments with that date’s rows',(await repeatedVisits()).length===1&&await page.evaluate(()=>MapUiLocalBridge.stores().every(row=>row.lastDeliveryDate==='2026-10-21')));
+ await page.locator('#operationVehicle').evaluate(select=>{select.value='101';select.dispatchEvent(new Event('change',{bubbles:true}));});
+ await page.locator('#chooseRoutes').click();
+ await page.locator('#selectedDate').evaluate((input,date)=>{input.value=date;},routeFailureDate);
+ try{
+  await Promise.all([
+   page.waitForRequest(request=>request.url().includes('/route-plan?date='+routeFailureDate+'&vehicle=101')),
+   page.locator('#queryRoutes').click()
+  ]);
+  await page.waitForFunction(()=>!document.querySelector('#routeDialog').open&&document.querySelector('#syncOperation').disabled&&document.querySelector('#runList [data-run-vehicle="101"]'),null,{timeout:5000});
+  check('verified visits are accessible before the auxiliary route response',await page.locator('#runList [data-run-vehicle="101"]').first().isVisible());
+ }finally{releaseRoutePlan();}
+ await page.waitForFunction(()=>!document.querySelector('#syncOperation').disabled&&document.querySelector('#mapStatusSub').textContent.includes('운행현황 조회 실패'));
+ check('route failure stays visible alongside the verified visits',await page.locator('#runStatusError').isVisible()&&await page.locator('#runList [data-run-vehicle="101"]').count()===rows.filter(row=>row.vehicle==='101').length);
  check('no page errors or remote calls',errors.length===0&&external.length===0);
  const result={scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_MAP',output,checks,errors,externalCalls:external.length,requests};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

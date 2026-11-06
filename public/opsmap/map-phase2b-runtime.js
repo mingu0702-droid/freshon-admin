@@ -642,7 +642,7 @@
     })();return baseVehicleRequest;
   }
 
-  async function changeSelectedDate(date,queryConditions=null) {
+  async function changeSelectedDate(date,queryConditions=null,{skipOperationStatus=false}={}) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date+'T00:00:00Z')) || new Date(date+'T00:00:00Z').toISOString().slice(0,10)!==date || date > localDate()) return;
     const contextChanged=state.mode!=='DATE_ROUTE'||date!==state.selectedDate;
     generalMap=false;resetRoadRoute();cancelManualRoadRoute();
@@ -687,7 +687,9 @@
       if (response.meta?.complete !== true || response.meta.date !== date) throw new Error("날짜별 편성 검증 실패");
       let rows = response.data || [];
       if(!Array.isArray(rows)||rows.some(row=>!row||row.deliveryDate&&row.deliveryDate!==date))throw new Error('배송일이 일치하지 않습니다.');
-      if (date === localDate() && response.meta.reviewOnly!==true && window.MAP_ROLLING_DATE_INDEX_ENABLED!==true) {
+      // Current Delivery assignments already carry stop status from today-status.
+      const assignmentsIncludeLiveStatus = response.meta.source === "Delivery Admin current dispatch";
+      if (date === localDate() && !assignmentsIncludeLiveStatus && response.meta.reviewOnly!==true && window.MAP_ROLLING_DATE_INDEX_ENABLED!==true) {
         try {
           const live = await fetchJson(`/api/map-phase2b/preview/today-status?date=${date}`, { channel: "selected-date-live", ttl: 30000, timeout: 45000 });
           const byVisit = new Map(rows.map((row) => [datedVisitKey(row.vehicle || row.confirmedVehicle, row.customerCode || row.code), row]));
@@ -708,8 +710,8 @@
       ensureDateVehicles();
       datedSourceDate=date;dateReady = true;
       await loadBaseMap();
-      // Historical driver identity comes from assignment history, not today's master.
-      await loadOperationStatus(primarySelectedVehicle(), selectedVehicles().length === 1);
+      // The verified visit list is ready while the selected vehicle status loads.
+      if (!skipOperationStatus && token===dateRequestId) void loadOperationStatus(primarySelectedVehicle(), selectedVehicles().length === 1);
     } catch (error) {
       if (token !== dateRequestId || isSilentRequestError(error)) return;
       dateReady=false;datedSourceDate='';state.currentRows=[];state.routeRows=[];operationStops=[];clearMap();renderRunList();
@@ -2672,7 +2674,8 @@
     const requestId = ++state.todayRequestId;
     const current = date === localDate();
     const url = current ? `/api/map-phase2b/preview/today-status?date=${date}` : `/api/map-phase2b/preview/route-plan?date=${date}&vehicle=${encodeURIComponent(vehicle)}`;
-    if (refresh) memoryResponses.delete(url);
+    if (refresh && !current) memoryResponses.delete(url);
+    $("#runStatusError")?.remove();
     $("#syncOperation").disabled = true;
     try {
       const payload = await fetchJson(url, { channel: "operation-status", ttl: 30000, timeout: 45000 });
@@ -2710,9 +2713,13 @@
     } catch (error) {
       if (isSilentRequestError(error) || requestId !== state.todayRequestId || date !== state.selectedDate || state.mode !== "DATE_ROUTE" || filterIdentity!==queryFilterIdentity()) return;
       updateOperationMetrics(null);
-      operationStops = []; renderRunList();
-      $("#runList").textContent = "운행 목록을 불러오지 못했습니다. 상단 동기화로 재시도해주세요.";
       resetRoadRoute();
+      const message = document.createElement("p");
+      message.id = "runStatusError";
+      message.className = "hint";
+      message.setAttribute("role", "status");
+      message.textContent = "운행현황 조회 실패 · 상단 동기화로 재시도해 주세요.";
+      $("#runList").prepend(message);
       $("#mapStatusSub").textContent = `운행현황 조회 실패 · ${error.message}${lastRefreshedAt ? ' · 마지막 확인 시각 ' + lastRefreshedAt : ''}`;
     } finally {
       if (requestId === state.todayRequestId) $("#syncOperation").disabled = false;
@@ -2729,10 +2736,12 @@
     memoryResponses.delete(`/api/map-phase2b/preview/assignments?date=${date}`);
     memoryResponses.delete(`/api/map-phase2b/preview/today-status?date=${date}`);
     state.fitRequested = false;
-    await changeSelectedDate(date);
-    if (date !== state.selectedDate || !dateReady) return;
+    const selection = changeSelectedDate(date, null, { skipOperationStatus: true });
+    const token = dateRequestId;
+    await selection;
+    if (token!==dateRequestId || !isDailyDataReady()) return;
     await loadOperationStatus(selected, routeOpen, {}, true);
-    if (detail) selectStore(storeByVehicleAndCode.get(`${detail.vehicle}|${detail.customerCode}`) || { ...detail, vehicle: "" }, null, false);
+    if (token===dateRequestId && detail) selectStore(storeByVehicleAndCode.get(`${detail.vehicle}|${detail.customerCode}`) || { ...detail, vehicle: "" }, null, false);
   }
 
   function exportNewArea(format) {
@@ -2986,7 +2995,8 @@
       if(state.mode!=='DATE_ROUTE'||!valid(start)||start!==end||end>localDate())return {ok:false,message:'일자별 운행은 선택한 배송일 한 날짜만 조회합니다.'};
       const queryConditions={vehicles:selectedVehicles().slice(),centerFilter:'',scope:periodVehicleScope};
       await changeSelectedDate(end,queryConditions);
-      return {ok:dateReady,message:dateReady?'':$('#freshnessState').textContent};
+      const ready=isDailyDataReady()&&state.selectedDate===end;
+      return {ok:ready,message:ready?'':$('#freshnessState').textContent};
     },
     setGeneralLegend(html){originalRouteLegend=html;syncRoadRoutePanel();},
     lookupStore(value){const key=String(value||'').trim();return allStores.filter(row=>[row.customerCode,row.customerName,row.address].includes(key));},
