@@ -3,6 +3,7 @@
   'use strict';
   const API = '/api/map-phase2b/private/delivery-photos';
   const KINDS = Object.freeze({ REFRIGERATOR_DOOR: '냉장고 문 확인', ENTRANCE_LOCK: '출입문 잠금 확인' });
+  const HISTORY_KIND = 'FRONT_DOOR_DELIVERY', HISTORY_TITLE = '매장 문 앞 납품 사진';
   const MAX_PHOTOS = 40, MAX_IMAGE_BYTES = 4 * 1024 * 1024, MAX_JSON_BYTES = 256 * 1024;
   const SAFE_FAILURE_CODES = new Set(['UNVERIFIED', 'SOURCE_UNAVAILABLE', 'NOT_CONFIGURED', 'INVALID_SOURCE_RESPONSE',
     'UPSTREAM_AUTH_REQUIRED', 'PHOTO_APPROVAL_REQUIRED', 'PHOTO_BUDGET_NOT_CONFIGURED', 'PHOTO_BUDGET_NOT_INITIALIZED', 'PHOTO_BUDGET_INVALID', 'PHOTO_BUDGET_NOT_APPROVED', 'PHOTO_BUDGET_EXHAUSTED', 'PHOTO_BUDGET_CONFLICT', 'PHOTO_BUDGET_READBACK_UNVERIFIED', 'PHOTO_BUDGET_UNAVAILABLE', 'PHOTO_SOURCE_DISABLED', 'PHOTO_LOOKUP_FAILED', 'PHOTO_FORBIDDEN', 'PHOTO_NOT_FOUND',
@@ -13,6 +14,8 @@
   const SAFE_STAGES=new Set(['source-session','source-login','source-http','source-content-type','source-json','source-identity','source-attachments','source-category','source-media','source-timeout','source-size','staff-session']);
   const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
   const safeText = (value, maximum) => typeof value === 'string' && value.length <= maximum;
+  const validRecordId = value => typeof value === 'string' && /^\d{1,20}$/.test(value);
+  const photoTitle = photo => photo.kind === HISTORY_KIND ? HISTORY_TITLE : KINDS[photo.kind];
   function mediaPath(value) {
     if (typeof value !== 'string') throw Error('UNVERIFIED');
     const url = new URL(value, location.href);
@@ -23,6 +26,7 @@
     const data = payload?.ok === true && payload.data;
     if (!data || data.customerCode !== target.customerCode || !Array.isArray(data.deliveries) || data.deliveries.length > 100) throw Error('UNVERIFIED');
     const identities = new Set();
+    if (target.history && data.coverage !== 'INCOMPLETE') throw Error('UNVERIFIED');
     return data.deliveries.map(delivery => {
       if (delivery.customerCode !== target.customerCode || !validDate(delivery.date) || !safeText(delivery.deliveryId, 128) || !delivery.deliveryId || (target.date && delivery.date !== target.date) || (target.deliveryId && delivery.deliveryId !== target.deliveryId)) throw Error('UNVERIFIED');
       const identity = delivery.date + '\n' + delivery.deliveryId;
@@ -33,12 +37,17 @@
       for (const photo of delivery.photos) {
         if (!safeText(photo.id, 128) || !photo.id || ids.has(photo.id)) throw Error('UNVERIFIED');
         ids.add(photo.id);
-        if (!KINDS[photo.kind]) { unclassified = true; continue; }
-        photos.push({ id: photo.id, kind: photo.kind, thumbnailUrl: mediaPath(photo.thumbnailUrl), url: mediaPath(photo.url) });
+        if (target.history) {
+          if (photo.kind !== HISTORY_KIND || !validRecordId(photo.recordId) || !validRecordId(delivery.deliveryId)) throw Error('UNVERIFIED');
+        } else if (!Object.hasOwn(KINDS, photo.kind)) { unclassified = true; continue; }
+        photos.push({ id: photo.id, kind: photo.kind, thumbnailUrl: mediaPath(photo.thumbnailUrl), url: mediaPath(photo.url),
+          ...(target.history ? {recordId:photo.recordId, date:delivery.date, deliveryId:delivery.deliveryId} : {}) });
       }
       if (delivery.status === 'EMPTY' && delivery.photos.length) throw Error('UNVERIFIED');
       return { customerCode: delivery.customerCode, date: delivery.date, deliveryId: delivery.deliveryId, notes: delivery.notes || '', status: unclassified ? 'UNVERIFIED' : delivery.status, photos };
-    }).sort((a, b) => b.date.localeCompare(a.date) || a.deliveryId.localeCompare(b.deliveryId));
+    }).sort((a, b) => b.date.localeCompare(a.date) || (target.history
+      ? b.deliveryId.length - a.deliveryId.length || b.deliveryId.localeCompare(a.deliveryId)
+      : a.deliveryId.localeCompare(b.deliveryId)));
   }
   function node(tag, text, parent, className) {
     const result = document.createElement(tag);
@@ -147,6 +156,12 @@
       host.dataset.failureStage = SAFE_STAGES.has(error.sourceStage) ? error.sourceStage : ['staff-session', 'discovery', 'task', 'image'].includes(error.photoStage) ? error.photoStage : 'ui-response';
       if (Number.isInteger(error.status) && error.status >= 100 && error.status <= 599) host.dataset.failureHttp = String(error.status);
       if ([200,400,401,403,404,409,410,413,422,429,500,502,503,504].includes(error.sourceHttpStatus)) host.dataset.failureSourceHttp=String(error.sourceHttpStatus);
+      if (target?.history) {
+        const forbidden = error.status === 403;
+        shell(forbidden ? '사진 조회 권한이 없습니다.' : '과거 기록 확인 필요', forbidden ? 'forbidden' : 'unverified',
+          forbidden ? null : { label:'다시 조회', run:() => current === generation && target && open(target) });
+        return;
+      }
       if (error.message === 'UPSTREAM_AUTH_REQUIRED') { shell('Delivery Admin 인증 연결이 필요합니다. 직원 로그인은 유지됩니다.', 'upstream-auth-required'); return; }
       if (error.message === 'PHOTO_SOURCE_DISABLED') { shell('납품 사진 연결이 비활성 상태입니다.', 'source-disabled'); return; }
       const sourceContractErrors = {
@@ -185,23 +200,40 @@
     async function enlarge(index) {
       if (deadline <= Date.now()) { block(); return; }
       if (!photoList[index]) return;
+      const photo = photoList[index], title = photoTitle(photo);
       const id = generation;
       viewerController?.abort(); viewerController = new AbortController(); const controller = viewerController;
       if (viewer.hidden) focusBeforeViewer = document.activeElement;
       viewerIndex = index; stage.replaceChildren(); viewer.hidden = false; closeButton.focus();
       viewerUrl = null;
-      viewerTitle.textContent = selected.date + ' · ' + KINDS[photoList[index].kind];
+      viewerTitle.textContent = photo.kind === HISTORY_KIND
+        ? `${photo.date} · 배송 ID ${photo.deliveryId} · 원본 기록 ID ${photo.recordId}`
+        : selected.date + ' · ' + title;
       count.textContent = `${index + 1} / ${photoList.length}`; previous.disabled = index === 0; next.disabled = index === photoList.length - 1;
       node('p', '사진 불러오는 중…', stage, 'deliveryPhotoViewerStatus');
       try {
-        const url = await image(photoList[index].url, controller.signal);
+        const url = await image(photo.url, controller.signal);
         if (!alive(id) || controller.signal.aborted || viewerIndex !== index) return;
-        viewerUrl = url; stage.replaceChildren(); const img = node('img', undefined, stage); img.alt = KINDS[photoList[index].kind] + ' 확대 사진'; img.src = url;
+        viewerUrl = url; stage.replaceChildren(); const img = node('img', undefined, stage); img.alt = title + ' 확대 사진'; img.src = url;
         img.onerror = () => { if (viewerIndex === index && alive(id)) { stage.replaceChildren(); node('p', '사진 파일을 열지 못했습니다.', stage, 'deliveryPhotoViewerStatus'); } };
       } catch (error) {
         if (controller.signal.aborted || id !== generation) return;
         if (error.status === 401 || error.status === 403) { failure(error, id); return; }
         stage.replaceChildren(); node('p', error.status === 410 || error.status === 404 ? '삭제되었거나 사용할 수 없는 사진입니다.' : '사진 조회 실패', stage, 'deliveryPhotoViewerStatus');
+      }
+    }
+    function renderHistory(list) {
+      shell('과거 기록 확인 필요', list.length ? 'ready' : 'unverified');
+      const groups = node('div', undefined, host, 'deliveryPhotoGroups');
+      photoList = list.flatMap(delivery => delivery.photos);
+      for (const delivery of list) {
+        const group = node('section', undefined, groups);
+        node('h4', `${delivery.date} · 배송 ID ${delivery.deliveryId}`, group);
+        for (const photo of delivery.photos) {
+          const button = node('button', `원본 기록 ID ${photo.recordId} · 사진 확대`, group);
+          button.type = 'button';
+          button.onclick = () => enlarge(photoList.indexOf(photo));
+        }
       }
     }
     function renderList() {
@@ -261,11 +293,18 @@
       } catch (error) { if (!requestController?.signal.aborted) failure(error, id); }
     }
     async function open(value) {
-      purge(); target = { customerCode: String(value.customerCode || ''), ...(validDate(value.date) ? { date: value.date } : {}) };
+      purge(); target = { customerCode: String(value.customerCode || ''), ...(value.history === true
+        ? {history:true} : validDate(value.date) ? {date:value.date} : {}) };
       if (!target.customerCode || target.customerCode.length > 128) { shell('사진 미확인 · 고객코드가 필요합니다.', 'unverified'); return; }
       const id = generation; requestController = new AbortController(); shell('배송 기록 확인 중…', 'loading');
       try {
         if (!await authorize(id)) return;
+        if (target.history) {
+          const params = new URLSearchParams({customerCode:target.customerCode});
+          const history = normalize(await request(API + '/history?' + params), target);
+          if (alive(id)) renderHistory(history);
+          return;
+        }
         const list = normalize(await request(API + '?' + new URLSearchParams(target)), target);
         if (!alive(id)) return;
         deliveries = list;
@@ -293,8 +332,8 @@
     if (currentHost?.isConnected && currentHost.dataset.customerCode === String(row.customerCode)) return;
     reset(); currentHost = node('section', undefined, detail, 'deliveryPhotos'); currentHost.dataset.customerCode = String(row.customerCode); currentHost.setAttribute('aria-label', '납품 사진');
     current = createController({ host: currentHost });
-    node('h3', '납품 사진', currentHost); node('p', '직원 인증 후 배송일별 사진을 조회합니다.', currentHost, 'deliveryPhotoStatus');
-    const button = node('button', '납품 사진 조회', currentHost); button.type = 'button'; button.onclick = () => current?.open({ customerCode: row.customerCode, date: state.mode === 'DATE_ROUTE' ? state.selectedDate : row.lastDeliveryDate });
+    node('h3', '납품 사진', currentHost); node('p', '완료된 매장 문 앞 납품 사진을 조회합니다.', currentHost, 'deliveryPhotoStatus');
+    const button = node('button', '납품 사진 조회', currentHost); button.type = 'button'; button.onclick = () => current?.open({customerCode:row.customerCode, history:true});
   }
   function schedule() { if (observing) return; observing = true; queueMicrotask(() => { observing = false; mountSelection(); }); }
   function mount() {

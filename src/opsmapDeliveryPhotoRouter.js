@@ -32,7 +32,7 @@ function failure(error, res) {
 }
 // Dependency injection preserves A's existing staff session and makes the feature default OFF.
 export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCurrent = () => false, source = null, enabled = false, prepareSource,
-  prepareDiscovery = false, timeoutMs = 8000, maxImageBytes = 4 * 1024 * 1024, maxConcurrent = 3, now = Date.now } = {}) {
+  prepareDiscovery = false, historyOnly = false, timeoutMs = 8000, maxImageBytes = 4 * 1024 * 1024, maxConcurrent = 3, now = Date.now } = {}) {
   if (!app?.get || typeof requireStaff !== 'function') throw new Error('STAFF_AUTH_INJECTION_REQUIRED');
   const service = createDeliveryPhotoService({ source, enabled, now });
   let active = 0;
@@ -52,7 +52,7 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
     Promise.resolve().then(() => action(req, res, controller.signal, sessionKey)).catch(error => failure(error, res))
       .finally(() => { clearTimeout(timer); req.off('aborted', abort); res.off('close', abort); active--; });
   };
-  app.get('/api/map-phase2b/private/delivery-photos', secure, handler(async (req, res, signal, sessionKey) => {
+  if (!historyOnly) app.get('/api/map-phase2b/private/delivery-photos', secure, handler(async (req, res, signal, sessionKey) => {
     // OFF must block validation, session preparation and any source activity.
     if (!(typeof enabled === 'function' ? enabled() === true : enabled === true)) throw new DeliveryPhotoError('PHOTO_SOURCE_DISABLED', 503);
     const identity = validatePhotoQuery(req.query);
@@ -65,6 +65,14 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
     const data = await service.list(req.query, sessionKey, { signal });
     // Session can expire or be revoked while the upstream request is in flight.
     await requireStaff(req, res, () => res.json({ ok: true, data }));
+  }));
+  if (typeof source?.listHistory === 'function') app.get('/api/map-phase2b/private/delivery-photos/history', secure, handler(async (req, res, signal, sessionKey) => {
+    if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
+    const data = await service.listHistory(req.query, sessionKey, {signal});
+    await requireStaff(req, res, () => {
+      if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
+      res.json({ok:true, data});
+    });
   }));
   app.get('/api/map-phase2b/private/delivery-photos/media/:id', secure, handler(async (req, res, signal, sessionKey) => {
     const upstream = await service.openMedia(req.params.id, sessionKey, { signal });
