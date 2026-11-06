@@ -38,7 +38,7 @@ export async function verifyStaffPassword(password, hash) {
 }
 
 // The approved persistent store survives restarts; credential rotation still revokes sessions.
-export function createMapStaffAuth({ env = process.env, now = Date.now, sessionStore } = {}) {
+export function createMapStaffAuth({ env = process.env, now = Date.now, sessionStore, cookieName = STAFF_COOKIE } = {}) {
   const policy=staffSessionPolicy(env);
   const sessions = new Map(), attempts = new Map();
   const revoked = new Set();
@@ -62,9 +62,9 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
     return req.get('origin') === config.origin;
   }
   function sessionKey(req, config) {
-    const cookies = String(req.headers.cookie || '').split(';').map(s => s.trim()).filter(s => s.startsWith(`${STAFF_COOKIE}=`));
+    const cookies = String(req.headers.cookie || '').split(';').map(s => s.trim()).filter(s => s.startsWith(`${cookieName}=`));
     if (cookies.length !== 1) return '';
-    const value = cookies[0].slice(STAFF_COOKIE.length + 1);
+    const value = cookies[0].slice(cookieName.length + 1);
     if (!/^[A-Za-z0-9_-]{43}$/.test(value)) return '';
     return crypto.createHmac('sha256', config.secret).update(value).digest('hex');
   }
@@ -150,7 +150,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
       if(sessionStore)await sessionStore.set(key,session,fingerprint);
       const afterSave=configuration();if(!afterSave.ready||!equal(afterSave.hash,config.hash)||!equal(afterSave.secret,config.secret))return res.status(503).json({error:'LOGIN_UNAVAILABLE'});
       sessions.set(key, session);
-      res.cookie(STAFF_COOKIE, token, { ...cookieOptions, maxAge: policy.maxMs });
+      res.cookie(cookieName, token, { ...cookieOptions, maxAge: policy.maxMs });
       addStaffTiming(res, 'session', performance.now() - sessionStarted);
       return res.json({ authenticated: true, ...session });
     } catch { return res.status(503).json({ error: 'LOGIN_UNAVAILABLE' }); }
@@ -161,7 +161,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
     const config = configuration();
     if (!config.ready || !sameOrigin(req, config)) return res.status(403).json({ error: 'ORIGIN_REJECTED' });
     const key=sessionKey(req,config);if(key){revoked.add(key);sessions.delete(key);try{if(sessionStore)await sessionStore.delete(key);}catch{return res.status(503).json({error:'STAFF_SESSION_STORE_UNAVAILABLE'});}}
-    res.clearCookie(STAFF_COOKIE, cookieOptions);
+    res.clearCookie(cookieName, cookieOptions);
     addStaffTiming(res, 'session', performance.now() - started);
     return res.json({ authenticated: false });
   });
