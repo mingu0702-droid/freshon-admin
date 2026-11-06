@@ -5,16 +5,15 @@
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   let SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
-  const ADMIN = new Map((window.ADMIN_FEATURES || []).map((feature) => [String(feature.properties?.code || ""), feature]));
   const DEFAULT_PERIOD_CENTER = "osan";
-  const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", areaOn: false, centerFilter: DEFAULT_PERIOD_CENTER, selectedDate: "", latestDate: "", map: null, overlays: [], representativeOverlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
+  const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", centerFilter: DEFAULT_PERIOD_CENTER, selectedDate: "", latestDate: "", map: null, overlays: [], lines: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
   let mapInitializing=null,mapObserver=null,mapHandlers=[],mapCamera=null,cameraSelection=0;
   let searchTemporaryOverlay=null,searchTemporaryRadius=null,searchTemporaryClick=null;
   let clusterPanel=null,clusterPopupCleanup=null;
   let routeCameraEpoch=null;
   let operationStops = [], runFilter = "ALL";
   let approvedMarkerOrder = new Map();
-  const modeViews = { BASE_60D: { vehicles: [], scope: "all", areaOn: false, centerFilter: DEFAULT_PERIOD_CENTER }, DATE_ROUTE: { vehicles: [], scope: "all", areaOn: false, centerFilter: "" } };
+  const modeViews = { BASE_60D: { vehicles: [], scope: "all", centerFilter: DEFAULT_PERIOD_CENTER }, DATE_ROUTE: { vehicles: [], scope: "all", centerFilter: "" } };
   let periodBasis = "vehicle", periodVehicleScope = "all", periodListLimit = 0;
   let generalAllStores = true;
   let generalMap = true;
@@ -43,7 +42,7 @@
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();approvedMarkerOrder.clear();
     indexedRows=null;pointIndex=null;baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
-    SOURCE={vehicles:[]};ADMIN.clear();state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
+    SOURCE={vehicles:[]};state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
     clearSelection();clearMap();renderPeriodStoreList([]);resetRoadRoute();clearNewAreaBatch();renderManualDraft();
     for(const selector of ['#results','#runList','#addressJudgeResults','#periodDriver','#vehicleList','#navSuggestions','#operationsPanel'])$(selector)?.replaceChildren();
     vehicleRegions = null; renderVehicleQuickFilter([]);
@@ -52,7 +51,7 @@
   const manualDraft = window.ManualWaypoints?.createDraft();
   let modeViewInitialized = false, markerFrame = null;
   let markerSourceVersion=0;
-  let markerEntries = new Map(), indexedRows = null, pointIndex = null, boundaryKey = "", detailFrame = null, resizeFrame = null;
+  let markerEntries = new Map(), indexedRows = null, pointIndex = null, detailFrame = null, resizeFrame = null;
   let periodSelectionCache = null;
   let baseVehicles = new Map(), baseVehicleRequest = null, baseVehicleTimer = null, baseVehicleTries = 0;
   let recentPeriodMode = true;
@@ -139,18 +138,18 @@
     if (state.mode !== next) cancelNewAreaWork();
     if (state.mode !== next) {resetRoadRoute();cancelManualRoadRoute();}
     if (modeViewInitialized && state.mode !== next) {
-      modeViews[state.mode] = { vehicles: selectedVehicles().slice(), scope: periodVehicleScope, areaOn: state.areaOn, centerFilter: state.centerFilter, basis:periodBasis, driverKeys:selectedDriverKeys.slice(), driverKey:state.driverKey,
+      modeViews[state.mode] = { vehicles: selectedVehicles().slice(), scope: periodVehicleScope, centerFilter: state.centerFilter, basis:periodBasis, driverKeys:selectedDriverKeys.slice(), driverKey:state.driverKey,
         center: state.map?.getCenter(), level: state.map?.getLevel() };
     }
     if (!modeViewInitialized || state.mode !== next) {
       const view = modeViews[next]; state.mode = next;
-      setSelectedVehicles(view.vehicles); state.areaOn = next==='DATE_ROUTE'?false:view.areaOn; state.centerFilter = next==='DATE_ROUTE'?'':view.centerFilter;
+      setSelectedVehicles(view.vehicles); state.centerFilter = next==='DATE_ROUTE'?'':view.centerFilter;
       periodBasis=next==='DATE_ROUTE'?'vehicle':view.basis||'vehicle';selectedDriverKeys=next==='DATE_ROUTE'?[]:(view.driverKeys||[]).slice();state.driverKey=next==='DATE_ROUTE'?'':view.driverKey||'';
       periodVehicleScope = view.scope;
       if (view.center && state.map) { state.map.setLevel(view.level); state.map.setCenter(view.center); state.fitRequested = false; }
       else requestMapFit();
       modeViewInitialized = true;
-      refreshVehicleUi(false); syncBoundaryButtons();
+      refreshVehicleUi(false);
       if ($("#newAreaTools")) activateSheet(next === "BASE_60D" ? "stores" : "runs");
     }
   }
@@ -1036,19 +1035,10 @@
 
   function clearMap() {
     closeClusterPanel();
-    [...state.overlays, ...state.representativeOverlays, ...state.lines, ...state.polygons].forEach((item) => item.setMap?.(null));
+    [...state.overlays, ...state.lines].forEach((item) => item.setMap?.(null));
     state.overlays = [];
-    state.representativeOverlays = [];
     state.lines = [];
-    state.polygons = [];
-    markerEntries.clear(); indexedRows = null; pointIndex = null; boundaryKey = "";
-  }
-
-  function clearBoundaries() {
-    state.polygons.forEach((item) => item.setMap?.(null));
-    state.polygons = [];
-    boundaryKey = "";
-    if(!window.MapTerritoryUi)$("#areaToggle").setAttribute("data-geometry-count", "0");
+    markerEntries.clear(); indexedRows = null; pointIndex = null;
   }
 
   function clearSelection({preserveSearch=false}={}) {
@@ -1342,15 +1332,6 @@
     }, overlay => overlay.setMap(null));
     markerEntries = reconciled.next;
     state.overlays = [...markerEntries.values()].map(entry=>entry.value);
-    const nextBoundaryKey = [state.mode,state.rangeStart,state.rangeEnd,state.selectedDate,state.centerFilter,periodBasis,periodVehicleScope,state.driverKey,selectedVehicles().join(',')].join('|');
-    if (!options.viewportOnly && (dataChanged || boundaryKey !== nextBoundaryKey)) {
-      clearBoundaries(); state.representativeOverlays.forEach(overlay=>overlay.setMap(null)); state.representativeOverlays=[];
-    }
-    if (state.areaOn && boundaryKey !== nextBoundaryKey) { if (!state.polygons.length) drawSelectedBoundaries([]); boundaryKey=nextBoundaryKey; }
-    // Vehicle overview already renders one representative per hocha.
-    // Avoid duplicating those markers when a territory polygon is enabled.
-    if (state.areaOn && !vehicleOverview && !state.representativeOverlays.length) addComparisonPins();
-    if (!state.areaOn) state.representativeOverlays.forEach((overlay) => overlay.setMap(null));
     const mobileRoute = innerWidth <= 760 && options.numbered;
     if (pointIndex.valid.length && state.fitRequested && !state.userMovedMap) {
       state.suppressMapEventsUntil = Date.now() + 700;
@@ -1359,26 +1340,13 @@
       state.fitRequested = false;
     }
     if(state.userMovedMap)state.fitRequested=false;
-    window.MapTerritoryUi?.renderForSelection();
     renderMetrics.renders++; renderMetrics.created+=reconciled.created; renderMetrics.removed+=reconciled.removed; renderMetrics.reused+=reconciled.reused;
     renderMetrics.lastMs=+(performance.now()-started).toFixed(2);
     if(markerEntries.size&&renderMetrics.firstMs===undefined){
       renderMetrics.firstMs=renderMetrics.lastMs;
       performance.mark('opsmap-first-markers');
     }
-    $("#map").setAttribute('data-render-metrics',JSON.stringify({...renderMetrics,sourceRows:rows.length,active:markerEntries.size,polygons:state.polygons.length}));
-  }
-
-  function drawSelectedBoundaries(_selected) {
-    // The official administrative-boundary layer is the only polygon owner.
-  }
-
-  function geometryPaths(geometry) {
-    if (!geometry) return [];
-    const ring = (coordinates) => coordinates.map(([lng, lat]) => new kakao.maps.LatLng(lat, lng));
-    if (geometry.type === "Polygon") return geometry.coordinates.map(ring);
-    if (geometry.type === "MultiPolygon") return geometry.coordinates.flatMap((polygon) => polygon.map(ring));
-    return [];
+    $("#map").setAttribute('data-render-metrics',JSON.stringify({...renderMetrics,sourceRows:rows.length,active:markerEntries.size}));
   }
 
   function drawRoute() {
@@ -1608,15 +1576,6 @@
     $("#nearWrap").innerHTML = rows.length
       ? `<details class="detailMore"><summary>30km 주변 호차 ${rows.length}대 · 참고용</summary>${rows.map((row) => `<div class="judgeCard"><b>${esc(vehicleLabel(row.vehicle))}</b> · ${formatDistance(row.distance)}<br>최근접 배송점 ${esc(row.customerName)}</div>`).join("")}</details>`
       : `<div class="hint">30km 내 주변 호차가 없습니다.</div>`;
-  }
-
-  function addComparisonPins() {
-    if (!state.map || !dateReady) return;
-    representativeRows(state.mode === "BASE_60D" ? filteredPeriodStores() : state.currentRows).forEach((row) => {
-      const overlay = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(row.lat, row.lng), content: markerElement(row, null, "representative"), xAnchor: .5, yAnchor: 1, zIndex: 2 });
-      overlay.setMap(state.areaOn ? state.map : null);
-      state.overlays.push(overlay); state.representativeOverlays.push(overlay);
-    });
   }
 
   function renderRunList() {
@@ -2256,7 +2215,7 @@
     // Display server totals even when a stop has no map coordinates.
     state.mode = "DATE_ROUTE";
     state.routeRows = stops;
-    renderStops(stops, { numbered: true, boundaries: false });
+    renderStops(stops, { numbered: true });
     drawRoute(stops);
     renderRouteSummary(payload, source);
     loadRoadRoute(vehicle);
@@ -2311,25 +2270,6 @@
 
   function endRoute() {
     changePeriod(state.rangeStart, state.rangeEnd);
-  }
-
-  function syncBoundaryButtons() {
-    if(window.MapTerritoryUi)return;
-    [$("#areaToggle"), $("#mobileAreaToggle")].forEach((button) => {
-      if (!button) return;
-      button.classList.toggle("on", state.areaOn);
-      button.textContent = state.areaOn ? "권역선 ON" : "권역선 OFF";
-      button.setAttribute("aria-pressed", String(state.areaOn));
-    });
-  }
-
-  function rerenderCurrentMap() {
-    renderStops(state.currentRows, { numbered: state.mode === "DATE_ROUTE", boundaries: state.areaOn, vehicles: selectedVehicles() });
-    if (state.mode === "DATE_ROUTE") drawRoute(state.routeRows);
-  }
-
-  function toggleBoundaries() {
-    void window.MapTerritoryUi?.toggle();
   }
 
   function resetMapOverview() {
@@ -2886,9 +2826,7 @@
     $("#syncOperation").onclick = () => {if(state.mode==="DATE_ROUTE")return refreshSelectedDate();};
     $("#routePlan").onclick = () => loadRoute("pc");
     $("#endRoute").onclick = endRoute;
-    $("#areaToggle").onclick = () => {if(state.mode==="BASE_60D")return toggleBoundaries();};
     $("#mapReset").onclick = resetMapOverview;
-    $("#mobileAreaToggle").onclick = toggleBoundaries;
     $("#mobileMapReset").onclick = resetMapOverview;
     $("#mobileCenter").onchange = (event) => selectCenter(event.target.value);
     $("#mobileBaseVehicle").onchange = (event) => { state.centerFilter = ""; periodVehicleScope = event.target.value ? "selected" : "all"; setSelectedVehicles(event.target.value ? [event.target.value] : []); $("#mobileCenter").value = "all"; refreshVehicleUi(true); };
@@ -2957,7 +2895,6 @@
   clearNewAreaBatch();
   syncModeUi();
   $("#runListTool").open = false;
-  $("#mapModeBar").insertBefore($("#areaToggle"), $("#staffLogout"));
   ["Total", "Completed", "Remaining", "Eta"].forEach((name) => { $("#op" + name).parentNode.id = name.toLowerCase() + "Metric"; });
   $("#newAreaBatchTool > summary").textContent = "④ 신규권역 일괄조회";
   $('[data-sheet-tab="new"]').textContent = "신규권역";
@@ -3014,9 +2951,7 @@
     stores:()=>allStores.slice(),
     refreshManualCoordinates(){indexedRows=null;pointIndex=null;for(const row of allStores){window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);}if(state.selected){window.MapManualPins?.apply(state.selected);applyUnifiedSearchCoordinateGuard(state.selected);liveAddressLocations?.apply(state.selected);refreshCoordinateEvidence(state.selected);}cancelManualRoadRoute();state.fitRequested=false;void loadBaseMap();window.dispatchEvent(new Event('map-coordinate-updated'));},
     addressLocationStatus:code=>code?liveAddressLocations?.status(storesByCode.get(String(code))):liveAddressLocations?.summary()||{located:0,review:0,retention:'PAGE_MEMORY_ONLY'},
-    fixedTerritoryMasterState:()=>({version:baseVehicleMeta?.version||null,stale:baseVehicleMeta?.stale!==false,checkedAt:baseVehicleMeta?.checkedAt||null,lastError:baseVehicleMeta?.lastError||null,refresh:baseVehicleMeta?.refresh||null}),
     fixedTerritoryStores:()=>window.MapUiLocalBridge.navigationStores().map(row=>({...row,...(baseVehicles.get(String(row.customerCode))||{baseVehicle:'',baseVehicleState:'UNKNOWN'})})),
-    loadBaseVehicleMasterForTerritory:()=>loadBaseVehicles(window.MapUiLocalBridge.navigationStores().map(row=>String(row.customerCode||''))),
     navigationStores:()=>{if(state.mode==='DATE_ROUTE')return isDailyDataReady()?allStores.map(row=>liveAddressLocations?.apply({...row})||{...row}):[];const list=new Map(latestSnapshotRows.map(r=>[r.customerCode,r]));for(const row of allStores){const prior=list.get(row.customerCode);const conflict=prior&&row.address&&prior.address&&row.address.replace(/\s/g,'')!==prior.address.replace(/\s/g,'');list.set(row.customerCode,{...row,...(conflict?{coordinateStatus:'CONFLICT'}:{})});}return [...list.values()].map(row=>liveAddressLocations?.apply({...row})||row);},
     selectNavigationStore:code=>{const row=(state.mode==='DATE_ROUTE'&&!isDailyDataReady()?[]:allStores).find(r=>r.customerCode===code)||(state.mode==='BASE_60D'?latestSnapshotRows.find(r=>r.customerCode===code):null);if(row)selectStore(row,null,true);},
     queryRecordedRoute:()=>{cancelManualRoadRoute();const v=primarySelectedVehicle();if(!v||!operationStops.length||operationStops.some(s=>!Number.isSafeInteger(s.order)||s.order<1)){roadResult={state:'error',error:'RECORDED_ORDER_REQUIRED'};window.dispatchEvent(new CustomEvent('map-recorded-route',{detail:roadResult}));syncRoadRoutePanel();return;}loadRoadRoute(v,{explicit:true});},
@@ -3050,15 +2985,13 @@
     manualRouteState:()=>manualRoadResult,
     clearManual(){cancelManualRoadRoute();manualDraft.clear();renderManualDraft();}
   };
-  syncBoundaryButtons();
   $("#currentTime").textContent = formatTime(new Date());
   setInterval(() => { $("#currentTime").textContent = formatTime(new Date()); }, 10000);
   refreshVehicleUi(false);
   window.MapStaffEntry?.registerPurge(()=>hybridUi?.logout());
   window.addEventListener('map-staff-signed-out',purgeStaffData);
   window.addEventListener('map-staff-ready',()=>{
-    SOURCE=window.VEHICLE_AREA_DATA||{vehicles:[]};ADMIN.clear();
-    for(const feature of window.ADMIN_FEATURES||[])ADMIN.set(String(feature.properties?.code||''),feature);
+    SOURCE=window.VEHICLE_AREA_DATA||{vehicles:[]};
     initVehicles();void initializeGeneral();void initMap();
   });
   window.addEventListener('pagehide',event=>{cancelManualRoadRoute();resetRoadRoute();if(event.persisted)hybridUi?.cancel();else{hybridUi?.dispose();mapObserver?.disconnect();for(const [name,fn]of mapHandlers)kakao?.maps?.event?.removeListener?.(state.map,name,fn);mapHandlers=[];}});window.addEventListener('pageshow',event=>{if(event.persisted)mapCamera?.scheduleRelayout();});

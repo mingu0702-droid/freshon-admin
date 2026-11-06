@@ -76,9 +76,6 @@
     if(obsoleteRoutePanel){obsoleteRoutePanel.hidden=true;obsoleteRoutePanel.inert=true;obsoleteRoutePanel.dataset.modeHidden='true';}
     const options=document.createElement('details');options.id='dotRoadOptions';options.innerHTML='<summary>경로 표시·방문 목록</summary>';
     options.append(summary.querySelector('.navToggles'),$('#queryRecordedRoute'),$('#navLegs'));summary.append(options);
-    const controls=document.createElement('details');controls.id='territoryControls';
-    controls.innerHTML='<summary>호차별 권역</summary><p id="territoryStatus" role="status">기준호차에 배정된 매장</p><ul id="territoryVehicles"></ul><button id="refreshTerritories">권역 새로고침</button>';
-    $('.generalCenters').append(controls);
     const status=document.createElement('p');status.id='dotDataStatus';status.setAttribute('role','status');$('.sidefoot').prepend(status);
     $('#mapSourceStatus').hidden=true;
     const listHeading=$('#periodStoreListSection .sectiontitle');for(const node of [...listHeading.childNodes])if(node.nodeType===Node.TEXT_NODE)node.remove();

@@ -1,5 +1,4 @@
 import {mountProductionPhotoBinding} from './opsmapProductionPhotos.js';
-import {mountOfficialAdminBoundaries} from './officialAdminBoundaries.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import fsSync from 'node:fs';
 import express from 'express';import path from 'node:path';import fs from 'node:fs/promises';
@@ -61,7 +60,6 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  const roadRouteBudget=createProductionRoadBudget({env,token:credentials.authToken});
  const api=mountProductionMapApi(router,{...readers,roadRouteBudget,readStoredStaffHistory,readObservedStoreAddress,readApprovedCoordinateSearch,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,mountPrivateExtensions:binding=>{
   if(customerRegistry)mountPrivateCustomerRegistry({...binding,registry:customerRegistry,secret:credentials.sessionSecret,readRules:approvedRules});
-  mountOfficialAdminBoundaries({...binding,origin:authEnv.MAP_STAFF_ORIGIN});
   manual.mount(binding);
   mountPrivateDriverContact({...binding,enabled:()=>env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',readDriverMaster:readers.readDriverMaster,readAssignment:createDriverAssignmentReader({readBaseVehicles:codes=>readers.sharedBaseCache?.get(codes),readStoredRoute:createDatedDriverRouteReader({today:readers.phase2bKstDate,readTodayStatus:readers.phase2bTodayStatus,readStoredRoute:readers.readStoredDriverRoute})})});
   router.get('/api/vehicle-driver-master',binding.requireStaff,async(q,r)=>{try{if(env.OPSMAP_DRIVER_CONTACT_ENABLED!=='1')return r.status(503).json({error:'DRIVER_CONTACT_DISABLED'});if(!readers.readDriverMaster)return r.status(503).json({error:'DRIVER_SOURCE_NOT_CONFIGURED'});const value=await readers.readDriverMaster(String(q.query.date||''));return binding.requireStaff(q,r,()=>r.json(redactPublicData(value)));}catch{return r.status(503).json({error:'DRIVER_SOURCE_UNAVAILABLE'});}});
@@ -75,7 +73,6 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
   router.get('/api/map-phase2b/preview/route-plan',binding.requireStaff,async(q,r)=>{const date=readers.normalizeDateValue(q.query.date),vehicle=String(q.query.vehicle||'');if(!date||!vehicle||vehicle.length>40)return r.status(400).json({error:'INVALID_ROUTE'});try{const payload=await (readers.readStoredRoute?readers.readStoredRoute(date,vehicle):readers.callHub?.('routePlan',{date,vehicle}));if(!payload)return r.status(503).json({error:'ROUTE_SOURCE_NOT_CONFIGURED'});return binding.requireStaff(q,r,()=>r.json(redactPublicData(payload)));}catch{return r.status(503).json({error:'ROUTE_SOURCE_UNAVAILABLE'});}});
 
   mountProductionPhotoBinding({...binding,env,rawRequest:readers.photoRawRequest,hasMemorySession:readers.photoHasMemorySession,prepareSession:readers.photoPrepareSession,listDeliveryMetadata:readers.photoListDeliveryMetadata,sourceConfiguration:readers.photoSourceConfiguration,reserveRead:readers.reservePhotoRead});
-  router.get('/admin-features.js',binding.requireStaff,(_q,r)=>r.type('js').set('Cache-Control','private,no-store').send('window.ADMIN_FEATURES=[];window.OPSMAP_OPTIONAL_FEATURE_STATUS={state:"DISABLED",reason:"NOT_CONFIGURED"};'));
   router.get('/vehicle-data.js',binding.requireStaff,async(_q,r)=>{try{const text=await fs.readFile(path.join(publicDir,'vehicle-data.js'),'utf8'),match=text.match(/^\s*window\.[A-Z_]+\s*=\s*([\s\S]*?);?\s*$/);if(!match)throw Error();r.type('js').set('Cache-Control','private,no-store').send('window.VEHICLE_AREA_DATA='+JSON.stringify(redactPublicData(JSON.parse(match[1])))+';');}catch{r.status(503).json({error:'REFERENCE_DATA_UNAVAILABLE'});}});
  }});
  router.use('/api',(_q,r)=>r.status(404).json({error:'OPSMAP_API_NOT_AVAILABLE'}));router.get('/',(_q,r)=>r.sendFile(path.join(root,'map-phase2b-preview.html')));router.use(express.static(root));router.use((_q,r)=>r.status(404).end());return {enabled:true,status:api.status};

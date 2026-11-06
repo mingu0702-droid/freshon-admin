@@ -14,7 +14,10 @@ test('existing root Hub HMAC restore is shared with authenticated ABC Period/His
  assert.equal((await fetch(base+'/opsmap'+period)).status,401);const login=await fetch(base+'/opsmap/api/map-phase2b/auth/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({id:'fixture',password:'synthetic-password'})});assert.equal(login.status,200);const cookie=login.headers.get('set-cookie').split(';')[0];assert(cookie.startsWith('__Host-opsmap-staff='));const headers={cookie,origin};
  const fresh=await(await fetch(base+'/opsmap'+period,{headers})).json();assert.equal(fresh.meta.generation,legacy.meta.generation);assert.deepEqual(fresh.data,legacy.data);
  const hist=await fetch(base+'/opsmap/api/map-phase2b/private/driver-history?customerCode=S970001&startDate=2026-10-23&endDate=2026-10-23',{headers});assert.equal(hist.status,200);assert.equal((await hist.json()).data.length,1);
- assert.equal((await fetch(base+'/opsmap/admin-features.js',{headers})).status,200);const road=await(await fetch(base+'/opsmap/api/map-phase2b/private/road-route/config',{headers})).json();assert.equal(road.data?.enabled??road.enabled,false);
+ assert.equal((await fetch(base+'/opsmap/admin-features.js',{headers})).status,404);
+ assert.equal((await fetch(base+'/opsmap/api/map-phase2b/private/admin-boundaries/query',{method:'POST',headers})).status,404);
+ assert.equal((await fetch(base+'/opsmap/api/map-phase2b/private/admin-boundaries',{headers})).status,404);
+ const road=await(await fetch(base+'/opsmap/api/map-phase2b/private/road-route/config',{headers})).json();assert.equal(road.data?.enabled??road.enabled,false);
  assert.equal((await fetch(base+'/opsmap/api/map-phase2b/auth/logout',{method:'POST',headers})).status,200);assert.equal((await fetch(base+'/opsmap'+period,{headers})).status,401);assert.equal((await fetch(base+period)).status,200);
  }finally{await new Promise(r=>server.close(r));}
 });

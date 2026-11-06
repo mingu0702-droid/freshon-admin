@@ -158,7 +158,7 @@
   $('#sourceFooterLinks').append(data,$('#openOperations'));sidebar.append(foot);$('#sourceBatch').onclick=()=>{$('#newAreaBatchTool').hidden=false;$('#newAreaBatchTool').open=!$('#newAreaBatchTool').open;};$('#newAreaBatchTool').hidden=true;
   const maparea=document.createElement('div');maparea.className='maparea';maparea.append($('#map'));
   const mapTop=document.createElement('div');mapTop.className='maptop';const context=document.createElement('div');context.className='mapcontext';context.id='generalMapContext';context.innerHTML='';
-  const controls=document.createElement('div');controls.className='row';controls.append($('#mapReset'),$('#areaToggle'));mapTop.append(context,controls);maparea.append(mapTop);
+  const controls=document.createElement('div');controls.className='row';controls.append($('#mapReset'));mapTop.append(context,controls);maparea.append(mapTop);
   const quickVehicles=document.createElement('div');quickVehicles.id='vehicleQuickFilter';quickVehicles.hidden=true;quickVehicles.setAttribute('role','group');quickVehicles.setAttribute('aria-label','선택 호차');
   quickVehicles.innerHTML='<div id="vehicleQuickChips"></div><button id="clearMapVehicleFilter" type="button" aria-label="호차 필터 전체 해제">전체보기</button>';
   quickVehicles.querySelector('button').onclick=()=>$('#clearVehicles').click();
@@ -215,7 +215,7 @@
   function modeVisible(node,visible){if(!node)return;node.hidden=!visible;node.inert=!visible;node.dataset.modeHidden=String(!visible);}
   let controlsMode=null;
   function syncModeControls(daily,historyDialog=false){
-    for(const node of [search,address,filters,stores,$('#sourceBatch'),$('#sourceAreaShortcut'),$('#sourceManualShortcut'),$('#areaToggle')])modeVisible(node,!daily&&node!==address&&node.id!=='sourceManualShortcut');
+    for(const node of [search,address,filters,stores,$('#sourceBatch'),$('#sourceAreaShortcut'),$('#sourceManualShortcut')])modeVisible(node,!daily&&node!==address&&node.id!=='sourceManualShortcut');
     modeVisible(planner,true);modeVisible(periodButton,!daily);modeVisible(context,false);
     const host=daily?dailyForm:basePicker,actions=daily?dailyVehicleActions:pickerActions;
     const before=daily?dailyVehicleActions:$('#baseVehicleCount');

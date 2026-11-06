@@ -5,7 +5,7 @@
 #mapModeBar button{padding:8px 10px;border:1px solid #ccd7e5;border-radius:8px;background:#fff;color:#29405d;font-weight:700;white-space:nowrap;font-size:12px;min-height:36px}
 #mapModeBar [aria-pressed=true]{background:#215dd1;color:#fff}
 #periodIdentity{font-size:12px;font-weight:700;color:#284365;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#staffLogout{margin-left:auto;font-size:10px!important}#areaToggle{min-width:88px!important}
+#staffLogout{margin-left:auto;font-size:10px!important}
 #periodControls{position:static;display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:10px 0 0;font-size:11px}
 #periodControls label{display:flex;flex-direction:column;gap:4px;min-width:0}
 #periodControls input,#periodControls select,#periodControls button,#periodDriver{box-sizing:border-box;width:100%;min-width:0;padding:8px;border:1px solid #ccd7e5;border-radius:7px;background:#fff;font-size:12px}
@@ -69,7 +69,7 @@ button:disabled{cursor:not-allowed;opacity:.5}
  :root{--left:0px}
  #mapModeBar{left:0;right:0;top:0;height:82px;display:flex;align-content:center;flex-wrap:wrap;gap:4px;padding:5px 7px}
  #mapModeBar button{font-size:11px;padding:6px 8px;min-height:32px}
- #staffLogout{font-size:9px!important}#areaToggle{min-width:76px!important}
+ #staffLogout{font-size:9px!important}
  #periodIdentity{order:5;flex:1 0 100%;font-size:11px;padding:1px 3px}
  body:not(.periodMode) #mapModeBar{height:44px;flex-wrap:nowrap}
  #toggleRunList{display:none!important}

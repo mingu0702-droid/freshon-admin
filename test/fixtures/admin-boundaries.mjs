@@ -1,2 +1,0 @@
-// Synthetic geometry, never shipped as an official boundary asset.
-export const boundaries={type:'FeatureCollection',metadata:{sourceUrl:'https://www.data.go.kr/data/15129688/fileData.do',boundaryType:'ADMINISTRATIVE_EMD',codeSystem:'SGIS_ADM_8',crs:'EPSG:4326',sourceCrs:'EPSG:5179',baseDate:'2025-06-30',license:'PUBLIC_DATA_UNRESTRICTED',coverage:'SUBSET'},features:[{type:'Feature',properties:{adm_cd:'11010530',adm_nm:'테스트'},geometry:{type:'Polygon',coordinates:[[[127,37],[127.5,37],[127.5,37.5],[127,37.5],[127,37]]]}}]};

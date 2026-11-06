@@ -36,6 +36,6 @@ test('one operation control, WMS UI removed, list and mobile tabs present',()=>{
 test('popup centers above pointed pin; same font family; map header has no gap',()=>{
  assert.match(runtime,/point\.x - width \/ 2/);assert.match(runtime,/point\.y - panel\.offsetHeight - 40/);assert.match(runtime,/xAnchor: \.5/);assert.match(runtime,/yAnchor: 1,/);assert.match(css,/\.code,\.storeName\{font-family:var\(--font\)/);assert.match(css,/#map\{top:var\(--bar\)/);
 });
-test('comparison defaults off and source truncation cannot become dated fallback',()=>{
- assert.equal(fixture().state.areaOn,false);assert.match(runtime,/if \(state\.areaOn\) \{ drawSelectedBoundaries\(\[\]\)/);assert.match(runtime,/snapshot vehicle relationships must never masquerade/);
+test('source truncation cannot become dated fallback',()=>{
+ assert.match(runtime,/snapshot vehicle relationships must never masquerade/);
 });

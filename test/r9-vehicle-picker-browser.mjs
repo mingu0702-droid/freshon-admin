@@ -34,7 +34,7 @@ const checkedAt='2026-10-20T00:00:00.000Z',basis='FIXED_DISPATCH_PRIMARY';
 const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','vehicle-picker-regions.js','map-phase2b-runtime.js','map-approved-shell-candidate.js'];
 const fixture=`window.VEHICLE_AREA_DATA=${JSON.stringify({vehicles})};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
 document.body.dataset.mapStaffState='authenticated';
-window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){window.territoryRenders=(window.territoryRenders||0)+1},toggle(){}};
+window.MapStaffEntry={status(){},registerPurge(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
 class Bounds{extend(){}getSouthWest(){return new Coord(33,124)}getNorthEast(){return new Coord(39.5,132)}}
 class FixtureMap{constructor(el,opts){this.el=el;this.center=opts.center;this.level=5}getCenter(){return this.center}setCenter(p){this.center=p}panTo(p){this.center=p}getLevel(){return this.level}setLevel(v){this.level=v}getBounds(){return new Bounds()}setBounds(){}relayout(){}getProjection(){return {containerPointFromCoords:p=>({x:300+(p.lng-127)*100,y:300+(p.lat-36)*30}),coordsFromContainerPoint:p=>new Coord(36,127)}}}
@@ -91,7 +91,8 @@ try{
  await query.fill('용인시');assert.deepEqual(await values(),['101']);await query.fill('202');assert.deepEqual(await values(),['202','202-1']);checks.push('number and region query update immediately');
  await input('202').click();await query.fill('');check('clearing search preserves selection',await input('202').isChecked());
  await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===1&&MapUiLocalBridge.state.overlays.length===1);
- check('selection still drives map pins and territory rendering',await page.evaluate(()=>MapUiLocalBridge.state.currentRows[0].vehicle==='202'&&window.territoryRenders>0));
+ check('selection still drives map pins',await page.evaluate(()=>MapUiLocalBridge.state.currentRows[0].vehicle==='202'&&MapUiLocalBridge.state.overlays.length>0));
+ check('territory controls are absent',await page.locator('#areaToggle,#mobileAreaToggle,#territoryControls').count()===0);
  await input('202').click();check('same vehicle deselects and returns to full map',!(await selected()).length&&!await chips.isVisible()&&await page.evaluate(()=>MapUiLocalBridge.state.currentRows.length>2));
  await input('101').click();await input('122').click();assert.deepEqual(await selected(),['101','122']);checks.push('101 and 122 multiple selection');
  await summary.click({position:{x:10,y:10}});check('collapsed picker keeps map controls accessible',!await query.isVisible()&&await chips.isVisible());

@@ -5,14 +5,13 @@
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   const SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
-  const ADMIN = new Map((window.ADMIN_FEATURES || []).map((feature) => [String(feature.properties?.code || ""), feature]));
   const COLORS = ["#2563eb", "#7c3aed", "#0f766e", "#b45309", "#0891b2", "#db2777", "#dc2626", "#059669", "#9333ea", "#c2410c"];
-  const state = { mode: "BASE_60D", rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", areaOn: false, centerFilter: "", selectedDate: "", latestDate: "", map: null, overlays: [], representativeOverlays: [], lines: [], polygons: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
+  const state = { mode: "BASE_60D", rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", centerFilter: "", selectedDate: "", latestDate: "", map: null, overlays: [], lines: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
   let operationStops = [], runFilter = "ALL";
-  const modeViews = { BASE_60D: { vehicles: [], scope: "all", areaOn: false, centerFilter: "" }, DATE_ROUTE: { vehicles: [], scope: "all", areaOn: false, centerFilter: "" } };
+  const modeViews = { BASE_60D: { vehicles: [], scope: "all", centerFilter: "" }, DATE_ROUTE: { vehicles: [], scope: "all", centerFilter: "" } };
   let periodBasis = "vehicle", periodVehicleScope = "all", periodListLimit = 0;
   let modeViewInitialized = false, markerFrame = null;
-  let markerEntries = new Map(), indexedRows = null, pointIndex = null, boundaryKey = "", detailFrame = null, resizeFrame = null;
+  let markerEntries = new Map(), indexedRows = null, pointIndex = null, detailFrame = null, resizeFrame = null;
   let periodSelectionCache = null;
   let baseVehicles = new Map(), baseVehicleRequest = null, baseVehicleTimer = null, baseVehicleTries = 0;
   let recentPeriodMode = true;
@@ -30,17 +29,17 @@
   }
   function switchMode(next) {
     if (modeViewInitialized && state.mode !== next) {
-      modeViews[state.mode] = { vehicles: selectedVehicles().slice(), scope: periodVehicleScope, areaOn: state.areaOn, centerFilter: state.centerFilter,
+      modeViews[state.mode] = { vehicles: selectedVehicles().slice(), scope: periodVehicleScope, centerFilter: state.centerFilter,
         center: state.map?.getCenter(), level: state.map?.getLevel() };
     }
     if (!modeViewInitialized || state.mode !== next) {
       const view = modeViews[next]; state.mode = next;
-      setSelectedVehicles(view.vehicles); state.areaOn = view.areaOn; state.centerFilter = view.centerFilter;
+      setSelectedVehicles(view.vehicles); state.centerFilter = view.centerFilter;
       periodVehicleScope = view.scope;
       if (view.center && state.map) { state.map.setLevel(view.level); state.map.setCenter(view.center); state.fitRequested = false; }
       else requestMapFit();
       modeViewInitialized = true;
-      refreshVehicleUi(false); syncBoundaryButtons();
+      refreshVehicleUi(false);
       if ($("#newAreaTools")) activateSheet(next === "BASE_60D" ? "stores" : "runs");
     }
   }
@@ -516,19 +515,10 @@
   }
 
   function clearMap() {
-    [...state.overlays, ...state.representativeOverlays, ...state.lines, ...state.polygons].forEach((item) => item.setMap?.(null));
+    [...state.overlays, ...state.lines].forEach((item) => item.setMap?.(null));
     state.overlays = [];
-    state.representativeOverlays = [];
     state.lines = [];
-    state.polygons = [];
-    markerEntries.clear(); indexedRows = null; pointIndex = null; boundaryKey = "";
-  }
-
-  function clearBoundaries() {
-    state.polygons.forEach((item) => item.setMap?.(null));
-    state.polygons = [];
-    boundaryKey = "";
-    $("#areaToggle").setAttribute("data-geometry-count", "0");
+    markerEntries.clear(); indexedRows = null; pointIndex = null;
   }
 
   function clearSelection() {
@@ -627,13 +617,6 @@
     }, overlay => overlay.setMap(null));
     markerEntries = reconciled.next;
     state.overlays = [...markerEntries.values()].map(entry=>entry.value);
-    const nextBoundaryKey = [state.mode,state.rangeStart,state.rangeEnd,state.selectedDate,state.centerFilter,periodBasis,periodVehicleScope,state.driverKey,selectedVehicles().join(',')].join('|');
-    if (!options.viewportOnly && (dataChanged || boundaryKey !== nextBoundaryKey)) {
-      clearBoundaries(); state.representativeOverlays.forEach(overlay=>overlay.setMap(null)); state.representativeOverlays=[];
-    }
-    if (state.areaOn && boundaryKey !== nextBoundaryKey) { if (!state.polygons.length) drawSelectedBoundaries([]); boundaryKey=nextBoundaryKey; }
-    if (state.areaOn && !state.representativeOverlays.length) addComparisonPins();
-    if (!state.areaOn) state.representativeOverlays.forEach((overlay) => overlay.setMap(null));
     const mobileRoute = innerWidth <= 760 && options.numbered;
     if (pointIndex.valid.length && state.fitRequested && !state.userMovedMap) {
       state.suppressMapEventsUntil = Date.now() + 700;
@@ -643,61 +626,7 @@
     }
     renderMetrics.renders++; renderMetrics.created+=reconciled.created; renderMetrics.removed+=reconciled.removed; renderMetrics.reused+=reconciled.reused;
     renderMetrics.lastMs=+(performance.now()-started).toFixed(2);
-    $("#map").setAttribute('data-render-metrics',JSON.stringify({...renderMetrics,sourceRows:rows.length,active:markerEntries.size,polygons:state.polygons.length}));
-  }
-
-  function drawSelectedBoundaries(selected) {
-    if (!state.map) return;
-    selected = selected.length ? selected : selectedVehicles();
-    if (state.mode === "BASE_60D" && periodBasis === "vehicle" && periodVehicleScope === "selected" && !selected.length) return;
-    if (state.mode === "BASE_60D" && periodBasis === "driver" && state.driverKey) {
-      selected = [...new Set(filteredPeriodStores().map(row => row.vehicle))];
-      if (!selected.length) return;
-    }
-    const seen = new Set();
-    SOURCE.vehicles.filter(vehicle => (!selected.length || selected.includes(String(vehicle.vehicle))) && (!state.centerFilter || vehicle.group === state.centerFilter)).forEach(vehicle => {
-      const codes = vehicle.overview_admin_codes || vehicle.detail_admin_codes || [];
-      codes.forEach(code => {
-        const feature = ADMIN.get(String(code));
-        if (!feature?.geometry || seen.has(String(code))) return;
-        seen.add(String(code));
-        const geometries = feature.geometry.type === "MultiPolygon" ? feature.geometry.coordinates.map(coordinates => ({ type: "Polygon", coordinates })) : [feature.geometry];
-        geometries.forEach(geometry => {
-          const path = geometryPaths(geometry); if (!path.length) return;
-          const color = vehicleColor(vehicle.vehicle);
-          const polygon = new kakao.maps.Polygon({ path, strokeWeight: 2, strokeColor: color, strokeOpacity: .76, fillColor: color, fillOpacity: .035 });
-          polygon.setMap(state.map); state.polygons.push(polygon);
-        });
-      });
-    });
-    // Keep the verified delivery hull only for vehicles without administrative geometry.
-    const groups = new Map();
-    const boundaryStores = state.mode === "BASE_60D" ? filteredPeriodStores() : state.routeRows;
-    boundaryStores.forEach((row) => {
-      if (!row.vehicle || (selected.length && !selected.includes(row.vehicle))) return;
-      if (!groups.has(row.vehicle)) groups.set(row.vehicle, []);
-      groups.get(row.vehicle).push(row);
-    });
-    groups.forEach((stores, vehicle) => {
-      if ((SOURCE.vehicles.find(item => String(item.vehicle) === String(vehicle))?.overview_admin_codes || []).some(code => ADMIN.has(String(code)))) return;
-      const hull = Phase2bUi.deliveryBoundary(stores);
-      if (hull.length < 3) return;
-      const path = hull.map((row) => new kakao.maps.LatLng(row.lat, row.lng));
-      const color = vehicleColor(vehicle);
-      const polygon = new kakao.maps.Polygon({ path, strokeWeight: selected.length ? 3 : 2, strokeColor: color, strokeOpacity: .76, fillColor: color, fillOpacity: selected.length ? .05 : .015 });
-      polygon.setMap(state.map);
-      state.polygons.push(polygon);
-    });
-    $("#areaToggle").setAttribute("data-geometry-count", String(state.polygons.length));
-    $("#areaToggle").title = `표시 권역 geometry ${state.polygons.length}개`;
-  }
-
-  function geometryPaths(geometry) {
-    if (!geometry) return [];
-    const ring = (coordinates) => coordinates.map(([lng, lat]) => new kakao.maps.LatLng(lat, lng));
-    if (geometry.type === "Polygon") return geometry.coordinates.map(ring);
-    if (geometry.type === "MultiPolygon") return geometry.coordinates.flatMap((polygon) => polygon.map(ring));
-    return [];
+    $("#map").setAttribute('data-render-metrics',JSON.stringify({...renderMetrics,sourceRows:rows.length,active:markerEntries.size}));
   }
 
   function drawRoute(rows) {
@@ -889,15 +818,6 @@
       : `<div class="hint">30km 내 주변 호차가 없습니다.</div>`;
   }
 
-  function addComparisonPins() {
-    if (!state.map || !dateReady) return;
-    representativeRows(state.mode === "BASE_60D" ? filteredPeriodStores() : state.currentRows).forEach((row) => {
-      const overlay = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(row.lat, row.lng), content: markerElement(row, null, "representative"), xAnchor: .5, yAnchor: 1, zIndex: 2 });
-      overlay.setMap(state.areaOn ? state.map : null);
-      state.overlays.push(overlay); state.representativeOverlays.push(overlay);
-    });
-  }
-
   function renderRunList() {
     const selectedVehicle = primarySelectedVehicle();
     if ($("#runListTitle")) $("#runListTitle").textContent = selectedVehicle ? `${selectedVehicle}호 운행 목록` : "운행 목록";
@@ -1059,7 +979,7 @@
       .map((row) => ({ ...row, vehicle: dateReady ? storesByCode.get(row.customerCode)?.vehicle || "" : "", deliveryDate: state.selectedDate }));
     if (localRows.length) {
       setSearchState(`${localRows.length}건 · ${state.selectedDate} 편성`);
-      requestMapFit(); renderResults(localRows); renderStops(localRows, { boundaries: false }); selectStore(localRows[0], null, true);
+      requestMapFit(); renderResults(localRows); renderStops(localRows, {}); selectStore(localRows[0], null, true);
       return;
     }
     const errors = [];
@@ -1071,7 +991,7 @@
           const row = normalizeApiStore(detail.data);
           row.vehicle = dateReady ? storesByCode.get(row.customerCode)?.vehicle || "" : "";
           setSearchState("1건 · 고객코드 일치");
-          requestMapFit(); renderResults([row]); renderStops([row], { boundaries: false }); selectStore(row, null, true, true);
+          requestMapFit(); renderResults([row]); renderStops([row], {}); selectStore(row, null, true, true);
           return;
         }
       } catch (error) { if (isSilentRequestError(error)) return; errors.push(error); }
@@ -1094,7 +1014,7 @@
     setSearchState(`${rows.length}건${errors.length ? " · 일부 API 오류" : ""}`);
     requestMapFit();
     renderResults(rows);
-    renderStops(rows, { boundaries: false });
+    renderStops(rows, {});
     selectStore(rows[0], null, true);
   }
 
@@ -1104,7 +1024,7 @@
       element.onclick = () => {
         const row = rows[Number(element.dataset.result)];
         requestMapFit();
-        renderStops([row], { boundaries: false });
+        renderStops([row], {});
         selectStore(row, null, true);
       };
     });
@@ -1215,7 +1135,7 @@
     const selected = new Set(selectedVehicles());
     const retained = state.mode === "DATE_ROUTE" ? state.routeRows : state.currentRows.filter(store => !store.virtual);
     state.fitRequested = false;
-    renderStops([...retained, row], { virtual: true, boundaries: state.areaOn });
+    renderStops([...retained, row], { virtual: true });
     if (state.routeRows.length) drawRoute(state.routeRows);
     selectStore(row, null, true);
     state.virtual = row;
@@ -1350,7 +1270,7 @@
     // Display server totals even when a stop has no map coordinates.
     state.mode = "DATE_ROUTE";
     state.routeRows = stops;
-    renderStops(stops, { numbered: true, boundaries: false });
+    renderStops(stops, { numbered: true });
     drawRoute(stops);
     renderRouteSummary(payload, source);
     updateOperationMetrics(payload);
@@ -1399,28 +1319,6 @@
 
   function endRoute() {
     changePeriod(state.rangeStart, state.rangeEnd);
-  }
-
-  function syncBoundaryButtons() {
-    [$("#areaToggle"), $("#mobileAreaToggle")].forEach((button) => {
-      if (!button) return;
-      button.classList.toggle("on", state.areaOn);
-      button.textContent = state.areaOn ? "권역선 ON" : "권역선 OFF";
-      button.setAttribute("aria-pressed", String(state.areaOn));
-    });
-  }
-
-  function rerenderCurrentMap() {
-    renderStops(state.currentRows, { numbered: state.mode === "DATE_ROUTE", boundaries: state.areaOn, vehicles: selectedVehicles() });
-    if (state.mode === "DATE_ROUTE") drawRoute(state.routeRows);
-  }
-
-  function toggleBoundaries() {
-    state.areaOn = !state.areaOn;
-    syncBoundaryButtons();
-    clearBoundaries();
-    if (state.areaOn) { drawSelectedBoundaries([]); if (!state.representativeOverlays.length) addComparisonPins(); }
-    state.representativeOverlays.forEach((overlay) => overlay.setMap(state.areaOn ? state.map : null));
   }
 
   function resetMapOverview() {
@@ -1809,9 +1707,7 @@
     $("#syncOperation").onclick = refreshSelectedDate;
     $("#routePlan").onclick = () => loadRoute("pc");
     $("#endRoute").onclick = endRoute;
-    $("#areaToggle").onclick = toggleBoundaries;
     $("#mapReset").onclick = resetMapOverview;
-    $("#mobileAreaToggle").onclick = toggleBoundaries;
     $("#mobileMapReset").onclick = resetMapOverview;
     $("#mobileCenter").onchange = (event) => selectCenter(event.target.value);
     $("#mobileBaseVehicle").onchange = (event) => { state.centerFilter = ""; periodVehicleScope = event.target.value ? "selected" : "all"; setSelectedVehicles(event.target.value ? [event.target.value] : []); $("#mobileCenter").value = "all"; refreshVehicleUi(true); };
@@ -1851,7 +1747,6 @@
   clearNewAreaBatch();
   syncModeUi();
   $("#runListTool").open = false;
-  $("#mapModeBar").insertBefore($("#areaToggle"), $("#staffLogout"));
   ["Total", "Completed", "Remaining", "Eta"].forEach((name) => { $("#op" + name).parentNode.id = name.toLowerCase() + "Metric"; });
   $("#newAreaBatchTool > summary").textContent = "④ 신규권역 일괄조회";
   $('[data-sheet-tab="new"]').textContent = "신규권역";
@@ -1880,7 +1775,6 @@
   activateSheet("stores");
   if (innerWidth <= 760) showMobileMap();
   bindEvents();
-  syncBoundaryButtons();
   $("#currentTime").textContent = formatTime(new Date());
   setInterval(() => { $("#currentTime").textContent = formatTime(new Date()); }, 10000);
   refreshVehicleUi(false);

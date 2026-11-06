@@ -30,7 +30,7 @@ function fixture(windowData = {}) {
     Option:class {constructor(text,value){this.textContent=text;this.value=value;}},location:{href:'http://local.test/'}});
   vm.runInContext(runtime.slice(0,runtime.lastIndexOf('  initVehicles();')) + `
     activateSheet=()=>{}; refreshVehicleUi=()=>{};
-    window.test={state,initializePeriod,selectLatestRoute,syncDateHeading,drawSelectedBoundaries,clearBoundaries,changePeriod,changeSelectedDate,clearNewAreaBatch,runNewArea,exportNewArea,selectStore,clearSelection,renderStops,search,searchPeriod,loadOperationStatus,showDiagnostics,renderPeriodStoreList,selectCenter,comparisonStores,judgeNewAreaPoint,loadBaseVehicles,
+    window.test={state,initializePeriod,selectLatestRoute,syncDateHeading,changePeriod,changeSelectedDate,clearNewAreaBatch,runNewArea,exportNewArea,selectStore,clearSelection,renderStops,search,searchPeriod,loadOperationStatus,showDiagnostics,renderPeriodStoreList,selectCenter,comparisonStores,judgeNewAreaPoint,loadBaseVehicles,
       baseRows:()=>[...baseVehicles.values()],
       setReady:()=>{dateReady=true;periodMeta=${JSON.stringify(range)};state.rangeStart=periodMeta.startDate;state.rangeEnd=periodMeta.endDate;},
       setRows:rows=>{periodRows=rows;replaceStoreSnapshot(rows,{});},
@@ -102,11 +102,11 @@ test('default Period creates zero cards; selecting a late store creates only its
  f.clearSelection();assert.equal((f.node('#periodStoreList').innerHTML.match(/data-period-store=/g)||[]).length,0);
  assert.equal(f.state.currentRows.length,6000);
 });
-test('repeated map idle reuses pins, preserves polygons and never fetches',()=>{
+test('repeated map idle reuses pins and never fetches',()=>{
  const f=fixture();f.setReady();f.state.fitRequested=false;let calls=0;f.setFetch(()=>{calls++;throw Error('must not fetch');});
  f.state.map={getLevel:()=>5,getProjection:()=>({containerPointFromCoords:()=>({x:100,y:100})})};
- const rows=[sample];f.renderStops(rows);const overlay=f.state.overlays[0];const boundary={setMap(){throw Error('must not rebuild');}};f.state.polygons=[boundary];
- f.renderStops(rows,{viewportOnly:true});assert.equal(f.state.overlays[0],overlay);assert.equal(f.state.polygons[0],boundary);assert.equal(calls,0);
+ const rows=[sample];f.renderStops(rows);const overlay=f.state.overlays[0];
+ f.renderStops(rows,{viewportOnly:true});assert.equal(f.state.overlays[0],overlay);assert.equal(calls,0);
  const metrics=JSON.parse(f.node('#map').attrs['data-render-metrics']);assert.equal(metrics.created,1);assert.equal(metrics.removed,0);assert.equal(metrics.reused,1);
 });
 test('model not ready polls status only and transitions to ready automatically',async()=>{
@@ -142,21 +142,14 @@ test('latest Daily resolves actual assignments API date, never Snapshot fallback
  f.setFetch(async url=>{urls.push(url);return {data:[sample],meta:{date:'2026-09-19',complete:true}};});await f.selectLatestRoute();
  assert.ok(urls[0].endsWith('assignments?date=latest'));assert.equal(f.state.selectedDate,'2026-09-19');assert.equal(f.node('#periodControls').hidden,true);assert.equal(f.node('#dailyControls').hidden,false);
 });
-test('all-vehicle Osan administrative geometry attaches, toggles without selection/camera mutations',()=>{
- const f=fixture({VEHICLE_AREA_DATA:{vehicles:[{vehicle:'101',group:'osan',overview_admin_codes:['A']},{vehicle:'202',group:'honam',overview_admin_codes:['B']}]},ADMIN_FEATURES:[{properties:{code:'A'},geometry:{type:'Polygon',coordinates:[[[127,37],[128,37],[128,38],[127,37]]]}}]});
- f.selectors.get('#vehicleList input[type=checkbox]').forEach(x=>x.checked=false);
- f.state.map={center:'unchanged',level:5};f.state.centerFilter='osan';f.state.selected=sample;const map=f.state.map;
- f.drawSelectedBoundaries([]);assert.equal(f.state.polygons.length,1);assert.equal(f.state.polygons[0].map,map);assert.equal(f.node('#areaToggle').attrs['data-geometry-count'],'1');
- f.clearBoundaries();assert.equal(f.state.polygons.length,0);assert.equal(f.state.selected,sample);assert.equal(map.level,5);assert.equal(map.center,'unchanged');assert.equal(f.state.mode,'BASE_60D');
-});
 test('date controls move as one DOM into sidebar; address retains original DOM/events; assets versioned',()=>{
  const html=file('map-phase2b-preview.html');assert.ok(html.indexOf('id="mapDateBar"')<html.indexOf('id="map"'));
  assert.equal(html.split('id="selectedDate"').length-1,1);assert.equal(html.split('id="todayBtn"').length-1,1);
  assert.ok(runtime.includes('$("#results").before(addressPanel)'));assert.ok(!runtime.includes('filters.append($("#legacyVehicleState"), $("#periodDriver"), $("#periodControls"))'));
  assert.ok(runtime.includes("$('#leftPanel .head').append($('#mapDateBar'))"));
  for(const asset of ['map-data-sync.js','map-staff.js','map-staff.css'])assert.ok(html.includes(asset+'?v=20260924-ui1'));
- for(const asset of ['map-period-ui.js','map-phase2b-runtime.js'])assert.ok(html.includes(asset+'?v=20260924-fixed-cache1'));
- assert.ok(html.includes('map-period.css?v=20260924-ui1'));
+ assert.ok(html.includes('map-period-ui.js?v=20260924-fixed-cache1'));
+ for(const asset of ['map-phase2b-runtime.js','map-period.css'])assert.ok(html.includes(asset+'?v=20261107-r18-no-territory'));
 });
 test('recent range never exceeds available model start and never guesses absent latest',()=>{
  assert.deepEqual(MapPeriodUi.recentRange({...model,startDate:'2026-09-01'}),{start:'2026-09-01',end:'2026-09-19'});

@@ -16,7 +16,7 @@ function fixture() {
   const ctx = vm.createContext({ window: { VEHICLE_AREA_DATA: { vehicles: [] } }, document: { body: node('body'), querySelector: node, querySelectorAll: () => [] }, console, Intl, Date, Number, URL, URLSearchParams, Map, Set, AbortController, setTimeout, clearTimeout, performance, innerWidth: 1440, innerHeight: 900, requestAnimationFrame: () => {}, Phase2bUi: helpers });
   ctx.MapPeriodUi=globalThis.MapPeriodUi;
   vm.runInContext(runtime.slice(0, runtime.lastIndexOf("  initVehicles();")) + `
-    window.test = { state, setPeriod: (rows) => { state.rangeStart = "2026-08-01"; state.rangeEnd = "2026-08-28"; periodRows = rows.map(row => ({...row, history:[{vehicle:row.vehicle}]})); periodMeta = {complete:true,startDate:state.rangeStart,endDate:state.rangeEnd,missingCoordinate:0}; }, nodes: $, judgeNewAreaPoint, toggleBoundaries, normalizeRouteStop, normalizeApiStore, setStores: (rows) => { allStores = rows; }, setSelected: (values) => { selectedVehicles = () => values; }, ready: () => { dateReady = true; }, loadOperationStatus, changeSelectedDate, setSnapshot: (rows) => { latestSnapshotRows = rows; }, stubUi: () => { activateSheet = () => {}; loadBaseMap = async () => {}; ensureDateVehicles = () => {}; refreshDriverMaster = () => {}; }, getStores: () => allStores, localDate, setFetch: (fn) => { fetchJson = fn; }, noDraw: () => { drawSelectedBoundaries = () => {}; } };
+    window.test = { state, setPeriod: (rows) => { state.rangeStart = "2026-08-01"; state.rangeEnd = "2026-08-28"; periodRows = rows.map(row => ({...row, history:[{vehicle:row.vehicle}]})); periodMeta = {complete:true,startDate:state.rangeStart,endDate:state.rangeEnd,missingCoordinate:0}; }, nodes: $, judgeNewAreaPoint, normalizeRouteStop, normalizeApiStore, setStores: (rows) => { allStores = rows; }, setSelected: (values) => { selectedVehicles = () => values; }, ready: () => { dateReady = true; }, loadOperationStatus, changeSelectedDate, setSnapshot: (rows) => { latestSnapshotRows = rows; }, stubUi: () => { activateSheet = () => {}; loadBaseMap = async () => {}; ensureDateVehicles = () => {}; refreshDriverMaster = () => {}; }, getStores: () => allStores, localDate, setFetch: (fn) => { fetchJson = fn; } };
     window.test.setMeta = patch => Object.assign(periodMeta,patch);
   })();`, ctx);
   return ctx.window.test;
@@ -35,13 +35,6 @@ test("30km references use nearest delivery point per vehicle and exclude distant
   assert.equal(rows[0].lat, 37.01);
 });
 
-test("selected-date boundary encloses only supplied assignments, excludes missing coordinates", () => {
-  const stores = [{lat:37,lng:127},{lat:37,lng:128},{lat:38,lng:127},{lat:37.1,lng:127.1},{lat:null,lng:129}];
-  const hull = helpers.deliveryBoundary(stores);
-  assert.equal(hull.length, 3);
-  assert.equal(hull.some((point) => point.lat === 37.1), false);
-  assert.equal(helpers.deliveryBoundary(stores.slice(0,2)).length, 0);
-});
 
 test("500m auto decision does not recommend stores 600m or 30km away", () => {
   const f = fixture();
@@ -66,29 +59,6 @@ test('address ambiguity and existing region exceptions stay distinct from covera
  assert.equal(f.judgeNewAreaPoint({address:'제주 테스트로 1'},{lat:37,lng:127}).reason,'제주도');
 });
 
-test("boundary toggle hides only polygons and representatives, never refits or clears stores/routes", () => {
-  const f = fixture();
-  f.noDraw();
-  assert.equal(f.state.areaOn, false);
-  f.state.areaOn = true; // exercise ON -> OFF, then OFF -> ON
-  let storeCalls = 0, lineCalls = 0, polygonCalls = 0, representativeMap = "map";
-  f.state.map = { setBounds() { assert.fail("unexpected fit"); } };
-  f.state.overlays = [{ setMap() { storeCalls++; } }];
-  f.state.lines = [{ setMap() { lineCalls++; } }];
-  f.state.polygons = [{ setMap(value) { assert.equal(value, null); polygonCalls++; } }];
-  f.state.representativeOverlays = [{ setMap(value) { representativeMap = value; } }];
-  f.state.fitRequested = false;
-  f.state.selectedDate = "2026-08-11";
-  f.setSelected(["101"]);
-  f.toggleBoundaries();
-  assert.equal(storeCalls + lineCalls, 0);
-  assert.equal(polygonCalls, 1);
-  assert.equal(representativeMap, null);
-  assert.equal(f.state.fitRequested, false);
-  assert.equal(f.state.selectedDate, "2026-08-11");
-  f.toggleBoundaries();
-  assert.equal(representativeMap, f.state.map);
-});
 
 test("historical status calls only the requested route date, preserves 27/10/17 and suppresses ETA", async () => {
   const f = fixture(); f.ready(); f.state.mode = "DATE_ROUTE"; f.state.selectedDate = "2026-08-11";
