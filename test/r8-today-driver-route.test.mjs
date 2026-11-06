@@ -9,7 +9,9 @@ const status={date,sourceObservation:observation,vehicles:[route]};
 const input={date,vehicle,customerCode,context:'DATE_ROUTE'};
 function reader(value=status,readStoredRoute=()=>{throw Error('unexpected fallback');}) {return createDatedDriverRouteReader({today:()=>date,readTodayStatus:async()=>value,readStoredRoute});}
 test('today uses complete Delivery evidence and never stored route; missing phone cannot borrow undated master',async()=>{
- const assignment=createDriverAssignmentReader({readStoredRoute:reader()});
+ const stop={...route.stops[0],driverName:route.driverName};
+ const value={...status,vehicles:[{...route,stops:[stop]}]};
+ const assignment=createDriverAssignmentReader({readStoredRoute:reader(value)});
  const read=createDriverContactReader({readAssignment:assignment,readDriverMaster:async()=>({generatedAt:date,vehicles:[{vehicle,driverName:route.driverName,phone:'010-0000-0000'}]})});
  assert.deepEqual((await read(input)).data,{driverName:route.driverName,phone:null});
 });

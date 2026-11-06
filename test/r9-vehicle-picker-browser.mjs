@@ -52,6 +52,14 @@ try{
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapUiLocalBridge?.isDataReady());
  const check=(name,condition)=>{assert(condition,name);checks.push(name);};
  await page.waitForFunction(()=>document.querySelector('#vehicleList .vehicleItem')?.dataset.listGroup==='osan');
+ check('fresh page selects only Osan stores and marks Osan in the controls',await page.evaluate(()=>{
+  const state=MapUiLocalBridge.state;
+  return state.centerFilter==='osan'&&state.currentRows.length>0&&state.currentRows.every(row=>row.baseVehicleGroup==='osan')
+    &&document.querySelector('[data-source-center="osan"]').getAttribute('aria-pressed')==='true'
+    &&document.querySelector('#periodCenter').value==='osan';
+ }));
+ await page.locator('[data-source-center="all"]').click();
+ await page.waitForFunction(()=>!MapUiLocalBridge.state.centerFilter&&document.querySelector('[data-source-center="all"]').getAttribute('aria-pressed')==='true');
  const query=page.locator('#vehicleQuery');check('single search is initially inside folded picker',await query.count()===1&&!await query.isVisible()&&await page.locator('#baseVehiclePicker').getAttribute('open')===null);
  const summary=page.locator('#baseVehiclePicker>summary');
  await summary.click({position:{x:10,y:10}});check('single visible search below vehicle heading',await query.isVisible()&&await query.getAttribute('placeholder')==='호차번호 · 담당 지역 검색');
@@ -89,7 +97,8 @@ try{
  }));
  await query.fill('');
  await page.locator('[data-source-center="yeongnam"]').click();await query.fill('30');assert.deepEqual(await values(),['301']);await query.fill('');assert.deepEqual(await values(),['301','310']);checks.push('search and center filter compose');
- await page.locator('[data-source-center="all"]').click();await page.evaluate(()=>{MapUiLocalBridge.state.mode='DATE_ROUTE';return MapUiLocalBridge.submitDailyQuery('2026-10-21','2026-10-21')});
+ await page.locator('[data-source-center="all"]').click();await page.locator('#modeDaily').click();
+ await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-10-21','2026-10-21'));
  await page.locator('#chooseRoutes').click();check('same search visible above daily checks',await query.isVisible()&&await query.evaluate(i=>i.nextElementSibling.id==='vehicleList'));
  await query.fill('영종구');assert.deepEqual(await values(),['103']);await input('103').check();await query.fill('');check('daily vehicle shows region from dated deliveries',await area('103').innerText()==='영종구');
  check('unknown date vehicle sorted in unknown group',await page.locator('#vehicleList input[value="103"]').evaluate(i=>i.parentElement.dataset.listGroup==='unknown'));
@@ -97,6 +106,7 @@ try{
  check('date changes preserve one checkbox per vehicle',await page.locator('#vehicleList input[value="103"]').count()===1);
  check('date reorder preserves checked selection',await page.locator('#vehicleList input[value="103"]').isChecked());
  await page.locator('#closeRoutes').click();await page.locator('#modePeriod').click();await page.waitForFunction(()=>MapUiLocalBridge.state.mode==='BASE_60D');
+ check('return from dated routes keeps explicit All center selection',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter===''&&document.querySelector('#periodCenter').value==='all'));
  await page.waitForFunction(()=>document.querySelector('#vehicleList input[value="101"]').parentElement.textContent.includes('강남구'));
  for(const width of [1920,1366,390]){
   await page.setViewportSize({width,height:844});
@@ -108,5 +118,5 @@ try{
   await page.screenshot({path:path.join(output,`after-fixture-${width}.png`),fullPage:true});
  }
  check('no page errors',errors.length===0);check('remote/auth/geocoding/source calls remain zero',external.length===0&&requests.every(p=>!/auth|geocod|source|hub|private\//i.test(p)));
- const result={scope:'LOCAL_EDGE_SYNTHETIC_MAP_NOT_PRODUCTION',output,checks,errors,externalCalls:external.length,requests};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+ const result={scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_MAP',output,checks,errors,externalCalls:external.length,requests};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

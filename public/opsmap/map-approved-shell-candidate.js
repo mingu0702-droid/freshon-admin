@@ -38,7 +38,7 @@
   for(const node of [$('#searchNotice'),$('#addressJudgeResults')]){node.hidden=true;node.inert=true;node.classList.add('compatibilityHidden');address.append(node);}
   const filters=$('#periodFilterPanel');filters.className='generalCenters';
   const filterTitle=filters.querySelector('.label');filterTitle.className='sectiontitle';filterTitle.innerHTML='<h2>담당 센터</h2><button id="sourceCenterReset" class="textbtn">전체 보기</button>';
-  const centers=document.createElement('div');centers.className='centers';centers.id='centers';centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남']].map(([key,label])=>`<button data-source-center="${key}" class="${key==='all'?'active':''}">${label}</button>`).join('');filters.append(centers);
+  const centers=document.createElement('div');centers.className='centers';centers.id='centers';centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남']].map(([key,label])=>`<button data-source-center="${key}" class="${key===(bridge.state.centerFilter||'all')?'active':''}">${label}</button>`).join('');filters.append(centers);
   const pickerShell=document.createElement('div');pickerShell.className='vehiclePickerShell';filters.append(pickerShell);
   const basePicker=document.createElement('details');basePicker.id='baseVehiclePicker';
   basePicker.innerHTML='<summary>호차 선택</summary><p id="baseVehicleCount" role="status">선택 없음 · 전체 지도</p>';
@@ -271,7 +271,7 @@
     syncVehicleLegend();
     $('#periodDriver').disabled=$('input[name="periodBasis"][value="vehicle"]').checked;
     const daily=document.body.classList.contains('daily-mode');planner.hidden=false;stores.hidden=daily;$('#sourceBatch').hidden=daily;
-    const centerValue=$('#periodCenter').value||'all';for(const button of centers.querySelectorAll('button')){const active=button.dataset.sourceCenter===centerValue;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}
+    const centerValue=bridge.state.centerFilter||'all';for(const button of centers.querySelectorAll('button')){const active=button.dataset.sourceCenter===centerValue;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}
     const selected=bridge.state.selectedVehicles;const selectedText=selected.length?selected.length+'개 호차 선택':'선택 없음 · 전체 지도';if($('#baseVehicleCount').textContent!==selectedText)$('#baseVehicleCount').textContent=selectedText;
     // Reconcile only presentation of disabled state; operational partial/error messages remain.
     if(daily){const count=new Set(bridge.state.currentRows.map(row=>row.customerCode)).size;const badge=count?`${count} 매장`:bridge.isDataReady()?'0 매장':'불러오는 중';if($('#totalBadge').textContent!==badge)$('#totalBadge').textContent=badge;
