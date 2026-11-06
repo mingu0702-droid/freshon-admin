@@ -42,6 +42,36 @@ test('geometry response limit explicitly rejects a wide query while count querie
  assert.equal((await query([{lat:37.5665,lng:126.978}],{geometry:false})).metadata.matchedPointCount,1);
 });
 
+test('identical in-flight count queries share work and only distinct jobs consume queue slots',async()=>{
+ const query=createOfficialAdminBoundaryQuery(),options={geometry:false,detail:'detail'};
+ const seoul={lat:37.5665,lng:126.978},busan={lat:35.1796,lng:129.0756};
+ const points=[seoul,busan],first=query(points,options);
+ const orderedDifferently=query([busan,seoul],options);
+ const otherDetail=query(points,{geometry:false,detail:'overview'});
+ assert.notEqual(first,orderedDifferently);assert.notEqual(first,otherDetail);
+ const duplicates=Array.from({length:3},()=>query(points.map(({lat,lng})=>({lng,lat})),options));
+ assert(duplicates.every(pending=>pending===first));
+ await assert.rejects(query([seoul],options),{status:503,message:'ADMIN_BOUNDARIES_BUSY'});
+ await assert.rejects(query(points,{geometry:true}),{status:503,message:'ADMIN_BOUNDARIES_BUSY'});
+ const [joined,reordered]=await Promise.all([first,orderedDifferently,otherDetail,...duplicates]);
+ assert.deepEqual(joined.matches.map(m=>m.adminCodes),[['11020550'],['21130590']]);
+ assert.deepEqual(reordered.matches.map(m=>m.adminCodes),[['21130590'],['11020550']]);
+ const next=query(points,options);assert.notEqual(next,first);assert.deepEqual(await next,joined);
+});
+
+test('failed shared count queries release their key for retry',async()=>{
+ let fail=true;
+ const query=createOfficialAdminBoundaryQuery({readFile:async(...args)=>{
+  if(fail){fail=false;throw Error('LOCAL_READ_FAILURE');}
+  return fs.readFile(...args);
+ }});
+ const points=[{lat:37.5665,lng:126.978}],options={geometry:false};
+ const failed=query(points,options);assert.equal(query(points,options),failed);
+ await assert.rejects(failed,/LOCAL_READ_FAILURE/);
+ const retry=query(points,options);assert.notEqual(retry,failed);
+ assert.equal((await retry).metadata.matchedPointCount,1);
+});
+
 test('a complex coastal feature keeps exact joins, names and every original polygon',async()=>{
  const entry=manifest.entries.find(e=>e.code==='36670360');
  const [feature]=JSON.parse(gunzipSync(await fs.readFile(new URL(entry.shard,directory)))).features;

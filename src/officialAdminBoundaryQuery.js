@@ -32,7 +32,7 @@ export function validateBoundaryQuery(body){
 }
 // The manifest alone is indexed at first query. Only counties touching requested points are decoded.
 export function createOfficialAdminBoundaryQuery({directory=bundled,overviewDirectory=overviewBundled,readFile=fs.readFile,expectedManifestHash=manifestHash,expectedOverviewHash=overviewHash,maxCacheBytes=1024*1024,maxGeometryBytes=16*1024*1024}={}){
- let pending,overviewPending,tail=Promise.resolve(),queued=0;const cache=new Map(),pointMatches=new Map();let cacheBytes=0;
+ let pending,overviewPending,tail=Promise.resolve(),queued=0;const cache=new Map(),pointMatches=new Map(),inFlightCounts=new Map();let cacheBytes=0;
  async function loadIndex(){
   if(!pending)pending=(async()=>{
    const bytes=await readFile(path.join(directory,'manifest.json'));
@@ -165,7 +165,18 @@ export function createOfficialAdminBoundaryQuery({directory=bundled,overviewDire
  }
  return (points,options={})=>{
   validateBoundaryQuery({points,...options});
+  // Keep the exact count inputs stable while they wait in the existing queue.
+  const countOnly=options.geometry===false;
+  const queryPoints=countOnly?points.map(({lat,lng})=>({lat,lng})):points;
+  const queryOptions=countOnly?{geometry:false,detail:options.detail??'detail'}:options;
+  const key=countOnly?hash(JSON.stringify([queryOptions.detail,queryPoints])):null;
+  if(key&&inFlightCounts.has(key))return inFlightCounts.get(key);
   if(queued>=3)return Promise.reject(Object.assign(Error('ADMIN_BOUNDARIES_BUSY'),{status:503}));
-  queued++;const result=tail.then(()=>query(points,options));tail=result.catch(()=>{}).finally(()=>{queued--;});return result;
+  queued++;
+  const pendingQuery=tail.then(()=>query(queryPoints,queryOptions));
+  const result=key?pendingQuery.finally(()=>{inFlightCounts.delete(key);}):pendingQuery;
+  if(key)inFlightCounts.set(key,result);
+  tail=result.catch(()=>{}).finally(()=>{queued--;});
+  return result;
  };
 }
