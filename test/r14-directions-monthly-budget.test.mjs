@@ -49,6 +49,19 @@ test('two processes race through CAS without overwriting reservations',async()=>
  const r=remote();const result=await Promise.allSettled([reserve(budget(r,next)),reserve(budget(r,next))]);
  assert.equal(result.filter(row=>row.status==='fulfilled').length,1);assert.equal(r.writes,1);assert.equal(r.state.roadBudget.used,10);
 });
+test('a CAS readback crossing KST midnight retains the debit on its original day and blocks dispatch',async()=>{
+ const midnight=Date.parse('2026-11-03T15:00:00Z'),r=remote();let time=midnight-1;
+ const b=createProductionRoadBudget({env,token:'synthetic-token',now:()=>time,fetchImpl:async(url,options)=>{
+  const result=await r.fetchImpl(url,options);
+  if(options.method==='PUT')time=midnight;
+  return result;
+ }});
+ await assert.rejects(reserve(b),e=>e.code==='ROAD_BUDGET_RESERVATION_DAY_CHANGED');
+ assert.equal(r.writes,1);assert.equal(r.state.roadBudget.used,10);
+ assert.equal(r.state.roadBudget.updatedAt,'2026-11-03T14:59:59.999Z');
+ assert.deepEqual(r.state.roadBudget.monthlyApproval.dailyUsage,{'2026-11-03':{directions:3,waypoints:1}});
+ const status=await b.status();assert.equal(status.usageDate,'2026-11-04');assert.equal(status.apiRemaining.directions,10000);
+});
 test('obsolete 100-call environment setting cannot impose a process quota',()=>{
  for(const oldLimit of ['0','1','100','300']){
   const service=createRoadRouteService({env:{...env,OPSMAP_ROAD_ROUTE_REQUEST_LIMIT:oldLimit}});assert.equal(service.configuration().requestLimit,30000);

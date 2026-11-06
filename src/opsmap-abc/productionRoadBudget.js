@@ -33,11 +33,11 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
   let state;try{const bytes=Buffer.from(data.content,'base64');if(bytes.length>32768)fail();state=JSON.parse(bytes.toString('utf8'));}catch{fail('ROAD_BUDGET_FORMAT');}
   return {state,sha:data.sha};
  }
- function validate(state){
+ function validate(state,time){
   const b=state?.roadBudget;
   if(state?.schema!==1||!b||b.accountHash!==accountHash||b.scope!=='CUMULATIVE_APPROVED_ACCOUNT')fail('ROAD_BUDGET_ACCOUNT_MISMATCH');
   if(b.policy!=='FREE_ONLY'||b.providerPaidDisabled!==true||b.servicePermissionVerified!==true||!/^[-A-Za-z0-9_]{8,100}$/.test(b.approvalId||''))fail('ROAD_BUDGET_APPROVAL_REQUIRED');
-  const verified=Date.parse(b.verifiedAt),expires=Date.parse(b.expiresAt),time=now();
+  const verified=Date.parse(b.verifiedAt),expires=Date.parse(b.expiresAt);
   if(!Number.isFinite(verified)||!Number.isFinite(expires)||verified>time||expires<=time||expires<=verified)fail('ROAD_BUDGET_APPROVAL_EXPIRED');
   if(b.monthlyApproval){
    // Opt-in monthly evidence only. Never upgrade, extend or replenish an old
@@ -64,19 +64,21 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
   if(total!==b.used)fail('ROAD_BUDGET_QUOTA_UNVERIFIED');
   return b;
  }
- function stateStatus(b){
-  const day=kst(now()),approvalDay=kst(Date.parse(b.verifiedAt));
+ function stateStatus(b,time){
+  const day=kst(time),approvalDay=kst(Date.parse(b.verifiedAt));
   const apis=Object.fromEntries(Object.entries(b.apis).filter(([api])=>['directions','waypoints'].includes(api)).map(([api,value])=>[api,Math.max(0,b.monthlyApproval?(day===approvalDay?value.freeRemainingAtApproval:dailyLimits[api])-(b.monthlyApproval.dailyUsage[day]?.[api]||0):value.freeRemainingAtApproval-value.used)]));
   return {durable:true,scope:b.scope,remaining:Math.max(0,Math.min(b.limit-b.used,b.monthlyFreeRemainingAtApproval-b.used,apis.directions+apis.waypoints)),apiRemaining:apis,freeOnly:true,approvalExpiresAt:b.expiresAt,approvalWindow:b.monthlyApproval?'KST_MONTH':'KST_DAY',usageDate:day};
  }
  function transaction(work){const task=tail.catch(()=>{}).then(async()=>work(await read()));tail=task;return task;}
  return {kind:'PRODUCTION_PRIVATE_GITHUB_CAS',durable:configured,inspectWhenDisabled:true,
-  status:()=>transaction(async({state})=>stateStatus(validate(state))),
+  status:()=>transaction(async({state})=>{
+   const time=now();return stateStatus(validate(state,time),time);
+  }),
   reserve:({cost,provider,api})=>transaction(async({state,sha})=>{
    if(cost!==1||provider!=='kakao-directions'||!['directions','waypoints'].includes(api))fail('ROAD_BUDGET_INVALID_RESERVATION');
-   const b=validate(state),status=stateStatus(b);if(!status.remaining||!status.apiRemaining[api])fail('QUOTA_EXCEEDED');
-   b.used++;b.apis[api].used++;b.lastReservation=randomUUID();b.updatedAt=new Date(now()).toISOString();
-   if(b.monthlyApproval){const day=kst(now());b.monthlyApproval.dailyUsage[day]||={directions:0,waypoints:0};b.monthlyApproval.dailyUsage[day][api]++;}
+   const time=now(),b=validate(state,time),status=stateStatus(b,time);if(!status.remaining||!status.apiRemaining[api])fail('QUOTA_EXCEEDED');
+   b.used++;b.apis[api].used++;b.lastReservation=randomUUID();b.updatedAt=new Date(time).toISOString();
+   if(b.monthlyApproval){const day=status.usageDate;b.monthlyApproval.dailyUsage[day]||={directions:0,waypoints:0};b.monthlyApproval.dailyUsage[day][api]++;}
    // Write only the quota ledger; never serialize unrelated/session/customer fields.
    const clean={schema:1,roadBudget:Object.fromEntries(['accountHash','scope','policy','providerPaidDisabled','servicePermissionVerified','approvalId','verifiedAt','expiresAt','limit','used','monthlyFreeRemainingAtApproval','lastReservation','updatedAt'].map(k=>[k,b[k]]))};
    clean.roadBudget.apis=Object.fromEntries(['directions','waypoints'].map(api=>[api,{freeRemainingAtApproval:b.apis[api].freeRemainingAtApproval,used:b.apis[api].used}]));
@@ -85,6 +87,10 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
    const response=await request(file,{method:'PUT',body:JSON.stringify({message:'Reserve approved Production free Directions call',branch,sha,content:bytes.toString('base64')})});
    if([409,422].includes(response.status))fail('ROAD_BUDGET_CONFLICT');if(!response.ok)fail('ROAD_BUDGET_WRITE');
    const saved=await read();if(JSON.stringify(saved.state)!==JSON.stringify(clean))fail('ROAD_BUDGET_READBACK_UNKNOWN');
-   return {reserved:true,...stateStatus(validate(saved.state))};
+   // A verified reservation is usable only on the KST day it was charged.
+   // Keep an already committed reservation if readback crosses midnight.
+   const confirmedAt=now(),confirmedStatus=stateStatus(validate(saved.state,confirmedAt),confirmedAt);
+   if(confirmedStatus.usageDate!==status.usageDate)fail('ROAD_BUDGET_RESERVATION_DAY_CHANGED');
+   return {reserved:true,...confirmedStatus};
   })};
 }
