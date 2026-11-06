@@ -69,7 +69,6 @@
     const selection=document.createElement('p');selection.id='dotRouteSelection';
     const origin=document.createElement('p');origin.id='dotRouteOrigin';
     summary.querySelector('.sectiontitle').after(selection,origin);
-    for(const [id,label]of [['navDistance','주행거리'],['navDuration','예상 소요']]){const value=$('#'+id),wrap=document.createElement('span');wrap.append(label+' ',value);summary.querySelector('.navTotals').append(wrap);}
     summary.append($('#syncOperation'));
     const referenceNotice=$('#mapReferenceDataNotice');
     if(referenceNotice)$('#approvedSiteHeader').append(referenceNotice);

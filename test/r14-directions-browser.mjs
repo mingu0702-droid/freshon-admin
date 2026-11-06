@@ -78,8 +78,9 @@ try{
  await page.route('**/*',route=>{if(!route.request().url().startsWith(origin)){external.push(route.request().url());return route.abort();}return route.continue();});
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady());
  const check=(name,value)=>{assert(value,name);checks.push(name);};
+ const totals=page.locator('#mapRouteTotals');
  await page.screenshot({path:path.join(output,'before-1366.png')});
- check('initial visit does not query Directions',requests.length===0&&providerRequests.length===0);
+ check('initial visit does not query Directions or show route totals',requests.length===0&&providerRequests.length===0&&!await totals.isVisible());
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
  await page.locator('.navCenterChoices').getByRole('button',{name:'오산센터',exact:true}).click();
  await page.evaluate(()=>MapNavigationEditor.setPoint('destination','SYNTHETIC_3'));
@@ -88,6 +89,8 @@ try{
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  assert.deepEqual(providerRequests[0],{method:'GET',points:[[127,37],[rows[3].lng,rows[3].lat]]});
  check('Osan center to one store displays synthetic road geometry, distance and duration',requests.length===1&&await page.evaluate(()=>__routeLines.size===1)&&await page.locator('#navDistance').textContent()==='0.1 km'&&await page.locator('#navDuration').textContent()==='1분');
+ check('desktop totals are visible on the map and absent from route settings',await page.locator('.maparea > #mapRouteTotals').isVisible()&&await page.locator('#waypointPlanner #navDistance, #navigationSummary #navDuration').count()===0);
+ await totals.screenshot({path:path.join(output,'map-route-totals-1366.png')});
  await page.locator('#clearPlanner').click();
  await page.evaluate(()=>MapNavigationEditor.replacePoints(['SYNTHETIC_0','SYNTHETIC_1','SYNTHETIC_2','SYNTHETIC_3']));
  await page.evaluate(()=>{window.__stableKakaoLink=document.querySelector('#navKakaoLinks a');for(let i=0;i<20;i++)window.dispatchEvent(new Event('map-coordinate-updated'));});await page.waitForTimeout(100);check('background coordinate updates preserve the same clickable external route link',await page.evaluate(()=>window.__stableKakaoLink===document.querySelector('#navKakaoLinks a')));
@@ -100,7 +103,7 @@ try{
  await page.evaluate(()=>{const map=MapUiLocalBridge.state.map;map.panTo(new kakao.maps.LatLng(37.02,127.02));map.setLevel(6);});
  await page.waitForFunction(()=>MapUiLocalBridge.state.map.getLevel()===6&&MapUiLocalBridge.state.map.getCenter().getLat()===37.02);
  assert.deepEqual(await page.evaluate(()=>Array.from(__routeLines,l=>l.opts.path.map(p=>[p.getLat(),p.getLng()]))),geometry);
- check('pan and zoom keep the synthetic path without a new call',requests.length===2);
+ check('pan and zoom keep the synthetic path and map totals without a new call',requests.length===2&&await totals.isVisible());
  await page.locator('[aria-label="경유지 2 위로"]').click();await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  await page.waitForFunction(()=>document.querySelector('#navLegs').textContent.includes('합성 매장 0 → 합성 매장 2'));
  check('waypoint reorder automatically recalculates exact new sequence once',requests.length===3&&requests[2].waypoints[0].lat===rows[2].lat&&requests[2].waypoints[1].lat===rows[1].lat&&providerRequests.length===3);
@@ -108,7 +111,7 @@ try{
  check('swap reverses endpoints and intermediate visit order',requests.length===4&&requests[3].origin.lat===rows[3].lat&&requests[3].destination.lat===rows[0].lat&&requests[3].waypoints[0].lat===rows[1].lat);
  await page.locator('#plannerWaypoint0').fill('UNRESOLVED');await page.waitForTimeout(650);
  check('incomplete waypoint clears geometry and never queries',requests.length===4&&await page.locator('#navDistance').textContent()==='— km');
- await page.locator('#clearPlanner').click();await page.waitForTimeout(550);check('reset clears all points and metrics without a call',requests.length===4&&(await page.evaluate(()=>MapNavigationEditor.values())).every(v=>!v)&&await page.locator('#navDuration').textContent()==='— 분');
+ await page.locator('#clearPlanner').click();await page.waitForTimeout(550);check('reset clears all points and metrics without a call',requests.length===4&&(await page.evaluate(()=>MapNavigationEditor.values())).every(v=>!v)&&await page.locator('#navDuration').textContent()==='— 분'&&!await totals.isVisible());
  for(const width of [1920,1366,768,390]){
   await page.setViewportSize({width,height:900});await page.locator('#waypointPlanner').scrollIntoViewIfNeeded();
   check(width+'px editor stays inside the viewport',await page.locator('#waypointPlanner').evaluate(n=>{const r=n.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1}));
@@ -116,6 +119,8 @@ try{
  }
  await page.evaluate(()=>MapNavigationEditor.replacePoints(['SYNTHETIC_0','SYNTHETIC_3']));await page.locator('#planRoute').click();await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  check('mobile explicit route shows synthetic geometry and response metrics',requests.length===5&&await page.locator('#navDistance').textContent()==='0.1 km');
+ check('mobile totals fit inside the map',await totals.evaluate(node=>{const badge=node.getBoundingClientRect(),map=node.parentElement.getBoundingClientRect();return badge.width>0&&badge.left>=map.left&&badge.right<=map.right&&badge.bottom<=map.bottom;}));
+ await totals.screenshot({path:path.join(output,'map-route-totals-390.png')});
  await page.locator('#addWaypoint').click();await page.evaluate(()=>MapNavigationEditor.setPoint('waypoint','SYNTHETIC_1',0));await page.waitForFunction(()=>document.querySelector('#navDistance').textContent==='0.2 km');
  check('mobile add waypoint recalculates',requests.length===6&&requests.at(-1).waypoints.length===1);
  const beforeRemove=providerRequests.length;
@@ -148,7 +153,7 @@ try{
  const response=await blocked;
  const payload=await response.json();
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='error');
- check('exhausted free budget returns local 429 and dispatches no provider request',response.status()===429&&payload.error==='QUOTA_EXCEEDED'&&requests.length===requestCount+1&&providerRequests.length===providerCount&&reservations.length===providerCount&&await page.evaluate(()=>__routeLines.size===0)&&await page.locator('#navDistance').textContent()==='— km');
+ check('exhausted free budget returns local 429 and dispatches no provider request',response.status()===429&&payload.error==='QUOTA_EXCEEDED'&&requests.length===requestCount+1&&providerRequests.length===providerCount&&reservations.length===providerCount&&await page.evaluate(()=>__routeLines.size===0)&&await page.locator('#navDistance').textContent()==='— km'&&!await totals.isVisible());
  check('no external calls or JavaScript errors',external.length===0&&errors.length===0);
- const result={pass:checks.length,fail:0,scope:'LOCAL_REAL_EDGE_SYNTHETIC_PROVIDER_NOT_LIVE_KAKAO',checks,routePosts:requests.length,providerCalls:providerRequests.length,reservations:reservations.length,externalCalls:external.length,errors,artifacts:output};fs.writeFileSync(path.join(output,'RESULT.safe.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+ const result={pass:checks.length,fail:0,scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_PROVIDER',checks,routePosts:requests.length,providerCalls:providerRequests.length,reservations:reservations.length,externalCalls:external.length,errors,artifacts:output};fs.writeFileSync(path.join(output,'RESULT.safe.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }catch(error){if(errors.length)console.error(JSON.stringify(errors));throw error;}finally{await browser?.close();await new Promise(r=>server.close(r));}

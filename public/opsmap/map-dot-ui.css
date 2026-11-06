@@ -18,8 +18,6 @@
 .dotRestored.daily-mode #navigationSummary .sectiontitle{margin-bottom:3px}
 .dotRestored.daily-mode #navigationSummary h2{font-size:13px}
 .dotRestored #dotRouteSelection,.dotRestored #dotRouteOrigin{margin:3px 0;font-size:11px;color:#728097}
-.dotRestored #navigationSummary .navTotals{font-size:12px;margin:6px 0;gap:14px;color:#8290a2}
-.dotRestored #navigationSummary .navTotals b{font-size:14px;color:#39495f}
 .dotRestored #navigationSummary #navRouteStatus{font-size:11px;color:#728097;margin:5px 0}
 .dotRestored #navigationSummary>#syncOperation{font-size:11px;padding:5px 8px;margin-top:3px}
 .dotRestored #dotRoadOptions{font-size:11px;margin-top:6px;color:#728097}
@@ -27,7 +25,6 @@
 .dotRestored #dotRoadOptions:not([open])>summary{font-size:10px}
 .dotRestored.daily-mode #navigationSummary .sectiontitle{margin-bottom:0}
 .dotRestored #dotRouteSelection,.dotRestored #dotRouteOrigin{margin:2px 0}
-.dotRestored #navigationSummary .navTotals{margin:4px 0}
 .dotRestored #navigationSummary #navRouteStatus{margin:3px 0}
 .dotRestored:not(.daily-mode) #waypointPlanner{padding-top:24px}
 .dotRestored #navigationSummary{position:static}
