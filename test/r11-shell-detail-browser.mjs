@@ -68,9 +68,10 @@ try{
  check('clear selection restores all center stores and removes every selected checkbox',await page.locator('#vehicleList input:checked').count()===0&&await page.evaluate(()=>MapUiLocalBridge.state.centerFilter==='osan'));
  await page.locator('#vehicleQuery').fill('2');await page.locator('#vehicleQuery').press('Enter');await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===4);
  await page.locator('[data-remove-vehicle="2"]').evaluate(node=>node.click());await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===26);
- check('legacy last-chip handler restores the center map',await page.evaluate(()=>MapUiLocalBridge.state.selectedVehicles.length===0));
- await page.locator('#selectAllVehicles').click();await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===32);
- check('all vehicles explicitly restores all centers',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter===''));
+ check('last map chip restores the center map',await page.evaluate(()=>MapUiLocalBridge.state.selectedVehicles.length===0));
+ await page.locator('#selectAllVehicles').click();await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===4);
+ check('select all checks the current search results without resetting the center',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter==='osan'&&MapUiLocalBridge.state.selectedVehicles.join(',')==='2'));
+ await page.locator('[data-source-center="all"]').click();await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===32);
  await page.locator('#vehicleQuery').fill('');await page.locator('#query').fill('');await page.locator('#baseVehiclePicker>summary').click();
  await page.waitForFunction(()=>MapUiLocalBridge.navigationStores().some(r=>r.customerCode==='S990000'&&r.baseVehicleState==='VERIFIED_MASTER'));await page.evaluate(()=>MapUiLocalBridge.selectNavigationStore('S990000'));await page.waitForFunction(()=>document.querySelector('#detailAddressValue')?.textContent==='합성 상세주소 2층'&&document.querySelector('#detailDriver a')?.getAttribute('href')==='tel:01012345678');
  check('selected card keeps folded store list folded',!await page.locator('#periodStoreList').isVisible());
