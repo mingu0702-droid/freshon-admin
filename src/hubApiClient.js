@@ -121,6 +121,7 @@ async function callHubUncached(action, params, key) {
   const started = Date.now();
   state.metrics.requests += 1;
   const actionTimeoutMs = {
+    mapModelStatus: 15000,
     unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 30000),
     customerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
     nearestVehicles: Number(process.env.HUB_NEAREST_TIMEOUT_MS || 30000),

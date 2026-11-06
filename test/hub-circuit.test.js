@@ -22,6 +22,25 @@ test.afterEach(() => {
   process.env = { ...originalEnv };
 });
 
+test("model status can finish after the generic Hub timeout", async (t) => {
+  const client = await freshClient();
+  process.env.HUB_API_TIMEOUT_MS = "2000";
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  global.fetch = async (_url, { body, signal }) => new Promise((resolve, reject) => {
+    const response = setTimeout(() => resolve(ok(JSON.parse(body).action)), 5000);
+    signal.addEventListener("abort", () => {
+      clearTimeout(response);
+      reject(signal.reason);
+    }, { once: true });
+  });
+
+  const status = client.callHub("mapModelStatus", {}, { useCache: false });
+  const genericTimeout = assert.rejects(client.callHub("ping", {}, { useCache: false }), { name: "AbortError" });
+  t.mock.timers.tick(5000);
+  assert.equal((await status).ok, true);
+  await genericTimeout;
+});
+
 test("Search OPEN does not block Route", async () => {
   const client = await freshClient();
   global.fetch = async (_url, options) => {
