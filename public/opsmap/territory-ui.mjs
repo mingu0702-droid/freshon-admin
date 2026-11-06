@@ -3,11 +3,12 @@ const bridge=window.MapUiLocalBridge,$=s=>document.querySelector(s),button=$('#a
 const buttons=[button,$('#mobileAreaToggle')].filter(Boolean);
 let enabled=false,busy=false,epoch=0,model=null,polygons=[],renderKey='',draws=0,requests=0,availability=null,lastReason=null,boundaryData=null;
 let lookupData=null,lookupKey='',queryKey='',listeningMap=null,lastMasterCheck=-Infinity,referenceExpiry=null,referenceExpiryKey='';
-let activeKey='',activeLoad=null,controller=null,idleTimer=null,refreshState='IDLE';
+let activePlan=null,activeLoad=null,controller=null,lookupRequest=null,idleTimer=null,refreshState='IDLE';
 const polygonEntries=new Map(),geometryCache=new Map(),metadataCache=new Map();
 const counters={created:0,reused:0,removed:0,cacheHits:0,cacheMisses:0,aborted:0,idleEvents:0,renderMs:0,totalRenderMs:0};
 const now=()=>typeof performance!=='undefined'?performance.now():Date.now();
 const pointKey=p=>p.lat+','+p.lng;
+const samePlan=(a,b)=>a?.key===b.key&&a?.lookupKey===b.lookupKey;
 const referenceState='VERIFIED_SNAPSHOT_REFRESHING';
 function territoryModel(stores,boundaries=null,master=bridge.fixedTerritoryMasterState?.()){return buildBaseTerritories(stores,boundaries,{now:Date.now(),referenceMaster:master?.stale===true?{version:master.version,checkedAt:master.checkedAt,source:'FIXED_DISPATCH_PRIMARY'}:null});}
 const available=(stores,master,model)=>baseTerritoryAvailability(stores,master,model,{now:Date.now()});
@@ -42,7 +43,8 @@ const diagnostics=document.createElement('output');diagnostics.id='territoryDiag
 const reasons={ADMIN_BOUNDARIES_QUERY_TOO_WIDE:'조회 지역이 넓습니다. 지도를 확대하거나 호차를 선택해 주세요',ADMIN_BOUNDARIES_UNAVAILABLE:'공식 읍면동 경계 자료가 없습니다',ADMIN_BOUNDARIES_INVALID:'공식 읍면동 경계 검증에 실패했습니다',ADMIN_BOUNDARY_NO_MATCH:'선택 호차의 검증 좌표에 해당하는 공식 경계가 없습니다',OUTSIDE_VIEWPORT:'현재 지도 범위에 해당 호차의 검증 매장이 없습니다',MASTER_STALE:'기준호차가 이전 확인값입니다',MASTER_UNAVAILABLE:'현재 기준호차 자료가 없습니다',MASTER_UNVERIFIED:'현재 기준호차 검증자료가 없습니다',MASTER_VERSION_CHANGED:'기준호차 자료가 변경됐습니다',SOURCE_AUTH_REQUIRED:'기준호차 조회 권한을 확인해 주세요',SOURCE_UNAVAILABLE:'기준호차 자료를 조회하지 못했습니다',SDK_UNAVAILABLE:'지도 연결을 확인해 주세요'};
 const unavailable=()=>`${reasons[lastReason||availability?.reason]||'선택 호차의 센터·좌표 근거가 부족합니다'}${availability?.checkedAt?' ('+availability.checkedAt+' 기준)':''} · 실제 경계를 확인한 지역만 표시합니다.`;
 const clear=()=>{for(const p of polygons){p.setMap(null);counters.removed++;}polygons=[];polygonEntries.clear();renderKey='';};
-function cancelLoad(){epoch++;controller?.abort();controller=null;busy=false;activeKey='';activeLoad=null;if(idleTimer!==null)clearTimeout(idleTimer);idleTimer=null;}
+function cancelLookup(keepKey){if(lookupRequest&&lookupRequest.key!==keepKey){lookupRequest.controller?.abort();lookupRequest=null;}}
+function cancelLoad(keepLookupKey){epoch++;controller?.abort();controller=null;cancelLookup(keepLookupKey);busy=false;activePlan=null;activeLoad=null;if(idleTimer!==null)clearTimeout(idleTimer);idleTimer=null;}
 function stopListening(){if(listeningMap&&typeof kakao!=='undefined')kakao.maps?.event?.removeListener?.(listeningMap,'idle',onIdle);listeningMap=null;}
 function onIdle(){counters.idleEvents++;if(idleTimer!==null)clearTimeout(idleTimer);if(enabled&&bridge.state.mode==='BASE_60D')idleTimer=setTimeout(()=>{idleTimer=null;if(enabled)void renderForSelection();},180);}
 function listen(){if(listeningMap===bridge.state.map)return;stopListening();if(bridge.state.map&&typeof kakao!=='undefined'&&kakao.maps?.event?.addListener){listeningMap=bridge.state.map;kakao.maps.event.addListener(listeningMap,'idle',onIdle);}}
@@ -79,7 +81,7 @@ function renderForSelection(){
  if(bridge.state.mode!=='BASE_60D'){cancelLoad();stopListening();clear();status('기준호차 권역선은 매장·권역 지도에서 조회합니다.');return;}
  if(!enabled)return;
  let plan;try{plan=queryPlan();}catch{cancelLoad();clear();model=null;lastReason='MASTER_VERSION_CHANGED';status(unavailable());return;}
- if(busy&&activeKey!==plan.key){counters.aborted++;cancelLoad();refreshState='IDLE';lastReason=null;}
+ if(busy&&!samePlan(activePlan,plan)){counters.aborted++;cancelLoad(plan.lookupKey);refreshState='IDLE';lastReason=null;}
  listen();
  if(!bridge.state.map||typeof kakao==='undefined'||typeof kakao.maps?.Polygon!=='function'){clear();lastReason='SDK_UNAVAILABLE';status(unavailable());return;}
  if(usable(plan)){
@@ -103,24 +105,40 @@ function validateLookup(data,count){
  for(const join of data.matches){if(!Number.isInteger(join?.index)||join.index<0||join.index>=count||seen.has(join.index)||!Array.isArray(join.adminCodes)||join.adminCodes.some(code=>typeof code!=='string'||!/^\d{8}$/.test(code)))throw Error('ADMIN_BOUNDARIES_INVALID');seen.add(join.index);}
 }
 function validateBoundary(data){if(territoryModel([],data,null).boundaryReason)throw Error('ADMIN_BOUNDARIES_INVALID');}
+async function queryBoundaries(points,geometry,detail,signal){
+ requests++;
+ const response=await fetch('/api/map-phase2b/private/admin-boundaries/query',{method:'POST',credentials:'same-origin',cache:'no-store',signal,headers:{'Content-Type':'application/json'},body:JSON.stringify({points,geometry,detail})});
+ if(!response.ok)throw Object.assign(Error(response.status===413?'ADMIN_BOUNDARIES_QUERY_TOO_WIDE':'ADMIN_BOUNDARIES_UNAVAILABLE'),{status:response.status});
+ return (await response.json()).data;
+}
+function loadLookup(plan){
+ if(lookupRequest?.key===plan.lookupKey)return lookupRequest.promise;
+ cancelLookup();
+ const request={key:plan.lookupKey,controller:typeof AbortController==='function'?new AbortController():null};
+ lookupRequest=request;
+ request.promise=queryBoundaries(plan.all,false,'detail',request.controller?.signal).then(result=>{
+  if(lookupRequest!==request)return;
+  validateLookup(result,plan.all.length);lookupData=result;lookupKey=request.key;
+ }).finally(()=>{if(lookupRequest===request)lookupRequest=null;});
+ return request.promise;
+}
 function load(){
  if(!enabled||bridge.state.mode!=='BASE_60D')return;
  let initial;try{initial=queryPlan();}catch{return renderForSelection();}
- if(busy&&activeKey===initial.key)return activeLoad;
- if(busy){counters.aborted++;cancelLoad();}
+ if(busy&&samePlan(activePlan,initial))return activeLoad;
+ if(busy){counters.aborted++;cancelLoad(initial.lookupKey);}
  const id=++epoch;controller=typeof AbortController==='function'?new AbortController():null;const signal=controller?.signal;
- activeKey=initial.key;busy=true;lastReason=null;refreshState='REFRESHING';listen();if(usable(initial))displayStatus();else status('기준호차 확인 중');
+ activePlan=initial;busy=true;lastReason=null;refreshState='REFRESHING';listen();if(usable(initial))displayStatus();else status('기준호차 확인 중');
  const valid=()=>id===epoch&&enabled&&bridge.state.mode==='BASE_60D';
  activeLoad=(async()=>{try{
   if(typeof bridge.fixedTerritoryStores!=='function')throw Error('TERRITORY_BINDING_MISSING');
   const current=bridge.fixedTerritoryMasterState?.();
   if((!current?.version||current.stale===true)&&Date.now()-lastMasterCheck>=60000&&typeof bridge.loadBaseVehicleMasterForTerritory==='function'){lastMasterCheck=Date.now();requests++;await bridge.loadBaseVehicleMasterForTerritory();}
   if(!valid())return;
-  const plan=queryPlan(),master=bridge.fixedTerritoryMasterState?.();activeKey=plan.key;
-  async function query(points,geometry){requests++;const response=await fetch('/api/map-phase2b/private/admin-boundaries/query',{method:'POST',credentials:'same-origin',cache:'no-store',signal,headers:{'Content-Type':'application/json'},body:JSON.stringify({points,geometry,detail:geometry?plan.detail:'detail'})});if(!response.ok)throw Object.assign(Error(response.status===413?'ADMIN_BOUNDARIES_QUERY_TOO_WIDE':'ADMIN_BOUNDARIES_UNAVAILABLE'),{status:response.status});return (await response.json()).data;}
-  if(lookupKey!==plan.lookupKey){const result=await query(plan.all,false);if(!valid())return;validateLookup(result,plan.all.length);lookupData=result;lookupKey=plan.lookupKey;}
+  const plan=queryPlan(),master=bridge.fixedTerritoryMasterState?.();activePlan=plan;
+  if(lookupKey!==plan.lookupKey){await loadLookup(plan);if(!valid())return;}
   const codes=lookupCodes(plan,plan.points),prefix=master?.version+':'+plan.detail+':',missing=codes.filter(code=>!geometryCache.has(prefix+code));counters.cacheHits+=codes.length-missing.length;counters.cacheMisses+=missing.length;
-  if(missing.length){const needed=new Set(missing),joins=new Map(lookupData.matches.map(join=>[pointKey(plan.all[join.index]),join.adminCodes])),points=plan.points.filter(point=>(joins.get(pointKey(point))||[]).some(code=>needed.has(code))),result=await query(points,true);if(!valid())return;validateBoundary(result);
+  if(missing.length){const needed=new Set(missing),joins=new Map(lookupData.matches.map(join=>[pointKey(plan.all[join.index]),join.adminCodes])),points=plan.points.filter(point=>(joins.get(pointKey(point))||[]).some(code=>needed.has(code))),result=await queryBoundaries(points,true,plan.detail,signal);if(!valid())return;validateBoundary(result);
    if(missing.some(code=>!result.features.some(feature=>feature.properties.adm_cd===code)))throw Error('ADMIN_BOUNDARIES_INVALID');
    metadataCache.set(master?.version+':'+plan.detail,result.metadata);
    for(const feature of result.features){const key=prefix+feature.properties.adm_cd;if(!geometryCache.has(key))geometryCache.set(key,feature);}
@@ -128,7 +146,7 @@ function load(){
    while(metadataCache.size>8)metadataCache.delete(metadataCache.keys().next().value);
   }
   if(!valid())return;
-  if(queryPlan().key!==plan.key){activeKey='';return;}
+  if(!samePlan(queryPlan(),plan))return;
   const data=cachedBoundary(plan,master?.version,codes),candidate=territoryModel(plan.stores,data,master),check=available(plan.stores,master,candidate);
   if(check.reason){availability=check;lastReason=check.reason;clear();model=null;syncReferenceExpiry();status(unavailable());return;}
   boundaryData=data;model=candidate;availability=check;queryKey=plan.key;completeAvailability(plan);syncReferenceExpiry();lastReason=null;refreshState='IDLE';renderKey='';renderForSelection();
@@ -137,7 +155,7 @@ function load(){
   if([401,403].includes(error?.status)){clear();model=null;geometryCache.clear();metadataCache.clear();}
   let plan;try{plan=queryPlan();}catch{clear();model=null;lastReason='MASTER_VERSION_CHANGED';status(unavailable());return;}
   if(usable(plan))displayStatus();else{availability=available(plan.stores,bridge.fixedTerritoryMasterState?.(),territoryModel(plan.stores,lookupData));completeAvailability(plan);if(availability)for(const v of availability.vehicles){if(!v.reason||v.reason==='OUTSIDE_VIEWPORT'||v.reason==='ADMIN_BOUNDARY_NO_MATCH'){v.reason=lastReason;v.state='unconfirmed';}}if(availability){availability.displayedVehicleCount=0;availability.unshownReasons=Object.fromEntries([...new Set(availability.vehicles.map(v=>v.reason||lastReason))].map(reason=>[reason,availability.vehicles.filter(v=>(v.reason||lastReason)===reason).length]));}status(unavailable());}
- }}finally{if(valid()){busy=false;controller=null;activeLoad=null;activeKey='';if(polygons.length)displayStatus();else status(unavailable());if(refreshState!=='FAILED'&&enabled&&!lastReason){let next;try{next=queryPlan();}catch{clear();model=null;lastReason='MASTER_VERSION_CHANGED';status(unavailable());}if(next&&(queryKey!==next.key||lookupKey!==next.lookupKey))void load();}}}})();
+ }}finally{if(valid()){busy=false;controller=null;activeLoad=null;activePlan=null;if(polygons.length)displayStatus();else status(unavailable());if(refreshState!=='FAILED'&&enabled&&!lastReason){let next;try{next=queryPlan();}catch{clear();model=null;lastReason='MASTER_VERSION_CHANGED';status(unavailable());}if(next&&(queryKey!==next.key||lookupKey!==next.lookupKey))void load();}}}})();
  return activeLoad;
 }
 async function toggle(){if(bridge.state.mode!=='BASE_60D')return;enabled=!enabled;bridge.state.areaOn=false;if(!enabled){cancelLoad();stopListening();clear();refreshState='IDLE';syncReferenceExpiry();status('고정배차 기준 권역');return;}await load();}
