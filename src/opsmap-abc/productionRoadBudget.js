@@ -9,6 +9,7 @@ const integer=n=>Number.isSafeInteger(n)&&n>=0;
 // Official daily free ceilings, checked 2026-11-04:
 // https://developers.kakaomobility.com/price/
 const dailyLimits=Object.freeze({directions:10000,waypoints:5000});
+const supportedApis=Object.keys(dailyLimits);
 const kst=value=>new Date(value+9*3600000).toISOString().slice(0,10);
 export const productionRoadRouteFlag=env=>env.OPSMAP_PRODUCTION_ROAD_ROUTE_ENABLED==='1'?'1':'0';
 export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetch,now=Date.now}={}){
@@ -37,6 +38,7 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
   const b=state?.roadBudget;
   if(state?.schema!==1||!b||b.accountHash!==accountHash||b.scope!=='CUMULATIVE_APPROVED_ACCOUNT')fail('ROAD_BUDGET_ACCOUNT_MISMATCH');
   if(b.policy!=='FREE_ONLY'||b.providerPaidDisabled!==true||b.servicePermissionVerified!==true||!/^[-A-Za-z0-9_]{8,100}$/.test(b.approvalId||''))fail('ROAD_BUDGET_APPROVAL_REQUIRED');
+  if(b.approvedApis!==undefined&&(!Array.isArray(b.approvedApis)||!b.approvedApis.length||new Set(b.approvedApis).size!==b.approvedApis.length||b.approvedApis.some(api=>!supportedApis.includes(api))))fail('ROAD_BUDGET_APPROVAL_REQUIRED');
   const verified=Date.parse(b.verifiedAt),expires=Date.parse(b.expiresAt);
   if(!Number.isFinite(verified)||!Number.isFinite(expires)||verified>time||expires<=time||expires<=verified)fail('ROAD_BUDGET_APPROVAL_EXPIRED');
   if(b.monthlyApproval){
@@ -66,7 +68,15 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
  }
  function stateStatus(b,time){
   const day=kst(time),approvalDay=kst(Date.parse(b.verifiedAt));
-  const apis=Object.fromEntries(Object.entries(b.apis).filter(([api])=>['directions','waypoints'].includes(api)).map(([api,value])=>[api,Math.max(0,b.monthlyApproval?(day===approvalDay?value.freeRemainingAtApproval:dailyLimits[api])-(b.monthlyApproval.dailyUsage[day]?.[api]||0):value.freeRemainingAtApproval-value.used)]));
+  // Earlier verified ledgers covered both endpoints. A scoped approval stays
+  // scoped across daily rollover and still accounts for prior calls to either.
+  const approved=b.approvedApis??supportedApis;
+  const apis=Object.fromEntries(supportedApis.map(api=>{
+   if(!approved.includes(api))return [api,0];
+   const value=b.apis[api];
+   const remaining=b.monthlyApproval?(day===approvalDay?value.freeRemainingAtApproval:dailyLimits[api])-(b.monthlyApproval.dailyUsage[day]?.[api]||0):value.freeRemainingAtApproval-value.used;
+   return [api,Math.max(0,remaining)];
+  }));
   return {durable:true,scope:b.scope,remaining:Math.max(0,Math.min(b.limit-b.used,b.monthlyFreeRemainingAtApproval-b.used,apis.directions+apis.waypoints)),apiRemaining:apis,freeOnly:true,approvalExpiresAt:b.expiresAt,approvalWindow:b.monthlyApproval?'KST_MONTH':'KST_DAY',usageDate:day};
  }
  function transaction(work){const task=tail.catch(()=>{}).then(async()=>work(await read()));tail=task;return task;}
@@ -75,13 +85,16 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
    const time=now();return stateStatus(validate(state,time),time);
   }),
   reserve:({cost,provider,api})=>transaction(async({state,sha})=>{
-   if(cost!==1||provider!=='kakao-directions'||!['directions','waypoints'].includes(api))fail('ROAD_BUDGET_INVALID_RESERVATION');
-   const time=now(),b=validate(state,time),status=stateStatus(b,time);if(!status.remaining||!status.apiRemaining[api])fail('QUOTA_EXCEEDED');
+   if(cost!==1||provider!=='kakao-directions'||!supportedApis.includes(api))fail('ROAD_BUDGET_INVALID_RESERVATION');
+   const time=now(),b=validate(state,time),status=stateStatus(b,time);
+   if(b.approvedApis&&!b.approvedApis.includes(api))fail('ROAD_BUDGET_API_UNVERIFIED');
+   if(!status.remaining||!status.apiRemaining[api])fail('QUOTA_EXCEEDED');
    b.used++;b.apis[api].used++;b.lastReservation=randomUUID();b.updatedAt=new Date(time).toISOString();
    if(b.monthlyApproval){const day=status.usageDate;b.monthlyApproval.dailyUsage[day]||={directions:0,waypoints:0};b.monthlyApproval.dailyUsage[day][api]++;}
    // Write only the quota ledger; never serialize unrelated/session/customer fields.
    const clean={schema:1,roadBudget:Object.fromEntries(['accountHash','scope','policy','providerPaidDisabled','servicePermissionVerified','approvalId','verifiedAt','expiresAt','limit','used','monthlyFreeRemainingAtApproval','lastReservation','updatedAt'].map(k=>[k,b[k]]))};
-   clean.roadBudget.apis=Object.fromEntries(['directions','waypoints'].map(api=>[api,{freeRemainingAtApproval:b.apis[api].freeRemainingAtApproval,used:b.apis[api].used}]));
+   if(b.approvedApis)clean.roadBudget.approvedApis=b.approvedApis.slice();
+   clean.roadBudget.apis=Object.fromEntries(supportedApis.map(api=>[api,{freeRemainingAtApproval:b.apis[api].freeRemainingAtApproval,used:b.apis[api].used}]));
    if(b.monthlyApproval)clean.roadBudget.monthlyApproval={period:b.monthlyApproval.period,exclusiveDirectionsUsage:true,usedBeforeWindow:{directions:b.monthlyApproval.usedBeforeWindow.directions,waypoints:b.monthlyApproval.usedBeforeWindow.waypoints},dailyUsage:structuredClone(b.monthlyApproval.dailyUsage)};
    const bytes=Buffer.from(JSON.stringify(clean));if(bytes.length>32768)fail('ROAD_BUDGET_FORMAT');
    const response=await request(file,{method:'PUT',body:JSON.stringify({message:'Reserve approved Production free Directions call',branch,sha,content:bytes.toString('base64')})});

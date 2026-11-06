@@ -39,6 +39,19 @@ test('verified first-day remaining and official later daily limit are independen
  const exhausted=ledger();exhausted.roadBudget.used=10007;exhausted.roadBudget.apis.directions.used=10005;exhausted.roadBudget.monthlyApproval.dailyUsage['2026-11-03'].directions=0;exhausted.roadBudget.monthlyApproval.dailyUsage['2026-11-04']={directions:10000,waypoints:0};
  await assert.rejects(reserve(budget(remote(exhausted),next)),e=>e.code==='QUOTA_EXCEEDED');
 });
+test('basic-only approval keeps waypoints closed after KST rollover and preserves earlier usage',async()=>{
+ const state=ledger();state.roadBudget.approvedApis=['directions'];const r=remote(state);
+ const denyWaypoints=b=>assert.rejects(b.reserve({cost:1,provider:'kakao-directions',api:'waypoints'}),e=>e.code==='ROAD_BUDGET_API_UNVERIFIED');
+ for(const time of [start,next]){
+  const b=budget(r,time),status=await b.status();assert.equal(status.apiRemaining.waypoints,0);await denyWaypoints(b);
+ }
+ assert.equal(r.writes,0);
+ await reserve(budget(r,next));
+ assert.deepEqual(r.state.roadBudget.approvedApis,['directions']);
+ assert.equal(r.state.roadBudget.apis.waypoints.used,2);
+ assert.equal(r.state.roadBudget.used,10);
+ await denyWaypoints(budget(r,next));assert.equal(r.writes,1);
+});
 test('no monthly inference, no month reset and no unverified usage/accounting upgrade',async()=>{
  for(const mutate of [b=>delete b.monthlyApproval,b=>b.monthlyApproval.exclusiveDirectionsUsage=false,b=>b.monthlyApproval.period='2026-10',b=>b.monthlyApproval.usedBeforeWindow.directions=0,b=>b.monthlyApproval.dailyUsage['2026-11-04']={directions:10001,waypoints:0},b=>b.providerPaidDisabled=false,b=>b.servicePermissionVerified=false,b=>b.expiresAt='2026-12-02T00:00:00Z']){
   const state=ledger();mutate(state.roadBudget);const r=remote(state);await assert.rejects(reserve(budget(r,next)));assert.equal(r.writes,0);
