@@ -124,9 +124,8 @@ try{
  await page.setViewportSize({width:1366,height:900});
  await page.locator('#query').fill('합성 매장 0');
  await page.locator('#searchBtn').click();
- await page.locator('#results [data-search-code="S100000"]').click();
- check('store search preserves the warehouse overlay while selecting a store',await stableMarker()&&
-   await page.evaluate(()=>MapUiLocalBridge.state.selected?.customerCode==='S100000'));
+ await page.waitForFunction(()=>MapUiLocalBridge.state.selected?.customerCode==='S100000');
+ check('store search preserves the warehouse overlay while selecting a store',await stableMarker());
  await page.evaluate(()=>kakao.maps.event.trigger(MapUiLocalBridge.state.map,'click'));
  await page.screenshot({path:path.join(output,'before-1366.png')});
  check('initial visit does not query Directions or show route totals',requests.length===0&&providerRequests.length===0&&!await totals.isVisible());
