@@ -23,13 +23,13 @@ const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTo
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
  'renderResults','unifiedAddressQuery','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual}={}){
- const nodes=new Map(),selected=[],fallback=[],queries=[],requests=new Map();let resets=0,tempClears=0;
+ const nodes=new Map(),selected=[],fallback=[],queries=[],baseQueries=[],requests=new Map();let resets=0,tempClears=0;
  const node=key=>{if(!nodes.has(key))nodes.set(key,{value:'',hidden:true,html:'',replaceChildren(){this.html='';this.buttons=[];},setAttribute(k,v){this[k]=v;},dispatchEvent(){},get innerHTML(){return this.html;},set innerHTML(v){this.html=v;this.buttons=[...v.matchAll(/data-result="(\d+)"/g)].map(m=>({dataset:{result:m[1]}}));}});return nodes.get(key);};
  const context={console,AbortController,Event,setTimeout,clearTimeout,Number,Map,Set,
   state:{mode:'BASE_60D',selected:null,searchRequestId:0,selectedDate:'2026-11-02',currentRows:rows},
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
   coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),requestControllers:requests,
-  unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
+  unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,baseVehicleStatus:'LOADING',baseVehicleMeta:null,
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
   window:{MapManualPins:{apply:row=>manual?.(row)}},
@@ -37,15 +37,39 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual}={}){
   setSearchState:text=>{context.lastStatus=text;},resetMapOverview:()=>{resets++;},
   cancelAddressLookup(){},clearSearchTemporaryPin(){tempClears++;},
   selectStore:row=>{context.state.selected=row;selected.push(row);},
-  loadBaseVehicles:async()=>{},refreshSelectedDriverContact(){},
+  loadBaseVehicles:async codes=>baseQueries.push([...codes]),refreshSelectedDriverContact(){},
   fetchJson:async(url,options)=>{queries.push({url,options});return remote(decodeURIComponent(options.headers['x-map-customer-query']));},
   isSilentRequestError:e=>e?.silent||e?.name==='AbortError',
   searchExternalAddress:async(text,options)=>fallback.push({text,options})
  };
  vm.createContext(context);vm.runInContext(controllerSource,context);
- return {context,node,selected,fallback,queries,get resets(){return resets;},get tempClears(){return tempClears;}};
+ return {context,node,selected,fallback,queries,baseQueries,get resets(){return resets;},get tempClears(){return tempClears;}};
 }
 const store=(customerCode,customerName,address,more={})=>({customerCode,customerName,address,lat:37.5,lng:127.1,vehicle:'101',lastDeliveryDate:'2026-11-02',...more});
+
+test('exact-code search reuses only a verified current fixed-dispatch assignment',async()=>{
+ const customer=store('S990001','합성 매장','합성 주소'),checkedAt='2026-11-06T08:00:00Z';
+ const verified={baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleVersion:'v1',baseVehicleCheckedAt:checkedAt,baseVehicleStale:false};
+ for(const [record,meta,status,reuses] of [
+   [verified,{version:'v1',checkedAt,stale:false},'READY',true],
+   [null,{version:'v1',checkedAt,stale:false},'READY',false],
+   [{...verified,baseVehicleState:'UNKNOWN'},{version:'v1',checkedAt,stale:false},'READY',false],
+   [{...verified,baseVehicleStale:true},{version:'v1',checkedAt,stale:false},'READY',false],
+   [verified,{version:'v1',checkedAt,stale:true},'READY',false],
+   [verified,{version:'v2',checkedAt,stale:false},'READY',false],
+   [verified,{version:'v1',checkedAt:'2026-11-07T08:00:00Z',stale:false},'READY',false],
+   [verified,{version:'v1',checkedAt,stale:false},'LOADING',false]
+ ]){
+   const f=fixture({rows:[customer]});
+   f.context.baseVehicleStatus=status;f.context.baseVehicleMeta=meta;
+   if(record)f.context.baseVehicles.set(customer.customerCode,record);
+   f.node('#query').value=customer.customerCode;
+   await f.context.search();
+   assert.equal(f.selected[0].customerCode,customer.customerCode);
+   assert.deepEqual(f.baseQueries,reuses?[]:[[customer.customerCode]]);
+   assert.deepEqual(f.queries,[]);
+ }
+});
 
 test('map idle keeps an out-of-filter selected customer in the address queue',()=>{
  const registration=source.split('\n').find(line=>line.includes("listen('idle',")&&line.includes('liveAddressLocations'));

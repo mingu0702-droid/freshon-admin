@@ -1818,6 +1818,10 @@
     try{selectStore(row,null,true);}finally{unifiedSelectionActive=false;}
     setSearchState(row.lat===null?'매장 선택 · 좌표 미확인 · 지도에서 위치를 수정할 수 있습니다.':'매장 선택');
     // Fixed-dispatch lookup is optional enrichment, never a barrier to selection.
+    const base=baseVehicles.get(row.customerCode);
+    if(baseVehicleStatus==='READY'&&baseVehicleMeta?.version&&baseVehicleMeta.stale===false
+      &&base?.baseVehicleState==='VERIFIED_MASTER'&&base.baseVehicleStale===false
+      &&base.baseVehicleVersion===baseVehicleMeta.version&&base.baseVehicleCheckedAt===baseVehicleMeta.checkedAt)return true;
     void loadBaseVehicles([row.customerCode]).then(()=>{
       if(selectedOwner===state.searchRequestId && state.selected?.customerCode===row.customerCode)refreshSelectedDriverContact();
     });
