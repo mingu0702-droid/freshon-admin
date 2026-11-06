@@ -6,17 +6,27 @@
   const d=data||{},s=snapshot?.snapshot||snapshot||{},cp=s.selectedDateCheckpoint||{},publication=d.publicationConnection;
   const today=new Date(now+9*3600000).toISOString().slice(0,10);
   const start=date(s.startDate),end=date(s.latestDate||s.latest);
-  const selectedStored=cp.sourceReadComplete===true&&cp.sourceDateVerified===true&&cp.selectedDateStorageVerified===true&&date(cp.date)===today;
-  const publicationVerified=publication?.servingGenerationMatch===true&&publication.rollingRootVerified===true&&publication.sourceBoundCompletionVerified===true&&publication.privateSealedBindingVerified===true&&date(d.published?.endDate)===today;
+  const checkpointDate=date(cp.date),publishedDate=date(d.published?.endDate);
+  const checkpointVerified=cp.sourceReadComplete===true&&cp.sourceDateVerified===true&&cp.selectedDateStorageVerified===true&&checkpointDate&&checkpointDate<=today;
+  const publishedProof=publication?.servingGenerationMatch===true&&publication.rollingRootVerified===true&&publication.sourceBoundCompletionVerified===true&&publication.privateSealedBindingVerified===true&&publishedDate&&publishedDate<=today;
+  const selectedStored=Boolean(checkpointVerified&&checkpointDate===today);
+  const publicationVerified=Boolean(publishedProof&&publishedDate===today);
   const phase=d.job?.phase,active=!!phase&&!['DONE','ERROR','UP_TO_DATE','NOOP','HELD','NOT_STARTED'].includes(phase)||d.job?.publication==='PENDING';
   const incomplete=s.sourceCompletenessVerified!==true||cp.historicalCompletenessVerified!==true||d.partial===true;
   const state=failed?'QUERY_FAILED':active?'UPDATING':selectedStored?'TODAY_STORED':publicationVerified?'PUBLISHED_VERIFIED':'INCOMPLETE';
   const label={QUERY_FAILED:'조회 실패',UPDATING:'갱신 중',TODAY_STORED:'당일 저장 확인',PUBLISHED_VERIFIED:'최신 게시 확인',INCOMPLETE:'일부 기간 검증 미완료'}[state];
-  const sync=selectedStored?stamp(cp.checkedAt)||stamp(cp.sourceObservedAt):publicationVerified?stamp(d.automation?.lastSuccess):null;
+  const checkpointTime=checkpointVerified?(stamp(cp.checkedAt)||stamp(cp.sourceObservedAt)):null;
+  const publicationTime=publishedProof?stamp(d.automation?.lastSuccess):null;
+  const sync=selectedStored?checkpointTime:publicationVerified?publicationTime:null;
+  const lastVerified=[checkpointTime,publicationTime].filter(value=>value&&Date.parse(value)<=now)
+   .sort((a,b)=>Date.parse(b)-Date.parse(a))[0]||null;
   const clock=sync?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(sync)):'미확인';
+  const verifiedClock=!sync&&lastVerified?' · 마지막 검증 '+new Intl.DateTimeFormat('sv-SE',{
+   timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'
+  }).format(new Date(lastVerified)).replaceAll('-','.'):'';
   const range=start&&end?start.replaceAll('-','.')+' ~ '+end.replaceAll('-','.'):'기간 확인 중';
-  return {state,startDate:start,endDate:end,lastSync:sync,partial:incomplete,selectedDateStored:selectedStored,publicationVerified,
-   text:'매장자료 '+range+' · 마지막 동기화 '+clock+' · '+label+(incomplete&&['TODAY_STORED','PUBLISHED_VERIFIED'].includes(state)?' · 일부 기간 검증 미완료':''),
+  return {state,startDate:start,endDate:end,lastSync:sync,lastVerified,partial:incomplete,selectedDateStored:selectedStored,publicationVerified,
+   text:'매장자료 '+range+' · 마지막 동기화 '+clock+verifiedClock+' · '+label+(incomplete&&['TODAY_STORED','PUBLISHED_VERIFIED'].includes(state)?' · 일부 기간 검증 미완료':''),
    title:'저장된 관측자료의 범위입니다. 당일 저장 확인과 과거 전체 기간 완료는 별도로 검증합니다.'};
  }});
 })(typeof window==='object'?window:globalThis);
@@ -53,16 +63,18 @@
   attachSummary();if(!document.querySelector('#approvedSiteHeader')){headerObserver=new MutationObserver(attachSummary);headerObserver.observe(document.body,{childList:true,subtree:true});}
   const showDetails=()=>{const help=document.querySelector('.dataHelp');if(help)help.open=true;panel.open=true;void refresh();};strip.onclick=showDetails;
   function renderSummary(d,snapshot,failed=false){const value=MapFreshnessSummary.summarize(d,snapshot,{failed});strip.textContent=value.text;strip.title=value.title;strip.dataset.state=value.state;strip.dataset.partial=String(value.partial);api.summary=value;}
-  let busy=false,last=null,poll=null,pollCount=0,dialogOpen=false,submitted=false,generation=0,lastMetadata=null;
+  let busy=false,last=null,poll=null,pollCount=0,dialogOpen=false,submitted=false,generation=0,lastMetadata=null,lastStatus=null;
   const api=window.MapDataSync={onPublished:null,refresh:()=>refresh()};
   async function refresh(){
     if(busy||!window.MapStaffEntry?.session())return;const owner=generation;busy=true;button.disabled=true;
     try{
       const [r,s]=await Promise.all([fetch('/api/map-phase2b/preview/data-status',{cache:'no-store'}),fetch('/api/map-phase2b/preview/status?metadataOnly=1',{cache:'no-store'})]);
-      const statusData=s.ok?await s.json():null;if(statusData)lastMetadata=statusData;
+      const statusData=s.ok?await s.json():null;
+      if(owner!==generation||!window.MapStaffEntry?.session())return;
+      if(statusData)lastMetadata=statusData;
       if(!r.ok)throw new Error('STATUS');const d=(await r.json()).data,snap=statusData?.snapshot||statusData&&{latest:statusData.latestDate,stale:statusData.stale,selectedDateCheckpoint:statusData.selectedDateCheckpoint},live=d.live||{ready:false,generation:null,periodLatest:null};
       if(owner!==generation||!window.MapStaffEntry?.session())return;
-      renderSummary(d,statusData,!s.ok);
+      lastStatus=d;renderSummary(d,lastMetadata,!s.ok);
       detailAction.disabled=d.partial===true||['BUILD','VERIFY','HELD'].includes(d.customerDetails?.phase);
       const target=d.customer.freshon&&d.customer.delivery?[d.customer.freshon,d.customer.delivery].sort()[0]:null,job=d.job;
       const active=job&&(job.publication==='PENDING'||!['DONE','ERROR','UP_TO_DATE'].includes(job.phase));
@@ -79,7 +91,7 @@
       if(last!==live.generation&&live.ready){const old=last;last=live.generation;if(old!==null)await api.onPublished?.(live);}
       // Staff idle deadlines are not extended by automatic background polling.
       return d;
-    }catch{if(owner===generation&&window.MapStaffEntry?.session()){renderSummary(null,lastMetadata,true);status.textContent='최신화 상태 확인 실패 · 기존 지도 유지 · 다시 버튼을 눌러 확인해 주세요.';action.disabled=true;action.textContent='상태 확인 후 관리자 요청 가능';}}
+    }catch{if(owner===generation&&window.MapStaffEntry?.session()){renderSummary(lastStatus,lastMetadata,true);status.textContent='최신화 상태 확인 실패 · 기존 지도 유지 · 다시 버튼을 눌러 확인해 주세요.';action.disabled=true;action.textContent='상태 확인 후 관리자 요청 가능';}}
     finally{busy=false;button.disabled=false;}
   }
   button.onclick=()=>{document.querySelector('#mapDateBar').append(panel);panel.open=true;void refresh();};
@@ -104,7 +116,7 @@
       finally{token='';input.value='';submit.disabled=false;}
     };dialog.showModal();
   };
-  window.addEventListener('map-staff-signed-out',()=>{generation++;clearTimeout(poll);strip.textContent='직원 로그인 필요';delete strip.dataset.state;status.textContent='직원 로그인 필요';action.disabled=true;detailAction.disabled=true;});
+  window.addEventListener('map-staff-signed-out',()=>{generation++;clearTimeout(poll);lastMetadata=null;lastStatus=null;api.summary=null;strip.textContent='직원 로그인 필요';strip.title='';delete strip.dataset.state;status.textContent='직원 로그인 필요';action.disabled=true;detailAction.disabled=true;});
   window.addEventListener('map-staff-authenticated',()=>void refresh());
   void refresh();
 })();

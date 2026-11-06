@@ -15,6 +15,14 @@ test('an observed date or restart-generated timestamp alone cannot certify sync'
 test('a prior-day checkpoint cannot masquerade as current business data',()=>{
  const v=summarize({}, {...base,selectedDateCheckpoint:{...checkpoint,date:'2026-11-02'}},{now});assert.equal(v.selectedDateStored,false);assert.equal(v.state,'INCOMPLETE');
 });
+test('a verified older checkpoint retains its KST timestamp during a query failure',()=>{
+ const previous={...checkpoint,date:'2026-11-02',checkedAt:'2026-11-02T09:20:00Z'};
+ const saved={...base,selectedDateCheckpoint:previous};
+ const v=summarize({},saved,{now,failed:true});
+ assert.equal(v.state,'QUERY_FAILED');assert.equal(v.lastSync,null);assert.equal(v.lastVerified,previous.checkedAt);
+ assert.match(v.text,/마지막 검증 2026\.11\.02 18:20/);
+ assert.equal(summarize({}, {...saved,selectedDateCheckpoint:{...previous,selectedDateStorageVerified:false}},{now}).lastVerified,null);
+});
 test('active work and query failure do not say completed or erase the known range',()=>{
  assert.equal(summarize({job:{phase:'VERIFY'}},base,{now}).state,'UPDATING');
  const v=summarize({},base,{now,failed:true});assert.equal(v.state,'QUERY_FAILED');assert.equal(v.startDate,base.startDate);assert.match(v.text,/조회 실패/);
