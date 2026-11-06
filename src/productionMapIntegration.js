@@ -232,8 +232,8 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
     try{
       const response=await callHub('stageReadModelRequest',{target:'production'},{useCache:false});
       if(response.data?.phase==='BUSY'&&attempt<3)setTimeout(()=>requestPublishedModel(attempt+1),120000).unref();
-    }catch(error){
-      if(attempt<3&&(error.name==='AbortError'||error.message==='HUB_TIMEOUT'))setTimeout(()=>requestPublishedModel(attempt+1),120000).unref();
+    }catch{
+      // A lost acknowledgement does not tell us whether Hub already started the restore.
       console.warn('Production published lookup restore request not acknowledged.');
     }
   }

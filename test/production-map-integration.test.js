@@ -8,6 +8,29 @@ import {mountProductionMapApi} from '../src/productionMapIntegration.js';
 import {createStaffPasswordHash} from '../src/mapStaffAuth.js';
 import {phase2bSnapshotMeta} from '../src/phase2bOperations.js';
 const secret='synthetic-production-read-model-key-00000000';
+test('startup restore retries only after Hub explicitly reports BUSY',async t=>{
+ const retryTimers=[];
+ t.mock.method(globalThis,'setTimeout',(callback,delay)=>{
+  retryTimers.push({callback,delay});
+  return {unref(){}};
+ });
+ let requests=0;
+ const model=mountProductionMapApi(express(),{
+  previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),secret,
+  callHub:async()=>{
+   requests++;
+   if(requests===1)return {data:{phase:'BUSY'}};
+   throw Object.assign(Error('HUB_TIMEOUT'),{name:'AbortError'});
+  }
+ });
+ await model.requestPublishedModel();
+ assert.equal(requests,1);
+ assert.deepEqual(retryTimers.map(timer=>timer.delay),[120000]);
+ await retryTimers.shift().callback();
+ assert.equal(requests,2);
+ assert.equal(retryTimers.length,0);
+});
+
 test('production routes: signed Unicode ingest, Period, staff auth, protected history/detail and public projection',async t=>{
  const env={MAP_STAFF_ID:'abc',MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash('Ab12cd'),MAP_STAFF_SESSION_SECRET:'s'.repeat(43),RENDER_EXTERNAL_URL:'https://production.example.test',HUB_API_SECRET:secret,ADMIN_TOKEN:'test-admin'};
  const snapshot={rows:[{customerCode:'S12345',customerName:'합성점포',address:'합성주소',lat:37,lng:127,password:'SYNTHETIC',rawMemo:'SYNTHETIC'}],latestDate:'2026-09-19'};

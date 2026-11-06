@@ -110,9 +110,11 @@ export async function callHub(action, params, { useCache = true, privateRead = f
   if (privateRead || ['customerDetail','staffCustomerDetail'].includes(action)) useCache = false;
   const saved = cache.get(key);
   if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
-  if (useCache && inFlight.has(key)) return inFlight.get(key);
+  // The public and protected status routes share this read, including a forced refresh.
+  const sharePending = useCache || (action === "mapModelStatus" && !privateRead && deadline === undefined && !signal);
+  if (sharePending && inFlight.has(key)) return inFlight.get(key);
   const request = callHubUncached(action, params, key, privateRead || ['customerDetail','staffCustomerDetail'].includes(action), { deadline, signal, page });
-  if (useCache) inFlight.set(key, request);
+  if (sharePending) inFlight.set(key, request);
   try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
 }
 
@@ -138,6 +140,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
   state.metrics.requests += 1;
   const actionTimeoutMs = {
     mapModelStatus: 15000,
+    stageReadModelRequest: 15000,
     mapModelIncrementalRequest: 30000,
     mapBaseVehicles: 225000,
     mapCoordinateSupplement: 8000,
@@ -155,7 +158,7 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
   let sharedDeadline = Math.min(deadline ?? Infinity, staffDetail || action === 'staffDriverHistory' ? started + timeoutMs : Infinity);
   let outputAllowanceUsed=false;
   let lastError;
-  const attempts = entered.probe || action === "customerDetail" ? 1 : 2;
+  const attempts = entered.probe || action === "customerDetail" || action === "stageReadModelRequest" ? 1 : 2;
   let timedOut = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     signal?.throwIfAborted();

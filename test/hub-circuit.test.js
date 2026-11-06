@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { callHub as verifiedHubRead } from "../src/phase2bHubReadClient.js";
 
 const originalFetch = global.fetch;
 const originalEnv = { ...process.env };
@@ -39,6 +40,50 @@ test("model status can finish after the generic Hub timeout", async (t) => {
   t.mock.timers.tick(5000);
   assert.equal((await status).ok, true);
   await genericTimeout;
+});
+
+test("concurrent uncached model status readers share only the pending request", async () => {
+  const client = await freshClient();
+  let requests = 0;
+  global.fetch = async (_url, { body }) => {
+    requests += 1;
+    return ok(JSON.parse(body).action);
+  };
+
+  const readers = Array.from({ length: 10 }, (_, index) => index % 2 ? client.callHub : verifiedHubRead);
+  const responses = await Promise.all(readers.map(read => read("mapModelStatus", {}, { useCache: false })));
+  assert.equal(responses.filter(value => value.ok).length, readers.length);
+  assert.equal(requests, 1);
+  await verifiedHubRead("mapModelStatus", {}, { useCache: false });
+  assert.equal(requests, 2);
+});
+
+test("the restore acknowledgement can finish after the generic Hub timeout", async (t) => {
+  await freshClient();
+  process.env.HUB_API_TIMEOUT_MS = "2000";
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  global.fetch = async (_url, { signal }) => new Promise((resolve, reject) => {
+    const response = setTimeout(() => resolve(ok("stageReadModelRequest")), 5000);
+    signal.addEventListener("abort", () => {
+      clearTimeout(response);
+      reject(signal.reason);
+    }, { once: true });
+  });
+
+  const result = verifiedHubRead("stageReadModelRequest", { target: "production" }, { useCache: false });
+  t.mock.timers.tick(5000);
+  assert.equal((await result).ok, true);
+});
+
+test("a 5xx restore acknowledgement is not replayed by the Hub client", async () => {
+  await freshClient();
+  let requests = 0;
+  global.fetch = async () => {
+    requests += 1;
+    return { ok: false, status: 503, json: async () => ({ ok: false, error: { code: "TEMPORARY" }, meta: {} }) };
+  };
+  await assert.rejects(verifiedHubRead("stageReadModelRequest", { target: "production" }, { useCache: false }), /HUB_TEMPORARY/);
+  assert.equal(requests, 1);
 });
 
 test("Search OPEN does not block Route", async () => {

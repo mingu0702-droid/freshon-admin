@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { callHub as callVerifiedHub } from "./phase2bHubReadClient.js";
 
 const VERSION = "map-phase2-v1";
 const cache = new Map();
@@ -92,6 +93,7 @@ export function previewEnabled() {
 }
 
 export async function callHub(action, params, { useCache = true } = {}) {
+  if (action === "mapModelStatus") return callVerifiedHub(action, params, { useCache });
   if (!process.env.HUB_API_URL) throw new Error("HUB_API_URL_NOT_CONFIGURED");
   const key = `${action}:${stable(params || {})}`;
   const saved = cache.get(key);
@@ -121,7 +123,6 @@ async function callHubUncached(action, params, key) {
   const started = Date.now();
   state.metrics.requests += 1;
   const actionTimeoutMs = {
-    mapModelStatus: 15000,
     unifiedSearch: Number(process.env.HUB_SEARCH_TIMEOUT_MS || 30000),
     customerDetail: Number(process.env.HUB_DETAIL_TIMEOUT_MS || 120000),
     nearestVehicles: Number(process.env.HUB_NEAREST_TIMEOUT_MS || 30000),
