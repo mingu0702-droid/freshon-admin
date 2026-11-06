@@ -134,7 +134,7 @@
   const temporaryPlaces=lookup.createTemporaryPlaces();
   let addressSearchController=null,addressSearchGeneration=0;
   let recalculateTimer=null,autoRecalculate=false;
-  let centers=[],centerMarker=null,routePointOverlays=[],lastResult=null,lastKind='manual',disposed=false,selectedCandidate=null,activeInput=null,roleSignature='',missingSignature='',suggestTimer=null,suggestionIndex=-1;
+  let centers=[],centerMarker=null,otherCenterMarkers=[],centerDraw=null,routePointOverlays=[],lastResult=null,lastKind='manual',disposed=false,selectedCandidate=null,activeInput=null,roleSignature='',missingSignature='',suggestTimer=null,suggestionIndex=-1;
   let externalDirectionsSignature='';
   function all(){return lookup.unique([...bridge.navigationStores(),...centers,...temporaryPlaces.values()]);}
   const resolve=value=>lookup.resolve(value,all());
@@ -325,16 +325,22 @@
     }catch(error){status(error.message);planner.open=true;}
   };
   function drawCenters(){
-    centers=lookup.registeredCenters();
-    centerChoices.replaceChildren();centerChoices.hidden=!centers.length;
+    const rows=lookup.registeredCenters(),map=bridge.state.map;
+    const signature=JSON.stringify(rows.map(row=>[row.id,row.lat,row.lng,row.address,row.sourceVersion]));
+    if(centerDraw?.map===map&&centerDraw.signature===signature)return;
+    clearCenters();centers=rows;centerDraw={map,signature};
+    centerChoices.hidden=!centers.length;
     if(centers.length){const label=document.createElement('span');label.textContent='센터에서 출발';centerChoices.append(label);}
     for(const center of centers){
       const button=document.createElement('button');button.type='button';button.textContent=center.customerName;button.onclick=()=>choosePoint('origin',center);centerChoices.append(button);
+      if(map&&center.id!=='osan'){
+        const label=document.createElement('button');label.type='button';label.className='centerMarker';label.textContent=center.customerName;
+        label.onclick=()=>{updateSelected(center);if(bridge.state.mode==='DATE_ROUTE')planner.open=true;};
+        const overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(center.lat,center.lng),content:label,zIndex:2});
+        overlay.setMap(map);otherCenterMarkers.push(overlay);
+      }
     }
-    const center=centers.find(row=>row.id==='osan'),map=bridge.state.map;
-    const signature=center&&JSON.stringify([center.lat,center.lng,center.address,center.sourceVersion]);
-    if(centerMarker?.map===map&&centerMarker.signature===signature)return;
-    removeCenterMarker();
+    const center=centers.find(row=>row.id==='osan');
     if(!center||!map)return;
 
     const anchor=document.createElement('div');anchor.className='osanCenterAnchor';
@@ -360,15 +366,17 @@
     card.onkeydown=button.onkeydown=event=>{if(event.key==='Escape')closeCenterCard(true);};
     mapArea.append(card);
     const overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(center.lat,center.lng),content:anchor,clickable:true,xAnchor:0,yAnchor:0,zIndex:42});
-    overlay.setMap(map);centerMarker={map,signature,button,card,overlay};
+    overlay.setMap(map);centerMarker={button,card,overlay};
   }
   function closeCenterCard(restoreFocus=false){
     if(!centerMarker||centerMarker.card.hidden)return;
     centerMarker.card.hidden=true;centerMarker.button.setAttribute('aria-expanded','false');
     if(restoreFocus)centerMarker.button.focus();
   }
-  function removeCenterMarker(){
+  function clearCenters(){
     centerMarker?.overlay.setMap(null);centerMarker?.card.remove();centerMarker=null;
+    otherCenterMarkers.forEach(overlay=>overlay.setMap(null));otherCenterMarkers=[];
+    centers=[];centerDraw=null;centerChoices.replaceChildren();centerChoices.hidden=true;
   }
   function syncMissing(){
     const vehicles=bridge.state.selectedVehicles,rows=lookup.unique(bridge.state.mode==='DATE_ROUTE'?bridge.navigationStores():bridge.stores()).filter(row=>(!vehicles.length||vehicles.includes(String(row.vehicle)))&&!lookup.located(row));
@@ -397,10 +405,14 @@
     if(autoRecalculate&&values.length>=2&&roleRows().length===values.length)recalculateTimer=setTimeout(()=>{if(!disposed&&autoRecalculate&&roleRows().length===editor.values().length)$('#planRoute').click();},450);
   };
   const onContext=()=>{closeCenterCard();autoRecalculate=false;clearTimeout(recalculateTimer);hideSuggestions();temporaryPlaces.clear();editor.clear();selectedCandidate=null;updateSelected(null);lastResult=null;lastKind='manual';showResult({state:'idle'});roleSignature='';sync();};
-  const events=[['map-manual-route',onManual],['map-recorded-route',onRecorded],['map-store-selected',onSelected],['map-sdk-ready',onReady],['map-navigation-logout',onContext],['map-navigation-context-changed',onContext],['map-navigation-draft',onDraft],['map-coordinate-updated',sync]];
+  const onLogout=()=>{clearCenters();onContext();};
+  const onStaffReady=()=>{void window.KakaoMapsAdapter?.ready().then(()=>{
+    if(!disposed&&document.body.dataset.mapStaffState==='authenticated')onReady();
+  }).catch(()=>{});};
+  const events=[['map-manual-route',onManual],['map-recorded-route',onRecorded],['map-store-selected',onSelected],['map-sdk-ready',onReady],['map-staff-ready',onStaffReady],['map-navigation-logout',onLogout],['map-navigation-context-changed',onContext],['map-navigation-draft',onDraft],['map-coordinate-updated',sync]];
   events.forEach(([name,listener])=>window.addEventListener(name,listener));
   const observer=new MutationObserver(sync);if($('#modeDaily'))observer.observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});if($('#runList'))observer.observe($('#runList'),{childList:true});
-  window.addEventListener('pagehide',event=>{if(event.persisted)return;disposed=true;cancelAddressSearch();clearTimeout(suggestTimer);clearTimeout(recalculateTimer);observer.disconnect();events.forEach(([name,listener])=>window.removeEventListener(name,listener));document.removeEventListener('pointerdown',outsidePointer);removeCenterMarker();routePointOverlays.forEach(overlay=>overlay.setMap(null));routePointOverlays=[];},{once:true});
-  window.MapNavigation=Object.freeze({resolve,search:value=>lookup.search(value,all()),sync,metrics:()=>({centerOverlays:Number(Boolean(centerMarker)),routePointOverlays:routePointOverlays.length,routePointCount:roleRows().length,temporaryPointCount:temporaryPlaces.values().length,routeState:lastResult?.state||'idle'})});
+  window.addEventListener('pagehide',event=>{if(event.persisted)return;disposed=true;cancelAddressSearch();clearTimeout(suggestTimer);clearTimeout(recalculateTimer);observer.disconnect();events.forEach(([name,listener])=>window.removeEventListener(name,listener));document.removeEventListener('pointerdown',outsidePointer);clearCenters();routePointOverlays.forEach(overlay=>overlay.setMap(null));routePointOverlays=[];},{once:true});
+  window.MapNavigation=Object.freeze({resolve,search:value=>lookup.search(value,all()),sync,metrics:()=>({centerOverlays:otherCenterMarkers.length+Number(Boolean(centerMarker)),osanCenterOverlays:Number(Boolean(centerMarker)),routePointOverlays:routePointOverlays.length,routePointCount:roleRows().length,temporaryPointCount:temporaryPlaces.values().length,routeState:lastResult?.state||'idle'})});
   drawCenters();updateSelected();sync();
 })();

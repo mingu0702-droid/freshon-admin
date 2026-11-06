@@ -21,6 +21,7 @@
 .approvedShellCandidate #navAmbiguous{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
 .approvedShellCandidate .mapCenters{display:flex;gap:4px;flex-wrap:wrap;max-width:100%}
 .approvedShellCandidate .mapCenters button{font-size:11px;padding:5px 8px;background:white}
+.approvedShellCandidate .centerMarker{font-size:11px;background:#fff;border:2px solid #345f99;border-radius:5px;padding:4px}
 .osanCenterAnchor{position:relative;width:0;height:0;pointer-events:none}
 .osanCenterAnchor::before{content:"";position:absolute;top:0;left:-2px;width:4px;height:4px;border-radius:50%;background:#1852a2}
 .approvedShellCandidate .osanCenterMarker{position:absolute;top:5px;left:0;transform:translateX(-50%);display:grid;justify-items:center;gap:2px;padding:0;border:0;background:transparent;box-shadow:none;pointer-events:auto;white-space:nowrap}

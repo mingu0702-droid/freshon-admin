@@ -33,7 +33,7 @@ function registeredOsanCenter(setting){
   if(typeof setting!=='string'||setting.length>2048)return null;
   let row;
   try{row=JSON.parse(setting);}catch{return null;}
-  if(row?.verified!==true||!Number.isFinite(row.lat)||row.lat<33||row.lat>39.5||
+  if(row?.verified!==true||(row.id!==undefined&&row.id!=='osan')||!Number.isFinite(row.lat)||row.lat<33||row.lat>39.5||
     !Number.isFinite(row.lng)||row.lng<124||row.lng>132||
     typeof row.sourceVersion!=='string'||!/^[A-Za-z0-9._:-]{1,128}$/.test(row.sourceVersion))return null;
   const address=typeof row.address==='string'?row.address.trim():'';

@@ -69,6 +69,7 @@ const server=http.createServer(async(req,res)=>{
    let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);requests.push(body);
    try{data=await service.route(body);}catch(e){res.statusCode=e.status||500;data={ok:false,error:e.code};}
   }
+  if(u.pathname.endsWith('/customer-search'))data={data:[{...rows[0],customerCode:'S100000'}]};
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-11-02',startDate:'2026-09-04',endDate:'2026-11-02'}};
   if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:'e'.repeat(64),baseVehicleStale:false})),meta:{version:'e'.repeat(64),stale:false}};
   if(u.pathname.endsWith('/assignments'))data={data:dailyRows.map(r=>({...r,deliveryDate:u.searchParams.get('date')})),meta:{complete:true,date:u.searchParams.get('date')}};
@@ -90,8 +91,8 @@ try{
  const marker=page.locator('#map .osanCenterMarker'),card=page.locator('#osanCenterCard');
  await marker.waitFor();
  await page.evaluate(()=>{window.__stableOsanMarker=document.querySelector('.osanCenterMarker');});
- const stableMarker=()=>page.evaluate(()=>MapNavigation.metrics().centerOverlays===1&&
-   document.querySelectorAll('.centerMarker').length===1&&__stableOsanMarker===document.querySelector('.osanCenterMarker'));
+ const stableMarker=()=>page.evaluate(()=>MapNavigation.metrics().osanCenterOverlays===1&&MapNavigation.metrics().centerOverlays===2&&
+   document.querySelectorAll('.centerMarker:not(.osanCenterMarker)').length===1&&__stableOsanMarker===document.querySelector('.osanCenterMarker'));
  check('exactly one warehouse marker uses the registered Osan coordinate',await marker.evaluate(node=>{
   const anchor=node.closest('.osanCenterAnchor');
   return anchor.parentElement.dataset.fixtureCoords==='37,127'&&node.querySelector('svg').getBoundingClientRect().width===28;
@@ -121,6 +122,12 @@ try{
  await page.screenshot({path:path.join(output,'osan-center-390.png')});
  await card.locator('[data-center-close]').click();
  await page.setViewportSize({width:1366,height:900});
+ await page.locator('#query').fill('합성 매장 0');
+ await page.locator('#searchBtn').click();
+ await page.locator('#results [data-search-code="S100000"]').click();
+ check('store search preserves the warehouse overlay while selecting a store',await stableMarker()&&
+   await page.evaluate(()=>MapUiLocalBridge.state.selected?.customerCode==='S100000'));
+ await page.evaluate(()=>kakao.maps.event.trigger(MapUiLocalBridge.state.map,'click'));
  await page.screenshot({path:path.join(output,'before-1366.png')});
  check('initial visit does not query Directions or show route totals',requests.length===0&&providerRequests.length===0&&!await totals.isVisible());
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
@@ -203,6 +210,9 @@ try{
  const payload=await response.json();
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='error');
  check('exhausted free budget returns local 429 and dispatches no provider request',response.status()===429&&payload.error==='QUOTA_EXCEEDED'&&requests.length===requestCount+1&&providerRequests.length===providerCount&&reservations.length===providerCount&&await page.evaluate(()=>__routeLines.size===0)&&await page.locator('#navDistance').textContent()==='— km'&&!await totals.isVisible());
+ await page.evaluate(()=>window.dispatchEvent(new Event('map-navigation-logout')));
+ check('logout purges center overlays, card and route choices',await page.evaluate(()=>MapNavigation.metrics().centerOverlays===0&&
+   !document.querySelector('.centerMarker,#osanCenterCard,.navCenterChoices button')&&!MapNavigation.resolve('CENTER_osan').length));
  check('no external calls or JavaScript errors',external.length===0&&errors.length===0);
  const result={pass:checks.length,fail:0,scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_PROVIDER',checks,routePosts:requests.length,providerCalls:providerRequests.length,reservations:reservations.length,externalCalls:external.length,errors,artifacts:output};fs.writeFileSync(path.join(output,'RESULT.safe.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }catch(error){if(errors.length)console.error(JSON.stringify(errors));throw error;}finally{await browser?.close();await new Promise(r=>server.close(r));}

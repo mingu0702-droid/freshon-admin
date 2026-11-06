@@ -40,6 +40,7 @@ test('staff SDK configuration projects only verified registered Osan data withou
   [undefined,undefined],
   ['{',undefined],
   [JSON.stringify({...point,verified:false}),undefined],
+  [JSON.stringify({...point,id:'yeongnam'}),undefined],
   [JSON.stringify({...point,lat:String(point.lat)}),undefined],
   [JSON.stringify({...point,lng:150}),undefined],
   [JSON.stringify({...point,sourceVersion:' '}),undefined]
