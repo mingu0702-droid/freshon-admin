@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   const rawFetch = window.fetch.bind(window), ACTIVITY_THROTTLE_MS = 60000;
+  const preloadedScripts = new Set();
   let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivityCheck = 0, checking = null, checkingOwner = -1, confirming = null, confirmingOwner = -1, signingOut = null, logoutRequired = false;
   const requests = new Set(), purges = new Set();
   const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('map-staff-session') : null;
@@ -121,9 +122,24 @@
     }));
   }
   async function bootstrap(owner) {
+    const placeholders = document.querySelectorAll('script[type="application/x-map-staff"]');
+    for (const placeholder of placeholders) {
+      const src = placeholder.dataset.src;
+      if (!src || placeholder.dataset.loaded === '1' || preloadedScripts.has(src)) continue;
+      const preload = document.createElement('link');
+      preload.rel = placeholder.dataset.module === '1' ? 'modulepreload' : 'preload';
+      if (preload.rel === 'preload') preload.as = 'script';
+      preload.href = src;
+      preloadedScripts.add(src);
+      document.head.append(preload);
+    }
+    // Fetch static dependencies in parallel while retaining the execution order below.
+    if (document.documentElement.dataset.referenceDataOptional === 'true') {
+      void window.KakaoMapsAdapter?.ready().catch(() => {});
+    }
     await loadData(owner);
     if (!booted) {
-      for (const placeholder of document.querySelectorAll('script[type="application/x-map-staff"]')) {
+      for (const placeholder of placeholders) {
         if (placeholder.dataset.loaded === '1') continue;
         if (owner !== epoch || !session) throw new DOMException('Session changed', 'AbortError');
         const script = document.createElement('script');
@@ -140,6 +156,8 @@
     } else window.dispatchEvent(new CustomEvent('map-staff-authenticated'));
     if (owner !== epoch || !session) throw new DOMException('Session changed', 'AbortError');
     entry.hidden = true; document.body.dataset.mapStaffState = 'authenticated'; status();
+    performance.mark('opsmap-staff-ready');
+    window.dispatchEvent(new Event('map-staff-ready'));
   }
   async function accept(value) {
     if (value?.authenticated !== true) { await revoke('직원 로그인 후 지도를 사용할 수 있습니다.'); return false; }

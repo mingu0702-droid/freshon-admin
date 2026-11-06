@@ -158,7 +158,7 @@
       return active ? sync(options) : Promise.resolve(summary());
     }
 
-    function locationRows(rows, selection = {}, {limit = 40} = {}) {
+    function locationRows(rows, selection = {}, {limit = 40, extend = false} = {}) {
       if (!authenticated()) { if (active) purge(); return []; }
       if (!active) return [];
       const count = Math.max(0, Math.min(1000, Number.isFinite(limit) ? Math.floor(limit) : 40));
@@ -177,6 +177,7 @@
         scope = {eligible: new Set(ordered.slice(0, count).map(row => row.customerCode)), generations: new Set()};
         locationScopes.set(scopeKey, scope);
       }
+      if (extend) for (const row of ordered.slice(0, count)) scope.eligible.add(row.customerCode);
       // A render after success may remove a candidate, but must never refill its slot.
       for (const row of ordered) if (row.customerCode === selected || approved(row)) scope.eligible.add(row.customerCode);
       if (!scope.generations.has(version)) {

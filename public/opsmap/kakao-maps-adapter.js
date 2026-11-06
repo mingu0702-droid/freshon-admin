@@ -1,5 +1,29 @@
 (function(root){
  'use strict';let pending,script;
+ const configPath='/api/map-phase2b/private/map-sdk-config';
+ let addressPending=false,addressCheck=null,addressEpoch=0,dailyRetryAt=0,blockedReason=null;
+ function refreshAddressLookup(){
+  if(addressCheck)return addressCheck;
+  if(!addressPending&&(!dailyRetryAt||Date.now()<dailyRetryAt))return Promise.resolve();
+  const owner=addressEpoch;
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
+  const task=fetch(configPath,{credentials:'same-origin',cache:'no-store',signal:controller.signal})
+   .then(async response=>{
+    if(!response.ok)return;
+    const payload=await response.json();
+    if(owner!==addressEpoch||controller.signal.aborted)return;
+    addressPending=false;dailyRetryAt=0;blockedReason=null;
+    const allowed=payload.allowExternalAddressLookup===true&&payload.addressLookupServerProxy===true;
+    root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:allowed};
+    if(allowed)root.dispatchEvent(new CustomEvent('map-address-capability'));
+   }).catch(()=>{}).finally(()=>{clearTimeout(timer);if(addressCheck===task)addressCheck=null;});
+  addressCheck=task;
+  return task;
+ }
+ root.addEventListener?.('map-staff-signed-out',()=>{
+  addressEpoch++;addressCheck=null;addressPending=true;dailyRetryAt=0;blockedReason=null;
+  root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false};
+ });
  function ready({timeoutMs=8000,configTimeoutMs=15000}={}){
   if(pending)return pending;
   pending=new Promise(async(resolve,reject)=>{
@@ -9,7 +33,8 @@
    let config=root.KAKAO_MAP_CONFIG||{};const tag=document.getElementById('kakaoMapsSdk');
    root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:false};
    root.OPSMAP_DRIVER_CONTACT_ENABLED=false;
-   try{const response=await fetch('/api/map-phase2b/private/map-sdk-config',{credentials:'same-origin',cache:'no-store'});if(finished)return;if(response.ok){const payload=await response.json();if(finished)return;config={...config,javascriptKey:config.javascriptKey||payload.javascriptKey};root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:payload.allowExternalAddressLookup===true&&payload.addressLookupServerProxy===true,addressLookupServerProxy:true};root.OPSMAP_DRIVER_CONTACT_ENABLED=payload.driverContactEnabled===true;}else if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_JAVASCRIPT_KEY_UNCONFIGURED');}catch{if(finished)return;if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_SDK_CONFIG_UNAVAILABLE');}
+   const owner=addressEpoch;
+   try{const response=await fetch(configPath+'?sdkOnly=1',{credentials:'same-origin',cache:'no-store'});if(finished)return;if(response.ok){const payload=await response.json();if(finished)return;if(owner!==addressEpoch)return finish('MAP_SDK_SESSION_CHANGED');config={...config,javascriptKey:config.javascriptKey||payload.javascriptKey};addressPending=payload.addressLookupPending===true;root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:!addressPending&&payload.allowExternalAddressLookup===true&&payload.addressLookupServerProxy===true,addressLookupServerProxy:true};root.OPSMAP_DRIVER_CONTACT_ENABLED=payload.driverContactEnabled===true;}else if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_JAVASCRIPT_KEY_UNCONFIGURED');}catch{if(finished)return;if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_SDK_CONFIG_UNAVAILABLE');}
    clearTimeout(timer);timer=setTimeout(()=>finish('MAP_SDK_TIMEOUT'),timeoutMs);
    root.dispatchEvent(new CustomEvent('map-driver-capability'));
    if(root.kakao?.maps?.load)return loaded();
@@ -24,8 +49,8 @@
  function reset(){script?.remove();script=null;pending=null;}
  function geocoder(){
   const cache=new Map(),inflight=new Map();let epoch=0;
-  const clear=()=>{epoch++;cache.clear();inflight.clear();};root.addEventListener('map-staff-signed-out',clear);root.addEventListener('pagehide',clear,{once:true});
-  const proxy={serverProxy:true,blockedReason:null,addressSearch(query,callback,{signal}={}){
+  const clear=()=>{epoch++;cache.clear();inflight.clear();};root.addEventListener?.('map-staff-signed-out',clear);root.addEventListener?.('pagehide',clear,{once:true});
+  const proxy={serverProxy:true,get blockedReason(){return blockedReason;},addressSearch(query,callback,{signal}={}){
    const key=String(query||'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim(),owner=epoch;
    if(!inflight.has(key)&&!cache.has(key)){
     const task=fetch('/api/map-phase2b/private/address-lookup',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})})
@@ -36,10 +61,14 @@
    Promise.resolve(cache.get(key)||inflight.get(key)).then(data=>{if(signal?.aborted||owner!==epoch)return;callback(data.documents,data.status,{status:200,httpStatus:200,providerHttp:data.providerHttp,resolution:data.resolution});})
     .catch(error=>{if(signal?.aborted||owner!==epoch)return;
      const code=error.code||'GEOCODER_FAILED';
-     if(/^(?:GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED|DURABLE_LEDGER_REQUIRED|LEDGER_INVALID)|GEOCODING_DISABLED|TARGET_APP_FREE_QUOTA_UNVERIFIED)$/.test(code)||error.providerHttp===401||error.providerHttp===403||error.providerHttp===429){proxy.blockedReason=code;root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false};}
+     if(/^(?:GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED|DURABLE_LEDGER_REQUIRED|LEDGER_INVALID)|GEOCODING_DISABLED|TARGET_APP_FREE_QUOTA_UNVERIFIED)$/.test(code)||error.providerHttp===401||error.providerHttp===403||error.providerHttp===429){
+      blockedReason=code;
+      if(code==='GEOCODE_DAILY_LIMIT')dailyRetryAt=(Math.floor((Date.now()+32400000)/86400000)+1)*86400000-32400000;
+      root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false};
+     }
      callback([],'ERROR',{code,status:error.status,httpStatus:error.status||null,providerHttp:Number.isInteger(error.providerHttp)?error.providerHttp:null});});
   }};return proxy;
  }
- root.KakaoMapsAdapter=Object.freeze({ready,reset,geocoder});
+ root.KakaoMapsAdapter=Object.freeze({ready,reset,geocoder,refreshAddressLookup});
 })(typeof window==='object'?window:globalThis);
 

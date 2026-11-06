@@ -28,7 +28,7 @@ function fixture({rows=[],customer=()=>({data:[],meta:{complete:true}}),lookup=(
     const payload=await customer(query);
     return {ok:payload.ok!==false,status:payload.ok===false?503:200,headers:{get(){return null;}},json:async()=>payload};
   };
-  const context=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],body:node('body')},
+  const context=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},body:node('body')},
     MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,
     location:{href:'https://example.invalid/opsmap/'},fetch,Map,Set,URL,URLSearchParams,AbortController,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
   vm.runInContext(exposed,context);window.qa.setup(rows);
@@ -188,13 +188,17 @@ test('cancellation aborts lookup; a late callback cannot overwrite a later run',
   assert.equal(f.state.newAreaResults.length,1);assert.equal(f.state.newAreaResults[0].originalCustomer,'합성2');assert.equal(f.state.newAreaResults[0].lat,37.3);
 });
 
-test('proxy preserves safe backend code/status and forwards cancellation without coordinates or keys in metadata',async()=>{
+test('proxy preserves safe quota status and shares an in-flight request across cancelled and active callers',async()=>{
   const source=fs.readFileSync(new URL('../public/opsmap/kakao-maps-adapter.js',import.meta.url),'utf8');
-  let options;const window={KAKAO_MAP_CONFIG:{allowExternalAddressLookup:true}};
-  const context=vm.createContext({window,fetch:async(_url,value)=>{options=value;return {ok:false,status:429,json:async()=>({ok:false,error:'GEOCODE_DAILY_LIMIT'})};}});
+  let options,release,calls=0;const window={KAKAO_MAP_CONFIG:{allowExternalAddressLookup:true}};
+  const gate=new Promise(resolve=>release=resolve);
+  const context=vm.createContext({window,fetch:async(_url,value)=>{calls++;options=value;await gate;return {ok:false,status:429,json:async()=>({ok:false,error:'GEOCODE_DAILY_LIMIT'})};}});
   vm.runInContext(source,context);const geocoder=window.KakaoMapsAdapter.geocoder();const controller=new AbortController();
-  await assert.rejects(globalThis.NewAreaRequests.lookup(geocoder,'경기도 화성시 합성로 1',{signal:controller.signal}),error=>error.code==='GEOCODE_DAILY_LIMIT'&&error.status===429);
-  assert.equal(options.signal,controller.signal);assert.equal(options.body,JSON.stringify({query:'경기도 화성시 합성로 1'}));
+  const query='경기도 화성시 합성로 1';
+  const cancelled=assert.rejects(globalThis.NewAreaRequests.lookup(geocoder,query,{signal:controller.signal}),error=>error.name==='AbortError');
+  const active=assert.rejects(globalThis.NewAreaRequests.lookup(geocoder,query),error=>error.code==='GEOCODE_DAILY_LIMIT'&&error.status===429);
+  controller.abort();release();await Promise.all([cancelled,active]);
+  assert.equal(calls,1);assert.equal(options.body,JSON.stringify({query}));
   assert.equal(geocoder.blockedReason,'GEOCODE_DAILY_LIMIT');assert.equal(window.KAKAO_MAP_CONFIG.allowExternalAddressLookup,false);
 });
 

@@ -17,3 +17,14 @@ test('fresh selected private detail invalidates a hashless old live address with
 test('dated fallback requires its exact last-observed date and cannot replace an established GPS or manual pin',async()=>{const f=make(),source={customerCode:'S990001',address:'합성시 다른로 99',sourceBasis:'DATED_DELIVERY_LOOKUP',currentMasterState:'NOT_FOUND',detailDate:'2026-11-04',locationState:'SOURCE_ROW'};for(const coordinateSource of ['RAW_GPS','MANUAL_PIN']){const a={...row(),lat:37.4,lng:127.1,coordinateSource,lastDeliveryDate:'2026-11-04'},before=JSON.stringify(a);f.api.acceptAddress(a,source);assert.equal(JSON.stringify(a),before);}const a={...row(),lastDeliveryDate:'2026-11-03'};await f.api.ensure(a);f.api.acceptAddress(a,source);assert.equal(a.coordinateSource,'KAKAO_ADDRESS_LIVE');assert.equal(f.calls(),1);});
 test('a canonical synced delivery date rechecks a hashless address without reusing an earlier building',async()=>{let reads=0;const f=make({readAddress:async r=>({customerCode:r.customerCode,address:++reads===1?'합성시 첫로 10':'합성시 변경로 99'})}),a={...row(),address:'',lastDeliveryDate:'2026-11-03'};f.api.onSourceSync('v1',[a]);await f.api.ensure(a);a.lastDeliveryDate='2026-11-04';f.api.onSourceSync('v2',[a]);f.api.apply(a);assert.equal(a.lat,null);await f.api.ensure(a);assert.equal(reads,2);assert.equal(f.calls(),2);});
 test('filtered copies with older dates cannot invalidate the canonical customer address',async()=>{const f=make({readAddress:async r=>({customerCode:r.customerCode,address:'합성시 합성로 10'})}),a={...row(),address:'',lastDeliveryDate:'2026-11-04'};await f.api.ensure(a);const filtered={...a,lastDeliveryDate:'2026-11-03'};f.api.apply(filtered);assert.equal(filtered.coordinateSource,'KAKAO_ADDRESS_LIVE');assert.equal(f.api.summary().located,1);assert.equal(f.calls(),1);});
+test('local daily limit defers a customer until KST midnight without rerendering unchanged pins',async()=>{
+ const midnight=Date.parse('2026-11-06T15:00:00Z');let clock=midnight-1,calls=0,renders=0;
+ const {api}=make({now:()=>clock,onChange:()=>renders++,lookup:async()=>{
+  if(++calls===1)throw Object.assign(Error(),{code:'GEOCODE_DAILY_LIMIT'});
+  return {lat:37.5,lng:127};
+ }}),store=row();
+ await api.ensure(store);assert.equal(api.status(store).state,'DEFERRED');assert.equal(api.status(store).retryAt,midnight);
+ await api.ensure(store);assert.equal(calls,1);assert.equal(renders,0);
+ clock=midnight;assert.equal(api.canSchedule(store),true);
+ await api.ensure(store);assert.equal(api.status(store).state,'LOCATED');assert.equal(calls,2);assert.equal(renders,1);
+});

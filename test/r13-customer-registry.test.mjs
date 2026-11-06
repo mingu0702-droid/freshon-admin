@@ -218,11 +218,14 @@ test('tampered Customer, original-address and search-query hashes cannot replace
   }
 });
 
-test('location scope fixes its first 40 eligible codes and never refills after successful points disappear', () => {
+test('location scope refills only on an explicit background continuation', () => {
   const {api} = load(), rows = Array.from({length: 6004}, (_, index) => ({customerCode: `S${100000 + index}`}));
   const first = api.locationRows(rows); assert.equal(first.length, 40);
   const successful = new Set(first.map(row => row.customerCode));
-  for (let index = 0; index < 10; index++) assert.equal(api.locationRows(rows.filter(row => !successful.has(row.customerCode))).length, 0);
+  const rest=rows.filter(row=>!successful.has(row.customerCode));
+  for (let index = 0; index < 10; index++) assert.equal(api.locationRows(rest).length, 0);
+  assert.deepEqual(copy(api.locationRows(rest, {}, {extend:true})), rest.slice(0,40));
+  assert.equal(api.locationRows(rest.slice(40)).length, 0);
   assert.equal(api.summary().locationScopes, 1);
 });
 

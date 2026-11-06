@@ -44,6 +44,26 @@
    bindings.delete(row.customerCode);outcomes.delete(row.customerCode);return true;
   }
   const identity=row=>/^[A-Z]\d+$/.test(row?.customerCode||'')&&row.currentMasterStatus!=='UNAVAILABLE'?normalize(addressFor(row)):'';
+  const matchingOutcome=row=>{
+   const outcome=outcomes.get(row.customerCode);
+   return outcome?.sourceHash===sourceHash(row)&&(outcome.address===undefined||outcome.address===identity(row))?outcome:null;
+  };
+  function status(row){
+   if(!row)return null;
+   if(established(row))return {state:'ESTABLISHED'};
+   if(row.coordinateSource===SOURCE&&valid(row)&&row.addressLocationKey===identity(row))return {state:'LOCATED'};
+   const code=row.customerCode,outcome=matchingOutcome(row);
+   if(active.has(code))return {state:'LOOKING_UP'};
+   if(outcome?.state==='REVIEW')return {state:'REVIEW',reason:outcome.reason};
+   if(outcome?.state==='RETRY'&&outcome.retryAt>now())return {state:'DEFERRED',reason:outcome.reason,retryAt:outcome.retryAt};
+   return {state:queue.has(code)?'QUEUED':'WAITING'};
+  }
+  function canSchedule(row){
+   if(!/^[A-Z]\d+$/.test(row?.customerCode||'')||row.currentMasterStatus==='UNAVAILABLE'||row.customerRegistryStatus==='DELETED'||active.has(row.customerCode)||established(row))return false;
+   if(uncheckedProjection(row))return true;
+   const value=status(row);
+   return value.state==='WAITING'||value.state==='QUEUED';
+  }
   function apply(row){
    if(!row)return row;
    observeRegistry(row);
@@ -75,14 +95,14 @@
      if(source?.customerCode!==code||!source.address)throw Object.assign(Error('CUSTOMER_ADDRESS_UNAVAILABLE'),{code:'CUSTOMER_ADDRESS_UNAVAILABLE'});
      addresses.set(code,{address:source.address,sourceHash:sourceBinding,observedDate:observedDate(row),conflict:conflicted(row)});
      await acceptSearch(row,source,owner,sourceBinding);if(owner!==epoch||signal.aborted||sourceHash(row)!==sourceBinding)return row;
-    }catch(error){if(owner===epoch&&!signal.aborted){const notFound=error?.status===404;outcomes.set(code,{sourceHash:sourceBinding,state:!notFound&&attempts.get(attemptKey)<2?'RETRY':'REVIEW',reason:notFound?'CUSTOMER_NOT_FOUND':'CUSTOMER_ADDRESS_UNAVAILABLE',retryAt:now()+60000});onChange(code);}return row;}
+    }catch(error){if(owner===epoch&&!signal.aborted){const notFound=error?.status===404;outcomes.set(code,{sourceHash:sourceBinding,state:!notFound&&attempts.get(attemptKey)<2?'RETRY':'REVIEW',reason:notFound?'CUSTOMER_NOT_FOUND':'CUSTOMER_ADDRESS_UNAVAILABLE',retryAt:now()+60000});}return row;}
    }
    const address=identity(row),query=queryForRow(row),key=normalize(query);
    if(!address||!key){outcomes.set(code,{address,sourceHash:sourceBinding,state:'REVIEW',reason:'CUSTOMER_ADDRESS_INVALID'});return row;}
    bindings.set(code,address);
-   if(points.has(key)){apply(row);outcomes.set(code,{address,state:'LOCATED',reason:'EXACT_ADDRESS'});onChange(code);return row;}
-   const prior=outcomes.get(code);
-   if(prior?.address===address&&(prior.state!=='RETRY'||prior.retryAt>now()))return row;
+   if(points.has(key)){apply(row);outcomes.set(code,{address,sourceHash:sourceBinding,state:'LOCATED',reason:'EXACT_ADDRESS'});onChange(code);return row;}
+   const prior=matchingOutcome(row);
+   if(prior&&(prior.state!=='RETRY'||prior.retryAt>now()))return row;
    const lookupAttempt='lookup:'+code+'|'+address;attempts.set(lookupAttempt,(attempts.get(lookupAttempt)||0)+1);
    try{
     if(!pending.has(key)){const lookupAddress=searchFor(row)?.query||addressFor(row),task=Promise.resolve().then(()=>lookup(lookupAddress,signal)).then(point=>{
@@ -92,13 +112,15 @@
     }).finally(()=>{if(pending.get(key)===task)pending.delete(key);});pending.set(key,task);}
     const point=await pending.get(key);
     if(owner!==epoch||signal.aborted||sourceHash(row)!==sourceBinding||normalize(queryForRow(row))!==key||identity(row)!==address||bindings.get(code)!==address)return row;
-    outcomes.set(code,{address,state:point?'LOCATED':'REVIEW',reason:point?'EXACT_ADDRESS':'ADDRESS_NOT_EXACT'});
-    apply(row);onChange(code);return row;
+    outcomes.set(code,{address,sourceHash:sourceBinding,state:point?'LOCATED':'REVIEW',reason:point?'EXACT_ADDRESS':'ADDRESS_NOT_EXACT'});
+    if(point){apply(row);onChange(code);}return row;
    }catch(error){
     if(owner!==epoch||signal.aborted||normalize(queryForRow(row))!==key)return row;
     const reason=/^[A-Z_]+$/.test(error?.code||'')?error.code:'ADDRESS_LOOKUP_FAILED';
-    const retry=attempts.get(lookupAttempt)<2&&/TIMEOUT|NETWORK|UNAVAILABLE|COOLDOWN|GEOCODER_FAILED|LOOKUP_FAILED/.test(reason);
-    outcomes.set(code,{address,state:retry?'RETRY':'REVIEW',reason,retryAt:now()+60000});onChange(code);return row;
+    const daily=reason==='GEOCODE_DAILY_LIMIT';
+    const retry=daily||attempts.get(lookupAttempt)<2&&/TIMEOUT|NETWORK|UNAVAILABLE|COOLDOWN|GEOCODER_FAILED|LOOKUP_FAILED/.test(reason);
+    const retryAt=daily?(Math.floor((now()+32400000)/86400000)+1)*86400000-32400000:now()+60000;
+    outcomes.set(code,{address,sourceHash:sourceBinding,state:retry?'RETRY':'REVIEW',reason,retryAt});return row;
    }
   }
   async function drain(){
@@ -112,9 +134,7 @@
   function schedule(rows,{priority=false}={}){
    if(!enabled())return;
    const additions=[];
-   for(const row of rows||[]){apply(row);const check=!!row&&uncheckedProjection(row);if(active.has(row?.customerCode)||established(row)||!check&&valid(row)&&row.coordinateSource===SOURCE||!/^[A-Z]\d+$/.test(row?.customerCode||'')||row.currentMasterStatus==='UNAVAILABLE')continue;
-    const previous=outcomes.get(row.customerCode);if(!check&&previous&&(previous.address===identity(row)||previous.sourceHash===sourceHash(row))&&(previous.state!=='RETRY'||previous.retryAt>now()))continue;
-    additions.push([row.customerCode,row]);}
+   for(const row of rows||[]){apply(row);if(canSchedule(row))additions.push([row.customerCode,row]);}
    if(priority){const rest=[...queue];queue.clear();for(const entry of additions)queue.set(...entry);for(const entry of rest)if(!queue.has(entry[0]))queue.set(...entry);}
    else{queue.clear();for(const entry of additions)queue.set(...entry);}
    void drain();
@@ -138,7 +158,7 @@
    addresses.set(row.customerCode,{address:source.address,sourceHash:sourceHash(row),observedDate:observedDate(row),conflict:conflicted(row)});bindings.delete(row.customerCode);outcomes.delete(row.customerCode);apply(row);onChange(row.customerCode);
    searches.delete(row.customerCode);if(source.coordinateSearch)void acceptSearch(row,source,epoch,sourceHash(row)).then(accepted=>{if(accepted){apply(row);onChange(row.customerCode);}});
   }
-  return Object.freeze({apply,ensure,schedule,clear,onSourceSync,acceptAddress,source:SOURCE,summary:()=>({located:[...outcomes.values()].filter(r=>r.state==='LOCATED').length,review:[...outcomes.values()].filter(r=>r.state==='REVIEW').length,retry:[...outcomes.values()].filter(r=>r.state==='RETRY').length,queued:queue.size,pending:pending.size,retention:'PAGE_MEMORY_ONLY'})});
+  return Object.freeze({apply,ensure,schedule,clear,onSourceSync,acceptAddress,status,canSchedule,busy:()=>running,source:SOURCE,summary:()=>({located:[...outcomes.values()].filter(r=>r.state==='LOCATED').length,review:[...outcomes.values()].filter(r=>r.state==='REVIEW').length,retry:[...outcomes.values()].filter(r=>r.state==='RETRY').length,queued:queue.size,pending:pending.size,retention:'PAGE_MEMORY_ONLY'})});
  }
  root.MapAddressLocations=Object.freeze({create,source:SOURCE});
 })(typeof window==='object'?window:globalThis);

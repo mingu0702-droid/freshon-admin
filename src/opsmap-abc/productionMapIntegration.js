@@ -63,8 +63,9 @@ export function mountProductionMapApi(app,{
   app.get('/api/map-phase2b/private/map-sdk-config',async(req,res)=>{
     const javascriptKey=String(env.KAKAO_MAP_JAVASCRIPT_KEY||'').trim();
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED'});
-    const lookup=await addressLookupService.status();
-    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({javascriptKey,driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowExternalAddressLookup:lookup.enabled===true,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true}));
+    const sdkOnly = req.query.sdkOnly === '1';
+    const lookup = sdkOnly ? null : await addressLookupService.status();
+    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({javascriptKey,driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowExternalAddressLookup:lookup?.enabled===true,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true}));
   });
   mountKakaoCoordinateConnection({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,service:addressLookupService,jsonBody:express.json({limit:'4kb'}),origin:env.MAP_STAFF_ORIGIN||env.RENDER_EXTERNAL_URL});
   app.get('/api/map-phase2b/private/address-lookup/config',async(req,res)=>{
