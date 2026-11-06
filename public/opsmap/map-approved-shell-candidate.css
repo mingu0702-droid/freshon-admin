@@ -105,7 +105,8 @@
 /* Role separation wins over legacy forced display rules. */
 .approvedShellCandidate [data-mode-hidden="true"]{display:none!important}
 .approvedShellCandidate .vehiclePickerShell{position:relative;margin-top:10px}
-.approvedShellCandidate #baseVehiclePicker>summary{display:flex;align-items:center;min-height:34px;padding:0 106px 0 0}
+.approvedShellCandidate .vehiclePickerShell #baseVehiclePicker{padding-top:0}
+.approvedShellCandidate .vehiclePickerShell #baseVehiclePicker>summary{display:flex;align-items:center;justify-content:flex-start;min-height:34px;padding:0 106px 0 0;box-sizing:border-box}
 .approvedShellCandidate .vehiclePickerActions{position:absolute;top:3px;right:2px;display:flex;gap:3px}
 .approvedShellCandidate .vehiclePickerActions button{min-height:28px;padding:3px 5px;font-size:11px;white-space:nowrap}
 .approvedShellCandidate #baseVehiclePicker>#vehicleList{max-height:240px;overflow-y:auto}
@@ -126,6 +127,6 @@
   .approvedShellCandidate #vehicleQuickFilter{max-width:100%}
   .approvedShellCandidate #vehicleList .vehicleItem{min-height:38px}
   .approvedShellCandidate #vehicleQuickFilter button,.approvedShellCandidate .vehiclePickerActions button{min-height:36px}
-  .approvedShellCandidate #baseVehiclePicker>summary{min-height:42px}
+  .approvedShellCandidate .vehiclePickerShell #baseVehiclePicker>summary{min-height:42px}
 }
 .approvedShellCandidate #roadRoutePanel[data-mode-hidden="true"]{display:none!important}
