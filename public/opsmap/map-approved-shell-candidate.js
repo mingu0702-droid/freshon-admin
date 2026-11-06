@@ -276,7 +276,8 @@
     // Reconcile only presentation of disabled state; operational partial/error messages remain.
     if(daily){const count=new Set(bridge.state.currentRows.map(row=>row.customerCode)).size;const badge=count?`${count} 매장`:bridge.isDataReady()?'0 매장':'불러오는 중';if($('#totalBadge').textContent!==badge)$('#totalBadge').textContent=badge;
       if($('#runListTitle').textContent!=='방문 순서')$('#runListTitle').textContent='방문 순서';
-      const navLabel=$('#chooseRoutes').textContent.replace(' ▾','').replace(' ?','')+(count?` · ${count}착`:'');if($('#navSelection').textContent!==navLabel)$('#navSelection').textContent=navLabel;
+      const visits=bridge.state.currentRows.length;
+      const navLabel=$('#chooseRoutes').textContent.replace(' ▾','').replace(' ?','')+(visits?` · ${visits}착`:'');if($('#navSelection').textContent!==navLabel)$('#navSelection').textContent=navLabel;
       const heading='자동차 경로';if($('#navigationPreview h2 span').textContent!==heading)$('#navigationPreview h2 span').textContent=heading;
       if($('#opEta').textContent.includes('과거')){$('#opEta').title=$('#opEta').textContent;$('#opEta').textContent='—';}
       // Route controllers own status, coverage and metrics; the shell must not replace them.
@@ -288,7 +289,7 @@
     const listExpanded=toggle.getAttribute('aria-expanded')==='true';
     $('#periodStoreList').hidden=!listExpanded;$('#periodListMore').hidden=!listExpanded||$('#periodListMore').hidden;
     loadMore.hidden=!listExpanded||!countMatch||Number(countMatch[1].replaceAll(',',''))<=visibleStoreLimit;
-    for(const button of $('#runList').querySelectorAll('[data-run-code]'))sourceCard(button,bridge.state.routeRows.find(row=>row.customerCode===button.dataset.runCode),true);
+    for(const button of $('#runList').querySelectorAll('[data-run-code]'))sourceCard(button,bridge.state.routeRows.find(row=>row.customerCode===button.dataset.runCode&&row.vehicle===button.dataset.runVehicle),true);
   }
   for(const node of [$('#runList'),$('#dailySummary'),$('#roadRoutePanel'),$('#periodStoreList')])new MutationObserver(sourceSync).observe(node,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
   new MutationObserver(sourceSync).observe($('#togglePeriodList'),{attributes:true,attributeFilter:['aria-expanded']});

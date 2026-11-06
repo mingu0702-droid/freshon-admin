@@ -18,6 +18,15 @@ const stores=[
  ['203','서울 중구 합성로 13']
 ];
 const rows=stores.map(([vehicle,address],i)=>({customerCode:'S9800'+String(i+1).padStart(2,'0'),customerName:'SYNTHETIC_ONLY_'+i,address,vehicle,baseVehicle:vehicle,lat:35+i*.15,lng:127+i*.04,lastDeliveryDate:'2026-10-20'}));
+const today='2026-11-07', repeatedCode=rows[0].customerCode;
+const todayRows=[
+ {...rows[0],deliveryDate:today,sequence:1},
+ {...rows[0],vehicle:'122',deliveryDate:today,sequence:2,address:'서울 동작구 합성중복길 2',lat:36.1,lng:127.1},
+ {...rows[1],deliveryDate:today,sequence:3}
+];
+const liveVehicles=['101','122'].map(vehicle=>({vehicle,stops:todayRows.filter(row=>row.vehicle===vehicle).map(row=>({
+ customerCode:row.customerCode,sequence:row.sequence,address:row.address,lat:row.lat,lng:row.lng,appRecorded:vehicle==='122'
+}))}));
 const version='f'.repeat(64),requests=[],external=[],errors=[],checks=[];
 const checkedAt='2026-10-20T00:00:00.000Z',basis='FIXED_DISPATCH_PRIMARY';
 const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','vehicle-picker-regions.js','map-phase2b-runtime.js','map-approved-shell-candidate.js'];
@@ -37,7 +46,8 @@ const server=http.createServer((req,res)=>{
   requests.push(u.pathname);let data={data:[],meta:{}};
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-10-20',startDate:'2026-08-01',endDate:'2026-10-20'}};
   else if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:r.vehicle,baseVehicleGroup:vehicles.find(v=>v.vehicle===r.vehicle).group,baseVehicleState:r.vehicle==='203'?'CONFLICT':'VERIFIED_MASTER',baseVehicleSource:basis,baseVehicleVersion:version,baseVehicleCheckedAt:checkedAt,baseVehicleStale:false})),meta:{version,basis,checkedAt,stale:false}};
-  else if(u.pathname.endsWith('/assignments')){const date=u.searchParams.get('date');data={data:[...rows.map(r=>({...r,deliveryDate:date})),{customerCode:'S980099',customerName:'SYNTHETIC_NEW_103',address:'인천 영종구 합성로 12',vehicle:'103',lat:36,lng:127,deliveryDate:date}],meta:{complete:true,date,reviewOnly:true}};}
+  else if(u.pathname.endsWith('/assignments')){const date=u.searchParams.get('date');data=date===today?{data:todayRows,meta:{complete:true,date}}:{data:[...rows.map(r=>({...r,deliveryDate:date,lastDeliveryDate:date})),{customerCode:'S980099',customerName:'SYNTHETIC_NEW_103',address:'인천 영종구 합성로 12',vehicle:'103',lat:36,lng:127,deliveryDate:date}],meta:{complete:true,date,reviewOnly:true}};}
+  else if(u.pathname.endsWith('/today-status')&&u.searchParams.get('date')===today)data={data:{vehicles:liveVehicles}};
   res.setHeader('content-type','application/json');res.end(JSON.stringify(data));return;
  }
  if(u.pathname==='/opsmap/'||u.pathname==='/'){res.setHeader('content-type','text/html');res.end(html);return;}
@@ -48,6 +58,7 @@ let browser;
 try{
  browser=await chromium.launch({headless:true,executablePath:process.env.OPSMAP_TEST_CHROMIUM||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
  const page=await browser.newPage({viewport:{width:1920,height:1080}});page.on('pageerror',e=>errors.push(e.message));
+ await page.clock.setFixedTime(new Date('2026-11-06T16:00:00Z'));
  await page.route('**/*',route=>{if(!route.request().url().startsWith(origin)){external.push(route.request().url());return route.abort();}return route.continue();});
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapUiLocalBridge?.isDataReady());
  const check=(name,condition)=>{assert(condition,name);checks.push(name);};
@@ -117,6 +128,34 @@ try{
   check(`map chip available at ${width}`,await chips.isVisible()&&await chips.locator('button[data-remove-vehicle="101"]').isEnabled());
   await page.screenshot({path:path.join(output,`after-fixture-${width}.png`),fullPage:true});
  }
- check('no page errors',errors.length===0);check('remote/auth/geocoding/source calls remain zero',external.length===0&&requests.every(p=>!/auth|geocod|source|hub|private\//i.test(p)));
+ check('remote/auth/geocoding/source calls remain zero',external.length===0&&requests.every(p=>!/auth|geocod|source|hub|private\//i.test(p)));
+ await page.setViewportSize({width:1366,height:900});
+ await page.reload();
+ await page.waitForFunction(()=>MapUiLocalBridge.isDataReady());
+ const changeDate=async date=>{
+  await page.locator('#selectedDate').evaluate((input,value)=>{input.value=value;input.dispatchEvent(new Event('change',{bubbles:true}));},date);
+  await page.waitForFunction(value=>MapUiLocalBridge.isDataReady()&&MapUiLocalBridge.state.selectedDate===value,date);
+ };
+ await changeDate(today);
+ const repeatedVisits=()=>page.evaluate(code=>MapUiLocalBridge.stores().filter(row=>row.customerCode===code).map(({vehicle,baseVehicle,address,lat,lng,status})=>({vehicle,baseVehicle,address,lat,lng,status})),repeatedCode);
+ const expectedVisits=todayRows.slice(0,2).map(({vehicle,baseVehicle,address,lat,lng})=>({vehicle,baseVehicle,address,lat,lng,status:vehicle==='122'?'COMPLETED':'PENDING'}));
+ assert.deepEqual(await repeatedVisits(),expectedVisits);
+ check('KST current date keeps both confirmed vehicles, their addresses, coordinates and shared base assignment',true);
+ const repeatedButtons=page.locator(`#runList [data-run-code="${repeatedCode}"]`);
+ await page.waitForFunction(code=>document.querySelectorAll('#runList [data-run-code="'+code+'"]').length===2,repeatedCode);
+ assert.deepEqual(await repeatedButtons.evaluateAll(buttons=>buttons.map(button=>button.dataset.runVehicle)),['101','122']);
+ check('store and visit counters use their own identity',await page.locator('#totalBadge').textContent()==='2 매장'&&(await page.locator('#navSelection').textContent()).includes('3착'));
+ await page.locator(`#runList [data-run-code="${repeatedCode}"][data-run-vehicle="122"]`).evaluate(button=>button.click());
+ check('run list opens the exact confirmed vehicle for a repeated customer',await page.evaluate(()=>MapUiLocalBridge.state.selected?.vehicle==='122'));
+ const liveBefore=requests.filter(p=>p.endsWith('/today-status')).length;
+ await page.locator('#operationVehicle').evaluate(select=>{select.value='122';});
+ await page.locator('#syncOperation').evaluate(button=>button.click());
+ await page.waitForFunction(()=>!document.querySelector('#syncOperation').disabled&&MapUiLocalBridge.state.selected?.vehicle==='122');
+ assert.deepEqual(await repeatedVisits(),expectedVisits);
+ check('refresh preserves both assignments and restores the selected confirmed vehicle',requests.filter(p=>p.endsWith('/today-status')).length>liveBefore);
+ await page.locator('#operationVehicle').evaluate(select=>{select.value='';});
+ await changeDate('2026-10-21');
+ check('historical date transition replaces both current assignments with that date’s rows',(await repeatedVisits()).length===1&&await page.evaluate(()=>MapUiLocalBridge.stores().every(row=>row.lastDeliveryDate==='2026-10-21')));
+ check('no page errors or remote calls',errors.length===0&&external.length===0);
  const result={scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_MAP',output,checks,errors,externalCalls:external.length,requests};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

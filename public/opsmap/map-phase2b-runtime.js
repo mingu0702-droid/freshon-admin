@@ -690,12 +690,13 @@
       if (date === localDate() && response.meta.reviewOnly!==true && window.MAP_ROLLING_DATE_INDEX_ENABLED!==true) {
         try {
           const live = await fetchJson(`/api/map-phase2b/preview/today-status?date=${date}`, { channel: "selected-date-live", ttl: 30000, timeout: 45000 });
-          const byCode = new Map(rows.map((row) => [String(row.customerCode || row.code), row]));
+          const byVisit = new Map(rows.map((row) => [datedVisitKey(row.vehicle || row.confirmedVehicle, row.customerCode || row.code), row]));
           (live.data?.vehicles || []).forEach((vehicle) => (vehicle.stops || []).forEach((stop) => {
             const code = String(stop.customerCode || stop.code || "");
-            if (code) byCode.set(code, { ...byCode.get(code), ...stop, vehicle: vehicle.vehicle, lastDeliveryDate: date });
+            const key = datedVisitKey(vehicle.vehicle, code);
+            if (code) byVisit.set(key, { ...byVisit.get(key), ...stop, vehicle: vehicle.vehicle, lastDeliveryDate: date });
           }));
-          rows = [...byCode.values()];
+          rows = [...byVisit.values()];
         } catch (error) {
           if (isSilentRequestError(error) || token !== dateRequestId) return;
           // Dated assignments remain usable when the optional live status fails.
@@ -1598,17 +1599,17 @@
       const next = operationStops[operationStops.indexOf(row) + 1];
       const distance = next ? distanceKm(row, next) : Infinity;
       const selected = state.selected?.customerCode === row.customerCode && state.selected?.vehicle === row.vehicle;
-      return `<button class="runStop${selected ? " selected" : ""}" data-run-code="${esc(row.customerCode)}" aria-pressed="${selected}"><span class="runOrder">${esc(row.order || "-")}</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName || "점포명 미확인")}</div><span class="runMeta"><span class="statusChip ${row.status === "COMPLETED" ? "done" : ""}">${row.status === "COMPLETED" ? "완료" : row.status === "PENDING" ? "미완료" : "상태 미확인"}</span><span>${esc(formatTime(row.actualCompletedAt || row.deliveryCompletedAt) || "-")}</span><span class="runDistance">${row.lat == null || row.lng == null ? "좌표 미확인" : Number.isFinite(distance) ? "다음 직선 " + formatDistance(distance) : "-"}</span></span></span></button>`;
+      return `<button class="runStop${selected ? " selected" : ""}" data-run-code="${esc(row.customerCode)}" data-run-vehicle="${esc(row.vehicle)}" aria-pressed="${selected}"><span class="runOrder">${esc(row.order || "-")}</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName || "점포명 미확인")}</div><span class="runMeta"><span class="statusChip ${row.status === "COMPLETED" ? "done" : ""}">${row.status === "COMPLETED" ? "완료" : row.status === "PENDING" ? "미완료" : "상태 미확인"}</span><span>${esc(formatTime(row.actualCompletedAt || row.deliveryCompletedAt) || "-")}</span><span class="runDistance">${row.lat == null || row.lng == null ? "좌표 미확인" : Number.isFinite(distance) ? "다음 직선 " + formatDistance(distance) : "-"}</span></span></span></button>`;
     }).join("") : !isDailyDataReady()?"날짜를 선택해 배송지를 조회해 주세요.":"선택한 조건의 배송지가 없습니다.";
     // Historical Hub route totals exclude unlocated rows. Keep those source
     // assignments in a clearly separate list without inventing route order/status.
-    const extraStops = isDailyDataReady()&&selectedVehicle ? filteredDateStores(allStores).filter(row => row.vehicle === selectedVehicle && (row.lat == null || row.lng == null) && !operationStops.some(stop => stop.customerCode === row.customerCode)) : [];
+    const extraStops = isDailyDataReady()&&selectedVehicle ? filteredDateStores(allStores).filter(row => row.vehicle === selectedVehicle && (row.lat == null || row.lng == null) && !operationStops.some(stop => stop.customerCode === row.customerCode && stop.vehicle === row.vehicle)) : [];
     if (extraStops.length) {
       $("#runListCount").textContent += ` · 좌표 미확인 ${extraStops.length}`;
-      $("#runList").innerHTML += `<div class="unlocatedHeading">좌표 미확인 착지 ${extraStops.length} · 운행집계 제외</div>` + extraStops.map(row => `<button class="unlocatedStop${state.selected?.customerCode === row.customerCode ? " selected" : ""}" data-run-code="${esc(row.customerCode)}"><span class="runOrder">—</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName)}</div><span class="coordinateWarning">좌표 미확인 · 상태 미확인</span></span></button>`).join("");
+      $("#runList").innerHTML += `<div class="unlocatedHeading">좌표 미확인 착지 ${extraStops.length} · 운행집계 제외</div>` + extraStops.map(row => `<button class="unlocatedStop${state.selected?.customerCode === row.customerCode && state.selected?.vehicle === row.vehicle ? " selected" : ""}" data-run-code="${esc(row.customerCode)}" data-run-vehicle="${esc(row.vehicle)}"><span class="runOrder">—</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName)}</div><span class="coordinateWarning">좌표 미확인 · 상태 미확인</span></span></button>`).join("");
     }
     $$('[data-run-code]').forEach((button) => button.onclick = () => {
-      const row = [...operationStops, ...extraStops].find((stop) => stop.customerCode === button.dataset.runCode);
+      const row = [...operationStops, ...extraStops].find((stop) => stop.customerCode === button.dataset.runCode && stop.vehicle === button.dataset.runVehicle);
       if (!row) return;
       state.fitRequested = false;
       renderStops(state.routeRows, { numbered: true }); drawRoute(state.routeRows);
@@ -2243,10 +2244,14 @@
     return { ...row, status: completed ? "COMPLETED" : ['PENDING','INCOMPLETE'].includes(status)||stop.completed===false ? "PENDING" : "", actualCompletedAt: completed ? (stop.actualCompletedAt || stop.completedAt || null) : null, isEstimated: stop.isEstimated===true };
   }
 
+  function datedVisitKey(vehicle, code) {
+    return JSON.stringify([normalizeVehicle(vehicle), String(code || "").trim()]);
+  }
+
   function dedupeRouteStops(rows) {
     const unique = new Map();
     rows.forEach((row, index) => {
-      const key = row.customerCode ? `C:${row.customerCode}` : Number.isFinite(row.lat) && Number.isFinite(row.lng) ? `P:${row.lat.toFixed(6)},${row.lng.toFixed(6)}` : `R:${index}`;
+      const key = row.customerCode ? datedVisitKey(row.vehicle, row.customerCode) : Number.isFinite(row.lat) && Number.isFinite(row.lng) ? `P:${row.lat.toFixed(6)},${row.lng.toFixed(6)}` : `R:${index}`;
       const old = unique.get(key);
       if (!old || (old.status !== "COMPLETED" && row.status === "COMPLETED")) unique.set(key, row);
     });
@@ -2674,14 +2679,15 @@
       if (requestId !== state.todayRequestId || date !== state.selectedDate || state.mode !== "DATE_ROUTE" || filterIdentity!==queryFilterIdentity()) return;
       const status = current ? payload.data?.vehicles?.find((row) => normalizeVehicle(row.vehicle) === vehicle) : payload.data;
       if (current && refresh && snapshotMeta?.reviewOnly!==true && window.MAP_ROLLING_DATE_INDEX_ENABLED!==true) {
-        const byCode = new Map(allStores.map((row) => [row.customerCode, row]));
+        const byVisit = new Map(allStores.map((row) => [datedVisitKey(row.vehicle, row.customerCode), row]));
         (payload.data?.vehicles || []).forEach((item) => (item.stops || []).forEach((stop) => {
           const code = String(stop.customerCode || stop.code || "");
           if (!code) return;
-          const known = byCode.get(code) || {};
-          byCode.set(code, { ...known, ...stop, customerCode: code, vehicle: item.vehicle, lat: stop.lat ?? known.lat, lng: stop.lng ?? known.lng, lastDeliveryDate: date });
+          const key = datedVisitKey(item.vehicle, code);
+          const known = byVisit.get(key) || {};
+          byVisit.set(key, { ...known, ...stop, customerCode: code, vehicle: item.vehicle, lat: stop.lat ?? known.lat, lng: stop.lng ?? known.lng, lastDeliveryDate: date });
         }));
-        replaceStoreSnapshot([...byCode.values()], snapshotMeta);
+        replaceStoreSnapshot([...byVisit.values()], snapshotMeta);
         if (!showRoute) { state.fitRequested = false; await loadBaseMap(); }
       }
       updateOperationMetrics(status);
@@ -2726,7 +2732,7 @@
     await changeSelectedDate(date);
     if (date !== state.selectedDate || !dateReady) return;
     await loadOperationStatus(selected, routeOpen, {}, true);
-    if (detail) selectStore(storesByCode.get(detail.customerCode) || { ...detail, vehicle: "" }, null, false);
+    if (detail) selectStore(storeByVehicleAndCode.get(`${detail.vehicle}|${detail.customerCode}`) || { ...detail, vehicle: "" }, null, false);
   }
 
   function exportNewArea(format) {
