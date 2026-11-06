@@ -45,6 +45,7 @@
     SOURCE={vehicles:[]};ADMIN.clear();state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
     clearSelection();clearMap();renderPeriodStoreList([]);resetRoadRoute();clearNewAreaBatch();renderManualDraft();
     for(const selector of ['#results','#runList','#addressJudgeResults','#periodDriver','#vehicleList','#navSuggestions','#operationsPanel'])$(selector)?.replaceChildren();
+    vehicleRegions = null; renderVehicleQuickFilter([]);
     $('#freshnessState').textContent='직원 로그인 필요';$('#periodStoreListCount').textContent='';
   }
   const manualDraft = window.ManualWaypoints?.createDraft();
@@ -724,7 +725,7 @@
       label.className = "vehicleItem";
       label.dataset.group=allStores.find(row=>row.baseVehicle===vehicle&&row.baseVehicleGroup)?.baseVehicleGroup||'';
       label.innerHTML = `<input type="checkbox" value="${esc(vehicle)}"><span class="vehicleNo">${esc(vehicleLabel(vehicle))}</span><span class="vehicleArea"></span>`;
-      label.querySelector("input").onchange = () => { periodVehicleScope = selectedVehicles().length ? "selected" : "all"; refreshVehicleUi(true); };
+      label.querySelector("input").onchange = () => applyVehicleFilter(selectedVehicles());
       $("#vehicleList").append(label);
       ["#vehicle", "#mobileVehicle", "#operationVehicle", "#mobileBaseVehicle"].forEach((id) => $(id).add(new Option(`${vehicleLabel(vehicle)}`, vehicle)));
     });
@@ -801,14 +802,58 @@
     return ({osan:'osan',yeongnam:'yeongnam',honam:'honam','011':'osan','012':'yeongnam','013':'honam','오산':'osan','영남':'yeongnam','호남':'honam','오산센터':'osan','영남센터':'yeongnam','호남센터':'honam'})[String(value || '').trim()] || 'unknown';
   }
 
+  let vehicleRegions;
+  function currentVehicleRegions() {
+    const dated = state.mode === 'DATE_ROUTE';
+    const ready = !dated || isDailyDataReady();
+    if (vehicleRegions?.rows === allStores && vehicleRegions.dated === dated && vehicleRegions.ready === ready) return vehicleRegions.byVehicle;
+    const byVehicle = new Map();
+    if (ready) for (const row of allStores) {
+      if (row.customerRegistryStatus === 'DELETED') continue;
+      const verified = row.baseVehicleState === 'VERIFIED_MASTER' && row.baseVehicleSource === 'FIXED_DISPATCH_PRIMARY' && /^[a-f0-9]{64}$/.test(row.baseVehicleVersion || '');
+      const vehicle = dated ? row.vehicle : verified && row.baseVehicle;
+      if (!vehicle) continue;
+      const region = window.MapVehiclePickerRegions?.addressMunicipality(row.address);
+      if (!region) continue;
+      if (!byVehicle.has(vehicle)) byVehicle.set(vehicle, new Set());
+      byVehicle.get(vehicle).add(region);
+    }
+    vehicleRegions = { rows: allStores, dated, ready, byVehicle: new Map([...byVehicle].map(([vehicle, regions]) =>
+      [vehicle, [...regions].sort((a, b) => a.localeCompare(b, 'ko')).join(' / ')])) };
+    return vehicleRegions.byVehicle;
+  }
+
   function filterVehicleList() {
-    const query = $('#vehicleQuery').value;
+    const query = $('#vehicleQuery').value.normalize('NFKC').trim();
+    const regions = currentVehicleRegions();
+    const visibleGroups = new Set();
     $$('#vehicleList .vehicleItem').forEach(item => {
-      item.style.display = (!state.centerFilter || vehicleListGroup(item.dataset.group) === vehicleListGroup(state.centerFilter)) && Phase2bUi.vehicleMatches(query, item.querySelector('input').value) ? 'flex' : 'none';
+      const vehicle = item.querySelector('input').value;
+      const region = regions.get(vehicle) || '';
+      const area = item.querySelector('.vehicleArea');
+      const label = region || '담당 지역 미확인';
+      if (area.textContent !== label) area.textContent = label;
+      const matchesCenter = !state.centerFilter || vehicleListGroup(item.dataset.group) === vehicleListGroup(state.centerFilter);
+      const visible = matchesCenter && (Phase2bUi.vehicleMatches(query, vehicle) || region.includes(query));
+      item.style.display = visible ? 'flex' : 'none';
+      if (visible) visibleGroups.add(item.dataset.listGroup);
     });
     $$('#vehicleList .vehicleGroupHeading').forEach(heading => {
-      heading.hidden = !$$('#vehicleList .vehicleItem').some(item => item.dataset.listGroup === heading.dataset.listGroup && item.style.display !== 'none');
+      heading.hidden = !visibleGroups.has(heading.dataset.listGroup);
     });
+    $('#selectAllVehicles').disabled = !visibleGroups.size;
+  }
+
+  function visibleVehicleItems() {
+    return $$('#vehicleList .vehicleItem').filter(item => item.style.display !== 'none');
+  }
+
+  function applyVehicleFilter(vehicles) {
+    setSelectedVehicles(vehicles);
+    periodVehicleScope = vehicles.length ? 'selected' : 'all';
+    $('#mobileBaseVehicle').value = vehicles.length === 1 ? vehicles[0] : '';
+    $('#vehicleSelect').classList.remove('open');
+    refreshVehicleUi(true, { preserveSearch: true });
   }
 
   function sortVehicleControls() {
@@ -846,7 +891,7 @@
         <span class="vehicleNo">${esc(vehicleLabel(vehicle.vehicle))}</span>
         <span class="vehicleArea">${esc(vehicle.area_label || vehicle.primary_area || vehicle.group || "권역")}</span>
       </label>`).join("");
-    vehicleChecks().forEach((input) => { input.onchange = () => { periodVehicleScope = selectedVehicles().length ? "selected" : "all"; refreshVehicleUi(true); }; });
+    vehicleChecks().forEach((input) => { input.onchange = () => applyVehicleFilter(selectedVehicles()); });
     [$("#vehicle"), $("#mobileVehicle"), $("#operationVehicle")].forEach((select) => {
       select.innerHTML = '<option value="">전체 호차</option>' + vehicles.map((vehicle) => `<option value="${esc(vehicle)}">${esc(vehicleLabel(vehicle))}</option>`).join("");
       select.value = "";
@@ -1093,7 +1138,7 @@
       const filter=document.createElement('button');filter.type='button';filter.textContent=`${vehicles[0]}호차만 보기`;
       filter.onclick=()=>{closeClusterPanel();state.centerFilter='';periodBasis='vehicle';periodVehicleScope='selected';syncPeriodBasis();setSelectedVehicles([vehicles[0]]);refreshVehicleUi(true);};actions.append(filter);
     }
-    const all=document.createElement('button');all.type='button';all.textContent='전체 호차';all.onclick=()=>{closeClusterPanel();$('#selectAllVehicles').click();};actions.append(all);panel.append(actions);
+    const all=document.createElement('button');all.type='button';all.textContent='전체 호차';all.onclick=()=>{state.centerFilter='';$('#periodCenter').value='all';applyVehicleFilter([]);};actions.append(all);panel.append(actions);
     const query=document.createElement('input');query.type='search';query.placeholder='이 묶음에서 매장 검색';query.setAttribute('aria-label','묶음 매장 검색');panel.append(query);
     // Region clusters keep their zoom action, with co-located stores reachable first.
     if(!sameLocation){
@@ -1991,7 +2036,20 @@
     $("#addressJudgeResults").innerHTML = `<div class="judgeCard"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : row.decision === "검토" ? "review" : "no"}">${esc(row.decision)}</span><b>${esc(row.customer || "신규 주소")}</b></div><div>주소 권역: ${esc(row.addressRegion||"주소 권역 미확인")} · 실제 담당 센터: ${esc(row.actualDispatchCenter?.label||"담당 센터 미확인")}</div><div>권역판정: <b>${row.decision === "O" ? "가능" : esc(row.reason)}</b></div><div>배송요일: <b>${esc(row.deliveryDays || "")}</b></div><div>근접호차: <b>${esc(vehicleLabel(row.vehicle || "-"))}</b>${row.nearestDistance == null ? "" : ` · ${formatDistance(row.nearestDistance)}`}</div>${row.facility ? `<span class="facility">차량 진입 확인 필요</span>` : ""}</div>`;
   }
 
-  function refreshVehicleUi(run) {
+  function renderVehicleQuickFilter(selected) {
+    const quick = $('#vehicleQuickFilter');
+    if (!quick) return;
+    quick.hidden = !selected.length;
+    const chips = $('#vehicleQuickChips'), key = JSON.stringify(selected);
+    if (chips.dataset.selected === key) return;
+    chips.dataset.selected = key;
+    chips.innerHTML = selected.map(vehicle => `<button type="button" class="vehicleChip" data-remove-vehicle="${esc(vehicle)}" aria-label="${esc(vehicleLabel(vehicle))} 선택 해제">${esc(vehicleLabel(vehicle))} ×</button>`).join('');
+    chips.querySelectorAll('button').forEach(chip => {
+      chip.onclick = () => applyVehicleFilter(selectedVehicles().filter(vehicle => vehicle !== chip.dataset.removeVehicle));
+    });
+  }
+
+  function refreshVehicleUi(run, { preserveSearch = false } = {}) {
     filterVehicleList();
     if (run) {closeClusterPanel();resetRoadRoute();}
     syncRoadRoutePanel();
@@ -1999,26 +2057,33 @@
     if (run) {
       ++state.todayRequestId; ++state.routeRequestId;
       requestControllers.get("operation-status")?.controller.abort("superseded");
-      clearSelection(); updateOperationMetrics(null);
+      if (!preserveSearch) clearSelection();
+      else if (state.selected && dateReady) {
+        const visible = state.mode === 'BASE_60D' ? filteredPeriodStores() : filteredDateStores(allStores);
+        if (!visible.some(row => row.customerCode === state.selected.customerCode)) clearSelection({preserveSearch: true});
+      }
+      updateOperationMetrics(null);
     }
     if (state.mode === "BASE_60D" && selected.length) periodVehicleScope = "selected";
     $("#selectedVehicleCount").textContent = selected.length ? `${selected.length}대` : "선택 없음";
     $("#vehicleModeLabel").textContent = selected.length === 1 ? "해당 호차 집중모드" : selected.length > 1 ? "선택 호차 권역 비교" : "기준일 전체 권역";
     $("#mapStatusTitle").textContent = selected.length === 1 ? `${selected[0]}호 ${state.selectedDate} 권역` : selected.length > 1 ? `${selected.length}대 호차 권역 비교` : "기준일 전체 권역";
     $("#vehicleChips").className = selected.length ? "" : "vehiclePlaceholder";
-    $("#vehicleChips").innerHTML = selected.length ? (selected.length > 3 ? `${selected.length}개 호차 선택` : selected.map((vehicle) => `<span class="vehicleChip" role="button" tabindex="0" data-remove-vehicle="${esc(vehicle)}" aria-label="${esc(vehicleLabel(vehicle))} 선택 해제">${esc(vehicleLabel(vehicle))} ×</span>`).join("")) : periodVehicleScope === "all" ? "전체 호차" : "호차를 선택하세요";
-    $$('[data-remove-vehicle]').forEach((chip) => {
-      const remove = (event) => { event.stopPropagation(); setSelectedVehicles(selectedVehicles().filter((vehicle) => vehicle !== chip.dataset.removeVehicle)); if (!selectedVehicles().length) periodVehicleScope = 'all'; refreshVehicleUi(true); };
-      chip.onclick = remove;
-      chip.onkeydown = (event) => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); remove(event); } };
-    });
+    $("#vehicleChips").textContent = selected.length ? `${selected.length}개 호차 선택` : "전체 호차";
+    renderVehicleQuickFilter(selected);
     $("#operationVehicle").value = selected.length === 1 ? selected[0] : "";
     if (!selected.length) {
       operationStops = []; renderRunList();
       ++state.todayRequestId; updateOperationMetrics(null); $("#syncOperation").disabled = false;
       if (state.mode === "DATE_ROUTE") { state.routeRows = []; clearMap(); }
     }
-    if (run) { operationStops = []; state.routeRows = []; renderRunList(); requestMapFit(); loadBaseMap(); if (state.mode === "DATE_ROUTE") loadOperationStatus(primarySelectedVehicle(), selected.length === 1); }
+    if (run) {
+      operationStops = []; state.routeRows = []; renderRunList();
+      if (!preserveSearch || (selected.length && !state.userMovedMap && !state.selected && !state.virtual)) requestMapFit();
+      else state.fitRequested = false;
+      loadBaseMap();
+      if (state.mode === 'DATE_ROUTE') loadOperationStatus(primarySelectedVehicle(), selected.length === 1);
+    }
   }
 
   let datedDriverEvidence;
@@ -2044,6 +2109,7 @@
   }
   async function loadBaseMap() {
     if (!dateReady || state.mode==='DATE_ROUTE'&&!isDailyDataReady()) return;
+    if (state.mode === 'DATE_ROUTE') filterVehicleList();
     void refreshDriverMaster();
     const selected = selectedVehicles();
     let stores = state.mode === "BASE_60D" ? filteredPeriodStores()
@@ -2731,12 +2797,15 @@
     $("#vehicleQuery").oninput = filterVehicleList;
     $("#vehicleQuery").onkeydown = (event) => {
       if (event.key !== "Enter") return;
-      const first = $$(".vehicleItem").find((item) => item.style.display !== "none");
+      const first = visibleVehicleItems()[0];
       if (!first) return;
-      setSelectedVehicles([first.querySelector("input").value]); periodVehicleScope = "selected"; $("#vehicleSelect").classList.remove("open"); refreshVehicleUi(true);
+      event.preventDefault();
+      const input = first.querySelector('input');
+      input.checked = !input.checked;
+      applyVehicleFilter(selectedVehicles());
     };
-    $("#selectAllVehicles").onclick = () => { state.centerFilter = ""; $("#periodCenter").value = "all"; setSelectedVehicles([]); periodVehicleScope = "all"; refreshVehicleUi(true); };
-    $("#clearVehicles").onclick = () => { setSelectedVehicles([]); periodVehicleScope = "all"; $("#mobileBaseVehicle").value = ""; $("#vehicleSelect").classList.remove("open"); refreshVehicleUi(true); };
+    $("#selectAllVehicles").onclick = () => applyVehicleFilter(visibleVehicleItems().map(item => item.querySelector('input').value));
+    $("#clearVehicles").onclick = () => applyVehicleFilter([]);
     $$("[data-center]").forEach((button) => { button.onclick = () => { selectCenter(button.dataset.center); $("#vehicleSelect").classList.remove("open"); }; });
     let composing = false;
     $("#query").oncompositionstart = () => { composing = true; };
@@ -2845,7 +2914,7 @@
   $(".addressBlock .label").hidden = true;
   $("#addressBtn").textContent = "위치 찾기";
   $(".addressBlock .hint").textContent = "임시핀 · 30km 주변 호차 확인 (공간거리)";
-  $("#selectAllVehicles").textContent = "전체 호차"; $("#clearVehicles").textContent = "선택 해제";
+  $("#selectAllVehicles").textContent = "전체선택"; $("#clearVehicles").textContent = "전체해제";
   $("#legacyVehicleState").hidden = false; $("#legacyVehicleState").removeAttribute("aria-hidden");
   $("#vehicleTrigger").setAttribute("aria-label", "호차 선택");
   const sidebar = $("#leftPanel"), addressPanel = $(".addressBlock");

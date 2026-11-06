@@ -104,12 +104,28 @@
 
 /* Role separation wins over legacy forced display rules. */
 .approvedShellCandidate [data-mode-hidden="true"]{display:none!important}
-.approvedShellCandidate #baseVehiclePicker{margin-top:10px}
-.approvedShellCandidate #baseVehiclePicker>#vehicleList{display:flex;flex-wrap:wrap;max-height:240px;overflow:auto}
-.approvedShellCandidate #baseVehiclePicker>summary{flex-wrap:wrap}
-.approvedShellCandidate #baseVehiclePicker>summary::after{order:1}
-.approvedShellCandidate #baseVehiclePicker>summary>#vehicleQuery{order:2;flex-basis:100%}
+.approvedShellCandidate .vehiclePickerShell{position:relative;margin-top:10px}
+.approvedShellCandidate #baseVehiclePicker>summary{display:flex;align-items:center;min-height:34px;padding:0 106px 0 0}
+.approvedShellCandidate .vehiclePickerActions{position:absolute;top:3px;right:2px;display:flex;gap:3px}
+.approvedShellCandidate .vehiclePickerActions button{min-height:28px;padding:3px 5px;font-size:11px;white-space:nowrap}
+.approvedShellCandidate #baseVehiclePicker>#vehicleList{max-height:240px;overflow-y:auto}
+.approvedShellCandidate #baseVehicleCount{margin:5px 0 0;color:var(--muted);font-size:11px}
 .approvedShellCandidate #vehicleQuery{box-sizing:border-box;margin:6px 0}
-.approvedShellCandidate #vehicleList{flex-wrap:wrap}
-.approvedShellCandidate #vehicleList .vehicleGroupHeading{flex-basis:100%;font-size:11px;color:var(--muted);padding:5px 0}
+.approvedShellCandidate #vehicleList{display:flex;flex-direction:column;flex-wrap:nowrap;gap:3px}
+.approvedShellCandidate #vehicleList .vehicleGroupHeading{font-size:11px;color:var(--muted);padding:5px 0}
+.approvedShellCandidate #vehicleList .vehicleItem{display:flex;align-items:flex-start;gap:5px;width:100%;min-width:0;min-height:30px;box-sizing:border-box;padding:5px}
+.approvedShellCandidate #vehicleList .vehicleItem input{flex:none;margin:2px 0 0}
+.approvedShellCandidate #vehicleList .vehicleNo{flex:0 0 39px;min-width:0;font-size:clamp(11px,1.5vw,12px);line-height:1.4;overflow-wrap:anywhere}
+.approvedShellCandidate #vehicleList .vehicleArea{flex:1;min-width:0;max-width:none;font-size:clamp(10px,1.4vw,11px);line-height:1.5;overflow:visible;white-space:normal;text-overflow:clip;overflow-wrap:anywhere}
+.approvedShellCandidate #vehicleQuickFilter{display:flex;align-items:flex-start;gap:4px;min-width:0;max-width:min(60%,390px);margin-right:auto;padding:3px;background:var(--panel,#fff);border-radius:7px;box-shadow:0 2px 10px #1634471c}
+.approvedShellCandidate #vehicleQuickFilter[hidden]{display:none}
+.approvedShellCandidate #vehicleQuickChips{display:flex;flex-wrap:wrap;min-width:0;max-height:70px;overflow-y:auto;gap:3px}
+.approvedShellCandidate #vehicleQuickFilter button{min-height:32px;padding:3px 6px;font-size:11px;white-space:nowrap}
+.approvedShellCandidate #clearMapVehicleFilter{flex:none}
+@media(max-width:760px){
+  .approvedShellCandidate #vehicleQuickFilter{max-width:100%}
+  .approvedShellCandidate #vehicleList .vehicleItem{min-height:38px}
+  .approvedShellCandidate #vehicleQuickFilter button,.approvedShellCandidate .vehiclePickerActions button{min-height:36px}
+  .approvedShellCandidate #baseVehiclePicker>summary{min-height:42px}
+}
 .approvedShellCandidate #roadRoutePanel[data-mode-hidden="true"]{display:none!important}
