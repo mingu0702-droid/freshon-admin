@@ -307,6 +307,7 @@
     KEY_MISSING:'도로 경로 제공자 인증 설정이 필요합니다.',
     PERSISTENT_BUDGET_REQUIRED:'승인된 호출 한도 저장소 설정이 필요합니다.',
     ROAD_BUDGET_UNVERIFIED:'승인된 호출 한도를 확인할 수 없습니다.',
+    ROAD_BUDGET_LEDGER_MISSING:'승인된 호출 원장이 없습니다.',
     ROAD_BUDGET_API_UNVERIFIED:'이 경로 유형의 API 호출 승인을 확인해 주세요.',
     QUOTA_EXCEEDED:'승인된 도로 경로 호출 한도를 모두 사용했습니다.',
     STAFF_LOGIN_REQUIRED:'직원 로그인 후 경로 설정을 확인할 수 있습니다.'
@@ -317,7 +318,9 @@
     const visited=points.filter((point,index)=>index===0||point.lat!==points[index-1].lat||point.lng!==points[index-1].lng);
     const api=visited.length>7?'waypoints':'directions',endpoint=readiness.apis?.[api]||readiness;
     const blocked=Array.isArray(endpoint.blockedReasons)?endpoint.blockedReasons:[];
-    readinessStatus.textContent=endpoint.canRequest?'경로 조회 설정 확인됨':blocked.map(code=>readinessReasons[code]).filter(Boolean).join(' ')||'경로 조회 설정을 확인할 수 없습니다.';
+    const reasons=blocked.map(code=>readinessReasons[code==='ROAD_BUDGET_UNVERIFIED'&&readiness.budgetError==='ROAD_BUDGET_LEDGER_MISSING'
+      ? readiness.budgetError : code]).filter(Boolean);
+    readinessStatus.textContent=endpoint.canRequest?'경로 조회 설정 확인됨':reasons.join(' ')||'경로 조회 설정을 확인할 수 없습니다.';
   }
   async function loadReadiness(){
     if(!planner.open||readinessController||document.body.dataset.mapStaffState!=='authenticated')return;
@@ -363,6 +366,7 @@
     const key=identity?JSON.stringify(identity):'';
     if(key===dailyIdentity)return;
     dailyIdentity=key;dailyController?.abort();dailyController=null;
+    delete dailyStatus.dataset.sourceError;
     dailyDefaults=[];dailyStops=[];dailyValues=null;dailyReady=false;
     bridge.resetDailyNavigation?.();applyDailyDraft();
     if(!identity){dailyStatus.textContent='배송일과 호차 하나를 선택해 주세요.';return;}
@@ -374,7 +378,13 @@
       const body=await response.json();
       if(dailyController!==controller)return;
       const data=body.data,center=centers.find(row=>row.id==='osan');
-      if(!response.ok||body.ok!==true||body.meta?.source!=='HUB_ROUTE_STOPS'||data?.date!==identity.date||data?.vehicle!==identity.vehicle)throw Error(body.error==='ORIGIN_UNCONFIRMED'?'오산센터의 등록 위치를 확인해 주세요.':'해당일의 저장된 배송 순서를 확인할 수 없습니다.');
+      if(!response.ok||body.ok!==true||body.meta?.source!=='HUB_ROUTE_STOPS'||data?.date!==identity.date||data?.vehicle!==identity.vehicle){
+        const sourceErrors={ORIGIN_UNCONFIRMED:'오산센터의 등록 위치를 확인해 주세요.',
+          WAYPOINT_LIMIT:'저장된 배송지가 31개를 초과합니다.',STOP_COORDINATES_MISSING:'위치가 확인되지 않은 배송지가 있습니다.'};
+        const code=typeof body.error==='string'&&/^[A-Z_]+$/.test(body.error)?body.error:'ROUTE_SOURCE_UNVERIFIED';
+        dailyStatus.dataset.sourceError=code;
+        throw Error(sourceErrors[code]||'해당일의 저장된 배송 순서를 확인할 수 없습니다.');
+      }
       const origin=data.origin;
       if(origin&&(!lookup.located(center)||origin.customerCode!==center.customerCode||origin.lat!==center.lat||origin.lng!==center.lng))throw Error('오산센터의 등록 위치를 확인해 주세요.');
       if(!Array.isArray(data.stops)||!data.stops.length)throw Error('해당일에 확인된 배송지가 없습니다.');
