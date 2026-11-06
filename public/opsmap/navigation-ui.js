@@ -366,7 +366,7 @@
     const key=identity?JSON.stringify(identity):'';
     if(key===dailyIdentity)return;
     dailyIdentity=key;dailyController?.abort();dailyController=null;
-    delete dailyStatus.dataset.sourceError;
+    for(const field of ['sourceError','sourceStops','missingOrder','duplicateOrder'])delete dailyStatus.dataset[field];
     dailyDefaults=[];dailyStops=[];dailyValues=null;dailyReady=false;
     bridge.resetDailyNavigation?.();applyDailyDraft();
     if(!identity){dailyStatus.textContent='배송일과 호차 하나를 선택해 주세요.';return;}
@@ -387,6 +387,16 @@
       }
       const origin=data.origin;
       if(origin&&(!lookup.located(center)||origin.customerCode!==center.customerCode||origin.lat!==center.lat||origin.lng!==center.lng))throw Error('오산센터의 등록 위치를 확인해 주세요.');
+      if(data.orderVerified===false&&Number.isSafeInteger(data.sourceStopCount)&&data.sourceStopCount>0){
+        dailyDefaults=[origin?.customerCode||'',''];
+        if(!dailyValues)applyDailyDraft();
+        dailyStatus.dataset.sourceError='RECORDED_ORDER_REQUIRED';
+        dailyStatus.dataset.sourceStops=String(data.sourceStopCount);
+        dailyStatus.dataset.missingOrder=String(data.invalidOrderCount);
+        dailyStatus.dataset.duplicateOrder=String(data.duplicateOrderCount);
+        dailyStatus.textContent=(origin?'오산센터 출발 · ':'')+'저장된 착순 미확인 · 방문지를 직접 지정해 주세요.';
+        return;
+      }
       if(!Array.isArray(data.stops)||!data.stops.length)throw Error('해당일에 확인된 배송지가 없습니다.');
       if(data.stops.length>31)throw Error('저장된 배송지가 31개를 초과합니다.');
       if(data.stops.some(row=>!row.customerCode||!Number.isSafeInteger(row.order)||row.order<1||row.vehicle!==identity.vehicle||

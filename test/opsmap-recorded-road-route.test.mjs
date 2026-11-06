@@ -37,14 +37,12 @@ test('recorded route verifies source order, preserves repeated visits and ends a
   assert.equal((await reader(page(Array.from({length:31},(_,index)=>stop(index+1))))(identity,center)).draft.waypoints.length,30);
 });
 
-test('recorded route rejects incomplete, mismatched, unordered or oversized source rows',async()=>{
+test('recorded route rejects incomplete, mismatched or oversized source rows',async()=>{
   const cases=[
     [page([stop(1)],{nextCursor:'pending'}),'ROUTE_SOURCE_UNVERIFIED'],
     [page([stop(1)],{total:2}),'ROUTE_SOURCE_UNVERIFIED'],
     [page([{...stop(1),deliveryDate:'2026-11-06'}]),'ROUTE_IDENTITY_MISMATCH'],
     [page([{...stop(1),confirmedVehicle:'102'}]),'ROUTE_IDENTITY_MISMATCH'],
-    [page([stop(1),stop(1)]),'RECORDED_ORDER_REQUIRED'],
-    [page([stop(null)]),'RECORDED_ORDER_REQUIRED'],
     [page(Array.from({length:32},(_,index)=>stop(index+1))),'WAYPOINT_LIMIT']
   ];
   for(const [payload,code] of cases)await assert.rejects(reader(payload)(identity,center),{code});
@@ -56,6 +54,17 @@ test('recorded route rejects incomplete, mismatched, unordered or oversized sour
   }
   assert.equal((await reader(page([stop(1)]))(identity,{...center,verified:false})).data.origin,null);
   await assert.rejects(reader(page([]))({...identity,date:'2026-11-31'},center),{code:'INVALID_MANUAL_ROUTE'});
+});
+
+test('an unverified saved order still identifies the verified Osan origin without inventing a destination',async()=>{
+  const result=await reader(page([stop(1),stop(1),stop(null)]))(identity,center);
+  assert.equal(result.data.origin.id,'CENTER_osan');
+  assert.equal(result.data.sourceStopCount,3);
+  assert.equal(result.data.orderVerified,false);
+  assert.equal(result.data.invalidOrderCount,1);
+  assert.equal(result.data.duplicateOrderCount,1);
+  assert.deepEqual(result.data.stops,[]);
+  assert.equal(result.draft,null);
 });
 
 test('recorded stops retain unlocated deliveries without creating a drivable draft',async()=>{
@@ -142,10 +151,10 @@ test('Stage ledger authorizes only its verified API and distinguishes provider p
   assert.equal(mismatched.writes,0);
 });
 
-test('staff recorded stops GET is read only and recorded POST requires a verified origin and coordinates',async t=>{
-  let centerId='honam',hubReads=0,lat=37.001;
+test('staff recorded stops GET is read only and recorded POST requires verified order, origin and coordinates',async t=>{
+  let centerId='honam',hubReads=0,lat=37.001,sequence=1;
   const read=createRecordedRoadRouteReader({
-    callHub:async()=>{hubReads++;return page([{...stop(1),latitude:lat}]);},
+    callHub:async()=>{hubReads++;return page([{...stop(sequence),latitude:lat}]);},
     readVehicleCenter:async()=>centerId
   });
   const app=express(),stageOrigin='https://stage.synthetic.test';
@@ -173,6 +182,8 @@ test('staff recorded stops GET is read only and recorded POST requires a verifie
   assert.equal((await (await post()).json()).error,'FEATURE_DISABLED');
   lat=null;
   assert.equal((await (await post()).json()).error,'STOP_COORDINATES_MISSING');
+  sequence=null;
+  assert.equal((await (await post()).json()).error,'RECORDED_ORDER_REQUIRED');
   assert.equal(f.writes,0);
   assert.equal(f.calls,0);
 });

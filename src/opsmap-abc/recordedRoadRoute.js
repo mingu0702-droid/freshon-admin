@@ -24,15 +24,18 @@ export function createRecordedRoadRouteReader({callHub,readVehicleCenter}){
     if(meta.total>=pageLimit||rows.length>=pageLimit)throw error('WAYPOINT_LIMIT',400);
     if(meta.nextCursor!==null||meta.total!==rows.length)throw error('ROUTE_SOURCE_UNVERIFIED');
     const orders=new Set();
+    let invalidOrderCount=0,duplicateOrderCount=0;
     const stops=rows.map(row=>{
       if(row?.deliveryDate!==date||vehicleId(row.confirmedVehicle)!==normalizedVehicle)throw error('ROUTE_IDENTITY_MISMATCH');
       const order=row.sequence,customerCode=text(row.customerCode);
-      if(!customerCode||!Number.isSafeInteger(order)||order<1||orders.has(order))throw error('RECORDED_ORDER_REQUIRED');
-      orders.add(order);
+      if(!customerCode)throw error('ROUTE_IDENTITY_MISMATCH');
+      if(!Number.isSafeInteger(order)||order<1)invalidOrderCount++;
+      else if(orders.has(order))duplicateOrderCount++;
+      else orders.add(order);
       let {latitude:lat,longitude:lng}=row;
       try{coordinate({lat,lng});}catch{lat=null;lng=null;}
       return {customerCode,customerName:text(row.customerName),address:text(row.customerAddress),vehicle,order,lat,lng};
-    }).sort((a,b)=>a.order-b.order);
+    });
     let origin=null;
     if(stops.length&&center?.id==='osan'&&center.verified===true&&text(center.sourceVersion)){
       try{
@@ -42,9 +45,11 @@ export function createRecordedRoadRouteReader({callHub,readVehicleCenter}){
         }
       }catch{/* The saved order is still usable with an explicitly selected origin. */}
     }
+    const orderVerified=invalidOrderCount===0&&duplicateOrderCount===0;
     const missingCoordinates=stops.filter(stop=>stop.lat===null).length;
-    const data={date,vehicle,origin,stops,missingCoordinates};
-    if(!origin||missingCoordinates)return {data,draft:null};
+    const data={date,vehicle,origin,sourceStopCount:stops.length,orderVerified,invalidOrderCount,duplicateOrderCount,
+      stops:orderVerified?stops.sort((a,b)=>a.order-b.order):[],missingCoordinates};
+    if(!origin||!orderVerified||missingCoordinates)return {data,draft:null};
     const points=stops.map((stop,index)=>point('stop-'+index,stop));
     const draft={mode:'MANUAL_WAYPOINTS',requestId:randomUUID(),origin:point(origin.id,origin),
       waypoints:points.slice(0,-1).map((p,index)=>({...p,order:index+1})),destination:points.at(-1)};

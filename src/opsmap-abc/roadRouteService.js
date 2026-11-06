@@ -146,6 +146,7 @@ export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=proc
     res.set('Cache-Control','private, no-store');
     try{
       const verified=recorded?await readRecorded(req.body):null;
+      if(verified?.data?.orderVerified===false)throw error('RECORDED_ORDER_REQUIRED',409);
       if(verified?.draft===null&&verified.data.stops.length)throw error(verified.data.missingCoordinates?'STOP_COORDINATES_MISSING':'ORIGIN_UNCONFIRMED',409);
       const result=verified?.draft===null?{ok:true,data:{state:'empty'}}:await service.route(verified?.draft??verified??req.body);
       if(recorded)result.data={...result.data,date:req.body.date,vehicle:req.body.vehicle};
