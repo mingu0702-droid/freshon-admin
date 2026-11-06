@@ -59,19 +59,25 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
     try{if(budget)await budget.reserve({cost:1,provider:'kakao-directions',api:plan.path==='/v1/waypoints/directions'?'waypoints':'directions'});}catch(e){used--;active--;throw error(e.code==='QUOTA_EXCEEDED'?'QUOTA_EXCEEDED':'CALL_POLICY_BLOCKED',429);}
     const timeout=Math.min(45000,Math.max(1000,Number(env.OPSMAP_ROAD_ROUTE_TIMEOUT_MS)||15000));
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
+    let providerHttp=null;
     try{
       const url=new URL(plan.path,origin);if(plan.query)for(const[k,v]of Object.entries(plan.query))url.searchParams.set(k,String(v));
       const response=await fetchImpl(url.href,{method:plan.method,redirect:'error',signal:controller.signal,
         headers:{Authorization:'KakaoAK '+key(),Accept:'application/json',...(plan.method==='POST'?{'content-type':'application/json'}:{})},...(plan.body?{body:JSON.stringify(plan.body)}:{})});
-      if(!response.ok){void response.body?.cancel();throw error(response.status===401?'AUTHENTICATION_FAILED':response.status===403?'PERMISSION_DENIED':response.status===429?'QUOTA_EXCEEDED':'PROVIDER_UNAVAILABLE',response.status===429?429:502);}
+      providerHttp=response.status;
+      if(providerHttp!==200){void response.body?.cancel();throw error(providerHttp===401?'AUTHENTICATION_FAILED':providerHttp===403?'PERMISSION_DENIED':providerHttp===429?'QUOTA_EXCEEDED':'PROVIDER_UNAVAILABLE',providerHttp===429?429:502);}
       const provider=await boundedJson(response);const data=adapter.fromProvider(provider,clean);
-      return {...data,calculatedAt:new Date(now()).toISOString()};
-    }catch(e){if(controller.signal.aborted)throw error('TIMEOUT',504);if(e.code&&e.status)throw e;throw error('PROVIDER_UNAVAILABLE',502);}
+      return {data:{...data,calculatedAt:new Date(now()).toISOString()},providerHttp};
+    }catch(e){
+      const failure=controller.signal.aborted?error('TIMEOUT',504):e.code&&e.status?e:error('PROVIDER_UNAVAILABLE',502);
+      if(Number.isInteger(providerHttp))failure.providerHttp=providerHttp;
+      throw failure;
+    }
     finally{clearTimeout(timer);active--;}
   }
   async function route(input){
     let clean,plan;try{clean=validRoadRouteRequest(input);plan=adapter.plan(clean);}catch(e){throw error(e.code||'INVALID_MANUAL_ROUTE',400);}
-    if(plan.zeroDistance)return {ok:true,data:{...adapter.fromProvider(null,clean),calculatedAt:new Date(now()).toISOString()},meta:{cache:'NOT_NEEDED',...configuration()}};
+    if(plan.zeroDistance)return {ok:true,data:{...adapter.fromProvider(null,clean),calculatedAt:new Date(now()).toISOString()},meta:{cache:'NOT_NEEDED',providerHttp:null,...configuration()}};
     if(!configured())throw error('FEATURE_DISABLED',503);
     if(!configuration().keyConfigured)throw error('KEY_MISSING',503);
     // Preserve the deployed Stage call-authorization boundary. A process-only
@@ -80,16 +86,17 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
     const id=createHash('sha256').update(JSON.stringify({plan,stationaryLegs:adapter.routePlan(clean).stationaryLegs})).digest('hex');
     for(const[k,v]of cache)if(v.until<=now())remove(k);
     const saved=cache.get(id);
-    if(saved)return {ok:true,data:{...structuredClone(saved.value),requestId:clean.requestId},meta:{cache:'HIT',...configuration()}};
+    if(saved)return {ok:true,data:{...structuredClone(saved.value),requestId:clean.requestId},meta:{cache:'HIT',providerHttp:null,...configuration()}};
     if(!pending.has(id)){
-      const task=load(clean,plan).then(value=>{
+      const task=load(clean,plan).then(result=>{
+        const value=result.data;
         const size=Buffer.byteLength(JSON.stringify(value));
         if(value.state==='success'&&size<=maxCacheBytes){while(cache.size>=32||bytes+size>maxCacheBytes)remove(cache.keys().next().value);cache.set(id,{value,until:now()+ttl,bytes:size});bytes+=size;}
-        return value;
+        return result;
       }).finally(()=>pending.delete(id));pending.set(id,task);
     }
-    const result=await pending.get(id);
-    return {ok:true,data:{...structuredClone(result),requestId:clean.requestId},meta:{cache:'MISS_OR_SHARED',...configuration()}};
+    const {data,providerHttp}=await pending.get(id);
+    return {ok:true,data:{...structuredClone(data),requestId:clean.requestId},meta:{cache:'MISS_OR_SHARED',providerHttp,...configuration()}};
   }
   return {route,configuration,readiness,clear(){cache.clear();bytes=0;}};
 }
@@ -113,7 +120,7 @@ export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=proc
       const result=await service.route(body);
       if(recorded)result.data={...result.data,date:req.body.date,vehicle:req.body.vehicle};
       return requireStaff(req,res,()=>res.json(result));
-    }catch(e){return requireStaff(req,res,()=>res.status(e.status||502).json({ok:false,error:e.code||'ROAD_ROUTE_FAILED'}));}
+    }catch(e){return requireStaff(req,res,()=>res.status(e.status||502).json({ok:false,error:e.code||'ROAD_ROUTE_FAILED',providerHttp:Number.isInteger(e.providerHttp)?e.providerHttp:null}));}
   };
   app.get('/api/map-phase2b/private/road-route/config',requireStaff,async(_q,r)=>{
     const config=typeof service.readiness==='function'?await service.readiness():service.configuration();

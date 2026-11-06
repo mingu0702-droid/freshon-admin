@@ -21,7 +21,7 @@ async function fixture(extra={}){
    if(options.method==='PUT'){const update=JSON.parse(options.body);assert.equal(update.branch,'production/opsmap-auth');assert.equal(update.sha,String(revision).padStart(40,'0'));state=JSON.parse(Buffer.from(update.content,'base64'));revision++;return response({});}
    return state?response({sha:String(revision).padStart(40,'0'),encoding:'base64',content:Buffer.from(JSON.stringify(state)).toString('base64')}):response({},404);
   }
-  if(url.startsWith('https://apis-navi.kakaomobility.com/v1/directions?'))return response({routes:[{result_code:0,summary:{distance:100,duration:60},sections:[{distance:100,duration:60,roads:[{vertexes:[127,37,127.01,37.01]}]}]}]});
+  if(url.startsWith('https://apis-navi.kakaomobility.com/v1/directions?'))return response({routes:[{result_code:0,summary:{distance:100,duration:60},sections:[{distance:100,duration:60,roads:[{vertexes:[127,37,127.01,37.01]}]}]}]},extra.providerHttp??200);
   assert.fail('Unexpected synthetic outbound surface');
  };
  try{mountProductionOpsmapCandidate(app,{env,publicDir:fileURLToPath(new URL('../public/',import.meta.url)),sessionStore:{get:async k=>sessions.get(k),set:async(k,v)=>sessions.set(k,v),touch:async(k,v)=>{if(!sessions.has(k))return false;sessions.set(k,v);return true;},delete:async k=>sessions.delete(k)},readPhase2bSnapshot:async()=>snapshot,getSnapshotMemory:()=>snapshot,phase2bKstDate:()=> '2026-11-03',normalizeCell:v=>String(v||''),normalizeDateValue:v=>v,phase2bSnapshotMeta:()=>({}),phase2bTodayStatus:async()=>({vehicles:[]}),callHub:async action=>assert.fail('Hub call forbidden: '+action)});}finally{globalThis.fetch=realFetch;}
@@ -41,9 +41,16 @@ test('Production explicit flag alone cannot enable calls without an existing app
 test('approved free ledger can be inspected while OFF and a guarded one-call sample preserves auth, cache and quota',async()=>{
  const off=await fixture({ledger:true,env:{OPSMAP_ROAD_BUDGET_STORE_ENABLED:'1'}});try{const s=await off.get();assert.equal(s.budgetVerified,true);assert.equal(s.approvedRemaining,1);assert.deepEqual(s.blockedReasons,['FEATURE_DISABLED']);assert(off.calls.every(c=>c.method==='GET'));}finally{await off.close();}
  const f=await fixture({ledger:true,env:{OPSMAP_ROAD_BUDGET_STORE_ENABLED:'1',OPSMAP_PRODUCTION_ROAD_ROUTE_ENABLED:'1'}});try{
-  assert.equal((await f.get()).canRequest,true);const first=await f.route();assert.equal(first.status,200);assert.equal((await first.json()).data.distanceMeters,100);
-  const second=await f.route(2);assert.equal(second.status,200);assert.equal((await second.json()).meta.cache,'HIT');assert.equal(f.state.roadBudget.used,1);assert.equal(f.calls.filter(c=>c.url.startsWith('https://apis-navi.')).length,1);assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
+  assert.equal((await f.get()).canRequest,true);const first=await f.route();assert.equal(first.status,200);const fetched=await first.json();assert.equal(fetched.data.distanceMeters,100);assert.equal(fetched.data.durationSeconds,60);assert.deepEqual(fetched.data.chunks[0].geometry[0].latLngs,[[37,127],[37.01,127.01]]);assert.equal(fetched.meta.providerHttp,200);
+  const second=await f.route(2);assert.equal(second.status,200);const cached=await second.json();assert.equal(cached.meta.cache,'HIT');assert.equal(cached.meta.providerHttp,null);assert.equal(f.state.roadBudget.used,1);assert.equal(f.calls.filter(c=>c.url.startsWith('https://apis-navi.')).length,1);assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
   const config=await f.get();assert.equal(config.approvedRemaining,0);assert.equal(config.canRequest,false);assert(config.blockedReasons.includes('QUOTA_EXCEEDED'));assert(!JSON.stringify(config).includes(key));
   const recorded=await realFetch(f.base+'/api/map-phase2b/private/road-route',{method:'POST',headers:f.headers,body:'{}'});assert.equal(recorded.status,409);assert.equal((await recorded.json()).error,'RECORDED_ORDER_REQUIRED');
+ }finally{await f.close();}
+});
+test('provider rejection status differs from the local quota refusal after reservation',async()=>{
+ const f=await fixture({ledger:true,providerHttp:403,env:{OPSMAP_ROAD_BUDGET_STORE_ENABLED:'1',OPSMAP_PRODUCTION_ROAD_ROUTE_ENABLED:'1'}});try{
+  const rejected=await f.route();assert.equal(rejected.status,502);assert.deepEqual(await rejected.json(),{ok:false,error:'PERMISSION_DENIED',providerHttp:403});
+  const exhausted=await f.route(2);assert.equal(exhausted.status,429);assert.deepEqual(await exhausted.json(),{ok:false,error:'QUOTA_EXCEEDED',providerHttp:null});
+  assert.equal(f.state.roadBudget.used,1);assert.equal(f.calls.filter(c=>c.url.startsWith('https://apis-navi.')).length,1);
  }finally{await f.close();}
 });
