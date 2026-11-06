@@ -346,17 +346,29 @@
     const anchor=document.createElement('div');anchor.className='osanCenterAnchor';
     const button=document.createElement('button');button.type='button';button.className='centerMarker osanCenterMarker';
     button.setAttribute('aria-controls','osanCenterCard');button.setAttribute('aria-expanded','false');
-    button.innerHTML='<svg viewBox="0 0 28 28" aria-hidden="true"><path d="M3 12l11-7 11 7v11H3z" fill="currentColor"/><path d="M10 23v-8h8v8m-8-5h8m-8 3h8" fill="none" stroke="#1852a2" stroke-width="1.2"/></svg><span></span>';
+    button.innerHTML='<svg viewBox="0 0 28 28" aria-hidden="true"><path d="M4 12l10-6 10 6v11H4z M10 23v-8h8v8m-8-4h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><span></span>';
     button.querySelector('span').textContent=center.customerName;anchor.append(button);
     const card=document.createElement('section');card.id='osanCenterCard';card.hidden=true;card.setAttribute('aria-label',center.customerName);
     card.innerHTML='<strong></strong><p></p><div><button type="button" data-center-origin>출발지로</button><button type="button" data-center-close>닫기</button></div><small role="status"></small>';
     card.querySelector('strong').textContent=center.customerName;
     const address=card.querySelector('p');address.textContent=center.address;address.hidden=!center.address;
     const feedback=card.querySelector('[role=status]');
+    function placeCard(){
+      if(card.hidden)return;
+      const point=anchor.getBoundingClientRect(), bounds=$('#map').getBoundingClientRect(), size=card.getBoundingClientRect();
+      const left=bounds.left+8+size.width/2, right=bounds.right-8-size.width/2;
+      card.style.setProperty('--osan-card-shift',`${Math.max(left,Math.min(right,point.left))-point.left}px`);
+      card.dataset.side=point.top-bounds.top<size.height+button.offsetHeight+10?'below':'above';
+    }
+    function syncCenterSize(){
+      const level=map.getLevel?.() ?? 7;
+      anchor.style.setProperty('--osan-icon-size',`${Math.max(15,Math.min(23,27-level))}px`);
+      placeCard();
+    }
     button.onclick=event=>{
       event.stopPropagation();
       const open=card.hidden;card.hidden=!open;button.setAttribute('aria-expanded',String(open));
-      if(open){feedback.textContent='';updateSelected(center);}
+      if(open){feedback.textContent='';updateSelected(center);placeCard();}
     };
     card.querySelector('[data-center-close]').onclick=()=>closeCenterCard(true);
     card.querySelector('[data-center-origin]').onclick=()=>{
@@ -364,9 +376,16 @@
       if(choosePoint('origin',center))feedback.textContent='출발지로 지정했습니다.';
     };
     card.onkeydown=button.onkeydown=event=>{if(event.key==='Escape')closeCenterCard(true);};
-    mapArea.append(card);
+    anchor.append(card);
     const overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(center.lat,center.lng),content:anchor,clickable:true,xAnchor:0,yAnchor:0,zIndex:42});
-    overlay.setMap(map);centerMarker={button,card,overlay};
+    overlay.setMap(map);syncCenterSize();
+    kakao.maps.event?.addListener(map,'zoom_changed',syncCenterSize);
+    kakao.maps.event?.addListener(map,'idle',placeCard);
+    centerMarker={button,card,overlay,dispose(){
+      kakao.maps.event?.removeListener(map,'zoom_changed',syncCenterSize);
+      kakao.maps.event?.removeListener(map,'idle',placeCard);
+      overlay.setMap(null);
+    }};
   }
   function closeCenterCard(restoreFocus=false){
     if(!centerMarker||centerMarker.card.hidden)return;
@@ -374,7 +393,7 @@
     if(restoreFocus)centerMarker.button.focus();
   }
   function clearCenters(){
-    centerMarker?.overlay.setMap(null);centerMarker?.card.remove();centerMarker=null;
+    centerMarker?.dispose();centerMarker=null;
     otherCenterMarkers.forEach(overlay=>overlay.setMap(null));otherCenterMarkers=[];
     centers=[];centerDraw=null;centerChoices.replaceChildren();centerChoices.hidden=true;
   }

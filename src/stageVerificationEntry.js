@@ -40,6 +40,23 @@ const normalizeDateValue = value => {
 const today = () => new Date(Date.now() + 9 * 3600000).toISOString().slice(0,10);
 const deliveryUnavailable = () => { throw Object.assign(new Error('DELIVERY_SOURCE_READ_ONLY'), {code:'DELIVERY_SOURCE_READ_ONLY'}); };
 
+export function stageSnapshotBaseVehicles(snapshot) {
+  const rows = new Map();
+  let version, checkedAt;
+  for (const row of snapshot?.rows || []) {
+    if (row.baseVehicleSource !== 'FIXED_DISPATCH_PRIMARY' || !/^[a-f0-9]{64}$/.test(row.baseVehicleVersion || '') ||
+      !Number.isFinite(Date.parse(row.baseVehicleCheckedAt))) continue;
+    version ??= row.baseVehicleVersion;
+    checkedAt ??= row.baseVehicleCheckedAt;
+    if (version !== row.baseVehicleVersion || checkedAt !== row.baseVehicleCheckedAt) return null;
+    rows.set(row.customerCode,{customerCode:row.customerCode,baseVehicle:row.baseVehicle || '',baseVehicleGroup:row.baseVehicleGroup || '',
+      baseVehicleState:row.baseVehicleState,baseVehicleSource:row.baseVehicleSource,baseVehicleVersion:version,baseVehicleCheckedAt:checkedAt,baseVehicleStale:true});
+  }
+  if (!rows.size) return null;
+  const meta={basis:'FIXED_DISPATCH_PRIMARY',source:'STAGE_SNAPSHOT',version,checkedAt,total:rows.size,stale:true,refresh:'READ_ONLY',cacheState:'PRESENT'};
+  return {get(codes) {return {ok:true,data:codes.map(code=>rows.get(code)).filter(Boolean),meta};}};
+}
+
 function stageHubUrl(value) {
   if (!value) return true;
   try {
@@ -71,11 +88,14 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const sessions = createStageStaffSessionStore({env:stage,fetchImpl:stageGithub(fetchImpl,{files:['staff-sessions-v1.json'],branch:pinsBranch,writable:'staff-sessions-v1.json'})});
   const snapshotFetch = stageGithub(fetchImpl,{files:['map-snapshot-v1.json','map-date-checkpoint-v1.json','fixed-vehicle-projection-v1.json'],branch:snapshotBranch,allowBlob:true});
   const snapshotStore = createProductionSnapshotStore({env:stage,token:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,fetchImpl:snapshotFetch});
-  let snapshot = null, snapshotPending = null;
+  let snapshot = null, snapshotPending = null, snapshotBase = null;
   async function readSnapshot() {
     if (snapshot) return snapshot;
     snapshotPending ??= Promise.resolve(snapshotStore?.load()).then(value => {
-      if (value) snapshot = materializeSnapshot(value);
+      if (value) {
+        snapshot = materializeSnapshot(value);
+        snapshotBase = stageSnapshotBaseVehicles(snapshot);
+      }
       return snapshot;
     }).finally(() => {snapshotPending = null;});
     return snapshotPending;
@@ -85,9 +105,15 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return readHub(action, params, options);
   };
   const masterStore = createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_TOKEN:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,GITHUB_CACHE_BRANCH:snapshotBranch,GITHUB_CACHE_DIR:'opsmap-stage'},fetchImpl:snapshotFetch});
-  const base = createFixedVehicleCache({readOnly:true,store:stage.OPSMAP_STAGE_FIXED_MASTER_FILE ? createFixedVehicleFileStore({env:stage}) : {
+  const fixed = createFixedVehicleCache({readOnly:true,store:stage.OPSMAP_STAGE_FIXED_MASTER_FILE ? createFixedVehicleFileStore({env:stage}) : {
     async load() {return (await masterStore.read('fixed-vehicle-projection-v1.json')).value;}
   }});
+  const base={async get(codes) {
+    const primary=await fixed.get(codes);
+    if (primary.ok) return primary;
+    try {await readSnapshot();} catch {return primary;}
+    return snapshotBase?.get(codes) || primary;
+  }};
   const budgetConfigured = stage.OPSMAP_ROAD_BUDGET_STORE_KIND === 'github-stage';
   const pinStore = stage.OPSMAP_MANUAL_PIN_STORE_KIND === 'github' || budgetConfigured ? createManualPinGithubStore({
     repo, token:stage.GITHUB_TOKEN, branch:pinsBranch,

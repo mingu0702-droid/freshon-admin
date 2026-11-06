@@ -22,18 +22,17 @@
 .approvedShellCandidate .mapCenters{display:flex;gap:4px;flex-wrap:wrap;max-width:100%}
 .approvedShellCandidate .mapCenters button{font-size:11px;padding:5px 8px;background:white}
 .approvedShellCandidate .centerMarker{font-size:11px;background:#fff;border:2px solid #345f99;border-radius:5px;padding:4px}
-.osanCenterAnchor{position:relative;width:0;height:0;pointer-events:none}
-.osanCenterAnchor::before{content:"";position:absolute;top:0;left:-2px;width:4px;height:4px;border-radius:50%;background:#1852a2}
-.approvedShellCandidate .osanCenterMarker{position:absolute;top:5px;left:0;transform:translateX(-50%);display:grid;justify-items:center;gap:2px;padding:0;border:0;background:transparent;box-shadow:none;pointer-events:auto;white-space:nowrap}
-.osanCenterMarker svg{display:block;box-sizing:border-box;width:var(--map-store-pin-size);height:var(--map-store-pin-size);background:#1852a2;border:2px solid #fff;border-radius:7px;color:#fff;box-shadow:0 1px 5px #10294466}
-.osanCenterMarker span{padding:1px 4px;background:#fff;color:#153e77;border-radius:4px;font-size:11px;font-weight:700;line-height:1.3;box-shadow:0 1px 4px #10294440}
+.osanCenterAnchor{position:relative;width:0;height:0;pointer-events:none;--osan-icon-size:20px}
+.approvedShellCandidate .osanCenterMarker{position:absolute;bottom:0;left:0;transform:translateX(-50%);display:grid;justify-items:center;gap:1px;padding:1px 4px;border:0;background:transparent;box-shadow:none;pointer-events:auto;white-space:nowrap}
+.osanCenterMarker svg{display:block;box-sizing:border-box;width:var(--osan-icon-size);height:var(--osan-icon-size);background:#f3f7fb;border:1px solid #8ca6c0;border-radius:4px;color:#3f6388}
+.osanCenterMarker span{padding:0 3px;background:#ffffffec;color:#355470;border-radius:3px;font-size:10px;font-weight:600;line-height:1.3}
 .osanCenterMarker:focus-visible{outline:2px solid #1852a2;outline-offset:3px}
-#osanCenterCard{position:absolute;z-index:410;bottom:84px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 24px);box-sizing:border-box;padding:10px 12px;background:#fff;color:#153e77;border:1px solid #b5c9e2;border-radius:8px;box-shadow:0 3px 14px #10294436;font-size:12px}
+#osanCenterCard{position:absolute;bottom:calc(var(--osan-icon-size) + 21px);left:var(--osan-card-shift,0px);transform:translateX(-50%);width:max-content;max-width:min(220px,calc(100vw - 24px));box-sizing:border-box;padding:8px 10px;background:#fff;color:#355470;border:1px solid #c8d5e1;border-radius:7px;box-shadow:0 2px 6px #10294420;font-size:12px;pointer-events:auto}
+#osanCenterCard[data-side=below]{top:6px;bottom:auto}
 #osanCenterCard[hidden]{display:none}
 #osanCenterCard p{margin:4px 0 8px;color:#44566d;overflow-wrap:anywhere}
 #osanCenterCard div{display:flex;gap:6px;margin-top:6px}
 #osanCenterCard small:not(:empty){display:block;margin-top:5px}
-@media(max-width:760px){#osanCenterCard{bottom:58px}}
 .approvedShellCandidate .navRoutePoint{font-size:11px;font-weight:700;background:#234f94;color:#fff;border:2px solid #fff;box-shadow:0 1px 6px #16365d55;border-radius:12px;padding:4px 8px}
 .approvedShellCandidate #navMissingStores button{display:block;text-align:left;margin:5px 0;width:100%;white-space:normal}
 .approvedShellCandidate #navigationMeaning{font-size:11px;color:#65768b}
