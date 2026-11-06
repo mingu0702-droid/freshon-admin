@@ -1699,24 +1699,33 @@
 
   function searchTokens(value) { return normalizeSearchText(value).split(" ").filter(Boolean); }
 
-  function rankSearchRow(row, query) {
+  function rankSearchRow(query) {
     const compact = value => normalizeSearchText(value).replace(/\s/g, '');
-    const target = compact(query), code = compact(row.customerCode), name = compact(row.customerName);
-    if(!target)return 99;
-    if(code === target)return 0;
-    if(name === target)return 1;
-    if(name.includes(target))return 2;
-    if(code.includes(target))return 3;
-    if(searchTokens(query).every(token => name.includes(compact(token))))return 4;
+    const target = compact(query);
+    const tokens = searchTokens(query).map(compact);
     const address = normalizeSearchAddress(query);
-    if(address && [row.address,row.customerAddress,row.roadAddress,row.roadNameAddress,row.jibunAddress]
-      .some(value => {if(!value)return false;const normalized=normalizeSearchAddress(value),at=normalized.indexOf(address);return at>=0&&(!/\d$/.test(address)||!/[\d-]/.test(normalized.charAt(at+address.length)));}))return 5;
-    return 99;
+    const addressEndsInNumber = /\d$/.test(address);
+    return row => {
+      if(!target)return 99;
+      const code = compact(row.customerCode), name = compact(row.customerName);
+      if(code === target)return 0;
+      if(name === target)return 1;
+      if(name.includes(target))return 2;
+      if(code.includes(target))return 3;
+      if(tokens.every(token => name.includes(token)))return 4;
+      if(address && [row.address,row.customerAddress,row.roadAddress,row.roadNameAddress,row.jibunAddress]
+        .some(value => {
+          if(!value)return false;
+          const normalized=normalizeSearchAddress(value),at=normalized.indexOf(address);
+          return at>=0&&(!addressEndsInNumber||!/[\d-]/.test(normalized.charAt(at+address.length)));
+        }))return 5;
+      return 99;
+    };
   }
 
   function rankSearchRows(rows, query) {
-    const seen = new Set();
-    return rows.map(row => normalizeApiStore(row)).map(row => ({row,rank:rankSearchRow(row,query)}))
+    const seen = new Set(), rank = rankSearchRow(query);
+    return rows.map(row => normalizeApiStore(row)).map(row => ({row,rank:rank(row)}))
       .filter(({row,rank}) => /^[A-Z]\d{3,}$/.test(row.customerCode) && rank<99 && !seen.has(row.customerCode) && seen.add(row.customerCode))
       .sort((a,b) => a.rank-b.rank || naturalCompare(a.row.customerName,b.row.customerName)).map(item => item.row);
   }
@@ -1935,8 +1944,9 @@
       const row=normalizeApiStore({...matched.get(value.customerCode),...value});
       matched.set(row.customerCode,row);
     }
+    const rank=rankSearchRow(text);
     let rows=[...matched.values()].filter(row=>!code||row.customerCode===code)
-      .sort((a,b)=>rankSearchRow(a,text)-rankSearchRow(b,text)||naturalCompare(a.customerName,b.customerName)).slice(0,40);
+      .sort((a,b)=>rank(a)-rank(b)||naturalCompare(a.customerName,b.customerName)).slice(0,40);
     if(rows.length){
       setSearchState(rows.length===1?'검색 결과 1건':`${rows.length}개 매장 · 선택해 주세요.`);
       renderResults(rows,{owner});return;
