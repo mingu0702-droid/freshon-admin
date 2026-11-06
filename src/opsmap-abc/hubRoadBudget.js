@@ -1,26 +1,36 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
+import {createApprovedRoadBudgetPolicy,supportedRoadApis} from './roadBudgetPolicy.js';
 // Reuse the existing private GitHub CAS transaction store. Approval and the
 // already-consumed account usage must be provisioned by the operator; never
 // create/reset a budget when a server starts or a ledger is missing.
-export function createStoreRoadBudget({store,accountHash}={}){
- const fail=()=>{throw Object.assign(Error('ROAD_BUDGET_UNAVAILABLE'),{code:'CALL_POLICY_BLOCKED'});};
- const validate=state=>{
-  const b=state?.roadBudget;
-  if(!/^[a-f0-9]{64}$/.test(accountHash||'')||!b||b.accountHash!==accountHash||b.scope!=='CUMULATIVE_APPROVED_ACCOUNT'||
-   !/^[-A-Za-z0-9_]{8,100}$/.test(b.approvalId||'')||!Number.isSafeInteger(b.limit)||b.limit<1||b.limit>30000||
-   !Number.isSafeInteger(b.used)||b.used<0||b.used>b.limit)fail();
-  return b;
+export function createStoreRoadBudget({store,accountHash,env=process.env,now=Date.now}={}){
+ const fail=code=>{throw Object.assign(Error(code),{code});};
+ const {validate,stateStatus}=createApprovedRoadBudgetPolicy({accountHash,requireExplicitApis:true});
+ const validateStage=(state,time)=>{
+  if(!state?.roadBudget)fail('ROAD_BUDGET_LEDGER_MISSING');
+  const key=String(env.KAKAO_MOBILITY_REST_API_KEY||env.KAKAO_REST_API_KEY||'').trim();
+  if(!key||createHash('sha256').update(key).digest('hex')!==accountHash)fail('ROAD_BUDGET_ACCOUNT_MISMATCH');
+  return validate(state,time);
  };
- return {durable:true,async status(){
-  if(!store?.transaction)fail();
-  return store.transaction(async state=>{const b=validate(state);return {durable:true,scope:b.scope,remaining:b.limit-b.used};});
- },async reserve({cost,provider}){
-  if(!store?.transaction||cost!==1||provider!=='kakao-directions')fail();
+ const durable=typeof store?.transaction==='function';
+ return {kind:'STAGE_PRIVATE_GITHUB_CAS',durable,inspectWhenDisabled:true,async status(){
+  if(!durable)fail('ROAD_BUDGET_STORE_CONFIG');
+  return store.transaction(async state=>{const time=now();return stateStatus(validateStage(state,time),time);});
+ },async reserve({cost,provider,api}){
+  if(!durable||cost!==1||provider!=='kakao-directions'||!supportedRoadApis.includes(api))fail('ROAD_BUDGET_INVALID_RESERVATION');
   return store.transaction(async(state,commit)=>{
-   const b=validate(state);
-   if(b.used>=b.limit)throw Object.assign(Error('QUOTA_EXCEEDED'),{code:'QUOTA_EXCEEDED'});
-   b.used++;b.lastReservation=randomUUID();b.updatedAt=new Date().toISOString();
-   await commit(state);return {reserved:true,scope:b.scope,remaining:b.limit-b.used};
+   const time=now(),b=validateStage(state,time),status=stateStatus(b,time);
+   if(!status.approvedApis.includes(api))fail('ROAD_BUDGET_API_UNVERIFIED');
+   if(!status.remaining||!status.apiRemaining[api])fail('QUOTA_EXCEEDED');
+   b.used++;b.apis[api].used++;b.lastReservation=randomUUID();b.updatedAt=new Date(time).toISOString();
+   if(b.monthlyApproval){
+    b.monthlyApproval.dailyUsage[status.usageDate]??={directions:0,waypoints:0};
+    b.monthlyApproval.dailyUsage[status.usageDate][api]++;
+   }
+   await commit(state);
+   const confirmedAt=now(),confirmed=stateStatus(validateStage(state,confirmedAt),confirmedAt);
+   if(confirmed.usageDate!==status.usageDate)fail('ROAD_BUDGET_RESERVATION_DAY_CHANGED');
+   return {reserved:true,...confirmed};
   });
  }};
 }

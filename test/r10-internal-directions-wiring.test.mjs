@@ -73,7 +73,7 @@ test('approved free ledger can be inspected while OFF and a guarded one-call sam
 });
 test('provider rejection status differs from the local quota refusal after reservation',async()=>{
  const f=await fixture({ledger:true,providerHttp:403,env:{OPSMAP_ROAD_BUDGET_STORE_ENABLED:'1',OPSMAP_PRODUCTION_ROAD_ROUTE_ENABLED:'1'}});try{
-  const rejected=await f.route();assert.equal(rejected.status,502);assert.deepEqual(await rejected.json(),{ok:false,error:'PERMISSION_DENIED',providerHttp:403});
+  const rejected=await f.route();assert.equal(rejected.status,502);assert.deepEqual(await rejected.json(),{ok:false,error:'PERMISSION_DENIED',providerHttp:403,providerApi:'directions'});
   const exhausted=await f.route(2);assert.equal(exhausted.status,429);assert.deepEqual(await exhausted.json(),{ok:false,error:'QUOTA_EXCEEDED',providerHttp:null});
   assert.equal(f.state.roadBudget.used,1);assert.equal(f.calls.filter(c=>c.url.startsWith('https://apis-navi.')).length,1);
  }finally{await f.close();}
