@@ -3,7 +3,15 @@
  // Page-memory projection only. Never mutate a source row or persist provider points.
  const SOURCE='KAKAO_ADDRESS_LIVE',normalize=v=>String(v||'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
  const valid=r=>typeof r?.lat==='number'&&typeof r?.lng==='number'&&Number.isFinite(r.lat)&&Number.isFinite(r.lng)&&r.lat>=33&&r.lat<=39.5&&r.lng>=124&&r.lng<=132;
- const established=r=>valid(r)&&!['CONFLICT','MISSING','UNVERIFIED'].includes(r.coordinateStatus)&&r.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'&&r.coordinateSource!==SOURCE;
+ const validHash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+ const addressMismatch=row=>{
+  if(!row)return false;
+  const current=[row.currentAddressHash,row.customerRegistryAddressHash,row.raw?.currentAddressHash,row.raw?.customerRegistryAddressHash].find(validHash);
+  const manual=row.coordinateSource==='MANUAL_PIN'&&row.resolutionStatus==='MANUAL_CONFIRMED'?row.manualPinAddressHash:null;
+  const evidence=[manual,row.coordinateAddressHash,row.raw?.coordinateAddressHash,row.originalAddressHash,row.raw?.originalAddressHash,row.addressHash,row.raw?.addressHash].find(validHash);
+  return Boolean(current&&evidence&&current!==evidence);
+ };
+ const established=r=>valid(r)&&!addressMismatch(r)&&!['CONFLICT','MISSING','UNVERIFIED'].includes(r.coordinateStatus)&&r.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'&&r.coordinateSource!==SOURCE;
  const hashAddress=async value=>{if(!root.crypto?.subtle||!root.TextEncoder)return '';try{const data=new root.TextEncoder().encode(normalize(value));return Array.from(new Uint8Array(await root.crypto.subtle.digest('SHA-256',data)),v=>v.toString(16).padStart(2,'0')).join('');}catch{return '';}};
  function create({lookup,readAddress,queryFor,enabled=()=>true,onChange=()=>{},now=Date.now,spacingMs=4000}={}){
   let epoch=0,running=false,controller=new AbortController(),syncToken='';
@@ -11,7 +19,13 @@
   const sourceHash=row=>row.currentAddressHash||row.raw?.currentAddressHash||row.originalAddressHash||row.addressHash||row.raw?.originalAddressHash||row.raw?.addressHash||'';
   const observedDate=row=>row.raw?.lastDeliveryDate||row.lastDeliveryDate||'';
   const conflicted=row=>row.searchAddressConflict===true||row.addressChanged===true||row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED';
-  const addressFor=row=>{const cached=addresses.get(row.customerCode),bound=cached?.sourceHash===sourceHash(row);return conflicted(row)?bound&&cached.conflict?cached.address:'':bound?cached.address:row.address||'';};
+  const addressFor=row=>{
+   const cached=addresses.get(row.customerCode),bound=cached?.sourceHash===sourceHash(row);
+   const registryAddress=row.currentMasterStatus==='FOUND'&&validHash(row.customerRegistryAddressHash)&&row.currentAddressHash===row.customerRegistryAddressHash;
+   const sameRegistryAddress=row.raw?.customerRegistryAddressHash===row.currentAddressHash&&normalize(row.raw?.address)===normalize(row.address);
+   if(conflicted(row))return bound&&cached.conflict?cached.address:registryAddress&&(!row.searchAddressConflict||sameRegistryAddress)?row.address||'':'';
+   return bound?cached.address:row.address||'';
+  };
   const searchFor=row=>{const value=searches.get(row.customerCode);return !searchRevoked(row)&&value?.sourceHash===sourceHash(row)&&value.originalAddress===normalize(addressFor(row))?value:null;};
   const queryForRow=row=>searchFor(row)?.query||queryFor?.(addressFor(row));
   const projectionSearch=row=>row.coordinateSearch||row.raw?.coordinateSearch;
@@ -72,6 +86,10 @@
    if(key)bindings.set(row.customerCode,key);
    if(established(row))return row;
    if(row.coordinateSource===SOURCE){row.lat=null;row.lng=null;row.coordinateSource='';row.coordinateStatus='MISSING';}
+   else if(valid(row)&&(addressMismatch(row)||row.coordinateStatus==='CONFLICT'||row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED')){
+    row.coordinateEvidence ||= Object.freeze({lat:row.lat,lng:row.lng,coordinateSource:row.coordinateSource||'',coordinateAccuracy:row.coordinateAccuracy||''});
+    Object.assign(row,{lat:null,lng:null,latitude:null,longitude:null,coordinateStatus:'CONFLICT',addressChanged:true,resolutionStatus:'ADDRESS_CHANGED_REVIEW_REQUIRED'});
+   }
    const query=queryForRow(row),point=key&&points.get(normalize(query)),accuracy=searchFor(row)?.accuracy||'BUILDING';
    if(point&&valid(point))Object.assign(row,{lat:point.lat,lng:point.lng,coordinateSource:SOURCE,coordinateAccuracy:accuracy,coordinateStatus:accuracy==='CAMPUS'?'APPROXIMATE':'CONFIRMED',resolutionStatus:accuracy==='CAMPUS'?'CAMPUS_ADDRESS_LOCATED':'ADDRESS_LOCATED',addressLocationKey:key,storeInteriorVerified:false});
    return row;

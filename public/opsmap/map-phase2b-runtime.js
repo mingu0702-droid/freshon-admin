@@ -1796,7 +1796,8 @@
   function applyUnifiedSearchCoordinateGuard(row) {
     // A confirmed pin projection may have loaded before Customer changed.
     // Never let its later apply() override a verified search address conflict.
-    if(row.searchAddressConflict===true || row.addressChanged===true){
+    const verifiedManual=row.coordinateSource==='MANUAL_PIN'&&row.resolutionStatus==='MANUAL_CONFIRMED'&&row.currentAddressHash&&row.manualPinAddressHash===row.currentAddressHash;
+    if(!verifiedManual&&(row.searchAddressConflict===true || row.addressChanged===true)){
       row.lat=null;row.lng=null;row.coordinateStatus='CONFLICT';row.resolutionStatus='ADDRESS_CHANGED_REVIEW_REQUIRED';
     }
     return row;

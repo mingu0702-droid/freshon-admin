@@ -208,8 +208,10 @@
         const previousAddress = row.address || row.customerAddress || row.basicAddress || '';
         const previousHash = row.currentAddressHash || row.customerRegistryAddressHash || '';
         const changed = !!previousHash && previousHash !== record.addressHash || !!previousAddress && normalize(previousAddress) !== normalize(record.basicAddress);
-        const evidenceHash = row.originalAddressHash || row.addressHash || row.raw?.originalAddressHash || row.raw?.addressHash || previousHash;
-        const holdCoordinates = changed && (automatic(row) || evidenceHash !== record.addressHash);
+        const evidenceHash = [row.coordinateAddressHash, row.raw?.coordinateAddressHash, row.originalAddressHash,
+          row.raw?.originalAddressHash, row.addressHash, row.raw?.addressHash].find(hash) || '';
+        const holdCoordinates = (evidenceHash && evidenceHash !== record.addressHash) ||
+          (changed && (automatic(row) || evidenceHash !== record.addressHash));
         if (holdCoordinates) {
           row.coordinateEvidence = Object.freeze(row.coordinateEvidence && row.lat == null && row.lng == null ? {...row.coordinateEvidence} : {...row.coordinateEvidence, lat: row.lat, lng: row.lng,
             coordinateSource: row.coordinateSource || '', coordinateAccuracy: row.coordinateAccuracy || '', coordinateStatus: row.coordinateStatus || '',

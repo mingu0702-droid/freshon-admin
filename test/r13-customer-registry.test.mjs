@@ -56,6 +56,20 @@ test('changed-address GPS, manual and verified points are held while their origi
   }
 });
 
+test('a GPS address hash mismatch is held even without a previous displayed address', async () => {
+  const {api} = load({readPage: async () => page([active('S990001')])});
+  await api.sync();
+  const observed = {customerCode: 'S990001', lat: 37.5, lng: 127, coordinateSource: 'RAW_GPS',
+    addressHash: sha('합성시 합성로 10'), raw: {originalAddressHash: sha('합성시 구주소 1'), lastDeliveryDate: '2026-10-01'}};
+  const row = api.merge([observed])[0];
+  assert.equal(row.lat, null);
+  assert.equal(row.lng, null);
+  assert.equal(row.coordinateEvidence.lat, observed.lat);
+  assert.equal(row.raw.lastDeliveryDate, '2026-10-01');
+  assert.equal(observed.lat, 37.5);
+  assert.equal(row.currentAddressHash, sha('합성시 합성로 10'));
+});
+
 test('a changed display address can retain GPS or manual evidence bound to the verified current hash', async () => {
   const {api} = load({readPage: async () => page([active('S990001')])}); await api.sync();
   for (const coordinateSource of ['MANUAL_PIN', 'RAW_GPS']) {

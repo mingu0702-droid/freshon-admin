@@ -28,8 +28,8 @@ function apply(row){
   bases.set(row,original);
   Object.defineProperty(row,ORIGINAL_PIN_BASE,{value:Object.freeze({customerCode:row.customerCode,coordinates:Object.freeze(original)}),enumerable:true,configurable:true});
  }
- const r=records.get(row.customerCode),original=bases.get(row);Object.assign(row,original);delete row.resolutionStatus;
- if(r?.resolutionStatus==='MANUAL_CONFIRMED'){row.lat=r.latitude;row.lng=r.longitude;row.coordinateSource='MANUAL_PIN';row.coordinateAccuracy='MANUAL_PIN';row.coordinateStatus='CONFIRMED';row.resolutionStatus='MANUAL_CONFIRMED';}
+ const r=records.get(row.customerCode),original=bases.get(row);Object.assign(row,original);delete row.resolutionStatus;delete row.manualPinAddressHash;
+ if(r?.resolutionStatus==='MANUAL_CONFIRMED'){row.lat=r.latitude;row.lng=r.longitude;row.coordinateSource='MANUAL_PIN';row.coordinateAccuracy='MANUAL_PIN';row.coordinateStatus='CONFIRMED';row.resolutionStatus='MANUAL_CONFIRMED';row.manualPinAddressHash=r.originalAddressHash;}
  else if(r?.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'){row.lat=null;row.lng=null;row.coordinateStatus='CONFLICT';row.resolutionStatus=r.resolutionStatus;}
  return row;
 }

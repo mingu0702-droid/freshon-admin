@@ -28,3 +28,20 @@ test('local daily limit defers a customer until KST midnight without rerendering
  clock=midnight;assert.equal(api.canSchedule(store),true);
  await api.ensure(store);assert.equal(api.status(store).state,'LOCATED');assert.equal(calls,2);assert.equal(renders,1);
 });
+test('a mismatched GPS is hidden before lookup and retains its source evidence',async()=>{
+ const current='a'.repeat(64),old='b'.repeat(64),a={...row(),lat:37.55,lng:126.94,coordinateSource:'RAW_GPS',addressHash:current,currentAddressHash:current,customerRegistryAddressHash:current,currentMasterStatus:'FOUND',raw:{originalAddressHash:old}};
+ const {api,calls}=make();
+ assert.equal(api.status(a).state,'WAITING');
+ api.apply(a);
+ assert.equal(a.lat,null);assert.equal(a.lng,null);assert.equal(a.coordinateStatus,'CONFLICT');
+ assert.equal(a.coordinateEvidence.lat,37.55);assert.equal(a.raw.originalAddressHash,old);
+ await api.ensure(a);
+ assert.equal(a.coordinateSource,'KAKAO_ADDRESS_LIVE');
+ assert.equal(api.status(a).state,'LOCATED');
+ assert.equal(calls(),1);
+});
+test('an address-bound manual overlay supersedes the older GPS address hash',async()=>{
+ const current='a'.repeat(64),a={...row(),lat:37.5,lng:127,coordinateSource:'MANUAL_PIN',resolutionStatus:'MANUAL_CONFIRMED',currentAddressHash:current,manualPinAddressHash:current,raw:{originalAddressHash:'b'.repeat(64)}};
+ const {api,calls}=make();await api.ensure(a);
+ assert.equal(api.status(a).state,'ESTABLISHED');assert.equal(a.lat,37.5);assert.equal(calls(),0);
+});

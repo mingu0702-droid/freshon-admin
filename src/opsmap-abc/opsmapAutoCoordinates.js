@@ -25,6 +25,15 @@ export function prepareApprovedCoordinateSearch({ customerCode, originalAddress,
   return { customerCode, originalAddressHash: hash, query, queryHash: coordinateAddressHash(query),
     accuracy: approved.accuracy, storeInteriorVerified: false, ruleVersion: 'USER_CONFIRMED_SEARCH_ADDRESS_20261104' };
 }
+// A private review binds an independently disproved legacy point, not later GPS fixes.
+export function holdReviewedLegacyPoint(row, rules) {
+  if (!pointValid(row) || !rules || !Object.hasOwn(rules, row.customerCode)) return row;
+  const rule = rules[row.customerCode]?.legacyCoordinateHold;
+  if (rule?.basis !== 'SGIS_ADDRESS_DISTRICT_MISMATCH' || !/^[a-f0-9]{64}$/.test(rule.currentAddressHash || '') || row.coordinateSource === 'MANUAL_PIN' ||
+      [row.coordinateAddressHash, row.originalAddressHash, row.addressHash].some(hash => /^[a-f0-9]{64}$/.test(hash || '')) ||
+      rule.pointSha256 !== sha(JSON.stringify([row.lat, row.lng]))) return row;
+  return {...row, lat: null, lng: null, coordinateSource: 'UNRESOLVED', coordinateStatus: 'CONFLICT', resolutionStatus: 'ADDRESS_CHANGED_REVIEW_REQUIRED'};
+}
 // Private preparation only: never serialize rawBasic/rawDetail to a map/cache response.
 // Identity uses the unchanged Customer hash rule; a simplified search is separate evidence.
 export function preparePrivateCoordinateAddress(basicAddress, detailAddress = '') {
