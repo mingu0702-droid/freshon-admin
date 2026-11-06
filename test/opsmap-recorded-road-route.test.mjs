@@ -6,6 +6,7 @@ import {REGISTERED_OSAN_CENTER} from '../src/opsmap-abc/centerSettings.js';
 import {createStoreRoadBudget} from '../src/opsmap-abc/hubRoadBudget.js';
 import {createRecordedRoadRouteReader} from '../src/opsmap-abc/recordedRoadRoute.js';
 import {createRoadRouteService,mountRoadRouteRoutes} from '../src/opsmap-abc/roadRouteService.js';
+import {callHub,hubRequestProfile} from '../src/opsmap-abc/phase2bHubReadClient.js';
 
 const date='2026-11-07',vehicle='101',identity={date,vehicle};
 const stop=(sequence,customerCode='R101')=>({deliveryDate:date,confirmedVehicle:'101호차',sequence,customerCode,
@@ -36,7 +37,7 @@ test('recorded route verifies source order, preserves repeated visits and ends a
   assert.equal((await reader(page(Array.from({length:31},(_,index)=>stop(index+1))))(identity,center)).draft.waypoints.length,30);
 });
 
-test('recorded route rejects incomplete, mismatched, unordered, unlocated or oversized source rows',async()=>{
+test('recorded route rejects incomplete, mismatched, unordered or oversized source rows',async()=>{
   const cases=[
     [page([stop(1)],{nextCursor:'pending'}),'ROUTE_SOURCE_UNVERIFIED'],
     [page([stop(1)],{total:2}),'ROUTE_SOURCE_UNVERIFIED'],
@@ -44,7 +45,6 @@ test('recorded route rejects incomplete, mismatched, unordered, unlocated or ove
     [page([{...stop(1),confirmedVehicle:'102'}]),'ROUTE_IDENTITY_MISMATCH'],
     [page([stop(1),stop(1)]),'RECORDED_ORDER_REQUIRED'],
     [page([stop(null)]),'RECORDED_ORDER_REQUIRED'],
-    [page([{...stop(1),latitude:null}]),'STOP_COORDINATES_MISSING'],
     [page(Array.from({length:32},(_,index)=>stop(index+1))),'WAYPOINT_LIMIT']
   ];
   for(const [payload,code] of cases)await assert.rejects(reader(payload)(identity,center),{code});
@@ -56,6 +56,33 @@ test('recorded route rejects incomplete, mismatched, unordered, unlocated or ove
   }
   assert.equal((await reader(page([stop(1)]))(identity,{...center,verified:false})).data.origin,null);
   await assert.rejects(reader(page([]))({...identity,date:'2026-11-31'},center),{code:'INVALID_MANUAL_ROUTE'});
+});
+
+test('recorded stops retain unlocated deliveries without creating a drivable draft',async()=>{
+  const result=await reader(page([{...stop(1),latitude:null},stop(2,'R102')]))(identity,center);
+  assert.equal(result.data.origin.id,'CENTER_osan');
+  assert.equal(result.data.stops.length,2);
+  assert.equal(result.data.stops[0].lat,null);
+  assert.equal(result.data.stops[0].lng,null);
+  assert.equal(result.data.missingCoordinates,1);
+  assert.equal(result.draft,null);
+});
+
+test('recorded stop transport uses the scoped Hub timeout and preserves the overall deadline',async t=>{
+  const restore=Object.fromEntries(['HUB_API_URL','HUB_API_SECRET','HUB_API_TIMEOUT_MS'].map(key=>[key,process.env[key]]));
+  t.after(()=>{for(const [key,value] of Object.entries(restore))if(value===undefined)delete process.env[key];else process.env[key]=value;});
+  process.env.HUB_API_URL='https://script.google.com/macros/s/synthetic/exec';
+  process.env.HUB_API_SECRET='synthetic-hub-secret-for-local-test';
+  process.env.HUB_API_TIMEOUT_MS='2000';
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    assert.equal(url,process.env.HUB_API_URL);
+    assert.equal(JSON.parse(options.body).action,'routeStops');
+    return Response.json(page([stop(1)]));
+  });
+  const payload=await callHub('routeStops',{...identity,limit:32},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000});
+  assert.ok(hubRequestProfile(payload).remainingMs>10000);
+  const bounded=await callHub('routeStops',{...identity,limit:32},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+5000});
+  assert.ok(hubRequestProfile(bounded).remainingMs<=5000);
 });
 
 const key='synthetic-stage-rest-key',now=()=>Date.parse('2026-11-07T03:00:00Z');
@@ -115,10 +142,10 @@ test('Stage ledger authorizes only its verified API and distinguishes provider p
   assert.equal(mismatched.writes,0);
 });
 
-test('staff recorded stops GET is read only and recorded POST requires a verified automatic origin',async t=>{
-  let centerId='honam',hubReads=0;
+test('staff recorded stops GET is read only and recorded POST requires a verified origin and coordinates',async t=>{
+  let centerId='honam',hubReads=0,lat=37.001;
   const read=createRecordedRoadRouteReader({
-    callHub:async()=>{hubReads++;return page([stop(1)]);},
+    callHub:async()=>{hubReads++;return page([{...stop(1),latitude:lat}]);},
     readVehicleCenter:async()=>centerId
   });
   const app=express(),stageOrigin='https://stage.synthetic.test';
@@ -144,6 +171,8 @@ test('staff recorded stops GET is read only and recorded POST requires a verifie
   assert.equal((await (await post()).json()).error,'ORIGIN_UNCONFIRMED');
   centerId='osan';
   assert.equal((await (await post()).json()).error,'FEATURE_DISABLED');
+  lat=null;
+  assert.equal((await (await post()).json()).error,'STOP_COORDINATES_MISSING');
   assert.equal(f.writes,0);
   assert.equal(f.calls,0);
 });

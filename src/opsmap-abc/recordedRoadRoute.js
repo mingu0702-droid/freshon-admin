@@ -29,8 +29,8 @@ export function createRecordedRoadRouteReader({callHub,readVehicleCenter}){
       const order=row.sequence,customerCode=text(row.customerCode);
       if(!customerCode||!Number.isSafeInteger(order)||order<1||orders.has(order))throw error('RECORDED_ORDER_REQUIRED');
       orders.add(order);
-      const {latitude:lat,longitude:lng}=row;
-      try{coordinate({lat,lng});}catch{throw error('STOP_COORDINATES_MISSING');}
+      let {latitude:lat,longitude:lng}=row;
+      try{coordinate({lat,lng});}catch{lat=null;lng=null;}
       return {customerCode,customerName:text(row.customerName),address:text(row.customerAddress),vehicle,order,lat,lng};
     }).sort((a,b)=>a.order-b.order);
     let origin=null;
@@ -42,8 +42,9 @@ export function createRecordedRoadRouteReader({callHub,readVehicleCenter}){
         }
       }catch{/* The saved order is still usable with an explicitly selected origin. */}
     }
-    const data={date,vehicle,origin,stops};
-    if(!origin)return {data,draft:null};
+    const missingCoordinates=stops.filter(stop=>stop.lat===null).length;
+    const data={date,vehicle,origin,stops,missingCoordinates};
+    if(!origin||missingCoordinates)return {data,draft:null};
     const points=stops.map((stop,index)=>point('stop-'+index,stop));
     const draft={mode:'MANUAL_WAYPOINTS',requestId:randomUUID(),origin:point(origin.id,origin),
       waypoints:points.slice(0,-1).map((p,index)=>({...p,order:index+1})),destination:points.at(-1)};

@@ -389,14 +389,17 @@
       if(origin&&(!lookup.located(center)||origin.customerCode!==center.customerCode||origin.lat!==center.lat||origin.lng!==center.lng))throw Error('오산센터의 등록 위치를 확인해 주세요.');
       if(!Array.isArray(data.stops)||!data.stops.length)throw Error('해당일에 확인된 배송지가 없습니다.');
       if(data.stops.length>31)throw Error('저장된 배송지가 31개를 초과합니다.');
-      if(data.stops.some(row=>!row.customerCode||!Number.isSafeInteger(row.order)||row.order<1||row.vehicle!==identity.vehicle||!lookup.located(row))||new Set(data.stops.map(row=>row.order)).size!==data.stops.length)throw Error('해당일의 저장된 배송 순서를 확인할 수 없습니다.');
+      if(data.stops.some(row=>!row.customerCode||!Number.isSafeInteger(row.order)||row.order<1||row.vehicle!==identity.vehicle||
+        (!lookup.located(row)&&!(row.lat===null&&row.lng===null)))||new Set(data.stops.map(row=>row.order)).size!==data.stops.length)throw Error('해당일의 저장된 배송 순서를 확인할 수 없습니다.');
       // A visit identity includes the order when one store has several visits.
       const counts=new Map();for(const row of data.stops)counts.set(row.customerCode,(counts.get(row.customerCode)||0)+1);
       dailyStops=data.stops.toSorted((a,b)=>a.order-b.order).map(row=>counts.get(row.customerCode)>1?{...row,storeCode:row.customerCode,customerCode:'VISIT_'+row.order+'_'+row.customerCode}:row);
       dailyDefaults=[origin?.customerCode||'',...dailyStops.map(row=>row.customerCode)];
       dailyReady=true;
       if(!dailyValues)applyDailyDraft();
-      dailyStatus.textContent=origin?'오산센터 출발 · 저장된 배송 순서 · 마지막 배송지 도착':'저장된 배송 순서를 적용했습니다. 출발지를 선택해 주세요.';
+      const missing=data.stops.filter(row=>!lookup.located(row)).length;
+      const loaded=origin?'오산센터 출발 · 저장된 배송 순서 · 마지막 배송지 도착':'저장된 배송 순서를 적용했습니다. 출발지를 선택해 주세요.';
+      dailyStatus.textContent=missing?loaded+' · 위치 확인 필요 '+missing+'곳':loaded;
     }catch(error){if(dailyController===controller)dailyStatus.textContent=error instanceof TypeError||error instanceof SyntaxError?'해당일의 저장된 배송 순서를 확인할 수 없습니다.':error.message;}
     finally{if(dailyController===controller)dailyController=null;}
   }
