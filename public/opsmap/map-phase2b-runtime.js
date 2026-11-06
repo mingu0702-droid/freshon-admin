@@ -326,7 +326,28 @@
   function syncSourceFreshness() {
     const meta=snapshotMeta||{};
     $('#sourceCollectedAt').textContent=`최신 원천 수집일: ${meta.sourceObservedAt||meta.sourceCollectedAt||'미확인'}${customerRegistryCheckedAt?' · Customer 확인 '+new Date(customerRegistryCheckedAt).toLocaleTimeString('ko-KR',{hour12:false}):''}`;
-    $('#mapAppliedRange').textContent=`현재 지도 반영기간: ${!generalMap?state.mode==='DATE_ROUTE'?state.selectedDate||'미확인':state.rangeStart&&state.rangeEnd?`${state.rangeStart} ~ ${state.rangeEnd}`:'미확인':meta.startDate&&meta.endDate?`${meta.startDate} ~ ${meta.endDate}`:'기간 미확인'}`;
+    const range=generalMap?generalSnapshotRange(meta):{start:state.rangeStart,end:state.rangeEnd};
+    $('#mapAppliedRange').textContent=`현재 지도 반영기간: ${state.mode==='DATE_ROUTE'?state.selectedDate||'미확인':range?.start&&range.end?`${range.start} ~ ${range.end}`:'기간 미확인'}`;
+  }
+  function generalSnapshotRange(meta) {
+    const start=meta?.startDate, end=meta?.endDate;
+    const validDay=value=>/^\d{4}-\d{2}-\d{2}$/.test(value||'')&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
+    if(validDay(start)&&validDay(end)&&start<=end&&start>=daysBefore(end,89))return {start,end};
+    return null;
+  }
+  function applyGeneralSnapshotRange() {
+    const range=generalSnapshotRange(snapshotMeta);
+    $('#rangeStart').value=state.rangeStart=range?.start||'';
+    $('#rangeEnd').value=state.rangeEnd=range?.end||'';
+  }
+  function syncGeneralFreshness() {
+    $('#freshnessState').textContent=({
+      cached:'저장된 정상 지도 유지 · 최신 자료 확인 중',
+      retained:'저장된 정상 지도 유지 · 네트워크 최신성 미확인',
+      'retained-pending':'저장된 정상 지도 유지 · 최신 매장 집계 중',
+      ready:'전체 저장 매장 반영됨 — 운영 전체 매장 완전성 미검증'
+    })[snapshotReadState]||'일반지도 조회 실패 — 매장 수 미확인';
+    syncSourceFreshness();
   }
   function syncPeriodBasis() {
     const driver = periodBasis === "driver";
@@ -341,7 +362,7 @@
     const key = [generalMap,generalAllStores,periodBasis,periodVehicleScope,selectedVehicles().join(','),selectedDriverKeys.join(','),state.driverKey,state.centerFilter].join('|');
     if (periodSelectionCache?.source === allStores && periodSelectionCache.key === key) return periodSelectionCache.rows;
     const driverKeys=selectedDriverKeys.length?selectedDriverKeys:[state.driverKey];
-    const candidates=periodBasis==='driver'&&driverKeys.length>1?[...new Map(driverKeys.flatMap(key=>MapPeriodUi.select(allStores,[],key,{vehicleBasis:'actual'})).map(row=>[row.customerCode,row])).values()]:MapPeriodUi.select(allStores, periodBasis === "vehicle" ? selectedVehicles() : [], periodBasis === "driver" ? state.driverKey : "", {vehicleBasis:periodBasis === "vehicle" ? "base" : "actual", includeUnvisited:generalAllStores && periodBasis === 'vehicle',useResidentSummary:generalMap&&window.MAP_ROLLING_DATE_INDEX_ENABLED===true&&periodBasis==='vehicle',periodComplete:generalMap||periodMeta?.segmented!==true||periodMeta.aggregateComplete===true});
+    const candidates=periodBasis==='driver'&&driverKeys.length>1?[...new Map(driverKeys.flatMap(key=>MapPeriodUi.select(allStores,[],key,{vehicleBasis:'actual'})).map(row=>[row.customerCode,row])).values()]:MapPeriodUi.select(allStores, periodBasis === "vehicle" ? selectedVehicles() : [], periodBasis === "driver" ? state.driverKey : "", {vehicleBasis:periodBasis === "vehicle" ? "base" : "actual", includeUnvisited:generalAllStores && periodBasis === 'vehicle',useResidentSummary:generalMap&&snapshotMeta?.periodHistoryLoaded===false&&periodBasis==='vehicle',periodComplete:generalMap||periodMeta?.segmented!==true||periodMeta.aggregateComplete===true});
     const rows = candidates
       .filter(row => (!generalMap||row.customerRegistryStatus!=='DELETED')&&(!state.centerFilter || periodBasis === "driver" || row.baseVehicleGroup === state.centerFilter));
     periodSelectionCache = {source:allStores,key,rows}; return rows;
@@ -368,22 +389,23 @@
   async function pollGeneralSnapshot(){
     if(generalSnapshotPolling||!generalMap||state.mode!=='BASE_60D'||document.hidden||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
     generalSnapshotPolling=true;const owner=initialRequestId,oldRows=latestSnapshotRows,oldMeta=snapshotMeta;
-    const version=m=>JSON.stringify([m?.preservation?.version,m?.sourceGeneration,m?.version,m?.generatedAt,m?.rowCount]);
+    const version=m=>JSON.stringify([m?.preservation?.version,m?.sourceGeneration,m?.version,m?.generatedAt,m?.rowCount,m?.startDate,m?.endDate]);
     try{
       await refreshStoreSnapshot();
       if(owner!==initialRequestId||!generalMap||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
       if(snapshotReadState!=='ready')throw Error('SNAPSHOT_READ_FAILED');
-      if(version(oldMeta)===version(snapshotMeta)&&oldRows.length===latestSnapshotRows.length)return{ok:true,changed:false};
+      if(version(oldMeta)===version(snapshotMeta)&&oldRows.length===latestSnapshotRows.length){syncGeneralFreshness();return{ok:true,changed:false};}
       const merged=new Map(oldRows.map(r=>[String(r.customerCode||r.code),r])),added=[];
       for(const row of latestSnapshotRows){const code=String(row.customerCode||row.code),prior=merged.get(code);if(prior&&(prior.lastDeliveryDate||'')>(row.lastDeliveryDate||''))continue;if(!prior)added.push(code);merged.set(code,row);}
       latestSnapshotRows=[...merged.values()];coordinateByCode.clear();latestSnapshotRows.forEach(row=>coordinateByCode.set(String(row.customerCode||row.code),row));
-      periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;
+      applyGeneralSnapshotRange();periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;
       if(state.selected){const next=storesByCode.get(state.selected.customerCode);if(next){state.selected={...state.selected,...next};refreshCoordinateEvidence(state.selected);void enrichStoreDetail(state.selected);}}
       state.fitRequested=false;await loadBaseMap();if(added.length)void loadBaseVehicles(added);
       void window.MapDataSync?.refresh?.();return{ok:true,changed:true,added:added.length,stores:allStores.length};
     }catch(error){
       if(owner!==initialRequestId||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
       latestSnapshotRows=oldRows;snapshotMeta=oldMeta;coordinateByCode.clear();oldRows.forEach(row=>coordinateByCode.set(String(row.customerCode||row.code),row));
+      if(generalMap&&state.mode==='BASE_60D'&&dateReady){snapshotReadState=snapshotReadState==='pending'?'retained-pending':'retained';applyGeneralSnapshotRange();syncGeneralFreshness();}
       const label=$('#mapFreshnessStatus');if(label)label.title='자동 매장 조회 지연 · 기존 지도 유지';return{ok:false,changed:false};
     }finally{generalSnapshotPolling=false;}
   }
@@ -408,18 +430,25 @@
     try {
       const adapter=await hybridUiReady,cached=await adapter?.readCachedGeneral();
       if(id!==initialRequestId||!generalMap)return;
-      if(cached){if(recentPeriodMode){state.rangeStart=cached.meta.startDate;state.rangeEnd=cached.meta.endDate;$('#rangeStart').value=state.rangeStart;$('#rangeEnd').value=state.rangeEnd;}latestSnapshotRows=cached.data;snapshotMeta=cached.meta;coordinateByCode.clear();cached.data.forEach(row=>coordinateByCode.set(row.customerCode,row));periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;setPeriodViewState(allStores.length?'ready':'empty');await loadBaseMap();}
+      const cachedCodes=new Set(cached?.data.map(row=>row.customerCode));
+      if(cached){
+        latestSnapshotRows=cached.data;snapshotMeta=cached.meta;snapshotReadState='cached';applyGeneralSnapshotRange();
+        coordinateByCode.clear();cached.data.forEach(row=>coordinateByCode.set(row.customerCode,row));
+        periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;
+        setPeriodViewState(allStores.length?'ready':'empty');await loadBaseMap();
+        if(id!==initialRequestId||!generalMap)return;
+        void loadBaseVehicles([...cachedCodes]);
+      }
       await refreshStoreSnapshot();
       if(id!==initialRequestId||!generalMap)return;
-      if(snapshotReadState==='error'&&cached){dateReady=true;setPeriodViewState(allStores.length?'ready':'empty');$('#freshnessState').textContent='저장된 정상 지도 유지 · 네트워크 최신성 미확인';return;}
+      if(cached&&['error','pending'].includes(snapshotReadState)){snapshotReadState=snapshotReadState==='error'?'retained':'retained-pending';syncGeneralFreshness();return;}
       if(snapshotReadState==='pending'){setPeriodViewState('not-ready');renderPeriodStoreList([]);$('#freshnessState').textContent='매장 집계 중 — 조회 0건으로 확정하지 않음';return;}
       if(snapshotReadState!=='ready')throw Error('SNAPSHOT_READ_FAILED');
-      if(recentPeriodMode){const latest=await adapter?.refreshLatest().catch(()=>null),range=MapPeriodUi.recentRange(latest);if(id!==initialRequestId||!generalMap)return;if(range){state.rangeStart=range.start;state.rangeEnd=range.end;$('#rangeStart').value=range.start;$('#rangeEnd').value=range.end;}}
-      periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;
-      void loadBaseVehicles(latestSnapshotRows.map(row=>row.customerCode));
+      applyGeneralSnapshotRange();periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;
+      const newCodes=latestSnapshotRows.map(row=>row.customerCode).filter(code=>!cachedCodes.has(code));
+      if(newCodes.length)void loadBaseVehicles(newCodes);
       setPeriodViewState(allStores.length?'ready':'empty');await loadBaseMap();
       if(id!==initialRequestId||!generalMap)return;
-      $('#freshnessState').textContent='전체 저장 매장 반영됨 — 운영 전체 매장 완전성 미검증';syncSourceFreshness();
       void syncCustomerRegistry();
     }catch(error){if(id!==initialRequestId||isSilentRequestError(error))return;setPeriodViewState('error');renderPeriodStoreList([]);$('#freshnessState').textContent='일반지도 조회 실패 — 매장 수 미확인';}
   }
@@ -2139,7 +2168,8 @@
     $("#mapStatusTitle").textContent = period ? "매장·권역 지도" : "일자별 운행";
     $("#mapStatusSub").textContent = period ? `${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 배송지' : (baseVehicleMeta?.stale?'이전 기준호차':'기준호차')}`
       : `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
-    $("#freshnessState").textContent = period ? `지도 반영일 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}` : `${state.selectedDate} 편성 조회 완료`;
+    if(generalMap&&period)syncGeneralFreshness();
+    else $("#freshnessState").textContent = period ? `지도 반영일 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}` : `${state.selectedDate} 편성 조회 완료`;
     if(period&&periodBasis==='vehicle'&&baseVehicleStatus!=='READY')$('#mapStatusSub').textContent=baseVehicleStatus==='ERROR'?'기준호차를 불러오지 못했습니다.':baseVehicleStatus==='NOT_READY'?'기준호차 자료를 확인해 주세요.':'기준호차를 불러오는 중입니다.';
     if(period&&periodBasis==='vehicle'&&baseVehicleStatus==='READY'&&baseVehicleMeta?.stale)$('#mapStatusSub').textContent+=` · 기준호차 이전 확인값 (${baseVehicleMeta.checkedAt||'시각 미확인'}) · ${baseVehicleMeta.refresh==='RUNNING'?'별도 갱신 중':baseVehicleMeta.refresh==='ERROR'?'갱신 실패 · 기존값 유지':'갱신 대기'} · 기간 최신화와 별개`;
     syncDateHeading();
