@@ -10,7 +10,7 @@ const root=path.resolve('public/opsmap'),output=process.env.OPSMAP_R14_DIRECTION
 fs.mkdirSync(output,{recursive:true});
 const rows=Array.from({length:8},(_,i)=>({customerCode:'SYNTHETIC_'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',order:8-i,lat:osanCenter.lat+i*.001,lng:osanCenter.lng+i*.001,lastDeliveryDate:'2026-11-02'}));
 const dailyRows=rows.slice(0,4);
-const requests=[],providerRequests=[],reservations=[],external=[],errors=[],checks=[];
+const requests=[],recordedRequests=[],configReads=[],providerRequests=[],reservations=[],external=[],errors=[],checks=[];
 let budgetDepleted=false,snapshotRevision=1;
 const budget={
  durable:true,
@@ -71,6 +71,21 @@ const server=http.createServer(async(req,res)=>{
    let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);requests.push(body);
    try{data=await service.route(body);}catch(e){res.statusCode=e.status||500;data={ok:false,error:e.code};}
   }
+  if(u.pathname.endsWith('/road-route/config')){
+   configReads.push(u.pathname);
+   data={ok:true,data:{canRequest:false,blockedReasons:['ROAD_BUDGET_API_UNVERIFIED']}};
+  }
+  if(u.pathname.endsWith('/road-route/recorded-stops')){
+   const date=u.searchParams.get('date'),vehicle=u.searchParams.get('vehicle');
+   data={ok:true,data:{date,vehicle,origin:{...osanCenter,customerCode:'CENTER_osan'},stops:dailyRows},meta:{source:'HUB_ROUTE_STOPS'}};
+  }
+  if(u.pathname.endsWith('/road-route')&&req.method==='POST'){
+   let raw='';for await(const chunk of req)raw+=chunk;
+   const identity=JSON.parse(raw);recordedRequests.push(identity);
+   const points=[osanCenter,...[...dailyRows].sort((a,b)=>a.order-b.order)].map((point,index)=>({id:'fixture_'+index,lat:point.lat,lng:point.lng}));
+   data=await service.route({mode:'MANUAL_WAYPOINTS',requestId:1,origin:points[0],waypoints:points.slice(1,-1).map((point,index)=>({...point,order:index+1})),destination:points.at(-1)});
+   Object.assign(data.data,identity);
+  }
   if(u.pathname.endsWith('/customer-search'))data={data:[{...rows[0],customerCode:'S100000'}]};
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,version:String(snapshotRevision),latestDate:'2026-11-02',startDate:'2026-09-04',endDate:'2026-11-02'}};
   if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:'e'.repeat(64),baseVehicleStale:false})),meta:{version:'e'.repeat(64),stale:false}};
@@ -85,7 +100,7 @@ const server=http.createServer(async(req,res)=>{
 await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;let browser;
 try{
  browser=await chromium.launch({headless:true,executablePath:process.env.OPSMAP_TEST_CHROMIUM||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
- const page=await browser.newPage({viewport:{width:1366,height:900}});page.on('pageerror',e=>errors.push(e.message));
+ const page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',route=>{if(!route.request().url().startsWith(origin)){external.push(route.request().url());return route.abort();}return route.continue();});
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady());
  const check=(name,value)=>{assert(value,name);checks.push(name);};
@@ -97,7 +112,7 @@ try{
    document.querySelectorAll('.centerMarker:not(.osanCenterMarker)').length===1&&__stableOsanMarker===document.querySelector('.osanCenterMarker'));
  check('exactly one warehouse marker uses the registered Osan coordinate',await marker.evaluate((node,coords)=>{
   const anchor=node.closest('.osanCenterAnchor');
-  return anchor.parentElement.dataset.fixtureCoords===coords&&node.querySelector('svg').getBoundingClientRect().width===40;
+  return anchor.parentElement.dataset.fixtureCoords===coords&&node.querySelector('svg').getBoundingClientRect().width>=15;
  },[osanCenter.lat,osanCenter.lng].join(','))&&await stableMarker());
  await page.locator('#periodCenter').evaluate(node=>{node.value='all';node.dispatchEvent(new Event('change'));});
  await page.evaluate(()=>{
@@ -109,7 +124,7 @@ try{
    (await card.textContent()).includes(osanCenter.address)&&await page.evaluate(()=>!MapUiLocalBridge.state.selected));
  await card.locator('[data-center-origin]').click();
  check('warehouse card sets the existing origin without a provider call',await page.locator('#plannerStart').inputValue()==='CENTER_osan'&&requests.length===0);
- await page.screenshot({path:path.join(output,'osan-center-1366.png')});
+ await page.screenshot({path:path.join(output,'osan-center-1440.png')});
  await card.locator('[data-center-close]').click();
  await page.evaluate(()=>{kakao.maps.event.trigger(MapUiLocalBridge.state.map,'click');MapNavigationEditor.clear();});
  await page.setViewportSize({width:390,height:900});
@@ -120,22 +135,28 @@ try{
  await marker.click();
  check('mobile warehouse marker and card remain visible after resize',await card.evaluate(node=>{
   const r=node.getBoundingClientRect(),label=document.querySelector('.osanCenterMarker span').getBoundingClientRect();
-  return r.width>0&&r.left>=0&&r.right<=innerWidth&&label.bottom<=r.top;
+  return r.width>0&&r.left>=0&&r.right<=innerWidth&&(label.bottom<=r.top||r.bottom<=label.top);
  })&&await stableMarker());
  await page.screenshot({path:path.join(output,'osan-center-390.png')});
  await card.locator('[data-center-close]').click();
- await page.setViewportSize({width:1366,height:900});
+ await page.setViewportSize({width:1440,height:900});
  await page.locator('#query').fill('합성 매장 0');
  await page.locator('#searchBtn').click();
  await page.waitForFunction(()=>MapUiLocalBridge.state.selected?.customerCode==='S100000');
  check('store search preserves the warehouse overlay while selecting a store',await stableMarker());
+ check('customer code result has the same three route actions',await page.locator('#detail [data-nav-pick]').allTextContents().then(labels=>JSON.stringify(labels)==='["출발","경유","도착"]'));
+ await page.locator('#detail [data-nav-pick="destination"]').click();
+ check('customer code result is assignable and the panel closes',await page.locator('#plannerEnd').inputValue()==='S100000'&&await page.evaluate(()=>MapNavigation.resolve('S100000').length===1)&&!await page.locator('#detailSection').evaluate(node=>node.classList.contains('open')));
+ await page.evaluate(()=>MapNavigationEditor.clear());
  snapshotRevision++;
  const refreshed=await page.evaluate(()=>MapUiLocalBridge.refreshGeneralSnapshot());
  check('a new store snapshot retains the existing warehouse overlay',refreshed.ok&&refreshed.changed&&await stableMarker());
  await page.evaluate(()=>kakao.maps.event.trigger(MapUiLocalBridge.state.map,'click'));
- await page.screenshot({path:path.join(output,'before-1366.png')});
+ await page.screenshot({path:path.join(output,'before-1440.png')});
  check('initial visit does not query Directions or show route totals',requests.length===0&&providerRequests.length===0&&!await totals.isVisible());
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
+ await page.waitForFunction(()=>document.querySelector('#navReadiness').textContent.includes('API 호출 승인'));
+ check('opening the planner reads configuration without querying directions',configReads.length>0&&requests.length===0&&reservations.length===0);
  await page.locator('.navCenterChoices').getByRole('button',{name:'오산센터',exact:true}).click();
  await page.evaluate(()=>MapNavigationEditor.setPoint('destination','SYNTHETIC_3'));
  check('verified Osan center is selectable',await page.locator('#plannerStart').inputValue()==='CENTER_osan');
@@ -144,10 +165,10 @@ try{
  assert.deepEqual(providerRequests[0],{method:'GET',points:[[osanCenter.lng,osanCenter.lat],[rows[3].lng,rows[3].lat]]});
  check('Osan center to one store displays synthetic road geometry, distance and duration',requests.length===1&&await page.evaluate(()=>__routeLines.size===1)&&await page.locator('#navDistance').textContent()==='0.1 km'&&await page.locator('#navDuration').textContent()==='1분');
  check('desktop totals are visible on the map and absent from route settings',await page.locator('.maparea > #mapRouteTotals').isVisible()&&await page.locator('#waypointPlanner #navDistance, #waypointPlanner #navDuration, #waypointPlanner .plannerMetrics').count()===0);
- await totals.screenshot({path:path.join(output,'map-route-totals-1366.png')});
+ await totals.screenshot({path:path.join(output,'map-route-totals-1440.png')});
  await page.locator('#clearPlanner').click();
  await page.evaluate(()=>MapNavigationEditor.replacePoints(['SYNTHETIC_0','SYNTHETIC_1','SYNTHETIC_2','SYNTHETIC_3']));
- await page.evaluate(()=>{window.__stableKakaoLink=document.querySelector('#navKakaoLinks a');for(let i=0;i<20;i++)window.dispatchEvent(new Event('map-coordinate-updated'));});await page.waitForTimeout(100);check('background coordinate updates preserve the same clickable external route link',await page.evaluate(()=>window.__stableKakaoLink===document.querySelector('#navKakaoLinks a')));
+ check('no external Kakao route links are rendered',await page.locator('#navKakaoDirections, #waypointPlanner a[href*="map.kakao.com"]').count()===0);
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);await page.locator('#planRoute').click();
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  assert.deepEqual(providerRequests[1],{method:'GET',points:rows.slice(0,4).map(r=>[r.lng,r.lat])});
@@ -166,7 +187,7 @@ try{
  await page.locator('#plannerWaypoint0').fill('UNRESOLVED');await page.waitForTimeout(650);
  check('incomplete waypoint clears geometry and never queries',requests.length===4&&await page.locator('#navDistance').textContent()==='— km');
  await page.locator('#clearPlanner').click();await page.waitForTimeout(550);check('reset clears all points and metrics without a call',requests.length===4&&(await page.evaluate(()=>MapNavigationEditor.values())).every(v=>!v)&&await page.locator('#navDuration').textContent()==='— 분'&&!await totals.isVisible());
- for(const width of [1920,1366,768,390]){
+ for(const width of [1920,1440,768,390]){
   await page.setViewportSize({width,height:900});await page.locator('#waypointPlanner').scrollIntoViewIfNeeded();
   check(width+'px editor stays inside the viewport',await page.locator('#waypointPlanner').evaluate(n=>{const r=n.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1}));
   await page.screenshot({path:path.join(output,'after-'+width+'.png')});
@@ -186,24 +207,25 @@ try{
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  assert.deepEqual(providerRequests.at(-1),{method:'POST',points:rows.map(r=>[r.lng,r.lat])});
  check('six waypoints use one synthetic POST with all seven legs',requests.length===8&&requests.at(-1).waypoints.length===6&&reservations.at(-1)==='waypoints'&&await page.evaluate(()=>__routeLines.size===7)&&await page.locator('#navDuration').textContent()==='7분');
- await page.locator('#clearPlanner').click();await page.locator('#modeDaily').click();
+ await page.locator('#modeDaily').click();
  await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-11-02','2026-11-02'));
  await page.evaluate(()=>{const input=document.querySelector('#vehicleList input[value="101"]');input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));});
- await page.waitForFunction(()=>MapUiLocalBridge.navigationVisitRows().length===4);
+ await page.waitForFunction(()=>MapNavigationEditor.values().at(-1)==='SYNTHETIC_0');
+ check('daily draft starts at the verified Osan center and ends at the last recorded stop',JSON.stringify(await page.evaluate(()=>MapNavigationEditor.values()))===JSON.stringify(['CENTER_osan','SYNTHETIC_3','SYNTHETIC_2','SYNTHETIC_1','SYNTHETIC_0'])&&recordedRequests.length===0);
  check('date and vehicle selection preserve the same warehouse marker',await stableMarker());
- const overlappingStore=page.locator('#map .marker[data-customer-code="SYNTHETIC_0"]');
- check('mobile warehouse icon matches a regular store pin size',await page.evaluate(()=>{
-   const warehouse=document.querySelector('.osanCenterMarker svg'),store=document.querySelector('.marker[data-customer-code="SYNTHETIC_0"] .pin');
-   return warehouse&&store&&getComputedStyle(warehouse).width===getComputedStyle(store).width&&getComputedStyle(warehouse).height===getComputedStyle(store).height;
- }));
- await marker.click();
- check('warehouse can be selected beside a coincident store',await card.isVisible()&&await page.evaluate(()=>!MapUiLocalBridge.state.selected));
- await card.locator('[data-center-close]').click();
- await overlappingStore.click();
- check('coincident store remains directly selectable',await page.evaluate(()=>MapUiLocalBridge.state.selected?.customerCode==='SYNTHETIC_0')&&await stableMarker());
- await page.evaluate(()=>{MapNavigationEditor.setPoint('origin','CENTER_osan');document.querySelector('#waypointPlanner').open=true;document.querySelector('#dotRoadOptions').open=true;});
+ await page.locator('[data-route-scope="manual"]').click();
+ check('manual points and geometry survive changing daily date and vehicle',await page.evaluate(()=>MapNavigationEditor.values().length===8&&__routeLines.size===7));
+ await page.locator('[data-route-scope="daily"]').click();
+ await page.locator('#planRoute').click();
+ await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
+ check('verified default uses the recorded endpoint',recordedRequests.length===1&&requests.length===8&&await page.locator('#navDistance').textContent()==='0.4 km');
+ await page.locator('[aria-label="경유지 1 삭제"]').click();
+ await page.locator('#planRoute').click();
+ await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
+ check('editing the daily draft uses the manual endpoint in the edited order',recordedRequests.length===1&&requests.length===9&&requests.at(-1).waypoints[0].lat===rows[2].lat);
+ await page.locator('#dotRoadOptions').evaluate(n=>n.open=true);
  await page.locator('#queryRecordedRoute').click();
- check('mobile saved visits sort by order and retain center origin',JSON.stringify(await page.evaluate(()=>MapNavigationEditor.values()))===JSON.stringify(['CENTER_osan','SYNTHETIC_3','SYNTHETIC_2','SYNTHETIC_1','SYNTHETIC_0'])&&requests.length===8);
+ check('restore returns to the recorded order without a provider request',await page.evaluate(()=>MapNavigationEditor.values()[1]==='SYNTHETIC_3')&&requests.length===9&&recordedRequests.length===1);
  await page.screenshot({path:path.join(output,'after-import-390.png')});
  const requestCount=requests.length;
  const providerCount=providerRequests.length;

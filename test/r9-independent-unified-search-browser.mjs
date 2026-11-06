@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import {chromium} from 'playwright';
+const {chromium}=await import(process.env.OPSMAP_TEST_PLAYWRIGHT_MODULE||'playwright');
 
 // Independent candidate UI/runtime check. Every source, identity and SDK is synthetic.
 // This cannot certify Kakao or Production; no remote request or real pin write is allowed.
@@ -20,7 +20,7 @@ const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','
 const fixture=`
 window.VEHICLE_AREA_DATA={vehicles:${JSON.stringify(['101','122','172','202'].map(vehicle=>({vehicle,group:'osan',customers:[]})))}};
 window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};window.fixturePurges=[];window.fixtureOverlays=[];window.fixtureGeocodes=0;
-window.MapStaffEntry={status(){},registerPurge(fn){window.fixturePurges.push(fn)}};
+document.body.dataset.mapStaffState='authenticated';window.MapStaffEntry={status(){},registerPurge(fn){window.fixturePurges.push(fn)}};
 window.MapManualPins={apply(row){if(row.customerCode==='S990001')Object.assign(row,{lat:37.511,lng:127.011,coordinateSource:'MANUAL_PIN',resolutionStatus:'MANUAL_CONFIRMED',manualPinRevision:7});if(row.customerCode==='S990005')Object.assign(row,{lat:37.541,lng:127.041,coordinateSource:'MANUAL_PIN',resolutionStatus:'MANUAL_CONFIRMED',manualPinRevision:4});return row;},open(){}};
 window.MapTerritoryUi={renderForSelection(){},toggle(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
@@ -90,17 +90,17 @@ try{
  await search('원천조회실패');await page.waitForTimeout(100);check('source failure is not reported as master absence',await page.locator('#searchState').innerText().then(t=>!/고객\s*마스터에\s*없|미등록\s*확정/.test(t)));
  await page.evaluate(()=>KAKAO_MAP_CONFIG.allowExternalAddressLookup=true);await search('서울 중구 원천조회실패길 703');await page.waitForFunction(()=>document.querySelector('#map')?.dataset.searchPositionPending==='true');await page.locator('#map').click({position:{x:200,y:180}});await page.waitForFunction(()=>MapUiLocalBridge.state.virtual?.searchTemporary===true);
  check('failed Customer source permits only unconfirmed manual point and never calls geocoder',await page.evaluate(()=>MapUiLocalBridge.state.virtual.customerMatchState==='UNCONFIRMED'&&window.fixtureGeocodes===0));await page.locator('#clearQuery').click();await page.evaluate(()=>KAKAO_MAP_CONFIG.allowExternalAddressLookup=false);
- await search('원동380-38');await page.locator('[data-search-address-link]').waitFor({state:'visible'});
- check('incomplete address exposes the encoded official search link without opening a tab',await page.locator('[data-search-address-link]').getAttribute('href')==='https://map.kakao.com/link/search/'+encodeURIComponent('원동380-38')&&browser.contexts()[0].pages().length===1);
- check('incomplete address asks for city or district instead of inventing regional candidates',await page.locator('[data-search-address-guide]').innerText().then(t=>t.includes('지역이 빠진 주소')&&t.includes('시·군·구'))&&!await virtual()&&await page.evaluate(()=>window.fixtureGeocodes)===0);
+ await search('원동380-38');await page.locator('[data-search-address-guide]').waitFor({state:'visible'});
+ check('incomplete address stays in the operating map',await page.locator('[data-search-address-link]').count()===0&&browser.contexts()[0].pages().length===1);
+ check('incomplete address asks for city or district instead of inventing regional candidates',await page.locator('[data-search-address-guide]').innerText().then(t=>t.includes('시·군·구를 입력')&&t.includes('임시 위치'))&&!await virtual()&&await page.evaluate(()=>window.fixtureGeocodes)===0);
  await page.locator('#map').click({position:{x:200,y:180}});await page.waitForFunction(()=>MapUiLocalBridge.state.virtual?.searchTemporary===true);
- check('incomplete address map click produces only one unsaved point and closes the search link',await page.locator('[data-search-temporary-pin]').count()===1&&await page.locator('[data-search-address-link]').count()===0&&await page.evaluate(()=>MapUiLocalBridge.state.virtual.coordinateSource==='MAP_CLICK_TEMPORARY'&&MapUiLocalBridge.navigationStores().length===5));
+ check('incomplete address map click produces only one unsaved point and closes the search guidance',await page.locator('[data-search-temporary-pin]').count()===1&&await page.locator('[data-search-address-guide]').count()===0&&await page.evaluate(()=>MapUiLocalBridge.state.virtual.coordinateSource==='MAP_CLICK_TEMPORARY'&&MapUiLocalBridge.navigationStores().length===5));
  await page.locator('#clearQuery').click();
  await search('서울 중구 합성로 701');await page.waitForTimeout(100);check('OFF geocoding does not create an unverified automatic pin',!await virtual());
- check('qualified address link preserves its region without a missing-region warning',await page.locator('[data-search-address-link]').getAttribute('href')==='https://map.kakao.com/link/search/'+encodeURIComponent('서울 중구 합성로 701')&&await page.locator('[data-search-address-guide]').innerText().then(t=>!t.includes('지역이 빠진 주소')));
+ check('qualified address fallback preserves its region',await page.locator('[data-search-address-guide]').innerText().then(t=>t.includes('시·군·구를 확인')));
  await page.locator('#map').click({position:{x:200,y:180}});await page.waitForFunction(()=>MapUiLocalBridge.state.virtual?.searchTemporary===true);
  check('manual map position creates exactly one temporary pin',await page.locator('[data-search-temporary-pin]').count()===1);
- check('temporary map point is connected to existing navigation selection',await page.locator('#navSelectedStore').innerText().then(t=>t.includes('서울 중구 합성로 701')));
+ check('temporary map point has the same three route actions',await page.locator('#detail [data-nav-pick]').allTextContents().then(labels=>JSON.stringify(labels)==='["출발","경유","도착"]'));
  const markerCount=await page.evaluate(()=>MapUiLocalBridge.state.overlays.filter(x=>x.map).length);
  await search('서울 중구 합성로 702');check('next search removes old temporary pin before lookup',await page.locator('[data-search-temporary-pin]').count()===0);
  await page.locator('#map').click({position:{x:210,y:190}});await page.waitForFunction(()=>MapUiLocalBridge.state.virtual?.searchTemporary===true);check('second new address has only its own one temporary pin',await page.locator('[data-search-temporary-pin]').count()===1);
@@ -113,9 +113,9 @@ try{
   if(cleanup==='modeDaily'){await page.locator('#modePeriod').click();await page.waitForFunction(()=>MapUiLocalBridge.state.mode==='BASE_60D');}
  }
  for(const width of [1920,1366,760,390]){
-  await page.setViewportSize({width,height:width<800?900:1000});await page.locator('#query').scrollIntoViewIfNeeded();await search('원동380-38');await page.locator('[data-search-address-link]').waitFor({state:'visible'});
-  const fallback=await page.locator('#results').evaluate(e=>{const box=e.getBoundingClientRect(),guide=e.querySelector('[data-search-address-guide]'),link=e.querySelector('[data-search-address-link]');return {bounded:box.left>=0&&box.right<=innerWidth+1&&e.scrollWidth<=e.clientWidth+1,wrapped:getComputedStyle(guide).whiteSpace==='normal',linkVisible:link.getBoundingClientRect().height>=18};});
-  check('address fallback '+width+' fits unified search with visible link and wrapping guidance',fallback.bounded&&fallback.wrapped&&fallback.linkVisible);
+  await page.setViewportSize({width,height:width<800?900:1000});await page.locator('#query').scrollIntoViewIfNeeded();await search('원동380-38');await page.locator('[data-search-address-guide]').waitFor({state:'visible'});
+  const fallback=await page.locator('#results').evaluate(e=>{const box=e.getBoundingClientRect(),guide=e.querySelector('[data-search-address-guide]');return {bounded:box.left>=0&&box.right<=innerWidth+1&&e.scrollWidth<=e.clientWidth+1,wrapped:getComputedStyle(guide).whiteSpace==='normal',guideVisible:guide.getBoundingClientRect().height>=18};});
+  check('address fallback '+width+' fits unified search with visible wrapping guidance',fallback.bounded&&fallback.wrapped&&fallback.guideVisible);
   await page.screenshot({path:path.join(output,'address-fallback-'+width+'.png')});await page.locator('#clearQuery').click();
   await page.setViewportSize({width,height:width<800?900:1000});await page.locator('#query').scrollIntoViewIfNeeded();await search('합성 공동');await page.waitForFunction(()=>document.querySelectorAll('#results [data-search-code]').length===2);
   const bounds=await page.evaluate(()=>{const a=document.querySelector('#query').getBoundingClientRect(),b=document.querySelector('#results').getBoundingClientRect();return {left:b.left,right:b.right,viewport:innerWidth,queryLeft:a.left,hasDuplicate:!!document.querySelector('.addressBlock:not([hidden]):not([inert])')&&getComputedStyle(document.querySelector('.addressBlock')).display!=='none',overflow:document.documentElement.scrollWidth>innerWidth+2};});

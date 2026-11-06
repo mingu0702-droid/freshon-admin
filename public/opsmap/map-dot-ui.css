@@ -17,14 +17,12 @@
 .dotRestored.daily-mode #navigationSummary{margin:10px 0 0;padding:10px 0 12px;border-top:1px solid var(--line)}
 .dotRestored.daily-mode #navigationSummary .sectiontitle{margin-bottom:3px}
 .dotRestored.daily-mode #navigationSummary h2{font-size:13px}
-.dotRestored #dotRouteSelection,.dotRestored #dotRouteOrigin{margin:3px 0;font-size:11px;color:#728097}
 .dotRestored #navigationSummary #navRouteStatus{font-size:11px;color:#728097;margin:5px 0}
 .dotRestored #navigationSummary>#syncOperation{font-size:11px;padding:5px 8px;margin-top:3px}
 .dotRestored #dotRoadOptions{font-size:11px;margin-top:6px;color:#728097}
 .dotRestored #dotRoadOptions:not([open]){display:inline-block;margin:3px 0 0 6px;vertical-align:middle}
 .dotRestored #dotRoadOptions:not([open])>summary{font-size:10px}
 .dotRestored.daily-mode #navigationSummary .sectiontitle{margin-bottom:0}
-.dotRestored #dotRouteSelection,.dotRestored #dotRouteOrigin{margin:2px 0}
 .dotRestored #navigationSummary #navRouteStatus{margin:3px 0}
 .dotRestored:not(.daily-mode) #waypointPlanner{padding-top:24px}
 .dotRestored #navigationSummary{position:static}
@@ -32,12 +30,10 @@
 .dotRestored #navigationSummary .sectiontitle{gap:8px;flex-wrap:wrap}
 .dotRestored #navigationSummary .sectiontitle #syncOperation{font-size:11px;padding:5px 7px;margin-left:auto}
 .dotRestored #navigationMeaning{display:none}
-.dotRestored .navigationPicker{padding:9px;margin:10px 0}
-.dotRestored .navigationPicker label{font-size:12px}
 .dotRestored .navPickActions button{font-size:11px;min-width:0;padding:7px 5px}
 .dotRestored .navToggles{margin:8px 0}
 .dotRestored #queryRecordedRoute{font-size:12px;width:100%}
-.dotRestored #navSelectedStore,.dotRestored #navPointStatus,.dotRestored #plannerStatus{font-size:12px}
+.dotRestored #plannerStatus{font-size:12px}
 .dotRestored #refreshTerritories{font-size:11px;padding:5px 8px}
 .dotRestored #dotDataStatus{font-size:11px;color:#728097;margin:4px 0 0;overflow-wrap:anywhere}
 .dotRestored #dotDataStatus[data-state=error]{color:#a33a16}
@@ -92,7 +88,6 @@
 .dotRestored #baseVehiclePicker:not([open])>:not(summary){display:none!important}
 .dotRestored #periodStoreList[hidden],.dotRestored #periodListMore[hidden],.dotRestored #loadMore[hidden],.dotRestored .dotDetailFacts [hidden]{display:none!important}
 .dotRestored #waypointPlanner>#navigationSummary{margin:12px 0 0;padding:12px 0 0;border-top:1px solid var(--line);position:static}
-.dotRestored #navKakaoDirections{margin:12px 0 0}
 .dotRestored .dotDetailFacts dd a{overflow-wrap:anywhere}
 .dotRestored .plannerActions{flex-wrap:wrap}
 .dotRestored .plannerActions>button{min-width:0;flex:1}

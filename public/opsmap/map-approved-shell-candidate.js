@@ -49,7 +49,6 @@
   centers.querySelectorAll('button').forEach(button=>button.onclick=()=>setCenter(button.dataset.sourceCenter));$('#sourceCenterReset').onclick=()=>setCenter('all');
   const planner=document.createElement('details');planner.id='waypointPlanner';
   planner.innerHTML=`<summary class="sectiontitle"><h2>경로 설정</h2><span class="muted">자동차</span></summary>
-    <p class="hint plannerHelp">매장이나 주소를 검색해 각 지점을 지정하세요.</p>
     <div class="navEditorField" data-point-role="origin"><label for="plannerStart"><span class="pointRole origin">출발</span> 출발지</label><div class="pointInputRow"><input id="plannerStart" data-nav-role="origin" aria-label="출발지 검색" placeholder="고객코드·매장명·주소 검색" autocomplete="off"><button id="clearOrigin" type="button" class="pointClear" aria-label="출발지 지우기" title="출발지 지우기">×</button></div></div>
     <div id="plannerStops"></div><button id="addWaypoint" type="button" class="full addWaypoint">＋ 경유지 추가</button>
     <div class="navEditorField" data-point-role="destination"><label for="plannerEnd"><span class="pointRole destination">도착</span> 목적지</label><div class="pointInputRow"><input id="plannerEnd" data-nav-role="destination" aria-label="목적지 검색" placeholder="고객코드·매장명·주소 검색" autocomplete="off"><button id="clearDestination" type="button" class="pointClear" aria-label="목적지 지우기" title="목적지 지우기">×</button></div></div>
@@ -126,15 +125,20 @@
     const seen=new Set();
     for(let index=0;index<next.length;index++){const code=next[index];if(seen.has(code)&&!(index===next.length-1&&code===next[0]))throw Error('목록에 같은 매장이 반복되어 있습니다. 중복 방문을 확인해 주세요.');seen.add(code);}
     // Validate the complete list before mutating any role; never truncate visits.
-    writeEditorInput($('#plannerStart'),next[0]);writeEditorInput($('#plannerEnd'),next[next.length-1]);waypoints.splice(0,waypoints.length,...next.slice(1,-1));renderWaypoints();draftChanged();
+    restoreEditor(next);draftChanged();
+  }
+  function restoreEditor(values){
+    writeEditorInput($('#plannerStart'),values[0]);writeEditorInput($('#plannerEnd'),values.at(-1));
+    waypoints.splice(0,waypoints.length,...values.slice(1,-1));renderWaypoints();
   }
   function reverseEditor(){const start=readEditorInput($('#plannerStart')),end=readEditorInput($('#plannerEnd'));writeEditorInput($('#plannerStart'),end);writeEditorInput($('#plannerEnd'),start);waypoints.reverse();renderWaypoints();draftChanged();}
   $('#addWaypoint').onclick=()=>{if(waypoints.length>=30){$('#plannerStatus').hidden=false;$('#plannerStatus').textContent='경유지는 최대 30개입니다.';return;}waypoints.push('');renderWaypoints();draftChanged();$('#plannerWaypoint'+(waypoints.length-1)).focus();};
   $('#clearOrigin').onclick=()=>removeEditorPoint('origin');$('#clearDestination').onclick=()=>removeEditorPoint('destination');$('#reversePlanner').onclick=reverseEditor;
   $('#clearPlanner').onclick=()=>{waypoints.length=0;writeEditorInput($('#plannerStart'),'');writeEditorInput($('#plannerEnd'),'');renderWaypoints();draftChanged({clearDraft:true});};
   $('#planRoute').onclick=async()=>{
-    if($('#planRoute').disabled)return;const status=$('#plannerStatus');
+    if($('#planRoute').disabled)return;const status=$('#plannerStatus');status.hidden=true;
     try{
+      if(window.MapNavigation?.useRecordedRoute()){await bridge.queryRecordedRoute();return;}
       const values=editorValues();
       const points=values.map((value,index)=>{
         const role=index===0?'출발지':index===values.length-1?'목적지':'경유지 '+index;
@@ -144,11 +148,10 @@
         if(found[0].coordinateStatus==='CONFLICT'||!Number.isFinite(found[0].lat)||!Number.isFinite(found[0].lng))throw Error(role+'의 위치를 확인할 수 없습니다. 다른 지점을 선택해 주세요.');
         return {...found[0],label:found[0].customerName||value};
       });
-      status.hidden=false;status.textContent='도로 경로를 조회하고 있습니다.';
       bridge.replaceManualStops(points);await bridge.queryManualRoute();
     }catch(error){status.hidden=false;status.textContent=error.message;}
   };
-  window.MapNavigationEditor=Object.freeze({values:editorValues,setPoint:setEditorPoint,removePoint:removeEditorPoint,replacePoints:replaceEditorPoints,reverse:reverseEditor,clear:()=>$('#clearPlanner').click()});
+  window.MapNavigationEditor=Object.freeze({values:editorValues,setPoint:setEditorPoint,removePoint:removeEditorPoint,replacePoints:replaceEditorPoints,restore:restoreEditor,reverse:reverseEditor,clear:()=>$('#clearPlanner').click()});
   const stores=$('#periodStoreListSection');stores.className='storeSection';stores.querySelector('.label').className='sectiontitle';const title=document.createElement('h2');title.append('매장 목록 ',$('#periodStoreListCount'));stores.querySelector('.sectiontitle').prepend(title);$('#togglePeriodList').className='textbtn';
   const loadMore=document.createElement('button');loadMore.id='loadMore';loadMore.className='full';loadMore.textContent='매장 더 보기';loadMore.onclick=()=>stores.classList.add('showMoreStores');stores.append(loadMore);$('#periodStoreList').className='sourceStoreList';
   const route=$('#runListTool');route.className='sourceItinerary';route.open=false;

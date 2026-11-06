@@ -2,6 +2,10 @@
   'use strict';
   const STATES = new Set(['success', 'partial', 'error', 'disabled', 'empty', 'not-applicable']);
   const TERMINAL = new Set(['QUOTA_EXCEEDED', 'AUTHENTICATION_FAILED', 'PERMISSION_DENIED', 'CALL_POLICY_BLOCKED']);
+  function hasProviderRoute(data){
+    if(data.source==='kakao-directions')return data.isGpsActual===false;
+    return data.source==='stationary-stops'&&data.noDrivingRequired===true&&data.distanceMeters===0&&data.durationSeconds===0;
+  }
   function createController({ fetchImpl = root.fetch.bind(root), onChange }) {
     let generation = 0, active = null, blocked = null;
     function cancel() { generation++; active?.abort(); active = null; onChange({ state: 'idle' }); }
@@ -26,7 +30,7 @@
           return;
         }
         const data = payload.data;
-        if (!data || data.date !== date || data.vehicle !== vehicle || !STATES.has(data.state)) throw new Error('INVALID_ROAD_ROUTE_RESPONSE');
+        if (!data || data.date !== date || data.vehicle !== vehicle || !STATES.has(data.state) || (['success','partial'].includes(data.state) && !hasProviderRoute(data))) throw new Error('INVALID_ROAD_ROUTE_RESPONSE');
         if (controller.signal.aborted) throw new Error('TIMEOUT');
         blocked = [data.error, ...(Array.isArray(data.chunks) ? data.chunks.map(chunk => chunk?.error) : [])].find(code => TERMINAL.has(code)) || null;
         onChange(data);
