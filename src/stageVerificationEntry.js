@@ -54,7 +54,11 @@ export function stageSnapshotBaseVehicles(snapshot) {
   }
   if (!rows.size) return null;
   const meta={basis:'FIXED_DISPATCH_PRIMARY',source:'STAGE_SNAPSHOT',version,checkedAt,total:rows.size,stale:true,refresh:'READ_ONLY',cacheState:'PRESENT'};
-  return {get(codes) {return {ok:true,data:codes.map(code=>rows.get(code)).filter(Boolean),meta};}};
+  return {get(codes) {
+    const data=codes.map(customerCode=>rows.get(customerCode) || {customerCode,baseVehicle:'',baseVehicleGroup:'',baseVehicleState:'UNKNOWN',
+      baseVehicleSource:meta.basis,baseVehicleVersion:version,baseVehicleCheckedAt:checkedAt,baseVehicleStale:true});
+    return {ok:true,data,meta};
+  }};
 }
 
 function stageHubUrl(value) {
