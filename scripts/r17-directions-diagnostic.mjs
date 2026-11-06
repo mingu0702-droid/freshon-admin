@@ -78,10 +78,18 @@ export async function runDiagnostic({ proof, receiptPath, env = process.env, now
       const response = await send(url, key);
       result.providerHttp = Number.isInteger(response.statusCode) ? response.statusCode : null;
       try {
+        const payload = await readPayload(response);
+        if (Number.isSafeInteger(payload?.code)) result.providerCode = payload.code;
         if (result.providerHttp === 200) {
-          const route = adapter.fromProvider(await readPayload(response), sample);
+          const routeCode = payload?.routes?.[0]?.result_code;
+          if (Number.isSafeInteger(routeCode)) result.resultCode = routeCode;
+          const route = adapter.fromProvider(payload, sample);
           result.geometryVerified = route.state === 'success' && route.complete === true &&
             route.distanceMeters > 0 && route.durationSeconds > 0;
+          if (result.geometryVerified) {
+            result.distanceMeters = route.distanceMeters;
+            result.durationSeconds = route.durationSeconds;
+          }
         }
       } finally {
         response.destroy();

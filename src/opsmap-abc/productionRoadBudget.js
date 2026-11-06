@@ -39,13 +39,19 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
   if(state?.schema!==1||!b||b.accountHash!==accountHash||b.scope!=='CUMULATIVE_APPROVED_ACCOUNT')fail('ROAD_BUDGET_ACCOUNT_MISMATCH');
   if(b.policy!=='FREE_ONLY'||b.providerPaidDisabled!==true||b.servicePermissionVerified!==true||!/^[-A-Za-z0-9_]{8,100}$/.test(b.approvalId||''))fail('ROAD_BUDGET_APPROVAL_REQUIRED');
   if(b.approvedApis!==undefined&&(!Array.isArray(b.approvedApis)||!b.approvedApis.length||new Set(b.approvedApis).size!==b.approvedApis.length||b.approvedApis.some(api=>!supportedApis.includes(api))))fail('ROAD_BUDGET_APPROVAL_REQUIRED');
+  const observed=b.providerDailyUsedAtApproval;
+  if(observed!==undefined&&(!b.approvedApis||!observed||typeof observed!=='object'||Array.isArray(observed)||
+   Object.keys(observed).length!==b.approvedApis.length||b.approvedApis.some(api=>!integer(observed[api])||
+    observed[api]+b.apis?.[api]?.freeRemainingAtApproval>dailyLimits[api])))fail('ROAD_BUDGET_QUOTA_UNVERIFIED');
   const verified=Date.parse(b.verifiedAt),expires=Date.parse(b.expiresAt);
   if(!Number.isFinite(verified)||!Number.isFinite(expires)||verified>time||expires<=time||expires<=verified)fail('ROAD_BUDGET_APPROVAL_EXPIRED');
   if(b.monthlyApproval){
-   // Opt-in monthly evidence only. Never upgrade, extend or replenish an old
-   // daily approval; the operator must verify paid-OFF and exclusive usage.
    const m=b.monthlyApproval,period=kst(verified).slice(0,7);
-   if(m.period!==period||kst(time).slice(0,7)!==period||kst(expires-1).slice(0,7)!==period||m.exclusiveDirectionsUsage!==true)fail('ROAD_BUDGET_MONTHLY_APPROVAL_REQUIRED');
+   // Basic Directions refuses overage under a verified free-only approval.
+   // The ledger reserves local calls; the provider still enforces shared use.
+   const hardFreeLimit=m.providerRejectsFreeOverage===true&&b.approvedApis?.length===1&&b.approvedApis[0]==='directions'&&integer(observed?.directions);
+   if(m.period!==period||kst(time).slice(0,7)!==period||kst(expires-1).slice(0,7)!==period||
+      (m.exclusiveDirectionsUsage!==true&&!hardFreeLimit))fail('ROAD_BUDGET_MONTHLY_APPROVAL_REQUIRED');
    if(!m.dailyUsage||typeof m.dailyUsage!=='object'||Array.isArray(m.dailyUsage)||Object.keys(m.dailyUsage).length>31)fail('ROAD_BUDGET_QUOTA_UNVERIFIED');
    for(const [day,counts]of Object.entries(m.dailyUsage)){
     if(!/^\d{4}-\d{2}-\d{2}$/.test(day)||!Number.isFinite(Date.parse(day))||new Date(day).toISOString().slice(0,10)!==day||day.slice(0,7)!==period||day>kst(time))fail('ROAD_BUDGET_QUOTA_UNVERIFIED');
@@ -94,8 +100,14 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
    // Write only the quota ledger; never serialize unrelated/session/customer fields.
    const clean={schema:1,roadBudget:Object.fromEntries(['accountHash','scope','policy','providerPaidDisabled','servicePermissionVerified','approvalId','verifiedAt','expiresAt','limit','used','monthlyFreeRemainingAtApproval','lastReservation','updatedAt'].map(k=>[k,b[k]]))};
    if(b.approvedApis)clean.roadBudget.approvedApis=b.approvedApis.slice();
+   if(b.providerDailyUsedAtApproval)clean.roadBudget.providerDailyUsedAtApproval={...b.providerDailyUsedAtApproval};
    clean.roadBudget.apis=Object.fromEntries(supportedApis.map(api=>[api,{freeRemainingAtApproval:b.apis[api].freeRemainingAtApproval,used:b.apis[api].used}]));
-   if(b.monthlyApproval)clean.roadBudget.monthlyApproval={period:b.monthlyApproval.period,exclusiveDirectionsUsage:true,usedBeforeWindow:{directions:b.monthlyApproval.usedBeforeWindow.directions,waypoints:b.monthlyApproval.usedBeforeWindow.waypoints},dailyUsage:structuredClone(b.monthlyApproval.dailyUsage)};
+   if(b.monthlyApproval)clean.roadBudget.monthlyApproval={
+    period:b.monthlyApproval.period,
+    ...(b.monthlyApproval.exclusiveDirectionsUsage===true?{exclusiveDirectionsUsage:true}:{providerRejectsFreeOverage:true}),
+    usedBeforeWindow:{directions:b.monthlyApproval.usedBeforeWindow.directions,waypoints:b.monthlyApproval.usedBeforeWindow.waypoints},
+    dailyUsage:structuredClone(b.monthlyApproval.dailyUsage)
+   };
    const bytes=Buffer.from(JSON.stringify(clean));if(bytes.length>32768)fail('ROAD_BUDGET_FORMAT');
    const response=await request(file,{method:'PUT',body:JSON.stringify({message:'Reserve approved Production free Directions call',branch,sha,content:bytes.toString('base64')})});
    if([409,422].includes(response.status))fail('ROAD_BUDGET_CONFLICT');if(!response.ok)fail('ROAD_BUDGET_WRITE');

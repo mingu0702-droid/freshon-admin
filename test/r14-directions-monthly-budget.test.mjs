@@ -52,6 +52,22 @@ test('basic-only approval keeps waypoints closed after KST rollover and preserve
  assert.equal(r.state.roadBudget.used,10);
  await denyWaypoints(budget(r,next));assert.equal(r.writes,1);
 });
+test('verified hard free-only directions keep the observed call and continue without an exclusive-use claim',async()=>{
+ const state=ledger(),b=state.roadBudget;
+ b.approvedApis=['directions'];b.apis.directions.freeRemainingAtApproval=9999;b.providerDailyUsedAtApproval={directions:1};
+ delete b.monthlyApproval.exclusiveDirectionsUsage;b.monthlyApproval.providerRejectsFreeOverage=true;
+ const r=remote(state);
+ assert.deepEqual((await budget(r,start).status()).apiRemaining,{directions:9997,waypoints:0});
+ await reserve(budget(r,next));
+ assert.deepEqual(r.state.roadBudget.providerDailyUsedAtApproval,{directions:1});
+ assert.equal(r.state.roadBudget.monthlyApproval.providerRejectsFreeOverage,true);
+ assert.equal(r.state.roadBudget.monthlyApproval.exclusiveDirectionsUsage,undefined);
+ assert.deepEqual((await budget(r,next).status()).apiRemaining,{directions:9999,waypoints:0});
+ for(const mutate of [v=>delete v.providerDailyUsedAtApproval,v=>v.providerDailyUsedAtApproval.directions=2,v=>v.approvedApis.push('waypoints'),v=>v.providerPaidDisabled=false]){
+  const invalid=structuredClone(state);mutate(invalid.roadBudget);
+  await assert.rejects(budget(remote(invalid),next).status());
+ }
+});
 test('no monthly inference, no month reset and no unverified usage/accounting upgrade',async()=>{
  for(const mutate of [b=>delete b.monthlyApproval,b=>b.monthlyApproval.exclusiveDirectionsUsage=false,b=>b.monthlyApproval.period='2026-10',b=>b.monthlyApproval.usedBeforeWindow.directions=0,b=>b.monthlyApproval.dailyUsage['2026-11-04']={directions:10001,waypoints:0},b=>b.providerPaidDisabled=false,b=>b.servicePermissionVerified=false,b=>b.expiresAt='2026-12-02T00:00:00Z']){
   const state=ledger();mutate(state.roadBudget);const r=remote(state);await assert.rejects(reserve(budget(r,next)));assert.equal(r.writes,0);

@@ -42,7 +42,7 @@ test('verified proof reserves exactly one fixed public call across concurrent in
   };
   const attempts = await Promise.allSettled([runDiagnostic(options), runDiagnostic(options)]);
   assert.equal(sends, 1);
-  assert.deepEqual(attempts.find(attempt => attempt.status === 'fulfilled').value, {state: 'FINISHED', providerHttp: 200, geometryVerified: true});
+  assert.deepEqual(attempts.find(attempt => attempt.status === 'fulfilled').value, {state: 'FINISHED', providerHttp: 200, geometryVerified: true, resultCode: 0, distanceMeters: 1000, durationSeconds: 300});
   assert.equal(attempts.find(attempt => attempt.status === 'rejected').reason.code, 'DIAGNOSTIC_ALREADY_RESERVED');
   const stored = await readFile(options.receiptPath, 'utf8');
   assert(!stored.includes(key) && !stored.includes('vertexes'));
