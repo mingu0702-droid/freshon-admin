@@ -748,18 +748,26 @@
   }
 
   function ensureDateVehicles() {
-    const known = new Set(vehicleChecks().map((input) => input.value));
-    [...new Set(allStores.flatMap((row) => [row.baseVehicle, row.vehicle, ...(row.history || []).map(item => item.vehicle)]).filter(Boolean))].forEach((vehicle) => {
+    const known = new Set(vehicleChecks().map(input => input.value));
+    const vehicles = new Set();
+    const baseGroups = new Map();
+    for (const row of allStores) {
+      if (row.baseVehicle) vehicles.add(row.baseVehicle);
+      if (row.vehicle) vehicles.add(row.vehicle);
+      for (const item of row.history || []) if (item.vehicle) vehicles.add(item.vehicle);
+      if (row.baseVehicleGroup && !baseGroups.has(row.baseVehicle)) baseGroups.set(row.baseVehicle, row.baseVehicleGroup);
+    }
+    vehicles.forEach(vehicle => {
       if (known.has(vehicle)) return;
       const label = document.createElement("label");
       label.className = "vehicleItem";
-      label.dataset.group=allStores.find(row=>row.baseVehicle===vehicle&&row.baseVehicleGroup)?.baseVehicleGroup||'';
+      label.dataset.group=baseGroups.get(vehicle)||'';
       label.innerHTML = `<input type="checkbox" value="${esc(vehicle)}"><span class="vehicleNo">${esc(vehicleLabel(vehicle))}</span><span class="vehicleArea"></span>`;
       label.querySelector("input").onchange = () => applyVehicleFilter(selectedVehicles());
       $("#vehicleList").append(label);
       ["#vehicle", "#mobileVehicle", "#operationVehicle", "#mobileBaseVehicle"].forEach((id) => $(id).add(new Option(`${vehicleLabel(vehicle)}`, vehicle)));
     });
-    $$('.vehicleItem').forEach(label=>{const group=allStores.find(row=>row.baseVehicle===label.querySelector('input')?.value&&row.baseVehicleGroup)?.baseVehicleGroup;if(group)label.dataset.group=group;});
+    $$('.vehicleItem').forEach(label=>{const group=baseGroups.get(label.querySelector('input')?.value);if(group)label.dataset.group=group;});
     sortVehicleControls();
   }
 
@@ -1901,9 +1909,14 @@
     cancelAddressLookup();closeUnifiedSearchResults();setSearchState('검색 중',true);
     unifiedSearchController=new AbortController();const signal=unifiedSearchController.signal;
     const code=/^[A-Z]\d{3,}$/i.test(text)?text.toUpperCase():null;
-    const local=rankSearchRows([...periodRows,...latestSnapshotRows,...allStores],text);
-    const exact=code&&local.find(row=>row.customerCode===code);
-    if(exact){selectUnifiedSearchStore(exact,{owner});return;}
+    const sources=[periodRows,latestSnapshotRows,allStores];
+    if(code){
+      for(const source of sources){
+        const exact=source.find(row=>String(row.customerCode||row.code||row.id||'').trim()===code);
+        if(exact){selectUnifiedSearchStore(normalizeApiStore(exact),{owner});return;}
+      }
+    }
+    const local=rankSearchRows(sources.flat(),text);
     if(local.length>1)renderResults(local.slice(0,40),{owner});
     let remote=[],meta=null,lookupError=null;
     try{
