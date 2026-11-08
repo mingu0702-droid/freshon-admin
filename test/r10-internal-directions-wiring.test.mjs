@@ -5,6 +5,8 @@ import express from 'express';
 import {fileURLToPath} from 'node:url';
 import {mountProductionOpsmapCandidate} from '../src/productionOpsmapCandidate.js';
 import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
+import '../public/opsmap/manual-road-route-ui.js';
+import '../public/opsmap/road-route-ui.js';
 const origin='https://production.synthetic.test',key='synthetic-rest-key';
 const realFetch=globalThis.fetch;
 async function fixture(extra={}){
@@ -21,7 +23,7 @@ async function fixture(extra={}){
    if(options.method==='PUT'){const update=JSON.parse(options.body);assert.equal(update.branch,'production/opsmap-auth');assert.equal(update.sha,String(revision).padStart(40,'0'));state=JSON.parse(Buffer.from(update.content,'base64'));revision++;return response({});}
    return state?response({sha:String(revision).padStart(40,'0'),encoding:'base64',content:Buffer.from(JSON.stringify(state)).toString('base64')}):response({},404);
   }
-  if(url.startsWith('https://apis-navi.kakaomobility.com/v1/directions?'))return response({routes:[{result_code:0,summary:{distance:100,duration:60},sections:[{distance:100,duration:60,roads:[{vertexes:[127,37,127.01,37.01]}]}]}]},extra.providerHttp??200);
+  if(url.startsWith('https://apis-navi.kakaomobility.com/v1/directions?'))return response(extra.providerPayload??{routes:[{result_code:0,summary:{distance:100,duration:60},sections:[{distance:100,duration:60,roads:[{vertexes:[127,37,127.01,37.01]}]}]}]},extra.providerHttp??200);
   assert.fail('Unexpected synthetic outbound surface');
  };
  try{mountProductionOpsmapCandidate(app,{env,publicDir:fileURLToPath(new URL('../public/',import.meta.url)),sessionStore:{get:async k=>sessions.get(k),set:async(k,v)=>sessions.set(k,v),touch:async(k,v)=>{if(!sessions.has(k))return false;sessions.set(k,v);return true;},delete:async k=>sessions.delete(k)},readPhase2bSnapshot:async()=>snapshot,getSnapshotMemory:()=>snapshot,phase2bKstDate:()=> '2026-11-03',normalizeCell:v=>String(v||''),normalizeDateValue:v=>v,phase2bSnapshotMeta:()=>({}),phase2bTodayStatus:async()=>({vehicles:[]}),callHub:async action=>assert.fail('Hub call forbidden: '+action)});}finally{globalThis.fetch=realFetch;}
@@ -53,4 +55,56 @@ test('provider rejection status differs from the local quota refusal after reser
   const exhausted=await f.route(2);assert.equal(exhausted.status,429);assert.deepEqual(await exhausted.json(),{ok:false,error:'QUOTA_EXCEEDED',providerHttp:null});
   assert.equal(f.state.roadBudget.used,1);assert.equal(f.calls.filter(c=>c.url.startsWith('https://apis-navi.')).length,1);
  }finally{await f.close();}
+});
+
+test('complete Kakao route keeps the 16-second excess in the destination ETA', async () => {
+ const draft = {
+  mode: 'MANUAL_WAYPOINTS',
+  origin: {id:'o',lat:37,lng:127},
+  waypoints: [{id:'w',lat:37.01,lng:127.01,order:1}],
+  destination: {id:'d',lat:37.02,lng:127.02}
+ };
+ // The production failure had two sections, matching distance, and a 16-second time difference.
+ const route = {
+  result_code: 0,
+  summary: {distance:200,duration:76},
+  sections: [
+   {distance:100,duration:30,roads:[{vertexes:[127,37,127.01,37.01]}]},
+   {distance:100,duration:30,roads:[{vertexes:[127.01,37.01,127.02,37.02]}]}
+  ]
+ };
+ const f = await fixture({ledger:true,providerPayload:{routes:[route]},
+  env:{OPSMAP_ROAD_BUDGET_STORE_ENABLED:'1',OPSMAP_PRODUCTION_ROAD_ROUTE_ENABLED:'1'}});
+ try {
+  let postedStatus;
+  const controller = globalThis.ManualRoadRouteUi.createController({
+   fetchImpl: async (path, options) => {
+    const response = await realFetch(f.base+path,{...options,headers:f.headers});
+    postedStatus = response.status;
+    return response;
+   },
+   onChange: () => {}
+  });
+  const result = await controller.load(draft);
+  assert.equal(postedStatus,200);
+  assert.equal(result?.state,'success');
+  assert.equal(result.durationSeconds,76);
+  assert.deepEqual(result.legs.map(leg=>leg.durationSeconds),[30,30]);
+  assert.deepEqual(globalThis.RoadRouteUi.metrics(result),{distance:'0.2 km',duration:'2분'});
+  assert.deepEqual(globalThis.RoadRouteUi.roadSegments(result).map(part=>part.latLngs),[
+   [[37,127],[37.01,127.01]], [[37.01,127.01],[37.02,127.02]]
+  ]);
+  assert.equal(f.state.roadBudget.used,1);
+  const tooShort = {...route,summary:{...route.summary,duration:57}};
+  assert.throws(()=>globalThis.KakaoDirectionsAdapter.fromProvider({routes:[tooShort]},draft),{validationCheck:'DURATION_SUM'});
+  let rejected;
+  const badController = globalThis.ManualRoadRouteUi.createController({
+   fetchImpl: async()=>Response.json({ok:true,data:{...result,durationSeconds:57}}),
+   onChange: state=>{rejected=state;}
+  });
+  await badController.load(draft);
+  assert.equal(rejected?.state,'error');
+ } finally {
+  await f.close();
+ }
 });

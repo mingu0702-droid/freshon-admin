@@ -50,7 +50,19 @@
           }
           if(!successful||nextLeg!==legs||covered.size!==data.coveredLegs||data.distanceMeters>=1500000)throw Error('INVALID_RESPONSE');
           if(stationary.length&&(!Array.isArray(data.legs)||allStationary&&(data.distanceMeters!==0||data.durationSeconds!==0)))throw Error('INVALID_RESPONSE');
-          if(data.legs!==undefined){if(!Array.isArray(data.legs)||data.legs.length!==data.coveredLegs)throw Error('INVALID_RESPONSE');const indexes=new Set();let distance=0,duration=0;for(const leg of data.legs){if(!covered.has(leg?.index)||indexes.has(leg.index)||![leg.distanceMeters,leg.durationSeconds].every(n=>Number.isSafeInteger(n)&&n>=0)||stationarySet.has(leg.index)&&(leg.distanceMeters!==0||leg.durationSeconds!==0))throw Error('INVALID_RESPONSE');indexes.add(leg.index);distance+=leg.distanceMeters;duration+=leg.durationSeconds;}if(Math.abs(distance-data.distanceMeters)>legs||Math.abs(duration-data.durationSeconds)>legs)throw Error('INVALID_RESPONSE');}
+          if(data.legs!==undefined){
+            if(!Array.isArray(data.legs)||data.legs.length!==data.coveredLegs)throw Error('INVALID_RESPONSE');
+            const indexes=new Set();let distance=0,duration=0;
+            for(const leg of data.legs){
+              if(!covered.has(leg?.index)||indexes.has(leg.index)||![leg.distanceMeters,leg.durationSeconds].every(n=>Number.isSafeInteger(n)&&n>=0)||stationarySet.has(leg.index)&&(leg.distanceMeters!==0||leg.durationSeconds!==0))throw Error('INVALID_RESPONSE');
+              indexes.add(leg.index);distance+=leg.distanceMeters;duration+=leg.durationSeconds;
+            }
+            const durationDelta=duration-data.durationSeconds;
+            const invalidDuration=full&&data.source==='kakao-directions'
+              ? !Number.isSafeInteger(data.durationSeconds)||durationDelta>legs
+              : Math.abs(durationDelta)>legs;
+            if(Math.abs(distance-data.distanceMeters)>legs||invalidDuration)throw Error('INVALID_RESPONSE');
+          }
         }
         blocked=[data.error,...(data.chunks||[]).map(chunk=>chunk.error)].find(code=>terminal.has(code))||null;
         onChange(data);return data;

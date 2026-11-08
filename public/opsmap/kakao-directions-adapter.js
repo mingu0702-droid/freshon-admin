@@ -65,7 +65,8 @@
   const distanceDeltaMeters=sumDistance-distance,durationDeltaSeconds=sumDuration-duration;
   const totals={distanceDeltaMeters,durationDeltaSeconds,allowedDelta:expectedSectionCount};
   if(Math.abs(distanceDeltaMeters)>expectedSectionCount)fail('INCOMPLETE_ROAD_ROUTE','DISTANCE_SUM',totals);
-  if(Math.abs(durationDeltaSeconds)>expectedSectionCount)fail('INCOMPLETE_ROAD_ROUTE','DURATION_SUM',totals);
+  // Kakao's destination ETA can exceed the sum of the individual section times.
+  if(durationDeltaSeconds>expectedSectionCount)fail('INCOMPLETE_ROAD_ROUTE','DURATION_SUM',totals);
   return {...base,state:'success',complete:true,coveredLegs:totalLegs,distanceMeters:distance,durationSeconds:duration,legs,chunks:[{state:'success',startLeg:0,endLeg:totalLegs-1,geometry}]};
  }
  const httpError=status=>status===401?'STAFF_LOGIN_REQUIRED':status===403?'PERMISSION_DENIED':status===429?'QUOTA_EXCEEDED':status===504?'TIMEOUT':status>=500?'PROVIDER_UNAVAILABLE':status===404?'FEATURE_DISABLED':'ROAD_ROUTE_FAILED';
