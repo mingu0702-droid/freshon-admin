@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { addStaffTiming } from '../opsmap-abc/staffLatency.js';
+
 const ROOT = '/api/map-phase2b/private/shadow-coverage';
 const CENTERS = ['all', 'osan', 'yeongnam', 'honam'];
 
@@ -32,17 +35,20 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
   })();
   // Stage already authenticates the prefix and rechecks every JSON response.
   const entry = staffResponseGuarded ? [] : [requireStaff];
-  const route = (suffix, parse, handle) => app.get(ROOT + suffix, ...entry, async (req, res) => {
+  const sendData = (res, data) => res.json({ ok: true, data });
+  const route = (suffix, parse, handle, reply = sendData) => app.get(ROOT + suffix, ...entry, async (req, res) => {
     res.set('Cache-Control', 'private, no-store').vary('Cookie');
     const scope = criteria(req.query);
     const args = scope && parse(req);
     if (!args) return res.status(400).json({ ok: false, error: 'COVERAGE_QUERY_INVALID' });
     try {
+      const started = performance.now();
       const ready = await load();
       if (res.destroyed || res.writableEnded) return;
       const result = await handle(scope, args, ready);
+      if (suffix === '/view') addStaffTiming(res, 'coverage', performance.now() - started);
       if (res.destroyed || res.writableEnded) return;
-      const send = () => res.set('Cache-Control', 'private, no-store').json({ ok: true, data: result });
+      const send = () => reply(res.set('Cache-Control', 'private, no-store'), result);
       return staffResponseGuarded ? send() : requireStaff(req, res, send);
     } catch (error) {
       if (res.destroyed || res.writableEnded) return;
@@ -63,10 +69,16 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     }
     const coords = box.split(',');
     const bounds = coords.length === 4 && coords.every(v => /^-?\d+(?:\.\d+)?$/.test(v)) ? coords.map(Number) : null;
-    return bounds && { bounds, level: Number(level) };
-  }, async ({ days, center }, { bounds, level }, { reader, model }) => {
+    const tag = req.get('X-Coverage-View-Tag');
+    return bounds && { bounds, level: Number(level), tag: /^"coverage-[a-f0-9]{64}"$/.test(tag) ? tag : null };
+  }, async ({ days, center }, { bounds, level, tag }, { reader, model }) => {
     if (!model.boundsOf(bounds)) throw Error('COVERAGE_QUERY_INVALID');
-    const data = await reader.readPeriod(days);
+    const data = await reader.readPeriod(days, undefined, { recheck: tag !== null });
+    const { window, index, stale } = data;
+    const preservedMap = (await Promise.resolve().then(readPreservedMap).catch(() => null)) ?? null;
+    const version = createHash('sha256').update(JSON.stringify([1, index.sha256, stale, preservedMap, days, center, bounds, level])).digest('hex');
+    const etag = '"coverage-' + version + '"';
+    if (etag === tag) return { etag, data: null };
     let resolution = resolutionFor(level);
     let view = reader.viewFor(data, center, resolution);
     let visible = model.viewportCells(view, bounds);
@@ -75,9 +87,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       view = reader.viewFor(data, center, resolution);
       visible = model.viewportCells(view, bounds);
     }
-    const { window, index, stale } = data;
     const nationwide = resolution === model.BASE_RESOLUTION ? view : reader.viewFor(data, center, model.BASE_RESOLUTION);
-    const preservedMap = await Promise.resolve().then(readPreservedMap).catch(() => null);
     const candidateList = model.coverageList(nationwide);
     if (readDirectory && !measuredView) {
       measuredView = true;
@@ -86,7 +96,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
         maxRssMiB: Math.round(process.resourceUsage().maxRSS / 1024)
       }));
     }
-    return {
+    const result = {
       generation: index.sha256,
       kind: index.kind,
       stale,
@@ -101,12 +111,16 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       summary: nationwide.summary,
       summaryResolution: model.BASE_RESOLUTION,
       viewportSummary: visible.summary,
-      preservedMap: preservedMap ?? null,
+      preservedMap,
       candidateList,
       resolution,
       truncated: visible.overflow,
       cells: visible.cells
     };
+    return { etag, data: result };
+  }, (res, { etag, data }) => {
+    res.set('ETag', etag);
+    return data ? sendData(res, data) : res.json({ ok: true, unchanged: true });
   });
 
   route('/list', req => {

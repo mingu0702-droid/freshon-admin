@@ -108,8 +108,8 @@ export function createShadowCoverageStore({ directory, appRoot = process.cwd(), 
   const blobs = new Map(), views = new Map(), pending = new Map();
   let folder, active, previous, lastGood, checkPromise, checkedAt = -Infinity, tail = Promise.resolve(), cacheBytes = 0, reads = 0;
 
-  async function checkIndexes() {
-    if (now() - checkedAt < recheckMs) return;
+  async function checkIndexes(recheck) {
+    if (!recheck && now() - checkedAt < recheckMs) return;
     if (!checkPromise) {
       checkPromise = (async () => {
         folder ||= await privateCoverageDirectory(directory, appRoot);
@@ -159,8 +159,8 @@ export function createShadowCoverageStore({ directory, appRoot = process.cwd(), 
     }
   }
 
-  async function readPeriod(days, expectedGeneration) {
-    await checkIndexes();
+  async function readPeriod(days, expectedGeneration, { recheck = false } = {}) {
+    await checkIndexes(recheck);
     const candidates = [...new Set([active, lastGood, previous].filter(Boolean))];
     for (const index of candidates) {
       if (expectedGeneration && index.sha256 !== expectedGeneration) continue;

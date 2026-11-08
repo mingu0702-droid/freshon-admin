@@ -1,9 +1,10 @@
-import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261109-field-analysis';
+import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261109-shadow-reentry';
 
 const API = '/api/map-phase2b/private/shadow-coverage';
 const STATUS = { DELIVERED: '관측 배송 이력', CANDIDATE: '관측기간 미배송 후보', EMPTY: '검증 범위 내 공백', UNKNOWN: '자료 부족' };
 const LIST_TITLES = { candidate: STATUS.CANDIDATE, delivery: '배송 이력 격자', review: '자료 부족 격자' };
 const fmt = value => Number(value || 0).toLocaleString('ko-KR');
+const VIEW_TAG = /^"coverage-[a-f0-9]{64}"$/;
 const time = new Intl.DateTimeFormat('ko-KR', {
   timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
 });
@@ -121,6 +122,7 @@ export function createCoveragePanel({ workspace, header }) {
   const requests = new Map();
   let map, baseMap, active = false, mapOwner = 0, timer, view = null, selected = null, pendingView = null;
   let days = 90, center = 'all', loadedCenter = 'all', lastKey = '', failedKey = '';
+  let viewTag = '', viewSession = null, openedAt = 0;
   let list = null, listKey = '', listOffset = 0, searchOwner, addressProxy;
   const resize = new ResizeObserver(entries => {
     if (!active) return;
@@ -150,15 +152,18 @@ export function createCoveragePanel({ workspace, header }) {
 
   async function startMap(retryFailed = false) {
     const owner = ++mapOwner;
-    showMapState('음영권역 지도를 불러오고 있습니다.');
+    const reopening = Boolean(map);
     try {
-      const { maps } = await window.KakaoMapsAdapter.ready({ retryFailed });
-      if (!active || owner !== mapOwner) return;
-      baseMap ||= new maps.Map(host, { center: new maps.LatLng(36.8, 127.2), level: 11 });
-      map = createCoverageMap(baseMap, maps, { idle: scheduleView, select: id => void selectCell(id) });
+      if (!map) {
+        showMapState('음영권역 지도를 불러오고 있습니다.');
+        const { maps } = await window.KakaoMapsAdapter.ready({ retryFailed });
+        if (!active || owner !== mapOwner) return;
+        baseMap ||= new maps.Map(host, { center: new maps.LatLng(36.8, 127.2), level: 11 });
+        map = createCoverageMap(baseMap, maps, { idle: scheduleView, select: id => void selectCell(id), enabled: () => active });
+      }
       baseMap.relayout();
       searchButton.disabled = false;
-      await loadView();
+      await loadView(false, reopening);
     } catch {
       if (active && owner === mapOwner) {
         showMapState('지도를 불러오지 못했습니다.', () => void startMap(true));
@@ -184,6 +189,7 @@ export function createCoveragePanel({ workspace, header }) {
     requests.set(name, controller);
     try {
       const url = API + path + '?' + new URLSearchParams(params);
+      const started = performance.now();
       const response = await fetch(url, {
         credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
         headers
@@ -191,8 +197,12 @@ export function createCoveragePanel({ workspace, header }) {
       if (!response.ok) throw Object.assign(Error('COVERAGE_REQUEST_FAILED'), { status: response.status });
       const payload = await response.json();
       if (!active || requests.get(name) !== controller) return null;
-      if (payload?.ok !== true || !payload.data) throw Error('COVERAGE_RESPONSE_INVALID');
-      return payload.data;
+      const unchanged = name === 'view' && payload?.unchanged === true;
+      if (payload?.ok !== true || (!unchanged && !payload.data)) throw Error('COVERAGE_RESPONSE_INVALID');
+      if (name !== 'view') return payload.data;
+      const timing = Object.fromEntries((response.headers.get('server-timing') || '').split(',').map(item => item.trim().split(';dur=')));
+      return { data: payload?.data, tag: response.headers.get('etag'), unchanged, requestMs: performance.now() - started,
+        serverMs: Number(timing.total) || null, sessionMs: Number(timing.session) || null, analysisMs: Number(timing.coverage) || null };
     } catch (error) {
       if (!active || requests.get(name) !== controller) return null;
       throw error;
@@ -323,36 +333,71 @@ export function createCoveragePanel({ workspace, header }) {
     paint();
   }
 
-  async function loadView(force = false) {
+  function currentSession() {
+    const session = window.MapStaffEntry?.session();
+    return session?.authenticated && Date.now() < Math.min(session.expiresAt, session.idleExpiresAt) ? session.expiresAt : null;
+  }
+
+  function recordPaint(mode, started, query) {
+    const owner = mapOwner;
+    const painted = view;
+    requestAnimationFrame(() => {
+      if (!active || owner !== mapOwner || view !== painted) return;
+      const now = performance.now();
+      const requestMs = query?.requestMs || 0;
+      root.dataset.viewMetrics = JSON.stringify({ mode, displayMs: Math.round(now - openedAt),
+        setupMs: Math.round(Math.max(0, started - openedAt - requestMs)), requestMs: Math.round(requestMs),
+        serverMs: query?.serverMs ?? null, sessionMs: query?.sessionMs ?? null, analysisMs: query?.analysisMs ?? null,
+        transferMs: query?.serverMs ? Math.round(Math.max(0, requestMs - query.serverMs)) : null,
+        renderMs: Math.round(now - started) });
+    });
+  }
+
+  async function loadView(force = false, reopening = false) {
     if (!active || !map) return;
     const viewport = map.viewport();
     const box = viewport.box.map(value => value.toFixed(5)).join(',');
     const key = [days, center, viewport.level, box].join(':');
     if (key === pendingView?.key) return;
-    if (!force && (key === lastKey || key === failedKey)) {
+    if (!force && !reopening && (key === lastKey || key === failedKey)) {
       abort('view');
       pendingView = null;
       return;
     }
     const request = pendingView = { key };
     const wantedCenter = center;
+    const tag = reopening && key === lastKey && viewSession !== null && viewSession === currentSession() ? viewTag : '';
+    if (tag) recordPaint('cached', performance.now());
+    else if (reopening && view) resetView();
     if (!view) showMapState('분석 격자를 불러오고 있습니다.');
     try {
-      const data = await read('view', '/view', { days, center, box, level: viewport.level });
-      if (!data || pendingView !== request) return;
+      const result = await read('view', '/view', { days, center, box, level: viewport.level }, tag ? { 'X-Coverage-View-Tag': tag } : undefined);
+      if (!result || pendingView !== request) return;
+      if (result.unchanged) {
+        if (!tag || result.tag !== tag || viewSession !== currentSession()) throw Error('COVERAGE_REVALIDATION_INVALID');
+        root.dataset.viewValidation = 'unchanged';
+        return;
+      }
+      const data = result.data;
       if (!Array.isArray(data.cells) || data.cells.length > 360) throw Error('COVERAGE_VIEW_INVALID');
+      const started = performance.now();
       if (view && (view.generation !== data.generation || view.period.days !== data.period.days || loadedCenter !== wantedCenter)) {
         clearSelection();
         if (view.generation !== data.generation) clearSearch();
       }
       view = data;
+      viewTag = VIEW_TAG.test(result.tag) ? result.tag : '';
+      viewSession = currentSession();
       loadedCenter = wantedCenter;
       lastKey = key;
       failedKey = '';
       renderView(view);
       showMapState('');
-    } catch {
+      if (!root.dataset.viewMetrics || tag) recordPaint('fresh', started, result);
+      if (tag) root.dataset.viewValidation = 'updated';
+    } catch (error) {
       if (!active || pendingView !== request) return;
+      if (tag || error.status === 401 || error.status === 403) resetView();
       failedKey = key;
       if (view) {
         days = view.period.days;
@@ -589,12 +634,33 @@ export function createCoveragePanel({ workspace, header }) {
   find('coverageListPrevious').onclick = () => void loadList(Math.max(0, listOffset - 12));
   find('coverageListMore').onclick = () => { if (list?.next != null) void loadList(list.next); };
 
+  function resetView() {
+    view = list = null;
+    viewTag = lastKey = listKey = '';
+    viewSession = null;
+    listOffset = 0;
+    clearSelection();
+    clearSearch();
+    abort('list');
+    renderList();
+    evidence.replaceChildren();
+    status.textContent = '';
+    find('coverageBasis').textContent = '분석 기준일을 확인하고 있습니다.';
+    for (const id of ['coverageObserved', 'coveragePreserved', 'coverageGaps', 'coverageViewport']) find(id).textContent = '';
+    for (const stat of root.querySelectorAll('[data-metric]')) stat.textContent = '—';
+    delete root.dataset.viewMetrics;
+    delete root.dataset.viewValidation;
+  }
+
   return {
-    open() {
+    open(started) {
+      if (view && viewSession !== currentSession()) resetView();
+      openedAt = started;
+      delete root.dataset.viewMetrics;
+      delete root.dataset.viewValidation;
       active = true;
       root.hidden = false;
       sidebar.scrollTop = 0;
-      collapsePanel(false);
       filters();
       fitWorkspace();
       resize.observe(header);
@@ -603,40 +669,43 @@ export function createCoveragePanel({ workspace, header }) {
     },
     close() {
       active = false;
+      root.hidden = true;
       mapOwner++;
       resize.disconnect();
       clearTimeout(timer);
       clearSearch();
       for (const controller of requests.values()) controller.abort();
       requests.clear();
-      map?.destroy();
-      map = view = selected = null;
+      map?.suspend();
       pendingView = null;
-      lastKey = failedKey = '';
-      detail.hidden = root.hidden = true;
-      detail.replaceChildren();
-      searchResults.replaceChildren();
-      cellList.replaceChildren();
-      evidence.replaceChildren();
+      failedKey = '';
+      const resetList = selected || listOffset || find('coverageListFilter').value !== 'candidate';
+      clearSelection();
       find('coverageEvidence').open = false;
       find('coverageQuery').value = '';
       find('coverageRadius').value = '0';
-      days = 90;
-      center = 'all';
-      list = null;
-      listKey = '';
-      listOffset = 0;
-      find('coverageListFilter').value = 'candidate';
-      renderList();
-      status.textContent = '';
-      find('coverageBasis').textContent = '분석 기준일을 확인하고 있습니다.';
-      for (const id of ['coverageObserved', 'coveragePreserved', 'coverageGaps', 'coverageViewport']) find(id).textContent = '';
-      for (const stat of root.querySelectorAll('[data-metric]')) stat.textContent = '—';
+      if (resetList) {
+        find('coverageListFilter').value = 'candidate';
+        list = view?.candidateList || null;
+        listOffset = 0;
+        renderList();
+      }
       searchButton.disabled = true;
       showMapState('');
     },
+    invalidate() {
+      abort('view');
+      pendingView = null;
+      resetView();
+      if (active) void loadView(true);
+    },
     disposeMap() {
-      baseMap = null;
+      resetView();
+      map?.destroy();
+      map = baseMap = addressProxy = null;
+      days = 90;
+      center = 'all';
+      collapsePanel(false);
       host.replaceChildren();
     }
   };

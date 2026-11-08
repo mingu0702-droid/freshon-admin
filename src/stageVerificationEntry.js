@@ -194,7 +194,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     shadowCoverageEnabled:true,
     mountPrivateExtensions:binding=>{
       const {requireStaff}=binding;
-      mountShadowCoverage({...binding,directory:stage.OPSMAP_SHADOW_DATA_DIR,readDirectory:readShadowDirectory,
+      mountShadowCoverage({...binding,staffResponseGuarded:true,directory:stage.OPSMAP_SHADOW_DATA_DIR,readDirectory:readShadowDirectory,
         appRoot:fileURLToPath(new URL('../',import.meta.url)),
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
       manual.mount(binding);

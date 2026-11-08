@@ -19,7 +19,7 @@ function appearance(cell) {
   return cell.visits ? 'light' : 'none';
 }
 
-export function createCoverageMap(map, maps, { idle, select }) {
+export function createCoverageMap(map, maps, { idle, select, enabled }) {
   const svg = document.createElementNS(SVG, 'svg');
   svg.classList.add('coverage-overlay');
   svg.setAttribute('aria-hidden', 'true');
@@ -31,7 +31,7 @@ export function createCoverageMap(map, maps, { idle, select }) {
 
   function draw() {
     frame = undefined;
-    if (!anchor) return;
+    if (!anchor || !enabled()) return;
     const projection = overlay.getProjection();
     const origin = projection.pointFromCoords(anchor);
     svg.style.left = origin.x + 'px';
@@ -61,7 +61,7 @@ export function createCoverageMap(map, maps, { idle, select }) {
   // The SDK moves its overlay pane with the map. Same-scale pan only moves
   // the anchor; projecting all visible vertices is reserved for data/zoom.
   function schedule() {
-    if (frame === undefined) frame = requestAnimationFrame(draw);
+    if (enabled() && frame === undefined) frame = requestAnimationFrame(draw);
   }
   overlay.onAdd = function () { this.getPanels().overlayLayer.prepend(svg); };
   overlay.onRemove = () => svg.remove();
@@ -69,7 +69,7 @@ export function createCoverageMap(map, maps, { idle, select }) {
   overlay.setMap(map);
 
   function onMapClick(event) {
-    if (!event?.latLng) return;
+    if (!enabled() || !event?.latLng) return;
     const lat = event.latLng.getLat(), lng = event.latLng.getLng();
     const cell = cells.find(item => contains(item.boundary, lat, lng));
     if (cell) select(cell.id);
@@ -104,12 +104,24 @@ export function createCoverageMap(map, maps, { idle, select }) {
       }
     },
     render(value, highlight) {
+      if (!value.length && !highlight) {
+        svg.replaceChildren();
+        cells = renderedCells = EMPTY;
+        selected = renderedSelection = anchor = null;
+        return;
+      }
       if (value !== cells) {
         cells = value;
         anchor = map.getCenter();
       }
       selected = highlight;
       schedule();
+    },
+    suspend() {
+      cancelAnimationFrame(frame);
+      frame = undefined;
+      radiusCircle?.setMap(null);
+      radiusCircle = null;
     },
     destroy() {
       maps.event.removeListener(map, 'click', onMapClick);

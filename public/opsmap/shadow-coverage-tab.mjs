@@ -49,6 +49,7 @@ if (tabs && workspace && period && daily) {
     const available = window.KAKAO_MAP_CONFIG?.shadowCoverageEnabled === true && window.MapStaffEntry?.session();
     if (!available) {
       close();
+      panel?.disposeMap();
       tab.remove();
       return;
     }
@@ -64,12 +65,13 @@ if (tabs && workspace && period && daily) {
 
   tab.onclick = async () => {
     if (active || opening || !window.MapStaffEntry?.session()) return;
+    const started = performance.now();
     if (!panel) {
       const attempt = opening = {};
       tab.setAttribute('aria-busy', 'true');
       tab.textContent = '음영권역 불러오는 중';
       try {
-        const { createCoveragePanel } = await import('./shadow-coverage-panel.mjs?v=20261109-shadow-lazy');
+        const { createCoveragePanel } = await import('./shadow-coverage-panel.mjs?v=20261109-shadow-reentry');
         if (opening !== attempt || !tab.isConnected || !window.MapStaffEntry?.session()) return;
         panel = createCoveragePanel({ workspace, header });
       } catch {
@@ -107,16 +109,17 @@ if (tabs && workspace && period && daily) {
     document.body.classList.add('shadow-coverage-open');
     tab.setAttribute('aria-pressed', 'true');
     window.scrollTo(0, 0);
-    panel.open();
+    panel.open(started);
   };
 
   period.addEventListener('click', cancelOpening);
   daily.addEventListener('click', cancelOpening);
   window.addEventListener('map-shadow-coverage-capability', syncAvailability);
   window.addEventListener('map-staff-ready', syncAvailability);
-  window.addEventListener('pagehide', event => {
+  window.addEventListener('map-customer-registry-updated', () => panel?.invalidate());
+  window.addEventListener('pagehide', () => {
     close();
-    if (!event.persisted) panel?.disposeMap();
+    panel?.disposeMap();
   });
   window.MapStaffEntry?.registerPurge(() => {
     close();

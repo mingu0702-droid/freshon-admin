@@ -10,6 +10,7 @@ import { createShadowCoverageStore } from '../src/shadowCoverage/store.js';
 
 const [directory, output, mode] = process.argv.slice(2);
 const fieldAnalysis = mode === 'field-analysis';
+const reentry = mode === 'reentry';
 assert(path.isAbsolute(directory || '') && path.isAbsolute(output || ''));
 await fs.mkdir(output, { recursive: true });
 const stageOrigin = 'https://freshon-admin-stage-preview-template.onrender.com';
@@ -20,7 +21,7 @@ assert.equal(source.index.kind, 'OBSERVED');
 const date = source.index.asOf;
 const sample = source.catalog.stores.find(row => row.cell && row.address && row.name && row.code && row.registered);
 assert(sample);
-const result = { scope: (fieldAnalysis ? 'FIELD_ANALYSIS' : 'THIRD_TAB') + '_LOCAL_CHROMIUM_SDK_FIXTURE_REAL_PRIVATE_H3', base,
+const result = { scope: (reentry ? 'REENTRY' : fieldAnalysis ? 'FIELD_ANALYSIS' : 'THIRD_TAB') + '_LOCAL_CHROMIUM_SDK_FIXTURE_REAL_PRIVATE_H3', base,
   checks: [], errors: [], screenshots: [], requestsToStage: 0, providerCalls: 0, sourceWrites: 0 };
 function check(label, condition) {
   assert(condition, label);
@@ -133,7 +134,8 @@ async function open(width, { failView = false, failSdk = false, missingKey = fal
     const view = pathname.endsWith(shade + 'view');
     let held;
     if (view) {
-      views.push({ days: requestUrl.searchParams.get('days'), center: requestUrl.searchParams.get('center') });
+      views.push({ days: requestUrl.searchParams.get('days'), center: requestUrl.searchParams.get('center'),
+        conditional: Boolean(route.request().headers()['x-coverage-view-tag']) });
       held = holdNext;
       holdNext = null;
       if (failView) {
@@ -314,11 +316,12 @@ async function exercise(width) {
       restored.level === operating.level && restored.center.join() === operating.center.join() &&
       restored.vehicles.join() === operating.vehicles.join() && restored.markers === operating.markers &&
       !await page.locator('#shadowCoverage').isVisible());
+    const reopened = page.waitForResponse(response => viewPath(response) && response.ok());
     await toggle(page).click();
     session.releaseView();
-    await ready(page);
-    check(width + ' re-entry cancels stale response and loads default 90 days on the same analysis map',
-      views.at(-1).days === '90' && await page.locator('#coverageDays').inputValue() === '90' &&
+    await reopened;
+    check(width + ' re-entry cancels stale response and keeps the period on the same analysis map',
+      views.at(-1).days === '60' && await page.locator('#coverageDays').inputValue() === '60' &&
       await page.evaluate(() => __coverageFixture.maps() === 2));
 
     await daily(page).click();
@@ -486,10 +489,54 @@ async function checkFieldAnalysis(width) {
   } finally { await context.close(); }
 }
 
+async function checkReentry() {
+  const session = await open(1440);
+  const { page, context, views } = session;
+  try {
+    await page.waitForFunction(() => MapUiLocalBridge.isDataReady() && Boolean(MapUiLocalBridge.state.map));
+    await toggle(page).click();
+    await ready(page);
+    await page.locator('#coverageDays').selectOption('60');
+    await page.waitForFunction(() => document.getElementById('coverageObserved').textContent.includes('/60일'));
+    await page.evaluate(() => { window.__verifiedCoveragePath = document.querySelector('#coverageMap .coverage-overlay path'); });
+    await general(page).click();
+    const requests = views.length;
+    session.holdNextView();
+    await toggle(page).click();
+    await page.waitForFunction(() => JSON.parse(document.getElementById('shadowCoverage').dataset.viewMetrics || '{}').mode === 'cached');
+    check('same-scope re-entry paints the verified SVG before the server answers',
+      await page.locator('#coverageDays').inputValue() === '60' &&
+      await page.evaluate(() => window.__verifiedCoveragePath === document.querySelector('#coverageMap .coverage-overlay path')));
+    session.releaseView();
+    await page.locator('#shadowCoverage[data-view-validation="unchanged"]').waitFor();
+    check('same-scope re-entry performs one version validation', views.length === requests + 1 && views.at(-1).conditional);
+    await general(page).click();
+    await page.evaluate(() => window.dispatchEvent(new Event('map-customer-registry-updated')));
+    await toggle(page).click();
+    await ready(page);
+    check('a changed original registry invalidates the view before re-entry', views.length === requests + 2 &&
+      !views.at(-1).conditional && views.at(-1).days === '60');
+    await general(page).click();
+    await page.locator('#staffLogout').click();
+    await page.waitForFunction(() => document.body.dataset.mapStaffState === 'signed-out' &&
+      !document.querySelector('#coverageMap .coverage-overlay') && document.getElementById('coverageObserved').textContent === '');
+    await page.locator('#mapStaffEntry input[name=username]').fill('coverage-local-fixture');
+    await page.locator('#mapStaffEntry input[name=password]').fill(password);
+    await page.locator('#mapStaffEntry button[type=submit]').click();
+    await page.waitForFunction(() => document.body.dataset.mapStaffState === 'authenticated');
+    await toggle(page).click();
+    await ready(page);
+    check('logout purges the hidden analysis and the next session reads its own view', !views.at(-1).conditional &&
+      views.at(-1).days === '90');
+  } finally { await context.close(); }
+}
+
 try {
   browser = await chromium.launch({ headless: true,
     executablePath: process.env.OPSMAP_TEST_CHROMIUM || 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
-  if (fieldAnalysis) {
+  if (reentry) {
+    await checkReentry();
+  } else if (fieldAnalysis) {
     await checkFieldAnalysis(1440);
     await checkFieldAnalysis(390);
   } else {
@@ -506,7 +553,7 @@ try {
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
-  await fs.writeFile(path.join(output, (fieldAnalysis ? 'field-analysis' : 'third-tab') + '-browser.json'), JSON.stringify(result, null, 2));
+  await fs.writeFile(path.join(output, (reentry ? 'reentry' : fieldAnalysis ? 'field-analysis' : 'third-tab') + '-browser.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ scope: result.scope, checks: result.checks.length, errors: result.errors, failure: result.failure }));
   if (failed) process.exitCode = 1;
 }

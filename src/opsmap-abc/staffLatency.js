@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 
 const endpoints = new Set([
   '/api/map-phase2b/auth/login', '/api/map-phase2b/auth/session', '/api/map-phase2b/auth/logout',
+  '/api/map-phase2b/private/shadow-coverage/view',
   '/api/map-phase2b/private/customer-detail', '/api/map-phase2b/private/driver-history', '/api/map-phase2b/preview/detail', '/api/map-phase2b/preview/route-plan'
 ]);
 export function addStaffTiming(res, name, duration) {

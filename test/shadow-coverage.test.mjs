@@ -251,18 +251,22 @@ test('Stage serves existing routes while one archive restore is pending and caps
 test('the analytic endpoints enforce the existing staff gate and reject unbounded input', async () => {
   const app = express();
   const { catalog, days } = fixture();
-  let reads = 0;
+  let reads = 0, analyses = 0, rechecked = false, generation = proof, preservedMap = null;
   const reader = {
-    async readPeriod(period) {
+    async readPeriod(period, _generation, { recheck = false } = {}) {
       reads++;
+      rechecked = recheck;
       return { catalog, window: combineDays(end, period, days), stale: false, index: {
-        sha256: proof, kind: 'FIXTURE', sourceObservedAt: '2026-11-08T00:00:00Z', generatedAt: '2026-11-08T00:00:00Z'
+        sha256: generation, kind: 'FIXTURE', sourceObservedAt: '2026-11-08T00:00:00Z', generatedAt: '2026-11-08T00:00:00Z'
       } };
     },
-    viewFor: ({ catalog, window }, center, resolution) => prepareView(catalog, window, center, resolution)
+    viewFor: ({ catalog, window }, center, resolution) => {
+      analyses++;
+      return prepareView(catalog, window, center, resolution);
+    }
   };
   mountShadowCoverage({
-    app, store: reader,
+    app, store: reader, readPreservedMap: () => preservedMap,
     requireStaff: (req, res, next) => req.get('x-test-staff') === 'yes' ? next() : res.status(401).end()
   });
   const server = await new Promise(resolve => { const running = app.listen(0, '127.0.0.1', () => resolve(running)); });
@@ -274,12 +278,33 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
     for (const query of ['box=0,0,999,99', 'box=127,37,126,38', 'box=126,36,128,38&days=999']) {
       assert.equal((await fetch(url + '/view?' + query, options)).status, 400);
     }
-    const response = await fetch(url + '/view?days=90&level=4&box=126,36,128,38', options);
+    const viewUrl = url + '/view?days=90&level=4&box=126,36,128,38';
+    const response = await fetch(viewUrl, options);
     assert.match(response.headers.get('cache-control'), /private, no-store/);
     const { data } = await response.json();
     assert.equal(data.resolution, 8);
     assert(data.cells.length <= 360);
     assert(data.cells.every(cell => cell.boundary.length >= 5));
+    const etag = response.headers.get('etag');
+    const conditional = { headers: { ...options.headers, 'x-coverage-view-tag': etag } };
+    const previousAnalyses = analyses;
+    const unchanged = await fetch(viewUrl, conditional);
+    assert.equal(unchanged.status, 200);
+    assert.deepEqual(await unchanged.json(), { ok: true, unchanged: true });
+    assert.equal(analyses, previousAnalyses);
+    assert(rechecked);
+    assert.equal((await fetch(viewUrl, { headers: { 'x-coverage-view-tag': etag } })).status, 401);
+    const newScope = await fetch(viewUrl.replace('days=90', 'days=30'), conditional);
+    assert.equal(newScope.status, 200);
+    await newScope.json();
+    preservedMap = { count: 3, asOf: end };
+    const updatedSource = await fetch(viewUrl, conditional);
+    assert.equal(updatedSource.status, 200);
+    assert.deepEqual((await updatedSource.json()).data.preservedMap, preservedMap);
+    generation = 'b'.repeat(64);
+    const updatedCoverage = await fetch(viewUrl, { headers: { ...options.headers, 'x-coverage-view-tag': updatedSource.headers.get('etag') } });
+    assert.equal(updatedCoverage.status, 200);
+    assert.equal((await updatedCoverage.json()).data.generation, generation);
     const outside = await (await fetch(url + '/view?days=90&level=4&box=130,38,131,39', options)).json();
     assert.equal(outside.data.cells.length, 0);
     assert.equal(outside.data.summary.total, data.summary.total);
