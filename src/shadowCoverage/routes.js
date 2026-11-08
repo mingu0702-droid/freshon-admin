@@ -21,7 +21,7 @@ function resolutionFor(level) {
 }
 
 export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, staffResponseGuarded = false } = {}) {
-  let dependencies;
+  let dependencies, measuredView = false;
   const load = () => dependencies ??= (async () => {
     const folder = readDirectory ? await readDirectory() : directory;
     if (!store && !folder) throw Error('COVERAGE_DATA_UNAVAILABLE');
@@ -78,6 +78,14 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const { window, index, stale } = data;
     const nationwide = resolution === model.BASE_RESOLUTION ? view : reader.viewFor(data, center, model.BASE_RESOLUTION);
     const preservedMap = await Promise.resolve().then(readPreservedMap).catch(() => null);
+    const candidateList = model.coverageList(nationwide);
+    if (readDirectory && !measuredView) {
+      measuredView = true;
+      console.info('[opsmap-shadow] COVERAGE_FIRST_VIEW', JSON.stringify({
+        rssMiB: Math.round(process.memoryUsage().rss / 1048576),
+        maxRssMiB: Math.round(process.resourceUsage().maxRSS / 1024)
+      }));
+    }
     return {
       generation: index.sha256,
       kind: index.kind,
@@ -94,7 +102,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       summaryResolution: model.BASE_RESOLUTION,
       viewportSummary: visible.summary,
       preservedMap: preservedMap ?? null,
-      candidateList: model.coverageList(nationwide),
+      candidateList,
       resolution,
       truncated: visible.overflow,
       cells: visible.cells
