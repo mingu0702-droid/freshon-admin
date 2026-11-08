@@ -1,0 +1,183 @@
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import express from 'express';
+import { cellToLatLng, gridDisk, latLngToCell } from 'h3-js';
+import { buildShadowCoverage } from '../scripts/build-shadow-coverage.mjs';
+import { aggregateDay, cellDetail, combineDays, datesFor, prepareCatalog, prepareView, searchCoverage } from '../src/shadowCoverage/model.js';
+import { mountShadowCoverage } from '../src/shadowCoverage/routes.js';
+import { createShadowCoverageStore } from '../src/shadowCoverage/store.js';
+
+const end = '2026-11-07';
+const allDates = datesFor(end, 90);
+const proof = 'a'.repeat(64);
+const baseCell = latLngToCell(37.16, 127.1, 8);
+const [blue, orange, gray, purple] = gridDisk(baseCell, 1);
+const names = [
+  ['T900001', '모의 한빛매장', blue, '경기도 오산시 모의로 1 한빛빌딩'],
+  ['T900002', '모의 정원매장', orange, '경기도 오산시 모의동 15-3'],
+  ['T900003', '모의 중앙매장', purple, '경기도 오산시 모의로 3']
+];
+const storeRows = names.map(([code, name, id, address]) => {
+  const [lat, lng] = cellToLatLng(id);
+  return { code, name, address, lat, lng, center: 'osan', registered: true, matchHash: proof };
+});
+const source = {
+  registryComplete: true, registryProofHash: proof, stores: storeRows,
+  scopes: [blue, orange, gray].map(id => ({ id, center: 'all', label: '모의 오산', proofHash: proof })),
+  regions: [{ name: '모의동', query: '모의동', bounds: [127, 37, 127.2, 37.3], location: cellToLatLng(blue) }]
+};
+const identity = value => crypto.createHash('sha256').update(value).digest('hex');
+const event = (id, vehicle, addressHash = proof) => [identity(id), 'T900001', vehicle, 'osan', addressHash];
+
+function raw(date, visits = [], completeCenters = ['osan', 'yeongnam', 'honam']) {
+  return { date, proof: 'VERIFIED_COMPLETE_DAY', proofHash: proof, completeCenters, sourceRows: visits.length, unidentified: 0, visits };
+}
+
+function fixture(change) {
+  const catalog = prepareCatalog(source);
+  const stores = new Map(catalog.stores.map(store => [store.code, store]));
+  const days = new Map(allDates.map((date, index) => {
+    const visits = [8, 47, 85].includes(index) ? [event(date, index === 8 ? '101' : '122')] : [];
+    return [date, aggregateDay(raw(date, visits), stores)];
+  }));
+  change?.(days, stores);
+  return { catalog, stores, days };
+}
+
+test('periods keep unique delivery counts and each confirmed vehicle for the same customer', () => {
+  const { catalog, days } = fixture();
+  assert.equal(datesFor(end, 90)[0], '2026-08-10');
+  assert.equal(datesFor(end, 60)[0], '2026-09-09');
+  assert.equal(datesFor(end, 30)[0], '2026-10-09');
+  for (const [period, count] of [[30, 1], [60, 2], [90, 3]]) {
+    const view = prepareView(catalog, combineDays(end, period, days), 'all', 8);
+    const detail = cellDetail(view, blue);
+    assert.equal(detail.visits, count);
+    assert.equal(detail.registered, 1);
+    assert.equal(detail.customers, 1);
+    assert.deepEqual(detail.stores[0].vehicles, period === 90 ? ['101', '122'] : ['122']);
+  }
+});
+
+test('negative classification requires geography, registry and all applicable days', () => {
+  const { catalog, days } = fixture();
+  let view = prepareView(catalog, combineDays(end, 90, days), 'all', 8);
+  assert.deepEqual([blue, orange, gray, purple].map(id => cellDetail(view, id).status),
+    ['DELIVERED', 'UNDLVRD', 'EMPTY', 'UNKNOWN']);
+  assert.equal(prepareView(catalog, combineDays(end, 90, days), 'all', 7).summary.undelivered, 0);
+  days.delete(allDates[0]);
+  view = prepareView(catalog, combineDays(end, 90, days), 'all', 8);
+  assert.equal(cellDetail(view, gray).status, 'UNKNOWN');
+  assert.equal(cellDetail(view, orange).candidate, false);
+  assert.equal(cellDetail(view, blue).status, 'DELIVERED');
+});
+
+test('observed center scope and changed addresses cannot create false empty cells', () => {
+  const { catalog, days, stores } = fixture((data, byCode) => {
+    data.set(end, aggregateDay(raw(end, [event('moved', '103', 'b'.repeat(64))], ['osan']), byCode));
+  });
+  assert.throws(() => aggregateDay(raw(end, [event('same', '101'), event('same', '122')]), stores), /DELIVERY|IDENTITY/);
+  const window = combineDays(end, 90, days);
+  assert.equal(window.unplaced.osan, 1);
+  assert.deepEqual(window.unverified.all, [end]);
+  assert.deepEqual(window.unverified.osan, []);
+  assert.equal(prepareView(catalog, window, 'all', 8).summary.undelivered, 0);
+  assert.equal(prepareView(catalog, window, 'yeongnam', 8).summary.visits, 0);
+});
+
+test('local search covers customer codes, stored street/lot/building names and region bounds', () => {
+  const { catalog, days } = fixture();
+  const view = prepareView(catalog, combineDays(end, 90, days), 'all', 8);
+  for (const query of ['T900001', '한빛매장', '모의로 1', '한빛빌딩']) {
+    const row = searchCoverage(catalog, view, query, 'all', 500)[0];
+    assert.equal(row.id, blue);
+    assert.equal(row.stats.visits, 3);
+    assert(row.stats.nearbyRegistered >= 1);
+  }
+  assert.equal(searchCoverage(catalog, view, '모의동 15-3', 'all')[0].id, orange);
+  assert(searchCoverage(catalog, view, '모의동', 'all').some(row => row.kind === 'region' && row.bounds));
+});
+
+test('daily shards are reused, duplicate reads share cache and restart uses previous verified data', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'opsmap-coverage-'));
+  const out = path.join(directory, 'compiled'), observed = path.join(directory, 'observed-days');
+  await fs.mkdir(observed);
+  await fs.writeFile(path.join(directory, 'stores.private.json'), JSON.stringify(source));
+  const writeDay = (date, visits) => fs.writeFile(path.join(observed, date + '.json'), JSON.stringify(raw(date, visits)));
+  const writeSource = stamp => fs.writeFile(path.join(directory, 'source-import.safe.json'),
+    JSON.stringify({ end, observedAt: stamp, sourceWrites: 0 }));
+  for (const date of allDates) await writeDay(date, date === end ? [event('first', '101')] : []);
+  await writeSource('2026-11-08T00:00:00Z');
+  const build = () => buildShadowCoverage({ inputDirectory: directory, outputDirectory: out, kind: 'FIXTURE', includeOfficialRegions: false });
+  const first = await build();
+  assert.equal(first.rebuiltDays, 90);
+  const noChange = await build();
+  assert.equal(noChange.reusedDays, 90);
+  assert.equal(noChange.index.sha256, first.index.sha256);
+  await writeDay(end, [event('first', '101'), event('next', '122')]);
+  await writeSource('2026-11-08T01:00:00Z');
+  const second = await build();
+  assert.equal(second.reusedDays, 89);
+  assert.equal(second.rebuiltDays, 1);
+  const store = createShadowCoverageStore({ directory: out, allowFixture: true, recheckMs: 0 });
+  const batch = await Promise.all(Array.from({ length: 12 }, () => store.readPeriod(90)));
+  assert(batch.every(data => data.window.completed === 2));
+  assert.equal(store.metrics().reads, 2);
+  for (const period of [30, 60, 90]) {
+    const value = await store.readPeriod(period);
+    for (const resolution of [4, 5, 6, 7, 8]) store.viewFor(value, 'all', resolution);
+  }
+  assert(store.metrics().blobs <= 4);
+  assert(store.metrics().views <= 2);
+  await fs.writeFile(path.join(out, second.index.windows[90].sha256 + '.json'), 'corrupt');
+  const restarted = createShadowCoverageStore({ directory: out, allowFixture: true });
+  const old = await restarted.readPeriod(90);
+  assert.equal(old.index.sha256, first.index.sha256);
+  assert.equal(old.window.completed, 1);
+  assert.equal(old.stale, true);
+  await assert.rejects(createShadowCoverageStore({ directory: out }).readPeriod(90), /UNAVAILABLE/);
+});
+
+test('the analytic endpoints enforce the existing staff gate and reject unbounded input', async () => {
+  const app = express();
+  const { catalog, days } = fixture();
+  let reads = 0;
+  const reader = {
+    async readPeriod(period) {
+      reads++;
+      return { catalog, window: combineDays(end, period, days), stale: false, index: {
+        sha256: proof, kind: 'FIXTURE', sourceObservedAt: '2026-11-08T00:00:00Z', generatedAt: '2026-11-08T00:00:00Z'
+      } };
+    },
+    viewFor: ({ catalog, window }, center, resolution) => prepareView(catalog, window, center, resolution)
+  };
+  mountShadowCoverage({
+    app, store: reader,
+    requireStaff: (req, res, next) => req.get('x-test-staff') === 'yes' ? next() : res.status(401).end()
+  });
+  const server = await new Promise(resolve => { const running = app.listen(0, '127.0.0.1', () => resolve(running)); });
+  const url = 'http://127.0.0.1:' + server.address().port + '/api/map-phase2b/private/shadow-coverage';
+  const options = { headers: { 'x-test-staff': 'yes' } };
+  try {
+    assert.equal((await fetch(url + '/view?box=126,36,128,38')).status, 401);
+    assert.equal(reads, 0);
+    for (const query of ['box=0,0,999,99', 'box=127,37,126,38', 'box=126,36,128,38&days=999']) {
+      assert.equal((await fetch(url + '/view?' + query, options)).status, 400);
+    }
+    const response = await fetch(url + '/view?days=90&level=4&box=126,36,128,38', options);
+    assert.match(response.headers.get('cache-control'), /private, no-store/);
+    const { data } = await response.json();
+    assert.equal(data.resolution, 8);
+    assert(data.cells.length <= 360);
+    assert(data.cells.every(cell => cell.boundary.length >= 5));
+    const outside = await (await fetch(url + '/view?days=90&level=4&box=130,38,131,39', options)).json();
+    assert.equal(outside.data.cells.length, 0);
+    assert.equal(outside.data.summary.total, data.summary.total);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});

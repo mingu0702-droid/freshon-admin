@@ -1,0 +1,82 @@
+.coverage-overlay {
+  --coverage-ink: #285899;
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 0;
+}
+.coverage-overlay path { fill: var(--coverage-ink); stroke: var(--coverage-ink); stroke-width: 1; stroke-opacity: .61 }
+.coverage-overlay [data-tone="none"] { fill-opacity: 0 }
+.coverage-overlay [data-tone="light"] { fill-opacity: .12 }
+.coverage-overlay [data-tone="medium"] { fill-opacity: .23 }
+.coverage-overlay [data-tone="dense"] { fill-opacity: .36 }
+.coverage-overlay [data-tone="unknown"] { fill-opacity: 0; stroke-dasharray: 4 3 }
+.coverage-overlay .coverage-selected { stroke-width: 2.5; stroke-opacity: 1 }
+.shadow-coverage {
+  margin: 12px;
+  padding: 10px 11px;
+  border: 1px solid var(--line, #dce4ee);
+  border-radius: 9px;
+  background: #f8faff;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #243550;
+  overflow-wrap: anywhere;
+}
+.shadow-coverage[hidden], .shadow-coverage [hidden] { display: none !important }
+.shadow-coverage :is(h2,h3,p,dl,ul) { margin: 0 }
+.shadow-coverage p + p { margin-top: 4px }
+.coverage-heading, .coverage-detail-head, .coverage-filters, .coverage-search-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 5px;
+}
+.shadow-coverage h2 { font-size: 14px }
+.shadow-coverage h3 { font-size: 12px; margin-top: 5px }
+.shadow-coverage :is(select, input, button) {
+  padding: 4px 6px;
+  min-height: 29px;
+  font-size: inherit;
+  border: 1px solid #d2deee;
+  border-radius: 5px;
+  color: inherit;
+  background: white;
+}
+.coverage-filters { margin: 6px 0 }
+.coverage-filters label { display: flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap }
+.shadow-coverage .coverage-filters select { min-width: 0; width: auto }
+.coverage-legend { display: flex; gap: 4px 8px; flex-wrap: wrap; font-size: 11px }
+.coverage-legend span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap }
+.coverage-legend span::before {
+  content: "";
+  width: 12px;
+  height: 9px;
+  background: #2858991f;
+  border: 1px solid #28589999;
+  border-radius: 2px;
+}
+.coverage-legend [data-tone="medium"]::before { background: #2858993b }
+.coverage-legend [data-tone="dense"]::before { background: #2858995c }
+.coverage-legend [data-tone="unknown"]::before { background: transparent; border-style: dashed }
+.coverage-note, .coverage-search-caption, .coverage-empty { color: #54667d }
+.shadow-coverage .coverage-note, .shadow-coverage #coverageStatus { margin-top: 5px }
+.shadow-coverage summary { cursor: pointer; font-weight: 650; padding: 6px 0 }
+.coverage-detail, .coverage-tools, .coverage-evidence { margin-top: 5px; border-top: 1px solid #e0e8f5 }
+.coverage-detail { padding-top: 5px }
+.coverage-detail-metrics { display: grid; grid-template-columns: auto 1fr; gap: 2px 7px }
+.coverage-detail-metrics dd { margin: 0; font-weight: 600 }
+.coverage-badge { color: #285899; font-weight: 650 }
+.coverage-cell-id { color: #54667d; font-size: 11px }
+.shadow-coverage .coverage-stores { padding: 0 0 0 16px; max-height: 104px; overflow: auto }
+.coverage-stores small, .coverage-search-result small, .coverage-list-row small { display: block; color: #54667d }
+.coverage-detail-paging { display: flex; gap: 5px; margin-top: 5px }
+.coverage-search-row { margin: 4px 0 }
+.coverage-search-row input { flex: 1; min-width: 0 }
+.coverage-list { margin-top: 6px }
+#coverageCellList, .coverage-results { display: grid; gap: 4px; max-height: 160px; overflow: auto }
+.coverage-list-row, .coverage-search-result { text-align: left }
+.coverage-search-result > span { display: block }
+@media (max-width: 700px) {
+  .shadow-coverage :is(select, input, button) { min-height: 34px }
+}
