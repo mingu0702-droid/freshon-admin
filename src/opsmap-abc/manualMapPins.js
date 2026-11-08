@@ -89,7 +89,11 @@ export function createManualMapPins({env=process.env,appRoot,readCustomer,readCo
   if(typeof requireStaff!=='function'||typeof isSessionCurrent!=='function')throw Error('EXISTING_STAFF_AUTH_REQUIRED');
   const base='/api/map-phase2b/private/manual-pins';app.use(base,requireStaff,(_q,r,next)=>{r.set('Cache-Control','private, no-store');next();});
   const wrap=fn=>async(q,r)=>{try{await fn(q,r);}catch(e){r.status(e.status||503).json({ok:false,error:/^MANUAL_PIN_[A-Z_]+$/.test(e.code||'')?e.code:'MANUAL_PIN_STORAGE_UNAVAILABLE'});}};
-  app.get(base+'/projection',wrap(async(q,r)=>{const data=await projection();return requireStaff(q,r,()=>r.json({ok:true,data}));}));
+  app.get(base+'/projection',wrap(async(q,r)=>{
+   const data=await projection();
+   const capabilities={canView:Boolean(configured&&store),canWrite:canWrite()&&(await authorizeWrite(q,r.locals.staffSession))===true};
+   return requireStaff(q,r,()=>r.json({ok:true,data,capabilities}));
+  }));
   app.get(base+'/:code',wrap(async(q,r)=>{const data=await selected(q.params.code);data.canWrite=data.canWrite&&(await authorizeWrite(q,r.locals.staffSession))===true;return requireStaff(q,r,()=>r.json({ok:true,data,csrfToken:data.canWrite?csrf(r.locals.staffSession.key):null}));}));
   app.get(base+'/:code/search',wrap(async(q,r)=>{
    if(!codeValid(q.params.code))throw failure('MANUAL_PIN_CUSTOMER_CODE',400);await source(q.params.code);

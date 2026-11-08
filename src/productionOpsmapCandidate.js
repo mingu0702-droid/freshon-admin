@@ -1,5 +1,4 @@
 import {mountProductionPhotoBinding} from './opsmapProductionPhotos.js';
-import {mountOfficialAdminBoundaries} from './officialAdminBoundaries.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import fsSync from 'node:fs';
 import express from 'express';import path from 'node:path';import fs from 'node:fs/promises';
@@ -8,6 +7,7 @@ import {createProductionStaffSessionStore as createProductionSessionStore} from 
 import {createProductionManualPinGithubStore,createProductionGeocodeBudgetGithubStore} from './opsmap-abc/manualPinGithubStore.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
 import {createProductionRoadBudget,productionRoadRouteFlag} from './opsmap-abc/productionRoadBudget.js';
+import {createRecordedRoadRouteReader} from './opsmap-abc/recordedRoadRoute.js';
 import {createManualPinAuthorizer} from './opsmap-abc/manualPinAuthorization.js';
 import {createManualMapPins} from './opsmap-abc/manualMapPins.js';
 import {redactPublicData} from './publicDataSecurity.js';
@@ -58,10 +58,15 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  const manual=createManualMapPins({env:pinEnv,appRoot:path.resolve(publicDir,'..'),store:pinStore,backupStore:pinStore?.backupStore,authorizeWrite:createManualPinAuthorizer({env:pinEnv}),readCoordinate:code=>{const row=readers.getSnapshotMemory()?.rows?.find(r=>r.customerCode===code);return row?{latitude:row.lat,longitude:row.lng}:null;},readCustomer:code=>readProductionManualPinCustomer(readers,code)});
  const readStoredStaffHistory=createStoredStaffDriverHistoryReader({readSnapshot:readers.readPhase2bSnapshot,readObservedDeliveryDate:readers.phase2bTodayStatus});
  const readObservedStoreAddress=createObservedStoreAddressReader({readSnapshot:readers.readPhase2bSnapshot,readObservedDeliveryDate:readers.phase2bTodayStatus});
+ const readRecordedRoadRoute=createRecordedRoadRouteReader({callHub:protectedHubRead,async readVehicleCenter({vehicle}){
+  const snapshot=await readers.readPhase2bSnapshot();
+  const groups=new Set((snapshot?.rows||[]).filter(row=>row.baseVehicle===vehicle&&row.baseVehicleState==='VERIFIED_MASTER'&&
+   row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'')).map(row=>row.baseVehicleGroup));
+  return groups.size===1?[...groups][0]:null;
+ }});
  const roadRouteBudget=createProductionRoadBudget({env,token:credentials.authToken});
- const api=mountProductionMapApi(router,{...readers,roadRouteBudget,readStoredStaffHistory,readObservedStoreAddress,readApprovedCoordinateSearch,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,mountPrivateExtensions:binding=>{
+ const api=mountProductionMapApi(router,{...readers,roadRouteBudget,readRecordedRoadRoute,readStoredStaffHistory,readObservedStoreAddress,readApprovedCoordinateSearch,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,mountPrivateExtensions:binding=>{
   if(customerRegistry)mountPrivateCustomerRegistry({...binding,registry:customerRegistry,secret:credentials.sessionSecret,readRules:approvedRules});
-  mountOfficialAdminBoundaries({...binding,origin:authEnv.MAP_STAFF_ORIGIN});
   manual.mount(binding);
   mountPrivateDriverContact({...binding,enabled:()=>env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',readDriverMaster:readers.readDriverMaster,readAssignment:createDriverAssignmentReader({readBaseVehicles:codes=>readers.sharedBaseCache?.get(codes),readStoredRoute:createDatedDriverRouteReader({today:readers.phase2bKstDate,readTodayStatus:readers.phase2bTodayStatus,readStoredRoute:readers.readStoredDriverRoute})})});
   router.get('/api/vehicle-driver-master',binding.requireStaff,async(q,r)=>{try{if(env.OPSMAP_DRIVER_CONTACT_ENABLED!=='1')return r.status(503).json({error:'DRIVER_CONTACT_DISABLED'});if(!readers.readDriverMaster)return r.status(503).json({error:'DRIVER_SOURCE_NOT_CONFIGURED'});const value=await readers.readDriverMaster(String(q.query.date||''));return binding.requireStaff(q,r,()=>r.json(redactPublicData(value)));}catch{return r.status(503).json({error:'DRIVER_SOURCE_UNAVAILABLE'});}});

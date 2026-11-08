@@ -60,6 +60,7 @@
   function message(error) {
     return ({ GEOCODE_DAILY_LIMIT: '일일 주소 조회 한도 대기', GEOCODE_AUTOMATICALLY_BLOCKED: '주소 조회 차단 · 보류',
       GEOCODE_QUERY_INVALID: '검색용 기본주소 확인 필요', GEOCODER_UNAVAILABLE: '주소 조회 서비스 미연결', GEOCODER_TIMEOUT: '주소 조회 시간 초과',
+      KAKAO_TIMEOUT: '카카오 주소 조회 시간 초과', GEOCODE_RETRY_COOLDOWN: '잠시 후 주소를 다시 조회해 주세요',
       GEOCODER_FAILED: '주소 조회 오류', GEOCODER_INVALID_COORDINATES: '주소 좌표 응답 오류',
       GEOCODE_SESSION_EXPIRED:'직원 인증이 만료되었습니다',GEOCODE_ORIGIN_REJECTED:'주소 조회 권한 확인 필요',
       GEOCODER_MULTIPLE_CANDIDATES:'주소 후보 복수 · 선택 필요',GEOCODER_RESULT_TRUNCATED:'주소 범위 확인 필요',

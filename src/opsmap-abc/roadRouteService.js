@@ -4,6 +4,8 @@ import '../../public/opsmap/kakao-directions-adapter.js';
 const adapter=globalThis.KakaoDirectionsAdapter;
 const origin='https://apis-navi.kakaomobility.com';
 const error=(code,status=400)=>Object.assign(new Error(code),{code,status});
+const routeValidationCodes=new Set(['INVALID_ROAD_ROUTE_RESPONSE','INVALID_ROAD_GEOMETRY','INVALID_COORDINATE','INCOMPLETE_ROAD_ROUTE']);
+const invalidProviderResponse=providerFailure=>Object.assign(error('INVALID_RESPONSE',502),{providerFailure});
 export function validRoadRouteRequest(body){
   if(!body||body.mode!=='MANUAL_WAYPOINTS'||!Array.isArray(body.waypoints)||body.waypoints.length>30)throw error('WAYPOINT_LIMIT');
   if(!(Number.isSafeInteger(body.requestId)&&body.requestId>=0)&&!(typeof body.requestId==='string'&&/^[\w-]{1,80}$/.test(body.requestId)))throw error('INVALID_MANUAL_ROUTE');
@@ -18,12 +20,15 @@ export function validRoadRouteRequest(body){
   adapter.plan(clean);return clean;
 }
 async function boundedJson(response,maxBytes=8388608){
-  if(!/json/i.test(response.headers.get('content-type')||''))throw error('PROVIDER_UNAVAILABLE',502);
-  const reader=response.body?.getReader();if(!reader)throw error('PROVIDER_UNAVAILABLE',502);
+  if(!/json/i.test(response.headers.get('content-type')||'')){
+    void response.body?.cancel().catch(()=>{});
+    throw invalidProviderResponse('CONTENT_TYPE');
+  }
+  const reader=response.body?.getReader();if(!reader)throw invalidProviderResponse('MISSING_BODY');
   const parts=[];let size=0;
-  try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>maxBytes)throw error('PROVIDER_UNAVAILABLE',502);parts.push(value);}}
+  try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>maxBytes)throw invalidProviderResponse('RESPONSE_LIMIT');parts.push(value);}}
   finally{void reader.cancel().catch(()=>{});reader.releaseLock();}
-  try{return JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{throw error('PROVIDER_UNAVAILABLE',502);}
+  try{return JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{throw invalidProviderResponse('MALFORMED_JSON');}
 }
 export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date.now,budget=null,requireDurableBudget=false,maxCacheBytes=12*1024*1024}={}){
   const cache=new Map(),pending=new Map();let bytes=0,used=0,active=0;
@@ -65,11 +70,14 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
       const response=await fetchImpl(url.href,{method:plan.method,redirect:'error',signal:controller.signal,
         headers:{Authorization:'KakaoAK '+key(),Accept:'application/json',...(plan.method==='POST'?{'content-type':'application/json'}:{})},...(plan.body?{body:JSON.stringify(plan.body)}:{})});
       providerHttp=response.status;
-      if(providerHttp!==200){void response.body?.cancel();throw error(providerHttp===401?'AUTHENTICATION_FAILED':providerHttp===403?'PERMISSION_DENIED':providerHttp===429?'QUOTA_EXCEEDED':'PROVIDER_UNAVAILABLE',providerHttp===429?429:502);}
-      const provider=await boundedJson(response);const data=adapter.fromProvider(provider,clean);
+      if(providerHttp!==200){void response.body?.cancel().catch(()=>{});throw error(providerHttp===401?'AUTHENTICATION_FAILED':providerHttp===403?'PERMISSION_DENIED':providerHttp===429?'QUOTA_EXCEEDED':'PROVIDER_UNAVAILABLE',providerHttp===429?429:502);}
+      const provider=await boundedJson(response);let data;
+      try{data=adapter.fromProvider(provider,clean);}
+      catch(e){if(routeValidationCodes.has(e?.code))throw invalidProviderResponse(e.code);throw e;}
       return {data:{...data,calculatedAt:new Date(now()).toISOString()},providerHttp};
     }catch(e){
-      const failure=controller.signal.aborted?error('TIMEOUT',504):e.code&&e.status?e:error('PROVIDER_UNAVAILABLE',502);
+      const failure=controller.signal.aborted?error('TIMEOUT',504):e?.code&&e.status?e:
+        Object.assign(error('PROVIDER_UNAVAILABLE',502),{providerFailure:providerHttp===null?'TRANSPORT':'RESPONSE_STREAM'});
       if(Number.isInteger(providerHttp))failure.providerHttp=providerHttp;
       throw failure;
     }
@@ -109,22 +117,34 @@ export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=proc
     if(!req.is('application/json'))return res.status(415).json({ok:false,error:'INVALID_MANUAL_ROUTE'});
     next();
   }
+  const readRecorded=input=>{
+    if(typeof readRecordedRoute!=='function')throw error('RECORDED_ORDER_REQUIRED',409);
+    return readRecordedRoute(input);
+  };
+  const fail=(req,res,e)=>requireStaff(req,res,()=>res.status(e.status||502).json({ok:false,error:e.code||'ROAD_ROUTE_FAILED',
+    providerHttp:Number.isInteger(e.providerHttp)?e.providerHttp:null,
+    ...(e.providerFailure?{providerFailure:e.providerFailure}:{})}));
   const respond=async(req,res,recorded)=>{
     res.set('Cache-Control','private, no-store');
     try{
-      let body=req.body;
-      if(recorded){
-        if(typeof readRecordedRoute!=='function')throw error('RECORDED_ORDER_REQUIRED',409);
-        body=await readRecordedRoute(req.body); // adapter must return a verified ordered draft
-      }
-      const result=await service.route(body);
+      const verified=recorded?await readRecorded(req.body):null;
+      if(verified?.data?.orderVerified===false)throw error('RECORDED_ORDER_REQUIRED',409);
+      if(verified?.draft===null&&verified.data.stops.length)throw error(verified.data.missingCoordinates?'STOP_COORDINATES_MISSING':'ORIGIN_UNCONFIRMED',409);
+      const result=verified?.draft===null?{ok:true,data:{state:'empty'}}:await service.route(verified?.draft??verified??req.body);
       if(recorded)result.data={...result.data,date:req.body.date,vehicle:req.body.vehicle};
       return requireStaff(req,res,()=>res.json(result));
-    }catch(e){return requireStaff(req,res,()=>res.status(e.status||502).json({ok:false,error:e.code||'ROAD_ROUTE_FAILED',providerHttp:Number.isInteger(e.providerHttp)?e.providerHttp:null}));}
+    }catch(e){return fail(req,res,e);}
   };
   app.get('/api/map-phase2b/private/road-route/config',requireStaff,async(_q,r)=>{
     const config=typeof service.readiness==='function'?await service.readiness():service.configuration();
     return requireStaff(_q,r,()=>r.set('Cache-Control','private, no-store').json({ok:true,data:{...config,recordedRouteConfigured:typeof readRecordedRoute==='function'}}));
+  });
+  app.get('/api/map-phase2b/private/road-route/recorded-stops',requireStaff,async(req,res)=>{
+    res.set('Cache-Control','private, no-store');
+    try{
+      const {data}=await readRecorded(req.query);
+      return requireStaff(req,res,()=>res.json({ok:true,data,meta:{source:'HUB_ROUTE_STOPS'}}));
+    }catch(e){return fail(req,res,e);}
   });
   app.post('/api/map-phase2b/private/manual-road-route',requireStaff,sameOrigin,jsonBody,(q,r)=>respond(q,r,false));
   app.post('/api/map-phase2b/private/road-route',requireStaff,sameOrigin,jsonBody,(q,r)=>respond(q,r,true));

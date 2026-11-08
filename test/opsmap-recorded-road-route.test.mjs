@@ -1,0 +1,135 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import express from 'express';
+import {REGISTERED_OSAN_CENTER} from '../src/opsmap-abc/centerSettings.js';
+import {createRecordedRoadRouteReader} from '../src/opsmap-abc/recordedRoadRoute.js';
+import {createRoadRouteService,mountRoadRouteRoutes} from '../src/opsmap-abc/roadRouteService.js';
+import {callHub,hubRequestProfile} from '../src/opsmap-abc/phase2bHubReadClient.js';
+
+const date='2026-11-07',vehicle='101',identity={date,vehicle};
+const stop=(sequence,customerCode='R101')=>({deliveryDate:date,confirmedVehicle:'101호차',sequence,customerCode,
+  customerName:'Fixture store',customerAddress:'Fixture street',driverPhone:'private',latitude:37+sequence*.001,longitude:127+sequence*.001});
+const page=(rows,meta={})=>({ok:true,data:rows,meta:{limit:32,total:rows.length,returned:rows.length,nextCursor:null,orderVerified:true,...meta}});
+const center=REGISTERED_OSAN_CENTER;
+const reader=(payload,readVehicleCenter=async()=>'osan')=>createRecordedRoadRouteReader({callHub:async()=>payload,readVehicleCenter});
+
+test('recorded route verifies source order, preserves repeated visits and ends at the last delivery',async()=>{
+  const read=createRecordedRoadRouteReader({callHub:async(action,params,options)=>{
+    assert.equal(action,'routeStops');
+    assert.deepEqual(params,{...identity,limit:32});
+    assert.equal(options.privateRead,true);
+    assert.equal(options.useCache,false);
+    return page([stop(9),stop(2),stop(6,'R102')]);
+  },readVehicleCenter:async params=>{
+    assert.deepEqual(params,identity);
+    return 'osan';
+  }});
+  const result=await read(identity,center);
+  assert.deepEqual(result.data.stops.map(row=>[row.order,row.customerCode]),[[2,'R101'],[6,'R102'],[9,'R101']]);
+  assert.deepEqual(result.draft.origin,{id:'CENTER_osan',lat:center.lat,lng:center.lng});
+  assert.deepEqual(result.draft.waypoints.map(row=>[row.order,row.lat]),[[1,37.002],[2,37.006]]);
+  assert.equal(result.draft.destination.lat,37.009);
+  assert.equal(result.data.stops[0].address,'Fixture street');
+  assert(!JSON.stringify(result).includes('driverPhone'));
+  assert.equal((await reader(page([]))(identity,center)).draft,null);
+  assert.equal((await reader(page(Array.from({length:31},(_,index)=>stop(index+1))))(identity,center)).draft.waypoints.length,30);
+});
+
+test('recorded route rejects incomplete, mismatched or oversized source rows',async()=>{
+  const cases=[
+    [page([stop(1)],{nextCursor:'pending'}),'ROUTE_SOURCE_UNVERIFIED'],
+    [page([stop(1)],{total:2}),'ROUTE_SOURCE_UNVERIFIED'],
+    [page([{...stop(1),deliveryDate:'2026-11-06'}]),'ROUTE_IDENTITY_MISMATCH'],
+    [page([{...stop(1),confirmedVehicle:'102'}]),'ROUTE_IDENTITY_MISMATCH'],
+    [page(Array.from({length:32},(_,index)=>stop(index+1))),'WAYPOINT_LIMIT']
+  ];
+  for(const [payload,code] of cases)await assert.rejects(reader(payload)(identity,center),{code});
+  for(const location of ['honam',null]){
+    const unconfirmed=await reader(page([stop(1)]),async()=>location)(identity,center);
+    assert.equal(unconfirmed.data.origin,null);
+    assert.equal(unconfirmed.draft,null);
+    assert.equal(unconfirmed.data.stops.length,1);
+  }
+  assert.equal((await reader(page([stop(1)]))(identity,{...center,verified:false})).data.origin,null);
+  await assert.rejects(reader(page([]))({...identity,date:'2026-11-31'},center),{code:'INVALID_MANUAL_ROUTE'});
+});
+
+test('an unverified saved order still identifies the verified Osan origin without inventing a destination',async()=>{
+  const result=await reader(page([stop(1),stop(1),stop(null)]))(identity,center);
+  assert.equal(result.data.origin.id,'CENTER_osan');
+  assert.equal(result.data.sourceStopCount,3);
+  assert.equal(result.data.orderVerified,false);
+  assert.equal(result.data.invalidOrderCount,1);
+  assert.equal(result.data.duplicateOrderCount,1);
+  assert.deepEqual(result.data.stops,[]);
+  assert.equal(result.draft,null);
+  const noSourceProof=await reader(page([stop(1),stop(2)],{orderVerified:undefined}))(identity,center);
+  assert.equal(noSourceProof.data.origin.id,'CENTER_osan');
+  assert.equal(noSourceProof.data.orderVerified,false);
+  assert.equal(noSourceProof.data.invalidOrderCount,0);
+  assert.deepEqual(noSourceProof.data.stops,[]);
+  assert.equal(noSourceProof.draft,null);
+});
+
+test('recorded stops retain unlocated deliveries without creating a drivable draft',async()=>{
+  const result=await reader(page([{...stop(1),latitude:null},stop(2,'R102')]))(identity,center);
+  assert.equal(result.data.origin.id,'CENTER_osan');
+  assert.equal(result.data.stops.length,2);
+  assert.equal(result.data.stops[0].lat,null);
+  assert.equal(result.data.stops[0].lng,null);
+  assert.equal(result.data.missingCoordinates,1);
+  assert.equal(result.draft,null);
+});
+
+test('recorded stop transport uses the scoped Hub timeout and preserves the overall deadline',async t=>{
+  const restore=Object.fromEntries(['HUB_API_URL','HUB_API_SECRET','HUB_API_TIMEOUT_MS'].map(key=>[key,process.env[key]]));
+  t.after(()=>{for(const [key,value] of Object.entries(restore))if(value===undefined)delete process.env[key];else process.env[key]=value;});
+  process.env.HUB_API_URL='https://script.google.com/macros/s/synthetic/exec';
+  process.env.HUB_API_SECRET='synthetic-hub-secret-for-local-test';
+  process.env.HUB_API_TIMEOUT_MS='2000';
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    assert.equal(url,process.env.HUB_API_URL);
+    assert.equal(JSON.parse(options.body).action,'routeStops');
+    return Response.json(page([stop(1)]));
+  });
+  const payload=await callHub('routeStops',{...identity,limit:32},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000});
+  assert.ok(hubRequestProfile(payload).remainingMs>10000);
+  const bounded=await callHub('routeStops',{...identity,limit:32},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+5000});
+  assert.ok(hubRequestProfile(bounded).remainingMs<=5000);
+});
+
+test('staff recorded stops GET is read only and recorded POST requires verified order, origin and coordinates',async t=>{
+  let centerId='honam',hubReads=0,providerCalls=0,lat=37.001,sequence=1;
+  const read=createRecordedRoadRouteReader({
+    callHub:async()=>{hubReads++;return page([{...stop(sequence),latitude:lat}]);},
+    readVehicleCenter:async()=>centerId
+  });
+  const app=express(),fixtureOrigin='https://opsmap.synthetic.test';
+  const service=createRoadRouteService({env:{OPSMAP_ROAD_ROUTE_ENABLED:'0'},fetchImpl:async()=>{providerCalls++;}});
+  const requireStaff=(q,r,next)=>q.get('x-fixture-staff')==='yes'?next():r.status(401).end();
+  mountRoadRouteRoutes({app,requireStaff,jsonBody:express.json(),service,
+    env:{MAP_STAFF_ORIGIN:fixtureOrigin},readRecordedRoute:input=>read(input,center)});
+  const server=app.listen(0,'127.0.0.1');
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  await new Promise(resolve=>server.once('listening',resolve));
+  const base='http://127.0.0.1:'+server.address().port+'/api/map-phase2b/private/road-route';
+  const get=base+'/recorded-stops?'+new URLSearchParams(identity);
+  assert.equal((await fetch(get)).status,401);
+  assert.equal(hubReads,0);
+  const response=await fetch(get,{headers:{'x-fixture-staff':'yes'}});
+  assert.equal(response.status,200);
+  assert.equal(response.headers.get('cache-control'),'private, no-store');
+  const result=await response.json();
+  assert.equal(result.meta.source,'HUB_ROUTE_STOPS');
+  assert.equal(result.data.origin,null);
+  assert.equal(result.data.stops[0].order,1);
+  const post=()=>fetch(base,{method:'POST',headers:{'x-fixture-staff':'yes','content-type':'application/json',origin:fixtureOrigin},body:JSON.stringify(identity)});
+  assert.equal((await (await post()).json()).error,'ORIGIN_UNCONFIRMED');
+  centerId='osan';
+  assert.equal((await (await post()).json()).error,'FEATURE_DISABLED');
+  lat=null;
+  assert.equal((await (await post()).json()).error,'STOP_COORDINATES_MISSING');
+  sequence=null;
+  assert.equal((await (await post()).json()).error,'RECORDED_ORDER_REQUIRED');
+  assert.equal(providerCalls,0);
+});

@@ -5,6 +5,53 @@ const row=(code='S990001')=>({customerCode:code,address:'합성시 합성로 10'
 test('verified GPS and manual points never call Kakao or change fields',async()=>{const f=make();for(const source of ['RAW_GPS','MANUAL_PIN','HISTORICAL_GPS_SAME_BUILDING']){const a={...row(),lat:37.4,lng:127.1,coordinateSource:source},before=JSON.stringify(a);await f.api.ensure(a);assert.equal(JSON.stringify(a),before);}assert.equal(f.calls(),0);});
 test('two shop-in-shop codes share one request but retain their separate identities',async()=>{const f=make(),a=row(),b=row('S990002');await Promise.all([f.api.ensure(a),f.api.ensure(b)]);assert.equal(f.calls(),1);assert.equal(a.customerCode,'S990001');assert.equal(b.customerCode,'S990002');assert.equal(a.coordinateSource,'KAKAO_ADDRESS_LIVE');assert.equal(b.lat,a.lat);assert.equal(f.api.summary().located,2);});
 test('current Customer address is read without adding addresses to the source row',async()=>{let reads=0;const f=make({readAddress:async r=>{reads++;return{customerCode:r.customerCode,address:'합성시 합성로 10'};}}),a={...row(),address:'',raw:{originalAddressHash:'old'}};await f.api.ensure(a);assert.equal(a.address,'');assert.equal(a.lat,37.5);await f.api.ensure(a);assert.equal(reads,1);assert.equal(f.calls(),1);});
+test('concurrent views of the same unlocated customer share one private address read and lookup',async()=>{
+ let release,reads=0;
+ const gate=new Promise(resolve=>release=resolve),f=make({addressReadDate:()=> '2026-11-07',readAddress:async(r,_signal,date)=>{
+  reads++;
+  assert.equal(date,'2026-11-07');
+  await gate;
+  return {customerCode:r.customerCode,address:'합성시 합성로 10'};
+ }});
+ const first={...row(),address:''},second={...first};
+ const together=Promise.all([f.api.ensure(first),f.api.ensure(second)]);
+ await Promise.resolve();
+ assert.equal(reads,1);
+ release();
+ await together;
+ assert.equal(first.lat,37.5);
+ assert.equal(second.lat,37.5);
+ await f.api.ensure(first);
+ assert.equal(reads,1);
+ assert.equal(f.calls(),1);
+});
+test('an in-flight address read is separate for a changed delivery date',async()=>{
+ let date='2026-11-06',release;
+ const dates=[],lookups=[],gate=new Promise(resolve=>release=resolve);
+ const f=make({addressReadDate:()=>date,readAddress:async(r,_signal,readDate)=>{
+  dates.push(readDate);
+  if(readDate==='2026-11-06')await gate;
+  return {customerCode:r.customerCode,address:`합성시 합성로 ${readDate.endsWith('07')?20:10}`};
+ },lookup:async address=>{lookups.push(address);return {lat:37.5,lng:127};}});
+ const unlocated={...row(),address:''},old=f.api.ensure(unlocated);
+ await Promise.resolve();
+ date='2026-11-07';
+ await f.api.ensure(unlocated);
+ release();
+ await old;
+ assert.deepEqual(dates,['2026-11-06','2026-11-07']);
+ assert.deepEqual(lookups,['합성시 합성로 20']);
+ assert.equal(unlocated.lat,37.5);
+});
+test('logout discards a queued private address read before it starts',async()=>{
+ let reads=0;
+ const f=make({readAddress:async()=>{reads++;}}),unlocated={...row(),address:''};
+ const pending=f.api.ensure(unlocated);
+ f.api.clear();
+ await pending;
+ assert.equal(reads,0);
+ assert.equal(unlocated.lat,null);
+});
 test('address/hash changes invalidate old screen coordinates and read the new current address',async()=>{let reads=0;const f=make({readAddress:async r=>({customerCode:r.customerCode,address:'합성시 변경로 '+(++reads)})}),a={...row(),address:'',raw:{originalAddressHash:'old'}};await f.api.ensure(a);a.raw={originalAddressHash:'new'};f.api.apply(a);assert.equal(a.lat,null);await f.api.ensure(a);assert.equal(reads,2);assert.equal(f.calls(),2);});
 test('explicit basic address change cannot reuse a point from another building',async()=>{const f=make(),a=row();await f.api.ensure(a);a.address='합성시 다른로 99';f.api.apply(a);assert.equal(a.lat,null);await f.api.ensure(a);assert.equal(f.calls(),2);});
 test('verified Customer conflict forces a fresh current address instead of the old point',async()=>{const f=make({readAddress:async r=>({customerCode:r.customerCode,address:'합성시 변경로 99'})}),a=row();await f.api.ensure(a);a.addressChanged=true;a.lat=null;a.lng=null;a.coordinateStatus='CONFLICT';f.api.apply(a);assert.equal(a.lat,null);await f.api.ensure(a);assert.equal(a.lat,37.5);assert.equal(f.calls(),2);});

@@ -169,7 +169,8 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
     datedAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
     periodAssignments: Number(process.env.HUB_ASSIGNMENTS_TIMEOUT_MS || 60000),
     staffDriverHistory: 5000,
-    routePlan: Number(process.env.HUB_ROUTE_TIMEOUT_MS || 25000)
+    routePlan: Number(process.env.HUB_ROUTE_TIMEOUT_MS || 25000),
+    routeStops: 12000
   };
   const timeoutMs = actionTimeoutMs[action] || Number(process.env.HUB_API_TIMEOUT_MS || 2000);
   let sharedDeadline = Math.min(deadline ?? Infinity, staffDetail || preparedPrivate || action === 'staffDriverHistory' ? started + timeoutMs : Infinity);

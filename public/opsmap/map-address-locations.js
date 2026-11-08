@@ -13,9 +13,9 @@
  };
  const established=r=>valid(r)&&!addressMismatch(r)&&!['CONFLICT','MISSING','UNVERIFIED'].includes(r.coordinateStatus)&&r.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'&&r.coordinateSource!==SOURCE;
  const hashAddress=async value=>{if(!root.crypto?.subtle||!root.TextEncoder)return '';try{const data=new root.TextEncoder().encode(normalize(value));return Array.from(new Uint8Array(await root.crypto.subtle.digest('SHA-256',data)),v=>v.toString(16).padStart(2,'0')).join('');}catch{return '';}};
- function create({lookup,readAddress,queryFor,enabled=()=>true,onChange=()=>{},now=Date.now,spacingMs=4000}={}){
+ function create({lookup,readAddress,addressReadDate=()=>'',queryFor,enabled=()=>true,onChange=()=>{},now=Date.now,spacingMs=4000}={}){
   let epoch=0,running=false,controller=new AbortController(),syncToken='';
-  const points=new Map(),pending=new Map(),outcomes=new Map(),queue=new Map(),bindings=new Map(),addresses=new Map(),searches=new Map(),searchChecks=new Map(),registryPolicies=new Map(),active=new Set(),attempts=new Map();
+  const points=new Map(),pending=new Map(),addressReads=new Map(),outcomes=new Map(),queue=new Map(),bindings=new Map(),addresses=new Map(),searches=new Map(),searchChecks=new Map(),registryPolicies=new Map(),active=new Set(),attempts=new Map();
   const sourceHash=row=>row.currentAddressHash||row.raw?.currentAddressHash||row.originalAddressHash||row.addressHash||row.raw?.originalAddressHash||row.raw?.addressHash||'';
   const observedDate=row=>row.raw?.lastDeliveryDate||row.lastDeliveryDate||'';
   const conflicted=row=>row.searchAddressConflict===true||row.addressChanged===true||row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED';
@@ -108,12 +108,28 @@
    const signal=controller.signal;
    if(!addressFor(row)&&readAddress){
     const prior=outcomes.get(code);if(prior?.sourceHash===sourceBinding&&prior.retryAt>now())return row;
-    const attemptKey=code+'|'+sourceBinding;attempts.set(attemptKey,(attempts.get(attemptKey)||0)+1);
-    try{const source=await readAddress(row,signal);if(owner!==epoch||signal.aborted||sourceHash(row)!==sourceBinding)return row;
+    const date=addressReadDate(row),observed=observedDate(row),version=registryVersion(row),generation=syncToken;
+    const current=()=>owner===epoch&&!signal.aborted&&sourceHash(row)===sourceBinding&&observedDate(row)===observed&&registryVersion(row)===version&&addressReadDate(row)===date&&syncToken===generation;
+    const readKey=JSON.stringify([code,sourceBinding,date,observed,version,generation]);
+    const attemptKey=code+'|'+sourceBinding;
+    let read=addressReads.get(readKey);
+    if(!read){
+     read=Promise.resolve().then(()=>{
+      if(!current())return null;
+      attempts.set(attemptKey,(attempts.get(attemptKey)||0)+1);
+      return readAddress(row,signal,date);
+     }).finally(()=>{if(addressReads.get(readKey)===read)addressReads.delete(readKey);});
+     addressReads.set(readKey,read);
+    }
+    try{const source=await read;if(!current())return row;
      if(source?.customerCode!==code||!source.address)throw Object.assign(Error('CUSTOMER_ADDRESS_UNAVAILABLE'),{code:'CUSTOMER_ADDRESS_UNAVAILABLE'});
-     addresses.set(code,{address:source.address,sourceHash:sourceBinding,observedDate:observedDate(row),conflict:conflicted(row)});
-     await acceptSearch(row,source,owner,sourceBinding);if(owner!==epoch||signal.aborted||sourceHash(row)!==sourceBinding)return row;
-    }catch(error){if(owner===epoch&&!signal.aborted){const notFound=error?.status===404;outcomes.set(code,{sourceHash:sourceBinding,state:!notFound&&attempts.get(attemptKey)<2?'RETRY':'REVIEW',reason:notFound?'CUSTOMER_NOT_FOUND':'CUSTOMER_ADDRESS_UNAVAILABLE',retryAt:now()+60000});}return row;}
+     const existing=normalize(addressFor(row));
+     if(!existing||existing===normalize(source.address)){
+      addresses.set(code,{address:source.address,sourceHash:sourceBinding,observedDate:observed,conflict:conflicted(row)});
+      await acceptSearch(row,source,owner,sourceBinding);
+     }
+     if(!current())return row;
+    }catch(error){if(current()&&!addressFor(row)){const notFound=error?.status===404;outcomes.set(code,{sourceHash:sourceBinding,state:!notFound&&attempts.get(attemptKey)<2?'RETRY':'REVIEW',reason:notFound?'CUSTOMER_NOT_FOUND':'CUSTOMER_ADDRESS_UNAVAILABLE',retryAt:now()+60000});}return row;}
    }
    const address=identity(row),query=queryForRow(row),key=normalize(query);
    if(!address||!key){outcomes.set(code,{address,sourceHash:sourceBinding,state:'REVIEW',reason:'CUSTOMER_ADDRESS_INVALID'});return row;}
@@ -167,7 +183,7 @@
     outcomes.delete(code);for(const key of attempts.keys())if(key.startsWith(code+'|')||key.startsWith('lookup:'+code+'|'))attempts.delete(key);
    }
   }
-  function clear(){epoch++;controller.abort();controller=new AbortController();points.clear();pending.clear();queue.clear();bindings.clear();outcomes.clear();addresses.clear();searches.clear();searchChecks.clear();registryPolicies.clear();attempts.clear();syncToken='';}
+  function clear(){epoch++;controller.abort();controller=new AbortController();points.clear();pending.clear();addressReads.clear();queue.clear();bindings.clear();outcomes.clear();addresses.clear();searches.clear();searchChecks.clear();registryPolicies.clear();attempts.clear();syncToken='';}
   function acceptAddress(row,source){
    if(!row||established(row)||source?.customerCode!==row.customerCode||!source.address||source.locationState!=='SOURCE_ROW')return;
    const current=source.sourceBasis==='CURRENT_CUSTOMER_LOOKUP',dated=source.sourceBasis==='DATED_DELIVERY_LOOKUP'&&source.currentMasterState==='NOT_FOUND'&&source.detailDate===observedDate(row);

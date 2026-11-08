@@ -27,6 +27,7 @@ import {createRoadRouteService,mountRoadRouteRoutes} from './roadRouteService.js
 import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
 import {createHubRoadBudget} from './hubRoadBudget.js';
 import {createKakaoCoordinateConnection,mountKakaoCoordinateConnection} from './kakaoCoordinateConnection.js';
+import {registeredOsanCenter} from './centerSettings.js';
 import {assertDeliverySourceObservation} from '../snapshotRefreshEvidence.js';
 
 export function mountProductionMapApi(app,{
@@ -39,6 +40,7 @@ export function mountProductionMapApi(app,{
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
+  const osanCenter=registeredOsanCenter(env.OPSMAP_VERIFIED_OSAN_CENTER_JSON);
   addressLookupService??=createKakaoCoordinateConnection({env});
   const preparedCustomerDetails=createPreparedCustomerDetailReader({callHub});
   if(roadRouteBudget===undefined)roadRouteBudget=createHubRoadBudget({callHub}); // Explicit null requires a separately configured backend.
@@ -65,14 +67,14 @@ export function mountProductionMapApi(app,{
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED'});
     const sdkOnly = req.query.sdkOnly === '1';
     const lookup = sdkOnly ? null : await addressLookupService.status();
-    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({javascriptKey,driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowExternalAddressLookup:lookup?.enabled===true,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true}));
+    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({javascriptKey,centers:osanCenter?[osanCenter]:[],driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowExternalAddressLookup:lookup?.enabled===true,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true}));
   });
   mountKakaoCoordinateConnection({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,service:addressLookupService,jsonBody:express.json({limit:'4kb'}),origin:env.MAP_STAFF_ORIGIN||env.RENDER_EXTERNAL_URL});
   app.get('/api/map-phase2b/private/address-lookup/config',async(req,res)=>{
     const value=await addressLookupService.configuration({javascriptKey:env.KAKAO_MAP_JAVASCRIPT_KEY});
     return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:value}));
   });
-  mountRoadRouteRoutes({app,requireStaff:mapStaff.requireStaff,jsonBody:express.json({limit:'16kb'}),service:roadRouteService||createRoadRouteService({env,budget:roadRouteBudget,requireDurableBudget:true}),env,readRecordedRoute:readRecordedRoadRoute});
+  mountRoadRouteRoutes({app,requireStaff:mapStaff.requireStaff,jsonBody:express.json({limit:'16kb'}),service:roadRouteService||createRoadRouteService({env,budget:roadRouteBudget,requireDurableBudget:true}),env,readRecordedRoute:readRecordedRoadRoute&&(input=>readRecordedRoadRoute(input,osanCenter))});
   mountPrivateExtensions?.({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,previewEnabled});
   app.use(publicResponse);
   if(hybridStoredIoEnabled){const stored=createRollingHubIo({callHub});hybridReadDateCatalog??=stored.readDateCatalog;hybridReadDatePage??=stored.readDatePage;}

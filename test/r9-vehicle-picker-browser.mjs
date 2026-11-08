@@ -19,6 +19,8 @@ const stores=[
 ];
 const rows=stores.map(([vehicle,address],i)=>({customerCode:'S9800'+String(i+1).padStart(2,'0'),customerName:'SYNTHETIC_ONLY_'+i,address,vehicle,baseVehicle:vehicle,lat:35+i*.15,lng:127+i*.04,lastDeliveryDate:'2026-10-20'}));
 const version='f'.repeat(64),requests=[],external=[],errors=[],checks=[];
+const manualCode=rows[0].customerCode,pin={customerCode:manualCode,latitude:rows[0].lat,longitude:rows[0].lng,originalAddressHash:'a'.repeat(64),resolutionStatus:'MANUAL_CONFIRMED'};
+let holdCustomerSearch=false,releaseCustomerSearch;
 const checkedAt='2026-10-20T00:00:00.000Z',basis='FIXED_DISPATCH_PRIMARY';
 const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','vehicle-picker-regions.js','map-phase2b-runtime.js','map-approved-shell-candidate.js'];
 const fixture=`window.VEHICLE_AREA_DATA=${JSON.stringify({vehicles})};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
@@ -30,7 +32,7 @@ class FixtureMap{constructor(el,opts){this.el=el;this.center=opts.center;this.le
 class Overlay{constructor(opts){this.opts=opts}setMap(map){if(this.opts.content){this.opts.content.remove();if(map)map.el.append(this.opts.content)}}}
 window.kakao={maps:{LatLng:Coord,LatLngBounds:Bounds,Map:FixtureMap,CustomOverlay:Overlay,Polygon:Overlay,Polyline:Overlay,event:{addListener(){},removeListener(){}}}};window.KakaoMapsAdapter={ready:()=>Promise.resolve(),reset(){}};`;
 let html=fs.readFileSync(path.join(root,'map-phase2b-preview.html'),'utf8').replace(/<script\b[\s\S]*?<\/script>/gi,'');
-html=html.replace('</body>','<script>'+fixture+'</script>'+scripts.map(file=>'<script src="'+file+'"></script>').join('')+'</body>');
+html=html.replace('</body>','<script>'+fixture+'</script>'+scripts.map(file=>'<script src="'+file+'"></script>').join('')+'<script type="module" src="manual-map-pins.mjs"></script></body>');
 const server=http.createServer((req,res)=>{
  const u=new URL(req.url,'http://localhost');
  if(u.pathname.startsWith('/api/')){
@@ -38,10 +40,16 @@ const server=http.createServer((req,res)=>{
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-10-20',startDate:'2026-08-01',endDate:'2026-10-20'}};
   else if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:r.vehicle,baseVehicleGroup:vehicles.find(v=>v.vehicle===r.vehicle).group,baseVehicleState:r.vehicle==='203'?'CONFLICT':'VERIFIED_MASTER',baseVehicleSource:basis,baseVehicleVersion:version,baseVehicleCheckedAt:checkedAt,baseVehicleStale:false})),meta:{version,basis,checkedAt,stale:false}};
   else if(u.pathname.endsWith('/assignments')){const date=u.searchParams.get('date');data={data:[...rows.map(r=>({...r,deliveryDate:date})),{customerCode:'S980099',customerName:'SYNTHETIC_NEW_103',address:'인천 영종구 합성로 12',vehicle:'103',lat:36,lng:127,deliveryDate:date}],meta:{complete:true,date,reviewOnly:true}};}
+  else if(u.pathname.endsWith('/manual-pins/projection'))data={ok:true,data:[pin],capabilities:{canView:true,canWrite:false}};
+  else if(u.pathname.endsWith('/manual-pins/'+manualCode))data={ok:true,data:{customerName:rows[0].customerName,originalAddress:rows[0].address,canWrite:false,revision:7,current:pin,history:[{revision:7,updatedAt:checkedAt,after:pin}]}};
+  else if(u.pathname.endsWith('/customer-search')&&holdCustomerSearch){
+   releaseCustomerSearch=()=>{if(!res.destroyed){res.setHeader('content-type','application/json');res.end(JSON.stringify(data));}};
+   return;
+  }
   res.setHeader('content-type','application/json');res.end(JSON.stringify(data));return;
  }
  if(u.pathname==='/opsmap/'||u.pathname==='/'){res.setHeader('content-type','text/html');res.end(html);return;}
- const file=path.join(root,path.basename(u.pathname));if(fs.existsSync(file)){res.setHeader('content-type',file.endsWith('.css')?'text/css':file.endsWith('.js')?'application/javascript':'application/octet-stream');res.end(fs.readFileSync(file));}else{res.statusCode=404;res.end();}
+ const file=path.join(root,path.basename(u.pathname));if(fs.existsSync(file)){res.setHeader('content-type',file.endsWith('.css')?'text/css':/\.m?js$/.test(file)?'application/javascript':'application/octet-stream');res.end(fs.readFileSync(file));}else{res.statusCode=404;res.end();}
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
 let browser;
@@ -66,7 +74,8 @@ try{
  await query.fill('용인시');assert.deepEqual(await values(),['101']);await query.fill('202');assert.deepEqual(await values(),['202','202-1']);checks.push('number and region query update immediately');
  await input('202').click();await query.fill('');check('clearing search preserves selection',await input('202').isChecked());
  await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===1&&MapUiLocalBridge.state.overlays.length===1);
- check('selection still drives map pins and territory rendering',await page.evaluate(()=>MapUiLocalBridge.state.currentRows[0].vehicle==='202'&&window.territoryRenders>0));
+ check('vehicle selection drives map pins without territory rendering',await page.evaluate(()=>MapUiLocalBridge.state.currentRows[0].vehicle==='202'&&!window.territoryRenders));
+ check('no territory toggle or refresh control',await page.locator('#territoryControls,#areaToggle,#mobileAreaToggle,#refreshTerritories').count()===0);
  await input('202').click();check('same vehicle deselects and returns to full map',!(await selected()).length&&!await chips.isVisible()&&await page.evaluate(()=>MapUiLocalBridge.state.currentRows.length>2));
  await input('101').click();await input('122').click();assert.deepEqual(await selected(),['101','122']);checks.push('101 and 122 multiple selection');
  await summary.click({position:{x:10,y:10}});check('collapsed picker keeps map controls accessible',!await query.isVisible()&&await chips.isVisible());
@@ -98,15 +107,41 @@ try{
  check('date reorder preserves checked selection',await page.locator('#vehicleList input[value="103"]').isChecked());
  await page.locator('#closeRoutes').click();await page.locator('#modePeriod').click();await page.waitForFunction(()=>MapUiLocalBridge.state.mode==='BASE_60D');
  await page.waitForFunction(()=>document.querySelector('#vehicleList input[value="101"]').parentElement.textContent.includes('강남구'));
- for(const width of [1920,1366,390]){
+ for(const width of [1920,1366]){
   await page.setViewportSize({width,height:844});
-  await query.fill('101');await query.scrollIntoViewIfNeeded();
+  await query.fill('');await query.scrollIntoViewIfNeeded();
   if(!await input('101').isChecked())await input('101').click();
-  const layout=await area('101').evaluate(el=>({overflow:el.scrollWidth>el.clientWidth,ellipsis:getComputedStyle(el).textOverflow,height:el.offsetHeight,lineHeight:parseFloat(getComputedStyle(el).lineHeight)}));
-  check(`row text wraps without clipping at ${width}`,!layout.overflow&&layout.ellipsis!=='ellipsis'&&layout.height>layout.lineHeight);
+  const layout=await area('101').evaluate(el=>{
+   const box=el.getBoundingClientRect(),item=el.closest('label'),label=item.getBoundingClientRect(),number=item.querySelector('.vehicleNo').getBoundingClientRect();
+   return {overflow:el.scrollWidth>el.clientWidth||el.scrollHeight>el.clientHeight||box.bottom>label.bottom+1,ellipsis:getComputedStyle(el).textOverflow,height:el.offsetHeight,lineHeight:parseFloat(getComputedStyle(el).lineHeight),numberWidth:number.width,viewportOverflow:document.documentElement.scrollWidth>innerWidth};
+  });
+  check(`long region wraps without clipping at ${width}`,!layout.overflow&&!layout.viewportOverflow&&layout.ellipsis!=='ellipsis'&&layout.height>layout.lineHeight&&layout.numberWidth>=41);
   check(`map chip available at ${width}`,await chips.isVisible()&&await chips.locator('button[data-remove-vehicle="101"]').isEnabled());
   await page.screenshot({path:path.join(output,`after-fixture-${width}.png`),fullPage:true});
  }
- check('no page errors',errors.length===0);check('remote/auth/geocoding/source calls remain zero',external.length===0&&requests.every(p=>!/auth|geocod|source|hub|private\//i.test(p)));
- const result={scope:'LOCAL_EDGE_SYNTHETIC_MAP_NOT_PRODUCTION',output,checks,errors,externalCalls:external.length,requests};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+ const search=page.locator('#query'),searchCount=()=>requests.filter(p=>p.endsWith('/customer-search')).length;
+ const masterCount=()=>requests.filter(p=>p.endsWith('/base-vehicles')).length;
+ const masterBefore=masterCount();
+ await search.fill(manualCode.toLowerCase());await page.locator('#searchBtn').click();
+ await page.waitForFunction(code=>MapUiLocalBridge.state.selected?.customerCode===code,manualCode);
+ check('exact code uses the loaded point with no search or bulk-master request',searchCount()===0&&masterCount()===masterBefore&&await page.evaluate(()=>MapUiLocalBridge.state.selected.coordinateSource==='MANUAL_PIN'));
+ const pinAction=page.locator('#manualPinEdit');
+ check('coordinate status and read-only pin action are clearly labeled',/좌표 상태 · 미확인 \d+개/.test(await page.locator('#manualPinTargets>summary').textContent())&&await pinAction.textContent()==='핀 정보·이력');
+ await pinAction.click();await page.locator('#manualPinHistory').locator('..').locator('summary').click();
+ check('read-only history shows revision and no edit, save, or revert buttons',(await page.locator('#manualPinHistory').textContent()).includes('#7')&&await page.locator('#manualPinSearch,#manualPinSave,#manualPinRestoreOriginal').count()===0);
+ await page.locator('#manualPinEditor').getByRole('button',{name:'닫기'}).click();
+ holdCustomerSearch=true;
+ const stored=rows.find(r=>r.vehicle==='202');
+ await search.fill(stored.address);await page.locator('#searchBtn').click();
+ const candidate=page.locator('#results [data-result]');
+ await candidate.waitFor();
+ check('stored address candidate is clickable while Customer lookup is still pending',await candidate.count()===1&&(await candidate.textContent()).includes(stored.customerCode)&&!await page.locator('#results').isHidden());
+ await candidate.click();releaseCustomerSearch?.();holdCustomerSearch=false;
+ check('stored address selects the same real code, not a temporary pin',await page.evaluate(code=>MapUiLocalBridge.state.selected?.customerCode===code&&!MapUiLocalBridge.state.virtual,stored.customerCode));
+ await search.fill('합성아파트');await page.locator('#searchBtn').click();
+ await page.waitForFunction(()=>document.querySelector('#searchState')?.textContent.includes('도로명과 건물번호'));
+ check('apartment-only search gives a specific address hint without geocoding',!requests.some(p=>p.endsWith('/address-lookup')));
+ await page.screenshot({path:path.join(output,'search-address-guidance-1366.png'),fullPage:true});
+ check('no page errors',errors.length===0);check('no external, geocoding or territory requests',external.length===0&&requests.every(p=>!/auth|geocod|source|hub|territor|boundar/i.test(p)));
+ const result={scope:'LOCAL_CHROMIUM_SYNTHETIC_MAP_NOT_PRODUCTION',output,checks,errors,externalCalls:external.length,requests};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

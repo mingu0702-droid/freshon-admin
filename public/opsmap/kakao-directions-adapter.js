@@ -21,7 +21,8 @@
   if(!['directions','waypoints'].includes(api)||points.length-2>(api==='directions'?5:30))fail('WAYPOINT_LIMIT');
   const options={priority:'RECOMMEND',alternatives:false,road_details:false,summary:false};
   if(api==='waypoints')return {method:'POST',path:'/v1/waypoints/directions',body:{origin:points[0],destination:points.at(-1),waypoints:points.slice(1,-1),...options}};
-  return {method:'GET',path:'/v1/directions',query:{origin:points[0].x+','+points[0].y,destination:points.at(-1).x+','+points.at(-1).y,waypoints:points.slice(1,-1).map(p=>p.x+','+p.y).join('|'),...options}};
+  const waypointQuery=points.slice(1,-1).map(p=>p.x+','+p.y).join('|');
+  return {method:'GET',path:'/v1/directions',query:{origin:points[0].x+','+points[0].y,destination:points.at(-1).x+','+points.at(-1).y,...(waypointQuery?{waypoints:waypointQuery}:{}),...options}};
  }
  function fromProvider(payload,body){
   const {providerLegs,stationaryLegs}=routePlan(body),totalLegs=body.waypoints.length+1;
@@ -36,10 +37,10 @@
   let vertices=0,sumDistance=0,sumDuration=0;const geometry=[];
   route.sections.forEach((section,providerIndex)=>{
    const index=providerLegs[providerIndex];
-   if(![section.distance,section.duration].every(n=>Number.isSafeInteger(n)&&n>=0)||!Array.isArray(section.roads)||!section.roads.length||section.roads.length>10000)fail('INVALID_ROAD_GEOMETRY');
+   if(![section?.distance,section?.duration].every(n=>Number.isSafeInteger(n)&&n>=0)||!Array.isArray(section.roads)||!section.roads.length||section.roads.length>10000)fail('INVALID_ROAD_GEOMETRY');
    sumDistance+=section.distance;sumDuration+=section.duration;
    legs[index]={index,distanceMeters:section.distance,durationSeconds:section.duration};
-   for(const road of section.roads){const v=road.vertexes;if(!Array.isArray(v)||v.length<4||v.length%2||vertices+v.length/2>100000)fail('INVALID_ROAD_GEOMETRY');
+   for(const road of section.roads){const v=road?.vertexes;if(!Array.isArray(v)||v.length<4||v.length%2||vertices+v.length/2>100000)fail('INVALID_ROAD_GEOMETRY');
     const latLngs=[];for(let i=0;i<v.length;i+=2){coordinate({lng:v[i],lat:v[i+1]});latLngs.push([v[i+1],v[i]]);}vertices+=latLngs.length;geometry.push({legOffset:index,latLngs});
    }
   });
@@ -48,7 +49,7 @@
  }
  const httpError=status=>status===401?'STAFF_LOGIN_REQUIRED':status===403?'PERMISSION_DENIED':status===429?'QUOTA_EXCEEDED':status===504?'TIMEOUT':status>=500?'PROVIDER_UNAVAILABLE':status===404?'FEATURE_DISABLED':'ROAD_ROUTE_FAILED';
  async function responseError(response){
-  const allowed=new Set(['STAFF_LOGIN_REQUIRED','ORIGIN_REJECTED','STAGE_VERIFICATION_READ_ONLY','AUTHENTICATION_FAILED','PERMISSION_DENIED','QUOTA_EXCEEDED','CALL_POLICY_BLOCKED','CALL_POLICY_UNCONFIRMED','PERSISTENT_BUDGET_REQUIRED','FEATURE_DISABLED','KEY_MISSING','TIMEOUT','PROVIDER_UNAVAILABLE','NO_ROAD_ROUTE','INVALID_MANUAL_ROUTE','WAYPOINT_LIMIT','ROAD_ROUTE_FAILED','RECORDED_ORDER_REQUIRED','STOP_COORDINATES_MISSING']);
+  const allowed=new Set(['STAFF_LOGIN_REQUIRED','ORIGIN_REJECTED','STAGE_VERIFICATION_READ_ONLY','AUTHENTICATION_FAILED','PERMISSION_DENIED','QUOTA_EXCEEDED','CALL_POLICY_BLOCKED','CALL_POLICY_UNCONFIRMED','PERSISTENT_BUDGET_REQUIRED','FEATURE_DISABLED','KEY_MISSING','TIMEOUT','PROVIDER_UNAVAILABLE','NO_ROAD_ROUTE','INVALID_MANUAL_ROUTE','INVALID_RESPONSE','WAYPOINT_LIMIT','ROAD_ROUTE_FAILED','RECORDED_ORDER_REQUIRED','STOP_COORDINATES_MISSING','ORIGIN_UNCONFIRMED','ROUTE_SOURCE_UNAVAILABLE','ROUTE_SOURCE_UNVERIFIED','ROUTE_IDENTITY_MISMATCH']);
   try{
    const reader=response.body?.getReader();if(!reader)return httpError(response.status);
    const parts=[];let count=0;try{for(;;){const r=await reader.read();if(r.done)break;count+=r.value.byteLength;if(count>4096)throw Error();parts.push(r.value);}}finally{void reader.cancel().catch(()=>{});reader.releaseLock();}

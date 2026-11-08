@@ -8,6 +8,7 @@ import {fileURLToPath} from 'node:url';
 // Controller boundaries only. All customers/addresses are synthetic and no network runs.
 const publicRoot=process.env.OPSMAP_QA_PUBLIC_ROOT || fileURLToPath(new URL('../public/opsmap/',import.meta.url));
 const source=fs.readFileSync(path.join(publicRoot,'map-phase2b-runtime.js'),'utf8').replaceAll('\r\n','\n');
+const addressHelpers=['phase2b-ui-helpers.js','new-area-requests.js'].map(file=>fs.readFileSync(path.join(publicRoot,file),'utf8'));
 function declaration(name){
  const match=new RegExp('^  (?:async )?function '+name+'\\(','m').exec(source);
  assert(match,'required controller function: '+name);
@@ -19,7 +20,7 @@ function declaration(name){
 }
 // Pick only A-owned declarations: B's interleaved temporary-pin functions remain
 // interface stubs here and are exercised by the independent full-browser QA.
-const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','rankSearchRows','normalizeApiStore',
+const controllerSource=['normalizeSearchText','normalizeSearchAddress','prepareSearchQuery','searchRowKeys','unifiedLocalSearchRows','rankSearchRow','rankSearchRows','normalizeApiStore',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
  'renderResults','unifiedAddressQuery','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual}={}){
@@ -29,7 +30,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual}={}){
   state:{mode:'BASE_60D',selected:null,searchRequestId:0,selectedDate:'2026-11-02',currentRows:rows},
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
   coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),requestControllers:requests,
-  unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
+  unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,unifiedSearchIndex:null,unifiedSearchKeys:new WeakMap(),
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
   window:{MapManualPins:{apply:row=>manual?.(row)}},
@@ -42,18 +43,30 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual}={}){
   isSilentRequestError:e=>e?.silent||e?.name==='AbortError',
   searchExternalAddress:async(text,options)=>fallback.push({text,options})
  };
- vm.createContext(context);vm.runInContext(controllerSource,context);
+ vm.createContext(context);
+ for(const helper of addressHelpers)vm.runInContext(helper,context);
+ context.Phase2bUi=context.window.Phase2bUi;
+ context.NewAreaRequests=context.window.NewAreaRequests;
+ vm.runInContext(controllerSource,context);
  return {context,node,selected,fallback,queries,get resets(){return resets;},get tempClears(){return tempClears;}};
 }
 const store=(customerCode,customerName,address,more={})=>({customerCode,customerName,address,lat:37.5,lng:127.1,vehicle:'101',lastDeliveryDate:'2026-11-02',...more});
 
 test('map idle keeps an out-of-filter selected customer in the address queue',()=>{
- const registration=source.split('\n').find(line=>line.includes("listen('idle',")&&line.includes('liveAddressLocations'));
+ const registration=source.split('\n').find(line=>line.includes("listen('idle',")&&line.includes('deferMapAddressWork'));
  assert(registration);
- const selected=store('S990100','합성 선택점','',{vehicle:'223',lat:null,lng:null}),visible=store('S990101','합성 필터점','',{vehicle:'101'});
+ const selected=store('S990100','합성 선택점','',{vehicle:'223',lat:null,lng:null});
+ const visible=store('S990101','합성 필터점','',{vehicle:'101',lat:null,lng:null});
+ const frames=[];
  let idle,queued;
- const c={dateReady:true,markerFrame:null,state:{mode:'BASE_60D',selected,currentRows:[visible]},listen:(name,callback)=>{idle=callback;},requestAnimationFrame:callback=>callback(),renderStops:()=>{},liveAddressLocations:{schedule:rows=>{queued=rows;}}};
- vm.runInNewContext(registration,c);idle();
+ const c={dateReady:true,markerFrame:null,addressScheduleFrame:null,customerRegistry:null,window:{},
+  document:{hidden:false,body:{dataset:{mapStaffState:'authenticated'}}},
+  state:{map:{},mode:'BASE_60D',selected,currentRows:[visible]},listen:(name,callback)=>{idle=callback;},
+  requestAnimationFrame:callback=>frames.push(callback),renderStops:()=>{},liveAddressLocations:{schedule:rows=>{queued=rows;}}};
+ const functions=['scheduleVisibleAddressRows','scheduleMapAddressWork','deferMapAddressWork'].map(declaration).join('\n');
+ vm.runInNewContext(functions+'\n'+registration,c);
+ idle();
+ while(frames.length)frames.shift()();
  assert.equal(queued[0],selected);assert(queued.includes(visible));
 });
 
@@ -77,7 +90,7 @@ test('exact customer selects existing manual overlay without a remote lookup or 
 
 test('unlocated existing customer opens existing detail with no invented location',async()=>{
  const f=fixture({rows:[store('B990002','합성 미확인점','서울 시험구 미확인로 2',{lat:null,lng:null})]});
- await f.context.searchPeriod('B990002');assert.equal(f.selected[0].lat,null);assert.equal(f.selected[0].lng,null);assert.match(f.context.lastStatus,/좌표 미확인/);assert.equal(f.fallback.length,0);
+ await f.context.searchPeriod('B990002');assert.equal(f.selected[0].lat,null);assert.equal(f.selected[0].lng,null);assert.match(f.context.lastStatus,/위치 확인 필요/);assert.equal(f.fallback.length,0);
 });
 
 test('duplicate names expose one candidate per customer and close after choosing',async()=>{
@@ -89,6 +102,37 @@ test('duplicate names expose one candidate per customer and close after choosing
 test('same-building customers retain separate codes and detail addresses',async()=>{
  const rows=[store('S990005','합성 입점A','서울특별시 합성구 테스트로 5',{detailAddress:'1층'}),store('S990006','합성 입점B','서울특별시 합성구 테스트로 5',{detailAddress:'2층'})];
  const f=fixture({rows});await f.context.searchPeriod('서울 합성구 테스트로5');assert.equal(f.node('#results').buttons.length,2);f.node('#results').buttons[0].onclick();assert.equal(f.selected[0].customerCode,'S990005');assert.equal(f.selected[0].detailAddress,'1층');assert.equal(f.context.state.currentRows.length,2);
+});
+
+test('one already loaded address can be selected before a stalled Customer lookup',async()=>{
+ const row=store('S990018','합성 즉시 주소점','서울 종로구 합성로 18');
+ let release;
+ const f=fixture({rows:[row],remote:()=>new Promise(resolve=>{release=resolve;})});
+ const pending=f.context.searchPeriod('서울특별시 종로구 합성로18');
+ assert.equal(f.node('#results').buttons.length,1);
+ assert.match(f.context.lastStatus,/저장된 매장 1건/);
+ f.node('#results').buttons[0].onclick();
+ assert.equal(f.selected[0].customerCode,row.customerCode);
+ release({data:[store('S990019','합성 지연점',row.address)],meta:{}});
+ await pending;
+ assert.deepEqual(f.selected.map(x=>x.customerCode),[row.customerCode]);
+ assert.equal(f.fallback.length,0);
+});
+
+test('the loaded address catalogue prefers current rows and refreshes after source replacement',async()=>{
+ const old=store('S990020','합성 주소 이전점','서울 종로구 합성로 20');
+ const next={...old,address:'서울 중구 합성로 30',lat:null,lng:null,addressChanged:true,coordinateStatus:'CONFLICT'};
+ const f=fixture({rows:[old]});
+ const c=f.context;
+ await c.searchPeriod(old.address);
+ assert.equal(f.selected.length,1);
+ c.allStores=[next];c.storesByCode.set(old.customerCode,next);
+ await c.searchPeriod(old.address);
+ assert.equal(f.selected.length,1);
+ await c.searchPeriod(next.address);
+ assert.equal(f.selected.length,2);
+ assert.equal(f.selected[1].address,next.address);
+ assert.equal(f.selected[1].lat,null);
 });
 
 test('private address match is accepted when the public result omits its address',async()=>{
@@ -104,6 +148,45 @@ test('Customer failure cannot declare a new customer or invoke external lookup',
 
 test('verified empty lookup and unverified empty lookup preserve distinct customer states',async()=>{
  for(const verified of [false,true]){const f=fixture({remote:async()=>({data:[],meta:{customerMatchVerified:verified}})});await f.context.searchPeriod('서울 합성구 새주소로 9');assert.equal(f.fallback[0].options.lookupAllowed,true);assert.equal(f.fallback[0].options.customerMatchState,verified?'NOT_IN_MASTER':'UNCONFIRMED');}
+});
+
+test('an apartment name without a building or lot number stays in store search',async()=>{
+ const f=fixture();
+ for(const text of ['합성아파트','서울 합성구 합성아파트']){
+  await f.context.searchPeriod(text);
+  assert.match(f.context.lastStatus,/도로명과 건물번호 또는 동·리와 지번/);
+ }
+ assert.equal(f.queries.length,2);
+ assert.equal(f.fallback.length,0);
+ await f.context.searchPeriod('합성리 산 123-4');
+ assert.equal(f.fallback[0].text,'합성리 산 123-4');
+});
+
+test('exact address search waits for the existing permission check and ignores stale results',async()=>{
+ const {context:c}=fixture();
+ const point={lat:37.5,lng:127.1},finished=[];
+ let release;
+ Object.assign(c,{addressController:null,geocodeAddress:async()=>point,finishAddress:value=>finished.push(value),
+  waitForSearchMapPoint:()=>assert.fail('pending permission became a map fallback')});
+ c.state.map={};
+ c.state.addressRequestId=0;
+ c.window.KakaoMapsAdapter={refreshAddressLookup:()=>new Promise(resolve=>{
+  release=()=>{c.window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:true};resolve();};
+ })};
+ vm.runInContext(declaration('searchExternalAddress'),c);
+
+ const stale=c.searchExternalAddress('서울 합성구 시험로 10');
+ assert.equal(c.lastStatus,'주소검색 연결 확인 중');
+ c.state.searchRequestId++;
+ release();
+ await stale;
+ assert.equal(finished.length,0);
+
+ c.window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
+ const current=c.searchExternalAddress('서울 합성구 시험로 11');
+ release();
+ await current;
+ assert.deepEqual(finished,[point]);
 });
 
 test('unknown exact customer code cannot become an address pin or a prefix-code match',async()=>{
@@ -134,6 +217,15 @@ test('zero and swapped coordinates are never selected as valid points',async()=>
 
 test('optional master enrichment does not delay existing customer selection',async()=>{
  const f=fixture({rows:[store('S990015','합성 즉시선택','서울 시험로 15')]});f.context.loadBaseVehicles=()=>new Promise(()=>{});await f.context.searchPeriod('S990015');assert.equal(f.selected.length,1);
+});
+
+test('selecting a customer with a loaded base vehicle does not refetch the bulk master',async()=>{
+ const row=store('S990022','합성 호차 확인점','서울 시험로 22'),f=fixture({rows:[row]});
+ f.context.baseVehicles.set(row.customerCode,{baseVehicle:'101'});
+ f.context.loadBaseVehicles=()=>assert.fail('loaded master should not be fetched on selection');
+ await f.context.searchPeriod(row.customerCode);
+ assert.equal(f.selected[0].customerCode,row.customerCode);
+ assert.equal(f.selected[0].vehicle,'101');
 });
 
 test('clear search removes only search state and invokes the existing overview reset',()=>{

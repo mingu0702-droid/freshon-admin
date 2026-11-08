@@ -7,10 +7,10 @@ import {createRoadRouteService} from '../src/opsmap-abc/roadRouteService.js';
 const {chromium}=await import(process.env.OPSMAP_TEST_PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve('public/opsmap'),output=process.env.OPSMAP_R14_DIRECTIONS_OUTPUT||fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r14-directions-'));
 fs.mkdirSync(output,{recursive:true});
-const rows=Array.from({length:8},(_,i)=>({customerCode:'SYNTHETIC_'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',order:8-i,lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
+const rows=Array.from({length:8},(_,i)=>({customerCode:'S99000'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',order:8-i,lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
 const dailyRows=rows.slice(0,4);
-const requests=[],providerRequests=[],reservations=[],external=[],errors=[],checks=[];
-let budgetDepleted=false;
+const requests=[],providerRequests=[],reservations=[],recordedReads=[],external=[],errors=[],checks=[];
+let budgetDepleted=false,recordedOrderVerified=false;
 const budget={
  durable:true,
  status:async()=>({durable:true,scope:'CUMULATIVE_APPROVED_ACCOUNT',remaining:budgetDepleted?0:30000-reservations.length}),
@@ -47,8 +47,20 @@ const event={
  removeListener(target,name,fn){listeners.get(target)?.get(name)?.delete(fn);},
  trigger(target,name){for(const fn of listeners.get(target)?.get(name)||[])fn();}
 };
-class FixtureMap{constructor(el,o){this.el=el;this.center=o.center;this.level=5}getCenter(){return this.center}setCenter(p){this.center=p;event.trigger(this,'center_changed');event.trigger(this,'idle')}panTo(p){this.setCenter(p)}getLevel(){return this.level}setLevel(v){this.level=v;event.trigger(this,'zoom_changed');event.trigger(this,'idle')}getBounds(){return new Bounds()}setBounds(){}relayout(){}getProjection(){return{containerPointFromCoords:p=>({x:350,y:300}),coordsFromContainerPoint:p=>new Coord(37,127)}}}
-class Overlay{constructor(o){this.opts=o}setMap(m){this.opts.content?.remove();if(m&&this.opts.content)m.el.append(this.opts.content)}}
+class FixtureMap{constructor(el,o){this.el=el;this.center=o.center;this.level=5}getCenter(){return this.center}setCenter(p){this.center=p;event.trigger(this,'center_changed');event.trigger(this,'idle')}panTo(p){this.setCenter(p)}getLevel(){return this.level}setLevel(v){this.level=v;event.trigger(this,'zoom_changed');event.trigger(this,'idle')}getBounds(){return new Bounds()}setBounds(){}relayout(){}getProjection(){return{containerPointFromCoords:p=>({x:this.el.clientWidth*.20+(p.getLng()-127)*this.el.clientWidth*119+(127.7-this.center.getLng())*15,y:Math.max(150,this.el.clientHeight*.62)-(p.getLat()-37)*8000+(this.center.getLat()-36.7)*12}),coordsFromContainerPoint:p=>new Coord(37,127)}}}
+class Overlay{
+ constructor(o){this.opts=o;}
+ setMap(m){
+  if(this.map){event.removeListener(this.map,'idle',this.position);removeEventListener('resize',this.position);this.wrap?.remove();}
+  this.map=m;
+  if(!m||!this.opts.content||!this.opts.position)return;
+  this.wrap=document.createElement('div');
+  Object.assign(this.wrap.style,{position:'absolute',width:'max-content',zIndex:String(this.opts.zIndex||1),transform:'translate('+(-100*(this.opts.xAnchor??.5))+'%,'+(-100*(this.opts.yAnchor??.5))+'%)'});
+  this.wrap.append(this.opts.content);m.el.append(this.wrap);
+  this.position=()=>{const {x,y}=m.getProjection().containerPointFromCoords(this.opts.position);this.wrap.style.left=x+'px';this.wrap.style.top=y+'px';};
+  this.position();event.addListener(m,'idle',this.position);addEventListener('resize',this.position);
+ }
+}
 class RoadLine extends Overlay{setMap(m){if(m){if(this.opts.path.length<3)throw Error('SYNTHETIC_GEOMETRY_MISSING');window.__routeLines.add(this);}else window.__routeLines.delete(this);}}
 window.kakao={maps:{LatLng:Coord,LatLngBounds:Bounds,Map:FixtureMap,CustomOverlay:Overlay,Polygon:Overlay,Polyline:RoadLine,event}};window.KakaoMapsAdapter={ready:()=>Promise.resolve(),reset(){}};`;
 let html=fs.readFileSync(path.join(root,'map-phase2b-preview.html'),'utf8').replace(/<script\b[\s\S]*?<\/script>/gi,'');
@@ -62,9 +74,19 @@ const server=http.createServer(async(req,res)=>{
    try{data=await service.route(body);}catch(e){res.statusCode=e.status||500;data={ok:false,error:e.code};}
   }
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-11-02',startDate:'2026-09-04',endDate:'2026-11-02'}};
-  if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:'e'.repeat(64),baseVehicleStale:false})),meta:{version:'e'.repeat(64),stale:false}};
+  if(u.pathname.endsWith('/base-vehicles')){
+   let raw='';for await(const chunk of req)raw+=chunk;
+   const codes=new Set(raw?JSON.parse(raw).customerCodes:u.searchParams.get('customerCodes')?.split(','));
+   const meta={version:'e'.repeat(64),basis:'FIXED_DISPATCH_PRIMARY',checkedAt:'2026-11-02T08:00:00.000Z',stale:false};
+   data={ok:true,data:rows.filter(row=>codes.has(row.customerCode)).map(r=>({customerCode:r.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',baseVehicleSource:meta.basis,baseVehicleVersion:meta.version,baseVehicleCheckedAt:meta.checkedAt,baseVehicleStale:meta.stale})),meta};
+  }
   if(u.pathname.endsWith('/assignments'))data={data:dailyRows.map(r=>({...r,deliveryDate:u.searchParams.get('date')})),meta:{complete:true,date:u.searchParams.get('date')}};
   if(u.pathname.endsWith('/route-plan'))data={data:{vehicle:'101',stops:dailyRows,totalStops:4},meta:{complete:true}};
+  if(u.pathname.endsWith('/recorded-stops')){
+   const date=u.searchParams.get('date'),vehicle=u.searchParams.get('vehicle');recordedReads.push({date,vehicle});
+   const origin=vehicle==='101'?{customerCode:'CENTER_osan',customerName:'오산센터',lat:37,lng:127}:null;
+   data={ok:true,data:{date,vehicle,origin,orderVerified:recordedOrderVerified,sourceStopCount:dailyRows.length,stops:recordedOrderVerified?dailyRows:[]},meta:{source:'HUB_ROUTE_STOPS'}};
+  }
   res.setHeader('content-type','application/json');res.end(JSON.stringify(data));return;
  }
  if(u.pathname==='/opsmap/'){res.setHeader('content-type','text/html');res.end(html);return;}
@@ -79,12 +101,27 @@ try{
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady());
  const check=(name,value)=>{assert(value,name);checks.push(name);};
  const totals=page.locator('#mapRouteTotals');
+ const centerMarker=page.locator('.osanCenterMarker');
+ const map=page.locator('#map');
+ const measureBadges=()=>page.locator('.navRoutePoint').evaluateAll(nodes=>nodes.map(node=>{
+  const badge=node.getBoundingClientRect(),map=document.querySelector('#map').getBoundingClientRect();
+  const pin=document.querySelector('.marker[data-customer-code="'+node.dataset.customerCode+'"] .pin'),marker=pin?.getBoundingClientRect();
+  return {text:node.textContent,height:badge.height,gap:marker?marker.top-badge.bottom:null,number:pin?.textContent,color:getComputedStyle(node).backgroundColor,inside:badge.left>=map.left&&badge.right<=map.right&&badge.top>=map.top&&badge.bottom<=map.bottom};
+ }));
  await page.screenshot({path:path.join(output,'before-1366.png')});
- check('initial visit does not query Directions or show route totals',requests.length===0&&providerRequests.length===0&&!await totals.isVisible());
+ check('initial visit does not query Directions or show route totals or role badges',requests.length===0&&providerRequests.length===0&&!await totals.isVisible()&&await page.locator('.navRoutePoint').count()===0);
+ check('one compact verified Osan building is available before selection',await centerMarker.count()===1&&await centerMarker.locator('svg').isVisible()&&await centerMarker.innerText()==='오산센터');
+ const originalIconWidth=await centerMarker.locator('svg').evaluate(node=>node.getBoundingClientRect().width);
+ await page.evaluate(()=>MapUiLocalBridge.state.map.setLevel(13));
+ check('Osan building resizes on zoom without duplication',await centerMarker.count()===1&&await centerMarker.locator('svg').evaluate(node=>node.getBoundingClientRect().width)<originalIconWidth);
+ await page.evaluate(()=>MapUiLocalBridge.state.map.setLevel(5));
+ await centerMarker.click();
+ check('Osan card opens at the registered marker',await page.locator('#osanCenterCard').isVisible()&&await centerMarker.getAttribute('aria-expanded')==='true');
+ await map.screenshot({path:path.join(output,'map-osan-center-1366.png')});
+ await page.locator('#osanCenterCard [data-center-origin]').click();
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
- await page.locator('.navCenterChoices').getByRole('button',{name:'오산센터',exact:true}).click();
- await page.evaluate(()=>MapNavigationEditor.setPoint('destination','SYNTHETIC_3'));
- check('verified Osan center is selectable',await page.locator('#plannerStart').inputValue()==='CENTER_osan');
+ await page.evaluate(()=>MapNavigationEditor.setPoint('destination','S990003'));
+ check('verified Osan center card can select the route origin',await page.locator('#plannerStart').inputValue()==='CENTER_osan'&&!await page.locator('#osanCenterCard').isVisible());
  await page.locator('#planRoute').click();
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  assert.deepEqual(providerRequests[0],{method:'GET',points:[[127,37],[rows[3].lng,rows[3].lat]]});
@@ -92,8 +129,25 @@ try{
  check('desktop totals are visible on the map and absent from route settings',await page.locator('.maparea > #mapRouteTotals').isVisible()&&await page.locator('#waypointPlanner #navDistance, #waypointPlanner #navDuration, #waypointPlanner .plannerMetrics').count()===0);
  await totals.screenshot({path:path.join(output,'map-route-totals-1366.png')});
  await page.locator('#clearPlanner').click();
- await page.evaluate(()=>MapNavigationEditor.replacePoints(['SYNTHETIC_0','SYNTHETIC_1','SYNTHETIC_2','SYNTHETIC_3']));
- await page.evaluate(()=>{window.__stableKakaoLink=document.querySelector('#navKakaoLinks a');for(let i=0;i<20;i++)window.dispatchEvent(new Event('map-coordinate-updated'));});await page.waitForTimeout(100);check('background coordinate updates preserve the same clickable external route link',await page.evaluate(()=>window.__stableKakaoLink===document.querySelector('#navKakaoLinks a')));
+ await page.waitForFunction(()=>MapUiLocalBridge.stores().some(row=>row.baseVehicleState==='VERIFIED_MASTER'));
+ await page.evaluate(()=>MapNavigationEditor.replacePoints(['S990000','S990001','S990002','S990003']));
+ await page.evaluate(()=>{window.__stableRouteBadge=document.querySelector('.navRoutePoint');for(let i=0;i<20;i++)window.dispatchEvent(new Event('map-coordinate-updated'));});
+ check('background coordinate updates retain selected role badges and no external link UI',await page.evaluate(()=>window.__stableRouteBadge===document.querySelector('.navRoutePoint'))&&await page.locator('#navKakaoDirections,#navSelectedKakao').count()===0);
+ const expectedBadges=[['출발','rgb(19, 131, 100)'],['경유1','rgb(52, 67, 84)'],['경유2','rgb(52, 67, 84)'],['도착','rgb(196, 65, 70)']];
+ const badgeMeasurements={};
+ for(const width of [1366,390]){
+  await page.setViewportSize({width,height:900});
+  await page.waitForFunction(()=>Array.from(document.querySelectorAll('.navRoutePointGroup')).every(group=>group.style.getPropertyValue('--nav-badge-offset')));
+  const measured=await measureBadges();badgeMeasurements[width]=measured;
+  assert.deepEqual(measured.map(({text,color})=>[text,color]),expectedBadges);
+  check(width+'px role badges stay 24px high and 4–6px above visible numbered vehicle pins',measured.every(row=>row.inside&&row.height===24&&row.gap>=4&&row.gap<=6&&row.number==='101'));
+  await map.screenshot({path:path.join(output,'map-route-badges-'+width+'.png')});
+ }
+ await centerMarker.click();
+ check('mobile Osan card and its exit control fit the map',await page.locator('#osanCenterCard').evaluate(card=>{const r=card.getBoundingClientRect(),m=document.querySelector('#map').getBoundingClientRect();return r.width>0&&r.left>=m.left&&r.right<=m.right&&r.top>=m.top&&r.bottom<=m.bottom;}));
+ await map.screenshot({path:path.join(output,'map-osan-center-390.png')});
+ await page.locator('#osanCenterCard [data-center-close]').click();
+ await page.setViewportSize({width:1366,height:900});
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);await page.locator('#planRoute').click();
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  assert.deepEqual(providerRequests[1],{method:'GET',points:rows.slice(0,4).map(r=>[r.lng,r.lat])});
@@ -111,17 +165,20 @@ try{
  check('swap reverses endpoints and intermediate visit order',requests.length===4&&requests[3].origin.lat===rows[3].lat&&requests[3].destination.lat===rows[0].lat&&requests[3].waypoints[0].lat===rows[1].lat);
  await page.locator('#plannerWaypoint0').fill('UNRESOLVED');await page.waitForTimeout(650);
  check('incomplete waypoint clears geometry and never queries',requests.length===4&&await page.locator('#navDistance').textContent()==='— km');
- await page.locator('#clearPlanner').click();await page.waitForTimeout(550);check('reset clears all points and metrics without a call',requests.length===4&&(await page.evaluate(()=>MapNavigationEditor.values())).every(v=>!v)&&await page.locator('#navDuration').textContent()==='— 분'&&!await totals.isVisible());
+ await page.locator('#clearPlanner').click();await page.waitForTimeout(550);check('reset clears all points, badges and metrics without a call',requests.length===4&&(await page.evaluate(()=>MapNavigationEditor.values())).every(v=>!v)&&await page.locator('#navDuration').textContent()==='— 분'&&!await totals.isVisible()&&await page.locator('.navRoutePoint').count()===0);
+ await page.evaluate(()=>MapNavigationEditor.replacePoints(['S990001','S990001']));
+ check('co-located origin and destination badges share a non-overlapping row',await page.locator('.navRoutePointGroup').count()===1&&await page.locator('.navRoutePoint').evaluateAll(nodes=>{const [a,b]=nodes.map(node=>node.getBoundingClientRect());return nodes.length===2&&a.top===b.top&&a.right+3<=b.left;}));
+ await page.locator('#clearPlanner').click();
  for(const width of [1920,1366,768,390]){
   await page.setViewportSize({width,height:900});await page.locator('#waypointPlanner').scrollIntoViewIfNeeded();
   check(width+'px editor stays inside the viewport',await page.locator('#waypointPlanner').evaluate(n=>{const r=n.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1}));
   await page.screenshot({path:path.join(output,'after-'+width+'.png')});
  }
- await page.evaluate(()=>MapNavigationEditor.replacePoints(['SYNTHETIC_0','SYNTHETIC_3']));await page.locator('#planRoute').click();await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
+ await page.evaluate(()=>MapNavigationEditor.replacePoints(['S990000','S990003']));await page.locator('#planRoute').click();await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  check('mobile explicit route shows synthetic geometry and response metrics',requests.length===5&&await page.locator('#navDistance').textContent()==='0.1 km');
  check('mobile totals fit inside the map',await totals.evaluate(node=>{const badge=node.getBoundingClientRect(),map=node.parentElement.getBoundingClientRect();return badge.width>0&&badge.left>=map.left&&badge.right<=map.right&&badge.bottom<=map.bottom;}));
  await totals.screenshot({path:path.join(output,'map-route-totals-390.png')});
- await page.locator('#addWaypoint').click();await page.evaluate(()=>MapNavigationEditor.setPoint('waypoint','SYNTHETIC_1',0));await page.waitForFunction(()=>document.querySelector('#navDistance').textContent==='0.2 km');
+ await page.locator('#addWaypoint').click();await page.evaluate(()=>MapNavigationEditor.setPoint('waypoint','S990001',0));await page.waitForFunction(()=>document.querySelector('#navDistance').textContent==='0.2 km');
  check('mobile add waypoint recalculates',requests.length===6&&requests.at(-1).waypoints.length===1);
  const beforeRemove=providerRequests.length;
  await page.locator('[aria-label="경유지 1 삭제"]').click();await page.waitForFunction(()=>document.querySelector('#navDistance').textContent==='0.1 km');
@@ -134,11 +191,23 @@ try{
  check('six waypoints use one synthetic POST with all seven legs',requests.length===8&&requests.at(-1).waypoints.length===6&&reservations.at(-1)==='waypoints'&&await page.evaluate(()=>__routeLines.size===7)&&await page.locator('#navDuration').textContent()==='7분');
  await page.locator('#clearPlanner').click();await page.locator('#modeDaily').click();
  await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-11-02','2026-11-02'));
- await page.evaluate(()=>{const input=document.querySelector('#vehicleList input[value="101"]');input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));});
+ const pickVehicle=value=>page.evaluate(checked=>{const input=document.querySelector('#vehicleList input[value="101"]');input.checked=checked;input.dispatchEvent(new Event('change',{bubbles:true}));},value);
+ await pickVehicle(true);
  await page.waitForFunction(()=>MapUiLocalBridge.navigationVisitRows().length===4);
- await page.evaluate(()=>{MapNavigationEditor.setPoint('origin','CENTER_osan');document.querySelector('#waypointPlanner').open=true;document.querySelector('#dotRoadOptions').open=true;});
+ await page.waitForFunction(()=>MapNavigationEditor.values()[0]==='CENTER_osan');
+ check('verified Osan vehicle defaults only the origin without calling Directions',await centerMarker.count()===1&&JSON.stringify(await page.evaluate(()=>MapNavigationEditor.values()))===JSON.stringify(['CENTER_osan',''])&&requests.length===8&&recordedReads.length===1);
+ await page.evaluate(()=>{document.querySelector('#waypointPlanner').open=true;document.querySelector('#dotRoadOptions').open=true;});
  await page.locator('#queryRecordedRoute').click();
- check('mobile saved visits sort by order and retain center origin',JSON.stringify(await page.evaluate(()=>MapNavigationEditor.values()))===JSON.stringify(['CENTER_osan','SYNTHETIC_3','SYNTHETIC_2','SYNTHETIC_1','SYNTHETIC_0'])&&requests.length===8);
+ await page.waitForFunction(()=>document.querySelector('#navPointStatus').textContent.includes('저장된 착순을 확인할 수 없습니다'));
+ check('unverified saved sequence never supplies waypoints or a destination',JSON.stringify(await page.evaluate(()=>MapNavigationEditor.values()))===JSON.stringify(['CENTER_osan',''])&&requests.length===8&&recordedReads.length===1);
+ await pickVehicle(false);
+ await page.waitForFunction(()=>MapNavigationEditor.values()[0]==='');
+ recordedOrderVerified=true;
+ await pickVehicle(true);
+ await page.waitForFunction(()=>MapNavigationEditor.values()[0]==='CENTER_osan');
+ await page.locator('#queryRecordedRoute').click();
+ await page.waitForFunction(()=>document.querySelector('#navPointStatus').textContent.includes('지점을 적용했습니다.'));
+ check('mobile saved visits sort by order and retain center origin',JSON.stringify(await page.evaluate(()=>MapNavigationEditor.values()))===JSON.stringify(['CENTER_osan','S990003','S990002','S990001','S990000'])&&requests.length===8);
  await page.screenshot({path:path.join(output,'after-import-390.png')});
  const requestCount=requests.length;
  const providerCount=providerRequests.length;
@@ -147,7 +216,7 @@ try{
  check('reconnect restores staff map without dispatch or old route',requests.length===requestCount&&await page.evaluate(()=>document.body.dataset.mapStaffState==='authenticated'&&MapNavigation.metrics().routeState==='idle'&&__routeLines.size===0));
  budgetDepleted=true;
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
- await page.evaluate(()=>MapNavigationEditor.replacePoints(['CENTER_osan','SYNTHETIC_6']));
+ await page.evaluate(()=>MapNavigationEditor.replacePoints(['CENTER_osan','S990006']));
  const blocked=page.waitForResponse(r=>r.url().endsWith('/manual-road-route'));
  await page.locator('#planRoute').click();
  const response=await blocked;
@@ -155,5 +224,5 @@ try{
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='error');
  check('exhausted free budget returns local 429 and dispatches no provider request',response.status()===429&&payload.error==='QUOTA_EXCEEDED'&&requests.length===requestCount+1&&providerRequests.length===providerCount&&reservations.length===providerCount&&await page.evaluate(()=>__routeLines.size===0)&&await page.locator('#navDistance').textContent()==='— km'&&!await totals.isVisible());
  check('no external calls or JavaScript errors',external.length===0&&errors.length===0);
- const result={pass:checks.length,fail:0,scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_PROVIDER',checks,routePosts:requests.length,providerCalls:providerRequests.length,reservations:reservations.length,externalCalls:external.length,errors,artifacts:output};fs.writeFileSync(path.join(output,'RESULT.safe.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+ const result={pass:checks.length,fail:0,scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_PROVIDER',checks,badgeMeasurements,routePosts:requests.length,recordedReads:recordedReads.length,providerCalls:providerRequests.length,reservations:reservations.length,externalCalls:external.length,errors,artifacts:output};fs.writeFileSync(path.join(output,'RESULT.safe.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }catch(error){if(errors.length)console.error(JSON.stringify(errors));throw error;}finally{await browser?.close();await new Promise(r=>server.close(r));}

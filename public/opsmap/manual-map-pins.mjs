@@ -2,13 +2,13 @@ import{addressRegion,dispatchCenter,manualPinTargetCodes}from'./map-location-con
 window.MapLocationContract={addressRegion,dispatchCenter};
 const bridge=window.MapUiLocalBridge;if(!bridge)throw Error('EXISTING_MAP_BRIDGE_REQUIRED');
 let targets=[];
-let projectionVerified=false;
+let projectionVerified=false,canViewPins=false,canEditPins=false;
 // Enumerable symbols survive object-spread search/detail copies, but not JSON export.
 const ORIGINAL_PIN_BASE=Symbol('opsmap-original-pin-base');
 const $=s=>document.querySelector(s),base='/api/map-phase2b/private/manual-pins';let records=new Map(),bases=new WeakMap(),generation=0,edit=null,marker=null,mapClick=null,pending=null,refreshing=null,refreshingOwner=-1,touchClose=null,ignoreClickUntil=0;
 const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('map-manual-pins'):null;
 const panel=document.createElement('section');panel.id='manualPinEditor';panel.hidden=true;panel.setAttribute('role','dialog');panel.setAttribute('aria-label','배송지 핀 위치 수정');document.body.append(panel);
-const list=document.createElement('details');list.id='manualPinTargets';list.innerHTML='<summary>좌표 직접 수정</summary><p>주소는 선택한 매장 1건씩 표시합니다. Customer 원본 주소는 바꾸지 않습니다.</p><div class="manualPinPending"></div><details><summary>위치가 확인된 수정 대상</summary><div class="manualPinResolved"></div></details>';
+const list=document.createElement('details');list.id='manualPinTargets';list.innerHTML='<summary>좌표 상태</summary><p class="manualPinCapability"></p><div class="manualPinPending"></div><details><summary>위치 확인 완료</summary><div class="manualPinResolved"></div></details>';
 const projectionStatus=document.createElement('p');projectionStatus.id='manualPinProjectionStatus';projectionStatus.setAttribute('role','status');projectionStatus.hidden=true;list.prepend(projectionStatus);
 // The legacy mobile controller may still hold the store section in its hidden sheet.
 // Keep the manual editor entry in the active Dot sidebar instead of that sheet.
@@ -38,8 +38,9 @@ async function refresh(){
  refreshing=(async()=>{const value=await request(base+'/projection');if(owner!==generation)return;const next=new Map();
   if(!Array.isArray(value.data)||value.data.length>15000)throw Error('위치 응답 형식을 확인할 수 없습니다.');
   for(const r of value.data){if(!/^[A-Z]\d+$/.test(r.customerCode)||next.has(r.customerCode)||!['MANUAL_CONFIRMED','ADDRESS_CHANGED_REVIEW_REQUIRED'].includes(r.resolutionStatus)||r.resolutionStatus==='MANUAL_CONFIRMED'&&!(Number.isFinite(r.latitude)&&r.latitude>=33&&r.latitude<=39.5&&Number.isFinite(r.longitude)&&r.longitude>=124&&r.longitude<=132))throw Error('위치 응답 형식을 확인할 수 없습니다.');next.set(r.customerCode,r);}
-  records=next;projectionVerified=true;projectionStatus.hidden=true;projectionStatus.textContent='';bridge.refreshManualCoordinates();renderTargets();
- })();try{await refreshing;}catch(error){if(owner===generation){projectionVerified=false;projectionStatus.hidden=false;projectionStatus.textContent='수동 저장 위치를 확인하지 못했습니다. 현재 지도 위치의 출처는 재확인이 필요합니다.';window.dispatchEvent(new Event('map-manual-projection-failed'));}throw error;}finally{refreshing=null;}
+  records=next;projectionVerified=true;canViewPins=value.capabilities?.canView===true;canEditPins=canViewPins&&value.capabilities?.canWrite===true;
+  projectionStatus.hidden=true;projectionStatus.textContent='';bridge.refreshManualCoordinates();renderTargets();attach();
+ })();try{await refreshing;}catch(error){if(owner===generation){projectionVerified=false;canViewPins=false;canEditPins=false;renderTargets();attach();projectionStatus.hidden=false;projectionStatus.textContent='수동 저장 위치를 확인하지 못했습니다. 현재 지도 위치의 출처는 재확인이 필요합니다.';window.dispatchEvent(new Event('map-manual-projection-failed'));}throw error;}finally{refreshing=null;}
 }
 function close(){generation++;pending?.abort();pending=null;touchClose?.();touchClose=null;edit=null;panel.hidden=true;panel.replaceChildren();document.body.classList.remove('manualPinEditing');if(marker)marker.setMap(null);marker=null;if(mapClick&&bridge.state.map)kakao.maps.event.removeListener(bridge.state.map,'click',mapClick);mapClick=null;ignoreClickUntil=0;}
 function bindTouchPin(map){
@@ -88,17 +89,21 @@ async function save(action='save',targetRevision){
  }catch(e){if(owner===generation)$('#manualPinMessage').textContent=e.message;}finally{if(owner===generation)$('#manualPinSave').disabled=!edit?.point||!edit.data.canWrite;}
 }
 async function open(code,{searchNow=false}={}){
- close();const owner=generation;pending=new AbortController();panel.hidden=false;document.body.classList.add('manualPinEditing');node('h2','배송지 핀 위치 수정',panel);button('닫기',panel,close);const status=node('p','선택 매장 정보를 조회합니다…',panel);status.id='manualPinMessage';
+ close();const owner=generation;pending=new AbortController();panel.hidden=false;const heading=node('h2','배송지 핀 정보',panel);button('닫기',panel,close);const status=node('p','선택 매장 정보를 조회합니다…',panel);status.id='manualPinMessage';
  try{const value=await request(base+'/'+code,{signal:pending.signal});if(owner!==generation)return;const data=value.data;edit={code,data,csrf:value.csrfToken,point:null,requestBody:null};
   node('p',code+' · '+data.customerName,panel).id='manualPinIdentity';node('p','Customer 기본주소 (원문 보존)',panel);node('p',data.originalAddress,panel).id='manualPinOriginalAddress';
   if(data.addressChanged)node('p','원본 주소가 변경됐습니다. 이전 주소 해시와 비교해 다시 확인해 주세요.',panel);
-  node('label','검색용 주소 (선택·원본 주소 변경 없음)',panel).htmlFor='manualPinSearchAddress';const input=node('input',undefined,panel);input.id='manualPinSearchAddress';input.autocomplete='off';input.value=data.originalAddress;input.oninput=()=>{if(edit)edit.requestBody=null;};
-  const find=button('주소 검색',panel,search);find.id='manualPinSearch';node('div','',panel).id='manualPinSearchResults';node('p','지도 위를 클릭하거나 핀을 드래그해 위치를 지정해 주세요.',panel).id='manualPinCoordinates';
-  const confirm=button('이 위치로 저장',panel,()=>save());confirm.id='manualPinSave';confirm.disabled=true;
-  const history=node('details',undefined,panel);node('summary','수정 이력·이전 위치로 되돌리기',history);const h=node('div',undefined,history);h.id='manualPinHistory';
+  if(data.canWrite){
+   heading.textContent='배송지 핀 위치 수정';document.body.classList.add('manualPinEditing');
+   node('label','검색용 주소 (선택·원본 주소 변경 없음)',panel).htmlFor='manualPinSearchAddress';const input=node('input',undefined,panel);input.id='manualPinSearchAddress';input.autocomplete='off';input.value=data.originalAddress;input.oninput=()=>{if(edit)edit.requestBody=null;};
+   const find=button('주소 검색',panel,search);find.id='manualPinSearch';node('div','',panel).id='manualPinSearchResults';node('p','지도 위를 클릭하거나 핀을 드래그해 위치를 지정해 주세요.',panel).id='manualPinCoordinates';
+   const confirm=button('이 위치로 저장',panel,()=>save());confirm.id='manualPinSave';confirm.disabled=true;
+  }
+  const history=node('details',undefined,panel);node('summary',data.canWrite?'수정 이력·이전 위치로 되돌리기':'수정 이력',history);const h=node('div',undefined,history);h.id='manualPinHistory';
   if(data.revision&&data.canWrite){button('처음 위치로 되돌리기',h,()=>{edit.requestBody=null;void save('revert',0);}).id='manualPinRestoreOriginal';}
   for(const event of data.history){const entry=node('div',undefined,h);node('p',`#${event.revision} · ${event.updatedAt} · 공유계정 수정`,entry);if(event.after)node('p',event.after.latitude+', '+event.after.longitude,entry);if(data.canWrite&&event.revision<data.revision)button('이전 위치 #'+event.revision+'로 되돌리기',entry,()=>{edit.requestBody=null;void save('revert',event.revision);});}
-  status.textContent=data.canWrite?'원본 Customer 주소는 수정하지 않습니다.':'저장 권한이 비활성화되어 있습니다. 관리자에게 전용 저장소·수정 권한 연결을 요청해 주세요.';
+  status.textContent=data.canWrite?'원본 Customer 주소는 수정하지 않습니다.':'등록 좌표와 수정 이력을 확인할 수 있습니다.';
+  if(!data.canWrite)return;
   await bridge.initMap();if(owner!==generation)return;
   mapClick=e=>{if(Date.now()>=ignoreClickUntil)selectPoint(e.latLng.getLat(),e.latLng.getLng());};kakao.maps.event.addListener(bridge.state.map,'click',mapClick);bindTouchPin(bridge.state.map);
   const initial=data.current&&!data.addressChanged?data.current:data.previousCoordinate;if(initial&&Number.isFinite(initial.latitude)&&Number.isFinite(initial.longitude))selectPoint(initial.latitude,initial.longitude,{pan:true});
@@ -109,17 +114,24 @@ function renderTargets(){
  targets=manualPinTargetCodes(bridge.stores(),[...records.values()],targets);
  const stores=new Map(bridge.stores().map(r=>[r.customerCode,r])),unresolved=list.querySelector('.manualPinPending'),resolved=list.querySelector('.manualPinResolved');unresolved.replaceChildren();resolved.replaceChildren();let count=0;
  for(const code of targets){const row=stores.get(code);if(!row)continue;const manual=records.get(code)?.resolutionStatus==='MANUAL_CONFIRMED',located=Number.isFinite(row.lat)&&Number.isFinite(row.lng)&&row.coordinateStatus!=='CONFLICT';const parent=located?resolved:unresolved;if(!located)count++;
-  const item=node('div',undefined,parent);item.className='manualPinTarget';item.dataset.manualTarget=code;node('b',code+' · '+row.customerName,item);node('p',manual?'수동 확정 완료':located?row.coordinateSource==='KAKAO_ADDRESS_LIVE'?'주소 기준 위치':'건물·기존 좌표 확인됨 · 재수정 가능':'위치 확인 필요 · 주소 검색 또는 지도에서 핀을 지정해 주세요.',item);
-  button('주소 검색',item,()=>open(code,{searchNow:true}));button(manual||located?'핀 위치 수정':'지도에서 핀 지정',item,()=>open(code));
+  const item=node('div',undefined,parent);item.className='manualPinTarget';item.dataset.manualTarget=code;node('b',code+' · '+row.customerName,item);node('p',manual?'수동 확정 완료':located?row.coordinateSource==='KAKAO_ADDRESS_LIVE'?'주소 기준 위치':'건물·기존 좌표 확인됨':'위치 확인 필요',item);
+  if(canEditPins){button('주소 검색',item,()=>open(code,{searchNow:true}));button(manual||located?'핀 위치 수정':'지도에서 핀 지정',item,()=>open(code));}
+  else if(canViewPins)button('핀 정보·이력',item,()=>open(code));
  }
- list.querySelector('summary').textContent='좌표 직접 수정 · 미확인 '+count+'개';
+ list.querySelector('summary').textContent='좌표 상태 · 미확인 '+count+'개';
+ list.querySelector('.manualPinCapability').textContent=canEditPins?'매장별로 주소 검색 또는 지도에서 핀 위치를 지정할 수 있습니다.':'매장별 위치 확인 상태를 표시합니다.';
 }
-function attach(){const code=bridge.state.selected?.customerCode;if(!code||!$('#detail .detailBody')||$('#manualPinEdit'))return;const b=button('지도에서 위치 수정',$('#detail .detailBody'),()=>open(code));b.id='manualPinEdit';if(records.get(code)?.resolutionStatus==='MANUAL_CONFIRMED')b.textContent='핀 위치 수정';}
+function attach(){
+ const current=$('#manualPinEdit'),code=bridge.state.selected?.customerCode,body=$('#detail .detailBody');
+ if(!code||!body||!canViewPins){current?.remove();return;}
+ const label=canEditPins?(records.get(code)?.resolutionStatus==='MANUAL_CONFIRMED'?'핀 위치 수정':'지도에서 위치 수정'):'핀 정보·이력';
+ const action=current||button(label,body,()=>open(code));action.id='manualPinEdit';action.textContent=label;action.onclick=()=>open(code);
+}
 window.MapManualPins=Object.freeze({apply,open,refresh,verified:()=>projectionVerified});
 window.addEventListener('map-store-selected',e=>{if(edit&&e.detail?.customerCode&&edit.code!==e.detail.customerCode)close();queueMicrotask(attach);});
 window.addEventListener('map-stores-replaced',()=>{renderTargets();if(!refreshing)void refresh().catch(()=>{});});
 window.addEventListener('map-coordinate-updated',()=>{window.MapNavigation?.sync();renderTargets();});
 window.addEventListener('map-staff-authenticated',()=>void refresh().catch(()=>{}));
-window.addEventListener('map-staff-signed-out',()=>{projectionVerified=false;projectionStatus.hidden=true;close();records.clear();bases=new WeakMap();list.querySelector('.manualPinPending').replaceChildren();list.querySelector('.manualPinResolved').replaceChildren();});
+window.addEventListener('map-staff-signed-out',()=>{projectionVerified=false;canViewPins=false;canEditPins=false;projectionStatus.hidden=true;close();records.clear();bases=new WeakMap();$('#manualPinEdit')?.remove();list.querySelector('.manualPinPending').replaceChildren();list.querySelector('.manualPinResolved').replaceChildren();});
 channel?.addEventListener('message',e=>{if(e.data==='changed'&&document.body.dataset.mapStaffState==='authenticated')void refresh().catch(()=>{});});
 window.addEventListener('pagehide',()=>{close();channel?.close();},{once:true});renderTargets();void refresh().catch(()=>{});

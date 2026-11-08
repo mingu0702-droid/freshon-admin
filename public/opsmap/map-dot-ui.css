@@ -38,10 +38,6 @@
 .dotRestored .navToggles{margin:8px 0}
 .dotRestored #queryRecordedRoute{font-size:12px;width:100%}
 .dotRestored #navSelectedStore,.dotRestored #navPointStatus,.dotRestored #plannerStatus{font-size:12px}
-.dotRestored #territoryControls{margin-top:12px;font-size:12px}
-.dotRestored #territoryControls p{font-size:11px;color:#728097}
-.dotRestored #territoryVehicles{padding-left:18px;color:#728097}
-.dotRestored #refreshTerritories{font-size:11px;padding:5px 8px}
 .dotRestored #dotDataStatus{font-size:11px;color:#728097;margin:4px 0 0;overflow-wrap:anywhere}
 .dotRestored #dotDataStatus[data-state=error]{color:#a33a16}
 .dotRestored #detailSection{position:absolute!important;right:20px!important;left:auto!important;top:84px!important;bottom:78px!important;width:340px!important;max-width:calc(100% - 40px);max-height:calc(100% - 162px)!important;margin:0;padding:0;border:1px solid #dce4ee;border-radius:12px;background:#fff;box-shadow:0 12px 40px #18354b25;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;z-index:450;transform:none!important}

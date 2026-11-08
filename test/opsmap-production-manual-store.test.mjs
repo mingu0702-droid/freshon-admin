@@ -24,8 +24,11 @@ test('shared staff session cannot write without independent coordinate permissio
  const service=createManualMapPins({env,appRoot:'C:/app',readCustomer,store,backupStore});assert.equal(service.canWrite(),false);
  const serviceWithPermission=createManualMapPins({env,appRoot:'C:/app',readCustomer,store,backupStore,authorizeWrite:q=>q.get('x-test-coordinate-role')==='approved'}),app=express();
  serviceWithPermission.mount({app,requireStaff:(_q,r,n)=>{r.locals.staffSession={key:'fixture-session'};n();},isSessionCurrent:()=>true});const server=http.createServer(app);await new Promise(r=>server.listen(0,'127.0.0.1',r));
- const base='http://127.0.0.1:'+server.address().port+'/api/map-phase2b/private/manual-pins/S970003';
+ const route='http://127.0.0.1:'+server.address().port+'/api/map-phase2b/private/manual-pins',base=route+'/S970003';
  try{const read=await(await fetch(base)).json();assert.equal(read.data.canWrite,false);assert.equal(read.csrfToken,null);
+  const projection=async headers=>(await(await fetch(route+'/projection',{headers})).json()).capabilities;
+  assert.deepEqual(await projection(),{canView:true,canWrite:false});
+  assert.deepEqual(await projection({'x-test-coordinate-role':'approved'}),{canView:true,canWrite:true});
   const allowed=await(await fetch(base,{headers:{'x-test-coordinate-role':'approved'}})).json();assert.equal(allowed.data.canWrite,true);
   const body={originalAddressHash:coordinateAddressHash('서울특별시 가상로 10'),expectedRevision:0,requestId:crypto.randomUUID(),latitude:37.5,longitude:127};
   const headers={'content-type':'application/json',origin:'https://localhost:3000','x-map-pin-csrf':allowed.csrfToken};assert.equal((await fetch(base+'/save',{method:'POST',headers,body:JSON.stringify(body)})).status,403);
