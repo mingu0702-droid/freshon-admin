@@ -65,12 +65,13 @@
   const distanceDeltaMeters=sumDistance-distance,durationDeltaSeconds=sumDuration-duration;
   const totals={distanceDeltaMeters,durationDeltaSeconds,allowedDelta:expectedSectionCount};
   if(Math.abs(distanceDeltaMeters)>expectedSectionCount)fail('INCOMPLETE_ROAD_ROUTE','DISTANCE_SUM',totals);
-  if(Math.abs(durationDeltaSeconds)>expectedSectionCount)fail('INCOMPLETE_ROAD_ROUTE','DURATION_SUM',totals);
+  // Kakao's destination ETA can exceed the sum of the individual section times.
+  if(durationDeltaSeconds>expectedSectionCount)fail('INCOMPLETE_ROAD_ROUTE','DURATION_SUM',totals);
   return {...base,state:'success',complete:true,coveredLegs:totalLegs,distanceMeters:distance,durationSeconds:duration,legs,chunks:[{state:'success',startLeg:0,endLeg:totalLegs-1,geometry}]};
  }
  const httpError=status=>status===401?'STAFF_LOGIN_REQUIRED':status===403?'PERMISSION_DENIED':status===429?'QUOTA_EXCEEDED':status===504?'TIMEOUT':status>=500?'PROVIDER_UNAVAILABLE':status===404?'FEATURE_DISABLED':'ROAD_ROUTE_FAILED';
  async function responseError(response){
-  const allowed=new Set(['STAFF_LOGIN_REQUIRED','ORIGIN_REJECTED','STAGE_VERIFICATION_READ_ONLY','AUTHENTICATION_FAILED','PERMISSION_DENIED','QUOTA_EXCEEDED','CALL_POLICY_BLOCKED','CALL_POLICY_UNCONFIRMED','PERSISTENT_BUDGET_REQUIRED','FEATURE_DISABLED','KEY_MISSING','TIMEOUT','PROVIDER_UNAVAILABLE','NO_ROAD_ROUTE','INVALID_MANUAL_ROUTE','INVALID_RESPONSE','WAYPOINT_LIMIT','ROAD_ROUTE_FAILED','RECORDED_ORDER_REQUIRED','STOP_COORDINATES_MISSING','ROUTE_SOURCE_UNAVAILABLE','ROUTE_SOURCE_UNVERIFIED','ROUTE_IDENTITY_MISMATCH','ORIGIN_UNCONFIRMED']);
+  const allowed=new Set(['STAFF_LOGIN_REQUIRED','ORIGIN_REJECTED','STAGE_VERIFICATION_READ_ONLY','AUTHENTICATION_FAILED','PERMISSION_DENIED','QUOTA_EXCEEDED','CALL_POLICY_BLOCKED','CALL_POLICY_UNCONFIRMED','PERSISTENT_BUDGET_REQUIRED','FEATURE_DISABLED','KEY_MISSING','TIMEOUT','PROVIDER_UNAVAILABLE','NO_ROAD_ROUTE','INVALID_MANUAL_ROUTE','WAYPOINT_LIMIT','ROAD_ROUTE_FAILED','RECORDED_ORDER_REQUIRED','STOP_COORDINATES_MISSING']);
   try{
    const reader=response.body?.getReader();if(!reader)return httpError(response.status);
    const parts=[];let count=0;try{for(;;){const r=await reader.read();if(r.done)break;count+=r.value.byteLength;if(count>4096)throw Error();parts.push(r.value);}}finally{void reader.cancel().catch(()=>{});reader.releaseLock();}
