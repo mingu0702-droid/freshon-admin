@@ -83,7 +83,7 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
    const remaining=b.monthlyApproval?(day===approvalDay?value.freeRemainingAtApproval:dailyLimits[api])-(b.monthlyApproval.dailyUsage[day]?.[api]||0):value.freeRemainingAtApproval-value.used;
    return [api,Math.max(0,remaining)];
   }));
-  return {durable:true,scope:b.scope,remaining:Math.max(0,Math.min(b.limit-b.used,b.monthlyFreeRemainingAtApproval-b.used,apis.directions+apis.waypoints)),apiRemaining:apis,freeOnly:true,approvalExpiresAt:b.expiresAt,approvalWindow:b.monthlyApproval?'KST_MONTH':'KST_DAY',usageDate:day};
+  return {durable:true,scope:b.scope,remaining:Math.max(0,Math.min(b.limit-b.used,b.monthlyFreeRemainingAtApproval-b.used,apis.directions+apis.waypoints)),apiRemaining:apis,approvedApis:[...approved],freeOnly:true,approvalExpiresAt:b.expiresAt,approvalWindow:b.monthlyApproval?'KST_MONTH':'KST_DAY',usageDate:day};
  }
  function transaction(work){const task=tail.catch(()=>{}).then(async()=>work(await read()));tail=task;return task;}
  return {kind:'PRODUCTION_PRIVATE_GITHUB_CAS',durable:configured,inspectWhenDisabled:true,

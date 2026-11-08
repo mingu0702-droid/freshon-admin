@@ -11,6 +11,8 @@ test('a current stored date is separate from unverified history and uses KST sou
 });
 test('an observed date or restart-generated timestamp alone cannot certify sync',()=>{
  const v=summarize({},base,{now});assert.equal(v.state,'INCOMPLETE');assert.equal(v.lastSync,null);assert.match(v.text,/동기화 미확인/);
+ assert.match(v.text,/마지막 저장 2026\.11\.03 04:00/);assert.doesNotMatch(v.text,/마지막 검증/);
+ assert.doesNotMatch(summarize({}, {...base,generatedAt:'2026-11-02T21:00:00Z'},{now}).text,/마지막 저장/);
 });
 test('a prior-day checkpoint cannot masquerade as current business data',()=>{
  const v=summarize({}, {...base,selectedDateCheckpoint:{...checkpoint,date:'2026-11-02'}},{now});assert.equal(v.selectedDateStored,false);assert.equal(v.state,'INCOMPLETE');

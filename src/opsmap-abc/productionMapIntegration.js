@@ -87,7 +87,8 @@ export function mountProductionMapApi(app,{
     const value=await addressLookupService.configuration({javascriptKey:env.KAKAO_MAP_JAVASCRIPT_KEY});
     return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:value}));
   });
-  mountRoadRouteRoutes({app,requireStaff:mapStaff.requireStaff,jsonBody:express.json({limit:'16kb'}),service:roadRouteService||createRoadRouteService({env,budget:roadRouteBudget,requireDurableBudget:true}),env,readRecordedRoute:readRecordedRoadRoute});
+  mountRoadRouteRoutes({app,requireStaff:mapStaff.requireStaff,jsonBody:express.json({limit:'16kb'}),service:roadRouteService||createRoadRouteService({env,budget:roadRouteBudget,requireDurableBudget:true}),env,
+    readRecordedRoute:readRecordedRoadRoute&&((input)=>readRecordedRoadRoute(input,osanCenter))});
   mountPrivateExtensions?.({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,previewEnabled});
   app.use(publicResponse);
   if(hybridStoredIoEnabled){const stored=createRollingHubIo({callHub});hybridReadDateCatalog??=stored.readDateCatalog;hybridReadDatePage??=stored.readDatePage;}

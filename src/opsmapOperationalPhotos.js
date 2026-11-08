@@ -1,6 +1,7 @@
 import {createDeliveryAdminPhotoSource, DeliveryPhotoError, deliveryDate, validatePhotoQuery} from './opsmapDeliveryPhotos.js';
 import {createDeliveryAdminPhotoTransport, DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, DELIVERY_ADMIN_PHOTO_HOSTS} from './opsmapDeliveryAdminTransport.js';
 import {mountOpsmapDeliveryPhotoRoutes} from './opsmapDeliveryPhotoRouter.js';
+import {createDeliveryPhotoHistoryReader} from './opsmapDeliveryPhotoHistory.js';
 export {createOperationalPhotoTaskReader} from './opsmapOperationalPhotoTaskReader.js';
 
 const fail = (code, status = 503) => { throw new DeliveryPhotoError(code, status); };
@@ -51,7 +52,7 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate}
 // Operational access replaces the old single-record trial allowance. Existing
 // staff/session checks, exact identity checks, stream limits and host checks remain.
 export function createOperationalPhotoExtension({enabled = false, rawRequest,
-  hasMemorySession, prepareSession, listDeliveryMetadata, imageFetch = globalThis.fetch} = {}) {
+  hasMemorySession, prepareSession, prepareHistorySession = false, listDeliveryMetadata, imageFetch = globalThis.fetch} = {}) {
   const isEnabled = () => typeof enabled === 'function' ? enabled() === true : enabled === true;
   const hasSession = () => isEnabled() && typeof hasMemorySession === 'function' && hasMemorySession() === true;
   const ensureSession = async (identity, {signal} = {}) => {
@@ -79,11 +80,21 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
     if (typeof listDeliveryMetadata !== 'function') fail('SOURCE_UNAVAILABLE');
     return listDeliveryMetadata(identity, options);
   };
-  const source = createDeliveryAdminPhotoSource({...transport, requestJson, listDeliveryMetadata: metadata,
+  const photoSource = createDeliveryAdminPhotoSource({...transport, requestJson, listDeliveryMetadata: metadata,
     categoryMap: DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, allowedImageHosts: DELIVERY_ADMIN_PHOTO_HOSTS, readTaskStatusRecords:true});
+  const readHistory = createDeliveryPhotoHistoryReader({
+    searchFrontDoorTasks:transport.searchFrontDoorTasks, listHistoryRecord:photoSource.listHistoryRecord, hasSession
+  });
+  const source = {...photoSource, async listHistory(identity, options) {
+    if (prepareHistorySession && !hasSession()) {
+      try { await ensureSession(identity, options); }
+      catch { return {coverage:'INCOMPLETE', deliveries:[]}; }
+    }
+    return readHistory(identity, options);
+  }};
   return {
     diagnostics: () => ({enabled: isEnabled(), sourceSession: hasSession(), metadataConfigured: typeof listDeliveryMetadata === 'function'}),
-    mount: ({app, requireStaff, isSessionCurrent, previewEnabled}) => mountOpsmapDeliveryPhotoRoutes({app, requireStaff, isSessionCurrent,
+    mount: ({app, requireStaff, isSessionCurrent, previewEnabled}, {historyOnly = false} = {}) => mountOpsmapDeliveryPhotoRoutes({app, requireStaff, isSessionCurrent, historyOnly,
       source, enabled: () => isEnabled() && previewEnabled() === true, prepareSource: ensureSession,
       prepareDiscovery: true, timeoutMs: 15000, maxConcurrent: 3, maxImageBytes: 4 * 1024 * 1024})
   };

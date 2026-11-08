@@ -82,7 +82,7 @@ export function mountProductionPhotoBinding({env=process.env,rawRequest,hasMemor
   return binding.requireStaff(req,res,()=>res.set('Cache-Control','private,no-store').json({ok:true,data:{enabled:env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',credentialsConfigured:source.credentialsConfigured===true,environmentCookieConfigured:source.environmentCookieConfigured===true,sourceSession:typeof hasMemorySession==='function'&&hasMemorySession()===true,metadataConfigured:typeof listDeliveryMetadata==='function'}}));
  });
  if(env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1'){
-  const extension=createOperationalPhotoExtension({enabled:()=>env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',rawRequest,hasMemorySession,prepareSession,listDeliveryMetadata});
+  const extension=createOperationalPhotoExtension({enabled:()=>env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',rawRequest,hasMemorySession,prepareSession,prepareHistorySession:true,listDeliveryMetadata});
   extension.mount(binding);return extension;
  }
  let approvedRecords=[];

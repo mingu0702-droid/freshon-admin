@@ -21,13 +21,16 @@
   const lastVerified=[checkpointTime,publicationTime].filter(value=>value&&Date.parse(value)<=now)
    .sort((a,b)=>Date.parse(b)-Date.parse(a))[0]||null;
   const clock=sync?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(sync)):'미확인';
-  const verifiedClock=!sync&&lastVerified?' · 마지막 검증 '+new Intl.DateTimeFormat('sv-SE',{
+  const fullClock=value=>new Intl.DateTimeFormat('sv-SE',{
    timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'
-  }).format(new Date(lastVerified)).replaceAll('-','.'):'';
+  }).format(new Date(value)).replaceAll('-','.');
+  const lastSaved=stamp(s.generatedAt);
+  const savedClock=!sync&&lastSaved&&Date.parse(lastSaved)<=now?' · 마지막 저장 '+fullClock(lastSaved):'';
+  const verifiedClock=!sync&&lastVerified?' · 마지막 검증 '+fullClock(lastVerified):'';
   const range=start&&end?start.replaceAll('-','.')+' ~ '+end.replaceAll('-','.'):'기간 확인 중';
   return {state,startDate:start,endDate:end,lastSync:sync,lastVerified,partial:incomplete,selectedDateStored:selectedStored,publicationVerified,
-   text:'매장자료 '+range+' · 마지막 동기화 '+clock+verifiedClock+' · '+label+(incomplete&&['TODAY_STORED','PUBLISHED_VERIFIED'].includes(state)?' · 일부 기간 검증 미완료':''),
-   title:'저장된 관측자료의 범위입니다. 당일 저장 확인과 과거 전체 기간 완료는 별도로 검증합니다.'};
+   text:'매장자료 '+range+' · 마지막 동기화 '+clock+savedClock+verifiedClock+' · '+label+(incomplete&&['TODAY_STORED','PUBLISHED_VERIFIED'].includes(state)?' · 일부 기간 검증 미완료':''),
+   title:'저장 시각과 원천 검증 시각을 각각 표시합니다. 당일 저장 확인과 과거 전체 기간은 별도로 검증합니다.'};
  }});
 })(typeof window==='object'?window:globalThis);
 /* Read-only status and the existing explicitly authenticated administrator action. */

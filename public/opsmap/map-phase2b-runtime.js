@@ -34,7 +34,7 @@
     liveAddressLocations?.clear();
     if(addressScheduleFrame!==null)cancelAnimationFrame(addressScheduleFrame);
     addressScheduleFrame=null;
-    cancelManualRoadRoute();manualDraft?.clear();window.dispatchEvent(new CustomEvent('map-navigation-logout'));
+    cancelManualRoadRoute();scopedManualResults.manual=null;scopedManualResults.daily=null;manualDraft?.clear();window.dispatchEvent(new CustomEvent('map-navigation-logout'));
     ++initialRequestId;++periodRequestId;++dateRequestId;
     for(const key of ['baseRequestId','routeRequestId','searchRequestId','addressRequestId','detailRequestId','todayRequestId'])++state[key];
     clearTimeout(initialTimer);clearTimeout(periodTimer);clearTimeout(baseVehicleTimer);clearInterval(generalSnapshotPoll);generalSnapshotPoll=null;clearTimeout(customerRegistryRetry);customerRegistryRetry=null;customerRegistry?.purge();
@@ -61,9 +61,10 @@
   const renderMetrics = { renders: 0, created: 0, removed: 0, reused: 0, lastMs: 0 };
   let roadResult = null, roadLayer = null;
   let roadLinesVisible=true;
-  let manualRoadResult=null,manualRoadLayer=null;
+  let manualRoadResult=null,manualRoadLayer=null,navigationScope='manual';
+  const scopedManualResults={manual:null,daily:null};
   const manualRoadController=window.ManualRoadRouteUi?.createController({onChange:result=>{
-    manualRoadResult=result;renderManualRoadState();
+    manualRoadResult=result;scopedManualResults[navigationScope]=result;renderManualRoadState();
     if(state.map){manualRoadLayer ||= window.RoadRouteUi.createLayer({map:state.map});if(roadLinesVisible)manualRoadLayer.render(result);else manualRoadLayer.clear();}
     window.dispatchEvent(new CustomEvent('map-manual-route',{detail:result}));
   }});
@@ -72,21 +73,22 @@
     const result=manualRoadResult;
     const text=window.MapDotUi.describeRoute(result);
     $('#manualStatus').textContent=text;
-    const status=$('#plannerStatus');if(status){status.hidden=!result||result.state==='idle';status.textContent=text;status.dataset.state=result?.state||'idle';}
     const button=$('#planRoute');if(button)button.disabled=result?.state==='loading';
     const advanced=$('#manualValidate');if(advanced)advanced.disabled=result?.state==='loading';
     const badge=$('#waypointPlanner .sectiontitle .muted');if(badge)badge.textContent=['success','partial'].includes(result?.state)?'자동차 경로':result?.state==='loading'?'조회 중':result?.state==='error'?'조회 실패':result?.state==='empty'?'경로 없음':result?.state==='disabled'?'연결 대기':'자동차';
   }
   function cancelManualRoadRoute(){manualRoadController?.cancel();manualRoadLayer?.clear();}
+  function cancelDailyRoadRoute(){
+    scopedManualResults.daily=null;
+    if(navigationScope==='daily')cancelManualRoadRoute();
+  }
   async function queryManualRoadRoute(){
     if(manualRoadController?.isLoading())return;
     const draft=manualDraft.validate();
     if(!manualRoadController)throw Error('도로경로 API 모듈 미연결');
-    ++state.routeRequestId;++state.todayRequestId;
-    requestControllers.get('route-plan')?.controller.abort('superseded');
-    requestControllers.get('operation-status')?.controller.abort('superseded');
-    $('#syncOperation').disabled=false;
-    resetRoadRoute();routeCameraEpoch=mapCamera?.interaction()??0;return manualRoadController.load(draft);
+    if(navigationScope==='daily')resetRoadRoute();
+    routeCameraEpoch=mapCamera?.interaction()??0;
+    return manualRoadController.load(draft);
   }
   let originalRouteLegend = $('.legend')?.innerHTML || '';
   const roadController = window.RoadRouteUi?.createController({ onChange: result => {
@@ -94,10 +96,20 @@
     syncRoadRoutePanel();
     if (state.map) {
       roadLayer ||= RoadRouteUi.createLayer({ map: state.map });
-      if(roadLinesVisible)roadLayer.render(result);else roadLayer.clear();
+      if(roadLinesVisible&&navigationScope==='daily')roadLayer.render(result);else roadLayer.clear();
     }
-    window.dispatchEvent(new CustomEvent('map-recorded-route',{detail:result}));
+    if(navigationScope==='daily'){
+      const button=$('#planRoute');if(button)button.disabled=result.state==='loading';
+      window.dispatchEvent(new CustomEvent('map-recorded-route',{detail:result}));
+    }
   } });
+  function renderNavigationLayers(){
+    if(!state.map)return;
+    manualRoadLayer ||= RoadRouteUi.createLayer({map:state.map});
+    roadLayer ||= RoadRouteUi.createLayer({map:state.map});
+    manualRoadLayer.render(roadLinesVisible?manualRoadResult:null);
+    roadLayer.render(roadLinesVisible&&navigationScope==='daily'?roadResult:null);
+  }
   function osanRoadVehicle(vehicle = primarySelectedVehicle()) {
     return isDailyDataReady() && selectedVehicles().length === 1 && Boolean(vehicle);
   }
@@ -115,7 +127,7 @@
   function resetRoadRoute() { roadController?.cancel(); roadLayer?.clear(); }
   function loadRoadRoute(vehicle,{explicit=false}={}) {
     if(!explicit)return;
-    cancelManualRoadRoute();
+    cancelDailyRoadRoute();
     if(hasDatedDriverFilter()){resetRoadRoute();return;}
     if (!osanRoadVehicle(vehicle)) { resetRoadRoute(); return; }
     routeCameraEpoch=mapCamera?.interaction()??0;
@@ -133,10 +145,10 @@
     if(state.mode!==next)resetDriverMaster();
     if(state.mode!==next){closeClusterPanel();window.dispatchEvent(new CustomEvent('map-navigation-context-changed',{detail:{mode:next,date:next==='DATE_ROUTE'?state.routeDate:''}}));}
     if(state.mode!==next&&next==='DATE_ROUTE'){dateReady=false;datedSourceDate='';dailyMeta=null;state.currentRows=[];state.routeRows=[];operationStops=[];}
-    if(state.mode!==next){cancelManualRoadRoute();clearSelection();cancelAddressLookup();++state.searchRequestId;++state.addressRequestId;state.virtual=null;$('#query').value='';$('#addressQuery').value='';$('#results').replaceChildren();$('#addressJudgeResults').replaceChildren();clearMap();}
+    if(state.mode!==next){cancelDailyRoadRoute();clearSelection();cancelAddressLookup();++state.searchRequestId;++state.addressRequestId;state.virtual=null;$('#query').value='';$('#addressQuery').value='';$('#results').replaceChildren();$('#addressJudgeResults').replaceChildren();clearMap();}
     if(!preservePeriod){hybridUi?.cancel();if(state.mode!==next)hybridUi?.closePeriod();}
     if (state.mode !== next) cancelNewAreaWork();
-    if (state.mode !== next) {resetRoadRoute();cancelManualRoadRoute();}
+    if (state.mode !== next) resetRoadRoute();
     if (modeViewInitialized && state.mode !== next) {
       modeViews[state.mode] = { vehicles: selectedVehicles().slice(), scope: periodVehicleScope, centerFilter: state.centerFilter, basis:periodBasis, driverKeys:selectedDriverKeys.slice(), driverKey:state.driverKey,
         center: state.map?.getCenter(), level: state.map?.getLevel() };
@@ -673,7 +685,7 @@
   async function changeSelectedDate(date,queryConditions=null,{skipOperationStatus=false}={}) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date+'T00:00:00Z')) || new Date(date+'T00:00:00Z').toISOString().slice(0,10)!==date || date > localDate()) return;
     const contextChanged=state.mode!=='DATE_ROUTE'||date!==state.selectedDate;
-    generalMap=false;resetRoadRoute();cancelManualRoadRoute();
+    generalMap=false;resetRoadRoute();cancelDailyRoadRoute();
     dateReady=false;datedSourceDate='';dailyMeta=null;
     ++initialRequestId; clearTimeout(initialTimer);
     clearTimeout(periodTimer); ++periodRequestId;
@@ -686,7 +698,7 @@
     syncModeUi(); $("#runListTool").open = true;
     updateDateRange(date);
     $("#freshnessState").title = "";
-    cancelManualRoadRoute();
+    cancelDailyRoadRoute();
     dateReady = false;
     const token = ++dateRequestId;
     ++state.searchRequestId;
@@ -1253,7 +1265,7 @@
       if(row.clusterCount){const small=document.createElement('small');small.textContent=row.clusterCount+'개 매장';pin.append(small);}
       button.classList.add('approvedMarker');button.replaceChildren(pin);
     }
-    if(state.mode==='DATE_ROUTE'&&window.MapNavigationEditor?.values?.().includes(row.customerCode))button.classList.add('navAssigned');
+    if(window.MapNavigationEditor?.values?.().includes(row.customerCode))button.classList.add('navAssigned');
     return button;
   }
 
@@ -1402,6 +1414,13 @@
     if (actions) body.insertBefore(node, actions); else body.append(node);
   }
 
+  function navigationPointActions(row){
+    if(!window.MapNavigation)return '';
+    const disabled=window.MapNavigationLookup.located(row)?'':' disabled';
+    return '<div class="navPickActions" role="group" aria-label="경로 지점 지정">'+
+      [['origin','출발'],['waypoint','경유'],['destination','도착']].map(([role,label])=>'<button type="button" data-nav-pick="'+role+'"'+disabled+'>'+label+'</button>').join('')+'</div><p data-nav-feedback role="status"></p>';
+  }
+
   function selectStore(row, element, focus, skipEnrich = false) {
     if(!row.virtual){if(!unifiedSelectionActive)invalidateUnifiedSearch();if(typeof clearSearchTemporaryPin==='function')clearSearchTemporaryPin({restoreView:false});closeUnifiedSearchResults();}
     ++cameraSelection;
@@ -1451,6 +1470,7 @@
       <div class="detailBody">
         <dl class="dotDetailFacts"><dt>담당 센터</dt><dd>${esc(detailCenter)}</dd><dt hidden>주소 권역</dt><dd id="detailAddressRegion" hidden>${esc(detailAddressRegion)}</dd><dt>${routeMode?"확정호차":"기준호차"}</dt><dd${routeMode?'':' id="detailBaseVehicle"'}>${esc(routeMode?vehicleLabel(vehicle)||'선택일 편성 없음':MapPeriodUi.baseVehicleLabel(row))}</dd><dt id="detailDeliveryDaysLabel" hidden>배송요일</dt><dd id="detailDeliveryDaysValue" hidden></dd><dt id="detailDriverLabel">${esc(detailDriver.label)}</dt><dd id="detailDriver" title="${esc(detailDriver.title)}" data-source="${esc(detailDriver.source)}">${esc(detailDriver.text)}</dd><dt>주소</dt><dd>${esc(row.address||'주소 불러오는 중…')}</dd><dt id="detailAddressLabel" hidden>상세주소</dt><dd id="detailAddressValue" hidden></dd></dl>
 
+        ${navigationPointActions(row)}
         <div class="staffActions"><button id="staffNotes" aria-expanded="false" aria-controls="staffAuxContent">출입배송정보 ▸</button><button id="staffHistory" aria-expanded="false" aria-controls="staffAuxContent">최근 배송기사이력 ▸</button></div>
         ${!routeMode && row.history?.length ? `<div class="periodRecent">최근배송 ${esc(row.lastDeliveryDate)} · ${row.visitCount===null?'전체 기간 횟수 미확인':(row.visitCount??row.history.length)+'회 이력'}</div>` : ""}
         ${unlocated ? '<div class="coordinateWarning">위치 확인 필요</div>' : row.coordinateSource==='KAKAO_ADDRESS_LIVE'?'<small class="coordinateEvidence">주소 기준 위치</small>':""}
@@ -1851,7 +1871,7 @@
       $('#detailSection').classList.remove('open');$('#detail').className='idle';
       $('#detail').textContent='검색하거나 핀을 선택하면 점포정보가 표시됩니다.';
     }
-    if($('#results [data-search-address-link]'))closeUnifiedSearchResults();
+    if($('#results [data-search-address-guide]'))closeUnifiedSearchResults();
     $('#map').removeAttribute('data-search-position-pending');
     if(restoreView&&state.map){state.fitRequested=false;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});}
   }
@@ -1860,7 +1880,9 @@
     if(owner!==state.searchRequestId||state.mode!=='BASE_60D')return;
     const regionMissing=!/^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주|[가-힣]+(?:시|군|구))/.test(text);
     const results=$('#results');results.hidden=false;
-    results.innerHTML=`<a class="resultItem" data-search-address-link href="https://map.kakao.com/link/search/${esc(encodeURIComponent(text))}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">카카오맵에서 주소 후보 확인 ↗</a><div class="resultMeta" data-search-address-guide>${regionMissing?'지역이 빠진 주소는 여러 곳일 수 있습니다. 시·군·구를 입력하세요.':'주소 후보의 시·군·구를 확인하세요.'} 지도 클릭으로 임시 위치를 지정할 수 있습니다.</div>`;
+    const guide=document.createElement('div');guide.className='resultMeta';guide.dataset.searchAddressGuide='true';
+    guide.textContent=regionMissing?'시·군·구를 입력하거나 지도에서 임시 위치를 지정하세요.':'주소의 시·군·구를 확인하거나 지도에서 임시 위치를 지정하세요.';
+    results.replaceChildren(guide);
     $('#query').setAttribute('aria-expanded','true');
     if(!state.map){setSearchState('지도 연결 후 임시 위치를 지정해 주세요.');return;}
     const requestId=state.addressRequestId;
@@ -2029,7 +2051,7 @@
     searchTemporaryOverlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(lat,lng),content,clickable:true,xAnchor:.5,yAnchor:1,zIndex:45});
     searchTemporaryOverlay.setMap(state.map);state.virtual=row;
     $('#detailSection').classList.add('open');$('#detail').className='detailCard';
-    $('#detail').innerHTML=`<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">임시 위치</div><div class="storeName">${esc(row.address||row.customerName||'선택 위치')}</div></div><div class="detailBody"><p class="hint">저장하지 않는 임시 핀입니다.</p><div id="nearWrap"></div></div>`;
+    $('#detail').innerHTML=`<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">임시 위치</div><div class="storeName">${esc(row.address||row.customerName||'선택 위치')}</div></div><div class="detailBody"><p class="hint">저장하지 않는 임시 핀입니다.</p>${navigationPointActions(row)}<div id="nearWrap"></div></div>`;
     $('#detailClose').onclick=()=>{clearSearchTemporaryPin();clearSelection();};
     window.dispatchEvent(new CustomEvent('map-store-selected',{detail:{customerCode:null}}));
     renderSearchTemporaryNearby(row);
@@ -2205,7 +2227,7 @@
 
   async function loadRoute(source) {
     if (!dateReady) return;
-    cancelManualRoadRoute();
+    cancelDailyRoadRoute();
     if(hasDatedDriverFilter()){await loadBaseMap();await loadOperationStatus('',false);return;}
     const date = state.selectedDate;
     const vehicle = source === "mobile" ? $("#mobileVehicle").value : $("#vehicle").value;
@@ -2281,8 +2303,7 @@
   }
 
   function renderRouteSummary(payload, source) {
-    const connectionLabel = '방문 목록을 길찾기에 적용한 뒤 출발지·경유지·목적지를 확인해 주세요.';
-    const html = `<div class="routeMode"><span class="routeDot"></span>${esc(state.selectedDate)} 운행 상세</div><div class="routeSummary"><div class="routeMetric"><strong>${payload.totalStops || 0}</strong><small>총 착지</small></div><div class="routeMetric"><strong>${payload.completedStops || 0}</strong><small>완료</small></div><div class="routeMetric"><strong>${payload.remainingStops || 0}</strong><small>잔여</small></div></div><div class="resultMeta">${connectionLabel}</div><details><summary>착순·완료시각 ${payload.stops?.length || 0}건</summary>${(payload.stops || []).map((stop) => `<div class="judgeCard">${esc(stop.order || stop.sequence || "-")}착 · ${esc(stop.customerName || stop.name || stop.customerCode)}<br>${stop.status === "COMPLETED" || stop.appRecorded ? `완료 ${esc(formatTime(stop.actualCompletedAt || stop.deliveryCompletedAt || stop.completedAt) || "시각 미기록")}` : "미완료"}</div>`).join("")}</details>`;
+    const html = `<div class="routeMode"><span class="routeDot"></span>${esc(state.selectedDate)} 운행 상세</div><div class="routeSummary"><div class="routeMetric"><strong>${payload.totalStops || 0}</strong><small>총 착지</small></div><div class="routeMetric"><strong>${payload.completedStops || 0}</strong><small>완료</small></div><div class="routeMetric"><strong>${payload.remainingStops || 0}</strong><small>잔여</small></div></div><details><summary>착순·완료시각 ${payload.stops?.length || 0}건</summary>${(payload.stops || []).map((stop) => `<div class="judgeCard">${esc(stop.order || stop.sequence || "-")}착 · ${esc(stop.customerName || stop.name || stop.customerCode)}<br>${stop.status === "COMPLETED" || stop.appRecorded ? `완료 ${esc(formatTime(stop.actualCompletedAt || stop.deliveryCompletedAt || stop.completedAt) || "시각 미기록")}` : "미완료"}</div>`).join("")}</details>`;
     (source === "mobile" ? $("#mobileRouteSummary") : $("#routeSummary")).innerHTML = html;
   }
 
@@ -2669,7 +2690,7 @@
     if(dailyMeta?.reviewOnly===true){if(showRoute)await loadBaseMap();return;}
     if(hasDatedDriverFilter()){updateOperationMetrics(null);$('#opTotal').textContent=operationStops.length;$('#mapStatusSub').textContent=state.selectedDate+' · 선택 기사 해당일 근거 '+operationStops.length+'착지 · 기사 미확인 제외 · 도로 경로 미조회';return;}
     if (!/^\d{4}-\d{2}-\d{2}$/.test(state.selectedDate) || !vehicle) return;
-    cancelManualRoadRoute();
+    cancelDailyRoadRoute();
     const date = state.selectedDate;
     const filterIdentity=queryFilterIdentity();
     const requestId = ++state.todayRequestId;
@@ -2979,11 +3000,36 @@
     refreshManualCoordinates(){indexedRows=null;pointIndex=null;for(const row of allStores){window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);}if(state.selected){window.MapManualPins?.apply(state.selected);applyUnifiedSearchCoordinateGuard(state.selected);liveAddressLocations?.apply(state.selected);refreshCoordinateEvidence(state.selected);}cancelManualRoadRoute();state.fitRequested=false;void loadBaseMap();window.dispatchEvent(new Event('map-coordinate-updated'));},
     addressLocationStatus:code=>code?liveAddressLocations?.status(storesByCode.get(String(code))):liveAddressLocations?.summary()||{located:0,review:0,retention:'PAGE_MEMORY_ONLY'},
     fixedTerritoryStores:()=>window.MapUiLocalBridge.navigationStores().map(row=>({...row,...(baseVehicles.get(String(row.customerCode))||{baseVehicle:'',baseVehicleState:'UNKNOWN'})})),
-    navigationStores:()=>{if(state.mode==='DATE_ROUTE')return isDailyDataReady()?allStores.map(row=>liveAddressLocations?.apply({...row})||{...row}):[];const list=new Map(latestSnapshotRows.map(r=>[r.customerCode,r]));for(const row of allStores){const prior=list.get(row.customerCode);const conflict=prior&&row.address&&prior.address&&row.address.replace(/\s/g,'')!==prior.address.replace(/\s/g,'');list.set(row.customerCode,{...row,...(conflict?{coordinateStatus:'CONFLICT'}:{})});}return [...list.values()].map(row=>liveAddressLocations?.apply({...row})||row);},
-    selectNavigationStore:code=>{const row=(state.mode==='DATE_ROUTE'&&!isDailyDataReady()?[]:allStores).find(r=>r.customerCode===code)||(state.mode==='BASE_60D'?latestSnapshotRows.find(r=>r.customerCode===code):null);if(row)selectStore(row,null,true);},
-    queryRecordedRoute:()=>{cancelManualRoadRoute();const v=primarySelectedVehicle();if(!v||!operationStops.length||operationStops.some(s=>!Number.isSafeInteger(s.order)||s.order<1)){roadResult={state:'error',error:'RECORDED_ORDER_REQUIRED'};window.dispatchEvent(new CustomEvent('map-recorded-route',{detail:roadResult}));syncRoadRoutePanel();return;}loadRoadRoute(v,{explicit:true});},
+    navigationStores:(mode=state.mode)=>{if(mode==='DATE_ROUTE')return isDailyDataReady()?allStores.map(row=>liveAddressLocations?.apply({...row})||{...row}):[];const list=new Map(latestSnapshotRows.map(r=>[r.customerCode,r]));for(const row of allStores){const prior=list.get(row.customerCode);const conflict=prior&&row.address&&prior.address&&row.address.replace(/\s/g,'')!==prior.address.replace(/\s/g,'');list.set(row.customerCode,{...row,...(conflict?{coordinateStatus:'CONFLICT'}:{})});}return [...list.values()].map(row=>liveAddressLocations?.apply({...row})||row);},
+    selectNavigationStore:code=>{
+      const known=(state.mode==='DATE_ROUTE'&&!isDailyDataReady()?[]:allStores).find(row=>row.customerCode===code);
+      const [resolved]=window.MapNavigation?.resolve(code)||[];
+      const row=known||resolved;
+      if(row&&!row.virtual)selectStore(row,null,true);
+    },
+    navigationDailyIdentity:()=>{
+      const vehicles=selectedVehicles();
+      return isDailyDataReady()&&vehicles.length===1&&!hasDatedDriverFilter()?{date:state.selectedDate,vehicle:vehicles[0]}:null;
+    },
+    queryRecordedRoute:()=>{
+      const identity=window.MapUiLocalBridge.navigationDailyIdentity();
+      if(identity&&navigationScope==='daily')return loadRoadRoute(identity.vehicle,{explicit:true});
+    },
+    closeNavigationSelection:()=>clearSelection(),
+    selectNavigationPoint:showVirtual,
+    resetDailyNavigation(){resetRoadRoute();cancelDailyRoadRoute();},
+    setNavigationScope(scope){
+      if(manualRoadController?.isLoading())cancelManualRoadRoute();
+      navigationScope=scope;manualRoadResult=scopedManualResults[scope];
+      renderManualRoadState();renderNavigationLayers();
+      if(scope==='daily'&&roadResult?.state&&roadResult.state!=='idle'){
+        if($('#planRoute'))$('#planRoute').disabled=roadResult.state==='loading';
+        return {kind:'recorded',result:roadResult};
+      }
+      return {kind:'manual',result:manualRoadResult};
+    },
     toggleConnections:()=>{state.connectionLines=false;state.lines.forEach(line=>line.setMap(null));state.lines=[];return {shown:false};},
-    toggleRoadLines:value=>{roadLinesVisible=Boolean(value);if(!roadLinesVisible){manualRoadLayer?.clear();roadLayer?.clear();}else{if(state.map){manualRoadLayer ||= window.RoadRouteUi.createLayer({map:state.map});manualRoadLayer.render(manualRoadResult);roadLayer ||= window.RoadRouteUi.createLayer({map:state.map});roadLayer.render(roadResult);}}},
+    toggleRoadLines:value=>{roadLinesVisible=Boolean(value);renderNavigationLayers();},
     highlightManualLeg:index=>{if(roadLinesVisible&&state.map&&manualRoadResult){manualRoadLayer ||= window.RoadRouteUi.createLayer({map:state.map});manualRoadLayer.render({...manualRoadResult,selectedLeg:Number.isInteger(index)?index:undefined});}},
     highlightRecordedLeg:index=>{if(roadLinesVisible&&state.map&&roadResult){roadLayer ||= window.RoadRouteUi.createLayer({map:state.map});roadLayer.render({...roadResult,selectedLeg:Number.isInteger(index)?index:undefined});}},
     async submitDailyQuery(start,end){
@@ -3004,13 +3050,13 @@
       const allowed=routeCameraEpoch!==null&&routeCameraEpoch===(mapCamera?.interaction()??0);routeCameraEpoch=null;
       if(allowed&&state.map){state.fitRequested=false;state.suppressMapEventsUntil=Date.now()+700;state.map.setBounds(bounds,70,60,120,60);}
     },
-    navigationChanged(){cancelManualRoadRoute();resetRoadRoute();if(state.map)renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});},
+    navigationChanged(){cancelManualRoadRoute();if(navigationScope==='daily')resetRoadRoute();if(state.map)renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});},
     manualStops:()=>manualDraft.stops(),
     replaceManualStops(points){cancelManualRoadRoute();const before=manualDraft.stops();try{manualDraft.clear();points.forEach(point=>manualDraft.add(point));renderManualDraft();return manualDraft.validate();}catch(error){manualDraft.clear();before.forEach(point=>manualDraft.add(point));renderManualDraft();throw error;}},
     queryManualRoute:queryManualRoadRoute,
     cancelManualRoute:cancelManualRoadRoute,
     manualRouteState:()=>manualRoadResult,
-    clearManual(){cancelManualRoadRoute();manualDraft.clear();renderManualDraft();}
+    clearManual(){cancelManualRoadRoute();if(navigationScope==='daily')resetRoadRoute();manualDraft.clear();renderManualDraft();}
   };
   $("#currentTime").textContent = formatTime(new Date());
   setInterval(() => { $("#currentTime").textContent = formatTime(new Date()); }, 10000);

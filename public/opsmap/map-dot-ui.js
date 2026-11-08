@@ -9,9 +9,9 @@
     if(data.state==='success')return data.noDrivingRequired?'모든 방문지가 같은 위치에 있습니다.':'자동차 경로 · 현재 교통 기준';
     if(data.state==='partial')return '일부 구간만 조회되었습니다.';
     if(data.state==='empty'||data.error==='NO_ROAD_ROUTE')return '이 지점을 잇는 자동차 경로가 없습니다.';
-    const errors={STAFF_LOGIN_REQUIRED:'직원 로그인이 필요합니다.',AUTHENTICATION_FAILED:'길찾기 제공자 인증 연결을 확인해야 합니다.',PERMISSION_DENIED:'길찾기 API 이용 권한을 확인해야 합니다.',STAGE_VERIFICATION_READ_ONLY:'이 화면의 길찾기 연결을 확인해 주세요.',ORIGIN_REJECTED:'길찾기 연결 주소를 확인해 주세요.',KEY_MISSING:'길찾기 연결이 준비되지 않았습니다.',FEATURE_DISABLED:'길찾기 연결이 준비되지 않았습니다.',PERSISTENT_BUDGET_REQUIRED:'길찾기 사용 한도 설정을 확인해 주세요.',QUOTA_EXCEEDED:'경로 조회 한도에 도달했습니다.',TIMEOUT:'경로 조회 시간이 초과되었습니다.',PROVIDER_UNAVAILABLE:'경로 서비스에 연결할 수 없습니다.',RECORDED_ORDER_REQUIRED:'호차와 저장된 방문 순서를 선택해 주세요.',INVALID_RESPONSE:'경로 응답을 확인할 수 없습니다.',ROAD_ROUTE_FAILED:'경로를 불러오지 못했습니다.'};
+    const errors={STAFF_LOGIN_REQUIRED:'직원 로그인이 필요합니다.',AUTHENTICATION_FAILED:'길찾기 제공자 인증 연결을 확인해야 합니다.',PERMISSION_DENIED:'길찾기 API 이용 권한을 확인해야 합니다.',STAGE_VERIFICATION_READ_ONLY:'이 화면의 길찾기 연결을 확인해 주세요.',ORIGIN_REJECTED:'길찾기 연결 주소를 확인해 주세요.',KEY_MISSING:'길찾기 연결이 준비되지 않았습니다.',FEATURE_DISABLED:'길찾기 연결이 준비되지 않았습니다.',PERSISTENT_BUDGET_REQUIRED:'길찾기 사용 한도 설정을 확인해 주세요.',QUOTA_EXCEEDED:'경로 조회 한도에 도달했습니다.',TIMEOUT:'경로 조회 시간이 초과되었습니다.',PROVIDER_UNAVAILABLE:'경로 서비스에 연결할 수 없습니다.',RECORDED_ORDER_REQUIRED:'호차와 저장된 배송 순서를 확인해 주세요.',ROUTE_SOURCE_UNAVAILABLE:'저장된 배송 순서를 불러오지 못했습니다.',ROUTE_SOURCE_UNVERIFIED:'해당일의 배송 순서를 확인할 수 없습니다.',ROUTE_IDENTITY_MISMATCH:'선택한 배송일과 호차의 기록을 확인해 주세요.',ORIGIN_UNCONFIRMED:'출발지의 등록 위치를 확인해 주세요.',CALL_POLICY_BLOCKED:'도로 경로 호출 승인 상태를 확인해 주세요.',INVALID_RESPONSE:'경로 응답을 확인할 수 없습니다.',ROAD_ROUTE_FAILED:'경로를 불러오지 못했습니다.'};
     if(errors[data.error])return errors[data.error];
-    if(data.state==='disabled'||data.error==='CALL_POLICY_BLOCKED')return '길찾기 연결 대기';
+    if(data.state==='disabled'||data.error==='CALL_POLICY_BLOCKED')return '도로 경로 호출 승인 상태를 확인해 주세요.';
     return '경로를 조회하지 못했습니다. 잠시 후 다시 시도해 주세요.';
   }
   function dockDetail(){
@@ -49,10 +49,6 @@
       if($('#periodStoreListSection').previousElementSibling!==context)context.after($('#periodStoreListSection'));
       planner.hidden=false;visits.hidden=true;
     }
-    const state=window.MapUiLocalBridge.state,vehicles=state.selectedVehicles;
-    $('#dotRouteSelection').textContent=(vehicles.length===1?vehicles[0]+'호차':vehicles.length?vehicles.length+'개 호차':'전체 호차')+' · '+state.currentRows.length+'개 매장';
-    const origin=window.MapNavigationEditor?.values?.()[0]||$('#plannerStart').value,point=window.MapNavigation?.resolve(origin)||[];
-    $('#dotRouteOrigin').textContent=point.length===1?'출발 · '+point[0].customerName:'출발지를 선택해 주세요.';
     return true;
   }
   function mount(){
@@ -64,11 +60,7 @@
     context.after($('#periodStoreListSection'));
     document.querySelectorAll('option[value="other"]').forEach(n=>n.remove());
     const planner=$('#waypointPlanner');planner.querySelector('.sectiontitle .muted').textContent='자동차';
-    planner.querySelector('.plannerHelp').textContent='선택한 순서로 자동차 경로를 조회합니다.';
     const summary=$('#navigationSummary');summary.querySelector('h2').textContent='도로 경로 결과';
-    const selection=document.createElement('p');selection.id='dotRouteSelection';
-    const origin=document.createElement('p');origin.id='dotRouteOrigin';
-    summary.querySelector('.sectiontitle').after(selection,origin);
     summary.append($('#syncOperation'));
     const referenceNotice=$('#mapReferenceDataNotice');
     if(referenceNotice)$('#approvedSiteHeader').append(referenceNotice);
