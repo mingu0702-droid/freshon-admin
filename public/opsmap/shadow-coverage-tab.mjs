@@ -1,5 +1,3 @@
-import { createCoveragePanel } from './shadow-coverage-panel.mjs?v=20261109-field-analysis';
-
 const header = document.getElementById('approvedSiteHeader');
 const tabs = header?.querySelector('nav');
 const workspace = document.querySelector('body > main.workspace');
@@ -15,10 +13,18 @@ if (tabs && workspace && period && daily) {
   tab.setAttribute('aria-pressed', 'false');
   tab.setAttribute('aria-controls', 'shadowCoverage');
 
-  let panel, stylesheet, active = false, previous;
+  let panel, stylesheet, opening, active = false, previous;
   let returnTabs = [];
 
+  function cancelOpening() {
+    if (!opening) return;
+    opening = null;
+    tab.removeAttribute('aria-busy');
+    tab.textContent = '음영권역';
+  }
+
   function close(restoreScroll = false) {
+    cancelOpening();
     if (!active) return;
     active = false;
     panel.close();
@@ -56,9 +62,26 @@ if (tabs && workspace && period && daily) {
     tabs.append(tab);
   }
 
-  tab.onclick = () => {
-    if (active || !window.MapStaffEntry?.session()) return;
-    panel ||= createCoveragePanel({ workspace, header });
+  tab.onclick = async () => {
+    if (active || opening || !window.MapStaffEntry?.session()) return;
+    if (!panel) {
+      const attempt = opening = {};
+      tab.setAttribute('aria-busy', 'true');
+      tab.textContent = '음영권역 불러오는 중';
+      try {
+        const { createCoveragePanel } = await import('./shadow-coverage-panel.mjs?v=20261109-shadow-lazy');
+        if (opening !== attempt || !tab.isConnected || !window.MapStaffEntry?.session()) return;
+        panel = createCoveragePanel({ workspace, header });
+      } catch {
+        if (opening === attempt) {
+          cancelOpening();
+          tab.textContent = '음영권역 다시 열기';
+        }
+        return;
+      } finally {
+        if (opening === attempt) cancelOpening();
+      }
+    }
     const prior = daily.getAttribute('aria-pressed') === 'true' ? daily : period;
     previous = { hidden: workspace.hidden, inert: workspace.inert, scroll: window.scrollY };
     // Keep the operating controls and their selected state while the analysis is open.
@@ -87,6 +110,8 @@ if (tabs && workspace && period && daily) {
     panel.open();
   };
 
+  period.addEventListener('click', cancelOpening);
+  daily.addEventListener('click', cancelOpening);
   window.addEventListener('map-shadow-coverage-capability', syncAvailability);
   window.addEventListener('map-staff-ready', syncAvailability);
   window.addEventListener('pagehide', event => {

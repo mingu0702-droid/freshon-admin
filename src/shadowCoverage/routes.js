@@ -20,15 +20,16 @@ function resolutionFor(level) {
   return 8;
 }
 
-export function mountShadowCoverage({ app, requireStaff, directory, appRoot, store, readPreservedMap, staffResponseGuarded = false } = {}) {
+export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, staffResponseGuarded = false } = {}) {
   let dependencies;
-  const load = () => {
-    if (!store && !directory) throw Error('COVERAGE_DATA_UNAVAILABLE');
-    dependencies ||= Promise.all([import('./model.js'), import('./store.js'), import('h3-js')])
-      .then(([model, { createShadowCoverageStore }, h3]) =>
-        ({ model, h3, reader: store || createShadowCoverageStore({ directory, appRoot }) }));
-    return dependencies;
-  };
+  const load = () => dependencies ??= (async () => {
+    const folder = readDirectory ? await readDirectory() : directory;
+    if (!store && !folder) throw Error('COVERAGE_DATA_UNAVAILABLE');
+    const [model, { createShadowCoverageStore }, h3] = await Promise.all([
+      import('./model.js'), import('./store.js'), import('h3-js')
+    ]);
+    return { model, h3, reader: store || createShadowCoverageStore({ directory: folder, appRoot }) };
+  })();
   // Stage already authenticates the prefix and rechecks every JSON response.
   const entry = staffResponseGuarded ? [] : [requireStaff];
   const route = (suffix, parse, handle) => app.get(ROOT + suffix, ...entry, async (req, res) => {
@@ -37,7 +38,9 @@ export function mountShadowCoverage({ app, requireStaff, directory, appRoot, sto
     const args = scope && parse(req);
     if (!args) return res.status(400).json({ ok: false, error: 'COVERAGE_QUERY_INVALID' });
     try {
-      const result = await handle(scope, args, await load());
+      const ready = await load();
+      if (res.destroyed || res.writableEnded) return;
+      const result = await handle(scope, args, ready);
       if (res.destroyed || res.writableEnded) return;
       const send = () => res.set('Cache-Control', 'private, no-store').json({ ok: true, data: result });
       return staffResponseGuarded ? send() : requireStaff(req, res, send);

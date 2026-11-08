@@ -179,7 +179,8 @@ export function createCoveragePanel({ workspace, header }) {
   async function read(name, path, params, headers) {
     abort(name);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    // Only the first analysis view may still be waiting for the boot restore.
+    const timeout = setTimeout(() => controller.abort(), name === 'view' && !view ? 25000 : 10000);
     requests.set(name, controller);
     try {
       const url = API + path + '?' + new URLSearchParams(params);

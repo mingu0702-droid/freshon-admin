@@ -10,6 +10,7 @@ import { cellToLatLng, cellToParent, greatCircleDistance, gridDisk, latLngToCell
 import { buildShadowCoverage } from '../scripts/build-shadow-coverage.mjs';
 import { aggregateDay, cellDetail, combineDays, coverageList, datesFor, prepareCatalog, prepareView, searchCoverage } from '../src/shadowCoverage/model.js';
 import { mountShadowCoverage } from '../src/shadowCoverage/routes.js';
+import { createStageShadowRuntime, STAGE_ARCHIVE_ENV } from '../src/shadowCoverage/stageArchive.js';
 import { createShadowCoverageStore } from '../src/shadowCoverage/store.js';
 
 const end = '2026-11-07';
@@ -202,6 +203,48 @@ test('runtime reads bounded compressed private files and rejects altered content
   } finally {
     for (const file of await fs.readdir(directory)) await fs.unlink(path.join(directory, file));
     await fs.rmdir(directory);
+  }
+});
+
+test('Stage serves existing routes while one archive restore is pending and caps transient retries', async () => {
+  let release, attempts = 0;
+  const held = new Promise(resolve => { release = resolve; });
+  const runtime = createStageShadowRuntime({
+    RENDER_EXTERNAL_URL: 'https://freshon-admin-stage-preview-template.onrender.com',
+    [STAGE_ARCHIVE_ENV.token]: 'fixture-token', [STAGE_ARCHIVE_ENV.blob]: 'a'.repeat(40),
+    [STAGE_ARCHIVE_ENV.hash]: proof, [STAGE_ARCHIVE_ENV.key]: Buffer.alloc(32).toString('base64')
+  }, {fetchImpl: async () => ++attempts === 1 ? held : new Response(null, {status: 404})});
+  assert(!Object.values(STAGE_ARCHIVE_ENV).some(key => key in runtime.env));
+
+  const app = express();
+  app.get('/health', (_req, res) => res.sendStatus(200));
+  mountShadowCoverage({app, readDirectory: runtime.readDirectory, requireStaff: (_req, _res, next) => next()});
+  const server = await new Promise(resolve => {
+    const running = app.listen(0, '127.0.0.1', () => {
+      void runtime.readDirectory();
+      resolve(running);
+    });
+  });
+  const url = 'http://127.0.0.1:' + server.address().port;
+  const view = url + '/api/map-phase2b/private/shadow-coverage/view?box=126,36,128,38';
+  try {
+    const signal = AbortSignal.timeout(4000);
+    const pending = [fetch(view, {signal}), fetch(view, {signal})];
+    try {
+      assert.equal((await fetch(url + '/health', {signal})).status, 200);
+      assert.equal(attempts, 1);
+    } finally {
+      release(new Response(null, {status: 503}));
+      const responses = await Promise.all(pending);
+      for (const response of responses) {
+        assert.equal(response.status, 503);
+        assert.deepEqual(await response.json(), {ok: false, error: 'COVERAGE_DATA_UNAVAILABLE'});
+      }
+    }
+    assert.equal(await runtime.readDirectory(), '');
+    assert.equal(attempts, 2);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
   }
 });
 

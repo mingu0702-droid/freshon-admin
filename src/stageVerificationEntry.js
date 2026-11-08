@@ -107,7 +107,7 @@ function stagePhotoExtension(env, fetchImpl) {
   });
 }
 
-export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead} = {}) {
+export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory} = {}) {
   if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
   if (![env.HUB_API_URL,env.OPSMAP_PRIVATE_READER_URL].every(stageHubUrl)) throw new Error('STAGE_READ_SOURCE_CONFIG');
   const stage = {...env, OPSMAP_STAGE_VERIFY_ONLY:'1', MAP_STAFF_ORIGIN:stageOrigin, OPSMAP_MANUAL_PIN_WRITES:'0',
@@ -194,8 +194,9 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     shadowCoverageEnabled:true,
     mountPrivateExtensions:binding=>{
       const {requireStaff}=binding;
-      mountShadowCoverage({...binding,directory:stage.OPSMAP_SHADOW_DATA_DIR,appRoot:fileURLToPath(new URL('../',import.meta.url)),
-        readPreservedMap:async()=>{const saved=await readSnapshot();return saved && {count:saved.rows.length,asOf:saved.latestDate};}});
+      mountShadowCoverage({...binding,directory:stage.OPSMAP_SHADOW_DATA_DIR,readDirectory:readShadowDirectory,
+        appRoot:fileURLToPath(new URL('../',import.meta.url)),
+        readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
       manual.mount(binding);
       photos.mount(binding,{historyOnly:true});
       mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
