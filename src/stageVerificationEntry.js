@@ -194,7 +194,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     shadowCoverageEnabled:Boolean(stage.OPSMAP_SHADOW_DATA_DIR),
     mountPrivateExtensions:binding=>{
       const {requireStaff}=binding;
-      mountShadowCoverage({...binding,staffResponseGuarded:true,directory:stage.OPSMAP_SHADOW_DATA_DIR,appRoot:fileURLToPath(new URL('../',import.meta.url))});
+      mountShadowCoverage({...binding,staffResponseGuarded:true,directory:stage.OPSMAP_SHADOW_DATA_DIR,appRoot:fileURLToPath(new URL('../',import.meta.url)),
+        readPreservedMap:async()=>{const saved=await readSnapshot();return saved && {count:saved.rows.length,asOf:saved.latestDate};}});
       manual.mount(binding);
       photos.mount(binding,{historyOnly:true});
       mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});

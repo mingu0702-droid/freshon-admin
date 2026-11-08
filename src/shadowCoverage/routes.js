@@ -20,7 +20,7 @@ function resolutionFor(level) {
   return 8;
 }
 
-export function mountShadowCoverage({ app, requireStaff, directory, appRoot, store, staffResponseGuarded = false } = {}) {
+export function mountShadowCoverage({ app, requireStaff, directory, appRoot, store, readPreservedMap, staffResponseGuarded = false } = {}) {
   let dependencies;
   const load = () => {
     if (!store && !directory) throw Error('COVERAGE_DATA_UNAVAILABLE');
@@ -73,23 +73,39 @@ export function mountShadowCoverage({ app, requireStaff, directory, appRoot, sto
       visible = model.viewportCells(view, bounds);
     }
     const { window, index, stale } = data;
+    const nationwide = resolution === model.BASE_RESOLUTION ? view : reader.viewFor(data, center, model.BASE_RESOLUTION);
+    const preservedMap = await Promise.resolve().then(readPreservedMap).catch(() => null);
     return {
       generation: index.sha256,
       kind: index.kind,
       stale,
       refreshedAt: index.generatedAt,
       sourceObservedAt: index.sourceObservedAt,
-      period: { days, start: window.start, end: window.end, latest: window.latest },
+      period: { days, start: window.start, end: window.end, latest: nationwide.evidence.latestRecorded },
       completeness: {
-        ...view.proof, missingDates: window.missing, unverifiedDates: window.unverified[center],
+        ...view.proof, ...nationwide.evidence,
         recordedCenters: window.recorded,
         recordedVisits: center === 'all' ? window.completed : window.recorded[center]
       },
-      summary: view.summary,
+      summary: nationwide.summary,
+      summaryResolution: model.BASE_RESOLUTION,
+      viewportSummary: visible.summary,
+      preservedMap: preservedMap ?? null,
+      candidateList: model.coverageList(nationwide),
       resolution,
       truncated: visible.overflow,
       cells: visible.cells
     };
+  });
+
+  route('/list', req => {
+    const { filter = 'candidate', offset = '0' } = req.query;
+    return ['candidate', 'delivery', 'review'].includes(filter) &&
+      typeof offset === 'string' && /^\d{1,5}$/.test(offset) && Number(offset) <= 48_000
+      ? { filter, offset: Number(offset) } : null;
+  }, async ({ days, center, generation }, { filter, offset }, { reader, model }) => {
+    const data = await reader.readPeriod(days, generation);
+    return model.coverageList(reader.viewFor(data, center, model.BASE_RESOLUTION), filter, offset);
   });
 
   route('/cell', req => {
@@ -113,10 +129,23 @@ export function mountShadowCoverage({ app, requireStaff, directory, appRoot, sto
     const radius = req.query.radius ?? '0';
     return query.length >= 2 && query.length <= 200 && !/[\u0000-\u001f]/.test(query) &&
       ['0', '500', '1000'].includes(radius) ? { query, radius: Number(radius) } : null;
-  }, async ({ center, generation }, { query, radius }, { reader, model }) => {
-    const data = await reader.readPeriod(90, generation);
-    const view = reader.viewFor(data, center, 8);
-    return { start: data.window.start, end: data.window.end, results: model.searchCoverage(data.catalog, view, query, center, radius) };
+  }, async ({ days, center, generation }, { query, radius }, { reader, model }) => {
+    const data = await reader.readPeriod(days, generation);
+    const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
+    return { days, start: data.window.start, end: data.window.end,
+      results: model.searchCoverage(data.catalog, view, query, center, radius) };
+  });
+
+  route('/point', req => {
+    const point = req.get('x-map-coverage-point') || '';
+    if (point.length > 55 || !/^-?\d{1,3}(?:\.\d{1,16})?,-?\d{1,3}(?:\.\d{1,16})?$/.test(point)) return null;
+    return point.split(',').map(Number);
+  }, async ({ days, center, generation }, location, { reader, model }) => {
+    if (!model.isPoint(...location)) throw Error('COVERAGE_QUERY_INVALID');
+    const data = await reader.readPeriod(days, generation);
+    const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
+    return { days, start: data.window.start, end: data.window.end,
+      results: [model.coverageAtPoint(data.catalog, view, location, center)] };
   });
 
 }

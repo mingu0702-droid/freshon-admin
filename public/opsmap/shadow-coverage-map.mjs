@@ -12,6 +12,8 @@ function contains(boundary, lat, lng) {
 
 function appearance(cell) {
   if (cell.status === 'UNKNOWN') return 'unknown';
+  if (cell.status === 'CANDIDATE') return 'candidate';
+  if (cell.status === 'EMPTY') return 'empty';
   if (cell.visits >= 50) return 'dense';
   if (cell.visits >= 10) return 'medium';
   return cell.visits ? 'light' : 'none';

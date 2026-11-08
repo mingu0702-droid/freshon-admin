@@ -1,7 +1,8 @@
-import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261109-third-tab';
+import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261109-field-analysis';
 
 const API = '/api/map-phase2b/private/shadow-coverage';
-const STATUS = { DELIVERED: '배송 기록', UNDLVRD: '기록 0건', EMPTY: '기록 0건', UNKNOWN: '자료 부족' };
+const STATUS = { DELIVERED: '관측 배송 이력', CANDIDATE: '관측기간 미배송 후보', EMPTY: '검증 범위 내 공백', UNKNOWN: '자료 부족' };
+const LIST_TITLES = { candidate: STATUS.CANDIDATE, delivery: '배송 이력 격자', review: '자료 부족 격자' };
 const fmt = value => Number(value || 0).toLocaleString('ko-KR');
 const time = new Intl.DateTimeFormat('ko-KR', {
   timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
@@ -13,6 +14,8 @@ function element(tag, className, text) {
   if (text !== undefined) node.textContent = text;
   return node;
 }
+
+const visitLabel = record => record.status === 'UNKNOWN' ? '미확인' : fmt(record.visits) + '건';
 
 function statusBadge(status) {
   const badge = element('span', 'coverage-badge', STATUS[status] || STATUS.UNKNOWN);
@@ -44,37 +47,55 @@ export function createCoveragePanel({ workspace, header }) {
           <input id="coverageQuery" type="search" placeholder="도로명·지번 주소, 고객코드, 매장명" maxlength="200" required autocomplete="off">
           <button type="submit" class="coverage-primary" disabled>검색</button>
         </div>
-        <label class="coverage-radius" for="coverageRadius">검색 범위
-          <select id="coverageRadius"><option value="0">선택 격자</option><option value="500">반경 500m</option><option value="1000">반경 1km</option></select>
-        </label>
       </form>
       <div id="coverageSearchResults" class="coverage-results" aria-live="polite"></div>
       <div id="coverageAnalysis">
         <div class="coverage-filters">
           <label>자료 기간 <select id="coverageDays"><option value="30">30일</option><option value="60">60일</option><option value="90" selected>90일</option></select></label>
           <label>담당 센터 <select id="coverageCenter"><option value="all">전체</option><option value="osan">오산</option><option value="yeongnam">영남</option><option value="honam">호남</option></select></label>
+          <label>검색 반경 <select id="coverageRadius"><option value="0">격자만</option><option value="500">500m</option><option value="1000">1km</option></select></label>
         </div>
-        <div class="coverage-legend" aria-label="격자 범례 · 배송 관측 건수">
-          <span data-tone="light">1–9건</span><span data-tone="medium">10–49건</span><span data-tone="dense">50건 이상</span><span data-tone="unknown">자료 부족</span>
+        <div class="coverage-overview" aria-label="분석 핵심 현황">
+          <p id="coverageBasis">분석 기준일을 확인하고 있습니다.</p>
+          <p id="coverageObserved" aria-live="polite"></p>
+          <h2 id="coverageNationalTitle">전국 집계</h2>
+          <dl class="coverage-kpis">
+            <div><dt>등록 매장</dt><dd data-metric="registered">—</dd></div>
+            <div><dt>좌표 확인 매장</dt><dd data-metric="located">—</dd></div>
+            <div><dt>미배송 후보 격자</dt><dd data-metric="candidates">—</dd></div>
+            <div><dt>후보 격자 내 매장</dt><dd data-metric="candidateStores">—</dd></div>
+            <div><dt>배송 이력 격자</dt><dd data-metric="delivered">—</dd></div>
+            <div><dt>자료 부족 격자</dt><dd data-metric="review">—</dd></div>
+          </dl>
+          <p id="coveragePreserved"></p>
+          <p id="coverageGaps"></p>
+          <p id="coverageViewport"></p>
         </div>
-        <p class="coverage-note">배송 이력 참고용 · 배차 가능 여부는 별도 확인</p>
-        <p id="coverageTotals" class="coverage-totals"></p>
+        <div class="coverage-legend" aria-label="배송 격자 범례">
+          <span data-tone="delivery">관측 배송 이력</span><span data-tone="candidate">관측기간 미배송 후보</span>
+          <span data-tone="unknown">자료 부족</span><span data-tone="empty">검증 범위 내 공백</span>
+        </div>
+        <p class="coverage-note">관측기간 후보 · 주변 호차는 배송 이력 참고</p>
         <p id="coverageStatus" role="status" aria-live="polite"></p>
+        <div class="coverage-detail" id="coverageDetail" aria-label="선택 격자 상세" hidden></div>
+        <div class="coverage-list" aria-labelledby="coverageListTitle">
+          <div class="coverage-list-head">
+            <h2 id="coverageListTitle">관측기간 미배송 후보</h2>
+            <select id="coverageListFilter" aria-label="격자 목록 필터">
+              <option value="candidate">미배송 후보</option><option value="delivery">배송 있음</option><option value="review">자료 부족</option>
+            </select>
+          </div>
+          <p class="coverage-note">전국 H3 R8 · 등록 매장 많은 순</p>
+          <div id="coverageCellList" aria-live="polite"></div>
+          <div class="coverage-list-pages">
+            <button type="button" id="coverageListPrevious" hidden>이전</button>
+            <button type="button" id="coverageListMore" hidden>다음</button>
+          </div>
+        </div>
         <details class="coverage-evidence" id="coverageEvidence">
-          <summary id="coverageEvidenceTitle">집계 기준과 자료 기간</summary>
+          <summary id="coverageEvidenceTitle">집계 근거와 날짜</summary>
           <div id="coverageEvidenceBody"></div>
           <button type="button" id="coverageRefresh">다시 읽기</button>
-        </details>
-        <div class="coverage-detail" id="coverageDetail" aria-label="선택 격자 상세" hidden></div>
-        <details class="coverage-tools" id="coverageTools">
-          <summary>격자 목록</summary>
-          <div class="coverage-list">
-            <select id="coverageListFilter" aria-label="격자 목록 필터">
-              <option value="review">기록 미확인·자료 부족</option><option value="all">현재 지도 전체</option><option value="delivery">배송 기록 있음</option>
-            </select>
-            <div id="coverageCellList"></div>
-            <button id="coverageListMore" type="button" hidden>격자 더 보기</button>
-          </div>
         </details>
       </div>
     </aside>
@@ -99,7 +120,8 @@ export function createCoveragePanel({ workspace, header }) {
   const evidence = find('coverageEvidenceBody');
   const requests = new Map();
   let map, baseMap, active = false, mapOwner = 0, timer, view = null, selected = null, pendingView = null;
-  let days = 90, center = 'all', loadedCenter = 'all', lastKey = '', failedKey = '', listLimit = 12;
+  let days = 90, center = 'all', loadedCenter = 'all', lastKey = '', failedKey = '';
+  let list = null, listKey = '', listOffset = 0, searchOwner, addressProxy;
   const resize = new ResizeObserver(entries => {
     if (!active) return;
     if (entries.some(entry => entry.target === header)) fitWorkspace();
@@ -154,7 +176,7 @@ export function createCoveragePanel({ workspace, header }) {
     requests.delete(name);
   }
 
-  async function read(name, path, params, query) {
+  async function read(name, path, params, headers) {
     abort(name);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
@@ -163,7 +185,7 @@ export function createCoveragePanel({ workspace, header }) {
       const url = API + path + '?' + new URLSearchParams(params);
       const response = await fetch(url, {
         credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
-        ...(query ? { headers: { 'x-map-customer-query': encodeURIComponent(query) } } : {})
+        headers
       });
       if (!response.ok) throw Object.assign(Error('COVERAGE_REQUEST_FAILED'), { status: response.status });
       const payload = await response.json();
@@ -179,28 +201,77 @@ export function createCoveragePanel({ workspace, header }) {
     }
   }
 
+  function distanceLabel(meters) {
+    return meters < 1000 ? fmt(meters) + 'm' : (meters / 1000).toLocaleString('ko-KR', { maximumFractionDigits: 1 }) + 'km';
+  }
+
+  function nearbyLabels(nearby, compact = false) {
+    if (!nearby?.nearest) return ['주변 관측 배송 격자 없음', '주변 배송 이력 호차 미확인'];
+    const location = compact ? '' : nearby.nearest.label + ' · ';
+    const label = '인접 배송 ' + fmt(nearby.adjacentCount) + '격자 · 최근접 ' + location +
+      '중심 직선 ' + distanceLabel(nearby.nearest.distanceMeters);
+    const vehicles = nearby.vehicles.map(vehicle => vehicle + '호').join(' · ');
+    const remaining = nearby.vehicleCount - nearby.vehicles.length;
+    return [label, vehicles ? (nearby.vehicleScope === 'adjacent' ? '인접' : '최근접') + ' 배송 이력 ' + vehicles +
+      (remaining ? ' 외 ' + fmt(remaining) + '대' : '') : '주변 배송 이력 호차 미확인'];
+  }
+
   function renderList() {
     const filter = find('coverageListFilter').value;
-    const allowed = cell => filter === 'all' || (filter === 'delivery' ? cell.status === 'DELIVERED' : cell.status !== 'DELIVERED');
-    const cells = (view?.cells || []).filter(allowed).sort((a, b) =>
-      b.registered - a.registered || b.visits - a.visits);
+    find('coverageListTitle').textContent = LIST_TITLES[filter];
     cellList.replaceChildren();
-    for (const cell of cells.slice(0, listLimit)) {
+    for (const cell of list?.rows || []) {
       const row = element('button', 'coverage-list-row');
       row.type = 'button';
       row.dataset.cellId = cell.id;
       row.setAttribute('aria-pressed', String(selected?.id === cell.id));
-      const text = element('span');
-      text.append(element('strong', '', cell.label), element('small', '', '등록 ' + fmt(cell.registered) + ' · 배송 ' + fmt(cell.visits)));
-      row.append(text, statusBadge(cell.status));
+      row.append(element('strong', '', cell.label),
+        element('small', '', '등록 ' + fmt(cell.registered) + '곳 · 관측 방문 ' + visitLabel(cell)),
+        ...nearbyLabels(cell.nearby, true).map(label => element('small', '', label)));
       row.onclick = () => {
         map.focus(cell.location);
         void selectCell(cell.id);
       };
       cellList.append(row);
     }
-    if (!cells.length) cellList.append(element('p', 'coverage-empty', '현재 화면에서 이 조건에 해당하는 격자가 없습니다.'));
-    find('coverageListMore').hidden = cells.length <= listLimit;
+    if (!list?.rows.length) cellList.append(element('p', 'coverage-empty', list
+      ? '이 범위에서 해당 격자가 확인되지 않았습니다.' : '격자 목록을 불러오고 있습니다.'));
+    find('coverageListPrevious').hidden = !list || !listOffset;
+    find('coverageListMore').hidden = list?.next == null;
+  }
+
+  async function loadList(offset = 0) {
+    if (!active || !view || view.period.days !== days || loadedCenter !== center) return;
+    const filter = find('coverageListFilter').value;
+    abort('list');
+    if (!offset && filter === 'candidate') {
+      list = view.candidateList;
+      listOffset = 0;
+      renderList();
+      return;
+    }
+    const owner = listKey;
+    try {
+      const result = await read('list', '/list', { days, center, generation: view.generation, filter, offset });
+      if (!result || owner !== listKey || filter !== find('coverageListFilter').value) return;
+      list = result;
+      listOffset = offset;
+      renderList();
+    } catch (error) {
+      if (!active || owner !== listKey) return;
+      cellList.replaceChildren(element('p', 'coverage-empty', '격자 목록을 불러오지 못했습니다.'));
+      if (error.status === 409) void loadView(true);
+    }
+  }
+
+  function updateList(data) {
+    const key = [data.generation, data.period.days, loadedCenter].join(':');
+    if (listKey === key) return;
+    listKey = key;
+    list = null;
+    listOffset = 0;
+    renderList();
+    void loadList();
   }
 
   function paint() {
@@ -209,15 +280,30 @@ export function createCoveragePanel({ workspace, header }) {
 
   function renderView(data) {
     const { period, completeness, summary } = data;
-    find('coverageTotals').textContent = '등록 매장 ' + fmt(summary.registered) + '곳 · 배송 기록 ' + fmt(completeness.recordedVisits) + '건';
-    find('coverageEvidenceTitle').textContent = '기록 확인 ' + (period.days - completeness.missingDates.length) + '/' +
-      period.days + '일 · 미확인 ' + completeness.missingDates.length + '일';
+    const { viewportSummary, preservedMap } = data;
+    const confirmed = completeness.recordedDays;
+    const sourceText = confirmed == null ? '센터별 일자 집계 미확인' :
+      '기록 확인 ' + confirmed + '/' + period.days + '일 · 미확인 ' + completeness.missingDates.length + '일';
+    find('coverageBasis').textContent = '분석 ' + period.days + '일 · 기준 ' + period.end;
+    find('coverageObserved').textContent = sourceText;
+    const selectedCenter = find('coverageCenter').selectedOptions[0]?.textContent;
+    find('coverageNationalTitle').textContent = (loadedCenter === 'all' ? '전국 집계' : '전국 · ' + selectedCenter + ' 센터') +
+      ' · H3 R' + data.summaryResolution;
+    for (const stat of root.querySelectorAll('[data-metric]')) stat.textContent = fmt(summary[stat.dataset.metric]);
+    find('coveragePreserved').textContent = preservedMap
+      ? 'Stage 보존 지도 ' + fmt(preservedMap.count) + '곳' + (preservedMap.asOf ? ' (' + preservedMap.asOf + ')' : '') + ' · 별도 범위'
+      : 'Stage 보존 지도 미확인 · 별도 범위';
+    find('coverageGaps').textContent = '좌표 미확인 ' + fmt(summary.missingStoreLocation) + '곳 · 배송 위치 미연결 ' +
+      fmt(summary.unplacedVisits) + '건 · 원천 식별 미확인 ' + fmt(summary.unidentifiedVisits) + '건';
+    find('coverageViewport').textContent = '현재 지도 R' + data.resolution + ' · 배송 ' + fmt(viewportSummary.delivered) +
+      ' · 후보 ' + fmt(viewportSummary.candidates) + ' · 자료 부족 ' + fmt(viewportSummary.review) +
+      ' · 공백 ' + fmt(viewportSummary.empty) + '격자';
     evidence.replaceChildren(
-      element('p', '', period.start + ' ~ ' + period.end + ' · 기록 ' + (period.days - completeness.missingDates.length) + '/' + period.days + '일'),
+      element('p', '', period.start + ' ~ ' + period.end + ' · 마지막 확인 ' + (period.latest || '미확인')),
       element('p', '', '집계 갱신 ' + time.format(new Date(data.refreshedAt)) + ' · 원천 확인 ' + time.format(new Date(data.sourceObservedAt))),
       element('p', '', '등록 매장 ' + fmt(summary.registered) + '곳 · 위치 미확인 ' + fmt(summary.missingStoreLocation) + '곳'),
       element('p', '', '배송 완료 ' + fmt(completeness.recordedVisits) + '건 · 격자 연결 ' + fmt(summary.visits) + '건 · 위치 미연결 ' + fmt(summary.unplacedVisits) + '건'),
-      element('p', '', 'H3 R' + data.resolution + ' · 현재 화면 ' + fmt(data.cells.length) + '격자 · 배송 기록 ' + fmt(summary.delivered) + ' · 자료 부족 ' + fmt(summary.review))
+      element('p', '', '현재 지도 ' + fmt(viewportSummary.total) + '격자 · 표시 ' + fmt(data.cells.length) + '격자')
     );
     const centers = [['osan', '오산'], ['yeongnam', '영남'], ['honam', '호남']];
     evidence.append(element('p', '', centers.map(([key, label]) =>
@@ -232,7 +318,7 @@ export function createCoveragePanel({ workspace, header }) {
     } else {
       status.textContent = data.truncated ? '지도를 확대하면 나머지 격자를 확인할 수 있습니다.' : '';
     }
-    renderList();
+    updateList(data);
     paint();
   }
 
@@ -256,7 +342,7 @@ export function createCoveragePanel({ workspace, header }) {
       if (!Array.isArray(data.cells) || data.cells.length > 360) throw Error('COVERAGE_VIEW_INVALID');
       if (view && (view.generation !== data.generation || view.period.days !== data.period.days || loadedCenter !== wantedCenter)) {
         clearSelection();
-        searchResults.replaceChildren();
+        if (view.generation !== data.generation) clearSearch();
       }
       view = data;
       loadedCenter = wantedCenter;
@@ -271,6 +357,7 @@ export function createCoveragePanel({ workspace, header }) {
         days = view.period.days;
         center = loadedCenter;
         filters();
+        updateList(view);
         status.textContent = '조회에 실패했습니다. 마지막 정상 집계를 표시합니다 · ' + time.format(new Date(view.refreshedAt));
       } else {
         showMapState('분석 격자를 불러오지 못했습니다.', () => void loadView(true));
@@ -301,9 +388,15 @@ export function createCoveragePanel({ workspace, header }) {
     close.onclick = clearSelection;
     header.append(close);
     const fields = element('dl', 'coverage-detail-metrics');
+    const { administrative, evidence: dates, deliveryDays } = cell;
+    const [nearby, vehicles] = nearbyLabels(cell.nearby);
     const facts = [
-      ['등록 매장', fmt(cell.registered) + '곳'], ['배송 이력', fmt(cell.visits) + '건'],
-      ['격자 내 고객', fmt(cell.customers) + '곳'], ['최근 배송일', cell.lastDelivery || '확인된 기록 없음'],
+      ['시·군·구(대표)', administrative.district || '미확인'], ['읍·면·동(대표)', administrative.locality || '미확인'],
+      ['등록 매장', fmt(cell.registered) + '곳'], ['관측기간 방문', visitLabel(cell)],
+      ['관측 배송일', deliveryDays == null || cell.status === 'UNKNOWN' ? '날짜별 집계 미확인' : fmt(deliveryDays) + '일'],
+      ['마지막 배송일', cell.lastDelivery || '확인된 기록 없음'],
+      ['확인·누락', dates.recordedDays == null ? '센터별 일자 미확인' :
+        fmt(dates.recordedDays) + '/' + fmt(dates.totalDays) + '일 확인 · ' + fmt(dates.missingDates.length) + '일 미확인'],
       ['자료 기간', view.period.start + ' ~ ' + view.period.end]
     ];
     for (const [label, value] of facts) {
@@ -311,13 +404,17 @@ export function createCoveragePanel({ workspace, header }) {
     }
     detail.replaceChildren(header, element('h2', '', cell.label), element('p', 'coverage-cell-id', cell.id));
     if (cell.address) detail.append(element('p', 'coverage-address', cell.address));
-    detail.append(fields, element('h3', '', '확정호차 이력'),
+    detail.append(fields, element('h3', '', '이 격자의 배송 이력 호차'),
       element('p', 'coverage-vehicle-list', cell.vehicles.length ? cell.vehicles.map(vehicle => vehicle + '호').join(' · ') : '확인된 호차 없음'),
+      element('h3', '', '가까운 배송 격자'),
+      element('p', 'coverage-nearby', nearby + (cell.nearby.nearest ? ' · 도로거리 아님' : '')),
+      element('p', 'coverage-nearby-id', cell.nearby.nearest ? '최근접 H3 ' + cell.nearby.nearest.id : ''),
+      element('p', '', vehicles),
       element('h3', '', '고객코드 · 매장'));
     const list = element('ul', 'coverage-stores');
     for (const store of cell.stores) {
       const row = element('li');
-      row.append(element('strong', '', store.name), element('small', '', store.code +
+      row.append(element('strong', '', store.name), element('small', '', store.code + (store.registered ? ' · 등록' : ' · 배송 이력') +
         (store.vehicles.length ? ' · ' + store.vehicles.map(vehicle => vehicle + '호').join(', ') : '')));
       list.append(row);
     }
@@ -347,16 +444,16 @@ export function createCoveragePanel({ workspace, header }) {
     if (view.period.days !== days || loadedCenter !== center) return;
     const current = view;
     collapsePanel(false);
-    const requested = current.cells.find(cell => cell.id === id);
+    const requested = current.cells.find(cell => cell.id === id) || list?.rows.find(cell => cell.id === id);
     if (requested) selected = requested;
     paint();
     detail.hidden = false;
-    const provisional = requested ? '배송 ' + fmt(requested.visits) + '건 · 등록 ' + fmt(requested.registered) + '곳' : '격자 상세를 불러오고 있습니다.';
+    const provisional = requested ? '관측 방문 ' + visitLabel(requested) + ' · 등록 ' + fmt(requested.registered) + '곳' : '격자 상세를 불러오고 있습니다.';
     detail.replaceChildren(element('p', '', provisional), element('p', '', current.period.start + ' ~ ' + current.period.end));
     try {
       const cell = await read('detail', '/cell', { id, offset, days: current.period.days, center: loadedCenter, generation: current.generation });
       if (!cell || view?.generation !== current.generation || view.period.days !== current.period.days) return;
-      if (regionLabel && cell.label === '행정구역 미확인') cell.label = regionLabel + ' 중심 격자';
+      if (regionLabel && cell.label === '행정구역 미확인') cell.label = regionLabel + ' 격자';
       selected = cell;
       renderDetail(cell, offset);
       renderList();
@@ -365,7 +462,7 @@ export function createCoveragePanel({ workspace, header }) {
       if (!active) return;
       const retry = element('button', '', '다시 읽기');
       retry.type = 'button';
-      retry.onclick = () => void selectCell(id, offset);
+      retry.onclick = () => void selectCell(id, offset, regionLabel);
       detail.replaceChildren(element('p', '', provisional), element('p', '', current.period.start + ' ~ ' + current.period.end), retry);
       if (error.status === 409) void loadView(true);
     }
@@ -377,7 +474,7 @@ export function createCoveragePanel({ workspace, header }) {
       searchResults.append(element('p', 'coverage-empty', '저장된 주소·매장·행정구역에서 일치 항목을 찾지 못했습니다.'));
       return;
     }
-    searchResults.append(element('p', 'coverage-search-caption', '90일 · 대표 격자 기준'));
+    searchResults.append(element('p', 'coverage-search-caption', result.days + '일 · ' + result.start + ' ~ ' + result.end));
     for (const row of result.results) {
       const button = element('button', 'coverage-search-result');
       button.type = 'button';
@@ -385,39 +482,85 @@ export function createCoveragePanel({ workspace, header }) {
       button.append(element('strong', '', row.name), element('small', '', [row.code, row.address].filter(Boolean).join(' · ')));
       if (row.stats) {
         const stats = row.stats;
-        button.append(element('span', '', '배송 ' + fmt(stats.visits) + '건 · 등록 ' + fmt(stats.registered) + '곳'));
-        button.append(element('small', '', '최근 ' + (stats.lastDelivery || '기록 없음') + ' · ' + (stats.vehicles.map(v => v + '호').join(', ') || '호차 미확인')));
-        button.append(statusBadge(stats.status));
-        if (radius) button.append(element('small', '', '반경 내 등록 매장 ' + fmt(stats.nearbyRegistered) + '곳'));
+        button.append(element('span', '', '관측 방문 ' + visitLabel(stats) + ' · 등록 ' + fmt(stats.registered) + '곳'));
+        button.append(element('small', '', 'H3 ' + row.id + ' · 이력 호차 ' + (stats.vehicles.map(v => v + '호').join(', ') || '미확인')),
+          ...nearbyLabels(stats.nearby).map(label => element('small', '', label)), statusBadge(stats.status));
+        button.append(element('small', '', '반경 내 등록 매장 500m ' + fmt(stats.registeredWithin[500]) +
+          '곳 · 1km ' + fmt(stats.registeredWithin[1000]) + '곳'));
       } else {
         button.append(element('span', '', row.bounds ? '행정구역 범위' : '저장된 좌표가 없습니다.'));
       }
       button.disabled = !row.location && !row.bounds;
       button.onclick = () => {
         map.focus(row.location, row.bounds, radius);
-        if (row.id) void selectCell(row.id, 0, row.kind === 'region' ? row.name : undefined);
+        if (row.id) void selectCell(row.id, 0, row.kind === 'store' ? undefined : row.name);
       };
       searchResults.append(button);
     }
   }
 
+  function clearSearch() {
+    abort('search');
+    searchOwner?.abort();
+    searchOwner = null;
+    searchResults.replaceChildren();
+  }
+
+  function searchMessage(message) {
+    searchResults.replaceChildren(element('p', 'coverage-empty', message));
+  }
+
   async function search(event) {
     event.preventDefault();
+    clearSearch();
     const query = find('coverageQuery').value.trim();
     if (query.length < 2) {
-      searchResults.replaceChildren(element('p', '', '검색어를 두 글자 이상 입력해 주세요.'));
+      searchMessage('검색어를 두 글자 이상 입력해 주세요.');
       return;
     }
+    const owner = searchOwner = new AbortController();
     const radius = Number(find('coverageRadius').value);
-    searchResults.replaceChildren(element('p', '', '저장된 위치를 찾는 중입니다.'));
+    const params = { days, center, radius };
+    if (view) params.generation = view.generation;
+    searchMessage('저장된 위치를 찾는 중입니다.');
     try {
-      const params = { center, radius };
-      if (view) params.generation = view.generation;
-      const data = await read('search', '/search', params, query);
-      if (data) renderSearch(data, radius);
+      const data = await read('search', '/search', params, { 'x-map-customer-query': encodeURIComponent(query) });
+      if (!data || searchOwner !== owner) return;
+      if (data.results.length) {
+        renderSearch(data, radius);
+        return;
+      }
+      const requests = window.NewAreaRequests;
+      const address = requests?.addressQuery(query, window.Phase2bUi.addressVariants);
+      if (!address) {
+        renderSearch(data, radius);
+        return;
+      }
+      const adapter = window.KakaoMapsAdapter;
+      if (window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup !== true) await adapter?.refreshAddressLookup?.();
+      if (!active || searchOwner !== owner) return;
+      if (window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup !== true) {
+        searchMessage('미등록 주소 조회는 승인된 주소 서비스 연결 후 사용할 수 있습니다.');
+        return;
+      }
+      addressProxy ||= adapter?.geocoder?.();
+      if (!addressProxy?.serverProxy) throw Error('APPROVED_ADDRESS_PROXY_REQUIRED');
+      searchMessage('승인된 주소 서비스에서 정확한 위치를 찾는 중입니다.');
+      const documents = await requests.lookup(addressProxy, address, { signal: owner.signal });
+      if (!active || searchOwner !== owner) return;
+      const [document] = documents;
+      if (documents.length !== 1 || !window.Phase2bUi.addressMatches(address, document.address_name)) {
+        searchMessage('일치하는 주소 좌표를 확인하지 못했습니다.');
+        return;
+      }
+      const point = [Number(document.y), Number(document.x)];
+      const pointResult = await read('search', '/point', params, { 'x-map-coverage-point': point.join(',') });
+      if (!pointResult || searchOwner !== owner) return;
+      pointResult.results = pointResult.results.map(result => ({ ...result, kind: 'address', name: document.address_name }));
+      renderSearch(pointResult, radius);
     } catch (error) {
-      if (!active) return;
-      searchResults.replaceChildren(element('p', '', '검색을 완료하지 못했습니다. 다시 검색해 주세요.'));
+      if (!active || searchOwner !== owner) return;
+      searchMessage(error.code ? window.NewAreaRequests.message(error) : '검색을 완료하지 못했습니다. 다시 검색해 주세요.');
       if (error.status === 409) void loadView(true);
     }
   }
@@ -425,9 +568,11 @@ export function createCoveragePanel({ workspace, header }) {
   function changeFilters() {
     filters();
     clearSelection();
-    abort('search');
-    searchResults.replaceChildren();
-    listLimit = 12;
+    clearSearch();
+    abort('list');
+    listKey = '';
+    list = null;
+    renderList();
     lastKey = '';
     void loadView(true);
   }
@@ -437,10 +582,11 @@ export function createCoveragePanel({ workspace, header }) {
   find('coverageRefresh').onclick = () => void loadView(true);
   panelToggle.onclick = () => collapsePanel(panelToggle.getAttribute('aria-expanded') === 'true');
   find('coverageSearch').onsubmit = search;
-  find('coverageQuery').oninput = () => { abort('search'); searchResults.replaceChildren(); };
-  find('coverageRadius').onchange = () => { abort('search'); searchResults.replaceChildren(); };
-  find('coverageListFilter').onchange = () => { listLimit = 12; renderList(); };
-  find('coverageListMore').onclick = () => { listLimit += 12; renderList(); };
+  find('coverageQuery').oninput = clearSearch;
+  find('coverageRadius').onchange = clearSearch;
+  find('coverageListFilter').onchange = () => { list = null; renderList(); void loadList(); };
+  find('coverageListPrevious').onclick = () => void loadList(Math.max(0, listOffset - 12));
+  find('coverageListMore').onclick = () => { if (list?.next != null) void loadList(list.next); };
 
   return {
     open() {
@@ -459,6 +605,7 @@ export function createCoveragePanel({ workspace, header }) {
       mapOwner++;
       resize.disconnect();
       clearTimeout(timer);
+      clearSearch();
       for (const controller of requests.values()) controller.abort();
       requests.clear();
       map?.destroy();
@@ -470,15 +617,20 @@ export function createCoveragePanel({ workspace, header }) {
       searchResults.replaceChildren();
       cellList.replaceChildren();
       evidence.replaceChildren();
-      find('coverageEvidenceTitle').textContent = '집계 기준과 자료 기간';
-      find('coverageEvidence').open = find('coverageTools').open = false;
+      find('coverageEvidence').open = false;
       find('coverageQuery').value = '';
       find('coverageRadius').value = '0';
       days = 90;
       center = 'all';
-      listLimit = 12;
+      list = null;
+      listKey = '';
+      listOffset = 0;
+      find('coverageListFilter').value = 'candidate';
+      renderList();
       status.textContent = '';
-      find('coverageTotals').textContent = '';
+      find('coverageBasis').textContent = '분석 기준일을 확인하고 있습니다.';
+      for (const id of ['coverageObserved', 'coveragePreserved', 'coverageGaps', 'coverageViewport']) find(id).textContent = '';
+      for (const stat of root.querySelectorAll('[data-metric]')) stat.textContent = '—';
       searchButton.disabled = true;
       showMapState('');
     },

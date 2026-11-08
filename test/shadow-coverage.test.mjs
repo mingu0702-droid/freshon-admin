@@ -5,9 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import express from 'express';
-import { cellToLatLng, gridDisk, latLngToCell } from 'h3-js';
+import { cellToLatLng, cellToParent, greatCircleDistance, gridDisk, latLngToCell, UNITS } from 'h3-js';
 import { buildShadowCoverage } from '../scripts/build-shadow-coverage.mjs';
-import { aggregateDay, cellDetail, combineDays, datesFor, prepareCatalog, prepareView, searchCoverage } from '../src/shadowCoverage/model.js';
+import { aggregateDay, cellDetail, combineDays, coverageList, datesFor, prepareCatalog, prepareView, searchCoverage } from '../src/shadowCoverage/model.js';
 import { mountShadowCoverage } from '../src/shadowCoverage/routes.js';
 import { createShadowCoverageStore } from '../src/shadowCoverage/store.js';
 
@@ -23,7 +23,7 @@ const names = [
 ];
 const storeRows = names.map(([code, name, id, address]) => {
   const [lat, lng] = cellToLatLng(id);
-  return { code, name, address, lat, lng, center: 'osan', registered: true, matchHash: proof };
+  return { code, name, address, lat, lng, center: id === purple ? 'unknown' : 'osan', registered: true, matchHash: proof };
 });
 const source = {
   registryComplete: true, registryProofHash: proof, stores: storeRows,
@@ -59,21 +59,52 @@ test('periods keep unique delivery counts and each confirmed vehicle for the sam
     assert.equal(detail.visits, count);
     assert.equal(detail.registered, 1);
     assert.equal(detail.customers, 1);
+    assert.equal(detail.deliveryDays, count);
     assert.deepEqual(detail.stores[0].vehicles, period === 90 ? ['101', '122'] : ['122']);
   }
 });
 
-test('negative classification requires geography, registry and all applicable days', () => {
+test('observational candidates stay separate from verified empty cells and incomplete scope', () => {
   const { catalog, days } = fixture();
   let view = prepareView(catalog, combineDays(end, 90, days), 'all', 8);
   assert.deepEqual([blue, orange, gray, purple].map(id => cellDetail(view, id).status),
-    ['DELIVERED', 'UNDLVRD', 'EMPTY', 'UNKNOWN']);
-  assert.equal(prepareView(catalog, combineDays(end, 90, days), 'all', 7).summary.undelivered, 0);
+    ['DELIVERED', 'CANDIDATE', 'EMPTY', 'UNKNOWN']);
+  assert.equal(prepareView(catalog, combineDays(end, 90, days), 'all', 7).summary.empty, 0);
   days.delete(allDates[0]);
   view = prepareView(catalog, combineDays(end, 90, days), 'all', 8);
   assert.equal(cellDetail(view, gray).status, 'UNKNOWN');
-  assert.equal(cellDetail(view, orange).candidate, false);
+  const candidate = cellDetail(view, orange);
+  assert.equal(candidate.status, 'CANDIDATE');
+  assert.equal(candidate.deliveryDays, 0);
+  assert.equal(candidate.evidence.recordedDays, 89);
+  assert.deepEqual(candidate.evidence.missingDates, [allDates[0]]);
+  assert.deepEqual(candidate.administrative, { district: '경기도 오산시', locality: '모의동' });
+  assert.equal(candidate.nearby.nearest.id, blue);
+  assert.equal(candidate.nearby.nearest.distanceMeters, Math.round(greatCircleDistance(cellToLatLng(orange), cellToLatLng(blue), UNITS.m)));
+  assert.deepEqual(candidate.nearby.vehicles, ['101', '122']);
+  assert.deepEqual(coverageList(view).rows.map(row => row.id), [orange]);
   assert.equal(cellDetail(view, blue).status, 'DELIVERED');
+});
+
+test('daily evidence is deduplicated across visits and centers and unmatched visits suppress candidates', () => {
+  const { catalog, days, stores } = fixture();
+  const date = allDates[85];
+  const moved = [identity('moved-orange'), 'T900002', '102', 'osan', 'b'.repeat(64)];
+  const extra = [identity('same-day-other-center'), 'T900001', '115', 'yeongnam', proof];
+  days.set(date, aggregateDay(raw(date, [event(date, '122'), moved, extra], []), stores));
+  days.delete(allDates[1]);
+  const window = combineDays(end, 90, days);
+  const view = prepareView(catalog, window, 'all', 8);
+  assert.equal(cellDetail(view, orange).status, 'UNKNOWN');
+  assert.equal(view.summary.unplacedVisits, 1);
+  const detail = cellDetail(prepareView(catalog, window, 'all', 7), cellToParent(blue, 7));
+  assert.equal(detail.visits, 4);
+  assert.equal(detail.deliveryDays, 3);
+  const legacy = { ...window, observedDates: undefined, unplacedCodes: undefined, rows: window.rows.map(row => row.slice(0, 7)) };
+  const legacyView = prepareView(catalog, legacy, 'all', 8);
+  assert.equal(cellDetail(legacyView, blue).deliveryDays, null);
+  assert.equal(cellDetail(legacyView, orange).status, 'UNKNOWN');
+  assert.equal(prepareView(catalog, window, 'honam', 8).summary.candidates, 0);
 });
 
 test('observed center scope and changed addresses cannot create false empty cells', () => {
@@ -85,7 +116,7 @@ test('observed center scope and changed addresses cannot create false empty cell
   assert.equal(window.unplaced.osan, 1);
   assert.deepEqual(window.unverified.all, [end]);
   assert.deepEqual(window.unverified.osan, []);
-  assert.equal(prepareView(catalog, window, 'all', 8).summary.undelivered, 0);
+  assert.equal(prepareView(catalog, window, 'all', 8).summary.empty, 0);
   assert.equal(prepareView(catalog, window, 'yeongnam', 8).summary.visits, 0);
 });
 
@@ -177,6 +208,26 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
     const outside = await (await fetch(url + '/view?days=90&level=4&box=130,38,131,39', options)).json();
     assert.equal(outside.data.cells.length, 0);
     assert.equal(outside.data.summary.total, data.summary.total);
+    assert.equal(outside.data.viewportSummary.total, 0);
+    assert.equal(data.summaryResolution, 8);
+    const coarse = await (await fetch(url + '/view?days=90&level=11&box=126,36,128,38', options)).json();
+    assert.deepEqual(coarse.data.summary, data.summary);
+    for (const [days, visits] of [[30, 1], [60, 2], [90, 3]]) {
+      const search = await (await fetch(url + '/search?days=' + days + '&radius=500',
+        { headers: { ...options.headers, 'x-map-customer-query': 'T900001' } })).json();
+      const row = search.data.results[0];
+      assert.equal(search.data.days, days);
+      assert.equal(row.stats.visits, visits);
+      assert.equal(row.id, blue);
+      assert(row.stats.registeredWithin[500] <= row.stats.registeredWithin[1000]);
+      const point = await (await fetch(url + '/point?days=' + days,
+        { headers: { ...options.headers, 'x-map-coverage-point': cellToLatLng(blue).map(v => v.toFixed(10)).join(',') } })).json();
+      assert.equal(point.data.results[0].stats.visits, visits);
+    }
+    const invalidPoint = await fetch(url + '/point', { headers: { ...options.headers, 'x-map-coverage-point': '91,127' } });
+    assert.equal(invalidPoint.status, 400);
+    const list = await (await fetch(url + '/list?filter=delivery&days=30', options)).json();
+    assert.deepEqual(list.data.rows.map(row => row.id), [blue]);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

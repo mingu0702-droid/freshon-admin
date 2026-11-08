@@ -8,7 +8,8 @@ import { createStaffPasswordHash } from '../src/opsmap-abc/mapStaffAuth.js';
 import { snapshotProjection } from '../src/productionSnapshotStore.js';
 import { createShadowCoverageStore } from '../src/shadowCoverage/store.js';
 
-const [directory, output] = process.argv.slice(2);
+const [directory, output, mode] = process.argv.slice(2);
+const fieldAnalysis = mode === 'field-analysis';
 assert(path.isAbsolute(directory || '') && path.isAbsolute(output || ''));
 await fs.mkdir(output, { recursive: true });
 const stageOrigin = 'https://freshon-admin-stage-preview-template.onrender.com';
@@ -19,7 +20,7 @@ assert.equal(source.index.kind, 'OBSERVED');
 const date = source.index.asOf;
 const sample = source.catalog.stores.find(row => row.cell && row.address && row.name && row.code && row.registered);
 assert(sample);
-const result = { scope: 'THIRD_TAB_LOCAL_CHROMIUM_SDK_FIXTURE_REAL_PRIVATE_H3', base,
+const result = { scope: (fieldAnalysis ? 'FIELD_ANALYSIS' : 'THIRD_TAB') + '_LOCAL_CHROMIUM_SDK_FIXTURE_REAL_PRIVATE_H3', base,
   checks: [], errors: [], screenshots: [], requestsToStage: 0, providerCalls: 0, sourceWrites: 0 };
 function check(label, condition) {
   assert(condition, label);
@@ -38,7 +39,9 @@ const rows = [...stores, ...Array.from({ length: 4489 }, (_, i) => ({
   ...fixed, customerCode: 'Q' + String(i).padStart(6, '0'), customerName: '검수 매장 ' + (i + 4),
   lat: 34.6 + (i % 83) * .014, lng: 126.8 + (i % 55) * .012, vehicle: '120', baseVehicle: '120', lastDeliveryDate: date
 }))];
-const current = snapshotProjection({ version: 'phase2b-map-snapshot-v1', latestDate: date, startDate: source.window.start, rows });
+const preservedAsOf = fieldAnalysis ? '2026-11-02' : date;
+const current = snapshotProjection({ version: 'phase2b-map-snapshot-v1', latestDate: preservedAsOf, startDate: source.window.start,
+  rows: rows.map(row => ({ ...row, lastDeliveryDate: preservedAsOf })) });
 const dayRows = stores.slice(0, 2).map((row, index) => ({ ...row, deliveryDate: date, sequence: index + 1, order: index + 1, status: 'COMPLETED' }));
 let sessionFile = null;
 let sessionRevision = 0;
@@ -87,13 +90,15 @@ const shade = '/api/map-phase2b/private/shadow-coverage/';
 const viewPath = response => new URL(response.url()).pathname.endsWith(shade + 'view');
 let browser, failed;
 
-async function open(width, { failView = false, failSdk = false, missingKey = false } = {}) {
+const fixtureAddresses = ['경기도 오산시 검증로 777', '경기도 오산시 검증동 777-1'];
+
+async function open(width, { failView = false, failSdk = false, missingKey = false, allowAddressLookup = false } = {}) {
   const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 930 },
     isMobile: width === 390, hasTouch: width === 390, serviceWorkers: 'block' });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   page.on('pageerror', error => result.errors.push({ width, name: error.name, message: error.message.replace(/https?:\S+/g, '[URL]').slice(0, 100) }));
-  const views = [], http = {};
+  const views = [], http = {}, lookupCalls = [];
   page.on('response', response => {
     const endpoint = new URL(response.url()).pathname.split('/').at(-1);
     if (['map-sdk-config', 'snapshot', 'base-vehicles', 'view'].includes(endpoint)) http[endpoint] = response.status();
@@ -112,6 +117,17 @@ async function open(width, { failView = false, failSdk = false, missingKey = fal
       missingKey = false;
       return route.fulfill({ status: 503, json: { error: 'MAP_JAVASCRIPT_KEY_UNCONFIGURED', shadowCoverageEnabled: true } });
     }
+    if (pathname.endsWith('/private/address-lookup')) {
+      const query = route.request().postDataJSON()?.query;
+      lookupCalls.push(fixtureAddresses.includes(query) ? fixtureAddresses.indexOf(query) : -1);
+      if (!allowAddressLookup || !fixtureAddresses.includes(query)) return route.fulfill({
+        status: 503, json: { ok: false, error: 'GEOCODING_DISABLED' }
+      });
+      return route.fulfill({ json: { ok: true, data: {
+        documents: [{ address_name: query, x: '127.108', y: '37.17' }],
+        status: 'OK', exact: true, resolution: { kind: 'EXACT' }, retention: 'REQUEST_ONLY'
+      } } });
+    }
     if (pathname.endsWith('/assignments')) return route.fulfill({ json: { ok: true, data: dayRows, meta: { complete: true, date } } });
     if (pathname.endsWith('/route-plan')) return route.fulfill({ json: { ok: true, data: { stops: dayRows, date, vehicle: '101' } } });
     const view = pathname.endsWith(shade + 'view');
@@ -129,6 +145,10 @@ async function open(width, { failView = false, failSdk = false, missingKey = fal
       const response = await route.fetch({ url: origin + pathname + requestUrl.search,
         headers: await route.request().allHeaders(), maxRedirects: 0, timeout: 15000 });
       if (held) await held;
+      if (allowAddressLookup && pathname.endsWith('/map-sdk-config') && response.ok()) {
+        return route.fulfill({ response, json: { ...await response.json(), addressLookupPending: false,
+          allowExternalAddressLookup: true, addressLookupServerProxy: true } });
+      }
       await route.fulfill({ response });
     } catch {
       await route.abort().catch(() => {});
@@ -139,7 +159,7 @@ async function open(width, { failView = false, failSdk = false, missingKey = fal
   await page.locator('#mapStaffEntry input[name=password]').fill(password);
   await page.locator('#mapStaffEntry button[type=submit]').click();
   await page.waitForFunction(() => document.body.dataset.mapStaffState === 'authenticated');
-  return { page, context, views, http, sdkRequests: () => sdkRequests,
+  return { page, context, views, http, lookupCalls, sdkRequests: () => sdkRequests,
     holdNextView() { holdNext = new Promise(resolve => { release = resolve; }); },
     releaseView() { release?.(); holdNext = null; } };
 }
@@ -161,7 +181,7 @@ async function capture(page, width) {
     badge.style.cssText = 'position:absolute;left:10px;bottom:8px;padding:4px 7px;z-index:70;pointer-events:none;background:#fffdf3;color:#554826;border:1px solid #ddcf9f;border-radius:4px;font:11px sans-serif';
     document.querySelector('#coverageMap').append(badge);
   });
-  const name = 'third-tab-' + width + '.png';
+  const name = (fieldAnalysis ? 'field-analysis-' : 'third-tab-') + width + '.png';
   await page.screenshot({ path: path.join(output, name), fullPage: width === 390, animations: 'disabled' });
   result.screenshots.push(name);
 }
@@ -222,7 +242,7 @@ async function exercise(width) {
     const initial = await first;
     const initialView = (await initial.json()).data;
     await ready(page);
-    const periods = page.locator('#coverageEvidenceTitle');
+    const periods = page.locator('#coverageObserved');
     check(width + ' automatic 90-day private view and observed dates', initialView.period.days === 90 && views[0].days === '90' &&
       (await periods.innerText()).includes('76/90일 · 미확인 14일') &&
       initialView.completeness.missingDates.join() === source.window.missing.join() && initial.headers()['cache-control'].includes('no-store'));
@@ -265,12 +285,12 @@ async function exercise(width) {
     const selected = await clickHex(page, zoomed.cells);
     const details = await page.locator('#coverageDetail').innerText();
     check(width + ' click on a rendered hex shows selected cell counts and vehicles', details.includes(selected) &&
-      details.includes('등록 매장') && details.includes('배송 이력') && details.includes('확정호차 이력') && zoomed.resolution === 8);
+      details.includes('등록 매장') && details.includes('배송 이력') && details.includes('이 격자의 배송 이력 호차') && zoomed.resolution === 8);
     await page.locator('#coverageDetail').getByRole('button', { name: '닫기' }).click();
 
     for (const days of ['30', '60']) {
       await page.locator('#coverageDays').selectOption(days);
-      await page.waitForFunction(n => document.querySelector('#coverageEvidenceTitle').textContent.includes('/' + n + '일'), days);
+      await page.waitForFunction(n => document.querySelector('#coverageObserved').textContent.includes('/' + n + '일'), days);
     }
     check(width + ' changing period updates rendered evidence', views.some(view => view.days === '30') && views.some(view => view.days === '60'));
     if (width === 1440) {
@@ -358,14 +378,127 @@ async function retryCase(options, message, label) {
   } finally { await context.close(); }
 }
 
+async function checkFieldAnalysis(width) {
+  const { page, context, lookupCalls } = await open(width, { allowAddressLookup: width === 1440 });
+  try {
+    await page.waitForFunction(() => MapUiLocalBridge.isDataReady() && Boolean(MapUiLocalBridge.state.map));
+    const first = page.waitForResponse(response => viewPath(response) && response.ok());
+    await toggle(page).click();
+    const initial = (await (await first).json()).data;
+    await ready(page);
+    const visibleList = page.locator('#coverageCellList .coverage-list-row');
+    await visibleList.first().waitFor();
+    check(width + ' scope and completeness visible on entry', (await page.locator('#coverageBasis').innerText()).includes(source.index.asOf) &&
+      (await page.locator('#coverageObserved').innerText()).includes('76/90일 · 미확인 14일') &&
+      (await page.locator('#coveragePreserved').innerText()).includes('4,492곳 (2026-11-02) · 별도 범위') &&
+      (await page.locator('[data-metric="registered"]').innerText()) === '6,043' &&
+      (await page.locator('[data-metric="located"]').innerText()) === '4,737' &&
+      (await page.locator('#coverageGaps').innerText()).includes('위치 미연결'));
+    check(width + ' visible orange candidates are labeled separately from gray uncertainty',
+      await page.locator('#coverageListTitle').innerText() === '관측기간 미배송 후보' &&
+      await page.locator('#coverageMap path[data-tone="candidate"]').count() > 0 &&
+      await page.locator('#coverageMap path[data-tone="unknown"]').count() === initial.cells.filter(cell => cell.status === 'UNKNOWN').length &&
+      await page.locator('#coverageMap path[data-tone="candidate"]').first().evaluate(node =>
+        Number(getComputedStyle(node).fillOpacity) > 0 && getComputedStyle(node).fill === 'rgb(245, 158, 11)'));
+    check(width + ' nationwide R8 candidates are ranked and nearby histories are visible by default',
+      initial.summaryResolution === 8 && initial.summary.candidates > 0 &&
+      initial.candidateList.rows.every((row, index, rows) => row.status === 'CANDIDATE' &&
+        (!index || rows[index - 1].registered >= row.registered)) &&
+      (await visibleList.first().innerText()).includes('관측 방문 0건') &&
+      (await visibleList.first().innerText()).includes('배송 이력') &&
+      (await page.locator('#coverageViewport').innerText()).includes('현재 지도 R' + initial.resolution));
+    check(width + ' analysis layout fits viewport', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    await capture(page, width);
+
+    await visibleList.first().click();
+    const detail = page.locator('#coverageDetail');
+    await detail.locator('.coverage-cell-id').waitFor();
+    await page.locator('#coverageMap .coverage-selected').waitFor({ state: 'attached' });
+    const content = await detail.innerText();
+    check(width + ' candidate click focuses selected hex and discloses evidence', content.includes(initial.candidateList.rows[0].id) &&
+      content.includes('시·군·구') && content.includes('읍·면·동') && content.includes('고객코드') &&
+      content.includes('관측 배송일') && content.includes('마지막 배송일') &&
+      content.includes('중심 직선') && content.includes('도로거리 아님') &&
+      content.includes('76/90일 확인 · 14일 미확인') &&
+      await page.locator('#coverageMap .coverage-selected').count() > 0);
+    check(width + ' nationwide candidate total does not change on focus',
+      await page.locator('[data-metric="candidates"]').innerText() === initial.summary.candidates.toLocaleString('ko-KR'));
+    await detail.getByRole('button', { name: '닫기' }).click();
+
+    if (width === 1440) {
+      const zoomRequest = page.waitForResponse(response => viewPath(response) && response.ok());
+      await setView(page, 37.17, 127.11, 5);
+      const zoomed = (await (await zoomRequest).json()).data;
+      await page.waitForFunction(n => document.querySelectorAll('#coverageMap .coverage-overlay path').length === n, zoomed.cells.length);
+      const clicked = await clickHex(page, zoomed.cells);
+      const detailText = await detail.innerText();
+      check('hex click shows distinct recorded dates and historical vehicles', detailText.includes(clicked) &&
+        /관측 배송일\s+[1-9]\d*일/.test(detailText) && detailText.includes('이 격자의 배송 이력 호차'));
+      await detail.getByRole('button', { name: '닫기' }).click();
+      for (const filter of ['delivery', 'review']) {
+        const next = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(shade + 'list') && response.ok());
+        await page.locator('#coverageListFilter').selectOption(filter);
+        const payload = (await (await next).json()).data;
+        await page.locator('#coverageCellList .coverage-list-row').first().waitFor();
+        check('list filter ' + filter + ' returns its own status',
+          payload.rows.length > 0 && payload.rows.every(row => row.status === (filter === 'delivery' ? 'DELIVERED' : 'UNKNOWN')));
+      }
+      await page.locator('#coverageCellList .coverage-list-row').first().click();
+      const gray = page.locator('#coverageMap path.coverage-selected[data-tone="unknown"]');
+      await gray.waitFor({ state: 'attached' });
+      check('selected uncertain hex has a gray dashed outline', await gray.evaluate(node =>
+        getComputedStyle(node).stroke === 'rgb(100, 116, 139)' && getComputedStyle(node).strokeDasharray !== 'none'));
+      await detail.getByRole('button', { name: '닫기' }).click();
+      for (const days of [30, 60, 90]) {
+        await page.locator('#coverageDays').selectOption(String(days));
+        await page.waitForFunction(n => document.querySelector('#coverageBasis').textContent.includes('분석 ' + n + '일'), days);
+        await page.locator('#coverageQuery').fill(sample.code);
+        const pending = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(shade + 'search') && response.ok());
+        await page.locator('#coverageSearch button').click();
+        const response = await pending;
+        const payload = (await response.json()).data;
+        await page.locator('#coverageSearchResults .coverage-search-result').first().waitFor();
+        const row = payload.results[0];
+        check(days + ' day stored search follows selected analysis period',
+          new URL(response.url()).searchParams.get('days') === String(days) && payload.days === days &&
+          (await page.locator('.coverage-search-caption').innerText()).startsWith(days + '일 · ') &&
+          row.stats.registeredWithin[500] <= row.stats.registeredWithin[1000]);
+      }
+    }
+
+    const addresses = width === 1440 ? fixtureAddresses : [fixtureAddresses[0]];
+    for (const [index, address] of addresses.entries()) {
+      await page.locator('#coverageQuery').fill(address);
+      await page.locator('#coverageSearch button').click();
+      if (width === 1440) {
+        const row = page.locator('#coverageSearchResults button[data-kind="address"]');
+        await row.waitFor();
+        const text = await row.innerText();
+        check((index ? 'lot' : 'road') + ' address uses approved proxy and gets cell plus both radii',
+          lookupCalls.length === index + 1 && lookupCalls[index] === index &&
+          text.includes('H3 ') && text.includes('관측 방문') && text.includes('500m') && text.includes('1km') &&
+          text.includes('배송 이력'));
+      } else {
+        await page.getByText('미등록 주소 조회는 승인된 주소 서비스 연결 후 사용할 수 있습니다.', { exact: true }).waitFor();
+        check('unapproved address fallback makes no lookup request', lookupCalls.length === 0);
+      }
+    }
+  } finally { await context.close(); }
+}
+
 try {
   browser = await chromium.launch({ headless: true,
     executablePath: process.env.OPSMAP_TEST_CHROMIUM || 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
-  await exercise(1440);
-  await exercise(390);
-  await retryCase({ failView: true }, '분석 격자를 불러오지 못했습니다.', 'H3 API failure');
-  await retryCase({ failSdk: true }, '지도를 불러오지 못했습니다.', 'Kakao SDK loading failure');
-  await retryCase({ missingKey: true }, '지도를 불러오지 못했습니다.', 'Kakao configuration failure');
+  if (fieldAnalysis) {
+    await checkFieldAnalysis(1440);
+    await checkFieldAnalysis(390);
+  } else {
+    await exercise(1440);
+    await exercise(390);
+    await retryCase({ failView: true }, '분석 격자를 불러오지 못했습니다.', 'H3 API failure');
+    await retryCase({ failSdk: true }, '지도를 불러오지 못했습니다.', 'Kakao SDK loading failure');
+    await retryCase({ missingKey: true }, '지도를 불러오지 못했습니다.', 'Kakao configuration failure');
+  }
   check('no uncaught browser errors', !result.errors.length);
 } catch (error) {
   failed = true;
@@ -373,7 +506,7 @@ try {
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
-  await fs.writeFile(path.join(output, 'third-tab-browser.json'), JSON.stringify(result, null, 2));
+  await fs.writeFile(path.join(output, (fieldAnalysis ? 'field-analysis' : 'third-tab') + '-browser.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ scope: result.scope, checks: result.checks.length, errors: result.errors, failure: result.failure }));
   if (failed) process.exitCode = 1;
 }

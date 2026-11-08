@@ -114,6 +114,25 @@ function checkWindow(value, days, end) {
       !Number.isSafeInteger(value.completed) || value.completed < 0 || !value.recorded || !value.unplaced) {
     throw Error('COVERAGE_WINDOW_INVALID');
   }
+  if (value.evidenceVersion !== undefined) {
+    const limit = 1n << BigInt(days);
+    const missing = new Set(value.missing);
+    const missingMask = dates.reduce((mask, date, index) => missing.has(date) ? mask | 1n << BigInt(index) : mask, 0n);
+    const validMask = row => {
+      if (!/^[1-9a-f][0-9a-f]{0,22}$/.test(row?.[7] || '')) return false;
+      const bits = BigInt('0x' + row[7]);
+      return bits < limit && !(bits & missingMask) && row[3] === dates[bits.toString(2).length - 1];
+    };
+    const keys = [...CENTERS.slice(1), 'unknown'];
+    if (value.evidenceVersion !== 2 ||
+        !CENTERS.every(center => dateList(value.observedDates?.[center]) &&
+          value.observedDates[center].every(date => !missing.has(date))) ||
+        !keys.every(center => {
+          const codes = value.unplacedCodes?.[center];
+          return Array.isArray(codes) && codes.length <= Math.min(15_000, value.unplaced[center]) &&
+            new Set(codes).size === codes.length && codes.every(code => /^[A-Z]\d{1,20}$/.test(code));
+        }) || !value.rows.every(validMask)) throw Error('COVERAGE_EVIDENCE_INVALID');
+  }
   return value;
 }
 

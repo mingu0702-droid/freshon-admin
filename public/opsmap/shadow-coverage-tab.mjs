@@ -1,4 +1,4 @@
-import { createCoveragePanel } from './shadow-coverage-panel.mjs?v=20261109-third-tab';
+import { createCoveragePanel } from './shadow-coverage-panel.mjs?v=20261109-field-analysis';
 
 const header = document.getElementById('approvedSiteHeader');
 const tabs = header?.querySelector('nav');
@@ -50,7 +50,7 @@ if (tabs && workspace && period && daily) {
     stylesheet ||= document.createElement('link');
     if (!stylesheet.isConnected) {
       stylesheet.rel = 'stylesheet';
-      stylesheet.href = new URL('./shadow-coverage.css?v=20261109-third-tab', import.meta.url);
+      stylesheet.href = new URL('./shadow-coverage.css?v=20261109-field-analysis', import.meta.url);
       document.head.append(stylesheet);
     }
     tabs.append(tab);
