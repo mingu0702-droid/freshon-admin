@@ -6,6 +6,74 @@ const origin='https://apis-navi.kakaomobility.com';
 const error=(code,status=400)=>Object.assign(new Error(code),{code,status});
 const providerApis=['directions','waypoints'];
 const safeBudgetError=code=>/^ROAD_BUDGET_[A-Z_]+$/.test(code||'')?code:'ROAD_BUDGET_UNVERIFIED';
+const routeValidationCodes=new Set(['INVALID_ROAD_ROUTE_RESPONSE','INVALID_ROAD_GEOMETRY','INVALID_COORDINATE','INCOMPLETE_ROAD_ROUTE']);
+const validationNumberKeys=[
+  'expectedRouteCount','actualRouteCount','expectedSectionCount','actualSectionCount',
+  'sectionIndex','roadIndex','roadCount','vertexValueCount','vertexCount','vertexIndex',
+  'distanceDeltaMeters','durationDeltaSeconds','allowedDelta'
+];
+const bodyFailureCodes=new Set(['CONTENT_TYPE','MISSING_BODY','RESPONSE_LIMIT']);
+const invalidProviderResponse=providerFailure=>Object.assign(error('INVALID_RESPONSE',502),{providerFailure});
+const serializationFailure=()=>Object.assign(error('ROAD_ROUTE_FAILED',502),{providerFailure:'SERIALIZATION_FAILED'});
+
+function classifyProviderFailure(cause, observation, timedOut) {
+  if (timedOut) return error('TIMEOUT', 504);
+  const {failureStage, providerHttp} = observation;
+  switch (failureStage) {
+    case 'FETCH': {
+      if (providerHttp === 401) return error('AUTHENTICATION_FAILED', 502);
+      if (providerHttp === 403) return error('PERMISSION_DENIED', 502);
+      if (providerHttp === 429) return error('QUOTA_EXCEEDED', 429);
+      const failure = error('PROVIDER_UNAVAILABLE', 502);
+      if (providerHttp === null) failure.providerFailure = 'TRANSPORT';
+      return failure;
+    }
+    case 'READ_BODY':
+      if (bodyFailureCodes.has(cause?.providerFailure)) return invalidProviderResponse(cause.providerFailure);
+      return Object.assign(error('PROVIDER_UNAVAILABLE', 502), {providerFailure:'RESPONSE_STREAM'});
+    case 'JSON_PARSE':
+      return invalidProviderResponse('MALFORMED_JSON');
+    case 'VALIDATE_ROUTE': {
+      if (!routeValidationCodes.has(cause?.code)) return invalidProviderResponse('ROUTE_VALIDATION_FAILED');
+      const validationNumbers = {};
+      for (const key of validationNumberKeys) {
+        const value = cause.validationNumbers?.[key];
+        if (Number.isSafeInteger(value)) validationNumbers[key] = value;
+      }
+      return Object.assign(invalidProviderResponse(cause.code), {
+        validationCheck:cause.validationCheck,
+        validationNumbers:Object.keys(validationNumbers).length ? validationNumbers : undefined
+      });
+    }
+    case 'SERIALIZE':
+      return serializationFailure();
+  }
+}
+
+function failurePayload(failure) {
+  return {
+    ok:false,
+    error:failure.code || 'ROAD_ROUTE_FAILED',
+    providerHttp:Number.isInteger(failure.providerHttp) ? failure.providerHttp : null,
+    ...(providerApis.includes(failure.providerApi) ? {providerApi:failure.providerApi} : {}),
+    ...(failure.budgetError ? {budgetError:safeBudgetError(failure.budgetError)} : {}),
+    ...(failure.providerFailure ? {providerFailure:failure.providerFailure} : {}),
+    ...(failure.failureStage ? {failureStage:failure.failureStage,responseBytes:failure.responseBytes} : {}),
+    ...(failure.validationCheck ? {validationCheck:failure.validationCheck} : {}),
+    ...(failure.validationNumbers ? {validationNumbers:failure.validationNumbers} : {})
+  };
+}
+
+function recordProviderFailure(failure, observation) {
+  Object.assign(failure, observation);
+  console.warn(JSON.stringify({
+    component:'opsmap-road-route',
+    httpStatus:failure.status,
+    ...failurePayload(failure)
+  }));
+  return failure;
+}
+
 export function validRoadRouteRequest(body){
   if(!body||body.mode!=='MANUAL_WAYPOINTS'||!Array.isArray(body.waypoints)||body.waypoints.length>30)throw error('WAYPOINT_LIMIT');
   if(!(Number.isSafeInteger(body.requestId)&&body.requestId>=0)&&!(typeof body.requestId==='string'&&/^[\w-]{1,80}$/.test(body.requestId)))throw error('INVALID_MANUAL_ROUTE');
@@ -19,13 +87,24 @@ export function validRoadRouteRequest(body){
   const clean={mode:body.mode,requestId:body.requestId,origin:point(body.origin),waypoints:body.waypoints.map((p,i)=>point(p,i+1)),destination:point(body.destination)};
   adapter.plan(clean);return clean;
 }
-async function boundedJson(response,maxBytes=8388608){
-  if(!/json/i.test(response.headers.get('content-type')||''))throw error('PROVIDER_UNAVAILABLE',502);
-  const reader=response.body?.getReader();if(!reader)throw error('PROVIDER_UNAVAILABLE',502);
-  const parts=[];let size=0;
-  try{for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>maxBytes)throw error('PROVIDER_UNAVAILABLE',502);parts.push(value);}}
+async function readProviderBody(response, observation, maxBytes=8388608){
+  if(!/json/i.test(response.headers.get('content-type')||'')){
+    void response.body?.cancel().catch(()=>{});
+    throw invalidProviderResponse('CONTENT_TYPE');
+  }
+  const reader=response.body?.getReader();if(!reader)throw invalidProviderResponse('MISSING_BODY');
+  const parts=[];
+  try{
+    for(;;){
+      const {done,value}=await reader.read();
+      if(done)break;
+      observation.responseBytes+=value.byteLength;
+      if(observation.responseBytes>maxBytes)throw invalidProviderResponse('RESPONSE_LIMIT');
+      parts.push(value);
+    }
+  }
   finally{void reader.cancel().catch(()=>{});reader.releaseLock();}
-  try{return JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{throw error('PROVIDER_UNAVAILABLE',502);}
+  return Buffer.concat(parts, observation.responseBytes);
 }
 export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date.now,budget=null,requireDurableBudget=false,maxCacheBytes=12*1024*1024}={}){
   const cache=new Map(),pending=new Map();let bytes=0,used=0,active=0;
@@ -83,20 +162,28 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
     }
     const timeout=Math.min(45000,Math.max(1000,Number(env.OPSMAP_ROAD_ROUTE_TIMEOUT_MS)||15000));
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
-    let providerHttp=null;
+    const observation={failureStage:'FETCH',providerHttp:null,responseBytes:0,providerApi:api};
     try{
       const url=new URL(plan.path,origin);if(plan.query)for(const[k,v]of Object.entries(plan.query))if(v!=='')url.searchParams.set(k,String(v));
       const response=await fetchImpl(url.href,{method:plan.method,redirect:'error',signal:controller.signal,
         headers:{Authorization:'KakaoAK '+key(),Accept:'application/json',...(plan.method==='POST'?{'content-type':'application/json'}:{})},...(plan.body?{body:JSON.stringify(plan.body)}:{})});
-      providerHttp=response.status;
-      if(providerHttp!==200){void response.body?.cancel().catch(()=>{});throw error(providerHttp===401?'AUTHENTICATION_FAILED':providerHttp===403?'PERMISSION_DENIED':providerHttp===429?'QUOTA_EXCEEDED':'PROVIDER_UNAVAILABLE',providerHttp===429?429:502);}
-      const provider=await boundedJson(response);const data=adapter.fromProvider(provider,clean);
-      return {data:{...data,calculatedAt:new Date(now()).toISOString()},providerHttp};
+      observation.providerHttp=Number.isInteger(response.status)?response.status:null;
+      if(observation.providerHttp!==200){
+        void response.body?.cancel().catch(()=>{});
+        throw Error('PROVIDER_HTTP_REJECTED');
+      }
+      observation.failureStage='READ_BODY';
+      const body=await readProviderBody(response,observation);
+      observation.failureStage='JSON_PARSE';
+      const provider=JSON.parse(body.toString('utf8'));
+      observation.failureStage='VALIDATE_ROUTE';
+      const validated=adapter.fromProvider(provider,clean);
+      observation.failureStage='SERIALIZE';
+      const data={...validated,calculatedAt:new Date(now()).toISOString()};
+      const serializedBytes=Buffer.byteLength(JSON.stringify(data));
+      return {data,serializedBytes,providerHttp:observation.providerHttp,responseBytes:observation.responseBytes};
     }catch(e){
-      const failure=controller.signal.aborted?error('TIMEOUT',504):e?.code&&e.status?e:error('PROVIDER_UNAVAILABLE',502);
-      if(Number.isInteger(providerHttp))failure.providerHttp=providerHttp;
-      failure.providerApi=api;
-      throw failure;
+      throw recordProviderFailure(classifyProviderFailure(e,observation,controller.signal.aborted),observation);
     }
     finally{clearTimeout(timer);active--;}
   }
@@ -114,14 +201,13 @@ export function createRoadRouteService({env=process.env,fetchImpl=fetch,now=Date
     if(saved)return {ok:true,data:{...structuredClone(saved.value),requestId:clean.requestId},meta:{cache:'HIT',providerHttp:null,...configuration()}};
     if(!pending.has(id)){
       const task=load(clean,plan).then(result=>{
-        const value=result.data;
-        const size=Buffer.byteLength(JSON.stringify(value));
+        const {data:value,serializedBytes:size}=result;
         if(value.state==='success'&&size<=maxCacheBytes){while(cache.size>=32||bytes+size>maxCacheBytes)remove(cache.keys().next().value);cache.set(id,{value,until:now()+ttl,bytes:size});bytes+=size;}
         return result;
       }).finally(()=>pending.delete(id));pending.set(id,task);
     }
-    const {data,providerHttp}=await pending.get(id);
-    return {ok:true,data:{...structuredClone(data),requestId:clean.requestId},meta:{cache:'MISS_OR_SHARED',providerHttp,...configuration()}};
+    const {data,providerHttp,responseBytes}=await pending.get(id);
+    return {ok:true,data:{...structuredClone(data),requestId:clean.requestId},meta:{cache:'MISS_OR_SHARED',providerHttp,responseBytes,...configuration()}};
   }
   return {route,configuration,readiness,clear(){cache.clear();bytes=0;}};
 }
@@ -138,10 +224,7 @@ export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=proc
     if(typeof readRecordedRoute!=='function')throw error('RECORDED_ORDER_REQUIRED',409);
     return readRecordedRoute(input);
   };
-  const failure=(req,res,e)=>requireStaff(req,res,()=>res.status(e.status||502).json({ok:false,error:e.code||'ROAD_ROUTE_FAILED',
-    providerHttp:Number.isInteger(e.providerHttp)?e.providerHttp:null,
-    ...(providerApis.includes(e.providerApi)?{providerApi:e.providerApi}:{}),
-    ...(e.budgetError?{budgetError:safeBudgetError(e.budgetError)}:{})}));
+  const fail=(req,res,e)=>requireStaff(req,res,()=>res.status(e.status||502).json(failurePayload(e)));
   const respond=async(req,res,recorded)=>{
     res.set('Cache-Control','private, no-store');
     try{
@@ -150,8 +233,21 @@ export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=proc
       if(verified?.draft===null&&verified.data.stops.length)throw error(verified.data.missingCoordinates?'STOP_COORDINATES_MISSING':'ORIGIN_UNCONFIRMED',409);
       const result=verified?.draft===null?{ok:true,data:{state:'empty'}}:await service.route(verified?.draft??verified??req.body);
       if(recorded)result.data={...result.data,date:req.body.date,vehicle:req.body.vehicle};
-      return requireStaff(req,res,()=>res.json(result));
-    }catch(e){return failure(req,res,e);}
+      return requireStaff(req,res,async()=>{
+        // The staff response gate can serialize after an asynchronous session check.
+        try{return await res.json(result);}
+        catch{
+          const failure=recordProviderFailure(serializationFailure(),{
+            failureStage:'SERIALIZE',
+            providerHttp:result.meta?.providerHttp??null,
+            responseBytes:result.meta?.responseBytes??0
+          });
+          if(res.headersSent)return res.destroy();
+          try{return await res.status(failure.status).json(failurePayload(failure));}
+          catch{return res.destroy();}
+        }
+      });
+    }catch(e){return fail(req,res,e);}
   };
   app.get('/api/map-phase2b/private/road-route/config',requireStaff,async(_q,r)=>{
     const config=typeof service.readiness==='function'?await service.readiness():service.configuration();
@@ -162,7 +258,7 @@ export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=proc
     try{
       const {data}=await readRecorded(req.query);
       return requireStaff(req,res,()=>res.json({ok:true,data,meta:{source:'HUB_ROUTE_STOPS'}}));
-    }catch(e){return failure(req,res,e);}
+    }catch(e){return fail(req,res,e);}
   });
   app.post('/api/map-phase2b/private/manual-road-route',requireStaff,sameOrigin,jsonBody,(q,r)=>respond(q,r,false));
   app.post('/api/map-phase2b/private/road-route',requireStaff,sameOrigin,jsonBody,(q,r)=>respond(q,r,true));
