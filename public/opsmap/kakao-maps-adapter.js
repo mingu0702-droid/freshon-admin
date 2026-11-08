@@ -1,5 +1,5 @@
 (function(root){
- 'use strict';let pending,script;
+ 'use strict';let pending,script,localCenters;
  const configPath='/api/map-phase2b/private/map-sdk-config';
  let addressPending=false,addressCheck=null,addressEpoch=0,dailyRetryAt=0,blockedReason=null;
  function refreshAddressLookup(){
@@ -22,19 +22,24 @@
  }
  root.addEventListener?.('map-staff-signed-out',()=>{
   addressEpoch++;addressCheck=null;addressPending=true;dailyRetryAt=0;blockedReason=null;
-  root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false};
+  const {centers,...config}=root.KAKAO_MAP_CONFIG||{};
+  root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:false};
+  pending=null;
  });
  function ready({timeoutMs=8000,configTimeoutMs=15000}={}){
   if(pending)return pending;
   pending=new Promise(async(resolve,reject)=>{
    let finished=false,timer;const finish=(error)=>{if(finished)return;finished=true;clearTimeout(timer);error?reject(Error(error)):resolve(root.kakao);};
    timer=setTimeout(()=>finish('MAP_SDK_CONFIG_TIMEOUT'),configTimeoutMs);
-   function loaded(){try{if(typeof root.kakao?.maps?.load!=='function')return finish('MAP_SDK_UNAVAILABLE');root.kakao.maps.load(()=>finish());}catch{finish('MAP_SDK_INITIALIZATION_FAILED');}}
+   function loaded(){try{if(typeof root.kakao?.maps?.load!=='function')return finish('MAP_SDK_UNAVAILABLE');root.kakao.maps.load(()=>finish(owner===addressEpoch?undefined:'MAP_SDK_SESSION_CHANGED'));}catch{finish('MAP_SDK_INITIALIZATION_FAILED');}}
    let config=root.KAKAO_MAP_CONFIG||{};const tag=document.getElementById('kakaoMapsSdk');
+   localCenters??=Array.isArray(config.centers)?config.centers:[];
    root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:false};
    root.OPSMAP_DRIVER_CONTACT_ENABLED=false;
    const owner=addressEpoch;
-   try{const response=await fetch(configPath+'?sdkOnly=1',{credentials:'same-origin',cache:'no-store'});if(finished)return;if(response.ok){const payload=await response.json();if(finished)return;if(owner!==addressEpoch)return finish('MAP_SDK_SESSION_CHANGED');config={...config,javascriptKey:config.javascriptKey||payload.javascriptKey};addressPending=payload.addressLookupPending===true;root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:!addressPending&&payload.allowExternalAddressLookup===true&&payload.addressLookupServerProxy===true,addressLookupServerProxy:true};root.OPSMAP_DRIVER_CONTACT_ENABLED=payload.driverContactEnabled===true;}else if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_JAVASCRIPT_KEY_UNCONFIGURED');}catch{if(finished)return;if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_SDK_CONFIG_UNAVAILABLE');}
+   try{const response=await fetch(configPath+'?sdkOnly=1',{credentials:'same-origin',cache:'no-store'});if(finished)return;if(response.ok){const payload=await response.json();if(finished)return;if(owner!==addressEpoch)return finish('MAP_SDK_SESSION_CHANGED');const serverCenters=Array.isArray(payload.centers)?payload.centers:[];
+     const centers=[...localCenters.filter(row=>!serverCenters.some(server=>server?.id===row?.id)),...serverCenters];
+     config={...config,javascriptKey:config.javascriptKey||payload.javascriptKey,...(centers.length?{centers}:{})};addressPending=payload.addressLookupPending===true;root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:!addressPending&&payload.allowExternalAddressLookup===true&&payload.addressLookupServerProxy===true,addressLookupServerProxy:true};root.OPSMAP_DRIVER_CONTACT_ENABLED=payload.driverContactEnabled===true;}else if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_JAVASCRIPT_KEY_UNCONFIGURED');}catch{if(finished)return;if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_SDK_CONFIG_UNAVAILABLE');}
    clearTimeout(timer);timer=setTimeout(()=>finish('MAP_SDK_TIMEOUT'),timeoutMs);
    root.dispatchEvent(new CustomEvent('map-driver-capability'));
    if(root.kakao?.maps?.load)return loaded();

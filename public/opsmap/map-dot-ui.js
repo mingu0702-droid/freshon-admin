@@ -49,10 +49,6 @@
       if($('#periodStoreListSection').previousElementSibling!==context)context.after($('#periodStoreListSection'));
       planner.hidden=false;visits.hidden=true;
     }
-    const state=window.MapUiLocalBridge.state,vehicles=state.selectedVehicles;
-    $('#dotRouteSelection').textContent=(vehicles.length===1?vehicles[0]+'호차':vehicles.length?vehicles.length+'개 호차':'전체 호차')+' · '+state.currentRows.length+'개 매장';
-    const origin=window.MapNavigationEditor?.values?.()[0]||$('#plannerStart').value,point=window.MapNavigation?.resolve(origin)||[];
-    $('#dotRouteOrigin').textContent=point.length===1?'출발 · '+point[0].customerName:'출발지를 선택해 주세요.';
     return true;
   }
   function mount(){
@@ -64,11 +60,7 @@
     context.after($('#periodStoreListSection'));
     document.querySelectorAll('option[value="other"]').forEach(n=>n.remove());
     const planner=$('#waypointPlanner');planner.querySelector('.sectiontitle .muted').textContent='자동차';
-    planner.querySelector('.plannerHelp').textContent='선택한 순서로 자동차 경로를 조회합니다.';
     const summary=$('#navigationSummary');summary.querySelector('h2').textContent='도로 경로 결과';
-    const selection=document.createElement('p');selection.id='dotRouteSelection';
-    const origin=document.createElement('p');origin.id='dotRouteOrigin';
-    summary.querySelector('.sectiontitle').after(selection,origin);
     summary.append($('#syncOperation'));
     const referenceNotice=$('#mapReferenceDataNotice');
     if(referenceNotice)$('#approvedSiteHeader').append(referenceNotice);
@@ -76,9 +68,6 @@
     if(obsoleteRoutePanel){obsoleteRoutePanel.hidden=true;obsoleteRoutePanel.inert=true;obsoleteRoutePanel.dataset.modeHidden='true';}
     const options=document.createElement('details');options.id='dotRoadOptions';options.innerHTML='<summary>경로 표시·방문 목록</summary>';
     options.append(summary.querySelector('.navToggles'),$('#queryRecordedRoute'),$('#navLegs'));summary.append(options);
-    const controls=document.createElement('details');controls.id='territoryControls';
-    controls.innerHTML='<summary>호차별 권역</summary><p id="territoryStatus" role="status">기준호차에 배정된 매장</p><ul id="territoryVehicles"></ul><button id="refreshTerritories">권역 새로고침</button>';
-    $('.generalCenters').append(controls);
     const status=document.createElement('p');status.id='dotDataStatus';status.setAttribute('role','status');$('.sidefoot').prepend(status);
     $('#mapSourceStatus').hidden=true;
     const listHeading=$('#periodStoreListSection .sectiontitle');for(const node of [...listHeading.childNodes])if(node.nodeType===Node.TEXT_NODE)node.remove();

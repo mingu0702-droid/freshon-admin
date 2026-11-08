@@ -182,7 +182,7 @@
     const rect=node=>node?.getClientRects?.().length&&!node.hidden?node.getBoundingClientRect():null;
     const pin=rect(doc?.querySelector('#map .marker.selected'))||[...(doc?.querySelectorAll('#map .marker')||[])].map(rect).find(Boolean);
     return {mapRect:element?.getBoundingClientRect?.(),viewportRect,headerRect:rect(doc?.querySelector('#approvedSiteHeader')),
-      occluders:[...(doc?.querySelectorAll('#leftPanel,#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#areaToggle,#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
+      occluders:[...(doc?.querySelectorAll('#leftPanel,#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
       anchorHeight:pin?.height||0,
       anchorWidth:pin?.width||0,
       mobile:win.matchMedia?.('(max-width: 760px)')?.matches??Number(viewportRect.width)<=760};

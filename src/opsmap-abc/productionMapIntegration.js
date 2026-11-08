@@ -27,7 +27,19 @@ import {createRoadRouteService,mountRoadRouteRoutes} from './roadRouteService.js
 import {createPreparedCustomerDetailReader} from './preparedCustomerDetails.js';
 import {createHubRoadBudget} from './hubRoadBudget.js';
 import {createKakaoCoordinateConnection,mountKakaoCoordinateConnection} from './kakaoCoordinateConnection.js';
+import {REGISTERED_OSAN_CENTER} from './centerSettings.js';
 import {assertDeliverySourceObservation} from '../snapshotRefreshEvidence.js';
+
+function registeredOsanCenter(setting){
+  if(typeof setting!=='string'||setting.length>2048)return null;
+  let row;
+  try{row=JSON.parse(setting);}catch{return null;}
+  if(row?.verified!==true||(row.id!==undefined&&row.id!=='osan')||!Number.isFinite(row.lat)||row.lat<33||row.lat>39.5||
+    !Number.isFinite(row.lng)||row.lng<124||row.lng>132||
+    typeof row.sourceVersion!=='string'||!/^[A-Za-z0-9._:-]{1,128}$/.test(row.sourceVersion))return null;
+  const address=typeof row.address==='string'?row.address.trim():'';
+  return {id:'osan',verified:true,sourceVersion:row.sourceVersion,lat:row.lat,lng:row.lng,address:address.slice(0,200)};
+}
 
 export function mountProductionMapApi(app,{
   previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
@@ -39,6 +51,9 @@ export function mountProductionMapApi(app,{
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
+  const osanCenter=env.OPSMAP_VERIFIED_OSAN_CENTER_JSON===undefined
+    ? REGISTERED_OSAN_CENTER
+    : registeredOsanCenter(env.OPSMAP_VERIFIED_OSAN_CENTER_JSON);
   addressLookupService??=createKakaoCoordinateConnection({env});
   const preparedCustomerDetails=createPreparedCustomerDetailReader({callHub});
   if(roadRouteBudget===undefined)roadRouteBudget=createHubRoadBudget({callHub}); // Explicit null requires a separately configured backend.
@@ -65,7 +80,7 @@ export function mountProductionMapApi(app,{
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED'});
     const sdkOnly = req.query.sdkOnly === '1';
     const lookup = sdkOnly ? null : await addressLookupService.status();
-    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({javascriptKey,driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowExternalAddressLookup:lookup?.enabled===true,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true}));
+    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({javascriptKey,...(osanCenter?{centers:[osanCenter]}:{}),driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowExternalAddressLookup:lookup?.enabled===true,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true}));
   });
   mountKakaoCoordinateConnection({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,service:addressLookupService,jsonBody:express.json({limit:'4kb'}),origin:env.MAP_STAFF_ORIGIN||env.RENDER_EXTERNAL_URL});
   app.get('/api/map-phase2b/private/address-lookup/config',async(req,res)=>{

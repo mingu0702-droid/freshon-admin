@@ -49,7 +49,6 @@
   centers.querySelectorAll('button').forEach(button=>button.onclick=()=>setCenter(button.dataset.sourceCenter));$('#sourceCenterReset').onclick=()=>setCenter('all');
   const planner=document.createElement('details');planner.id='waypointPlanner';
   planner.innerHTML=`<summary class="sectiontitle"><h2>경로 설정</h2><span class="muted">자동차</span></summary>
-    <p class="hint plannerHelp">매장이나 주소를 검색해 각 지점을 지정하세요.</p>
     <div class="navEditorField" data-point-role="origin"><label for="plannerStart"><span class="pointRole origin">출발</span> 출발지</label><div class="pointInputRow"><input id="plannerStart" data-nav-role="origin" aria-label="출발지 검색" placeholder="고객코드·매장명·주소 검색" autocomplete="off"><button id="clearOrigin" type="button" class="pointClear" aria-label="출발지 지우기" title="출발지 지우기">×</button></div></div>
     <div id="plannerStops"></div><button id="addWaypoint" type="button" class="full addWaypoint">＋ 경유지 추가</button>
     <div class="navEditorField" data-point-role="destination"><label for="plannerEnd"><span class="pointRole destination">도착</span> 목적지</label><div class="pointInputRow"><input id="plannerEnd" data-nav-role="destination" aria-label="목적지 검색" placeholder="고객코드·매장명·주소 검색" autocomplete="off"><button id="clearDestination" type="button" class="pointClear" aria-label="목적지 지우기" title="목적지 지우기">×</button></div></div>
@@ -158,7 +157,7 @@
   $('#sourceFooterLinks').append(data,$('#openOperations'));sidebar.append(foot);$('#sourceBatch').onclick=()=>{$('#newAreaBatchTool').hidden=false;$('#newAreaBatchTool').open=!$('#newAreaBatchTool').open;};$('#newAreaBatchTool').hidden=true;
   const maparea=document.createElement('div');maparea.className='maparea';maparea.append($('#map'));
   const mapTop=document.createElement('div');mapTop.className='maptop';const context=document.createElement('div');context.className='mapcontext';context.id='generalMapContext';context.innerHTML='';
-  const controls=document.createElement('div');controls.className='row';controls.append($('#mapReset'),$('#areaToggle'));mapTop.append(context,controls);maparea.append(mapTop);
+  const controls=document.createElement('div');controls.className='row';controls.append($('#mapReset'));mapTop.append(context,controls);maparea.append(mapTop);
   const quickVehicles=document.createElement('div');quickVehicles.id='vehicleQuickFilter';quickVehicles.hidden=true;quickVehicles.setAttribute('role','group');quickVehicles.setAttribute('aria-label','선택 호차');
   quickVehicles.innerHTML='<div id="vehicleQuickChips"></div><button id="clearMapVehicleFilter" type="button" aria-label="호차 필터 전체 해제">전체보기</button>';
   quickVehicles.querySelector('button').onclick=()=>$('#clearVehicles').click();
@@ -215,7 +214,7 @@
   function modeVisible(node,visible){if(!node)return;node.hidden=!visible;node.inert=!visible;node.dataset.modeHidden=String(!visible);}
   let controlsMode=null;
   function syncModeControls(daily,historyDialog=false){
-    for(const node of [search,address,filters,stores,$('#sourceBatch'),$('#sourceAreaShortcut'),$('#sourceManualShortcut'),$('#areaToggle')])modeVisible(node,!daily&&node!==address&&node.id!=='sourceManualShortcut');
+    for(const node of [search,address,filters,stores,$('#sourceBatch'),$('#sourceAreaShortcut'),$('#sourceManualShortcut')])modeVisible(node,!daily&&node!==address&&node.id!=='sourceManualShortcut');
     modeVisible(planner,true);modeVisible(periodButton,!daily);modeVisible(context,false);
     const host=daily?dailyForm:basePicker,actions=daily?dailyVehicleActions:pickerActions;
     const before=daily?dailyVehicleActions:$('#baseVehicleCount');

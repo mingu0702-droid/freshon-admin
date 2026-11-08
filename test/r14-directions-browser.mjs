@@ -7,8 +7,8 @@ import {createRoadRouteService} from '../src/opsmap-abc/roadRouteService.js';
 const {chromium}=await import(process.env.OPSMAP_TEST_PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve('public/opsmap'),output=process.env.OPSMAP_R14_DIRECTIONS_OUTPUT||fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r14-directions-'));
 fs.mkdirSync(output,{recursive:true});
-const rows=Array.from({length:8},(_,i)=>({customerCode:'SYNTHETIC_'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',order:8-i,lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
-const dailyRows=rows.slice(0,4);
+const rows=Array.from({length:8},(_,i)=>({customerCode:'S99000'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',order:8-i,lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
+const dailyRows=rows.slice(0,4).map(row=>({...row,centerCode:'011'}));
 const requests=[],providerRequests=[],reservations=[],external=[],errors=[],checks=[];
 let budgetDepleted=false;
 const budget={
@@ -38,7 +38,7 @@ const service=createRoadRouteService({env:{OPSMAP_ROAD_ROUTE_ENABLED:'1',KAKAO_R
 }});
 const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
 const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false,centers:[{id:'osan',verified:true,sourceVersion:'SYNTHETIC',lat:37,lng:127}]};window.__routeLines=new Set();
-document.body.dataset.mapStaffState='authenticated';window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){},toggle(){}};
+document.body.dataset.mapStaffState='authenticated';window.MapStaffEntry={status(){},registerPurge(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
 class Bounds{extend(){}getSouthWest(){return new Coord(33,124)}getNorthEast(){return new Coord(39.5,132)}}
 const listeners=new WeakMap();
@@ -55,6 +55,7 @@ let html=fs.readFileSync(path.join(root,'map-phase2b-preview.html'),'utf8').repl
 html=html.replace('</body>','<script>'+fixture+'</script>'+scripts.map(f=>'<script src="'+f+'"></script>').join('')+'<script>MapDotUi.mount()</script></body>');
 const server=http.createServer(async(req,res)=>{
  const u=new URL(req.url,'http://localhost');
+ if(/admin-boundar|admin-features|territory-ui/.test(u.pathname))throw Error('OBSOLETE_TERRITORY_REQUEST');
  if(u.pathname.startsWith('/api/')){
   let data={data:[],meta:{}};
   if(u.pathname.endsWith('/manual-road-route')){
@@ -81,9 +82,16 @@ try{
  const totals=page.locator('#mapRouteTotals');
  await page.screenshot({path:path.join(output,'before-1366.png')});
  check('initial visit does not query Directions or show route totals',requests.length===0&&providerRequests.length===0&&!await totals.isVisible());
+ check('the verified Osan building appears once without territory controls',await page.locator('.osanCenterMarker svg').count()===1&&await page.locator('#areaToggle,#mobileAreaToggle,#territoryControls').count()===0);
+ await page.locator('.osanCenterMarker').evaluate(n=>n.click());
+ check('Osan marker opens its anchored card',await page.locator('#osanCenterCard').isVisible());
+ await page.locator('[data-center-close]').evaluate(n=>n.click());
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
  await page.locator('.navCenterChoices').getByRole('button',{name:'오산센터',exact:true}).click();
- await page.evaluate(()=>MapNavigationEditor.setPoint('destination','SYNTHETIC_3'));
+ await page.locator('#query').fill('S990003');await page.locator('#searchBtn').click();
+ await page.locator('#detail [data-nav-pick="destination"]').click();
+ check('a store card sets a destination without the separate picker',await page.evaluate(()=>MapNavigationEditor.values().at(-1)==='S990003')&&await page.locator('.navigationPicker').count()===0);
+ check('route badges appear as compact rectangles in the general map',await page.locator('.navRoutePoint').count()===2&&await page.locator('.navRoutePoint').first().evaluate(n=>getComputedStyle(n).height==='24px'&&getComputedStyle(n).borderRadius==='4px'));
  check('verified Osan center is selectable',await page.locator('#plannerStart').inputValue()==='CENTER_osan');
  await page.locator('#planRoute').click();
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
@@ -92,8 +100,9 @@ try{
  check('desktop totals are visible on the map and absent from route settings',await page.locator('.maparea > #mapRouteTotals').isVisible()&&await page.locator('#waypointPlanner #navDistance, #waypointPlanner #navDuration, #waypointPlanner .plannerMetrics').count()===0);
  await totals.screenshot({path:path.join(output,'map-route-totals-1366.png')});
  await page.locator('#clearPlanner').click();
- await page.evaluate(()=>MapNavigationEditor.replacePoints(['SYNTHETIC_0','SYNTHETIC_1','SYNTHETIC_2','SYNTHETIC_3']));
- await page.evaluate(()=>{window.__stableKakaoLink=document.querySelector('#navKakaoLinks a');for(let i=0;i<20;i++)window.dispatchEvent(new Event('map-coordinate-updated'));});await page.waitForTimeout(100);check('background coordinate updates preserve the same clickable external route link',await page.evaluate(()=>window.__stableKakaoLink===document.querySelector('#navKakaoLinks a')));
+ await page.evaluate(()=>MapNavigationEditor.replacePoints(['S990000','S990001','S990002','S990003']));
+ await page.evaluate(()=>{for(let i=0;i<20;i++)window.dispatchEvent(new Event('map-coordinate-updated'));});
+ check('coordinate refreshes keep the route badges and leave external Kakao controls absent',await page.locator('.navRoutePoint').count()===4&&await page.locator('#navKakaoDirections,a[href*="map.kakao.com/link/"]').count()===0);
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);await page.locator('#planRoute').click();
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  assert.deepEqual(providerRequests[1],{method:'GET',points:rows.slice(0,4).map(r=>[r.lng,r.lat])});
@@ -117,11 +126,11 @@ try{
   check(width+'px editor stays inside the viewport',await page.locator('#waypointPlanner').evaluate(n=>{const r=n.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1}));
   await page.screenshot({path:path.join(output,'after-'+width+'.png')});
  }
- await page.evaluate(()=>MapNavigationEditor.replacePoints(['SYNTHETIC_0','SYNTHETIC_3']));await page.locator('#planRoute').click();await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
+ await page.evaluate(()=>MapNavigationEditor.replacePoints(['S990000','S990003']));await page.locator('#planRoute').click();await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  check('mobile explicit route shows synthetic geometry and response metrics',requests.length===5&&await page.locator('#navDistance').textContent()==='0.1 km');
  check('mobile totals fit inside the map',await totals.evaluate(node=>{const badge=node.getBoundingClientRect(),map=node.parentElement.getBoundingClientRect();return badge.width>0&&badge.left>=map.left&&badge.right<=map.right&&badge.bottom<=map.bottom;}));
  await totals.screenshot({path:path.join(output,'map-route-totals-390.png')});
- await page.locator('#addWaypoint').click();await page.evaluate(()=>MapNavigationEditor.setPoint('waypoint','SYNTHETIC_1',0));await page.waitForFunction(()=>document.querySelector('#navDistance').textContent==='0.2 km');
+ await page.locator('#addWaypoint').click();await page.evaluate(()=>MapNavigationEditor.setPoint('waypoint','S990001',0));await page.waitForFunction(()=>document.querySelector('#navDistance').textContent==='0.2 km');
  check('mobile add waypoint recalculates',requests.length===6&&requests.at(-1).waypoints.length===1);
  const beforeRemove=providerRequests.length;
  await page.locator('[aria-label="경유지 1 삭제"]').click();await page.waitForFunction(()=>document.querySelector('#navDistance').textContent==='0.1 km');
@@ -136,9 +145,11 @@ try{
  await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-11-02','2026-11-02'));
  await page.evaluate(()=>{const input=document.querySelector('#vehicleList input[value="101"]');input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));});
  await page.waitForFunction(()=>MapUiLocalBridge.navigationVisitRows().length===4);
- await page.evaluate(()=>{MapNavigationEditor.setPoint('origin','CENTER_osan');document.querySelector('#waypointPlanner').open=true;document.querySelector('#dotRoadOptions').open=true;});
+ await page.waitForFunction(()=>MapNavigationEditor.values()[0]==='CENTER_osan');
+ check('verified Osan day automatically sets only the origin without a provider call',JSON.stringify(await page.evaluate(()=>MapNavigationEditor.values()))===JSON.stringify(['CENTER_osan',''])&&requests.length===8);
+ await page.evaluate(()=>{document.querySelector('#waypointPlanner').open=true;document.querySelector('#dotRoadOptions').open=true;});
  await page.locator('#queryRecordedRoute').click();
- check('mobile saved visits sort by order and retain center origin',JSON.stringify(await page.evaluate(()=>MapNavigationEditor.values()))===JSON.stringify(['CENTER_osan','SYNTHETIC_3','SYNTHETIC_2','SYNTHETIC_1','SYNTHETIC_0'])&&requests.length===8);
+ check('mobile saved visits sort by order and retain center origin',JSON.stringify(await page.evaluate(()=>MapNavigationEditor.values()))===JSON.stringify(['CENTER_osan','S990003','S990002','S990001','S990000'])&&requests.length===8);
  await page.screenshot({path:path.join(output,'after-import-390.png')});
  const requestCount=requests.length;
  const providerCount=providerRequests.length;
@@ -147,7 +158,7 @@ try{
  check('reconnect restores staff map without dispatch or old route',requests.length===requestCount&&await page.evaluate(()=>document.body.dataset.mapStaffState==='authenticated'&&MapNavigation.metrics().routeState==='idle'&&__routeLines.size===0));
  budgetDepleted=true;
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
- await page.evaluate(()=>MapNavigationEditor.replacePoints(['CENTER_osan','SYNTHETIC_6']));
+ await page.evaluate(()=>MapNavigationEditor.replacePoints(['CENTER_osan','S990006']));
  const blocked=page.waitForResponse(r=>r.url().endsWith('/manual-road-route'));
  await page.locator('#planRoute').click();
  const response=await blocked;

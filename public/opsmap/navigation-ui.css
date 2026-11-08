@@ -11,18 +11,15 @@
 #mapRouteTotals b{color:#2454a4;font-size:14px;white-space:nowrap}
 .approvedShellCandidate .navToggles{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin:12px 0}
 .approvedShellCandidate .navToggles input{width:auto;height:auto}
-.approvedShellCandidate #navRouteStatus,.approvedShellCandidate #navPointStatus{font-size:12px;overflow-wrap:anywhere}
+.approvedShellCandidate #navRouteStatus{font-size:12px;overflow-wrap:anywhere}
 .approvedShellCandidate #navLegs{display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:200px;overflow:auto}
 .approvedShellCandidate #navLegs button{white-space:normal;text-align:left;font-size:12px}
-.approvedShellCandidate #navLegs button[aria-pressed=true]{background:#eaf0ff;color:#2059dc;outline:1px solid #8fb2fb}
-.approvedShellCandidate .navigationPicker{padding:10px;background:#f3f7fd;border-radius:7px;margin:10px 0}
 .approvedShellCandidate .navPickActions{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
 .approvedShellCandidate .navPickActions button{font-size:12px;flex:1;min-width:75px}
 .approvedShellCandidate #navAmbiguous{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
 .approvedShellCandidate .mapCenters{display:flex;gap:4px;flex-wrap:wrap;max-width:100%}
 .approvedShellCandidate .mapCenters button{font-size:11px;padding:5px 8px;background:white}
 .approvedShellCandidate .centerMarker{font-size:11px;background:#fff;border:2px solid #345f99;border-radius:5px;padding:4px}
-.approvedShellCandidate .navRoutePoint{font-size:11px;font-weight:700;background:#234f94;color:#fff;border:2px solid #fff;box-shadow:0 1px 6px #16365d55;border-radius:12px;padding:4px 8px}
 .approvedShellCandidate #navMissingStores button{display:block;text-align:left;margin:5px 0;width:100%;white-space:normal}
 .approvedShellCandidate #navigationMeaning{font-size:11px;color:#65768b}
 .approvedShellCandidate #navigationSummary button,.approvedShellCandidate #navigationSummary label{max-width:100%}
@@ -30,21 +27,12 @@
 .approvedShellCandidate.daily-mode .mapbottom{top:320px;bottom:auto}
 @media(max-width:900px){.approvedShellCandidate #approvedSiteHeader{height:auto;min-height:76px;flex-wrap:wrap;gap:8px;padding:10px 14px}.approvedShellCandidate #approvedSiteHeader .brand{width:auto;flex:1;min-width:160px}.approvedShellCandidate #approvedSiteHeader>nav{order:3}.approvedShellCandidate #approvedSiteHeader .headerLinks{order:4;width:100%;justify-content:center}.approvedShellCandidate.daily-mode .workspace{flex-direction:column}.approvedShellCandidate.daily-mode .sidebar{width:100%;min-width:0}.approvedShellCandidate.daily-mode .maparea{width:100%;min-width:0}.approvedShellCandidate.daily-mode #detailSection{position:static!important;grid-row:3;left:auto!important;right:auto!important;top:auto!important;width:100%;max-width:none;max-height:400px!important;margin:0}.approvedShellCandidate.daily-mode #detailSection:not(.open){display:none}.approvedShellCandidate.daily-mode .maptop{flex-wrap:wrap;gap:6px;left:12px;right:12px}.approvedShellCandidate.daily-mode .mapCenters{width:100%;max-width:none;justify-content:flex-end}}
 @media(max-width:900px){.approvedShellCandidate.daily-mode .navigationWorkspace{grid-template-columns:minmax(0,1fr);max-height:none;overflow:visible}.approvedShellCandidate.daily-mode .maparea{height:auto!important;min-height:900px;overflow:visible;grid-template-rows:360px auto}.approvedShellCandidate.daily-mode #map{min-height:360px;height:360px}.approvedShellCandidate.daily-mode .workspace{height:auto;overflow:visible}.approvedShellCandidate .navigationWorkspace #runListTool{grid-column:1}.approvedShellCandidate #navigationSummary,.approvedShellCandidate #waypointPlanner{width:100%;box-sizing:border-box}}
-@media(max-width:480px){.approvedShellCandidate .navigationWorkspace{padding:10px!important;gap:10px!important}.approvedShellCandidate .mapCenters{max-width:180px}.approvedShellCandidate .maptop{gap:5px}.approvedShellCandidate .navPickActions button{padding:7px 5px}.approvedShellCandidate .navigationPicker input{min-width:0;width:100%;box-sizing:border-box}}
+@media(max-width:480px){.approvedShellCandidate .navigationWorkspace{padding:10px!important;gap:10px!important}.approvedShellCandidate .mapCenters{max-width:180px}.approvedShellCandidate .maptop{gap:5px}.approvedShellCandidate .navPickActions button{padding:7px 5px}}
 
 @media(min-width:901px){.approvedShellCandidate #navigationSummary{position:sticky;top:0;align-self:start}.approvedShellCandidate .navigationWorkspace{align-items:start}}
 
 
-/* Route entry is one consistent set of searchable fields. */
-.approvedShellCandidate .navigationPicker{padding:12px;background:#f5f7fb;border:1px solid #e1e7ee;border-radius:9px;margin:12px 0}
-.approvedShellCandidate .navSelectedHeading{font-size:11px;font-weight:600;color:#6b7889}
-.approvedShellCandidate #navSelectedStore{margin:6px 0 9px;line-height:1.5}
-.approvedShellCandidate #navSelectedStore strong{display:block;font-size:13px;color:#24364b}
-.approvedShellCandidate #navSelectedStore small{display:block;font-size:11px;color:#718097;overflow-wrap:anywhere}
 .approvedShellCandidate .navPickActions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
-.approvedShellCandidate .navPickActions button{min-width:0;min-height:34px;font-size:12px;padding:7px 5px}
-.approvedShellCandidate #navPointStatus:empty{display:none}
-.approvedShellCandidate #navPointStatus{margin:8px 0 0;line-height:1.5;color:#426185}
 .approvedShellCandidate .navFieldDetail{display:block;margin:5px 0 0 28px;color:#6d7a8c;font-size:11px;line-height:1.45;overflow-wrap:anywhere}
 .approvedShellCandidate .navFieldDetail[hidden]{display:none}
 .approvedShellCandidate .navEditorField input[data-resolved=true]{border-color:#a1bcd7;background:#f9fbfd}
@@ -59,21 +47,26 @@
 .approvedShellCandidate .navCenterChoices[hidden]{display:none}
 .approvedShellCandidate .navCenterChoices>span{font-size:11px;color:#718097;margin-right:2px}
 .approvedShellCandidate .navCenterChoices button{font-size:11px;padding:5px 8px;min-height:28px;border:1px solid #d6e0e8;background:white}
-.approvedShellCandidate .navRoutePointGroup{display:flex;flex-direction:column;align-items:center;gap:2px;max-width:150px}
-.approvedShellCandidate .navRoutePoint{min-height:31px;max-width:150px;display:flex;align-items:center;gap:6px;border-radius:7px;padding:5px 8px;line-height:1.2;font-size:11px;background:#4b66a4;box-shadow:0 2px 5px #15304a33}
-.approvedShellCandidate .navRoutePoint small{max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:500;color:#fff}
-.approvedShellCandidate .navRoutePoint[data-role=origin]{background:#1e7c63}
-.approvedShellCandidate .navRoutePoint[data-role=destination]{background:#bf514b}
+.navRoutePointAnchor,.osanCenterAnchor{position:relative;width:0;height:0;pointer-events:none}
+.approvedShellCandidate .navRoutePointGroup{position:absolute;bottom:var(--nav-badge-offset,51px);left:var(--nav-badge-shift,0px);transform:translateX(-50%);width:max-content;max-width:min(245px,calc(100vw - 12px));display:flex;flex-wrap:wrap;justify-content:center;gap:4px;pointer-events:none}
+.approvedShellCandidate .navRoutePoint{box-sizing:border-box;display:grid;place-items:center;min-width:36px;height:24px;padding:0 6px;border:1px solid #fff;border-radius:4px;background:#344354;color:#fff;font-size:11px;font-weight:700;line-height:1;white-space:nowrap;box-shadow:0 1px 3px #1724353d;pointer-events:auto}
+.approvedShellCandidate .navRoutePoint[data-role=origin]{background:#138364}
+.approvedShellCandidate .navRoutePoint[data-role=destination]{background:#c44146}
+@media(max-width:760px){.approvedShellCandidate .navRoutePointGroup{bottom:var(--nav-badge-offset,53px)}}
+.osanCenterAnchor{--osan-icon-size:20px}
+.approvedShellCandidate .osanCenterMarker{position:absolute;bottom:0;left:0;transform:translateX(-50%);display:grid;justify-items:center;gap:1px;padding:1px 4px;border:0;background:transparent;box-shadow:none;pointer-events:auto;white-space:nowrap}
+.osanCenterMarker svg{display:block;box-sizing:border-box;width:var(--osan-icon-size);height:var(--osan-icon-size);background:#f3f7fb;border:1px solid #8ca6c0;border-radius:4px;color:#3f6388}
+.osanCenterMarker span{padding:0 3px;background:#ffffffec;color:#355470;border-radius:3px;font-size:10px;font-weight:600;line-height:1.3}
+.osanCenterMarker:focus-visible{outline:2px solid #1852a2;outline-offset:3px}
+#osanCenterCard{position:absolute;bottom:calc(var(--osan-icon-size) + 21px);left:var(--osan-card-shift,0px);transform:translateX(-50%);width:max-content;max-width:min(220px,calc(100vw - 24px));box-sizing:border-box;padding:8px 10px;background:#fff;color:#355470;border:1px solid #c8d5e1;border-radius:7px;box-shadow:0 2px 6px #10294420;font-size:12px;pointer-events:auto}
+#osanCenterCard[data-side=below]{top:6px;bottom:auto}
+#osanCenterCard[hidden]{display:none}
+#osanCenterCard p{margin:4px 0 8px;color:#44566d;overflow-wrap:anywhere}
+#osanCenterCard div{display:flex;gap:6px;margin-top:6px}
+#osanCenterCard small:not(:empty){display:block;margin-top:5px}
 .approvedShellCandidate #navLegs button{font-size:11px;line-height:1.5;padding:8px 9px}
 .approvedShellCandidate #navMissingStores{font-size:12px;color:#6c7b8e}
 @media(max-width:480px){.approvedShellCandidate .navSearchResults{max-height:210px}.approvedShellCandidate .navPickActions button{min-height:38px}}
-.approvedShellCandidate #navKakaoDirections{margin:12px 0;padding:10px;border:1px solid #dce5ee;border-radius:8px}
-.approvedShellCandidate #navKakaoDirections h3{margin:0 0 7px;font-size:13px}
-.approvedShellCandidate #navKakaoDirections p,.approvedShellCandidate #navSelectedKakaoHint{font-size:11px;line-height:1.5;overflow-wrap:anywhere}
-.approvedShellCandidate #navKakaoLinks,.approvedShellCandidate #navKakaoLegLinks{display:flex;flex-direction:column;gap:6px}
-.approvedShellCandidate #navKakaoLinks a,.approvedShellCandidate #navKakaoLegLinks a,.approvedShellCandidate #navSelectedKakao{display:block;box-sizing:border-box;padding:9px;border:1px solid #b9cce3;border-radius:6px;color:#2454a4;background:#f4f8fd;font-size:12px;line-height:1.5;text-decoration:none;overflow-wrap:anywhere}
-.approvedShellCandidate #navKakaoLegFallback summary{cursor:pointer;font-size:12px;color:#2454a4}
-.approvedShellCandidate #navKakaoLegLinks{margin-top:7px}
-.approvedShellCandidate #navSelectedKakao[hidden]{display:none}
-.approvedShellCandidate #navSelectedKakaoHint:empty{display:none}
-.approvedShellCandidate #detailSection>#navSelectedKakaoActions{padding:0 12px 12px}
+#detail .navPickActions{margin:10px 0}
+#detail [data-nav-feedback]{margin:4px 0;font-size:12px;color:#536982}
+#detail [data-nav-feedback]:empty{display:none}

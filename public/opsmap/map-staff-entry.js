@@ -57,7 +57,7 @@
   function revoke(text, unknown = false) {
     epoch++; session = null; clearTimeout(timer); password.value = '';
     for (const controller of requests) controller.abort(); requests.clear();
-    delete window.VEHICLE_AREA_DATA; delete window.ADMIN_FEATURES;
+    delete window.VEHICLE_AREA_DATA;
     document.body.dataset.mapStaffState = unknown ? 'checking' : 'signed-out'; entry.hidden = false; submit.disabled = unknown;
     entryMode(unknown?'checking':'signed-out');
     account.disabled = unknown; password.disabled = unknown;
@@ -95,31 +95,27 @@
   async function loadData(owner) {
     const optional=document.documentElement.dataset.referenceDataOptional==='true';
     const current=()=>{if(owner!==epoch||!session)throw new DOMException('Session changed','AbortError');};
-    function missing(name){
-      current();window[name]=null;document.body.dataset.mapReferenceDataState='unconfirmed';
+    function missing(){
+      current();window.VEHICLE_AREA_DATA=null;document.body.dataset.mapReferenceDataState='unconfirmed';
       let notice=document.getElementById('mapReferenceDataNotice');
       if(!notice){notice=document.createElement('p');notice.id='mapReferenceDataNotice';notice.setAttribute('role','status');(document.getElementById('approvedSiteHeader')||document.body).prepend(notice);}
       notice.textContent='기준자료 일부 미연결 · 저장 매장 조회 가능';
     }
-    // The two independent reference reads no longer block each other. Optional
-    // legacy files cannot hold up the private saved map indefinitely.
-    await Promise.all([['vehicle-data.js','VEHICLE_AREA_DATA'],['admin-features.js','ADMIN_FEATURES']].map(async([url,name])=>{
-      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),optional?3000:10000);
-      try{
-        const response=await window.fetch('/'+url,{credentials:'same-origin',cache:'no-store',signal:controller.signal});
-        current();
-        if(optional&&[401,403,404,503].includes(response.status)){await response.body?.cancel();missing(name);return;}
-        if(!response.ok)throw Error('MAP_DATA_UNAVAILABLE');
-        const text=await response.text();current();
-        const match=text.match(/^\s*window\.([A-Z_]+)\s*=\s*([\s\S]*?);?\s*$/);
-        if(!match||match[1]!==name)throw Error('MAP_DATA_UNAVAILABLE');
-        window[name]=JSON.parse(match[2]);
-      }catch(error){
-        current();
-        if(optional){missing(name);return;}
-        throw error;
-      }finally{clearTimeout(timer);}
-    }));
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),optional?3000:10000);
+    try{
+      const response=await window.fetch('/vehicle-data.js',{credentials:'same-origin',cache:'no-store',signal:controller.signal});
+      current();
+      if(optional&&[401,403,404,503].includes(response.status)){await response.body?.cancel();missing();return;}
+      if(!response.ok)throw Error('MAP_DATA_UNAVAILABLE');
+      const text=await response.text();current();
+      const match=text.match(/^\s*window\.VEHICLE_AREA_DATA\s*=\s*([\s\S]*?);?\s*$/);
+      if(!match)throw Error('MAP_DATA_UNAVAILABLE');
+      window.VEHICLE_AREA_DATA=JSON.parse(match[1]);
+    }catch(error){
+      current();
+      if(optional){missing();return;}
+      throw error;
+    }finally{clearTimeout(timer);}
   }
   async function bootstrap(owner) {
     const placeholders = document.querySelectorAll('script[type="application/x-map-staff"]');
