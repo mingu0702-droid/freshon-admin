@@ -1,6 +1,6 @@
 (function(root){
  'use strict';
- const fail=code=>{throw Object.assign(Error(code),{code});};
+ const fail=(code,validationCheck)=>{throw Object.assign(Error(code),{code,...(validationCheck?{validationCheck}:{})});};
  const coordinate=p=>{if(!p||!Number.isFinite(p.lat)||!Number.isFinite(p.lng)||p.lat<33||p.lat>39.5||p.lng<124||p.lng>132)fail('INVALID_COORDINATE');return {x:p.lng,y:p.lat};};
  // Collapse only adjacent equal coordinates for the provider request. Keep a
  // map back to EVERY original visit/leg, including separate shops in a building.
@@ -30,21 +30,36 @@
   const base={mode:body.mode,requestId:body.requestId,source:providerLegs.length?'kakao-directions':'stationary-stops',isGpsActual:false,totalLegs,stationaryLegs};
   if(!providerLegs.length)return {...base,state:'success',complete:true,noDrivingRequired:true,coveredLegs:totalLegs,distanceMeters:0,durationSeconds:0,legs,chunks:[{state:'success',startLeg:0,endLeg:totalLegs-1,geometry:[]}]};
   const route=payload?.routes?.[0];
-  if(!Array.isArray(payload?.routes)||payload.routes.length!==1||!route||!Number.isInteger(route.result_code))fail('INVALID_ROAD_ROUTE_RESPONSE');
+  if(!Array.isArray(payload?.routes)||payload.routes.length!==1||!route)fail('INVALID_ROAD_ROUTE_RESPONSE','ROUTE_ENVELOPE');
+  if(!Number.isInteger(route.result_code))fail('INVALID_ROAD_ROUTE_RESPONSE','RESULT_CODE');
   if(route.result_code!==0)return {...base,state:'error',error:'NO_ROAD_ROUTE',complete:false,coveredLegs:0,chunks:[]};
   const distance=route.summary?.distance,duration=route.summary?.duration;
-  if(![distance,duration].every(n=>Number.isSafeInteger(n)&&n>=0)||distance>=1500000||!Array.isArray(route.sections)||route.sections.length!==providerLegs.length)fail('INVALID_ROAD_ROUTE_RESPONSE');
+  if(![distance,duration].every(n=>Number.isSafeInteger(n)&&n>=0)||distance>=1500000)fail('INVALID_ROAD_ROUTE_RESPONSE','SUMMARY_TOTALS');
+  if(!Array.isArray(route.sections))fail('INVALID_ROAD_ROUTE_RESPONSE','SECTIONS_ARRAY');
+  if(route.sections.length!==providerLegs.length)fail('INVALID_ROAD_ROUTE_RESPONSE','SECTION_COUNT');
   let vertices=0,sumDistance=0,sumDuration=0;const geometry=[];
   route.sections.forEach((section,providerIndex)=>{
    const index=providerLegs[providerIndex];
-   if(![section?.distance,section?.duration].every(n=>Number.isSafeInteger(n)&&n>=0)||!Array.isArray(section.roads)||!section.roads.length||section.roads.length>10000)fail('INVALID_ROAD_GEOMETRY');
+   if(![section?.distance,section?.duration].every(n=>Number.isSafeInteger(n)&&n>=0))fail('INVALID_ROAD_GEOMETRY','SECTION_TOTALS');
+   if(!Array.isArray(section.roads))fail('INVALID_ROAD_GEOMETRY','ROADS_ARRAY');
+   if(!section.roads.length||section.roads.length>10000)fail('INVALID_ROAD_GEOMETRY','ROAD_COUNT');
    sumDistance+=section.distance;sumDuration+=section.duration;
    legs[index]={index,distanceMeters:section.distance,durationSeconds:section.duration};
-   for(const road of section.roads){const v=road?.vertexes;if(!Array.isArray(v)||v.length<4||v.length%2||vertices+v.length/2>100000)fail('INVALID_ROAD_GEOMETRY');
-    const latLngs=[];for(let i=0;i<v.length;i+=2){coordinate({lng:v[i],lat:v[i+1]});latLngs.push([v[i+1],v[i]]);}vertices+=latLngs.length;geometry.push({legOffset:index,latLngs});
+   for(const road of section.roads){
+    const v=road?.vertexes;
+    if(!Array.isArray(v))fail('INVALID_ROAD_GEOMETRY','VERTEX_ARRAY');
+    if(v.length<4||v.length%2)fail('INVALID_ROAD_GEOMETRY','VERTEX_LENGTH');
+    if(vertices+v.length/2>100000)fail('INVALID_ROAD_GEOMETRY','VERTEX_LIMIT');
+    const latLngs=[];
+    for(let i=0;i<v.length;i+=2){
+     try{coordinate({lng:v[i],lat:v[i+1]});}catch{fail('INVALID_COORDINATE','VERTEX_COORDINATE');}
+     latLngs.push([v[i+1],v[i]]);
+    }
+    vertices+=latLngs.length;geometry.push({legOffset:index,latLngs});
    }
   });
-  if(Math.abs(sumDistance-distance)>providerLegs.length||Math.abs(sumDuration-duration)>providerLegs.length)fail('INCOMPLETE_ROAD_ROUTE');
+  if(Math.abs(sumDistance-distance)>providerLegs.length)fail('INCOMPLETE_ROAD_ROUTE','DISTANCE_SUM');
+  if(Math.abs(sumDuration-duration)>providerLegs.length)fail('INCOMPLETE_ROAD_ROUTE','DURATION_SUM');
   return {...base,state:'success',complete:true,coveredLegs:totalLegs,distanceMeters:distance,durationSeconds:duration,legs,chunks:[{state:'success',startLeg:0,endLeg:totalLegs-1,geometry}]};
  }
  const httpError=status=>status===401?'STAFF_LOGIN_REQUIRED':status===403?'PERMISSION_DENIED':status===429?'QUOTA_EXCEEDED':status===504?'TIMEOUT':status>=500?'PROVIDER_UNAVAILABLE':status===404?'FEATURE_DISABLED':'ROAD_ROUTE_FAILED';

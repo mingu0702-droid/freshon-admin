@@ -9,6 +9,7 @@ const origin='https://production.synthetic.test',key='synthetic-rest-key';
 const realFetch=globalThis.fetch;
 async function fixture(extra={}){
  const app=express(),sessions=new Map(),calls=[];let state=null,revision=1;
+ if(extra.jsonReplacer)app.set('json replacer',extra.jsonReplacer);
  const now=Date.now(),expiry=Math.min(now+600000,Math.floor((now+9*3600000)/86400000)*86400000+86400000-9*3600000);
  const approved={schema:1,roadBudget:{accountHash:createHash('sha256').update(key).digest('hex'),scope:'CUMULATIVE_APPROVED_ACCOUNT',policy:'FREE_ONLY',providerPaidDisabled:true,servicePermissionVerified:true,approvalId:'synthetic-approval',verifiedAt:new Date(now).toISOString(),expiresAt:new Date(expiry).toISOString(),limit:1,used:0,monthlyFreeRemainingAtApproval:10,apis:{directions:{freeRemainingAtApproval:10,used:0},waypoints:{freeRemainingAtApproval:0,used:0}}}};
  if(extra.ledger)state=approved;
@@ -22,7 +23,8 @@ async function fixture(extra={}){
    return state?response({sha:String(revision).padStart(40,'0'),encoding:'base64',content:Buffer.from(JSON.stringify(state)).toString('base64')}):response({},404);
   }
   if(url.startsWith('https://apis-navi.kakaomobility.com/v1/directions?')){
-   assert.equal(new URL(url).searchParams.has('waypoints'),false);
+   const expectedWaypoints=extra.points?.waypoints.map(point=>point.lng+','+point.lat).join('|')||null;
+   assert.equal(new URL(url).searchParams.get('waypoints'),expectedWaypoints);
    return extra.providerResponse?.()??response({routes:[{result_code:0,summary:{distance:100,duration:60},sections:[{distance:100,duration:60,roads:[{vertexes:[127,37,127.01,37.01]}]}]}]},extra.providerHttp??200);
   }
   assert.fail('Unexpected synthetic outbound surface');
@@ -32,7 +34,7 @@ async function fixture(extra={}){
  const login=await realFetch(base+'/api/map-phase2b/auth/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({id:'fixture',password:'synthetic-password'})});assert.equal(login.status,200);
  const cookie=login.headers.get('set-cookie').split(';')[0],headers={cookie,origin,'content-type':'application/json'};
  const get=async()=>{const r=await realFetch(base+'/api/map-phase2b/private/road-route/config',{headers});assert.equal(r.status,200);return (await r.json()).data;};
- const route=async(requestId=1)=>realFetch(base+'/api/map-phase2b/private/manual-road-route',{method:'POST',headers,body:JSON.stringify({mode:'MANUAL_WAYPOINTS',requestId,origin:{id:'o',lat:37,lng:127},waypoints:[],destination:{id:'d',lat:37.01,lng:127.01}})});
+ const route=async(requestId=1)=>realFetch(base+'/api/map-phase2b/private/manual-road-route',{method:'POST',headers,body:JSON.stringify({mode:'MANUAL_WAYPOINTS',requestId,origin:{id:'o',lat:37,lng:127},waypoints:[],destination:{id:'d',lat:37.01,lng:127.01},...extra.points})});
  return {base,headers,get,route,calls,get state(){return state;},close:()=>new Promise(r=>server.close(r))};
 }
 test('Production defaults OFF with no inferred Hub budget backend',async()=>{
@@ -52,26 +54,127 @@ test('approved free ledger can be inspected while OFF and a guarded one-call sam
 });
 test('provider rejection status differs from the local quota refusal after reservation',async()=>{
  const f=await fixture({ledger:true,providerHttp:403,env:{OPSMAP_ROAD_BUDGET_STORE_ENABLED:'1',OPSMAP_PRODUCTION_ROAD_ROUTE_ENABLED:'1'}});try{
-  const rejected=await f.route();assert.equal(rejected.status,502);assert.deepEqual(await rejected.json(),{ok:false,error:'PERMISSION_DENIED',providerHttp:403});
+  const rejected=await f.route();assert.equal(rejected.status,502);assert.deepEqual(await rejected.json(),{ok:false,error:'PERMISSION_DENIED',providerHttp:403,failureStage:'FETCH',responseBytes:0});
   const exhausted=await f.route(2);assert.equal(exhausted.status,429);assert.deepEqual(await exhausted.json(),{ok:false,error:'QUOTA_EXCEEDED',providerHttp:null});
   assert.equal(f.state.roadBudget.used,1);assert.equal(f.calls.filter(c=>c.url.startsWith('https://apis-navi.')).length,1);
  }finally{await f.close();}
 });
-test('staff diagnostics distinguish provider transport, body and geometry failures without exposing upstream text',async()=>{
+test('staff diagnostics distinguish provider transport, body reads and JSON parsing without exposing upstream text',async t=>{
+ const warn=t.mock.method(console,'warn',()=>{});
+ const malformed='{"message":"합성 비공개 응답 '+key;
+ const partial=Buffer.from('{"routes":[');
+ const interrupted=()=>{
+  let sent=false;
+  const body=new ReadableStream({pull(controller){
+   if(!sent){sent=true;controller.enqueue(partial);return;}
+   controller.error(Error(key));
+  }});
+  return new Response(body,{headers:{'content-type':'application/json'}});
+ };
  const cases=[
-  [()=>{throw Error(key);},'PROVIDER_UNAVAILABLE',null,'TRANSPORT'],
-  [()=>new Response(key),'INVALID_RESPONSE',200,'CONTENT_TYPE'],
-  [()=>new Response(key,{headers:{'content-type':'application/json'}}),'INVALID_RESPONSE',200,'MALFORMED_JSON'],
-  [()=>Response.json({routes:[{result_code:0,summary:{distance:100,duration:60},sections:[null]}]}),'INVALID_RESPONSE',200,'INVALID_ROAD_GEOMETRY']
+  [()=>{throw Object.assign(Error(key),{code:key,status:599});},'PROVIDER_UNAVAILABLE',null,'TRANSPORT','FETCH',0],
+  [()=>new Response(key),'INVALID_RESPONSE',200,'CONTENT_TYPE','READ_BODY',0],
+  [interrupted,'PROVIDER_UNAVAILABLE',200,'RESPONSE_STREAM','READ_BODY',partial.byteLength],
+  [()=>new Response(malformed,{headers:{'content-type':'application/json'}}),'INVALID_RESPONSE',200,'MALFORMED_JSON','JSON_PARSE',Buffer.byteLength(malformed)]
  ];
- for(const [providerResponse,error,providerHttp,providerFailure] of cases){
+ for(const [providerResponse,error,providerHttp,providerFailure,failureStage,responseBytes] of cases){
   const f=await fixture({ledger:true,providerResponse,env:{OPSMAP_ROAD_BUDGET_STORE_ENABLED:'1',OPSMAP_PRODUCTION_ROAD_ROUTE_ENABLED:'1'}});
   try{
    const result=await f.route();
    assert.equal(result.status,502);
    assert.match(result.headers.get('cache-control'),/\bno-store\b/);
-   assert.deepEqual(await result.json(),{ok:false,error,providerHttp,providerFailure});
+   const expected={ok:false,error,providerHttp,providerFailure,failureStage,responseBytes};
+   assert.deepEqual(await result.json(),expected);
+   assert.deepEqual(JSON.parse(warn.mock.calls.at(-1).arguments[0]),{component:'opsmap-road-route',httpStatus:502,...expected});
    assert.equal(f.state.roadBudget.used,1);
   }finally{await f.close();}
  }
+ assert.equal(warn.mock.callCount(),cases.length);
+});
+
+// Reduced public example. Keep the documented two sections, totals and X/Y
+// vertex order. No operational coordinates or recorded provider traffic.
+// https://developers.kakaomobility.com/guide/navi-api/directions#response
+const documentedPoints={
+ origin:{id:'o',lat:37.402464820205246,lng:127.10764191124568},
+ waypoints:[{id:'via',order:1,lat:37.36629687436494,lng:127.17354989857544}],
+ destination:{id:'d',lat:37.39419693653072,lng:127.11056336672839}
+};
+function documentedDirections(){
+ const point=({lng,lat})=>({name:'',x:lng,y:lat});
+ const road=(distance,duration,vertexes)=>({name:'',distance,duration,traffic_speed:16,traffic_state:0,vertexes});
+ return {trans_id:'public-example',routes:[{
+  result_code:0,result_msg:'길찾기 성공',
+  summary:{
+   origin:point(documentedPoints.origin),destination:point(documentedPoints.destination),
+   waypoints:documentedPoints.waypoints.map(point),priority:'RECOMMEND',
+   fare:{taxi:22200,toll:0},distance:19032,duration:3494
+  },
+  sections:[
+   {distance:10035,duration:1880,roads:[road(186,47,[127.10763122680424,37.40241072822385,127.10645821495126,37.40322184743522])]},
+   {distance:8997,duration:1614,roads:[road(14,3,[127.10966790676201,37.394469584427156,127.10982600539788,37.39447077471427])]}
+  ]
+ }]};
+}
+const enabled={OPSMAP_ROAD_BUDGET_STORE_ENABLED:'1',OPSMAP_PRODUCTION_ROAD_ROUTE_ENABLED:'1'};
+
+test('public Kakao Directions example format preserves section geometry, distance and duration',async()=>{
+ const payload=documentedDirections();
+ const f=await fixture({ledger:true,points:documentedPoints,providerResponse:()=>Response.json(payload),env:enabled});
+ try{
+  const result=await f.route();
+  assert.equal(result.status,200);
+  const {data,meta}=await result.json();
+  assert.equal(data.state,'success');
+  assert.deepEqual(data.legs.map(leg=>[leg.distanceMeters,leg.durationSeconds]),[[10035,1880],[8997,1614]]);
+  assert.deepEqual([data.distanceMeters,data.durationSeconds],[19032,3494]);
+  assert.deepEqual(data.chunks[0].geometry[0].latLngs[0],[37.40241072822385,127.10763122680424]);
+  assert.equal(meta.providerHttp,200);
+  assert.equal(meta.responseBytes,Buffer.byteLength(JSON.stringify(payload)));
+ }finally{await f.close();}
+});
+
+test('HTTP 200 route validation identifies the rejected section, road, vertex or total check',async t=>{
+ const warn=t.mock.method(console,'warn',()=>{});
+ const cases=[
+  ['SECTION_COUNT','INVALID_ROAD_ROUTE_RESPONSE',route=>route.sections.pop()],
+  ['ROADS_ARRAY','INVALID_ROAD_GEOMETRY',route=>delete route.sections[0].roads],
+  ['ROAD_COUNT','INVALID_ROAD_GEOMETRY',route=>route.sections[0].roads=[]],
+  ['VERTEX_ARRAY','INVALID_ROAD_GEOMETRY',route=>delete route.sections[0].roads[0].vertexes],
+  ['VERTEX_LENGTH','INVALID_ROAD_GEOMETRY',route=>route.sections[0].roads[0].vertexes.pop()],
+  ['VERTEX_COORDINATE','INVALID_COORDINATE',route=>route.sections[0].roads[0].vertexes[1]=127],
+  ['DISTANCE_SUM','INCOMPLETE_ROAD_ROUTE',route=>route.summary.distance+=10],
+  ['DURATION_SUM','INCOMPLETE_ROAD_ROUTE',route=>route.summary.duration+=10]
+ ];
+ for(const [validationCheck,providerFailure,mutate] of cases){
+  const payload=documentedDirections();
+  mutate(payload.routes[0]);
+  const f=await fixture({ledger:true,points:documentedPoints,providerResponse:()=>Response.json(payload),env:enabled});
+  try{
+   const result=await f.route();
+   assert.equal(result.status,502,validationCheck);
+   const expected={ok:false,error:'INVALID_RESPONSE',providerHttp:200,providerFailure,
+    failureStage:'VALIDATE_ROUTE',responseBytes:Buffer.byteLength(JSON.stringify(payload)),validationCheck};
+   assert.deepEqual(await result.json(),expected);
+   assert.deepEqual(JSON.parse(warn.mock.calls.at(-1).arguments[0]),{component:'opsmap-road-route',httpStatus:502,...expected});
+   assert.equal(f.state.roadBudget.used,1);
+  }finally{await f.close();}
+ }
+ assert.equal(warn.mock.callCount(),cases.length);
+});
+
+test('HTTP serialization failure after a valid provider response reports its own stage',async t=>{
+ const warn=t.mock.method(console,'warn',()=>{});
+ const payload=documentedDirections();
+ const f=await fixture({ledger:true,points:documentedPoints,providerResponse:()=>Response.json(payload),env:enabled,
+  jsonReplacer:(property,value)=>{if(property==='calculatedAt')throw Error(key);return value;}});
+ try{
+  const result=await f.route();
+  assert.equal(result.status,502);
+  const expected={ok:false,error:'ROAD_ROUTE_FAILED',providerHttp:200,providerFailure:'SERIALIZATION_FAILED',
+   failureStage:'SERIALIZE',responseBytes:Buffer.byteLength(JSON.stringify(payload))};
+  assert.deepEqual(await result.json(),expected);
+  assert.deepEqual(warn.mock.calls.map(call=>JSON.parse(call.arguments[0])),[{component:'opsmap-road-route',httpStatus:502,...expected}]);
+  assert.equal(f.state.roadBudget.used,1);
+ }finally{await f.close();}
 });
