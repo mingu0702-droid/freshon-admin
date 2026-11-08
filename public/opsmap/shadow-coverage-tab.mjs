@@ -1,73 +1,102 @@
-const header = document.querySelector('#approvedSiteHeader nav');
-const sidebar = document.querySelector('#leftPanel .scrollside');
-const tab = document.createElement('button');
-const label = document.createElement('span');
-const switchState = document.createElement('small');
-tab.id = 'modeShadowCoverage';
-tab.type = 'button';
-tab.className = 'tab';
-tab.setAttribute('aria-label', '음영권역');
-tab.setAttribute('aria-controls', 'shadowCoverage');
-tab.hidden = true;
-label.textContent = '음영권역 ';
-tab.append(label, switchState);
+import { createCoveragePanel } from './shadow-coverage-panel.mjs?v=20261109-third-tab';
 
-let operatingMap, controller, loading, active = false, owner = 0;
+const header = document.getElementById('approvedSiteHeader');
+const tabs = header?.querySelector('nav');
+const workspace = document.querySelector('body > main.workspace');
+const period = document.getElementById('modePeriod');
+const daily = document.getElementById('modeDaily');
 
-function updateToggle() {
-  tab.setAttribute('aria-pressed', String(active));
-  switchState.textContent = active ? 'ON' : 'OFF';
-}
+if (tabs && workspace && period && daily) {
+  const tab = document.createElement('button');
+  tab.id = 'modeShadowCoverage';
+  tab.type = 'button';
+  tab.className = 'tab';
+  tab.textContent = '음영권역';
+  tab.setAttribute('aria-pressed', 'false');
+  tab.setAttribute('aria-controls', 'shadowCoverage');
 
-function close() {
-  owner++;
-  active = false;
-  controller?.close();
-  updateToggle();
-}
+  let panel, stylesheet, active = false, previous;
+  let returnTabs = [];
 
-function syncAvailability() {
-  const map = window.MapUiLocalBridge?.state.map;
-  if (map !== operatingMap) close();
-  operatingMap = map;
-  tab.hidden = !(header && sidebar && map && window.kakao?.maps?.AbstractOverlay &&
-    window.KAKAO_MAP_CONFIG?.shadowCoverageEnabled && window.MapStaffEntry?.session());
-  if (!tab.hidden && !tab.isConnected) header.append(tab);
-}
-
-tab.onclick = async () => {
-  if (active) return close();
-  if (tab.hidden || !operatingMap || !window.MapStaffEntry?.session()) return;
-  active = true;
-  updateToggle();
-  tab.title = '';
-  const ticket = ++owner;
-  try {
-    loading ||= Promise.all([
-      import('./shadow-coverage-panel.mjs?v=20261109-stage'),
-      new Promise((resolve, reject) => {
-        const css = document.createElement('link');
-        css.rel = 'stylesheet';
-        css.href = new URL('./shadow-coverage.css?v=20261109-stage', import.meta.url);
-        css.onload = resolve;
-        css.onerror = () => { css.remove(); reject(Error('COVERAGE_STYLE_UNAVAILABLE')); };
-        document.head.append(css);
-      })
-    ]).catch(error => { loading = null; throw error; });
-    const [module] = await loading;
-    if (ticket !== owner || !window.MapStaffEntry?.session()) return;
-    controller ||= module.createCoveragePanel(sidebar);
-    controller.open(operatingMap, window.kakao.maps);
-  } catch {
-    if (ticket !== owner) return;
-    close();
-    tab.title = '음영권역을 열지 못했습니다. 다시 선택해 주세요.';
+  function close(restoreScroll = false) {
+    if (!active) return;
+    active = false;
+    panel.close();
+    for (const { original, proxy, hidden } of returnTabs) {
+      proxy.remove();
+      original.hidden = hidden;
+    }
+    returnTabs = [];
+    workspace.hidden = previous.hidden;
+    workspace.inert = previous.inert;
+    document.body.classList.remove('shadow-coverage-open');
+    tab.setAttribute('aria-pressed', 'false');
+    const scroll = previous.scroll;
+    requestAnimationFrame(() => {
+      if (active || !window.MapStaffEntry?.session()) return;
+      if (restoreScroll) window.scrollTo(0, scroll);
+      window.MapUiLocalBridge?.state.map?.relayout();
+    });
   }
-};
 
-updateToggle();
-window.addEventListener('map-sdk-ready', syncAvailability);
-window.addEventListener('map-staff-ready', syncAvailability);
-window.addEventListener('pagehide', close);
-window.MapStaffEntry?.registerPurge(() => { close(); tab.hidden = true; });
-syncAvailability();
+  function syncAvailability() {
+    const available = window.KAKAO_MAP_CONFIG?.shadowCoverageEnabled === true && window.MapStaffEntry?.session();
+    if (!available) {
+      close();
+      tab.remove();
+      return;
+    }
+    if (tab.isConnected) return;
+    stylesheet ||= document.createElement('link');
+    if (!stylesheet.isConnected) {
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = new URL('./shadow-coverage.css?v=20261109-third-tab', import.meta.url);
+      document.head.append(stylesheet);
+    }
+    tabs.append(tab);
+  }
+
+  tab.onclick = () => {
+    if (active || !window.MapStaffEntry?.session()) return;
+    panel ||= createCoveragePanel({ workspace, header });
+    const prior = daily.getAttribute('aria-pressed') === 'true' ? daily : period;
+    previous = { hidden: workspace.hidden, inert: workspace.inert, scroll: window.scrollY };
+    // Keep the operating controls and their selected state while the analysis is open.
+    returnTabs = [period, daily].map(original => {
+      const proxy = document.createElement('button');
+      proxy.type = 'button';
+      proxy.className = 'tab';
+      proxy.textContent = original.textContent;
+      proxy.setAttribute('aria-pressed', 'false');
+      proxy.onclick = () => {
+        close(original === prior);
+        if (original !== prior) original.click();
+        original.focus({ preventScroll: true });
+      };
+      const hidden = original.hidden;
+      original.before(proxy);
+      original.hidden = true;
+      return { original, proxy, hidden };
+    });
+    active = true;
+    workspace.hidden = true;
+    workspace.inert = true;
+    document.body.classList.add('shadow-coverage-open');
+    tab.setAttribute('aria-pressed', 'true');
+    window.scrollTo(0, 0);
+    panel.open();
+  };
+
+  window.addEventListener('map-shadow-coverage-capability', syncAvailability);
+  window.addEventListener('map-staff-ready', syncAvailability);
+  window.addEventListener('pagehide', event => {
+    close();
+    if (!event.persisted) panel?.disposeMap();
+  });
+  window.MapStaffEntry?.registerPurge(() => {
+    close();
+    panel?.disposeMap();
+    tab.remove();
+  });
+  syncAvailability();
+}

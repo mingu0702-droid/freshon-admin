@@ -12,19 +12,55 @@
 .coverage-overlay [data-tone="dense"] { fill-opacity: .36 }
 .coverage-overlay [data-tone="unknown"] { fill-opacity: 0; stroke-dasharray: 4 3 }
 .coverage-overlay .coverage-selected { stroke-width: 2.5; stroke-opacity: 1 }
+
+body.shadow-coverage-open > main.workspace,
+body.shadow-coverage-open #approvedSiteHeader nav button[hidden],
+body.shadow-coverage-open #staffAuxContent,
+body.shadow-coverage-open #mapFreshnessStatus,
+.shadow-coverage[hidden], .shadow-coverage [hidden] { display: none !important }
+
 .shadow-coverage {
-  margin: 12px;
-  padding: 10px 11px;
-  border: 1px solid var(--line, #dce4ee);
-  border-radius: 9px;
-  background: #f8faff;
-  font-size: 12px;
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  height: calc(100dvh - var(--coverage-header-height, 76px));
+  min-height: 420px;
+  color: var(--ink, #243550);
+  font-size: 13px;
   line-height: 1.45;
-  color: #243550;
   overflow-wrap: anywhere;
 }
-.shadow-coverage[hidden], .shadow-coverage [hidden] { display: none !important }
-.shadow-coverage :is(h2,h3,p,dl,ul) { margin: 0 }
+.coverage-sidebar {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  border-right: 1px solid var(--line, #dce4ee);
+  background: white;
+}
+.coverage-map-area { position: relative; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; background: #e7eef4 }
+#coverageMap { position: absolute; inset: 0; overflow: hidden }
+.coverage-map-state {
+  position: absolute;
+  inset: 12px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  pointer-events: none;
+}
+.coverage-map-state p {
+  padding: 8px 12px;
+  border: 1px solid #d2deee;
+  border-radius: 7px;
+  background: white;
+}
+.coverage-map-state button { pointer-events: auto }
+.shadow-coverage :is(h1,h2,h3,p,dl,ul) { margin: 0 }
 .shadow-coverage p + p { margin-top: 4px }
 .coverage-heading, .coverage-detail-head, .coverage-filters, .coverage-search-row {
   display: flex;
@@ -32,18 +68,25 @@
   align-items: center;
   gap: 5px;
 }
+.shadow-coverage h1 { font-size: 18px }
 .shadow-coverage h2 { font-size: 14px }
 .shadow-coverage h3 { font-size: 12px; margin-top: 5px }
 .shadow-coverage :is(select, input, button) {
-  padding: 4px 6px;
-  min-height: 29px;
+  box-sizing: border-box;
+  padding: 4px 7px;
+  min-height: 32px;
   font-size: inherit;
   border: 1px solid #d2deee;
-  border-radius: 5px;
+  border-radius: 6px;
   color: inherit;
   background: white;
 }
-.coverage-filters { margin: 6px 0 }
+.shadow-coverage button.coverage-primary { background: var(--blue, #2458dd); color: white; border-color: transparent }
+.shadow-coverage button:disabled { opacity: .55 }
+.coverage-search { margin-top: 14px }
+.coverage-search > label:first-child { font-weight: 650 }
+.coverage-radius { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap }
+.coverage-filters { margin: 12px 0 8px }
 .coverage-filters label { display: flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap }
 .shadow-coverage .coverage-filters select { min-width: 0; width: auto }
 .coverage-legend { display: flex; gap: 4px 8px; flex-wrap: wrap; font-size: 11px }
@@ -59,11 +102,14 @@
 .coverage-legend [data-tone="medium"]::before { background: #2858993b }
 .coverage-legend [data-tone="dense"]::before { background: #2858995c }
 .coverage-legend [data-tone="unknown"]::before { background: transparent; border-style: dashed }
-.coverage-note, .coverage-search-caption, .coverage-empty { color: #54667d }
-.shadow-coverage .coverage-note, .shadow-coverage #coverageStatus { margin-top: 5px }
-.shadow-coverage summary { cursor: pointer; font-weight: 650; padding: 6px 0 }
-.coverage-detail, .coverage-tools, .coverage-evidence { margin-top: 5px; border-top: 1px solid #e0e8f5 }
-.coverage-detail { padding-top: 5px }
+.coverage-note, .coverage-search-caption, .coverage-empty { color: #54667d; font-size: 12px }
+.shadow-coverage .coverage-note, .shadow-coverage #coverageStatus { margin-top: 7px }
+.shadow-coverage .coverage-totals { margin-top: 7px; font-weight: 650; color: #285899 }
+.shadow-coverage :is(#coverageStatus,.coverage-totals):empty { display: none }
+.shadow-coverage summary { cursor: pointer; font-weight: 650; padding: 8px 0 }
+.coverage-detail, .coverage-tools, .coverage-evidence { margin-top: 6px; border-top: 1px solid #e0e8f5 }
+#coverageRefresh { margin: 6px 0 }
+.coverage-detail { padding-top: 6px }
 .coverage-detail-metrics { display: grid; grid-template-columns: auto 1fr; gap: 2px 7px }
 .coverage-detail-metrics dd { margin: 0; font-weight: 600 }
 .coverage-badge { color: #285899; font-weight: 650 }
@@ -71,12 +117,23 @@
 .shadow-coverage .coverage-stores { padding: 0 0 0 16px; max-height: 104px; overflow: auto }
 .coverage-stores small, .coverage-search-result small, .coverage-list-row small { display: block; color: #54667d }
 .coverage-detail-paging { display: flex; gap: 5px; margin-top: 5px }
-.coverage-search-row { margin: 4px 0 }
+.coverage-search-row { margin: 5px 0 }
 .coverage-search-row input { flex: 1; min-width: 0 }
 .coverage-list { margin-top: 6px }
 #coverageCellList, .coverage-results { display: grid; gap: 4px; max-height: 160px; overflow: auto }
+.coverage-results:not(:empty) { margin-top: 6px }
 .coverage-list-row, .coverage-search-result { text-align: left }
 .coverage-search-result > span { display: block }
-@media (max-width: 700px) {
+#coveragePanelToggle { display: none }
+@media (max-width: 760px) {
+  .shadow-coverage {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(300px, 1fr);
+    height: auto;
+    min-height: max(530px, calc(100dvh - var(--coverage-header-height, 134px)));
+  }
+  .coverage-sidebar { padding: 11px 14px; max-height: min(47dvh, 390px); border-right: 0; border-bottom: 1px solid var(--line, #dce4ee) }
   .shadow-coverage :is(select, input, button) { min-height: 34px }
+  #coveragePanelToggle { display: inline-block }
+  .coverage-panel-collapsed #coverageAnalysis { display: none }
 }

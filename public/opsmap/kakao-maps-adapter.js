@@ -1,5 +1,5 @@
 (function(root){
- 'use strict';let pending,script,localCenters;
+ 'use strict';let pending,script,localCenters,failed=false;
  const configPath='/api/map-phase2b/private/map-sdk-config';
  let addressPending=false,addressCheck=null,addressEpoch=0,dailyRetryAt=0,blockedReason=null;
  function refreshAddressLookup(){
@@ -22,13 +22,14 @@
  }
  root.addEventListener?.('map-staff-signed-out',()=>{
   addressEpoch++;addressCheck=null;addressPending=true;dailyRetryAt=0;blockedReason=null;
-  const {centers,...config}=root.KAKAO_MAP_CONFIG||{};
+  const {centers,shadowCoverageEnabled,...config}=root.KAKAO_MAP_CONFIG||{};
   root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:false};
-  pending=null;
+  pending=null;failed=false;
  });
- function ready({timeoutMs=8000,configTimeoutMs=15000}={}){
-  if(pending)return pending;
-  pending=new Promise(async(resolve,reject)=>{
+ function ready({timeoutMs=8000,configTimeoutMs=15000,retryFailed=false}={}){
+  if(pending&&!(retryFailed&&failed))return pending;
+  if(failed)reset();
+  const task=new Promise(async(resolve,reject)=>{
    let finished=false,timer;const finish=(error)=>{if(finished)return;finished=true;clearTimeout(timer);error?reject(Error(error)):resolve(root.kakao);};
    timer=setTimeout(()=>finish('MAP_SDK_CONFIG_TIMEOUT'),configTimeoutMs);
    function loaded(){try{if(typeof root.kakao?.maps?.load!=='function')return finish('MAP_SDK_UNAVAILABLE');root.kakao.maps.load(()=>finish(owner===addressEpoch?undefined:'MAP_SDK_SESSION_CHANGED'));}catch{finish('MAP_SDK_INITIALIZATION_FAILED');}}
@@ -37,7 +38,17 @@
    root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:false};
    root.OPSMAP_DRIVER_CONTACT_ENABLED=false;
    const owner=addressEpoch;
-   try{const response=await fetch(configPath+'?sdkOnly=1',{credentials:'same-origin',cache:'no-store'});if(finished)return;if(response.ok){const payload=await response.json();if(finished)return;if(owner!==addressEpoch)return finish('MAP_SDK_SESSION_CHANGED');const serverCenters=Array.isArray(payload.centers)?payload.centers:[];
+   try{
+    const response=await fetch(configPath+'?sdkOnly=1',{credentials:'same-origin',cache:'no-store'});
+    if(finished)return;
+    const payload=response.ok||response.status===503?await response.json():null;
+    if(finished)return;
+    if(owner!==addressEpoch)return finish('MAP_SDK_SESSION_CHANGED');
+    if(payload){
+     root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,shadowCoverageEnabled:payload.shadowCoverageEnabled===true};
+     root.dispatchEvent(new Event('map-shadow-coverage-capability'));
+    }
+    if(response.ok){const serverCenters=Array.isArray(payload.centers)?payload.centers:[];
      const centers=[...localCenters.filter(row=>!serverCenters.some(server=>server?.id===row?.id)),...serverCenters];
      config={...config,javascriptKey:config.javascriptKey||payload.javascriptKey,shadowCoverageEnabled:payload.shadowCoverageEnabled===true,...(centers.length?{centers}:{})};addressPending=payload.addressLookupPending===true;root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:!addressPending&&payload.allowExternalAddressLookup===true&&payload.addressLookupServerProxy===true,addressLookupServerProxy:true};root.OPSMAP_DRIVER_CONTACT_ENABLED=payload.driverContactEnabled===true;}else if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_JAVASCRIPT_KEY_UNCONFIGURED');}catch{if(finished)return;if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_SDK_CONFIG_UNAVAILABLE');}
    clearTimeout(timer);timer=setTimeout(()=>finish('MAP_SDK_TIMEOUT'),timeoutMs);
@@ -49,9 +60,12 @@
     url.searchParams.set('autoload','false');url.searchParams.set('libraries','services');
    }catch{return finish('MAP_SDK_CONFIG_INVALID');}
    script=document.createElement('script');script.src=url.href;script.async=true;script.onload=loaded;script.onerror=()=>finish('MAP_SDK_LOAD_FAILED');document.head.append(script);
-  });return pending;
+  });
+  pending=task;
+  void task.catch(()=>{if(pending===task)failed=true;});
+  return task;
  }
- function reset(){script?.remove();script=null;pending=null;}
+ function reset(){script?.remove();script=null;pending=null;failed=false;}
  function geocoder(){
   const cache=new Map(),inflight=new Map();let epoch=0;
   const clear=()=>{epoch++;cache.clear();inflight.clear();};root.addEventListener?.('map-staff-signed-out',clear);root.addEventListener?.('pagehide',clear,{once:true});

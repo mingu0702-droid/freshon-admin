@@ -1,5 +1,6 @@
 (() => {
   const geometry = new Set();
+  const instances = new WeakMap();
   let mapCount = 0;
   function emit(target, name, event) {
     for (const listener of target.listeners.get(name) || []) listener(event);
@@ -25,6 +26,7 @@
     constructor(element, { center, level }) {
       mapCount++;
       this.element = element;
+      instances.set(element, this);
       this.center = center;
       this.level = level;
       element.style.background = '#e7eef4';
@@ -118,7 +120,7 @@
     setMap(map) { if (map) geometry.add(this); else geometry.delete(this); }
     setOptions(options) { Object.assign(this.options, options); }
   }
-  window.__coverageFixture = { shapes: () => [...geometry].map(shape => shape.options), maps: () => mapCount };
+  window.__coverageFixture = { shapes: () => [...geometry].map(shape => shape.options), maps: () => mapCount, mapFor: element => instances.get(element) };
   window.kakao = { maps: { Map: FixtureMap, LatLng, LatLngBounds, AbstractOverlay, CustomOverlay,
     Polyline: Shape, Polygon: Shape, Circle: Shape, Point: class { constructor(x, y) { this.x = x; this.y = y; } },
     load: fn => fn(), event: {
