@@ -22,7 +22,7 @@
  }
  root.addEventListener?.('map-staff-signed-out',()=>{
   addressEpoch++;addressCheck=null;addressPending=true;dailyRetryAt=0;blockedReason=null;
-  const {centers,shadowCoverageEnabled,...config}=root.KAKAO_MAP_CONFIG||{};
+  const {centers,shadowCoverageEnabled,shadowCoverageRestoring,...config}=root.KAKAO_MAP_CONFIG||{};
   root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:false};
   pending=null;failed=false;
  });
@@ -45,12 +45,14 @@
     if(finished)return;
     if(owner!==addressEpoch)return finish('MAP_SDK_SESSION_CHANGED');
     if(payload){
-     root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,shadowCoverageEnabled:payload.shadowCoverageEnabled===true};
+     const coverage={shadowCoverageEnabled:payload.shadowCoverageEnabled===true,shadowCoverageRestoring:payload.shadowCoverageRestoring===true};
+     config={...config,...coverage};
+     root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,...coverage};
      root.dispatchEvent(new Event('map-shadow-coverage-capability'));
     }
     if(response.ok){const serverCenters=Array.isArray(payload.centers)?payload.centers:[];
      const centers=[...localCenters.filter(row=>!serverCenters.some(server=>server?.id===row?.id)),...serverCenters];
-     config={...config,javascriptKey:config.javascriptKey||payload.javascriptKey,shadowCoverageEnabled:payload.shadowCoverageEnabled===true,...(centers.length?{centers}:{})};addressPending=payload.addressLookupPending===true;root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:!addressPending&&payload.allowExternalAddressLookup===true&&payload.addressLookupServerProxy===true,addressLookupServerProxy:true};root.OPSMAP_DRIVER_CONTACT_ENABLED=payload.driverContactEnabled===true;}else if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_JAVASCRIPT_KEY_UNCONFIGURED');}catch{if(finished)return;if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_SDK_CONFIG_UNAVAILABLE');}
+     config={...config,javascriptKey:config.javascriptKey||payload.javascriptKey,...(centers.length?{centers}:{})};addressPending=payload.addressLookupPending===true;root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:!addressPending&&payload.allowExternalAddressLookup===true&&payload.addressLookupServerProxy===true,addressLookupServerProxy:true};root.OPSMAP_DRIVER_CONTACT_ENABLED=payload.driverContactEnabled===true;}else if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_JAVASCRIPT_KEY_UNCONFIGURED');}catch{if(finished)return;if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_SDK_CONFIG_UNAVAILABLE');}
    clearTimeout(timer);timer=setTimeout(()=>finish('MAP_SDK_TIMEOUT'),timeoutMs);
    root.dispatchEvent(new CustomEvent('map-driver-capability'));
    if(root.kakao?.maps?.load)return loaded();

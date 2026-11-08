@@ -1,5 +1,6 @@
 import {mountProductionPhotoBinding} from './opsmapProductionPhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
+import {createProductionShadowRuntime} from './shadowCoverage/productionArchive.js';
 import {mountOfficialAdminBoundaries} from './officialAdminBoundaries.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import fsSync from 'node:fs';
@@ -60,8 +61,10 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  const readStoredStaffHistory=createStoredStaffDriverHistoryReader({readSnapshot:readers.readPhase2bSnapshot,readObservedDeliveryDate:readers.phase2bTodayStatus});
  const readObservedStoreAddress=createObservedStoreAddressReader({readSnapshot:readers.readPhase2bSnapshot,readObservedDeliveryDate:readers.phase2bTodayStatus});
  const roadRouteBudget=createProductionRoadBudget({env,token:credentials.authToken});
- const api=mountProductionMapApi(router,{...readers,roadRouteBudget,readStoredStaffHistory,readObservedStoreAddress,readApprovedCoordinateSearch,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,shadowCoverageEnabled:true,mountPrivateExtensions:binding=>{
-  mountShadowCoverage({...binding,directory:env.OPSMAP_SHADOW_DATA_DIR,appRoot:path.resolve(publicDir,'..'),readPreservedMap:()=>{
+ const shadowAppRoot=path.resolve(publicDir,'..');
+ const shadow=createProductionShadowRuntime(env,{appRoot:shadowAppRoot});
+ const api=mountProductionMapApi(router,{...readers,roadRouteBudget,readStoredStaffHistory,readObservedStoreAddress,readApprovedCoordinateSearch,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,getShadowCoverageState:shadow.state,mountPrivateExtensions:binding=>{
+  mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:shadow.readDirectory,appRoot:shadowAppRoot,readPreservedMap:()=>{
    const saved=readers.getSnapshotMemory?.();
    return Array.isArray(saved?.rows)?{count:saved.rows.length,asOf:saved.latestDate||null}:null;
   }});

@@ -1,5 +1,3 @@
-import { createCoveragePanel } from './shadow-coverage-panel.mjs?v=20261109-field-analysis';
-
 const header = document.getElementById('approvedSiteHeader');
 const tabs = header?.querySelector('nav');
 const workspace = document.querySelector('body > main.workspace');
@@ -15,10 +13,19 @@ if (tabs && workspace && period && daily) {
   tab.setAttribute('aria-pressed', 'false');
   tab.setAttribute('aria-controls', 'shadowCoverage');
 
-  let panel, stylesheet, active = false, previous;
+  let panel, stylesheet, opening, active = false, previous;
+  let probeTimer, probeRequest, probeUntil = 0;
   let returnTabs = [];
 
+  function cancelOpening() {
+    if (!opening) return;
+    opening = null;
+    tab.removeAttribute('aria-busy');
+    tab.textContent = '음영권역';
+  }
+
   function close(restoreScroll = false) {
+    cancelOpening();
     if (!active) return;
     active = false;
     panel.close();
@@ -39,13 +46,56 @@ if (tabs && workspace && period && daily) {
     });
   }
 
+  function stopAvailabilityProbe() {
+    clearTimeout(probeTimer);
+    probeTimer = null;
+    probeUntil = 0;
+    probeRequest?.abort();
+    probeRequest = null;
+  }
+
+  async function checkAvailability() {
+    probeTimer = null;
+    const controller = probeRequest = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+    try {
+      const response = await fetch('/api/map-phase2b/private/map-sdk-config?sdkOnly=1', {
+        credentials: 'same-origin', cache: 'no-store', signal: controller.signal
+      });
+      if (!response.ok && response.status !== 503) return;
+      const payload = await response.json();
+      if (probeRequest !== controller || !window.MapStaffEntry?.session()) return;
+      window.KAKAO_MAP_CONFIG = { ...window.KAKAO_MAP_CONFIG,
+        shadowCoverageEnabled: payload.shadowCoverageEnabled === true,
+        shadowCoverageRestoring: payload.shadowCoverageRestoring === true };
+    } catch {
+      // The operating map remains available while the optional archive is restored.
+    } finally {
+      clearTimeout(timeout);
+      if (probeRequest === controller) {
+        probeRequest = null;
+        syncAvailability();
+      }
+    }
+  }
+
   function syncAvailability() {
-    const available = window.KAKAO_MAP_CONFIG?.shadowCoverageEnabled === true && window.MapStaffEntry?.session();
+    const session = window.MapStaffEntry?.session();
+    const config = window.KAKAO_MAP_CONFIG;
+    const available = session && config?.shadowCoverageEnabled === true;
     if (!available) {
       close();
+      panel?.disposeMap();
       tab.remove();
+      if (session && config?.shadowCoverageRestoring === true) {
+        probeUntil ||= performance.now() + 25_000;
+        if (!probeTimer && !probeRequest && performance.now() < probeUntil) {
+          probeTimer = setTimeout(() => void checkAvailability(), 1500);
+        }
+      } else stopAvailabilityProbe();
       return;
     }
+    stopAvailabilityProbe();
     if (tab.isConnected) return;
     stylesheet ||= document.createElement('link');
     if (!stylesheet.isConnected) {
@@ -56,9 +106,26 @@ if (tabs && workspace && period && daily) {
     tabs.append(tab);
   }
 
-  tab.onclick = () => {
-    if (active || !window.MapStaffEntry?.session()) return;
-    panel ||= createCoveragePanel({ workspace, header });
+  tab.onclick = async () => {
+    if (active || opening || !window.MapStaffEntry?.session()) return;
+    if (!panel) {
+      const attempt = opening = {};
+      tab.setAttribute('aria-busy', 'true');
+      tab.textContent = '음영권역 불러오는 중';
+      try {
+        const { createCoveragePanel } = await import('./shadow-coverage-panel.mjs?v=20261109-shadow-production');
+        if (opening !== attempt || !tab.isConnected || !window.MapStaffEntry?.session()) return;
+        panel = createCoveragePanel({ workspace, header });
+      } catch {
+        if (opening === attempt) {
+          cancelOpening();
+          tab.textContent = '음영권역 다시 열기';
+        }
+        return;
+      } finally {
+        if (opening === attempt) cancelOpening();
+      }
+    }
     const prior = daily.getAttribute('aria-pressed') === 'true' ? daily : period;
     previous = { hidden: workspace.hidden, inert: workspace.inert, scroll: window.scrollY };
     // Keep the operating controls and their selected state while the analysis is open.
@@ -87,13 +154,19 @@ if (tabs && workspace && period && daily) {
     panel.open();
   };
 
+  period.addEventListener('click', cancelOpening);
+  daily.addEventListener('click', cancelOpening);
   window.addEventListener('map-shadow-coverage-capability', syncAvailability);
   window.addEventListener('map-staff-ready', syncAvailability);
-  window.addEventListener('pagehide', event => {
+  window.addEventListener('map-customer-registry-updated', () => panel?.invalidate());
+  window.addEventListener('pageshow', event => { if (event.persisted) syncAvailability(); });
+  window.addEventListener('pagehide', () => {
+    stopAvailabilityProbe();
     close();
-    if (!event.persisted) panel?.disposeMap();
+    panel?.disposeMap();
   });
   window.MapStaffEntry?.registerPurge(() => {
+    stopAvailabilityProbe();
     close();
     panel?.disposeMap();
     tab.remove();

@@ -47,7 +47,7 @@ export function mountProductionMapApi(app,{
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
   publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement,sharedBaseCache,
   hybridEnabled=()=>process.env.MAP_HYBRID_90DAY_ENABLED==='true',hybridReadIndexedDay,hybridUiReadiness,hybridReadDateCatalog,hybridReadDatePage,hybridReadVerifiedDayText,hybridStoredIoEnabled=false,hubPublicationCutover=null,
-  mountPrivateExtensions,shadowCoverageEnabled=false,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,readObservedStoreAddress,readApprovedCoordinateSearch
+  mountPrivateExtensions,getShadowCoverageState,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,readObservedStoreAddress,readApprovedCoordinateSearch
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
@@ -77,7 +77,8 @@ export function mountProductionMapApi(app,{
   mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
   app.get('/api/map-phase2b/private/map-sdk-config',async(req,res)=>{
     const javascriptKey=String(env.KAKAO_MAP_JAVASCRIPT_KEY||'').trim();
-    const coverage=shadowCoverageEnabled?{shadowCoverageEnabled:true}:{};
+    const coverageState=getShadowCoverageState?.();
+    const coverage=coverageState?{shadowCoverageEnabled:coverageState==='ready',shadowCoverageRestoring:coverageState==='restoring'}:{};
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).set('Cache-Control','private, no-store').json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED',...coverage});
     const sdkOnly = req.query.sdkOnly === '1';
     const lookup = sdkOnly ? null : await addressLookupService.status();
