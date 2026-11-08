@@ -8,7 +8,7 @@ const ORIGINAL_PIN_BASE=Symbol('opsmap-original-pin-base');
 const $=s=>document.querySelector(s),base='/api/map-phase2b/private/manual-pins';let records=new Map(),bases=new WeakMap(),generation=0,edit=null,marker=null,mapClick=null,pending=null,refreshing=null,refreshingOwner=-1,touchClose=null,ignoreClickUntil=0;
 const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('map-manual-pins'):null;
 const panel=document.createElement('section');panel.id='manualPinEditor';panel.hidden=true;panel.setAttribute('role','dialog');panel.setAttribute('aria-label','배송지 핀 위치 수정');document.body.append(panel);
-const list=document.createElement('details');list.id='manualPinTargets';list.innerHTML='<summary>좌표 직접 수정</summary><p>주소는 선택한 매장 1건씩 표시합니다. Customer 원본 주소는 바꾸지 않습니다.</p><div class="manualPinPending"></div><details><summary>위치가 확인된 수정 대상</summary><div class="manualPinResolved"></div></details>';
+const list=document.createElement('details');list.id='manualPinTargets';list.innerHTML='<summary>좌표 상태</summary><p>주소는 선택한 매장 1건씩 표시합니다. Customer 원본 주소는 바꾸지 않습니다.</p><div class="manualPinPending"></div><details><summary>위치가 확인된 수정 대상</summary><div class="manualPinResolved"></div></details>';
 const projectionStatus=document.createElement('p');projectionStatus.id='manualPinProjectionStatus';projectionStatus.setAttribute('role','status');projectionStatus.hidden=true;list.prepend(projectionStatus);
 // The legacy mobile controller may still hold the store section in its hidden sheet.
 // Keep the manual editor entry in the active Dot sidebar instead of that sheet.
@@ -112,7 +112,7 @@ function renderTargets(){
   const item=node('div',undefined,parent);item.className='manualPinTarget';item.dataset.manualTarget=code;node('b',code+' · '+row.customerName,item);node('p',manual?'수동 확정 완료':located?row.coordinateSource==='KAKAO_ADDRESS_LIVE'?'주소 기준 위치':'건물·기존 좌표 확인됨 · 재수정 가능':'위치 확인 필요 · 주소 검색 또는 지도에서 핀을 지정해 주세요.',item);
   button('주소 검색',item,()=>open(code,{searchNow:true}));button(manual||located?'핀 위치 수정':'지도에서 핀 지정',item,()=>open(code));
  }
- list.querySelector('summary').textContent='좌표 직접 수정 · 미확인 '+count+'개';
+ list.querySelector('summary').textContent='좌표 상태 · 미확인 '+count+'개';
 }
 function attach(){const code=bridge.state.selected?.customerCode;if(!code||!$('#detail .detailBody')||$('#manualPinEdit'))return;const b=button('지도에서 위치 수정',$('#detail .detailBody'),()=>open(code));b.id='manualPinEdit';if(records.get(code)?.resolutionStatus==='MANUAL_CONFIRMED')b.textContent='핀 위치 수정';}
 window.MapManualPins=Object.freeze({apply,open,refresh,verified:()=>projectionVerified});

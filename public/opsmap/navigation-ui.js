@@ -133,6 +133,7 @@
   let addressSearchController=null,addressSearchGeneration=0;
   let recalculateTimer=null,autoRecalculate=false;
   let centers=[],centerMarker=null,otherCenterMarkers=[],centerDraw=null,routePointOverlays=[],lastResult=null,lastKind='manual',disposed=false,activeInput=null,roleSignature='',missingSignature='',suggestTimer=null,suggestionIndex=-1;
+  let rolePinMap=null,rolePinFrame=null;
   let mode=bridge.state.mode,manualValues=['',''];
   let dailyIdentity='',dailyDefaults=[],dailyStops=[],dailyController=null;
   let readiness=null,readinessController=null;
@@ -256,27 +257,70 @@
     const values=editor.values(),records=all();return values.flatMap((value,index)=>{
       if(!String(value||'').trim())return [];
       const matches=lookup.resolve(value,records);if(matches.length!==1||!lookup.located(matches[0]))return [];
-      return [{row:matches[0],index,role:index===0?'origin':index===values.length-1?'destination':'waypoint',label:index===0?'출발':index===values.length-1?'도착':'경유 '+index}];
+      return [{row:matches[0],index,role:index===0?'origin':index===values.length-1?'destination':'waypoint',label:index===0?'출발':index===values.length-1?'도착':'경유'+index}];
     });
   }
+  function positionRolePins(){
+    rolePinFrame=null;
+    const projection=rolePinMap?.getProjection?.(),mapNode=$('#map');
+    if(!projection?.containerPointFromCoords||!mapNode)return;
+    const mapRect=mapNode.getBoundingClientRect();
+    for(const {group,position,items} of routePointOverlays){
+      const point=projection.containerPointFromCoords(position);
+      if(!Number.isFinite(point?.x)||!Number.isFinite(point?.y))continue;
+      const x=mapRect.left+point.x,y=mapRect.top+point.y;
+      const tops=items.flatMap(({row})=>{
+        const code=CSS.escape(String(row.customerCode));
+        const marker=mapNode.querySelector(`[data-center-code="${code}"],.marker[data-customer-code="${code}"]:not(.periodCluster)`)||
+          (row.searchTemporary?mapNode.querySelector('[data-search-temporary-pin]'):null);
+        if(!marker)return [];
+        const graphic=(marker.querySelector('.pin,.pinShape')||marker).getBoundingClientRect();
+        return graphic.width&&Math.abs((graphic.left+graphic.right)/2-x)<32&&Math.abs(graphic.bottom-y)<35?[graphic.top]:[];
+      });
+      const width=Math.max(0,mapRect.width-12);
+      group.style.maxWidth=`${Math.min(245,width)}px`;
+      const half=group.offsetWidth/2+6;
+      const shift=point.x>=0&&point.x<=mapRect.width?Math.max(half,Math.min(mapRect.width-half,point.x))-point.x:0;
+      group.style.setProperty('--nav-badge-shift',`${shift}px`);
+      if(tops.length)group.style.setProperty('--nav-badge-offset',`${y-Math.min(...tops)+5}px`);
+      else group.style.removeProperty('--nav-badge-offset');
+    }
+  }
+  function scheduleRolePins(){if(routePointOverlays.length&&rolePinFrame===null)rolePinFrame=requestAnimationFrame(positionRolePins);}
+  function clearRolePins(){
+    if(rolePinFrame!==null)cancelAnimationFrame(rolePinFrame);rolePinFrame=null;
+    routePointOverlays.forEach(({overlay})=>overlay.setMap(null));routePointOverlays=[];
+  }
   function renderRolePins(){
-    const roles=roleRows(),signature=JSON.stringify([bridge.state.mode,roles.map(item=>[item.row.customerCode,item.row.customerName,item.row.lat,item.row.lng,item.role,item.index])]);
-    if(!bridge.state.map||signature===roleSignature)return;roleSignature=signature;
-    routePointOverlays.forEach(overlay=>overlay.setMap(null));routePointOverlays=[];
-    const assigned=new Set(roles.map(item=>item.row.storeCode||item.row.customerCode));
-    document.querySelectorAll('.marker[data-customer-code]').forEach(node=>node.classList.toggle('navAssigned',assigned.has(node.dataset.customerCode)));
-    if(!window.kakao?.maps?.CustomOverlay)return;
+    const map=bridge.state.map;if(!map)return;
+    const roles=roleRows(),signature=JSON.stringify(roles.map(item=>[item.row.customerCode,item.row.customerName,item.row.lat,item.row.lng,item.role,item.index]));
+    if(rolePinMap===map&&signature===roleSignature){scheduleRolePins();return;}
+    if(rolePinMap!==map){
+      if(rolePinMap)kakao.maps.event?.removeListener(rolePinMap,'idle',scheduleRolePins);
+      rolePinMap=map;kakao.maps.event?.addListener(map,'idle',scheduleRolePins);
+    }
+    roleSignature=signature;clearRolePins();
     const groups=new Map();for(const item of roles){const key=item.row.lat+','+item.row.lng;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
     for(const items of groups.values()){
-      if(items.every(item=>item.row.customerCode==='CENTER_osan'))continue;
+      const anchor=document.createElement('div');anchor.className='navRoutePointAnchor';
       const group=document.createElement('div');group.className='navRoutePointGroup';
       for(const item of items){
         const label=document.createElement('button');label.type='button';label.className='navRoutePoint';label.dataset.role=item.role;label.dataset.customerCode=item.row.customerCode;label.textContent=item.label;
-        const name=document.createElement('small');name.textContent=item.row.customerName||item.row.customerCode;label.append(name);label.setAttribute('aria-label',item.label+' · '+name.textContent);
-        label.onclick=event=>{event.stopPropagation();if(item.row.customerCode==='CENTER_osan')centerMarker?.button.click();else if(item.row.virtual)bridge.selectNavigationPoint?.(item.row);else if(!item.row.customerCode.startsWith('CENTER_'))bridge.selectNavigationStore(item.row.storeCode||item.row.customerCode);};group.append(label);
+        label.title=item.row.customerName||item.row.customerCode;label.setAttribute('aria-label',item.label+' · '+label.title);
+        label.onclick=event=>{
+          event.stopPropagation();
+          if(item.row.id==='osan')centerMarker?.button.click();
+          else if(item.row.virtual)bridge.selectNavigationPoint?.(item.row);
+          else bridge.selectNavigationStore(item.row.customerCode);
+        };
+        group.append(label);
       }
-      const first=items[0].row,overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(first.lat,first.lng),content:group,zIndex:30,yAnchor:1.15});overlay.setMap(bridge.state.map);routePointOverlays.push(overlay);
+      anchor.append(group);
+      const first=items[0].row,position=new kakao.maps.LatLng(first.lat,first.lng);
+      const overlay=new kakao.maps.CustomOverlay({position,content:anchor,clickable:true,xAnchor:0,yAnchor:0,zIndex:30});
+      overlay.setMap(map);routePointOverlays.push({overlay,group,position,items});
     }
+    scheduleRolePins();
   }
   function displayLabel(value,fallback){const found=resolve(value);return found.length===1?(found[0].customerName||found[0].customerCode):fallback;}
   function showResult(result,kind='manual',{fit=false}={}){
@@ -451,7 +495,7 @@
     if(!center||!map)return;
 
     const anchor=document.createElement('div');anchor.className='osanCenterAnchor';
-    const button=document.createElement('button');button.type='button';button.className='centerMarker osanCenterMarker';
+    const button=document.createElement('button');button.type='button';button.className='centerMarker osanCenterMarker';button.dataset.centerCode=center.customerCode;
     button.setAttribute('aria-controls','osanCenterCard');button.setAttribute('aria-expanded','false');
     button.innerHTML='<svg viewBox="0 0 28 28" aria-hidden="true"><path d="M4 12l10-6 10 6v11H4z M10 23v-8h8v8m-8-4h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><span></span>';
     button.querySelector('span').textContent=center.customerName;anchor.append(button);
@@ -543,7 +587,7 @@
   const events=[['map-manual-route',onManual],['map-recorded-route',onRecorded],['map-store-selected',onSelected],['map-sdk-ready',onReady],['map-staff-ready',onStaffReady],['map-navigation-logout',onLogout],['map-navigation-context-changed',onContext],['map-navigation-draft',onDraft],['map-coordinate-updated',sync]];
   events.forEach(([name,listener])=>window.addEventListener(name,listener));
   const observer=new MutationObserver(sync);if($('#modeDaily'))observer.observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});if($('#runList'))observer.observe($('#runList'),{childList:true});
-  window.addEventListener('pagehide',event=>{if(event.persisted)return;disposed=true;dailyController?.abort();readinessController?.abort();cancelAddressSearch();clearTimeout(suggestTimer);clearTimeout(recalculateTimer);observer.disconnect();events.forEach(([name,listener])=>window.removeEventListener(name,listener));document.removeEventListener('pointerdown',outsidePointer);$('#detail').removeEventListener('click',onPointClick);clearCenters();routePointOverlays.forEach(overlay=>overlay.setMap(null));routePointOverlays=[];},{once:true});
+  window.addEventListener('pagehide',event=>{if(event.persisted)return;disposed=true;dailyController?.abort();readinessController?.abort();cancelAddressSearch();clearTimeout(suggestTimer);clearTimeout(recalculateTimer);observer.disconnect();events.forEach(([name,listener])=>window.removeEventListener(name,listener));document.removeEventListener('pointerdown',outsidePointer);$('#detail').removeEventListener('click',onPointClick);if(rolePinMap)kakao.maps.event?.removeListener(rolePinMap,'idle',scheduleRolePins);clearCenters();clearRolePins();},{once:true});
   window.MapNavigation=Object.freeze({resolve,search:value=>lookup.search(value,all()),sync,useRecordedRoute,scope:()=>scope,metrics:()=>({centerOverlays:otherCenterMarkers.length+Number(Boolean(centerMarker)),osanCenterOverlays:Number(Boolean(centerMarker)),routePointOverlays:routePointOverlays.length,routePointCount:roleRows().length,temporaryPointCount:temporaryPlaces.values().length,routeState:lastResult?.state||'idle'})});
   drawCenters();syncDraft();sync();void loadReadiness();
 })();

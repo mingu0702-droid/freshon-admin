@@ -1404,8 +1404,9 @@
     const body = $('#detail .detailBody');
     if (!body) return;
     body.querySelectorAll('.coordinateEvidence,.coordinateWarning').forEach(node => node.remove());
-    const unlocated = numberOrNull(row.lat) === null || numberOrNull(row.lng) === null;
-    const text = unlocated ? '위치 확인 필요' : row.coordinateSource==='KAKAO_ADDRESS_LIVE'?'주소 기준 위치':'';
+    const unlocated = row.coordinateStatus === 'CONFLICT' || numberOrNull(row.lat) === null || numberOrNull(row.lng) === null;
+    const text = unlocated ? '위치 확인 필요' : coordinateEvidenceLabel(row);
+    body.querySelectorAll('[data-nav-pick]').forEach(button => button.disabled = !window.MapNavigationLookup?.located(row));
     if (!text) return;
     const node = document.createElement('div');
     node.className = unlocated ? 'coordinateWarning' : 'coordinateEvidence';
@@ -1881,7 +1882,7 @@
     const regionMissing=!/^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주|[가-힣]+(?:시|군|구))/.test(text);
     const results=$('#results');results.hidden=false;
     const guide=document.createElement('div');guide.className='resultMeta';guide.dataset.searchAddressGuide='true';
-    guide.textContent=regionMissing?'시·군·구를 입력하거나 지도에서 임시 위치를 지정하세요.':'주소의 시·군·구를 확인하거나 지도에서 임시 위치를 지정하세요.';
+    guide.textContent=regionMissing?'지역이 빠진 주소입니다. 시·군·구를 입력하거나 지도에서 임시 위치를 지정하세요.':'지도에서 임시 위치를 지정할 수 있습니다.';
     results.replaceChildren(guide);
     $('#query').setAttribute('aria-expanded','true');
     if(!state.map){setSearchState('지도 연결 후 임시 위치를 지정해 주세요.');return;}

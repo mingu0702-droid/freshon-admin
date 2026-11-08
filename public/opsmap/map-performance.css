@@ -90,11 +90,6 @@
 .approvedShellCandidate .marker.periodCluster:hover .clusterpin { box-shadow:0 2px 8px #1c3d6e40; background:#f7faff!important; }
 .approvedShellCandidate .marker.navAssigned { visibility:visible!important; pointer-events:auto!important; }
 .approvedShellCandidate .marker.navAssigned .pin { outline:3px solid #f59e0b66; }
-.approvedShellCandidate .navRoutePoint { min-width:42px; padding:6px 8px; border-radius:8px; border:2px solid white; background:#275dd8; color:white; font-size:11px; font-weight:700; box-shadow:0 2px 6px #0f172a30; white-space:pre-line; line-height:1.25; }
-.approvedShellCandidate .navRoutePoint[data-role="origin"] { background:#138364; }
-.approvedShellCandidate .navRoutePoint[data-role="destination"] { background:#c44146; }
-.approvedShellCandidate .navRoutePoint[data-role="waypoint"] { background:#275dd8; }
-.approvedShellCandidate .navRoutePoint small { display:block; margin-top:2px; font-size:9px; font-weight:500; max-width:108px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* A clicked group exposes every store, including shops at the same coordinates. */
 .approvedShellCandidate .mapClusterPanel { position:absolute; z-index:440; left:16px; top:66px; width:290px; max-width:calc(100% - 32px); max-height:calc(100% - 84px); overflow:auto; overscroll-behavior:contain; border:1px solid #dce4ee; border-radius:12px; padding:14px; background:#fff; box-shadow:0 8px 28px #18354b1c; }
@@ -148,7 +143,6 @@
  .approvedShellCandidate.dotRestored .detailCard { padding:14px; }
  #detail .detailHead>.storeName { font-size:16px; }
  .approvedShellCandidate.dotRestored .dotDetailFacts { gap:8px 10px; }
- .approvedShellCandidate .navRoutePoint { padding:5px 7px; }
  .approvedShellCandidate .marker.periodCluster .clusterpin { min-width:44px; padding:5px 7px; }
  .approvedShellCandidate .marker.approvedMarker { min-width:44px; min-height:48px; }
 }
