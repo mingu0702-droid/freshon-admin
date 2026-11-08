@@ -1,0 +1,168 @@
+.coverage-overlay {
+  --coverage-ink: #285899;
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 0;
+}
+.coverage-overlay path { fill: var(--coverage-ink); stroke: var(--coverage-ink); stroke-width: 1; stroke-opacity: .61 }
+.coverage-overlay [data-tone="none"] { fill-opacity: 0 }
+.coverage-overlay [data-tone="light"] { fill-opacity: .12 }
+.coverage-overlay [data-tone="medium"] { fill-opacity: .23 }
+.coverage-overlay [data-tone="dense"] { fill-opacity: .36 }
+.coverage-overlay [data-tone="candidate"] { fill: #f59e0b; fill-opacity: .52; stroke: #b45309; stroke-opacity: .85 }
+.coverage-overlay [data-tone="unknown"] { fill: #8592a3; fill-opacity: .08; stroke: #64748b; stroke-opacity: .84; stroke-dasharray: 4 3 }
+.coverage-overlay [data-tone="empty"] { fill: #91a99f; fill-opacity: .32; stroke: #60776f; stroke-opacity: .84 }
+.coverage-overlay .coverage-selected { stroke-width: 2.5; stroke-opacity: 1 }
+
+body.shadow-coverage-open > main.workspace,
+body.shadow-coverage-open #approvedSiteHeader nav button[hidden],
+body.shadow-coverage-open #staffAuxContent,
+body.shadow-coverage-open #mapFreshnessStatus,
+.shadow-coverage[hidden], .shadow-coverage [hidden] { display: none !important }
+
+.shadow-coverage {
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  height: calc(100dvh - var(--coverage-header-height, 76px));
+  min-height: 420px;
+  color: var(--ink, #243550);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.coverage-sidebar {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  border-right: 1px solid var(--line, #dce4ee);
+  background: white;
+}
+.coverage-map-area { position: relative; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; background: #e7eef4 }
+#coverageMap { position: absolute; inset: 0; overflow: hidden }
+.coverage-map-state {
+  position: absolute;
+  inset: 12px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  pointer-events: none;
+}
+.coverage-map-state p {
+  padding: 8px 12px;
+  border: 1px solid #d2deee;
+  border-radius: 7px;
+  background: white;
+}
+.coverage-map-state button { pointer-events: auto }
+.shadow-coverage :is(h1,h2,h3,p,dl,ul) { margin: 0 }
+.shadow-coverage p + p { margin-top: 4px }
+.coverage-heading, .coverage-detail-head, .coverage-search-row, .coverage-list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 5px;
+}
+.shadow-coverage h1 { font-size: 18px }
+.shadow-coverage h2 { font-size: 14px }
+.shadow-coverage h3 { font-size: 12px; margin-top: 5px }
+.shadow-coverage :is(select, input, button) {
+  box-sizing: border-box;
+  padding: 4px 7px;
+  min-height: 32px;
+  font-size: inherit;
+  border: 1px solid #d2deee;
+  border-radius: 6px;
+  color: inherit;
+  background: white;
+}
+.shadow-coverage button.coverage-primary { background: var(--blue, #2458dd); color: white; border-color: transparent }
+.shadow-coverage button:disabled { opacity: .55 }
+.coverage-search { margin-top: 14px }
+.coverage-search > label:first-child { font-weight: 650 }
+.coverage-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 9px 0 7px }
+.coverage-filters label { display: grid; gap: 3px; min-width: 0; margin: 0; font-size: 11px }
+.shadow-coverage .coverage-filters select { min-width: 0; width: 100% }
+.coverage-legend { display: flex; gap: 4px 8px; flex-wrap: wrap; font-size: 11px }
+.coverage-legend span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap }
+.coverage-legend span::before {
+  content: "";
+  width: 12px;
+  height: 9px;
+  background: #2858991f;
+  border: 1px solid #28589999;
+  border-radius: 2px;
+}
+.coverage-legend [data-tone="delivery"]::before { background: #28589955 }
+.coverage-legend [data-tone="candidate"]::before { background: #f59e0b83; border-color: #b45309 }
+.coverage-legend [data-tone="unknown"]::before { background: #8592a31a; border-color: #64748b; border-style: dashed }
+.coverage-legend [data-tone="empty"]::before { background: #91a99f66; border-color: #60776f }
+.coverage-overview { padding: 8px 10px; margin: 5px 0 8px; border: 1px solid #dce7f5; border-radius: 8px; background: #f7faff }
+#coverageBasis { font-size: 13px; font-weight: 700 }
+#coverageObserved { color: #285899; font-weight: 650 }
+#coverageNationalTitle { margin-top: 8px; font-size: 12px }
+.coverage-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 8px; margin: 5px 0 !important }
+.coverage-kpis > div { min-width: 0; font-size: 11px; line-height: 1.2 }
+.coverage-kpis dt { color: #54667d }
+.coverage-kpis dd { margin: 1px 0 0; font-size: 15px; font-weight: 700 }
+.coverage-kpis [data-metric="candidates"], .coverage-kpis [data-metric="candidateStores"] { color: #98450a }
+#coveragePreserved, #coverageGaps, #coverageViewport { color: #52627a; font-size: 11px }
+#coverageViewport { padding-top: 4px; border-top: 1px solid #dce7f5 }
+.coverage-note, .coverage-search-caption, .coverage-empty { color: #54667d; font-size: 12px }
+.shadow-coverage .coverage-note, .shadow-coverage #coverageStatus { margin-top: 5px }
+.shadow-coverage :is(#coverageStatus,#coverageObserved,#coveragePreserved,#coverageGaps,#coverageViewport):empty { display: none }
+.shadow-coverage summary { cursor: pointer; font-weight: 650; padding: 8px 0 }
+.coverage-detail, .coverage-list, .coverage-evidence { margin-top: 6px; border-top: 1px solid #e0e8f5 }
+#coverageRefresh { margin: 6px 0 }
+.coverage-detail { padding-top: 6px }
+.coverage-detail-metrics { display: grid; grid-template-columns: auto 1fr; gap: 2px 7px }
+.coverage-detail-metrics dd { margin: 0; font-weight: 600 }
+.coverage-badge { color: #285899; font-weight: 650 }
+.coverage-badge[data-status="CANDIDATE"] { color: #98450a }
+.coverage-badge[data-status="UNKNOWN"] { color: #586477 }
+.coverage-badge[data-status="EMPTY"] { color: #48665c }
+.coverage-cell-id, .coverage-nearby-id { color: #54667d; font-size: 11px }
+.coverage-nearby-id:empty { display: none }
+.shadow-coverage .coverage-stores { padding: 0 0 0 16px; max-height: 104px; overflow: auto }
+.coverage-stores small, .coverage-search-result small, .coverage-list-row small { display: block; color: #54667d }
+.coverage-detail-paging { display: flex; gap: 5px; margin-top: 5px }
+.coverage-search-row { margin: 5px 0 }
+.coverage-search-row input { flex: 1; min-width: 0 }
+.coverage-list { padding-top: 7px }
+.coverage-list-head { align-items: start }
+.coverage-list-head h2 { font-size: 13px; line-height: 1.35 }
+.coverage-list-head select { max-width: 104px }
+.coverage-list-pages { display: flex; justify-content: flex-end; gap: 4px; margin-top: 4px }
+#coverageCellList, .coverage-results { display: grid; gap: 4px; max-height: 185px; overflow: auto }
+#coverageCellList { margin-top: 5px }
+.coverage-list-row[aria-pressed="true"] { border-color: #2d63aa; background: #f2f7fd }
+.coverage-list-row small:last-child { font-weight: 650 }
+.coverage-results:not(:empty) { margin-top: 6px }
+.coverage-list-row, .coverage-search-result { text-align: left; white-space: normal; overflow-wrap: anywhere }
+.coverage-search-result > span { display: block }
+#coveragePanelToggle { display: none }
+@media (max-width: 760px) {
+  .shadow-coverage {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(300px, 1fr);
+    height: auto;
+    min-height: max(530px, calc(100dvh - var(--coverage-header-height, 134px)));
+  }
+  .coverage-sidebar { padding: 11px 14px; max-height: min(76dvh, 640px); border-right: 0; border-bottom: 1px solid var(--line, #dce4ee) }
+  .shadow-coverage :is(select, input, button) { min-height: 34px }
+  .coverage-search { margin-top: 7px }
+  .coverage-search > label:first-child { margin-bottom: 2px }
+  .coverage-filters { margin: 6px 0 }
+  .coverage-overview { padding: 6px 8px }
+  .coverage-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)) }
+  #coverageCellList { max-height: 112px }
+  #coveragePanelToggle { display: inline-block }
+  .coverage-panel-collapsed #coverageAnalysis { display: none }
+}

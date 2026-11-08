@@ -10,3 +10,5 @@ public/daily-routes.corrupt-*.html
 _check_index.js
 _check_daily-routes.js
 _daily-routes-inline-check.js
+opsmap-coverage-*.json.gz.b64
+**/opsmap-coverage-*.json.gz.b64

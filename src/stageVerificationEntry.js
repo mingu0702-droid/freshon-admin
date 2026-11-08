@@ -19,6 +19,7 @@ import {phase2bSnapshotMeta} from './phase2bOperations.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createOperationalPhotoExtension} from './opsmapOperationalPhotos.js';
+import {mountShadowCoverage} from './shadowCoverage/routes.js';
 
 const stageOrigin = 'https://freshon-admin-stage-preview-template.onrender.com';
 const stageService = 'srv-da47hugu01pc73etpfa0';
@@ -190,8 +191,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     phase2bKstDate:today,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:deliveryUnavailable,
     callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
     sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget,readRecordedRoadRoute,
+    shadowCoverageEnabled:true,
     mountPrivateExtensions:binding=>{
       const {requireStaff}=binding;
+      mountShadowCoverage({...binding,directory:stage.OPSMAP_SHADOW_DATA_DIR,appRoot:fileURLToPath(new URL('../',import.meta.url)),
+        readPreservedMap:async()=>{const saved=await readSnapshot();return saved && {count:saved.rows.length,asOf:saved.latestDate};}});
       manual.mount(binding);
       photos.mount(binding,{historyOnly:true});
       mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
