@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildVehiclePrintModel,validPrintDate,validateDatedPrintResponse,PRINT_UNPROVIDED_CENTER} from '../public/opsmap/map-print-ui.mjs';
+import {buildVehiclePrintModel,mergeDatedPrintCoordinates,validPrintDate,validateDatedPrintResponse,PRINT_UNPROVIDED_CENTER} from '../public/opsmap/map-print-ui.mjs';
 const master={version:'a'.repeat(64),checkedAt:'2026-11-04T00:00:00Z',stale:false};
 const fixed=(code,car='2',center='osan',extra={})=>({customerCode:code,customerName:'합성 테스트 매장',address:'경기도 오산시 합성로 10',baseVehicle:car,baseVehicleGroup:center,baseVehicleState:'VERIFIED_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:master.version,baseVehicleCheckedAt:master.checkedAt,baseVehicleStale:false,lat:37.1,lng:127.1,...extra});
 const build=(rows,extra={})=>buildVehiclePrintModel({basis:'FIXED',date:'2026-11-04',nowDate:'2026-11-04',center:'osan',selectedVehicle:'2',master,rows,...extra});
@@ -34,4 +34,22 @@ test('dated center omitted at source has an explicit scope isolated from known c
  assert.deepEqual(build(rows,{basis:'DATED',date:'2026-11-03',center:'osan'}).stores.map(r=>r.customerCode),['S102']);
  assert.throws(()=>build([fixed('S100')],{center:PRINT_UNPROVIDED_CENTER}),/SELECTION_REQUIRED/);
  assert.throws(()=>build(rows,{basis:'DATED',date:'2026-11-04',center:PRINT_UNPROVIDED_CENTER}),/DATE_UNVERIFIED/);
+});
+
+test('dated print fills only missing points tied to the same customer address and verified saved evidence',()=>{
+ const address='경기도 오산시 검증로 10', date='2026-11-03', binding='f'.repeat(64);
+ const rows=Array.from({length:7},(_,i)=>({customerCode:'S'+(100+i),address,deliveryDate:date,vehicle:'2',vehicleGroup:'osan',order:i+1,lat:null,lng:null}));
+ const saved=rows.map((r,i)=>({...r,lat:37.1+i/1000,lng:127.1,coordinateSource:'RAW_GPS',originalAddressHash:binding,currentAddressHash:binding}));
+ saved[1].address='경기도 오산시 검증로 20';
+ saved[2].currentAddressHash='e'.repeat(64);
+ saved[3].coordinateSource='KAKAO_ADDRESS_LIVE';
+ delete rows[4].address;
+ saved[5].coordinateStatus='APPROXIMATE';
+ rows[6].lat=37.5;rows[6].lng=127.3;
+ const merged=mergeDatedPrintCoordinates(rows,saved);
+ const model=build(merged,{basis:'DATED',date});
+ assert.equal(model.stores.length,7);assert.equal(model.locatedCount,2);
+ assert.equal(model.stores[0].lat,37.1);assert.equal(model.stores[6].lat,37.5);
+ assert.ok(model.stores.slice(1,6).every(row=>row.lat===null));
+ assert.equal(rows[0].lat,null);
 });

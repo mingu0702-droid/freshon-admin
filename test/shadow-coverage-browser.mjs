@@ -11,6 +11,7 @@ import { createShadowCoverageStore } from '../src/shadowCoverage/store.js';
 const [directory, output, mode] = process.argv.slice(2);
 const fieldAnalysis = mode === 'field-analysis';
 const reentry = mode === 'reentry';
+const adminFilters = mode === 'admin-filters';
 assert(path.isAbsolute(directory || '') && path.isAbsolute(output || ''));
 await fs.mkdir(output, { recursive: true });
 const stageOrigin = 'https://freshon-admin-stage-preview-template.onrender.com';
@@ -21,7 +22,7 @@ assert.equal(source.index.kind, 'OBSERVED');
 const date = source.index.asOf;
 const sample = source.catalog.stores.find(row => row.cell && row.address && row.name && row.code && row.registered);
 assert(sample);
-const result = { scope: (reentry ? 'REENTRY' : fieldAnalysis ? 'FIELD_ANALYSIS' : 'THIRD_TAB') + '_LOCAL_CHROMIUM_SDK_FIXTURE_REAL_PRIVATE_H3', base,
+const result = { scope: (adminFilters ? 'ADMIN_FILTERS' : reentry ? 'REENTRY' : fieldAnalysis ? 'FIELD_ANALYSIS' : 'THIRD_TAB') + '_LOCAL_CHROMIUM_SDK_FIXTURE_REAL_PRIVATE_H3', base,
   checks: [], errors: [], screenshots: [], requestsToStage: 0, providerCalls: 0, sourceWrites: 0 };
 function check(label, condition) {
   assert(condition, label);
@@ -163,7 +164,7 @@ async function open(width, { failView = false, failSdk = false, missingKey = fal
   await page.waitForFunction(() => document.body.dataset.mapStaffState === 'authenticated');
   return { page, context, views, http, lookupCalls, sdkRequests: () => sdkRequests,
     holdNextView() { holdNext = new Promise(resolve => { release = resolve; }); },
-    releaseView() { release?.(); holdNext = null; } };
+    releaseView() { release?.(); holdNext = null; }, failNextView() { failView = true; } };
 }
 
 const toggle = page => page.getByRole('button', { name: '음영권역', exact: true });
@@ -531,10 +532,61 @@ async function checkReentry() {
   } finally { await context.close(); }
 }
 
+async function checkAdminFilters(width) {
+  const session = await open(width);
+  const { page, context } = session;
+  try {
+    if (width === 1440) {
+      let checks = 0;
+      await page.route('**/api/map-phase2b/auth/session', route => ++checks === 1
+        ? route.fulfill({status:503,json:{error:'STAFF_SESSION_STORE_UNAVAILABLE'}}) : route.fallback());
+      await page.reload({waitUntil:'domcontentloaded'});
+      await page.getByRole('heading',{name:'직원 로그인 연결 지연'}).waitFor();
+      check('session read failure hides map data and preserves the login session for recheck', await page.evaluate(async()=>{
+        try { await fetch('/api/map-phase2b/private/customer-search');return false; } catch(error){return error.status===401&&document.body.dataset.mapStaffState==='checking';}
+      }));
+      await page.waitForFunction(() => document.body.dataset.mapStaffState === 'authenticated');
+      check('a single automatic recheck recovers after 503 without submitting credentials again', checks===2);
+    }
+    await toggle(page).click();
+    await ready(page);
+    const day = page.locator('#coverageDays'), progress = page.locator('#coverageFilterProgress');
+    const basis = page.locator('#coverageBasis');
+    session.holdNextView();
+    await day.selectOption('30');
+    check(width+' delayed scope explicitly distinguishes requested 30d from displayed 90d', /30일.*조회 중.*90일.*표시/.test(await progress.innerText()) && /90일/.test(await basis.innerText()));
+    session.releaseView();
+    await page.waitForFunction(()=>document.querySelector('#coverageBasis').textContent.includes('분석 30일'));
+    check(width+' accepted scope clears the pending message', !(await progress.innerText()));
+    session.failNextView();
+    await day.selectOption('60');
+    const retry = page.locator('#coverageFilterRetry');
+    await retry.waitFor();
+    check(width+' failed scope keeps the last verified scope', (await day.inputValue())==='30' && /조건 조회 실패.*30일/.test(await progress.innerText()));
+    await retry.click();
+    await page.waitForFunction(()=>document.querySelector('#coverageBasis').textContent.includes('분석 60일'));
+    check(width+' retries the failed scope with the original 60d selection', (await day.inputValue())==='60' && !await retry.isVisible());
+    if(width===390){
+      const summary=page.locator('#coverageMapSummary');
+      check('mobile viewport candidate count and four legend keys are accessible without sidebar scrolling', await summary.evaluate(node=>{
+        const rect=node.getBoundingClientRect(); return rect.top>=0 && rect.bottom<innerHeight && /현재 화면 후보/.test(node.textContent) && node.querySelectorAll('[data-tone]').length===4;
+      }));
+      check('mobile candidate list row hit target is at least 44 pixels', await page.locator('#coverageCellList .coverage-list-row').first().evaluate(node=>node.getBoundingClientRect().height>=44));
+      await summary.screenshot({path:path.join(output,'coverage-viewport-390.png')});
+      result.screenshots.push('coverage-viewport-390.png');
+    }
+    await general(page).click();
+    check(width+' returns to the base map after filter changes', await page.locator('#shadowCoverage').isHidden());
+  } finally { session.releaseView(); await context.close(); }
+}
+
 try {
   browser = await chromium.launch({ headless: true,
     executablePath: process.env.OPSMAP_TEST_CHROMIUM || 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
-  if (reentry) {
+  if (adminFilters) {
+    await checkAdminFilters(1440);
+    await checkAdminFilters(390);
+  } else if (reentry) {
     await checkReentry();
   } else if (fieldAnalysis) {
     await checkFieldAnalysis(1440);
@@ -553,7 +605,7 @@ try {
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
-  await fs.writeFile(path.join(output, (reentry ? 'reentry' : fieldAnalysis ? 'field-analysis' : 'third-tab') + '-browser.json'), JSON.stringify(result, null, 2));
+  await fs.writeFile(path.join(output, (adminFilters ? 'admin-filters' : reentry ? 'reentry' : fieldAnalysis ? 'field-analysis' : 'third-tab') + '-browser.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ scope: result.scope, checks: result.checks.length, errors: result.errors, failure: result.failure }));
   if (failed) process.exitCode = 1;
 }

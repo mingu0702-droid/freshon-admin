@@ -6,6 +6,7 @@ import '../public/opsmap/map-period-ui.js';
 import '../public/opsmap/phase2b-ui-helpers.js';
 import '../public/opsmap/manual-waypoints.js';
 import '../public/opsmap/new-area-requests.js';
+import {batchDomNode,batchDomTemplate} from './fixtures/new-area-dom.mjs';
 
 // Synthetic data and mocked transports only. No browser, API, source or coordinate writes.
 const runtime=fs.readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js',import.meta.url),'utf8');
@@ -18,7 +19,7 @@ saved:()=>latestSnapshotRows};})();`;
 const saved={customerCode:'S990001',customerName:'합성 저장매장',address:'경기도 화성시 합성로 1',lat:37.2,lng:127,vehicle:'101'};
 function fixture({rows=[],customer=()=>({data:[],meta:{complete:true}}),lookup=(query,callback)=>callback([{address_name:query,x:'127',y:'37.2'}],'OK')}={}){
   const nodes=new Map(),headers=[],queries=[];
-  const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',innerHTML:'',textContent:'',disabled:false,setAttribute(){},removeAttribute(){},classList:{add(){},remove(){}}});return nodes.get(id);};
+  const node=id=>{if(!nodes.has(id))nodes.set(id,batchDomNode());return nodes.get(id);};
   const window={addEventListener(){},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,
     KAKAO_MAP_CONFIG:{allowExternalAddressLookup:true},kakaoGeocoder:{serverProxy:true,addressSearch(query,callback,options){queries.push(query);lookup(query,callback,options);}}};
   const fetch=async(url,options)=>{
@@ -28,9 +29,9 @@ function fixture({rows=[],customer=()=>({data:[],meta:{complete:true}}),lookup=(
     const payload=await customer(query);
     return {ok:payload.ok!==false,status:payload.ok===false?503:200,headers:{get(){return null;}},json:async()=>payload};
   };
-  const context=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},body:node('body')},
+  const context=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:node('body')},
     MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,
-    location:{href:'https://example.invalid/opsmap/'},fetch,Map,Set,URL,URLSearchParams,AbortController,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
+    location:{href:'https://example.invalid/opsmap/'},fetch,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
   vm.runInContext(exposed,context);window.qa.setup(rows);
   const run=input=>{node('#newAreaBatchInput').value=input;return window.qa.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');};
   return {...window.qa,window,node,run,headers,queries};
@@ -89,7 +90,7 @@ test('same normalized query is reused only within its run; all original rows and
   const f=fixture({lookup:(query,callback)=>query.includes('만세구')?callback([],'ZERO_RESULT'):callback([{address_name:query,x:'127',y:'37.2'}],'OK')});
   const input='경기도 화성시 만세구 합성로 12 (합성동)\t합성 고객1\n경기도 화성시 합성로12 (합성상가)\t합성 고객2';
   await f.run(input);assert.equal(f.queries.length,2);assert.equal(f.headers.length,2);
-  assert.deepEqual(f.queries,['경기도 화성시 만세구 합성로 12','경기도 화성시 합성로 12']);
+  assert.deepEqual(new Set(f.queries),new Set(['경기도 화성시 만세구 합성로 12','경기도 화성시 합성로 12']));
   assert.equal(f.state.newAreaResults.length,2);assert.notEqual(f.state.newAreaResults[0].originalCustomer,f.state.newAreaResults[1].originalCustomer);
   await f.run(input);assert.equal(f.queries.length,4);assert.equal(f.headers.length,4,'no cross-run coordinate response cache');
 });

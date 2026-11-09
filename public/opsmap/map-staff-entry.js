@@ -3,6 +3,7 @@
   const rawFetch = window.fetch.bind(window), ACTIVITY_THROTTLE_MS = 60000;
   const preloadedScripts = new Set();
   let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivityCheck = 0, checking = null, checkingOwner = -1, confirming = null, confirmingOwner = -1, signingOut = null, logoutRequired = false;
+  let recoveryTimer = null;
   const requests = new Set(), purges = new Set();
   const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('map-staff-session') : null;
   const entry = document.createElement('section'); entry.id = 'mapStaffEntry';
@@ -55,7 +56,7 @@
     if (expiresAt && idleExpiresAt) deadline({ authenticated: true, expiresAt, idleExpiresAt });
   }
   function revoke(text, unknown = false) {
-    epoch++; session = null; clearTimeout(timer); password.value = '';
+    epoch++; session = null; clearTimeout(timer); clearTimeout(recoveryTimer); password.value = '';
     for (const controller of requests) controller.abort(); requests.clear();
     delete window.VEHICLE_AREA_DATA;
     document.body.dataset.mapStaffState = unknown ? 'checking' : 'signed-out'; entry.hidden = false; submit.disabled = unknown;
@@ -67,10 +68,18 @@
     window.dispatchEvent(new CustomEvent('map-navigation-logout'));
     return Promise.allSettled([...purges].map(purge => Promise.resolve().then(purge)));
   }
-  async function unavailable() {
-    await revoke('네트워크 문제로 직원 인증을 확인하지 못했습니다. 보호정보는 잠시 차단됩니다.', true);
+  async function unavailable(error, retryOnce = true) {
+    const serverUnavailable=error?.status>=500;
+    const pending=revoke(serverUnavailable?'서버에서 직원 로그인 상태를 확인하지 못했습니다.':'연결이 지연되어 직원 로그인 상태를 확인하지 못했습니다.',true);
+    const owner=epoch;
+    await pending;
+    if(owner!==epoch||logoutRequired)return;
+    form.querySelector('h1').textContent='직원 로그인 연결 지연';
     const retry=document.createElement('button');retry.type='button';retry.textContent='연결 재확인';
-    retry.onclick=()=>{retry.disabled=true;void check();};message.append(retry);
+    const recheck=()=>{clearTimeout(recoveryTimer);retry.disabled=true;void check({retryOnce:false});};
+    retry.onclick=recheck;message.append(retry);
+    if(retryOnce&&navigator.onLine!==false&&(serverUnavailable||!error?.status))
+      recoveryTimer=setTimeout(()=>{if(owner===epoch&&!logoutRequired)recheck();},2500+Math.floor(Math.random()*1000));
   }
   async function auth(path, options = {}) {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), ['login','logout'].includes(path)?60000:10000);
@@ -167,7 +176,7 @@
       return false;
     } finally { booting = null; }
   }
-  async function check({activity = false} = {}) {
+  async function check({activity = false, retryOnce = true} = {}) {
     if (logoutRequired) return null;
     if (checking && checkingOwner===epoch) return checking;
     const owner = epoch;
@@ -179,8 +188,8 @@
         if (!value.authenticated) { await revoke(value.reason === 'SESSION_UNAVAILABLE' ? '서버 재시작 또는 세션 종료로 다시 로그인이 필요합니다.' : '직원 로그인 후 지도를 사용할 수 있습니다.'); return null; }
         if (session) { deadline(value); return session; }
         await accept(value); return session;
-      } catch {
-        if (owner === epoch) await unavailable();
+      } catch (error) {
+        if (owner === epoch) await unavailable(error,retryOnce);
         return null;
       } finally { if(checkingOwner===owner)checking = null; }
     })();
@@ -223,7 +232,7 @@
       if (response.status === 401) {
         let verified;
         try { verified = await confirmSession(); }
-        catch { if(owner===epoch)await unavailable(); }
+        catch (error) { if(owner===epoch)await unavailable(error); }
         if(owner===epoch&&verified?.authenticated===false)await revoke(verified.reason==='SESSION_UNAVAILABLE'?'서버 재시작 또는 세션 종료로 다시 로그인이 필요합니다.':'직원 인증이 만료되었습니다. 다시 로그인해 주세요.');
         if (!verified?.authenticated || owner !== epoch || !session) { void response.body?.cancel().catch(() => {}); throw Object.assign(Error('STAFF_LOGIN_REQUIRED'), { status: 401 }); }
         deadline(verified);

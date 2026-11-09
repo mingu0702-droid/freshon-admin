@@ -6,7 +6,8 @@ import path from 'node:path';
 import {chromium} from 'playwright';
 
 // Local synthetic fixtures only: no authentication, source, geocoding or remote SDK.
-const root=path.resolve('public/opsmap'),output=fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-vehicle-picker-'));
+const root=path.resolve('public/opsmap'),output=process.env.OPSMAP_VEHICLE_TEST_OUTPUT||fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-vehicle-picker-'));
+fs.mkdirSync(output,{recursive:true});
 const vehicles=[['203','osan'],['122','osan'],['202-1','osan'],['101','osan'],['202','osan'],['용10','osan'],['용2','osan'],['310','yeongnam'],['301','yeongnam'],['410','honam'],['미확인','']].map(([vehicle,group])=>({vehicle,group,customers:[]}));
 const stores=[
  ['101','서울특별시 강남구 합성로 1'],['101','서울 서초구 합성길 2'],['101','서울 송파구 합성길 3'],
@@ -40,6 +41,7 @@ class Bounds{extend(){}getSouthWest(){return new Coord(33,124)}getNorthEast(){re
 class FixtureMap{constructor(el,opts){this.el=el;this.center=opts.center;this.level=5}getCenter(){return this.center}setCenter(p){this.center=p}panTo(p){this.center=p}getLevel(){return this.level}setLevel(v){this.level=v}getBounds(){return new Bounds()}setBounds(){}relayout(){}getProjection(){return {containerPointFromCoords:p=>({x:300+(p.lng-127)*100,y:300+(p.lat-36)*30}),coordsFromContainerPoint:p=>new Coord(36,127)}}}
 class Overlay{constructor(opts){this.opts=opts}setMap(map){if(this.opts.content){this.opts.content.remove();if(map)map.el.append(this.opts.content)}}}
 window.kakao={maps:{LatLng:Coord,LatLngBounds:Bounds,Map:FixtureMap,CustomOverlay:Overlay,Polygon:Overlay,Polyline:Overlay,event:{addListener(){},removeListener(){}}}};window.KakaoMapsAdapter={ready:()=>Promise.resolve(),reset(){}};`;
+if(process.env.OPSMAP_VEHICLE_TEST_FLOW==='operations')scripts.push('navigation-ui.js');
 let html=fs.readFileSync(path.join(root,'map-phase2b-preview.html'),'utf8').replace(/<script\b[\s\S]*?<\/script>/gi,'');
 html=html.replace('</body>','<script>'+fixture+'</script>'+scripts.map(file=>'<script src="'+file+'"></script>').join('')+'</body>');
 const server=http.createServer((req,res)=>{
@@ -68,6 +70,7 @@ try{
  await page.route('**/*',route=>{if(!route.request().url().startsWith(origin)){external.push(route.request().url());return route.abort();}return route.continue();});
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapUiLocalBridge?.isDataReady());
  const check=(name,condition)=>{assert(condition,name);checks.push(name);};
+ if(process.env.OPSMAP_VEHICLE_TEST_FLOW!=='operations'){
  await page.waitForFunction(()=>document.querySelector('#vehicleList .vehicleItem')?.dataset.listGroup==='osan');
  check('fresh page selects only Osan stores and marks Osan in the controls',await page.evaluate(()=>{
   const state=MapUiLocalBridge.state;
@@ -136,6 +139,14 @@ try{
   await page.screenshot({path:path.join(output,`after-fixture-${width}.png`),fullPage:true});
  }
  check('remote/auth/geocoding/source calls remain zero',external.length===0&&requests.every(p=>!/auth|geocod|source|hub|private\//i.test(p)));
+ } else {
+  await page.locator('[data-source-center="osan"]').click();
+  if(await page.locator('#baseVehiclePicker').getAttribute('open')===null)await page.locator('#baseVehiclePicker>summary').click();
+  await page.locator('#vehicleList input[value="101"]').check();
+  await page.locator('#query').fill(repeatedCode);
+  await page.locator('#clearQuery').click();
+  check('clicking the search clear button retains the selected center and vehicle',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter==='osan'&&MapUiLocalBridge.state.selectedVehicles.join()==='101'&&document.querySelector('#query').value===''));
+ }
  await page.setViewportSize({width:1366,height:900});
  await page.reload();
  await page.waitForFunction(()=>MapUiLocalBridge.isDataReady());
@@ -144,6 +155,11 @@ try{
   await page.waitForFunction(value=>MapUiLocalBridge.isDataReady()&&MapUiLocalBridge.state.selectedDate===value,date);
  };
  await changeDate(today);
+ await page.locator('#chooseRoutes').click();
+ await page.locator('#vehicleList input[value="101"]').check();
+ await page.locator('#vehicleList input[value="122"]').check();
+ await page.locator('#queryRoutes').click();
+ await page.waitForFunction(()=>MapUiLocalBridge.isDataReady()&&MapUiLocalBridge.state.selectedVehicles.length===2);
  const repeatedVisits=()=>page.evaluate(code=>MapUiLocalBridge.stores().filter(row=>row.customerCode===code).map(({vehicle,baseVehicle,address,lat,lng,status})=>({vehicle,baseVehicle,address,lat,lng,status})),repeatedCode);
  const expectedVisits=todayRows.slice(0,2).map(({vehicle,baseVehicle,address,lat,lng})=>({vehicle,baseVehicle,address,lat,lng,status:vehicle==='122'?'COMPLETED':'PENDING'}));
  assert.deepEqual(await repeatedVisits(),expectedVisits);
@@ -155,11 +171,14 @@ try{
  await page.locator(`#runList [data-run-code="${repeatedCode}"][data-run-vehicle="122"]`).evaluate(button=>button.click());
  check('run list opens the exact confirmed vehicle for a repeated customer',await page.evaluate(()=>MapUiLocalBridge.state.selected?.vehicle==='122'));
  const liveBefore=requests.filter(p=>p.endsWith('/today-status')).length;
+ const planBefore=requests.filter(p=>p.endsWith('/route-plan')).length;
  await page.locator('#operationVehicle').evaluate(select=>{select.value='122';});
- await page.locator('#syncOperation').evaluate(button=>button.click());
+ if(!await page.locator('#syncOperation').isVisible())await page.locator('#waypointPlanner>summary').click();
+ await page.locator('#syncOperation').click({timeout:5000});
  await page.waitForFunction(()=>!document.querySelector('#syncOperation').disabled&&MapUiLocalBridge.state.selected?.vehicle==='122');
  assert.deepEqual(await repeatedVisits(),expectedVisits);
  check('refresh reads current status once and restores the selected confirmed vehicle',requests.filter(p=>p.endsWith('/today-status')).length===liveBefore+1);
+ check('refresh keeps all three visits and both vehicles in the actual screen counters', await page.locator('#opTotal').textContent()==='3'&&await page.locator('#opCompleted').textContent()==='1'&&await page.locator('#opRemaining').textContent()==='2'&&requests.filter(p=>p.endsWith('/route-plan')).length===planBefore);
  await page.locator('#operationVehicle').evaluate(select=>{select.value='';});
  await changeDate('2026-10-21');
  check('historical date transition replaces both current assignments with that date’s rows',(await repeatedVisits()).length===1&&await page.evaluate(()=>MapUiLocalBridge.stores().every(row=>row.lastDeliveryDate==='2026-10-21')));
@@ -175,7 +194,7 @@ try{
   check('verified visits are accessible before the auxiliary route response',await page.locator('#runList [data-run-vehicle="101"]').first().isVisible());
  }finally{releaseRoutePlan();}
  await page.waitForFunction(()=>!document.querySelector('#syncOperation').disabled&&document.querySelector('#mapStatusSub').textContent.includes('운행현황 조회 실패'));
- check('route failure stays visible alongside the verified visits',await page.locator('#runStatusError').isVisible()&&await page.locator('#runList [data-run-vehicle="101"]').count()===rows.filter(row=>row.vehicle==='101').length);
+ check('route failure stays visible alongside the verified visits and counters',await page.locator('#runStatusError').isVisible()&&await page.locator('#runList [data-run-vehicle="101"]').count()===rows.filter(row=>row.vehicle==='101').length&&Number(await page.locator('#opTotal').textContent())===rows.filter(row=>row.vehicle==='101').length);
  check('no page errors or remote calls',errors.length===0&&external.length===0);
  const result={scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_MAP',output,checks,errors,externalCalls:external.length,requests};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

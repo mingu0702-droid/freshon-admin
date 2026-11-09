@@ -56,6 +56,7 @@ export function createCoveragePanel({ workspace, header }) {
           <label>담당 센터 <select id="coverageCenter"><option value="all">전체</option><option value="osan">오산</option><option value="yeongnam">영남</option><option value="honam">호남</option></select></label>
           <label>검색 반경 <select id="coverageRadius"><option value="0">격자만</option><option value="500">500m</option><option value="1000">1km</option></select></label>
         </div>
+        <div class="coverage-filter-feedback"><p id="coverageFilterProgress" role="status" aria-live="polite"></p><button type="button" id="coverageFilterRetry" hidden>조건 다시 조회</button></div>
         <div class="coverage-overview" aria-label="분석 핵심 현황">
           <p id="coverageBasis">분석 기준일을 확인하고 있습니다.</p>
           <p id="coverageObserved" aria-live="polite"></p>
@@ -102,6 +103,10 @@ export function createCoveragePanel({ workspace, header }) {
     </aside>
     <section class="coverage-map-area" aria-label="배송 관측 격자 지도">
       <div id="coverageMap"></div>
+      <div id="coverageMapSummary" class="coverage-map-summary" hidden>
+        <p id="coverageMapCount"></p>
+        <div class="coverage-legend" aria-label="지도 범례"><span data-tone="candidate">미배송 후보</span><span data-tone="delivery">배송 이력</span><span data-tone="unknown">자료 부족</span><span data-tone="empty">확인 공백</span></div>
+      </div>
       <div id="coverageMapState" class="coverage-map-state" hidden>
         <p id="coverageMapMessage" role="status" aria-live="polite"></p>
         <button type="button" id="coverageRetry" hidden>다시 시도</button>
@@ -121,7 +126,7 @@ export function createCoveragePanel({ workspace, header }) {
   const evidence = find('coverageEvidenceBody');
   const requests = new Map();
   let map, baseMap, active = false, mapOwner = 0, timer, view = null, selected = null, pendingView = null;
-  let days = 90, center = 'all', loadedCenter = 'all', lastKey = '', failedKey = '';
+  let days = 90, center = 'all', loadedCenter = 'all', lastKey = '', failedKey = '', failedFilter = null;
   let viewTag = '', viewSession = null, openedAt = 0;
   let list = null, listKey = '', listOffset = 0, searchOwner, addressProxy;
   const resize = new ResizeObserver(entries => {
@@ -182,6 +187,14 @@ export function createCoveragePanel({ workspace, header }) {
   function filters() {
     find('coverageDays').value = String(days);
     find('coverageCenter').value = center;
+  }
+
+  const centerLabel = value => ({all:'전체', osan:'오산', yeongnam:'영남', honam:'호남'})[value] || '';
+  function filterProgress(message = '', busy = false) {
+    find('coverageFilterProgress').textContent = message;
+    find('coverageFilterRetry').hidden = !failedFilter;
+    if (busy) cellList.setAttribute('aria-busy', 'true');
+    else cellList.removeAttribute('aria-busy');
   }
 
   function abort(name) {
@@ -305,7 +318,7 @@ export function createCoveragePanel({ workspace, header }) {
       '기록 확인 ' + confirmed + '/' + period.days + '일 · 미확인 ' + completeness.missingDates.length + '일';
     find('coverageBasis').textContent = '분석 ' + period.days + '일 · 기준 ' + period.end;
     find('coverageObserved').textContent = sourceText;
-    const selectedCenter = find('coverageCenter').selectedOptions[0]?.textContent;
+    const selectedCenter = centerLabel(loadedCenter);
     find('coverageNationalTitle').textContent = (loadedCenter === 'all' ? '전국 집계' : '전국 · ' + selectedCenter + ' 센터') +
       ' · 기본 격자';
     for (const stat of root.querySelectorAll('[data-metric]')) stat.textContent = fmt(summary[stat.dataset.metric]);
@@ -318,6 +331,8 @@ export function createCoveragePanel({ workspace, header }) {
       ? '현재 화면 · 후보 ' + fmt(candidateViewport.cells) + '격자 · ' + fmt(candidateViewport.stores) + '곳' +
         (data.resolution < data.summaryResolution ? ' · 주황 숫자: 묶인 후보 격자 수' : '')
       : '현재 화면 · 후보 ' + fmt(viewportSummary.candidates) + '격자';
+    find('coverageMapCount').textContent = '현재 화면 후보 ' + fmt(candidateViewport?.cells ?? viewportSummary.candidates) + '격자' + (candidateViewport ? ' · ' + fmt(candidateViewport.stores) + '곳' : '');
+    find('coverageMapSummary').hidden = false;
     evidence.replaceChildren(
       element('p', '', period.start + ' ~ ' + period.end + ' · 마지막 확인 ' + (period.latest || '미확인')),
       element('p', '', '집계 갱신 ' + time.format(new Date(data.refreshedAt)) + ' · 원천 확인 ' + time.format(new Date(data.sourceObservedAt))),
@@ -376,7 +391,12 @@ export function createCoveragePanel({ workspace, header }) {
       return;
     }
     const request = pendingView = { key };
-    const wantedCenter = center;
+    const wantedCenter = center, wantedDays = days;
+    const switching = view && (view.period.days !== wantedDays || loadedCenter !== wantedCenter);
+    if (switching) {
+      failedFilter = null;
+      filterProgress(wantedDays + '일 · ' + centerLabel(wantedCenter) + ' 조회 중 · 현재 ' + view.period.days + '일 · ' + centerLabel(loadedCenter) + ' 표시', true);
+    }
     const tag = reopening && key === lastKey && viewSession !== null && viewSession === currentSession() ? viewTag : '';
     if (tag) recordPaint('cached', performance.now());
     else if (reopening && view) resetView();
@@ -402,6 +422,8 @@ export function createCoveragePanel({ workspace, header }) {
       loadedCenter = wantedCenter;
       lastKey = key;
       failedKey = '';
+      failedFilter = null;
+      filterProgress();
       renderView(view);
       showMapState('');
       if (!root.dataset.viewMetrics || tag) recordPaint('fresh', started, result);
@@ -411,6 +433,8 @@ export function createCoveragePanel({ workspace, header }) {
       if (tag || error.status === 401 || error.status === 403) resetView();
       failedKey = key;
       if (view) {
+        if (switching) failedFilter = { days: wantedDays, center: wantedCenter };
+        filterProgress(switching ? '조건 조회 실패 · 현재 ' + view.period.days + '일 · ' + centerLabel(loadedCenter) + ' 표시' : '');
         days = view.period.days;
         center = loadedCenter;
         filters();
@@ -420,7 +444,10 @@ export function createCoveragePanel({ workspace, header }) {
         showMapState('분석 격자를 불러오지 못했습니다.', () => void loadView(true));
       }
     } finally {
-      if (pendingView === request) pendingView = null;
+      if (pendingView === request) {
+        pendingView = null;
+        cellList.removeAttribute('aria-busy');
+      }
     }
   }
 
@@ -623,6 +650,8 @@ export function createCoveragePanel({ workspace, header }) {
   }
 
   function changeFilters() {
+    failedFilter = null;
+    filterProgress();
     filters();
     clearSelection();
     clearSearch();
@@ -637,6 +666,7 @@ export function createCoveragePanel({ workspace, header }) {
   find('coverageDays').onchange = event => { days = Number(event.target.value); changeFilters(); };
   find('coverageCenter').onchange = event => { center = event.target.value; changeFilters(); };
   find('coverageRefresh').onclick = () => void loadView(true);
+  find('coverageFilterRetry').onclick = () => { if (failedFilter) { ({ days, center } = failedFilter); changeFilters(); } };
   panelToggle.onclick = () => collapsePanel(panelToggle.getAttribute('aria-expanded') === 'true');
   find('coverageSearch').onsubmit = search;
   find('coverageQuery').oninput = clearSearch;
@@ -649,6 +679,10 @@ export function createCoveragePanel({ workspace, header }) {
     view = list = null;
     viewTag = lastKey = listKey = '';
     viewSession = null;
+    failedFilter = null;
+    filterProgress();
+    find('coverageMapCount').textContent = '';
+    find('coverageMapSummary').hidden = true;
     listOffset = 0;
     clearSelection();
     clearSearch();
@@ -690,6 +724,8 @@ export function createCoveragePanel({ workspace, header }) {
       map?.suspend();
       pendingView = null;
       failedKey = '';
+      failedFilter = null;
+      filterProgress();
       const resetList = selected || listOffset || find('coverageListFilter').value !== 'candidate';
       clearSelection();
       find('coverageEvidence').open = false;
