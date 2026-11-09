@@ -19,6 +19,7 @@ import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
+import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 
 const stageOrigin = STAGE_ORIGIN;
 const stageService = STAGE_SERVICE;
@@ -41,7 +42,6 @@ const normalizeDateValue = value => {
   return /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0,10) === day ? day : '';
 };
 const today = () => new Date(Date.now() + 9 * 3600000).toISOString().slice(0,10);
-const deliveryUnavailable = () => { throw Object.assign(new Error('DELIVERY_SOURCE_READ_ONLY'), {code:'DELIVERY_SOURCE_READ_ONLY'}); };
 
 export function stageSnapshotBaseVehicles(snapshot) {
   const rows = new Map();
@@ -176,6 +176,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       return staffStoreDetail(response?.data,{customerCode:code,date:null});
     }});
   const app = express(), router = express.Router();
+  const readDatedDelivery = createStageDatedDeliveryReader({env:stage, fetchImpl});
   app.disable('x-powered-by');
   app.get('/api/health',(_req,res)=>res.json({ok:true,scope:'stage',release:/^[a-f0-9]{40}$/.test(stage.RENDER_GIT_COMMIT || '') ? stage.RENDER_GIT_COMMIT : null}));
   app.get(['/','/index.html','/map-phase2b-preview.html'],(_req,res)=>res.redirect(302,'/opsmap/'));
@@ -193,7 +194,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   mountProductionMapApi(router,{
     previewEnabled:()=>true,requireView:(req,res,next)=>staffView(req,res,next),readPhase2bSnapshot:readSnapshot,
     getSnapshotMemory:()=>validation.active() ? joinedSnapshot?.snapshot || snapshot : snapshot,
-    phase2bKstDate:today,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:deliveryUnavailable,
+    phase2bKstDate:today,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:readDatedDelivery,
     callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
     sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget:null,readRecordedRoadRoute,
     getShadowCoverageState:()=>validation.active() ? 'ready' : coverageState,
@@ -228,6 +229,17 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           return requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json(redactPublicData(payload)));
         }
         catch {return res.status(503).json({error:'ROUTE_SOURCE_UNAVAILABLE'});}
+      });
+      router.get('/api/map-phase2b/preview/today-status',requireStaff,async(req,res)=>{
+        const date=normalizeDateValue(req.query.date);
+        if(!date || date>today() || Object.keys(req.query).length!==1) return res.status(400).json({error:'INVALID_DATE'});
+        try {
+          const data=await readDatedDelivery(date);
+          return requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:redactPublicData(data),error:null}));
+        } catch(failure) {
+          return res.set('Cache-Control','private, no-store').status(503).json({error:'DELIVERY_STATUS_UNAVAILABLE',
+            sourceCode:/^DELIVERY_SOURCE_[A-Z_]+$/.test(failure.code||'') ? failure.code : 'DELIVERY_SOURCE_READ_UNAVAILABLE'});
+        }
       });
       router.get('/vehicle-data.js',requireStaff,async(_req,res)=>{
         try {
