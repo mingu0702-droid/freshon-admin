@@ -25,8 +25,14 @@ export function validateDatedPrintResponse(payload,date){
 const addressKey=row=>text(row?.address||row?.customerAddress).normalize('NFKC').replace(/\s+/g,' ');
 const hash=row=>text(row?.currentAddressHash||row?.originalAddressHash||row?.addressHash);
 const conflictingPoint=row=>{const bound=row?.coordinateAddressHash||row?.manualPinAddressHash||row?.originalAddressHash;return row?.addressChanged===true||row?.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'||row?.coordinateStatus==='CONFLICT'||Boolean(row?.currentAddressHash&&bound&&row.currentAddressHash!==bound);};
-const savedPoint=row=>safePoint(row)&&!conflictingPoint(row)&&row.coordinateStatus!=='APPROXIMATE'&&['MANUAL_PIN','RAW_GPS','DELIVERY_RECORDED','VERIFIED_STORE_POINT'].includes(row.coordinateSource)&&
- (row.coordinateSource==='MANUAL_PIN'?row.resolutionStatus==='MANUAL_CONFIRMED':/^[a-f0-9]{64}$/.test(hash(row))||row.coordinateStatus==='CONFIRMED');
+function buildingPoint(row){
+ const binding=hash(row);
+ return row.coordinateSource==='BUILDING_VERIFIED'&&row.coordinateEvidence==='BUILDING_LOCATION'&&row.coordinateAccuracy==='BUILDING'&&
+  /^[a-f0-9]{64}$/.test(binding)&&[row.currentAddressHash,row.originalAddressHash,row.coordinateAddressHash,row.addressHash].filter(Boolean).every(value=>value===binding);
+}
+const savedPoint=row=>safePoint(row)&&!conflictingPoint(row)&&row.coordinateStatus!=='APPROXIMATE'&&(buildingPoint(row)||
+ ['MANUAL_PIN','RAW_GPS','DELIVERY_RECORDED','VERIFIED_STORE_POINT'].includes(row.coordinateSource)&&
+ (row.coordinateSource==='MANUAL_PIN'?row.resolutionStatus==='MANUAL_CONFIRMED':/^[a-f0-9]{64}$/.test(hash(row))||row.coordinateStatus==='CONFIRMED'));
 
 export function mergeDatedPrintCoordinates(rows,snapshotRows){
  const known=new Map();
@@ -43,7 +49,8 @@ export function mergeDatedPrintCoordinates(rows,snapshotRows){
   const projection={...row,customerName:row.customerName||current.customerName,address:row.address||row.customerAddress||current.address||current.customerAddress};
   if(changed||conflictingPoint(current)||conflictingPoint(row))return {...projection,coordinateStatus:'CONFLICT'};
   if(row.lat==null&&row.lng==null&&addressMatched&&row.coordinateStatus!=='UNVERIFIED'&&savedPoint(current))
-   return {...projection,lat:current.lat,lng:current.lng,coordinateStatus:'CONFIRMED'};
+   return {...projection,lat:current.lat,lng:current.lng,coordinateStatus:'CONFIRMED',
+    coordinateSource:current.coordinateSource,coordinateAccuracy:current.coordinateAccuracy,coordinateEvidence:current.coordinateEvidence};
   return projection;
  });
 }

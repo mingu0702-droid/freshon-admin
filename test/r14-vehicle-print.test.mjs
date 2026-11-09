@@ -53,3 +53,16 @@ test('dated print fills only missing points tied to the same customer address an
  assert.ok(model.stores.slice(1,6).every(row=>row.lat===null));
  assert.equal(rows[0].lat,null);
 });
+
+test('dated print projects official building evidence only for the same bound address',()=>{
+ const address='경기도 오산시 검증로 10', originalAddressHash='b'.repeat(64);
+ const row={customerCode:'S100',customerName:'검증점',address,originalAddressHash,lat:null,lng:null};
+ const saved={...row,lat:37.1,lng:127.1,coordinateStatus:'CONFIRMED',coordinateSource:'BUILDING_VERIFIED',
+  coordinateAccuracy:'BUILDING',coordinateEvidence:'BUILDING_LOCATION'};
+ assert.deepEqual(mergeDatedPrintCoordinates([row],[saved])[0],saved);
+ const invalid=[{coordinateEvidence:'DELIVERY_COMPLETION_GPS'},{coordinateAccuracy:'UNVERIFIED'},
+  {originalAddressHash:undefined},{addressHash:'a'.repeat(64)},{coordinateSource:'KAKAO_ADDRESS_LIVE'}];
+ for(const change of invalid)assert.equal(mergeDatedPrintCoordinates([row],[{...saved,...change}])[0].lat,null);
+ const moved={...row,address:'경기도 오산시 검증로 20'};
+ assert.equal(mergeDatedPrintCoordinates([moved],[saved])[0].coordinateStatus,'CONFLICT');
+});

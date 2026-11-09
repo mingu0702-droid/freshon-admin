@@ -274,7 +274,7 @@
     if (currentHash && savedHash && currentHash !== savedHash) return false;
     const sameText = currentAddress && savedAddress && currentAddress.normalize('NFKC').replace(/\s+/g,' ').trim() === savedAddress.normalize('NFKC').replace(/\s+/g,' ').trim();
     if (currentAddress && savedAddress && !sameText) return false;
-    const requiresProof = ['STAGE_REGISTRY_POINT','DELIVERY_COMPLETION_GPS'].includes(saved.coordinateEvidence);
+    const requiresProof = ['STAGE_REGISTRY_POINT','DELIVERY_COMPLETION_GPS','BUILDING_LOCATION'].includes(saved.coordinateEvidence);
     return !requiresProof || Boolean(sameText || currentHash && currentHash === savedHash);
   }
 
@@ -309,7 +309,7 @@
       if(item.periodAggregate?.verified===true)row.periodAggregate=item.periodAggregate;
       if(item.historyCoverage)row.historyCoverage=item.historyCoverage;
       if(item.currentMasterStatus)row.currentMasterStatus=item.currentMasterStatus;
-      for(const key of ['customerOnly','deliveryObserved','currentAddressHash','customerRegistryAddressHash','customerRegistryStatus','customerRegistryUpdatedAt','customerRegistryVersion','customerLifecycle','coordinateSearch','coordinateEvidence','addressChanged','coordinateStatus','resolutionStatus','addressLocationKey'])if(item[key]!==undefined)row[key]=item[key];
+      for(const key of ['customerOnly','deliveryObserved','currentAddressHash','originalAddressHash','customerRegistryAddressHash','customerRegistryStatus','customerRegistryUpdatedAt','customerRegistryVersion','customerLifecycle','coordinateSearch','coordinateEvidence','addressChanged','coordinateStatus','resolutionStatus','addressLocationKey'])if(item[key]!==undefined)row[key]=item[key];
       row.driverKey = item.driverKey || "";
       row.driverIdentity = item.driverIdentity || '';
       row.driverName = item.driverName || "";
@@ -1384,6 +1384,7 @@
     if (numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) return '';
     if (row.coordinateSource === 'MANUAL_PIN') return '사용자 수동 확정 위치 · 원본 주소 보존';
     if (row.coordinateEvidence === 'DELIVERY_COMPLETION_GPS') return '배송 완료 GPS 위치 · 출입구 위치 미검증';
+    if (row.coordinateSource === 'BUILDING_VERIFIED' && row.coordinateEvidence === 'BUILDING_LOCATION') return '공공 데이터로 확인한 건물 위치';
     if (row.coordinateSource === 'VERIFIED_STORE_POINT') return '검증된 저장 위치';
     if (['KAKAO_ADDRESS_LIVE','KAKAO_BUILDING_EXACT_ADDRESS','KAKAO_VERIFIED_BUILDING','KAKAO_ADDRESS_REVALIDATION'].includes(row.coordinateSource)) return '주소 기준 위치';
     if (row.coordinateSource === 'HISTORICAL_GPS_SAME_BUILDING') return '동일 주소의 저장 위치';
