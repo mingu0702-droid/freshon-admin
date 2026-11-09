@@ -1,4 +1,4 @@
-import {createHash, randomBytes} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -180,20 +180,4 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
     }
   });
 
-  router.get('/stage-verification', requireStaff, noStore, (_req,res) => {
-    const nonce = randomBytes(16).toString('base64');
-    res.set('Content-Security-Policy', "default-src 'none'; script-src 'nonce-" + nonce + "'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");
-    res.type('html').send([
-      '<!doctype html><html lang="ko"><meta charset="utf-8"><title>Stage A+B 검증</title>',
-      '<h1>Stage A+B 검증</h1><label for="bundle">임시 검증 자료</label> <input id="bundle" type="file" accept=".gz">',
-      '<button id="load">검증 자료 열기</button><p id="result" role="status"></p><a href="/opsmap/">운영지도 Stage</a>',
-      '<script nonce="' + nonce + '">',
-      "const byId=id=>document.getElementById(id);",
-      "byId('load').onclick=async()=>{const file=byId('bundle').files[0];if(!file)return;byId('load').disabled=true;",
-      "try{const r=await fetch('/opsmap" + STAGE_BUNDLE_ROUTE + "',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/octet-stream','X-Opsmap-Stage-Verification':'1'},body:file});",
-      "const status=await r.json();byId('result').textContent=r.ok&&status.active?'등록 '+status.registered+'곳 · 좌표 '+status.located+'곳 · 위치 확인 필요 '+status.pending+'곳':'검증 자료 연결 실패 (HTTP '+r.status+')';",
-      "}catch{byId('result').textContent='검증 자료 연결 실패';}finally{byId('load').disabled=false;byId('bundle').value='';}};",
-      '</script></html>'
-    ].join(''));
-  });
 }

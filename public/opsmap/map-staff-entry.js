@@ -3,7 +3,7 @@
   const rawFetch = window.fetch.bind(window), ACTIVITY_THROTTLE_MS = 60000;
   const preloadedScripts = new Set();
   let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivityCheck = 0, checking = null, checkingOwner = -1, confirming = null, confirmingOwner = -1, signingOut = null, logoutRequired = false;
-  let recoveryTimer = null;
+  let recoveryTimer = null, stageVerification;
   const requests = new Set(), purges = new Set();
   const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('map-staff-session') : null;
   const entry = document.createElement('section'); entry.id = 'mapStaffEntry';
@@ -30,21 +30,54 @@
       || /^\/api\/(?:fixed-dispatch(?:\/customer-search)?|monthly-dispatch-summary|monthly-dispatch-route|vehicle-driver-master|mobile\/customer-search|daily-route|status|delivery-admin\/status)\/?$/.test(url.pathname)
       || /^\/(?:vehicle-data|new-area-data|admin-features)\.js$/.test(url.pathname);
   }
+  function mountStageVerification(header) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.textContent = 'Stage 검증 자료';
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('aria-labelledby', 'stageVerificationTitle');
+    dialog.innerHTML = '<h2 id="stageVerificationTitle">Stage A+B 검증</h2><label>임시 검증 자료 <input type="file" accept=".gz"></label><p role="status"></p><button type="button" data-load>검증 자료 열기</button> <button type="button" data-close>닫기</button>';
+    const file = dialog.querySelector('input'), result = dialog.querySelector('[role="status"]');
+    const load = dialog.querySelector('[data-load]');
+    dialog.querySelector('[data-close]').onclick = () => dialog.close();
+    button.onclick = () => dialog.showModal();
+    load.onclick = async () => {
+      const bundle = file.files[0];
+      if (!session || !bundle) return;
+      const owner = epoch;
+      load.disabled = true;
+      result.textContent = '자료 확인 중';
+      try {
+        const response = await window.fetch('/api/map-phase2b/private/stage-validation-bundle', {
+          method:'POST', credentials:'same-origin',
+          headers:{'Content-Type':'application/octet-stream','X-Opsmap-Stage-Verification':'1'}, body:bundle
+        });
+        const status = await response.json();
+        if (owner !== epoch) return;
+        result.textContent = response.ok && status.active
+          ? `등록 ${status.registered}곳 · 좌표 ${status.located}곳 · 위치 확인 필요 ${status.pending}곳`
+          : `검증 자료 연결 실패 (HTTP ${response.status})`;
+      } catch {
+        if (owner === epoch) result.textContent = '검증 자료 연결 실패';
+      } finally {
+        load.disabled = false;
+        file.value = '';
+      }
+    };
+    header.append(button);
+    document.body.append(dialog);
+    return {setVisible(visible) {
+      button.hidden = !visible;
+      if (!visible) {dialog.close(); file.value = ''; result.textContent = '';}
+    }};
+  }
   function status() {
     const unknown = document.body.dataset.mapStaffState === 'checking';
     const button = document.querySelector('#staffLogout');
     if (button) { button.textContent = session ? '직원 로그아웃' : unknown ? '연결 재확인' : '직원 로그인'; button.onclick = session ? logout : unknown ? () => void check() : () => account.focus(); }
     const header = document.querySelector('#approvedSiteHeader');
     if (header && location.origin === 'https://freshon-admin-stage-preview-template.onrender.com') {
-      let link = document.querySelector('#mapStageVerification');
-      if (!link && session) {
-        link = document.createElement('a');
-        link.id = 'mapStageVerification';
-        link.href = '/opsmap/stage-verification';
-        link.textContent = 'Stage 검증 자료';
-        header.append(link);
-      }
-      if (link) link.hidden = !session;
+      if (session) stageVerification ??= mountStageVerification(header);
+      stageVerification?.setVisible(Boolean(session));
     }
     let label = document.querySelector('#mapStaffSessionState');
     if (header && !label) { label = document.createElement('span'); label.id = 'mapStaffSessionState'; label.setAttribute('role', 'status'); header.append(label); }
