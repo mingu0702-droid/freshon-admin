@@ -1,12 +1,23 @@
 import crypto from 'node:crypto';
 import {fixedEnvelope,validateFixedEnvelope,fixedTupleData} from './fixedVehicleStore.js';
 
-export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000,readOnly=false}) {
-  let current=null,index=new Map(),loadPending=null,loaded=false,pending=null,error=null,retryAt=0,refreshStartedAt=null,refreshMs=null;
+export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000,readOnly=false,reloadReadOnlyAfterMs=0}) {
+  let current=null,index=new Map(),loadPending=null,loaded=false,loadedAt=0,pending=null,error=null,retryAt=0,refreshStartedAt=null,refreshMs=null;
   function install(envelope){const checked=validateFixedEnvelope(envelope,{materialize:false});current=checked.envelope;index=new Map(checked.envelope.rows.map(r=>[r[0],r]));}
   async function initialize(){
-    if(loaded||now()<retryAt&&(current||error))return;if(loadPending)return loadPending;
-    loadPending=(async()=>{if(store){const saved=await store.load();if(saved)install(saved);}loaded=true;})().finally(()=>{loadPending=null;});
+    const reload=readOnly&&reloadReadOnlyAfterMs>0&&now()-loadedAt>=reloadReadOnlyAfterMs;
+    if(loaded&&!reload||now()<retryAt&&(current||error))return;if(loadPending)return loadPending;
+    loadPending=(async()=>{
+      if(store){
+        const saved=await store.load();
+        if(saved){
+          if(current&&readOnly&&(Date.parse(saved.checkedAt)<Date.parse(current.checkedAt)||
+            saved.checkedAt===current.checkedAt&&saved.version!==current.version))throw Object.assign(Error('FIXED_STORE_SOURCE_REGRESSION'),{code:'FIXED_STORE_SOURCE_REGRESSION'});
+          install(saved);
+        }
+      }
+      loaded=true;loadedAt=now();error=null;retryAt=0;
+    })().finally(()=>{loadPending=null;});
     return loadPending;
   }
   function refresh(){

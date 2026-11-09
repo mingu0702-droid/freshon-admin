@@ -87,7 +87,7 @@ function stageGithub(fetchImpl, {files, branch, writable, allowBlob = false}) {
   };
 }
 
-export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory} = {}) {
+export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory, now = Date.now} = {}) {
   if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
   if (![env.HUB_API_URL,env.OPSMAP_PRIVATE_READER_URL].every(stageHubUrl)) throw new Error('STAGE_READ_SOURCE_CONFIG');
   const stage = {...env, OPSMAP_STAGE_VERIFY_ONLY:'1', MAP_STAFF_ORIGIN:stageOrigin, OPSMAP_MANUAL_PIN_WRITES:'0',
@@ -103,18 +103,32 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const snapshotStore = createProductionSnapshotStore({env:stage,token:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,fetchImpl:snapshotFetch});
   const masterStore = createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_TOKEN:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,GITHUB_CACHE_BRANCH:snapshotBranch,GITHUB_CACHE_DIR:'opsmap-stage'},fetchImpl:snapshotFetch});
   let snapshot = null, snapshotPending = null, snapshotBase = null, joinedSnapshot = null;
+  let nextSnapshotCheck = 0;
   async function readBaseSnapshot() {
-    if (snapshot) return snapshot;
+    if (now() < nextSnapshotCheck) return snapshot;
     snapshotPending ??= Promise.resolve(snapshotStore?.load()).then(value => {
-      if (value) {
+      nextSnapshotCheck = now() + 60_000;
+      if (!value) return snapshot;
+      const previous = snapshot?.preservation;
+      if (previous && (value.revision < previous.revision || value.revision === previous.revision &&
+          value.sha256 !== previous.version || value.latestDate < snapshot.latestDate)) {
+        throw Error('STAGE_SNAPSHOT_SOURCE_REGRESSION');
+      }
+      if (value.sha256 !== previous?.version) {
         snapshot = materializeSnapshot(value);
         snapshotBase = stageSnapshotBaseVehicles(snapshot);
-        const loaded = snapshot;
-        // The map can serve its verified snapshot while the separate proof is read.
-        void snapshotStore.loadSelectedDateCheckpoint(value).then(checkpoint => {
-          if (checkpoint && snapshot === loaded) snapshot = {...loaded, selectedDateCheckpoint:checkpoint};
-        }).catch(() => {});
       }
+      const loaded = snapshot;
+      // A checkpoint can arrive separately for an unchanged projection.
+      void snapshotStore.loadSelectedDateCheckpoint(value).then(checkpoint => {
+        if (checkpoint && snapshot === loaded && loaded.selectedDateCheckpoint?.checkedAt !== checkpoint.checkedAt) {
+          snapshot = {...loaded, selectedDateCheckpoint:checkpoint};
+        }
+      }).catch(() => {});
+      return loaded;
+    }).catch(error => {
+      nextSnapshotCheck = now() + 60_000;
+      if (!snapshot) throw error;
       return snapshot;
     }).finally(() => {snapshotPending = null;});
     return snapshotPending;
@@ -141,7 +155,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return groups.size===1 ? [...groups][0] : null;
   }});
   const photos = createStageOperationalPhotoExtension({env:stage,fetchImpl,defaultDate:today});
-  const fixed = createFixedVehicleCache({readOnly:true,store:stage.OPSMAP_STAGE_FIXED_MASTER_FILE ? createFixedVehicleFileStore({env:stage}) : {
+  const fixed = createFixedVehicleCache({readOnly:true,reloadReadOnlyAfterMs:60_000,now,store:stage.OPSMAP_STAGE_FIXED_MASTER_FILE ? createFixedVehicleFileStore({env:stage}) : {
     async load() {return (await masterStore.read('fixed-vehicle-projection-v1.json')).value;}
   }});
   const base={async get(codes) {
