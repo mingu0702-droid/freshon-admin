@@ -58,7 +58,7 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate,
 // Operational access replaces the old single-record trial allowance. Existing
 // staff/session checks, exact identity checks, stream limits and host checks remain.
 export function createOperationalPhotoExtension({enabled = false, rawRequest,
-  hasMemorySession, prepareSession, prepareHistorySession = false, listDeliveryMetadata, onSourceVerified, imageFetch = globalThis.fetch} = {}) {
+  hasMemorySession, prepareSession, prepareHistorySession = false, prepareMediaSession = false, canPrepareSource, listDeliveryMetadata, onSourceVerified, imageFetch = globalThis.fetch} = {}) {
   const isEnabled = () => typeof enabled === 'function' ? enabled() === true : enabled === true;
   const hasSession = () => isEnabled() && typeof hasMemorySession === 'function' && hasMemorySession() === true;
   const ensureSession = async (identity, {signal} = {}) => {
@@ -78,7 +78,8 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
     if (signal?.aborted) fail('PHOTO_TIMEOUT', 504);
     if (!hasSession()) fail('UPSTREAM_AUTH_REQUIRED', 502);
   };
-  const transport = createDeliveryAdminPhotoTransport({approvedRequest: rawRequest, hasApprovedSession: hasSession, imageFetch});
+  const transport = createDeliveryAdminPhotoTransport({approvedRequest:rawRequest, imageFetch, hasApprovedMediaSession:hasSession,
+    hasApprovedSession:() => hasSession() || (isEnabled() && canPrepareSource?.() === true)});
   const pending = new Map();
   const requestJson = (path, options) => {
     // Share only an active exact-detail read. Delete immediately on settlement;
@@ -102,6 +103,10 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
   });
   const source = {
     ...photoSource,
+    async openMedia(identity, ref, options) {
+      if (prepareMediaSession) await ensureSession(identity, options);
+      return photoSource.openMedia(identity, ref, options);
+    },
     async list(identity, options) {
       const rows = await photoSource.list(identity, options);
       onSourceVerified?.();

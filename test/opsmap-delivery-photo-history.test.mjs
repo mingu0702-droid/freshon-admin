@@ -159,6 +159,13 @@ test('map selection opens photo history independent of the date filter and shows
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
         await page.keyboard.press('Escape');
         assert.equal(await page.getByRole('dialog').isVisible(), false);
+        await records.last().click();
+        await page.getByRole('img', {name:'매장 문 앞 납품 사진 확대 사진'}).waitFor();
+        assert.equal(f.imageReads(), before + 2);
+        await page.keyboard.press('Escape');
+        await records.last().click();
+        await page.getByRole('img', {name:'매장 문 앞 납품 사진 확대 사진'}).waitFor();
+        assert.equal(f.imageReads(), before + 3);
       } finally { await page.close(); }
     }
   } finally { await browser.close(); await f.close(); }

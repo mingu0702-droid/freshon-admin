@@ -32,6 +32,13 @@ test('synthetic Edge: date selection, lazy thumbnails, enlargement/reuse and log
         await page.locator('.deliveryPhotoThumb').first().click();
         await page.locator('.deliveryPhotoStage img').waitFor();
         assert(await page.locator('.deliveryPhotoStage img').evaluate(img=>img.complete&&img.naturalWidth>0));assert.equal(mediaReads-before,6);
+        await page.getByRole('button',{name:'다음 사진'}).click();
+        await page.getByText('2 / 8',{exact:true}).waitFor();
+        await page.locator('.deliveryPhotoStage img').waitFor();
+        await page.getByRole('button',{name:'이전 사진'}).click();
+        await page.getByText('1 / 8',{exact:true}).waitFor();
+        await page.locator('.deliveryPhotoStage img').waitFor();
+        assert.equal(mediaReads-before,6);
         await page.getByRole('button',{name:'확대 사진 닫기'}).click();assert(await page.locator('.deliveryPhotoViewer').isHidden());
         await page.getByRole('button',{name:'사진 더 보기'}).click();
         await page.waitForFunction(()=>document.querySelectorAll('.deliveryPhotoThumb img').length===8);assert.equal(mediaReads-before,8);

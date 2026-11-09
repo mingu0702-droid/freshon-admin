@@ -24,7 +24,7 @@ export function deliveryPhotoUpstreamError(status, stage = 'source-http') {
   if (status === 504) return new DeliveryPhotoError('PHOTO_TIMEOUT', 504, detail);
   return new DeliveryPhotoError('PHOTO_LOOKUP_FAILED', 502, detail);
 }
-async function guarded(promise, signal, onLate) {
+export async function waitForPhotoSignal(promise, signal, onLate) {
   let abort;
   const stopped = new Promise((_, reject) => {
     abort = () => reject(new DeliveryPhotoError('PHOTO_TIMEOUT', 504));
@@ -51,7 +51,7 @@ async function readJson(response, limit, signal) {
   const chunks = []; let size = 0;
   try {
     while (true) {
-      const item = await guarded(reader.read(), signal);
+      const item = await waitForPhotoSignal(reader.read(), signal);
       if (item.done) break;
       size += item.value.byteLength;
       if (size > limit) fail('PHOTO_JSON_TOO_LARGE',413,{stage:'source-size',sourceHttpStatus:safeHttp(response.status)});
@@ -71,16 +71,18 @@ export { readJson as readBoundedPhotoLoginJson };
 // deliveryAdminJson helper: it automatically logs in/relogs in on HTTP 401.
 // No cookies, tokens, passwords, photos, signed URLs or task JSON are retained.
 export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApprovedSession = () => false,
-  imageFetch = globalThis.fetch, allowedImageHosts = DELIVERY_ADMIN_PHOTO_HOSTS,
+  imageFetch = globalThis.fetch, allowedImageHosts = DELIVERY_ADMIN_PHOTO_HOSTS, hasApprovedMediaSession = hasApprovedSession,
   timeoutMs = 8000, maxJsonBytes = 65536 } = {}) {
-  if (typeof hasApprovedSession !== 'function' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000
+  if (typeof hasApprovedSession !== 'function' || typeof hasApprovedMediaSession !== 'function' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000
     || !Number.isInteger(maxJsonBytes) || maxJsonBytes < 1 || maxJsonBytes > 65536
     || !Array.isArray(allowedImageHosts) || allowedImageHosts.some(host => typeof host !== 'string' || !/^[a-z0-9.-]+$/.test(host))) {
     fail('INVALID_PHOTO_TRANSPORT_CONFIG', 503);
   }
   const hosts = new Set(allowedImageHosts);
-  const approved = () => { if (hasApprovedSession() !== true) fail('UPSTREAM_AUTH_REQUIRED',502,{stage:'source-session'}); };
-  async function run(signal, stage, action) {
+  const requireSession = check => { if (check() !== true) fail('UPSTREAM_AUTH_REQUIRED',502,{stage:'source-session'}); };
+  const approved = () => requireSession(hasApprovedSession);
+  const mediaApproved = () => requireSession(hasApprovedMediaSession);
+  async function run(signal, stage, action, check = approved) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
@@ -88,7 +90,7 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
     const timer = setTimeout(abort, timeoutMs); timer.unref?.();
     try {
       if (controller.signal.aborted) fail('PHOTO_TIMEOUT', 504);
-      approved();
+      check();
       return await action(controller.signal);
     } catch (error) {
       if (error instanceof DeliveryPhotoError) throw error;
@@ -102,7 +104,7 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
   async function getJson(path, limit, signal, stage) {
     if (typeof approvedRequest !== 'function') fail('SOURCE_UNAVAILABLE',503,{stage:'source-session'});
     return run(signal, stage, async requestSignal => {
-      const response = await guarded(Promise.resolve().then(() => approvedRequest(path, {
+      const response = await waitForPhotoSignal(Promise.resolve().then(() => approvedRequest(path, {
         method:'GET', signal:requestSignal, redirect:'error', cache:'no-store', maxResponseBytes:limit
       })), requestSignal, response => cancel(response?.body));
       try { approved(); } catch (error) { cancel(response?.body); throw error; }
@@ -140,14 +142,14 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
       if (typeof imageFetch !== 'function') fail('UNVERIFIED', 503);
       return run(signal, 'source-media', async requestSignal => {
         // CDN fetch deliberately has no Delivery Admin Cookie/Authorization.
-        const response = await guarded(Promise.resolve().then(() => imageFetch(url.href, {
+        const response = await waitForPhotoSignal(Promise.resolve().then(() => imageFetch(url.href, {
           method: 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store',
           headers: { Accept: 'image/jpeg,image/png,image/webp,image/gif' }, signal: requestSignal
         })), requestSignal, response => cancel(response?.body));
-        try { approved(); } catch (error) { cancel(response?.body); throw error; }
+        try { mediaApproved(); } catch (error) { cancel(response?.body); throw error; }
         if (response?.redirected) { cancel(response.body); fail('MEDIA_ORIGIN_REJECTED',403,{stage:'source-media',sourceHttpStatus:safeHttp(response.status)}); }
         return response; // The existing router streams and bounds image bytes.
-      });
+      }, mediaApproved);
     }
   };
 }

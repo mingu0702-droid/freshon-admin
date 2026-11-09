@@ -56,8 +56,8 @@
     parent?.append(result); return result;
   }
   function createController({ host, fetcher = window.fetch.bind(window), requestTimeoutMs = 15000 } = {}) {
-    let generation = 0, requestController, timer, deadline = 0, target = null, deliveries = [], selected = null, photoList = [], urls = new Set(), viewerUrl = null, viewerController = null, viewerIndex = -1, focusBeforeViewer = null;
-    const imagePromises = new Map(); // Current view only, keyed by opaque same-origin handle.
+    let generation = 0, requestController, timer, deadline = 0, target = null, deliveries = [], selected = null, photoList = [], viewerController = null, viewerIndex = -1, focusBeforeViewer = null;
+    const images = new Map(); // Active thumbnails and the open viewer only.
     const viewer = node('div', undefined, document.body, 'deliveryPhotoViewer'); viewer.hidden = true;
     viewer.setAttribute('role', 'dialog'); viewer.setAttribute('aria-modal', 'true'); viewer.setAttribute('aria-label', '납품 사진 확대 보기');
     const head = node('header', undefined, viewer), viewerTitle = node('h2', '', head), closeButton = node('button', '닫기', head);
@@ -65,18 +65,26 @@
     const stage = node('div', undefined, viewer, 'deliveryPhotoStage'), foot = node('footer', undefined, viewer);
     const previous = node('button', '이전', foot), count = node('p', '', foot), next = node('button', '다음', foot);
     previous.type = next.type = 'button'; previous.setAttribute('aria-label', '이전 사진'); next.setAttribute('aria-label', '다음 사진');
+    function releaseImage(entry) {
+      entry.controller.abort();
+      if (entry.url) URL.revokeObjectURL(entry.url);
+    }
     function closeViewer() {
       viewerController?.abort(); viewerController = null; viewerIndex = -1;
       stage.replaceChildren(); viewer.hidden = true;
-      viewerUrl = null; // Shared with the active thumbnail until purge().
+      for (const [path, entry] of images) {
+        if (entry.thumbnail) continue;
+        releaseImage(entry);
+        images.delete(path);
+      }
       if (focusBeforeViewer?.isConnected) focusBeforeViewer.focus(); focusBeforeViewer = null;
     }
     function purge() {
       generation++; requestController?.abort(); requestController = null; clearTimeout(timer); closeViewer();
       delete host.dataset.failureCode;
       delete host.dataset.failureStage; delete host.dataset.failureHttp; delete host.dataset.failureSourceHttp;
-      for (const url of urls) URL.revokeObjectURL(url); urls.clear();
-      imagePromises.clear();
+      for (const entry of images.values()) releaseImage(entry);
+      images.clear();
       deliveries = []; selected = null; photoList = []; host.replaceChildren();
     }
     function shell(message, state, action) {
@@ -177,21 +185,25 @@
       const forbidden = error.status === 403, unverified = ['UNVERIFIED', 'SOURCE_UNAVAILABLE', 'NOT_CONFIGURED', 'INVALID_SOURCE_RESPONSE'].includes(error.message) || error.status === 404 || error.status === 422 || error.status === 503;
       shell(forbidden ? '사진 조회 권한이 없습니다.' : unverified ? '사진 미확인 · 배송 사진 원천 또는 연결 상태를 확인해 주세요.' : '사진 조회 실패 · 잠시 후 다시 시도해 주세요.', forbidden ? 'forbidden' : unverified ? 'unverified' : 'error', forbidden ? null : { label: '다시 조회', run: () => current === generation && target && open(target) });
     }
-    async function image(path, signal) {
+    async function image(path, signal, thumbnail = false) {
       if (deadline <= Date.now()) throw Object.assign(Error('AUTH_REQUIRED'), { status: 401 });
-      if (!imagePromises.has(path)) {
-        const id = generation, viewSignal = requestController?.signal;
-        imagePromises.set(path, (async () => {
-          const blob = await request(path, { signal: viewSignal }, async (response, requestSignal) => {
+      let entry = images.get(path);
+      if (!entry) {
+        const id = generation, controller = new AbortController();
+        entry = {controller, thumbnail, url:null};
+        images.set(path, entry);
+        entry.promise = (async () => {
+          const blob = await request(path, { signal: controller.signal }, async (response, requestSignal) => {
             const type = (response.headers.get('content-type') || '').split(';')[0].toLowerCase();
             if (!/^image\/(jpeg|png|webp|gif)$/.test(type)) throw Error('UNVERIFIED');
             return new Blob([await readBody(response, MAX_IMAGE_BYTES, requestSignal)], { type });
           });
-          if (id !== generation || viewSignal?.aborted || deadline <= Date.now()) throw Object.assign(Error('AUTH_REQUIRED'), { status: 401 });
-          const url = URL.createObjectURL(blob); urls.add(url); return url;
-        })());
-      }
-      const url = await imagePromises.get(path);
+          if (id !== generation || controller.signal.aborted || deadline <= Date.now()) throw Object.assign(Error('AUTH_REQUIRED'), { status: 401 });
+          entry.url = URL.createObjectURL(blob);
+          return entry.url;
+        })();
+      } else if (thumbnail) entry.thumbnail = true;
+      const url = await entry.promise;
       if (signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
       if (deadline <= Date.now()) throw Object.assign(Error('AUTH_REQUIRED'), { status: 401 });
       return url;
@@ -213,7 +225,6 @@
       viewerController?.abort(); viewerController = new AbortController(); const controller = viewerController;
       if (viewer.hidden) focusBeforeViewer = document.activeElement;
       viewerIndex = index; stage.replaceChildren(); viewer.hidden = false; closeButton.focus();
-      viewerUrl = null;
       viewerTitle.textContent = photo.kind === HISTORY_KIND
         ? `${photo.date} · 배송 ID ${photo.deliveryId} · 원본 기록 ID ${photo.recordId}`
         : selected.date + ' · ' + title;
@@ -223,7 +234,7 @@
         if (!await authorize(id) || controller.signal.aborted) return;
         const url = await image(photo.url, controller.signal);
         if (!alive(id) || controller.signal.aborted || viewerIndex !== index) return;
-        viewerUrl = url; stage.replaceChildren(); const img = node('img', undefined, stage); img.alt = title + ' 확대 사진'; img.src = url;
+        stage.replaceChildren(); const img = node('img', undefined, stage); img.alt = title + ' 확대 사진'; img.src = url;
         img.onerror = () => { if (viewerIndex === index && alive(id)) { stage.replaceChildren(); node('p', '사진 파일을 열지 못했습니다.', stage, 'deliveryPhotoViewerStatus'); } };
       } catch (error) {
         if (controller.signal.aborted || id !== generation) return;
@@ -235,7 +246,7 @@
     }
     async function loadThumbnail(thumb, photo, title, id) {
       try {
-        const url = await image(photo.thumbnailUrl, requestController.signal);
+        const url = await image(photo.thumbnailUrl, requestController.signal, true);
         if (!alive(id)) return false;
         const img = node('img');
         img.alt = title + ' 썸네일';
