@@ -74,6 +74,13 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
    await assertCurrent();
    const point=index.lookup(query);
    await assertCurrent();
+   if(point?.kind){
+    const {kind,road,lot,points}=point;
+    const documents=points.map(([lat,lng],i)=>({x:String(lng),y:String(lat),address_name:road,
+     ...(kind==='CHOOSE'?{place_name:'공식 위치 후보 '+(i+1)}:{})}));
+    return {ok:true,data:{documents,status:documents.length?'OK':'ZERO_RESULT',resolution:{kind,road,lot},
+     source:'OFFICIAL_PUBLIC_BUILDING',retention:'REQUEST_ONLY',coordinatePersistence:false}};
+   }
    const documents=point?[{x:String(point.lng),y:String(point.lat)}]:[];
    return {ok:true,data:{documents,status:point?'OK':'ZERO_RESULT',
     resolution:{kind:point?'EXACT':'ZERO_RESULT'},source:'OFFICIAL_PUBLIC_BUILDING',retention:'REQUEST_ONLY',coordinatePersistence:false}};

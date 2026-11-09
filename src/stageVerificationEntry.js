@@ -22,6 +22,7 @@ import {mountShadowCoverage} from './shadowCoverage/routes.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
 import {createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
+import {createStageGenerationRestore} from './stageGenerationRestore.js';
 
 const stageOrigin = STAGE_ORIGIN;
 const stageService = STAGE_SERVICE;
@@ -100,8 +101,10 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     OPSMAP_MANUAL_PIN_STORE_FILE:undefined, OPSMAP_MANUAL_PIN_SEARCH_CACHE_FILE:undefined, OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',
     OPSMAP_KAKAO_GEOCODING_ENABLED:stageAddressApproved ? env.OPSMAP_KAKAO_GEOCODING_ENABLED : '0',
     OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:stageAddressApproved ? env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED : '0',
-    OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED:'0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
+    OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED:stageAddressApproved && env.OPSMAP_STAGE_KAKAO_PLACE_APPROVED === '1'
+      ? env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED : '0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
   const validation = createStageAbValidation();
+  const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   const officialIndex = createTemporaryOfficialAddressLookup({sha256:stage.OPSMAP_STAGE_OFFICIAL_ADDRESS_INDEX_SHA256});
   const geocodeBudgetFile = 'geocode-budget-v1.json';
   const geocodeBudget = stageAddressApproved ? createStageGeocodeBudgetStore({repo,token:stage.GITHUB_TOKEN,branch:pinsBranch,
@@ -118,11 +121,15 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const masterStore = createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_TOKEN:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,GITHUB_CACHE_BRANCH:snapshotBranch,GITHUB_CACHE_DIR:'opsmap-stage'},fetchImpl:snapshotFetch});
   let snapshot = null, snapshotPending = null, snapshotBase = null, joinedSnapshot = null;
   let nextSnapshotCheck = 0;
+  let snapshotReadState=snapshotStore?'PENDING':'NOT_CONFIGURED', snapshotVerifiedAt=null;
   async function readBaseSnapshot() {
     if (now() < nextSnapshotCheck) return snapshot;
-    snapshotPending ??= Promise.resolve(snapshotStore?.load()).then(value => {
+    snapshotPending ??= Promise.resolve().then(()=>snapshotStore?.load()).then(value => {
       nextSnapshotCheck = now() + 60_000;
-      if (!value) return snapshot;
+      if (!value) {
+        snapshotReadState=snapshot?'LAST_VERIFIED_RETAINED':snapshotStore?'NOT_AVAILABLE':'NOT_CONFIGURED';
+        return snapshot;
+      }
       const previous = snapshot?.preservation;
       if (previous && (value.revision < previous.revision || value.revision === previous.revision &&
           value.sha256 !== previous.version || value.latestDate < snapshot.latestDate)) {
@@ -132,6 +139,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         snapshot = materializeSnapshot(value);
         snapshotBase = stageSnapshotBaseVehicles(snapshot);
       }
+      snapshotReadState='VERIFIED_STORED_PROJECTION';
+      snapshotVerifiedAt=new Date(now()).toISOString();
       const loaded = snapshot;
       // A checkpoint can arrive separately for an unchanged projection.
       void snapshotStore.loadSelectedDateCheckpoint(value).then(checkpoint => {
@@ -142,6 +151,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       return loaded;
     }).catch(error => {
       nextSnapshotCheck = now() + 60_000;
+      snapshotReadState=snapshot?'LAST_VERIFIED_RETAINED':'UNAVAILABLE';
       if (!snapshot) throw error;
       return snapshot;
     }).finally(() => {snapshotPending = null;});
@@ -158,7 +168,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   }
   const callHub = async (action, params, options) => {
     if (!readActions.has(action)) throw new Error('STAGE_HUB_WRITE_REJECTED');
-    const payload = await readHub(action, params, options);
+    const payload = await readHub(action, params, action==='datedAssignments' ? {...options,
+      useCache:false,privateRead:true,maxResponseBytes:1536*1024,deadline:Math.min(options?.deadline??Infinity,Date.now()+12_000)} : options);
     return deliveryReadActions.has(action) ? validation.joinPayload(payload) : payload;
   };
   const readRecordedRoadRoute = createRecordedRoadRouteReader({callHub,async readVehicleCenter({vehicle}) {
@@ -190,6 +201,12 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       return staffStoreDetail(response?.data,{customerCode:code,date:null});
     }});
   const app = express(), router = express.Router();
+  // Start after listen and reuse the same in-flight, read-only load as user queries.
+  if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
+    const refresh=()=>{if(snapshotStore)void readBaseSnapshot().catch(()=>{});void generationRestore.refresh();};
+    refresh();
+    setInterval(refresh,60_000).unref();
+  });
   const readDatedDelivery = createStageDatedDeliveryReader({env:stage, fetchImpl});
   app.disable('x-powered-by');
   app.get('/api/health',(_req,res)=>res.json({ok:true,scope:'stage',release:/^[a-f0-9]{40}$/.test(stage.RENDER_GIT_COMMIT || '') ? stage.RENDER_GIT_COMMIT : null}));
@@ -220,6 +237,16 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       staffView = requireStaff;
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
         mountStageAbValidation(router,{...binding,validation,readBaseVehicles:codes=>base.get(codes)});
+        router.get('/api/map-phase2b/private/stage-sync-evidence',requireStaff,(_req,res)=>{
+          const generation=validation.active();
+          return res.set('Cache-Control','private, no-store').vary('Cookie').json({
+            automaticSyncVerified:false,
+            snapshot:{state:snapshotReadState,verifiedAt:snapshotVerifiedAt,latestDate:snapshot?.latestDate||null,
+              revision:snapshot?.preservation?.revision||null,selectedDateStorageVerified:snapshot?.selectedDateCheckpoint?.selectedDateStorageVerified===true},
+            coverage:{state:generation?'VERIFIED_STAGE_GENERATION':coverageState,generation:generation?.generation||null,
+              asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status()}
+          });
+        });
         router.post(officialAddressIndexRoute,requireStaff,(req,res,next)=>{
           res.set('Cache-Control','private, no-store').vary('Cookie');
           if (req.get('Origin') !== stageOrigin || req.get('X-Opsmap-Stage-Verification') !== '1') return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});

@@ -45,6 +45,7 @@
         geocoder.addressSearch(query, (rows, status, meta) => {
           const problem=code=>Object.assign(failure(code),{status:meta?.status??meta?.httpStatus,httpStatus:meta?.httpStatus??meta?.status,providerHttp:Number.isInteger(meta?.providerHttp)?meta.providerHttp:null});
           if (status === 'ZERO_RESULT') {
+            if (mode==='official' && meta?.resolution?.kind==='MANUAL') return finish(null,{rows:[],resolution:meta.resolution});
             const reasons={MULTIPLE_CANDIDATES:'GEOCODER_MULTIPLE_CANDIDATES',TRUNCATED:'GEOCODER_RESULT_TRUNCATED',ADDRESS_OR_COORDINATE_MISMATCH:'GEOCODER_ADDRESS_MISMATCH',INVALID_RESPONSE:'GEOCODER_INVALID_RESPONSE'};
             return reasons[meta?.resolution?.kind]?finish(problem(reasons[meta.resolution.kind])):finish(null, Object.defineProperty([], 'zeroResult', { value:true }));
           }

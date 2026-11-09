@@ -48,6 +48,37 @@ export function createOfficialAddressLookup(buffer, {sha256: expected} = {}) {
   }});
 }
 
+// Postal building identifiers were matched offline. A postal address without a
+// verified building position must never be turned into a pin automatically.
+export function createOfficialAddressReview(buffer, {sha256: expected} = {}) {
+  if (!Buffer.isBuffer(buffer) || buffer.length > 256 * 1024 || !digest.test(expected || '') ||
+      sha256(buffer) !== expected) throw Error('OFFICIAL_ADDRESS_REVIEW_DIGEST');
+  const value = JSON.parse(buffer);
+  if (value?.schema !== 'opsmap-official-address-review-v1' || !Array.isArray(value.rows) ||
+      !value.rows.length || value.rows.length > 1000) throw Error('OFFICIAL_ADDRESS_REVIEW_SCHEMA');
+  const rows = new Map();
+  const publicAddress = input => typeof input === 'string' && input.length <= 180 &&
+    !/[\r\n\x00-\x1f]/.test(input) && !!officialAddressKey(input);
+  for (const {key, road, lot, kind, points} of value.rows) {
+    if (!digest.test(key || '') || rows.has(key) || !publicAddress(road) || !publicAddress(lot) ||
+        !Array.isArray(points) || !(kind === 'EXACT' && points.length === 1 ||
+        kind === 'CHOOSE' && points.length >= 2 && points.length <= 12 ||
+        kind === 'MANUAL' && !points.length)) throw Error('OFFICIAL_ADDRESS_REVIEW_ROW');
+    const seen = new Set();
+    for (const point of points) {
+      if (!Array.isArray(point) || point.length !== 2 ||
+          !point.every(Number.isFinite) || point[0] < 33 || point[0] > 39.5 || point[1] < 124 || point[1] > 132 ||
+          seen.has(point.join(','))) throw Error('OFFICIAL_ADDRESS_REVIEW_POINT');
+      seen.add(point.join(','));
+    }
+    rows.set(key, Object.freeze({kind, road, lot, points:points.map(point => Object.freeze([...point]))}));
+  }
+  return Object.freeze({lookup(query) {
+    const key = officialAddressKey(query);
+    return key ? rows.get(sha256(key)) || null : null;
+  }});
+}
+
 export function createTemporaryOfficialAddressLookup({sha256: expected, now = Date.now} = {}) {
   const ttl = 2 * 60 * 60 * 1000;
   let current;

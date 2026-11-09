@@ -112,13 +112,14 @@ export async function callHub(action, params, { useCache = true, privateRead = f
     if(!Number.isSafeInteger(maxResponseBytes)||maxResponseBytes<1||maxResponseBytes>2*1048576)throw new Error('HUB_RESPONSE_LIMIT_INVALID');
     useCache=false;
   }
-  if (!process.env.HUB_API_URL) throw new Error("HUB_API_URL_NOT_CONFIGURED");
+  const endpoint=privateReaderEndpoint(action);
+  if (!endpoint.url) throw new Error("HUB_API_URL_NOT_CONFIGURED");
   const key = `${action}:${stable(params || {})}`;
   if (privateRead || ['customerRegistry','customerDetail','staffCustomerDetail','customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action)) useCache = false;
   const saved = cache.get(key);
   if (useCache && saved && saved.expiresAt > Date.now()) return saved.value;
   if (useCache && inFlight.has(key)) return inFlight.get(key);
-  const request = callHubUncached(action, params, key, privateRead || maxResponseBytes!==undefined || ['customerDetail','staffCustomerDetail','customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action), { deadline, signal, page, maxResponseBytes, addressLocationRead });
+  const request = callHubUncached(action, params, key, privateRead || maxResponseBytes!==undefined || ['customerDetail','staffCustomerDetail','customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action), { deadline, signal, page, maxResponseBytes, addressLocationRead, endpoint });
   if (useCache) inFlight.set(key, request);
   try { return await request; } finally { if (inFlight.get(key) === request) inFlight.delete(key); }
 }
@@ -137,13 +138,14 @@ function retryableHubError(error) {
   return error.failureType === "upstream" && Number(error.upstreamStatus) >= 500;
 }
 
-async function callHubUncached(action, params, key, privateRead = false, { deadline, signal, page, maxResponseBytes, addressLocationRead=false } = {}) {
-  const endpoint=privateReaderEndpoint(action);
-  const entered = circuitEnter(endpoint.isolated&&action==='customerDetail'&&addressLocationRead?'customerDetail:address-location':action);
+async function callHubUncached(action, params, key, privateRead = false, { deadline, signal, page, maxResponseBytes, addressLocationRead=false, endpoint } = {}) {
+  const datedReader=endpoint.isolated&&action==='datedAssignments';
+  const circuitKey=datedReader?'datedAssignments:stage-reader':endpoint.isolated&&action==='customerDetail'&&addressLocationRead?'customerDetail:address-location':action;
+  const entered = circuitEnter(circuitKey);
   const started = Date.now();
   const staffDetail = action === 'staffCustomerDetail';
   const preparedPrivate=['customerRegistry','customerDetailPrepared','customerDetailsStatus','customerDetailsSyncRequest','mapRoadBudgetStatus','mapRoadBudgetReserve'].includes(action);
-  const sourceRead = maxResponseBytes!==undefined || ['periodAssignments','staffDriverHistory','mapCoordinateSupplement'].includes(action);
+  const sourceRead = datedReader || maxResponseBytes!==undefined || ['periodAssignments','staffDriverHistory','mapCoordinateSupplement'].includes(action);
   state.metrics.requests += 1;
   const actionTimeoutMs = {
     customerSearch:15000,
@@ -252,7 +254,10 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
         profile.customerMatch = String(json.data?.customerCode || '').toUpperCase() === String(params.customerCode).toUpperCase();
         throw Object.assign(new Error('HUB_INVALID_DETAIL_CONTRACT'), { upstreamStatus: response.status, failureType: 'contract' });
       }
-      if(endpoint.isolated&&action==='customerRegistry'){
+      if(datedReader){
+        if(json.meta.requestId!==body.requestId||json.meta.contract!=='dated-assignments-v1'||json.meta.date!==params.date||
+            !Array.isArray(json.data))throw Object.assign(new Error('HUB_INVALID_DATED_CONTRACT'),{upstreamStatus:502,failureType:'contract'});
+      }else if(endpoint.isolated&&action==='customerRegistry'){
         if(json.meta.requestId!==body.requestId||json.meta.detailDate!==null)throw Object.assign(new Error('HUB_INVALID_REGISTRY_CONTRACT'),{upstreamStatus:502,failureType:'contract'});
         try{validateCustomerRegistryPage(json.data,{cursor:params.cursor||null,afterVersion:params.afterVersion||null});}catch(_){throw Object.assign(new Error('HUB_INVALID_REGISTRY_CONTRACT'),{upstreamStatus:502,failureType:'contract'});}
       }else if(endpoint.isolated&&action==='customerSearch'){

@@ -9,7 +9,7 @@ import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {createFixedCoordinateResolver, hasFixedCoordinatePoint, readFixedCoordinateLedger} from './fixedStoreCoordinates.js';
 import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
 import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
-import {createOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
+import {createOfficialAddressLookup,createOfficialAddressReview} from './opsmapOfficialAddressLookup.js';
 import {readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
 
 export const STAGE_ORIGIN = 'https://freshon-admin-stage-preview-template.onrender.com';
@@ -47,13 +47,20 @@ const bundles = new Map([
     generation:'506774f9e38c2c4cc7b900c53f32d8c31c4623e45cc1ef5d9350254a6bf20ed6',
     ledger:'8065d5fdea2653d542730e95acc669ab578356680bfb74857c7504180aed60ca',
     nearby:'cb2d51833b478ab589843d09a868eeab5379ac8643de1d65b1561cb98941ba60'
+  }],
+  ['7ddddb915546fbcf0b462c242fac318d454e0569583b0d45d155c2b62bc83f76',{
+    ...currentProfile, version:7, official:395,
+    generation:'f15280152af5363bddeee7752c48f053da348fd1d2101999a18d40e23f91ecba',
+    ledger:'6cf537e3444fd6a790e3582c554075ff556a9c33492ea2a97dccd59602d8ee85',
+    nearby:'6d9c2caa87bbf93e9f3301b96a20f9173155948db69b45063b360e9192bbabe0',
+    addressReview:'1668c2d407eb93f295bd08276af2c5ede9b3e0bd58580f1fcd01273e65edb5b7'
   }]
 ]);
 const INDEX = 'coverage-index.json';
 const LEDGER = 'fixed-store-coordinates-v1.json';
 const DELIVERY_ARCHIVE = 'verified-delivery-observations-v1.json';
 const DECOMPRESS = promisify(gunzip);
-const MAX_COMPRESSED = 1024 * 1024;
+export const MAX_STAGE_BUNDLE_BYTES = 1088 * 1024;
 const TTL = 2 * 60 * 60 * 1000;
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const rowCode = row => row?.customerCode || row?.code;
@@ -133,13 +140,13 @@ function joinMissing(registry, rows) {
 }
 
 export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = {}) {
-  let current, installation;
+  let temporary, durable, installation;
 
   function active() {
-    return current && current.expiresAt > now() ? current : null;
+    return temporary?.expiresAt > now() && (!durable || temporary.version>durable.version) ? temporary : durable || null;
   }
 
-  async function load(bytes, expected) {
+  async function load(bytes, expected, durableRead) {
     const bundle = JSON.parse(await DECOMPRESS(bytes, {maxOutputLength:5 * 1024 * 1024}));
     const indexBytes = Buffer.from(bundle[INDEX], 'base64');
     const index = parseCoverageIndex(indexBytes);
@@ -154,13 +161,15 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     }
     const bundledAddress = expected.addressIndex ? createOfficialAddressLookup(
       Buffer.from(bundle['opsmap-official-address-index-v1.json'], 'base64'), {sha256:expected.addressIndex}) : null;
+    const addressReview = expected.addressReview ? createOfficialAddressReview(
+      Buffer.from(bundle['opsmap-official-address-review-v1.json'], 'base64'), {sha256:expected.addressReview}) : null;
     const archived = expected.archive
       ? readStageArchivedDelivery(Buffer.from(bundle[expected.addressIndex ? 'opsmap-stage-dated-delivery-v1.json' : DELIVERY_ARCHIVE], 'base64'), expected.archive) : null;
     const {registry, counts} = registryFromCatalog(JSON.parse(files.get(index.catalog.sha256 + '.json')), ledger, expected.official);
     const nearby = expected.nearby ? readStageNearbyEvidence(Buffer.from(bundle['opsmap-stage-nearby-v1.json'], 'base64'), {
       expected:expected.nearby, generation:index.sha256, registry, window:JSON.parse(files.get(index.windows[90].sha256 + '.json'))
     }) : null;
-    if (Object.keys(bundle).length !== files.size + 1 + Number(!!archived) + Number(!!bundledAddress) + Number(!!nearby)) {
+    if (Object.keys(bundle).length !== files.size + 1 + Number(!!archived) + Number(!!bundledAddress) + Number(!!addressReview) + Number(!!nearby)) {
       throw Error('STAGE_BUNDLE_SCOPE');
     }
     const directory = await mkdtemp(path.join(tempRoot, 'opsmap-ab-stage-'));
@@ -169,19 +178,28 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
       const appliedAt = now();
       const evidence = {
         coordinateAppliedAt:new Date(appliedAt).toISOString(),
-        coordinateScope:'STAGE_TEMPORARY',
+        coordinateScope:durableRead?'STAGE_APPROVED_READ_ONLY_FILE':'STAGE_TEMPORARY',
         pendingCoordinates:counts.pending,
         coverageGeneratedAt:index.generatedAt,
         coverageSourceObservedAt:index.sourceObservedAt,
         coverageAsOf:index.asOf
       };
       const result = {directory, registry, counts, resolver:createFixedCoordinateResolver(ledger), asOf:index.asOf,
-        generation:index.sha256, version:expected.version, archived, bundledAddress, nearby, evidence, expiresAt:appliedAt + TTL};
-      current = result;
-      setTimeout(() => {
-        if (current === result) current = null;
-        void rm(directory, {recursive:true, force:true}).catch(() => {});
-      }, TTL).unref();
+        generation:index.sha256, version:expected.version, archived, nearby, evidence, expiresAt:durableRead?Infinity:appliedAt + TTL,
+        bundledAddress:addressReview ? {lookup:query => bundledAddress?.lookup(query) || addressReview.lookup(query)} : bundledAddress};
+      if (!durableRead) {
+        temporary=result;
+        setTimeout(() => {
+          if (temporary === result) temporary = null;
+          void rm(directory, {recursive:true, force:true}).catch(() => {});
+        }, TTL).unref();
+      } else {
+        const previous=durable;
+        durable=result;
+        if (previous) setTimeout(() => {
+          void rm(previous.directory, {recursive:true, force:true}).catch(() => {});
+        },30_000).unref();
+      }
       return result;
     } catch (error) {
       await rm(directory, {recursive:true, force:true}).catch(() => {});
@@ -189,17 +207,17 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     }
   }
 
-  async function activate(bytes) {
-    const expected = Buffer.isBuffer(bytes) && bytes.length <= MAX_COMPRESSED && bundles.get(sha256(bytes));
+  async function activate(bytes, {durableRead=false} = {}) {
+    const expected = Buffer.isBuffer(bytes) && bytes.length <= MAX_STAGE_BUNDLE_BYTES && bundles.get(sha256(bytes));
     if (!expected) throw Error('STAGE_BUNDLE_DIGEST');
     if (installation) {
-      if (installation.expected !== expected) throw Error('STAGE_BUNDLE_LOADING');
+      if (installation.expected !== expected || installation.durableRead!==durableRead) throw Error('STAGE_BUNDLE_LOADING');
       return installation.promise;
     }
-    const prepared = active();
+    const prepared = durableRead ? durable : active();
     if (prepared?.version > expected.version) throw Error('STAGE_BUNDLE_REGRESSION');
-    if (prepared?.version === expected.version) return prepared;
-    installation = {expected, promise:load(bytes, expected).finally(() => {installation = null;})};
+    if (prepared?.version === expected.version && (!durableRead || prepared.expiresAt===Infinity)) return prepared;
+    installation = {expected,durableRead,promise:load(bytes, expected,durableRead).finally(() => {installation = null;})};
     return installation.promise;
   }
 
@@ -232,7 +250,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
 
 function publicStatus(prepared) {
   return prepared ? {active:true, generation:prepared.generation, ...prepared.counts,
-    expiresAt:new Date(prepared.expiresAt).toISOString()} : {active:false};
+    expiresAt:Number.isFinite(prepared.expiresAt)?new Date(prepared.expiresAt).toISOString():null} : {active:false};
 }
 
 export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles}) {
@@ -241,6 +259,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
   router.get(STAGE_NEARBY_ROUTE, requireStaff, noStore, async (req, res) => {
     const prepared = validation.active();
     if (!prepared?.nearby) return res.status(503).json({error:'STAGE_NEARBY_NOT_READY'});
+    if (req.query.generation && req.query.generation!==prepared.generation) return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
     const codes = [...prepared.registry.values()].filter(store => store.hasPoint).map(store => store.code);
     const fixed = await readBaseVehicles?.(codes).catch(() => null);
     return requireStaff(req, res, () => {
@@ -251,7 +270,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
   router.post(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (req,res,next) => {
     if (req.get('Origin') !== STAGE_ORIGIN || req.get('X-Opsmap-Stage-Verification') !== '1') return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});
     next();
-  }, express.raw({type:'application/octet-stream',limit:MAX_COMPRESSED,inflate:false}), async (req,res) => {
+  }, express.raw({type:'application/octet-stream',limit:MAX_STAGE_BUNDLE_BYTES,inflate:false}), async (req,res) => {
     try {
       if (!isSessionCurrent(req,res.locals.staffSession?.key)) return res.sendStatus(401);
       const prepared = await validation.activate(req.body);
