@@ -503,7 +503,7 @@
       const response = stored?{meta:{complete:true,date:reviewDate||status.completedThrough}}:await fetchJson("/api/map-phase2b/preview/assignments?date=latest", { channel: "latest-route-date", ttl: 0, timeout: 120000 });
       if (id !== dateRequestId || state.mode !== "DATE_ROUTE") return;
       const date = response.meta?.date;
-      if (response.meta?.complete !== true || !/^\d{4}-\d{2}-\d{2}$/.test(date || "")) throw new Error("운행일 확인 실패");
+      if (!usableDatedAssignments(response.meta) || !/^\d{4}-\d{2}-\d{2}$/.test(date || "")) throw new Error("운행일 확인 실패");
       await changeSelectedDate(date);
     } catch (error) { if (id === dateRequestId && !isSilentRequestError(error)) {dateReady=false;datedSourceDate='';state.currentRows=[];clearMap();renderRunList();$("#freshnessState").textContent = "운행일을 불러오지 못했습니다. 날짜를 선택해 다시 조회해 주세요.";} }
   }
@@ -671,6 +671,8 @@
     })();return baseVehicleRequest;
   }
 
+  const archivedDatedAssignments = meta => meta?.reviewOnly === true && meta.source === 'STAGE_VERIFIED_DELIVERY_ARCHIVE';
+  const usableDatedAssignments = meta => meta?.complete === true || archivedDatedAssignments(meta);
   async function changeSelectedDate(date,queryConditions=null,{skipOperationStatus=false}={}) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date+'T00:00:00Z')) || new Date(date+'T00:00:00Z').toISOString().slice(0,10)!==date || date > localDate()) return;
     const contextChanged=state.mode!=='DATE_ROUTE'||date!==state.selectedDate;
@@ -713,7 +715,7 @@
       if(token!==dateRequestId)return;
       const response = await adapter?.readDate(date) || await fetchJson(`/api/map-phase2b/preview/assignments?date=${date}`, { channel: "selected-date", ttl: 60000, timeout: 120000 });
       if(token!==dateRequestId||state.mode!=='DATE_ROUTE'||state.selectedDate!==date)return;
-      if (response.meta?.complete !== true || response.meta.date !== date) throw new Error("날짜별 편성 검증 실패");
+      if (!usableDatedAssignments(response.meta) || response.meta.date !== date) throw new Error("날짜별 편성 검증 실패");
       let rows = response.data || [];
       if(!Array.isArray(rows)||rows.some(row=>!row||row.deliveryDate&&row.deliveryDate!==date))throw new Error('배송일이 일치하지 않습니다.');
       if (date === localDate() && response.meta.reviewOnly!==true && window.MAP_ROLLING_DATE_INDEX_ENABLED!==true) {
@@ -1606,26 +1608,28 @@
     if ($("#runListTitle")) $("#runListTitle").textContent = selectedVehicle ? `${selectedVehicle}호 운행 목록` : "운행 목록";
     if ($("#selectedVehicleBadge")) $("#selectedVehicleBadge").textContent = selectedVehicle ? `선택 호차: ${selectedVehicle}호` : "호차 선택";
     if ($("#runListTool")) $("#runListTool").hidden = state.mode!=='DATE_ROUTE';
-    const shown = operationStops.filter((row) => runFilter === "ALL" || row.status === runFilter);
-    $("#runListCount").textContent = operationStops.length ? `${shown.length}/${operationStops.length}착` : isDailyDataReady()?'0착':'조회 대기';
+    const archived = archivedDatedAssignments(dailyMeta);
+    const list = archived ? filteredDateStores(allStores) : operationStops;
+    const shown = list.filter((row) => runFilter === "ALL" || row.status === runFilter);
+    $("#runListCount").textContent = archived ? `보존 완료 기록 ${shown.length}곳 · 전체 배차 미확인` : list.length ? `${shown.length}/${list.length}착` : isDailyDataReady()?'0착':'조회 대기';
     $("#runList").innerHTML = shown.length ? shown.map((row) => {
-      const next = operationStops[operationStops.indexOf(row) + 1];
+      const next = archived ? null : list[list.indexOf(row) + 1];
       const distance = next ? distanceKm(row, next) : Infinity;
       const selected = state.selected?.customerCode === row.customerCode && state.selected?.vehicle === row.vehicle;
       return `<button class="runStop${selected ? " selected" : ""}" data-run-code="${esc(row.customerCode)}" data-run-vehicle="${esc(row.vehicle)}" aria-pressed="${selected}"><span class="runOrder">${esc(row.order || "-")}</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName || "점포명 미확인")}</div><span class="runMeta"><span class="statusChip ${row.status === "COMPLETED" ? "done" : ""}">${row.status === "COMPLETED" ? "완료" : row.status === "PENDING" ? "미완료" : "상태 미확인"}</span><span>${esc(formatTime(row.actualCompletedAt || row.deliveryCompletedAt) || "-")}</span><span class="runDistance">${row.lat == null || row.lng == null ? "좌표 미확인" : Number.isFinite(distance) ? "다음 직선 " + formatDistance(distance) : "-"}</span></span></span></button>`;
     }).join("") : !isDailyDataReady()?"날짜를 선택해 배송지를 조회해 주세요.":"선택한 조건의 배송지가 없습니다.";
     // Historical Hub route totals exclude unlocated rows. Keep those source
     // assignments in a clearly separate list without inventing route order/status.
-    const extraStops = isDailyDataReady()&&selectedVehicle ? filteredDateStores(allStores).filter(row => row.vehicle === selectedVehicle && (row.lat == null || row.lng == null) && !operationStops.some(stop => stop.customerCode === row.customerCode)) : [];
+    const extraStops = !archived&&isDailyDataReady()&&selectedVehicle ? filteredDateStores(allStores).filter(row => row.vehicle === selectedVehicle && (row.lat == null || row.lng == null) && !operationStops.some(stop => stop.customerCode === row.customerCode)) : [];
     if (extraStops.length) {
       $("#runListCount").textContent += ` · 좌표 미확인 ${extraStops.length}`;
       $("#runList").innerHTML += `<div class="unlocatedHeading">좌표 미확인 착지 ${extraStops.length} · 운행집계 제외</div>` + extraStops.map(row => `<button class="unlocatedStop${state.selected?.customerCode === row.customerCode ? " selected" : ""}" data-run-code="${esc(row.customerCode)}" data-run-vehicle="${esc(row.vehicle)}"><span class="runOrder">—</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName)}</div><span class="coordinateWarning">좌표 미확인 · 상태 미확인</span></span></button>`).join("");
     }
     $$('[data-run-code]').forEach((button) => button.onclick = () => {
-      const row = [...operationStops, ...extraStops].find(stop => stop.customerCode === button.dataset.runCode && stop.vehicle === button.dataset.runVehicle);
+      const row = [...list, ...extraStops].find(stop => stop.customerCode === button.dataset.runCode && stop.vehicle === button.dataset.runVehicle);
       if (!row) return;
       state.fitRequested = false;
-      renderStops(state.routeRows, { numbered: true }); drawRoute(state.routeRows);
+      if(!archived){renderStops(state.routeRows, { numbered: true }); drawRoute(state.routeRows);}
       selectStore(row, null, true);
     });
     $$('[data-run-filter]').forEach((button) => { button.classList.toggle("active", button.dataset.runFilter === runFilter); button.setAttribute("aria-pressed", String(button.dataset.runFilter === runFilter)); });
@@ -2285,6 +2289,7 @@
 
   async function loadRoute(source) {
     if (!dateReady) return;
+    if (archivedDatedAssignments(dailyMeta)) { setRouteLoading(source,'보존 완료 기록 · 운행 순서 미확인'); return; }
     cancelManualRoadRoute();
     if(hasDatedDriverFilter()){await loadBaseMap();await loadOperationStatus('',false);return;}
     const date = state.selectedDate;

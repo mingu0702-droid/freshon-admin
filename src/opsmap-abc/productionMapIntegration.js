@@ -47,7 +47,7 @@ export function mountProductionMapApi(app,{
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
   publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement,sharedBaseCache,
   hybridEnabled=()=>process.env.MAP_HYBRID_90DAY_ENABLED==='true',hybridReadIndexedDay,hybridUiReadiness,hybridReadDateCatalog,hybridReadDatePage,hybridReadVerifiedDayText,hybridStoredIoEnabled=false,hubPublicationCutover=null,
-  mountPrivateExtensions,getShadowCoverageState,getLocalDataEvidence,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,readObservedStoreAddress,readApprovedCoordinateSearch
+  mountPrivateExtensions,getShadowCoverageState,getLocalDataEvidence,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,readObservedStoreAddress,readApprovedCoordinateSearch,readArchivedAssignments
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
@@ -332,7 +332,10 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
     res.setHeader("X-Phase2B-Cache", loaded.cache);
     return res.json(loaded.value);
   } catch (error) {
-    return res.status(502).json({ ok: false, data: null, error: error.message });
+    const archive=readArchivedAssignments?.(date);
+    if(archive)return requireView(req,res,()=>res.set('Cache-Control','private, no-store').json(archive));
+    const failure=mapReadFailure(error,'DELIVERY');
+    return res.status(failure.status).json({ ok: false, data: null, error: failure.code });
   }
 });
 
