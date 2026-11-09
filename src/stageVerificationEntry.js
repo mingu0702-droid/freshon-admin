@@ -18,6 +18,7 @@ import {phase2bSnapshotMeta} from './phase2bOperations.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
+import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
 
 const stageOrigin = STAGE_ORIGIN;
@@ -94,6 +95,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     OPSMAP_MANUAL_PIN_STORE_FILE:undefined, OPSMAP_MANUAL_PIN_SEARCH_CACHE_FILE:undefined, OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',
     OPSMAP_KAKAO_GEOCODING_ENABLED:'0', OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:'0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
   const validation = createStageAbValidation();
+  const addressLookupService = createKakaoCoordinateConnection({env:stage,independentAddressLookup:()=>validation.active()?.addressLookup});
+  const readArchivedAssignments = date => {
+    const active = validation.active();
+    return active?.readArchivedDelivery?.(date, active.registry) || null;
+  };
   let coverageState = 'restoring';
   const baseDirectory = Promise.resolve().then(() => readShadowDirectory ? readShadowDirectory() : stage.OPSMAP_SHADOW_DATA_DIR)
     .catch(() => null).then(directory => {coverageState = directory ? 'ready' : 'unavailable'; return directory;});
@@ -181,7 +187,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     getSnapshotMemory:()=>validation.active() ? joinedSnapshot?.snapshot || snapshot : snapshot,
     phase2bKstDate:today,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:deliveryUnavailable,
     callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
-    sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget:null,readRecordedRoadRoute,
+    sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget:null,readRecordedRoadRoute,addressLookupService,readArchivedAssignments,
     getShadowCoverageState:()=>validation.active() ? 'ready' : coverageState,
     getLocalDataEvidence:()=>validation.active()?.evidence || null,
     mountPrivateExtensions:binding=>{

@@ -314,8 +314,10 @@
       row.driverIdentity = item.driverIdentity || '';
       row.driverName = item.driverName || "";
       Object.assign(row, baseVehicles.get(String(row.customerCode)) || {baseVehicle:normalizeVehicle(item.baseVehicle||''),baseVehicleState:item.baseVehicle?'PUBLISHED_ONLY':'UNKNOWN'});
-      window.MapManualPins?.apply(row);
-      liveAddressLocations?.apply(row);
+      if(!archivedDatedAssignments(meta)){
+        window.MapManualPins?.apply(row);
+        liveAddressLocations?.apply(row);
+      }
       row.deliveryCount90d = item.deliveryCount90d ?? item.deliveryCount ?? null;
       next.push(row);
       storeByVehicleAndCode.set(`${row.vehicle}|${row.customerCode}`, row);
@@ -1611,7 +1613,8 @@
     const archived = archivedDatedAssignments(dailyMeta);
     const list = archived ? filteredDateStores(allStores) : operationStops;
     const shown = list.filter((row) => runFilter === "ALL" || row.status === runFilter);
-    $("#runListCount").textContent = archived ? `보존 완료 기록 ${shown.length}곳 · 전체 배차 미확인` : list.length ? `${shown.length}/${list.length}착` : isDailyDataReady()?'0착':'조회 대기';
+    const archiveLabel = dailyMeta?.recordKind === 'CUSTOMER_DAILY_ROUTES' ? '저장 배차' : '보존 완료 기록';
+    $("#runListCount").textContent = archived ? `${archiveLabel} ${shown.length}곳 · 101·122·202호 확인 범위` : list.length ? `${shown.length}/${list.length}착` : isDailyDataReady()?'0착':'조회 대기';
     $("#runList").innerHTML = shown.length ? shown.map((row) => {
       const next = archived ? null : list[list.indexOf(row) + 1];
       const distance = next ? distanceKm(row, next) : Infinity;

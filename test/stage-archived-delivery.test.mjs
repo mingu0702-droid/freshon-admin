@@ -6,14 +6,14 @@ import {readStageArchivedDelivery} from '../src/stageArchivedDelivery.js';
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const address=hash('current source address');
 const observedAt='2026-11-08T14:24:54.423Z';
-const older={date:'2026-08-10',sourceRows:6,visits:[
+const older={date:'2026-08-10',kind:'ARCHIVE_COMPLETED',sourceRows:6,visits:[
   [hash('historical 1'),'S90001','101',address],
   [hash('historical 2'),'S90001','101',hash('other address')],
   [hash('historical 3'),'S90001','122',address],
   [hash('historical 4'),'S90002','202',null]
 ]};
-const recent={date:'2026-11-07',sourceRows:3,visits:[[hash('recent'),'S90001','122',address]]};
-const build=days=>Buffer.from(JSON.stringify({source:'DELIVERY_ARCHIVE_COMPLETION_OBSERVATIONS',observedAt,days}));
+const recent={date:'2026-11-07',kind:'CUSTOMER_DAILY_ROUTES',sourceRows:3,visits:[[hash('recent'),'S90001','122',address]]};
+const build=days=>Buffer.from(JSON.stringify({source:'VERIFIED_DATED_SOURCES',observedAt,days}));
 
 test('archive returns only matching dates and observed vehicles without implying complete or ordered dispatch',()=>{
   const bytes=build([older,recent]), read=readStageArchivedDelivery(bytes,hash(bytes));
@@ -28,6 +28,8 @@ test('archive returns only matching dates and observed vehicles without implying
     ['101',null,null,'COMPLETED'],['122',37,null,'COMPLETED'],['202',null,null,'COMPLETED']
   ]);
   assert.equal(read('latest',stores).meta.date,recent.date);
+  assert.equal(read('latest',stores).data[0].status,'UNCONFIRMED');
+  assert.equal(read('latest',stores).data[0].lat,null);
   assert.equal(read('2026-07-01',stores),null);
 });
 

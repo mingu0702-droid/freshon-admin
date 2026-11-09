@@ -8,14 +8,25 @@ import express from 'express';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {createFixedCoordinateResolver, hasFixedCoordinatePoint, readFixedCoordinateLedger} from './fixedStoreCoordinates.js';
 import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
+import {createOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
+import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
 
 export const STAGE_ORIGIN = 'https://freshon-admin-stage-preview-template.onrender.com';
 export const STAGE_SERVICE = 'srv-da47hugu01pc73etpfa0';
 export const STAGE_BUNDLE_ROUTE = '/api/map-phase2b/private/stage-validation-bundle';
 
-const BUNDLE_SHA256 = 'f990ee60197d15afde6f3a59d65909d0660d87b7ed9a5ac0a4ab3a00f9f27a63';
-const GENERATION = '8e906410020e7abcc765e659d17ff524772eff3dc690e49edc6a7b95d6970f58';
-const LEDGER_SHA256 = '8206b6dc53676970f231b81f41ffd9d9320460e63e5904d8809b7d8f3a246c35';
+const profiles = new Map([
+  ['f990ee60197d15afde6f3a59d65909d0660d87b7ed9a5ac0a4ab3a00f9f27a63',{
+    generation:'8e906410020e7abcc765e659d17ff524772eff3dc690e49edc6a7b95d6970f58',
+    ledger:'8206b6dc53676970f231b81f41ffd9d9320460e63e5904d8809b7d8f3a246c35',located:5035,buildings:0
+  }],
+  ['77c389680516fc9c94e5c4842300a582caac6fc9245b9cd3605101b97c52126b',{
+    generation:'3df93605c76dcb279b405de3ab55171a2278b763ae67ddc5e8cec91891aa5585',
+    ledger:'c930bc96b87ff0c2577167ac2caa44d759414fa7c0817daf0ba162b2799c9fd3',located:5044,buildings:9,
+    addressIndex:'7e0e54434fdbacd591a87ccda45a75e9c089da9bfbfd32f66d59ee718ef29941',
+    deliveryIndex:'826ce89623dd1274827ea886df6b04a213a75374fdacf3d5684077f4fb73ead0'
+  }]
+]);
 const INDEX = 'coverage-index.json';
 const LEDGER = 'fixed-store-coordinates-v1.json';
 const DECOMPRESS = promisify(gunzip);
@@ -31,11 +42,12 @@ const sameAddress = (row, hash) => {
 const reviewedConflict = row => row?.addressChanged === true || row?.coordinateStatus === 'CONFLICT' ||
   row?.resolutionStatus === 'ADDRESS_CHANGED_REVIEW_REQUIRED';
 
-function registryFromCatalog(catalog, ledger) {
+function registryFromCatalog(catalog, ledger, profile) {
   if (!Array.isArray(catalog.stores) || catalog.stores.length !== 6043) throw Error('REGISTRY_SCOPE');
   const registry = new Map();
   let located = 0;
   let gpsCount = 0;
+  let buildings = 0;
   for (const row of catalog.stores) {
     const {code, name, center, lat, lng} = row;
     const addressHash = coordinateAddressHash(row.address);
@@ -43,16 +55,18 @@ function registryFromCatalog(catalog, ledger) {
         typeof name !== 'string' || name.length > 200 || (row.address && !addressHash)) throw Error('REGISTRY_IDENTITY');
     const hasPoint = hasFixedCoordinatePoint(row);
     if (hasPoint && !addressHash || !hasPoint && (lat != null || lng != null)) throw Error('REGISTRY_POINT');
-    const gps = ledger.records[code]?.at(-1)?.point;
-    if (gps) {
-      if (!gps.verifiedAt || gps.measurementKind !== 'DELIVERY_COMPLETION_GPS' || gps.addressHash !== addressHash ||
-          !hasPoint || gps.lat !== lat || gps.lng !== lng) throw Error('REGISTRY_GPS_BINDING');
-      gpsCount++;
+    const point = ledger.records[code]?.at(-1)?.point;
+    if (point) {
+      if (!point.verifiedAt || !['DELIVERY_COMPLETION_GPS','BUILDING_LOCATION'].includes(point.measurementKind) ||
+          point.addressHash !== addressHash || !hasPoint || point.lat !== lat || point.lng !== lng) throw Error('REGISTRY_POINT_BINDING');
+      if (point.measurementKind === 'DELIVERY_COMPLETION_GPS') gpsCount++;
+      else buildings++;
     }
     if (hasPoint) located++;
-    registry.set(code, {code, name, center, address:row.address || '', addressHash, lat, lng, hasPoint, gps});
+    registry.set(code, {code, name, center, address:row.address || '', addressHash, matchHash:row.matchHash || null, lat, lng, hasPoint, point});
   }
-  if (located !== 5035 || gpsCount !== 298 || Object.keys(ledger.records).length !== gpsCount) throw Error('REGISTRY_COUNTS');
+  if (located !== profile.located || gpsCount !== 298 || buildings !== profile.buildings ||
+      Object.keys(ledger.records).length !== gpsCount + buildings) throw Error('REGISTRY_COUNTS');
   return registry;
 }
 
@@ -61,10 +75,10 @@ function mappedPoint(store, existing) {
     existing.lat === store.lat && existing.lng === store.lng;
   return {
     lat:store.lat, lng:store.lng, coordinateStatus:'CONFIRMED',
-    coordinateSource:store.gps?.coordinateSource || (sameManual ? 'MANUAL_PIN' : 'VERIFIED_STORE_POINT'),
-    coordinateAccuracy:store.gps?.coordinateAccuracy || (sameManual ? 'MANUAL' : 'UNVERIFIED'),
+    coordinateSource:store.point?.coordinateSource || (sameManual ? 'MANUAL_PIN' : 'VERIFIED_STORE_POINT'),
+    coordinateAccuracy:store.point?.coordinateAccuracy || (sameManual ? 'MANUAL' : 'UNVERIFIED'),
     originalAddressHash:store.addressHash,
-    coordinateEvidence:store.gps ? 'DELIVERY_COMPLETION_GPS' : 'STAGE_REGISTRY_POINT'
+    coordinateEvidence:store.point?.measurementKind || 'STAGE_REGISTRY_POINT'
   };
 }
 
@@ -87,7 +101,7 @@ function projectedRegistry(registry, rows) {
 function joinMissing(registry, rows) {
   return rows.map(row => {
     const store = registry.get(rowCode(row));
-    if (!store?.hasPoint || store.gps || rowCode(row) === 'S191541' || reviewedConflict(row) ||
+    if (!store?.hasPoint || store.point || rowCode(row) === 'S191541' || reviewedConflict(row) ||
         hasFixedCoordinatePoint(row) || row.coordinateSource === 'MANUAL_PIN' || !sameAddress(row, store.addressHash)) return row;
     return {...row, ...mappedPoint(store, row)};
   });
@@ -100,12 +114,12 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     return current && current.expiresAt > now() ? current : null;
   }
 
-  async function load(bytes) {
+  async function load(bytes, profile, digest) {
     const bundle = JSON.parse(await DECOMPRESS(bytes, {maxOutputLength:5 * 1024 * 1024}));
     const indexBytes = Buffer.from(bundle[INDEX], 'base64');
     const index = parseCoverageIndex(indexBytes);
-    const ledger = readFixedCoordinateLedger(Buffer.from(bundle[LEDGER], 'base64'), LEDGER_SHA256);
-    if (index.sha256 !== GENERATION) throw Error('STAGE_GENERATION');
+    const ledger = readFixedCoordinateLedger(Buffer.from(bundle[LEDGER], 'base64'), profile.ledger);
+    if (index.sha256 !== profile.generation) throw Error('STAGE_GENERATION');
     const files = new Map([[INDEX, indexBytes]]);
     for (const ref of [index.catalog, ...PERIODS.map(days => index.windows[days])]) {
       const name = ref.sha256 + '.json';
@@ -113,8 +127,12 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
       if (data.length !== ref.bytes || sha256(data) !== ref.sha256) throw Error('STAGE_BLOB_INTEGRITY');
       files.set(name, data);
     }
-    if (Object.keys(bundle).length !== files.size + 1) throw Error('STAGE_BUNDLE_SCOPE');
-    const registry = registryFromCatalog(JSON.parse(files.get(index.catalog.sha256 + '.json')), ledger);
+    const addressLookup = profile.addressIndex ? createOfficialAddressLookup(
+      Buffer.from(bundle['opsmap-official-address-index-v1.json'], 'base64'),{sha256:profile.addressIndex}) : null;
+    const readArchivedDelivery = profile.deliveryIndex ? readStageArchivedDelivery(
+      Buffer.from(bundle['opsmap-stage-dated-delivery-v1.json'], 'base64'),profile.deliveryIndex) : null;
+    if (Object.keys(bundle).length !== files.size + 1 + Number(!!addressLookup) + Number(!!readArchivedDelivery)) throw Error('STAGE_BUNDLE_SCOPE');
+    const registry = registryFromCatalog(JSON.parse(files.get(index.catalog.sha256 + '.json')), ledger, profile);
     const directory = await mkdtemp(path.join(tempRoot, 'opsmap-ab-stage-'));
     try {
       for (const [name, data] of files) await writeFile(path.join(directory, name), data, {mode:0o600, flag:'wx'});
@@ -127,7 +145,8 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
         coverageSourceObservedAt:index.sourceObservedAt,
         coverageAsOf:index.asOf
       };
-      const result = {directory, registry, resolver:createFixedCoordinateResolver(ledger), asOf:index.asOf, generation:index.sha256, evidence, expiresAt:appliedAt + TTL};
+      const result = {directory, registry, resolver:createFixedCoordinateResolver(ledger), asOf:index.asOf,
+        generation:index.sha256, digest, profile, evidence, addressLookup, readArchivedDelivery, expiresAt:appliedAt + TTL};
       current = result;
       setTimeout(() => {
         if (current === result) current = null;
@@ -141,8 +160,15 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
   }
 
   async function activate(bytes) {
-    if (!Buffer.isBuffer(bytes) || bytes.length > MAX_COMPRESSED || sha256(bytes) !== BUNDLE_SHA256) throw Error('STAGE_BUNDLE_DIGEST');
-    return active() || (installation ??= load(bytes).finally(() => {installation = null;}));
+    if (!Buffer.isBuffer(bytes) || bytes.length > MAX_COMPRESSED) throw Error('STAGE_BUNDLE_DIGEST');
+    const digest = sha256(bytes), profile = profiles.get(digest);
+    if (!profile) throw Error('STAGE_BUNDLE_DIGEST');
+    const current = active();
+    if (current?.digest === digest) return current;
+    if (current && current.profile.located > profile.located) throw Error('STAGE_BUNDLE_OLDER');
+    if (installation && installation.digest !== digest) throw Error('STAGE_BUNDLE_LOADING');
+    installation ??= {digest, promise:load(bytes,profile,digest).finally(() => {installation = null;})};
+    return installation.promise;
   }
 
   function snapshot(saved) {
@@ -169,8 +195,10 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
 }
 
 function publicStatus(prepared) {
-  return prepared ? {active:true, generation:prepared.generation, registered:6043, located:5035, pending:1008,
-    gpsCompletion:298, expiresAt:new Date(prepared.expiresAt).toISOString()} : {active:false};
+  return prepared ? {active:true, generation:prepared.generation, registered:prepared.registry.size,
+    located:prepared.profile.located, pending:prepared.evidence.pendingCoordinates,
+    gpsCompletion:298,...(prepared.profile.buildings?{buildings:prepared.profile.buildings}:{}),
+    expiresAt:new Date(prepared.expiresAt).toISOString()} : {active:false};
 }
 
 export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation}) {
