@@ -332,7 +332,7 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
     res.setHeader("X-Phase2B-Cache", loaded.cache);
     return res.json(loaded.value);
   } catch (error) {
-    const archive=readArchivedAssignments?.(date);
+    const archive=await Promise.resolve().then(()=>readArchivedAssignments?.(date)).catch(()=>null);
     if(archive)return requireView(req,res,()=>res.set('Cache-Control','private, no-store').json(archive));
     const failure=mapReadFailure(error,'DELIVERY');
     return res.status(failure.status).json({ ok: false, data: null, error: failure.code });

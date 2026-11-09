@@ -23,6 +23,7 @@ import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
 import {createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
 import {createStageGenerationRestore} from './stageGenerationRestore.js';
+import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 
 const stageOrigin = STAGE_ORIGIN;
 const stageService = STAGE_SERVICE;
@@ -92,7 +93,8 @@ function stageGithub(fetchImpl, {files, branch, writable, allowBlob = false}) {
   };
 }
 
-export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory, now = Date.now} = {}) {
+export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory,
+  openScheduledStore = openOpsmapSyncGenerationStore, now = Date.now} = {}) {
   if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
   if (![env.HUB_API_URL,env.OPSMAP_PRIVATE_READER_URL].every(stageHubUrl)) throw new Error('STAGE_READ_SOURCE_CONFIG');
   const stageAddressApproved = env.RENDER_SERVICE_ID === stageService && env.OPSMAP_STAGE_KAKAO_ADDRESS_APPROVED === '1' &&
@@ -105,6 +107,26 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       ? env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED : '0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
   const validation = createStageAbValidation();
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
+  const scheduledEnabled = stage.RENDER_SERVICE_ID===stageService && stage.OPSMAP_STAGE_SYNC_READ_APPROVED==='1';
+  let scheduledStore, scheduledRefresh, scheduledSuccessAt = null;
+  let scheduledState = scheduledEnabled?'PENDING':'NOT_CONFIGURED';
+  async function refreshScheduled() {
+    if (!scheduledEnabled) return;
+    scheduledRefresh ??= (async()=>{
+      scheduledStore ||= await openScheduledStore(stage.OPSMAP_STAGE_SYNC_DIR,{writable:false});
+      const candidate = await scheduledStore.read();
+      if (!candidate) throw Error('OPSMAP_SYNC_NOT_PUBLISHED');
+      if (!validation.followScheduled(candidate,scheduledStore.readDay)) {
+        scheduledState='LAST_VERIFIED_RETAINED';
+        return;
+      }
+      const status = await scheduledStore.readStatus();
+      if (status?.generation===candidate.index.sha256 && Number.isFinite(Date.parse(status.lastSuccessAt))) scheduledSuccessAt=status.lastSuccessAt;
+      scheduledState='VERIFIED_SCHEDULED_PROJECTION';
+    })().catch(()=>{scheduledState=validation.active()?.scheduled?'LAST_VERIFIED_RETAINED':'UNAVAILABLE';})
+      .finally(()=>{scheduledRefresh=null;});
+    return scheduledRefresh;
+  }
   const officialIndex = createTemporaryOfficialAddressLookup({sha256:stage.OPSMAP_STAGE_OFFICIAL_ADDRESS_INDEX_SHA256});
   const geocodeBudgetFile = 'geocode-budget-v1.json';
   const geocodeBudget = stageAddressApproved ? createStageGeocodeBudgetStore({repo,token:stage.GITHUB_TOKEN,branch:pinsBranch,
@@ -158,6 +180,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return snapshotPending;
   }
   async function readSnapshot() {
+    const scheduled = validation.active()?.scheduled;
+    if (scheduled) return scheduled.snapshot;
     const saved = await readBaseSnapshot();
     const bundle = validation.active();
     if (!bundle) {joinedSnapshot = null; return saved;}
@@ -203,7 +227,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const app = express(), router = express.Router();
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
-    const refresh=()=>{if(snapshotStore)void readBaseSnapshot().catch(()=>{});void generationRestore.refresh();};
+    const refresh=()=>{if(snapshotStore)void readBaseSnapshot().catch(()=>{});void generationRestore.refresh();void refreshScheduled();};
     refresh();
     setInterval(refresh,60_000).unref();
   });
@@ -225,7 +249,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   let staffView;
   mountProductionMapApi(router,{
     previewEnabled:()=>true,requireView:(req,res,next)=>staffView(req,res,next),readPhase2bSnapshot:readSnapshot,
-    getSnapshotMemory:()=>validation.active() ? joinedSnapshot?.snapshot || snapshot : snapshot,
+    getSnapshotMemory:()=>validation.active() ? validation.active().scheduled?.snapshot || joinedSnapshot?.snapshot || snapshot : snapshot,
     phase2bKstDate:today,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:readDatedDelivery,
     callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
     sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget:null,readRecordedRoadRoute,addressLookupService,
@@ -244,7 +268,9 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             snapshot:{state:snapshotReadState,verifiedAt:snapshotVerifiedAt,latestDate:snapshot?.latestDate||null,
               revision:snapshot?.preservation?.revision||null,selectedDateStorageVerified:snapshot?.selectedDateCheckpoint?.selectedDateStorageVerified===true},
             coverage:{state:generation?'VERIFIED_STAGE_GENERATION':coverageState,generation:generation?.generation||null,
-              asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status()}
+              asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status()},
+            scheduled:{state:scheduledState,revision:generation?.scheduled?.state.revision||null,
+              publishedAt:generation?.scheduled?.state.committedAt||null,lastSuccessAt:scheduledSuccessAt}
           });
         });
         router.post(officialAddressIndexRoute,requireStaff,(req,res,next)=>{

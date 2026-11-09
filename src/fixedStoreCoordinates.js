@@ -77,6 +77,53 @@ export function readFixedCoordinateLedger(bytes, expectedSha256) {
   return ledger;
 }
 
+export function reviseFixedCoordinateLedger(ledger, {expectedRevision, rows = [], rollbacks = [], updatedAt} = {}) {
+  const current = validateFixedCoordinateLedger(ledger);
+  if (current.revision !== expectedRevision) throw Error('FIXED_COORDINATE_CAS');
+  if (!validTime(updatedAt) || !Array.isArray(rows) || !Array.isArray(rollbacks) ||
+      rows.length + rollbacks.length > 10_000) throw Error('FIXED_COORDINATE_INPUT');
+  const revision = current.revision + 1;
+  const records = {...current.records};
+  const seen = new Set();
+  let changed = false;
+  const register = code => {
+    if (code === 'S191541') throw Error('FIXED_COORDINATE_MANUAL_PROTECTED');
+    if (!CODE.test(code || '') || seen.has(code)) throw Error('FIXED_COORDINATE_DUPLICATE');
+    seen.add(code);
+  };
+  const append = (code,point,rollbackOf) => {
+    records[code] = [...(records[code] || []),{revision,updatedAt,rollbackOf,point}];
+    changed = true;
+  };
+  for (const point of rows) {
+    const code = point?.customerCode;
+    register(code);
+    checkPoint(point,code);
+    if (!point.verifiedAt || Date.parse(point.verifiedAt) > Date.parse(updatedAt)) throw Error('FIXED_COORDINATE_VERIFICATION_REQUIRED');
+    const previous = records[code]?.at(-1)?.point;
+    if (previous) {
+      if (previous.addressHash === point.addressHash && previous.lat === point.lat && previous.lng === point.lng) continue;
+      throw Error('FIXED_COORDINATE_LOCKED');
+    }
+    append(code,point,null);
+  }
+  for (const {customerCode:code, toRevision, currentAddressHash} of rollbacks) {
+    register(code);
+    const history = records[code];
+    const target = toRevision === 0 ? null : history?.find(event => event.revision === toRevision);
+    if (!history || toRevision !== 0 && !target) throw Error('FIXED_COORDINATE_ROLLBACK');
+    const point = target?.point ?? null;
+    const previous = history.at(-1).point;
+    if (!HASH.test(currentAddressHash || '') || (point || previous)?.addressHash !== currentAddressHash) {
+      throw Error('FIXED_COORDINATE_ADDRESS_CHANGED');
+    }
+    if (digest(point) !== digest(previous)) append(code,point,toRevision);
+  }
+  if (!changed) return current;
+  const body = {schema:SCHEMA,revision,records};
+  return validateFixedCoordinateLedger({...body,sha256:digest(body)});
+}
+
 function rowAddressHash(row) {
   const claims = [coordinateAddressHash(row.customerAddress || row.basicAddress || row.address),
     row.currentAddressHash, row.originalAddressHash, row.coordinateAddressHash, row.addressHash].filter(Boolean);

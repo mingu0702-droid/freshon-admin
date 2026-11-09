@@ -12,6 +12,7 @@ import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
 import {createOfficialAddressLookup,createOfficialAddressReview} from './opsmapOfficialAddressLookup.js';
 import {readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
 import {searchPreservedRegistry} from './privateCustomerSearch.js';
+import {archivedOpsmapAssignments} from './opsmapSyncGeneration.js';
 
 export const STAGE_ORIGIN = 'https://freshon-admin-stage-preview-template.onrender.com';
 export const STAGE_SERVICE = 'srv-da47hugu01pc73etpfa0';
@@ -56,6 +57,13 @@ const bundles = new Map([
     ledger:'6cf537e3444fd6a790e3582c554075ff556a9c33492ea2a97dccd59602d8ee85',
     nearby:'6d9c2caa87bbf93e9f3301b96a20f9173155948db69b45063b360e9192bbabe0',
     addressReview:'1668c2d407eb93f295bd08276af2c5ede9b3e0bd58580f1fcd01273e65edb5b7'
+  }],
+  ['1dc652a346539cc8cf265b20ad681e4c0ea01957e6fc1126a11357abc8ee677c',{
+    ...currentProfile, version:8, gps:525, official:395,
+    generation:'86a2aba6595d3abcb9f8a1cd3fa5531296cca3242c187e465d320bf034fc92a9',
+    ledger:'781312bba532851c63343837aaef3fb5f77a38aecdfda2090b48b12334771cfb',
+    nearby:'db3679ce939db0bf742621e6b98158c6db76740c282a53532ef805b6c6d0055f',
+    addressReview:'1668c2d407eb93f295bd08276af2c5ede9b3e0bd58580f1fcd01273e65edb5b7'
   }]
 ]);
 const INDEX = 'coverage-index.json';
@@ -74,7 +82,7 @@ const sameAddress = (row, hash) => {
 const reviewedConflict = row => row?.addressChanged === true || row?.coordinateStatus === 'CONFLICT' ||
   row?.resolutionStatus === 'ADDRESS_CHANGED_REVIEW_REQUIRED';
 
-function registryFromCatalog(catalog, ledger, expectedOfficial) {
+function registryFromCatalog(catalog, ledger, {official:expectedOfficial,gps:expectedGps=298}) {
   if (!Array.isArray(catalog.stores) || catalog.stores.length !== 6043) throw Error('REGISTRY_SCOPE');
   const registry = new Map();
   let located = 0;
@@ -99,7 +107,7 @@ function registryFromCatalog(catalog, ledger, expectedOfficial) {
     registry.set(code, {code, name, center, address:row.address || '', addressHash, lat, lng, hasPoint, proof,
       matchHash:addressHash && /^[a-f0-9]{64}$/.test(row.matchHash || '') ? row.matchHash : null});
   }
-  if (located !== 5035 + expectedOfficial || gpsCount !== 298 || officialCount !== expectedOfficial ||
+  if (located !== 4737 + expectedGps + expectedOfficial || gpsCount !== expectedGps || officialCount !== expectedOfficial ||
       Object.keys(ledger.records).length !== gpsCount + officialCount) throw Error('REGISTRY_COUNTS');
   return {registry, counts:{registered:registry.size, located, pending:registry.size-located, gpsCompletion:gpsCount, officialBuilding:officialCount}};
 }
@@ -142,10 +150,41 @@ function joinMissing(registry, rows) {
 }
 
 export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = {}) {
-  let temporary, durable, installation;
+  let temporary, durable, scheduled, installation;
 
-  function active() {
+  function fallback() {
     return temporary?.expiresAt > now() && (!durable || temporary.version>durable.version) ? temporary : durable || null;
+  }
+  function active() {
+    const verified = fallback();
+    if (!verified || !scheduled) return scheduled || verified;
+    if (scheduled.asOf < verified.asOf || (scheduled.asOf === verified.asOf &&
+        (scheduled.counts.registered < verified.counts.registered || scheduled.counts.located < verified.counts.located))) return verified;
+    return scheduled;
+  }
+
+  function followScheduled(generation, readDay) {
+    if (!generation) return false;
+    if (scheduled?.scheduled === generation) return active() === scheduled;
+    const previous = scheduled?.scheduled;
+    if (previous && (generation.state.revision <= previous.state.revision || generation.index.asOf < previous.index.asOf)) return false;
+    const {registry,index,ledger,coverage,nearby,snapshot,state} = generation;
+    const located = [...registry.values()].filter(row => row.hasPoint).length;
+    const proof = Object.values(ledger.records).map(history => history.at(-1).point).filter(Boolean);
+    scheduled = {scheduled:generation,directory:coverage,registry,nearby,snapshot,asOf:index.asOf,
+      generation:index.sha256,expiresAt:Infinity,resolver:createFixedCoordinateResolver(ledger),
+      counts:{registered:registry.size,located,pending:registry.size-located,
+        gpsCompletion:proof.filter(row=>row.measurementKind==='DELIVERY_COMPLETION_GPS').length,
+        officialBuilding:proof.filter(row=>row.measurementKind==='BUILDING_LOCATION').length},
+      evidence:{coordinateAppliedAt:state.committedAt,coordinateScope:'STAGE_APPROVED_SCHEDULED_GENERATION',
+        pendingCoordinates:registry.size-located,coverageGeneratedAt:index.generatedAt,
+        coverageSourceObservedAt:index.sourceObservedAt,coverageAsOf:index.asOf},
+      get bundledAddress() {return fallback()?.bundledAddress;},
+      async archived(date) {
+        const day = await readDay(date==='latest'?index.asOf:date,generation).catch(()=>null);
+        return archivedOpsmapAssignments(day,generation) ?? fallback()?.archived?.(date,registry) ?? null;
+      }};
+    return active() === scheduled;
   }
 
   async function load(bytes, expected, durableRead) {
@@ -167,7 +206,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
       Buffer.from(bundle['opsmap-official-address-review-v1.json'], 'base64'), {sha256:expected.addressReview}) : null;
     const archived = expected.archive
       ? readStageArchivedDelivery(Buffer.from(bundle[expected.addressIndex ? 'opsmap-stage-dated-delivery-v1.json' : DELIVERY_ARCHIVE], 'base64'), expected.archive) : null;
-    const {registry, counts} = registryFromCatalog(JSON.parse(files.get(index.catalog.sha256 + '.json')), ledger, expected.official);
+    const {registry, counts} = registryFromCatalog(JSON.parse(files.get(index.catalog.sha256 + '.json')), ledger, expected);
     const nearby = expected.nearby ? readStageNearbyEvidence(Buffer.from(bundle['opsmap-stage-nearby-v1.json'], 'base64'), {
       expected:expected.nearby, generation:index.sha256, registry, window:JSON.parse(files.get(index.windows[90].sha256 + '.json'))
     }) : null;
@@ -216,7 +255,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
       if (installation.expected !== expected || installation.durableRead!==durableRead) throw Error('STAGE_BUNDLE_LOADING');
       return installation.promise;
     }
-    const prepared = durableRead ? durable : active();
+    const prepared = durableRead ? durable : fallback();
     if (prepared?.version > expected.version) throw Error('STAGE_BUNDLE_REGRESSION');
     if (prepared?.version === expected.version && (!durableRead || prepared.expiresAt===Infinity)) return prepared;
     installation = {expected,durableRead,promise:load(bytes, expected,durableRead).finally(() => {installation = null;})};
@@ -226,6 +265,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
   function snapshot(saved) {
     const prepared = active();
     if (!prepared) return saved;
+    if (prepared.scheduled) return prepared.snapshot;
     const base = saved || {};
     const rows = projectedRegistry(prepared.registry, base.rows || []);
     return {...base, rows, rowCount:rows.length, latestDate:base.latestDate || prepared.asOf,
@@ -247,7 +287,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     const prepared = active();
     return prepared?.archived?.(date, prepared.registry) ?? null;
   }
-  return {activate, active, snapshot, joinPayload, archivedAssignments};
+  return {activate, active, snapshot, joinPayload, archivedAssignments, followScheduled};
 }
 
 function publicStatus(prepared) {

@@ -1,6 +1,9 @@
 import {createOperationalPhotoTaskReader} from './opsmapOperationalPhotoTaskReader.js';
 import {assertDeliverySourceObservation, deliverySourceObservation} from './snapshotRefreshEvidence.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from './stageAbValidation.js';
+import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
+import {archiveAddressHash} from './stageArchivedDelivery.js';
+import {syncDigest, syncSha256, validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
 
 const deliveryOrigin = 'https://delivery-bali.chabyulhwa.com';
 const error = (code, status) => Object.assign(Error(code), {code, diagnostic:{status}});
@@ -16,23 +19,36 @@ function taskVehicle(task) {
   return /^(?:[용척]?\d{1,4})(?:-\d{1,3})?$/.test(vehicle) ? vehicle : '';
 }
 
-export function createStageDatedDeliveryReader({env = process.env, fetchImpl = fetch} = {}) {
+export function createStageDatedDeliveryReader({env = process.env, fetchImpl = fetch, syncCenters = {osan:'1'}} = {}) {
   const enabled = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE &&
     env.OPSMAP_STAGE_DELIVERY_DATED_ENABLED === '1';
   const cookie = String(env.OPSMAP_STAGE_DELIVERY_DATED_COOKIE || '').trim();
-  const read = createOperationalPhotoTaskReader({async rawRequest(path, {method, signal}) {
+  const scope = Object.entries(syncCenters || {});
+  if (!scope.length || scope.some(([center,id]) => !['osan','yeongnam','honam'].includes(center) ||
+      typeof id !== 'string' || !/^[1-9]\d{0,5}$/.test(id) || (center==='osan') !== (id==='1')) ||
+      new Set(scope.map(([,id])=>id)).size !== scope.length) throw error('DELIVERY_SOURCE_CENTER_CONFIG', 503);
+  const readerFor = id => createOperationalPhotoTaskReader({async rawRequest(path, {method, signal}) {
     const url = new URL(path, deliveryOrigin);
     if (method !== 'GET' || url.origin !== deliveryOrigin || url.pathname !== '/api/bali/task' || url.hash || url.username || url.password) {
       throw error('DELIVERY_SOURCE_REQUEST_REJECTED', 403);
     }
+    url.searchParams.set('logisticsCenterId',id);
     return fetchImpl(url, {method, signal, redirect:'error', cache:'no-store', headers:{Accept:'application/json', Cookie:cookie}});
   }});
+  const read = readerFor('1');
+  const syncReaders = scope.map(([center,id]) => ({center,id,reader:id==='1'?read:readerFor(id)}));
 
   const inflight = new Map();
   let cached;
-  async function loadDate(date) {
+  function authorize(date) {
+    if (!enabled) throw error('DELIVERY_SOURCE_READ_ONLY', 503);
+    if (!/^[\x20-\x7e]{1,8192}$/.test(cookie)) throw error('DELIVERY_SOURCE_SESSION_REQUIRED', 401);
+    if (!validDate(date)) throw error('DELIVERY_SOURCE_DATE_INVALID', 400);
+  }
+  async function readTasks(date, reader = read) {
+    authorize(date);
     let tasks;
-    try { tasks = await read(date); }
+    try { tasks = await reader(date); }
     catch (failure) {
       const code = ({UPSTREAM_AUTH_REQUIRED:'DELIVERY_SOURCE_AUTH_REQUIRED', PHOTO_FORBIDDEN:'DELIVERY_SOURCE_FORBIDDEN',
         PHOTO_TIMEOUT:'DELIVERY_SOURCE_TIMEOUT', PHOTO_RATE_LIMITED:'DELIVERY_SOURCE_RATE_LIMITED',
@@ -42,6 +58,11 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const observation = deliverySourceObservation(tasks, {date, complete:tasks.sourceObservation.complete,
       pages:tasks.sourceObservation.pages, resolveVehicle:taskVehicle});
     assertDeliverySourceObservation(observation, date);
+    return {tasks,observation};
+  }
+
+  async function loadDate(date) {
+    const {tasks,observation} = await readTasks(date);
     const groups = new Map();
     for (const task of tasks) {
       const vehicle = taskVehicle(task) || '미확인';
@@ -64,10 +85,8 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       })};
   }
 
-  return async function readDate(date) {
-    if (!enabled) throw error('DELIVERY_SOURCE_READ_ONLY', 503);
-    if (!/^[\x20-\x7e]{1,8192}$/.test(cookie)) throw error('DELIVERY_SOURCE_SESSION_REQUIRED', 401);
-    if (!validDate(date)) throw error('DELIVERY_SOURCE_DATE_INVALID', 400);
+  async function readDate(date) {
+    authorize(date);
     if (cached?.date === date && cached.expiresAt > Date.now()) return cached.value;
     if (inflight.has(date)) return inflight.get(date);
     if (inflight.size >= 2) throw error('DELIVERY_SOURCE_BUSY', 429);
@@ -77,5 +96,31 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     }).finally(() => inflight.delete(date));
     inflight.set(date, pending);
     return pending;
+  }
+  readDate.readObservation = async date => {
+    const projected = [], visits = [];
+    const observations = [];
+    for (const {center,id:expected,reader} of syncReaders) {
+      const {tasks,observation} = await readTasks(date,reader);
+      observations.push({center,...observation});
+      for (const task of tasks) {
+        const centerId = task.logisticsCenter?.id ?? task.logisticsCenterId;
+        if (centerId !== undefined && centerId !== null && String(centerId) !== expected) throw error('DELIVERY_SOURCE_SCOPE', 503);
+        const code = task.customer?.erpCode ?? task.customerErpCode;
+        const vehicle = taskVehicle(task);
+        const address = field(task.location?.address, task.customerAddress, task.address, task.customer?.address);
+        const id = syncSha256('delivery:'+task.id);
+        const rawStatus = field(task.status,task.taskStatus).toUpperCase();
+        const status = ['COMPLETED','DELIVERED'].includes(rawStatus) ? 'COMPLETED' : /^CANCEL/.test(rawStatus) ? 'CANCELLED' : 'OPEN';
+        projected.push([id,code,vehicle,center,coordinateAddressHash(address) || null,status]);
+        if (status === 'COMPLETED') visits.push([id,code,vehicle,center,archiveAddressHash(address)]);
+      }
+    }
+    if (!projected.length) return null;
+    projected.sort((a,b) => a[0].localeCompare(b[0]));
+    visits.sort((a,b) => a[0].localeCompare(b[0]));
+    return validateOpsmapSyncDay({date,sourceRows:projected.length,unidentified:0,proof:'OBSERVED_STAGE_DELIVERY_READ',
+      proofHash:syncDigest([observations,projected,visits]),completeCenters:[],visits,tasks:projected},date);
   };
+  return readDate;
 }
