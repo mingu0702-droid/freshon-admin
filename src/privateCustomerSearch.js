@@ -4,7 +4,7 @@ const code=v=>typeof v==='string'&&/^[A-Z]\d{1,20}$/.test(v);
 const text=v=>String(v??'').normalize('NFKC').trim().toLowerCase().replace(/\s+/g,'');
 const sha=v=>crypto.createHash('sha256').update(v).digest('hex');
 function projection(row){
- const fields=['customerCode','customerName','lat','lng','coordinateSource','coordinateAccuracy','coordinateStatus','originalAddressHash','addressHash','addressChanged','resolutionStatus','sourceUpdatedAt','matchedBy','baseVehicle','baseVehicleGroup','baseVehicleState','baseVehicleSource','baseVehicleVersion','baseVehicleCheckedAt','baseVehicleStale','dispatchCenterCode','center','region','lastDeliveryDate'];
+ const fields=['customerCode','customerName','lat','lng','coordinateSource','coordinateAccuracy','coordinateEvidence','coordinateStatus','originalAddressHash','addressHash','addressChanged','resolutionStatus','sourceUpdatedAt','matchedBy','baseVehicle','baseVehicleGroup','baseVehicleState','baseVehicleSource','baseVehicleVersion','baseVehicleCheckedAt','baseVehicleStale','dispatchCenterCode','center','region','lastDeliveryDate'];
  const r=Object.fromEntries(fields.filter(k=>Object.hasOwn(row,k)).map(k=>[k,row[k]]));
  if(/비밀번호|보안키|bearer\s|(?:01[016789])[- ]?\d{3,4}[- ]?\d{4}/i.test(r.customerName||''))r.customerName=r.customerCode;
  return r;

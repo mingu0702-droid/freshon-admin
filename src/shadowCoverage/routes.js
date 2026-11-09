@@ -23,16 +23,16 @@ function resolutionFor(level) {
 }
 
 export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, staffResponseGuarded = false } = {}) {
-  let dependencies;
+  let imports, current;
   const load = async () => {
-    if (dependencies) return dependencies;
     const folder = readDirectory ? await readDirectory() : directory;
     if (!store && !folder) throw Error('COVERAGE_DATA_UNAVAILABLE');
-    return dependencies ??= Promise.all([
+    const [model, {createShadowCoverageStore}, h3] = await (imports ??= Promise.all([
       import('./model.js'), import('./store.js'), import('h3-js')
-    ]).then(([model, { createShadowCoverageStore }, h3]) => ({
-      model, h3, reader: store || createShadowCoverageStore({ directory: folder, appRoot })
-    }));
+    ]));
+    if (store) return {model, h3, reader:store};
+    if (current?.folder !== folder) current = {folder, reader:createShadowCoverageStore({directory:folder, appRoot})};
+    return {model, h3, reader:current.reader};
   };
   // The operating map authenticates the prefix and rechecks every JSON response.
   const entry = staffResponseGuarded ? [] : [requireStaff];
@@ -102,6 +102,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       summary: nationwide.summary,
       summaryResolution: model.BASE_RESOLUTION,
       viewportSummary: visible.summary,
+      candidateViewport: model.viewportCandidates(nationwide, bounds, resolution),
       preservedMap,
       candidateList: model.coverageList(nationwide),
       resolution,

@@ -46,7 +46,7 @@
       <section class="block addressBlock"><div class="label"><span>주소로 위치 찾기</span><span class="mini">임시핀 지원</span></div><div class="searchLine"><input id="addressQuery" class="field" autocomplete="off" placeholder="도로명 · 지번 주소"><button id="addressBtn" class="ghost">판단</button></div><div class="hint">임시핀·주변 배송처·근접호차·권역/요일을 함께 판단</div><div id="searchNotice" class="notice"></div><div id="addressJudgeResults" class="judgeList"></div></section>
       <div id="detailSection" class="detailWrap"><div id="detail" class="idle">매장을 선택하면 상세정보가 표시됩니다.</div></div>
       <div hidden id="routeTool"><input id="date" type="date"><select id="vehicle"></select><button id="routePlan"></button><button id="endRoute"></button><div id="loadingNotice"></div><div id="routeSummary"></div></div>
-      <details id="newAreaBatchTool" class="tool"><summary>신규권역 일괄조회</summary><div class="toolBody"><label>적용일 <input id="newAreaApplyDate" type="date" required></label><textarea id="newAreaBatchInput" class="newInput" placeholder="주소(X열)&#9;상세주소/고객정보(Y열)"></textarea><div class="newActions"><button id="judgeNewAreaBatch" class="primary">일괄 판단</button><button id="cancelNewAreaBatch" class="ghost">취소</button><button id="clearNewAreaBatch" class="ghost">비우기</button></div><div id="newAreaBatchStatus" class="hint">권역·배송요일·차량 진입 확인을 분리해 표시합니다.</div><div id="newAreaBatchResults" class="judgeList"></div><div class="newActions"><button id="copyAreaDecision" disabled>판정 결과 복사</button><button id="copyAreaMatching" disabled>매칭정보 복사</button></div><div class="dropdownFoot"><button id="exportNewAreaCsv" class="tiny">결과 CSV</button><button id="exportNewAreaExcel" class="tiny">결과 Excel</button></div></div></details>
+      <details id="newAreaBatchTool" class="tool"><summary>신규권역 일괄조회</summary><div class="toolBody"><label>적용일 <input id="newAreaApplyDate" type="date" required></label><textarea id="newAreaBatchInput" aria-label="일괄 조회 주소와 고객정보" class="newInput" placeholder="주소(X열)&#9;상세주소/고객정보(Y열)"></textarea><div class="newActions"><button id="judgeNewAreaBatch" class="primary">일괄 판단</button><button id="cancelNewAreaBatch" class="ghost" disabled>취소</button><button id="clearNewAreaBatch" class="ghost">비우기</button></div><div id="newAreaBatchStatus" class="hint" role="status">권역·배송요일·차량 진입 확인을 분리해 표시합니다.</div><div id="newAreaBatchResults" class="judgeList"></div><div class="newActions"><button id="copyAreaDecision" disabled>판정 결과 복사</button><button id="copyAreaMatching" disabled>매칭정보 복사</button></div><div class="dropdownFoot"><button id="exportNewAreaCsv" class="tiny">결과 CSV</button><button id="exportNewAreaExcel" class="tiny">결과 Excel</button></div></div></details>
       <section class="block"><button id="openOperations" class="ghost operationsButton">연결 상태</button><div id="operationsPanel" hidden></div></section>
       <section id="periodStoreListSection" class="block"><div class="label">매장 목록 <span id="periodStoreListCount" class="mini"></span><button id="togglePeriodList" class="tiny" aria-expanded="false" aria-controls="periodStoreList">펼치기</button></div><div id="periodStoreList" class="resultList"></div><button id="periodListMore" class="ghost" hidden>매장 더 보기</button></section>
       <details id="manualRouteTool" class="tool"><summary>경로 설정 <span class="mini">자동차</span></summary><div class="toolBody">
@@ -71,7 +71,7 @@
   <section id="staffAuxContent" class="staffAuxCard" aria-label="직원 보호 상세" hidden></section>
   <section id="mobileWorkspace" class="mobileWorkspace"><button id="sheetExpand" class="sheetHandle" aria-label="패널 펼치기">━</button><nav class="sheetTabs" aria-label="지도 패널"><button data-sheet-tab="filters">호차·조건</button><button data-sheet-tab="stores" class="active">매장 목록</button><button data-sheet-tab="runs">운행목록</button><button data-sheet-tab="new">주소·신규권역</button><button data-sheet-tab="manual">경유 내비</button></nav><div id="mobileDateHome"></div><div id="mobileSheetContent"></div></section>
   <link rel="stylesheet" href="map-staff-entry.css?v=20261028-r5">
-  <script src="map-staff-entry.js?v=20261106-r15"></script>
+  <script src="map-staff-entry.js?v=20261110-ab1"></script>
   <script type="application/x-map-staff" data-src="phase2b-ui-helpers.js?v=20261028-r5"></script>
   <link rel="stylesheet" href="map-staff.css?v=20261028-r5">
   <link rel="stylesheet" href="map-period.css?v=20261028-r5">
@@ -80,7 +80,7 @@
   <script type="application/x-map-staff" data-src="map-period-ui.js?v=20261028-r5"></script>
   <script type="application/x-map-staff" data-src="map-data-sync.js?v=20261028-r5"></script>
   <script type="application/x-map-staff" data-src="road-route-ui.js?v=20261028-r5"></script>
-  <script type="application/x-map-staff" data-src="new-area-requests.js?v=20261028-r5"></script>
+  <script type="application/x-map-staff" data-src="new-area-requests.js?v=20261110-ab1"></script>
   <script type="application/x-map-staff" data-src="manual-waypoints.js?v=20261028-r5"></script>
   <script type="application/x-map-staff" data-src="kakao-directions-adapter.js?v=20261028-r5"></script>
   <script type="application/x-map-staff" data-src="manual-road-route-ui.js?v=20261028-r5"></script>
@@ -92,11 +92,11 @@
   <script type="application/x-map-staff" data-src="customer-registry.js?v=20261106-stale-gps"></script>
   <script type="application/x-map-staff" data-src="map-address-locations.js?v=20261106-stale-gps"></script>
   <script type="application/x-map-staff" data-src="vehicle-picker-regions.js?v=20261106"></script>
-  <script type="application/x-map-staff" data-src="map-phase2b-runtime.js?v=20261107-route-totals"></script>
+  <script type="application/x-map-staff" data-src="map-phase2b-runtime.js?v=20261110-ab1"></script>
 
 <link rel="stylesheet" href="approved-site-source.css?v=20261028-r5">
-<link rel="stylesheet" href="map-approved-shell-candidate.css?v=20261106-vehicle-picker">
-<script type="application/x-map-staff" data-src="map-approved-shell-candidate.js?v=20261107-route-totals"></script>
+<link rel="stylesheet" href="map-approved-shell-candidate.css?v=20261110-ab1">
+<script type="application/x-map-staff" data-src="map-approved-shell-candidate.js?v=20261110-ab1"></script>
 <link rel="stylesheet" href="navigation-ui.css?v=20261107-route-totals">
 <script type="application/x-map-staff" data-src="navigation-ui.js?v=20261107-route-totals"></script>
 <link rel="stylesheet" href="manual-map-pins.css?v=20261028-r5">
@@ -105,9 +105,9 @@
 <script type="application/x-map-staff" data-src="opsmap-delivery-photos.js?v=20261104-r14-status-record"></script>
 <link rel="stylesheet" href="map-dot-ui.css?v=20261107-map-totals">
 <script type="application/x-map-staff">MapDotUi.mount();</script>
-<script type="application/x-map-staff" data-module="1" data-src="map-print-ui.mjs?v=20261104-r14"></script>
+<script type="application/x-map-staff" data-module="1" data-src="map-print-ui.mjs?v=20261110-ab1"></script>
 <link rel="stylesheet" href="map-performance.css?v=20261028-r5">
-<script type="application/x-map-staff" data-module="1" data-src="shadow-coverage-tab.mjs?v=20261109-shadow-production"></script>
+<script type="application/x-map-staff" data-module="1" data-src="shadow-coverage-tab.mjs?v=20261110-ab1"></script>
 </body>
 </html>
 

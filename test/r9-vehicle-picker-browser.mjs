@@ -6,7 +6,8 @@ import path from 'node:path';
 import {chromium} from 'playwright';
 
 // Local synthetic fixtures only: no authentication, source, geocoding or remote SDK.
-const root=path.resolve('public/opsmap'),output=fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-vehicle-picker-'));
+const root=path.resolve('public/opsmap'),output=process.env.OPSMAP_VEHICLE_TEST_OUTPUT||fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-vehicle-picker-'));
+fs.mkdirSync(output,{recursive:true});
 const vehicles=[['203','osan'],['122','osan'],['202-1','osan'],['101','osan'],['202','osan'],['용10','osan'],['용2','osan'],['310','yeongnam'],['301','yeongnam'],['410','honam'],['미확인','']].map(([vehicle,group])=>({vehicle,group,customers:[]}));
 const stores=[
  ['101','서울특별시 강남구 합성로 1'],['101','서울 서초구 합성길 2'],['101','서울 송파구 합성길 3'],
@@ -18,6 +19,17 @@ const stores=[
  ['203','서울 중구 합성로 13']
 ];
 const rows=stores.map(([vehicle,address],i)=>({customerCode:'S9800'+String(i+1).padStart(2,'0'),customerName:'SYNTHETIC_ONLY_'+i,address,vehicle,baseVehicle:vehicle,lat:35+i*.15,lng:127+i*.04,lastDeliveryDate:'2026-10-20'}));
+const today='2026-11-07', routeFailureDate='2026-11-06', repeatedCode=rows[0].customerCode;
+let releaseRoutePlan;
+const heldRoutePlan=new Promise(resolve=>{releaseRoutePlan=resolve;});
+const todayRows=[
+ {...rows[0],deliveryDate:today,sequence:1},
+ {...rows[0],vehicle:'122',deliveryDate:today,sequence:2,address:'서울 동작구 합성중복길 2',lat:36.1,lng:127.1},
+ {...rows[1],deliveryDate:today,sequence:3}
+];
+const liveVehicles=['101','122'].map(vehicle=>({vehicle,stops:todayRows.filter(row=>row.vehicle===vehicle).map(row=>({
+ customerCode:row.customerCode,sequence:row.sequence,address:row.address,lat:row.lat,lng:row.lng,appRecorded:vehicle==='122'
+}))}));
 const version='f'.repeat(64),requests=[],external=[],errors=[],checks=[];
 const checkedAt='2026-10-20T00:00:00.000Z',basis='FIXED_DISPATCH_PRIMARY';
 const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','vehicle-picker-regions.js','map-phase2b-runtime.js','map-approved-shell-candidate.js'];
@@ -29,6 +41,7 @@ class Bounds{extend(){}getSouthWest(){return new Coord(33,124)}getNorthEast(){re
 class FixtureMap{constructor(el,opts){this.el=el;this.center=opts.center;this.level=5}getCenter(){return this.center}setCenter(p){this.center=p}panTo(p){this.center=p}getLevel(){return this.level}setLevel(v){this.level=v}getBounds(){return new Bounds()}setBounds(){}relayout(){}getProjection(){return {containerPointFromCoords:p=>({x:300+(p.lng-127)*100,y:300+(p.lat-36)*30}),coordsFromContainerPoint:p=>new Coord(36,127)}}}
 class Overlay{constructor(opts){this.opts=opts}setMap(map){if(this.opts.content){this.opts.content.remove();if(map)map.el.append(this.opts.content)}}}
 window.kakao={maps:{LatLng:Coord,LatLngBounds:Bounds,Map:FixtureMap,CustomOverlay:Overlay,Polygon:Overlay,Polyline:Overlay,event:{addListener(){},removeListener(){}}}};window.KakaoMapsAdapter={ready:()=>Promise.resolve(),reset(){}};`;
+if(process.env.OPSMAP_VEHICLE_TEST_FLOW==='operations')scripts.push('navigation-ui.js');
 let html=fs.readFileSync(path.join(root,'map-phase2b-preview.html'),'utf8').replace(/<script\b[\s\S]*?<\/script>/gi,'');
 html=html.replace('</body>','<script>'+fixture+'</script>'+scripts.map(file=>'<script src="'+file+'"></script>').join('')+'</body>');
 const server=http.createServer((req,res)=>{
@@ -37,7 +50,12 @@ const server=http.createServer((req,res)=>{
   requests.push(u.pathname);let data={data:[],meta:{}};
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-10-20',startDate:'2026-08-01',endDate:'2026-10-20'}};
   else if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:r.vehicle,baseVehicleGroup:vehicles.find(v=>v.vehicle===r.vehicle).group,baseVehicleState:r.vehicle==='203'?'CONFLICT':'VERIFIED_MASTER',baseVehicleSource:basis,baseVehicleVersion:version,baseVehicleCheckedAt:checkedAt,baseVehicleStale:false})),meta:{version,basis,checkedAt,stale:false}};
-  else if(u.pathname.endsWith('/assignments')){const date=u.searchParams.get('date');data={data:[...rows.map(r=>({...r,deliveryDate:date})),{customerCode:'S980099',customerName:'SYNTHETIC_NEW_103',address:'인천 영종구 합성로 12',vehicle:'103',lat:36,lng:127,deliveryDate:date}],meta:{complete:true,date,reviewOnly:true}};}
+  else if(u.pathname.endsWith('/assignments')){const date=u.searchParams.get('date');data=date===today?{data:todayRows,meta:{complete:true,date}}:{data:[...rows.map(r=>({...r,deliveryDate:date,lastDeliveryDate:date})),{customerCode:'S980099',customerName:'SYNTHETIC_NEW_103',address:'인천 영종구 합성로 12',vehicle:'103',lat:36,lng:127,deliveryDate:date}],meta:{complete:true,date,reviewOnly:date!==routeFailureDate}};}
+  else if(u.pathname.endsWith('/today-status')&&u.searchParams.get('date')===today)data={data:{vehicles:liveVehicles}};
+  else if(u.pathname.endsWith('/route-plan')&&u.searchParams.get('date')===routeFailureDate){
+   void heldRoutePlan.then(()=>{res.writeHead(503,{'content-type':'application/json'});res.end(JSON.stringify({error:'SYNTHETIC_ROUTE_FAILURE'}));});
+   return;
+  }
   res.setHeader('content-type','application/json');res.end(JSON.stringify(data));return;
  }
  if(u.pathname==='/opsmap/'||u.pathname==='/'){res.setHeader('content-type','text/html');res.end(html);return;}
@@ -48,10 +66,20 @@ let browser;
 try{
  browser=await chromium.launch({headless:true,executablePath:process.env.OPSMAP_TEST_CHROMIUM||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
  const page=await browser.newPage({viewport:{width:1920,height:1080}});page.on('pageerror',e=>errors.push(e.message));
+ await page.clock.setFixedTime(new Date('2026-11-06T16:00:00Z'));
  await page.route('**/*',route=>{if(!route.request().url().startsWith(origin)){external.push(route.request().url());return route.abort();}return route.continue();});
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapUiLocalBridge?.isDataReady());
  const check=(name,condition)=>{assert(condition,name);checks.push(name);};
+ if(process.env.OPSMAP_VEHICLE_TEST_FLOW!=='operations'){
  await page.waitForFunction(()=>document.querySelector('#vehicleList .vehicleItem')?.dataset.listGroup==='osan');
+ check('fresh page selects only Osan stores and marks Osan in the controls',await page.evaluate(()=>{
+  const state=MapUiLocalBridge.state;
+  return state.centerFilter==='osan'&&state.currentRows.length>0&&state.currentRows.every(row=>row.baseVehicleGroup==='osan')
+    &&document.querySelector('[data-source-center="osan"]').getAttribute('aria-pressed')==='true'
+    &&document.querySelector('#periodCenter').value==='osan';
+ }));
+ await page.locator('[data-source-center="all"]').click();
+ await page.waitForFunction(()=>!MapUiLocalBridge.state.centerFilter&&document.querySelector('[data-source-center="all"]').getAttribute('aria-pressed')==='true');
  const query=page.locator('#vehicleQuery');check('single search is initially inside folded picker',await query.count()===1&&!await query.isVisible()&&await page.locator('#baseVehiclePicker').getAttribute('open')===null);
  const summary=page.locator('#baseVehiclePicker>summary');
  await summary.click({position:{x:10,y:10}});check('single visible search below vehicle heading',await query.isVisible()&&await query.getAttribute('placeholder')==='호차번호 · 담당 지역 검색');
@@ -66,7 +94,8 @@ try{
  await query.fill('용인시');assert.deepEqual(await values(),['101']);await query.fill('202');assert.deepEqual(await values(),['202','202-1']);checks.push('number and region query update immediately');
  await input('202').click();await query.fill('');check('clearing search preserves selection',await input('202').isChecked());
  await page.waitForFunction(()=>MapUiLocalBridge.state.currentRows.length===1&&MapUiLocalBridge.state.overlays.length===1);
- check('selection still drives map pins without territory controls',await page.evaluate(()=>MapUiLocalBridge.state.currentRows[0].vehicle==='202'&&!document.querySelector('#areaToggle,#mobileAreaToggle,#territoryControls')));
+ check('selection still drives map pins',await page.evaluate(()=>MapUiLocalBridge.state.currentRows[0].vehicle==='202'&&MapUiLocalBridge.state.overlays.length>0));
+ check('territory controls are absent',await page.locator('#areaToggle,#mobileAreaToggle,#territoryControls').count()===0);
  await input('202').click();check('same vehicle deselects and returns to full map',!(await selected()).length&&!await chips.isVisible()&&await page.evaluate(()=>MapUiLocalBridge.state.currentRows.length>2));
  await input('101').click();await input('122').click();assert.deepEqual(await selected(),['101','122']);checks.push('101 and 122 multiple selection');
  await summary.click({position:{x:10,y:10}});check('collapsed picker keeps map controls accessible',!await query.isVisible()&&await chips.isVisible());
@@ -89,7 +118,8 @@ try{
  }));
  await query.fill('');
  await page.locator('[data-source-center="yeongnam"]').click();await query.fill('30');assert.deepEqual(await values(),['301']);await query.fill('');assert.deepEqual(await values(),['301','310']);checks.push('search and center filter compose');
- await page.locator('[data-source-center="all"]').click();await page.evaluate(()=>{MapUiLocalBridge.state.mode='DATE_ROUTE';return MapUiLocalBridge.submitDailyQuery('2026-10-21','2026-10-21')});
+ await page.locator('[data-source-center="all"]').click();await page.locator('#modeDaily').click();
+ await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-10-21','2026-10-21'));
  await page.locator('#chooseRoutes').click();check('same search visible above daily checks',await query.isVisible()&&await query.evaluate(i=>i.nextElementSibling.id==='vehicleList'));
  await query.fill('영종구');assert.deepEqual(await values(),['103']);await input('103').check();await query.fill('');check('daily vehicle shows region from dated deliveries',await area('103').innerText()==='영종구');
  check('unknown date vehicle sorted in unknown group',await page.locator('#vehicleList input[value="103"]').evaluate(i=>i.parentElement.dataset.listGroup==='unknown'));
@@ -97,6 +127,7 @@ try{
  check('date changes preserve one checkbox per vehicle',await page.locator('#vehicleList input[value="103"]').count()===1);
  check('date reorder preserves checked selection',await page.locator('#vehicleList input[value="103"]').isChecked());
  await page.locator('#closeRoutes').click();await page.locator('#modePeriod').click();await page.waitForFunction(()=>MapUiLocalBridge.state.mode==='BASE_60D');
+ check('return from dated routes keeps explicit All center selection',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter===''&&document.querySelector('#periodCenter').value==='all'));
  await page.waitForFunction(()=>document.querySelector('#vehicleList input[value="101"]').parentElement.textContent.includes('강남구'));
  for(const width of [1920,1366,390]){
   await page.setViewportSize({width,height:844});
@@ -107,6 +138,63 @@ try{
   check(`map chip available at ${width}`,await chips.isVisible()&&await chips.locator('button[data-remove-vehicle="101"]').isEnabled());
   await page.screenshot({path:path.join(output,`after-fixture-${width}.png`),fullPage:true});
  }
- check('no page errors',errors.length===0);check('remote/auth/geocoding/source calls remain zero',external.length===0&&requests.every(p=>!/auth|geocod|source|hub|private\//i.test(p)));
- const result={scope:'LOCAL_EDGE_SYNTHETIC_MAP_NOT_PRODUCTION',output,checks,errors,externalCalls:external.length,requests};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+ check('remote/auth/geocoding/source calls remain zero',external.length===0&&requests.every(p=>!/auth|geocod|source|hub|private\//i.test(p)));
+ } else {
+  await page.locator('[data-source-center="osan"]').click();
+  if(await page.locator('#baseVehiclePicker').getAttribute('open')===null)await page.locator('#baseVehiclePicker>summary').click();
+  await page.locator('#vehicleList input[value="101"]').check();
+  await page.locator('#query').fill(repeatedCode);
+  await page.locator('#clearQuery').click();
+  check('clicking the search clear button retains the selected center and vehicle',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter==='osan'&&MapUiLocalBridge.state.selectedVehicles.join()==='101'&&document.querySelector('#query').value===''));
+ }
+ await page.setViewportSize({width:1366,height:900});
+ await page.reload();
+ await page.waitForFunction(()=>MapUiLocalBridge.isDataReady());
+ const changeDate=async date=>{
+  await page.locator('#selectedDate').evaluate((input,value)=>{input.value=value;input.dispatchEvent(new Event('change',{bubbles:true}));},date);
+  await page.waitForFunction(value=>MapUiLocalBridge.isDataReady()&&MapUiLocalBridge.state.selectedDate===value,date);
+ };
+ await changeDate(today);
+ await page.locator('#chooseRoutes').click();
+ await page.locator('#vehicleList input[value="101"]').check();
+ await page.locator('#vehicleList input[value="122"]').check();
+ await page.locator('#queryRoutes').click();
+ await page.waitForFunction(()=>MapUiLocalBridge.isDataReady()&&MapUiLocalBridge.state.selectedVehicles.length===2);
+ const repeatedVisits=()=>page.evaluate(code=>MapUiLocalBridge.stores().filter(row=>row.customerCode===code).map(({vehicle,baseVehicle,address,lat,lng,status})=>({vehicle,baseVehicle,address,lat,lng,status})),repeatedCode);
+ const expectedVisits=todayRows.slice(0,2).map(({vehicle,baseVehicle,address,lat,lng})=>({vehicle,baseVehicle,address,lat,lng,status:vehicle==='122'?'COMPLETED':'PENDING'}));
+ assert.deepEqual(await repeatedVisits(),expectedVisits);
+ check('KST current date keeps both confirmed vehicles, their addresses, coordinates and shared base assignment',true);
+ const repeatedButtons=page.locator(`#runList [data-run-code="${repeatedCode}"]`);
+ await page.waitForFunction(code=>document.querySelectorAll('#runList [data-run-code="'+code+'"]').length===2,repeatedCode);
+ assert.deepEqual(await repeatedButtons.evaluateAll(buttons=>buttons.map(button=>button.dataset.runVehicle)),['101','122']);
+ check('store and visit counters use their own identity',await page.locator('#totalBadge').textContent()==='2 매장'&&(await page.locator('#navSelection').textContent()).includes('3착'));
+ await page.locator(`#runList [data-run-code="${repeatedCode}"][data-run-vehicle="122"]`).evaluate(button=>button.click());
+ check('run list opens the exact confirmed vehicle for a repeated customer',await page.evaluate(()=>MapUiLocalBridge.state.selected?.vehicle==='122'));
+ const liveBefore=requests.filter(p=>p.endsWith('/today-status')).length;
+ const planBefore=requests.filter(p=>p.endsWith('/route-plan')).length;
+ await page.locator('#operationVehicle').evaluate(select=>{select.value='122';});
+ if(!await page.locator('#syncOperation').isVisible())await page.locator('#waypointPlanner>summary').click();
+ await page.locator('#syncOperation').click({timeout:5000});
+ await page.waitForFunction(()=>!document.querySelector('#syncOperation').disabled&&MapUiLocalBridge.state.selected?.vehicle==='122');
+ assert.deepEqual(await repeatedVisits(),expectedVisits);
+ check('refresh reads current status once and restores the selected confirmed vehicle',requests.filter(p=>p.endsWith('/today-status')).length===liveBefore+1);
+ check('refresh keeps all three visits and both vehicles in the actual screen counters', await page.locator('#opTotal').textContent()==='3'&&await page.locator('#opCompleted').textContent()==='1'&&await page.locator('#opRemaining').textContent()==='2'&&requests.filter(p=>p.endsWith('/route-plan')).length===planBefore);
+ await page.locator('#operationVehicle').evaluate(select=>{select.value='';});
+ await changeDate('2026-10-21');
+ check('historical date transition replaces both current assignments with that date’s rows',(await repeatedVisits()).length===1&&await page.evaluate(()=>MapUiLocalBridge.stores().every(row=>row.lastDeliveryDate==='2026-10-21')));
+ await page.locator('#operationVehicle').evaluate(select=>{select.value='101';select.dispatchEvent(new Event('change',{bubbles:true}));});
+ await page.locator('#chooseRoutes').click();
+ await page.locator('#selectedDate').evaluate((input,date)=>{input.value=date;},routeFailureDate);
+ try{
+  await Promise.all([
+   page.waitForRequest(request=>request.url().includes('/route-plan?date='+routeFailureDate+'&vehicle=101')),
+   page.locator('#queryRoutes').click()
+  ]);
+  await page.waitForFunction(()=>!document.querySelector('#routeDialog').open&&document.querySelector('#syncOperation').disabled&&document.querySelector('#runList [data-run-vehicle="101"]'),null,{timeout:5000});
+  check('verified visits are accessible before the auxiliary route response',await page.locator('#runList [data-run-vehicle="101"]').first().isVisible());
+ }finally{releaseRoutePlan();}
+ await page.waitForFunction(()=>!document.querySelector('#syncOperation').disabled&&document.querySelector('#mapStatusSub').textContent.includes('운행현황 조회 실패'));
+ check('route failure stays visible alongside the verified visits and counters',await page.locator('#runStatusError').isVisible()&&await page.locator('#runList [data-run-vehicle="101"]').count()===rows.filter(row=>row.vehicle==='101').length&&Number(await page.locator('#opTotal').textContent())===rows.filter(row=>row.vehicle==='101').length);
+ check('no page errors or remote calls',errors.length===0&&external.length===0);
+ const result={scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_MAP',output,checks,errors,externalCalls:external.length,requests};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

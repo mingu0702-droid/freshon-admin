@@ -6,6 +6,7 @@ import '../public/opsmap/map-period-ui.js';
 import '../public/opsmap/phase2b-ui-helpers.js';
 import '../public/opsmap/manual-waypoints.js';
 import '../public/opsmap/new-area-requests.js';
+import {batchDomNode,batchDomTemplate} from './fixtures/new-area-dom.mjs';
 
 const source = fs.readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js',import.meta.url),'utf8');
 const exposure = `
@@ -22,10 +23,10 @@ export const newAreaTestRuntime = source.slice(0,source.indexOf('\n  initVehicle
 const near = {customerCode:'S990001',customerName:'합성 인근 배송처',address:'경기도 화성시 합성로 1',lat:37.2,lng:127,vehicle:'101',deliveryPattern:'월수금',lastDeliveryDate:'2026-11-02'};
 function fixture() {
   const nodes=new Map();
-  const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',innerHTML:'',textContent:'',disabled:false,setAttribute(){},removeAttribute(){},classList:{add(){},remove(){}}});return nodes.get(id);};
+  const node=id=>{if(!nodes.has(id))nodes.set(id,batchDomNode());return nodes.get(id);};
   let calls=0;
   const window={addEventListener(){},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,KAKAO_MAP_CONFIG:{allowExternalAddressLookup:false},kakaoGeocoder:{addressSearch(){calls++;throw Error('EXTERNAL_LOOKUP_FORBIDDEN');}}};
-  const ctx=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],body:node('body')},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
+  const ctx=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:node('body')},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
   vm.runInContext(newAreaTestRuntime,ctx);
   return {...window.test,node,externalCalls:()=>calls,window};
 }
@@ -80,7 +81,7 @@ test('TSV multiline preserves X/Y order and separates invalid addresses and row 
   assert.equal(globalThis.MapPeriodUi.areaTsv(rows,'2026-11-02','decision').split('\r\n').length,3);
   f.setJudge(async row=>{if(row.address==='실패')throw Error('SYNTHETIC_ROW_FAILURE');return {...row,decision:'검토',reason:'주소 확인 필요',nearby:[]};});
   f.node('#newAreaBatchInput').value='실패\t고객1\n경기도 화성시 합성로 2\t고객2';await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
-  assert.equal(f.state.newAreaResults.length,2);assert.equal(f.state.newAreaResults[0].lookupError,true);assert.equal(f.state.newAreaResults[1].lookupError,undefined);assert.match(f.node('#newAreaBatchStatus').textContent,/행 실패 1/);
+  assert.equal(f.state.newAreaResults.length,2);assert.equal(f.state.newAreaResults[0].lookupError,true);assert.equal(f.state.newAreaResults[1].lookupError,undefined);assert.match(f.node('#newAreaBatchStatus').textContent,/실패 1/);
 });
 test('cancel pending batch then rerun keeps input and suppresses stale completion',async()=>{
   const f=fixture();f.setup([near]);f.node('#newAreaBatchInput').value=near.customerCode;

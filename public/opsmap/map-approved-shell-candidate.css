@@ -81,6 +81,8 @@
 .approvedShellCandidate #mapBatchDialog textarea{min-height:100px;resize:vertical;margin:12px 0}
 .approvedShellCandidate #mapBatchDialog .newActions,.approvedShellCandidate #mapBatchDialog .dropdownFoot{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}
 .approvedShellCandidate #mapBatchDialog .judgeCard{width:100%;white-space:normal;overflow-wrap:anywhere;text-align:left;margin:8px 0}
+.approvedShellCandidate #mapBatchDialog .judgeTop{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px}
+.approvedShellCandidate #mapBatchDialog .judgeCard:disabled{opacity:1;cursor:default}
 .approvedShellCandidate .marker.approvedMarker{width:36px;height:36px;filter:none}
 .approvedShellCandidate .marker.approvedMarker.periodCluster{width:44px;height:44px}
 .approvedShellCandidate .marker.approvedMarker.selected .pin{width:40px;height:40px;outline:5px solid #2962ed40}

@@ -147,7 +147,9 @@ body.shadow-coverage-open #mapFreshnessStatus,
 .coverage-results:not(:empty) { margin-top: 6px }
 .coverage-list-row, .coverage-search-result { text-align: left; white-space: normal; overflow-wrap: anywhere }
 .coverage-search-result > span { display: block }
-#coveragePanelToggle { display: none }
+.coverage-filter-feedback { display:flex; align-items:center; gap:6px; color:#334b6b; font-size:12px }
+.coverage-filter-feedback p:not(:empty) { padding:4px 0 }
+.coverage-map-summary, #coveragePanelToggle { display: none }
 @media (max-width: 760px) {
   .shadow-coverage {
     grid-template-columns: minmax(0, 1fr);
@@ -162,7 +164,15 @@ body.shadow-coverage-open #mapFreshnessStatus,
   .coverage-filters { margin: 6px 0 }
   .coverage-overview { padding: 6px 8px }
   .coverage-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)) }
-  #coverageCellList { max-height: 112px }
+  #coverageCellList { max-height: 152px }
+  #coverageCellList .coverage-list-row { min-height: 44px; padding: 7px 8px }
+  #coverageCellList .coverage-list-row small { font-size: 12px; line-height: 1.4 }
+  .coverage-map-summary { display: grid; gap: 2px; position:absolute; top:8px; left:8px; z-index:3; max-width:calc(100% - 16px); box-sizing:border-box; padding:5px 8px; background:#fffffff2; border:1px solid #cbd5e1; border-radius:6px; color:#243550; pointer-events:none; font-size:12px }
+  .coverage-map-summary > p { font-weight:650 }
+  .coverage-map-summary .coverage-legend { gap: 2px 7px }
   #coveragePanelToggle { display: inline-block }
   .coverage-panel-collapsed #coverageAnalysis { display: none }
 }
+
+.coverage-candidate-count circle { fill: #98450a; stroke: #fff; stroke-width: 2 }
+.coverage-candidate-count text { fill: #fff; text-anchor: middle; font: 700 11px system-ui, sans-serif }

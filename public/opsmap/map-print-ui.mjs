@@ -22,6 +22,32 @@ export function validateDatedPrintResponse(payload,date){
  return payload.data;
 }
 
+const addressKey=row=>text(row?.address||row?.customerAddress).normalize('NFKC').replace(/\s+/g,' ');
+const hash=row=>text(row?.currentAddressHash||row?.originalAddressHash||row?.addressHash);
+const conflictingPoint=row=>{const bound=row?.coordinateAddressHash||row?.manualPinAddressHash||row?.originalAddressHash;return row?.addressChanged===true||row?.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'||row?.coordinateStatus==='CONFLICT'||Boolean(row?.currentAddressHash&&bound&&row.currentAddressHash!==bound);};
+const savedPoint=row=>safePoint(row)&&!conflictingPoint(row)&&row.coordinateStatus!=='APPROXIMATE'&&['MANUAL_PIN','RAW_GPS','DELIVERY_RECORDED','VERIFIED_STORE_POINT'].includes(row.coordinateSource)&&
+ (row.coordinateSource==='MANUAL_PIN'?row.resolutionStatus==='MANUAL_CONFIRMED':/^[a-f0-9]{64}$/.test(hash(row))||row.coordinateStatus==='CONFIRMED');
+
+export function mergeDatedPrintCoordinates(rows,snapshotRows){
+ const known=new Map();
+ for(const row of snapshotRows){
+  const code=text(row.customerCode||row.code);if(!/^[A-Z]\d+$/.test(code))continue;
+  if(!known.has(code))known.set(code,row);else known.set(code,null);
+ }
+ return rows.map(row=>{
+  const current=known.get(text(row.customerCode||row.code));if(!current)return row;
+  const historicAddress=addressKey(row),currentAddress=addressKey(current);
+  const historicHash=hash(row), currentHash=hash(current);
+  const changed=historicAddress&&currentAddress&&historicAddress!==currentAddress||historicHash&&currentHash&&historicHash!==currentHash;
+  const addressMatched=Boolean(historicAddress&&historicAddress===currentAddress||/^[a-f0-9]{64}$/.test(historicHash)&&historicHash===currentHash);
+  const projection={...row,customerName:row.customerName||current.customerName,address:row.address||row.customerAddress||current.address||current.customerAddress};
+  if(changed||conflictingPoint(current)||conflictingPoint(row))return {...projection,coordinateStatus:'CONFLICT'};
+  if(row.lat==null&&row.lng==null&&addressMatched&&row.coordinateStatus!=='UNVERIFIED'&&savedPoint(current))
+   return {...projection,lat:current.lat,lng:current.lng,coordinateStatus:'CONFIRMED'};
+  return projection;
+ });
+}
+
 export function buildVehiclePrintModel({basis,date,center,selectedVehicle,rows,master=null,nowDate=today()}){
  if(!['FIXED','DATED'].includes(basis)||!validPrintDate(date)||date>nowDate||!(PRINT_CENTERS[center]||basis==='DATED'&&center===PRINT_UNPROVIDED_CENTER)||!vehicle(selectedVehicle)||vehicle(selectedVehicle).length>64||!Array.isArray(rows))throw Error('SELECTION_REQUIRED');
  const fixed=basis==='FIXED',wanted=vehicle(selectedVehicle),conflicts=new Set(),seen=new Map();
@@ -125,13 +151,16 @@ export function mountVehiclePrintUi({win=window,doc=document,bridge=win.MapUiLoc
   try{
    if(!validPrintDate(selection.date)||selection.date>today()||!selection.selectedVehicle)throw Error('SELECTION_REQUIRED');
    let rows;
-   if(selection.basis==='FIXED')rows=bridge.fixedTerritoryStores?.()||[];
+   if(selection.basis==='FIXED'){
+    if(!bridge.fixedTerritoryMasterState?.()?.version)await bridge.refreshFixedTerritoryMaster?.();
+    if(id!==epoch||!dialog.open)return;
+    rows=bridge.fixedTerritoryStores?.()||[];
+   }
    else{
     const response=await win.fetch('/api/map-phase2b/preview/assignments?date='+encodeURIComponent(selection.date),{credentials:'same-origin',cache:'no-store',signal:ownController.signal,headers:{Accept:'application/json'}});
     if(!response.ok)throw Error(response.status===401||response.status===403?'AUTH_REQUIRED':'SOURCE_UNAVAILABLE');
     const payload=await response.json();rows=validateDatedPrintResponse(payload,selection.date);
-    const known=new Map((bridge.navigationStores?.()||[]).map(r=>[text(r.customerCode),r]));
-    rows=rows.map(row=>{const current=known.get(text(row.customerCode))||{};const changed=row.address&&current.address&&row.address.replace(/\s/g,'')!==current.address.replace(/\s/g,'');const unsafeCurrent=['CONFLICT','UNVERIFIED','MISSING'].includes(current.coordinateStatus)||current.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED';return {...row,customerName:row.customerName||current.customerName,address:row.address||current.address,...(changed||unsafeCurrent?{coordinateStatus:'CONFLICT'}:{})};});
+    rows=mergeDatedPrintCoordinates(rows,bridge.printCoordinateStores?.()||bridge.navigationStores?.('BASE_60D')||[]);
    }
    if(id!==epoch||!dialog.open)return;
    model=buildVehiclePrintModel({...selection,rows,master:bridge.fixedTerritoryMasterState?.()});

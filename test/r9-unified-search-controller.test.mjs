@@ -26,7 +26,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual}={}){
  const nodes=new Map(),selected=[],fallback=[],queries=[],requests=new Map();let resets=0,tempClears=0;
  const node=key=>{if(!nodes.has(key))nodes.set(key,{value:'',hidden:true,html:'',replaceChildren(){this.html='';this.buttons=[];},setAttribute(k,v){this[k]=v;},dispatchEvent(){},get innerHTML(){return this.html;},set innerHTML(v){this.html=v;this.buttons=[...v.matchAll(/data-result="(\d+)"/g)].map(m=>({dataset:{result:m[1]}}));}});return nodes.get(key);};
  const context={console,AbortController,Event,setTimeout,clearTimeout,Number,Map,Set,
-  state:{mode:'BASE_60D',selected:null,searchRequestId:0,selectedDate:'2026-11-02',currentRows:rows},
+  state:{mode:'BASE_60D',selected:null,searchRequestId:0,selectedDate:'2026-11-02',centerFilter:'osan',selectedVehicles:['101','122'],currentRows:rows},
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
@@ -34,7 +34,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual}={}){
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
   window:{MapManualPins:{apply:row=>manual?.(row)}},
   esc:v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
-  setSearchState:text=>{context.lastStatus=text;},resetMapOverview:()=>{resets++;},
+  setSearchState:text=>{context.lastStatus=text;},resetMapOverview:()=>{resets++;},clearSelection:()=>{context.state.selected=null;},
   cancelAddressLookup(){},clearSearchTemporaryPin(){tempClears++;},
   selectStore:row=>{context.state.selected=row;selected.push(row);},
   loadBaseVehicles:async()=>{},refreshSelectedDriverContact(){},
@@ -51,10 +51,10 @@ test('map idle keeps an out-of-filter selected customer in the address queue',()
  const registration=source.split('\n').find(line=>line.includes("listen('idle',")&&line.includes('deferMapAddressWork'));
  assert(registration);
  const selected=store('S990100','합성 선택점','',{vehicle:'223',lat:null,lng:null}),visible=store('S990101','합성 필터점','',{vehicle:'101'});
- let idle,queued;
- const c={dateReady:true,markerFrame:null,addressScheduleFrame:null,state:{mode:'BASE_60D',map:{},selected,currentRows:[visible]},document:{body:{dataset:{mapStaffState:'authenticated'}}},window:{},listen:(name,callback)=>{idle=callback;},requestAnimationFrame:callback=>callback(),renderStops:()=>{},scheduleVisibleAddressRows:rows=>{queued=rows;}};
- const addressWork=source.slice(source.indexOf('  function scheduleMapAddressWork'),source.indexOf("  window.addEventListener('map-address-capability'"));
- vm.runInNewContext(addressWork+'\n'+registration,c);idle();
+ let idle,queued;const frames=[];
+ const c={dateReady:true,markerFrame:null,addressScheduleFrame:null,state:{mode:'BASE_60D',map:{},selected,currentRows:[visible]},document:{hidden:false,body:{dataset:{mapStaffState:'authenticated'}}},window:{},listen:(_name,callback)=>{idle=callback;},requestAnimationFrame:callback=>frames.push(callback),renderStops:()=>{},scheduleVisibleAddressRows:rows=>{queued=rows;}};
+ vm.runInNewContext(declaration('scheduleMapAddressWork')+declaration('deferMapAddressWork')+registration,c);idle();
+ while(frames.length)frames.shift()();
  assert.equal(queued[0],selected);assert(queued.includes(visible));
 });
 
@@ -137,8 +137,8 @@ test('optional master enrichment does not delay existing customer selection',asy
  const f=fixture({rows:[store('S990015','합성 즉시선택','서울 시험로 15')]});f.context.loadBaseVehicles=()=>new Promise(()=>{});await f.context.searchPeriod('S990015');assert.equal(f.selected.length,1);
 });
 
-test('clear search removes only search state and invokes the existing overview reset',()=>{
- const f=fixture();f.node('#query').value='기존 입력';f.node('#results').innerHTML='<button data-result="0">기존후보</button>';f.context.clearUnifiedSearch();assert.equal(f.node('#query').value,'');assert.equal(f.node('#results').hidden,true);assert.equal(f.node('#results').html,'');assert.equal(f.resets,1);assert.equal(f.tempClears,1);
+test('clear search closes the detail without resetting the selected center or vehicles',()=>{
+ const f=fixture();f.node('#query').value='기존 입력';f.node('#results').innerHTML='<button data-result="0">기존후보</button>';f.context.clearUnifiedSearch();assert.equal(f.node('#query').value,'');assert.equal(f.node('#results').hidden,true);assert.equal(f.node('#results').html,'');assert.equal(f.resets,0);assert.equal(f.tempClears,1);assert.equal(f.context.state.centerFilter,'osan');assert.deepEqual(f.context.state.selectedVehicles,['101','122']);
 });
 
 
