@@ -47,3 +47,22 @@ export function createOfficialAddressLookup(buffer, {sha256: expected} = {}) {
     return key ? rows.get(sha256(key)) || null : null;
   }});
 }
+
+export function createTemporaryOfficialAddressLookup({sha256: expected, now = Date.now} = {}) {
+  const ttl = 2 * 60 * 60 * 1000;
+  let current;
+  return {
+    activate(bytes) {
+      const lookup = createOfficialAddressLookup(bytes, {sha256:expected});
+      const expiresAt = now() + ttl;
+      const activated = {lookup,expiresAt};
+      current = activated;
+      setTimeout(() => {if (current === activated) current = null;},ttl).unref();
+      return {expiresAt:new Date(expiresAt).toISOString()};
+    },
+    active() {
+      if (current && current.expiresAt <= now()) current = null;
+      return current?.lookup || null;
+    }
+  };
+}

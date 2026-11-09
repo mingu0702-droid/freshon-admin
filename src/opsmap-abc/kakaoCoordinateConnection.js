@@ -35,6 +35,7 @@ function interactiveDocuments(body,mode){
 }
 
 export function createKakaoCoordinateConnection({env=process.env,store,independentAddressLookup=()=>null,now=Date.now,fetchImpl=globalThis.fetch}={}) {
+ const externalDisabled=env.OPSMAP_STAGE_VERIFY_ONLY==='1';
  const configuredLimit=Number(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT||100);
  const dailyLimit=Number.isSafeInteger(configuredLimit)&&configuredLimit>=1&&configuredLimit<=1000?configuredLimit:100;
  let blocked=false,cooldownUntil=0,lastProviderAt=0,providerQueue=Promise.resolve();const pending=new Map();
@@ -54,6 +55,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
  const keywordProof=()=>env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED==='1';
  const status=async()=>{
   const independentEnabled=Boolean(independentAddressLookup());
+  if(externalDisabled)return {enabled:false,independentEnabled,reason:'GEOCODING_DISABLED',retention:'REQUEST_ONLY'};
   if(!proof())return {enabled:false,independentEnabled,reason:'TARGET_APP_FREE_QUOTA_UNVERIFIED',retention:'REQUEST_ONLY'};
   try{return await transaction(async state=>{
    const enabled=env.OPSMAP_KAKAO_GEOCODING_ENABLED==='1'&&state.diagnosticPassed&&!state.blocked&&!blocked;
@@ -76,6 +78,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
    return {ok:true,data:{documents,status:point?'OK':'ZERO_RESULT',
     resolution:{kind:point?'EXACT':'ZERO_RESULT'},source:'OFFICIAL_PUBLIC_BUILDING',retention:'REQUEST_ONLY',coordinatePersistence:false}};
   }
+  if(externalDisabled)fail('GEOCODING_DISABLED');
   const place=mode==='place';
   const safe=place?null:externalCoordinateAddress(query.normalize('NFKC').replace(/ +/g,' ').trim().replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)$/,'$1 $2'));
   const address=place?safePlaceQuery(query):safe?prepareRecoveryCoordinateAddress(safe).query:null;

@@ -82,7 +82,7 @@ export function mountProductionMapApi(app,{
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).set('Cache-Control','private, no-store').json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED',...coverage});
     const sdkOnly = req.query.sdkOnly === '1';
     const lookup = sdkOnly ? null : await addressLookupService.status();
-    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({javascriptKey,...coverage,...(osanCenter?{centers:[osanCenter]}:{}),driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowExternalAddressLookup:lookup?.enabled===true,allowExternalPlaceLookup:lookup?.keywordEnabled===true,addressLookupReason:lookup?.reason||null,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true}));
+    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({javascriptKey,...coverage,...(osanCenter?{centers:[osanCenter]}:{}),driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowIndependentAddressLookup:lookup?.independentEnabled===true,allowExternalAddressLookup:lookup?.enabled===true,allowExternalPlaceLookup:lookup?.keywordEnabled===true,addressLookupReason:lookup?.reason||null,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true}));
   });
   mountKakaoCoordinateConnection({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,service:addressLookupService,jsonBody:express.json({limit:'4kb'}),origin:env.MAP_STAFF_ORIGIN||env.RENDER_EXTERNAL_URL});
   app.get('/api/map-phase2b/private/address-lookup/config',async(req,res)=>{

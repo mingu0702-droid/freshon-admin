@@ -20,6 +20,8 @@ import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
+import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
+import {createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
 
 const stageOrigin = STAGE_ORIGIN;
 const stageService = STAGE_SERVICE;
@@ -33,7 +35,8 @@ const readActions = new Set([
   'customerDetailsStatus', 'customerDetail', 'staffCustomerDetail', 'customerDetailPrepared', 'staffDriverHistory',
   'customerSearch', 'unifiedSearch', 'customerRegistry'
 ]);
-const readPosts = new Set(['/api/map-phase2b/preview/base-vehicles', '/api/map-phase2b/private/address-lookup', STAGE_BUNDLE_ROUTE]);
+const officialAddressIndexRoute = '/api/map-phase2b/private/stage-official-address-index';
+const readPosts = new Set(['/api/map-phase2b/preview/base-vehicles', '/api/map-phase2b/private/address-lookup', STAGE_BUNDLE_ROUTE, officialAddressIndexRoute]);
 const deliveryReadActions = new Set(['routePlan','routeStops','datedAssignments','periodAssignments']);
 const authPosts = new Set(['/api/map-phase2b/auth/login', '/api/map-phase2b/auth/logout']);
 const normalizeCell = value => typeof value === 'string' ? value.trim() : '';
@@ -94,6 +97,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     OPSMAP_MANUAL_PIN_STORE_FILE:undefined, OPSMAP_MANUAL_PIN_SEARCH_CACHE_FILE:undefined, OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',
     OPSMAP_KAKAO_GEOCODING_ENABLED:'0', OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:'0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
   const validation = createStageAbValidation();
+  const officialIndex = createTemporaryOfficialAddressLookup({sha256:stage.OPSMAP_STAGE_OFFICIAL_ADDRESS_INDEX_SHA256});
+  const addressLookupService = createKakaoCoordinateConnection({env:stage,fetchImpl,independentAddressLookup:officialIndex.active});
   let coverageState = 'restoring';
   const baseDirectory = Promise.resolve().then(() => readShadowDirectory ? readShadowDirectory() : stage.OPSMAP_SHADOW_DATA_DIR)
     .catch(() => null).then(directory => {coverageState = directory ? 'ready' : 'unavailable'; return directory;});
@@ -196,14 +201,27 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     getSnapshotMemory:()=>validation.active() ? joinedSnapshot?.snapshot || snapshot : snapshot,
     phase2bKstDate:today,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:readDatedDelivery,
     callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
-    sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget:null,readRecordedRoadRoute,
+    sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget:null,readRecordedRoadRoute,addressLookupService,
     getShadowCoverageState:()=>validation.active() ? 'ready' : coverageState,
     getLocalDataEvidence:()=>validation.active()?.evidence || null,
     readArchivedAssignments:validation.archivedAssignments,
     mountPrivateExtensions:binding=>{
-      const {requireStaff}=binding;
+      const {requireStaff,isSessionCurrent}=binding;
       staffView = requireStaff;
-      if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) mountStageAbValidation(router,{...binding,validation});
+      if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
+        mountStageAbValidation(router,{...binding,validation});
+        router.post(officialAddressIndexRoute,requireStaff,(req,res,next)=>{
+          res.set('Cache-Control','private, no-store').vary('Cookie');
+          if (req.get('Origin') !== stageOrigin || req.get('X-Opsmap-Stage-Verification') !== '1') return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});
+          if (!req.is('application/json')) return res.status(415).json({error:'OFFICIAL_ADDRESS_INDEX_MEDIA_TYPE'});
+          return next();
+        },express.raw({type:'application/json',limit:'512kb',inflate:false}),(req,res)=>{
+          if (!isSessionCurrent(req,res.locals.staffSession?.key)) return res.status(401).json({error:'AUTH_REQUIRED'});
+          if (!/^[a-f0-9]{64}$/.test(stage.OPSMAP_STAGE_OFFICIAL_ADDRESS_INDEX_SHA256 || '')) return res.status(503).json({error:'OFFICIAL_ADDRESS_INDEX_DISABLED'});
+          try {return res.json({ok:true,...officialIndex.activate(req.body)});}
+          catch {return res.status(400).json({error:'OFFICIAL_ADDRESS_INDEX_REJECTED'});}
+        });
+      }
       mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
         appRoot:fileURLToPath(new URL('../',import.meta.url)),
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
