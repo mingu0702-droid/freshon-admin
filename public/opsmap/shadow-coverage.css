@@ -14,6 +14,8 @@
 .coverage-overlay [data-tone="unknown"] { fill: #8592a3; fill-opacity: .08; stroke: #64748b; stroke-opacity: .84; stroke-dasharray: 4 3 }
 .coverage-overlay [data-tone="empty"] { fill: #91a99f; fill-opacity: .32; stroke: #60776f; stroke-opacity: .84 }
 .coverage-overlay .coverage-selected { stroke-width: 2.5; stroke-opacity: 1 }
+.coverage-candidate-count circle { fill: #98450a; stroke: #fff; stroke-width: 2 }
+.coverage-candidate-count text { fill: #fff; text-anchor: middle; font: 700 11px system-ui, sans-serif }
 
 body.shadow-coverage-open > main.workspace,
 body.shadow-coverage-open #approvedSiteHeader nav button[hidden],

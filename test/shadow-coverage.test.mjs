@@ -8,7 +8,7 @@ import { gzipSync } from 'node:zlib';
 import express from 'express';
 import { cellToLatLng, cellToParent, greatCircleDistance, gridDisk, latLngToCell, UNITS } from 'h3-js';
 import { buildShadowCoverage } from '../scripts/build-shadow-coverage.mjs';
-import { aggregateDay, cellDetail, combineDays, coverageList, datesFor, prepareCatalog, prepareView, searchCoverage } from '../src/shadowCoverage/model.js';
+import { aggregateDay, cellDetail, combineDays, coverageList, datesFor, prepareCatalog, prepareView, searchCoverage, viewportCandidates, viewportCells } from '../src/shadowCoverage/model.js';
 import { mountShadowCoverage } from '../src/shadowCoverage/routes.js';
 import { createShadowCoverageStore } from '../src/shadowCoverage/store.js';
 
@@ -48,6 +48,29 @@ function fixture(change) {
   change?.(days, stores);
   return { catalog, stores, days };
 }
+
+test('zoomed-out delivery polygons do not hide or double count R8 candidates', () => {
+  const { days } = fixture();
+  const candidateId = gridDisk(blue, 1).find(id => id !== blue && cellToParent(id, 4) === cellToParent(blue, 4));
+  assert(candidateId);
+  const [lat, lng] = cellToLatLng(candidateId);
+  const catalog = prepareCatalog({ ...source, scopes: [], stores: [storeRows[0], { ...storeRows[1], lat, lng }] });
+  const window = combineDays(end, 90, days);
+  const base = prepareView(catalog, window, 'all', 8);
+  const bounds = [126, 36, 128, 38];
+  assert.equal(base.summary.candidates, 1);
+  const coarse = viewportCells(prepareView(catalog, window, 'all', 4), bounds);
+  assert.equal(coarse.summary.delivered, 1);
+  assert.equal(coarse.summary.candidates, 0);
+  for (const res of [4, 5, 6, 7]) {
+    assert.deepEqual(viewportCandidates(base, bounds, res),
+      { cells: 1, stores: 1, groups: 1, markers: [{ id: candidateId, location: [lat, lng], cells: 1 }] });
+  }
+  assert.deepEqual(viewportCandidates(base, bounds, 8), { cells: 1, stores: 1, groups: 0, markers: [] });
+  assert.deepEqual(viewportCandidates(base, [130, 38, 131, 39], 4),
+    { cells: 0, stores: 0, groups: 0, markers: [] });
+  assert.equal(viewportCandidates(prepareView(catalog, window, 'honam', 8), bounds, 4).cells, 0);
+});
 
 test('periods keep unique delivery counts and each confirmed vehicle for the same customer', () => {
   const { catalog, days } = fixture();
@@ -241,9 +264,14 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
     assert.equal(outside.data.cells.length, 0);
     assert.equal(outside.data.summary.total, data.summary.total);
     assert.equal(outside.data.viewportSummary.total, 0);
+    assert.deepEqual(outside.data.candidateViewport, { cells: 0, stores: 0, groups: 0, markers: [] });
+    assert.equal(data.candidateViewport.cells, data.viewportSummary.candidates);
+    assert.deepEqual(data.candidateViewport.markers, []);
     assert.equal(data.summaryResolution, 8);
     const coarse = await (await fetch(url + '/view?days=90&level=11&box=126,36,128,38', options)).json();
     assert.deepEqual(coarse.data.summary, data.summary);
+    assert.equal(coarse.data.candidateViewport.cells, data.candidateViewport.cells);
+    assert.equal(coarse.data.candidateViewport.markers.reduce((sum, marker) => sum + marker.cells, 0), data.candidateViewport.cells);
     for (const [days, visits] of [[30, 1], [60, 2], [90, 3]]) {
       const search = await (await fetch(url + '/search?days=' + days + '&radius=500',
         { headers: { ...options.headers, 'x-map-customer-query': 'T900001' } })).json();

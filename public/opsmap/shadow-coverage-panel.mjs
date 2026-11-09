@@ -1,4 +1,4 @@
-import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261109-shadow-production';
+import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261109-coverage-candidates';
 
 const API = '/api/map-phase2b/private/shadow-coverage';
 const STATUS = { DELIVERED: '관측 배송 이력', CANDIDATE: '관측기간 미배송 후보', EMPTY: '검증 범위 내 공백', UNKNOWN: '자료 부족' };
@@ -86,7 +86,7 @@ export function createCoveragePanel({ workspace, header }) {
               <option value="candidate">미배송 후보</option><option value="delivery">배송 있음</option><option value="review">자료 부족</option>
             </select>
           </div>
-          <p class="coverage-note">전국 H3 R8 · 등록 매장 많은 순</p>
+          <p class="coverage-note">전국 기본 격자 · 등록 매장 많은 순</p>
           <div id="coverageCellList" aria-live="polite"></div>
           <div class="coverage-list-pages">
             <button type="button" id="coverageListPrevious" hidden>이전</button>
@@ -159,7 +159,15 @@ export function createCoveragePanel({ workspace, header }) {
         const { maps } = await window.KakaoMapsAdapter.ready({ retryFailed });
         if (!active || owner !== mapOwner) return;
         baseMap ||= new maps.Map(host, { center: new maps.LatLng(36.8, 127.2), level: 11 });
-        map = createCoverageMap(baseMap, maps, { idle: scheduleView, select: id => void selectCell(id), enabled: () => active });
+        map = createCoverageMap(baseMap, maps, {
+          idle: scheduleView,
+          select: (id, location) => {
+            if (!view || view.period.days !== days || loadedCenter !== center) return;
+            if (location) map.focus(location);
+            void selectCell(id);
+          },
+          enabled: () => active
+        });
       }
       baseMap.relayout();
       searchButton.disabled = false;
@@ -282,12 +290,12 @@ export function createCoveragePanel({ workspace, header }) {
   }
 
   function paint() {
-    if (map) map.render(view?.cells || [], selected);
+    if (map) map.render(view?.cells || [], selected, view?.candidateViewport?.markers);
   }
 
   function renderView(data) {
     const { period, completeness, summary } = data;
-    const { viewportSummary, preservedMap } = data;
+    const { viewportSummary, candidateViewport, preservedMap } = data;
     const confirmed = completeness.recordedDays;
     const sourceText = confirmed == null ? '센터별 일자 집계 미확인' :
       '기록 확인 ' + confirmed + '/' + period.days + '일 · 미확인 ' + completeness.missingDates.length + '일';
@@ -295,22 +303,25 @@ export function createCoveragePanel({ workspace, header }) {
     find('coverageObserved').textContent = sourceText;
     const selectedCenter = find('coverageCenter').selectedOptions[0]?.textContent;
     find('coverageNationalTitle').textContent = (loadedCenter === 'all' ? '전국 집계' : '전국 · ' + selectedCenter + ' 센터') +
-      ' · H3 R' + data.summaryResolution;
+      ' · 기본 격자';
     for (const stat of root.querySelectorAll('[data-metric]')) stat.textContent = fmt(summary[stat.dataset.metric]);
     find('coveragePreserved').textContent = preservedMap
       ? '보존 지도 ' + fmt(preservedMap.count) + '곳' + (preservedMap.asOf ? ' (' + preservedMap.asOf + ')' : '') + ' · 별도 범위'
       : '보존 지도 미확인 · 별도 범위';
     find('coverageGaps').textContent = '좌표 미확인 ' + fmt(summary.missingStoreLocation) + '곳 · 배송 위치 미연결 ' +
       fmt(summary.unplacedVisits) + '건 · 원천 식별 미확인 ' + fmt(summary.unidentifiedVisits) + '건';
-    find('coverageViewport').textContent = '현재 지도 R' + data.resolution + ' · 배송 ' + fmt(viewportSummary.delivered) +
-      ' · 후보 ' + fmt(viewportSummary.candidates) + ' · 자료 부족 ' + fmt(viewportSummary.review) +
-      ' · 공백 ' + fmt(viewportSummary.empty) + '격자';
+    find('coverageViewport').textContent = candidateViewport
+      ? '현재 화면 · 후보 ' + fmt(candidateViewport.cells) + '격자 · ' + fmt(candidateViewport.stores) + '곳' +
+        (data.resolution < data.summaryResolution ? ' · 주황 숫자: 묶인 후보 격자 수' : '')
+      : '현재 화면 · 후보 ' + fmt(viewportSummary.candidates) + '격자';
     evidence.replaceChildren(
       element('p', '', period.start + ' ~ ' + period.end + ' · 마지막 확인 ' + (period.latest || '미확인')),
       element('p', '', '집계 갱신 ' + time.format(new Date(data.refreshedAt)) + ' · 원천 확인 ' + time.format(new Date(data.sourceObservedAt))),
       element('p', '', '등록 매장 ' + fmt(summary.registered) + '곳 · 위치 미확인 ' + fmt(summary.missingStoreLocation) + '곳'),
       element('p', '', '배송 완료 ' + fmt(completeness.recordedVisits) + '건 · 격자 연결 ' + fmt(summary.visits) + '건 · 위치 미연결 ' + fmt(summary.unplacedVisits) + '건'),
-      element('p', '', '현재 지도 ' + fmt(viewportSummary.total) + '격자 · 표시 ' + fmt(data.cells.length) + '격자')
+      element('p', '', '전국 기본 격자 R' + data.summaryResolution + ' · 현재 지도 R' + data.resolution +
+        ' · 배송 ' + fmt(viewportSummary.delivered) + ' · 자료 부족 ' + fmt(viewportSummary.review) +
+        ' · 공백 ' + fmt(viewportSummary.empty) + ' · 표시 ' + fmt(data.cells.length) + '격자')
     );
     const centers = [['osan', '오산'], ['yeongnam', '영남'], ['honam', '호남']];
     evidence.append(element('p', '', centers.map(([key, label]) =>
