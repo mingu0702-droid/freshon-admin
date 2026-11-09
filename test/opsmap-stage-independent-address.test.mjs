@@ -5,6 +5,7 @@ import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageAbValidation.js';
 import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
 import {createTemporaryOfficialAddressLookup,officialAddressKey} from '../src/opsmapOfficialAddressLookup.js';
+import {createKakaoGeocodeLedger,KAKAO_EXPECTED_APP_ID} from '../src/opsmap-abc/kakaoCoordinateConnection.js';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const address = '경기도 오산시 검증로 777';
@@ -75,4 +76,56 @@ test('signed-in Stage can use a pinned official point independently of disabled 
   assert.equal(found.payload.data.coordinatePersistence,false);
   assert.equal((await lookup(address+'-1','official')).payload.data.status,'ZERO_RESULT');
   assert.equal((await lookup(address,'address')).payload.error,'GEOCODING_DISABLED');
+});
+
+test('approved Stage address queries use only the separate hash-only budget and stop at its limit',async t=>{
+  let session, providerCalls = 0;
+  const key = '1'.repeat(32), password = 'fixture-stage-provider-read';
+  let budget = Buffer.from(JSON.stringify({...createKakaoGeocodeLedger(),diagnosticUsed:true,diagnosticPassed:true}));
+  const encoded = value => value ? Response.json({size:value.length,sha:'c'.repeat(40),encoding:'base64',content:value.toString('base64')})
+    : new Response(null,{status:404});
+  const app = createStageVerificationApp({env:{RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
+    GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',GITHUB_TOKEN:'fixture',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'stage/opsmap-manual-pins',
+    MAP_STAFF_ID:'fixture',MAP_STAFF_SESSION_SECRET:'d'.repeat(48),MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash(password),
+    KAKAO_REST_API_KEY:key,KAKAO_MAP_APP_ID:KAKAO_EXPECTED_APP_ID,OPSMAP_KAKAO_REST_KEY_SHA256:hash(key),
+    OPSMAP_KAKAO_FREE_QUOTA_VERIFIED:'1',OPSMAP_KAKAO_PAID_API_DISABLED:'1',OPSMAP_STAGE_KAKAO_ADDRESS_APPROVED:'1',
+    OPSMAP_KAKAO_GEOCODING_ENABLED:'1',OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT:'1'},fetchImpl:async(input,options={})=>{
+    const url = new URL(input);
+    if (url.origin === 'https://dapi.kakao.com') {
+      providerCalls++;
+      assert.equal(url.pathname,'/v2/local/search/address.json');
+      assert.equal(options.method,'GET');
+      return Response.json({meta:{is_end:true},documents:[{x:'127.07',y:'37.15',address_name:address}]});
+    }
+    assert.equal(url.origin,'https://api.github.com');
+    if (url.pathname.endsWith('/freshon-cache')) return Response.json({private:true,permissions:{push:true}});
+    const file = url.pathname.split('/').at(-1);
+    assert(['staff-sessions-v1.json','geocode-budget-v1.json'].includes(file));
+    assert(url.pathname.includes('/opsmap-stage/'));
+    if (options.method !== 'PUT') return encoded(file==='geocode-budget-v1.json' ? budget : session);
+    const body = JSON.parse(options.body);
+    assert.equal(body.branch,'stage/opsmap-manual-pins');
+    if (file==='geocode-budget-v1.json') budget = Buffer.from(body.content,'base64');
+    else session = Buffer.from(body.content,'base64');
+    return Response.json({});
+  }});
+  const server = app.listen(0,'127.0.0.1');
+  t.after(()=>{server.closeAllConnections();server.close();});
+  await new Promise(resolve=>server.once('listening',resolve));
+  const root = `http://127.0.0.1:${server.address().port}/api/map-phase2b/`;
+  const headers = {origin:STAGE_ORIGIN,'content-type':'application/json'};
+  const login = await fetch(root+'auth/login',{method:'POST',headers,body:JSON.stringify({id:'fixture',password})});
+  assert.equal(login.status,200);
+  headers.cookie = login.headers.get('set-cookie').split(';')[0];
+  const lookup = ()=>fetch(root+'private/address-lookup',{method:'POST',headers,body:JSON.stringify({query:address,mode:'address'})});
+  const found = await lookup();
+  assert.equal(found.status,200);
+  assert.equal((await found.json()).data.coordinatePersistence,false);
+  const limited = await lookup();
+  assert.equal(limited.status,429);
+  assert.equal((await limited.json()).error,'GEOCODE_DAILY_LIMIT');
+  assert.equal(providerCalls,1);
+  assert.equal(JSON.parse(budget).used,1);
+  assert(!budget.toString().includes(address));
+  assert(!budget.toString().includes('127.07'));
 });

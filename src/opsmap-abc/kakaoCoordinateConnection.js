@@ -34,8 +34,8 @@ function interactiveDocuments(body,mode){
  return [...found.values()];
 }
 
-export function createKakaoCoordinateConnection({env=process.env,store,independentAddressLookup=()=>null,now=Date.now,fetchImpl=globalThis.fetch}={}) {
- const externalDisabled=env.OPSMAP_STAGE_VERIFY_ONLY==='1';
+export function createKakaoCoordinateConnection({env=process.env,store,independentAddressLookup=()=>null,stageAddressApproved=false,now=Date.now,fetchImpl=globalThis.fetch}={}) {
+ const externalDisabled=env.OPSMAP_STAGE_VERIFY_ONLY==='1'&&!stageAddressApproved;
  const configuredLimit=Number(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT||100);
  const dailyLimit=Number.isSafeInteger(configuredLimit)&&configuredLimit>=1&&configuredLimit<=1000?configuredLimit:100;
  let blocked=false,cooldownUntil=0,lastProviderAt=0,providerQueue=Promise.resolve();const pending=new Map();

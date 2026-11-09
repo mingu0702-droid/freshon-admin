@@ -10,7 +10,7 @@ import {isRoadRouteRequest} from './opsmap-abc/roadRouteService.js';
 import {createRecordedRoadRouteReader} from './opsmap-abc/recordedRoadRoute.js';
 import {staffStoreDetail} from './opsmap-abc/mapStaffDetail.js';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
-import {createManualPinGithubStore} from './manualPinGithubStore.js';
+import {createManualPinGithubStore,createStageGeocodeBudgetStore} from './manualPinGithubStore.js';
 import {createStageStaffSessionStore} from './staffSessionStore.js';
 import {createProductionSnapshotStore,materializeSnapshot} from './productionSnapshotStore.js';
 import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,createStageAbValidation,mountStageAbValidation} from './stageAbValidation.js';
@@ -36,6 +36,7 @@ const readActions = new Set([
   'customerSearch', 'unifiedSearch', 'customerRegistry'
 ]);
 const officialAddressIndexRoute = '/api/map-phase2b/private/stage-official-address-index';
+const addressDiagnosticRoute = '/api/map-phase2b/private/address-lookup-diagnostic';
 const readPosts = new Set(['/api/map-phase2b/preview/base-vehicles', '/api/map-phase2b/private/address-lookup', STAGE_BUNDLE_ROUTE, officialAddressIndexRoute]);
 const deliveryReadActions = new Set(['routePlan','routeStops','datedAssignments','periodAssignments']);
 const authPosts = new Set(['/api/map-phase2b/auth/login', '/api/map-phase2b/auth/logout']);
@@ -93,12 +94,20 @@ function stageGithub(fetchImpl, {files, branch, writable, allowBlob = false}) {
 export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory, now = Date.now} = {}) {
   if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
   if (![env.HUB_API_URL,env.OPSMAP_PRIVATE_READER_URL].every(stageHubUrl)) throw new Error('STAGE_READ_SOURCE_CONFIG');
+  const stageAddressApproved = env.RENDER_SERVICE_ID === stageService && env.OPSMAP_STAGE_KAKAO_ADDRESS_APPROVED === '1' &&
+    /^(?:[1-9][0-9]?|100)$/.test(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT || '') && !!env.GITHUB_TOKEN;
   const stage = {...env, OPSMAP_STAGE_VERIFY_ONLY:'1', MAP_STAFF_ORIGIN:stageOrigin, OPSMAP_MANUAL_PIN_WRITES:'0',
     OPSMAP_MANUAL_PIN_STORE_FILE:undefined, OPSMAP_MANUAL_PIN_SEARCH_CACHE_FILE:undefined, OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',
-    OPSMAP_KAKAO_GEOCODING_ENABLED:'0', OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:'0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
+    OPSMAP_KAKAO_GEOCODING_ENABLED:stageAddressApproved ? env.OPSMAP_KAKAO_GEOCODING_ENABLED : '0',
+    OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:stageAddressApproved ? env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED : '0',
+    OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED:'0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
   const validation = createStageAbValidation();
   const officialIndex = createTemporaryOfficialAddressLookup({sha256:stage.OPSMAP_STAGE_OFFICIAL_ADDRESS_INDEX_SHA256});
-  const addressLookupService = createKakaoCoordinateConnection({env:stage,fetchImpl,independentAddressLookup:officialIndex.active});
+  const geocodeBudgetFile = 'geocode-budget-v1.json';
+  const geocodeBudget = stageAddressApproved ? createStageGeocodeBudgetStore({repo,token:stage.GITHUB_TOKEN,branch:pinsBranch,
+    fetchImpl:stageGithub(fetchImpl,{files:[geocodeBudgetFile],branch:pinsBranch,writable:geocodeBudgetFile})}) : null;
+  const addressLookupService = createKakaoCoordinateConnection({env:stage,fetchImpl,store:geocodeBudget,
+    stageAddressApproved,independentAddressLookup:officialIndex.active});
   let coverageState = 'restoring';
   const baseDirectory = Promise.resolve().then(() => readShadowDirectory ? readShadowDirectory() : stage.OPSMAP_SHADOW_DATA_DIR)
     .catch(() => null).then(directory => {coverageState = directory ? 'ready' : 'unavailable'; return directory;});
@@ -192,7 +201,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     let route;
     try {route=decodeURIComponent(req.path).toLowerCase().replace(/\/$/,'');} catch {return res.status(400).end();}
     if (/^\/(?:internal|api\/collector|api\/map-phase2b\/admin)(?:\/|$)/.test(route)) return res.status(404).end();
-    if (req.method==='GET' || req.method==='HEAD' || req.method==='POST' && (authPosts.has(route) || readPosts.has(route) || isRoadRouteRequest(req))) return next();
+    if (req.method==='GET' || req.method==='HEAD' || req.method==='POST' && (authPosts.has(route) || readPosts.has(route) ||
+        route===addressDiagnosticRoute&&stageAddressApproved || isRoadRouteRequest(req))) return next();
     return res.status(403).json({error:'STAGE_READ_ONLY'});
   });
   let staffView;
