@@ -20,7 +20,7 @@ places.retainSearchPoints([assigned.customerCode]);
 assert.equal(places.values().length,2);assert(places.values().some(r=>r.customerCode===assigned.customerCode));assert(places.values().some(r=>r.customerCode===manual.customerCode));checks.push('navigation retains assigned search points and manual points but removes unassigned previews');
 places.retainSearchPoints([]);assert.equal(places.values().length,1);checks.push('navigation clear removes only unassigned search temporary points');
 const fixture=`window.VEHICLE_AREA_DATA={vehicles:[]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
-window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){}};
+document.body.dataset.mapStaffState='authenticated';window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){}};
 window.pendingLookups=[];window.lookupCalls=0;window.kakaoGeocoder={addressSearch(q,cb){window.lookupCalls++;window.pendingLookups.push({q,cb})}};
 window.allOverlays=[];window.allCircles=[];
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
@@ -94,6 +94,25 @@ try{
  await page.evaluate(()=>{const owner=tempPinTest.stats().owner;window.expiredOwner=owner;return tempPinTest.begin('서울 합성구 대기로 70',{lookupAllowed:false});});
  await page.evaluate(()=>tempPinTest.finish({address:'서울 합성구 이전로 50',lat:37.55,lng:127},expiredOwner));
  check('stale owner cannot finish a point',(await page.evaluate(()=>tempPinTest.stats())).count===0);
+ await page.evaluate(()=>tempPinTest.clear());
+ await page.evaluate(()=>{
+  document.querySelector('#results').hidden=true;
+  KAKAO_MAP_CONFIG.allowExternalPlaceLookup=true;
+  window.kakaoGeocoder={serverProxy:true,addressSearch(_query,callback,{mode}){
+   if(mode!=='place')throw Error('PLACE_MODE_REQUIRED');
+   callback([
+    {x:'127.04',y:'37.58',address_name:'서울 합성구 상호길 1',place_name:'합성 상호 첫 지점'},
+    {x:'127.05',y:'37.59',address_name:'서울 합성구 상호길 2',place_name:'합성 상호 둘째 지점'}
+   ],'OK',{resolution:{kind:'KEYWORD'}});
+  }};
+  return tempPinTest.begin('합성 상호');
+ });
+ check('provider candidate menu is visibly expanded',await page.locator('[data-address-candidate]').count()===2&&await page.locator('#results').isVisible()&&await page.locator('#query').getAttribute('aria-expanded')==='true');
+ check('place candidates have names and addresses and no pin before selection',await page.locator('[data-address-candidate="1"]').innerText().then(text=>text.includes('합성 상호 둘째 지점')&&text.includes('상호길 2'))&&(await page.evaluate(()=>tempPinTest.stats())).count===0);
+ await page.locator('[data-address-candidate="1"]').click();
+ check('selection shows the chosen place on the map',await page.evaluate(()=>tempPinTest.stats().virtual.address==='서울 합성구 상호길 2'));
+ await page.locator('#searchPointToBatch').click();
+ check('selected temporary place can be passed to the batch input',await page.locator('#newAreaBatchInput').inputValue().then(value=>value.includes('서울 합성구 상호길 2')));
  await page.evaluate(()=>tempPinTest.clear());
  check('synthetic browser has no unhandled errors',errors.length===0);check('no remote calls or persistent writes',external.length===0&&requests.every(r=>r.method==='GET'||r.path.endsWith('/base-vehicles')));
  const result={scope:'LOCAL_EDGE_SYNTHETIC_NO_REAL_SOURCE_OR_GEOCODING',pass:checks.length,fail:0,checks,errors,externalRequests:external.length,artifacts:out};fs.writeFileSync(path.join(out,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));

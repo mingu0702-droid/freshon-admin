@@ -7,7 +7,7 @@
       .replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)(?=\s|\(|\[|$)/g, '$1 $2');
     const choices = variants(normalized);
     const primary = choices[choices.length - 1] || '';
-    if(!/(?:대로|로|길|동|읍|면|리|가)\s+(?:산\s*)?\d+(?:-\d+)?$/.test(primary))return [];
+    if(!/(?:대로|로|길|동|읍|면|리|가)\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?$/.test(primary))return [];
     let query = primary;
     // Official search aliases only; the original address and its identity are untouched.
     // https://www.incheon.go.kr/IC01070101 (2026-07-01 administrative reorganization)
@@ -28,7 +28,7 @@
     return /^(?:KAKAO_|GEOCODE_(?:DAILY_LIMIT|AUTOMATICALLY_BLOCKED|LEDGER_|DURABLE_|SESSION_|ORIGIN_)|GEOCODING_DISABLED|TARGET_APP_)/.test(error?.code || '');
   }
   function outcome(error) { return error?.code === 'GEOCODE_DAILY_LIMIT' ? 'LIMIT' : ['GEOCODE_AUTOMATICALLY_BLOCKED','NEW_AREA_ROW_TIMEOUT','REQUEST_TIMEOUT','GEOCODER_TIMEOUT'].includes(error?.code)||/^GEOCODER_(?:MULTIPLE_CANDIDATES|RESULT_TRUNCATED|ADDRESS_MISMATCH)$/.test(error?.code||'') ? 'DEFERRED' : 'FAILED'; }
-  function lookup(geocoder, query, { signal, timeout = geocoder?.serverProxy?45000:7000 } = {}) {
+  function lookup(geocoder, query, { signal, mode, timeout = geocoder?.serverProxy?45000:7000 } = {}) {
     return new Promise((resolve, reject) => {
       let settled = false, timer;
       const finish = (error, rows) => {
@@ -52,15 +52,18 @@
           const valid = row => row && row.x != null && row.y != null && String(row.x).trim() !== '' && String(row.y).trim() !== ''
             && Number.isFinite(Number(row.x)) && Number.isFinite(Number(row.y)) && Math.abs(Number(row.x)) <= 180 && Math.abs(Number(row.y)) <= 90;
           if (!rows.every(valid)) return finish(failure('GEOCODER_INVALID_COORDINATES'));
-          finish(null, rows);
-        }, { signal });
+          finish(null, mode?{rows,resolution:meta?.resolution}:rows);
+        }, { signal, mode });
       } catch { finish(failure('GEOCODER_FAILED')); }
     });
   }
   function message(error) {
     return ({ GEOCODE_DAILY_LIMIT: '일일 주소 조회 한도 대기', GEOCODE_AUTOMATICALLY_BLOCKED: '주소 조회 차단 · 보류',
       NEW_AREA_ROW_TIMEOUT: '주소 응답 지연 · 다시 조회 필요', REQUEST_TIMEOUT: '고객 주소 응답 지연 · 다시 조회 필요',
-      GEOCODE_QUERY_INVALID: '검색용 기본주소 확인 필요', GEOCODER_UNAVAILABLE: '주소 조회 서비스 미연결', GEOCODER_TIMEOUT: '주소 조회 시간 초과',
+      GEOCODE_QUERY_INVALID: '주소·상호 검색어를 확인해 주세요',
+      GEOCODING_DISABLED:'외부 주소 검색 비활성',TARGET_APP_FREE_QUOTA_UNVERIFIED:'외부 주소 검색 무료 한도 미확인',
+      TARGET_APP_KEYWORD_FREE_QUOTA_UNVERIFIED:'외부 상호 검색 무료 한도 미확인',DIAGNOSTIC_REQUIRED:'외부 주소 검색 연결 미확인',
+      GEOCODE_DURABLE_LEDGER_REQUIRED:'외부 검색 사용 원장 미연결',GEOCODE_RETRY_COOLDOWN:'외부 검색 응답 대기 · 잠시 후 재시도', GEOCODER_UNAVAILABLE: '주소 조회 서비스 미연결', GEOCODER_TIMEOUT: '주소 조회 시간 초과',
       GEOCODER_FAILED: '주소 조회 오류', GEOCODER_INVALID_COORDINATES: '주소 좌표 응답 오류',
       GEOCODE_SESSION_EXPIRED:'직원 인증이 만료되었습니다',GEOCODE_ORIGIN_REJECTED:'주소 조회 권한 확인 필요',
       GEOCODER_MULTIPLE_CANDIDATES:'주소 후보 복수 · 선택 필요',GEOCODER_RESULT_TRUNCATED:'주소 범위 확인 필요',

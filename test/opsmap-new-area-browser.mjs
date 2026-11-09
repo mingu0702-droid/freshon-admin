@@ -61,5 +61,32 @@ try{
   await page.locator('#cancelNewAreaBatch').click();await page.evaluate(()=>window.finishBatch());assert.equal(await page.locator('#newAreaBatchInput').inputValue(),'S990001\t"합성 고객\n상세주소"\n대구광역시 동구 합성로 2\t합성 고객2\n입력\t오류\t추가열');
   assert.equal(await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults.length),0);
   await page.evaluate(()=>{window.newAreaBrowser.setJudge(window.newAreaBrowser.realJudge);document.querySelector('#judgeNewAreaBatch').click();});await page.waitForFunction(()=>MapUiLocalBridge.state.newAreaResults.length===3);
-  result.cancelRerun=true;assert.deepEqual(errors,[]);assert.deepEqual(blocked,[]);result.externalRequests=0;result.artifacts=artifacts;console.log(JSON.stringify(result));
+  await page.locator('#newAreaBatchInput').fill('성공행\n실패행\n미완료행');
+  await page.evaluate(()=>{
+    window.firstPass=[];
+    newAreaBrowser.setJudge(row=>{
+      firstPass.push(row.address);
+      if(row.address==='미완료행')return new Promise(resolve=>window.finishOldBatch=resolve);
+      if(row.address==='실패행')throw Error('SYNTHETIC_RETRY');
+      return {...row,decision:'O',lookupStatus:'SUCCESS',lat:37.2,lng:127};
+    });
+    document.querySelector('#judgeNewAreaBatch').click();
+  });
+  await page.waitForFunction(()=>document.querySelectorAll('[data-judged]').length===2);
+  await page.locator('#cancelNewAreaBatch').click();
+  assert.equal(await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults.length),2);
+  assert.equal(await page.locator('#retryNewAreaBatch').isEnabled(),true);
+  await page.evaluate(()=>{
+    window.retryPass=[];
+    newAreaBrowser.setJudge(row=>{
+      retryPass.push(row.address);
+      return {...row,decision:'O',lookupStatus:'SUCCESS',lat:37.2,lng:127};
+    });
+    finishOldBatch({address:'STALE_SYNTHETIC',decision:'검토'});
+  });
+  await page.locator('#retryNewAreaBatch').click();
+  await page.waitForFunction(()=>MapUiLocalBridge.state.newAreaResults.length===3);
+  assert.deepEqual(await page.evaluate(()=>retryPass.sort()),['미완료행','실패행']);
+  assert.deepEqual(await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults.map(row=>row.address)),['성공행','실패행','미완료행']);
+  result.cancelRerun=true;result.failedAndPendingOnly=true;assert.deepEqual(errors,[]);assert.deepEqual(blocked,[]);result.externalRequests=0;result.artifacts=artifacts;console.log(JSON.stringify(result));
 }catch(error){await page?.screenshot({path:path.join(artifacts,'failure.png'),fullPage:true});console.error(JSON.stringify({artifacts,errors}));throw error;}finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

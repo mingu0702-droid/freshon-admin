@@ -123,3 +123,46 @@ test('staff and same-origin are enforced before reservation, and expired session
  try{assert.equal((await fetch(url,{...options,headers:{'content-type':'application/json',origin}})).status,401);assert.equal((await fetch(url,{...options,headers:{...options.headers,origin:'https://wrong.invalid'}})).status,403);current=false;assert.equal((await fetch(url,options)).status,401);assert.equal(f.calls.length,0);}
  finally{await new Promise(r=>server.close(r));}
 });
+
+
+test('interactive address mode projects road and lot candidates while strict recovery remains exact',async()=>{
+ const ledger=createKakaoGeocodeLedger();ledger.diagnosticPassed=true;
+ const response={documents:[
+  {...doc('서울 종로구 합성로 14'),address:{address_name:'서울 종로구 합성동 10'},road_address:{address_name:'서울 종로구 합성로 14'}},
+  {...doc('서울 중구 합성로 14'),address:{address_name:'서울 중구 합성동 20'},road_address:{address_name:'서울 중구 합성로 14'},y:'37.52'}
+ ],meta:{is_end:false,total_count:50}};
+ const f=fixture({ledger,enabled:'1',reply:async()=>({ok:true,status:200,json:async()=>response})});
+ const q='서울 합성로 14';
+ const interactive=await f.service.lookup(q,{mode:'address'});
+ assert.equal(interactive.data.status,'OK');
+ assert.equal(interactive.data.resolution.kind,'TRUNCATED');
+ assert.equal(interactive.data.documents.length,2);
+ assert.equal(interactive.data.documents[0].address.address_name,response.documents[0].address.address_name);
+ const strict=await f.service.lookup(q);
+ assert.equal(strict.data.status,'ZERO_RESULT');assert.deepEqual(strict.data.documents,[]);
+ assert.deepEqual(f.calls.map(x=>x.url.searchParams.get('analyze_type')),['similar','exact']);
+ assert.equal(f.store.snapshot().used,2);
+ assert(!JSON.stringify(f.store.snapshot()).includes('합성'));
+});
+
+test('keyword lookup requires separate proof, rejects sensitive queries, and projects only labels and points',async()=>{
+ const ledger=createKakaoGeocodeLedger();ledger.diagnosticPassed=true;
+ const place={x:'127.01',y:'37.51',place_name:'합성 카페',address_name:'서울 종로구 합성동 14',road_address_name:'서울 종로구 합성로 23',phone:'PRIVATE_PHONE',place_url:'PRIVATE_URL'};
+ const f=fixture({ledger,enabled:'1',reply:async()=>({ok:true,status:200,json:async()=>({documents:[place],meta:{is_end:true}})})});
+ assert.equal((await f.service.status()).keywordEnabled,false);
+ await assert.rejects(f.service.lookup('합성 카페',{mode:'place'}),/TARGET_APP_KEYWORD_FREE_QUOTA_UNVERIFIED/);
+ f.env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED='1';
+ for(const invalid of ['S990123','카페 전화 010-1234-5678','카페 암호','카페\n메모']){
+  await assert.rejects(f.service.lookup(invalid,{mode:'place'}),/GEOCODE_QUERY_INVALID/);
+ }
+ assert.equal(f.calls.length,0);
+ assert.equal((await f.service.status()).keywordEnabled,true);
+ const value=await f.service.lookup('합성 카페',{mode:'place'});
+ assert.equal(f.calls[0].url.pathname,'/v2/local/search/keyword.json');
+ assert.equal(f.calls[0].url.searchParams.has('analyze_type'),false);
+ assert.deepEqual(value.data.documents,[{x:'127.01',y:'37.51',address_name:place.road_address_name,
+  road_address:{address_name:place.road_address_name},address:{address_name:place.address_name},place_name:place.place_name}]);
+ assert.equal(value.data.coordinatePersistence,false);
+ assert.equal(f.store.snapshot().used,1);
+ assert(!JSON.stringify(f.store.snapshot()).includes('합성'));
+});

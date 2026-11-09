@@ -11,7 +11,7 @@ import {batchDomNode,batchDomTemplate} from './fixtures/new-area-dom.mjs';
 // Synthetic data and mocked transports only. No browser, API, source or coordinate writes.
 const runtime=fs.readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js',import.meta.url),'utf8');
 const exposed=runtime.slice(0,runtime.indexOf('\n  initVehicles();'))+`
-window.qa={state,runNewArea,clearNewAreaBatch,judgeNewAreaRow,judgeNewAreaPoint,
+window.qa={state,runNewArea,clearNewAreaBatch,judgeNewAreaRow,judgeNewAreaPoint,lookupInteractiveLocation,
 setup(saved){state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';dateReady=false;
   periodRows=[];periodMeta={complete:false};latestSnapshotRows=saved;allStores=saved;
   for(const row of saved){storesByCode.set(row.customerCode,row);coordinateByCode.set(row.customerCode,row);if(row.vehicle)baseVehicles.set(row.customerCode,{baseVehicle:row.vehicle});}},
@@ -229,4 +229,34 @@ test('only valid customer codes enter manual-pin projection and still reuse conf
   assert.equal(f.state.newAreaResults.length,1);assert.equal(f.state.newAreaResults[0].lookupStatus,'SUCCESS');
   assert.equal(f.state.newAreaResults[0].coordinateSource,'MANUAL_PIN');assert.equal(f.state.newAreaResults[0].lat,saved.lat);
   assert.equal(f.queries.length,0);assert.equal(f.headers.length,0);
+});
+
+
+test('normalized saved address and separately stored lot address prevent provider replacement',async()=>{
+ const existing={...saved,roadAddress:saved.address,jibunAddress:'경기도 화성시 합성동 11-2',lat:null,lng:null,coordinateStatus:'MISSING'};
+ const f=fixture({rows:[existing]});
+ for(const address of ['경기 화성시 합성로1 (합성빌딩)','경기 화성시 합성동11-2']){
+  const result=await f.judgeNewAreaRow({address,customer:'원본 고객'});
+  assert.equal(result.customerCode,existing.customerCode);
+  assert.equal(result.reason,'기존 고객 좌표 확인 필요');
+ }
+ assert.equal(f.headers.length,0);
+ assert.equal(f.queries.length,0);
+});
+
+test('interactive address uncertainty and region-prefixed place names require selection',async()=>{
+ const f=fixture({lookup:(query,callback,{mode})=>{
+  assert.equal(mode,query==='서울역'?'place':'address');
+  callback([{address_name:'서울 종로구 합성로 14',place_name:mode==='place'?'합성역':undefined,x:'127.01',y:'37.51'}],
+   'OK',{resolution:{kind:mode==='place'?'KEYWORD':'ADDRESS_OR_COORDINATE_MISMATCH'}});
+ }});
+ f.window.KAKAO_MAP_CONFIG.allowExternalPlaceLookup=true;
+ for(const [text,kind] of [['서울역','KAKAO_PLACE_TEMPORARY'],['서울 종로구 합성로 41','KAKAO_ADDRESS_TEMPORARY']]){
+  const result=await f.lookupInteractiveLocation(text);
+  assert.equal(result.candidates.length,1);
+  assert.equal(result.candidates[0].coordinateSource,kind);
+ }
+ f.window.KAKAO_MAP_CONFIG.allowExternalPlaceLookup=false;
+ assert.equal(await f.lookupInteractiveLocation('서울역'),null);
+ assert.equal(f.queries.length,2);
 });

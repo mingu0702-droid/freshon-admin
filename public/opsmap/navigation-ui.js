@@ -192,7 +192,7 @@
     }
     if(!found.length){const message=document.createElement('p');message.textContent=input.value.trim()?'검색 결과가 없습니다. 고객코드·매장명·주소를 확인해 주세요.':'고객코드·매장명·주소로 검색해 주세요.';suggestions.append(message);}
     if(!found.length&&input.value.trim()&&bridge.canLookupNavigationAddress?.()===true){
-      const button=document.createElement('button');button.type='button';button.id='navLookupAddress';button.className='navLookupAddress';button.textContent='주소로 위치 찾기';button.onmousedown=event=>event.preventDefault();button.onclick=()=>lookupAddress(input);suggestions.append(button);
+      const button=document.createElement('button');button.type='button';button.id='navLookupAddress';button.className='navLookupAddress';button.textContent='주소·상호로 위치 찾기';button.onmousedown=event=>event.preventDefault();button.onclick=()=>lookupAddress(input);suggestions.append(button);
     }
     suggestions.hidden=false;input.setAttribute('aria-expanded','true');
   }
@@ -210,7 +210,7 @@
       const instruction=document.createElement('p');instruction.textContent=candidates.length?'경로에 사용할 주소를 선택해 주세요.':'일치하는 주소를 찾지 못했습니다. 도로명과 건물번호를 확인해 주세요.';suggestions.append(instruction);
       for(const candidate of candidates){
         const row={...candidate,customerCode:'',customerName:candidate.placeName||candidate.address,virtual:true},button=document.createElement('button');button.type='button';button.setAttribute('role','option');button.dataset.navAddressResult='true';
-        const name=document.createElement('strong');name.textContent=row.address;const hint=document.createElement('small');hint.textContent='선택하면 이 경로에서만 사용합니다.';button.append(name,hint);button.onmousedown=event=>event.preventDefault();
+        const name=document.createElement('strong');name.textContent=candidate.placeName||row.address;const hint=document.createElement('small');hint.textContent=candidate.placeName?row.address:'선택하면 이 경로에서만 사용합니다.';button.append(name,hint);button.onmousedown=event=>event.preventDefault();
         button.onclick=()=>{if(!current())return;choosePoint(fieldRole(input),row,fieldIndex(input));};suggestions.append(button);
       }
     }catch(error){if(current()){suggestions.replaceChildren();const message=document.createElement('p');message.textContent='주소 위치를 찾지 못했습니다. 잠시 후 다시 시도해 주세요.';suggestions.append(message);}}
