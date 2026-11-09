@@ -140,6 +140,31 @@ test('account mode cannot use wrong Stage identity, missing account values, disa
   }
 });
 
+test('only explicit Stage photo approval can reuse an account already stored on Stage', async () => {
+  const env = {RENDER_EXTERNAL_URL:STAGE_ORIGIN, RENDER_SERVICE_ID:STAGE_SERVICE,
+    DELIVERY_ADMIN_ID:'stage-fixture', DELIVERY_ADMIN_PASSWORD:'fixture-secret'};
+  for (const [overrides, expected] of [
+    [{},502],
+    [{OPSMAP_STAGE_DELIVERY_PHOTO_USE_EXISTING_ADMIN:'1', RENDER_SERVICE_ID:'production'},502],
+    [{OPSMAP_STAGE_DELIVERY_PHOTO_USE_EXISTING_ADMIN:'1', OPSMAP_STAGE_DELIVERY_PHOTO_AUTH_ENABLED:'1'},502],
+    [{OPSMAP_STAGE_DELIVERY_PHOTO_USE_EXISTING_ADMIN:'1'},200]
+  ]) {
+    const f = await fixture({env:{...env,...overrides},lifetime:30});
+    try {
+      const result = await f.get(exact);
+      assert.equal(result.status,expected);
+      if (expected===502) { assert.deepEqual(f.stats(),{logins:0,reads:0,media:0}); continue; }
+      assert.equal(f.stats().logins,1);
+      const [row] = (await result.json()).data.deliveries;
+      f.advance(30001);
+      assert.equal((await f.get(row.photos[0].thumbnailUrl)).status,200);
+      assert.equal(f.stats().logins,2);
+      f.logout();
+      assert.equal((await f.get(row.photos[0].url)).status,401);
+    } finally { await f.close(); }
+  }
+});
+
 test('an upstream 401 renews the Stage session once and cooldown suppresses a repeated rejection', async () => {
   const renewed = await fixture({sourceStatus:(_url, cookie) => cookie.endsWith('-1') ? 401 : null});
   try {

@@ -21,8 +21,11 @@ function taskSearchAllowed(url) {
 }
 
 export function createStageOperationalPhotoExtension({env = process.env, fetchImpl = globalThis.fetch, defaultDate, now = Date.now} = {}) {
-  const accountMode = env.OPSMAP_STAGE_DELIVERY_PHOTO_AUTH_ENABLED === '1';
-  const id = env.OPSMAP_STAGE_DELIVERY_PHOTO_ID, password = env.OPSMAP_STAGE_DELIVERY_PHOTO_PASSWORD;
+  const dedicatedAccount = env.OPSMAP_STAGE_DELIVERY_PHOTO_AUTH_ENABLED === '1';
+  const approvedExistingAccount = !dedicatedAccount && env.OPSMAP_STAGE_DELIVERY_PHOTO_USE_EXISTING_ADMIN === '1';
+  const accountMode = dedicatedAccount || approvedExistingAccount;
+  const id = dedicatedAccount ? env.OPSMAP_STAGE_DELIVERY_PHOTO_ID : env.DELIVERY_ADMIN_ID;
+  const password = dedicatedAccount ? env.OPSMAP_STAGE_DELIVERY_PHOTO_PASSWORD : env.DELIVERY_ADMIN_PASSWORD;
   const approvedStage = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE;
   const account = accountMode && approvedStage && validSecret(id, 256) && validSecret(password, 1024)
     ? createStageDeliveryAdminPhotoSession({id, password, fetchImpl, now}) : null;
