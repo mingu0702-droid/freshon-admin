@@ -118,7 +118,16 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     const directory = await mkdtemp(path.join(tempRoot, 'opsmap-ab-stage-'));
     try {
       for (const [name, data] of files) await writeFile(path.join(directory, name), data, {mode:0o600, flag:'wx'});
-      const result = {directory, registry, asOf:index.asOf, generation:index.sha256, expiresAt:now() + TTL};
+      const appliedAt = now();
+      const evidence = {
+        coordinateAppliedAt:new Date(appliedAt).toISOString(),
+        coordinateScope:'STAGE_TEMPORARY',
+        pendingCoordinates:[...registry.values()].filter(store => !store.hasPoint).length,
+        coverageGeneratedAt:index.generatedAt,
+        coverageSourceObservedAt:index.sourceObservedAt,
+        coverageAsOf:index.asOf
+      };
+      const result = {directory, registry, asOf:index.asOf, generation:index.sha256, evidence, expiresAt:appliedAt + TTL};
       current = result;
       setTimeout(() => {
         if (current === result) current = null;

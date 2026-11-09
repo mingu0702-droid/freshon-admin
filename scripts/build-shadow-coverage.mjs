@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { aggregateDay, combineDays, datesFor, PERIODS, prepareCatalog, prepareView } from '../src/shadowCoverage/model.js';
-import { atomicCoverageWrite, boundedRead, privateCoverageDirectory, publishCoverageIndex, writeCoverageBlob } from '../src/shadowCoverage/store.js';
+import { atomicCoverageWrite, boundedRead, privateCoverageDirectory, publishCoverageIndex, readCoverageIndex, writeCoverageBlob } from '../src/shadowCoverage/store.js';
 
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const digestJson = value => digest(JSON.stringify(value));
@@ -72,6 +72,25 @@ async function optionalJson(file, maxBytes) {
   } catch (error) {
     if (error.code === 'ENOENT') return null;
     throw error;
+  }
+}
+
+async function checkObservedContinuity(output, end, daily) {
+  if (!daily.has(end)) throw Error('COVERAGE_END_DATE_UNCONFIRMED');
+  let previous;
+  try {
+    previous = await readCoverageIndex(path.join(output, 'coverage-index.json'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  const ref = previous.windows[90];
+  const bytes = await boundedRead(path.join(output, ref.sha256 + '.json'), ref.bytes);
+  if (bytes.length !== ref.bytes || digest(bytes) !== ref.sha256) throw Error('COVERAGE_PREVIOUS_WINDOW_INTEGRITY');
+  const missing = new Set(JSON.parse(bytes).missing);
+  const newRange = new Set(datesFor(end, 90));
+  for (const date of datesFor(previous.asOf, 90)) {
+    if (newRange.has(date) && !missing.has(date) && !daily.has(date)) throw Error('COVERAGE_OBSERVED_DAY_REGRESSION');
   }
 }
 
@@ -146,6 +165,7 @@ export async function buildShadowCoverage({ inputDirectory, outputDirectory, kin
         catalog.stores.length !== source.stores?.union)) {
       throw Error('COVERAGE_OBSERVATION_COUNT_MISMATCH');
     }
+    if (kind === 'OBSERVED') await checkObservedContinuity(output, source.end, daily);
 
     const catalogRef = await writeCoverageBlob(output, {
       stores: catalog.stores.map(({ code, name, address, center, registered, lat, lng }) =>

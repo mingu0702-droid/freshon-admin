@@ -129,6 +129,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       if (value) {
         snapshot = materializeSnapshot(value);
         snapshotBase = stageSnapshotBaseVehicles(snapshot);
+        const loaded = snapshot;
+        // The map can serve its verified snapshot while the separate proof is read.
+        void snapshotStore.loadSelectedDateCheckpoint(value).then(checkpoint => {
+          if (checkpoint && snapshot === loaded) snapshot = {...loaded, selectedDateCheckpoint:checkpoint};
+        }).catch(() => {});
       }
       return snapshot;
     }).finally(() => {snapshotPending = null;});
@@ -198,6 +203,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
     sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget:null,readRecordedRoadRoute,
     getShadowCoverageState:()=>validation.active() ? 'ready' : coverageState,
+    getLocalDataEvidence:()=>validation.active()?.evidence || null,
     mountPrivateExtensions:binding=>{
       const {requireStaff}=binding;
       staffView = requireStaff;

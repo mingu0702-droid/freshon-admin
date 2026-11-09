@@ -174,6 +174,41 @@ test('daily shards are reused, duplicate reads share cache and restart uses prev
   await assert.rejects(createShadowCoverageStore({ directory: out }).readPeriod(90), /UNAVAILABLE/);
 });
 
+test('an observed publish rejects loss of an overlapping observed day and an unobserved end date', async t => {
+  const input = await fs.mkdtemp(path.join(os.tmpdir(), 'opsmap-coverage-continuity-'));
+  t.after(() => fs.rm(input, {recursive:true,force:true}));
+  const observed = path.join(input, 'observed-days');
+  const output = path.join(input, 'compiled');
+  await fs.mkdir(observed);
+  await fs.writeFile(path.join(input, 'stores.private.json'), JSON.stringify(source));
+  const oldDay = allDates.at(-2);
+  const addDay = day => fs.writeFile(path.join(observed, day + '.json'), JSON.stringify(raw(day)));
+  const importEvidence = (lastDay, count, stamp) => fs.writeFile(path.join(input, 'source-import.safe.json'), JSON.stringify({
+    end:lastDay, days:count, completedUnique:0, observedAt:stamp, sourceWrites:0,
+    sources:{current:{stable:true}, archive:{stable:true}}, stores:{union:storeRows.length}
+  }));
+  const build = () => buildShadowCoverage({inputDirectory:input,outputDirectory:output,includeOfficialRegions:false});
+  await addDay(oldDay);
+  await addDay(end);
+  await importEvidence(end, 2, '2026-11-08T00:00:00Z');
+  const first = await build();
+  await fs.unlink(path.join(observed, oldDay + '.json'));
+  await importEvidence(end, 1, '2026-11-08T01:00:00Z');
+  await assert.rejects(build(), /COVERAGE_OBSERVED_DAY_REGRESSION/);
+  await addDay(oldDay);
+  const nextDay = '2026-11-08';
+  await importEvidence(nextDay, 2, '2026-11-09T00:00:00Z');
+  await assert.rejects(build(), /COVERAGE_END_DATE_UNCONFIRMED/);
+  const old = await createShadowCoverageStore({directory:output}).readPeriod(90);
+  assert.equal(old.index.sha256, first.index.sha256);
+  await addDay(nextDay);
+  await importEvidence(nextDay, 3, '2026-11-09T01:00:00Z');
+  const next = await build();
+  assert.equal(next.reusedDays, 2);
+  assert.equal(next.rebuiltDays, 1);
+  assert.equal((await createShadowCoverageStore({directory:output}).readPeriod(90)).index.asOf, nextDay);
+});
+
 test('runtime reads bounded compressed private files and rejects altered content', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'opsmap-coverage-packed-'));
   try {

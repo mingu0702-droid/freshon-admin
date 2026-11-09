@@ -23,10 +23,11 @@ export function mapPublicationConnection(hubStatus,liveStatus){
     sourceBoundCompletionVerified:false,privateSealedBindingVerified:false,oneDateValidationAllowed:false};
 }
 
-export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicleView=requireView,previewEnabled,modelStatus,readBaseVehicleMaster,baseCache,env=process.env,adminGuard=requireAdmin,baseStore=env.OPSMAP_STAGE_FIXED_MASTER_FILE?createFixedVehicleFileStore({env}):env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
+export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicleView=requireView,previewEnabled,modelStatus,readBaseVehicleMaster,baseCache,getLocalDataEvidence,env=process.env,adminGuard=requireAdmin,baseStore=env.OPSMAP_STAGE_FIXED_MASTER_FILE?createFixedVehicleFileStore({env}):env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
   let statusCache=null,statusAt=0,statusPending=null;
   const base=baseCache||createFixedVehicleCache({reader:readBaseVehicleMaster||(()=>{throw new Error('FIXED_MASTER_UNAVAILABLE');}),store:baseStore,readOnly:env.OPSMAP_STAGE_VERIFY_ONLY==='1'||env.OPSMAP_FIXED_MASTER_REFRESH_ENABLED==='0'});
   const cleanDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:null;
+  const cleanTime=v=>typeof v==='string'&&v.length<=40&&Number.isFinite(Date.parse(v))?new Date(v).toISOString():null;
   const code=v=>/^[A-Z0-9_]+$/.test(v||'')?v:'UNKNOWN';
   async function readStatus(){
     if(statusCache&&Date.now()-statusAt<20000)return statusCache;
@@ -58,7 +59,7 @@ export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicl
         coverage:{generation:Number(raw.coverage?.generation)||null,proof:code(raw.coverage?.proof),
           history:(raw.coverage?.history||[]).filter(cleanDate),period:(raw.coverage?.period||[]).filter(cleanDate)},
         automatic:raw.automatic&&typeof raw.automatic==='object'?code(raw.automatic.status):model?'NOT_CONFIGURED':'UNKNOWN',
-        automation:raw.automatic&&typeof raw.automatic==='object'?{configured:raw.automatic.configured===true,status:code(raw.automatic.status),lastCheck:raw.automatic.lastCheck||null,lastRequest:raw.automatic.lastRequest||null,lastSuccess:raw.automatic.lastSuccess||null,lastError:raw.automatic.lastError?code(raw.automatic.lastError):null,generation:Number(raw.automatic.generation)||null}:model?{configured:false,status:'NOT_CONFIGURED'}:{configured:null,status:'UNKNOWN'},continuation:!model?'UNKNOWN':raw.continuation==='ACTIVE'?'ACTIVE':'NONE',checkedAt:new Date().toISOString()};
+        automation:raw.automatic&&typeof raw.automatic==='object'?{configured:raw.automatic.configured===true,status:code(raw.automatic.status),lastCheck:cleanTime(raw.automatic.lastCheck),lastRequest:cleanTime(raw.automatic.lastRequest),lastSuccess:cleanTime(raw.automatic.lastSuccess),lastError:raw.automatic.lastError?code(raw.automatic.lastError):null,generation:Number(raw.automatic.generation)||null}:model?{configured:false,status:'NOT_CONFIGURED'}:{configured:null,status:'UNKNOWN'},continuation:!model?'UNKNOWN':raw.continuation==='ACTIVE'?'ACTIVE':'NONE',checkedAt:new Date().toISOString()};
       statusAt=Date.now();return statusCache;
     })().finally(()=>{statusPending=null;});return statusPending;
   }
@@ -70,7 +71,16 @@ export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicl
       try{live=await modelStatus();liveAvailable=!!live&&typeof live==='object'&&!Array.isArray(live);}catch{/* Independent local status remains unknown. */}
       const sources=[...status.sources,{action:'localModelStatus',state:liveAvailable?'AVAILABLE':'UNKNOWN'}];
       const available=sources.some(source=>source.state==='AVAILABLE');
-      return r.status(available?200:503).json({ok:available,...(!available?{error:'MAP_DATA_STATUS_UNAVAILABLE'}:{}),data:{...status,partial:sources.some(source=>source.state==='UNKNOWN'),sources,live,publicationConnection:mapPublicationConnection(status,live)}});
+      const evidence=getLocalDataEvidence?.();
+      const localEvidence=evidence?{
+        coordinateAppliedAt:cleanTime(evidence.coordinateAppliedAt),
+        coordinateScope:evidence.coordinateScope==='STAGE_TEMPORARY'?'STAGE_TEMPORARY':null,
+        pendingCoordinates:Number.isSafeInteger(evidence.pendingCoordinates)&&evidence.pendingCoordinates>=0?evidence.pendingCoordinates:null,
+        coverageGeneratedAt:cleanTime(evidence.coverageGeneratedAt),
+        coverageSourceObservedAt:cleanTime(evidence.coverageSourceObservedAt),
+        coverageAsOf:cleanDate(evidence.coverageAsOf)
+      }:null;
+      return r.status(available?200:503).json({ok:available,...(!available?{error:'MAP_DATA_STATUS_UNAVAILABLE'}:{}),data:{...status,partial:sources.some(source=>source.state==='UNKNOWN'),sources,live,localEvidence,publicationConnection:mapPublicationConnection(status,live)}});
     }catch{return r.status(503).json({error:'MAP_DATA_STATUS_UNAVAILABLE'});}
   });
   async function baseResponse(q,r){

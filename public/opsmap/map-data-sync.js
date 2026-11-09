@@ -28,6 +28,7 @@
   const panel=document.createElement('details');panel.id='mapDataHealth';panel.className='block';
   const summary=document.createElement('summary');summary.textContent='지도 데이터 최신화 상태';panel.append(summary);
   const status=document.createElement('p');status.setAttribute('role','status');panel.append(status);
+  const evidence=document.createElement('ul');evidence.hidden=true;panel.append(evidence);
   const action=document.createElement('button');action.textContent='관리자 로그인 필요 · 저장분 증분 요청';action.disabled=true;panel.append(action);
   const detailAction=document.createElement('button');detailAction.textContent='Customer 상세정보 저장자료 갱신 요청';detailAction.disabled=true;panel.append(detailAction);
   document.querySelector('#leftPanel .head').after(panel);
@@ -53,16 +54,34 @@
   attachSummary();if(!document.querySelector('#approvedSiteHeader')){headerObserver=new MutationObserver(attachSummary);headerObserver.observe(document.body,{childList:true,subtree:true});}
   const showDetails=()=>{const help=document.querySelector('.dataHelp');if(help)help.open=true;panel.open=true;void refresh();};strip.onclick=showDetails;
   function renderSummary(d,snapshot,failed=false){const value=MapFreshnessSummary.summarize(d,snapshot,{failed});strip.textContent=value.text;strip.title=value.title;strip.dataset.state=value.state;strip.dataset.partial=String(value.partial);api.summary=value;}
+  const formatTime=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',dateStyle:'short',timeStyle:'short'});
+  function renderEvidence(data,snapshot){
+    const showTime=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?formatTime.format(new Date(value)):'미확인';
+    const checkpoint=snapshot?.snapshot?.selectedDateCheckpoint||snapshot?.selectedDateCheckpoint;
+    const sourceAt=checkpoint?.sourceReadComplete===true&&checkpoint.sourceDateVerified===true?checkpoint.sourceObservedAt:null;
+    const local=data?.localEvidence;
+    const lines=[
+      '원천 확인 '+showTime(sourceAt)+(sourceAt?' ('+checkpoint.date+' 배송 기준)':''),
+      '지도 저장본 '+showTime(snapshot?.generatedAt||snapshot?.snapshot?.updatedAt),
+      '고정 좌표 적용 '+showTime(local?.coordinateAppliedAt)+(local?.coordinateScope==='STAGE_TEMPORARY'?' (Stage 임시)':''),
+      '음영권역 집계 '+showTime(local?.coverageGeneratedAt)+(local?.coverageAsOf?' (기준일 '+local.coverageAsOf+')':'')
+    ];
+    if(Number.isSafeInteger(local?.pendingCoordinates))lines.push('좌표 미확인 '+local.pendingCoordinates.toLocaleString('ko-KR')+'곳');
+    evidence.replaceChildren(...lines.map(text=>{const li=document.createElement('li');li.textContent=text;return li;}));
+    evidence.hidden=false;
+  }
   let busy=false,last=null,poll=null,pollCount=0,dialogOpen=false,submitted=false,generation=0,lastMetadata=null;
   const api=window.MapDataSync={onPublished:null,refresh:()=>refresh()};
   async function refresh(){
     if(busy||!window.MapStaffEntry?.session())return;const owner=generation;busy=true;button.disabled=true;
     try{
       const [r,s]=await Promise.all([fetch('/api/map-phase2b/preview/data-status',{cache:'no-store'}),fetch('/api/map-phase2b/preview/status?metadataOnly=1',{cache:'no-store'})]);
-      const statusData=s.ok?await s.json():null;if(statusData)lastMetadata=statusData;
+      const statusData=s.ok?await s.json():null;
       if(!r.ok)throw new Error('STATUS');const d=(await r.json()).data,snap=statusData?.snapshot||statusData&&{latest:statusData.latestDate,stale:statusData.stale,selectedDateCheckpoint:statusData.selectedDateCheckpoint},live=d.live||{ready:false,generation:null,periodLatest:null};
       if(owner!==generation||!window.MapStaffEntry?.session())return;
+      if(statusData)lastMetadata=statusData;
       renderSummary(d,statusData,!s.ok);
+      renderEvidence(d,statusData||lastMetadata);
       detailAction.disabled=d.partial===true||['BUILD','VERIFY','HELD'].includes(d.customerDetails?.phase);
       const target=d.customer.freshon&&d.customer.delivery?[d.customer.freshon,d.customer.delivery].sort()[0]:null,job=d.job;
       const active=job&&(job.publication==='PENDING'||!['DONE','ERROR','UP_TO_DATE'].includes(job.phase));
@@ -79,7 +98,7 @@
       if(last!==live.generation&&live.ready){const old=last;last=live.generation;if(old!==null)await api.onPublished?.(live);}
       // Staff idle deadlines are not extended by automatic background polling.
       return d;
-    }catch{if(owner===generation&&window.MapStaffEntry?.session()){renderSummary(null,lastMetadata,true);status.textContent='최신화 상태 확인 실패 · 기존 지도 유지 · 다시 버튼을 눌러 확인해 주세요.';action.disabled=true;action.textContent='상태 확인 후 관리자 요청 가능';}}
+    }catch{if(owner===generation&&window.MapStaffEntry?.session()){renderSummary(null,lastMetadata,true);renderEvidence(null,lastMetadata);status.textContent='최신화 상태 확인 실패 · 기존 지도 유지 · 다시 버튼을 눌러 확인해 주세요.';action.disabled=true;action.textContent='상태 확인 후 관리자 요청 가능';}}
     finally{busy=false;button.disabled=false;}
   }
   button.onclick=()=>{document.querySelector('#mapDateBar').append(panel);panel.open=true;void refresh();};
@@ -104,7 +123,7 @@
       finally{token='';input.value='';submit.disabled=false;}
     };dialog.showModal();
   };
-  window.addEventListener('map-staff-signed-out',()=>{generation++;clearTimeout(poll);strip.textContent='직원 로그인 필요';delete strip.dataset.state;status.textContent='직원 로그인 필요';action.disabled=true;detailAction.disabled=true;});
+  window.addEventListener('map-staff-signed-out',()=>{generation++;clearTimeout(poll);lastMetadata=null;evidence.replaceChildren();evidence.hidden=true;delete api.summary;strip.textContent='직원 로그인 필요';delete strip.dataset.state;status.textContent='직원 로그인 필요';action.disabled=true;detailAction.disabled=true;});
   window.addEventListener('map-staff-authenticated',()=>void refresh());
   void refresh();
 })();
