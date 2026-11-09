@@ -30,7 +30,7 @@ try{
   for(const name of ['phase2b-ui-helpers.js','map-period-ui.js','manual-waypoints.js','new-area-requests.js'])await page.addScriptTag({path:path.join(base,name)});
   await page.addScriptTag({path:path.resolve('node_modules/xlsx/dist/xlsx.full.min.js')});
   const runtime=fs.readFileSync(path.join(base,'map-phase2b-runtime.js'),'utf8');
-  await page.addScriptTag({content:runtime.replace('\n  initVehicles();',`\n  window.newAreaBrowser={setup(){baseVehicles.set('S990001',{baseVehicle:'101'});state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';dateReady=false;periodRows=[${JSON.stringify(row)}];periodMeta={startDate:state.rangeStart,endDate:state.rangeEnd,complete:false,displayComplete:true,coverageComplete:false};},setJudge:fn=>judgeNewAreaRow=fn,realJudge:judgeNewAreaRow};\n  initVehicles();`)});
+  await page.addScriptTag({content:runtime.replace('\n  initVehicles();',`\n  window.newAreaBrowser={setup(){baseVehicles.set('S990001',{baseVehicle:'101'});state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';dateReady=false;periodRows=[${JSON.stringify(row)}];periodMeta={startDate:state.rangeStart,endDate:state.rangeEnd,complete:false,displayComplete:true,coverageComplete:false};},setJudge:fn=>judgeNewAreaRow=fn,realJudge:judgeNewAreaRow,enableMapClick(){state.map={};$('#map').onclick=()=>searchTemporaryClick?.({latLng:{getLat:()=>37.2,getLng:()=>127}});}};\n  initVehicles();`)});
   await page.waitForFunction(()=>window.MapUiLocalBridge?.stores().length===1);
   await page.addScriptTag({path:path.join(base,'map-approved-shell-candidate.js')});
   await page.evaluate(()=>window.newAreaBrowser.setup());
@@ -88,5 +88,44 @@ try{
   await page.waitForFunction(()=>MapUiLocalBridge.state.newAreaResults.length===3);
   assert.deepEqual(await page.evaluate(()=>retryPass.sort()),['미완료행','실패행']);
   assert.deepEqual(await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults.map(row=>row.address)),['성공행','실패행','미완료행']);
+  await page.evaluate(()=>{
+    newAreaBrowser.enableMapClick();
+    window.manualLookups=[];
+    newAreaBrowser.setJudge(row=>{
+      manualLookups.push(row.customer);
+      const candidates=row.customer==='후보 확인'?[{address:'합성 후보 하나',lat:37.2,lng:127},{address:'합성 후보 둘',lat:37.3,lng:127.1}]:undefined;
+      return {...row,decision:'검토',lookupStatus:'DEFERRED',candidates};
+    });
+  });
+  for(const width of [1440,390]){
+    await page.setViewportSize({width,height:900});
+    const input='경기도 화성시 합성로 2\t지도 선택\n경기도 화성시 합성로 2\t후보 확인';
+    await page.locator('#newAreaBatchInput').fill(input);
+    await page.locator('#judgeNewAreaBatch').click();
+    const first=page.locator('[data-judged="0"]'),second=page.locator('[data-judged="1"]');
+    const control=page.locator('.newAreaPositionControl');
+    await first.click();
+    assert.equal(await control.isVisible(),true);
+    const bounds=await control.boundingBox();
+    assert.ok(bounds.x>=0&&bounds.x+bounds.width<=width);
+    await control.getByRole('button',{name:'취소하고 목록으로'}).click();
+    assert.equal(await page.locator('#newAreaBatchInput').inputValue(),input);
+    assert.equal(await first.count(),1);
+    await first.click();
+    await page.locator('#map').click({position:{x:135,y:230}});
+    await page.waitForFunction(()=>MapUiLocalBridge.state.newAreaResults[0]?.coordinateSource==='MAP_CLICK_TEMPORARY');
+    assert.match(await first.innerText(),/임시 위치 선택 · 배송판정 검토/);
+    await second.click();
+    await control.getByRole('button',{name:'합성 후보 둘'}).click();
+    assert.equal(await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults[1]?.resolvedAddress),'합성 후보 둘');
+    await page.evaluate(()=>{manualLookups.length=0;});
+    await page.locator('#judgeNewAreaBatch').click();
+    await first.waitFor();
+    assert.deepEqual(await page.evaluate(()=>manualLookups),[]);
+    assert.deepEqual(await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults.map(row=>row.customer)),['지도 선택','후보 확인']);
+    result.checks.push({width,manualMapClick:true,manualCandidate:true,cancelPreservesRows:true,rerunPreservesChoices:true});
+    await page.screenshot({path:path.join(artifacts,'manual-results-'+width+'.png'),fullPage:true});
+    await page.locator('#clearNewAreaBatch').click();
+  }
   result.cancelRerun=true;result.failedAndPendingOnly=true;assert.deepEqual(errors,[]);assert.deepEqual(blocked,[]);result.externalRequests=0;result.artifacts=artifacts;console.log(JSON.stringify(result));
 }catch(error){await page?.screenshot({path:path.join(artifacts,'failure.png'),fullPage:true});console.error(JSON.stringify({artifacts,errors}));throw error;}finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

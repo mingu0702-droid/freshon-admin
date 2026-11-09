@@ -83,6 +83,10 @@
 .approvedShellCandidate #mapBatchDialog .judgeCard{width:100%;white-space:normal;overflow-wrap:anywhere;text-align:left;margin:8px 0}
 .approvedShellCandidate #mapBatchDialog .judgeTop{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px}
 .approvedShellCandidate #mapBatchDialog .judgeCard:disabled{opacity:1;cursor:default}
+.approvedShellCandidate .newAreaPositionControl{position:absolute;top:56px;right:12px;z-index:460;box-sizing:border-box;width:max-content;max-width:calc(100% - 24px);padding:10px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 2px 8px #18345916;font-size:13px;overflow-wrap:anywhere}
+.approvedShellCandidate .newAreaPositionControl>button{margin-top:8px;min-height:36px}
+.approvedShellCandidate .newAreaPositionChoices{max-height:min(180px,30vh);overflow:auto}
+.approvedShellCandidate .newAreaPositionChoices .resultItem{width:100%;text-align:left;white-space:normal}
 .approvedShellCandidate .marker.approvedMarker{width:36px;height:36px;filter:none}
 .approvedShellCandidate .marker.approvedMarker.periodCluster{width:44px;height:44px}
 .approvedShellCandidate .marker.approvedMarker.selected .pin{width:40px;height:40px;outline:5px solid #2962ed40}
