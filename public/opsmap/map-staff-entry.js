@@ -35,6 +35,17 @@
     const button = document.querySelector('#staffLogout');
     if (button) { button.textContent = session ? '직원 로그아웃' : unknown ? '연결 재확인' : '직원 로그인'; button.onclick = session ? logout : unknown ? () => void check() : () => account.focus(); }
     const header = document.querySelector('#approvedSiteHeader');
+    if (header && location.origin === 'https://freshon-admin-stage-preview-template.onrender.com') {
+      let link = document.querySelector('#mapStageVerification');
+      if (!link && session) {
+        link = document.createElement('a');
+        link.id = 'mapStageVerification';
+        link.href = '/opsmap/stage-verification';
+        link.textContent = 'Stage 검증 자료';
+        header.append(link);
+      }
+      if (link) link.hidden = !session;
+    }
     let label = document.querySelector('#mapStaffSessionState');
     if (header && !label) { label = document.createElement('span'); label.id = 'mapStaffSessionState'; label.setAttribute('role', 'status'); header.append(label); }
     if (label) label.textContent = session ? '직원 로그인됨' : unknown ? '직원 인증 확인 중' : '직원 로그인 필요';
