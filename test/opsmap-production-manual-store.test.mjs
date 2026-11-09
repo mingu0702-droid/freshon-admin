@@ -1,5 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import crypto from 'node:crypto';import http from 'node:http';import express from 'express';
+import {spawnSync} from 'node:child_process';import {mkdtemp,readFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import path from 'node:path';
 import {createProductionManualPinGithubStore} from '../src/opsmap-abc/manualPinGithubStore.js';import {createManualMapPins} from '../src/opsmap-abc/manualMapPins.js';import {createMemoryCoordinateStore} from '../src/opsmap-abc/opsmapCoordinateIngestion.js';import {coordinateAddressHash} from '../src/opsmap-abc/opsmapAutoCoordinates.js';
+import {createFileCoordinateStore} from '../src/opsmap-abc/opsmapCoordinateIngestion.js';
 const sha=n=>String(n).padStart(40,'0');
 function fakeGithub(){let revision=1,value={manualPins:{schema:1,operations:0,customers:{}}},writes=0,unknown=false;
  const response=(status,body)=>({status,ok:status>=200&&status<300,json:async()=>structuredClone(body)});
@@ -38,7 +40,62 @@ test('manual pin real service persists, reloads and reverts through isolated CAS
  const env={RENDER:'true',RENDER_SERVICE_ID:'fixture',MAP_STAFF_ID:'fixture',OPSMAP_MANUAL_PIN_WRITER_ID:'fixture',OPSMAP_MANUAL_PIN_WRITES:'1',OPSMAP_MANUAL_PIN_DURABLE_CONFIRMED:'1'};
  const source={customerCode:'S970003',customerName:'fixture',address:'서울특별시 가상로 10'},options={env,appRoot:'C:/app',store,backupStore:store.backupStore,authorizeWrite:()=>true,readCustomer:async()=>source,readCoordinate:()=>({latitude:null,longitude:null})};
  const service=createManualMapPins(options),body={originalAddressHash:coordinateAddressHash(source.address),expectedRevision:0,requestId:crypto.randomUUID(),latitude:37.5,longitude:127};
- await service.mutate(source.customerCode,'save',body);const reopened=createManualMapPins(options);assert.equal((await reopened.projection())[0].resolutionStatus,'MANUAL_CONFIRMED');
- await reopened.mutate(source.customerCode,'revert',{...body,expectedRevision:1,requestId:crypto.randomUUID(),targetRevision:0});assert.equal((await reopened.projection()).length,0);
+ const session={assertSession:()=>{}};
+ await service.mutate(source.customerCode,'save',body,session);const reopened=createManualMapPins(options);assert.equal((await reopened.projection())[0].resolutionStatus,'MANUAL_CONFIRMED');
+ await reopened.mutate(source.customerCode,'revert',{...body,expectedRevision:1,requestId:crypto.randomUUID(),targetRevision:0},session);assert.equal((await reopened.projection()).length,0);
  assert.equal(remote.value.manualPins.customers[source.customerCode].history.length,2);assert.equal(JSON.stringify(remote.value).includes(source.address),false);assert.equal(remote.writes,2);
+});
+
+test('isolated private file persists across server processes and preserves the prior pin on rejection', async t => {
+ const directory=await mkdtemp(path.join(tmpdir(),'opsmap-manual-pin-fixture-'));
+ t.after(()=>rm(directory,{recursive:true,force:true}));
+ const filePath=path.join(directory,'pins.json'),code='S970003';
+ const original='서울특별시 가상로 10 2층';
+ let address=original;
+ const env={MAP_STAFF_ID:'fixture',OPSMAP_MANUAL_PIN_WRITER_ID:'fixture',OPSMAP_MANUAL_PIN_WRITES:'1',OPSMAP_MANUAL_PIN_DURABLE_CONFIRMED:'1'};
+ const options={env,readCustomer:async()=>({customerCode:code,customerName:'fixture',address}),
+  store:createFileCoordinateStore({filePath}),backupStore:createFileCoordinateStore({filePath:filePath+'.backup'}),authorizeWrite:()=>true};
+ const session={assertSession:()=>{}};
+ const service=createManualMapPins(options);
+ const body={originalAddressHash:coordinateAddressHash(original),expectedRevision:0,requestId:crypto.randomUUID(),
+  latitude:37.5,longitude:127,verificationKind:'BUILDING_LOCATION',correctedSearchAddress:'서울특별시 가상로 10'};
+ assert.equal((await service.selected(code)).correctedSearchAddress,body.correctedSearchAddress);
+ await assert.rejects(service.mutate(code,'save',body),{code:'MANUAL_PIN_WRITE_PERMISSION_REQUIRED'});
+ await service.mutate(code,'save',body,session);
+ const saved=await readFile(filePath,'utf8');
+ assert.ok(!saved.includes(original)&&!saved.includes(body.correctedSearchAddress));
+
+ function reopen() {
+  const manualModule=new URL('../src/opsmap-abc/manualMapPins.js',import.meta.url).href;
+  const storageModule=new URL('../src/opsmap-abc/opsmapCoordinateIngestion.js',import.meta.url).href;
+  const script=`import {createManualMapPins} from ${JSON.stringify(manualModule)};
+    import {createFileCoordinateStore} from ${JSON.stringify(storageModule)};
+    const [filePath,code,address]=process.argv.slice(1);
+    const service=createManualMapPins({store:createFileCoordinateStore({filePath}),readCustomer:()=>({customerCode:code,address})});
+    const selected=await service.selected(code);
+    console.log(JSON.stringify({revision:selected.revision,history:selected.history.length,projection:await service.projection()}));`;
+  const result=spawnSync(process.execPath,['--input-type=module','-e',script,filePath,code,address],{encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);
+  return JSON.parse(result.stdout);
+ }
+ const restarted=reopen();
+ assert.equal(restarted.revision,1);
+ assert.equal(restarted.projection[0].latitude,body.latitude);
+ assert.equal(restarted.projection[0].coordinateAccuracy,'BUILDING');
+ assert.equal(restarted.projection[0].coordinateEvidence,'BUILDING_LOCATION');
+ const second={originalAddressHash:body.originalAddressHash,expectedRevision:1,requestId:crypto.randomUUID(),latitude:37.51,longitude:127};
+ const unavailable=createManualMapPins({...options,backupStore:{transaction(){throw Error('DISK_FULL');}}});
+ await assert.rejects(unavailable.mutate(code,'save',second,session),{message:'DISK_FULL'});
+ assert.equal(await readFile(filePath,'utf8'),saved);
+ address='서울특별시 가상로 12';
+ assert.equal(reopen().projection[0].resolutionStatus,'ADDRESS_CHANGED_REVIEW_REQUIRED');
+ await assert.rejects(service.mutate(code,'save',second,session),{code:'MANUAL_PIN_ADDRESS_CHANGED'});
+ assert.equal(await readFile(filePath,'utf8'),saved);
+ address=original;
+ await service.mutate(code,'save',second,session);
+ const revert={originalAddressHash:body.originalAddressHash,expectedRevision:2,requestId:crypto.randomUUID(),targetRevision:1};
+ await service.mutate(code,'revert',revert,session);
+ assert.equal(reopen().projection[0].latitude,body.latitude);
+ await service.mutate(code,'revert',{...revert,expectedRevision:3,requestId:crypto.randomUUID(),targetRevision:0},session);
+ assert.deepEqual(reopen(),{revision:4,history:4,projection:[]});
 });

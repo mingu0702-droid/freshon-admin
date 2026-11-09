@@ -24,12 +24,12 @@ function apply(row){
  if(row.addressChanged&&row.currentAddressHash&&row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'&&!(confirmed?.resolutionStatus==='MANUAL_CONFIRMED'&&confirmed.originalAddressHash===row.currentAddressHash)){row.lat=null;row.lng=null;row.coordinateStatus='CONFLICT';return row;}
  if(!bases.has(row)){
   const inherited=row[ORIGINAL_PIN_BASE];
-  const original=inherited?.customerCode===row.customerCode?inherited.coordinates:{lat:row.lat,lng:row.lng,coordinateSource:row.coordinateSource,coordinateAccuracy:row.coordinateAccuracy,coordinateStatus:row.coordinateStatus};
+  const original=inherited?.customerCode===row.customerCode?inherited.coordinates:{lat:row.lat,lng:row.lng,coordinateSource:row.coordinateSource,coordinateAccuracy:row.coordinateAccuracy,coordinateStatus:row.coordinateStatus,coordinateEvidence:row.coordinateEvidence};
   bases.set(row,original);
   Object.defineProperty(row,ORIGINAL_PIN_BASE,{value:Object.freeze({customerCode:row.customerCode,coordinates:Object.freeze(original)}),enumerable:true,configurable:true});
  }
  const r=records.get(row.customerCode),original=bases.get(row);Object.assign(row,original);delete row.resolutionStatus;delete row.manualPinAddressHash;
- if(r?.resolutionStatus==='MANUAL_CONFIRMED'){row.lat=r.latitude;row.lng=r.longitude;row.coordinateSource='MANUAL_PIN';row.coordinateAccuracy='MANUAL_PIN';row.coordinateStatus='CONFIRMED';row.resolutionStatus='MANUAL_CONFIRMED';row.manualPinAddressHash=r.originalAddressHash;}
+ if(r?.resolutionStatus==='MANUAL_CONFIRMED'){row.lat=r.latitude;row.lng=r.longitude;row.coordinateSource='MANUAL_PIN';row.coordinateAccuracy=r.coordinateAccuracy||'MANUAL';row.coordinateStatus='CONFIRMED';row.coordinateEvidence=r.coordinateEvidence||'MANUAL_CONFIRMATION';row.resolutionStatus='MANUAL_CONFIRMED';row.manualPinAddressHash=r.originalAddressHash;}
  else if(r?.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'){row.lat=null;row.lng=null;row.coordinateStatus='CONFLICT';row.resolutionStatus=r.resolutionStatus;}
  return row;
 }
@@ -47,17 +47,19 @@ function bindTouchPin(map){
  const finish=()=>{if(drag){map.setDraggable(drag.mapDraggable);drag=null;ignoreClickUntil=Date.now()+350;}};
  const start=e=>{if(e.touches.length!==1||!edit?.point)return;const t=e.touches[0],r=area.getBoundingClientRect(),p=map.getProjection().containerPointFromCoords(new kakao.maps.LatLng(edit.point.latitude,edit.point.longitude));
   if(Math.abs(t.clientX-r.left-p.x)>24||t.clientY-r.top-p.y< -44||t.clientY-r.top-p.y>8)return;
-  drag={id:t.identifier,x:t.clientX,y:t.clientY,p,initial:{...edit.point},mapDraggable:map.getDraggable()};map.setDraggable(false);e.preventDefault();e.stopImmediatePropagation();};
+  drag={id:t.identifier,x:t.clientX,y:t.clientY,p,initial:{...edit.point},initialReady:edit.pointReady,mapDraggable:map.getDraggable()};map.setDraggable(false);e.preventDefault();e.stopImmediatePropagation();};
  const move=e=>{if(!drag)return;const t=[...e.touches].find(t=>t.identifier===drag.id);if(!t||e.touches.length!==1){finish();return;}const p=map.getProjection().coordsFromContainerPoint(new kakao.maps.Point(drag.p.x+t.clientX-drag.x,drag.p.y+t.clientY-drag.y));selectPoint(p.getLat(),p.getLng());e.preventDefault();e.stopImmediatePropagation();};
- const end=e=>{if(!drag)return;if(e.type==='touchcancel')selectPoint(drag.initial.latitude,drag.initial.longitude);finish();e.preventDefault();e.stopImmediatePropagation();};
+ const end=e=>{if(!drag)return;if(e.type==='touchcancel')selectPoint(drag.initial.latitude,drag.initial.longitude,{preview:!drag.initialReady});finish();e.preventDefault();e.stopImmediatePropagation();};
  for(const [name,fn]of [['touchstart',start],['touchmove',move],['touchend',end],['touchcancel',end]])area.addEventListener(name,fn,{capture:true,passive:false});
  touchClose=()=>{finish();for(const [name,fn]of [['touchstart',start],['touchmove',move],['touchend',end],['touchcancel',end]])area.removeEventListener(name,fn,true);};
 }
-function selectPoint(lat,lng,{pan=false}={}){
+const pointKey=(lat,lng)=>lat.toFixed(6)+':'+lng.toFixed(6);
+function selectPoint(lat,lng,{pan=false,preview=false}={}){
  if(!edit||!Number.isFinite(lat)||!Number.isFinite(lng)||lat<33||lat>39.5||lng<124||lng>132)return;
  edit.point={latitude:lat,longitude:lng};edit.requestBody=null;
+ edit.pointReady=!preview&&!edit.previewPoints.has(pointKey(lat,lng));
  const map=bridge.state.map,position=new kakao.maps.LatLng(lat,lng);if(!marker){marker=new kakao.maps.Marker({map,position,draggable:true,clickable:true,zIndex:99});kakao.maps.event.addListener(marker,'dragend',()=>{const p=marker.getPosition();selectPoint(p.getLat(),p.getLng());});}else marker.setPosition(position);
- if(pan){map.setLevel(Math.min(map.getLevel(),4));map.panTo(position);}$('#manualPinCoordinates').textContent=`선택 좌표: ${lat.toFixed(7)}, ${lng.toFixed(7)} · 공유계정 수정`;$('#manualPinSave').disabled=!edit.data.canWrite;
+ if(pan){map.setLevel(Math.min(map.getLevel(),4));map.panTo(position);}$('#manualPinCoordinates').textContent=`선택 좌표: ${lat.toFixed(7)}, ${lng.toFixed(7)} · 공유계정 수정`;$('#manualPinSave').disabled=!edit.data.canWrite||!edit.pointReady;
 }
 async function search(){
  if(!edit)return;const owner=generation,query=$('#manualPinSearchAddress').value.trim();if(!query)return;
@@ -73,27 +75,31 @@ async function search(){
     geocoder.addressSearch(query,(docs,status)=>{if(finished)return;finished=true;clearTimeout(timer);if(status!=='OK'){resolve([]);return;}resolve((Array.isArray(docs)?docs:[]).filter(d=>Number.isFinite(Number(d.y))&&Number.isFinite(Number(d.x))).slice(0,5).map(d=>({latitude:Number(d.y),longitude:Number(d.x),label:d.road_address?.address_name||d.address_name})));},{page:1,size:5,analyze_type:kakao.maps.services.AnalyzeType.EXACT});});
   }
   if(owner!==generation)return;const area=$('#manualPinSearchResults');area.replaceChildren();
-  for(const r of results)button(r.label||'주소 검색 위치',area,()=>{selectPoint(r.latitude,r.longitude,{pan:true});$('#manualPinMessage').textContent='지도를 클릭하거나 핀을 드래그한 뒤 저장해 주세요.';});
-  if(results.length===1){selectPoint(results[0].latitude,results[0].longitude,{pan:true});$('#manualPinMessage').textContent='건물 위치를 선택했습니다. 지도 클릭·핀 드래그로 바꿀 수 있습니다.';}
+  for(const r of results){edit.previewPoints.add(pointKey(r.latitude,r.longitude));button(r.label||'주소 검색 위치',area,()=>{selectPoint(r.latitude,r.longitude,{pan:true,preview:true});$('#manualPinMessage').textContent='실제 위치를 확인한 뒤 지도에서 위치를 지정해 주세요.';});}
+  if(edit.point&&edit.previewPoints.has(pointKey(edit.point.latitude,edit.point.longitude))){edit.pointReady=false;$('#manualPinSave').disabled=true;}
+  if(results.length===1){selectPoint(results[0].latitude,results[0].longitude,{pan:true,preview:true});$('#manualPinMessage').textContent='주소 검색 위치를 표시했습니다. 실제 위치를 확인한 뒤 핀을 지정해 주세요.';}
   else $('#manualPinMessage').textContent=results.length?'주소 후보를 선택해 주세요.':'주소 검색 결과가 없습니다. 지도에서 직접 위치를 지정할 수 있습니다.';
  }catch(e){if(owner===generation)$('#manualPinMessage').textContent=e.message;}finally{if(owner===generation)$('#manualPinSearch').disabled=false;}
 }
 async function save(action='save',targetRevision){
- if(!edit||!edit.data.canWrite||action==='save'&&!edit.point)return;const owner=generation,code=edit.code;$('#manualPinSave').disabled=true;$('#manualPinMessage').textContent='저장·재조회 확인 중…';
+ if(!edit||!edit.data.canWrite||action==='save'&&!edit.pointReady)return;const owner=generation,code=edit.code;$('#manualPinSave').disabled=true;$('#manualPinMessage').textContent='저장·재조회 확인 중…';
  try{
-  const query=$('#manualPinSearchAddress').value.trim();edit.requestBody??={originalAddressHash:edit.data.originalAddressHash,expectedRevision:edit.data.revision,requestId:crypto.randomUUID(),...(action==='save'?{...edit.point,correctedSearchAddress:query!==edit.data.originalAddress?query:''}:{targetRevision})};
+  const query=$('#manualPinSearchAddress').value.trim();edit.requestBody??={originalAddressHash:edit.data.originalAddressHash,expectedRevision:edit.data.revision,requestId:crypto.randomUUID(),...(action==='save'?{...edit.point,verificationKind:$('#manualPinVerification').value,correctedSearchAddress:query!==edit.data.originalAddress?query:''}:{targetRevision})};
   await request(base+'/'+code+'/'+action,{method:'POST',headers:{'content-type':'application/json','x-map-pin-csrf':edit.csrf},body:JSON.stringify(edit.requestBody),signal:pending.signal});
   if(owner!==generation)return;
   await refresh();if(owner!==generation)return;close();bridge.selectNavigationStore(code);channel?.postMessage('changed');
- }catch(e){if(owner===generation)$('#manualPinMessage').textContent=e.message;}finally{if(owner===generation)$('#manualPinSave').disabled=!edit?.point||!edit.data.canWrite;}
+ }catch(e){if(owner===generation)$('#manualPinMessage').textContent=e.message;}finally{if(owner===generation)$('#manualPinSave').disabled=!edit?.pointReady||!edit.data.canWrite;}
 }
 async function open(code,{searchNow=false}={}){
  close();const owner=generation;pending=new AbortController();panel.hidden=false;document.body.classList.add('manualPinEditing');node('h2','배송지 핀 위치 수정',panel);button('닫기',panel,close);const status=node('p','선택 매장 정보를 조회합니다…',panel);status.id='manualPinMessage';
- try{const value=await request(base+'/'+code,{signal:pending.signal});if(owner!==generation)return;const data=value.data;edit={code,data,csrf:value.csrfToken,point:null,requestBody:null};
+ try{const value=await request(base+'/'+code,{signal:pending.signal});if(owner!==generation)return;const data=value.data;edit={code,data,csrf:value.csrfToken,point:null,pointReady:false,previewPoints:new Set(),requestBody:null};
   node('p',code+' · '+data.customerName,panel).id='manualPinIdentity';node('p','Customer 기본주소 (원문 보존)',panel);node('p',data.originalAddress,panel).id='manualPinOriginalAddress';
   if(data.addressChanged)node('p','원본 주소가 변경됐습니다. 이전 주소 해시와 비교해 다시 확인해 주세요.',panel);
-  node('label','검색용 주소 (선택·원본 주소 변경 없음)',panel).htmlFor='manualPinSearchAddress';const input=node('input',undefined,panel);input.id='manualPinSearchAddress';input.autocomplete='off';input.value=data.originalAddress;input.oninput=()=>{if(edit)edit.requestBody=null;};
+  node('label','보정·검색용 주소',panel).htmlFor='manualPinSearchAddress';const input=node('input',undefined,panel);input.id='manualPinSearchAddress';input.autocomplete='off';input.value=data.correctedSearchAddress||data.originalAddress;input.oninput=()=>{if(edit)edit.requestBody=null;};
   const find=button('주소 검색',panel,search);find.id='manualPinSearch';node('div','',panel).id='manualPinSearchResults';node('p','지도 위를 클릭하거나 핀을 드래그해 위치를 지정해 주세요.',panel).id='manualPinCoordinates';
+  node('label','위치 확인 근거',panel).htmlFor='manualPinVerification';const verification=node('select',undefined,panel);verification.id='manualPinVerification';
+  for(const [value,label] of [['BUILDING_LOCATION','건물 위치 확인'],['DIRECT_SITE_MEASUREMENT','매장 직접 확인'],['CORRECTED_ADDRESS_CONFIRMED','보정 주소 확인']])node('option',label,verification).value=value;
+  verification.onchange=()=>{if(edit)edit.requestBody=null;};
   const confirm=button('이 위치로 저장',panel,()=>save());confirm.id='manualPinSave';confirm.disabled=true;
   const history=node('details',undefined,panel);node('summary','수정 이력·이전 위치로 되돌리기',history);const h=node('div',undefined,history);h.id='manualPinHistory';
   if(data.revision&&data.canWrite){button('처음 위치로 되돌리기',h,()=>{edit.requestBody=null;void save('revert',0);}).id='manualPinRestoreOriginal';}
@@ -101,7 +107,7 @@ async function open(code,{searchNow=false}={}){
   status.textContent=data.canWrite?'원본 Customer 주소는 수정하지 않습니다.':'저장 권한이 비활성화되어 있습니다. 관리자에게 전용 저장소·수정 권한 연결을 요청해 주세요.';
   await bridge.initMap();if(owner!==generation)return;
   mapClick=e=>{if(Date.now()>=ignoreClickUntil)selectPoint(e.latLng.getLat(),e.latLng.getLng());};kakao.maps.event.addListener(bridge.state.map,'click',mapClick);bindTouchPin(bridge.state.map);
-  const initial=data.current&&!data.addressChanged?data.current:data.previousCoordinate;if(initial&&Number.isFinite(initial.latitude)&&Number.isFinite(initial.longitude))selectPoint(initial.latitude,initial.longitude,{pan:true});
+  const initial=data.current&&!data.addressChanged?data.current:data.previousCoordinate;if(initial&&Number.isFinite(initial.latitude)&&Number.isFinite(initial.longitude))selectPoint(initial.latitude,initial.longitude,{pan:true,preview:true});
   if(searchNow)void search();
  }catch(e){if(owner===generation)status.textContent=e.message;}
 }
