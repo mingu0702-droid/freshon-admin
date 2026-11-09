@@ -9,10 +9,20 @@ import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {createFixedCoordinateResolver, hasFixedCoordinatePoint, readFixedCoordinateLedger} from './fixedStoreCoordinates.js';
 import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
 import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
+import {createOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
+import {readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
 
 export const STAGE_ORIGIN = 'https://freshon-admin-stage-preview-template.onrender.com';
 export const STAGE_SERVICE = 'srv-da47hugu01pc73etpfa0';
 export const STAGE_BUNDLE_ROUTE = '/api/map-phase2b/private/stage-validation-bundle';
+export const STAGE_NEARBY_ROUTE = '/api/map-phase2b/private/stage-nearby-evidence';
+
+const currentProfile = {
+  generation:'3df93605c76dcb279b405de3ab55171a2278b763ae67ddc5e8cec91891aa5585',
+  ledger:'c930bc96b87ff0c2577167ac2caa44d759414fa7c0817daf0ba162b2799c9fd3',
+  official:9, addressIndex:'7e0e54434fdbacd591a87ccda45a75e9c089da9bfbfd32f66d59ee718ef29941',
+  archive:'826ce89623dd1274827ea886df6b04a213a75374fdacf3d5684077f4fb73ead0'
+};
 
 const bundles = new Map([
   ['f990ee60197d15afde6f3a59d65909d0660d87b7ed9a5ac0a4ab3a00f9f27a63', {
@@ -27,6 +37,10 @@ const bundles = new Map([
     version:3, generation:'dc02f573b0597846620c75d24f01c23284a3030f58bd8f67f7cb9c08ffb83960',
     ledger:'cd6c04c20076cd609249c93613769faa7aa5b47c1b7759a0084d72dcda3c507d', official:8,
     archive:'11e72a5e987660ef18865acb8f541700cda847ac937aa82541a1d6221611254a'
+  }],
+  ['77c389680516fc9c94e5c4842300a582caac6fc9245b9cd3605101b97c52126b',{...currentProfile, version:4}],
+  ['94806273844c0ca4f7c6d8c0c8a30762c06bfd9c3bcd6cb801c1b9cdb7f80896',{
+    ...currentProfile, version:5, nearby:'71949a90c9ca1412753c72f21e8594649d2babe6c5e1804da32a1939fc927e43'
   }]
 ]);
 const INDEX = 'coverage-index.json';
@@ -132,10 +146,17 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
       if (data.length !== ref.bytes || sha256(data) !== ref.sha256) throw Error('STAGE_BLOB_INTEGRITY');
       files.set(name, data);
     }
-    if (Object.keys(bundle).length !== files.size + (expected.archive ? 2 : 1)) throw Error('STAGE_BUNDLE_SCOPE');
+    const bundledAddress = expected.addressIndex ? createOfficialAddressLookup(
+      Buffer.from(bundle['opsmap-official-address-index-v1.json'], 'base64'), {sha256:expected.addressIndex}) : null;
     const archived = expected.archive
-      ? readStageArchivedDelivery(Buffer.from(bundle[DELIVERY_ARCHIVE], 'base64'), expected.archive) : null;
+      ? readStageArchivedDelivery(Buffer.from(bundle[expected.addressIndex ? 'opsmap-stage-dated-delivery-v1.json' : DELIVERY_ARCHIVE], 'base64'), expected.archive) : null;
     const {registry, counts} = registryFromCatalog(JSON.parse(files.get(index.catalog.sha256 + '.json')), ledger, expected.official);
+    const nearby = expected.nearby ? readStageNearbyEvidence(Buffer.from(bundle['opsmap-stage-nearby-v1.json'], 'base64'), {
+      expected:expected.nearby, generation:index.sha256, registry, window:JSON.parse(files.get(index.windows[90].sha256 + '.json'))
+    }) : null;
+    if (Object.keys(bundle).length !== files.size + 1 + Number(!!archived) + Number(!!bundledAddress) + Number(!!nearby)) {
+      throw Error('STAGE_BUNDLE_SCOPE');
+    }
     const directory = await mkdtemp(path.join(tempRoot, 'opsmap-ab-stage-'));
     try {
       for (const [name, data] of files) await writeFile(path.join(directory, name), data, {mode:0o600, flag:'wx'});
@@ -149,7 +170,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
         coverageAsOf:index.asOf
       };
       const result = {directory, registry, counts, resolver:createFixedCoordinateResolver(ledger), asOf:index.asOf,
-        generation:index.sha256, version:expected.version, archived, evidence, expiresAt:appliedAt + TTL};
+        generation:index.sha256, version:expected.version, archived, bundledAddress, nearby, evidence, expiresAt:appliedAt + TTL};
       current = result;
       setTimeout(() => {
         if (current === result) current = null;
@@ -165,12 +186,15 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
   async function activate(bytes) {
     const expected = Buffer.isBuffer(bytes) && bytes.length <= MAX_COMPRESSED && bundles.get(sha256(bytes));
     if (!expected) throw Error('STAGE_BUNDLE_DIGEST');
-    if (installation) await installation;
+    if (installation) {
+      if (installation.expected !== expected) throw Error('STAGE_BUNDLE_LOADING');
+      return installation.promise;
+    }
     const prepared = active();
     if (prepared?.version > expected.version) throw Error('STAGE_BUNDLE_REGRESSION');
     if (prepared?.version === expected.version) return prepared;
-    installation = load(bytes, expected).finally(() => {installation = null;});
-    return installation;
+    installation = {expected, promise:load(bytes, expected).finally(() => {installation = null;})};
+    return installation.promise;
   }
 
   function snapshot(saved) {
@@ -205,9 +229,19 @@ function publicStatus(prepared) {
     expiresAt:new Date(prepared.expiresAt).toISOString()} : {active:false};
 }
 
-export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation}) {
+export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles}) {
   const noStore = (_req, res, next) => {res.set('Cache-Control','private, no-store').vary('Cookie'); next();};
   router.get(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (_req, res) => res.json(publicStatus(validation.active())));
+  router.get(STAGE_NEARBY_ROUTE, requireStaff, noStore, async (req, res) => {
+    const prepared = validation.active();
+    if (!prepared?.nearby) return res.status(503).json({error:'STAGE_NEARBY_NOT_READY'});
+    const codes = [...prepared.registry.values()].filter(store => store.hasPoint).map(store => store.code);
+    const fixed = await readBaseVehicles?.(codes).catch(() => null);
+    return requireStaff(req, res, () => {
+      if (validation.active() !== prepared) return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
+      return res.json(stageNearbyResponse(prepared.nearby, fixed));
+    });
+  });
   router.post(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (req,res,next) => {
     if (req.get('Origin') !== STAGE_ORIGIN || req.get('X-Opsmap-Stage-Verification') !== '1') return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});
     next();

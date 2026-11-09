@@ -107,7 +107,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const geocodeBudget = stageAddressApproved ? createStageGeocodeBudgetStore({repo,token:stage.GITHUB_TOKEN,branch:pinsBranch,
     fetchImpl:stageGithub(fetchImpl,{files:[geocodeBudgetFile],branch:pinsBranch,writable:geocodeBudgetFile})}) : null;
   const addressLookupService = createKakaoCoordinateConnection({env:stage,fetchImpl,store:geocodeBudget,
-    stageAddressApproved,independentAddressLookup:officialIndex.active});
+    stageAddressApproved,independentAddressLookup:()=>validation.active()?.bundledAddress || officialIndex.active()});
   let coverageState = 'restoring';
   const baseDirectory = Promise.resolve().then(() => readShadowDirectory ? readShadowDirectory() : stage.OPSMAP_SHADOW_DATA_DIR)
     .catch(() => null).then(directory => {coverageState = directory ? 'ready' : 'unavailable'; return directory;});
@@ -219,7 +219,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       const {requireStaff,isSessionCurrent}=binding;
       staffView = requireStaff;
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
-        mountStageAbValidation(router,{...binding,validation});
+        mountStageAbValidation(router,{...binding,validation,readBaseVehicles:codes=>base.get(codes)});
         router.post(officialAddressIndexRoute,requireStaff,(req,res,next)=>{
           res.set('Cache-Control','private, no-store').vary('Cookie');
           if (req.get('Origin') !== stageOrigin || req.get('X-Opsmap-Stage-Verification') !== '1') return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});

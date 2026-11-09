@@ -314,8 +314,10 @@
       row.driverIdentity = item.driverIdentity || '';
       row.driverName = item.driverName || "";
       Object.assign(row, baseVehicles.get(String(row.customerCode)) || {baseVehicle:normalizeVehicle(item.baseVehicle||''),baseVehicleState:item.baseVehicle?'PUBLISHED_ONLY':'UNKNOWN'});
-      window.MapManualPins?.apply(row);
-      liveAddressLocations?.apply(row);
+      if(!archivedDatedAssignments(meta)){
+        window.MapManualPins?.apply(row);
+        liveAddressLocations?.apply(row);
+      }
       row.deliveryCount90d = item.deliveryCount90d ?? item.deliveryCount ?? null;
       next.push(row);
       storeByVehicleAndCode.set(`${row.vehicle}|${row.customerCode}`, row);
@@ -1611,7 +1613,8 @@
     const archived = archivedDatedAssignments(dailyMeta);
     const list = archived ? filteredDateStores(allStores) : operationStops;
     const shown = list.filter((row) => runFilter === "ALL" || row.status === runFilter);
-    $("#runListCount").textContent = archived ? `보존 완료 기록 ${shown.length}곳 · 전체 배차 미확인` : list.length ? `${shown.length}/${list.length}착` : isDailyDataReady()?'0착':'조회 대기';
+    const archiveLabel = dailyMeta?.recordKind === 'CUSTOMER_DAILY_ROUTES' ? '저장 배차' : '보존 완료 기록';
+    $("#runListCount").textContent = archived ? `${archiveLabel} ${shown.length}곳 · 101·122·202호 확인 범위` : list.length ? `${shown.length}/${list.length}착` : isDailyDataReady()?'0착':'조회 대기';
     $("#runList").innerHTML = shown.length ? shown.map((row) => {
       const next = archived ? null : list[list.indexOf(row) + 1];
       const distance = next ? distanceKm(row, next) : Infinity;
@@ -2604,20 +2607,40 @@
     return judgeNewAreaPoint(row, await lookup, batch);
   }
 
-  function newAreaEvidence() {
+  async function stageNewAreaEvidence(signal, requestId) {
+    const generation = snapshotMeta?.sourceGeneration;
+    if (window.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com' || !generation) return null;
+    const proof = await fetchJson('/api/map-phase2b/private/stage-nearby-evidence', {
+      channel:'stage-nearby:'+requestId, ttl:0, timeout:5000, signal
+    }).catch(() => null);
+    if (signal.aborted || snapshotMeta?.sourceGeneration !== generation || proof?.generation !== generation ||
+        proof?.source !== 'STAGE_ARCHIVE_ADDRESS_BOUND' || !Array.isArray(proof.rows) || !Array.isArray(proof.fixedRows)) return null;
+    const coordinates = new Map(latestSnapshotRows.map(row => [row.customerCode, newAreaCoordinate(row)]));
+    const observed = proof.rows.flatMap(([code,date,vehicle,mask]) => {
+      const point = coordinates.get(code);
+      return point ? [{lat:point.lat,lng:point.lng,deliveryDate:date,vehicle,observedMask:mask}] : [];
+    });
+    const fixed = proof.fixedRows.flatMap(([code,vehicle]) => {
+      const point = coordinates.get(code);
+      return point ? [{lat:point.lat,lng:point.lng,vehicle}] : [];
+    });
+    return {observed,fixed,start:proof.start,end:proof.end,days:proof.observedDays,unknownDays:proof.unknownDays,fixedCheckedAt:proof.fixedCheckedAt};
+  }
+
+  function newAreaEvidence(archive) {
     const comparisons = newAreaComparisonStores();
     const conflicting=new Set(periodRows.filter(store=>['CONFLICT','UNVERIFIED','MISSING'].includes(store.coordinateStatus||store.raw?.coordinateStatus)||store.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED').map(store=>store.customerCode));
     const locationRows=[...new Map([...latestSnapshotRows.filter(store=>!conflicting.has(store.customerCode)),...comparisons].map(store=>[store.customerCode,store])).values()]
       .map(newAreaCoordinate).filter(Boolean).map(store=>({...store,vehicle:baseVehicles.get(store.customerCode)?.baseVehicle||store.vehicle||''}));
     const periodComplete = dateReady && periodMeta?.complete === true && periodMeta.startDate === state.rangeStart && periodMeta.endDate === state.rangeEnd && (periodMeta.segmented !== true || periodMeta.aggregateComplete === true);
     const limits=[!periodComplete?'전체 기간 비교 미완료':null,periodMeta?.missingCoordinate>0 || periodComplete && comparisons.length < periodRows.length?'비교 원천 좌표 누락':null,periodMeta?.coverageComplete!==true?'전체 원천 완전성 미검증':null].filter(Boolean);
-    return {comparisons, locationRows, limits};
+    return {comparisons, locationRows, limits, archive};
   }
 
   function judgeNewAreaPoint(row, point, batch) {
     const base = { ...row, ...point, address:row.address,customer:row.customer,originalAddress:row.originalAddress,originalCustomer:row.originalCustomer,resolvedAddress:point?.address,lookupStatus:newAreaCoordinate(point)?'SUCCESS':'DEFERRED',addressRegion:row.addressRegion||window.MapLocationContract?.addressRegion(row.address)||'주소 권역 미확인',actualDispatchCenter:row.actualDispatchCenter||{state:'UNCONFIRMED',label:'담당 센터 미확인'},rangeStart: state.rangeStart, rangeEnd: state.rangeEnd, decision: "검토", nearby: [], vehicle: "-", nearestDistance: null, facility: facilityReview(`${row.address} ${row.customer}`) };
     if (!point || point.candidates || !newAreaCoordinate(point)) return { ...base, reason: point?.candidates ? "주소 복수 후보" : "주소 확인 필요", evidence: point?.candidates ? "주소 후보를 먼저 확정해 주세요." : "검증된 저장·수동 좌표 미확인" };
-    const {comparisons, locationRows, limits} = batch ? (batch.evidence ||= newAreaEvidence()) : newAreaEvidence();
+    const {comparisons, locationRows, limits, archive} = batch ? (batch.evidence ||= newAreaEvidence(batch.archive)) : newAreaEvidence();
     const nearby = comparisons.map(store => ({...store,distance:distanceKm(point,store)}))
       .filter(store=>store.distance<=.5).sort((a,b)=>a.distance-b.distance);
     let nearest = null, storedNearbyCount = 0;
@@ -2627,8 +2650,20 @@
       if (!nearest || distance<nearest.distance) nearest={customerName:store.customerName,distance};
     }
     const references = Phase2bUi.nearbyVehicles(point, locationRows, 30);
+    const archiveContext = archive ? {
+      start:archive.start,end:archive.end,days:archive.days,unknownDays:archive.unknownDays,
+      fixedCheckedAt:archive.fixedCheckedAt,
+      fixed:Phase2bUi.nearbyVehicles(point, archive.fixed, 30).slice(0,5),
+      observed:Phase2bUi.nearbyVehicles(point, archive.observed, 30).slice(0,5)
+    } : null;
+    if (archiveContext) {
+      const observedWithin500 = archive.observed.filter(store => distanceKm(point,store) <= .5);
+      const mask = observedWithin500.reduce((value,store) => value | store.observedMask, 0);
+      archiveContext.within500 = observedWithin500.length;
+      archiveContext.weekdays = ['일','월','화','수','목','금','토'].filter((_day,index) => mask & (1 << index)).join('·');
+    }
     const exception = legacyException(`${row.address} ${row.customer}`);
-    const facts={...base,nearby,references,storedNearbyCount,evidenceCount:nearby.length,dataLimits:limits.join(' · '),deliveryDays:combineNearbyPatterns(nearby),vehicle:nearby[0]?.vehicle||references[0]?.vehicle||'-',nearestStore:nearest?.customerName||'',nearestDistance:nearest?.distance??null};
+    const facts={...base,nearby,references,archiveContext,storedNearbyCount,evidenceCount:nearby.length,dataLimits:limits.join(' · '),deliveryDays:combineNearbyPatterns(nearby),vehicle:nearby[0]?.vehicle||archiveContext?.fixed[0]?.vehicle||references[0]?.vehicle||'-',nearestStore:nearest?.customerName||'',nearestDistance:nearest?.distance??null};
     if(limits.length)return {...facts,reason:'위치 확인 완료 · 배송판정 검토',evidence:(exception?exception+' · ':'')+(nearby.length?'500m 내 기존 배송점 확인 · ':references.length?'30km 내 근접호차 확인 · ':'')+limits.join(' · ')+' · 인근 배송점 부재 확정 불가 · 직선거리이며 도로 진입 판정 아님'};
     if(exception)return {...facts,decision:'X',reason:exception,evidence:'기존 지역/시설 업무 제외 규칙'};
     if(base.facility)return {...facts,reason:'차량 진입 확인 필요',evidence:nearby.length?'500m 내 기존 배송점 확인 · 시설 진입 별도 확인':'시설 진입 확인 전 확정 불가'};
@@ -2701,9 +2736,17 @@
     }
   }
 
+  function stageNearbyMarkup(context) {
+    if (!context) return '';
+    const vehicles = rows => rows.map(item => vehicleLabel(item.vehicle)+' '+formatDistance(item.distance)).join(' · ') || '확인 근거 없음';
+    const fixedDate = context.fixedCheckedAt ? ' · '+context.fixedCheckedAt.slice(0,10)+' 확인본' : '';
+    return `<div>보존 완료 배송 ${esc(context.start)} ~ ${esc(context.end)} · ${context.days}일 기록 / ${context.unknownDays}일 미관측</div><div>500m 내 완료 배송점 ${context.within500}곳${context.weekdays?' · 관측 요일 '+esc(context.weekdays):''}</div><div>30km 내 완료 배송 호차: ${esc(vehicles(context.observed))}</div><div>30km 내 기준호차 참고: ${esc(vehicles(context.fixed)+fixedDate)}</div>`;
+  }
+
   function appendBatchResult(list, row, index) {
     const template = document.createElement('template');
     template.innerHTML = `<button type="button" class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(row.reason || "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>사용 주소: ${esc(row.address)}</div>${row.coordinateSource==='OFFICIAL_PUBLIC_BUILDING'?'<div>공식 자료 건물 위치 · 매장 내부·출입구 미확인</div>':''}${!Number.isFinite(row.lat) || !Number.isFinite(row.lng) ? "<div>클릭하여 확인된 위치 입력</div>" : ""}<div>500m 저장위치 ${Number.isFinite(row.storedNearbyCount)?row.storedNearbyCount:'미확인'}개 · 기간 배송근거 ${Number.isFinite(row.evidenceCount)?row.evidenceCount:'미확인'}개</div><div>주소 권역: ${esc(row.addressRegion||"주소 권역 미확인")} · 실제 담당 센터: ${esc(row.actualDispatchCenter?.label||"담당 센터 미확인")}</div><div>${esc(row.evidence || "")} · ${esc(vehicleLabel(row.vehicle))} ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.rangeStart || state.rangeStart)} ~ ${esc(row.rangeEnd || state.rangeEnd)}${Number.isFinite(row.evidenceCount) ? ` · 500m 근거 ${row.evidenceCount}개` : ''}</div><div>${esc(row.dataLimits || '')}</div><div>30km 근접호차: ${esc((row.references || []).map(item => vehicleLabel(item.vehicle) + " " + formatDistance(item.distance)).join(" · ") || "확인 근거 없음")}</div><div>인근 배송점 요일 자료(실배송요일 미확정): ${esc(row.deliveryDays || "확인 근거 없음")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`;
+    if (row.archiveContext) template.content.firstElementChild.insertAdjacentHTML('beforeend', stageNearbyMarkup(row.archiveContext));
     const button = template.content.firstElementChild;
     button.disabled = true;
     const existing=[...list.children].find(item=>Number(item.dataset.judged)===index);
@@ -2811,6 +2854,9 @@
       }
     }
     try {
+      showProgress();
+      batch.archive = await stageNewAreaEvidence(signal, requestId);
+      if (!current()) return;
       await Promise.all(Array.from({length:Math.min(3,indexes.length)},worker));
     } finally {
       if (batchController===controller && requestId===newAreaRequestId) {
