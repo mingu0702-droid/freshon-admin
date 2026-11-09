@@ -8,15 +8,30 @@ export function createStageStaffSessionStore({env=process.env,fetchImpl=fetch,no
   const root='https://api.github.com/repos/'+env.GITHUB_CACHE_REPO;
   const branch='stage/opsmap-manual-pins',file=root+'/contents/opsmap-stage/staff-sessions-v1.json';
   const headers={Authorization:'Bearer '+env.GITHUB_TOKEN,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'opsmap-stage-staff-session'};
-  const fail=()=>{throw Error('STAFF_SESSION_STORE_UNAVAILABLE');};
+  const logged=new Map();
+  const fail=(step,response)=>{
+    const at=now(), status=Number(response?.status)||null;
+    const field=name=>{const raw=response?.headers?.get(name);return /^\d{1,12}$/.test(raw||'')?Number(raw):null;};
+    const rateRemaining=field('x-ratelimit-remaining'), rateReset=field('x-ratelimit-reset'), retryAfter=field('retry-after');
+    const tag=step+':'+status;
+    if(!logged.has(tag)||at-logged.get(tag)>=30000){
+      logged.set(tag,at);
+      console.warn(JSON.stringify({event:'STAGE_STAFF_STORE_UNAVAILABLE',step,status,rateRemaining,rateReset,retryAfter}));
+    }
+    throw Error('STAFF_SESSION_STORE_UNAVAILABLE');
+  };
   const mac=value=>crypto.createHmac('sha256',env.MAP_STAFF_SESSION_SECRET).update('staff-session-v1:'+JSON.stringify(value)).digest('hex');
-  async function request(url,options={}){try{return await fetchImpl(url,{...options,headers,redirect:'error',signal:AbortSignal.timeout(10000)});}catch{fail();}}
+  async function request(url,options={}){try{return await fetchImpl(url,{...options,headers,redirect:'error',signal:AbortSignal.timeout(10000)});}catch{fail('TRANSPORT');}}
   async function read(){
-    const info=await request(root);if(!info.ok)fail();const repo=await info.json();if(repo.private!==true||repo.permissions?.push!==true)fail();
-    const r=await request(file+'?ref='+encodeURIComponent(branch));if(r.status===404)return {sha:null,state:{schema:1,sessions:{}}};if(!r.ok)fail();
-    const data=await r.json();if(data.encoding!=='base64'||! /^[a-f0-9]{40}$/.test(data.sha||'')||data.size>512000)fail();
-    let state;try{const bytes=Buffer.from(data.content,'base64');if(bytes.length>512000)fail();state=JSON.parse(bytes.toString('utf8'));}catch{fail();}
-    if(state.schema!==1||!state.sessions||Array.isArray(state.sessions)||Object.keys(state.sessions).length>1000)fail();
+    const info=await request(root);if(!info.ok)fail('REPOSITORY_HTTP',info);
+    let repo;try{repo=await info.json();}catch{fail('REPOSITORY_JSON',info);}
+    if(repo?.private!==true||repo.permissions?.push!==true)fail('REPOSITORY_SCOPE',info);
+    const r=await request(file+'?ref='+encodeURIComponent(branch));if(r.status===404)return {sha:null,state:{schema:1,sessions:{}}};
+    if(!r.ok)fail('STATE_HTTP',r);
+    let data;try{data=await r.json();}catch{fail('STATE_JSON',r);}
+    if(data?.encoding!=='base64'||! /^[a-f0-9]{40}$/.test(data.sha||'')||data.size>512000)fail('STATE_FORMAT',r);
+    let state;try{const bytes=Buffer.from(data.content,'base64');if(bytes.length>512000)throw Error('SIZE');state=JSON.parse(bytes.toString('utf8'));}catch{fail('STATE_DECODE',r);}
+    if(state?.schema!==1||!state.sessions||Array.isArray(state.sessions)||Object.keys(state.sessions).length>1000)fail('STATE_SCHEMA',r);
     return {sha:data.sha,state};
   }
   function valid(key,entry){
@@ -31,10 +46,10 @@ export function createStageStaffSessionStore({env=process.env,fetchImpl=fetch,no
       pendingRead=null;const {sha,state}=await read();
       for(const [id,value]of Object.entries(state.sessions))if(!valid(id,value)||now()>=value.expiresAt||now()>=value.idleExpiresAt)delete state.sessions[id];
       if(requireExisting&&(!valid(key,state.sessions[key])||state.sessions[key].fingerprint!==entry.fingerprint||state.credentialFingerprint!==entry.fingerprint))return false;
-      if(entry){if(state.credentialFingerprint!==entry.fingerprint){state.sessions={};state.credentialFingerprint=entry.fingerprint;}if(Object.keys(state.sessions).length>=1000&&!state.sessions[key])fail();state.sessions[key]={...entry,signature:mac({key,...entry})};}else delete state.sessions[key];
-      const bytes=Buffer.from(JSON.stringify(state));if(bytes.length>512000)fail();
-      const result=await request(file,{method:'PUT',body:JSON.stringify({message:'Update isolated Stage staff session metadata',branch,...(sha?{sha}:{}),content:bytes.toString('base64')})});if(!result.ok)fail();
-      pendingRead=null;const saved=await read();if(JSON.stringify(saved.state.sessions[key]||null)!==JSON.stringify(state.sessions[key]||null))fail();
+      if(entry){if(state.credentialFingerprint!==entry.fingerprint){state.sessions={};state.credentialFingerprint=entry.fingerprint;}if(Object.keys(state.sessions).length>=1000&&!state.sessions[key])fail('STATE_CAPACITY');state.sessions[key]={...entry,signature:mac({key,...entry})};}else delete state.sessions[key];
+      const bytes=Buffer.from(JSON.stringify(state));if(bytes.length>512000)fail('STATE_CAPACITY');
+      const result=await request(file,{method:'PUT',body:JSON.stringify({message:'Update isolated Stage staff session metadata',branch,...(sha?{sha}:{}),content:bytes.toString('base64')})});if(!result.ok)fail('CAS_HTTP',result);
+      pendingRead=null;const saved=await read();if(JSON.stringify(saved.state.sessions[key]||null)!==JSON.stringify(state.sessions[key]||null))fail('CAS_READBACK');
       return true;
     });writeTail=work;return work;
   }
