@@ -199,6 +199,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget:null,readRecordedRoadRoute,
     getShadowCoverageState:()=>validation.active() ? 'ready' : coverageState,
     getLocalDataEvidence:()=>validation.active()?.evidence || null,
+    readArchivedAssignments:validation.archivedAssignments,
     mountPrivateExtensions:binding=>{
       const {requireStaff}=binding;
       staffView = requireStaff;

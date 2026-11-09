@@ -8,6 +8,7 @@ import express from 'express';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {createFixedCoordinateResolver, hasFixedCoordinatePoint, readFixedCoordinateLedger} from './fixedStoreCoordinates.js';
 import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
+import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
 
 export const STAGE_ORIGIN = 'https://freshon-admin-stage-preview-template.onrender.com';
 export const STAGE_SERVICE = 'srv-da47hugu01pc73etpfa0';
@@ -21,10 +22,16 @@ const bundles = new Map([
   ['2c442f181244a536c597e686e1c73ffabc4aca5d8862a71468c9897f7f8961ee', {
     version:2, generation:'dc02f573b0597846620c75d24f01c23284a3030f58bd8f67f7cb9c08ffb83960',
     ledger:'cd6c04c20076cd609249c93613769faa7aa5b47c1b7759a0084d72dcda3c507d', official:8
+  }],
+  ['fd76f1dcf1a78289b6557dc7a9b2cffbe23d059da94788c0a0862e319cb76bdd', {
+    version:3, generation:'dc02f573b0597846620c75d24f01c23284a3030f58bd8f67f7cb9c08ffb83960',
+    ledger:'cd6c04c20076cd609249c93613769faa7aa5b47c1b7759a0084d72dcda3c507d', official:8,
+    archive:'11e72a5e987660ef18865acb8f541700cda847ac937aa82541a1d6221611254a'
   }]
 ]);
 const INDEX = 'coverage-index.json';
 const LEDGER = 'fixed-store-coordinates-v1.json';
+const DELIVERY_ARCHIVE = 'verified-delivery-observations-v1.json';
 const DECOMPRESS = promisify(gunzip);
 const MAX_COMPRESSED = 1024 * 1024;
 const TTL = 2 * 60 * 60 * 1000;
@@ -60,7 +67,8 @@ function registryFromCatalog(catalog, ledger, expectedOfficial) {
       else throw Error('REGISTRY_POINT_SOURCE');
     }
     if (hasPoint) located++;
-    registry.set(code, {code, name, center, address:row.address || '', addressHash, lat, lng, hasPoint, proof});
+    registry.set(code, {code, name, center, address:row.address || '', addressHash, lat, lng, hasPoint, proof,
+      matchHash:addressHash && /^[a-f0-9]{64}$/.test(row.matchHash || '') ? row.matchHash : null});
   }
   if (located !== 5035 + expectedOfficial || gpsCount !== 298 || officialCount !== expectedOfficial ||
       Object.keys(ledger.records).length !== gpsCount + officialCount) throw Error('REGISTRY_COUNTS');
@@ -124,7 +132,9 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
       if (data.length !== ref.bytes || sha256(data) !== ref.sha256) throw Error('STAGE_BLOB_INTEGRITY');
       files.set(name, data);
     }
-    if (Object.keys(bundle).length !== files.size + 1) throw Error('STAGE_BUNDLE_SCOPE');
+    if (Object.keys(bundle).length !== files.size + (expected.archive ? 2 : 1)) throw Error('STAGE_BUNDLE_SCOPE');
+    const archived = expected.archive
+      ? readStageArchivedDelivery(Buffer.from(bundle[DELIVERY_ARCHIVE], 'base64'), expected.archive) : null;
     const {registry, counts} = registryFromCatalog(JSON.parse(files.get(index.catalog.sha256 + '.json')), ledger, expected.official);
     const directory = await mkdtemp(path.join(tempRoot, 'opsmap-ab-stage-'));
     try {
@@ -139,7 +149,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
         coverageAsOf:index.asOf
       };
       const result = {directory, registry, counts, resolver:createFixedCoordinateResolver(ledger), asOf:index.asOf,
-        generation:index.sha256, version:expected.version, evidence, expiresAt:appliedAt + TTL};
+        generation:index.sha256, version:expected.version, archived, evidence, expiresAt:appliedAt + TTL};
       current = result;
       setTimeout(() => {
         if (current === result) current = null;
@@ -183,7 +193,11 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     return payload;
   }
 
-  return {activate, active, snapshot, joinPayload};
+  function archivedAssignments(date) {
+    const prepared = active();
+    return prepared?.archived?.(date, prepared.registry) ?? null;
+  }
+  return {activate, active, snapshot, joinPayload, archivedAssignments};
 }
 
 function publicStatus(prepared) {
