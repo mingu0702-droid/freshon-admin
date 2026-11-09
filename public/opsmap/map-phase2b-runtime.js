@@ -1382,9 +1382,9 @@
 
   function coordinateEvidenceLabel(row) {
     if (numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) return '';
+    if (row.coordinateSource === 'MANUAL_PIN') return '사용자 수동 확정 위치 · 원본 주소 보존';
     if (row.coordinateEvidence === 'DELIVERY_COMPLETION_GPS') return '배송 완료 GPS 위치 · 출입구 위치 미검증';
     if (row.coordinateSource === 'VERIFIED_STORE_POINT') return '검증된 저장 위치';
-    if (row.coordinateSource === 'MANUAL_PIN') return '사용자 수동 확정 위치 · 원본 주소 보존';
     if (['KAKAO_ADDRESS_LIVE','KAKAO_BUILDING_EXACT_ADDRESS','KAKAO_VERIFIED_BUILDING','KAKAO_ADDRESS_REVALIDATION'].includes(row.coordinateSource)) return '주소 기준 위치';
     if (row.coordinateSource === 'HISTORICAL_GPS_SAME_BUILDING') return '동일 주소의 저장 위치';
     return '';
@@ -1463,10 +1463,10 @@
         ${navigationPointActions(row)}
         <div class="staffActions"><button id="staffNotes" aria-expanded="false" aria-controls="staffAuxContent">출입배송정보 ▸</button><button id="staffHistory" aria-expanded="false" aria-controls="staffAuxContent">최근 배송기사이력 ▸</button></div>
         ${!routeMode && row.history?.length ? `<div class="periodRecent">최근배송 ${esc(row.lastDeliveryDate)} · ${row.visitCount===null?'전체 기간 횟수 미확인':(row.visitCount??row.history.length)+'회 이력'}</div>` : ""}
-        ${unlocated ? '<div class="coordinateWarning">위치 확인 필요</div>' : row.coordinateSource==='KAKAO_ADDRESS_LIVE'?'<small class="coordinateEvidence">주소 기준 위치</small>':""}
         <div class="mobileActions"><button id="mobileMapView" class="primary">매장 위치 중심으로 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicleLabel(vehicle) || "선택 호차")} 운행동선</button></div>
         <div id="nearWrap"></div>
       </div>`;
+    refreshCoordinateEvidence(row);
     refreshSelectedDriverContact();
     requestAnimationFrame(positionDetailPopup);
     $(".detailMore")?.addEventListener("toggle", positionDetailPopup);

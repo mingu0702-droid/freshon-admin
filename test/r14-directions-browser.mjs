@@ -8,6 +8,7 @@ const {chromium}=await import(process.env.OPSMAP_TEST_PLAYWRIGHT_MODULE||'playwr
 const root=path.resolve('public/opsmap'),output=process.env.OPSMAP_R14_DIRECTIONS_OUTPUT||fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r14-directions-'));
 fs.mkdirSync(output,{recursive:true});
 const rows=Array.from({length:8},(_,i)=>({customerCode:'S99000'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',order:8-i,lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
+rows[3].coordinateEvidence='DELIVERY_COMPLETION_GPS';
 const dailyRows=rows.slice(0,4).map(row=>({...row,centerCode:'011'}));
 const requests=[],providerRequests=[],reservations=[],external=[],errors=[],checks=[];
 let budgetDepleted=false;
@@ -89,6 +90,7 @@ try{
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
  await page.locator('.navCenterChoices').getByRole('button',{name:'오산센터',exact:true}).click();
  await page.locator('#query').fill('S990003');await page.locator('#searchBtn').click();
+ check('initial detail distinguishes delivery GPS from an unverified entrance',await page.locator('#detail .coordinateEvidence').textContent()==='배송 완료 GPS 위치 · 출입구 위치 미검증');
  await page.locator('#detail [data-nav-pick="destination"]').click();
  check('a store card sets a destination without the separate picker',await page.evaluate(()=>MapNavigationEditor.values().at(-1)==='S990003')&&await page.locator('.navigationPicker').count()===0);
  check('route badges appear as compact rectangles in the general map',await page.locator('.navRoutePoint').count()===2&&await page.locator('.navRoutePoint').first().evaluate(n=>getComputedStyle(n).height==='24px'&&getComputedStyle(n).borderRadius==='4px'));
