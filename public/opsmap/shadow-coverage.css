@@ -157,7 +157,7 @@ body.shadow-coverage-open #mapFreshnessStatus,
     height: auto;
     min-height: max(530px, calc(100dvh - var(--coverage-header-height, 134px)));
   }
-  .coverage-sidebar { padding: 11px 14px; max-height: min(76dvh, 640px); border-right: 0; border-bottom: 1px solid var(--line, #dce4ee) }
+  .coverage-sidebar { padding: 11px 14px; max-height: min(46dvh, 400px); border-right: 0; border-bottom: 1px solid var(--line, #dce4ee) }
   .shadow-coverage :is(select, input, button) { min-height: 34px }
   .coverage-search { margin-top: 7px }
   .coverage-search > label:first-child { margin-bottom: 2px }

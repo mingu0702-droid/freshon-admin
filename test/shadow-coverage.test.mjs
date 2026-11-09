@@ -7,6 +7,7 @@ import test from 'node:test';
 import { gzipSync } from 'node:zlib';
 import express from 'express';
 import { cellToLatLng, cellToParent, greatCircleDistance, gridDisk, latLngToCell, UNITS } from 'h3-js';
+import { mergeCoverageBadges } from '../public/opsmap/shadow-coverage-map.mjs';
 import { buildShadowCoverage } from '../scripts/build-shadow-coverage.mjs';
 import { aggregateDay, cellDetail, combineDays, coverageList, datesFor, prepareCatalog, prepareView, searchCoverage, viewportCandidates, viewportCells } from '../src/shadowCoverage/model.js';
 import { mountShadowCoverage } from '../src/shadowCoverage/routes.js';
@@ -48,6 +49,18 @@ function fixture(change) {
   change?.(days, stores);
   return { catalog, stores, days };
 }
+
+test('overlapping overview badges keep every candidate and a real focus target', () => {
+  const points = [
+    { id: blue, location: cellToLatLng(blue), x: 100, y: 100, cells: 2 },
+    { id: orange, location: cellToLatLng(orange), x: 102, y: 121, cells: 3 },
+    { id: purple, location: cellToLatLng(purple), x: 132, y: 100, cells: 4 }
+  ];
+  const badges = mergeCoverageBadges(points);
+  assert.deepEqual(badges, [{ ...points[0], cells: 5 }, points[2]]);
+  assert.equal(points[0].cells, 2);
+  assert.equal(badges.reduce((sum, badge) => sum + badge.cells, 0), 9);
+});
 
 test('zoomed-out delivery polygons do not hide or double count R8 candidates', () => {
   const { days } = fixture();

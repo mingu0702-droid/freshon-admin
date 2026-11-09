@@ -1,4 +1,4 @@
-import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261109-coverage-candidates';
+import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261110-coverage-display';
 
 const API = '/api/map-phase2b/private/shadow-coverage';
 const STATUS = { DELIVERED: '관측 배송 이력', CANDIDATE: '관측기간 미배송 후보', EMPTY: '검증 범위 내 공백', UNKNOWN: '자료 부족' };
@@ -435,7 +435,7 @@ export function createCoveragePanel({ workspace, header }) {
     for (const [label, value] of facts) {
       fields.append(element('dt', '', label), element('dd', '', value));
     }
-    detail.replaceChildren(header, element('h2', '', cell.label), element('p', 'coverage-cell-id', cell.id));
+    detail.replaceChildren(header, element('h2', '', cell.label));
     if (cell.address) detail.append(element('p', 'coverage-address', cell.address));
     detail.append(fields, element('h3', '', '이 격자의 배송 이력 호차'),
       element('p', 'coverage-vehicle-list', cell.vehicles.length ? cell.vehicles.map(vehicle => vehicle + '호').join(' · ') : '확인된 호차 없음'),
@@ -516,7 +516,7 @@ export function createCoveragePanel({ workspace, header }) {
       if (row.stats) {
         const stats = row.stats;
         button.append(element('span', '', '관측 방문 ' + visitLabel(stats) + ' · 등록 ' + fmt(stats.registered) + '곳'));
-        button.append(element('small', '', 'H3 ' + row.id + ' · 이력 호차 ' + (stats.vehicles.map(v => v + '호').join(', ') || '미확인')),
+        button.append(element('small', '', '이력 호차 ' + (stats.vehicles.map(v => v + '호').join(', ') || '미확인')),
           ...nearbyLabels(stats.nearby).map(label => element('small', '', label)), statusBadge(stats.status));
         button.append(element('small', '', '반경 내 등록 매장 500m ' + fmt(stats.registeredWithin[500]) +
           '곳 · 1km ' + fmt(stats.registeredWithin[1000]) + '곳'));

@@ -19,6 +19,17 @@ function appearance(cell) {
   return cell.visits ? 'light' : 'none';
 }
 
+export function mergeCoverageBadges(points) {
+  const badges = [];
+  for (const point of points) {
+    // Even the three-digit badge fits in 32 CSS pixels including its outline.
+    const overlap = badges.find(badge => (point.x - badge.x) ** 2 + (point.y - badge.y) ** 2 < 32 ** 2);
+    if (overlap) overlap.cells += point.cells;
+    else badges.push({ ...point });
+  }
+  return badges;
+}
+
 export function createCoverageMap(map, maps, { idle, select, enabled }) {
   const svg = document.createElementNS(SVG, 'svg');
   svg.classList.add('coverage-overlay');
@@ -57,21 +68,22 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
       if (cell.id === selected?.id) path.classList.add('coverage-selected');
       fragment.append(path);
     }
-    hits = markers.map(marker => {
+    hits = mergeCoverageBadges(markers.map(marker => {
       const point = projection.pointFromCoords(new maps.LatLng(...marker.location));
-      const x = point.x - origin.x, y = point.y - origin.y;
+      return { ...marker, x: point.x - origin.x, y: point.y - origin.y };
+    }));
+    for (const { x, y, cells: countCells } of hits) {
       const badge = document.createElementNS(SVG, 'g');
       badge.classList.add('coverage-candidate-count');
       badge.setAttribute('transform', 'translate(' + x + ' ' + y + ')');
       const circle = document.createElementNS(SVG, 'circle');
-      circle.setAttribute('r', marker.cells >= 100 ? '15' : '12');
+      circle.setAttribute('r', countCells >= 100 ? '15' : '12');
       const count = document.createElementNS(SVG, 'text');
       count.setAttribute('dy', '.35em');
-      count.textContent = String(marker.cells);
+      count.textContent = String(countCells);
       badge.append(circle, count);
       fragment.append(badge);
-      return { ...marker, x, y };
-    });
+    }
     svg.replaceChildren(fragment);
   }
 
