@@ -1,5 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import vm from 'node:vm';import fs from 'node:fs';import crypto from 'node:crypto';
-import {searchCustomerSummaries} from '../src/privateCustomerSearch.js';
+import express from 'express';
+import {mountPrivateCustomerSearch,searchCustomerSummaries} from '../src/privateCustomerSearch.js';
 const source=fs.readFileSync(new URL('../integrations/hub/protected-reader/CustomerSearch.js',import.meta.url),'utf8');
 const now='2026-11-03T00:00:00Z';
 function fixture(extra=[],mutate=false){
@@ -17,3 +18,29 @@ test('exact known customer remains selectable while the master is unavailable',a
 test('authenticated current address matches join by code without returning private addresses',async()=>{const f=fixture();const r=await searchCustomerSummaries({query:'서울 강남구 합성로10',snapshot:{rows:[{customerCode:'S970001',lat:37,lng:127}]},searchMaster:async q=>({ok:true,data:f.search(q)})});assert.equal(r.meta.customerMatchVerified,true);assert.equal(r.data.length,2);assert.equal(r.data[0].lat,37);assert.equal(r.data[1].lat,null);assert(!JSON.stringify(r).includes('합성로'));});
 test('changed address hash cannot reuse a previously verified coordinate',async()=>{const f=fixture();const r=await searchCustomerSummaries({query:'서울 강남구 합성로10',snapshot:{rows:[{customerCode:'S970001',lat:37,lng:127,originalAddressHash:'f'.repeat(64)}]},searchMaster:async q=>({ok:true,data:f.search(q)})});const row=r.data.find(x=>x.customerCode==='S970001');assert.equal(row.lat,null);assert.equal(row.coordinateStatus,'CONFLICT');assert.equal(row.addressChanged,true);});
 test('master failure does not break known names or certify unknown addresses',async()=>{const searchMaster=async()=>{throw Error('HUB_TIMEOUT');};const r=await searchCustomerSummaries({query:'합성',snapshot:{rows:[{customerCode:'S970001',customerName:'합성'}]},searchMaster});assert.equal(r.data.length,1);assert.equal(r.meta.customerMatchVerified,false);await assert.rejects(searchCustomerSummaries({query:'서울 미등록로 99',snapshot:{rows:[]},searchMaster}),/HUB_TIMEOUT/);});
+
+test('only a verified Stage batch can use preserved address matching without a current source request',async t=>{
+ const app=express();let upstream=0;
+ const rows=[{customerCode:'S970001',customerName:'합성 A',address:'서울특별시 강남구 합성로 10',lat:37,lng:127},
+  {customerCode:'S970002',customerName:'합성 B',address:'서울 강남구 합성로 100',lat:37,lng:127}];
+ mountPrivateCustomerSearch({app,allowPreservedBatch:true,
+  requireStaff:(req,res,next)=>req.get('x-test-staff')==='1'?next():res.sendStatus(401),
+  readSnapshot:async()=>({source:'STAGE_VERIFIED_REGISTRY',rows}),
+  searchMaster:async()=>{upstream++;throw Error('HUB_TIMEOUT');}});
+ const server=await new Promise(resolve=>{const listener=app.listen(0,'127.0.0.1',()=>resolve(listener));});
+ t.after(()=>new Promise(resolve=>server.close(resolve)));
+ const query=(value,headers)=>fetch(`http://127.0.0.1:${server.address().port}/api/map-phase2b/private/customer-search`,
+  {headers:{'x-map-customer-query':encodeURIComponent(value),...headers}});
+ assert.equal((await query('서울 강남구 합성로10',{'x-map-search-scope':'new-area'})).status,401);
+ const auth={'x-test-staff':'1','x-map-search-scope':'new-area'};
+ const exact=await query('서울 강남구 합성로10',auth).then(r=>r.json());
+ assert.deepEqual(exact.data.map(row=>row.customerCode),['S970001']);
+ assert.equal(exact.data[0].address,undefined);
+ assert.equal(exact.meta.customerMatchVerified,false);
+ const none=await query('서울 강남구 합성로 1',auth).then(r=>r.json());
+ assert.deepEqual(none.data,[]);
+ assert.equal(none.meta.currentness,'PRESERVED_VALIDATION');
+ assert.equal(upstream,0);
+ assert.equal((await query('서울 강남구 없는로 3',{'x-test-staff':'1'})).status,503);
+ assert.equal(upstream,1);
+});

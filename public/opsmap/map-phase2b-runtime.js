@@ -2510,7 +2510,7 @@
     const key=query.normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
     if (!batch.customers.has(key)) batch.customers.set(key,fetchJson('/api/map-phase2b/private/customer-search',{
       channel:'new-area-customer-search:'+batch.requestId+':'+batch.customers.size,
-      ttl:0,timeout:12000,signal:batch.signal||signal,headers:{'x-map-customer-query':encodeURIComponent(query)}
+      ttl:0,timeout:12000,signal:batch.signal||signal,headers:{'x-map-customer-query':encodeURIComponent(query),'x-map-search-scope':'new-area'}
     }).then(result=>{
       if (!Array.isArray(result.data)) throw Object.assign(Error('CUSTOMER_SEARCH_CONTRACT'),{code:'CUSTOMER_SEARCH_CONTRACT'});
       return result;

@@ -193,7 +193,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
       manual.mount(binding);
       photos.mount(binding);
-      mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
+      mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,allowPreservedBatch:true,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
       router.get('/api/map-phase2b/preview/snapshot',requireStaff,async(req,res)=>{
         try {
           const saved=await readSnapshot();
