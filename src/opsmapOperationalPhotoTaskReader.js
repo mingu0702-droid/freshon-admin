@@ -1,5 +1,5 @@
-import {DeliveryPhotoError, deliveryDate} from './opsmapDeliveryPhotos.js';
-import {readBoundedPhotoLoginJson} from './opsmapDeliveryAdminTransport.js';
+import {DeliveryPhotoError, deliveryDate, validatePhotoQuery, validDeliveryId} from './opsmapDeliveryPhotos.js';
+import {deliveryPhotoUpstreamError, readBoundedPhotoLoginJson} from './opsmapDeliveryAdminTransport.js';
 import {deliverySourceObservation, sourceTaskDate} from './snapshotRefreshEvidence.js';
 
 const fail = (code, status = 502) => { throw new DeliveryPhotoError(code, status); };
@@ -13,10 +13,12 @@ const count = value => typeof value === 'number' && Number.isSafeInteger(value) 
 
 // Existing GET task-list contract, with a single deadline covering every page and
 // body read. This requester never invokes deliveryAdminJson or logs in on 401.
-export function createOperationalPhotoTaskReader({rawRequest, extractRows = extractDefault, timeoutMs = 15000} = {}) {
+export function createOperationalPhotoTaskReader({rawRequest, extractRows = extractDefault, timeoutMs = 15000, customerScoped = false} = {}) {
   if (typeof rawRequest !== 'function' || typeof extractRows !== 'function'
     || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 15000) throw Error('PHOTO_TASK_READER_CONFIG_REJECTED');
-  return async (date, {signal} = {}) => {
+  const pageSize = customerScoped ? 50 : 300, maxPages = customerScoped ? 4 : 20;
+  return async (date, {signal, customerCode} = {}) => {
+    if (customerScoped) validatePhotoQuery({customerCode});
     if (!deliveryDate(date) || date.length !== 10) fail('INVALID_DATE', 400);
     const controller = new AbortController(), end = Date.now() + timeoutMs;
     const abort = () => controller.abort();
@@ -32,41 +34,42 @@ export function createOperationalPhotoTaskReader({rawRequest, extractRows = extr
     };
     const rows = [], seen = new Set();let complete = false, pages = 0, declaredTotal = null, declaredPages = null, pagingValid = true;
     try {
-      for (let page = 0; page < 20; page++) {
+      for (let page = 0; page < maxPages; page++) {
         check();
-        const query = new URLSearchParams({logisticsCenterId:'1', page:String(page), pageSize:'300'});
+        const query = new URLSearchParams({page:String(page), pageSize:String(pageSize)});
+        if (customerScoped) query.set('customerErpCodeLike', customerCode);
+        else query.set('logisticsCenterId', '1');
         query.append('enteringDatedAtBetween', date + 'T00:00:00+09:00');
         query.append('enteringDatedAtBetween', date + 'T00:00:00+09:00');
         const response = await guarded(Promise.resolve().then(() => {
           check();return rawRequest('/api/bali/task?' + query, {method:'GET', signal:controller.signal,
-            redirect:'error', cache:'no-store', maxResponseBytes:1048576, timeoutMs:Math.max(1, end - Date.now())});
+            redirect:'error', cache:'no-store', maxResponseBytes:customerScoped ? 256 * 1024 : 1048576, timeoutMs:Math.max(1, end - Date.now())});
         }), late => cancel(late?.body));
         if (response?.redirected) { cancel(response.body); fail('UPSTREAM_REDIRECT_REJECTED'); }
         if (response?.status !== 200) {
           cancel(response?.body);
-          const status = response?.status;
-          fail(status === 401 ? 'UPSTREAM_AUTH_REQUIRED' : status === 403 ? 'PHOTO_FORBIDDEN' : status === 429 ? 'PHOTO_RATE_LIMITED' : 'PHOTO_LOOKUP_FAILED', status === 403 ? 403 : status === 429 ? 429 : 502);
+          throw deliveryPhotoUpstreamError(response?.status);
         }
-        const payload = await readBoundedPhotoLoginJson(response, 1048576, controller.signal);check();
+        const payload = await readBoundedPhotoLoginJson(response, customerScoped ? 256 * 1024 : 1048576, controller.signal);check();
         if (payload?.ok === false || payload?.success === false || payload?.error) fail('PHOTO_LOOKUP_FAILED');
         const batch = extractRows(payload);
-        if (!Array.isArray(batch) || batch.length > 300 || rows.length + batch.length > 10000) fail('INVALID_PHOTO_RESPONSE');
+        if (!Array.isArray(batch) || batch.length > pageSize || rows.length + batch.length > 10000) fail('INVALID_PHOTO_RESPONSE');
         const total = count(payload?.totalElements ?? payload?.data?.totalElements), pageCount = count(payload?.totalPages ?? payload?.data?.totalPages);
         if (total === null || pageCount === null || total > 10000 || total === 0 && pageCount > 1
-          || total > 0 && pageCount !== Math.ceil(total / 300)) pagingValid = false;
+          || total > 0 && pageCount !== Math.ceil(total / pageSize)) pagingValid = false;
         if (declaredTotal !== null && (declaredTotal !== total || declaredPages !== pageCount)) pagingValid = false;
         if (declaredTotal === null && total !== null) { declaredTotal = total; declaredPages = pageCount; }
         for (const task of batch) {
           const id = String(task?.id ?? '');
           const customerCode = task?.customer?.erpCode ?? task?.customerErpCode;
           const values = [task?.enteringDatedAt, task?.deliveryDate, task?.carrier?.enteringDatedAt].filter(value => value !== null && value !== undefined);
-          if (!/^\d{1,20}$/.test(id) || seen.has(id) || typeof customerCode !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(customerCode)
+          if (!validDeliveryId(task?.id) || seen.has(id) || typeof customerCode !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(customerCode)
             || !values.length || values.some(value => sourceTaskDate(value) !== date)) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
           seen.add(id);rows.push(task);
         }
         pages++;
         if (pagingValid && rows.length === declaredTotal && (declaredTotal === 0 || pages === declaredPages)) { complete = true;break; }
-        if (batch.length < 300 || declaredPages !== null && pages >= declaredPages) break;
+        if (batch.length < pageSize || declaredPages !== null && pages >= declaredPages) break;
       }
       check();
       Object.defineProperty(rows, 'sourceObservation', {value:deliverySourceObservation(rows, {date, complete, pages})});
@@ -74,6 +77,7 @@ export function createOperationalPhotoTaskReader({rawRequest, extractRows = extr
     } catch (error) {
       if (controller.signal.aborted || error?.name === 'AbortError') fail('PHOTO_TIMEOUT', 504);
       if (error instanceof DeliveryPhotoError) throw error;
+      if (Number.isInteger(error?.status)) throw deliveryPhotoUpstreamError(error.status);
       fail('PHOTO_LOOKUP_FAILED');
     } finally { clearTimeout(timer);signal?.removeEventListener('abort', abort); }
   };

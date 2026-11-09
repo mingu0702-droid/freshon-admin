@@ -1,6 +1,7 @@
-import {createDeliveryAdminPhotoSource, DeliveryPhotoError, deliveryDate, validatePhotoQuery} from './opsmapDeliveryPhotos.js';
-import {createDeliveryAdminPhotoTransport, DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, DELIVERY_ADMIN_PHOTO_HOSTS} from './opsmapDeliveryAdminTransport.js';
+import {createDeliveryAdminPhotoSource, DeliveryPhotoError, deliveryDate, validatePhotoQuery, validDeliveryId} from './opsmapDeliveryPhotos.js';
+import {createDeliveryAdminPhotoTransport, DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, DELIVERY_ADMIN_PHOTO_HOSTS, deliveryPhotoUpstreamError} from './opsmapDeliveryAdminTransport.js';
 import {mountOpsmapDeliveryPhotoRoutes} from './opsmapDeliveryPhotoRouter.js';
+import {createDeliveryPhotoHistoryReader} from './opsmapDeliveryPhotoHistory.js';
 export {createOperationalPhotoTaskReader} from './opsmapOperationalPhotoTaskReader.js';
 
 const fail = (code, status = 503) => { throw new DeliveryPhotoError(code, status); };
@@ -15,7 +16,7 @@ async function waitForPhotoOperation(work, signal) {
 
 // Read only the selected day through the existing Delivery reader; never scan history.
 // Only three identity fields leave this adapter, without retaining source rows.
-export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate} = {}) {
+export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate, customerScoped = false} = {}) {
   const active = new Map(), identities = new Map();
   return async (query, {signal} = {}) => {
     if (typeof readTaskRows !== 'function') fail('SOURCE_UNAVAILABLE');
@@ -25,8 +26,14 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate}
     const key = query.customerCode + ':' + date, now = Date.now();
     for (const [id, entry] of identities) if (entry.expiresAt <= now) identities.delete(id);
     if (identities.has(key)) return identities.get(key).records.map(row => ({...row}));
-    if (!active.has(date)) active.set(date, Promise.resolve().then(() => readTaskRows(date, {signal})).finally(() => active.delete(date)));
-    const rows = await waitForPhotoOperation(() => active.get(date), signal);
+    const activeKey = customerScoped ? key : date;
+    if (!active.has(activeKey)) {
+      const operation = Promise.resolve().then(() => readTaskRows(date, {signal, ...(customerScoped ? {customerCode:query.customerCode} : {})}));
+      active.set(activeKey, operation);
+      void operation.finally(() => active.delete(activeKey)).catch(() => {});
+    }
+    const operation = active.get(activeKey);
+    const rows = await waitForPhotoOperation(() => operation, signal);
     if (!Array.isArray(rows) || rows.length > 10000) fail('INVALID_PHOTO_RESPONSE', 502);
     if (signal?.aborted) fail('PHOTO_TIMEOUT', 504);
     const records = new Map();
@@ -35,7 +42,7 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate}
       if (customerCode !== query.customerCode) continue;
       const observedDate = deliveryDate(task?.carrier?.enteringDatedAt ?? task?.enteringDatedAt ?? task?.deliveryDate);
       const deliveryId = String(task?.id ?? '');
-      if (observedDate !== date || !/^\d{1,20}$/.test(deliveryId)) fail('PHOTO_IDENTITY_UNVERIFIED');
+      if (observedDate !== date || !validDeliveryId(task?.id)) fail('PHOTO_IDENTITY_UNVERIFIED');
       records.set(deliveryId, {customerCode, date, deliveryId});
       if (records.size > 32) fail('HISTORY_LIMIT_EXCEEDED', 422);
     }
@@ -51,7 +58,7 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate}
 // Operational access replaces the old single-record trial allowance. Existing
 // staff/session checks, exact identity checks, stream limits and host checks remain.
 export function createOperationalPhotoExtension({enabled = false, rawRequest,
-  hasMemorySession, prepareSession, listDeliveryMetadata, imageFetch = globalThis.fetch} = {}) {
+  hasMemorySession, prepareSession, prepareHistorySession = false, listDeliveryMetadata, onSourceVerified, imageFetch = globalThis.fetch} = {}) {
   const isEnabled = () => typeof enabled === 'function' ? enabled() === true : enabled === true;
   const hasSession = () => isEnabled() && typeof hasMemorySession === 'function' && hasMemorySession() === true;
   const ensureSession = async (identity, {signal} = {}) => {
@@ -59,7 +66,15 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
     validatePhotoQuery({customerCode:identity.customerCode, ...(identity.date ? {date:identity.date} : {}), ...(identity.deliveryId ? {deliveryId:identity.deliveryId} : {})});
     // The injected routine is the existing Delivery Admin authentication flow.
     // This feature contains no credential store, login endpoint or retry login.
-    if (!hasSession() && typeof prepareSession === 'function') await waitForPhotoOperation(() => prepareSession({signal}), signal);
+    if (typeof rawRequest !== 'function' && typeof prepareSession === 'function') fail('SOURCE_UNAVAILABLE');
+    if (!hasSession() && typeof prepareSession === 'function') {
+      try { await waitForPhotoOperation(() => prepareSession({signal}), signal); }
+      catch (error) {
+        if (error instanceof DeliveryPhotoError) throw error;
+        if (Number.isInteger(error?.status)) throw deliveryPhotoUpstreamError(error.status, 'source-login');
+        throw new DeliveryPhotoError('UPSTREAM_AUTH_REQUIRED', 502, {stage:'source-login'});
+      }
+    }
     if (signal?.aborted) fail('PHOTO_TIMEOUT', 504);
     if (!hasSession()) fail('UPSTREAM_AUTH_REQUIRED', 502);
   };
@@ -79,11 +94,29 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
     if (typeof listDeliveryMetadata !== 'function') fail('SOURCE_UNAVAILABLE');
     return listDeliveryMetadata(identity, options);
   };
-  const source = createDeliveryAdminPhotoSource({...transport, requestJson, listDeliveryMetadata: metadata,
+  const photoSource = createDeliveryAdminPhotoSource({...transport, requestJson, listDeliveryMetadata: metadata,
     categoryMap: DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, allowedImageHosts: DELIVERY_ADMIN_PHOTO_HOSTS, readTaskStatusRecords:true});
+  const readHistory = createDeliveryPhotoHistoryReader({
+    searchFrontDoorTasks:transport.searchFrontDoorTasks, listHistoryRecord:photoSource.listHistoryRecord
+  });
+  const source = {
+    ...photoSource,
+    async list(identity, options) {
+      const rows = await photoSource.list(identity, options);
+      onSourceVerified?.();
+      return rows;
+    },
+    async listHistory(identity, options) {
+      if (prepareHistorySession) await ensureSession(identity, options);
+      if (!hasSession()) throw new DeliveryPhotoError('UPSTREAM_AUTH_REQUIRED', 502, {stage:'source-session'});
+      const history = await readHistory(identity, options);
+      onSourceVerified?.();
+      return history;
+    }
+  };
   return {
     diagnostics: () => ({enabled: isEnabled(), sourceSession: hasSession(), metadataConfigured: typeof listDeliveryMetadata === 'function'}),
-    mount: ({app, requireStaff, isSessionCurrent, previewEnabled}) => mountOpsmapDeliveryPhotoRoutes({app, requireStaff, isSessionCurrent,
+    mount: ({app, requireStaff, isSessionCurrent, previewEnabled}, {historyOnly = false} = {}) => mountOpsmapDeliveryPhotoRoutes({app, requireStaff, isSessionCurrent, historyOnly,
       source, enabled: () => isEnabled() && previewEnabled() === true, prepareSource: ensureSession,
       prepareDiscovery: true, timeoutMs: 15000, maxConcurrent: 3, maxImageBytes: 4 * 1024 * 1024})
   };

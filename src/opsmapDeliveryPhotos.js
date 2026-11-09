@@ -6,7 +6,9 @@ export class DeliveryPhotoError extends Error {
     if (Number.isInteger(detail.sourceHttpStatus)) this.sourceHttpStatus = detail.sourceHttpStatus;
   }
 }
-export const PHOTO_KINDS = new Set(['REFRIGERATOR_DOOR', 'ENTRANCE_LOCK']);
+export const FRONT_DOOR_PHOTO_KIND = 'FRONT_DOOR_DELIVERY';
+const FRONT_DOOR_PHOTO_LABEL = '상품을 잘 적치하셨나요? - 매장 문 앞';
+export const PHOTO_KINDS = new Set(['REFRIGERATOR_DOOR', 'ENTRANCE_LOCK', FRONT_DOOR_PHOTO_KIND]);
 const fail = (code, status) => { throw new DeliveryPhotoError(code, status); };
 const cleanText = (value, max = 2000) => typeof value === 'string' ? value.slice(0, max) : '';
 async function bounded(promise, signal) {
@@ -40,12 +42,35 @@ function identityOf(task) {
 }
 function exact(task, expected) {
   const actual = identityOf(task);
+  if (!validDeliveryId(task?.id) || !actual.date || typeof actual.customerCode !== 'string') fail('PHOTO_IDENTITY_UNVERIFIED', 503);
+  const codes = [task.customer?.erpCode, task.customerErpCode];
+  const dates = [task.carrier?.enteringDatedAt, task.enteringDatedAt];
+  if (codes.some(code => code !== undefined && code !== actual.customerCode)
+    || dates.some(date => date !== undefined && deliveryDate(date) !== actual.date)) fail('DELIVERY_IDENTITY_MISMATCH', 409);
   if (actual.customerCode !== expected.customerCode || (expected.date && actual.date !== expected.date)
     || (expected.deliveryId && actual.deliveryId !== expected.deliveryId)) fail('DELIVERY_IDENTITY_MISMATCH', 409);
-  if (!actual.date || !/^\d{1,20}$/.test(actual.deliveryId)) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
   return actual;
 }
-function unwrap(payload) { return payload?.data ?? payload; }
+function unwrap(payload) {
+  if (payload?.ok === false || payload?.success === false || payload?.error) {
+    throw new DeliveryPhotoError('INVALID_PHOTO_RESPONSE', 502, {stage:'source-json'});
+  }
+  return payload?.data ?? payload;
+}
+
+function matchesFrontDoorCompletion(record) {
+  return (record.status === undefined || record.status === 'COMPLETED')
+    && (record.statusText === undefined || record.statusText === '배송완료')
+    && (record.completeType === undefined || record.completeType === 'FRONT_DOOR')
+    && (record.completeTypeText === undefined || record.completeTypeText === '매장문앞');
+}
+
+export function hasFrontDoorCompletion(record) {
+  return record && (record.status === 'COMPLETED' || record.statusText === '배송완료')
+    && record.completeTypeText === '매장문앞' && matchesFrontDoorCompletion(record);
+}
+
+export const validDeliveryId = value => (typeof value === 'string' || Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value));
 
 // Public Delivery Admin bundle confirms /api/bali/task/{taskId}, customer.erpCode,
 // carrier.enteringDatedAt and taskAttachments[{typeText,text,images:[{url}]}].
@@ -55,7 +80,11 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
   if (typeof requestJson !== 'function' || typeof fetchImage !== 'function') fail('UNVERIFIED', 503);
   if (firstPhotoKind !== null && !PHOTO_KINDS.has(firstPhotoKind)) fail('UNVERIFIED', 503);
   const hosts = new Set(allowedImageHosts);
-  const kinds = Object.fromEntries(Object.entries(categoryMap).filter(([, kind]) => PHOTO_KINDS.has(kind)));
+  const kinds = new Map(Object.entries(categoryMap).filter(([, kind]) => PHOTO_KINDS.has(kind) && kind !== FRONT_DOOR_PHOTO_KIND));
+  const photoKind = (attachment, history) => {
+    if ((history || readTaskStatusRecords === true && attachment?.photoRecordId) && attachment?.typeText === FRONT_DOOR_PHOTO_LABEL) return FRONT_DOOR_PHOTO_KIND;
+    return history ? undefined : kinds.get(attachment?.typeText);
+  };
   function attachmentImages(attachment) {
     if (!attachment || typeof attachment !== 'object' || !Array.isArray(attachment.images)) fail('PHOTO_IMAGES_INVALID', 503);
     if (attachment.images.length > 24) fail('PHOTO_IMAGE_LIMIT_EXCEEDED', 503);
@@ -81,7 +110,7 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
   function permitted(task, attachmentIndex, imageIndex, childImageIndex = null) {
     if (firstPhotoKind === null) return true;
     for (const [index, attachment] of task.taskAttachments.entries()) {
-      if (kinds[attachment?.typeText] !== firstPhotoKind) continue;
+      if (photoKind(attachment, false) !== firstPhotoKind) continue;
       const first = attachmentImages(attachment)[0];
       if (first) return index === attachmentIndex && first.imageIndex === imageIndex && first.childImageIndex === childImageIndex;
     }
@@ -89,16 +118,17 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
   }
   function mediaAsset(raw) {
     let url;
-    try { url = new URL(raw); } catch { fail('PHOTO_NOT_FOUND', 404); }
+    try { url = new URL(raw); } catch { fail('INVALID_MEDIA_URL', 502); }
     if (url.protocol !== 'https:' || url.username || url.password || url.port || !hosts.has(url.hostname)) fail('MEDIA_ORIGIN_REJECTED', 403);
     if (url.href.length > 8192) fail('INVALID_MEDIA_URL', 502);
     // Persist only the normalized asset identity digest; signed query strings may rotate.
     const fingerprint = createHash('sha256').update(url.origin + url.pathname).digest('hex');
     return { url, fingerprint };
   }
-  async function detail(identity, signal) {
+  async function detail(identity, signal, history = false) {
     let task = unwrap(await bounded(requestJson(`/api/bali/task/${identity.deliveryId}`, { method: 'GET', signal, maxResponseBytes: 65536 }), signal));
     exact(task, identity);
+    if (history && !matchesFrontDoorCompletion(task)) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
     if (readTaskStatusRecords === true) {
       // Public task screen reads attachments from taskStatusRecord, separately
       // from its parent task. Parent identity must pass before this second GET.
@@ -117,11 +147,16 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
       for (const [recordIndex, record] of records.entries()) {
         validateExplicit(record, true);
         if (Object.hasOwn(record, 'task')) validateExplicit(record.task);
+        if (history && (record.status !== 'COMPLETED' || !hasFrontDoorCompletion(record))) continue;
         if (!Array.isArray(record.taskAttachments)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
+        if (history && !validDeliveryId(record.id)) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
         const recordFingerprint = createHash('sha256').update(JSON.stringify({source:'TASK_STATUS_RECORD', ...identity, recordIndex, id:record.id ?? null})).digest('hex');
+        const frontDoor = readTaskStatusRecords === true && hasFrontDoorCompletion(record) && validDeliveryId(record.id);
         for (const attachment of record.taskAttachments) {
           if (!attachment || typeof attachment !== 'object' || Array.isArray(attachment)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
-          attachments.push({...attachment, photoRecordFingerprint:recordFingerprint});
+          if (history && !photoKind(attachment, true)) continue;
+          attachments.push({...attachment, photoRecordFingerprint:recordFingerprint,
+            photoRecordId:frontDoor && photoKind(attachment, true) ? String(record.id) : undefined});
           if (attachments.length > 20) fail('PHOTO_ATTACHMENT_LIMIT_EXCEEDED', 503);
         }
       }
@@ -137,6 +172,20 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
     return task;
   }
   return {
+    async listHistoryRecord(identity, { signal } = {}) {
+      if (readTaskStatusRecords !== true) fail('UNVERIFIED', 503);
+      const task = await detail(identity, signal, true), photos = [];
+      for (const [attachmentIndex, attachment] of task.taskAttachments.entries()) {
+        for (const {imageIndex, childImageIndex, image} of attachmentImages(attachment)) {
+          const {fingerprint} = mediaAsset(image.url);
+          photos.push({kind:FRONT_DOOR_PHOTO_KIND, recordId:attachment.photoRecordId,
+            ref:{kind:FRONT_DOOR_PHOTO_KIND, attachmentIndex, imageIndex, ...(childImageIndex === null ? {} : {childImageIndex}), fingerprint,
+              recordFingerprint:attachment.photoRecordFingerprint, history:true}});
+        }
+      }
+      if (photos.length > 40) fail('PHOTO_LIMIT_EXCEEDED', 503);
+      return {...exact(task, identity), notes:'', status:photos.length ? 'READY' : 'EMPTY', photos};
+    },
     async list(identity, { signal } = {}) {
       if (identity.deliveryId) {
         const task = await detail(identity, signal), photos = [], notes = [];
@@ -144,12 +193,12 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
         for (const [attachmentIndex, attachment] of task.taskAttachments.entries()) {
           const images = attachmentImages(attachment);
           if (attachment.text) notes.push(cleanText(attachment.text));
-          const kind = kinds[attachment.typeText];
+          const kind = photoKind(attachment, false);
           if (!kind && images.length) { unverified = true; continue; }
           for (const {imageIndex, childImageIndex, image} of images) {
             if (!permitted(task, attachmentIndex, imageIndex, childImageIndex)) continue;
             const { fingerprint } = mediaAsset(image?.url);
-            photos.push({ kind, ref: { attachmentIndex, imageIndex, ...(childImageIndex === null ? {} : {childImageIndex}), fingerprint,
+            photos.push({ kind, ...(kind === FRONT_DOOR_PHOTO_KIND ? {recordId:attachment.photoRecordId} : {}), ref: { kind, attachmentIndex, imageIndex, ...(childImageIndex === null ? {} : {childImageIndex}), fingerprint,
               ...(readTaskStatusRecords === true ? {recordFingerprint:attachment.photoRecordFingerprint} : {}) } });
           }
         }
@@ -166,11 +215,13 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
         notes: '', status: 'UNVERIFIED', photos: [] }));
     },
     async openMedia(identity, ref, { signal } = {}) {
-      const task = await detail(identity, signal);
+      const history = ref.history === true;
+      if (history && readTaskStatusRecords !== true) fail('PHOTO_FORBIDDEN', 403);
+      const task = await detail(identity, signal, history);
       if (!permitted(task, ref.attachmentIndex, ref.imageIndex, ref.childImageIndex ?? null)) fail('PHOTO_FORBIDDEN', 403);
       const attachment = task.taskAttachments[ref.attachmentIndex];
       if (readTaskStatusRecords === true && attachment?.photoRecordFingerprint !== ref.recordFingerprint) fail('PHOTO_NOT_FOUND', 404);
-      if (!kinds[attachment?.typeText]) fail('UNVERIFIED', 503);
+      if (photoKind(attachment, history) !== ref.kind) fail('PHOTO_NOT_FOUND', 404);
       const entry = attachmentImages(attachment).find(r => r.imageIndex === ref.imageIndex && r.childImageIndex === (ref.childImageIndex ?? null));
       if (!entry) fail('PHOTO_NOT_FOUND', 404);
       const { url, fingerprint } = mediaAsset(entry.image.url);
@@ -187,29 +238,43 @@ export function createDeliveryPhotoService({ source = null, enabled = false, now
     if (!source?.list || !source?.openMedia) fail('SOURCE_UNAVAILABLE', 503);
   }
   function prune() { for (const [key, value] of handles) if (now() >= value.expiresAt) handles.delete(key); }
+  function publish(rows, identity, sessionKey, history = false) {
+    if (!Array.isArray(rows) || rows.length > 32) fail('INVALID_PHOTO_RESPONSE', 502);
+    prune();
+    return rows.map(row => {
+      if (row.customerCode !== identity.customerCode || !deliveryDate(row.date) || (identity.date && row.date !== identity.date)
+        || !/^\d{1,20}$/.test(row.deliveryId) || (identity.deliveryId && row.deliveryId !== identity.deliveryId)) fail('DELIVERY_IDENTITY_MISMATCH', 409);
+      if (!['READY', 'EMPTY', 'UNVERIFIED'].includes(row.status) || !Array.isArray(row.photos) || row.photos.length > 40
+        || (history && (row.status !== 'READY' || !row.photos.length))) fail('INVALID_PHOTO_RESPONSE', 502);
+      return { customerCode: row.customerCode, date: row.date, deliveryId: row.deliveryId,
+        notes: history ? '' : cleanText(row.notes, 4000), status: row.status, photos: row.photos.map(photo => {
+          if (!PHOTO_KINDS.has(photo.kind) || (history && (photo.kind !== FRONT_DOOR_PHOTO_KIND || photo.ref?.history !== true))
+            || (photo.kind === FRONT_DOOR_PHOTO_KIND && !validDeliveryId(photo.recordId))) fail('UNVERIFIED', 503);
+          while (handles.size >= maxHandles) handles.delete(handles.keys().next().value);
+          const id = randomBytes(24).toString('base64url');
+          handles.set(id, { sessionKey, identity: { customerCode: row.customerCode, date: row.date, deliveryId: row.deliveryId },
+            ref: photo.ref, expiresAt: now() + handleTtlMs });
+          const url = `/api/map-phase2b/private/delivery-photos/media/${id}`;
+          return { id, kind: photo.kind, thumbnailUrl: url, url, ...(photo.kind === FRONT_DOOR_PHOTO_KIND ? {recordId:String(photo.recordId)} : {}) };
+        }) };
+    });
+  }
   return {
     async list(query, sessionKey, { signal } = {}) {
       ready(); const identity = validatePhotoQuery(query);
       if (!sessionKey) fail('STAFF_LOGIN_REQUIRED', 401);
       const rows = await bounded(source.list(identity, { signal }), signal);
-      if (!Array.isArray(rows) || rows.length > 32) fail('INVALID_PHOTO_RESPONSE', 502);
-      prune();
-      const deliveries = rows.map(row => {
-        if (row.customerCode !== identity.customerCode || !deliveryDate(row.date) || (identity.date && row.date !== identity.date)
-          || !/^\d{1,20}$/.test(row.deliveryId) || (identity.deliveryId && row.deliveryId !== identity.deliveryId)) fail('DELIVERY_IDENTITY_MISMATCH', 409);
-        if (!['READY', 'EMPTY', 'UNVERIFIED'].includes(row.status) || !Array.isArray(row.photos) || row.photos.length > 40) fail('INVALID_PHOTO_RESPONSE', 502);
-        return { customerCode: row.customerCode, date: row.date, deliveryId: row.deliveryId,
-          notes: cleanText(row.notes, 4000), status: row.status, photos: row.photos.map(photo => {
-            if (!PHOTO_KINDS.has(photo.kind)) fail('UNVERIFIED', 503);
-            while (handles.size >= maxHandles) handles.delete(handles.keys().next().value);
-            const id = randomBytes(24).toString('base64url');
-            handles.set(id, { sessionKey, identity: { customerCode: row.customerCode, date: row.date, deliveryId: row.deliveryId },
-              ref: photo.ref, expiresAt: now() + handleTtlMs });
-            const url = `/api/map-phase2b/private/delivery-photos/media/${id}`;
-            return { id, kind: photo.kind, thumbnailUrl: url, url };
-          }) };
-      });
-      return { customerCode: identity.customerCode, deliveries };
+      return { customerCode: identity.customerCode, deliveries:publish(rows, identity, sessionKey) };
+    },
+    async listHistory(query, sessionKey, {signal} = {}) {
+      ready();
+      if (Object.keys(query).some(key => key !== 'customerCode')) fail('INVALID_PHOTO_REQUEST', 400);
+      const identity = validatePhotoQuery(query);
+      if (!sessionKey) fail('STAFF_LOGIN_REQUIRED', 401);
+      if (typeof source.listHistory !== 'function') fail('SOURCE_UNAVAILABLE', 503);
+      const history = await bounded(source.listHistory(identity, {signal}), signal);
+      if (history?.coverage !== 'INCOMPLETE') fail('INVALID_PHOTO_RESPONSE', 502);
+      return {customerCode:identity.customerCode, coverage:history.coverage, deliveries:publish(history.deliveries, identity, sessionKey, true)};
     },
     async openMedia(id, sessionKey, { signal } = {}) {
       ready(); prune();

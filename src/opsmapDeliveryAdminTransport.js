@@ -1,4 +1,4 @@
-import { DeliveryPhotoError } from './opsmapDeliveryPhotos.js';
+import { DeliveryPhotoError, deliveryDate, validatePhotoQuery } from './opsmapDeliveryPhotos.js';
 
 // Confirmed from the existing authenticated task screen and the public bundle's
 // direct taskAttachment.typeText binding. Unknown labels stay UNVERIFIED.
@@ -13,13 +13,15 @@ const safeHttp = value => [200,400,401,403,404,409,410,413,422,429,500,502,503,5
 // for a noncooperative cancellation promise or retaining this request forever.
 const cancel = body => { try { Promise.resolve(body?.cancel?.()).catch(() => {}); } catch {} };
 
-function statusError(status) {
-  const detail = {stage:'source-http',sourceHttpStatus:safeHttp(status)};
-  if (status === 401) fail('UPSTREAM_AUTH_REQUIRED',502,detail);
-  if (status === 403) fail('PHOTO_FORBIDDEN',403,detail);
-  if (status === 404 || status === 410) fail('PHOTO_NOT_FOUND',status,detail);
-  if (status === 429) fail('PHOTO_RATE_LIMITED',429,detail);
-  fail('PHOTO_LOOKUP_FAILED',502,detail);
+export function deliveryPhotoUpstreamError(status, stage = 'source-http') {
+  const detail = {stage, sourceHttpStatus:safeHttp(status)};
+  if (status === 401) return new DeliveryPhotoError(stage === 'source-media' ? 'PHOTO_MEDIA_AUTH_REQUIRED' : 'UPSTREAM_AUTH_REQUIRED', 502, detail);
+  if (status === 403) return new DeliveryPhotoError('PHOTO_FORBIDDEN', 403, detail);
+  if (status === 404 || status === 410) return new DeliveryPhotoError('PHOTO_NOT_FOUND', status, detail);
+  if (status === 429) return new DeliveryPhotoError('PHOTO_RATE_LIMITED', 429, detail);
+  if (status === 503) return new DeliveryPhotoError('PHOTO_UPSTREAM_UNAVAILABLE', 503, detail);
+  if (status === 504) return new DeliveryPhotoError('PHOTO_TIMEOUT', 504, detail);
+  return new DeliveryPhotoError('PHOTO_LOOKUP_FAILED', 502, detail);
 }
 async function guarded(promise, signal, onLate) {
   let abort;
@@ -92,26 +94,42 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
       if (controller.signal.aborted || error?.name === 'AbortError') fail('PHOTO_TIMEOUT', 504);
       // Preserve only a safe status from approved requesters, never their text,
       // headers, payloads, URLs or signed media details.
-      if (safeHttp(error?.status)) statusError(error.status);
+      if (safeHttp(error?.status)) throw deliveryPhotoUpstreamError(error.status);
       fail('PHOTO_LOOKUP_FAILED');
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+  }
+  async function getJson(path, limit, signal) {
+    if (typeof approvedRequest !== 'function') fail('SOURCE_UNAVAILABLE',503,{stage:'source-session'});
+    return run(signal, async requestSignal => {
+      const response = await guarded(Promise.resolve().then(() => approvedRequest(path, {
+        method:'GET', signal:requestSignal, redirect:'error', cache:'no-store', maxResponseBytes:limit
+      })), requestSignal, response => cancel(response?.body));
+      try { approved(); } catch (error) { cancel(response?.body); throw error; }
+      if (response?.redirected) { cancel(response.body); fail('UPSTREAM_REDIRECT_REJECTED',502,{stage:'source-http',sourceHttpStatus:safeHttp(response.status)}); }
+      if (response?.status !== 200) { cancel(response?.body); throw deliveryPhotoUpstreamError(response?.status); }
+      const json = await readJson(response, limit, requestSignal);
+      approved();
+      return json;
+    });
   }
   return {
     async requestJson(path, { method = 'GET', signal, maxResponseBytes = maxJsonBytes } = {}) {
       if (method !== 'GET' || !/^\/api\/bali\/task\/\d{1,20}(?:\/status-record)?$/.test(path || '')) fail('INVALID_PHOTO_REQUEST', 400);
-      if (typeof approvedRequest !== 'function') fail('SOURCE_UNAVAILABLE',503,{stage:'source-session'});
       if (!Number.isInteger(maxResponseBytes) || maxResponseBytes < 1) fail('INVALID_PHOTO_REQUEST', 400);
-      return run(signal, async requestSignal => {
-        const response = await guarded(Promise.resolve().then(() => approvedRequest(path, {
-          method: 'GET', signal: requestSignal, redirect: 'error', cache: 'no-store',
-          maxResponseBytes: Math.min(maxResponseBytes, maxJsonBytes)
-        })), requestSignal, response => cancel(response?.body));
-        try { approved(); } catch (error) { cancel(response?.body); throw error; }
-        if (response?.redirected) { cancel(response.body); fail('UPSTREAM_REDIRECT_REJECTED',502,{stage:'source-http',sourceHttpStatus:safeHttp(response.status)}); }
-        if (response?.status !== 200) { cancel(response?.body); statusError(response?.status); }
-        const json = await readJson(response, Math.min(maxResponseBytes, maxJsonBytes), requestSignal);
-        approved(); return json;
-      });
+      return getJson(path, Math.min(maxResponseBytes, maxJsonBytes), signal);
+    },
+    async searchFrontDoorTasks({customerCode, startDate, endDate, page}, {signal} = {}) {
+      validatePhotoQuery({customerCode});
+      if (deliveryDate(startDate) !== startDate || deliveryDate(endDate) !== endDate
+        || endDate.length !== 10 || startDate.length !== 10 || startDate > endDate
+        || Date.parse(endDate) - Date.parse(startDate) > 364 * 86400000
+        || !Number.isInteger(page) || page < 0 || page >= 4) fail('INVALID_PHOTO_REQUEST',400);
+      // The provider's Task search uses these filters and repeated date parameters.
+      const params = new URLSearchParams({customerErpCodeLike:customerCode, statusIn:'COMPLETED',
+        completeTypeIn:'FRONT_DOOR', page:String(page), pageSize:'50'});
+      params.append('enteringDatedAtBetween', startDate + 'T00:00:00+09:00');
+      params.append('enteringDatedAtBetween', endDate + 'T00:00:00+09:00');
+      return getJson('/api/bali/task?' + params, 256 * 1024, signal);
     },
     async fetchImage(raw, { method = 'GET', signal } = {}) {
       let url; try { url = new URL(raw); } catch { fail('MEDIA_ORIGIN_REJECTED', 403); }

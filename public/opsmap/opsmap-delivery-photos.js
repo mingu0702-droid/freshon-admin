@@ -3,16 +3,19 @@
   'use strict';
   const API = '/api/map-phase2b/private/delivery-photos';
   const KINDS = Object.freeze({ REFRIGERATOR_DOOR: '냉장고 문 확인', ENTRANCE_LOCK: '출입문 잠금 확인' });
+  const HISTORY_KIND = 'FRONT_DOOR_DELIVERY', HISTORY_TITLE = '매장 문 앞 납품 사진';
   const MAX_PHOTOS = 40, MAX_IMAGE_BYTES = 4 * 1024 * 1024, MAX_JSON_BYTES = 256 * 1024;
   const SAFE_FAILURE_CODES = new Set(['UNVERIFIED', 'SOURCE_UNAVAILABLE', 'NOT_CONFIGURED', 'INVALID_SOURCE_RESPONSE',
     'UPSTREAM_AUTH_REQUIRED', 'PHOTO_APPROVAL_REQUIRED', 'PHOTO_BUDGET_NOT_CONFIGURED', 'PHOTO_BUDGET_NOT_INITIALIZED', 'PHOTO_BUDGET_INVALID', 'PHOTO_BUDGET_NOT_APPROVED', 'PHOTO_BUDGET_EXHAUSTED', 'PHOTO_BUDGET_CONFLICT', 'PHOTO_BUDGET_READBACK_UNVERIFIED', 'PHOTO_BUDGET_UNAVAILABLE', 'PHOTO_SOURCE_DISABLED', 'PHOTO_LOOKUP_FAILED', 'PHOTO_FORBIDDEN', 'PHOTO_NOT_FOUND',
     'PHOTO_RATE_LIMITED', 'PHOTO_TIMEOUT', 'INVALID_PHOTO_RESPONSE', 'DELIVERY_IDENTITY_MISMATCH',
     'PHOTO_IDENTITY_UNVERIFIED', 'PHOTO_ATTACHMENTS_INVALID', 'PHOTO_ATTACHMENT_LIMIT_EXCEEDED',
     'PHOTO_IMAGES_INVALID', 'PHOTO_IMAGE_LIMIT_EXCEEDED', 'PHOTO_LOGIN_HTTP_ERROR', 'PHOTO_LOGIN_REDIRECT_REJECTED', 'PHOTO_LOGIN_NETWORK_ERROR', 'PHOTO_LOGIN_SESSION_MISSING', 'PHOTO_CONTENT_TYPE_INVALID', 'PHOTO_JSON_INVALID', 'PHOTO_BODY_UNAVAILABLE',
-    'PHOTO_JSON_TOO_LARGE', 'INVALID_PHOTO_REQUEST', 'PHOTO_LIMIT_EXCEEDED', 'MEDIA_ORIGIN_REJECTED', 'INVALID_MEDIA_TYPE', 'MEDIA_TOO_LARGE', 'UPSTREAM_REDIRECT_REJECTED']);
+    'PHOTO_UPSTREAM_UNAVAILABLE', 'PHOTO_MEDIA_AUTH_REQUIRED', 'PHOTO_IMAGE_DECODE_FAILED', 'INVALID_MEDIA_URL', 'PHOTO_JSON_TOO_LARGE', 'INVALID_PHOTO_REQUEST', 'PHOTO_LIMIT_EXCEEDED', 'MEDIA_ORIGIN_REJECTED', 'INVALID_MEDIA_TYPE', 'MEDIA_TOO_LARGE', 'UPSTREAM_REDIRECT_REJECTED']);
   const SAFE_STAGES=new Set(['source-session','source-login','source-http','source-content-type','source-json','source-identity','source-attachments','source-category','source-media','source-timeout','source-size','staff-session']);
   const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
   const safeText = (value, maximum) => typeof value === 'string' && value.length <= maximum;
+  const validRecordId = value => typeof value === 'string' && /^\d{1,20}$/.test(value);
+  const photoTitle = photo => photo.kind === HISTORY_KIND ? HISTORY_TITLE : KINDS[photo.kind];
   function mediaPath(value) {
     if (typeof value !== 'string') throw Error('UNVERIFIED');
     const url = new URL(value, location.href);
@@ -23,6 +26,7 @@
     const data = payload?.ok === true && payload.data;
     if (!data || data.customerCode !== target.customerCode || !Array.isArray(data.deliveries) || data.deliveries.length > 100) throw Error('UNVERIFIED');
     const identities = new Set();
+    if (target.history && data.coverage !== 'INCOMPLETE') throw Error('UNVERIFIED');
     return data.deliveries.map(delivery => {
       if (delivery.customerCode !== target.customerCode || !validDate(delivery.date) || !safeText(delivery.deliveryId, 128) || !delivery.deliveryId || (target.date && delivery.date !== target.date) || (target.deliveryId && delivery.deliveryId !== target.deliveryId)) throw Error('UNVERIFIED');
       const identity = delivery.date + '\n' + delivery.deliveryId;
@@ -33,12 +37,17 @@
       for (const photo of delivery.photos) {
         if (!safeText(photo.id, 128) || !photo.id || ids.has(photo.id)) throw Error('UNVERIFIED');
         ids.add(photo.id);
-        if (!KINDS[photo.kind]) { unclassified = true; continue; }
-        photos.push({ id: photo.id, kind: photo.kind, thumbnailUrl: mediaPath(photo.thumbnailUrl), url: mediaPath(photo.url) });
+        if (photo.kind === HISTORY_KIND) {
+          if (!validRecordId(photo.recordId) || !validRecordId(delivery.deliveryId)) throw Error('UNVERIFIED');
+        } else if (target.history || !Object.hasOwn(KINDS, photo.kind)) { unclassified = true; continue; }
+        photos.push({ id: photo.id, kind: photo.kind, thumbnailUrl: mediaPath(photo.thumbnailUrl), url: mediaPath(photo.url),
+          ...(photo.kind === HISTORY_KIND ? {recordId:photo.recordId, date:delivery.date, deliveryId:delivery.deliveryId} : {}) });
       }
       if (delivery.status === 'EMPTY' && delivery.photos.length) throw Error('UNVERIFIED');
       return { customerCode: delivery.customerCode, date: delivery.date, deliveryId: delivery.deliveryId, notes: delivery.notes || '', status: unclassified ? 'UNVERIFIED' : delivery.status, photos };
-    }).sort((a, b) => b.date.localeCompare(a.date) || a.deliveryId.localeCompare(b.deliveryId));
+    }).sort((a, b) => b.date.localeCompare(a.date) || (target.history
+      ? b.deliveryId.length - a.deliveryId.length || b.deliveryId.localeCompare(a.deliveryId)
+      : a.deliveryId.localeCompare(b.deliveryId)));
   }
   function node(tag, text, parent, className) {
     const result = document.createElement(tag);
@@ -74,6 +83,7 @@
       host.replaceChildren(); host.dataset.state = state;
       node('h3', '납품 사진', host);
       const status = node('p', message, host, 'deliveryPhotoStatus'); status.setAttribute('role', 'status');
+      if (host.dataset.failureCode) node('small', host.dataset.failureCode, host);
       if (action) { const button = node('button', action.label, host); button.type = 'button'; button.onclick = action.run; }
     }
     function dateSearch() {
@@ -149,6 +159,10 @@
       if ([200,400,401,403,404,409,410,413,422,429,500,502,503,504].includes(error.sourceHttpStatus)) host.dataset.failureSourceHttp=String(error.sourceHttpStatus);
       if (error.message === 'UPSTREAM_AUTH_REQUIRED') { shell('Delivery Admin 인증 연결이 필요합니다. 직원 로그인은 유지됩니다.', 'upstream-auth-required'); return; }
       if (error.message === 'PHOTO_SOURCE_DISABLED') { shell('납품 사진 연결이 비활성 상태입니다.', 'source-disabled'); return; }
+      if (error.message === 'PHOTO_UPSTREAM_UNAVAILABLE') {
+        shell('사진 원천 서비스가 일시 중단되었습니다.', 'source-unavailable', {label:'다시 조회', run:() => current === generation && target && open(target)});
+        return;
+      }
       const sourceContractErrors = {
         PHOTO_CONTENT_TYPE_INVALID: '사진 원천 응답 형식이 JSON이 아닙니다.',
         PHOTO_JSON_INVALID: '사진 원천의 JSON 형식을 확인하지 못했습니다.',
@@ -159,7 +173,7 @@
         PHOTO_IMAGES_INVALID: '사진 원천의 이미지 목록 형식을 확인하지 못했습니다.',
         PHOTO_IMAGE_LIMIT_EXCEEDED: '사진 원천의 이미지 목록이 허용 범위를 초과했습니다.'
       };
-      if (sourceContractErrors[error.message]) { shell(sourceContractErrors[error.message], 'unverified'); dateSearch(); return; }
+      if (Object.hasOwn(sourceContractErrors, error.message)) { shell(sourceContractErrors[error.message], 'unverified'); if (!target?.history) dateSearch(); return; }
       const forbidden = error.status === 403, unverified = ['UNVERIFIED', 'SOURCE_UNAVAILABLE', 'NOT_CONFIGURED', 'INVALID_SOURCE_RESPONSE'].includes(error.message) || error.status === 404 || error.status === 422 || error.status === 503;
       shell(forbidden ? '사진 조회 권한이 없습니다.' : unverified ? '사진 미확인 · 배송 사진 원천 또는 연결 상태를 확인해 주세요.' : '사진 조회 실패 · 잠시 후 다시 시도해 주세요.', forbidden ? 'forbidden' : unverified ? 'unverified' : 'error', forbidden ? null : { label: '다시 조회', run: () => current === generation && target && open(target) });
     }
@@ -182,26 +196,88 @@
       if (deadline <= Date.now()) throw Object.assign(Error('AUTH_REQUIRED'), { status: 401 });
       return url;
     }
+    function mediaFailureText(error) {
+      if (error.status === 404 || error.status === 410) return '사진 파일을 찾을 수 없습니다.';
+      if (error.status === 403) return '사진 파일 접근이 거부되었습니다.';
+      if (error.message === 'PHOTO_MEDIA_AUTH_REQUIRED') return '사진 파일 인증이 필요합니다.';
+      if (error.message === 'PHOTO_UPSTREAM_UNAVAILABLE') return '사진 원천 서비스를 사용할 수 없습니다.';
+      return '사진 파일을 불러오지 못했습니다.';
+    }
+    const requiresSession = error => error.status === 401 || error.message === 'UPSTREAM_AUTH_REQUIRED';
+    const safeMediaCode = error => SAFE_FAILURE_CODES.has(error.message) ? error.message : 'PHOTO_LOOKUP_FAILED';
     async function enlarge(index) {
       if (deadline <= Date.now()) { block(); return; }
       if (!photoList[index]) return;
+      const photo = photoList[index], title = photoTitle(photo);
       const id = generation;
       viewerController?.abort(); viewerController = new AbortController(); const controller = viewerController;
       if (viewer.hidden) focusBeforeViewer = document.activeElement;
       viewerIndex = index; stage.replaceChildren(); viewer.hidden = false; closeButton.focus();
       viewerUrl = null;
-      viewerTitle.textContent = selected.date + ' · ' + KINDS[photoList[index].kind];
+      viewerTitle.textContent = photo.kind === HISTORY_KIND
+        ? `${photo.date} · 배송 ID ${photo.deliveryId} · 원본 기록 ID ${photo.recordId}`
+        : selected.date + ' · ' + title;
       count.textContent = `${index + 1} / ${photoList.length}`; previous.disabled = index === 0; next.disabled = index === photoList.length - 1;
       node('p', '사진 불러오는 중…', stage, 'deliveryPhotoViewerStatus');
       try {
-        const url = await image(photoList[index].url, controller.signal);
+        if (!await authorize(id) || controller.signal.aborted) return;
+        const url = await image(photo.url, controller.signal);
         if (!alive(id) || controller.signal.aborted || viewerIndex !== index) return;
-        viewerUrl = url; stage.replaceChildren(); const img = node('img', undefined, stage); img.alt = KINDS[photoList[index].kind] + ' 확대 사진'; img.src = url;
+        viewerUrl = url; stage.replaceChildren(); const img = node('img', undefined, stage); img.alt = title + ' 확대 사진'; img.src = url;
         img.onerror = () => { if (viewerIndex === index && alive(id)) { stage.replaceChildren(); node('p', '사진 파일을 열지 못했습니다.', stage, 'deliveryPhotoViewerStatus'); } };
       } catch (error) {
         if (controller.signal.aborted || id !== generation) return;
-        if (error.status === 401 || error.status === 403) { failure(error, id); return; }
-        stage.replaceChildren(); node('p', error.status === 410 || error.status === 404 ? '삭제되었거나 사용할 수 없는 사진입니다.' : '사진 조회 실패', stage, 'deliveryPhotoViewerStatus');
+        if (requiresSession(error)) { failure(error, id); return; }
+        stage.replaceChildren();
+        node('p', mediaFailureText(error), stage, 'deliveryPhotoViewerStatus');
+        node('small', safeMediaCode(error), stage);
+      }
+    }
+    async function loadThumbnail(thumb, photo, title, id) {
+      try {
+        const url = await image(photo.thumbnailUrl, requestController.signal);
+        if (!alive(id)) return false;
+        const img = node('img');
+        img.alt = title + ' 썸네일';
+        img.src = url;
+        try { await img.decode(); } catch { throw Error('PHOTO_IMAGE_DECODE_FAILED'); }
+        if (!alive(id)) return false;
+        thumb.replaceChildren(img);
+        return true;
+      } catch (error) {
+        if (!alive(id)) return false;
+        if (requiresSession(error)) { failure(error, id); return false; }
+        thumb.replaceChildren();
+        node('span', mediaFailureText(error), thumb, 'deliveryPhotoMissing');
+        node('small', safeMediaCode(error), thumb);
+        return false;
+      }
+    }
+    function renderHistory(list) {
+      shell('과거 기록 확인 필요', list.length ? 'ready' : 'unverified');
+      dateSearch();
+      const groups = node('div', undefined, host, 'deliveryPhotoGroups');
+      photoList = list.flatMap(delivery => delivery.photos);
+      const id = generation;
+      for (const delivery of list) {
+        const group = node('section', undefined, groups);
+        node('h4', `${delivery.date} · 배송 ID ${delivery.deliveryId}`, group);
+        const grid = node('div', undefined, group, 'deliveryPhotoGrid');
+        for (const photo of delivery.photos) {
+          const card = node('div', undefined, grid), index = photoList.indexOf(photo);
+          const button = node('button', `원본 기록 ID ${photo.recordId} · 사진 확대`, card);
+          button.type = 'button';
+          button.onclick = () => enlarge(index);
+          const preview = node('button', '썸네일 표시', card, 'deliveryPhotoThumb');
+          preview.type = 'button';
+          preview.onclick = async () => {
+            preview.disabled = true;
+            if (!await loadThumbnail(preview, photo, HISTORY_TITLE, id)) return;
+            preview.disabled = false;
+            preview.setAttribute('aria-label', '썸네일 확대');
+            preview.onclick = () => enlarge(index);
+          };
+        }
       }
     }
     function renderList() {
@@ -231,7 +307,9 @@
         if (selected.status === 'UNVERIFIED') { node('p', '사진 미확인 · 사진 분류 또는 원천 확인이 필요합니다.', body, 'deliveryPhotoStatus'); host.dataset.state = 'unverified'; }
         if (!photoList.length && selected.status !== 'UNVERIFIED') { node('p', '사진 없음 · 해당 배송에 등록된 사진이 없습니다.', body, 'deliveryPhotoStatus'); host.dataset.state = 'empty'; }
         const groups = node('div', undefined, body, 'deliveryPhotoGroups'), tasks = [];
-        for (const [kind, title] of Object.entries(KINDS)) {
+        let loaded = 0, failed = 0;
+        const categories = photoList.some(photo => photo.kind === HISTORY_KIND) ? {...KINDS, [HISTORY_KIND]:HISTORY_TITLE} : KINDS;
+        for (const [kind, title] of Object.entries(categories)) {
           const group = node('section', undefined, groups); node('h4', title, group);
           const matching = photoList.filter(photo => photo.kind === kind);
           if (!matching.length) { node('p', selected.status === 'UNVERIFIED' ? '미확인' : '사진 없음', group, 'deliveryPhotoMissing'); continue; }
@@ -239,7 +317,10 @@
           for (const photo of matching) {
             const index = photoList.indexOf(photo), thumb = node('button', undefined, grid, 'deliveryPhotoThumb'); thumb.type = 'button'; thumb.setAttribute('aria-label', title + ' 사진 ' + (index + 1) + ' 확대'); thumb.onclick = () => enlarge(index);
             node('span', '불러오는 중', thumb, 'deliveryPhotoMissing');
-            tasks.push(async () => { try { const url = await image(photo.thumbnailUrl, requestController.signal); if (!alive(id)) { URL.revokeObjectURL(url); urls.delete(url); return; } thumb.replaceChildren(); const img = node('img', undefined, thumb); img.alt = title + ' 썸네일'; img.src = url; img.onerror = () => { thumb.replaceChildren(); node('span', '파일 미확인', thumb, 'deliveryPhotoMissing'); }; } catch (error) { if (!alive(id)) return; if (error.status === 401 || error.status === 403) { failure(error, id); return; } thumb.replaceChildren(); node('span', error.status === 404 || error.status === 410 ? '삭제된 사진' : '조회 실패', thumb, 'deliveryPhotoMissing'); } });
+            tasks.push(async () => {
+              if (await loadThumbnail(thumb, photo, title, id)) loaded++;
+              else failed++;
+            });
           }
         }
         node('p', selected.notes ? '배송 특이사항\n' + selected.notes : '배송 특이사항 없음', body, 'deliveryPhotoNotes');
@@ -254,18 +335,28 @@
           const work = async () => { while (batch.length && alive(id)) await batch.shift()(); };
           await Promise.all([work(), work()]);
           loadingBatch = false; more.disabled = false; more.hidden = !tasks.length;
+          if (!alive(id) || !photoList.length) return;
+          if (!loaded && failed) host.dataset.state = 'media-error';
+          else if (failed) host.dataset.state = 'partial';
+          else if (selected.status === 'READY') host.dataset.state = 'ready';
         };
         more.onclick = () => void loadBatch();
         await loadBatch();
-        if (alive(id) && photoList.length && selected.status === 'READY') host.dataset.state = 'ready';
       } catch (error) { if (!requestController?.signal.aborted) failure(error, id); }
     }
     async function open(value) {
-      purge(); target = { customerCode: String(value.customerCode || ''), ...(validDate(value.date) ? { date: value.date } : {}) };
+      purge(); target = { customerCode: String(value.customerCode || ''), ...(value.history === true
+        ? {history:true} : validDate(value.date) ? {date:value.date} : {}) };
       if (!target.customerCode || target.customerCode.length > 128) { shell('사진 미확인 · 고객코드가 필요합니다.', 'unverified'); return; }
       const id = generation; requestController = new AbortController(); shell('배송 기록 확인 중…', 'loading');
       try {
         if (!await authorize(id)) return;
+        if (target.history) {
+          const params = new URLSearchParams({customerCode:target.customerCode});
+          const history = normalize(await request(API + '/history?' + params), target);
+          if (alive(id)) renderHistory(history);
+          return;
+        }
         const list = normalize(await request(API + '?' + new URLSearchParams(target)), target);
         if (!alive(id)) return;
         deliveries = list;
@@ -290,17 +381,24 @@
     if (document.hidden) { reset(); return; }
     const state = window.MapUiLocalBridge?.state, row = state?.selected, detail = document.querySelector('#detailSection.open #detail .detailBody');
     if (!row?.customerCode || !detail) { reset(); return; }
-    if (currentHost?.isConnected && currentHost.dataset.customerCode === String(row.customerCode)) return;
-    reset(); currentHost = node('section', undefined, detail, 'deliveryPhotos'); currentHost.dataset.customerCode = String(row.customerCode); currentHost.setAttribute('aria-label', '납품 사진');
+    const date = (state.mode === 'DATE_ROUTE' ? state.selectedDate : row.lastDeliveryDate) || '';
+    if (currentHost?.isConnected && currentHost.dataset.customerCode === String(row.customerCode) && currentHost.dataset.deliveryDate === date) return;
+    reset(); currentHost = node('section', undefined, detail, 'deliveryPhotos');
+    currentHost.dataset.customerCode = String(row.customerCode); currentHost.dataset.deliveryDate = date;
+    currentHost.setAttribute('aria-label', '납품 사진');
     current = createController({ host: currentHost });
     node('h3', '납품 사진', currentHost); node('p', '직원 인증 후 배송일별 사진을 조회합니다.', currentHost, 'deliveryPhotoStatus');
-    const button = node('button', '납품 사진 조회', currentHost); button.type = 'button'; button.onclick = () => current?.open({ customerCode: row.customerCode, date: state.mode === 'DATE_ROUTE' ? state.selectedDate : row.lastDeliveryDate });
+    const button = node('button', '납품 사진 조회', currentHost); button.type = 'button';
+    button.onclick = () => current?.open({customerCode:row.customerCode, date});
+    const historyButton = node('button', '매장 문 앞 납품 이력', currentHost); historyButton.type = 'button';
+    historyButton.onclick = () => current?.open({customerCode:row.customerCode, history:true});
   }
   function schedule() { if (observing) return; observing = true; queueMicrotask(() => { observing = false; mountSelection(); }); }
   function mount() {
     if (mounted) return; mounted = true;
     observer = new MutationObserver(schedule); const root = document.querySelector('#detailSection'); if (root) observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
     window.addEventListener('map-store-selected', () => { reset(); schedule(); });
+    window.addEventListener('map-navigation-context-changed', schedule);
     window.addEventListener('map-navigation-logout', () => current?.expire());
     document.querySelector('#staffLogout')?.addEventListener('click', () => current?.expire());
     document.addEventListener('visibilitychange', () => { if (document.hidden) { reset(); } else schedule(); });

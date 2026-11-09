@@ -1,7 +1,7 @@
 // Reuses the existing C transport/parser/router. No login, collector or persistent photo cache.
 import {createDeliveryAdminPhotoSource,DeliveryPhotoError,validatePhotoQuery} from './opsmapDeliveryPhotos.js';
 import {createDeliveryAdminPhotoTransport,DELIVERY_ADMIN_PHOTO_CATEGORY_MAP,DELIVERY_ADMIN_PHOTO_HOSTS} from './opsmapDeliveryAdminTransport.js';
-import {mountOpsmapDeliveryPhotoRoutes} from './opsmapDeliveryPhotoRouter.js';
+import {mountDeliveryPhotoConfig,mountOpsmapDeliveryPhotoRoutes} from './opsmapDeliveryPhotoRouter.js';
 import {createOperationalPhotoExtension} from './opsmapOperationalPhotos.js';
 const fail=(code,status=503,stage='source-session',sourceHttpStatus)=>{throw new DeliveryPhotoError(code,status,{stage,...(Number.isInteger(sourceHttpStatus)?{sourceHttpStatus}:{})});};
 const session=has=>{if(typeof has!=='function'||has()!==true)fail('UPSTREAM_AUTH_REQUIRED',502);};
@@ -77,12 +77,14 @@ export function createProductionPhotoExtension({enabled=false,rawRequest,hasMemo
 }
 
 export function mountProductionPhotoBinding({env=process.env,rawRequest,hasMemorySession,reserveRead,prepareSession,listDeliveryMetadata,sourceConfiguration,...binding}={}){
- binding.app.get('/api/map-phase2b/private/delivery-photos/config',binding.requireStaff,(req,res)=>{
+ mountDeliveryPhotoConfig(binding,()=>{
   const source=typeof sourceConfiguration==='function'?sourceConfiguration():{};
-  return binding.requireStaff(req,res,()=>res.set('Cache-Control','private,no-store').json({ok:true,data:{enabled:env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',credentialsConfigured:source.credentialsConfigured===true,environmentCookieConfigured:source.environmentCookieConfigured===true,sourceSession:typeof hasMemorySession==='function'&&hasMemorySession()===true,metadataConfigured:typeof listDeliveryMetadata==='function'}}));
+  return {enabled:env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',
+   credentialsConfigured:source.credentialsConfigured===true,environmentCookieConfigured:source.environmentCookieConfigured===true,
+   sourceSession:typeof hasMemorySession==='function'&&hasMemorySession()===true,metadataConfigured:typeof listDeliveryMetadata==='function'};
  });
  if(env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1'){
-  const extension=createOperationalPhotoExtension({enabled:()=>env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',rawRequest,hasMemorySession,prepareSession,listDeliveryMetadata});
+  const extension=createOperationalPhotoExtension({enabled:()=>env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',rawRequest,hasMemorySession,prepareSession,prepareHistorySession:true,listDeliveryMetadata});
   extension.mount(binding);return extension;
  }
  let approvedRecords=[];

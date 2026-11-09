@@ -1,6 +1,7 @@
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createDeliveryPhotoService, DeliveryPhotoError, validatePhotoQuery } from './opsmapDeliveryPhotos.js';
+import { deliveryPhotoUpstreamError } from './opsmapDeliveryAdminTransport.js';
 
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 // Cleanup must never delay the bounded HTTP error when an upstream cancel hook
@@ -8,7 +9,7 @@ const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif
 const cancelBody = body => { try { Promise.resolve(body?.cancel?.()).catch(() => {}); } catch {} };
 const SAFE_STAGES = new Set(['source-session','source-login','source-http','source-content-type','source-json','source-identity','source-attachments','source-category','source-media','source-timeout','source-size','staff-session']);
 const SAFE_SOURCE_CODES = new Set(['PHOTO_LOGIN_HTTP_ERROR','PHOTO_LOGIN_REDIRECT_REJECTED','PHOTO_LOGIN_NETWORK_ERROR','PHOTO_LOGIN_SESSION_MISSING','PHOTO_CONTENT_TYPE_INVALID','PHOTO_JSON_INVALID','PHOTO_BODY_UNAVAILABLE','PHOTO_JSON_TOO_LARGE','PHOTO_TIMEOUT']);
-const SAFE_LOG_CODES = new Set([...SAFE_SOURCE_CODES,'STAFF_LOGIN_REQUIRED','UPSTREAM_AUTH_REQUIRED','DELIVERY_IDENTITY_MISMATCH','PHOTO_IDENTITY_UNVERIFIED','PHOTO_ATTACHMENTS_INVALID','PHOTO_ATTACHMENT_LIMIT_EXCEEDED','PHOTO_IMAGES_INVALID','PHOTO_IMAGE_LIMIT_EXCEEDED','PHOTO_FORBIDDEN','PHOTO_NOT_FOUND','PHOTO_RATE_LIMITED','PHOTO_LOOKUP_FAILED','INVALID_MEDIA_TYPE','MEDIA_TOO_LARGE','MEDIA_ORIGIN_REJECTED','INVALID_PHOTO_RESPONSE','PHOTO_SOURCE_DISABLED','PHOTO_APPROVAL_REQUIRED','SOURCE_UNAVAILABLE','UNVERIFIED']);
+const SAFE_LOG_CODES = new Set([...SAFE_SOURCE_CODES,'STAFF_LOGIN_REQUIRED','UPSTREAM_AUTH_REQUIRED','DELIVERY_IDENTITY_MISMATCH','PHOTO_IDENTITY_UNVERIFIED','PHOTO_ATTACHMENTS_INVALID','PHOTO_ATTACHMENT_LIMIT_EXCEEDED','PHOTO_IMAGES_INVALID','PHOTO_IMAGE_LIMIT_EXCEEDED','PHOTO_FORBIDDEN','PHOTO_NOT_FOUND','PHOTO_RATE_LIMITED','PHOTO_LOOKUP_FAILED','PHOTO_UPSTREAM_UNAVAILABLE','PHOTO_MEDIA_AUTH_REQUIRED','INVALID_MEDIA_TYPE','MEDIA_TOO_LARGE','MEDIA_ORIGIN_REJECTED','INVALID_PHOTO_RESPONSE','PHOTO_SOURCE_DISABLED','PHOTO_APPROVAL_REQUIRED','SOURCE_UNAVAILABLE','UNVERIFIED']);
 const sourceStage = error => SAFE_STAGES.has(error?.photoStage) ? error.photoStage : SAFE_STAGES.has(error?.stage) ? error.stage : ({PHOTO_APPROVAL_REQUIRED:'source-session',UPSTREAM_AUTH_REQUIRED:'source-session',STAFF_LOGIN_REQUIRED:'staff-session',DELIVERY_IDENTITY_MISMATCH:'source-identity',PHOTO_IDENTITY_UNVERIFIED:'source-identity',PHOTO_ATTACHMENTS_INVALID:'source-attachments',PHOTO_ATTACHMENT_LIMIT_EXCEEDED:'source-attachments',PHOTO_IMAGES_INVALID:'source-attachments',PHOTO_IMAGE_LIMIT_EXCEEDED:'source-attachments',PHOTO_TIMEOUT:'source-timeout',PHOTO_JSON_TOO_LARGE:'source-size',MEDIA_TOO_LARGE:'source-size',MEDIA_ORIGIN_REJECTED:'source-media',INVALID_MEDIA_TYPE:'source-media'})[error?.code] || undefined;
 function failure(error, res) {
   const status = error instanceof DeliveryPhotoError ? error.status
@@ -30,9 +31,17 @@ function failure(error, res) {
     console.warn(JSON.stringify(record)); res.destroy();
   }
 }
+export function mountDeliveryPhotoConfig({app, requireStaff}, diagnostics) {
+  app.get('/api/map-phase2b/private/delivery-photos/config', (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    res.set('Vary', 'Cookie');
+    return requireStaff(req, res, () => res.json({ok:true, data:diagnostics()}));
+  });
+}
+
 // Dependency injection preserves A's existing staff session and makes the feature default OFF.
 export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCurrent = () => false, source = null, enabled = false, prepareSource,
-  prepareDiscovery = false, timeoutMs = 8000, maxImageBytes = 4 * 1024 * 1024, maxConcurrent = 3, now = Date.now } = {}) {
+  prepareDiscovery = false, historyOnly = false, timeoutMs = 8000, maxImageBytes = 4 * 1024 * 1024, maxConcurrent = 3, now = Date.now } = {}) {
   if (!app?.get || typeof requireStaff !== 'function') throw new Error('STAFF_AUTH_INJECTION_REQUIRED');
   const service = createDeliveryPhotoService({ source, enabled, now });
   let active = 0;
@@ -52,26 +61,36 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
     Promise.resolve().then(() => action(req, res, controller.signal, sessionKey)).catch(error => failure(error, res))
       .finally(() => { clearTimeout(timer); req.off('aborted', abort); res.off('close', abort); active--; });
   };
-  app.get('/api/map-phase2b/private/delivery-photos', secure, handler(async (req, res, signal, sessionKey) => {
+  if (!historyOnly) app.get('/api/map-phase2b/private/delivery-photos', secure, handler(async (req, res, signal, sessionKey) => {
     // OFF must block validation, session preparation and any source activity.
     if (!(typeof enabled === 'function' ? enabled() === true : enabled === true)) throw new DeliveryPhotoError('PHOTO_SOURCE_DISABLED', 503);
+    if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
     const identity = validatePhotoQuery(req.query);
     if ((identity.deliveryId || prepareDiscovery) && typeof prepareSource === 'function') {
-      // Discovery never starts login; only a staff-authorized exact record may.
-      if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
       await prepareSource(identity, { signal });
       if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
     }
     const data = await service.list(req.query, sessionKey, { signal });
     // Session can expire or be revoked while the upstream request is in flight.
-    await requireStaff(req, res, () => res.json({ ok: true, data }));
+    await requireStaff(req, res, () => {
+      if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
+      res.json({ok:true, data});
+    });
+  }));
+  app.get('/api/map-phase2b/private/delivery-photos/history', secure, handler(async (req, res, signal, sessionKey) => {
+    if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
+    const data = await service.listHistory(req.query, sessionKey, {signal});
+    await requireStaff(req, res, () => {
+      if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
+      res.json({ok:true, data});
+    });
   }));
   app.get('/api/map-phase2b/private/delivery-photos/media/:id', secure, handler(async (req, res, signal, sessionKey) => {
+    if (!isSessionCurrent(req, sessionKey)) throw new DeliveryPhotoError('STAFF_LOGIN_REQUIRED', 401);
     const upstream = await service.openMedia(req.params.id, sessionKey, { signal });
     if (!upstream || upstream.status !== 200) {
       cancelBody(upstream?.body);
-      const status = [401, 403, 404, 410, 429].includes(upstream?.status) ? upstream.status : 502;
-      throw new DeliveryPhotoError(status===401?'UPSTREAM_AUTH_REQUIRED':status===403?'PHOTO_FORBIDDEN':[404,410].includes(status)?'PHOTO_NOT_FOUND':status===429?'PHOTO_RATE_LIMITED':'PHOTO_LOOKUP_FAILED',status===401?502:status,{stage:'source-http',sourceHttpStatus:upstream?.status});
+      throw deliveryPhotoUpstreamError(upstream?.status, 'source-media');
     }
     const type = (upstream.headers?.get?.('content-type') || '').split(';')[0].trim();
     const length = Number(upstream.headers?.get?.('content-length') || 0);
@@ -92,7 +111,7 @@ export function mountOpsmapDeliveryPhotoRoutes({ app, requireStaff, isSessionCur
       done(count > maxImageBytes ? new DeliveryPhotoError('MEDIA_TOO_LARGE', 413) : null, chunk);
     } });
     const body = upstream.body?.getReader ? Readable.fromWeb(upstream.body) : upstream.body;
-    if (!body) throw new DeliveryPhotoError('PHOTO_NOT_FOUND', 404);
+    if (!body) throw new DeliveryPhotoError('PHOTO_BODY_UNAVAILABLE', 502, {stage:'source-media'});
     await pipeline(body, limiter, res, { signal });
   }));
   return { service };
