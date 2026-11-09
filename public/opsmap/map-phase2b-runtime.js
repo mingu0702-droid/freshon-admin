@@ -1901,7 +1901,9 @@
     if(!active())return;
     const config=window.KAKAO_MAP_CONFIG;
     const place=!unifiedAddressQuery(text);
-    if(lookupAllowed===false||config?.allowExternalAddressLookup!==true||place&&config?.allowExternalPlaceLookup!==true){
+    const officialAllowed=!place&&config?.allowIndependentAddressLookup===true;
+    const externalAllowed=config?.allowExternalAddressLookup===true&&(!place||config?.allowExternalPlaceLookup===true);
+    if(lookupAllowed===false||!officialAllowed&&!externalAllowed){
       const reason=lookupAllowed===false?'기존 매장 조회 미확인':config?.addressLookupReason?NewAreaRequests.message({code:config.addressLookupReason}):place?'외부 상호 검색 미승인':'외부 주소검색 미승인';
       waitForSearchMapPoint(text,{owner,customerMatchState,reason});
       return;
@@ -2041,9 +2043,25 @@
     return null;
   }
 
+  async function lookupOfficialAddress(text, signal, queries = NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants)) {
+    if(window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup!==true||window.kakaoGeocoder?.serverProxy!==true)return null;
+    for(const query of queries){
+      let result;
+      try { result=await NewAreaRequests.lookup(window.kakaoGeocoder,query,{signal,mode:'official'}); }
+      catch(error){ if(error.code==='OFFICIAL_ADDRESS_LOOKUP_DISABLED')return null; throw error; }
+      if(result.rows?.length!==1||result.resolution?.kind!=='EXACT')continue;
+      const row=result.rows[0];
+      return newAreaCoordinate({lat:Number(row.y),lng:Number(row.x),address:query,
+        coordinateSource:'OFFICIAL_PUBLIC_BUILDING',coordinateAccuracy:'BUILDING'});
+    }
+    return null;
+  }
+
   async function lookupInteractiveLocation(text, signal) {
     const geocoder=window.kakaoGeocoder;
     const address=unifiedAddressQuery(text);
+    const official=address?await lookupOfficialAddress(text,signal):null;
+    if(official)return official;
     if(!geocoder?.serverProxy)return address?geocodeAddress(text,signal):null;
     const config=window.KAKAO_MAP_CONFIG;
     if(config?.allowExternalAddressLookup!==true||!address&&config.allowExternalPlaceLookup!==true)return null;
@@ -2074,7 +2092,7 @@
     searchTemporaryOverlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(lat,lng),content,clickable:true,xAnchor:.5,yAnchor:1,zIndex:45});
     searchTemporaryOverlay.setMap(state.map);state.virtual=row;
     $('#detailSection').classList.add('open');$('#detail').className='detailCard';
-    $('#detail').innerHTML=`<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">임시 위치</div><div class="storeName">${esc(row.address||row.customerName||'선택 위치')}</div></div><div class="detailBody"><p class="hint">저장하지 않는 임시 핀입니다.</p>${navigationPointActions(row)}${state.mode==='BASE_60D'?'<button type="button" id="searchPointToBatch" class="tiny">신규권역 일괄조회에 추가</button>':''}<div id="nearWrap"></div></div>`;
+    $('#detail').innerHTML=`<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">임시 위치</div><div class="storeName">${esc(row.address||row.customerName||'선택 위치')}</div></div><div class="detailBody"><p class="hint">${row.coordinateSource==='OFFICIAL_PUBLIC_BUILDING'?'공식 자료 건물 위치 · 매장 내부·출입구 미확인':'저장하지 않는 임시 핀입니다.'}</p>${navigationPointActions(row)}${state.mode==='BASE_60D'?'<button type="button" id="searchPointToBatch" class="tiny">신규권역 일괄조회에 추가</button>':''}<div id="nearWrap"></div></div>`;
     $('#detailClose').onclick=()=>{clearSearchTemporaryPin();clearSelection();};
     const addToBatch=$('#searchPointToBatch');
     if(addToBatch)addToBatch.onclick=()=>{
@@ -2560,6 +2578,8 @@
       if(saved)return judgeNewAreaPoint({...row,customerCode:matched.customerCode},saved,batch);
       return {...judgeNewAreaPoint({...row,customerCode:matched.customerCode},null),reason:'기존 고객 좌표 확인 필요',evidence:'인증된 고객 주소 매칭 · 저장·수동 좌표 확인 필요 · 외부 좌표로 대체하지 않음'};
     }
+    const official=await lookupOfficialAddress(row.address,signal,queries);
+    if(official)return judgeNewAreaPoint(row,official,batch);
     const blocked=batch.blocked||window.kakaoGeocoder?.blockedReason;
     if(blocked)throw Object.assign(Error(blocked),{code:blocked==='GEOCODE_DAILY_LIMIT'?blocked:'GEOCODE_AUTOMATICALLY_BLOCKED'});
     if (window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup !== true) return {...judgeNewAreaPoint(row,null),evidence:'저장 위치 미확인 · 기존 좌표 직접 수정 또는 주소를 이름으로 지정한 수동 경유 좌표를 확인해 주세요.'};
@@ -2677,7 +2697,7 @@
 
   function appendBatchResult(list, row, index) {
     const template = document.createElement('template');
-    template.innerHTML = `<button type="button" class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(row.reason || "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>사용 주소: ${esc(row.address)}</div>${!Number.isFinite(row.lat) || !Number.isFinite(row.lng) ? "<div>클릭하여 확인된 위치 입력</div>" : ""}<div>500m 저장위치 ${Number.isFinite(row.storedNearbyCount)?row.storedNearbyCount:'미확인'}개 · 기간 배송근거 ${Number.isFinite(row.evidenceCount)?row.evidenceCount:'미확인'}개</div><div>주소 권역: ${esc(row.addressRegion||"주소 권역 미확인")} · 실제 담당 센터: ${esc(row.actualDispatchCenter?.label||"담당 센터 미확인")}</div><div>${esc(row.evidence || "")} · ${esc(vehicleLabel(row.vehicle))} ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.rangeStart || state.rangeStart)} ~ ${esc(row.rangeEnd || state.rangeEnd)}${Number.isFinite(row.evidenceCount) ? ` · 500m 근거 ${row.evidenceCount}개` : ''}</div><div>${esc(row.dataLimits || '')}</div><div>30km 근접호차: ${esc((row.references || []).map(item => vehicleLabel(item.vehicle) + " " + formatDistance(item.distance)).join(" · ") || "확인 근거 없음")}</div><div>인근 배송점 요일 자료(실배송요일 미확정): ${esc(row.deliveryDays || "확인 근거 없음")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`;
+    template.innerHTML = `<button type="button" class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(row.reason || "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>사용 주소: ${esc(row.address)}</div>${row.coordinateSource==='OFFICIAL_PUBLIC_BUILDING'?'<div>공식 자료 건물 위치 · 매장 내부·출입구 미확인</div>':''}${!Number.isFinite(row.lat) || !Number.isFinite(row.lng) ? "<div>클릭하여 확인된 위치 입력</div>" : ""}<div>500m 저장위치 ${Number.isFinite(row.storedNearbyCount)?row.storedNearbyCount:'미확인'}개 · 기간 배송근거 ${Number.isFinite(row.evidenceCount)?row.evidenceCount:'미확인'}개</div><div>주소 권역: ${esc(row.addressRegion||"주소 권역 미확인")} · 실제 담당 센터: ${esc(row.actualDispatchCenter?.label||"담당 센터 미확인")}</div><div>${esc(row.evidence || "")} · ${esc(vehicleLabel(row.vehicle))} ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.rangeStart || state.rangeStart)} ~ ${esc(row.rangeEnd || state.rangeEnd)}${Number.isFinite(row.evidenceCount) ? ` · 500m 근거 ${row.evidenceCount}개` : ''}</div><div>${esc(row.dataLimits || '')}</div><div>30km 근접호차: ${esc((row.references || []).map(item => vehicleLabel(item.vehicle) + " " + formatDistance(item.distance)).join(" · ") || "확인 근거 없음")}</div><div>인근 배송점 요일 자료(실배송요일 미확정): ${esc(row.deliveryDays || "확인 근거 없음")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`;
     const button = template.content.firstElementChild;
     button.disabled = true;
     const existing=[...list.children].find(item=>Number(item.dataset.judged)===index);
@@ -3232,7 +3252,7 @@
     navigationVisitRows:()=>isDailyDataReady()?operationStops.map(row=>({...row})):[],
     navigationDailyContext,
     selectNavigationPoint:showVirtual,
-    canLookupNavigationAddress:()=>window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true,
+    canLookupNavigationAddress:()=>window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true||window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup===true,
     lookupNavigationAddress:(text,signal)=>lookupInteractiveLocation(String(text||'').trim(),signal),
     relayoutPreservingView(){mapCamera?.scheduleRelayout();},
     fitNavigationBounds(bounds){

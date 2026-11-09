@@ -4,7 +4,7 @@
  let addressPending=false,addressCheck=null,addressEpoch=0,dailyRetryAt=0,blockedReason=null;
  function lookupCapabilities(payload){
   const address=payload.allowExternalAddressLookup===true&&payload.addressLookupServerProxy===true;
-  return {allowExternalAddressLookup:address,allowExternalPlaceLookup:address&&payload.allowExternalPlaceLookup===true,
+  return {allowIndependentAddressLookup:payload.allowIndependentAddressLookup===true&&payload.addressLookupServerProxy===true,allowExternalAddressLookup:address,allowExternalPlaceLookup:address&&payload.allowExternalPlaceLookup===true,
    addressLookupReason:payload.addressLookupReason||null};
  }
  function refreshAddressLookup(){
@@ -20,7 +20,7 @@
     addressPending=false;dailyRetryAt=0;blockedReason=null;
     const capability=lookupCapabilities(payload);
     root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,...capability};
-    if(capability.allowExternalAddressLookup)root.dispatchEvent(new CustomEvent('map-address-capability'));
+    if(capability.allowExternalAddressLookup||capability.allowIndependentAddressLookup)root.dispatchEvent(new CustomEvent('map-address-capability'));
    }).catch(()=>{}).finally(()=>{clearTimeout(timer);if(addressCheck===task)addressCheck=null;});
   addressCheck=task;
   return task;
@@ -28,7 +28,7 @@
  root.addEventListener?.('map-staff-signed-out',()=>{
   addressEpoch++;addressCheck=null;addressPending=true;dailyRetryAt=0;blockedReason=null;
   const {centers,shadowCoverageEnabled,shadowCoverageRestoring,...config}=root.KAKAO_MAP_CONFIG||{};
-  root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:false,allowExternalPlaceLookup:false};
+  root.KAKAO_MAP_CONFIG={...config,allowIndependentAddressLookup:false,allowExternalAddressLookup:false,allowExternalPlaceLookup:false};
   pending=null;failed=false;
  });
  function ready({timeoutMs=8000,configTimeoutMs=15000,retryFailed=false}={}){
@@ -40,7 +40,7 @@
    function loaded(){try{if(typeof root.kakao?.maps?.load!=='function')return finish('MAP_SDK_UNAVAILABLE');root.kakao.maps.load(()=>finish(owner===addressEpoch?undefined:'MAP_SDK_SESSION_CHANGED'));}catch{finish('MAP_SDK_INITIALIZATION_FAILED');}}
    let config=root.KAKAO_MAP_CONFIG||{};const tag=document.getElementById('kakaoMapsSdk');
    localCenters??=Array.isArray(config.centers)?config.centers:[];
-   root.KAKAO_MAP_CONFIG={...config,allowExternalAddressLookup:false,allowExternalPlaceLookup:false};
+   root.KAKAO_MAP_CONFIG={...config,allowIndependentAddressLookup:false,allowExternalAddressLookup:false,allowExternalPlaceLookup:false};
    root.OPSMAP_DRIVER_CONTACT_ENABLED=false;
    const owner=addressEpoch;
    try{
@@ -87,6 +87,7 @@
    Promise.resolve(cache.get(key)||inflight.get(key)).then(data=>{if(signal?.aborted||owner!==epoch)return;callback(data.documents,data.status,{status:200,httpStatus:200,providerHttp:data.providerHttp,resolution:data.resolution});})
     .catch(error=>{if(signal?.aborted||owner!==epoch)return;
      const code=error.code||'GEOCODER_FAILED';
+     if(code==='OFFICIAL_ADDRESS_LOOKUP_DISABLED')root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowIndependentAddressLookup:false};
      if(/^(?:GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED|DURABLE_LEDGER_REQUIRED|LEDGER_INVALID)|GEOCODING_DISABLED|TARGET_APP_FREE_QUOTA_UNVERIFIED)$/.test(code)||error.providerHttp===401||error.providerHttp===403||error.providerHttp===429){
       blockedReason=code;
       if(code==='GEOCODE_DAILY_LIMIT')dailyRetryAt=(Math.floor((Date.now()+32400000)/86400000)+1)*86400000-32400000;

@@ -34,7 +34,7 @@ function interactiveDocuments(body,mode){
  return [...found.values()];
 }
 
-export function createKakaoCoordinateConnection({env=process.env,store,now=Date.now,fetchImpl=globalThis.fetch}={}) {
+export function createKakaoCoordinateConnection({env=process.env,store,independentAddressLookup=()=>null,now=Date.now,fetchImpl=globalThis.fetch}={}) {
  const configuredLimit=Number(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT||100);
  const dailyLimit=Number.isSafeInteger(configuredLimit)&&configuredLimit>=1&&configuredLimit<=1000?configuredLimit:100;
  let blocked=false,cooldownUntil=0,lastProviderAt=0,providerQueue=Promise.resolve();const pending=new Map();
@@ -53,18 +53,29 @@ export function createKakaoCoordinateConnection({env=process.env,store,now=Date.
  const transaction=work=>{if(!store?.durable||typeof store.transaction!=='function')fail('GEOCODE_DURABLE_LEDGER_REQUIRED');return store.transaction((state,commit)=>work(validate(state),commit));};
  const keywordProof=()=>env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED==='1';
  const status=async()=>{
-  if(!proof())return {enabled:false,reason:'TARGET_APP_FREE_QUOTA_UNVERIFIED',retention:'REQUEST_ONLY'};
+  const independentEnabled=Boolean(independentAddressLookup());
+  if(!proof())return {enabled:false,independentEnabled,reason:'TARGET_APP_FREE_QUOTA_UNVERIFIED',retention:'REQUEST_ONLY'};
   try{return await transaction(async state=>{
    const enabled=env.OPSMAP_KAKAO_GEOCODING_ENABLED==='1'&&state.diagnosticPassed&&!state.blocked&&!blocked;
-   return {enabled,keywordEnabled:enabled&&keywordProof(),
+   return {enabled,independentEnabled,keywordEnabled:enabled&&keywordProof(),
    diagnosticAvailable:env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED==='1'&&!state.diagnosticUsed&&!state.blocked&&!blocked,
    reason:state.blocked||blocked?'GEOCODE_AUTOMATICALLY_BLOCKED':enabled?'READY':state.diagnosticPassed?'GEOCODING_DISABLED':'DIAGNOSTIC_REQUIRED',
    dailyLimit,dailyUsed:Number(state.days[day(now())]||0),epoch:state.epoch,retention:'REQUEST_ONLY',lastAttempt:state.lastAttempt||null};});}
-  catch{return {enabled:false,reason:'GEOCODE_DURABLE_LEDGER_REQUIRED',retention:'REQUEST_ONLY'};}
+  catch{return {enabled:false,independentEnabled,reason:'GEOCODE_DURABLE_LEDGER_REQUIRED',retention:'REQUEST_ONLY'};}
  };
  const lookup=async(query,{diagnostic=false,mode='exact',assertCurrent=async()=>{}}={})=>{
   if(typeof query!=='string'||query.normalize('NFKC').trim().length>200||
-     !['exact','address','place'].includes(mode)||(diagnostic&&mode!=='exact'))fail('GEOCODE_QUERY_INVALID',400);
+     !['exact','address','place','official'].includes(mode)||(diagnostic&&mode!=='exact'))fail('GEOCODE_QUERY_INVALID',400);
+  if(mode==='official'){
+   const index=independentAddressLookup();
+   if(!index)fail('OFFICIAL_ADDRESS_LOOKUP_DISABLED');
+   await assertCurrent();
+   const point=index.lookup(query);
+   await assertCurrent();
+   const documents=point?[{x:String(point.lng),y:String(point.lat)}]:[];
+   return {ok:true,data:{documents,status:point?'OK':'ZERO_RESULT',
+    resolution:{kind:point?'EXACT':'ZERO_RESULT'},source:'OFFICIAL_PUBLIC_BUILDING',retention:'REQUEST_ONLY',coordinatePersistence:false}};
+  }
   const place=mode==='place';
   const safe=place?null:externalCoordinateAddress(query.normalize('NFKC').replace(/ +/g,' ').trim().replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)$/,'$1 $2'));
   const address=place?safePlaceQuery(query):safe?prepareRecoveryCoordinateAddress(safe).query:null;
@@ -155,7 +166,7 @@ export function mountKakaoCoordinateConnection({app,requireStaff,isSessionCurren
    if(!origin||req.get('origin')!==new URL(origin).origin||req.get('sec-fetch-site')&&!['same-origin','none'].includes(req.get('sec-fetch-site')))fail('GEOCODE_ORIGIN_REJECTED',403);
    const fields=Object.keys(req.body||{});
    if(!req.is('application/json')||!fields.includes('query')||fields.some(key=>key!=='query'&&(key!=='mode'||diagnostic))||
-      fields.includes('mode')&&!['address','place'].includes(req.body.mode))fail('GEOCODE_QUERY_INVALID',400);
+      fields.includes('mode')&&!['address','place','official'].includes(req.body.mode))fail('GEOCODE_QUERY_INVALID',400);
    const sessionKey=res.locals.staffSession?.key;
    const assertCurrent=async()=>{if(isSessionCurrent&&!await isSessionCurrent(req,sessionKey))fail('GEOCODE_SESSION_EXPIRED',401);};
    const value=await service.lookup(req.body.query,{diagnostic,mode:req.body.mode,assertCurrent});return requireStaff(req,res,()=>res.json(value));

@@ -260,3 +260,22 @@ test('interactive address uncertainty and region-prefixed place names require se
  assert.equal(await f.lookupInteractiveLocation('서울역'),null);
  assert.equal(f.queries.length,2);
 });
+
+
+test('interactive search and new-area batch locate official building evidence while paid provider is off',async()=>{
+ const f=fixture({lookup:(_query,callback,{mode})=>{
+   assert.equal(mode,'official');
+   callback([{x:'127.01',y:'37.51'}],'OK',{resolution:{kind:'EXACT'}});
+ }});
+ f.window.KAKAO_MAP_CONFIG.allowExternalAddressLookup=false;
+ f.window.KAKAO_MAP_CONFIG.allowIndependentAddressLookup=true;
+ const address='서울 종로구 합성로 41';
+ const interactive=await f.lookupInteractiveLocation(address);
+ assert.equal(interactive.coordinateSource,'OFFICIAL_PUBLIC_BUILDING');
+ assert.equal(interactive.coordinateAccuracy,'BUILDING');
+ const batch=await f.judgeNewAreaRow({address,customer:'원본 고객'});
+ assert.equal(batch.lookupStatus,'SUCCESS');
+ assert.equal(batch.coordinateSource,'OFFICIAL_PUBLIC_BUILDING');
+ assert.equal(batch.coordinateAccuracy,'BUILDING');
+ assert.equal(f.queries.length,2);
+});
