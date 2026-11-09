@@ -2077,11 +2077,18 @@
     return null;
   }
 
-  async function lookupOfficialAddress(text, signal, queries = NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants)) {
+  async function lookupOfficialAddress(text, signal, queries = NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants),prefetched) {
     if(window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup!==true||window.kakaoGeocoder?.serverProxy!==true)return null;
     for(const query of queries){
       let result;
-      try { result=await NewAreaRequests.lookup(window.kakaoGeocoder,query,{signal,mode:'official'}); }
+      try {
+        if(prefetched?.has(query)){
+          const point=prefetched.get(query).official;
+          if(!point)continue;
+          const kind=point.kind||'EXACT', source=point.points||[[point.lat,point.lng]];
+          result={resolution:{kind,road:point.road,lot:point.lot},rows:source.map(([y,x],i)=>({x,y,place_name:kind==='CHOOSE'?'공식 위치 후보 '+(i+1):undefined}))};
+        }else result=await NewAreaRequests.lookup(window.kakaoGeocoder,query,{signal,mode:'official'});
+      }
       catch(error){ if(error.code==='OFFICIAL_ADDRESS_LOOKUP_DISABLED')return null; throw error; }
       const {kind,road,lot}=result.resolution||{};
       if(kind==='MANUAL')return {verifiedAddressOnly:true,officialRoad:road,officialLot:lot};
@@ -2571,14 +2578,15 @@
     if(signal?.aborted)throw signal.reason;
     if (!(window.kakaoGeocoder?.serverProxy||window.KAKAO_MAP_CONFIG?.addressLookupServerProxy) || !query) return null;
     const key=query.normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
-    if (!batch.customers.has(key)) batch.customers.set(key,fetchJson('/api/map-phase2b/private/customer-search',{
+    const local=batch.prefetched?.get(query)?.customer;
+    if (!local&&!batch.customers.has(key)) batch.customers.set(key,fetchJson('/api/map-phase2b/private/customer-search',{
       channel:'new-area-customer-search:'+batch.requestId+':'+batch.customers.size,
       ttl:0,timeout:12000,signal:batch.signal||signal,headers:{'x-map-customer-query':encodeURIComponent(query),'x-map-search-scope':'new-area'}
     }).then(result=>{
       if (!Array.isArray(result.data)) throw Object.assign(Error('CUSTOMER_SEARCH_CONTRACT'),{code:'CUSTOMER_SEARCH_CONTRACT'});
       return result;
     }));
-    const result=await batch.customers.get(key);
+    const result=local||await batch.customers.get(key);
     if(signal?.aborted)throw Object.assign(Error('조회 취소'),{name:'AbortError'});
     const rows=result.data.filter(store=>/^[A-Z]\d{3,}$/.test(store.customerCode||'') && (store.matchedBy==='ADDRESS'||store.matchedBy==='CODE'));
     if(result.meta?.truncated || rows.length>1)return {candidates:rows};
@@ -2623,7 +2631,7 @@
       if(saved)return judgeNewAreaPoint({...row,customerCode:matched.customerCode},saved,batch);
       return {...judgeNewAreaPoint({...row,customerCode:matched.customerCode},null),reason:'기존 고객 좌표 확인 필요',evidence:'인증된 고객 주소 매칭 · 저장·수동 좌표 확인 필요 · 외부 좌표로 대체하지 않음'};
     }
-    const official=await lookupOfficialAddress(row.address,signal,queries);
+    const official=await lookupOfficialAddress(row.address,signal,queries,batch.prefetched);
     if(official&&!official.verifiedAddressOnly)return judgeNewAreaPoint(row,official,batch);
     const blocked=batch.blocked||window.kakaoGeocoder?.blockedReason;
     if(blocked)throw Object.assign(Error(blocked),{code:blocked==='GEOCODE_DAILY_LIMIT'?blocked:'GEOCODE_AUTOMATICALLY_BLOCKED'});
@@ -2645,6 +2653,17 @@
   }
 
   const stageNearbyAvailable=()=>window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com'&&!!snapshotMeta?.sourceGeneration;
+  async function stageBatchAddressEvidence(rows,signal,requestId){
+    const generation=snapshotMeta?.sourceGeneration;
+    const queries=[...new Set(rows.flatMap(row=>row.inputAmbiguous?[]:NewAreaRequests.addressQueries(row.address,Phase2bUi.addressVariants)))];
+    if(!queries.length||queries.length>120)return null;
+    const result=await fetchJson('/api/map-phase2b/private/stage-address-evidence',{
+      channel:'stage-address-batch:'+requestId,method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({generation,queries}),timeout:6000,signal
+    }).catch(()=>null);
+    if(signal.aborted||result?.generation!==generation||snapshotMeta?.sourceGeneration!==generation||result?.data?.length!==queries.length)return null;
+    return new Map(queries.map((query,index)=>[query,result.data[index]]));
+  }
   async function stageNewAreaEvidence(signal, requestId) {
     const generation = snapshotMeta?.sourceGeneration;
     if (!stageNearbyAvailable()) return null;
@@ -2920,7 +2939,11 @@
     }
     try {
       showProgress();
-      if (stageNearbyAvailable()) batch.archive = await stageNewAreaEvidence(signal, requestId);
+      if (stageNearbyAvailable()) {
+        [batch.archive,batch.prefetched]=await Promise.all([
+          stageNewAreaEvidence(signal,requestId),stageBatchAddressEvidence(indexes.map(index=>rows[index]),signal,requestId)
+        ]);
+      }
       if (!current()) return;
       newAreaBatch.archive=batch.archive;
       await Promise.all(Array.from({length:Math.min(3,indexes.length)},worker));

@@ -11,11 +11,13 @@ import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
 import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
 import {createOfficialAddressLookup,createOfficialAddressReview} from './opsmapOfficialAddressLookup.js';
 import {readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
+import {searchPreservedRegistry} from './privateCustomerSearch.js';
 
 export const STAGE_ORIGIN = 'https://freshon-admin-stage-preview-template.onrender.com';
 export const STAGE_SERVICE = 'srv-da47hugu01pc73etpfa0';
 export const STAGE_BUNDLE_ROUTE = '/api/map-phase2b/private/stage-validation-bundle';
 export const STAGE_NEARBY_ROUTE = '/api/map-phase2b/private/stage-nearby-evidence';
+export const STAGE_ADDRESS_BATCH_ROUTE = '/api/map-phase2b/private/stage-address-evidence';
 
 const currentProfile = {
   generation:'3df93605c76dcb279b405de3ab55171a2278b763ae67ddc5e8cec91891aa5585',
@@ -253,7 +255,7 @@ function publicStatus(prepared) {
     expiresAt:Number.isFinite(prepared.expiresAt)?new Date(prepared.expiresAt).toISOString():null} : {active:false};
 }
 
-export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles}) {
+export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot}) {
   const noStore = (_req, res, next) => {res.set('Cache-Control','private, no-store').vary('Cookie'); next();};
   router.get(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (_req, res) => res.json(publicStatus(validation.active())));
   router.get(STAGE_NEARBY_ROUTE, requireStaff, noStore, async (req, res) => {
@@ -266,6 +268,31 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
       if (validation.active() !== prepared) return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
       return res.json(stageNearbyResponse(prepared.nearby, fixed));
     });
+  });
+  router.post(STAGE_ADDRESS_BATCH_ROUTE,requireStaff,noStore,(req,res,next)=>{
+    if(req.get('Origin')!==STAGE_ORIGIN) return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});
+    if(!req.is('application/json')) return res.status(415).json({error:'STAGE_BATCH_MEDIA_TYPE'});
+    return next();
+  },express.json({limit:'96kb'}),async(req,res)=>{
+    const {generation,queries}=req.body||{};
+    if(!/^[a-f0-9]{64}$/.test(generation||'')||!Array.isArray(queries)||queries.length<1||queries.length>120||
+      queries.some(query=>typeof query!=='string'||query.length<2||query.length>200||/[\x00-\x1f]/.test(query))) {
+      return res.status(400).json({error:'STAGE_BATCH_QUERY_INVALID'});
+    }
+    const prepared=validation.active();
+    if(!prepared?.bundledAddress||prepared.generation!==generation)return res.status(409).json({error:'STAGE_BATCH_GENERATION_CHANGED'});
+    try{
+      const saved=await readSnapshot();
+      if(saved?.sourceGeneration!==generation||validation.active()!==prepared)return res.status(409).json({error:'STAGE_BATCH_GENERATION_CHANGED'});
+      const data=queries.map(query=>{
+        const match=searchPreservedRegistry(query,saved);
+        // This endpoint has no provider transport. A miss has no live-source meaning.
+        return {customer:{data:match.data.slice(0,12),meta:{truncated:match.meta.truncated||match.data.length>12}},
+          official:match.data.length?null:prepared.bundledAddress.lookup(query)};
+      });
+      return requireStaff(req,res,()=>isSessionCurrent(req,res.locals.staffSession?.key)
+        ?res.json({ok:true,generation,data}):res.status(401).json({error:'STAFF_LOGIN_REQUIRED'}));
+    }catch{return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});}
   });
   router.post(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (req,res,next) => {
     if (req.get('Origin') !== STAGE_ORIGIN || req.get('X-Opsmap-Stage-Verification') !== '1') return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});

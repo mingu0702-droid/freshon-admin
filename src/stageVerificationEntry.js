@@ -13,7 +13,7 @@ import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
 import {createManualPinGithubStore,createStageGeocodeBudgetStore} from './manualPinGithubStore.js';
 import {createStageStaffSessionStore} from './staffSessionStore.js';
 import {createProductionSnapshotStore,materializeSnapshot} from './productionSnapshotStore.js';
-import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,createStageAbValidation,mountStageAbValidation} from './stageAbValidation.js';
+import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,createStageAbValidation,mountStageAbValidation} from './stageAbValidation.js';
 import {phase2bSnapshotMeta} from './phase2bOperations.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {redactPublicData} from './publicDataSecurity.js';
@@ -38,7 +38,7 @@ const readActions = new Set([
 ]);
 const officialAddressIndexRoute = '/api/map-phase2b/private/stage-official-address-index';
 const addressDiagnosticRoute = '/api/map-phase2b/private/address-lookup-diagnostic';
-const readPosts = new Set(['/api/map-phase2b/preview/base-vehicles', '/api/map-phase2b/private/address-lookup', STAGE_BUNDLE_ROUTE, officialAddressIndexRoute]);
+const readPosts = new Set(['/api/map-phase2b/preview/base-vehicles', '/api/map-phase2b/private/address-lookup', STAGE_BUNDLE_ROUTE, STAGE_ADDRESS_BATCH_ROUTE, officialAddressIndexRoute]);
 const deliveryReadActions = new Set(['routePlan','routeStops','datedAssignments','periodAssignments']);
 const authPosts = new Set(['/api/map-phase2b/auth/login', '/api/map-phase2b/auth/logout']);
 const normalizeCell = value => typeof value === 'string' ? value.trim() : '';
@@ -236,7 +236,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       const {requireStaff,isSessionCurrent}=binding;
       staffView = requireStaff;
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
-        mountStageAbValidation(router,{...binding,validation,readBaseVehicles:codes=>base.get(codes)});
+        mountStageAbValidation(router,{...binding,validation,readSnapshot,readBaseVehicles:codes=>base.get(codes)});
         router.get('/api/map-phase2b/private/stage-sync-evidence',requireStaff,(_req,res)=>{
           const generation=validation.active();
           return res.set('Cache-Control','private, no-store').vary('Cookie').json({

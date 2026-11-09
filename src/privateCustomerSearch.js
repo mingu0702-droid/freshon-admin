@@ -18,7 +18,7 @@ function exactAddressKey(address){
   .replace(/^경기도/,'경기').replace(/^강원(?:특별자치도|도)/,'강원').replace(/^제주(?:특별자치도|도)/,'제주')
   .replace(/^전북특별자치도/,'전북').replace(/^전라([북남])도/,'전$1').replace(/^충청([북남])도/,'충$1').replace(/^경상([북남])도/,'경$1');
 }
-function searchPreservedRegistry(query,snapshot){
+export function searchPreservedRegistry(query,snapshot){
  const rows=snapshot.rows;
  let byAddress=preservedIndexes.get(rows);
  if(!byAddress){
