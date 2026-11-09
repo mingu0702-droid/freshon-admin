@@ -20,7 +20,7 @@ export function manualPinRenderMountVerified(env,readMountInfo=()=>fsSync.readFi
   return readMountInfo().split('\n').some(line=>{const [left,right]=line.split(' - ');if(!right)return false;const mount=decode(left.split(' ')[4]||''),kind=right.split(' ')[0];return mount===actualRoot&&!['overlay','tmpfs','ramfs','proc','sysfs','devtmpfs','squashfs'].includes(kind);});
  }catch{return false;}
 }
-export function createManualMapPins({env=process.env,appRoot,readCustomer,readCoordinate=()=>null,now=Date.now,store:providedStore,backupStore:providedBackup,authorizeWrite}={}){
+export function createManualMapPins({env=process.env,appRoot,readCustomer,readCurrentCustomer=readCustomer,readCoordinate=()=>null,now=Date.now,store:providedStore,backupStore:providedBackup,authorizeWrite}={}){
  const file=env.OPSMAP_MANUAL_PIN_STORE_FILE,configured=Boolean((file||providedStore)&&typeof readCustomer==='function');
  let store=providedStore,backup=providedBackup;
  if(configured&&!store){
@@ -43,7 +43,7 @@ export function createManualMapPins({env=process.env,appRoot,readCustomer,readCo
   for(const e of record.history){const {hash,...body}=e;if(e.customerCode!==code||e.revision!==++revision||e.previousHash!==prior||digest(body)!==hash||e.after!==null&&(!point(e.after)||e.after.customerCode!==code||e.after.coordinateSource!=='MANUAL_PIN'||e.after.resolutionStatus!=='MANUAL_CONFIRMED'||e.after.verificationKind!==undefined&&!Object.hasOwn(verificationAccuracy,e.after.verificationKind)))throw failure('MANUAL_PIN_AUDIT_INVALID',503);prior=hash;}
   if(record.revision!==revision||record.head!==prior||digest(record.current)!==digest(record.history.at(-1)?.after??null))throw failure('MANUAL_PIN_AUDIT_INVALID',503);
  }
- async function source(code){const row=await readCustomer(code);if(!row||row.customerCode!==code||!location(row.address))throw failure('MANUAL_PIN_CUSTOMER_ADDRESS_UNAVAILABLE',503);return {...row,address:location(row.address),originalAddressHash:coordinateAddressHash(row.address)};}
+ async function source(code,reader=readCustomer){const row=await reader(code);if(!row||row.customerCode!==code||!location(row.address))throw failure('MANUAL_PIN_CUSTOMER_ADDRESS_UNAVAILABLE',503);return {...row,address:location(row.address),originalAddressHash:coordinateAddressHash(row.address)};}
  function previousPoint(code){const value=readCoordinate(code);return point(value)?{latitude:value.latitude,longitude:value.longitude}:null;}
  async function selected(code){if(!codeValid(code))throw failure('MANUAL_PIN_CUSTOMER_CODE',400);if(!configured||!store)throw failure('MANUAL_PIN_STORE_NOT_CONFIGURED',503);const customer=await source(code);return store.transaction(async state=>{
   const record=container(state).customers[code];verify(record,code);const prepared=preparePrivateCoordinateAddress(customer.address);
@@ -63,7 +63,7 @@ export function createManualMapPins({env=process.env,appRoot,readCustomer,readCo
   if(!codeValid(code)||!body||Object.keys(body).some(k=>!['originalAddressHash','expectedRevision','requestId','latitude','longitude','correctedSearchAddress','targetRevision','verificationKind'].includes(k))||!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0||typeof body.requestId!=='string'||!/^[a-f0-9-]{36}$/.test(body.requestId)||!/^[a-f0-9]{64}$/.test(body.originalAddressHash||''))throw failure('MANUAL_PIN_INPUT',400);
   if(action==='save'&&(!point(body)||body.correctedSearchAddress!==undefined&&body.correctedSearchAddress!==''&&!location(body.correctedSearchAddress)))throw failure('MANUAL_PIN_POINT_OR_SEARCH_ADDRESS',400);
   if(body.verificationKind!==undefined&&(action!=='save'||!Object.hasOwn(verificationAccuracy,body.verificationKind)))throw failure('MANUAL_PIN_INPUT',400);
-  const customer=await source(code);if(customer.originalAddressHash!==body.originalAddressHash)throw failure('MANUAL_PIN_ADDRESS_CHANGED');
+  const customer=await source(code,readCurrentCustomer);if(customer.originalAddressHash!==body.originalAddressHash)throw failure('MANUAL_PIN_ADDRESS_CHANGED');
   const requestHash=digest({code,action,body});
   return store.transaction(async(state,checkpoint)=>{
    const m=container(state),record=m.customers[code]||{revision:0,current:null,history:[],head:null};verify(record,code);
@@ -83,7 +83,7 @@ export function createManualMapPins({env=process.env,appRoot,readCustomer,readCo
    await assertSession();
    // One bounded previous normal snapshot, plus the complete append-only audit.
    await backup.transaction(async(_old,save)=>save(structuredClone(state)));
-   const currentCustomer=await source(code);if(currentCustomer.originalAddressHash!==customer.originalAddressHash)throw failure('MANUAL_PIN_ADDRESS_CHANGED');
+   const currentCustomer=await source(code,readCurrentCustomer);if(currentCustomer.originalAddressHash!==customer.originalAddressHash)throw failure('MANUAL_PIN_ADDRESS_CHANGED');
    await assertSession();
    const event={customerCode:code,revision:record.revision+1,operation:action,requestId:body.requestId,requestHash,originalAddressHash:customer.originalAddressHash,updatedAt:timestamp,modifiedBy,previousHash:record.head,
     before:record.current,previousCoordinate:record.revision?null:previousPoint(code),after:next};event.hash=digest(event);

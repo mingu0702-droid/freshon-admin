@@ -81,7 +81,7 @@ async function restoreArchive(config, { appRoot, fetchImpl, tempRoot }) {
     }
     if (offset !== bytes.length) throw Error('COVERAGE_ARCHIVE_FORMAT');
     await fs.writeFile(path.join(folder, 'coverage-index.json'), indexBytes, { flag: 'wx', mode: 0o400 });
-    return folder;
+    return {folder,evidence:{coverageGeneratedAt:index.generatedAt,coverageSourceObservedAt:index.sourceObservedAt,coverageAsOf:index.asOf}};
   } catch (error) {
     for (const name of await fs.readdir(folder).catch(() => [])) {
       const file = path.join(folder, name);
@@ -96,15 +96,17 @@ async function restoreArchive(config, { appRoot, fetchImpl, tempRoot }) {
 export function createProductionShadowRuntime(env, { appRoot, fetchImpl = fetch, tempRoot = os.tmpdir() }) {
   const config = archiveConfig(env);
   let state = config ? 'restoring' : 'unavailable';
-  let directory = null;
+  let directory = null, evidence = null;
   if (config) setImmediate(async () => {
     try {
-      directory = await restoreArchive(config, { appRoot, fetchImpl, tempRoot });
+      const restored = await restoreArchive(config, { appRoot, fetchImpl, tempRoot });
+      directory = restored.folder;
+      evidence = restored.evidence;
       state = 'ready';
     } catch {
       state = 'unavailable';
       console.warn('[opsmap-shadow] PRODUCTION_COVERAGE_DATA_UNAVAILABLE');
     }
   });
-  return { state: () => state, readDirectory: () => directory };
+  return { state: () => state, readDirectory: () => directory, evidence: () => evidence };
 }

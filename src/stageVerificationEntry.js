@@ -17,7 +17,7 @@ import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,createStageAbValidation,mo
 import {phase2bSnapshotMeta} from './phase2bOperations.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {redactPublicData} from './publicDataSecurity.js';
-import {createOperationalPhotoExtension} from './opsmapOperationalPhotos.js';
+import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
 
 const stageOrigin = STAGE_ORIGIN;
@@ -87,26 +87,6 @@ function stageGithub(fetchImpl, {files, branch, writable, allowBlob = false}) {
   };
 }
 
-function stagePhotoExtension(env, fetchImpl) {
-  const cookie = String(env.OPSMAP_STAGE_DELIVERY_PHOTO_COOKIE || '').trim();
-  const hasSession = /^[\x20-\x7e]{1,8192}$/.test(cookie);
-  const sourceOrigin = 'https://delivery-bali.chabyulhwa.com';
-  return createOperationalPhotoExtension({
-    enabled: true, hasMemorySession: () => hasSession, imageFetch: fetchImpl,
-    rawRequest: hasSession ? (pathname, {method, signal} = {}) => {
-      const url = new URL(pathname, sourceOrigin);
-      const detail = /^\/api\/bali\/task\/\d{1,20}(?:\/status-record)?$/.test(url.pathname) && !url.search;
-      const list = url.pathname === '/api/bali/task' &&
-        /^[A-Za-z0-9_-]{1,64}$/.test(url.searchParams.get('customerErpCodeLike') || '') &&
-        url.searchParams.get('statusIn') === 'COMPLETED' && url.searchParams.get('completeTypeIn') === 'FRONT_DOOR';
-      if (method !== 'GET' || url.origin !== sourceOrigin || url.username || url.password || url.hash || (!detail && !list)) {
-        throw new Error('STAGE_PHOTO_READ_SCOPE_REJECTED');
-      }
-      return fetchImpl(url, {method, signal, redirect:'error', cache:'no-store', headers:{Accept:'application/json',Cookie:cookie}});
-    } : undefined
-  });
-}
-
 export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory} = {}) {
   if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
   if (![env.HUB_API_URL,env.OPSMAP_PRIVATE_READER_URL].every(stageHubUrl)) throw new Error('STAGE_READ_SOURCE_CONFIG');
@@ -160,7 +140,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY' && /^[a-f0-9]{64}$/.test(row.baseVehicleVersion || '')).map(row=>row.baseVehicleGroup));
     return groups.size===1 ? [...groups][0] : null;
   }});
-  const photos = stagePhotoExtension(stage, fetchImpl);
+  const photos = createStageOperationalPhotoExtension({env:stage,fetchImpl,defaultDate:today});
   const fixed = createFixedVehicleCache({readOnly:true,store:stage.OPSMAP_STAGE_FIXED_MASTER_FILE ? createFixedVehicleFileStore({env:stage}) : {
     async load() {return (await masterStore.read('fixed-vehicle-projection-v1.json')).value;}
   }});
@@ -212,7 +192,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         appRoot:fileURLToPath(new URL('../',import.meta.url)),
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
       manual.mount(binding);
-      photos.mount(binding,{historyOnly:true});
+      photos.mount(binding);
       mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
       router.get('/api/map-phase2b/preview/snapshot',requireStaff,async(req,res)=>{
         try {

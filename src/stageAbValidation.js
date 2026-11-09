@@ -6,7 +6,7 @@ import {gunzip} from 'node:zlib';
 import {promisify} from 'node:util';
 import express from 'express';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
-import {hasFixedCoordinatePoint, validateFixedCoordinateLedger} from './fixedStoreCoordinates.js';
+import {createFixedCoordinateResolver, hasFixedCoordinatePoint, readFixedCoordinateLedger} from './fixedStoreCoordinates.js';
 import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
 
 export const STAGE_ORIGIN = 'https://freshon-admin-stage-preview-template.onrender.com';
@@ -87,7 +87,7 @@ function projectedRegistry(registry, rows) {
 function joinMissing(registry, rows) {
   return rows.map(row => {
     const store = registry.get(rowCode(row));
-    if (!store?.hasPoint || rowCode(row) === 'S191541' || reviewedConflict(row) ||
+    if (!store?.hasPoint || store.gps || rowCode(row) === 'S191541' || reviewedConflict(row) ||
         hasFixedCoordinatePoint(row) || row.coordinateSource === 'MANUAL_PIN' || !sameAddress(row, store.addressHash)) return row;
     return {...row, ...mappedPoint(store, row)};
   });
@@ -104,8 +104,8 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     const bundle = JSON.parse(await DECOMPRESS(bytes, {maxOutputLength:5 * 1024 * 1024}));
     const indexBytes = Buffer.from(bundle[INDEX], 'base64');
     const index = parseCoverageIndex(indexBytes);
-    const ledger = validateFixedCoordinateLedger(JSON.parse(Buffer.from(bundle[LEDGER], 'base64')));
-    if (index.sha256 !== GENERATION || ledger.sha256 !== LEDGER_SHA256) throw Error('STAGE_GENERATION');
+    const ledger = readFixedCoordinateLedger(Buffer.from(bundle[LEDGER], 'base64'), LEDGER_SHA256);
+    if (index.sha256 !== GENERATION) throw Error('STAGE_GENERATION');
     const files = new Map([[INDEX, indexBytes]]);
     for (const ref of [index.catalog, ...PERIODS.map(days => index.windows[days])]) {
       const name = ref.sha256 + '.json';
@@ -127,7 +127,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
         coverageSourceObservedAt:index.sourceObservedAt,
         coverageAsOf:index.asOf
       };
-      const result = {directory, registry, asOf:index.asOf, generation:index.sha256, evidence, expiresAt:appliedAt + TTL};
+      const result = {directory, registry, resolver:createFixedCoordinateResolver(ledger), asOf:index.asOf, generation:index.sha256, evidence, expiresAt:appliedAt + TTL};
       current = result;
       setTimeout(() => {
         if (current === result) current = null;
@@ -157,7 +157,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
   function joinPayload(payload) {
     const prepared = active();
     if (!prepared || !payload || typeof payload !== 'object') return payload;
-    const join = rows => joinMissing(prepared.registry, rows);
+    const join = rows => joinMissing(prepared.registry, prepared.resolver.join(rows));
     if (Array.isArray(payload.data)) return {...payload, data:join(payload.data)};
     if (Array.isArray(payload.data?.rows)) return {...payload, data:{...payload.data, rows:join(payload.data.rows)}};
     if (Array.isArray(payload.data?.stops)) return {...payload, data:{...payload.data, stops:join(payload.data.stops)}};

@@ -31,10 +31,12 @@ export function resolveProductionCredentials(env){
  const reuse=env.OPSMAP_PRODUCTION_REUSE_EXISTING_CREDENTIALS==='1';
  return {sessionSecret:env.OPSMAP_AUTH_SESSION_SECRET||(reuse?env.MAP_STAFF_SESSION_SECRET:undefined),authToken:env.OPSMAP_AUTH_STORE_TOKEN||(reuse?env.GITHUB_TOKEN:undefined),pinToken:env.OPSMAP_PIN_STORE_TOKEN||(reuse?env.GITHUB_TOKEN:undefined)};
 }
-export async function readProductionManualPinCustomer(readers,code,{env=process.env,protectedRead=protectedHubRead}={}){
- const snapshot=await readers.readPhase2bSnapshot();
- const row=snapshot?.rows?.find(r=>r.customerCode===code);
- if(row?.address)return row;
+export async function readProductionManualPinCustomer(readers,code,{env=process.env,protectedRead=protectedHubRead,requireFresh=false}={}){
+ if(!requireFresh){
+  const snapshot=await readers.readPhase2bSnapshot();
+  const row=snapshot?.rows?.find(r=>r.customerCode===code);
+  if(row?.address)return row;
+ }
  // An older map Snapshot is not the Customer registry. Read only this selected customer.
  const read=env.OPSMAP_PRIVATE_READER_ENABLED==='true'?customerCode=>protectedRead('customerDetail',{customerCode},{useCache:false,privateRead:true,maxResponseBytes:65536,deadline:Date.now()+15000}):readers.readManualPinCustomer;
  if(!read)return null;
@@ -57,13 +59,13 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
  let geocodeStore;try{if(env.OPSMAP_PIN_STORE_REPO&&credentials.pinToken)geocodeStore=createProductionGeocodeBudgetGithubStore({repo:env.OPSMAP_PIN_STORE_REPO,token:credentials.pinToken,branch:env.OPSMAP_PIN_STORE_BRANCH});}catch{/* A missing ledger never creates a fresh allowance. */}
  readers.addressLookupService=createKakaoCoordinateConnection({env,store:geocodeStore});
  const pinEnv={...authEnv,OPSMAP_MANUAL_PIN_STORE_FILE:undefined,OPSMAP_MANUAL_PIN_WRITES:env.OPSMAP_PRODUCTION_PIN_WRITES==='1'?'1':'0',OPSMAP_MANUAL_PIN_DURABLE_CONFIRMED:pinStore?'1':'0',OPSMAP_MANUAL_PIN_WRITER_ID:env.OPSMAP_PIN_WRITER_ID,OPSMAP_MANUAL_PIN_WRITE_AUTHORIZATION:env.OPSMAP_PIN_WRITE_AUTHORIZATION,OPSMAP_MANUAL_PIN_WRITE_APPROVAL_ID:env.OPSMAP_PIN_WRITE_APPROVAL_ID};
- const manual=createManualMapPins({env:pinEnv,appRoot:path.resolve(publicDir,'..'),store:pinStore,backupStore:pinStore?.backupStore,authorizeWrite:createManualPinAuthorizer({env:pinEnv}),readCoordinate:code=>{const row=readers.getSnapshotMemory()?.rows?.find(r=>r.customerCode===code);return row?{latitude:row.lat,longitude:row.lng}:null;},readCustomer:code=>readProductionManualPinCustomer(readers,code)});
+ const manual=createManualMapPins({env:pinEnv,appRoot:path.resolve(publicDir,'..'),store:pinStore,backupStore:pinStore?.backupStore,authorizeWrite:createManualPinAuthorizer({env:pinEnv}),readCoordinate:code=>{const row=readers.getSnapshotMemory()?.rows?.find(r=>r.customerCode===code);return row?{latitude:row.lat,longitude:row.lng}:null;},readCustomer:code=>readProductionManualPinCustomer(readers,code,{env}),readCurrentCustomer:code=>readProductionManualPinCustomer(readers,code,{env,requireFresh:true})});
  const readStoredStaffHistory=createStoredStaffDriverHistoryReader({readSnapshot:readers.readPhase2bSnapshot,readObservedDeliveryDate:readers.phase2bTodayStatus});
  const readObservedStoreAddress=createObservedStoreAddressReader({readSnapshot:readers.readPhase2bSnapshot,readObservedDeliveryDate:readers.phase2bTodayStatus});
  const roadRouteBudget=createProductionRoadBudget({env,token:credentials.authToken});
  const shadowAppRoot=path.resolve(publicDir,'..');
  const shadow=createProductionShadowRuntime(env,{appRoot:shadowAppRoot});
- const api=mountProductionMapApi(router,{...readers,roadRouteBudget,readStoredStaffHistory,readObservedStoreAddress,readApprovedCoordinateSearch,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,getShadowCoverageState:shadow.state,mountPrivateExtensions:binding=>{
+ const api=mountProductionMapApi(router,{...readers,roadRouteBudget,readStoredStaffHistory,readObservedStoreAddress,readApprovedCoordinateSearch,callHub:typeof readers.callHub==='function'?createProductionDetailReader(readers.callHub,{env}):undefined,publicDir:root,previewEnabled:()=>true,requireView:(_q,_r,n)=>n(),authOptions:{env:authEnv,sessionStore:store},hybridEnabled:()=>false,getShadowCoverageState:shadow.state,getLocalDataEvidence:shadow.evidence,mountPrivateExtensions:binding=>{
   mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:shadow.readDirectory,appRoot:shadowAppRoot,readPreservedMap:()=>{
    const saved=readers.getSnapshotMemory?.();
    return Array.isArray(saved?.rows)?{count:saved.rows.length,asOf:saved.latestDate||null}:null;
