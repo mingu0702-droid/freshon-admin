@@ -279,3 +279,17 @@ test('interactive search and new-area batch locate official building evidence wh
  assert.equal(batch.coordinateAccuracy,'BUILDING');
  assert.equal(f.queries.length,2);
 });
+
+test('customer lookup failure allows only the approved official evidence, even with an external provider configured',async()=>{
+ const f=fixture({lookup:(text,callback,{mode})=>{
+   assert.equal(mode,'official');
+   if(text.includes('41'))callback([{x:'127.01',y:'37.51'}],'OK',{resolution:{kind:'EXACT'}});
+   else callback([],'ZERO_RESULT');
+ }});
+ Object.assign(f.window.KAKAO_MAP_CONFIG,{allowIndependentAddressLookup:true,allowExternalPlaceLookup:true});
+ const options={allowExternal:false};
+ assert.equal((await f.lookupInteractiveLocation('서울 종로구 합성로 41',undefined,options)).coordinateSource,'OFFICIAL_PUBLIC_BUILDING');
+ assert.equal(await f.lookupInteractiveLocation('서울 종로구 합성로 42',undefined,options),null);
+ assert.equal(await f.lookupInteractiveLocation('서울역',undefined,options),null);
+ assert.equal(f.queries.length,2);
+});

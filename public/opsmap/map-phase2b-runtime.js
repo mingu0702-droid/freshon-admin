@@ -1933,13 +1933,13 @@
     const requestId=state.addressRequestId;
     const active=()=>owner===state.searchRequestId&&requestId===state.addressRequestId&&!signal?.aborted&&state.mode==='BASE_60D';
     if(!state.map)await initMap();
-    if(lookupAllowed)await window.KakaoMapsAdapter?.refreshAddressLookup?.();
+    await window.KakaoMapsAdapter?.refreshAddressLookup?.();
     if(!active())return;
     const config=window.KAKAO_MAP_CONFIG;
     const place=!unifiedAddressQuery(text);
     const officialAllowed=!place&&config?.allowIndependentAddressLookup===true;
-    const externalAllowed=config?.allowExternalAddressLookup===true&&(!place||config?.allowExternalPlaceLookup===true);
-    if(lookupAllowed===false||!officialAllowed&&!externalAllowed){
+    const externalAllowed=lookupAllowed&&config?.allowExternalAddressLookup===true&&(!place||config?.allowExternalPlaceLookup===true);
+    if(!officialAllowed&&!externalAllowed){
       const reason=lookupAllowed===false?'기존 매장 조회 미확인':config?.addressLookupReason?NewAreaRequests.message({code:config.addressLookupReason}):place?'외부 상호 검색 미승인':'외부 주소검색 미승인';
       waitForSearchMapPoint(text,{owner,customerMatchState,reason});
       return;
@@ -1948,7 +1948,7 @@
     const controller=new AbortController();addressController=controller;
     const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});
     let point;
-    try {point=await lookupInteractiveLocation(text,controller.signal);}
+    try {point=await lookupInteractiveLocation(text,controller.signal,{allowExternal:externalAllowed});}
     catch(error){
       if(active()&&!isSilentRequestError(error))waitForSearchMapPoint(text,{owner,customerMatchState,reason:NewAreaRequests.message(error)});
       return;
@@ -1956,7 +1956,7 @@
     if(!active())return;
     if(!point||point.verifiedAddressOnly){
       waitForSearchMapPoint(point?.officialRoad||text,{owner,customerMatchState,
-        reason:point?.verifiedAddressOnly?'공식 주소 확인 · 좌표 미확인':config?.allowExternalAddressLookup!==true&&config?.addressLookupReason
+        reason:point?.verifiedAddressOnly?'공식 주소 확인 · 좌표 미확인':!lookupAllowed?'기존 매장 조회 미확인':config?.allowExternalAddressLookup!==true&&config?.addressLookupReason
           ?NewAreaRequests.message({code:config.addressLookupReason}):place?'일치하는 상호 없음':'일치하는 주소 위치 없음'});return;
     }
     const choose=candidate=>{
@@ -2102,11 +2102,12 @@
     return null;
   }
 
-  async function lookupInteractiveLocation(text, signal) {
+  async function lookupInteractiveLocation(text, signal, {allowExternal=true} = {}) {
     const geocoder=window.kakaoGeocoder;
     const address=unifiedAddressQuery(text);
     const official=address?await lookupOfficialAddress(text,signal):null;
     if(official&&!official.verifiedAddressOnly)return official;
+    if(!allowExternal)return official;
     if(!geocoder?.serverProxy)return address?geocodeAddress(text,signal):null;
     const config=window.KAKAO_MAP_CONFIG;
     if(config?.allowExternalAddressLookup!==true||!address&&config.allowExternalPlaceLookup!==true)return official;
