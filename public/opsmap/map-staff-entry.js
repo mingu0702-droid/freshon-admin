@@ -30,9 +30,9 @@
       || /^\/api\/(?:fixed-dispatch(?:\/customer-search)?|monthly-dispatch-summary|monthly-dispatch-route|vehicle-driver-master|mobile\/customer-search|daily-route|status|delivery-admin\/status)\/?$/.test(url.pathname)
       || /^\/(?:vehicle-data|new-area-data|admin-features)\.js$/.test(url.pathname);
   }
-  function mountStageVerification(header) {
+  function mountStageVerification(shortcuts) {
     const button = document.createElement('button');
-    button.type = 'button'; button.textContent = 'Stage 검증 자료';
+    button.type = 'button'; button.className = 'tiny'; button.textContent = 'Stage 검증 자료';
     const dialog = document.createElement('dialog');
     dialog.setAttribute('aria-labelledby', 'stageVerificationTitle');
     dialog.innerHTML = '<h2 id="stageVerificationTitle">Stage A+B 검증</h2><label>임시 검증 자료 <input type="file" accept=".gz"></label><p role="status"></p><button type="button" data-load>검증 자료 열기</button> <button type="button" data-close>닫기</button>';
@@ -63,7 +63,7 @@
         file.value = '';
       }
     };
-    header.append(button);
+    shortcuts.append(button);
     document.body.append(dialog);
     return {setVisible(visible) {
       button.hidden = !visible;
@@ -76,7 +76,7 @@
     if (button) { button.textContent = session ? '직원 로그아웃' : unknown ? '연결 재확인' : '직원 로그인'; button.onclick = session ? logout : unknown ? () => void check() : () => account.focus(); }
     const header = document.querySelector('#approvedSiteHeader');
     if (header && location.origin === 'https://freshon-admin-stage-preview-template.onrender.com') {
-      if (session) stageVerification ??= mountStageVerification(header);
+      if (session) stageVerification ??= mountStageVerification(header.querySelector('#approvedShortcuts') || header);
       stageVerification?.setVisible(Boolean(session));
     }
     let label = document.querySelector('#mapStaffSessionState');
