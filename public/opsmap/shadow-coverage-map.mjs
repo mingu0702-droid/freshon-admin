@@ -27,7 +27,8 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
   svg.setAttribute('height', '1');
   const overlay = new maps.AbstractOverlay();
   let cells = EMPTY, selected = null, radiusCircle = null, anchor = null;
-  let renderedCells, renderedSelection, renderedLevel, frame;
+  let markers = EMPTY, hits = EMPTY;
+  let renderedCells, renderedMarkers, renderedSelection, renderedLevel, frame;
 
   function draw() {
     frame = undefined;
@@ -38,8 +39,9 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
     svg.style.top = origin.y + 'px';
 
     const level = map.getLevel();
-    if (cells === renderedCells && selected === renderedSelection && level === renderedLevel) return;
+    if (cells === renderedCells && markers === renderedMarkers && selected === renderedSelection && level === renderedLevel) return;
     renderedCells = cells;
+    renderedMarkers = markers;
     renderedSelection = selected;
     renderedLevel = level;
     const fragment = document.createDocumentFragment();
@@ -55,6 +57,21 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
       if (cell.id === selected?.id) path.classList.add('coverage-selected');
       fragment.append(path);
     }
+    hits = markers.map(marker => {
+      const point = projection.pointFromCoords(new maps.LatLng(...marker.location));
+      const x = point.x - origin.x, y = point.y - origin.y;
+      const badge = document.createElementNS(SVG, 'g');
+      badge.classList.add('coverage-candidate-count');
+      badge.setAttribute('transform', 'translate(' + x + ' ' + y + ')');
+      const circle = document.createElementNS(SVG, 'circle');
+      circle.setAttribute('r', marker.cells >= 100 ? '15' : '12');
+      const count = document.createElementNS(SVG, 'text');
+      count.setAttribute('dy', '.35em');
+      count.textContent = String(marker.cells);
+      badge.append(circle, count);
+      fragment.append(badge);
+      return { ...marker, x, y };
+    });
     svg.replaceChildren(fragment);
   }
 
@@ -70,6 +87,17 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
 
   function onMapClick(event) {
     if (!enabled() || !event?.latLng) return;
+    if (anchor && hits.length) {
+      const projection = overlay.getProjection();
+      const origin = projection.pointFromCoords(anchor), point = projection.pointFromCoords(event.latLng);
+      const x = point.x - origin.x, y = point.y - origin.y;
+      let nearest, distance = 16 ** 2;
+      for (const hit of hits) {
+        const squared = (x - hit.x) ** 2 + (y - hit.y) ** 2;
+        if (squared <= distance) { nearest = hit; distance = squared; }
+      }
+      if (nearest) { select(nearest.id, nearest.location); return; }
+    }
     const lat = event.latLng.getLat(), lng = event.latLng.getLng();
     const cell = cells.find(item => contains(item.boundary, lat, lng));
     if (cell) select(cell.id);
@@ -103,17 +131,18 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
         radiusCircle.setMap(map);
       }
     },
-    render(value, highlight) {
-      if (!value.length && !highlight) {
+    render(value, highlight, candidateMarkers = EMPTY) {
+      if (!value.length && !highlight && !candidateMarkers.length) {
         svg.replaceChildren();
-        cells = renderedCells = EMPTY;
+        cells = renderedCells = markers = renderedMarkers = hits = EMPTY;
         selected = renderedSelection = anchor = null;
         return;
       }
-      if (value !== cells) {
+      if (value !== cells || candidateMarkers !== markers) {
         cells = value;
         anchor = map.getCenter();
       }
+      markers = candidateMarkers;
       selected = highlight;
       schedule();
     },
@@ -129,7 +158,7 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
       radiusCircle?.setMap(null);
       overlay.setMap(null);
       cancelAnimationFrame(frame);
-      cells = EMPTY;
+      cells = markers = hits = EMPTY;
       selected = null;
     }
   };

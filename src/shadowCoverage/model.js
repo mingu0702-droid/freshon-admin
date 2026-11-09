@@ -312,7 +312,7 @@ export function prepareView(catalog, window, center, resolution) {
   const candidateEvidence = !window.unidentified && (!unplacedVisits || !!window.unplacedCodes);
   const summary = { ...counts(), registered, located: registered - missingStoreLocation,
     missingStoreLocation, unplacedVisits, unidentifiedVisits: window.unidentified, visits: 0 };
-  const delivered = [];
+  const delivered = [], baseCandidates = [];
   for (const group of groups.values()) {
     const provenScope = absenceReady && !!group.scope;
     const observedCandidate = candidateEvidence && group.registered.length > 0 && group.registered.every(code =>
@@ -331,12 +331,13 @@ export function prepareView(catalog, window, center, resolution) {
     group.vehicles = [...new Set(group.history.flatMap(row => row[5]))].sort();
     group.deliveryDays = group.exactDates ? countDays(group.dateMask) : null;
     if (group.status === 'DELIVERED') delivered.push(group);
+    if (resolution === BASE_RESOLUTION && group.status === 'CANDIDATE') baseCandidates.push(group);
     countCell(summary, group);
     summary.visits += group.visits;
   }
   delivered.sort((a, b) => a.geometry.location[0] - b.geometry.location[0]);
   return {
-    groups, stores, summary, delivered, nearby: new Map(), lists: new Map(),
+    groups, stores, summary, delivered, baseCandidates, nearby: new Map(), lists: new Map(),
     evidence: periodEvidence(window, center),
     proof: { dateComplete, centerComplete, registryVerified: catalog.registryVerified,
       scopedCells: catalog.scopes.filter(scope => scope.center === center && getResolution(scope.id) === resolution).length }
@@ -384,6 +385,28 @@ export function viewportCells(view, bounds, limit = MAX_VISIBLE_CELLS) {
     if (cells.length < limit) cells.push({ ...card(group), boundary: group.geometry.boundary });
   }
   return { cells, summary, overflow: summary.total > limit };
+}
+
+// Count the original candidates even when a larger cell also contains deliveries.
+export function viewportCandidates(baseView, bounds, resolution) {
+  const groups = new Map();
+  let cells = 0, stores = 0;
+  for (const candidate of baseView.baseCandidates) {
+    if (!intersects(bounds, candidate.geometry.bounds)) continue;
+    cells++;
+    stores += candidate.registered.length;
+    if (resolution === BASE_RESOLUTION) continue;
+    const parent = cellToParent(candidate.id, resolution);
+    const location = candidate.geometry.location;
+    const [lat, lng] = location;
+    const centered = lng >= bounds[0] && lng <= bounds[2] && lat >= bounds[1] && lat <= bounds[3];
+    let group = groups.get(parent);
+    if (!group) groups.set(parent, group = { id: candidate.id, location, cells: 0, centered });
+    else if (centered && !group.centered) Object.assign(group, { id: candidate.id, location, centered });
+    group.cells++;
+  }
+  const markers = Array.from(groups.values()).slice(0, MAX_VISIBLE_CELLS).map(({ id, location, cells }) => ({ id, location, cells }));
+  return { cells, stores, groups: groups.size, markers };
 }
 
 function nearbyDelivery(view, id, point) {

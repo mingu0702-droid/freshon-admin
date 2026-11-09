@@ -76,7 +76,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const data = await reader.readPeriod(days, undefined, { recheck: tag !== null });
     const { window, index, stale } = data;
     const preservedMap = (await Promise.resolve().then(readPreservedMap).catch(() => null)) ?? null;
-    const version = createHash('sha256').update(JSON.stringify([1, index.sha256, stale, preservedMap, days, center, bounds, level])).digest('hex');
+    const version = createHash('sha256').update(JSON.stringify([2, index.sha256, stale, preservedMap, days, center, bounds, level])).digest('hex');
     const etag = '"coverage-' + version + '"';
     if (etag === tag) return { etag, data: null };
     let resolution = resolutionFor(level);
@@ -111,6 +111,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       summary: nationwide.summary,
       summaryResolution: model.BASE_RESOLUTION,
       viewportSummary: visible.summary,
+      candidateViewport: model.viewportCandidates(nationwide, bounds, resolution),
       preservedMap,
       candidateList,
       resolution,
