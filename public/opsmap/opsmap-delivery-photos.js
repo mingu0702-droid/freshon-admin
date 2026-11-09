@@ -11,7 +11,7 @@
     'PHOTO_IDENTITY_UNVERIFIED', 'PHOTO_ATTACHMENTS_INVALID', 'PHOTO_ATTACHMENT_LIMIT_EXCEEDED',
     'PHOTO_IMAGES_INVALID', 'PHOTO_IMAGE_LIMIT_EXCEEDED', 'PHOTO_LOGIN_HTTP_ERROR', 'PHOTO_LOGIN_REDIRECT_REJECTED', 'PHOTO_LOGIN_NETWORK_ERROR', 'PHOTO_LOGIN_SESSION_MISSING', 'PHOTO_CONTENT_TYPE_INVALID', 'PHOTO_JSON_INVALID', 'PHOTO_BODY_UNAVAILABLE',
     'PHOTO_UPSTREAM_UNAVAILABLE', 'PHOTO_MEDIA_AUTH_REQUIRED', 'PHOTO_IMAGE_DECODE_FAILED', 'INVALID_MEDIA_URL', 'PHOTO_JSON_TOO_LARGE', 'INVALID_PHOTO_REQUEST', 'PHOTO_LIMIT_EXCEEDED', 'MEDIA_ORIGIN_REJECTED', 'INVALID_MEDIA_TYPE', 'MEDIA_TOO_LARGE', 'UPSTREAM_REDIRECT_REJECTED']);
-  const SAFE_STAGES=new Set(['source-session','source-login','source-http','source-content-type','source-json','source-identity','source-attachments','source-category','source-media','source-timeout','source-size','staff-session']);
+  const SAFE_STAGES=new Set(['source-session','source-login','source-http','source-task-search','source-task-detail','source-content-type','source-json','source-identity','source-attachments','source-category','source-media','source-timeout','source-size','staff-session']);
   const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
   const safeText = (value, maximum) => typeof value === 'string' && value.length <= maximum;
   const validRecordId = value => typeof value === 'string' && /^\d{1,20}$/.test(value);

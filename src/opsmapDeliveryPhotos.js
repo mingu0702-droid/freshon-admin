@@ -76,7 +76,7 @@ export const validDeliveryId = value => (typeof value === 'string' || Number.isS
 // carrier.enteringDatedAt and taskAttachments[{typeText,text,images:[{url}]}].
 // Live task ID equivalence and category labels require an authenticated one-record check.
 // This adapter performs no login and makes no request until explicitly injected and enabled.
-export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDeliveryMetadata, allowedImageHosts = [], categoryMap = {}, firstPhotoKind = null, readTaskStatusRecords = false } = {}) {
+export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDeliveryMetadata, allowedImageHosts = [], categoryMap = {}, firstPhotoKind = null, readTaskStatusRecords = false, onIdentityVerified } = {}) {
   if (typeof requestJson !== 'function' || typeof fetchImage !== 'function') fail('UNVERIFIED', 503);
   if (firstPhotoKind !== null && !PHOTO_KINDS.has(firstPhotoKind)) fail('UNVERIFIED', 503);
   const hosts = new Set(allowedImageHosts);
@@ -129,6 +129,7 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
     let task = unwrap(await bounded(requestJson(`/api/bali/task/${identity.deliveryId}`, { method: 'GET', signal, maxResponseBytes: 65536 }), signal));
     exact(task, identity);
     if (history && !matchesFrontDoorCompletion(task)) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
+    onIdentityVerified?.();
     if (readTaskStatusRecords === true) {
       // Public task screen reads attachments from taskStatusRecord, separately
       // from its parent task. Parent identity must pass before this second GET.

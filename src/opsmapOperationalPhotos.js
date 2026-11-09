@@ -95,7 +95,8 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
     return listDeliveryMetadata(identity, options);
   };
   const photoSource = createDeliveryAdminPhotoSource({...transport, requestJson, listDeliveryMetadata: metadata,
-    categoryMap: DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, allowedImageHosts: DELIVERY_ADMIN_PHOTO_HOSTS, readTaskStatusRecords:true});
+    categoryMap: DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, allowedImageHosts: DELIVERY_ADMIN_PHOTO_HOSTS, readTaskStatusRecords:true,
+    onIdentityVerified:onSourceVerified});
   const readHistory = createDeliveryPhotoHistoryReader({
     searchFrontDoorTasks:transport.searchFrontDoorTasks, listHistoryRecord:photoSource.listHistoryRecord
   });

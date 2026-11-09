@@ -15,7 +15,8 @@ const cancel = body => { try { Promise.resolve(body?.cancel?.()).catch(() => {})
 
 export function deliveryPhotoUpstreamError(status, stage = 'source-http') {
   const detail = {stage, sourceHttpStatus:safeHttp(status)};
-  if (status === 401) return new DeliveryPhotoError(stage === 'source-media' ? 'PHOTO_MEDIA_AUTH_REQUIRED' : 'UPSTREAM_AUTH_REQUIRED', 502, detail);
+  if (status === 401) return new DeliveryPhotoError(stage === 'source-media' ? 'PHOTO_MEDIA_AUTH_REQUIRED' : 'UPSTREAM_AUTH_REQUIRED', 502,
+    {...detail, stage:stage === 'source-media' || stage === 'source-login' ? stage : 'source-session'});
   if (status === 403) return new DeliveryPhotoError('PHOTO_FORBIDDEN', 403, detail);
   if (status === 404 || status === 410) return new DeliveryPhotoError('PHOTO_NOT_FOUND', status, detail);
   if (status === 429) return new DeliveryPhotoError('PHOTO_RATE_LIMITED', 429, detail);
@@ -79,7 +80,7 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
   }
   const hosts = new Set(allowedImageHosts);
   const approved = () => { if (hasApprovedSession() !== true) fail('UPSTREAM_AUTH_REQUIRED',502,{stage:'source-session'}); };
-  async function run(signal, action) {
+  async function run(signal, stage, action) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
@@ -94,19 +95,19 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
       if (controller.signal.aborted || error?.name === 'AbortError') fail('PHOTO_TIMEOUT', 504);
       // Preserve only a safe status from approved requesters, never their text,
       // headers, payloads, URLs or signed media details.
-      if (safeHttp(error?.status)) throw deliveryPhotoUpstreamError(error.status);
-      fail('PHOTO_LOOKUP_FAILED');
+      if (safeHttp(error?.status)) throw deliveryPhotoUpstreamError(error.status, stage);
+      fail('PHOTO_LOOKUP_FAILED',502,{stage});
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
   }
-  async function getJson(path, limit, signal) {
+  async function getJson(path, limit, signal, stage) {
     if (typeof approvedRequest !== 'function') fail('SOURCE_UNAVAILABLE',503,{stage:'source-session'});
-    return run(signal, async requestSignal => {
+    return run(signal, stage, async requestSignal => {
       const response = await guarded(Promise.resolve().then(() => approvedRequest(path, {
         method:'GET', signal:requestSignal, redirect:'error', cache:'no-store', maxResponseBytes:limit
       })), requestSignal, response => cancel(response?.body));
       try { approved(); } catch (error) { cancel(response?.body); throw error; }
-      if (response?.redirected) { cancel(response.body); fail('UPSTREAM_REDIRECT_REJECTED',502,{stage:'source-http',sourceHttpStatus:safeHttp(response.status)}); }
-      if (response?.status !== 200) { cancel(response?.body); throw deliveryPhotoUpstreamError(response?.status); }
+      if (response?.redirected) { cancel(response.body); fail('UPSTREAM_REDIRECT_REJECTED',502,{stage,sourceHttpStatus:safeHttp(response.status)}); }
+      if (response?.status !== 200) { cancel(response?.body); throw deliveryPhotoUpstreamError(response?.status, stage); }
       const json = await readJson(response, limit, requestSignal);
       approved();
       return json;
@@ -116,7 +117,8 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
     async requestJson(path, { method = 'GET', signal, maxResponseBytes = maxJsonBytes } = {}) {
       if (method !== 'GET' || !/^\/api\/bali\/task\/\d{1,20}(?:\/status-record)?$/.test(path || '')) fail('INVALID_PHOTO_REQUEST', 400);
       if (!Number.isInteger(maxResponseBytes) || maxResponseBytes < 1) fail('INVALID_PHOTO_REQUEST', 400);
-      return getJson(path, Math.min(maxResponseBytes, maxJsonBytes), signal);
+      return getJson(path, Math.min(maxResponseBytes, maxJsonBytes), signal,
+        path.endsWith('/status-record') ? 'source-attachments' : 'source-task-detail');
     },
     async searchFrontDoorTasks({customerCode, startDate, endDate, page}, {signal} = {}) {
       validatePhotoQuery({customerCode});
@@ -129,14 +131,14 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
         completeTypeIn:'FRONT_DOOR', page:String(page), pageSize:'50'});
       params.append('enteringDatedAtBetween', startDate + 'T00:00:00+09:00');
       params.append('enteringDatedAtBetween', endDate + 'T00:00:00+09:00');
-      return getJson('/api/bali/task?' + params, 256 * 1024, signal);
+      return getJson('/api/bali/task?' + params, 256 * 1024, signal, 'source-task-search');
     },
     async fetchImage(raw, { method = 'GET', signal } = {}) {
       let url; try { url = new URL(raw); } catch { fail('MEDIA_ORIGIN_REJECTED', 403); }
       if (method !== 'GET' || url.protocol !== 'https:' || url.username || url.password || url.port
         || !hosts.has(url.hostname) || url.href.length > 8192) fail('MEDIA_ORIGIN_REJECTED', 403);
       if (typeof imageFetch !== 'function') fail('UNVERIFIED', 503);
-      return run(signal, async requestSignal => {
+      return run(signal, 'source-media', async requestSignal => {
         // CDN fetch deliberately has no Delivery Admin Cookie/Authorization.
         const response = await guarded(Promise.resolve().then(() => imageFetch(url.href, {
           method: 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store',

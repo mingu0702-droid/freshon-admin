@@ -2,7 +2,8 @@ import {DeliveryPhotoError, deliveryDate, validatePhotoQuery, validDeliveryId} f
 import {deliveryPhotoUpstreamError, readBoundedPhotoLoginJson} from './opsmapDeliveryAdminTransport.js';
 import {deliverySourceObservation, sourceTaskDate} from './snapshotRefreshEvidence.js';
 
-const fail = (code, status = 502) => { throw new DeliveryPhotoError(code, status); };
+const stage = 'source-task-search';
+const fail = (code, status = 502) => { throw new DeliveryPhotoError(code, status, {stage:{PHOTO_IDENTITY_UNVERIFIED:'source-identity', PHOTO_TIMEOUT:'source-timeout'}[code] ?? stage}); };
 const cancel = body => { try { Promise.resolve(body?.cancel?.()).catch(() => {}); } catch {} };
 const extractDefault = payload => {
   if (Array.isArray(payload)) return payload;
@@ -48,7 +49,7 @@ export function createOperationalPhotoTaskReader({rawRequest, extractRows = extr
         if (response?.redirected) { cancel(response.body); fail('UPSTREAM_REDIRECT_REJECTED'); }
         if (response?.status !== 200) {
           cancel(response?.body);
-          throw deliveryPhotoUpstreamError(response?.status);
+          throw deliveryPhotoUpstreamError(response?.status, stage);
         }
         const payload = await readBoundedPhotoLoginJson(response, customerScoped ? 256 * 1024 : 1048576, controller.signal);check();
         if (payload?.ok === false || payload?.success === false || payload?.error) fail('PHOTO_LOOKUP_FAILED');
@@ -77,7 +78,7 @@ export function createOperationalPhotoTaskReader({rawRequest, extractRows = extr
     } catch (error) {
       if (controller.signal.aborted || error?.name === 'AbortError') fail('PHOTO_TIMEOUT', 504);
       if (error instanceof DeliveryPhotoError) throw error;
-      if (Number.isInteger(error?.status)) throw deliveryPhotoUpstreamError(error.status);
+      if (Number.isInteger(error?.status)) throw deliveryPhotoUpstreamError(error.status, stage);
       fail('PHOTO_LOOKUP_FAILED');
     } finally { clearTimeout(timer);signal?.removeEventListener('abort', abort); }
   };

@@ -13,7 +13,7 @@ const mediaHost = 'static.chabyulhwa.com';
 const payload = (content, totalElements = content.length) => Response.json({data:{content, totalElements, totalPages:totalElements ? 1 : 0}});
 const staffSession = () => ({key:'first', expiresAt:Date.now() + 60000, idleExpiresAt:Date.now() + 60000});
 
-async function fixture({enabled = true, cookie = true, sourceStatus, mediaStatus, discovery, attachmentRows} = {}) {
+async function fixture({enabled = true, cookie = true, sourceStatus, mediaStatus, discovery, attachmentRows, statusByPath = {}, mediaNetworkError = false} = {}) {
   const app = express(), calls = [];
   let staff = true, sourceHttp = sourceStatus;
   const extension = createStageOperationalPhotoExtension({
@@ -28,12 +28,14 @@ async function fixture({enabled = true, cookie = true, sourceStatus, mediaStatus
       if (url.hostname === mediaHost) {
         assert.equal(options.credentials, 'omit');
         assert.equal(options.headers.Cookie, undefined);
+        if (mediaNetworkError) throw Error('upstream private url');
         if (mediaStatus) return new Response(null, {status:mediaStatus});
         return new Response('image fixture', {headers:{'content-type':'image/png'}});
       }
       assert.equal(url.origin, 'https://delivery-bali.chabyulhwa.com');
       assert.equal(options.headers.Cookie, 'fixture=session');
       if (sourceHttp) return new Response(null, {status:sourceHttp});
+      if (statusByPath[url.pathname]) return new Response(null, {status:statusByPath[url.pathname]});
       if (url.pathname === '/api/bali/task') {
         assert.equal(url.searchParams.get('customerErpCodeLike'), code);
         assert.equal(url.searchParams.get('pageSize'), '50');
@@ -121,11 +123,37 @@ test('Stage differentiates unavailable config, disabled mode, expiry, empty days
   try {
     const result = await f.get(api + query);
     assert.equal(result.status, 502);
-    assert.deepEqual((await result.json()).error, {code:'UPSTREAM_AUTH_REQUIRED', stage:'source-http', sourceHttpStatus:401});
+    assert.deepEqual((await result.json()).error, {code:'UPSTREAM_AUTH_REQUIRED', stage:'source-session', sourceHttpStatus:401});
     assert.equal((await (await f.get(api + '/config')).json()).data.sourceAuth, 'AUTH_REQUIRED');
     f.setStatus(null);
     assert.equal((await f.get(exact)).status, 502);
     assert.equal(f.calls.length, 1);
+  } finally { await f.close(); }
+});
+
+test('Stage routes failed auth, task search, detail, attachments and CDN to their actual failure stage', async () => {
+  for (const [pathname, url, upstream, code, stage, sourceAuth, expectedCalls] of [
+    ['/api/bali/task', api + query, 401, 'UPSTREAM_AUTH_REQUIRED', 'source-session', 'AUTH_REQUIRED', 1],
+    ['/api/bali/task', api + query, 503, 'PHOTO_UPSTREAM_UNAVAILABLE', 'source-task-search', 'NOT_VERIFIED', 1],
+    ['/api/bali/task/' + deliveryId, exact, 404, 'PHOTO_NOT_FOUND', 'source-task-detail', 'NOT_VERIFIED', 1],
+    ['/api/bali/task/' + deliveryId + '/status-record', exact, 503, 'PHOTO_UPSTREAM_UNAVAILABLE', 'source-attachments', 'VERIFIED', 2]
+  ]) {
+    const f = await fixture({statusByPath:{[pathname]:upstream}});
+    try {
+      const response = await f.get(url);
+      assert.equal(response.status, upstream === 401 ? 502 : upstream);
+      assert.deepEqual((await response.json()).error, {code, stage, sourceHttpStatus:upstream});
+      assert.equal(f.calls.length, expectedCalls);
+      assert.equal((await (await f.get(api + '/config')).json()).data.sourceAuth, sourceAuth);
+    } finally { await f.close(); }
+  }
+  const f = await fixture({mediaNetworkError:true});
+  try {
+    const {data} = await (await f.get(exact)).json();
+    const response = await f.get(data.deliveries[0].photos[0].url);
+    assert.equal(response.status, 502);
+    assert.deepEqual((await response.json()).error, {code:'PHOTO_LOOKUP_FAILED', stage:'source-media'});
+    assert.equal(f.calls.at(-1).origin, 'https://' + mediaHost);
   } finally { await f.close(); }
 });
 
