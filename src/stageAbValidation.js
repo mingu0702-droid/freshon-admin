@@ -41,6 +41,12 @@ const bundles = new Map([
   ['77c389680516fc9c94e5c4842300a582caac6fc9245b9cd3605101b97c52126b',{...currentProfile, version:4}],
   ['94806273844c0ca4f7c6d8c0c8a30762c06bfd9c3bcd6cb801c1b9cdb7f80896',{
     ...currentProfile, version:5, nearby:'71949a90c9ca1412753c72f21e8594649d2babe6c5e1804da32a1939fc927e43'
+  }],
+  ['98773bd97fb457da292cf5376b762eb5afdf077930e9f14f7a266d6dfb02cd0e',{
+    ...currentProfile, version:6, official:38,
+    generation:'506774f9e38c2c4cc7b900c53f32d8c31c4623e45cc1ef5d9350254a6bf20ed6',
+    ledger:'8065d5fdea2653d542730e95acc669ab578356680bfb74857c7504180aed60ca',
+    nearby:'cb2d51833b478ab589843d09a868eeab5379ac8643de1d65b1561cb98941ba60'
   }]
 ]);
 const INDEX = 'coverage-index.json';
