@@ -406,8 +406,19 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           catch {return res.status(400).json({error:'OFFICIAL_ADDRESS_INDEX_REJECTED'});}
         });
       }
+      const coverageAppRoot=fileURLToPath(new URL('../',import.meta.url));
+      let providerReader;
+      const providerApproved=stage.RENDER_SERVICE_ID===STAGE_SERVICE&&stage.OPSMAP_STAGE_PROVIDER_COVERAGE_APPROVED==='1';
+      const readProviderCoverage=providerApproved?async()=>{
+        providerReader??=import('./shadowCoverage/providerInput.js').then(({createProviderCoverageReader})=>
+          createProviderCoverageReader({directory:stage.OPSMAP_STAGE_PROVIDER_COVERAGE_DIR,appRoot:coverageAppRoot,
+            expected:Object.fromEntries(['FRESHON','CJ','NAVER_SHOPPING'].map(provider=>[
+              provider,stage['OPSMAP_STAGE_PROVIDER_'+provider+'_SHA256']
+            ]).filter(([,digest])=>digest!==undefined))}));
+        return (await providerReader)();
+      }:undefined;
       mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
-        appRoot:fileURLToPath(new URL('../',import.meta.url)),
+        appRoot:coverageAppRoot,readProviderCoverage,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
       manual.mount(binding);
