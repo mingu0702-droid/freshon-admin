@@ -1,13 +1,13 @@
 import {createHash} from 'node:crypto';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
-import {approvedOfficialAddressSource} from './opsmapOfficialAddressLookup.js';
+import {approvedFixedAddressSource} from './opsmapOfficialAddressLookup.js';
 
 export const FIXED_COORDINATE_FILE = 'fixed-store-coordinates-v1.json';
 const SCHEMA = 'opsmap-fixed-store-coordinates-v1';
 const HASH = /^[a-f0-9]{64}$/;
 const CODE = /^[A-Z]\d{1,20}$/;
 const sources = new Set(['CUSTOMER_ORIGINAL','CUSTOMER_GPS_CACHE','CUSTOMER_GPS_BUILD','CUSTOMER_MAP_BUILD',
-  'HUB_ORIGINAL','ARCHIVE_MAP','HISTORICAL_GPS','MANUAL_STORE','SNAPSHOT','OFFICIAL_ADDRESS_DATA']);
+  'HUB_ORIGINAL','ARCHIVE_MAP','HISTORICAL_GPS','MANUAL_STORE','SNAPSHOT','OFFICIAL_ADDRESS_DATA','OPEN_ADDRESS_DATA']);
 const accuracy = {RAW_GPS:'UNVERIFIED', MANUAL_PIN:'MANUAL', DELIVERY_RECORDED:'UNVERIFIED',
   BUILDING_VERIFIED:'BUILDING', CORRECTED_ADDRESS_VERIFIED:'ADDRESS', ADDRESS_REPRESENTATIVE:'ADDRESS_APPROXIMATE'};
 const measurement = {RAW_GPS:'DELIVERY_COMPLETION_GPS', MANUAL_PIN:'DIRECT_SITE_MEASUREMENT',
@@ -18,7 +18,7 @@ const verifiedSources = {
   DIRECT_SITE_MEASUREMENT:new Set(['MANUAL_STORE']),
   BUILDING_LOCATION:new Set(['OFFICIAL_ADDRESS_DATA','MANUAL_STORE']),
   CORRECTED_ADDRESS_CONFIRMED:new Set(['OFFICIAL_ADDRESS_DATA','MANUAL_STORE']),
-  ADDRESS_LOCATION:new Set(['OFFICIAL_ADDRESS_DATA'])
+  ADDRESS_LOCATION:new Set(['OFFICIAL_ADDRESS_DATA','OPEN_ADDRESS_DATA'])
 };
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
@@ -43,7 +43,8 @@ function checkPoint(row, code) {
       !sources.has(row.evidenceSource) || !validTime(row.observedAt) ||
       legacy && ['BUILDING_VERIFIED','CORRECTED_ADDRESS_VERIFIED'].includes(row.coordinateSource) ||
       row.coordinateSource === 'ADDRESS_REPRESENTATIVE' && !hasDataset ||
-      hasDataset && (row.evidenceSource !== 'OFFICIAL_ADDRESS_DATA' || !approvedOfficialAddressSource(row.sourceDataset) ||
+      row.evidenceSource === 'OPEN_ADDRESS_DATA' && row.coordinateSource !== 'ADDRESS_REPRESENTATIVE' ||
+      hasDataset && (!approvedFixedAddressSource(row.evidenceSource,row.sourceDataset) ||
         !HASH.test(row.sourceDatasetSha256)) ||
       !legacy && (!validTime(row.verifiedAt) || Date.parse(row.verifiedAt) < Date.parse(row.observedAt) ||
         row.measurementKind !== measurement[row.coordinateSource] ||

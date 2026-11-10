@@ -103,6 +103,7 @@ export function createCoveragePanel({ workspace, header }) {
     </aside>
     <section class="coverage-map-area" aria-label="배송 관측 격자 지도">
       <div id="coverageMap"></div>
+      <a class="open-coordinate-credit" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">일부 주소 위치 © OpenStreetMap contributors</a>
       <div id="coverageMapSummary" class="coverage-map-summary" hidden>
         <p id="coverageMapCount"></p>
         <div class="coverage-legend" aria-label="지도 범례"><span data-tone="candidate">미배송 후보</span><span data-tone="delivery">배송 이력</span><span data-tone="unknown">자료 부족</span><span data-tone="empty">확인 공백</span></div>

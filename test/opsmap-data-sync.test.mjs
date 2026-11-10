@@ -143,8 +143,9 @@ def postal(number, lot, building):
     return '|'.join(fields)
 first='1'*24+'1'
 second='1'*24+'2'
+third='1'*24+'3'
 with zipfile.ZipFile(root/'postal.zip','w') as archive:
-    archive.writestr('region.txt','건물관리번호\\n'+postal('20','220',first)+'\\n'+postal('30','330',second)+'\\n')
+    archive.writestr('region.txt','건물관리번호\\n'+postal('20','220',first)+'\\n'+postal('30','330',second)+'\\n'+postal('40','440',third)+'\\n')
 with zipfile.ZipFile(root/'business.zip','w') as archive:
     header='건물관리번호,도로명주소,지번주소,위도,경도,건물명\\n'
     archive.writestr('region.csv',header+first+',경기도 오산시 예시로 20,경기도 오산시 테스트동 220,37.16,127.06,상가\\n'+
@@ -157,14 +158,40 @@ with zipfile.ZipFile(root/'business.zip','w') as archive:
     '--postal',path.join(root,'postal.zip'),'--business',path.join(root,'business.zip'),'--elevator',path.join(root,'elevator.csv'),
     '--business-date','2026-09-30','--elevator-date','2025-12-12'],{encoding:'utf8'});
   assert.equal(built.status,0,built.stderr);
-  const config = {file:database,sha256:syncSha256(await fs.readFile(database))};
+  const malformed = '경기도 오산시 예시로';
+  const reviewedFile = path.join(root,'reviewed-addresses.private.json');
+  const reviewed = JSON.stringify({schema:'opsmap-reviewed-public-addresses-v1',rows:[
+    {customerCode:'T99022',addressHash:coordinateAddressHash(malformed),correctedAddress:'경기도 오산시 예시로 30',
+      buildingSha256:syncSha256('1'.repeat(24)+'2')},
+    {customerCode:'T99024',addressHash:coordinateAddressHash(malformed),correctedAddress:'경기도 오산시 예시로 30',
+      buildingSha256:'0'.repeat(64)}
+  ]});
+  await fs.writeFile(reviewedFile,reviewed,{mode:0o600});
+  const databaseSha = syncSha256(await fs.readFile(database));
+  const openAddress = '경기도 오산시 예시로 40';
+  const openFile = path.join(root,'reviewed-open-points.private.json');
+  const open = JSON.stringify({schema:'opsmap-reviewed-open-building-points-v1',baseCatalogSha256:databaseSha,
+    license:'ODbL-1.0',datasetSha256:'a'.repeat(64),datasetDate:'2026-09-01',rows:[
+      {customerCode:'T99025',addressHash:coordinateAddressHash(openAddress),status:'NO_LICENSED_POINT',
+        buildingSha256:syncSha256('1'.repeat(24)+'3'),wayId:123,lat:37.18,lng:127.08}
+    ]});
+  await fs.writeFile(openFile,open,{mode:0o600});
+  const config = {file:database,sha256:databaseSha,reviewedAddresses:{file:reviewedFile,sha256:syncSha256(reviewed)},
+    reviewedOpenBuildings:{file:openFile,sha256:syncSha256(open)}};
+  await assert.rejects(openPublicAddressCatalog({...config,reviewedAddresses:{...config.reviewedAddresses,
+    sha256:'0'.repeat(64)}}),/PUBLIC_ADDRESS_REVIEW_DIGEST/);
   const catalog = await openPublicAddressCatalog(config);
   const directory = path.join(root,'publisher');
   await fs.mkdir(directory,{mode:0o700});
   const seed = await fixtureSeed(root);
   const road = customerRow('T99020','새 매장 A','경기 오산시 예시로 20 (2층 201호)');
   const lot = customerRow('T99021','새 매장 B','경기 오산시 테스트동 220 3층');
-  let rows = [road,lot];
+  const reviewedRow = customerRow('T99022','주소 보정 매장',malformed);
+  const unreviewedRow = customerRow('T99023','다른 매장',malformed);
+  const changedBuildingId = customerRow('T99024','건물 ID 불일치',malformed);
+  const openRow = customerRow('T99025','공개 도형 매장',openAddress);
+  const notMatched = customerRow('T99026','별도 고객코드',openAddress);
+  let rows = [road,lot,reviewedRow,unreviewedRow,changedBuildingId,openRow,notMatched];
   const deliveryId = syncSha256('new-customer-visit');
   const delivery = {date:day,sourceRows:1,unidentified:0,proofHash:syncSha256(day),completeCenters:['osan'],
     visits:[[deliveryId,lot.customerCode,'122','osan',archiveAddressHash(lot.basicAddress)]],
@@ -186,19 +213,37 @@ with zipfile.ZipFile(root/'business.zip','w') as archive:
     assert.equal(searchPreservedRegistry(row.basicAddress,snapshot.snapshot).data[0].lat,pins[i].lat);
   }
   assert.equal(archivedOpsmapAssignments(delivery,snapshot).data[0].lat,pins[1].lat);
+  const reviewedPin = snapshot.ledger.records[reviewedRow.customerCode].at(-1).point;
+  assert.equal(reviewedPin.addressHash,coordinateAddressHash(malformed));
+  assert.equal(reviewedPin.lat,37.17);
+  assert.equal(reviewedPin.coordinateAccuracy,'ADDRESS_APPROXIMATE');
+  assert(!snapshot.ledger.records[unreviewedRow.customerCode]);
+  assert(!snapshot.ledger.records[changedBuildingId.customerCode]);
+  const openPin = snapshot.ledger.records[openRow.customerCode].at(-1).point;
+  assert.equal(openPin.evidenceSource,'OPEN_ADDRESS_DATA');
+  assert.equal(openPin.coordinateAccuracy,'ADDRESS_APPROXIMATE');
+  assert.equal(searchPreservedRegistry(openRow.customerCode,snapshot.snapshot).data[0].lat,37.18);
+  assert(!snapshot.ledger.records[notMatched.customerCode]);
   const h3 = await createShadowCoverageStore({directory:snapshot.coverage}).readPeriod(90);
   assert.equal(h3.index.sha256,first.generation);
   const cells = h3.catalog.stores.filter(row=>row.code===road.customerCode||row.code===lot.customerCode).map(row=>row.cell);
   assert.equal(cells.length,2);
   assert(cells[0] && cells[0]===cells[1]);
   assert.equal((await (await openOpsmapSyncGenerationStore(directory)).read()).ledger.sha256,snapshot.ledger.sha256);
-  rows = [{...road,basicAddress:'경기도 오산시 예시로 30'},lot];
+  rows = [{...road,basicAddress:'경기도 오산시 예시로 30'},lot,{...reviewedRow,basicAddress:'경기도 오산시 예시로 20'},
+    unreviewedRow,changedBuildingId,{...openRow,basicAddress:'경기도 오산시 예시로 20'},notMatched];
   await worker.sync();
   const moved = (await worker.read()).ledger.records[road.customerCode];
   assert.equal(moved.length,2);
   assert.deepEqual(moved[0].point,pins[0]);
   assert.equal(moved[1].point.coordinateAccuracy,'BUILDING');
   assert.equal(moved[1].point.lat,37.17);
+  const movedReview = (await worker.read()).ledger.records[reviewedRow.customerCode];
+  assert.deepEqual(movedReview[0].point,reviewedPin);
+  assert.equal(movedReview[1].point.lat,37.16);
+  const movedOpen = (await worker.read()).ledger.records[openRow.customerCode];
+  assert.deepEqual(movedOpen[0].point,openPin);
+  assert.equal(movedOpen[1].point.lat,37.16);
   assert.equal((await worker.sync()).state,'NOOP');
 });
 

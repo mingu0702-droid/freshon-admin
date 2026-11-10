@@ -151,6 +151,7 @@ export function mountVehiclePrintUi({win=window,doc=document,bridge=win.MapUiLoc
   make('p','기준일 '+data.date+' · '+data.basisLabel+' · 매장 '+data.stores.length+'곳 · 위치 '+data.locatedCount+'곳 / 미확인 '+data.unlocatedCount+'곳',section);
   make('p',data.note+(data.checkedAt?' 기준호차 확인시각 '+data.checkedAt+(data.stale?' · 이전 확인값, 현재 기준 미확인':''):'')+' 주소·매장명은 현재 확인된 매장정보를 포함합니다.',section);
   const host=make('div',undefined,section);host.className='print-map';const note=make('p','지도 준비 중',section);note.className='print-map-note';
+  make('p','일부 주소 위치 © OpenStreetMap contributors · https://www.openstreetmap.org/copyright',section);
   const table=make('table',undefined,section),head=make('thead',undefined,table),hr=make('tr',undefined,head);for(const value of ['목록','방문 순서','고객코드','매장명','주소'])make('th',value,hr);
   const body=make('tbody',undefined,table);for(const [i,row] of data.stores.entries()){const tr=make('tr',undefined,body);for(const v of [i+1,row.order??'미확정',row.customerCode,row.customerName||'매장명 미확인',row.address||'주소 미확인'])make('td',v,tr);}
   drawMap(host,data,note,id);

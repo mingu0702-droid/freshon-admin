@@ -1,7 +1,7 @@
 // Pure deterministic completion from an approved official index; no network or source writes.
 import {createHash} from 'node:crypto';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
-import {approvedOfficialAddressSource, officialAddressKey} from './opsmapOfficialAddressLookup.js';
+import {approvedFixedAddressSource, officialAddressKey} from './opsmapOfficialAddressLookup.js';
 import {hasFixedCoordinatePoint,createFixedCoordinateResolver,reviseFixedCoordinateLedger,
   validateFixedCoordinateLedger} from './fixedStoreCoordinates.js';
 const sha=v=>createHash('sha256').update(v).digest('hex');
@@ -39,13 +39,15 @@ export async function completeFixedCoordinatesFromCatalog(options, catalog) {
   const rows = createFixedCoordinateResolver(ledger,{manualRows}).join(stores);
   const manualCodes = new Set(manualRows.map(row=>row.customerCode));
   const addresses = new Set();
+  const customers = [];
   for (const row of rows) {
     const address = addressOf(row);
     if (row.registered !== false && !protectedPoint(row,manualCodes) && needsCoordinate(row) && validAddress(address)) {
       addresses.add(address);
+      customers.push({customerCode:row.customerCode || row.code,address});
     }
   }
-  return completeFixedCoordinates({...options,index:await catalog.resolveMany([...addresses])});
+  return completeFixedCoordinates({...options,index:await catalog.resolveMany([...addresses],customers)});
 }
 
 export function completeFixedCoordinates({stores,ledger,index,manualRows=[],now=Date.now,maxChanges=1000}={}) {
@@ -76,15 +78,15 @@ export function completeFixedCoordinates({stores,ledger,index,manualRows=[],now=
       record(code,hash,'PRESERVED_EXISTING');continue;
     }
     if(rows.length+replacements.length>=maxChanges){record(code,hash,'DEFERRED_BATCH_LIMIT');continue;}
-    const evidence=index.resolve(address);
+    const evidence=index.resolve(address,code);
     if(!evidence){record(code,hash,index.status?.(address) || 'PENDING_OFFICIAL_COVERAGE');continue;}
     const key=officialAddressKey(address), observedAt=evidence.datasetDate+'T00:00:00.000Z';
     const fromCatalog=Object.hasOwn(evidence,'customerAddressHash');
     const addressLocation=evidence.measurementKind==='ADDRESS_LOCATION';
     const matchesAddress=fromCatalog
-      ? evidence.customerAddressHash===hash && approvedOfficialAddressSource(evidence.sourceDataset)
-      : key && evidence.addressSha256===sha(key);
-    if(!matchesAddress||evidence.evidenceSource!=='OFFICIAL_ADDRESS_DATA'||
+      ? evidence.customerAddressHash===hash && approvedFixedAddressSource(evidence.evidenceSource,evidence.sourceDataset)
+      : evidence.evidenceSource==='OFFICIAL_ADDRESS_DATA' && key && evidence.addressSha256===sha(key);
+    if(!matchesAddress||evidence.evidenceSource==='OPEN_ADDRESS_DATA'&&!addressLocation||
        !(evidence.measurementKind==='BUILDING_LOCATION'||fromCatalog&&addressLocation)||
        ![evidence.buildingSha256,evidence.datasetSha256,evidence.indexSha256].every(v=>HASH.test(v||''))||
        typeof evidence.lat!=='number'||typeof evidence.lng!=='number'||!hasFixedCoordinatePoint(evidence)||
@@ -93,7 +95,7 @@ export function completeFixedCoordinates({stores,ledger,index,manualRows=[],now=
        Date.parse(observedAt)>Date.parse(updatedAt))throw Error('FIXED_COMPLETION_EVIDENCE');
     const point={customerCode:code,addressHash:hash,lat:evidence.lat,lng:evidence.lng,
       coordinateSource:addressLocation?'ADDRESS_REPRESENTATIVE':'BUILDING_VERIFIED',
-      coordinateAccuracy:addressLocation?'ADDRESS_APPROXIMATE':'BUILDING',evidenceSource:'OFFICIAL_ADDRESS_DATA',
+      coordinateAccuracy:addressLocation?'ADDRESS_APPROXIMATE':'BUILDING',evidenceSource:evidence.evidenceSource,
       evidenceSha256:digest({customerCode:code,addressHash:hash,...evidence}),observedAt,verifiedAt:updatedAt,
       measurementKind:evidence.measurementKind,
       ...(fromCatalog?{sourceDataset:evidence.sourceDataset,sourceDatasetSha256:evidence.datasetSha256}:{})};
@@ -103,7 +105,7 @@ export function completeFixedCoordinates({stores,ledger,index,manualRows=[],now=
       if(previous.coordinateSource==='MANUAL_PIN'){record(code,hash,'PRESERVED_MANUAL');continue;}
       replacements.push({point,expectedAddressHash:previous.addressHash,currentAddressHash:hash});
       record(code,hash,'ADDRESS_CHANGED_REBOUND');
-    }else{rows.push(point);record(code,hash,'RESOLVED_OFFICIAL');}
+    }else{rows.push(point);record(code,hash,evidence.evidenceSource==='OPEN_ADDRESS_DATA'?'RESOLVED_OPEN_BUILDING':'RESOLVED_OFFICIAL');}
     // Equal coordinates are not duplicate customers. Each address/building
     // identity above is independently verified; stores retain separate codes.
   }

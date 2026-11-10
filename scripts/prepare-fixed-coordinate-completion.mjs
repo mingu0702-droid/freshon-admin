@@ -31,7 +31,9 @@ async function main(){
   if (config.publicAddressCatalog) {
     const source = await openPublicAddressCatalog(config.publicAddressCatalog,{appRoot});
     candidate = await completeFixedCoordinatesFromCatalog(options,source);
-    sourceDigest = {publicAddressCatalogSha256:config.publicAddressCatalog.sha256};
+    sourceDigest = {publicAddressCatalogSha256:config.publicAddressCatalog.sha256,
+      ...(config.publicAddressCatalog.reviewedAddresses ? {addressReviewSha256:config.publicAddressCatalog.reviewedAddresses.sha256} : {}),
+      ...(config.publicAddressCatalog.reviewedOpenBuildings ? {openBuildingReviewSha256:config.publicAddressCatalog.reviewedOpenBuildings.sha256} : {})};
   } else {
     const indexBytes = await privateFile(config.officialIndexFile,512*1024);
     const index = createOfficialAddressLookup(indexBytes,{sha256:config.officialIndexSha256});
