@@ -143,7 +143,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   if(stage.RENDER_SERVICE_ID===STAGE_SERVICE) {
     try {
       preservedOfficialIndex=createOfficialAddressLookup(readFileSync('/etc/secrets/opsmap-stage-official-address-index-v2.json'),{
-        sha256:'8631bb03fe3cdcc2704bd0d1c65d4df0c776b07ea2610b96a2ff5e4b2b3d776c',allowMixed:true
+        // The two stored matches are bound to the approved A ledger and original 58-row addresses.
+        sha256:'85c1ea71bd58cbdea3ede8940a23a6d6779d7f4bee1c412836959e3d4b17951d',allowMixed:true,allowStored:true
       });
     } catch(error) {
       if(error.code!=='ENOENT') console.warn(JSON.stringify({component:'stage-official-address-index',state:'REJECTED'}));

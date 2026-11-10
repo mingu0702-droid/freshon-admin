@@ -81,6 +81,7 @@ export function resolvePreservedAddressBatch(rows,snapshot,officialIndex){
   if(!official)return {status:officialIndex?'ADDRESS_NOT_MATCHED':'OFFICIAL_ADDRESS_INDEX_UNAVAILABLE'};
   const points=(official.points||[[official.lat,official.lng]]).map(([lat,lng])=>safePoint({lat,lng})).filter(Boolean);
   if(official.kind==='CHOOSE'&&points.length>1)return {status:'OFFICIAL_ADDRESS_AMBIGUOUS',points};
+  if(official.coordinateKind==='STORED'&&points.length===1)return {status:'STORED',point:{...points[0],coordinateSource:'STAGE_PRESERVED_COORDINATE'}};
   if((!official.kind||official.kind==='EXACT')&&points.length===1)return {status:'OFFICIAL',point:{...points[0],
     coordinateSource:official.coordinateKind==='PARCEL'?'OFFICIAL_PUBLIC_PARCEL':official.coordinateKind==='ADDRESS'?'OFFICIAL_PUBLIC_ADDRESS':'OFFICIAL_PUBLIC_BUILDING'}};
   return {status:'OFFICIAL_COORDINATE_UNVERIFIED'};

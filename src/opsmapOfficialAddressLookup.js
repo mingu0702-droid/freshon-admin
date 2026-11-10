@@ -30,7 +30,7 @@ export function officialAddressKey(value) {
   return [aliases.get(province) || province, ...parts].join('');
 }
 
-export function createOfficialAddressLookup(buffer, {sha256: expected, allowMixed = false} = {}) {
+export function createOfficialAddressLookup(buffer, {sha256: expected, allowMixed = false, allowStored = false} = {}) {
   if (!Buffer.isBuffer(buffer) || buffer.length > 512 * 1024 || !digest.test(expected || '') || sha256(buffer) !== expected) {
     throw Error('OFFICIAL_ADDRESS_INDEX_DIGEST');
   }
@@ -43,8 +43,9 @@ export function createOfficialAddressLookup(buffer, {sha256: expected, allowMixe
     throw Error('OFFICIAL_ADDRESS_INDEX_SCHEMA');
   }
   const rows = new Map();
+  const kinds = allowStored ? ['BUILDING','ADDRESS','PARCEL','STORED'] : ['BUILDING','ADDRESS','PARCEL'];
   for (const row of index.rows) {
-    if (!row || Object.keys(row).length !== (mixed?5:4) || mixed && !['BUILDING','ADDRESS','PARCEL'].includes(row.coordinateKind) || !digest.test(row.addressSha256 || '') ||
+    if (!row || Object.keys(row).length !== (mixed?5:4) || mixed && !kinds.includes(row.coordinateKind) || !digest.test(row.addressSha256 || '') ||
         !digest.test(row.buildingSha256 || '') || typeof row.lat !== 'number' || typeof row.lng !== 'number' ||
         row.lat < 33 || row.lat > 39.5 || row.lng < 124 || row.lng > 132 || rows.has(row.addressSha256)) {
       throw Error('OFFICIAL_ADDRESS_INDEX_ROW');
