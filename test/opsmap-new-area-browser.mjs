@@ -10,9 +10,12 @@ import XLSX from 'xlsx';
 const base=path.resolve('public/opsmap'),app=express();
 const html=fs.readFileSync(path.join(base,'map-phase2b-preview.html'),'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'');
 const row={customerCode:'S990001',customerName:'합성 배송처',address:'경기도 화성시 합성로 1',lat:37.2,lng:127,deliveryPattern:'월수금',lastDeliveryDate:'2026-11-02'};
+const version='a'.repeat(64),checkedAt='2026-09-24T04:37:59.102Z',basis='FIXED_DISPATCH_PRIMARY';
+const assignment={customerCode:row.customerCode,baseVehicle:'101',baseVehicleGroup:'osan',baseVehicleState:'VERIFIED_MASTER',
+  weekdays:{Mon:'101',Wed:'122'},baseVehicleSource:basis,baseVehicleVersion:version,baseVehicleCheckedAt:checkedAt,baseVehicleStale:true};
 app.get('/',(_q,r)=>r.send(html));
 app.get('/api/map-phase2b/preview/snapshot',(_q,r)=>r.json({data:[row],meta:{complete:true,latestDate:'2026-11-02'}}));
-app.post('/api/map-phase2b/preview/base-vehicles',(_q,r)=>r.json({data:[{customerCode:row.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER'}],meta:{stale:false,refresh:'IDLE'}}));
+app.post('/api/map-phase2b/preview/base-vehicles',(_q,r)=>r.json({ok:true,data:[assignment],meta:{basis,version,checkedAt,stale:true}}));
 app.use('/opsmap',express.static(base));
 app.use(express.static(base));
 const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
@@ -30,8 +33,8 @@ try{
   for(const name of ['phase2b-ui-helpers.js','map-period-ui.js','manual-waypoints.js','new-area-requests.js'])await page.addScriptTag({path:path.join(base,name)});
   await page.addScriptTag({path:path.resolve('node_modules/xlsx/dist/xlsx.full.min.js')});
   const runtime=fs.readFileSync(path.join(base,'map-phase2b-runtime.js'),'utf8');
-  await page.addScriptTag({content:runtime.replace('\n  initVehicles();',`\n  window.newAreaBrowser={setup(){baseVehicles.set('S990001',{baseVehicle:'101'});state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';dateReady=false;periodRows=[${JSON.stringify(row)}];periodMeta={startDate:state.rangeStart,endDate:state.rangeEnd,complete:false,displayComplete:true,coverageComplete:false};},setJudge:fn=>judgeNewAreaRow=fn,realJudge:judgeNewAreaRow,enableMapClick(){state.map={};$('#map').onclick=()=>searchTemporaryClick?.({latLng:{getLat:()=>37.2,getLng:()=>127}});}};\n  initVehicles();`)});
-  await page.waitForFunction(()=>window.MapUiLocalBridge?.stores().length===1);
+  await page.addScriptTag({content:runtime.replace('\n  initVehicles();',`\n  window.newAreaBrowser={setup(){state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';},setJudge:fn=>judgeNewAreaRow=fn,realJudge:judgeNewAreaRow,enableMapClick(){state.map={};$('#map').onclick=()=>searchTemporaryClick?.({latLng:{getLat:()=>37.2,getLng:()=>127}});}};\n  initVehicles();`)});
+  await page.waitForFunction(()=>window.MapUiLocalBridge?.stores().length===1&&!!window.MapUiLocalBridge.fixedTerritoryMasterState()?.version);
   await page.addScriptTag({path:path.join(base,'map-approved-shell-candidate.js')});
   await page.evaluate(()=>window.newAreaBrowser.setup());
   for(const width of [1440,390]){
@@ -40,9 +43,10 @@ try{
     await page.locator('#newAreaBatchInput').fill('S990001\t"합성 고객\n상세주소"\n대구광역시 동구 합성로 2\t합성 고객2\n입력\t오류\t추가열');
     await page.locator('#judgeNewAreaBatch').click();await page.waitForFunction(()=>MapUiLocalBridge.state.newAreaResults.length===3);
     const rows=await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults);
-    assert.equal(rows[0].decision,'O');assert.equal(rows[0].evidenceCount,1);assert.equal(rows[0].deliveryDays,'월수금');assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
-    assert.match(await page.locator('#newAreaBatchResults').innerText(),/배송 가능 후보 \(O\)/);
-    assert.match(await page.locator('#newAreaBatchResults').innerText(),/30km 내 실제 운행호차 · 확인된 호차 없음/);
+    assert.equal(rows[0].decision,'O');assert.equal(rows[0].nearestDistanceMeters,0);assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
+    assert.match(await page.locator('#newAreaBatchResults').innerText(),/배송 가능 \(O\)/);
+    assert.match(await page.locator('#newAreaBatchResults').innerText(),/30km 내 참고 배차호차 · 2대 확인/);
+    assert.match(await page.locator('#newAreaBatchResults [data-area-nearest-weekdays]').first().innerText(),/101호 월 · 122호 수/);
     await page.locator('#newAreaApplyDate').fill('2026-11-02');await page.locator('#copyAreaDecision').click();
     assert.equal((await page.evaluate(()=>navigator.clipboard.readText())).split('\r\n').length,3);
     await page.locator('#copyAreaMatching').click();assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/합성 배송처/);

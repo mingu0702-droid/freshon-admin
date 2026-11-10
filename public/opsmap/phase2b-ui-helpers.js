@@ -93,16 +93,20 @@
   }
   function nearbyVehicleWeekdays(point, stops, maxRadius = 50) {
     const byVehicle = new Map(), distances = new Map();
-    for (const {customerCode,vehicle,center,mask,lat,lng} of stops) {
-      if (!vehicle || !Number.isInteger(mask) || mask<1 || mask>127) continue;
+    for (const stop of stops) {
+      const {customerCode,vehicle,center,mask,lat,lng}=stop;
+      if (!vehicle || !Number.isInteger(mask) || mask<0 || mask>127) continue;
       const key = customerCode+'|'+lat+'|'+lng;
       if (!distances.has(key)) distances.set(key,distanceKm(point,{lat,lng}));
       const distance = distances.get(key);
-      if (distance > maxRadius) continue;
+      if (!Number.isFinite(distance) || distance > maxRadius) continue;
       const identity = (center||'')+'|'+vehicle;
       let group = byVehicle.get(identity);
-      if (!group) byVehicle.set(identity,group={vehicle,center,distance,dayDistances:Array(7).fill(Infinity)});
-      group.distance = Math.min(group.distance,distance);
+      if (!group) byVehicle.set(identity,group={vehicle,center,distance,nearestStop:stop,dayDistances:Array(7).fill(Infinity)});
+      if (distance<group.distance || distance===group.distance&&customerCode<group.nearestStop.customerCode) {
+        group.distance=distance;
+        group.nearestStop=stop;
+      }
       for (let day=0;day<7;day++) if (mask & (1 << day)) group.dayDistances[day] = Math.min(group.dayDistances[day],distance);
     }
     return [...byVehicle.values()].sort((a,b)=>a.distance-b.distance||a.vehicle.localeCompare(b.vehicle,'ko',{numeric:true}));

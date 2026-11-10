@@ -361,7 +361,9 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
     if (!prepared?.nearby) return res.status(503).json({error:'STAGE_NEARBY_NOT_READY'});
     if (req.query.generation && req.query.generation!==prepared.generation) return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
     const codes = [...prepared.registry.values()].filter(store => store.hasPoint).map(store => store.code);
-    const [fixed,vehicles] = await Promise.all([readBaseVehicles?.(codes).catch(() => null),readVehicleDays(prepared)]);
+    const [fixed,vehicles] = await Promise.all([
+      req.query.view==='observed' ? null : readBaseVehicles?.(codes).catch(() => null),readVehicleDays(prepared)
+    ]);
     return requireStaff(req, res, () => {
       if (validation.active() !== prepared) return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
       const {observedDates:_dates,...archive}=prepared.nearby;

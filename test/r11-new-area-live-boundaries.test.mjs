@@ -29,7 +29,7 @@ function fixture({rows=[],customer=()=>({data:[],meta:{complete:true}}),lookup=(
     const payload=await customer(query);
     return {ok:payload.ok!==false,status:payload.ok===false?503:200,headers:{get(){return null;}},json:async()=>payload};
   };
-  const context=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:node('body')},
+  const context=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:{dataset:{}}},
     MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,
     location:{href:'https://example.invalid/opsmap/'},fetch,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
   vm.runInContext(exposed,context);window.qa.setup(rows);
@@ -73,17 +73,16 @@ test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with n
   for(const [i,row] of f.state.newAreaResults.entries()){
     assert.equal(row.originalAddress,cells[i].x);assert.equal(row.originalCustomer,cells[i].y);
     assert.equal(row.address,cells[i].x.trim());assert.equal(row.customer,cells[i].y);assert.equal(row.decision,'O');
-    assert.equal(row.lookupStatus,'SUCCESS');assert.equal(row.storedNearbyCount,1);
-    assert.equal(row.nearestStoreCode,saved.customerCode);assert.equal(row.actualVehicles.length,0);
-    assert.equal(row.eligibilityBasis,'FIXED_REGISTRY_500M');assert.match(row.dataLimits,/전체 기간 비교 미완료/);
-    assert.equal(row.evidenceCount,0);assert.equal(row.deliveryDays,'');
+    assert.equal(row.lookupStatus,'SUCCESS');assert.equal(row.nearestDistanceMeters,0);
+    assert.equal(row.nearestStoreCode,saved.customerCode);assert.equal(row.dispatchVehicles.length,0);
+    assert.equal(row.eligibilityBasis,'FIXED_REGISTRY_500M');assert.equal(row.nearestDispatchLabel,'미확인');
     assert.equal(f.queries[i],`경기도 화성시 합성로 ${i+100}`);assert.equal(f.headers[i],f.queries[i]);
   }
   const exported=globalThis.MapPeriodUi.areaExportRows(f.state.newAreaResults,'2026-11-03');
   assert.deepEqual(Array.from(exported,row=>Array.from(row).slice(0,2)),cells.map(({x,y})=>[x,y]));
   assert.match(f.node('#newAreaBatchStatus').textContent,/완료 60 · 위치 확인 60 · 보류 0 · 실패 0 · 한도대기 0/);
   assert.match(f.node('#newAreaBatchResults').innerHTML,/가장 가까운 등록 매장\(직선거리\)/);
-  assert.match(f.node('#newAreaBatchResults').innerHTML,/실제 운행호차 · 확인된 호차 없음/);
+  assert.match(f.node('#newAreaBatchResults').innerHTML,/참고 배차호차 · 확인된 호차 없음/);
   assert.equal(JSON.stringify(f.saved()),original,'REST coordinates never mutate the saved snapshot');
 });
 

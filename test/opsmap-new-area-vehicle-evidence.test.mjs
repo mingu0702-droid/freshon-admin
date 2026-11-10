@@ -45,20 +45,30 @@ test('legacy authenticated generations single-flight sealed day reads and retry 
   assert.equal(reads,4);
 });
 
-test('30/40/50km includes every actual vehicle and only weekday stops inside the selected radius',()=>{
+test('30/40/50km includes every reference vehicle and only weekday stops inside the selected radius',()=>{
   const {nearbyVehicleWeekdays,vehiclesAtRadius}=globalThis.Phase2bUi;
   const point={lat:37,lng:127};
   const stop=(vehicle,lat,mask,center='osan')=>({vehicle,lat,lng:127,mask,center,customerCode:'S'+String(lat*10000)});
   const groups=nearbyVehicleWeekdays(point,[
     ...Array.from({length:7},(_,i)=>stop(String(101+i),37.01+i/100,2)),
     stop('101',37.30,4),stop('122',37.32,8),stop('202',37.41,64),stop('203',37.51,16),
-    stop('101',37.11,64,'honam')
+    stop('101',37.11,64,'honam'),stop('106',37.005,0)
   ]);
   const at30=vehiclesAtRadius(groups,30),at40=vehiclesAtRadius(groups,40),at50=vehiclesAtRadius(groups,50);
   assert.deepEqual([at30.length,at40.length,at50.length],[8,9,10]);
   assert.deepEqual(at30.find(item=>item.vehicle==='101'&&item.center==='osan').weekdays,['월']);
   assert.deepEqual(at40.find(item=>item.vehicle==='101'&&item.center==='osan').weekdays,['월','화']);
   assert.deepEqual(at50.find(item=>item.vehicle==='101'&&item.center==='honam').weekdays,['토']);
-  assert.ok(at30[0].distance>1 && at30[0].distance<1.12);
+  assert.equal(at30[0].vehicle,'106');
+  assert.equal(at30[0].nearestStop.lat,37.005);
+  assert.deepEqual(at30[0].weekdays,['월']);
   assert.ok(!at50.some(item=>item.vehicle==='203'));
+});
+
+test('a verified primary assignment without weekdays still has a reference pin',()=>{
+  const {nearbyVehicleWeekdays,vehiclesAtRadius}=globalThis.Phase2bUi;
+  const point={lat:37,lng:127},stop={...point,customerCode:'S990001',vehicle:'101',center:'osan',mask:0};
+  const [result]=vehiclesAtRadius(nearbyVehicleWeekdays(point,[stop]),30);
+  assert.equal(result.nearestStop,stop);
+  assert.deepEqual(result.weekdays,[]);
 });

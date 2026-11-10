@@ -11,16 +11,20 @@ import {batchDomNode,batchDomTemplate} from './fixtures/new-area-dom.mjs';
 const source = fs.readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js',import.meta.url),'utf8');
 const exposure = `
   window.test={state,judgeNewAreaPoint,judgeNewAreaRow,runNewArea,clearNewAreaBatch,exportNewArea,
-    setup(rows=[],meta={},snapshot=[]){state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';dateReady=false;
+    setup(rows=[],meta={},snapshot=rows){state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';dateReady=false;
       periodRows=rows;periodMeta={startDate:state.rangeStart,endDate:state.rangeEnd,complete:false,...meta};
       latestSnapshotRows=snapshot;allStores=rows;storesByCode.clear();coordinateByCode.clear();
       for(const row of [...snapshot,...rows]){storesByCode.set(row.customerCode,row);coordinateByCode.set(row.customerCode,row);}
-      for(const row of rows)if(row.vehicle)baseVehicles.set(row.customerCode,{baseVehicle:row.vehicle});},
+      baseVehicles.clear();baseVehicleMeta=null;},
+    assign(rows){baseVehicles=new Map(rows.map(row=>[row.customerCode,row]));baseVehicleMeta={checkedAt:'2026-09-24T04:37:59.102Z',stale:true};},
+    waitForAssignment(result){baseVehicleRequest=result.then(rows=>{window.test.assign(rows);baseVehicleRequest=null;});return baseVehicleRequest;},
     ready(){dateReady=true;},generation(value){snapshotMeta={source:'STAGE_VERIFIED_REGISTRY',sourceGeneration:value};},manual:point=>manualDraft.add(point),
     setJudge:fn=>judgeNewAreaRow=fn};
 })();`;
 export const newAreaTestRuntime = source.slice(0,source.indexOf('\n  initVehicles();')) + exposure;
 const near = {customerCode:'S990001',customerName:'합성 인근 배송처',address:'경기도 화성시 합성로 1',lat:37.2,lng:127,vehicle:'101',deliveryPattern:'월수금',lastDeliveryDate:'2026-11-02'};
+const assigned={customerCode:near.customerCode,baseVehicle:'101',baseVehicleGroup:'osan',
+  baseVehicleState:'VERIFIED_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'};
 const completed={...near,history:[
   {kind:'COMPLETED',vehicle:'101',center:'osan',deliveryDate:'2026-11-02',address:near.address},
   {kind:'ASSIGNED',vehicle:'122',center:'osan',deliveryDate:'2026-10-31',address:near.address},
@@ -32,65 +36,67 @@ function fixture({location,fetch} = {}) {
   let calls=0;
   const window={addEventListener(){},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,KAKAO_MAP_CONFIG:{allowExternalAddressLookup:false},kakaoGeocoder:{addressSearch(){calls++;throw Error('EXTERNAL_LOOKUP_FORBIDDEN');}}};
   window.location=location;
-  const ctx=vm.createContext({window,location,fetch,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:node('body')},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
+  const ctx=vm.createContext({window,location,fetch,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:{dataset:{}}},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
   vm.runInContext(newAreaTestRuntime,ctx);
   return {...window.test,node,externalCalls:()=>calls,window};
 }
-test('a partial period keeps positive completed-delivery evidence and explicit exclusions',()=>{
-  const f=fixture();f.setup([completed],{segmented:true,displayComplete:true,aggregateComplete:false,coverageComplete:false});
-  const row=f.judgeNewAreaPoint({address:'경기도 화성시 합성로 2'},{lat:37.201,lng:127});
-  assert.equal(row.decision,'O');assert.equal(row.evidenceCount,1);assert.equal(row.deliveryDays,'월수금');
-  assert.equal(row.possibleWeekdays.join(''),'월');assert.match(row.dataLimits,/전체 기간 비교 미완료/);
-  assert.deepEqual(Array.from(Phase2bUi.vehiclesAtRadius(row.actualVehicles,30),item=>[item.vehicle,item.weekdays.join('')]),[['101','월']]);
-  assert.equal(f.judgeNewAreaPoint({address:'제주특별자치도 합성로 1'},null).reason,'제주도');
-  assert.equal(f.judgeNewAreaPoint({address:'서울특별시 합성아파트 101동 102호'},{lat:37.5,lng:127}).reason,'아파트');
-  assert.equal(f.judgeNewAreaPoint({address:'서울특별시 합성로 1',customer:'동선외'},{lat:37.5,lng:127}).decision,'X');
-  assert.equal(f.judgeNewAreaPoint({address:'서울특별시 합성상가 101동 102호'},{lat:37.5,lng:127}).decision,'검토');
-});
-test('500 m includes an undelivered fixed registration without inventing weekdays',()=>{
+test('500 m includes an undelivered fixed registration and preserves legacy exclusions',()=>{
   const f=fixture();f.setup([],{},[{...near,lastDeliveryDate:''}]);f.generation('a'.repeat(64));
   const at=meters=>({lat:near.lat+meters/6371000*180/Math.PI,lng:near.lng});
   const request={address:'경기도 화성시 합성로 2'};
   const qualifies=f.judgeNewAreaPoint(request,at(500));
   assert.equal(qualifies.decision,'O');assert.equal(qualifies.eligibilityBasis,'FIXED_REGISTRY_500M');
   assert.equal(qualifies.nearestDistanceMeters,500);assert.equal(qualifies.nearestStoreCode,near.customerCode);
-  assert.equal(qualifies.possibleWeekdays.length,0);assert.equal(qualifies.actualVehicles.length,0);
+  assert.equal(qualifies.nearestDispatchLabel,'미확인');assert.equal(qualifies.dispatchVehicles.length,0);
   assert.match(qualifies.evidence,/실제 수락·배송일 별도 확인/);
-  assert.equal(f.judgeNewAreaPoint(request,at(500.1)).decision,'검토');
-  assert.equal(f.judgeNewAreaPoint({address:'경기도 화성시 합성아파트',customer:'101동 102호'},at(383)).decision,'X');
-  assert.equal(f.judgeNewAreaPoint({...request,customer:'동선외'},at(218)).decision,'X');
-  assert.equal(f.judgeNewAreaPoint({address:'제주특별자치도 합성로 2'},at(218)).decision,'X');
+  assert.equal(f.judgeNewAreaPoint(request,at(500.1)).decision,'검토','do not compare rounded meters');
+  for(const [row,reason] of [
+    [{address:'경기도 화성시 합성아파트',customer:'101동 102호'},'아파트'],
+    [{...request,customer:'동선외'},'배송동선 맞지않음'],
+    [{address:'제주특별자치도 합성로 2'},'제주도']
+  ]){
+    assert.equal(f.judgeNewAreaPoint(row,at(383)).decision,'X');
+    assert.equal(f.judgeNewAreaPoint(row,null).reason,reason);
+  }
   assert.equal(f.judgeNewAreaPoint(request,{...at(218),coordinateSource:'MAP_CLICK_TEMPORARY'}).decision,'검토');
+  assert.equal(f.judgeNewAreaPoint({address:'S990001'},{...at(218),address:'제주특별자치도 합성로 2'}).reason,'제주도');
+  assert.equal(f.judgeNewAreaPoint({...request,customer:'합성상가 101동 102호'},at(218)).decision,'O');
+  const facility={...request,customer:'지하 하역장'};
+  assert.match(f.judgeNewAreaPoint(facility,at(218)).evidence,/차량 진입 별도 확인/);
+  assert.equal(f.judgeNewAreaPoint(facility,at(775)).reason,'차량 진입 확인 필요');
 });
-test('temporary registry coordinates cannot provide 500 m eligibility',()=>{
+test('temporary, invalid, deleted and delivery-only coordinates cannot provide 500 m eligibility',()=>{
   const f=fixture();
   f.setup([],{},[{...near,coordinateSource:'KAKAO_ADDRESS_LIVE'},
+    {...near,customerCode:'S990003',customerRegistryStatus:'DELETED'},
+    {...near,customerCode:'S990004',deliveryOnly:true},
+    {...near,customerCode:'S990005',coordinateStatus:'CONFLICT'},
+    {...near,customerCode:'S990006',lat:null},{...near,customerCode:'S990007',lat:0},
     {...near,customerCode:'S990002',lat:37.21,coordinateSource:'ADDRESS_REPRESENTATIVE'}]);
   const row=f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127});
   assert.equal(row.nearestStoreCode,'S990002');
   assert.equal(row.decision,'검토');
+  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:NaN,lng:127}).reason,'주소 확인 필요');
 });
-test('the original 1 km rule still uses completed visits and days outside 500 m',()=>{
-  const f=fixture();
-  f.setup([{...completed,deliveryPattern:'월화수목금토'}],{complete:true,coverageComplete:true,missingCoordinate:0});f.ready();
-  const qualified=f.judgeNewAreaPoint({address:near.address},{lat:37.207,lng:127});
-  assert.equal(qualified.decision,'O');assert.equal(qualified.possibleWeekdays.join(''),'월');assert.equal(qualified.deliveryDays,'');
-  assert.equal(qualified.eligibilityBasis,'OBSERVED_DELIVERY_1KM');
-  assert.match(qualified.evidence,/배송 수락 및 차량 진입은 별도 확인/);
-  const nearbyCandidate=f.judgeNewAreaPoint({address:near.address},{lat:37.201,lng:127});
-  assert.equal(nearbyCandidate.evidenceCount,1);assert.equal(nearbyCandidate.deliveryDays,'');
-  assert.equal(nearbyCandidate.possibleWeekdays.join(''),'월');
-  assert.equal(f.judgeNewAreaPoint({address:near.address,customer:'지하 하역장'},{lat:37.207,lng:127}).decision,'검토');
-  const facilityCandidate=f.judgeNewAreaPoint({address:near.address,customer:'지하 하역장'},{lat:37.201,lng:127});
-  assert.equal(facilityCandidate.decision,'O');assert.match(facilityCandidate.evidence,/차량 진입 별도 확인/);
-  assert.equal(f.judgeNewAreaPoint({address:'경상북도 안동시 합성로 1'},{lat:36.56,lng:128.73}).decision,'검토');
-  f.setup([completed],{complete:true,segmented:true,aggregateComplete:false,coverageComplete:false});f.ready();
-  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.207,lng:127}).decision,'O');
-  const out=f.judgeNewAreaPoint({address:near.address},{lat:37.212,lng:127});
-  assert.equal(out.decision,'검토');assert.equal(out.actualVehicles.length,1);
-  assert.match(out.evidence,/50km 내 실제 운행호차 1대 확인.*문의 주소까지 배송동선 미확인/);
+test('completed visits, archive coverage, and nearby dispatch vehicles cannot decide O/X',()=>{
+  const f=fixture(), request={address:'경기도 화성시 합성로 2'};
+  const fixed={...near,lastDeliveryDate:'',lat:37.2};
+  const point={lat:37.207,lng:127};
+  f.setup([],{},[fixed]);f.state.rangeStart='2026-08-05';
+  const before=f.judgeNewAreaPoint(request,point);
+  assert.equal(before.decision,'검토');
+  const archive={start:f.state.rangeStart,end:f.state.rangeEnd,days:76,unknownDays:14,vehicleStatus:'READY',
+    vehicles:[{...near,vehicle:'999',center:'osan',mask:2}],observed:[],fixed:[]};
+  f.setup([completed],{complete:true,coverageComplete:true},[fixed]);f.ready();
+  f.assign([{...assigned,weekdays:{Mon:'101',Tue:'122'}}]);
+  const after=f.judgeNewAreaPoint(request,point,{archive});
+  assert.equal(after.decision,before.decision);
+  assert.equal(after.evidence,before.evidence);
+  assert.equal(after.nearestDistanceMeters,778);
+  assert.deepEqual(Array.from(MapPeriodUi.areaDispatchVehicles(after,30),item=>[item.vehicle,item.weekdays.join('')]),[['101','월'],['122','화']]);
+  assert.equal(f.judgeNewAreaPoint(request,{lat:37.201,lng:127},{archive}).decision,'O');
 });
-test('nearest registered store can be an undelivered store outside the filtered delivery rows',()=>{
+test('nearest registered store comes from the fixed registry even when a period row is closer',()=>{
   const f=fixture();
   f.setup([near],{},[{...near,customerCode:'S990002',customerName:'배송 이력 없는 매장',lat:37.2015,lastDeliveryDate:''},
     {...near,customerCode:'S990003',customerName:'배송 전용',lat:37.2016,deliveryOnly:true}]);
@@ -98,38 +104,28 @@ test('nearest registered store can be an undelivered store outside the filtered 
   assert.equal(row.nearestStore,'배송 이력 없는 매장');
   assert.equal(row.nearestStoreCode,'S990002');assert.equal(row.nearestDistanceMeters,11);
 });
-test('14 unobserved days do not invalidate an address-bound completed route and weekday',()=>{
-  const f=fixture();f.setup([],{},[near]);f.state.rangeStart='2026-08-05';
-  const archive={start:f.state.rangeStart,end:f.state.rangeEnd,days:76,unknownDays:14,vehicleStatus:'READY',
-    observedByCenter:{osan:76,honam:0},vehicles:[{...near,vehicle:'202',center:'osan',mask:2}],observed:[],fixed:[]};
-  const point={lat:37.207,lng:127};
-  const judge=vehicleStatus=>f.judgeNewAreaPoint({address:near.address},point,{archive:{...archive,vehicleStatus}});
-  const recorded=judge('READY');
-  assert.equal(recorded.decision,'O');
-  assert.equal(recorded.possibleWeekdays.join(''),'월');
-  assert.equal(recorded.archiveContext.unknownDays,14);
-  assert.equal(judge('UNAVAILABLE').decision,'검토');
-});
-test('wrong-period rows never count, while dated snapshot delivery remains partial evidence',()=>{
-  const f=fixture();f.setup([{...near,customerCode:'S990009'}],{startDate:'2025-01-01'},[near,{...near,customerCode:'S990002',lastDeliveryDate:'2025-01-01'}]);
-  const row=f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127});assert.equal(row.evidenceCount,1);
-  assert.equal(row.eligibilityBasis,'FIXED_REGISTRY_500M');assert.equal(row.actualVehicles.length,0);
-});
-test('empty partial page still uses dated snapshot evidence and does not revive conflicted same-code rows',()=>{
-  const f=fixture();f.setup([],{complete:false},[near]);
-  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127}).evidenceCount,1);
-  f.setup([{...near,coordinateStatus:'CONFLICT'}],{complete:false},[near]);
-  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127}).evidenceCount,0);
-});
-test('conflicting, blank and out-of-country coordinates cannot become nearby evidence',()=>{
-  const f=fixture();f.setup([{...near,coordinateStatus:'CONFLICT'},{...near,lat:null},{...near,lat:0}]);
-  const row=f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127});assert.equal(row.evidenceCount,0);
-  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:NaN,lng:127}).reason,'주소 확인 필요');
+test('verified dispatch days stay with their weekday vehicle; an unknown day is not inferred',()=>{
+  const f=fixture();
+  f.setup([],{},[near]);
+  f.assign([{...assigned,weekdays:{Tue:'122',Sun:'202'}}]);
+  const row=f.judgeNewAreaPoint({address:near.address},{lat:near.lat,lng:near.lng});
+  assert.equal(row.decision,'O');
+  assert.deepEqual(Array.from(row.nearestDispatch,item=>[item.vehicle,MapPeriodUi.areaDispatchDays(item)]),
+    [['101','미확인'],['122','화'],['202','일']]);
+  const cells=MapPeriodUi.areaExportRows([row])[0];
+  assert.match(cells[6],/101호 · 122호 · 202호/);
+  assert.match(cells[12],/101호 .*미확인/);
+  assert.equal(cells[13],'101호 미확인 · 122호 화 · 202호 일');
+  f.assign([{...assigned,baseVehicleState:'CONFLICT'}]);
+  const unknown=f.judgeNewAreaPoint({address:near.address},{lat:near.lat,lng:near.lng});
+  assert.equal(unknown.decision,'O');assert.equal(unknown.dispatchVehicles.length,0);
+  f.assign([{...assigned,baseVehicle:'',baseVehicleState:'UNASSIGNED'}]);
+  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:near.lat,lng:near.lng}).nearestDispatchLabel,'미배정');
 });
 test('customer code, stored address and existing manual coordinate input require zero lookup calls',async()=>{
   const f=fixture();f.setup([near]);
-  assert.equal((await f.judgeNewAreaRow({address:near.customerCode,customer:''})).evidenceCount,1);
-  assert.equal((await f.judgeNewAreaRow({address:near.address,customer:''})).evidenceCount,1);
+  assert.equal((await f.judgeNewAreaRow({address:near.customerCode,customer:''})).nearestStoreCode,near.customerCode);
+  assert.equal((await f.judgeNewAreaRow({address:near.address,customer:''})).nearestStoreCode,near.customerCode);
   f.manual({label:'대구광역시 동구 합성로 2',lat:35.9,lng:128.65});
   assert.equal((await f.judgeNewAreaRow({address:'대구광역시 동구 합성로 2'})).coordinateSource,'MANUAL_WAYPOINT');
   const unknown=await f.judgeNewAreaRow({address:'서울특별시 영등포구 합성로 2'});assert.equal(unknown.reason,'주소 확인 필요');assert.equal(unknown.lookupError,undefined);
@@ -137,13 +133,13 @@ test('customer code, stored address and existing manual coordinate input require
 });
 test('confirmed manual pin projection is reused without pin writes',async()=>{
   const f=fixture();f.setup([{...near,lat:null,lng:null}]);f.window.MapManualPins={apply(row){row.lat=near.lat;row.lng=near.lng;row.coordinateStatus='CONFIRMED';row.coordinateSource='MANUAL_PIN';}};
-  assert.equal((await f.judgeNewAreaRow({address:near.customerCode})).evidenceCount,1);assert.equal(f.externalCalls(),0);
+  assert.equal((await f.judgeNewAreaRow({address:near.customerCode})).nearestStoreCode,near.customerCode);assert.equal(f.externalCalls(),0);
 });
 test('TSV multiline preserves X/Y order and separates invalid addresses and row errors',async()=>{
   const f=fixture();f.setup([near]);f.node('#newAreaBatchInput').value=`${near.customerCode}\t"합성 고객\n상세주소"\n서울특별시 영등포구 합성로 2\t합성 고객2\n잘못된 입력\t오류\t추가열`;
   await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
   const rows=f.state.newAreaResults;assert.equal(rows.length,3);assert.equal(rows[0].originalCustomer,'합성 고객\n상세주소');assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
-  assert.equal(f.node('#exportNewAreaCsv').disabled,false);assert.match(f.node('#newAreaBatchResults').innerHTML,/30km 내 실제 운행호차/);
+  assert.equal(f.node('#exportNewAreaCsv').disabled,false);assert.match(f.node('#newAreaBatchResults').innerHTML,/30km 내 참고 배차호차/);
   const output=globalThis.MapPeriodUi.areaExportRows(rows,'2026-11-02');assert.equal(output[0][0],near.customerCode);assert.equal(output[0][2],'O');assert.equal(output[0][1],'합성 고객\n상세주소');
   assert.equal(MapPeriodUi.areaExportHeadings.at(-1),'판정 근거');assert.match(output[0].at(-1),/500m 이내/);
   assert.equal(globalThis.MapPeriodUi.areaTsv(rows,'2026-11-02','decision').split('\r\n').length,3);
@@ -182,16 +178,11 @@ test('Stage preserves HTTP status even when a gateway sends HTML',async()=>{
   assert.equal(result.lookupStatus,'FAILED');assert.equal(result.lookupHttpStatus,403);
   assert.match(MapPeriodUi.areaExportRows([result])[0][3],/HTTP 403/);
 });
-test('a failed delivery record request preserves confirmed points and retries only missing addresses',async()=>{
+test('Stage never requests completed-delivery records and retries only missing addresses',async()=>{
   const origin='https://freshon-admin-stage-preview-template.onrender.com', generation='a'.repeat(64);
-  const requests=[];let historyReads=0;
+  const requests=[];
   const f=fixture({location:{origin,href:origin},fetch:async(url,{body})=>{
-    if(url.includes('stage-nearby-evidence')){
-      if(++historyReads===1)return new Response(null,{status:502});
-      return Response.json({generation,source:'STAGE_ARCHIVE_ADDRESS_BOUND',start:'2026-08-05',end:'2026-11-02',
-        observedDays:76,unknownDays:14,rows:[[near.customerCode,'2026-11-02','101',2]],fixedRows:[],
-        vehicleStatus:'READY',vehicleDays:[[near.customerCode,'101','osan',2]]});
-    }
+    assert.equal(url,'/api/map-phase2b/private/stage-address-evidence');
     const {rows}=JSON.parse(body);requests.push(rows);
     return Response.json({generation,data:rows.map(([query])=>query===near.customerCode||requests.length>1
       ?{status:'STORED',point:{lat:near.lat,lng:near.lng}}:{status:'OFFICIAL_ADDRESS_UNAVAILABLE'})});
@@ -201,12 +192,27 @@ test('a failed delivery record request preserves confirmed points and retries on
   const run=retry=>f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults',retry);
   await run(false);
   assert.deepEqual(Array.from(f.state.newAreaResults,row=>row.lookupStatus),['SUCCESS','FAILED']);
-  assert.equal(f.state.newAreaResults[0].deliveryEvidenceState,'UNAVAILABLE');
+  const verified=f.state.newAreaResults[0];assert.equal(verified.decision,'O');assert.equal(verified.nearestDispatchLabel,'미확인');
   await run(true);
   assert.deepEqual(requests.map(rows=>rows.length),[2,1]);
   assert.deepEqual(Array.from(f.state.newAreaResults,row=>row.lookupStatus),['SUCCESS','SUCCESS']);
-  assert.equal(f.state.newAreaResults[0].deliveryEvidenceState,'READY');
-  assert.equal(f.state.newAreaResults[0].actualVehicles[0].vehicle,'101');
+  assert.equal(f.state.newAreaResults[0],verified);
+});
+test('waiting for the dispatch master leaves the verdict and successful location available',async()=>{
+  const f=fixture();f.setup([near]);
+  let resolve;
+  const waiting=f.waitForAssignment(new Promise(done=>{resolve=done;}));
+  f.node('#newAreaBatchInput').value=near.customerCode;
+  await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
+  const before=f.state.newAreaResults[0];
+  assert.equal(before.decision,'O');assert.equal(before.nearestDispatchLabel,'미확인');
+  resolve([{...assigned,weekdays:{Mon:'101'}}]);
+  await waiting;await Promise.resolve();
+  const after=f.state.newAreaResults[0];
+  assert.equal(after.decision,before.decision);assert.equal(after.evidence,before.evidence);
+  assert.equal(after.nearestDistanceMeters,before.nearestDistanceMeters);
+  assert.equal(after.nearestDispatch[0].weekdays.join(''),'월');
+  assert.equal(f.node('#retryNewAreaBatch').disabled,true);
 });
 test('cancel pending batch then rerun keeps input and suppresses stale completion',async()=>{
   const f=fixture();f.setup([near]);f.node('#newAreaBatchInput').value=near.customerCode;

@@ -139,6 +139,7 @@
 .approvedShellCandidate .marker[data-search-temporary-pin]{filter:none}
 .approvedShellCandidate .marker[data-search-temporary-pin] .pinShape{fill:#fff;fill-opacity:.42;stroke:#4b648b}
 .approvedShellCandidate .marker[data-search-temporary-pin] .pinNumber{color:#243b5e}
+.approvedShellCandidate .areaObservedRoutes{margin-top:6px;border-top:1px solid #dce4ee;padding-top:5px}
 .areaRadius{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0;font-size:12px}
 .areaRadius select{min-height:34px;padding:3px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#182436}
 .areaBatchEntry,.areaInquiry{min-width:0;overflow-wrap:anywhere;line-height:1.5}
@@ -146,5 +147,8 @@
 .areaVehicles{min-width:0;margin:5px 0 12px;padding:6px 8px;border:1px solid #dbe4ef;border-radius:6px}
 .areaVehicles summary{cursor:pointer;min-height:24px}
 .areaRouteList{max-height:min(220px,35dvh);overflow:auto;overscroll-behavior:contain;padding-inline-start:18px;margin:5px 0}
+.areaDispatchChoice{max-width:100%;min-height:32px;text-align:left;white-space:normal;overflow-wrap:anywhere}
+.areaDispatchChoice[aria-pressed="true"]{border-color:var(--primary,#2457d6)}
+@media(max-width:760px){.areaDispatchChoice{min-height:44px}}
 .areaFixedReference{margin-top:8px}
 @media(max-width:760px){.areaRadius select{min-height:40px}.areaVehicles summary{min-height:36px;padding-block:6px}}

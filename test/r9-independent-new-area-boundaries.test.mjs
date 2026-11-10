@@ -11,7 +11,7 @@ import '../public/opsmap/new-area-requests.js';
 const source = fs.readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js', import.meta.url), 'utf8');
 const exposure = `
   window.qa = {
-    judgeNewAreaPoint, newAreaComparisonStores,
+    judgeNewAreaPoint, newAreaEvidence,
     setup(saved, rows) {
       state.rangeStart = '2026-09-01'; state.rangeEnd = '2026-11-02'; dateReady = true;
       periodMeta = {startDate:state.rangeStart,endDate:state.rangeEnd,complete:true,coverageComplete:true,missingCoordinate:0};
@@ -33,33 +33,32 @@ const saved = {customerCode:'S990001',customerName:'SYNTHETIC_ONLY',address:'경
 const missing = {customerCode:saved.customerCode,address:saved.address,lastDeliveryDate:saved.lastDeliveryDate};
 const point = {lat:37.201,lng:127};
 
-test('independent QA: fallback requires a validated saved coordinate pair and never mixes sources', () => {
+test('independent QA: the fixed registry requires a validated coordinate pair and ignores period rows', () => {
   const f = fixture();
   for (const coordinateStatus of ['CONFLICT','UNVERIFIED','MISSING']) {
     f.setup([{...saved,coordinateStatus}],[missing]);
-    assert.equal(f.newAreaComparisonStores().length,0,coordinateStatus + ' snapshot must not become evidence');
+    assert.equal(f.newAreaEvidence().locationRows.length,0,coordinateStatus + ' snapshot must not become evidence');
     assert.equal(f.judgeNewAreaPoint({address:saved.address},point).decision,'검토');
   }
   f.setup([{...saved,resolutionStatus:'ADDRESS_CHANGED_REVIEW_REQUIRED'}],[missing]);
-  assert.equal(f.newAreaComparisonStores().length,0,'address-review snapshot must not become evidence');
+  assert.equal(f.newAreaEvidence().locationRows.length,0,'address-review snapshot must not become evidence');
   for (const row of [{...missing,lat:37.201},{...missing,lng:127},{...missing,lat:null,lng:null}]) {
     f.setup([saved],[row]);
-    assert.equal(f.newAreaComparisonStores().length,0,'partial or explicitly absent period pair must not be patched from snapshot');
+    assert.equal(f.newAreaEvidence().locationRows.length,1,'partial period pair cannot invalidate the registry');
+    assert.equal(f.judgeNewAreaPoint({address:saved.address},point).decision,'O');
   }
   f.setup([saved],[{...missing,address:'경기도 화성시 다른합성로 2'}]);
-  assert.equal(f.newAreaComparisonStores().length,0,'changed address must not reuse saved pair');
-  f.setup([saved],[missing]);
-  assert.equal(f.newAreaComparisonStores().length,1,'validated same-address saved pair remains usable');
-  assert.equal(f.judgeNewAreaPoint({address:saved.address},point).evidenceCount,1);
+  assert.equal(f.newAreaEvidence().locationRows[0].address,saved.address,'period address cannot replace the registry address');
+  f.setup([], [saved]);
+  assert.equal(f.newAreaEvidence().locationRows.length,0,'period coordinate alone cannot create a registered store');
 });
 
 test('independent QA: a complete period without a nearby point cannot certify road-route exclusion', () => {
   const f = fixture(); f.setup([saved],[saved]);
   const far = f.judgeNewAreaPoint({address:'경상북도 안동시 합성로 1'},{lat:36.56,lng:128.73});
   assert.equal(far.decision,'검토');
-  assert.equal(far.reason,'배송동선·운행요일 확인 필요');
-  assert.equal(far.evidenceCount,0);
-  assert.match(far.evidence,/직선거리만으로 배송 가능 여부를 판단하지 않습니다/);
+  assert.equal(far.reason,'배송동선 확인 필요');
+  assert.match(far.evidence,/직선 500m 초과/);
   assert.notEqual(far.reason,'배송동선 맞지 않음');
   const exception = f.judgeNewAreaPoint({address:'제주특별자치도 합성로 1'},{lat:33.4,lng:126.5});
   assert.equal(exception.decision,'X','explicit legacy exclusion remains a separate policy');
