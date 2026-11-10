@@ -7,7 +7,8 @@ import {createHash} from 'node:crypto';
 import {boundedRead,privateCoverageDirectory} from '../src/shadowCoverage/coverageFiles.js';
 import {readFixedCoordinateLedger} from '../src/fixedStoreCoordinates.js';
 import {createOfficialAddressLookup} from '../src/opsmapOfficialAddressLookup.js';
-import {completeFixedCoordinates} from '../src/fixedCoordinateCompletion.js';
+import {openPublicAddressCatalog} from '../src/opsmapPublicAddressCatalog.js';
+import {completeFixedCoordinates, completeFixedCoordinatesFromCatalog} from '../src/fixedCoordinateCompletion.js';
 const appRoot=fileURLToPath(new URL('../',import.meta.url));
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 async function privateFile(file,max){
@@ -21,12 +22,22 @@ async function main(){
   const [settingsFile,...extra]=process.argv.slice(2);
   if(extra.length)throw Error('FIXED_PREPARE_USAGE');
   const config=JSON.parse(await privateFile(settingsFile,32768));
-  const [catalogBytes,ledgerBytes,indexBytes]=await Promise.all([
-    privateFile(config.catalogFile,3*1024*1024),privateFile(config.ledgerFile,8*1024*1024),privateFile(config.officialIndexFile,512*1024)]);
+  const [catalogBytes,ledgerBytes]=await Promise.all([
+    privateFile(config.catalogFile,3*1024*1024),privateFile(config.ledgerFile,8*1024*1024)]);
   const ledger=readFixedCoordinateLedger(ledgerBytes,config.ledgerSha256);
-  const index=createOfficialAddressLookup(indexBytes,{sha256:config.officialIndexSha256});
   const catalog=JSON.parse(catalogBytes);
-  const candidate=completeFixedCoordinates({stores:catalog.stores,ledger,index,maxChanges:config.maxChanges??1000});
+  const options = {stores:catalog.stores,ledger,maxChanges:config.maxChanges??1000};
+  let candidate, sourceDigest;
+  if (config.publicAddressCatalog) {
+    const source = await openPublicAddressCatalog(config.publicAddressCatalog,{appRoot});
+    candidate = await completeFixedCoordinatesFromCatalog(options,source);
+    sourceDigest = {publicAddressCatalogSha256:config.publicAddressCatalog.sha256};
+  } else {
+    const indexBytes = await privateFile(config.officialIndexFile,512*1024);
+    const index = createOfficialAddressLookup(indexBytes,{sha256:config.officialIndexSha256});
+    candidate = completeFixedCoordinates({...options,index});
+    sourceDigest = {officialIndexSha256:digest(indexBytes)};
+  }
   const parent=await privateCoverageDirectory(config.outputDirectory,appRoot);
   const output=await fs.mkdtemp(path.join(parent,'coordinate-candidate-'));
   const files={
@@ -35,7 +46,7 @@ async function main(){
     'coordinate-decisions.private.json':JSON.stringify(candidate.decisions)
   };
   const manifest={kind:'CANDIDATE_ONLY',sourceWrites:0,providerCalls:0,operationalWrites:0,
-    inputs:{catalogSha256:digest(catalogBytes),ledgerSha256:ledger.sha256,officialIndexSha256:digest(indexBytes)},
+    inputs:{catalogSha256:digest(catalogBytes),ledgerSha256:ledger.sha256,...sourceDigest},
     outputLedgerSha256:candidate.ledger.sha256,summary:candidate.summary,
     files:Object.fromEntries(Object.entries(files).map(([name,text])=>[name,{sha256:digest(text),bytes:Buffer.byteLength(text)}]))};
   for(const [name,text] of Object.entries({...files,'manifest.safe.json':JSON.stringify(manifest,null,2)}))

@@ -214,7 +214,8 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
       generation:index.sha256,expiresAt:Infinity,resolver:createFixedCoordinateResolver(ledger),
       counts:{registered:registry.size,located,pending:registry.size-located,
         gpsCompletion:proof.filter(row=>row.measurementKind==='DELIVERY_COMPLETION_GPS').length,
-        officialBuilding:proof.filter(row=>row.measurementKind==='BUILDING_LOCATION').length},
+        officialBuilding:proof.filter(row=>row.measurementKind==='BUILDING_LOCATION').length,
+        officialAddressApproximate:proof.filter(row=>row.measurementKind==='ADDRESS_LOCATION').length},
       evidence:{coordinateAppliedAt:state.committedAt,coordinateScope:'STAGE_APPROVED_SCHEDULED_GENERATION',
         pendingCoordinates:registry.size-located,coverageGeneratedAt:index.generatedAt,
         coverageSourceObservedAt:index.sourceObservedAt,coverageAsOf:index.asOf},
@@ -359,7 +360,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
       return res.status(400).json({error:'STAGE_BATCH_QUERY_INVALID'});
     }
     const prepared=validation.active();
-    if(!prepared?.bundledAddress||prepared.generation!==generation)return res.status(409).json({error:'STAGE_BATCH_GENERATION_CHANGED'});
+    if(!prepared||prepared.generation!==generation)return res.status(409).json({error:'STAGE_BATCH_GENERATION_CHANGED'});
     try{
       const saved=await readSnapshot();
       if(saved?.sourceGeneration!==generation||validation.active()!==prepared)return res.status(409).json({error:'STAGE_BATCH_GENERATION_CHANGED'});
@@ -367,7 +368,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         const match=searchPreservedRegistry(query,saved);
         // This endpoint has no provider transport. A miss has no live-source meaning.
         return {customer:{data:match.data.slice(0,12),meta:{truncated:match.meta.truncated||match.data.length>12}},
-          official:match.data.length?null:prepared.bundledAddress.lookup(query)};
+          official:match.data.length?null:prepared.bundledAddress?.lookup(query) ?? null};
       });
       return requireStaff(req,res,()=>isSessionCurrent(req,res.locals.staffSession?.key)
         ?res.json({ok:true,generation,data}):res.status(401).json({error:'STAFF_LOGIN_REQUIRED'}));

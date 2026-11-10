@@ -110,7 +110,6 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
       if (bytes.length !== ref.bytes) throw Error('OPSMAP_SYNC_COVERAGE_LENGTH');
       if (ref === index.windows[90]) window90 = JSON.parse(bytes);
     }
-    const stores = new Map(catalog.stores.map(row => [row.code,row]));
     const registry = new Map(catalog.stores.filter(row => row.registered).map(row => {
       const addressHash = coordinateAddressHash(row.address);
       const proof = ledger.records[row.code]?.at(-1).point;
@@ -119,7 +118,13 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
     const nearby = readStageNearbyEvidence(await verifiedBytes(path.join(folder,'nearby.json'),state.nearbySha256,384*1024),
       {expected:state.nearbySha256,generation:index.sha256,registry,window:window90});
     const snapshot = materializeSnapshot(sealedSnapshot);
-    snapshot.rows = snapshot.rows.map(row => ({...row,address:stores.get(row.customerCode)?.address || ''}));
+    snapshot.rows = snapshot.rows.map(row => {
+      const store = registry.get(row.customerCode);
+      const matching = store?.hasPoint && store.addressHash===row.originalAddressHash &&
+        store.lat===row.lat && store.lng===row.lng;
+      const evidence = matching && (store.proof?.measurementKind || store.coordinateEvidence);
+      return {...row,address:store?.address || '',...(evidence?{coordinateEvidence:evidence}:{})};
+    });
     return {state,folder,input,coverage,index,ledger,catalog,registry,nearby,baseCatalog:JSON.parse(baseBytes),sealedSnapshot,
       snapshot:{...snapshot,source:'STAGE_VERIFIED_REGISTRY',sourceGeneration:index.sha256}};
   }
@@ -197,7 +202,10 @@ export function archivedOpsmapAssignments(day, generation) {
     const complete = !day.tasks || status === 'COMPLETED' || previous?.status === 'COMPLETED';
     grouped.set(vehicle+'|'+customerCode,{customerCode,customerName:known?.customerName || customerCode,vehicle,
       deliveryDate:day.date,lastDeliveryDate:day.date,status:complete?'COMPLETED':'UNCONFIRMED',order:null,
-      lat:matches?known?.lat ?? null:null,lng:matches?known?.lng ?? null:null});
+      lat:matches?known?.lat ?? null:null,lng:matches?known?.lng ?? null:null,
+      ...(matches&&known?.coordinateEvidence?{coordinateSource:known.coordinateSource,
+        coordinateAccuracy:known.coordinateAccuracy,coordinateEvidence:known.coordinateEvidence,
+        originalAddressHash:known.originalAddressHash}:{})});
   }
   const data = [...grouped.values()];
   if (!data.length) return null;

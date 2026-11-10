@@ -27,7 +27,9 @@ const hash=row=>text(row?.currentAddressHash||row?.originalAddressHash||row?.add
 const conflictingPoint=row=>{const bound=row?.coordinateAddressHash||row?.manualPinAddressHash||row?.originalAddressHash;return row?.addressChanged===true||row?.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'||row?.coordinateStatus==='CONFLICT'||Boolean(row?.currentAddressHash&&bound&&row.currentAddressHash!==bound);};
 function buildingPoint(row){
  const binding=hash(row);
- return row.coordinateSource==='BUILDING_VERIFIED'&&row.coordinateEvidence==='BUILDING_LOCATION'&&row.coordinateAccuracy==='BUILDING'&&
+ const building=row.coordinateSource==='BUILDING_VERIFIED'&&row.coordinateEvidence==='BUILDING_LOCATION'&&row.coordinateAccuracy==='BUILDING';
+ const address=row.coordinateSource==='ADDRESS_REPRESENTATIVE'&&row.coordinateEvidence==='ADDRESS_LOCATION'&&row.coordinateAccuracy==='ADDRESS_APPROXIMATE';
+ return (building||address)&&
   /^[a-f0-9]{64}$/.test(binding)&&[row.currentAddressHash,row.originalAddressHash,row.coordinateAddressHash,row.addressHash].filter(Boolean).every(value=>value===binding);
 }
 const savedPoint=row=>safePoint(row)&&!conflictingPoint(row)&&row.coordinateStatus!=='APPROXIMATE'&&(buildingPoint(row)||

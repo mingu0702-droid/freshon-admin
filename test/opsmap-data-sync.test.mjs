@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomBytes, randomUUID} from 'node:crypto';
+import {spawnSync} from 'node:child_process';
 import {once} from 'node:events';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -8,14 +9,18 @@ import test from 'node:test';
 import {createCustomerRegistry, customerRegistryAddressHash} from '../src/customerRegistry.js';
 import {reviseFixedCoordinateLedger} from '../src/fixedStoreCoordinates.js';
 import {createOpsmapDataSync, startOpsmapDataSync} from '../src/opsmapDataSync.js';
-import {openOpsmapSyncGenerationStore, syncDigest, syncSha256} from '../src/opsmapSyncGeneration.js';
+import {archivedOpsmapAssignments, openOpsmapSyncGenerationStore, syncDigest, syncSha256} from '../src/opsmapSyncGeneration.js';
+import {openPublicAddressCatalog} from '../src/opsmapPublicAddressCatalog.js';
+import {completeFixedCoordinatesFromCatalog} from '../src/fixedCoordinateCompletion.js';
+import {searchPreservedRegistry} from '../src/privateCustomerSearch.js';
+import {createShadowCoverageStore} from '../src/shadowCoverage/store.js';
 import {createManualMapPins} from '../src/opsmap-abc/manualMapPins.js';
 import {coordinateAddressHash} from '../src/opsmap-abc/opsmapAutoCoordinates.js';
 import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
 import {archiveAddressHash} from '../src/stageArchivedDelivery.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
-import {createStageAbValidation, STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageAbValidation.js';
+import {createStageAbValidation, STAGE_ADDRESS_BATCH_ROUTE, STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageAbValidation.js';
 
 const day = '2026-11-10', priorDay = '2026-11-07', historical = '2026-07-31';
 const now = () => Date.parse(day+'T04:00:00Z');
@@ -100,6 +105,11 @@ async function stageHttp(t, directory, expected) {
   assert.equal(snapshot.meta.sourceGeneration,expected);
   assert.equal(snapshot.data.length,4);
   assert(!snapshot.data.some(row=>row.address||row.customerAddress));
+  const area=await fetch(new URL('/opsmap'+STAGE_ADDRESS_BATCH_ROUTE,base),{method:'POST',
+    headers:{cookie,Origin:STAGE_ORIGIN,'Content-Type':'application/json'},
+    body:JSON.stringify({generation:expected,queries:[point.customerCode]})});
+  assert.equal(area.status,200);
+  assert.equal((await area.json()).data[0].customer.data[0].lat,point.lat);
   const archive=await get('/preview/assignments?date='+historical);
   assert.equal(archive.meta.date,historical);
   assert.equal(archive.meta.sourceComplete,false);
@@ -117,6 +127,80 @@ async function stageHttp(t, directory, expected) {
   // This fixture only reads Osan. It cannot advance nationwide success.
   assert.equal(status.scheduled.lastSuccessAt,null);
 }
+
+test('new Customer addresses resolve from the public catalog, survive restart, and feed map, area, daily and H3', {timeout:30_000}, async t => {
+  const root = await rootFor(t);
+  const database = path.join(root,'public.sqlite');
+  const python = process.platform==='win32'?'python':'python3';
+  const makeArchives = `
+from pathlib import Path
+import sys, zipfile
+root=Path(sys.argv[1])
+def postal(number, lot, building):
+    fields=['']*26
+    for i,value in {1:'경기도',3:'오산시',8:'예시로',10:'0',11:number,12:'0',13:building,
+                    17:'테스트동',20:'0',21:lot,23:'0'}.items(): fields[i]=value
+    return '|'.join(fields)
+first='1'*24+'1'
+second='1'*24+'2'
+with zipfile.ZipFile(root/'postal.zip','w') as archive:
+    archive.writestr('region.txt','건물관리번호\\n'+postal('20','220',first)+'\\n'+postal('30','330',second)+'\\n')
+with zipfile.ZipFile(root/'business.zip','w') as archive:
+    header='건물관리번호,도로명주소,지번주소,위도,경도,건물명\\n'
+    archive.writestr('region.csv',header+first+',경기도 오산시 예시로 20,경기도 오산시 테스트동 220,37.16,127.06,상가\\n'+
+        first+',경기도 오산시 예시로 20,경기도 오산시 테스트동 220,37.1602,127.06,상가\\n')
+(root/'elevator.csv').write_text('건물명,건물주소,경도,위도\\n,경기도 오산시 예시로 30,127.07,37.17\\n', encoding='utf8')
+`;
+  const fixture = spawnSync(python,['-X','utf8','-c',makeArchives,root],{encoding:'utf8'});
+  assert.equal(fixture.status,0,fixture.stderr);
+  const built = spawnSync(python,['-X','utf8','-B','scripts/opsmap-public-address-catalog.py','build',database,
+    '--postal',path.join(root,'postal.zip'),'--business',path.join(root,'business.zip'),'--elevator',path.join(root,'elevator.csv'),
+    '--business-date','2026-09-30','--elevator-date','2025-12-12'],{encoding:'utf8'});
+  assert.equal(built.status,0,built.stderr);
+  const config = {file:database,sha256:syncSha256(await fs.readFile(database))};
+  const catalog = await openPublicAddressCatalog(config);
+  const directory = path.join(root,'publisher');
+  await fs.mkdir(directory,{mode:0o700});
+  const seed = await fixtureSeed(root);
+  const road = customerRow('T99020','새 매장 A','경기 오산시 예시로 20 (2층 201호)');
+  const lot = customerRow('T99021','새 매장 B','경기 오산시 테스트동 220 3층');
+  let rows = [road,lot];
+  const deliveryId = syncSha256('new-customer-visit');
+  const delivery = {date:day,sourceRows:1,unidentified:0,proofHash:syncSha256(day),completeCenters:['osan'],
+    visits:[[deliveryId,lot.customerCode,'122','osan',archiveAddressHash(lot.basicAddress)]],
+    tasks:[[deliveryId,lot.customerCode,'122','osan',coordinateAddressHash(lot.basicAddress),'COMPLETED']]};
+  const options = {directory,seed,now,includeOfficialRegions:false,readLedger:async()=>empty,
+    readRegistry:async()=>({complete:true,version:syncDigest(rows),rows}),
+    readDay:async date=>date===day?delivery:null,
+    completeCoordinates:context=>completeFixedCoordinatesFromCatalog(context,catalog)};
+  const worker = await createOpsmapDataSync(options);
+  await worker.sync({bootstrap:true});
+  const first = await worker.sync();
+  const snapshot = await worker.read();
+  const pins = [road,lot].map(row=>snapshot.ledger.records[row.customerCode].at(-1).point);
+  assert.deepEqual(pins.map(p=>[p.lat,p.lng,p.coordinateAccuracy]),
+    [[37.16,127.06,'ADDRESS_APPROXIMATE'],[37.16,127.06,'ADDRESS_APPROXIMATE']]);
+  for(const [i,row] of [road,lot].entries()) {
+    assert.equal(pins[i].addressHash,coordinateAddressHash(row.basicAddress));
+    assert.equal(searchPreservedRegistry(row.customerCode,snapshot.snapshot).data[0].lat,pins[i].lat);
+    assert.equal(searchPreservedRegistry(row.basicAddress,snapshot.snapshot).data[0].lat,pins[i].lat);
+  }
+  assert.equal(archivedOpsmapAssignments(delivery,snapshot).data[0].lat,pins[1].lat);
+  const h3 = await createShadowCoverageStore({directory:snapshot.coverage}).readPeriod(90);
+  assert.equal(h3.index.sha256,first.generation);
+  const cells = h3.catalog.stores.filter(row=>row.code===road.customerCode||row.code===lot.customerCode).map(row=>row.cell);
+  assert.equal(cells.length,2);
+  assert(cells[0] && cells[0]===cells[1]);
+  assert.equal((await (await openOpsmapSyncGenerationStore(directory)).read()).ledger.sha256,snapshot.ledger.sha256);
+  rows = [{...road,basicAddress:'경기도 오산시 예시로 30'},lot];
+  await worker.sync();
+  const moved = (await worker.read()).ledger.records[road.customerCode];
+  assert.equal(moved.length,2);
+  assert.deepEqual(moved[0].point,pins[0]);
+  assert.equal(moved[1].point.coordinateAccuracy,'BUILDING');
+  assert.equal(moved[1].point.lat,37.17);
+  assert.equal((await worker.sync()).state,'NOOP');
+});
 
 test('server timer retries before atomically switching map, fixed coordinates and all coverage windows', {timeout:30_000}, async t => {
   const root=await rootFor(t),directory=path.join(root,'publisher');

@@ -1,7 +1,7 @@
 // Pure deterministic completion from an approved official index; no network or source writes.
 import {createHash} from 'node:crypto';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
-import {officialAddressKey} from './opsmapOfficialAddressLookup.js';
+import {approvedOfficialAddressSource, officialAddressKey} from './opsmapOfficialAddressLookup.js';
 import {hasFixedCoordinatePoint,createFixedCoordinateResolver,reviseFixedCoordinateLedger,
   validateFixedCoordinateLedger} from './fixedStoreCoordinates.js';
 const sha=v=>createHash('sha256').update(v).digest('hex');
@@ -9,6 +9,13 @@ const digest=v=>sha(JSON.stringify(v));
 const HASH=/^[a-f0-9]{64}$/, CODE=/^[A-Z]\d{1,20}$/;
 const addressOf=row=>row.customerAddress || row.basicAddress || row.address || '';
 const sensitive=v=>/[\u0000-\u001f]|비밀번호|보안키|공동현관|bearer\s|(?:01[016789])[- ]?\d{3,4}[- ]?\d{4}/i.test(v);
+const needsCoordinate = row => !hasFixedCoordinatePoint(row) || row.addressChanged ||
+  row.coordinateStatus === 'CONFLICT' || row.resolutionStatus === 'ADDRESS_CHANGED_REVIEW_REQUIRED';
+const protectedPoint = (row,manualCodes) => {
+  const code = row.customerCode || row.code;
+  return code === 'S191541' || manualCodes.has(code) || row.coordinateSource === 'MANUAL_PIN';
+};
+const validAddress = address => typeof address === 'string' && address.length <= 500 && !sensitive(address) && !!coordinateAddressHash(address);
 const prefix=(a,b)=>Object.entries(a.records).every(([code,h])=>
   JSON.stringify(b.records[code]?.slice(0,h.length))===JSON.stringify(h));
 
@@ -27,6 +34,20 @@ export function continuingFixedLedger(current,supplied) {
   return newer;
 }
 
+export async function completeFixedCoordinatesFromCatalog(options, catalog) {
+  const {stores,ledger,manualRows=[]} = options;
+  const rows = createFixedCoordinateResolver(ledger,{manualRows}).join(stores);
+  const manualCodes = new Set(manualRows.map(row=>row.customerCode));
+  const addresses = new Set();
+  for (const row of rows) {
+    const address = addressOf(row);
+    if (row.registered !== false && !protectedPoint(row,manualCodes) && needsCoordinate(row) && validAddress(address)) {
+      addresses.add(address);
+    }
+  }
+  return completeFixedCoordinates({...options,index:await catalog.resolveMany([...addresses])});
+}
+
 export function completeFixedCoordinates({stores,ledger,index,manualRows=[],now=Date.now,maxChanges=1000}={}) {
   validateFixedCoordinateLedger(ledger);
   if(!Array.isArray(stores)||stores.length>15000||typeof index?.resolve!=='function'||
@@ -42,34 +63,40 @@ export function completeFixedCoordinates({stores,ledger,index,manualRows=[],now=
     seen.add(code);
     if(row.registered===false)continue;
     const address=addressOf(row), hash=coordinateAddressHash(address);
-    if(code==='S191541'||manualCodes.has(code)||row.coordinateSource==='MANUAL_PIN'){
+    if(protectedPoint(row,manualCodes)){
       record(code,hash,'PRESERVED_MANUAL');continue;
     }
-    if(typeof address!=='string'||!hash||address.length>500||sensitive(address)){
+    if(!validAddress(address)){
       record(code,hash,'REVIEW_ADDRESS');continue;
     }
     if(row.currentAddressHash && row.currentAddressHash!==hash){
       record(code,hash,'REVIEW_ADDRESS_BINDING');continue;
     }
-    if(hasFixedCoordinatePoint(row) && !row.addressChanged && row.coordinateStatus!=='CONFLICT' &&
-       row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'){
+    if(!needsCoordinate(row)){
       record(code,hash,'PRESERVED_EXISTING');continue;
     }
     if(rows.length+replacements.length>=maxChanges){record(code,hash,'DEFERRED_BATCH_LIMIT');continue;}
     const evidence=index.resolve(address);
-    if(!evidence){record(code,hash,'PENDING_OFFICIAL_COVERAGE');continue;}
+    if(!evidence){record(code,hash,index.status?.(address) || 'PENDING_OFFICIAL_COVERAGE');continue;}
     const key=officialAddressKey(address), observedAt=evidence.datasetDate+'T00:00:00.000Z';
-    if(!key||evidence.addressSha256!==sha(key)||evidence.evidenceSource!=='OFFICIAL_ADDRESS_DATA'||
-       evidence.measurementKind!=='BUILDING_LOCATION'||
+    const fromCatalog=Object.hasOwn(evidence,'customerAddressHash');
+    const addressLocation=evidence.measurementKind==='ADDRESS_LOCATION';
+    const matchesAddress=fromCatalog
+      ? evidence.customerAddressHash===hash && approvedOfficialAddressSource(evidence.sourceDataset)
+      : key && evidence.addressSha256===sha(key);
+    if(!matchesAddress||evidence.evidenceSource!=='OFFICIAL_ADDRESS_DATA'||
+       !(evidence.measurementKind==='BUILDING_LOCATION'||fromCatalog&&addressLocation)||
        ![evidence.buildingSha256,evidence.datasetSha256,evidence.indexSha256].every(v=>HASH.test(v||''))||
        typeof evidence.lat!=='number'||typeof evidence.lng!=='number'||!hasFixedCoordinatePoint(evidence)||
        !/^\d{4}-\d{2}-\d{2}$/.test(evidence.datasetDate||'')||
        !Number.isFinite(Date.parse(observedAt))||new Date(observedAt).toISOString().slice(0,10)!==evidence.datasetDate||
        Date.parse(observedAt)>Date.parse(updatedAt))throw Error('FIXED_COMPLETION_EVIDENCE');
     const point={customerCode:code,addressHash:hash,lat:evidence.lat,lng:evidence.lng,
-      coordinateSource:'BUILDING_VERIFIED',coordinateAccuracy:'BUILDING',evidenceSource:'OFFICIAL_ADDRESS_DATA',
+      coordinateSource:addressLocation?'ADDRESS_REPRESENTATIVE':'BUILDING_VERIFIED',
+      coordinateAccuracy:addressLocation?'ADDRESS_APPROXIMATE':'BUILDING',evidenceSource:'OFFICIAL_ADDRESS_DATA',
       evidenceSha256:digest({customerCode:code,addressHash:hash,...evidence}),observedAt,verifiedAt:updatedAt,
-      measurementKind:'BUILDING_LOCATION'};
+      measurementKind:evidence.measurementKind,
+      ...(fromCatalog?{sourceDataset:evidence.sourceDataset,sourceDatasetSha256:evidence.datasetSha256}:{})};
     const previous=ledger.records[code]?.at(-1)?.point;
     if(previous){
       if(previous.addressHash===hash){record(code,hash,'REVIEW_EXISTING_EVIDENCE');continue;}

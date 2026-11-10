@@ -277,7 +277,7 @@
     if (currentHash && savedHash && currentHash !== savedHash) return false;
     const sameText = currentAddress && savedAddress && currentAddress.normalize('NFKC').replace(/\s+/g,' ').trim() === savedAddress.normalize('NFKC').replace(/\s+/g,' ').trim();
     if (currentAddress && savedAddress && !sameText) return false;
-    const requiresProof = ['STAGE_REGISTRY_POINT','DELIVERY_COMPLETION_GPS','BUILDING_LOCATION'].includes(saved.coordinateEvidence);
+    const requiresProof = ['STAGE_REGISTRY_POINT','DELIVERY_COMPLETION_GPS','BUILDING_LOCATION','ADDRESS_LOCATION'].includes(saved.coordinateEvidence);
     return !requiresProof || Boolean(sameText || currentHash && currentHash === savedHash);
   }
 
@@ -1392,6 +1392,7 @@
     if (row.coordinateSource === 'MANUAL_PIN') return '사용자 수동 확정 위치 · 원본 주소 보존';
     if (row.coordinateEvidence === 'DELIVERY_COMPLETION_GPS') return '배송 완료 GPS 위치 · 출입구 위치 미검증';
     if (row.coordinateSource === 'BUILDING_VERIFIED' && row.coordinateEvidence === 'BUILDING_LOCATION') return '공공 데이터로 확인한 건물 위치';
+    if (row.coordinateSource === 'ADDRESS_REPRESENTATIVE' && row.coordinateEvidence === 'ADDRESS_LOCATION') return '공공 데이터의 주소 대표 위치';
     if (row.coordinateSource === 'VERIFIED_STORE_POINT') return '검증된 저장 위치';
     if (['KAKAO_ADDRESS_LIVE','KAKAO_BUILDING_EXACT_ADDRESS','KAKAO_VERIFIED_BUILDING','KAKAO_ADDRESS_REVALIDATION'].includes(row.coordinateSource)) return '주소 기준 위치';
     if (row.coordinateSource === 'HISTORICAL_GPS_SAME_BUILDING') return '동일 주소의 저장 위치';

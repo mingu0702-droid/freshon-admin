@@ -1,5 +1,6 @@
 import {createOfficialAddressLookup} from '../src/opsmapOfficialAddressLookup.js';
-import {completeFixedCoordinates} from '../src/fixedCoordinateCompletion.js';
+import {openPublicAddressCatalog} from '../src/opsmapPublicAddressCatalog.js';
+import {completeFixedCoordinates, completeFixedCoordinatesFromCatalog} from '../src/fixedCoordinateCompletion.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -74,11 +75,20 @@ async function run() {
     }
   }
   let completeCoordinates;
-  if (config.officialCoordinateIndex) {
+  if (config.publicAddressCatalog || config.officialCoordinateIndex) {
     if (env.OPSMAP_SYNC_FIXED_COORDINATES_APPROVED!=='1') throw Error('OPSMAP_SYNC_COORDINATE_APPROVAL_REQUIRED');
     let index, indexKey;
     completeCoordinates=async options=>{
       const settings=await readSettings();
+      if (config.publicAddressCatalog) {
+        const catalog = settings.publicAddressCatalog;
+        const key = JSON.stringify(catalog);
+        if (key !== indexKey) {
+          index = await openPublicAddressCatalog(catalog, {appRoot});
+          indexKey = key;
+        }
+        return completeFixedCoordinatesFromCatalog(options,index);
+      }
       const {file,sha256}=settings.officialCoordinateIndex||{};
       if (!path.isAbsolute(file||'')) throw Error('OPSMAP_SYNC_OFFICIAL_INDEX_PATH');
       const key=file+'|'+sha256;

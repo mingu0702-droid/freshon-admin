@@ -1,9 +1,9 @@
 import {createHash} from 'node:crypto';
 
-const approvedSources = new Set([
-  'https://www.data.go.kr/data/15083033/fileData.do',
-  'https://www.data.go.kr/data/15156424/fileData.do'
-]);
+export const OFFICIAL_BUSINESS_SOURCE = 'https://www.data.go.kr/data/15083033/fileData.do';
+export const OFFICIAL_BUILDING_SOURCE = 'https://www.data.go.kr/data/15156424/fileData.do';
+const approvedSources = new Set([OFFICIAL_BUSINESS_SOURCE, OFFICIAL_BUILDING_SOURCE]);
+export const approvedOfficialAddressSource = value => approvedSources.has(value);
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const digest = /^[a-f0-9]{64}$/;
 const aliases = new Map(Object.entries({

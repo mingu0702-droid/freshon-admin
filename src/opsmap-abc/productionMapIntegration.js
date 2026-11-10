@@ -29,6 +29,23 @@ import {createHubRoadBudget} from './hubRoadBudget.js';
 import {createKakaoCoordinateConnection,mountKakaoCoordinateConnection} from './kakaoCoordinateConnection.js';
 import {REGISTERED_OSAN_CENTER} from './centerSettings.js';
 import {assertDeliverySourceObservation} from '../snapshotRefreshEvidence.js';
+import {officialAddressKey} from '../opsmapOfficialAddressLookup.js';
+import {coordinateAddressHash} from './opsmapAutoCoordinates.js';
+
+function datedStopCoordinates(stop, point) {
+  const saved = point.coordinateSource === 'ADDRESS_REPRESENTATIVE' || point.coordinateSource === 'BUILDING_VERIFIED';
+  if (!saved) return {lat:stop.lat ?? point.lat ?? null,lng:stop.lng ?? point.lng ?? null};
+  if (stop.lat != null && stop.lng != null) return {lat:stop.lat,lng:stop.lng};
+  const address = stop.address || stop.customerAddress || stop.basicAddress;
+  const hash = coordinateAddressHash(address);
+  const key = officialAddressKey(address);
+  const matches = hash && hash === (point.originalAddressHash || point.addressHash) ||
+    key && key === officialAddressKey(point.address);
+  if (!matches || point.lat == null || point.lng == null) return {lat:null,lng:null};
+  return {lat:point.lat,lng:point.lng,coordinateStatus:'CONFIRMED',coordinateSource:point.coordinateSource,
+    coordinateAccuracy:point.coordinateAccuracy,coordinateEvidence:point.coordinateEvidence,
+    originalAddressHash:point.originalAddressHash};
+}
 
 function registeredOsanCenter(setting){
   if(typeof setting!=='string'||setting.length>2048)return null;
@@ -295,7 +312,8 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
   if (date !== "latest" && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || normalizeDateValue(date) !== date || date > phase2bKstDate())) return res.status(400).json({ error: "INVALID_DATE" });
   try {
     const snapshot = await readPhase2bSnapshot();
-    const readDate = (candidate) => (candidate === phase2bKstDate() ? phase2bAssignmentCache : phase2bDatedAssignmentCache).load(`datedAssignments:${candidate}`, async () => {
+      const readDate = (candidate) => (candidate === phase2bKstDate() ? phase2bAssignmentCache : phase2bDatedAssignmentCache)
+        .load(`datedAssignments:${candidate}:${snapshot?.sourceGeneration || ''}`, async () => {
       if (candidate === phase2bKstDate() || date !== 'latest') {
         // An explicitly selected business date remains readable after midnight.
         // Reuse the bounded, date-verified Delivery reader; never scan a period.
@@ -309,7 +327,7 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
             const code = String(stop.customerCode || stop.code || "");
             const point = coordinates.get(code) || {};
             return { ...stop, customerCode: code, vehicle: vehicle.vehicle, deliveryDate: candidate,
-              lat: stop.lat ?? point.lat ?? null, lng: stop.lng ?? point.lng ?? null };
+                ...datedStopCoordinates(stop, point) };
           }));
           const data = uniqueAssignments(actual, candidate);
           if (data.length) return { ok: true, data, meta: { date: candidate, source: candidate === phase2bKstDate() ? "Delivery Admin current dispatch" : "Delivery Admin date-verified dispatch", complete: true, rowCount: data.length, generatedAt: live.generatedAt }, error: null };
