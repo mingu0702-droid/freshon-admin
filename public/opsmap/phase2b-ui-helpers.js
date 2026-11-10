@@ -76,6 +76,41 @@
     }
     return [...nearest.values()].sort((a, b) => a.distance - b.distance);
   }
+  function nearestRegisteredStore(point, stores) {
+    let nearest = null;
+    for (const store of stores) {
+      if (!store.customerCode) continue;
+      const distance = distanceKm(point, store);
+      if (!Number.isFinite(distance) || nearest && (distance > nearest.distance ||
+          distance === nearest.distance && store.customerCode >= nearest.customerCode)) continue;
+      nearest = {customerCode:store.customerCode,customerName:store.customerName,distance};
+    }
+    return nearest;
+  }
+  const WEEKDAYS = ['일','월','화','수','목','금','토'];
+  function observedWeekdays(mask) {
+    return [1,2,3,4,5,6,0].filter(day => mask & (1 << day)).map(day => WEEKDAYS[day]);
+  }
+  function nearbyVehicleWeekdays(point, stops, maxRadius = 50) {
+    const byVehicle = new Map(), distances = new Map();
+    for (const {customerCode,vehicle,center,mask,lat,lng} of stops) {
+      if (!vehicle || !Number.isInteger(mask) || mask<1 || mask>127) continue;
+      const key = customerCode+'|'+lat+'|'+lng;
+      if (!distances.has(key)) distances.set(key,distanceKm(point,{lat,lng}));
+      const distance = distances.get(key);
+      if (distance > maxRadius) continue;
+      const identity = (center||'')+'|'+vehicle;
+      let group = byVehicle.get(identity);
+      if (!group) byVehicle.set(identity,group={vehicle,center,distance,dayDistances:Array(7).fill(Infinity)});
+      group.distance = Math.min(group.distance,distance);
+      for (let day=0;day<7;day++) if (mask & (1 << day)) group.dayDistances[day] = Math.min(group.dayDistances[day],distance);
+    }
+    return [...byVehicle.values()].sort((a,b)=>a.distance-b.distance||a.vehicle.localeCompare(b.vehicle,'ko',{numeric:true}));
+  }
+  function vehiclesAtRadius(vehicles, radius) {
+    return vehicles.filter(item=>item.distance<=radius).map(({dayDistances,...item})=>({...item,
+      weekdays:observedWeekdays(dayDistances.reduce((mask,distance,day)=>distance<=radius?mask | (1 << day):mask,0))}));
+  }
   function deliveryBoundary(stores) {
     const unique = new Map(stores.filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng)).map((row) => [`${row.lat}:${row.lng}`, { lat: row.lat, lng: row.lng }]));
     const points = [...unique.values()].sort((a, b) => a.lng - b.lng || a.lat - b.lat);
@@ -100,6 +135,7 @@
     }
     return error;
   }
-  root.Phase2bUi = Object.freeze({ storeDetailMatches, normalizeVehicleLabel, vehicleColorKey, vehicleMatches, vehicleColor, addressVariants, addressMatches, distanceKm, nearbyVehicles, deliveryBoundary, requestError });
+  root.Phase2bUi = Object.freeze({ storeDetailMatches, normalizeVehicleLabel, vehicleColorKey, vehicleMatches, vehicleColor, addressVariants, addressMatches, distanceKm, nearbyVehicles,
+    nearestRegisteredStore, observedWeekdays, nearbyVehicleWeekdays, vehiclesAtRadius, deliveryBoundary, requestError });
 })(typeof window === "undefined" ? globalThis : window);
 

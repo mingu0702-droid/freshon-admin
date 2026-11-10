@@ -10,7 +10,7 @@ import {createFixedCoordinateResolver, hasFixedCoordinatePoint, readFixedCoordin
 import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
 import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
 import {createOfficialAddressLookup,createOfficialAddressReview} from './opsmapOfficialAddressLookup.js';
-import {readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
+import {createLegacyNearbyVehicleReader, readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
 import {resolvePreservedAddressBatch,searchPreservedRegistry} from './privateCustomerSearch.js';
 import {archivedOpsmapAssignments} from './opsmapSyncGeneration.js';
 import {opsmapVehicleDeliveryPage} from './opsmapVehicleDeliveryEvidence.js';
@@ -228,6 +228,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
         pendingCoordinates:registry.size-located,coverageGeneratedAt:index.generatedAt,
         coverageSourceObservedAt:index.sourceObservedAt,coverageAsOf:index.asOf},
       get bundledAddress() {return fallback()?.bundledAddress;},
+      readNearbyDay:date=>readDay(date,generation),
       async archived(date) {
         const day = await readDay(date==='latest'?index.asOf:date,generation).catch(()=>null);
         return archivedOpsmapAssignments(day,generation) ?? fallback()?.archived?.(date,registry) ?? null;
@@ -351,16 +352,18 @@ function publicStatus(prepared) {
 
 export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot, readOfficialIndex}) {
   const noStore = (_req, res, next) => {res.set('Cache-Control','private, no-store').vary('Cookie'); next();};
+  const readVehicleDays=createLegacyNearbyVehicleReader();
   router.get(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (_req, res) => res.json(publicStatus(validation.active())));
   router.get(STAGE_NEARBY_ROUTE, requireStaff, noStore, async (req, res) => {
     const prepared = validation.active();
     if (!prepared?.nearby) return res.status(503).json({error:'STAGE_NEARBY_NOT_READY'});
     if (req.query.generation && req.query.generation!==prepared.generation) return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
     const codes = [...prepared.registry.values()].filter(store => store.hasPoint).map(store => store.code);
-    const fixed = await readBaseVehicles?.(codes).catch(() => null);
+    const [fixed,vehicles] = await Promise.all([readBaseVehicles?.(codes).catch(() => null),readVehicleDays(prepared)]);
     return requireStaff(req, res, () => {
       if (validation.active() !== prepared) return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
-      return res.json(stageNearbyResponse(prepared.nearby, fixed));
+      const {observedDates:_dates,...archive}=prepared.nearby;
+      return res.json(stageNearbyResponse({...archive,...vehicles},fixed));
     });
   });
   router.get(STAGE_VEHICLE_DELIVERY_ROUTE, requireStaff, noStore, async (req,res)=>{

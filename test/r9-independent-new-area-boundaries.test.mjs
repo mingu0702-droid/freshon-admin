@@ -25,7 +25,7 @@ const exposure = `
 function fixture() {
   const node = () => ({value:'',innerHTML:'',textContent:'',classList:{add(){},remove(){}},setAttribute(){},removeAttribute(){}});
   const window = {addEventListener(){},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,KAKAO_MAP_CONFIG:{allowExternalAddressLookup:false}};
-  const ctx = vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],body:node()},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
+  const ctx = vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},body:node()},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
   vm.runInContext(source.slice(0,source.indexOf('\n  initVehicles();')) + exposure, ctx);
   return window.qa;
 }
@@ -57,9 +57,9 @@ test('independent QA: a complete period without a nearby point cannot certify ro
   const f = fixture(); f.setup([saved],[saved]);
   const far = f.judgeNewAreaPoint({address:'경상북도 안동시 합성로 1'},{lat:36.56,lng:128.73});
   assert.equal(far.decision,'검토');
-  assert.equal(far.reason,'500m 내 기존 배송점 미확인');
+  assert.equal(far.reason,'배송동선·운행요일 확인 필요');
   assert.equal(far.evidenceCount,0);
-  assert.match(far.evidence,/도로.*(?:판정|확인)/);
+  assert.match(far.evidence,/직선거리만으로 배송 가능 여부를 판단하지 않습니다/);
   assert.notEqual(far.reason,'배송동선 맞지 않음');
   const exception = f.judgeNewAreaPoint({address:'제주특별자치도 합성로 1'},{lat:33.4,lng:126.5});
   assert.equal(exception.decision,'X','explicit legacy exclusion remains a separate policy');
