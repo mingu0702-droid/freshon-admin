@@ -4,6 +4,7 @@ import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {archiveAddressHash} from './stageArchivedDelivery.js';
 import {syncDigest, syncSha256, validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
+import {createStageDeliveryAdminPhotoSession} from './opsmapStageDeliveryAdminSession.js';
 
 const deliveryOrigin = 'https://delivery-bali.chabyulhwa.com';
 const error = (code, status) => Object.assign(Error(code), {code, diagnostic:{status}});
@@ -23,6 +24,14 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
   const enabled = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE &&
     env.OPSMAP_STAGE_DELIVERY_DATED_ENABLED === '1';
   const cookie = String(env.OPSMAP_STAGE_DELIVERY_DATED_COOKIE || '').trim();
+  const dedicated = env.OPSMAP_STAGE_DELIVERY_PHOTO_AUTH_ENABLED === '1';
+  const reuse = enabled && env.OPSMAP_STAGE_DELIVERY_DATED_REUSE_APPROVED === '1' &&
+    (dedicated || env.OPSMAP_STAGE_DELIVERY_PHOTO_USE_EXISTING_ADMIN === '1');
+  const id = dedicated ? env.OPSMAP_STAGE_DELIVERY_PHOTO_ID : env.DELIVERY_ADMIN_ID;
+  const password = dedicated ? env.OPSMAP_STAGE_DELIVERY_PHOTO_PASSWORD : env.DELIVERY_ADMIN_PASSWORD;
+  const valid = (value,max)=>typeof value==='string'&&value.length<=max&&value.trim()&&!/[\x00-\x1f\x7f]/.test(value);
+  const account = reuse && valid(id,256) && valid(password,1024) ? createStageDeliveryAdminPhotoSession({id,password,fetchImpl}) : null;
+  const hasSource = enabled && (!!account || /^[\x20-\x7e]{1,8192}$/.test(cookie));
   const scope = Object.entries(syncCenters || {});
   if (!scope.length || scope.some(([center,id]) => !['osan','yeongnam','honam'].includes(center) ||
       typeof id !== 'string' || !/^[1-9]\d{0,5}$/.test(id) || (center==='osan') !== (id==='1')) ||
@@ -33,6 +42,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       throw error('DELIVERY_SOURCE_REQUEST_REJECTED', 403);
     }
     url.searchParams.set('logisticsCenterId',id);
+    if(account) return account.read(url,{signal});
     return fetchImpl(url, {method, signal, redirect:'error', cache:'no-store', headers:{Accept:'application/json', Cookie:cookie}});
   }});
   const read = readerFor('1');
@@ -42,7 +52,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
   let cached;
   function authorize(date) {
     if (!enabled) throw error('DELIVERY_SOURCE_READ_ONLY', 503);
-    if (!/^[\x20-\x7e]{1,8192}$/.test(cookie)) throw error('DELIVERY_SOURCE_SESSION_REQUIRED', 401);
+    if (!hasSource) throw error('DELIVERY_SOURCE_SESSION_REQUIRED', 401);
     if (!validDate(date)) throw error('DELIVERY_SOURCE_DATE_INVALID', 400);
   }
   async function readTasks(date, reader = read) {
@@ -101,11 +111,11 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const projected = [], visits = [];
     const observations = [];
     for (const {center,id:expected,reader} of syncReaders) {
-      const {tasks,observation} = await readTasks(date,reader);
+      const {tasks,observation} = await readTasks(date,reader).catch(failure=>{throw Object.assign(failure,{date,center});});
       observations.push({center,...observation});
       for (const task of tasks) {
-        const centerId = task.logisticsCenter?.id ?? task.logisticsCenterId;
-        if (centerId !== undefined && centerId !== null && String(centerId) !== expected) throw error('DELIVERY_SOURCE_SCOPE', 503);
+        const centerId = task.logisticsCenter?.id ?? task.logisticsCenterId ?? task.carrier?.logisticsCenterId;
+        if (centerId !== undefined && centerId !== null && String(centerId) !== expected) throw Object.assign(error('DELIVERY_SOURCE_SCOPE',503),{date,center});
         const code = task.customer?.erpCode ?? task.customerErpCode;
         const vehicle = taskVehicle(task);
         const address = field(task.location?.address, task.customerAddress, task.address, task.customer?.address);
@@ -123,5 +133,6 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     return validateOpsmapSyncDay({date,sourceRows:projected.length,unidentified:0,proof:'VERIFIED_COMPLETE_DAY',
       proofHash:syncDigest([observations,projected,visits]),completeCenters,visits,tasks:projected},date);
   };
+  readDate.configured = hasSource;
   return readDate;
 }

@@ -20,7 +20,7 @@ function hubProductionMapAutoInstall(){
     console.log(JSON.stringify(hubMapAutomationStatus_()));
   }finally{lock.releaseLock();}
 }
-function hubProductionMapAutoTick(){
+function hubProductionMapAutoTick(event){
   // Request helper acquires the same user lock as restore/candidate workers.
   // No implicit retry of ERROR, no source collection, no force-resume.
   const s=hubMapAutomationLoad_();s.lastCheck=new Date().toISOString();
@@ -42,6 +42,7 @@ function hubProductionMapAutoTick(){
   }catch(e){s.status='ERROR';s.lastError=/^MODEL_[A-Z0-9_]+$/.test(String(e.message))?e.message:'MODEL_AUTOMATION_FAILED';}
   PropertiesService.getScriptProperties().setProperty(HUB_MAP_AUTO.property,JSON.stringify(s));
   console.log(JSON.stringify(hubMapAutomationStatus_()));
+  if(event && typeof hubOpsmapStageSyncDispatch_==='function')hubOpsmapStageSyncDispatch_(event);
 }
 function hubMapCandidateCheckpointSave_(c){
   const props=PropertiesService.getScriptProperties(),own=props.getProperty(HUB_MAP_INCREMENTAL.property),published=props.getProperty(HUB_STAGE_MODEL.property);

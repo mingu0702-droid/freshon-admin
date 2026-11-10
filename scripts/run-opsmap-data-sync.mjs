@@ -14,21 +14,29 @@ import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {boundedRead, privateCoverageDirectory} from '../src/shadowCoverage/coverageFiles.js';
 import {atomicCoverageWrite} from '../src/shadowCoverage/fileStore.js';
+import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from '../src/opsmapDurableGeneration.js';
+import {opsmapScheduleConfig,publishOpsmapScheduledRun,verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
+import {SYNC_CENTERS} from '../src/opsmapSyncPolicy.js';
 
 const appRoot = fileURLToPath(new URL('../',import.meta.url));
 const env = process.env;
 
 function report(result) {
   console.log(JSON.stringify({component:'opsmap-data-sync',state:result.state,revision:result.revision ?? null,
-    generation:result.generation ?? null,observedToday:result.observedToday===true,sourceReadComplete:result.sourceReadComplete===true,lastSuccessAt:result.lastSuccessAt ?? null}));
+    generation:result.generation ?? null,runId:result.runId??null,observedToday:result.observedToday===true,
+    sourceReadComplete:result.sourceReadComplete===true,lastSuccessAt:result.lastSuccessAt ?? result.completedAt ?? null}));
 }
 
-async function run() {
-  const [mode,settingsFile,...backfillDates] = process.argv.slice(2);
-  if (!['bootstrap','once','watch'].includes(mode) || !path.isAbsolute(settingsFile || '')) throw Error('OPSMAP_SYNC_USAGE');
+async function buildWorker({mode,settingsFile,durable}) {
   const settingsRoot = await privateCoverageDirectory(path.dirname(settingsFile),appRoot);
   const readSettings = async () => JSON.parse(await boundedRead(path.join(settingsRoot,path.basename(settingsFile)),32_768));
   const config = await readSettings();
+  if(durable && path.isAbsolute(config.directory || '')){
+    const parent=await privateCoverageDirectory(path.dirname(config.directory),appRoot);
+    const spool=path.join(parent,path.basename(config.directory));
+    try {await fs.mkdir(spool,{mode:0o700});}
+    catch(error) {if(error.code!=='EEXIST'||(await fs.lstat(spool)).isSymbolicLink())throw error;}
+  }
   const directory = await privateCoverageDirectory(config.directory,appRoot);
   if (!path.isAbsolute(config.ledgerFile || '')) throw Error('OPSMAP_SYNC_LEDGER_PATH');
   const ledgerFolder = await privateCoverageDirectory(path.dirname(config.ledgerFile),appRoot);
@@ -39,8 +47,9 @@ async function run() {
   };
   let readRegistry, readDay, readManualPins;
   if (mode !== 'bootstrap') {
-    if (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN || env.OPSMAP_SYNC_SOURCE_READ_APPROVED !== '1' ||
-        env.OPSMAP_STAGE_DELIVERY_DATED_ENABLED !== '1' || !env.OPSMAP_STAGE_DELIVERY_DATED_COOKIE?.trim()) throw Error('OPSMAP_SYNC_SOURCE_APPROVAL_REQUIRED');
+    if (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN || env.OPSMAP_SYNC_SOURCE_READ_APPROVED !== '1') {
+      throw Error('OPSMAP_SYNC_SOURCE_APPROVAL_REQUIRED');
+    }
     const protectedHub = privateReaderEndpoint('customerRegistry');
     if (!protectedHub.isolated || protectedHub.url === env.HUB_API_URL || protectedHub.secret === env.HUB_API_SECRET) throw Error('OPSMAP_SYNC_HUB_SCOPE');
     const stateFile = path.join(directory,'registry-checkpoint.private.json');
@@ -55,7 +64,12 @@ async function run() {
       if (!['UPDATED','NOOP'].includes(status.phase)) throw Error('OPSMAP_SYNC_REGISTRY_INCOMPLETE');
       return registry.read();
     };
-    readDay = createStageDatedDeliveryReader({env,syncCenters:config.deliveryCenters}).readObservation;
+    if(durable && SYNC_CENTERS.some(center=>!Object.hasOwn(config.deliveryCenters || {},center))) {
+      throw Error('DELIVERY_SOURCE_CENTER_CONFIG');
+    }
+    const delivery = createStageDatedDeliveryReader({env,syncCenters:config.deliveryCenters});
+    if(!delivery.configured)throw Error('DELIVERY_SOURCE_SESSION_REQUIRED');
+    readDay = delivery.readObservation;
     if (config.manualPinFile) {
       const folder = await privateCoverageDirectory(path.dirname(config.manualPinFile),appRoot);
       const file = await fs.realpath(path.join(folder,path.basename(config.manualPinFile)));
@@ -102,7 +116,26 @@ async function run() {
       return completeFixedCoordinates({...options,index});
     };
   }
-  const worker = await createOpsmapDataSync({directory,seed:config.seed,readLedger,readRegistry,readDay,readManualPins,appRoot,completeCoordinates});
+  if(durable&&!completeCoordinates)throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
+  await durable?.restoreSpool(directory);
+  return createOpsmapDataSync({directory,seed:config.seed,readLedger,readRegistry,readDay,readManualPins,appRoot,completeCoordinates,
+    readMissingDay:durable?.readDay});
+}
+
+async function run() {
+  const [mode,settingsFile,...backfillDates] = process.argv.slice(2);
+  if (!['bootstrap','once','watch','scheduled'].includes(mode) || !path.isAbsolute(settingsFile || '')) throw Error('OPSMAP_SYNC_USAGE');
+  if(mode==='scheduled'){
+    if(env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||backfillDates.length)throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
+    let input='';
+    for await(const chunk of process.stdin){input+=chunk;if(Buffer.byteLength(input)>2048)throw Error('OPSMAP_SCHEDULE_RECEIPT');}
+    const receipt=verifyOpsmapScheduleReceipt(JSON.parse(input),opsmapScheduleConfig(env));
+    const durable=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env,write:true}),appRoot});
+    try {report(await publishOpsmapScheduledRun({createWorker:()=>buildWorker({mode,settingsFile,durable}),durable,receipt}));}
+    finally {await durable.dispose().catch(()=>{});}
+    return;
+  }
+  const worker=await buildWorker({mode,settingsFile});
   if (mode !== 'watch') {report(await worker.sync({bootstrap:mode==='bootstrap',backfillDates}));return;}
   if (backfillDates.length) throw Error('OPSMAP_SYNC_USAGE');
   const stop = startOpsmapDataSync(worker,{onResult:report});

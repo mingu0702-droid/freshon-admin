@@ -137,10 +137,17 @@ async function materializeDays({store, current, seed, changes, directory}) {
     if ((old?.tasks || old?.visits || []).some(row => !ids.has(row[0]))) throw Error('OPSMAP_SYNC_DAY_REGRESSION');
     newDocs.set(date,day);
   }
+  const latest=[...Object.keys(dates),...newDocs.keys()].sort().at(-1);
+  const floor=latest&&datesFor(latest,90)[0];
   for (const [date,hash] of Object.entries(dates)) {
     if (newDocs.has(date)) continue;
     if (!syncHash(hash)) throw Error('OPSMAP_SYNC_DAY_DIGEST');
-    await fs.link(path.join(current.input,'observed-days',date+'.json'),path.join(directory,date+'.json'));
+    const target=path.join(directory,date+'.json');
+    try {await fs.link(path.join(current.input,'observed-days',date+'.json'),target);}
+    catch(error) {
+      if(error.code!=='ENOENT') throw error;
+      if(date>=floor) await atomicCoverageWrite(target,JSON.stringify(await store.readDay(date,current)));
+    }
   }
   for (const [date,day] of newDocs) {
     const bytes = JSON.stringify(day);
@@ -154,7 +161,7 @@ async function materializeDays({store, current, seed, changes, directory}) {
 async function copyCoverageCache(source, output) {
   if (!source) return;
   await fs.mkdir(path.join(output,'days'),{recursive:true,mode:0o700});
-  for (const name of await fs.readdir(path.join(source,'days'))) {
+  for (const name of await fs.readdir(path.join(source,'days')).catch(error=>{if(error.code==='ENOENT')return [];throw error;})) {
     if (isDay(name.slice(0,10)) && name === name.slice(0,10)+'.json') {
       await fs.copyFile(path.join(source,'days',name),path.join(output,'days',name));
     }
@@ -164,9 +171,9 @@ async function copyCoverageCache(source, output) {
   }
 }
 
-export async function createOpsmapDataSync({directory, seed, readLedger, readRegistry, readDay,
+export async function createOpsmapDataSync({directory, seed, readLedger, readRegistry, readDay, readMissingDay,
   readManualPins = async () => [], now = Date.now, appRoot = process.cwd(), includeOfficialRegions = true, buildCoverage = defaultCoverageBuilder, completeCoordinates} = {}) {
-  const store = await openOpsmapSyncGenerationStore(directory,{appRoot,writable:true});
+  const store = await openOpsmapSyncGenerationStore(directory,{appRoot,writable:true,readMissingDay});
   const statusFile = path.join(store.root,'sync-status.json');
   let flight;
 
@@ -182,17 +189,26 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
     return {directory:root,base:JSON.parse(base),facts,snapshot:seed.snapshot && validateSnapshotProjection(seed.snapshot)};
   }
 
-  async function run({bootstrap = false, backfillDates = []} = {}) {
+  async function run({bootstrap = false, backfillDates = [], scheduledRun, durableActive} = {}) {
     const expected = await store.latestRevision();
     const current = await store.read();
     if (bootstrap && current) return {state:'NOOP',generation:current.index.sha256,revision:current.state.revision};
+    if (scheduledRun && (!syncHash(scheduledRun.runId)||!isDay(scheduledRun.date)||!completeCoordinates)) throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
+    if (scheduledRun?.runId && current?.state.runId===scheduledRun.runId && current.state.sourceReadComplete===true) {
+      return {state:'PUBLISHED',generation:current.index.sha256,revision:current.state.revision,observedToday:true,
+        sourceReadComplete:true,observationHash:current.state.observationHash};
+    }
     if (!bootstrap && (!readRegistry || !readDay)) throw Error('OPSMAP_SYNC_SOURCES_NOT_CONFIGURED');
     const initial = current ? null : await loadSeed();
-    const target = kstDate(now());
+    const target = scheduledRun?.date || kstDate(now());
     if (!Array.isArray(backfillDates) || backfillDates.length > 2 || backfillDates.some(date => !isDay(date) || date > target)) {
       throw Error('OPSMAP_SYNC_BACKFILL');
     }
-    const datesToRead = bootstrap ? [] : [...new Set([dateBefore(target),target,...backfillDates])];
+    const yesterday=dateBefore(target);
+    const catchupAfter=scheduledRun?(current?.state.catchupAfter || current?.state.asOf || initial?.facts.end):null;
+    const catchup=isDay(catchupAfter)?datesFor(target,90).filter(date=>date>catchupAfter && date<yesterday &&
+      !current?.state.dates[date]).slice(0,2):[];
+    const datesToRead = bootstrap ? [] : [...new Set([yesterday,target,...catchup,...backfillDates])];
     const [registry, suppliedLedger] = await Promise.all([bootstrap?null:readRegistry(),readLedger()]);
     let ledger=completeCoordinates ? continuingFixedLedger(current?.ledger,suppliedLedger) : suppliedLedger;
     const manual = await readManualPins();
@@ -202,6 +218,10 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       const day = await readDay(date);
       if (day) changes.set(date,validateOpsmapSyncDay(day,date));
     }
+    const todayEvidence=changes.get(target);
+    const sourceReadComplete=completeSyncObservation(todayEvidence);
+    if (scheduledRun && !sourceReadComplete) throw Object.assign(Error('OPSMAP_SCHEDULE_SOURCE_INCOMPLETE'),{date:target});
+    const observationHash=scheduledRun?syncDigest([scheduledRun.runId,registry.version,[...changes].map(([date,day])=>[date,day.proofHash])]):null;
     const base = rebindCatalog(current?.baseCatalog || initial.base,registry);
     let completedStores=base.stores;
     if (completeCoordinates) {
@@ -212,8 +232,10 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
     const registryVersion = registry?.version || current?.state.registryVersion || initial?.facts.stores.registryVersion || null;
     const sameDays = [...changes].every(([date,doc]) => current?.state.dates[date] === syncDigest(doc));
     const fingerprint = syncDigest([registryVersion,base,ledger.sha256,manual]);
-    if (current?.state.fingerprint === fingerprint && sameDays && current.state.revision === expected) {
-      return {state:'NOOP',generation:current.index.sha256,revision:current.state.revision,observedToday:changes.has(target),sourceReadComplete:completeSyncObservation(changes.get(target))};
+    if (current?.state.fingerprint === fingerprint && sameDays && current.state.revision === expected &&
+        (!scheduledRun || durableActive?.generation===current.index.sha256 && durableActive.revision===current.state.revision)) {
+      return {state:'NOOP',generation:current.index.sha256,revision:current.state.revision,
+        observedToday:changes.has(target),sourceReadComplete,observationHash};
     }
     const candidate = await store.candidate(expected);
     let published = false;
@@ -253,10 +275,9 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
           registered:catalog.stores.filter(row => row.registered).length,located:catalog.stores.filter(hasFixedCoordinatePoint).length,registryVersion},
         ...(!bootstrap?{syncRead:{target,registryVersion,observedDates:[...changes.keys()].sort()}}:{})};
       const previousSnapshot = current?.sealedSnapshot || initial?.snapshot;
-      const todayEvidence = changes.get(target);
       const sealedSnapshot = snapshotProjection({version:'phase2b-map-snapshot-v1',latestDate:asOf,startDate:source.start,
         rows:snapshotRows(catalog,previousSnapshot,changes.values()),sourceFreshness:{targetDate:target,
-          sourceReadComplete:completeSyncObservation(todayEvidence),sourceDateVerified:Boolean(todayEvidence),
+          sourceReadComplete,sourceDateVerified:Boolean(todayEvidence),
           phase:bootstrap?'VERIFIED_SEED':'VERIFIED_SCHEDULED_READ'}},
       {now,revision:candidate.revision});
       const baseBytes = JSON.stringify(base), catalogBytes = JSON.stringify(catalog), ledgerBytes = JSON.stringify(ledger);
@@ -276,10 +297,11 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       await atomicCoverageWrite(path.join(candidate.folder,'nearby.json'),nearbyBytes);
       const ready = await store.publish(candidate,{fingerprint,asOf,committedAt,registryVersion,dates,generation:built.index.sha256,
         snapshotSha256:syncSha256(snapshotBytes),ledgerSha256:syncSha256(ledgerBytes),baseSha256:syncSha256(baseBytes),
-        catalogSha256:syncSha256(catalogBytes),indexSha256:syncSha256(indexBytes),nearbySha256:syncSha256(nearbyBytes)});
+        catalogSha256:syncSha256(catalogBytes),indexSha256:syncSha256(indexBytes),nearbySha256:syncSha256(nearbyBytes),
+        ...(scheduledRun?{runId:scheduledRun.runId,observationHash,sourceReadComplete,catchupAfter}:{} )});
       published = true;
       return {state:bootstrap?'SEEDED':'PUBLISHED',generation:ready.index.sha256,revision:ready.state.revision,
-        observedToday:changes.has(target),sourceReadComplete:completeSyncObservation(todayEvidence),metrics:built.metrics};
+        observedToday:changes.has(target),sourceReadComplete,observationHash,metrics:built.metrics};
     } finally {
       if (!published) await store.discard(candidate).catch(() => {});
     }
