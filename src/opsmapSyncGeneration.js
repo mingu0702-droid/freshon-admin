@@ -63,7 +63,7 @@ async function verifiedBytes(file, expected, limit) {
 
 // Each committed revision is immutable. Linking a fully written pointer to the
 // next revision name publishes it atomically and rejects concurrent publishers.
-export async function openOpsmapSyncGenerationStore(directory, {appRoot = process.cwd(), writable = false} = {}) {
+export async function openOpsmapSyncGenerationStore(directory, {appRoot = process.cwd(), writable = false, readMissingDay} = {}) {
   const root = await privateCoverageDirectory(directory, appRoot);
   if (process.platform !== 'win32' && ((await fs.stat(root)).mode & 0o007) !== 0) throw Error('OPSMAP_SYNC_PRIVATE_DIRECTORY');
   const heads = path.join(root,'published');
@@ -86,6 +86,8 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
         !syncHash(state.snapshotSha256) || !syncHash(state.ledgerSha256) || !syncHash(state.indexSha256) ||
         !syncHash(state.catalogSha256) || !syncHash(state.baseSha256) || !syncHash(state.nearbySha256) ||
         !isDay(state.asOf) || !Number.isFinite(Date.parse(state.committedAt)) ||
+        state.runId!==undefined&&(!syncHash(state.runId)||state.sourceReadComplete!==true||!syncHash(state.observationHash)) ||
+        state.catchupAfter!=null&&(!isDay(state.catchupAfter)||state.catchupAfter>state.asOf) ||
         !state.dates || Object.entries(state.dates).some(([date,hash]) => !isDay(date) || !syncHash(hash))) {
       throw Error('OPSMAP_SYNC_HEAD');
     }
@@ -126,7 +128,7 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
       return {...row,address:store?.address || '',...(evidence?{coordinateEvidence:evidence}:{})};
     });
     return {state,folder,input,coverage,index,ledger,catalog,registry,nearby,baseCatalog:JSON.parse(baseBytes),sealedSnapshot,
-      snapshot:{...snapshot,source:'STAGE_VERIFIED_REGISTRY',sourceGeneration:index.sha256}};
+      snapshot:{...snapshot,source:'STAGE_VERIFIED_REGISTRY',sourceGeneration:index.sha256,sourceRunId:state.runId || null}};
   }
 
   async function read({recheck = false} = {}) {
@@ -153,8 +155,15 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
     const active = generation ?? await read();
     const hash = active?.state.dates[date];
     if (!hash) return null;
-    const data = await verifiedBytes(path.join(active.input,'observed-days',date+'.json'),hash,SYNC_MAX_DAY_BYTES);
-    return validateOpsmapSyncDay(JSON.parse(data),date);
+    try {
+      const data = await verifiedBytes(path.join(active.input,'observed-days',date+'.json'),hash,SYNC_MAX_DAY_BYTES);
+      return validateOpsmapSyncDay(JSON.parse(data),date);
+    } catch(error) {
+      if (error.code!=='ENOENT'||!readMissingDay) throw error;
+      const day=await readMissingDay(date,active);
+      if (syncDigest(day)!==hash) throw Error('OPSMAP_SYNC_DAY_DIGEST');
+      return validateOpsmapSyncDay(day,date);
+    }
   }, async candidate(expectedRevision) {
     if (!writable) throw Error('OPSMAP_SYNC_READ_ONLY');
     if (await latestRevision() !== expectedRevision) throw Error('OPSMAP_SYNC_PUBLISH_CONFLICT');

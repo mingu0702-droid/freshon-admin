@@ -24,6 +24,8 @@ import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConne
 import {createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
 import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
+import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from './opsmapDurableGeneration.js';
+import {mountOpsmapScheduledRun} from './opsmapScheduledRun.js';
 
 const stageOrigin = STAGE_ORIGIN;
 const stageService = STAGE_SERVICE;
@@ -108,12 +110,16 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const validation = createStageAbValidation();
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   const scheduledEnabled = stage.RENDER_SERVICE_ID===stageService && stage.OPSMAP_STAGE_SYNC_READ_APPROVED==='1';
+  const remoteEnabled=scheduledEnabled && stage.OPSMAP_STAGE_SYNC_REMOTE_APPROVED==='1';
   let scheduledStore, scheduledRefresh, scheduledSuccessAt = null;
+  let scheduledRun=null,scheduledFailure=null;
   let scheduledState = scheduledEnabled?'PENDING':'NOT_CONFIGURED';
   async function refreshScheduled() {
     if (!scheduledEnabled) return;
     scheduledRefresh ??= (async()=>{
-      scheduledStore ||= await openScheduledStore(stage.OPSMAP_STAGE_SYNC_DIR,{writable:false});
+      scheduledStore ||= remoteEnabled
+        ? createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:stage,fetchImpl}),now})
+        : await openScheduledStore(stage.OPSMAP_STAGE_SYNC_DIR,{writable:false});
       const candidate = await scheduledStore.read();
       if (!candidate) throw Error('OPSMAP_SYNC_NOT_PUBLISHED');
       if (!validation.followScheduled(candidate,scheduledStore.readDay)) {
@@ -121,8 +127,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         return;
       }
       const status = await scheduledStore.readStatus();
-      if (status?.generation===candidate.index.sha256 && Number.isFinite(Date.parse(status.lastSuccessAt))) scheduledSuccessAt=status.lastSuccessAt;
-      scheduledState='VERIFIED_SCHEDULED_PROJECTION';
+      const current=status?.generation===candidate.index.sha256;
+      if (current && Number.isFinite(Date.parse(status.lastSuccessAt))) scheduledSuccessAt=status.lastSuccessAt;
+      scheduledRun=remoteEnabled?status?.run || null:null;
+      scheduledFailure=remoteEnabled?status?.lastFailure || null:null;
+      scheduledState=remoteEnabled&&!current?'LAST_VERIFIED_RETAINED':'VERIFIED_SCHEDULED_PROJECTION';
     })().catch(()=>{scheduledState=validation.active()?.scheduled?'LAST_VERIFIED_RETAINED':'UNAVAILABLE';})
       .finally(()=>{scheduledRefresh=null;});
     return scheduledRefresh;
@@ -225,6 +234,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       return staffStoreDetail(response?.data,{customerCode:code,date:null});
     }});
   const app = express(), router = express.Router();
+  mountOpsmapScheduledRun(app,{env:stage,now});
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
     const refresh=()=>{if(snapshotStore)void readBaseSnapshot().catch(()=>{});void generationRestore.refresh();void refreshScheduled();};
@@ -263,14 +273,24 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         mountStageAbValidation(router,{...binding,validation,readSnapshot,readBaseVehicles:codes=>base.get(codes)});
         router.get('/api/map-phase2b/private/stage-sync-evidence',requireStaff,(_req,res)=>{
           const generation=validation.active();
+          const sourceRunId=generation?.scheduled?.state.runId || null;
+          const automaticSyncVerified=remoteEnabled && scheduledState==='VERIFIED_SCHEDULED_PROJECTION' && !!sourceRunId &&
+            ['PUBLISHED','VERIFIED_NOOP'].includes(scheduledRun?.state) && scheduledRun.sourceReadComplete===true &&
+            scheduledRun.generation===generation.generation &&
+            scheduledRun.date===today() && Number.isFinite(Date.parse(scheduledSuccessAt));
           return res.set('Cache-Control','private, no-store').vary('Cookie').json({
-            automaticSyncVerified:false,
+            automaticSyncVerified,
             snapshot:{state:snapshotReadState,verifiedAt:snapshotVerifiedAt,latestDate:snapshot?.latestDate||null,
               revision:snapshot?.preservation?.revision||null,selectedDateStorageVerified:snapshot?.selectedDateCheckpoint?.selectedDateStorageVerified===true},
             coverage:{state:generation?'VERIFIED_STAGE_GENERATION':coverageState,generation:generation?.generation||null,
               asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status()},
             scheduled:{state:scheduledState,revision:generation?.scheduled?.state.revision||null,
-              publishedAt:generation?.scheduled?.state.committedAt||null,lastSuccessAt:scheduledSuccessAt}
+              publishedAt:generation?.scheduled?.state.committedAt||null,lastSuccessAt:scheduledSuccessAt,sourceRunId,
+              run:scheduledRun?{runId:scheduledRun.runId,triggerId:scheduledRun.triggerId,executorHash:scheduledRun.principal,
+                state:scheduledRun.state,date:scheduledRun.date,startedAt:scheduledRun.startedAt,completedAt:scheduledRun.completedAt||null,
+                sourceReadComplete:scheduledRun.sourceReadComplete===true}:null,
+              lastFailure:scheduledFailure?{runId:scheduledFailure.runId,at:scheduledFailure.completedAt,code:scheduledFailure.error,
+                date:scheduledFailure.failedDate,center:scheduledFailure.failedCenter}:null}
           });
         });
         router.post(officialAddressIndexRoute,requireStaff,(req,res,next)=>{
@@ -287,6 +307,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       }
       mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
         appRoot:fileURLToPath(new URL('../',import.meta.url)),
+        readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
       manual.mount(binding);
       photos.mount(binding);
@@ -299,7 +320,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           if (saved.source === 'STAGE_VERIFIED_REGISTRY') {
             for (const row of rows) for (const field of ['address','basicAddress','customerAddress','latestAddress','addressDetail']) delete row[field];
           }
-          const meta = {...phase2bSnapshotMeta(saved), sourceGeneration:saved.sourceGeneration || null};
+          const meta = {...phase2bSnapshotMeta(saved), sourceGeneration:saved.sourceGeneration || null,sourceRunId:saved.sourceRunId || null};
           return requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:rows,meta,error:null}));
         } catch {return res.status(503).json({error:'PHASE2B_SNAPSHOT_UNAVAILABLE'});}
       });

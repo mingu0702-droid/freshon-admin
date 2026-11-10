@@ -1,0 +1,301 @@
+import assert from 'node:assert/strict';
+import {createHash, createHmac, randomBytes} from 'node:crypto';
+import {EventEmitter, once} from 'node:events';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {PassThrough} from 'node:stream';
+import test from 'node:test';
+import vm from 'node:vm';
+import express from 'express';
+import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
+import {coordinateAddressHash} from '../src/opsmap-abc/opsmapAutoCoordinates.js';
+import {createOpsmapDataSync} from '../src/opsmapDataSync.js';
+import {createOpsmapDurableGeneration, stageOpsmapDurableStorage} from '../src/opsmapDurableGeneration.js';
+import {mountOpsmapScheduledRun, OPSMAP_SCHEDULED_ROUTE, publishOpsmapScheduledRun, verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
+import {syncDigest, syncSha256} from '../src/opsmapSyncGeneration.js';
+import {archiveAddressHash} from '../src/stageArchivedDelivery.js';
+import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
+import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
+import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
+
+const date='2026-11-11', previousDate='2026-11-10', oldDate='2026-07-01';
+const clockStart=Date.parse(date+'T02:00:00+09:00');
+const owner='fixture@example.test', triggerId='845142167671';
+const principal=syncSha256(owner), secret='test-scheduler-signing-secret-do-not-reuse';
+const stage={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN};
+const clock={secret,scheduleId:triggerId,executorHash:principal};
+const key=randomBytes(32);
+const storageEnv={...stage,OPSMAP_STAGE_SYNC_REMOTE_APPROVED:'1',OPSMAP_STAGE_SYNC_PUBLISH_APPROVED:'1',
+  OPSMAP_STAGE_SYNC_WRITE_TOKEN:'fixture-writer',OPSMAP_STAGE_SYNC_READ_TOKEN:'fixture-reader',OPSMAP_SHADOW_ARCHIVE_KEY_B64:key.toString('base64')};
+const code='T99111', address='경기도 오산시 검증로 91';
+const ledgerBody={schema:'opsmap-fixed-store-coordinates-v1',revision:0,records:{}};
+const ledger={...ledgerBody,sha256:syncDigest(ledgerBody)};
+
+function signed(at) {
+  const slot=Math.floor(at/3600000), issuedAt=new Date(at).toISOString(), origin='APPS_SCRIPT_TIME_TRIGGER';
+  const day=new Date(at+9*3600000).toISOString().slice(0,10);
+  const runId=syncDigest([1,origin,triggerId,principal,slot]);
+  const signature=createHmac('sha256',secret).update(JSON.stringify([1,origin,triggerId,principal,issuedAt,slot,day,runId])).digest('hex');
+  return {version:1,origin,triggerId,principal,issuedAt,slot,date:day,runId,signature};
+}
+
+async function listen(t,app) {
+  const server=app.listen(0,'127.0.0.1');
+  await once(server,'listening');
+  t.after(()=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve);}));
+  return 'http://127.0.0.1:'+server.address().port;
+}
+
+function github() {
+  const files=new Map(), calls=[];
+  let reject;
+  async function fetchImpl(input,options={}) {
+    const url=new URL(input),method=options.method || 'GET';
+    const root='/repos/mingu0702-droid/freshon-cache';
+    assert.equal(url.origin,'https://api.github.com');
+    if(url.pathname===root)return Response.json({private:true,permissions:{push:true}});
+    assert(url.pathname.startsWith(root+'/contents/'));
+    const folder=url.pathname.slice((root+'/contents/').length), name=folder.split('/').at(-1);
+    const branch=method==='GET'?url.searchParams.get('ref'):JSON.parse(options.body).branch;
+    const object=branch+'/'+folder;
+    calls.push({method,name});
+    const current=files.get(object);
+    if(method==='GET') {
+      return current?Response.json({sha:current.sha,size:current.data.length,encoding:'base64',content:current.data.toString('base64')}):
+        new Response(null,{status:404});
+    }
+    const incoming=JSON.parse(options.body);
+    if(incoming.sha!==current?.sha)return new Response(null,{status:409});
+    if(reject?.(name))return new Response(null,{status:503});
+    const data=Buffer.from(incoming.content,'base64');
+    files.set(object,{sha:createHash('sha1').update(data).digest('hex'),data});
+    return Response.json({});
+  }
+  return {files,calls,fetchImpl,deny:fn=>{reject=fn;}};
+}
+
+function observation(day,status='OPEN') {
+  const rows=day===previousDate?[]:[[syncSha256(day),code,'122','osan',coordinateAddressHash(address),status]];
+  return {date:day,sourceRows:rows.length,unidentified:0,proof:'VERIFIED_COMPLETE_DAY',proofHash:syncDigest(rows),
+    completeCenters:['osan','yeongnam','honam'],tasks:rows,
+    visits:status==='COMPLETED'?[[rows[0][0],code,'122','osan',archiveAddressHash(address)]]:[]};
+}
+
+async function seedFor(root) {
+  const directory=path.join(root,'seed'), observed=path.join(directory,'observed-days');
+  await fs.mkdir(observed,{recursive:true,mode:0o700});
+  const catalog=JSON.stringify({stores:[{code,name:'격리 매장',address,center:'osan',registered:true,
+    lat:37.15,lng:127.06,matchHash:archiveAddressHash(address)}]});
+  const source=JSON.stringify({start:'2026-08-12',end:'2026-11-09',observedAt:'2026-11-10T00:00:00Z',
+    sourceWrites:0,sources:{current:{stable:true},archive:{stable:true}},days:1,completedUnique:1,stores:{union:1}});
+  await fs.writeFile(path.join(directory,'stores.private.json'),catalog);
+  await fs.writeFile(path.join(directory,'source-import.safe.json'),source);
+  for(const day of [oldDate,'2026-11-09']) {
+    await fs.writeFile(path.join(observed,day+'.json'),JSON.stringify({date:day,sourceRows:1,unidentified:0,
+      proof:'OBSERVED_ARCHIVE_CURRENT',visits:[[syncSha256(day),code,'122','osan',archiveAddressHash(address)]]}));
+  }
+  return {directory,catalogSha256:syncSha256(catalog),sourceSha256:syncSha256(source)};
+}
+
+test('existing Apps Script clock signs the Stage request and rejects manual, duplicate or wrong-account dispatch',async()=>{
+  const requests=[];
+  const time=clockStart;
+  let event={triggerUid:triggerId}, activeOwner=owner, count=1;
+  const trigger={getHandlerFunction:()=> 'hubProductionMapAutoTick',getUniqueId:()=>triggerId,getTriggerSource:()=> 'CLOCK'};
+  const settings=JSON.stringify({enabled:true,triggerId,executorHash:principal});
+  const context={Date:class extends Date{constructor(){super(time);}},
+    PropertiesService:{getScriptProperties:()=>({getProperty:name=>name.endsWith('_V1')?settings:secret})},
+    ScriptApp:{getProjectTriggers:()=>Array(count).fill(trigger),TriggerSource:{CLOCK:'CLOCK'}},
+    Session:{getEffectiveUser:()=>({getEmail:()=>activeOwner})},
+    Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},
+      computeDigest:(_,value)=>[...Buffer.from(syncSha256(value),'hex')],
+      computeHmacSha256Signature:(value,key)=>[...createHmac('sha256',key).update(value).digest()],
+      formatDate:()=>date},
+    UrlFetchApp:{fetch(url,opts){requests.push({url,opts});return {getResponseCode:()=>202};}},console:{log(){}}};
+  vm.createContext(context);
+  vm.runInContext(await fs.readFile(new URL('../integrations/hub/HubOpsmapStageSync.js',import.meta.url),'utf8'),context);
+  const dispatch=()=>context.hubOpsmapStageSyncDispatch_(event);
+  event=null;dispatch();
+  event={triggerUid:triggerId};count=2;dispatch();
+  count=1;activeOwner='other@example.test';dispatch();
+  assert.equal(requests.length,0);
+  activeOwner=owner;dispatch();
+  const [{url,opts}]=requests;
+  assert.equal(url,STAGE_ORIGIN+OPSMAP_SCHEDULED_ROUTE);
+  assert.equal(opts.followRedirects,false);
+  const value=JSON.parse(opts.payload);
+  assert.deepEqual(value,signed(time));
+  const now=()=>time;
+  assert.equal(verifyOpsmapScheduleReceipt(value,{...clock,now}).runId,value.runId);
+  assert.throws(()=>verifyOpsmapScheduleReceipt(value,{...clock,now:()=>time+11*60000}),/RECEIPT/);
+  assert.throws(()=>verifyOpsmapScheduleReceipt({...value,signature:'1'.repeat(64)},{...clock,now}),/SIGNATURE/);
+});
+
+test('Stage scheduler endpoint passes a valid receipt once and drops raw child diagnostics',async t=>{
+  const app=express(),logs=[];
+  const env={...storageEnv,OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED:'1',
+    OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE:path.join(os.tmpdir(),'fixture-settings.json'),
+    OPSMAP_STAGE_SYNC_TRIGGER_ID:triggerId,OPSMAP_STAGE_SYNC_EXECUTOR_SHA256:principal,OPSMAP_STAGE_SYNC_SCHEDULER_SECRET:secret};
+  let child,input='';
+  mountOpsmapScheduledRun(app,{env,now:()=>clockStart,log:value=>logs.push(JSON.parse(value)),launch(exec,args){
+    assert.equal(exec,process.execPath);
+    assert.deepEqual(args.slice(1),['scheduled',env.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE]);
+    child=new EventEmitter();
+    child.stdin=new PassThrough();
+    child.stderr=new PassThrough();
+    child.stdin.on('data',bytes=>{input+=bytes;});
+    return child;
+  }});
+  const base=await listen(t,app);
+  const post=value=>fetch(base+OPSMAP_SCHEDULED_ROUTE,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
+  const receipt=signed(clockStart);
+  assert.equal((await post({...receipt,principal:'2'.repeat(64)})).status,403);
+  assert.equal((await post(receipt)).status,202);
+  assert.deepEqual(JSON.parse(input),receipt);
+  assert.equal((await post(receipt)).status,409);
+  child.stderr.write('mock sensitive stack text');
+  child.emit('close',1);
+  assert.deepEqual(logs,[{component:'opsmap-scheduled-run',runId:receipt.runId,exitCode:1,error:'OPSMAP_SYNC_FAILED'}]);
+});
+
+test('publication CAS, source retry, restart, archive laziness, and one run ID across authenticated Stage snapshot and H3',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'opsmap-scheduled-test-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  let spool=path.join(root,'spool');
+  await fs.mkdir(spool,{mode:0o700});
+  const seed=await seedFor(root), api=github();
+  let tick=clockStart, status='OPEN', readFailure=false;
+  const now=()=>tick;
+  const writer=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:storageEnv,write:true,fetchImpl:api.fetchImpl}),now,tempRoot:root});
+  const reader=()=>createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:storageEnv,fetchImpl:api.fetchImpl}),now,tempRoot:root});
+  const activeRegistry={complete:true,version:syncSha256('fixture-registry'),rows:[{customerCode:code,customerName:'격리 매장',
+    basicAddress:address,lifecycle:'ACTIVE'}]};
+  const work=()=>createOpsmapDataSync({directory:spool,seed,now,includeOfficialRegions:false,readLedger:async()=>ledger,
+    readRegistry:async()=>activeRegistry,completeCoordinates:async({stores,ledger})=>({stores,ledger}),readMissingDay:writer.readDay,
+    async readDay(day){
+      if(readFailure)throw Object.assign(Error('DELIVERY_SOURCE_FORBIDDEN'),{date:day,center:'honam'});
+      return observation(day,day===date?status:'OPEN');
+    }});
+  const receipt=()=>verifyOpsmapScheduleReceipt(signed(tick),{...clock,now});
+  const run=()=>publishOpsmapScheduledRun({createWorker:work,durable:writer,receipt:receipt()});
+  const initial=await run();
+  assert.equal(initial.state,'PUBLISHED');
+  assert.equal((await run()).state,'NOOP');
+  const baseline=await writer.read();
+  assert.equal(baseline.snapshot.sourceRunId,initial.runId);
+  assert.equal(baseline.index.asOf,date);
+  const dayRead=await writer.readDay(previousDate);
+  assert.equal(dayRead.sourceRows,0);
+  assert.equal(dayRead.completeCenters.length,3);
+  assert.equal(await writer.readDay('2026-08-16'),null);
+  assert([...api.files.values()].every(({data})=>!data.toString().includes(address)));
+  assert.throws(()=>stageOpsmapDurableStorage({env:{...storageEnv,OPSMAP_STAGE_SYNC_REMOTE_APPROVED:'0'}}),/APPROVAL/);
+  tick+=3600000;
+  const reservations=await Promise.all([writer.reserve(receipt()),writer.reserve(receipt())]);
+  assert.deepEqual(reservations.map(x=>x.state).sort(),['BUSY','STARTED']);
+  const leased=reservations.find(x=>x.run);
+  await writer.fail(leased.run,Error('FIXTURE_INTERRUPTED'));
+  readFailure=true;
+  await assert.rejects(run(),/DELIVERY_SOURCE_FORBIDDEN/);
+  assert.equal((await writer.readStatus()).lastFailure.failedCenter,'honam');
+  assert.equal((await writer.read()).index.sha256,baseline.index.sha256);
+  readFailure=false;
+  status='COMPLETED';
+  api.deny(name=>name.startsWith('release-'));
+  await assert.rejects(run(),/FIXED_STORE_WRITE/);
+  assert.equal((await reader().read()).index.sha256,baseline.index.sha256);
+  api.deny(null);
+  const replacement=await run();
+  assert.equal(replacement.state,'PUBLISHED');
+  assert.equal(replacement.revision,2);
+  assert.notEqual(replacement.generation,baseline.index.sha256);
+  const restarted=reader();
+  const fetchedAt=api.calls.length;
+  const restored=await restarted.read();
+  assert.equal(restored.index.sha256,replacement.generation);
+  assert.equal(restored.snapshot.sourceRunId,replacement.runId);
+  assert.equal(restored.ledger.sha256,ledger.sha256);
+  assert(api.calls.slice(fetchedAt).every(({name})=>!name.startsWith('day-')));
+  assert.equal((await restarted.readDay(oldDate)).visits.length,1);
+  assert(api.calls.at(-1).name.startsWith('day-'));
+  spool=path.join(root,'spool-after-restart');
+  await fs.mkdir(spool,{mode:0o700});
+  await writer.restoreSpool(spool);
+  const restoredWorker=await work();
+  assert.equal((await restoredWorker.read()).index.sha256,replacement.generation);
+  assert.equal((await restoredWorker.readDay(oldDate)).visits.length,1);
+  tick+=3600000;
+  const unchanged=await run();
+  assert.equal(unchanged.state,'VERIFIED_NOOP');
+  assert.equal(unchanged.generation,replacement.generation);
+  assert.equal((await writer.readStatus()).run.sourceReadComplete,true);
+
+  const password='stage-scheduler-fixture';
+  const app=createStageVerificationApp({env:{...storageEnv,OPSMAP_STAGE_SYNC_READ_APPROVED:'1',GITHUB_TOKEN:'fixture',
+    GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'stage/opsmap-manual-pins',
+    MAP_STAFF_ID:'fixture',MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash(password),
+    MAP_STAFF_SESSION_SECRET:randomBytes(32).toString('base64url')},now,fetchImpl:api.fetchImpl,
+  async readHub(){throw Error('HUB_FORBIDDEN');}});
+  const base=(await listen(t,app))+'/opsmap/api/map-phase2b';
+  app.emit('opsmap-stage-listening');
+  assert.equal((await fetch(base+'/preview/snapshot')).status,401);
+  const login=await fetch(base+'/auth/login',{method:'POST',headers:{Origin:STAGE_ORIGIN,'Content-Type':'application/json'},
+    body:JSON.stringify({id:'fixture',password})});
+  assert.equal(login.status,200);
+  const cookie=login.headers.get('set-cookie').split(';')[0];
+  const get=async suffix=>{
+    const response=await fetch(base+suffix,{headers:{cookie,'sec-fetch-site':'same-origin'}});
+    assert.equal(response.status,200,suffix);
+    return response.json();
+  };
+  const snapshot=await get('/preview/snapshot');
+  assert.equal(snapshot.meta.sourceGeneration,replacement.generation);
+  assert.equal(snapshot.meta.sourceRunId,replacement.runId);
+  assert.equal(snapshot.data[0].confirmedVehicle,'122');
+  for(const days of [30,60,90]){
+    const coverage=await get('/private/shadow-coverage/view?days='+days+'&box=126.9,37.1,127.2,37.3');
+    assert.equal(coverage.data.generation,replacement.generation);
+    assert.equal(coverage.data.sourceRunId,replacement.runId);
+  }
+  const evidence=await get('/private/stage-sync-evidence');
+  assert.equal(evidence.scheduled.sourceRunId,replacement.runId);
+  assert.equal(evidence.scheduled.run.runId,unchanged.runId);
+  assert.equal(evidence.scheduled.lastFailure.code,'FIXED_STORE_WRITE');
+
+  const head=[...api.files].find(([name])=>name.endsWith('/head-v1.json'));
+  const {current}=JSON.parse(head[1].data);
+  const bad=[...api.files].find(([name])=>name.endsWith('/release-'+current.blob+'.json'));
+  bad[1].data=Buffer.from('{}');
+  assert.equal((await reader().read()).index.sha256,baseline.index.sha256);
+});
+
+test('Delivery restartable login uses existing account only with explicit date-read approval',async()=>{
+  const env={...stage,OPSMAP_STAGE_DELIVERY_DATED_ENABLED:'1',OPSMAP_STAGE_DELIVERY_PHOTO_USE_EXISTING_ADMIN:'1',
+    DELIVERY_ADMIN_ID:'fixture-user',DELIVERY_ADMIN_PASSWORD:'fixture-password'};
+  assert.equal(createStageDatedDeliveryReader({env}).configured,false);
+  const calls=[];
+  let wrongCenter=false;
+  const read=createStageDatedDeliveryReader({env:{...env,OPSMAP_STAGE_DELIVERY_DATED_REUSE_APPROVED:'1'},
+    syncCenters:{osan:'1',yeongnam:'7',honam:'8'},async fetchImpl(url,options){
+      assert.equal(url.origin,'https://delivery-bali.chabyulhwa.com');
+      calls.push(url.pathname);
+      if(url.pathname==='/api/auth/login'){
+        assert.equal(options.method,'POST');
+        return Response.json({token:'fixture-token'});
+      }
+      assert.equal(options.method,'GET');
+      if(wrongCenter&&url.searchParams.get('logisticsCenterId')==='7') {
+        return Response.json({content:[{id:1,customer:{erpCode:code},carrier:{enteringDatedAt:date,logisticsCenterId:1}}],
+          totalElements:1,totalPages:1});
+      }
+      return Response.json({content:[],totalElements:0,totalPages:0});
+    }});
+  const result=await read.readObservation(date);
+  assert.deepEqual(result.completeCenters,['osan','yeongnam','honam']);
+  assert.equal(result.sourceRows,0);
+  assert.equal(calls.filter(item=>item==='/api/auth/login').length,1);
+  assert.equal(calls.filter(item=>item==='/api/bali/task').length,3);
+  wrongCenter=true;
+  await assert.rejects(read.readObservation(date),{code:'DELIVERY_SOURCE_SCOPE',date,center:'yeongnam'});
+});

@@ -22,7 +22,7 @@ function resolutionFor(level) {
   return 8;
 }
 
-export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, staffResponseGuarded = false } = {}) {
+export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, readRunId, staffResponseGuarded = false } = {}) {
   let imports, current;
   const load = async () => {
     const folder = readDirectory ? await readDirectory() : directory;
@@ -75,7 +75,8 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const data = await reader.readPeriod(days, undefined, { recheck: tag !== null });
     const { window, index, stale } = data;
     const preservedMap = (await Promise.resolve().then(readPreservedMap).catch(() => null)) ?? null;
-    const version = createHash('sha256').update(JSON.stringify([1, index.sha256, stale, preservedMap, days, center, bounds, level])).digest('hex');
+    const sourceRunId=readRunId?.(index.sha256) ?? null;
+    const version = createHash('sha256').update(JSON.stringify([1, index.sha256, stale, preservedMap, sourceRunId, days, center, bounds, level])).digest('hex');
     const etag = '"coverage-' + version + '"';
     if (etag === tag) return { etag, data: null };
     let resolution = resolutionFor(level);
@@ -89,6 +90,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const nationwide = resolution === model.BASE_RESOLUTION ? view : reader.viewFor(data, center, model.BASE_RESOLUTION);
     const result = {
       generation: index.sha256,
+      sourceRunId,
       kind: index.kind,
       stale,
       refreshedAt: index.generatedAt,
