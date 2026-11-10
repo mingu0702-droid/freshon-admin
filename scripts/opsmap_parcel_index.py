@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+from tempfile import TemporaryFile
 from uuid import uuid4
 import zipfile
 
@@ -192,9 +193,23 @@ def add_geometry_layer(db, components, open_component, digest, as_of, sources, c
                   "license": "CC-BY-2.0-KR", "crs": "EPSG:5186"}
     source = sources.index(provenance) if provenance in sources else len(sources)
     with ExitStack() as stack:
-        streams = {suffix[1:]: stack.enter_context(open_component(suffix)) for suffix in (".shp", ".shx", ".dbf")}
+        streams = {}
+        for suffix in (".shp", ".shx", ".dbf"):
+            if require_official_identity:
+                # PyShp performs random seeks. Inflating each member once avoids
+                # replaying large compressed streams on every backwards seek.
+                stream = stack.enter_context(TemporaryFile())
+                with open_component(suffix) as compressed:
+                    shutil.copyfileobj(compressed, stream, length=1024 * 1024)
+                stream.seek(0)
+            else:
+                stream = stack.enter_context(open_component(suffix))
+            streams[suffix[1:]] = stream
+        streams["shx"].seek(0, os.SEEK_END)
+        index_bytes = streams["shx"].tell() - 100
+        streams["shx"].seek(0)
         shp = stack.enter_context(shapefile.Reader(**streams, encoding=encoding))
-        if shp.numRecords != len(shp):
+        if index_bytes < 0 or index_bytes % 8 or shp.numRecords != index_bytes // 8:
             raise ValueError("PARCEL_SHAPEFILE_RECORD_COUNT")
         fields = {field[0].upper(): field[0] for field in shp.fields[1:]}
         pnu_field = fields.get("A1") or fields.get("PNU")
@@ -208,8 +223,6 @@ def add_geometry_layer(db, components, open_component, digest, as_of, sources, c
         valid_count = written = 0
         for record in shp.iterRecords(fields=columns if targets is None else [pnu_field]):
             original = str(record[pnu_field]).strip()
-            if not valid_pnu(original):
-                continue
             current = original
             if original[:10] in changes:
                 new, effective = changes[original[:10]]
@@ -217,6 +230,8 @@ def add_geometry_layer(db, components, open_component, digest, as_of, sources, c
                     continue
                 current = new + original[10:]
             if targets is not None and current not in targets:
+                continue
+            if not valid_pnu(original):
                 continue
             if "A1" in fields:
                 if targets is not None:
