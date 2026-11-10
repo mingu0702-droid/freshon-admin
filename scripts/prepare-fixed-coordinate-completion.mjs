@@ -32,6 +32,7 @@ async function main(){
     const source = await openPublicAddressCatalog(config.publicAddressCatalog,{appRoot});
     candidate = await completeFixedCoordinatesFromCatalog(options,source);
     sourceDigest = {publicAddressCatalogSha256:config.publicAddressCatalog.sha256,
+      ...(config.publicAddressCatalog.parcelIndex ? {parcelIndexSha256:config.publicAddressCatalog.parcelIndex.sha256} : {}),
       ...(config.publicAddressCatalog.reviewedAddresses ? {addressReviewSha256:config.publicAddressCatalog.reviewedAddresses.sha256} : {}),
       ...(config.publicAddressCatalog.reviewedOpenBuildings ? {openBuildingReviewSha256:config.publicAddressCatalog.reviewedOpenBuildings.sha256} : {})};
   } else {

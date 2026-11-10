@@ -1,6 +1,6 @@
 """Build and query the offline postal/building coordinate catalog used by Opsmap."""
 import argparse
-from contextlib import closing
+from contextlib import ExitStack, closing
 import csv
 import hashlib
 import importlib.util
@@ -257,6 +257,14 @@ def representative(points):
     return min(points, key=lambda point: ((point[0] - lat)**2 + ((point[1] - lng) * scale)**2, point))
 
 
+def known_points(db, ids):
+    points = [[], []]
+    for bid in ids:
+        for source, lat, lng in db.execute("SELECT source, lat, lng FROM point WHERE building = ?", (bid,)):
+            points[source].append((lat, lng))
+    return points
+
+
 def locate(db, value):
     parts = query_parts(value)
     if not parts:
@@ -274,9 +282,7 @@ def locate(db, value):
     if not ids:
         return {"status": "ADDRESS_NOT_IDENTIFIED"}
     bid = next(iter(ids))
-    points = [[], []]
-    for source, lat, lng in db.execute("SELECT source, lat, lng FROM point WHERE building = ?", (bid,)):
-        points[source].append((lat, lng))
+    points = known_points(db, [bid])
     if not any(points) and len(postal) == len(business) == 1 and bid not in business and parts[2]:
         # The same exact address can use a newer building ID in the postal edition.
         points[1] = db.execute("SELECT lat, lng FROM point WHERE building = ? AND source = 1",
@@ -286,7 +292,70 @@ def locate(db, value):
     source = 0 if points[0] else 1
     lat, lng = representative(points[source])
     return {"status": "MATCHED", "source": source, "lat": lat, "lng": lng,
-            "buildingSha256": hashlib.sha256(bid.encode("ascii")).hexdigest()}
+            "buildingId": bid, "buildingSha256": hashlib.sha256(bid.encode("ascii")).hexdigest()}
+
+
+def lookup_parcel(base, index, metadata, value):
+    from opsmap_parcel_index import binding_for, direct_lot, parcel_point
+    normalized = clean_address(value)
+    road = address_match.ROAD.search(normalized)
+    lot = address_match.LOT.search(normalized)
+    is_lot = lot is not None and (road is None or lot.start() < road.start())
+    part = lot if is_lot else road
+    if not part:
+        return {"status": "ADDRESS_NOT_IDENTIFIED"}
+    query = normalized[:part.end()]
+    postal, _ = address_buildings(base, query_parts(value))
+    bound = binding_for(index, postal)
+    bindings = sorted({row for rows in bound.values() for row in rows})
+    pnus = {row[0] for row in bindings}
+    direct = direct_lot(index, query, metadata["postalObservedOn"]) if is_lot else None
+    if direct:
+        if pnus and pnus != {direct[0]}:
+            return {"status": "PARCEL_IDENTITY_CONFLICT"}
+        pnus.add(direct[0])
+    road_names = sorted({row[1] for row in bindings})
+    canonical_names = {row[2 if is_lot else 1] for row in bindings}
+    canonical = direct[1] if direct else next(iter(canonical_names)) if len(canonical_names) == 1 else query
+    if not is_lot and bound and len(bound) == len(postal) and len(road_names) == 1:
+        site = index.execute("SELECT pnus,address,id,source,lat,lng,reference FROM site WHERE key=?",
+                             (clean_address(road_names[0]),)).fetchone()
+        if site and set(site[0].split(",")) == pnus:
+            _, address, identifier, source, lat, lng, reference = site
+            return {"status": "MATCHED_REPRESENTATIVE", "kind": "CAMPUS", "identifier": identifier,
+                    "address": address, "parcelSource": source, "lat": lat, "lng": lng,
+                    "parcelIds": sorted(pnus), "officialReference": reference}
+    if len(pnus) > 1:
+        return {"status": "MULTIPLE_PARCELS"}
+    if len(postal) > 1 and len(bound) != len(postal):
+        return {"status": "PARCEL_BINDING_UNAVAILABLE"}
+    ordinary = None
+    if len(postal) <= 1:
+        ordinary = locate(base, value)
+        if ordinary["status"] == "MATCHED":
+            identifier = "PNU:" + next(iter(pnus)) if pnus else "BUILDING:" + ordinary["buildingId"]
+            return {**ordinary, "kind": "BUILDING" if ordinary["source"] == 0 else "ADDRESS",
+                    "identifier": identifier, "address": canonical}
+    if not pnus:
+        return ordinary or {"status": "PARCEL_BINDING_UNAVAILABLE"}
+    pnu = next(iter(pnus))
+    identifier = "PNU:" + pnu
+    # With an exact road address and a shared parcel, licensed points may
+    # represent that address without choosing a specific building.
+    if not is_lot and len(postal) > 1 and len(road_names) == 1:
+        points = known_points(base, postal)
+        if any(points):
+            source = 0 if points[0] else 1
+            lat, lng = representative(points[source])
+            return {"status": "MATCHED", "kind": "ADDRESS", "identifier": identifier, "address": canonical,
+                    "source": source, "lat": lat, "lng": lng}
+    point = parcel_point(index, pnu, metadata["sources"])
+    if point:
+        source, lat, lng, original_pnu = point
+        return {"status": "MATCHED_REPRESENTATIVE", "kind": "PARCEL", "identifier": identifier,
+                "address": canonical, "parcelSource": source, "lat": lat, "lng": lng, "sourcePnu": original_pnu}
+    return {"status": "PARCEL_GEOMETRY_UNAVAILABLE", "identifier": identifier, "address": canonical,
+            "identitySource": "POSTAL_PARCEL_BINDING" if bindings else "LEGAL_CODE_LOOKUP"}
 
 
 def lookup(args):
@@ -294,9 +363,20 @@ def lookup(args):
     if not isinstance(queries, list) or len(queries) > MAX_QUERIES or any(
             not isinstance(value, str) or not 0 < len(value) <= 500 for value in queries):
         raise ValueError("PUBLIC_ADDRESS_QUERY_SCOPE")
-    with closing(sqlite3.connect(args.database.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as db:
+    with ExitStack() as stack:
+        db = stack.enter_context(closing(sqlite3.connect(args.database.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)))
         metadata = json.loads(db.execute("SELECT value FROM metadata").fetchone()[0])
-        result = {"metadata": metadata, "rows": [locate(db, value) for value in queries]}
+        if args.parcel_index:
+            from opsmap_parcel_index import SCHEMA as PARCEL_SCHEMA
+            parcel = stack.enter_context(closing(sqlite3.connect(
+                args.parcel_index.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)))
+            parcel_meta = json.loads(parcel.execute("SELECT value FROM metadata").fetchone()[0])
+            if parcel_meta["schema"] != PARCEL_SCHEMA or parcel_meta["postalSha256"] != metadata["postal"]["sha256"]:
+                raise ValueError("PARCEL_POSTAL_VERSION")
+            result = {"metadata": metadata, "parcelMetadata": parcel_meta,
+                      "rows": [lookup_parcel(db, parcel, parcel_meta, value) for value in queries]}
+        else:
+            result = {"metadata": metadata, "rows": [locate(db, value) for value in queries]}
     json.dump(result, sys.stdout, ensure_ascii=True, separators=(",", ":"))
 
 
@@ -305,14 +385,26 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     build_parser = commands.add_parser("build")
     read_parser = commands.add_parser("lookup")
-    for command in (build_parser, read_parser):
+    parcel_parser = commands.add_parser("build-parcel")
+    for command in (build_parser, read_parser, parcel_parser):
         command.add_argument("database", type=Path)
     for name in ("postal", "business", "elevator"):
         build_parser.add_argument("--" + name, type=Path, required=True)
     for name in ("business-date", "elevator-date"):
         build_parser.add_argument("--" + name, required=True)
+    read_parser.add_argument("--parcel-index", type=Path)
+    parcel_parser.add_argument("--postal", type=Path, required=True)
+    parcel_parser.add_argument("--postal-observed-on", required=True)
+    parcel_parser.add_argument("--legal-dongs", type=Path)
+    parcel_parser.add_argument("--code-changes", type=Path)
+    parcel_parser.add_argument("--parcel-shape", action="append", default=[])
+    parcel_parser.add_argument("--site-index", type=Path, action="append", default=[])
     args = parser.parse_args()
-    (build if args.command == "build" else lookup)(args)
+    if args.command == "build-parcel":
+        from opsmap_parcel_index import build as build_parcel
+        build_parcel(args, lambda file: zip_members(file, ".txt", "utf-8-sig"), clean_address)
+    else:
+        (build if args.command == "build" else lookup)(args)
 
 
 if __name__ == "__main__":

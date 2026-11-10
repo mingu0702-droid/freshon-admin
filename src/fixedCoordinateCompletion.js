@@ -2,6 +2,7 @@
 import {createHash} from 'node:crypto';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {approvedFixedAddressSource, officialAddressKey} from './opsmapOfficialAddressLookup.js';
+import {representativeTypes, validRepresentative} from './opsmapCoordinateRepresentative.js';
 import {hasFixedCoordinatePoint,createFixedCoordinateResolver,reviseFixedCoordinateLedger,
   validateFixedCoordinateLedger} from './fixedStoreCoordinates.js';
 const sha=v=>createHash('sha256').update(v).digest('hex');
@@ -83,29 +84,38 @@ export function completeFixedCoordinates({stores,ledger,index,manualRows=[],now=
     const key=officialAddressKey(address), observedAt=evidence.datasetDate+'T00:00:00.000Z';
     const fromCatalog=Object.hasOwn(evidence,'customerAddressHash');
     const addressLocation=evidence.measurementKind==='ADDRESS_LOCATION';
+    const type=Object.hasOwn(representativeTypes,evidence.representative?.kind) ? representativeTypes[evidence.representative.kind] : null;
     const matchesAddress=fromCatalog
       ? evidence.customerAddressHash===hash && approvedFixedAddressSource(evidence.evidenceSource,evidence.sourceDataset)
       : evidence.evidenceSource==='OFFICIAL_ADDRESS_DATA' && key && evidence.addressSha256===sha(key);
-    if(!matchesAddress||evidence.evidenceSource==='OPEN_ADDRESS_DATA'&&!addressLocation||
-       !(evidence.measurementKind==='BUILDING_LOCATION'||fromCatalog&&addressLocation)||
+    if(!matchesAddress||!(fromCatalog&&type&&type.measurementKind===evidence.measurementKind ||
+         evidence.measurementKind==='BUILDING_LOCATION'||fromCatalog&&addressLocation)||
+       evidence.evidenceSource==='OPEN_ADDRESS_DATA'&&!addressLocation&&type?.measurementKind!=='CAMPUS_LOCATION'||
        ![evidence.buildingSha256,evidence.datasetSha256,evidence.indexSha256].every(v=>HASH.test(v||''))||
        typeof evidence.lat!=='number'||typeof evidence.lng!=='number'||!hasFixedCoordinatePoint(evidence)||
        !/^\d{4}-\d{2}-\d{2}$/.test(evidence.datasetDate||'')||
        !Number.isFinite(Date.parse(observedAt))||new Date(observedAt).toISOString().slice(0,10)!==evidence.datasetDate||
        Date.parse(observedAt)>Date.parse(updatedAt))throw Error('FIXED_COMPLETION_EVIDENCE');
     const point={customerCode:code,addressHash:hash,lat:evidence.lat,lng:evidence.lng,
-      coordinateSource:addressLocation?'ADDRESS_REPRESENTATIVE':'BUILDING_VERIFIED',
-      coordinateAccuracy:addressLocation?'ADDRESS_APPROXIMATE':'BUILDING',evidenceSource:evidence.evidenceSource,
+      coordinateSource:type?.coordinateSource || (addressLocation?'ADDRESS_REPRESENTATIVE':'BUILDING_VERIFIED'),
+      coordinateAccuracy:type?.coordinateAccuracy || (addressLocation?'ADDRESS_APPROXIMATE':'BUILDING'),evidenceSource:evidence.evidenceSource,
       evidenceSha256:digest({customerCode:code,addressHash:hash,...evidence}),observedAt,verifiedAt:updatedAt,
       measurementKind:evidence.measurementKind,
-      ...(fromCatalog?{sourceDataset:evidence.sourceDataset,sourceDatasetSha256:evidence.datasetSha256}:{})};
+      ...(fromCatalog?{sourceDataset:evidence.sourceDataset,sourceDatasetSha256:evidence.datasetSha256}:{}),
+      ...(type?{representative:evidence.representative}:{})};
+    if (evidence.representative && !validRepresentative(point)) throw Error('FIXED_COMPLETION_REPRESENTATIVE');
     const previous=ledger.records[code]?.at(-1)?.point;
     if(previous){
       if(previous.addressHash===hash){record(code,hash,'REVIEW_EXISTING_EVIDENCE');continue;}
       if(previous.coordinateSource==='MANUAL_PIN'){record(code,hash,'PRESERVED_MANUAL');continue;}
       replacements.push({point,expectedAddressHash:previous.addressHash,currentAddressHash:hash});
       record(code,hash,'ADDRESS_CHANGED_REBOUND');
-    }else{rows.push(point);record(code,hash,evidence.evidenceSource==='OPEN_ADDRESS_DATA'?'RESOLVED_OPEN_BUILDING':'RESOLVED_OFFICIAL');}
+    }else{
+      rows.push(point);
+      record(code,hash,type?.coordinateAccuracy==='PARCEL'?'RESOLVED_PARCEL':
+        type?.coordinateAccuracy==='CAMPUS'?'RESOLVED_CAMPUS':
+          evidence.evidenceSource==='OPEN_ADDRESS_DATA'?'RESOLVED_OPEN_BUILDING':'RESOLVED_OFFICIAL');
+    }
     // Equal coordinates are not duplicate customers. Each address/building
     // identity above is independently verified; stores retain separate codes.
   }

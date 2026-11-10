@@ -3,10 +3,12 @@ import {createHash} from 'node:crypto';
 export const OFFICIAL_BUSINESS_SOURCE = 'https://www.data.go.kr/data/15083033/fileData.do';
 export const OFFICIAL_BUILDING_SOURCE = 'https://www.data.go.kr/data/15156424/fileData.do';
 export const OPEN_BUILDING_SOURCE = 'https://download.geofabrik.de/asia/south-korea.html';
+export const OFFICIAL_PARCEL_SOURCE = 'https://www.data.go.kr/data/15045882/fileData.do';
 const approvedSources = new Set([OFFICIAL_BUSINESS_SOURCE, OFFICIAL_BUILDING_SOURCE]);
 export const approvedOfficialAddressSource = value => approvedSources.has(value);
 export const approvedFixedAddressSource = (source,dataset) => source === 'OFFICIAL_ADDRESS_DATA' ? approvedSources.has(dataset) :
-  source === 'OPEN_ADDRESS_DATA' && dataset === OPEN_BUILDING_SOURCE;
+  source === 'OPEN_ADDRESS_DATA' ? dataset === OPEN_BUILDING_SOURCE :
+    source === 'OFFICIAL_PARCEL_DATA' && dataset === OFFICIAL_PARCEL_SOURCE;
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const digest = /^[a-f0-9]{64}$/;
 const aliases = new Map(Object.entries({
