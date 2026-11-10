@@ -198,9 +198,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   async function readSnapshot() {
     const scheduled = validation.active()?.scheduled;
     if (scheduled) return scheduled.snapshot;
-    const saved = await readBaseSnapshot();
+    let saved, baseError;
+    try {saved = await readBaseSnapshot();} catch(error) {baseError=error;}
+    // On startup, wait for the shared durable restore only when the base has no usable snapshot.
+    if(!saved&&!validation.active()&&scheduledRefresh)await scheduledRefresh;
     const bundle = validation.active();
-    if (!bundle) {joinedSnapshot = null; return saved;}
+    if (bundle?.scheduled) return bundle.scheduled.snapshot;
+    if (!bundle) {joinedSnapshot = null; if(baseError)throw baseError; return saved;}
     if (joinedSnapshot?.bundle !== bundle || joinedSnapshot.base !== saved) {
       joinedSnapshot = {bundle, base:saved, snapshot:validation.snapshot(saved)};
     }
