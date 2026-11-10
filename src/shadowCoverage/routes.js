@@ -22,8 +22,9 @@ function resolutionFor(level) {
   return 8;
 }
 
-export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, readRunId, staffResponseGuarded = false } = {}) {
-  let imports, current;
+export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, readRunId,
+  readProviderCoverage, staffResponseGuarded = false } = {}) {
+  let imports, current, providerModule;
   const load = async () => {
     const folder = readDirectory ? await readDirectory() : directory;
     if (!store && !folder) throw Error('COVERAGE_DATA_UNAVAILABLE');
@@ -37,13 +38,13 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
   // The operating map authenticates the prefix and rechecks every JSON response.
   const entry = staffResponseGuarded ? [] : [requireStaff];
   const sendData = (res, data) => res.json({ ok: true, data });
-  const route = (suffix, parse, handle, reply = sendData) => app.get(ROOT + suffix, ...entry, async (req, res) => {
+  const route = (suffix, parse, handle, reply = sendData, loadReady=load) => app.get(ROOT + suffix, ...entry, async (req, res) => {
     res.set('Cache-Control', 'private, no-store').vary('Cookie');
     const scope = criteria(req.query);
     const args = scope && parse(req);
     if (!args) return res.status(400).json({ ok: false, error: 'COVERAGE_QUERY_INVALID' });
     try {
-      const ready = await load();
+      const ready = await loadReady();
       if (res.destroyed || res.writableEnded) return;
       const result = await handle(scope, args, ready);
       if (res.destroyed || res.writableEnded) return;
@@ -166,5 +167,43 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     return { days, start: data.window.start, end: data.window.end,
       results: [model.coverageAtPoint(data.catalog, view, location, center)] };
   });
+
+  route('/provider-overlap',req=>{
+    const {cells='',at}=req.query;
+    if(typeof cells!=='string'||cells.length>1023||at!==undefined&&(typeof at!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(at)))return null;
+    const ids=cells?cells.split(','):[];
+    return ids.length<=64&&ids.every(id=>/^[a-f0-9]{15}$/.test(id))?{ids:[...new Set(ids)],at}:null;
+  },async({days,center,generation},{ids,at})=>{
+    const [providers,inputs,ready]=await Promise.all([
+      providerModule??=import('./providerCoverage.js'),
+      Promise.resolve().then(readProviderCoverage).catch(()=>({})),
+      load().catch(()=>null)
+    ]);
+    const date=at||new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+    if(new Date(date+'T00:00:00Z').toJSON()?.slice(0,10)!==date||ids.some(id=>!providers.isProviderCell(id))) {
+      throw Error('COVERAGE_QUERY_INVALID');
+    }
+    let freshon=null;
+    const data=await ready?.reader.readPeriod(days,generation).catch(error=>{
+      if(error.message==='COVERAGE_GENERATION_CHANGED')throw error;
+      return null;
+    });
+    if(generation&&!data)throw Error('COVERAGE_GENERATION_CHANGED');
+    if(data?.index.kind==='OBSERVED'&&data.window.end<=date) {
+      const view=ready.reader.viewFor(data,center,providers.PROVIDER_H3_RESOLUTION);
+      const {missingDates,unverifiedDates}=view.evidence;
+      const complete=!data.stale&&missingDates.length===0&&unverifiedDates.length===0;
+      const byCell=new Map(ids.map(id=>{
+        const cell=view.groups.get(id);
+        const visits=cell?.visits||0;
+        return [id,{status:visits?'DELIVERY_OBSERVED':complete&&cell&&cell.status!=='UNKNOWN'?'NO_DELIVERY_HISTORY':'UNVERIFIED',
+          observedVisits:visits,candidate:cell?.status==='CANDIDATE',lastDelivery:cell?.lastDelivery||null}];
+      }));
+      freshon={generation:data.index.sha256,start:data.window.start,end:data.window.end,missingDates,unverifiedDates,
+        stale:data.stale,byCell};
+    }
+    const sources={...inputs,FRESHON:{...inputs?.FRESHON,state:'UNVERIFIED'}};
+    return providers.providerCoverageView({inputs:sources,freshon,cells:ids,at:date});
+  },sendData,async()=>null);
 
 }
