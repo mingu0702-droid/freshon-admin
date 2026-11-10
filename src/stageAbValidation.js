@@ -200,24 +200,25 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     return scheduled.compatible ? scheduled : verified;
   }
 
-  function followScheduled(generation, readDay) {
+  function followScheduled(generation, readDay, {baseline=false}={}) {
     if (!generation) return false;
     if (scheduled?.scheduled === generation) return active() === scheduled;
     const previous = scheduled?.scheduled;
-    if (previous && (generation.state.revision <= previous.state.revision || generation.index.asOf < previous.index.asOf)) return false;
+    if (previous && (baseline || generation.index.asOf < previous.index.asOf ||
+        !scheduled.baseline && generation.state.revision <= previous.state.revision)) return false;
     const selected = active();
     if (selected && !preservesVerifiedGeneration(selected,generation)) return false;
     const {registry,index,ledger,coverage,nearby,snapshot,state} = generation;
     const located = [...registry.values()].filter(row => row.hasPoint).length;
     const proof = Object.values(ledger.records).map(history => history.at(-1).point).filter(Boolean);
-    scheduled = {scheduled:generation,directory:coverage,registry,ledger,nearby,snapshot,asOf:index.asOf,
+    scheduled = {scheduled:generation,baseline,directory:coverage,registry,ledger,nearby,snapshot,asOf:index.asOf,
       reference:fallback(),compatible:true,
       generation:index.sha256,expiresAt:Infinity,resolver:createFixedCoordinateResolver(ledger),
       counts:{registered:registry.size,located,pending:registry.size-located,
         gpsCompletion:proof.filter(row=>row.measurementKind==='DELIVERY_COMPLETION_GPS').length,
         officialBuilding:proof.filter(row=>row.measurementKind==='BUILDING_LOCATION').length,
         officialAddressApproximate:proof.filter(row=>row.measurementKind==='ADDRESS_LOCATION').length},
-      evidence:{coordinateAppliedAt:state.committedAt,coordinateScope:'STAGE_APPROVED_SCHEDULED_GENERATION',
+      evidence:{coordinateAppliedAt:state.committedAt,coordinateScope:baseline?'STAGE_VERIFIED_OFFLINE_BASELINE':'STAGE_APPROVED_SCHEDULED_GENERATION',
         pendingCoordinates:registry.size-located,coverageGeneratedAt:index.generatedAt,
         coverageSourceObservedAt:index.sourceObservedAt,coverageAsOf:index.asOf},
       get bundledAddress() {return fallback()?.bundledAddress;},
@@ -401,9 +402,8 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
       if(generationError)return res.status(409).json({error:generationError});
       try{
         const saved=await readSnapshot();
-        if(!Array.isArray(saved?.rows))return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});
         const changed=validation.addressGenerationError(generation,validation.active());
-        if(changed||validation.active()!==prepared||generation!==null&&saved.sourceGeneration!==generation)
+        if(changed||validation.active()!==prepared||generation!==null&&saved?.sourceGeneration!==generation)
           return res.status(409).json({error:changed||'STAGE_BATCH_GENERATION_CHANGED'});
         const bundled=prepared?.bundledAddress, independent=readOfficialIndex?.();
         const official=bundled||independent?{lookup(query){
@@ -411,7 +411,11 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
           if(primary&&(!primary.kind||primary.kind==='EXACT'))return primary;
           return independent?.lookup(query)??primary;
         }}:null;
-        const data=resolvePreservedAddressBatch(rows,saved,official);
+        const snapshotReady=Array.isArray(saved?.rows);
+        if(!snapshotReady&&!official)return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});
+        const data=resolvePreservedAddressBatch(rows,snapshotReady?saved:{rows:[]},official).map(row=>
+          !snapshotReady&&['CUSTOMER_CODE_NOT_FOUND','ADDRESS_NOT_MATCHED'].includes(row.status)
+            ?{status:'STORED_REGISTRY_UNAVAILABLE'}:row);
         outcomes=data.reduce((counts,{status})=>({...counts,[status]:(counts[status]||0)+1}),{});
         return requireStaff(req,res,()=>{
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});

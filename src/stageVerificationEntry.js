@@ -112,6 +112,30 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       ? env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED : '0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
   const validation = createStageAbValidation({now});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
+  let baselineConfig, baselineStore, baselineRefresh, baselineState='NOT_CONFIGURED';
+  if(stage.RENDER_SERVICE_ID===STAGE_SERVICE){
+    try {
+      const config=JSON.parse(readFileSync('/etc/secrets/opsmap-stage-baseline-v1.json','utf8'));
+      const baselineKey=Buffer.from(config.key||'','base64');
+      if(baselineKey.length!==32||config.ref?.generation!=='afa2699571a45ef38300a2c4477b18e27b29e235dd24c3f252983d3c110b5014')throw Error('STAGE_BASELINE_CONFIG');
+      baselineConfig={ref:config.ref,baselineKey};
+      baselineState='PENDING';
+    } catch(error) {
+      if(error.code!=='ENOENT')baselineState='UNAVAILABLE';
+    }
+  }
+  function refreshBaseline(){
+    if(!baselineConfig||['VERIFIED','SUPERSEDED'].includes(baselineState))return;
+    baselineRefresh??=(async()=>{
+      baselineStore ||= createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:stage,fetchImpl,baselineKey:baselineConfig.baselineKey}),now});
+      const candidate=await baselineStore.readBaseline(baselineConfig.ref);
+      if(candidate.ledger.sha256!=='a239aaf9f5b8138daaa75a0d662d03964a93ef62bd85e21cc230418be22e6115'||
+          candidate.registry.size!==6043||[...candidate.registry.values()].some(row=>!row.hasPoint)||!candidate.vehicleDelivery)throw Error('STAGE_BASELINE_SCOPE');
+      baselineState=validation.followScheduled(candidate,baselineStore.readDay,{baseline:true})?'VERIFIED':'SUPERSEDED';
+    })().catch(async()=>{baselineState='UNAVAILABLE';await baselineStore?.dispose().catch(()=>{});})
+      .finally(()=>{baselineRefresh=null;});
+    return baselineRefresh;
+  }
   const scheduledEnabled = stage.RENDER_SERVICE_ID===stageService && stage.OPSMAP_STAGE_SYNC_READ_APPROVED==='1';
   const remoteEnabled=scheduledEnabled && stage.OPSMAP_STAGE_SYNC_REMOTE_APPROVED==='1';
   let scheduledStore, scheduledRefresh, scheduledSuccessAt = null;
@@ -220,10 +244,10 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return joinedSnapshot.snapshot;
   }
   function snapshotRecovery() {
-    if (snapshotPending || scheduledRefresh || fileRestorePending) return 'RESTORING';
+    if (snapshotPending || scheduledRefresh || fileRestorePending || baselineRefresh) return 'RESTORING';
     const fileState=generationRestore.status().state;
     if ([snapshotReadState,scheduledState,fileState].includes('LAST_VERIFIED_RETAINED')) return 'LAST_VERIFIED_RETAINED';
-    if ([snapshotReadState,scheduledState,fileState].some(state=>['UNAVAILABLE','NOT_AVAILABLE'].includes(state))) return 'UNAVAILABLE';
+    if ([snapshotReadState,scheduledState,fileState,baselineState].some(state=>['UNAVAILABLE','NOT_AVAILABLE'].includes(state))) return 'UNAVAILABLE';
     return snapshot || validation.active() ? 'READY' : 'UNAVAILABLE';
   }
   async function readSnapshot() {
@@ -231,7 +255,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     if (current && validation.active()) return current;
     const baseRead=readBaseSnapshot().catch(()=>null);
     if (current) return current;
-    const restore = [scheduledRefresh,fileRestorePending].filter(Boolean);
+    const restore = [scheduledRefresh,fileRestorePending,baselineRefresh].filter(Boolean);
     const reads = [baseRead,...restore];
     let timer;
     // An existing copy may be served as soon as either source validates it. Bound a cold HTTP read.
@@ -288,6 +312,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       if(generationRestore.status().state!=='NOT_CONFIGURED') {
         fileRestorePending ??= generationRestore.refresh().finally(()=>{fileRestorePending=null;});
       }
+      void refreshBaseline();
       void refreshScheduled();
     };
     refresh();
@@ -340,7 +365,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             snapshot:{state:snapshotReadState,verifiedAt:snapshotVerifiedAt,latestDate:snapshot?.latestDate||null,
               revision:snapshot?.preservation?.revision||null,selectedDateStorageVerified:snapshot?.selectedDateCheckpoint?.selectedDateStorageVerified===true},
             coverage:{state:generation?'VERIFIED_STAGE_GENERATION':coverageState,generation:generation?.generation||null,
-              asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status()},
+              asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status(),baselineState},
             scheduled:{state:scheduledState,revision:generation?.scheduled?.state.revision||null,requiredSourceIds,confirmedSourceIds,
               publishedAt:generation?.scheduled?.state.committedAt||null,lastSuccessAt:scheduledSuccessAt,sourceRunId,
               run:scheduledRun?{runId:scheduledRun.runId,triggerId:scheduledRun.triggerId,executorHash:scheduledRun.principal,

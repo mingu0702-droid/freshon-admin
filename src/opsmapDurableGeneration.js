@@ -12,6 +12,7 @@ import {MAX_VEHICLE_DELIVERY_BYTES,VEHICLE_DELIVERY_FILE} from './opsmapVehicleD
 
 const compress = promisify(gzip), decompress = promisify(gunzip);
 const HEAD = 'head-v1.json';
+export const STAGE_BASELINE_PREFIX = 'opsmap-stage/scheduled-generations-v1/verified-baseline-v1';
 const LEASE_MS = 20 * 60_000;
 const MAX_RELEASE_BYTES = 14 * 1024 * 1024;
 const MAX_COMPRESSED_BYTES = 4 * 1024 * 1024;
@@ -23,16 +24,18 @@ const metadataFiles = new Map([
   ['input/source-import.safe.json',32_768],['coverage/coverage-index.json',16_384]
 ]);
 
-export function stageOpsmapDurableStorage({env = process.env, fetchImpl = fetch, write = false} = {}) {
+export function stageOpsmapDurableStorage({env = process.env, fetchImpl = fetch, write = false, baselineKey = null} = {}) {
+  const baseline=Buffer.isBuffer(baselineKey)&&baselineKey.length===32;
   if (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN ||
-      env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED !== '1' || (write && env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED !== '1')) {
+      (baseline ? write : env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED !== '1' || write && env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED !== '1')) {
     throw Error('OPSMAP_DURABLE_STAGE_APPROVAL');
   }
   const token = write ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN || (env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1' && env.OPSMAP_SNAPSHOT_STORE_TOKEN)
-    : env.OPSMAP_STAGE_SYNC_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;
-  const key = Buffer.from(env.OPSMAP_SHADOW_ARCHIVE_KEY_B64 || '','base64');
+    : env.OPSMAP_STAGE_SYNC_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN || (baseline&&env.GITHUB_TOKEN);
+  const key = baseline ? baselineKey : Buffer.from(env.OPSMAP_SHADOW_ARCHIVE_KEY_B64 || '','base64');
   if (!token || key.length !== 32) throw Error('OPSMAP_DURABLE_STAGE_CREDENTIALS');
-  const repo = 'mingu0702-droid/freshon-cache', branch = 'stage/opsmap-snapshots', prefix = 'opsmap-stage/scheduled-generations-v1';
+  const repo = 'mingu0702-droid/freshon-cache', branch = 'stage/opsmap-snapshots';
+  const prefix = baseline ? STAGE_BASELINE_PREFIX : 'opsmap-stage/scheduled-generations-v1';
   const base = 'https://api.github.com/repos/'+repo;
   const guard = (input,options={}) => {
     const url = new URL(input);
@@ -40,7 +43,7 @@ export function stageOpsmapDurableStorage({env = process.env, fetchImpl = fetch,
     const plain = url.origin+url.pathname;
     const folder=base+'/contents/'+prefix+'/';
     const name = plain.startsWith(folder) ? plain.slice(folder.length) : null;
-    const own = name===HEAD || objectName.test(name || '');
+    const own = (!baseline&&name===HEAD) || objectName.test(name || '');
     const get = method==='GET' && (own && url.searchParams.size===1 && url.searchParams.get('ref')===branch ||
       !url.search && (plain===base || plain.startsWith(base+'/git/blobs/') && gitSha.test(plain.split('/').at(-1))));
     const put = method==='PUT' && write && own && !url.search && JSON.parse(options.body).branch===branch;
@@ -176,7 +179,23 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     return restoring;
   }
 
-  return {read, async dispose() {
+  return {read, async readBaseline(ref) {
+    if (!Number.isSafeInteger(ref?.revision)||ref.revision<1||!isDay(ref.asOf)||!syncHash(ref.generation)||
+        !syncHash(ref.blob)||ref.runId!==undefined) throw Error('OPSMAP_DURABLE_BASELINE_REF');
+    const restored=await restore(ref);
+    cached=restored;
+    return restored.generation;
+  }, async exportBaseline(generation) {
+    if (generation?.state.runId!==undefined || typeof store.write!=='function') throw Error('OPSMAP_DURABLE_BASELINE_EXPORT');
+    for(const [date,id] of Object.entries(generation.state.dates)){
+      const data=await boundedRead(path.join(generation.input,'observed-days',date+'.json'),SYNC_MAX_DAY_BYTES);
+      if (syncSha256(data)!==id) throw Error('OPSMAP_DURABLE_DAY_DIGEST');
+      validateOpsmapSyncDay(JSON.parse(data),date);
+      await putObject('day',data,SYNC_MAX_DAY_BYTES);
+    }
+    const blob=await putObject('release',await packGeneration(generation),MAX_RELEASE_BYTES);
+    return {revision:generation.state.revision,asOf:generation.index.asOf,generation:generation.index.sha256,blob};
+  }, async dispose() {
     const previous=cached;
     cached=null;
     if(previous) await fs.rm(previous.root,{recursive:true,force:true});

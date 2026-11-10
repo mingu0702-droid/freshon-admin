@@ -2696,9 +2696,10 @@
       ADDRESS_NOT_MATCHED:'저장·공식 자료에서 주소 일치 없음',ADDRESS_AMBIGUOUS:'주소에 연결된 저장 위치가 여러 곳입니다',
       INVALID_ADDRESS:'주소 입력 확인 필요',OFFICIAL_COORDINATE_UNVERIFIED:'공식 주소 확인 · 좌표 검증 필요',
       OFFICIAL_ADDRESS_INDEX_UNAVAILABLE:'공식 주소 자료를 사용할 수 없습니다',OFFICIAL_ADDRESS_UNAVAILABLE:'공식 주소 조회 실패',
+      STORED_REGISTRY_UNAVAILABLE:'저장 매장 자료 복원 중 · 다시 조회해 주세요',
       REQUEST_TIMEOUT:'저장 주소 조회 시간 초과',STAGE_BATCH_UNAVAILABLE:'저장 주소 자료 조회 실패'};
     const candidates=status==='OFFICIAL_ADDRESS_AMBIGUOUS'?evidence.points?.map(point=>({...point,coordinateSource:'OFFICIAL_PUBLIC_BUILDING'})):null;
-    const failed=!!error||['OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_ADDRESS_UNAVAILABLE'].includes(status)||!status;
+    const failed=!!error||['OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_ADDRESS_UNAVAILABLE','STORED_REGISTRY_UNAVAILABLE'].includes(status)||!status;
     const reason=http===401?'직원 로그인 필요':http===403?'주소 조회 권한 없음':messages[error||status]|| (candidates?'공식 주소 위치 후보 확인 필요':'저장 주소 조회 실패');
     return {...judgeNewAreaPoint(row,candidates?{candidates}:null),reason,evidence:http?`${reason} · HTTP ${http}`:reason,
       lookupStatus:failed?'FAILED':'DEFERRED',lookupError:failed,lookupHttpStatus:http};
