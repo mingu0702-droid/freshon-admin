@@ -1798,11 +1798,11 @@
   function startSearchTrace() {
     const id=++searchSequence, started=performance.now(), stages={input:Math.round(started-(searchInputAt??started))};
     const mark=phase=>{stages[phase]=Math.round(performance.now()-started);};
-    return {mark,finish(kind){afterSearchPaint(()=>{
-      if(id!==searchSequence)return;
-      mark('total');
-      $('#map').dataset.searchMetrics=JSON.stringify({id,kind,...stages});
-    });}};
+    return {mark,finish(kind){
+      const publish=()=>{if(id===searchSequence)$('#map').dataset.searchMetrics=JSON.stringify({id,kind,...stages});};
+      mark('total');publish();
+      requestAnimationFrame(()=>{mark('frame');publish();});
+    }};
   }
 
   function normalizeApiStore(row) {

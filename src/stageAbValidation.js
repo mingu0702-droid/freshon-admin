@@ -392,7 +392,8 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
       return res.json(stageNearbyResponse({...page,sourceRunId:prepared.scheduled.state.runId||null},fixed));
     });
   });
-  router.post(STAGE_ADDRESS_BATCH_ROUTE,requireStaff,noStore,(req,res,next)=>{
+  const addressStaff=(req,res,next)=>res.locals.staffSession?.key ? next() : requireStaff(req,res,next);
+  router.post(STAGE_ADDRESS_BATCH_ROUTE,addressStaff,noStore,(req,res,next)=>{
     if(req.get('Origin')!==STAGE_ORIGIN) return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});
     if(!req.is('application/json')) return res.status(415).json({error:'STAGE_BATCH_MEDIA_TYPE'});
     return next();
@@ -413,7 +414,9 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
       const generationError=validation.addressGenerationError(generation,prepared);
       if(generationError)return res.status(409).json({error:generationError});
       try{
-        const saved=await readSnapshot();
+        const loaded=prepared?.scheduled?.snapshot;
+        const immediate=includeCustomers&&generation!==null&&loaded?.sourceGeneration===generation;
+        const saved=immediate?loaded:await readSnapshot();
         const changed=validation.addressGenerationError(generation,validation.active());
         if(changed||validation.active()!==prepared||generation!==null&&saved?.sourceGeneration!==generation)
           return res.status(409).json({error:changed||'STAGE_BATCH_GENERATION_CHANGED'});
@@ -429,11 +432,12 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
           !snapshotReady&&['CUSTOMER_CODE_NOT_FOUND','ADDRESS_NOT_MATCHED'].includes(row.status)
             ?{status:'STORED_REGISTRY_UNAVAILABLE'}:row);
         outcomes=data.reduce((counts,{status})=>({...counts,[status]:(counts[status]||0)+1}),{});
-        return requireStaff(req,res,()=>{
+        const respond=()=>{
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           if(validation.active()!==prepared)return res.status(409).json({error:validation.addressGenerationError(generation,validation.active())||'STAGE_BATCH_GENERATION_CHANGED'});
           return res.json({ok:true,generation,data});
-        });
+        };
+        return immediate?respond():requireStaff(req,res,respond);
       }catch{return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});}
     }
     if(!/^[a-f0-9]{64}$/.test(generation||'')||!Array.isArray(queries)||queries.length<1||queries.length>120||
