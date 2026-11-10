@@ -96,7 +96,7 @@ function stageGithub(fetchImpl, {files, branch, writable, allowBlob = false}) {
 }
 
 export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory,
-  openScheduledStore = openOpsmapSyncGenerationStore, now = Date.now} = {}) {
+  openScheduledStore = openOpsmapSyncGenerationStore, now = Date.now, snapshotWaitMs = 2500} = {}) {
   const today=()=>new Date(now()+9*3600000).toISOString().slice(0,10);
   if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
   if (![env.HUB_API_URL,env.OPSMAP_PRIVATE_READER_URL].every(stageHubUrl)) throw new Error('STAGE_READ_SOURCE_CONFIG');
@@ -158,6 +158,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const snapshotStore = createProductionSnapshotStore({env:stage,token:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,fetchImpl:snapshotFetch});
   const masterStore = createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_TOKEN:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,GITHUB_CACHE_BRANCH:snapshotBranch,GITHUB_CACHE_DIR:'opsmap-stage'},fetchImpl:snapshotFetch});
   let snapshot = null, snapshotPending = null, snapshotBase = null, joinedSnapshot = null;
+  let fileRestorePending = null;
   let nextSnapshotCheck = 0;
   let snapshotReadState=snapshotStore?'PENDING':'NOT_CONFIGURED', snapshotVerifiedAt=null;
   async function readBaseSnapshot() {
@@ -195,20 +196,40 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     }).finally(() => {snapshotPending = null;});
     return snapshotPending;
   }
-  async function readSnapshot() {
-    const scheduled = validation.active()?.scheduled;
-    if (scheduled) return scheduled.snapshot;
-    let saved, baseError;
-    try {saved = await readBaseSnapshot();} catch(error) {baseError=error;}
-    // On startup, wait for the shared durable restore only when the base has no usable snapshot.
-    if(!saved&&!validation.active()&&scheduledRefresh)await scheduledRefresh;
+  function selectSnapshot(saved) {
     const bundle = validation.active();
     if (bundle?.scheduled) return bundle.scheduled.snapshot;
-    if (!bundle) {joinedSnapshot = null; if(baseError)throw baseError; return saved;}
+    if (!bundle) {joinedSnapshot = null; return saved;}
     if (joinedSnapshot?.bundle !== bundle || joinedSnapshot.base !== saved) {
       joinedSnapshot = {bundle, base:saved, snapshot:validation.snapshot(saved)};
     }
     return joinedSnapshot.snapshot;
+  }
+  function snapshotRecovery() {
+    if (snapshotPending || scheduledRefresh || fileRestorePending) return 'RESTORING';
+    const fileState=generationRestore.status().state;
+    if ([snapshotReadState,scheduledState,fileState].includes('LAST_VERIFIED_RETAINED')) return 'LAST_VERIFIED_RETAINED';
+    if ([snapshotReadState,scheduledState,fileState].some(state=>['UNAVAILABLE','NOT_AVAILABLE'].includes(state))) return 'UNAVAILABLE';
+    return snapshot || validation.active() ? 'READY' : 'UNAVAILABLE';
+  }
+  async function readSnapshot() {
+    const current=selectSnapshot(snapshot);
+    if (current && validation.active()) return current;
+    const baseRead=readBaseSnapshot().catch(()=>null);
+    if (current) return current;
+    const restore = [scheduledRefresh,fileRestorePending].filter(Boolean);
+    const reads = [baseRead,...restore];
+    let timer;
+    // An existing copy may be served as soon as either source validates it. Bound a cold HTTP read.
+    try {
+      await Promise.race([
+        Promise.any(reads.map(read=>Promise.resolve(read).then(()=>{
+          if (!selectSnapshot(snapshot)) throw Error('STAGE_SNAPSHOT_NOT_AVAILABLE');
+        }))).catch(()=>{}),
+        new Promise(resolve=>{timer=setTimeout(resolve,snapshotWaitMs);})
+      ]);
+      return selectSnapshot(snapshot);
+    } finally {clearTimeout(timer);}
   }
   const callHub = async (action, params, options) => {
     if (!readActions.has(action)) throw new Error('STAGE_HUB_WRITE_REJECTED');
@@ -248,7 +269,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   mountOpsmapScheduledRun(app,{env:stage,now});
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
-    const refresh=()=>{if(snapshotStore)void readBaseSnapshot().catch(()=>{});void generationRestore.refresh();void refreshScheduled();};
+    const refresh=()=>{
+      if(snapshotStore)void readBaseSnapshot().catch(()=>{});
+      if(generationRestore.status().state!=='NOT_CONFIGURED') {
+        fileRestorePending ??= generationRestore.refresh().finally(()=>{fileRestorePending=null;});
+      }
+      void refreshScheduled();
+    };
     refresh();
     setInterval(refresh,60_000).unref();
   });
@@ -327,12 +354,17 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       router.get('/api/map-phase2b/preview/snapshot',requireStaff,async(req,res)=>{
         try {
           const saved=await readSnapshot();
-          if (!saved) return res.status(503).json({error:'PHASE2B_SNAPSHOT_NOT_READY'});
+          if (!saved) {
+            const recovery=snapshotRecovery();
+            if(recovery==='RESTORING')res.set('Retry-After','2');
+            return res.status(503).json({error:recovery==='RESTORING'?'PHASE2B_SNAPSHOT_RESTORING':'PHASE2B_SNAPSHOT_UNAVAILABLE',recovery});
+          }
           const rows = redactPublicData(saved.rows);
           if (saved.source === 'STAGE_VERIFIED_REGISTRY') {
             for (const row of rows) for (const field of ['address','basicAddress','customerAddress','latestAddress','addressDetail']) delete row[field];
           }
-          const meta = {...phase2bSnapshotMeta(saved), sourceGeneration:saved.sourceGeneration || null,sourceRunId:saved.sourceRunId || null};
+          const meta = {...phase2bSnapshotMeta(saved), sourceGeneration:saved.sourceGeneration || null,sourceRunId:saved.sourceRunId || null,
+            recovery:snapshotRecovery()};
           return requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:rows,meta,error:null}));
         } catch {return res.status(503).json({error:'PHASE2B_SNAPSHOT_UNAVAILABLE'});}
       });

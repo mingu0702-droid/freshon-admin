@@ -235,24 +235,48 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   assert.equal((await writer.readStatus()).run.sourceReadComplete,true);
 
   const password='stage-scheduler-fixture';
-  const app=createStageVerificationApp({env:{...storageEnv,OPSMAP_STAGE_SYNC_READ_APPROVED:'1',GITHUB_TOKEN:'fixture',
+  const env={...storageEnv,OPSMAP_STAGE_SYNC_READ_APPROVED:'1',GITHUB_TOKEN:'fixture',
     GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'stage/opsmap-manual-pins',
     MAP_STAFF_ID:'fixture',MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash(password),
-    MAP_STAFF_SESSION_SECRET:randomBytes(32).toString('base64url')},now,fetchImpl:api.fetchImpl,
-  async readHub(){throw Error('HUB_FORBIDDEN');}});
-  const base=(await listen(t,app))+'/opsmap/api/map-phase2b';
-  app.emit('opsmap-stage-listening');
+    MAP_STAFF_SESSION_SECRET:randomBytes(32).toString('base64url')};
+  let release, headRequests=0, headOffline=false;
+  const delayedHead=new Promise(resolve=>{release=resolve;});
+  const createStage=async()=>{
+    const app=createStageVerificationApp({env,now,snapshotWaitMs:100,async fetchImpl(input, options){
+      const pathname=new URL(input).pathname;
+      if(pathname.endsWith('/map-snapshot-v1.json'))return new Response(null,{status:503});
+      if(pathname.endsWith('/head-v1.json')){
+        headRequests++;
+        await delayedHead;
+        if(headOffline)return new Response(null,{status:503});
+      }
+      return api.fetchImpl(input,options);
+    },async readHub(){throw Error('HUB_FORBIDDEN');}});
+    const base=(await listen(t,app))+'/opsmap/api/map-phase2b';
+    app.emit('opsmap-stage-listening');
+    return base;
+  };
+  const base=await createStage();
   assert.equal((await fetch(base+'/preview/snapshot')).status,401);
   const login=await fetch(base+'/auth/login',{method:'POST',headers:{Origin:STAGE_ORIGIN,'Content-Type':'application/json'},
     body:JSON.stringify({id:'fixture',password})});
   assert.equal(login.status,200);
   const cookie=login.headers.get('set-cookie').split(';')[0];
+  const request=(root,suffix)=>fetch(root+suffix,{headers:{cookie,'sec-fetch-site':'same-origin'}});
+  const pending=await request(base,'/preview/snapshot');
+  assert.equal(pending.status,503);
+  assert.equal(pending.headers.get('retry-after'),'2');
+  assert.deepEqual(await pending.json(),{error:'PHASE2B_SNAPSHOT_RESTORING',recovery:'RESTORING'});
+  assert.equal(headRequests,1);
+  release();
   const get=async suffix=>{
     const response=await fetch(base+suffix,{headers:{cookie,'sec-fetch-site':'same-origin'}});
     assert.equal(response.status,200,suffix);
     return response.json();
   };
-  const snapshot=await get('/preview/snapshot');
+  const copies=await Promise.all(Array.from({length:4},()=>get('/preview/snapshot')));
+  const [snapshot]=copies;
+  assert(copies.every(value=>value.meta.sourceGeneration===replacement.generation && value.data.length===1));
   assert.equal(snapshot.meta.sourceGeneration,replacement.generation);
   assert.equal(snapshot.meta.sourceRunId,replacement.runId);
   assert.equal(snapshot.data[0].confirmedVehicle,'122');
@@ -265,6 +289,18 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   assert.equal(evidence.scheduled.sourceRunId,replacement.runId);
   assert.equal(evidence.scheduled.run.runId,unchanged.runId);
   assert.equal(evidence.scheduled.lastFailure.code,'FIXED_STORE_WRITE');
+
+  headOffline=true;
+  const cold=await createStage();
+  const failed=await request(cold,'/preview/snapshot');
+  assert.equal(failed.status,503);
+  assert.deepEqual(await failed.json(),{error:'PHASE2B_SNAPSHOT_UNAVAILABLE',recovery:'UNAVAILABLE'});
+  assert.equal((await get('/preview/snapshot')).meta.sourceGeneration,replacement.generation);
+  headOffline=false;
+  const restart=await createStage();
+  const recovered=await request(restart,'/preview/snapshot');
+  assert.equal(recovered.status,200);
+  assert.equal((await recovered.json()).meta.sourceGeneration,replacement.generation);
 
   const head=[...api.files].find(([name])=>name.endsWith('/head-v1.json'));
   const {current}=JSON.parse(head[1].data);

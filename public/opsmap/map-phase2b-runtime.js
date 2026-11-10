@@ -359,7 +359,9 @@
   }
   function syncSourceFreshness() {
     const meta=snapshotMeta||{};
-    $('#sourceCollectedAt').textContent=`최신 원천 수집일: ${meta.sourceObservedAt||meta.sourceCollectedAt||'미확인'}${customerRegistryCheckedAt?' · Customer 확인 '+new Date(customerRegistryCheckedAt).toLocaleTimeString('ko-KR',{hour12:false}):''}`;
+    const recovery=meta.recovery==='RESTORING'?' · 최신 자료 복원 중':
+      ['LAST_VERIFIED_RETAINED','UNAVAILABLE'].includes(meta.recovery)?' · 최신 자료 조회 실패, 확인된 자료 표시 중':'';
+    $('#sourceCollectedAt').textContent=`최신 원천 수집일: ${meta.sourceObservedAt||meta.sourceCollectedAt||'미확인'}${customerRegistryCheckedAt?' · Customer 확인 '+new Date(customerRegistryCheckedAt).toLocaleTimeString('ko-KR',{hour12:false}):''}${recovery}`;
     $('#mapAppliedRange').textContent=`현재 지도 반영기간: ${!generalMap?state.mode==='DATE_ROUTE'?state.selectedDate||'미확인':state.rangeStart&&state.rangeEnd?`${state.rangeStart} ~ ${state.rangeEnd}`:'미확인':meta.startDate&&meta.endDate?`${meta.startDate} ~ ${meta.endDate}`:'기간 미확인'}`;
   }
   function syncPeriodBasis() {
@@ -397,7 +399,10 @@
       state.latestDate = snapshotMeta.latestDate || latestDateFromRows(latestSnapshotRows);
       $("#selectedDate").max = localDate();
       // Coordinates and Snapshot freshness never select the Period or Daily date.
-    } catch (error) { if(isSilentRequestError(error))throw error; snapshotReadState = 'error'; }
+    } catch (error) {
+      if(isSilentRequestError(error))throw error;
+      snapshotReadState = error.code==='PHASE2B_SNAPSHOT_RESTORING'?'pending':'error';
+    }
   }
   async function pollGeneralSnapshot(){
     if(generalSnapshotPolling||!generalMap||state.mode!=='BASE_60D'||document.hidden||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
@@ -446,7 +451,10 @@
       await refreshStoreSnapshot();
       if(id!==initialRequestId||!generalMap)return;
       if(snapshotReadState==='error'&&cached){dateReady=true;setPeriodViewState(allStores.length?'ready':'empty');$('#freshnessState').textContent='저장된 정상 지도 유지 · 네트워크 최신성 미확인';return;}
-      if(snapshotReadState==='pending'){setPeriodViewState('not-ready');renderPeriodStoreList([]);$('#freshnessState').textContent='매장 집계 중 — 조회 0건으로 확정하지 않음';return;}
+      if(snapshotReadState==='pending'){
+        if(cached){$('#freshnessState').textContent='최신 매장 자료 복원 중 · 저장된 지도 표시';return;}
+        setPeriodViewState('not-ready');renderPeriodStoreList([]);$('#freshnessState').textContent='매장 자료 복원 중 · 매장 수 미확인';return;
+      }
       if(snapshotReadState!=='ready')throw Error('SNAPSHOT_READ_FAILED');
       if(recentPeriodMode){const latest=await adapter?.refreshLatest().catch(()=>null),range=MapPeriodUi.recentRange(latest);if(id!==initialRequestId||!generalMap)return;if(range){state.rangeStart=range.start;state.rangeEnd=range.end;$('#rangeStart').value=range.start;$('#rangeEnd').value=range.end;}}
       periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;
