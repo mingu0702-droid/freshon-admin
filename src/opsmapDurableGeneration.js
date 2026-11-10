@@ -86,6 +86,9 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
   const encryption = kdf('objects'), signing = kdf('head');
   const mac = value => createHmac('sha256',signing).update(JSON.stringify(value)).digest('hex');
   let cached, restoring;
+  const days=new Map(), dayFlights=new Map(), dayQueue=[];
+  let dayBytes=0, activeDayReads=0;
+  const maxDayCacheBytes=2*1024*1024;
   const empty = {version:1,current:null,previous:null,run:null,lastSuccess:null,lastFailure:null};
 
   async function readHead() {
@@ -100,6 +103,11 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
   }
 
   const writeHead = (head,sha) => store.write(HEAD,{...head,signature:mac(head)},sha);
+  function mergeSources(head,updates) {
+    const sources={...head.sources};
+    for(const [key,status] of Object.entries(updates))sources[key]={...sources[key],...status};
+    return sources;
+  }
 
   async function decode(kind,id,value,limit) {
     if (value?.version!==1 || typeof value.ciphertext!=='string' || value.ciphertext.length>Math.ceil(MAX_COMPRESSED_BYTES/3)*4 ||
@@ -147,11 +155,16 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
       const folder=path.join(root,'generations',state.id);
       await fs.mkdir(path.join(folder,'input'),{recursive:true,mode:0o700});
       await fs.mkdir(path.join(folder,'coverage'),{mode:0o700});
-      for (const [name,limit] of expected) {
-        if (typeof files[name]!=='string' || files[name].length>Math.ceil(limit/3)*4) throw Error('OPSMAP_DURABLE_RELEASE_FILES');
-        const data=Buffer.from(files[name],'base64');
-        if (!data.length||data.length>limit) throw Error('OPSMAP_DURABLE_RELEASE_FILES');
-        await fs.writeFile(path.join(folder,name),data,{flag:'wx',mode:0o600});
+      const entries=[...expected];
+      for(let i=0;i<entries.length;i+=4) {
+        const writes=await Promise.allSettled(entries.slice(i,i+4).map(async([name,limit])=>{
+          if (typeof files[name]!=='string' || files[name].length>Math.ceil(limit/3)*4) throw Error('OPSMAP_DURABLE_RELEASE_FILES');
+          const data=Buffer.from(files[name],'base64');
+          if (!data.length||data.length>limit) throw Error('OPSMAP_DURABLE_RELEASE_FILES');
+          await fs.writeFile(path.join(folder,name),data,{flag:'wx',mode:0o600});
+        }));
+        const failed=writes.find(write=>write.status==='rejected');
+        if(failed)throw failed.reason;
       }
       await fs.mkdir(path.join(root,'published'),{mode:0o700});
       await fs.writeFile(path.join(root,'published',String(state.revision).padStart(12,'0')+'.json'),JSON.stringify({...state,sha256:syncDigest(state)}),{flag:'wx',mode:0o600});
@@ -161,26 +174,73 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     } catch(error) {await fs.rm(root,{recursive:true,force:true}).catch(()=>{});throw error;}
   }
 
-  async function read() {
+  function statusOf(head) {
+    return {generation:head.current?.generation||null,revision:head.current?.revision??null,
+      run:head.run,lastSuccessAt:head.lastSuccess?.completedAt||null,
+      lastFailure:head.lastFailure,sources:head.sources||{}};
+  }
+
+  async function readWithStatus() {
     restoring ??= (async()=>{
       const {head}=await readHead();
-      if (cached && cached.ref.blob===head.current?.blob) return cached.generation;
+      const status=statusOf(head);
+      if (cached && cached.ref.blob===head.current?.blob) return {generation:cached.generation,status};
       for (const ref of [head.current,head.previous].filter(Boolean)) {
-        if (cached?.ref.blob===ref.blob) return cached.generation;
+        if (cached?.ref.blob===ref.blob) return {generation:cached.generation,status};
         let next;
         try {next=await restore(ref);}catch{continue;}
         const previous=cached;
         cached=next;
         if(previous) setTimeout(()=>void fs.rm(previous.root,{recursive:true,force:true}).catch(()=>{}),30_000).unref();
-        return next.generation;
+        return {generation:next.generation,status};
       }
       if (head.current) throw Error('OPSMAP_DURABLE_NO_VERIFIED_RELEASE');
-      return cached?.generation || null;
-    })().catch(error=>{if(cached)return cached.generation;throw error;}).finally(()=>{restoring=null;});
+      return {generation:cached?.generation||null,status};
+    })().catch(error=>{
+      if(cached)return {generation:cached.generation,status:null,error:safeCode(error.code||error.message)};
+      throw error;
+    }).finally(()=>{restoring=null;});
     return restoring;
   }
+  const read=async()=>(await readWithStatus()).generation;
 
-  return {read, async readBaseline(ref) {
+  function readDayBytes(id,date) {
+    const key=date+':'+id;
+    const saved=days.get(key);
+    if(saved) {
+      days.delete(key);
+      days.set(key,saved);
+      return saved;
+    }
+    if(dayFlights.has(key))return dayFlights.get(key);
+    if(dayFlights.size>=32)throw Error('OPSMAP_DURABLE_DAY_BUSY');
+    const pending=(async()=>{
+      if(activeDayReads>=4)await new Promise(resolve=>dayQueue.push(resolve));
+      else activeDayReads++;
+      try {
+        const bytes=await readObject('day',id,SYNC_MAX_DAY_BYTES);
+        validateOpsmapSyncDay(JSON.parse(bytes),date);
+        if(bytes.length<=maxDayCacheBytes) {
+          while(days.size>=8||dayBytes+bytes.length>maxDayCacheBytes) {
+            const oldest=days.keys().next().value;
+            dayBytes-=days.get(oldest).length;
+            days.delete(oldest);
+          }
+          days.set(key,bytes);
+          dayBytes+=bytes.length;
+        }
+        return bytes;
+      } finally {
+        const next=dayQueue.shift();
+        if(next)next();
+        else activeDayReads--;
+      }
+    })().finally(()=>dayFlights.delete(key));
+    dayFlights.set(key,pending);
+    return pending;
+  }
+
+  return {read,readWithStatus, async readBaseline(ref) {
     if (!Number.isSafeInteger(ref?.revision)||ref.revision<1||!isDay(ref.asOf)||!syncHash(ref.generation)||
         !syncHash(ref.blob)||ref.runId!==undefined) throw Error('OPSMAP_DURABLE_BASELINE_REF');
     const restored=await restore(ref);
@@ -199,15 +259,17 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
   }, async dispose() {
     const previous=cached;
     cached=null;
+    days.clear();
+    dayBytes=0;
     if(previous) await fs.rm(previous.root,{recursive:true,force:true});
   }, async readDay(date,generation) {
     if (!isDay(date)) throw Error('OPSMAP_SYNC_DAY');
     const active=generation || await read();
     const id=active?.state.dates[date];
-    return id ? validateOpsmapSyncDay(JSON.parse(await readObject('day',id,SYNC_MAX_DAY_BYTES)),date) : null;
+    return id ? JSON.parse(await readDayBytes(id,date)) : null;
   }, async readStatus() {
     const {head}=await readHead();
-    return {generation:head.current?.generation || null,run:head.run,lastSuccessAt:head.lastSuccess?.completedAt || null,lastFailure:head.lastFailure};
+    return statusOf(head);
   }, async restoreSpool(directory) {
     const target=await openOpsmapSyncGenerationStore(directory,{appRoot,writable:true});
     const generation=await read();
@@ -245,23 +307,23 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     try {await writeHead({...head,run},sha);}
     catch(error){if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY'};throw error;}
     return {state:'STARTED',run,active:head.current};
-  }, async fail(run,error) {
+  }, async fail(run,error,sources={}) {
     const {head,sha}=await readHead();
     if (head.run?.owner!==run.owner || head.run.state!=='RUNNING') return;
     const finished={...head.run,state:'FAILED',error:safeCode(error.code || error.message),completedAt:new Date(now()).toISOString(),
       failedDate:isDay(error.date)?error.date:null,failedCenter:['osan','yeongnam','honam'].includes(error.center)?error.center:null,
       failedSourceId:['1','2','3','4'].includes(error.sourceId)?error.sourceId:null};
-    await writeHead({...head,run:finished,lastFailure:finished},sha);
-  }, async confirmUnchanged(run,generation,observationHash) {
+    await writeHead({...head,sources:mergeSources(head,sources),run:finished,lastFailure:finished},sha);
+  }, async confirmUnchanged(run,generation,observationHash,sources={}) {
     const {head,sha}=await readHead();
     if(head.run?.owner!==run.owner||head.run.state!=='RUNNING'||head.run.leaseUntil<=now()||!syncHash(observationHash)||
        head.current?.generation!==generation.index.sha256||head.current.revision!==generation.state.revision)throw Error('OPSMAP_DURABLE_LEASE');
     const finished={...head.run,state:'VERIFIED_NOOP',generation:head.current.generation,revision:head.current.revision,observationHash,
       sourceReadComplete:true,observedToday:true,completedAt:new Date(now()).toISOString()};
-    await writeHead({...head,run:finished,lastSuccess:finished},sha);
+    await writeHead({...head,sources:mergeSources(head,sources),run:finished,lastSuccess:finished},sha);
     if ((await readHead()).head.lastSuccess?.owner!==run.owner) throw Error('OPSMAP_DURABLE_HEAD_READBACK');
     return finished;
-  }, async commit(run,generation) {
+  }, async commit(run,generation,sources={}) {
     const {head,sha}=await readHead();
     if (head.run?.owner!==run.owner || head.run.state!=='RUNNING' || head.run.leaseUntil<=now()) throw Error('OPSMAP_DURABLE_LEASE');
     if (generation?.state.runId!==run.runId || generation.state.sourceReadComplete!==true || !syncHash(generation.state.observationHash) ||
@@ -287,7 +349,7 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     const finished={...head.run,state:'PUBLISHED',generation:current.generation,revision:current.revision,
       observationHash:generation.state.observationHash,sourceReadComplete:true,observedToday:true,completedAt:new Date(now()).toISOString()};
     if(run.leaseUntil<=now())throw Error('OPSMAP_DURABLE_LEASE');
-    await writeHead({...head,current,previous:head.current,run:finished,lastSuccess:finished},sha);
+    await writeHead({...head,sources:mergeSources(head,sources),current,previous:head.current,run:finished,lastSuccess:finished},sha);
     const saved=await readHead();
     if(saved.head.current?.blob!==blob)throw Error('OPSMAP_DURABLE_HEAD_READBACK');
     return finished;

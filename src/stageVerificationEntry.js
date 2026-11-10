@@ -139,7 +139,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const scheduledEnabled = stage.RENDER_SERVICE_ID===stageService && stage.OPSMAP_STAGE_SYNC_READ_APPROVED==='1';
   const remoteEnabled=scheduledEnabled && stage.OPSMAP_STAGE_SYNC_REMOTE_APPROVED==='1';
   let scheduledStore, scheduledRefresh, scheduledSuccessAt = null;
-  let scheduledRun=null,scheduledFailure=null;
+  let scheduledRun=null,scheduledFailure=null,scheduledError=null,scheduledSources={};
   let scheduledState = scheduledEnabled?'PENDING':'NOT_CONFIGURED';
   async function refreshScheduled() {
     if (!scheduledEnabled) return;
@@ -147,19 +147,28 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       scheduledStore ||= remoteEnabled
         ? createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:stage,fetchImpl}),now})
         : await openScheduledStore(stage.OPSMAP_STAGE_SYNC_DIR,{writable:false});
-      const candidate = await scheduledStore.read();
+      const result=remoteEnabled?await scheduledStore.readWithStatus():
+        {generation:await scheduledStore.read(),status:await scheduledStore.readStatus()};
+      const {generation:candidate,status}=result;
+      scheduledError=result.error||null;
+      if(remoteEnabled&&status) {
+        scheduledRun=status.run||null;
+        scheduledFailure=status.lastFailure||null;
+        scheduledSources=status.sources||{};
+      }
       if (!candidate) throw Error('OPSMAP_SYNC_NOT_PUBLISHED');
       if (!validation.followScheduled(candidate,scheduledStore.readDay)) {
         scheduledState='LAST_VERIFIED_RETAINED';
         return;
       }
-      const status = await scheduledStore.readStatus();
-      const current=status?.generation===candidate.index.sha256;
+      const current=status?.generation===candidate.index.sha256&&(!remoteEnabled||status.revision===candidate.state.revision);
       if (current && Number.isFinite(Date.parse(status.lastSuccessAt))) scheduledSuccessAt=status.lastSuccessAt;
-      scheduledRun=remoteEnabled?status?.run || null:null;
-      scheduledFailure=remoteEnabled?status?.lastFailure || null:null;
       scheduledState=remoteEnabled&&!current?'LAST_VERIFIED_RETAINED':'VERIFIED_SCHEDULED_PROJECTION';
-    })().catch(()=>{scheduledState=validation.active()?.scheduled?'LAST_VERIFIED_RETAINED':'UNAVAILABLE';})
+    })().catch(error=>{
+      const code=error.code||error.message;
+      scheduledError=/^[A-Z][A-Z_0-9]{1,95}$/.test(code||'')?code:'OPSMAP_SYNC_STATUS_UNAVAILABLE';
+      scheduledState=validation.active()?.scheduled?'LAST_VERIFIED_RETAINED':'UNAVAILABLE';
+    })
       .finally(()=>{scheduledRefresh=null;});
     return scheduledRefresh;
   }
@@ -351,6 +360,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         mountStageAbValidation(router,{...binding,validation,readSnapshot,readOfficialIndex,readBaseVehicles:codes=>base.get(codes)});
         router.get('/api/map-phase2b/private/stage-sync-evidence',requireStaff,(_req,res)=>{
           const generation=validation.active();
+          const windowDays=generation?.scheduled?.vehicleDelivery?.observedDates.all?.length ?? generation?.nearby?.observedDays;
           const sourceRunId=generation?.scheduled?.state.runId || null;
           const requiredSourceIds=Object.values(SYNC_DELIVERY_SOURCES);
           const confirmedSourceIds=requiredSourceIds.filter(id=>
@@ -362,11 +372,20 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             scheduledRun.date===today() && Number.isFinite(Date.parse(scheduledSuccessAt));
           return res.set('Cache-Control','private, no-store').vary('Cookie').json({
             automaticSyncVerified,
+            sources:Object.fromEntries(['customerRegistry',...requiredSourceIds.map(id=>'delivery:'+id)].map(id=>[
+              id,scheduledSources[id]||{lastSuccessAt:null,error:null}
+            ])),
             snapshot:{state:snapshotReadState,verifiedAt:snapshotVerifiedAt,latestDate:snapshot?.latestDate||null,
               revision:snapshot?.preservation?.revision||null,selectedDateStorageVerified:snapshot?.selectedDateCheckpoint?.selectedDateStorageVerified===true},
             coverage:{state:generation?'VERIFIED_STAGE_GENERATION':coverageState,generation:generation?.generation||null,
-              asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status(),baselineState},
-            scheduled:{state:scheduledState,revision:generation?.scheduled?.state.revision||null,requiredSourceIds,confirmedSourceIds,
+              asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status(),baselineState,
+              publishedAt:generation?.evidence.coverageGeneratedAt||null,unknownDays:Number.isInteger(windowDays)?90-windowDays:null,
+              registered:generation?.counts.registered??null,located:generation?.counts.located??null},
+            scheduled:{state:scheduledState,error:scheduledError,previousVerifiedRetained:scheduledState==='LAST_VERIFIED_RETAINED',
+              revision:generation?.scheduled?.state.revision||null,requiredSourceIds,confirmedSourceIds,
+              config:{readerApproved:scheduledEnabled,remoteApproved:remoteEnabled,writerApproved:stage.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED==='1',
+                schedulerApproved:stage.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED==='1',deliveryConfigured:readDatedDelivery.configured,
+                sourceReadsApproved:stage.OPSMAP_SYNC_SOURCE_READ_APPROVED==='1'},
               publishedAt:generation?.scheduled?.state.committedAt||null,lastSuccessAt:scheduledSuccessAt,sourceRunId,
               run:scheduledRun?{runId:scheduledRun.runId,triggerId:scheduledRun.triggerId,executorHash:scheduledRun.principal,
                 state:scheduledRun.state,date:scheduledRun.date,startedAt:scheduledRun.startedAt,completedAt:scheduledRun.completedAt||null,

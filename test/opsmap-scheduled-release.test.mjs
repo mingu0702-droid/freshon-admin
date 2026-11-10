@@ -176,10 +176,16 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   const reader=()=>createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:storageEnv,fetchImpl:api.fetchImpl}),now,tempRoot:root});
   const activeRegistry={complete:true,version:syncSha256('fixture-registry'),rows:[{customerCode:code,customerName:'격리 매장',
     basicAddress:address,lifecycle:'ACTIVE'}]};
-  const work=()=>createOpsmapDataSync({directory:spool,seed,now,includeOfficialRegions:false,readLedger:async()=>ledger,
-    readRegistry:async()=>activeRegistry,completeCoordinates:async({stores,ledger})=>({stores,ledger}),readMissingDay:writer.readDay,
+  const work=record=>createOpsmapDataSync({directory:spool,seed,now,includeOfficialRegions:false,readLedger:async()=>ledger,
+    readRegistry:async()=>{record?.('customerRegistry');return activeRegistry;},
+    completeCoordinates:async({stores,ledger})=>({stores,ledger}),readMissingDay:writer.readDay,
     async readDay(day){
-      if(readFailure)throw Object.assign(Error('DELIVERY_SOURCE_FORBIDDEN'),{date:day,center:'honam'});
+      if(readFailure){
+        const error=Object.assign(Error('DELIVERY_SOURCE_FORBIDDEN'),{date:day,center:'honam'});
+        record?.('delivery:4',day,error);
+        throw error;
+      }
+      record?.('delivery:4',day);
       return observation(day,day===date?status:'OPEN');
     }});
   const receipt=()=>verifyOpsmapScheduleReceipt(signed(tick),{...clock,now});
@@ -203,7 +209,10 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   await writer.fail(leased.run,Error('FIXTURE_INTERRUPTED'));
   readFailure=true;
   await assert.rejects(run(),/DELIVERY_SOURCE_FORBIDDEN/);
-  assert.equal((await writer.readStatus()).lastFailure.failedCenter,'honam');
+  const failure=await writer.readStatus();
+  assert.equal(failure.lastFailure.failedCenter,'honam');
+  assert.equal(failure.sources['delivery:4'].error,'DELIVERY_SOURCE_FORBIDDEN');
+  assert(failure.sources['delivery:4'].lastSuccessAt);
   assert.equal((await writer.read()).index.sha256,baseline.index.sha256);
   readFailure=false;
   status='COMPLETED';
@@ -217,13 +226,20 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   assert.notEqual(replacement.generation,baseline.index.sha256);
   const restarted=reader();
   const fetchedAt=api.calls.length;
-  const restored=await restarted.read();
+  const {generation:restored,status:restoredStatus}=await restarted.readWithStatus();
+  assert.equal(api.calls.slice(fetchedAt).filter(({name})=>name==='head-v1.json').length,1);
   assert.equal(restored.index.sha256,replacement.generation);
+  assert.equal(restoredStatus.generation,replacement.generation);
   assert.equal(restored.snapshot.sourceRunId,replacement.runId);
   assert.equal(restored.ledger.sha256,ledger.sha256);
   assert.equal(restored.vehicleDelivery.generation,replacement.generation);
   assert(api.calls.slice(fetchedAt).every(({name})=>!name.startsWith('day-')));
-  assert.equal((await restarted.readDay(oldDate)).visits.length,1);
+  const firstRead=api.calls.length;
+  const parallel=await Promise.all(Array.from({length:12},()=>restarted.readDay(oldDate,restored)));
+  assert(parallel.every(day=>day.visits.length===1));
+  parallel[0].visits.length=0;
+  assert.equal((await restarted.readDay(oldDate,restored)).visits.length,1);
+  assert.equal(api.calls.slice(firstRead).filter(({name})=>name.startsWith('day-')).length,1);
   assert(api.calls.at(-1).name.startsWith('day-'));
   spool=path.join(root,'spool-after-restart');
   await fs.mkdir(spool,{mode:0o700});
@@ -273,12 +289,22 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   assert.deepEqual(await pending.json(),{error:'PHASE2B_SNAPSHOT_RESTORING',recovery:'RESTORING'});
   assert.equal(headRequests,1);
   release();
+  const waitForSnapshot=async root=>{
+    for(let attempt=0;attempt<40;attempt++){
+      const response=await request(root,'/preview/snapshot');
+      if(response.status===200)return response.json();
+      assert.equal(response.status,503);
+      assert.deepEqual(await response.json(),{error:'PHASE2B_SNAPSHOT_RESTORING',recovery:'RESTORING'});
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    assert.fail('Snapshot did not recover after the fixture was released');
+  };
   const get=async suffix=>{
     const response=await fetch(base+suffix,{headers:{cookie,'sec-fetch-site':'same-origin'}});
     assert.equal(response.status,200,suffix);
     return response.json();
   };
-  const copies=await Promise.all(Array.from({length:4},()=>get('/preview/snapshot')));
+  const copies=await Promise.all(Array.from({length:4},()=>waitForSnapshot(base)));
   const [snapshot]=copies;
   assert(copies.every(value=>value.meta.sourceGeneration===replacement.generation && value.data.length===1));
   assert.equal(snapshot.meta.sourceGeneration,replacement.generation);
@@ -293,6 +319,11 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   assert.equal(evidence.scheduled.sourceRunId,replacement.runId);
   assert.equal(evidence.scheduled.run.runId,unchanged.runId);
   assert.equal(evidence.scheduled.lastFailure.code,'FIXED_STORE_WRITE');
+  assert.equal(evidence.sources['delivery:4'].error,null);
+  assert(evidence.sources['delivery:4'].lastFailureAt);
+  assert(evidence.sources.customerRegistry.lastSuccessAt);
+  assert.equal(evidence.coverage.registered,1);
+  assert.equal(evidence.coverage.located,1);
   const deliveries=await get('/private/stage-vehicle-delivery-evidence?vehicle=122&limit=1&generation='+replacement.generation);
   assert.equal(deliveries.sourceRunId,replacement.runId);
   assert.equal(deliveries.rows[0].actualVehicle,'122');
@@ -312,9 +343,8 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   assert.equal((await get('/preview/snapshot')).meta.sourceGeneration,replacement.generation);
   headOffline=false;
   const restart=await createStage();
-  const recovered=await request(restart,'/preview/snapshot');
-  assert.equal(recovered.status,200);
-  assert.equal((await recovered.json()).meta.sourceGeneration,replacement.generation);
+  const recovered=await waitForSnapshot(restart);
+  assert.equal(recovered.meta.sourceGeneration,replacement.generation);
 
   const head=[...api.files].find(([name])=>name.endsWith('/head-v1.json'));
   const {current}=JSON.parse(head[1].data);
@@ -375,6 +405,27 @@ test('route evidence separates trucks and same-building customer codes and keeps
   assert.deepEqual(page.map(row=>[row.customerCode,row.actualVehicle,row.deliveryDates,row.deliveryWeekdays]),
     [[code,'101',[dates[0]],[1]],[code,'122',[dates[1]],[3]],[second,'122',[dates[1]],[3]]]);
   assert.deepEqual(completeSources,{'1':[],'2':[],'3':[],'4':[]});
+});
+
+test('scheduled Delivery retries a transient server failure once and records a permission failure without retry',async()=>{
+  let calls=0,forbidden=false;
+  const records=[];
+  const delivery=createStageDatedDeliveryReader({
+    env:{...stage,OPSMAP_STAGE_DELIVERY_DATED_ENABLED:'1',OPSMAP_STAGE_DELIVERY_DATED_COOKIE:'fixture'},
+    recordSource:(key,day,error)=>records.push([key,day,error?.code||null]),
+    async fetchImpl(){
+      calls++;
+      if(forbidden)return new Response(null,{status:403});
+      if(calls===1)return new Response(null,{status:503});
+      return Response.json({content:[],totalElements:0,totalPages:1});
+    }
+  });
+  assert.equal((await delivery.readObservation(date)).sourceRows,0);
+  assert.equal(calls,2);
+  forbidden=true;
+  await assert.rejects(delivery.readObservation(date),{code:'DELIVERY_SOURCE_FORBIDDEN'});
+  assert.equal(calls,3);
+  assert.deepEqual(records,[['delivery:1',date,null],['delivery:1',date,'DELIVERY_SOURCE_FORBIDDEN']]);
 });
 
 test('21:00 loads the next dispatch, midnight replaces drafts, and a failed source keeps the last generation',async t=>{

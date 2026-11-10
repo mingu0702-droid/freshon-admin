@@ -115,22 +115,25 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
     const catalog = JSON.parse(catalogBytes);
     const index = parseCoverageIndex(indexBytes);
     if (index.sha256 !== state.generation || index.asOf !== state.asOf || !Array.isArray(catalog.stores)) throw Error('OPSMAP_SYNC_GENERATION');
-    let window90;
-    for (const ref of [index.catalog,...PERIODS.map(days => index.windows[days])]) {
-      const bytes = await verifiedBytes(path.join(coverage,ref.sha256+'.json'),ref.sha256,ref.bytes);
-      if (bytes.length !== ref.bytes) throw Error('OPSMAP_SYNC_COVERAGE_LENGTH');
-      if (ref === index.windows[90]) window90 = JSON.parse(bytes);
-    }
+    const [window90,nearbyBytes,vehicleDeliveryBytes]=await Promise.all([
+      Promise.all([index.catalog,...PERIODS.map(days=>index.windows[days])].map(async ref=>{
+        const bytes=await verifiedBytes(path.join(coverage,ref.sha256+'.json'),ref.sha256,ref.bytes);
+        if(bytes.length!==ref.bytes)throw Error('OPSMAP_SYNC_COVERAGE_LENGTH');
+        return ref===index.windows[90]?JSON.parse(bytes):null;
+      })).then(windows=>windows.at(-1)),
+      verifiedBytes(path.join(folder,'nearby.json'),state.nearbySha256,384*1024),
+      state.vehicleDeliverySha256?verifiedBytes(path.join(folder,VEHICLE_DELIVERY_FILE),
+        state.vehicleDeliverySha256,MAX_VEHICLE_DELIVERY_BYTES):null
+    ]);
     const registry = new Map(catalog.stores.filter(row => row.registered).map(row => {
       const addressHash = coordinateAddressHash(row.address);
       const proof = ledger.records[row.code]?.at(-1).point;
       return [row.code,{...row,addressHash,hasPoint:hasFixedCoordinatePoint(row),proof:proof?.addressHash===addressHash?proof:null}];
     }));
-    const nearby = readStageNearbyEvidence(await verifiedBytes(path.join(folder,'nearby.json'),state.nearbySha256,384*1024),
+    const nearby = readStageNearbyEvidence(nearbyBytes,
       {expected:state.nearbySha256,generation:index.sha256,registry,window:window90});
-    const vehicleDelivery=state.vehicleDeliverySha256?readOpsmapVehicleDelivery(await verifiedBytes(
-      path.join(folder,VEHICLE_DELIVERY_FILE),state.vehicleDeliverySha256,MAX_VEHICLE_DELIVERY_BYTES
-    ),{generation:index.sha256,registry,window:window90}):null;
+    const vehicleDelivery=vehicleDeliveryBytes?readOpsmapVehicleDelivery(vehicleDeliveryBytes,
+      {generation:index.sha256,registry,window:window90}):null;
     const snapshot = materializeSnapshot(sealedSnapshot);
     snapshot.rows = snapshot.rows.map(row => {
       const store = registry.get(row.customerCode);
@@ -209,10 +212,17 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
   }};
 }
 
+const archivedStoreIndexes = new WeakMap();
+
 export function archivedOpsmapAssignments(day, generation) {
   if (!day || !generation) return null;
-  const rows = new Map(generation.snapshot.rows.map(row => [row.customerCode,row]));
-  const historicalHashes = new Map(generation.catalog.stores.map(row => [row.code,row.matchHash]));
+  let indexes=archivedStoreIndexes.get(generation);
+  if (!indexes) {
+    indexes={rows:new Map(generation.snapshot.rows.map(row=>[row.customerCode,row])),
+      historicalHashes:new Map(generation.catalog.stores.map(row=>[row.code,row.matchHash]))};
+    archivedStoreIndexes.set(generation,indexes);
+  }
+  const {rows,historicalHashes}=indexes;
   const grouped = new Map();
   for (const [,customerCode,vehicle,,hash,status] of day.tasks || day.visits) {
     if (!vehicle || status==='CANCELLED') continue;

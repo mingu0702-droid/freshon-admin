@@ -5,6 +5,7 @@ import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {archiveAddressHash} from './stageArchivedDelivery.js';
 import {syncDigest, syncSha256, validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
 import {createStageDeliveryAdminPhotoSession} from './opsmapStageDeliveryAdminSession.js';
+import {setTimeout as delay} from 'node:timers/promises';
 
 const deliveryOrigin = 'https://delivery-bali.chabyulhwa.com';
 const error = (code, status) => Object.assign(Error(code), {code, diagnostic:{status}});
@@ -26,7 +27,7 @@ function taskVehicle(task) {
   return /^(?:[용척]?\d{1,4})(?:-\d{1,3})?$/.test(vehicle) ? vehicle : '';
 }
 
-export function createStageDatedDeliveryReader({env = process.env, fetchImpl = fetch, syncCenters = {osan:'1'}} = {}) {
+export function createStageDatedDeliveryReader({env = process.env, fetchImpl = fetch, syncCenters = {osan:'1'},recordSource} = {}) {
   const enabled = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE &&
     env.OPSMAP_STAGE_DELIVERY_DATED_ENABLED === '1';
   const cookie = String(env.OPSMAP_STAGE_DELIVERY_DATED_COOKIE || '').trim();
@@ -84,6 +85,25 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     return {tasks,observation};
   }
 
+  async function readSyncTasks(date,reader,center,sourceId) {
+    try {
+      let result;
+      try {result=await readTasks(date,reader,sourceId);}
+      catch(error) {
+        const retryable=error.code==='DELIVERY_SOURCE_TIMEOUT' ||
+          error.code==='DELIVERY_SOURCE_READ_UNAVAILABLE' && [500,502,503,504].includes(error.diagnostic?.status);
+        if(!recordSource||!retryable)throw error;
+        await delay(250);
+        result=await readTasks(date,reader,sourceId);
+      }
+      recordSource?.('delivery:'+sourceId,date);
+      return result;
+    } catch(error) {
+      recordSource?.('delivery:'+sourceId,date,error);
+      throw Object.assign(error,{date,center,sourceId});
+    }
+  }
+
   async function loadDate(date) {
     const {tasks,observation} = await readTasks(date);
     const groups = new Map();
@@ -126,9 +146,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const projected = [], visits = [];
     const observations = [];
     for (const {center,id:expected,reader} of syncReaders) {
-      const {tasks,observation} = await readTasks(date,reader,expected).catch(failure=>{
-        throw Object.assign(failure,{date,center,sourceId:expected});
-      });
+      const {tasks,observation} = await readSyncTasks(date,reader,center,expected);
       observations.push({center,sourceId:expected,...observation});
       for (const task of tasks) {
         const code = task.customer?.erpCode ?? task.customerErpCode;

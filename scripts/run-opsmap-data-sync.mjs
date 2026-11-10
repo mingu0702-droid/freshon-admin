@@ -27,7 +27,7 @@ function report(result) {
     sourceReadComplete:result.sourceReadComplete===true,lastSuccessAt:result.lastSuccessAt ?? result.completedAt ?? null}));
 }
 
-async function buildWorker({mode,settingsFile,durable}) {
+async function buildWorker({mode,settingsFile,durable,recordSource}) {
   const settingsRoot = await privateCoverageDirectory(path.dirname(settingsFile),appRoot);
   const readSettings = async () => JSON.parse(await boundedRead(path.join(settingsRoot,path.basename(settingsFile)),32_768));
   const config = await readSettings();
@@ -60,9 +60,16 @@ async function buildWorker({mode,settingsFile,durable}) {
       },
       writeState:value => atomicCoverageWrite(stateFile,JSON.stringify(value))});
     readRegistry = async () => {
-      const status = await registry.refresh({maxPages:36,deadline:Date.now()+180_000});
-      if (!['UPDATED','NOOP'].includes(status.phase)) throw Error('OPSMAP_SYNC_REGISTRY_INCOMPLETE');
-      return registry.read();
+      try {
+        const status = await registry.refresh({maxPages:36,deadline:Date.now()+180_000});
+        if (!['UPDATED','NOOP'].includes(status.phase)) throw Error('OPSMAP_SYNC_REGISTRY_INCOMPLETE');
+        const snapshot=await registry.read();
+        recordSource?.('customerRegistry');
+        return snapshot;
+      } catch(error) {
+        recordSource?.('customerRegistry',null,error);
+        throw error;
+      }
     };
     if(durable && Object.entries(SYNC_DELIVERY_SOURCES).some(([center,id])=>config.deliveryCenters?.[center]!==id)) {
       throw Error('DELIVERY_SOURCE_CENTER_CONFIG');
@@ -72,7 +79,7 @@ async function buildWorker({mode,settingsFile,durable}) {
         Object.values(SYNC_DELIVERY_SOURCES).some(id=>!verifiedSources.includes(id)))) {
       throw Error('DELIVERY_SOURCE_ENTITLEMENT_UNVERIFIED');
     }
-    const delivery = createStageDatedDeliveryReader({env,syncCenters:config.deliveryCenters});
+    const delivery = createStageDatedDeliveryReader({env,syncCenters:config.deliveryCenters,recordSource});
     if(!delivery.configured)throw Error('DELIVERY_SOURCE_SESSION_REQUIRED');
     readDay = delivery.readObservation;
     if (config.manualPinFile) {
@@ -136,7 +143,7 @@ async function run() {
     for await(const chunk of process.stdin){input+=chunk;if(Buffer.byteLength(input)>2048)throw Error('OPSMAP_SCHEDULE_RECEIPT');}
     const receipt=verifyOpsmapScheduleReceipt(JSON.parse(input),opsmapScheduleConfig(env));
     const durable=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env,write:true}),appRoot});
-    try {report(await publishOpsmapScheduledRun({createWorker:()=>buildWorker({mode,settingsFile,durable}),durable,receipt}));}
+    try {report(await publishOpsmapScheduledRun({createWorker:recordSource=>buildWorker({mode,settingsFile,durable,recordSource}),durable,receipt}));}
     finally {await durable.dispose().catch(()=>{});}
     return;
   }
