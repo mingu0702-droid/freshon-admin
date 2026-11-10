@@ -6,6 +6,60 @@ const VEHICLE = /^(?:[용척]?\d{1,4})(?:-\d{1,3})?$/;
 const FIXED = /^[\p{L}\p{N}_-]{1,64}$/u;
 const SHA = /^[a-f0-9]{64}$/;
 const textVehicle = value => typeof value === 'string' && VEHICLE.test(value);
+const CENTERS = new Set(['osan','yeongnam','honam','unknown']);
+
+export function addObservedVehicleDays(groups, date, visits, matchesAddress) {
+  const bit = 1 << new Date(date).getUTCDay();
+  for (const [,code,vehicle,center,addressHash] of visits) {
+    if (!textVehicle(vehicle) || !CENTERS.has(center) || !addressHash || !matchesAddress(code,addressHash)) continue;
+    const key = code+'|'+vehicle+'|'+center;
+    const previous = groups.get(key);
+    if (previous) previous[3] |= bit;
+    else groups.set(key,[code,vehicle,center,bit]);
+  }
+}
+
+// Older generations have the same verified day objects but no per-vehicle
+// projection. Read each object once per generation, with bounded concurrency.
+export function createLegacyNearbyVehicleReader({waitMs=3500, now=Date.now}={}) {
+  const cache = new WeakMap();
+  return async function readVehicleDays(prepared) {
+    if (prepared.nearby.vehicleDays) return {vehicleStatus:'READY',vehicleDays:prepared.nearby.vehicleDays};
+    if (!prepared.readNearbyDay) return {vehicleStatus:'UNAVAILABLE'};
+    let work = cache.get(prepared);
+    if (!work || work.retryAt <= now()) {
+      const dates = prepared.nearby.observedDates, groups = new Map();
+      let cursor=0, failed=false;
+      work={retryAt:Infinity};
+      work.pending=Promise.all(Array.from({length:Math.min(4,dates.length)},async()=>{
+        while (!failed && cursor<dates.length) {
+          const date=dates[cursor++];
+          try {
+            const day=await prepared.readNearbyDay(date);
+            if (day?.date!==date || day.planningOnly || !Array.isArray(day.visits)) throw Error('NEARBY_DAY_UNVERIFIED');
+            addObservedVehicleDays(groups,date,day.visits,(code,hash)=>{
+              const store=prepared.registry.get(code);
+              return store?.hasPoint && store.matchHash===hash;
+            });
+          } catch {failed=true;}
+        }
+      })).then(()=>{
+        if (!failed) return work.ready={vehicleStatus:'READY',vehicleDays:[...groups.values()]};
+        work.retryAt=now()+30_000;
+        return {vehicleStatus:'UNAVAILABLE'};
+      });
+      cache.set(prepared,work);
+    }
+    if (work.ready) return work.ready;
+    let timeout;
+    try {
+      return await Promise.race([work.pending,new Promise(resolve=>{
+        timeout=setTimeout(()=>resolve({vehicleStatus:'LOADING'}),waitMs);
+        timeout.unref?.();
+      })]);
+    } finally {clearTimeout(timeout);}
+  };
+}
 
 export function readStageNearbyEvidence(bytes, {expected, generation, registry, window}) {
   if (!bytes?.length || bytes.length > 384 * 1024 || !SHA.test(expected) ||
@@ -25,7 +79,15 @@ export function readStageNearbyEvidence(bytes, {expected, generation, registry, 
         days < 1 || days > 127 || !(days & (1 << new Date(date).getUTCDay()))) throw Error('STAGE_NEARBY_ROW');
     codes.add(code);
   }
-  return {source, generation, start, end, observedDays:dates.size, unknownDays:90-dates.size, rows};
+  const observedByCenter=Object.fromEntries([...CENTERS].filter(center=>center!=='unknown').map(center=>{
+    const observed=window.observedDates[center];
+    if(observed===undefined)return [center,null];
+    if(!Array.isArray(observed)||new Set(observed).size!==observed.length||observed.some(date=>!dates.has(date))) {
+      throw Error('STAGE_NEARBY_CENTER_SCOPE');
+    }
+    return [center,observed.length];
+  }));
+  return {source, generation, start, end, observedDates, observedDays:dates.size, unknownDays:90-dates.size, observedByCenter, rows};
 }
 
 export function stageNearbyResponse(evidence, fixed) {

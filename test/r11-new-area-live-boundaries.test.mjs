@@ -73,7 +73,8 @@ test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with n
   for(const [i,row] of f.state.newAreaResults.entries()){
     assert.equal(row.originalAddress,cells[i].x);assert.equal(row.originalCustomer,cells[i].y);
     assert.equal(row.address,cells[i].x.trim());assert.equal(row.customer,cells[i].y);assert.equal(row.decision,'검토');
-    assert.equal(row.lookupStatus,'SUCCESS');assert.equal(row.storedNearbyCount,1);assert.equal(row.references[0].vehicle,'101');
+    assert.equal(row.lookupStatus,'SUCCESS');assert.equal(row.storedNearbyCount,1);
+    assert.equal(row.nearestStoreCode,saved.customerCode);assert.equal(row.actualVehicles.length,0);
     assert.equal(row.reason,'위치 확인 완료 · 배송판정 검토');assert.match(row.evidence,/전체 기간 비교 미완료/);
     assert.equal(row.evidenceCount,0);assert.equal(row.deliveryDays,'');
     assert.equal(f.queries[i],`경기도 화성시 합성로 ${i+100}`);assert.equal(f.headers[i],f.queries[i]);
@@ -81,8 +82,8 @@ test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with n
   const exported=globalThis.MapPeriodUi.areaExportRows(f.state.newAreaResults,'2026-11-03');
   assert.deepEqual(Array.from(exported,row=>Array.from(row).slice(0,2)),cells.map(({x,y})=>[x,y]));
   assert.match(f.node('#newAreaBatchStatus').textContent,/완료 60 · 위치 확인 60 · 보류 0 · 실패 0 · 한도대기 0/);
-  assert.match(f.node('#newAreaBatchResults').innerHTML,/500m 저장위치 1개 · 기간 배송근거 0개/);
-  assert.match(f.node('#newAreaBatchResults').innerHTML,/실배송요일 미확정/);
+  assert.match(f.node('#newAreaBatchResults').innerHTML,/가장 가까운 등록 매장\(직선거리\)/);
+  assert.match(f.node('#newAreaBatchResults').innerHTML,/실제 운행호차 · 확인된 호차 없음/);
   assert.equal(JSON.stringify(f.saved()),original,'REST coordinates never mutate the saved snapshot');
 });
 

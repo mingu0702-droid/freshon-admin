@@ -41,7 +41,7 @@ try{
     await page.locator('#judgeNewAreaBatch').click();await page.waitForFunction(()=>MapUiLocalBridge.state.newAreaResults.length===3);
     const rows=await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults);
     assert.equal(rows[0].decision,'검토');assert.equal(rows[0].evidenceCount,1);assert.equal(rows[0].deliveryDays,'월수금');assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
-    assert.match(await page.locator('#newAreaBatchResults').innerText(),/30km 근접호차: 101호/);
+    assert.match(await page.locator('#newAreaBatchResults').innerText(),/30km 내 실제 운행호차 · 확인된 호차 없음/);
     await page.locator('#newAreaApplyDate').fill('2026-11-02');await page.locator('#copyAreaDecision').click();
     assert.equal((await page.evaluate(()=>navigator.clipboard.readText())).split('\r\n').length,3);
     await page.locator('#copyAreaMatching').click();assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/합성 배송처/);
