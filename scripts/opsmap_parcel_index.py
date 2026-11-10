@@ -119,6 +119,19 @@ def checked_point(geometry, transformer=None):
     return (lat, lng) if 33 <= lat <= 39.5 and 124 <= lng <= 132 else None
 
 
+def equivalent_parcel_crs(crs, expected):
+    if crs.equals(expected, ignore_axis_order=True):
+        return True
+    if not crs.is_projected or crs.datum != expected.datum:
+        return False
+    actual_op, expected_op = crs.coordinate_operation, expected.coordinate_operation
+    if not actual_op or actual_op.method_code != expected_op.method_code:
+        return False
+    params = lambda op: sorted((p.code, p.value, p.unit_conversion_factor) for p in op.params)
+    axes = lambda value: sorted((axis.direction, axis.unit_conversion_factor) for axis in value.axis_info)
+    return params(actual_op) == params(expected_op) and axes(crs) == axes(expected)
+
+
 def add_geometry(db, file, as_of, sources, changes, postal_observed_on):
     import shapefile
     from pyproj import CRS, Transformer
@@ -127,7 +140,7 @@ def add_geometry(db, file, as_of, sources, changes, postal_observed_on):
         raise ValueError("PARCEL_SHAPEFILE_REQUIRED")
     components = [stem.with_suffix(suffix) for suffix in (".shp", ".shx", ".dbf", ".prj")]
     crs = CRS.from_wkt(components[3].read_text(encoding="utf-8-sig").strip())
-    if not crs.equals(CRS.from_epsg(5186), ignore_axis_order=True):
+    if not equivalent_parcel_crs(crs, CRS.from_epsg(5186)):
         raise ValueError("PARCEL_SHAPEFILE_CRS")
     transformer = Transformer.from_crs(crs, 4326, always_xy=True)
     encoding = "cp949"
