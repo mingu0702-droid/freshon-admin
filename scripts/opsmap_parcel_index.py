@@ -1,11 +1,12 @@
 """Build an offline index from postal parcel bindings and licensed geometries."""
-from contextlib import closing
+from contextlib import ExitStack, closing
 from datetime import date
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 from uuid import uuid4
 import zipfile
@@ -119,73 +120,95 @@ def checked_point(geometry, transformer=None):
     return (lat, lng) if 33 <= lat <= 39.5 and 124 <= lng <= 132 else None
 
 
-def equivalent_parcel_crs(crs, expected):
-    if crs.equals(expected, ignore_axis_order=True):
-        return True
-    if not crs.is_projected or crs.datum != expected.datum:
-        return False
-    actual_op, expected_op = crs.coordinate_operation, expected.coordinate_operation
-    if not actual_op or actual_op.method_code != expected_op.method_code:
-        return False
-    params = lambda op: sorted((p.code, p.value, p.unit_conversion_factor) for p in op.params)
-    axes = lambda value: sorted((axis.direction, axis.unit_conversion_factor) for axis in value.axis_info)
-    return params(actual_op) == params(expected_op) and axes(crs) == axes(expected)
+def geometry_layers(file):
+    required = (".shp", ".shx", ".dbf", ".prj")
+    if file.suffix.lower() == ".zip":
+        digest = file_sha(file)
+        with zipfile.ZipFile(file) as archive:
+            groups = {}
+            for entry in archive.infolist():
+                name = Path(entry.filename)
+                suffix = name.suffix.lower()
+                if entry.is_dir() or suffix not in (*required, ".cpg"):
+                    continue
+                if name.is_absolute() or name.drive or ".." in name.parts:
+                    raise ValueError("PARCEL_SHAPEFILE_ARCHIVE_PATH")
+                group = groups.setdefault(str(name.with_suffix("")).casefold(), {})
+                if suffix in group:
+                    raise ValueError("PARCEL_SHAPEFILE_ARCHIVE_DUPLICATE")
+                group[suffix] = entry
+            if not groups or any(not set(required).issubset(group) for group in groups.values()):
+                raise ValueError("PARCEL_SHAPEFILE_ARCHIVE_COMPONENTS")
+            for group in groups.values():
+                yield group.keys(), lambda suffix: archive.open(group[suffix]), digest
+    elif file.suffix.lower() == ".shp":
+        components = {suffix: file.with_suffix(suffix) for suffix in required}
+        cpg = file.with_suffix(".cpg")
+        if cpg.is_file():
+            components[".cpg"] = cpg
+        digest = hashlib.sha256("".join(file_sha(f) for f in components.values()).encode("ascii")).hexdigest()
+        yield components.keys(), lambda suffix: components[suffix].open("rb"), digest
+    else:
+        raise ValueError("PARCEL_SHAPEFILE_REQUIRED")
 
 
-def add_geometry(db, file, as_of, sources, changes, postal_observed_on):
+def add_geometry(db, file, as_of, sources, changes, postal_observed_on, targets=None):
+    valid_count = 0
+    with closing(geometry_layers(file)) as layers:
+        for components, open_component, digest in layers:
+            valid_count += add_geometry_layer(db, components, open_component, digest, as_of, sources, changes,
+                                              postal_observed_on, targets, file.suffix.lower() == ".zip")
+    if targets is None and not valid_count:
+        raise ValueError("PARCEL_SHAPEFILE_NO_VALID_PNU")
+
+
+def add_geometry_layer(db, components, open_component, digest, as_of, sources, changes, postal_observed_on,
+                       targets, require_official_identity):
     import shapefile
     from pyproj import CRS, Transformer
-    stem = file.with_suffix("")
-    if file.suffix.lower() != ".shp":
-        raise ValueError("PARCEL_SHAPEFILE_REQUIRED")
-    components = [stem.with_suffix(suffix) for suffix in (".shp", ".shx", ".dbf", ".prj")]
-    crs = CRS.from_wkt(components[3].read_text(encoding="utf-8-sig").strip())
-    if not equivalent_parcel_crs(crs, CRS.from_epsg(5186)):
+
+    def read_metadata(suffix):
+        with open_component(suffix) as stream:
+            data = stream.read(16_385)
+        if len(data) > 16_384:
+            raise ValueError("PARCEL_SHAPEFILE_METADATA_SIZE")
+        return data.decode("utf-8-sig").strip()
+
+    crs = CRS.from_wkt(read_metadata(".prj"))
+    expected = CRS.from_epsg(5186)
+    if not crs.equals(expected, ignore_axis_order=True) and not (
+        crs.to_epsg(min_confidence=100) == 5186 and crs.to_wkt("WKT1_ESRI") == expected.to_wkt("WKT1_ESRI")
+    ):
         raise ValueError("PARCEL_SHAPEFILE_CRS")
-    transformer = Transformer.from_crs(crs, 4326, always_xy=True)
+    transformer = Transformer.from_crs(expected, 4326, always_xy=True)
     encoding = "cp949"
-    cpg = stem.with_suffix(".cpg")
-    if cpg.is_file():
-        label = cpg.read_text(encoding="utf-8-sig").strip().lower()
+    if ".cpg" in components:
+        label = read_metadata(".cpg").lower()
         encoding = {"949": "cp949", "cp949": "cp949", "euc-kr": "cp949",
                     "65001": "utf-8", "utf-8": "utf-8", "utf8": "utf-8"}.get(label)
         if not encoding:
             raise ValueError("PARCEL_SHAPEFILE_ENCODING")
-        components.append(cpg)
-    digest = hashlib.sha256("".join(file_sha(f) for f in components).encode("ascii")).hexdigest()
-    source = len(sources)
-    sources.append({"url": PARCEL_SOURCE, "sha256": digest, "date": as_of,
-                    "license": "CC-BY-2.0-KR", "crs": "EPSG:5186"})
-    with shapefile.Reader(str(file), encoding=encoding) as shp:
+    provenance = {"url": PARCEL_SOURCE, "sha256": digest, "date": as_of,
+                  "license": "CC-BY-2.0-KR", "crs": "EPSG:5186"}
+    source = sources.index(provenance) if provenance in sources else len(sources)
+    with ExitStack() as stack:
+        streams = {suffix[1:]: stack.enter_context(open_component(suffix)) for suffix in (".shp", ".shx", ".dbf")}
+        shp = stack.enter_context(shapefile.Reader(**streams, encoding=encoding))
+        if shp.numRecords != len(shp):
+            raise ValueError("PARCEL_SHAPEFILE_RECORD_COUNT")
         fields = {field[0].upper(): field[0] for field in shp.fields[1:]}
         pnu_field = fields.get("A1") or fields.get("PNU")
-        if not pnu_field:
+        if not pnu_field or (require_official_identity and "A1" not in fields):
             raise ValueError("PARCEL_SHAPEFILE_PNU_COLUMN")
         columns = [pnu_field]
         if "A1" in fields:
             if not {"A2", "A4", "A6"}.issubset(fields):
                 raise ValueError("PARCEL_SHAPEFILE_IDENTITY_COLUMNS")
             columns.extend(fields[key] for key in ("A2", "A4", "A6"))
-        valid_count = 0
-        for item in shp.iterShapeRecords(fields=columns):
-            original = str(item.record[pnu_field]).strip()
+        valid_count = written = 0
+        for record in shp.iterRecords(fields=columns if targets is None else [pnu_field]):
+            original = str(record[pnu_field]).strip()
             if not valid_pnu(original):
-                continue
-            if "A1" in fields:
-                legal = str(item.record[fields["A2"]]).strip()
-                number = re.fullmatch(r"(산)?\s*([0-9]{1,4})(?:-([0-9]{1,4}))?",
-                                      str(item.record[fields["A4"]]).strip())
-                if not number or parcel_id(legal, "1" if number[1] else "0", number[2], number[3] or "0") != original:
-                    continue
-                try:
-                    feature_date = iso_day(str(item.record[fields["A6"]]).strip())
-                except ValueError:
-                    continue
-                if feature_date > as_of:
-                    continue
-            valid_count += 1
-            point = checked_point(item.shape.__geo_interface__, transformer)
-            if point is None:
                 continue
             current = original
             if original[:10] in changes:
@@ -193,12 +216,40 @@ def add_geometry(db, file, as_of, sources, changes, postal_observed_on):
                 if not as_of < effective <= postal_observed_on:
                     continue
                 current = new + original[10:]
-            old = db.execute("SELECT lat, lng FROM point WHERE pnu=? AND source=?", (current, source)).fetchone()
-            if old and old != point:
+            if targets is not None and current not in targets:
+                continue
+            if "A1" in fields:
+                if targets is not None:
+                    record = shp.record(record.oid, fields=columns)
+                legal = str(record[fields["A2"]]).strip()
+                number = re.fullmatch(r"(산)?\s*([0-9]{1,4})(?:-([0-9]{1,4}))?",
+                                      str(record[fields["A4"]]).strip())
+                if not number or parcel_id(legal, "1" if number[1] else "0", number[2], number[3] or "0") != original:
+                    continue
+                try:
+                    feature_date = iso_day(str(record[fields["A6"]]).strip())
+                except ValueError:
+                    continue
+                if feature_date > as_of:
+                    continue
+            valid_count += 1
+            geometry = shp.shape(record.oid)
+            if geometry.shapeType not in (shapefile.POLYGON, shapefile.POLYGONM, shapefile.POLYGONZ):
+                continue
+            point = checked_point(geometry.__geo_interface__, transformer)
+            if point is None:
+                continue
+            values = (*point, original)
+            old = db.execute("SELECT lat, lng, source_pnu FROM point WHERE pnu=? AND source=?",
+                             (current, source)).fetchone()
+            if old and old != values:
                 raise ValueError("PARCEL_DUPLICATE_GEOMETRY")
-            db.execute("INSERT OR IGNORE INTO point VALUES (?, ?, ?, ?, ?)", (current, source, *point, original))
-        if not valid_count:
-            raise ValueError("PARCEL_SHAPEFILE_NO_VALID_PNU")
+            if not old:
+                db.execute("INSERT INTO point VALUES (?, ?, ?, ?, ?)", (current, source, *values))
+                written += 1
+    if written and source == len(sources):
+        sources.append(provenance)
+    return valid_count
 
 
 def add_sites(db, file, sources, clean):
@@ -263,6 +314,56 @@ def build(args, postal_streams, clean):
             }),))
             db.commit()
         os.link(tmp, args.database)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def extend(args):
+    """Create a new sealed index containing only requested missing parcel points."""
+    if args.database.exists():
+        raise ValueError("PARCEL_INDEX_EXISTS")
+    target_file = args.target_pnus
+    if target_file.stat().st_size > 256_000:
+        raise ValueError("PARCEL_TARGET_PNUS")
+    requested = json.loads(target_file.read_text(encoding="utf-8-sig"))
+    if not isinstance(requested, list) or not 0 < len(requested) <= 10_000 or any(
+            not isinstance(pnu, str) or not valid_pnu(pnu) for pnu in requested
+    ) or len(set(requested)) != len(requested):
+        raise ValueError("PARCEL_TARGET_PNUS")
+    base = args.base_index.resolve(strict=True)
+    if not HASH.fullmatch(args.base_sha256) or any(
+            base.with_name(base.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal")
+    ):
+        raise ValueError("PARCEL_BASE_INDEX_NOT_SEALED")
+    tmp = args.database.with_name("." + args.database.name + "-" + uuid4().hex)
+    try:
+        shutil.copyfile(base, tmp)
+        if file_sha(tmp) != args.base_sha256:
+            raise ValueError("PARCEL_BASE_INDEX_HASH")
+        with closing(sqlite3.connect(tmp)) as db:
+            (row,) = db.execute("SELECT value FROM metadata").fetchall()
+            metadata = json.loads(row[0])
+            if metadata["schema"] != SCHEMA:
+                raise ValueError("PARCEL_BASE_INDEX_SCHEMA")
+            observed = iso_day(metadata["postalObservedOn"])
+            sources = metadata["sources"]
+            changes = {old: (new, effective) for old, new, effective in db.execute(
+                "SELECT old, new, effective FROM transition"
+            )}
+            targets = {pnu for pnu in requested if parcel_point(db, pnu, sources) is None}
+            if not targets:
+                raise ValueError("PARCEL_TARGETS_ALREADY_RESOLVED")
+            for spec in args.parcel_shape:
+                file, as_of = spec.rsplit("=", 1)
+                add_geometry(db, Path(file), iso_day(as_of), sources, changes, observed, targets)
+            resolved = sum(parcel_point(db, pnu, sources) is not None for pnu in targets)
+            if not resolved:
+                raise ValueError("PARCEL_TARGET_GEOMETRY_UNAVAILABLE")
+            db.execute("UPDATE metadata SET value=?", (json.dumps(metadata),))
+            db.commit()
+        os.link(tmp, args.database)
+        return {"requested": len(requested), "alreadyResolved": len(requested) - len(targets),
+                "added": resolved, "unavailable": len(targets) - resolved}
     finally:
         tmp.unlink(missing_ok=True)
 
