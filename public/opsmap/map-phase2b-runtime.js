@@ -2532,11 +2532,14 @@
     return /(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주|(?:로|길|동|읍|면)\s*\d|\d{1,4}[-번길로동읍면가])/i.test(text);
   }
 
-  function newAreaCoordinate(row) {
+  function newAreaCoordinate(row, {fixedOnly=false}={}) {
     if (!row) return null;
     const point = {...row};
     if (/^[A-Z]\d+$/.test(point.customerCode||'')) window.MapManualPins?.apply(point);
-    liveAddressLocations?.apply(point);
+    if (fixedOnly) {
+      const source=point.coordinateSource||point.raw?.coordinateSource||'';
+      if (point.virtual||point.searchTemporary||/(?:_TEMPORARY|_LIVE)$/.test(source)) return null;
+    } else liveAddressLocations?.apply(point);
     const status = point.coordinateStatus || point.raw?.coordinateStatus;
     const lat = numberOrNull(point.lat), lng = numberOrNull(point.lng);
     if (['CONFLICT','UNVERIFIED','MISSING'].includes(status) || point.resolutionStatus === 'ADDRESS_CHANGED_REVIEW_REQUIRED' || lat === null || lng === null || lat < 33 || lat > 39.5 || lng < 124 || lng > 132) return null;
@@ -2770,7 +2773,7 @@
     const locationRows=[...new Map(registered.filter(store=>!store.deliveryOnly&&!deleted.has(store.customerCode)&&
       store.customerRegistryStatus!=='DELETED'&&(verifiedRegistry||!conflicting.has(store.customerCode))).map(row=>[row.customerCode||row.code,row])).entries()]
       .flatMap(([code,store])=>{
-        const point=newAreaCoordinate({...store,customerCode:code,customerName:store.customerName||store.name||''});
+        const point=newAreaCoordinate({...store,customerCode:code,customerName:store.customerName||store.name||''},{fixedOnly:true});
         const fixed=baseVehicles.get(code);
         return point&&code?[{...point,vehicle:fixed?.baseVehicleState==='VERIFIED_MASTER'?fixed.baseVehicle:''}]:[];
       });
@@ -2792,7 +2795,8 @@
     const nearby = comparisons.map(store => ({...store,distance:distanceKm(checked,store)}))
       .filter(store=>store.distance<=.5).sort((a,b)=>a.distance-b.distance);
     const nearest=Phase2bUi.nearestRegisteredStore(checked,locationRows);
-    const storedNearbyCount=locationRows.filter(store=>distanceKm(checked,store)<=.5).length;
+    const fixedRadiusKm=.5+1e-9; // Keep the exact boundary inclusive without comparing rounded meters.
+    const storedNearbyCount=locationRows.filter(store=>distanceKm(checked,store)<=fixedRadiusKm).length;
     const actualVehicles=Phase2bUi.nearbyVehicleWeekdays(checked,routeStops);
     const fixedVehicles=Phase2bUi.nearbyVehicles(checked,archive?.fixed||locationRows,50)
       .map(({vehicle,distance})=>({vehicle,distance}));
@@ -2807,8 +2811,8 @@
       archiveContext.within500 = observedWithin500.length;
       archiveContext.weekdays = Phase2bUi.observedWeekdays(mask).join('·');
     }
-    // Preserve the original 1 km comparison for positive evidence. A nearby
-    // registration or an assignment alone is not a completed delivery.
+    // Observed deliveries support the legacy route rule and reference days;
+    // a nearby fixed registration is a separate basis for eligibility.
     let possibleMask=0, nearestCompleted=Infinity;
     for(const route of actualVehicles){
       if(route.distance>1)break;
@@ -2822,11 +2826,16 @@
       nearestDistance:nearest?.distance??null,nearestDistanceMeters:nearest?Math.round(nearest.distance*1000):null};
     if(exception)return {...facts,decision:'X',reason:exception,evidence:'기존 지역·시설·배송동선 제외 규칙'};
     if(point.coordinateSource==='MAP_CLICK_TEMPORARY')return {...facts,reason:'임시 위치 선택 · 배송판정 검토',evidence:'직접 선택한 위치의 주변 배송 근거 · 주소와 배송 가능 여부는 확인이 필요합니다.'};
+    const possibleWeekdays=Phase2bUi.observedWeekdays(possibleMask);
+    if(nearest?.distance<=fixedRadiusKm)return {...facts,decision:'O',reason:'',eligibilityBasis:'FIXED_REGISTRY_500M',possibleWeekdays,
+      evidence:'최근접 고정 등록 매장까지 직선 '+facts.nearestDistanceMeters+'m(500m 이내) · 실제 수락·배송일'+(base.facility?'·차량 진입':'')+' 별도 확인'};
     if(base.facility)return {...facts,reason:'차량 진입 확인 필요',evidence:'시설 진입 확인 전 배송 가능 여부를 확정할 수 없습니다.'};
-    if(possibleMask)return {...facts,decision:'O',reason:'',possibleWeekdays:Phase2bUi.observedWeekdays(possibleMask),
+    if(possibleMask)return {...facts,decision:'O',reason:'',eligibilityBasis:'OBSERVED_DELIVERY_1KM',possibleWeekdays,
       evidence:'1km 내 완료 배송점 '+Math.round(nearestCompleted*1000)+'m(직선) · 관측 요일 확인 · 배송 수락 및 차량 진입은 별도 확인'};
-    if(limits.length)return {...facts,reason:'위치 확인 완료 · 배송판정 검토',evidence:'1km 내 완료 배송동선·요일 근거 미확인 · 인근 배송점 부재 확정 불가 · 직선거리이며 도로 진입 판정 아님'};
-    return {...facts,reason:'배송동선·운행요일 확인 필요',evidence:'확인된 배송동선과 운행요일 근거가 부족합니다. 직선거리만으로 배송 가능 여부를 판단하지 않습니다.'};
+    if(actualVehicles.length)return {...facts,reason:'배송동선·운행요일 확인 필요',
+      evidence:'50km 내 실제 운행호차 '+actualVehicles.length+'대 확인 · 가장 가까운 완료 배송점 '+Math.round(actualVehicles[0].distance*1000)+'m(직선) · 문의 주소까지 배송동선 미확인'};
+    return {...facts,reason:limits.length?'위치 확인 완료 · 배송판정 검토':'배송동선·운행요일 확인 필요',
+      evidence:'50km 내 확인된 완료 배송기록이 없습니다. 직선거리만으로 배송 가능 여부를 판단하지 않습니다.'};
   }
 
   let newAreaRequestId = 0;
@@ -2905,13 +2914,13 @@
   }
 
   function newAreaSummaryMarkup(row) {
-    const label=row.decision==='O'?'배송 가능 근거 있음':row.decision==='X'?'배송 불가':'검토 필요';
+    const label=row.decision==='O'?'배송 가능 후보 (O)':row.decision==='X'?'배송 불가':'검토 필요';
     const kind=row.decision==='O'?'ok':row.decision==='X'?'no':'review';
     const nearest=row.nearestStoreCode&&Number.isFinite(row.nearestDistanceMeters)
       ?`<strong>${esc(row.nearestStore||'매장명 미확인')} · ${esc(row.nearestStoreCode)}</strong> · <strong>${row.nearestDistanceMeters}m</strong>`:'등록 매장 위치 근거 미확인';
     return `<div><span class="judgeBadge ${kind}">${label}</span> ${esc(row.reason||'')}</div>
       <div data-area-nearest>가장 가까운 등록 매장(직선거리): ${nearest}</div>
-      <div>배송 가능 참고요일: <strong>${esc(row.possibleWeekdays?.join('·')||(row.decision==='X'?'해당 없음':'검토 필요'))}</strong></div>
+      <div>배송 가능 참고요일: <strong>${esc(row.possibleWeekdays?.join('·')||(row.decision==='X'?'해당 없음':'별도 확인'))}</strong></div>
       ${row.deliveryDays?`<div class="areaInquiryHint">주변 매장 기준요일 참고: ${esc(row.deliveryDays)}</div>`:''}
       <div class="areaInquiryHint">${esc(row.evidence||'')}${row.decision==='검토'?' · 실제 배송 확정 전 확인 필요':''}</div>
       ${!row.archiveContext&&row.dataLimits?`<div class="areaInquiryHint">자료 범위: ${esc(row.dataLimits)}</div>`:''}`;

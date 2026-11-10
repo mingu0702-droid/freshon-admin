@@ -124,7 +124,7 @@
   }
   const areaExportHeadings=Object.freeze(['주소(X)','고객정보(Y)','판단(BV)','사유(BW)','적용일자(BX)','센터/권역(BY)',
     '가까운 등록 매장의 기준호차','가까운 등록 매장','직선거리km','가까운 등록 매장 고객코드','직선거리m',
-    '호차 조회 반경km','실제 운행호차·직선거리·확인 요일','배송 가능 참고요일']);
+    '호차 조회 반경km','실제 운행호차·직선거리·확인 요일','배송 가능 참고요일','판정 근거']);
   function areaExportRows(rows, applyDate, radius=30) {
     const date=/^\d{4}-\d{2}-\d{2}$/.test(applyDate||'')?Number(applyDate.slice(5,7))+'-'+Number(applyDate.slice(8)):'';
     return rows.map(row=>{
@@ -134,7 +134,7 @@
       return [row.originalAddress??row.address??'',row.originalCustomer??row.customer??'',decision,reason,date,
         regionForAddress(row.address),row.nearestStoreFixedVehicle||'',row.nearestStore||'',
         Number.isFinite(row.nearestDistance)?Number(row.nearestDistance.toFixed(3)):'',row.nearestStoreCode||'',
-        Number.isFinite(row.nearestDistanceMeters)?row.nearestDistanceMeters:'',areaRadius(radius),vehicles,row.possibleWeekdays?.join('·')||''];
+        Number.isFinite(row.nearestDistanceMeters)?row.nearestDistanceMeters:'',areaRadius(radius),vehicles,row.possibleWeekdays?.join('·')||'',row.evidence||''];
     });
   }
   function areaTsv(rows, applyDate, kind) {

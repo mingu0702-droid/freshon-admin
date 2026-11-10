@@ -40,7 +40,8 @@ try{
     await page.locator('#newAreaBatchInput').fill('S990001\t"합성 고객\n상세주소"\n대구광역시 동구 합성로 2\t합성 고객2\n입력\t오류\t추가열');
     await page.locator('#judgeNewAreaBatch').click();await page.waitForFunction(()=>MapUiLocalBridge.state.newAreaResults.length===3);
     const rows=await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults);
-    assert.equal(rows[0].decision,'검토');assert.equal(rows[0].evidenceCount,1);assert.equal(rows[0].deliveryDays,'월수금');assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
+    assert.equal(rows[0].decision,'O');assert.equal(rows[0].evidenceCount,1);assert.equal(rows[0].deliveryDays,'월수금');assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
+    assert.match(await page.locator('#newAreaBatchResults').innerText(),/배송 가능 후보 \(O\)/);
     assert.match(await page.locator('#newAreaBatchResults').innerText(),/30km 내 실제 운행호차 · 확인된 호차 없음/);
     await page.locator('#newAreaApplyDate').fill('2026-11-02');await page.locator('#copyAreaDecision').click();
     assert.equal((await page.evaluate(()=>navigator.clipboard.readText())).split('\r\n').length,3);
@@ -48,7 +49,7 @@ try{
     const csvPending=page.waitForEvent('download');await page.locator('#exportNewAreaCsv').click();const csv=await csvPending;await csv.saveAs(path.join(artifacts,'result-'+width+'.csv'));
     const csvText=fs.readFileSync(path.join(artifacts,'result-'+width+'.csv'),'utf8');assert.match(csvText,/검토필요/);assert.match(csvText,/S990001/);assert.match(csvText,/합성 고객\n상세주소/);
     const excelPending=page.waitForEvent('download');await page.locator('#exportNewAreaExcel').click();const excel=await excelPending;await excel.saveAs(path.join(artifacts,'result-'+width+'.xlsx'));
-    const book=XLSX.readFile(path.join(artifacts,'result-'+width+'.xlsx'));const cells=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{header:1});assert.equal(cells.length,4);assert.equal(cells[1][0],'S990001');assert.equal(cells[1][2],'검토필요');
+    const book=XLSX.readFile(path.join(artifacts,'result-'+width+'.xlsx'));const cells=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{header:1});assert.equal(cells.length,4);assert.equal(cells[1][0],'S990001');assert.equal(cells[1][2],'O');assert.match(cells[1].at(-1),/500m 이내/);
     await page.locator('[data-judged="1"]').click();assert.equal(await page.locator('#manualLabel').inputValue(),'대구광역시 동구 합성로 2');assert.equal(await page.locator('#manualLat').inputValue(),'');
     await page.locator('#manualLat').fill('35.9');await page.locator('#manualLng').fill('128.65');await page.locator('#manualAdd').click();
     await page.evaluate(()=>{if(!document.querySelector('#mapBatchDialog').open)document.querySelector('#sourceBatch').click();});

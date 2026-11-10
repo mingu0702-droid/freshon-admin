@@ -47,18 +47,48 @@ test('a partial period keeps positive completed-delivery evidence and explicit e
   assert.equal(f.judgeNewAreaPoint({address:'서울특별시 합성로 1',customer:'동선외'},{lat:37.5,lng:127}).decision,'X');
   assert.equal(f.judgeNewAreaPoint({address:'서울특별시 합성상가 101동 102호'},{lat:37.5,lng:127}).decision,'검토');
 });
-test('a nearby registration alone is insufficient; actual delivery and weekday enable O within the original 1 km rule',()=>{
-  const f=fixture();f.setup([near],{complete:true,coverageComplete:true,missingCoordinate:0});f.ready();
-  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.201,lng:127}).decision,'검토');
+test('500 m includes an undelivered fixed registration without inventing weekdays',()=>{
+  const f=fixture();f.setup([],{},[{...near,lastDeliveryDate:''}]);f.generation('a'.repeat(64));
+  const at=meters=>({lat:near.lat+meters/6371000*180/Math.PI,lng:near.lng});
+  const request={address:'경기도 화성시 합성로 2'};
+  const qualifies=f.judgeNewAreaPoint(request,at(500));
+  assert.equal(qualifies.decision,'O');assert.equal(qualifies.eligibilityBasis,'FIXED_REGISTRY_500M');
+  assert.equal(qualifies.nearestDistanceMeters,500);assert.equal(qualifies.nearestStoreCode,near.customerCode);
+  assert.equal(qualifies.possibleWeekdays.length,0);assert.equal(qualifies.actualVehicles.length,0);
+  assert.match(qualifies.evidence,/실제 수락·배송일 별도 확인/);
+  assert.equal(f.judgeNewAreaPoint(request,at(500.1)).decision,'검토');
+  assert.equal(f.judgeNewAreaPoint({address:'경기도 화성시 합성아파트',customer:'101동 102호'},at(383)).decision,'X');
+  assert.equal(f.judgeNewAreaPoint({...request,customer:'동선외'},at(218)).decision,'X');
+  assert.equal(f.judgeNewAreaPoint({address:'제주특별자치도 합성로 2'},at(218)).decision,'X');
+  assert.equal(f.judgeNewAreaPoint(request,{...at(218),coordinateSource:'MAP_CLICK_TEMPORARY'}).decision,'검토');
+});
+test('temporary registry coordinates cannot provide 500 m eligibility',()=>{
+  const f=fixture();
+  f.setup([],{},[{...near,coordinateSource:'KAKAO_ADDRESS_LIVE'},
+    {...near,customerCode:'S990002',lat:37.21,coordinateSource:'ADDRESS_REPRESENTATIVE'}]);
+  const row=f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127});
+  assert.equal(row.nearestStoreCode,'S990002');
+  assert.equal(row.decision,'검토');
+});
+test('the original 1 km rule still uses completed visits and days outside 500 m',()=>{
+  const f=fixture();
   f.setup([{...completed,deliveryPattern:'월화수목금토'}],{complete:true,coverageComplete:true,missingCoordinate:0});f.ready();
-  const qualified=f.judgeNewAreaPoint({address:near.address},{lat:37.201,lng:127});
+  const qualified=f.judgeNewAreaPoint({address:near.address},{lat:37.207,lng:127});
   assert.equal(qualified.decision,'O');assert.equal(qualified.possibleWeekdays.join(''),'월');assert.equal(qualified.deliveryDays,'');
+  assert.equal(qualified.eligibilityBasis,'OBSERVED_DELIVERY_1KM');
   assert.match(qualified.evidence,/배송 수락 및 차량 진입은 별도 확인/);
-  assert.equal(f.judgeNewAreaPoint({address:near.address,customer:'지하 하역장'},{lat:37.201,lng:127}).decision,'검토');
+  const nearbyCandidate=f.judgeNewAreaPoint({address:near.address},{lat:37.201,lng:127});
+  assert.equal(nearbyCandidate.evidenceCount,1);assert.equal(nearbyCandidate.deliveryDays,'');
+  assert.equal(nearbyCandidate.possibleWeekdays.join(''),'월');
+  assert.equal(f.judgeNewAreaPoint({address:near.address,customer:'지하 하역장'},{lat:37.207,lng:127}).decision,'검토');
+  const facilityCandidate=f.judgeNewAreaPoint({address:near.address,customer:'지하 하역장'},{lat:37.201,lng:127});
+  assert.equal(facilityCandidate.decision,'O');assert.match(facilityCandidate.evidence,/차량 진입 별도 확인/);
   assert.equal(f.judgeNewAreaPoint({address:'경상북도 안동시 합성로 1'},{lat:36.56,lng:128.73}).decision,'검토');
   f.setup([completed],{complete:true,segmented:true,aggregateComplete:false,coverageComplete:false});f.ready();
   assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.207,lng:127}).decision,'O');
-  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.212,lng:127}).decision,'검토');
+  const out=f.judgeNewAreaPoint({address:near.address},{lat:37.212,lng:127});
+  assert.equal(out.decision,'검토');assert.equal(out.actualVehicles.length,1);
+  assert.match(out.evidence,/50km 내 실제 운행호차 1대 확인.*문의 주소까지 배송동선 미확인/);
 });
 test('nearest registered store can be an undelivered store outside the filtered delivery rows',()=>{
   const f=fixture();
@@ -72,7 +102,7 @@ test('14 unobserved days do not invalidate an address-bound completed route and 
   const f=fixture();f.setup([],{},[near]);f.state.rangeStart='2026-08-05';
   const archive={start:f.state.rangeStart,end:f.state.rangeEnd,days:76,unknownDays:14,vehicleStatus:'READY',
     observedByCenter:{osan:76,honam:0},vehicles:[{...near,vehicle:'202',center:'osan',mask:2}],observed:[],fixed:[]};
-  const point={lat:37.201,lng:127};
+  const point={lat:37.207,lng:127};
   const judge=vehicleStatus=>f.judgeNewAreaPoint({address:near.address},point,{archive:{...archive,vehicleStatus}});
   const recorded=judge('READY');
   assert.equal(recorded.decision,'O');
@@ -82,7 +112,8 @@ test('14 unobserved days do not invalidate an address-bound completed route and 
 });
 test('wrong-period rows never count, while dated snapshot delivery remains partial evidence',()=>{
   const f=fixture();f.setup([{...near,customerCode:'S990009'}],{startDate:'2025-01-01'},[near,{...near,customerCode:'S990002',lastDeliveryDate:'2025-01-01'}]);
-  const row=f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127});assert.equal(row.evidenceCount,1);assert.equal(row.decision,'검토');
+  const row=f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127});assert.equal(row.evidenceCount,1);
+  assert.equal(row.eligibilityBasis,'FIXED_REGISTRY_500M');assert.equal(row.actualVehicles.length,0);
 });
 test('empty partial page still uses dated snapshot evidence and does not revive conflicted same-code rows',()=>{
   const f=fixture();f.setup([],{complete:false},[near]);
@@ -113,7 +144,8 @@ test('TSV multiline preserves X/Y order and separates invalid addresses and row 
   await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
   const rows=f.state.newAreaResults;assert.equal(rows.length,3);assert.equal(rows[0].originalCustomer,'합성 고객\n상세주소');assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
   assert.equal(f.node('#exportNewAreaCsv').disabled,false);assert.match(f.node('#newAreaBatchResults').innerHTML,/30km 내 실제 운행호차/);
-  const output=globalThis.MapPeriodUi.areaExportRows(rows,'2026-11-02');assert.equal(output[0][0],near.customerCode);assert.equal(output[0][2],'검토필요');assert.equal(output[0][1],'합성 고객\n상세주소');
+  const output=globalThis.MapPeriodUi.areaExportRows(rows,'2026-11-02');assert.equal(output[0][0],near.customerCode);assert.equal(output[0][2],'O');assert.equal(output[0][1],'합성 고객\n상세주소');
+  assert.equal(MapPeriodUi.areaExportHeadings.at(-1),'판정 근거');assert.match(output[0].at(-1),/500m 이내/);
   assert.equal(globalThis.MapPeriodUi.areaTsv(rows,'2026-11-02','decision').split('\r\n').length,3);
   f.setJudge(async row=>{if(row.address==='실패')throw Error('SYNTHETIC_ROW_FAILURE');return {...row,decision:'검토',reason:'주소 확인 필요',nearby:[]};});
   f.node('#newAreaBatchInput').value='실패\t고객1\n경기도 화성시 합성로 2\t고객2';await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
