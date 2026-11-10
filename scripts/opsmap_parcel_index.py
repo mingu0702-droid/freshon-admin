@@ -130,20 +130,46 @@ def add_geometry(db, file, as_of, sources, changes, postal_observed_on):
     if not crs.equals(CRS.from_epsg(5186), ignore_axis_order=True):
         raise ValueError("PARCEL_SHAPEFILE_CRS")
     transformer = Transformer.from_crs(crs, 4326, always_xy=True)
+    encoding = "cp949"
+    cpg = stem.with_suffix(".cpg")
+    if cpg.is_file():
+        label = cpg.read_text(encoding="utf-8-sig").strip().lower()
+        encoding = {"949": "cp949", "cp949": "cp949", "euc-kr": "cp949",
+                    "65001": "utf-8", "utf-8": "utf-8", "utf8": "utf-8"}.get(label)
+        if not encoding:
+            raise ValueError("PARCEL_SHAPEFILE_ENCODING")
+        components.append(cpg)
     digest = hashlib.sha256("".join(file_sha(f) for f in components).encode("ascii")).hexdigest()
     source = len(sources)
     sources.append({"url": PARCEL_SOURCE, "sha256": digest, "date": as_of,
                     "license": "CC-BY-2.0-KR", "crs": "EPSG:5186"})
-    with shapefile.Reader(str(file), encoding="cp949") as shp:
+    with shapefile.Reader(str(file), encoding=encoding) as shp:
         fields = {field[0].upper(): field[0] for field in shp.fields[1:]}
-        pnu_field = fields.get("PNU") or fields.get("A1")
+        pnu_field = fields.get("A1") or fields.get("PNU")
         if not pnu_field:
             raise ValueError("PARCEL_SHAPEFILE_PNU_COLUMN")
+        columns = [pnu_field]
+        if "A1" in fields:
+            if not {"A2", "A4", "A6"}.issubset(fields):
+                raise ValueError("PARCEL_SHAPEFILE_IDENTITY_COLUMNS")
+            columns.extend(fields[key] for key in ("A2", "A4", "A6"))
         valid_count = 0
-        for item in shp.iterShapeRecords(fields=[pnu_field]):
+        for item in shp.iterShapeRecords(fields=columns):
             original = str(item.record[pnu_field]).strip()
             if not valid_pnu(original):
                 continue
+            if "A1" in fields:
+                legal = str(item.record[fields["A2"]]).strip()
+                number = re.fullmatch(r"(산)?\s*([0-9]{1,4})(?:-([0-9]{1,4}))?",
+                                      str(item.record[fields["A4"]]).strip())
+                if not number or parcel_id(legal, "1" if number[1] else "0", number[2], number[3] or "0") != original:
+                    continue
+                try:
+                    feature_date = iso_day(str(item.record[fields["A6"]]).strip())
+                except ValueError:
+                    continue
+                if feature_date > as_of:
+                    continue
             valid_count += 1
             point = checked_point(item.shape.__geo_interface__, transformer)
             if point is None:

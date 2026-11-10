@@ -54,10 +54,11 @@ x,y = transform.transform(127.06,37.16)
 outer = [(x+dx,y+dy) for dx,dy in [(0,0),(0,100),(10,100),(10,10),(100,10),(100,0),(0,0)]]
 polygon = Polygon(outer)
 assert not polygon.contains(polygon.centroid)
-with shapefile.Writer(str(root/'parcels'),shapeType=shapefile.POLYGON) as shp:
-    shp.field('PNU','C',19)
-    shp.poly([outer]); shp.record('4136010100201230004')
-    shp.poly([[(a-200,b-200) for a,b in outer]]); shp.record('2826012200100080137')
+with shapefile.Writer(str(root/'parcels'),shapeType=shapefile.POLYGON,encoding='cp949') as shp:
+    shp.field('A1','C',19); shp.field('A2','C',10); shp.field('A4','C',10); shp.field('A6','C',10)
+    shp.poly([outer]); shp.record('4136010100201230004','4136010100','산123-4','2026-06-30')
+    shp.poly([[(a-200,b-200) for a,b in outer]]); shp.record('2826012200100080137','2826012200','8-137','2026-06-30')
+    shp.poly([outer]); shp.record('2826012200100080000','2826012200','9','2026-06-30')
 (root/'parcels.prj').write_text(CRS.from_epsg(5186).to_wkt(),encoding='utf8')
 interior = polygon.representative_point()
 lng,lat = Transformer.from_crs(5186,4326,always_xy=True).transform(interior.x,interior.y)
