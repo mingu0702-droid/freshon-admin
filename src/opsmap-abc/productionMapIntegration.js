@@ -322,9 +322,11 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
           const live = await phase2bTodayStatus(candidate);
           if(live?.date!==candidate)throw new Error('DELIVERY_SOURCE_DATE_MISMATCH');
           assertDeliverySourceObservation(live.sourceObservation,candidate);
+          const retained=live.sourceReadState==='STALE_VERIFIED'?{sourceReadState:'STALE_VERIFIED',sourceError:live.sourceError,
+            previousVerifiedRetained:true,currentReadComplete:false}:{};
           if(phase2bDispatchDate && live.sourceObservation.responseRows===0) {
             return {ok:true,data:[],meta:{date:candidate,source:"Delivery Admin date-verified dispatch",complete:true,
-              rowCount:0,generatedAt:live.generatedAt,sourceReadState:'NO_DISPATCH_OBSERVED'},error:null};
+              rowCount:0,generatedAt:live.generatedAt,sourceReadState:'NO_DISPATCH_OBSERVED',...retained},error:null};
           }
           if(live.sourceObservation.dateVerified!==true)throw new Error('DELIVERY_SOURCE_DATE_UNVERIFIED');
           if(candidate>calendarDate && live.vehicles.some(vehicle=>vehicle.stops.some(stop=>stop.appRecorded))) {
@@ -340,15 +342,18 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
           const data = uniqueAssignments(actual, candidate);
           if (data.length && candidate>calendarDate) {
             return {ok:true,data:data.map(({lastDeliveryDate,...row})=>row),meta:{date:candidate,source:"Delivery Admin date-verified dispatch",
-              recordKind:'PLANNED_ASSIGNMENTS',complete:true,rowCount:data.length,generatedAt:live.generatedAt},error:null};
+              recordKind:'PLANNED_ASSIGNMENTS',complete:true,rowCount:data.length,generatedAt:live.generatedAt,...retained},error:null};
           }
-          if (data.length) return { ok: true, data, meta: { date: candidate, source: candidate === calendarDate ? "Delivery Admin current dispatch" : "Delivery Admin date-verified dispatch", complete: true, rowCount: data.length, generatedAt: live.generatedAt }, error: null };
+          if (data.length) return { ok: true, data, meta: { date: candidate, source: candidate === calendarDate ? "Delivery Admin current dispatch" : "Delivery Admin date-verified dispatch", complete: true, rowCount: data.length, generatedAt: live.generatedAt,...retained }, error: null };
           if (phase2bDispatchDate && !actual.length) {
             return {ok:true,data:[],meta:{date:candidate,source:"Delivery Admin date-verified dispatch",complete:true,
-              rowCount:0,generatedAt:live.generatedAt,sourceReadState:'NO_ACTIVE_DISPATCH_OBSERVED'},error:null};
+              rowCount:0,generatedAt:live.generatedAt,sourceReadState:'NO_ACTIVE_DISPATCH_OBSERVED',...retained},error:null};
           }
         } catch (error) {
           if(candidate>calendarDate)throw error;
+          const saved=await Promise.resolve().then(()=>readArchivedAssignments?.(candidate)).catch(()=>null);
+          if(saved?.meta?.date===candidate) return saved;
+          if (phase2bDispatchDate && candidate===calendarDate) throw error;
           console.warn(JSON.stringify({ component: "phase2b-assignments", source: "Delivery", error: /^DELIVERY_[A-Z_]+$/.test(error.code || error.message || '') ? error.code || error.message : 'DELIVERY_READ_UNAVAILABLE' }));
         }
       }

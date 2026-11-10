@@ -137,6 +137,15 @@ async function materializeDays({store, current, seed, changes, directory, target
     // Omission and incomplete pages cannot erase previously observed deliveries.
     const ids = new Set((day.tasks || day.visits).map(row => row[0]));
     if (!old?.planningOnly && (old?.tasks || old?.visits || []).some(row => !ids.has(row[0]))) throw Error('OPSMAP_SYNC_DAY_REGRESSION');
+    if (old?.dispatch) {
+      const incoming=new Map((day.tasks||[]).map((row,index)=>[row[0],{row,event:day.dispatch?.events[index]}]));
+      if (old.tasks.some((row,index)=>{
+        const next=incoming.get(row[0]);
+        return !next || next.row[1]!==row[1] || next.row[3]!==row[3] ||
+          old.dispatch.events[index][6]==='VERIFIED_INDIVIDUAL' && next.row[2]===row[2] && next.row[5]==='COMPLETED' &&
+          next.event?.[6]!=='VERIFIED_INDIVIDUAL';
+      })) throw Error('OPSMAP_SYNC_DELIVERY_EVENT_REGRESSION');
+    }
     newDocs.set(date,day);
   }
   const latest=[...Object.keys(dates),...newDocs.keys()].filter(date=>date<=targetDate&&!plannedDates.has(date)).sort().at(-1);
@@ -233,7 +242,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       const planned=opsmapDispatchDate(Date.parse(scheduledRun.issuedAt));
       if(planned>target) {
         const plan=await readDay(planned);
-        if (!completeSyncObservation(plan,SYNC_CENTERS,requiredSourceIds) || plan.visits.length) {
+        if (!completeSyncObservation(plan,SYNC_CENTERS,requiredSourceIds) || plan.tasks.some(row=>row[5]==='COMPLETED')) {
           throw Object.assign(Error('OPSMAP_SCHEDULE_PLAN_INCOMPLETE'),{date:planned});
         }
         if (plan.sourceRows) changes.set(planned,validateOpsmapSyncDay({...plan,planningOnly:true},planned));

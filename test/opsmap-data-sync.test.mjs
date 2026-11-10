@@ -352,14 +352,14 @@ test('scheduled Delivery reads preserve verified center scope and reject a wrong
   const used=[];
   let wrongCenter=false;
   const delivery=createStageDatedDeliveryReader({env:{...env,OPSMAP_STAGE_DELIVERY_DATED_ENABLED:'1',OPSMAP_STAGE_DELIVERY_DATED_COOKIE:'fixture-only'},
-    syncCenters:{osan:'1',yeongnam:'7',honam:'8'},async fetchImpl(url){
+    syncCenters:{osan:'1',yeongnam:'3',honam:'4'},async fetchImpl(url){
       const id=url.searchParams.get('logisticsCenterId');
       used.push(id);
-      const item={...task(Number(id),known.code,10,'101'),logisticsCenterId:wrongCenter&&id==='7'?1:Number(id)};
+      const item={...task(Number(id),known.code,10,'101'),logisticsCenterId:wrongCenter&&id==='3'?1:Number(id)};
       return Response.json({content:[item],totalElements:1,totalPages:1});
     }});
   const combined=await delivery.readObservation(day);
-  assert.deepEqual(used,['1','7','8']);
+  assert.deepEqual(used,['1','3','4']);
   assert.deepEqual(combined.visits.map(row=>row[3]).sort(),['honam','osan','yeongnam']);
   assert.deepEqual(combined.completeCenters,['osan','yeongnam','honam']);
   assert.equal((await delivery(day)).vehicles[0].totalStops,1);

@@ -14,7 +14,7 @@ const count = value => typeof value === 'number' && Number.isSafeInteger(value) 
 
 // Existing GET task-list contract, with a single deadline covering every page and
 // body read. This requester never invokes deliveryAdminJson or logs in on 401.
-export function createOperationalPhotoTaskReader({rawRequest, extractRows = extractDefault, timeoutMs = 15000, customerScoped = false} = {}) {
+export function createOperationalPhotoTaskReader({rawRequest, extractRows = extractDefault, timeoutMs = 15000, customerScoped = false, strictDated = false} = {}) {
   if (typeof rawRequest !== 'function' || typeof extractRows !== 'function'
     || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 15000) throw Error('PHOTO_TASK_READER_CONFIG_REJECTED');
   const pageSize = customerScoped ? 50 : 300, maxPages = customerScoped ? 4 : 20;
@@ -33,7 +33,7 @@ export function createOperationalPhotoTaskReader({rawRequest, extractRows = extr
       try { return await Promise.race([promise, deadline]); }
       finally { controller.signal.removeEventListener('abort', stop); if (controller.signal.aborted && onLate) Promise.resolve(promise).then(onLate).catch(() => {}); }
     };
-    const rows = [], seen = new Set();let complete = false, pages = 0, declaredTotal = null, declaredPages = null, pagingValid = true;
+    const rows = [], seen = new Map();let complete = false, pages = 0, declaredTotal = null, declaredPages = null, pagingValid = true, rawRows = 0;
     try {
       for (let page = 0; page < maxPages; page++) {
         check();
@@ -54,7 +54,7 @@ export function createOperationalPhotoTaskReader({rawRequest, extractRows = extr
         const payload = await readBoundedPhotoLoginJson(response, customerScoped ? 256 * 1024 : 1048576, controller.signal);check();
         if (payload?.ok === false || payload?.success === false || payload?.error) fail('PHOTO_LOOKUP_FAILED');
         const batch = extractRows(payload);
-        if (!Array.isArray(batch) || batch.length > pageSize || rows.length + batch.length > 10000) fail('INVALID_PHOTO_RESPONSE');
+        if (!Array.isArray(batch) || batch.length > pageSize || rawRows + batch.length > 10000) fail('INVALID_PHOTO_RESPONSE');
         const total = count(payload?.totalElements ?? payload?.data?.totalElements), pageCount = count(payload?.totalPages ?? payload?.data?.totalPages);
         const returnedPage = payload?.number ?? payload?.data?.number;
         if (returnedPage != null && returnedPage !== page) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
@@ -62,20 +62,38 @@ export function createOperationalPhotoTaskReader({rawRequest, extractRows = extr
           || total > 0 && pageCount !== Math.ceil(total / pageSize)) pagingValid = false;
         if (declaredTotal !== null && (declaredTotal !== total || declaredPages !== pageCount)) pagingValid = false;
         if (declaredTotal === null && total !== null) { declaredTotal = total; declaredPages = pageCount; }
+        if (strictDated) {
+          const reportedSize = payload?.numberOfElements ?? payload?.data?.numberOfElements;
+          const last = payload?.last ?? payload?.data?.last;
+          if (!pagingValid || batch.length !== Math.min(pageSize, Math.max(0,total-page*pageSize)) ||
+              reportedSize != null && reportedSize !== batch.length || last != null && last !== (page+1>=pageCount)) {
+            fail('PHOTO_PAGE_INCOMPLETE', 503);
+          }
+        }
         for (const task of batch) {
           const id = String(task?.id ?? '');
           const customerCode = task?.customer?.erpCode ?? task?.customerErpCode;
           const values = [task?.enteringDatedAt, task?.deliveryDate, task?.carrier?.enteringDatedAt].filter(value => value !== null && value !== undefined);
-          if (!validDeliveryId(task?.id) || seen.has(id) || typeof customerCode !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(customerCode)
+          if (!validDeliveryId(task?.id) || typeof customerCode !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(customerCode)
             || !values.length || values.some(value => sourceTaskDate(value) !== date)) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
-          seen.add(id);rows.push(task);
+          if (seen.has(id)) {
+            if (!strictDated) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
+            const prior = seen.get(id);
+            // An ID repeated across page boundaries can conceal a skipped row.
+            if (prior.page !== page || JSON.stringify(prior.task) !== JSON.stringify(task)) fail('PHOTO_PAGE_DUPLICATE', 503);
+            continue;
+          }
+          seen.set(id,strictDated?{page,task}:null); rows.push(task);
         }
+        rawRows += batch.length;
         pages++;
-        if (pagingValid && rows.length === declaredTotal && (declaredTotal === 0 || pages === declaredPages)) { complete = true;break; }
+        if (pagingValid && rawRows === declaredTotal && (declaredTotal === 0 || pages === declaredPages)) { complete = true;break; }
         if (batch.length < pageSize || declaredPages !== null && pages >= declaredPages) break;
       }
       check();
-      Object.defineProperty(rows, 'sourceObservation', {value:deliverySourceObservation(rows, {date, complete, pages})});
+      const observation=deliverySourceObservation(rows, {date, complete, pages});
+      if (strictDated) Object.assign(observation,{rawRows,duplicateRows:rawRows-rows.length});
+      Object.defineProperty(rows, 'sourceObservation', {value:observation});
       return rows;
     } catch (error) {
       if (controller.signal.aborted || error?.name === 'AbortError') fail('PHOTO_TIMEOUT', 504);

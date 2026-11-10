@@ -8,6 +8,7 @@ import {atomicCoverageWrite} from './shadowCoverage/fileStore.js';
 import {readStageNearbyEvidence} from './stageNearbyEvidence.js';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {readOpsmapVehicleDelivery,MAX_VEHICLE_DELIVERY_BYTES,VEHICLE_DELIVERY_FILE} from './opsmapVehicleDeliveryEvidence.js';
+import {validateDatedDispatch} from './datedDeliveryContract.js';
 
 export const syncSha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export const syncDigest = value => syncSha256(JSON.stringify(value));
@@ -51,13 +52,15 @@ export function validateOpsmapSyncDay(value, date) {
   if (tasks !== undefined) {
     if (!Array.isArray(tasks) || tasks.length !== sourceRows || unidentified !== 0) throw Error('OPSMAP_SYNC_TASK_COUNT');
     checkRows(tasks, true);
-    const completed = tasks.filter(row => row[5] === 'COMPLETED');
+    if (value.dispatch !== undefined) validateDatedDispatch(value);
+    const completed = tasks.filter((row,index) => row[5] === 'COMPLETED' && value.dispatch?.events[index][4]!==true);
     const byId = new Map(visits.map(row => [row[0],row]));
     if (completed.length !== visitIds.size || completed.some(([id,code,vehicle,center]) => {
       const visit = byId.get(id);
       return !visit || visit[1] !== code || visit[2] !== vehicle || visit[3] !== center;
     })) throw Error('OPSMAP_SYNC_TASK_BINDING');
   }
+  if (tasks===undefined && value.dispatch!==undefined) throw Error('DELIVERY_DISPATCH_CONTRACT');
   return value;
 }
 

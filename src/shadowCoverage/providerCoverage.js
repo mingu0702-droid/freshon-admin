@@ -78,6 +78,19 @@ export function sealProviderCoverage({provider,asOf,source,kind,records}={}) {
     const row=normalizeRow(raw,provider,asOf);
     distinct.set(JSON.stringify(row),row);
   }
+  const byCustomer=new Map();
+  for(const row of distinct.values()) {
+    if (!row.customerCode) continue;
+    const linked=byCustomer.get(row.customerCode)||[];
+    linked.push(row);
+    byCustomer.set(row.customerCode,linked);
+  }
+  for(const links of byCustomer.values()) {
+    links.sort((a,b)=>a.validFrom.localeCompare(b.validFrom));
+    for(let i=1;i<links.length;i++) {
+      if (!links[i-1].validTo || links[i-1].validTo>=links[i].validFrom) fail('PROVIDER_CUSTOMER_PERIOD_CONFLICT');
+    }
+  }
   const body={contract:PROVIDER_COVERAGE_CONTRACT,provider,asOf,source:origin,kind,records:Object.freeze([...distinct.values()])};
   return Object.freeze({...body,generation:providerDigest(JSON.stringify(body))});
 }

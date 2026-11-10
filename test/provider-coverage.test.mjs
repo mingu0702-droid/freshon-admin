@@ -86,6 +86,22 @@ test('bounded CSV and Excel imports retain text codes and require the approved b
   const xlsx=XLSX.write(book,{type:'buffer',bookType:'xlsx'});
   const excel=await importProviderCoverageFile(xlsx,{...metadata,format:'xlsx',sheetName:'Coverage',expectedSha256:providerDigest(xlsx)});
   assert.deepEqual([excel.records[0].customerCode,excel.records[0].validFrom,excel.records[0].validTo],['0002',date,'2026-12-01']);
+  const invalid=Buffer.from('customerCode,customerCode,unapprovedField\n0001,0002,fixture');
+  await assert.rejects(importProviderCoverageFile(invalid,{...metadata,format:'csv',expectedSha256:providerDigest(invalid)}),/INPUT_COLUMNS/);
+  sheet.B2.f='1+1';
+  const formula=XLSX.write(book,{type:'buffer',bookType:'xlsx'});
+  await assert.rejects(importProviderCoverageFile(formula,{...metadata,format:'xlsx',expectedSha256:providerDigest(formula)}),/INPUT_SHEET/);
+});
+
+test('conflicting customer effective periods are rejected while other provider generations remain independent',()=>{
+  const row={customerCode:'001',pnu:'4111100000100000001',matchApproved:true,status:'AVAILABLE_CONFIRMED',validFrom:'2026-11-01',validTo:'2026-11-20'};
+  const changed={...row,pnu:'4111100000100000002',validFrom:'2026-11-20',validTo:'2026-11-25'};
+  const prior=make('CJ',[row]);
+  assert.throws(()=>make('CJ',[row,changed]),/CUSTOMER_PERIOD_CONFLICT/);
+  const good=make('CJ',[row,{...changed,validFrom:'2026-11-21'}]);
+  assert.notEqual(prior.generation,good.generation);
+  assert.equal(prior.records[0].pnu,row.pnu);
+  assert.notEqual(prior.generation,make('NAVER_SHOPPING',[row]).generation);
 });
 
 test('approved API reads the pinned JSON endpoint without a redirect and rejects changed bytes',async()=>{

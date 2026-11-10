@@ -91,8 +91,22 @@ test('Stage assignments and current status share the same authenticated source w
     body:JSON.stringify({id:'fixture-staff',password})});
   assert.equal(login.status,200);
   const cookie = login.headers.get('set-cookie').split(';')[0];
-  const [assignments, todayStatus] = await Promise.all(['assignments','today-status'].map(path => fetch(`${api}/${path}?date=${date}`,{headers:{cookie}})));
-  assert.deepEqual([assignments.status,todayStatus.status],[200,200]);
+  const dated=origin+'/api/map-phase2b/private/dated-delivery';
+  assert.equal((await fetch(`${dated}?date=${date}`)).status,401);
+  const [assignments, todayStatus, contract] = await Promise.all([...['assignments','today-status'].map(path => fetch(`${api}/${path}?date=${date}`,{headers:{cookie}})),
+    fetch(`${dated}?date=${date}&vehicle=122`,{headers:{cookie}})]);
+  assert.deepEqual([assignments.status,todayStatus.status,contract.status],[200,200,200]);
+  assert.match(contract.headers.get('cache-control'),/\bno-store\b/);
+  assert.match(contract.headers.get('vary'),/\bCookie\b/i);
+  const delivery=await contract.json();
+  assert.equal(delivery.count,1);
+  assert.equal(delivery.source.rawRows,3);
+  assert.equal(delivery.rows[0].customerCode,'S2');
+  assert.equal(delivery.rows[0].individualCompletedAt,null);
+  assert.deepEqual(delivery.chronology,[]);
+  const centerUnavailable=await fetch(`${dated}?date=${date}&center=yeongnam`,{headers:{cookie}});
+  assert.equal(centerUnavailable.status,503);
+  assert.equal((await centerUnavailable.json()).rows,null);
   const payload = await assignments.json();
   assert.equal(payload.meta.complete,true);
   assert.equal(payload.meta.date,date);

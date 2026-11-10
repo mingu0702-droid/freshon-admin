@@ -311,7 +311,7 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     const {head,sha}=await readHead();
     if (head.run?.owner!==run.owner || head.run.state!=='RUNNING') return;
     const finished={...head.run,state:'FAILED',error:safeCode(error.code || error.message),completedAt:new Date(now()).toISOString(),
-      failedDate:isDay(error.date)?error.date:null,failedCenter:['osan','yeongnam','honam'].includes(error.center)?error.center:null,
+      failedDate:isDay(error.date)?error.date:null,failedCenter:['osan','osanColdStorage','yeongnam','honam'].includes(error.center)?error.center:null,
       failedSourceId:['1','2','3','4'].includes(error.sourceId)?error.sourceId:null};
     await writeHead({...head,sources:mergeSources(head,sources),run:finished,lastFailure:finished},sha);
   }, async confirmUnchanged(run,generation,observationHash,sources={}) {

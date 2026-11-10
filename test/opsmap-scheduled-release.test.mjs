@@ -23,6 +23,7 @@ import {opsmapDispatchDate} from '../src/snapshotRefreshEvidence.js';
 import {createShadowCoverageStore} from '../src/shadowCoverage/store.js';
 import {completeSyncObservation,SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
 import {collectOpsmapVehicleDelivery,opsmapVehicleDeliveryPage,readOpsmapVehicleDelivery} from '../src/opsmapVehicleDeliveryEvidence.js';
+import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,packDatedEvent,deliveryCompletion} from '../src/datedDeliveryContract.js';
 
 const date='2026-11-11', previousDate='2026-11-10', oldDate='2026-07-01';
 const clockStart=Date.parse(date+'T02:00:00+09:00');
@@ -186,7 +187,11 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
         throw error;
       }
       record?.('delivery:4',day);
-      return observation(day,day===date?status:'OPEN');
+      const source=observation(day,day===date?status:'OPEN');
+      const event=deliveryCompletion({status,individualCompletion:true,completedAt:date+'T01:00:00+09:00'},
+        {date:day,customerCode:code,vehicle:'122'});
+      const dispatch={contract:DATED_DELIVERY_CONTRACT,sources:[['1',1,source.sourceRows,0]],events:source.tasks.map(()=>packDatedEvent('1',event))};
+      return {...source,completeSources:['1'],dispatch,proofHash:syncDigest([day,source.tasks,source.visits,dispatch])};
     }});
   const receipt=()=>verifyOpsmapScheduleReceipt(signed(tick),{...clock,now});
   const run=()=>publishOpsmapScheduledRun({createWorker:work,durable:writer,receipt:receipt()});
@@ -234,6 +239,10 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   assert.equal(restored.ledger.sha256,ledger.sha256);
   assert.equal(restored.vehicleDelivery.generation,replacement.generation);
   assert(api.calls.slice(fetchedAt).every(({name})=>!name.startsWith('day-')));
+  const restoredEvents=archivedDatedDispatch(await restarted.readDay(date,restored),{center:'osan',vehicle:'122',generation:replacement.generation});
+  assert.equal(restoredEvents.state,'PUBLISHED_VERIFIED');
+  assert.deepEqual(restoredEvents.chronology,[syncSha256(date)]);
+  assert.equal(restoredEvents.rows[0].individualCompletedAt,'2026-11-10T16:00:00.000Z');
   const firstRead=api.calls.length;
   const parallel=await Promise.all(Array.from({length:12},()=>restarted.readDay(oldDate,restored)));
   assert(parallel.every(day=>day.visits.length===1));

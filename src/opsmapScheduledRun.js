@@ -14,13 +14,14 @@ const kstDate=ms=>new Date(ms+9*HOUR).toISOString().slice(0,10);
 const jobFile=fileURLToPath(new URL('../scripts/run-opsmap-data-sync.mjs',import.meta.url));
 const sourceKeys=new Set(['customerRegistry','delivery:1','delivery:2','delivery:3','delivery:4']);
 
-function recordSource(sources,key,date,error) {
+function recordSource(sources,key,date,error,evidence) {
   if(!sourceKeys.has(key))return;
   const at=new Date().toISOString();
   const code=error?.code||error?.message;
   const observation={...sources[key],checkedAt:at,checkedDate:/^\d{4}-\d{2}-\d{2}$/.test(date||'')?date:null};
   sources[key]=error?{...observation,lastFailureAt:at,error:/^[A-Z][A-Z_0-9]{1,95}$/.test(code||'')?code:'OPSMAP_SOURCE_FAILED'}:
-    {...observation,lastSuccessAt:at,lastSuccessDate:observation.checkedDate,error:null};
+    {...observation,lastSuccessAt:at,lastSuccessDate:observation.checkedDate,error:null,
+      ...(evidence?.complete===true?{pages:evidence.pages,sourceRows:evidence.rawRows,uniqueDeliveries:evidence.responseRows,complete:true}:{})};
 }
 
 export function verifyOpsmapScheduleReceipt(value,{secret,scheduleId,executorHash,now=Date.now}={}) {

@@ -1,33 +1,39 @@
 import {createOperationalPhotoTaskReader} from './opsmapOperationalPhotoTaskReader.js';
-import {assertDeliverySourceObservation, deliverySourceObservation} from './snapshotRefreshEvidence.js';
+import {assertDeliverySourceObservation} from './snapshotRefreshEvidence.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {archiveAddressHash} from './stageArchivedDelivery.js';
-import {syncDigest, syncSha256, validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
+import {validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
 import {createStageDeliveryAdminPhotoSession} from './opsmapStageDeliveryAdminSession.js';
+import {createDeliveryAdminPhotoTransport} from './opsmapDeliveryAdminTransport.js';
 import {setTimeout as delay} from 'node:timers/promises';
+import {confirmedTaskVehicle, DATED_DELIVERY_CONTRACT, datedDispatchSource, datedDispatchView, deliveryCompletion,
+  deliveryDigest, deliveryTaskId, deliveryTaskState, packDatedEvent} from './datedDeliveryContract.js';
 
 const deliveryOrigin = 'https://delivery-bali.chabyulhwa.com';
 const error = (code, status) => Object.assign(Error(code), {code, diagnostic:{status}});
 const validDate = date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) &&
   Number.isFinite(Date.parse(date)) && new Date(date).toISOString().slice(0, 10) === date;
-const field = (...values) => values.find(value => typeof value === 'string' && value.trim())?.trim() || '';
-const completedAt=task=>field(task.completedAt,task.completeDatedAt,task.deliveryCompletedAt);
-function taskState(task) {
-  const status=field(task.status,task.taskStatus).toUpperCase();
-  if (/^CANCEL/.test(status)) return 'CANCELLED';
-  return ['COMPLETED','DELIVERED'].includes(status)||Number.isFinite(Date.parse(completedAt(task)))?'COMPLETED':'OPEN';
+const field = (...values) => values.find(value => typeof value === 'string' && value.length<=512 && value.trim())?.trim() || '';
+const cacheTtl = 60_000;
+const staleLimit = 24 * 60 * 60_000;
+const focusedVehicles=new Set(['101','105','122','202']);
+const vehicleEventLimit=32;
+
+function taskEvent(task,date,customerCode,vehicle) {
+  return deliveryCompletion(vehicle?task:{status:task.status,taskStatus:task.taskStatus,statusText:task.statusText},
+    {date,customerCode,vehicle:vehicle||null});
 }
 
-function taskVehicle(task) {
-  const carrier = task.carrier || task.carrierInfo || task.driver || {};
-  const raw = [task.fixedNo, task.fixed_no, task.fixedNumber, task.fixedVehicleNo, task.carrierNo, task.vehicleNo,
-    task.vehicle, carrier.fixedNo, carrier.fixed_no, carrier.fixedNumber, carrier.carrierNo, carrier.vehicleNo, carrier.name];
-  const vehicle = field(...raw.map(value => Number.isSafeInteger(value) ? String(value) : value)).replace(/\s+/g, '').replace(/(?:호차|호|번)$/, '');
-  return /^(?:[용척]?\d{1,4})(?:-\d{1,3})?$/.test(vehicle) ? vehicle : '';
+function eventCandidate(task, state, event, customerCode, vehicle) {
+  if (!vehicle || state!=='COMPLETED' || ['VERIFIED_INDIVIDUAL','BULK_CONFIRMED','EVENT_CONFLICT'].includes(event.verification) ||
+      !/^[A-Z_]{1,32}$/.test(task.completeType||'') || !Number.isFinite(Date.parse(task.completeDatedAt))) return null;
+  const {id,status,completeType,completeDatedAt}=task;
+  return {task:{id,status,completeType,completeDatedAt},customerCode,vehicle};
 }
 
-export function createStageDatedDeliveryReader({env = process.env, fetchImpl = fetch, syncCenters = {osan:'1'},recordSource} = {}) {
+export function createStageDatedDeliveryReader({env = process.env, fetchImpl = fetch, syncCenters = {osan:'1'},recordSource,now=Date.now} = {}) {
   const enabled = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE &&
     env.OPSMAP_STAGE_DELIVERY_DATED_ENABLED === '1';
   const cookie = String(env.OPSMAP_STAGE_DELIVERY_DATED_COOKIE || '').trim();
@@ -39,27 +45,57 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
   const valid = (value,max)=>typeof value==='string'&&value.length<=max&&value.trim()&&!/[\x00-\x1f\x7f]/.test(value);
   const account = reuse && valid(id,256) && valid(password,1024) ? createStageDeliveryAdminPhotoSession({id,password,fetchImpl}) : null;
   const hasSource = enabled && (!!account || /^[\x20-\x7e]{1,8192}$/.test(cookie));
+  const request = (url,signal) => account ? account.read(url,{signal}) : fetchImpl(url,{method:'GET',signal,redirect:'error',
+    cache:'no-store',headers:{Accept:'application/json',Cookie:cookie}});
+  const eventTransport=hasSource&&env.OPSMAP_STAGE_DELIVERY_EVENT_READ_APPROVED==='1' ? createDeliveryAdminPhotoTransport({
+    hasApprovedSession:()=>hasSource,timeoutMs:2500,approvedRequest:(path,{signal})=>{
+      if(!/^\/api\/bali\/task\/\d{1,20}\/status-record$/.test(path)) throw error('DELIVERY_SOURCE_REQUEST_REJECTED',403);
+      return request(new URL(path,deliveryOrigin),signal);
+    }}) : null;
+  let eventGroups=0;
+  async function readEvents(candidates,date,limit) {
+    const result={events:new Map(),requested:candidates.length,attempted:0,failed:0,truncated:false};
+    if (!eventTransport || !candidates.length) return result;
+    if (eventGroups>=2) return {...result,truncated:true};
+    eventGroups++;
+    try {
+      const budget=AbortSignal.timeout(8_000);
+      const bounded=candidates.slice(0,limit);
+      for (let offset=0; offset<bounded.length && !budget.aborted; offset+=3) {
+        const batch=bounded.slice(offset,offset+3);
+        const values=await Promise.all(batch.map(async({task,customerCode,vehicle})=>{
+          result.attempted++;
+          try {
+            const response=await eventTransport.requestJson(`/api/bali/task/${task.id}/status-record`,{signal:budget});
+            const records=response?.data??response;
+            if (response?.ok===false || !Array.isArray(records) || records.length>32 || records.some(record=>
+              !record || String(record.taskId)!==String(task.id))) throw Error('DELIVERY_EVENT_BINDING');
+            return [deliveryTaskId(task.id),deliveryCompletion({...task,taskStatusRecords:records},{date,customerCode,vehicle})];
+          } catch {result.failed++;return null;}
+        }));
+        for(const item of values)if(item)result.events.set(...item);
+        if(values.every(item=>!item))break;
+      }
+      result.truncated=result.attempted<candidates.length;
+      return result;
+    } finally {eventGroups--;}
+  }
   const scope = Object.entries(syncCenters || {});
-  if (!scope.length || scope.some(([center,id]) => !['osan','osanColdStorage','yeongnam','honam'].includes(center) ||
-      typeof id !== 'string' || !/^[1-9]\d{0,5}$/.test(id) || (center==='osan') !== (id==='1')) ||
-      (syncCenters.osanColdStorage!==undefined && syncCenters.osanColdStorage!=='2') ||
-      new Set(scope.map(([,id])=>id)).size !== scope.length) throw error('DELIVERY_SOURCE_CENTER_CONFIG', 503);
-  const readerFor = id => createOperationalPhotoTaskReader({async rawRequest(path, {method, signal}) {
+  if (!scope.length || scope.some(([center,id]) => !Object.hasOwn(SYNC_DELIVERY_SOURCES,center) ||
+      id!==SYNC_DELIVERY_SOURCES[center])) throw error('DELIVERY_SOURCE_CENTER_CONFIG', 503);
+  const readerFor = id => createOperationalPhotoTaskReader({strictDated:true,async rawRequest(path, {method, signal}) {
     const url = new URL(path, deliveryOrigin);
     if (method !== 'GET' || url.origin !== deliveryOrigin || url.pathname !== '/api/bali/task' || url.hash || url.username || url.password) {
       throw error('DELIVERY_SOURCE_REQUEST_REJECTED', 403);
     }
     url.searchParams.set('logisticsCenterId',id);
-    if(account) return account.read(url,{signal});
-    return fetchImpl(url, {method, signal, redirect:'error', cache:'no-store', headers:{Accept:'application/json', Cookie:cookie}});
+    return request(url,signal);
   }});
   const read = readerFor('1');
-  const syncReaders = scope.map(([center,id]) => ({
-    center:center==='osanColdStorage'?'osan':center,id,reader:id==='1'?read:readerFor(id)
-  }));
+  const readers = new Map(scope.map(([center,id]) => [center,{center,id,reader:id==='1'?read:readerFor(id)}]));
+  if (!readers.has('osan')) readers.set('osan',{center:'osan',id:'1',reader:read});
 
-  const inflight = new Map();
-  let cached;
+  const inflight = new Map(), cached = new Map(), lastReads=new Map();
   function authorize(date) {
     if (!enabled) throw error('DELIVERY_SOURCE_READ_ONLY', 503);
     if (!hasSource) throw error('DELIVERY_SOURCE_SESSION_REQUIRED', 401);
@@ -72,17 +108,25 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     catch (failure) {
       const code = ({UPSTREAM_AUTH_REQUIRED:'DELIVERY_SOURCE_AUTH_REQUIRED', PHOTO_FORBIDDEN:'DELIVERY_SOURCE_FORBIDDEN',
         PHOTO_TIMEOUT:'DELIVERY_SOURCE_TIMEOUT', PHOTO_RATE_LIMITED:'DELIVERY_SOURCE_RATE_LIMITED',
-        PHOTO_IDENTITY_UNVERIFIED:'DELIVERY_SOURCE_IDENTITY_UNVERIFIED'})[failure?.code] || 'DELIVERY_SOURCE_READ_UNAVAILABLE';
+        PHOTO_IDENTITY_UNVERIFIED:'DELIVERY_SOURCE_IDENTITY_UNVERIFIED', PHOTO_PAGE_INCOMPLETE:'DELIVERY_SOURCE_INCOMPLETE',
+        PHOTO_PAGE_DUPLICATE:'DELIVERY_SOURCE_PAGE_DUPLICATE'})[failure?.code] || 'DELIVERY_SOURCE_READ_UNAVAILABLE';
       throw error(code, failure?.sourceHttpStatus ?? failure?.status ?? 502);
     }
-    const observation = deliverySourceObservation(tasks, {date, complete:tasks.sourceObservation.complete,
-      pages:tasks.sourceObservation.pages, resolveVehicle:taskVehicle});
-    assertDeliverySourceObservation(observation, date);
-    if(tasks.some(task=>{
-      const center=task.logisticsCenter?.id ?? task.logisticsCenterId ?? task.carrier?.logisticsCenterId;
-      return center!=null && String(center)!==expectedCenter;
-    })) throw error('DELIVERY_SOURCE_SCOPE',503);
-    return {tasks,observation};
+    const vehicles = new Map();
+    let unassignedRows=0;
+    for (const task of tasks) {
+      if ([task.logisticsCenter?.id,task.logisticsCenterId,task.carrier?.logisticsCenterId]
+          .some(center=>center!=null && String(center)!==expectedCenter)) throw error('DELIVERY_SOURCE_SCOPE',503);
+      const code = task.customer?.erpCode ?? task.customerErpCode;
+      if (task.customer?.erpCode!=null && task.customerErpCode!=null && task.customer.erpCode!==task.customerErpCode ||
+          !/^[A-Z]\d{1,20}$/.test(code)) throw error('DELIVERY_SOURCE_CUSTOMER_CONFLICT',503);
+      const vehicle=confirmedTaskVehicle(task);
+      if (!vehicle) unassignedRows++;
+      vehicles.set(task,vehicle);
+    }
+    const observation = {...tasks.sourceObservation,unassignedRows};
+    assertDeliverySourceObservation(observation,date);
+    return {tasks,vehicles,observation};
   }
 
   async function readSyncTasks(date,reader,center,sourceId) {
@@ -92,81 +136,192 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       catch(error) {
         const retryable=error.code==='DELIVERY_SOURCE_TIMEOUT' ||
           error.code==='DELIVERY_SOURCE_READ_UNAVAILABLE' && [500,502,503,504].includes(error.diagnostic?.status);
-        if(!recordSource||!retryable)throw error;
+        if(!retryable)throw error;
         await delay(250);
         result=await readTasks(date,reader,sourceId);
       }
-      recordSource?.('delivery:'+sourceId,date);
+      recordSource?.('delivery:'+sourceId,date,null,result.observation);
+      const {pages,rawRows,duplicateRows,responseRows}=result.observation;
+      const at=new Date(now()).toISOString();
+      lastReads.set(center,{checkedDate:date,checkedAt:at,lastSuccessAt:at,lastSuccessDate:date,complete:true,
+        pages,rawRows,duplicateRows,uniqueDeliveries:responseRows,error:null});
       return result;
     } catch(error) {
       recordSource?.('delivery:'+sourceId,date,error);
+      lastReads.set(center,{...lastReads.get(center),checkedDate:date,checkedAt:new Date(now()).toISOString(),complete:false,
+        error:/^DELIVERY_SOURCE_[A-Z_]+$/.test(error.code||'')?error.code:'DELIVERY_SOURCE_READ_UNAVAILABLE'});
       throw Object.assign(error,{date,center,sourceId});
     }
   }
 
-  async function loadDate(date) {
-    const {tasks,observation} = await readTasks(date);
+  async function loadDate(date,{center,id,reader}) {
+    const {tasks,vehicles,observation} = await readSyncTasks(date,reader,center,id);
     const groups = new Map();
+    const rows = [], candidates=new Map();
     for (const task of tasks) {
-      const state=taskState(task);
+      const customerCode=task.customer?.erpCode ?? task.customerErpCode;
+      const confirmedVehicle=vehicles.get(task);
+      const state=deliveryTaskState(task);
+      const event=taskEvent(task,date,customerCode,confirmedVehicle);
+      const candidate=eventTransport&&eventCandidate(task,state,event,customerCode,confirmedVehicle);
+      if (candidate) {
+        const list=candidates.get(confirmedVehicle)||[];
+        list.push(candidate);
+        candidates.set(confirmedVehicle,list);
+      }
+      rows.push({taskId:String(task.id),customerCode,vehicle:confirmedVehicle,state,event});
       if(state==='CANCELLED')continue;
-      const vehicle = taskVehicle(task) || '미확인';
+      const vehicle = confirmedVehicle || '미확인';
       const customer = task.customer || {}, location = task.location || {};
       const stops = groups.get(vehicle) || [];
-      const deliveryStatus = field(task.status, task.taskStatus);
-      const deliveryCompletedAt = completedAt(task);
-      stops.push({customerCode:task.customer?.erpCode ?? task.customerErpCode,
+      stops.push({customerCode,
         customerName:field(task.customerName, customer.name),
         address:field(task.customerAddress, task.address, customer.address, location.address),
-        sequence:stops.length + 1, deliveryStatus, deliveryCompletedAt,
+        sequence:stops.length + 1, deliveryStatus:event.sourceStatus, deliveryCompletedAt:event.individualCompletedAt,
         appRecorded:state==='COMPLETED'});
       groups.set(vehicle, stops);
     }
-    return {date, generatedAt:new Date().toISOString(), sourceObservation:observation,
-      vehicles:[...groups].map(([vehicle, stops]) => {
-        const completedStops = stops.filter(stop => stop.appRecorded).length;
-        return {vehicle, stops, totalStops:stops.length, completedStops, remainingStops:stops.length - completedStops,
-          status:completedStops === stops.length ? '완료' : completedStops ? '배송중' : '출차전'};
-      })};
+    for(const list of candidates.values())list.sort((a,b)=>String(a.task.id).localeCompare(String(b.task.id)));
+    return {rows,candidates,eventReads:new Map(),views:new Map(),legacy:{date,generatedAt:new Date(now()).toISOString(),
+      sourceReadState:'LIVE_VERIFIED',sourceError:null,sourceObservation:observation,
+      vehicles:[...groups].map(([vehicle,stops])=>{
+        const completedStops=stops.filter(stop=>stop.appRecorded).length;
+        return {vehicle,stops,totalStops:stops.length,completedStops,remainingStops:stops.length-completedStops,
+          status:completedStops===stops.length?'완료':completedStops?'배송중':'출차전'};
+      })}};
   }
 
-  async function readDate(date) {
+  function prepareContract(value) {
+    const {date,sourceObservation:{pages,rawRows,duplicateRows}}=value.legacy;
+    const rows=value.rows.map(({taskId,customerCode,vehicle,state,event})=>
+      ({deliveryId:deliveryTaskId(taskId),deliveryDate:date,customerCode,vehicle,state,...event}));
+    rows.sort((a,b)=>a.deliveryId.localeCompare(b.deliveryId));
+    const byVehicle=new Map();
+    for(const row of rows)if(row.vehicle) {
+      const list=byVehicle.get(row.vehicle)||[];
+      list.push(row);
+      byVehicle.set(row.vehicle,list);
+    }
+    return {rows,byVehicle,source:datedDispatchSource(rows,{pages,rawRows,duplicateRows})};
+  }
+
+  async function loadCenter(date,center) {
     authorize(date);
-    if (cached?.date === date && cached.expiresAt > Date.now()) return cached.value;
-    if (inflight.has(date)) return inflight.get(date);
-    if (inflight.size >= 2) throw error('DELIVERY_SOURCE_BUSY', 429);
-    const pending = loadDate(date).then(value => {
-      cached = {date, value, expiresAt:Date.now() + 60000};
-      return value;
-    }).finally(() => inflight.delete(date));
-    inflight.set(date, pending);
+    const config=readers.get(center);
+    if (!config) throw error('DELIVERY_SOURCE_CENTER_UNVERIFIED',503);
+    const key=JSON.stringify([date,center]);
+    const saved=cached.get(key);
+    const previousRead=lastReads.get(center);
+    if (saved && saved.freshUntil > now()) return saved;
+    if (inflight.has(key)) return inflight.get(key);
+    const stale=code=>({value:saved.value,freshUntil:Math.min(now()+15_000,saved.retainUntil),retainUntil:saved.retainUntil,error:code});
+    const fallback=failure=>{
+      if(!saved || saved.retainUntil<=now())throw failure;
+      const retained=stale(failure.code || 'DELIVERY_SOURCE_READ_UNAVAILABLE');
+      if (failure.code==='DELIVERY_SOURCE_REGRESSION') lastReads.set(center,{...previousRead,checkedDate:date,
+        checkedAt:new Date(now()).toISOString(),complete:false,error:failure.code});
+      cached.set(key,retained);
+      return retained;
+    };
+    if (inflight.size >= 2) return fallback(error('DELIVERY_SOURCE_BUSY',429));
+    const pending = loadDate(date,config).then(value => {
+      if (saved) {
+        const rows=new Map(value.rows.map(row=>[row.taskId,row]));
+        if (saved.value.rows.some(prior=>{
+          const next=rows.get(prior.taskId);
+          return !next || prior.customerCode!==next.customerCode ||
+            prior.vehicle===next.vehicle && next.state==='COMPLETED' && prior.event.individualCompletedAt && !next.event.individualCompletedAt;
+        })) throw error('DELIVERY_SOURCE_REGRESSION',503);
+        for (const [vehicle,entry] of saved.value.eventReads) {
+          const previous=saved.value.candidates.get(vehicle)||[];
+          if (entry.reusable && deliveryDigest(previous)===deliveryDigest(value.candidates.get(vehicle)||[])) value.eventReads.set(vehicle,entry);
+        }
+      }
+      cached.delete(key);
+      while(cached.size>=6) cached.delete(cached.keys().next().value);
+      const active={value,freshUntil:now()+cacheTtl,retainUntil:now()+staleLimit,error:null};
+      cached.set(key,active);
+      return active;
+    }).catch(fallback).finally(() => inflight.delete(key));
+    inflight.set(key, pending);
     return pending;
   }
+  async function readDate(date) {
+    const {value,error}=await loadCenter(date,'osan');
+    return error?{...value.legacy,sourceReadState:'STALE_VERIFIED',sourceError:error}:value.legacy;
+  }
+  readDate.readContract=async(date,center,vehicle)=>{
+    const {value,error}=await loadCenter(date,center);
+    const prepared=value.prepared??=prepareContract(value);
+    const candidates=value.candidates.get(vehicle);
+    if (!error && candidates?.length && !value.eventReads.has(vehicle)) {
+      const entry={reusable:false};
+      entry.pending=readEvents(candidates,date,vehicleEventLimit).then(result=>{
+        entry.reusable=!result.failed&&!result.truncated;
+        return result;
+      });
+      value.eventReads.set(vehicle,entry);
+    }
+    const result=await value.eventReads.get(vehicle)?.pending;
+    const rows=vehicle?prepared.byVehicle.get(vehicle)||[]:prepared.rows;
+    let view=value.views.get(vehicle);
+    if (view?.result!==result || !view) {
+      const data=datedDispatchView({date,center,sourceId:readers.get(center).id,vehicle,
+      rows:result?.events.size?rows.map(row=>({...row,...result.events.get(row.deliveryId)})):rows,
+        source:prepared.source,at:value.legacy.generatedAt,state:'LIVE_VERIFIED',
+        eventRead:result?{requested:result.requested,attempted:result.attempted,failed:result.failed,truncated:result.truncated}:null});
+      view={result,data};
+      if(value.views.size>=64) value.views.delete(value.views.keys().next().value);
+      value.views.set(vehicle,view);
+    }
+    return error?{...view.data,state:'STALE_VERIFIED',error,currentReadComplete:false,confirmedEmpty:false,previousVerifiedRetained:true}:view.data;
+  };
   readDate.readObservation = async date => {
-    const projected = [], visits = [];
-    const observations = [];
-    for (const {center,id:expected,reader} of syncReaders) {
-      const {tasks,observation} = await readSyncTasks(date,reader,center,expected);
-      observations.push({center,sourceId:expected,...observation});
+    const projected = [], visits = [], sources = [];
+    const seen = new Set();
+    for (const [key,expected] of scope) {
+      const {center,reader}=readers.get(key);
+      const {tasks,vehicles,observation} = await readSyncTasks(date,reader,center,expected);
+      sources.push([expected,observation.pages,observation.rawRows,observation.duplicateRows]);
+      const pending=[];
       for (const task of tasks) {
         const code = task.customer?.erpCode ?? task.customerErpCode;
-        const vehicle = taskVehicle(task);
+        const vehicle = vehicles.get(task) || '';
         const address = field(task.location?.address, task.customerAddress, task.address, task.customer?.address);
-        const id = syncSha256('delivery:'+task.id);
-        const status=taskState(task);
-        projected.push([id,code,vehicle,center,coordinateAddressHash(address) || null,status]);
-        if (status === 'COMPLETED') visits.push([id,code,vehicle,center,archiveAddressHash(address)]);
+        const id = deliveryTaskId(task.id);
+        if (seen.has(id)) throw Object.assign(error('DELIVERY_SOURCE_ID_SCOPE_CONFLICT',503),{date,center,sourceId:expected});
+        seen.add(id);
+        const status=deliveryTaskState(task), group=center==='osanColdStorage'?'osan':center;
+        const event=taskEvent(task,date,code,vehicle);
+        const target={task:[id,code,vehicle,group,coordinateAddressHash(address) || null,status],event:packDatedEvent(expected,event)};
+        const candidate=eventTransport&&center==='osan'&&focusedVehicles.has(vehicle)&&eventCandidate(task,status,event,code,vehicle);
+        if(candidate)pending.push(candidate);
+        projected.push(target);
+        if (status === 'COMPLETED' && event.bulkProcessed!==true) visits.push([id,code,vehicle,group,archiveAddressHash(address)]);
+      }
+      if(pending.length) {
+        const {events}=await readEvents(pending,date,64);
+        for (const row of projected) {
+          const event=events.get(row.task[0]);
+          if(event)row.event=packDatedEvent(expected,event);
+        }
       }
     }
-    // readTasks checked all pages, date and center scope; zero tasks remain evidence.
-    const complete = observations.filter(item => item.complete === true);
-    const completeCenters = [...new Set(complete.map(item => item.center))];
-    const completeSources = complete.map(item=>item.sourceId);
-    projected.sort((a,b) => a[0].localeCompare(b[0]));
+    const completeCenters = [...new Set(scope.map(([center])=>center==='osanColdStorage'?'osan':center))];
+    const completeSources = sources.map(([id])=>id);
+    projected.sort((a,b) => a.task[0].localeCompare(b.task[0]));
     visits.sort((a,b) => a[0].localeCompare(b[0]));
-    return validateOpsmapSyncDay({date,sourceRows:projected.length,unidentified:0,proof:'VERIFIED_COMPLETE_DAY',
-      proofHash:syncDigest([observations,projected,visits]),completeCenters,completeSources,visits,tasks:projected},date);
+    const tasks=projected.map(row=>row.task);
+    const dispatch={contract:DATED_DELIVERY_CONTRACT,sources,events:projected.map(row=>row.event)};
+    const batchIds=new Set(projected.filter(row=>row.event[4]===true).map(row=>row.task[0]));
+    const observedVisits=visits.filter(row=>!batchIds.has(row[0]));
+    return validateOpsmapSyncDay({date,sourceRows:tasks.length,unidentified:0,proof:'VERIFIED_COMPLETE_DAY',
+      proofHash:deliveryDigest([date,tasks,observedVisits,dispatch]),completeCenters,completeSources,visits:observedVisits,tasks,dispatch},date);
   };
   readDate.configured = hasSource;
+  readDate.sourceStatus=()=>Object.fromEntries(Object.keys(SYNC_DELIVERY_SOURCES).map(center=>[center,lastReads.get(center)||{
+    checkedDate:null,lastSuccessAt:null,complete:false,error:!hasSource?'DELIVERY_SOURCE_NOT_CONFIGURED':
+      readers.has(center)?'DELIVERY_SOURCE_NOT_READ':'DELIVERY_SOURCE_CENTER_UNVERIFIED'
+  }]));
   return readDate;
 }

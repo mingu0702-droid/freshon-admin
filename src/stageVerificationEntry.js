@@ -21,6 +21,7 @@ import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
+import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,vehicleId} from './datedDeliveryContract.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
 import {createOfficialAddressLookup,createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
 import {createStageGenerationRestore} from './stageGenerationRestore.js';
@@ -338,7 +339,9 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     refresh();
     setInterval(refresh,60_000).unref();
   });
-  const readDatedDelivery = createStageDatedDeliveryReader({env:stage, fetchImpl});
+  const datedSourceIds=new Set(['1',...String(stage.OPSMAP_STAGE_DELIVERY_DATED_VERIFIED_SOURCE_IDS||'').split(',').map(id=>id.trim())]);
+  const readDatedDelivery = createStageDatedDeliveryReader({env:stage,fetchImpl,now,
+    syncCenters:Object.fromEntries(Object.entries(SYNC_DELIVERY_SOURCES).filter(([,id])=>datedSourceIds.has(id)))});
   const dispatchDate=readDatedDelivery.configured?()=>opsmapDispatchDate(now()):undefined;
   app.disable('x-powered-by');
   app.get('/api/health',(_req,res)=>res.json({ok:true,scope:'stage',release:/^[a-f0-9]{40}$/.test(stage.RENDER_GIT_COMMIT || '') ? stage.RENDER_GIT_COMMIT : null}));
@@ -383,6 +386,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             scheduledRun.date===today() && Number.isFinite(Date.parse(scheduledSuccessAt));
           return res.set('Cache-Control','private, no-store').vary('Cookie').json({
             automaticSyncVerified,
+            liveDeliveryByCenter:readDatedDelivery.sourceStatus(),
             sources:Object.fromEntries(['customerRegistry',...requiredSourceIds.map(id=>'delivery:'+id)].map(id=>[
               id,scheduledSources[id]||{lastSuccessAt:null,error:null}
             ])),
@@ -398,12 +402,43 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
                 schedulerApproved:stage.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED==='1',deliveryConfigured:readDatedDelivery.configured,
                 sourceReadsApproved:stage.OPSMAP_SYNC_SOURCE_READ_APPROVED==='1'},
               publishedAt:generation?.scheduled?.state.committedAt||null,lastSuccessAt:scheduledSuccessAt,sourceRunId,
+              nextRun:{state:scheduledRun?.triggerId?'TRIGGER_OBSERVED_NEXT_TIME_UNVERIFIED':'TRIGGER_UNVERIFIED',at:null},
               run:scheduledRun?{runId:scheduledRun.runId,triggerId:scheduledRun.triggerId,executorHash:scheduledRun.principal,
                 state:scheduledRun.state,date:scheduledRun.date,startedAt:scheduledRun.startedAt,completedAt:scheduledRun.completedAt||null,
                 sourceReadComplete:scheduledRun.sourceReadComplete===true}:null,
               lastFailure:scheduledFailure?{runId:scheduledFailure.runId,at:scheduledFailure.completedAt,code:scheduledFailure.error,
                 date:scheduledFailure.failedDate,center:scheduledFailure.failedCenter,sourceId:scheduledFailure.failedSourceId||null}:null}
           });
+        });
+        router.get('/api/map-phase2b/private/dated-delivery',requireStaff,async(req,res)=>{
+          const privateResponse=()=>res.set('Cache-Control','private, no-store').vary('Cookie');
+          privateResponse();
+          const {date,center='osan',vehicle:queryVehicle}=req.query;
+          const vehicle=queryVehicle===undefined?null:vehicleId(queryVehicle);
+          if (typeof date!=='string'||normalizeDateValue(date)!==date||date>(dispatchDate?.()||today())||
+              typeof center!=='string'||!Object.hasOwn(SYNC_DELIVERY_SOURCES,center)||
+              queryVehicle!==undefined&&(typeof queryVehicle!=='string'||!vehicle)||
+              Object.keys(req.query).some(key=>!['date','center','vehicle'].includes(key))) {
+            return res.status(400).json({error:'DELIVERY_QUERY_INVALID'});
+          }
+          const active=validation.active();
+          const source=scheduledSources['delivery:'+SYNC_DELIVERY_SOURCES[center]];
+          const retained=async error=>{
+            const archive=await active?.readNearbyDay?.(date).catch(()=>null);
+            return archivedDatedDispatch(archive,{center,vehicle,generation:active?.generation,
+              publishedAt:active?.scheduled?.state.committedAt,lastSuccessAt:source?.lastSuccessDate===date?source.lastSuccessAt:null,error});
+          };
+          try {
+            const data=await readDatedDelivery.readContract(date,center,vehicle);
+            const archive=await retained('DELIVERY_SOURCE_REGRESSION');
+            return requireStaff(req,res,()=>privateResponse().json(archive?.source.uniqueDeliveries>data.source.uniqueDeliveries?archive:data));
+          } catch (failure) {
+            const error=/^DELIVERY_SOURCE_[A-Z_]+$/.test(failure.code||'')?failure.code:'DELIVERY_SOURCE_READ_UNAVAILABLE';
+            const saved=await retained(error);
+            return requireStaff(req,res,()=>saved?privateResponse().json(saved):privateResponse().status(503).json({contract:DATED_DELIVERY_CONTRACT,date,center,vehicle,
+              state:'SOURCE_UNAVAILABLE',error,sourceComplete:false,currentReadComplete:false,scopeComplete:false,confirmedEmpty:false,
+              previousVerifiedRetained:false,lastSuccessAt:source?.lastSuccessAt||null,rows:null,chronology:null}));
+          }
         });
         router.post(officialAddressIndexRoute,requireStaff,(req,res,next)=>{
           res.set('Cache-Control','private, no-store').vary('Cookie');
