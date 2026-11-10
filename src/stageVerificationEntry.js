@@ -1,6 +1,7 @@
 import express from 'express';
 import compression from 'compression';
 import {fileURLToPath} from 'node:url';
+import {readFileSync} from 'node:fs';
 import {mountProductionMapApi} from './opsmap-abc/productionMapIntegration.js';
 import {callHub as hubRead} from './opsmap-abc/phase2bHubReadClient.js';
 import {createFixedVehicleCache} from './opsmap-abc/fixedVehicleCache.js';
@@ -21,7 +22,7 @@ import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
-import {createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
+import {createOfficialAddressLookup,createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
 import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from './opsmapDurableGeneration.js';
@@ -138,12 +139,23 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return scheduledRefresh;
   }
   const officialIndex = createTemporaryOfficialAddressLookup({sha256:stage.OPSMAP_STAGE_OFFICIAL_ADDRESS_INDEX_SHA256});
+  let preservedOfficialIndex = null;
+  if(stage.RENDER_SERVICE_ID===STAGE_SERVICE) {
+    try {
+      preservedOfficialIndex=createOfficialAddressLookup(readFileSync('/etc/secrets/opsmap-stage-official-address-index-v2.json'),{
+        sha256:'8631bb03fe3cdcc2704bd0d1c65d4df0c776b07ea2610b96a2ff5e4b2b3d776c',allowMixed:true
+      });
+    } catch(error) {
+      if(error.code!=='ENOENT') console.warn(JSON.stringify({component:'stage-official-address-index',state:'REJECTED'}));
+    }
+  }
+  const readOfficialIndex=()=>officialIndex.active() || preservedOfficialIndex;
   const geocodeBudgetFile = 'geocode-budget-v1.json';
   const geocodeBudget = stageAddressApproved ? createStageGeocodeBudgetStore({repo,token:stage.GITHUB_TOKEN,branch:pinsBranch,
     fetchImpl:stageGithub(fetchImpl,{files:[geocodeBudgetFile],branch:pinsBranch,writable:geocodeBudgetFile})}) : null;
   const addressLookupService = createKakaoCoordinateConnection({env:stage,fetchImpl,store:geocodeBudget,
     stageAddressApproved,independentAddressLookup:()=>{
-      const index=officialIndex.active();
+      const index=readOfficialIndex();
       return validation.active()?.bundledAddress || (index&&{lookup(query){
         const point=index.lookup(query);
         return point?.coordinateKind&&point.coordinateKind!=='BUILDING'?null:point;
@@ -309,7 +321,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       const {requireStaff,isSessionCurrent}=binding;
       staffView = requireStaff;
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
-        mountStageAbValidation(router,{...binding,validation,readSnapshot,readOfficialIndex:()=>officialIndex.active(),readBaseVehicles:codes=>base.get(codes)});
+        mountStageAbValidation(router,{...binding,validation,readSnapshot,readOfficialIndex,readBaseVehicles:codes=>base.get(codes)});
         router.get('/api/map-phase2b/private/stage-sync-evidence',requireStaff,(_req,res)=>{
           const generation=validation.active();
           const sourceRunId=generation?.scheduled?.state.runId || null;
