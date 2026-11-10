@@ -39,12 +39,12 @@ export function createOfficialAddressLookup(buffer, {sha256: expected, allowMixe
   try { index = JSON.parse(buffer.toString('utf8')); } catch { throw Error('OFFICIAL_ADDRESS_INDEX_JSON'); }
   const mixed = index?.schema === 'opsmap-official-address-index-v2';
   if (!index || Object.keys(index).length !== 5 || (mixed?!allowMixed:index.schema !== 'opsmap-official-address-index-v1') ||
-      !approvedSources.has(index.source) || !/^\d{4}-\d{2}-\d{2}$/.test(index.date || '') ||
+      !(approvedSources.has(index.source) || mixed && index.source===OFFICIAL_PARCEL_SOURCE) || !/^\d{4}-\d{2}-\d{2}$/.test(index.date || '') ||
       !digest.test(index.datasetSha256 || '') || !Array.isArray(index.rows) || !index.rows.length || index.rows.length > 2000) {
     throw Error('OFFICIAL_ADDRESS_INDEX_SCHEMA');
   }
   const rows = new Map();
-  const kinds = allowStored ? ['BUILDING','ADDRESS','PARCEL','STORED'] : ['BUILDING','ADDRESS','PARCEL'];
+  const kinds = index.source===OFFICIAL_PARCEL_SOURCE ? ['PARCEL'] : allowStored ? ['BUILDING','ADDRESS','PARCEL','STORED'] : ['BUILDING','ADDRESS','PARCEL'];
   for (const row of index.rows) {
     if (!row || Object.keys(row).length !== (mixed?5:4) || mixed && !kinds.includes(row.coordinateKind) || !digest.test(row.addressSha256 || '') ||
         !digest.test(row.buildingSha256 || '') || typeof row.lat !== 'number' || typeof row.lng !== 'number' ||

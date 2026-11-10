@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {getResolution,isValidCell,latLngToCell} from 'h3-js';
+import {cellToLatLng,getResolution,isValidCell,latLngToCell} from 'h3-js';
 import {isDay} from './coverageFiles.js';
 
 export const PROVIDERS=Object.freeze(['FRESHON','CJ','NAVER_SHOPPING']);
@@ -111,6 +111,23 @@ function cellsOf(dataset) {
   }
   indexed.set(dataset,cells);
   return cells;
+}
+
+export function providerCellsInBox(inputs, box, at) {
+  const [west,south,east,north]=box;
+  const middleLat=(south+north)/2, middleLng=(west+east)/2;
+  const matches=new Map();
+  for(const provider of PROVIDERS){
+    const dataset=inputs?.[provider]?.dataset;
+    if(dataset?.kind!=='APPROVED'||dataset.provider!==provider||dataset.asOf>at)continue;
+    for(const [id,rows] of cellsOf(dataset)){
+      if(matches.has(id)||!rows.some(row=>row.scope==='H3_CELL'&&confirmed.includes(row.status)&&row.validFrom<=at&&(!row.validTo||at<=row.validTo)))continue;
+      const [lat,lng]=cellToLatLng(id);
+      if(lat>=south&&lat<=north&&lng>=west&&lng<=east)matches.set(id,(lat-middleLat)**2+(lng-middleLng)**2);
+    }
+  }
+  const ids=[...matches].sort(([a,distA],[b,distB])=>distA-distB||a.localeCompare(b)).slice(0,64).map(([id])=>id);
+  return {ids,truncated:matches.size>ids.length};
 }
 
 export function providerCoverageView({inputs={},freshon=null,cells=[],at,kind='APPROVED'}={}) {

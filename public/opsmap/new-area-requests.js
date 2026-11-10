@@ -88,7 +88,9 @@
     const variants = /^\d{19}$/.test(query) ? [query] : addressQueries(query,root.Phase2bUi.addressVariants);
     if (!variants.length) return Promise.resolve(null);
     const key = JSON.stringify([generation,...variants.map(addressKey)]);
-    if (retained.has(key)) return Promise.resolve(retained.get(key));
+    const cached=retained.get(key);
+    if(cached?.expiresAt>Date.now())return Promise.resolve(cached.result);
+    if(cached)retained.delete(key);
     if (!flights.has(key)) {
       const epoch = addressEpoch;
       const task = fetch('/api/map-phase2b/private/stage-address-evidence',{
@@ -100,7 +102,7 @@
         if(epoch!==addressEpoch)return null;
         if(payload?.generation!==generation||payload.data?.length!==1)throw failure('STAGE_BATCH_UNAVAILABLE');
         const [result]=payload.data;
-        if(generation&&['STORED','OFFICIAL'].includes(result.status)&&result.point)remember(retained,key,result);
+        if(generation&&['STORED','OFFICIAL'].includes(result.status)&&result.point)remember(retained,key,{result,expiresAt:Date.now()+60_000});
         return result;
       }).finally(()=>{if(flights.get(key)===task)flights.delete(key);});
       flights.set(key,task);

@@ -341,11 +341,12 @@ export function createCoveragePanel({ workspace, header }) {
   async function loadProviderLayers(data) {
     const scope=[data.generation,days,center].join(':');
     const same=providerScope===scope;
-    if(!same){providerScope=scope;providerMeta=null;providerCells=EMPTY;providerViewKey='';updateProviderPaths();renderProviderStates();}
+    if(!same){abort('providers');abort('provider-map');providerScope=scope;providerMeta=null;providerCells=EMPTY;providerViewKey='';updateProviderPaths();renderProviderStates();}
     const params={days,center,generation:data.generation};
     if(!providerMeta){
+      if(requests.has('providers'))return;
       const meta=await read('providers','/provider-overlap',params).catch(()=>null);
-      if(!meta||providerScope!==scope||meta.contract!=='opsmap-provider-coverage-v1')return;
+      if(!meta||providerScope!==scope||meta.contract!=='opsmap-provider-coverage-v1'||meta.kind!=='APPROVED')return;
       providerMeta=meta.providers;
       renderProviderStates();
       if(comparisonRow)void compareProviders(comparisonRow);
@@ -356,7 +357,7 @@ export function createCoveragePanel({ workspace, header }) {
     providerViewKey=box;
     const result=await read('provider-map','/provider-overlap',{...params,box}).catch(()=>null);
     if(providerScope!==scope||providerViewKey!==box)return;
-    if(!result){providerViewKey='';return;}
+    if(result?.kind!=='APPROVED'){providerViewKey='';return;}
     providerCells=Array.isArray(result.cells)?result.cells:EMPTY;
     find('coverageProviderMapStatus').textContent=result.truncated?'지도를 확대하면 나머지 공급자 격자를 확인할 수 있습니다.':'';
     updateProviderPaths();
@@ -605,7 +606,7 @@ export function createCoveragePanel({ workspace, header }) {
     if(!row.id||!view||!PROVIDERS.some(([id])=>providerMeta?.[id]?.serviceSourceConnected))return;
     const generation=view.generation;
     const data=await read('provider-point','/provider-overlap',{days,center,generation,cells:row.id}).catch(()=>null);
-    if(data&&comparisonRow===row&&view?.generation===generation)renderProviderComparison(row,data.cells?.[0]);
+    if(data?.kind==='APPROVED'&&comparisonRow===row&&view?.generation===generation)renderProviderComparison(row,data.cells?.[0]);
   }
 
   function focusSearchResult(row, radius) {
@@ -627,6 +628,10 @@ export function createCoveragePanel({ workspace, header }) {
       button.type = 'button';
       button.dataset.kind = row.kind;
       button.append(element('strong', '', row.name), element('small', '', [row.code, row.address].filter(Boolean).join(' · ')));
+      const basis=({OFFICIAL_PUBLIC_PARCEL:'공식 필지 대표점',OFFICIAL_PUBLIC_BUILDING:'공식 건물 위치',
+        OFFICIAL_PUBLIC_ADDRESS:'공식 주소 대표점',MAP_CLICK_TEMPORARY:'직접 선택한 임시 위치',
+        STAGE_PRESERVED_COORDINATE:'저장 좌표',KAKAO_ADDRESS_TEMPORARY:'승인된 외부 주소 위치'})[row.coordinateSource];
+      if(basis)button.append(element('small','',basis));
       if (row.stats) {
         const stats = row.stats;
         button.append(element('span', '', '관측 방문 ' + visitLabel(stats) + ' · 등록 ' + fmt(stats.registered) + '곳'));

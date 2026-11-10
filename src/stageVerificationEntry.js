@@ -173,7 +173,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return scheduledRefresh;
   }
   const officialIndex = createTemporaryOfficialAddressLookup({sha256:stage.OPSMAP_STAGE_OFFICIAL_ADDRESS_INDEX_SHA256});
-  let preservedOfficialIndex = null;
+  let preservedOfficialIndex = null, coverageOfficialIndex = null;
   if(stage.RENDER_SERVICE_ID===STAGE_SERVICE) {
     try {
       preservedOfficialIndex=createOfficialAddressLookup(readFileSync('/etc/secrets/opsmap-stage-official-address-index-v2.json'),{
@@ -183,8 +183,19 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     } catch(error) {
       if(error.code!=='ENOENT') console.warn(JSON.stringify({component:'stage-official-address-index',state:'REJECTED'}));
     }
+    try {
+      coverageOfficialIndex=createOfficialAddressLookup(readFileSync('/etc/secrets/opsmap-stage-coverage-address-index-v2.json'),{
+        sha256:'9613e87049231f3afecfd9c2e763f30ae1bba4321bc2437566b3f2dd17c0eba9',allowMixed:true
+      });
+    } catch(error) {
+      if(error.code!=='ENOENT') console.warn(JSON.stringify({component:'stage-coverage-address-index',state:'REJECTED'}));
+    }
   }
-  const readOfficialIndex=()=>officialIndex.active() || preservedOfficialIndex;
+  const readOfficialIndex=()=>{
+    const temporary=officialIndex.active();
+    if(!coverageOfficialIndex)return temporary || preservedOfficialIndex;
+    return {lookup:query=>temporary?.lookup(query)??preservedOfficialIndex?.lookup(query)??coverageOfficialIndex.lookup(query)};
+  };
   const geocodeBudgetFile = 'geocode-budget-v1.json';
   const geocodeBudget = stageAddressApproved ? createStageGeocodeBudgetStore({repo,token:stage.GITHUB_TOKEN,branch:pinsBranch,
     fetchImpl:stageGithub(fetchImpl,{files:[geocodeBudgetFile],branch:pinsBranch,writable:geocodeBudgetFile})}) : null;

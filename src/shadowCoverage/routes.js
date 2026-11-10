@@ -152,7 +152,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
   }, async ({ days, center, generation }, { query, radius }, { reader, model }) => {
     const data = await reader.readPeriod(days, generation);
     const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
-    return { days, start: data.window.start, end: data.window.end,
+    return { days, start: data.window.start, end: data.window.end, generation:data.index.sha256,
       results: model.searchCoverage(data.catalog, view, query, center, radius) };
   });
 
@@ -164,16 +164,19 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     if (!model.isPoint(...location)) throw Error('COVERAGE_QUERY_INVALID');
     const data = await reader.readPeriod(days, generation);
     const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
-    return { days, start: data.window.start, end: data.window.end,
+    return { days, start: data.window.start, end: data.window.end, generation:data.index.sha256,
       results: [model.coverageAtPoint(data.catalog, view, location, center)] };
   });
 
   route('/provider-overlap',req=>{
-    const {cells='',at}=req.query;
+    const {cells='',at,box}=req.query;
     if(typeof cells!=='string'||cells.length>1023||at!==undefined&&(typeof at!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(at)))return null;
     const ids=cells?cells.split(','):[];
-    return ids.length<=64&&ids.every(id=>/^[a-f0-9]{15}$/.test(id))?{ids:[...new Set(ids)],at}:null;
-  },async({days,center,generation},{ids,at})=>{
+    if(box!==undefined&&(cells||typeof box!=='string'||box.length>100||!box.split(',').every(part=>/^-?\d{1,3}(?:\.\d{1,10})?$/.test(part))))return null;
+    const bounds=box?.split(',').map(Number);
+    if(bounds&&(bounds.length!==4||bounds[0]<-180||bounds[1]<-90||bounds[2]>180||bounds[3]>90||bounds[0]>=bounds[2]||bounds[1]>=bounds[3]))return null;
+    return ids.length<=64&&ids.every(id=>/^[a-f0-9]{15}$/.test(id))?{ids:[...new Set(ids)],at,bounds}:null;
+  },async({days,center,generation},{ids,at,bounds})=>{
     const [providers,inputs,ready]=await Promise.all([
       providerModule??=import('./providerCoverage.js'),
       Promise.resolve().then(readProviderCoverage).catch(()=>({})),
@@ -183,6 +186,8 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     if(new Date(date+'T00:00:00Z').toJSON()?.slice(0,10)!==date||ids.some(id=>!providers.isProviderCell(id))) {
       throw Error('COVERAGE_QUERY_INVALID');
     }
+    const viewport=bounds&&providers.providerCellsInBox(inputs,bounds,date);
+    if(viewport)ids=viewport.ids;
     let freshon=null;
     const data=await ready?.reader.readPeriod(days,generation).catch(error=>{
       if(error.message==='COVERAGE_GENERATION_CHANGED')throw error;
@@ -203,7 +208,10 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
         stale:data.stale,byCell};
     }
     const sources={...inputs,FRESHON:{...inputs?.FRESHON,state:'UNVERIFIED'}};
-    return providers.providerCoverageView({inputs:sources,freshon,cells:ids,at:date});
+    const result=providers.providerCoverageView({inputs:sources,freshon,cells:ids,at:date});
+    if(!viewport||!ids.length)return result;
+    const {cellToBoundary}=await import('h3-js');
+    return {...result,truncated:viewport.truncated,cells:result.cells.map(cell=>({...cell,boundary:cellToBoundary(cell.id)}))};
   },sendData,async()=>null);
 
 }

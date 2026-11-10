@@ -2122,7 +2122,8 @@
     const virtual={customerCode:'',customerName:point.placeName||'임시 위치',address:point.address,
       lat,lng,virtual:true,searchTemporary:true,customerMatchState,
       coordinateSource:point.coordinateSource||'KAKAO_ADDRESS_TEMPORARY',
-      coordinateAccuracy:point.coordinateSource==='MAP_CLICK_TEMPORARY'?'USER_SELECTED':point.coordinateSource==='KAKAO_PLACE_TEMPORARY'?'PLACE':'BUILDING'};
+      coordinateAccuracy:({MAP_CLICK_TEMPORARY:'USER_SELECTED',KAKAO_PLACE_TEMPORARY:'PLACE',OFFICIAL_PUBLIC_PARCEL:'PARCEL',
+        OFFICIAL_PUBLIC_ADDRESS:'ADDRESS',STAGE_PRESERVED_COORDINATE:'PRESERVED'})[point.coordinateSource]||'BUILDING'};
     NewAreaRequests.rememberTemporary(point.address,virtual);
     trace?.mark('coordinates');
     showVirtual(virtual,null,trace);
@@ -2224,8 +2225,10 @@
     searchTemporaryOverlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(lat,lng),content,clickable:true,xAnchor:.5,yAnchor:1,zIndex:45});
     searchTemporaryOverlay.setMap(state.map);state.virtual=row;
     trace?.mark('pin');
+    const locationBasis=({OFFICIAL_PUBLIC_BUILDING:'공식 자료 건물 위치',OFFICIAL_PUBLIC_ADDRESS:'공식 주소 대표점',
+      OFFICIAL_PUBLIC_PARCEL:'공식 필지 대표점',STAGE_PRESERVED_COORDINATE:'저장 좌표'})[row.coordinateSource];
     $('#detailSection').classList.add('open');$('#detail').className='detailCard';
-    $('#detail').innerHTML=`<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">임시 위치</div><div class="storeName">${esc(row.address||row.customerName||'선택 위치')}</div></div><div class="detailBody"><p class="hint">저장하지 않는 임시 핀입니다.${row.coordinateSource==='OFFICIAL_PUBLIC_BUILDING'?' · 공식 자료 건물 위치':''}</p>${navigationPointActions(row)}${state.mode==='BASE_60D'?'<button type="button" id="searchPointToBatch" class="tiny">신규권역 일괄조회에 추가</button>':''}<label class="areaRadius">인근 호차 반경 <select id="newAreaSingleRadius"><option value="30">30km</option><option value="40">40km</option><option value="50">50km</option></select></label><div id="nearWrap" aria-live="polite"></div></div>`;
+    $('#detail').innerHTML=`<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">임시 위치</div><div class="storeName">${esc(row.address||row.customerName||'선택 위치')}</div></div><div class="detailBody"><p class="hint">저장하지 않는 임시 핀입니다.${locationBasis?' · '+locationBasis:''}</p>${navigationPointActions(row)}${state.mode==='BASE_60D'?'<button type="button" id="searchPointToBatch" class="tiny">신규권역 일괄조회에 추가</button>':''}<label class="areaRadius">인근 호차 반경 <select id="newAreaSingleRadius"><option value="30">30km</option><option value="40">40km</option><option value="50">50km</option></select></label><div id="nearWrap" aria-live="polite"></div></div>`;
     $('#detailClose').onclick=()=>{clearSearchTemporaryPin();clearSelection();};
     $('#newAreaSingleRadius').value=String(newAreaRadius);
     $('#newAreaSingleRadius').onchange=event=>setNewAreaRadius(event.target.value);

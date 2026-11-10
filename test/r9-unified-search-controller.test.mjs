@@ -21,15 +21,17 @@ function declaration(name){
 // interface stubs here and are exercised by the independent full-browser QA.
 const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','rankSearchRows','normalizeApiStore',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
- 'renderResults','unifiedAddressQuery','search','searchPeriod'].map(declaration).join('\n');
-function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual}={}){
+ 'renderResults','unifiedAddressQuery','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
+function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
  const nodes=new Map(),selected=[],fallback=[],queries=[],requests=new Map();let resets=0,tempClears=0;
- const node=key=>{if(!nodes.has(key))nodes.set(key,{value:'',hidden:true,html:'',replaceChildren(){this.html='';this.buttons=[];},setAttribute(k,v){this[k]=v;},dispatchEvent(){},get innerHTML(){return this.html;},set innerHTML(v){this.html=v;this.buttons=[...v.matchAll(/data-result="(\d+)"/g)].map(m=>({dataset:{result:m[1]}}));}});return nodes.get(key);};
- const context={console,AbortController,Event,setTimeout,clearTimeout,Number,Map,Set,
+ const node=key=>{if(!nodes.has(key))nodes.set(key,{dataset:{},value:'',hidden:true,html:'',replaceChildren(){this.html='';this.buttons=[];},setAttribute(k,v){this[k]=v;},dispatchEvent(){},get innerHTML(){return this.html;},set innerHTML(v){this.html=v;this.buttons=[...v.matchAll(/data-result="(\d+)"/g)].map(m=>({dataset:{result:m[1]}}));}});return nodes.get(key);};
+ const context={console,AbortController,Event,setTimeout,clearTimeout,Number,Map,Set,performance,requestAnimationFrame:fn=>fn(),
   state:{mode:'BASE_60D',selected:null,searchRequestId:0,selectedDate:'2026-11-02',centerFilter:'osan',selectedVehicles:['101','122'],currentRows:rows},
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
+  searchIndex:null,searchFlight:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,
+  stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{stageAddress,temporaryPoint:()=>null},
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
   window:{MapManualPins:{apply:row=>manual?.(row)}},
@@ -43,6 +45,8 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual}={}){
   searchExternalAddress:async(text,options)=>fallback.push({text,options})
  };
  vm.createContext(context);vm.runInContext(controllerSource,context);
+ const searchPeriod=context.searchPeriod;
+ context.searchPeriod=(query,trace=context.startSearchTrace())=>searchPeriod(query,trace);
  return {context,node,selected,fallback,queries,get resets(){return resets;},get tempClears(){return tempClears;}};
 }
 const store=(customerCode,customerName,address,more={})=>({customerCode,customerName,address,lat:37.5,lng:127.1,vehicle:'101',lastDeliveryDate:'2026-11-02',...more});
@@ -66,7 +70,16 @@ test('search address normalization preserves building numbers and province alias
 });
 test('existing local addresses cannot confuse building 14 with 140 or 14-1',()=>{
  const rows=[store('S990001','합성 다른건물','서울 종로구 합성로 140'),store('S990002','합성 다른번지','서울 종로구 합성로 14-1')],{context:c}=fixture({rows});
- assert.equal(c.rankSearchRows(rows,'서울특별시 종로구 합성로 14').length,0);
+ assert.equal(c.rankSearchRows('서울특별시 종로구 합성로 14').length,0);
+});
+
+test('local names and preserved addresses avoid the live Customer reader',async()=>{
+ const row=store('S990201','합성 로컬 매장','');
+ const f=fixture({rows:[row],stageAddress:async()=>({status:'STORED',customerCodes:[row.customerCode]})});
+ await f.context.searchPeriod(row.customerName);
+ await f.context.searchPeriod('서울 합성구 보호로 5');
+ assert.deepEqual(f.selected.map(result=>result.customerCode),[row.customerCode,row.customerCode]);
+ assert.equal(f.queries.length,0);
 });
 
 test('exact customer selects existing manual overlay without a remote lookup or source mutation',async()=>{

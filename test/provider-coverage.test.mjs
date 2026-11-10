@@ -8,7 +8,7 @@ import express from 'express';
 import {gridDisk,latLngToCell} from 'h3-js';
 import XLSX from 'xlsx';
 import {mountShadowCoverage} from '../src/shadowCoverage/routes.js';
-import {PROVIDERS,providerCoverageView,providerDigest,sameApprovedProviderLocation,sealProviderCoverage} from '../src/shadowCoverage/providerCoverage.js';
+import {PROVIDERS,providerCellsInBox,providerCoverageView,providerDigest,sameApprovedProviderLocation,sealProviderCoverage} from '../src/shadowCoverage/providerCoverage.js';
 import {createProviderCoverageReader,importProviderCoverageApi,importProviderCoverageFile} from '../src/shadowCoverage/providerInput.js';
 
 const date='2026-11-11';
@@ -30,6 +30,13 @@ test('synthetic comparison covers each requested pattern and keeps an absent sou
   assert.deepEqual(missing.cells[0].overlap,{status:'NOT_COMPARABLE',available:['FRESHON','CJ'],unavailable:[],unknown:['NAVER_SHOPPING']});
   const operating=providerCoverageView({inputs,cells:[ids[0]],at:date});
   assert.deepEqual(operating.cells[0].overlap.available,[]);
+});
+
+test('provider viewport includes external-only approved cells and excludes point and synthetic data',()=>{
+  const inputs={CJ:{dataset:make('CJ',[cell(ids[0],true),{lat:37.1,lng:127.1,status:'AVAILABLE_CONFIRMED'}],'APPROVED')},
+    NAVER_SHOPPING:{dataset:make('NAVER_SHOPPING',[cell(ids[1],true)])}};
+  assert.deepEqual(providerCellsInBox(inputs,[126,36,128,38],date),{ids:[ids[0]],truncated:false});
+  assert.deepEqual(providerCellsInBox(inputs,[128,36,130,38],date),{ids:[],truncated:false});
 });
 
 test('approved location binds by address or PNU while provider customer codes remain independent',()=>{
