@@ -13,7 +13,8 @@ import {createOfficialAddressLookup,createOfficialAddressReview} from './opsmapO
 import {readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
 import {resolvePreservedAddressBatch,searchPreservedRegistry} from './privateCustomerSearch.js';
 import {archivedOpsmapAssignments} from './opsmapSyncGeneration.js';
-import {opsmapVehicleDeliveryPage} from './opsmapVehicleDeliveryEvidence.js';
+import {collectStageVehicleWeekdays, opsmapVehicleDeliveryPage} from './opsmapVehicleDeliveryEvidence.js';
+import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 
 import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_NEARBY_ROUTE,STAGE_VEHICLE_DELIVERY_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,MAX_STAGE_BUNDLE_BYTES} from './stageScope.js';
 export {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_NEARBY_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,MAX_STAGE_BUNDLE_BYTES} from './stageScope.js';
@@ -212,12 +213,13 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     const located = [...registry.values()].filter(row => row.hasPoint).length;
     const proof = Object.values(ledger.records).map(history => history.at(-1).point).filter(Boolean);
     const deliveries=generation.vehicleDelivery;
-    const startDay=deliveries ? new Date(deliveries.start).getUTCDay() : 0;
-    // Reuse verified per-vehicle dates instead of reopening 76 archived source objects.
-    const vehicleDays=deliveries?.rows.map(([code,vehicle,center,positions])=>
-      [code,vehicle,center,positions.reduce((mask,position)=>mask | 1 << ((startDay+position)%7),0)]);
+    const vehicleEvidence=deliveries && collectStageVehicleWeekdays(deliveries,registry);
+    const unverifiedVehicleSources=deliveries && ['yeongnam','osanColdStorage'].filter(source=>
+      !deliveries.completeSources[SYNC_DELIVERY_SOURCES[source]].length);
     scheduled = {scheduled:generation,baseline,directory:coverage,registry,ledger,
-      nearby:vehicleDays?{...nearby,vehicleDays}:nearby,snapshot,asOf:index.asOf,
+      nearby:vehicleEvidence?{...nearby,vehicleDays:vehicleEvidence.vehicleDays,
+        vehicleCounts:vehicleEvidence.counts,unverifiedVehicleSources}:nearby,
+      snapshot,asOf:index.asOf,
       reference:fallback(),compatible:true,
       generation:index.sha256,expiresAt:Infinity,resolver:createFixedCoordinateResolver(ledger),
       counts:{registered:registry.size,located,pending:registry.size-located,

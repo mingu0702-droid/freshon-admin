@@ -86,3 +86,32 @@ export function opsmapVehicleDeliveryPage(evidence,registry,{center='all',vehicl
   const {rows:_,...meta}=evidence;
   return {...meta,rows,total:matches.length,nextOffset:offset+rows.length<matches.length?offset+rows.length:null};
 }
+
+export function collectStageVehicleWeekdays(evidence,registry) {
+  const vehicleDays = [];
+  const identities = new Set();
+  const vehicles = new Set();
+  const total = evidence.rows.length;
+  const limit = 250;
+  let offset = 0;
+  let pages = 0;
+  do {
+    const page = opsmapVehicleDeliveryPage(evidence,registry,{offset,limit});
+    const end = offset + page.rows.length;
+    if (page.generation !== evidence.generation || page.total !== total ||
+        page.rows.length !== Math.min(limit,total-offset) || page.nextOffset !== (end < total ? end : null)) {
+      throw Error('OPSMAP_VEHICLE_DELIVERY_PAGE_INCOMPLETE');
+    }
+    for (const {customerCode,actualVehicle,center,deliveryWeekdays} of page.rows) {
+      const identity = [customerCode,actualVehicle,center].join('|');
+      if (identities.has(identity)) throw Error('OPSMAP_VEHICLE_DELIVERY_PAGE_DUPLICATE');
+      identities.add(identity);
+      vehicles.add(actualVehicle);
+      const mask = deliveryWeekdays.reduce((days,day)=>days | (1 << (day % 7)),0);
+      vehicleDays.push([customerCode,actualVehicle,center,mask]);
+    }
+    offset = page.nextOffset;
+    pages++;
+  } while (offset !== null);
+  return {vehicleDays,counts:{rows:vehicleDays.length,vehicles:vehicles.size,pages}};
+}
