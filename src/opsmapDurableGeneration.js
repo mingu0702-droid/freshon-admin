@@ -30,8 +30,9 @@ export function stageOpsmapDurableStorage({env = process.env, fetchImpl = fetch,
       (baseline ? write : env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED !== '1' || write && env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED !== '1')) {
     throw Error('OPSMAP_DURABLE_STAGE_APPROVAL');
   }
-  const token = write ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN || (env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1' && env.OPSMAP_SNAPSHOT_STORE_TOKEN)
-    : env.OPSMAP_STAGE_SYNC_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN || (baseline&&env.GITHUB_TOKEN);
+  const token = baseline ? env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.GITHUB_TOKEN : write
+    ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN || (env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1' && env.OPSMAP_SNAPSHOT_STORE_TOKEN)
+    : env.OPSMAP_STAGE_SYNC_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;
   const key = baseline ? baselineKey : Buffer.from(env.OPSMAP_SHADOW_ARCHIVE_KEY_B64 || '','base64');
   if (!token || key.length !== 32) throw Error('OPSMAP_DURABLE_STAGE_CREDENTIALS');
   const repo = 'mingu0702-droid/freshon-cache', branch = 'stage/opsmap-snapshots';

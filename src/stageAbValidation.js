@@ -211,7 +211,13 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     const {registry,index,ledger,coverage,nearby,snapshot,state} = generation;
     const located = [...registry.values()].filter(row => row.hasPoint).length;
     const proof = Object.values(ledger.records).map(history => history.at(-1).point).filter(Boolean);
-    scheduled = {scheduled:generation,baseline,directory:coverage,registry,ledger,nearby,snapshot,asOf:index.asOf,
+    const deliveries=generation.vehicleDelivery;
+    const startDay=deliveries ? new Date(deliveries.start).getUTCDay() : 0;
+    // Reuse verified per-vehicle dates instead of reopening 76 archived source objects.
+    const vehicleDays=deliveries?.rows.map(([code,vehicle,center,positions])=>
+      [code,vehicle,center,positions.reduce((mask,position)=>mask | 1 << ((startDay+position)%7),0)]);
+    scheduled = {scheduled:generation,baseline,directory:coverage,registry,ledger,
+      nearby:vehicleDays?{...nearby,vehicleDays}:nearby,snapshot,asOf:index.asOf,
       reference:fallback(),compatible:true,
       generation:index.sha256,expiresAt:Infinity,resolver:createFixedCoordinateResolver(ledger),
       counts:{registered:registry.size,located,pending:registry.size-located,
