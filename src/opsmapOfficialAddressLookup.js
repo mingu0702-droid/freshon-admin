@@ -30,31 +30,34 @@ export function officialAddressKey(value) {
   return [aliases.get(province) || province, ...parts].join('');
 }
 
-export function createOfficialAddressLookup(buffer, {sha256: expected} = {}) {
+export function createOfficialAddressLookup(buffer, {sha256: expected, allowMixed = false} = {}) {
   if (!Buffer.isBuffer(buffer) || buffer.length > 512 * 1024 || !digest.test(expected || '') || sha256(buffer) !== expected) {
     throw Error('OFFICIAL_ADDRESS_INDEX_DIGEST');
   }
   let index;
   try { index = JSON.parse(buffer.toString('utf8')); } catch { throw Error('OFFICIAL_ADDRESS_INDEX_JSON'); }
-  if (!index || Object.keys(index).length !== 5 || index.schema !== 'opsmap-official-address-index-v1' ||
+  const mixed = index?.schema === 'opsmap-official-address-index-v2';
+  if (!index || Object.keys(index).length !== 5 || (mixed?!allowMixed:index.schema !== 'opsmap-official-address-index-v1') ||
       !approvedSources.has(index.source) || !/^\d{4}-\d{2}-\d{2}$/.test(index.date || '') ||
       !digest.test(index.datasetSha256 || '') || !Array.isArray(index.rows) || !index.rows.length || index.rows.length > 2000) {
     throw Error('OFFICIAL_ADDRESS_INDEX_SCHEMA');
   }
   const rows = new Map();
   for (const row of index.rows) {
-    if (!row || Object.keys(row).length !== 4 || !digest.test(row.addressSha256 || '') ||
+    if (!row || Object.keys(row).length !== (mixed?5:4) || mixed && !['BUILDING','ADDRESS','PARCEL'].includes(row.coordinateKind) || !digest.test(row.addressSha256 || '') ||
         !digest.test(row.buildingSha256 || '') || typeof row.lat !== 'number' || typeof row.lng !== 'number' ||
         row.lat < 33 || row.lat > 39.5 || row.lng < 124 || row.lng > 132 || rows.has(row.addressSha256)) {
       throw Error('OFFICIAL_ADDRESS_INDEX_ROW');
     }
-    rows.set(row.addressSha256, Object.freeze({lat:row.lat, lng:row.lng, buildingSha256:row.buildingSha256}));
+    rows.set(row.addressSha256, Object.freeze({lat:row.lat, lng:row.lng, buildingSha256:row.buildingSha256,
+      ...(mixed?{coordinateKind:row.coordinateKind}:{})}));
   }
   const find=query=>{const key=officialAddressKey(query);return key?{addressSha256:sha256(key),point:rows.get(sha256(key))}:null;};
   return Object.freeze({lookup(query) {
-    const point=find(query)?.point;return point?Object.freeze({lat:point.lat,lng:point.lng}):null;
+    const point=find(query)?.point;return point?Object.freeze({lat:point.lat,lng:point.lng,
+      ...(point.coordinateKind?{coordinateKind:point.coordinateKind}:{})}):null;
   },resolve(query) {
-    const match=find(query);if(!match?.point)return null;
+    const match=find(query);if(!match?.point||mixed)return null;
     return Object.freeze({...match.point,addressSha256:match.addressSha256,evidenceSource:'OFFICIAL_ADDRESS_DATA',
       datasetSha256:index.datasetSha256,indexSha256:expected,datasetDate:index.date,measurementKind:'BUILDING_LOCATION'});
   }});
@@ -96,7 +99,7 @@ export function createTemporaryOfficialAddressLookup({sha256: expected, now = Da
   let current;
   return {
     activate(bytes) {
-      const lookup = createOfficialAddressLookup(bytes, {sha256:expected});
+      const lookup = createOfficialAddressLookup(bytes, {sha256:expected,allowMixed:true});
       const expiresAt = now() + ttl;
       const activated = {lookup,expiresAt};
       current = activated;

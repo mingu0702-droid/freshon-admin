@@ -11,7 +11,7 @@ import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
 import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
 import {createOfficialAddressLookup,createOfficialAddressReview} from './opsmapOfficialAddressLookup.js';
 import {readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
-import {searchPreservedRegistry} from './privateCustomerSearch.js';
+import {resolvePreservedAddressBatch,searchPreservedRegistry} from './privateCustomerSearch.js';
 import {archivedOpsmapAssignments} from './opsmapSyncGeneration.js';
 
 import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_NEARBY_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,MAX_STAGE_BUNDLE_BYTES} from './stageScope.js';
@@ -184,7 +184,7 @@ function preservesVerifiedGeneration(previous, candidate) {
 }
 
 export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = {}) {
-  let temporary, durable, scheduled, installation;
+  let temporary, durable, scheduled, installation, lastTemporary;
 
   function fallback() {
     return temporary?.expiresAt > now() && (!durable || temporary.version>durable.version) ? temporary : durable || null;
@@ -270,6 +270,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
         bundledAddress:addressReview ? {lookup:query => bundledAddress?.lookup(query) || addressReview.lookup(query)} : bundledAddress};
       if (!durableRead) {
         temporary=result;
+        lastTemporary={generation:result.generation,expiresAt:result.expiresAt};
         setTimeout(() => {
           if (temporary === result) temporary = null;
           void rm(directory, {recursive:true, force:true}).catch(() => {});
@@ -327,7 +328,12 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     const prepared = active();
     return prepared?.archived?.(date, prepared.registry) ?? null;
   }
-  return {activate, active, snapshot, joinPayload, archivedAssignments, followScheduled};
+  function addressGenerationError(generation, prepared) {
+    if ((prepared?.generation ?? null) === generation) return null;
+    return generation && lastTemporary?.generation===generation && lastTemporary.expiresAt<=now()
+      ? 'STAGE_BATCH_GENERATION_EXPIRED' : 'STAGE_BATCH_GENERATION_CHANGED';
+  }
+  return {activate, active, snapshot, joinPayload, archivedAssignments, followScheduled, addressGenerationError};
 }
 
 function publicStatus(prepared) {
@@ -335,7 +341,7 @@ function publicStatus(prepared) {
     expiresAt:Number.isFinite(prepared.expiresAt)?new Date(prepared.expiresAt).toISOString():null} : {active:false};
 }
 
-export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot}) {
+export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot, readOfficialIndex}) {
   const noStore = (_req, res, next) => {res.set('Cache-Control','private, no-store').vary('Cookie'); next();};
   router.get(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (_req, res) => res.json(publicStatus(validation.active())));
   router.get(STAGE_NEARBY_ROUTE, requireStaff, noStore, async (req, res) => {
@@ -354,9 +360,43 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
     if(!req.is('application/json')) return res.status(415).json({error:'STAGE_BATCH_MEDIA_TYPE'});
     return next();
   },express.json({limit:'96kb'}),async(req,res)=>{
-    const {generation,queries}=req.body||{};
+    const {generation,queries,rows}=req.body||{};
+    const queryOk=query=>typeof query==='string'&&query.length>=2&&query.length<=200&&!/[\x00-\x1f]/.test(query);
+    if(rows!==undefined){
+      if(queries!==undefined||!(generation===null||typeof generation==='string'&&/^[a-f0-9]{64}$/.test(generation))||
+        !Array.isArray(rows)||rows.length<1||rows.length>120||rows.some(row=>!Array.isArray(row)||row.length>2||!row.every(queryOk))) {
+        return res.status(400).json({error:'STAGE_BATCH_QUERY_INVALID'});
+      }
+      const started=performance.now();
+      let outcomes=null;
+      res.once('finish',()=>console.info(JSON.stringify({component:'stage-address-batch',rows:rows.length,
+        status:res.statusCode,durationMs:Math.round(performance.now()-started),outcomes})));
+      const prepared=validation.active();
+      const generationError=validation.addressGenerationError(generation,prepared);
+      if(generationError)return res.status(409).json({error:generationError});
+      try{
+        const saved=await readSnapshot();
+        if(!Array.isArray(saved?.rows))return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});
+        const changed=validation.addressGenerationError(generation,validation.active());
+        if(changed||validation.active()!==prepared||generation!==null&&saved.sourceGeneration!==generation)
+          return res.status(409).json({error:changed||'STAGE_BATCH_GENERATION_CHANGED'});
+        const bundled=prepared?.bundledAddress, independent=readOfficialIndex?.();
+        const official=bundled||independent?{lookup(query){
+          const primary=bundled?.lookup(query);
+          if(primary&&(!primary.kind||primary.kind==='EXACT'))return primary;
+          return independent?.lookup(query)??primary;
+        }}:null;
+        const data=resolvePreservedAddressBatch(rows,saved,official);
+        outcomes=data.reduce((counts,{status})=>({...counts,[status]:(counts[status]||0)+1}),{});
+        return requireStaff(req,res,()=>{
+          if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
+          if(validation.active()!==prepared)return res.status(409).json({error:validation.addressGenerationError(generation,validation.active())||'STAGE_BATCH_GENERATION_CHANGED'});
+          return res.json({ok:true,generation,data});
+        });
+      }catch{return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});}
+    }
     if(!/^[a-f0-9]{64}$/.test(generation||'')||!Array.isArray(queries)||queries.length<1||queries.length>120||
-      queries.some(query=>typeof query!=='string'||query.length<2||query.length>200||/[\x00-\x1f]/.test(query))) {
+      !queries.every(queryOk)) {
       return res.status(400).json({error:'STAGE_BATCH_QUERY_INVALID'});
     }
     const prepared=validation.active();

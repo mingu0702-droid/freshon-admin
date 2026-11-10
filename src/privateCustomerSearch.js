@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import {createPrivateDetailReadScope} from './opsmap-abc/privateDetailRequest.js';
 import {prepareRecoveryCoordinateAddress} from './coordinateLookupOutcome.js';
+import {officialAddressKey} from './opsmapOfficialAddressLookup.js';
 const code=v=>typeof v==='string'&&/^[A-Z]\d{1,20}$/.test(v);
 const text=v=>String(v??'').normalize('NFKC').trim().toLowerCase().replace(/\s+/g,'');
 const sha=v=>crypto.createHash('sha256').update(v).digest('hex');
@@ -23,24 +24,67 @@ function snapshotIndex(snapshot){
  return entry;
 }
 function exactAddressKey(address){
+ const official=officialAddressKey(address);
+ if(official)return official;
  const prepared=prepareRecoveryCoordinateAddress(address);
  if(!prepared.query||!['ROAD','LOT'].includes(prepared.addressKind))return null;
- return text(prepared.query).replace(/^(서울)(?:특별시|시)/,'$1').replace(/^(부산|대구|인천|광주|대전|울산)광역시/,'$1')
-  .replace(/^경기도/,'경기').replace(/^강원(?:특별자치도|도)/,'강원').replace(/^제주(?:특별자치도|도)/,'제주')
-  .replace(/^전북특별자치도/,'전북').replace(/^전라([북남])도/,'전$1').replace(/^충청([북남])도/,'충$1').replace(/^경상([북남])도/,'경$1');
+ return officialAddressKey(prepared.query);
 }
-export function searchPreservedRegistry(query,snapshot){
+function preservedMatches(query,snapshot){
  const rows=snapshot.rows,index=snapshotIndex(snapshot);
  const matchedBy=code(query.toUpperCase())?'CODE':'ADDRESS';
  if(matchedBy==='ADDRESS'&&!index.byAddress){
   const byAddress=new Map();
-  for(const row of rows){const key=exactAddressKey(row.address);if(!key||!code(row.customerCode))continue;
-   const matches=byAddress.get(key)||[];matches.push(row);byAddress.set(key,matches);}
+  for(const row of rows){if(!code(row.customerCode))continue;
+   for(const key of new Set([row.address,row.customerAddress,row.roadAddress,row.lotAddress].map(exactAddressKey).filter(Boolean))){
+    const matches=byAddress.get(key)||[];matches.push(row);byAddress.set(key,matches);}}
   index.byAddress=byAddress;
  }
  const matches=matchedBy==='CODE'?index.byCode.get(query.toUpperCase())||[]:index.byAddress.get(exactAddressKey(query))||[];
+ return {matches,matchedBy};
+}
+export function searchPreservedRegistry(query,snapshot){
+ const {matches,matchedBy}=preservedMatches(query,snapshot);
  return {ok:true,data:matches.slice(0,50).map(row=>({...projection(row),matchedBy})),
   meta:{source:'STAGE_VERIFIED_REGISTRY',currentness:'PRESERVED_VALIDATION',customerMatchVerified:false,complete:false,truncated:matches.length>50}};
+}
+const safePoint = ({lat,lng}={}) => Number.isFinite(lat)&&Number.isFinite(lng)&&lat>=33&&lat<=39.5&&lng>=124&&lng<=132 ? {lat,lng} : null;
+const approvedPoint = row => !row.addressChanged && !['CONFLICT','UNVERIFIED','MISSING'].includes(row.coordinateStatus) &&
+ row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED' ? safePoint(row) : null;
+export function resolvePreservedAddressBatch(rows,snapshot,officialIndex){
+ return rows.map(queries=>{
+  if(!queries.length)return {status:'INVALID_ADDRESS'};
+  const isCode=code(queries[0].toUpperCase());
+  const matched=new Set(queries.flatMap(query=>preservedMatches(query,snapshot).matches));
+  let official,officialError=false;
+  // A verified road/lot pair is one address identity, including when the postal point is unverified.
+  if(!isCode&&!matched.size){
+   try{
+    const hits=queries.map(query=>officialIndex?.lookup(query)).filter(Boolean);
+    for(const alias of hits.flatMap(hit=>[hit.road,hit.lot]).filter(Boolean)){
+     for(const row of preservedMatches(alias,snapshot).matches)matched.add(row);
+    }
+    const signature=hit=>JSON.stringify([hit.kind||'EXACT',hit.points||[[hit.lat,hit.lng]]]);
+    if(new Set(hits.map(signature)).size>1)return {status:'ADDRESS_AMBIGUOUS'};
+    official=hits[0];
+   }catch{officialError=true;}
+  }
+  if(matched.size){
+   const points=new Map();
+   for(const row of matched){const point=approvedPoint(row);if(!point)return {status:'STORED_COORDINATE_UNVERIFIED'};
+    points.set(`${point.lat},${point.lng}`,point);}
+   if(points.size!==1)return {status:'ADDRESS_AMBIGUOUS'};
+   return {status:'STORED',point:{...points.values().next().value,coordinateSource:'STAGE_PRESERVED_COORDINATE'}};
+  }
+  if(isCode)return {status:'CUSTOMER_CODE_NOT_FOUND'};
+  if(officialError)return {status:'OFFICIAL_ADDRESS_UNAVAILABLE'};
+  if(!official)return {status:officialIndex?'ADDRESS_NOT_MATCHED':'OFFICIAL_ADDRESS_INDEX_UNAVAILABLE'};
+  const points=(official.points||[[official.lat,official.lng]]).map(([lat,lng])=>safePoint({lat,lng})).filter(Boolean);
+  if(official.kind==='CHOOSE'&&points.length>1)return {status:'OFFICIAL_ADDRESS_AMBIGUOUS',points};
+  if((!official.kind||official.kind==='EXACT')&&points.length===1)return {status:'OFFICIAL',point:{...points[0],
+    coordinateSource:official.coordinateKind==='PARCEL'?'OFFICIAL_PUBLIC_PARCEL':official.coordinateKind==='ADDRESS'?'OFFICIAL_PUBLIC_ADDRESS':'OFFICIAL_PUBLIC_BUILDING'}};
+  return {status:'OFFICIAL_COORDINATE_UNVERIFIED'};
+ });
 }
 export async function searchCustomerSummaries({query,snapshot,searchMaster,signal,deadline}){
  const rows=snapshot?.rows||[],index=snapshotIndex(snapshot),byCode={get:key=>index.byCode.get(key)?.at(-1)},needle=text(query),exact=byCode.get(query.toUpperCase());

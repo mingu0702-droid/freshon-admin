@@ -119,7 +119,7 @@
     const date=/^\d{4}-\d{2}-\d{2}$/.test(applyDate||'')?Number(applyDate.slice(5,7))+'-'+Number(applyDate.slice(8)):'';
     return rows.map(row=>{
       const decision=['O','X'].includes(row.decision)?row.decision:'검토필요';
-      const reason=decision==='검토필요'?'검토필요':String(row.reason||'').replace('배송동선 맞지 않음','배송동선 맞지않음');
+      const reason=row.lookupError?String(row.evidence||row.reason||'조회 실패'):decision==='검토필요'?'검토필요':String(row.reason||'').replace('배송동선 맞지 않음','배송동선 맞지않음');
       return [row.originalAddress??row.address??'',row.originalCustomer??row.customer??'',decision,reason,date,
         regionForAddress(row.address),row.vehicle&&row.vehicle!=='-'?row.vehicle:'',
         row.nearestStore||row.nearby?.[0]?.customerName||'',Number.isFinite(row.nearestDistance)?Number(row.nearestDistance.toFixed(3)):''];

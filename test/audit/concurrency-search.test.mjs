@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {createSharedInflightRead} from '../../src/sharedInflightRead.js';
 import {createOperationalPhotoMetadataReader} from '../../src/opsmapOperationalPhotos.js';
-import {searchPreservedRegistry,searchCustomerSummaries} from '../../src/privateCustomerSearch.js';
+import {resolvePreservedAddressBatch,searchPreservedRegistry,searchCustomerSummaries} from '../../src/privateCustomerSearch.js';
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 test('20 concurrent readers share one upstream operation',async()=>{
  const shared=createSharedInflightRead();let calls=0;
@@ -62,6 +62,15 @@ test('address cache invalidates when a generation changes',()=>{
 });
 test('unknown address in preserved data is not certified absent from the current registry',()=>{
  const r=searchPreservedRegistry('경기 오산시 합성로 999',{rows:[]});assert.equal(r.meta.complete,false);assert.equal(r.meta.customerMatchVerified,false);
+});
+test('official road/lot identity can reuse a verified point but cannot revive a moved customer',()=>{
+ const road='경기 오산시 합성로 10',lot='경기도 오산시 합성동 20';
+ const index={lookup(query){assert.equal(query,lot);return {road,lot,kind:'MANUAL'};}};
+ const row={customerCode:'T990001',address:road,lat:37.1,lng:127.1};
+ assert.equal(resolvePreservedAddressBatch([[lot]],{rows:[row]},index)[0].status,'STORED');
+ assert.deepEqual(resolvePreservedAddressBatch([[lot]],{rows:[{...row,addressChanged:true}]},index),[{status:'STORED_COORDINATE_UNVERIFIED'}]);
+ assert.deepEqual(resolvePreservedAddressBatch([[lot]],{rows:[]},{lookup:()=>({lat:37.1,lng:127.1,coordinateKind:'PARCEL'})}),
+  [{status:'OFFICIAL',point:{lat:37.1,lng:127.1,coordinateSource:'OFFICIAL_PUBLIC_PARCEL'}}]);
 });
 test('indexed customer search retains source metadata and does not call Hub for exact local code',async()=>{
  const snapshot={rows:[{customerCode:'T990001',customerName:'합성',lat:37.15,lng:127.05}]};

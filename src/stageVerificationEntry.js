@@ -107,7 +107,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:stageAddressApproved ? env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED : '0',
     OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED:stageAddressApproved && env.OPSMAP_STAGE_KAKAO_PLACE_APPROVED === '1'
       ? env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED : '0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
-  const validation = createStageAbValidation();
+  const validation = createStageAbValidation({now});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   const scheduledEnabled = stage.RENDER_SERVICE_ID===stageService && stage.OPSMAP_STAGE_SYNC_READ_APPROVED==='1';
   const remoteEnabled=scheduledEnabled && stage.OPSMAP_STAGE_SYNC_REMOTE_APPROVED==='1';
@@ -141,7 +141,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const geocodeBudget = stageAddressApproved ? createStageGeocodeBudgetStore({repo,token:stage.GITHUB_TOKEN,branch:pinsBranch,
     fetchImpl:stageGithub(fetchImpl,{files:[geocodeBudgetFile],branch:pinsBranch,writable:geocodeBudgetFile})}) : null;
   const addressLookupService = createKakaoCoordinateConnection({env:stage,fetchImpl,store:geocodeBudget,
-    stageAddressApproved,independentAddressLookup:()=>validation.active()?.bundledAddress || officialIndex.active()});
+    stageAddressApproved,independentAddressLookup:()=>{
+      const index=officialIndex.active();
+      return validation.active()?.bundledAddress || (index&&{lookup(query){
+        const point=index.lookup(query);
+        return point?.coordinateKind&&point.coordinateKind!=='BUILDING'?null:point;
+      }});
+    }});
   let coverageState = 'restoring';
   const baseDirectory = Promise.resolve().then(() => readShadowDirectory ? readShadowDirectory() : stage.OPSMAP_SHADOW_DATA_DIR)
     .catch(() => null).then(directory => {coverageState = directory ? 'ready' : 'unavailable'; return directory;});
@@ -270,7 +276,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       const {requireStaff,isSessionCurrent}=binding;
       staffView = requireStaff;
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
-        mountStageAbValidation(router,{...binding,validation,readSnapshot,readBaseVehicles:codes=>base.get(codes)});
+        mountStageAbValidation(router,{...binding,validation,readSnapshot,readOfficialIndex:()=>officialIndex.active(),readBaseVehicles:codes=>base.get(codes)});
         router.get('/api/map-phase2b/private/stage-sync-evidence',requireStaff,(_req,res)=>{
           const generation=validation.active();
           const sourceRunId=generation?.scheduled?.state.runId || null;

@@ -2656,17 +2656,44 @@
     return judgeNewAreaPoint(row, await lookup, batch);
   }
 
-  const stageNearbyAvailable=()=>window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com'&&!!snapshotMeta?.sourceGeneration;
+  const stageAddressBatchEnabled=()=>window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com';
+  const stageNearbyAvailable=()=>stageAddressBatchEnabled()&&!!snapshotMeta?.sourceGeneration;
   async function stageBatchAddressEvidence(rows,signal,requestId){
-    const generation=snapshotMeta?.sourceGeneration;
-    const queries=[...new Set(rows.flatMap(row=>row.inputAmbiguous?[]:NewAreaRequests.addressQueries(row.address,Phase2bUi.addressVariants)))];
-    if(!queries.length||queries.length>120)return null;
-    const result=await fetchJson('/api/map-phase2b/private/stage-address-evidence',{
-      channel:'stage-address-batch:'+requestId,method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({generation,queries}),timeout:6000,signal
-    }).catch(()=>null);
-    if(signal.aborted||result?.generation!==generation||snapshotMeta?.sourceGeneration!==generation||result?.data?.length!==queries.length)return null;
-    return new Map(queries.map((query,index)=>[query,result.data[index]]));
+    const generation=snapshotMeta?.sourceGeneration??null;
+    const inputs=rows.map(row=>{
+      const code=row.address.trim().toUpperCase();
+      return /^[A-Z]\d{3,}$/.test(code)?[code]:NewAreaRequests.addressQueries(row.address,Phase2bUi.addressVariants);
+    });
+    const resolved=[];
+    for(let offset=0;offset<inputs.length;offset+=120){
+      const chunk=inputs.slice(offset,offset+120);
+      const result=await fetchJson('/api/map-phase2b/private/stage-address-evidence',{
+        channel:'stage-address-batch:'+requestId,method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({generation,rows:chunk}),timeout:12000,signal
+      }).catch(error=>({error:error.code||error.message,status:error.status}));
+      if(signal.aborted)break;
+      const error=result.error||((snapshotMeta?.sourceGeneration??null)!==generation?'STAGE_BATCH_GENERATION_CHANGED':
+        result.generation!==generation||result.data?.length!==chunk.length?'STAGE_BATCH_UNAVAILABLE':null);
+      resolved.push(...(error?chunk.map(()=>({error,httpStatus:result.status})):result.data));
+    }
+    return resolved;
+  }
+  function judgeStageAreaRow(row,evidence,batch){
+    const status=evidence?.status;
+    if(evidence?.point&&['STORED','OFFICIAL'].includes(status))return judgeNewAreaPoint(row,evidence.point,batch);
+    const error=evidence?.error;
+    const http=evidence?.httpStatus;
+    const messages={STAGE_BATCH_GENERATION_EXPIRED:'검증 자료 사용 기간 만료 · 지도 새로고침 필요',STAGE_BATCH_GENERATION_CHANGED:'검증 자료가 변경됨 · 지도 새로고침 필요',
+      CUSTOMER_CODE_NOT_FOUND:'저장 자료에서 고객코드 미확인',STORED_COORDINATE_UNVERIFIED:'저장 고객 확인 · 좌표 검증 필요',
+      ADDRESS_NOT_MATCHED:'저장·공식 자료에서 주소 일치 없음',ADDRESS_AMBIGUOUS:'주소에 연결된 저장 위치가 여러 곳입니다',
+      INVALID_ADDRESS:'주소 입력 확인 필요',OFFICIAL_COORDINATE_UNVERIFIED:'공식 주소 확인 · 좌표 검증 필요',
+      OFFICIAL_ADDRESS_INDEX_UNAVAILABLE:'공식 주소 자료를 사용할 수 없습니다',OFFICIAL_ADDRESS_UNAVAILABLE:'공식 주소 조회 실패',
+      REQUEST_TIMEOUT:'저장 주소 조회 시간 초과',STAGE_BATCH_UNAVAILABLE:'저장 주소 자료 조회 실패'};
+    const candidates=status==='OFFICIAL_ADDRESS_AMBIGUOUS'?evidence.points?.map(point=>({...point,coordinateSource:'OFFICIAL_PUBLIC_BUILDING'})):null;
+    const failed=!!error||['OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_ADDRESS_UNAVAILABLE'].includes(status)||!status;
+    const reason=http===401?'직원 로그인 필요':http===403?'주소 조회 권한 없음':messages[error||status]|| (candidates?'공식 주소 위치 후보 확인 필요':'저장 주소 조회 실패');
+    return {...judgeNewAreaPoint(row,candidates?{candidates}:null),reason,evidence:http?`${reason} · HTTP ${http}`:reason,
+      lookupStatus:failed?'FAILED':'DEFERRED',lookupError:failed,lookupHttpStatus:http};
   }
   async function stageNewAreaEvidence(signal, requestId) {
     const generation = snapshotMeta?.sourceGeneration;
@@ -2862,7 +2889,7 @@
 
   function appendBatchResult(list, row, index) {
     const template = document.createElement('template');
-    template.innerHTML = `<button type="button" class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(row.reason || "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>사용 주소: ${esc(row.address)}</div>${row.coordinateSource==='OFFICIAL_PUBLIC_BUILDING'?'<div>공식 자료 건물 위치 · 매장 내부·출입구 미확인</div>':''}${!Number.isFinite(row.lat) || !Number.isFinite(row.lng) ? "<div>클릭하여 확인된 위치 입력</div>" : ""}<div>500m 저장위치 ${Number.isFinite(row.storedNearbyCount)?row.storedNearbyCount:'미확인'}개 · 기간 배송근거 ${Number.isFinite(row.evidenceCount)?row.evidenceCount:'미확인'}개</div><div>주소 권역: ${esc(row.addressRegion||"주소 권역 미확인")} · 실제 담당 센터: ${esc(row.actualDispatchCenter?.label||"담당 센터 미확인")}</div><div>${esc(row.evidence || "")} · ${esc(vehicleLabel(row.vehicle))} ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.rangeStart || state.rangeStart)} ~ ${esc(row.rangeEnd || state.rangeEnd)}${Number.isFinite(row.evidenceCount) ? ` · 500m 근거 ${row.evidenceCount}개` : ''}</div><div>${esc(row.dataLimits || '')}</div><div>30km 근접호차: ${esc((row.references || []).map(item => vehicleLabel(item.vehicle) + " " + formatDistance(item.distance)).join(" · ") || "확인 근거 없음")}</div><div>인근 배송점 요일 자료(실배송요일 미확정): ${esc(row.deliveryDays || "확인 근거 없음")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`;
+    template.innerHTML = `<button type="button" class="judgeCard batchResult" data-judged="${index}"><div class="judgeTop"><span class="judgeBadge ${row.decision === "O" ? "ok" : "no"}">${row.decision === "O" ? "권역 가능" : esc(row.reason || "판단 보류")}</span><b>${esc(row.customer || row.address)}</b></div><div>사용 주소: ${esc(row.address)}</div>${row.coordinateSource==='OFFICIAL_PUBLIC_PARCEL'?'<div>공식 필지 대표점 · 매장 내부·출입구 미확인</div>':row.coordinateSource==='OFFICIAL_PUBLIC_ADDRESS'?'<div>공식 주소 대표점 · 매장 내부·출입구 미확인</div>':row.coordinateSource==='OFFICIAL_PUBLIC_BUILDING'?'<div>공식 자료 건물 위치 · 매장 내부·출입구 미확인</div>':''}${!Number.isFinite(row.lat) || !Number.isFinite(row.lng) ? "<div>클릭하여 확인된 위치 입력</div>" : ""}<div>500m 저장위치 ${Number.isFinite(row.storedNearbyCount)?row.storedNearbyCount:'미확인'}개 · 기간 배송근거 ${Number.isFinite(row.evidenceCount)?row.evidenceCount:'미확인'}개</div><div>주소 권역: ${esc(row.addressRegion||"주소 권역 미확인")} · 실제 담당 센터: ${esc(row.actualDispatchCenter?.label||"담당 센터 미확인")}</div><div>${esc(row.evidence || "")} · ${esc(vehicleLabel(row.vehicle))} ${row.nearestDistance == null ? "" : formatDistance(row.nearestDistance)}</div><div>${esc(row.rangeStart || state.rangeStart)} ~ ${esc(row.rangeEnd || state.rangeEnd)}${Number.isFinite(row.evidenceCount) ? ` · 500m 근거 ${row.evidenceCount}개` : ''}</div><div>${esc(row.dataLimits || '')}</div><div>30km 근접호차: ${esc((row.references || []).map(item => vehicleLabel(item.vehicle) + " " + formatDistance(item.distance)).join(" · ") || "확인 근거 없음")}</div><div>인근 배송점 요일 자료(실배송요일 미확정): ${esc(row.deliveryDays || "확인 근거 없음")}${row.facility ? " · 차량 진입 확인 필요" : ""}</div></button>`;
     if (row.archiveContext) template.content.firstElementChild.insertAdjacentHTML('beforeend', stageNearbyMarkup(row.archiveContext));
     if (row.officialRoad) template.content.firstElementChild.insertAdjacentHTML('beforeend',`<div>공식 도로명: ${esc(row.officialRoad)} · 지번: ${esc(row.officialLot||'미확인')}${row.candidates?.length?' · 지도에서 후보 선택':''}</div>`);
     if (row.coordinateSource==='MAP_CLICK_TEMPORARY') template.content.firstElementChild.insertAdjacentHTML('beforeend','<div>지도에서 직접 선택한 임시 위치</div>');
@@ -2944,11 +2971,14 @@
     const active = new Set();
     let next = 0, completed = 0;
     setNewAreaBusy(true);
-    const counts={done:0,located:0,deferred:0,failed:0,limited:0,inside:0};
+    const counts={done:0,located:0,deferred:0,deliveryHold:0,failed:0,limited:0,inside:0};
     function countResult(row, change) {
       if(!row)return;
       counts.done+=change;
-      if(row.lookupStatus==='SUCCESS'||newAreaCoordinate(row))counts.located+=change;
+      if(row.lookupStatus==='SUCCESS'||newAreaCoordinate(row)){
+        counts.located+=change;
+        if(row.decision==='검토')counts.deliveryHold+=change;
+      }
       else if(row.lookupStatus==='FAILED')counts.failed+=change;
       else if(row.lookupStatus==='LIMIT')counts.limited+=change;
       else counts.deferred+=change;
@@ -2957,7 +2987,8 @@
     judged.forEach(row=>countResult(row,1));
     function showProgress() {
       const checking=[...active].map(index=>index+1).sort((a,b)=>a-b).join(', ');
-      status.textContent='입력 '+rows.length+' · 완료 '+counts.done+' · 위치 확인 '+counts.located+' · 보류 '+counts.deferred+' · 실패 '+counts.failed+' · 한도대기 '+counts.limited+
+      const details=stageAddressBatchEnabled()?` · 위치 보류 ${counts.deferred} · 배송판정 보류 ${counts.deliveryHold} · 시스템 오류 ${counts.failed}`:` · 보류 ${counts.deferred} · 실패 ${counts.failed}`;
+      status.textContent='입력 '+rows.length+' · 완료 '+counts.done+' · 위치 확인 '+counts.located+details+' · 한도대기 '+counts.limited+
         ' · 권역 내 '+counts.inside+(retry&&completed<indexes.length?' · 재조회 '+completed+'/'+indexes.length:'')+(checking?' · 확인 중 '+checking+'번':'');
     }
     async function worker() {
@@ -2965,7 +2996,8 @@
         const index=indexes[next++], row=rows[index];
         active.add(index);showProgress();
         let result;
-        try { result=manualPoints.has(index)?judgeNewAreaPoint(row,manualPoints.get(index),batch):await judgeBatchRow(row,signal,batch); }
+        try { result=manualPoints.has(index)?judgeNewAreaPoint(row,manualPoints.get(index),batch):batch.stageRows&&!row.inputAmbiguous
+          ?judgeStageAreaRow(row,batch.stageRows.get(index),batch):await judgeBatchRow(row,signal,batch); }
         catch (error) {
           if (!current()) return;
           if (NewAreaRequests.stopsExternal(error) || window.kakaoGeocoder?.blockedReason) batch.blocked=error.code || 'GEOCODE_AUTOMATICALLY_BLOCKED';
@@ -2982,10 +3014,13 @@
     }
     try {
       showProgress();
-      if (stageNearbyAvailable()) {
-        [batch.archive,batch.prefetched]=await Promise.all([
-          stageNewAreaEvidence(signal,requestId),stageBatchAddressEvidence(indexes.filter(index=>!manualPoints.has(index)).map(index=>rows[index]),signal,requestId)
+      if (stageAddressBatchEnabled()) {
+        const requested=indexes.filter(index=>!manualPoints.has(index)&&!rows[index].inputAmbiguous);
+        const [archive,results]=await Promise.all([
+          stageNewAreaEvidence(signal,requestId),stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId)
         ]);
+        batch.archive=archive;
+        batch.stageRows=new Map(requested.map((index,i)=>[index,results[i]]));
       }
       if (!current()) return;
       newAreaBatch.archive=batch.archive;
@@ -3045,10 +3080,10 @@
     const started = performance.now();
     try {
       const response = await fetch(url, { cache: "no-store", signal: controller.signal, headers: options.headers, method:options.method,body:options.body });
-      const json = await response.json();
       apiDiagnostics.set(new URL(url, location.href).pathname.split("/").pop(), { ms: Math.round(performance.now() - started), status: response.status, cache: response.headers.get("X-Phase2B-Cache") || "미제공" });
+      const json = await response.json().catch(error=>{if(response.ok)throw error;return {};});
       if (requestControllers.get(channel)?.token !== token) { const stale = new Error("STALE_RESPONSE"); stale.silent = true; throw stale; }
-      if (!response.ok || json.error) throw Object.assign(new Error(json.error || `HTTP_${response.status}`), { status: response.status });
+      if (!response.ok || json.error) throw Object.assign(new Error(json.error || `HTTP_${response.status}`), { status: response.status,code:json.error || `HTTP_${response.status}` });
       if (ttl) {
         for(const [key,value] of memoryResponses)if(value.expiresAt<=Date.now())memoryResponses.delete(key);
         memoryResponses.delete(url);while(memoryResponses.size>=32)memoryResponses.delete(memoryResponses.keys().next().value);

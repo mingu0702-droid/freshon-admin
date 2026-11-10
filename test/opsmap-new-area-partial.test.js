@@ -21,12 +21,13 @@ const exposure = `
 })();`;
 export const newAreaTestRuntime = source.slice(0,source.indexOf('\n  initVehicles();')) + exposure;
 const near = {customerCode:'S990001',customerName:'합성 인근 배송처',address:'경기도 화성시 합성로 1',lat:37.2,lng:127,vehicle:'101',deliveryPattern:'월수금',lastDeliveryDate:'2026-11-02'};
-function fixture() {
+function fixture({location,fetch} = {}) {
   const nodes=new Map();
   const node=id=>{if(!nodes.has(id))nodes.set(id,batchDomNode());return nodes.get(id);};
   let calls=0;
   const window={addEventListener(){},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,KAKAO_MAP_CONFIG:{allowExternalAddressLookup:false},kakaoGeocoder:{addressSearch(){calls++;throw Error('EXTERNAL_LOOKUP_FORBIDDEN');}}};
-  const ctx=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:node('body')},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
+  window.location=location;
+  const ctx=vm.createContext({window,location,fetch,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:node('body')},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
   vm.runInContext(newAreaTestRuntime,ctx);
   return {...window.test,node,externalCalls:()=>calls,window};
 }
@@ -82,6 +83,37 @@ test('TSV multiline preserves X/Y order and separates invalid addresses and row 
   f.setJudge(async row=>{if(row.address==='실패')throw Error('SYNTHETIC_ROW_FAILURE');return {...row,decision:'검토',reason:'주소 확인 필요',nearby:[]};});
   f.node('#newAreaBatchInput').value='실패\t고객1\n경기도 화성시 합성로 2\t고객2';await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
   assert.equal(f.state.newAreaResults.length,2);assert.equal(f.state.newAreaResults[0].lookupError,true);assert.equal(f.state.newAreaResults[1].lookupError,undefined);assert.match(f.node('#newAreaBatchStatus').textContent,/실패 1/);
+});
+test('Stage recovers 57 failed rows in one retry and keeps the already located row',async()=>{
+  const origin='https://freshon-admin-stage-preview-template.onrender.com', requests=[];
+  const f=fixture({location:{origin,href:origin},fetch:async(url,{body})=>{
+    assert.equal(url,'/api/map-phase2b/private/stage-address-evidence');
+    const {generation,rows}=JSON.parse(body);requests.push(rows);
+    const data=rows.map(([query])=>query===near.customerCode||requests.length>1
+      ?{status:'STORED',point:{lat:near.lat,lng:near.lng}}:{status:'OFFICIAL_ADDRESS_INDEX_UNAVAILABLE'});
+    return Response.json({generation,data});
+  }});
+  const original=[near.customerCode,...Array.from({length:57},(_,i)=>'경기도 오산시 합성로 '+(i+1))];
+  f.setup([near]);f.node('#newAreaBatchInput').value=original.join('\n');
+  const run=retry=>f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults',retry);
+  await run(false);
+  const first=f.state.newAreaResults[0];
+  assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 1 .*시스템 오류 57/);
+  await run(true);
+  assert.deepEqual(requests.map(rows=>rows.length),[58,57]);
+  assert.equal(f.state.newAreaResults[0],first);
+  assert.equal(f.state.newAreaResults.map(row=>row.originalAddress).join('\n'),original.join('\n'));
+  assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 58 .*시스템 오류 0/);
+  assert.equal(f.externalCalls(),0);
+});
+test('Stage preserves HTTP status even when a gateway sends HTML',async()=>{
+  const origin='https://freshon-admin-stage-preview-template.onrender.com';
+  const f=fixture({location:{origin,href:origin},fetch:async()=>new Response('<html>denied</html>',{status:403})});
+  f.setup([]);f.node('#newAreaBatchInput').value=near.customerCode;
+  await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
+  const result=f.state.newAreaResults[0];
+  assert.equal(result.lookupStatus,'FAILED');assert.equal(result.lookupHttpStatus,403);
+  assert.match(MapPeriodUi.areaExportRows([result])[0][3],/HTTP 403/);
 });
 test('cancel pending batch then rerun keeps input and suppresses stale completion',async()=>{
   const f=fixture();f.setup([near]);f.node('#newAreaBatchInput').value=near.customerCode;

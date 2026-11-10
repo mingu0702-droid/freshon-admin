@@ -110,6 +110,21 @@ async function stageHttp(t, directory, expected) {
     body:JSON.stringify({generation:expected,queries:[point.customerCode]})});
   assert.equal(area.status,200);
   assert.equal((await area.json()).data[0].customer.data[0].lat,point.lat);
+  // Reproduce the former one success / 57 row failures without live providers.
+  const queries=[[point.customerCode],...Array.from({length:57},(_,i)=>[address(5000+i)])];
+  const lookup=(generation,cookieValue)=>fetch(new URL('/opsmap'+STAGE_ADDRESS_BATCH_ROUTE,base),{method:'POST',
+    headers:{...(cookieValue?{cookie:cookieValue}:{}),Origin:STAGE_ORIGIN,'Content-Type':'application/json'},
+    body:JSON.stringify({generation,rows:queries})});
+  const batch=await lookup(expected,cookie);
+  assert.equal(batch.status,200);
+  const resolved=(await batch.json()).data;
+  assert.deepEqual(resolved[0],{status:'STORED',point:{lat:point.lat,lng:point.lng,coordinateSource:'STAGE_PRESERVED_COORDINATE'}});
+  assert.equal(resolved.length,58);
+  assert(resolved.slice(1).every(row=>row.status==='OFFICIAL_ADDRESS_INDEX_UNAVAILABLE'&&!row.point));
+  assert.equal((await lookup(expected,null)).status,401);
+  const stale=await lookup('f'.repeat(64),cookie);
+  assert.equal(stale.status,409);
+  assert.equal((await stale.json()).error,'STAGE_BATCH_GENERATION_CHANGED');
   const archive=await get('/preview/assignments?date='+historical);
   assert.equal(archive.meta.date,historical);
   assert.equal(archive.meta.sourceComplete,false);
