@@ -1,7 +1,7 @@
 // Publication is not proof that every required source was read successfully.
 export const SYNC_CENTERS = Object.freeze(['osan','yeongnam','honam']);
 export function completeSyncObservation(day, requiredCenters = SYNC_CENTERS) {
-  if (!day || day.proof !== 'VERIFIED_COMPLETE_DAY' || !Array.isArray(requiredCenters) || !requiredCenters.length ||
+  if (!day || day.planningOnly || day.proof !== 'VERIFIED_COMPLETE_DAY' || !Array.isArray(requiredCenters) || !requiredCenters.length ||
       requiredCenters.some(c => !SYNC_CENTERS.includes(c)) || new Set(requiredCenters).size !== requiredCenters.length ||
       !Array.isArray(day.completeCenters) || new Set(day.completeCenters).size !== day.completeCenters.length ||
       day.unidentified !== 0 || !Number.isSafeInteger(day.sourceRows) || day.sourceRows < 0 ||

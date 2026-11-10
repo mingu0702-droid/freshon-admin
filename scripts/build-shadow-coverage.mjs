@@ -133,7 +133,7 @@ export async function buildShadowCoverage({ inputDirectory, outputDirectory, kin
     let reusedDays = 0, rebuiltDays = 0;
     for (const date of datesFor(source.end, 90)) {
       const raw = await optionalJson(path.join(input, 'observed-days', date + '.json'), 3 * 1024 * 1024);
-      if (!raw) continue;
+      if (!raw || raw.planningOnly === true) continue;
       if (raw.date !== date || !Array.isArray(raw.visits) || raw.visits.length > 12_000) throw Error('COVERAGE_DAY_CONTRACT');
       const references = new Set();
       for (const [identity, code] of raw.visits) {

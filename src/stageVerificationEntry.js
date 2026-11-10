@@ -26,6 +26,7 @@ import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from './opsmapDurableGeneration.js';
 import {mountOpsmapScheduledRun} from './opsmapScheduledRun.js';
+import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
 
 const stageOrigin = STAGE_ORIGIN;
 const stageService = STAGE_SERVICE;
@@ -49,7 +50,6 @@ const normalizeDateValue = value => {
   const day = normalizeCell(value);
   return /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0,10) === day ? day : '';
 };
-const today = () => new Date(Date.now() + 9 * 3600000).toISOString().slice(0,10);
 
 export function stageSnapshotBaseVehicles(snapshot) {
   const rows = new Map();
@@ -97,6 +97,7 @@ function stageGithub(fetchImpl, {files, branch, writable, allowBlob = false}) {
 
 export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory,
   openScheduledStore = openOpsmapSyncGenerationStore, now = Date.now} = {}) {
+  const today=()=>new Date(now()+9*3600000).toISOString().slice(0,10);
   if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
   if (![env.HUB_API_URL,env.OPSMAP_PRIVATE_READER_URL].every(stageHubUrl)) throw new Error('STAGE_READ_SOURCE_CONFIG');
   const stageAddressApproved = env.RENDER_SERVICE_ID === stageService && env.OPSMAP_STAGE_KAKAO_ADDRESS_APPROVED === '1' &&
@@ -242,6 +243,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     setInterval(refresh,60_000).unref();
   });
   const readDatedDelivery = createStageDatedDeliveryReader({env:stage, fetchImpl});
+  const dispatchDate=readDatedDelivery.configured?()=>opsmapDispatchDate(now()):undefined;
   app.disable('x-powered-by');
   app.get('/api/health',(_req,res)=>res.json({ok:true,scope:'stage',release:/^[a-f0-9]{40}$/.test(stage.RENDER_GIT_COMMIT || '') ? stage.RENDER_GIT_COMMIT : null}));
   app.get(['/','/index.html','/map-phase2b-preview.html'],(_req,res)=>res.redirect(302,'/opsmap/'));
@@ -260,7 +262,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   mountProductionMapApi(router,{
     previewEnabled:()=>true,requireView:(req,res,next)=>staffView(req,res,next),readPhase2bSnapshot:readSnapshot,
     getSnapshotMemory:()=>validation.active() ? validation.active().scheduled?.snapshot || joinedSnapshot?.snapshot || snapshot : snapshot,
-    phase2bKstDate:today,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:readDatedDelivery,
+    phase2bKstDate:today,phase2bDispatchDate:dispatchDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:readDatedDelivery,
     callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
     sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget:null,readRecordedRoadRoute,addressLookupService,
     getShadowCoverageState:()=>validation.active() ? 'ready' : coverageState,
@@ -335,7 +337,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       });
       router.get('/api/map-phase2b/preview/today-status',requireStaff,async(req,res)=>{
         const date=normalizeDateValue(req.query.date);
-        if(!date || date>today() || Object.keys(req.query).length!==1) return res.status(400).json({error:'INVALID_DATE'});
+        if(!date || date>(dispatchDate?.() || today()) || Object.keys(req.query).length!==1) return res.status(400).json({error:'INVALID_DATE'});
         try {
           const data=await readDatedDelivery(date);
           return requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:redactPublicData(data),error:null}));

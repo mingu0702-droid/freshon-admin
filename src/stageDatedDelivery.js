@@ -11,6 +11,12 @@ const error = (code, status) => Object.assign(Error(code), {code, diagnostic:{st
 const validDate = date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) &&
   Number.isFinite(Date.parse(date)) && new Date(date).toISOString().slice(0, 10) === date;
 const field = (...values) => values.find(value => typeof value === 'string' && value.trim())?.trim() || '';
+const completedAt=task=>field(task.completedAt,task.completeDatedAt,task.deliveryCompletedAt);
+function taskState(task) {
+  const status=field(task.status,task.taskStatus).toUpperCase();
+  if (/^CANCEL/.test(status)) return 'CANCELLED';
+  return ['COMPLETED','DELIVERED'].includes(status)||Number.isFinite(Date.parse(completedAt(task)))?'COMPLETED':'OPEN';
+}
 
 function taskVehicle(task) {
   const carrier = task.carrier || task.carrierInfo || task.driver || {};
@@ -55,7 +61,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     if (!hasSource) throw error('DELIVERY_SOURCE_SESSION_REQUIRED', 401);
     if (!validDate(date)) throw error('DELIVERY_SOURCE_DATE_INVALID', 400);
   }
-  async function readTasks(date, reader = read) {
+  async function readTasks(date, reader = read, expectedCenter = '1') {
     authorize(date);
     let tasks;
     try { tasks = await reader(date); }
@@ -68,6 +74,10 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const observation = deliverySourceObservation(tasks, {date, complete:tasks.sourceObservation.complete,
       pages:tasks.sourceObservation.pages, resolveVehicle:taskVehicle});
     assertDeliverySourceObservation(observation, date);
+    if(tasks.some(task=>{
+      const center=task.logisticsCenter?.id ?? task.logisticsCenterId ?? task.carrier?.logisticsCenterId;
+      return center!=null && String(center)!==expectedCenter;
+    })) throw error('DELIVERY_SOURCE_SCOPE',503);
     return {tasks,observation};
   }
 
@@ -75,16 +85,18 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const {tasks,observation} = await readTasks(date);
     const groups = new Map();
     for (const task of tasks) {
+      const state=taskState(task);
+      if(state==='CANCELLED')continue;
       const vehicle = taskVehicle(task) || '미확인';
       const customer = task.customer || {}, location = task.location || {};
       const stops = groups.get(vehicle) || [];
       const deliveryStatus = field(task.status, task.taskStatus);
-      const deliveryCompletedAt = field(task.completedAt, task.completeDatedAt, task.deliveryCompletedAt);
+      const deliveryCompletedAt = completedAt(task);
       stops.push({customerCode:task.customer?.erpCode ?? task.customerErpCode,
         customerName:field(task.customerName, customer.name),
         address:field(task.customerAddress, task.address, customer.address, location.address),
         sequence:stops.length + 1, deliveryStatus, deliveryCompletedAt,
-        appRecorded:Boolean(deliveryCompletedAt) || deliveryStatus === 'COMPLETED'});
+        appRecorded:state==='COMPLETED'});
       groups.set(vehicle, stops);
     }
     return {date, generatedAt:new Date().toISOString(), sourceObservation:observation,
@@ -111,17 +123,14 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const projected = [], visits = [];
     const observations = [];
     for (const {center,id:expected,reader} of syncReaders) {
-      const {tasks,observation} = await readTasks(date,reader).catch(failure=>{throw Object.assign(failure,{date,center});});
+      const {tasks,observation} = await readTasks(date,reader,expected).catch(failure=>{throw Object.assign(failure,{date,center});});
       observations.push({center,...observation});
       for (const task of tasks) {
-        const centerId = task.logisticsCenter?.id ?? task.logisticsCenterId ?? task.carrier?.logisticsCenterId;
-        if (centerId !== undefined && centerId !== null && String(centerId) !== expected) throw Object.assign(error('DELIVERY_SOURCE_SCOPE',503),{date,center});
         const code = task.customer?.erpCode ?? task.customerErpCode;
         const vehicle = taskVehicle(task);
         const address = field(task.location?.address, task.customerAddress, task.address, task.customer?.address);
         const id = syncSha256('delivery:'+task.id);
-        const rawStatus = field(task.status,task.taskStatus).toUpperCase();
-        const status = ['COMPLETED','DELIVERED'].includes(rawStatus) ? 'COMPLETED' : /^CANCEL/.test(rawStatus) ? 'CANCELLED' : 'OPEN';
+        const status=taskState(task);
         projected.push([id,code,vehicle,center,coordinateAddressHash(address) || null,status]);
         if (status === 'COMPLETED') visits.push([id,code,vehicle,center,archiveAddressHash(address)]);
       }

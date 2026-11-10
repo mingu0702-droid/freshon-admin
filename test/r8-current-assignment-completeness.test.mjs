@@ -17,6 +17,12 @@ test('current assignment HTTP loader accepts only complete date-verified live ob
   {name:'complete source is accepted directly',observation:verified(),hub:'FORBIDDEN',status:200,source:'Delivery Admin current dispatch',calls:0},
   {name:'current delivery uses the saved address representative for the same building',observation:verified(),hub:'FORBIDDEN',status:200,source:'Delivery Admin current dispatch',calls:0,
    stop:{address:'경기 오산시 예시로 20 2층',lat:null,lng:null},snapshot:[representative],point:[37.16,127.06]},
+  {name:'approved Stage D+1 returns an open stop while Hub is forbidden',dispatch:'2026-11-03',query:'latest',status:200,
+   source:'Delivery Admin date-verified dispatch',resultDate:'2026-11-03',calls:0,expectedLive:['2026-11-03'],planned:true},
+  {name:'empty D+1 does not consult Hub or replace the current dispatch',dispatch:'2026-11-03',query:'latest',emptyNext:true,status:200,
+   source:'Delivery Admin current dispatch',resultDate:date,calls:0,expectedLive:['2026-11-03',date]},
+  {name:'explicit complete empty day remains a verified zero without a Hub request',dispatch:date,emptyToday:true,status:200,
+   source:'Delivery Admin date-verified dispatch',resultDate:date,calls:0,expectedLive:[date]},
   {name:'a delivery at the former address cannot inherit the new representative point',observation:verified(),hub:'FORBIDDEN',status:200,source:'Delivery Admin current dispatch',calls:0,
    stop:{address:'경기 오산시 예시로 10',lat:null,lng:null},snapshot:[representative],point:[null,null]},
   {name:'explicit business date survives midnight without an unrelated Hub read',today:'2026-11-03',observation:verified(),hub:'FORBIDDEN',status:200,source:'Delivery Admin date-verified dispatch',calls:0},
@@ -31,7 +37,13 @@ test('current assignment HTTP loader accepts only complete date-verified live ob
  for(const scenario of cases)await t.test(scenario.name,async()=>{
   const env={MAP_STAFF_ID:'fixture',MAP_STAFF_PASSWORD_HASH:passwordHash,MAP_STAFF_SESSION_SECRET:'s'.repeat(43),MAP_STAFF_ORIGIN:'https://localhost:3000',OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',OPSMAP_ROAD_ROUTE_ENABLED:'0'};
   const calls=[],liveCalls=[],app=express(),previous=process.env.RENDER_EXTERNAL_URL;delete process.env.RENDER_EXTERNAL_URL;
-  try{mountProductionMapApi(app,{previewEnabled:()=>true,requireView:(_req,_res,next)=>next(),readPhase2bSnapshot:async()=>({rows:scenario.snapshot||[]}),getSnapshotMemory:()=>null,phase2bKstDate:()=>scenario.today||date,normalizeCell:v=>String(v||'').trim(),normalizeDateValue:v=>String(v||''),phase2bSnapshotMeta:()=>({stale:true}),phase2bTodayStatus:async selected=>{liveCalls.push(selected);return live(scenario.observation,scenario.stop);},authOptions:{env},hybridEnabled:()=>false,callHub:async(action)=>{
+  try{mountProductionMapApi(app,{previewEnabled:()=>true,requireView:(_req,_res,next)=>next(),readPhase2bSnapshot:async()=>({rows:scenario.snapshot||[]}),getSnapshotMemory:()=>null,phase2bKstDate:()=>scenario.today||date,phase2bDispatchDate:scenario.dispatch?()=>scenario.dispatch:undefined,normalizeCell:v=>String(v||'').trim(),normalizeDateValue:v=>String(v||''),phase2bSnapshotMeta:()=>({stale:true}),phase2bTodayStatus:async selected=>{
+   liveCalls.push(selected);
+   if(!scenario.dispatch)return live(scenario.observation,scenario.stop);
+   const empty=selected===date?scenario.emptyToday:scenario.emptyNext;
+   return {...live(deliverySourceObservation(empty?[]:[{enteringDatedAt:selected}],{date:selected,pages:1,complete:true}),{appRecorded:false}),
+     date:selected,...(empty?{vehicles:[]}:{} )};
+  },authOptions:{env},hybridEnabled:()=>false,callHub:async(action)=>{
    calls.push(action);assert.equal(action,'datedAssignments');
    if(scenario.hub==='VALID')return hubPage();
    if(scenario.hub==='INCOMPLETE'){const page=hubPage();page.meta.complete=false;return page;}
@@ -42,13 +54,19 @@ test('current assignment HTTP loader accepts only complete date-verified live ob
    const login=await fetch(base+'/api/map-phase2b/auth/login',{method:'POST',headers:{origin:env.MAP_STAFF_ORIGIN,'content-type':'application/json'},body:JSON.stringify({id:'fixture',password:'synthetic-test-password'})});assert.equal(login.status,200);
    const cookie=login.headers.get('set-cookie').split(';')[0];
    for(let i=0;i<(scenario.repeat?2:1);i++){
-    const response=await fetch(base+'/api/map-phase2b/preview/assignments?date='+date,{headers:{cookie}});assert.equal(response.status,scenario.status);const body=await response.json();
-    if(scenario.status===200){assert.equal(body.meta.complete,true);assert.equal(body.meta.source,scenario.source);assert.equal(body.data[0].customerCode,scenario.calls?'S970002':'S970001');}
+    const response=await fetch(base+'/api/map-phase2b/preview/assignments?date='+(scenario.query||date),{headers:{cookie}});assert.equal(response.status,scenario.status);const body=await response.json();
+    if(scenario.status===200){
+     assert.equal(body.meta.complete,true);assert.equal(body.meta.source,scenario.source);
+     assert.equal(body.meta.date,scenario.resultDate||date);
+     if(scenario.emptyToday){assert.equal(body.meta.sourceReadState,'NO_DISPATCH_OBSERVED');assert.deepEqual(body.data,[]);}
+     else assert.equal(body.data[0].customerCode,scenario.calls?'S970002':'S970001');
+     if(scenario.planned){assert.equal(body.meta.recordKind,'PLANNED_ASSIGNMENTS');assert.equal(body.data[0].lastDeliveryDate,undefined);}
+    }
     else{assert.equal(body.ok,false);assert.equal(body.data,null);}
     if(scenario.point)assert.deepEqual([body.data[0].lat,body.data[0].lng],scenario.point);
    }
    assert.equal(calls.length,scenario.calls);
-   assert.deepEqual(liveCalls,Array(scenario.repeat?2:1).fill(date));
+   assert.deepEqual(liveCalls,scenario.expectedLive||Array(scenario.repeat?2:1).fill(date));
   }finally{await new Promise(resolve=>server.close(resolve));}
  });
 });

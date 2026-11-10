@@ -30,6 +30,7 @@ test('a certified complete empty day is distinct from partial/unknown metadata a
 });
 test('duplicate IDs, missing/conflicting/wrong dates and malformed page shapes fail closed',async()=>{
   for(const response of [
+    ()=>Response.json({content:[task(1)],totalElements:1,totalPages:1,number:1}),
     ()=>page([task(1),task(1)],2,1),
     ()=>page([{...task(1),customer:undefined}],1,1),
     ()=>page([{...task(1),enteringDatedAt:undefined}],1,1),
