@@ -2778,11 +2778,7 @@
     const routeStops=archive?.vehicleStatus==='READY'?archive.vehicles:periodStops;
     const periodComplete = dateReady && periodMeta?.complete === true && periodMeta.startDate === state.rangeStart && periodMeta.endDate === state.rangeEnd && (periodMeta.segmented !== true || periodMeta.aggregateComplete === true);
     const limits=[!periodComplete?'전체 기간 비교 미완료':null,periodMeta?.missingCoordinate>0 || periodComplete && comparisons.length < periodRows.length?'비교 원천 좌표 누락':null,periodMeta?.coverageComplete!==true?'전체 원천 완전성 미검증':null].filter(Boolean);
-    const archiveMatches=(!state.rangeStart&&!state.rangeEnd)||(archive?.start===state.rangeStart&&archive?.end===state.rangeEnd);
-    const completeArchiveStops=archiveMatches&&archive?.vehicleStatus==='READY'
-      ?routeStops.filter(stop=>archive.observedByCenter?.[stop.center]===90):[];
-    const decisionStops=limits.length?completeArchiveStops:[...completeArchiveStops,...periodStops];
-    return {comparisons,locationRows,limits,archive:archive?.start&&archive?.end?archive:null,routeStops,decisionStops,
+    return {comparisons,locationRows,limits,archive:archive?.start&&archive?.end?archive:null,routeStops,
       vehicleStatus:archive?.vehicleStatus||(periodStops.length?'PARTIAL':null)};
   }
 
@@ -2792,7 +2788,7 @@
     const base = { ...row, ...point, ...checked, address:row.address,customer:row.customer,originalAddress:row.originalAddress,originalCustomer:row.originalCustomer,resolvedAddress:point?.address,lookupStatus:checked?'SUCCESS':'DEFERRED',addressRegion:row.addressRegion||point?.addressRegion||window.MapLocationContract?.addressRegion(row.address)||'주소 권역 미확인',actualDispatchCenter:row.actualDispatchCenter||point?.actualDispatchCenter||{state:'UNCONFIRMED',label:'담당 센터 미확인'},rangeStart: state.rangeStart, rangeEnd: state.rangeEnd, decision: "검토", nearby: [], nearestDistance: null, facility: facilityReview(row.address+' '+(row.customer||'')) };
     if (!checked || point.candidates) return { ...base, ...(exception?{decision:'X',reason:exception,evidence:'기존 배송 제외 규칙 · 위치 미확인'}:
       {reason:point?.candidates?'주소 복수 후보':'주소 확인 필요',evidence:point?.candidates?'주소 후보를 먼저 확정해 주세요.':'검증된 저장·수동 좌표 미확인'}) };
-    const {comparisons,locationRows,limits,archive,routeStops,decisionStops,vehicleStatus} = batch ? (batch.evidence ||= newAreaEvidence(batch.archive)) : newAreaEvidence();
+    const {comparisons,locationRows,limits,archive,routeStops,vehicleStatus} = batch ? (batch.evidence ||= newAreaEvidence(batch.archive)) : newAreaEvidence();
     const nearby = comparisons.map(store => ({...store,distance:distanceKm(checked,store)}))
       .filter(store=>store.distance<=.5).sort((a,b)=>a.distance-b.distance);
     const nearest=Phase2bUi.nearestRegisteredStore(checked,locationRows);
@@ -2811,7 +2807,14 @@
       archiveContext.within500 = observedWithin500.length;
       archiveContext.weekdays = Phase2bUi.observedWeekdays(mask).join('·');
     }
-    const possibleMask=decisionStops.reduce((mask,stop)=>distanceKm(checked,stop)<=.5?mask | stop.mask:mask,0);
+    // Preserve the original 1 km comparison for positive evidence. A nearby
+    // registration or an assignment alone is not a completed delivery.
+    let possibleMask=0, nearestCompleted=Infinity;
+    for(const route of actualVehicles){
+      if(route.distance>1)break;
+      nearestCompleted=Math.min(nearestCompleted,route.distance);
+      for(let day=0;day<7;day++)if(route.dayDistances[day]<=1)possibleMask|=1<<day;
+    }
     const facts={...base,nearby,actualVehicles,fixedVehicles,archiveContext,storedNearbyCount,evidenceCount:nearby.length,dataLimits:limits.join(' · '),
       deliveryEvidenceState:vehicleStatus||(batch?.archiveRequested?'LOADING':'UNCONFIRMED'),
       deliveryDays:combineNearbyPatterns(nearby),nearestStore:nearest?.customerName||'',nearestStoreCode:nearest?.customerCode||'',
@@ -2820,8 +2823,9 @@
     if(exception)return {...facts,decision:'X',reason:exception,evidence:'기존 지역·시설·배송동선 제외 규칙'};
     if(point.coordinateSource==='MAP_CLICK_TEMPORARY')return {...facts,reason:'임시 위치 선택 · 배송판정 검토',evidence:'직접 선택한 위치의 주변 배송 근거 · 주소와 배송 가능 여부는 확인이 필요합니다.'};
     if(base.facility)return {...facts,reason:'차량 진입 확인 필요',evidence:'시설 진입 확인 전 배송 가능 여부를 확정할 수 없습니다.'};
-    if(possibleMask)return {...facts,decision:'O',reason:'',possibleWeekdays:Phase2bUi.observedWeekdays(possibleMask),evidence:'500m 내 실제 완료 배송동선과 운행요일 확인 · 배송 수락 및 차량 진입은 별도 확인'};
-    if(limits.length)return {...facts,reason:'위치 확인 완료 · 배송판정 검토',evidence:limits.join(' · ')+' · 인근 배송점 부재 확정 불가 · 직선거리이며 도로 진입 판정 아님'};
+    if(possibleMask)return {...facts,decision:'O',reason:'',possibleWeekdays:Phase2bUi.observedWeekdays(possibleMask),
+      evidence:'1km 내 완료 배송점 '+Math.round(nearestCompleted*1000)+'m(직선) · 관측 요일 확인 · 배송 수락 및 차량 진입은 별도 확인'};
+    if(limits.length)return {...facts,reason:'위치 확인 완료 · 배송판정 검토',evidence:'1km 내 완료 배송동선·요일 근거 미확인 · 인근 배송점 부재 확정 불가 · 직선거리이며 도로 진입 판정 아님'};
     return {...facts,reason:'배송동선·운행요일 확인 필요',evidence:'확인된 배송동선과 운행요일 근거가 부족합니다. 직선거리만으로 배송 가능 여부를 판단하지 않습니다.'};
   }
 
@@ -2909,7 +2913,8 @@
       <div data-area-nearest>가장 가까운 등록 매장(직선거리): ${nearest}</div>
       <div>배송 가능 참고요일: <strong>${esc(row.possibleWeekdays?.join('·')||(row.decision==='X'?'해당 없음':'검토 필요'))}</strong></div>
       ${row.deliveryDays?`<div class="areaInquiryHint">주변 매장 기준요일 참고: ${esc(row.deliveryDays)}</div>`:''}
-      <div class="areaInquiryHint">${esc(row.evidence||'')}${row.decision!=='X'?' · 실제 배송 확정 전 확인 필요':''}</div>`;
+      <div class="areaInquiryHint">${esc(row.evidence||'')}${row.decision==='검토'?' · 실제 배송 확정 전 확인 필요':''}</div>
+      ${!row.archiveContext&&row.dataLimits?`<div class="areaInquiryHint">자료 범위: ${esc(row.dataLimits)}</div>`:''}`;
   }
 
   function newAreaArchiveMarkup(row) {
@@ -2921,7 +2926,7 @@
       .filter(([source])=>context.unverifiedVehicleSources?.includes(source)).map(([,label])=>label).join('·');
     return `<div class="areaInquiryHint">보존 완료 배송 ${esc(context.start)} ~ ${esc(context.end)} · ${context.days}일 기록 / ${context.unknownDays}일 미확인</div>
       ${scopes?`<div class="areaInquiryHint">센터별 기록: ${esc(scopes)}</div>`:''}
-      ${unverifiedSources?`<div class="areaInquiryHint">${unverifiedSources} 원천 조회 권한 미확인</div>`:''}
+      ${unverifiedSources?`<div class="areaInquiryHint">${unverifiedSources} 원천 기록 미확인</div>`:''}
       <div>500m 내 완료 배송점 ${context.within500}곳${context.weekdays?' · 기록 요일 '+esc(context.weekdays):''}</div>`;
   }
 
@@ -2939,7 +2944,7 @@
     const actual=observed.map(item=>`<li><b>${esc(MapPeriodUi.areaVehicleLabel(item))}</b> · 직선 ${MapPeriodUi.areaDistance(item.distance)} · ${esc(item.weekdays.join('·'))}</li>`).join('');
     const master=fixed.map(item=>`<li>${esc(vehicleLabel(item.vehicle))} · 배정 매장까지 직선 ${MapPeriodUi.areaDistance(item.distance)}</li>`).join('');
     return `${actual?`<p class="areaInquiryHint">호차별 가장 가까운 완료 배송점까지의 직선거리</p><ul class="areaRouteList">${actual}</ul>`:`<p>${availability}</p>`}
-      <p class="areaInquiryHint">완료 배송이 관측된 요일입니다. 매주 배송 일정은 별도 확인이 필요합니다.</p>
+      <p class="areaInquiryHint">완료 배송이 관측된 요일입니다. 나머지 요일은 미확인이며, 정기 배송 일정은 별도 확인이 필요합니다.</p>
       <details class="areaFixedReference"><summary>기준호차(배정 정보만) · ${fixed.length?fixed.length+'대 확인':'미확인'}</summary>
       ${master?`<ul class="areaRouteList">${master}</ul>`:'<p>확인된 기준호차 자료가 없습니다.</p>'}</details>`;
   }

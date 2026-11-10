@@ -36,17 +36,18 @@ function fixture({location,fetch} = {}) {
   vm.runInContext(newAreaTestRuntime,ctx);
   return {...window.test,node,externalCalls:()=>calls,window};
 }
-test('a partial period shows only recorded weekdays while explicit exclusions still apply',()=>{
+test('a partial period keeps positive completed-delivery evidence and explicit exclusions',()=>{
   const f=fixture();f.setup([completed],{segmented:true,displayComplete:true,aggregateComplete:false,coverageComplete:false});
   const row=f.judgeNewAreaPoint({address:'경기도 화성시 합성로 2'},{lat:37.201,lng:127});
-  assert.equal(row.decision,'검토');assert.equal(row.evidenceCount,1);assert.equal(row.deliveryDays,'월수금');assert.match(row.evidence,/도로 진입 판정 아님/);
+  assert.equal(row.decision,'O');assert.equal(row.evidenceCount,1);assert.equal(row.deliveryDays,'월수금');
+  assert.equal(row.possibleWeekdays.join(''),'월');assert.match(row.dataLimits,/전체 기간 비교 미완료/);
   assert.deepEqual(Array.from(Phase2bUi.vehiclesAtRadius(row.actualVehicles,30),item=>[item.vehicle,item.weekdays.join('')]),[['101','월']]);
   assert.equal(f.judgeNewAreaPoint({address:'제주특별자치도 합성로 1'},null).reason,'제주도');
   assert.equal(f.judgeNewAreaPoint({address:'서울특별시 합성아파트 101동 102호'},{lat:37.5,lng:127}).reason,'아파트');
   assert.equal(f.judgeNewAreaPoint({address:'서울특별시 합성로 1',customer:'동선외'},{lat:37.5,lng:127}).decision,'X');
   assert.equal(f.judgeNewAreaPoint({address:'서울특별시 합성상가 101동 102호'},{lat:37.5,lng:127}).decision,'검토');
 });
-test('500m alone is insufficient; a complete source with actual route and weekday enables O',()=>{
+test('a nearby registration alone is insufficient; actual delivery and weekday enable O within the original 1 km rule',()=>{
   const f=fixture();f.setup([near],{complete:true,coverageComplete:true,missingCoordinate:0});f.ready();
   assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.201,lng:127}).decision,'검토');
   f.setup([{...completed,deliveryPattern:'월화수목금토'}],{complete:true,coverageComplete:true,missingCoordinate:0});f.ready();
@@ -55,8 +56,9 @@ test('500m alone is insufficient; a complete source with actual route and weekda
   assert.match(qualified.evidence,/배송 수락 및 차량 진입은 별도 확인/);
   assert.equal(f.judgeNewAreaPoint({address:near.address,customer:'지하 하역장'},{lat:37.201,lng:127}).decision,'검토');
   assert.equal(f.judgeNewAreaPoint({address:'경상북도 안동시 합성로 1'},{lat:36.56,lng:128.73}).decision,'검토');
-  f.setup([near],{complete:true,segmented:true,aggregateComplete:false,coverageComplete:true});f.ready();
-  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.201,lng:127}).decision,'검토');
+  f.setup([completed],{complete:true,segmented:true,aggregateComplete:false,coverageComplete:false});f.ready();
+  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.207,lng:127}).decision,'O');
+  assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:37.212,lng:127}).decision,'검토');
 });
 test('nearest registered store can be an undelivered store outside the filtered delivery rows',()=>{
   const f=fixture();
@@ -66,14 +68,17 @@ test('nearest registered store can be an undelivered store outside the filtered 
   assert.equal(row.nearestStore,'배송 이력 없는 매장');
   assert.equal(row.nearestStoreCode,'S990002');assert.equal(row.nearestDistanceMeters,11);
 });
-test('archive coverage from another center cannot turn an observed visit into a positive decision',()=>{
+test('14 unobserved days do not invalidate an address-bound completed route and weekday',()=>{
   const f=fixture();f.setup([],{},[near]);f.state.rangeStart='2026-08-05';
-  const archive={start:f.state.rangeStart,end:f.state.rangeEnd,days:90,unknownDays:0,vehicleStatus:'READY',
-    vehicles:[{...near,vehicle:'202',center:'honam',mask:2}],observed:[],fixed:[]};
+  const archive={start:f.state.rangeStart,end:f.state.rangeEnd,days:76,unknownDays:14,vehicleStatus:'READY',
+    observedByCenter:{osan:76,honam:0},vehicles:[{...near,vehicle:'202',center:'osan',mask:2}],observed:[],fixed:[]};
   const point={lat:37.201,lng:127};
-  const judge=observedByCenter=>f.judgeNewAreaPoint({address:near.address},point,{archive:{...archive,observedByCenter}});
-  assert.equal(judge({osan:90,honam:76}).decision,'검토');
-  assert.equal(judge({osan:90,honam:90}).possibleWeekdays.join(''),'월');
+  const judge=vehicleStatus=>f.judgeNewAreaPoint({address:near.address},point,{archive:{...archive,vehicleStatus}});
+  const recorded=judge('READY');
+  assert.equal(recorded.decision,'O');
+  assert.equal(recorded.possibleWeekdays.join(''),'월');
+  assert.equal(recorded.archiveContext.unknownDays,14);
+  assert.equal(judge('UNAVAILABLE').decision,'검토');
 });
 test('wrong-period rows never count, while dated snapshot delivery remains partial evidence',()=>{
   const f=fixture();f.setup([{...near,customerCode:'S990009'}],{startDate:'2025-01-01'},[near,{...near,customerCode:'S990002',lastDeliveryDate:'2025-01-01'}]);

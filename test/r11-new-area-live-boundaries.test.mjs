@@ -75,7 +75,7 @@ test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with n
     assert.equal(row.address,cells[i].x.trim());assert.equal(row.customer,cells[i].y);assert.equal(row.decision,'검토');
     assert.equal(row.lookupStatus,'SUCCESS');assert.equal(row.storedNearbyCount,1);
     assert.equal(row.nearestStoreCode,saved.customerCode);assert.equal(row.actualVehicles.length,0);
-    assert.equal(row.reason,'위치 확인 완료 · 배송판정 검토');assert.match(row.evidence,/전체 기간 비교 미완료/);
+    assert.equal(row.reason,'위치 확인 완료 · 배송판정 검토');assert.match(row.dataLimits,/전체 기간 비교 미완료/);
     assert.equal(row.evidenceCount,0);assert.equal(row.deliveryDays,'');
     assert.equal(f.queries[i],`경기도 화성시 합성로 ${i+100}`);assert.equal(f.headers[i],f.queries[i]);
   }
