@@ -27,6 +27,7 @@ import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from './opsmapDurableGeneration.js';
 import {mountOpsmapScheduledRun} from './opsmapScheduledRun.js';
+import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
 
 const stageOrigin = STAGE_ORIGIN;
@@ -326,8 +327,12 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         router.get('/api/map-phase2b/private/stage-sync-evidence',requireStaff,(_req,res)=>{
           const generation=validation.active();
           const sourceRunId=generation?.scheduled?.state.runId || null;
+          const requiredSourceIds=Object.values(SYNC_DELIVERY_SOURCES);
+          const confirmedSourceIds=requiredSourceIds.filter(id=>
+            generation?.scheduled?.vehicleDelivery?.completeSources[id]?.includes(scheduledRun?.date));
           const automaticSyncVerified=remoteEnabled && scheduledState==='VERIFIED_SCHEDULED_PROJECTION' && !!sourceRunId &&
             ['PUBLISHED','VERIFIED_NOOP'].includes(scheduledRun?.state) && scheduledRun.sourceReadComplete===true &&
+            confirmedSourceIds.length===requiredSourceIds.length &&
             scheduledRun.generation===generation.generation &&
             scheduledRun.date===today() && Number.isFinite(Date.parse(scheduledSuccessAt));
           return res.set('Cache-Control','private, no-store').vary('Cookie').json({
@@ -336,13 +341,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
               revision:snapshot?.preservation?.revision||null,selectedDateStorageVerified:snapshot?.selectedDateCheckpoint?.selectedDateStorageVerified===true},
             coverage:{state:generation?'VERIFIED_STAGE_GENERATION':coverageState,generation:generation?.generation||null,
               asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status()},
-            scheduled:{state:scheduledState,revision:generation?.scheduled?.state.revision||null,
+            scheduled:{state:scheduledState,revision:generation?.scheduled?.state.revision||null,requiredSourceIds,confirmedSourceIds,
               publishedAt:generation?.scheduled?.state.committedAt||null,lastSuccessAt:scheduledSuccessAt,sourceRunId,
               run:scheduledRun?{runId:scheduledRun.runId,triggerId:scheduledRun.triggerId,executorHash:scheduledRun.principal,
                 state:scheduledRun.state,date:scheduledRun.date,startedAt:scheduledRun.startedAt,completedAt:scheduledRun.completedAt||null,
                 sourceReadComplete:scheduledRun.sourceReadComplete===true}:null,
               lastFailure:scheduledFailure?{runId:scheduledFailure.runId,at:scheduledFailure.completedAt,code:scheduledFailure.error,
-                date:scheduledFailure.failedDate,center:scheduledFailure.failedCenter}:null}
+                date:scheduledFailure.failedDate,center:scheduledFailure.failedCenter,sourceId:scheduledFailure.failedSourceId||null}:null}
           });
         });
         router.post(officialAddressIndexRoute,requireStaff,(req,res,next)=>{

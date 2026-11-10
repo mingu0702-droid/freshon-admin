@@ -8,6 +8,7 @@ import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
 import {openOpsmapSyncGenerationStore, SYNC_MAX_DAY_BYTES, syncDigest, syncHash, syncSha256, validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
 import {boundedRead, isDay, parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {MAX_VEHICLE_DELIVERY_BYTES,VEHICLE_DELIVERY_FILE} from './opsmapVehicleDeliveryEvidence.js';
 
 const compress = promisify(gzip), decompress = promisify(gunzip);
 const HEAD = 'head-v1.json';
@@ -56,15 +57,17 @@ const safeCode = value => /^[A-Z][A-Z_0-9]{1,95}$/.test(value || '') ? value : '
 const reference = value => value && Number.isSafeInteger(value.revision) && value.revision>0 && syncHash(value.generation) &&
   syncHash(value.blob) && isDay(value.asOf) && syncHash(value.runId);
 
-function payloadFiles(index) {
-  return new Map([...metadataFiles,...[index.catalog,...PERIODS.map(days=>index.windows[days])]
+function payloadFiles(index,state) {
+  const files=new Map([...metadataFiles,...[index.catalog,...PERIODS.map(days=>index.windows[days])]
     .map(ref=>['coverage/'+ref.sha256+'.json',ref.bytes])]);
+  if(state.vehicleDeliverySha256)files.set(VEHICLE_DELIVERY_FILE,MAX_VEHICLE_DELIVERY_BYTES);
+  return files;
 }
 
 async function packGeneration(generation) {
   const files = {};
   let bytes = 0;
-  for (const [name,limit] of payloadFiles(generation.index)) {
+  for (const [name,limit] of payloadFiles(generation.index,generation.state)) {
     const data = await boundedRead(path.join(generation.folder,name),limit);
     bytes += data.length;
     if (bytes > MAX_RELEASE_BYTES * 0.7) throw Error('OPSMAP_DURABLE_RELEASE_LIMIT');
@@ -133,7 +136,7 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     if (state?.revision!==ref.revision || state.generation!==ref.generation || state.asOf!==ref.asOf ||
         state.runId!==ref.runId || !/^[a-f0-9-]{36}$/.test(state.id || '') || !files) throw Error('OPSMAP_DURABLE_RELEASE');
     const index = parseCoverageIndex(Buffer.from(files['coverage/coverage-index.json'] || '','base64'));
-    const expected=payloadFiles(index);
+    const expected=payloadFiles(index,state);
     if (Object.keys(files).length!==expected.size) throw Error('OPSMAP_DURABLE_RELEASE_FILES');
     const root=await fs.mkdtemp(path.join(tempRoot,'opsmap-durable-view-'));
     try {
@@ -199,7 +202,7 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     const folder=path.join(target.root,'generations',generation.state.id);
     await fs.mkdir(path.join(folder,'input'),{recursive:true,mode:0o700});
     await fs.mkdir(path.join(folder,'coverage'),{recursive:true,mode:0o700});
-    for(const [name,limit] of payloadFiles(generation.index)){
+    for(const [name,limit] of payloadFiles(generation.index,generation.state)){
       const bytes=await boundedRead(path.join(generation.folder,name),limit);
       const targetFile=path.join(folder,name);
       try {await fs.writeFile(targetFile,bytes,{flag:'wx',mode:0o600});}
@@ -226,7 +229,8 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     const {head,sha}=await readHead();
     if (head.run?.owner!==run.owner || head.run.state!=='RUNNING') return;
     const finished={...head.run,state:'FAILED',error:safeCode(error.code || error.message),completedAt:new Date(now()).toISOString(),
-      failedDate:isDay(error.date)?error.date:null,failedCenter:['osan','yeongnam','honam'].includes(error.center)?error.center:null};
+      failedDate:isDay(error.date)?error.date:null,failedCenter:['osan','yeongnam','honam'].includes(error.center)?error.center:null,
+      failedSourceId:['1','2','3','4'].includes(error.sourceId)?error.sourceId:null};
     await writeHead({...head,run:finished,lastFailure:finished},sha);
   }, async confirmUnchanged(run,generation,observationHash) {
     const {head,sha}=await readHead();

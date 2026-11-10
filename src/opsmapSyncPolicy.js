@@ -1,12 +1,14 @@
 // Publication is not proof that every required source was read successfully.
 export const SYNC_CENTERS = Object.freeze(['osan','yeongnam','honam']);
-export function completeSyncObservation(day, requiredCenters = SYNC_CENTERS) {
+export const SYNC_DELIVERY_SOURCES = Object.freeze({osan:'1',osanColdStorage:'2',yeongnam:'3',honam:'4'});
+export function completeSyncObservation(day, requiredCenters = SYNC_CENTERS, requiredSources = []) {
   if (!day || day.planningOnly || day.proof !== 'VERIFIED_COMPLETE_DAY' || !Array.isArray(requiredCenters) || !requiredCenters.length ||
       requiredCenters.some(c => !SYNC_CENTERS.includes(c)) || new Set(requiredCenters).size !== requiredCenters.length ||
       !Array.isArray(day.completeCenters) || new Set(day.completeCenters).size !== day.completeCenters.length ||
       day.unidentified !== 0 || !Number.isSafeInteger(day.sourceRows) || day.sourceRows < 0 ||
       !Array.isArray(day.tasks) || day.tasks.length !== day.sourceRows) return false;
-  return requiredCenters.every(c => day.completeCenters.includes(c));
+  return requiredCenters.every(c => day.completeCenters.includes(c)) &&
+    (!requiredSources.length || Array.isArray(day.completeSources) && requiredSources.every(id=>day.completeSources.includes(id)));
 }
 export function nextSyncEvidence(previous,result,attemptedAt,completedAt) {
   const verified=result.sourceReadComplete===true;

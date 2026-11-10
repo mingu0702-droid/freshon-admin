@@ -7,6 +7,7 @@ import {boundedRead, isDay, parseCoverageIndex, PERIODS, privateCoverageDirector
 import {atomicCoverageWrite} from './shadowCoverage/fileStore.js';
 import {readStageNearbyEvidence} from './stageNearbyEvidence.js';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
+import {readOpsmapVehicleDelivery,MAX_VEHICLE_DELIVERY_BYTES,VEHICLE_DELIVERY_FILE} from './opsmapVehicleDeliveryEvidence.js';
 
 export const syncSha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export const syncDigest = value => syncSha256(JSON.stringify(value));
@@ -24,6 +25,9 @@ export function validateOpsmapSyncDay(value, date) {
       !Number.isSafeInteger(unidentified) || unidentified < 0 || unidentified > sourceRows ||
       !Array.isArray(visits) || visits.length > sourceRows || !syncHash(value.proofHash) ||
       !Array.isArray(value.completeCenters) || new Set(value.completeCenters).size !== value.completeCenters.length ||
+      value.completeSources!==undefined && (!Array.isArray(value.completeSources) || value.completeSources.length>4 ||
+        new Set(value.completeSources).size!==value.completeSources.length ||
+        value.completeSources.some(id=>typeof id!=='string'||!/^[1-9]\d{0,5}$/.test(id))) ||
       visits.length + unidentified > sourceRows || value.completeCenters.some(center => !centers.slice(0,3).includes(center))) {
     throw Error('OPSMAP_SYNC_DAY_CONTRACT');
   }
@@ -87,6 +91,7 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
         !syncHash(sha256) || syncDigest(state) !== sha256 || !syncHash(state.fingerprint) ||
         !syncHash(state.snapshotSha256) || !syncHash(state.ledgerSha256) || !syncHash(state.indexSha256) ||
         !syncHash(state.catalogSha256) || !syncHash(state.baseSha256) || !syncHash(state.nearbySha256) ||
+        state.vehicleDeliverySha256!==undefined&&!syncHash(state.vehicleDeliverySha256) ||
         !isDay(state.asOf) || !Number.isFinite(Date.parse(state.committedAt)) ||
         state.runId!==undefined&&(!syncHash(state.runId)||state.sourceReadComplete!==true||!syncHash(state.observationHash)) ||
         state.catchupAfter!=null&&(!isDay(state.catchupAfter)||state.catchupAfter>state.asOf) ||
@@ -123,6 +128,9 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
     }));
     const nearby = readStageNearbyEvidence(await verifiedBytes(path.join(folder,'nearby.json'),state.nearbySha256,384*1024),
       {expected:state.nearbySha256,generation:index.sha256,registry,window:window90});
+    const vehicleDelivery=state.vehicleDeliverySha256?readOpsmapVehicleDelivery(await verifiedBytes(
+      path.join(folder,VEHICLE_DELIVERY_FILE),state.vehicleDeliverySha256,MAX_VEHICLE_DELIVERY_BYTES
+    ),{generation:index.sha256,registry,window:window90}):null;
     const snapshot = materializeSnapshot(sealedSnapshot);
     snapshot.rows = snapshot.rows.map(row => {
       const store = registry.get(row.customerCode);
@@ -131,7 +139,7 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
       const evidence = matching && (store.proof?.measurementKind || store.coordinateEvidence);
       return {...row,address:store?.address || '',...(evidence?{coordinateEvidence:evidence}:{})};
     });
-    return {state,folder,input,coverage,index,ledger,catalog,registry,nearby,baseCatalog:JSON.parse(baseBytes),sealedSnapshot,
+    return {state,folder,input,coverage,index,ledger,catalog,registry,nearby,vehicleDelivery,baseCatalog:JSON.parse(baseBytes),sealedSnapshot,
       snapshot:{...snapshot,source:'STAGE_VERIFIED_REGISTRY',sourceGeneration:index.sha256,sourceRunId:state.runId || null}};
   }
 

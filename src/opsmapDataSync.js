@@ -14,8 +14,9 @@ async function defaultCoverageBuilder(options) {
 import {openOpsmapSyncGenerationStore, syncDigest, syncHash, syncSha256, SYNC_MAX_DAY_BYTES,
   validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
 
-import {completeSyncObservation,nextSyncEvidence} from './opsmapSyncPolicy.js';
+import {completeSyncObservation,nextSyncEvidence,SYNC_CENTERS} from './opsmapSyncPolicy.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
+import {collectOpsmapVehicleDelivery,MAX_VEHICLE_DELIVERY_BYTES,VEHICLE_DELIVERY_FILE} from './opsmapVehicleDeliveryEvidence.js';
 import {continuingFixedLedger} from './fixedCoordinateCompletion.js';
 
 const DAY = 86_400_000;
@@ -173,7 +174,8 @@ async function copyCoverageCache(source, output) {
 }
 
 export async function createOpsmapDataSync({directory, seed, readLedger, readRegistry, readDay, readMissingDay,
-  readManualPins = async () => [], now = Date.now, appRoot = process.cwd(), includeOfficialRegions = true, buildCoverage = defaultCoverageBuilder, completeCoordinates} = {}) {
+  readManualPins = async () => [], now = Date.now, appRoot = process.cwd(), includeOfficialRegions = true, buildCoverage = defaultCoverageBuilder,
+  completeCoordinates,requiredSourceIds=[]} = {}) {
   const store = await openOpsmapSyncGenerationStore(directory,{appRoot,writable:true,readMissingDay});
   const statusFile = path.join(store.root,'sync-status.json');
   let flight;
@@ -195,7 +197,8 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
     const current = await store.read();
     if (bootstrap && current) return {state:'NOOP',generation:current.index.sha256,revision:current.state.revision};
     if (scheduledRun && (!syncHash(scheduledRun.runId)||!isDay(scheduledRun.date)||!completeCoordinates)) throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
-    if (scheduledRun?.runId && current?.state.runId===scheduledRun.runId && current.state.sourceReadComplete===true) {
+    if (scheduledRun?.runId && current?.state.runId===scheduledRun.runId && current.state.sourceReadComplete===true &&
+        requiredSourceIds.every(id=>current.vehicleDelivery?.completeSources?.[id]?.includes(scheduledRun.date))) {
       return {state:'PUBLISHED',generation:current.index.sha256,revision:current.state.revision,observedToday:true,
         sourceReadComplete:true,observationHash:current.state.observationHash};
     }
@@ -218,16 +221,19 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
     const changes = new Map();
     for (const date of datesToRead) {
       const day = await readDay(date);
+      if (scheduledRun && requiredSourceIds.length && !completeSyncObservation(day,SYNC_CENTERS,requiredSourceIds)) {
+        throw Object.assign(Error('OPSMAP_SCHEDULE_SOURCE_INCOMPLETE'),{date});
+      }
       if (day) changes.set(date,validateOpsmapSyncDay(day,date));
     }
     const todayEvidence=changes.get(target);
-    const sourceReadComplete=completeSyncObservation(todayEvidence);
+    const sourceReadComplete=completeSyncObservation(todayEvidence,SYNC_CENTERS,requiredSourceIds);
     if (scheduledRun && !sourceReadComplete) throw Object.assign(Error('OPSMAP_SCHEDULE_SOURCE_INCOMPLETE'),{date:target});
     if (scheduledRun) {
       const planned=opsmapDispatchDate(Date.parse(scheduledRun.issuedAt));
       if(planned>target) {
         const plan=await readDay(planned);
-        if (!completeSyncObservation(plan) || plan.visits.length) {
+        if (!completeSyncObservation(plan,SYNC_CENTERS,requiredSourceIds) || plan.visits.length) {
           throw Object.assign(Error('OPSMAP_SCHEDULE_PLAN_INCOMPLETE'),{date:planned});
         }
         if (plan.sourceRows) changes.set(planned,validateOpsmapSyncDay({...plan,planningOnly:true},planned));
@@ -248,7 +254,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
     const registryVersion = registry?.version || current?.state.registryVersion || initial?.facts.stores.registryVersion || null;
     const sameDays = [...changes].every(([date,doc]) => current?.state.dates[date] === syncDigest(doc));
     const fingerprint = syncDigest([registryVersion,base,ledger.sha256,manual]);
-    if (current?.state.fingerprint === fingerprint && sameDays && current.state.revision === expected &&
+    if (current?.vehicleDelivery && current.state.fingerprint === fingerprint && sameDays && current.state.revision === expected &&
         (!scheduledRun || durableActive?.generation===current.index.sha256 && durableActive.revision===current.state.revision)) {
       return {state:'NOOP',generation:current.index.sha256,revision:current.state.revision,
         observedToday:changes.has(target),sourceReadComplete,observationHash};
@@ -266,6 +272,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       const window = datesFor(asOf,90);
       const locations = new Map(catalog.stores.filter(row => row.registered && hasFixedCoordinatePoint(row))
         .map(row => [row.code,row.matchHash]));
+      const vehicleDelivery=collectOpsmapVehicleDelivery(asOf,locations);
       const nearby = new Map();
       let count = 0, completed = 0;
       for (const date of window) {
@@ -273,6 +280,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
         const bytes = await boundedRead(path.join(observed,date+'.json'),SYNC_MAX_DAY_BYTES);
         if (syncSha256(bytes) !== dates[date]) throw Error('OPSMAP_SYNC_DAY_DIGEST');
         const day = JSON.parse(bytes);
+        vehicleDelivery.add(day);
         count++;
         completed += day.visits.length;
         for (const [,code,vehicle,,addressHash] of day.visits) {
@@ -311,9 +319,13 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
         start:window90.start,end:window90.end,observedDates:window90.observedDates.all,
         rows:[...nearby].map(([code,{date,vehicles,days}]) => [code,date,vehicles.size===1?[...vehicles][0]:'',days])});
       await atomicCoverageWrite(path.join(candidate.folder,'nearby.json'),nearbyBytes);
+      const vehicleDeliveryBytes=JSON.stringify(vehicleDelivery.finish(built.index.sha256,window90.observedDates));
+      if(Buffer.byteLength(vehicleDeliveryBytes)>MAX_VEHICLE_DELIVERY_BYTES)throw Error('OPSMAP_VEHICLE_DELIVERY_LIMIT');
+      await atomicCoverageWrite(path.join(candidate.folder,VEHICLE_DELIVERY_FILE),vehicleDeliveryBytes);
       const ready = await store.publish(candidate,{fingerprint,asOf,committedAt,registryVersion,dates,generation:built.index.sha256,
         snapshotSha256:syncSha256(snapshotBytes),ledgerSha256:syncSha256(ledgerBytes),baseSha256:syncSha256(baseBytes),
         catalogSha256:syncSha256(catalogBytes),indexSha256:syncSha256(indexBytes),nearbySha256:syncSha256(nearbyBytes),
+        vehicleDeliverySha256:syncSha256(vehicleDeliveryBytes),
         ...(plannedDates.size?{plannedDates:[...plannedDates].sort()}:{}),
         ...(scheduledRun?{runId:scheduledRun.runId,observationHash,sourceReadComplete,catchupAfter}:{} )});
       published = true;

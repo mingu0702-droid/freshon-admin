@@ -39,8 +39,9 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
   const account = reuse && valid(id,256) && valid(password,1024) ? createStageDeliveryAdminPhotoSession({id,password,fetchImpl}) : null;
   const hasSource = enabled && (!!account || /^[\x20-\x7e]{1,8192}$/.test(cookie));
   const scope = Object.entries(syncCenters || {});
-  if (!scope.length || scope.some(([center,id]) => !['osan','yeongnam','honam'].includes(center) ||
+  if (!scope.length || scope.some(([center,id]) => !['osan','osanColdStorage','yeongnam','honam'].includes(center) ||
       typeof id !== 'string' || !/^[1-9]\d{0,5}$/.test(id) || (center==='osan') !== (id==='1')) ||
+      (syncCenters.osanColdStorage!==undefined && syncCenters.osanColdStorage!=='2') ||
       new Set(scope.map(([,id])=>id)).size !== scope.length) throw error('DELIVERY_SOURCE_CENTER_CONFIG', 503);
   const readerFor = id => createOperationalPhotoTaskReader({async rawRequest(path, {method, signal}) {
     const url = new URL(path, deliveryOrigin);
@@ -52,7 +53,9 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     return fetchImpl(url, {method, signal, redirect:'error', cache:'no-store', headers:{Accept:'application/json', Cookie:cookie}});
   }});
   const read = readerFor('1');
-  const syncReaders = scope.map(([center,id]) => ({center,id,reader:id==='1'?read:readerFor(id)}));
+  const syncReaders = scope.map(([center,id]) => ({
+    center:center==='osanColdStorage'?'osan':center,id,reader:id==='1'?read:readerFor(id)
+  }));
 
   const inflight = new Map();
   let cached;
@@ -123,8 +126,10 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const projected = [], visits = [];
     const observations = [];
     for (const {center,id:expected,reader} of syncReaders) {
-      const {tasks,observation} = await readTasks(date,reader,expected).catch(failure=>{throw Object.assign(failure,{date,center});});
-      observations.push({center,...observation});
+      const {tasks,observation} = await readTasks(date,reader,expected).catch(failure=>{
+        throw Object.assign(failure,{date,center,sourceId:expected});
+      });
+      observations.push({center,sourceId:expected,...observation});
       for (const task of tasks) {
         const code = task.customer?.erpCode ?? task.customerErpCode;
         const vehicle = taskVehicle(task);
@@ -136,11 +141,13 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       }
     }
     // readTasks checked all pages, date and center scope; zero tasks remain evidence.
-    const completeCenters = observations.filter(item => item.complete === true).map(item => item.center);
+    const complete = observations.filter(item => item.complete === true);
+    const completeCenters = [...new Set(complete.map(item => item.center))];
+    const completeSources = complete.map(item=>item.sourceId);
     projected.sort((a,b) => a[0].localeCompare(b[0]));
     visits.sort((a,b) => a[0].localeCompare(b[0]));
     return validateOpsmapSyncDay({date,sourceRows:projected.length,unidentified:0,proof:'VERIFIED_COMPLETE_DAY',
-      proofHash:syncDigest([observations,projected,visits]),completeCenters,visits,tasks:projected},date);
+      proofHash:syncDigest([observations,projected,visits]),completeCenters,completeSources,visits,tasks:projected},date);
   };
   readDate.configured = hasSource;
   return readDate;

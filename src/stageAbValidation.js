@@ -13,8 +13,9 @@ import {createOfficialAddressLookup,createOfficialAddressReview} from './opsmapO
 import {readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
 import {resolvePreservedAddressBatch,searchPreservedRegistry} from './privateCustomerSearch.js';
 import {archivedOpsmapAssignments} from './opsmapSyncGeneration.js';
+import {opsmapVehicleDeliveryPage} from './opsmapVehicleDeliveryEvidence.js';
 
-import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_NEARBY_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,MAX_STAGE_BUNDLE_BYTES} from './stageScope.js';
+import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_NEARBY_ROUTE,STAGE_VEHICLE_DELIVERY_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,MAX_STAGE_BUNDLE_BYTES} from './stageScope.js';
 export {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_NEARBY_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,MAX_STAGE_BUNDLE_BYTES} from './stageScope.js';
 
 const currentProfile = {
@@ -353,6 +354,30 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
     return requireStaff(req, res, () => {
       if (validation.active() !== prepared) return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
       return res.json(stageNearbyResponse(prepared.nearby, fixed));
+    });
+  });
+  router.get(STAGE_VEHICLE_DELIVERY_ROUTE, requireStaff, noStore, async (req,res)=>{
+    const {generation,center,vehicle,offset='0',limit='200',box}=req.query;
+    if(typeof generation!=='string'||!/^[a-f0-9]{64}$/.test(generation)||
+        typeof offset!=='string'||!/^\d{1,5}$/.test(offset)||typeof limit!=='string'||!/^\d{1,3}$/.test(limit)) {
+      return res.status(400).json({error:'STAGE_VEHICLE_DELIVERY_QUERY'});
+    }
+    const prepared=validation.active();
+    const evidence=prepared?.scheduled?.vehicleDelivery;
+    if(!evidence)return res.status(503).json({error:'STAGE_VEHICLE_DELIVERY_NOT_READY'});
+    if(prepared.generation!==generation)return res.status(409).json({error:'STAGE_VEHICLE_DELIVERY_GENERATION_CHANGED'});
+    let page;
+    try {
+      const values=box===undefined?undefined:typeof box==='string'&&box.length<=100?box.split(','):null;
+      if(values!==undefined&&(!values||values.some(value=>!/^-?\d+(?:\.\d+)?$/.test(value))))throw Error('STAGE_VEHICLE_DELIVERY_QUERY');
+      page=opsmapVehicleDeliveryPage(evidence,prepared.registry,{center,vehicle,offset:Number(offset),limit:Number(limit),box:values?.map(Number)});
+    }
+    catch {return res.status(400).json({error:'STAGE_VEHICLE_DELIVERY_QUERY'});}
+    const codes=[...new Set(page.rows.map(row=>row.customerCode))];
+    const fixed=codes.length?await Promise.resolve().then(()=>readBaseVehicles?.(codes)).catch(()=>null):null;
+    return requireStaff(req,res,()=>{
+      if(validation.active()!==prepared)return res.status(409).json({error:'STAGE_VEHICLE_DELIVERY_GENERATION_CHANGED'});
+      return res.json(stageNearbyResponse({...page,sourceRunId:prepared.scheduled.state.runId||null},fixed));
     });
   });
   router.post(STAGE_ADDRESS_BATCH_ROUTE,requireStaff,noStore,(req,res,next)=>{

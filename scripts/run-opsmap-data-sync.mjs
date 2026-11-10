@@ -16,7 +16,7 @@ import {boundedRead, privateCoverageDirectory} from '../src/shadowCoverage/cover
 import {atomicCoverageWrite} from '../src/shadowCoverage/fileStore.js';
 import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from '../src/opsmapDurableGeneration.js';
 import {opsmapScheduleConfig,publishOpsmapScheduledRun,verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
-import {SYNC_CENTERS} from '../src/opsmapSyncPolicy.js';
+import {SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
 
 const appRoot = fileURLToPath(new URL('../',import.meta.url));
 const env = process.env;
@@ -64,8 +64,13 @@ async function buildWorker({mode,settingsFile,durable}) {
       if (!['UPDATED','NOOP'].includes(status.phase)) throw Error('OPSMAP_SYNC_REGISTRY_INCOMPLETE');
       return registry.read();
     };
-    if(durable && SYNC_CENTERS.some(center=>!Object.hasOwn(config.deliveryCenters || {},center))) {
+    if(durable && Object.entries(SYNC_DELIVERY_SOURCES).some(([center,id])=>config.deliveryCenters?.[center]!==id)) {
       throw Error('DELIVERY_SOURCE_CENTER_CONFIG');
+    }
+    const verifiedSources=config.deliveryVerifiedSourceIds;
+    if(durable && (!Array.isArray(verifiedSources)||verifiedSources.length!==4||
+        Object.values(SYNC_DELIVERY_SOURCES).some(id=>!verifiedSources.includes(id)))) {
+      throw Error('DELIVERY_SOURCE_ENTITLEMENT_UNVERIFIED');
     }
     const delivery = createStageDatedDeliveryReader({env,syncCenters:config.deliveryCenters});
     if(!delivery.configured)throw Error('DELIVERY_SOURCE_SESSION_REQUIRED');
@@ -119,7 +124,7 @@ async function buildWorker({mode,settingsFile,durable}) {
   if(durable&&!completeCoordinates)throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
   await durable?.restoreSpool(directory);
   return createOpsmapDataSync({directory,seed:config.seed,readLedger,readRegistry,readDay,readManualPins,appRoot,completeCoordinates,
-    readMissingDay:durable?.readDay});
+    readMissingDay:durable?.readDay,requiredSourceIds:durable?Object.values(SYNC_DELIVERY_SOURCES):[]});
 }
 
 async function run() {

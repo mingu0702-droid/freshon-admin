@@ -21,6 +21,8 @@ import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
 import {opsmapDispatchDate} from '../src/snapshotRefreshEvidence.js';
 import {createShadowCoverageStore} from '../src/shadowCoverage/store.js';
+import {completeSyncObservation,SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
+import {collectOpsmapVehicleDelivery,opsmapVehicleDeliveryPage,readOpsmapVehicleDelivery} from '../src/opsmapVehicleDeliveryEvidence.js';
 
 const date='2026-11-11', previousDate='2026-11-10', oldDate='2026-07-01';
 const clockStart=Date.parse(date+'T02:00:00+09:00');
@@ -219,6 +221,7 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   assert.equal(restored.index.sha256,replacement.generation);
   assert.equal(restored.snapshot.sourceRunId,replacement.runId);
   assert.equal(restored.ledger.sha256,ledger.sha256);
+  assert.equal(restored.vehicleDelivery.generation,replacement.generation);
   assert(api.calls.slice(fetchedAt).every(({name})=>!name.startsWith('day-')));
   assert.equal((await restarted.readDay(oldDate)).visits.length,1);
   assert(api.calls.at(-1).name.startsWith('day-'));
@@ -258,6 +261,7 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   };
   const base=await createStage();
   assert.equal((await fetch(base+'/preview/snapshot')).status,401);
+  assert.equal((await fetch(base+'/private/stage-vehicle-delivery-evidence?generation='+replacement.generation)).status,401);
   const login=await fetch(base+'/auth/login',{method:'POST',headers:{Origin:STAGE_ORIGIN,'Content-Type':'application/json'},
     body:JSON.stringify({id:'fixture',password})});
   assert.equal(login.status,200);
@@ -289,6 +293,16 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   assert.equal(evidence.scheduled.sourceRunId,replacement.runId);
   assert.equal(evidence.scheduled.run.runId,unchanged.runId);
   assert.equal(evidence.scheduled.lastFailure.code,'FIXED_STORE_WRITE');
+  const deliveries=await get('/private/stage-vehicle-delivery-evidence?vehicle=122&limit=1&generation='+replacement.generation);
+  assert.equal(deliveries.sourceRunId,replacement.runId);
+  assert.equal(deliveries.rows[0].actualVehicle,'122');
+  assert.equal(deliveries.rows[0].customerCode,code);
+  assert.equal(deliveries.nextOffset,null);
+  assert.deepEqual(deliveries.fixedRows,[]);
+  const outside=await get('/private/stage-vehicle-delivery-evidence?box=128,37,129,38&generation='+replacement.generation);
+  assert.deepEqual(outside.rows,[]);
+  const stale=await fetch(base+'/private/stage-vehicle-delivery-evidence?generation='+baseline.index.sha256,{headers:{cookie}});
+  assert.equal(stale.status,409);
 
   headOffline=true;
   const cold=await createStage();
@@ -316,7 +330,7 @@ test('Delivery restartable login uses existing account only with explicit date-r
   const calls=[];
   let wrongCenter=false;
   const read=createStageDatedDeliveryReader({env:{...env,OPSMAP_STAGE_DELIVERY_DATED_REUSE_APPROVED:'1'},
-    syncCenters:{osan:'1',yeongnam:'7',honam:'8'},async fetchImpl(url,options){
+    syncCenters:SYNC_DELIVERY_SOURCES,async fetchImpl(url,options){
       assert.equal(url.origin,'https://delivery-bali.chabyulhwa.com');
       calls.push(url.pathname);
       if(url.pathname==='/api/auth/login'){
@@ -324,7 +338,7 @@ test('Delivery restartable login uses existing account only with explicit date-r
         return Response.json({token:'fixture-token'});
       }
       assert.equal(options.method,'GET');
-      if(wrongCenter&&url.searchParams.get('logisticsCenterId')==='7') {
+      if(wrongCenter&&url.searchParams.get('logisticsCenterId')==='3') {
         return Response.json({content:[{id:1,customer:{erpCode:code},carrier:{enteringDatedAt:date,logisticsCenterId:1}}],
           totalElements:1,totalPages:1});
       }
@@ -332,11 +346,35 @@ test('Delivery restartable login uses existing account only with explicit date-r
     }});
   const result=await read.readObservation(date);
   assert.deepEqual(result.completeCenters,['osan','yeongnam','honam']);
+  assert.deepEqual(result.completeSources,['1','2','3','4']);
+  assert.equal(completeSyncObservation(result,undefined,['1','2','3','4']),true);
+  assert.equal(completeSyncObservation({...result,completeSources:['1','3','4']},undefined,['1','2','3','4']),false);
   assert.equal(result.sourceRows,0);
   assert.equal(calls.filter(item=>item==='/api/auth/login').length,1);
-  assert.equal(calls.filter(item=>item==='/api/bali/task').length,3);
+  assert.equal(calls.filter(item=>item==='/api/bali/task').length,4);
   wrongCenter=true;
-  await assert.rejects(read.readObservation(date),{code:'DELIVERY_SOURCE_SCOPE',date,center:'yeongnam'});
+  await assert.rejects(read.readObservation(date),{code:'DELIVERY_SOURCE_SCOPE',date,center:'yeongnam',sourceId:'3'});
+});
+
+test('route evidence separates trucks and same-building customer codes and keeps missing scope unverified',()=>{
+  const addressHash=archiveAddressHash(address), second='T99112', end='2026-11-11';
+  const start='2026-08-14', dates=['2026-11-09','2026-11-11'];
+  const observedDates={all:dates,osan:dates,yeongnam:[],honam:[]};
+  const collector=collectOpsmapVehicleDelivery(end,new Map([[code,addressHash],[second,addressHash]]));
+  const rows=(vehicle)=>[[syncSha256(vehicle),code,vehicle,'osan',addressHash]];
+  collector.add({date:dates[0],visits:rows('101')});
+  collector.add({date:dates[1],visits:[...rows('122'),[syncSha256(second),second,'122','osan',addressHash],
+    [syncSha256('stale'),code,'202','osan',syncSha256('different-address')]]});
+  const generation=syncSha256('delivery-fixture');
+  const registry=new Map([code,second].map(k=>[k,{hasPoint:true,lat:37.15,lng:127.06}]));
+  const actual=readOpsmapVehicleDelivery(JSON.stringify(collector.finish(generation,observedDates)),{
+    generation,registry,window:{start,end,observedDates}
+  });
+  const {rows:page,completeSources,total}=opsmapVehicleDeliveryPage(actual,registry);
+  assert.equal(total,3);
+  assert.deepEqual(page.map(row=>[row.customerCode,row.actualVehicle,row.deliveryDates,row.deliveryWeekdays]),
+    [[code,'101',[dates[0]],[1]],[code,'122',[dates[1]],[3]],[second,'122',[dates[1]],[3]]]);
+  assert.deepEqual(completeSources,{'1':[],'2':[],'3':[],'4':[]});
 });
 
 test('21:00 loads the next dispatch, midnight replaces drafts, and a failed source keeps the last generation',async t=>{
