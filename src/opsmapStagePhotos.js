@@ -3,7 +3,7 @@ import {deliveryPhotoUpstreamError} from './opsmapDeliveryAdminTransport.js';
 import {createOperationalPhotoExtension, createOperationalPhotoMetadataReader, createOperationalPhotoTaskReader} from './opsmapOperationalPhotos.js';
 import {mountDeliveryPhotoConfig} from './opsmapDeliveryPhotoRouter.js';
 import {createStageDeliveryAdminPhotoSession, STAGE_DELIVERY_ORIGIN} from './opsmapStageDeliveryAdminSession.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageAbValidation.js';
+import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 const DAY_MS = 86400000;
 const validSecret = (value, max) => typeof value === 'string' && value.length <= max && value.trim().length > 0 && !/[\x00-\x1f\x7f]/.test(value);
 

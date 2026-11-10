@@ -1,7 +1,7 @@
 import { cellToBoundary, cellToLatLng, cellToParent, getResolution, greatCircleDistance, gridDisk, isValidCell, latLngToCell, UNITS } from 'h3-js';
-import { isDay, PERIODS } from './coverageFiles.js';
+import { isDay, PERIODS, datesFor } from './coverageFiles.js';
 
-export { isDay, PERIODS };
+export { isDay, PERIODS, datesFor };
 export const CENTERS = ['all', 'osan', 'yeongnam', 'honam'];
 export const BASE_RESOLUTION = 8;
 export const MAX_VISIBLE_CELLS = 360;
@@ -14,11 +14,6 @@ const CODE = /^[A-Z]\d{1,20}$/;
 const SHA = /^[a-f0-9]{64}$/;
 const PROTECTED = /[\u0000-\u001f]|비밀번호|보안키|공동현관|bearer\s|(?:01[016789])[- ]?\d{3,4}[- ]?\d{4}/i;
 
-export function datesFor(end, days) {
-  if (!isDay(end) || !PERIODS.includes(days)) throw Error('COVERAGE_PERIOD_INVALID');
-  return Array.from({ length: days }, (_, index) =>
-    new Date(Date.parse(end) - (days - 1 - index) * DAY).toISOString().slice(0, 10));
-}
 
 export function isPoint(lat, lng) {
   return Number.isFinite(lat) && Number.isFinite(lng) &&

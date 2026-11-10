@@ -77,11 +77,11 @@ export function readFixedCoordinateLedger(bytes, expectedSha256) {
   return ledger;
 }
 
-export function reviseFixedCoordinateLedger(ledger, {expectedRevision, rows = [], rollbacks = [], updatedAt} = {}) {
+export function reviseFixedCoordinateLedger(ledger, {expectedRevision, rows = [], replacements = [], rollbacks = [], updatedAt} = {}) {
   const current = validateFixedCoordinateLedger(ledger);
   if (current.revision !== expectedRevision) throw Error('FIXED_COORDINATE_CAS');
-  if (!validTime(updatedAt) || !Array.isArray(rows) || !Array.isArray(rollbacks) ||
-      rows.length + rollbacks.length > 10_000) throw Error('FIXED_COORDINATE_INPUT');
+  if (!validTime(updatedAt) || !Array.isArray(rows) || !Array.isArray(replacements) || !Array.isArray(rollbacks) ||
+      rows.length + replacements.length + rollbacks.length > 10_000) throw Error('FIXED_COORDINATE_INPUT');
   const revision = current.revision + 1;
   const records = {...current.records};
   const seen = new Set();
@@ -105,6 +105,15 @@ export function reviseFixedCoordinateLedger(ledger, {expectedRevision, rows = []
       if (previous.addressHash === point.addressHash && previous.lat === point.lat && previous.lng === point.lng) continue;
       throw Error('FIXED_COORDINATE_LOCKED');
     }
+    append(code,point,null);
+  }
+  for (const {point,expectedAddressHash,currentAddressHash} of replacements) {
+    const code=point?.customerCode;register(code);checkPoint(point,code);
+    const previous=records[code]?.at(-1)?.point;
+    if (!previous || previous.coordinateSource==='MANUAL_PIN' || !HASH.test(expectedAddressHash||'') ||
+        previous.addressHash!==expectedAddressHash || !HASH.test(currentAddressHash||'') ||
+        point.addressHash!==currentAddressHash || currentAddressHash===expectedAddressHash ||
+        !point.verifiedAt || Date.parse(point.verifiedAt)>Date.parse(updatedAt)) throw Error('FIXED_COORDINATE_REBIND_CONFLICT');
     append(code,point,null);
   }
   for (const {customerCode:code, toRevision, currentAddressHash} of rollbacks) {

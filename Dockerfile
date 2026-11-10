@@ -8,7 +8,7 @@ RUN apt-get update \
   && pip3 install --no-cache-dir msoffcrypto-tool openpyxl \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 COPY . .
 

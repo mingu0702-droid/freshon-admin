@@ -1,3 +1,4 @@
+import {createSharedInflightRead} from './sharedInflightRead.js';
 import {createDeliveryAdminPhotoSource, DeliveryPhotoError, deliveryDate, validatePhotoQuery, validDeliveryId} from './opsmapDeliveryPhotos.js';
 import {createDeliveryAdminPhotoTransport, DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, DELIVERY_ADMIN_PHOTO_HOSTS, deliveryPhotoUpstreamError} from './opsmapDeliveryAdminTransport.js';
 import {mountOpsmapDeliveryPhotoRoutes} from './opsmapDeliveryPhotoRouter.js';
@@ -17,7 +18,8 @@ async function waitForPhotoOperation(work, signal) {
 // Read only the selected day through the existing Delivery reader; never scan history.
 // Only three identity fields leave this adapter, without retaining source rows.
 export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate, customerScoped = false} = {}) {
-  const active = new Map(), identities = new Map();
+  const active=createSharedInflightRead({maxEntries:8,timeoutMs:15000,
+    error:code=>new DeliveryPhotoError(code==='READ_BUSY'?'PHOTO_RATE_LIMITED':'PHOTO_TIMEOUT',code==='READ_BUSY'?429:504)}), identities=new Map();
   return async (query, {signal} = {}) => {
     if (typeof readTaskRows !== 'function') fail('SOURCE_UNAVAILABLE');
     const date = query.date || (typeof defaultDate === 'function' ? defaultDate() : '');
@@ -27,13 +29,8 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate,
     for (const [id, entry] of identities) if (entry.expiresAt <= now) identities.delete(id);
     if (identities.has(key)) return identities.get(key).records.map(row => ({...row}));
     const activeKey = customerScoped ? key : date;
-    if (!active.has(activeKey)) {
-      const operation = Promise.resolve().then(() => readTaskRows(date, {signal, ...(customerScoped ? {customerCode:query.customerCode} : {})}));
-      active.set(activeKey, operation);
-      void operation.finally(() => active.delete(activeKey)).catch(() => {});
-    }
-    const operation = active.get(activeKey);
-    const rows = await waitForPhotoOperation(() => operation, signal);
+    const rows=await active.read(activeKey,sharedSignal=>readTaskRows(date,{signal:sharedSignal,
+      ...(customerScoped?{customerCode:query.customerCode}:{})}),{signal});
     if (!Array.isArray(rows) || rows.length > 10000) fail('INVALID_PHOTO_RESPONSE', 502);
     if (signal?.aborted) fail('PHOTO_TIMEOUT', 504);
     const records = new Map();
@@ -80,16 +77,10 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
   };
   const transport = createDeliveryAdminPhotoTransport({approvedRequest:rawRequest, imageFetch, hasApprovedMediaSession:hasSession,
     hasApprovedSession:() => hasSession() || (isEnabled() && canPrepareSource?.() === true)});
-  const pending = new Map();
-  const requestJson = (path, options) => {
-    // Share only an active exact-detail read. Delete immediately on settlement;
-    // no persistent JSON/photo cache, including after process restart.
-    if (!pending.has(path)) {
-      const operation = transport.requestJson(path, options).finally(() => pending.delete(path));
-      pending.set(path, operation);
-    }
-    return pending.get(path);
-  };
+  const pending=createSharedInflightRead({maxEntries:8,timeoutMs:15000,
+    error:code=>new DeliveryPhotoError(code==='READ_BUSY'?'PHOTO_RATE_LIMITED':'PHOTO_TIMEOUT',code==='READ_BUSY'?429:504)});
+  const requestJson=(path,options={})=>pending.read(path,signal=>
+    transport.requestJson(path,{...options,signal}),{signal:options.signal});
   const metadata = async (identity, options) => {
     await ensureSession(identity, options);
     if (typeof listDeliveryMetadata !== 'function') fail('SOURCE_UNAVAILABLE');

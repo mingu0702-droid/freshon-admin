@@ -1,6 +1,9 @@
 import {createHash} from 'node:crypto';
 
-const source = 'https://www.data.go.kr/data/15083033/fileData.do';
+const approvedSources = new Set([
+  'https://www.data.go.kr/data/15083033/fileData.do',
+  'https://www.data.go.kr/data/15156424/fileData.do'
+]);
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const digest = /^[a-f0-9]{64}$/;
 const aliases = new Map(Object.entries({
@@ -29,7 +32,7 @@ export function createOfficialAddressLookup(buffer, {sha256: expected} = {}) {
   let index;
   try { index = JSON.parse(buffer.toString('utf8')); } catch { throw Error('OFFICIAL_ADDRESS_INDEX_JSON'); }
   if (!index || Object.keys(index).length !== 5 || index.schema !== 'opsmap-official-address-index-v1' ||
-      index.source !== source || !/^\d{4}-\d{2}-\d{2}$/.test(index.date || '') ||
+      !approvedSources.has(index.source) || !/^\d{4}-\d{2}-\d{2}$/.test(index.date || '') ||
       !digest.test(index.datasetSha256 || '') || !Array.isArray(index.rows) || !index.rows.length || index.rows.length > 2000) {
     throw Error('OFFICIAL_ADDRESS_INDEX_SCHEMA');
   }
@@ -40,11 +43,15 @@ export function createOfficialAddressLookup(buffer, {sha256: expected} = {}) {
         row.lat < 33 || row.lat > 39.5 || row.lng < 124 || row.lng > 132 || rows.has(row.addressSha256)) {
       throw Error('OFFICIAL_ADDRESS_INDEX_ROW');
     }
-    rows.set(row.addressSha256, Object.freeze({lat:row.lat, lng:row.lng}));
+    rows.set(row.addressSha256, Object.freeze({lat:row.lat, lng:row.lng, buildingSha256:row.buildingSha256}));
   }
+  const find=query=>{const key=officialAddressKey(query);return key?{addressSha256:sha256(key),point:rows.get(sha256(key))}:null;};
   return Object.freeze({lookup(query) {
-    const key = officialAddressKey(query);
-    return key ? rows.get(sha256(key)) || null : null;
+    const point=find(query)?.point;return point?Object.freeze({lat:point.lat,lng:point.lng}):null;
+  },resolve(query) {
+    const match=find(query);if(!match?.point)return null;
+    return Object.freeze({...match.point,addressSha256:match.addressSha256,evidenceSource:'OFFICIAL_ADDRESS_DATA',
+      datasetSha256:index.datasetSha256,indexSha256:expected,datasetDate:index.date,measurementKind:'BUILDING_LOCATION'});
   }});
 }
 

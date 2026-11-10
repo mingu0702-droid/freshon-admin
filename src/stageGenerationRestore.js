@@ -1,6 +1,6 @@
 import {constants} from 'node:fs';
 import {open,realpath} from 'node:fs/promises';
-import {MAX_STAGE_BUNDLE_BYTES,STAGE_ORIGIN,STAGE_SERVICE} from './stageAbValidation.js';
+import {MAX_STAGE_BUNDLE_BYTES,STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
 
 const file='/var/data/opsmap-stage/verified-generation-v1.json.gz';
 

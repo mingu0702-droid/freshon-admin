@@ -11,6 +11,17 @@ function projection(row){
  return r;
 }
 const preservedIndexes=new WeakMap();
+function snapshotIndex(snapshot){
+ const rows=snapshot?.rows || [];
+ const version=snapshot?.sourceGeneration || snapshot?.version || snapshot?.preservation?.version || null;
+ let entry=preservedIndexes.get(rows);
+ if(!entry||entry.version!==version||entry.length!==rows.length){
+  const byCode=new Map();
+  for(const row of rows){if(!code(row.customerCode))continue;const found=byCode.get(row.customerCode)||[];found.push(row);byCode.set(row.customerCode,found);}
+  entry={version,length:rows.length,byCode,byAddress:null};preservedIndexes.set(rows,entry);
+ }
+ return entry;
+}
 function exactAddressKey(address){
  const prepared=prepareRecoveryCoordinateAddress(address);
  if(!prepared.query||!['ROAD','LOT'].includes(prepared.addressKind))return null;
@@ -19,25 +30,20 @@ function exactAddressKey(address){
   .replace(/^전북특별자치도/,'전북').replace(/^전라([북남])도/,'전$1').replace(/^충청([북남])도/,'충$1').replace(/^경상([북남])도/,'경$1');
 }
 export function searchPreservedRegistry(query,snapshot){
- const rows=snapshot.rows;
- let byAddress=preservedIndexes.get(rows);
- if(!byAddress){
-  byAddress=new Map();
-  for(const row of rows){
-   const key=exactAddressKey(row.address);
-   if(!key||!code(row.customerCode))continue;
-   const matches=byAddress.get(key)||[];
-   matches.push(row);byAddress.set(key,matches);
-  }
-  preservedIndexes.set(rows,byAddress);
- }
+ const rows=snapshot.rows,index=snapshotIndex(snapshot);
  const matchedBy=code(query.toUpperCase())?'CODE':'ADDRESS';
- const matches=matchedBy==='CODE'?rows.filter(row=>row.customerCode===query.toUpperCase()):byAddress.get(exactAddressKey(query))||[];
- return {ok:true,data:matches.slice(0,50).map(row=>projection({...row,matchedBy})),
+ if(matchedBy==='ADDRESS'&&!index.byAddress){
+  const byAddress=new Map();
+  for(const row of rows){const key=exactAddressKey(row.address);if(!key||!code(row.customerCode))continue;
+   const matches=byAddress.get(key)||[];matches.push(row);byAddress.set(key,matches);}
+  index.byAddress=byAddress;
+ }
+ const matches=matchedBy==='CODE'?index.byCode.get(query.toUpperCase())||[]:index.byAddress.get(exactAddressKey(query))||[];
+ return {ok:true,data:matches.slice(0,50).map(row=>({...projection(row),matchedBy})),
   meta:{source:'STAGE_VERIFIED_REGISTRY',currentness:'PRESERVED_VALIDATION',customerMatchVerified:false,complete:false,truncated:matches.length>50}};
 }
 export async function searchCustomerSummaries({query,snapshot,searchMaster,signal,deadline}){
- const rows=snapshot?.rows||[],byCode=new Map(rows.filter(r=>code(r.customerCode)).map(r=>[r.customerCode,r])),needle=text(query),exact=byCode.get(query.toUpperCase());
+ const rows=snapshot?.rows||[],index=snapshotIndex(snapshot),byCode={get:key=>index.byCode.get(key)?.at(-1)},needle=text(query),exact=byCode.get(query.toUpperCase());
  const local=exact?[exact]:rows.filter(r=>text(r.customerName).includes(needle)||[r.address,r.customerAddress].some(v=>v&&text(v).includes(needle))).slice(0,50);
  if(exact)return {ok:true,data:local.map(projection),meta:{source:'EXISTING_PRODUCTION_SNAPSHOT',matchedBy:'CODE',customerMatchVerified:false,complete:false,currentness:'UNCONFIRMED'}};
  let value,sourceError;

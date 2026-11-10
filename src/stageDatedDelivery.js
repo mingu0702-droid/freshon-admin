@@ -1,6 +1,6 @@
 import {createOperationalPhotoTaskReader} from './opsmapOperationalPhotoTaskReader.js';
 import {assertDeliverySourceObservation, deliverySourceObservation} from './snapshotRefreshEvidence.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageAbValidation.js';
+import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {archiveAddressHash} from './stageArchivedDelivery.js';
 import {syncDigest, syncSha256, validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
@@ -116,11 +116,12 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
         if (status === 'COMPLETED') visits.push([id,code,vehicle,center,archiveAddressHash(address)]);
       }
     }
-    if (!projected.length) return null;
+    // readTasks checked all pages, date and center scope; zero tasks remain evidence.
+    const completeCenters = observations.filter(item => item.complete === true).map(item => item.center);
     projected.sort((a,b) => a[0].localeCompare(b[0]));
     visits.sort((a,b) => a[0].localeCompare(b[0]));
-    return validateOpsmapSyncDay({date,sourceRows:projected.length,unidentified:0,proof:'OBSERVED_STAGE_DELIVERY_READ',
-      proofHash:syncDigest([observations,projected,visits]),completeCenters:[],visits,tasks:projected},date);
+    return validateOpsmapSyncDay({date,sourceRows:projected.length,unidentified:0,proof:'VERIFIED_COMPLETE_DAY',
+      proofHash:syncDigest([observations,projected,visits]),completeCenters,visits,tasks:projected},date);
   };
   return readDate;
 }

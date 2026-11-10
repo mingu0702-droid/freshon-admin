@@ -5,11 +5,17 @@ import {createFixedCoordinateResolver, hasFixedCoordinatePoint, validateFixedCoo
 import {snapshotProjection, validateSnapshotProjection} from './productionSnapshotStore.js';
 import {archiveAddressHash} from './stageArchivedDelivery.js';
 import {boundedRead, isDay, privateCoverageDirectory} from './shadowCoverage/coverageFiles.js';
-import {datesFor} from './shadowCoverage/model.js';
-import {atomicCoverageWrite} from './shadowCoverage/store.js';
-import {buildShadowCoverage} from '../scripts/build-shadow-coverage.mjs';
+import {datesFor} from './shadowCoverage/coverageFiles.js';
+import {atomicCoverageWrite} from './shadowCoverage/fileStore.js';
+async function defaultCoverageBuilder(options) {
+  const {buildShadowCoverage} = await import('../scripts/build-shadow-coverage.mjs');
+  return buildShadowCoverage(options);
+}
 import {openOpsmapSyncGenerationStore, syncDigest, syncHash, syncSha256, SYNC_MAX_DAY_BYTES,
   validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
+
+import {completeSyncObservation,nextSyncEvidence} from './opsmapSyncPolicy.js';
+import {continuingFixedLedger} from './fixedCoordinateCompletion.js';
 
 const DAY = 86_400_000;
 const kstDate = ms => new Date(ms + 9*3_600_000).toISOString().slice(0,10);
@@ -29,21 +35,33 @@ function rebindCatalog(base, registry) {
         !['ACTIVE','DELETED'].includes(lifecycle)) throw Error('OPSMAP_SYNC_REGISTRY_ROW');
     seen.add(code);
     const previous = rows.get(code);
+    const previousAddressHash = coordinateAddressHash(previous?.address);
     if (lifecycle === 'DELETED') {
-      if (previous && registry.deletionPolicy === 'EXPLICIT_ONLY' && registry.lifecycleField) rows.set(code,{...previous,registered:false});
+      if (previous?.registered && code !== 'S191541' && registry.deletionPolicy === 'EXPLICIT_ONLY' && registry.lifecycleField) {
+        rows.set(code,{...previous,registered:false,registryTransition:{kind:'EXPLICIT_DELETION',
+          previousAddressHash,version:registry.version}});
+      }
       continue;
     }
     const binding = coordinateAddressHash(address);
     // An empty or malformed address from a partial update does not retire a proven pin.
     const validAddress = binding ? address : previous?.address || '';
-    const same = previous && coordinateAddressHash(previous.address) === coordinateAddressHash(validAddress);
+    const same = previous && previousAddressHash === coordinateAddressHash(validAddress);
     if (code === 'S191541' && previous && !same) {
       rows.set(code,{...previous,name:name || previous.name,registered:true});
       continue;
     }
-    rows.set(code,{...previous,code,name:name || previous?.name || code,address:validAddress,
+    const metadata = {...previous};
+    if (previous && !same) {
+      for (const key of ['originalAddressHash','currentAddressHash','coordinateAddressHash','addressHash',
+        'latitude','longitude','hasCoordinate','coordinateStatus','coordinateAccuracy','coordinateEvidence',
+        'addressChanged','resolutionStatus']) delete metadata[key];
+      if (metadata.coordinateSource !== 'MANUAL_PIN') delete metadata.coordinateSource;
+    }
+    rows.set(code,{...metadata,code,name:name || previous?.name || code,address:validAddress,
       center:previous?.center || 'unknown',registered:true,lat:same?previous.lat:null,lng:same?previous.lng:null,
-      ...(previous && !same?{reviewAddressChanged:true}:{}),
+      ...(previous && !same?{reviewAddressChanged:true,registryTransition:{kind:'ADDRESS_CHANGED',
+        previousAddressHash,version:registry.version}}:{}),
       matchHash:same?previous.matchHash:archiveAddressHash(validAddress)});
   }
   return {...base,stores:[...rows.values()]};
@@ -147,7 +165,7 @@ async function copyCoverageCache(source, output) {
 }
 
 export async function createOpsmapDataSync({directory, seed, readLedger, readRegistry, readDay,
-  readManualPins = async () => [], now = Date.now, appRoot = process.cwd(), includeOfficialRegions = true} = {}) {
+  readManualPins = async () => [], now = Date.now, appRoot = process.cwd(), includeOfficialRegions = true, buildCoverage = defaultCoverageBuilder, completeCoordinates} = {}) {
   const store = await openOpsmapSyncGenerationStore(directory,{appRoot,writable:true});
   const statusFile = path.join(store.root,'sync-status.json');
   let flight;
@@ -175,7 +193,8 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       throw Error('OPSMAP_SYNC_BACKFILL');
     }
     const datesToRead = bootstrap ? [] : [...new Set([dateBefore(target),target,...backfillDates])];
-    const [registry, ledger] = await Promise.all([bootstrap?null:readRegistry(),readLedger()]);
+    const [registry, suppliedLedger] = await Promise.all([bootstrap?null:readRegistry(),readLedger()]);
+    let ledger=completeCoordinates ? continuingFixedLedger(current?.ledger,suppliedLedger) : suppliedLedger;
     const manual = await readManualPins();
     preserveLedger(current?.ledger,ledger);
     const changes = new Map();
@@ -184,12 +203,17 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       if (day) changes.set(date,validateOpsmapSyncDay(day,date));
     }
     const base = rebindCatalog(current?.baseCatalog || initial.base,registry);
-    const catalog = {...base,stores:createFixedCoordinateResolver(ledger,{manualRows:manual}).join(base.stores)};
+    let completedStores=base.stores;
+    if (completeCoordinates) {
+      const result=await completeCoordinates({stores:base.stores,ledger,manualRows:manual,now});
+      preserveLedger(ledger,result.ledger);ledger=result.ledger;completedStores=result.stores;
+    }
+    const catalog = {...base,stores:createFixedCoordinateResolver(ledger,{manualRows:manual}).join(completedStores)};
     const registryVersion = registry?.version || current?.state.registryVersion || initial?.facts.stores.registryVersion || null;
     const sameDays = [...changes].every(([date,doc]) => current?.state.dates[date] === syncDigest(doc));
     const fingerprint = syncDigest([registryVersion,base,ledger.sha256,manual]);
     if (current?.state.fingerprint === fingerprint && sameDays && current.state.revision === expected) {
-      return {state:'NOOP',generation:current.index.sha256,revision:current.state.revision,observedToday:changes.has(target)};
+      return {state:'NOOP',generation:current.index.sha256,revision:current.state.revision,observedToday:changes.has(target),sourceReadComplete:completeSyncObservation(changes.get(target))};
     }
     const candidate = await store.candidate(expected);
     let published = false;
@@ -232,7 +256,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       const todayEvidence = changes.get(target);
       const sealedSnapshot = snapshotProjection({version:'phase2b-map-snapshot-v1',latestDate:asOf,startDate:source.start,
         rows:snapshotRows(catalog,previousSnapshot,changes.values()),sourceFreshness:{targetDate:target,
-          sourceReadComplete:todayEvidence?.completeCenters.length === 3,sourceDateVerified:Boolean(todayEvidence),
+          sourceReadComplete:completeSyncObservation(todayEvidence),sourceDateVerified:Boolean(todayEvidence),
           phase:bootstrap?'VERIFIED_SEED':'VERIFIED_SCHEDULED_READ'}},
       {now,revision:candidate.revision});
       const baseBytes = JSON.stringify(base), catalogBytes = JSON.stringify(catalog), ledgerBytes = JSON.stringify(ledger);
@@ -243,7 +267,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
         atomicCoverageWrite(path.join(candidate.folder,'fixed-store-coordinates-v1.json'),ledgerBytes),
         atomicCoverageWrite(path.join(candidate.folder,'snapshot.json'),snapshotBytes),copyCoverageCache(current?.coverage,coverage)
       ]);
-      const built = await buildShadowCoverage({inputDirectory:input,outputDirectory:coverage,includeOfficialRegions});
+      const built = await buildCoverage({inputDirectory:input,outputDirectory:coverage,includeOfficialRegions});
       const indexBytes = await boundedRead(path.join(coverage,'coverage-index.json'),16_384);
       const window90 = await readJson(path.join(coverage,built.index.windows[90].sha256+'.json'),3*1024*1024);
       const nearbyBytes = JSON.stringify({source:'STAGE_ARCHIVE_ADDRESS_BOUND',generation:built.index.sha256,
@@ -255,7 +279,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
         catalogSha256:syncSha256(catalogBytes),indexSha256:syncSha256(indexBytes),nearbySha256:syncSha256(nearbyBytes)});
       published = true;
       return {state:bootstrap?'SEEDED':'PUBLISHED',generation:ready.index.sha256,revision:ready.state.revision,
-        observedToday:changes.has(target),metrics:built.metrics};
+        observedToday:changes.has(target),sourceReadComplete:completeSyncObservation(todayEvidence),metrics:built.metrics};
     } finally {
       if (!published) await store.discard(candidate).catch(() => {});
     }
@@ -268,14 +292,14 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       const attemptedAt = new Date(now()).toISOString();
       try {
         const result = await run(options);
-        const lastSuccessAt = result.observedToday ? new Date(now()).toISOString() : last?.lastSuccessAt || null;
-        await atomicCoverageWrite(statusFile,JSON.stringify({state:result.state,attemptedAt,lastSuccessAt,
-          observedToday:result.observedToday === true,generation:result.generation}));
-        return {...result,lastSuccessAt};
+        const evidence=nextSyncEvidence(last,result,attemptedAt,new Date(now()).toISOString());
+        await atomicCoverageWrite(statusFile,JSON.stringify(evidence));
+        return {...result,lastSuccessAt:evidence.lastSuccessAt};
       } catch (error) {
         const code = /^[A-Z][A-Z_0-9]{1,95}$/.test(error.code || error.message) ? error.code || error.message : 'OPSMAP_SYNC_FAILED';
         await atomicCoverageWrite(statusFile,JSON.stringify({state:'FAILED',attemptedAt,error:code,
-          lastSuccessAt:last?.lastSuccessAt || null,generation:last?.generation || null})).catch(() => {});
+          lastSuccessAt:last?.lastSuccessAt || null,lastObservedAt:last?.lastObservedAt || null,
+          observedToday:false,sourceReadComplete:false,generation:last?.generation || null})).catch(() => {});
         throw error;
       }
     })().finally(() => {flight = null;});

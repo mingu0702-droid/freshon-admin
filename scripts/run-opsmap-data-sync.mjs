@@ -1,3 +1,5 @@
+import {createOfficialAddressLookup} from '../src/opsmapOfficialAddressLookup.js';
+import {completeFixedCoordinates} from '../src/fixedCoordinateCompletion.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -7,17 +9,17 @@ import {createOpsmapDataSync, startOpsmapDataSync} from '../src/opsmapDataSync.j
 import {callHub} from '../src/opsmap-abc/phase2bHubReadClient.js';
 import {privateReaderEndpoint} from '../src/opsmap-abc/privateReaderEndpoint.js';
 import {createManualMapPins} from '../src/opsmap-abc/manualMapPins.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageAbValidation.js';
+import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {boundedRead, privateCoverageDirectory} from '../src/shadowCoverage/coverageFiles.js';
-import {atomicCoverageWrite} from '../src/shadowCoverage/store.js';
+import {atomicCoverageWrite} from '../src/shadowCoverage/fileStore.js';
 
 const appRoot = fileURLToPath(new URL('../',import.meta.url));
 const env = process.env;
 
 function report(result) {
   console.log(JSON.stringify({component:'opsmap-data-sync',state:result.state,revision:result.revision ?? null,
-    generation:result.generation ?? null,observedToday:result.observedToday===true,lastSuccessAt:result.lastSuccessAt ?? null}));
+    generation:result.generation ?? null,observedToday:result.observedToday===true,sourceReadComplete:result.sourceReadComplete===true,lastSuccessAt:result.lastSuccessAt ?? null}));
 }
 
 async function run() {
@@ -71,7 +73,26 @@ async function run() {
       readManualPins = () => manual.projection();
     }
   }
-  const worker = await createOpsmapDataSync({directory,seed:config.seed,readLedger,readRegistry,readDay,readManualPins,appRoot});
+  let completeCoordinates;
+  if (config.officialCoordinateIndex) {
+    if (env.OPSMAP_SYNC_FIXED_COORDINATES_APPROVED!=='1') throw Error('OPSMAP_SYNC_COORDINATE_APPROVAL_REQUIRED');
+    let index, indexKey;
+    completeCoordinates=async options=>{
+      const settings=await readSettings();
+      const {file,sha256}=settings.officialCoordinateIndex||{};
+      if (!path.isAbsolute(file||'')) throw Error('OPSMAP_SYNC_OFFICIAL_INDEX_PATH');
+      const key=file+'|'+sha256;
+      if(key!==indexKey){
+        const folder=await privateCoverageDirectory(path.dirname(file),appRoot);
+        const actual=await fs.realpath(path.join(folder,path.basename(file)));
+        if(path.dirname(actual)!==folder) throw Error('OPSMAP_SYNC_OFFICIAL_INDEX_PATH');
+        const checked=createOfficialAddressLookup(await boundedRead(actual,512*1024),{sha256});
+        index=checked;indexKey=key;
+      }
+      return completeFixedCoordinates({...options,index});
+    };
+  }
+  const worker = await createOpsmapDataSync({directory,seed:config.seed,readLedger,readRegistry,readDay,readManualPins,appRoot,completeCoordinates});
   if (mode !== 'watch') {report(await worker.sync({bootstrap:mode==='bootstrap',backfillDates}));return;}
   if (backfillDates.length) throw Error('OPSMAP_SYNC_USAGE');
   const stop = startOpsmapDataSync(worker,{onResult:report});

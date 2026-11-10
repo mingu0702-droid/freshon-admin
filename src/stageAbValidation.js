@@ -14,11 +14,8 @@ import {readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidenc
 import {searchPreservedRegistry} from './privateCustomerSearch.js';
 import {archivedOpsmapAssignments} from './opsmapSyncGeneration.js';
 
-export const STAGE_ORIGIN = 'https://freshon-admin-stage-preview-template.onrender.com';
-export const STAGE_SERVICE = 'srv-da47hugu01pc73etpfa0';
-export const STAGE_BUNDLE_ROUTE = '/api/map-phase2b/private/stage-validation-bundle';
-export const STAGE_NEARBY_ROUTE = '/api/map-phase2b/private/stage-nearby-evidence';
-export const STAGE_ADDRESS_BATCH_ROUTE = '/api/map-phase2b/private/stage-address-evidence';
+import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_NEARBY_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,MAX_STAGE_BUNDLE_BYTES} from './stageScope.js';
+export {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_NEARBY_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,MAX_STAGE_BUNDLE_BYTES} from './stageScope.js';
 
 const currentProfile = {
   generation:'3df93605c76dcb279b405de3ab55171a2278b763ae67ddc5e8cec91891aa5585',
@@ -70,7 +67,6 @@ const INDEX = 'coverage-index.json';
 const LEDGER = 'fixed-store-coordinates-v1.json';
 const DELIVERY_ARCHIVE = 'verified-delivery-observations-v1.json';
 const DECOMPRESS = promisify(gunzip);
-export const MAX_STAGE_BUNDLE_BYTES = 1088 * 1024;
 const TTL = 2 * 60 * 60 * 1000;
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 const rowCode = row => row?.customerCode || row?.code;
@@ -149,6 +145,44 @@ function joinMissing(registry, rows) {
   });
 }
 
+// A sealed publication can have fewer pins after a confirmed move or closure.
+// Check the affected identities and their original bindings before using it.
+function preservesVerifiedGeneration(previous, candidate) {
+  if (candidate.index.asOf < previous.asOf || candidate.ledger.revision < previous.ledger.revision) return false;
+  for (const [code, history] of Object.entries(previous.ledger.records)) {
+    const next = candidate.ledger.records[code];
+    if (!next || JSON.stringify(next.slice(0,history.length)) !== JSON.stringify(history)) return false;
+  }
+  const base = new Map(candidate.baseCatalog.stores.map(row => [row.code,row]));
+  const currentBinding = (store, hash) => store.originalAddressHash === hash &&
+    (store.coordinateSource === 'MANUAL_PIN' ||
+      store.proof?.addressHash === hash && store.proof.lat === store.lat && store.proof.lng === store.lng);
+  for (const [code, prior] of previous.registry) {
+    const next = candidate.registry.get(code);
+    const row = base.get(code);
+    const evidence = row?.registryTransition;
+    const changed = kind => /^[a-f0-9]{64}$/.test(evidence?.version || '') &&
+      evidence.kind === kind && evidence.previousAddressHash === prior.addressHash;
+    if (!next) {
+      if (code === 'S191541' || row?.registered !== false || !changed('EXPLICIT_DELETION')) return false;
+    } else if (prior.addressHash !== next.addressHash) {
+      if (code === 'S191541' || !next.addressHash || coordinateAddressHash(row?.address) !== next.addressHash ||
+          !changed('ADDRESS_CHANGED') || next.hasPoint && !currentBinding(next,next.addressHash)) return false;
+    } else if (prior.hasPoint && (!next.hasPoint || prior.lat !== next.lat || prior.lng !== next.lng)) {
+      const currentManual = next.coordinateSource === 'MANUAL_PIN' && next.hasPoint && currentBinding(next,next.addressHash);
+      // Within the same publisher, a manual revert restores the sealed base or
+      // the fixed ledger. It does not authorize loss of any verified base point.
+      const restoredBase = previous.scheduled && prior.coordinateSource === 'MANUAL_PIN' &&
+        row?.registered === true && coordinateAddressHash(row.address) === next.addressHash &&
+        (next.hasPoint
+          ? next.lat === row.lat && next.lng === row.lng || currentBinding(next,next.addressHash)
+          : !hasFixedCoordinatePoint(row) && !next.proof);
+      if (code === 'S191541' || !currentManual && !restoredBase) return false;
+    }
+  }
+  return true;
+}
+
 export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = {}) {
   let temporary, durable, scheduled, installation;
 
@@ -158,9 +192,11 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
   function active() {
     const verified = fallback();
     if (!verified || !scheduled) return scheduled || verified;
-    if (scheduled.asOf < verified.asOf || (scheduled.asOf === verified.asOf &&
-        (scheduled.counts.registered < verified.counts.registered || scheduled.counts.located < verified.counts.located))) return verified;
-    return scheduled;
+    if (scheduled.reference !== verified) {
+      scheduled.reference = verified;
+      scheduled.compatible = preservesVerifiedGeneration(verified,scheduled.scheduled);
+    }
+    return scheduled.compatible ? scheduled : verified;
   }
 
   function followScheduled(generation, readDay) {
@@ -168,10 +204,13 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     if (scheduled?.scheduled === generation) return active() === scheduled;
     const previous = scheduled?.scheduled;
     if (previous && (generation.state.revision <= previous.state.revision || generation.index.asOf < previous.index.asOf)) return false;
+    const selected = active();
+    if (selected && !preservesVerifiedGeneration(selected,generation)) return false;
     const {registry,index,ledger,coverage,nearby,snapshot,state} = generation;
     const located = [...registry.values()].filter(row => row.hasPoint).length;
     const proof = Object.values(ledger.records).map(history => history.at(-1).point).filter(Boolean);
-    scheduled = {scheduled:generation,directory:coverage,registry,nearby,snapshot,asOf:index.asOf,
+    scheduled = {scheduled:generation,directory:coverage,registry,ledger,nearby,snapshot,asOf:index.asOf,
+      reference:fallback(),compatible:true,
       generation:index.sha256,expiresAt:Infinity,resolver:createFixedCoordinateResolver(ledger),
       counts:{registered:registry.size,located,pending:registry.size-located,
         gpsCompletion:proof.filter(row=>row.measurementKind==='DELIVERY_COMPLETION_GPS').length,
@@ -225,7 +264,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
         coverageSourceObservedAt:index.sourceObservedAt,
         coverageAsOf:index.asOf
       };
-      const result = {directory, registry, counts, resolver:createFixedCoordinateResolver(ledger), asOf:index.asOf,
+      const result = {directory, registry, ledger, counts, resolver:createFixedCoordinateResolver(ledger), asOf:index.asOf,
         generation:index.sha256, version:expected.version, archived, nearby, evidence, expiresAt:durableRead?Infinity:appliedAt + TTL,
         bundledAddress:addressReview ? {lookup:query => bundledAddress?.lookup(query) || addressReview.lookup(query)} : bundledAddress};
       if (!durableRead) {

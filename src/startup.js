@@ -1,4 +1,4 @@
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageAbValidation.js';
+import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 
 if (process.env.RENDER_SERVICE_ID === STAGE_SERVICE && process.env.RENDER_EXTERNAL_URL === STAGE_ORIGIN) {
   const [{createStageVerificationApp}, {createStageShadowRuntime}] = await Promise.all([

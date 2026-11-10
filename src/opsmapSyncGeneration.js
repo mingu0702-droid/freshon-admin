@@ -4,7 +4,7 @@ import path from 'node:path';
 import {hasFixedCoordinatePoint, validateFixedCoordinateLedger} from './fixedStoreCoordinates.js';
 import {materializeSnapshot, validateSnapshotProjection} from './productionSnapshotStore.js';
 import {boundedRead, isDay, parseCoverageIndex, PERIODS, privateCoverageDirectory} from './shadowCoverage/coverageFiles.js';
-import {atomicCoverageWrite} from './shadowCoverage/store.js';
+import {atomicCoverageWrite} from './shadowCoverage/fileStore.js';
 import {readStageNearbyEvidence} from './stageNearbyEvidence.js';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 
@@ -23,7 +23,8 @@ export function validateOpsmapSyncDay(value, date) {
   if (!isDay(date) || value?.date !== date || !Number.isSafeInteger(sourceRows) || sourceRows < 0 || sourceRows > 12_000 ||
       !Number.isSafeInteger(unidentified) || unidentified < 0 || unidentified > sourceRows ||
       !Array.isArray(visits) || visits.length > sourceRows || !syncHash(value.proofHash) ||
-      !Array.isArray(value.completeCenters) || value.completeCenters.some(center => !centers.slice(0,3).includes(center))) {
+      !Array.isArray(value.completeCenters) || new Set(value.completeCenters).size !== value.completeCenters.length ||
+      visits.length + unidentified > sourceRows || value.completeCenters.some(center => !centers.slice(0,3).includes(center))) {
     throw Error('OPSMAP_SYNC_DAY_CONTRACT');
   }
   function checkRows(rows, includeStatus) {

@@ -15,7 +15,7 @@ import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
 import {archiveAddressHash} from '../src/stageArchivedDelivery.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageAbValidation.js';
+import {createStageAbValidation, STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageAbValidation.js';
 
 const day = '2026-11-10', priorDay = '2026-11-07', historical = '2026-07-31';
 const now = () => Date.parse(day+'T04:00:00Z');
@@ -107,13 +107,15 @@ async function stageHttp(t, directory, expected) {
     const response=await get('/private/shadow-coverage/view?days='+days+'&level=5&box=123,32,132,40');
     assert.equal(response.data.generation,expected);
     assert.equal(response.data.summary.registered,4);
-    assert.equal(response.data.completeness.recordedDays,2);
-    assert.equal(response.data.completeness.missingDates.length,days-2);
+    // Yesterday was observed successfully with zero deliveries; it is not missing.
+    assert.equal(response.data.completeness.recordedDays,3);
+    assert.equal(response.data.completeness.missingDates.length,days-3);
   }
   const status=await get('/private/stage-sync-evidence');
   assert.equal(status.automaticSyncVerified,false);
   assert.equal(status.scheduled.state,'VERIFIED_SCHEDULED_PROJECTION');
-  assert.equal(status.scheduled.lastSuccessAt,new Date(now()).toISOString());
+  // This fixture only reads Osan. It cannot advance nationwide success.
+  assert.equal(status.scheduled.lastSuccessAt,null);
 }
 
 test('server timer retries before atomically switching map, fixed coordinates and all coverage windows', {timeout:30_000}, async t => {
@@ -182,6 +184,8 @@ test('server timer retries before atomically switching map, fixed coordinates an
   assert.equal((await worker.sync()).state,'NOOP');
   assert.equal((await follower.read()).state.revision,2);
   await stageHttp(t,directory,advanced.generation);
+  const validation=createStageAbValidation({now});
+  assert.equal(validation.followScheduled(active,follower.readDay),true);
   tasks=[tasks[0]];
   await assert.rejects(worker.sync(),/DAY_REGRESSION/);
   assert.equal((await follower.read()).index.sha256,advanced.generation);
@@ -195,6 +199,7 @@ test('server timer retries before atomically switching map, fixed coordinates an
   const latest=await follower.read();
   assert.equal(latest.snapshot.rows.find(row=>row.customerCode===held.code).lat,null);
   assert.equal(latest.snapshot.rows.find(row=>row.customerCode===held.code).confirmedVehicle,'203');
+  assert.equal(validation.followScheduled(latest,follower.readDay),true);
   await fs.writeFile(path.join(latest.coverage,'coverage-index.json'),'{}');
   assert.equal((await (await openOpsmapSyncGenerationStore(directory)).read()).index.sha256,advanced.generation);
 });
@@ -212,9 +217,38 @@ test('scheduled Delivery reads preserve verified center scope and reject a wrong
   const combined=await delivery.readObservation(day);
   assert.deepEqual(used,['1','7','8']);
   assert.deepEqual(combined.visits.map(row=>row[3]).sort(),['honam','osan','yeongnam']);
-  assert.deepEqual(combined.completeCenters,[]);
+  assert.deepEqual(combined.completeCenters,['osan','yeongnam','honam']);
   assert.equal((await delivery(day)).vehicles[0].totalStops,1);
   assert.equal(used.at(-1),'1');
   wrongCenter=true;
   await assert.rejects(delivery.readObservation(day),{code:'DELIVERY_SOURCE_SCOPE'});
+});
+
+test('Stage uses a verified move and closure even when counts fall, but rejects missing identity evidence', async t => {
+  const root=await rootFor(t);
+  const directory=path.join(root,'stage-publisher');
+  await fs.mkdir(directory,{mode:0o700});
+  const seed=await fixtureSeed(root);
+  const worker=await createOpsmapDataSync({directory,seed,now,includeOfficialRegions:false,
+    readLedger:async()=>empty,readDay:async()=>null,async readRegistry() {
+      const rows=[customerRow(known.code,known.name,address(11)),
+        {...customerRow(saved.code,saved.name,saved.address),lifecycle:'DELETED'}];
+      return {complete:true,version:syncDigest(rows),deletionPolicy:'EXPLICIT_ONLY',lifecycleField:'status',rows};
+    }});
+  await worker.sync({bootstrap:true});
+  const before=await worker.read();
+  const validation=createStageAbValidation({now});
+  assert.equal(validation.followScheduled(before,worker.readDay),true);
+  await worker.sync();
+  const after=await worker.read();
+  const unsupported={...after,baseCatalog:{...after.baseCatalog,stores:after.baseCatalog.stores.map(
+    ({registryTransition,...row})=>row)}};
+  assert.equal(validation.followScheduled(unsupported,worker.readDay),false);
+  assert.equal(validation.snapshot().sourceGeneration,before.index.sha256);
+  assert.equal(validation.followScheduled(after,worker.readDay),true);
+  assert.equal(validation.active().counts.registered,2);
+  assert.equal(validation.active().counts.located,0);
+  assert.equal(validation.snapshot().rows.find(row=>row.customerCode===known.code).lat,null);
+  assert(!validation.snapshot().rows.some(row=>row.customerCode===saved.code));
+  assert.equal(validation.followScheduled(before,worker.readDay),false);
 });

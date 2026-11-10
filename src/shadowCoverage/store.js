@@ -9,23 +9,8 @@ export { boundedRead, privateCoverageDirectory };
 export const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
-export async function atomicCoverageWrite(file, bytes) {
-  const temp = file + '.' + crypto.randomUUID() + '.tmp';
-  let created = false;
-  try {
-    const handle = await fs.open(temp, 'wx', 0o600);
-    created = true;
-    try {
-      await handle.writeFile(bytes);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await fs.rename(temp, file);
-  } finally {
-    if (created) await fs.unlink(temp).catch(() => {});
-  }
-}
+import {atomicCoverageWrite} from './fileStore.js';
+export {atomicCoverageWrite} from './fileStore.js';
 
 export async function writeCoverageBlob(directory, value) {
   const bytes = Buffer.from(JSON.stringify(value));

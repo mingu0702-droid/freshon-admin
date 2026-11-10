@@ -67,3 +67,9 @@ export function parseCoverageIndex(bytes, { allowFixture = false } = {}) {
   }
   return value;
 }
+
+export function datesFor(end, days) {
+  if (!isDay(end) || !PERIODS.includes(days)) throw Error('COVERAGE_PERIOD_INVALID');
+  return Array.from({ length: days }, (_, index) =>
+    new Date(Date.parse(end) - (days - 1 - index) * 86_400_000).toISOString().slice(0, 10));
+}
