@@ -76,6 +76,44 @@
     if (!rows.every(row=>typeof row.lat==='number'&&typeof row.lng==='number'&&Number.isFinite(row.lat)&&Number.isFinite(row.lng)&&row.lat===first.lat&&row.lng===first.lng)) return {candidates:rows};
     return {...first,coordinateReferenceCustomers:[...new Set(rows.map(row=>row.customerCode).filter(Boolean))]};
   }
-  root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, stopsExternal, outcome, singleStoredLocation };
+  const flights = new Map(), retained = new Map(), temporary = new Map();
+  let addressEpoch = 0;
+  const addressKey = value => String(value || '').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
+  function remember(cache,key,value) {
+    if (cache.size >= 64) cache.delete(cache.keys().next().value);
+    cache.set(key,value);
+  }
+  function stageAddress(query,generation) {
+    if (root.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com') return Promise.resolve(null);
+    const variants = /^\d{19}$/.test(query) ? [query] : addressQueries(query,root.Phase2bUi.addressVariants);
+    if (!variants.length) return Promise.resolve(null);
+    const key = JSON.stringify([generation,...variants.map(addressKey)]);
+    if (retained.has(key)) return Promise.resolve(retained.get(key));
+    if (!flights.has(key)) {
+      const epoch = addressEpoch;
+      const task = fetch('/api/map-phase2b/private/stage-address-evidence',{
+        method:'POST', credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(10000),
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({generation,rows:[variants],includeCustomers:true})
+      }).then(async response=>{
+        const payload=await response.json().catch(()=>null);
+        if(!response.ok)throw Object.assign(failure(payload?.error||'STAGE_BATCH_UNAVAILABLE'),{status:response.status});
+        if(epoch!==addressEpoch)return null;
+        if(payload?.generation!==generation||payload.data?.length!==1)throw failure('STAGE_BATCH_UNAVAILABLE');
+        const [result]=payload.data;
+        if(generation&&['STORED','OFFICIAL'].includes(result.status)&&result.point)remember(retained,key,result);
+        return result;
+      }).finally(()=>{if(flights.get(key)===task)flights.delete(key);});
+      flights.set(key,task);
+    }
+    return flights.get(key);
+  }
+  function rememberTemporary(query,point) {
+    if(point?.coordinateSource==='MAP_CLICK_TEMPORARY' && Number.isFinite(point.lat)&&Number.isFinite(point.lng)) {
+      remember(temporary,addressKey(query),{lat:point.lat,lng:point.lng,coordinateSource:point.coordinateSource});
+    }
+  }
+  root.addEventListener?.('map-staff-signed-out',()=>{addressEpoch++;retained.clear();flights.clear();temporary.clear();});
+  root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, stopsExternal, outcome, singleStoredLocation,
+    stageAddress, rememberTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
 })(typeof window === 'object' ? window : globalThis);
 

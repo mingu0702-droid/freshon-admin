@@ -51,7 +51,7 @@ export function searchPreservedRegistry(query,snapshot){
 const safePoint = ({lat,lng}={}) => Number.isFinite(lat)&&Number.isFinite(lng)&&lat>=33&&lat<=39.5&&lng>=124&&lng<=132 ? {lat,lng} : null;
 const approvedPoint = row => !row.addressChanged && !['CONFLICT','UNVERIFIED','MISSING'].includes(row.coordinateStatus) &&
  row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED' ? safePoint(row) : null;
-export function resolvePreservedAddressBatch(rows,snapshot,officialIndex){
+export function resolvePreservedAddressBatch(rows,snapshot,officialIndex,{includeCustomers=false}={}){
  return rows.map(queries=>{
   if(!queries.length)return {status:'INVALID_ADDRESS'};
   const isCode=code(queries[0].toUpperCase());
@@ -70,11 +70,12 @@ export function resolvePreservedAddressBatch(rows,snapshot,officialIndex){
    }catch{officialError=true;}
   }
   if(matched.size){
+   const customers=includeCustomers?{customerCodes:[...new Set([...matched].map(row=>row.customerCode))].slice(0,50)}:{};
    const points=new Map();
-   for(const row of matched){const point=approvedPoint(row);if(!point)return {status:'STORED_COORDINATE_UNVERIFIED'};
+   for(const row of matched){const point=approvedPoint(row);if(!point)return {status:'STORED_COORDINATE_UNVERIFIED',...customers};
     points.set(`${point.lat},${point.lng}`,point);}
-   if(points.size!==1)return {status:'ADDRESS_AMBIGUOUS'};
-   return {status:'STORED',point:{...points.values().next().value,coordinateSource:'STAGE_PRESERVED_COORDINATE'}};
+   if(points.size!==1)return {status:'ADDRESS_AMBIGUOUS',...customers};
+   return {status:'STORED',...customers,point:{...points.values().next().value,coordinateSource:'STAGE_PRESERVED_COORDINATE'}};
   }
   if(isCode)return {status:'CUSTOMER_CODE_NOT_FOUND'};
   if(officialError)return {status:'OFFICIAL_ADDRESS_UNAVAILABLE'};

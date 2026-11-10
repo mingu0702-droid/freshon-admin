@@ -397,11 +397,12 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
     if(!req.is('application/json')) return res.status(415).json({error:'STAGE_BATCH_MEDIA_TYPE'});
     return next();
   },express.json({limit:'96kb'}),async(req,res)=>{
-    const {generation,queries,rows}=req.body||{};
+    const {generation,queries,rows,includeCustomers}=req.body||{};
     const queryOk=query=>typeof query==='string'&&query.length>=2&&query.length<=200&&!/[\x00-\x1f]/.test(query);
     if(rows!==undefined){
       if(queries!==undefined||!(generation===null||typeof generation==='string'&&/^[a-f0-9]{64}$/.test(generation))||
-        !Array.isArray(rows)||rows.length<1||rows.length>120||rows.some(row=>!Array.isArray(row)||row.length>2||!row.every(queryOk))) {
+        !Array.isArray(rows)||rows.length<1||rows.length>120||rows.some(row=>!Array.isArray(row)||row.length>2||!row.every(queryOk))||
+        includeCustomers!==undefined&&(includeCustomers!==true||rows.length!==1)) {
         return res.status(400).json({error:'STAGE_BATCH_QUERY_INVALID'});
       }
       const started=performance.now();
@@ -424,7 +425,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         }}:null;
         const snapshotReady=Array.isArray(saved?.rows);
         if(!snapshotReady&&!official)return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});
-        const data=resolvePreservedAddressBatch(rows,snapshotReady?saved:{rows:[]},official).map(row=>
+        const data=resolvePreservedAddressBatch(rows,snapshotReady?saved:{rows:[]},official,{includeCustomers}).map(row=>
           !snapshotReady&&['CUSTOMER_CODE_NOT_FOUND','ADDRESS_NOT_MATCHED'].includes(row.status)
             ?{status:'STORED_REGISTRY_UNAVAILABLE'}:row);
         outcomes=data.reduce((counts,{status})=>({...counts,[status]:(counts[status]||0)+1}),{});

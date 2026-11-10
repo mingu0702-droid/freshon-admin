@@ -37,9 +37,9 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
   svg.setAttribute('width', '1');
   svg.setAttribute('height', '1');
   const overlay = new maps.AbstractOverlay();
-  let cells = EMPTY, selected = null, radiusCircle = null, anchor = null;
-  let markers = EMPTY, hits = EMPTY;
-  let renderedCells, renderedMarkers, renderedSelection, renderedLevel, frame;
+  let cells = EMPTY, selected = null, radiusCircle = null, searchMarker = null, anchor = null;
+  let markers = EMPTY, hits = EMPTY, providerPaths = EMPTY;
+  let renderedCells, renderedMarkers, renderedSelection, renderedLevel, renderedProviders, frame;
 
   function draw() {
     frame = undefined;
@@ -50,22 +50,23 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
     svg.style.top = origin.y + 'px';
 
     const level = map.getLevel();
-    if (cells === renderedCells && markers === renderedMarkers && selected === renderedSelection && level === renderedLevel) return;
+    if (cells === renderedCells && markers === renderedMarkers && selected === renderedSelection && level === renderedLevel && providerPaths===renderedProviders) return;
     renderedCells = cells;
     renderedMarkers = markers;
     renderedSelection = selected;
     renderedLevel = level;
+    renderedProviders = providerPaths;
     const fragment = document.createDocumentFragment();
     const visible = selected?.boundary && !cells.some(cell => cell.id === selected.id) ? [...cells, selected] : cells;
-    for (const cell of visible) {
+    for (const cell of [...visible,...providerPaths]) {
       const path = document.createElementNS(SVG, 'path');
       const vertices = cell.boundary.map(([lat, lng]) => {
         const point = projection.pointFromCoords(new maps.LatLng(lat, lng));
         return (point.x - origin.x) + ' ' + (point.y - origin.y);
       });
       path.setAttribute('d', 'M' + vertices.join('L') + 'Z');
-      path.dataset.tone = appearance(cell);
-      if (cell.id === selected?.id) path.classList.add('coverage-selected');
+      if(cell.provider){path.dataset.provider=cell.provider;path.dataset.providerStatus=cell.status;}
+      else {path.dataset.tone = appearance(cell);if (cell.id === selected?.id) path.classList.add('coverage-selected');}
       fragment.append(path);
     }
     hits = mergeCoverageBadges(markers.map(marker => {
@@ -143,18 +144,30 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
         radiusCircle.setMap(map);
       }
     },
-    render(value, highlight, candidateMarkers = EMPTY) {
-      if (!value.length && !highlight && !candidateMarkers.length) {
+    searchPoint(location) {
+      searchMarker?.setMap(null);
+      searchMarker = null;
+      if (!location || !maps.CustomOverlay) return;
+      const pin = document.createElement('span');
+      pin.className = 'coverage-search-pin';
+      pin.setAttribute('role', 'img');
+      pin.setAttribute('aria-label', '조회 위치');
+      searchMarker = new maps.CustomOverlay({ position:new maps.LatLng(...location), content:pin, zIndex:30 });
+      searchMarker.setMap(map);
+    },
+    render(value, highlight, candidateMarkers = EMPTY, layers = EMPTY) {
+      if (!value.length && !highlight && !candidateMarkers.length && !layers.length) {
         svg.replaceChildren();
-        cells = renderedCells = markers = renderedMarkers = hits = EMPTY;
+        cells = renderedCells = markers = renderedMarkers = hits = providerPaths = renderedProviders = EMPTY;
         selected = renderedSelection = anchor = null;
         return;
       }
-      if (value !== cells || candidateMarkers !== markers) {
+      if (value !== cells || candidateMarkers !== markers || layers!==providerPaths) {
         cells = value;
         anchor = map.getCenter();
       }
       markers = candidateMarkers;
+      providerPaths = layers;
       selected = highlight;
       schedule();
     },
@@ -163,11 +176,14 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
       frame = undefined;
       radiusCircle?.setMap(null);
       radiusCircle = null;
+      searchMarker?.setMap(null);
+      searchMarker = null;
     },
     destroy() {
       maps.event.removeListener(map, 'click', onMapClick);
       maps.event.removeListener(map, 'idle', idle);
       radiusCircle?.setMap(null);
+      searchMarker?.setMap(null);
       overlay.setMap(null);
       cancelAnimationFrame(frame);
       cells = markers = hits = EMPTY;

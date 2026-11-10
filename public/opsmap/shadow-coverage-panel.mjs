@@ -1,8 +1,12 @@
-import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261110-ab1';
+import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261111-coverage1';
 
 const API = '/api/map-phase2b/private/shadow-coverage';
 const STATUS = { DELIVERED: '관측 배송 이력', CANDIDATE: '관측기간 미배송 후보', EMPTY: '검증 범위 내 공백', UNKNOWN: '자료 부족' };
 const LIST_TITLES = { candidate: STATUS.CANDIDATE, delivery: '배송 이력 격자', review: '자료 부족 격자' };
+const PROVIDERS = [['FRESHON','프레시온'],['CJ','CJ택배'],['NAVER_SHOPPING','네이버쇼핑']];
+const PROVIDER_STATUS = {NOT_CONNECTED:'자료 미연결',UNVERIFIED:'자료 미확인',AVAILABLE_CONFIRMED:'가능 확인',
+  UNAVAILABLE_CONFIRMED:'불가 확인',NO_DELIVERY_HISTORY:'관측 배송기록 없음'};
+const EMPTY = Object.freeze([]);
 const fmt = value => Number(value || 0).toLocaleString('ko-KR');
 const VIEW_TAG = /^"coverage-[a-f0-9]{64}"$/;
 const time = new Intl.DateTimeFormat('ko-KR', {
@@ -50,12 +54,18 @@ export function createCoveragePanel({ workspace, header }) {
         </div>
       </form>
       <div id="coverageSearchResults" class="coverage-results" aria-live="polite"></div>
+      <section id="coverageProviderComparison" class="coverage-provider-comparison" aria-label="주소별 공급자 비교" aria-live="polite" hidden></section>
       <div id="coverageAnalysis">
         <div class="coverage-filters">
           <label>자료 기간 <select id="coverageDays"><option value="30">30일</option><option value="60">60일</option><option value="90" selected>90일</option></select></label>
           <label>담당 센터 <select id="coverageCenter"><option value="all">전체</option><option value="osan">오산</option><option value="yeongnam">영남</option><option value="honam">호남</option></select></label>
           <label>검색 반경 <select id="coverageRadius"><option value="0">격자만</option><option value="500">500m</option><option value="1000">1km</option></select></label>
         </div>
+        <fieldset class="coverage-providers"><legend>공급자 레이어</legend>${PROVIDERS.map(([id,label])=>
+          `<label><input type="checkbox" data-coverage-provider="${id}" checked><span class="coverage-provider-key" data-key="${id}">${label}<small data-provider-state="${id}">${id==='FRESHON'?'집계 확인 중':'자료 미연결'}</small></span></label>`).join('')}
+          <label><input id="coverageOverlapToggle" type="checkbox" checked><span class="coverage-provider-key" data-key="OVERLAP">3사 중첩 보기</span></label>
+          <p id="coverageProviderMapStatus" class="coverage-note" aria-live="polite"></p>
+        </fieldset>
         <div class="coverage-filter-feedback"><p id="coverageFilterProgress" role="status" aria-live="polite"></p><button type="button" id="coverageFilterRetry" hidden>조건 다시 조회</button></div>
         <div class="coverage-overview" aria-label="분석 핵심 현황">
           <p id="coverageBasis">분석 기준일을 확인하고 있습니다.</p>
@@ -123,13 +133,16 @@ export function createCoveragePanel({ workspace, header }) {
   const status = find('coverageStatus');
   const detail = find('coverageDetail');
   const searchResults = find('coverageSearchResults');
+  const comparison = find('coverageProviderComparison');
   const cellList = find('coverageCellList');
   const evidence = find('coverageEvidenceBody');
   const requests = new Map();
   let map, baseMap, active = false, mapOwner = 0, timer, view = null, selected = null, pendingView = null;
   let days = 90, center = 'all', loadedCenter = 'all', lastKey = '', failedKey = '', failedFilter = null;
   let viewTag = '', viewSession = null;
-  let list = null, listKey = '', listOffset = 0, searchOwner, addressProxy;
+  let list = null, listKey = '', listOffset = 0, searchOwner, addressProxy, pendingSearchKey;
+  const enabledProviders = new Set(PROVIDERS.map(([id])=>id));
+  let providerMeta, providerCells = EMPTY, providerPaths = EMPTY, providerScope = '', providerViewKey = '', comparisonRow;
   const resize = new ResizeObserver(entries => {
     if (!active) return;
     if (entries.some(entry => entry.target === header)) fitWorkspace();
@@ -296,7 +309,57 @@ export function createCoveragePanel({ workspace, header }) {
   }
 
   function paint() {
-    if (map) map.render(view?.cells || [], selected, view?.candidateViewport?.markers);
+    const freshon=enabledProviders.has('FRESHON');
+    if (map) map.render(freshon ? view?.cells || EMPTY : EMPTY, freshon ? selected : null,
+      freshon ? view?.candidateViewport?.markers : EMPTY, providerPaths);
+  }
+
+  function updateProviderPaths() {
+    providerPaths=providerCells.flatMap(cell=>{
+      if(!Array.isArray(cell.boundary)||cell.boundary.length<3)return [];
+      const paths=PROVIDERS.filter(([id])=>enabledProviders.has(id)&&
+        ['AVAILABLE_CONFIRMED','UNAVAILABLE_CONFIRMED'].includes(cell.providers?.[id]?.status)).map(([id])=>
+        ({id:cell.id,boundary:cell.boundary,provider:id,status:cell.providers[id].status}));
+      if(find('coverageOverlapToggle').checked&&['TWO_AVAILABLE','ALL_AVAILABLE'].includes(cell.overlap?.status)&&
+        paths.filter(item=>item.status==='AVAILABLE_CONFIRMED').length>1)paths.push({id:cell.id,boundary:cell.boundary,provider:'OVERLAP',status:'AVAILABLE_CONFIRMED'});
+      return paths;
+    });
+    paint();
+  }
+
+  function renderProviderStates() {
+    for(const [id] of PROVIDERS){
+      const entry=providerMeta?.[id];
+      const source=entry?.source==='FRESHON_OBSERVED_DELIVERY'?'보존 배송 이력':entry?.source;
+      const state=entry?.serviceSourceConnected?'자료 연결':id==='FRESHON'&&view?'관측 배송 기록':
+        entry?.connection==='UNVERIFIED'?'자료 미확인':id==='FRESHON'?'집계 확인 중':'자료 미연결';
+      root.querySelector(`[data-provider-state="${id}"]`).textContent=[state,entry?.sourceAsOf||
+        (id==='FRESHON'?view?.period.end:null),source||(id==='FRESHON'&&view?'보존 배송 이력':null)].filter(Boolean).join(' · ');
+    }
+  }
+
+  async function loadProviderLayers(data) {
+    const scope=[data.generation,days,center].join(':');
+    const same=providerScope===scope;
+    if(!same){providerScope=scope;providerMeta=null;providerCells=EMPTY;providerViewKey='';updateProviderPaths();renderProviderStates();}
+    const params={days,center,generation:data.generation};
+    if(!providerMeta){
+      const meta=await read('providers','/provider-overlap',params).catch(()=>null);
+      if(!meta||providerScope!==scope||meta.contract!=='opsmap-provider-coverage-v1')return;
+      providerMeta=meta.providers;
+      renderProviderStates();
+      if(comparisonRow)void compareProviders(comparisonRow);
+    }
+    if(!PROVIDERS.some(([id])=>enabledProviders.has(id)&&providerMeta[id]?.serviceSourceConnected))return;
+    const box=map.viewport().box.map(value=>value.toFixed(5)).join(',');
+    if(providerViewKey===box)return;
+    providerViewKey=box;
+    const result=await read('provider-map','/provider-overlap',{...params,box}).catch(()=>null);
+    if(providerScope!==scope||providerViewKey!==box)return;
+    if(!result){providerViewKey='';return;}
+    providerCells=Array.isArray(result.cells)?result.cells:EMPTY;
+    find('coverageProviderMapStatus').textContent=result.truncated?'지도를 확대하면 나머지 공급자 격자를 확인할 수 있습니다.':'';
+    updateProviderPaths();
   }
 
   function renderView(data) {
@@ -344,6 +407,7 @@ export function createCoveragePanel({ workspace, header }) {
     }
     updateList(data);
     paint();
+    void loadProviderLayers(data);
   }
 
   function currentSession() {
@@ -519,7 +583,39 @@ export function createCoveragePanel({ workspace, header }) {
     }
   }
 
-  function renderSearch(result, radius) {
+  function renderProviderComparison(row, result) {
+    const list=element('dl','coverage-provider-results');
+    for(const [id,label] of PROVIDERS){
+      const record=result?.providers?.[id], meta=providerMeta?.[id];
+      const reading=record && PROVIDER_STATUS[record.status];
+      const freshonStatus=record?.history?.status==='DELIVERY_OBSERVED'?'관측 배송 이력':STATUS[row.stats?.status];
+      const state=id==='FRESHON' ? (record?.status?.endsWith('_CONFIRMED')?reading:freshonStatus||reading||'격자 자료 미확인') :
+        reading||(meta?.connection==='CONNECTED'||meta?.connection==='UNVERIFIED'?'자료 미확인':'자료 미연결');
+      list.append(element('dt','',label),element('dd','',state));
+    }
+    const overlap={ALL_AVAILABLE:'3사 가능 확인',TWO_AVAILABLE:'2사 가능 확인',ONE_AVAILABLE:'1사 가능 확인',
+      ALL_UNAVAILABLE:'3사 불가 확인'}[result?.overlap?.status] || '비교 가능한 공급자 자료가 부족합니다.';
+    comparison.replaceChildren(element('h2','', '주소별 공급자 비교 · 격자 기준'),list,element('p','coverage-note',overlap));
+    comparison.hidden=false;
+  }
+
+  async function compareProviders(row) {
+    comparisonRow=row;
+    renderProviderComparison(row);
+    if(!row.id||!view||!PROVIDERS.some(([id])=>providerMeta?.[id]?.serviceSourceConnected))return;
+    const generation=view.generation;
+    const data=await read('provider-point','/provider-overlap',{days,center,generation,cells:row.id}).catch(()=>null);
+    if(data&&comparisonRow===row&&view?.generation===generation)renderProviderComparison(row,data.cells?.[0]);
+  }
+
+  function focusSearchResult(row, radius) {
+    map.focus(row.location, row.bounds, radius);
+    map.searchPoint(row.location);
+    if(row.location)void compareProviders(row);
+    if (row.id) void selectCell(row.id, 0, row.kind === 'store' ? undefined : row.name);
+  }
+
+  function renderSearch(result, radius, autoFocus = false) {
     searchResults.replaceChildren();
     if (!result.results.length) {
       searchResults.append(element('p', 'coverage-empty', '저장된 주소·매장·행정구역에서 일치 항목을 찾지 못했습니다.'));
@@ -542,18 +638,22 @@ export function createCoveragePanel({ workspace, header }) {
         button.append(element('span', '', row.bounds ? '행정구역 범위' : '저장된 좌표가 없습니다.'));
       }
       button.disabled = !row.location && !row.bounds;
-      button.onclick = () => {
-        map.focus(row.location, row.bounds, radius);
-        if (row.id) void selectCell(row.id, 0, row.kind === 'store' ? undefined : row.name);
-      };
+      button.onclick = () => focusSearchResult(row, radius);
       searchResults.append(button);
     }
+    if (autoFocus && result.results.length===1 && result.results[0].location) focusSearchResult(result.results[0],radius);
   }
 
   function clearSearch() {
     abort('search');
+    abort('provider-point');
     searchOwner?.abort();
     searchOwner = null;
+    pendingSearchKey = null;
+    map?.searchPoint(null);
+    comparisonRow=null;
+    comparison.replaceChildren();
+    comparison.hidden=true;
     searchResults.replaceChildren();
   }
 
@@ -563,38 +663,89 @@ export function createCoveragePanel({ workspace, header }) {
 
   async function search(event) {
     event.preventDefault();
+    const query = find('coverageQuery').value.normalize('NFKC').trim();
+    const radius = Number(find('coverageRadius').value);
+    const key = JSON.stringify([query,days,center,radius,view?.generation]);
+    if (pendingSearchKey === key) return;
     clearSearch();
-    const query = find('coverageQuery').value.trim();
     if (query.length < 2) {
       searchMessage('검색어를 두 글자 이상 입력해 주세요.');
       return;
     }
     const owner = searchOwner = new AbortController();
-    const radius = Number(find('coverageRadius').value);
+    pendingSearchKey = key;
     const params = { days, center, radius };
     if (view) params.generation = view.generation;
+    const current = () => active && searchOwner === owner;
+    const pointFor = async (point, name) => {
+      if (!current() || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return;
+      const location = [point.lat,point.lng];
+      map.focus(location,null,radius);
+      map.searchPoint(location);
+      searchMessage('좌표 확인 · 격자 자료를 조회하고 있습니다.');
+      const data = await read('search','/point',params,{'x-map-coverage-point':location.join(',')});
+      if (!data || !current()) return;
+      data.results = data.results.map(row=>({...row,kind:'address',name,coordinateSource:point.coordinateSource}));
+      renderSearch(data,radius);
+      if(data.results[0])void compareProviders(data.results[0]);
+      if (data.results[0]?.id) void selectCell(data.results[0].id,0,name);
+    };
+    const candidatesFor = points => {
+      searchMessage('공식 위치 후보를 선택해 주세요.');
+      points.forEach((point,index)=>{
+        const button=element('button','coverage-search-result',`공식 위치 후보 ${index+1}`);
+        button.type='button';
+        button.onclick=()=>void pointFor(point,query).catch(failSearch);
+        searchResults.append(button);
+      });
+    };
+    const failSearch = error => {
+      if (!current()) return;
+      searchMessage(error.code ? window.NewAreaRequests.message(error) : '검색을 완료하지 못했습니다. 다시 검색해 주세요.');
+      if (error.status === 409) void loadView(true);
+    };
     searchMessage('저장된 위치를 찾는 중입니다.');
     try {
       const data = await read('search', '/search', params, { 'x-map-customer-query': encodeURIComponent(query) });
       if (!data || searchOwner !== owner) return;
-      if (data.results.length) {
-        renderSearch(data, radius);
+      if (data.results.some(row=>row.kind==='store' && row.location)) {
+        renderSearch(data, radius, true);
         return;
       }
       const requests = window.NewAreaRequests;
       const address = requests?.addressQuery(query, window.Phase2bUi.addressVariants);
-      if (!address) {
-        renderSearch(data, radius);
+      if (!address && !/^\d{19}$/.test(query)) {
+        renderSearch(data, radius, true);
         return;
       }
       const adapter = window.KakaoMapsAdapter;
-      if (window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup !== true) await adapter?.refreshAddressLookup?.();
-      if (!active || searchOwner !== owner) return;
+      let preserved;
+      try { preserved=await requests.stageAddress(query,data.generation??params.generation??null); }
+      catch(error){ if ([401,403,409].includes(error.status)) throw error; }
+      if (!current()) return;
+      if (preserved?.point) { await pointFor(preserved.point,query); return; }
+      if (preserved?.status==='OFFICIAL_ADDRESS_AMBIGUOUS' && preserved.points?.length) { candidatesFor(preserved.points); return; }
+      if (preserved?.status==='ADDRESS_AMBIGUOUS') { searchMessage('같은 주소에 여러 위치가 있습니다. 시·군·구 또는 고객코드를 확인해 주세요.'); return; }
+      if (data.results.length) { renderSearch(data,radius,true); return; }
+      if (!window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup && !window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup) await adapter?.refreshAddressLookup?.();
+      if (!current()) return;
+      addressProxy ||= adapter?.geocoder?.();
+      if (address && window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup===true && addressProxy?.serverProxy) {
+        const result=await requests.lookup(addressProxy,address,{mode:'official',signal:owner.signal}).catch(error=>{
+          if (error.code!=='OFFICIAL_ADDRESS_LOOKUP_DISABLED') throw error;
+        });
+        if (!current()) return;
+        const points=(result?.rows||[]).map(row=>({lat:Number(row.y),lng:Number(row.x),coordinateSource:'OFFICIAL_PUBLIC_BUILDING'}));
+        if (points.length===1) { await pointFor(points[0],result.resolution?.road||query); return; }
+        if (points.length>1) { candidatesFor(points); return; }
+      }
+      const temporary=requests.temporaryPoint(query);
+      if (temporary) { await pointFor(temporary,query); return; }
+      if (!address) { searchMessage('승인된 자료에서 해당 필지 위치를 찾지 못했습니다.'); return; }
       if (window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup !== true) {
-        searchMessage('미등록 주소 조회는 승인된 주소 서비스 연결 후 사용할 수 있습니다.');
+        searchMessage('저장·공식 자료에서 일치하는 위치를 찾지 못했습니다. 시·군·구를 포함해 확인해 주세요.');
         return;
       }
-      addressProxy ||= adapter?.geocoder?.();
       if (!addressProxy?.serverProxy) throw Error('APPROVED_ADDRESS_PROXY_REQUIRED');
       searchMessage('승인된 주소 서비스에서 정확한 위치를 찾는 중입니다.');
       const documents = await requests.lookup(addressProxy, address, { signal: owner.signal });
@@ -604,16 +755,10 @@ export function createCoveragePanel({ workspace, header }) {
         searchMessage('일치하는 주소 좌표를 확인하지 못했습니다.');
         return;
       }
-      const point = [Number(document.y), Number(document.x)];
-      const pointResult = await read('search', '/point', params, { 'x-map-coverage-point': point.join(',') });
-      if (!pointResult || searchOwner !== owner) return;
-      pointResult.results = pointResult.results.map(result => ({ ...result, kind: 'address', name: document.address_name }));
-      renderSearch(pointResult, radius);
+      await pointFor({lat:Number(document.y),lng:Number(document.x),coordinateSource:'KAKAO_ADDRESS_TEMPORARY'},document.address_name);
     } catch (error) {
-      if (!active || searchOwner !== owner) return;
-      searchMessage(error.code ? window.NewAreaRequests.message(error) : '검색을 완료하지 못했습니다. 다시 검색해 주세요.');
-      if (error.status === 409) void loadView(true);
-    }
+      failSearch(error);
+    } finally {if(current())pendingSearchKey=null;}
   }
 
   function changeFilters() {
@@ -636,6 +781,13 @@ export function createCoveragePanel({ workspace, header }) {
   find('coverageFilterRetry').onclick = () => { if (failedFilter) { ({ days, center } = failedFilter); changeFilters(); } };
   panelToggle.onclick = () => collapsePanel(panelToggle.getAttribute('aria-expanded') === 'true');
   find('coverageSearch').onsubmit = search;
+  find('coverageOverlapToggle').onchange=updateProviderPaths;
+  for(const toggle of root.querySelectorAll('[data-coverage-provider]')) toggle.onchange=()=>{
+    const id=toggle.dataset.coverageProvider;
+    if(toggle.checked)enabledProviders.add(id);else enabledProviders.delete(id);
+    updateProviderPaths();
+    if(view)void loadProviderLayers(view);
+  };
   find('coverageQuery').oninput = clearSearch;
   find('coverageRadius').onchange = clearSearch;
   find('coverageListFilter').onchange = () => { list = null; renderList(); void loadList(); };
@@ -644,6 +796,12 @@ export function createCoveragePanel({ workspace, header }) {
 
   function resetView() {
     view = list = null;
+    providerScope=providerViewKey='';
+    providerMeta=null;
+    providerCells=providerPaths=EMPTY;
+    abort('providers');abort('provider-map');
+    find('coverageProviderMapStatus').textContent='';
+    renderProviderStates();
     viewTag = lastKey = listKey = '';
     viewSession = null;
     failedFilter = null;

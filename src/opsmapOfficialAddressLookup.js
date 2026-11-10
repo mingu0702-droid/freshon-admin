@@ -22,6 +22,7 @@ export function officialAddressKey(value) {
   if (typeof value !== 'string' || value.length > 200) return null;
   const normalized = value.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ')
     .replace(/(대로|로)\s+(\d+(?:번)?길)/g, '$1$2');
+  if (/^\d{10}[12](?!0000)\d{8}$/.test(normalized)) return 'pnu:'+normalized;
   const road = /^.*?[가-힣0-9·.]+(?:대로|로|길)\s*(?:지하\s*)?\d+(?:-\d+)?(?=$|[\s,(\[])/;
   const lot = /^.*?[가-힣0-9·.]+(?:동\d+가|동|리|읍|면|가)\s*(?:산\s*)?\d+(?:-\d+)?(?=$|[\s,(\[])/;
   const core = (normalized.match(road) || normalized.match(lot))?.[0];

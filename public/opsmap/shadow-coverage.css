@@ -176,3 +176,25 @@ body.shadow-coverage-open #mapFreshnessStatus,
 
 .coverage-candidate-count circle { fill: #98450a; stroke: #fff; stroke-width: 2 }
 .coverage-candidate-count text { fill: #fff; text-anchor: middle; font: 700 11px system-ui, sans-serif }
+.coverage-providers { display:flex; flex-wrap:wrap; gap:6px 10px; border:1px solid #dce4ee; border-radius:6px; margin:6px 0; padding:4px 7px; min-inline-size:0 }
+.coverage-providers legend { padding:0 4px; font-weight:650 }
+.coverage-providers label { display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer }
+.coverage-providers label input { min-height:0; accent-color:#294b7a }
+.coverage-providers label small { display:block; color:#475c78; font-size:11px }
+.coverage-provider-key { border-inline-start:3px solid var(--provider-key); padding-inline-start:4px }
+.coverage-provider-key[data-key="FRESHON"] { --provider-key:#285fa8 }
+.coverage-provider-key[data-key="CJ"] { --provider-key:#bd3f2b }
+.coverage-provider-key[data-key="NAVER_SHOPPING"] { --provider-key:#147147 }
+.coverage-provider-key[data-key="OVERLAP"] { --provider-key:#5c307e }
+.coverage-providers > p:empty { display:none }
+.coverage-provider-comparison:not([hidden]) { border:1px solid #dce4ee; border-radius:6px; padding:6px 8px; margin:6px 0 }
+.coverage-provider-comparison h2 { margin:0 0 4px; font-size:13px }
+.coverage-provider-results { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:3px 9px; margin:0; font-size:12px }
+.coverage-provider-results dd { margin:0 }
+.coverage-search-pin { display:block; width:15px; height:15px; transform:rotate(-45deg); border:2px solid #253f65; border-radius:50% 50% 50% 0; background:#ffffffa8; box-shadow:0 1px 3px #17294155 }
+.coverage-overlay path[data-provider] { fill:var(--coverage-provider-color); stroke:var(--coverage-provider-color); fill-opacity:.20; stroke-width:2 }
+.coverage-overlay path[data-provider="FRESHON"] { --coverage-provider-color:#285fa8 }
+.coverage-overlay path[data-provider="CJ"] { --coverage-provider-color:#bd3f2b }
+.coverage-overlay path[data-provider="NAVER_SHOPPING"] { --coverage-provider-color:#147147 }
+.coverage-overlay path[data-provider-status="UNAVAILABLE_CONFIRMED"] { fill-opacity:.08; stroke-dasharray:3 3 }
+.coverage-overlay path[data-provider="OVERLAP"] { --coverage-provider-color:#5c307e; fill-opacity:.25; stroke-width:3 }
