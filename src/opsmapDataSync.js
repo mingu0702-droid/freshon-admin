@@ -15,6 +15,7 @@ import {openOpsmapSyncGenerationStore, syncDigest, syncHash, syncSha256, SYNC_MA
   validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
 
 import {completeSyncObservation,nextSyncEvidence} from './opsmapSyncPolicy.js';
+import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
 import {continuingFixedLedger} from './fixedCoordinateCompletion.js';
 
 const DAY = 86_400_000;
@@ -115,7 +116,7 @@ function snapshotRows(catalog, saved, docs) {
   });
 }
 
-async function materializeDays({store, current, seed, changes, directory}) {
+async function materializeDays({store, current, seed, changes, directory, targetDate, plannedDates}) {
   await fs.mkdir(directory,{recursive:true,mode:0o700});
   const dates = {...current?.state.dates};
   const newDocs = new Map();
@@ -134,10 +135,10 @@ async function materializeDays({store, current, seed, changes, directory}) {
     const old = await store.readDay(date,current);
     // Omission and incomplete pages cannot erase previously observed deliveries.
     const ids = new Set((day.tasks || day.visits).map(row => row[0]));
-    if ((old?.tasks || old?.visits || []).some(row => !ids.has(row[0]))) throw Error('OPSMAP_SYNC_DAY_REGRESSION');
+    if (!old?.planningOnly && (old?.tasks || old?.visits || []).some(row => !ids.has(row[0]))) throw Error('OPSMAP_SYNC_DAY_REGRESSION');
     newDocs.set(date,day);
   }
-  const latest=[...Object.keys(dates),...newDocs.keys()].sort().at(-1);
+  const latest=[...Object.keys(dates),...newDocs.keys()].filter(date=>date<=targetDate&&!plannedDates.has(date)).sort().at(-1);
   const floor=latest&&datesFor(latest,90)[0];
   for (const [date,hash] of Object.entries(dates)) {
     if (newDocs.has(date)) continue;
@@ -205,9 +206,10 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       throw Error('OPSMAP_SYNC_BACKFILL');
     }
     const yesterday=dateBefore(target);
+    const plannedDates=new Set(current?.state.plannedDates || []);
     const catchupAfter=scheduledRun?(current?.state.catchupAfter || current?.state.asOf || initial?.facts.end):null;
     const catchup=isDay(catchupAfter)?datesFor(target,90).filter(date=>date>catchupAfter && date<yesterday &&
-      !current?.state.dates[date]).slice(0,2):[];
+      (!current?.state.dates[date]||plannedDates.has(date))).slice(0,2):[];
     const datesToRead = bootstrap ? [] : [...new Set([yesterday,target,...catchup,...backfillDates])];
     const [registry, suppliedLedger] = await Promise.all([bootstrap?null:readRegistry(),readLedger()]);
     let ledger=completeCoordinates ? continuingFixedLedger(current?.ledger,suppliedLedger) : suppliedLedger;
@@ -221,6 +223,20 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
     const todayEvidence=changes.get(target);
     const sourceReadComplete=completeSyncObservation(todayEvidence);
     if (scheduledRun && !sourceReadComplete) throw Object.assign(Error('OPSMAP_SCHEDULE_SOURCE_INCOMPLETE'),{date:target});
+    if (scheduledRun) {
+      const planned=opsmapDispatchDate(Date.parse(scheduledRun.issuedAt));
+      if(planned>target) {
+        const plan=await readDay(planned);
+        if (!completeSyncObservation(plan) || plan.visits.length) {
+          throw Object.assign(Error('OPSMAP_SCHEDULE_PLAN_INCOMPLETE'),{date:planned});
+        }
+        if (plan.sourceRows) changes.set(planned,validateOpsmapSyncDay({...plan,planningOnly:true},planned));
+      }
+    }
+    for (const [date,day] of changes) {
+      if (day.planningOnly) plannedDates.add(date);
+      else plannedDates.delete(date);
+    }
     const observationHash=scheduledRun?syncDigest([scheduledRun.runId,registry.version,[...changes].map(([date,day])=>[date,day.proofHash])]):null;
     const base = rebindCatalog(current?.baseCatalog || initial.base,registry);
     let completedStores=base.stores;
@@ -243,8 +259,8 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       const input = path.join(candidate.folder,'input');
       const coverage = path.join(candidate.folder,'coverage');
       const observed = path.join(input,'observed-days');
-      const dates = await materializeDays({store,current,seed:initial,changes,directory:observed});
-      const asOf = Object.keys(dates).sort().at(-1);
+      const dates = await materializeDays({store,current,seed:initial,changes,directory:observed,targetDate:target,plannedDates});
+      const asOf = Object.keys(dates).filter(date=>date<=target&&!plannedDates.has(date)).sort().at(-1);
       if (!isDay(asOf) || asOf > target) throw Error('OPSMAP_SYNC_DATE_FRONTIER');
       const source = current ? await readJson(path.join(current.input,'source-import.safe.json'),32_768) : initial.facts;
       const window = datesFor(asOf,90);
@@ -253,7 +269,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       const nearby = new Map();
       let count = 0, completed = 0;
       for (const date of window) {
-        if (!dates[date]) continue;
+        if (!dates[date] || plannedDates.has(date)) continue;
         const bytes = await boundedRead(path.join(observed,date+'.json'),SYNC_MAX_DAY_BYTES);
         if (syncSha256(bytes) !== dates[date]) throw Error('OPSMAP_SYNC_DAY_DIGEST');
         const day = JSON.parse(bytes);
@@ -276,7 +292,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
         ...(!bootstrap?{syncRead:{target,registryVersion,observedDates:[...changes.keys()].sort()}}:{})};
       const previousSnapshot = current?.sealedSnapshot || initial?.snapshot;
       const sealedSnapshot = snapshotProjection({version:'phase2b-map-snapshot-v1',latestDate:asOf,startDate:source.start,
-        rows:snapshotRows(catalog,previousSnapshot,changes.values()),sourceFreshness:{targetDate:target,
+        rows:snapshotRows(catalog,previousSnapshot,[...changes.values()].filter(day=>!day.planningOnly)),sourceFreshness:{targetDate:target,
           sourceReadComplete,sourceDateVerified:Boolean(todayEvidence),
           phase:bootstrap?'VERIFIED_SEED':'VERIFIED_SCHEDULED_READ'}},
       {now,revision:candidate.revision});
@@ -298,6 +314,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       const ready = await store.publish(candidate,{fingerprint,asOf,committedAt,registryVersion,dates,generation:built.index.sha256,
         snapshotSha256:syncSha256(snapshotBytes),ledgerSha256:syncSha256(ledgerBytes),baseSha256:syncSha256(baseBytes),
         catalogSha256:syncSha256(catalogBytes),indexSha256:syncSha256(indexBytes),nearbySha256:syncSha256(nearbyBytes),
+        ...(plannedDates.size?{plannedDates:[...plannedDates].sort()}:{}),
         ...(scheduledRun?{runId:scheduledRun.runId,observationHash,sourceReadComplete,catchupAfter}:{} )});
       published = true;
       return {state:bootstrap?'SEEDED':'PUBLISHED',generation:ready.index.sha256,revision:ready.state.revision,

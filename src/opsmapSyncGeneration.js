@@ -42,6 +42,8 @@ export function validateOpsmapSyncDay(value, date) {
     return identities;
   }
   const visitIds = checkRows(visits, false);
+  if (value.planningOnly!==undefined && (value.planningOnly!==true || visits.length ||
+      value.proof!=='VERIFIED_COMPLETE_DAY' || !Array.isArray(tasks))) throw Error('OPSMAP_SYNC_DAY_PLAN');
   if (tasks !== undefined) {
     if (!Array.isArray(tasks) || tasks.length !== sourceRows || unidentified !== 0) throw Error('OPSMAP_SYNC_TASK_COUNT');
     checkRows(tasks, true);
@@ -88,6 +90,8 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
         !isDay(state.asOf) || !Number.isFinite(Date.parse(state.committedAt)) ||
         state.runId!==undefined&&(!syncHash(state.runId)||state.sourceReadComplete!==true||!syncHash(state.observationHash)) ||
         state.catchupAfter!=null&&(!isDay(state.catchupAfter)||state.catchupAfter>state.asOf) ||
+        state.plannedDates!==undefined&&(!Array.isArray(state.plannedDates) ||
+          new Set(state.plannedDates).size!==state.plannedDates.length || state.plannedDates.some(date=>!isDay(date)||!state.dates?.[date])) ||
         !state.dates || Object.entries(state.dates).some(([date,hash]) => !isDay(date) || !syncHash(hash))) {
       throw Error('OPSMAP_SYNC_HEAD');
     }
@@ -210,7 +214,7 @@ export function archivedOpsmapAssignments(day, generation) {
       (day.tasks ? known?.originalAddressHash === hash : historicalHashes.get(customerCode) === hash);
     const complete = !day.tasks || status === 'COMPLETED' || previous?.status === 'COMPLETED';
     grouped.set(vehicle+'|'+customerCode,{customerCode,customerName:known?.customerName || customerCode,vehicle,
-      deliveryDate:day.date,lastDeliveryDate:day.date,status:complete?'COMPLETED':'UNCONFIRMED',order:null,
+      deliveryDate:day.date,...(!day.planningOnly?{lastDeliveryDate:day.date}:{}),status:complete?'COMPLETED':'UNCONFIRMED',order:null,
       lat:matches?known?.lat ?? null:null,lng:matches?known?.lng ?? null:null,
       ...(matches&&known?.coordinateEvidence?{coordinateSource:known.coordinateSource,
         coordinateAccuracy:known.coordinateAccuracy,coordinateEvidence:known.coordinateEvidence,
@@ -218,7 +222,8 @@ export function archivedOpsmapAssignments(day, generation) {
   }
   const data = [...grouped.values()];
   if (!data.length) return null;
-  return {ok:true,data,meta:{date:day.date,source:'STAGE_VERIFIED_DELIVERY_ARCHIVE',recordKind:day.tasks?'OBSERVED_ASSIGNMENTS':'ARCHIVE_COMPLETED',
+  return {ok:true,data,meta:{date:day.date,source:'STAGE_VERIFIED_DELIVERY_ARCHIVE',
+    recordKind:day.planningOnly?'PLANNED_ASSIGNMENTS':day.tasks?'OBSERVED_ASSIGNMENTS':'ARCHIVE_COMPLETED',
     reviewOnly:true,complete:false,sourceComplete:false,rowCount:data.length,observedVisitCount:day.visits.length,
     sourceDayRows:day.sourceRows,vehicles:[...new Set(data.map(row => row.vehicle))]},error:null};
 }

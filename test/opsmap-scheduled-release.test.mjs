@@ -11,6 +11,7 @@ import express from 'express';
 import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
 import {coordinateAddressHash} from '../src/opsmap-abc/opsmapAutoCoordinates.js';
 import {createOpsmapDataSync} from '../src/opsmapDataSync.js';
+import {reviseFixedCoordinateLedger} from '../src/fixedStoreCoordinates.js';
 import {createOpsmapDurableGeneration, stageOpsmapDurableStorage} from '../src/opsmapDurableGeneration.js';
 import {mountOpsmapScheduledRun, OPSMAP_SCHEDULED_ROUTE, publishOpsmapScheduledRun, verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
 import {syncDigest, syncSha256} from '../src/opsmapSyncGeneration.js';
@@ -18,6 +19,8 @@ import {archiveAddressHash} from '../src/stageArchivedDelivery.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
+import {opsmapDispatchDate} from '../src/snapshotRefreshEvidence.js';
+import {createShadowCoverageStore} from '../src/shadowCoverage/store.js';
 
 const date='2026-11-11', previousDate='2026-11-10', oldDate='2026-07-01';
 const clockStart=Date.parse(date+'T02:00:00+09:00');
@@ -298,4 +301,77 @@ test('Delivery restartable login uses existing account only with explicit date-r
   assert.equal(calls.filter(item=>item==='/api/bali/task').length,3);
   wrongCenter=true;
   await assert.rejects(read.readObservation(date),{code:'DELIVERY_SOURCE_SCOPE',date,center:'yeongnam'});
+});
+
+test('21:00 loads the next dispatch, midnight replaces drafts, and a failed source keeps the last generation',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'opsmap-dispatch-test-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const spool=path.join(root,'spool'), tomorrow='2026-11-12';
+  await fs.mkdir(spool,{mode:0o700});
+  const seed=await seedFor(root);
+  const newCode='T99112', newAddress='경기도 오산시 검증로 92', movedAddress='경기도 오산시 검증로 93';
+  let tick=Date.parse(date+'T20:59:59.999+09:00'), registryNew=false, fail=false;
+  const queried=[];
+  const now=()=>tick;
+  const row=(customerCode,basicAddress)=>({customerCode,customerName:'격리 매장',basicAddress,lifecycle:'ACTIVE'});
+  const verifiedPoints=[{customerCode:code,address:movedAddress,lat:37.15},{customerCode:newCode,address:newAddress,lat:37.16}];
+  const updatedLedger=reviseFixedCoordinateLedger(ledger,{expectedRevision:0,updatedAt:date+'T12:00:00Z',rows:verifiedPoints.map(point=>({
+    customerCode:point.customerCode,addressHash:coordinateAddressHash(point.address),lat:point.lat,lng:127.06,
+    coordinateSource:'BUILDING_VERIFIED',coordinateAccuracy:'BUILDING',evidenceSource:'OFFICIAL_ADDRESS_DATA',
+    evidenceSha256:'a'.repeat(64),observedAt:date+'T10:00:00Z',verifiedAt:date+'T12:00:00Z',measurementKind:'BUILDING_LOCATION'
+  }))});
+  const worker=await createOpsmapDataSync({directory:spool,seed,now,includeOfficialRegions:false,readLedger:async()=>ledger,
+    async readRegistry(){
+      const rows=registryNew?[row(code,movedAddress),row(newCode,newAddress)]:[row(code,address)];
+      return {complete:true,version:syncDigest(rows),rows};
+    },
+    completeCoordinates:async input=>({stores:input.stores,ledger:registryNew?updatedLedger:input.ledger}),
+    async readDay(day) {
+      queried.push(day);
+      if (fail && day===tomorrow) throw Error('DELIVERY_SOURCE_FORBIDDEN');
+      if(day!==tomorrow)return observation(day);
+      const base=observation(day);
+      const isActual=Date.parse(tomorrow+'T00:00:00+09:00')<=tick;
+      const id=syncSha256(isActual?'reassigned-at-midnight':'planned-stop');
+      const tasks=[[id,newCode,'202','osan',coordinateAddressHash(newAddress),isActual?'COMPLETED':'OPEN']];
+      return {...base,tasks,proofHash:syncDigest(tasks),
+        visits:isActual?[[id,newCode,'202','osan',archiveAddressHash(newAddress)]]:[]};
+    }});
+  const run=()=>worker.sync({scheduledRun:verifyOpsmapScheduleReceipt(signed(tick),{...clock,now})});
+  assert.equal(opsmapDispatchDate(tick),date);
+  await run();
+  assert.deepEqual(queried,[previousDate,date]);
+  registryNew=true;
+  tick++;
+  assert.equal(opsmapDispatchDate(tick),tomorrow);
+  fail=true;
+  const prior=await worker.read();
+  await assert.rejects(run(),/DELIVERY_SOURCE_FORBIDDEN/);
+  assert.equal((await worker.read()).index.sha256,prior.index.sha256);
+  fail=false;
+  await run();
+  const evening=await worker.read();
+  assert.deepEqual(evening.state.plannedDates,[tomorrow]);
+  assert.equal(evening.index.asOf,date);
+  assert.equal(evening.ledger.sha256,updatedLedger.sha256);
+  assert.equal(evening.snapshot.rows.find(row=>row.customerCode===newCode).lat,37.16);
+  assert.equal(evening.snapshot.rows.find(row=>row.customerCode===code).originalAddressHash,coordinateAddressHash(movedAddress));
+  assert.equal((await worker.readDay(tomorrow)).planningOnly,true);
+  assert.equal((await worker.readDay(tomorrow)).visits.length,0);
+  tick=Date.parse(tomorrow+'T00:00:00+09:00');
+  assert.equal(opsmapDispatchDate(tick),tomorrow);
+  await run();
+  const midnight=await worker.read();
+  const day=await worker.readDay(tomorrow);
+  assert.equal(midnight.state.plannedDates,undefined);
+  assert.equal(midnight.index.asOf,tomorrow);
+  assert.equal(day.visits.length,1);
+  assert.equal(day.visits[0][2],'202');
+  const coverage=createShadowCoverageStore({directory:midnight.coverage});
+  for(const days of [30,60,90]) {
+    const {index,window}=await coverage.readPeriod(days);
+    assert.equal(index.sha256,midnight.snapshot.sourceGeneration);
+    assert.equal(window.end,tomorrow);
+    assert.equal(window.completed,2);
+  }
 });

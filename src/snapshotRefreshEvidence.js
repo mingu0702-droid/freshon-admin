@@ -1,6 +1,12 @@
 // Read observations certify only the selected date, never collection/publication.
 const validDay=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
 const nextDay=value=>new Date(Date.parse(value)+86400000).toISOString().slice(0,10);
+// Dispatch switches at 21:00 KST. Source delivery dates and coverage stay on the calendar day.
+export function opsmapDispatchDate(time) {
+ const local=new Date(time+9*3600000);
+ const date=local.toISOString().slice(0,10);
+ return local.getUTCHours()>=21?nextDay(date):date;
+}
 export function sourceTaskDate(value){
  if(validDay(value))return value;
  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T/.test(value)||!validDay(value.slice(0,10))||!/(?:Z|[+-]\d\d:\d\d)$/.test(value))return null;

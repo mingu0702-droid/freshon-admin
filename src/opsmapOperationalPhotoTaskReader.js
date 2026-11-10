@@ -56,6 +56,8 @@ export function createOperationalPhotoTaskReader({rawRequest, extractRows = extr
         const batch = extractRows(payload);
         if (!Array.isArray(batch) || batch.length > pageSize || rows.length + batch.length > 10000) fail('INVALID_PHOTO_RESPONSE');
         const total = count(payload?.totalElements ?? payload?.data?.totalElements), pageCount = count(payload?.totalPages ?? payload?.data?.totalPages);
+        const returnedPage = payload?.number ?? payload?.data?.number;
+        if (returnedPage != null && returnedPage !== page) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
         if (total === null || pageCount === null || total > 10000 || total === 0 && pageCount > 1
           || total > 0 && pageCount !== Math.ceil(total / pageSize)) pagingValid = false;
         if (declaredTotal !== null && (declaredTotal !== total || declaredPages !== pageCount)) pagingValid = false;

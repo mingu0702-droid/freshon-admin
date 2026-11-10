@@ -59,7 +59,7 @@ function registeredOsanCenter(setting){
 }
 
 export function mountProductionMapApi(app,{
-  previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
+  previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,phase2bDispatchDate,
   normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus,
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
   publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement,sharedBaseCache,
@@ -309,19 +309,27 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
   if(publishedReads.isActive())return pagedRequired(res);
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const date = String(req.query.date || "");
-  if (date !== "latest" && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || normalizeDateValue(date) !== date || date > phase2bKstDate())) return res.status(400).json({ error: "INVALID_DATE" });
+  const calendarDate=phase2bKstDate(), dispatchDate=phase2bDispatchDate?.() || calendarDate;
+  if (date !== "latest" && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || normalizeDateValue(date) !== date || date > dispatchDate)) return res.status(400).json({ error: "INVALID_DATE" });
   try {
     const snapshot = await readPhase2bSnapshot();
-      const readDate = (candidate) => (candidate === phase2bKstDate() ? phase2bAssignmentCache : phase2bDatedAssignmentCache)
+      const readDate = (candidate) => (candidate >= calendarDate ? phase2bAssignmentCache : phase2bDatedAssignmentCache)
         .load(`datedAssignments:${candidate}:${snapshot?.sourceGeneration || ''}`, async () => {
-      if (candidate === phase2bKstDate() || date !== 'latest') {
+      if (candidate >= calendarDate || date !== 'latest') {
         // An explicitly selected business date remains readable after midnight.
         // Reuse the bounded, date-verified Delivery reader; never scan a period.
         try {
           const live = await phase2bTodayStatus(candidate);
           if(live?.date!==candidate)throw new Error('DELIVERY_SOURCE_DATE_MISMATCH');
           assertDeliverySourceObservation(live.sourceObservation,candidate);
+          if(phase2bDispatchDate && live.sourceObservation.responseRows===0) {
+            return {ok:true,data:[],meta:{date:candidate,source:"Delivery Admin date-verified dispatch",complete:true,
+              rowCount:0,generatedAt:live.generatedAt,sourceReadState:'NO_DISPATCH_OBSERVED'},error:null};
+          }
           if(live.sourceObservation.dateVerified!==true)throw new Error('DELIVERY_SOURCE_DATE_UNVERIFIED');
+          if(candidate>calendarDate && live.vehicles.some(vehicle=>vehicle.stops.some(stop=>stop.appRecorded))) {
+            throw new Error('DELIVERY_SOURCE_PLAN_CONFLICT');
+          }
           const coordinates = new Map((snapshot?.rows || []).map((row) => [String(row.customerCode || row.code), row]));
           const actual = live.vehicles.flatMap((vehicle) => vehicle.stops.map((stop) => {
             const code = String(stop.customerCode || stop.code || "");
@@ -330,17 +338,41 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
                 ...datedStopCoordinates(stop, point) };
           }));
           const data = uniqueAssignments(actual, candidate);
-          if (data.length) return { ok: true, data, meta: { date: candidate, source: candidate === phase2bKstDate() ? "Delivery Admin current dispatch" : "Delivery Admin date-verified dispatch", complete: true, rowCount: data.length, generatedAt: live.generatedAt }, error: null };
+          if (data.length && candidate>calendarDate) {
+            return {ok:true,data:data.map(({lastDeliveryDate,...row})=>row),meta:{date:candidate,source:"Delivery Admin date-verified dispatch",
+              recordKind:'PLANNED_ASSIGNMENTS',complete:true,rowCount:data.length,generatedAt:live.generatedAt},error:null};
+          }
+          if (data.length) return { ok: true, data, meta: { date: candidate, source: candidate === calendarDate ? "Delivery Admin current dispatch" : "Delivery Admin date-verified dispatch", complete: true, rowCount: data.length, generatedAt: live.generatedAt }, error: null };
+          if (phase2bDispatchDate && !actual.length) {
+            return {ok:true,data:[],meta:{date:candidate,source:"Delivery Admin date-verified dispatch",complete:true,
+              rowCount:0,generatedAt:live.generatedAt,sourceReadState:'NO_ACTIVE_DISPATCH_OBSERVED'},error:null};
+          }
         } catch (error) {
+          if(candidate>calendarDate)throw error;
           console.warn(JSON.stringify({ component: "phase2b-assignments", source: "Delivery", error: /^DELIVERY_[A-Z_]+$/.test(error.code || error.message || '') ? error.code || error.message : 'DELIVERY_READ_UNAVAILABLE' }));
         }
       }
       // Only a verified final page resolves this loader and enters the cache.
       return readPaginatedDatedAssignments(candidate, params => callHub("datedAssignments", params, { useCache: false }));
     });
-    const verifiedSnapshotDate = snapshot && !phase2bSnapshotMeta(snapshot).stale && snapshot.refreshedThrough >= phase2bKstDate() ? snapshot.latestDate : "";
-    let candidate = date === "latest" ? phase2bKstDate() : date;
+    const verifiedSnapshotDate = snapshot && !phase2bSnapshotMeta(snapshot).stale && snapshot.refreshedThrough >= calendarDate ? snapshot.latestDate : "";
+    let candidate = date === "latest" ? dispatchDate : date;
     let loaded;
+    if(date==='latest' && candidate>calendarDate) {
+      try {
+        const next=await readDate(candidate);
+        if(next.value.data.length) {
+          res.setHeader("X-Phase2B-Cache", next.cache);
+          return res.json(next.value);
+        }
+      } catch {
+        const saved=await Promise.resolve().then(()=>readArchivedAssignments?.(candidate)).catch(()=>null);
+        if(saved?.meta?.date===candidate && saved.meta.recordKind==='PLANNED_ASSIGNMENTS') {
+          return requireView(req,res,()=>res.set('Cache-Control','private, no-store').json(saved));
+        }
+      }
+      candidate=calendarDate;
+    }
     for (let offset = 0; offset < (date === "latest" ? 8 : 1); offset++) {
       loaded = await readDate(candidate);
       if (loaded.value.data.length || date !== "latest") break;
