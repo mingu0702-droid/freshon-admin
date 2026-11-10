@@ -59,7 +59,11 @@ with shapefile.Writer(str(root/'parcels'),shapeType=shapefile.POLYGON,encoding='
     shp.poly([outer]); shp.record('4136010100201230004','4136010100','산123-4','2026-06-30')
     shp.poly([[(a-200,b-200) for a,b in outer]]); shp.record('2826012200100080137','2826012200','8-137','2026-06-30')
     shp.poly([outer]); shp.record('2826012200100080000','2826012200','9','2026-06-30')
-(root/'parcels.prj').write_text(CRS.from_epsg(5186).to_wkt(),encoding='utf8')
+    shp.poly([outer]); shp.record('4136010100109990000','4136010100','999','2026-06-30')
+(root/'parcels.prj').write_text(CRS.from_epsg(5186).to_wkt('WKT1_ESRI'),encoding='utf8')
+with zipfile.ZipFile(root/'parcels.zip','w',compression=zipfile.ZIP_DEFLATED) as z:
+    for suffix in ('shp','shx','dbf','prj'):
+        z.write(root/f'parcels.{suffix}',f'region/parcels.{suffix}')
 interior = polygon.representative_point()
 lng,lat = Transformer.from_crs(5186,4326,always_xy=True).transform(interior.x,interior.y)
 (root/'point.json').write_text(json.dumps([lat,lng]))
@@ -68,6 +72,7 @@ lng,lat = Transformer.from_crs(5186,4326,always_xy=True).transform(interior.x,in
 function run(args) {
   const result = spawnSync(python,['-X','utf8','-B',...args],{encoding:'utf8'});
   assert.equal(result.status,0,result.stderr);
+  return result.stdout;
 }
 
 test('representative resolution preserves exact parcels, shared customer coordinates and address history', async t => {
@@ -78,12 +83,24 @@ test('representative resolution preserves exact parcels, shared customer coordin
   const file = name => path.join(root,name);
   run(['-c',fixture,root]);
   const helper = 'scripts/opsmap-public-address-catalog.py';
-  const base = file('base.sqlite'), parcel = file('parcel.sqlite');
+  const base = file('base.sqlite'), parcel = file('parcel.sqlite'), previousParcel = file('previous-parcel.sqlite');
   run([helper,'build',base,'--postal',file('postal.zip'),'--business',file('business.zip'),'--elevator',file('elevator.csv'),
     '--business-date','2026-09-30','--elevator-date','2025-12-12']);
-  run([helper,'build-parcel',parcel,'--postal',file('postal.zip'),'--postal-observed-on','2026-11-10',
-    '--legal-dongs',file('legal.zip'),'--code-changes',file('changes.json'),'--parcel-shape',file('parcels.shp')+'=2026-06-30',
+  run([helper,'build-parcel',previousParcel,'--postal',file('postal.zip'),'--postal-observed-on','2026-11-10',
+    '--legal-dongs',file('legal.zip'),'--code-changes',file('changes.json'),
     '--site-index',file('sites.json')]);
+  const previousHash = sha(await fs.readFile(previousParcel));
+  const targets = file('target-pnus.json');
+  await fs.writeFile(targets,JSON.stringify(['4136010100201230004','2827511100100080137','2827511100100080000']));
+  const extend = ['--base-index',previousParcel,'--target-pnus',targets,'--parcel-shape',file('parcels.zip')+'=2026-06-30'];
+  assert.deepEqual(JSON.parse(run([helper,'extend-parcel',parcel,...extend,'--base-sha256',previousHash])),
+    {requested:3,alreadyResolved:0,added:2,unavailable:1});
+  assert.equal(sha(await fs.readFile(previousParcel)),previousHash);
+  const rejected = spawnSync(python,['-X','utf8','-B',helper,'extend-parcel',file('bad-index.sqlite'),
+    ...extend,'--base-sha256','0'.repeat(64)],{encoding:'utf8'});
+  assert.notEqual(rejected.status,0);
+  assert.match(rejected.stderr,/PARCEL_BASE_INDEX_HASH/);
+  await assert.rejects(fs.access(file('bad-index.sqlite')),{code:'ENOENT'});
   const catalog = await openPublicAddressCatalog({file:base,sha256:sha(await fs.readFile(base)),
     parcelIndex:{file:parcel,sha256:sha(await fs.readFile(parcel))}});
 
@@ -94,7 +111,8 @@ test('representative resolution preserves exact parcels, shared customer coordin
   const stores = [
     row('S901',shared),row('S902',shared),row('S903',parcelOnly),row('S904',oldAddress),
     row('S905','경기 오산시 하늘로 50 (서관)'),row('S906','인천광역시 서해구 청라동 산8-137'),
-    row('S907','인천광역시 서해구 청라동 8'),row('S908',shared),row('S909','경기도 오산시 하늘로 75')
+    row('S907','인천광역시 서해구 청라동 8'),row('S908',shared),row('S909','경기도 오산시 하늘로 75'),
+    row('S910','경기도 오산시 가동 999')
   ];
   const body = {schema:'opsmap-fixed-store-coordinates-v1',revision:0,records:{}};
   const empty = {...body,sha256:sha(JSON.stringify(body))};
@@ -121,6 +139,7 @@ test('representative resolution preserves exact parcels, shared customer coordin
   assert.equal(status('S905'),'MULTIPLE_PARCELS');
   assert.equal(status('S906'),'PARCEL_GEOMETRY_UNAVAILABLE');
   assert.equal(status('S907'),'PARCEL_GEOMETRY_UNAVAILABLE');
+  assert.equal(status('S910'),'PARCEL_GEOMETRY_UNAVAILABLE');
   assert.equal(status('S908'),'PRESERVED_MANUAL');
   assert.equal(first.stores.find(s=>s.code==='S908').lat,37.175);
   assert.equal(point('S909').coordinateSource,'CAMPUS_REPRESENTATIVE');

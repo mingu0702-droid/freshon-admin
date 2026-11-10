@@ -386,7 +386,8 @@ def main():
     build_parser = commands.add_parser("build")
     read_parser = commands.add_parser("lookup")
     parcel_parser = commands.add_parser("build-parcel")
-    for command in (build_parser, read_parser, parcel_parser):
+    extend_parser = commands.add_parser("extend-parcel")
+    for command in (build_parser, read_parser, parcel_parser, extend_parser):
         command.add_argument("database", type=Path)
     for name in ("postal", "business", "elevator"):
         build_parser.add_argument("--" + name, type=Path, required=True)
@@ -399,10 +400,17 @@ def main():
     parcel_parser.add_argument("--code-changes", type=Path)
     parcel_parser.add_argument("--parcel-shape", action="append", default=[])
     parcel_parser.add_argument("--site-index", type=Path, action="append", default=[])
+    extend_parser.add_argument("--base-index", type=Path, required=True)
+    extend_parser.add_argument("--base-sha256", required=True)
+    extend_parser.add_argument("--target-pnus", type=Path, required=True)
+    extend_parser.add_argument("--parcel-shape", action="append", required=True)
     args = parser.parse_args()
     if args.command == "build-parcel":
         from opsmap_parcel_index import build as build_parcel
         build_parcel(args, lambda file: zip_members(file, ".txt", "utf-8-sig"), clean_address)
+    elif args.command == "extend-parcel":
+        from opsmap_parcel_index import extend as extend_parcel
+        json.dump(extend_parcel(args), sys.stdout)
     else:
         (build if args.command == "build" else lookup)(args)
 
