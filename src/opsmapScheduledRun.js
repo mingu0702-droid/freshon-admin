@@ -12,6 +12,16 @@ const HOUR=3_600_000;
 const maxRuntime=18*60_000;
 const kstDate=ms=>new Date(ms+9*HOUR).toISOString().slice(0,10);
 const jobFile=fileURLToPath(new URL('../scripts/run-opsmap-data-sync.mjs',import.meta.url));
+const sourceKeys=new Set(['customerRegistry','delivery:1','delivery:2','delivery:3','delivery:4']);
+
+function recordSource(sources,key,date,error) {
+  if(!sourceKeys.has(key))return;
+  const at=new Date().toISOString();
+  const code=error?.code||error?.message;
+  const observation={...sources[key],checkedAt:at,checkedDate:/^\d{4}-\d{2}-\d{2}$/.test(date||'')?date:null};
+  sources[key]=error?{...observation,lastFailureAt:at,error:/^[A-Z][A-Z_0-9]{1,95}$/.test(code||'')?code:'OPSMAP_SOURCE_FAILED'}:
+    {...observation,lastSuccessAt:at,lastSuccessDate:observation.checkedDate,error:null};
+}
 
 export function verifyOpsmapScheduleReceipt(value,{secret,scheduleId,executorHash,now=Date.now}={}) {
   const {version,origin,triggerId,principal,issuedAt,slot,date,runId,signature}=value || {};
@@ -76,15 +86,17 @@ export async function publishOpsmapScheduledRun({createWorker,durable,receipt}) 
   const reservation=await durable.reserve(receipt);
   if (reservation.state!=='STARTED') return {state:reservation.state,runId:receipt.runId};
   const {run}=reservation;
+  const sources={};
   try {
-    const worker=await createWorker();
+    const worker=await createWorker((...args)=>recordSource(sources,...args));
     const result=await worker.sync({scheduledRun:run,durableActive:reservation.active});
     if (result.sourceReadComplete!==true) throw Error('OPSMAP_SCHEDULE_SOURCE_INCOMPLETE');
     const generation=await worker.read();
     if (!generation || generation.index.sha256!==result.generation) throw Error('OPSMAP_SCHEDULE_GENERATION');
-    return result.state==='NOOP' ? await durable.confirmUnchanged(run,generation,result.observationHash) : await durable.commit(run,generation);
+    return result.state==='NOOP' ? await durable.confirmUnchanged(run,generation,result.observationHash,sources)
+      : await durable.commit(run,generation,sources);
   } catch(error) {
-    await durable.fail(run,error).catch(()=>{});
+    await durable.fail(run,error,sources).catch(()=>{});
     throw error;
   }
 }
