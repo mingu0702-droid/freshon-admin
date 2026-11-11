@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cellStatusCounts } from './storeStatus.js';
+import { activeOrderSummary, cellStatusCounts } from './storeStatus.js';
 
 const ROOT = '/api/map-phase2b/private/shadow-coverage';
 const CENTERS = ['all', 'osan', 'yeongnam', 'honam'];
@@ -85,8 +85,8 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       readStatus?.(catalog, index.sha256, days).catch(() => null)
     ]);
     const sourceRunId=readRunId?.(index.sha256) ?? null;
-    const version = createHash('sha256').update(JSON.stringify([3, index.sha256, stale, preservedMap, sourceRunId, days, center, bounds, level,
-      choice, statuses?.version, statuses?.evidenceAsOf, statuses?.date, statuses?.counts])).digest('hex');
+    const version = createHash('sha256').update(JSON.stringify([4, index.sha256, stale, preservedMap, sourceRunId, days, center, bounds, level,
+      choice, statuses?.version, statuses?.evidenceAsOf, statuses?.date, statuses?.counts, statuses?.orderSummary, statuses?.orderVersion])).digest('hex');
     const etag = '"coverage-' + version + '"';
     if (etag === tag) return { etag, data: null };
     const base = reader.viewFor(data, center, model.BASE_RESOLUTION);
@@ -108,11 +108,11 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       const codes = model.coverageMembers(view, catalog, cell.id);
       if (resolution >= 9) for (const code of codes) {
         const status = statuses.records.get(code), store = catalog.byCode.get(code);
-        if (statusPins.length >= 120 || pinned.has(code) || !(status?.newActive || status?.current || status?.pastNew || status?.pastHeld || status?.heldOrderConflict) || !store?.cell ||
+        if (statusPins.length >= 120 || pinned.has(code) || !(status?.newActive || status?.pastNew || status?.held || status?.heldOrderConflict) || !store?.cell ||
             store.lng < bounds[0] || store.lat < bounds[1] || store.lng > bounds[2] || store.lat > bounds[3]) continue;
         pinned.add(code);
         statusPins.push({ id:cell.id, state:status.current, newActive:status.newActive, heldOrderConflict:status.heldOrderConflict,
-          pastNew:status.pastNew, pastHeld:status.pastHeld,
+          pastNew:status.pastNew, pastHeld:status.pastHeld || (status.held && !status.current),
           location:[store.lat, store.lng] });
       }
       return { ...cell, storeStatus:cellStatusCounts(codes, statuses) };
@@ -141,12 +141,12 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       cells,
       statusPins,
       storeStatus: statuses ? { ...statuses.counts,
-        NEW:statuses.counts.NEW || (statuses.counts.ordersUnknown ? null : 0),
+        NEW:statuses.orderSummary ? statuses.orderSummary.newActive : statuses.counts.NEW || (statuses.counts.ordersUnknown ? null : 0),
         HELD:statuses.counts.HELD || (statuses.counts.currentUnknown ? null : 0),
         pastNew:statuses.evidenceAsOf ? statuses.counts.pastNew : null,
         pastHeld:statuses.evidenceAsOf ? statuses.counts.pastHeld : null,
         fixedCheckedAt:statuses.fixedCheckedAt, evidenceAsOf:statuses.evidenceAsOf, historyStart:statuses.historyStart,
-        rollingStart:statuses.rollingStart } : null
+        rollingStart:statuses.rollingStart, orderFilter:statuses.orderSummary } : null
     };
     return { etag, data: result };
   }, (res, { etag, data }) => {
@@ -172,13 +172,16 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
   }, async ({ days, center, generation }, { id, offset }, { reader, model, h3 }) => {
     if (!h3.isValidCell(id)) throw Error('COVERAGE_QUERY_INVALID');
     const resolution = h3.getResolution(id);
-    if (resolution < 4 || resolution > 10) throw Error('COVERAGE_QUERY_INVALID');
+    if (resolution < 4 || resolution > 11) throw Error('COVERAGE_QUERY_INVALID');
     const data = await reader.readPeriod(days, generation);
     const view = reader.viewFor(data, center, Math.min(resolution, model.BASE_RESOLUTION));
     const detail = resolution > model.BASE_RESOLUTION ? model.detailedCell(view, data.catalog, id, offset) : model.cellDetail(view, id, offset);
     const statuses = await readStatus?.(data.catalog, data.index.sha256, days).catch(() => null);
+    const storeStatus=cellStatusCounts(model.coverageMembers(view, data.catalog, id), statuses);
+    const orderSummary=resolution >= 8 ? statuses?.orderCell?.(id) : null;
     return { ...detail, resolution, boundary: h3.cellToBoundary(id),
-      storeStatus:cellStatusCounts(model.coverageMembers(view, data.catalog, id), statuses),
+      orderFilter:orderSummary ? activeOrderSummary(orderSummary,storeStatus) : null,
+      storeStatus,
       stores:detail.stores.map(row => {
         const store = data.catalog.byCode.get(row.code);
         return { ...row, ...(statuses?.records.get(row.code) || {}), location:store?.cell ? [store.lat, store.lng] : null };

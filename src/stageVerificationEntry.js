@@ -480,6 +480,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       let pendingStoreStatus;
       const statusApproved=stage.RENDER_SERVICE_ID===STAGE_SERVICE && stage.OPSMAP_STAGE_STORE_STATUS_APPROVED==='1';
       const readCoverageStatus = createCoverageStatusReader({
+        orderDigest:statusApproved ? stage.OPSMAP_STAGE_MIS_ORDER_SHA256 : null,
         readFixed:async codes=>{
           const primary=await fixed.get(codes);
           return primary.ok ? primary : snapshotBase?.get(codes) || primary;
@@ -487,11 +488,15 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         readEvidence:statusApproved ? generation=>{
           const active=validation.active();
           if (!active?.registry || active.generation!==generation) return null;
-          if (pendingStoreStatus?.generation!==generation) {
-            const request={generation};
+          if (pendingStoreStatus?.generation!==generation || now()>=pendingStoreStatus.retryAfter) {
+            const request={generation,retryAfter:Infinity};
             request.promise=import('./shadowCoverage/freshonStoreStatus.js').then(({readFreshonStoreStatusFile})=>
               readFreshonStoreStatusFile({file:stage.OPSMAP_STAGE_STORE_STATUS_FILE,expectedSha256:stage.OPSMAP_STAGE_STORE_STATUS_SHA256,
-                appRoot:coverageAppRoot,generation,registry:active.registry})).catch(error=>{
+                orderFile:stage.OPSMAP_STAGE_MIS_ORDER_FILE,orderSha256:stage.OPSMAP_STAGE_MIS_ORDER_SHA256,
+                appRoot:coverageAppRoot,generation,registry:active.registry})).then(index=>{
+              if (index.metadata.orderSource==='UNAVAILABLE') request.retryAfter=now()+60_000;
+              return index;
+            }).catch(error=>{
               if (pendingStoreStatus===request) pendingStoreStatus=undefined;
               throw error;
             });
