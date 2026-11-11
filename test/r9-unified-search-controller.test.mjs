@@ -21,7 +21,7 @@ function declaration(name){
 // interface stubs here and are exercised by the independent full-browser QA.
 const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','rankSearchRows','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
- 'renderResults','unifiedAddressQuery','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
+ 'renderResults','unifiedAddressQuery','stageAddressHashMatches','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
  const nodes=new Map(),selected=[],fallback=[],queries=[],requests=new Map();let resets=0,tempClears=0;
  const node=key=>{if(!nodes.has(key))nodes.set(key,{dataset:{},value:'',hidden:true,html:'',replaceChildren(){this.html='';this.buttons=[];},setAttribute(k,v){this[k]=v;},dispatchEvent(){},get innerHTML(){return this.html;},set innerHTML(v){this.html=v;this.buttons=[...v.matchAll(/data-result="(\d+)"/g)].map(m=>({dataset:{result:m[1]}}));}});return nodes.get(key);};
@@ -30,7 +30,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
-  searchIndex:null,searchFlight:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,customerRegistry:null,
+  searchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,customerRegistry:null,
   stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{stageAddress,temporaryPoint:()=>null},
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
@@ -93,6 +93,20 @@ test('a sealed Stage address uses the generation-bound index without rebuilding 
  assert.equal(f.selected[0]?.customerCode,row.customerCode);
  assert.equal(f.context.searchIndex,null);
  assert.equal(f.queries.length,0);
+});
+
+test('an exact sealed address hash uses authorized in-memory rows while changes fall back to the server',async()=>{
+ const hash='b'.repeat(64),row=store('S990203','합성 해시 매장','',{originalAddressHash:hash});
+ let requests=0;
+ const f=fixture({rows:[row],stageAddress:async()=>{requests++;return {status:'STORED',customerCodes:[row.customerCode]};}});
+ f.context.snapshotMeta={sourceGeneration:'a'.repeat(64)};
+ f.context.window.MapCustomerRegistry={addressHash:async()=>hash};
+ await f.context.searchPeriod('서울 합성구 보호로 7');
+ assert.equal(f.selected[0]?.customerCode,row.customerCode);
+ assert.equal(requests,0);
+ f.context.storesByCode.set(row.customerCode,{...row,currentAddressHash:'c'.repeat(64)});
+ await f.context.searchPeriod('서울 합성구 보호로 7');
+ assert.equal(requests,1);
 });
 
 test('exact customer selects existing manual overlay without a remote lookup or source mutation',async()=>{

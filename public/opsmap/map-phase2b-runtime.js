@@ -58,7 +58,7 @@
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();approvedMarkerOrder.clear();
     indexedRows=null;pointIndex=null;baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
-    searchIndex=searchFlight=newAreaObservedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
+    searchIndex=searchFlight=stageAddressHashIndex=newAreaObservedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
     SOURCE={vehicles:[]};state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
     clearSelection();clearMap();updateOperationMetrics(null);renderPeriodStoreList([]);resetRoadRoute();clearNewAreaBatch();renderManualDraft();
     for(const selector of ['#results','#runList','#addressJudgeResults','#periodDriver','#vehicleList','#navSuggestions','#operationsPanel'])$(selector)?.replaceChildren();
@@ -201,7 +201,7 @@
   const driverByVehicle = new Map();
   const requestControllers = new Map();
   let unifiedSearchController = null, unifiedSelectionActive = false, unifiedResetting = false;
-  let searchIndex, searchFlight, searchInputAt, searchSequence = 0;
+  let searchIndex, searchFlight, stageAddressHashIndex, searchInputAt, searchSequence = 0;
   const memoryResponses = new Map();
   let latestSnapshotRows = [];
   let generalRegistryRows = new Map();
@@ -2300,6 +2300,29 @@
     return /(?:대로|로|길|동\d+가|동|리|읍|면|가|번지)\s*(?:(?:산|지하)\s*)?\d/.test(text);
   }
 
+  function stageAddressHashMatches(rows, hash) {
+    if(!/^[a-f0-9]{64}$/.test(hash||''))return [];
+    if(stageAddressHashIndex?.rows!==rows){
+      const byHash=new Map();
+      for(const row of rows){
+        const key=row.originalAddressHash||row.addressHash;
+        if(!/^[a-f0-9]{64}$/.test(key||''))continue;
+        const matches=byHash.get(key)||[];
+        matches.push(row);byHash.set(key,matches);
+      }
+      stageAddressHashIndex={rows,byHash};
+    }
+    const matches=stageAddressHashIndex.byHash.get(hash)||[];
+    const current=matches.map(row=>storesByCode.get(row.customerCode)||row);
+    // A newer address or a withheld point must go through the protected resolver.
+    if(current.some(row=>row.addressChanged||row.searchAddressConflict||
+      row.currentAddressHash&&row.currentAddressHash!==hash||
+      ['CONFLICT','UNVERIFIED','MISSING'].includes(row.coordinateStatus)||
+      row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'||
+      !Number.isFinite(row.lat)||!Number.isFinite(row.lng)))return [];
+    return current;
+  }
+
   async function search() {
     const text=$('#query').value.normalize('NFKC').trim();
     if(!text){clearUnifiedSearch();return;}
@@ -2451,6 +2474,15 @@
     };
     if(!deferLocal&&localMatches())return;
     const active=()=>!signal.aborted&&owner===state.searchRequestId&&state.mode==='BASE_60D';
+    if(deferLocal&&window.MapCustomerRegistry?.addressHash){
+      const rows=latestSnapshotRows;
+      const digest=await window.MapCustomerRegistry.addressHash(text).catch(()=>null);
+      if(!active())return;
+      if(rows===latestSnapshotRows&&snapshotMeta?.sourceGeneration===generation){
+        const matches=stageAddressHashMatches(rows,digest);
+        if(matches.length){trace.mark('matching');if(showMatches(matches))return;}
+      }
+    }
     if(stageLookup){
       trace.mark('apiStart');
       const reply=await NewAreaRequests.stageAddress(text,generation,{signal}).catch(()=>null);
