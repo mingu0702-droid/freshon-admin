@@ -61,8 +61,9 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
       ]);
       const confirmed = new Map((fixed?.data || []).filter(row => row.baseVehicleState === 'VERIFIED_MASTER' &&
         row.baseVehicleSource === 'FIXED_DISPATCH_PRIMARY').map(row => [row.customerCode, row.baseVehicle]));
-      const lastDelivery = new Map((snapshot?.rows || []).filter(row => isDay(row.lastDeliveryDate)).map(row => [row.customerCode, row.lastDeliveryDate]));
       const today = dayAt(now());
+      const lastDelivery = new Map((snapshot?.rows || []).filter(row => isDay(row.lastDeliveryDate) && row.lastDeliveryDate <= today &&
+        (row.status === 'COMPLETED' || row.deliveryStatus === 'COMPLETED')).map(row => [row.customerCode, row.lastDeliveryDate]));
       const evidence = source?.asOf <= today ? source : null;
       const first = dayAt(now() - 89 * 86400000);
       const orderCutoff = new Date(today + 'T00:00:00Z');

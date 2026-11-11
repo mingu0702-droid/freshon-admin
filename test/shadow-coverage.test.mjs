@@ -80,13 +80,15 @@ test('current, historical and resumed order status are independent and missing o
   const clock=()=>Date.parse('2026-11-11T00:00:00Z');
   const fixed = async () => ({data:[],meta:{checkedAt:'2026-11-11T00:00:00Z'}});
   const read = createCoverageStatusReader({readFixed:fixed,readEvidence:async()=>evidence,readSnapshot:async()=>({
-    rows:[{customerCode:'T900001',lastDeliveryDate:'2026-11-09'}]
+    rows:[{customerCode:'T900001',lastDeliveryDate:'2026-11-09',status:'COMPLETED'},
+      {customerCode:'T900003',lastDeliveryDate:'2026-11-09',status:'UNCONFIRMED'}]
   }),now:clock});
   const data=await read(catalog,proof);
   assert.deepEqual(data.counts,{NEW:1,HELD:0,pastNew:2,pastHeld:1,changedFromNew:1,changedFromHeld:1,currentUnknown:0,historyUnknown:0,ordersUnknown:2});
   assert.deepEqual(cellStatusCounts(['T900001','T900002'],data),{NEW:1,HELD:0,pastNew:1,pastHeld:1,unknown:0});
   assert.equal(data.records.get('T900001').order,null);
   assert.equal(data.records.get('T900001').lastDelivery,'2026-11-09');
+  assert.equal(data.records.get('T900003').lastDelivery,null);
   assert.equal(data.records.get('T900002').resumed,true);
   const missing = await createCoverageStatusReader({readFixed:fixed,now:clock})(catalog,proof);
   assert.equal(missing.counts.currentUnknown,3);

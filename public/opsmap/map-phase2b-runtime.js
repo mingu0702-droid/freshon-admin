@@ -961,6 +961,12 @@
     const scope=saved.scopes.get(center);
     return scope?{saved,scope,vehicle,key:center+'|'+vehicle}:null;
   }
+  function routeAuditEnabled() {
+    return stageAddressBatchEnabled() && new URLSearchParams(location.search).get('opsmapQa') === 'route';
+  }
+  function noteChronologyRead(value) {
+    if (routeAuditEnabled()) $('#map')?.setAttribute('data-chronology-read',JSON.stringify(value));
+  }
 
   function visibleActualPoints() {
     const rows=dailyView?.shown||[];
@@ -986,10 +992,13 @@
     if (prior?.pending) return prior.pending;
     if (prior?.nextAttempt>Date.now()) return;
     const entry={};
+    noteChronologyRead({vehicle,stage:'request'});
     entry.pending=fetchJson(rosterQuery(scope.date,scope.center,vehicle),{channel:'dated-chronology:'+scope.center+'|'+vehicle,
       timeout:12000,allowSourceError:true}).then(response=>{
       const current=currentRosterRoute();
       if (!rosterAuthorized||current?.saved!==saved||current.key!==key||!OpsmapDaily.sameRosterScope(current.scope,scope)) return;
+      noteChronologyRead({vehicle,stage:'response',sameScope:OpsmapDaily.sameRosterScope(scope,response),state:response.state,
+        active:response.activeCount,eventRead:response.eventRead,points:response.chronology?.length});
       const evidence=OpsmapDaily.chronology(scope,response,vehicle);
       const retained=saved.chronologies.get(key);
       if (evidence.points.size||evidence.tiedCount||!retained) saved.chronologies.set(key,evidence);
@@ -998,6 +1007,8 @@
       drawRoute();
 
     }).catch(error=>{
+      if (currentRosterRoute()?.key===key) noteChronologyRead({vehicle,stage:'failure',status:error.status||null,
+        code:/^[A-Z_]{3,80}$/.test(error.code||error.message||'')?error.code||error.message:null});
       if (rosterAuthorized&&isStaffAccessError(error)) purgeStaffData();
     }).finally(()=>{
       entry.pending=null;
@@ -1749,7 +1760,7 @@
   }
   function auditActualRoute(points, segments, badges) {
     // Stage QA returns counts only. No IDs, locations or timestamps leave the page.
-    if (!stageAddressBatchEnabled() || new URLSearchParams(location.search).get('opsmapQa') !== 'route') return;
+    if (!routeAuditEnabled()) return;
     const route=currentRosterRoute(), evidence=route?.saved.chronologies.get(route.key);
     if (!evidence) return;
     const source=new Map(route.scope.rows.filter(row=>row.vehicle===route.vehicle).map(row=>[row.deliveryId,row]));

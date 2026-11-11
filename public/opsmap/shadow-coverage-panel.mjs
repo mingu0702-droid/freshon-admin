@@ -449,6 +449,7 @@ export function createCoveragePanel({ workspace, header }) {
       return;
     }
     const request = pendingView = { key };
+    const started = performance.now();
     const wantedCenter = center, wantedDays = days;
     const switching = view && (view.period.days !== wantedDays || loadedCenter !== wantedCenter);
     if (switching) {
@@ -480,6 +481,8 @@ export function createCoveragePanel({ workspace, header }) {
       failedFilter = null;
       filterProgress();
       renderView(view);
+      find('coverageMap').dataset.coverageView = JSON.stringify({resolution:data.resolution,days:data.period.days,
+        cells:data.cells.length,ms:Math.round(performance.now()-started)});
       showMapState('');
     } catch (error) {
       if (!active || pendingView !== request) return;
