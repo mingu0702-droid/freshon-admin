@@ -1731,8 +1731,9 @@
         const mark=name=>Math.round(performance.getEntriesByName('opsmap-'+name).at(-1)?.startTime)||null;
         const nav=performance.getEntriesByType('navigation')[0];
         $('#map').dataset.bootMetrics=JSON.stringify({serverResponse:Math.round(nav?.responseStart)||null,
-          authentication:mark('staff-ready'),snapshot:mark('snapshot-ready'),snapshotRequest:apiDiagnostics.get('snapshot')?.ms??null,
-          restore:apiDiagnostics.get('snapshot')?.restoreMs??null,sdkStart:mark('sdk-start'),sdk:mark('sdk-ready'),firstPin:Math.round(performance.now()),
+          authentication:mark('staff-verified'),uiReady:mark('staff-ready'),snapshot:mark('snapshot-ready'),snapshotRequest:apiDiagnostics.get('snapshot')?.ms??null,
+          restore:apiDiagnostics.get('snapshot')?.restoreMs??null,sdkRequest:mark('sdk-request'),sdkStart:mark('sdk-start'),sdk:mark('sdk-ready'),
+          firstPin:Math.round(performance.now()),pinRender:renderMetrics.firstMs,
           active:markerEntries.size,sourceRows:state.currentRows.length});
       });
     }
@@ -4133,6 +4134,14 @@
     rosterAuthorized=true;
     SOURCE=window.VEHICLE_AREA_DATA||{vehicles:[]};
     initVehicles();void initializeGeneral();void initMap();
+  });
+  window.addEventListener('map-staff-reference-ready',()=>{
+    const selected=selectedVehicles();
+    SOURCE=window.VEHICLE_AREA_DATA;
+    initVehicles();
+    ensureDateVehicles();
+    setSelectedVehicles(selected);
+    refreshVehicleUi(false);
   });
   window.addEventListener('pagehide',event=>{cancelManualRoadRoute();resetRoadRoute();if(event.persisted)hybridUi?.cancel();else{hybridUi?.dispose();mapObserver?.disconnect();for(const [name,fn]of mapHandlers)kakao?.maps?.event?.removeListener?.(state.map,name,fn);mapHandlers=[];}});window.addEventListener('pageshow',event=>{if(event.persisted)mapCamera?.scheduleRelayout();});
   if(document.body.dataset.mapStaffState==='authenticated'||!window.MapStaffEntry){

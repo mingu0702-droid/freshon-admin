@@ -96,11 +96,16 @@ export function mountProductionMapApi(app,{
     return coordinateIndexes.get(rows);
   };
   const phase2bDatedAssignmentCache=createPhase2bReadCache({name:'datedAssignments',ttlMs:600000,staleMs:0,maxEntries:16,maxBytes:24*1024*1024});
+  const stageOnly=env.OPSMAP_STAGE_VERIFY_ONLY==='1';
+  const requireStageRead=(req,res,next)=>stageOnly && mapStaff.isSessionCurrent(req,res.locals.staffSession?.key)
+    ? next() : mapStaff.requireStaff(req,res,next);
   app.use(staffLatency);
   app.use('/api/map-phase2b/auth',securityAudit,mapStaff.router);
-  mountMapStaffEntryGate(app,mapStaff.requireStaff);
+  mountMapStaffEntryGate(app,mapStaff.requireStaff,{isInlineSessionCurrent:stageOnly ? mapStaff.isSessionCurrent : undefined});
   app.use('/api/map-phase2b/private/driver-history',(req,res,next)=>historyDeadline(req,res,next,{milliseconds:readStoredStaffHistory?20000:5000}));
-  app.use('/api/map-phase2b/private',mapStaff.requireStaff);
+  app.use('/api/map-phase2b/private',(req,res,next)=>stageOnly&&
+    (req.path==='/stage-address-evidence'||req.path==='/map-sdk-config'&&req.query.sdkOnly==='1')
+    ? requireStageRead(req,res,next) : mapStaff.requireStaff(req,res,next));
   mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
   app.get('/api/map-phase2b/private/map-sdk-config',async(req,res)=>{
     const javascriptKey=String(env.KAKAO_MAP_JAVASCRIPT_KEY||'').trim();
@@ -110,7 +115,11 @@ export function mountProductionMapApi(app,{
     const sdkOnly = req.query.sdkOnly === '1';
     const lookup = sdkOnly ? null : await addressLookupService.status();
     const respond=()=>res.set('Cache-Control','private, no-store').json({javascriptKey,...coverage,...(osanCenter?{centers:[osanCenter]}:{}),driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowIndependentAddressLookup:lookup?.independentEnabled===true,allowExternalAddressLookup:lookup?.enabled===true,allowExternalPlaceLookup:lookup?.keywordEnabled===true,addressLookupReason:lookup?.reason||null,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true});
-    if(sdkOnly&&env.OPSMAP_STAGE_VERIFY_ONLY==='1')return mapStaff.isSessionCurrent(req,res.locals.staffSession?.key)?respond():res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
+    if(sdkOnly&&stageOnly){
+      if(!mapStaff.isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
+      res.locals.stageInlineStaffResponse=true;
+      return respond();
+    }
     return mapStaff.requireStaff(req,res,respond);
   });
   mountKakaoCoordinateConnection({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,service:addressLookupService,jsonBody:express.json({limit:'4kb'}),origin:env.MAP_STAFF_ORIGIN||env.RENDER_EXTERNAL_URL});
@@ -119,7 +128,7 @@ export function mountProductionMapApi(app,{
     return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:value}));
   });
   mountRoadRouteRoutes({app,requireStaff:mapStaff.requireStaff,jsonBody:express.json({limit:'16kb'}),service:roadRouteService||createRoadRouteService({env,budget:roadRouteBudget,requireDurableBudget:true}),env,readRecordedRoute:readRecordedRoadRoute});
-  mountPrivateExtensions?.({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,previewEnabled});
+  mountPrivateExtensions?.({app,requireStaff:mapStaff.requireStaff,requireStageRead,isSessionCurrent:mapStaff.isSessionCurrent,previewEnabled});
   app.use(publicResponse);
   if(hybridStoredIoEnabled){const stored=createRollingHubIo({callHub});hybridReadDateCatalog??=stored.readDateCatalog;hybridReadDatePage??=stored.readDatePage;}
   const hybrid=mountHybridMapReadApi(app,{enabled:hybridEnabled,requireStaff:mapStaff.requireStaff,previewEnabled,callHub,today:phase2bKstDate,readIndexedDay:hybridReadIndexedDay,readDateCatalog:hybridReadDateCatalog,readDatePage:hybridReadDatePage||(hybridReadVerifiedDayText?createPublishedDayPageReader({readVerifiedText:hybridReadVerifiedDayText}):undefined),uiReadiness:hybridUiReadiness,publicationCutover:hubPublicationCutover,legacyBusy:()=>!!getSnapshotWorkerState().running});

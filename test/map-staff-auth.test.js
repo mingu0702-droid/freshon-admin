@@ -7,9 +7,41 @@ import { createMapStaffAuth, createStaffPasswordHash, verifyStaffPassword, STAFF
 import { staffSetupValues } from '../scripts/setup-map-staff.mjs';
 import { staffCustomerDetail } from '../src/mapStaffDetail.js';
 import { staffLatency } from '../src/staffLatency.js';
+import { mountMapStaffEntryGate } from '../src/opsmap-abc/mapStaffEntryGate.js';
 
 // Synthetic credentials only: exercise the requested six-character minimum.
 const password = 'Ab12cd';
+test('Stage inline responses reuse only the current request authorization', async t => {
+  const app = express();
+  let reads = 0;
+  let valid = true;
+  const requireStaff = (_req, res, next) => {
+    reads++;
+    if (!valid) return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
+    res.locals.staffSession = {key:'fixture'};
+    return next();
+  };
+  mountMapStaffEntryGate(app, requireStaff, {isInlineSessionCurrent:(_req,key)=>valid && key==='fixture'});
+  app.get('/api/map-phase2b/private/test', (req, res) => {
+    res.locals.stageInlineStaffResponse = req.query.inline === '1';
+    if (req.query.revoke === '1') valid = false;
+    res.json({staffOnly:true});
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => server.close());
+  const base = 'http://127.0.0.1:'+server.address().port+'/api/map-phase2b/private/test';
+  assert.deepEqual(await (await fetch(base+'?inline=1')).json(),{staffOnly:true});
+  assert.equal(reads,1);
+  assert.deepEqual(await (await fetch(base)).json(),{staffOnly:true});
+  assert.equal(reads,3);
+  const revoked = await fetch(base+'?inline=1&revoke=1');
+  assert.equal(revoked.status,401);
+  assert.deepEqual(await revoked.json(),{error:'STAFF_LOGIN_REQUIRED'});
+  assert.equal(reads,5);
+  assert.equal((await fetch(base+'?inline=1')).status,401);
+  assert.equal(reads,6);
+});
 test('Argon2id baseline and legacy scrypt coexist; hash-only leaves other credentials untouched', async () => {
   const values = await staffSetupValues(password,password,{hashOnly:true});
   assert.deepEqual(Object.keys(values),['hash']);

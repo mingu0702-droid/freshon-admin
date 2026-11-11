@@ -15,11 +15,12 @@ export function isStaffMapReadPath(pathname) {
   return /^\/(?:vehicle-data|new-area-data|admin-features)\.js\/?$/.test(value)
     || /\.(?:json|geojson|csv|tsv|xlsx?|zip)\/?$/.test(value) && !/^\/api\//.test(value);
 }
-export function mountMapStaffEntryGate(app, requireStaff) {
+export function mountMapStaffEntryGate(app, requireStaff, {isInlineSessionCurrent} = {}) {
   if (typeof requireStaff !== 'function') throw Error('EXISTING_STAFF_AUTH_REQUIRED');
   app.use((req, res, next) => {
     if (!isStaffMapReadPath(req.path)) return next();
     return requireStaff(req, res, () => {
+      const checkedAt = performance.now();
       // Revoke an in-flight JSON/download response after logout or expiry.
       const json = res.json.bind(res), send = res.send.bind(res);
       let checking = false;
@@ -27,7 +28,11 @@ export function mountMapStaffEntryGate(app, requireStaff) {
         if (checking) return operation();
         checking = true;
         try {
-          const result=requireStaff(req,res,operation);
+          // Only an opted-in, in-memory Stage read can reuse this request's check.
+          const inline = res.locals.stageInlineStaffResponse === true &&
+            performance.now() - checkedAt < 500 &&
+            isInlineSessionCurrent?.(req, res.locals.staffSession?.key);
+          const result=inline ? operation() : requireStaff(req,res,operation);
           if(result&&typeof result.finally==='function')return result.finally(()=>{checking=false;});
           checking=false;return result;
         } catch(error) { checking=false;throw error; }

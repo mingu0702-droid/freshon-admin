@@ -278,17 +278,21 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     const current=selectSnapshot(snapshot);
     if (current && validation.active()) return current;
     const baseRead=readBaseSnapshot().catch(()=>null);
-    if (current) return current;
     const restore = [scheduledRefresh,fileRestorePending,baselineRefresh].filter(Boolean);
     const reads = [baseRead,...restore];
     let timer;
     // An existing copy may be served as soon as either source validates it. Bound a cold HTTP read.
     try {
+      const deadline = new Promise(resolve=>{timer=setTimeout(resolve,snapshotWaitMs);});
+      if (current) {
+        await Promise.race([baseRead,deadline]);
+        return selectSnapshot(snapshot) || current;
+      }
       await Promise.race([
         Promise.any(reads.map(read=>Promise.resolve(read).then(()=>{
           if (!selectSnapshot(snapshot)) throw Error('STAGE_SNAPSHOT_NOT_AVAILABLE');
         }))).catch(()=>{}),
-        new Promise(resolve=>{timer=setTimeout(resolve,snapshotWaitMs);})
+        deadline
       ]);
       return selectSnapshot(snapshot);
     } finally {clearTimeout(timer);}
@@ -371,7 +375,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     getLocalDataEvidence:()=>validation.active()?.evidence || null,
     readArchivedAssignments:validation.archivedAssignments,
     mountPrivateExtensions:binding=>{
-      const {requireStaff,isSessionCurrent}=binding;
+      const {requireStaff,requireStageRead,isSessionCurrent}=binding;
       staffView = requireStaff;
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
         mountStageAbValidation(router,{...binding,validation,readSnapshot,readOfficialIndex,readBaseVehicles:codes=>base.get(codes)});
@@ -487,7 +491,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       photos.mount(binding);
       mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,allowPreservedBatch:true,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
       const snapshotProjections=new WeakMap();
-      router.get('/api/map-phase2b/preview/snapshot',requireStaff,async(req,res)=>{
+      router.get('/api/map-phase2b/preview/snapshot',requireStageRead,async(req,res)=>{
         try {
           const immediate=validation.active()?.scheduled?.snapshot;
           const saved=immediate||await readSnapshot();
@@ -511,7 +515,9 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             recovery,...(recovery==='RESTORING'?{retryAfterMs:2000}:{})};
           const respond=()=>res.json({ok:true,data:rows,meta,error:null});
           if(!immediate)return requireStaff(req,res,respond);
-          return isSessionCurrent(req,res.locals.staffSession?.key)?respond():res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
+          if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
+          res.locals.stageInlineStaffResponse=true;
+          return respond();
         } catch {return res.status(503).json({error:'PHASE2B_SNAPSHOT_UNAVAILABLE'});}
       });
       router.get('/api/map-phase2b/preview/route-plan',requireStaff,async(req,res)=>{

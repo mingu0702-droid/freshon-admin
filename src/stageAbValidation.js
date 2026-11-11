@@ -437,6 +437,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         const respond=()=>{
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           if(validation.active()!==prepared)return res.status(409).json({error:validation.addressGenerationError(generation,validation.active())||'STAGE_BATCH_GENERATION_CHANGED'});
+          if(immediate)res.locals.stageInlineStaffResponse=true;
           return res.json({ok:true,generation,data});
         };
         return immediate?respond():requireStaff(req,res,respond);

@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   const rawFetch = window.fetch.bind(window), ACTIVITY_THROTTLE_MS = 60000;
+  const stage = location.origin === 'https://freshon-admin-stage-preview-template.onrender.com';
   const preloadedScripts = new Set();
   let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivityCheck = 0, checking = null, checkingOwner = -1, confirming = null, confirmingOwner = -1, signingOut = null, logoutRequired = false;
   let recoveryTimer = null, stageVerification;
@@ -155,6 +156,7 @@
       notice.textContent='기준자료 일부 미연결 · 저장 매장 조회 가능';
     }
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),optional?3000:10000);
+    requests.add(controller);
     try{
       const response=await window.fetch('/vehicle-data.js',{credentials:'same-origin',cache:'no-store',signal:controller.signal});
       current();
@@ -164,11 +166,12 @@
       const match=text.match(/^\s*window\.VEHICLE_AREA_DATA\s*=\s*([\s\S]*?);?\s*$/);
       if(!match)throw Error('MAP_DATA_UNAVAILABLE');
       window.VEHICLE_AREA_DATA=JSON.parse(match[1]);
+      document.body.dataset.mapReferenceDataState='ready';
     }catch(error){
       current();
       if(optional){missing();return;}
       throw error;
-    }finally{clearTimeout(timer);}
+    }finally{clearTimeout(timer);requests.delete(controller);}
   }
   async function bootstrap(owner) {
     const placeholders = document.querySelectorAll('script[type="application/x-map-staff"]');
@@ -184,9 +187,15 @@
     }
     // Fetch static dependencies in parallel while retaining the execution order below.
     if (document.documentElement.dataset.referenceDataOptional === 'true') {
+      performance.mark('opsmap-sdk-request');
       void window.KakaoMapsAdapter?.ready().catch(() => {});
     }
-    await loadData(owner);
+    if(stage){
+      void loadData(owner).then(()=>{
+        if(owner===epoch&&session&&document.body.dataset.mapStaffState==='authenticated'&&window.VEHICLE_AREA_DATA?.vehicles?.length)
+          window.dispatchEvent(new Event('map-staff-reference-ready'));
+      }).catch(()=>{});
+    }else await loadData(owner);
     if (!booted) {
       for (const placeholder of placeholders) {
         if (placeholder.dataset.loaded === '1') continue;
@@ -210,6 +219,7 @@
   }
   async function accept(value) {
     if (value?.authenticated !== true) { await revoke('직원 로그인 후 지도를 사용할 수 있습니다.'); return false; }
+    performance.mark('opsmap-staff-verified');
     session = value; lastActivityCheck = Date.now(); account.disabled = false; password.disabled = false; deadline(value);
     const owner = epoch; document.body.dataset.mapStaffState = 'loading'; message.textContent = '지도 불러오는 중…';
     entryMode('loading');
