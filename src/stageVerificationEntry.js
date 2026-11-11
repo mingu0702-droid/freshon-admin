@@ -2,6 +2,7 @@ import express from 'express';
 import compression from 'compression';
 import {fileURLToPath} from 'node:url';
 import {readFileSync} from 'node:fs';
+import path from 'node:path';
 import {mountProductionMapApi} from './opsmap-abc/productionMapIntegration.js';
 import {callHub as hubRead} from './opsmap-abc/phase2bHubReadClient.js';
 import {createFixedVehicleCache} from './opsmap-abc/fixedVehicleCache.js';
@@ -27,7 +28,7 @@ import {createOfficialAddressLookup,createTemporaryOfficialAddressLookup} from '
 import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from './opsmapDurableGeneration.js';
-import {mountOpsmapScheduledRun} from './opsmapScheduledRun.js';
+import {mountOpsmapScheduledRun,opsmapScheduleConfig} from './opsmapScheduledRun.js';
 import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
 
@@ -378,6 +379,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           const generation=validation.active();
           const windowDays=generation?.scheduled?.vehicleDelivery?.observedDates.all?.length ?? generation?.nearby?.observedDays;
           const sourceRunId=generation?.scheduled?.state.runId || null;
+          const persisted=generation?.scheduled?.state;
+          const {secret,scheduleId,executorHash}=opsmapScheduleConfig(stage);
           const requiredSourceIds=Object.values(SYNC_DELIVERY_SOURCES);
           const confirmedSourceIds=requiredSourceIds.filter(id=>
             generation?.scheduled?.vehicleDelivery?.completeSources[id]?.includes(scheduledRun?.date));
@@ -402,7 +405,15 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
               revision:generation?.scheduled?.state.revision||null,requiredSourceIds,confirmedSourceIds,
               config:{readerApproved:scheduledEnabled,remoteApproved:remoteEnabled,writerApproved:stage.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED==='1',
                 schedulerApproved:stage.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED==='1',deliveryConfigured:readDatedDelivery.configured,
-                sourceReadsApproved:stage.OPSMAP_SYNC_SOURCE_READ_APPROVED==='1'},
+                deliveryEventApproved:stage.OPSMAP_STAGE_DELIVERY_EVENT_READ_APPROVED==='1',sourceReadsApproved:stage.OPSMAP_SYNC_SOURCE_READ_APPROVED==='1',
+                triggerIdConfigured:/^\d{1,30}$/.test(scheduleId||''),executorConfigured:/^[a-f0-9]{64}$/.test(executorHash||''),
+                hmacConfigured:typeof secret==='string'&&secret.length>=32&&secret.length<=512,
+                jobSettingsPathConfigured:path.isAbsolute(stage.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE||''),
+                storageReaderCredentialPresent:!!(stage.OPSMAP_STAGE_SYNC_READ_TOKEN||stage.OPSMAP_SNAPSHOT_STORE_TOKEN||stage.OPSMAP_SHADOW_GITHUB_READ_TOKEN),
+                storageWriterCredentialPresent:!!(stage.OPSMAP_STAGE_SYNC_WRITE_TOKEN||
+                  stage.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1'&&stage.OPSMAP_SNAPSHOT_STORE_TOKEN)},
+              release:sourceRunId?{sourceRunId,generation:persisted.generation,ledgerSha256:persisted.ledgerSha256,
+                snapshotSha256:persisted.snapshotSha256,coverageIndexSha256:persisted.indexSha256,observationHash:persisted.observationHash}:null,
               publishedAt:generation?.scheduled?.state.committedAt||null,lastSuccessAt:scheduledSuccessAt,sourceRunId,
               nextRun:{state:scheduledRun?.triggerId?'TRIGGER_OBSERVED_NEXT_TIME_UNVERIFIED':'TRIGGER_UNVERIFIED',at:null},
               run:scheduledRun?{runId:scheduledRun.runId,triggerId:scheduledRun.triggerId,executorHash:scheduledRun.principal,
@@ -424,11 +435,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             return res.status(400).json({error:'DELIVERY_QUERY_INVALID'});
           }
           const active=validation.active();
-          const source=scheduledSources['delivery:'+SYNC_DELIVERY_SOURCES[center]];
+          const sourceId=SYNC_DELIVERY_SOURCES[center];
+          const source=scheduledSources['delivery:'+sourceId];
+          const scopedSuccessAt=source?.lastSuccessDate===date?source.lastSuccessAt:null;
           const retained=async error=>{
             const archive=await active?.readNearbyDay?.(date).catch(()=>null);
             return archivedDatedDispatch(archive,{center,vehicle,generation:active?.generation,
-              publishedAt:active?.scheduled?.state.committedAt,lastSuccessAt:source?.lastSuccessDate===date?source.lastSuccessAt:null,error});
+              sourceRunId:active?.scheduled?.state.runId,publishedAt:active?.scheduled?.state.committedAt,lastSuccessAt:scopedSuccessAt,error});
           };
           try {
             const data=await readDatedDelivery.readContract(date,center,vehicle);
@@ -437,9 +450,10 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           } catch (failure) {
             const error=/^DELIVERY_SOURCE_[A-Z_]+$/.test(failure.code||'')?failure.code:'DELIVERY_SOURCE_READ_UNAVAILABLE';
             const saved=await retained(error);
-            return requireStaff(req,res,()=>saved?privateResponse().json(saved):privateResponse().status(503).json({contract:DATED_DELIVERY_CONTRACT,date,center,vehicle,
-              state:'SOURCE_UNAVAILABLE',error,sourceComplete:false,currentReadComplete:false,scopeComplete:false,confirmedEmpty:false,
-              previousVerifiedRetained:false,lastSuccessAt:source?.lastSuccessAt||null,rows:null,chronology:null}));
+            return requireStaff(req,res,()=>saved?privateResponse().json(saved):privateResponse().status(503).json({contract:DATED_DELIVERY_CONTRACT,
+              date,center,sourceId,vehicle,generation:null,sourceGeneration:null,sourceRunId:null,state:'SOURCE_UNAVAILABLE',error,
+              source:{kind:'DELIVERY_ADMIN_READ',observedAt:null},sourceComplete:false,currentReadComplete:false,scopeComplete:false,confirmedEmpty:false,
+              previousVerifiedRetained:false,lastSuccessAt:scopedSuccessAt,rows:null,activeCount:null,chronology:null,chronologyTies:null}));
           }
         });
         router.post(officialAddressIndexRoute,requireStaff,(req,res,next)=>{

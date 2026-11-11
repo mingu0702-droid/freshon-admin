@@ -9,7 +9,7 @@ const date='2026-11-11', at=(time)=>`${date}T${time}:00+09:00`;
 const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
   OPSMAP_STAGE_DELIVERY_DATED_ENABLED:'1',OPSMAP_STAGE_DELIVERY_DATED_COOKIE:'fixture-only'};
 const task=(id,vehicle,details={})=>({id,deliveryDate:date,customer:{erpCode:`S${id}`},carrier:{fixedNo:vehicle},status:'COMPLETED',...details});
-const record=(taskId,time,details={})=>({taskId,status:'COMPLETED',eventSource:'DRIVER_APP',eventAt:at(time),...details});
+const record=(taskId,time,details={})=>({id:200+taskId,taskId,status:'COMPLETED',eventSource:'DRIVER_APP',eventAt:at(time),...details});
 const page=(content,totalElements=content.length,number=0)=>Response.json({content,totalElements,totalPages:Math.ceil(totalElements/300),number});
 
 test('keeps delivery stops distinct from proven driver events including an individual completion at 17:00',async()=>{
@@ -30,12 +30,29 @@ test('keeps delivery stops distinct from proven driver events including an indiv
   assert.deepEqual(new Set(data.chronologyTies[0].deliveryIds),new Set([2,9].map(deliveryTaskId)));
   assert.equal(byId(1).completionType,'DIRECT_HANDOFF');
   assert.equal(byId(1).individualCompletedAt,'2026-11-11T08:00:00.000Z');
+  assert.match(byId(1).eventId,/^[a-f0-9]{64}$/);
   assert.equal(byId(3).completionType,'ADMIN_BULK_17');
   assert.equal(byId(4).verification,'NO_INDIVIDUAL_RECORD');
   assert.equal(byId(5).verification,'TIME_UNVERIFIED');
   assert.equal((await read.readContract(date,'osan','122')).rows[0].completionType,'ADMIN_BULK');
   assert.deepEqual((await read.readContract(date,'osan','105')).chronology,[10,11].map(deliveryTaskId));
   assert.equal((await read.readContract(date,'osan','202')).rows[0].individualCompletedAt,null);
+});
+
+test('source event IDs retain revisits to the same customer and omit chronology for missing or conflicting event IDs',async()=>{
+  const rows=[task(1,'105',{customer:{erpCode:'S1'},taskStatusRecords:[record(1,'16:10')]}),
+    task(2,'105',{customer:{erpCode:'S1'},taskStatusRecords:[record(2,'16:15')]}),
+    task(3,'105',{taskStatusRecords:[record(3,'16:20',{id:null})]}),
+    task(4,'105',{taskStatusRecords:[record(4,'16:25'),record(4,'16:25',{id:999})]})];
+  const read=createStageDatedDeliveryReader({env,fetchImpl:()=>page(rows)});
+  const result=await read.readContract(date,'osan','105');
+  assert.equal(result.activeCount,4);
+  assert.deepEqual(result.chronology,[deliveryTaskId(1),deliveryTaskId(2)]);
+  assert.equal(result.rows.find(row=>row.deliveryId===deliveryTaskId(3)).verification,'TIME_UNVERIFIED');
+  assert.equal(result.rows.find(row=>row.deliveryId===deliveryTaskId(4)).verification,'EVENT_CONFLICT');
+  assert.equal(result.source.kind,'DELIVERY_ADMIN_READ');
+  assert.equal(result.source.observedAt,result.lastSuccessAt);
+  assert.equal(result.sourceGeneration,result.source.sha256);
 });
 
 test('all pages are checked before returning and incomplete, duplicated or conflicting reads retain the same day only',async()=>{
@@ -83,6 +100,10 @@ test('four physical sources persist counts, deduplicate exact in-page IDs and bi
   assert.equal(restored.state,'PUBLISHED_VERIFIED');
   assert.equal(archivedDatedDispatch(copy,{center:'osanColdStorage',vehicle:'105'}).count,1);
   assert.equal(archivedDatedDispatch(copy,{center:'yeongnam'}).lastVerifiedEmpty,true);
+  const legacy=structuredClone(copy);
+  legacy.dispatch.events=legacy.dispatch.events.map(event=>event.slice(0,7));
+  legacy.proofHash=deliveryDigest([date,legacy.tasks,legacy.visits,legacy.dispatch]);
+  assert.deepEqual(archivedDatedDispatch(validateOpsmapSyncDay(legacy,date),{center:'osan',vehicle:'101'}).chronology,[]);
   copy.dispatch.events[0][1]='UNKNOWN';
   assert.throws(()=>validateOpsmapSyncDay(copy,date),/DELIVERY_EVENT_CONTRACT/);
   copy.dispatch.events[0]=day.dispatch.events[0];
@@ -107,6 +128,7 @@ test('the opt-in bounded status-record read uses the observed Delivery schema an
   assert.deepEqual(requests,[1,2]);
   assert.deepEqual(first[0],first[1]);
   assert.deepEqual(first[0].chronology,[deliveryTaskId(1)]);
+  assert.equal(first[0].rows.find(row=>row.deliveryId===deliveryTaskId(1)).sourceCompletionType,'DIRECT');
   assert.equal(first[0].rows.find(row=>row.deliveryId===deliveryTaskId(2)).completionType,'ADMIN_BULK_17');
   assert.deepEqual(first[0].eventRead,{requested:2,attempted:2,failed:0,truncated:false});
   const day=await read.readObservation(date);

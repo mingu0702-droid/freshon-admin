@@ -188,7 +188,7 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
       }
       record?.('delivery:4',day);
       const source=observation(day,day===date?status:'OPEN');
-      const event=deliveryCompletion({status,individualCompletion:true,completedAt:date+'T01:00:00+09:00'},
+      const event=deliveryCompletion({status,individualCompletion:true,completionEventId:901,completedAt:date+'T01:00:00+09:00'},
         {date:day,customerCode:code,vehicle:'122'});
       const dispatch={contract:DATED_DELIVERY_CONTRACT,sources:[['1',1,source.sourceRows,0]],events:source.tasks.map(()=>packDatedEvent('1',event))};
       return {...source,completeSources:['1'],dispatch,proofHash:syncDigest([day,source.tasks,source.visits,dispatch])};

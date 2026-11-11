@@ -106,7 +106,11 @@ test('Stage assignments and current status share the same authenticated source w
   assert.deepEqual(delivery.chronology,[]);
   const centerUnavailable=await fetch(`${dated}?date=${date}&center=yeongnam`,{headers:{cookie}});
   assert.equal(centerUnavailable.status,503);
-  assert.equal((await centerUnavailable.json()).rows,null);
+  const unavailable=await centerUnavailable.json();
+  assert.equal(unavailable.rows,null);
+  assert.equal(unavailable.activeCount,null);
+  assert.equal(unavailable.sourceId,'3');
+  assert.equal(unavailable.lastSuccessAt,null);
   const payload = await assignments.json();
   assert.equal(payload.meta.complete,true);
   assert.equal(payload.meta.date,date);
