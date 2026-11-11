@@ -12,7 +12,7 @@ import { aggregateDay, cellDetail, combineDays, coverageList, coverageMembers, d
 import { mountShadowCoverage } from '../src/shadowCoverage/routes.js';
 import { createShadowCoverageStore } from '../src/shadowCoverage/store.js';
 import { cellStatusCounts, createCoverageStatusReader } from '../src/shadowCoverage/storeStatus.js';
-import { createFreshonMisOrderLookup } from '../src/shadowCoverage/freshonMisOrderLedger.js';
+import { COMPLETED_DELIVERY_SOURCE } from '../src/shadowCoverage/freshonCompletedDeliveries.js';
 import { buildFreshonStoreStatus, createFreshonStoreStatusIndex } from '../src/shadowCoverage/freshonStoreStatus.js';
 
 const end = '2026-11-07';
@@ -70,7 +70,7 @@ test('fine cells map verified store locations without copying R8 visit totals or
   }
 });
 
-test('only order ledger activation counts as new and a held order conflict preserves held status', async () => {
+test('only completed deliveries activate the historical new cohort and partial coverage still proves positives', async () => {
   const {catalog} = fixture();
   const row = (code, vehicle, fixedObservations, lastOrder=null) => [code,{vehicle,currentKnown:true,fixedObservations,transitions:[],
     historyComplete:true,ordersComplete:lastOrder!==null,lastOrder}];
@@ -82,11 +82,11 @@ test('only order ledger activation counts as new and a held order conflict prese
   const evidence = {
     metadata:{generation:proof,start:'2026-08-14',asOf:'2026-11-11',currentAsOf:'2026-11-11'},
     getStore:code=>rows.get(code),
-    getOrderStatus(code, days) {
-      if (code === 'T900002') return {order:{state:'CONFIRMED_VALID',complete:true,validOrderCount:1,lastOrderDate:'2026-11-10'},held:true,heldOrderConflict:true};
-      if (code === 'T900003' && days === 90) return {order:{state:'CONFIRMED_VALID',validOrderCount:1,lastOrderDate:'2026-09-19',complete:true},newActive:true};
-      if (code === 'T900003' && days === 60) return {order:{state:'UNKNOWN',observedValidOrderCount:1,lastObservedValidOrderDate:'2026-09-19'},newActive:null};
-      return {order:{state:'UNKNOWN'},newUnknown:true,newActive:false};
+    getDeliveryStatus(code, days) {
+      const positive={state:'CONFIRMED_DELIVERY',complete:false,observedCompletedCount:1,lastCompletedOn:'2026-09-19'};
+      if (code === 'T900002') return {delivery:positive,held:true,newActive:false};
+      if (code === 'T900003' && days >= 60) return {delivery:positive,newActive:true};
+      return {delivery:{state:'UNKNOWN'},newActive:null};
     }
   };
   const clock=()=>Date.parse('2026-11-11T00:00:00Z');
@@ -97,33 +97,32 @@ test('only order ledger activation counts as new and a held order conflict prese
   }),now:clock});
   const data=await read(catalog,proof);
   assert.deepEqual(data.counts,{NEW:1,HELD:1,pastNew:2,pastHeld:1,changedFromNew:1,changedFromHeld:0,rollingNew:2,rollingHeld:1,
-    newUnknown:1,newZero:0,newCancelledOnly:0,held:1,heldUnknown:0,heldOrderConflict:1,currentUnknown:0,historyUnknown:0,ordersUnknown:1});
-  assert.deepEqual(cellStatusCounts(['T900001','T900002'],data),{NEW:0,HELD:1,pastNew:1,pastHeld:1,unknown:0,ordersUnknown:1,
-    newUnknown:1,newZero:0,newCancelledOnly:0,held:1,heldUnknown:0,heldOrderConflict:1});
-  assert.equal(data.records.get('T900001').order.state,'UNKNOWN');
+    newUnknown:1,newZero:0,held:1,currentUnknown:0,historyUnknown:0});
+  assert.deepEqual(cellStatusCounts(['T900001','T900002'],data),{NEW:0,HELD:1,pastNew:1,pastHeld:1,unknown:0,newUnknown:1,newZero:0,held:1});
+  assert.equal(data.records.get('T900001').delivery.state,'UNKNOWN');
   assert.equal(data.records.get('T900001').newActive,null);
   assert.equal(data.records.get('T900001').lastDelivery,'2026-11-09');
   assert.equal(data.records.get('T900003').lastDelivery,null);
-  assert.equal(data.records.get('T900002').heldOrderConflict,true);
+  assert.equal(data.records.get('T900002').newActive,null);
   assert.equal(data.records.get('T900002').current,'HELD');
   assert.equal((await read(catalog,proof,30)).counts.NEW,0);
-  assert.equal((await read(catalog,proof,60)).counts.NEW,0);
-  assert.equal((await read(catalog,proof,60)).records.get('T900003').newActive,null);
-  assert.equal((await read(catalog,proof,60)).records.get('T900003').order.observedValidOrderCount,1);
-  assert.equal((await read(catalog,proof,60)).records.get('T900003').order.validOrderCount,null);
+  assert.equal((await read(catalog,proof,60)).counts.NEW,1);
+  assert.equal((await read(catalog,proof,60)).records.get('T900003').newActive,true);
+  assert.equal((await read(catalog,proof,60)).records.get('T900003').delivery.observedCompletedCount,1);
+  assert.equal((await read(catalog,proof,60)).records.get('T900003').delivery.complete,false);
   assert.equal((await read(catalog,proof,90)).counts.NEW,1);
   assert.equal(data.records.get('T900003').history.length,0);
   assert.equal(data.records.get('T900003').observations.length,1);
   assert.equal((await read(catalog,'different-generation')).counts.pastNew,0);
   const missing = await createCoverageStatusReader({readFixed:fixed,now:clock})(catalog,proof);
   assert.equal(missing.counts.currentUnknown,3);
-  assert.equal(missing.counts.ordersUnknown,3);
+  assert.equal(missing.deliverySummary,null);
   const historyOnly = await createCoverageStatusReader({readFixed:fixed,
     readEvidence:async()=>({metadata:evidence.metadata,getStore:evidence.getStore}),now:clock})(catalog,proof);
   assert.equal(historyOnly.counts.NEW,0);
   assert.equal(historyOnly.counts.HELD,1);
   assert.equal(historyOnly.counts.pastNew,2);
-  assert.equal(historyOnly.counts.ordersUnknown,3);
+  assert.equal(historyOnly.counts.newUnknown,2);
 });
 
 test('periods keep unique delivery counts and each confirmed vehicle for the same customer', () => {
@@ -332,14 +331,12 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
   };
   const statusReads = [];
   const registry = new Map(catalog.stores.map(store=>[store.code,{...store,addressHash:proof,hasPoint:Boolean(store.cell)}]));
-  const statusProjection = buildFreshonStoreStatus({generation:proof,registry,asOf:end,observedDeliveryDates:[],
+  const statusProjection = buildFreshonStoreStatus({generation:proof,registry,asOf:end,observedDeliveryDates:allDates,
     current:{date:end,rows:[{code:'T900001',vehicle:'오산신규'},{code:'T900002',vehicle:'오산보류'}]},
     fixed:['T900001','T900003'].map(code=>({code,date:end,vehicle:'오산신규'}))});
-  const ledger = createFreshonMisOrderLookup({schema:1,source:'FRESHON_MIS_ORDER_LEDGER',generation:proof,start:allDates[0],asOf:end,
-    sourceRevision:'C_HTTP_TEST',orders:[[identity('order-a'),'T900001',allDates[45],'VALID'],[identity('order-b'),'T900002',end,'CANCELLED']],
-    coverage:['T900001','T900002'].map(customerCode=>({customerCode,start:allDates[0],end,scope:'VERIFIED_COMPLETE_ALL_STATUSES'}))},
-  {generation:proof,asOf:end});
-  const index = createFreshonStoreStatusIndex(statusProjection,registry,proof,{orderLookup:ledger,orderSource:'VERIFIED'});
+  statusProjection.completedDeliveryEvidence={source:COMPLETED_DELIVERY_SOURCE,completeDates:allDates.slice(-30),
+    stores:[['T900001',[[allDates[45],1]]]]};
+  const index = createFreshonStoreStatusIndex(statusProjection,registry,proof);
   const readStatus = createCoverageStatusReader({
     readEvidence: () => index,
     now: () => Date.parse(end + 'T00:00:00Z')
@@ -367,8 +364,8 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
     assert.equal(data.resolution, 8);
     assert.equal(data.storeStatus.NEW, 1);
     assert.equal(data.storeStatus.pastNew, 2);
-    assert.equal(data.storeStatus.ordersUnknown, 1);
-    assert.equal(data.storeStatus.orderFilter.newUnknown, 1);
+    assert.equal(data.storeStatus.deliveryFilter.newUnknown, 1);
+    assert.equal(data.storeStatus.deliveryFilter.complete, false);
     assert(data.cells.length <= 360);
     assert(data.cells.every(cell => cell.boundary.length >= 5));
     const outside = await (await fetch(url + '/view?days=90&level=4&box=130,38,131,39', options)).json();
@@ -398,15 +395,14 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
     const fineId = latLngToCell(lat,lng,9);
     const box = `${lng-.02},${lat-.02},${lng+.02},${lat+.02}`;
     const narrow = await (await fetch(url + `/view?days=30&level=4&box=${box}`, options)).json();
-    assert(narrow.data.statusPins.some(pin => pin.id === fineId && pin.pastNew && !pin.newActive && pin.state === null));
-    assert.equal(narrow.data.storeStatus.orderFilter.newZero,1);
+    assert(narrow.data.statusPins.some(pin => pin.id === fineId && pin.pastNew && pin.newActive === false && pin.state === null));
+    assert.equal(narrow.data.storeStatus.deliveryFilter.newZero,2);
     const active = await (await fetch(url + `/view?days=60&level=4&box=${box}`, options)).json();
     assert(active.data.statusPins.some(pin => pin.id === fineId && pin.newActive));
     const cell = await (await fetch(url + `/cell?id=${latLngToCell(lat,lng,11)}&days=60`, options)).json();
     assert.equal(cell.data.stores[0].newActive,true);
-    assert.equal(cell.data.stores[0].order.state,'CONFIRMED_VALID');
-    assert.deepEqual(cell.data.stores[0].order.dates,[{date:allDates[45],count:1}]);
-    assert.equal(cell.data.orderFilter.newActive,1);
+    assert.deepEqual(cell.data.stores[0].delivery,{state:'CONFIRMED_DELIVERY',complete:false,observedCompletedCount:1,lastCompletedOn:allDates[45]});
+    assert.equal(cell.data.deliveryFilter.newActive,1);
     assert.deepEqual(statusReads.slice(-3),[30,60,60]);
   } finally {
     await new Promise(resolve => server.close(resolve));

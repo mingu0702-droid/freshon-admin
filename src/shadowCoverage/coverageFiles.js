@@ -46,7 +46,11 @@ export async function readStoredCoverageFile(file, maxBytes) {
 
   // Render Secret Files are mounted as text. Bound the encoded and restored sizes.
   const packedFile = path.join(path.dirname(file), 'opsmap-coverage-' + path.basename(file) + '.gz.b64');
-  const encoded = (await boundedRead(packedFile, MAX_SECRET_FILE_BYTES)).toString('utf8').trim();
+  return readPackedCoverageFile(packedFile, maxBytes);
+}
+
+export async function readPackedCoverageFile(file, maxBytes) {
+  const encoded = (await boundedRead(file, MAX_SECRET_FILE_BYTES)).toString('utf8').trim();
   const compressed = Buffer.from(encoded, 'base64');
   if (!compressed.length || compressed.toString('base64') !== encoded) throw Error('COVERAGE_ENCODING_INVALID');
   return gunzipSync(compressed, { maxOutputLength: maxBytes });

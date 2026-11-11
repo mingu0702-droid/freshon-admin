@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { activeOrderSummary, cellStatusCounts } from './storeStatus.js';
+import { activeDeliverySummary, cellStatusCounts } from './storeStatus.js';
 
 const ROOT = '/api/map-phase2b/private/shadow-coverage';
 const CENTERS = ['all', 'osan', 'yeongnam', 'honam'];
@@ -85,8 +85,8 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       readStatus?.(catalog, index.sha256, days).catch(() => null)
     ]);
     const sourceRunId=readRunId?.(index.sha256) ?? null;
-    const version = createHash('sha256').update(JSON.stringify([4, index.sha256, stale, preservedMap, sourceRunId, days, center, bounds, level,
-      choice, statuses?.version, statuses?.evidenceAsOf, statuses?.date, statuses?.counts, statuses?.orderSummary, statuses?.orderVersion])).digest('hex');
+    const version = createHash('sha256').update(JSON.stringify([5, index.sha256, stale, preservedMap, sourceRunId, days, center, bounds, level,
+      choice, statuses?.version, statuses?.evidenceAsOf, statuses?.date, statuses?.counts, statuses?.deliverySummary])).digest('hex');
     const etag = '"coverage-' + version + '"';
     if (etag === tag) return { etag, data: null };
     const base = reader.viewFor(data, center, model.BASE_RESOLUTION);
@@ -103,15 +103,17 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       select();
     }
     const nationwide = base;
-    const statusPins = [], pinned = new Set();
+    const activePins = [], historicalPins = [], pinned = new Set();
     const cells = statuses ? visible.cells.map(cell => {
       const codes = model.coverageMembers(view, catalog, cell.id);
       if (resolution >= 9) for (const code of codes) {
         const status = statuses.records.get(code), store = catalog.byCode.get(code);
-        if (statusPins.length >= 120 || pinned.has(code) || !(status?.newActive || status?.pastNew || status?.held || status?.heldOrderConflict) || !store?.cell ||
+        if (pinned.has(code) || !(status?.newActive || status?.pastNew || status?.held) || !store?.cell ||
             store.lng < bounds[0] || store.lat < bounds[1] || store.lng > bounds[2] || store.lat > bounds[3]) continue;
         pinned.add(code);
-        statusPins.push({ id:cell.id, state:status.current, newActive:status.newActive, heldOrderConflict:status.heldOrderConflict,
+        const pins = status.newActive === true || status.held ? activePins : historicalPins;
+        if (pins.length >= 120) continue;
+        pins.push({ id:cell.id, state:status.current, newActive:status.newActive,
           pastNew:status.pastNew, pastHeld:status.pastHeld || (status.held && !status.current),
           location:[store.lat, store.lng] });
       }
@@ -139,14 +141,14 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       resolution,
       truncated: visible.overflow,
       cells,
-      statusPins,
+      statusPins:[...activePins,...historicalPins].slice(0,120),
       storeStatus: statuses ? { ...statuses.counts,
-        NEW:statuses.orderSummary ? statuses.orderSummary.newActive : statuses.counts.NEW || (statuses.counts.ordersUnknown ? null : 0),
+        NEW:statuses.deliverySummary?.newActive ?? null,
         HELD:statuses.counts.HELD || (statuses.counts.currentUnknown ? null : 0),
         pastNew:statuses.evidenceAsOf ? statuses.counts.pastNew : null,
         pastHeld:statuses.evidenceAsOf ? statuses.counts.pastHeld : null,
         fixedCheckedAt:statuses.fixedCheckedAt, evidenceAsOf:statuses.evidenceAsOf, historyStart:statuses.historyStart,
-        rollingStart:statuses.rollingStart, orderFilter:statuses.orderSummary } : null
+        rollingStart:statuses.rollingStart, deliveryFilter:statuses.deliverySummary } : null
     };
     return { etag, data: result };
   }, (res, { etag, data }) => {
@@ -178,9 +180,9 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const detail = resolution > model.BASE_RESOLUTION ? model.detailedCell(view, data.catalog, id, offset) : model.cellDetail(view, id, offset);
     const statuses = await readStatus?.(data.catalog, data.index.sha256, days).catch(() => null);
     const storeStatus=cellStatusCounts(model.coverageMembers(view, data.catalog, id), statuses);
-    const orderSummary=resolution >= 8 ? statuses?.orderCell?.(id) : null;
+    const deliverySummary=resolution >= 8 ? statuses?.deliveryCell?.(id) : null;
     return { ...detail, resolution, boundary: h3.cellToBoundary(id),
-      orderFilter:orderSummary ? activeOrderSummary(orderSummary,storeStatus) : null,
+      deliveryFilter:deliverySummary ? activeDeliverySummary(deliverySummary,storeStatus) : null,
       storeStatus,
       stores:detail.stores.map(row => {
         const store = data.catalog.byCode.get(row.code);

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { getResolution, isValidCell, latLngToCell } from 'h3-js';
-import { datesFor, isDay, privateCoverageDirectory, boundedRead } from './coverageFiles.js';
+import { datesFor, isDay, privateCoverageDirectory, boundedRead, readPackedCoverageFile } from './coverageFiles.js';
 import { readFreshonMisOrderLookup } from './freshonMisOrderLedger.js';
 import { createFreshonCompletedDeliveryWindows } from './freshonCompletedDeliveries.js';
 
@@ -282,7 +282,7 @@ export async function readFreshonStoreStatusFile({ file, expectedSha256, appRoot
   if (!path.isAbsolute(file || '') || !digest(expectedSha256)) throw Error('FRESHON_SHADOW_FILE_CONFIG');
   const resolved = await realpath(file);
   await privateCoverageDirectory(path.dirname(resolved), appRoot);
-  const bytes = await boundedRead(resolved, 8 * 1024 * 1024);
+  const bytes = await (file.endsWith('.gz.b64') ? readPackedCoverageFile : boundedRead)(resolved, 8 * 1024 * 1024);
   if (createHash('sha256').update(bytes).digest('hex') !== expectedSha256) throw Error('FRESHON_SHADOW_FILE_DIGEST');
   const projection = JSON.parse(bytes);
   let orderLookup;

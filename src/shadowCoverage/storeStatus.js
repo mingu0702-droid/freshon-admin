@@ -3,29 +3,22 @@ import { isDay } from './coverageFiles.js';
 const names = { NEW: '오산신규', HELD: '오산보류' };
 const stateOf = vehicle => vehicle === names.NEW ? 'NEW' : vehicle === names.HELD ? 'HELD' : null;
 const dayAt = ms => new Date(ms + 9 * 3600000).toISOString().slice(0, 10);
-const orderStates = new Set(['CONFIRMED_VALID','CONFIRMED_ZERO','CONFIRMED_CANCELLED_ONLY','UNKNOWN']);
-const unknownOrder = Object.freeze({state:'UNKNOWN',complete:false,validOrderCount:null,lastOrderDate:null,dates:Object.freeze([]),
-  observedValidOrderCount:0,lastObservedValidOrderDate:null,sourceAsOf:null});
+const unknownDelivery = Object.freeze({state:'UNKNOWN',complete:false,observedCompletedCount:0,lastCompletedOn:null});
 
-function publicOrder(value) {
-  if (!orderStates.has(value?.state)) return unknownOrder;
-  const observed = {
-    observedValidOrderCount:Number.isSafeInteger(value.observedValidOrderCount) && value.observedValidOrderCount>0 ? value.observedValidOrderCount : 0,
-    lastObservedValidOrderDate:isDay(value.lastObservedValidOrderDate) ? value.lastObservedValidOrderDate : null,
-    sourceAsOf:isDay(value.sourceAsOf) ? value.sourceAsOf : null
-  };
-  if (!value.complete || value.state === 'UNKNOWN' || !Number.isSafeInteger(value.validOrderCount) ||
-      (value.state === 'CONFIRMED_VALID' ? value.validOrderCount <= 0 : value.validOrderCount !== 0)) return {...unknownOrder,...observed};
-  return {...observed,state:value.state,complete:true,validOrderCount:value.validOrderCount,
-    lastOrderDate:isDay(value.lastOrderDate) ? value.lastOrderDate : null,
-    dates:(Array.isArray(value.dates) ? value.dates : []).filter(item=>isDay(item?.date) && Number.isSafeInteger(item.count) && item.count>0)
-      .map(({date,count})=>({date,count}))};
+function publicDelivery(value) {
+  if (value?.state === 'CONFIRMED_ZERO' && value.complete === true && value.observedCompletedCount === 0) {
+    return {state:value.state,complete:true,observedCompletedCount:0,lastCompletedOn:null};
+  }
+  if (value?.state !== 'CONFIRMED_DELIVERY' || !Number.isSafeInteger(value.observedCompletedCount) ||
+      value.observedCompletedCount < 1 || !isDay(value.lastCompletedOn)) return unknownDelivery;
+  return {state:value.state,complete:value.complete===true,observedCompletedCount:value.observedCompletedCount,
+    lastCompletedOn:value.lastCompletedOn};
 }
 
-export function createCoverageStatusReader({ readFixed, readEvidence, readSnapshot, orderDigest, now = Date.now }) {
+export function createCoverageStatusReader({ readFixed, readEvidence, readSnapshot, now = Date.now }) {
   const cached = new WeakMap();
   const projections = new WeakMap();
-  const orderProjections = new WeakMap();
+  const deliveryProjections = new WeakMap();
   return async (catalog, generation, days = 90) => {
     let periods = cached.get(catalog);
     if (!periods) cached.set(catalog, periods = new Map());
@@ -60,35 +53,32 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
       const first = dayAt(now() - 89 * 86400000);
       const fixedTime = Date.parse(fixed?.meta?.checkedAt);
       const fixedDay = Number.isFinite(fixedTime) ? dayAt(fixedTime) : null;
-      let orders;
-      if (evidence?.getOrderStatus) {
-        let byPeriod = orderProjections.get(evidence);
-        if (!byPeriod) orderProjections.set(evidence, byPeriod = new Map());
-        orders = byPeriod.get(days);
-        if (!orders) {
-          orders = new Map(codes.map(code => {
-            const status = evidence.getOrderStatus(code, days);
-            const order = publicOrder(status?.order);
-            const newActive = order.complete && typeof status?.newActive === 'boolean' ? status.newActive : null;
-            return [code, {newActive,historicalNew:status?.historicalNew === true,held:status?.held === true,
-              heldOrderConflict:status?.heldOrderConflict === true && order.state === 'CONFIRMED_VALID',order}];
+      let deliveries;
+      if (evidence?.getDeliveryStatus) {
+        let byPeriod = deliveryProjections.get(evidence);
+        if (!byPeriod) deliveryProjections.set(evidence, byPeriod = new Map());
+        deliveries = byPeriod.get(days);
+        if (!deliveries) {
+          deliveries = new Map(codes.map(code => {
+            const status = evidence.getDeliveryStatus(code, days);
+            const delivery = publicDelivery(status?.delivery);
+            const newActive = status?.newActive === true && delivery.state === 'CONFIRMED_DELIVERY' ? true :
+              status?.newActive === false && delivery.state === 'CONFIRMED_ZERO' ? false : null;
+            return [code, {newActive,historicalNew:status?.historicalNew === true,held:status?.held === true,delivery}];
           }));
-          byPeriod.set(days, orders);
+          byPeriod.set(days, deliveries);
         }
       }
       const records = new Map();
       const counts = { NEW: 0, HELD: 0, pastNew: 0, pastHeld: 0, changedFromNew: 0, changedFromHeld: 0,
-        rollingNew: 0, rollingHeld: 0, newUnknown: 0, newZero: 0, newCancelledOnly: 0, held: 0, heldUnknown: 0, heldOrderConflict: 0,
-        currentUnknown: 0, historyUnknown: 0, ordersUnknown: 0 };
+        rollingNew: 0, rollingHeld: 0, newUnknown: 0, newZero: 0, held: 0, currentUnknown: 0, historyUnknown: 0 };
       for (const code of codes) {
         const approved = evidenceRows?.get(code);
         const approvedCurrent = approved?.vehicle && currentAsOf && currentAsOf <= today && (!fixedDay || currentAsOf >= fixedDay) ? approved.vehicle : null;
         const vehicle = approvedCurrent || confirmed.get(code) || null;
         const rawState = stateOf(vehicle);
-        const verifiedOrder = orders?.get(code);
-        const order = verifiedOrder?.order ?? unknownOrder;
-        const newActive = verifiedOrder?.newActive ?? null;
-        const heldOrderConflict = verifiedOrder?.heldOrderConflict === true;
+        const verifiedDelivery = deliveries?.get(code);
+        const delivery = verifiedDelivery?.delivery ?? unknownDelivery;
         const current = rawState === 'HELD' ? 'HELD' : null;
         const within = event => event.date >= (historyStart || first) && event.date <= (asOf || today);
         const observations = (approved?.fixedObservations || []).filter(within);
@@ -96,18 +86,15 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
         const historyComplete = approved?.historyComplete === true && asOf === today;
         const seen = (label, start) => observations.some(event => (!start || event.date >= start) && stateOf(event.vehicle) === label) ||
           history.some(event => (!start || event.date >= start) && (stateOf(event.vehicle) === label || stateOf(event.fromVehicle) === label));
-        const pastNew = verifiedOrder?.historicalNew === true || seen('NEW'), pastHeld = seen('HELD');
+        const pastNew = verifiedDelivery?.historicalNew === true || seen('NEW'), pastHeld = seen('HELD');
+        const newActive = pastNew ? verifiedDelivery?.newActive ?? null : null;
         const newUnknown = pastNew && newActive === null;
-        const held = verifiedOrder?.held === true || current === 'HELD' || pastHeld;
+        const held = verifiedDelivery?.held === true || current === 'HELD' || pastHeld;
         if (newActive === true) counts.NEW++;
         if (newUnknown) counts.newUnknown++;
-        if (pastNew && order.state === 'CONFIRMED_ZERO') counts.newZero++;
-        if (pastNew && order.state === 'CONFIRMED_CANCELLED_ONLY') counts.newCancelledOnly++;
+        if (newActive === false) counts.newZero++;
         if (current) counts.HELD++;
         if (held) counts.held++;
-        const heldOrderUnknown = held && !order.complete;
-        if (heldOrderUnknown) counts.heldUnknown++;
-        if (heldOrderConflict) counts.heldOrderConflict++;
         if (pastNew) counts.pastNew++;
         if (pastHeld) counts.pastHeld++;
         if (seen('NEW',first)) counts.rollingNew++;
@@ -116,51 +103,43 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
         if (pastHeld && vehicle && rawState !== 'HELD') counts.changedFromHeld++;
         if (!vehicle) counts.currentUnknown++;
         if (!historyComplete) counts.historyUnknown++;
-        if (order.state === 'UNKNOWN') counts.ordersUnknown++;
-        records.set(code, { vehicle, currentVehicle:vehicle, current, newActive, newUnknown, held, heldOrderUnknown, heldOrderConflict,
-          heldOrderConflictReason:heldOrderConflict ? 'HELD_WITH_VALID_ORDER' : null,
-          pastNew, pastHeld, history, observations, historyComplete, order,
+        records.set(code, { vehicle, currentVehicle:vehicle, current, newActive, newUnknown, held,
+          pastNew, pastHeld, history, observations, historyComplete, delivery,
           lastDelivery: [approved?.lastDelivery,lastDelivery.get(code)].filter(Boolean).sort().at(-1) || null,
           asOf: approvedCurrent ? currentAsOf : vehicle ? fixedDay : null });
       }
-      const orderSummary = evidence?.getOrderSummary?.(days);
+      const deliverySummary = evidence?.getDeliverySummary?.(days);
       return { records, counts, fixedCheckedAt: fixedDay ? fixed.meta.checkedAt : null, evidenceAsOf: asOf, historyStart, rollingStart:first,
         version: fixed?.meta?.version || null, date: today,
-        orderSummary:orderSummary ? activeOrderSummary(orderSummary, counts) : null,
-        orderVersion:evidence?.metadata.orderSource==='VERIFIED' ? orderDigest : null,
-        orderCell:id=>evidence?.getCell?.(id,{days,limit:1})?.orderFilter || null };
+        deliverySummary:deliverySummary ? activeDeliverySummary(deliverySummary, counts) : null,
+        deliveryCell:id=>evidence?.getCell?.(id,{days,limit:1})?.deliveryFilter || null };
     })().finally(() => { entry.pending = false; entry.until = now() + 30000; });
     periods.set(days, entry);
     return entry.value;
   };
 }
 
-export function activeOrderSummary(summary, counts) {
+export function activeDeliverySummary(summary, counts) {
   return {days:summary.days,start:summary.start,end:summary.end,source:summary.source,
+    observedDays:summary.observedDays,missingDays:summary.missingDays,completeDays:summary.completeDays,
     historicalNew:counts.pastNew,newActive:counts.newUnknown && !counts.NEW ? null : counts.NEW,
-    confirmedNewActive:counts.NEW,complete:counts.newUnknown===0,
-    newUnknown:counts.newUnknown,newZero:counts.newZero,newCancelledOnly:counts.newCancelledOnly,
-    held:counts.held,heldOrderUnknown:counts.heldUnknown,heldOrderConflict:counts.heldOrderConflict};
+    confirmedNewActive:counts.NEW,complete:summary.complete === true,
+    newUnknown:counts.newUnknown,newZero:counts.newZero,held:counts.held};
 }
 
 export function cellStatusCounts(codes, statuses) {
   if (!statuses) return undefined;
-  const counts = { NEW: 0, HELD: 0, pastNew: 0, pastHeld: 0, unknown: 0, ordersUnknown: 0,
-    newUnknown: 0, newZero: 0, newCancelledOnly: 0, held: 0, heldUnknown: 0, heldOrderConflict: 0 };
+  const counts = { NEW: 0, HELD: 0, pastNew: 0, pastHeld: 0, unknown: 0,newUnknown: 0,newZero: 0,held: 0 };
   for (const code of codes) {
     const row = statuses.records.get(code);
     if (row?.newActive === true) counts.NEW++;
     if (row?.newUnknown === true) counts.newUnknown++;
-    if (row?.pastNew && row.order.state === 'CONFIRMED_ZERO') counts.newZero++;
-    if (row?.pastNew && row.order.state === 'CONFIRMED_CANCELLED_ONLY') counts.newCancelledOnly++;
+    if (row?.newActive === false) counts.newZero++;
     if (row?.current === 'HELD') counts.HELD++;
     if (row?.pastNew) counts.pastNew++;
     if (row?.pastHeld) counts.pastHeld++;
     if (!row?.vehicle) counts.unknown++;
-    if (!row || row.order.state === 'UNKNOWN') counts.ordersUnknown++;
     if (row?.held) counts.held++;
-    if (row?.heldOrderUnknown) counts.heldUnknown++;
-    if (row?.heldOrderConflict) counts.heldOrderConflict++;
   }
   return counts;
 }
