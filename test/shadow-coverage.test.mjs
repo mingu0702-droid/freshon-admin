@@ -8,9 +8,10 @@ import { gzipSync } from 'node:zlib';
 import express from 'express';
 import { cellToLatLng, cellToParent, greatCircleDistance, gridDisk, latLngToCell, UNITS } from 'h3-js';
 import { buildShadowCoverage } from '../scripts/build-shadow-coverage.mjs';
-import { aggregateDay, cellDetail, combineDays, coverageList, datesFor, prepareCatalog, prepareView, searchCoverage } from '../src/shadowCoverage/model.js';
+import { aggregateDay, cellDetail, combineDays, coverageList, coverageMembers, datesFor, detailedCell, detailedViewport, prepareCatalog, prepareView, searchCoverage } from '../src/shadowCoverage/model.js';
 import { mountShadowCoverage } from '../src/shadowCoverage/routes.js';
 import { createShadowCoverageStore } from '../src/shadowCoverage/store.js';
+import { cellStatusCounts, createCoverageStatusReader, validateCoverageStatusSource } from '../src/shadowCoverage/storeStatus.js';
 
 const end = '2026-11-07';
 const allDates = datesFor(end, 90);
@@ -48,6 +49,49 @@ function fixture(change) {
   change?.(days, stores);
   return { catalog, stores, days };
 }
+
+test('fine cells map verified store locations without copying R8 visit totals or fabricating an empty-cell verdict', () => {
+  const { catalog, days } = fixture();
+  const view = prepareView(catalog, combineDays(end, 90, days), 'all', 8);
+  const [lat,lng] = cellToLatLng(blue);
+  for (const resolution of [9,10]) {
+    const id = latLngToCell(lat,lng,resolution);
+    const visible = detailedViewport(view,catalog,[lng-.04,lat-.04,lng+.04,lat+.04],resolution);
+    assert.equal(new Set(visible.cells.map(cell=>cell.id)).size,visible.cells.length);
+    assert.equal(visible.cells.find(cell=>cell.id===id).visits,null);
+    const detail = detailedCell(view,catalog,id);
+    assert.equal(detail.observedStores,1);
+    assert.deepEqual(coverageMembers(view,catalog,id),['T900001']);
+    const empty = detailedCell(view,catalog,latLngToCell(lat+.01,lng+.01,resolution));
+    assert.equal(empty.status,'UNKNOWN');
+    assert.equal(empty.stores.length,0);
+  }
+});
+
+test('current, historical and resumed order status are independent and missing orders are never inferred', async () => {
+  const {catalog} = fixture();
+  const row = (code, vehicle, history, lastOrder=null) => ({code,vehicle,history,historyComplete:true,ordersComplete:lastOrder!==null,lastOrder});
+  const evidence = validateCoverageStatusSource({schema:1,asOf:'2026-11-11',stores:[
+    row('T900001','오산신규',[{date:'2026-10-01',vehicle:'오산신규'}]),
+    row('T900002','오산보류',[{date:'2026-10-02',vehicle:'오산보류'}],'2026-11-10'),
+    row('T900003','122',[{date:'2026-10-10',vehicle:'오산신규'}])
+  ]});
+  assert.throws(()=>validateCoverageStatusSource({schema:1,asOf:'2026-11-11',stores:[row('T900001',122,[])]}),/SOURCE_INVALID/);
+  const clock=()=>Date.parse('2026-11-11T00:00:00Z');
+  const fixed = async () => ({data:[],meta:{checkedAt:'2026-11-11T00:00:00Z'}});
+  const read = createCoverageStatusReader({readFixed:fixed,readEvidence:async()=>evidence,readSnapshot:async()=>({
+    rows:[{customerCode:'T900001',lastDeliveryDate:'2026-11-09'}]
+  }),now:clock});
+  const data=await read(catalog,proof);
+  assert.deepEqual(data.counts,{NEW:1,HELD:0,pastNew:2,pastHeld:1,changedFromNew:1,changedFromHeld:1,currentUnknown:0,historyUnknown:0,ordersUnknown:2});
+  assert.deepEqual(cellStatusCounts(['T900001','T900002'],data),{NEW:1,HELD:0,pastNew:1,pastHeld:1,unknown:0});
+  assert.equal(data.records.get('T900001').order,null);
+  assert.equal(data.records.get('T900001').lastDelivery,'2026-11-09');
+  assert.equal(data.records.get('T900002').resumed,true);
+  const missing = await createCoverageStatusReader({readFixed:fixed,now:clock})(catalog,proof);
+  assert.equal(missing.counts.currentUnknown,3);
+  assert.equal(missing.counts.ordersUnknown,3);
+});
 
 test('periods keep unique delivery counts and each confirmed vehicle for the same customer', () => {
   const { catalog, days } = fixture();

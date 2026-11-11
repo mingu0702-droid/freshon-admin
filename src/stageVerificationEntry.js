@@ -21,6 +21,7 @@ import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
+import {createCoverageStatusFileReader,createCoverageStatusReader} from './shadowCoverage/storeStatus.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,vehicleId} from './datedDeliveryContract.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
@@ -476,6 +477,16 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         });
       }
       const coverageAppRoot=fileURLToPath(new URL('../',import.meta.url));
+      const readCoverageStatus = createCoverageStatusReader({
+        readFixed:codes=>fixed.get(codes),
+        readEvidence:stage.RENDER_SERVICE_ID===STAGE_SERVICE && stage.OPSMAP_STAGE_STORE_STATUS_APPROVED==='1' ? createCoverageStatusFileReader({
+          file:stage.OPSMAP_STAGE_STORE_STATUS_FILE, sha256:stage.OPSMAP_STAGE_STORE_STATUS_SHA256, appRoot:coverageAppRoot
+        }) : undefined,
+        readSnapshot:generation=>{
+          const active=validation.active();
+          return active?.generation===generation ? active.scheduled?.snapshot : null;
+        }, now
+      });
       let providerReader;
       const providerApproved=stage.RENDER_SERVICE_ID===STAGE_SERVICE&&stage.OPSMAP_STAGE_PROVIDER_COVERAGE_APPROVED==='1';
       const readProviderCoverage=providerApproved?async()=>{
@@ -487,7 +498,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         return (await providerReader)();
       }:undefined;
       mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
-        appRoot:coverageAppRoot,readProviderCoverage,
+        appRoot:coverageAppRoot,readProviderCoverage,readStatus:readCoverageStatus,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
       manual.mount(binding);

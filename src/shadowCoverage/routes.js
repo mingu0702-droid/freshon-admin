@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { cellStatusCounts } from './storeStatus.js';
 
 const ROOT = '/api/map-phase2b/private/shadow-coverage';
 const CENTERS = ['all', 'osan', 'yeongnam', 'honam'];
@@ -15,6 +16,8 @@ function criteria(query) {
 }
 
 function resolutionFor(level) {
+  if (level <= 2) return 10;
+  if (level <= 4) return 9;
   if (level >= 12) return 4;
   if (level >= 10) return 5;
   if (level >= 8) return 6;
@@ -23,7 +26,7 @@ function resolutionFor(level) {
 }
 
 export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, readRunId,
-  readProviderCoverage, staffResponseGuarded = false } = {}) {
+  readProviderCoverage, readStatus, staffResponseGuarded = false } = {}) {
   let imports, current, providerModule;
   const load = async () => {
     const folder = readDirectory ? await readDirectory() : directory;
@@ -64,31 +67,55 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
   route('/view', req => {
     const box = req.query.box;
     const level = req.query.level ?? '11';
+    const resolution = req.query.resolution ?? 'auto';
     if (typeof box !== 'string' || box.length > 100 || typeof level !== 'string' || !/^(?:[1-9]|1[0-4])$/.test(level)) {
       return null;
     }
+    if (!['auto','8','9','10'].includes(resolution)) return null;
     const coords = box.split(',');
     const bounds = coords.length === 4 && coords.every(v => /^-?\d+(?:\.\d+)?$/.test(v)) ? coords.map(Number) : null;
     const tag = req.get('X-Coverage-View-Tag');
-    return bounds && { bounds, level: Number(level), tag: /^"coverage-[a-f0-9]{64}"$/.test(tag) ? tag : null };
-  }, async ({ days, center }, { bounds, level, tag }, { reader, model }) => {
+    return bounds && { bounds, level: Number(level), resolution, tag: /^"coverage-[a-f0-9]{64}"$/.test(tag) ? tag : null };
+  }, async ({ days, center }, { bounds, level, resolution: choice, tag }, { reader, model }) => {
     if (!model.boundsOf(bounds)) throw Error('COVERAGE_QUERY_INVALID');
     const data = await reader.readPeriod(days, undefined, { recheck: tag !== null });
-    const { window, index, stale } = data;
-    const preservedMap = (await Promise.resolve().then(readPreservedMap).catch(() => null)) ?? null;
+    const { window, index, stale, catalog } = data;
+    const [preservedMap, statuses] = await Promise.all([
+      Promise.resolve().then(readPreservedMap).catch(() => null),
+      readStatus?.(catalog, index.sha256).catch(() => null)
+    ]);
     const sourceRunId=readRunId?.(index.sha256) ?? null;
-    const version = createHash('sha256').update(JSON.stringify([1, index.sha256, stale, preservedMap, sourceRunId, days, center, bounds, level])).digest('hex');
+    const version = createHash('sha256').update(JSON.stringify([2, index.sha256, stale, preservedMap, sourceRunId, days, center, bounds, level,
+      choice, statuses?.version, statuses?.evidenceAsOf, statuses?.date, statuses?.counts])).digest('hex');
     const etag = '"coverage-' + version + '"';
     if (etag === tag) return { etag, data: null };
-    let resolution = resolutionFor(level);
-    let view = reader.viewFor(data, center, resolution);
-    let visible = model.viewportCells(view, bounds);
+    const base = reader.viewFor(data, center, model.BASE_RESOLUTION);
+    const span = Math.max(bounds[2]-bounds[0], bounds[3]-bounds[1]);
+    let resolution = Math.min(choice === 'auto' ? resolutionFor(level) : Number(choice), span > .75 ? 8 : span > .22 ? 9 : 10);
+    let view, visible;
+    const select = () => {
+      view = resolution >= model.BASE_RESOLUTION ? base : reader.viewFor(data, center, resolution);
+      visible = resolution > model.BASE_RESOLUTION ? model.detailedViewport(base, catalog, bounds, resolution) : model.viewportCells(view, bounds);
+    };
+    select();
     while (visible.overflow && resolution > 4) {
       resolution--;
-      view = reader.viewFor(data, center, resolution);
-      visible = model.viewportCells(view, bounds);
+      select();
     }
-    const nationwide = resolution === model.BASE_RESOLUTION ? view : reader.viewFor(data, center, model.BASE_RESOLUTION);
+    const nationwide = base;
+    const statusPins = [], pinned = new Set();
+    const cells = statuses ? visible.cells.map(cell => {
+      const codes = model.coverageMembers(view, catalog, cell.id);
+      if (resolution >= 9) for (const code of codes) {
+        const status = statuses.records.get(code), store = catalog.byCode.get(code);
+        if (statusPins.length >= 120 || pinned.has(code) || !(status?.current || status?.pastNew || status?.pastHeld) || !store?.cell ||
+            store.lng < bounds[0] || store.lat < bounds[1] || store.lng > bounds[2] || store.lat > bounds[3]) continue;
+        pinned.add(code);
+        statusPins.push({ id:cell.id, state:status.current, pastNew:status.pastNew, pastHeld:status.pastHeld,
+          location:[store.lat, store.lng] });
+      }
+      return { ...cell, storeStatus:cellStatusCounts(codes, statuses) };
+    }) : visible.cells;
     const result = {
       generation: index.sha256,
       sourceRunId,
@@ -105,12 +132,14 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       summary: nationwide.summary,
       summaryResolution: model.BASE_RESOLUTION,
       viewportSummary: visible.summary,
-      candidateViewport: model.viewportCandidates(nationwide, bounds, resolution),
-      preservedMap,
+      candidateViewport: model.viewportCandidates(nationwide, bounds, Math.min(resolution, model.BASE_RESOLUTION)),
+      preservedMap: preservedMap ?? null,
       candidateList: model.coverageList(nationwide),
       resolution,
       truncated: visible.overflow,
-      cells: visible.cells
+      cells,
+      statusPins,
+      storeStatus: statuses ? { ...statuses.counts, fixedCheckedAt:statuses.fixedCheckedAt, evidenceAsOf:statuses.evidenceAsOf } : null
     };
     return { etag, data: result };
   }, (res, { etag, data }) => {
@@ -136,36 +165,46 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
   }, async ({ days, center, generation }, { id, offset }, { reader, model, h3 }) => {
     if (!h3.isValidCell(id)) throw Error('COVERAGE_QUERY_INVALID');
     const resolution = h3.getResolution(id);
-    if (resolution < 4 || resolution > 8) throw Error('COVERAGE_QUERY_INVALID');
+    if (resolution < 4 || resolution > 10) throw Error('COVERAGE_QUERY_INVALID');
     const data = await reader.readPeriod(days, generation);
-    const detail = model.cellDetail(reader.viewFor(data, center, resolution), id, offset);
-    return { ...detail, boundary: h3.cellToBoundary(id) };
+    const view = reader.viewFor(data, center, Math.min(resolution, model.BASE_RESOLUTION));
+    const detail = resolution > model.BASE_RESOLUTION ? model.detailedCell(view, data.catalog, id, offset) : model.cellDetail(view, id, offset);
+    const statuses = await readStatus?.(data.catalog, data.index.sha256).catch(() => null);
+    return { ...detail, resolution, boundary: h3.cellToBoundary(id),
+      storeStatus:cellStatusCounts(model.coverageMembers(view, data.catalog, id), statuses),
+      stores:detail.stores.map(row => {
+        const store = data.catalog.byCode.get(row.code);
+        return { ...row, ...(statuses?.records.get(row.code) || {}), location:store?.cell ? [store.lat, store.lng] : null };
+      }) };
   });
 
   route('/search', req => {
     let query;
     try { query = decodeURIComponent(req.get('x-map-customer-query') || '').normalize('NFKC').trim(); }
     catch { return null; }
-    const radius = req.query.radius ?? '0';
+    const radius = req.query.radius ?? '0', resolution = req.query.resolution ?? '8';
     return query.length >= 2 && query.length <= 200 && !/[\u0000-\u001f]/.test(query) &&
-      ['0', '500', '1000'].includes(radius) ? { query, radius: Number(radius) } : null;
-  }, async ({ days, center, generation }, { query, radius }, { reader, model }) => {
+      ['0', '500', '1000'].includes(radius) && ['8','9','10'].includes(resolution) ? { query, radius: Number(radius), resolution:Number(resolution) } : null;
+  }, async ({ days, center, generation }, { query, radius, resolution }, { reader, model, h3 }) => {
     const data = await reader.readPeriod(days, generation);
     const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
     return { days, start: data.window.start, end: data.window.end, generation:data.index.sha256,
-      results: model.searchCoverage(data.catalog, view, query, center, radius) };
+      results: model.searchCoverage(data.catalog, view, query, center, radius).map(row => row.location && resolution > 8
+        ? {...row, detailId:h3.latLngToCell(...row.location, resolution)} : row) };
   });
 
   route('/point', req => {
     const point = req.get('x-map-coverage-point') || '';
     if (point.length > 55 || !/^-?\d{1,3}(?:\.\d{1,16})?,-?\d{1,3}(?:\.\d{1,16})?$/.test(point)) return null;
-    return point.split(',').map(Number);
-  }, async ({ days, center, generation }, location, { reader, model }) => {
+    const resolution = req.query.resolution ?? '8';
+    return ['8','9','10'].includes(resolution) ? { location:point.split(',').map(Number), resolution:Number(resolution) } : null;
+  }, async ({ days, center, generation }, {location,resolution}, { reader, model, h3 }) => {
     if (!model.isPoint(...location)) throw Error('COVERAGE_QUERY_INVALID');
     const data = await reader.readPeriod(days, generation);
     const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
     return { days, start: data.window.start, end: data.window.end, generation:data.index.sha256,
-      results: [model.coverageAtPoint(data.catalog, view, location, center)] };
+      results: [{...model.coverageAtPoint(data.catalog, view, location, center),
+        ...(resolution > 8 ? {detailId:h3.latLngToCell(...location,resolution)} : {})}] };
   });
 
   route('/provider-overlap',req=>{

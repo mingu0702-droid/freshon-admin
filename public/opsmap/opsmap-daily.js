@@ -118,15 +118,18 @@
     const expected = new Map(roster.rows.filter(row => row.vehicle === selectedVehicle).map(row => [row.deliveryId, row]));
     if (expected.size !== response.count) throw rosterError();
     const eligible = new Map(), status = new Map();
+    let explicitBulk = 0, verifiedAt17Kst = 0;
     for (const row of response.rows) {
       const prior = expected.get(row.deliveryId);
       if (!prior || prior.customerCode !== row.customerCode || prior.state !== row.state) throw rosterError();
       if (row.state !== 'COMPLETED') continue;
       status.set(row.deliveryId, null);
+      if (row.verification === 'BULK_CONFIRMED' && row.bulkProcessed === true) explicitBulk++;
       if (row.verification === 'VERIFIED_INDIVIDUAL' && row.bulkProcessed === false &&
         kinds.has(row.completionType) && iso(row.individualCompletedAt)) {
         eligible.set(row.deliveryId, row.individualCompletedAt);
         status.set(row.deliveryId, row.individualCompletedAt);
+        if (new Date(row.individualCompletedAt).getUTCHours() === 8) verifiedAt17Kst++;
       }
     }
     const tied = new Set();
@@ -146,7 +149,7 @@
       previous = at;
     }
     if (points.size + tied.size !== eligible.size) throw rosterError();
-    return {points, status, tiedCount:tied.size};
+    return {points, status, tiedCount:tied.size, explicitBulk, verifiedAt17Kst};
   }
   function rosterPoints(rows, points) {
     const byId = new Map(rows.map(row => [row.deliveryId, row]));

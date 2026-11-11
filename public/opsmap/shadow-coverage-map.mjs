@@ -16,7 +16,7 @@ function appearance(cell) {
   if (cell.status === 'EMPTY') return 'empty';
   if (cell.visits >= 50) return 'dense';
   if (cell.visits >= 10) return 'medium';
-  return cell.visits ? 'light' : 'none';
+  return cell.visits || cell.observedStores ? 'light' : 'none';
 }
 
 export function mergeCoverageBadges(points) {
@@ -38,8 +38,8 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
   svg.setAttribute('height', '1');
   const overlay = new maps.AbstractOverlay();
   let cells = EMPTY, selected = null, radiusCircle = null, searchMarker = null, anchor = null;
-  let markers = EMPTY, hits = EMPTY, providerPaths = EMPTY;
-  let renderedCells, renderedMarkers, renderedSelection, renderedLevel, renderedProviders, frame;
+  let markers = EMPTY, hits = EMPTY, providerPaths = EMPTY, statusPins = EMPTY, statusHits = EMPTY;
+  let renderedCells, renderedMarkers, renderedSelection, renderedLevel, renderedProviders, renderedPins, frame;
 
   function draw() {
     frame = undefined;
@@ -50,12 +50,14 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
     svg.style.top = origin.y + 'px';
 
     const level = map.getLevel();
-    if (cells === renderedCells && markers === renderedMarkers && selected === renderedSelection && level === renderedLevel && providerPaths===renderedProviders) return;
+    if (cells === renderedCells && markers === renderedMarkers && selected === renderedSelection &&
+        level === renderedLevel && providerPaths === renderedProviders && statusPins === renderedPins) return;
     renderedCells = cells;
     renderedMarkers = markers;
     renderedSelection = selected;
     renderedLevel = level;
     renderedProviders = providerPaths;
+    renderedPins = statusPins;
     const fragment = document.createDocumentFragment();
     const visible = selected?.boundary && !cells.some(cell => cell.id === selected.id) ? [...cells, selected] : cells;
     for (const cell of [...visible,...providerPaths]) {
@@ -85,6 +87,37 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
       badge.append(circle, count);
       fragment.append(badge);
     }
+    function badgeAt(point, state, count, offset = 0, historic = false) {
+      const badge = document.createElementNS(SVG, 'g');
+      badge.dataset.storeStatus = state;
+      if (historic) badge.dataset.historic = '1';
+      badge.setAttribute('transform', 'translate(' + (point.x - origin.x + offset) + ' ' + (point.y - origin.y) + ')');
+      const circle = document.createElementNS(SVG, 'circle');
+      circle.setAttribute('r', count ? '10' : '5');
+      badge.append(circle);
+      if (count) {
+        const text = document.createElementNS(SVG, 'text');
+        text.setAttribute('dy', '.35em');
+        text.textContent = String(count);
+        badge.append(text);
+      }
+      fragment.append(badge);
+    }
+    for (const cell of cells) {
+      const summary = cell.storeStatus;
+      if (!summary?.NEW && !summary?.HELD && !summary?.pastNew && !summary?.pastHeld) continue;
+      const point = projection.pointFromCoords(new maps.LatLng(...cell.location));
+      const counts = [['NEW', summary.NEW, false], ['HELD', summary.HELD, false],
+        ['NEW', summary.pastNew, true], ['HELD', summary.pastHeld, true]].filter(([,count])=>count);
+      counts.forEach(([state,count,historic],i)=>badgeAt(point,state,count,(i-(counts.length-1)/2)*20,historic));
+    }
+    statusHits = statusPins.map(pin => {
+      const point = projection.pointFromCoords(new maps.LatLng(...pin.location));
+      const states = [[pin.state,false], [pin.pastNew && pin.state!=='NEW' ? 'NEW' : null,true],
+        [pin.pastHeld && pin.state!=='HELD' ? 'HELD' : null,true]].filter(([state])=>state);
+      states.forEach(([state,historic],i)=>badgeAt(point,state,null,(i-(states.length-1)/2)*10,historic));
+      return { ...pin, x:point.x-origin.x, y:point.y-origin.y };
+    });
     svg.replaceChildren(fragment);
   }
 
@@ -100,12 +133,12 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
 
   function onMapClick(event) {
     if (!enabled() || !event?.latLng) return;
-    if (anchor && hits.length) {
+    if (anchor && (hits.length || statusHits.length)) {
       const projection = overlay.getProjection();
       const origin = projection.pointFromCoords(anchor), point = projection.pointFromCoords(event.latLng);
       const x = point.x - origin.x, y = point.y - origin.y;
       let nearest, distance = 16 ** 2;
-      for (const hit of hits) {
+      for (const hit of [...hits, ...statusHits]) {
         const squared = (x - hit.x) ** 2 + (y - hit.y) ** 2;
         if (squared <= distance) { nearest = hit; distance = squared; }
       }
@@ -155,10 +188,10 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
       searchMarker = new maps.CustomOverlay({ position:new maps.LatLng(...location), content:pin, zIndex:30 });
       searchMarker.setMap(map);
     },
-    render(value, highlight, candidateMarkers = EMPTY, layers = EMPTY) {
-      if (!value.length && !highlight && !candidateMarkers.length && !layers.length) {
+    render(value, highlight, candidateMarkers = EMPTY, layers = EMPTY, pins = EMPTY) {
+      if (!value.length && !highlight && !candidateMarkers.length && !layers.length && !pins.length) {
         svg.replaceChildren();
-        cells = renderedCells = markers = renderedMarkers = hits = providerPaths = renderedProviders = EMPTY;
+        cells = renderedCells = markers = renderedMarkers = hits = providerPaths = renderedProviders = statusPins = renderedPins = statusHits = EMPTY;
         selected = renderedSelection = anchor = null;
         return;
       }
@@ -168,6 +201,7 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
       }
       markers = candidateMarkers;
       providerPaths = layers;
+      statusPins = pins;
       selected = highlight;
       schedule();
     },
@@ -186,7 +220,7 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
       searchMarker?.setMap(null);
       overlay.setMap(null);
       cancelAnimationFrame(frame);
-      cells = markers = hits = EMPTY;
+      cells = markers = hits = statusPins = statusHits = EMPTY;
       selected = null;
     }
   };

@@ -104,6 +104,15 @@ body.shadow-coverage-open #mapFreshnessStatus,
 .coverage-legend [data-tone="candidate"]::before { background: #f59e0b83; border-color: #b45309 }
 .coverage-legend [data-tone="unknown"]::before { background: #8592a31a; border-color: #64748b; border-style: dashed }
 .coverage-legend [data-tone="empty"]::before { background: #91a99f66; border-color: #60776f }
+.coverage-legend [data-tone="new"]::before { background: #087f83; border-color: #075e62 }
+.coverage-legend [data-tone="held"]::before { background: #7950a2; border-color: #56367a }
+.coverage-overlay [data-store-status="NEW"] { --status-ink: #087f83 }
+.coverage-overlay [data-store-status="HELD"] { --status-ink: #7950a2 }
+.coverage-overlay [data-store-status] circle { fill: var(--status-ink); stroke: #fff; stroke-width: 1.4 }
+.coverage-overlay [data-store-status] text { fill: #fff; text-anchor: middle; font-size: 10px; font-weight: 700 }
+.coverage-overlay [data-store-status][data-historic] circle { fill: #fff; stroke: var(--status-ink); stroke-dasharray: 2 1 }
+.coverage-overlay [data-store-status][data-historic] text { fill: var(--status-ink) }
+.coverage-stores li + li { margin-top: .55rem }
 .coverage-overview { padding: 8px 10px; margin: 5px 0 8px; border: 1px solid #dce7f5; border-radius: 8px; background: #f7faff }
 #coverageBasis { font-size: 13px; font-weight: 700 }
 #coverageObserved { color: #285899; font-weight: 650 }

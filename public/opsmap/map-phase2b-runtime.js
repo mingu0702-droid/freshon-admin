@@ -1741,10 +1741,35 @@
   }
 
   function clearActualRoute() {
+    $('#map')?.removeAttribute('data-actual-route-audit');
     if(!actualRouteLayer)return;
     actualRouteLayer.items.forEach(item=>item.setMap(null));
     actualRouteLayer.info?.close();
     actualRouteLayer=null;
+  }
+  function auditActualRoute(points, segments, badges) {
+    // Stage QA returns counts only. No IDs, locations or timestamps leave the page.
+    if (!stageAddressBatchEnabled() || new URLSearchParams(location.search).get('opsmapQa') !== 'route') return;
+    const route=currentRosterRoute(), evidence=route?.saved.chronologies.get(route.key);
+    if (!evidence) return;
+    const source=new Map(route.scope.rows.filter(row=>row.vehicle===route.vehicle).map(row=>[row.deliveryId,row]));
+    const expected=[...evidence.points];
+    const ids=new Set();
+    const equal=(point,row)=>Boolean(point&&row&&Math.abs(point.getLat()-row.lat)<1e-7&&Math.abs(point.getLng()-row.lng)<1e-7);
+    let verified=0, chronological=true;
+    points.forEach(({row,at},i)=>{
+      ids.add(row.deliveryId);
+      const forward=segments[i]?.getPath?.(), backward=segments[i-1]?.getPath?.();
+      if (expected[i]?.[0]===row.deliveryId && expected[i][1]===at && source.get(row.deliveryId)?.customerCode===row.customerCode &&
+          (i===0 || equal(backward?.[1],row)) && (i===points.length-1 || equal(forward?.[0],row))) verified++;
+      if (i&&Date.parse(points[i-1].at)>=Date.parse(at)) chronological=false;
+    });
+    const start=equal(badges[0]?.getPosition?.(),points[0]?.row);
+    const end=equal(badges[1]?.getPosition?.(),points.at(-1)?.row);
+    $('#map')?.setAttribute('data-actual-route-audit',JSON.stringify({date:route.scope.date,vehicle:route.vehicle,roster:source.size,
+      expected:expected.length,drawn:points.length,verified,missing:expected.length-ids.size,duplicates:points.length-ids.size,
+      segments:segments.length,ties:evidence.tiedCount,explicitBulk:evidence.explicitBulk,verifiedAt17Kst:evidence.verifiedAt17Kst,
+      chronological,start,end}));
   }
   function drawRoute() {
     const vehicles=selectedVehicles();
@@ -1776,6 +1801,7 @@
       items.push(new kakao.maps.CustomOverlay({map:state.map,position:path[index],content:badge,yAnchor:1.8,zIndex:9,clickable:true}));
     }
     actualRouteLayer={key,items,info};
+    auditActualRoute(points,items.slice(0,-2),items.slice(-2));
   }
 
   function scheduleDetailPosition() {

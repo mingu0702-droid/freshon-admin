@@ -332,7 +332,7 @@ export function prepareView(catalog, window, center, resolution) {
   }
   delivered.sort((a, b) => a.geometry.location[0] - b.geometry.location[0]);
   return {
-    groups, stores, summary, delivered, baseCandidates, nearby: new Map(), lists: new Map(),
+    groups, stores, summary, delivered, baseCandidates, nearby: new Map(), lists: new Map(), detailed: new Map(),
     evidence: periodEvidence(window, center),
     proof: { dateComplete, centerComplete, registryVerified: catalog.registryVerified,
       scopedCells: catalog.scopes.filter(scope => scope.center === center && getResolution(scope.id) === resolution).length }
@@ -380,6 +380,100 @@ export function viewportCells(view, bounds, limit = MAX_VISIBLE_CELLS) {
     if (cells.length < limit) cells.push({ ...card(group), boundary: group.geometry.boundary });
   }
   return { cells, summary, overflow: summary.total > limit };
+}
+
+function detailedGroups(view, catalog, parent, resolution) {
+  const key = parent.id + ':' + resolution;
+  if (view.detailed.has(key)) return view.detailed.get(key);
+  const groups = new Map();
+  const observed = new Map();
+  for (const row of parent.history) {
+    for (const code of row[4]) if (!observed.has(code)) observed.set(code, new Set());
+    for (const [code, vehicles] of row[6]) {
+      const cars = observed.get(code);
+      if (cars) for (const vehicle of vehicles) cars.add(vehicle);
+    }
+  }
+  const registered = new Set(parent.registered);
+  for (const code of new Set([...registered, ...observed.keys()])) {
+    const store = view.stores.get(code);
+    if (store?.cell !== parent.id) continue;
+    const id = latLngToCell(store.lat, store.lng, resolution);
+    if (!groups.has(id)) groups.set(id, {id, registered: [], observed: new Map(), geometry: geometryFor(catalog, id)});
+    const cell = groups.get(id);
+    if (registered.has(code)) cell.registered.push(code);
+    if (observed.has(code)) cell.observed.set(code, observed.get(code));
+  }
+  if (view.detailed.size >= 180) view.detailed.delete(view.detailed.keys().next().value);
+  view.detailed.set(key, groups);
+  return groups;
+}
+
+function detailedCard(group, parent) {
+  const status = group.observed.size ? 'DELIVERED' : group.candidate ? 'CANDIDATE' : 'UNKNOWN';
+  return { id: group.id, label: parent.label, status, candidate: status === 'CANDIDATE', visits: null,
+    observedStores: group.observed.size, registered: group.registered.length,
+    lastDelivery: null, location: group.geometry.location, boundary: group.geometry.boundary };
+}
+
+function detailedGroupFor(view, catalog, id) {
+  const resolution = getResolution(id), parentId = cellToParent(id, BASE_RESOLUTION);
+  let result;
+  // H3's logical parent and the cell containing a point can differ at a boundary.
+  for (const nearbyId of gridDisk(parentId, 1)) {
+    const parent = view.groups.get(nearbyId);
+    const part = parent && detailedGroups(view, catalog, parent, resolution).get(id);
+    if (!part) continue;
+    result ||= { parent, group: { id, geometry:part.geometry, registered:[], observed:new Map(), candidate:true } };
+    const { group } = result;
+    group.registered.push(...part.registered);
+    for (const [code, vehicles] of part.observed) group.observed.set(code, vehicles);
+    group.candidate &&= parent.status === 'CANDIDATE';
+  }
+  return result;
+}
+
+export function detailedViewport(view, catalog, bounds, resolution, limit = MAX_VISIBLE_CELLS) {
+  const summary = counts(), cells = [], seen = new Set();
+  const nearby = [bounds[0]-.02, bounds[1]-.02, bounds[2]+.02, bounds[3]+.02];
+  for (const parent of view.groups.values()) {
+    if (!intersects(nearby, parent.geometry.bounds)) continue;
+    for (const part of detailedGroups(view, catalog, parent, resolution).values()) {
+      if (seen.has(part.id) || !intersects(bounds, part.geometry.bounds)) continue;
+      seen.add(part.id);
+      const detail = detailedGroupFor(view, catalog, part.id);
+      if (!detail) continue;
+      const { group } = detail;
+      const cell = detailedCard(group, detail.parent);
+      countCell(summary, { status: cell.status, registered: group.registered });
+      if (cells.length < limit) cells.push(cell);
+      if (summary.total > limit) return { cells, summary, overflow: true };
+    }
+  }
+  return { cells, summary, overflow: false };
+}
+
+export function coverageMembers(view, catalog, id) {
+  const resolution = getResolution(id);
+  if (resolution <= BASE_RESOLUTION) return view.groups.get(id)?.registered || [];
+  return detailedGroupFor(view, catalog, id)?.group.registered || [];
+}
+
+export function detailedCell(view, catalog, id, offset = 0) {
+  const parentId = cellToParent(id, BASE_RESOLUTION);
+  const { parent, group } = detailedGroupFor(view, catalog, id) || {};
+  if (!group) return { ...cellDetail(view, parentId), id, boundary:cellToBoundary(id), location:cellToLatLng(id),
+    label: '세부 격자', visits:null, observedStores:0, lastDelivery:null, registered:0, customers:0, stores:[], next:null,
+    vehicles:[], status:'UNKNOWN', candidate:false, deliveryDays:null, address:'' };
+  const codes = [...new Set([...group.registered, ...group.observed.keys()])].sort();
+  const stores = codes.slice(offset, offset + 40).map(code => ({
+    code, name: view.stores.get(code)?.name || code, registered: group.registered.includes(code),
+    vehicles: [...(group.observed.get(code) || [])].sort()
+  }));
+  return { ...detailedCard(group, parent), customers: codes.length, stores,
+    next: offset + stores.length < codes.length ? offset + stores.length : null,
+    vehicles: [...new Set(stores.flatMap(store => store.vehicles))].sort(),
+    address:'', administrative:parent.administrative, deliveryDays:null, evidence:view.evidence, nearby:nearbyDelivery(view,parentId) };
 }
 
 // Count the original candidates even when a larger cell also contains deliveries.
