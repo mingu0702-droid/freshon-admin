@@ -19,7 +19,7 @@ function declaration(name){
 }
 // Pick only A-owned declarations: B's interleaved temporary-pin functions remain
 // interface stubs here and are exercised by the independent full-browser QA.
-const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','rankSearchRows','normalizeApiStore',
+const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','rankSearchRows','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
  'renderResults','unifiedAddressQuery','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
@@ -30,7 +30,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
-  searchIndex:null,searchFlight:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,
+  searchIndex:null,searchFlight:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,customerRegistry:null,
   stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{stageAddress,temporaryPoint:()=>null},
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
@@ -79,6 +79,19 @@ test('local names and preserved addresses avoid the live Customer reader',async(
  await f.context.searchPeriod(row.customerName);
  await f.context.searchPeriod('서울 합성구 보호로 5');
  assert.deepEqual(f.selected.map(result=>result.customerCode),[row.customerCode,row.customerCode]);
+ assert.equal(f.queries.length,0);
+});
+
+test('a sealed Stage address uses the generation-bound index without rebuilding the name index',async()=>{
+ const row=store('S990202','합성 보존 매장',''),generation='a'.repeat(64);
+ const f=fixture({rows:[row],stageAddress:async(_query,value)=>{
+   assert.equal(value,generation);
+   return {status:'STORED',customerCodes:[row.customerCode]};
+ }});
+ f.context.snapshotMeta={sourceGeneration:generation};
+ await f.context.searchPeriod('서울 합성구 보호로 6');
+ assert.equal(f.selected[0]?.customerCode,row.customerCode);
+ assert.equal(f.context.searchIndex,null);
  assert.equal(f.queries.length,0);
 });
 

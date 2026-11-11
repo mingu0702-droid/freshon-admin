@@ -2432,26 +2432,35 @@
     cancelAddressLookup();closeUnifiedSearchResults();setSearchState('검색 중',true);
     unifiedSearchController=new AbortController();const signal=unifiedSearchController.signal;
     const code=/^[A-Z]\d{3,}$/i.test(text)?text.toUpperCase():null;
-    const local=code ? [storesByCode.get(code)||coordinateByCode.get(code)].filter(Boolean) : rankSearchRows(text);
-    trace.mark('matching');
-    if(local.length){
-      setSearchState(local.length===1?'검색 결과 1건':`${local.length}개 매장 · 선택해 주세요.`);
-      renderResults(local,{owner,trace});return;
-    }
     const address=unifiedAddressQuery(text)||/^\d{19}$/.test(text);
+    const generation=snapshotMeta?.sourceGeneration??null;
+    const stageLookup=address&&stageAddressBatchEnabled();
+    // Sealed Stage coordinates omit street text. Use that generation's protected index
+    // before rebuilding the name index, unless a complete newer Customer view is present.
+    const deferLocal=stageLookup&&generation!==null&&customerRegistry?.summary().complete!==true;
+    const showMatches=rows=>{
+      if(!rows.length)return false;
+      setSearchState(rows.length===1?'검색 결과 1건':`${rows.length}개 매장 · 선택해 주세요.`);
+      renderResults(rows,{owner,trace});
+      return true;
+    };
+    const localMatches=()=>{
+      const rows=code ? [storesByCode.get(code)||coordinateByCode.get(code)].filter(Boolean) : rankSearchRows(text);
+      trace.mark('matching');
+      return showMatches(rows);
+    };
+    if(!deferLocal&&localMatches())return;
     const active=()=>!signal.aborted&&owner===state.searchRequestId&&state.mode==='BASE_60D';
-    if(address&&stageAddressBatchEnabled()){
-      const generation=snapshotMeta?.sourceGeneration??null;
+    if(stageLookup){
       trace.mark('apiStart');
-      const evidence=await NewAreaRequests.stageAddress(text,generation,{signal}).catch(()=>null);
+      const reply=await NewAreaRequests.stageAddress(text,generation,{signal}).catch(()=>null);
       trace.mark('apiEnd');
       if(!active())return;
-      if((snapshotMeta?.sourceGeneration??null)===generation){
-        const stored=(evidence?.customerCodes||[]).map(code=>storesByCode.get(code)||coordinateByCode.get(code)).filter(Boolean);
-        if(stored.length){
-          setSearchState(stored.length===1?'검색 결과 1건':`${stored.length}개 매장 · 선택해 주세요.`);
-          renderResults(stored,{owner,trace});return;
-        }
+      const evidence=(snapshotMeta?.sourceGeneration??null)===generation ? reply : null;
+      const stored=(evidence?.customerCodes||[]).map(code=>storesByCode.get(code)||coordinateByCode.get(code)).filter(Boolean);
+      if(stored.length){trace.mark('matching');if(showMatches(stored))return;}
+      if(deferLocal&&localMatches())return;
+      if(evidence){
         const point=evidence?.point;
         if(point){
           if(!state.map)await initMap();

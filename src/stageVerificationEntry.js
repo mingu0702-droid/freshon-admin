@@ -454,10 +454,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           } catch (failure) {
             const error=/^DELIVERY_SOURCE_[A-Z_]+$/.test(failure.code||'')?failure.code:'DELIVERY_SOURCE_READ_UNAVAILABLE';
             const saved=await retained(error);
-            return requireStaff(req,res,()=>saved?privateResponse().json(saved):privateResponse().status(503).json({contract:DATED_DELIVERY_CONTRACT,
-              date,center,sourceId,vehicle,generation:null,sourceGeneration:null,sourceRunId:null,state:'SOURCE_UNAVAILABLE',error,
-              source:{kind:'DELIVERY_ADMIN_READ',observedAt:null},sourceComplete:false,currentReadComplete:false,scopeComplete:false,confirmedEmpty:false,
-              previousVerifiedRetained:false,lastSuccessAt:scopedSuccessAt,rows:null,activeCount:null,chronology:null,chronologyTies:null}));
+            return requireStaff(req,res,()=>{
+              console.info(JSON.stringify({component:'stage-dated-delivery',status:saved?200:503,code:error}));
+              return saved?privateResponse().json(saved):privateResponse().status(503).json({contract:DATED_DELIVERY_CONTRACT,
+                date,center,sourceId,vehicle,generation:null,sourceGeneration:null,sourceRunId:null,state:'SOURCE_UNAVAILABLE',error,
+                source:{kind:'DELIVERY_ADMIN_READ',observedAt:null},sourceComplete:false,currentReadComplete:false,scopeComplete:false,confirmedEmpty:false,
+                previousVerifiedRetained:false,lastSuccessAt:scopedSuccessAt,rows:null,activeCount:null,chronology:null,chronologyTies:null});
+            });
           }
         });
         router.post(officialAddressIndexRoute,requireStaff,(req,res,next)=>{
