@@ -115,12 +115,19 @@
           const page = await validate(payload, requestedCursor);
           assertCurrent(owner, signal);
           if (stage && (stage.version !== page.version || stage.sourceVersion !== (page.sourceVersion || '') || stage.mode !== page.mode)) throw failure('CUSTOMER_REGISTRY_VERSION_CHANGED');
-          if (!stage) stage = {records: new Map(records), version: page.version, sourceVersion: page.sourceVersion || '', mode: page.mode, cursor: requestedCursor, receipts: new Set(), pages: 0};
+          if (!stage) stage = {
+            records: new Map(records), version: page.version, sourceVersion: page.sourceVersion || '',
+            mode: page.mode, cursor: requestedCursor, receipts: new Set(), customerCodes: new Set(), pages: 0
+          };
           const receipt = JSON.stringify([page.version, requestedCursor, page.nextCursor ?? null]);
           if (stage.receipts.has(receipt)) throw failure('CUSTOMER_REGISTRY_CURSOR_REPEATED');
           stage.receipts.add(receipt); stage.pages++;
-          // An opaque version is an identity, not a sortable timestamp.
-          if (page.version !== version) for (const row of page.rows) stage.records.set(row.customerCode, row);
+          for (const row of page.rows) {
+            if (stage.customerCodes.has(row.customerCode)) throw failure('CUSTOMER_REGISTRY_ROW_INVALID');
+            stage.customerCodes.add(row.customerCode);
+            // An opaque version is an identity, not a sortable timestamp.
+            if (page.version !== version) stage.records.set(row.customerCode, row);
+          }
           if (stage.records.size > 100000) throw failure('CUSTOMER_REGISTRY_LIMIT_EXCEEDED');
           stage.cursor = page.nextCursor ?? null;
           if (!page.complete && stage.receipts.has(JSON.stringify([page.version, stage.cursor, requestedCursor]))) throw failure('CUSTOMER_REGISTRY_CURSOR_REPEATED');

@@ -151,6 +151,24 @@ test('repeated cursors, mismatched page versions and invalid rows never enter th
   }
 });
 
+test('duplicate customer codes across pages cannot replace the last complete registry', async () => {
+  const duplicate = active('S990002');
+  const responses = [
+    page([active('S990001')]),
+    page([duplicate], {version:'v2', mode:'DELTA', afterCursor:'checkpoint-1', complete:false, nextCursor:'v2-2'}),
+    page([{...duplicate, customerName:'합성 충돌'}], {version:'v2', mode:'DELTA', afterCursor:'v2-2'}),
+    page([duplicate], {version:'v3', mode:'DELTA', afterCursor:'checkpoint-1'})
+  ];
+  const {api} = load({readPage: async () => responses.shift()});
+  await api.sync();
+  await assert.rejects(api.sync(), {code:'CUSTOMER_REGISTRY_ROW_INVALID'});
+  assert.equal(api.summary().version, 'v1');
+  assert.equal(api.summary().cursor, 'checkpoint-1');
+  assert.equal(api.merge([]).length, 1);
+  await api.sync();
+  assert.deepEqual(Array.from(api.merge([]), row => row.customerCode), ['S990001','S990002']);
+});
+
 test('logout purges all private metadata and rejects an otherwise valid late response', async () => {
   const wait = deferred(); let calls = 0; const {api} = load({readPage: async () => ++calls === 1 ? page([active('S990001')]) : wait.promise});
   await api.sync(); const late = api.sync(); api.purge(); assert.equal(api.summary().count, 0); assert.equal(api.merge([{customerCode: 'S990001'}]).length, 0);
