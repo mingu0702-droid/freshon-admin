@@ -19,18 +19,38 @@ const button=(text,parent,fn)=>{const b=node('button',text,parent);b.type='butto
 const stateText={MANUAL_PIN_STORE_NOT_CONFIGURED:'수동 위치 저장소가 연결되지 않았습니다.',MANUAL_PIN_WRITE_PERMISSION_REQUIRED:'수동 위치 수정 권한이 없습니다.',MANUAL_PIN_GEOCODER_BUDGET_EXHAUSTED:'주소 검색 예산이 소진됐습니다. 지도 클릭·핀 드래그는 사용할 수 있습니다.',MANUAL_PIN_REVISION_CONFLICT:'다른 수정이 먼저 저장됐습니다. 다시 열어 비교해 주세요.',MANUAL_PIN_ADDRESS_CHANGED:'원본 주소가 변경됐습니다. 다시 열어 비교해 주세요.',MANUAL_PIN_OPERATION_SUPERSEDED:'이미 후속 수정이 있습니다. 현재 저장본을 다시 확인해 주세요.',MANUAL_PIN_SESSION_EXPIRED:'직원 세션이 만료됐습니다.',MANUAL_PIN_CSRF_REJECTED:'수정 권한을 다시 확인해 주세요.'};
 async function request(url,options={}){const response=await fetch(url,{cache:'no-store',credentials:'same-origin',...options});let value;try{value=await response.json();}catch{throw Error('저장 결과를 확인하지 못했습니다. 현재 저장본을 다시 조회해 주세요.');}if(!response.ok||value.ok!==true)throw Error(stateText[value.error]||'위치 조회·저장을 완료하지 못했습니다. 다시 열어 현재 저장본을 확인해 주세요.');return value;}
 function apply(row){
- const confirmed=records.get(row.customerCode);
- if(row.currentAddressHash&&confirmed?.resolutionStatus==='MANUAL_CONFIRMED'&&confirmed.originalAddressHash!==row.currentAddressHash){if(row.coordinateSource!=='MANUAL_PIN'&&Number.isFinite(row.lat)&&Number.isFinite(row.lng)&&row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED')return row;row.lat=null;row.lng=null;row.coordinateStatus='CONFLICT';row.resolutionStatus='ADDRESS_CHANGED_REVIEW_REQUIRED';return row;}
- if(row.addressChanged&&row.currentAddressHash&&row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'&&!(confirmed?.resolutionStatus==='MANUAL_CONFIRMED'&&confirmed.originalAddressHash===row.currentAddressHash)){row.lat=null;row.lng=null;row.coordinateStatus='CONFLICT';return row;}
+ const pin=records.get(row.customerCode);
+ const currentAddressHash=row.currentAddressHash||row.customerRegistryAddressHash;
+ const evidenceAddressHash=row.coordinateAddressHash||row.raw?.coordinateAddressHash||
+  row.originalAddressHash||row.raw?.originalAddressHash;
+ const rowAddressHash=currentAddressHash||evidenceAddressHash;
+ const matchesPin=pin?.resolutionStatus==='MANUAL_CONFIRMED'&&(!rowAddressHash||pin.originalAddressHash===rowAddressHash);
+ if(row.addressChanged&&currentAddressHash&&row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'&&!matchesPin){
+  row.lat=null;row.lng=null;row.coordinateStatus='CONFLICT';return row;
+ }
  if(!bases.has(row)){
   const inherited=row[ORIGINAL_PIN_BASE];
-  const original=inherited?.customerCode===row.customerCode?inherited.coordinates:{lat:row.lat,lng:row.lng,coordinateSource:row.coordinateSource,coordinateAccuracy:row.coordinateAccuracy,coordinateStatus:row.coordinateStatus,coordinateEvidence:row.coordinateEvidence};
+  const original=inherited?.customerCode===row.customerCode?inherited.coordinates:{
+   lat:row.lat,lng:row.lng,coordinateSource:row.coordinateSource,coordinateAccuracy:row.coordinateAccuracy,
+   coordinateStatus:row.coordinateStatus,coordinateEvidence:row.coordinateEvidence,resolutionStatus:row.resolutionStatus
+  };
   bases.set(row,original);
   Object.defineProperty(row,ORIGINAL_PIN_BASE,{value:Object.freeze({customerCode:row.customerCode,coordinates:Object.freeze(original)}),enumerable:true,configurable:true});
  }
- const r=records.get(row.customerCode),original=bases.get(row);Object.assign(row,original);delete row.resolutionStatus;delete row.manualPinAddressHash;
- if(r?.resolutionStatus==='MANUAL_CONFIRMED'){row.lat=r.latitude;row.lng=r.longitude;row.coordinateSource='MANUAL_PIN';row.coordinateAccuracy=r.coordinateAccuracy||'MANUAL';row.coordinateStatus='CONFIRMED';row.coordinateEvidence=r.coordinateEvidence||'MANUAL_CONFIRMATION';row.resolutionStatus='MANUAL_CONFIRMED';row.manualPinAddressHash=r.originalAddressHash;}
- else if(r?.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'){row.lat=null;row.lng=null;row.coordinateStatus='CONFLICT';row.resolutionStatus=r.resolutionStatus;}
+ Object.assign(row,bases.get(row));
+ delete row.manualPinAddressHash;
+ if(matchesPin){
+  Object.assign(row,{lat:pin.latitude,lng:pin.longitude,coordinateSource:'MANUAL_PIN',
+   coordinateAccuracy:pin.coordinateAccuracy||'MANUAL',coordinateStatus:'CONFIRMED',
+   coordinateEvidence:pin.coordinateEvidence||'MANUAL_CONFIRMATION',resolutionStatus:'MANUAL_CONFIRMED',
+   manualPinAddressHash:pin.originalAddressHash});
+ }else if(pin){
+  const expectedHash=currentAddressHash||(pin.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'?pin.currentAddressHash:rowAddressHash);
+  const verifiedCurrentPoint=evidenceAddressHash&&evidenceAddressHash===expectedHash&&
+   row.coordinateSource!=='MANUAL_PIN'&&row.coordinateStatus==='CONFIRMED'&&
+   row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'&&Number.isFinite(row.lat)&&Number.isFinite(row.lng);
+  if(!verifiedCurrentPoint)Object.assign(row,{lat:null,lng:null,coordinateStatus:'CONFLICT',resolutionStatus:'ADDRESS_CHANGED_REVIEW_REQUIRED'});
+ }
  return row;
 }
 async function refresh(){
