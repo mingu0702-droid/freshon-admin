@@ -47,13 +47,21 @@ try{
     assert.match(await page.locator('#newAreaBatchResults').innerText(),/배송 가능 \(O\)/);
     assert.match(await page.locator('#newAreaBatchResults').innerText(),/30km 내 참고 배차호차 · 2대 확인/);
     assert.match(await page.locator('#newAreaBatchResults [data-area-nearest-weekdays]').first().innerText(),/101호 월 · 122호 수/);
+    assert.equal(await page.locator('#newAreaBatchResults [data-area-dispatch-reference]').first().innerText(),
+      '배차표 기준일 2026-09-24 · 최신 배정 미확인');
+    for(const radius of ['40','50','30']){
+      await page.locator('#newAreaBatchRadius').selectOption(radius);
+      assert.deepEqual(await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults.map(row=>row.decision)),rows.map(row=>row.decision));
+    }
     await page.locator('#newAreaApplyDate').fill('2026-11-02');await page.locator('#copyAreaDecision').click();
     assert.equal((await page.evaluate(()=>navigator.clipboard.readText())).split('\r\n').length,3);
     await page.locator('#copyAreaMatching').click();assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/합성 배송처/);
     const csvPending=page.waitForEvent('download');await page.locator('#exportNewAreaCsv').click();const csv=await csvPending;await csv.saveAs(path.join(artifacts,'result-'+width+'.csv'));
     const csvText=fs.readFileSync(path.join(artifacts,'result-'+width+'.csv'),'utf8');assert.match(csvText,/검토필요/);assert.match(csvText,/S990001/);assert.match(csvText,/합성 고객\n상세주소/);
+    assert.match(csvText,/2026-09-24 · 최신 배정 미확인/);
     const excelPending=page.waitForEvent('download');await page.locator('#exportNewAreaExcel').click();const excel=await excelPending;await excel.saveAs(path.join(artifacts,'result-'+width+'.xlsx'));
     const book=XLSX.readFile(path.join(artifacts,'result-'+width+'.xlsx'));const cells=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{header:1});assert.equal(cells.length,4);assert.equal(cells[1][0],'S990001');assert.equal(cells[1][2],'O');assert.match(cells[1].at(-1),/500m 이내/);
+    assert.equal(cells[1][cells[0].indexOf('배차표 기준일·확인 상태')],'배차표 기준일 2026-09-24 · 최신 배정 미확인');
     await page.locator('[data-judged="1"]').click();assert.equal(await page.locator('#manualLabel').inputValue(),'대구광역시 동구 합성로 2');assert.equal(await page.locator('#manualLat').inputValue(),'');
     await page.locator('#manualLat').fill('35.9');await page.locator('#manualLng').fill('128.65');await page.locator('#manualAdd').click();
     await page.evaluate(()=>{if(!document.querySelector('#mapBatchDialog').open)document.querySelector('#sourceBatch').click();});
