@@ -195,7 +195,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
     return { days, start: data.window.start, end: data.window.end, generation:data.index.sha256,
       results: model.searchCoverage(data.catalog, view, query, center, radius).map(row => row.location && resolution > 8
-        ? {...row, detailId:h3.latLngToCell(...row.location, resolution)} : row) };
+        ? {...row, detailId:h3.latLngToCell(...row.location, resolution), detailResolution:resolution} : row) };
   });
 
   route('/point', req => {
@@ -209,7 +209,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
     return { days, start: data.window.start, end: data.window.end, generation:data.index.sha256,
       results: [{...model.coverageAtPoint(data.catalog, view, location, center),
-        ...(resolution > 8 ? {detailId:h3.latLngToCell(...location,resolution)} : {})}] };
+        ...(resolution > 8 ? {detailId:h3.latLngToCell(...location,resolution), detailResolution:resolution} : {})}] };
   });
 
   route('/provider-overlap',req=>{

@@ -184,7 +184,7 @@ export function createCoveragePanel({ workspace, header }) {
         const { maps } = await window.KakaoMapsAdapter.ready({ retryFailed });
         if (!active || owner !== mapOwner) return;
         baseMap ||= new maps.Map(host, { center: new maps.LatLng(36.8, 127.2), level: 11 });
-        map = createCoverageMap(baseMap, maps, { idle: scheduleView, select: id => void selectCell(id), enabled: () => active });
+        map = createCoverageMap(baseMap, maps, { idle: scheduleView, select: id => chooseMapCell(id), enabled: () => active });
       }
       baseMap.relayout();
       searchButton.disabled = false;
@@ -270,7 +270,7 @@ export function createCoveragePanel({ workspace, header }) {
         ...nearbyLabels(cell.nearby, true).map(label => element('small', '', label)));
       row.onclick = () => {
         map.focus(cell.location);
-        void selectCell(cell.id);
+        chooseMapCell(cell.id);
       };
       cellList.append(row);
     }
@@ -472,6 +472,7 @@ export function createCoveragePanel({ workspace, header }) {
         clearSelection();
         if (view.generation !== data.generation) clearSearch();
       }
+      const resolutionChanged = view && view.resolution !== data.resolution;
       view = data;
       viewTag = VIEW_TAG.test(result.tag) ? result.tag : '';
       viewSession = currentSession();
@@ -481,6 +482,7 @@ export function createCoveragePanel({ workspace, header }) {
       failedFilter = null;
       filterProgress();
       renderView(view);
+      if (resolutionChanged && focusedSearchRow) void showSearchCell(focusedSearchRow);
       find('coverageMap').dataset.coverageView = JSON.stringify({resolution:data.resolution,days:data.period.days,
         cells:data.cells.length,ms:Math.round(performance.now()-started)});
       showMapState('');
@@ -514,6 +516,8 @@ export function createCoveragePanel({ workspace, header }) {
 
   function clearSelection() {
     abort('detail');
+    abort('focus-point');
+    focusedSearchRow = null;
     selected = null;
     detail.hidden = true;
     detail.replaceChildren();
@@ -659,11 +663,38 @@ export function createCoveragePanel({ workspace, header }) {
     if(data?.kind==='APPROVED'&&comparisonRow===row&&view?.generation===generation)renderProviderComparison(row,data.cells?.[0]);
   }
 
+  let focusedSearchRow = null;
+  function chooseMapCell(id) {
+    focusedSearchRow = null;
+    abort('focus-point');
+    void selectCell(id);
+  }
+
+  async function showSearchCell(row) {
+    const current = view, resolution = Math.max(8, current?.resolution || row.detailResolution || 8);
+    const label = row.kind === 'store' ? undefined : row.name;
+    const use = id => { if (id) void selectCell(id,0,label); };
+    if (!current || !row.location || resolution === (row.detailResolution || 8)) {
+      use(row.detailId || row.id);
+      return;
+    }
+    try {
+      const next=await read('focus-point','/point',{days,center,generation:current.generation,resolution},
+        {'x-map-coverage-point':row.location.join(',')});
+      if (focusedSearchRow!==row || view?.generation!==current.generation || Math.max(8,view.resolution)!==resolution) return;
+      const point=next?.results?.[0];
+      use(point?.detailId || point?.id);
+    } catch (error) {
+      if (focusedSearchRow===row && error.status===409) void loadView(true);
+    }
+  }
+
   function focusSearchResult(row, radius) {
     map.focus(row.location, row.bounds, radius);
     map.searchPoint(row.location);
     if(row.location)void compareProviders(row);
-    if (row.detailId || row.id) void selectCell(row.detailId || row.id, 0, row.kind === 'store' ? undefined : row.name);
+    focusedSearchRow=row;
+    void showSearchCell(row);
   }
 
   function renderSearch(result, radius, autoFocus = false) {
@@ -702,6 +733,8 @@ export function createCoveragePanel({ workspace, header }) {
   function clearSearch() {
     abort('search');
     abort('provider-point');
+    abort('focus-point');
+    focusedSearchRow=null;
     searchOwner?.abort();
     searchOwner = null;
     pendingSearchKey = null;
@@ -744,7 +777,7 @@ export function createCoveragePanel({ workspace, header }) {
       data.results = data.results.map(row=>({...row,kind:'address',name,coordinateSource:point.coordinateSource}));
       renderSearch(data,radius);
       if(data.results[0])void compareProviders(data.results[0]);
-      if (data.results[0]?.id) void selectCell(data.results[0].detailId || data.results[0].id,0,name);
+      if (data.results[0]?.id) { focusedSearchRow=data.results[0]; void showSearchCell(focusedSearchRow); }
     };
     const candidatesFor = points => {
       searchMessage('공식 위치 후보를 선택해 주세요.');
@@ -833,7 +866,7 @@ export function createCoveragePanel({ workspace, header }) {
 
   find('coverageDays').onchange = event => { days = Number(event.target.value); changeFilters(); };
   find('coverageCenter').onchange = event => { center = event.target.value; changeFilters(); };
-  find('coverageResolution').onchange = () => { clearSelection(); clearSearch(); void loadView(true); };
+  find('coverageResolution').onchange = () => { if (!focusedSearchRow) clearSelection(); void loadView(true); };
   find('coverageRefresh').onclick = () => void loadView(true);
   find('coverageFilterRetry').onclick = () => { if (failedFilter) { ({ days, center } = failedFilter); changeFilters(); } };
   panelToggle.onclick = () => collapsePanel(panelToggle.getAttribute('aria-expanded') === 'true');
