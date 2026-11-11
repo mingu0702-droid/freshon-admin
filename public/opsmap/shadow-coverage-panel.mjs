@@ -1,4 +1,4 @@
-import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261111-store-status';
+import { createCoverageMap } from './shadow-coverage-map.mjs?v=20261111-order-status';
 
 const API = '/api/map-phase2b/private/shadow-coverage';
 const STATUS = { DELIVERED: '관측 배송 이력', CANDIDATE: '관측기간 미배송 후보', EMPTY: '검증 범위 내 공백', UNKNOWN: '자료 부족' };
@@ -80,7 +80,7 @@ export function createCoveragePanel({ workspace, header }) {
             <div><dt>후보 격자 내 매장</dt><dd data-metric="candidateStores">—</dd></div>
             <div><dt>배송 이력 격자</dt><dd data-metric="delivered">—</dd></div>
             <div><dt>자료 부족 격자</dt><dd data-metric="review">—</dd></div>
-            <div><dt>오산신규 매장</dt><dd id="coverageNewCount">—</dd></div>
+            <div><dt>활성 오산신규</dt><dd id="coverageNewCount">—</dd></div>
             <div><dt>오산보류 매장</dt><dd id="coverageHeldCount">—</dd></div>
           </dl>
           <p id="coveragePreserved"></p>
@@ -90,7 +90,7 @@ export function createCoveragePanel({ workspace, header }) {
         </div>
         <div class="coverage-legend" aria-label="배송 격자 범례">
           <span data-tone="delivery">관측 배송 이력</span><span data-tone="candidate">관측기간 미배송 후보</span>
-          <span data-tone="new">오산신규</span><span data-tone="held">오산보류</span><span>점선 원: 90일 이력</span>
+          <span data-tone="new">활성 오산신규</span><span data-tone="held">오산보류</span><span>점선 원: 90일 이력</span>
           <span data-tone="unknown">자료 부족</span><span data-tone="empty">검증 범위 내 공백</span>
         </div>
         <p class="coverage-note">관측기간 후보 · 주변 호차는 배송 이력 참고</p>
@@ -122,7 +122,7 @@ export function createCoveragePanel({ workspace, header }) {
       <a class="open-coordinate-credit" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">일부 주소 위치 © OpenStreetMap contributors</a>
       <div id="coverageMapSummary" class="coverage-map-summary" hidden>
         <p id="coverageMapCount"></p>
-        <div class="coverage-legend" aria-label="지도 범례"><span data-tone="candidate">미배송 후보</span><span data-tone="delivery">배송 이력</span><span data-tone="new">오산신규</span><span data-tone="held">오산보류</span><span data-tone="unknown">자료 부족</span><span data-tone="empty">확인 공백</span></div>
+        <div class="coverage-legend" aria-label="지도 범례"><span data-tone="candidate">미배송 후보</span><span data-tone="delivery">배송 이력</span><span data-tone="new">활성 오산신규</span><span data-tone="held">오산보류</span><span data-tone="unknown">자료 부족</span><span data-tone="empty">확인 공백</span></div>
       </div>
       <div id="coverageMapState" class="coverage-map-state" hidden>
         <p id="coverageMapMessage" role="status" aria-live="polite"></p>
@@ -388,10 +388,10 @@ export function createCoveragePanel({ workspace, header }) {
     find('coverageGaps').textContent = '좌표 미확인 ' + fmt(summary.missingStoreLocation) + '곳 · 배송 위치 미연결 ' +
       fmt(summary.unplacedVisits) + '건 · 원천 식별 미확인 ' + fmt(summary.unidentifiedVisits) + '건';
     const stores = data.storeStatus;
-    const tally = key => !stores || !stores[key] && stores.currentUnknown ? '미확인'
-      : fmt(stores[key]) + '곳' + (stores.currentUnknown ? ' 확인' : '');
-    find('coverageNewCount').textContent = tally('NEW');
-    find('coverageHeldCount').textContent = tally('HELD');
+    const tally = (key, unknown) => stores?.[key] == null ? '미확인'
+      : fmt(stores[key]) + '곳' + (stores[unknown] ? ' 확인' : '');
+    find('coverageNewCount').textContent = tally('NEW', 'ordersUnknown');
+    find('coverageHeldCount').textContent = tally('HELD', 'currentUnknown');
     const history = stores && (!stores.historyUnknown || stores.pastNew || stores.pastHeld)
       ? '보존 90일 관측 신규 ' + fmt(stores.pastNew) + '곳(다른 현재 호차 ' + fmt(stores.changedFromNew) + ') · 보류 ' +
         fmt(stores.pastHeld) + '곳(해제·다른 현재 호차 ' + fmt(stores.changedFromHeld) + ')' +
@@ -400,7 +400,8 @@ export function createCoveragePanel({ workspace, header }) {
         (stores.historyUnknown ? ' · 일부 이력 미확인' : '')
       : '90일 기준호차 이력 미확인';
     find('coverageStoreBasis').textContent = '매장 상태 전체 등록 기준 · ' + (stores?.fixedCheckedAt ? '기준호차 확인 ' + time.format(new Date(stores.fixedCheckedAt)) : '기준호차 미확인') +
-      ' · ' + history + (stores?.ordersUnknown ? ' · 발주 미확인 ' + fmt(stores.ordersUnknown) + '곳' : '') +
+      ' · ' + history + (stores?.ordersUnknown ? ' · ' + period.days + '일 발주 미확인 ' + fmt(stores.ordersUnknown) + '곳' : '') +
+      (stores?.heldOrderConflict ? ' · 보류·발주 확인 충돌 ' + fmt(stores.heldOrderConflict) + '곳' : '') +
       ' · 마지막 배송 수집 ' + time.format(new Date(data.sourceObservedAt));
     find('coverageViewport').textContent = '화면 H3 R' + data.resolution + ' · ' + (candidateViewport
       ? (data.resolution > data.summaryResolution ? 'R8 ' : '') + '후보 ' + fmt(candidateViewport.cells) + '격자 · ' + fmt(candidateViewport.stores) + '곳' +
@@ -546,9 +547,11 @@ export function createCoveragePanel({ workspace, header }) {
       ['자료 기간', view.period.start + ' ~ ' + view.period.end]
     ];
     if (cell.storeStatus) {
-      const count=key=>cell.storeStatus[key] || !cell.storeStatus.unknown ? fmt(cell.storeStatus[key]) : '미확인';
-      facts.push(['매장 상태', '오산신규 ' + count('NEW') + ' · 오산보류 ' + count('HELD') +
-        ' · 기준호차 미확인 ' + fmt(cell.storeStatus.unknown)]);
+      const count=(key,unknown)=>cell.storeStatus[key] || !cell.storeStatus[unknown] ? fmt(cell.storeStatus[key]) : '미확인';
+      facts.push(['매장 상태', '활성 오산신규 ' + count('NEW','ordersUnknown') + ' · 오산보류 ' + count('HELD','unknown') +
+        ' · 기준호차 미확인 ' + fmt(cell.storeStatus.unknown)],
+      ['발주 확인', view.period.days + '일 발주 미확인 ' + fmt(cell.storeStatus.ordersUnknown) + '곳' +
+        (cell.storeStatus.heldOrderConflict ? ' · 보류·발주 확인 충돌 ' + fmt(cell.storeStatus.heldOrderConflict) + '곳' : '')]);
     }
     for (const [label, value] of facts) {
       fields.append(element('dt', '', label), element('dd', '', value));
@@ -574,13 +577,13 @@ export function createCoveragePanel({ workspace, header }) {
       row.append(element('small', '', '90일 기준호차 관측 ' + (observed || '확인된 관측 없음')),
         element('small', '', '기준호차 변경일 ' + (history || (store.historyComplete ? '변경 기록 없음' : '미확인')) +
           (history && !store.historyComplete ? ' · 일부 기간 미확인' : '')));
-      row.append(element('small', '', (store.order ? '최근 확인 발주 ' + store.order :
-        store.ordersComplete ? '조회 기간 발주 없음' : '발주 미확인') +
+      row.append(element('small', '', (store.order?.state === 'UNKNOWN' || !store.order ? '발주 미확인' :
+        store.order.lastOrder ? '최근 확인 발주 ' + store.order.lastOrder : '발주 자료 확인') +
         ' · 최근 배송 관측 ' + (store.lastDelivery || '미확인')));
-      if (store.current || store.resumed || store.pastNew || store.pastHeld) row.append(element('small', '',
-        [store.current === 'NEW' ? '오산신규 · 기준호차 분류' : '', store.current === 'HELD' ? '오산보류 · 기준호차 분류' : '',
-          store.resumed ? '발주 재개 확인 · 현재 보류 해제' : '',
-          store.pastNew ? (store.vehicle && store.current !== 'NEW' ? '오산신규 이력 · 현재 다른 기준호차' : '오산신규 이력') : '',
+      if (store.newActive || store.current || store.heldOrderConflict || store.pastNew || store.pastHeld) row.append(element('small', '',
+        [store.newActive === true ? '활성 오산신규 · 발주 원장 확인' : '', store.current === 'HELD' ? '오산보류 · 기준호차 분류' : '',
+          store.heldOrderConflict === true ? '오산보류 상태에서 발주 확인' : '',
+          store.pastNew ? (store.vehicle && store.vehicle !== '오산신규' ? '오산신규 이력 · 현재 다른 기준호차' : '오산신규 이력') : '',
           store.pastHeld ? '오산보류 이력' : ''].filter(Boolean).join(' · ')));
       if (store.location) {
         const move = element('button', '', '매장 핀으로 이동');

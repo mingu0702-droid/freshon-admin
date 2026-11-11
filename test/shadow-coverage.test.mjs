@@ -68,7 +68,7 @@ test('fine cells map verified store locations without copying R8 visit totals or
   }
 });
 
-test('current, historical and resumed order status are independent and missing orders are never inferred', async () => {
+test('only order ledger activation counts as new and a held order conflict preserves held status', async () => {
   const {catalog} = fixture();
   const row = (code, vehicle, fixedObservations, lastOrder=null) => [code,{vehicle,currentKnown:true,fixedObservations,transitions:[],
     historyComplete:true,ordersComplete:lastOrder!==null,lastOrder}];
@@ -77,7 +77,15 @@ test('current, historical and resumed order status are independent and missing o
     row('T900002','오산보류',[{date:'2026-10-02',vehicle:'오산보류'}],'2026-11-10'),
     row('T900003','122',[{date:'2026-10-10',vehicle:'오산신규'}])
   ]);
-  const evidence = {metadata:{generation:proof,start:'2026-08-14',asOf:'2026-11-11',currentAsOf:'2026-11-11'},getStore:code=>rows.get(code)};
+  const evidence = {
+    metadata:{generation:proof,start:'2026-08-14',asOf:'2026-11-11',currentAsOf:'2026-11-11'},
+    getStore:code=>rows.get(code),
+    getOrderStatus(code, days) {
+      if (code === 'T900002') return {order:{state:'ORDERED',lastOrder:'2026-11-10'},heldOrderConflict:true};
+      if (code === 'T900003' && days === 90) return {order:{state:'ORDERED',lastOrder:'2026-09-19'},newActive:true};
+      return {order:{state:'UNKNOWN'},newActive:false};
+    }
+  };
   const clock=()=>Date.parse('2026-11-11T00:00:00Z');
   const fixed = async () => ({data:[],meta:{checkedAt:'2026-11-11T00:00:00Z'}});
   const read = createCoverageStatusReader({readFixed:fixed,readEvidence:async()=>evidence,readSnapshot:async()=>({
@@ -85,18 +93,30 @@ test('current, historical and resumed order status are independent and missing o
       {customerCode:'T900003',lastDeliveryDate:'2026-11-09',status:'UNCONFIRMED'}]
   }),now:clock});
   const data=await read(catalog,proof);
-  assert.deepEqual(data.counts,{NEW:1,HELD:0,pastNew:2,pastHeld:1,changedFromNew:1,changedFromHeld:1,rollingNew:2,rollingHeld:1,currentUnknown:0,historyUnknown:0,ordersUnknown:2});
-  assert.deepEqual(cellStatusCounts(['T900001','T900002'],data),{NEW:1,HELD:0,pastNew:1,pastHeld:1,unknown:0});
-  assert.equal(data.records.get('T900001').order,null);
+  assert.deepEqual(data.counts,{NEW:1,HELD:1,pastNew:2,pastHeld:1,changedFromNew:1,changedFromHeld:0,rollingNew:2,rollingHeld:1,
+    heldOrderConflict:1,currentUnknown:0,historyUnknown:0,ordersUnknown:1});
+  assert.deepEqual(cellStatusCounts(['T900001','T900002'],data),{NEW:0,HELD:1,pastNew:1,pastHeld:1,unknown:0,ordersUnknown:1,heldOrderConflict:1});
+  assert.equal(data.records.get('T900001').order.state,'UNKNOWN');
+  assert.equal(data.records.get('T900001').newActive,false);
   assert.equal(data.records.get('T900001').lastDelivery,'2026-11-09');
   assert.equal(data.records.get('T900003').lastDelivery,null);
-  assert.equal(data.records.get('T900002').resumed,true);
+  assert.equal(data.records.get('T900002').heldOrderConflict,true);
+  assert.equal(data.records.get('T900002').current,'HELD');
+  assert.equal((await read(catalog,proof,30)).counts.NEW,0);
+  assert.equal((await read(catalog,proof,60)).counts.NEW,0);
+  assert.equal((await read(catalog,proof,90)).counts.NEW,1);
   assert.equal(data.records.get('T900003').history.length,0);
   assert.equal(data.records.get('T900003').observations.length,1);
   assert.equal((await read(catalog,'different-generation')).counts.pastNew,0);
   const missing = await createCoverageStatusReader({readFixed:fixed,now:clock})(catalog,proof);
   assert.equal(missing.counts.currentUnknown,3);
   assert.equal(missing.counts.ordersUnknown,3);
+  const historyOnly = await createCoverageStatusReader({readFixed:fixed,
+    readEvidence:async()=>({metadata:evidence.metadata,getStore:evidence.getStore}),now:clock})(catalog,proof);
+  assert.equal(historyOnly.counts.NEW,0);
+  assert.equal(historyOnly.counts.HELD,1);
+  assert.equal(historyOnly.counts.pastNew,2);
+  assert.equal(historyOnly.counts.ordersUnknown,3);
 });
 
 test('periods keep unique delivery counts and each confirmed vehicle for the same customer', () => {
@@ -303,8 +323,19 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
     },
     viewFor: ({ catalog, window }, center, resolution) => prepareView(catalog, window, center, resolution)
   };
+  const statusReads = [];
+  const readStatus = createCoverageStatusReader({
+    readEvidence: () => ({ metadata:{ generation:proof,start:allDates[0],asOf:end,currentAsOf:end },
+      getStore: code => code === 'T900001' ? { currentKnown:true,vehicle:'오산신규',
+        fixedObservations:[{date:end,vehicle:'오산신규'}] } : null }),
+    now: () => Date.parse(end + 'T00:00:00Z')
+  });
   mountShadowCoverage({
     app, store: reader,
+    readStatus: (catalog, generation, period) => {
+      statusReads.push(period);
+      return readStatus(catalog, generation, period);
+    },
     requireStaff: (req, res, next) => req.get('x-test-staff') === 'yes' ? next() : res.status(401).end()
   });
   const server = await new Promise(resolve => { const running = app.listen(0, '127.0.0.1', () => resolve(running)); });
@@ -320,6 +351,9 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
     assert.match(response.headers.get('cache-control'), /private, no-store/);
     const { data } = await response.json();
     assert.equal(data.resolution, 8);
+    assert.equal(data.storeStatus.NEW, null);
+    assert.equal(data.storeStatus.pastNew, 1);
+    assert.equal(data.storeStatus.ordersUnknown, 3);
     assert(data.cells.length <= 360);
     assert(data.cells.every(cell => cell.boundary.length >= 5));
     const outside = await (await fetch(url + '/view?days=90&level=4&box=130,38,131,39', options)).json();
@@ -345,6 +379,14 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
     assert.equal(invalidPoint.status, 400);
     const list = await (await fetch(url + '/list?filter=delivery&days=30', options)).json();
     assert.deepEqual(list.data.rows.map(row => row.id), [blue]);
+    const [lat,lng] = cellToLatLng(blue);
+    const fineId = latLngToCell(lat,lng,9);
+    const narrow = await (await fetch(url + `/view?days=60&level=4&box=${lng-.02},${lat-.02},${lng+.02},${lat+.02}`, options)).json();
+    assert(narrow.data.statusPins.some(pin => pin.id === fineId && pin.pastNew && !pin.newActive && pin.state === null));
+    const cell = await (await fetch(url + `/cell?id=${fineId}&days=30`, options)).json();
+    assert.equal(cell.data.stores[0].newActive,false);
+    assert.equal(cell.data.stores[0].order.state,'UNKNOWN');
+    assert.deepEqual(statusReads.slice(-2),[60,30]);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

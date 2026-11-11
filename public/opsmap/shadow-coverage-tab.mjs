@@ -100,7 +100,7 @@ if (tabs && workspace && period && daily) {
     stylesheet ||= document.createElement('link');
     if (!stylesheet.isConnected) {
       stylesheet.rel = 'stylesheet';
-      stylesheet.href = new URL('./shadow-coverage.css?v=20261111-store-status', import.meta.url);
+      stylesheet.href = new URL('./shadow-coverage.css?v=20261111-order-status', import.meta.url);
       document.head.append(stylesheet);
     }
     tabs.append(tab);
@@ -113,7 +113,7 @@ if (tabs && workspace && period && daily) {
       tab.setAttribute('aria-busy', 'true');
       tab.textContent = '음영권역 불러오는 중';
       try {
-        const { createCoveragePanel } = await import('./shadow-coverage-panel.mjs?v=20261111-store-status5');
+        const { createCoveragePanel } = await import('./shadow-coverage-panel.mjs?v=20261111-order-status');
         if (opening !== attempt || !tab.isConnected || !window.MapStaffEntry?.session()) return;
         panel = createCoveragePanel({ workspace, header });
       } catch {

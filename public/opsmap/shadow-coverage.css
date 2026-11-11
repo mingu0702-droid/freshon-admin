@@ -106,7 +106,8 @@ body.shadow-coverage-open #mapFreshnessStatus,
 .coverage-legend [data-tone="empty"]::before { background: #91a99f66; border-color: #60776f }
 .coverage-legend [data-tone="new"]::before { background: #087f83; border-color: #075e62 }
 .coverage-legend [data-tone="held"]::before { background: #7950a2; border-color: #56367a }
-.coverage-overlay [data-store-status="NEW"] { --status-ink: #087f83 }
+.coverage-overlay [data-store-status="NEW"], .coverage-overlay [data-store-status="NEW_HISTORY"] { --status-ink: #087f83 }
+.coverage-overlay [data-store-status="HELD_CONFLICT"] { --status-ink: #a04412 }
 .coverage-overlay [data-store-status="HELD"] { --status-ink: #7950a2 }
 .coverage-overlay [data-store-status] circle { fill: var(--status-ink); stroke: #fff; stroke-width: 1.4 }
 .coverage-overlay [data-store-status] text { fill: #fff; text-anchor: middle; font-size: 10px; font-weight: 700 }

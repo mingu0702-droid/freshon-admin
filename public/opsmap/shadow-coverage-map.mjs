@@ -105,16 +105,18 @@ export function createCoverageMap(map, maps, { idle, select, enabled }) {
     }
     for (const cell of cells) {
       const summary = cell.storeStatus;
-      if (!summary?.NEW && !summary?.HELD && !summary?.pastNew && !summary?.pastHeld) continue;
+      if (!summary?.NEW && !summary?.HELD && !summary?.pastNew && !summary?.pastHeld && !summary?.heldOrderConflict) continue;
       const point = projection.pointFromCoords(new maps.LatLng(...cell.location));
       const counts = [['NEW', summary.NEW, false], ['HELD', summary.HELD, false],
-        ['NEW', summary.pastNew, true], ['HELD', summary.pastHeld, true]].filter(([,count])=>count);
+        ['NEW_HISTORY', summary.pastNew, true], ['HELD', summary.pastHeld, true],
+        ['HELD_CONFLICT', summary.heldOrderConflict, false]].filter(([,count])=>count);
       counts.forEach(([state,count,historic],i)=>badgeAt(point,state,count,(i-(counts.length-1)/2)*20,historic));
     }
     statusHits = statusPins.map(pin => {
       const point = projection.pointFromCoords(new maps.LatLng(...pin.location));
-      const states = [[pin.state,false], [pin.pastNew && pin.state!=='NEW' ? 'NEW' : null,true],
-        [pin.pastHeld && pin.state!=='HELD' ? 'HELD' : null,true]].filter(([state])=>state);
+      const states = [[pin.state==='HELD' ? 'HELD' : null,false], [pin.newActive===true ? 'NEW' : null,false],
+        [pin.pastNew && !pin.newActive ? 'NEW_HISTORY' : null,true], [pin.pastHeld && pin.state!=='HELD' ? 'HELD' : null,true],
+        [pin.heldOrderConflict===true ? 'HELD_CONFLICT' : null,false]].filter(([state])=>state);
       states.forEach(([state,historic],i)=>badgeAt(point,state,null,(i-(states.length-1)/2)*10,historic));
       return { ...pin, x:point.x-origin.x, y:point.y-origin.y };
     });

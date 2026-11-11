@@ -82,10 +82,10 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const { window, index, stale, catalog } = data;
     const [preservedMap, statuses] = await Promise.all([
       Promise.resolve().then(readPreservedMap).catch(() => null),
-      readStatus?.(catalog, index.sha256).catch(() => null)
+      readStatus?.(catalog, index.sha256, days).catch(() => null)
     ]);
     const sourceRunId=readRunId?.(index.sha256) ?? null;
-    const version = createHash('sha256').update(JSON.stringify([2, index.sha256, stale, preservedMap, sourceRunId, days, center, bounds, level,
+    const version = createHash('sha256').update(JSON.stringify([3, index.sha256, stale, preservedMap, sourceRunId, days, center, bounds, level,
       choice, statuses?.version, statuses?.evidenceAsOf, statuses?.date, statuses?.counts])).digest('hex');
     const etag = '"coverage-' + version + '"';
     if (etag === tag) return { etag, data: null };
@@ -108,10 +108,11 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       const codes = model.coverageMembers(view, catalog, cell.id);
       if (resolution >= 9) for (const code of codes) {
         const status = statuses.records.get(code), store = catalog.byCode.get(code);
-        if (statusPins.length >= 120 || pinned.has(code) || !(status?.current || status?.pastNew || status?.pastHeld) || !store?.cell ||
+        if (statusPins.length >= 120 || pinned.has(code) || !(status?.newActive || status?.current || status?.pastNew || status?.pastHeld || status?.heldOrderConflict) || !store?.cell ||
             store.lng < bounds[0] || store.lat < bounds[1] || store.lng > bounds[2] || store.lat > bounds[3]) continue;
         pinned.add(code);
-        statusPins.push({ id:cell.id, state:status.current, pastNew:status.pastNew, pastHeld:status.pastHeld,
+        statusPins.push({ id:cell.id, state:status.current, newActive:status.newActive, heldOrderConflict:status.heldOrderConflict,
+          pastNew:status.pastNew, pastHeld:status.pastHeld,
           location:[store.lat, store.lng] });
       }
       return { ...cell, storeStatus:cellStatusCounts(codes, statuses) };
@@ -140,7 +141,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
       cells,
       statusPins,
       storeStatus: statuses ? { ...statuses.counts,
-        NEW:statuses.counts.NEW || (statuses.counts.currentUnknown ? null : 0),
+        NEW:statuses.counts.NEW || (statuses.counts.ordersUnknown ? null : 0),
         HELD:statuses.counts.HELD || (statuses.counts.currentUnknown ? null : 0),
         pastNew:statuses.evidenceAsOf ? statuses.counts.pastNew : null,
         pastHeld:statuses.evidenceAsOf ? statuses.counts.pastHeld : null,
@@ -175,7 +176,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const data = await reader.readPeriod(days, generation);
     const view = reader.viewFor(data, center, Math.min(resolution, model.BASE_RESOLUTION));
     const detail = resolution > model.BASE_RESOLUTION ? model.detailedCell(view, data.catalog, id, offset) : model.cellDetail(view, id, offset);
-    const statuses = await readStatus?.(data.catalog, data.index.sha256).catch(() => null);
+    const statuses = await readStatus?.(data.catalog, data.index.sha256, days).catch(() => null);
     return { ...detail, resolution, boundary: h3.cellToBoundary(id),
       storeStatus:cellStatusCounts(model.coverageMembers(view, data.catalog, id), statuses),
       stores:detail.stores.map(row => {

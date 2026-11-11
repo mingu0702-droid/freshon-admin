@@ -7,8 +7,10 @@ const dayAt = ms => new Date(ms + 9 * 3600000).toISOString().slice(0, 10);
 export function createCoverageStatusReader({ readFixed, readEvidence, readSnapshot, now = Date.now }) {
   const cached = new WeakMap();
   const projections = new WeakMap();
-  return async (catalog, generation) => {
-    const old = cached.get(catalog);
+  return async (catalog, generation, days = 90) => {
+    let periods = cached.get(catalog);
+    if (!periods) cached.set(catalog, periods = new Map());
+    const old = periods.get(days);
     if (old?.generation === generation && (old.pending || now() < old.until)) return old.value;
     const entry = { generation, pending: true };
     entry.value = (async () => {
@@ -29,8 +31,7 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
         evidenceRows = new Map(codes.map(code => {
           const row = evidence.getStore(code);
           return [code, row && {vehicle:row.currentKnown ? row.vehicle : null, fixedObservations:row.fixedObservations,
-            transitions:row.transitions, historyComplete:row.historyComplete, lastOrder:row.lastOrder,
-            ordersComplete:row.ordersComplete, lastDelivery:row.lastDelivery?.date || null}];
+            transitions:row.transitions, historyComplete:row.historyComplete, lastDelivery:row.lastDelivery?.date || null}];
         }));
         projections.set(evidence,evidenceRows);
       }
@@ -38,26 +39,27 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
       const historyStart = evidence?.metadata.start || null;
       const currentAsOf = evidence?.metadata.currentAsOf || null;
       const first = dayAt(now() - 89 * 86400000);
-      const orderCutoff = new Date(today + 'T00:00:00Z');
-      orderCutoff.setUTCMonth(orderCutoff.getUTCMonth() - 3, 1);
-      const lastDay = new Date(Date.UTC(orderCutoff.getUTCFullYear(), orderCutoff.getUTCMonth() + 1, 0)).getUTCDate();
-      orderCutoff.setUTCDate(Math.min(Number(today.slice(8)), lastDay));
-      const cutoff = orderCutoff.toISOString().slice(0, 10);
       const fixedTime = Date.parse(fixed?.meta?.checkedAt);
       const fixedDay = Number.isFinite(fixedTime) ? dayAt(fixedTime) : null;
       const records = new Map();
       const counts = { NEW: 0, HELD: 0, pastNew: 0, pastHeld: 0, changedFromNew: 0, changedFromHeld: 0,
-        rollingNew: 0, rollingHeld: 0,
+        rollingNew: 0, rollingHeld: 0, heldOrderConflict: 0,
         currentUnknown: 0, historyUnknown: 0, ordersUnknown: 0 };
       for (const code of codes) {
         const approved = evidenceRows?.get(code);
         const approvedCurrent = approved?.vehicle && currentAsOf && currentAsOf <= today && (!fixedDay || currentAsOf >= fixedDay) ? approved.vehicle : null;
         const vehicle = approvedCurrent || confirmed.get(code) || null;
         const rawState = stateOf(vehicle);
-        const order = approved?.lastOrder || null;
-        const ordersComplete = approved?.ordersComplete === true && asOf === today;
-        const resumed = rawState === 'HELD' && order && order >= cutoff;
-        const current = resumed ? null : rawState;
+        const verifiedOrder = evidence?.getOrderStatus?.(code, days);
+        const orderState = verifiedOrder?.order?.state;
+        const lastOrder = verifiedOrder?.order?.lastOrder;
+        const order = {
+          state: typeof orderState === 'string' && /^[A-Z_]{1,32}$/.test(orderState) ? orderState : 'UNKNOWN',
+          lastOrder: isDay(lastOrder) && lastOrder <= today ? lastOrder : null
+        };
+        const newActive = verifiedOrder?.newActive === true;
+        const heldOrderConflict = verifiedOrder?.heldOrderConflict === true;
+        const current = rawState === 'HELD' ? 'HELD' : null;
         const within = event => event.date >= (historyStart || first) && event.date <= (asOf || today);
         const observations = (approved?.fixedObservations || []).filter(within);
         const history = (approved?.transitions || []).filter(within);
@@ -65,37 +67,42 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
         const seen = (label, start) => observations.some(event => (!start || event.date >= start) && stateOf(event.vehicle) === label) ||
           history.some(event => (!start || event.date >= start) && (stateOf(event.vehicle) === label || stateOf(event.fromVehicle) === label));
         const pastNew = seen('NEW'), pastHeld = seen('HELD');
-        if (current) counts[current]++;
+        if (newActive) counts.NEW++;
+        if (current) counts.HELD++;
+        if (heldOrderConflict) counts.heldOrderConflict++;
         if (pastNew) counts.pastNew++;
         if (pastHeld) counts.pastHeld++;
         if (seen('NEW',first)) counts.rollingNew++;
         if (seen('HELD',first)) counts.rollingHeld++;
-        if (pastNew && vehicle && current !== 'NEW') counts.changedFromNew++;
-        if (pastHeld && vehicle && current !== 'HELD') counts.changedFromHeld++;
+        if (pastNew && vehicle && rawState !== 'NEW') counts.changedFromNew++;
+        if (pastHeld && vehicle && rawState !== 'HELD') counts.changedFromHeld++;
         if (!vehicle) counts.currentUnknown++;
         if (!historyComplete) counts.historyUnknown++;
-        if (!ordersComplete) counts.ordersUnknown++;
-        records.set(code, { vehicle, current, pastNew, pastHeld, history, observations, historyComplete, order, ordersComplete,
-          resumed: Boolean(resumed), lastDelivery: [approved?.lastDelivery,lastDelivery.get(code)].filter(Boolean).sort().at(-1) || null,
+        if (order.state === 'UNKNOWN') counts.ordersUnknown++;
+        records.set(code, { vehicle, current, newActive, heldOrderConflict, pastNew, pastHeld, history, observations, historyComplete, order,
+          lastDelivery: [approved?.lastDelivery,lastDelivery.get(code)].filter(Boolean).sort().at(-1) || null,
           asOf: approvedCurrent ? currentAsOf : vehicle ? fixedDay : null });
       }
       return { records, counts, fixedCheckedAt: fixedDay ? fixed.meta.checkedAt : null, evidenceAsOf: asOf, historyStart, rollingStart:first,
         version: fixed?.meta?.version || null, date: today };
     })().finally(() => { entry.pending = false; entry.until = now() + 30000; });
-    cached.set(catalog, entry);
+    periods.set(days, entry);
     return entry.value;
   };
 }
 
 export function cellStatusCounts(codes, statuses) {
   if (!statuses) return undefined;
-  const counts = { NEW: 0, HELD: 0, pastNew: 0, pastHeld: 0, unknown: 0 };
+  const counts = { NEW: 0, HELD: 0, pastNew: 0, pastHeld: 0, unknown: 0, ordersUnknown: 0, heldOrderConflict: 0 };
   for (const code of codes) {
     const row = statuses.records.get(code);
-    if (row?.current) counts[row.current]++;
+    if (row?.newActive === true) counts.NEW++;
+    if (row?.current === 'HELD') counts.HELD++;
     if (row?.pastNew) counts.pastNew++;
     if (row?.pastHeld) counts.pastHeld++;
     if (!row?.vehicle) counts.unknown++;
+    if (!row || row.order.state === 'UNKNOWN') counts.ordersUnknown++;
+    if (row?.heldOrderConflict) counts.heldOrderConflict++;
   }
   return counts;
 }
