@@ -997,8 +997,16 @@
       timeout:12000,allowSourceError:true}).then(response=>{
       const current=currentRosterRoute();
       if (!rosterAuthorized||current?.saved!==saved||current.key!==key||!OpsmapDaily.sameRosterScope(current.scope,scope)) return;
-      noteChronologyRead({vehicle,stage:'response',sameScope:OpsmapDaily.sameRosterScope(scope,response),state:response.state,
-        active:response.activeCount,eventRead:response.eventRead,points:response.chronology?.length});
+      if (routeAuditEnabled()) {
+        const verification={};
+        for (const row of response.rows||[]) if (row.state==='COMPLETED') {
+          const type=/^(VERIFIED_INDIVIDUAL|BULK_CONFIRMED|NO_INDIVIDUAL_RECORD|TIME_UNVERIFIED|EVENT_CONFLICT)$/.test(row.verification)
+            ? row.verification : 'OTHER';
+          verification[type]=(verification[type]||0)+1;
+        }
+        noteChronologyRead({vehicle,stage:'response',sameScope:OpsmapDaily.sameRosterScope(scope,response),state:response.state,
+          active:response.activeCount,eventRead:response.eventRead,points:response.chronology?.length,verification});
+      }
       const evidence=OpsmapDaily.chronology(scope,response,vehicle);
       const retained=saved.chronologies.get(key);
       if (evidence.points.size||evidence.tiedCount||!retained) saved.chronologies.set(key,evidence);

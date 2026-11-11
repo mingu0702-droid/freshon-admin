@@ -11,7 +11,7 @@ import { buildShadowCoverage } from '../scripts/build-shadow-coverage.mjs';
 import { aggregateDay, cellDetail, combineDays, coverageList, coverageMembers, datesFor, detailedCell, detailedViewport, prepareCatalog, prepareView, searchCoverage } from '../src/shadowCoverage/model.js';
 import { mountShadowCoverage } from '../src/shadowCoverage/routes.js';
 import { createShadowCoverageStore } from '../src/shadowCoverage/store.js';
-import { cellStatusCounts, createCoverageStatusReader, validateCoverageStatusSource } from '../src/shadowCoverage/storeStatus.js';
+import { cellStatusCounts, createCoverageStatusReader } from '../src/shadowCoverage/storeStatus.js';
 
 const end = '2026-11-07';
 const allDates = datesFor(end, 90);
@@ -70,13 +70,14 @@ test('fine cells map verified store locations without copying R8 visit totals or
 
 test('current, historical and resumed order status are independent and missing orders are never inferred', async () => {
   const {catalog} = fixture();
-  const row = (code, vehicle, history, lastOrder=null) => ({code,vehicle,history,historyComplete:true,ordersComplete:lastOrder!==null,lastOrder});
-  const evidence = validateCoverageStatusSource({schema:1,asOf:'2026-11-11',stores:[
+  const row = (code, vehicle, fixedObservations, lastOrder=null) => [code,{vehicle,currentKnown:true,fixedObservations,transitions:[],
+    historyComplete:true,ordersComplete:lastOrder!==null,lastOrder}];
+  const rows = new Map([
     row('T900001','오산신규',[{date:'2026-10-01',vehicle:'오산신규'}]),
     row('T900002','오산보류',[{date:'2026-10-02',vehicle:'오산보류'}],'2026-11-10'),
     row('T900003','122',[{date:'2026-10-10',vehicle:'오산신규'}])
-  ]});
-  assert.throws(()=>validateCoverageStatusSource({schema:1,asOf:'2026-11-11',stores:[row('T900001',122,[])]}),/SOURCE_INVALID/);
+  ]);
+  const evidence = {metadata:{generation:proof,asOf:'2026-11-11',currentAsOf:'2026-11-11'},getStore:code=>rows.get(code)};
   const clock=()=>Date.parse('2026-11-11T00:00:00Z');
   const fixed = async () => ({data:[],meta:{checkedAt:'2026-11-11T00:00:00Z'}});
   const read = createCoverageStatusReader({readFixed:fixed,readEvidence:async()=>evidence,readSnapshot:async()=>({
@@ -90,6 +91,9 @@ test('current, historical and resumed order status are independent and missing o
   assert.equal(data.records.get('T900001').lastDelivery,'2026-11-09');
   assert.equal(data.records.get('T900003').lastDelivery,null);
   assert.equal(data.records.get('T900002').resumed,true);
+  assert.equal(data.records.get('T900003').history.length,0);
+  assert.equal(data.records.get('T900003').observations.length,1);
+  assert.equal((await read(catalog,'different-generation')).counts.pastNew,0);
   const missing = await createCoverageStatusReader({readFixed:fixed,now:clock})(catalog,proof);
   assert.equal(missing.counts.currentUnknown,3);
   assert.equal(missing.counts.ordersUnknown,3);

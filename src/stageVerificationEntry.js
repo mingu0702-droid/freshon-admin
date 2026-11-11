@@ -21,7 +21,7 @@ import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
-import {createCoverageStatusFileReader,createCoverageStatusReader} from './shadowCoverage/storeStatus.js';
+import {createCoverageStatusReader} from './shadowCoverage/storeStatus.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,vehicleId} from './datedDeliveryContract.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
@@ -477,11 +477,28 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         });
       }
       const coverageAppRoot=fileURLToPath(new URL('../',import.meta.url));
+      let pendingStoreStatus;
+      const statusApproved=stage.RENDER_SERVICE_ID===STAGE_SERVICE && stage.OPSMAP_STAGE_STORE_STATUS_APPROVED==='1';
       const readCoverageStatus = createCoverageStatusReader({
-        readFixed:codes=>fixed.get(codes),
-        readEvidence:stage.RENDER_SERVICE_ID===STAGE_SERVICE && stage.OPSMAP_STAGE_STORE_STATUS_APPROVED==='1' ? createCoverageStatusFileReader({
-          file:stage.OPSMAP_STAGE_STORE_STATUS_FILE, sha256:stage.OPSMAP_STAGE_STORE_STATUS_SHA256, appRoot:coverageAppRoot
-        }) : undefined,
+        readFixed:async codes=>{
+          const primary=await fixed.get(codes);
+          return primary.ok ? primary : snapshotBase?.get(codes) || primary;
+        },
+        readEvidence:statusApproved ? generation=>{
+          const active=validation.active();
+          if (!active?.registry || active.generation!==generation) return null;
+          if (pendingStoreStatus?.generation!==generation) {
+            const request={generation};
+            request.promise=import('./shadowCoverage/freshonStoreStatus.js').then(({readFreshonStoreStatusFile})=>
+              readFreshonStoreStatusFile({file:stage.OPSMAP_STAGE_STORE_STATUS_FILE,expectedSha256:stage.OPSMAP_STAGE_STORE_STATUS_SHA256,
+                appRoot:coverageAppRoot,generation,registry:active.registry})).catch(error=>{
+              if (pendingStoreStatus===request) pendingStoreStatus=undefined;
+              throw error;
+            });
+            pendingStoreStatus=request;
+          }
+          return pendingStoreStatus.promise;
+        } : undefined,
         readSnapshot:generation=>{
           const active=validation.active();
           return active?.generation===generation ? active.scheduled?.snapshot : null;

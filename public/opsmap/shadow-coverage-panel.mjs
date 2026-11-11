@@ -393,9 +393,9 @@ export function createCoveragePanel({ workspace, header }) {
     find('coverageNewCount').textContent = tally('NEW');
     find('coverageHeldCount').textContent = tally('HELD');
     const history = stores && (!stores.historyUnknown || stores.pastNew || stores.pastHeld)
-      ? '90일 이력 신규 ' + fmt(stores.pastNew) + '곳(전환 ' + fmt(stores.changedFromNew) + ') · 보류 ' +
-        fmt(stores.pastHeld) + '곳(해제·전환 ' + fmt(stores.changedFromHeld) + ')' +
-        (stores.historyUnknown ? ' · 일부 이력 미확인' : '')
+      ? '90일 관측 신규 ' + fmt(stores.pastNew) + '곳(다른 현재 호차 ' + fmt(stores.changedFromNew) + ') · 보류 ' +
+        fmt(stores.pastHeld) + '곳(해제·다른 현재 호차 ' + fmt(stores.changedFromHeld) + ')' +
+        (stores.evidenceAsOf ? ' · ' + stores.evidenceAsOf + '까지' : '') + (stores.historyUnknown ? ' · 일부 이력 미확인' : '')
       : '90일 기준호차 이력 미확인';
     find('coverageStoreBasis').textContent = '매장 상태 전체 등록 기준 · ' + (stores?.fixedCheckedAt ? '기준호차 확인 ' + time.format(new Date(stores.fixedCheckedAt)) : '기준호차 미확인') +
       ' · ' + history + (stores?.ordersUnknown ? ' · 발주 미확인 ' + fmt(stores.ordersUnknown) + '곳' : '') +
@@ -539,8 +539,11 @@ export function createCoveragePanel({ workspace, header }) {
         fmt(dates.recordedDays) + '/' + fmt(dates.totalDays) + '일 확인 · ' + fmt(dates.missingDates.length) + '일 미확인'],
       ['자료 기간', view.period.start + ' ~ ' + view.period.end]
     ];
-    if (cell.storeStatus) facts.push(['매장 상태', '오산신규 ' + fmt(cell.storeStatus.NEW) + ' · 오산보류 ' +
-      fmt(cell.storeStatus.HELD) + ' · 기준호차 미확인 ' + fmt(cell.storeStatus.unknown)]);
+    if (cell.storeStatus) {
+      const count=key=>cell.storeStatus[key] || !cell.storeStatus.unknown ? fmt(cell.storeStatus[key]) : '미확인';
+      facts.push(['매장 상태', '오산신규 ' + count('NEW') + ' · 오산보류 ' + count('HELD') +
+        ' · 기준호차 미확인 ' + fmt(cell.storeStatus.unknown)]);
+    }
     for (const [label, value] of facts) {
       fields.append(element('dt', '', label), element('dd', '', value));
     }
@@ -560,9 +563,11 @@ export function createCoveragePanel({ workspace, header }) {
         (store.vehicles.length ? ' · ' + store.vehicles.map(vehicle => vehicle + '호').join(', ') : '')));
       row.append(element('small', '', '현재 기준호차 ' + (store.vehicle || '미확인') +
         (store.asOf ? ' · 기준 ' + store.asOf : '')));
-      const history = (store.history || []).map(event => event.date + ' ' + event.vehicle).join(' · ');
-      row.append(element('small', '', '90일 기준호차 ' + (history || (store.historyComplete ? '변경 기록 없음' : '이력 미확인')) +
-        (history && !store.historyComplete ? ' · 일부 기간 미확인' : '')));
+      const observed = (store.observations || []).map(event => event.date + ' ' + event.vehicle).join(' · ');
+      const history = (store.history || []).map(event => event.date + ' ' + event.fromVehicle + ' → ' + event.vehicle).join(' · ');
+      row.append(element('small', '', '90일 기준호차 관측 ' + (observed || '확인된 관측 없음')),
+        element('small', '', '기준호차 변경일 ' + (history || (store.historyComplete ? '변경 기록 없음' : '미확인')) +
+          (history && !store.historyComplete ? ' · 일부 기간 미확인' : '')));
       row.append(element('small', '', (store.order ? '최근 확인 발주 ' + store.order :
         store.ordersComplete ? '조회 기간 발주 없음' : '발주 미확인') +
         ' · 최근 배송 관측 ' + (store.lastDelivery || '미확인')));
