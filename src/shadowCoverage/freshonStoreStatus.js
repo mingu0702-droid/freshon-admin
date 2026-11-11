@@ -19,7 +19,9 @@ const route = value => typeof value === 'string' && vehicle.test(value) && value
 const seen = (row, label) => row.fixedObservations.some(item => item.vehicle === label) ||
   row.transitions.some(item => item.vehicle === label || item.fromVehicle === label);
 const wasNew = item => item.vehicle === '오산신규' || item.fromVehicle === '오산신규';
-const unknownOrder = () => ({ state: 'UNKNOWN', complete: false, validOrderCount: null, lastOrderDate: null, dates: [] });
+const unknownOrder = () => ({ state: 'UNKNOWN', complete: false, validOrderCount: null, lastOrderDate: null, dates: [],
+  observedValidOrderCount: 0, lastObservedValidOrderDate: null });
+const hiredVehicle = /^용(?:차)?\s?\d+(?:호)?$/;
 
 function count(row, totals) {
   totals.registered++;
@@ -205,30 +207,42 @@ export function createFreshonStoreStatusIndex(projection, registry, generation,
     const [start] = datesFor(projection.asOf, days);
     const byCode = new Map();
     for (const row of rows.values()) {
-      const order = orderLookup?.(row.code, start) ?? unknownOrder();
+      const order = { ...(orderLookup?.(row.code, start) ?? unknownOrder()),
+        sourceAsOf: orderSource === 'VERIFIED' ? projection.asOf : null };
       const historicalNew = seen(row, '오산신규');
       const held = row.vehicle === '오산보류' || seen(row, '오산보류');
       const valid = order.state === 'CONFIRMED_VALID';
+      const newUnknown = historicalNew && !order.complete;
+      const hiredDispatched = historicalNew && row.dispatchObservations.some(item => hiredVehicle.test(item.confirmedVehicle ?? ''));
       const newerNumberedVehicle = historicalNew && row.currentKnown && /^\d+$/.test(row.vehicle ?? '') &&
         (row.fixedObservations.some(item => wasNew(item) && item.date < projection.currentAsOf) ||
           row.transitions.some(item => wasNew(item) && item.date < projection.currentAsOf));
-      byCode.set(row.code, { order, historicalNew, newActive: historicalNew && valid,
-        newUnknown: historicalNew && order.state === 'UNKNOWN', held, heldOrderConflict: held && valid,
+      byCode.set(row.code, { order, historicalNew, newActive: newUnknown ? null : historicalNew && valid,
+        newUnknown, held, heldOrderUnknown: held && !order.complete, heldOrderConflict: held && valid,
+        heldOrderConflictReason: held && valid ? 'HELD_WITH_VALID_ORDER' : null,
         currentVehicle: row.currentKnown ? row.vehicle : null,
-        laterNumberedVehicle: newerNumberedVehicle,
+        laterNumberedVehicle: newerNumberedVehicle, hiredDispatched,
         confirmedRegularTransition: row.transitions.some(item => item.fromVehicle === '오산신규' && /^\d+$/.test(item.vehicle)) });
     }
     function summarize(members) {
-      const counts = { historicalNew: 0, newActive: 0, newUnknown: 0, newZero: 0, newCancelledOnly: 0,
-        held: 0, heldOrderConflict: 0, laterNumberedVehicle: 0, confirmedRegularTransition: 0 };
+      const counts = { historicalNew: 0, confirmedNewActive: 0, newUnknown: 0, newZero: 0, newCancelledOnly: 0,
+        held: 0, heldOrderUnknown: 0, heldOrderConflict: 0, laterNumberedVehicle: 0, hiredDispatched: 0,
+        numberedWithVerifiedOrders: 0, hiredWithVerifiedOrders: 0, confirmedRegularTransition: 0 };
       for (const row of members) {
         const status = byCode.get(row.code);
-        for (const field of ['historicalNew', 'newActive', 'newUnknown', 'held', 'heldOrderConflict',
-          'laterNumberedVehicle', 'confirmedRegularTransition']) if (status[field]) counts[field]++;
+        for (const field of ['historicalNew', 'newUnknown', 'held', 'heldOrderUnknown', 'heldOrderConflict',
+          'laterNumberedVehicle', 'hiredDispatched', 'confirmedRegularTransition']) if (status[field]) counts[field]++;
+        if (status.newActive === true) {
+          counts.confirmedNewActive++;
+          if (status.laterNumberedVehicle) counts.numberedWithVerifiedOrders++;
+          if (status.hiredDispatched) counts.hiredWithVerifiedOrders++;
+        }
         if (status.historicalNew && status.order.state === 'CONFIRMED_ZERO') counts.newZero++;
         if (status.historicalNew && status.order.state === 'CONFIRMED_CANCELLED_ONLY') counts.newCancelledOnly++;
       }
-      return { days, start, end: projection.asOf, source: orderSource, ...counts };
+      return { days, start, end: projection.asOf, source: orderSource, ...counts,
+        newActive: counts.newUnknown && !counts.confirmedNewActive ? null : counts.confirmedNewActive,
+        complete: counts.newUnknown === 0 };
     }
     const window = { byCode, summarize, summary: Object.freeze(summarize(rows.values())) };
     orderWindows.set(days, window);

@@ -7,9 +7,52 @@ const sha256 = /^[a-f0-9]{64}$/;
 const customerCode = /^[A-Z]\d{1,20}$/;
 const orderStates = new Set(['VALID', 'CANCELLED', 'UNVERIFIED']);
 
+// Build a pinned input from normalized pages of the same MIS revision. A failed
+// read may contribute observations, but only a verified full read adds coverage.
+export function prepareFreshonMisOrderLedger({ generation, asOf, sourceRevision, reads }) {
+  const [start] = datesFor(asOf, 90);
+  const coverage = new Map();
+  const orders = [];
+  for (const read of reads) {
+    const code = read.customerCode;
+    if (!customerCode.test(code ?? '') || !isDay(read.start) || read.start < start || read.start > asOf ||
+        read.end !== asOf || !Array.isArray(read.pages)) throw Error('FRESHON_MIS_ORDER_READ_SCOPE');
+    const pages = [...read.pages].sort((a, b) => a.number - b.number);
+    const { pageSize, totalRows } = pages[0] ?? {};
+    const usableCounts = Number.isSafeInteger(pageSize) && pageSize > 0 && pageSize <= 5000 &&
+      Number.isSafeInteger(totalRows) && totalRows >= 0 && totalRows <= 150000;
+    let complete = read.allStatuses === true && usableCounts && pages.length === Math.max(1, Math.ceil(totalRows / pageSize));
+    const ids = new Set();
+    for (const [index, page] of pages.entries()) {
+      if (page.httpStatus !== 200 || page.sourceRevision !== sourceRevision || !Array.isArray(page.orders)) {
+        complete = false;
+        continue;
+      }
+      if (page.number !== index + 1 || page.pageSize !== pageSize || page.totalRows !== totalRows ||
+          page.orders.length !== Math.min(pageSize, totalRows - index * pageSize)) complete = false;
+      for (const entry of page.orders) {
+        if (entry?.[1] !== code || !isDay(entry[2]) || entry[2] < read.start || entry[2] > asOf) {
+          throw Error('FRESHON_MIS_ORDER_READ_ROW');
+        }
+        if (ids.has(entry[0])) complete = false;
+        ids.add(entry[0]);
+        orders.push(entry);
+      }
+    }
+    if (complete && ids.size === totalRows && (!coverage.has(code) || read.start < coverage.get(code).start)) {
+      coverage.set(code, { customerCode: code, start: read.start, end: asOf, scope: 'VERIFIED_COMPLETE_ALL_STATUSES' });
+    }
+  }
+  const payload = { schema: 1, source: 'FRESHON_MIS_ORDER_LEDGER', generation, asOf, start, sourceRevision,
+    orders, coverage: [...coverage.values()] };
+  createFreshonMisOrderLookup(payload, { generation, asOf });
+  return payload;
+}
+
 export function createFreshonMisOrderLookup(payload, { generation, asOf }) {
   const [start] = datesFor(asOf, 90);
-  if (payload?.schema !== 1 || payload.source !== 'FRESHON_MIS_ORDER_LEDGER' ||
+  if (typeof generation !== 'string' || !sha256.test(generation) ||
+      payload?.schema !== 1 || payload.source !== 'FRESHON_MIS_ORDER_LEDGER' ||
       payload.generation !== generation || payload.asOf !== asOf || payload.start !== start ||
       typeof payload.sourceRevision !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(payload.sourceRevision) ||
       !Array.isArray(payload.orders) || payload.orders.length > 150000 ||
@@ -61,8 +104,11 @@ export function createFreshonMisOrderLookup(payload, { generation, asOf }) {
     }
     const complete = completeFrom.has(code) && completeFrom.get(code) <= from && !unverified;
     const dates = [...validByDate].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, count }));
-    const state = valid ? 'CONFIRMED_VALID' : !complete ? 'UNKNOWN' : cancelled ? 'CONFIRMED_CANCELLED_ONLY' : 'CONFIRMED_ZERO';
-    return { state, complete, validOrderCount: valid || (complete ? 0 : null), lastOrderDate: dates.at(-1)?.date ?? null, dates };
+    const lastObservedValidOrderDate = dates.at(-1)?.date ?? null;
+    const state = !complete ? 'UNKNOWN' : valid ? 'CONFIRMED_VALID' : cancelled ? 'CONFIRMED_CANCELLED_ONLY' : 'CONFIRMED_ZERO';
+    return { state, complete, validOrderCount: complete ? valid : null,
+      lastOrderDate: complete ? lastObservedValidOrderDate : null, dates: complete ? dates : [],
+      observedValidOrderCount: valid, lastObservedValidOrderDate };
   };
 }
 

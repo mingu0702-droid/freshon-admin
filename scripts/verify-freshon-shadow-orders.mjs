@@ -14,7 +14,8 @@ async function verify([generationDirectory, file, expectedSha256, outputDirector
     registry, orderFile, orderSha256 });
   const periods = [30, 60, 90];
   const summaries = periods.map(days => index.getOrderSummary(days));
-  const counts = ['historicalNew', 'newActive', 'newUnknown', 'newZero', 'newCancelledOnly', 'held', 'heldOrderConflict'];
+  const counts = ['historicalNew', 'confirmedNewActive', 'newUnknown', 'newZero', 'newCancelledOnly',
+    'held', 'heldOrderUnknown', 'heldOrderConflict', 'numberedWithVerifiedOrders', 'hiredWithVerifiedOrders'];
   const cells = [8, 9, 10, 11].map(resolution => {
     const located = [...registry.values()].filter(row => row.hasPoint);
     const ids = new Set(located.map(row => latLngToCell(row.lat, row.lng, resolution)));
@@ -36,11 +37,12 @@ async function verify([generationDirectory, file, expectedSha256, outputDirector
     const latest = index.getOrderStatus(customerCode, 90);
     if (!latest.historicalNew && !latest.held) continue;
     results.push({ customerCode, currentVehicle: latest.currentVehicle, historicalNew: latest.historicalNew,
-      held: latest.held, laterNumberedVehicle: latest.laterNumberedVehicle,
+      held: latest.held, laterNumberedVehicle: latest.laterNumberedVehicle, hiredDispatched: latest.hiredDispatched,
       confirmedRegularTransition: latest.confirmedRegularTransition,
       periods: periods.map(days => {
         const status = index.getOrderStatus(customerCode, days);
-        return { days, order: status.order, heldOrderConflict: status.heldOrderConflict };
+        return { days, newActive: status.newActive, order: status.order, heldOrderConflict: status.heldOrderConflict,
+          heldOrderConflictReason: status.heldOrderConflictReason };
       }) });
   }
   const privateBytes = Buffer.from(JSON.stringify({ metadata: index.metadata, stores: results }));
