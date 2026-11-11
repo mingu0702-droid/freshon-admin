@@ -4,13 +4,19 @@ const names = { NEW: '오산신규', HELD: '오산보류' };
 const stateOf = vehicle => vehicle === names.NEW ? 'NEW' : vehicle === names.HELD ? 'HELD' : null;
 const dayAt = ms => new Date(ms + 9 * 3600000).toISOString().slice(0, 10);
 const orderStates = new Set(['CONFIRMED_VALID','CONFIRMED_ZERO','CONFIRMED_CANCELLED_ONLY','UNKNOWN']);
-const unknownOrder = Object.freeze({state:'UNKNOWN',complete:false,validOrderCount:null,lastOrderDate:null,dates:Object.freeze([])});
+const unknownOrder = Object.freeze({state:'UNKNOWN',complete:false,validOrderCount:null,lastOrderDate:null,dates:Object.freeze([]),
+  observedValidOrderCount:0,lastObservedValidOrderDate:null,sourceAsOf:null});
 
 function publicOrder(value) {
-  if (!orderStates.has(value?.state) || value.state === 'UNKNOWN' || !Number.isSafeInteger(value.validOrderCount) ||
-      value.validOrderCount < 0) return unknownOrder;
-  if (value.state === 'CONFIRMED_VALID' ? value.validOrderCount === 0 : value.validOrderCount !== 0 || !value.complete) return unknownOrder;
-  return {state:value.state,complete:value.complete === true,validOrderCount:value.validOrderCount,
+  if (!orderStates.has(value?.state)) return unknownOrder;
+  const observed = {
+    observedValidOrderCount:Number.isSafeInteger(value.observedValidOrderCount) && value.observedValidOrderCount>0 ? value.observedValidOrderCount : 0,
+    lastObservedValidOrderDate:isDay(value.lastObservedValidOrderDate) ? value.lastObservedValidOrderDate : null,
+    sourceAsOf:isDay(value.sourceAsOf) ? value.sourceAsOf : null
+  };
+  if (!value.complete || value.state === 'UNKNOWN' || !Number.isSafeInteger(value.validOrderCount) ||
+      (value.state === 'CONFIRMED_VALID' ? value.validOrderCount <= 0 : value.validOrderCount !== 0)) return {...unknownOrder,...observed};
+  return {...observed,state:value.state,complete:true,validOrderCount:value.validOrderCount,
     lastOrderDate:isDay(value.lastOrderDate) ? value.lastOrderDate : null,
     dates:(Array.isArray(value.dates) ? value.dates : []).filter(item=>isDay(item?.date) && Number.isSafeInteger(item.count) && item.count>0)
       .map(({date,count})=>({date,count}))};
@@ -65,7 +71,7 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
             const order = publicOrder(status?.order);
             const newActive = order.complete && typeof status?.newActive === 'boolean' ? status.newActive : null;
             return [code, {newActive,historicalNew:status?.historicalNew === true,held:status?.held === true,
-              heldOrderConflict:status?.heldOrderConflict === true,order}];
+              heldOrderConflict:status?.heldOrderConflict === true && order.state === 'CONFIRMED_VALID',order}];
           }));
           byPeriod.set(days, orders);
         }
@@ -99,7 +105,8 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
         if (pastNew && order.state === 'CONFIRMED_CANCELLED_ONLY') counts.newCancelledOnly++;
         if (current) counts.HELD++;
         if (held) counts.held++;
-        if (held && order.state === 'UNKNOWN') counts.heldUnknown++;
+        const heldOrderUnknown = held && !order.complete;
+        if (heldOrderUnknown) counts.heldUnknown++;
         if (heldOrderConflict) counts.heldOrderConflict++;
         if (pastNew) counts.pastNew++;
         if (pastHeld) counts.pastHeld++;
@@ -110,7 +117,8 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
         if (!vehicle) counts.currentUnknown++;
         if (!historyComplete) counts.historyUnknown++;
         if (order.state === 'UNKNOWN') counts.ordersUnknown++;
-        records.set(code, { vehicle, currentVehicle:vehicle, current, newActive, newUnknown, held, heldOrderConflict,
+        records.set(code, { vehicle, currentVehicle:vehicle, current, newActive, newUnknown, held, heldOrderUnknown, heldOrderConflict,
+          heldOrderConflictReason:heldOrderConflict ? 'HELD_WITH_VALID_ORDER' : null,
           pastNew, pastHeld, history, observations, historyComplete, order,
           lastDelivery: [approved?.lastDelivery,lastDelivery.get(code)].filter(Boolean).sort().at(-1) || null,
           asOf: approvedCurrent ? currentAsOf : vehicle ? fixedDay : null });
@@ -129,9 +137,10 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
 
 export function activeOrderSummary(summary, counts) {
   return {days:summary.days,start:summary.start,end:summary.end,source:summary.source,
-    historicalNew:counts.pastNew, newActive:counts.pastNew > 0 && counts.newUnknown === counts.pastNew ? null : counts.NEW,
+    historicalNew:counts.pastNew,newActive:counts.newUnknown && !counts.NEW ? null : counts.NEW,
+    confirmedNewActive:counts.NEW,complete:counts.newUnknown===0,
     newUnknown:counts.newUnknown,newZero:counts.newZero,newCancelledOnly:counts.newCancelledOnly,
-    held:counts.held,heldOrderConflict:counts.heldOrderConflict};
+    held:counts.held,heldOrderUnknown:counts.heldUnknown,heldOrderConflict:counts.heldOrderConflict};
 }
 
 export function cellStatusCounts(codes, statuses) {
@@ -150,7 +159,7 @@ export function cellStatusCounts(codes, statuses) {
     if (!row?.vehicle) counts.unknown++;
     if (!row || row.order.state === 'UNKNOWN') counts.ordersUnknown++;
     if (row?.held) counts.held++;
-    if (row?.held && row.order.state === 'UNKNOWN') counts.heldUnknown++;
+    if (row?.heldOrderUnknown) counts.heldUnknown++;
     if (row?.heldOrderConflict) counts.heldOrderConflict++;
   }
   return counts;

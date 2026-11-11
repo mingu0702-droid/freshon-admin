@@ -26,8 +26,10 @@ const visitLabel = record => record.visits === null ? '배송 관측 매장 ' + 
 function orderLabel(order) {
   if (order?.state === 'CONFIRMED_ZERO') return '유효 발주 0건 확인';
   if (order?.state === 'CONFIRMED_CANCELLED_ONLY') return '취소만 확인 · 유효 발주 0건';
-  if (order?.state !== 'CONFIRMED_VALID') return '발주 미확인';
-  return '유효 발주 ' + (order.complete ? '' : '최소 ') + fmt(order.validOrderCount) + '건' +
+  if (order?.state !== 'CONFIRMED_VALID') return order?.observedValidOrderCount ?
+    '발주 검증 대기 · 부분 조회에서 ' + fmt(order.observedValidOrderCount) + '건 관측' +
+      (order.lastObservedValidOrderDate ? ' · 최근 관측 ' + order.lastObservedValidOrderDate : '') : '발주 미확인';
+  return '유효 발주 ' + fmt(order.validOrderCount) + '건' +
     (order.lastOrderDate ? ' · 최근 ' + order.lastOrderDate : '');
 }
 
@@ -607,7 +609,7 @@ export function createCoveragePanel({ workspace, header }) {
       if (store.newActive || store.newUnknown || store.current || store.heldOrderConflict || store.pastNew || store.pastHeld) row.append(element('small', '',
         [store.newActive === true ? '활성 오산신규 · 발주 원장 확인' : '', store.current === 'HELD' ? '오산보류 · 기준호차 분류' : '',
           store.newUnknown ? '활성 여부 발주 검증 대기' : '',
-          store.heldOrderConflict === true ? '오산보류 상태에서 발주 확인' : '',
+          store.heldOrderConflictReason === 'HELD_WITH_VALID_ORDER' ? '오산보류 상태에서 발주 확인' : '',
           store.pastNew ? (store.vehicle && store.vehicle !== '오산신규' ? '오산신규 이력 · 현재 다른 기준호차' : '오산신규 이력') : '',
           store.pastHeld ? '오산보류 이력' : ''].filter(Boolean).join(' · ')));
       if (store.location) {

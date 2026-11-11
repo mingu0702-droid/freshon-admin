@@ -83,8 +83,9 @@ test('only order ledger activation counts as new and a held order conflict prese
     metadata:{generation:proof,start:'2026-08-14',asOf:'2026-11-11',currentAsOf:'2026-11-11'},
     getStore:code=>rows.get(code),
     getOrderStatus(code, days) {
-      if (code === 'T900002') return {order:{state:'CONFIRMED_VALID',validOrderCount:1,lastOrderDate:'2026-11-10'},held:true,heldOrderConflict:true};
-      if (code === 'T900003' && days >= 60) return {order:{state:'CONFIRMED_VALID',validOrderCount:1,lastOrderDate:'2026-09-19',complete:days===90},newActive:true};
+      if (code === 'T900002') return {order:{state:'CONFIRMED_VALID',complete:true,validOrderCount:1,lastOrderDate:'2026-11-10'},held:true,heldOrderConflict:true};
+      if (code === 'T900003' && days === 90) return {order:{state:'CONFIRMED_VALID',validOrderCount:1,lastOrderDate:'2026-09-19',complete:true},newActive:true};
+      if (code === 'T900003' && days === 60) return {order:{state:'UNKNOWN',observedValidOrderCount:1,lastObservedValidOrderDate:'2026-09-19'},newActive:null};
       return {order:{state:'UNKNOWN'},newUnknown:true,newActive:false};
     }
   };
@@ -108,6 +109,8 @@ test('only order ledger activation counts as new and a held order conflict prese
   assert.equal((await read(catalog,proof,30)).counts.NEW,0);
   assert.equal((await read(catalog,proof,60)).counts.NEW,0);
   assert.equal((await read(catalog,proof,60)).records.get('T900003').newActive,null);
+  assert.equal((await read(catalog,proof,60)).records.get('T900003').order.observedValidOrderCount,1);
+  assert.equal((await read(catalog,proof,60)).records.get('T900003').order.validOrderCount,null);
   assert.equal((await read(catalog,proof,90)).counts.NEW,1);
   assert.equal(data.records.get('T900003').history.length,0);
   assert.equal(data.records.get('T900003').observations.length,1);
