@@ -83,18 +83,22 @@
     if (cache.size >= 64) cache.delete(cache.keys().next().value);
     cache.set(key,value);
   }
-  function stageAddress(query,generation) {
+  function stageAddress(query,generation,{signal}={}) {
     if (root.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com') return Promise.resolve(null);
+    if(signal?.aborted)return Promise.resolve(null);
     const variants = /^\d{19}$/.test(query) ? [query] : addressQueries(query,root.Phase2bUi.addressVariants);
     if (!variants.length) return Promise.resolve(null);
     const key = JSON.stringify([generation,...variants.map(addressKey)]);
     const cached=retained.get(key);
     if(cached?.expiresAt>Date.now())return Promise.resolve(cached.result);
     if(cached)retained.delete(key);
-    if (!flights.has(key)) {
+    let flight=flights.get(key);
+    if (!flight) {
       const epoch = addressEpoch;
-      const task = fetch('/api/map-phase2b/private/stage-address-evidence',{
-        method:'POST', credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(10000),
+      const controller=new AbortController();
+      flight={controller,consumers:0};
+      flight.task=fetch('/api/map-phase2b/private/stage-address-evidence',{
+        method:'POST', credentials:'same-origin', cache:'no-store', signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)]),
         headers:{'Content-Type':'application/json'},body:JSON.stringify({generation,rows:[variants],includeCustomers:true})
       }).then(async response=>{
         const payload=await response.json().catch(()=>null);
@@ -104,17 +108,33 @@
         const [result]=payload.data;
         if(generation&&['STORED','OFFICIAL'].includes(result.status)&&result.point)remember(retained,key,{result,expiresAt:Date.now()+60_000});
         return result;
-      }).finally(()=>{if(flights.get(key)===task)flights.delete(key);});
-      flights.set(key,task);
+      }).finally(()=>{if(flights.get(key)===flight)flights.delete(key);});
+      flights.set(key,flight);
     }
-    return flights.get(key);
+    flight.consumers++;
+    return new Promise((resolve,reject)=>{
+      let released=false;
+      const finish=(fn,value)=>{
+        if(released)return;
+        released=true;signal?.removeEventListener('abort',cancel);
+        if(--flight.consumers===0&&flights.get(key)===flight){flights.delete(key);flight.controller.abort();}
+        fn(value);
+      };
+      const cancel=()=>finish(resolve,null);
+      signal?.addEventListener('abort',cancel,{once:true});
+      flight.task.then(value=>finish(resolve,value),error=>finish(reject,error));
+    });
   }
   function rememberTemporary(query,point) {
     if(point?.coordinateSource==='MAP_CLICK_TEMPORARY' && Number.isFinite(point.lat)&&Number.isFinite(point.lng)) {
       remember(temporary,addressKey(query),{lat:point.lat,lng:point.lng,coordinateSource:point.coordinateSource});
     }
   }
-  root.addEventListener?.('map-staff-signed-out',()=>{addressEpoch++;retained.clear();flights.clear();temporary.clear();});
+  root.addEventListener?.('map-staff-signed-out',()=>{
+    addressEpoch++;retained.clear();
+    for(const flight of flights.values())flight.controller.abort();
+    flights.clear();temporary.clear();
+  });
   root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, stopsExternal, outcome, singleStoredLocation,
     stageAddress, rememberTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
 })(typeof window === 'object' ? window : globalThis);

@@ -61,6 +61,7 @@ export function createOperationalPhotoTaskReader({rawRequest, extractRows = extr
         if (total === null || pageCount === null || total > 10000 || total === 0 && pageCount > 1
           || total > 0 && pageCount !== Math.ceil(total / pageSize)) pagingValid = false;
         if (declaredTotal !== null && (declaredTotal !== total || declaredPages !== pageCount)) pagingValid = false;
+        if(total!==null&&batch.length!==Math.max(0,Math.min(pageSize,total-page*pageSize)))pagingValid=false;
         if (declaredTotal === null && total !== null) { declaredTotal = total; declaredPages = pageCount; }
         if (strictDated) {
           const reportedSize = payload?.numberOfElements ?? payload?.data?.numberOfElements;

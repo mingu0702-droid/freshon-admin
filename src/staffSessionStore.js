@@ -23,10 +23,11 @@ export function createStageStaffSessionStore({env=process.env,fetchImpl=fetch,no
   const mac=value=>crypto.createHmac('sha256',env.MAP_STAFF_SESSION_SECRET).update('staff-session-v1:'+JSON.stringify(value)).digest('hex');
   async function request(url,options={}){try{return await fetchImpl(url,{...options,headers,redirect:'error',signal:AbortSignal.timeout(10000)});}catch{fail('TRANSPORT');}}
   async function read(){
-    const info=await request(root);if(!info.ok)fail('REPOSITORY_HTTP',info);
+    const [info,r]=await Promise.all([request(root),request(file+'?ref='+encodeURIComponent(branch))]);
+    if(!info.ok)fail('REPOSITORY_HTTP',info);
     let repo;try{repo=await info.json();}catch{fail('REPOSITORY_JSON',info);}
     if(repo?.private!==true||repo.permissions?.push!==true)fail('REPOSITORY_SCOPE',info);
-    const r=await request(file+'?ref='+encodeURIComponent(branch));if(r.status===404)return {sha:null,state:{schema:1,sessions:{}}};
+    if(r.status===404)return {sha:null,state:{schema:1,sessions:{}}};
     if(!r.ok)fail('STATE_HTTP',r);
     let data;try{data=await r.json();}catch{fail('STATE_JSON',r);}
     if(data?.encoding!=='base64'||! /^[a-f0-9]{40}$/.test(data.sha||'')||data.size>512000)fail('STATE_FORMAT',r);

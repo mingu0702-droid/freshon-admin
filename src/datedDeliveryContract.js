@@ -55,7 +55,7 @@ function markers(record) {
   const batchId = [record.batchId,record.bulkJobId].some(value=>
     typeof value === 'string' && !!value.trim() || Number.isSafeInteger(value) && value > 0);
   const scheduled = ['SCHEDULED_BULK_17','ADMIN_BULK_17'].includes(action);
-  const bulk = record.isBulk === true || record.bulkProcessed === true || batchId || scheduled ||
+  const bulk = record.isBulk === true || record.bulk === true || record.bulkProcessed === true || batchId || scheduled ||
     ['ADMIN_BULK','BULK_COMPLETE','BATCH_COMPLETE'].some(marker=>marker===origin||marker===action);
   const individual = record.individualCompletion === true || origin === 'DRIVER_APP' || action === 'DRIVER_APP_COMPLETE';
   return {bulk, individual, scheduled};

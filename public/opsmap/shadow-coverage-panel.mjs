@@ -725,7 +725,7 @@ export function createCoveragePanel({ workspace, header }) {
       }
       const adapter = window.KakaoMapsAdapter;
       let preserved;
-      try { preserved=await requests.stageAddress(query,data.generation??params.generation??null); }
+      try { preserved=await requests.stageAddress(query,data.generation??params.generation??null,{signal:owner.signal}); }
       catch(error){ if ([401,403,409].includes(error.status)) throw error; }
       if (!current()) return;
       if (preserved?.point) { await pointFor(preserved.point,query); return; }

@@ -28,6 +28,8 @@ import { callHub, hubMetrics, previewEnabled } from "./hubApiClient.js";
 import { calculateVehicleEta, mergeHubBoundsPayloads, normalizePhase2bDetail, phase2bCacheNamespace, phase2bSnapshotMeta, splitHubBounds } from "./phase2bOperations.js";
 import { createPhase2bReadCache } from "./phase2bReadCache.js";
 import { mountProductionMapApi } from './productionMapIntegration.js';
+import {datedCompletionEvent,datedStopStatus} from './opsmapDailyServer.js';
+import {createDailyCompletionReader,dailyCompletionCandidates} from './opsmapDailyCompletionReader.js';
 import { mountMapMainPage } from './mapMainPage.js';
 import { createFixedVehicleReader } from './fixedVehicleProjection.js';
 
@@ -2071,6 +2073,7 @@ function buildStopFromDeliveryTaskRow(row, vehicle, sequence) {
   const amount = deliveryStopText(row, ["salesAmount", "amount", "sales", "price", "totalAmount"])
     || deliveryStopText(nested.order, ["salesAmount", "amount", "price", "totalAmount"]);
   const status = deliveryTaskStatus(row);
+  const actualDeliveryEvent=datedCompletionEvent(row);
   const vehicleName = deliveryTaskVehicle(row) || vehicle;
   const coords = extractPoint(row);
   return {
@@ -2088,6 +2091,7 @@ function buildStopFromDeliveryTaskRow(row, vehicle, sequence) {
     deliveryCompletedAt: status.completedAt,
     rawDeliveryCompletedAt: status.completedAt,
     deliveryStatus: status.status,
+    status: datedStopStatus(row,actualDeliveryEvent), actualDeliveryEvent,
     appRecorded: status.appRecorded,
     appUsageGroup: status.appRecorded ? "\uB51C\uB9AC\uBC84\uB9AC \uC5B4\uB4DC\uBBFC \uBC30\uC1A1\uC644\uB8CC" : "\uB51C\uB9AC\uBC84\uB9AC \uC5B4\uB4DC\uBBFC \uC870\uD68C",
     routeOrder: deliveryStopText(row, ["sequence", "seq", "sort", "sortNo", "routeOrder", "deliverySequence"]),
@@ -3811,11 +3815,19 @@ async function phase2bTodayStatus(date) {
       vehicles: [...byVehicle].map(([vehicle, vehicleRows]) => phase2bTodayVehicleSummary(vehicle, vehicleRows, date)).sort((a, b) => a.vehicle.localeCompare(b.vehicle, "ko", { numeric: true }))
     };
     phase2bTodayCache.set(date, { expiresAt: Date.now() + 60000, value });
+    if(rows.sourceObservation?.complete===true)phase2bCompletionCandidates.set(value,dailyCompletionCandidates(rows,deliveryTaskVehicle));
     return value;
   })();
   phase2bTodayInflight.set(date, pending);
   try { return await pending; } finally { phase2bTodayInflight.delete(date); }
 }
+
+const phase2bCompletionCandidates=new WeakMap();
+phase2bTodayStatus.readCompletionEvidence=createDailyCompletionReader({
+  getSource:date=>phase2bTodayCache.get(date)?.value,
+  candidates:(source,vehicle)=>phase2bCompletionCandidates.get(source)?.get(vehicle)||[],
+  request:(id,signal)=>deliveryAdminFetch('/api/bali/task/'+id+'/status-record',{method:'GET',signal,redirect:'error',cache:'no-store'})
+});
 
 app.get("/api/map-phase2b/preview/status", requireView, (_req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });

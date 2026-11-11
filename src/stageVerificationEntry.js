@@ -113,7 +113,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       ? env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED : '0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
   const validation = createStageAbValidation({now});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
-  let baselineConfig, baselineStore, baselineRefresh, baselineState='NOT_CONFIGURED';
+  let baselineConfig, baselineStore, baselineRefresh, baselineRestoreMs, baselineState='NOT_CONFIGURED';
   if(stage.RENDER_SERVICE_ID===STAGE_SERVICE){
     try {
       const config=JSON.parse(readFileSync('/etc/secrets/opsmap-stage-baseline-v1.json','utf8'));
@@ -128,11 +128,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   function refreshBaseline(){
     if(!baselineConfig||['VERIFIED','SUPERSEDED'].includes(baselineState))return;
     baselineRefresh??=(async()=>{
+      const started=performance.now();
       baselineStore ||= createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:stage,fetchImpl,baselineKey:baselineConfig.baselineKey}),now});
       const candidate=await baselineStore.readBaseline(baselineConfig.ref);
       if(candidate.ledger.sha256!=='a239aaf9f5b8138daaa75a0d662d03964a93ef62bd85e21cc230418be22e6115'||
           candidate.registry.size!==6043||[...candidate.registry.values()].some(row=>!row.hasPoint)||!candidate.vehicleDelivery)throw Error('STAGE_BASELINE_SCOPE');
       baselineState=validation.followScheduled(candidate,baselineStore.readDay,{baseline:true})?'VERIFIED':'SUPERSEDED';
+      baselineRestoreMs=Math.round(performance.now()-started);
     })().catch(async()=>{baselineState='UNAVAILABLE';await baselineStore?.dispose().catch(()=>{});})
       .finally(()=>{baselineRefresh=null;});
     return baselineRefresh;
@@ -470,21 +472,32 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       manual.mount(binding);
       photos.mount(binding);
       mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,allowPreservedBatch:true,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
+      const snapshotProjections=new WeakMap();
       router.get('/api/map-phase2b/preview/snapshot',requireStaff,async(req,res)=>{
         try {
-          const saved=await readSnapshot();
+          const immediate=validation.active()?.scheduled?.snapshot;
+          const saved=immediate||await readSnapshot();
+          res.set('Cache-Control','private, no-store').vary('Cookie');
+          if(baselineRestoreMs!==undefined)res.set('X-Opsmap-Restore-Ms',String(baselineRestoreMs));
           if (!saved) {
             const recovery=snapshotRecovery();
             if(recovery==='RESTORING')res.set('Retry-After','2');
             return res.status(503).json({error:recovery==='RESTORING'?'PHASE2B_SNAPSHOT_RESTORING':'PHASE2B_SNAPSHOT_UNAVAILABLE',recovery});
           }
-          const rows = redactPublicData(saved.rows);
-          if (saved.source === 'STAGE_VERIFIED_REGISTRY') {
-            for (const row of rows) for (const field of ['address','basicAddress','customerAddress','latestAddress','addressDetail']) delete row[field];
+          let rows=snapshotProjections.get(saved.rows);
+          if(!rows){
+            rows=redactPublicData(saved.rows);
+            if(saved.source==='STAGE_VERIFIED_REGISTRY'){
+              for(const row of rows)for(const field of ['address','basicAddress','customerAddress','latestAddress','addressDetail'])delete row[field];
+            }
+            snapshotProjections.set(saved.rows,rows);
           }
+          const recovery=snapshotRecovery();
           const meta = {...phase2bSnapshotMeta(saved), sourceGeneration:saved.sourceGeneration || null,sourceRunId:saved.sourceRunId || null,
-            recovery:snapshotRecovery()};
-          return requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:rows,meta,error:null}));
+            recovery,...(recovery==='RESTORING'?{retryAfterMs:2000}:{})};
+          const respond=()=>res.json({ok:true,data:rows,meta,error:null});
+          if(!immediate)return requireStaff(req,res,respond);
+          return isSessionCurrent(req,res.locals.staffSession?.key)?respond():res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
         } catch {return res.status(503).json({error:'PHASE2B_SNAPSHOT_UNAVAILABLE'});}
       });
       router.get('/api/map-phase2b/preview/route-plan',requireStaff,async(req,res)=>{

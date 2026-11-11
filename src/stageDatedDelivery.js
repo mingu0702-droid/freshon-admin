@@ -8,6 +8,7 @@ import {validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
 import {createStageDeliveryAdminPhotoSession} from './opsmapStageDeliveryAdminSession.js';
 import {createDeliveryAdminPhotoTransport} from './opsmapDeliveryAdminTransport.js';
 import {setTimeout as delay} from 'node:timers/promises';
+import {validDeliveryPoint} from './opsmapDailyServer.js';
 import {confirmedTaskVehicle, DATED_DELIVERY_CONTRACT, datedDispatchSource, datedDispatchView, deliveryCompletion,
   deliveryDigest, deliveryTaskId, deliveryTaskState, packDatedEvent} from './datedDeliveryContract.js';
 
@@ -173,17 +174,18 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       if(state==='CANCELLED')continue;
       const vehicle = confirmedVehicle || '미확인';
       const customer = task.customer || {}, location = task.location || {};
+      const point=validDeliveryPoint(location.gps)?{lat:Number(location.gps.latitude),lng:Number(location.gps.longitude)}:{};
       const stops = groups.get(vehicle) || [];
       stops.push({customerCode,
         customerName:field(task.customerName, customer.name),
         address:field(task.customerAddress, task.address, customer.address, location.address),
         sequence:stops.length + 1, deliveryStatus:event.sourceStatus, deliveryCompletedAt:event.individualCompletedAt,
-        appRecorded:state==='COMPLETED'});
+        appRecorded:state==='COMPLETED',dispatchCenterCode:({osan:'011',osanColdStorage:'011',yeongnam:'012',honam:'013'})[center],...point});
       groups.set(vehicle, stops);
     }
     for(const list of candidates.values())list.sort((a,b)=>String(a.task.id).localeCompare(String(b.task.id)));
     return {rows,candidates,eventReads:new Map(),views:new Map(),legacy:{date,generatedAt:new Date(now()).toISOString(),
-      sourceReadState:'LIVE_VERIFIED',sourceError:null,sourceObservation:observation,
+      sourceReadState:'LIVE_VERIFIED',sourceError:null,sourceObservation:observation,centerScope:center,
       vehicles:[...groups].map(([vehicle,stops])=>{
         const completedStops=stops.filter(stop=>stop.appRecorded).length;
         return {vehicle,stops,totalStops:stops.length,completedStops,remainingStops:stops.length-completedStops,

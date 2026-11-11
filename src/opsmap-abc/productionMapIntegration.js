@@ -16,7 +16,9 @@ import {createStageReadModel,stageReadModelPending} from './stageReadModel.js';
 import {publicResponse,publicCustomerDetail,publicMapValue,securityAudit} from './phase2bSecurity.js';
 import {callHub as verifiedHubRead,hubRequestProfile} from './phase2bHubReadClient.js';
 import {createPhase2bReadCache} from './phase2bReadCache.js';
-import {readPaginatedDatedAssignments,uniqueAssignments} from './phase2bAssignments.js';
+import {readPaginatedDatedAssignments} from './phase2bAssignments.js';
+import {dailyAssignmentContract,datedSourceFailure} from '../opsmapDailyServer.js';
+import {createDailyRetainedStore} from '../opsmapDailyRetained.js';
 import {mountMapDataFreshness} from './mapDataFreshness.js';
 import {createCoordinateSupplement} from './mapCoordinateSupplement.js';
 import {mountHybridMapReadApi} from './hybridMapRouter.js';
@@ -34,15 +36,14 @@ import {coordinateAddressHash} from './opsmapAutoCoordinates.js';
 
 function datedStopCoordinates(stop, point) {
   const saved = point.coordinateSource === 'ADDRESS_REPRESENTATIVE' || point.coordinateSource === 'BUILDING_VERIFIED';
-  if (!saved) return {lat:stop.lat ?? point.lat ?? null,lng:stop.lng ?? point.lng ?? null};
-  if (stop.lat != null && stop.lng != null) return {lat:stop.lat,lng:stop.lng};
+  if (Number.isFinite(stop.lat) && Number.isFinite(stop.lng)) return {lat:stop.lat,lng:stop.lng};
   const address = stop.address || stop.customerAddress || stop.basicAddress;
   const hash = coordinateAddressHash(address);
   const key = officialAddressKey(address);
   const matches = hash && hash === (point.originalAddressHash || point.addressHash) ||
     key && key === officialAddressKey(point.address);
   if (!matches || point.lat == null || point.lng == null) return {lat:null,lng:null};
-  return {lat:point.lat,lng:point.lng,coordinateStatus:'CONFIRMED',coordinateSource:point.coordinateSource,
+  return {lat:point.lat,lng:point.lng,coordinateStatus:saved?'CONFIRMED':point.coordinateStatus,coordinateSource:point.coordinateSource,
     coordinateAccuracy:point.coordinateAccuracy,coordinateEvidence:point.coordinateEvidence,
     originalAddressHash:point.originalAddressHash};
 }
@@ -84,7 +85,16 @@ export function mountProductionMapApi(app,{
     : Promise.resolve({loaded:false,reason:'PRIVATE_CACHE_DISABLED'});
   const stageReadModelEnabled=true;
   const stageReadModel=sharedReadModel||createStageReadModel({secret,publicPeriodCacheEntries:1});
-  const phase2bAssignmentCache=createPhase2bReadCache({name:'assignments',ttlMs:60000,staleMs:120000,maxEntries:8,maxBytes:12*1024*1024});
+  const phase2bAssignmentCache=createPhase2bReadCache({name:'assignments',ttlMs:60000,staleMs:0,maxEntries:8,maxBytes:12*1024*1024});
+  const datedRetained=createDailyRetainedStore({directory:env.OPSMAP_DAILY_RETAINED_DIR,secret:env.MAP_STAFF_SESSION_SECRET});
+  const verifiedDaily=new Map(), restoreReads=new Map(), coordinateIndexes=new WeakMap();
+  function keepVerifiedDaily(value){const date=value.meta.date;verifiedDaily.delete(date);verifiedDaily.set(date,value);while(verifiedDaily.size>4)verifiedDaily.delete(verifiedDaily.keys().next().value);}
+  const datedPoints=snapshot=>{
+    const rows=snapshot?.rows;
+    if(!Array.isArray(rows))return new Map();
+    if(!coordinateIndexes.has(rows))coordinateIndexes.set(rows,new Map(rows.map(row=>[String(row.customerCode||row.code),row])));
+    return coordinateIndexes.get(rows);
+  };
   const phase2bDatedAssignmentCache=createPhase2bReadCache({name:'datedAssignments',ttlMs:600000,staleMs:0,maxEntries:16,maxBytes:24*1024*1024});
   app.use(staffLatency);
   app.use('/api/map-phase2b/auth',securityAudit,mapStaff.router);
@@ -99,7 +109,9 @@ export function mountProductionMapApi(app,{
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).set('Cache-Control','private, no-store').json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED',...coverage});
     const sdkOnly = req.query.sdkOnly === '1';
     const lookup = sdkOnly ? null : await addressLookupService.status();
-    return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({javascriptKey,...coverage,...(osanCenter?{centers:[osanCenter]}:{}),driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowIndependentAddressLookup:lookup?.independentEnabled===true,allowExternalAddressLookup:lookup?.enabled===true,allowExternalPlaceLookup:lookup?.keywordEnabled===true,addressLookupReason:lookup?.reason||null,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true}));
+    const respond=()=>res.set('Cache-Control','private, no-store').json({javascriptKey,...coverage,...(osanCenter?{centers:[osanCenter]}:{}),driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowIndependentAddressLookup:lookup?.independentEnabled===true,allowExternalAddressLookup:lookup?.enabled===true,allowExternalPlaceLookup:lookup?.keywordEnabled===true,addressLookupReason:lookup?.reason||null,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true});
+    if(sdkOnly&&env.OPSMAP_STAGE_VERIFY_ONLY==='1')return mapStaff.isSessionCurrent(req,res.locals.staffSession?.key)?respond():res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
+    return mapStaff.requireStaff(req,res,respond);
   });
   mountKakaoCoordinateConnection({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,service:addressLookupService,jsonBody:express.json({limit:'4kb'}),origin:env.MAP_STAFF_ORIGIN||env.RENDER_EXTERNAL_URL});
   app.get('/api/map-phase2b/private/address-lookup/config',async(req,res)=>{
@@ -308,13 +320,39 @@ app.get("/api/map-phase2b/preview/period", requireView, compression({ threshold:
 app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) => {
   if(publishedReads.isActive())return pagedRequired(res);
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
+  res.set('Cache-Control','private, no-store');
   const date = String(req.query.date || "");
   const calendarDate=phase2bKstDate(), dispatchDate=phase2bDispatchDate?.() || calendarDate;
   if (date !== "latest" && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || normalizeDateValue(date) !== date || date > dispatchDate)) return res.status(400).json({ error: "INVALID_DATE" });
   try {
+    const restored=date!=='latest'&&!verifiedDaily.has(date)?await datedRetained?.read(date):null;
+    if(restored){
+      keepVerifiedDaily(restored);
+      if(!restoreReads.has(date)){
+        const pending=readDatedHttp(req,null,date,calendarDate,dispatchDate,true).catch(()=>{}).finally(()=>restoreReads.delete(date));
+        restoreReads.set(date,pending);
+      }
+      return requireView(req,res,()=>res.json({...restored,meta:{...restored.meta,retained:true}}));
+    }
+    return await readDatedHttp(req,res,date,calendarDate,dispatchDate);
+  }catch(error){
+    return respondDatedFailure(req,res,date,error);
+  }
+});
+
+async function readDatedHttp(req,res,date,calendarDate,dispatchDate,background=false){
     const snapshot = await readPhase2bSnapshot();
-      const readDate = (candidate) => (candidate >= calendarDate ? phase2bAssignmentCache : phase2bDatedAssignmentCache)
+    const readDate = (candidate) => (candidate >= calendarDate ? phase2bAssignmentCache : phase2bDatedAssignmentCache)
         .load(`datedAssignments:${candidate}:${snapshot?.sourceGeneration || ''}`, async () => {
+      let deliveryFailure;
+      const finish=async value=>{
+        const result=dailyAssignmentContract(value,{sourceGeneration:snapshot?.sourceGeneration});
+        if(!value.meta.previousVerifiedRetained){
+          keepVerifiedDaily(result);
+          await datedRetained?.write(result).catch(()=>{});
+        }
+        return result;
+      };
       if (candidate >= calendarDate || date !== 'latest') {
         // An explicitly selected business date remains readable after midnight.
         // Reuse the bounded, date-verified Delivery reader; never scan a period.
@@ -325,31 +363,42 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
           const retained=live.sourceReadState==='STALE_VERIFIED'?{sourceReadState:'STALE_VERIFIED',sourceError:live.sourceError,
             previousVerifiedRetained:true,currentReadComplete:false}:{};
           if(phase2bDispatchDate && live.sourceObservation.responseRows===0) {
-            return {ok:true,data:[],meta:{date:candidate,source:"Delivery Admin date-verified dispatch",complete:true,
-              rowCount:0,generatedAt:live.generatedAt,sourceReadState:'NO_DISPATCH_OBSERVED',...retained},error:null};
+            return finish({ok:true,data:[],meta:{date:candidate,source:"Delivery Admin date-verified dispatch",complete:true,
+              rowCount:0,generatedAt:live.generatedAt,sourceReadState:'NO_DISPATCH_OBSERVED',centerScope:live.centerScope,...retained},error:null});
           }
           if(live.sourceObservation.dateVerified!==true)throw new Error('DELIVERY_SOURCE_DATE_UNVERIFIED');
           if(candidate>calendarDate && live.vehicles.some(vehicle=>vehicle.stops.some(stop=>stop.appRecorded))) {
             throw new Error('DELIVERY_SOURCE_PLAN_CONFLICT');
           }
-          const coordinates = new Map((snapshot?.rows || []).map((row) => [String(row.customerCode || row.code), row]));
+          const coordinates=datedPoints(snapshot);
           const actual = live.vehicles.flatMap((vehicle) => vehicle.stops.map((stop) => {
             const code = String(stop.customerCode || stop.code || "");
             const point = coordinates.get(code) || {};
-            return { ...stop, customerCode: code, vehicle: vehicle.vehicle, deliveryDate: candidate,
+            return { ...stop, customerCode: code, vehicle: vehicle.vehicle, confirmedVehicle:vehicle.vehicle, deliveryDate: candidate,
                 ...datedStopCoordinates(stop, point) };
           }));
-          const data = uniqueAssignments(actual, candidate);
-          if (data.length && candidate>calendarDate) {
-            return {ok:true,data:data.map(({lastDeliveryDate,...row})=>row),meta:{date:candidate,source:"Delivery Admin date-verified dispatch",
-              recordKind:'PLANNED_ASSIGNMENTS',complete:true,rowCount:data.length,generatedAt:live.generatedAt,...retained},error:null};
+          const visits=new Map();
+          for(const row of actual){
+            if(!row.customerCode||!row.vehicle)throw Error('DATED_ASSIGNMENTS_ROW_INVALID');
+            const key=row.vehicle+'|'+row.customerCode, prior=visits.get(key);
+            const events=[...(prior?.actualDeliveryEvents||[]),...(row.actualDeliveryEvent?[row.actualDeliveryEvent]:[])];
+            if(prior&&prior.address&&row.address&&(officialAddressKey(prior.address)||prior.address)!==(officialAddressKey(row.address)||row.address))
+              throw Error('DATED_ASSIGNMENTS_ROW_INVALID');
+            const preferred=prior?.status==='COMPLETED'&&row.status!=='COMPLETED'?prior:row;
+            visits.set(key,{...preferred,lastDeliveryDate:candidate,actualDeliveryEvents:events});
           }
-          if (data.length) return { ok: true, data, meta: { date: candidate, source: candidate === calendarDate ? "Delivery Admin current dispatch" : "Delivery Admin date-verified dispatch", complete: true, rowCount: data.length, generatedAt: live.generatedAt,...retained }, error: null };
+          const data=[...visits.values()];
+          if (data.length && candidate>calendarDate) {
+            return finish({ok:true,data:data.map(({lastDeliveryDate,...row})=>row),meta:{date:candidate,source:"Delivery Admin date-verified dispatch",
+              recordKind:'PLANNED_ASSIGNMENTS',complete:true,rowCount:data.length,generatedAt:live.generatedAt,centerScope:live.centerScope,...retained},error:null});
+          }
+          if (data.length) return finish({ok:true,data,meta:{date:candidate,source:candidate===calendarDate?"Delivery Admin current dispatch":"Delivery Admin date-verified dispatch",complete:true,generatedAt:live.generatedAt,centerScope:live.centerScope,unassignedRows:live.sourceObservation.unassignedRows,completionEvidence:typeof phase2bTodayStatus.readCompletionEvidence==="function"?"DELIVERY_STATUS_RECORD_V1":undefined,...retained},error:null});
           if (phase2bDispatchDate && !actual.length) {
-            return {ok:true,data:[],meta:{date:candidate,source:"Delivery Admin date-verified dispatch",complete:true,
-              rowCount:0,generatedAt:live.generatedAt,sourceReadState:'NO_ACTIVE_DISPATCH_OBSERVED',...retained},error:null};
+            return finish({ok:true,data:[],meta:{date:candidate,source:"Delivery Admin date-verified dispatch",complete:true,
+              rowCount:0,generatedAt:live.generatedAt,sourceReadState:'NO_ACTIVE_DISPATCH_OBSERVED',centerScope:live.centerScope,...retained},error:null});
           }
         } catch (error) {
+          deliveryFailure=datedSourceFailure(error);
           if(candidate>calendarDate)throw error;
           const saved=await Promise.resolve().then(()=>readArchivedAssignments?.(candidate)).catch(()=>null);
           if(saved?.meta?.date===candidate) return saved;
@@ -358,7 +407,16 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
         }
       }
       // Only a verified final page resolves this loader and enters the cache.
-      return readPaginatedDatedAssignments(candidate, params => callHub("datedAssignments", params, { useCache: false }));
+      try{
+        const result=await readPaginatedDatedAssignments(candidate,params=>callHub("datedAssignments",params,{useCache:false}));
+        // A second source can only prove an empty date within its own coverage.
+        if(deliveryFailure&&(!result.data.length||verifiedDaily.get(candidate)?.meta.source.startsWith("Delivery Admin")||
+          (await datedRetained?.read(candidate))?.meta.source.startsWith("Delivery Admin")))throw Object.assign(Error(deliveryFailure.code),deliveryFailure);
+        return finish(result);
+      }catch(error){
+        if(deliveryFailure)error.deliveryFailure=deliveryFailure;
+        throw error;
+      }
     });
     const verifiedSnapshotDate = snapshot && !phase2bSnapshotMeta(snapshot).stale && snapshot.refreshedThrough >= calendarDate ? snapshot.latestDate : "";
     let candidate = date === "latest" ? dispatchDate : date;
@@ -384,16 +442,52 @@ app.get("/api/map-phase2b/preview/assignments", requireView, async (req, res) =>
       candidate = verifiedSnapshotDate && offset === 0 && verifiedSnapshotDate < candidate ? verifiedSnapshotDate : new Date(Date.parse(`${candidate}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
     }
     if (date === "latest" && !loaded.value.data.length) return res.status(503).json({ ok: false, error: "LATEST_BUSINESS_DATE_UNAVAILABLE" });
+    if(background)return;
     res.setHeader("X-Phase2B-Cache", loaded.cache);
     return res.json(loaded.value);
-  } catch (error) {
+}
+async function respondDatedFailure(req,res,date,error) {
+    const fallback=datedSourceFailure(error);
+    const failure=[401,403,429,504].includes(fallback.status)||fallback.code==='DATED_ASSIGNMENTS_INCOMPLETE'
+      ? fallback : error.deliveryFailure && (fallback.code==='DELIVERY_SOURCE_UNAVAILABLE'||error.deliveryFailure.code==='DATED_ASSIGNMENTS_INCOMPLETE') ? error.deliveryFailure : fallback;
+    const retained=verifiedDaily.get(date) || await datedRetained?.read(date);
+    if(retained)return requireView(req,res,()=>res.json({...retained,meta:{...retained.meta,retained:true,failure}}));
     const archive=await Promise.resolve().then(()=>readArchivedAssignments?.(date)).catch(()=>null);
-    if(archive)return requireView(req,res,()=>res.set('Cache-Control','private, no-store').json(archive));
-    const failure=mapReadFailure(error,'DELIVERY');
-    return res.status(failure.status).json({ ok: false, data: null, error: failure.code });
-  }
-});
+    if(archive)return requireView(req,res,()=>res.json({...archive,meta:{...archive.meta,failure}}));
+    return res.status(failure.status).json({ok:false,data:null,error:failure.code,sourceHttp:failure.status,
+      sourceAttempts:{delivery:error.deliveryFailure||null,hub:fallback}});
+}
 
+
+  app.get('/api/map-phase2b/preview/daily-completions',requireView,async(req,res)=>{
+    res.set('Cache-Control','private, no-store');
+    const {date,vehicle,observedAt}=req.query;
+    const reader=phase2bTodayStatus?.readCompletionEvidence;
+    if(!previewEnabled()||typeof reader!=='function')return res.status(404).json({error:'DAILY_COMPLETIONS_DISABLED'});
+    if(typeof date!=='string'||normalizeDateValue(date)!==date||date>(phase2bDispatchDate?.()||phase2bKstDate())||
+      typeof vehicle!=='string'||typeof observedAt!=='string'||!/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(observedAt)||
+      Object.keys(req.query).length!==3)return res.status(400).json({error:'DAILY_COMPLETIONS_QUERY_INVALID'});
+    try{
+      const data=await reader(date,vehicle,observedAt);
+      const last=verifiedDaily.get(date);
+      if(last?.meta.generatedAt===observedAt&&data.events.length){
+        const events=new Map();
+        for(const {customerCode,event} of data.events){
+          const list=events.get(customerCode)||[];
+          list.push(event);events.set(customerCode,list);
+        }
+        const rows=last.data.map(row=>row.vehicle===vehicle&&events.has(row.customerCode)
+          ? {...row,actualDeliveryEvents:events.get(row.customerCode)} : row);
+        const updated=dailyAssignmentContract({...last,data:rows});
+        keepVerifiedDaily(updated);
+        await datedRetained?.write(updated).catch(()=>{});
+      }
+      return requireView(req,res,()=>res.json({ok:true,data}));
+    }catch(error){
+      const failure=datedSourceFailure(error);
+      return res.status(failure.status).json({ok:false,error:failure.code,sourceHttp:failure.status});
+    }
+  });
 
   // This request restores only an existing published generation to production.
   // Missing published state must fail closed in Hub; never fall back to BUILD.
