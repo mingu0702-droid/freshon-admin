@@ -3374,11 +3374,11 @@
       nearestDistance:nearest?.distance??null,nearestDistanceMeters,...newAreaDispatchFacts(checked,nearest?.customerCode,evidence)};
     if(exception)return {...facts,decision:'X',reason:exception,evidence:'기존 지역·시설·배송동선 제외 규칙'};
     if(point.coordinateSource==='MAP_CLICK_TEMPORARY')return {...facts,reason:'임시 위치 선택 · 배송판정 검토',evidence:'직접 선택한 위치의 실제 주소를 확인해 주세요.'};
-    if(nearest?.distance<=0.5)return {...facts,decision:'O',reason:'',eligibilityBasis:'FIXED_REGISTRY_500M',
-      evidence:'최근접 고정 등록 매장까지 직선 '+nearestDistanceMeters+'m(500m 이내) · 실제 수락·배송일'+(base.facility?'·차량 진입':'')+' 별도 확인'};
-    if(base.facility)return {...facts,reason:'차량 진입 확인 필요',evidence:'시설 진입 확인 전 배송 가능 여부를 확정할 수 없습니다.'};
     if(!nearest)return {...facts,reason:'등록 매장 위치 미확인',evidence:'검증된 고정 등록 매장 좌표를 확인해 주세요.'};
-    return {...facts,reason:'배송동선 확인 필요',evidence:'최근접 고정 등록 매장까지 직선 500m 초과 · 배송동선 추가 확인'};
+    if(nearest.distance<=0.5)return {...facts,decision:'O',reason:'',eligibilityBasis:'FIXED_REGISTRY_500M',
+      evidence:'최근접 고정 등록 매장까지 직선 '+nearestDistanceMeters+'m(500m 이내) · 실제 수락·배송일'+(base.facility?'·차량 진입':'')+' 별도 확인'};
+    return {...facts,decision:'X',reason:'배송동선 맞지않음',
+      evidence:'최근접 고정 등록 매장까지 반올림 전 직선거리 500m 초과'};
   }
 
   let newAreaRequestId = 0;

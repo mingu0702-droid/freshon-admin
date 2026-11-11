@@ -53,13 +53,16 @@ test('independent QA: the fixed registry requires a validated coordinate pair an
   assert.equal(f.newAreaEvidence().locationRows.length,0,'period coordinate alone cannot create a registered store');
 });
 
-test('independent QA: a complete period without a nearby point cannot certify road-route exclusion', () => {
+test('independent QA: the fixed 500 m limit applies without a complete delivery period', () => {
   const f = fixture(); f.setup([saved],[saved]);
   const far = f.judgeNewAreaPoint({address:'경상북도 안동시 합성로 1'},{lat:36.56,lng:128.73});
-  assert.equal(far.decision,'검토');
-  assert.equal(far.reason,'배송동선 확인 필요');
-  assert.match(far.evidence,/직선 500m 초과/);
-  assert.notEqual(far.reason,'배송동선 맞지 않음');
+  assert.equal(far.decision,'X');
+  assert.equal(far.reason,'배송동선 맞지않음');
+  assert.match(far.evidence,/반올림 전 직선거리 500m 초과/);
+  f.setup([saved],[]);
+  const withoutPeriod = f.judgeNewAreaPoint({address:'경상북도 안동시 합성로 1'},{lat:36.56,lng:128.73});
+  assert.equal(withoutPeriod.decision,far.decision);
+  assert.equal(withoutPeriod.reason,far.reason);
   const exception = f.judgeNewAreaPoint({address:'제주특별자치도 합성로 1'},{lat:33.4,lng:126.5});
   assert.equal(exception.decision,'X','explicit legacy exclusion remains a separate policy');
 });

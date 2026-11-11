@@ -52,13 +52,15 @@ test('500 m includes an undelivered fixed registration and preserves legacy excl
   const outside=f.judgeNewAreaPoint(request,at(500.0000005));
   assert.equal(outside.nearestDistanceMeters,500);
   assert.ok(outside.nearestDistance>0.5);
-  assert.equal(outside.decision,'검토','the unrounded distance is outside the limit');
+  assert.equal(outside.decision,'X','the unrounded distance is outside the limit');
+  assert.equal(outside.reason,'배송동선 맞지않음');
   for(const [row,reason] of [
     [{address:'경기도 화성시 합성아파트',customer:'101동 102호'},'아파트'],
     [{...request,customer:'동선외'},'배송동선 맞지않음'],
     [{address:'제주특별자치도 합성로 2'},'제주도']
   ]){
     assert.equal(f.judgeNewAreaPoint(row,at(383)).decision,'X');
+    assert.equal(f.judgeNewAreaPoint(row,at(775)).reason,reason);
     assert.equal(f.judgeNewAreaPoint(row,null).reason,reason);
   }
   assert.equal(f.judgeNewAreaPoint(request,{...at(218),coordinateSource:'MAP_CLICK_TEMPORARY'}).decision,'검토');
@@ -66,7 +68,9 @@ test('500 m includes an undelivered fixed registration and preserves legacy excl
   assert.equal(f.judgeNewAreaPoint({...request,customer:'합성상가 101동 102호'},at(218)).decision,'O');
   const facility={...request,customer:'지하 하역장'};
   assert.match(f.judgeNewAreaPoint(facility,at(218)).evidence,/차량 진입 별도 확인/);
-  assert.equal(f.judgeNewAreaPoint(facility,at(775)).reason,'차량 진입 확인 필요');
+  const outsideFacility=f.judgeNewAreaPoint(facility,at(775));
+  assert.equal(outsideFacility.decision,'X');
+  assert.equal(outsideFacility.reason,'배송동선 맞지않음');
 });
 test('temporary, invalid, deleted and delivery-only coordinates cannot provide 500 m eligibility',()=>{
   const f=fixture();
@@ -78,7 +82,8 @@ test('temporary, invalid, deleted and delivery-only coordinates cannot provide 5
     {...near,customerCode:'S990002',lat:37.21,coordinateSource:'ADDRESS_REPRESENTATIVE'}]);
   const row=f.judgeNewAreaPoint({address:near.address},{lat:37.2,lng:127});
   assert.equal(row.nearestStoreCode,'S990002');
-  assert.equal(row.decision,'검토');
+  assert.equal(row.decision,'X');
+  assert.equal(row.reason,'배송동선 맞지않음');
   assert.equal(f.judgeNewAreaPoint({address:near.address},{lat:NaN,lng:127}).reason,'주소 확인 필요');
 });
 test('completed visits, archive coverage, and nearby dispatch vehicles cannot decide O/X',()=>{
@@ -87,13 +92,15 @@ test('completed visits, archive coverage, and nearby dispatch vehicles cannot de
   const point={lat:37.207,lng:127};
   f.setup([],{},[fixed]);f.state.rangeStart='2026-08-05';
   const before=f.judgeNewAreaPoint(request,point);
-  assert.equal(before.decision,'검토');
+  assert.equal(before.decision,'X');
+  assert.equal(before.reason,'배송동선 맞지않음');
   const archive={start:f.state.rangeStart,end:f.state.rangeEnd,days:76,unknownDays:14,vehicleStatus:'READY',
     vehicles:[{...near,vehicle:'999',center:'osan',mask:2}],observed:[],fixed:[]};
   f.setup([completed],{complete:true,coverageComplete:true},[fixed]);f.ready();
   f.assign([{...assigned,weekdays:{Mon:'101',Tue:'122'}}]);
   const after=f.judgeNewAreaPoint(request,point,{archive});
   assert.equal(after.decision,before.decision);
+  assert.equal(after.reason,before.reason);
   assert.equal(after.evidence,before.evidence);
   assert.equal(after.nearestDistanceMeters,778);
   assert.deepEqual(Array.from(MapPeriodUi.areaDispatchVehicles(after,30),item=>[item.vehicle,item.weekdays.join('')]),[['101','월'],['122','화']]);
@@ -106,7 +113,8 @@ test('changing 30/40/50 km and clearing all delivery history leave O, X and revi
   const scenarios=[
     [request,{lat:37.201,lng:127}],
     [{...request,customer:'동선외'},{lat:37.201,lng:127}],
-    [request,{lat:37.207,lng:127}]
+    [request,{lat:37.207,lng:127}],
+    [request,null]
   ];
   for(const history of [[completed],[]]){
     const snapshot=[near,distant].map(row=>({...row,lastDeliveryDate:history.length?row.lastDeliveryDate:'',history}));
@@ -115,8 +123,9 @@ test('changing 30/40/50 km and clearing all delivery history leave O, X and revi
     for(const radius of [30,40,50]){
       f.setNewAreaRadius(radius);
       const rows=scenarios.map(([row,point])=>f.judgeNewAreaPoint(row,point));
-      assert.deepEqual(rows.map(row=>row.decision),['O','X','검토']);
-      assert.deepEqual(rows.map(row=>row.nearestDistanceMeters),[111,111,778]);
+      assert.deepEqual(rows.map(row=>row.decision),['O','X','X','검토']);
+      assert.deepEqual(rows.map(row=>row.nearestDistanceMeters??null),[111,111,778,null]);
+      assert.equal(rows[2].reason,'배송동선 맞지않음');
       assert.equal(MapPeriodUi.areaDispatchVehicles(rows[0],radius).length,radius===50?2:1);
     }
   }
