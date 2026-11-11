@@ -3,6 +3,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { getResolution, isValidCell, latLngToCell } from 'h3-js';
 import { datesFor, isDay, privateCoverageDirectory, boundedRead } from './coverageFiles.js';
+import { readFreshonMisOrderLookup } from './freshonMisOrderLedger.js';
 
 const names = new Map([['오산신규', 'new'], ['오산보류', 'held']]);
 const customerCode = /^[A-Z]\d{1,20}$/;
@@ -15,15 +16,17 @@ const counters = () => Object.fromEntries(fields.map(key => [key, 0]));
 const code = value => typeof value === 'string' && customerCode.test(value);
 const digest = value => typeof value === 'string' && sha256.test(value);
 const route = value => typeof value === 'string' && vehicle.test(value) && value.trim() === value;
+const seen = (row, label) => row.fixedObservations.some(item => item.vehicle === label) ||
+  row.transitions.some(item => item.vehicle === label || item.fromVehicle === label);
+const wasNew = item => item.vehicle === '오산신규' || item.fromVehicle === '오산신규';
+const unknownOrder = () => ({ state: 'UNKNOWN', complete: false, validOrderCount: null, lastOrderDate: null, dates: [] });
 
 function count(row, totals) {
   totals.registered++;
   if (names.get(row.vehicle) === 'new') totals.currentNew++;
   if (names.get(row.vehicle) === 'held') totals.currentHeld++;
-  const seen = label => row.fixedObservations.some(item => item.vehicle === label) ||
-    row.transitions.some(item => item.vehicle === label || item.fromVehicle === label);
-  if (seen('오산신규')) totals.observedNew++;
-  if (seen('오산보류')) totals.observedHeld++;
+  if (seen(row, '오산신규')) totals.observedNew++;
+  if (seen(row, '오산보류')) totals.observedHeld++;
   if (row.ordersComplete && row.lastOrder === null) totals.confirmedNoOrder++;
   if (!row.ordersComplete && row.lastOrder === null) totals.orderUnknown++;
   if (row.dispatchComplete && row.dispatchObservations.length === 0) totals.confirmedDispatchGap++;
@@ -163,7 +166,8 @@ export function buildFreshonStoreStatus({ generation, registry, asOf, observedDe
     deliveryUnknownDates: dates.filter(day => !observed.has(day)), addressMismatches, stores: [...rows.values()] };
 }
 
-export function createFreshonStoreStatusIndex(projection, registry, generation) {
+export function createFreshonStoreStatusIndex(projection, registry, generation,
+  { orderLookup, orderSource = 'NOT_CONNECTED' } = {}) {
   if (!digest(generation) || projection?.schema !== 1 || projection.provider !== 'FRESHON' ||
       projection.generation !== generation || !Array.isArray(projection.stores) || projection.stores.length !== registry.size ||
       typeof projection.currentComplete !== 'boolean') throw Error('FRESHON_SHADOW_GENERATION');
@@ -178,7 +182,7 @@ export function createFreshonStoreStatusIndex(projection, registry, generation) 
   const cells = new Map();
   const totals = counters();
   const metadata = Object.freeze({ provider: projection.provider, generation, start: projection.start,
-    asOf: projection.asOf, currentAsOf: projection.currentAsOf,
+    asOf: projection.asOf, currentAsOf: projection.currentAsOf, orderSource,
     deliveryObservedDates: Object.freeze([...received]), deliveryUnknownDates: Object.freeze([...projection.deliveryUnknownDates]) });
   for (const row of projection.stores) {
     const store = registry.get(row?.code);
@@ -195,10 +199,48 @@ export function createFreshonStoreStatusIndex(projection, registry, generation) 
       cells.set(cell, members);
     }
   }
+  const orderWindows = new Map();
+  function orderWindow(days) {
+    if (orderWindows.has(days)) return orderWindows.get(days);
+    const [start] = datesFor(projection.asOf, days);
+    const byCode = new Map();
+    for (const row of rows.values()) {
+      const order = orderLookup?.(row.code, start) ?? unknownOrder();
+      const historicalNew = seen(row, '오산신규');
+      const held = row.vehicle === '오산보류' || seen(row, '오산보류');
+      const valid = order.state === 'CONFIRMED_VALID';
+      const newerNumberedVehicle = historicalNew && row.currentKnown && /^\d+$/.test(row.vehicle ?? '') &&
+        (row.fixedObservations.some(item => wasNew(item) && item.date < projection.currentAsOf) ||
+          row.transitions.some(item => wasNew(item) && item.date < projection.currentAsOf));
+      byCode.set(row.code, { order, historicalNew, newActive: historicalNew && valid,
+        newUnknown: historicalNew && order.state === 'UNKNOWN', held, heldOrderConflict: held && valid,
+        currentVehicle: row.currentKnown ? row.vehicle : null,
+        laterNumberedVehicle: newerNumberedVehicle,
+        confirmedRegularTransition: row.transitions.some(item => item.fromVehicle === '오산신규' && /^\d+$/.test(item.vehicle)) });
+    }
+    function summarize(members) {
+      const counts = { historicalNew: 0, newActive: 0, newUnknown: 0, newZero: 0, newCancelledOnly: 0,
+        held: 0, heldOrderConflict: 0, laterNumberedVehicle: 0, confirmedRegularTransition: 0 };
+      for (const row of members) {
+        const status = byCode.get(row.code);
+        for (const field of ['historicalNew', 'newActive', 'newUnknown', 'held', 'heldOrderConflict',
+          'laterNumberedVehicle', 'confirmedRegularTransition']) if (status[field]) counts[field]++;
+        if (status.historicalNew && status.order.state === 'CONFIRMED_ZERO') counts.newZero++;
+        if (status.historicalNew && status.order.state === 'CONFIRMED_CANCELLED_ONLY') counts.newCancelledOnly++;
+      }
+      return { days, start, end: projection.asOf, source: orderSource, ...counts };
+    }
+    const window = { byCode, summarize, summary: Object.freeze(summarize(rows.values())) };
+    orderWindows.set(days, window);
+    return window;
+  }
+
   return Object.freeze({ metadata, summary: Object.freeze(report(totals, projection.currentComplete,
     projection.stores.every(row => row.historyComplete))),
   getStore(key) { return rows.has(key) ? structuredClone(rows.get(key)) : null; },
-  getCell(id, { offset = 0, limit = 50 } = {}) {
+  getOrderStatus(key, days = 90) { return structuredClone(orderWindow(days).byCode.get(key) ?? null); },
+  getOrderSummary(days = 90) { return orderWindow(days).summary; },
+  getCell(id, { offset = 0, limit = 50, days = 90 } = {}) {
     if (typeof id !== 'string' || !isValidCell(id) || !resolutions.includes(getResolution(id)) ||
         !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       throw Error('FRESHON_SHADOW_CELL_QUERY');
@@ -206,17 +248,32 @@ export function createFreshonStoreStatusIndex(projection, registry, generation) 
     const members = cells.get(id) || [];
     const cellTotals = counters();
     for (const row of members) count(row, cellTotals);
+    const orders = orderWindow(days);
     return { id, ...metadata, counts: report(cellTotals, projection.currentComplete,
       members.length > 0 && members.every(row => row.historyComplete)), offset,
-    rows: structuredClone(members.slice(offset, offset + limit)) };
+    orderFilter: orders.summarize(members),
+    rows: structuredClone(members.slice(offset, offset + limit).map(row => ({ ...row, orderStatus: orders.byCode.get(row.code) }))) };
   } });
 }
 
-export async function readFreshonStoreStatusFile({ file, expectedSha256, appRoot = process.cwd(), generation, registry }) {
+export async function readFreshonStoreStatusFile({ file, expectedSha256, appRoot = process.cwd(), generation, registry,
+  orderFile, orderSha256 }) {
   if (!path.isAbsolute(file || '') || !digest(expectedSha256)) throw Error('FRESHON_SHADOW_FILE_CONFIG');
   const resolved = await realpath(file);
   await privateCoverageDirectory(path.dirname(resolved), appRoot);
   const bytes = await boundedRead(resolved, 8 * 1024 * 1024);
   if (createHash('sha256').update(bytes).digest('hex') !== expectedSha256) throw Error('FRESHON_SHADOW_FILE_DIGEST');
-  return createFreshonStoreStatusIndex(JSON.parse(bytes), registry, generation);
+  const projection = JSON.parse(bytes);
+  let orderLookup;
+  let orderSource = 'NOT_CONNECTED';
+  if (orderFile || orderSha256) {
+    try {
+      orderLookup = await readFreshonMisOrderLookup({ file: orderFile, expectedSha256: orderSha256,
+        appRoot, generation, asOf: projection.asOf });
+      orderSource = 'VERIFIED';
+    } catch {
+      orderSource = 'UNAVAILABLE';
+    }
+  }
+  return createFreshonStoreStatusIndex(projection, registry, generation, { orderLookup, orderSource });
 }
