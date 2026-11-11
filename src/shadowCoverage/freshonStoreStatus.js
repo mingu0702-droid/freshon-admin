@@ -4,6 +4,7 @@ import path from 'node:path';
 import { getResolution, isValidCell, latLngToCell } from 'h3-js';
 import { datesFor, isDay, privateCoverageDirectory, boundedRead } from './coverageFiles.js';
 import { readFreshonMisOrderLookup } from './freshonMisOrderLedger.js';
+import { createFreshonCompletedDeliveryWindows } from './freshonCompletedDeliveries.js';
 
 const names = new Map([['오산신규', 'new'], ['오산보류', 'held']]);
 const customerCode = /^[A-Z]\d{1,20}$/;
@@ -201,6 +202,7 @@ export function createFreshonStoreStatusIndex(projection, registry, generation,
       cells.set(cell, members);
     }
   }
+  const deliveryWindow = createFreshonCompletedDeliveryWindows(projection, rows, seen);
   const orderWindows = new Map();
   function orderWindow(days) {
     if (orderWindows.has(days)) return orderWindows.get(days);
@@ -254,6 +256,8 @@ export function createFreshonStoreStatusIndex(projection, registry, generation,
   getStore(key) { return rows.has(key) ? structuredClone(rows.get(key)) : null; },
   getOrderStatus(key, days = 90) { return structuredClone(orderWindow(days).byCode.get(key) ?? null); },
   getOrderSummary(days = 90) { return orderWindow(days).summary; },
+  getDeliveryStatus(key, days = 90) { return structuredClone(deliveryWindow(days).byCode.get(key) ?? null); },
+  getDeliverySummary(days = 90) { return deliveryWindow(days).summary; },
   getCell(id, { offset = 0, limit = 50, days = 90 } = {}) {
     if (typeof id !== 'string' || !isValidCell(id) || !resolutions.includes(getResolution(id)) ||
         !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
@@ -263,10 +267,13 @@ export function createFreshonStoreStatusIndex(projection, registry, generation,
     const cellTotals = counters();
     for (const row of members) count(row, cellTotals);
     const orders = orderWindow(days);
+    const deliveries = deliveryWindow(days);
     return { id, ...metadata, counts: report(cellTotals, projection.currentComplete,
       members.length > 0 && members.every(row => row.historyComplete)), offset,
     orderFilter: orders.summarize(members),
-    rows: structuredClone(members.slice(offset, offset + limit).map(row => ({ ...row, orderStatus: orders.byCode.get(row.code) }))) };
+    deliveryFilter: deliveries.summarize(members),
+    rows: structuredClone(members.slice(offset, offset + limit).map(row => ({ ...row,
+      orderStatus: orders.byCode.get(row.code), deliveryStatus: deliveries.byCode.get(row.code) ?? null }))) };
   } });
 }
 
