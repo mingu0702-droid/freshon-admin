@@ -77,7 +77,7 @@ test('current, historical and resumed order status are independent and missing o
     row('T900002','오산보류',[{date:'2026-10-02',vehicle:'오산보류'}],'2026-11-10'),
     row('T900003','122',[{date:'2026-10-10',vehicle:'오산신규'}])
   ]);
-  const evidence = {metadata:{generation:proof,asOf:'2026-11-11',currentAsOf:'2026-11-11'},getStore:code=>rows.get(code)};
+  const evidence = {metadata:{generation:proof,start:'2026-08-14',asOf:'2026-11-11',currentAsOf:'2026-11-11'},getStore:code=>rows.get(code)};
   const clock=()=>Date.parse('2026-11-11T00:00:00Z');
   const fixed = async () => ({data:[],meta:{checkedAt:'2026-11-11T00:00:00Z'}});
   const read = createCoverageStatusReader({readFixed:fixed,readEvidence:async()=>evidence,readSnapshot:async()=>({
@@ -85,7 +85,7 @@ test('current, historical and resumed order status are independent and missing o
       {customerCode:'T900003',lastDeliveryDate:'2026-11-09',status:'UNCONFIRMED'}]
   }),now:clock});
   const data=await read(catalog,proof);
-  assert.deepEqual(data.counts,{NEW:1,HELD:0,pastNew:2,pastHeld:1,changedFromNew:1,changedFromHeld:1,currentUnknown:0,historyUnknown:0,ordersUnknown:2});
+  assert.deepEqual(data.counts,{NEW:1,HELD:0,pastNew:2,pastHeld:1,changedFromNew:1,changedFromHeld:1,rollingNew:2,rollingHeld:1,currentUnknown:0,historyUnknown:0,ordersUnknown:2});
   assert.deepEqual(cellStatusCounts(['T900001','T900002'],data),{NEW:1,HELD:0,pastNew:1,pastHeld:1,unknown:0});
   assert.equal(data.records.get('T900001').order,null);
   assert.equal(data.records.get('T900001').lastDelivery,'2026-11-09');

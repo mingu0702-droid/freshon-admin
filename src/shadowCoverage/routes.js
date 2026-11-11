@@ -144,7 +144,8 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
         HELD:statuses.counts.HELD || (statuses.counts.currentUnknown ? null : 0),
         pastNew:statuses.evidenceAsOf ? statuses.counts.pastNew : null,
         pastHeld:statuses.evidenceAsOf ? statuses.counts.pastHeld : null,
-        fixedCheckedAt:statuses.fixedCheckedAt, evidenceAsOf:statuses.evidenceAsOf } : null
+        fixedCheckedAt:statuses.fixedCheckedAt, evidenceAsOf:statuses.evidenceAsOf, historyStart:statuses.historyStart,
+        rollingStart:statuses.rollingStart } : null
     };
     return { etag, data: result };
   }, (res, { etag, data }) => {

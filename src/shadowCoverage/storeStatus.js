@@ -35,6 +35,7 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
         projections.set(evidence,evidenceRows);
       }
       const asOf = evidence?.metadata.asOf || null;
+      const historyStart = evidence?.metadata.start || null;
       const currentAsOf = evidence?.metadata.currentAsOf || null;
       const first = dayAt(now() - 89 * 86400000);
       const orderCutoff = new Date(today + 'T00:00:00Z');
@@ -46,6 +47,7 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
       const fixedDay = Number.isFinite(fixedTime) ? dayAt(fixedTime) : null;
       const records = new Map();
       const counts = { NEW: 0, HELD: 0, pastNew: 0, pastHeld: 0, changedFromNew: 0, changedFromHeld: 0,
+        rollingNew: 0, rollingHeld: 0,
         currentUnknown: 0, historyUnknown: 0, ordersUnknown: 0 };
       for (const code of codes) {
         const approved = evidenceRows?.get(code);
@@ -56,16 +58,18 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
         const ordersComplete = approved?.ordersComplete === true && asOf === today;
         const resumed = rawState === 'HELD' && order && order >= cutoff;
         const current = resumed ? null : rawState;
-        const within = event => event.date >= first && event.date <= today;
+        const within = event => event.date >= (historyStart || first) && event.date <= (asOf || today);
         const observations = (approved?.fixedObservations || []).filter(within);
         const history = (approved?.transitions || []).filter(within);
         const historyComplete = approved?.historyComplete === true && asOf === today;
-        const seen = label => observations.some(event => stateOf(event.vehicle) === label) ||
-          history.some(event => stateOf(event.vehicle) === label || stateOf(event.fromVehicle) === label);
+        const seen = (label, start) => observations.some(event => (!start || event.date >= start) && stateOf(event.vehicle) === label) ||
+          history.some(event => (!start || event.date >= start) && (stateOf(event.vehicle) === label || stateOf(event.fromVehicle) === label));
         const pastNew = seen('NEW'), pastHeld = seen('HELD');
         if (current) counts[current]++;
         if (pastNew) counts.pastNew++;
         if (pastHeld) counts.pastHeld++;
+        if (seen('NEW',first)) counts.rollingNew++;
+        if (seen('HELD',first)) counts.rollingHeld++;
         if (pastNew && vehicle && current !== 'NEW') counts.changedFromNew++;
         if (pastHeld && vehicle && current !== 'HELD') counts.changedFromHeld++;
         if (!vehicle) counts.currentUnknown++;
@@ -75,7 +79,7 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
           resumed: Boolean(resumed), lastDelivery: [approved?.lastDelivery,lastDelivery.get(code)].filter(Boolean).sort().at(-1) || null,
           asOf: approvedCurrent ? currentAsOf : vehicle ? fixedDay : null });
       }
-      return { records, counts, fixedCheckedAt: fixedDay ? fixed.meta.checkedAt : null, evidenceAsOf: asOf,
+      return { records, counts, fixedCheckedAt: fixedDay ? fixed.meta.checkedAt : null, evidenceAsOf: asOf, historyStart, rollingStart:first,
         version: fixed?.meta?.version || null, date: today };
     })().finally(() => { entry.pending = false; entry.until = now() + 30000; });
     cached.set(catalog, entry);

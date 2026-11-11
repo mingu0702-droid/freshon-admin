@@ -393,9 +393,11 @@ export function createCoveragePanel({ workspace, header }) {
     find('coverageNewCount').textContent = tally('NEW');
     find('coverageHeldCount').textContent = tally('HELD');
     const history = stores && (!stores.historyUnknown || stores.pastNew || stores.pastHeld)
-      ? '90일 관측 신규 ' + fmt(stores.pastNew) + '곳(다른 현재 호차 ' + fmt(stores.changedFromNew) + ') · 보류 ' +
+      ? '보존 90일 관측 신규 ' + fmt(stores.pastNew) + '곳(다른 현재 호차 ' + fmt(stores.changedFromNew) + ') · 보류 ' +
         fmt(stores.pastHeld) + '곳(해제·다른 현재 호차 ' + fmt(stores.changedFromHeld) + ')' +
-        (stores.evidenceAsOf ? ' · ' + stores.evidenceAsOf + '까지' : '') + (stores.historyUnknown ? ' · 일부 이력 미확인' : '')
+        (stores.evidenceAsOf ? ' · ' + stores.historyStart + ' ~ ' + stores.evidenceAsOf : '') +
+        (stores.historyStart !== stores.rollingStart ? ' · 오늘 기준 90일 확인 신규 ' + fmt(stores.rollingNew) + '곳 · 보류 ' + fmt(stores.rollingHeld) + '곳' : '') +
+        (stores.historyUnknown ? ' · 일부 이력 미확인' : '')
       : '90일 기준호차 이력 미확인';
     find('coverageStoreBasis').textContent = '매장 상태 전체 등록 기준 · ' + (stores?.fixedCheckedAt ? '기준호차 확인 ' + time.format(new Date(stores.fixedCheckedAt)) : '기준호차 미확인') +
       ' · ' + history + (stores?.ordersUnknown ? ' · 발주 미확인 ' + fmt(stores.ordersUnknown) + '곳' : '') +
