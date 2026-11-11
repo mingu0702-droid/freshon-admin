@@ -255,7 +255,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
   readDate.readContract=async(date,center,vehicle)=>{
     const {value,error}=await loadCenter(date,center);
     const prepared=value.prepared??=prepareContract(value);
-    const candidates=value.candidates.get(vehicle);
+    const candidates=center==='osan'&&focusedVehicles.has(vehicle)?value.candidates.get(vehicle):null;
     if (!error && candidates?.length && !value.eventReads.has(vehicle)) {
       const entry={reusable:false};
       entry.pending=readEvents(candidates,date,vehicleEventLimit).then(result=>{

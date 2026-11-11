@@ -43,31 +43,6 @@
     return {shown, completed, pending, unknown:rows.length - completed - pending};
   }
   const kinds = new Set(['DIRECT_HANDOFF','DELIVERY_COMPLETED']);
-  function deliveryEvidence(value,{date,center,vehicle,generation}) {
-    if(value?.contract!=='opsmap-dated-delivery-v1'||value.date!==date||value.center!==center||value.vehicle!==vehicle||
-      value.sourceComplete!==true||!['LIVE_VERIFIED','STALE_VERIFIED','PUBLISHED_VERIFIED'].includes(value.state)||
-      value.generation&&generation&&value.generation!==generation||!Array.isArray(value.rows)||!Array.isArray(value.chronology)||
-      !Array.isArray(value.chronologyTies)||value.count!==value.rows.length||value.rows.length>10000)return null;
-    const chronological=new Set(value.chronology), byCustomer=new Map(), seen=new Set();
-    for(const tie of value.chronologyTies){
-      if(!Array.isArray(tie?.deliveryIds)||tie.deliveryIds.some(id=>chronological.has(id)))return null;
-    }
-    for(const row of value.rows){
-      if(row.deliveryDate!==date||row.vehicle!==vehicle||!row.customerCode||!row.deliveryId||seen.has(row.deliveryId)||
-        !['OPEN','COMPLETED','CANCELLED'].includes(row.state))return null;
-      seen.add(row.deliveryId);
-      if(row.state==='CANCELLED')continue;
-      const group=byCustomer.get(row.customerCode)||{completed:0,open:0,events:[]};
-      group[row.state==='COMPLETED'?'completed':'open']++;
-      if(row.state==='COMPLETED'&&row.verification==='VERIFIED_INDIVIDUAL'&&row.bulkProcessed===false&&
-        chronological.has(row.deliveryId)&&kinds.has(row.completionType)&&Number.isFinite(Date.parse(row.individualCompletedAt))) {
-        group.events.push({kind:row.completionType,at:row.individualCompletedAt,individual:true,deliveryId:row.deliveryId});
-      }
-      byCustomer.set(row.customerCode,group);
-    }
-    if([...chronological].some(id=>!seen.has(id)))return null;
-    return {byCustomer,state:value.state,error:value.error||null};
-  }
   function actualPoints(rows) {
     const events = new Map();
     for (const row of rows) {
@@ -86,5 +61,100 @@
     }
     return [...events.values()].sort((a,b) => a.time - b.time || a.at.localeCompare(b.at) || visit(a.row.vehicle,a.row.customerCode).localeCompare(visit(b.row.vehicle,b.row.customerCode)));
   }
-  root.OpsmapDaily = Object.freeze({archive, calendar, day, dispatch, errorLabel, validate, projection, actualPoints, deliveryEvidence});
+
+  const centers = Object.freeze({osan:'1', osanColdStorage:'2', yeongnam:'3', honam:'4'});
+  const sourceStates = new Set(['LIVE_VERIFIED', 'STALE_VERIFIED', 'PUBLISHED_VERIFIED']);
+  const visitStates = new Set(['OPEN', 'COMPLETED', 'CANCELLED']);
+  const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  const iso = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+  const rosterError = () => Object.assign(Error('DATED_ASSIGNMENTS_INCOMPLETE'), {code:'DATED_ASSIGNMENTS_INCOMPLETE'});
+  function verifyRoster(payload, date, center, selectedVehicle=null) {
+    if (payload?.contract !== 'opsmap-dated-delivery-v1' || payload.date !== date || payload.center !== center ||
+      payload.sourceId !== centers[center] || payload.vehicle !== selectedVehicle ||
+      !sourceStates.has(payload.state) || payload.sourceComplete !== true ||
+      payload.currentReadComplete !== (payload.state === 'LIVE_VERIFIED') ||
+      typeof payload.scopeComplete !== 'boolean' || typeof payload.confirmedEmpty !== 'boolean' ||
+      !Array.isArray(payload.rows) || payload.rows.length > 10000 || payload.count !== payload.rows.length ||
+      !Number.isInteger(payload.activeCount) || !digest(payload.sha256) || !digest(payload.source?.sha256) ||
+      !Number.isInteger(payload.source.unassigned) || payload.source.unassigned < 0 ||
+      (!selectedVehicle && payload.source.uniqueDeliveries !== payload.count) ||
+      (payload.state === 'LIVE_VERIFIED' && !iso(payload.lastSuccessAt)) ||
+      (payload.confirmedEmpty && (!payload.scopeComplete || !payload.currentReadComplete || payload.count !== 0))) {
+      throw rosterError();
+    }
+    const ids = new Set();
+    let activeCount = 0;
+    for (const row of payload.rows) {
+      if (row?.deliveryDate !== date || !digest(row.deliveryId) || ids.has(row.deliveryId) ||
+        typeof row.customerCode !== 'string' || !row.customerCode.trim() || !visitStates.has(row.state) ||
+        (row.vehicle !== null && (typeof row.vehicle !== 'string' || !row.vehicle || vehicle(row.vehicle) !== row.vehicle)) ||
+        (selectedVehicle && row.vehicle !== selectedVehicle)) throw rosterError();
+      ids.add(row.deliveryId);
+      if (row.state !== 'CANCELLED') activeCount++;
+    }
+    if (activeCount !== payload.activeCount) throw rosterError();
+    return payload;
+  }
+  function rosterRows(scopes) {
+    const rows = new Map();
+    for (const scope of scopes) {
+      for (const row of scope.rows) {
+        if (row.state === 'CANCELLED') continue;
+        if (rows.has(row.deliveryId)) throw rosterError();
+        rows.set(row.deliveryId, {...row, dispatchCenterCode:scope.center,
+          status:row.state === 'COMPLETED' ? 'COMPLETED' : 'PENDING'});
+      }
+    }
+    return [...rows.values()];
+  }
+  function sameRosterScope(a, b) {
+    return a.date === b.date && a.center === b.center && a.generation === b.generation &&
+      a.lastSuccessAt === b.lastSuccessAt && a.source.sha256 === b.source.sha256;
+  }
+  function chronology(roster, response, selectedVehicle) {
+    verifyRoster(response, roster.date, roster.center, selectedVehicle);
+    if (!sameRosterScope(roster, response) || !Array.isArray(response.chronology) ||
+      !Array.isArray(response.chronologyTies) || response.eventRead?.failed > 0 || response.eventRead?.truncated) throw rosterError();
+    const expected = new Map(roster.rows.filter(row => row.vehicle === selectedVehicle).map(row => [row.deliveryId, row]));
+    if (expected.size !== response.count) throw rosterError();
+    const eligible = new Map(), status = new Map();
+    for (const row of response.rows) {
+      const prior = expected.get(row.deliveryId);
+      if (!prior || prior.customerCode !== row.customerCode || prior.state !== row.state) throw rosterError();
+      if (row.state !== 'COMPLETED') continue;
+      status.set(row.deliveryId, null);
+      if (row.verification === 'VERIFIED_INDIVIDUAL' && row.bulkProcessed === false &&
+        kinds.has(row.completionType) && iso(row.individualCompletedAt)) {
+        eligible.set(row.deliveryId, row.individualCompletedAt);
+        status.set(row.deliveryId, row.individualCompletedAt);
+      }
+    }
+    const tied = new Set();
+    for (const group of response.chronologyTies) {
+      if (!iso(group?.at) || !Array.isArray(group.deliveryIds) || group.deliveryIds.length < 2) throw rosterError();
+      for (const id of group.deliveryIds) {
+        if (tied.has(id) || eligible.get(id) !== group.at) throw rosterError();
+        tied.add(id);
+      }
+    }
+    let previous = '';
+    const points = new Map();
+    for (const id of response.chronology) {
+      const at = eligible.get(id);
+      if (!at || tied.has(id) || at <= previous) throw rosterError();
+      points.set(id, at);
+      previous = at;
+    }
+    if (points.size + tied.size !== eligible.size) throw rosterError();
+    return {points, status, tiedCount:tied.size};
+  }
+  function rosterPoints(rows, points) {
+    const byId = new Map(rows.map(row => [row.deliveryId, row]));
+    return [...points].flatMap(([id, at]) => {
+      const row = byId.get(id);
+      return row?.status === 'COMPLETED' && Number.isFinite(row.lat) && Math.abs(row.lat) <= 90 &&
+        Number.isFinite(row.lng) && Math.abs(row.lng) <= 180 && row.coordinateStatus !== 'CONFLICT' ? [{row, at}] : [];
+    });
+  }
+  root.OpsmapDaily = Object.freeze({archive, calendar, day, dispatch, errorLabel, validate, projection, actualPoints, centers, verifyRoster, rosterRows, sameRosterScope, chronology, rosterPoints});
 })(globalThis);

@@ -103,11 +103,12 @@ test('Delivery wire-format: per-vehicle record requests are shared and cannot ad
   assert.equal(a,b);
   assert.equal(a.sourceComplete,true);
   assert.deepEqual(a.rows.filter(x=>a.chronology.includes(x.deliveryId)).map(x=>[x.customerCode,x.completionType]),[['S1','DIRECT_HANDOFF']]);
-  const scope={date,center:'osan',vehicle:'105'};
-  assert.equal(daily.deliveryEvidence(a,scope).byCustomer.get('S1').events.length,1);
-  assert.equal(daily.deliveryEvidence(a,scope).byCustomer.get('S2').events.length,0);
-  assert.equal(daily.deliveryEvidence({...a,chronologyTies:[{deliveryIds:a.chronology}]},scope),null);
-  assert.equal(daily.deliveryEvidence(a,{...scope,vehicle:'122'}),null);
+  const completeRoster=await reader.readContract(date,'osan',null);
+  const chronology=daily.chronology(completeRoster,a,'105');
+  assert.equal(chronology.points.size,1);
+  assert.equal(chronology.status.get(a.rows.find(row=>row.customerCode==='S2').deliveryId),null);
+  assert.throws(()=>daily.chronology(completeRoster,{...a,chronologyTies:[{deliveryIds:a.chronology}]},'105'));
+  assert.throws(()=>daily.chronology(completeRoster,a,'122'));
   assert.deepEqual(calls.sort(),['/api/bali/task','/api/bali/task/1/status-record','/api/bali/task/2/status-record','/api/bali/task/3/status-record']);
 });
 

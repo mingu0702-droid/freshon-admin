@@ -19,6 +19,9 @@
   const dailySnapshots = new Map();
   let dailyRead = null, dailyError = null, actualRouteLayer = null, dailyView = null;
   const dailyEvidenceReads=new Map();
+  const dailyRosters=new Map();
+  let rosterAuthorized=true, rosterCoordinateRequest=null;
+  const usesDeliveryRoster=()=>location.hostname==='freshon-admin-stage-preview-template.onrender.com';
   let approvedMarkerOrder = new Map();
   const modeViews = { BASE_60D: { vehicles: [], scope: "all", centerFilter: DEFAULT_PERIOD_CENTER }, DATE_ROUTE: { vehicles: [], scope: "all", centerFilter: "" } };
   let periodBasis = "vehicle", periodVehicleScope = "all", periodListLimit = 0;
@@ -46,6 +49,9 @@
     for(const key of ['baseRequestId','routeRequestId','searchRequestId','addressRequestId','detailRequestId','todayRequestId'])++state[key];
     clearTimeout(initialTimer);clearTimeout(periodTimer);clearTimeout(baseVehicleTimer);clearInterval(generalSnapshotPoll);generalSnapshotPoll=null;clearTimeout(customerRegistryRetry);customerRegistryRetry=null;customerRegistry?.purge();
     clearTimeout(snapshotRecoveryTimer);snapshotRecoveryTimer=null;snapshotRetryAfter=0;snapshotFlight=null;
+    rosterAuthorized=false;
+    dailyRead?.controller.abort();
+    dailyRosters.clear(); rosterCoordinateRequest=null;
     dailySnapshots.clear(); dailyEvidenceReads.clear(); dailyRead = dailyError = dailyView = null;
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
@@ -53,9 +59,11 @@
     indexedRows=null;pointIndex=null;baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
     searchIndex=searchFlight=newAreaObservedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
     SOURCE={vehicles:[]};state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
-    clearSelection();clearMap();renderPeriodStoreList([]);resetRoadRoute();clearNewAreaBatch();renderManualDraft();
+    clearSelection();clearMap();updateOperationMetrics(null);renderPeriodStoreList([]);resetRoadRoute();clearNewAreaBatch();renderManualDraft();
     for(const selector of ['#results','#runList','#addressJudgeResults','#periodDriver','#vehicleList','#navSuggestions','#operationsPanel'])$(selector)?.replaceChildren();
     vehicleRegions = null; renderVehicleQuickFilter([]);
+    for(const selector of ['#routeSummary','#mobileRouteSummary','#mapStatusSub'])$(selector)?.replaceChildren();
+    delete $('#map').dataset.dailyStops;delete $('#map').dataset.dailyLocated;
     $('#freshnessState').textContent='직원 로그인 필요';$('#periodStoreListCount').textContent='';
   }
   const manualDraft = window.ManualWaypoints?.createDraft();
@@ -562,6 +570,7 @@
     }
   }
   async function selectLatestRoute() {
+    if(usesDeliveryRoster())return changeSelectedDate(maxDailyDate());
     generalMap=false;
     const kept = isDailyDataReady(); dailyError=null;
     ++initialRequestId; clearTimeout(initialTimer); clearTimeout(periodTimer); ++periodRequestId;
@@ -754,6 +763,233 @@
   function maxDailyDate() {
     return location.hostname==='freshon-admin-stage-preview-template.onrender.com' ? OpsmapDaily.dispatch(Date.now()) : localDate();
   }
+
+  function rosterCenters() {
+    if (state.centerFilter === 'osan') return ['osan','osanColdStorage'];
+    if (Object.hasOwn(OpsmapDaily.centers,state.centerFilter)) return [state.centerFilter];
+    return ['osan','honam','yeongnam','osanColdStorage'];
+  }
+
+  function rosterScopeStatus() {
+    const saved=dailyRosters.get(state.selectedDate), centers=rosterCenters();
+    const loaded=centers.map(center=>saved?.scopes.get(center)).filter(Boolean);
+    const failures=centers.map(center=>saved?.errors.get(center)).filter(Boolean);
+    const partial=loaded.length<centers.length;
+    const selected=selectedVehicles();
+    const contributing=selected.length?loaded.filter(scope=>scope.rows.some(row=>row.state!=='CANCELLED'&&selected.includes(row.vehicle))):loaded;
+    const observedScopes=contributing.length?contributing:loaded;
+    const retained=observedScopes.some(scope=>saved.errors.has(scope.center)||!scope.currentReadComplete);
+    const loading=dailyRead?.date===state.selectedDate&&centers.some(center=>dailyRead.pending.has(center));
+    const observed=observedScopes.map(scope=>scope.lastSuccessAt||scope.publishedAt).filter(Boolean).sort()[0];
+    const empty=!partial&&!retained&&!loading&&periodBasis==='vehicle'&&
+      (periodVehicleScope!=='selected'||selected.length>0)&&loaded.every(scope=>selected.length
+        ? scope.source.unassigned===0&&!scope.rows.some(row=>row.state!=='CANCELLED'&&selected.includes(row.vehicle))
+        : scope.activeCount===0);
+    return {loaded,failures,partial,retained,loading,observed,empty};
+  }
+
+  function renderRosterReadState() {
+    if (!rosterAuthorized) return;
+    const {loaded,failures,partial,retained,loading,observed}=rosterScopeStatus();
+    const message=loaded.length ? retained?'마지막 확인 배차 유지':loading?'배차 갱신 중':'배차 확인'
+      : loading?'배송지 조회 중':failures.length?OpsmapDaily.errorLabel(failures[0])+' · 착지 수 미확인':'배송지 조회 대기';
+    const status=$('#freshnessState');
+    status.setAttribute('aria-live','polite');
+    status.textContent=[message,loaded.length&&partial?'일부 센터 미확인':'',observed&&formatTime(observed,true)].filter(Boolean).join(' · ');
+    $('#syncOperation').disabled=loading;
+    if (!loaded.length) $('#mapStatusSub').textContent=status.textContent;
+  }
+
+  function rosterQuery(date,center,vehicle) {
+    const params=new URLSearchParams({date,center});
+    if (vehicle) params.set('vehicle',vehicle);
+    return '/api/map-phase2b/private/dated-delivery?'+params;
+  }
+
+  function isStaffAccessError(error) {
+    return [401,403].includes(error?.status)||error?.code==='STAFF_LOGIN_REQUIRED';
+  }
+
+  function installRoster(saved) {
+    if (!saved.scopes.size) return;
+    const scopes=[...saved.scopes.values()];
+    const rows=OpsmapDaily.rosterRows(scopes).map(row=>{
+      const point=coordinateByCode.get(row.customerCode)||generalRegistryRows.get(row.customerCode);
+      if (!point||point.customerRegistryStatus==='DELETED') return row;
+      const conflict=point.coordinateStatus==='CONFLICT';
+      return {...row,customerName:point.customerName||point.name,address:point.address||point.customerAddress,
+        lat:conflict?null:point.lat,lng:conflict?null:point.lng,coordinateStatus:point.coordinateStatus,
+        coordinateSource:point.coordinateSource,coordinateAccuracy:point.coordinateAccuracy,
+        coordinateEvidence:point.coordinateEvidence,originalAddressHash:point.originalAddressHash,
+        currentAddressHash:point.currentAddressHash};
+    });
+    const generatedAt=scopes.map(scope=>scope.lastSuccessAt||scope.publishedAt).filter(Boolean).sort().at(-1);
+    installDaily({data:rows,meta:{date:saved.date,roster:true,complete:true,generatedAt}});
+  }
+
+  function ensureRosterCoordinates() {
+    if (coordinateByCode.size||rosterCoordinateRequest) return;
+    const owner=rosterCoordinateRequest={};
+    void hybridUiReady.then(adapter=>adapter?.readGeneral({masterOnly:true})).then(payload=>payload||
+      fetchJson('/api/map-phase2b/preview/snapshot',{channel:'daily-coordinates',timeout:15000})).then(payload=>{
+      if (owner!==rosterCoordinateRequest||!rosterAuthorized||!Array.isArray(payload.data)||payload.meta?.complete===false) return;
+      for (const row of payload.data) if (row.customerCode) coordinateByCode.set(String(row.customerCode),row);
+      const saved=dailyRosters.get(state.selectedDate);
+      if (state.mode==='DATE_ROUTE'&&saved) installRoster(saved);
+    }).catch(error=>{
+      if (owner===rosterCoordinateRequest&&isStaffAccessError(error)) purgeStaffData();
+    }).finally(()=>{if(owner===rosterCoordinateRequest)rosterCoordinateRequest=null;});
+  }
+
+  async function changeRosterDate(date,conditions) {
+    if (!rosterAuthorized||!OpsmapDaily.day(date)||date>maxDailyDate()) return;
+    if (state.mode!=='DATE_ROUTE'||date!==state.selectedDate) {
+      dailyRead?.controller.abort();
+      dailyRead=null;
+      ++initialRequestId; clearTimeout(initialTimer); clearTimeout(periodTimer); ++periodRequestId;
+      hybridUi?.cancel(); resetRoadRoute(); cancelManualRoadRoute();
+      generalMap=false; switchMode('DATE_ROUTE');
+      state.selectedDate=state.routeDate=date;
+      resetDailyView(); requestMapFit(); clearNewAreaBatch();
+      $('#addressJudgeResults').replaceChildren(); $('#results').replaceChildren();
+      window.dispatchEvent(new CustomEvent('map-navigation-context-changed',{detail:{mode:'DATE_ROUTE',date}}));
+    }
+    if (conditions) {
+      setSelectedVehicles(conditions.vehicles);
+      state.centerFilter=conditions.centerFilter;
+      periodVehicleScope=conditions.scope;
+      refreshVehicleUi(false);
+    }
+    syncModeUi(); updateDateRange(date); $('#runListTool').open=true;
+    for (const selector of ['#selectedDate','#date','#mobileDate']) {
+      $(selector).value=date;
+      $(selector).max=maxDailyDate();
+    }
+    const saved=dailyRosters.get(date)||{date,scopes:new Map(),errors:new Map(),chronologies:new Map()};
+    dailyRosters.delete(date); dailyRosters.set(date,saved);
+    while (dailyRosters.size>4) dailyRosters.delete(dailyRosters.keys().next().value);
+    if (!isDailyDataReady()) installRoster(saved);
+    ensureRosterCoordinates();
+    if (dailyRead?.date===date) {
+      for (const center of rosterCenters()) if (!dailyRead.visited.has(center)) dailyRead.pending.add(center);
+      return dailyRead.promise;
+    }
+    const read={date,controller:new AbortController(),pending:new Set(rosterCenters()),visited:new Set()};
+    dailyRead=read;
+    const active=()=>rosterAuthorized&&read===dailyRead&&!read.controller.signal.aborted&&state.mode==='DATE_ROUTE'&&state.selectedDate===date;
+    renderRosterReadState();
+    read.promise=(async()=>{
+      try {
+        for (const center of read.pending) {
+          if (!active()) return;
+          read.visited.add(center);
+          try {
+            const response=await fetchJson(rosterQuery(date,center),{channel:'dated-roster:'+center,signal:read.controller.signal,
+              timeout:16000,allowSourceError:true});
+            if (!active()) return;
+            const scope=OpsmapDaily.verifyRoster(response,date,center);
+            const prior=saved.scopes.get(center);
+            const before=prior?.lastSuccessAt||prior?.publishedAt||'';
+            const after=scope.lastSuccessAt||scope.publishedAt||'';
+            if (prior&&(after<before||!scope.currentReadComplete&&prior.currentReadComplete&&after===before)) {
+              saved.errors.set(center,Error(scope.error||'DELIVERY_SOURCE_REGRESSION'));
+              continue;
+            }
+            const updated=new Map(saved.scopes);
+            updated.set(center,scope);
+            OpsmapDaily.rosterRows(updated.values());
+            if(prior&&!OpsmapDaily.sameRosterScope(prior,scope)){
+              for(const key of saved.chronologies.keys())if(key.startsWith(center+'|'))saved.chronologies.delete(key);
+            }
+            saved.scopes=updated;
+            saved.errors.delete(center);
+            if (!prior||prior.sha256!==scope.sha256||!OpsmapDaily.sameRosterScope(prior,scope)) installRoster(saved);
+          } catch (error) {
+            if (!active()) return;
+            if (isStaffAccessError(error)) {purgeStaffData();return;}
+            saved.errors.set(center,error);
+          } finally {
+            read.pending.delete(center);
+            if (active()) renderRosterReadState();
+          }
+        }
+        if(active()&&!saved.scopes.size&&date<localDate()&&!isDailyDataReady()){
+          const archive=await fetchJson('/api/map-phase2b/preview/assignments?date='+date,
+            {channel:'dated-legacy-archive',signal:read.controller.signal,timeout:12000})
+            .then(value=>archivedDatedAssignments(value?.meta)?OpsmapDaily.validate(value,date):null).catch(()=>null);
+          if(active()&&archive)installDaily(archive);
+        }
+      } finally {
+        if (active()) {
+          dailyRead=null;
+          if (isDailyDataReady()) void loadBaseMap();
+          else renderRosterReadState();
+        }
+      }
+    })();
+    return read.promise;
+  }
+
+  function currentRosterRoute() {
+    const vehicles=selectedVehicles();
+    if (vehicles.length!==1) return null;
+    const saved=dailyRosters.get(state.selectedDate);
+    if (!saved) return null;
+    const vehicle=vehicles[0];
+    const centers=new Set(operationStops.filter(row=>row.vehicle===vehicle).map(row=>row.dispatchCenterCode));
+    if (centers.size!==1) return null;
+    const [center]=centers;
+    const scope=saved.scopes.get(center);
+    return scope?{saved,scope,vehicle,key:center+'|'+vehicle}:null;
+  }
+
+  function visibleActualPoints() {
+    const rows=dailyView?.shown||[];
+    if (!dailyMeta?.roster) return OpsmapDaily.actualPoints(rows);
+    const route=currentRosterRoute();
+    const evidence=route?.saved.chronologies.get(route.key);
+    return evidence?OpsmapDaily.rosterPoints(rows,evidence.points):[];
+  }
+
+  function applyRosterTimes() {
+    if (!dailyMeta?.roster) return;
+    const route=currentRosterRoute();
+    const evidence=route?.saved.chronologies.get(route.key);
+    for (const row of operationStops) row.actualCompletedAt=evidence?.status.get(row.deliveryId)||null;
+  }
+
+  async function loadRosterChronology() {
+    const route=currentRosterRoute();
+    if (!rosterAuthorized||!route||!operationStops.some(row=>row.status==='COMPLETED')) return;
+    const {saved,scope,vehicle,key}=route;
+    const requestKey=JSON.stringify([scope.date,scope.center,vehicle,scope.lastSuccessAt,scope.generation,scope.source.sha256]);
+    const prior=dailyEvidenceReads.get(requestKey);
+    if (prior?.pending) return prior.pending;
+    if (prior?.nextAttempt>Date.now()) return;
+    const entry={};
+    entry.pending=fetchJson(rosterQuery(scope.date,scope.center,vehicle),{channel:'dated-chronology:'+scope.center+'|'+vehicle,
+      timeout:12000,allowSourceError:true}).then(response=>{
+      const current=currentRosterRoute();
+      if (!rosterAuthorized||current?.saved!==saved||current.key!==key||!OpsmapDaily.sameRosterScope(current.scope,scope)) return;
+      const evidence=OpsmapDaily.chronology(scope,response,vehicle);
+      const retained=saved.chronologies.get(key);
+      if (evidence.points.size||evidence.tiedCount||!retained) saved.chronologies.set(key,evidence);
+      applyRosterTimes();
+      renderRunList();
+      drawRoute();
+
+    }).catch(error=>{
+      if (rosterAuthorized&&isStaffAccessError(error)) purgeStaffData();
+    }).finally(()=>{
+      entry.pending=null;
+      entry.nextAttempt=Date.now()+30000;
+    });
+    dailyEvidenceReads.set(requestKey,entry);
+    while (dailyEvidenceReads.size>32) dailyEvidenceReads.delete(dailyEvidenceReads.keys().next().value);
+    return entry.pending;
+  }
+
+
   function resetDailyView() {
     delete $('#map').dataset.dailyEvidence;
     dateReady=false; datedSourceDate=''; dailyMeta=null; dailyView=null;
@@ -761,6 +997,7 @@
     clearSelection(); clearMap(); renderRunList(); updateOperationMetrics(null);
   }
   function renderDailyReadState() {
+    if(usesDeliveryRoster()&&!dailyMeta?.reviewOnly)return renderRosterReadState();
     const ready=isDailyDataReady(), loading=dailyRead?.date===state.selectedDate;
     const observed=dailyMeta?.sourceObservedAt || dailyMeta?.generatedAt || dailyMeta?.observedAt || dailyMeta?.checkedAt;
     const freshness=$("#freshnessState");
@@ -781,7 +1018,8 @@
       const selected=state.selected;
       replaceStoreSnapshot(payload.data,payload.meta);
       if(selected?.customerCode){
-        const next=storeByVehicleAndCode.get(datedVisitKey(selected.vehicle,selected.customerCode));
+        const next=selected.deliveryId ? allStores.find(row=>row.deliveryId===selected.deliveryId)
+          : storeByVehicleAndCode.get(datedVisitKey(selected.vehicle,selected.customerCode));
         if(next)state.selected={...selected,...next};
         else if(!selected.outsideReason)clearSelection({preserveSearch:true});
       }
@@ -794,6 +1032,7 @@
     lastRefreshedAt=payload.meta.sourceObservedAt||payload.meta.generatedAt||payload.meta.observedAt||payload.meta.checkedAt||'';
   }
   async function changeSelectedDate(date,queryConditions=null,{provided=null}={}) {
+    if(usesDeliveryRoster())return changeRosterDate(date,queryConditions);
     if(!OpsmapDaily.day(date)||date>maxDailyDate())return;
     const contextChanged=state.mode!=='DATE_ROUTE'||date!==state.selectedDate;
     generalMap=false;
@@ -878,6 +1117,7 @@
   function normalizeStore(customer, vehicle, vehicleIndex) {
     return {
       customerCode: String(customer.id || customer.code || customer.customerCode || "").trim(),
+      deliveryId: customer.deliveryId || "",
       customerName: customer.name || customer.customerName || "",
       address: customer.address || "",
       vehicle: String(vehicle.vehicle || "").replace(/호(?:차)?$/, ""),
@@ -942,7 +1182,7 @@
   }
 
   function vehicleListGroup(value) {
-    return ({osan:'osan',yeongnam:'yeongnam',honam:'honam','011':'osan','012':'yeongnam','013':'honam','오산':'osan','영남':'yeongnam','호남':'honam','오산센터':'osan','영남센터':'yeongnam','호남센터':'honam'})[String(value || '').trim()] || 'unknown';
+    return ({osan:'osan',osanColdStorage:'osan',yeongnam:'yeongnam',honam:'honam','011':'osan','012':'yeongnam','013':'honam','오산':'osan','영남':'yeongnam','호남':'honam','오산센터':'osan','영남센터':'yeongnam','호남센터':'honam'})[String(value || '').trim()] || 'unknown';
   }
 
   let vehicleRegions;
@@ -1334,12 +1574,13 @@
     const compact = kind === "store" && !index;
     button.className = `marker${completed ? " done" : pending ? " pending" : ""}${kind === "virtual" ? " virtual" : ""}${kind === "nearbyVehicle" ? " nearbyVehicle" : ""}${compact ? " storeDot" : ""}`;
     button.dataset.customerCode = row.customerCode || "";
+    if(row.deliveryId)button.dataset.deliveryId=row.deliveryId;
     button.dataset.coordinateSource=row.coordinateSource||'';
     button.dataset.vehicle = row.vehicle || "";
     button.title = `${row.vehicle ? vehicleLabel(row.vehicle) + " · " : ""}${row.customerName || row.address || ""}`;
     button.dataset.masterCheckedAt=row.baseVehicleCheckedAt||'';button.dataset.masterStale=String(row.baseVehicleStale===true);
     button.setAttribute("aria-label", state.mode === "BASE_60D" ? button.title : `${button.title} · ${completed ? "완료" : pending ? "미완료" : "상태 미확인"}`);
-    if (row.customerCode && row.customerCode === state.selected?.customerCode) button.classList.add("selected");
+    if (row.customerCode && runVisitId(row) === runVisitId(state.selected)) button.classList.add("selected");
     const pinColor=row.clusterCount?(window.MapViewPolicy.regionColors[row.clusterColorKey]||vehicleColor(row.vehicle)):vehicleColor(row.vehicle);
     button.style.setProperty('--pin-color',pinColor);
     const label = kind === "virtual" ? "임시" : index || (["representative", "nearbyVehicle"].includes(kind) ? row.vehicle : "");
@@ -1435,7 +1676,7 @@
       if(osanCenter)bounds.extend(new kakao.maps.LatLng(osanCenter.lat,osanCenter.lng));
       pointIndex.valid.forEach(row => bounds.extend(new kakao.maps.LatLng(row.lat,row.lng)));
     }
-    const entries = pins.map((row,index) => ({row,index,key:row.clusterKey||[row.virtual?'virtual':'store',row.vehicle,row.customerCode || '',row.lat,row.lng].join('|'),
+    const entries = pins.map((row,index) => ({row,index,key:row.clusterKey||[row.virtual?'virtual':'store',runVisitId(row),row.lat,row.lng].join('|'),
       fingerprint:JSON.stringify([row.lat,row.lng,row.clusterBounds,row.clusterMemberKey,row.vehicle,row.customerName,row.address,row.status,row.order,row.clusterCount,row.lastDeliveryDate,row.visitCount,row.driverKey,row.clusterLabel,row.clusterColorKey,state.selected?.customerCode===row.customerCode,navCodes.includes(row.customerCode),Boolean(options.numbered),Boolean(row.virtual),Boolean(row.representative),Boolean(row.nearbyVehicle),state.mode,state.rangeStart,state.rangeEnd])}));
     const reconciled = MapPeriodUi.reconcile(markerEntries, entries, ({row,index}) => {
       const position = new kakao.maps.LatLng(Number(row.lat), Number(row.lng));
@@ -1487,8 +1728,8 @@
   }
   function drawRoute() {
     const vehicles=selectedVehicles();
-    const points=state.map&&isDailyDataReady()&&vehicles.length===1 ? OpsmapDaily.actualPoints(dailyView?.shown||[]) : [];
-    const key=JSON.stringify([state.selectedDate,...points.map(({row,at})=>[row.vehicle,row.customerCode,row.customerName,row.lat,row.lng,at])]);
+    const points=state.map&&isDailyDataReady()&&vehicles.length===1 ? visibleActualPoints() : [];
+    const key=JSON.stringify([state.selectedDate,...points.map(({row,at})=>[runVisitId(row),row.customerName,row.lat,row.lng,at])]);
     if(actualRouteLayer?.key===key)return;
     clearActualRoute();
     if(points.length<2)return;
@@ -1587,7 +1828,7 @@
       const active = button.dataset.searchCode === row.customerCode;
       button.classList.toggle("selected", active); button.setAttribute("aria-pressed", String(active));
     });
-    $$(".marker").forEach((pin) => pin.classList.toggle("selected", Boolean(row.customerCode) && pin.dataset.customerCode === row.customerCode && pin.dataset.vehicle === row.vehicle));
+    $$(".marker").forEach((pin) => pin.classList.toggle("selected", Boolean(row.customerCode) && (row.deliveryId ? pin.dataset.deliveryId === row.deliveryId : pin.dataset.customerCode === row.customerCode && pin.dataset.vehicle === row.vehicle)));
     if (!trace) renderRunList();
     if (state.mode === "BASE_60D") {
       if (!trace) renderPeriodStoreList();
@@ -1760,15 +2001,21 @@
     const list = isDailyDataReady() ? operationStops : [];
     const {shown} = window.OpsmapDaily?.projection(list,runFilter) || {shown:list};
     const archiveLabel = dailyMeta?.recordKind === 'CUSTOMER_DAILY_ROUTES' ? '저장 배차' : '보존 완료 기록';
+    const route=dailyMeta?.roster&&currentRosterRoute();
+    const ties=route&&route.saved.chronologies.get(route.key)?.tiedCount;
     const archiveScope=dailyMeta?.vehicles?.length ? ' · 확인 범위 '+dailyMeta.vehicles.length+'대' : '';
     $("#runListCount").textContent = archived ? `${archiveLabel} ${shown.length}곳${archiveScope}` : list.length ? `${shown.length}/${list.length}착` : verifiedEmptyDailyScope() ? '0착' : '배송지 수 미확인';
+    if(ties)$("#runListCount").textContent+=" · 동일 시각 "+ties+"착 순서 미확정";
+    const emptyText=list.length ? '선택한 상태의 배송지가 없습니다.' :
+      dailyMeta?.roster&&!verifiedEmptyDailyScope()?'선택 범위의 착지 수를 확인하지 못했습니다.':
+      !isDailyDataReady()?'날짜를 선택해 배송지를 조회해 주세요.':'선택한 조건의 배송지가 없습니다.';
     $("#runList").innerHTML = shown.length ? shown.map(row => {
-      const selected = state.selected?.customerCode === row.customerCode && state.selected?.vehicle === row.vehicle;
-      return `<button class="runStop${selected ? " selected" : ""}" data-run-code="${esc(row.customerCode)}" data-run-vehicle="${esc(row.vehicle)}" aria-pressed="${selected}"><span class="runOrder">${esc(row.order || "-")}</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName || "점포명 미확인")}</div><span class="runMeta"><span class="statusChip ${row.status === "COMPLETED" ? "done" : ""}">${row.status === "COMPLETED" ? "완료" : row.status === "PENDING" ? "미완료" : "상태 미확인"}</span><span>${esc(formatTime(row.actualCompletedAt,true) || "-")}</span><span class="runDistance">${row.lat == null || row.lng == null ? "좌표 미확인" : ""}</span></span></span></button>`;
-    }).join("") : !isDailyDataReady()?"날짜를 선택해 배송지를 조회해 주세요.":"선택한 조건의 배송지가 없습니다.";
-    const byVisit=new Map(shown.map(row=>[datedVisitKey(row.vehicle,row.customerCode),row]));
+      const selected = runVisitId(state.selected) === runVisitId(row);
+      return `<button class="runStop${selected ? " selected" : ""}" data-run-code="${esc(row.customerCode)}" data-run-vehicle="${esc(row.vehicle)}" data-run-visit="${esc(runVisitId(row))}" aria-pressed="${selected}"><span class="runOrder">${esc(row.order || "-")}</span><span class="runInfo"><span class="runCode">${esc(row.customerCode)}</span><div class="runName">${esc(row.customerName || "점포명 미확인")}</div><span class="runMeta"><span class="statusChip ${row.status === "COMPLETED" ? "done" : ""}">${row.status === "COMPLETED" ? "완료" : row.status === "PENDING" ? "미완료" : "상태 미확인"}</span><span>${esc(formatTime(row.actualCompletedAt,true) || "-")}</span><span class="runDistance">${row.lat == null || row.lng == null ? "좌표 미확인" : ""}</span></span></span></button>`;
+    }).join("") : emptyText;
+    const byVisit=new Map(shown.map(row=>[runVisitId(row),row]));
     $$('[data-run-code]').forEach(button=>button.onclick=()=>{
-      const row=byVisit.get(datedVisitKey(button.dataset.runVehicle,button.dataset.runCode));
+      const row=byVisit.get(button.dataset.runVisit);
       if(row){state.fitRequested=false;selectStore(row,null,true);}
     });
 
@@ -2490,6 +2737,10 @@
     renderVehicleQuickFilter(selected);
     $("#operationVehicle").value = selected.length === 1 ? selected[0] : "";
     if (run) {
+      if(usesDeliveryRoster()&&state.mode==='DATE_ROUTE'&&state.selectedDate) {
+        const saved=dailyRosters.get(state.selectedDate);
+        if(rosterCenters().some(center=>!saved?.scopes.has(center)&&!saved?.errors.has(center)))void changeRosterDate(state.selectedDate);
+      }
       if (!preserveSearch || (selected.length && !state.userMovedMap && !state.selected && !state.virtual)) requestMapFit();
       else state.fitRequested = false;
       void loadBaseMap();
@@ -2511,6 +2762,7 @@
     return records.some(item=>item.deliveryDate===date&&String(item.vehicle||'')===vehicle&&keys.includes(item.driverKey)&&item.driverIdentity==='VERIFIED');
   }
   function verifiedEmptyDailyScope(){
+    if(dailyMeta?.roster)return rosterScopeStatus().empty;
     if(!isDailyDataReady()||dailyMeta?.complete!==true||dailyMeta.retained||dailyMeta.unassignedRows>0
       ||dailyError||periodBasis==='driver'||periodVehicleScope==='selected'&&!selectedVehicles().length)return false;
     const centers=dailyMeta.centerScope;
@@ -2536,8 +2788,14 @@
     let stores;
     if(daily){
       const key=queryFilterIdentity();
-      if(dailyView?.scopeKey!==key){dailyView.scopeKey=key;dailyView.scoped=dedupeRouteStops(filteredDateStores(allStores));dailyView.filter=null;}
+      if(dailyView?.scopeKey!==key){
+        dailyView.scopeKey=key;
+        const scoped=filteredDateStores(allStores);
+        dailyView.scoped=dailyMeta?.roster ? scoped : dedupeRouteStops(scoped);
+        dailyView.filter=null;
+      }
       operationStops=dailyView.scoped;
+      applyRosterTimes();
       const projection=OpsmapDaily.projection(operationStops,runFilter);
       if(dailyView.filter!==runFilter){dailyView.filter=runFilter;dailyView.shown=projection.shown;}
       stores=dailyView.shown;
@@ -2557,13 +2815,15 @@
     if (period) {
       setPeriodViewState(generalAllStores && snapshotReadState === 'error' ? 'error' : stores.length ? "ready" : "empty");
       const subject = periodBasis === "driver" ? ($("#periodDriver").selectedOptions[0]?.textContent || "전체 기사") : periodVehicleScope === "all" ? "전체 호차" : selected.length === 1 ? selected[0] + "호" : selected.length ? selected.length + "개 호차" : "호차 선택 없음";
-      const range = state.rangeStart === daysBefore(state.rangeEnd, 89) ? "최근 90일" : state.rangeStart.slice(5) + " ~ " + state.rangeEnd.slice(5);
+      const range = !OpsmapDaily.day(state.rangeEnd)||!OpsmapDaily.day(state.rangeStart)?'조회 기간 미확인':
+        state.rangeStart === daysBefore(state.rangeEnd, 89) ? "최근 90일" : state.rangeStart.slice(5) + " ~ " + state.rangeEnd.slice(5);
       $("#periodIdentity").textContent = `${subject} · ${generalAllStores && periodBasis === 'vehicle' ? '저장된 전체 매장' : range} · ${stores.length}개 매장`;
       if (generalAllStores && snapshotReadState === 'error') $('#periodIdentity').textContent = '전체 매장 원천 조회 실패 · 전체 매장 수 미확인';
     }
     $("#mapStatusTitle").textContent = period ? "매장·권역 지도" : "일자별 운행";
     $("#mapStatusSub").textContent = period ? `${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 배송지' : (baseVehicleMeta?.stale?'이전 기준호차':'기준호차')}`
-      : `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
+      : dailyMeta?.roster&&!operationStops.length&&!verifiedEmptyDailyScope()?`${state.selectedDate} · 선택 범위 착지 수 미확인`:
+        `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
     if(period) $("#freshnessState").textContent=`지도 반영일 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}`;
     else renderDailyReadState();
     if(period&&periodBasis==='vehicle'&&baseVehicleStatus!=='READY')$('#mapStatusSub').textContent=baseVehicleStatus==='ERROR'?'기준호차를 불러오지 못했습니다.':baseVehicleStatus==='NOT_READY'?'기준호차 자료를 확인해 주세요.':'기준호차를 불러오는 중입니다.';
@@ -2615,7 +2875,7 @@
     else await loadBaseMap();
     await loadDailyCompletionEvidence();
     if(state.mode!=='DATE_ROUTE'||state.selectedDate!==date||vehicle&&primarySelectedVehicle()!==vehicle)return;
-    const points=OpsmapDaily.actualPoints(dailyView?.shown||[]);
+    const points=visibleActualPoints();
     setRouteLoading(source,points.length>=2?'실제 완료 시각 순 직선 동선 · '+points.length+'곳':'개별 완료 시각과 위치가 확인된 지점이 2개 미만입니다.');
     if(source==='mobile')showMobileMap();
   }
@@ -2633,6 +2893,8 @@
     const completed = status === "COMPLETED" || status === "DELIVERED" || stop.completed === true;
     return { ...row, status: completed ? "COMPLETED" : ['PENDING','INCOMPLETE'].includes(status)||stop.completed===false ? "PENDING" : "", actualCompletedAt: completed ? (stop.actualCompletedAt || stop.completedAt || null) : null, isEstimated: stop.isEstimated===true };
   }
+
+  function runVisitId(row){return row?.deliveryId || datedVisitKey(row?.vehicle,row?.customerCode);}
 
   function datedVisitKey(vehicle, code) {
     return normalizeVehicle(vehicle) + "|" + String(code || "");
@@ -2682,9 +2944,8 @@
     state.routeRows = [];
     document.body.classList.remove("routeSheetOpen");
     clearSelection();
-    refreshVehicleUi(false);
-    requestMapFit();
-    loadBaseMap();
+    if(usesDeliveryRoster()&&state.mode==='DATE_ROUTE')refreshVehicleUi(true);
+    else {refreshVehicleUi(false);requestMapFit();void loadBaseMap();}
   }
 
   function selectCenter(group) {
@@ -3421,7 +3682,7 @@
       apiDiagnostics.set(new URL(url, location.href).pathname.split("/").pop(), { ms: Math.round(performance.now() - started), status: response.status, cache: response.headers.get("X-Phase2B-Cache") || "미제공",restoreMs:Number(response.headers.get('X-Opsmap-Restore-Ms'))||null });
       const json = await response.json().catch(error=>{if(response.ok)throw error;return {};});
       if (requestControllers.get(channel)?.token !== token) { const stale = new Error("STALE_RESPONSE"); stale.silent = true; throw stale; }
-      if (!response.ok || json.error) {
+      if (!response.ok || json.error && !options.allowSourceError) {
         const retry=response.headers.get('Retry-After');
         const retryAfterMs=retry?Math.max(0,/^\d+$/.test(retry)?Number(retry)*1000:Date.parse(retry)-Date.now()):undefined;
         throw Object.assign(new Error(json.error || `HTTP_${response.status}`), {status:response.status,sourceHttp:json.sourceHttp,
@@ -3466,11 +3727,9 @@
   }
 
   async function loadDailyCompletionEvidence(){
+    if(dailyMeta?.roster)return loadRosterChronology();
     const vehicles=selectedVehicles(),vehicle=vehicles[0],meta=dailyMeta,date=state.selectedDate;
-    if(stageAddressBatchEnabled()){
-      if(vehicles.length===1&&isDailyDataReady()&&operationStops.length)void loadStageDailyEvidence(date,vehicle,meta);
-      return;
-    }
+    if(stageAddressBatchEnabled())return;
     if(vehicles.length!==1||meta?.completionEvidence!=='DELIVERY_STATUS_RECORD_V1'||meta.retained||
       !meta.generatedAt||!operationStops.some(row=>row.status==='COMPLETED'))return;
     const key=[date,vehicle,meta.generatedAt].join('|'),view=dailyView;
@@ -3503,50 +3762,6 @@
       row.actualCompletedAt=row.actualDeliveryEvents.map(event=>event.at).sort()[0]||null;
     }
     read.applied=view;renderRunList();drawRoute();
-  }
-
-  async function loadStageDailyEvidence(date,vehicle,meta) {
-    const center=state.centerFilter||'osan';
-    if(!['osan','yeongnam','honam'].includes(center))return;
-    const generation=meta?.sourceGeneration||snapshotMeta?.sourceGeneration, view=dailyView;
-    const key=['stage',date,center,vehicle,generation,meta?.sourceRevision||meta?.generatedAt].join('|');
-    const current=()=>view===dailyView&&isDailyDataReady()&&state.selectedDate===date&&selectedVehicles().join()===vehicle&&
-      (state.centerFilter||'osan')===center&&(dailyMeta?.sourceGeneration||snapshotMeta?.sourceGeneration)===generation;
-    let read=dailyEvidenceReads.get(key);
-    if(read?.applied===view||read?.retryAt>Date.now())return;
-    if(!read?.promise){
-      read={};
-      const query=new URLSearchParams({date,center,vehicle});
-      read.promise=fetchJson('/api/map-phase2b/private/dated-delivery?'+query,{channel:'stage-daily-evidence',timeout:15000})
-        .then(value=>OpsmapDaily.deliveryEvidence(value,{date,center,vehicle,generation}))
-        .catch(error=>{read.error=error;return null;});
-      dailyEvidenceReads.set(key,read);
-      while(dailyEvidenceReads.size>16)dailyEvidenceReads.delete(dailyEvidenceReads.keys().next().value);
-    }
-    const evidence=await read.promise;
-    if(!evidence){
-      read.promise=null;
-      if(isSilentRequestError(read.error)||!current())return;
-      read.retryAt=Date.now()+15000;
-      $('#map').dataset.dailyEvidence='unavailable';
-      $('#mapStatusSub').textContent=`${date} · 배차 표시 · 완료 상태 ${OpsmapDaily.errorLabel(read.error)}`;
-      return;
-    }
-    if(!current()||read.applied===view)return;
-    for(const row of allStores){
-      if(row.vehicle!==vehicle)continue;
-      const match=evidence.byCustomer.get(row.customerCode);
-      if(!match)continue;
-      row.status=match.open?'PENDING':'COMPLETED';
-      row.actualDeliveryEvents=match.events;
-      row.actualDeliveryEvent=null;
-      row.actualCompletedAt=match.events.map(event=>event.at).sort()[0]||null;
-    }
-    read.applied=view;
-    await loadBaseMap();
-    if(!current())return;
-    $('#map').dataset.dailyEvidence=evidence.state;
-    if(evidence.state!=='LIVE_VERIFIED')$('#mapStatusSub').textContent=`${date} · 배차 표시 · 보존 완료 상태`;
   }
 
   async function loadOperationStatus() {
@@ -3820,7 +4035,7 @@
     fixedTerritoryStores:()=>window.MapUiLocalBridge.navigationStores('BASE_60D').map(row=>({...row,...(baseVehicles.get(String(row.customerCode))||{baseVehicle:'',baseVehicleState:'UNKNOWN'})})),
     navigationStores:(mode=state.mode)=>{if(mode==='DATE_ROUTE')return isDailyDataReady()?allStores.map(row=>liveAddressLocations?.apply({...row})||{...row}):[];const list=new Map(latestSnapshotRows.map(r=>[r.customerCode,r]));for(const row of allStores){const prior=list.get(row.customerCode);const conflict=prior&&row.address&&prior.address&&row.address.replace(/\s/g,'')!==prior.address.replace(/\s/g,'');list.set(row.customerCode,{...row,...(conflict?{coordinateStatus:'CONFLICT'}:{})});}return [...list.values()].map(row=>liveAddressLocations?.apply({...row})||row);},
     selectNavigationStore:code=>{const row=(state.mode==='DATE_ROUTE'&&!isDailyDataReady()?[]:allStores).find(r=>r.customerCode===code)||(state.mode==='BASE_60D'?latestSnapshotRows.find(r=>r.customerCode===code):null);if(row)selectStore(row,null,true);},
-    queryRecordedRoute:()=>{cancelManualRoadRoute();const v=primarySelectedVehicle();if(!v||!operationStops.length||operationStops.some(s=>!Number.isSafeInteger(s.order)||s.order<1)){roadResult={state:'error',error:'RECORDED_ORDER_REQUIRED'};window.dispatchEvent(new CustomEvent('map-recorded-route',{detail:roadResult}));syncRoadRoutePanel();return;}loadRoadRoute(v,{explicit:true});},
+    queryRecordedRoute:()=>{cancelManualRoadRoute();const v=primarySelectedVehicle();if(!v||!operationStops.length||!dailyMeta?.roster&&operationStops.some(s=>!Number.isSafeInteger(s.order)||s.order<1)){roadResult={state:'error',error:'RECORDED_ORDER_REQUIRED'};window.dispatchEvent(new CustomEvent('map-recorded-route',{detail:roadResult}));syncRoadRoutePanel();return;}loadRoadRoute(v,{explicit:true});},
     toggleConnections:()=>{state.connectionLines=false;state.lines.forEach(line=>line.setMap(null));state.lines=[];return {shown:false};},
     toggleRoadLines:value=>{roadLinesVisible=Boolean(value);if(!roadLinesVisible){manualRoadLayer?.clear();roadLayer?.clear();}else{if(state.map){manualRoadLayer ||= window.RoadRouteUi.createLayer({map:state.map});manualRoadLayer.render(manualRoadResult);roadLayer ||= window.RoadRouteUi.createLayer({map:state.map});roadLayer.render(roadResult);}}},
     highlightManualLeg:index=>{if(roadLinesVisible&&state.map&&manualRoadResult){manualRoadLayer ||= window.RoadRouteUi.createLayer({map:state.map});manualRoadLayer.render({...manualRoadResult,selectedLeg:Number.isInteger(index)?index:undefined});}},
@@ -3828,7 +4043,7 @@
     async submitDailyQuery(start,end){
       const valid=value=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
       if(state.mode!=='DATE_ROUTE'||!valid(start)||start!==end||end>maxDailyDate())return {ok:false,message:'일자별 운행은 선택한 배송일 한 날짜만 조회합니다.'};
-      const queryConditions={vehicles:selectedVehicles().slice(),centerFilter:'',scope:periodVehicleScope};
+      const queryConditions={vehicles:selectedVehicles().slice(),centerFilter:state.centerFilter,scope:periodVehicleScope};
       await changeSelectedDate(end,queryConditions);
       return {ok:dateReady,message:dateReady?'':$('#freshnessState').textContent};
     },
@@ -3868,6 +4083,7 @@
   window.MapStaffEntry?.registerPurge(()=>hybridUi?.logout());
   window.addEventListener('map-staff-signed-out',purgeStaffData);
   window.addEventListener('map-staff-ready',()=>{
+    rosterAuthorized=true;
     SOURCE=window.VEHICLE_AREA_DATA||{vehicles:[]};
     initVehicles();void initializeGeneral();void initMap();
   });

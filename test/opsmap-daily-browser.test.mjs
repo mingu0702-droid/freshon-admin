@@ -143,3 +143,164 @@ test('Chromium desktop and mobile: one assignment result for the list, pins, fil
     });
   }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
 });
+
+test('Stage B contract keeps every visit while vehicle evidence loads or fails', {timeout:45000}, async t=>{
+  const {createHash}=await import('node:crypto');
+  const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const date='2026-11-11', older='2026-11-10', delayed='2026-11-08';
+  const stage='https://freshon-admin-stage-preview-template.onrender.com';
+  const lengths={'101':22,'105':18,'122':17,'202':22};
+  const makeRows=day=>Object.entries(lengths).flatMap(([vehicle,size])=>
+    Array.from({length:day===older&&vehicle==='105'?6:size},(_,i)=>({
+      deliveryId:digest([day,vehicle,i]),deliveryDate:day,customerCode:'S'+vehicle+(vehicle==='105'&&i===17?0:i),
+      vehicle,state:vehicle==='105'&&i<8?'COMPLETED':'OPEN',sourceStatus:'OPEN',
+      completionType:'NO_INDIVIDUAL_RECORD',individualCompletedAt:null,bulkProcessed:null,
+      verification:'NO_INDIVIDUAL_RECORD',eventSource:'DELIVERY_TASK_LIST'
+    })));
+  const coordinates=makeRows(date).map((row,i)=>({customerCode:row.customerCode,customerName:'매장 '+i,
+    address:'Fixture address',lat:37+i/1000,lng:127}));
+  let mode='fail',revision=0,authLoss=false,published=false,rosterFailure=false,reads=0,chronologyReads=0,legacyReads=0;
+  const html=(await readFile(new URL('../public/opsmap/map-phase2b-preview.html',import.meta.url),'utf8'))
+    .replace(/<script[^>]+src="(?:https:\/\/cdn[^"]+|map-staff-entry\.js[^"]+)"[^>]*><\/script>/g,'')
+    .replace(/<script type="application\/x-map-staff" data-src="([^"]+)"[^>]*><\/script>/g,'<script src="$1"></script>')
+    .replace(/<script[^>]*type="module"[^>]*>[\s\S]*?<\/script>/g,'');
+  const host=express(),app=express.Router();host.use('/opsmap',app);
+  app.get('/',(_q,r)=>r.type('html').send(html));
+  app.get('/kakao-maps-adapter.js',(_q,r)=>r.type('js').send(mapStub));
+  app.get('/api/map-phase2b/preview/snapshot',(_q,r)=>r.json({data:coordinates,meta:{complete:true}}));
+  app.get('/api/map-phase2b/private/dated-delivery',async(q,r)=>{
+    const {date:day,center,vehicle=null}=q.query;
+    if(authLoss)return r.status(403).json({error:'STAFF_ACCESS_LOST'});
+    if(center!=='osan'||rosterFailure&&!vehicle)return r.status(503).json({rows:null,error:'DELIVERY_SOURCE_READ_UNAVAILABLE'});
+    const stamp=day+'T00:00:'+String(revision).padStart(2,'0')+'.000Z';
+    const roster=makeRows(day), data=vehicle?roster.filter(row=>row.vehicle===vehicle):roster;
+    const selected=roster.filter(row=>row.vehicle==='105');
+    const state=published?'PUBLISHED_VERIFIED':'LIVE_VERIFIED';
+    let ordered=[],ties=[];
+    if(vehicle){
+      chronologyReads++;
+      if(mode==='fail') {
+        await new Promise(resolve=>setTimeout(resolve,180));
+        return r.status(503).json({rows:null,error:'DELIVERY_SOURCE_READ_UNAVAILABLE'});
+      }
+      if(mode==='ok'&&vehicle==='105'&&selected.length>=8){
+        const ids=[1,5,7].map(i=>selected[i].deliveryId);
+        const tied=[2,3].map(i=>selected[i].deliveryId);
+        const times=new Map([[ids[0],day+'T01:00:00.000Z'],[ids[1],day+'T02:00:00.000Z'],[ids[2],day+'T03:00:00.000Z'],
+          [tied[0],day+'T01:30:00.000Z'],[tied[1],day+'T01:30:00.000Z']]);
+        ordered=ids;
+        ties=[{at:day+'T01:30:00.000Z',deliveryIds:tied}];
+        for(const row of data)if(times.has(row.deliveryId))Object.assign(row,{
+          verification:'VERIFIED_INDIVIDUAL',bulkProcessed:false,completionType:'DIRECT_HANDOFF',
+          individualCompletedAt:times.get(row.deliveryId),eventSource:'TASK_STATUS_RECORD'
+        });
+      }
+    }else{
+      reads++;
+      if(day===delayed)await new Promise(resolve=>setTimeout(resolve,330));
+    }
+    return r.json({contract:'opsmap-dated-delivery-v1',date:day,center,sourceId:'1',vehicle,
+      generation:null,state,error:published?'DELIVERY_SOURCE_READ_UNAVAILABLE':null,sourceComplete:true,
+      currentReadComplete:!published,scopeComplete:true,confirmedEmpty:false,lastSuccessAt:stamp,
+      source:{sha256:digest(makeRows(day)),uniqueDeliveries:roster.length,unassigned:0},sha256:digest(data),
+      count:data.length,activeCount:data.length,rows:data,chronology:ordered,chronologyTies:ties});
+  });
+  app.get(['/api/map-phase2b/preview/assignments','/api/map-phase2b/preview/daily-completions'],(_q,r)=>{legacyReads++;r.status(500).end();});
+  app.get('/api/*',(_q,r)=>r.status(404).json({error:'FIXTURE_NOT_CONFIGURED'}));
+  app.use(express.static(new URL('../public/opsmap/',import.meta.url).pathname.replace(/^\/(?=[A-Z]:)/i,'')));
+  const server=host.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+  const local='http://127.0.0.1:'+server.address().port;
+  let browser;
+  try {
+    browser=await chromium.launch({channel:'chrome',headless:true});
+    for(const width of [1440,390])await t.test(width+'px',async()=>{
+      mode='fail';revision=0;authLoss=false;published=false;rosterFailure=false;
+      const page=await browser.newPage({viewport:{width,height:900}});
+      const errors=[];page.on('pageerror',error=>errors.push(error.message));
+      await page.clock.install({time:new Date('2026-11-11T03:00:00Z')});
+      await page.route(stage+'/**',async route=>{
+        const url=new URL(route.request().url());
+        try{await route.fulfill({response:await route.fetch({url:local+url.pathname+url.search})});}catch{await route.abort().catch(()=>{});}
+      });
+      const dateTo=day=>page.evaluate(value=>{const n=document.querySelector('#date');n.value=value;n.dispatchEvent(new Event('change'));},day);
+      const vehicleTo=(...vehicles)=>page.evaluate(values=>{
+        for(const input of document.querySelectorAll('#vehicleList input[type=checkbox]'))input.checked=values.includes(input.value);
+        document.querySelector('#vehicleList input[type=checkbox]').dispatchEvent(new Event('change'));
+      },vehicles);
+      const sync=()=>page.evaluate(()=>document.querySelector('#syncOperation').click());
+      const ready=()=>page.waitForFunction(()=>MapUiLocalBridge.isDataReady()&&!document.querySelector('#syncOperation').disabled);
+      const summary=()=>page.evaluate(()=>({
+        visits:[...document.querySelectorAll('[data-run-visit]')].map(node=>node.dataset.runVisit),
+        located:Number(document.querySelector('#map').dataset.dailyLocated||0),
+        total:document.querySelector('#opTotal').textContent,
+        lines:fixtureMap.lines.filter(line=>line.map).map(line=>line.o.path.map(point=>point.lat)),
+        count:document.querySelector('#runListCount').textContent,
+        status:document.querySelector('#freshnessState').textContent
+      }));
+      await page.goto(stage+'/opsmap/');
+      await page.waitForFunction(()=>window.MapUiLocalBridge?.state.map);
+      await page.evaluate(()=>document.querySelector('#modeDaily').click());
+      await ready();
+      const startedChronology=chronologyReads;
+      const requested=reads,switchTimes=[];
+      for(let i=0;i<12;i++){
+        const [vehicle,expected]=Object.entries(lengths)[i%4],start=performance.now();
+        await vehicleTo(vehicle);
+        const view=await summary();
+        assert.deepEqual([view.visits.length,view.located,view.total],[expected,expected,String(expected)]);
+        switchTimes.push(performance.now()-start);
+      }
+      assert.equal(reads,requested);
+      assert.ok(chronologyReads>startedChronology);
+      await vehicleTo('101','105');
+      assert.deepEqual((await summary()).visits.length,40);
+      await vehicleTo('105');
+      assert.equal(new Set((await summary()).visits).size,18);
+      assert.equal((await summary()).lines.length,0);
+      revision++;mode='empty';await sync();await ready();
+      assert.deepEqual([(await summary()).visits.length,(await summary()).lines.length],[18,0]);
+      revision++;mode='ok';await sync();await ready();
+      await page.waitForFunction(()=>fixtureMap.lines.filter(line=>line.map).length===2);
+      assert.match((await summary()).count,/동일 시각 2착 순서 미확정/);
+      assert.equal((await summary()).visits.length,18);
+      for(const [filter,n] of [['COMPLETED',8],['PENDING',10],['ALL',18]]){
+        await page.evaluate(value=>document.querySelector('[data-run-filter="'+value+'"]').click(),filter);
+        const view=await summary();
+        assert.deepEqual([view.visits.length,view.located,view.total],[n,n,'18']);
+      }
+      const before=await summary();
+      rosterFailure=true;await sync();await ready();
+      const retained=await summary();
+      assert.deepEqual(retained.visits,before.visits);
+      assert.equal(retained.status.replace('마지막 확인 배차 유지','배차 확인'),before.status);
+      rosterFailure=false;
+      await dateTo(delayed);await dateTo(older);await ready();
+      assert.equal((await summary()).visits.length,6);
+      await dateTo(date);await ready();
+      assert.equal((await summary()).visits.length,18);
+      const restores=[];
+      for(let i=0;i<12;i++){
+        const start=performance.now();await dateTo(i%2?date:older);
+        assert.equal((await summary()).visits.length,i%2?18:6);
+        restores.push(performance.now()-start);
+      }
+      published=true;
+      await page.reload();
+      await page.waitForFunction(()=>window.MapUiLocalBridge?.state.map);
+      await page.evaluate(()=>document.querySelector('#modeDaily').click());
+      await ready();
+      await vehicleTo('105');
+      assert.equal((await summary()).visits.length,18);
+      assert.match((await summary()).status,/마지막 확인 배차 유지/);
+      authLoss=true;await sync();
+      await page.waitForFunction(()=>document.querySelector('#freshnessState').textContent==='직원 로그인 필요');
+      assert.deepEqual([(await summary()).visits.length,(await summary()).located,(await summary()).total],[0,0,'-']);
+      assert.deepEqual(errors,[]);
+      assert.equal(legacyReads,0);
+      const p95=values=>Math.round(values.sort((a,b)=>a-b)[Math.ceil(values.length*.95)-1]*10)/10;
+      t.diagnostic(JSON.stringify({width,vehicleP95:p95(switchTimes),dateRestoreP95:p95(restores)}));
+      assert.ok(p95(switchTimes)<1000&&p95(restores)<1000);
+      await page.close();
+    });
+  }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
+});
