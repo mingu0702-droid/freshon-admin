@@ -39,7 +39,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
   window:{MapManualPins:{apply:row=>manual?.(row)}},
   esc:v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
   setSearchState:text=>{context.lastStatus=text;},resetMapOverview:()=>{resets++;},clearSelection:()=>{context.state.selected=null;},
-  cancelAddressLookup(){},clearSearchTemporaryPin(){tempClears++;},
+  clearTemporaryPins(){tempClears++;},
   selectStore:row=>{context.state.selected=row;selected.push(row);},
   loadBaseVehicles:async()=>{},refreshSelectedDriverContact(){},
   fetchJson:async(url,options)=>{queries.push({url,options});return remote(decodeURIComponent(options.headers['x-map-customer-query']));},
@@ -238,8 +238,8 @@ test('optional master enrichment does not delay existing customer selection',asy
  const f=fixture({rows:[store('S990015','합성 즉시선택','서울 시험로 15')]});f.context.loadBaseVehicles=()=>new Promise(()=>{});await f.context.searchPeriod('S990015');assert.equal(f.selected.length,1);
 });
 
-test('clear search closes the detail and preserves the temporary pin, center and vehicles',()=>{
- const f=fixture();f.node('#query').value='기존 입력';f.node('#results').innerHTML='<button data-result="0">기존후보</button>';f.context.clearUnifiedSearch();assert.equal(f.node('#query').value,'');assert.equal(f.node('#results').hidden,true);assert.equal(f.node('#results').html,'');assert.equal(f.resets,0);assert.equal(f.tempClears,0);assert.equal(f.context.state.centerFilter,'osan');assert.deepEqual(f.context.state.selectedVehicles,['101','122']);
+test('clear search closes the detail and clears temporary pins while preserving center and vehicles',()=>{
+ const f=fixture();f.node('#query').value='기존 입력';f.node('#results').innerHTML='<button data-result="0">기존후보</button>';f.context.clearUnifiedSearch();assert.equal(f.node('#query').value,'');assert.equal(f.node('#results').hidden,true);assert.equal(f.node('#results').html,'');assert.equal(f.resets,0);assert.equal(f.tempClears,1);assert.equal(f.context.state.centerFilter,'osan');assert.deepEqual(f.context.state.selectedVehicles,['101','122']);
 });
 
 

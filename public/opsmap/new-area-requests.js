@@ -149,6 +149,10 @@
       remember(temporary,addressKey(query),{lat:point.lat,lng:point.lng,coordinateSource:point.coordinateSource});
     }
   }
+  function forgetTemporary(query,point) {
+    const key=addressKey(query),saved=temporary.get(key);
+    if(point.coordinateSource==='MAP_CLICK_TEMPORARY'&&saved?.lat===point.lat&&saved?.lng===point.lng)temporary.delete(key);
+  }
   function resetStageAddress(){
     addressEpoch++;retained.clear();
     for(const flight of flights.values())flight.controller.abort();
@@ -156,6 +160,6 @@
   }
   root.addEventListener?.('map-staff-signed-out',()=>{resetStageAddress();temporary.clear();});
   root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, addressFailureHint, stopsExternal, outcome, singleStoredLocation,
-    stageAddress, rememberTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
+    stageAddress, rememberTemporary, forgetTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
 })(typeof window === 'object' ? window : globalThis);
 

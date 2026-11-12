@@ -2515,10 +2515,10 @@
     try{
       cancelSearchAddressPreparation();
       invalidateUnifiedSearch();
-      cancelAddressLookup();closeUnifiedSearchResults();
+      clearSelection({preserveSearch:true});
+      clearTemporaryPins();closeUnifiedSearchResults();
       $('#query').value='';$('#query').dispatchEvent(new Event('input',{bubbles:true}));
       setSearchState('');
-      clearSelection({preserveSearch:true});
     }finally{unifiedResetting=false;}
   }
 
@@ -2672,17 +2672,26 @@
 
   function clearTemporaryPins() {
     cancelAddressLookup();
-    for(const {overlay} of temporaryPins.values())overlay.setMap(null);
-    temporaryPins.clear();
+    for(const entry of temporaryPins.values())disposeTemporaryPin(entry);
     if(temporaryDetailPoint)clearSelection({preserveSearch:true,fast:true,keepMapPins:true});
     clearTemporaryContext();
   }
 
-  function removeTemporaryPin(point) {
-    temporaryPins.get(point.temporaryKey)?.overlay.setMap(null);
+  function disposeTemporaryPin({point,overlay,marker,remove}) {
     temporaryPins.delete(point.temporaryKey);
+    NewAreaRequests.forgetTemporary(point.address,point);
+    marker.onclick=null;
+    remove.onclick=null;
+    mapMarkerRows.delete(marker);
+    overlay.setMap(null);
+  }
+
+  function removeTemporaryPin(point) {
+    const entry=temporaryPins.get(point.temporaryKey);
+    if(entry?.point!==point)return;
+    disposeTemporaryPin(entry);
     if(temporaryDetailPoint===point)clearSelection({preserveSearch:true,fast:true,keepMapPins:true});
-    if(state.virtual===point)clearTemporaryContext();
+    if(state.virtual===point){clearTemporaryContext();setSearchState('');}
   }
 
   function showAddressCandidates(candidates,choose,results=$('#results')) {
@@ -2782,7 +2791,7 @@
   async function searchPeriod(text,trace) {
     if(state.mode!=='BASE_60D')return;
     const owner=invalidateUnifiedSearch();
-    cancelAddressLookup();closeUnifiedSearchResults();setSearchState('검색 중',true);
+    clearTemporaryPins();closeUnifiedSearchResults();setSearchState('검색 중',true);
     unifiedSearchController=new AbortController();const signal=unifiedSearchController.signal;
     const code=/^[A-Z]\d{3,}$/i.test(text)?text.toUpperCase():null;
     const address=unifiedAddressQuery(text)||/^\d{19}$/.test(text);
@@ -2989,14 +2998,33 @@
     if(!entry){
       const point={...row,customerCode:'',lat,lng,virtual:true,searchTemporary:true,temporaryKey:key,
         customerMatchState:row.customerMatchState||'UNCONFIRMED'};
-      const content=markerElement(point,null,'virtual');content.dataset.searchTemporaryPin='true';
-      content.setAttribute('aria-label','임시 위치 · '+(point.address||''));
+      const marker=markerElement(point,null,'virtual');
+      marker.dataset.searchTemporaryPin='true';
+      marker.setAttribute('aria-label','임시 위치 · '+(point.address||''));
+      const remove=document.createElement('button');
+      remove.type='button';
+      remove.className='searchTemporaryRemove';
+      remove.textContent='×';
+      remove.setAttribute('aria-label','지도에서 임시 핀 삭제');
+      remove.onclick=event=>{
+        event.stopPropagation();
+        kakao.maps.event.preventMap?.();
+        removeTemporaryPin(point);
+      };
+      const content=document.createElement('div');
+      content.className='searchTemporaryMarker';
+      content.append(marker,remove);
       const overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(lat,lng),content,clickable:true,xAnchor:.5,yAnchor:1,zIndex:45});
       overlay.setMap(state.map);
-      entry={point,overlay};temporaryPins.set(key,entry);
+      entry={point,overlay,marker,remove};temporaryPins.set(key,entry);
     }
     trace?.mark('pin');
     openTemporaryPin(entry.point,{areaFacts,focus:true,trace});
+  }
+
+  function inspectNavigationPoint(row) {
+    cancelAddressLookup();closeUnifiedSearchResults();
+    openTemporaryPin({...row,searchTemporary:true},{focus:true});
   }
 
   function openTemporaryPin(row,{areaFacts=null,focus=false,trace}={}) {
@@ -3015,9 +3043,11 @@
       OFFICIAL_PUBLIC_PARCEL:'공식 필지 대표점',STAGE_PRESERVED_COORDINATE:'저장 좌표'})[row.coordinateSource];
     $('#detailSection').classList.add('open');$('#detail').className='detailCard';
     $('#detailSection').setAttribute('data-temporary-inspection','');
-    $('#detail').innerHTML=`<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">임시 위치</div><div class="storeName">${esc(row.address||row.customerName||'선택 위치')}</div></div><div class="detailBody"><p class="hint">저장하지 않는 임시 핀입니다.${locationBasis?' · '+locationBasis:''}</p>${navigationPointActions(row)}${temporaryDistanceActions()}<div class="temporaryPinActions"><button type="button" id="removeTemporaryPin" class="tiny">임시 핀 삭제</button>${state.mode==='BASE_60D'?'<button type="button" id="searchPointToBatch" class="tiny">신규권역 일괄조회에 추가</button>':''}</div><label class="areaRadius">인근 호차 반경 <select id="newAreaSingleRadius"><option value="30">30km</option><option value="40">40km</option><option value="50">50km</option></select></label><div id="nearWrap" aria-live="polite">주변 배송 근거 확인 중</div></div>`;
+    const canRemove=temporaryPins.get(row.temporaryKey)?.point===row;
+    const removeAction=canRemove?'<button type="button" id="removeTemporaryPin" class="tiny">임시 핀 삭제</button>':'';
+    $('#detail').innerHTML=`<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">임시 위치</div><div class="storeName">${esc(row.address||row.customerName||'선택 위치')}</div></div><div class="detailBody"><p class="hint">저장하지 않는 임시 핀입니다.${locationBasis?' · '+locationBasis:''}</p>${navigationPointActions(row)}${temporaryDistanceActions()}<div class="temporaryPinActions">${removeAction}${state.mode==='BASE_60D'?'<button type="button" id="searchPointToBatch" class="tiny">신규권역 일괄조회에 추가</button>':''}</div><label class="areaRadius">인근 호차 반경 <select id="newAreaSingleRadius"><option value="30">30km</option><option value="40">40km</option><option value="50">50km</option></select></label><div id="nearWrap" aria-live="polite">주변 배송 근거 확인 중</div></div>`;
     $('#detailClose').onclick=closeMapDetail;
-    $('#removeTemporaryPin').onclick=()=>removeTemporaryPin(row);
+    if(canRemove)$('#removeTemporaryPin').onclick=()=>removeTemporaryPin(row);
     bindTemporaryDistanceActions();
     $('#newAreaSingleRadius').value=String(newAreaRadius);
     $('#newAreaSingleRadius').onchange=event=>setNewAreaRadius(event.target.value);
@@ -4601,7 +4631,7 @@
     lookupStore(value){const key=String(value||'').trim();return allStores.filter(row=>[row.customerCode,row.customerName,row.address].includes(key));},
     navigationVisitRows:()=>isDailyDataReady()?operationStops.map(row=>({...row})):[],
     navigationDailyContext,
-    selectNavigationPoint:showVirtual,
+    selectNavigationPoint:inspectNavigationPoint,
     canLookupNavigationAddress:()=>window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true||window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup===true,
     lookupNavigationAddress:(text,signal)=>lookupInteractiveLocation(String(text||'').trim(),signal),
     relayoutPreservingView(){mapCamera?.scheduleRelayout();},

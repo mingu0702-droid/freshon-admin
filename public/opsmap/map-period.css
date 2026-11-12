@@ -39,6 +39,10 @@ body.historicalMode #etaMetric{display:none!important}
 .periodMode .marker.selected{filter:drop-shadow(0 0 3px #172033)}.periodMode .marker.selected .pinShape{stroke:#0f172a;stroke-width:3}
 .periodCluster .pinShape path{fill:#334c6a!important}.periodCluster .pinNumber{font-size:12px!important}
 .periodRecent{font-size:11px;color:#52647b;margin:5px 0 9px}.periodMode .mobileActions{display:none!important}
+.searchTemporaryMarker{position:relative;display:inline-flex;vertical-align:bottom}
+.searchTemporaryRemove{position:absolute;left:calc(100% + 3px);top:0;display:grid;place-items:center;width:36px;height:36px;padding:0;border:1px solid #a6b6cc;border-radius:50%;background:#fff;color:#243b5e;font-size:22px;line-height:1;cursor:pointer;touch-action:manipulation}
+.searchTemporaryRemove:hover{background:#eef4fc}
+.searchTemporaryRemove:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
 .popupMeta{font-size:12px}.detailWrap .code,.detailWrap .storeName{font-size:14px!important;font-weight:700}
 #newAreaTools .block{border-top:1px solid #e3e9f1}
 @media(max-width:1100px) and (min-width:761px){:root{--left:290px}#mapModeBar{gap:4px}#mapModeBar button{font-size:11px;padding:7px}#periodIdentity{font-size:10px}}
