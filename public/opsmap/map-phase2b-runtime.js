@@ -1820,7 +1820,7 @@
     markerPositions.set(row,{lat:row.lat,lng:row.lng,point});return point;
   }
 
-  function detailedMarkerRows(viewport,extra,assignmentMode) {
+  function detailedMarkerRows(viewport,extra,assignmentMode,project,protectedCodes) {
     const index=pointIndex.locations ||= MapPeriodUi.spatialIndex(window.MapViewPolicy.exactLocations(pointIndex.valid,assignmentMode));
     const view=state.map.getBounds?.(), sw=view?.getSouthWest(),ne=view?.getNorthEast();
     if(!sw||!ne)return [];
@@ -1830,11 +1830,13 @@
     const bounds={south:sw.getLat()-latitudePerPixel*56,north:ne.getLat()+latitudePerPixel*10,
       west:sw.getLng()-longitudePadding,east:ne.getLng()+longitudePadding};
     const visible=index.query(bounds);
-    if(!extra||extra.lat<bounds.south||extra.lat>bounds.north||extra.lng<bounds.west||extra.lng>bounds.east)return visible;
-    const at=visible.findIndex(row=>row.lat===extra.lat&&row.lng===extra.lng);
-    if(at<0)visible.push(extra);
-    else visible.splice(at,1,...window.MapViewPolicy.exactLocations([...(visible[at].clusterRows||[visible[at]]),extra],assignmentMode));
-    return visible;
+    if(extra&&extra.lat>=bounds.south&&extra.lat<=bounds.north&&extra.lng>=bounds.west&&extra.lng<=bounds.east){
+      const at=visible.findIndex(row=>row.lat===extra.lat&&row.lng===extra.lng);
+      if(at<0)visible.push(extra);
+      else visible.splice(at,1,...window.MapViewPolicy.exactLocations([...(visible[at].clusterRows||[visible[at]]),extra],assignmentMode));
+    }
+    return assignmentMode==='BASE_60D'&&project
+      ?window.MapViewPolicy.overlappingVehicleLocations(visible,project,assignmentMode,protectedCodes):visible;
   }
 
   function refreshMarkerSelection(overlay,entry) {
@@ -1872,9 +1874,10 @@
     const projection=state.map.getProjection();
     const projectPin=row=>projection.containerPointFromCoords(markerPosition(row));
     const clusterOptions={mode:assignmentMode,maxMarkers:innerWidth<=760?120:180,margin:base?44:80,
-      grouping:focusedStops?'individual':'territory',protectedCodes:navCodes,sourceVersion:markerSourceVersion};
+      grouping:focusedStops?'individual':'territory',protectedCodes:navCodes,sourceVersion:markerSourceVersion,
+      nearbyVehicleOnly:assignmentMode==='BASE_60D'};
     let pins,readyOverview=false;
-    if(detailedStores)pins=detailedMarkerRows(viewport,selectedExtra,assignmentMode);
+    if(detailedStores)pins=detailedMarkerRows(viewport,selectedExtra,assignmentMode,projectPin,[selectedCode,...navCodes]);
     else if(vehicleOverview){
       const overview=pointIndex.overview ||= representativeRows(valid);
       readyOverview=overview.representatives.length>0;

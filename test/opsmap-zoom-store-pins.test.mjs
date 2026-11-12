@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import '../public/opsmap/phase2b-ui-helpers.js';
 import '../public/opsmap/map-view-policy.js';
 import '../public/opsmap/map-period-ui.js';
 
@@ -94,6 +95,45 @@ test('pins distinguish the primary fixed route, confirmed blank, and missing evi
 test('a store with a verified empty delivery aggregate still uses its fixed route', () => {
   const [row]=MapPeriodUi.select([{customerCode:'S1',baseVehicle:'114',vehicle:'202',periodAggregate:{verified:true,groups:[]}}],['114'],'',{vehicleBasis:'base',includeUnvisited:true});
   assert.equal(row.vehicle,'114');
+});
+
+const nearbyPoint = (code, route, meters, pixel) => ({
+  customerCode: code, baseVehicle: route, lat: 37.5 + meters / 6371000 * 180 / Math.PI, lng: 127, pixel,
+});
+const projectNearby = row => ({x: row.pixel, y: 150});
+
+test('different fixed routes merge only within 500m and one visible pin width', () => {
+  const {overlappingVehicleLocations} = MapViewPolicy;
+  const start = nearbyPoint('S1', '101', 0, 100);
+  for(const meters of [499.999, 500, 500.001]) {
+    const markers = overlappingVehicleLocations([start,nearbyPoint('S2','114',meters,139)],projectNearby);
+    assert.equal(markers.length,meters<=500?1:2);
+    if(meters<=500)assert.deepEqual(markers[0].clusterVehicles,['101','114']);
+  }
+  for(const other of [nearbyPoint('S2','114',300,141),nearbyPoint('S2','101',100,120),nearbyPoint('S2','오산신규',100,120)]) {
+    assert.equal(overlappingVehicleLocations([start,other],projectNearby).length,2);
+  }
+  assert.equal(overlappingVehicleLocations([start,nearbyPoint('S2','척01',100,120)],projectNearby).length,1);
+  assert.equal(overlappingVehicleLocations([start,nearbyPoint('S2','114',100,120)],projectNearby,'BASE_60D',['S2']).length,2);
+});
+
+test('nearby route clusters cannot expand through a chain and broader bins keep routes separate', () => {
+  const {overlappingVehicleLocations,stableClusters} = MapViewPolicy;
+  const rows = [nearbyPoint('S1','101',0,100),nearbyPoint('S2','114',400,110),nearbyPoint('S3','122',800,120),nearbyPoint('S4','114',1500,130)];
+  const codes = markers => markers.flatMap(marker=>marker.memberCodes||[marker.customerCode]).sort();
+  const mixed = markers => markers.filter(marker=>marker.clusterVehicles?.length>1);
+  const close = overlappingVehicleLocations(rows,projectNearby);
+  assert.deepEqual(mixed(close).map(marker=>marker.memberCodes),[['S1','S2']]);
+  assert.deepEqual(codes(close),['S1','S2','S3','S4']);
+  const viewport={width:390,height:844};
+  const settings={nearbyVehicleOnly:true,sourceVersion:1};
+  const project = row=>({x:100+(row.lat-37.5)*2000,y:150});
+  const street=stableClusters(rows,project,6,'',viewport,settings);
+  assert.deepEqual(mixed(street).map(marker=>marker.memberCodes),[['S1','S2']]);
+  assert.deepEqual(codes(street),codes(close));
+  const broad=stableClusters(rows,project,8,'',viewport,settings);
+  assert.equal(mixed(broad).length,0);
+  assert.deepEqual(codes(broad),codes(close));
 });
 
 test('pin reconciliation reuses unchanged overlays across viewport and selection changes', () => {

@@ -3,6 +3,8 @@
   'use strict';
   const EARTH = 6378137;
   const storePinLevel = 5;
+  const vehicleOverlapPixels = 40;
+  const vehicleOverlapKm = 0.5;
   const groupingCache=new WeakMap();
   const finitePoint = row => Number.isFinite(row?.lat) && Number.isFinite(row?.lng) && Math.abs(row.lat)<=90 && Math.abs(row.lng)<=180;
   const regionColors = Object.freeze({ '수도권':'#2563eb', '강원권':'#0f766e', '충청권':'#b45309', '호남권':'#7c3aed', '영남권':'#047857', '제주권':'#0369a1' });
@@ -36,8 +38,8 @@
     if(row.baseVehicleState==='UNASSIGNED'&&row.baseVehicleEmptyVerified===true&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY')return unknown;
     return (!row.baseVehicleState||row.baseVehicleState==='UNKNOWN')&&!row.baseVehicleVersion?pending:unverified;
   }
-  function makeGroup(key) {
-    return {key, rows:[], lat:0, lng:0, x:0, y:0, south:Infinity, north:-Infinity, west:Infinity, east:-Infinity};
+  function makeGroup(key, route = '') {
+    return {key, route, rows:[], lat:0, lng:0, x:0, y:0, south:Infinity, north:-Infinity, west:Infinity, east:-Infinity};
   }
   function addRow(group, row, point) {
     group.rows.push(row);group.lat+=row.lat;group.lng+=row.lng;group.x+=point.x;group.y+=point.y;
@@ -52,16 +54,16 @@
     const find=i=>{while(parents[i]!==i){parents[i]=parents[parents[i]];i=parents[i];}return i;};
     for(let i=0;i<list.length;i++){
       const g=list[i],x=g.x/g.rows.length,y=g.y/g.rows.length,bx=Math.floor(x/cell),by=Math.floor(y/cell);
-      for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(const j of bins.get((bx+dx)+':'+(by+dy))||[]){
+      for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(const j of bins.get(`${g.route}:${bx+dx}:${by+dy}`)||[]){
         const other=list[j],ox=other.x/other.rows.length,oy=other.y/other.rows.length;
         if((x-ox)**2+(y-oy)**2<(cell*.65)**2){const a=find(i),b=find(j);parents[Math.max(a,b)]=Math.min(a,b);}
       }
-      const key=bx+':'+by;if(!bins.has(key))bins.set(key,[]);bins.get(key).push(i);
+      const key=`${g.route}:${bx}:${by}`;if(!bins.has(key))bins.set(key,[]);bins.get(key).push(i);
     }
     const merged=new Map();
     for(let i=0;i<list.length;i++){
       const root=find(i),g=list[i];let target=merged.get(root);
-      if(!target){target=makeGroup(list[root].key);merged.set(root,target);}
+      if(!target){target=makeGroup(list[root].key,g.route);merged.set(root,target);}
       target.rows.push(...g.rows);target.lat+=g.lat;target.lng+=g.lng;target.x+=g.x;target.y+=g.y;
       target.south=Math.min(target.south,g.south);target.north=Math.max(target.north,g.north);
       target.west=Math.min(target.west,g.west);target.east=Math.max(target.east,g.east);
@@ -113,6 +115,55 @@
       return clusterRow({key,rows,south:lat,north:lat,west:lng,east:lng},mode,0);
     });
   }
+  function overlappingVehicleLocations(locations, project, mode='BASE_60D', protectedCodes=[]) {
+    const distanceKm=root.Phase2bUi?.distanceKm;
+    if(typeof distanceKm!=='function')return locations;
+    const protectedSet=new Set(protectedCodes.filter(Boolean));
+    const actualRoute=code=>/^(?:(?:용|척|척척)?\d+)$/.test(code);
+    const limitSquared=vehicleOverlapPixels**2;
+    const buckets=new Map(), groups=[], unchanged=[];
+    const ordered=[...locations].sort((a,b)=>a.lat-b.lat||a.lng-b.lng);
+    for(const row of ordered){
+      const vehicles=row.clusterVehicles||[pinAssignment(row,mode).code];
+      const areaGroup=row.clusterCount&&row.clusterKind!=='location';
+      const protectedLocation=protectedSet.has(row.customerCode)||row.memberCodes?.some(code=>protectedSet.has(code));
+      if(areaGroup||protectedLocation||!vehicles.length||!vehicles.every(actualRoute)){
+        unchanged.push(row);continue;
+      }
+      const {x,y}=project(row)||{};
+      if(!Number.isFinite(x)||!Number.isFinite(y)){unchanged.push(row);continue;}
+      const bx=Math.floor(x/vehicleOverlapPixels),by=Math.floor(y/vehicleOverlapPixels);
+      const screenDistance=point=>(point.x-x)**2+(point.y-y)**2;
+      let match=null, nearest=Infinity;
+      for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
+        for(const group of buckets.get(`${bx+dx}:${by+dy}`)||[]){
+          if(group.vehicles.size===1&&vehicles.every(code=>group.vehicles.has(code)))continue;
+          const distance=screenDistance(group.points[0]);
+          if(distance>limitSquared||distance>nearest||(distance===nearest&&group.index>match.index))continue;
+          // Every pair must fit. A third pin cannot chain two distant locations together.
+          if(!group.points.every(point=>screenDistance(point)<=limitSquared&&distanceKm(point.row,row)<=vehicleOverlapKm+1e-9))continue;
+          match=group;nearest=distance;
+        }
+      }
+      const point={row,x,y};
+      if(match){
+        match.points.push(point);
+        vehicles.forEach(code=>match.vehicles.add(code));
+      }else{
+        const group={points:[point],vehicles:new Set(vehicles),index:groups.length}, key=`${bx}:${by}`;
+        groups.push(group);
+        if(!buckets.has(key))buckets.set(key,[]);
+        buckets.get(key).push(group);
+      }
+    }
+    return [...unchanged,...groups.map(({points})=>{
+      const first=points[0].row;
+      if(points.length===1)return first;
+      const group=makeGroup(`${mode}:nearby:${first.lat}:${first.lng}`);
+      for(const {row} of points)for(const member of row.clusterRows||[row])addRow(group,member,{x:0,y:0});
+      return clusterRow(group,mode,0);
+    })];
+  }
   function stableClusters(rows, project, level, selectedCode = '', viewport = null, options = {}) {
     const mode = options.mode || 'BASE_60D';
     const band = zoomBand(Number(level));
@@ -129,7 +180,8 @@
       const p = project(row);
       return Number.isFinite(p?.x) && Number.isFinite(p?.y) && p.x >= -margin && p.y >= -margin && p.x <= viewport.width + margin && p.y <= viewport.height + margin;
     };
-    const cachePrefix=options.sourceVersion===undefined?null:JSON.stringify([options.sourceVersion,mode,band,[...protectedCodes].sort()]);
+    const nearbyOnly=options.nearbyVehicleOnly===true;
+    const cachePrefix=options.sourceVersion===undefined?null:JSON.stringify([options.sourceVersion,mode,band,nearbyOnly,[...protectedCodes].sort()]);
     // Cache geographic levels, never the viewport's chosen level. Reusing a
     // nationwide result at close zoom would keep distant stores over-grouped.
     const atLevel=(key,build)=>{
@@ -145,34 +197,38 @@
     // selectable same-location card so none becomes inaccessible.
     if(options.grouping==='locations')return atLevel('exact',()=>exactLocations(rows,mode)).filter(visible);
     if(options.grouping==='individual')return atLevel('individual',()=>[...pinned,...exactLocations(ordinary,mode)]).filter(visible);
+    const mergeDisplayed=displayed=>nearbyOnly&&viewport&&level<=7
+      ?overlappingVehicleLocations(displayed,project,mode,[...protectedCodes]):displayed;
     const available=Math.max(1,limit-pinned.length);
     // Close-up maps still need a selectable group for colocated stores. Two
     // independent markers at identical coordinates would hide one another;
     // distant stores must not force distinct visible addresses to merge.
     if (band === 0) {
       const close=atLevel('location',()=>[...pinned,...exactLocations(ordinary,mode)]).filter(visible);
-      if(close.length-pinned.length<=available)return close;
+      if(close.length-pinned.length<=available)return mergeDisplayed(close);
     }
+    const {territory, routes}=atLevel('territory',()=>{
+      const territory=ordinary.map(row=>({row,point:world(row),route:nearbyOnly?pinAssignment(row,mode).code:''}));
+      return {territory,routes:new Set(territory.map(item=>item.route)).size};
+    });
     const baseCell = [80, 700, 3500, 18000, 120000][band];
     let visibleRows=[];
     // Bucket in world metres, not screen pixels: pan and small zoom changes do
     // not move a group's anchor or alter membership at the same level.
     // The marker limit belongs to the viewport, not all nationwide stores.
     for (let pass = 0; pass < 26; pass++) {
-      visibleRows=atLevel(pass,()=>{
+      const grouped=atLevel(pass,()=>{
         const buckets = new Map(),cell = baseCell * (2 ** pass);
-        for (const row of ordinary) {
-          const point=world(row);
-          // Geography owns the group. Splitting each cell by vehicle produced
-          // dozens of overlapping coloured badges in dense metropolitan areas.
-          const key=`${mode}:${band}:${pass}:${Math.floor(point.x/cell)}:${Math.floor(point.y/cell)}`;
-          let group=buckets.get(key);if(!group){group=makeGroup(key);buckets.set(key,group);}addRow(group,row,point);
+        for (const {row,point,route} of territory) {
+          const key=`${mode}:${band}:${pass}:${route}:${Math.floor(point.x/cell)}:${Math.floor(point.y/cell)}`;
+          let group=buckets.get(key);if(!group){group=makeGroup(key,route);buckets.set(key,group);}addRow(group,row,point);
         }
-        return [...pinned,...mergeNearby(buckets,cell).map(group=>clusterRow(group,mode,band))];
-      }).filter(visible);
-      if(visibleRows.length-pinned.length<=available)break;
+        return mergeNearby(buckets,cell).map(group=>clusterRow(group,mode,band));
+      });
+      visibleRows=[...pinned,...grouped].filter(visible);
+      if(visibleRows.length-pinned.length<=available||nearbyOnly&&grouped.length===routes)break;
     }
-    return visibleRows;
+    return mergeDisplayed(visibleRows);
   }
   const cameraRect = rect => {
     const left=Number(rect?.left),top=Number(rect?.top),right=Number(rect?.right??left+Number(rect?.width)),bottom=Number(rect?.bottom??top+Number(rect?.height));
@@ -310,5 +366,5 @@
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint});
+  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,overlappingVehicleLocations,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint});
 })(typeof window==='object'?window:globalThis);
