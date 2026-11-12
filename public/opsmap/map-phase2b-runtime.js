@@ -1687,7 +1687,7 @@
       button.onclick = () => showCluster(row,{keepView:Boolean(state.virtual)});
     }
     if(kind!=='virtual'&&document.body.classList.contains('approvedShellCandidate')){
-      const pin=document.createElement(group?'div':'span');pin.className=group?'clusterpin':'pin';
+      const pin=document.createElement('div');pin.className=group?'clusterpin':'pin';
       pin.style.setProperty('--pin',pinColor);
       if(group){
         const title=document.createElement('b'),count=document.createElement('small'),codes=row.clusterVehicles||[];
@@ -1696,7 +1696,7 @@
           :row.clusterLabel||'매장';
         count.textContent=group+'곳'+(row.clusterKind==='mixed'?' · 혼합':'');pin.append(title,count);
       }else{
-        pin.textContent=row.vehicle||(unassigned?'?':'•');
+        const label=document.createElement('span');label.textContent=row.vehicle||(unassigned?'?':'•');pin.append(label);
         if(index)pin.title=`${vehicleLabel(row.vehicle)||'호차 정보 없음'} · 착순 ${index}`;
       }
       button.classList.add('approvedMarker');button.append(pin);

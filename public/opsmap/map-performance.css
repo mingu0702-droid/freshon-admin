@@ -75,7 +75,7 @@
 .approvedShellCandidate { --map-store-pin-size:40px; }
 .approvedShellCandidate .marker.approvedMarker { width:42px; height:46px; min-width:42px; padding:0; }
 .approvedShellCandidate .marker.approvedMarker .pin { width:var(--map-store-pin-size); height:var(--map-store-pin-size); border-width:2px; box-shadow:0 2px 6px #152a4540; }
-.approvedShellCandidate .marker.approvedMarker .pin { font-size:13px; letter-spacing:-.15px; font-weight:750; }
+.approvedShellCandidate .marker.approvedMarker .pin>span { font-size:13px; letter-spacing:-.15px; font-weight:750; }
 .approvedShellCandidate .marker.approvedMarker.selected .pin { width:44px; height:44px; outline:4px solid #2c64da26; }
 .approvedShellCandidate .marker.periodCluster { width:max-content!important; height:auto!important; min-width:0; contain:layout style; }
 .approvedShellCandidate .marker.periodCluster .clusterpin {
@@ -96,7 +96,8 @@
 }
 .approvedShellCandidate #map .marker.store.selected:not(.periodCluster) .pin { outline:3px solid #2c64da46; }
 .approvedShellCandidate #map .marker.store .pin:after { border-top-width:6px; bottom:-5px; }
-.approvedShellCandidate .marker.pinUnassigned .pin { --pin:#64748b!important; background:#f1f5f9!important; color:#475569; border-color:#64748b; }
+.approvedShellCandidate .marker.pinUnassigned .pin { --pin:#64748b!important; background:#f1f5f9!important; border-color:#64748b; }
+.approvedShellCandidate .marker.pinUnassigned .pin>span { color:#475569; }
 .approvedShellCandidate .marker.periodCluster[data-cluster-kind="location"] .clusterpin { color:#5b21b6; border:1.5px dashed #7c3aed; background:#faf5ff!important; }
 .approvedShellCandidate .marker.periodCluster[data-cluster-kind="mixed"] .clusterpin { color:#1e40af; border-color:#64748b; background:#eff6ff!important; }
 .approvedShellCandidate .marker.periodCluster[data-cluster-kind="unassigned"] .clusterpin { color:#475569; border-color:#94a3b8; background:#f1f5f9!important; }
