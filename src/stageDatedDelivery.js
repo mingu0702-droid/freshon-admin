@@ -54,7 +54,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       return request(new URL(path,deliveryOrigin),signal);
     }}) : null;
   let eventGroups=0;
-  async function readEvents(candidates,date,limit) {
+  async function readEvents(candidates,date,limit,{retryTransient=false}={}) {
     const result={events:new Map(),requested:candidates.length,attempted:0,failed:0,truncated:false};
     if (!eventTransport || !candidates.length) return result;
     if (eventGroups>=2) return {...result,truncated:true};
@@ -62,22 +62,37 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     try {
       const budget=AbortSignal.timeout(8_000);
       const bounded=candidates.slice(0,limit);
+      const retry=[];
+      const readOne=async({task,customerCode,vehicle},signal)=>{
+        const response=await eventTransport.requestJson(`/api/bali/task/${task.id}/status-record`,{signal});
+        const records=response?.data??response;
+        if (response?.ok===false || !Array.isArray(records) || records.length>32 || records.some(record=>
+          !record || String(record.taskId)!==String(task.id))) throw Error('DELIVERY_EVENT_BINDING');
+        return [deliveryTaskId(task.id),deliveryCompletion({...task,taskStatusRecords:records},{date,customerCode,vehicle})];
+      };
       for (let offset=0; offset<bounded.length && !budget.aborted; offset+=3) {
         const batch=bounded.slice(offset,offset+3);
-        const values=await Promise.all(batch.map(async({task,customerCode,vehicle})=>{
+        const values=await Promise.all(batch.map(async candidate=>{
           result.attempted++;
-          try {
-            const response=await eventTransport.requestJson(`/api/bali/task/${task.id}/status-record`,{signal:budget});
-            const records=response?.data??response;
-            if (response?.ok===false || !Array.isArray(records) || records.length>32 || records.some(record=>
-              !record || String(record.taskId)!==String(task.id))) throw Error('DELIVERY_EVENT_BINDING');
-            return [deliveryTaskId(task.id),deliveryCompletion({...task,taskStatusRecords:records},{date,customerCode,vehicle})];
-          } catch {result.failed++;return null;}
+          try { return await readOne(candidate,budget); }
+          catch (error) {
+            if (retryTransient && ['PHOTO_TIMEOUT','PHOTO_UPSTREAM_UNAVAILABLE','PHOTO_LOOKUP_FAILED'].includes(error.code)) retry.push(candidate);
+            result.failed++;
+            return null;
+          }
         }));
         for(const item of values)if(item)result.events.set(...item);
         if(values.every(item=>!item))break;
       }
       result.truncated=result.attempted<candidates.length;
+      if (!result.truncated && retry.length) {
+        const retryBudget=AbortSignal.timeout(3_000);
+        const values=await Promise.allSettled(retry.slice(0,3).map(candidate=>readOne(candidate,retryBudget)));
+        for(const item of values) if(item.status==='fulfilled') {
+          result.events.set(...item.value);
+          result.failed--;
+        }
+      }
       return result;
     } finally {eventGroups--;}
   }
@@ -258,7 +273,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const candidates=center==='osan'&&focusedVehicles.has(vehicle)?value.candidates.get(vehicle):null;
     if (!error && candidates?.length && !value.eventReads.has(vehicle)) {
       const entry={reusable:false};
-      entry.pending=readEvents(candidates,date,vehicleEventLimit).then(result=>{
+      entry.pending=readEvents(candidates,date,vehicleEventLimit,{retryTransient:true}).then(result=>{
         entry.reusable=!result.failed&&!result.truncated;
         return result;
       });

@@ -404,6 +404,22 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
     assert.deepEqual(cell.data.stores[0].delivery,{state:'CONFIRMED_DELIVERY',complete:false,observedCompletedCount:1,lastCompletedOn:allDates[45]});
     assert.equal(cell.data.deliveryFilter.newActive,1);
     assert.deepEqual(statusReads.slice(-3),[30,60,60]);
+    const finestId = latLngToCell(lat,lng,11);
+    const finest = await (await fetch(url + `/view?days=60&level=1&resolution=11&box=${box}`, options)).json();
+    assert.equal(finest.data.resolution,11);
+    const ids = finest.data.cells.map(row => row.id);
+    assert.equal(ids.length,new Set(ids).size);
+    assert.equal(finest.data.cells.find(row => row.id === finestId)?.registered,cell.data.registered);
+    const finestSearch = await (await fetch(url + '/search?days=60&resolution=11', {
+      headers: { ...options.headers, 'x-map-customer-query': 'T900001' }
+    })).json();
+    assert.equal(finestSearch.data.results[0].detailId,finestId);
+    const finestPoint = await (await fetch(url + '/point?days=60&resolution=11', {
+      headers: { ...options.headers, 'x-map-coverage-point': `${lat},${lng}` }
+    })).json();
+    assert.equal(finestPoint.data.results[0].detailId,finestId);
+    const zoomedOut = await (await fetch(url + '/view?days=60&resolution=11&box=126,36,128,38', options)).json();
+    assert(zoomedOut.data.resolution<=8);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

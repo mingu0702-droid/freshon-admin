@@ -74,7 +74,7 @@ export function createCoveragePanel({ workspace, header }) {
           <label>자료 기간 <select id="coverageDays"><option value="30">30일</option><option value="60">60일</option><option value="90" selected>90일</option></select></label>
           <label>담당 센터 <select id="coverageCenter"><option value="all">전체</option><option value="osan">오산</option><option value="yeongnam">영남</option><option value="honam">호남</option></select></label>
           <label>검색 반경 <select id="coverageRadius"><option value="0">격자만</option><option value="500">500m</option><option value="1000">1km</option></select></label>
-          <label>격자 크기 <select id="coverageResolution"><option value="auto">자동</option><option value="8">R8</option><option value="9">R9</option><option value="10">R10</option></select></label>
+          <label>격자 크기 <select id="coverageResolution"><option value="auto">자동</option><option value="8">R8</option><option value="9">R9</option><option value="10">R10</option><option value="11">R11</option></select></label>
         </div>
         <fieldset class="coverage-providers"><legend>공급자 레이어</legend>${PROVIDERS.map(([id,label])=>
           `<label><input type="checkbox" data-coverage-provider="${id}" checked><span class="coverage-provider-key" data-key="${id}">${label}<small data-provider-state="${id}">${id==='FRESHON'?'집계 확인 중':'자료 미연결'}</small></span></label>`).join('')}

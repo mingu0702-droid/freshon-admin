@@ -113,7 +113,7 @@ if (tabs && workspace && period && daily) {
       tab.setAttribute('aria-busy', 'true');
       tab.textContent = '음영권역 불러오는 중';
       try {
-        const { createCoveragePanel } = await import('./shadow-coverage-panel.mjs?v=20261111-delivery-status');
+        const { createCoveragePanel } = await import('./shadow-coverage-panel.mjs?v=20261112-r11');
         if (opening !== attempt || !tab.isConnected || !window.MapStaffEntry?.session()) return;
         panel = createCoveragePanel({ workspace, header });
       } catch {

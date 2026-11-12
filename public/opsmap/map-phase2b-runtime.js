@@ -414,8 +414,10 @@
   }
   async function readStoreSnapshot(id) {
     try {
-      const adapter=stageAddressBatchEnabled()?null:await hybridUiReady;
-      const payload = await adapter?.readGeneral({masterOnly:true}) || await fetchJson("/api/map-phase2b/preview/snapshot", { channel: "map-snapshot", ttl: 0, timeout: 10000 });
+      const stage = stageAddressBatchEnabled();
+      const adapter=stage?null:await hybridUiReady;
+      const payload = await adapter?.readGeneral({masterOnly:true}) || await fetchJson("/api/map-phase2b/preview/snapshot", {
+        channel: "map-snapshot", ttl: 0, timeout: 10000, prefetch: stage ? window.MapStaffEntry?.takeInitialSnapshot : undefined });
       if(id!==initialRequestId)throw Object.assign(Error('QUERY_CANCELLED'),{name:'AbortError'});
       if(payload.meta?.phase==='ERROR')throw Error('SNAPSHOT_READ_FAILED');
       snapshotFailure=null;
@@ -994,7 +996,7 @@
     const entry={};
     noteChronologyRead({vehicle,stage:'request'});
     entry.pending=fetchJson(rosterQuery(scope.date,scope.center,vehicle),{channel:'dated-chronology:'+scope.center+'|'+vehicle,
-      timeout:12000,allowSourceError:true}).then(response=>{
+      timeout:20000,allowSourceError:true}).then(response=>{
       const current=currentRosterRoute();
       if (!rosterAuthorized||current?.saved!==saved||current.key!==key||!OpsmapDaily.sameRosterScope(current.scope,scope)) return;
       if (routeAuditEnabled()) {
@@ -3812,9 +3814,10 @@
     const timer = setTimeout(() => controller.abort("timeout"), timeout);
     const started = performance.now();
     try {
-      const response = await fetch(url, { cache: "no-store", signal: controller.signal, headers: options.headers, method:options.method,body:options.body });
-      apiDiagnostics.set(new URL(url, location.href).pathname.split("/").pop(), { ms: Math.round(performance.now() - started), status: response.status, cache: response.headers.get("X-Phase2B-Cache") || "미제공",restoreMs:Number(response.headers.get('X-Opsmap-Restore-Ms'))||null });
-      const json = await response.json().catch(error=>{if(response.ok)throw error;return {};});
+      const prefetched = options.prefetch ? await options.prefetch(controller.signal) : null;
+      const response = prefetched?.response || await fetch(url, { cache: "no-store", signal: controller.signal, headers: options.headers, method:options.method,body:options.body });
+      apiDiagnostics.set(new URL(url, location.href).pathname.split("/").pop(), { ms: prefetched?.ms ?? Math.round(performance.now() - started), status: response.status, cache: response.headers.get("X-Phase2B-Cache") || "미제공",restoreMs:Number(response.headers.get('X-Opsmap-Restore-Ms'))||null });
+      const json = prefetched ? prefetched.json : await response.json().catch(error=>{if(response.ok)throw error;return {};});
       if (requestControllers.get(channel)?.token !== token) { const stale = new Error("STALE_RESPONSE"); stale.silent = true; throw stale; }
       if (!response.ok || json.error && !options.allowSourceError) {
         const retry=response.headers.get('Retry-After');

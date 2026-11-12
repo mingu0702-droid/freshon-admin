@@ -16,6 +16,7 @@ function criteria(query) {
 }
 
 function resolutionFor(level) {
+  if (level === 1) return 11;
   if (level <= 2) return 10;
   if (level <= 4) return 9;
   if (level >= 12) return 4;
@@ -24,6 +25,8 @@ function resolutionFor(level) {
   if (level >= 6) return 7;
   return 8;
 }
+
+const detailResolutions = ['8', '9', '10', '11'];
 
 export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, readRunId,
   readProviderCoverage, readStatus, staffResponseGuarded = false } = {}) {
@@ -71,7 +74,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     if (typeof box !== 'string' || box.length > 100 || typeof level !== 'string' || !/^(?:[1-9]|1[0-4])$/.test(level)) {
       return null;
     }
-    if (!['auto','8','9','10'].includes(resolution)) return null;
+    if (resolution !== 'auto' && !detailResolutions.includes(resolution)) return null;
     const coords = box.split(',');
     const bounds = coords.length === 4 && coords.every(v => /^-?\d+(?:\.\d+)?$/.test(v)) ? coords.map(Number) : null;
     const tag = req.get('X-Coverage-View-Tag');
@@ -91,7 +94,8 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     if (etag === tag) return { etag, data: null };
     const base = reader.viewFor(data, center, model.BASE_RESOLUTION);
     const span = Math.max(bounds[2]-bounds[0], bounds[3]-bounds[1]);
-    let resolution = Math.min(choice === 'auto' ? resolutionFor(level) : Number(choice), span > .75 ? 8 : span > .22 ? 9 : 10);
+    const viewportResolution = span > .75 ? 8 : span > .22 ? 9 : span > .06 ? 10 : 11;
+    let resolution = Math.min(choice === 'auto' ? resolutionFor(level) : Number(choice), viewportResolution);
     let view, visible;
     const select = () => {
       view = resolution >= model.BASE_RESOLUTION ? base : reader.viewFor(data, center, resolution);
@@ -196,7 +200,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     catch { return null; }
     const radius = req.query.radius ?? '0', resolution = req.query.resolution ?? '8';
     return query.length >= 2 && query.length <= 200 && !/[\u0000-\u001f]/.test(query) &&
-      ['0', '500', '1000'].includes(radius) && ['8','9','10'].includes(resolution) ? { query, radius: Number(radius), resolution:Number(resolution) } : null;
+      ['0', '500', '1000'].includes(radius) && detailResolutions.includes(resolution) ? { query, radius: Number(radius), resolution:Number(resolution) } : null;
   }, async ({ days, center, generation }, { query, radius, resolution }, { reader, model, h3 }) => {
     const data = await reader.readPeriod(days, generation);
     const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
@@ -209,7 +213,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const point = req.get('x-map-coverage-point') || '';
     if (point.length > 55 || !/^-?\d{1,3}(?:\.\d{1,16})?,-?\d{1,3}(?:\.\d{1,16})?$/.test(point)) return null;
     const resolution = req.query.resolution ?? '8';
-    return ['8','9','10'].includes(resolution) ? { location:point.split(',').map(Number), resolution:Number(resolution) } : null;
+    return detailResolutions.includes(resolution) ? { location:point.split(',').map(Number), resolution:Number(resolution) } : null;
   }, async ({ days, center, generation }, {location,resolution}, { reader, model, h3 }) => {
     if (!model.isPoint(...location)) throw Error('COVERAGE_QUERY_INVALID');
     const data = await reader.readPeriod(days, generation);

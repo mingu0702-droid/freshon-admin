@@ -4,7 +4,7 @@
   const stage = location.origin === 'https://freshon-admin-stage-preview-template.onrender.com';
   const preloadedScripts = new Set();
   let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivityCheck = 0, checking = null, checkingOwner = -1, confirming = null, confirmingOwner = -1, signingOut = null, logoutRequired = false;
-  let recoveryTimer = null, stageVerification;
+  let recoveryTimer = null, stageVerification, initialSnapshot;
   const requests = new Set(), purges = new Set();
   const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('map-staff-session') : null;
   const entry = document.createElement('section'); entry.id = 'mapStaffEntry';
@@ -102,6 +102,7 @@
   }
   function revoke(text, unknown = false) {
     epoch++; session = null; clearTimeout(timer); clearTimeout(recoveryTimer); password.value = '';
+    initialSnapshot?.controller.abort(); initialSnapshot = null;
     for (const controller of requests) controller.abort(); requests.clear();
     delete window.VEHICLE_AREA_DATA;
     document.body.dataset.mapStaffState = unknown ? 'checking' : 'signed-out'; entry.hidden = false; submit.disabled = unknown;
@@ -173,7 +174,34 @@
       throw error;
     }finally{clearTimeout(timer);requests.delete(controller);}
   }
+  function primeStageSnapshot(owner) {
+    const controller = new AbortController(), started = performance.now();
+    const request = { owner, controller };
+    initialSnapshot = request;
+    setTimeout(() => {
+      if (initialSnapshot === request) initialSnapshot = null;
+      controller.abort();
+    }, 10000);
+    request.result = window.fetch('/api/map-phase2b/preview/snapshot', { cache: 'no-store', signal: controller.signal })
+      .then(async response => ({ response, json: await response.json().catch(error => {
+        if (response.ok) throw error;
+        return {};
+      }), ms: Math.round(performance.now() - started) })).catch(() => null);
+  }
+  async function takeInitialSnapshot(signal) {
+    const request = initialSnapshot;
+    if (!request || request.owner !== epoch) return null;
+    initialSnapshot = null;
+    const cancel = () => request.controller.abort();
+    if (signal.aborted) cancel();
+    else signal.addEventListener('abort', cancel, { once: true });
+    try {
+      const result = await request.result;
+      return !signal.aborted && request.owner === epoch && session ? result : null;
+    } finally { signal.removeEventListener('abort', cancel); }
+  }
   async function bootstrap(owner) {
+    if (stage) primeStageSnapshot(owner);
     const placeholders = document.querySelectorAll('script[type="application/x-map-staff"]');
     for (const placeholder of placeholders) {
       const src = placeholder.dataset.src;
@@ -343,7 +371,7 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !logoutRequired) void check(); });
   window.addEventListener('online', () => { if (!logoutRequired) void check(); });
   window.addEventListener('pageshow', event => { if (event.persisted) void check(); });
-  window.MapStaffEntry = Object.freeze({ check, logout, expire, observe, status,
+  window.MapStaffEntry = Object.freeze({ check, logout, expire, observe, status, takeInitialSnapshot,
     session: () => session && { ...session }, registerPurge: purge => { purges.add(purge); return () => purges.delete(purge); } });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void check(), { once: true }); else void check();
 })();

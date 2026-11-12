@@ -111,7 +111,7 @@ test('four physical sources persist counts, deduplicate exact in-page IDs and bi
   assert.throws(()=>validateOpsmapSyncDay(copy,date),/DELIVERY_DISPATCH_PROOF/);
 });
 
-test('the opt-in bounded status-record read uses the observed Delivery schema and excludes a proven batch from visits',async()=>{
+test('the opt-in status-record read retries only transient failures and excludes a proven batch from visits',async()=>{
   const time=at('17:00');
   const rows=[task(1,'105',{completeType:'DIRECT',completeDatedAt:time}),task(2,'105',{completeType:'DIRECT',completeDatedAt:time})];
   const requests=[];
@@ -121,11 +121,12 @@ test('the opt-in bounded status-record read uses the observed Delivery schema an
     if (url.pathname==='/api/bali/task') return page(rows);
     const id=Number(url.pathname.split('/')[4]);
     requests.push(id);
+    if (id===1 && requests.filter(value=>value===1).length===1) return new Response(null,{status:503});
     return Response.json([{id:100+id,taskId:id,status:'COMPLETED',completeType:'DIRECT',createdAt:time,
       gpsPosition:{latitude:'37.15',longitude:'127.05',isEmpty:false},...(id===2?{action:'BATCH_COMPLETE'}:{})}]);
   }});
   const first=await Promise.all([read.readContract(date,'osan','105'),read.readContract(date,'osan','105')]);
-  assert.deepEqual(requests,[1,2]);
+  assert.deepEqual(requests,[1,2,1]);
   assert.deepEqual(first[0],first[1]);
   assert.deepEqual(first[0].chronology,[deliveryTaskId(1)]);
   assert.equal(first[0].rows.find(row=>row.deliveryId===deliveryTaskId(1)).sourceCompletionType,'DIRECT');
