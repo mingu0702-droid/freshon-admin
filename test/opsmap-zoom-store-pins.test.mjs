@@ -67,6 +67,9 @@ test('pins distinguish the primary fixed route, confirmed blank, and missing evi
   assert.deepEqual(pinAssignment(row),{code:'114',label:'114',kind:'vehicle'});
   assert.equal(pinAssignment(row,'DATE_ROUTE').label,'202');
   assert.equal(pinAssignment({...row,baseVehicle:'오산 신규'}).label,'오산신규');
+  assert.deepEqual(pinAssignment({...row,baseVehicle:'호남신규'}),{code:'호남신규',label:'호남신규',kind:'new'});
+  assert.equal(pinAssignment({...row,baseVehicle:'척01'}).label,'척01');
+  assert.equal(pinAssignment({...row,baseVehicle:'용09'}).label,'용09');
   assert.equal(pinAssignment({...row,baseVehicle:'보류'}).label,'오산보류');
   const blank={baseVehicle:'',vehicle:'202',baseVehicleState:'UNASSIGNED',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'};
   assert.equal(pinAssignment(blank).label,'•');

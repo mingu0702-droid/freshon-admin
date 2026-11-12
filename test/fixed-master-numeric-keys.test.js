@@ -35,8 +35,11 @@ test('primary fixed dispatch keeps status labels and roundtrips proof of an expl
   {estCd:'S4',logCd:'011',mainCarSeqNm:null,carSeqMonNm:'101'},
   {estCd:'S5',logCd:'011',carSeqMonNm:'122'},
   {estCd:'S6',logCd:'011',mainCarSeqNm:'미확인'},
+  {estCd:'S7',logCd:'013',mainCarSeqNm:'척01'},
+  {estCd:'S8',logCd:'013',mainCarSeqNm:' 용09 호차 '},
+  {estCd:'S9',logCd:'013',mainCarSeqNm:'호남 신규'},
  ]);
- assert.deepEqual(projected.map(r=>r.baseVehicle),['오산신규','오산보류','114','','','']);
+ assert.deepEqual(projected.map(r=>r.baseVehicle),['오산신규','오산보류','114','','','','척01','용09','호남신규']);
  assert.equal(projected[3].baseVehicleEmptyVerified,true);
  assert.equal(projected[3].weekdays.Mon,'101');
  assert.equal(projected[4].baseVehicleEmptyVerified,undefined);

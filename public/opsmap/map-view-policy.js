@@ -27,7 +27,7 @@
     if(!dated&&row.baseVehicleState==='CONFLICT')return unverified;
     const raw=dated?row.vehicle||row.actualVehicle:row.baseVehicle??(row.baseVehicleState?'':row.vehicle);
     const value=String(raw??'').normalize('NFKC').trim(), compact=value.replace(/\s+/g,'');
-    if(compact==='오산신규')return {code:'오산신규',label:'오산신규',kind:'new'};
+    if(/^(?:오산|영남|호남|이천)신규$/.test(compact))return {code:compact,label:compact,kind:'new'};
     if(compact==='보류'||compact==='오산보류')return {code:'오산보류',label:'오산보류',kind:'held'};
     const number=compact.match(/^(\d+)(?:호(?:차)?)?$/)?.[1];
     if(number)return {code:number,label:number,kind:'vehicle'};

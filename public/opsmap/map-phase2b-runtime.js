@@ -1766,7 +1766,11 @@
       if(group&&assignment.kind==='mixed'){
         const routes=row.clusterVehicles;
         label.className='pinRoutes';
-        label.textContent=routes.slice(0,2).map(code=>code==='오산신규'?'신규':code==='오산보류'?'보류':code).join('\n');
+        label.textContent=routes.slice(0,2).map(code=>{
+          if(code==='오산신규')return '신규';
+          if(code==='오산보류')return '보류';
+          return code.endsWith('신규')?code.slice(0,2):code;
+        }).join('\n');
         if(routes.length>2)label.dataset.more='+'+(routes.length-2);
       }else{
         if(status || assignment.kind === 'unverified')label.className='pinStatus';
