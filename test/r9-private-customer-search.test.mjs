@@ -19,6 +19,17 @@ test('authenticated current address matches join by code without returning priva
 test('changed address hash cannot reuse a previously verified coordinate',async()=>{const f=fixture();const r=await searchCustomerSummaries({query:'서울 강남구 합성로10',snapshot:{rows:[{customerCode:'S970001',lat:37,lng:127,originalAddressHash:'f'.repeat(64)}]},searchMaster:async q=>({ok:true,data:f.search(q)})});const row=r.data.find(x=>x.customerCode==='S970001');assert.equal(row.lat,null);assert.equal(row.coordinateStatus,'CONFLICT');assert.equal(row.addressChanged,true);});
 test('master failure does not break known names or certify unknown addresses',async()=>{const searchMaster=async()=>{throw Error('HUB_TIMEOUT');};const r=await searchCustomerSummaries({query:'합성',snapshot:{rows:[{customerCode:'S970001',customerName:'합성'}]},searchMaster});assert.equal(r.data.length,1);assert.equal(r.meta.customerMatchVerified,false);await assert.rejects(searchCustomerSummaries({query:'서울 미등록로 99',snapshot:{rows:[]},searchMaster}),/HUB_TIMEOUT/);});
 
+test('a failed source lookup cannot substitute a nearby number or a different province', async () => {
+ const snapshot={rows:[
+  {customerCode:'S970001',address:'경기 광주시 합성로 560'},
+  {customerCode:'S970002',address:'전남 광주시 합성로 56'}
+ ]};
+ const searchMaster=async()=>{throw Error('HUB_TIMEOUT');};
+ await assert.rejects(searchCustomerSummaries({query:'경기 광주시 합성로 56',snapshot,searchMaster}),/HUB_TIMEOUT/);
+ const matched=await searchCustomerSummaries({query:'경기도 광주시 합성로 560',snapshot,searchMaster});
+ assert.deepEqual(matched.data.map(row=>[row.customerCode,row.matchedBy]),[['S970001','ADDRESS']]);
+});
+
 test('preparing a private address index coalesces callers and preserves exact matches', async () => {
  const rows=Array.from({length:130},(_,i)=>({customerCode:`S98${String(i).padStart(4,'0')}`,address:`서울 강남구 합성로 ${i+10}`}));
  const snapshot={rows,sourceGeneration:'a'.repeat(64)};

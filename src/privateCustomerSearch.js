@@ -126,7 +126,11 @@ export function resolvePreservedAddressBatch(rows,snapshot,officialIndex,{includ
 }
 export async function searchCustomerSummaries({query,snapshot,searchMaster,signal,deadline}){
  const rows=snapshot?.rows||[],index=snapshotIndex(snapshot),byCode={get:key=>index.byCode.get(key)?.at(-1)},needle=text(query),exact=byCode.get(query.toUpperCase());
- const local=exact?[exact]:rows.filter(r=>text(r.customerName).includes(needle)||[r.address,r.customerAddress].some(v=>v&&text(v).includes(needle))).slice(0,50);
+ const addressQuery=!exact&&Boolean(exactAddressKey(query));
+ let local;
+ if(exact)local=[exact];
+ else if(addressQuery)local=rows.length?preservedMatches(query,snapshot).matches.slice(0,50).map(row=>({...row,matchedBy:'ADDRESS'})):[];
+ else local=rows.filter(r=>text(r.customerName).includes(needle)||[r.address,r.customerAddress].some(v=>v&&text(v).includes(needle))).slice(0,50);
  if(exact)return {ok:true,data:local.map(projection),meta:{source:'EXISTING_PRODUCTION_SNAPSHOT',matchedBy:'CODE',customerMatchVerified:false,complete:false,currentness:'UNCONFIRMED'}};
  let value,sourceError;
  try{
@@ -136,7 +140,9 @@ export async function searchCustomerSummaries({query,snapshot,searchMaster,signa
  }catch(error){sourceError=/^(?:SEARCH|HUB|PRIVATE_READER)_[A-Z_]+$/.test(error.message||'')?error.message:'SEARCH_SOURCE_UNAVAILABLE';}
  if(!value||sourceError){if(local.length)return {ok:true,data:local.map(projection),meta:{source:'EXISTING_PRODUCTION_SNAPSHOT',customerMatchVerified:false,complete:false,partial:true,sourceError}};throw Object.assign(Error(sourceError||'SEARCH_SOURCE_UNAVAILABLE'),{code:sourceError});}
  const combined=new Map(local.map(r=>[r.customerCode,projection(r)]));
- for(const row of value.rows){const old=byCode.get(row.customerCode),hash=old?.originalAddressHash||old?.addressHash,changed=!!hash&&hash!==row.addressHash;
+ for(const row of value.rows){
+  if(addressQuery&&row.matchedBy!=='ADDRESS')continue;
+  const old=byCode.get(row.customerCode),hash=old?.originalAddressHash||old?.addressHash,changed=!!hash&&hash!==row.addressHash;
   combined.set(row.customerCode,projection({...old,customerCode:row.customerCode,customerName:row.customerName,lat:changed?null:old?.lat??null,lng:changed?null:old?.lng??null,matchedBy:row.matchedBy,addressChanged:changed,coordinateStatus:changed?'CONFLICT':old?.coordinateStatus,sourceUpdatedAt:row.sourceUpdatedAt}));}
  return {ok:true,data:[...combined.values()].slice(0,50),meta:{source:'CUSTOMER_CURRENT_METADATA',customerMatchVerified:value.complete===true,complete:value.complete,truncated:value.truncated||combined.size>50,totalMatches:value.totalMatches,sourceRows:value.sourceRows,currentness:'CURRENT_CUSTOMER_LOOKUP'}};
 }

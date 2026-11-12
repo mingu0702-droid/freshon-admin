@@ -2669,7 +2669,6 @@
       }
       if([401,403,409].includes(evidenceError?.status)){setSearchState(NewAreaRequests.message(evidenceError));trace.finish('error');return;}
     }
-    if(address&&(!stageLookup||customerRegistry?.summary().complete===true)&&showMatches(rankSearchRows(lookupText)))return;
     const temporary=address&&NewAreaRequests.temporaryPoint(text);
     if(temporary){if(!state.map)await initMap();if(active())finishAddress({...temporary,address:text},{owner,trace});return;}
     let remote=[],meta=null,lookupError=null;
