@@ -2405,7 +2405,7 @@
   }
 
   function unifiedAddressQuery(text) {
-    return /(?:대로|로|길|동\d+가|동|리|읍|면|가|번지)\s*(?:(?:산|지하)\s*)?\d/.test(text);
+    return /(?:대로|로|길|동\d+가|동|리|읍|면|가|번지)\s*(?:(?:산|지하)\s*)?\d/.test(Phase2bUi.addressLookupText(text));
   }
 
   function stageAddressHashMatches(rows, hash) {
