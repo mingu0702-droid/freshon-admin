@@ -30,7 +30,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
-  searchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,customerRegistry:null,
+  searchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,
   stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{stageAddress,temporaryPoint:()=>null,addressQuery:()=>'',addressQueries:()=>[],message:error=>error.code},Phase2bUi:{},
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
@@ -100,6 +100,19 @@ test('expired Stage evidence is surfaced instead of falling through to live or e
  await f.context.searchPeriod('서울 합성구 보호로 6');
  assert.equal(f.context.lastStatus,'STAGE_BATCH_GENERATION_CHANGED');
  assert.equal(f.queries.length,0);assert.equal(f.fallback.length,0);
+});
+
+test('a code missing from the restoring Stage snapshot waits for the verified registry',async()=>{
+ const row=store('S990204','합성 복원 매장','');
+ const f=fixture({stageAddress:async()=>{throw Error('unexpected address lookup');}});
+ f.context.snapshotRetryAfter=2000;
+ f.context.waitForSearchSnapshot=async()=>{
+   f.context.coordinateByCode.set(row.customerCode,row);
+   f.context.snapshotRetryAfter=0;
+ };
+ await f.context.searchPeriod(row.customerCode);
+ assert.equal(f.selected[0]?.customerCode,row.customerCode);
+ assert.equal(f.queries.length,0);
 });
 
 test('an exact sealed address hash uses authorized in-memory rows while changes fall back to the server',async()=>{

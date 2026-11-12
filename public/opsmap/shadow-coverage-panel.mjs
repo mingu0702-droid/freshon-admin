@@ -713,17 +713,18 @@ export function createCoveragePanel({ workspace, header }) {
     const current = view, resolution = Math.max(8, current?.resolution || row.detailResolution || 8);
     const label = row.kind === 'store' ? undefined : row.name;
     const use = (id,bundle=focusedSearchDetail) => { if (id) void selectCell(id,0,label,bundle); };
-    if(!current){
-      const bundle=focusedSearchDetail;
-      if(!active||focusedSearchRow!==row||bundle?.days!==days||!bundle.cell||bundle.cell.id!==(row.detailId||row.id))return;
-      // A verified point response already has its own period and generation. A slow
-      // initial viewport read must not hide the detail or make a second request.
+    const bundle=focusedSearchDetail;
+    if(active&&focusedSearchRow===row&&bundle?.days===days&&bundle.cell?.id===(row.detailId||row.id)&&
+      (!current||current.generation===bundle.generation&&loadedCenter===center)){
+      // Show the verified point's own detail even if zooming requests a finer cell.
+      abort('detail');
       collapsePanel(false);
       selected=label&&bundle.cell.label==='행정구역 미확인'?{...bundle.cell,label:label+' 격자'}:bundle.cell;
       renderDetail(selected,0,bundle);
       paint();
-      return;
+      if(!current||bundle.cell.resolution===resolution)return;
     }
+    if(!current)return;
     if(resolution===8&&row.id){use(row.id);return;}
     if (!row.location || resolution === (row.detailResolution || 8)) {
       use(row.detailId || row.id);

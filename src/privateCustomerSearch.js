@@ -24,6 +24,7 @@ function snapshotIndex(snapshot){
  return entry;
 }
 function exactAddressKey(address){
+ if(typeof address!=='string'||!address.trim())return null;
  const official=officialAddressKey(address);
  if(official)return official;
  const prepared=prepareRecoveryCoordinateAddress(address);
@@ -40,7 +41,11 @@ function preservedMatches(query,snapshot){
    if(!row.addressChanged&&row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'){
     addresses.push(row.customerAddress,row.roadAddress,row.roadNameAddress,row.lotAddress,row.jibunAddress);
    }
-   for(const key of new Set(addresses.map(exactAddressKey).filter(Boolean))){
+   const keys=new Set();
+   for(const address of new Set(addresses)){
+    const key=exactAddressKey(address);if(key)keys.add(key);
+   }
+   for(const key of keys){
     const matches=byAddress.get(key)||[];matches.push(row);byAddress.set(key,matches);}}
   index.byAddress=byAddress;
  }

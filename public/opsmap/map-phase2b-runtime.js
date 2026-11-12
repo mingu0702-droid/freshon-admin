@@ -459,6 +459,22 @@
       if(snapshotRetryAfter)scheduleSnapshotRecovery(id,until);
     },delay);
   }
+  function waitForSearchSnapshot(signal){
+    if(signal.aborted||!stageAddressBatchEnabled()||!snapshotRetryAfter)return Promise.resolve(false);
+    const rows=latestSnapshotRows,generation=snapshotMeta?.sourceGeneration;
+    return new Promise(resolve=>{
+      const finish=changed=>{
+        clearTimeout(timer);window.removeEventListener('map-stores-replaced',check);signal.removeEventListener('abort',cancel);resolve(changed);
+      };
+      const check=()=>{
+        if(rows!==latestSnapshotRows||generation!==snapshotMeta?.sourceGeneration||!snapshotRetryAfter)finish(true);
+      };
+      const cancel=()=>finish(false);
+      const timer=setTimeout(cancel,14000);
+      window.addEventListener('map-stores-replaced',check);
+      signal.addEventListener('abort',cancel,{once:true});
+    });
+  }
   function snapshotFailureLabel(){
     return [401,403].includes(snapshotFailure?.status)?'직원 인증 또는 조회 권한을 확인해 주세요.':
       snapshotFailure?.code==='REQUEST_TIMEOUT'?'매장 자료 응답 시간이 초과됐습니다.':'저장 매장 자료를 확인할 수 없습니다.';
@@ -2571,7 +2587,6 @@
     unifiedSearchController=new AbortController();const signal=unifiedSearchController.signal;
     const code=/^[A-Z]\d{3,}$/i.test(text)?text.toUpperCase():null;
     const address=unifiedAddressQuery(text)||/^\d{19}$/.test(text);
-    const generation=snapshotMeta?.sourceGeneration??null;
     const stageLookup=address&&stageAddressBatchEnabled();
     const showMatches=rows=>{
       if(!rows.length)return false;
@@ -2584,6 +2599,17 @@
     if(!active())return;
     trace.mark('matching');
     if(showMatches(local))return;
+    if(stageAddressBatchEnabled()&&snapshotRetryAfter){
+      setSearchState('저장 매장 자료 복원 중',true);
+      await waitForSearchSnapshot(signal);
+      if(!active())return;
+      const restored=await findStoredSearchRows(text,{signal,address});
+      if(!active())return;
+      trace.mark('matching');
+      if(showMatches(restored))return;
+      if(!address&&snapshotRetryAfter){setSearchState('저장 매장 자료 복원이 늦어지고 있습니다 · 잠시 후 다시 조회해 주세요.');trace.finish('unresolved');return;}
+    }
+    const generation=snapshotMeta?.sourceGeneration??null;
     let evidenceError=null;
     if(stageLookup){
       trace.mark('apiStart');
@@ -2639,7 +2665,7 @@
       renderResults(rows,{owner,trace});return;
     }
     closeUnifiedSearchResults();
-    if(code){setSearchState(lookupError?'고객 조회 실패 · 다시 시도해 주세요.':'고객코드를 확인해 주세요.');return;}
+    if(code){setSearchState(lookupError?'고객 조회 실패 · 다시 시도해 주세요.':'고객코드를 확인해 주세요.');trace.finish(lookupError?'error':'unresolved');return;}
     if(text.length<2){setSearchState('주소 또는 상호를 정확히 입력하세요.');return;}
     // A failed Customer lookup is not proof that this is a new customer.
     if([401,403].includes(lookupError?.status)){setSearchState(NewAreaRequests.message(lookupError));trace.finish('error');return;}
