@@ -149,6 +149,11 @@
 .areaRouteList{max-height:min(220px,35dvh);overflow:auto;overscroll-behavior:contain;padding-inline-start:18px;margin:5px 0}
 .areaDispatchChoice{max-width:100%;min-height:32px;text-align:left;white-space:normal;overflow-wrap:anywhere}
 .areaDispatchChoice[aria-pressed="true"]{border-color:var(--primary,#2457d6)}
+.temporaryPinActions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0;font-size:12px}
+.temporaryDistanceLabel{display:block;white-space:nowrap;padding:3px 7px;background:#fff;color:#5b21b6;border:1px solid #a78bfa;border-radius:5px;font-size:12px;font-weight:700;pointer-events:none}
+.areaVehicleMapBadge{display:block;box-sizing:border-box;height:24px;min-width:36px;padding:1px 5px;background:#fff;color:#1e293b;border:2px solid var(--pin-color,#64748b);border-radius:6px;font-size:11px;font-weight:700;white-space:nowrap}
+.areaVehicleMapBadge[aria-pressed="true"]{color:#fff;background:#334155}
 @media(max-width:760px){.areaDispatchChoice{min-height:44px}}
+@media(max-width:760px){.approvedShellCandidate.dotRestored #detailSection[data-temporary-inspection]{top:auto!important;bottom:12px!important;max-height:54%!important}}
 .areaFixedReference{margin-top:8px}
 @media(max-width:760px){.areaRadius select{min-height:40px}.areaVehicles summary{min-height:36px;padding-block:6px}}

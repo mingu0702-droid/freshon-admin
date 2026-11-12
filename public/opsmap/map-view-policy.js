@@ -2,6 +2,7 @@
 (function (root) {
   'use strict';
   const EARTH = 6378137;
+  const storePinLevel = 7;
   const groupingCache=new WeakMap();
   const finitePoint = row => Number.isFinite(row?.lat) && Number.isFinite(row?.lng) && Math.abs(row.lat)<=90 && Math.abs(row.lng)<=180;
   const regionColors = Object.freeze({ '수도권':'#2563eb', '강원권':'#0f766e', '충청권':'#b45309', '호남권':'#7c3aed', '영남권':'#047857', '제주권':'#0369a1' });
@@ -64,7 +65,7 @@
       // A group has no customer identity. Keep original members for the
       // drill-down list, including different stores in the very same building.
       customerCode:'',customerName:label,vehicle:regional?'':v,
-      lat:group.lat/group.rows.length,lng:group.lng/group.rows.length,
+      lat:sameLocation?group.south:group.lat/group.rows.length,lng:sameLocation?group.west:group.lng/group.rows.length,
       clusterKey:group.key,clusterCount:group.rows.length,clusterLabel:label,
       clusterKind:sameLocation?'location':regional?'region':v?'vehicle':'mixed',
       clusterColorKey:regional?r:v||r,addressRegion:r,
@@ -85,7 +86,7 @@
       (protectedCodes.has(row.customerCode) ? pinned : ordinary).push(row);
     }
     const visible = row => {
-      if (!viewport || protectedCodes.has(row.customerCode)) return true;
+      if (!viewport || protectedCodes.has(row.customerCode) || row.memberCodes?.some(code=>protectedCodes.has(code))) return true;
       const p = project(row);
       return Number.isFinite(p?.x) && Number.isFinite(p?.y) && p.x >= -80 && p.y >= -80 && p.x <= viewport.width + 80 && p.y <= viewport.height + 80;
     };
@@ -103,15 +104,17 @@
     // overview. Preserve every distinct positioned stop, irrespective of the
     // generic overview marker cap. Only truly co-located stores share a
     // selectable same-location card so none becomes inaccessible.
-    if (options.grouping === 'individual') {
+    if (options.grouping === 'individual' || options.grouping === 'locations') {
+      const keepTogether=options.grouping==='locations';
       const places = new Map();
-      for (const row of ordinary) {
+      for (const row of keepTogether?[...ordinary,...pinned]:ordinary) {
         const key = `${mode}:same-location:${row.lat}:${row.lng}`;
         let group = places.get(key);
         if (!group) { group = makeGroup(key); places.set(key, group); }
         addRow(group, row);
       }
-      return [...pinned, ...[...places.values()].map(group => clusterRow(group, mode, band))].filter(visible);
+      const locations=[...places.values()].map(group => clusterRow(group, mode, band));
+      return (keepTogether?locations:[...pinned,...locations]).filter(visible);
     }
     const available=Math.max(1,limit-pinned.length);
     const ordinaryCount=result=>result.reduce((count,row)=>count+(!protectedCodes.has(row.customerCode)&&visible(row)?1:0),0);
@@ -176,16 +179,37 @@
     }
     return area?{...area,x:(area.left+area.right)/2,y:(area.top+area.bottom)/2,basis:'UNOBSCURED_MAP'}:null;
   }
-  function cameraDomLayout(element) {
+  function cameraDomLayout(element,measurePin=true) {
     const doc=element?.ownerDocument,win=doc?.defaultView||root,visual=win.visualViewport;
     const viewportRect={left:visual?.offsetLeft||0,top:visual?.offsetTop||0,width:visual?.width||win.innerWidth,height:visual?.height||win.innerHeight};
     const rect=node=>node?.getClientRects?.().length&&!node.hidden?node.getBoundingClientRect():null;
-    const pin=rect(doc?.querySelector('#map .marker.selected'))||[...(doc?.querySelectorAll('#map .marker')||[])].map(rect).find(Boolean);
+    const pin=measurePin&&(rect(doc?.querySelector('#map .marker.selected'))||[...(doc?.querySelectorAll('#map .marker')||[])].find(node=>node.getClientRects().length)?.getBoundingClientRect());
     return {mapRect:element?.getBoundingClientRect?.(),viewportRect,headerRect:rect(doc?.querySelector('#approvedSiteHeader')),
       occluders:[...(doc?.querySelectorAll('#leftPanel,#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
       anchorHeight:pin?.height||0,
       anchorWidth:pin?.width||0,
       mobile:win.matchMedia?.('(max-width: 760px)')?.matches??Number(viewportRect.width)<=760};
+  }
+  function lineLabelPoint(start,end,box) {
+    let low=0,high=1;
+    for(const [axis,min,max] of [['x',box.left,box.right],['y',box.top,box.bottom]]){
+      const from=start[axis],delta=end[axis]-from;
+      if(!delta){if(from<min||from>max)return null;continue;}
+      const a=(min-from)/delta,b=(max-from)/delta;
+      low=Math.max(low,Math.min(a,b));high=Math.min(high,Math.max(a,b));
+    }
+    if(low>high)return null;
+    const fraction=(low+high)/2;
+    return {x:start.x+(end.x-start.x)*fraction,y:start.y+(end.y-start.y)*fraction};
+  }
+  function visibleLineLabelPoint(element,start,end) {
+    const layout=cameraDomLayout(element,false), map=layout.mapRect;
+    const area=cameraFocusViewport({...layout,mobile:false});
+    if(!area)return null;
+    const xInset=Math.min(42,area.width/4), yInset=Math.min(26,area.height/4);
+    const sx=element.clientWidth/map.width,sy=element.clientHeight/map.height;
+    return lineLabelPoint(start,end,{left:(area.left+xInset-map.left)*sx,right:(area.right-xInset-map.left)*sx,
+      top:(area.top+yInset-map.top)*sy,bottom:(area.bottom-yInset-map.top)*sy});
   }
   function createCamera({map, element, clock=Date.now, raf=fn=>requestAnimationFrame(fn), cancelRaf=id=>cancelAnimationFrame(id),layout=()=>cameraDomLayout(element),pixel=(x,y)=>root.kakao?.maps?.Point?new root.kakao.maps.Point(x,y):{x,y}}={}) {
     let width=-1,height=-1, frame=null, focusFrame=null, disposed=false, interaction=0, movingUntil=0,active=null,sequence=0,lastFocus=null;
@@ -249,5 +273,5 @@
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,zoomBand,createCamera,regionColors,cameraFocusViewport});
+  root.MapViewPolicy=Object.freeze({stableClusters,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint});
 })(typeof window==='object'?window:globalThis);

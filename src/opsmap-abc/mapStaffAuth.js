@@ -21,6 +21,55 @@ const legacyHash = hash => /^scrypt\$131072\$8\$1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9
 const argonHash = hash => /^\$argon2id\$v=19\$m=19456,(?:t=2,p=1|p=1,t=2)\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$/.test(hash || '');
 const validHash = hash => legacyHash(hash) || argonHash(hash);
 const argonParams = { type: argon2.argon2id, version: 0x13, memoryCost: 19456, timeCost: 2, parallelism: 1, hashLength: 32 };
+const loginWindowMs = 15 * 60 * 1000;
+
+function stageLoginThrottle(env, now) {
+  const limit = (name, ceiling) => {
+    const value = env[name] === undefined ? ceiling : Number(env[name]);
+    if (!Number.isInteger(value) || value < 1 || value > ceiling) throw Error('STAFF_LOGIN_POLICY_INVALID');
+    return value;
+  };
+  const attemptLimit = limit('MAP_STAFF_LOGIN_ATTEMPT_LIMIT', 100);
+  const failureLimit = limit('MAP_STAFF_LOGIN_FAILURE_LIMIT', 30);
+  const peerLimit = limit('MAP_STAFF_LOGIN_PEER_FAILURE_LIMIT', 10);
+  const peerFailures = new Map();
+  let attempts, failures, tail = Promise.resolve();
+  const active = (bucket, at) => bucket && at < bucket.until;
+  const delay = (bucket, cap, at) => active(bucket, at) && bucket.count >= cap ? bucket.until - at : 0;
+  const increment = (bucket, at) => active(bucket, at)
+    ? { count: bucket.count + 1, until: bucket.until }
+    : { count: 1, until: at + loginWindowMs };
+  const failureDelay = (peer, at) => Math.max(delay(failures, failureLimit, at), delay(peerFailures.get(peer), peerLimit, at));
+  return {
+    attemptLimit,
+    begin(req) {
+      // A socket peer is stable and cannot be replaced with a client-supplied header.
+      const peer = digest(req.socket.remoteAddress || 'unknown').toString('hex');
+      const at = now();
+      for (const [key, bucket] of peerFailures) if (!active(bucket, at)) peerFailures.delete(key);
+      const retry = Math.max(delay(attempts, attemptLimit, at), failureDelay(peer, at));
+      if (!retry) attempts = increment(attempts, at);
+      return { peer, retry };
+    },
+    verify(peer, check) {
+      // Queue only password checks. Argon2/scrypt uses one worker's memory and
+      // queued checks see any failures that reached the cap ahead of them.
+      const result = tail.then(async () => {
+        const retry = failureDelay(peer, now());
+        if (retry) return { retry };
+        const valid = await check();
+        if (!valid) {
+          const at = now();
+          failures = increment(failures, at);
+          peerFailures.set(peer, increment(peerFailures.get(peer), at));
+        }
+        return { valid };
+      });
+      tail = result.then(() => {}, () => {});
+      return result;
+    }
+  };
+}
 
 // OWASP Argon2id baseline; native async worker, never on the JS event loop.
 // Existing scrypt hashes remain valid until the operator replaces only the hash.
@@ -40,6 +89,7 @@ export async function verifyStaffPassword(password, hash) {
 // The approved persistent store survives restarts; credential rotation still revokes sessions.
 export function createMapStaffAuth({ env = process.env, now = Date.now, sessionStore } = {}) {
   const policy=staffSessionPolicy(env);
+  const stageThrottle=env.OPSMAP_STAGE_VERIFY_ONLY==='1'?stageLoginThrottle(env,now):null;
   const sessions = new Map(), attempts = new Map();
   const revoked = new Set();
   const processStartedAt = new Date(now()).toISOString();
@@ -99,7 +149,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
     next();
   });
   function limited(req) {
-    const time = now(), windowMs = 15 * 60 * 1000;
+    const time = now();
     for (const [key, item] of attempts) if (time >= item.until) attempts.delete(key);
     // socket peer only: do NOT trust arbitrary X-Forwarded-For. Global budget
     // protects the shared account even if the reverse proxy has multiple peers.
@@ -107,7 +157,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
     const keys = [['global', 30], [peer, 10]];
     for (const [key, limit] of keys) if ((attempts.get(key)?.count || 0) >= limit) return true;
     if (attempts.size > 1024) return true;
-    for (const [key] of keys) { const item = attempts.get(key) || { count: 0, until: time + windowMs }; item.count++; attempts.set(key, item); }
+    for (const [key] of keys) { const item = attempts.get(key) || { count: 0, until: time + loginWindowMs }; item.count++; attempts.set(key, item); }
     return false;
   }
   const router = express.Router();
@@ -125,21 +175,30 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
     return res.json({ authenticated: Boolean(session), configured: configuration().ready,
       expiresAt: session?.expiresAt || null, idleExpiresAt: session?.idleExpiresAt || null,
       reason: session ? null : expired ? 'SESSION_EXPIRED' : sessionKey(req, configuration()) ? 'SESSION_UNAVAILABLE' : 'SIGNED_OUT',
-      policy: { ...policy, persistence: sessionStore?.kind||'PROCESS_MEMORY', processStartedAt } });
+      policy: { ...policy, persistence: sessionStore?.kind||'PROCESS_MEMORY', processStartedAt,
+        ...(session&&stageThrottle ? {loginAttemptLimit:stageThrottle.attemptLimit,loginWindowMs} : {}) } });
   });
   router.post('/login', async (req, res) => {
     const config = configuration();
     if (!config.ready) return res.status(503).json({ error: 'STAFF_AUTH_NOT_CONFIGURED' });
     if (!sameOrigin(req, config) || !req.is('application/json')) return res.status(403).json({ error: 'ORIGIN_REJECTED' });
-    if (limited(req) || verifying) { res.set('Retry-After', '60'); return res.status(429).json({ error: 'LOGIN_RETRY_LATER' }); }
-    if (typeof req.body?.id !== 'string' || req.body.id.length > 128 || typeof req.body?.password !== 'string' || Buffer.byteLength(req.body.password) > 1024) return res.status(401).json({ error: 'LOGIN_FAILED' });
-    verifying = true;
+    const rateLimited = delayMs => res.set('Retry-After', String(Math.ceil(delayMs / 1000))).status(429).json({ error: 'LOGIN_RETRY_LATER' });
+    const admission = stageThrottle?.begin(req);
+    if (admission?.retry) return rateLimited(admission.retry);
+    if (!stageThrottle && (limited(req) || verifying)) return rateLimited(60000);
+    if (!stageThrottle) verifying = true;
     try {
-      const verifyStarted = performance.now();
-      const valid = await verifyStaffPassword(req.body.password, config.hash);
-      addStaffTiming(res, 'authVerify', performance.now() - verifyStarted);
+      const check = async () => {
+        if (typeof req.body?.id !== 'string' || req.body.id.length > 128 || typeof req.body?.password !== 'string' || Buffer.byteLength(req.body.password) > 1024) return false;
+        const verifyStarted = performance.now();
+        const valid = await verifyStaffPassword(req.body.password, config.hash);
+        addStaffTiming(res, 'authVerify', performance.now() - verifyStarted);
+        return valid && equal(req.body.id, config.id);
+      };
+      const result = stageThrottle ? await stageThrottle.verify(admission.peer, check) : { valid: await check() };
+      if (result.retry) return rateLimited(result.retry);
       const current = configuration();
-      if (!valid || !equal(req.body.id, config.id) || !current.ready || !equal(current.hash, config.hash) || !equal(current.secret, config.secret) || !equal(current.id, config.id)) return res.status(401).json({ error: 'LOGIN_FAILED' });
+      if (!result.valid || !current.ready || !equal(current.hash, config.hash) || !equal(current.secret, config.secret) || !equal(current.id, config.id)) return res.status(401).json({ error: 'LOGIN_FAILED' });
       const sessionStarted = performance.now(), time = now();
       for (const [key, session] of sessions) if (time >= session.expiresAt || time >= session.idleExpiresAt) sessions.delete(key);
       if (sessions.size >= 1000) return res.status(503).json({ error: 'LOGIN_RETRY_LATER' });
@@ -154,7 +213,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
       addStaffTiming(res, 'session', performance.now() - sessionStarted);
       return res.json({ authenticated: true, ...session });
     } catch { return res.status(503).json({ error: 'LOGIN_UNAVAILABLE' }); }
-    finally { verifying = false; if (req.body) req.body.password = ''; }
+    finally { if (!stageThrottle) verifying = false; if (req.body) req.body.password = ''; }
   });
   router.post('/logout', async (req, res) => {
     const started = performance.now();

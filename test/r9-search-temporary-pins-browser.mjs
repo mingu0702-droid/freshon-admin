@@ -33,14 +33,14 @@ window.KakaoMapsAdapter={ready:()=>Promise.resolve(),reset(){}};`;
 const runtime=fs.readFileSync(path.join(root,'map-phase2b-runtime.js'),'utf8').replace('\n  initVehicles();',`
   function selectUnifiedSearchStore(row){window.selectedSyntheticCustomer=row.customerCode;}
   window.tempPinTest={begin(text,options={}){++state.searchRequestId;return searchExternalAddress(text,{owner:state.searchRequestId,...options});},
-   click(lat,lng){kakao.maps.event.trigger(state.map,'click',{latLng:new kakao.maps.LatLng(lat,lng)});},clear:clearSearchTemporaryPin,
+   click(lat,lng){kakao.maps.event.trigger(state.map,'click',{latLng:new kakao.maps.LatLng(lat,lng)});},clear:clearTemporaryPins,
    finish:(p,owner=state.searchRequestId)=>finishAddress(p,{owner}),geocode:geocodeAddress,
    stats:()=>({count:document.querySelectorAll('[data-search-temporary-pin]').length,pending:!!searchTemporaryClick,
     activeCircles:window.allCircles.filter(x=>x.map).length,stores:state.currentRows.length,markerCount:markerEntries.size,
     virtual:state.virtual?{address:state.virtual.address,lat:state.virtual.lat,lng:state.virtual.lng,customerMatchState:state.virtual.customerMatchState}:null,
     lookupCalls:window.lookupCalls,owner:state.searchRequestId,addressOwner:state.addressRequestId})};
   initVehicles();`);
-const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js'];
+const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','opsmap-daily.js'];
 let html=fs.readFileSync(path.join(root,'map-phase2b-preview.html'),'utf8').replace(/<script\b[\s\S]*?<\/script>/gi,'');
 html=html.replace('</body>','<script>'+fixture+'</script>'+scripts.map(f=>'<script src="'+f+'"></script>').join('')+'<script src="temp-runtime.js"></script></body>');
 const server=http.createServer((req,res)=>{
@@ -61,21 +61,38 @@ try{
  browser=await chromium.launch({headless:true,executablePath:process.env.OPSMAP_TEST_CHROMIUM||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
  page=await browser.newPage({viewport:{width:1366,height:900}});page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',route=>{if(!route.request().url().startsWith(origin)){external.push(new URL(route.request().url()).hostname);return route.abort();}return route.continue();});
- await page.goto(origin);await page.waitForFunction(()=>window.MapUiLocalBridge?.isDataReady()&&MapUiLocalBridge.state.map);
+ await page.goto(origin);await page.waitForFunction(()=>window.MapUiLocalBridge?.isDataReady()&&MapUiLocalBridge.state.map&&
+  MapUiLocalBridge.state.currentRows.length===2&&MapUiLocalBridge.fixedTerritoryMasterState());
  const initial=await page.evaluate(()=>tempPinTest.stats()),check=(n,v)=>{assert(v,n);checks.push(n);};
  await page.evaluate(()=>tempPinTest.begin('서울 종로구 합성로 14'));
  let s=await page.evaluate(()=>tempPinTest.stats());check('unapproved address arms map click without a provider call',s.pending&&s.lookupCalls===0&&s.count===0);
  await page.evaluate(()=>tempPinTest.click(37.55,127));s=await page.evaluate(()=>tempPinTest.stats());check('map click creates exactly one temporary pin and 500m circle',s.count===1&&s.activeCircles===1&&!s.pending);
  check('temporary point stays out of customer rows and marker index',s.stores===initial.stores&&s.markerCount===initial.markerCount&&s.virtual.customerMatchState==='UNCONFIRMED');
- check('nearby UI uses 500m and 30km reference labels',await page.locator('#nearWrap').innerText().then(x=>x.includes('500m')&&x.includes('30km')&&x.includes('미확정')));
+ await page.locator('#nearWrap [data-area-nearest]').waitFor();
+ check('a hand-picked location shows the closest store and leaves delivery under review',await page.locator('#nearWrap').innerText().then(x=>x.includes('직선거리')&&x.includes('30km')&&x.includes('검토 필요')));
+ await page.locator('#nearWrap [data-area-dispatch-vehicle]').first().waitFor();
+ const vehicleCount=await page.locator('[data-area-dispatch-pin]').count();
+ await page.locator('[data-area-dispatch-pin]').last().evaluate(button=>button.click());
+ check('inspecting a nearby vehicle preserves all vehicle markers and updates the measured distance',
+  vehicleCount===2&&await page.locator('[data-area-dispatch-pin]').count()===vehicleCount&&await page.locator('[data-temp-distance-label]').count()===1);
+ await page.locator('[data-temp-distance-clear]').evaluate(button=>button.click());
+ check('clearing distance leaves the temporary pin',await page.locator('[data-temp-distance-label]').count()===0&&(await page.evaluate(()=>tempPinTest.stats())).count===1);
  await page.evaluate(()=>tempPinTest.begin('경기도 합성시 확인로 20'));
- s=await page.evaluate(()=>tempPinTest.stats());check('second search removes previous temporary pin before a new point',s.count===0&&s.activeCircles===0&&s.pending);
- await page.evaluate(()=>tempPinTest.click(37.56,127.01));s=await page.evaluate(()=>tempPinTest.stats());check('second search retains only its last point',s.count===1&&s.virtual.address==='경기도 합성시 확인로 20');
- await page.evaluate(()=>window.dispatchEvent(new Event('map-unified-search-clear')));s=await page.evaluate(()=>tempPinTest.stats());check('clear removes temporary pin and circle without removing stored markers',!s.virtual&&s.count===0&&s.activeCircles===0&&s.markerCount===initial.markerCount);
- for(const action of ['overview','mode','logout','pagehide']){
+ s=await page.evaluate(()=>tempPinTest.stats());check('a pending search preserves the previous temporary pin',s.count===1&&s.activeCircles===1&&s.pending);
+ await page.evaluate(()=>tempPinTest.click(37.56,127.01));s=await page.evaluate(()=>tempPinTest.stats());check('new searches keep previous temporary pins and update the current anchor',s.count===2&&s.virtual.address==='경기도 합성시 확인로 20');
+ const markersBeforeClose=s.markerCount;
+ await page.locator('#detailClose').evaluate(button=>button.click());
+ await page.evaluate(()=>window.dispatchEvent(new Event('map-unified-search-clear')));s=await page.evaluate(()=>tempPinTest.stats());check('detail close and search clear preserve temporary pins and stored markers',s.count===2&&s.activeCircles===1&&s.markerCount===markersBeforeClose);
+ await page.locator('[data-search-temporary-pin]').last().evaluate(button=>button.click());
+ await page.locator('#removeTemporaryPin').evaluate(button=>button.click());
+ s=await page.evaluate(()=>tempPinTest.stats());check('explicit deletion removes only the selected temporary pin',s.count===1&&!s.virtual&&!s.activeCircles);
+ await page.evaluate(()=>tempPinTest.clear());
+ for(const action of ['overview','mode','pagehide','logout']){
   await page.evaluate(()=>tempPinTest.begin('서울 합성구 검토로 30'));await page.evaluate(()=>tempPinTest.click(37.55,127));
   if(action==='overview')await page.locator('#mapReset').click();else await page.evaluate(name=>window.dispatchEvent(name==='pagehide'?new PageTransitionEvent('pagehide',{persisted:true}):new CustomEvent(name==='mode'?'map-navigation-context-changed':'map-navigation-logout')),action);
-  s=await page.evaluate(()=>tempPinTest.stats());check(action+' removes only temporary state',s.count===0&&!s.virtual&&s.activeCircles===0&&s.stores===initial.stores);
+  s=await page.evaluate(()=>tempPinTest.stats());const retained=action!=='logout';
+  check(action+' observes the temporary pin lifetime',s.count===Number(retained)&&Boolean(s.virtual)===retained&&s.activeCircles===Number(retained)&&s.stores===initial.stores);
+  await page.evaluate(()=>tempPinTest.clear());
  }
  await page.evaluate(()=>{KAKAO_MAP_CONFIG.allowExternalAddressLookup=true;return tempPinTest.begin('서울 합성구 차단로 40',{lookupAllowed:false});});
  s=await page.evaluate(()=>tempPinTest.stats());check('master lookup failure suppresses geocoder even when feature permission is true',s.lookupCalls===0&&s.pending);
