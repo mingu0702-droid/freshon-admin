@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import express from 'express';
 import {syncDigest,syncHash} from './opsmapSyncGeneration.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
+import {stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 
 export const OPSMAP_SCHEDULED_ROUTE='/internal/opsmap/scheduled-sync';
 const maxDelay=10*60_000;
@@ -46,10 +47,13 @@ export function opsmapScheduleConfig(env) {
 
 export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Date.now,log=console.log}={}) {
   const settings=env.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE;
+  const fixedSettings=env.OPSMAP_STAGE_FIXED_MASTER_SCOPE_FILE || settings;
+  const fullJob=path.isAbsolute(settings || '');
+  const fixedJob=stageFixedMasterSyncEnabled(env) && path.isAbsolute(fixedSettings || '');
   if (env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
       env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||
       env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1'||
-      !path.isAbsolute(settings || '')) return;
+      !fullJob&&!fixedJob) return;
   let child;
   app.post(OPSMAP_SCHEDULED_ROUTE,express.json({limit:'2kb',inflate:false}), (req,res)=>{
     res.set('Cache-Control','no-store');
@@ -58,12 +62,32 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     catch {return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});}
     if (child) return res.status(409).json({error:'OPSMAP_SCHEDULE_BUSY'});
     let processHandle;
-    try {processHandle=launch(process.execPath,[jobFile,'scheduled',settings],{env,stdio:['pipe','ignore','pipe'],windowsHide:true});}
+    const args=fullJob ? [jobFile,'scheduled',settings] : [jobFile,'fixed-scheduled',fixedSettings];
+    try {processHandle=launch(process.execPath,args,{env,stdio:['pipe',fixedJob?'pipe':'ignore','pipe'],windowsHide:true});}
     catch {return res.status(503).json({error:'OPSMAP_SCHEDULE_LAUNCH'});}
     child=processHandle;
     let diagnostic='',timedOut=false;
+    // The child emits aggregate evidence only. Never forward raw output.
+    if (fixedJob && processHandle.stdout) {
+      let line='', discarded=false;
+      processHandle.stdout.on('data',chunk=>{
+        for (const c of String(chunk)) {
+          if (c!=='\n') {if (!discarded) {line+=c;if(line.length>1024)discarded=true;} continue;}
+          try {
+            const value=!discarded&&JSON.parse(line);
+            if(value?.component==='opsmap-fixed-master-sync' && value.runId===receipt.runId &&
+               ['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','BUSY','RETRY_HELD','FAILED'].includes(value.state)) {
+              log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
+                version:syncHash(value.version)?value.version:null,
+                error:/^FIXED_(?:MASTER|STORE)_[A-Z_]{1,70}$/.test(value.error||'')?value.error:null}));
+            }
+          } catch {/* Ignore unrelated stdout and malformed lines. */}
+          line='';discarded=false;
+        }
+      });
+    }
     processHandle.stderr.on('data',chunk=>{if(diagnostic.length<100) diagnostic=(diagnostic+chunk).slice(0,100);});
-    const timeout=setTimeout(()=>{timedOut=true;processHandle.kill();},maxRuntime);
+    const timeout=setTimeout(()=>{timedOut=true;processHandle.kill();},maxRuntime+(fixedJob&&fullJob?10*60_000:0));
     timeout.unref();
     const release=(exitCode,error)=>{
       if(child!==processHandle)return;

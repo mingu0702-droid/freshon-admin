@@ -40,8 +40,7 @@ export function projectFixedVehicles(rows) {
     const previous = result.get(customerCode);
     const weekdays = Object.fromEntries(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => {
       const key = 'carSeq' + day + 'Nm';
-      const observed = projectFixedWeekdayValue(row[key], Object.hasOwn(row, key));
-      const value = day === 'Sun' && !/^\d+$/.test(observed) ? '' : observed;
+      const value = projectFixedWeekdayValue(row[key], Object.hasOwn(row, key));
       // Separate weekday evidence from the primary route. Duplicate source
       // rows may agree on the primary route and still disagree about a day.
       return [day, previous && previous.weekdays[day] !== value ? '' : value];
@@ -58,10 +57,10 @@ export function projectFixedVehicles(rows) {
   return [...result.values()];
 }
 
-export function createFixedVehicleReader({ensureSession, readJson, extractRows, pageConcurrency=1, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
+export function createFixedVehicleReader({ensureSession, readJson, extractRows, pageConcurrency=1, verifyLastPage=false, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
   if(![1,2].includes(pageConcurrency))throw Object.assign(Error('FIXED_MASTER_CONCURRENCY_INVALID'),{code:'FIXED_MASTER_CONCURRENCY_INVALID'});
   let progress=null;
-  const reader=async function readFixedVehicleMaster({signal}={}) {
+  const reader=async function readFixedVehicleMaster({signal, customerCodes}={}) {
     progress={phase:'SESSION',center:null,page:0,sourceRows:0,retries:0,completedCenters:[],pageConcurrency};
     const failure=(code,http=0,step='READ',kind='UNKNOWN')=>Object.assign(new Error(code),{code,status:Number(http)||0,step,kind});
     try{await ensureSession();}catch(error){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',error.status);}
@@ -74,6 +73,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         if(Number(payload?.status)>=400)throw {status:Number(payload.status)};
         return payload;
       }catch(error){
+        if(/^FIXED_MASTER_(?:DAILY_(?:PAGE_LIMIT|RESPONSE_INVALID)|STAGE_SOURCE_SCOPE)$/.test(error.code||''))throw error;
         // Same one-time expired-session recovery as the existing Freshon reader.
         // Reuse existing credentials; never retry a 403 or change permissions.
         // The shared reader maps its own AbortError to 504. Do not report that
@@ -97,13 +97,14 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         throw failure(http===401||loginHtml?'FIXED_MASTER_AUTH_REQUIRED':http===403?'FIXED_MASTER_FORBIDDEN':localTimeout?'FIXED_MASTER_LOCAL_TIMEOUT':network?'FIXED_MASTER_NETWORK_FAILED':error.diagnostic?.type==='html-or-login-response'?'FIXED_MASTER_NON_JSON':'FIXED_MASTER_READ_FAILED',http,error.diagnostic?.type==='html-or-login-response'?'PARSE':'READ',localTimeout?'LOCAL_TIMEOUT':network?'NETWORK':error.diagnostic?'UPSTREAM_HTTP':'APPLICATION_STATUS');
       }
     }
-    const projected = [];
+    const projected = [], allCustomerKeys=customerCodes ? new Set() : null;
     let sourceRows=0, pagingFieldRows=0;
     const centers=[];
     for (const logCd of ['011', '012', '013']) {
       let accepted=false;
       for(let scan=0;scan<2&&!accepted;scan++){
-      const centerProjection=[],pageHashes=new Set(),centerCustomerKeys=new Set(),duplicateCustomerKeys=new Set(),batch=new Map();let centerPagingRows=0,firstPageHash=null,firstReadOptions=null;
+      const centerProjection=[],pageHashes=new Set(),centerCustomerKeys=new Set(),duplicateCustomerKeys=new Set(),batch=new Map();
+      let centerPagingRows=0,firstPageHash=null,firstReadOptions=null,lastPageHash=null,lastReadOptions=null;
       let complete = false,centerRows=0,expectedRows=null;
       try{
       // Same bounded paging contract as scraper/freshonFixedDispatch.js.
@@ -161,18 +162,23 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         if(rows.length&&pageHashes.has(pageHash))throw failure('FIXED_MASTER_PAGE_REPEATED');
         if(rows.length)pageHashes.add(pageHash);
         if(page===0)firstPageHash=pageHash;
-        centerProjection.push(...minimal);
+        if(rows.length){lastPageHash=pageHash;lastReadOptions=options;}
+        centerProjection.push(...(customerCodes?minimal.filter(row=>customerCodes.has(normalizeFixedMasterCustomerKey(row.estCd))):minimal));
         if (rows.length < 1000) { if(expectedRows!==null&&centerRows!==expectedRows)throw failure('FIXED_MASTER_INCOMPLETE');complete = true; break; }
       }
       if (!complete) throw failure('FIXED_MASTER_INCOMPLETE');
       if(expectedRows!==null&&centerRows>=1000){
         progress={...progress,phase:'VERIFY',center:logCd,scan};
-        const check=await readPage(firstReadOptions),rows=Array.isArray(check?.data)?check.data:extractRows(check);
-        if(!Array.isArray(rows)||Number(rows[0]?.totalCnt)!==expectedRows)throw failure('FIXED_MASTER_COUNT_CHANGED');
-        const minimal=rows.map(row=>({logCd,...Object.fromEntries(['estCd','mainCarSeqNm',...['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm')].map(key=>[key,row[key]]))}));
-        if(crypto.createHash('sha256').update(JSON.stringify(minimal)).digest('hex')!==firstPageHash)throw failure('FIXED_MASTER_SOURCE_CHANGED');
+        for (const [options,hash] of [[firstReadOptions,firstPageHash],
+          ...(verifyLastPage&&lastReadOptions!==firstReadOptions?[[lastReadOptions,lastPageHash]]:[])]) {
+          const check=await readPage(options),rows=Array.isArray(check?.data)?check.data:extractRows(check);
+          if(!Array.isArray(rows)||Number(rows[0]?.totalCnt)!==expectedRows)throw failure('FIXED_MASTER_COUNT_CHANGED');
+          const minimal=rows.map(row=>({logCd,...Object.fromEntries(['estCd','mainCarSeqNm',...['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm')].map(key=>[key,row[key]]))}));
+          if(crypto.createHash('sha256').update(JSON.stringify(minimal)).digest('hex')!==hash)throw failure('FIXED_MASTER_SOURCE_CHANGED');
+        }
       }
       projected.push(...centerProjection);sourceRows+=centerRows;pagingFieldRows+=centerPagingRows;
+      if(allCustomerKeys)for(const key of centerCustomerKeys)allCustomerKeys.add(key);
       centers.push({center:logCd,sourceRows:centerRows,declaredRows:expectedRows,pages:pageHashes.size,scan,firstPageHash,uniqueCustomers:centerCustomerKeys.size,duplicateCustomerRows:centerRows-centerCustomerKeys.size,duplicateCustomers:duplicateCustomerKeys.size});accepted=true;
       progress={...progress,completedCenters:centers.map(({center,sourceRows,declaredRows,pages,scan,uniqueCustomers,duplicateCustomerRows,duplicateCustomers})=>({center,sourceRows,declaredRows,pages,scan,uniqueCustomers,duplicateCustomerRows,duplicateCustomers}))};
       }catch(error){
@@ -190,7 +196,11 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
     if (!projected.length) throw failure('FIXED_MASTER_EMPTY');
     progress={...progress,phase:'DONE',sourceRows,complete:true};
     const data=projectFixedVehicles(projected),withinCenterDuplicateRows=centers.reduce((sum,center)=>sum+center.duplicateCustomerRows,0);
-    return {data,meta:{authRetried,firstHttp,authReason,readHttp:200,sourceRows,pagingFieldRows,retries:progress.retries,centers,pageConcurrency,uniqueCustomers:data.length,withinCenterDuplicateRows,crossCenterDuplicateOccurrences:centers.reduce((sum,center)=>sum+center.uniqueCustomers,0)-data.length,conflictingCustomers:data.filter(row=>row.baseVehicleState==='CONFLICT').length,snapshotIsolationVerified:false}};
+    const uniqueCustomers=allCustomerKeys?.size ?? data.length;
+    return {data,meta:{authRetried,firstHttp,authReason,readHttp:200,sourceRows,pagingFieldRows,retries:progress.retries,centers,pageConcurrency,
+      uniqueCustomers,...(allCustomerKeys?{projectedCustomers:data.length}:{}),withinCenterDuplicateRows,
+      crossCenterDuplicateOccurrences:centers.reduce((sum,center)=>sum+center.uniqueCustomers,0)-uniqueCustomers,
+      conflictingCustomers:data.filter(row=>row.baseVehicleState==='CONFLICT').length,snapshotIsolationVerified:false}};
   };
   reader.getProgress=()=>progress?{...progress}:null;
   return reader;

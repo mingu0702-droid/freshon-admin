@@ -6,6 +6,8 @@ export const NO_FIXED_ASSIGNMENT = '_';
 
 const labels = Object.freeze(['월', '화', '수', '목', '금', '토']);
 const noDeliveryValues = new Set([NO_FIXED_ASSIGNMENT, '오산신규', '오산보류']);
+const otherNew = new Set(['이천신규','영남신규','호남신규']);
+const namedRoute = /^(?:용|척)\d{1,5}$/;
 const verifiedStates = new Set(['VERIFIED_MASTER', 'UNASSIGNED']);
 const centerCodes = new Set(['osan', 'yeongnam', 'honam']);
 const radiusKm = .5;
@@ -16,8 +18,9 @@ const compact = value => typeof value === 'string' || Number.isSafeInteger(value
   ? String(value).normalize('NFKC').replace(/\s+/g, '') : '';
 
 function fixedRoute(value) {
-  const match = compact(value).match(/^(\d+)(?:호(?:차)?)?$/);
-  const route = match?.[1].replace(/^0+/, '') ?? '';
+  const label = compact(value).replace(/호(?:차)?$/, '');
+  if (namedRoute.test(label)) return label;
+  const route = label.replace(/^0+/, '');
   return /^[1-9]\d{0,11}$/.test(route) ? route : null;
 }
 
@@ -27,14 +30,14 @@ export function projectFixedWeekdayValue(value, observed) {
   // or a blank in an older projection that had already flattened both cases.
   if (value === null || typeof value === 'string' && !value.trim()) return NO_FIXED_ASSIGNMENT;
   const key = compact(value);
-  if (key === '오산신규') return key;
+  if (key === '오산신규' || otherNew.has(key)) return key;
   if (key === '보류' || key === '오산보류') return '오산보류';
   return fixedRoute(value) ?? '';
 }
 
 export function isStoredFixedWeekdayValue(value) {
   return typeof value === 'string' && (/^\d*$/.test(value) ||
-    noDeliveryValues.has(value));
+    namedRoute.test(value) || noDeliveryValues.has(value) || otherNew.has(value));
 }
 
 function freshness(row, source) {

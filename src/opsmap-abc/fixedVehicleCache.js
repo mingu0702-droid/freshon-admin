@@ -13,7 +13,7 @@ export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000,r
         if(saved){
           if(current&&readOnly&&(Date.parse(saved.checkedAt)<Date.parse(current.checkedAt)||
             saved.checkedAt===current.checkedAt&&saved.version!==current.version))throw Object.assign(Error('FIXED_STORE_SOURCE_REGRESSION'),{code:'FIXED_STORE_SOURCE_REGRESSION'});
-          install(saved);
+          if (saved.version!==current?.version) install(saved);
         }
       }
       loaded=true;loadedAt=now();error=null;retryAt=0;
@@ -40,10 +40,13 @@ export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000,r
   }
   async function get(codes){
     try{await initialize();}catch(e){error=/^FIXED_STORE_[A-Z_]+$/.test(e.code||'')?e.code:'FIXED_STORE_UNAVAILABLE';retryAt=now()+300000;}
-    const stale=!current||now()-Date.parse(current.checkedAt)>=ttl;
+    const sync=store?.status?.();
+    const checkedAt=sync?.version===current?.version&&sync?.lastSuccessAt||current?.checkedAt||null;
+    const stale=!current||now()-Date.parse(checkedAt)>=ttl||!!sync?.lastError||readOnly&&!!error;
     if(!readOnly&&stale&&(!store||loaded))void refresh();
-    const meta={basis:'FIXED_DISPATCH_PRIMARY',checkedAt:current?.checkedAt||null,version:current?.version||null,total:current?.count||0,stale,
-      refresh:readOnly?'READ_ONLY':pending?'RUNNING':error?'ERROR':retryAt>now()?'WAITING':'IDLE',lastError:error,refreshStartedAt,refreshMs,persistent:!!store,cacheState:current?'PRESENT':error?'READ_FAILED':store?'MISSING':'NOT_CONFIGURED'};
+    const meta={basis:'FIXED_DISPATCH_PRIMARY',checkedAt,version:current?.version||null,total:current?.count||0,stale,
+      refresh:readOnly?'READ_ONLY':pending?'RUNNING':error?'ERROR':retryAt>now()?'WAITING':'IDLE',lastError:error||sync?.lastError||null,refreshStartedAt,refreshMs,persistent:!!store,cacheState:current?'PRESENT':error?'READ_FAILED':store?'MISSING':'NOT_CONFIGURED',
+      ...(sync?{scheduledState:sync.state,scheduledLastSuccessAt:sync.lastSuccessAt||null,scheduledLastFailureAt:sync.lastFailureAt||null,sourceAsOf:null}:{})};
     if(!current)return {ok:false,phase:pending?'LOADING':error?'ERROR':readOnly?'NOT_READY':'LOADING',meta};
     const rows=codes===null?[...index.values()].map(fixedTupleData):(codes||[]).map(customerCode=>index.has(customerCode)?fixedTupleData(index.get(customerCode)):{customerCode,baseVehicle:'',baseVehicleGroup:'',baseVehicleState:'NOT_IN_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'});
     return {ok:true,data:rows.map(r=>({...r,baseVehicleCheckedAt:meta.checkedAt,baseVehicleVersion:meta.version,baseVehicleStale:stale})),meta};

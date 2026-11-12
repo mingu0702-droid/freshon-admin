@@ -63,6 +63,17 @@ test('legacy blanks and unknown weekday values cannot become confirmed no delive
   assert.equal(fixedDeliveryWeekdays(row('S10001', allEmpty, { baseVehicleState: 'NOT_IN_MASTER' })).status, 'UNKNOWN');
 });
 
+test('registered named master routes count on Monday to Saturday only', () => {
+  const [raw] = projectFixedVehicles([{ estCd: 'S10001', logCd: '011', mainCarSeqNm: '용11호',
+    carSeqMonNm: '용11 호차', carSeqTueNm: '척 204', carSeqWedNm: '오산신규', carSeqSunNm: '용12' }]);
+  for (const store of [legacy, stage]) {
+    const [data] = store.validateFixedEnvelope(store.fixedEnvelope([raw], checkedAt)).data;
+    assert.equal(data.weekdays.Sun, '용12');
+    assert.deepEqual(fixedDeliveryWeekdays(data).days, ['월', '화']);
+    assert.deepEqual(fixedDeliveryWeekdays(data).byDay.slice(0, 3).map(d => d.route), ['용11', '척204', null]);
+  }
+});
+
 test('raw duplicates keep corroborated days and never resolve a day conflict by last row', () => {
   const common = { estCd: 'S10001', logCd: '011', mainCarSeqNm: '101', carSeqMonNm: '101' };
   const [projected] = projectFixedVehicles([

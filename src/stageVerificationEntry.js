@@ -31,6 +31,7 @@ import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from './opsmapDurableGeneration.js';
 import {mountOpsmapScheduledRun,opsmapScheduleConfig} from './opsmapScheduledRun.js';
+import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
 
@@ -314,9 +315,16 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return groups.size===1 ? [...groups][0] : null;
   }});
   const photos = createStageOperationalPhotoExtension({env:stage,fetchImpl,defaultDate:today});
-  const fixed = createFixedVehicleCache({readOnly:true,reloadReadOnlyAfterMs:60_000,now,store:stage.OPSMAP_STAGE_FIXED_MASTER_FILE ? createFixedVehicleFileStore({env:stage}) : {
+  const fixedBaseline = stage.OPSMAP_STAGE_FIXED_MASTER_FILE ? createFixedVehicleFileStore({env:stage}) : {
     async load() {return (await masterStore.read('fixed-vehicle-projection-v1.json')).value;}
-  }});
+  };
+  const dailyMaster=stageFixedMasterSyncEnabled(stage);
+  let dailyFixedStorage;
+  const fixedStore=dailyMaster ? createStageDailyFixedMasterReader({baseline:fixedBaseline,store:{
+    read(...args) {return (dailyFixedStorage ??= stageFixedMasterStorage({env:stage,fetchImpl})).read(...args);}
+  }}) : fixedBaseline;
+  const fixed = createFixedVehicleCache({readOnly:true,reloadReadOnlyAfterMs:dailyMaster?300_000:60_000,
+    ...(dailyMaster?{ttl:FIXED_MASTER_DAILY_TTL}:{}),now,store:fixedStore});
   const base={async get(codes) {
     const primary=await fixed.get(codes);
     if (primary.ok) return primary;
