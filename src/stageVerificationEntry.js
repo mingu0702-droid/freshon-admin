@@ -379,7 +379,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       const {requireStaff,requireStageRead,isSessionCurrent}=binding;
       staffView = requireStaff;
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
-        mountStageAbValidation(router,{...binding,validation,readSnapshot,readOfficialIndex,readBaseVehicles:codes=>base.get(codes)});
+        mountStageAbValidation(router,{...binding,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,readBaseVehicles:codes=>base.get(codes)});
         router.get('/api/map-phase2b/private/stage-sync-evidence',requireStaff,(_req,res)=>{
           const generation=validation.active();
           const windowDays=generation?.scheduled?.vehicleDelivery?.observedDates.all?.length ?? generation?.nearby?.observedDays;

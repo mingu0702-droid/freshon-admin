@@ -456,6 +456,20 @@ export function createCoveragePanel({ workspace, header }) {
     return session?.authenticated && Date.now() < Math.min(session.expiresAt, session.idleExpiresAt) ? session.expiresAt : null;
   }
 
+  const pointResults=new Map();
+  async function readPoint(name,location,params){
+    const point=location.join(','),session=currentSession();
+    const key=generation=>JSON.stringify([session,generation,params.days,params.center,params.resolution,point]);
+    const cached=params.generation&&session&&pointResults.get(key(params.generation));
+    if(cached&&cached.expires>Date.now()){abort(name);return cached.data;}
+    const data=await read(name,'/point',{...params,detail:'1'},{'x-map-coverage-point':point});
+    if(data?.cell&&data.generation&&session&&session===currentSession()){
+      if(pointResults.size>=16)pointResults.delete(pointResults.keys().next().value);
+      pointResults.set(key(data.generation),{data,expires:Date.now()+60_000});
+    }
+    return data;
+  }
+
   async function loadView(force = false, reopening = false) {
     if (!active || !map) return;
     const viewport = map.viewport();
@@ -538,6 +552,7 @@ export function createCoveragePanel({ workspace, header }) {
     abort('detail');
     abort('focus-point');
     focusedSearchRow = null;
+    focusedSearchDetail = null;
     selected = null;
     detail.hidden = true;
     detail.replaceChildren();
@@ -630,7 +645,7 @@ export function createCoveragePanel({ workspace, header }) {
     }
   }
 
-  async function selectCell(id, offset = 0, regionLabel) {
+  async function selectCell(id, offset = 0, regionLabel, bundled) {
     if (!view || !active) return;
     if (view.period.days !== days || loadedCenter !== center) return;
     const current = view;
@@ -642,7 +657,9 @@ export function createCoveragePanel({ workspace, header }) {
     const provisional = requested ? '관측 방문 ' + visitLabel(requested) + ' · 등록 ' + fmt(requested.registered) + '곳' : '격자 상세를 불러오고 있습니다.';
     detail.replaceChildren(element('p', '', provisional), element('p', '', current.period.start + ' ~ ' + current.period.end));
     try {
-      const cell = await read('detail', '/cell', { id, offset, days: current.period.days, center: loadedCenter, generation: current.generation });
+      const ready=!offset&&bundled?.generation===current.generation&&bundled.cell?.id===id;
+      if(ready)abort('detail');
+      const cell=ready?{...bundled.cell}:await read('detail','/cell',{id,offset,days:current.period.days,center:loadedCenter,generation:current.generation});
       if (!cell || view?.generation !== current.generation || view.period.days !== current.period.days) return;
       if (regionLabel && cell.label === '행정구역 미확인') cell.label = regionLabel + ' 격자';
       selected = cell;
@@ -684,9 +701,10 @@ export function createCoveragePanel({ workspace, header }) {
     if(data?.kind==='APPROVED'&&comparisonRow===row&&view?.generation===generation)renderProviderComparison(row,data.cells?.[0]);
   }
 
-  let focusedSearchRow = null;
+  let focusedSearchRow = null, focusedSearchDetail = null;
   function chooseMapCell(id) {
     focusedSearchRow = null;
+    focusedSearchDetail = null;
     abort('focus-point');
     void selectCell(id);
   }
@@ -694,7 +712,7 @@ export function createCoveragePanel({ workspace, header }) {
   async function showSearchCell(row) {
     const current = view, resolution = Math.max(8, current?.resolution || row.detailResolution || 8);
     const label = row.kind === 'store' ? undefined : row.name;
-    const use = id => { if (id) void selectCell(id,0,label); };
+    const use = (id,bundle=focusedSearchDetail) => { if (id) void selectCell(id,0,label,bundle); };
     if(!current)return;
     if(resolution===8&&row.id){use(row.id);return;}
     if (!row.location || resolution === (row.detailResolution || 8)) {
@@ -702,11 +720,10 @@ export function createCoveragePanel({ workspace, header }) {
       return;
     }
     try {
-      const next=await read('focus-point','/point',{days,center,generation:current.generation,resolution},
-        {'x-map-coverage-point':row.location.join(',')});
+      const next=await readPoint('focus-point',row.location,{days,center,generation:current.generation,resolution});
       if (focusedSearchRow!==row || view?.generation!==current.generation || Math.max(8,view.resolution)!==resolution) return;
       const point=next?.results?.[0];
-      use(point?.detailId || point?.id);
+      use(point?.detailId || point?.id,next);
     } catch (error) {
       if (focusedSearchRow===row && error.status===409) void loadView(true);
     }
@@ -716,6 +733,7 @@ export function createCoveragePanel({ workspace, header }) {
     map.focus(row.location, row.bounds, radius);
     map.searchPoint(row.location);
     if(row.location)void compareProviders(row);
+    if(focusedSearchRow!==row)focusedSearchDetail=null;
     focusedSearchRow=row;
     void showSearchCell(row);
   }
@@ -758,6 +776,7 @@ export function createCoveragePanel({ workspace, header }) {
     abort('provider-point');
     abort('focus-point');
     if(focusedSearchRow)clearSelection();
+    focusedSearchDetail=null;
     searchOwner?.abort();
     searchOwner = null;
     pendingSearchKey = null;
@@ -786,7 +805,7 @@ export function createCoveragePanel({ workspace, header }) {
     const owner = searchOwner = new AbortController();
     pendingSearchKey = key;
     const choice = find('coverageResolution').value;
-    const params = { days, center, radius, resolution:choice === 'auto' ? Math.max(9, view?.resolution || 8) : choice };
+    const params = { days, center, radius, resolution:choice === 'auto' ? Math.max(8, view?.resolution || 8) : choice };
     if (view) params.generation = view.generation;
     const current = () => active && searchOwner === owner;
     const pointFor = async (point, name) => {
@@ -794,13 +813,25 @@ export function createCoveragePanel({ workspace, header }) {
       const location = [point.lat,point.lng];
       map.focus(location,null,radius);
       map.searchPoint(location);
-      searchMessage('좌표 확인 · 격자 자료를 조회하고 있습니다.');
-      const data = await read('search','/point',params,{'x-map-coverage-point':location.join(',')});
+      const preview=element('div','coverage-search-result');
+      preview.dataset.kind='address';
+      preview.append(element('strong','',name),element('span','','위치 확인 · 격자 자료 조회 중'));
+      searchResults.replaceChildren(preview);
+      let data;
+      try{data=await readPoint('search',location,params);}
+      catch(error){
+        if(!current())return;
+        if([401,403].includes(error.status)){map.searchPoint(null);throw error;}
+        if(error.status===409)void loadView(true);
+        const retry=element('button','','격자 다시 조회');retry.type='button';
+        retry.onclick=()=>void pointFor(point,name).catch(failSearch);
+        preview.lastElementChild.textContent='위치 확인 · 격자 자료 조회 실패';preview.append(retry);return;
+      }
       if (!data || !current()) return;
-      data.results = data.results.map(row=>({...row,kind:'address',name,coordinateSource:point.coordinateSource}));
-      renderSearch(data,radius);
-      if(data.results[0])void compareProviders(data.results[0]);
-      if (data.results[0]?.id) { focusedSearchRow=data.results[0]; void showSearchCell(focusedSearchRow); }
+      const results=data.results.map(row=>({...row,kind:'address',name,coordinateSource:point.coordinateSource}));
+      renderSearch({...data,results},radius);
+      if(results[0])void compareProviders(results[0]);
+      if(results[0]?.id){focusedSearchDetail=data;focusedSearchRow=results[0];void showSearchCell(focusedSearchRow);}
     };
     const candidatesFor = points => {
       searchMessage('공식 위치 후보를 선택해 주세요.');
@@ -945,6 +976,7 @@ export function createCoveragePanel({ workspace, header }) {
   find('coverageListMore').onclick = () => { if (list?.next != null) void loadList(list.next); };
 
   function resetView() {
+    pointResults.clear();
     view = list = null;
     providerScope=providerViewKey='';
     providerMeta=null;

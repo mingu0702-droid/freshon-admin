@@ -321,8 +321,9 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
   const { catalog, days } = fixture();
   let reads = 0;
   const reader = {
-    async readPeriod(period) {
+    async readPeriod(period, generation) {
       reads++;
+      if(generation&&generation!==proof)throw Error('COVERAGE_GENERATION_CHANGED');
       return { catalog, window: combineDays(end, period, days), stale: false, index: {
         sha256: proof, kind: 'FIXTURE', sourceObservedAt: '2026-11-08T00:00:00Z', generatedAt: '2026-11-08T00:00:00Z'
       } };
@@ -418,6 +419,17 @@ test('the analytic endpoints enforce the existing staff gate and reject unbounde
       headers: { ...options.headers, 'x-map-coverage-point': `${lat},${lng}` }
     })).json();
     assert.equal(finestPoint.data.results[0].detailId,finestId);
+    assert.equal(finestPoint.data.cell,undefined);
+    const pointOptions={headers:{...options.headers,'x-map-coverage-point':`${lat},${lng}`}};
+    const inlineUrl=url+'/point?days=60&resolution=11&detail=1';
+    assert.equal((await fetch(inlineUrl)).status,401);
+    assert.equal((await fetch(inlineUrl+'&generation='+'0'.repeat(64),pointOptions)).status,409);
+    const inline=await fetch(inlineUrl,pointOptions);
+    assert.match(inline.headers.get('cache-control'),/private, no-store/);
+    const bundled=(await inline.json()).data;
+    assert.equal(bundled.results[0].detailId,finestId);
+    assert.deepEqual(bundled.cell,cell.data);
+    assert.equal((await fetch(url+'/point?detail=2',pointOptions)).status,400);
     const zoomedOut = await (await fetch(url + '/view?days=60&resolution=11&box=126,36,128,38', options)).json();
     assert(zoomedOut.data.resolution<=8);
   } finally {

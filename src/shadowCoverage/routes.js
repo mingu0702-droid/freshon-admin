@@ -170,19 +170,11 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     return model.coverageList(reader.viewFor(data, center, model.BASE_RESOLUTION), filter, offset);
   });
 
-  route('/cell', req => {
-    const { id, offset = '0' } = req.query;
-    if (typeof id !== 'string' || !/^[a-f0-9]{15}$/.test(id) ||
-        typeof offset !== 'string' || !/^\d{1,5}$/.test(offset) || Number(offset) > 15_000) return null;
-    return { id, offset: Number(offset) };
-  }, async ({ days, center, generation }, { id, offset }, { reader, model, h3 }) => {
-    if (!h3.isValidCell(id)) throw Error('COVERAGE_QUERY_INVALID');
+  async function readCellDetail(data, center, id, offset, {reader, model, h3}) {
     const resolution = h3.getResolution(id);
-    if (resolution < 4 || resolution > 11) throw Error('COVERAGE_QUERY_INVALID');
-    const data = await reader.readPeriod(days, generation);
     const view = reader.viewFor(data, center, Math.min(resolution, model.BASE_RESOLUTION));
     const detail = resolution > model.BASE_RESOLUTION ? model.detailedCell(view, data.catalog, id, offset) : model.cellDetail(view, id, offset);
-    const statuses = await readStatus?.(data.catalog, data.index.sha256, days).catch(() => null);
+    const statuses = await readStatus?.(data.catalog, data.index.sha256, data.window.days).catch(() => null);
     const storeStatus=cellStatusCounts(model.coverageMembers(view, data.catalog, id), statuses);
     const deliverySummary=resolution >= 8 ? statuses?.deliveryCell?.(id) : null;
     return { ...detail, resolution, boundary: h3.cellToBoundary(id),
@@ -192,6 +184,19 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
         const store = data.catalog.byCode.get(row.code);
         return { ...row, ...(statuses?.records.get(row.code) || {}), location:store?.cell ? [store.lat, store.lng] : null };
       }) };
+  }
+
+  route('/cell', req => {
+    const { id, offset = '0' } = req.query;
+    if (typeof id !== 'string' || !/^[a-f0-9]{15}$/.test(id) ||
+        typeof offset !== 'string' || !/^\d{1,5}$/.test(offset) || Number(offset) > 15_000) return null;
+    return { id, offset: Number(offset) };
+  }, async ({ days, center, generation }, { id, offset }, ready) => {
+    const {reader,h3}=ready;
+    if (!h3.isValidCell(id)) throw Error('COVERAGE_QUERY_INVALID');
+    const resolution = h3.getResolution(id);
+    if (resolution < 4 || resolution > 11) throw Error('COVERAGE_QUERY_INVALID');
+    return readCellDetail(await reader.readPeriod(days, generation), center, id, offset, ready);
   });
 
   route('/search', req => {
@@ -212,15 +217,20 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
   route('/point', req => {
     const point = req.get('x-map-coverage-point') || '';
     if (point.length > 55 || !/^-?\d{1,3}(?:\.\d{1,16})?,-?\d{1,3}(?:\.\d{1,16})?$/.test(point)) return null;
-    const resolution = req.query.resolution ?? '8';
-    return detailResolutions.includes(resolution) ? { location:point.split(',').map(Number), resolution:Number(resolution) } : null;
-  }, async ({ days, center, generation }, {location,resolution}, { reader, model, h3 }) => {
+    const resolution = req.query.resolution ?? '8', detail=req.query.detail;
+    return detailResolutions.includes(resolution)&&(detail===undefined||detail==='1')
+      ? {location:point.split(',').map(Number),resolution:Number(resolution),withDetail:detail==='1'} : null;
+  }, async ({ days, center, generation }, {location,resolution,withDetail}, ready) => {
+    const {reader,model,h3}=ready;
     if (!model.isPoint(...location)) throw Error('COVERAGE_QUERY_INVALID');
     const data = await reader.readPeriod(days, generation);
     const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
-    return { days, start: data.window.start, end: data.window.end, generation:data.index.sha256,
-      results: [{...model.coverageAtPoint(data.catalog, view, location, center),
-        ...(resolution > 8 ? {detailId:h3.latLngToCell(...location,resolution), detailResolution:resolution} : {})}] };
+    const detailId=h3.latLngToCell(...location,resolution);
+    const response={days,start:data.window.start,end:data.window.end,generation:data.index.sha256,
+      results:[{...model.coverageAtPoint(data.catalog,view,location,center),
+        ...(resolution>8?{detailId,detailResolution:resolution}:{})}]};
+    if(withDetail)response.cell=await readCellDetail(data,center,detailId,0,ready);
+    return response;
   });
 
   route('/provider-overlap',req=>{

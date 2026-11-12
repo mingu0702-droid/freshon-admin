@@ -2797,7 +2797,9 @@
     if(innerWidth<=760)showMobileMap();
     trace?.mark('detail');
     trace?.finish('temporary');
-    afterSearchPaint(()=>renderSearchTemporaryNearby(row));
+    const enrich=()=>{if(state.virtual===row)renderSearchTemporaryNearby(row);};
+    if(trace&&typeof window.requestIdleCallback==='function')window.requestIdleCallback(enrich,{timeout:800});
+    else afterSearchPaint(enrich);
   }
 
   function renderSearchTemporaryNearby(point,{loadDispatch=true,fit=false}={}) {

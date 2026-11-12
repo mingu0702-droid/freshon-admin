@@ -352,7 +352,7 @@ function publicStatus(prepared) {
     expiresAt:Number.isFinite(prepared.expiresAt)?new Date(prepared.expiresAt).toISOString():null} : {active:false};
 }
 
-export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot, readOfficialIndex}) {
+export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot, readReadySnapshot, readOfficialIndex}) {
   const noStore = (_req, res, next) => {res.set('Cache-Control','private, no-store').vary('Cookie'); next();};
   const readVehicleDays=createLegacyNearbyVehicleReader();
   router.get(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (_req, res) => res.json(publicStatus(validation.active())));
@@ -416,8 +416,8 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
       const generationError=validation.addressGenerationError(generation,prepared);
       if(generationError)return res.status(409).json({error:generationError});
       try{
-        const loaded=prepared?.scheduled?.snapshot;
-        const immediate=includeCustomers&&generation!==null&&loaded?.sourceGeneration===generation;
+        const loaded=includeCustomers&&generation!==null ? prepared?.scheduled?.snapshot||readReadySnapshot?.() : null;
+        const immediate=loaded?.sourceGeneration===generation&&Array.isArray(loaded?.rows);
         const saved=immediate?loaded:await readSnapshot();
         const changed=validation.addressGenerationError(generation,validation.active());
         if(changed||validation.active()!==prepared||generation!==null&&saved?.sourceGeneration!==generation)
@@ -430,6 +430,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         }}:null;
         const snapshotReady=Array.isArray(saved?.rows);
         if(!snapshotReady&&!official)return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});
+        const matching=performance.now();
         const data=resolvePreservedAddressBatch(rows,snapshotReady?saved:{rows:[]},official,{includeCustomers}).map(row=>
           !snapshotReady&&['CUSTOMER_CODE_NOT_FOUND','ADDRESS_NOT_MATCHED'].includes(row.status)
             ?{status:'STORED_REGISTRY_UNAVAILABLE'}:row);
@@ -438,6 +439,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           if(validation.active()!==prepared)return res.status(409).json({error:validation.addressGenerationError(generation,validation.active())||'STAGE_BATCH_GENERATION_CHANGED'});
           if(immediate)res.locals.stageInlineStaffResponse=true;
+          res.set('Server-Timing',`opsmap-address-read;dur=${Math.round(matching-started)}, opsmap-address-match;dur=${Math.round(performance.now()-matching)}`);
           return res.json({ok:true,generation,data});
         };
         return immediate?respond():requireStaff(req,res,respond);
