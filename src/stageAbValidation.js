@@ -434,12 +434,13 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         const data=resolvePreservedAddressBatch(rows,snapshotReady?saved:{rows:[]},official,{includeCustomers}).map(row=>
           !snapshotReady&&['CUSTOMER_CODE_NOT_FOUND','ADDRESS_NOT_MATCHED'].includes(row.status)
             ?{status:'STORED_REGISTRY_UNAVAILABLE'}:row);
+        const matched=performance.now();
         outcomes=data.reduce((counts,{status})=>({...counts,[status]:(counts[status]||0)+1}),{});
         const respond=()=>{
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           if(validation.active()!==prepared)return res.status(409).json({error:validation.addressGenerationError(generation,validation.active())||'STAGE_BATCH_GENERATION_CHANGED'});
           if(immediate)res.locals.stageInlineStaffResponse=true;
-          res.set('Server-Timing',`opsmap-address-read;dur=${Math.round(matching-started)}, opsmap-address-match;dur=${Math.round(performance.now()-matching)}`);
+          res.set('Server-Timing',`opsmap-address-read;dur=${Math.round(matching-started)}, opsmap-address-match;dur=${Math.round(matched-matching)}, opsmap-address-recheck;dur=${Math.round(performance.now()-matched)}`);
           return res.json({ok:true,generation,data});
         };
         return immediate?respond():requireStaff(req,res,respond);

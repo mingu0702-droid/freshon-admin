@@ -559,7 +559,7 @@ export function createCoveragePanel({ workspace, header }) {
     paint();
   }
 
-  function renderDetail(cell, offset) {
+  function renderDetail(cell, offset, period) {
     const header = element('div', 'coverage-detail-head');
     header.append(statusBadge(cell.status));
     const close = element('button', '', '닫기');
@@ -576,7 +576,7 @@ export function createCoveragePanel({ workspace, header }) {
       ['마지막 배송일', cell.lastDelivery || '확인된 기록 없음'],
       ['확인·누락', dates.recordedDays == null ? '센터별 일자 미확인' :
         fmt(dates.recordedDays) + '/' + fmt(dates.totalDays) + '일 확인 · ' + fmt(dates.missingDates.length) + '일 미확인'],
-      ['자료 기간', view.period.start + ' ~ ' + view.period.end]
+      ['자료 기간', period.start + ' ~ ' + period.end]
     ];
     if (cell.storeStatus) {
       const count=(key,unknown)=>cell.storeStatus[key] || !unknown ? fmt(cell.storeStatus[key]) : '미확인';
@@ -610,7 +610,7 @@ export function createCoveragePanel({ workspace, header }) {
       row.append(element('small', '', '90일 기준호차 관측 ' + (observed || '확인된 관측 없음')),
         element('small', '', '기준호차 변경일 ' + (history || (store.historyComplete ? '변경 기록 없음' : '미확인')) +
           (history && !store.historyComplete ? ' · 일부 기간 미확인' : '')));
-      row.append(element('small', '', view.period.days + '일 ' + deliveryLabel(store.delivery)));
+      row.append(element('small', '', period.days + '일 ' + deliveryLabel(store.delivery)));
       if (store.newActive || store.newUnknown || store.current || store.pastNew || store.pastHeld) row.append(element('small', '',
         [store.newActive === true ? '활성 오산신규 · 완료 배송 확인' : '', store.current === 'HELD' ? '오산보류 · 기준호차 분류' : '',
           store.newUnknown ? '활성 여부 배송 검증 대기' : '',
@@ -663,7 +663,7 @@ export function createCoveragePanel({ workspace, header }) {
       if (!cell || view?.generation !== current.generation || view.period.days !== current.period.days) return;
       if (regionLabel && cell.label === '행정구역 미확인') cell.label = regionLabel + ' 격자';
       selected = cell;
-      renderDetail(cell, offset);
+      renderDetail(cell, offset, current.period);
       renderList();
       paint();
     } catch (error) {
@@ -713,7 +713,17 @@ export function createCoveragePanel({ workspace, header }) {
     const current = view, resolution = Math.max(8, current?.resolution || row.detailResolution || 8);
     const label = row.kind === 'store' ? undefined : row.name;
     const use = (id,bundle=focusedSearchDetail) => { if (id) void selectCell(id,0,label,bundle); };
-    if(!current)return;
+    if(!current){
+      const bundle=focusedSearchDetail;
+      if(!active||focusedSearchRow!==row||bundle?.days!==days||!bundle.cell||bundle.cell.id!==(row.detailId||row.id))return;
+      // A verified point response already has its own period and generation. A slow
+      // initial viewport read must not hide the detail or make a second request.
+      collapsePanel(false);
+      selected=label&&bundle.cell.label==='행정구역 미확인'?{...bundle.cell,label:label+' 격자'}:bundle.cell;
+      renderDetail(selected,0,bundle);
+      paint();
+      return;
+    }
     if(resolution===8&&row.id){use(row.id);return;}
     if (!row.location || resolution === (row.detailResolution || 8)) {
       use(row.detailId || row.id);
