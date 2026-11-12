@@ -11,7 +11,7 @@ import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
 import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
 import {createOfficialAddressLookup,createOfficialAddressReview} from './opsmapOfficialAddressLookup.js';
 import {createLegacyNearbyVehicleReader, readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
-import {resolvePreservedAddressBatch,searchPreservedRegistry} from './privateCustomerSearch.js';
+import {preparePreservedAddressIndex,resolvePreservedAddressBatch,searchPreservedRegistry} from './privateCustomerSearch.js';
 import {archivedOpsmapAssignments} from './opsmapSyncGeneration.js';
 import {collectStageVehicleWeekdays, opsmapVehicleDeliveryPage} from './opsmapVehicleDeliveryEvidence.js';
 import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
@@ -430,6 +430,11 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         }}:null;
         const snapshotReady=Array.isArray(saved?.rows);
         if(!snapshotReady&&!official)return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});
+        const preparing=performance.now();
+        if(snapshotReady&&rows.some(row=>row.some(query=>!/^[A-Z]\d{1,20}$/i.test(query)))) {
+          await preparePreservedAddressIndex(saved);
+        }
+        if(res.destroyed||res.writableEnded)return;
         const matching=performance.now();
         const data=resolvePreservedAddressBatch(rows,snapshotReady?saved:{rows:[]},official,{includeCustomers}).map(row=>
           !snapshotReady&&['CUSTOMER_CODE_NOT_FOUND','ADDRESS_NOT_MATCHED'].includes(row.status)
@@ -440,7 +445,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           if(validation.active()!==prepared)return res.status(409).json({error:validation.addressGenerationError(generation,validation.active())||'STAGE_BATCH_GENERATION_CHANGED'});
           if(immediate)res.locals.stageInlineStaffResponse=true;
-          res.set('Server-Timing',`opsmap-address-read;dur=${Math.round(matching-started)}, opsmap-address-match;dur=${Math.round(matched-matching)}, opsmap-address-recheck;dur=${Math.round(performance.now()-matched)}`);
+          res.set('Server-Timing',`opsmap-address-read;dur=${Math.round(preparing-started)}, opsmap-address-index;dur=${Math.round(matching-preparing)}, opsmap-address-match;dur=${Math.round(matched-matching)}, opsmap-address-recheck;dur=${Math.round(performance.now()-matched)}`);
           return res.json({ok:true,generation,data});
         };
         return immediate?respond():requireStaff(req,res,respond);
@@ -455,6 +460,9 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
     try{
       const saved=await readSnapshot();
       if(saved?.sourceGeneration!==generation||validation.active()!==prepared)return res.status(409).json({error:'STAGE_BATCH_GENERATION_CHANGED'});
+      if(queries.some(query=>!/^[A-Z]\d{1,20}$/i.test(query)))await preparePreservedAddressIndex(saved);
+      if(res.destroyed||res.writableEnded)return;
+      if(validation.active()!==prepared)return res.status(409).json({error:'STAGE_BATCH_GENERATION_CHANGED'});
       const data=queries.map(query=>{
         const match=searchPreservedRegistry(query,saved);
         // This endpoint has no provider transport. A miss has no live-source meaning.

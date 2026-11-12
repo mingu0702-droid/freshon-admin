@@ -31,22 +31,49 @@ function exactAddressKey(address){
  if(!prepared.query||!['ROAD','LOT'].includes(prepared.addressKind))return null;
  return officialAddressKey(prepared.query);
 }
+function indexAddressRow(index, row) {
+ if (!code(row.customerCode)) return;
+ const addresses = [row.address || row.customerAddress || row.basicAddress || row.latestAddress];
+ if (!row.addressChanged && row.resolutionStatus !== 'ADDRESS_CHANGED_REVIEW_REQUIRED') {
+  addresses.push(row.customerAddress, row.roadAddress, row.roadNameAddress, row.lotAddress, row.jibunAddress);
+ }
+ const keys = new Set();
+ for (const address of new Set(addresses)) {
+  const key = exactAddressKey(address);
+  if (key) keys.add(key);
+ }
+ for (const key of keys) {
+  if (!index.has(key)) index.set(key, []);
+  index.get(key).push(row);
+ }
+}
+
+// Prepare the same private index used by a foreground lookup. Yield between
+// chunks so another staff request can still use the map during restoration.
+export function preparePreservedAddressIndex(snapshot) {
+ if (!Array.isArray(snapshot?.rows)) return Promise.resolve();
+ const entry = snapshotIndex(snapshot);
+ if (entry.byAddress) return Promise.resolve();
+ entry.preparingAddress ??= (async () => {
+  const byAddress = new Map();
+  for (let i = 0; i < snapshot.rows.length; i++) {
+   indexAddressRow(byAddress, snapshot.rows[i]);
+   if ((i + 1) % 128 === 0) {
+    await new Promise(resolve => setImmediate(resolve));
+    if (entry.byAddress) return;
+   }
+  }
+  entry.byAddress = byAddress;
+ })().finally(() => { entry.preparingAddress = null; });
+ return entry.preparingAddress;
+}
+
 function preservedMatches(query,snapshot){
  const rows=snapshot.rows,index=snapshotIndex(snapshot);
  const matchedBy=code(query.toUpperCase())?'CODE':'ADDRESS';
  if(matchedBy==='ADDRESS'&&!index.byAddress){
   const byAddress=new Map();
-  for(const row of rows){if(!code(row.customerCode))continue;
-   const addresses=[row.address||row.customerAddress||row.basicAddress||row.latestAddress];
-   if(!row.addressChanged&&row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'){
-    addresses.push(row.customerAddress,row.roadAddress,row.roadNameAddress,row.lotAddress,row.jibunAddress);
-   }
-   const keys=new Set();
-   for(const address of new Set(addresses)){
-    const key=exactAddressKey(address);if(key)keys.add(key);
-   }
-   for(const key of keys){
-    const matches=byAddress.get(key)||[];matches.push(row);byAddress.set(key,matches);}}
+  for (const row of rows) indexAddressRow(byAddress, row);
   index.byAddress=byAddress;
  }
  const matches=matchedBy==='CODE'?index.byCode.get(query.toUpperCase())||[]:index.byAddress.get(exactAddressKey(query))||[];

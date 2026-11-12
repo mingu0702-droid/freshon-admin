@@ -87,6 +87,10 @@
     if (cache.size >= 64) cache.delete(cache.keys().next().value);
     cache.set(key,value);
   }
+  function staffSessionExpiry() {
+    const session=root.MapStaffEntry?.session?.();
+    return session?.authenticated && Date.now()<Math.min(session.expiresAt,session.idleExpiresAt) ? session.expiresAt : null;
+  }
   function stageAddress(query,generation,{signal}={}) {
     if (root.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com') return Promise.resolve(null);
     if(signal?.aborted)return Promise.resolve(null);
@@ -94,8 +98,9 @@
     if (!variants.length) return Promise.resolve(null);
     if(addressGeneration!==generation){resetStageAddress();addressGeneration=generation;}
     const key = JSON.stringify(variants.map(addressKey));
+    const sessionExpiry=staffSessionExpiry();
     const cached=retained.get(key);
-    if(cached?.expiresAt>Date.now())return Promise.resolve(cached.result);
+    if(cached?.expiresAt>Date.now()&&sessionExpiry&&cached.sessionExpiry===sessionExpiry)return Promise.resolve(cached.result);
     if(cached)retained.delete(key);
     let flight=flights.get(key);
     if (!flight) {
@@ -111,7 +116,9 @@
         if(epoch!==addressEpoch)return null;
         if(payload?.generation!==generation||payload.data?.length!==1)throw failure('STAGE_BATCH_UNAVAILABLE');
         const [result]=payload.data;
-        if(generation&&['STORED','OFFICIAL'].includes(result.status)&&result.point)remember(retained,key,{result,expiresAt:Date.now()+60_000});
+        if(generation&&sessionExpiry&&sessionExpiry===staffSessionExpiry()&&['STORED','OFFICIAL'].includes(result.status)&&result.point){
+          remember(retained,key,{result,sessionExpiry,expiresAt:Date.now()+60_000});
+        }
         return result;
       }).finally(()=>{if(flights.get(key)===flight)flights.delete(key);});
       flights.set(key,flight);

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { activeDeliverySummary, cellStatusCounts } from './storeStatus.js';
+import { addStaffTiming } from '../opsmap-abc/staffLatency.js';
 
 const ROOT = '/api/map-phase2b/private/shadow-coverage';
 const CENTERS = ['all', 'osan', 'yeongnam', 'honam'];
@@ -50,9 +51,12 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const args = scope && parse(req);
     if (!args) return res.status(400).json({ ok: false, error: 'COVERAGE_QUERY_INVALID' });
     try {
+      const mark = (name, started) => addStaffTiming(res, name, performance.now() - started);
+      const restoring = performance.now();
       const ready = await loadReady();
+      mark('coverageRestore', restoring);
       if (res.destroyed || res.writableEnded) return;
-      const result = await handle(scope, args, ready);
+      const result = await handle(scope, args, ready, mark);
       if (res.destroyed || res.writableEnded) return;
       const send = () => reply(res.set('Cache-Control', 'private, no-store'), result);
       return staffResponseGuarded ? send() : requireStaff(req, res, send);
@@ -79,14 +83,18 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const bounds = coords.length === 4 && coords.every(v => /^-?\d+(?:\.\d+)?$/.test(v)) ? coords.map(Number) : null;
     const tag = req.get('X-Coverage-View-Tag');
     return bounds && { bounds, level: Number(level), resolution, tag: /^"coverage-[a-f0-9]{64}"$/.test(tag) ? tag : null };
-  }, async ({ days, center }, { bounds, level, resolution: choice, tag }, { reader, model }) => {
+  }, async ({ days, center }, { bounds, level, resolution: choice, tag }, { reader, model }, mark) => {
     if (!model.boundsOf(bounds)) throw Error('COVERAGE_QUERY_INVALID');
+    const loading = performance.now();
     const data = await reader.readPeriod(days, undefined, { recheck: tag !== null });
+    mark('coverageData', loading);
     const { window, index, stale, catalog } = data;
+    const readingStatus = performance.now();
     const [preservedMap, statuses] = await Promise.all([
       Promise.resolve().then(readPreservedMap).catch(() => null),
       readStatus?.(catalog, index.sha256, days).catch(() => null)
     ]);
+    mark('coverageStatus', readingStatus);
     const sourceRunId=readRunId?.(index.sha256) ?? null;
     const version = createHash('sha256').update(JSON.stringify([5, index.sha256, stale, preservedMap, sourceRunId, days, center, bounds, level,
       choice, statuses?.version, statuses?.evidenceAsOf, statuses?.date, statuses?.counts, statuses?.deliverySummary])).digest('hex');
@@ -170,20 +178,27 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     return model.coverageList(reader.viewFor(data, center, model.BASE_RESOLUTION), filter, offset);
   });
 
-  async function readCellDetail(data, center, id, offset, {reader, model, h3}) {
+  async function readCellDetail(data, center, id, offset, {reader, model, h3}, mark) {
+    const building = performance.now();
     const resolution = h3.getResolution(id);
     const view = reader.viewFor(data, center, Math.min(resolution, model.BASE_RESOLUTION));
     const detail = resolution > model.BASE_RESOLUTION ? model.detailedCell(view, data.catalog, id, offset) : model.cellDetail(view, id, offset);
+    mark('coverageDetail', building);
+    const readingStatus = performance.now();
     const statuses = await readStatus?.(data.catalog, data.index.sha256, data.window.days).catch(() => null);
+    mark('coverageStatus', readingStatus);
+    const enriching = performance.now();
     const storeStatus=cellStatusCounts(model.coverageMembers(view, data.catalog, id), statuses);
     const deliverySummary=resolution >= 8 ? statuses?.deliveryCell?.(id) : null;
-    return { ...detail, resolution, boundary: h3.cellToBoundary(id),
+    const result = { ...detail, resolution, boundary: h3.cellToBoundary(id),
       deliveryFilter:deliverySummary ? activeDeliverySummary(deliverySummary,storeStatus) : null,
       storeStatus,
       stores:detail.stores.map(row => {
         const store = data.catalog.byCode.get(row.code);
         return { ...row, ...(statuses?.records.get(row.code) || {}), location:store?.cell ? [store.lat, store.lng] : null };
       }) };
+    mark('coverageDetail', enriching);
+    return result;
   }
 
   route('/cell', req => {
@@ -191,12 +206,12 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     if (typeof id !== 'string' || !/^[a-f0-9]{15}$/.test(id) ||
         typeof offset !== 'string' || !/^\d{1,5}$/.test(offset) || Number(offset) > 15_000) return null;
     return { id, offset: Number(offset) };
-  }, async ({ days, center, generation }, { id, offset }, ready) => {
+  }, async ({ days, center, generation }, { id, offset }, ready, mark) => {
     const {reader,h3}=ready;
     if (!h3.isValidCell(id)) throw Error('COVERAGE_QUERY_INVALID');
     const resolution = h3.getResolution(id);
     if (resolution < 4 || resolution > 11) throw Error('COVERAGE_QUERY_INVALID');
-    return readCellDetail(await reader.readPeriod(days, generation), center, id, offset, ready);
+    return readCellDetail(await reader.readPeriod(days, generation), center, id, offset, ready, mark);
   });
 
   route('/search', req => {
@@ -220,16 +235,20 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     const resolution = req.query.resolution ?? '8', detail=req.query.detail;
     return detailResolutions.includes(resolution)&&(detail===undefined||detail==='1')
       ? {location:point.split(',').map(Number),resolution:Number(resolution),withDetail:detail==='1'} : null;
-  }, async ({ days, center, generation }, {location,resolution,withDetail}, ready) => {
+  }, async ({ days, center, generation }, {location,resolution,withDetail}, ready, mark) => {
     const {reader,model,h3}=ready;
     if (!model.isPoint(...location)) throw Error('COVERAGE_QUERY_INVALID');
+    const loading = performance.now();
     const data = await reader.readPeriod(days, generation);
+    mark('coverageData', loading);
+    const building = performance.now();
     const view = reader.viewFor(data, center, model.BASE_RESOLUTION);
     const detailId=h3.latLngToCell(...location,resolution);
     const response={days,start:data.window.start,end:data.window.end,generation:data.index.sha256,
       results:[{...model.coverageAtPoint(data.catalog,view,location,center),
         ...(resolution>8?{detailId,detailResolution:resolution}:{})}]};
-    if(withDetail)response.cell=await readCellDetail(data,center,detailId,0,ready);
+    mark('coveragePoint', building);
+    if(withDetail)response.cell=await readCellDetail(data,center,detailId,0,ready,mark);
     return response;
   });
 
@@ -279,4 +298,13 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     return {...result,truncated:viewport.truncated,cells:result.cells.map(cell=>({...cell,boundary:cellToBoundary(cell.id)}))};
   },sendData,async()=>null);
 
+  return {
+    async prepareDefaultPointData(generation) {
+      const started = performance.now();
+      const {reader} = await load();
+      const restoring = performance.now();
+      await reader.readPeriod(90, generation);
+      return {restoreMs:Math.round(restoring-started),dataMs:Math.round(performance.now()-restoring)};
+    }
+  };
 }

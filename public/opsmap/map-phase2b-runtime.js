@@ -43,6 +43,7 @@
     return hybridUi;
   });
   function purgeStaffData(){
+    cancelSearchAddressPreparation();
     liveAddressLocations?.clear();
     if(addressScheduleFrame!==null)cancelAnimationFrame(addressScheduleFrame);
     addressScheduleFrame=null;
@@ -168,6 +169,7 @@
     }).observe({type:'longtask',buffered:false}); } catch (_) { /* Unsupported metric remains unavailable. */ }
   }
   function switchMode(next, {preservePeriod=false}={}) {
+    if(state.mode!==next)cancelSearchAddressPreparation();
     if(state.mode!==next){resetDriverMaster();if(state.mode==='DATE_ROUTE'){++dateRequestId;dailyRead?.controller.abort();dailyRead=null;dailyView=null;clearActualRoute();}}
     if(state.mode!==next){closeClusterPanel();window.dispatchEvent(new CustomEvent('map-navigation-context-changed',{detail:{mode:next,date:next==='DATE_ROUTE'?state.routeDate:''}}));}
     if(state.mode!==next&&next==='DATE_ROUTE'){dateReady=false;datedSourceDate='';dailyMeta=null;state.currentRows=[];state.routeRows=[];operationStops=[];}
@@ -2346,6 +2348,7 @@
     if(unifiedResetting)return;
     unifiedResetting=true;
     try{
+      cancelSearchAddressPreparation();
       invalidateUnifiedSearch();
       if(typeof clearSearchTemporaryPin==='function')clearSearchTemporaryPin({restoreView:false});
       cancelAddressLookup();closeUnifiedSearchResults();
@@ -2452,11 +2455,43 @@
     return [];
   }
 
+  let searchAddressPreparation;
+  function cancelSearchAddressPreparation() {
+    if(!searchAddressPreparation)return;
+    clearTimeout(searchAddressPreparation.timer);
+    searchAddressPreparation.controller.abort();
+    searchAddressPreparation=null;
+  }
+
+  function queueSearchAddressPreparation() {
+    cancelSearchAddressPreparation();
+    const query=$('#query').value.normalize('NFKC').trim();
+    const generation=snapshotMeta?.sourceGeneration;
+    if(!generation||!stageAddressBatchEnabled()||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return;
+    const base=NewAreaRequests.addressQuery(query,Phase2bUi.addressVariants);
+    // Only prepare complete base addresses on our protected service.
+    const region=/^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|충청북|충청남|전라북|전라남|경상북|경상남|제주)(?:특별자치도|특별자치시|특별시|광역시|시|도)?\s/;
+    if(!base||!region.test(base)||base.replace(/\s/g,'')!==query.replace(/\s/g,''))return;
+    const work=searchAddressPreparation={controller:new AbortController(),timer:null};
+    const {signal}=work.controller;
+    const current=()=>!signal.aborted&&generation===snapshotMeta?.sourceGeneration&&state.mode==='BASE_60D';
+    work.timer=setTimeout(async()=>{
+      work.timer=null;
+      try {
+        if(!current())return;
+        const stored=await findStoredSearchRows(query,{signal,address:true});
+        if(current()&&!stored.length)await NewAreaRequests.stageAddress(query,generation,{signal});
+      } catch { /* The submitted search reports any lookup error. */ }
+      finally { if(searchAddressPreparation===work)searchAddressPreparation=null; }
+    },350);
+  }
+
   async function search() {
     const text=$('#query').value.normalize('NFKC').trim();
     if(!text){clearUnifiedSearch();return;}
     if(state.mode!=='BASE_60D')return;
     if(searchFlight?.text===text)return searchFlight.task;
+    if(searchAddressPreparation?.timer)cancelSearchAddressPreparation();
     const trace=startSearchTrace();
     const task=searchPeriod(text,trace).finally(()=>{if(searchFlight?.task===task)searchFlight=null;});
     searchFlight={text,task};
@@ -4133,17 +4168,18 @@
     $("#clearVehicles").onclick = () => applyVehicleFilter([]);
     $$("[data-center]").forEach((button) => { button.onclick = () => { selectCenter(button.dataset.center); $("#vehicleSelect").classList.remove("open"); }; });
     let composing = false;
-    $("#query").oncompositionstart = () => { composing = true; };
-    $("#query").oncompositionend = () => { composing = false; };
+    $("#query").oncompositionstart = () => { composing = true; cancelSearchAddressPreparation(); };
+    $("#query").oncompositionend = () => { composing = false; queueSearchAddressPreparation(); };
     $("#query").oninput = () => {
       if(unifiedResetting)return;
       searchInputAt=performance.now();
       invalidateUnifiedSearch();if(typeof clearSearchTemporaryPin==='function')clearSearchTemporaryPin({restoreView:false});
       cancelAddressLookup();closeUnifiedSearchResults();setSearchState('');
       if(!$('#query').value.trim())clearUnifiedSearch();
+      else if(!composing)queueSearchAddressPreparation();
     };
     $("#query").onkeydown = (event) => {
-      if(event.key==='Escape'){invalidateUnifiedSearch();clearSearchTemporaryPin();cancelAddressLookup();closeUnifiedSearchResults();return;}
+      if(event.key==='Escape'){cancelSearchAddressPreparation();invalidateUnifiedSearch();clearSearchTemporaryPin();cancelAddressLookup();closeUnifiedSearchResults();return;}
       if(event.key==='Enter'&&!composing&&!event.isComposing){event.preventDefault();void search();}
     };
     $("#searchBtn").onclick = search;

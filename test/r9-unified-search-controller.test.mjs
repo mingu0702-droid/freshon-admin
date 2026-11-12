@@ -20,7 +20,7 @@ function declaration(name){
 // Pick only A-owned declarations: B's interleaved temporary-pin functions remain
 // interface stubs here and are exercised by the independent full-browser QA.
 const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','getSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
- 'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
+ 'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','cancelSearchAddressPreparation','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
  'renderResults','unifiedAddressQuery','stageAddressHashMatches','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
  const nodes=new Map(),selected=[],fallback=[],queries=[],requests=new Map();let resets=0,tempClears=0;
@@ -30,7 +30,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
-  searchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,
+  searchIndex:null,searchFlight:null,searchAddressPreparation:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,
   stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{stageAddress,temporaryPoint:()=>null,addressQuery:()=>'',addressQueries:()=>[],message:error=>error.code},Phase2bUi:{},
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,

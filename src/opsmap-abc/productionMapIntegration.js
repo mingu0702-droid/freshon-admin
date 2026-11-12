@@ -99,12 +99,12 @@ export function mountProductionMapApi(app,{
   const stageOnly=env.OPSMAP_STAGE_VERIFY_ONLY==='1';
   const requireStageRead=(req,res,next)=>stageOnly && mapStaff.isSessionCurrent(req,res.locals.staffSession?.key)
     ? next() : mapStaff.requireStaff(req,res,next);
-  app.use(staffLatency);
+  app.use((req,res,next)=>staffLatency(req,res,next,{stageSearch:stageOnly}));
   app.use('/api/map-phase2b/auth',securityAudit,mapStaff.router);
   mountMapStaffEntryGate(app,mapStaff.requireStaff,{isInlineSessionCurrent:stageOnly ? mapStaff.isSessionCurrent : undefined});
   app.use('/api/map-phase2b/private/driver-history',(req,res,next)=>historyDeadline(req,res,next,{milliseconds:readStoredStaffHistory?20000:5000}));
   app.use('/api/map-phase2b/private',(req,res,next)=>stageOnly&&
-    (req.path==='/stage-address-evidence'||req.path==='/map-sdk-config'&&req.query.sdkOnly==='1')
+    (req.path==='/stage-address-evidence'||req.path==='/shadow-coverage/point'||req.path==='/map-sdk-config'&&req.query.sdkOnly==='1')
     ? requireStageRead(req,res,next) : mapStaff.requireStaff(req,res,next));
   mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
   app.get('/api/map-phase2b/private/map-sdk-config',async(req,res)=>{

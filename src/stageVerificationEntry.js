@@ -17,7 +17,7 @@ import {createStageStaffSessionStore} from './staffSessionStore.js';
 import {createProductionSnapshotStore,materializeSnapshot} from './productionSnapshotStore.js';
 import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,createStageAbValidation,mountStageAbValidation} from './stageAbValidation.js';
 import {phase2bSnapshotMeta} from './phase2bOperations.js';
-import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
+import {mountPrivateCustomerSearch,preparePreservedAddressIndex} from './privateCustomerSearch.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
@@ -514,10 +514,31 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             ]).filter(([,digest])=>digest!==undefined))}));
         return (await providerReader)();
       }:undefined;
-      mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
+      const coverage=mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
         appRoot:coverageAppRoot,readProviderCoverage,readStatus:readCoverageStatus,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
+      let preparedAddressRows, preparedCoverageGeneration;
+      function prepareStageSearch(saved) {
+        const generation = saved.sourceGeneration;
+        if (!generation || generation !== validation.active()?.generation || preparedAddressRows === saved.rows) return;
+        preparedAddressRows = saved.rows;
+        setImmediate(() => {
+          const started = performance.now();
+          void preparePreservedAddressIndex(saved).then(() => {
+            if (generation !== validation.active()?.generation || preparedCoverageGeneration === generation) return;
+            preparedCoverageGeneration = generation;
+            const addressIndexMs = Math.round(performance.now() - started);
+            // Background H3 file reads start after the map response and address preparation.
+            setTimeout(() => {
+              if (generation !== validation.active()?.generation) return;
+              void coverage.prepareDefaultPointData(generation).then(timings => {
+                console.info(JSON.stringify({component:'stage-search-prepare',addressIndexMs,...timings}));
+              }).catch(() => {});
+            }, 900).unref();
+          }).catch(() => { if (preparedAddressRows === saved.rows) preparedAddressRows = null; });
+        });
+      }
       manual.mount(binding);
       photos.mount(binding);
       mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,allowPreservedBatch:true,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
@@ -544,7 +565,10 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           const recovery=snapshotRecovery();
           const meta = {...phase2bSnapshotMeta(saved), sourceGeneration:saved.sourceGeneration || null,sourceRunId:saved.sourceRunId || null,
             recovery,...(recovery==='RESTORING'?{retryAfterMs:2000}:{})};
-          const respond=()=>res.json({ok:true,data:rows,meta,error:null});
+          const respond=()=>{
+            prepareStageSearch(saved);
+            return res.json({ok:true,data:rows,meta,error:null});
+          };
           if(!immediate)return requireStaff(req,res,respond);
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           res.locals.stageInlineStaffResponse=true;

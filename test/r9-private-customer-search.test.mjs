@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import vm from 'node:vm';import fs from 'node:fs';import crypto from 'node:crypto';
 import express from 'express';
-import {mountPrivateCustomerSearch,searchCustomerSummaries} from '../src/privateCustomerSearch.js';
+import {mountPrivateCustomerSearch,preparePreservedAddressIndex,searchCustomerSummaries,searchPreservedRegistry} from '../src/privateCustomerSearch.js';
 const source=fs.readFileSync(new URL('../integrations/hub/protected-reader/CustomerSearch.js',import.meta.url),'utf8');
 const now='2026-11-03T00:00:00Z';
 function fixture(extra=[],mutate=false){
@@ -18,6 +18,17 @@ test('exact known customer remains selectable while the master is unavailable',a
 test('authenticated current address matches join by code without returning private addresses',async()=>{const f=fixture();const r=await searchCustomerSummaries({query:'서울 강남구 합성로10',snapshot:{rows:[{customerCode:'S970001',lat:37,lng:127}]},searchMaster:async q=>({ok:true,data:f.search(q)})});assert.equal(r.meta.customerMatchVerified,true);assert.equal(r.data.length,2);assert.equal(r.data[0].lat,37);assert.equal(r.data[1].lat,null);assert(!JSON.stringify(r).includes('합성로'));});
 test('changed address hash cannot reuse a previously verified coordinate',async()=>{const f=fixture();const r=await searchCustomerSummaries({query:'서울 강남구 합성로10',snapshot:{rows:[{customerCode:'S970001',lat:37,lng:127,originalAddressHash:'f'.repeat(64)}]},searchMaster:async q=>({ok:true,data:f.search(q)})});const row=r.data.find(x=>x.customerCode==='S970001');assert.equal(row.lat,null);assert.equal(row.coordinateStatus,'CONFLICT');assert.equal(row.addressChanged,true);});
 test('master failure does not break known names or certify unknown addresses',async()=>{const searchMaster=async()=>{throw Error('HUB_TIMEOUT');};const r=await searchCustomerSummaries({query:'합성',snapshot:{rows:[{customerCode:'S970001',customerName:'합성'}]},searchMaster});assert.equal(r.data.length,1);assert.equal(r.meta.customerMatchVerified,false);await assert.rejects(searchCustomerSummaries({query:'서울 미등록로 99',snapshot:{rows:[]},searchMaster}),/HUB_TIMEOUT/);});
+
+test('preparing a private address index coalesces callers and preserves exact matches', async () => {
+ const rows=Array.from({length:130},(_,i)=>({customerCode:`S98${String(i).padStart(4,'0')}`,address:`서울 강남구 합성로 ${i+10}`}));
+ const snapshot={rows,sourceGeneration:'a'.repeat(64)};
+ const preparing=preparePreservedAddressIndex(snapshot);
+ assert.equal(preparePreservedAddressIndex(snapshot),preparing);
+ await preparing;
+ const result=searchPreservedRegistry('서울특별시 강남구 합성로 139',snapshot);
+ assert.deepEqual(result.data.map(row=>row.customerCode),['S980129']);
+ assert.equal(result.data[0].address,undefined);
+});
 
 test('only a verified Stage batch can use preserved address matching without a current source request',async t=>{
  const app=express();let upstream=0;
