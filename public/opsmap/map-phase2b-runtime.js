@@ -2194,8 +2194,7 @@
   }
 
   function normalizeSearchAddress(value) {
-    return String(value || '').normalize('NFKC').toLocaleLowerCase('ko-KR')
-      .replace(/\([^)]*\)|\[[^\]]*\]/g,' ')
+    return Phase2bUi.addressLookupText(value).toLocaleLowerCase('ko-KR')
       .replace(/서울특별시|서울시/g,'서울').replace(/부산광역시|부산시/g,'부산')
       .replace(/대구광역시|대구시/g,'대구').replace(/인천광역시|인천시/g,'인천')
       .replace(/광주광역시|광주시/g,'광주').replace(/대전광역시|대전시/g,'대전')
@@ -2471,7 +2470,7 @@
     const base=NewAreaRequests.addressQuery(query,Phase2bUi.addressVariants);
     // Only prepare complete base addresses on our protected service.
     const region=/^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|충청북|충청남|전라북|전라남|경상북|경상남|제주)(?:특별자치도|특별자치시|특별시|광역시|시|도)?\s/;
-    if(!base||!region.test(base)||base.replace(/\s/g,'')!==query.replace(/\s/g,''))return;
+    if(!base||!region.test(base)||base.replace(/\s/g,'')!==Phase2bUi.addressLookupText(query).replace(/\s/g,''))return;
     const work=searchAddressPreparation={controller:new AbortController(),timer:null};
     const {signal}=work.controller;
     const current=()=>!signal.aborted&&generation===snapshotMeta?.sourceGeneration&&state.mode==='BASE_60D';
@@ -2542,10 +2541,9 @@
 
   function waitForSearchMapPoint(text,{owner=state.searchRequestId,reason='외부 주소검색 미승인',customerMatchState='UNCONFIRMED'}={}) {
     if(owner!==state.searchRequestId||state.mode!=='BASE_60D')return;
-    const regionMissing=unifiedAddressQuery(text)&&!/^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주|[가-힣]+(?:시|군|구))/.test(text);
     const results=$('#results');results.hidden=false;
     const guide=document.createElement('div');guide.className='resultMeta';guide.dataset.searchAddressGuide='true';
-    guide.textContent=regionMissing?'지역이 빠진 주소입니다. 시·군·구를 입력하거나 지도에서 임시 위치를 지정하세요.':'지도에서 임시 위치를 지정할 수 있습니다.';
+    guide.textContent=unifiedAddressQuery(text)?NewAreaRequests.addressFailureHint(text,Phase2bUi.addressVariants):'지도에서 임시 위치를 지정할 수 있습니다.';
     results.replaceChildren(guide);
     $('#query').setAttribute('aria-expanded','true');
     if(!state.map){setSearchState('지도 연결 후 임시 위치를 지정해 주세요.');return;}
@@ -2622,6 +2620,7 @@
     unifiedSearchController=new AbortController();const signal=unifiedSearchController.signal;
     const code=/^[A-Z]\d{3,}$/i.test(text)?text.toUpperCase():null;
     const address=unifiedAddressQuery(text)||/^\d{19}$/.test(text);
+    const lookupText=address?(NewAreaRequests.addressQuery(text,Phase2bUi.addressVariants)||Phase2bUi.addressLookupText(text)):text;
     const stageLookup=address&&stageAddressBatchEnabled();
     const showMatches=rows=>{
       if(!rows.length)return false;
@@ -2670,14 +2669,14 @@
       }
       if([401,403,409].includes(evidenceError?.status)){setSearchState(NewAreaRequests.message(evidenceError));trace.finish('error');return;}
     }
-    if(address&&(!stageLookup||customerRegistry?.summary().complete===true)&&showMatches(rankSearchRows(text)))return;
+    if(address&&(!stageLookup||customerRegistry?.summary().complete===true)&&showMatches(rankSearchRows(lookupText)))return;
     const temporary=address&&NewAreaRequests.temporaryPoint(text);
     if(temporary){if(!state.map)await initMap();if(active())finishAddress({...temporary,address:text},{owner,trace});return;}
     let remote=[],meta=null,lookupError=null;
     trace.mark('remoteStart');
     try{
       const result=await fetchJson('/api/map-phase2b/private/customer-search',{
-        channel:'unified-customer-search',ttl:0,timeout:30000,headers:{'x-map-customer-query':encodeURIComponent(text)}
+        channel:'unified-customer-search',ttl:0,timeout:30000,headers:{'x-map-customer-query':encodeURIComponent(lookupText)}
       });
       if(!Array.isArray(result.data))throw new Error('CUSTOMER_SEARCH_CONTRACT');
       remote=result.data;meta=result.meta;
@@ -2692,7 +2691,7 @@
       const row=normalizeApiStore({...matched.get(value.customerCode),...value});
       matched.set(row.customerCode,row);
     }
-    const rank=rankSearchRow(text);
+    const rank=rankSearchRow(lookupText);
     let rows=[...matched.values()].filter(row=>!code||row.customerCode===code)
       .sort((a,b)=>rank(a)-rank(b)||naturalCompare(a.customerName,b.customerName)).slice(0,40);
     if(rows.length){
@@ -3514,8 +3513,9 @@
     const failed=!!error||['OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_ADDRESS_UNAVAILABLE','STORED_REGISTRY_UNAVAILABLE'].includes(status)||!status;
     const reason=http===401?'직원 로그인 필요':http===403?'주소 조회 권한 없음':messages[error||status]|| (candidates?'주소 위치 후보 확인 필요':NewAreaRequests.message({code:error||status}));
     const pending=judgeNewAreaPoint(row,candidates?{candidates}:null);
+    const hint=['INVALID_ADDRESS','ADDRESS_NOT_MATCHED'].includes(status)?' · '+NewAreaRequests.addressFailureHint(row.address,Phase2bUi.addressVariants):'';
     const restriction=evidence?.externalBlockedReason?' · '+NewAreaRequests.message({code:evidence.externalBlockedReason}):'';
-    return {...pending,reason:pending.decision==='X'?pending.reason:reason,evidence:(pending.decision==='X'?pending.evidence+' · ':'')+(http?`${reason} · HTTP ${http}`:reason)+restriction,
+    return {...pending,reason:pending.decision==='X'?pending.reason:reason,evidence:(pending.decision==='X'?pending.evidence+' · ':'')+(http?`${reason} · HTTP ${http}`:reason)+hint+restriction,
       lookupStatus:failed?'FAILED':'DEFERRED',lookupError:failed,lookupHttpStatus:http};
   }
   function newAreaRegistryRows() {

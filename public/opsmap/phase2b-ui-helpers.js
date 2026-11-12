@@ -40,12 +40,29 @@
     while (1.05 / (luminance(channels) + .05) < 4.5 && lightness > .20) channels = rgb(lightness -= .01);
     return "#" + channels.map(v => v.toString(16).padStart(2, "0")).join("");
   }
+  function addressLookupText(input) {
+    const text = String(input || '').normalize('NFKC').replace(/\s+/g, ' ').trim()
+      .replace(/(대로|로)\s+(\d+(?:번)?길)(?=\s|\d|$)/g, '$1$2')
+      .replace(/(동\d+가|동|읍|면|리|대로|로|길|가)(\d+(?:-\d+)?)(?=\s|\(|\[|$)/g, '$1 $2');
+    let base = text;
+    const notes = {')':'(', ']':'['};
+    while (notes[base.at(-1)]) {
+      const closing = base.at(-1), opening = notes[closing];
+      let depth = 1, start = base.length - 2;
+      for (; start >= 0; start--) {
+        if (base[start] === closing) depth++;
+        if (base[start] === opening && --depth === 0) break;
+      }
+      if (start < 0) return text;
+      base = base.slice(0, start).trimEnd();
+    }
+    // Parenthetical names at the end are reference text only after a complete address number.
+    return /(?:대로|로|길|동\d+가|동|리|읍|면|가)\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?$/.test(base) ? base : text;
+  }
   function addressVariants(input) {
-    const original = String(input || "").normalize('NFKC').replace(/\s+/g, " ").trim()
-      .replace(/(대로|로)\s+(\d+(?:번)?길)(?=\s|\d|$)/g,'$1$2');
-    const cleaned = original.replace(/\([^)]*\)|\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim();
-    const core = cleaned.match(/^.*?(?:[가-힣\d·.]+(?:대로|로|길)|[가-힣\d·.]+(?:동|리|읍|면|가))\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?/);
-    return [...new Set([original, cleaned, core?.[0]].filter(Boolean))];
+    const base = addressLookupText(input);
+    const core = base.match(/^.*?(?:[가-힣\d·.]+(?:대로|로|길)|[가-힣\d·.]+(?:동\d+가|동|리|읍|면|가))\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?(?=$|[\s,(\[])/);
+    return [...new Set([base, core?.[0]].filter(Boolean))];
   }
   function addressMatches(query, candidate) {
     const compact = (value) => String(value || "").replace(/\s/g, "");
@@ -139,7 +156,7 @@
     }
     return error;
   }
-  root.Phase2bUi = Object.freeze({ storeDetailMatches, normalizeVehicleLabel, vehicleColorKey, vehicleMatches, vehicleColor, addressVariants, addressMatches, distanceKm, nearbyVehicles,
+  root.Phase2bUi = Object.freeze({ storeDetailMatches, normalizeVehicleLabel, vehicleColorKey, vehicleMatches, vehicleColor, addressLookupText, addressVariants, addressMatches, distanceKm, nearbyVehicles,
     nearestRegisteredStore, observedWeekdays, nearbyVehicleWeekdays, vehiclesAtRadius, deliveryBoundary, requestError });
 })(typeof window === "undefined" ? globalThis : window);
 

@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import '../public/opsmap/phase2b-ui-helpers.js';
+import '../public/opsmap/new-area-requests.js';
 
 // Controller boundaries only. All customers/addresses are synthetic and no network runs.
 const publicRoot=process.env.OPSMAP_QA_PUBLIC_ROOT || fileURLToPath(new URL('../public/opsmap/',import.meta.url));
@@ -31,7 +33,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
   searchIndex:null,searchFlight:null,searchAddressPreparation:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,
-  stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{stageAddress,temporaryPoint:()=>null,addressQuery:()=>'',addressQueries:()=>[],message:error=>error.code},Phase2bUi:{},
+  stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{...globalThis.NewAreaRequests,stageAddress,temporaryPoint:()=>null,message:error=>error.code},Phase2bUi:globalThis.Phase2bUi,
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
   window:{MapManualPins:{apply:row=>manual?.(row)}},
@@ -67,6 +69,14 @@ test('search address normalization preserves building numbers and province alias
  assert.equal(c.normalizeSearchAddress('서울특별시 강남구 합성로 14 (합성동)'),c.normalizeSearchAddress('서울 강남구 합성로14'));
  assert.equal(c.normalizeSearchAddress('전북특별자치도 군산시 시험길 5-6'),c.normalizeSearchAddress('전북 군산시 시험길5-6'));
  assert.notEqual(c.normalizeSearchAddress('서울 합성로 5-6'),c.normalizeSearchAddress('서울 합성로 56'));
+});
+test('normal-map fallback sends the base address while preserving the typed text', async () => {
+ const f=fixture({stageAddress:async()=>({status:'ADDRESS_NOT_MATCHED'})});
+ const raw='부산 영도구 동삼로 56 （동삼동, 합성타워）';
+ f.node('#query').value=raw;
+ await f.context.searchPeriod(raw);
+ assert.equal(decodeURIComponent(f.queries[0].options.headers['x-map-customer-query']),'부산 영도구 동삼로 56');
+ assert.equal(f.node('#query').value,raw);
 });
 test('existing local addresses cannot confuse building 14 with 140 or 14-1',()=>{
  const rows=[store('S990001','합성 다른건물','서울 종로구 합성로 140'),store('S990002','합성 다른번지','서울 종로구 합성로 14-1')],{context:c}=fixture({rows});

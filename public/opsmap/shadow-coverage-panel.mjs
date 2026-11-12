@@ -906,9 +906,14 @@ export function createCoveragePanel({ workspace, header }) {
       }
       if(preserved?.status==='STORED_COORDINATE_UNVERIFIED'){searchMessage('등록 매장의 주소는 확인했으나 좌표 검증이 필요합니다.');return;}
       let coverageError;
-      const data=await read('search','/search',params,{'x-map-customer-query':encodeURIComponent(query)}).catch(error=>{coverageError=error;return null;});
+      const data=await read('search','/search',params,{'x-map-customer-query':encodeURIComponent(address||query)}).catch(error=>{coverageError=error;return null;});
       if(!current())return;
-      if (data?.results.length) { renderSearch(data,radius,true); return; }
+      if (data?.results.length) {
+        // This endpoint also supports fuzzy names. A nearby or partial address must not become a pin.
+        const exact = value => requests.addressQuery(value,window.Phase2bUi.addressVariants).replace(/\s/g,'');
+        const rows = addressInput ? data.results.filter(row => address && row.kind==='store' && row.location && exact(row.address)===exact(address)) : data.results;
+        if(rows.length){renderSearch({...data,results:rows},radius,true);return;}
+      }
       if (!addressInput) { if(coverageError)throw coverageError;if(data)renderSearch(data,radius,true);return; }
       if ([401,403].includes(coverageError?.status))throw coverageError;
       if (!window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup && !window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup) await adapter?.refreshAddressLookup?.();
@@ -929,7 +934,7 @@ export function createCoveragePanel({ workspace, header }) {
       if (window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup !== true) {
         if(storedError||coverageError)throw storedError||coverageError;
         const reason=requests.message({code:window.KAKAO_MAP_CONFIG?.addressLookupReason||'GEOCODING_DISABLED'});
-        searchMessage('저장·공식 자료에서 일치하는 위치 없음 · '+reason+' · 시·군·구를 확인해 주세요.');
+        searchMessage('저장·공식 자료에서 일치하는 위치 없음 · '+reason+' · '+requests.addressFailureHint(query,window.Phase2bUi.addressVariants));
         return;
       }
       if (!addressProxy?.serverProxy) throw Error('APPROVED_ADDRESS_PROXY_REQUIRED');

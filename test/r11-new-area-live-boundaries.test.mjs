@@ -56,13 +56,17 @@ test('basic query reuses existing variants, keeps road/lot numbers and scopes of
     ['전남광주통합특별시 북구 합성로 21 (용봉동)','광주광역시 북구 합성로 21'],
     ['부산광역시 북구 합성로 21 (용봉동)','부산광역시 북구 합성로 21'],
     ['전남광주통합특별시 북구 합성로 21 (다른동)','전남광주통합특별시 북구 합성로 21'],
-    ['경기도 화성시 합성동 산 21-3 [합성건물]','경기도 화성시 합성동 산 21-3']
+    ['경기도 화성시 합성동 산 21-3 [합성건물]','경기도 화성시 합성동 산 21-3'],
+    ['부산 영도구 동삼로 56 (동삼동, 한나타워)','부산 영도구 동삼로 56'],
+    ['경기 안성시 일죽면 서동대로 7184 （월정리, 광장휴게소）','경기 안성시 일죽면 서동대로 7184'],
+    ['경기 양주시 남면 황방리 386 (합성 건물(별관))','경기 양주시 남면 황방리 386']
   ];
   for(const [input,expected] of cases){
     assert.equal(queryChoices(input).at(-1),expected,input);assert.ok(queryChoices(input).length<=2);
     assert.equal(query(input),globalThis.Phase2bUi.addressVariants(input.normalize('NFKC').replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)(?=\s|\(|\[|$)/g,'$1 $2')).at(-1));
   }
   assert.equal(query('합성건물 고객정보만'), '');
+  assert.equal(query('합성건물 (경기 안성시 일죽면 서동대로 7184)'), '');
 });
 
 test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with no Y transmission',async()=>{

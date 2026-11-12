@@ -7,7 +7,7 @@
       .replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)(?=\s|\(|\[|$)/g, '$1 $2');
     const choices = variants(normalized);
     const primary = choices[choices.length - 1] || '';
-    if(!/(?:대로|로|길|동|읍|면|리|가)\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?$/.test(primary))return [];
+    if(/[()[\]]/.test(primary)||!/(?:대로|로|길|동\d+가|동|읍|면|리|가)\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?$/.test(primary))return [];
     let query = primary;
     // Official search aliases only; the original address and its identity are untouched.
     // https://www.incheon.go.kr/IC01070101 (2026-07-01 administrative reorganization)
@@ -24,6 +24,13 @@
     return [...new Set([primary,query])];
   }
   function addressQuery(address, variants) { return addressQueries(address,variants)[0] || ''; }
+  function addressFailureHint(address, variants) {
+    const base = addressQuery(address, variants);
+    if (!base) return '시·군·구와 도로명 주소 또는 지번을 확인해 주세요.';
+    const type = /(?:대로|로|길)\s+(?:지하\s*)?\d+(?:-\d+)?$/.test(base) ? '도로명과 건물번호' : '법정동·리와 지번';
+    return /(?:^|\s)[가-힣]+[시군구]\s/.test(base)
+      ? `${type}, 시·군·구 표기를 확인해 주세요.` : `시·군·구를 포함해 ${type} 표기를 확인해 주세요.`;
+  }
   function stopsExternal(error) {
     return /^(?:KAKAO_|GEOCODE_(?:DAILY_LIMIT|AUTOMATICALLY_BLOCKED|LEDGER_|DURABLE_|SESSION_|ORIGIN_)|GEOCODING_DISABLED|TARGET_APP_)/.test(error?.code || '');
   }
@@ -148,7 +155,7 @@
     flights.clear();
   }
   root.addEventListener?.('map-staff-signed-out',()=>{resetStageAddress();temporary.clear();});
-  root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, stopsExternal, outcome, singleStoredLocation,
+  root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, addressFailureHint, stopsExternal, outcome, singleStoredLocation,
     stageAddress, rememberTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
 })(typeof window === 'object' ? window : globalThis);
 
