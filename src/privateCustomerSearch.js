@@ -36,7 +36,11 @@ function preservedMatches(query,snapshot){
  if(matchedBy==='ADDRESS'&&!index.byAddress){
   const byAddress=new Map();
   for(const row of rows){if(!code(row.customerCode))continue;
-   for(const key of new Set([row.address,row.customerAddress,row.roadAddress,row.lotAddress].map(exactAddressKey).filter(Boolean))){
+   const addresses=[row.address||row.customerAddress||row.basicAddress||row.latestAddress];
+   if(!row.addressChanged&&row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED'){
+    addresses.push(row.customerAddress,row.roadAddress,row.roadNameAddress,row.lotAddress,row.jibunAddress);
+   }
+   for(const key of new Set(addresses.map(exactAddressKey).filter(Boolean))){
     const matches=byAddress.get(key)||[];matches.push(row);byAddress.set(key,matches);}}
   index.byAddress=byAddress;
  }

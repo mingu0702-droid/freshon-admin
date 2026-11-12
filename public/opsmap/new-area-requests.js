@@ -59,6 +59,9 @@
     });
   }
   function message(error) {
+    if(error?.status===401)return '직원 로그인이 필요합니다';
+    if(error?.status===403)return '주소 조회 권한을 확인해 주세요';
+    if(error?.status===409)return '지도 자료가 바뀌었습니다 · 새로고침 후 다시 조회해 주세요';
     return ({ GEOCODE_DAILY_LIMIT: '일일 주소 조회 한도 대기', GEOCODE_AUTOMATICALLY_BLOCKED: '주소 조회 차단 · 보류',
       NEW_AREA_ROW_TIMEOUT: '주소 응답 지연 · 다시 조회 필요', REQUEST_TIMEOUT: '고객 주소 응답 지연 · 다시 조회 필요',
       GEOCODE_QUERY_INVALID: '주소·상호 검색어를 확인해 주세요',
@@ -78,6 +81,7 @@
   }
   const flights = new Map(), retained = new Map(), temporary = new Map();
   let addressEpoch = 0;
+  let addressGeneration;
   const addressKey = value => String(value || '').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
   function remember(cache,key,value) {
     if (cache.size >= 64) cache.delete(cache.keys().next().value);
@@ -88,7 +92,8 @@
     if(signal?.aborted)return Promise.resolve(null);
     const variants = /^\d{19}$/.test(query) ? [query] : addressQueries(query,root.Phase2bUi.addressVariants);
     if (!variants.length) return Promise.resolve(null);
-    const key = JSON.stringify([generation,...variants.map(addressKey)]);
+    if(addressGeneration!==generation){resetStageAddress();addressGeneration=generation;}
+    const key = JSON.stringify(variants.map(addressKey));
     const cached=retained.get(key);
     if(cached?.expiresAt>Date.now())return Promise.resolve(cached.result);
     if(cached)retained.delete(key);
@@ -130,11 +135,12 @@
       remember(temporary,addressKey(query),{lat:point.lat,lng:point.lng,coordinateSource:point.coordinateSource});
     }
   }
-  root.addEventListener?.('map-staff-signed-out',()=>{
+  function resetStageAddress(){
     addressEpoch++;retained.clear();
     for(const flight of flights.values())flight.controller.abort();
-    flights.clear();temporary.clear();
-  });
+    flights.clear();
+  }
+  root.addEventListener?.('map-staff-signed-out',()=>{resetStageAddress();temporary.clear();});
   root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, stopsExternal, outcome, singleStoredLocation,
     stageAddress, rememberTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
 })(typeof window === 'object' ? window : globalThis);

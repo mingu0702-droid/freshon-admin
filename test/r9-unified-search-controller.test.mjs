@@ -19,19 +19,19 @@ function declaration(name){
 }
 // Pick only A-owned declarations: B's interleaved temporary-pin functions remain
 // interface stubs here and are exercised by the independent full-browser QA.
-const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','rankSearchRows','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
+const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','getSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
- 'renderResults','unifiedAddressQuery','stageAddressHashMatches','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
+ 'renderResults','unifiedAddressQuery','stageAddressHashMatches','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
  const nodes=new Map(),selected=[],fallback=[],queries=[],requests=new Map();let resets=0,tempClears=0;
  const node=key=>{if(!nodes.has(key))nodes.set(key,{dataset:{},value:'',hidden:true,html:'',replaceChildren(){this.html='';this.buttons=[];},setAttribute(k,v){this[k]=v;},dispatchEvent(){},get innerHTML(){return this.html;},set innerHTML(v){this.html=v;this.buttons=[...v.matchAll(/data-result="(\d+)"/g)].map(m=>({dataset:{result:m[1]}}));}});return nodes.get(key);};
  const context={console,AbortController,Event,setTimeout,clearTimeout,Number,Map,Set,performance,requestAnimationFrame:fn=>fn(),
   state:{mode:'BASE_60D',selected:null,searchRequestId:0,selectedDate:'2026-11-02',centerFilter:'osan',selectedVehicles:['101','122'],currentRows:rows},
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
- coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
+ coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
   searchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,customerRegistry:null,
-  stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{stageAddress,temporaryPoint:()=>null},
+  stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{stageAddress,temporaryPoint:()=>null,addressQuery:()=>'',addressQueries:()=>[],message:error=>error.code},Phase2bUi:{},
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
   window:{MapManualPins:{apply:row=>manual?.(row)}},
@@ -95,6 +95,13 @@ test('a sealed Stage address uses the generation-bound index without rebuilding 
  assert.equal(f.queries.length,0);
 });
 
+test('expired Stage evidence is surfaced instead of falling through to live or external search',async()=>{
+ const f=fixture({stageAddress:async()=>{throw Object.assign(Error('STAGE_BATCH_GENERATION_CHANGED'),{status:409,code:'STAGE_BATCH_GENERATION_CHANGED'});}});
+ await f.context.searchPeriod('서울 합성구 보호로 6');
+ assert.equal(f.context.lastStatus,'STAGE_BATCH_GENERATION_CHANGED');
+ assert.equal(f.queries.length,0);assert.equal(f.fallback.length,0);
+});
+
 test('an exact sealed address hash uses authorized in-memory rows while changes fall back to the server',async()=>{
  const hash='b'.repeat(64),row=store('S990203','합성 해시 매장','',{originalAddressHash:hash});
  let requests=0;
@@ -107,6 +114,8 @@ test('an exact sealed address hash uses authorized in-memory rows while changes 
  f.context.storesByCode.set(row.customerCode,{...row,currentAddressHash:'c'.repeat(64)});
  await f.context.searchPeriod('서울 합성구 보호로 7');
  assert.equal(requests,1);
+ assert.equal(f.selected.length,1,'the prior address response cannot select the changed customer');
+ assert.match(f.context.lastStatus,/주소가 변경/);
 });
 
 test('exact customer selects existing manual overlay without a remote lookup or source mutation',async()=>{
@@ -138,9 +147,9 @@ test('private address match is accepted when the public result omits its address
  await f.context.searchPeriod('서울 합성구 비공개로 7');assert.equal(f.selected[0].customerCode,row.customerCode);assert.equal(f.selected[0].lat,row.lat);assert.equal(f.fallback.length,0);assert.equal(f.queries[0].options.ttl,0);
 });
 
-test('Customer failure cannot declare a new customer or invoke external lookup',async()=>{
+test('Customer failure cannot declare a new customer and does not disable an independently approved address lookup',async()=>{
  const f=fixture({remote:async()=>{throw Object.assign(Error('SOURCE_UNAVAILABLE'),{status:503});}});
- await f.context.searchPeriod('서울 합성구 미등록로 8');assert.equal(f.selected.length,0);assert.equal(f.fallback.length,1);assert.equal(f.fallback[0].options.lookupAllowed,false);assert.equal(f.fallback[0].options.customerMatchState,'UNCONFIRMED');
+ await f.context.searchPeriod('서울 합성구 미등록로 8');assert.equal(f.selected.length,0);assert.equal(f.fallback.length,1);assert.equal(f.fallback[0].options.lookupAllowed,true);assert.equal(f.fallback[0].options.customerMatchState,'UNCONFIRMED');
 });
 
 test('verified empty lookup and unverified empty lookup preserve distinct customer states',async()=>{
@@ -153,7 +162,7 @@ test('unknown exact customer code cannot become an address pin or a prefix-code 
 
 test('a late prior search cannot overwrite the newer selection',async()=>{
  let release;const f=fixture({remote:async q=>q==='옛검색'?new Promise(r=>release=r):({data:[store('S990012','합성 최신검색','서울 시험로 12')]})});
- const old=f.context.searchPeriod('옛검색');const oldSignal=f.context.unifiedSearchController.signal;await f.context.searchPeriod('최신검색');assert.equal(oldSignal.aborted,true);release({data:[store('S990011','합성 옛검색','서울 시험로 11')]});await old;assert.deepEqual(f.selected.map(r=>r.customerCode),['S990012']);
+ const old=f.context.searchPeriod('옛검색');const oldSignal=f.context.unifiedSearchController.signal;await new Promise(setImmediate);assert.equal(typeof release,'function');await f.context.searchPeriod('최신검색');assert.equal(oldSignal.aborted,true);release({data:[store('S990011','합성 옛검색','서울 시험로 11')]});await old;assert.deepEqual(f.selected.map(r=>r.customerCode),['S990012']);
 });
 
 test('address-change conflict never reuses the previous customer location',async()=>{

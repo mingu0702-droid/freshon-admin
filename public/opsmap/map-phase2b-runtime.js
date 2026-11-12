@@ -9,6 +9,7 @@
   const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", centerFilter: DEFAULT_PERIOD_CENTER, selectedDate: "", latestDate: "", map: null, overlays: [], lines: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
   let mapInitializing=null,mapObserver=null,mapHandlers=[],mapCamera=null,cameraSelection=0;
   let searchTemporaryOverlay=null,searchTemporaryRadius=null,searchTemporaryClick=null;
+  let searchSelectedOverlay=null;
   let newAreaPositionControl=null;
   let addressCandidateOverlays=[];
   let temporaryAreaFacts=null, newAreaVehicleKey=null, newAreaObservedFlight=null;
@@ -347,7 +348,7 @@
     if(generalMap&&state.mode==='BASE_60D')generalRegistryRows=new Map(next.map(row=>[row.customerCode,row]));
     liveAddressLocations?.onSourceSync(JSON.stringify([meta?.preservation?.version,meta?.sourceGeneration,meta?.sourceObservedAt,meta?.generatedAt,customerRegistry?.summary().version]),allStores);
     window.dispatchEvent(new Event('map-stores-replaced'));
-    snapshotMeta = meta || snapshotMeta;
+    if(state.mode==='BASE_60D')snapshotMeta = meta || snapshotMeta;
     if(state.virtual?.searchTemporary&&(temporaryAreaSourceVersion!==newAreaSourceVersion()||temporaryAreaDispatchMeta!==baseVehicleMeta)){
       renderSearchTemporaryNearby(state.virtual,{loadDispatch:false});
     }
@@ -423,9 +424,12 @@
       snapshotFailure=null;
       if(payload.pending===true||payload.meta?.complete===false){snapshotReadState='pending';snapshotRetryAfter=2000;return;}
       if (!Array.isArray(payload.data)) throw new Error("스냅샷 확인 실패");
-      latestSnapshotRows = payload.data; coordinateByCode.clear();
       snapshotReadState = 'ready';
-      latestSnapshotRows.forEach(row => coordinateByCode.set(String(row.customerCode || row.code), row));
+      const generation=payload.meta?.sourceGeneration;
+      if(!/^[a-f0-9]{64}$/.test(generation||'')||generation!==snapshotMeta?.sourceGeneration||latestSnapshotRows.length!==payload.data.length){
+        latestSnapshotRows=payload.data;coordinateByCode.clear();
+        latestSnapshotRows.forEach(row=>coordinateByCode.set(String(row.customerCode||row.code),row));
+      }
       snapshotMeta = payload.meta || {};
       snapshotRetryAfter=snapshotMeta.recovery==='RESTORING'?Math.max(1000,Number(snapshotMeta.retryAfterMs)||2000):0;
       performance.mark('opsmap-snapshot-ready');
@@ -1429,6 +1433,7 @@
   }
 
   function clearMap() {
+    clearSearchSelectedOverlay();
     closeClusterPanel(); clearActualRoute();
     [...state.overlays, ...state.lines].forEach((item) => item.setMap?.(null));
     state.overlays = [];
@@ -1437,6 +1442,7 @@
   }
 
   function clearSelection({preserveSearch=false,fast=false}={}) {
+    clearSearchSelectedOverlay();
     addressFocusRequest=null;
     if(!preserveSearch){invalidateUnifiedSearch();if(typeof clearSearchTemporaryPin==='function')clearSearchTemporaryPin({restoreView:false});closeUnifiedSearchResults();cancelAddressLookup();}
     ++cameraSelection;mapCamera?.releaseFocus();
@@ -1875,6 +1881,7 @@
   }
 
   function selectStore(row, element, focus, skipEnrich = false, trace) {
+    clearSearchSelectedOverlay();
     if(!row.virtual){if(!unifiedSelectionActive)invalidateUnifiedSearch();if(typeof clearSearchTemporaryPin==='function')clearSearchTemporaryPin({restoreView:false});closeUnifiedSearchResults();}
     ++cameraSelection;
     closeClusterPanel();
@@ -1910,7 +1917,19 @@
     addressFocusRequest=unlocated?{code:row.customerCode,interaction:mapCamera?.interaction()}:null;
     // Rebuild the selected entry in both views, even if it was inside a cluster
     // or outside the current vehicle filter. Its overlay must be above peers.
-    if(state.map&&!unlocated){state.fitRequested=false;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});}
+    if(state.map&&!unlocated){
+      state.fitRequested=false;
+      if(trace&&state.mode==='BASE_60D'&&window.kakao?.maps?.CustomOverlay){
+        const pin=markerElement(row,null,'store');pin.classList.add('selected');
+        const overlay=searchSelectedOverlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(row.lat,row.lng),
+          content:pin,clickable:true,xAnchor:.5,yAnchor:1,zIndex:40});
+        overlay.setMap(state.map);
+        afterSearchPaint(()=>{
+          if(searchSelectedOverlay!==overlay||state.selected!==row)return;
+          renderStops(state.currentRows,{viewportOnly:true});clearSearchSelectedOverlay();
+        });
+      }else renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});
+    }
     trace?.mark('pin');
     const routeMode = state.mode === "DATE_ROUTE";
     const vehicle = normalizeVehicle(row.vehicle);
@@ -2195,20 +2214,21 @@
     };
   }
 
-  function rankSearchRows(query) {
+  function getSearchIndex() {
     const registryVersion=customerRegistry?.summary().version;
     if (searchIndex?.period!==periodRows || searchIndex?.snapshot!==latestSnapshotRows ||
-        searchIndex?.stores!==allStores || searchIndex?.registryVersion!==registryVersion) {
-      const records = new Map();
+        searchIndex?.registryVersion!==registryVersion) {
+      const records = new Map(), byAddress = new Map();
       const currentRows=newAreaRegistryRows();
-      for (const source of [currentRows,allStores,periodRows]) for (const value of source) {
+      const sources=stageAddressBatchEnabled()&&snapshotMeta?.sourceGeneration?[currentRows]:[currentRows,allStores,periodRows];
+      for (const source of sources) for (const value of source) {
         const code=String(value.customerCode||value.code||value.id||'').trim();
         if(!/^[A-Z]\d{3,}$/.test(code))continue;
         const addresses=storeSearchAddresses(value);
         const primaryAddress=normalizeSearchAddress(addresses[0]);
         let entry=records.get(code);
         if(!entry){
-          const row=normalizeApiStore(value);
+          const row=value.customerCode===code?value:{...value,customerCode:code};
           entry={row,code:code.toLowerCase(),name:normalizeSearchText(row.customerName).replace(/\s/g,''),primaryAddress,addresses:[]};
           records.set(code,entry);
         }else if(entry.primaryAddress&&entry.primaryAddress!==primaryAddress){
@@ -2218,12 +2238,38 @@
           if(!address)continue;
           const normalized=normalizeSearchAddress(address);
           if(!entry.addresses.includes(normalized))entry.addresses.push(normalized);
+          const base=NewAreaRequests.addressQuery(address,Phase2bUi.addressVariants);
+          for(const key of new Set([normalized,normalizeSearchAddress(base)].filter(Boolean))){
+            if(!byAddress.has(key))byAddress.set(key,new Set());
+            byAddress.get(key).add(code);
+          }
         }
       }
-      searchIndex={period:periodRows,snapshot:latestSnapshotRows,stores:allStores,registryVersion,records};
+      searchIndex={period:periodRows,snapshot:latestSnapshotRows,registryVersion,records,byAddress};
     }
+    return searchIndex;
+  }
+
+  function currentSearchStore(code,fallback) {
+    return generalRegistryRows.get(code)||(state.mode==='BASE_60D'?storesByCode.get(code):null)||fallback||coordinateByCode.get(code);
+  }
+
+  function currentStageSearchCustomers(codes){
+    return codes.flatMap(code=>{
+      const stored=coordinateByCode.get(code),current=currentSearchStore(code);
+      const hash=stored?.originalAddressHash||stored?.addressHash;
+      const currentHash=current?.currentAddressHash||current?.originalAddressHash||current?.addressHash;
+      return current&&!current.addressChanged&&!current.searchAddressConflict&&(!hash||!currentHash||hash===currentHash)?[current]:[];
+    });
+  }
+
+  function clearSearchSelectedOverlay(){
+    searchSelectedOverlay?.setMap(null);searchSelectedOverlay=null;
+  }
+
+  function rankSearchRows(query) {
     const rank = rankSearchRow(query), matches=[];
-    for(const entry of searchIndex.records.values()){
+    for(const entry of getSearchIndex().records.values()){
       const priority=rank(entry.row,entry);
       if(priority<99)matches.push({row:entry.row,priority});
     }
@@ -2335,10 +2381,7 @@
     if(rows.length===1){selectUnifiedSearchStore(rows[0],{owner,trace});return;}
     if(!rows.length)return;
     const results=$('#results');results.hidden=false;$('#query').setAttribute('aria-expanded','true');
-    results.innerHTML=rows.map((row,index)=>{
-      const summary=[row.address||row.customerAddress,window.MapLocationContract?.dispatchCenter?.(row)?.label].filter(Boolean).join(' · ');
-      return `<button type="button" class="resultItem" data-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName||'-')}</div><div class="resultMeta">${esc(summary||'주소·센터 확인 필요')}</div></button>`;
-    }).join('');
+    results.innerHTML=rows.map((row,index)=>`<button type="button" class="resultItem" data-result="${index}" data-search-code="${esc(row.customerCode)}" aria-pressed="false"><div class="resultName">${esc(row.customerCode)} · ${esc(row.customerName||'-')}</div></button>`).join('');
     $$('[data-result]').forEach(button=>button.onclick=()=>selectUnifiedSearchStore(rows[Number(button.dataset.result)],{owner}));
     trace?.finish('matches');
   }
@@ -2360,7 +2403,7 @@
       stageAddressHashIndex={rows,byHash};
     }
     const matches=stageAddressHashIndex.byHash.get(hash)||[];
-    const current=matches.map(row=>storesByCode.get(row.customerCode)||row);
+    const current=matches.map(row=>currentSearchStore(row.customerCode,row));
     // A newer address or a withheld point must go through the protected resolver.
     if(current.some(row=>row.addressChanged||row.searchAddressConflict||
       row.currentAddressHash&&row.currentAddressHash!==hash||
@@ -2368,6 +2411,29 @@
       row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'||
       !Number.isFinite(row.lat)||!Number.isFinite(row.lng)))return [];
     return current;
+  }
+
+  async function findStoredSearchRows(query,{signal,address=unifiedAddressQuery(query)||/^\d{19}$/.test(query)}={}) {
+    if(signal?.aborted)return [];
+    const code=/^[A-Z]\d{3,}$/i.test(query)?query.toUpperCase():null;
+    if(code)return [currentSearchStore(code)].filter(Boolean);
+    if(!address)return rankSearchRows(query);
+    const rows=latestSnapshotRows, registryVersion=customerRegistry?.summary().version;
+    if(searchIndex?.snapshot===rows&&searchIndex?.registryVersion===registryVersion||!stageAddressBatchEnabled()||registryVersion){
+      const {byAddress,records}=getSearchIndex();
+      const keys=[query,...NewAreaRequests.addressQueries(query,Phase2bUi.addressVariants)].map(normalizeSearchAddress);
+      const matches=[...new Set(keys.flatMap(key=>[...(byAddress.get(key)||[])]))].map(code=>records.get(code)?.row).filter(Boolean);
+      if(matches.length)return matches;
+    }
+    if(window.MapCustomerRegistry?.addressHash){
+      const hashes=await Promise.all([...new Set([query,...NewAreaRequests.addressQueries(query,Phase2bUi.addressVariants)])]
+        .map(value=>window.MapCustomerRegistry.addressHash(value).catch(()=>null)));
+      if(!signal?.aborted&&rows===latestSnapshotRows&&registryVersion===customerRegistry?.summary().version){
+        const matches=new Map(hashes.flatMap(hash=>stageAddressHashMatches(rows,hash)).map(row=>[row.customerCode,row]));
+        return [...matches.values()];
+      }
+    }
+    return [];
   }
 
   async function search() {
@@ -2444,7 +2510,7 @@
     };
   }
 
-  async function searchExternalAddress(text,{owner=state.searchRequestId,signal,lookupAllowed=true,customerMatchState='UNCONFIRMED',trace}={}) {
+  async function searchExternalAddress(text,{owner=state.searchRequestId,signal,lookupAllowed=true,lookupError,customerMatchState='UNCONFIRMED',trace}={}) {
     if(state.mode!=='BASE_60D'||owner!==state.searchRequestId||signal?.aborted)return;
     clearSearchTemporaryPin();
     if (text.length<2||text.length>200||/^[A-Z]\d+$/i.test(text)) {setSearchState('주소 또는 상호를 정확히 입력하세요.');return;}
@@ -2458,8 +2524,10 @@
     const officialAllowed=!place&&config?.allowIndependentAddressLookup===true;
     const externalAllowed=lookupAllowed&&config?.allowExternalAddressLookup===true&&(!place||config?.allowExternalPlaceLookup===true);
     if(!officialAllowed&&!externalAllowed){
-      const reason=lookupAllowed===false?'기존 매장 조회 미확인':config?.addressLookupReason?NewAreaRequests.message({code:config.addressLookupReason}):place?'외부 상호 검색 미승인':'외부 주소검색 미승인';
+      const reason=lookupError?.status===401||lookupError?.status===403?NewAreaRequests.message(lookupError):
+        lookupError?'저장 주소 조회 실패':config?.addressLookupReason?NewAreaRequests.message({code:config.addressLookupReason}):place?'외부 상호 검색 미승인':'외부 주소검색 미승인';
       waitForSearchMapPoint(text,{owner,customerMatchState,reason});
+      trace?.finish('unresolved');
       return;
     }
     setSearchState(place?'상호 위치 확인 중':'주소 확인 중',true);
@@ -2469,14 +2537,14 @@
     trace?.mark('externalStart');
     try {point=await lookupInteractiveLocation(text,controller.signal,{allowExternal:externalAllowed});}
     catch(error){
-      if(active()&&!isSilentRequestError(error))waitForSearchMapPoint(text,{owner,customerMatchState,reason:NewAreaRequests.message(error)});
+      if(active()&&!isSilentRequestError(error)){waitForSearchMapPoint(text,{owner,customerMatchState,reason:NewAreaRequests.message(error)});trace?.finish('error');}
       return;
     }finally{trace?.mark('externalEnd');signal?.removeEventListener('abort',abort);if(addressController===controller)addressController=null;}
     if(!active())return;
     if(!point||point.verifiedAddressOnly){
       waitForSearchMapPoint(point?.officialRoad||text,{owner,customerMatchState,
         reason:point?.verifiedAddressOnly?'공식 주소 확인 · 좌표 미확인':!lookupAllowed?'기존 매장 조회 미확인':config?.allowExternalAddressLookup!==true&&config?.addressLookupReason
-          ?NewAreaRequests.message({code:config.addressLookupReason}):place?'일치하는 상호 없음':'일치하는 주소 위치 없음'});return;
+          ?NewAreaRequests.message({code:config.addressLookupReason}):place?'일치하는 상호 없음':'일치하는 주소 위치 없음'});trace?.finish('unresolved');return;
     }
     const choose=candidate=>{
       if(!active())return;
@@ -2505,40 +2573,27 @@
     const address=unifiedAddressQuery(text)||/^\d{19}$/.test(text);
     const generation=snapshotMeta?.sourceGeneration??null;
     const stageLookup=address&&stageAddressBatchEnabled();
-    // Sealed Stage coordinates omit street text. Use that generation's protected index
-    // before rebuilding the name index, unless a complete newer Customer view is present.
-    const deferLocal=stageLookup&&generation!==null&&customerRegistry?.summary().complete!==true;
     const showMatches=rows=>{
       if(!rows.length)return false;
       setSearchState(rows.length===1?'검색 결과 1건':`${rows.length}개 매장 · 선택해 주세요.`);
       renderResults(rows,{owner,trace});
       return true;
     };
-    const localMatches=()=>{
-      const rows=code ? [storesByCode.get(code)||coordinateByCode.get(code)].filter(Boolean) : rankSearchRows(text);
-      trace.mark('matching');
-      return showMatches(rows);
-    };
-    if(!deferLocal&&localMatches())return;
     const active=()=>!signal.aborted&&owner===state.searchRequestId&&state.mode==='BASE_60D';
-    if(deferLocal&&window.MapCustomerRegistry?.addressHash){
-      const rows=latestSnapshotRows;
-      const digest=await window.MapCustomerRegistry.addressHash(text).catch(()=>null);
-      if(!active())return;
-      if(rows===latestSnapshotRows&&snapshotMeta?.sourceGeneration===generation){
-        const matches=stageAddressHashMatches(rows,digest);
-        if(matches.length){trace.mark('matching');if(showMatches(matches))return;}
-      }
-    }
+    const local=await findStoredSearchRows(text,{signal,address});
+    if(!active())return;
+    trace.mark('matching');
+    if(showMatches(local))return;
+    let evidenceError=null;
     if(stageLookup){
       trace.mark('apiStart');
-      const reply=await NewAreaRequests.stageAddress(text,generation,{signal}).catch(()=>null);
+      const reply=await NewAreaRequests.stageAddress(text,generation,{signal}).catch(error=>{evidenceError=error;return null;});
       trace.mark('apiEnd');
       if(!active())return;
       const evidence=(snapshotMeta?.sourceGeneration??null)===generation ? reply : null;
-      const stored=(evidence?.customerCodes||[]).map(code=>storesByCode.get(code)||coordinateByCode.get(code)).filter(Boolean);
+      const codes=evidence?.customerCodes||[], stored=currentStageSearchCustomers(codes);
+      if(codes.length&&stored.length!==codes.length){setSearchState('매장 주소가 변경되었습니다 · 현재 주소를 확인해 주세요.');trace.finish('unresolved');return;}
       if(stored.length){trace.mark('matching');if(showMatches(stored))return;}
-      if(deferLocal&&localMatches())return;
       if(evidence){
         const point=evidence?.point;
         if(point){
@@ -2552,7 +2607,9 @@
           setSearchState('주소 위치 후보를 선택해 주세요.');return;
         }
       }
+      if([401,403,409].includes(evidenceError?.status)){setSearchState(NewAreaRequests.message(evidenceError));trace.finish('error');return;}
     }
+    if(address&&(!stageLookup||customerRegistry?.summary().complete===true)&&showMatches(rankSearchRows(text)))return;
     const temporary=address&&NewAreaRequests.temporaryPoint(text);
     if(temporary){if(!state.map)await initMap();if(active())finishAddress({...temporary,address:text},{owner,trace});return;}
     let remote=[],meta=null,lookupError=null;
@@ -2585,7 +2642,8 @@
     if(code){setSearchState(lookupError?'고객 조회 실패 · 다시 시도해 주세요.':'고객코드를 확인해 주세요.');return;}
     if(text.length<2){setSearchState('주소 또는 상호를 정확히 입력하세요.');return;}
     // A failed Customer lookup is not proof that this is a new customer.
-    await searchExternalAddress(text,{owner,signal,lookupAllowed:!lookupError,trace,
+    if([401,403].includes(lookupError?.status)){setSearchState(NewAreaRequests.message(lookupError));trace.finish('error');return;}
+    await searchExternalAddress(text,{owner,signal,lookupAllowed:address||!lookupError,trace,lookupError:evidenceError||lookupError,
       customerMatchState:meta?.customerMatchVerified===true?'NOT_IN_MASTER':'UNCONFIRMED'});
   }
 
@@ -2671,12 +2729,16 @@
   async function lookupInteractiveLocation(text, signal, {allowExternal=true} = {}) {
     const geocoder=window.kakaoGeocoder;
     const address=unifiedAddressQuery(text);
-    const official=address?await lookupOfficialAddress(text,signal):null;
+    let official=null,officialError;
+    if(address)try{official=await lookupOfficialAddress(text,signal);}catch(error){
+      if(signal?.aborted||[401,403,409].includes(error.status))throw error;
+      officialError=error;
+    }
     if(official&&!official.verifiedAddressOnly)return official;
-    if(!allowExternal)return official;
+    if(!allowExternal){if(officialError)throw officialError;return official;}
     if(!geocoder?.serverProxy)return address?geocodeAddress(text,signal):null;
     const config=window.KAKAO_MAP_CONFIG;
-    if(config?.allowExternalAddressLookup!==true||!address&&config.allowExternalPlaceLookup!==true)return official;
+    if(config?.allowExternalAddressLookup!==true||!address&&config.allowExternalPlaceLookup!==true){if(officialError)throw officialError;return official;}
     const queries=address?NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants):[text];
     if(!queries.length)return null;
     for(const query of queries){
@@ -3141,6 +3203,7 @@
     if (!row) return null;
     const point = {...row};
     if (/^[A-Z]\d+$/.test(point.customerCode||'')) window.MapManualPins?.apply(point);
+    applyUnifiedSearchCoordinateGuard(point);
     if (fixedOnly) {
       const source=point.coordinateSource||point.raw?.coordinateSource||'';
       if (point.virtual||point.searchTemporary||/(?:_TEMPORARY|_LIVE)$/.test(source)) return null;
@@ -3336,6 +3399,42 @@
     }
     return resolved;
   }
+  async function stageSingleAreaEvidence(row,signal,requestId){
+    const query=row.address.trim();
+    const code=/^[A-Z]\d{3,}$/i.test(query);
+    const address=unifiedAddressQuery(query)||/^\d{19}$/.test(query);
+    const local=await findStoredSearchRows(query,{signal,address});
+    if(signal.aborted)return null;
+    if(local.length){
+      const name=normalizeSearchText(row.customer);
+      const named=name?local.filter(store=>normalizeSearchText(store.customerName)===name):[];
+      const matches=named.length===1?named:local;
+      const points=matches.map(store=>newAreaCoordinate(store,{fixedOnly:true})).filter(Boolean);
+      if(points.length!==matches.length)return {status:'STORED_COORDINATE_UNVERIFIED'};
+      const saved=NewAreaRequests.singleStoredLocation(points);
+      return saved.candidates?{status:'OFFICIAL_ADDRESS_AMBIGUOUS',points:saved.candidates}:{status:'STORED',point:saved};
+    }
+    if(!address){
+      if(code)return (await stageBatchAddressEvidence([row],signal,requestId))[0];
+      return {status:'ADDRESS_NOT_MATCHED'};
+    }
+    try{
+      const saved=await NewAreaRequests.stageAddress(query,snapshotMeta?.sourceGeneration??null,{signal});
+      if(!saved&&!signal.aborted)return {status:'INVALID_ADDRESS'};
+      if(saved?.customerCodes?.length&&currentStageSearchCustomers(saved.customerCodes).length!==saved.customerCodes.length){
+        return {status:'STORED_COORDINATE_UNVERIFIED'};
+      }
+      if(signal.aborted||saved?.status!=='ADDRESS_NOT_MATCHED'||!unifiedAddressQuery(query))return saved;
+      const temporary=NewAreaRequests.temporaryPoint(query);
+      if(temporary)return {status:'OFFICIAL',point:temporary};
+      if(window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup!==true){
+        return {...saved,externalBlockedReason:window.KAKAO_MAP_CONFIG?.addressLookupReason||'GEOCODING_DISABLED'};
+      }
+      const point=await lookupInteractiveLocation(query,signal);
+      if(!point||point.verifiedAddressOnly)return saved;
+      return point.candidates?{status:'OFFICIAL_ADDRESS_AMBIGUOUS',points:point.candidates}:{status:'OFFICIAL',point};
+    }catch(error){return {error:error.code||error.message,httpStatus:error.status};}
+  }
   function judgeStageAreaRow(row,evidence,batch){
     const status=evidence?.status;
     if(evidence?.point&&['STORED','OFFICIAL'].includes(status))return judgeNewAreaPoint(row,evidence.point,batch);
@@ -3348,11 +3447,12 @@
       OFFICIAL_ADDRESS_INDEX_UNAVAILABLE:'공식 주소 자료를 사용할 수 없습니다',OFFICIAL_ADDRESS_UNAVAILABLE:'공식 주소 조회 실패',
       STORED_REGISTRY_UNAVAILABLE:'저장 매장 자료 복원 중 · 다시 조회해 주세요',
       REQUEST_TIMEOUT:'저장 주소 조회 시간 초과',STAGE_BATCH_UNAVAILABLE:'저장 주소 자료 조회 실패'};
-    const candidates=status==='OFFICIAL_ADDRESS_AMBIGUOUS'?evidence.points?.map(point=>({...point,coordinateSource:'OFFICIAL_PUBLIC_BUILDING'})):null;
+    const candidates=status==='OFFICIAL_ADDRESS_AMBIGUOUS'?evidence.points?.map(point=>({...point,coordinateSource:point.coordinateSource||'OFFICIAL_PUBLIC_BUILDING'})):null;
     const failed=!!error||['OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_ADDRESS_UNAVAILABLE','STORED_REGISTRY_UNAVAILABLE'].includes(status)||!status;
-    const reason=http===401?'직원 로그인 필요':http===403?'주소 조회 권한 없음':messages[error||status]|| (candidates?'공식 주소 위치 후보 확인 필요':'저장 주소 조회 실패');
+    const reason=http===401?'직원 로그인 필요':http===403?'주소 조회 권한 없음':messages[error||status]|| (candidates?'주소 위치 후보 확인 필요':NewAreaRequests.message({code:error||status}));
     const pending=judgeNewAreaPoint(row,candidates?{candidates}:null);
-    return {...pending,reason:pending.decision==='X'?pending.reason:reason,evidence:(pending.decision==='X'?pending.evidence+' · ':'')+(http?`${reason} · HTTP ${http}`:reason),
+    const restriction=evidence?.externalBlockedReason?' · '+NewAreaRequests.message({code:evidence.externalBlockedReason}):'';
+    return {...pending,reason:pending.decision==='X'?pending.reason:reason,evidence:(pending.decision==='X'?pending.evidence+' · ':'')+(http?`${reason} · HTTP ${http}`:reason)+restriction,
       lookupStatus:failed?'FAILED':'DEFERRED',lookupError:failed,lookupHttpStatus:http};
   }
   function newAreaRegistryRows() {
@@ -3745,7 +3845,9 @@
       showProgress();
       if (stageAddressBatchEnabled()) {
         const requested=indexes.filter(index=>!retainedPoints.has(index)&&!rows[index].inputAmbiguous);
-        const results=await stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId);
+        const results=rows.length===1&&requested.length===1
+          ?[await stageSingleAreaEvidence(rows[requested[0]],signal,requestId)]
+          :await stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId);
         batch.stageRows=new Map(requested.map((index,i)=>[index,results[i]]));
       }
       if (!current()) return;
@@ -4158,6 +4260,10 @@
   // Local design shell uses the same controllers; it cannot authorize API calls.
   window.MapUiLocalBridge={
     state,
+    searchSnapshotGeneration:()=>snapshotMeta?.sourceGeneration??null,
+    findStoredSearchRows,
+    storedSearchCustomers:currentStageSearchCustomers,
+    storedSearchPoint:row=>newAreaCoordinate(row,{fixedOnly:true}),
     refreshGeneralSnapshot:pollGeneralSnapshot,
     refreshCustomerRegistry:syncCustomerRegistry,
     customerRegistryStatus:()=>customerRegistry?.summary(),

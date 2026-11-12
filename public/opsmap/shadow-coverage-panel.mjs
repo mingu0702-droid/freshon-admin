@@ -238,7 +238,10 @@ export function createCoveragePanel({ workspace, header }) {
         credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
         headers
       });
-      if (!response.ok) throw Object.assign(Error('COVERAGE_REQUEST_FAILED'), { status: response.status });
+      if (!response.ok) {
+        const error=await response.json().catch(()=>null);
+        throw Object.assign(Error('COVERAGE_REQUEST_FAILED'),{status:response.status,code:error?.error});
+      }
       const payload = await response.json();
       if (!active || requests.get(name) !== controller) return null;
       const unchanged = name === 'view' && payload?.unchanged === true;
@@ -489,7 +492,7 @@ export function createCoveragePanel({ workspace, header }) {
         clearSelection();
         if (view.generation !== data.generation) clearSearch();
       }
-      const resolutionChanged = view && view.resolution !== data.resolution;
+      const detailViewChanged = !view || view.resolution !== data.resolution;
       view = data;
       viewTag = VIEW_TAG.test(result.tag) ? result.tag : '';
       viewSession = currentSession();
@@ -499,7 +502,7 @@ export function createCoveragePanel({ workspace, header }) {
       failedFilter = null;
       filterProgress();
       renderView(view);
-      if (resolutionChanged && focusedSearchRow) void showSearchCell(focusedSearchRow);
+      if (detailViewChanged && focusedSearchRow) void showSearchCell(focusedSearchRow);
       find('coverageMap').dataset.coverageView = JSON.stringify({resolution:data.resolution,days:data.period.days,
         cells:data.cells.length,ms:Math.round(performance.now()-started)});
       showMapState('');
@@ -692,7 +695,9 @@ export function createCoveragePanel({ workspace, header }) {
     const current = view, resolution = Math.max(8, current?.resolution || row.detailResolution || 8);
     const label = row.kind === 'store' ? undefined : row.name;
     const use = id => { if (id) void selectCell(id,0,label); };
-    if (!current || !row.location || resolution === (row.detailResolution || 8)) {
+    if(!current)return;
+    if(resolution===8&&row.id){use(row.id);return;}
+    if (!row.location || resolution === (row.detailResolution || 8)) {
       use(row.detailId || row.id);
       return;
     }
@@ -752,7 +757,7 @@ export function createCoveragePanel({ workspace, header }) {
     abort('search');
     abort('provider-point');
     abort('focus-point');
-    focusedSearchRow=null;
+    if(focusedSearchRow)clearSelection();
     searchOwner?.abort();
     searchOwner = null;
     pendingSearchKey = null;
@@ -808,32 +813,62 @@ export function createCoveragePanel({ workspace, header }) {
     };
     const failSearch = error => {
       if (!current()) return;
-      searchMessage(error.code ? window.NewAreaRequests.message(error) : '검색을 완료하지 못했습니다. 다시 검색해 주세요.');
+      const problem=error.code||error.status?window.NewAreaRequests.message(error):'검색을 완료하지 못했습니다. 다시 검색해 주세요.';
+      searchMessage(error.message==='COVERAGE_REQUEST_FAILED'?'격자 자료 조회 실패 · '+problem:problem);
       if (error.status === 409) void loadView(true);
     };
     searchMessage('저장된 위치를 찾는 중입니다.');
     try {
-      const data = await read('search', '/search', params, { 'x-map-customer-query': encodeURIComponent(query) });
-      if (!data || searchOwner !== owner) return;
-      if (data.results.some(row=>row.kind==='store' && row.location)) {
-        renderSearch(data, radius, true);
-        return;
-      }
       const requests = window.NewAreaRequests;
       const address = requests?.addressQuery(query, window.Phase2bUi.addressVariants);
-      if (!address && !/^\d{19}$/.test(query)) {
-        renderSearch(data, radius, true);
-        return;
-      }
+      const addressInput=!!address||/^\d{19}$/.test(query);
+      const bridge=window.MapUiLocalBridge;
+      const local=await bridge?.findStoredSearchRows?.(query,{signal:owner.signal,address:addressInput})||[];
+      if(!current())return;
+      const storedPoints=rows=>rows.map(row=>bridge?.storedSearchPoint?.(row)).filter(Boolean);
+      const showStored=async rows=>{
+        const points=storedPoints(rows);
+        if(!points.length)return false;
+        if(points.length===1&&rows.length===1)await pointFor(points[0],points[0].customerName||query);
+        else{
+          searchMessage('매장 또는 위치를 선택해 주세요.');
+          for(const point of points){
+            const button=element('button','coverage-search-result',[point.customerCode,point.customerName].filter(Boolean).join(' · ')||'저장 위치');
+            button.type='button';button.onclick=()=>void pointFor(point,point.customerName||query).catch(failSearch);searchResults.append(button);
+          }
+        }
+        return true;
+      };
+      if(await showStored(local)||!current())return;
       const adapter = window.KakaoMapsAdapter;
-      let preserved;
-      try { preserved=await requests.stageAddress(query,data.generation??params.generation??null,{signal:owner.signal}); }
-      catch(error){ if ([401,403,409].includes(error.status)) throw error; }
+      let preserved,storedError;
+      if(addressInput)try {
+        // Address evidence belongs to the coordinate Snapshot, not the H3 release.
+        const generation=bridge?.searchSnapshotGeneration?.()??null;
+        preserved=await requests.stageAddress(query,generation,{signal:owner.signal});
+        if(preserved&&(bridge?.searchSnapshotGeneration?.()??null)!==generation){
+          throw Object.assign(Error('STAGE_BATCH_GENERATION_CHANGED'),{status:409,code:'STAGE_BATCH_GENERATION_CHANGED'});
+        }
+      } catch(error){ if ([401,403,409].includes(error.status)) throw error;storedError=error; }
       if (!current()) return;
+      if(preserved?.customerCodes?.length&&bridge?.storedSearchCustomers&&
+        bridge.storedSearchCustomers(preserved.customerCodes).length!==preserved.customerCodes.length){
+        searchMessage('매장 주소가 변경되었습니다 · 현재 주소를 확인해 주세요.');return;
+      }
       if (preserved?.point) { await pointFor(preserved.point,query); return; }
       if (preserved?.status==='OFFICIAL_ADDRESS_AMBIGUOUS' && preserved.points?.length) { candidatesFor(preserved.points); return; }
-      if (preserved?.status==='ADDRESS_AMBIGUOUS') { searchMessage('같은 주소에 여러 위치가 있습니다. 시·군·구 또는 고객코드를 확인해 주세요.'); return; }
-      if (data.results.length) { renderSearch(data,radius,true); return; }
+      if (preserved?.status==='ADDRESS_AMBIGUOUS') {
+        const rows=bridge?.storedSearchCustomers?.(preserved.customerCodes||[])||[];
+        if(rows.length>1&&await showStored(rows))return;
+        searchMessage('같은 주소에 여러 위치가 있습니다. 시·군·구 또는 고객코드를 확인해 주세요.');return;
+      }
+      if(preserved?.status==='STORED_COORDINATE_UNVERIFIED'){searchMessage('등록 매장의 주소는 확인했으나 좌표 검증이 필요합니다.');return;}
+      let coverageError;
+      const data=await read('search','/search',params,{'x-map-customer-query':encodeURIComponent(query)}).catch(error=>{coverageError=error;return null;});
+      if(!current())return;
+      if (data?.results.length) { renderSearch(data,radius,true); return; }
+      if (!addressInput) { if(coverageError)throw coverageError;if(data)renderSearch(data,radius,true);return; }
+      if ([401,403].includes(coverageError?.status))throw coverageError;
       if (!window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup && !window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup) await adapter?.refreshAddressLookup?.();
       if (!current()) return;
       addressProxy ||= adapter?.geocoder?.();
@@ -850,19 +885,26 @@ export function createCoveragePanel({ workspace, header }) {
       if (temporary) { await pointFor(temporary,query); return; }
       if (!address) { searchMessage('승인된 자료에서 해당 필지 위치를 찾지 못했습니다.'); return; }
       if (window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup !== true) {
-        searchMessage('저장·공식 자료에서 일치하는 위치를 찾지 못했습니다. 시·군·구를 포함해 확인해 주세요.');
+        if(storedError||coverageError)throw storedError||coverageError;
+        const reason=requests.message({code:window.KAKAO_MAP_CONFIG?.addressLookupReason||'GEOCODING_DISABLED'});
+        searchMessage('저장·공식 자료에서 일치하는 위치 없음 · '+reason+' · 시·군·구를 확인해 주세요.');
         return;
       }
       if (!addressProxy?.serverProxy) throw Error('APPROVED_ADDRESS_PROXY_REQUIRED');
       searchMessage('승인된 주소 서비스에서 정확한 위치를 찾는 중입니다.');
-      const documents = await requests.lookup(addressProxy, address, { signal: owner.signal });
+      const reply = await requests.lookup(addressProxy,address,{mode:'address',signal:owner.signal});
       if (!active || searchOwner !== owner) return;
-      const [document] = documents;
-      if (documents.length !== 1 || !window.Phase2bUi.addressMatches(address, document.address_name)) {
+      const points=reply.rows.flatMap(row=>{
+        const label=row.road_address?.address_name||row.address_name;
+        if(!window.Phase2bUi.addressMatches(address,label))return [];
+        return [{lat:Number(row.y),lng:Number(row.x),coordinateSource:'KAKAO_ADDRESS_TEMPORARY',label}];
+      });
+      if(points.length>1){candidatesFor(points);return;}
+      if (points.length!==1||reply.resolution?.kind!=='EXACT') {
         searchMessage('일치하는 주소 좌표를 확인하지 못했습니다.');
         return;
       }
-      await pointFor({lat:Number(document.y),lng:Number(document.x),coordinateSource:'KAKAO_ADDRESS_TEMPORARY'},document.address_name);
+      await pointFor(points[0],points[0].label);
     } catch (error) {
       failSearch(error);
     } finally {if(current())pendingSearchKey=null;}
