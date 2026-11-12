@@ -24,7 +24,7 @@
       // history page; never turn an aggregate into fabricated dated events.
       if(!driverKey&&row.periodAggregate?.verified===true){
         const all=row.periodAggregate.groups,groups=all.filter(g=>useBase||!wanted.size||wanted.has(String(g.vehicle)));
-        if(!groups.length)return options.includeUnvisited?[{...row,history:[],visitCount:0,periodVisitCount:all.reduce((n,g)=>n+g.count,0),historyCoverage:'DISPLAY_PAGE_ONLY'}]:[];
+        if(!groups.length)return options.includeUnvisited?[{...row,vehicle:useBase?String(row.baseVehicle||''):row.vehicle,history:[],visitCount:0,periodVisitCount:all.reduce((n,g)=>n+g.count,0),historyCoverage:'DISPLAY_PAGE_ONLY'}]:[];
         const latest=[...groups].sort((a,b)=>b.lastDeliveryDate.localeCompare(a.lastDeliveryDate))[0];
         return [{...row,vehicle:useBase?String(row.baseVehicle||''):latest.vehicle,actualVehicle:latest.vehicle,lastDeliveryDate:latest.lastDeliveryDate,
           visitCount:groups.reduce((n,g)=>n+g.count,0),periodVisitCount:all.reduce((n,g)=>n+g.count,0),vehicles:[...new Set(all.map(g=>g.vehicle))],drivers:[],
@@ -179,8 +179,11 @@
     return next;
   }
   function baseVehicleLabel(row) {
-    const label=row.baseVehicle?row.baseVehicle+'호':row.baseVehicleState==='UNASSIGNED'?'미지정':row.baseVehicleState==='NOT_IN_MASTER'?'마스터 미등록':row.baseVehicleState==='CONFLICT'?'기준 충돌':'확인 필요';
-    return label;
+    if(row.baseVehicleState==='CONFLICT')return '기준 충돌';
+    if(row.baseVehicleState==='NOT_IN_MASTER')return '마스터 미등록';
+    if(row.baseVehicleState==='UNASSIGNED')return row.baseVehicleEmptyVerified===true?'미지정':'확인 필요';
+    const route=root.MapViewPolicy?.pinAssignment({baseVehicle:row.baseVehicle,baseVehicleState:row.baseVehicleState}).code??row.baseVehicle;
+    return /^\d+$/.test(route||'')?route+'호':route==='보류'?'오산보류':route||'확인 필요';
   }
   root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile, parseAreaInput,
     regionForAddress, areaRadius, areaDispatchVehicles, areaDispatchDays, areaDispatchReference, areaDistance, areaVehicleLabel, areaExportHeadings, areaExportRows, areaTsv,

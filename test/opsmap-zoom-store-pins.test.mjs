@@ -29,7 +29,8 @@ test('level-six viewport preserves exact positions and does not retain an extra 
   const point = (customerCode, lat, lng, vehicle = '') => ({ customerCode, lat, lng, vehicle });
   const rows = [
     point('S00001', 37.5, 127, '104'), point('S00002', 37.5, 127, '108'),
-    point('S00003', 37.5, 127), point('S00004', 37.5, 127.0000001, '117'),
+    {...point('S00003', 37.5, 127),baseVehicleState:'UNASSIGNED',baseVehicleEmptyVerified:true,baseVehicleSource:'FIXED_DISPATCH_PRIMARY'},
+    point('S00004', 37.5, 127.0000001, '117'),
     point('S00005', 37.51, 127.02, '127'), point('S00006', 37.5, 127.05),
     point('S00007', null, null),
   ];
@@ -58,6 +59,35 @@ test('level-six viewport preserves exact positions and does not retain an extra 
   assert.deepEqual(codes(selected), ['S00001', 'S00002', 'S00003', 'S00004', 'S00005', 'S00008']);
   assert.strictEqual(detailedMarkerRows(viewport)[0], first[0]);
   assert.deepEqual(codes(detailedMarkerRows(viewport)), codes(first));
+});
+
+test('pins distinguish the primary fixed route, confirmed blank, and missing evidence', () => {
+  const {pinAssignment,exactLocations}=MapViewPolicy;
+  const row={vehicle:'202',baseVehicle:' １１４ 호차 ',baseVehicleState:'VERIFIED_MASTER'};
+  assert.deepEqual(pinAssignment(row),{code:'114',label:'114',kind:'vehicle'});
+  assert.equal(pinAssignment(row,'DATE_ROUTE').label,'202');
+  assert.equal(pinAssignment({...row,baseVehicle:'오산 신규'}).label,'오산신규');
+  assert.equal(pinAssignment({...row,baseVehicle:'보류'}).label,'오산보류');
+  const blank={baseVehicle:'',vehicle:'202',baseVehicleState:'UNASSIGNED',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'};
+  assert.equal(pinAssignment(blank).label,'미확인');
+  assert.equal(pinAssignment({...blank,baseVehicleEmptyVerified:true}).label,'?');
+  assert.equal(pinAssignment({...blank,baseVehicleState:'UNKNOWN',baseVehicleVersion:'v'}).label,'미확인');
+  assert.equal(pinAssignment({...blank,baseVehicleState:'UNKNOWN'}).label,'…');
+  assert.equal(pinAssignment({...row,baseVehicleState:'CONFLICT'}).label,'미확인');
+  assert.equal(MapPeriodUi.baseVehicleLabel(blank),'확인 필요');
+  assert.equal(MapPeriodUi.baseVehicleLabel({...blank,baseVehicleEmptyVerified:true}),'미지정');
+  assert.equal(MapPeriodUi.baseVehicleLabel({...row,baseVehicle:'보류'}),'오산보류');
+  const same=(code,assignment)=>({customerCode:code,lat:37.5,lng:127,...assignment});
+  const [group]=exactLocations([same('S1',{...row,baseVehicle:'보류'}),same('S2',{...row,baseVehicle:'오산보류'})]);
+  assert.equal(pinAssignment(group).label,'오산보류');
+  const [uncertain]=exactLocations([same('S1',blank),same('S2',{...blank,baseVehicleEmptyVerified:true})]);
+  assert.equal(pinAssignment(uncertain).label,'미확인');
+  assert.deepEqual(uncertain.memberCodes,['S1','S2']);
+});
+
+test('a store with a verified empty delivery aggregate still uses its fixed route', () => {
+  const [row]=MapPeriodUi.select([{customerCode:'S1',baseVehicle:'114',vehicle:'202',periodAggregate:{verified:true,groups:[]}}],['114'],'',{vehicleBasis:'base',includeUnvisited:true});
+  assert.equal(row.vehicle,'114');
 });
 
 test('pin reconciliation reuses unchanged overlays across viewport and selection changes', () => {

@@ -16,8 +16,26 @@
   function region(row) {
     return regionColors[row.addressRegion] ? row.addressRegion : '';
   }
-  function vehicle(row, mode) {
-    return String(mode === 'DATE_ROUTE' ? row.vehicle || row.actualVehicle || '' : row.baseVehicle || row.vehicle || '').replace(/호(?:차)?$/, '');
+  const unverified = Object.freeze({code:'',label:'미확인',kind:'unverified'});
+  const pending = Object.freeze({code:'',label:'…',kind:'unverified'});
+  const unknown = Object.freeze({code:'',label:'?',kind:'unknown'});
+  const mixed = Object.freeze({code:'',label:'혼합',kind:'mixed'});
+  const datedUnknown = Object.freeze({code:'',label:'•',kind:'unverified'});
+  const absence = /^(?:|[-?]|미확인|호차미확인|미지정|없음)$/;
+  function pinAssignment(row, mode='BASE_60D') {
+    if (row.clusterAssignment) return row.clusterAssignment;
+    const dated=mode==='DATE_ROUTE';
+    if(!dated&&row.baseVehicleState==='CONFLICT')return unverified;
+    const raw=dated?row.vehicle||row.actualVehicle:row.baseVehicle??(row.baseVehicleState?'':row.vehicle);
+    const value=String(raw??'').normalize('NFKC').trim(), compact=value.replace(/\s+/g,'');
+    if(compact==='오산신규')return {code:'오산신규',label:'오산신규',kind:'new'};
+    if(compact==='보류'||compact==='오산보류')return {code:'오산보류',label:'오산보류',kind:'held'};
+    const number=compact.match(/^(\d+)(?:호(?:차)?)?$/)?.[1];
+    if(number)return {code:number,label:number,kind:'vehicle'};
+    if(!absence.test(compact)&&/^[\p{L}\p{N}_-]{1,64}$/u.test(compact))return {code:value,label:value,kind:'other'};
+    if(dated)return datedUnknown;
+    if(row.baseVehicleState==='UNASSIGNED'&&row.baseVehicleEmptyVerified===true&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY')return unknown;
+    return (!row.baseVehicleState||row.baseVehicleState==='UNKNOWN')&&!row.baseVehicleVersion?pending:unverified;
   }
   function makeGroup(key) {
     return {key, rows:[], lat:0, lng:0, x:0, y:0, south:Infinity, north:-Infinity, west:Infinity, east:-Infinity};
@@ -53,13 +71,19 @@
   }
   function clusterRow(group, mode, band) {
     if(group.rows.length===1)return group.rows[0];
-    const assignments=new Set(group.rows.map(row=>vehicle(row,mode)));
-    const vehicles=[...assignments].filter(Boolean).sort();
+    const members=group.rows.map(row=>pinAssignment(row,mode));
+    const vehicles=[...new Set(members.map(assignment=>assignment.code).filter(Boolean))].sort();
+    const unassigned=members.some(assignment=>assignment.kind==='unknown');
+    const unmatched=members.some(assignment=>assignment.kind==='unverified');
+    const first=members[0];
+    const assignment=members.every(item=>item.code===first.code&&item.label===first.label)?first:
+      vehicles.length?mixed:unverified;
     const regions=[...new Set(group.rows.map(region))].sort();
-    const unassigned=assignments.has(''),v=vehicles.length===1&&!unassigned?vehicles[0]:'',r=regions.length===1?regions[0]:'';
+    const v=assignment.code,r=regions.length===1?regions[0]:'';
     const sameLocation=group.south===group.north&&group.west===group.east;
     const regional=Boolean(r)&&(band===4||!v);
-    const label=sameLocation?'같은 위치':v?`${v}호`:vehicles.length?'호차 혼합':'호차 미확인';
+    const label=sameLocation?'같은 위치':assignment.kind==='vehicle'?`${v}호`:
+      assignment.kind==='unknown'?'호차 미지정':assignment.kind==='mixed'?'호차 혼합':assignment.label;
     const memberCodes=group.rows.map(row=>String(row.customerCode||''));
     return {
       // A group has no customer identity. Keep original members for the
@@ -69,9 +93,9 @@
       clusterKey:group.key,clusterCount:group.rows.length,clusterLabel:label,
       clusterKind:sameLocation?'location':v?'vehicle':vehicles.length?'mixed':'unassigned',
       clusterColorKey:regional?r:v||r,addressRegion:r,
-      clusterRows:group.rows,memberCodes,clusterVehicles:vehicles,vehicles,clusterUnassigned:unassigned,
+      clusterRows:group.rows,memberCodes,clusterVehicles:vehicles,vehicles,clusterUnassigned:unassigned,clusterUnverified:unmatched,clusterAssignment:assignment,
       clusterRegions:regions.filter(Boolean),regions:regions.filter(Boolean),
-      clusterMemberKey:group.rows.map(row=>JSON.stringify([row.customerCode,row.lat,row.lng,vehicle(row,mode),region(row)])).sort().join('\n'),
+      clusterMemberKey:group.rows.map((row,i)=>JSON.stringify([row.customerCode,row.lat,row.lng,members[i].code,members[i].kind,region(row)])).sort().join('\n'),
       clusterBounds:{south:group.south,north:group.north,west:group.west,east:group.east}
     };
   }
@@ -183,10 +207,10 @@
   function cameraDomLayout(element,measurePin=true) {
     const doc=element?.ownerDocument,win=doc?.defaultView||root,visual=win.visualViewport;
     const viewportRect={left:visual?.offsetLeft||0,top:visual?.offsetTop||0,width:visual?.width||win.innerWidth,height:visual?.height||win.innerHeight};
-    const rect=node=>node?.getClientRects?.().length&&!node.hidden?node.getBoundingClientRect():null;
-    const pin=measurePin&&(rect(doc?.querySelector('#map .marker.selected'))||[...(doc?.querySelectorAll('#map .marker')||[])].find(node=>node.getClientRects().length)?.getBoundingClientRect());
+    const rect=node=>node?.getClientRects?.().length&&!node.hidden&&win.getComputedStyle?.(node).visibility!=='hidden'?node.getBoundingClientRect():null;
+    const pin=measurePin&&(rect(doc?.querySelector('#map .marker.selected'))||rect(doc?.querySelector('#map .marker')));
     return {mapRect:element?.getBoundingClientRect?.(),viewportRect,headerRect:rect(doc?.querySelector('#approvedSiteHeader')),
-      occluders:[...(doc?.querySelectorAll('#leftPanel,#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
+      occluders:[...(doc?.querySelectorAll('#leftPanel,#detailSection.open,#mapClusterPanel:not(.mapClusterPopup),#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
       anchorHeight:pin?.height||0,
       anchorWidth:pin?.width||0,
       mobile:win.matchMedia?.('(max-width: 760px)')?.matches??Number(viewportRect.width)<=760};
@@ -212,7 +236,7 @@
     return lineLabelPoint(start,end,{left:(area.left+xInset-map.left)*sx,right:(area.right-xInset-map.left)*sx,
       top:(area.top+yInset-map.top)*sy,bottom:(area.bottom-yInset-map.top)*sy});
   }
-  function createCamera({map, element, clock=Date.now, raf=fn=>requestAnimationFrame(fn), cancelRaf=id=>cancelAnimationFrame(id),layout=()=>cameraDomLayout(element),pixel=(x,y)=>root.kakao?.maps?.Point?new root.kakao.maps.Point(x,y):{x,y}}={}) {
+  function createCamera({map, element, clock=Date.now, raf=fn=>requestAnimationFrame(fn), cancelRaf=id=>cancelAnimationFrame(id),layout=measurePin=>cameraDomLayout(element,measurePin),pixel=(x,y)=>root.kakao?.maps?.Point?new root.kakao.maps.Point(x,y):{x,y}}={}) {
     let width=-1,height=-1, frame=null, focusFrame=null, disposed=false, interaction=0, movingUntil=0,active=null,sequence=0,lastFocus=null;
     const measure=()=>({w:Math.round(element?.clientWidth||0),h:Math.round(element?.clientHeight||0)});
     const validPoint=point=>Number.isFinite(point?.getLat?.()??point?.lat)&&Number.isFinite(point?.getLng?.()??point?.lng);
@@ -233,7 +257,18 @@
     function releaseFocus(){active=null;sequence++;if(focusFrame!==null)cancelRaf(focusFrame);focusFrame=null;}
     function userGesture(){interaction++;movingUntil=clock()+300;releaseFocus();}
     function report(value){lastFocus=value;if(element?.dataset){for(const [key,v]of Object.entries({focusState:value.state,focusExpectedX:value.expectedX,focusExpectedY:value.expectedY,focusActualX:value.actualX,focusActualY:value.actualY,focusErrorPx:value.errorPx,focusBasis:value.basis}))if(v!==undefined)element.dataset[key]=String(v);}}
-    function geometry(){const raw=layout(),target=cameraFocusViewport(raw);return target?{raw,target,key:JSON.stringify([raw.mapRect?.left,raw.mapRect?.top,raw.mapRect?.width,raw.mapRect?.height,target.x,target.y,target.basis])}:null;}
+    function capturePinOffset(point,body){
+      const mapRect=cameraRect(element?.getBoundingClientRect?.()),pinRect=cameraRect(body?.getBoundingClientRect?.());
+      const {w,h}=measure(),position=map.getProjection?.()?.containerPointFromCoords?.(point);
+      if(!mapRect||!pinRect||w<1||h<1||!Number.isFinite(position?.x)||!Number.isFinite(position?.y))return {x:0,y:0};
+      return {x:(pinRect.left+pinRect.width/2-mapRect.left)*w/mapRect.width-position.x,
+        y:(pinRect.top+pinRect.height/2-mapRect.top)*h/mapRect.height-position.y};
+    }
+    function geometry(){
+      const centerPin=Boolean(active?.pinOffset),raw=layout(!centerPin);
+      const target=cameraFocusViewport(centerPin?{...raw,mobile:false}:raw);
+      return target?{raw,target,key:JSON.stringify([raw.mapRect?.left,raw.mapRect?.top,raw.mapRect?.width,raw.mapRect?.height,target.x,target.y,target.basis])}:null;
+    }
     function scheduleFocus(force=false){
       if(disposed||!active||active.interaction!==interaction||focusFrame!==null)return;
       const g=geometry();if(!g||!force&&g.key===active.geometry)return;
@@ -245,7 +280,9 @@
       if(width!==size.w||height!==size.h)resizeMap(size.w,size.h);
       if(active.geometry!==g.key)active.corrections=0;active.geometry=g.key;
       const rect=cameraRect(g.raw.mapRect),sx=rect.width/size.w,sy=rect.height/size.h;
-      let actual=projection.containerPointFromCoords(active.point);if(!Number.isFinite(actual?.x)||!Number.isFinite(actual?.y))return;
+      const position=projection.containerPointFromCoords(active.point);if(!Number.isFinite(position?.x)||!Number.isFinite(position?.y))return;
+      const offset=active.pinOffset||{x:0,y:0};
+      const actual={x:position.x+offset.x,y:position.y+offset.y};
       const wanted={x:(g.target.x-rect.left)/sx,y:(g.target.y-rect.top)/sy};
       const error=Math.hypot((actual.x-wanted.x)*sx,(actual.y-wanted.y)*sy);
       if(error>.5&&active.corrections<3){
@@ -254,11 +291,11 @@
         report({state:'adjusting',expectedX:g.target.x,expectedY:g.target.y,actualX:rect.left+actual.x*sx,actualY:rect.top+actual.y*sy,errorPx:error,basis:g.target.basis});
         scheduleFocus(true);return;
       }
-      report({state:error<=30?'centered':'deviation',expectedX:g.target.x,expectedY:g.target.y,actualX:rect.left+actual.x*sx,actualY:rect.top+actual.y*sy,errorPx:Math.round(error*100)/100,basis:g.target.basis});
+      report({state:error<=(active.pinOffset?1.5:30)?'centered':'deviation',expectedX:g.target.x,expectedY:g.target.y,actualX:rect.left+actual.x*sx,actualY:rect.top+actual.y*sy,errorPx:Math.round(error*100)/100,basis:g.target.basis});
     }
-    function focus(point,{key='',reason='selection'}={}){
+    function focus(point,{key='',reason='selection',pinOffset}={}){
       if(disposed||!validPoint(point))return false;
-      releaseFocus();active={point,key,reason,id:++sequence,interaction,geometry:null,corrections:0};report({state:'pending'});scheduleFocus(true);return true;
+      releaseFocus();active={point,key,reason,pinOffset,id:++sequence,interaction,geometry:null,corrections:0};report({state:'pending'});scheduleFocus(true);return true;
     }
     function relayout(){
       if(disposed)return;
@@ -269,10 +306,10 @@
       if(active){active.corrections=0;scheduleFocus(true);}
     }
     function scheduleRelayout(){if(frame===null&&!disposed)frame=raf(()=>{frame=null;relayout();});}
-    return { userGesture, interaction:()=>interaction, scheduleRelayout, relayout,focus,scheduleFocus,releaseFocus,
+    return { userGesture, interaction:()=>interaction, scheduleRelayout, relayout,focus,scheduleFocus,releaseFocus,capturePinOffset,
       focusState:()=>lastFocus,
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint});
+  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint});
 })(typeof window==='object'?window:globalThis);

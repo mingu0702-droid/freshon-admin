@@ -27,6 +27,31 @@ test('projection preserves numeric identities and uses only primary fixed dispat
  assert.equal(projectFixedVehicles([{estCd:'000123',mainCarSeqNm:'221'},{estCd:'000123',mainCarSeqNm:'122'}])[0].baseVehicleState,'CONFLICT');
 });
 
+test('primary fixed dispatch keeps status labels and roundtrips proof of an explicit blank',()=>{
+ const projected=projectFixedVehicles([
+  {estCd:'S1',logCd:'011',mainCarSeqNm:'오산 신규'},
+  {estCd:'S2',logCd:'011',mainCarSeqNm:'보류'},
+  {estCd:'S3',logCd:'011',mainCarSeqNm:' １１４ 호차 '},
+  {estCd:'S4',logCd:'011',mainCarSeqNm:null,carSeqMonNm:'101'},
+  {estCd:'S5',logCd:'011',carSeqMonNm:'122'},
+  {estCd:'S6',logCd:'011',mainCarSeqNm:'미확인'},
+ ]);
+ assert.deepEqual(projected.map(r=>r.baseVehicle),['오산신규','오산보류','114','','','']);
+ assert.equal(projected[3].baseVehicleEmptyVerified,true);
+ assert.equal(projected[3].weekdays.Mon,'101');
+ assert.equal(projected[4].baseVehicleEmptyVerified,undefined);
+ assert.equal(projected[5].baseVehicleEmptyVerified,undefined);
+ const [duplicate]=projectFixedVehicles([{estCd:'S4',mainCarSeqNm:''},{estCd:'S4'}]);
+ assert.equal(duplicate.baseVehicleEmptyVerified,undefined);
+ for(const store of [rootStore,abcStore]){
+  const envelope=store.fixedEnvelope(projected,checkedAt);
+  assert.deepEqual(store.validateFixedEnvelope(envelope).data,projected);
+  assert.equal(envelope.rows[3].length,6);
+  assert.equal(envelope.rows[4].length,5);
+  assert.throws(()=>store.fixedEnvelope([{...projected[0],baseVehicleEmptyVerified:true}],checkedAt),/FIXED_STORE_INVALID/);
+ }
+});
+
 test('profile separates accepted numeric strings from unsupported numeric contracts',()=>{
  const profile=inspectFixedMasterKeys([{estCd:'000123'},{estCd:'1'.repeat(65)},{estCd:123},{estCd:'S1'}]);
  assert.equal(profile.numericOnly,2);assert.equal(profile.acceptedNumeric,1);assert.equal(profile.unsupportedNumeric,1);

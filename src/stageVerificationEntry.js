@@ -7,6 +7,7 @@ import {mountProductionMapApi} from './opsmap-abc/productionMapIntegration.js';
 import {callHub as hubRead} from './opsmap-abc/phase2bHubReadClient.js';
 import {createFixedVehicleCache} from './opsmap-abc/fixedVehicleCache.js';
 import {createFixedVehicleFileStore} from './opsmap-abc/fixedVehicleStore.js';
+import {canonicalFixedMasterVehicle} from './fixedMasterVehicle.js';
 import {createManualMapPins} from './opsmap-abc/manualMapPins.js';
 import {isRoadRouteRequest} from './opsmap-abc/roadRouteService.js';
 import {createRecordedRoadRouteReader} from './opsmap-abc/recordedRoadRoute.js';
@@ -65,7 +66,8 @@ export function stageSnapshotBaseVehicles(snapshot) {
     version ??= row.baseVehicleVersion;
     checkedAt ??= row.baseVehicleCheckedAt;
     if (version !== row.baseVehicleVersion || checkedAt !== row.baseVehicleCheckedAt) return null;
-    rows.set(row.customerCode,{customerCode:row.customerCode,baseVehicle:row.baseVehicle || '',baseVehicleGroup:row.baseVehicleGroup || '',
+    rows.set(row.customerCode,{customerCode:row.customerCode,baseVehicle:canonicalFixedMasterVehicle(row.baseVehicle),baseVehicleGroup:row.baseVehicleGroup || '',
+      ...(row.baseVehicleState==='UNASSIGNED'&&row.baseVehicleEmptyVerified===true?{baseVehicleEmptyVerified:true}:{}),
       baseVehicleState:row.baseVehicleState,baseVehicleSource:row.baseVehicleSource,baseVehicleVersion:version,baseVehicleCheckedAt:checkedAt,baseVehicleStale:true});
   }
   if (!rows.size) return null;
@@ -319,7 +321,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     const primary=await fixed.get(codes);
     if (primary.ok) return primary;
     try {await readSnapshot();} catch {return primary;}
-    return snapshotBase?.get(codes) || primary;
+    const fallback=snapshotBase?.get(codes);
+    return fallback?{...fallback,meta:{...fallback.meta,primaryCacheState:primary.meta?.cacheState,lastError:primary.meta?.lastError}}:primary;
   }};
   const pinStore = stage.OPSMAP_MANUAL_PIN_STORE_KIND === 'github' || stage.OPSMAP_ROAD_BUDGET_STORE_KIND === 'github-stage' ? createManualPinGithubStore({
     repo, token:stage.GITHUB_TOKEN, branch:pinsBranch,

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {gunzipSync} from 'node:zlib';
 import {isFixedMasterCustomerKey} from '../fixedMasterCustomerKey.js';
+import {canonicalFixedMasterVehicle} from '../fixedMasterVehicle.js';
 export const FIXED_SCHEMA = 1;
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const fail = code => { throw Object.assign(new Error(code), {code}); };
@@ -18,18 +19,23 @@ export function fixedEnvelope(data, checkedAt) {
     const group = String(row.baseVehicleGroup || '');
     const state = row.baseVehicleState;
     if (!isFixedMasterCustomerKey(code) || seen.has(code) || !vehicleKey(vehicle) || !['','osan','yeongnam','honam'].includes(group)
-      || !['VERIFIED_MASTER','UNASSIGNED','CONFLICT'].includes(state) || (state==='VERIFIED_MASTER') !== !!vehicle) fail('FIXED_STORE_INVALID');
+      || !['VERIFIED_MASTER','UNASSIGNED','CONFLICT'].includes(state) || (state==='VERIFIED_MASTER') !== !!vehicle
+      || row.baseVehicleEmptyVerified!==undefined && (row.baseVehicleEmptyVerified!==true || state!=='UNASSIGNED')) fail('FIXED_STORE_INVALID');
     seen.add(code);
     const days = row.weekdays ? DAYS.map(day => {const v=String(row.weekdays[day]||'');if(!vehicleKey(v))fail('FIXED_STORE_INVALID');return v;}) : null;
-    return [code, vehicle, group, state, days];
+    const tuple=[code, vehicle, group, state, days];
+    if(row.baseVehicleEmptyVerified)tuple.push(true);
+    return tuple;
   }).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);
   const body={schema:FIXED_SCHEMA,checkedAt:new Date(checkedAt).toISOString(),rows};
   return {...body,count:rows.length,version:hash(body)};
 }
-export function fixedTupleData(r){return {customerCode:r[0],baseVehicle:r[1],baseVehicleGroup:r[2],baseVehicleState:r[3],
-  ...(r[4]?{weekdays:Object.fromEntries(DAYS.map((d,i)=>[d,r[4][i]]))}:{}),baseVehicleSource:'FIXED_DISPATCH_PRIMARY'};}
+export function fixedTupleData(r){return {customerCode:r[0],baseVehicle:canonicalFixedMasterVehicle(r[1]),baseVehicleGroup:r[2],baseVehicleState:r[3],
+  ...(r[5]===true?{baseVehicleEmptyVerified:true}:{}),
+  ...(r[4]?{weekdays:Object.fromEntries(DAYS.map((d,i)=>[d,canonicalFixedMasterVehicle(r[4][i])]))}:{}),baseVehicleSource:'FIXED_DISPATCH_PRIMARY'};}
 export function validateFixedEnvelope(value,{materialize=true}={}) {
-  if(value?.schema!==FIXED_SCHEMA || !Array.isArray(value.rows) || value.rows.some(r=>!Array.isArray(r)||r.length!==5||r[4]!==null&&(!Array.isArray(r[4])||r[4].length!==7)))fail('FIXED_STORE_INVALID');
+  if(value?.schema!==FIXED_SCHEMA || !Array.isArray(value.rows) || value.rows.some(r=>!Array.isArray(r)||
+    r.length!==5&&!(r.length===6&&r[5]===true&&r[3]==='UNASSIGNED')||r[4]!==null&&(!Array.isArray(r[4])||r[4].length!==7)))fail('FIXED_STORE_INVALID');
   if(!value.rows.length||!Number.isFinite(Date.parse(value.checkedAt))||new Date(value.checkedAt).toISOString()!==value.checkedAt||Date.parse(value.checkedAt)>Date.now()+300000)fail('FIXED_STORE_INVALID');
   let previous='';
   for(const r of value.rows){

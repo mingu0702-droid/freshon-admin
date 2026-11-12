@@ -11,7 +11,7 @@ for(const width of [760,390])test(`mobile ${width}: open bottom panel is exclude
 });
 function cameraFixture(width=1920,height=864){
  let clock=1000,seq=0,center={lat:36,lng:127},layout={mapRect:rect(309,72,width-309,height-72),viewportRect:rect(0,0,width,height),headerRect:rect(0,0,width,72),occluders:[],mobile:width<=760};
- const frames=new Map(),element={clientWidth:layout.mapRect.width,clientHeight:layout.mapRect.height,dataset:{}},counts={moves:0,relayout:0};
+ const frames=new Map(),element={clientWidth:layout.mapRect.width,clientHeight:layout.mapRect.height,getBoundingClientRect:()=>layout.mapRect,dataset:{}},counts={moves:0,relayout:0};
  const projection={containerPointFromCoords:p=>({x:element.clientWidth/2+(p.lng-center.lng)*100,y:element.clientHeight/2-(p.lat-center.lat)*100}),coordsFromContainerPoint:p=>({lng:center.lng+(p.x-element.clientWidth/2)/100,lat:center.lat-(p.y-element.clientHeight/2)/100})};
  const map={getCenter:()=>center,setCenter:p=>{center=p;counts.moves++;},getProjection:()=>projection,relayout:()=>counts.relayout++};
  const camera=createCamera({map,element,layout:()=>layout,clock:()=>clock,raf:fn=>{frames.set(++seq,fn);return seq;},cancelRaf:id=>frames.delete(id)});
@@ -49,4 +49,15 @@ test('no detail panel uses map centre rather than full browser centre',()=>{
 });
 test('fully covered map does not claim a visible focus target',()=>{
  assert.equal(cameraFocusViewport({mapRect:rect(0,80,390,600),viewportRect:rect(0,0,390,680),occluders:[rect(0,80,390,600)],mobile:true}),null);
+});
+test('direct mobile pin centers the visible body above the detail card, including its offset from the geographic anchor',()=>{
+ const f=cameraFixture(390,844);
+ f.setLayout({mapRect:rect(0,144,390,700),viewportRect:rect(0,0,390,844),headerRect:rect(0,0,390,144),occluders:[rect(0,544,390,300)],mobile:true,anchorWidth:44,anchorHeight:56});
+ const point={lat:36,lng:127};
+ const pinOffset=f.camera.capturePinOffset(point,{getBoundingClientRect:()=>rect(175,444,40,40)});
+ assert.equal(pinOffset.x,0);assert.equal(pinOffset.y,-30);
+ assert.equal(f.camera.focus(point,{pinOffset}),true);f.flush();
+ const result=f.camera.focusState();
+ assert.equal(result.expectedX,195);assert.equal(result.expectedY,344);
+ assert.equal(result.errorPx,0);assert.equal(result.state,'centered');
 });

@@ -13,6 +13,7 @@ assert(popup.includes('function anchorClusterPanel('));
 const clearMap=runtime.slice(runtime.indexOf('  function clearMap() {'),runtime.indexOf('  function clearSelection('));
 const clearSelection=runtime.slice(runtime.indexOf('  function clearSelection('),runtime.indexOf('  function closeClusterPanel(){'));
 const marker=runtime.slice(runtime.indexOf('  function markerElement('),runtime.indexOf('  function representativeRows('));
+const markerUpdate=runtime.slice(runtime.indexOf('  function refreshMarkerSelection('),runtime.indexOf('  function renderStops('));
 const css=fs.readFileSync(path.join(root,'map-performance.css'),'utf8');
 const policy=fs.readFileSync(path.join(root,'map-view-policy.js'),'utf8');
 const out=fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r11-popup-'));
@@ -20,6 +21,7 @@ const fixture=`
 const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));
 let clusterPanel=null,clusterPopupCleanup=null,periodBasis='vehicle',periodVehicleScope='all';
 let markerEntries=new Map(),indexedRows=null,pointIndex=null,boundaryKey='',mapMoving=false;
+const selectedMapPins=new Set(),mapMarkerRows=new WeakMap();let activeMapPinKey='';
 const state={mode:'BASE_60D',currentRows:[],selected:null,detailRequestId:0,fitRequested:true,suppressMapEventsUntil:0,overlays:[],representativeOverlays:[],lines:[],polygons:[]};
 let cameraSelection=0,selectedDriverContact=null,temporaryDetailPoint=null,addressFocusRequest=null;const requestControllers=new Map();
 const invalidateUnifiedSearch=()=>{},closeUnifiedSearchResults=()=>{},cancelAddressLookup=()=>{},renderRunList=()=>{},renderPeriodStoreList=()=>{};
@@ -29,14 +31,16 @@ const vehicleLabel=v=>v?v+'호차':'';
 const vehicleColor=()=>'#275dd8',esc=v=>String(v).replace(/[&<>"']/g,'');
 const syncPeriodBasis=()=>{},setSelectedVehicles=()=>{},refreshVehicleUi=()=>{};
 function selectStore(row,element,focus){
+ activeMapPinKey=element&&selectedMapPins.has(markerPinKey(row))?markerPinKey(row):'';
  state.selected=row;window.selection={code:row.customerCode,name:row.customerName,focus};
  if(focus)state.map.panTo(new Coord(row.lat,row.lng));
  if(window.simulateDetail){
-  const close=document.createElement('button');close.textContent='상세 닫기';close.onclick=()=>clearSelection();
+  const close=document.createElement('button');close.textContent='상세 닫기';close.onclick=closeMapDetail;
   $('#detail').replaceChildren(close);$('#detailSection').classList.add('open');
  }
 }
 function selectVehicleStatus(){window.markerAction='vehicle';}function showNearbyReference(){window.markerAction='virtual';}
+function focusMapPoint(row,{pinOffset}={}){window.lastPinFocus={key:markerPinKey(row),body:Boolean(pinOffset)};}
 window.MapNavigationEditor={values:()=>['S00000']};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
 class Point{constructor(x,y){this.x=x;this.y=y}}
@@ -56,6 +60,7 @@ class Overlay{
  // Match Kakao: setPosition does not remeasure initial anchor dimensions.
  setMap(m){this.map=m;this.wrapper.remove();if(m){m.el.append(this.wrapper);this.cachedSize={width:this.opts.content.offsetWidth,height:this.opts.content.offsetHeight};this.draw();}}
  setPosition(p){this.position=p;if(this.map)this.draw();}
+ getContent(){return this.opts.content;}getZIndex(){return Number(this.wrapper.style.zIndex);}setZIndex(value){this.wrapper.style.zIndex=String(value);}
  draw(){const p=this.map.getProjection().containerPointFromCoords(this.position);this.wrapper.style.left=(p.x-this.cachedSize.width*this.opts.xAnchor)+'px';this.wrapper.style.top=(p.y-this.cachedSize.height*this.opts.yAnchor)+'px';}
 }
 window.kakao={maps:{CustomOverlay:Overlay,LatLng:Coord,LatLngBounds:Bounds,Point,event:events}};
@@ -64,6 +69,7 @@ ${popup}
 ${clearMap}
 ${clearSelection}
 ${marker}
+${markerUpdate}
 window.harness={
  show(rows,extra={}){window.pinCoord=new Coord(rows[0].lat,rows[0].lng);showCluster({lat:rows[0].lat,lng:rows[0].lng,clusterRows:rows,clusterLabel:'같은 위치',clusterVehicles:['101'],...extra});state.map.draw();},
  close:closeClusterPanel,clearMap,clearSelection,
@@ -82,7 +88,13 @@ window.harness={
   const add=(row,z,role)=>{const content=markerElement(row,null,'store');content.dataset.fixtureRole=role;const o=new Overlay({position:window.pinCoord,content,xAnchor:.5,yAnchor:1,zIndex:z});o.setMap(state.map);return o;};
   state.overlays=[add(group,3,'underlying-cluster'),add(first,40,'selected-store')];state.map.draw();
  },
- clickCase(rows,mode='BASE_60D',extra={}){clearMap();state.mode=mode;state.currentRows=rows;state.selected=null;window.selection=null;window.markerAction=null;const row={...rows[0],...extra};const marker=markerElement(row,mode==='DATE_ROUTE'?1:null,row.virtual?'virtual':row.representative?'representative':row.nearbyVehicle?'nearbyVehicle':'store');marker.click();return{selected:window.selection,action:window.markerAction,navAssigned:marker.classList.contains('navAssigned')};},
+ seedDistinct(rows){
+  clearSelection();clearMap();state.mode='BASE_60D';state.currentRows=rows;window.simulateDetail=true;
+  window.pinCoord=new Coord(rows[0].lat,rows[0].lng);state.map.setCenter(window.pinCoord);
+  state.overlays=rows.map((row,index)=>{const content=markerElement(row,null,'store');content.dataset.fixtureRole='distinct-'+index;
+   const overlay=new Overlay({position:new Coord(row.lat,row.lng),content,xAnchor:.5,yAnchor:1,zIndex:5});overlay.setMap(state.map);return overlay;});
+ },
+ clickCase(rows,mode='BASE_60D',extra={}){clearSelection();clearMap();state.mode=mode;state.currentRows=rows;window.selection=null;window.markerAction=null;const row={...rows[0],...extra};const marker=markerElement(row,mode==='DATE_ROUTE'?1:null,row.virtual?'virtual':row.representative?'representative':row.nearbyVehicle?'nearbyVehicle':'store');marker.click();return{selected:window.selection,action:window.markerAction,navAssigned:marker.classList.contains('navAssigned')};},
  directSearch(row){closeClusterPanel();window.selection=null;selectStore(row,null,true);},
  beginResizeRace(){
   const map=state.map,savedCenter=map.center,oldSize={width:map.el.clientWidth,height:map.el.clientHeight};
@@ -177,7 +189,7 @@ try{
  const colocated=rows.slice(0,6).map(r=>({...r,vehicle:'204'}));
  await page.evaluate(data=>{harness.seedOverlap(data);harness.clearSelection();},colocated);await page.waitForTimeout(60);
  const hit=await page.locator('[data-fixture-role="selected-store"]').evaluate(e=>{const r=e.getBoundingClientRect(),top=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{role:top.closest('[data-fixture-role]')?.dataset.fixtureRole,z:e.parentElement.style.zIndex,selected:e.classList.contains('selected')};});
- check('after actual clearSelection the z40 store still intercepts the z3 cluster',hit.role==='selected-store'&&hit.z==='40'&&!hit.selected);
+ check('clearing the selection restores navigation layering above the group',hit.role==='selected-store'&&hit.z==='25'&&!hit.selected);
  const originalSource=await page.evaluate(()=>harness.source());
  await page.locator('[data-fixture-role="selected-store"]').click();await page.waitForTimeout(100);
  check('normal click on the overlapping real pin opens all six customer codes',await page.locator('.mapClusterPopup [data-cluster-code]').count()===6);
@@ -193,6 +205,16 @@ try{
  action=await page.evaluate(data=>harness.clickCase(data,'DATE_ROUTE'),[colocated[0],{...colocated[0],order:2},colocated[1]]);check('dated visits keep their existing detail path and nav protection',action.selected?.code==='S00000'&&action.navAssigned&&await page.locator('.mapClusterPopup').count()===0);
  for(const [extra,expected]of [[{representative:true},'vehicle'],[{nearbyVehicle:true},'vehicle'],[{virtual:true},'virtual']]){action=await page.evaluate(({data,extra})=>harness.clickCase(data,'BASE_60D',extra),{data:colocated,extra});check(Object.keys(extra)[0]+' marker keeps its existing action',action.action===expected&&await page.locator('.mapClusterPopup').count()===0);}
  action=await page.evaluate(data=>harness.clickCase(data.map(r=>({...r,lat:91})),'BASE_60D'),colocated);check('invalid coordinates do not create a group popup',action.selected?.code==='S00000'&&await page.locator('.mapClusterPopup').count()===0);
+ await page.evaluate(data=>harness.seedDistinct(data),[rows[0],{...rows[1],lng:128.15}]);
+ const one=page.locator('[data-fixture-role="distinct-0"]'),two=page.locator('[data-fixture-role="distinct-1"]');
+ await one.click();await two.click();
+ check('two physical pins stay selected and the last click requests body centering',await one.getAttribute('aria-pressed')==='true'&&await two.getAttribute('aria-pressed')==='true'&&await page.evaluate(()=>lastPinFocus.key==='store:S00001'&&lastPinFocus.body));
+ await two.click();
+ check('a repeat click restores only that pin',await one.getAttribute('aria-pressed')==='true'&&await two.getAttribute('aria-pressed')==='false');
+ await two.click();await page.getByRole('button',{name:'상세 닫기'}).click();
+ check('detail close preserves the other selected pin',await one.getAttribute('aria-pressed')==='true'&&await two.getAttribute('aria-pressed')==='false');
+ await page.evaluate(()=>harness.clearSelection());
+ check('clearing map selection restores every original pin color',await one.getAttribute('aria-pressed')==='false'&&await two.getAttribute('aria-pressed')==='false');
  await show(colocated);await page.evaluate(()=>harness.beginResizeRace());
  await page.setViewportSize({width:390,height:780});await settle();
  const race=await page.evaluate(()=>window.resizeRace);

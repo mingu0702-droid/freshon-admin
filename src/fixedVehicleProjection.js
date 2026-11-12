@@ -2,6 +2,7 @@
 // Raw rows never persist; only the separately allowlisted projection may persist.
 import crypto from 'node:crypto';
 import {normalizeFixedMasterCustomerKey} from './fixedMasterCustomerKey.js';
+import {canonicalFixedMasterVehicle, isProjectedFixedMasterVehicle} from './fixedMasterVehicle.js';
 const masterKey = value => !!normalizeFixedMasterCustomerKey(value);
 const pagingKeys = new Set(['totalCnt','totalPages','isPaging','sortName','sortOrder','page','size','number','numberOfElements','first','last','empty']);
 // Counts only: never include customer identifiers, payload values, or raw rows
@@ -33,18 +34,20 @@ export function projectFixedVehicles(rows) {
   for (const row of rows) {
     const customerCode = normalizeFixedMasterCustomerKey(row.estCd);
     if (!masterKey(customerCode)) continue;
-    const primary = String(row.mainCarSeqNm || '').trim().replace(/호$/, '');
-    const baseVehicle = /^\d+$/.test(primary) ? String(Number(primary)) : '';
+    const primary = canonicalFixedMasterVehicle(row.mainCarSeqNm);
+    const baseVehicle = /^\d+$/.test(primary) ? String(Number(primary)) : isProjectedFixedMasterVehicle(primary) ? primary : '';
     const weekdays = Object.fromEntries(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => {
-      const v = String(row['carSeq' + day + 'Nm'] || '').trim().replace(/호$/, '');
-      return [day, /^\d+$/.test(v) ? String(Number(v)) : ''];
+      const vehicle = canonicalFixedMasterVehicle(row['carSeq' + day + 'Nm']);
+      return [day, /^\d+$/.test(vehicle) ? String(Number(vehicle)) : ''];
     }));
     const baseVehicleGroup=({'011':'osan','012':'yeongnam','013':'honam'})[row.logCd]||'';
     const previous = result.get(customerCode);
     const conflict = previous && (previous.baseVehicleState === 'CONFLICT' || previous.baseVehicle !== baseVehicle || previous.baseVehicleGroup&&baseVehicleGroup&&previous.baseVehicleGroup!==baseVehicleGroup);
+    const explicitEmpty = row.mainCarSeqNm === null || typeof row.mainCarSeqNm === 'string' && !primary;
     result.set(customerCode, {customerCode, baseVehicle: conflict ? '' : baseVehicle,
       baseVehicleState: conflict ? 'CONFLICT' : baseVehicle ? 'VERIFIED_MASTER' : 'UNASSIGNED',
       baseVehicleGroup: conflict?'':baseVehicleGroup,
+      ...(!conflict && explicitEmpty && (!previous || previous.baseVehicleEmptyVerified) ? {baseVehicleEmptyVerified:true} : {}),
       baseVehicleSource: 'FIXED_DISPATCH_PRIMARY', weekdays});
   }
   return [...result.values()];
