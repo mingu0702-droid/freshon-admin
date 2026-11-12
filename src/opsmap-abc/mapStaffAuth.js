@@ -96,6 +96,10 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
   let fingerprint = '', verifying = false;
   const cookieOptions = { httpOnly: true, secure: true, sameSite: 'strict', path: '/' };
   const noStore = (_req, res, next) => { res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache'); res.set('Vary', 'Cookie'); return next(); };
+  function storeUnavailable(res, error, code = 'STAFF_SESSION_STORE_UNAVAILABLE') {
+    if (stageThrottle && error?.retryAfterMs > 0) res.set('Retry-After', String(Math.ceil(error.retryAfterMs / 1000)));
+    return res.status(503).json({ error: code });
+  }
   function configuration() {
     const id = env.MAP_STAFF_ID || '', hash = env.MAP_STAFF_PASSWORD_HASH || '', secret = env.MAP_STAFF_SESSION_SECRET || '';
     const nextFingerprint = digest([id, hash, secret, env.RENDER_EXTERNAL_URL || env.MAP_STAFF_ORIGIN || '',sessionStore?'DURABLE_SESSION_V2':'PROCESS_MEMORY'].join('\n')).toString('hex');
@@ -139,7 +143,7 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
     const started = performance.now();
     // Ordinary/background map reads do not manufacture employee activity.
     // Only the explicit same-origin activity check below renews the idle lease.
-    let session;try{session=await readSession(req,false);}catch{return res.status(503).json({error:'STAFF_SESSION_STORE_UNAVAILABLE'});}
+    let session;try{session=await readSession(req,false);}catch(error){return storeUnavailable(res,error);}
     addStaffTiming(res, 'session', performance.now() - started);
     if (!session) return res.status(401).json({ error: 'STAFF_LOGIN_REQUIRED' });
     res.locals.sensitiveAuthenticated = true;
@@ -170,13 +174,14 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
       && (req.get('sec-fetch-site') === 'same-origin' || req.get('origin') === configuration().origin);
     const prior = sessions.get(sessionKey(req, configuration()));
     const expired = Boolean(prior && (now() >= prior.expiresAt || now() >= prior.idleExpiresAt));
-    let session;try{session=await readSession(req,activity);}catch{return res.status(503).json({error:'STAFF_SESSION_STORE_UNAVAILABLE'});}
+    let session;try{session=await readSession(req,activity);}catch(error){return storeUnavailable(res,error);}
     addStaffTiming(res, 'session', performance.now() - started);
     return res.json({ authenticated: Boolean(session), configured: configuration().ready,
       expiresAt: session?.expiresAt || null, idleExpiresAt: session?.idleExpiresAt || null,
       reason: session ? null : expired ? 'SESSION_EXPIRED' : sessionKey(req, configuration()) ? 'SESSION_UNAVAILABLE' : 'SIGNED_OUT',
       policy: { ...policy, persistence: sessionStore?.kind||'PROCESS_MEMORY', processStartedAt,
-        ...(session&&stageThrottle ? {loginAttemptLimit:stageThrottle.attemptLimit,loginWindowMs} : {}) } });
+        ...(session&&stageThrottle ? {loginAttemptLimit:stageThrottle.attemptLimit,loginWindowMs,
+          storeReads:sessionStore?.stats?.()} : {}) } });
   });
   router.post('/login', async (req, res) => {
     const config = configuration();
@@ -212,14 +217,22 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
       res.cookie(STAFF_COOKIE, token, { ...cookieOptions, maxAge: policy.maxMs });
       addStaffTiming(res, 'session', performance.now() - sessionStarted);
       return res.json({ authenticated: true, ...session });
-    } catch { return res.status(503).json({ error: 'LOGIN_UNAVAILABLE' }); }
+    } catch (error) { return storeUnavailable(res,error,'LOGIN_UNAVAILABLE'); }
     finally { if (!stageThrottle) verifying = false; if (req.body) req.body.password = ''; }
   });
   router.post('/logout', async (req, res) => {
     const started = performance.now();
     const config = configuration();
     if (!config.ready || !sameOrigin(req, config)) return res.status(403).json({ error: 'ORIGIN_REJECTED' });
-    const key=sessionKey(req,config);if(key){revoked.add(key);sessions.delete(key);try{if(sessionStore)await sessionStore.delete(key);}catch{return res.status(503).json({error:'STAFF_SESSION_STORE_UNAVAILABLE'});}}
+    const key=sessionKey(req,config);
+    if(key){
+      revoked.add(key);sessions.delete(key);
+      try{if(sessionStore)await sessionStore.delete(key);}
+      catch(error){
+        if(stageThrottle)res.clearCookie(STAFF_COOKIE,cookieOptions);
+        return storeUnavailable(res,error);
+      }
+    }
     res.clearCookie(STAFF_COOKIE, cookieOptions);
     addStaffTiming(res, 'session', performance.now() - started);
     return res.json({ authenticated: false });
