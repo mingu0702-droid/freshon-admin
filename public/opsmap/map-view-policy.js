@@ -16,10 +16,9 @@
   function region(row) {
     return regionColors[row.addressRegion] ? row.addressRegion : '';
   }
-  const unverified = Object.freeze({code:'',label:'미확인',kind:'unverified'});
+  const unverified = Object.freeze({code:'',label:'•',kind:'unverified'});
   const pending = Object.freeze({code:'',label:'…',kind:'unverified'});
   const unknown = Object.freeze({code:'',label:'?',kind:'unknown'});
-  const mixed = Object.freeze({code:'',label:'혼합',kind:'mixed'});
   const datedUnknown = Object.freeze({code:'',label:'•',kind:'unverified'});
   const absence = /^(?:|[-?]|미확인|호차미확인|미지정|없음)$/;
   function pinAssignment(row, mode='BASE_60D') {
@@ -77,13 +76,13 @@
     const unmatched=members.some(assignment=>assignment.kind==='unverified');
     const first=members[0];
     const assignment=members.every(item=>item.code===first.code&&item.label===first.label)?first:
-      vehicles.length?mixed:unverified;
+      vehicles.length?{code:'',label:vehicles.join('·'),kind:'mixed'}:unverified;
     const regions=[...new Set(group.rows.map(region))].sort();
     const v=assignment.code,r=regions.length===1?regions[0]:'';
     const sameLocation=group.south===group.north&&group.west===group.east;
     const regional=Boolean(r)&&(band===4||!v);
     const label=sameLocation?'같은 위치':assignment.kind==='vehicle'?`${v}호`:
-      assignment.kind==='unknown'?'호차 미지정':assignment.kind==='mixed'?'호차 혼합':assignment.label;
+      v?assignment.label:r||'권역';
     const memberCodes=group.rows.map(row=>String(row.customerCode||''));
     return {
       // A group has no customer identity. Keep original members for the

@@ -272,7 +272,7 @@
     const keys=[...new Set(bridge.state.currentRows.map(row=>Phase2bUi.vehicleColorKey(row.vehicle)))].sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
     const key=JSON.stringify([bridge.state.mode,keys]);if(key===vehicleLegendKey)return;vehicleLegendKey=key;legend.replaceChildren();
     const heading=document.createElement('strong');heading.textContent=bridge.state.mode==='DATE_ROUTE'?'실제 호차':'기준호차';legend.append(heading);
-    for(const vehicle of keys){const item=document.createElement('span');item.dataset.vehicle=vehicle;const dot=document.createElement('i');dot.style.background=Phase2bUi.vehicleColor(vehicle);item.append(dot,vehicle?sourceRouteLabel(vehicle):'호차 미확인');legend.append(item);}
+    for(const vehicle of keys){const item=document.createElement('span');item.dataset.vehicle=vehicle;const dot=document.createElement('i');dot.style.background=Phase2bUi.vehicleColor(vehicle);item.append(dot,vehicle?sourceRouteLabel(vehicle):'기준호차 확인 필요');legend.append(item);}
     const clusters=document.createElement('span');clusters.className='clusterLegend';clusters.textContent='숫자는 매장 수입니다';legend.append(clusters);bridge.setGeneralLegend(legend.innerHTML);
   }
   loadMore.onclick=()=>{if(bridge.isDataReady()&&bridge.state.currentRows.length&&!$('#periodStoreList').querySelector('[data-period-store]')){visibleStoreLimit=5;$('#togglePeriodList').click();sourceSync();return;}visibleStoreLimit+=5;if($('#periodStoreList').querySelectorAll('[data-period-store]').length<visibleStoreLimit&&!$('#periodListMore').hidden)$('#periodListMore').click();sourceSync();};

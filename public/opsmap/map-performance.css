@@ -87,6 +87,12 @@
 .approvedShellCandidate .marker.approvedMarker .pin>.pinStatus {
   font-size:11px; line-height:1.05; text-align:center; white-space:pre-line;
 }
+.approvedShellCandidate .marker.approvedMarker .pin>.pinRoutes {
+  position:relative; line-height:1.05; text-align:center; white-space:pre-line;
+}
+.approvedShellCandidate .marker.approvedMarker .pin>.pinRoutes[data-more]::after {
+  content:attr(data-more); position:absolute; left:100%; bottom:0; font-size:8px; line-height:1;
+}
 .approvedShellCandidate .marker.approvedMarker.selected { transform:none; filter:none; }
 .approvedShellCandidate .marker.approvedMarker.selected .pin { outline:none; background-color:#ad1457; }
 .approvedShellCandidate .marker.navAssigned { visibility:visible!important; pointer-events:auto!important; }

@@ -69,19 +69,22 @@ test('pins distinguish the primary fixed route, confirmed blank, and missing evi
   assert.equal(pinAssignment({...row,baseVehicle:'오산 신규'}).label,'오산신규');
   assert.equal(pinAssignment({...row,baseVehicle:'보류'}).label,'오산보류');
   const blank={baseVehicle:'',vehicle:'202',baseVehicleState:'UNASSIGNED',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'};
-  assert.equal(pinAssignment(blank).label,'미확인');
+  assert.equal(pinAssignment(blank).label,'•');
   assert.equal(pinAssignment({...blank,baseVehicleEmptyVerified:true}).label,'?');
-  assert.equal(pinAssignment({...blank,baseVehicleState:'UNKNOWN',baseVehicleVersion:'v'}).label,'미확인');
+  assert.equal(pinAssignment({...blank,baseVehicleState:'UNKNOWN',baseVehicleVersion:'v'}).label,'•');
   assert.equal(pinAssignment({...blank,baseVehicleState:'UNKNOWN'}).label,'…');
-  assert.equal(pinAssignment({...row,baseVehicleState:'CONFLICT'}).label,'미확인');
+  assert.equal(pinAssignment({...row,baseVehicleState:'CONFLICT'}).label,'•');
   assert.equal(MapPeriodUi.baseVehicleLabel(blank),'확인 필요');
   assert.equal(MapPeriodUi.baseVehicleLabel({...blank,baseVehicleEmptyVerified:true}),'미지정');
   assert.equal(MapPeriodUi.baseVehicleLabel({...row,baseVehicle:'보류'}),'오산보류');
   const same=(code,assignment)=>({customerCode:code,lat:37.5,lng:127,...assignment});
   const [group]=exactLocations([same('S1',{...row,baseVehicle:'보류'}),same('S2',{...row,baseVehicle:'오산보류'})]);
   assert.equal(pinAssignment(group).label,'오산보류');
+  const [pair]=exactLocations([same('S1',{...row,baseVehicle:'101'}),same('S2',row)]);
+  assert.equal(pinAssignment(pair).label,'101·114');
+  assert.deepEqual(pair.clusterVehicles,['101','114']);
   const [uncertain]=exactLocations([same('S1',blank),same('S2',{...blank,baseVehicleEmptyVerified:true})]);
-  assert.equal(pinAssignment(uncertain).label,'미확인');
+  assert.equal(pinAssignment(uncertain).label,'•');
   assert.deepEqual(uncertain.memberCodes,['S1','S2']);
 });
 

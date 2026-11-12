@@ -1600,7 +1600,7 @@
     const vehicles=row.clusterVehicles||row.vehicles||[];
     const assignments=document.createElement('p');assignments.className='clusterAssignments';
     if(vehicles.length||row.clusterUnassigned||row.clusterUnverified){
-      assignments.textContent=[...vehicles.map(vehicleLabel),row.clusterUnassigned?'호차 정보 없음':'',row.clusterUnverified?'기준호차 자료 미확인':''].filter(Boolean).join(' · ');
+      assignments.textContent=[...vehicles.map(vehicleLabel),row.clusterUnassigned?'호차 정보 없음':'',row.clusterUnverified?'기준호차 확인 필요':''].filter(Boolean).join(' · ');
     }
     if(vehicles.length===1&&vehicles[0]){
       const filter=document.createElement('button');filter.type='button';filter.textContent=`${vehicles[0]}호차만 보기`;
@@ -1727,7 +1727,7 @@
     const group = row.clusterCount;
     const assignmentTitle = assignment.code ? vehicleLabel(assignment.code) :
       assignment.kind === 'unknown' ? '호차 정보 없음' : assignment.kind === 'unverified' ?
-        (assignment.label==='…'?'기준호차 조회 중':base?'기준호차 자료 미확인':'호차 자료 미확인') : '';
+        (assignment.label==='…'?'기준호차 조회 중':base?'기준호차 확인 필요':'호차 확인 필요') : '';
     button.className = `marker${completed ? " done" : pending ? " pending" : ""}${kind === "virtual" ? " virtual" : ""}${kind === "nearbyVehicle" ? " nearbyVehicle" : ""}${compact ? " storeDot" : ""}`;
     button.dataset.customerCode = row.customerCode || "";
     if(row.deliveryId)button.dataset.deliveryId=row.deliveryId;
@@ -1752,10 +1752,10 @@
       button.classList.add("periodCluster");
       button.dataset.clusterKind=row.clusterKind||'mixed';
       const assignments=row.clusterVehicles||[];
-      const summary=assignments.slice(0,3).map(vehicleLabel).join(' · ')+(assignments.length>3?' 외 '+(assignments.length-3)+'개':'');
-      const heading = row.clusterKind === 'location' ? '같은 위치' : assignment.kind === 'mixed' ? '호차 혼합' : '';
+      const summary=assignments.map(vehicleLabel).join(' · ');
+      const heading = row.clusterKind === 'location' ? '같은 위치' : '';
       button.title=[heading,summary||assignmentTitle,assignments.length&&row.clusterUnassigned?'호차 정보 없음 포함':'',
-        assignments.length&&row.clusterUnverified?'기준호차 자료 미확인 포함':'',group+'개 매장'].filter(Boolean).join(' · ');
+        assignments.length&&row.clusterUnverified?'기준호차 확인 필요 포함':'',group+'개 매장'].filter(Boolean).join(' · ');
       button.setAttribute('aria-label',button.title+' · 목록 보기');
     }
     if(kind!=='virtual'&&document.body.classList.contains('approvedShellCandidate')){
@@ -1763,8 +1763,15 @@
       pin.style.setProperty('--pin',pinColor);
       const label=document.createElement('span');
       const status = assignment.kind === 'new' || assignment.kind === 'held';
-      if(status || assignment.kind === 'unverified')label.className='pinStatus';
-      label.textContent=status ? assignment.label.slice(0,2)+'\n'+assignment.label.slice(2) : assignment.label;
+      if(group&&assignment.kind==='mixed'){
+        const routes=row.clusterVehicles;
+        label.className='pinRoutes';
+        label.textContent=routes.slice(0,2).map(code=>code==='오산신규'?'신규':code==='오산보류'?'보류':code).join('\n');
+        if(routes.length>2)label.dataset.more='+'+(routes.length-2);
+      }else{
+        if(status || assignment.kind === 'unverified')label.className='pinStatus';
+        label.textContent=status ? assignment.label.slice(0,2)+'\n'+assignment.label.slice(2) : assignment.label;
+      }
       pin.append(label);
       if(index&&!group)pin.title=`${assignmentTitle||'호차 정보 없음'} · 착순 ${index}`;
       button.classList.add('approvedMarker');button.append(pin);
