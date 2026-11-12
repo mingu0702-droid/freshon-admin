@@ -2,7 +2,7 @@
 (function (root) {
   'use strict';
   const EARTH = 6378137;
-  const storePinLevel = 7;
+  const storePinLevel = 5;
   const groupingCache=new WeakMap();
   const finitePoint = row => Number.isFinite(row?.lat) && Number.isFinite(row?.lng) && Math.abs(row.lat)<=90 && Math.abs(row.lng)<=180;
   const regionColors = Object.freeze({ '수도권':'#2563eb', '강원권':'#0f766e', '충청권':'#b45309', '호남권':'#7c3aed', '영남권':'#047857', '제주권':'#0369a1' });
@@ -22,8 +22,7 @@
   function makeGroup(key) {
     return {key, rows:[], lat:0, lng:0, x:0, y:0, south:Infinity, north:-Infinity, west:Infinity, east:-Infinity};
   }
-  function addRow(group, row) {
-    const point=world(row);
+  function addRow(group, row, point) {
     group.rows.push(row);group.lat+=row.lat;group.lng+=row.lng;group.x+=point.x;group.y+=point.y;
     group.south=Math.min(group.south,row.lat);group.north=Math.max(group.north,row.lat);
     group.west=Math.min(group.west,row.lng);group.east=Math.max(group.east,row.lng);
@@ -54,12 +53,13 @@
   }
   function clusterRow(group, mode, band) {
     if(group.rows.length===1)return group.rows[0];
-    const vehicles=[...new Set(group.rows.map(row=>vehicle(row,mode)))].sort();
+    const assignments=new Set(group.rows.map(row=>vehicle(row,mode)));
+    const vehicles=[...assignments].filter(Boolean).sort();
     const regions=[...new Set(group.rows.map(region))].sort();
-    const v=vehicles.length===1?vehicles[0]:'',r=regions.length===1?regions[0]:'';
+    const unassigned=assignments.has(''),v=vehicles.length===1&&!unassigned?vehicles[0]:'',r=regions.length===1?regions[0]:'';
     const sameLocation=group.south===group.north&&group.west===group.east;
     const regional=Boolean(r)&&(band===4||!v);
-    const label=sameLocation?'같은 위치':regional?r:v?`${v}호`:'여러 호차';
+    const label=sameLocation?'같은 위치':v?`${v}호`:vehicles.length?'호차 혼합':'호차 미확인';
     const memberCodes=group.rows.map(row=>String(row.customerCode||''));
     return {
       // A group has no customer identity. Keep original members for the
@@ -67,13 +67,28 @@
       customerCode:'',customerName:label,vehicle:regional?'':v,
       lat:sameLocation?group.south:group.lat/group.rows.length,lng:sameLocation?group.west:group.lng/group.rows.length,
       clusterKey:group.key,clusterCount:group.rows.length,clusterLabel:label,
-      clusterKind:sameLocation?'location':regional?'region':v?'vehicle':'mixed',
+      clusterKind:sameLocation?'location':v?'vehicle':vehicles.length?'mixed':'unassigned',
       clusterColorKey:regional?r:v||r,addressRegion:r,
-      clusterRows:group.rows,memberCodes,clusterVehicles:vehicles.filter(Boolean),vehicles:vehicles.filter(Boolean),
+      clusterRows:group.rows,memberCodes,clusterVehicles:vehicles,vehicles,clusterUnassigned:unassigned,
       clusterRegions:regions.filter(Boolean),regions:regions.filter(Boolean),
-      clusterMemberKey:JSON.stringify(group.rows.map(row=>[String(row.customerCode||''),row.lat,row.lng,vehicle(row,mode),region(row)]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))),
+      clusterMemberKey:group.rows.map(row=>JSON.stringify([row.customerCode,row.lat,row.lng,vehicle(row,mode),region(row)])).sort().join('\n'),
       clusterBounds:{south:group.south,north:group.north,west:group.west,east:group.east}
     };
+  }
+  function exactLocations(rows,mode='BASE_60D') {
+    const places=new Map();
+    for(const row of rows){
+      if(!finitePoint(row))continue;
+      const key=`${mode}:same-location:${row.lat}:${row.lng}`, old=places.get(key);
+      if(!old)places.set(key,row);
+      else if(Array.isArray(old))old.push(row);
+      else places.set(key,[old,row]);
+    }
+    return [...places].map(([key,rows])=>{
+      if(!Array.isArray(rows))return rows;
+      const [{lat,lng}]=rows;
+      return clusterRow({key,rows,south:lat,north:lat,west:lng,east:lng},mode,0);
+    });
   }
   function stableClusters(rows, project, level, selectedCode = '', viewport = null, options = {}) {
     const mode = options.mode || 'BASE_60D';
@@ -85,10 +100,11 @@
       if (!finitePoint(row)) continue;
       (protectedCodes.has(row.customerCode) ? pinned : ordinary).push(row);
     }
+    const margin=options.margin??80;
     const visible = row => {
       if (!viewport || protectedCodes.has(row.customerCode) || row.memberCodes?.some(code=>protectedCodes.has(code))) return true;
       const p = project(row);
-      return Number.isFinite(p?.x) && Number.isFinite(p?.y) && p.x >= -80 && p.y >= -80 && p.x <= viewport.width + 80 && p.y <= viewport.height + 80;
+      return Number.isFinite(p?.x) && Number.isFinite(p?.y) && p.x >= -margin && p.y >= -margin && p.x <= viewport.width + margin && p.y <= viewport.height + margin;
     };
     const cachePrefix=options.sourceVersion===undefined?null:JSON.stringify([options.sourceVersion,mode,band,[...protectedCodes].sort()]);
     // Cache geographic levels, never the viewport's chosen level. Reusing a
@@ -104,51 +120,36 @@
     // overview. Preserve every distinct positioned stop, irrespective of the
     // generic overview marker cap. Only truly co-located stores share a
     // selectable same-location card so none becomes inaccessible.
-    if (options.grouping === 'individual' || options.grouping === 'locations') {
-      const keepTogether=options.grouping==='locations';
-      const places = new Map();
-      for (const row of keepTogether?[...ordinary,...pinned]:ordinary) {
-        const key = `${mode}:same-location:${row.lat}:${row.lng}`;
-        let group = places.get(key);
-        if (!group) { group = makeGroup(key); places.set(key, group); }
-        addRow(group, row);
-      }
-      const locations=[...places.values()].map(group => clusterRow(group, mode, band));
-      return (keepTogether?locations:[...pinned,...locations]).filter(visible);
-    }
+    if(options.grouping==='locations')return atLevel('exact',()=>exactLocations(rows,mode)).filter(visible);
+    if(options.grouping==='individual')return atLevel('individual',()=>[...pinned,...exactLocations(ordinary,mode)]).filter(visible);
     const available=Math.max(1,limit-pinned.length);
-    const ordinaryCount=result=>result.reduce((count,row)=>count+(!protectedCodes.has(row.customerCode)&&visible(row)?1:0),0);
     // Close-up maps still need a selectable group for colocated stores. Two
     // independent markers at identical coordinates would hide one another;
     // distant stores must not force distinct visible addresses to merge.
     if (band === 0) {
-      const close=atLevel('location',()=>{
-        const places=new Map();
-        for(const row of ordinary){const key=`${mode}:location:${row.lat}:${row.lng}`;let group=places.get(key);if(!group){group=makeGroup(key);places.set(key,group);}addRow(group,row);}
-        return [...pinned,...[...places.values()].map(group=>clusterRow(group,mode,band))];
-      });
-      if(ordinaryCount(close)<=available)return close.filter(visible);
+      const close=atLevel('location',()=>[...pinned,...exactLocations(ordinary,mode)]).filter(visible);
+      if(close.length-pinned.length<=available)return close;
     }
     const baseCell = [80, 700, 3500, 18000, 120000][band];
-    let result=[];
+    let visibleRows=[];
     // Bucket in world metres, not screen pixels: pan and small zoom changes do
     // not move a group's anchor or alter membership at the same level.
     // The marker limit belongs to the viewport, not all nationwide stores.
     for (let pass = 0; pass < 26; pass++) {
-      result=atLevel(pass,()=>{
+      visibleRows=atLevel(pass,()=>{
         const buckets = new Map(),cell = baseCell * (2 ** pass);
         for (const row of ordinary) {
           const point=world(row);
           // Geography owns the group. Splitting each cell by vehicle produced
           // dozens of overlapping coloured badges in dense metropolitan areas.
           const key=`${mode}:${band}:${pass}:${Math.floor(point.x/cell)}:${Math.floor(point.y/cell)}`;
-          let group=buckets.get(key);if(!group){group=makeGroup(key);buckets.set(key,group);}addRow(group,row);
+          let group=buckets.get(key);if(!group){group=makeGroup(key);buckets.set(key,group);}addRow(group,row,point);
         }
         return [...pinned,...mergeNearby(buckets,cell).map(group=>clusterRow(group,mode,band))];
-      });
-      if (ordinaryCount(result) <= available) break;
+      }).filter(visible);
+      if(visibleRows.length-pinned.length<=available)break;
     }
-    return result.filter(visible);
+    return visibleRows;
   }
   const cameraRect = rect => {
     const left=Number(rect?.left),top=Number(rect?.top),right=Number(rect?.right??left+Number(rect?.width)),bottom=Number(rect?.bottom??top+Number(rect?.height));
@@ -273,5 +274,5 @@
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint});
+  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint});
 })(typeof window==='object'?window:globalThis);

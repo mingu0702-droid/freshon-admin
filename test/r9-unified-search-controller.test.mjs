@@ -53,15 +53,44 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
 }
 const store=(customerCode,customerName,address,more={})=>({customerCode,customerName,address,lat:37.5,lng:127.1,vehicle:'101',lastDeliveryDate:'2026-11-02',...more});
 
-test('map idle keeps an out-of-filter selected customer in the address queue',()=>{
- const registration=source.split('\n').find(line=>line.includes("listen('idle',")&&line.includes('deferMapAddressWork'));
- assert(registration);
+test('map gestures coalesce idle work and keep the out-of-filter selection in the address queue',async()=>{
  const selected=store('S990100','합성 선택점','',{vehicle:'223',lat:null,lng:null}),visible=store('S990101','합성 필터점','',{vehicle:'101'});
- let idle,queued;const frames=[];
- const c={dateReady:true,markerFrame:null,addressScheduleFrame:null,state:{mode:'BASE_60D',map:{},selected,currentRows:[visible]},document:{hidden:false,body:{dataset:{mapStaffState:'authenticated'}}},window:{},listen:(_name,callback)=>{idle=callback;},requestAnimationFrame:callback=>frames.push(callback),renderStops:()=>{},scheduleVisibleAddressRows:rows=>{queued=rows;}};
- vm.runInNewContext(declaration('scheduleMapAddressWork')+declaration('deferMapAddressWork')+registration,c);idle();
- while(frames.length)frames.shift()();
- assert.equal(queued[0],selected);assert(queued.includes(visible));
+ const events=new Map(),frames=new Map(),renders=[],queues=[];
+ const mapElement={dataset:{},replaceChildren(){},addEventListener(){}};
+ let frameId=0;
+ const c={
+  dateReady:true,mapInitializing:null,mapCamera:null,mapMoving:false,mapHandlers:[],markerFrame:null,addressScheduleFrame:null,
+  state:{mode:'BASE_60D',map:null,selected,currentRows:[visible]},
+  document:{hidden:false,body:{dataset:{mapStaffState:'authenticated'}}},
+  window:{KakaoMapsAdapter:{ready:async()=>{}},dispatchEvent(){}},
+  kakao:{maps:{Map:class {},LatLng:class {},event:{addListener:(_map,name,callback)=>events.set(name,callback)}}},
+  $:()=>mapElement,performance:{mark(){}},CustomEvent:class {},loadBaseMap(){},positionTemporaryDistanceLabel(){},
+  setMapMessage:message=>assert.fail(message),
+  requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},
+  cancelAnimationFrame:id=>frames.delete(id),
+  renderStops:rows=>renders.push(rows),scheduleVisibleAddressRows:rows=>queues.push(rows),
+ };
+ function flushFrames(){
+  while(frames.size){
+   const [id,callback]=frames.entries().next().value;
+   frames.delete(id);
+   callback();
+  }
+ }
+ vm.runInNewContext(['scheduleMapAddressWork','deferMapAddressWork','initMap'].map(declaration).join('\n'),c);
+ assert(await c.initMap());
+ events.get('idle')();
+ events.get('dragstart')();
+ flushFrames();
+ assert.equal(renders.length,0);
+ assert.equal(queues.length,0);
+ events.get('idle')();
+ events.get('idle')();
+ flushFrames();
+ assert.equal(renders.length,1);
+ assert.equal(queues.length,1);
+ assert.equal(queues[0][0],selected);
+ assert(queues[0].includes(visible));
 });
 
 test('search address normalization preserves building numbers and province aliases',()=>{

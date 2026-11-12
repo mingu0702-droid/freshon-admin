@@ -19,7 +19,7 @@ const out=fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r11-popup-'));
 const fixture=`
 const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));
 let clusterPanel=null,clusterPopupCleanup=null,periodBasis='vehicle',periodVehicleScope='all';
-let markerEntries=new Map(),indexedRows=null,pointIndex=null,boundaryKey='';
+let markerEntries=new Map(),indexedRows=null,pointIndex=null,boundaryKey='',mapMoving=false;
 const state={mode:'BASE_60D',currentRows:[],selected:null,detailRequestId:0,fitRequested:true,suppressMapEventsUntil:0,overlays:[],representativeOverlays:[],lines:[],polygons:[]};
 let cameraSelection=0,selectedDriverContact=null,temporaryDetailPoint=null,addressFocusRequest=null;const requestControllers=new Map();
 const invalidateUnifiedSearch=()=>{},closeUnifiedSearchResults=()=>{},cancelAddressLookup=()=>{},renderRunList=()=>{},renderPeriodStoreList=()=>{};
@@ -28,7 +28,14 @@ let mapCamera={releaseFocus(){}};
 const vehicleLabel=v=>v?v+'호차':'';
 const vehicleColor=()=>'#275dd8',esc=v=>String(v).replace(/[&<>"']/g,'');
 const syncPeriodBasis=()=>{},setSelectedVehicles=()=>{},refreshVehicleUi=()=>{};
-function selectStore(row,element,focus){state.selected=row;window.selection={code:row.customerCode,name:row.customerName,focus};}
+function selectStore(row,element,focus){
+ state.selected=row;window.selection={code:row.customerCode,name:row.customerName,focus};
+ if(focus)state.map.panTo(new Coord(row.lat,row.lng));
+ if(window.simulateDetail){
+  const close=document.createElement('button');close.textContent='상세 닫기';close.onclick=()=>clearSelection();
+  $('#detail').replaceChildren(close);$('#detailSection').classList.add('open');
+ }
+}
 function selectVehicleStatus(){window.markerAction='vehicle';}function showNearbyReference(){window.markerAction='virtual';}
 window.MapNavigationEditor={values:()=>['S00000']};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
@@ -37,10 +44,10 @@ class Bounds{constructor(){this.points=[]}extend(p){this.points.push(p)}}
 window.overlays=[];
 const events={addListener(t,n,f){(t.listeners[n]||=[]).push(f)},removeListener(t,n,f){t.listeners[n]=(t.listeners[n]||[]).filter(v=>v!==f)},preventMap(){window.prevented=(window.prevented||0)+1;}};
 class FakeMap{
- constructor(){this.el=$('#map');this.center=new Coord(37.5,127);this.level=4;this.listeners={};this.boundsCalls=0;}
+ constructor(){this.el=$('#map');this.center=new Coord(37.5,127);this.level=4;this.listeners={};this.boundsCalls=0;this.centerWrites=0;}
  getLevel(){return this.level}setLevel(n){this.level=n;this.emit('zoom_changed');}
  getProjection(){if(window.resizeRace?.pending)window.resizeRace.earlyProjections++;const r=this.el.getBoundingClientRect();return{containerPointFromCoords:p=>new Point(r.width/2+(p.lng-this.center.lng)*100,r.height/2-(p.lat-this.center.lat)*100),coordsFromContainerPoint:p=>new Coord(this.center.lat-(p.y-r.height/2)/100,this.center.lng+(p.x-r.width/2)/100)}}
- setCenter(p){if(window.resizeRace?.pending)window.resizeRace.earlyWrites++;this.center=p;this.draw();this.emit('center_changed');}panTo(p){this.setCenter(p)}
+ setCenter(p){if(window.resizeRace?.pending)window.resizeRace.earlyWrites++;this.centerWrites++;this.center=p;this.draw();this.emit('center_changed');}panTo(p){this.setCenter(p)}
  setBounds(){this.boundsCalls++;}emit(n){for(const f of [...this.listeners[n]||[]])f();}
  draw(){for(const o of window.overlays)if(o.map)o.draw();const p=this.getProjection().containerPointFromCoords(window.pinCoord||new Coord(37.5,127));$('#syntheticPin').style.left=p.x+'px';$('#syntheticPin').style.top=p.y+'px';}
 }
@@ -60,8 +67,16 @@ ${marker}
 window.harness={
  show(rows,extra={}){window.pinCoord=new Coord(rows[0].lat,rows[0].lng);showCluster({lat:rows[0].lat,lng:rows[0].lng,clusterRows:rows,clusterLabel:'같은 위치',clusterVehicles:['101'],...extra});state.map.draw();},
  close:closeClusterPanel,clearMap,clearSelection,
+ seedColocated(rows){
+  clearMap();state.mode='BASE_60D';state.currentRows=rows;state.selected=null;window.selection=null;window.simulateDetail=true;
+  const [group]=MapViewPolicy.exactLocations(rows);
+  window.pinCoord=new Coord(group.lat,group.lng);state.map.setCenter(new Coord(group.lat+.05,group.lng+1.35));
+  const content=markerElement(group,null,'store');content.dataset.fixtureRole='exact-location';
+  const overlay=new Overlay({position:window.pinCoord,content,xAnchor:.5,yAnchor:1,zIndex:3});
+  overlay.setMap(state.map);state.overlays=[overlay];
+ },
  seedOverlap(rows){
-  clearMap();state.mode='BASE_60D';state.currentRows=Object.freeze(rows.map(r=>Object.freeze(r)));state.selected=state.currentRows[0];window.selection=null;
+  clearMap();state.mode='BASE_60D';state.currentRows=Object.freeze(rows.map(r=>Object.freeze(r)));state.selected=state.currentRows[0];window.selection=null;window.simulateDetail=false;
   const first=state.currentRows[0],group={lat:first.lat,lng:first.lng,clusterCount:rows.length-1,clusterRows:state.currentRows.slice(1),clusterLabel:'같은 위치',clusterVehicles:['204']};
   window.pinCoord=new Coord(first.lat,first.lng);state.map.setCenter(window.pinCoord);
   const add=(row,z,role)=>{const content=markerElement(row,null,'store');content.dataset.fixtureRole=role;const o=new Overlay({position:window.pinCoord,content,xAnchor:.5,yAnchor:1,zIndex:z});o.setMap(state.map);return o;};
@@ -82,18 +97,19 @@ window.harness={
  finishResizeRace(){mapCamera={releaseFocus(){}};window.resizeRace=null;},
  source:()=>JSON.stringify(state.currentRows),
  pan(x,y){const r=$('#map').getBoundingClientRect(),c=window.pinCoord;state.map.setCenter(new Coord(c.lat+(y-r.height/2)/100,c.lng-(x-r.width/2)/100));},
- stats(){return{active:window.overlays.filter(o=>o.map).length,listeners:Object.values(state.map.listeners).reduce((n,v)=>n+v.length,0),boundsCalls:state.map.boundsCalls,level:state.map.level,selected:window.selection};}
+ stats(){return{active:window.overlays.filter(o=>o.map).length,listeners:Object.values(state.map.listeners).reduce((n,v)=>n+v.length,0),boundsCalls:state.map.boundsCalls,level:state.map.level,selected:window.selection,camera:{lat:state.map.center.lat,lng:state.map.center.lng,level:state.map.level,writes:state.map.centerWrites}};}
 };state.map.draw();`;
 const base=`*{box-sizing:border-box}body{margin:0;font:13px Arial}#approvedSiteHeader{position:fixed;left:0;top:0;width:100%;height:52px}#map{position:absolute;left:20px;top:60px;width:calc(100% - 40px);height:calc(100% - 80px);background:#e8eee7;overflow:hidden}#syntheticPin{position:absolute;transform:translate(-50%,-100%);width:44px;height:48px;background:#275dd8;border-radius:50% 50% 50% 0}button{cursor:pointer}#mobileWorkspace{display:none}@media(max-width:760px){#map{left:0;top:56px;width:100%;height:calc(100% - 56px)}#mobileWorkspace{display:block;position:fixed;left:0;right:0;bottom:0;height:160px;background:#fff}}`;
 const rows=Array.from({length:85},(_,i)=>({customerCode:'S'+String(i).padStart(5,'0'),customerName:i<2?'동일한 매장명':'합성 매장 '+i,vehicle:i%2?'122':'101',address:'합성 주소 '+i,lat:37.5,lng:127}));
 const checks=[],errors=[],requests=[];
-const check=(name,value)=>{assert(value,name);checks.push(name);};
+const check=(name,value,details)=>{assert(value,details?name+' '+JSON.stringify(details):name);checks.push(name);};
 const browser=await chromium.launch({headless:true,executablePath:process.env.OPSMAP_TEST_CHROMIUM||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
 try{
  const page=await browser.newPage({viewport:{width:1180,height:800}});
+ page.setDefaultTimeout(5000);
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',r=>{requests.push(r.request().url());return r.abort();});
- await page.setContent('<!doctype html><html><head><style>section{margin:0 20px}'+base+css+'</style></head><body class="approvedShellCandidate"><header id="approvedSiteHeader"></header><div id="map"><div id="syntheticPin"></div></div><div id="mobileWorkspace" class="collapsed"></div><div id="detailSection"><div id="detail"></div><div id="staffAuxContent"></div></div></body></html>');
+ await page.setContent('<!doctype html><html><head><style>section{margin:0 20px}#detailSection{display:none}#detailSection.open{display:block;position:fixed;right:12px;top:64px;padding:8px;background:#fff;z-index:80}'+base+css+'</style></head><body class="approvedShellCandidate"><header id="approvedSiteHeader"></header><div id="map"><div id="syntheticPin"></div></div><div id="mobileWorkspace" class="collapsed"></div><div id="detailSection"><div id="detail"></div><div id="staffAuxContent"></div></div></body></html>');
  await page.addScriptTag({content:policy});await page.addScriptTag({content:fixture});
  const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))));
  const show=async(data=rows,extra={})=>{await page.evaluate(({data,extra})=>harness.show(data,extra),{data,extra});await settle();};
@@ -106,20 +122,24 @@ try{
  }));
  check('initial batch contains 40 actual customer codes',await page.locator('[data-cluster-code]').count()===40);
  check('code, duplicate name and hocha remain visible',(await page.locator('[data-cluster-code="S00000"]').innerText()).includes('101호차')&&(await page.locator('[data-cluster-code="S00001"]').innerText()).includes('동일한 매장명'));
- let g=await geometry();check('popup starts above the selected pin inside the map',g.bottom<=g.pinY-51&&g.top>=g.mapTop+7&&g.left>=g.mapLeft+7&&g.right<=g.mapRight-7);
+ let g=await geometry();check('popup starts above the selected pin inside the map',g.bottom<=g.pinY-51&&g.top>=g.mapTop+7&&g.left>=g.mapLeft+7&&g.right<=g.mapRight-7,g);
  await page.screenshot({path:path.join(out,'desktop.png')});
  await page.getByRole('button',{name:'더 보기 (40/85)',exact:true}).click();check('second batch expands to 80 codes',await page.locator('[data-cluster-code]').count()===80);
  await page.getByRole('button',{name:'더 보기 (80/85)',exact:true}).click();check('third batch reaches all 85 codes',await page.locator('[data-cluster-code]').count()===85);
  await page.getByRole('searchbox').fill('S00084');check('search reaches a code outside the first batch',await page.locator('[data-cluster-code]').count()===1&&await page.locator('[data-cluster-code="S00084"]').count()===1);
  await page.waitForTimeout(60);g=await geometry();check('search-result height changes retain the pin anchor',Math.abs(g.pinY-g.bottom-52)<2);
  await page.getByRole('searchbox').fill('동일한 매장명');check('equal shop names retain distinct customer-code entries',await page.locator('[data-cluster-code]').count()===2);
- await page.locator('[data-cluster-code="S00001"]').click();let s=await page.evaluate(()=>harness.stats());check('selection calls existing selectStore with original code and focus',s.selected.code==='S00001'&&s.selected.focus===true&&s.active===0&&s.listeners===0);
+ const cameraBefore=await page.evaluate(()=>harness.stats().camera);
+ await page.locator('[data-cluster-code="S00001"]').click();let s=await page.evaluate(()=>harness.stats());
+ assert.deepEqual(s.camera,cameraBefore);
+ check('selection opens the original code without moving the map',s.selected.code==='S00001'&&s.selected.focus===false&&s.active===0&&s.listeners===0);
  await show();g=await geometry();const before=g.left;
  await page.evaluate(()=>{const r=document.querySelector('#map').getBoundingClientRect();harness.pan(r.width/2-80,450)});await page.waitForTimeout(60);g=await geometry();
  check('map movement carries the overlay with its coordinate',Math.abs(g.left-(before-80))<2);
  await page.evaluate(()=>{const r=document.querySelector('#map').getBoundingClientRect();harness.pan(r.width-12,450)});await page.waitForTimeout(60);g=await geometry();check('right-edge clamp keeps the popup inside the map',g.right<=g.mapRight-7&&g.left>=g.mapLeft+7);
  await page.evaluate(()=>harness.pan(12,20));await page.waitForTimeout(60);g=await geometry();check('top-left edge retains the pin tether using below placement',g.below&&g.left>=g.mapLeft+7&&g.top>g.pinY);
  await page.evaluate(()=>harness.pan(-60,300));await settle();check('off-map pin hides its popup',await page.locator('.mapClusterAnchor').evaluate(e=>getComputedStyle(e).visibility==='hidden'));
+ await page.evaluate(()=>harness.pan(570,360));
  await show();await page.mouse.click(5,5);await page.keyboard.press('Escape');s=await page.evaluate(()=>harness.stats());check('global Escape closes unfocused popup and removes SDK listeners',s.active===0&&s.listeners===0);
  await show();await show(rows.slice(0,2).map(r=>({...r,lat:37.6,lng:127.1})));s=await page.evaluate(()=>harness.stats());check('another group replaces the previous overlay',s.active===1&&s.listeners===4);
  await page.getByRole('button',{name:'묶음 목록 닫기'}).click();s=await page.evaluate(()=>harness.stats());check('close button removes popup and listeners',s.active===0&&s.listeners===0);
@@ -136,6 +156,23 @@ try{
  check('mobile popup avoids the bottom workspace and leaves most map visible',g.left>=7&&g.right<=383&&g.top>=63&&g.bottom<=sheetTop-7&&g.height<=(sheetTop-g.mapTop)*.48+1);
  await page.screenshot({path:path.join(out,'mobile.png')});
  await page.getByRole('searchbox').fill('S00084');await page.locator('[data-cluster-code="S00084"]').click();check('mobile lazy-result selection preserves the original customer code',(await page.evaluate(()=>harness.stats())).selected.code==='S00084');
+ await page.evaluate(data=>harness.seedColocated(data),rows.slice(0,2));
+ const mobileCamera=await page.evaluate(()=>harness.stats().camera);
+ const locationPin=page.locator('[data-fixture-role="exact-location"]');
+ await locationPin.click();await page.locator('[data-cluster-code="S00000"]').click();
+ assert.equal((await page.evaluate(()=>harness.stats())).selected.code,'S00000');
+ await page.getByRole('button',{name:'상세 닫기'}).click();
+ await locationPin.click();await page.locator('[data-cluster-code="S00001"]').click();
+ s=await page.evaluate(()=>harness.stats());
+ assert.deepEqual(s.camera,mobileCamera);
+ check('mobile reopens the same pin after closing the first detail and selects the second code',s.selected.code==='S00001'&&s.selected.focus===false&&s.active===1&&s.listeners===0);
+ const shortMap=await page.addStyleTag({content:'#map{top:192px;height:460px}#mobileWorkspace{display:none}'});
+ await page.evaluate(data=>harness.seedColocated(data),rows.slice(0,2).map(row=>({...row,address:'긴 합성 주소 '.repeat(6)})));
+ await locationPin.click();
+ await page.locator('[data-cluster-code="S00001"]').click();
+ check('a short mobile map keeps long co-located rows reachable',(await page.evaluate(()=>harness.stats())).selected.code==='S00001');
+ await shortMap.evaluate(el=>el.remove());
+ await page.getByRole('button',{name:'상세 닫기'}).click();
  await page.setViewportSize({width:1180,height:800});
  const colocated=rows.slice(0,6).map(r=>({...r,vehicle:'204'}));
  await page.evaluate(data=>{harness.seedOverlap(data);harness.clearSelection();},colocated);await page.waitForTimeout(60);

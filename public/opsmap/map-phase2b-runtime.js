@@ -26,7 +26,6 @@
   const dailyRosters=new Map();
   let rosterAuthorized=true, rosterCoordinateRequest=null;
   const usesDeliveryRoster=()=>location.hostname==='freshon-admin-stage-preview-template.onrender.com';
-  let approvedMarkerOrder = new Map();
   const modeViews = { BASE_60D: { vehicles: [], scope: "all", centerFilter: DEFAULT_PERIOD_CENTER }, DATE_ROUTE: { vehicles: [], scope: "all", centerFilter: "" } };
   let periodBasis = "vehicle", periodVehicleScope = "all", periodListLimit = 0;
   let generalAllStores = true;
@@ -60,7 +59,7 @@
     dailySnapshots.clear(); dailyEvidenceReads.clear(); dailyRead = dailyError = dailyView = null;
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
-    storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();approvedMarkerOrder.clear();
+    storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();
     indexedRows=null;pointIndex=null;baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
     searchIndex=searchFlight=stageAddressHashIndex=newAreaObservedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
     SOURCE={vehicles:[]};state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
@@ -72,7 +71,7 @@
     $('#freshnessState').textContent='직원 로그인 필요';$('#periodStoreListCount').textContent='';
   }
   const manualDraft = window.ManualWaypoints?.createDraft();
-  let modeViewInitialized = false, markerFrame = null;
+  let modeViewInitialized = false, markerFrame = null, mapMoving = false;
   let markerSourceVersion=0;
   let markerEntries = new Map(), indexedRows = null, pointIndex = null, detailFrame = null, resizeFrame = null;
   let periodSelectionCache = null;
@@ -1435,11 +1434,19 @@
       for(const type of ['wheel','pointerdown','touchstart'])$('#map').addEventListener(type,userGesture,{passive:true});
       if(window.KakaoMapsAdapter?.geocoder)window.kakaoGeocoder=window.KakaoMapsAdapter.geocoder();
       const listen=(name,fn)=>{kakao.maps.event.addListener(state.map,name,fn);mapHandlers.push([name,fn]);};
-      listen('dragstart',userGesture);
-      listen('zoom_start',()=>{if(Date.now()>=state.suppressMapEventsUntil)userGesture();});
-      listen('zoom_changed',()=>$('#map').classList.toggle('mapZoomFar',state.map.getLevel()>=9));
-      listen('center_changed',scheduleDetailPosition);listen('zoom_changed',scheduleDetailPosition);
-      listen('idle',()=>{if(dateReady&&!markerFrame)markerFrame=requestAnimationFrame(()=>{markerFrame=null;renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});deferMapAddressWork();});});
+      const startMotion=()=>{mapMoving=true;if(markerFrame!==null){cancelAnimationFrame(markerFrame);markerFrame=null;}};
+      listen('dragstart',()=>{startMotion();userGesture();});
+      listen('zoom_start',()=>{startMotion();if(Date.now()>=state.suppressMapEventsUntil)userGesture();});
+      listen('idle',()=>{
+        mapMoving=false;
+        if(!dateReady||markerFrame!==null)return;
+        markerFrame=requestAnimationFrame(()=>{
+          markerFrame=null;
+          if(mapMoving)return;
+          renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});
+          positionTemporaryDistanceLabel();deferMapAddressWork();
+        });
+      });
       listen('click',event=>{if(searchTemporaryClick)return searchTemporaryClick(event);clearSelection();});
       if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});for(const node of [$('#map'),$('#leftPanel'),$('#detailSection'),$('#approvedSiteHeader')])if(node)mapObserver.observe(node);}
       loadBaseMap();window.dispatchEvent(new CustomEvent('map-sdk-ready'));return state.map;
@@ -1472,6 +1479,12 @@
     if($("#detail").contains($("#staffAuxContent")))$("#detailSection").append($("#staffAuxContent"));
     ++state.detailRequestId;
     requestControllers.get("store-detail")?.controller.abort("superseded");
+    for (const overlay of state.overlays) {
+      const marker=overlay.getContent?.();
+      if(!marker?.classList.contains('selected'))continue;
+      const layer=marker.classList.contains('navAssigned')?25:marker.classList.contains('virtual')?15:marker.classList.contains('periodCluster')?3:5;
+      if(overlay.getZIndex?.()!==layer)overlay.setZIndex?.(layer);
+    }
     $$(".marker.selected").forEach((item) => item.classList.remove("selected"));
     state.selected = null;window.dispatchEvent(new CustomEvent("map-store-selected",{detail:{customerCode:null}}));
     $$("[data-search-code]").forEach(button => { button.classList.remove("selected"); button.setAttribute("aria-pressed", "false"); });
@@ -1490,64 +1503,60 @@
     clusterPanel?.remove();clusterPanel=null;
   }
 
-  function anchorClusterPanel(panel,row,keepView){
+  function anchorClusterPanel(panel,row){
     const map=state.map,mapNode=$('#map'),position=new kakao.maps.LatLng(row.lat,row.lng);
     const anchor=document.createElement('div');anchor.className='mapClusterAnchor';anchor.append(panel);
     panel.classList.add('mapClusterPopup');panel.setAttribute('role','dialog');
     // Keep SDK anchor dimensions invariant: Kakao caches initial content size.
     const overlay=new kakao.maps.CustomOverlay({position,content:anchor,clickable:true,xAnchor:0,yAnchor:0,zIndex:60});
-    let frame=null,disposed=false,adjustCamera=true;
+    let frame=null,disposed=false;
     const rect=node=>node?.getClientRects().length&&!node.hidden?node.getBoundingClientRect():null;
     function layout(){
-      frame=null;if(disposed)return;
-      // Resize must settle before projecting or adjusting the popup's camera.
-      mapCamera?.relayout?.();
-      const cameraSize=mapCamera?.dimensions?.();
-      if(cameraSize&&(cameraSize.width!==mapNode.clientWidth||cameraSize.height!==mapNode.clientHeight)){schedule();return;}
+      frame=null;if(disposed||mapMoving)return;
+      const sizeChanged=()=>{
+        const cameraSize=mapCamera?.dimensions?.();
+        return cameraSize&&(cameraSize.width!==mapNode.clientWidth||cameraSize.height!==mapNode.clientHeight);
+      };
+      if(sizeChanged()){
+        mapCamera?.relayout?.();
+        if(sizeChanged()){schedule();return;}
+      }
       const mapRect=mapNode.getBoundingClientRect(),visual=window.visualViewport;
       const viewport={left:visual?.offsetLeft||0,top:visual?.offsetTop||0,width:visual?.width||innerWidth,height:visual?.height||innerHeight};
       const area=window.MapViewPolicy?.cameraFocusViewport({mapRect,viewportRect:viewport,headerRect:rect($('#approvedSiteHeader')),
         occluders:$$('#leftPanel,#detailSection.open,#mobileWorkspace,#manualPinEditor:not([hidden]),.mobileMapControls').map(rect).filter(Boolean)})||mapRect;
       const width=Math.max(0,Math.min(292,area.width-16)),gap=52;
-      panel.style.width=width+'px';panel.style.maxHeight=Math.max(0,Math.min(360,area.height*.48,area.height-gap-16))+'px';
-      overlay.setPosition(position);
-      const height=panel.getBoundingClientRect().height;
       const point=map.getProjection().containerPointFromCoords(position),x=mapRect.left+point.x,y=mapRect.top+point.y;
-      const minX=area.left+8+width/2,maxX=area.right-8-width/2,minY=area.top+8+height+gap,maxY=area.bottom-8;
-      if(adjustCamera&&!keepView){
-        adjustCamera=false;
-        const dx=Math.max(minX,Math.min(maxX,x))-x,dy=Math.max(Math.min(minY,maxY),Math.min(maxY,y))-y;
-        if(Math.abs(dx)>1||Math.abs(dy)>1){
-          const projection=map.getProjection();
-          const center=projection.coordsFromContainerPoint(new kakao.maps.Point(mapRect.width/2-dx,mapRect.height/2-dy));
-          state.suppressMapEventsUntil=Date.now()+700;map.setCenter(center);schedule();return;
-        }
-      }
+      const available=Math.max(y-area.top-gap-8,area.bottom-y-gap-8);
+      panel.style.width=width+'px';panel.style.maxHeight=Math.max(0,Math.min(360,area.height*.48,Math.max(available,140)))+'px';
+      const height=panel.getBoundingClientRect().height;
+      const minX=area.left+8+width/2,maxX=area.right-8-width/2;
       const shift=Math.max(minX-x,Math.min(maxX-x,0));
-      const below=y-height-gap<area.top+8&&y+height+gap<=area.bottom-8;
-      anchor.style.transform=`translate(${Math.round(shift)}px,${below?Math.round(height+gap*2):0}px)`;
+      const above=y-height-gap;
+      const below=above<area.top+8&&(y+height+gap<=area.bottom-8||y-area.top<area.bottom-y);
+      const top=Math.max(area.top+8,Math.min(area.bottom-height-8,below?y+gap:above));
+      anchor.style.transform=`translate(${Math.round(shift)}px,${Math.round(top-above)}px)`;
       anchor.style.setProperty('--cluster-tail-x',Math.max(12,Math.min(width-12,width/2-shift))+'px');
       anchor.classList.toggle('clusterBelow',below);
       // A panned-away pin must not leave a detached list fixed over the map.
       anchor.style.visibility=x<area.left||x>area.right||y<area.top||y>area.bottom||width<160?'hidden':'visible';
     }
-    function schedule(){if(!disposed&&frame===null)frame=requestAnimationFrame(layout);}
-    function resize(){adjustCamera=true;schedule();}
+    function schedule(){if(!disposed&&!mapMoving&&frame===null)frame=requestAnimationFrame(layout);}
     const escape=event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeClusterPanel();}};
     const stop=event=>{event.stopPropagation();kakao.maps.event.preventMap?.();};
     for(const name of ['pointerdown','click','dblclick','wheel','touchstart'])anchor.addEventListener(name,stop,{passive:true});
     const names=['center_changed','zoom_changed','bounds_changed','idle'];
     names.forEach(name=>kakao.maps.event.addListener(map,name,schedule));
-    const observer=window.ResizeObserver?new ResizeObserver(entries=>{if(entries.some(entry=>entry.target===mapNode))adjustCamera=true;schedule();}):null;
+    const observer=window.ResizeObserver?new ResizeObserver(schedule):null;
     observer?.observe(mapNode);observer?.observe(panel);
-    window.addEventListener('resize',resize);window.visualViewport?.addEventListener('resize',resize);
+    window.addEventListener('resize',schedule);window.visualViewport?.addEventListener('resize',schedule);
     document.addEventListener('keydown',escape,true);
     const cleanupEvents=['map-navigation-context-changed','map-navigation-logout','pagehide'];
     cleanupEvents.forEach(name=>window.addEventListener(name,closeClusterPanel));
     clusterPopupCleanup=()=>{
       disposed=true;if(frame!==null)cancelAnimationFrame(frame);observer?.disconnect();
       names.forEach(name=>kakao.maps.event.removeListener(map,name,schedule));
-      window.removeEventListener('resize',resize);window.visualViewport?.removeEventListener('resize',resize);
+      window.removeEventListener('resize',schedule);window.visualViewport?.removeEventListener('resize',schedule);
       document.removeEventListener('keydown',escape,true);cleanupEvents.forEach(name=>window.removeEventListener(name,closeClusterPanel));
       overlay.setMap(null);anchor.remove();
     };
@@ -1575,14 +1584,22 @@
     const heading=document.createElement('div');heading.className='clusterPanelHeading';
     const title=document.createElement('h3');title.textContent=`${row.clusterLabel||'선택한 위치'} · ${members.length}개 매장`;
     const close=document.createElement('button');close.type='button';close.textContent='×';close.setAttribute('aria-label','묶음 목록 닫기');close.onclick=closeClusterPanel;heading.append(title,close);panel.append(heading);
+    const content=sameLocation?document.createElement('div'):panel;
+    if(sameLocation){content.className='clusterPopupContent';panel.append(content);}
     const actions=document.createElement('div');actions.className='clusterPanelActions';
     const vehicles=row.clusterVehicles||row.vehicles||[];
+    const assignments=document.createElement('p');assignments.className='clusterAssignments';
+    if(vehicles.length||row.clusterUnassigned){
+      assignments.textContent=[...vehicles.map(vehicleLabel),...(row.clusterUnassigned?['호차 미확인']:[])].join(' · ');
+    }
     if(vehicles.length===1&&vehicles[0]){
       const filter=document.createElement('button');filter.type='button';filter.textContent=`${vehicles[0]}호차만 보기`;
       filter.onclick=()=>{closeClusterPanel();state.centerFilter='';periodBasis='vehicle';periodVehicleScope='selected';syncPeriodBasis();setSelectedVehicles([vehicles[0]]);refreshVehicleUi(true);};actions.append(filter);
     }
-    const all=document.createElement('button');all.type='button';all.textContent='전체 호차';all.onclick=()=>{state.centerFilter='';$('#periodCenter').value='all';applyVehicleFilter([]);};actions.append(all);panel.append(actions);
-    const query=document.createElement('input');query.type='search';query.placeholder='이 묶음에서 매장 검색';query.setAttribute('aria-label','묶음 매장 검색');panel.append(query);
+    const all=document.createElement('button');all.type='button';all.textContent='전체 호차';all.onclick=()=>{state.centerFilter='';$('#periodCenter').value='all';applyVehicleFilter([]);};actions.append(all);
+    const appendActions=()=>{if(assignments.textContent)content.append(assignments);content.append(actions);};
+    if(!sameLocation)appendActions();
+    const query=document.createElement('input');query.type='search';query.placeholder='이 묶음에서 매장 검색';query.setAttribute('aria-label','묶음 매장 검색');content.append(query);
     // Region clusters keep their zoom action, with co-located stores reachable first.
     if(!sameLocation){
       const groups=[...locations.values()].filter(items=>items.length>1).sort((a,b)=>b.length-a.length);
@@ -1595,8 +1612,9 @@
         panel.append(groupList);
       }
     }
-    const list=document.createElement('div');list.className='clusterMemberList';panel.append(list);
-    const more=document.createElement('button');more.type='button';more.textContent='더 보기';panel.append(more);
+    const list=document.createElement('div');list.className='clusterMemberList';content.append(list);
+    const more=document.createElement('button');more.type='button';more.textContent='더 보기';content.append(more);
+    if(sameLocation)appendActions();
     let limit=40;
     function paint(){
       const q=query.value.trim().toLocaleLowerCase('ko');const matches=members.filter(item=>[item.customerCode,item.customerName,item.address,item.vehicle].join(' ').toLocaleLowerCase('ko').includes(q));
@@ -1606,7 +1624,7 @@
         const code=document.createElement('span');code.className='clusterMemberCode';code.textContent=item.customerCode;
         const name=document.createElement('strong');name.textContent=item.customerName||item.customerCode;
         const meta=document.createElement('small');meta.textContent=[vehicleLabel(item.vehicle||item.baseVehicle),item.address].filter(Boolean).join(' · ');
-        button.append(code,name,meta);button.onclick=()=>{closeClusterPanel();selectStore(item,null,!keepView);};list.append(button);
+        button.append(code,name,meta);button.onclick=()=>{closeClusterPanel();selectStore(item,null,!keepView&&!sameLocation);};list.append(button);
       }
       if(!matches.length){const empty=document.createElement('p');empty.textContent='일치하는 매장이 없습니다.';list.append(empty);}
       more.hidden=matches.length<=limit;more.textContent=`더 보기 (${Math.min(limit,matches.length)}/${matches.length})`;
@@ -1614,7 +1632,7 @@
     query.oninput=()=>{limit=40;paint();};more.onclick=()=>{limit+=40;paint();};
     panel.addEventListener('keydown',event=>{if(event.key==='Escape'){event.stopPropagation();closeClusterPanel();}});
     clusterPanel=panel;paint();
-    if(sameLocation)anchorClusterPanel(panel,{lat:members[0].lat,lng:members[0].lng},keepView);
+    if(sameLocation)anchorClusterPanel(panel,{lat:members[0].lat,lng:members[0].lng});
     else ($('#map').parentElement||document.body).append(panel);
   }
 
@@ -1623,7 +1641,8 @@
     // Let that real pin expose the complete customer-code group as well.
     if(state.mode==='BASE_60D'&&row.customerCode&&Number.isFinite(row.lat)&&Math.abs(row.lat)<=90&&Number.isFinite(row.lng)&&Math.abs(row.lng)<=180){
       const members=[],codes=new Set();
-      for(const item of [row,...state.currentRows]){
+      const candidates=pointIndex?.query({south:row.lat,north:row.lat,west:row.lng,east:row.lng})??state.currentRows;
+      for(const item of [row,...candidates]){
         if(!item.customerCode||item.virtual||item.representative||item.nearbyVehicle||item.clusterCount||item.lat!==row.lat||item.lng!==row.lng)continue;
         const code=String(item.customerCode);if(codes.has(code))continue;codes.add(code);members.push(item);
       }
@@ -1647,29 +1666,43 @@
     if(row.representative)button.dataset.representativeVehicle=row.vehicle;
     button.dataset.coordinateSource=row.coordinateSource||'';
     button.dataset.vehicle = row.vehicle || "";
-    button.title = `${row.vehicle ? vehicleLabel(row.vehicle) + " · " : ""}${row.customerName || row.address || ""}`;
+    const unassigned=state.mode==='BASE_60D'&&kind==='store'&&!row.vehicle&&!row.clusterCount;
+    button.title = `${row.vehicle ? vehicleLabel(row.vehicle) + " · " : unassigned?'호차 미확인 · ':""}${row.customerName || row.address || ""}`;
     button.dataset.masterCheckedAt=row.baseVehicleCheckedAt||'';button.dataset.masterStale=String(row.baseVehicleStale===true);
     button.setAttribute("aria-label", state.mode === "BASE_60D" ? button.title : `${button.title} · ${completed ? "완료" : pending ? "미완료" : "상태 미확인"}`);
     if (row.customerCode && runVisitId(row) === runVisitId(state.selected) || row.memberCodes?.includes(state.selected?.customerCode)) button.classList.add("selected");
     const pinColor=row.clusterCount?(window.MapViewPolicy.regionColors[row.clusterColorKey]||vehicleColor(row.vehicle)):vehicleColor(row.vehicle);
     button.style.setProperty('--pin-color',pinColor);
-    const label = kind === "virtual" ? "임시" : index || (["representative", "nearbyVehicle"].includes(kind) ? row.vehicle : "");
     if (kind === "store" && state.mode === "BASE_60D") button.classList.add("store");
-    button.innerHTML = `<svg class="pinShape" viewBox="0 0 28 34" aria-hidden="true"><path d="M14 1C6.8 1 1 6.8 1 14C1 23 14 34 14 34S27 23 27 14C27 6.8 21.2 1 14 1Z"/></svg><span class="pinNumber">${esc(kind === "store" && state.mode === "BASE_60D" ? row.vehicle || '?' : label)}</span><span class="markerLabel">${esc(button.title)}</span>`;
+    if(unassigned)button.classList.add('pinUnassigned');
+    const group=row.clusterCount;
     button.onclick = () => row.virtual ? showNearbyReference(row) : row.representative || row.nearbyVehicle ? selectVehicleStatus(row, button) : selectStoreMarker(row, button);
-    if (row.clusterCount) {
+    if (group) {
       button.classList.add("periodCluster");
-      button.querySelector(".pinNumber").textContent = String(row.clusterCount);
-      button.setAttribute("aria-label", (row.clusterLabel||"권역")+" · "+row.clusterCount + "개 매장 · 목록 보기");
+      button.dataset.clusterKind=row.clusterKind||'mixed';
+      const assignments=row.clusterVehicles||[];
+      const summary=assignments.slice(0,3).map(vehicleLabel).join(' · ')+(assignments.length>3?' 외 '+(assignments.length-3)+'대':'');
+      button.title=[row.clusterLabel||'권역',summary,row.clusterUnassigned?'호차 미확인 포함':'',group+'개 매장'].filter(Boolean).join(' · ');
+      button.setAttribute('aria-label',button.title+' · 목록 보기');
       button.onclick = () => showCluster(row,{keepView:Boolean(state.virtual)});
     }
     if(kind!=='virtual'&&document.body.classList.contains('approvedShellCandidate')){
-      const pin=document.createElement('div');pin.className=row.clusterCount?'clusterpin':'pin';
+      const pin=document.createElement(group?'div':'span');pin.className=group?'clusterpin':'pin';
       pin.style.setProperty('--pin',pinColor);
-      const number=document.createElement(row.clusterCount?'b':'span');number.textContent=String(row.clusterCount?(row.clusterLabel||'매장'):row.vehicle||'•');pin.append(number);
-      if(!row.clusterCount&&index)pin.title=`${vehicleLabel(row.vehicle)||'호차 정보 없음'} · 착순 ${index}`;
-      if(row.clusterCount){const small=document.createElement('small');small.textContent=row.clusterCount+'개 매장';pin.append(small);}
-      button.classList.add('approvedMarker');button.replaceChildren(pin);
+      if(group){
+        const title=document.createElement('b'),count=document.createElement('small'),codes=row.clusterVehicles||[];
+        title.textContent=row.clusterKind==='mixed'
+          ?codes.slice(0,2).join('·')+(codes.length>2?' +'+(codes.length-2):'')
+          :row.clusterLabel||'매장';
+        count.textContent=group+'곳'+(row.clusterKind==='mixed'?' · 혼합':'');pin.append(title,count);
+      }else{
+        pin.textContent=row.vehicle||(unassigned?'?':'•');
+        if(index)pin.title=`${vehicleLabel(row.vehicle)||'호차 정보 없음'} · 착순 ${index}`;
+      }
+      button.classList.add('approvedMarker');button.append(pin);
+    }else{
+      const label=group|| (kind==='virtual'?'임시':index||(kind==='store'&&state.mode==='BASE_60D'?row.vehicle||'?':row.vehicle||''));
+      button.innerHTML=`<svg class="pinShape" viewBox="0 0 28 34" aria-hidden="true"><path d="M14 1C6.8 1 1 6.8 1 14C1 23 14 34 14 34S27 23 27 14C27 6.8 21.2 1 14 1Z"/></svg><span class="pinNumber">${esc(label)}</span><span class="markerLabel">${esc(button.title)}</span>`;
     }
     if(window.MapNavigationEditor?.values?.().some(code=>markerHasStore(row,code)))button.classList.add('navAssigned');
     return button;
@@ -1696,86 +1729,113 @@
     }));
   }
 
+  const markerPositions=new WeakMap();
+  let markerSignatures=new WeakMap();
+  function markerPosition(row) {
+    const previous=markerPositions.get(row);
+    if(previous?.lat===row.lat&&previous?.lng===row.lng)return previous.point;
+    const point=new kakao.maps.LatLng(row.lat,row.lng);
+    markerPositions.set(row,{lat:row.lat,lng:row.lng,point});return point;
+  }
+
+  function detailedMarkerRows(viewport,extra) {
+    const index=pointIndex.locations ||= MapPeriodUi.spatialIndex(window.MapViewPolicy.exactLocations(pointIndex.valid));
+    const view=state.map.getBounds?.(), sw=view?.getSouthWest(),ne=view?.getNorthEast();
+    if(!sw||!ne)return [];
+    // Cull in map coordinates with padding for the actual marker footprint.
+    const latitudePerPixel=(ne.getLat()-sw.getLat())/Math.max(1,viewport.height);
+    const longitudePadding=(ne.getLng()-sw.getLng())/Math.max(1,viewport.width)*18;
+    const bounds={south:sw.getLat()-latitudePerPixel*30,north:ne.getLat()+latitudePerPixel*10,
+      west:sw.getLng()-longitudePadding,east:ne.getLng()+longitudePadding};
+    const visible=index.query(bounds);
+    if(!extra||extra.lat<bounds.south||extra.lat>bounds.north||extra.lng<bounds.west||extra.lng>bounds.east)return visible;
+    const at=visible.findIndex(row=>row.lat===extra.lat&&row.lng===extra.lng);
+    if(at<0)visible.push(extra);
+    else visible.splice(at,1,...window.MapViewPolicy.exactLocations([...(visible[at].clusterRows||[visible[at]]),extra]));
+    return visible;
+  }
+
+  function refreshMarkerSelection(overlay,entry) {
+    const button=overlay.getContent?.();
+    if(!button?.classList)return;
+    const selected=button.classList.contains('selected'),assigned=button.classList.contains('navAssigned');
+    if(selected!==entry.selected)button.classList.toggle('selected',entry.selected);
+    if(assigned!==entry.assigned)button.classList.toggle('navAssigned',entry.assigned);
+    if(overlay.getZIndex?.()!==entry.zIndex)overlay.setZIndex?.(entry.zIndex);
+  }
+
   function renderStops(rows, options = {}) {
     const started = performance.now();
     const dataChanged = indexedRows !== rows;
     state.currentRows = rows;
-    if(dataChanged&&document.body.classList.contains('approvedShellCandidate'))approvedMarkerOrder=new Map(rows.map((row,index)=>[row.customerCode,index+1]));
     if (!state.map) return;
-    if (dataChanged || !pointIndex) { markerSourceVersion++;indexedRows = rows; pointIndex = MapPeriodUi.spatialIndex(rows); }
+    if (dataChanged || !pointIndex) {
+      markerSourceVersion++;indexedRows=rows;pointIndex=MapPeriodUi.spatialIndex(rows);markerSignatures=new WeakMap();
+    }
     if (!options.viewportOnly) { state.lines.forEach(line => line.setMap(null)); state.lines = []; }
-    const mapBounds = state.map.getBounds?.();
-    const sw = mapBounds?.getSouthWest(), ne = mapBounds?.getNorthEast();
-    const level=state.map.getLevel();
-    const detailedStores=state.mode==='BASE_60D'&&!state.fitRequested&&level<=window.MapViewPolicy.storePinLevel;
-    let valid = pointIndex.valid;
-    // Cluster membership is geographic and independent of panning/viewport size.
-    if (state.mode!=='DATE_ROUTE' && state.selected && Number.isFinite(state.selected.lat) && Number.isFinite(state.selected.lng)
-      && !valid.some(row => row.customerCode === state.selected.customerCode)) valid=[...valid,state.selected];
-    const bounds = new kakao.maps.LatLngBounds();
+    const {valid,byCode}=pointIndex;
+    const level=state.map.getLevel(),base=state.mode==='BASE_60D',fit=state.fitRequested;
+    const mapNode=$('#map');mapNode.classList.toggle('mapZoomFar',level>=9);
+    const viewport=fit?null:{width:mapNode.clientWidth,height:mapNode.clientHeight};
+    const detailedStores=base&&viewport&&level<=window.MapViewPolicy.storePinLevel;
+    const vehicleOverview=base&&level>=10&&periodBasis==='vehicle';
+    const focusedStops=!base&&(state.selectedVehicles.length===1||periodBasis==='driver');
     const navCodes=window.MapNavigationEditor?.values?.().filter(Boolean)||[];
-    // Overview: one selectable pin per hocha, never one synthetic badge that
-    // hides multiple vehicles. Focus: every actual store pin (same-coordinate
-    // stores remain reachable through the co-located store selector).
-    const chosenVehicles = selectedVehicles();
-    const vehicleOverview = state.mode==='BASE_60D' && level>=10 && periodBasis === 'vehicle' &&
-      (periodVehicleScope === 'all' || chosenVehicles.length > 1);
-    const focusedStops = state.mode==='DATE_ROUTE' && (chosenVehicles.length===1 || periodBasis==='driver');
+    const selectedCode=state.selected?.customerCode;
+    const selectedExtra=base&&selectedCode&&!byCode.has(selectedCode)&&Number.isFinite(state.selected.lat)&&Number.isFinite(state.selected.lng)?state.selected:null;
     const projection=state.map.getProjection();
-    const projectPin = row => projection.containerPointFromCoords(new kakao.maps.LatLng(row.lat,row.lng));
-    const viewport = state.fitRequested ? null : {width:$('#map').clientWidth,height:$('#map').clientHeight};
-    const protectedOverviewCodes = new Set([...navCodes, state.selected?.customerCode].filter(Boolean));
-    const representatives = vehicleOverview ? representativeRows(valid) : [];
-    const readyOverview = representatives.length>0;
-    let markerSource = valid;
-    if(readyOverview)markerSource=[...representatives,...valid.filter(row=>protectedOverviewCodes.has(row.customerCode))];
-    else if(detailedStores&&sw&&ne){
-      const marginLat=(ne.getLat()-sw.getLat())*.25,marginLng=(ne.getLng()-sw.getLng())*.25;
-      const nearby=pointIndex.query({south:sw.getLat()-marginLat,north:ne.getLat()+marginLat,west:sw.getLng()-marginLng,east:ne.getLng()+marginLng});
-      const seen=new Set(nearby.map(row=>row.customerCode));
-      markerSource=[...nearby,...valid.filter(row=>protectedOverviewCodes.has(row.customerCode)&&!seen.has(row.customerCode))];
+    const projectPin=row=>projection.containerPointFromCoords(markerPosition(row));
+    const clusterOptions={mode:state.mode,maxMarkers:innerWidth<=760?120:180,margin:base?36:80,
+      grouping:focusedStops?'individual':'territory',protectedCodes:navCodes,sourceVersion:markerSourceVersion};
+    let pins,readyOverview=false;
+    if(detailedStores)pins=detailedMarkerRows(viewport,selectedExtra);
+    else if(vehicleOverview){
+      const overview=pointIndex.overview ||= {representatives:representativeRows(valid),unassigned:valid.filter(row=>!row.vehicle)};
+      readyOverview=overview.representatives.length>0;
+      pins=overview.representatives.filter(row=>{
+        if(!viewport)return true;
+        const {x,y}=projectPin(row);return x>=-36&&x<=viewport.width+36&&y>=-36&&y<=viewport.height+36;
+      });
+      pins.push(...window.MapViewPolicy.stableClusters(overview.unassigned,projectPin,level,selectedCode,viewport,clusterOptions));
+      for(const code of new Set([selectedCode,...navCodes])){
+        const row=byCode.get(code);if(row?.vehicle)pins.push(row);
+      }
+    }else{
+      pins=window.MapViewPolicy.stableClusters(valid,projectPin,level,selectedCode,viewport,clusterOptions);
     }
-    const pins = readyOverview
-      ? markerSource.filter(row => {
-          if (!viewport) return true;
-          if (protectedOverviewCodes.has(row.customerCode)) return true;
-          const p = projectPin(row);
-          return Number.isFinite(p?.x) && Number.isFinite(p?.y) &&
-            p.x >= -80 && p.y >= -80 && p.x <= viewport.width + 80 && p.y <= viewport.height + 80;
-        })
-      : window.MapViewPolicy.stableClusters(markerSource, projectPin,
-          level, state.selected?.customerCode, viewport,
-          {mode:state.mode,maxMarkers:innerWidth<=760?120:180,
-            grouping:detailedStores?'locations':focusedStops?'individual':'territory',
-            protectedCodes:navCodes,sourceVersion:markerSourceVersion});
-    const osanCenter=state.fitRequested&&window.MapNavigationLookup?.registeredCenters?.().find(row=>row.id==='osan');
-    if (state.fitRequested) {
-      if(osanCenter)bounds.extend(new kakao.maps.LatLng(osanCenter.lat,osanCenter.lng));
-      pointIndex.valid.forEach(row => bounds.extend(new kakao.maps.LatLng(row.lat,row.lng)));
-    }
+    if(!detailedStores&&selectedExtra)pins.push(selectedExtra);
+    const markerMode=detailedStores?'STORES':readyOverview?'VEHICLES':'GROUPS';
     const entries = pins.map(row=>{
-      const selected=markerHasStore(row,state.selected?.customerCode), assigned=navCodes.some(code=>markerHasStore(row,code));
-      return {row,selected,assigned,key:row.representative?'vehicle:'+row.vehicle:row.clusterKey||[row.virtual?'virtual':'store',runVisitId(row),row.lat,row.lng].join('|'),
-        fingerprint:JSON.stringify([row.lat,row.lng,row.clusterBounds,row.clusterMemberKey,row.vehicle,row.customerName,row.address,row.status,row.order,row.clusterCount,row.lastDeliveryDate,row.visitCount,row.driverKey,row.clusterLabel,row.clusterColorKey,selected,assigned,Boolean(options.numbered),Boolean(row.virtual),row.representative||row.clusterCount?markerSourceVersion:null,Boolean(row.nearbyVehicle),state.mode,state.rangeStart,state.rangeEnd])};
+      const selected=base?markerHasStore(row,selectedCode):Boolean(row.customerCode&&runVisitId(row)===runVisitId(state.selected));
+      const assigned=navCodes.some(code=>markerHasStore(row,code));
+      let fingerprint=base?markerSignatures.get(row):null;
+      if(!fingerprint){
+        fingerprint=JSON.stringify([row.lat,row.lng,row.clusterBounds,row.clusterMemberKey,row.vehicle,row.customerName,row.address,row.status,row.order,row.clusterCount,row.lastDeliveryDate,row.visitCount,row.driverKey,row.clusterLabel,row.clusterColorKey,row.coordinateSource,row.baseVehicleStale,row.baseVehicleCheckedAt,Boolean(options.numbered),Boolean(row.virtual),row.representative||row.clusterCount?markerSourceVersion:null,Boolean(row.nearbyVehicle),state.mode,state.rangeStart,state.rangeEnd]);
+        if(base)markerSignatures.set(row,fingerprint);
+      }
+      return {row,selected,assigned,fingerprint,zIndex:selected?40:assigned?25:row.virtual?15:row.clusterCount?3:5,
+        key:row.representative?'vehicle:'+row.vehicle:row.clusterKey||[row.virtual?'virtual':'store',runVisitId(row),row.lat,row.lng].join('|')};
     });
-    const reconciled = MapPeriodUi.reconcile(markerEntries, entries, ({row,selected,assigned}) => {
-      const position = new kakao.maps.LatLng(Number(row.lat), Number(row.lng));
-      bounds.extend(position);
+    const planMs=performance.now()-started;
+    const reconciled = MapPeriodUi.reconcile(markerEntries, entries, ({row,zIndex}) => {
       const overlay = new kakao.maps.CustomOverlay({
-        position,
+        position:markerPosition(row),
         clickable: true,
         content: markerElement(row, options.numbered ? Number(row.order) || '—' : null, row.virtual ? "virtual" : row.nearbyVehicle ? "nearbyVehicle" : row.representative ? "representative" : "store"),
         xAnchor: .5,
         yAnchor: 1,
-        zIndex: selected?40:assigned?25:row.virtual?15:row.clusterCount?3:5
+        zIndex
       });
       overlay.setMap(state.map);
       return overlay;
-    }, overlay => overlay.setMap(null));
+    }, overlay => overlay.setMap(null), refreshMarkerSelection);
     markerEntries = reconciled.next;
     state.overlays = [...markerEntries.values()].map(entry=>entry.value);
-    const mobileRoute = innerWidth <= 760 && options.numbered;
-    if ((pointIndex.valid.length || osanCenter) && state.fitRequested && !state.userMovedMap) {
+    const osanCenter=fit&&window.MapNavigationLookup?.registeredCenters?.().find(row=>row.id==='osan');
+    if((valid.length||osanCenter)&&fit&&!state.userMovedMap){
+      const bounds=new kakao.maps.LatLngBounds(),mobileRoute=innerWidth<=760&&options.numbered;
+      if(osanCenter)bounds.extend(markerPosition(osanCenter));
+      for(const row of valid)bounds.extend(markerPosition(row));
       state.suppressMapEventsUntil = Date.now() + 700;
       mapCamera?.relayout();
       state.map.setBounds(bounds, mobileRoute ? 130 : 55, 40, mobileRoute ? 260 : 55, 40);
@@ -1798,8 +1858,8 @@
           active:markerEntries.size,sourceRows:state.currentRows.length});
       });
     }
-    $("#map").setAttribute('data-render-metrics',JSON.stringify({...renderMetrics,sourceRows:rows.length,active:markerEntries.size,
-      markerMode:detailedStores?'STORES':readyOverview?'VEHICLES':'GROUPS',
+    mapNode.setAttribute('data-render-metrics',JSON.stringify({...renderMetrics,sourceRows:rows.length,active:markerEntries.size,
+      markerMode,planMs:+planMs.toFixed(2),
       representedStores:pins.reduce((count,row)=>count+(row.clusterRows?.length||(row.customerCode?1:0)),0)}));
   }
 
@@ -1921,8 +1981,8 @@
     clearSearchSelectedOverlay();
     if(!row.virtual){if(!unifiedSelectionActive)invalidateUnifiedSearch();cancelAddressLookup();closeUnifiedSearchResults();}
     temporaryDetailPoint=null;
-    const keepView=state.mode==='BASE_60D'&&Boolean(state.virtual)&&!focus&&!trace;
-    if(keepView)mapCamera?.releaseFocus();
+    const keepView=!focus&&!trace;
+    if(keepView){state.fitRequested=false;mapCamera?.releaseFocus();}
     ++cameraSelection;
     closeClusterPanel();
     ++state.detailRequestId;requestControllers.get("store-detail")?.controller.abort("superseded");

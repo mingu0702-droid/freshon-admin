@@ -204,15 +204,26 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
       if (result.retry) return rateLimited(result.retry);
       const current = configuration();
       if (!result.valid || !current.ready || !equal(current.hash, config.hash) || !equal(current.secret, config.secret) || !equal(current.id, config.id)) return res.status(401).json({ error: 'LOGIN_FAILED' });
+      const revision = fingerprint;
       const sessionStarted = performance.now(), time = now();
       for (const [key, session] of sessions) if (time >= session.expiresAt || time >= session.idleExpiresAt) sessions.delete(key);
       if (sessions.size >= 1000) return res.status(503).json({ error: 'LOGIN_RETRY_LATER' });
-      const previousKey=sessionKey(req,config);if(previousKey){revoked.add(previousKey);sessions.delete(previousKey);if(sessionStore)await sessionStore.delete(previousKey);}
+      const previousKey = sessionKey(req, config);
+      const replace = previousKey && stageThrottle && typeof sessionStore?.replace === 'function';
+      if (previousKey) {
+        revoked.add(previousKey);
+        sessions.delete(previousKey);
+        if (sessionStore && !replace) await sessionStore.delete(previousKey);
+      }
+      if (stageThrottle && (!configuration().ready || fingerprint !== revision)) return res.status(503).json({ error: 'LOGIN_UNAVAILABLE' });
       const token = crypto.randomBytes(32).toString('base64url');
       const key = crypto.createHmac('sha256', config.secret).update(token).digest('hex');
       const session = { expiresAt: time + policy.maxMs, idleExpiresAt: time + policy.idleMs };
-      if(sessionStore)await sessionStore.set(key,session,fingerprint);
-      const afterSave=configuration();if(!afterSave.ready||!equal(afterSave.hash,config.hash)||!equal(afterSave.secret,config.secret))return res.status(503).json({error:'LOGIN_UNAVAILABLE'});
+      if (replace) await sessionStore.replace(previousKey, key, session, revision);
+      else if (sessionStore) await sessionStore.set(key, session, stageThrottle ? revision : fingerprint);
+      const afterSave = configuration();
+      if (!afterSave.ready || !equal(afterSave.hash, config.hash) || !equal(afterSave.secret, config.secret) ||
+          (stageThrottle && fingerprint !== revision)) return res.status(503).json({ error: 'LOGIN_UNAVAILABLE' });
       sessions.set(key, session);
       res.cookie(STAFF_COOKIE, token, { ...cookieOptions, maxAge: policy.maxMs });
       addStaffTiming(res, 'session', performance.now() - sessionStarted);

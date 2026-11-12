@@ -12,9 +12,31 @@ const env = {
 const key = 'a'.repeat(64), fingerprint = 'b'.repeat(64);
 
 function fixture(config = env) {
-  let at = 1794500000000, revision = 0, state, holdFile, beforeHold, failWrite = false, retryAt = 0, privateRepo = true;
+  let at = 1794500000000, revision = 0, state, failWrite = false, conflicts = 0, retryAt = 0, privateRepo = true;
   const requests = [];
+  const gates = new Map();
   const sha = () => revision.toString(16).padStart(40, '0');
+  function holdNext(step) {
+    let start, release;
+    const started = new Promise(resolve => { start = resolve; });
+    const released = new Promise(resolve => { release = resolve; });
+    gates.set(step, { start, released });
+    return { started, release };
+  }
+  async function pause(step) {
+    const gate = gates.get(step);
+    if (!gate) return;
+    gates.delete(step);
+    gate.start();
+    await gate.released;
+  }
+  function read(options) {
+    if (!state) return new Response(null, {status:404});
+    const etag = '"' + sha() + '"';
+    if (options.headers['If-None-Match'] === etag) return new Response(null, {status:304});
+    const body = Buffer.from(JSON.stringify(state));
+    return Response.json({ sha: sha(), encoding: 'base64', size: body.length, content: body.toString('base64') }, { headers: { etag } });
+  }
   const github = async (url, options) => {
     const path = new URL(url).pathname;
     const target = path.endsWith('/freshon-cache') ? 'repository' : 'session';
@@ -32,33 +54,33 @@ function fixture(config = env) {
     if (method === 'PUT') {
       const data = JSON.parse(options.body);
       assert.equal(data.branch, 'stage/opsmap-manual-pins');
-      assert.equal(data.sha, state ? sha() : undefined);
+      await pause('write');
+      if (conflicts > 0) {
+        conflicts--;
+        return new Response(null, {status:409});
+      }
+      if (data.sha !== (state ? sha() : undefined)) return new Response(null, {status:409});
       if (failWrite) return new Response(null, {status:500});
       state = JSON.parse(Buffer.from(data.content, 'base64').toString());
       revision++;
       return Response.json({});
     }
-    if (holdFile) {
-      const gate = holdFile;
-      holdFile = null;
-      beforeHold();
-      await gate;
-    }
-    if (!state) return new Response(null, {status:404});
-    const etag = '"' + sha() + '"';
-    if (options.headers['If-None-Match'] === etag) return new Response(null, {status:304});
-    const body = Buffer.from(JSON.stringify(state));
-    return Response.json({ sha: sha(), encoding: 'base64', size: body.length, content: body.toString('base64') }, { headers: { etag } });
+    await pause('read');
+    const response = read(options);
+    await pause('response');
+    return response;
   };
   return {
     requests, now: () => at, advance: ms => { at += ms; }, limit: ms => { retryAt = at + ms; },
     makePublic: () => { privateRepo = false; }, rejectWrites: () => { failWrite = true; },
-    holdNextRead() {
-      let release;
-      holdFile = new Promise(resolve => { release = resolve; });
-      return { started: new Promise(resolve => { beforeHold = resolve; }), release };
-    },
-    start: () => createStageStaffSessionStore({ env: config, fetchImpl: github, now: () => at })
+    conflictWrites: count => { conflicts = count; }, holdNextRead: () => holdNext('read'),
+    holdNextResponse: () => holdNext('response'), holdNextWrite: () => holdNext('write'),
+    holdNextAcknowledgment: () => holdNext('acknowledgment'),
+    start: () => createStageStaffSessionStore({ env: config, fetchImpl: github, now: () => at, wait: async ms => {
+      assert.equal(ms, 4000);
+      await pause('acknowledgment');
+      at += ms;
+    } })
   };
 }
 
@@ -145,21 +167,117 @@ test('a failed CAS cannot promote an unpersisted session into the read cache', a
   assert.deepEqual(await store.get(key, fingerprint), saved);
 });
 
-test('Stage HTTP login, restart, rotation and logout respect the durable cache boundary', async t => {
-  const password = 'SYNTHETIC_PASSWORD', origin = env.MAP_STAFF_ORIGIN;
+test('CAS retry is bounded and uses the durable state without resurrecting deleted sessions', async () => {
+  const f = fixture(), a = f.start(), b = f.start(), fresh = 'e'.repeat(64);
+  await a.set(key, future(f), fingerprint);
+  f.conflictWrites(4);
+  await assert.rejects(a.set(fresh, future(f), fingerprint), /STAFF_SESSION_STORE_UNAVAILABLE/);
+  assert.equal(a.stats().casConflicts, 3);
+  assert.equal(await a.get(fresh, fingerprint), null);
+  f.conflictWrites(0);
+  const gate = f.holdNextWrite(), touching = a.touch(key, future(f), fingerprint);
+  await gate.started;
+  try { await b.delete(key); } finally { gate.release(); }
+  assert.equal(await touching, false);
+  assert.equal(a.stats().casConflicts, 4);
+  assert.equal(await f.start().get(key, fingerprint), null);
+});
+
+test('a stale worker cannot restore credentials retired by a successful CAS', async () => {
+  const f = fixture(), a = f.start(), b = f.start(), oldAttempt = 'e'.repeat(64), newKey = 'd'.repeat(64);
+  const rotated = 'c'.repeat(64), session = future(f);
+  await a.set(key, session, fingerprint);
+  const gate = f.holdNextWrite(), stale = a.set(oldAttempt, session, fingerprint);
+  const rejected = assert.rejects(stale, /STAFF_SESSION_STORE_UNAVAILABLE/);
+  await gate.started;
+  try { await b.set(newKey, session, rotated); } finally { gate.release(); }
+  await rejected;
+  assert.equal(a.stats().casConflicts, 1);
+  const writes = a.stats().sessionWrites;
+  await assert.rejects(a.set(oldAttempt, session, fingerprint), /STAFF_SESSION_STORE_UNAVAILABLE/);
+  assert.equal(a.stats().sessionWrites, writes);
+  const restored = f.start();
+  assert.equal(await restored.get(key, fingerprint), null);
+  assert.equal(await restored.get(oldAttempt, fingerprint), null);
+  assert.deepEqual(await restored.get(newKey, rotated), session);
+});
+
+test('a pre-revocation read cannot start a new lease after the revocation is acknowledged', async () => {
+  const f = fixture(), a = f.start(), b = f.start();
+  await a.set(key, future(f), fingerprint);
+  const gate = f.holdNextResponse(), stale = b.get(key, fingerprint);
+  const rejected = assert.rejects(stale, /STAFF_SESSION_STORE_UNAVAILABLE/);
+  await gate.started;
+  try { await a.delete(key); } finally { gate.release(); }
+  await rejected;
+  assert.equal(await b.get(key, fingerprint), null);
+});
+
+async function startHttp(t, f, config) {
+  const store = f.start(), app = express();
+  const auth = createMapStaffAuth({ env: config, now: f.now, sessionStore: store });
+  app.use('/auth', auth.router);
+  app.get('/protected', auth.requireStaff, (_req, res) => res.sendStatus(200));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  return {
+    store,
+    request: (path, cookie, body) => fetch(`http://127.0.0.1:${server.address().port}${path}`, {
+      method: body ? 'POST' : 'GET', headers: { origin: env.MAP_STAFF_ORIGIN, 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
+      body: body && JSON.stringify(body)
+    })
+  };
+}
+
+test('two concurrent Stage HTTP logins both persist when the first CAS loses', { timeout: 10000 }, async t => {
+  const password = 'SYNTHETIC_PASSWORD';
   const config = { ...env, MAP_STAFF_PASSWORD_HASH: await createStaffPasswordHash(password) };
-  const f = fixture(config);
-  async function start() {
-    const app = express(), auth = createMapStaffAuth({ env:config, now:f.now, sessionStore:f.start() });
-    app.use('/auth',auth.router);
-    app.get('/protected',auth.requireStaff,(_req,res)=>res.sendStatus(200));
-    const server = app.listen(0,'127.0.0.1');
-    await new Promise(resolve => server.once('listening',resolve));
-    t.after(() => new Promise(resolve => server.close(resolve)));
-    return (path, cookie, body) => fetch(`http://127.0.0.1:${server.address().port}${path}`, {
-      method:body?'POST':'GET',headers:{origin,'content-type':'application/json',...(cookie?{cookie}:{})},body:body&&JSON.stringify(body)
-    });
+  const f = fixture(config), a = await startHttp(t, f, config), b = await startHttp(t, f, config);
+  const credentials = { id: env.MAP_STAFF_ID, password };
+  const original = await a.request('/auth/login', null, credentials);
+  assert.equal(original.status, 200);
+  f.requests.length = 0;
+  const gate = f.holdNextWrite(), first = a.request('/auth/login', null, credentials);
+  await gate.started;
+  let second;
+  try { second = await b.request('/auth/login', null, credentials); } finally { gate.release(); }
+  const responses = [await first, second];
+  assert.deepEqual(responses.map(response => response.status), [200, 200]);
+  assert.equal(a.store.stats().casConflicts, 1);
+  assert.equal(b.store.stats().casConflicts, 0);
+  assert.equal(f.requests.length, 10);
+  const restored = await startHttp(t, f, config);
+  for (const response of [original, ...responses]) {
+    const cookie = response.headers.get('set-cookie').split(';')[0];
+    assert.equal((await restored.request('/protected', cookie)).status, 200);
   }
+});
+
+test('logout acknowledges only after the other worker can no longer approve its cached session', { timeout: 10000 }, async t => {
+  const password = 'SYNTHETIC_PASSWORD';
+  const config = { ...env, MAP_STAFF_PASSWORD_HASH: await createStaffPasswordHash(password) };
+  const f = fixture(config), a = await startHttp(t, f, config), b = await startHttp(t, f, config);
+  const login = await a.request('/auth/login', null, { id: env.MAP_STAFF_ID, password });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  assert.equal((await b.request('/protected', cookie)).status, 200);
+  const acknowledgment = f.holdNextAcknowledgment();
+  let responded = false;
+  const logout = a.request('/auth/logout', cookie, {}).then(response => { responded = true; return response; });
+  await acknowledgment.started;
+  try {
+    assert.equal((await a.request('/protected', cookie)).status, 401);
+    assert.equal(responded, false);
+  } finally { acknowledgment.release(); }
+  assert.equal((await logout).status, 200);
+  assert.equal((await b.request('/protected', cookie)).status, 401);
+});
+
+test('Stage HTTP login, restart, rotation and logout respect the durable cache boundary', async t => {
+  const password = 'SYNTHETIC_PASSWORD';
+  const config = { ...env, MAP_STAFF_PASSWORD_HASH: await createStaffPasswordHash(password) };
+  const f = fixture(config), start = async () => (await startHttp(t, f, config)).request;
   const login = async (app, pass = password, cookie) => {
     const response = await app('/auth/login',cookie,{id:env.MAP_STAFF_ID,password:pass});
     assert.equal(response.status,200);

@@ -174,7 +174,8 @@
   $('#openOperations').textContent='연결 상태';
   const runHead=route.querySelector('summary');runHead.className='sectiontitle';
   const runHeading=document.createElement('h2');$('#runListTitle').replaceWith(runHeading);runHeading.id='runListTitle';runHeading.textContent='방문 순서';
-  $('#runListCount').className='muted';$('#runListPanel .runFilters').className='segment';
+  const runListPanel=$('#runListPanel'),runFilters=runListPanel.querySelector('.runFilters');
+  $('#runListCount').className='muted';runFilters.className='segment';
   $('#syncOperation').className='';
   $('#roadRoutePanel').style.display='contents';
   const manualShortcut=document.createElement('button');manualShortcut.id='sourceManualShortcut';manualShortcut.textContent='경유 내비';manualShortcut.onclick=()=>{planner.hidden=false;planner.scrollIntoView({block:'start'});};data.append(manualShortcut);
@@ -186,6 +187,14 @@
   for(const section of scroll.querySelectorAll(':scope>section'))if(!section.children.length)section.remove();
   const routeDialog=document.createElement('dialog');routeDialog.id='routeDialog';routeDialog.innerHTML='<div class="modalhead"><div><span class="eyebrow">운행 조회</span><h2>운행 조회 조건</h2></div><button id="closeRoutes" aria-label="운행 조건 닫기">✕</button></div>';
   document.body.append(routeDialog);const dailyForm=$('#dailyControls');dailyForm.replaceChildren();dailyForm.hidden=false;routeDialog.append(dailyForm);
+  const mobileRouteControls=window.matchMedia('(max-width:760px)');
+  function syncRouteDialogFilters(){
+    const inDialog=routeDialog.open&&bridge.state.mode==='DATE_ROUTE'&&mobileRouteControls.matches;
+    if(inDialog&&runFilters.parentElement!==routeDialog)dailyForm.before(runFilters);
+    if(!inDialog&&runFilters.parentElement!==runListPanel)runListPanel.prepend(runFilters);
+  }
+  routeDialog.addEventListener('close',syncRouteDialogFilters);
+  mobileRouteControls.addEventListener('change',syncRouteDialogFilters);
   function formRow(...nodes){const row=document.createElement('div');row.className='row';row.append(...nodes);return row;}
   function formLabel(text){const label=document.createElement('label');label.textContent=text;return label;}
   dailyForm.append(formLabel('조회 기간'),formRow($('#rangeStart'),$('#rangeEnd')),formRow($('#applyPeriod'),$('#recent60')),formLabel('호차 · 기사 조회'));
@@ -198,7 +207,7 @@
   const routeHelp=document.createElement('p');routeHelp.className='hint';routeHelp.textContent='선택 배송일의 확정호차와 방문 순서를 표시합니다.';dailyForm.append(routeHelp);
   const advancedRoutes=document.createElement('details');advancedRoutes.className='sourceAdvancedRoutes';advancedRoutes.innerHTML='<summary>호차 단일 선택</summary>';advancedRoutes.append($('#operationVehicle'),$('#vehicleTrigger'));dailyForm.append(advancedRoutes);
   $('#sourceRoutePicker').hidden=true;document.body.append(routeDialog);$('#closeRoutes').onclick=()=>routeDialog.close();
-  $('#chooseRoutes').onclick=()=>{if(bridge.state.mode!=='DATE_ROUTE')return;syncModeControls(true);routeDialog.showModal();};
+  $('#chooseRoutes').onclick=()=>{if(bridge.state.mode!=='DATE_ROUTE')return;syncModeControls(true);routeDialog.showModal();syncRouteDialogFilters();};
   const periodButton=document.createElement('button');periodButton.id='openPeriodQuery';periodButton.textContent='기간별 조회';context.append(periodButton);
   periodButton.onclick=()=>{if(bridge.state.mode!=='BASE_60D')return;dailyForm.hidden=false;syncModeControls(false,true);routeDialog.showModal();};
   for(const id of ['applyPeriod','recent60']){const button=$('#'+id),run=button.onclick;button.onclick=event=>{routeDialog.close();return run?.(event);};}

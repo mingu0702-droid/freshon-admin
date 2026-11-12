@@ -66,30 +66,38 @@
     return { start: new Date(Date.parse(end + 'T00:00:00Z') - 89 * 86400000).toISOString().slice(0,10), end };
   }
   function spatialIndex(rows) {
-    const bins = new Map(), valid = rows.filter(row => Number.isFinite(row.lat) && Number.isFinite(row.lng));
-    for (const row of valid) {
-      const key = Math.floor(row.lat * 10) + ':' + Math.floor(row.lng * 10);
-      if (!bins.has(key)) bins.set(key, []);
-      bins.get(key).push(row);
+    const bins=new Map(), byCode=new Map(), valid=[];
+    for(const row of rows){
+      if(!Number.isFinite(row.lat)||!Number.isFinite(row.lng))continue;
+      valid.push(row);
+      if(row.customerCode)byCode.set(row.customerCode,row);
+      const y=Math.floor(row.lat*20),x=Math.floor(row.lng*20);
+      let columns=bins.get(y);
+      if(!columns){columns=new Map();bins.set(y,columns);}
+      let bucket=columns.get(x);
+      if(!bucket){bucket=[];columns.set(x,bucket);}
+      bucket.push(row);
     }
-    return { valid, query(bounds) {
+    return { valid, byCode, query(bounds) {
       if (!bounds) return valid;
       const {south,north,west,east} = bounds;
-      if (![south,north,west,east].every(Number.isFinite) || east < west) return valid;
-      const result = [];
-      for (const [key, bucket] of bins) {
-        const [lat,lng] = key.split(':').map(Number);
-        if ((lat+1)/10 < south || lat/10 > north || (lng+1)/10 < west || lng/10 > east) continue;
-        for (const row of bucket) if (row.lat >= south && row.lat <= north && row.lng >= west && row.lng <= east) result.push(row);
+      if (![south,north,west,east].every(Number.isFinite) || east < west || north < south) return valid;
+      const result=[],y0=Math.floor(south*20),y1=Math.floor(north*20),x0=Math.floor(west*20),x1=Math.floor(east*20);
+      for(const [y,columns] of bins){
+        if(y<y0||y>y1)continue;
+        for(const [x,bucket] of columns){
+          if(x<x0||x>x1)continue;
+          for(const row of bucket)if(row.lat>=south&&row.lat<=north&&row.lng>=west&&row.lng<=east)result.push(row);
+        }
       }
       return result;
     }};
   }
-  function reconcile(previous, entries, create, remove) {
+  function reconcile(previous, entries, create, remove, update) {
     const next = new Map(); let created = 0, removed = 0, reused = 0;
     for (const entry of entries) {
       const old = previous.get(entry.key);
-      if (old && old.fingerprint === entry.fingerprint) { next.set(entry.key,old); reused++; }
+      if (old && old.fingerprint === entry.fingerprint) { update?.(old.value,entry); next.set(entry.key,old); reused++; }
       else { if (old) { remove(old.value); removed++; } next.set(entry.key,{fingerprint:entry.fingerprint,value:create(entry)}); created++; }
     }
     for (const [key, old] of previous) if (!next.has(key)) { remove(old.value); removed++; }

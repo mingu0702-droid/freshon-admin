@@ -72,7 +72,7 @@ test('Chromium desktop and mobile: one assignment result for the list, pins, fil
     browser=await chromium.launch({channel:'chrome',headless:true});
     for(const width of [1440,390])await t.test(width+'px',async()=>{
       outage=0;requests=[];latestError=false;
-      const page=await browser.newPage({viewport:{width,height:900}});
+      const page=await browser.newPage({viewport:{width,height:width===390?844:900}});
       snapshotRequests.length=0;
       await page.addInitScript(()=>document.addEventListener('DOMContentLoaded',()=>{document.body.dataset.mapStaffState='authenticated';}));
       const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -101,10 +101,23 @@ test('Chromium desktop and mobile: one assignment result for the list, pins, fil
       assert.deepEqual((await summary()).lines,[[37+1/400,37+3/400],[37+3/400,37]]);
       await page.evaluate(()=>fixtureMap.lines.find(x=>x.map).click());
       assert.match(await page.evaluate(()=>fixtureMap.info),/S105001.*08:00:00.*S105003.*09:00:00/);
+      if(width===390){
+        await page.locator('#chooseRoutes').click();
+        await page.locator('#routeDialog[open]').waitFor();
+      }
       for(const [filter,n] of [['COMPLETED',4],['PENDING',1],['ALL',5]]){
-        await page.evaluate(f=>document.querySelector('[data-run-filter="'+f+'"]').click(),filter);
+        const host=width===390?'#routeDialog':'#runListPanel';
+        await page.locator(`${host} [data-run-filter="${filter}"]`).click();
         view=await summary();assert.equal(view.list.length,n);assert.equal(view.located,n);
         assert.deepEqual(view.pin.sort(),view.list.sort());
+        assert.deepEqual(await page.evaluate(()=>MapUiLocalBridge.state.selectedVehicles),['105']);
+      }
+      if(width===390){
+        await page.keyboard.press('Escape');
+        await page.locator('#routeDialog').waitFor({state:'hidden'});
+        await page.locator('#runListPanel [data-run-filter="ALL"]').waitFor();
+        assert.equal(await page.locator('[data-run-filter="ALL"]').count(),1);
+        assert.equal(await page.locator('#runListPanel [data-run-filter="ALL"]').getAttribute('aria-pressed'),'true');
       }
       await vehicle('999');assert.equal((await summary()).count,'0착');
       await vehicle('105');
