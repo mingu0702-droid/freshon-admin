@@ -3,6 +3,7 @@
 import crypto from 'node:crypto';
 import {normalizeFixedMasterCustomerKey} from './fixedMasterCustomerKey.js';
 import {canonicalFixedMasterVehicle, isProjectedFixedMasterVehicle} from './fixedMasterVehicle.js';
+import {projectFixedWeekdayValue} from '../public/opsmap/fixed-delivery-weekdays.mjs';
 const masterKey = value => !!normalizeFixedMasterCustomerKey(value);
 const pagingKeys = new Set(['totalCnt','totalPages','isPaging','sortName','sortOrder','page','size','number','numberOfElements','first','last','empty']);
 // Counts only: never include customer identifiers, payload values, or raw rows
@@ -36,12 +37,16 @@ export function projectFixedVehicles(rows) {
     if (!masterKey(customerCode)) continue;
     const primary = canonicalFixedMasterVehicle(row.mainCarSeqNm);
     const baseVehicle = /^\d+$/.test(primary) ? String(Number(primary)) : isProjectedFixedMasterVehicle(primary) ? primary : '';
+    const previous = result.get(customerCode);
     const weekdays = Object.fromEntries(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day => {
-      const vehicle = canonicalFixedMasterVehicle(row['carSeq' + day + 'Nm']);
-      return [day, /^\d+$/.test(vehicle) ? String(Number(vehicle)) : ''];
+      const key = 'carSeq' + day + 'Nm';
+      const observed = projectFixedWeekdayValue(row[key], Object.hasOwn(row, key));
+      const value = day === 'Sun' && !/^\d+$/.test(observed) ? '' : observed;
+      // Separate weekday evidence from the primary route. Duplicate source
+      // rows may agree on the primary route and still disagree about a day.
+      return [day, previous && previous.weekdays[day] !== value ? '' : value];
     }));
     const baseVehicleGroup=({'011':'osan','012':'yeongnam','013':'honam'})[row.logCd]||'';
-    const previous = result.get(customerCode);
     const conflict = previous && (previous.baseVehicleState === 'CONFLICT' || previous.baseVehicle !== baseVehicle || previous.baseVehicleGroup&&baseVehicleGroup&&previous.baseVehicleGroup!==baseVehicleGroup);
     const explicitEmpty = row.mainCarSeqNm === null || typeof row.mainCarSeqNm === 'string' && !primary;
     result.set(customerCode, {customerCode, baseVehicle: conflict ? '' : baseVehicle,

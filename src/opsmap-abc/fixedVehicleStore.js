@@ -5,6 +5,7 @@ import path from 'node:path';
 import {gunzipSync} from 'node:zlib';
 import {isFixedMasterCustomerKey} from '../fixedMasterCustomerKey.js';
 import {canonicalFixedMasterVehicle} from '../fixedMasterVehicle.js';
+import {isStoredFixedWeekdayValue} from '../../public/opsmap/fixed-delivery-weekdays.mjs';
 export const FIXED_SCHEMA = 1;
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const fail = code => { throw Object.assign(new Error(code), {code}); };
@@ -22,7 +23,7 @@ export function fixedEnvelope(data, checkedAt) {
       || !['VERIFIED_MASTER','UNASSIGNED','CONFLICT'].includes(state) || (state==='VERIFIED_MASTER') !== !!vehicle
       || row.baseVehicleEmptyVerified!==undefined && (row.baseVehicleEmptyVerified!==true || state!=='UNASSIGNED')) fail('FIXED_STORE_INVALID');
     seen.add(code);
-    const days = row.weekdays ? DAYS.map(day => {const v=String(row.weekdays[day]||'');if(!vehicleKey(v))fail('FIXED_STORE_INVALID');return v;}) : null;
+    const days = row.weekdays ? DAYS.map(day => {const v=String(row.weekdays[day]||'');if(!isStoredFixedWeekdayValue(v))fail('FIXED_STORE_INVALID');return v;}) : null;
     const tuple=[code, vehicle, group, state, days];
     if(row.baseVehicleEmptyVerified)tuple.push(true);
     return tuple;
