@@ -92,7 +92,7 @@
 .approvedShellCandidate .marker.navAssigned .pin { outline:3px solid #f59e0b66; }
 .approvedShellCandidate #map .marker.store:not(.periodCluster) { width:26px!important; min-width:26px!important; height:30px!important; }
 .approvedShellCandidate #map .marker.store:not(.periodCluster) .pin {
-  width:24px; height:24px; font-size:10px; border-width:1px; box-shadow:0 1px 3px #152a4533;
+  width:24px; height:24px; border-width:1px; box-shadow:0 1px 3px #152a4533;
 }
 .approvedShellCandidate #map .marker.store.selected:not(.periodCluster) .pin { outline:3px solid #2c64da46; }
 .approvedShellCandidate #map .marker.store .pin:after { border-top-width:6px; bottom:-5px; }
