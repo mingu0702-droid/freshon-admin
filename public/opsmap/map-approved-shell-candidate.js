@@ -249,13 +249,14 @@
     for(const raw of [row.dispatchCenterCode,row.centerId,row.centerCode,row.centerName,typeof row.center==='string'?row.center:row.center?.id,typeof row.center==='object'?row.center?.name:null]){const name=names[String(raw||'').trim()];if(name)return name;}
     return '';
   }
+  const sourceRouteLabel=vehicle=>/\d$/.test(vehicle)?`${vehicle}호차`:vehicle==='보류'?'오산보류':vehicle;
   function sourceVehicleLabel(row,daily,vehicle){
-    if(daily)return vehicle?`${vehicle}호차`:'호차 확인 필요';
-    const label=vehicle?`${vehicle}호차`:({UNASSIGNED:'호차 미지정',NOT_IN_MASTER:'기준표 미등록',CONFLICT:'기준호차 충돌'}[row.baseVehicleState]||'호차 확인 필요');
-    return label;
+    if(vehicle)return sourceRouteLabel(vehicle);
+    if(!daily&&row.baseVehicleState==='UNASSIGNED'&&row.baseVehicleEmptyVerified===true)return '호차 미지정';
+    return !daily&&({NOT_IN_MASTER:'기준표 미등록',CONFLICT:'기준호차 충돌'}[row.baseVehicleState])||'호차 확인 필요';
   }
   function sourceCard(button,row,daily){
-    if(!row)return;const vehicle=String((daily?row.vehicle:Object.hasOwn(row,'baseVehicle')?row.baseVehicle:row.vehicle)||'').trim();const key=JSON.stringify([row.customerName,row.customerCode,vehicle,row.status,daily,row.address,row.customerAddress,row.baseVehicleState,row.baseVehicleSource,row.baseVehicleVersion,row.baseVehicleStale,row.baseVehicleGroup,row.baseVehicleCheckedAt,row.dispatchCenterCode,row.centerCode,row.centerId,row.center,row.centerName]);if(button.dataset.sourceCard===key)return;
+    if(!row)return;const vehicle=String((daily?row.vehicle:Object.hasOwn(row,'baseVehicle')?row.baseVehicle:row.vehicle)||'').trim();const key=JSON.stringify([row.customerName,row.customerCode,vehicle,row.status,daily,row.address,row.customerAddress,row.baseVehicleState,row.baseVehicleEmptyVerified,row.baseVehicleSource,row.baseVehicleVersion,row.baseVehicleStale,row.baseVehicleGroup,row.baseVehicleCheckedAt,row.dispatchCenterCode,row.centerCode,row.centerId,row.center,row.centerName]);if(button.dataset.sourceCard===key)return;
     button.dataset.sourceCard=key;button.classList.add('storeitem');
     button.title=[row.customerCode,row.customerName,row.address||row.customerAddress].filter(Boolean).join(' · ');button.replaceChildren();
     const icon=document.createElement('span');icon.className='icon';icon.textContent=daily?String(row.order||'—'):'•';icon.setAttribute('aria-hidden','true');
@@ -271,7 +272,7 @@
     const keys=[...new Set(bridge.state.currentRows.map(row=>Phase2bUi.vehicleColorKey(row.vehicle)))].sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
     const key=JSON.stringify([bridge.state.mode,keys]);if(key===vehicleLegendKey)return;vehicleLegendKey=key;legend.replaceChildren();
     const heading=document.createElement('strong');heading.textContent=bridge.state.mode==='DATE_ROUTE'?'실제 호차':'기준호차';legend.append(heading);
-    for(const vehicle of keys){const item=document.createElement('span');item.dataset.vehicle=vehicle;const dot=document.createElement('i');dot.style.background=Phase2bUi.vehicleColor(vehicle);item.append(dot,vehicle?`${vehicle}호차`:'호차 미확인');legend.append(item);}
+    for(const vehicle of keys){const item=document.createElement('span');item.dataset.vehicle=vehicle;const dot=document.createElement('i');dot.style.background=Phase2bUi.vehicleColor(vehicle);item.append(dot,vehicle?sourceRouteLabel(vehicle):'호차 미확인');legend.append(item);}
     const clusters=document.createElement('span');clusters.className='clusterLegend';clusters.textContent='숫자는 매장 수입니다';legend.append(clusters);bridge.setGeneralLegend(legend.innerHTML);
   }
   loadMore.onclick=()=>{if(bridge.isDataReady()&&bridge.state.currentRows.length&&!$('#periodStoreList').querySelector('[data-period-store]')){visibleStoreLimit=5;$('#togglePeriodList').click();sourceSync();return;}visibleStoreLimit+=5;if($('#periodStoreList').querySelectorAll('[data-period-store]').length<visibleStoreLimit&&!$('#periodListMore').hidden)$('#periodListMore').click();sourceSync();};

@@ -1307,13 +1307,20 @@
     const list = $('#vehicleList'), groups = ['osan','yeongnam','honam','unknown'];
     const names = {osan:'오산',yeongnam:'영남',honam:'호남',unknown:'미확인'};
     const items = $$('#vehicleList .vehicleItem');
+    const osanNewLast = (a,b) => Number(a==='오산신규')-Number(b==='오산신규');
+    const keepNewLast = state.mode==='BASE_60D';
     const groupKey = item => vehicleListGroup(item.dataset.group);
+    const vehicleKey = item => item.querySelector('input').value;
     const hired = item => /^용/.test(item.querySelector('input').value.trim());
     const sortKey = item => item.querySelector('input').value.trim().replace(/^용(?:차)?[\s-]*/, '');
-    items.sort((a,b) => groups.indexOf(groupKey(a)) - groups.indexOf(groupKey(b)) || Number(hired(a)) - Number(hired(b)) || naturalCompare(sortKey(a),sortKey(b)) || naturalCompare(a.querySelector('input').value,b.querySelector('input').value));
+    items.sort((a,b) => (keepNewLast?osanNewLast(vehicleKey(a),vehicleKey(b)):0) || groups.indexOf(groupKey(a)) - groups.indexOf(groupKey(b)) ||
+      Number(hired(a)) - Number(hired(b)) || naturalCompare(sortKey(a),sortKey(b)) || naturalCompare(vehicleKey(a),vehicleKey(b)));
     list.querySelectorAll('.vehicleGroupHeading').forEach(heading => heading.remove());
     let previous = '';
     for (const item of items) {
+      if(keepNewLast&&vehicleKey(item)==='오산신규'){
+        item.dataset.listGroup='osan-new';list.append(item);continue;
+      }
       const group = groupKey(item), key = group + (hired(item) ? '-hired' : '');
       item.dataset.listGroup = key;
       if (key !== previous) {
@@ -1324,7 +1331,7 @@
     }
     for (const id of ['#vehicle','#mobileVehicle','#operationVehicle','#mobileBaseVehicle']) {
       const select = $(id), value = select.value;
-      [...select.options].filter(option => option.value).sort((a,b) => naturalCompare(a.value,b.value)).forEach(option => select.add(option));
+      [...select.options].filter(option => option.value).sort((a,b) => (id==='#mobileBaseVehicle'?osanNewLast(a.value,b.value):0)||naturalCompare(a.value,b.value)).forEach(option => select.add(option));
       select.value = value;
     }
     filterVehicleList();
@@ -3188,7 +3195,7 @@
     const mobileFilter=$('#mobileBaseVehicle');
     let multiple=mobileFilter.querySelector('option[value="multiple"]');
     if(selected.length>1){
-      if(!multiple){multiple=new Option('', 'multiple');multiple.disabled=true;mobileFilter.add(multiple);}
+      if(!multiple){multiple=new Option('', 'multiple');multiple.disabled=true;mobileFilter.add(multiple,mobileFilter.querySelector('option[value="오산신규"]'));}
       multiple.textContent=`${selected.length}개 호차 선택`;
     }
     mobileFilter.value=selected.length>1?'multiple':selected[0]||'';
@@ -3205,7 +3212,7 @@
     if (state.mode === "BASE_60D" && selected.length) periodVehicleScope = "selected";
     $("#selectedVehicleCount").textContent = selected.length ? `${selected.length}대` : "선택 없음";
     $("#vehicleModeLabel").textContent = selected.length === 1 ? "해당 호차 집중모드" : selected.length > 1 ? "선택 호차 권역 비교" : "기준일 전체 권역";
-    $("#mapStatusTitle").textContent = selected.length === 1 ? `${selected[0]}호 ${state.selectedDate} 권역` : selected.length > 1 ? `${selected.length}대 호차 권역 비교` : "기준일 전체 권역";
+    $("#mapStatusTitle").textContent = selected.length === 1 ? `${vehicleLabel(selected[0])} ${state.selectedDate} 권역` : selected.length > 1 ? `${selected.length}대 호차 권역 비교` : "기준일 전체 권역";
     $("#vehicleChips").className = selected.length ? "" : "vehiclePlaceholder";
     $("#vehicleChips").textContent = selected.length ? `${selected.length}개 호차 선택` : "전체 호차";
     renderVehicleQuickFilter(selected);
@@ -3288,7 +3295,7 @@
     const period = state.mode === "BASE_60D";
     if (period) {
       setPeriodViewState(generalAllStores && snapshotReadState === 'error' ? 'error' : stores.length ? "ready" : "empty");
-      const subject = periodBasis === "driver" ? ($("#periodDriver").selectedOptions[0]?.textContent || "전체 기사") : periodVehicleScope === "all" ? "전체 호차" : selected.length === 1 ? selected[0] + "호" : selected.length ? selected.length + "개 호차" : "호차 선택 없음";
+      const subject = periodBasis === "driver" ? ($("#periodDriver").selectedOptions[0]?.textContent || "전체 기사") : periodVehicleScope === "all" ? "전체 호차" : selected.length === 1 ? vehicleLabel(selected[0]) : selected.length ? selected.length + "개 호차" : "호차 선택 없음";
       const range = !OpsmapDaily.day(state.rangeEnd)||!OpsmapDaily.day(state.rangeStart)?'조회 기간 미확인':
         state.rangeStart === daysBefore(state.rangeEnd, 89) ? "최근 90일" : state.rangeStart.slice(5) + " ~ " + state.rangeEnd.slice(5);
       $("#periodIdentity").textContent = `${subject} · ${generalAllStores && periodBasis === 'vehicle' ? '저장된 전체 매장' : range} · ${stores.length}개 매장`;

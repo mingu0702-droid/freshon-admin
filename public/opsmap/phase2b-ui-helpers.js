@@ -19,6 +19,8 @@
   }
   function vehicleColor(value) {
     const key = vehicleColorKey(value);
+    if (key === '오산신규') return '#087f83';
+    if (key === '오산보류' || key === '보류') return '#7950a2';
     if (!key) return "#64748b";
     let hash = 2166136261;
     for (const character of key) { hash ^= character.codePointAt(0); hash = Math.imul(hash, 16777619) >>> 0; }
