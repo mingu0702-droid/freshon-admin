@@ -31,7 +31,8 @@ import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from './opsmapDurableGeneration.js';
 import {mountOpsmapScheduledRun,opsmapScheduleConfig} from './opsmapScheduledRun.js';
-import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
+import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, stageFixedMasterScope,
+  stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
 
@@ -344,7 +345,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       return staffStoreDetail(response?.data,{customerCode:code,date:null});
     }});
   const app = express(), router = express.Router();
-  mountOpsmapScheduledRun(app,{env:stage,now});
+  mountOpsmapScheduledRun(app,{env:stage,now,readFixedScope:()=>stageFixedMasterScope(validation.active())});
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
     const refresh=()=>{

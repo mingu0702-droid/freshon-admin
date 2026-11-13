@@ -17,19 +17,11 @@ import {atomicCoverageWrite} from '../src/shadowCoverage/fileStore.js';
 import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from '../src/opsmapDurableGeneration.js';
 import {opsmapScheduleConfig,publishOpsmapScheduledRun,verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
 import {SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
-import {createStageFixedMasterSource, stageFixedMasterBaseline, stageFixedMasterStorage,
+import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixedMasterBaseline, stageFixedMasterStorage,
   stageFixedMasterSyncEnabled, syncStageFixedMaster} from '../src/stageFixedMasterSync.js';
 
 const appRoot = fileURLToPath(new URL('../',import.meta.url));
 const env = process.env;
-
-async function readFixedMasterPrivate(file, maxBytes) {
-  if (!path.isAbsolute(file || '')) throw Error('FIXED_MASTER_DAILY_LEDGER');
-  const root=await privateCoverageDirectory(path.dirname(file),appRoot);
-  const resolved=await fs.realpath(path.join(root,path.basename(file)));
-  if(path.dirname(resolved)!==root) throw Error('FIXED_MASTER_DAILY_LEDGER');
-  return boundedRead(resolved,maxBytes);
-}
 
 function report(result) {
   console.log(JSON.stringify({component:'opsmap-data-sync',state:result.state,revision:result.revision ?? null,
@@ -146,23 +138,20 @@ async function buildWorker({mode,settingsFile,durable,recordSource}) {
 
 async function run() {
   const [mode,settingsFile,...backfillDates] = process.argv.slice(2);
-  if (!['bootstrap','once','watch','scheduled','fixed-scheduled'].includes(mode) || !path.isAbsolute(settingsFile || '')) throw Error('OPSMAP_SYNC_USAGE');
+  if (!['bootstrap','once','watch','scheduled','fixed-scheduled'].includes(mode) ||
+      (mode==='fixed-scheduled'?settingsFile!==undefined:!path.isAbsolute(settingsFile || ''))) throw Error('OPSMAP_SYNC_USAGE');
   if(mode==='scheduled'||mode==='fixed-scheduled'){
     if(env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||backfillDates.length)throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
     let input='';
-    for await(const chunk of process.stdin){input+=chunk;if(Buffer.byteLength(input)>2048)throw Error('OPSMAP_SCHEDULE_RECEIPT');}
-    const receipt=verifyOpsmapScheduleReceipt(JSON.parse(input),opsmapScheduleConfig(env));
-    const scopeFile=env.OPSMAP_STAGE_FIXED_MASTER_SCOPE_FILE || settingsFile;
-    if (stageFixedMasterSyncEnabled(env) && path.isAbsolute(scopeFile)) {
+    for await(const chunk of process.stdin){input+=chunk;if(Buffer.byteLength(input)>FIXED_MASTER_SCOPE_INPUT_LIMIT)throw Error('OPSMAP_SCHEDULE_RECEIPT');}
+    const job=JSON.parse(input);
+    const receipt=verifyOpsmapScheduleReceipt(job?.receipt ?? job,opsmapScheduleConfig(env));
+    if (stageFixedMasterSyncEnabled(env)) {
       try {
         const store=stageFixedMasterStorage({env,write:true});
         const source=createStageFixedMasterSource({env});
         const baseline=stageFixedMasterBaseline({env,store});
-        const result=await syncStageFixedMaster({store,receipt,readMaster:source,loadBaseline:baseline.load,
-          async readLedger() {
-            const config=JSON.parse(await readFixedMasterPrivate(scopeFile,32_768));
-            return readFixedCoordinateLedger(await readFixedMasterPrivate(config.ledgerFile,8*1024*1024),config.ledgerSha256);
-          }});
+        const result=await syncStageFixedMaster({store,receipt,scope:job?.fixedScope,readMaster:source,loadBaseline:baseline.load});
         console.log(JSON.stringify({component:'opsmap-fixed-master-sync',runId:receipt.runId,state:result.state,version:result.version}));
       } catch(error) {
         const code=error.code || error.message || '';

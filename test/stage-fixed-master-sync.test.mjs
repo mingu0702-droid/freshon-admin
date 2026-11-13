@@ -2,11 +2,9 @@ import assert from 'node:assert/strict';
 import {createHash,createHmac} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
-import {tmpdir} from 'node:os';
-import path from 'node:path';
 import test from 'node:test';
 import express from 'express';
-import {createStageDailyFixedMasterReader,createStageFixedMasterSource,stageFixedMasterStorage,syncStageFixedMaster}
+import {createStageDailyFixedMasterReader,createStageFixedMasterSource,stageFixedMasterScope,stageFixedMasterStorage,syncStageFixedMaster}
   from '../src/stageFixedMasterSync.js';
 import {fixedEnvelope} from '../src/fixedVehicleStore.js';
 import {projectFixedVehicles} from '../src/fixedVehicleProjection.js';
@@ -28,7 +26,10 @@ function receipt(t) {
   return {version:1,origin,triggerId,principal:executor,date,issuedAt,slot,runId,
     signature:createHmac('sha256',hmac).update(JSON.stringify([1,origin,triggerId,executor,issuedAt,slot,date,runId])).digest('hex')};
 }
-const ledger={sha256:sha('ledger'),records:Object.fromEntries(codes.map(code=>[code,[{point:{}}]]))};
+const ledger={sha256:sha('ledger'),records:{[codes[0]]:[{point:{}}]}};
+const active={expiresAt:Infinity,ledger,generation:sha('verified registry'),
+  registry:new Map(codes.map(code=>[code,{hasPoint:true}])),counts:{registered:codes.length}};
+const scope=stageFixedMasterScope(active);
 const raw=(route='101')=>codes.map((code,i)=>({estCd:code,logCd:centers[i],mainCarSeqNm:i===0?route:'102',
   carSeqMonNm:'용09',carSeqTueNm:'오산신규',carSeqSatNm:'122',carSeqSunNm:'122'}));
 function source(route) {
@@ -55,7 +56,7 @@ const reader=baseValue=>({load:async()=>baseValue??null});
 test('complete daily projection is scoped, single-flight, and a no-change day verifies without a new object',async ()=>{
   let tick=start, calls=0;
   const store=memory(), baseline=base(), now=()=>tick;
-  const doRun=(readMaster)=>syncStageFixedMaster({store,receipt:receipt(tick),now,readLedger:async()=>ledger,
+  const doRun=(readMaster)=>syncStageFixedMaster({store,receipt:receipt(tick),now,scope,
     readMaster,loadBaseline:reader(baseline).load});
   let begin, finish;
   const entered=new Promise(r=>{begin=r;}), gate=new Promise(r=>{finish=r;});
@@ -64,8 +65,10 @@ test('complete daily projection is scoped, single-flight, and a no-change day ve
   assert.equal((await doRun(async()=>assert.fail('duplicate called source'))).state,'BUSY');
   finish();
   const first=await flight;
+  assert.equal(stageFixedMasterScope({...active,expiresAt:start}),null);
   assert.equal(first.state,'PUBLISHED');
   assert.equal(first.matchedCount,3);
+  assert.equal(first.missingCount,0);
   assert.equal((await doRun(async()=>assert.fail('same day called source'))).state,'ALREADY_VERIFIED');
   assert.equal(calls,1);
   const latest=createStageDailyFixedMasterReader({store,baseline:reader(baseline)});
@@ -86,6 +89,9 @@ test('complete daily projection is scoped, single-flight, and a no-change day ve
   assert.equal(store.files.size,2);
   const after=await cache.get([codes[0]]);
   assert.equal(after.meta.checkedAt,new Date(tick).toISOString());
+  assert.equal(after.meta.sourceObservedAt,new Date(tick).toISOString());
+  assert.equal(after.meta.scheduledRunId,receipt(tick).runId);
+  assert.equal(after.meta.registryGeneration,scope.generation);
   assert.equal(after.meta.sourceAsOf,null);
 });
 
@@ -93,7 +99,7 @@ test('partial pages, authorization errors and restart preserve the last publishe
   const store=memory();
   let tick=start;
   const now=()=>tick, baseline=base();
-  const doRun=readMaster=>syncStageFixedMaster({store,receipt:receipt(tick),now,readLedger:async()=>ledger,readMaster,
+  const doRun=readMaster=>syncStageFixedMaster({store,receipt:receipt(tick),now,scope,readMaster,
     loadBaseline:reader(baseline).load});
   await doRun(async()=>source('122'));
   tick+=24*hour;
@@ -110,6 +116,8 @@ test('partial pages, authorization errors and restart preserve the last publishe
   const data=await view.get([codes[0]]);
   assert.equal(data.data[0].baseVehicle,'122');
   assert.equal(data.meta.stale,true);
+  assert.equal(data.meta.scheduledLastSuccessAt,new Date(start).toISOString());
+  assert.equal(data.meta.sourceObservedAt,new Date(start).toISOString());
   assert.equal(data.meta.lastError,'FIXED_MASTER_FORBIDDEN');
   assert.equal(data.meta.scheduledLastFailureAt,new Date(tick-hour).toISOString());
 });
@@ -117,7 +125,7 @@ test('partial pages, authorization errors and restart preserve the last publishe
 test('a corrupt active object cannot hide a recoverable previous generation after restart',async ()=>{
   const store=memory();
   let tick=start;
-  const doRun=route=>syncStageFixedMaster({store,receipt:receipt(tick),now:()=>tick,readLedger:async()=>ledger,
+  const doRun=route=>syncStageFixedMaster({store,receipt:receipt(tick),now:()=>tick,scope,
     readMaster:async()=>source(route),loadBaseline:reader(base()).load});
   const first=await doRun('122');
   tick+=24*hour;
@@ -125,7 +133,11 @@ test('a corrupt active object cannot hide a recoverable previous generation afte
   const name='fixed-master-daily-v1/projection-'+second.version+'.json';
   store.files.get(name).value.rows[0][1]='999';
   const reopened=createStageDailyFixedMasterReader({store,baseline:reader(null)});
-  assert.equal((await reopened.load()).version,first.version);
+  const cache=createFixedVehicleCache({store:reopened,now:()=>tick,readOnly:true});
+  const restored=await cache.get([codes[0]]);
+  assert.equal(restored.meta.version,first.version);
+  assert.equal(restored.meta.scheduledRunId,null);
+  assert.equal(restored.meta.sourceObservedAt,null);
   assert.equal(reopened.status().state,'READ_FAILED');
   assert.equal(store.files.get(head).value.current.version,second.version);
 });
@@ -134,12 +146,51 @@ test('an unresolved known assignment never overwrites the approved baseline',asy
   const store=memory(), baseline=base(), result=source();
   result.data[0].baseVehicle='';
   result.data[0].baseVehicleState='UNASSIGNED';
-  await assert.rejects(syncStageFixedMaster({store,receipt:receipt(start),now:()=>start,readLedger:async()=>ledger,
+  await assert.rejects(syncStageFixedMaster({store,receipt:receipt(start),now:()=>start,scope,
     readMaster:async()=>result,loadBaseline:reader(baseline).load}),/FIXED_MASTER_DAILY_ASSIGNMENT_GAP/);
   const reopened=createStageDailyFixedMasterReader({store,baseline:reader(baseline)});
   assert.equal((await reopened.load()).version,baseline.version);
   assert.equal(store.files.size,1);
   assert.equal(reopened.status().state,'FAILED');
+});
+
+test('the verified registry includes stores without ledger overrides and records actual source absence',async ()=>{
+  const store=memory();
+  const absentCode='S10004';
+  const activeRegistry=new Map([...active.registry,[absentCode,{hasPoint:true}]]);
+  const all=stageFixedMasterScope({...active,registry:activeRegistry,counts:{registered:activeRegistry.size}});
+  const result=await syncStageFixedMaster({store,receipt:receipt(start),now:()=>start,scope:all,
+    async readMaster(requested){
+      assert.deepEqual([...requested],[...codes,absentCode]);
+      return source();
+    },loadBaseline:reader(base()).load});
+  assert.equal(result.ledgerCount,4);
+  assert.equal(result.matchedCount,3);
+  assert.equal(result.missingCount,1);
+  const master=createStageDailyFixedMasterReader({store,baseline:reader(null)});
+  const cache=createFixedVehicleCache({store:master,now:()=>start,readOnly:true});
+  const values=await cache.get([codes[2],absentCode]);
+  assert.equal(values.data[0].baseVehicle,'102');
+  assert.equal(values.data[1].baseVehicleState,'NOT_IN_MASTER');
+  assert.equal(values.data[1].baseVehicle,'');
+});
+
+test('a delayed scan has a bounded lease and completion across midnight still counts once that day',async ()=>{
+  const store=memory();
+  let tick=Date.parse('2026-11-12T14:50:00Z');
+  const now=()=>tick;
+  const doRun=readMaster=>syncStageFixedMaster({store,receipt:receipt(tick),now,scope,readMaster,loadBaseline:reader(null).load});
+  let entered, complete;
+  const ready=new Promise(resolve=>{entered=resolve;});
+  const hold=new Promise(resolve=>{complete=resolve;});
+  const first=doRun(async()=>{entered();await hold;return source();});
+  await ready;
+  tick+=35*60_000;
+  assert.equal((await doRun(()=>assert.fail('the first run still owns the lease'))).state,'BUSY');
+  complete();
+  assert.equal((await first).state,'PUBLISHED');
+  tick+=hour;
+  assert.equal((await doRun(()=>assert.fail('a success already completed today'))).state,'ALREADY_VERIFIED');
 });
 
 test('the source reads only the scoped FreshOn form with at most one authorized login recovery',async ()=>{
@@ -159,7 +210,7 @@ test('the source reads only the scoped FreshOn form with at most one authorized 
       const index=centers.indexOf(params.get('logCd'));
       return Response.json({data:[{...raw()[index],totalCnt:1}]});
     }});
-  const result=await read({...ledger,records:{[codes[1]]:ledger.records[codes[1]]}});
+  const result=await read(new Set([codes[1]]));
   assert.equal(calls,4);
   assert.equal(logins,1);
   assert.equal(result.meta.uniqueCustomers,3);
@@ -176,14 +227,14 @@ test('an unstable final page and an oversized source reply cannot certify a new 
     if (query.get('page')==='0') return Response.json({data:rows});
     return Response.json({data:[{estCd:'S11001',totalCnt:1001,mainCarSeqNm:++tailReads%2?'122':'202'}]});
   }});
-  await assert.rejects(read(ledger),/FIXED_MASTER_SOURCE_CHANGED/);
+  await assert.rejects(read(new Set(codes)),/FIXED_MASTER_SOURCE_CHANGED/);
   assert.equal(tailReads,4);
   let calls=0;
   const oversized=createStageFixedMasterSource({env:{...env,FRESHON_COOKIE:'fixture'},async fetchImpl(){
     calls++;
     return new Response('never consumed',{headers:{'content-length':'9000000'}});
   }});
-  await assert.rejects(oversized(ledger),/FIXED_MASTER_DAILY_PAGE_LIMIT/);
+  await assert.rejects(oversized(new Set(codes)),/FIXED_MASTER_DAILY_PAGE_LIMIT/);
   assert.equal(calls,1);
 });
 
@@ -207,13 +258,13 @@ test('private GitHub guard exposes no Production or legacy-file writes',async ()
   assert.throws(()=>stageFixedMasterStorage({env:{...env,RENDER_SERVICE_ID:'different'},write:true}),/APPROVAL/);
 });
 
-test('the existing Stage receipt route runs fixed-only when the separate scope is configured',async t=>{
-  const app=express(), settings=path.join(tmpdir(),'fixture-fixed-scope.json'), logs=[];
-  let child, input='';
-  mountOpsmapScheduledRun(app,{env:{...env,OPSMAP_STAGE_FIXED_MASTER_SCOPE_FILE:settings},now:()=>start,
+test('the existing Stage receipt route passes only the verified registry scope to a fixed-only child',async t=>{
+  const app=express(), logs=[];
+  let child, input='', approvedScope=null;
+  mountOpsmapScheduledRun(app,{env,now:()=>start,readFixedScope:()=>approvedScope,
     log:value=>logs.push(JSON.parse(value)),launch(exec,args,options) {
       assert.equal(exec,process.execPath);
-      assert.deepEqual(args.slice(1),['fixed-scheduled',settings]);
+      assert.deepEqual(args.slice(1),['fixed-scheduled']);
       assert.equal(options.stdio[1],'pipe');
       child=new EventEmitter();
       child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();
@@ -227,8 +278,11 @@ test('the existing Stage receipt route runs fixed-only when the separate scope i
     headers:{'content-type':'application/json'},body:JSON.stringify(value)});
   const signed=receipt(start);
   assert.equal((await post({...signed,signature:sha('bad')})).status,403);
+  assert.equal((await post(signed)).status,503);
+  assert.equal(child,undefined);
+  approvedScope=scope;
   assert.equal((await post(signed)).status,202);
-  assert.deepEqual(JSON.parse(input),signed);
+  assert.deepEqual(JSON.parse(input),{receipt:signed,fixedScope:scope});
   child.stdout.write('secret fixture ignored\n'+JSON.stringify({component:'opsmap-fixed-master-sync',state:'PUBLISHED',
     runId:signed.runId,version:sha('version'),private:'ignored'})+'\n');
   child.emit('close',0);

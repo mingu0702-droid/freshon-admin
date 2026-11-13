@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import express from 'express';
 import {syncDigest,syncHash} from './opsmapSyncGeneration.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
-import {stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
+import {FIXED_MASTER_WORKER_LIMIT, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 
 export const OPSMAP_SCHEDULED_ROUTE='/internal/opsmap/scheduled-sync';
 const maxDelay=10*60_000;
@@ -45,11 +45,10 @@ export function opsmapScheduleConfig(env) {
     executorHash:env.OPSMAP_STAGE_SYNC_EXECUTOR_SHA256};
 }
 
-export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Date.now,log=console.log}={}) {
+export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Date.now,log=console.log,readFixedScope}={}) {
   const settings=env.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE;
-  const fixedSettings=env.OPSMAP_STAGE_FIXED_MASTER_SCOPE_FILE || settings;
   const fullJob=path.isAbsolute(settings || '');
-  const fixedJob=stageFixedMasterSyncEnabled(env) && path.isAbsolute(fixedSettings || '');
+  const fixedJob=stageFixedMasterSyncEnabled(env) && typeof readFixedScope==='function';
   if (env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
       env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||
       env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1'||
@@ -61,8 +60,13 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     try {receipt=verifyOpsmapScheduleReceipt(req.body,{...opsmapScheduleConfig(env),now});}
     catch {return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});}
     if (child) return res.status(409).json({error:'OPSMAP_SCHEDULE_BUSY'});
+    let scope=null;
+    if (fixedJob) {
+      try {scope=readFixedScope();} catch { /* No verified scope. */ }
+      if (!scope && !fullJob) return res.status(503).json({error:'FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE'});
+    }
     let processHandle;
-    const args=fullJob ? [jobFile,'scheduled',settings] : [jobFile,'fixed-scheduled',fixedSettings];
+    const args=fullJob ? [jobFile,'scheduled',settings] : [jobFile,'fixed-scheduled'];
     try {processHandle=launch(process.execPath,args,{env,stdio:['pipe',fixedJob?'pipe':'ignore','pipe'],windowsHide:true});}
     catch {return res.status(503).json({error:'OPSMAP_SCHEDULE_LAUNCH'});}
     child=processHandle;
@@ -87,7 +91,7 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       });
     }
     processHandle.stderr.on('data',chunk=>{if(diagnostic.length<100) diagnostic=(diagnostic+chunk).slice(0,100);});
-    const timeout=setTimeout(()=>{timedOut=true;processHandle.kill();},maxRuntime+(fixedJob&&fullJob?10*60_000:0));
+    const timeout=setTimeout(()=>{timedOut=true;processHandle.kill();},(fullJob?maxRuntime:0)+(fixedJob?FIXED_MASTER_WORKER_LIMIT:0));
     timeout.unref();
     const release=(exitCode,error)=>{
       if(child!==processHandle)return;
@@ -102,7 +106,7 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       release(code,code===0?null:/^[A-Z][A-Z_0-9]{1,95}$/.test(value)?value:'OPSMAP_SYNC_FAILED');
     });
     processHandle.stdin.on('error',()=>{});
-    processHandle.stdin.end(JSON.stringify(req.body));
+    processHandle.stdin.end(JSON.stringify(fixedJob?{receipt:req.body,fixedScope:scope}:req.body));
     return res.status(202).json({state:'ACCEPTED',runId:receipt.runId});
   });
 }

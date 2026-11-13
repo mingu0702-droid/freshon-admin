@@ -23,11 +23,29 @@ const fail = code => Object.assign(Error(code), {code});
 const failureCode = e => safeCode.test(e?.code || e?.message || '') ? e.code || e.message : 'FIXED_MASTER_DAILY_FAILED';
 const validRef = ref => ref && hash.test(ref.version) && hash.test(ref.rowsHash) && hash.test(ref.ledgerSha256) &&
   validTime(ref.checkedAt) && Number.isSafeInteger(ref.count) && ref.count > 0 && ref.count <= 10_000;
-const scopeCodes = ledger => new Set(Object.entries(ledger?.records||{}).filter(([,history])=>history.at(-1)?.point).map(([code])=>code));
+const minute = 60_000;
+const customerCode = /^[A-Z]\d{1,20}$/;
 
 export const FIXED_MASTER_DAILY_TTL = 26 * 3600000;
+export const FIXED_MASTER_WORKER_LIMIT = 45 * minute;
+export const FIXED_MASTER_SCOPE_INPUT_LIMIT = 256 * 1024;
 export const stageFixedMasterSyncEnabled = env => env.RENDER_SERVICE_ID === STAGE_SERVICE &&
   env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED === '1';
+
+function validateFixedMasterScope(scope) {
+  const {generation, ledgerSha256, codes} = scope || {};
+  if (!hash.test(generation || '') || !hash.test(ledgerSha256 || '') || !Array.isArray(codes) ||
+      !codes.length || codes.length > 10_000 || codes.some(code => typeof code !== 'string' || !customerCode.test(code)) ||
+      new Set(codes).size !== codes.length) throw fail('FIXED_MASTER_DAILY_SCOPE');
+  return {generation, ledgerSha256, codes};
+}
+
+export function stageFixedMasterScope(active) {
+  if (active?.expiresAt !== Infinity || !(active.registry instanceof Map) ||
+      active.registry.size !== active.counts?.registered) return null;
+  return validateFixedMasterScope({generation:active.generation, ledgerSha256:active.ledger?.sha256,
+    codes:[...active.registry.keys()]});
+}
 
 export function stageFixedMasterStorage({env=process.env, fetchImpl=fetch, write=false}={}) {
   if (!stageFixedMasterSyncEnabled(env) || env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED !== '1' ||
@@ -76,9 +94,9 @@ async function verifiedObject(store, ref) {
   return envelope;
 }
 
-function verifyProjection(result, ledger, baseline, now) {
+function verifyProjection(result, scope, baseline, observedAt) {
   const {data,meta}=result || {};
-  if (!hash.test(ledger?.sha256 || '') || !ledger.records || !Array.isArray(data) || meta?.readHttp!==200 ||
+  if (!Array.isArray(data) || meta?.readHttp!==200 ||
       meta.centers?.length!==centers.length || !Number.isSafeInteger(meta.sourceRows) ||
       meta.centers.some((item,i)=>item.center!==centers[i] || !Number.isSafeInteger(item.declaredRows) ||
         item.declaredRows<1 || item.declaredRows!==item.sourceRows || item.pages!==Math.ceil(item.sourceRows/1000)) ||
@@ -88,26 +106,29 @@ function verifyProjection(result, ledger, baseline, now) {
       new Set(data.map(row=>row.customerCode)).size!==data.length) {
     throw fail('FIXED_MASTER_DAILY_INCOMPLETE');
   }
-  const scope=scopeCodes(ledger);
-  if (!scope.size || scope.size>10_000) throw fail('FIXED_MASTER_DAILY_LEDGER');
   const rows=data.filter(row=>scope.has(row.customerCode)), byCode=new Map(rows.map(row=>[row.customerCode,row]));
-  if (rows.some(row=>row.baseVehicleState==='CONFLICT') || baseline?.rows.some(row=>scope.has(row[0])&&
-      row[3]==='VERIFIED_MASTER'&&(!byCode.has(row[0])||byCode.get(row[0]).baseVehicleState!=='VERIFIED_MASTER'&&
-      byCode.get(row[0]).baseVehicleEmptyVerified!==true))) throw fail('FIXED_MASTER_DAILY_ASSIGNMENT_GAP');
-  const coverage={ledgerCount:scope.size, matchedCount:rows.length, sourceRows:meta.sourceRows,
+  if (rows.some(row=>row.baseVehicleState==='CONFLICT') || baseline?.rows.some(row=>{
+    if (!scope.has(row[0]) || row[3]!=='VERIFIED_MASTER') return false;
+    const incoming=byCode.get(row[0]);
+    return !incoming || incoming.baseVehicleState!=='VERIFIED_MASTER'&&incoming.baseVehicleEmptyVerified!==true;
+  })) throw fail('FIXED_MASTER_DAILY_ASSIGNMENT_GAP');
+  const coverage={ledgerCount:scope.size, matchedCount:rows.length, missingCount:scope.size-rows.length, sourceRows:meta.sourceRows,
     centers:meta.centers.map(({center,sourceRows,pages,duplicateCustomerRows})=>({center,sourceRows,pages,
       duplicateCustomerRows:Number.isSafeInteger(duplicateCustomerRows)?duplicateCustomerRows:null}))};
-  return {envelope:fixedEnvelope(rows,nowISO(now())),coverage};
+  return {envelope:fixedEnvelope(rows,observedAt),coverage};
 }
 
 // Only the existing signed Stage scheduler calls this. The reservation and
 // verified pointer share a CAS; a late process cannot publish over a new run.
-export async function syncStageFixedMaster({store, receipt, readLedger, readMaster, loadBaseline, now=Date.now}) {
+export async function syncStageFixedMaster({store, receipt, scope: input, readMaster, loadBaseline, now=Date.now}) {
   if (!hash.test(receipt?.runId || '') || receipt.date!==kstDay(now())) throw fail('FIXED_MASTER_DAILY_RECEIPT');
+  const scope=validateFixedMasterScope(input), codes=new Set(scope.codes);
   const {head,sha}=await readHead(store);
   const old=head.attempt, sameDay=old?.date===receipt.date, runId=receipt.runId;
-  if (head.lastSuccess?.date===receipt.date) return {state:'ALREADY_VERIFIED',runId};
-  if (old?.state==='RUNNING' && now()-Date.parse(old.startedAt)<20*60000) return {state:'BUSY',runId};
+  const today=head.lastSuccess?.date===receipt.date ||
+    validTime(head.lastSuccess?.at)&&kstDay(Date.parse(head.lastSuccess.at))===receipt.date;
+  if (today) return {state:'ALREADY_VERIFIED',runId};
+  if (old?.state==='RUNNING' && now()-Date.parse(old.startedAt)<FIXED_MASTER_WORKER_LIMIT+5*minute) return {state:'BUSY',runId};
   if (old?.runId===runId || sameDay && (old.count>=2 || old.state==='FAILED'&&noRetry.has(head.lastFailure?.code))) {
     return {state:'RETRY_HELD',runId};
   }
@@ -120,17 +141,24 @@ export async function syncStageFixedMaster({store, receipt, readLedger, readMast
     await store.write(headFile,{...current.head,...fields},current.sha);
   }
   try {
-    const ledger=await readLedger();
     const saved=head.current ? await verifiedObject(store,head.current) : null;
     const fallback=loadBaseline ? await Promise.resolve().then(loadBaseline).catch(error=>{if(!saved)throw error;return null;}) : null;
     const approved=fallback ? validateFixedEnvelope(fallback,{materialize:false}).envelope : null;
     const baseline=approved && (!saved || approved.checkedAt>saved.checkedAt) ? approved : saved;
-    const {envelope,coverage}=verifyProjection(await readMaster(ledger),ledger,baseline,now);
+    let result;
+    try {
+      result=await readMaster(codes);
+    } catch (error) {
+      if (error.name==='TimeoutError') throw fail('FIXED_MASTER_DAILY_TIMEOUT');
+      throw error;
+    }
+    const sourceObservedAt=nowISO(now());
+    const {envelope,coverage}=verifyProjection(result,codes,baseline,sourceObservedAt);
     if (baseline && Date.parse(envelope.checkedAt)<=Date.parse(baseline.checkedAt)) throw fail('FIXED_STORE_DAILY_SUPERSEDED');
     const rowsHash=digest(envelope.rows);
     const unchanged=head.current?.rowsHash===rowsHash;
-    const current=unchanged ? {...head.current,ledgerSha256:ledger.sha256} : {version:envelope.version,
-      checkedAt:envelope.checkedAt,rowsHash,ledgerSha256:ledger.sha256,count:envelope.count};
+    const current=unchanged ? {...head.current,ledgerSha256:scope.ledgerSha256} : {version:envelope.version,
+      checkedAt:envelope.checkedAt,rowsHash,ledgerSha256:scope.ledgerSha256,count:envelope.count};
     if (!unchanged) {
       const file=objectFile(current), present=await store.read(file);
       if (!present.value) {
@@ -141,7 +169,8 @@ export async function syncStageFixedMaster({store, receipt, readLedger, readMast
     }
     const at=nowISO(now());
     await finish({current,previous:unchanged?head.previous:head.current,attempt:{...attempt,state:'VERIFIED'},
-      lastSuccess:{runId,date:receipt.date,at,version:current.version,coverage}});
+      lastSuccess:{runId,date:receipt.date,at,version:current.version,
+        coverage:{...coverage,sourceObservedAt,registryGeneration:scope.generation}}});
     return {state:unchanged?'VERIFIED_NOOP':'PUBLISHED',runId,version:current.version,checkedAt:at,...coverage};
   } catch (error) {
     const code=failureCode(error);
@@ -167,20 +196,23 @@ export function createStageDailyFixedMasterReader({store, baseline}) {
         ({head}=await readHead(store));
         if (head.current) {
           const initial=await loadBaseline().catch(()=>null);
-          if (initial && initial.checkedAt>head.lastSuccess.at) {
+          if (initial && initial.checkedAt>(head.lastSuccess.coverage?.sourceObservedAt||head.lastSuccess.at)) {
             info={state:'APPROVED_BASELINE',lastError:head.attempt.state==='FAILED'?head.lastFailure?.code||null:null,
               lastFailureAt:head.lastFailure?.at||null};
             return initial;
           }
           if (cached?.version!==head.current.version) cached=await verifiedObject(store,head.current);
-          info={state:head.attempt.state,version:cached.version,lastSuccessAt:head.lastSuccess.at,
+          const success=head.lastSuccess;
+          info={state:head.attempt.state,version:cached.version,lastSuccessAt:success.at,runId:success.runId,
+            sourceObservedAt:validTime(success.coverage?.sourceObservedAt)?success.coverage.sourceObservedAt:null,
+            registryGeneration:hash.test(success.coverage?.registryGeneration || '')?success.coverage.registryGeneration:null,
             lastFailureAt:head.lastFailure?.at || null,lastError:head.attempt.state==='FAILED'?head.lastFailure?.code || null:null};
           return cached;
         }
         info={state:head.attempt?.state||'NOT_PUBLISHED',lastError:head.lastFailure?.code||null,
           lastFailureAt:head.lastFailure?.at||null};
       } catch (e) {
-        info={...info,state:'READ_FAILED',lastError:failureCode(e)};
+        info={state:'READ_FAILED',lastError:failureCode(e)};
         if (cached) return cached;
         if (head?.previous) {
           cached=await verifiedObject(store,head.previous).catch(()=>null);
@@ -196,7 +228,8 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
   if (!stageFixedMasterSyncEnabled(env) || env.FRESHON_BASE_URL && new URL(env.FRESHON_BASE_URL).origin!==MIS) {
     throw fail('FIXED_MASTER_STAGE_SOURCE_SCOPE');
   }
-  const limit=AbortSignal.timeout(10*60000);
+  // The verified three-center read took 33 minutes at the existing sequential page rate.
+  const limit=AbortSignal.timeout(FIXED_MASTER_WORKER_LIMIT-5*minute);
   let cookie=env.FRESHON_COOKIE || '', attemptedLogin=false, calls=0;
   const reader=createFixedVehicleReader({
     verifyLastPage:true,
@@ -251,7 +284,7 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
     },
     extractRows:value=>value?.data
   });
-  return ledger => reader({signal:limit,customerCodes:scopeCodes(ledger)});
+  return codes => reader({signal:limit,customerCodes:codes});
 }
 
 export function stageFixedMasterBaseline({env,store}) {
