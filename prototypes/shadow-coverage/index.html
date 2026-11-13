@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>배송 음영권역 · 운영지도</title>
+  <link rel="stylesheet" href="/theme.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="음영권역 시작 화면"><span class="brand-mark" aria-hidden="true">◈</span>운영지도</a>
+    <span class="top-separator" aria-hidden="true"></span>
+    <span class="top-label">음영권역</span>
+    <span id="top-scope" class="top-scope"></span>
+  </header>
+  <main class="workspace">
+    <aside class="panel">
+      <div class="intro">
+        <p id="layer-name" class="eyebrow"></p>
+        <h1 id="analysis-title">배송 음영권역</h1>
+        <p id="analysis-description" class="description"></p>
+      </div>
+      <div class="period">
+        <span class="caption">관측 기간</span>
+        <span id="period-dates" class="period-date"></span>
+        <div class="availability"><span id="date-progress"></span></div>
+        <p id="availability-label"></p>
+      </div>
+      <div class="stats">
+        <div class="stat"><span>등록 매장</span><strong id="total-stores">—</strong></div>
+        <div class="stat"><span>좌표 연결 배송</span><strong id="total-visits">—</strong></div>
+      </div>
+      <section class="legend" aria-label="지도 색상">
+        <h2>분류 기준</h2>
+        <div class="legend-row"><span class="swatch gradient" aria-hidden="true"></span><div>배송기록 있음<small>관측 배송 건수/km²</small></div><strong id="visible-delivered"></strong></div>
+        <div class="legend-row"><span class="swatch candidate" aria-hidden="true"></span><div>관측기간 미배송 후보<small>등록 매장 있음</small></div><strong id="visible-candidate"></strong></div>
+        <div class="legend-row"><span class="swatch unknown" aria-hidden="true"></span><div>자료 부족<small>원천·좌표 연결 미확인</small></div><strong id="visible-unknown"></strong></div>
+      </section>
+      <section class="status-flags" aria-label="오산신규와 오산보류">
+        <div><i class="dot new"></i><span>배송 확인 오산신규</span><b id="total-new">—</b></div>
+        <div><i class="dot pending"></i><span>오산신규 배송 미확인</span><b id="total-unconfirmed">—</b></div>
+        <div><i class="dot held"></i><span>오산보류 이력</span><b id="total-held">—</b></div>
+      </section>
+      <p id="coverage-note" class="coverage-note"></p>
+      <p id="source-note" class="source-note"></p>
+    </aside>
+    <section class="map-shell" aria-label="배송분포 지도">
+      <div id="map" tabindex="0" aria-label="지도, 드래그 또는 화살표로 이동하고 + 및 −로 확대 축소할 수 있습니다.">
+        <canvas id="display"></canvas>
+      </div>
+      <div class="map-header">
+        <div class="view-tabs" role="group" aria-label="지도 범위">
+          <button type="button" data-view="nation" aria-pressed="true">전국</button>
+          <button type="button" data-view="region" aria-pressed="false">오산·화성</button>
+          <button type="button" data-view="detail" aria-pressed="false">매장 주변</button>
+        </div>
+        <div id="resolution" class="resolution"></div>
+      </div>
+      <div class="zoom-stack" role="group" aria-label="지도 확대 축소">
+        <button type="button" id="zoom-in" aria-label="지도 확대">+</button>
+        <button type="button" id="zoom-out" aria-label="지도 축소">−</button>
+      </div>
+      <p id="map-notice" class="map-notice" role="status" hidden></p>
+      <div class="map-footer"><div id="scale" class="map-scale"></div><span id="map-source"></span></div>
+      <section id="inspection" class="inspection" aria-live="polite" hidden>
+        <button type="button" id="close-inspection" aria-label="구역 상세 닫기">×</button>
+        <span id="area-state" class="area-state"></span>
+        <h2 id="area-name"></h2>
+        <dl id="area-facts"></dl>
+      </section>
+    </section>
+  </main>
+</body>
+</html>
