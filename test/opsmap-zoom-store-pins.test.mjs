@@ -97,6 +97,20 @@ test('a store with a verified empty delivery aggregate still uses its fixed rout
   assert.equal(row.vehicle,'114');
 });
 
+test('overview keeps a route visible when its average falls outside the viewport',()=>{
+  const {visibleVehicleRepresentatives}=MapViewPolicy;
+  const at=(lat,lng)=>({lat,lng});
+  const visible=at(40,80),far=at(600,700);
+  const overview=[{vehicle:'157',lat:300,lng:600,clusterRows:[visible,far]},{vehicle:'202',...far,clusterRows:[far]}];
+  const view={width:390,height:460};
+  const project=row=>({x:row.lng,y:row.lat});
+  const markers=visibleVehicleRepresentatives(overview,project,view,new Map([['157',[visible]]]));
+  assert.equal(markers.length,1);
+  assert.deepEqual([markers[0].vehicle,markers[0].lat,markers[0].lng],['157',40,80]);
+  assert.strictEqual(markers[0].clusterRows,overview[0].clusterRows);
+  assert.equal(overview[0].lng,600);
+});
+
 const nearbyPoint = (code, route, meters, pixel) => ({
   customerCode: code, baseVehicle: route, lat: 37.5 + meters / 6371000 * 180 / Math.PI, lng: 127, pixel,
 });

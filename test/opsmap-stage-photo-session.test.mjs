@@ -87,7 +87,7 @@ test('approved Stage login is lazy, staff-bound and single flight, and media ref
     assert.equal((await f.get(api + '/media/not-a-handle')).status, 404);
     assert.equal((await f.get(api + '?customerCode=invalid%2F')).status, 400);
     const config = await (await f.get(api + '/config')).json();
-    assert.deepEqual(config.data, {enabled:true, cookieConfigured:false, sourceSession:false,
+    assert.deepEqual(config.data, {enabled:true, cookieConfigured:false, sourceSession:false, indexedHistoryConfigured:false,
       sourceAuth:'NOT_VERIFIED', metadataConfigured:true, authMode:'APPROVED_ACCOUNT', credentialsConfigured:true});
     assert.deepEqual(f.stats(), {logins:0, reads:0, media:0});
     const [discovery, detail] = await Promise.all([f.get(api + query), f.get(exact)]);

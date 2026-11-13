@@ -28,6 +28,7 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
   const id = dedicatedAccount ? env.OPSMAP_STAGE_DELIVERY_PHOTO_ID : env.DELIVERY_ADMIN_ID;
   const password = dedicatedAccount ? env.OPSMAP_STAGE_DELIVERY_PHOTO_PASSWORD : env.DELIVERY_ADMIN_PASSWORD;
   const approvedStage = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE;
+  const historyDirectory = approvedStage ? env.OPSMAP_PHOTO_HISTORY_DIRECTORY : null;
   const account = accountMode && approvedStage && validSecret(id, 256) && validSecret(password, 1024)
     ? createStageDeliveryAdminPhotoSession({id, password, fetchImpl, now}) : null;
   const cookie = accountMode ? '' : String(env.OPSMAP_STAGE_DELIVERY_PHOTO_COOKIE || '').trim();
@@ -57,7 +58,7 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
     hasMemorySession:account?.hasSession ?? (() => cookieConfigured), prepareSession:account?.prepareSession,
     canPrepareSource:() => Boolean(account), prepareHistorySession:Boolean(account), prepareMediaSession:Boolean(account),
     listDeliveryMetadata, imageFetch:fetchImpl,
-    readIndexedHistory:approvedStage && env.OPSMAP_PHOTO_HISTORY_DIRECTORY ? createOpsmapPhotoIndex({directory:env.OPSMAP_PHOTO_HISTORY_DIRECTORY, now}).read : undefined,
+    readIndexedHistory:historyDirectory ? createOpsmapPhotoIndex({directory:historyDirectory, now}).read : undefined,
     onSourceVerified:() => {
       if (account) account.markVerified();
       else if (legacyState !== 'AUTH_REQUIRED') legacyState = 'VERIFIED';
@@ -66,6 +67,7 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
   const diagnostics = () => {
     const sourceAuth = accountMode ? account?.sourceState() ?? 'NOT_CONFIGURED' : legacyState;
     return {enabled:enabled(), cookieConfigured, sourceSession:enabled() && sourceAuth === 'VERIFIED', sourceAuth, metadataConfigured:true,
+      indexedHistoryConfigured:Boolean(historyDirectory),
       ...(accountMode ? {authMode:'APPROVED_ACCOUNT', credentialsConfigured:Boolean(account)} : {})};
   };
   return {

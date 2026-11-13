@@ -780,6 +780,7 @@
         if(reviewNote&&baseVehicleMeta?.stale===true){reviewNote.dataset.masterReference='stale';reviewNote.textContent=`10/23 저장자료 · 기준호차 ${String(baseVehicleMeta.checkedAt||'').slice(0,10)||'시점 미확인'} 이전 확인값 · 현재 기준 미확인 · 미게시`;window.dispatchEvent(new Event('resize'));}
         const changed=JSON.stringify(previousMeta)!==JSON.stringify(baseVehicleMeta)||rows.some(r=>JSON.stringify(previous.get(r.customerCode))!==JSON.stringify(r));
         if(!changed)return;
+        if(state.selected)syncStoreDeliveryWeekdays(state.selected);
         if(state.mode==='BASE_60D'&&dateReady){
           replaceStoreSnapshot(periodRows,snapshotMeta);ensureDateVehicles();periodSelectionCache=null;
           if(state.selected){const selected=baseVehicles.get(state.selected.customerCode);if(selected){Object.assign(state.selected,{baseVehicleEmptyVerified:false},selected);if(periodBasis==='vehicle')state.selected.vehicle=selected.baseVehicle;const label=$('#detailBaseVehicle');if(label)label.textContent=MapPeriodUi.baseVehicleLabel(selected);}}
@@ -793,6 +794,7 @@
         if(isSilentRequestError(error))return;
         baseVehicleStatus=baseVehicles.size?'READY':'ERROR';baseVehicleMeta={...baseVehicleMeta,stale:true,refresh:'ERROR'};
         baseVehicles=new Map([...baseVehicles].map(([code,row])=>[code,{...row,baseVehicleStale:true}]));
+        if(state.selected)syncStoreDeliveryWeekdays(state.selected);
         if(state.mode==='BASE_60D'&&dateReady){
           replaceStoreSnapshot(periodRows,snapshotMeta);periodSelectionCache=null;
           if(state.selected){state.selected.baseVehicleStale=true;const label=$('#detailBaseVehicle');if(label)label.textContent=MapPeriodUi.baseVehicleLabel(state.selected);}
@@ -1839,6 +1841,17 @@
       ?window.MapViewPolicy.overlappingVehicleLocations(visible,project,assignmentMode,protectedCodes):visible;
   }
 
+  function overviewVehicleStores() {
+    const bounds=state.map.getBounds(),sw=bounds.getSouthWest(),ne=bounds.getNorthEast();
+    const visible=new Map();
+    for(const row of pointIndex.query({south:sw.getLat(),north:ne.getLat(),west:sw.getLng(),east:ne.getLng()})){
+      if(!row.baseVehicle)continue;
+      if(!visible.has(row.baseVehicle))visible.set(row.baseVehicle,[]);
+      visible.get(row.baseVehicle).push(row);
+    }
+    return visible;
+  }
+
   function refreshMarkerSelection(overlay,entry) {
     const button=overlay.getContent?.();
     if(!button?.classList)return;
@@ -1881,10 +1894,7 @@
     else if(vehicleOverview){
       const overview=pointIndex.overview ||= representativeRows(valid);
       readyOverview=overview.representatives.length>0;
-      pins=overview.representatives.filter(row=>{
-        if(!viewport)return true;
-        const {x,y}=projectPin(row);return x>=-36&&x<=viewport.width+36&&y>=-36&&y<=viewport.height+36;
-      });
+      pins=[...window.MapViewPolicy.visibleVehicleRepresentatives(overview.representatives,projectPin,viewport,viewport?overviewVehicleStores():null)];
       pins.push(...window.MapViewPolicy.stableClusters(overview.unassigned,projectPin,level,selectedCode,viewport,clusterOptions));
       for(const code of new Set([selectedCode,...navCodes])){
         const row=byCode.get(code);if(row&&window.MapViewPolicy.pinAssignment(row).code)pins.push(row);
@@ -2066,6 +2076,21 @@
       [['origin','출발'],['waypoint','경유'],['destination','도착']].map(([role,label])=>'<button type="button" data-nav-pick="'+role+'"'+disabled+'>'+label+'</button>').join('')+'</div><p data-nav-feedback role="status"></p>';
   }
 
+  function storeDeliveryWeekdays(row) {
+    return window.MapFixedDeliveryWeekdays?.fixedDeliveryWeekdays(baseVehicles.get(row.customerCode)||row,{source:baseVehicleMeta});
+  }
+
+  function syncStoreDeliveryWeekdays(row) {
+    const label=$('#detailDeliveryDaysLabel'),value=$('#detailDeliveryDaysValue');
+    if(!label||!value)return;
+    const schedule=storeDeliveryWeekdays(row);
+    const days=schedule?.days.join(' · ')||'';
+    label.hidden=value.hidden=!days;
+    value.textContent=days;
+    value.title=schedule?.stale?'이전 확인 배차표 기준':'';
+    value.dataset.weekdayState=schedule?.status||'UNKNOWN';
+  }
+
   function selectStore(row, element, focus, skipEnrich = false, trace) {
     clearSearchSelectedOverlay();
     if(!row.virtual){if(!unifiedSelectionActive)invalidateUnifiedSearch();cancelAddressLookup();closeUnifiedSearchResults();}
@@ -2124,6 +2149,9 @@
     const detailDriver=storeDriverDetail(row);
     const detailCenter=window.MapLocationContract?.dispatchCenter(row).label||'담당 센터 미확인';
     const detailAddressRegion=row.addressRegion||window.MapLocationContract?.addressRegion(row.address)||'주소 권역 미확인';
+    const schedule=storeDeliveryWeekdays(row);
+    const deliveryDays=schedule?.days.join(' · ')||'';
+    const weekdaysHidden=deliveryDays?'':' hidden';
     const orderCard = routeMode && row.order ? `<div class="stat"><strong>${esc(row.order)}</strong><span>착순</span></div>` : "";
     const statusCard = row.status ? `<div class="stat"><strong>${row.status === "COMPLETED" ? "완료" : "잔여"}</strong><span>상태</span></div>` : "";
     $("#detailSection").classList.add("open");
@@ -2132,7 +2160,7 @@
     if($("#detail").contains($("#staffAuxContent")))$("#detailSection").append($("#staffAuxContent"));
     $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">${esc(row.customerCode || "신규 주소")}</div><div class="storeName">${esc(row.customerName || "선택 위치")}</div></div>
       <div class="detailBody">
-        <dl class="dotDetailFacts"><dt>담당 센터</dt><dd>${esc(detailCenter)}</dd><dt hidden>주소 권역</dt><dd id="detailAddressRegion" hidden>${esc(detailAddressRegion)}</dd><dt>${routeMode?"확정호차":"기준호차"}</dt><dd${routeMode?'':' id="detailBaseVehicle"'}>${esc(routeMode?vehicleLabel(vehicle)||'선택일 편성 없음':MapPeriodUi.baseVehicleLabel(row))}</dd><dt id="detailDeliveryDaysLabel" hidden>배송요일</dt><dd id="detailDeliveryDaysValue" hidden></dd><dt id="detailDriverLabel">${esc(detailDriver.label)}</dt><dd id="detailDriver" title="${esc(detailDriver.title)}" data-source="${esc(detailDriver.source)}">${esc(detailDriver.text)}</dd><dt>주소</dt><dd>${esc(row.address||'주소 불러오는 중…')}</dd><dt id="detailAddressLabel" hidden>상세주소</dt><dd id="detailAddressValue" hidden></dd></dl>
+        <dl class="dotDetailFacts"><dt>담당 센터</dt><dd>${esc(detailCenter)}</dd><dt hidden>주소 권역</dt><dd id="detailAddressRegion" hidden>${esc(detailAddressRegion)}</dd><dt>${routeMode?"확정호차":"기준호차"}</dt><dd${routeMode?'':' id="detailBaseVehicle"'}>${esc(routeMode?vehicleLabel(vehicle)||'선택일 편성 없음':MapPeriodUi.baseVehicleLabel(row))}</dd><dt id="detailDeliveryDaysLabel"${weekdaysHidden}>배송요일</dt><dd id="detailDeliveryDaysValue"${weekdaysHidden} data-weekday-state="${schedule?.status||'UNKNOWN'}" title="${schedule?.stale?'이전 확인 배차표 기준':''}">${esc(deliveryDays)}</dd><dt id="detailDriverLabel">${esc(detailDriver.label)}</dt><dd id="detailDriver" title="${esc(detailDriver.title)}" data-source="${esc(detailDriver.source)}">${esc(detailDriver.text)}</dd><dt>주소</dt><dd>${esc(row.address||'주소 불러오는 중…')}</dd><dt id="detailAddressLabel" hidden>상세주소</dt><dd id="detailAddressValue" hidden></dd></dl>
 
         ${navigationPointActions(row)}
         ${!routeMode&&state.virtual?temporaryDistanceActions():''}
@@ -2189,11 +2217,6 @@
         const detailAddress=String(exact.detailAddress||'').trim();
         const detailAddressLabel=$('#detailAddressLabel'),detailAddressValue=$('#detailAddressValue');
         if(detailAddressLabel&&detailAddressValue){detailAddressLabel.hidden=detailAddressValue.hidden=!detailAddress;detailAddressValue.textContent=detailAddress;}
-        // Mon~Sun fixed-dispatch values are vehicle assignments, never delivery weekdays.
-        const pattern=typeof exact.deliveryPattern==='string'?exact.deliveryPattern.trim():'';
-        const days=['CURRENT_CUSTOMER_LOOKUP','DATED_CUSTOMER_LOOKUP'].includes(exact.sourceBasis)&&exact.locationState==='SOURCE_ROW'&&!/^(?:미확인|확인\s*필요|unknown|unconfirmed|[-—])$/i.test(pattern)?pattern:'';
-        const daysLabel=$('#detailDeliveryDaysLabel'),daysValue=$('#detailDeliveryDaysValue');
-        if(daysLabel&&daysValue){daysLabel.hidden=daysValue.hidden=!days;daysValue.textContent=days;}
         facts.dataset.deliveryPattern=exact.deliveryPattern||'';facts.dataset.detailAddressState=exact.detailAddressState||'';
         facts.dataset.sourceBasis=exact.sourceBasis||'';facts.dataset.sourceDate=exact.sourceDate||'';
       }
@@ -3802,12 +3825,13 @@
     return codes.length?loadBaseVehicles(codes):null;
   }
 
-  const dispatchDayKeys=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   function newAreaEvidence() {
     const locationRows=[],dispatchByCode=new Map(),dispatchStops=[];
-    for(const store of newAreaRegistryRows()){
+    const registeredRows=newAreaRegistryRows().filter(row=>!row.deliveryOnly&&row.customerRegistryStatus!=='DELETED');
+    const source=baseVehicleMeta;
+    for(const store of registeredRows){
       const code=store.customerCode||store.code;
-      if(!code||store.deliveryOnly||store.customerRegistryStatus==='DELETED')continue;
+      if(!code)continue;
       const point=newAreaCoordinate({...store,customerCode:code,customerName:store.customerName||store.name||''},{fixedOnly:true});
       if(!point)continue;
       locationRows.push(point);
@@ -3815,10 +3839,10 @@
       if(assignment?.baseVehicleSource!=='FIXED_DISPATCH_PRIMARY'||!['VERIFIED_MASTER','UNASSIGNED'].includes(assignment.baseVehicleState))continue;
       const byVehicle=new Map();
       const primary=normalizeVehicle(assignment.baseVehicle);
-      if(/^\d+$/.test(primary))byVehicle.set(primary,0);
-      dispatchDayKeys.forEach((day,index)=>{
-        const vehicle=normalizeVehicle(assignment.weekdays?.[day]);
-        if(/^\d+$/.test(vehicle))byVehicle.set(vehicle,(byVehicle.get(vehicle)||0)|(1<<((index+1)%7)));
+      if(/^(?:(?:용|척)?\d+)$/.test(primary))byVehicle.set(primary,0);
+      const schedule=window.MapFixedDeliveryWeekdays?.fixedDeliveryWeekdays(assignment,{source});
+      schedule?.byDay.forEach(({route},index)=>{
+        if(route)byVehicle.set(route,(byVehicle.get(route)||0)|(1<<(index+1)));
       });
       const assignments=[];
       for(const [vehicle,mask] of byVehicle){
@@ -3828,15 +3852,21 @@
       }
       dispatchByCode.set(code,{assignments,state:assignment.baseVehicleState});
     }
-    return {locationRows,dispatchByCode,dispatchStops,dispatchCheckedAt:baseVehicleMeta?.checkedAt||'',
-      dispatchStale:baseVehicleMeta?.stale!==false||!!baseVehicleMeta?.lastError};
+    const locationIndex=MapPeriodUi.spatialIndex(locationRows);
+    const locationCoverageComplete=Boolean(snapshotMeta?.sourceGeneration&&locationRows.length&&
+      locationIndex.byCode.size===registeredRows.length);
+    return {locationRows,locationIndex,locationCoverageComplete,assignments:baseVehicles,source,dispatchByCode,dispatchStops,
+      dispatchCheckedAt:source?.checkedAt||'',dispatchStale:source?.stale!==false||!!source?.lastError};
   }
 
   function newAreaDispatchFacts(point,nearestCode,evidence) {
-    const {dispatchByCode,dispatchStops,dispatchCheckedAt,dispatchStale}=evidence;
+    const {dispatchByCode,dispatchStops,dispatchCheckedAt,dispatchStale,locationIndex,assignments,source,locationCoverageComplete}=evidence;
     const assigned=dispatchByCode.get(nearestCode);
+    const nearby=window.MapFixedDeliveryWeekdays?.nearbyFixedDeliveryWeekdays(point,locationIndex,assignments,{source,locationCoverageComplete});
     return {nearestDispatch:assigned?.assignments||[],nearestDispatchLabel:assigned?.state==='UNASSIGNED'?'미배정':'미확인',
-      dispatchVehicles:Phase2bUi.nearbyVehicleWeekdays(point,dispatchStops),dispatchCheckedAt,dispatchStale};
+      dispatchVehicles:Phase2bUi.nearbyVehicleWeekdays(point,dispatchStops),dispatchCheckedAt,dispatchStale,
+      fixedNearbyWeekdays:nearby?.days||[],fixedNearbyWeekdayState:nearby?.status||'UNKNOWN',
+      fixedNearbyWeekdaysStale:nearby?.stale===true};
   }
 
   function judgeNewAreaPoint(row, point, batch) {
@@ -3944,7 +3974,8 @@
     return `<div><span class="judgeBadge ${kind}">${label}</span> ${esc(row.reason||'')}</div>
       <div data-area-nearest>가장 가까운 등록 매장(직선거리): ${nearest}</div>
       <div data-area-nearest-vehicles>배차표상 호차: <strong>${esc(vehicles)}</strong></div>
-      <div data-area-nearest-weekdays>배정 요일: <strong>${esc(weekdays)}</strong></div>
+      <div data-area-nearest-weekdays>가까운 매장 배정 요일: <strong>${esc(weekdays)}</strong></div>
+      <div data-area-fixed-weekdays data-state="${row.fixedNearbyWeekdayState||'UNKNOWN'}">500m 내 등록 매장 배송요일: <strong>${esc(MapPeriodUi.areaFixedWeekdayLabel(row))}</strong></div>
       <div class="areaInquiryHint" data-area-dispatch-reference>${esc(MapPeriodUi.areaDispatchReference(row))}</div>
       <div class="areaInquiryHint">${esc(row.evidence||'')}</div>`;
   }

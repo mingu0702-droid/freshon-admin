@@ -126,6 +126,11 @@
   const areaRadius = value=>[30,40,50].includes(Number(value))?Number(value):30;
   const areaDispatchVehicles = (row,radius)=>root.Phase2bUi.vehiclesAtRadius(row.dispatchVehicles||[],areaRadius(radius));
   const areaDispatchDays = item=>item.weekdays.join('·')||'미확인';
+  function areaFixedWeekdayLabel(row) {
+    const days=row.fixedNearbyWeekdays?.join(' · ');
+    if(days)return days+(row.fixedNearbyWeekdaysStale?' (이전 배차표)':row.fixedNearbyWeekdayState==='PARTIAL'?' (일부 자료 미확인)':'');
+    return ({NO_DELIVERY:'등록된 배송요일 없음',NO_NEARBY_STORES:'500m 내 등록 매장 없음'})[row.fixedNearbyWeekdayState]||'미확인';
+  }
   function areaDispatchReference({dispatchCheckedAt,dispatchStale}) {
     const checkedAt=Date.parse(dispatchCheckedAt);
     const day=Number.isFinite(checkedAt)?new Date(checkedAt+9*3600000).toISOString().slice(0,10):null;
@@ -139,7 +144,7 @@
   }
   const areaExportHeadings=Object.freeze(['주소(X)','고객정보(Y)','판단(BV)','사유(BW)','적용일자(BX)','센터/권역(BY)',
     '가까운 등록 매장의 배차표상 호차','가까운 등록 매장','직선거리km','가까운 등록 매장 고객코드','직선거리m',
-    '호차 조회 반경km','참고 배차호차·직선거리·배정 요일','최근접 매장 배정 요일','배차표 기준일·확인 상태','판정 근거']);
+    '호차 조회 반경km','참고 배차호차·직선거리·배정 요일','최근접 매장 배정 요일','배차표 기준일·확인 상태','500m 내 등록 매장 배송요일','판정 근거']);
   function areaExportRows(rows, applyDate, radius=30) {
     const date=/^\d{4}-\d{2}-\d{2}$/.test(applyDate||'')?Number(applyDate.slice(5,7))+'-'+Number(applyDate.slice(8)):'';
     return rows.map(row=>{
@@ -153,7 +158,7 @@
         regionForAddress(row.address),vehicleNames.join(' · ')||(row.nearestStoreCode?row.nearestDispatchLabel:''),row.nearestStore||'',
         Number.isFinite(row.nearestDistance)?Number(row.nearestDistance.toFixed(3)):'',row.nearestStoreCode||'',
         Number.isFinite(row.nearestDistanceMeters)?row.nearestDistanceMeters:'',areaRadius(radius),vehicles,weekdays||(row.nearestStoreCode?'미확인':''),
-        areaDispatchReference(row),row.evidence||''];
+        areaDispatchReference(row),areaFixedWeekdayLabel(row),row.evidence||''];
     });
   }
   function areaTsv(rows, applyDate, kind) {
@@ -186,6 +191,6 @@
     return /^\d+$/.test(route||'')?route+'호':route==='보류'?'오산보류':route||'확인 필요';
   }
   root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile, parseAreaInput,
-    regionForAddress, areaRadius, areaDispatchVehicles, areaDispatchDays, areaDispatchReference, areaDistance, areaVehicleLabel, areaExportHeadings, areaExportRows, areaTsv,
+    regionForAddress, areaRadius, areaDispatchVehicles, areaDispatchDays, areaDispatchReference, areaFixedWeekdayLabel, areaDistance, areaVehicleLabel, areaExportHeadings, areaExportRows, areaTsv,
     acceptsBaseVersion, mergeBaseVehicles, baseVehicleLabel });
 })(typeof window === 'undefined' ? globalThis : window);

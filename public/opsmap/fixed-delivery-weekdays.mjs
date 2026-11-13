@@ -5,8 +5,7 @@ export const DELIVERY_WEEKDAYS = Object.freeze(['Mon', 'Tue', 'Wed', 'Thu', 'Fri
 export const NO_FIXED_ASSIGNMENT = '_';
 
 const labels = Object.freeze(['월', '화', '수', '목', '금', '토']);
-const noDeliveryValues = new Set([NO_FIXED_ASSIGNMENT, '오산신규', '오산보류']);
-const otherNew = new Set(['이천신규','영남신규','호남신규']);
+const inactiveRoutes = new Set(['오산신규', '오산보류', '이천신규', '영남신규', '호남신규', '보류']);
 const namedRoute = /^(?:용|척)\d{1,5}$/;
 const verifiedStates = new Set(['VERIFIED_MASTER', 'UNASSIGNED']);
 const centerCodes = new Set(['osan', 'yeongnam', 'honam']);
@@ -30,14 +29,13 @@ export function projectFixedWeekdayValue(value, observed) {
   // or a blank in an older projection that had already flattened both cases.
   if (value === null || typeof value === 'string' && !value.trim()) return NO_FIXED_ASSIGNMENT;
   const key = compact(value);
-  if (key === '오산신규' || otherNew.has(key)) return key;
-  if (key === '보류' || key === '오산보류') return '오산보류';
+  if (inactiveRoutes.has(key)) return key === '보류' ? '오산보류' : key;
   return fixedRoute(value) ?? '';
 }
 
 export function isStoredFixedWeekdayValue(value) {
   return typeof value === 'string' && (/^\d*$/.test(value) ||
-    namedRoute.test(value) || noDeliveryValues.has(value) || otherNew.has(value));
+    namedRoute.test(value) || value === NO_FIXED_ASSIGNMENT || inactiveRoutes.has(value));
 }
 
 function freshness(row, source) {
@@ -52,11 +50,12 @@ export function fixedDeliveryWeekdays(row, { source } = {}) {
   const meta = freshness(row, source);
   const trusted = row?.baseVehicleSource === 'FIXED_DISPATCH_PRIMARY' &&
     verifiedStates.has(row.baseVehicleState) && (!source?.version || source.version === row.baseVehicleVersion);
+  const inactive = trusted && inactiveRoutes.has(compact(row.baseVehicle));
   const byDay = DELIVERY_WEEKDAYS.map((key, i) => {
     const value = trusted && Object.hasOwn(row.weekdays ?? {}, key) ? row.weekdays[key] : '';
-    const route = fixedRoute(value);
     const keyValue = compact(value);
-    const noDelivery = noDeliveryValues.has(keyValue) || keyValue === '보류';
+    const route = inactive ? null : fixedRoute(value);
+    const noDelivery = inactive || keyValue === NO_FIXED_ASSIGNMENT || inactiveRoutes.has(keyValue);
     const status = route ? 'DELIVERY' : !meta.stale && noDelivery ? 'NO_DELIVERY' : 'UNKNOWN';
     return { key, label: labels[i], status, route };
   });
@@ -153,4 +152,8 @@ export function nearbyFixedDeliveryWeekdays(point, index, assignments, {
       partial ? 'UNKNOWN' : 'NO_DELIVERY';
   return { ...base, status, days, locationCoverageComplete, nearbyRegisteredStoreCount: stores.length,
     nearbyDeliveryStoreCount: deliveryCount, unconfirmedStoreCount: unconfirmedCount };
+}
+
+if (typeof window === 'object') {
+  window.MapFixedDeliveryWeekdays = Object.freeze({fixedDeliveryWeekdays, nearbyFixedDeliveryWeekdays});
 }

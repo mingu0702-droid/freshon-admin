@@ -78,7 +78,7 @@ test('Stage scopes task discovery, validates all three categories, and gates ses
     const config = await f.get(api + '/config');
     assert.match(config.headers.get('cache-control'), /no-store/);
     assert.deepEqual((await config.json()).data, {
-      enabled:true, cookieConfigured:true, sourceSession:false, sourceAuth:'NOT_VERIFIED', metadataConfigured:true
+      enabled:true, cookieConfigured:true, sourceSession:false, sourceAuth:'NOT_VERIFIED', metadataConfigured:true, indexedHistoryConfigured:false
     });
     assert.equal(f.calls.length, 0);
     const discovery = await (await f.get(api + query)).json();

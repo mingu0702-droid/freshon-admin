@@ -9,14 +9,16 @@ const code='S990001',date='2026-11-02';
 async function render(overrides={}){
  const row={customerCode:code,vehicle:'101',lastDeliveryDate:date};
  const nodes=Object.fromEntries(['#detailAddressLabel','#detailAddressValue','#detailDeliveryDaysLabel','#detailDeliveryDaysValue','#detailAddressRegion'].map(id=>[id,{textContent:'',hidden:true}]));
+ Object.assign(nodes['#detailDeliveryDaysLabel'],{hidden:false});
+ Object.assign(nodes['#detailDeliveryDaysValue'],{textContent:'월 · 수',hidden:false});
  const address={textContent:''},facts={dataset:{},querySelectorAll:()=>[{textContent:'주소',nextElementSibling:address}]};
  const exact={customerCode:code,detailDate:null,sourceBasis:'CURRENT_CUSTOMER_LOOKUP',locationState:'SOURCE_ROW',address:'SYNTHETIC_ADDRESS',detailAddress:'SYNTHETIC_DETAIL',detailAddressState:'PRESENT',deliveryPattern:'월수금',...overrides};
- const context=vm.createContext({state:{mode:'BASE_60D',selected:row,selectedDate:date,detailRequestId:0},snapshotMeta:{},fetchJson:async()=>({data:exact}),document:{body:{dataset:{mapStaffState:'authenticated'}}},Phase2bUi:globalThis.Phase2bUi,$:s=>s==='#detail .dotDetailFacts'?facts:nodes[s]||{textContent:''},window:{},positionDetailPopup(){},isSilentRequestError:()=>false,row});
+ const context=vm.createContext({state:{mode:'BASE_60D',selected:row,selectedDate:date,detailRequestId:0},snapshotMeta:{},liveAddressLocations:null,fetchJson:async()=>({data:exact}),document:{body:{dataset:{mapStaffState:'authenticated'}}},Phase2bUi:globalThis.Phase2bUi,$:s=>s==='#detail .dotDetailFacts'?facts:nodes[s]||{textContent:''},window:{},positionDetailPopup(){},isSilentRequestError:()=>false,row});
  vm.runInContext(enrich,context);await vm.runInContext('enrichStoreDetail(row,null)',context);return {nodes,facts,address};
 }
-for(const basis of ['CURRENT_CUSTOMER_LOOKUP','DATED_CUSTOMER_LOOKUP'])test('Customer delivery pattern stays before driver for '+basis,async()=>{
+for(const basis of ['CURRENT_CUSTOMER_LOOKUP','DATED_CUSTOMER_LOOKUP'])test('customer enrichment retains the already rendered fixed schedule for '+basis,async()=>{
  const {nodes,facts}=await render({sourceBasis:basis,detailDate:basis==='DATED_CUSTOMER_LOOKUP'?date:null});
- assert.equal(nodes['#detailDeliveryDaysValue'].textContent,'월수금');assert.equal(nodes['#detailDeliveryDaysLabel'].hidden,false);assert.equal(nodes['#detailDeliveryDaysValue'].hidden,false);
+ assert.equal(nodes['#detailDeliveryDaysValue'].textContent,'월 · 수');assert.equal(nodes['#detailDeliveryDaysLabel'].hidden,false);assert.equal(nodes['#detailDeliveryDaysValue'].hidden,false);
  assert.equal(facts.dataset.sourceBasis,basis);assert.equal(facts.dataset.deliveryPattern,'월수금');
 });
 for(const [name,data]of [
@@ -25,8 +27,8 @@ for(const [name,data]of [
  ['unconfirmed value',{deliveryPattern:'미확인'}],
  ['unconfirmed location',{locationState:'UNCONFIRMED'}],
  ['stored historical projection',{sourceBasis:'STORED_DAY',sourceDate:date,detailDate:date}]
-])test(name+' cannot become delivery weekdays',async()=>{
- const {nodes,facts}=await render(data);assert.equal(nodes['#detailDeliveryDaysLabel'].hidden,true);assert.equal(nodes['#detailDeliveryDaysValue'].hidden,true);assert.equal(nodes['#detailDeliveryDaysValue'].textContent,'');
+])test(name+' cannot replace the verified fixed weekdays',async()=>{
+ const {nodes,facts}=await render(data);assert.equal(nodes['#detailDeliveryDaysLabel'].hidden,false);assert.equal(nodes['#detailDeliveryDaysValue'].hidden,false);assert.equal(nodes['#detailDeliveryDaysValue'].textContent,'월 · 수');
  assert.equal(facts.dataset.sourceBasis,data.sourceBasis||'CURRENT_CUSTOMER_LOOKUP');
 });
 test('empty or withheld detail address is omitted while private state metadata survives',async()=>{

@@ -31,6 +31,7 @@ try{
   await page.goto(origin);
   await page.evaluate(()=>{window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};window.VEHICLE_AREA_DATA={vehicles:[]};window.KakaoMapsAdapter={ready:()=>new Promise(()=>{})};window.kakaoGeocoder={addressSearch(){throw Error('EXTERNAL_GEOCODING_FORBIDDEN');}};});
   for(const name of ['phase2b-ui-helpers.js','map-period-ui.js','manual-waypoints.js','new-area-requests.js'])await page.addScriptTag({path:path.join(base,name)});
+  await page.evaluate(()=>import('/opsmap/fixed-delivery-weekdays.mjs').then(()=>true));
   await page.addScriptTag({path:path.resolve('node_modules/xlsx/dist/xlsx.full.min.js')});
   const runtime=fs.readFileSync(path.join(base,'map-phase2b-runtime.js'),'utf8');
   await page.addScriptTag({content:runtime.replace('\n  initVehicles();',`\n  window.newAreaBrowser={setup(){state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';},setJudge:fn=>judgeNewAreaRow=fn,realJudge:judgeNewAreaRow,enableMapClick(){state.map={};$('#map').onclick=()=>searchTemporaryClick?.({latLng:{getLat:()=>37.2,getLng:()=>127}});}};\n  initVehicles();`)});
@@ -47,6 +48,7 @@ try{
     assert.match(await page.locator('#newAreaBatchResults').innerText(),/배송 가능 \(O\)/);
     assert.match(await page.locator('#newAreaBatchResults').innerText(),/30km 내 참고 배차호차 · 2대 확인/);
     assert.match(await page.locator('#newAreaBatchResults [data-area-nearest-weekdays]').first().innerText(),/101호 월 · 122호 수/);
+    assert.match(await page.locator('#newAreaBatchResults [data-area-fixed-weekdays]').first().innerText(),/월 · 수/);
     assert.equal(await page.locator('#newAreaBatchResults [data-area-dispatch-reference]').first().innerText(),
       '배차표 기준일 2026-09-24 · 최신 배정 미확인');
     for(const radius of ['40','50','30']){

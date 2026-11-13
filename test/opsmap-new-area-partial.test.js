@@ -6,6 +6,7 @@ import '../public/opsmap/map-period-ui.js';
 import '../public/opsmap/phase2b-ui-helpers.js';
 import '../public/opsmap/manual-waypoints.js';
 import '../public/opsmap/new-area-requests.js';
+import * as fixedWeekdays from '../public/opsmap/fixed-delivery-weekdays.mjs';
 import {batchDomNode,batchDomTemplate} from './fixtures/new-area-dom.mjs';
 
 const source = fs.readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js',import.meta.url),'utf8');
@@ -35,6 +36,7 @@ function fixture({location,fetch} = {}) {
   const node=id=>{if(!nodes.has(id))nodes.set(id,batchDomNode());return nodes.get(id);};
   let calls=0;
   const window={addEventListener(){},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,KAKAO_MAP_CONFIG:{allowExternalAddressLookup:false},kakaoGeocoder:{addressSearch(){calls++;throw Error('EXTERNAL_LOOKUP_FORBIDDEN');}}};
+  window.MapFixedDeliveryWeekdays=fixedWeekdays;
   window.location=location;
   const ctx=vm.createContext({window,location,fetch,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:{dataset:{}}},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
   vm.runInContext(newAreaTestRuntime,ctx);
@@ -106,6 +108,23 @@ test('completed visits, archive coverage, and nearby dispatch vehicles cannot de
   assert.deepEqual(Array.from(MapPeriodUi.areaDispatchVehicles(after,30),item=>[item.vehicle,item.weekdays.join('')]),[['101','월'],['122','화']]);
   assert.equal(f.judgeNewAreaPoint(request,{lat:37.201,lng:127},{archive}).decision,'O');
 });
+test('new area displays the nearby fixed schedule without changing the nearest-store decision',()=>{
+  const f=fixture();
+  const second={...near,customerCode:'S990002',lat:near.lat+.002};
+  const held={...near,customerCode:'S990003',lat:near.lat+.003};
+  const far={...near,customerCode:'S990004',lat:near.lat+.006};
+  f.setup([],{},[near,second,held,far]);f.generation('a'.repeat(64));
+  f.assign([{...assigned,weekdays:{Mon:'101',Sun:'101'}},
+    {...assigned,customerCode:second.customerCode,weekdays:{Wed:'122'}},
+    {...assigned,customerCode:held.customerCode,baseVehicle:'오산보류',weekdays:{Thu:'122'}},
+    {...assigned,customerCode:far.customerCode,weekdays:{Sat:'122'}}]);
+  const row=f.judgeNewAreaPoint({address:near.address},near);
+  assert.equal(row.decision,'O');
+  assert.deepEqual(row.fixedNearbyWeekdays,['월','수']);
+  assert.equal(row.fixedNearbyWeekdayState,'PARTIAL');
+  const column=MapPeriodUi.areaExportHeadings.indexOf('500m 내 등록 매장 배송요일');
+  assert.match(MapPeriodUi.areaExportRows([row])[0][column],/^월 · 수/);
+});
 test('changing 30/40/50 km and clearing all delivery history leave O, X and review unchanged',()=>{
   const f=fixture();
   const distant={...near,customerCode:'S990002',lat:37.59};
@@ -138,18 +157,18 @@ test('nearest registered store comes from the fixed registry even when a period 
   assert.equal(row.nearestStore,'배송 이력 없는 매장');
   assert.equal(row.nearestStoreCode,'S990002');assert.equal(row.nearestDistanceMeters,11);
 });
-test('verified dispatch days stay with their weekday vehicle; an unknown day is not inferred',()=>{
+test('verified dispatch days stay with their weekday vehicle and exclude Sunday',()=>{
   const f=fixture();
   f.setup([],{},[near]);
   f.assign([{...assigned,weekdays:{Tue:'122',Sun:'202'}}]);
   const row=f.judgeNewAreaPoint({address:near.address},{lat:near.lat,lng:near.lng});
   assert.equal(row.decision,'O');
   assert.deepEqual(Array.from(row.nearestDispatch,item=>[item.vehicle,MapPeriodUi.areaDispatchDays(item)]),
-    [['101','미확인'],['122','화'],['202','일']]);
+    [['101','미확인'],['122','화']]);
   const cells=MapPeriodUi.areaExportRows([row])[0];
-  assert.match(cells[6],/101호 · 122호 · 202호/);
+  assert.equal(cells[6],'101호 · 122호');
   assert.match(cells[12],/101호 .*미확인/);
-  assert.equal(cells[13],'101호 미확인 · 122호 화 · 202호 일');
+  assert.equal(cells[13],'101호 미확인 · 122호 화');
   assert.equal(cells[14],'배차표 기준일 2026-09-24 · 최신 배정 미확인');
   f.assign([{...assigned,baseVehicleState:'CONFLICT'}]);
   const unknown=f.judgeNewAreaPoint({address:near.address},{lat:near.lat,lng:near.lng});

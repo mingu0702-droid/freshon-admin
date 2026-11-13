@@ -164,6 +164,24 @@
       return clusterRow(group,mode,0);
     })];
   }
+  function visibleVehicleRepresentatives(rows, project, viewport, visibleStores) {
+    if(!viewport)return rows;
+    const {width,height}=viewport, inside=({x,y},margin)=>
+      x>=-margin&&x<=width+margin&&y>=-margin&&y<=height+margin;
+    return rows.flatMap(row=>{
+      const center=project(row);
+      if(inside(center,0))return [row];
+      let anchor=null, nearest=Infinity;
+      for(const store of visibleStores?.get(row.vehicle)||[]){
+        const point=project(store);
+        if(!inside(point,0))continue;
+        const distance=(point.x-width/2)**2+(point.y-height/2)**2;
+        if(distance<nearest){anchor=store;nearest=distance;}
+      }
+      if(!anchor)return inside(center,36)?[row]:[];
+      return [{...row,lat:anchor.lat,lng:anchor.lng}];
+    });
+  }
   function stableClusters(rows, project, level, selectedCode = '', viewport = null, options = {}) {
     const mode = options.mode || 'BASE_60D';
     const band = zoomBand(Number(level));
@@ -366,5 +384,5 @@
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,overlappingVehicleLocations,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint});
+  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,overlappingVehicleLocations,visibleVehicleRepresentatives,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint});
 })(typeof window==='object'?window:globalThis);

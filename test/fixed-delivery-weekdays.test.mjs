@@ -63,6 +63,14 @@ test('legacy blanks and unknown weekday values cannot become confirmed no delive
   assert.equal(fixedDeliveryWeekdays(row('S10001', allEmpty, { baseVehicleState: 'NOT_IN_MASTER' })).status, 'UNKNOWN');
 });
 
+test('new and held stores do not advertise old numeric weekday assignments', () => {
+  for(const baseVehicle of ['오산신규','오산보류','호남신규']){
+    const assignment=row('S10001',{Mon:'101',Wed:'척01',Sun:'202'},{baseVehicle});
+    assert.deepEqual(fixedDeliveryWeekdays(assignment).days,[]);
+    assert.equal(fixedDeliveryWeekdays(assignment).status,'NO_DELIVERY');
+  }
+});
+
 test('registered named master routes count on Monday to Saturday only', () => {
   const [raw] = projectFixedVehicles([{ estCd: 'S10001', logCd: '011', mainCarSeqNm: '용11호',
     carSeqMonNm: '용11 호차', carSeqTueNm: '척 204', carSeqWedNm: '오산신규', carSeqSunNm: '용12' }]);
