@@ -20,12 +20,13 @@ const out=fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r11-popup-'));
 const fixture=`
 const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));
 let clusterPanel=null,clusterPopupCleanup=null,periodBasis='vehicle',periodVehicleScope='all';
+const baseVehicleStatus='READY';
 let markerEntries=new Map(),indexedRows=null,pointIndex=null,boundaryKey='',mapMoving=false;
 const selectedMapPins=new Set(),mapMarkerRows=new WeakMap();let activeMapPinKey='';
 const state={mode:'BASE_60D',currentRows:[],selected:null,detailRequestId:0,fitRequested:true,suppressMapEventsUntil:0,overlays:[],representativeOverlays:[],lines:[],polygons:[]};
 let cameraSelection=0,selectedDriverContact=null,temporaryDetailPoint=null,addressFocusRequest=null;const requestControllers=new Map();
 const invalidateUnifiedSearch=()=>{},closeUnifiedSearchResults=()=>{},cancelAddressLookup=()=>{},renderRunList=()=>{},renderPeriodStoreList=()=>{};
-const clearSearchSelectedOverlay=()=>{},clearActualRoute=()=>{},runVisitId=row=>row?.deliveryId||row?.customerCode;
+const clearSearchSelectedOverlay=()=>{},clearActualRoute=()=>{},scheduleNewAreaDispatchBadges=()=>{},runVisitId=row=>row?.deliveryId||row?.customerCode;
 let mapCamera={releaseFocus(){}};
 const vehicleLabel=v=>v?v+'호차':'';
 const vehicleColor=()=>'#275dd8',esc=v=>String(v).replace(/[&<>"']/g,'');
@@ -87,6 +88,16 @@ window.harness={
   window.pinCoord=new Coord(first.lat,first.lng);state.map.setCenter(window.pinCoord);
   const add=(row,z,role)=>{const content=markerElement(row,null,'store');content.dataset.fixtureRole=role;const o=new Overlay({position:window.pinCoord,content,xAnchor:.5,yAnchor:1,zIndex:z});o.setMap(state.map);return o;};
   state.overlays=[add(group,3,'underlying-cluster'),add(first,40,'selected-store')];state.map.draw();
+ },
+ seedAdjacentToLocation(rows){
+  clearSelection();clearMap();state.mode='BASE_60D';state.currentRows=rows;window.simulateDetail=true;
+  const pins=MapViewPolicy.exactLocations(rows);
+  window.pinCoord=new Coord(rows[0].lat,rows[0].lng);state.map.setLevel(MapViewPolicy.storePinLevel);state.map.setCenter(window.pinCoord);
+  state.overlays=pins.map(row=>{
+   const content=markerElement(row,null,'store');content.dataset.fixtureRole=row.clusterKind==='location'?'location-group':'neighbor';
+   const overlay=new Overlay({position:new Coord(row.lat,row.lng),content,xAnchor:.5,yAnchor:1,zIndex:markerLayer(row,false,false)});
+   overlay.setMap(state.map);return overlay;
+  });
  },
  seedDistinct(rows){
   clearSelection();clearMap();state.mode='BASE_60D';state.currentRows=rows;window.simulateDetail=true;
@@ -198,6 +209,18 @@ try{
  await page.screenshot({path:path.join(out,'selected-pin-overlap.png')});
  await page.locator('[data-cluster-code="S00005"]').click();check('a formerly hidden code reaches existing detail selection',(await page.evaluate(()=>harness.stats())).selected.code==='S00005');
  check('pin click does not mutate rows or coordinates',await page.evaluate(()=>harness.source())===originalSource);
+ const clickPinCenter=async role=>{
+  const {x,y,width,height}=await page.locator('[data-fixture-role="'+role+'"] .pin').boundingBox();
+  await page.mouse.click(x+width/2,y+height/2);
+ };
+ await page.evaluate(data=>harness.seedAdjacentToLocation(data),[rows[0],rows[1],{...rows[2],lng:127.2}]);
+ await clickPinCenter('location-group');
+ check('an adjacent pin does not intercept the co-located group centre',await page.locator('.mapClusterPopup [data-cluster-code]').count()===2);
+ await page.getByRole('button',{name:'묶음 목록 닫기'}).click();
+ await clickPinCenter('neighbor');
+ check('the adjacent store centre remains selectable under the group wrapper',(await page.evaluate(()=>harness.stats())).selected?.code==='S00002');
+ await clickPinCenter('location-group');
+ check('the co-located group centre remains reachable beside a selected store',await page.locator('.mapClusterPopup [data-cluster-code]').count()===2);
  await page.evaluate(row=>harness.directSearch(row),colocated[0]);check('direct customer search still selects detail without a group popup',(await page.evaluate(()=>harness.stats())).selected.code==='S00000'&&await page.locator('.mapClusterPopup').count()===0);
  await page.evaluate(data=>harness.clickCase([...data,data[0],{...data[1],virtual:true},{...data[2],representative:true},{...data[3],nearbyVehicle:true}]),colocated);await page.waitForTimeout(60);
  check('same-location marker grouping keeps distinct codes and ignores synthetic markers',await page.locator('.mapClusterPopup [data-cluster-code]').count()===6);

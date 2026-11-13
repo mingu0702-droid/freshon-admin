@@ -1688,6 +1688,30 @@
       Boolean(state.mode==='BASE_60D'&&selectedMapPins.size&&row.memberCodes?.some(code=>selectedMapPins.has('store:'+code)));
   }
 
+  const isStoreLocationPin=row=>row&&!row.virtual&&!row.representative&&!row.nearbyVehicle&&
+    (row.clusterKind==='location'||!row.clusterCount&&row.customerCode);
+
+  function storeLocationClickTarget(event,button,row){
+    if(state.mode!=='BASE_60D'||!event.detail||!isStoreLocationPin(row))return button;
+    const hits=new Set([button]);
+    let hasGroup=row.clusterKind==='location';
+    for(const element of document.elementsFromPoint(event.clientX,event.clientY)){
+      const candidate=element.closest('button.marker'),item=candidate&&mapMarkerRows.get(candidate);
+      if(!isStoreLocationPin(item))continue;
+      hits.add(candidate);hasGroup ||= item.clusterKind==='location';
+    }
+    if(!hasGroup||hits.size<2)return button;
+    // The SDK's clickable wrappers extend beyond the visible pins. Give the
+    // click to the nearest pin centre; exact ties retain the existing layer.
+    let target=button,best=Infinity;
+    for(const candidate of hits){
+      const {left,top,width,height}=(candidate.querySelector('.pin')||candidate).getBoundingClientRect();
+      const distance=(event.clientX-left-width/2)**2+(event.clientY-top-height/2)**2;
+      if(distance<best){target=candidate;best=distance;}
+    }
+    return target;
+  }
+
   function bindMapMarkerSelection(button,row,kind){
     const key=markerPinKey(row);
     mapMarkerRows.set(button,row);
@@ -1696,23 +1720,28 @@
       event.stopPropagation();
       kakao.maps.event.preventMap?.();
       if(kind==='virtual'){showNearbyReference(row);return;}
+      const target=storeLocationClickTarget(event,button,row);
+      const hit=target===button?row:mapMarkerRows.get(target);
+      const hitKey=target===button?key:markerPinKey(hit);
       ++cameraSelection;
       const preserveCamera=state.mode==='BASE_60D'&&state.virtual?.searchTemporary;
       if(preserveCamera)mapCamera?.releaseFocus();
-      const pinOffset=preserveCamera?null:mapCamera?.capturePinOffset?.(markerPosition(row),button.querySelector('.pin')||button)||{x:0,y:0};
-      const wasSelected=key&&selectedMapPins.delete(key);
-      if(key&&!wasSelected)selectedMapPins.add(key);
-      if(row.clusterCount)showCluster(row,{keepView:true});
-      else if(row.representative||row.nearbyVehicle)void selectVehicleStatus(row,button);
-      else if(!wasSelected)selectStoreMarker(row,button);
-      else if(markerShowsDetail(row))clearSelection({keepMapPins:true});
+      const pinOffset=preserveCamera?null:mapCamera?.capturePinOffset?.(markerPosition(hit),target.querySelector('.pin')||target)||{x:0,y:0};
+      const wasSelected=hitKey&&selectedMapPins.delete(hitKey);
+      if(hitKey&&!wasSelected)selectedMapPins.add(hitKey);
+      if(hit.clusterCount)showCluster(hit,{keepView:true});
+      else if(hit.representative||hit.nearbyVehicle)void selectVehicleStatus(hit,target);
+      else if(!wasSelected)selectStoreMarker(hit,target);
+      else if(markerShowsDetail(hit))clearSelection({keepMapPins:true});
       refreshMapPinSelection();
-      if(pinOffset)focusMapPoint(row,{pinOffset});
+      if(pinOffset)focusMapPoint(hit,{pinOffset});
     };
   }
 
   function markerLayer(row,selected,assigned){
-    return selected?40:assigned?25:row.virtual?15:row.representativeUsesVisibleStore?6:row.clusterCount?3:5;
+    if(selected||assigned||row.virtual)return selected?40:assigned?25:15;
+    if(state.mode==='BASE_60D'&&row.clusterKind==='location'&&state.map.getLevel()<=MapViewPolicy.storePinLevel)return 6;
+    return row.representativeUsesVisibleStore?6:row.clusterCount?3:5;
   }
 
   function refreshMapPinSelection(){
