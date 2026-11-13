@@ -63,12 +63,21 @@ test('period view has one header, no daily ETA/status; mobile has distinct filte
 });
 
 test('recent 60 and 90 day presets use the same verified coverage end and reject gaps',()=>{
+ const active=vm.createContext({});
+ for(const name of ['map-period-ui.js','map-phase2b-runtime.js']){
+  const code=fs.readFileSync(new URL('../public/opsmap/'+name,import.meta.url),'utf8');
+  if(name==='map-period-ui.js')vm.runInContext(code,active);
+  else{
+   assert.match(code,/initializePeriod\(days\)/);
+   assert.ok(!code.includes('changePeriod(daysBefore(localDate(),59), localDate())'));
+  }
+ }
  const status={ready:true,completionVerified:true,completedThrough:'2026-09-19',expectedThrough:'2026-09-19',gaps:[]};
- assert.deepEqual(MapPeriodUi.recentRange(status,60),{start:'2026-07-22',end:'2026-09-19'});
- assert.deepEqual(MapPeriodUi.recentRange(status,90),{start:'2026-06-22',end:'2026-09-19'});
- assert.equal(MapPeriodUi.recentRange({...status,gaps:['2026-09-18']},60),null);
- assert.equal(MapPeriodUi.recentRange({ready:true,startDate:'2026-06-22',periodLatest:'2026-09-19'},60),null);
- assert.ok(!runtime.includes('changePeriod(daysBefore(localDate(),59), localDate())'));
+ const preset=active.MapPeriodUi.recentRange;
+ assert.deepEqual({...preset(status,60)},{start:'2026-07-22',end:'2026-09-19'});
+ assert.deepEqual({...preset(status,90)},{start:'2026-06-22',end:'2026-09-19'});
+ assert.equal(preset({...status,gaps:['2026-09-18']},60),null);
+ assert.equal(preset({ready:true,startDate:'2026-06-22',periodLatest:'2026-09-19'},60),null);
 });
 
 test('incomplete period cannot claim a customer has no period history',async()=>{

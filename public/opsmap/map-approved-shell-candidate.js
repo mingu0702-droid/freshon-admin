@@ -214,7 +214,8 @@
   mobileRouteControls.addEventListener('change',syncRouteDialogFilters);
   function formRow(...nodes){const row=document.createElement('div');row.className='row';row.append(...nodes);return row;}
   function formLabel(text){const label=document.createElement('label');label.textContent=text;return label;}
-  dailyForm.append(formLabel('조회 기간'),formRow($('#rangeStart'),$('#rangeEnd')),formRow($('#applyPeriod'),$('#recent60')),formLabel('호차 · 기사 조회'));
+  const periodActions=['applyPeriod','recent60','recent90'].map(id=>$('#'+id)).filter(Boolean);
+  dailyForm.append(formLabel('조회 기간'),formRow($('#rangeStart'),$('#rangeEnd')),formRow(...periodActions),formLabel('호차 · 기사 조회'));
   const basis=$('.periodBasis');basis.className='periodBasis row basis';dailyForm.append(basis,$('#periodDriver'));
   const routeChecks=$('#vehicleList');routeChecks.className='routechecks';
   const dailyVehicleActions=formRow($('#selectAllVehicles'),$('#clearVehicles'));dailyForm.append(routeChecks,dailyVehicleActions);
@@ -227,7 +228,7 @@
   $('#chooseRoutes').onclick=()=>{if(bridge.state.mode!=='DATE_ROUTE')return;syncModeControls(true);routeDialog.showModal();syncRouteDialogFilters();};
   const periodButton=document.createElement('button');periodButton.id='openPeriodQuery';periodButton.textContent='기간별 조회';context.append(periodButton);
   periodButton.onclick=()=>{if(bridge.state.mode!=='BASE_60D')return;dailyForm.hidden=false;syncModeControls(false,true);routeDialog.showModal();};
-  for(const id of ['applyPeriod','recent60']){const button=$('#'+id),run=button.onclick;button.onclick=event=>{routeDialog.close();return run?.(event);};}
+  for(const button of periodActions){const run=button.onclick;button.onclick=event=>{routeDialog.close();return run?.(event);};}
   // Keep the existing controller's deferred-page action reachable after closing
   // the query dialog. The page itself remains bounded to seven complete dates.
   const placeNext=()=>{const button=$('#nextPeriodPage');if(button&&button.parentNode!==context)context.append(button);};
