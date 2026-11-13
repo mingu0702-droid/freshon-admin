@@ -233,11 +233,6 @@
     const band = zoomBand(Number(level));
     const limit = Math.max(40, Math.min(300, Number(options.maxMarkers) || 180));
     const protectedCodes = new Set([selectedCode, ...(options.protectedCodes || [])].filter(Boolean));
-    const pinned = [], ordinary = [];
-    for (const row of rows || []) {
-      if (!finitePoint(row)) continue;
-      (protectedCodes.has(row.customerCode) ? pinned : ordinary).push(row);
-    }
     const margin=options.margin??80;
     const visible = row => {
       if (!viewport || protectedCodes.has(row.customerCode) || row.memberCodes?.some(code=>protectedCodes.has(code))) return true;
@@ -260,6 +255,13 @@
     // generic overview marker cap. Only truly co-located stores share a
     // selectable same-location card so none becomes inaccessible.
     if(options.grouping==='locations')return atLevel('exact',()=>exactLocations(rows,mode)).filter(visible);
+    const {pinned,ordinary}=atLevel('partition',()=>{
+      const pinned=[],ordinary=[];
+      for(const row of rows||[]){
+        if(finitePoint(row))(protectedCodes.has(row.customerCode)?pinned:ordinary).push(row);
+      }
+      return {pinned,ordinary};
+    });
     if(options.grouping==='individual')return atLevel('individual',()=>[...pinned,...exactLocations(ordinary,mode)]).filter(visible);
     const mergeDisplayed=displayed=>nearbyOnly&&viewport&&level<=7
       ?overlappingVehicleLocations(displayed,project,mode,[...protectedCodes]):displayed;

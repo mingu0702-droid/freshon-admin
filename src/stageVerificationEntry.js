@@ -107,7 +107,7 @@ function stageGithub(fetchImpl, {files, branch, writable, allowBlob = false}) {
 }
 
 export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory,
-  openScheduledStore = openOpsmapSyncGenerationStore, now = Date.now, snapshotWaitMs = 2500} = {}) {
+  openScheduledStore = openOpsmapSyncGenerationStore, readVerifiedVehicleRegistration, now = Date.now, snapshotWaitMs = 2500} = {}) {
   const today=()=>new Date(now()+9*3600000).toISOString().slice(0,10);
   if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
   if (![env.HUB_API_URL,env.OPSMAP_PRIVATE_READER_URL].every(stageHubUrl)) throw new Error('STAGE_READ_SOURCE_CONFIG');
@@ -410,7 +410,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       staffView = requireStaff;
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
         driverContacts.mount(binding,{readBaseVehicles:codes=>base.get(codes),
-          readDatedAssignment:readDatedDelivery.readDriverAssignment});
+          readDatedAssignment:readDatedDelivery.readDriverAssignment,readVerifiedVehicleRegistration});
         mountStageAbValidation(router,{...binding,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,readBaseVehicles:codes=>base.get(codes)});
         if (dailyMaster) router.get('/api/map-phase2b/private/fixed-master-observation',requireStaff,async(req,res)=>{
           const {date,customerCodes}=req.query;

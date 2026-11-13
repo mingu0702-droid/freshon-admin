@@ -99,9 +99,9 @@
     for (const entry of entries) {
       const old = previous.get(entry.key);
       if (old && old.fingerprint === entry.fingerprint) { update?.(old.value,entry); next.set(entry.key,old); reused++; }
-      else { if (old) { remove(old.value); removed++; } next.set(entry.key,{fingerprint:entry.fingerprint,value:create(entry)}); created++; }
+      else { if (old) { remove(old.value,entry.key,old.fingerprint); removed++; } next.set(entry.key,{fingerprint:entry.fingerprint,value:create(entry)}); created++; }
     }
-    for (const [key, old] of previous) if (!next.has(key)) { remove(old.value); removed++; }
+    for (const [key, old] of previous) if (!next.has(key)) { remove(old.value,key,old.fingerprint); removed++; }
     return { next, created, removed, reused };
   }
   function parseAreaInput(text) {

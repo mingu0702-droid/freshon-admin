@@ -19,7 +19,7 @@ const config = {
   OPSMAP_STAGE_DRIVER_GOOGLE_SERVICE_ACCOUNT_JSON_BASE64:Buffer.from(JSON.stringify({type:'service_account',
     client_email:'fixture@synthetic-stage.iam.gserviceaccount.com',private_key:privateKey})).toString('base64')
 };
-const vehicleByCode = {'S101':'101','S122':'122','S202':'202','S999':'101'};
+const vehicleByCode = {'S101':'101','S122':'122','S202':'202','S203':'203','S999':'101'};
 const baseReader = async codes => ({ok:true,data:codes.map(customerCode=>({customerCode,baseVehicle:vehicleByCode[customerCode],
   baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:customerCode==='S999'?'yeongnam':'osan',
   baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:'f'.repeat(64),baseVehicleCheckedAt:current,baseVehicleStale:false}))});
@@ -109,6 +109,31 @@ test('current Stage contacts prove the customer and center, merge reads, and dis
   assert.equal(list.status,200);
   assert.deepEqual((await list.json()).vehicles.map(row=>[row.vehicle,Object.hasOwn(row,'phone')]),[['101',false],['122',false]]);
   assert.equal(requests.length,3);
+});
+
+test('a verified vehicle registration fills only a matching contact and flags disagreement', async t => {
+  const seen=[];
+  const endpoint=await useHttp(t,{env:config,fetchImpl:googleSource([])},{readBaseVehicles:baseReader,
+    async readVerifiedVehicleRegistration(identity) {
+      seen.push(identity);
+      const {vehicle}=identity;
+      return {...identity,verified:vehicle!=='203',source:'FRESHON_VEHICLE_REGISTRATION',
+        driverName:vehicle==='101'?'다른 합성 기사':vehicle==='122'?'테스트기사둘':'등록 합성 기사',phone};
+    }});
+  const conflict=await endpoint.read(contactQuery('S101','101'));
+  assert.equal(conflict.status,409);
+  assert.deepEqual(await conflict.json(),{ok:false,error:'DRIVER_SOURCE_CONFLICT'});
+  for(const vehicle of ['122','202']){
+    const response=await endpoint.read(contactQuery('S'+vehicle,vehicle));
+    const result=await response.json();
+    assert.equal(response.status,200);
+    assert.equal(result.data.phone,phone);
+    assert.equal(result.meta.source,'FRESHON_VEHICLE_REGISTRATION');
+  }
+  const unverified=await endpoint.read(contactQuery('S203','203'));
+  assert.equal((await unverified.json()).meta.state,'UNREGISTERED');
+  assert.deepEqual(seen.map(v=>v.vehicle),['101','122','202','203']);
+  assert(seen.every(v=>v.center==='osan'&&v.date===current));
 });
 
 test('the dated reader opens one exact, observed task and rejects mismatches before releasing contacts', async t => {

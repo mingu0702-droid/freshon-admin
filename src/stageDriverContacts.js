@@ -145,8 +145,11 @@ function datedIdentity(input) {
 }
 
 export function createStageDriverContacts({env=process.env, fetchImpl=fetch, now=Date.now} = {}) {
-  const enabled = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE &&
-    env.OPSMAP_DRIVER_CONTACT_ENABLED === '1' && env.OPSMAP_STAGE_DRIVER_CONTACT_APPROVED === '1';
+  const switchEnabled=env.OPSMAP_DRIVER_CONTACT_ENABLED==='1', approved=env.OPSMAP_STAGE_DRIVER_CONTACT_APPROVED==='1';
+  const enabled = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE && switchEnabled && approved;
+  const connection={switchEnabled,approved,sheetConfigured:Boolean(env.OPSMAP_STAGE_DRIVER_SHEET_ID),
+    gidConfigured:Boolean(env.OPSMAP_STAGE_DRIVER_SHEET_GID),centerConfigured:Boolean(env.OPSMAP_STAGE_DRIVER_SHEET_CENTER),
+    stageCredentialConfigured:Boolean(env.OPSMAP_STAGE_DRIVER_GOOGLE_SERVICE_ACCOUNT_FILE||env.OPSMAP_STAGE_DRIVER_GOOGLE_SERVICE_ACCOUNT_JSON_BASE64)};
   let config, configError;
   if (enabled) {
     try { config = sourceConfig(env); }
@@ -154,8 +157,23 @@ export function createStageDriverContacts({env=process.env, fetchImpl=fetch, now
   }
   const readSheet = config && createSheetReader(config,fetchImpl,now);
 
-  function mount(binding, {readBaseVehicles, readDatedAssignment} = {}) {
+  function mount(binding, {readBaseVehicles, readDatedAssignment, readVerifiedVehicleRegistration} = {}) {
     const readBaseAssignment = createDriverAssignmentReader({readBaseVehicles});
+    const readDriverMaster=readSheet&&async function(date, assignment) {
+      const master=await readSheet(date);
+      if(assignment?.basis!=='FIXED_DISPATCH_PRIMARY'||!readVerifiedVehicleRegistration)return master;
+      const registered=await readVerifiedVehicleRegistration({date,center:assignment.center,vehicle:assignment.vehicle});
+      if(registered?.verified!==true||registered.source!=='FRESHON_VEHICLE_REGISTRATION'||registered.date!==date||
+        registered.center!==assignment.center||driverVehicle(registered.vehicle)!==assignment.vehicle)return master;
+      const name=clean(registered.driverName),phone=driverPhone(registered.phone);
+      if(!name||!phone)return master;
+      const existing=master.vehicles.find(row=>row.vehicle===assignment.vehicle);
+      if(existing?.conflict||existing?.driverName&&existing.driverName.replace(/\s+/g,'')!==name.replace(/\s+/g,'')||
+        existing?.phone&&existing.phone.replace(/\D/g,'')!==phone.replace(/\D/g,''))throw fail('DRIVER_SOURCE_CONFLICT',409);
+      if(existing?.driverName&&existing.phone)return master;
+      return {...master,vehicles:[...master.vehicles.filter(row=>row.vehicle!==assignment.vehicle),
+        {...existing,vehicle:assignment.vehicle,driverName:existing?.driverName||name,phone:existing?.phone||phone,source:'FRESHON_VEHICLE_REGISTRATION'}]};
+    };
     function validateQuery(query) {
       const keys = Object.keys(query);
       if (keys.some(key => !contactQueryFields.has(key) || typeof query[key] !== 'string' ||
@@ -177,11 +195,11 @@ export function createStageDriverContacts({env=process.env, fetchImpl=fetch, now
       if (typeof readDatedAssignment !== 'function') throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
       return readDatedAssignment(identity);
     };
-    mountPrivateDriverContact({...binding, readDriverMaster:readSheet, readAssignment, datedIdentity, preferExactDatedContact:true, validateQuery,
+    mountPrivateDriverContact({...binding, readDriverMaster, readAssignment, datedIdentity, preferExactDatedContact:true, validateQuery,
       enabled:() => enabled, readiness:() => configError});
     binding.app.get(masterRoute, binding.requireStaff, async (req,res) => {
       res.set('Cache-Control','private, no-store').vary('Cookie');
-      if (!enabled || !config) return res.status(503).json({ok:false,error:configError || 'DRIVER_CONTACT_DISABLED'});
+      if (!enabled || !config) return res.status(503).json({ok:false,error:configError || 'DRIVER_CONTACT_DISABLED',connection});
       const {date, center} = req.query;
       if (Object.keys(req.query).length !== 2 || !validDay(date) || date !== kstDay(now()) || center !== config.center) {
         return res.status(400).json({ok:false,error:'DRIVER_CONTACT_INVALID_INPUT'});

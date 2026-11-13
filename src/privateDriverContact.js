@@ -123,11 +123,12 @@ export function createDriverContactReader({ readDriverMaster, readAssignment, da
     const phone = context === 'DATE_ROUTE'
       ? assignmentPhone || (sameDriver && (effectiveDate || currentSnapshot) ? driverPhone(row?.phone) : null)
       : driverPhone(row?.phone);
-    const phoneBasis = !name || !phone ? 'UNAVAILABLE' : context === 'BASE' ? 'DRIVER_MASTER'
+    const masterSource=row?.source==='FRESHON_VEHICLE_REGISTRATION'?'FRESHON_VEHICLE_REGISTRATION':'DRIVER_MASTER';
+    const phoneBasis = !name || !phone ? 'UNAVAILABLE' : context === 'BASE' ? masterSource
       : assignmentPhone ? 'DATED_ASSIGNMENT' : effectiveDate ? 'EFFECTIVE_DATED_MASTER' : 'CURRENT_DELIVERY_MATCHED_MASTER';
     return { ok: true, data: { driverName: name || null, phone: name ? phone : null },
       meta: { ...identity, state: name ? phone ? 'REGISTERED' : 'PHONE_UNREGISTERED' : 'UNREGISTERED',
-        source: context === 'DATE_ROUTE' ? 'DATED_ASSIGNMENT' : 'DRIVER_MASTER',
+        source: context === 'DATE_ROUTE' ? 'DATED_ASSIGNMENT' : masterSource,
         effectiveDate, phoneBasis, checkedAt: master.generatedAt || null,
         assignmentVersion: assignment.version || null, assignmentCheckedAt: assignment.checkedAt || null,
         assignmentStale: assignment.stale === true, effectiveDateVerified: !!effectiveDate } };

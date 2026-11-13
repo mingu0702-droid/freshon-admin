@@ -74,8 +74,11 @@
   }
   const manualDraft = window.ManualWaypoints?.createDraft();
   let modeViewInitialized = false, markerFrame = null, mapMoving = false;
+  let lastMarkerViewport=null, markerLayoutVersion=0;
+  const viewportMetrics={idles:0,renders:0,skipped:0,cancelled:0};
   let markerSourceVersion=0;
   let markerEntries = new Map(), indexedRows = null, pointIndex = null, detailFrame = null, resizeFrame = null;
+  const detachedMarkers=new Map();
   let periodSelectionCache = null;
   let baseVehicles = new Map(), baseVehicleRequest = null, baseVehicleTimer = null, baseVehicleTries = 0;
   let recentPeriodMode = true;
@@ -545,7 +548,10 @@
     generalSnapshotPoll=setInterval(()=>{
       if(document.hidden)return;
       void pollGeneralSnapshot();void syncCustomerRegistry();
-      if(generalMap&&state.mode==='BASE_60D')scheduleMapAddressWork({advance:true});
+      if(generalMap&&state.mode==='BASE_60D'){
+        scheduleMapAddressWork({advance:true});
+        if(document.body.dataset.mapStaffState==='authenticated'&&$('#detailSection').classList.contains('open'))refreshSelectedDriverContact();
+      }
     },60000);
   }
   async function initializeGeneral() {
@@ -824,6 +830,7 @@
             Object.assign(state.selected,selected);
             if(periodBasis==='vehicle')state.selected.vehicle=selected.baseVehicle;
             const label=$('#detailBaseVehicle');if(label)label.textContent=MapPeriodUi.baseVehicleLabel(selected);
+            syncDriverMasterUi();
           }
           state.fitRequested=false;await loadBaseMap();
           if(state.selected&&periodBasis==='vehicle'&&!filteredPeriodStores().some(row=>row.customerCode===state.selected.customerCode)){
@@ -1432,7 +1439,7 @@
     const routeMode=state.mode==='DATE_ROUTE',date=driverReferenceDate();
     const verifiedBase=row.baseVehicleState==='VERIFIED_MASTER'&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'');
     const vehicle=normalizeVehicle(routeMode?row.vehicle:row.baseVehicle);
-    const detail={label:'담당 기사',text:'담당 기사 정보 없음',title:'',source:''};
+    const detail={label:routeMode?'확정 기사':'정규 기사',text:'담당 기사 정보 없음',title:'',source:''};
     if(!routeMode&&(!verifiedBase||!vehicle)){detail.text+=' · 기준호차 확인 필요';return detail;}
     const scopedCenter=window.OPSMAP_DRIVER_CONTACT_CENTER;
     if(scopedCenter&&stageDriverCenter(row,routeMode)!==scopedCenter)return {...detail,text:'이 센터의 기사 연락처 자료 미연결',source:'CENTER_UNVERIFIED'};
@@ -1489,6 +1496,9 @@
   }
 
   window.addEventListener('map-driver-capability',()=>{selectedDriverContact?.clear();void refreshDriverMaster();});
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden&&document.body.dataset.mapStaffState==='authenticated'&&$('#detailSection').classList.contains('open'))refreshSelectedDriverContact();
+  });
   window.addEventListener('pagehide',event=>{if(!event.persisted){clearTemporaryPins();mapCamera?.dispose();}});
 
   function naturalCompare(a, b) {
@@ -1508,22 +1518,31 @@
       const userGesture=()=>{mapCamera?.userGesture();state.userMovedMap=true;state.fitRequested=false;};
       for(const type of ['wheel','pointerdown','touchstart'])$('#map').addEventListener(type,userGesture,{passive:true});
       if(window.KakaoMapsAdapter?.geocoder)window.kakaoGeocoder=window.KakaoMapsAdapter.geocoder();
-      const listen=(name,fn)=>{kakao.maps.event.addListener(state.map,name,fn);mapHandlers.push([name,fn]);};
-      const startMotion=()=>{mapMoving=true;if(markerFrame!==null){cancelAnimationFrame(markerFrame);markerFrame=null;}};
+      const owner=state.map;
+      const listen=(name,fn)=>{kakao.maps.event.addListener(owner,name,fn);mapHandlers.push([name,fn]);};
+      const startMotion=()=>{if(state.map===owner){mapMoving=true;cancelViewportRender();}};
       listen('dragstart',()=>{startMotion();userGesture();});
       listen('zoom_start',()=>{startMotion();if(Date.now()>=state.suppressMapEventsUntil)userGesture();});
       listen('idle',()=>{
+        if(state.map!==owner)return;
         mapMoving=false;
+        viewportMetrics.idles++;
         if(!dateReady||markerFrame!==null)return;
-        markerFrame=requestAnimationFrame(()=>{
+        const mode=state.mode;
+        const frame=markerFrame=requestAnimationFrame(()=>{
+          if(markerFrame!==frame)return;
           markerFrame=null;
-          if(mapMoving)return;
-          renderStops(state.currentRows,{viewportOnly:true,numbered:state.mode==='DATE_ROUTE'});
-          positionTemporaryDistanceLabel();scheduleNewAreaDispatchBadges();deferMapAddressWork();
+          if(mapMoving||!dateReady||state.map!==owner||state.mode!==mode||mode==='DATE_ROUTE'&&!isDailyDataReady()||
+            document.body.dataset.mapStaffState!=='authenticated'&&window.MapStaffEntry)return;
+          if(renderStops(state.currentRows,{viewportOnly:true,fromIdle:true,numbered:mode==='DATE_ROUTE'})){
+            viewportMetrics.renders++;
+            positionTemporaryDistanceLabel();scheduleNewAreaDispatchBadges();deferMapAddressWork();
+          }else viewportMetrics.skipped++;
+          $('#map').dataset.viewportMetrics=JSON.stringify(viewportMetrics);
         });
       });
       listen('click',event=>{if(searchTemporaryClick)return searchTemporaryClick(event);clearSelection();});
-      if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});for(const node of [$('#map'),$('#leftPanel'),$('#detailSection'),$('#approvedSiteHeader')])if(node)mapObserver.observe(node);}
+      if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{markerLayoutVersion++;if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});for(const node of $$('#map,#leftPanel,#detailSection,#approvedSiteHeader,#mapTopReadout,#mapTopControls,#mobileWorkspace'))mapObserver.observe(node);}
       loadBaseMap();window.dispatchEvent(new CustomEvent('map-sdk-ready'));return state.map;
     }).catch(()=>{state.map=null;$('#map').dataset.sdkState='error';setMapMessage('카카오 지도 연결을 확인해 주세요. 매장 검색·목록은 계속 사용할 수 있습니다.');const retry=document.createElement('button');retry.id='retryMapSdk';retry.textContent='지도 다시 연결';retry.onclick=()=>{window.KakaoMapsAdapter.reset();void initMap();};$('#map').append(retry);loadBaseMap();return null;}).finally(()=>{mapInitializing=null;});
     return mapInitializing;
@@ -1534,6 +1553,8 @@
   }
 
   function clearMap() {
+    cancelViewportRender();lastMarkerViewport=null;
+    detachedMarkers.clear();
     clearSearchSelectedOverlay();
     closeClusterPanel(); clearActualRoute();
     [...state.overlays, ...state.lines].forEach((item) => item.setMap?.(null));
@@ -1967,6 +1988,11 @@
     return bounds;
   }
 
+  function cancelViewportRender(){
+    if(markerFrame===null)return;
+    cancelAnimationFrame(markerFrame);markerFrame=null;viewportMetrics.cancelled++;
+  }
+
   function renderStops(rows, options = {}) {
     const started = performance.now();
     const dataChanged = indexedRows !== rows;
@@ -1974,6 +2000,7 @@
     if (!state.map) return;
     if (dataChanged || !pointIndex) {
       markerSourceVersion++;indexedRows=rows;pointIndex=MapPeriodUi.spatialIndex(rows);markerSignatures=new WeakMap();
+      detachedMarkers.clear();
     }
     if (!options.viewportOnly) { state.lines.forEach(line => line.setMap(null)); state.lines = []; }
     const {valid,byCode}=pointIndex;
@@ -1990,11 +2017,20 @@
     const selectedCode=state.selected?.customerCode;
     const protectedCodes=[selectedCode,...navCodes];
     const awaitingMaster=base&&periodBasis==='vehicle'&&baseVehicleStatus==='LOADING';
+    const center=state.map.getCenter?.();
+    const viewportKey=JSON.stringify([markerSourceVersion,markerLayoutVersion,state.mode,level,center?.getLat?.(),center?.getLng?.(),
+      mapViewport.width,mapViewport.height,fit,assignmentMode,vehicleOverview,focusedStops,baseVehicleStatus,Boolean(options.numbered),
+      selectedCode,state.selected?.lat,state.selected?.lng,state.virtual?.temporaryKey,navCodes]);
+    if(options.fromIdle&&!fit&&lastMarkerViewport===viewportKey)return false;
     const shouldShow=row=>row.virtual||row.nearbyVehicle||protectedCodes.some(code=>markerHasStore(row,code))||
       MapViewPolicy.pinAssignment(row).kind!=='unverified';
     const selectedExtra=base&&selectedCode&&!byCode.has(selectedCode)&&Number.isFinite(state.selected.lat)&&Number.isFinite(state.selected.lng)?state.selected:null;
     const projection=state.map.getProjection();
-    const projectPin=row=>projection.containerPointFromCoords(markerPosition(row));
+    const projectedPins=new Map();
+    const projectPin=row=>{
+      if(!projectedPins.has(row))projectedPins.set(row,projection.containerPointFromCoords(markerPosition(row)));
+      return projectedPins.get(row);
+    };
     const clusterOptions={mode:assignmentMode,maxMarkers:innerWidth<=760?120:180,margin:base?44:80,
       grouping:focusedStops?'individual':'territory',protectedCodes:navCodes,sourceVersion:markerSourceVersion,
       nearbyVehicleOnly:assignmentMode==='BASE_60D'};
@@ -2007,7 +2043,10 @@
       for(const code of new Set(protectedCodes)){
         const row=byCode.get(code);if(row&&(awaitingMaster||window.MapViewPolicy.pinAssignment(row).code))pins.push(row);
       }
-      const routes=readyOverview?MapViewPolicy.visibleVehicleRepresentatives(overview.representatives,projectPin,mapViewport,overviewVehicleStores()):[];
+      let visibleStores;
+      const routes=readyOverview?MapViewPolicy.visibleVehicleRepresentatives(overview.representatives,projectPin,mapViewport,{
+        get:vehicle=>(visibleStores??=overviewVehicleStores()).get(vehicle)
+      }):[];
       if(awaitingMaster)pins=pins.filter(shouldShow);
       const obstacles=routes.length?overviewPinObstacles(mapNode,selectedExtra?[...pins,selectedExtra]:pins,projectPin):[];
       pins.push(...MapViewPolicy.groupOverviewVehiclePins(routes,projectPin,mapViewport,obstacles));
@@ -2031,8 +2070,21 @@
         key:row.representative?'vehicle:'+row.vehicle:row.clusterKey||[row.virtual?'virtual':'store',runVisitId(row),row.lat,row.lng].join('|')};
     });
     const planMs=performance.now()-started;
+    const preserveDetached=base&&innerWidth>760&&options.viewportOnly&&!dataChanged;
+    const detachedLimit=180;
+    let restored=0;
     const reconciled = MapPeriodUi.reconcile(markerEntries, entries, entry => {
       const {row,zIndex}=entry;
+      const cached=detachedMarkers.get(entry.key);
+      if(cached){
+        detachedMarkers.delete(entry.key);
+        if(cached.fingerprint===entry.fingerprint){
+          cached.overlay.setMap(state.map);
+          refreshMarkerSelection(cached.overlay,entry);
+          restored++;
+          return cached.overlay;
+        }
+      }
       const overlay = new kakao.maps.CustomOverlay({
         position:markerPosition(row),
         clickable: true,
@@ -2044,7 +2096,13 @@
       overlay.setMap(state.map);
       if(row.representative||row.overviewRoutes)refreshMarkerSelection(overlay,entry);
       return overlay;
-    }, overlay => overlay.setMap(null), refreshMarkerSelection);
+    }, (overlay,key,fingerprint) => {
+      overlay.setMap(null);
+      if(!preserveDetached)return;
+      detachedMarkers.set(key,{overlay,fingerprint});
+      while(detachedMarkers.size>detachedLimit)detachedMarkers.delete(detachedMarkers.keys().next().value);
+    }, refreshMarkerSelection);
+    const overlayMs=performance.now()-started-planMs;
     markerEntries = reconciled.next;
     state.overlays = [...markerEntries.values()].map(entry=>entry.value);
     const osanCenter=fit&&window.MapNavigationLookup?.registeredCenters?.().find(row=>row.id==='osan');
@@ -2058,7 +2116,8 @@
       state.fitRequested = false;
     }
     if(state.userMovedMap)state.fitRequested=false;
-    renderMetrics.renders++; renderMetrics.created+=reconciled.created; renderMetrics.removed+=reconciled.removed; renderMetrics.reused+=reconciled.reused;
+    renderMetrics.renders++; renderMetrics.created+=reconciled.created-restored; renderMetrics.removed+=reconciled.removed; renderMetrics.reused+=reconciled.reused+restored;
+    renderMetrics.restored=(renderMetrics.restored||0)+restored;
     renderMetrics.lastMs=+(performance.now()-started).toFixed(2);
     if(markerEntries.size&&renderMetrics.firstMs===undefined){
       renderMetrics.firstMs=renderMetrics.lastMs;
@@ -2075,8 +2134,10 @@
       });
     }
     mapNode.setAttribute('data-render-metrics',JSON.stringify({...renderMetrics,sourceRows:rows.length,active:markerEntries.size,
-      markerMode,planMs:+planMs.toFixed(2),
+      markerMode,planMs:+planMs.toFixed(2),overlayMs:+overlayMs.toFixed(2),detached:detachedMarkers.size,
       representedStores:pins.reduce((count,row)=>count+(row.overviewRoutes?.reduce((total,route)=>total+route.storeCount,0)??row.clusterRows?.length??(row.customerCode?1:0)),0)}));
+    lastMarkerViewport=fit?null:viewportKey;
+    return true;
   }
 
   function clearActualRoute() {
@@ -4878,7 +4939,7 @@
     setSelectedVehicles(selected);
     refreshVehicleUi(false);
   });
-  window.addEventListener('pagehide',event=>{cancelManualRoadRoute();resetRoadRoute();if(event.persisted)hybridUi?.cancel();else{hybridUi?.dispose();mapObserver?.disconnect();for(const [name,fn]of mapHandlers)kakao?.maps?.event?.removeListener?.(state.map,name,fn);mapHandlers=[];}});window.addEventListener('pageshow',event=>{if(event.persisted)mapCamera?.scheduleRelayout();});
+  window.addEventListener('pagehide',event=>{cancelViewportRender();cancelManualRoadRoute();resetRoadRoute();if(event.persisted)hybridUi?.cancel();else{hybridUi?.dispose();mapObserver?.disconnect();for(const [name,fn]of mapHandlers)kakao?.maps?.event?.removeListener?.(state.map,name,fn);mapHandlers=[];}});window.addEventListener('pageshow',event=>{if(event.persisted)mapCamera?.scheduleRelayout();});
   if(document.body.dataset.mapStaffState==='authenticated'||!window.MapStaffEntry){
     initMap();
     initializeGeneral();

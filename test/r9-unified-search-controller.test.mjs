@@ -6,6 +6,8 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import '../public/opsmap/phase2b-ui-helpers.js';
 import '../public/opsmap/new-area-requests.js';
+import '../public/opsmap/map-view-policy.js';
+import '../public/opsmap/map-period-ui.js';
 
 // Controller boundaries only. All customers/addresses are synthetic and no network runs.
 const publicRoot=process.env.OPSMAP_QA_PUBLIC_ROOT || fileURLToPath(new URL('../public/opsmap/',import.meta.url));
@@ -21,7 +23,7 @@ function declaration(name){
 }
 // Pick only A-owned declarations: B's interleaved temporary-pin functions remain
 // interface stubs here and are exercised by the independent full-browser QA.
-const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','getSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
+const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','getSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','fixedVehicleFor','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','cancelSearchAddressPreparation','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
  'renderResults','unifiedAddressQuery','stageAddressHashMatches','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
@@ -33,7 +35,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
   searchIndex:null,searchFlight:null,searchAddressPreparation:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,
-  stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{...globalThis.NewAreaRequests,stageAddress,temporaryPoint:()=>null,message:error=>error.code},Phase2bUi:globalThis.Phase2bUi,
+  stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{...globalThis.NewAreaRequests,stageAddress,temporaryPoint:()=>null,message:error=>error.code},Phase2bUi:globalThis.Phase2bUi,MapPeriodUi:globalThis.MapPeriodUi,
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
   window:{MapManualPins:{apply:row=>manual?.(row)}},
@@ -60,6 +62,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
  let frameId=0;
  const c={
   dateReady:true,mapInitializing:null,mapCamera:null,mapMoving:false,mapHandlers:[],markerFrame:null,addressScheduleFrame:null,
+  viewportMetrics:{idles:0,renders:0,skipped:0,cancelled:0},
   state:{mode:'BASE_60D',map:null,selected,currentRows:[visible]},
   document:{hidden:false,body:{dataset:{mapStaffState:'authenticated'}}},
   window:{KakaoMapsAdapter:{ready:async()=>{}},dispatchEvent(){}},
@@ -69,7 +72,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
   setMapMessage:message=>assert.fail(message),
   requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},
   cancelAnimationFrame:id=>frames.delete(id),
-  renderStops:rows=>renders.push(rows),scheduleVisibleAddressRows:rows=>queues.push(rows),
+  renderStops:(rows,options)=>{assert.equal(options.fromIdle,true);return renders.push(rows)>0;},scheduleVisibleAddressRows:rows=>queues.push(rows),
  };
  function flushFrames(){
   while(frames.size){
@@ -78,7 +81,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
    callback();
   }
  }
- vm.runInNewContext(['scheduleMapAddressWork','deferMapAddressWork','initMap'].map(declaration).join('\n'),c);
+ vm.runInNewContext(['scheduleMapAddressWork','deferMapAddressWork','cancelViewportRender','initMap'].map(declaration).join('\n'),c);
  assert(await c.initMap());
  events.get('idle')();
  events.get('dragstart')();
@@ -94,6 +97,18 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
  assert.equal(badgeLayouts.length,1);
  assert.equal(queues[0][0],selected);
  assert(queues[0].includes(visible));
+ events.get('idle')();
+ c.dateReady=false;
+ flushFrames();
+ assert.equal(renders.length,1);
+ c.dateReady=true;
+ events.get('idle')();
+ c.state.map={};
+ flushFrames();
+ assert.equal(renders.length,1);
+ events.get('idle')();
+ flushFrames();
+ assert.equal(renders.length,1);
 });
 
 test('search address normalization preserves building numbers and province aliases',()=>{
