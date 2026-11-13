@@ -1872,11 +1872,7 @@
     if(overlay.getZIndex?.()!==entry.zIndex)overlay.setZIndex?.(entry.zIndex);
     if(entry.row?.representative){
       mapMarkerRows.set(button,entry.row);
-      const offset=entry.row.representativeOffset;
-      const translate=offset?`${offset.x}px ${offset.y}px`:'';
-      if(button.style.translate!==translate)button.style.translate=translate;
-      const parent=button.parentElement;
-      if(parent&&parent!==$('#map')&&parent.style.pointerEvents!=='none')parent.style.pointerEvents='none';
+      moveMapOverlayButton(button,entry.row.representativeOffset,$('#map'));
     }
   }
 
@@ -3213,6 +3209,11 @@
     dispatchBadgeFrame=null;
     for(const {value} of newAreaDispatchOverlays.values())value.overlay.setMap(null);
     newAreaDispatchOverlays.clear();
+    const map=$('#map');
+    for(const overlay of state.overlays){
+      const button=overlay.getContent?.(),row=mapMarkerRows.get(button);
+      if(row?.representative)moveMapOverlayButton(button,row.representativeOffset,map);
+    }
   }
 
   const areaVehicleKey=({vehicle,center})=>(center||'')+'|'+vehicle;
@@ -3235,6 +3236,13 @@
     dispatchBadgeFrame=requestAnimationFrame(()=>{dispatchBadgeFrame=null;positionNewAreaDispatchBadges();});
   }
 
+  function moveMapOverlayButton(content,offset,map) {
+    const translate=offset&&(offset.x||offset.y)?`${offset.x}px ${offset.y}px`:'';
+    if(content.style.translate!==translate)content.style.translate=translate;
+    const parent=content.parentElement;
+    if(parent&&parent!==map&&parent.style.pointerEvents!=='none')parent.style.pointerEvents='none';
+  }
+
   function positionNewAreaDispatchBadges() {
     if(!newAreaDispatchOverlays.size)return;
     const map=$('#map'),projection=state.map?.getProjection();
@@ -3242,7 +3250,7 @@
     const {left,top}=map.getBoundingClientRect();
     const bounds={left:Math.max(0,left+4),top:Math.max(0,top+4),right:Math.min(innerWidth,left+map.clientWidth)-4,
       bottom:Math.min(innerHeight,top+map.clientHeight)-4};
-    const obstacleSelector='.marker .pin,.marker.virtual,.searchTemporaryRemove,.navRoutePoint,.osanCenterMarker,.temporaryDistanceLabel';
+    const obstacleSelector='.marker:not([data-representative-vehicle]) .pin,.marker.virtual,.searchTemporaryRemove,.navRoutePoint,.osanCenterMarker,.temporaryDistanceLabel';
     const uiSelector='#approvedSiteHeader,#detailSection.open,#leftPanel,#mapReset,#mapClusterPanel';
     const obstacles=[...map.querySelectorAll(obstacleSelector),...$$(uiSelector)].flatMap(element=>{
       const rect=element.getBoundingClientRect();
@@ -3253,14 +3261,29 @@
       const anchor=projection.containerPointFromCoords(position),width=content.offsetWidth,height=content.offsetHeight;
       return {id,left:left+anchor.x-width/2,top:top+anchor.y-3*height,width,height};
     });
-    const placements=new Map(MapViewPolicy.placeOverlayLabels(badges,bounds,obstacles).map(value=>[value.id,value]));
+    const badgeOffsets=MapViewPolicy.placeOverlayLabels(badges,bounds,obstacles,{maxColumns:3,maxRows:5});
+    const placements=new Map(badgeOffsets.map(value=>[value.id,value]));
     items.forEach(({content},id)=>{
       const offset=placements.get(id);
       // The existing vehicle list remains available if no readable spot fits.
       content.classList.toggle('mapBadgeObscured',!offset||offset.hidden===true);
       // Kakao keeps the wrapper at the anchor after the button moves.
-      if(content.parentElement&&content.parentElement!==map)content.parentElement.style.pointerEvents='none';
-      content.style.translate=offset&&!offset.hidden?`${offset.x}px ${offset.y}px`:'';
+      moveMapOverlayButton(content,offset,map);
+      if(offset&&!offset.hidden){
+        const {left,top,width,height}=badges[id];
+        obstacles.push({left:left+offset.x,top:top+offset.y,right:left+offset.x+width,bottom:top+offset.y+height});
+      }
+    });
+    const representatives=state.overlays.flatMap(overlay=>{
+      const content=overlay.getContent?.();
+      if(!content?.dataset.representativeVehicle)return [];
+      const position=projection.containerPointFromCoords(overlay.getPosition());
+      return [{content,left:left+position.x-22,top:top+position.y-56,width:44,height:56}];
+    });
+    const offsets=new Map(MapViewPolicy.placeOverlayLabels(representatives.map((badge,id)=>({...badge,id})),bounds,obstacles,
+      {retainWhenCrowded:true}).map(value=>[value.id,value]));
+    representatives.forEach(({content},id)=>{
+      moveMapOverlayButton(content,offsets.get(id),map);
     });
   }
 

@@ -284,7 +284,7 @@
     }
     return area?{...area,x:(area.left+area.right)/2,y:(area.top+area.bottom)/2,basis:'UNOBSCURED_MAP'}:null;
   }
-  function placeOverlayLabels(badges, bounds, obstacles,{retainWhenCrowded=false}={}) {
+  function placeOverlayLabels(badges, bounds, obstacles,{retainWhenCrowded=false,maxColumns=2,maxRows=3}={}) {
     const gap=4, occupied=obstacles.slice(), placed=[];
     const intersects=(a,b)=>a.left<b.right+gap&&a.right+gap>b.left&&a.top<b.bottom+gap&&a.bottom+gap>b.top;
     for(const badge of badges){
@@ -298,7 +298,7 @@
       const original=boxAt(baseX,baseY);
       if(fits(original)){occupied.push(original);placed.push({id,x:baseX,y:baseY});continue;}
       const offsets=[];
-      for(let row=-3;row<=3;row++)for(let column=-2;column<=2;column++){
+      for(let row=-maxRows;row<=maxRows;row++)for(let column=-maxColumns;column<=maxColumns;column++){
         const x=baseX+column*(width+gap),y=baseY+row*(height+gap);
         offsets.push({x,y,dist:x*x+y*y});
       }
