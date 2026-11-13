@@ -73,11 +73,16 @@ test('pins distinguish the primary fixed route, confirmed blank, and missing evi
   assert.equal(pinAssignment({...row,baseVehicle:'용09'}).label,'용09');
   assert.equal(pinAssignment({...row,baseVehicle:'보류'}).label,'오산보류');
   const blank={baseVehicle:'',vehicle:'202',baseVehicleState:'UNASSIGNED',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'};
-  assert.equal(pinAssignment(blank).label,'•');
+  assert.equal(pinAssignment(blank).label,'미확인');
   assert.equal(pinAssignment({...blank,baseVehicleEmptyVerified:true}).label,'?');
-  assert.equal(pinAssignment({...blank,baseVehicleState:'UNKNOWN',baseVehicleVersion:'v'}).label,'•');
-  assert.deepEqual(pinAssignment({...blank,baseVehicleState:'UNKNOWN'}),{code:'',label:'',kind:'unverified',loading:true});
-  assert.equal(pinAssignment({...row,baseVehicleState:'CONFLICT'}).label,'•');
+  assert.equal(pinAssignment({...blank,baseVehicleState:'UNKNOWN',baseVehicleVersion:'v'}).label,'미확인');
+  assert.deepEqual(pinAssignment({...blank,baseVehicleState:'UNKNOWN'}),{code:'',label:'미확인',kind:'unverified',loading:true});
+  assert.equal(pinAssignment({...row,baseVehicleState:'CONFLICT'}).label,'충돌');
+  assert.equal(pinAssignment({...row,baseVehicleState:'NOT_IN_MASTER'}).label,'미등록');
+  for(const value of ['.','·','•','?','','미배정','비활성','unknown']){
+    assert.equal(pinAssignment({...row,baseVehicle:value}).code,'');
+    assert.equal(pinAssignment({vehicle:value},'DATE_ROUTE').label,'미확인');
+  }
   assert.equal(MapPeriodUi.baseVehicleLabel(blank),'확인 필요');
   assert.equal(MapPeriodUi.baseVehicleLabel({...blank,baseVehicleEmptyVerified:true}),'미지정');
   assert.equal(MapPeriodUi.baseVehicleLabel({...row,baseVehicle:'보류'}),'오산보류');
@@ -90,11 +95,14 @@ test('pins distinguish the primary fixed route, confirmed blank, and missing evi
   assert.equal(pinAssignment(pair).label,'101·114');
   assert.deepEqual(pair.clusterVehicles,['101','114']);
   const [uncertain]=exactLocations([same('S1',blank),same('S2',{...blank,baseVehicleEmptyVerified:true})]);
-  assert.equal(pinAssignment(uncertain).label,'•');
+  assert.equal(pinAssignment(uncertain).label,'미확인');
   assert.deepEqual(uncertain.memberCodes,['S1','S2']);
+  const [oneRoute]=exactLocations([same('S1',row),same('S2',{...row,baseVehicleState:'NOT_IN_MASTER'})]);
+  assert.equal(pinAssignment(oneRoute).label,'114');
+  assert.equal(oneRoute.clusterUnverified,true);
 });
 
-test('initial map pins use counts for groups and retain the loading message outside the pin label', () => {
+test('loading and unknown pins use readable labels while grouping keeps the store count', () => {
   class Element {
     dataset = {};
     children = [];
@@ -117,21 +125,51 @@ test('initial map pins use counts for groups and retain the loading message outs
   const pending = { customerCode:'S10001', customerName:'매장', baseVehicleState:'UNKNOWN' };
   const label = marker=>marker.children[0].children[0].textContent;
   const store = makeMarker(pending,null,'store');
-  assert.equal(label(store),'');
+  assert.equal(label(store),'조회 중');
   assert.equal(store.dataset.pinAssignment,'loading');
   assert.match(store.attributes['aria-label'],/기준호차 조회 중/);
   const group = makeMarker({...pending,customerCode:'',clusterCount:9,
-    clusterAssignment:{code:'',kind:'unverified',label:''}},null,'store');
-  assert.equal(label(group),'9');
+    clusterAssignment:{code:'',kind:'unverified',label:'미확인'}},null,'store');
+  assert.equal(label(group),'미확인');
   assert.match(group.attributes['aria-label'],/9개 매장/);
   context.baseVehicleStatus='ERROR';
   const failed = makeMarker(pending,null,'store');
-  assert.equal(label(failed),'•');
+  assert.equal(label(failed),'미확인');
   assert.equal(failed.dataset.pinAssignment,'unverified');
   assert.match(failed.attributes['aria-label'],/기준호차 확인 필요/);
   assert.equal(label(makeMarker({...pending,baseVehicle:'156',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'156');
   assert.equal(label(makeMarker({...pending,baseVehicle:'오산신규',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'오산\n신규');
   assert.equal(label(makeMarker({...pending,baseVehicle:'오산보류',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'오산\n보류');
+});
+
+test('store search retains verified fixed-route evidence and clears outdated empty-route evidence',()=>{
+  const code='S10001';
+  const verified={customerCode:code,baseVehicle:'114',baseVehicleGroup:'osan',baseVehicleState:'VERIFIED_MASTER',
+    baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:'a'.repeat(64),baseVehicleCheckedAt:'2026-11-12T00:00:00Z',weekdays:{Mon:'114'}};
+  const snapshot={...verified,baseVehicle:'',baseVehicleState:'UNASSIGNED',baseVehicleEmptyVerified:true};
+  const baseVehicles=new Map(), coordinateByCode=new Map([[code,verified]]), storesByCode=new Map();
+  const fixed=runtime.slice(runtime.indexOf('  function fixedVehicleFor('),runtime.indexOf('  function replaceStoreSnapshot('));
+  const search=runtime.slice(runtime.indexOf('  function normalizeApiStore('),runtime.indexOf('  function closeUnifiedSearchResults('));
+  const normalize=vm.runInNewContext(fixed+search+'\nnormalizeApiStore',{
+    state:{mode:'BASE_60D'},periodBasis:'vehicle',baseVehicles,coordinateByCode,storesByCode,storeByVehicleAndCode:new Map(),MapPeriodUi,
+    normalizeVehicle:String,numberOrNull:value=>value??null
+  });
+  const hit={customerCode:code,vehicle:'202',baseVehicle:'999',baseVehicleEmptyVerified:true};
+  const stored=normalize(hit);
+  assert.equal(MapViewPolicy.pinAssignment(stored).label,'114');
+  assert.equal(stored.vehicle,'114');
+  assert.equal(stored.baseVehicleStale,true);
+  assert.equal(stored.weekdays.Mon,'114');
+  assert.equal(stored.baseVehicleEmptyVerified,false);
+  coordinateByCode.set(code,snapshot);
+  assert.equal(MapViewPolicy.pinAssignment(normalize(hit)).label,'?');
+  baseVehicles.set(code,{...snapshot,baseVehicleEmptyVerified:undefined,baseVehicleVersion:'b'.repeat(64),baseVehicleCheckedAt:'2026-11-13T00:00:00Z'});
+  assert.equal(MapViewPolicy.pinAssignment(normalize(hit)).label,'미확인');
+  baseVehicles.clear();coordinateByCode.clear();
+  const unverified=normalize(hit);
+  assert.equal(unverified.vehicle,'');
+  assert.equal(unverified.baseVehicleEmptyVerified,false);
+  assert.equal(MapViewPolicy.pinAssignment(unverified).loading,true);
 });
 
 test('nearby vehicle badges avoid existing pins and each other, with overflow left in the existing list', () => {

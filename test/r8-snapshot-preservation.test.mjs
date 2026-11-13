@@ -19,6 +19,15 @@ test('projection discards raw addresses, all secrets and source objects',()=>{
  assert.throws(()=>snapshotProjection(snapshot([row(0),row(0)]),{now}),{code:'SNAPSHOT_DUPLICATE_CUSTOMER'});
  const corrupt=structuredClone(projected);corrupt.rows[0].lat+=1;assert.throws(()=>validateSnapshotProjection(corrupt),{code:'SNAPSHOT_INTEGRITY'});
 });
+test('snapshot restore preserves a confirmed blank fixed route and rejects unrelated blank evidence',()=>{
+ const base={baseVehicle:'',baseVehicleState:'UNASSIGNED',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleEmptyVerified:true};
+ const projected=snapshotProjection(snapshot([{...row(0),...base},{...row(1),...base,baseVehicleState:'UNKNOWN'},
+  {...row(2),...base,baseVehicleSource:'PUBLISHED_ONLY'}]),{now});
+ const saved=validateSnapshotProjection(structuredClone(projected)).rows;
+ assert.equal(saved[0].baseVehicleEmptyVerified,true);
+ assert.equal(saved[1].baseVehicleEmptyVerified,undefined);
+ assert.equal(saved[2].baseVehicleEmptyVerified,undefined);
+});
 test('partial source with no rows cannot delete current; newer additions union; stale rows do not overwrite',()=>{
  const old=snapshotProjection(snapshot([row(0,'2026-10-31')]),{now});
  assert.throws(()=>mergePreservedSnapshot(old,snapshot([]),{now}),{code:'SNAPSHOT_COUNT'});

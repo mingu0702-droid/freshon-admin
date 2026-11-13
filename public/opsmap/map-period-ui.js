@@ -184,6 +184,15 @@
     }
     return next;
   }
+  function fixedVehicleEvidence(row) {
+    if(row?.baseVehicleSource!=='FIXED_DISPATCH_PRIMARY'||!/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'')||
+      !Number.isFinite(Date.parse(row.baseVehicleCheckedAt))||!['VERIFIED_MASTER','UNASSIGNED','CONFLICT','NOT_IN_MASTER'].includes(row.baseVehicleState))return null;
+    const baseVehicle=row.baseVehicleState==='VERIFIED_MASTER'?root.MapViewPolicy.pinAssignment(row).code:'';
+    if(row.baseVehicleState==='VERIFIED_MASTER'&&!baseVehicle)return null;
+    return {baseVehicle,baseVehicleGroup:row.baseVehicleGroup||'',baseVehicleState:row.baseVehicleState,
+      baseVehicleSource:row.baseVehicleSource,baseVehicleVersion:row.baseVehicleVersion,baseVehicleCheckedAt:row.baseVehicleCheckedAt,
+      baseVehicleStale:row.baseVehicleStale===true,baseVehicleEmptyVerified:row.baseVehicleState==='UNASSIGNED'&&row.baseVehicleEmptyVerified===true,weekdays:row.weekdays};
+  }
   function baseVehicleLabel(row) {
     if(row.baseVehicleState==='CONFLICT')return '기준 충돌';
     if(row.baseVehicleState==='NOT_IN_MASTER')return row.baseVehicleStale===true?'기준호차 확인 필요':'고정배차표에 없음';
@@ -193,5 +202,5 @@
   }
   root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile, parseAreaInput,
     regionForAddress, areaRadius, areaDispatchVehicles, areaDispatchDays, areaDispatchReference, areaFixedWeekdayLabel, areaDistance, areaVehicleLabel, areaExportHeadings, areaExportRows, areaTsv,
-    acceptsBaseVersion, mergeBaseVehicles, baseVehicleLabel });
+    acceptsBaseVersion, mergeBaseVehicles, fixedVehicleEvidence, baseVehicleLabel });
 })(typeof window === 'undefined' ? globalThis : window);

@@ -28,6 +28,7 @@ function projectRow(input){
  for(const key of textFields)if(typeof input[key]==='string'&&input[key].length<=256&&!/[\u0000-\u001f]/.test(input[key]))row[key]=input[key];
  for(const key of numberFields)if(typeof input[key]==='number'&&Number.isFinite(input[key]))row[key]=input[key];
  for(const key of ['appRecorded','isActualDateStop','baseVehicleStale'])if(typeof input[key]==='boolean')row[key]=input[key];
+ if(input.baseVehicleState==='UNASSIGNED'&&input.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&input.baseVehicleEmptyVerified===true)row.baseVehicleEmptyVerified=true;
  for(const key of ['lastDeliveryDate','deliveryDate']){const d=day(input[key]);if(d)row[key]=d;}
  const lat=input.lat??input.latitude,lng=input.lng??input.longitude;
  if(coordinateValue(lat)&&coordinateValue(lng)&&Number.isFinite(Number(lat))&&Number.isFinite(Number(lng))&&Math.abs(Number(lat))<=90&&Math.abs(Number(lng))<=180){row.lat=Number(lat);row.lng=Number(lng);}else {row.lat=null;row.lng=null;}

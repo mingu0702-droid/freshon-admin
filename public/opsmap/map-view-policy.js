@@ -18,15 +18,21 @@
   function region(row) {
     return regionColors[row.addressRegion] ? row.addressRegion : '';
   }
-  const unverified = Object.freeze({code:'',label:'•',kind:'unverified'});
-  const pending = Object.freeze({code:'',label:'',kind:'unverified',loading:true});
+  const unverified = Object.freeze({code:'',label:'미확인',kind:'unverified'});
+  const pending = Object.freeze({...unverified,loading:true});
+  const notInMaster = Object.freeze({...unverified,label:'미등록'});
+  const conflict = Object.freeze({...unverified,label:'충돌'});
   const unknown = Object.freeze({code:'',label:'?',kind:'unknown'});
-  const datedUnknown = Object.freeze({code:'',label:'•',kind:'unverified'});
-  const absence = /^(?:|[-?]|미확인|호차미확인|미지정|없음)$/;
+  const absence = /^(?:|[-.?·•…]+|미확인|호차미확인|확인필요|조회중|미지정|미배정|미등록|비활성|없음|unknown|unassigned|inactive|n\/a)$/i;
   function pinAssignment(row, mode='BASE_60D') {
     if (row.clusterAssignment) return row.clusterAssignment;
     const dated=mode==='DATE_ROUTE';
-    if(!dated&&row.baseVehicleState==='CONFLICT')return unverified;
+    if(!dated){
+      if(row.baseVehicleState==='CONFLICT')return conflict;
+      if(row.baseVehicleState==='NOT_IN_MASTER')return notInMaster;
+      if(row.baseVehicleState==='UNASSIGNED')return row.baseVehicleEmptyVerified===true&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'?unknown:unverified;
+      if(row.baseVehicleState==='UNKNOWN')return row.baseVehicleVersion?unverified:pending;
+    }
     const raw=dated?row.vehicle||row.actualVehicle:row.baseVehicle??(row.baseVehicleState?'':row.vehicle);
     const value=String(raw??'').normalize('NFKC').trim(), compact=value.replace(/\s+/g,'');
     if(/^(?:오산|영남|호남|이천)신규$/.test(compact))return {code:compact,label:compact,kind:'new'};
@@ -34,8 +40,7 @@
     const number=compact.match(/^(\d+)(?:호(?:차)?)?$/)?.[1];
     if(number)return {code:number,label:number,kind:'vehicle'};
     if(!absence.test(compact)&&/^[\p{L}\p{N}_-]{1,64}$/u.test(compact))return {code:value,label:value,kind:'other'};
-    if(dated)return datedUnknown;
-    if(row.baseVehicleState==='UNASSIGNED'&&row.baseVehicleEmptyVerified===true&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY')return unknown;
+    if(dated)return unverified;
     return (!row.baseVehicleState||row.baseVehicleState==='UNKNOWN')&&!row.baseVehicleVersion?pending:unverified;
   }
   function makeGroup(key, route = '') {
@@ -77,8 +82,9 @@
     const unassigned=members.some(assignment=>assignment.kind==='unknown');
     const unmatched=members.some(assignment=>assignment.kind==='unverified');
     const first=members[0];
-    const assignment=members.every(item=>item.code===first.code&&item.label===first.label)?first:
-      vehicles.length?{code:'',label:vehicles.join('·'),kind:'mixed'}:unverified;
+    const assignment=members.every(item=>item.code===first.code&&item.label===first.label&&item.loading===first.loading)?first:
+      vehicles.length===1?members.find(item=>item.code===vehicles[0]):
+      vehicles.length>1?{code:'',label:vehicles.join('·'),kind:'mixed'}:unverified;
     const regions=[...new Set(group.rows.map(region))].sort();
     const v=assignment.code,r=regions.length===1?regions[0]:'';
     const sameLocation=group.south===group.north&&group.west===group.east;
