@@ -212,7 +212,8 @@ export function createStageDailyFixedMasterReader({store, baseline}) {
         info={state:head.attempt?.state||'NOT_PUBLISHED',lastError:head.lastFailure?.code||null,
           lastFailureAt:head.lastFailure?.at||null};
       } catch (e) {
-        info={state:'READ_FAILED',lastError:failureCode(e)};
+        const retained=cached && info?.version===cached.version ? info : null;
+        info={...retained,state:'READ_FAILED',lastError:failureCode(e)};
         if (cached) return cached;
         if (head?.previous) {
           cached=await verifiedObject(store,head.previous).catch(()=>null);

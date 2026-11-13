@@ -93,6 +93,18 @@ test('complete daily projection is scoped, single-flight, and a no-change day ve
   assert.equal(after.meta.scheduledRunId,receipt(tick).runId);
   assert.equal(after.meta.registryGeneration,scope.generation);
   assert.equal(after.meta.sourceAsOf,null);
+  const lastVerifiedAt=after.meta.scheduledLastSuccessAt;
+  const read=store.read;
+  store.read=async name=>{
+    if (name===head) throw Error('FIXED_STORE_READ');
+    return read(name);
+  };
+  tick+=6*60_000;
+  const retained=await cache.get([codes[0]]);
+  assert.equal(retained.meta.checkedAt,lastVerifiedAt);
+  assert.equal(retained.meta.scheduledLastSuccessAt,lastVerifiedAt);
+  assert.equal(retained.meta.lastError,'FIXED_STORE_READ');
+  assert.equal(retained.meta.stale,true);
 });
 
 test('partial pages, authorization errors and restart preserve the last published generation',async ()=>{
