@@ -227,7 +227,7 @@
   $('#sourceRoutePicker').hidden=true;document.body.append(routeDialog);$('#closeRoutes').onclick=()=>routeDialog.close();
   $('#chooseRoutes').onclick=()=>{if(bridge.state.mode!=='DATE_ROUTE')return;syncModeControls(true);routeDialog.showModal();syncRouteDialogFilters();};
   const periodButton=document.createElement('button');periodButton.id='openPeriodQuery';periodButton.textContent='기간별 조회';context.append(periodButton);
-  periodButton.onclick=()=>{if(bridge.state.mode!=='BASE_60D')return;dailyForm.hidden=false;syncModeControls(false,true);routeDialog.showModal();};
+  periodButton.onclick=()=>{if(bridge.state.mode!=='BASE_60D')return;dataDialog.close();dailyForm.hidden=false;syncModeControls(false,true);routeDialog.showModal();};
   for(const button of periodActions){const run=button.onclick;button.onclick=event=>{routeDialog.close();return run?.(event);};}
   // Keep the existing controller's deferred-page action reachable after closing
   // the query dialog. The page itself remains bounded to seven complete dates.
