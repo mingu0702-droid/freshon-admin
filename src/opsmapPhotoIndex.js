@@ -3,9 +3,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { boundedRead, isDay, privateCoverageDirectory } from './shadowCoverage/coverageFiles.js';
 import { atomicCoverageWrite } from './shadowCoverage/fileStore.js';
-import { DeliveryPhotoError, FRONT_DOOR_PHOTO_KIND, validDeliveryId } from './opsmapDeliveryPhotos.js';
+import { DELIVERY_PHOTO_KINDS, DeliveryPhotoError, validDeliveryId } from './opsmapDeliveryPhotos.js';
 
-export const INDEX_PHOTO_KINDS = Object.freeze([FRONT_DOOR_PHOTO_KIND, 'REFRIGERATOR_DOOR']);
+export const INDEX_PHOTO_KINDS = DELIVERY_PHOTO_KINDS;
+const DELIVERY_PHOTO_SCOPE = 2;
+const retiredPhotoKind = kind => kind === 'REFRIGERATOR_DOOR' || kind === 'ENTRANCE_LOCK';
 const DAY = 86400000;
 const MAX_FILE = 8 * 1024 * 1024;
 const PAGE_SIZE = 24;
@@ -70,9 +72,9 @@ function photoRef(photo) {
   if (!INDEX_PHOTO_KINDS.includes(photo?.kind) || ref?.kind !== photo.kind || ref.history === true ||
       !digest(ref.fingerprint) || !digest(ref.recordFingerprint) || !position(ref.attachmentIndex) ||
       !position(ref.imageIndex) || (ref.childImageIndex !== undefined && !position(ref.childImageIndex)) ||
-      (photo.kind === FRONT_DOOR_PHOTO_KIND && !validDeliveryId(photo.recordId))) fail('INVALID_PHOTO_RESPONSE', 502);
+      !validDeliveryId(photo.recordId)) fail('INVALID_PHOTO_RESPONSE', 502);
   const {kind, attachmentIndex, imageIndex, childImageIndex, fingerprint, recordFingerprint} = ref;
-  return {kind, ...(kind === FRONT_DOOR_PHOTO_KIND ? {recordId: String(photo.recordId)} : {}),
+  return {kind, recordId:String(photo.recordId),
     ref: {kind, attachmentIndex, imageIndex, ...(childImageIndex === undefined ? {} : {childImageIndex}), fingerprint, recordFingerprint}};
 }
 
@@ -93,7 +95,7 @@ function compactRanges(days) {
   return ranges;
 }
 
-export function createOpsmapPhotoIndex({directory, appRoot = process.cwd(), now = Date.now} = {}) {
+export function createOpsmapPhotoIndex({directory, appRoot = process.cwd(), now = Date.now, allowMountedLinks = false} = {}) {
   let root;
   const indexFile = async customerCode => {
     if (!validCode(customerCode)) fail('INVALID_CUSTOMER_CODE', 400);
@@ -101,16 +103,29 @@ export function createOpsmapPhotoIndex({directory, appRoot = process.cwd(), now 
     return path.join(root, `${hash(customerCode)}.json`);
   };
   async function load(file) {
+    let entry;
+    let reason = 'FILE_STAT';
     try {
-      if (!(await fs.lstat(file)).isFile()) fail('PHOTO_HISTORY_INDEX_INVALID');
-      const bytes = await boundedRead(file, MAX_FILE);
+      let openedFile = file;
+      entry = await fs.lstat(file);
+      if (allowMountedLinks && entry.isSymbolicLink()) {
+        reason = 'FILE_LINK';
+        openedFile = await fs.realpath(file);
+        const relative = path.relative(root, openedFile);
+        if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) fail('PHOTO_HISTORY_INDEX_INVALID');
+        if (!(await fs.lstat(openedFile)).isFile()) fail('PHOTO_HISTORY_INDEX_INVALID');
+      } else if (!entry.isFile()) fail('PHOTO_HISTORY_INDEX_INVALID');
+      reason = 'FILE_READ';
+      const bytes = await boundedRead(openedFile, MAX_FILE);
+      reason = 'FILE_SCHEMA';
       const value = JSON.parse(bytes.toString('utf8'));
-      if (value?.schema !== 1 || !value.plan || !Array.isArray(value.tasks) || !value.discovery) fail('PHOTO_HISTORY_INDEX_INVALID');
+      if (value?.schema !== 1 || (value.deliveryPhotoScope !== undefined && value.deliveryPhotoScope !== DELIVERY_PHOTO_SCOPE) ||
+          !value.plan || !Array.isArray(value.tasks) || !value.discovery) fail('PHOTO_HISTORY_INDEX_INVALID');
       value.plan = validatePhotoIndexPlan(value.plan);
       return {value, generation: hash(bytes)};
     } catch (error) {
-      if (error.code === 'ENOENT') return null;
-      fail('PHOTO_HISTORY_INDEX_INVALID');
+      if (error.code === 'ENOENT' && !entry) return null;
+      throw Object.assign(new DeliveryPhotoError('PHOTO_HISTORY_INDEX_INVALID', 503, {stage:'source-index'}), {indexReason:reason});
     }
   }
   async function loadCustomer(file, customerCode) {
@@ -147,22 +162,25 @@ export function createOpsmapPhotoIndex({directory, appRoot = process.cwd(), now 
     const {plan, tasks, discovery} = value;
     if (plan.customerCode !== customerCode) fail('PHOTO_HISTORY_INDEX_INVALID');
     const checkedDays = dates(plan);
-    const badTaskDays = new Set(tasks.filter(task => task.state !== 'CHECKED').map(task => task.date));
+    const currentScope = value.deliveryPhotoScope === DELIVERY_PHOTO_SCOPE;
+    const badTaskDays = new Set(tasks.filter(task => !currentScope || task.state !== 'CHECKED').map(task => task.date));
     const certified = new Set(plan.verifiedRanges.flatMap(dates));
     const missing = checkedDays.filter(day => discovery[day] !== 'CHECKED' || badTaskDays.has(day) || !certified.has(day) ||
       (day < plan.currentFrom && !plan.aliases.some(alias => inRange(day, alias))));
-    const complete = Boolean(plan.retentionProof && plan.identityProof && !missing.length && plan.through >= isoDay(now() + 9 * 3600000));
+    const complete = Boolean(currentScope && plan.retentionProof && plan.identityProof && !missing.length && plan.through >= isoDay(now() + 9 * 3600000));
     const statuses = [...Object.values(discovery), ...tasks.map(task => task.state)];
     const state = statuses.includes('AUTH_REQUIRED') ? 'AUTH_REQUIRED' : statuses.includes('FAILED') ? 'FAILED' : complete ? 'COMPLETE' : 'COLLECTING';
-    const [token, rawOffset, extra] = cursor ? cursor.split('.') : [generation, '0'];
-    if (token !== generation || extra !== undefined || !/^\d{1,8}$/.test(rawOffset || '')) fail('PHOTO_HISTORY_CHANGED', 409);
+    const pageGeneration = hash(generation + ':' + DELIVERY_PHOTO_SCOPE);
+    const [token, rawOffset, extra] = cursor ? cursor.split('.') : [pageGeneration, '0'];
+    if (token !== pageGeneration || extra !== undefined || !/^\d{1,8}$/.test(rawOffset || '')) fail('PHOTO_HISTORY_CHANGED', 409);
     const offset = Number(rawOffset);
     let total = 0;
     const items = [];
     for (const task of tasks) {
       if (!bindingMatches(task, plan) || !validDeliveryId(task.deliveryId) || !Array.isArray(task.photos)) fail('PHOTO_HISTORY_INDEX_INVALID');
       for (const photo of task.photos) {
-        if (!INDEX_PHOTO_KINDS.includes(photo.kind)) fail('PHOTO_HISTORY_INDEX_INVALID');
+        if (retiredPhotoKind(photo?.kind)) continue;
+        if (!INDEX_PHOTO_KINDS.includes(photo?.kind)) fail('PHOTO_HISTORY_INDEX_INVALID');
         if (total >= offset && items.length < PAGE_SIZE) {
           items.push({customerCode:task.customerCode, date:task.date, deliveryId:task.deliveryId, photo:photoRef(photo)});
         }
@@ -174,7 +192,7 @@ export function createOpsmapPhotoIndex({directory, appRoot = process.cwd(), now 
     const missingRanges = compactRanges(missing);
     return {state, items, counts, scope:{from:plan.from, through:plan.through, earliestRetained:plan.retentionProof ? plan.from : null,
       identityVerified:Boolean(plan.identityProof), missingDays:missing.length, missingRanges:missingRanges.slice(0, 20),
-      moreMissingRanges:Math.max(0, missingRanges.length - 20)}, nextCursor:total > offset + items.length ? `${generation}.${offset + items.length}` : null};
+      moreMissingRanges:Math.max(0, missingRanges.length - 20)}, nextCursor:total > offset + items.length ? `${pageGeneration}.${offset + items.length}` : null};
   }
   return {read, update};
 }
@@ -193,7 +211,10 @@ export function createPhotoIndexCollector({index, readHubCandidates, readTask}) 
     const bytes = await index.update(plan, async prior => {
       const sameBindings = prior?.plan.currentFrom === plan.currentFrom && JSON.stringify(prior.plan.aliases) === JSON.stringify(plan.aliases);
       const discovery = Object.fromEntries(Object.entries(sameBindings ? prior.discovery : {}).filter(([date]) => inRange(date, plan)));
-      const tasks = new Map((prior?.tasks ?? []).filter(task => bindingMatches(task, plan)).map(task => [task.deliveryId, task]));
+      const tasks = new Map((prior?.tasks ?? []).filter(task => bindingMatches(task, plan)).map(task => [task.deliveryId, {
+        ...task, state:prior.deliveryPhotoScope === DELIVERY_PHOTO_SCOPE || task.state !== 'CHECKED' ? task.state : 'PENDING',
+        photos:task.photos.filter(entry => !retiredPhotoKind(entry.kind))
+      }]));
       const candidates = new Map();
       try {
         for (const codeRange of [{customerCode:plan.customerCode, from:plan.currentFrom, through:plan.through}, ...plan.aliases]) {
@@ -220,7 +241,7 @@ export function createPhotoIndexCollector({index, readHubCandidates, readTask}) 
         const state = issueOf(error);
         stats[state === 'AUTH_REQUIRED' ? 'authFailures' : 'failures']++;
         for (const day of days) discovery[day] = state;
-        return {schema:1, plan, discovery, tasks:[...tasks.values()].sort(taskOrder)};
+        return {schema:1, deliveryPhotoScope:DELIVERY_PHOTO_SCOPE, plan, discovery, tasks:[...tasks.values()].sort(taskOrder)};
       }
       for (const [id, task] of candidates) if (!tasks.has(id)) tasks.set(id, {...task, state:'PENDING', photos:[]});
       for (const [id, task] of tasks) {
@@ -247,7 +268,7 @@ export function createPhotoIndexCollector({index, readHubCandidates, readTask}) 
         }
       }
       signal?.throwIfAborted();
-      return {schema:1, plan, discovery, tasks:[...tasks.values()].sort(taskOrder)};
+      return {schema:1, deliveryPhotoScope:DELIVERY_PHOTO_SCOPE, plan, discovery, tasks:[...tasks.values()].sort(taskOrder)};
     });
     return {...stats, indexBytes:bytes};
   };

@@ -7,8 +7,10 @@ export class DeliveryPhotoError extends Error {
   }
 }
 export const FRONT_DOOR_PHOTO_KIND = 'FRONT_DOOR_DELIVERY';
+export const INSIDE_PHOTO_KIND = 'INSIDE_DELIVERY';
+export const DELIVERY_PHOTO_KINDS = Object.freeze([FRONT_DOOR_PHOTO_KIND, INSIDE_PHOTO_KIND]);
 const FRONT_DOOR_PHOTO_LABEL = '상품을 잘 적치하셨나요? - 매장 문 앞';
-export const PHOTO_KINDS = new Set(['REFRIGERATOR_DOOR', 'ENTRANCE_LOCK', FRONT_DOOR_PHOTO_KIND]);
+export const PHOTO_KINDS = new Set(['REFRIGERATOR_DOOR', 'ENTRANCE_LOCK', ...DELIVERY_PHOTO_KINDS]);
 const fail = (code, status) => { throw new DeliveryPhotoError(code, status); };
 const cleanText = (value, max = 2000) => typeof value === 'string' ? value.slice(0, max) : '';
 async function bounded(promise, signal) {
@@ -76,15 +78,13 @@ export const validDeliveryId = value => (typeof value === 'string' || Number.isS
 // carrier.enteringDatedAt and taskAttachments[{typeText,text,images:[{url}]}].
 // Live task ID equivalence and category labels require an authenticated one-record check.
 // This adapter performs no login and makes no request until explicitly injected and enabled.
-export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDeliveryMetadata, allowedImageHosts = [], categoryMap = {}, firstPhotoKind = null, readTaskStatusRecords = false, onIdentityVerified } = {}) {
+export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDeliveryMetadata, allowedImageHosts = [], categoryMap = {}, firstPhotoKind = null, readTaskStatusRecords = false, deliveryOnly = false, onIdentityVerified } = {}) {
   if (typeof requestJson !== 'function' || typeof fetchImage !== 'function') fail('UNVERIFIED', 503);
   if (firstPhotoKind !== null && !PHOTO_KINDS.has(firstPhotoKind)) fail('UNVERIFIED', 503);
   const hosts = new Set(allowedImageHosts);
   const kinds = new Map(Object.entries(categoryMap).filter(([, kind]) => PHOTO_KINDS.has(kind) && kind !== FRONT_DOOR_PHOTO_KIND));
-  const photoKind = (attachment, history) => {
-    if ((history || readTaskStatusRecords === true && attachment?.photoRecordId) && attachment?.typeText === FRONT_DOOR_PHOTO_LABEL) return FRONT_DOOR_PHOTO_KIND;
-    return history ? undefined : kinds.get(attachment?.typeText);
-  };
+  const photoKind = (attachment, history, scoped = deliveryOnly) =>
+    (readTaskStatusRecords && attachment.photoDeliveryKind) || (history || scoped ? undefined : kinds.get(attachment.typeText));
   function attachmentImages(attachment) {
     if (!attachment || typeof attachment !== 'object' || !Array.isArray(attachment.images)) fail('PHOTO_IMAGES_INVALID', 503);
     if (attachment.images.length > 24) fail('PHOTO_IMAGE_LIMIT_EXCEEDED', 503);
@@ -152,12 +152,18 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
         if (!Array.isArray(record.taskAttachments)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
         if (history && !validDeliveryId(record.id)) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
         const recordFingerprint = createHash('sha256').update(JSON.stringify({source:'TASK_STATUS_RECORD', ...identity, recordIndex, id:record.id ?? null})).digest('hex');
-        const frontDoor = readTaskStatusRecords === true && hasFrontDoorCompletion(record) && validDeliveryId(record.id);
+        const frontDoor = hasFrontDoorCompletion(record);
+        const inside = record.status === 'COMPLETED' && record.completeType === 'BASIC' && record.completeTypeText === '매장안';
         for (const attachment of record.taskAttachments) {
           if (!attachment || typeof attachment !== 'object' || Array.isArray(attachment)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
-          if (history && !photoKind(attachment, true)) continue;
+          const kind = !validDeliveryId(record.id) ? undefined :
+            frontDoor && attachment.typeText === FRONT_DOOR_PHOTO_LABEL && (attachment.type === undefined || attachment.type === 'FRONT_PRODUCT')
+              ? FRONT_DOOR_PHOTO_KIND :
+            !history && inside && attachment.type === 'INSIDE_PRODUCT' &&
+              /^상품을 잘 적치하셨나요\? - 매장\s?안$/u.test(attachment.typeText) ? INSIDE_PHOTO_KIND : undefined;
+          if (history && !kind) continue;
           attachments.push({...attachment, photoRecordFingerprint:recordFingerprint,
-            photoRecordId:frontDoor && photoKind(attachment, true) ? String(record.id) : undefined});
+            photoDeliveryKind:kind, photoRecordId:kind ? String(record.id) : undefined});
           if (attachments.length > 20) fail('PHOTO_ATTACHMENT_LIMIT_EXCEEDED', 503);
         }
       }
@@ -187,19 +193,20 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
       if (photos.length > 40) fail('PHOTO_LIMIT_EXCEEDED', 503);
       return {...exact(task, identity), notes:'', status:photos.length ? 'READY' : 'EMPTY', photos};
     },
-    async list(identity, { signal } = {}) {
+    async list(identity, { signal, scoped = deliveryOnly } = {}) {
       if (identity.deliveryId) {
         const task = await detail(identity, signal), photos = [], notes = [];
         let unverified = false;
         for (const [attachmentIndex, attachment] of task.taskAttachments.entries()) {
-          const images = attachmentImages(attachment);
           if (attachment.text) notes.push(cleanText(attachment.text));
-          const kind = photoKind(attachment, false);
+          if (scoped && kinds.has(attachment.typeText)) continue;
+          const images = attachmentImages(attachment);
+          const kind = photoKind(attachment, false, scoped);
           if (!kind && images.length) { unverified = true; continue; }
           for (const {imageIndex, childImageIndex, image} of images) {
             if (!permitted(task, attachmentIndex, imageIndex, childImageIndex)) continue;
             const { fingerprint } = mediaAsset(image?.url);
-            photos.push({ kind, ...(kind === FRONT_DOOR_PHOTO_KIND ? {recordId:attachment.photoRecordId} : {}), ref: { kind, attachmentIndex, imageIndex, ...(childImageIndex === null ? {} : {childImageIndex}), fingerprint,
+            photos.push({ kind, ...(DELIVERY_PHOTO_KINDS.includes(kind) ? {recordId:attachment.photoRecordId} : {}), ref: { kind, attachmentIndex, imageIndex, ...(childImageIndex === null ? {} : {childImageIndex}), fingerprint,
               ...(readTaskStatusRecords === true ? {recordFingerprint:attachment.photoRecordFingerprint} : {}) } });
           }
         }
@@ -240,13 +247,13 @@ export function createDeliveryPhotoService({ source = null, enabled = false, now
   }
   function prune() { for (const [key, value] of handles) if (now() >= value.expiresAt) handles.delete(key); }
   function publishPhoto(photo, row, sessionKey) {
-    if (!PHOTO_KINDS.has(photo.kind) || (photo.kind === FRONT_DOOR_PHOTO_KIND && !validDeliveryId(photo.recordId))) fail('UNVERIFIED', 503);
+    if (!PHOTO_KINDS.has(photo.kind) || (DELIVERY_PHOTO_KINDS.includes(photo.kind) && !validDeliveryId(photo.recordId))) fail('UNVERIFIED', 503);
     while (handles.size >= maxHandles) handles.delete(handles.keys().next().value);
     const id = randomBytes(24).toString('base64url');
     handles.set(id, {sessionKey, identity:{customerCode:row.customerCode, date:row.date, deliveryId:row.deliveryId},
       ref:photo.ref, expiresAt:now() + handleTtlMs});
     const url = `/api/map-phase2b/private/delivery-photos/media/${id}`;
-    return {id, kind:photo.kind, thumbnailUrl:url, url, ...(photo.kind === FRONT_DOOR_PHOTO_KIND ? {recordId:String(photo.recordId)} : {})};
+    return {id, kind:photo.kind, thumbnailUrl:url, url, ...(DELIVERY_PHOTO_KINDS.includes(photo.kind) ? {recordId:String(photo.recordId)} : {})};
   }
   function publish(rows, identity, sessionKey, history = false) {
     if (!Array.isArray(rows) || rows.length > 32) fail('INVALID_PHOTO_RESPONSE', 502);

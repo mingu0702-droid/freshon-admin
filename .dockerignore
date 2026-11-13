@@ -12,3 +12,4 @@ _check_daily-routes.js
 _daily-routes-inline-check.js
 opsmap-coverage-*.json.gz.b64
 **/opsmap-coverage-*.json.gz.b64
+opsmap_photo_*.json

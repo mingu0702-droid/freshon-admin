@@ -29,7 +29,9 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
   const password = dedicatedAccount ? env.OPSMAP_STAGE_DELIVERY_PHOTO_PASSWORD : env.DELIVERY_ADMIN_PASSWORD;
   const approvedStage = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE;
   const historyDirectory = approvedStage ? env.OPSMAP_PHOTO_HISTORY_DIRECTORY : null;
-  const historyIndex = historyDirectory ? createOpsmapPhotoIndex({directory:historyDirectory, now}) : null;
+  const historyIndex = historyDirectory ? createOpsmapPhotoIndex({
+    directory:historyDirectory, now, allowMountedLinks:historyDirectory === '/etc/secrets'
+  }) : null;
   const readIndexedHistory = approvedStage ? async query => {
     if (!historyIndex) throw new DeliveryPhotoError('PHOTO_HISTORY_NOT_CONFIGURED', 503, {stage:'source-index'});
     try { return await historyIndex.read(query); }
@@ -66,7 +68,7 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
     enabled, rawRequest:account || cookieConfigured ? rawRequest : undefined,
     hasMemorySession:account?.hasSession ?? (() => cookieConfigured), prepareSession:account?.prepareSession,
     canPrepareSource:() => Boolean(account), prepareHistorySession:Boolean(account), prepareMediaSession:Boolean(account),
-    listDeliveryMetadata, imageFetch:fetchImpl,
+    listDeliveryMetadata, imageFetch:fetchImpl, deliveryOnly:true,
     readIndexedHistory,
     onSourceVerified:() => {
       if (account) account.markVerified();

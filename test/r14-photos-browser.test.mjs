@@ -12,9 +12,9 @@ test('synthetic Edge: date selection, lazy thumbnails, enlargement/reuse and log
   app.get('/api/map-phase2b/auth/session',(_q,r)=>r.json({authenticated:staff,expiresAt:expiry,idleExpiresAt:expiry}));
   const extension=createOperationalPhotoExtension({enabled:true,hasMemorySession:()=>true,
     listDeliveryMetadata:async q=>q.date===record.date?[record]:[],
-    rawRequest:async path=>path.endsWith('/status-record')?Response.json({data:[{id:'1990001',...(contractFailure?{}:{taskAttachments:[
-      {typeText:'냉장고 문은 잘 닫았나요?',images:Array.from({length:4},(_,i)=>({url:'https://static.chabyulhwa.com/fridge-'+i+'.png'}))},
-      {typeText:'매장 출입문은 잘 잠궜나요?',images:Array.from({length:4},(_,i)=>({url:'https://static.chabyulhwa.com/door-'+i+'.png'}))}
+    rawRequest:async path=>path.endsWith('/status-record')?Response.json({data:[{id:'1990001',status:'COMPLETED',completeType:'FRONT_DOOR',completeTypeText:'매장문앞',...(contractFailure?{}:{taskAttachments:[
+      {type:'FRONT_PRODUCT',typeText:'상품을 잘 적치하셨나요? - 매장 문 앞',images:Array.from({length:4},(_,i)=>({url:'https://static.chabyulhwa.com/fridge-'+i+'.png'}))},
+      {type:'FRONT_PRODUCT',typeText:'상품을 잘 적치하셨나요? - 매장 문 앞',images:Array.from({length:4},(_,i)=>({url:'https://static.chabyulhwa.com/door-'+i+'.png'}))}
     ]})}]}):Response.json({data:{id:record.deliveryId,customer:{erpCode:record.customerCode},carrier:{enteringDatedAt:record.date}}}),imageFetch:async()=>{mediaReads++;return new Response(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5N0AAAAASUVORK5CYII=','base64'),{headers:{'content-type':'image/png'}});}});
   extension.mount({app,requireStaff:(_q,r,n)=>{if(!staff)return r.status(401).json({error:'STAFF_LOGIN_REQUIRED'});r.locals.staffSession={key:'synthetic-staff',expiresAt:expiry,idleExpiresAt:expiry};return n();},isSessionCurrent:()=>staff,previewEnabled:()=>true});
   app.use(express.static(fileURLToPath(new URL('../public/opsmap',import.meta.url))));

@@ -56,7 +56,7 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate,
 // staff/session checks, exact identity checks, stream limits and host checks remain.
 export function createOperationalPhotoExtension({enabled = false, rawRequest,
   hasMemorySession, prepareSession, prepareHistorySession = false, prepareMediaSession = false, canPrepareSource, listDeliveryMetadata,
-  onSourceVerified, readIndexedHistory, imageFetch = globalThis.fetch} = {}) {
+  onSourceVerified, readIndexedHistory, deliveryOnly = false, imageFetch = globalThis.fetch} = {}) {
   const isEnabled = () => typeof enabled === 'function' ? enabled() === true : enabled === true;
   const hasSession = () => isEnabled() && typeof hasMemorySession === 'function' && hasMemorySession() === true;
   const ensureSession = async (identity, {signal} = {}) => {
@@ -88,7 +88,7 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
     return listDeliveryMetadata(identity, options);
   };
   const photoSource = createDeliveryAdminPhotoSource({...transport, requestJson, listDeliveryMetadata: metadata,
-    categoryMap: DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, allowedImageHosts: DELIVERY_ADMIN_PHOTO_HOSTS, readTaskStatusRecords:true,
+    categoryMap: DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, allowedImageHosts: DELIVERY_ADMIN_PHOTO_HOSTS, readTaskStatusRecords:true, deliveryOnly,
     onIdentityVerified:onSourceVerified});
   const readHistory = createDeliveryPhotoHistoryReader({
     searchFrontDoorTasks:transport.searchFrontDoorTasks, listHistoryRecord:photoSource.listHistoryRecord
@@ -122,7 +122,7 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
       const identity = validatePhotoQuery({customerCode, date, deliveryId});
       if (!identity.deliveryId) fail('INVALID_PHOTO_REQUEST', 400);
       await ensureSession(identity, options);
-      const [row] = await photoSource.list(identity, options);
+      const [row] = await photoSource.list(identity, {...options, scoped:true});
       return row;
     },
     diagnostics: () => ({enabled: isEnabled(), sourceSession: hasSession(), metadataConfigured: typeof listDeliveryMetadata === 'function'}),

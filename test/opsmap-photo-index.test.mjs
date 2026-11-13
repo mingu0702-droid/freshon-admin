@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rename, rm } from 'node:fs/promises';
+import fs, { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,7 @@ import express from 'express';
 const today = '2026-11-13', oldDay = '2025-10-01', proof = 'a'.repeat(64);
 const now = () => Date.parse(today + 'T03:00:00Z');
 const code = 'S100', alias = 'S200';
-const front = 'FRONT_DOOR_DELIVERY', cold = 'REFRIGERATOR_DOOR';
+const front = 'FRONT_DOOR_DELIVERY', inside = 'INSIDE_DELIVERY';
 const plan = (extra = {}) => ({customerCode:code, from:today, through:today, aliases:[],
   retentionProof:proof, identityProof:proof, verifiedRanges:[{from:today, through:today, evidenceSha256:proof}], ...extra});
 const stub = (customerCode, date, deliveryId) => ({customerCode, deliveryDate:date, deliveryId});
@@ -31,7 +31,7 @@ test('today empty still retains historical photos of each category and verified 
   const {index, directory} = await fixture(t);
   const archivePlan = plan({from:oldDay, currentFrom:today, retentionProof:null, identityProof:null,
     aliases:[{customerCode:alias, from:oldDay, through:oldDay, evidenceSha256:proof}]});
-  let configuredPhotos = [photo(front), photo(cold, 2)];
+  let configuredPhotos = [photo(front), photo(inside, 2)];
   const collect = createPhotoIndexCollector({index,
     async readHubCandidates({customerCode, startDate}) {
       if (startDate === today) return [stub(code, today, '20')];
@@ -41,12 +41,12 @@ test('today empty still retains historical photos of each category and verified 
     async readTask(task) { return result(task, task.date === today ? [] : configuredPhotos); }
   });
   await collect({plan:archivePlan, from:today, through:today, mode:'initial'});
-  for (const [photos, expected] of [[[photo(front)], [1,0]], [[photo(cold)], [0,1]], [[photo(front),photo(cold,2)], [1,1]]]) {
+  for (const [photos, expected] of [[[photo(front)], [1,0]], [[photo(inside)], [0,1]], [[photo(front),photo(inside,2)], [1,1]]]) {
     configuredPhotos = photos;
     await collect({plan:archivePlan, from:oldDay, through:oldDay, mode:'incremental'});
     const page = await index.read({customerCode:code});
     assert.equal(page.state, 'COLLECTING');
-    assert.deepEqual([page.counts[front],page.counts[cold]], expected);
+    assert.deepEqual([page.counts[front],page.counts[inside]], expected);
     assert.ok(page.items.every(row => row.date === oldDay && row.customerCode === alias));
     assert.ok(page.scope.missingDays > 365);
   }
@@ -152,6 +152,37 @@ test('Render-safe index filename keeps the same photos and seeds the next collec
   assert.equal((await index.read({customerCode:code})).counts[front], 1);
 });
 
+test('a mounted legacy index preserves delivery photos and keeps inspection-only history unconfirmed', async t => {
+  const {index, directory} = await fixture(t);
+  const mount = path.join(directory, 'mounted');
+  await mkdir(mount);
+  const legacy = await index.update(plan(), async () => ({
+    schema:1, plan:plan(), discovery:{[today]:'CHECKED'},
+    tasks:[{customerCode:code, date:today, deliveryId:'99', state:'CHECKED', photos:[photo(front), photo('REFRIGERATOR_DOOR', 2)]}]
+  }));
+  const [original] = (await readdir(directory)).filter(name => name.endsWith('.json'));
+  const mounted = path.join(mount, 'snapshot.json');
+  await rename(path.join(directory, original), mounted);
+  const named = path.join(directory, 'opsmap_photo_s100.json');
+  // Simulate Render's mounted filename without requiring Windows symlink privileges.
+  const {lstat, realpath} = fs;
+  t.mock.method(fs, 'lstat', file => file === named
+    ? Promise.resolve({isSymbolicLink:() => true, isFile:() => false}) : lstat(file));
+  t.mock.method(fs, 'realpath', file => file === named ? Promise.resolve(mounted) : realpath(file));
+  await assert.rejects(index.read({customerCode:code}), {code:'PHOTO_HISTORY_INDEX_INVALID'});
+  const reader = createOpsmapPhotoIndex({directory, now, allowMountedLinks:true});
+  const page = await reader.read({customerCode:code});
+  assert.deepEqual(page.counts, {[front]:1,[inside]:0});
+  assert.equal(page.state, 'COLLECTING');
+  assert.equal((await readFile(mounted)).length, legacy);
+  const data = JSON.parse(await readFile(mounted, 'utf8'));
+  data.tasks[0].photos.shift();
+  await writeFile(mounted, JSON.stringify(data));
+  const inspections = await reader.read({customerCode:code});
+  assert.equal(inspections.items.length, 0);
+  assert.equal(inspections.state, 'COLLECTING');
+});
+
 test('actual parser shape keeps types distinct, list never hits upstream, and alias media rechecks old identity', async t => {
   const {index} = await fixture(t);
   const calls = [];
@@ -164,8 +195,10 @@ test('actual parser shape keeps types distinct, list never hits upstream, and al
         carrier:{enteringDatedAt:today + 'T00:00:00+09:00'}});
       return Response.json([{id:700, status:'COMPLETED', completeType:'FRONT_DOOR', completeTypeText:'매장문앞', taskAttachments:[
         {typeText:'상품을 잘 적치하셨나요? - 매장 문 앞',images:[{url:'https://static.chabyulhwa.com/d?token=temp'}]},
-        {typeText:'냉장고 문은 잘 닫았나요?',images:[{url:'https://static.chabyulhwa.com/c?token=temp'}]},
+        {type:'INSIDE_PRODUCT',typeText:'냉장고 문은 잘 닫았나요?',images:[{url:'https://static.chabyulhwa.com/c?token=temp'}]},
         {typeText:'매장 출입문은 잘 잠궜나요?',images:[{url:'https://static.chabyulhwa.com/l?token=temp'}]}
+      ]}, {id:701, status:'COMPLETED', completeType:'BASIC', completeTypeText:'매장안', taskAttachments:[
+        {type:'INSIDE_PRODUCT',typeText:'상품을 잘 적치하셨나요? - 매장 안',images:[{url:'https://static.chabyulhwa.com/i'}]}
       ]}]);
     }
   });
@@ -179,15 +212,15 @@ test('actual parser shape keeps types distinct, list never hits upstream, and al
   let mediaChecks = 0;
   const service = createDeliveryPhotoService({enabled:true, source:{list:()=>[], readIndexedHistory:index.read,
     openMedia(identity, ref) { mediaChecks++; assert.deepEqual(identity, {customerCode:alias,date:today,deliveryId:'10'});
-      assert.equal(ref.kind, cold); return extension.readIndexTask(identity); }
+      assert.equal(ref.kind, inside); return extension.readIndexTask(identity); }
   }});
   const before = calls.length;
   const list = await service.listHistory({customerCode:code}, 'staff');
   assert.equal(list.state, 'COMPLETE');
-  assert.deepEqual(list.counts, {[front]:1,[cold]:1});
+  assert.deepEqual(list.counts, {[front]:1,[inside]:1});
   assert.doesNotMatch(JSON.stringify(list), /static\.chabyulhwa|token=temp|fingerprint|S200/);
   assert.equal(calls.length, before);
-  const id = list.items.find(item => item.photo.kind === cold).photo.id;
+  const id = list.items.find(item => item.photo.kind === inside).photo.id;
   await assert.rejects(service.openMedia(id, 'different-staff'), {code:'PHOTO_NOT_FOUND'});
   await service.openMedia(id, 'staff');
   assert.equal(mediaChecks, 1);
@@ -206,8 +239,8 @@ test('staff HTTP index and existing media route share authorization and proxy on
   const extension = createOperationalPhotoExtension({enabled:true, hasMemorySession:() => true, readIndexedHistory:index.read,
     async rawRequest(request) {
       calls.push(request.endsWith('/status-record') ? 'record' : 'task');
-      return request.endsWith('/status-record') ? Response.json([{id:700, taskAttachments:[
-        {typeText:'냉장고 문은 잘 닫았나요?', images:[{url:'https://static.chabyulhwa.com/c?signature=temporary'}]}
+      return request.endsWith('/status-record') ? Response.json([{id:700, status:'COMPLETED', completeType:'BASIC', completeTypeText:'매장안', taskAttachments:[
+        {type:'INSIDE_PRODUCT',typeText:'상품을 잘 적치하셨나요? - 매장 안', images:[{url:'https://static.chabyulhwa.com/c?signature=temporary'}]}
       ]}]) : Response.json({id:10, customer:{erpCode:code}, carrier:{enteringDatedAt:today + 'T00:00:00+09:00'}});
     },
     async imageFetch(_url, options) {
@@ -237,7 +270,7 @@ test('staff HTTP index and existing media route share authorization and proxy on
   assert.equal(list.status, 200);
   assert.match(list.headers.get('cache-control'), /no-store/);
   const {data} = await list.json();
-  assert.equal(data.counts[cold], 1);
+  assert.equal(data.counts[inside], 1);
   assert.deepEqual(calls, ['task','record']);
   const media = origin + data.items[0].photo.url;
   assert.equal((await fetch(media,{headers:{'x-fixture-staff':'second'}})).status, 404);
@@ -254,13 +287,13 @@ test('browser lists both indexed types without loading media and keeps list on u
     await page.route('https://fixture.example/**', route => route.fulfill({contentType:'text/html', body:'<section id="photos"></section>'}));
     await page.goto('https://fixture.example/');
     await page.addScriptTag({path:fileURLToPath(new URL('../public/opsmap/opsmap-delivery-photos.js', import.meta.url))});
-    await page.evaluate(async ({code, front, cold, today}) => {
+    await page.evaluate(async ({code, front, inside, today}) => {
       window.mediaCalls = 0;
       window.historyFailure = null;
       const photo = (kind, id) => ({id,kind,recordId:'9',url:`/api/map-phase2b/private/delivery-photos/media/${id}`});
       const data = {mode:'INDEXED', customerCode:code, state:'AUTH_REQUIRED', scope:{from:today,through:today,missingDays:1},
-        counts:{[front]:1,[cold]:1}, nextCursor:null, items:[{date:today,deliveryId:'10',photo:photo(front,'fakeFront1')},
-          {date:today,deliveryId:'10',photo:photo(cold,'fakeCold12')}]};
+        counts:{[front]:1,[inside]:1}, nextCursor:null, items:[{date:today,deliveryId:'10',photo:photo(front,'fakeFront1')},
+          {date:today,deliveryId:'10',photo:photo(inside,'fakeCold12')}]};
       window.controller = MapDeliveryPhotos.createController({host:document.querySelector('#photos'), async fetcher(route) {
         if (route.endsWith('/auth/session')) return Response.json({authenticated:true, expiresAt:Date.now()+60000, idleExpiresAt:Date.now()+60000});
         if (route.includes('/history?')) return window.historyFailure
@@ -269,13 +302,13 @@ test('browser lists both indexed types without loading media and keeps list on u
         return Response.json({ok:false,error:{code:'UPSTREAM_AUTH_REQUIRED'}}, {status:502});
       }});
       await window.controller.open({customerCode:code, history:true});
-    }, {code,front,cold,today});
+    }, {code,front,inside,today});
     assert.equal(await page.evaluate(() => window.mediaCalls), 0);
     await page.getByRole('button',{name:`${today} · 사진 확대`}).last().click();
     await page.getByText('사진 파일 인증이 필요합니다.',{exact:true}).waitFor();
     assert.equal(await page.evaluate(() => window.mediaCalls), 1);
-    assert.equal(await page.getByRole('heading',{name:'납품 사진 · 1장'}).count(), 1);
-    assert.equal(await page.getByRole('heading',{name:'냉장고 문 확인 사진 · 1장'}).count(), 1);
+    assert.equal(await page.getByRole('heading',{name:'매장 문 앞 납품 사진 · 1장'}).count(), 1);
+    assert.equal(await page.getByRole('heading',{name:'매장 안 납품 사진 · 1장'}).count(), 1);
     await page.getByRole('button',{name:'확대 사진 닫기'}).click();
     await page.evaluate(() => { window.historyFailure = 504; });
     await page.getByRole('button',{name:'다시 조회',exact:true}).click();

@@ -18,12 +18,12 @@ try {
     const discovery = {};
     const tasks = Array.from({length:amount}, (_, i) => {
       const date = atDay(i);
-      const photos = INDEX_PHOTO_KINDS.map((kind, j) => ({kind, ...(j === 0 ? {recordId:String(70000 + i)} : {}),
+      const photos = INDEX_PHOTO_KINDS.map((kind, j) => ({kind, recordId:String(70000 + i),
         ref:{kind, attachmentIndex:j, imageIndex:0, fingerprint:(i * 2 + j).toString(16).padStart(64, '0'), recordFingerprint:digest}}));
       discovery[date] = 'CHECKED';
       return {customerCode, date, deliveryId:String(90000 + i), state:'CHECKED', photos};
     });
-    return {schema:1, plan, discovery, tasks};
+    return {schema:1, deliveryPhotoScope:2, plan, discovery, tasks};
   });
   const reader = createOpsmapPhotoIndex({directory, now});
   const milliseconds = [], heap = [], rss = [];
@@ -36,7 +36,7 @@ try {
     heap.push(Math.max(0, after.heapUsed - before.heapUsed) / 1048576);
     rss.push(Math.max(0, after.rss - before.rss) / 1048576);
     assert.equal(page.items.length, 24);
-    assert.equal(page.counts.REFRIGERATOR_DOOR, amount);
+    assert.equal(page.counts.INSIDE_DELIVERY, amount);
     assert.equal(page.state, 'COMPLETE');
   }
   const p95 = values => Number(values.sort((a, b) => a - b)[Math.ceil(values.length * .95) - 1].toFixed(2));

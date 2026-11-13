@@ -2,9 +2,8 @@
 (() => {
   'use strict';
   const API = '/api/map-phase2b/private/delivery-photos';
-  const KINDS = Object.freeze({ REFRIGERATOR_DOOR: '냉장고 문 확인', ENTRANCE_LOCK: '출입문 잠금 확인' });
-  const HISTORY_KIND = 'FRONT_DOOR_DELIVERY', HISTORY_TITLE = '매장 문 앞 납품 사진';
-  const INDEX_KINDS = [HISTORY_KIND, 'REFRIGERATOR_DOOR'];
+  const KINDS = Object.freeze({FRONT_DOOR_DELIVERY:'매장 문 앞 납품 사진', INSIDE_DELIVERY:'매장 안 납품 사진'});
+  const INDEX_KINDS = Object.keys(KINDS);
   const MAX_PHOTOS = 40, MAX_IMAGE_BYTES = 4 * 1024 * 1024, MAX_JSON_BYTES = 256 * 1024;
   const SAFE_FAILURE_CODES = new Set(['UNVERIFIED', 'SOURCE_UNAVAILABLE', 'NOT_CONFIGURED', 'INVALID_SOURCE_RESPONSE',
     'UPSTREAM_AUTH_REQUIRED', 'PHOTO_APPROVAL_REQUIRED', 'PHOTO_BUDGET_NOT_CONFIGURED', 'PHOTO_BUDGET_NOT_INITIALIZED', 'PHOTO_BUDGET_INVALID', 'PHOTO_BUDGET_NOT_APPROVED', 'PHOTO_BUDGET_EXHAUSTED', 'PHOTO_BUDGET_CONFLICT', 'PHOTO_BUDGET_READBACK_UNVERIFIED', 'PHOTO_BUDGET_UNAVAILABLE', 'PHOTO_SOURCE_DISABLED', 'PHOTO_LOOKUP_FAILED', 'PHOTO_FORBIDDEN', 'PHOTO_NOT_FOUND',
@@ -16,7 +15,7 @@
   const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
   const safeText = (value, maximum) => typeof value === 'string' && value.length <= maximum;
   const validRecordId = value => typeof value === 'string' && /^\d{1,20}$/.test(value);
-  const photoTitle = photo => photo.kind === HISTORY_KIND ? HISTORY_TITLE : KINDS[photo.kind];
+  const photoTitle = photo => KINDS[photo.kind];
   function mediaPath(value) {
     if (typeof value !== 'string') throw Error('UNVERIFIED');
     const url = new URL(value, location.href);
@@ -38,11 +37,11 @@
       for (const photo of delivery.photos) {
         if (!safeText(photo.id, 128) || !photo.id || ids.has(photo.id)) throw Error('UNVERIFIED');
         ids.add(photo.id);
-        if (photo.kind === HISTORY_KIND) {
-          if (!validRecordId(photo.recordId) || !validRecordId(delivery.deliveryId)) throw Error('UNVERIFIED');
-        } else if (target.history || !Object.hasOwn(KINDS, photo.kind)) { unclassified = true; continue; }
+        if (photo.kind === 'REFRIGERATOR_DOOR' || photo.kind === 'ENTRANCE_LOCK') continue;
+        if (!Object.hasOwn(KINDS, photo.kind)) { unclassified = true; continue; }
+        if (!validRecordId(photo.recordId) || !validRecordId(delivery.deliveryId)) throw Error('UNVERIFIED');
         photos.push({ id: photo.id, kind: photo.kind, thumbnailUrl: mediaPath(photo.thumbnailUrl), url: mediaPath(photo.url),
-          ...(photo.kind === HISTORY_KIND ? {recordId:photo.recordId, date:delivery.date, deliveryId:delivery.deliveryId} : {}) });
+          recordId:photo.recordId, date:delivery.date, deliveryId:delivery.deliveryId });
       }
       if (delivery.status === 'EMPTY' && delivery.photos.length) throw Error('UNVERIFIED');
       return { customerCode: delivery.customerCode, date: delivery.date, deliveryId: delivery.deliveryId, notes: delivery.notes || '', status: unclassified ? 'UNVERIFIED' : delivery.status, photos };
@@ -65,7 +64,7 @@
     const items = data.items.map(({date, deliveryId, photo}) => {
       if (!validDate(date) || !validRecordId(deliveryId) || !INDEX_KINDS.includes(photo?.kind) ||
           !safeText(photo.id, 128) || !photo.id || seen.has(photo.id) ||
-          (photo.kind === HISTORY_KIND && !validRecordId(photo.recordId))) throw Error('UNVERIFIED');
+          !validRecordId(photo.recordId)) throw Error('UNVERIFIED');
       seen.add(photo.id);
       return {id:photo.id, kind:photo.kind, date, deliveryId, recordId:photo.recordId, url:mediaPath(photo.url)};
     });
@@ -260,7 +259,7 @@
       viewerController?.abort(); viewerController = new AbortController(); const controller = viewerController;
       if (viewer.hidden) focusBeforeViewer = document.activeElement;
       viewerIndex = index; stage.replaceChildren(); viewer.hidden = false; closeButton.focus();
-      viewerTitle.textContent = photo.kind === HISTORY_KIND
+      viewerTitle.textContent = photo.recordId
         ? `${photo.date} · 배송 ID ${photo.deliveryId} · 원본 기록 ID ${photo.recordId}`
         : (photo.date || selected?.date || '') + ' · ' + title;
       count.textContent = `${index + 1} / ${photoList.length}`; previous.disabled = index === 0; next.disabled = index === photoList.length - 1;
@@ -318,7 +317,7 @@
           preview.type = 'button';
           preview.onclick = async () => {
             preview.disabled = true;
-            if (!await loadThumbnail(preview, photo, HISTORY_TITLE, id)) return;
+            if (!await loadThumbnail(preview, photo, photoTitle(photo), id)) return;
             preview.disabled = false;
             preview.setAttribute('aria-label', '썸네일 확대');
             preview.onclick = () => enlarge(index);
@@ -338,7 +337,7 @@
       photoList = items;
       const groups = node('div', undefined, host, 'deliveryPhotoGroups');
       for (const kind of INDEX_KINDS) {
-        const title = kind === HISTORY_KIND ? '납품 사진' : '냉장고 문 확인 사진';
+        const title = KINDS[kind];
         const group = node('section', undefined, groups);
         node('h4', title + ' · ' + (counts[kind] || state === 'COMPLETE' ? `${counts[kind]}장` : '확인 중'), group);
         const list = node('ul', undefined, group);
@@ -386,8 +385,7 @@
         if (!photoList.length && selected.status !== 'UNVERIFIED') { node('p', '사진 없음 · 해당 배송에 등록된 사진이 없습니다.', body, 'deliveryPhotoStatus'); host.dataset.state = 'empty'; }
         const groups = node('div', undefined, body, 'deliveryPhotoGroups'), tasks = [];
         let loaded = 0, failed = 0;
-        const categories = photoList.some(photo => photo.kind === HISTORY_KIND) ? {...KINDS, [HISTORY_KIND]:HISTORY_TITLE} : KINDS;
-        for (const [kind, title] of Object.entries(categories)) {
+        for (const [kind, title] of Object.entries(KINDS)) {
           const group = node('section', undefined, groups); node('h4', title, group);
           const matching = photoList.filter(photo => photo.kind === kind);
           if (!matching.length) { node('p', selected.status === 'UNVERIFIED' ? '미확인' : '사진 없음', group, 'deliveryPhotoMissing'); continue; }

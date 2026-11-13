@@ -61,8 +61,8 @@ async function fixture({env = stageEnv, onLogin, sourceStatus, lifetime = 1200} 
       assert.equal(url.searchParams.get('customerErpCodeLike'), customerCode);
       return Response.json({data:{content:[sourceTask], totalElements:1, totalPages:1}});
     }
-    if (url.pathname.endsWith('/status-record')) return Response.json({data:[{id:'1', taskId:deliveryId, taskAttachments:[
-      {typeText:'냉장고 문은 잘 닫았나요?', images:[{url:'https://static.chabyulhwa.com/fixture.png?signature=fixture'}]}
+    if (url.pathname.endsWith('/status-record')) return Response.json({data:[{id:'1', taskId:deliveryId, status:'COMPLETED',completeType:'FRONT_DOOR',completeTypeText:'매장문앞',taskAttachments:[
+      {type:'FRONT_PRODUCT',typeText:'상품을 잘 적치하셨나요? - 매장 문 앞', images:[{url:'https://static.chabyulhwa.com/fixture.png?signature=fixture'}]}
     ]}]});
     assert.equal(url.href, approvedDetail.href);
     return Response.json({data:sourceTask});
@@ -97,7 +97,7 @@ test('approved Stage login is lazy, staff-bound and single flight, and media ref
     assert(!/fixture-secret|stage-fixture|issued-|static.chabyulhwa.com|signature=/.test(text));
     const [row] = JSON.parse(text).data.deliveries;
     assert.equal(row.status, 'READY');
-    assert.equal(row.photos[0].kind, 'REFRIGERATOR_DOOR');
+    assert.equal(row.photos[0].kind, 'FRONT_DOOR_DELIVERY');
     assert.equal(f.stats().logins, 1);
     assert.equal((await (await f.get(api + '/config')).json()).data.sourceAuth, 'VERIFIED');
     f.advance(30001);

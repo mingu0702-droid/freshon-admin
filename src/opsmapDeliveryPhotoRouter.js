@@ -23,6 +23,7 @@ function failure(error, res) {
   const safe={code};const stage=sourceStage(error)||sourceStage({code});if(stage)safe.stage=stage;
   if([200,400,401,403,404,409,410,413,422,429,500,502,503,504].includes(error?.sourceHttpStatus))safe.sourceHttpStatus=error.sourceHttpStatus;
   if(code==='PHOTO_ATTACHMENTS_INVALID'&&['MISSING','NULL','OBJECT','SCALAR'].includes(error?.attachmentState))safe.attachmentState=error.attachmentState;
+  if(code==='PHOTO_HISTORY_INDEX_INVALID'&&['FILE_STAT','FILE_LINK','FILE_READ','FILE_SCHEMA'].includes(error?.indexReason))safe.indexReason=error.indexReason;
   if (!res.headersSent) res.status(responseStatus).json({ ok: false, error: safe });
   else {
     // Stream errors cannot replace already-sent headers. Emit only fixed safe enums.

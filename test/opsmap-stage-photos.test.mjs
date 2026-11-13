@@ -104,7 +104,7 @@ test('approved Stage never falls back to legacy history and leaves the dated rou
   }
 });
 
-test('Stage scopes task discovery, validates all three categories, and gates session-bound opaque media', async () => {
+test('Stage scopes task discovery, excludes inspection photos, and gates session-bound opaque media', async () => {
   const f = await fixture();
   try {
     assert.equal((await f.get(api + '/config', 'anonymous')).status, 401);
@@ -124,12 +124,12 @@ test('Stage scopes task discovery, validates all three categories, and gates ses
     assert(!raw.includes(mediaHost));
     const [row] = JSON.parse(raw).data.deliveries;
     assert.equal(row.status, 'READY');
-    assert.deepEqual(row.photos.map(photo => photo.kind), ['REFRIGERATOR_DOOR', 'ENTRANCE_LOCK', 'FRONT_DOOR_DELIVERY']);
-    assert.equal(row.photos[2].recordId, '1234');
-    assert.equal(await (await f.get(row.photos[2].thumbnailUrl)).text(), 'image fixture');
+    assert.deepEqual(row.photos.map(photo => photo.kind), ['FRONT_DOOR_DELIVERY']);
+    assert.equal(row.photos[0].recordId, '1234');
+    assert.equal(await (await f.get(row.photos[0].thumbnailUrl)).text(), 'image fixture');
     assert.equal(f.calls.length, 6);
     f.logout();
-    assert.equal((await f.get(row.photos[2].url)).status, 401);
+    assert.equal((await f.get(row.photos[0].url)).status, 401);
     assert.equal(f.calls.length, 6);
   } finally { await f.close(); }
 });
