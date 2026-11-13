@@ -55,7 +55,8 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate,
 // Operational access replaces the old single-record trial allowance. Existing
 // staff/session checks, exact identity checks, stream limits and host checks remain.
 export function createOperationalPhotoExtension({enabled = false, rawRequest,
-  hasMemorySession, prepareSession, prepareHistorySession = false, prepareMediaSession = false, canPrepareSource, listDeliveryMetadata, onSourceVerified, imageFetch = globalThis.fetch} = {}) {
+  hasMemorySession, prepareSession, prepareHistorySession = false, prepareMediaSession = false, canPrepareSource, listDeliveryMetadata,
+  onSourceVerified, readIndexedHistory, imageFetch = globalThis.fetch} = {}) {
   const isEnabled = () => typeof enabled === 'function' ? enabled() === true : enabled === true;
   const hasSession = () => isEnabled() && typeof hasMemorySession === 'function' && hasMemorySession() === true;
   const ensureSession = async (identity, {signal} = {}) => {
@@ -94,6 +95,7 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
   });
   const source = {
     ...photoSource,
+    readIndexedHistory,
     async openMedia(identity, ref, options) {
       if (prepareMediaSession) await ensureSession(identity, options);
       return photoSource.openMedia(identity, ref, options);
@@ -112,6 +114,13 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
     }
   };
   return {
+    async readIndexTask({customerCode, date, deliveryId} = {}, options) {
+      const identity = validatePhotoQuery({customerCode, date, deliveryId});
+      if (!identity.deliveryId) fail('INVALID_PHOTO_REQUEST', 400);
+      await ensureSession(identity, options);
+      const [row] = await photoSource.list(identity, options);
+      return row;
+    },
     diagnostics: () => ({enabled: isEnabled(), sourceSession: hasSession(), metadataConfigured: typeof listDeliveryMetadata === 'function'}),
     mount: ({app, requireStaff, isSessionCurrent, previewEnabled}, {historyOnly = false} = {}) => mountOpsmapDeliveryPhotoRoutes({app, requireStaff, isSessionCurrent, historyOnly,
       source, enabled: () => isEnabled() && previewEnabled() === true, prepareSource: ensureSession,

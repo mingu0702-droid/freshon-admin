@@ -3,6 +3,7 @@ import {createDeliveryAdminPhotoSource,DeliveryPhotoError,validatePhotoQuery} fr
 import {createDeliveryAdminPhotoTransport,DELIVERY_ADMIN_PHOTO_CATEGORY_MAP,DELIVERY_ADMIN_PHOTO_HOSTS} from './opsmapDeliveryAdminTransport.js';
 import {mountDeliveryPhotoConfig,mountOpsmapDeliveryPhotoRoutes} from './opsmapDeliveryPhotoRouter.js';
 import {createOperationalPhotoExtension} from './opsmapOperationalPhotos.js';
+import {createOpsmapPhotoIndex} from './opsmapPhotoIndex.js';
 const fail=(code,status=503,stage='source-session',sourceHttpStatus)=>{throw new DeliveryPhotoError(code,status,{stage,...(Number.isInteger(sourceHttpStatus)?{sourceHttpStatus}:{})});};
 const session=has=>{if(typeof has!=='function'||has()!==true)fail('UPSTREAM_AUTH_REQUIRED',502);};
 const checkLimit=(value,maximum)=>Number.isInteger(value)&&value>=1&&value<=maximum;
@@ -84,7 +85,9 @@ export function mountProductionPhotoBinding({env=process.env,rawRequest,hasMemor
    sourceSession:typeof hasMemorySession==='function'&&hasMemorySession()===true,metadataConfigured:typeof listDeliveryMetadata==='function'};
  });
  if(env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1'){
-  const extension=createOperationalPhotoExtension({enabled:()=>env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',rawRequest,hasMemorySession,prepareSession,prepareHistorySession:true,listDeliveryMetadata});
+  const extension=createOperationalPhotoExtension({enabled:()=>env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',rawRequest,hasMemorySession,prepareSession,
+   prepareHistorySession:true,prepareMediaSession:Boolean(env.OPSMAP_PHOTO_HISTORY_DIRECTORY),listDeliveryMetadata,
+   readIndexedHistory:env.OPSMAP_PHOTO_HISTORY_DIRECTORY ? createOpsmapPhotoIndex({directory:env.OPSMAP_PHOTO_HISTORY_DIRECTORY}).read : undefined});
   extension.mount(binding);return extension;
  }
  let approvedRecords=[];

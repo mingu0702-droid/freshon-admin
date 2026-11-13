@@ -4,6 +4,7 @@ import {createOperationalPhotoExtension, createOperationalPhotoMetadataReader, c
 import {mountDeliveryPhotoConfig} from './opsmapDeliveryPhotoRouter.js';
 import {createStageDeliveryAdminPhotoSession, STAGE_DELIVERY_ORIGIN} from './opsmapStageDeliveryAdminSession.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {createOpsmapPhotoIndex} from './opsmapPhotoIndex.js';
 const DAY_MS = 86400000;
 const validSecret = (value, max) => typeof value === 'string' && value.length <= max && value.trim().length > 0 && !/[\x00-\x1f\x7f]/.test(value);
 
@@ -55,7 +56,9 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
     enabled, rawRequest:account || cookieConfigured ? rawRequest : undefined,
     hasMemorySession:account?.hasSession ?? (() => cookieConfigured), prepareSession:account?.prepareSession,
     canPrepareSource:() => Boolean(account), prepareHistorySession:Boolean(account), prepareMediaSession:Boolean(account),
-    listDeliveryMetadata, imageFetch:fetchImpl, onSourceVerified:() => {
+    listDeliveryMetadata, imageFetch:fetchImpl,
+    readIndexedHistory:approvedStage && env.OPSMAP_PHOTO_HISTORY_DIRECTORY ? createOpsmapPhotoIndex({directory:env.OPSMAP_PHOTO_HISTORY_DIRECTORY, now}).read : undefined,
+    onSourceVerified:() => {
       if (account) account.markVerified();
       else if (legacyState !== 'AUTH_REQUIRED') legacyState = 'VERIFIED';
     }
@@ -67,6 +70,7 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
   };
   return {
     diagnostics,
+    readIndexTask:extension.readIndexTask,
     mount(binding) {
       mountDeliveryPhotoConfig(binding, diagnostics);
       return extension.mount(binding);

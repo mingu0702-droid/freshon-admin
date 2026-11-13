@@ -239,6 +239,15 @@ export function createDeliveryPhotoService({ source = null, enabled = false, now
     if (!source?.list || !source?.openMedia) fail('SOURCE_UNAVAILABLE', 503);
   }
   function prune() { for (const [key, value] of handles) if (now() >= value.expiresAt) handles.delete(key); }
+  function publishPhoto(photo, row, sessionKey) {
+    if (!PHOTO_KINDS.has(photo.kind) || (photo.kind === FRONT_DOOR_PHOTO_KIND && !validDeliveryId(photo.recordId))) fail('UNVERIFIED', 503);
+    while (handles.size >= maxHandles) handles.delete(handles.keys().next().value);
+    const id = randomBytes(24).toString('base64url');
+    handles.set(id, {sessionKey, identity:{customerCode:row.customerCode, date:row.date, deliveryId:row.deliveryId},
+      ref:photo.ref, expiresAt:now() + handleTtlMs});
+    const url = `/api/map-phase2b/private/delivery-photos/media/${id}`;
+    return {id, kind:photo.kind, thumbnailUrl:url, url, ...(photo.kind === FRONT_DOOR_PHOTO_KIND ? {recordId:String(photo.recordId)} : {})};
+  }
   function publish(rows, identity, sessionKey, history = false) {
     if (!Array.isArray(rows) || rows.length > 32) fail('INVALID_PHOTO_RESPONSE', 502);
     prune();
@@ -249,14 +258,8 @@ export function createDeliveryPhotoService({ source = null, enabled = false, now
         || (history && (row.status !== 'READY' || !row.photos.length))) fail('INVALID_PHOTO_RESPONSE', 502);
       return { customerCode: row.customerCode, date: row.date, deliveryId: row.deliveryId,
         notes: history ? '' : cleanText(row.notes, 4000), status: row.status, photos: row.photos.map(photo => {
-          if (!PHOTO_KINDS.has(photo.kind) || (history && (photo.kind !== FRONT_DOOR_PHOTO_KIND || photo.ref?.history !== true))
-            || (photo.kind === FRONT_DOOR_PHOTO_KIND && !validDeliveryId(photo.recordId))) fail('UNVERIFIED', 503);
-          while (handles.size >= maxHandles) handles.delete(handles.keys().next().value);
-          const id = randomBytes(24).toString('base64url');
-          handles.set(id, { sessionKey, identity: { customerCode: row.customerCode, date: row.date, deliveryId: row.deliveryId },
-            ref: photo.ref, expiresAt: now() + handleTtlMs });
-          const url = `/api/map-phase2b/private/delivery-photos/media/${id}`;
-          return { id, kind: photo.kind, thumbnailUrl: url, url, ...(photo.kind === FRONT_DOOR_PHOTO_KIND ? {recordId:String(photo.recordId)} : {}) };
+          if (history && (photo.kind !== FRONT_DOOR_PHOTO_KIND || photo.ref?.history !== true)) fail('UNVERIFIED', 503);
+          return publishPhoto(photo, row, sessionKey);
         }) };
     });
   }
@@ -269,9 +272,19 @@ export function createDeliveryPhotoService({ source = null, enabled = false, now
     },
     async listHistory(query, sessionKey, {signal} = {}) {
       ready();
-      if (Object.keys(query).some(key => key !== 'customerCode')) fail('INVALID_PHOTO_REQUEST', 400);
+      if (Object.keys(query).some(key => key !== 'customerCode' && (key !== 'cursor' || !source.readIndexedHistory)) ||
+          (query.cursor !== undefined && (typeof query.cursor !== 'string' || !/^[a-f0-9]{64}\.\d{1,8}$/.test(query.cursor)))) {
+        fail('INVALID_PHOTO_REQUEST', 400);
+      }
       const identity = validatePhotoQuery(query);
       if (!sessionKey) fail('STAFF_LOGIN_REQUIRED', 401);
+      if (source.readIndexedHistory) {
+        const {state, scope, items, counts, nextCursor} = await bounded(source.readIndexedHistory({customerCode:identity.customerCode, cursor:query.cursor}), signal);
+        prune();
+        return {customerCode:identity.customerCode, mode:'INDEXED', state, scope, counts, nextCursor,
+          items:items.map(({date, deliveryId, customerCode, photo}) => ({date, deliveryId,
+            photo:publishPhoto(photo, {date, deliveryId, customerCode}, sessionKey)}))};
+      }
       if (typeof source.listHistory !== 'function') fail('SOURCE_UNAVAILABLE', 503);
       const history = await bounded(source.listHistory(identity, {signal}), signal);
       if (history?.coverage !== 'INCOMPLETE') fail('INVALID_PHOTO_RESPONSE', 502);

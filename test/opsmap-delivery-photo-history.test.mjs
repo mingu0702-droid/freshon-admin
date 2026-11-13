@@ -143,7 +143,7 @@ test('map selection opens photo history independent of the date filter and shows
       try {
         await page.goto(f.origin);
         const awaited = page.waitForRequest(request => request.url().includes('/history?'));
-        await page.getByRole('button', {name:'매장 문 앞 납품 이력'}).click();
+        await page.getByRole('button', {name:'과거 사진 조회'}).click();
         assert.equal(new URL((await awaited).url()).search, '?customerCode=' + customerCode);
         await page.getByText('과거 기록 확인 필요', {exact:true}).waitFor();
         const records = page.getByRole('button', {name:/원본 기록 ID/});
