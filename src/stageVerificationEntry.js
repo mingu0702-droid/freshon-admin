@@ -9,7 +9,8 @@ import {createFixedVehicleCache} from './opsmap-abc/fixedVehicleCache.js';
 import {createFixedVehicleFileStore} from './opsmap-abc/fixedVehicleStore.js';
 import {canonicalFixedMasterVehicle} from './fixedMasterVehicle.js';
 import {createManualMapPins} from './opsmap-abc/manualMapPins.js';
-import {isRoadRouteRequest} from './opsmap-abc/roadRouteService.js';
+import {createRoadRouteService,isRoadRouteRequest} from './opsmap-abc/roadRouteService.js';
+import {createStageRoadBudget} from './opsmap-abc/productionRoadBudget.js';
 import {createRecordedRoadRouteReader} from './opsmap-abc/recordedRoadRoute.js';
 import {staffStoreDetail} from './opsmap-abc/mapStaffDetail.js';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
@@ -111,12 +112,26 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   if (![env.HUB_API_URL,env.OPSMAP_PRIVATE_READER_URL].every(stageHubUrl)) throw new Error('STAGE_READ_SOURCE_CONFIG');
   const stageAddressApproved = env.RENDER_SERVICE_ID === stageService && env.OPSMAP_STAGE_KAKAO_ADDRESS_APPROVED === '1' &&
     /^(?:[1-9][0-9]?|100)$/.test(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT || '') && !!env.GITHUB_TOKEN;
+  const exactStageService = env.RENDER_SERVICE_ID === stageService;
+  const stageRoadApproved = exactStageService && env.OPSMAP_STAGE_ROAD_ROUTE_APPROVED === '1';
+  const stageRoadKey = exactStageService ? String(env.OPSMAP_STAGE_KAKAO_MOBILITY_REST_API_KEY || '').trim() : '';
+  const roadBudgetFile = 'road-budget-v1.json';
+  const roadRouteBudget = stageRoadApproved ? createStageRoadBudget({
+    key:stageRoadKey,token:env.OPSMAP_STAGE_ROAD_BUDGET_STORE_TOKEN,now,
+    fetchImpl:stageGithub(fetchImpl,{files:[roadBudgetFile],branch:pinsBranch,writable:roadBudgetFile})
+  }) : null;
+  const roadEnabled = stageRoadApproved && env.OPSMAP_STAGE_ROAD_ROUTE_ENABLED === '1';
   const stage = {...env, OPSMAP_STAGE_VERIFY_ONLY:'1', MAP_STAFF_ORIGIN:stageOrigin, OPSMAP_MANUAL_PIN_WRITES:'0',
     OPSMAP_MANUAL_PIN_STORE_FILE:undefined, OPSMAP_MANUAL_PIN_SEARCH_CACHE_FILE:undefined, OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',
     OPSMAP_KAKAO_GEOCODING_ENABLED:stageAddressApproved ? env.OPSMAP_KAKAO_GEOCODING_ENABLED : '0',
     OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:stageAddressApproved ? env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED : '0',
     OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED:stageAddressApproved && env.OPSMAP_STAGE_KAKAO_PLACE_APPROVED === '1'
-      ? env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED : '0', OPSMAP_ROAD_ROUTE_ENABLED:'0'};
+      ? env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED : '0', OPSMAP_ROAD_ROUTE_ENABLED:roadEnabled?'1':'0'};
+  const roadRouteService = createRoadRouteService({
+    env:{OPSMAP_ROAD_ROUTE_ENABLED:stage.OPSMAP_ROAD_ROUTE_ENABLED,KAKAO_MOBILITY_REST_API_KEY:stageRoadKey,
+      OPSMAP_ROAD_ROUTE_CACHE_MS:stage.OPSMAP_ROAD_ROUTE_CACHE_MS,OPSMAP_ROAD_ROUTE_TIMEOUT_MS:stage.OPSMAP_ROAD_ROUTE_TIMEOUT_MS},
+    fetchImpl,now,budget:roadRouteBudget,requireDurableBudget:true
+  });
   const validation = createStageAbValidation({now});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   let baselineConfig, baselineStore, baselineRefresh, baselineRestoreMs, baselineState='NOT_CONFIGURED';
@@ -383,7 +398,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     getSnapshotMemory:()=>validation.active() ? validation.active().scheduled?.snapshot || joinedSnapshot?.snapshot || snapshot : snapshot,
     phase2bKstDate:today,phase2bDispatchDate:dispatchDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:readDatedDelivery,
     callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
-    sharedBaseCache:base,hybridEnabled:()=>false,roadRouteBudget:null,readRecordedRoadRoute,addressLookupService,
+    sharedBaseCache:base,hybridEnabled:()=>false,roadRouteService,readRecordedRoadRoute,addressLookupService,
     getShadowCoverageState:()=>validation.active() ? 'ready' : coverageState,
     getLocalDataEvidence:()=>validation.active()?.evidence || null,
     readArchivedAssignments:validation.archivedAssignments,

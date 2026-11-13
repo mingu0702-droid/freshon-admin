@@ -1,9 +1,11 @@
 import {createHash,randomUUID} from 'node:crypto';
 
-// Existing private Production auth branch, separate file. Never create a repo,
-// branch or ledger, infer approval, reset counters, refund or retry a reservation.
-const repo='mingu0702-droid/freshon-cache',branch='production/opsmap-auth';
-const root='https://api.github.com/repos/'+repo,file=root+'/contents/opsmap-production/road-budget-v1.json';
+// Both environments use an existing private repo and independent ledgers.
+// A missing ledger is never created or reset by a reservation.
+const repo='mingu0702-droid/freshon-cache';
+const root='https://api.github.com/repos/'+repo;
+const productionBranch='production/opsmap-auth';
+const stageBranch='stage/opsmap-manual-pins';
 const fail=(code='ROAD_BUDGET_UNAVAILABLE')=>{throw Object.assign(Error(code),{code});};
 const integer=n=>Number.isSafeInteger(n)&&n>=0;
 // Official daily free ceilings, checked 2026-11-04:
@@ -15,9 +17,19 @@ export const productionRoadRouteFlag=env=>env.OPSMAP_PRODUCTION_ROAD_ROUTE_ENABL
 export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetch,now=Date.now}={}){
  if(env.OPSMAP_ROAD_BUDGET_STORE_ENABLED!=='1')return null;
  const key=String(env.KAKAO_MOBILITY_REST_API_KEY||env.KAKAO_REST_API_KEY||'').trim();
+ const configured=env.OPSMAP_AUTH_STORE_REPO===repo&&env.OPSMAP_AUTH_STORE_BRANCH===productionBranch&&typeof token==='string'&&!!token&&!!key;
+ return createPrivateRoadBudget({key,token,configured,branch:productionBranch,stage:false,fetchImpl,now});
+}
+
+export function createStageRoadBudget({key,token,fetchImpl=fetch,now=Date.now}={}){
+ if(!key||!token)return null;
+ return createPrivateRoadBudget({key,token,configured:true,branch:stageBranch,stage:true,fetchImpl,now});
+}
+
+function createPrivateRoadBudget({key,token,configured,branch,stage,fetchImpl,now}){
  const accountHash=createHash('sha256').update(key).digest('hex');
- const configured=env.OPSMAP_AUTH_STORE_REPO===repo&&env.OPSMAP_AUTH_STORE_BRANCH===branch&&typeof token==='string'&&!!token&&!!key;
- const headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'opsmap-production-road-budget'};
+ const file=root+'/contents/'+(stage?'opsmap-stage':'opsmap-production')+'/road-budget-v1.json';
+ const headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':stage?'opsmap-stage-road-budget':'opsmap-production-road-budget'};
  let tail=Promise.resolve();
  async function request(url,options={}){
   try{return await fetchImpl(url,{...options,headers,redirect:'error',signal:AbortSignal.timeout(10000)});}
@@ -40,6 +52,7 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
   if(b.policy!=='FREE_ONLY'||b.providerPaidDisabled!==true||b.servicePermissionVerified!==true||!/^[-A-Za-z0-9_]{8,100}$/.test(b.approvalId||''))fail('ROAD_BUDGET_APPROVAL_REQUIRED');
   if(b.approvedApis!==undefined&&(!Array.isArray(b.approvedApis)||!b.approvedApis.length||new Set(b.approvedApis).size!==b.approvedApis.length||b.approvedApis.some(api=>!supportedApis.includes(api))))fail('ROAD_BUDGET_APPROVAL_REQUIRED');
   const observed=b.providerDailyUsedAtApproval;
+  if(stage&&(b.environment!=='STAGE'||!b.approvedApis||observed===undefined))fail('ROAD_BUDGET_APPROVAL_REQUIRED');
   if(observed!==undefined&&(!b.approvedApis||!observed||typeof observed!=='object'||Array.isArray(observed)||
    Object.keys(observed).length!==b.approvedApis.length||b.approvedApis.some(api=>!integer(observed[api])||
     observed[api]+b.apis?.[api]?.freeRemainingAtApproval>dailyLimits[api])))fail('ROAD_BUDGET_QUOTA_UNVERIFIED');
@@ -86,7 +99,7 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
   return {durable:true,scope:b.scope,remaining:Math.max(0,Math.min(b.limit-b.used,b.monthlyFreeRemainingAtApproval-b.used,apis.directions+apis.waypoints)),apiRemaining:apis,freeOnly:true,approvalExpiresAt:b.expiresAt,approvalWindow:b.monthlyApproval?'KST_MONTH':'KST_DAY',usageDate:day};
  }
  function transaction(work){const task=tail.catch(()=>{}).then(async()=>work(await read()));tail=task;return task;}
- return {kind:'PRODUCTION_PRIVATE_GITHUB_CAS',durable:configured,inspectWhenDisabled:true,
+ return {kind:stage?'STAGE_PRIVATE_GITHUB_CAS':'PRODUCTION_PRIVATE_GITHUB_CAS',durable:configured,inspectWhenDisabled:true,
   status:()=>transaction(async({state})=>{
    const time=now();return stateStatus(validate(state,time),time);
   }),
@@ -99,6 +112,7 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
    if(b.monthlyApproval){const day=status.usageDate;b.monthlyApproval.dailyUsage[day]||={directions:0,waypoints:0};b.monthlyApproval.dailyUsage[day][api]++;}
    // Write only the quota ledger; never serialize unrelated/session/customer fields.
    const clean={schema:1,roadBudget:Object.fromEntries(['accountHash','scope','policy','providerPaidDisabled','servicePermissionVerified','approvalId','verifiedAt','expiresAt','limit','used','monthlyFreeRemainingAtApproval','lastReservation','updatedAt'].map(k=>[k,b[k]]))};
+   if(stage)clean.roadBudget.environment='STAGE';
    if(b.approvedApis)clean.roadBudget.approvedApis=b.approvedApis.slice();
    if(b.providerDailyUsedAtApproval)clean.roadBudget.providerDailyUsedAtApproval={...b.providerDailyUsedAtApproval};
    clean.roadBudget.apis=Object.fromEntries(supportedApis.map(api=>[api,{freeRemainingAtApproval:b.apis[api].freeRemainingAtApproval,used:b.apis[api].used}]));
@@ -109,7 +123,8 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
     dailyUsage:structuredClone(b.monthlyApproval.dailyUsage)
    };
    const bytes=Buffer.from(JSON.stringify(clean));if(bytes.length>32768)fail('ROAD_BUDGET_FORMAT');
-   const response=await request(file,{method:'PUT',body:JSON.stringify({message:'Reserve approved Production free Directions call',branch,sha,content:bytes.toString('base64')})});
+   const message=stage?'Reserve approved Stage free Directions call':'Reserve approved Production free Directions call';
+   const response=await request(file,{method:'PUT',body:JSON.stringify({message,branch,sha,content:bytes.toString('base64')})});
    if([409,422].includes(response.status))fail('ROAD_BUDGET_CONFLICT');if(!response.ok)fail('ROAD_BUDGET_WRITE');
    const saved=await read();if(JSON.stringify(saved.state)!==JSON.stringify(clean))fail('ROAD_BUDGET_READBACK_UNKNOWN');
    // A verified reservation is usable only on the KST day it was charged.
