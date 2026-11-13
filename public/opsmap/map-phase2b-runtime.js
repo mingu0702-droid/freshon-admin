@@ -1720,7 +1720,7 @@
       const button=overlay.getContent?.(),row=mapMarkerRows.get(button);
       if(!row)continue;
       const selected=markerIsSelected(row),assigned=button.classList.contains('navAssigned');
-      refreshMarkerSelection(overlay,{selected,assigned,zIndex:markerLayer(row,selected,assigned)});
+      refreshMarkerSelection(overlay,{row,selected,assigned,zIndex:markerLayer(row,selected,assigned)});
     }
     scheduleNewAreaDispatchBadges();
   }
@@ -1870,6 +1870,14 @@
     }
     if(assigned!==entry.assigned)button.classList.toggle('navAssigned',entry.assigned);
     if(overlay.getZIndex?.()!==entry.zIndex)overlay.setZIndex?.(entry.zIndex);
+    if(entry.row?.representative){
+      mapMarkerRows.set(button,entry.row);
+      const offset=entry.row.representativeOffset;
+      const translate=offset?`${offset.x}px ${offset.y}px`:'';
+      if(button.style.translate!==translate)button.style.translate=translate;
+      const parent=button.parentElement;
+      if(parent&&parent!==$('#map')&&parent.style.pointerEvents!=='none')parent.style.pointerEvents='none';
+    }
   }
 
   function renderStops(rows, options = {}) {
@@ -1926,7 +1934,8 @@
         key:row.representative?'vehicle:'+row.vehicle:row.clusterKey||[row.virtual?'virtual':'store',runVisitId(row),row.lat,row.lng].join('|')};
     });
     const planMs=performance.now()-started;
-    const reconciled = MapPeriodUi.reconcile(markerEntries, entries, ({row,zIndex}) => {
+    const reconciled = MapPeriodUi.reconcile(markerEntries, entries, entry => {
+      const {row,zIndex}=entry;
       const overlay = new kakao.maps.CustomOverlay({
         position:markerPosition(row),
         clickable: true,
@@ -1936,6 +1945,7 @@
         zIndex
       });
       overlay.setMap(state.map);
+      if(row.representative)refreshMarkerSelection(overlay,entry);
       return overlay;
     }, overlay => overlay.setMap(null), refreshMarkerSelection);
     markerEntries = reconciled.next;
@@ -3243,7 +3253,7 @@
       const anchor=projection.containerPointFromCoords(position),width=content.offsetWidth,height=content.offsetHeight;
       return {id,left:left+anchor.x-width/2,top:top+anchor.y-3*height,width,height};
     });
-    const placements=new Map(MapViewPolicy.placeDispatchBadges(badges,bounds,obstacles).map(value=>[value.id,value]));
+    const placements=new Map(MapViewPolicy.placeOverlayLabels(badges,bounds,obstacles).map(value=>[value.id,value]));
     items.forEach(({content},id)=>{
       const offset=placements.get(id);
       // The existing vehicle list remains available if no readable spot fits.

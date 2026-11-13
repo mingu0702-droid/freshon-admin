@@ -168,18 +168,25 @@
     if(!viewport)return rows;
     const {width,height}=viewport, inside=({x,y},margin)=>
       x>=-margin&&x<=width+margin&&y>=-margin&&y<=height+margin;
-    return rows.flatMap(row=>{
+    const preferred=rows.flatMap(row=>{
       const center=project(row);
-      if(inside(center,0))return [row];
+      if(inside(center,0))return [{row,point:center}];
       let anchor=null, nearest=Infinity;
       for(const store of visibleStores?.get(row.vehicle)||[]){
         const point=project(store);
         if(!inside(point,0))continue;
         const distance=(point.x-width/2)**2+(point.y-height/2)**2;
-        if(distance<nearest){anchor=store;nearest=distance;}
+        if(distance<nearest){anchor={row:{...row,lat:store.lat,lng:store.lng},point};nearest=distance;}
       }
-      if(!anchor)return inside(center,36)?[row]:[];
-      return [{...row,lat:anchor.lat,lng:anchor.lng}];
+      return anchor?[anchor]:inside(center,36)?[{row,point:center}]:[];
+    });
+    if(!visibleStores)return preferred.map(({row})=>row);
+    const placed=placeOverlayLabels(preferred.map(({point},id)=>({id,left:point.x-22,top:point.y-56,width:44,height:56})),
+      {left:0,top:0,right:width,bottom:height},[],{retainWhenCrowded:true});
+    const byId=new Map(placed.map(offset=>[offset.id,offset]));
+    return preferred.map(({row},id)=>{
+      const offset=byId.get(id);
+      return offset&&(offset.x||offset.y)?{...row,representativeOffset:{x:offset.x,y:offset.y}}:row;
     });
   }
   function stableClusters(rows, project, level, selectedCode = '', viewport = null, options = {}) {
@@ -277,25 +284,31 @@
     }
     return area?{...area,x:(area.left+area.right)/2,y:(area.top+area.bottom)/2,basis:'UNOBSCURED_MAP'}:null;
   }
-  function placeDispatchBadges(badges, bounds, obstacles) {
+  function placeOverlayLabels(badges, bounds, obstacles,{retainWhenCrowded=false}={}) {
     const gap=4, occupied=obstacles.slice(), placed=[];
     const intersects=(a,b)=>a.left<b.right+gap&&a.right+gap>b.left&&a.top<b.bottom+gap&&a.bottom+gap>b.top;
     for(const badge of badges){
       const {id,left,top,width,height}=badge;
       if(left+width<bounds.left||left>bounds.right||top+height<bounds.top||top>bounds.bottom)continue;
+      const fits=box=>box.left>=bounds.left&&box.top>=bounds.top&&box.right<=bounds.right&&box.bottom<=bounds.bottom&&
+        !occupied.some(other=>intersects(box,other));
       const baseX=Math.max(bounds.left,Math.min(left,bounds.right-width))-left;
       const baseY=Math.max(bounds.top,Math.min(top,bounds.bottom-height))-top;
+      const boxAt=(x,y)=>({left:left+x,top:top+y,right:left+x+width,bottom:top+y+height});
+      const original=boxAt(baseX,baseY);
+      if(fits(original)){occupied.push(original);placed.push({id,x:baseX,y:baseY});continue;}
       const offsets=[];
       for(let row=-3;row<=3;row++)for(let column=-2;column<=2;column++){
         const x=baseX+column*(width+gap),y=baseY+row*(height+gap);
         offsets.push({x,y,dist:x*x+y*y});
       }
       offsets.sort((a,b)=>a.dist-b.dist||a.y-b.y||a.x-b.x);
-      const position=offsets.map(({x,y})=>({left:left+x,top:top+y,right:left+x+width,bottom:top+y+height})).find(box=>{
-        return box.left>=bounds.left&&box.top>=bounds.top&&box.right<=bounds.right&&box.bottom<=bounds.bottom&&
-          !occupied.some(other=>intersects(box,other));
-      });
-      if(!position){placed.push({id,hidden:true});continue;}
+      const position=offsets.map(({x,y})=>boxAt(x,y)).find(fits);
+      if(!position){
+        if(retainWhenCrowded){occupied.push({left,top,right:left+width,bottom:top+height});placed.push({id,x:0,y:0});}
+        else placed.push({id,hidden:true});
+        continue;
+      }
       occupied.push(position);placed.push({id,x:position.left-left,y:position.top-top});
     }
     return placed;
@@ -407,5 +420,5 @@
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,overlappingVehicleLocations,visibleVehicleRepresentatives,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint,placeDispatchBadges});
+  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,overlappingVehicleLocations,visibleVehicleRepresentatives,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint,placeOverlayLabels});
 })(typeof window==='object'?window:globalThis);

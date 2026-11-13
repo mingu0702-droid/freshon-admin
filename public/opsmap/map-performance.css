@@ -99,7 +99,7 @@
 .approvedShellCandidate .marker.approvedMarker.selected .pin { outline:none; background-color:#ad1457; }
 .approvedShellCandidate .marker.navAssigned { visibility:visible!important; pointer-events:auto!important; }
 .approvedShellCandidate .marker.approvedMarker.navAssigned .pin { outline:3px solid #f59e0b66; }
-.areaVehicleMapBadge { pointer-events:auto; }
+.areaVehicleMapBadge,.approvedShellCandidate .marker[data-representative-vehicle] { pointer-events:auto; }
 .areaVehicleMapBadge.mapBadgeObscured { visibility:hidden; }
 .approvedShellCandidate .clusterAssignments { margin:4px 0 8px; color:#50617b; font-size:11px; line-height:1.55; overflow-wrap:anywhere; }
 

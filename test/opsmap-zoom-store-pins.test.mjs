@@ -135,18 +135,18 @@ test('initial map pins use counts for groups and retain the loading message outs
 });
 
 test('nearby vehicle badges avoid existing pins and each other, with overflow left in the existing list', () => {
-  const {placeDispatchBadges}=MapViewPolicy;
+  const {placeOverlayLabels}=MapViewPolicy;
   const bounds={left:0,top:0,right:390,bottom:420};
   const badges=[125,163].map(id=>({id,left:170,top:140,width:42,height:24}));
   const temporary={left:162,top:135,right:221,bottom:187};
-  const [one,two]=placeDispatchBadges(badges,bounds,[temporary]);
+  const [one,two]=placeOverlayLabels(badges,bounds,[temporary]);
   assert.deepEqual([one.id,two.id],[125,163]);
   assert.ok(!one.hidden&&!two.hidden);
   const rect=({x,y})=>({left:170+x,top:140+y,right:212+x,bottom:164+y});
   const noOverlap=(a,b)=>a.left>=b.right||a.right<=b.left||a.top>=b.bottom||a.bottom<=b.top;
   assert.ok(noOverlap(rect(one),temporary)&&noOverlap(rect(two),temporary)&&noOverlap(rect(one),rect(two)));
-  assert.deepEqual(placeDispatchBadges(badges,bounds,[bounds]),[{id:125,hidden:true},{id:163,hidden:true}]);
-  assert.deepEqual(placeDispatchBadges([{...badges[0],left:500}],bounds,[]),[]);
+  assert.deepEqual(placeOverlayLabels(badges,bounds,[bounds]),[{id:125,hidden:true},{id:163,hidden:true}]);
+  assert.deepEqual(placeOverlayLabels([{...badges[0],left:500}],bounds,[]),[]);
 });
 
 test('a store with a verified empty delivery aggregate still uses its fixed route', () => {
@@ -166,6 +166,18 @@ test('overview keeps a route visible when its average falls outside the viewport
   assert.deepEqual([markers[0].vehicle,markers[0].lat,markers[0].lng],['157',40,80]);
   assert.strictEqual(markers[0].clusterRows,overview[0].clusterRows);
   assert.equal(overview[0].lng,600);
+});
+
+test('overlapping overview pins stay separate while retaining both geographic anchors',()=>{
+  const {visibleVehicleRepresentatives}=MapViewPolicy;
+  const project=row=>({x:row.lng,y:row.lat});
+  const rows=[{vehicle:'161',lat:195,lng:185},{vehicle:'157',lat:200,lng:190}];
+  const visible=visibleVehicleRepresentatives(rows,project,{width:390,height:420},new Map());
+  assert.strictEqual(visible[0],rows[0]);
+  assert.equal(visible[1].lng,rows[1].lng);
+  assert.equal(visible[1].lat,rows[1].lat);
+  assert.ok(Math.abs(visible[1].lng+visible[1].representativeOffset.x-rows[0].lng)>=44||
+    Math.abs(visible[1].lat+visible[1].representativeOffset.y-rows[0].lat)>=56);
 });
 
 const nearbyPoint = (code, route, meters, pixel) => ({
