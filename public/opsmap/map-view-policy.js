@@ -277,6 +277,29 @@
     }
     return area?{...area,x:(area.left+area.right)/2,y:(area.top+area.bottom)/2,basis:'UNOBSCURED_MAP'}:null;
   }
+  function placeDispatchBadges(badges, bounds, obstacles) {
+    const gap=4, occupied=obstacles.slice(), placed=[];
+    const intersects=(a,b)=>a.left<b.right+gap&&a.right+gap>b.left&&a.top<b.bottom+gap&&a.bottom+gap>b.top;
+    for(const badge of badges){
+      const {id,left,top,width,height}=badge;
+      if(left+width<bounds.left||left>bounds.right||top+height<bounds.top||top>bounds.bottom)continue;
+      const baseX=Math.max(bounds.left,Math.min(left,bounds.right-width))-left;
+      const baseY=Math.max(bounds.top,Math.min(top,bounds.bottom-height))-top;
+      const offsets=[];
+      for(let row=-3;row<=3;row++)for(let column=-2;column<=2;column++){
+        const x=baseX+column*(width+gap),y=baseY+row*(height+gap);
+        offsets.push({x,y,dist:x*x+y*y});
+      }
+      offsets.sort((a,b)=>a.dist-b.dist||a.y-b.y||a.x-b.x);
+      const position=offsets.map(({x,y})=>({left:left+x,top:top+y,right:left+x+width,bottom:top+y+height})).find(box=>{
+        return box.left>=bounds.left&&box.top>=bounds.top&&box.right<=bounds.right&&box.bottom<=bounds.bottom&&
+          !occupied.some(other=>intersects(box,other));
+      });
+      if(!position){placed.push({id,hidden:true});continue;}
+      occupied.push(position);placed.push({id,x:position.left-left,y:position.top-top});
+    }
+    return placed;
+  }
   function cameraDomLayout(element,measurePin=true) {
     const doc=element?.ownerDocument,win=doc?.defaultView||root,visual=win.visualViewport;
     const viewportRect={left:visual?.offsetLeft||0,top:visual?.offsetTop||0,width:visual?.width||win.innerWidth,height:visual?.height||win.innerHeight};
@@ -384,5 +407,5 @@
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,overlappingVehicleLocations,visibleVehicleRepresentatives,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint});
+  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,overlappingVehicleLocations,visibleVehicleRepresentatives,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint,placeDispatchBadges});
 })(typeof window==='object'?window:globalThis);

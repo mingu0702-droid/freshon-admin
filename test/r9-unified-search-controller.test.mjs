@@ -55,7 +55,7 @@ const store=(customerCode,customerName,address,more={})=>({customerCode,customer
 
 test('map gestures coalesce idle work and keep the out-of-filter selection in the address queue',async()=>{
  const selected=store('S990100','합성 선택점','',{vehicle:'223',lat:null,lng:null}),visible=store('S990101','합성 필터점','',{vehicle:'101'});
- const events=new Map(),frames=new Map(),renders=[],queues=[];
+ const events=new Map(),frames=new Map(),renders=[],queues=[],badgeLayouts=[];
  const mapElement={dataset:{},replaceChildren(){},addEventListener(){}};
  let frameId=0;
  const c={
@@ -65,6 +65,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
   window:{KakaoMapsAdapter:{ready:async()=>{}},dispatchEvent(){}},
   kakao:{maps:{Map:class {},LatLng:class {},event:{addListener:(_map,name,callback)=>events.set(name,callback)}}},
   $:()=>mapElement,performance:{mark(){}},CustomEvent:class {},loadBaseMap(){},positionTemporaryDistanceLabel(){},
+  scheduleNewAreaDispatchBadges:()=>badgeLayouts.push(true),
   setMapMessage:message=>assert.fail(message),
   requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},
   cancelAnimationFrame:id=>frames.delete(id),
@@ -84,11 +85,13 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
  flushFrames();
  assert.equal(renders.length,0);
  assert.equal(queues.length,0);
+ assert.equal(badgeLayouts.length,0);
  events.get('idle')();
  events.get('idle')();
  flushFrames();
  assert.equal(renders.length,1);
  assert.equal(queues.length,1);
+ assert.equal(badgeLayouts.length,1);
  assert.equal(queues[0][0],selected);
  assert(queues[0].includes(visible));
 });

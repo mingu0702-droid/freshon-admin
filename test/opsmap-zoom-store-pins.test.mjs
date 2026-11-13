@@ -118,6 +118,7 @@ test('initial map pins use counts for groups and retain the loading message outs
   const label = marker=>marker.children[0].children[0].textContent;
   const store = makeMarker(pending,null,'store');
   assert.equal(label(store),'');
+  assert.equal(store.dataset.pinAssignment,'loading');
   assert.match(store.attributes['aria-label'],/기준호차 조회 중/);
   const group = makeMarker({...pending,customerCode:'',clusterCount:9,
     clusterAssignment:{code:'',kind:'unverified',label:''}},null,'store');
@@ -125,11 +126,27 @@ test('initial map pins use counts for groups and retain the loading message outs
   assert.match(group.attributes['aria-label'],/9개 매장/);
   context.baseVehicleStatus='ERROR';
   const failed = makeMarker(pending,null,'store');
-  assert.equal(label(failed),'');
+  assert.equal(label(failed),'•');
+  assert.equal(failed.dataset.pinAssignment,'unverified');
   assert.match(failed.attributes['aria-label'],/기준호차 확인 필요/);
   assert.equal(label(makeMarker({...pending,baseVehicle:'156',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'156');
   assert.equal(label(makeMarker({...pending,baseVehicle:'오산신규',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'오산\n신규');
   assert.equal(label(makeMarker({...pending,baseVehicle:'오산보류',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'오산\n보류');
+});
+
+test('nearby vehicle badges avoid existing pins and each other, with overflow left in the existing list', () => {
+  const {placeDispatchBadges}=MapViewPolicy;
+  const bounds={left:0,top:0,right:390,bottom:420};
+  const badges=[125,163].map(id=>({id,left:170,top:140,width:42,height:24}));
+  const temporary={left:162,top:135,right:221,bottom:187};
+  const [one,two]=placeDispatchBadges(badges,bounds,[temporary]);
+  assert.deepEqual([one.id,two.id],[125,163]);
+  assert.ok(!one.hidden&&!two.hidden);
+  const rect=({x,y})=>({left:170+x,top:140+y,right:212+x,bottom:164+y});
+  const noOverlap=(a,b)=>a.left>=b.right||a.right<=b.left||a.top>=b.bottom||a.bottom<=b.top;
+  assert.ok(noOverlap(rect(one),temporary)&&noOverlap(rect(two),temporary)&&noOverlap(rect(one),rect(two)));
+  assert.deepEqual(placeDispatchBadges(badges,bounds,[bounds]),[{id:125,hidden:true},{id:163,hidden:true}]);
+  assert.deepEqual(placeDispatchBadges([{...badges[0],left:500}],bounds,[]),[]);
 });
 
 test('a store with a verified empty delivery aggregate still uses its fixed route', () => {

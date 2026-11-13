@@ -34,6 +34,7 @@
   const syncClearQuery=()=>{clearQuery.hidden=!query.value;};query.addEventListener('input',syncClearQuery);window.addEventListener('map-unified-search-clear',()=>queueMicrotask(syncClearQuery));clearQuery.onclick=()=>{window.dispatchEvent(new Event('map-unified-search-clear'));queueMicrotask(syncClearQuery);query.focus();};syncClearQuery();
   const searchField=document.createElement('div');searchField.className='unifiedSearchField';searchLine.before(searchField);searchField.append(searchLine,$('#results'));
   const searchState=$('#searchState');searchState.setAttribute('role','status');searchState.setAttribute('aria-live','polite');if(searchState.textContent==='검색 대기')searchState.textContent='';searchField.after(searchState);
+  const fixedNotice=document.createElement('p');fixedNotice.id='fixedMasterNotice';fixedNotice.setAttribute('role','status');searchState.after(fixedNotice);
   const address=$('.addressBlock');address.classList.add('compatibilityHidden');address.hidden=true;address.inert=true;address.setAttribute('aria-hidden','true');
   for(const node of [$('#searchNotice'),$('#addressJudgeResults')]){node.hidden=true;node.inert=true;node.classList.add('compatibilityHidden');address.append(node);}
   const filters=$('#periodFilterPanel');filters.className='generalCenters';

@@ -10,6 +10,8 @@
 .approvedShellCandidate .sidehead h1 { margin-top:4px; font-size:19px; letter-spacing:-.4px; }
 .approvedShellCandidate .sourceCount { border:0; font-size:11px; min-width:52px; padding:5px 8px; }
 .approvedShellCandidate .sourceSearchLabel { font-size:13px; color:#35455d; }
+.approvedShellCandidate #fixedMasterNotice { margin:5px 0 0; font-size:12px; color:#526279; }
+.approvedShellCandidate #fixedMasterNotice:empty { display:none; }
 .approvedShellCandidate #query { height:38px; font-size:13px; }
 .approvedShellCandidate .customerBlock .row { align-items:stretch; }
 .approvedShellCandidate .customerBlock .row button { min-width:48px; }
@@ -97,6 +99,8 @@
 .approvedShellCandidate .marker.approvedMarker.selected .pin { outline:none; background-color:#ad1457; }
 .approvedShellCandidate .marker.navAssigned { visibility:visible!important; pointer-events:auto!important; }
 .approvedShellCandidate .marker.approvedMarker.navAssigned .pin { outline:3px solid #f59e0b66; }
+.areaVehicleMapBadge { pointer-events:auto; }
+.areaVehicleMapBadge.mapBadgeObscured { visibility:hidden; }
 .approvedShellCandidate .clusterAssignments { margin:4px 0 8px; color:#50617b; font-size:11px; line-height:1.55; overflow-wrap:anywhere; }
 
 /* A clicked group exposes every store, including shops at the same coordinates. */
