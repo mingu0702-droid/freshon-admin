@@ -110,7 +110,7 @@
 
 /* Role separation wins over legacy forced display rules. */
 .approvedShellCandidate [data-mode-hidden="true"]{display:none!important}
-.approvedShellCandidate .vehiclePickerShell{position:relative;margin-top:10px}
+.approvedShellCandidate .vehiclePickerShell{position:relative}
 .approvedShellCandidate .vehiclePickerShell #baseVehiclePicker{padding-top:0}
 .approvedShellCandidate .vehiclePickerShell #baseVehiclePicker>summary{display:flex;align-items:center;justify-content:flex-start;min-height:34px;padding:0 106px 0 0;box-sizing:border-box}
 .approvedShellCandidate .vehiclePickerActions{position:absolute;top:3px;right:2px;display:flex;gap:3px}
@@ -129,6 +129,24 @@
 .approvedShellCandidate #vehicleQuickChips{display:flex;flex-wrap:wrap;min-width:0;max-height:70px;overflow-y:auto;gap:3px}
 .approvedShellCandidate #vehicleQuickFilter button{min-height:32px;padding:3px 6px;font-size:11px;white-space:nowrap}
 .approvedShellCandidate #clearMapVehicleFilter{flex:none}
+.approvedShellCandidate #mapTopReadout{display:flex;flex:1 1 auto;flex-wrap:wrap;align-items:flex-start;gap:6px;min-width:0;pointer-events:none}
+.approvedShellCandidate #mapTopReadout:not(:has(>:not([hidden]))){display:none}
+.approvedShellCandidate #mapTopReadout>#vehicleQuickFilter{pointer-events:auto}
+.approvedShellCandidate #mapTopControls{flex:none;align-items:center;gap:6px;margin-left:auto;pointer-events:none}
+.approvedShellCandidate #mapTopControls #centers{gap:4px}
+.approvedShellCandidate #mapTopControls button{min-width:44px;min-height:40px;padding:6px 8px;font-size:12px;pointer-events:auto}
+@media(min-width:901px){
+  .approvedShellCandidate.dotRestored .maparea>#detailSection{
+    --map-detail-top:max(66px,calc(28px + var(--map-toolbar-height,0px)));
+    top:var(--map-detail-top)!important;max-height:calc(100% - var(--map-detail-top) - 18px)!important
+  }
+}
+@media(max-width:900px){
+  .approvedShellCandidate .maptop{flex-direction:column;align-items:stretch;gap:6px}
+  .approvedShellCandidate #mapTopReadout{order:1}
+  .approvedShellCandidate #mapTopControls{align-self:flex-end}
+  .approvedShellCandidate #mapTopControls button{min-height:44px}
+}
 @media(max-width:760px){
   .approvedShellCandidate #vehicleQuickFilter{max-width:100%}
   .approvedShellCandidate #vehicleList .vehicleItem{min-height:38px}

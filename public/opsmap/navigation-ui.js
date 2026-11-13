@@ -110,8 +110,8 @@
   'use strict';
   if(typeof document!=='object')return;
   const $=selector=>document.querySelector(selector),bridge=window.MapUiLocalBridge,editor=window.MapNavigationEditor,lookup=window.MapNavigationLookup;
-  const planner=$('#waypointPlanner'),routeList=$('#runListTool'),mapArea=$('#map')?.parentElement;
-  if(!bridge||!editor||!planner||!routeList||!mapArea)return;
+  const planner=$('#waypointPlanner'),routeList=$('#runListTool'),mapReadout=$('#mapTopReadout');
+  if(!bridge||!editor||!planner||!routeList||!mapReadout)return;
   const plannerAnchor=document.createComment('navigation-planner-home'),routeAnchor=document.createComment('navigation-list-home');
   planner.before(plannerAnchor);routeList.before(routeAnchor);
   const workspace=document.createElement('section');workspace.id='navigationWorkspace';workspace.className='navigationWorkspace';workspace.hidden=true;
@@ -119,8 +119,8 @@
   $('.scrollside').append(workspace);
   const routeTotals=document.createElement('div');routeTotals.id='mapRouteTotals';routeTotals.hidden=true;
   routeTotals.setAttribute('role','status');
-  routeTotals.innerHTML='<span id="navPartialTotals" hidden>일부 구간</span><span>주행거리 <b id="navDistance">— km</b></span><span>예상 소요시간 <b id="navDuration">— 분</b></span>';
-  mapArea.append(routeTotals);
+  routeTotals.innerHTML='<span>주행거리 <b id="navDistance">— km</b></span><span>· 예상 <b id="navDuration">— 분</b></span>';
+  mapReadout.append(routeTotals);
   if($('#syncOperation'))$('#navigationSummary').append($('#syncOperation'));
   const centerChoices=document.createElement('div');centerChoices.className='navCenterChoices';centerChoices.setAttribute('aria-label','센터에서 출발');planner.querySelector('summary').after(centerChoices);
   const suggestions=document.createElement('div');suggestions.id='navSearchResults';suggestions.className='navSearchResults';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label','매장 검색 결과');
@@ -318,8 +318,8 @@
     // A cancelled inactive controller must not erase the other controller's route.
     if(result?.state==='idle'&&lastKind!==kind&&['loading','success','partial'].includes(lastResult?.state))return;
     lastResult=result;lastKind=kind;renderRolePins();
-    const metric=RoadRouteUi.metrics(result);$('#navDistance').textContent=metric.distance==='—'?'— km':metric.distance;$('#navDuration').textContent=metric.duration==='—'?'— 분':metric.duration;
-    $('#navPartialTotals').hidden=result?.state!=='partial';
+    const metric=RoadRouteUi.metrics(result?.state==='success'&&result.source==='kakao-directions'?result:null);
+    $('#navDistance').textContent=metric.distance==='—'?'— km':metric.distance;$('#navDuration').textContent=metric.duration==='—'?'— 분':metric.duration;
     routeTotals.hidden=metric.distance==='—'||metric.duration==='—';
     $('#navRouteStatus').textContent=['success','partial'].includes(result?.state)&&result?.noDrivingRequired?'방문지가 같은 위치에 있습니다.':MapDotUi.describeRoute(result);$('#navigationSummary').dataset.state=result?.state||'idle';
     const legs=$('#navLegs');legs.replaceChildren();if(!['success','partial'].includes(result?.state))return;

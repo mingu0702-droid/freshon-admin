@@ -38,16 +38,26 @@
   const address=$('.addressBlock');address.classList.add('compatibilityHidden');address.hidden=true;address.inert=true;address.setAttribute('aria-hidden','true');
   for(const node of [$('#searchNotice'),$('#addressJudgeResults')]){node.hidden=true;node.inert=true;node.classList.add('compatibilityHidden');address.append(node);}
   const filters=$('#periodFilterPanel');filters.className='generalCenters';
-  const filterTitle=filters.querySelector('.label');filterTitle.className='sectiontitle';filterTitle.innerHTML='<h2>담당 센터</h2><button id="sourceCenterReset" class="textbtn">전체 보기</button>';
-  const centers=document.createElement('div');centers.className='centers';centers.id='centers';centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남']].map(([key,label])=>`<button data-source-center="${key}" class="${key==='all'?'active':''}">${label}</button>`).join('');filters.append(centers);
+  filters.querySelector('.label').remove();
+  const centers=document.createElement('div');centers.className='centers';centers.id='centers';
+  centers.setAttribute('role','group');centers.setAttribute('aria-label','담당 센터');
+  centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남']].map(([key,label])=>`<button type="button" data-source-center="${key}">${label}</button>`).join('');
+  const centerButtons=centers.querySelectorAll('button');
+  function syncCenterButtons(){
+    const center=$('#periodCenter').value||'all';
+    for(const button of centerButtons){
+      const active=button.dataset.sourceCenter===center;
+      button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));
+    }
+  }
   const pickerShell=document.createElement('div');pickerShell.className='vehiclePickerShell';filters.append(pickerShell);
   const basePicker=document.createElement('details');basePicker.id='baseVehiclePicker';
   basePicker.innerHTML='<summary>호차 선택</summary><p id="baseVehicleCount" role="status">선택 없음 · 전체 지도</p>';
   const pickerActions=document.createElement('div');pickerActions.className='vehiclePickerActions';
   pickerShell.append(basePicker,pickerActions);
   const vehicleQuery=$('#vehicleQuery');vehicleQuery.type='search';vehicleQuery.placeholder='호차번호 · 담당 지역 검색';vehicleQuery.setAttribute('aria-label','호차번호 · 담당 지역 검색');
-  function setCenter(key){if(bridge.state.mode!=='BASE_60D')return;$('#periodCenter').value=key;$('#periodCenter').dispatchEvent(new Event('change'));centers.querySelectorAll('button').forEach(button=>button.classList.toggle('active',button.dataset.sourceCenter===key));}
-  centers.querySelectorAll('button').forEach(button=>button.onclick=()=>setCenter(button.dataset.sourceCenter));$('#sourceCenterReset').onclick=()=>setCenter('all');
+  function setCenter(key){if(bridge.state.mode!=='BASE_60D')return;$('#periodCenter').value=key;$('#periodCenter').dispatchEvent(new Event('change'));syncCenterButtons();}
+  centerButtons.forEach(button=>button.onclick=()=>setCenter(button.dataset.sourceCenter));
   const planner=document.createElement('details');planner.id='waypointPlanner';
   planner.innerHTML=`<summary class="sectiontitle"><h2>경로 설정</h2><span class="muted">자동차</span></summary>
     <div class="navEditorField" data-point-role="origin"><label for="plannerStart"><span class="pointRole origin">출발</span> 출발지</label><div class="pointInputRow"><input id="plannerStart" data-nav-role="origin" aria-label="출발지 검색" placeholder="고객코드·매장명·주소 검색" autocomplete="off"><button id="clearOrigin" type="button" class="pointClear" aria-label="출발지 지우기" title="출발지 지우기">×</button></div></div>
@@ -158,11 +168,17 @@
   $('#sourceFooterLinks').append(data,$('#openOperations'));sidebar.append(foot);$('#sourceBatch').onclick=()=>{$('#newAreaBatchTool').hidden=false;$('#newAreaBatchTool').open=!$('#newAreaBatchTool').open;};$('#newAreaBatchTool').hidden=true;
   const maparea=document.createElement('div');maparea.className='maparea';maparea.append($('#map'));
   const mapTop=document.createElement('div');mapTop.className='maptop';const context=document.createElement('div');context.className='mapcontext';context.id='generalMapContext';context.innerHTML='';
-  const controls=document.createElement('div');controls.className='row';controls.append($('#mapReset'));mapTop.append(context,controls);maparea.append(mapTop);
+  const readout=document.createElement('div');readout.id='mapTopReadout';readout.append(context);
+  const controls=document.createElement('div');controls.id='mapTopControls';controls.className='row';
+  const mapReset=$('#mapReset');mapReset.addEventListener('click',()=>queueMicrotask(syncCenterButtons));
+  controls.append(centers,mapReset);mapTop.append(readout,controls);maparea.append(mapTop);
+  const toolbarSize=new ResizeObserver(([entry])=>maparea.style.setProperty('--map-toolbar-height',`${entry.contentRect.height}px`));
+  toolbarSize.observe(mapTop);
+  window.addEventListener('pagehide',event=>{if(!event.persisted)toolbarSize.disconnect();},{once:true});
   const quickVehicles=document.createElement('div');quickVehicles.id='vehicleQuickFilter';quickVehicles.hidden=true;quickVehicles.setAttribute('role','group');quickVehicles.setAttribute('aria-label','선택 호차');
   quickVehicles.innerHTML='<div id="vehicleQuickChips"></div><button id="clearMapVehicleFilter" type="button" aria-label="호차 필터 전체 해제">전체보기</button>';
   quickVehicles.querySelector('button').onclick=()=>$('#clearVehicles').click();
-  mapTop.insertBefore(quickVehicles,controls);
+  readout.append(quickVehicles);
   const mapBottom=document.createElement('div');mapBottom.className='mapbottom';const legend=$('.legend');legend.classList.add('vehicleLegend');legend.replaceChildren();mapBottom.append(legend);maparea.append(mapBottom);
   bridge.setGeneralLegend(legend.innerHTML);
   workspace.append(sidebar,maparea);document.body.insertBefore(workspace,header.nextSibling);
@@ -225,7 +241,7 @@
   let controlsMode=null;
   function syncModeControls(daily,historyDialog=false){
     for(const node of [search,address,filters,stores,$('#sourceBatch'),$('#sourceAreaShortcut'),$('#sourceManualShortcut')])modeVisible(node,!daily&&node!==address&&node.id!=='sourceManualShortcut');
-    modeVisible(planner,true);modeVisible(periodButton,!daily);modeVisible(context,false);
+    modeVisible(planner,true);modeVisible(periodButton,!daily);modeVisible(context,false);modeVisible(centers,!daily);
     const host=daily?dailyForm:basePicker,actions=daily?dailyVehicleActions:pickerActions;
     const before=daily?dailyVehicleActions:$('#baseVehicleCount');
     if(routeChecks.parentNode!==host)host.insertBefore(routeChecks,before);
@@ -281,7 +297,7 @@
     syncVehicleLegend();
     $('#periodDriver').disabled=$('input[name="periodBasis"][value="vehicle"]').checked;
     const daily=document.body.classList.contains('daily-mode');planner.hidden=false;stores.hidden=daily;$('#sourceBatch').hidden=daily;
-    const centerValue=$('#periodCenter').value||'all';for(const button of centers.querySelectorAll('button')){const active=button.dataset.sourceCenter===centerValue;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));}
+    syncCenterButtons();
     const selected=bridge.state.selectedVehicles;const selectedText=selected.length?selected.length+'개 호차 선택':'선택 없음 · 전체 지도';if($('#baseVehicleCount').textContent!==selectedText)$('#baseVehicleCount').textContent=selectedText;
     // Reconcile only presentation of disabled state; operational partial/error messages remain.
     if(daily){const count=new Set(bridge.state.currentRows.map(row=>row.customerCode)).size;const badge=count?`${count} 매장`:bridge.isDataReady()?'0 매장':'불러오는 중';if($('#totalBadge').textContent!==badge)$('#totalBadge').textContent=badge;

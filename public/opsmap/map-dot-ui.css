@@ -24,7 +24,8 @@
 .dotRestored #dotRoadOptions:not([open])>summary{font-size:10px}
 .dotRestored.daily-mode #navigationSummary .sectiontitle{margin-bottom:0}
 .dotRestored #navigationSummary #navRouteStatus{margin:3px 0}
-.dotRestored:not(.daily-mode) #waypointPlanner{padding-top:24px}
+.dotRestored:not(.daily-mode) #periodFilterPanel{padding-bottom:10px}
+.dotRestored:not(.daily-mode) .scrollside>#waypointPlanner{width:auto;margin-inline:16px;padding-top:12px}
 .dotRestored #navigationSummary{position:static}
 .dotRestored #navigationSummary,.dotRestored #waypointPlanner{width:auto}
 .dotRestored #navigationSummary .sectiontitle{gap:8px;flex-wrap:wrap}

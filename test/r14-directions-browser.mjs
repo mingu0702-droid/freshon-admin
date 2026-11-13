@@ -10,6 +10,7 @@ fs.mkdirSync(output,{recursive:true});
 const rows=Array.from({length:8},(_,i)=>({customerCode:'S99000'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',order:8-i,lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
 rows[3].coordinateEvidence='DELIVERY_COMPLETION_GPS';
 const dailyRows=rows.slice(0,4).map(row=>({...row,centerCode:'011'}));
+const master={version:'e'.repeat(64),checkedAt:'2026-11-02T10:00:00.000Z',basis:'FIXED_DISPATCH_PRIMARY',stale:false};
 const requests=[],providerRequests=[],reservations=[],external=[],errors=[],checks=[];
 let budgetDepleted=false;
 const budget={
@@ -37,7 +38,7 @@ const service=createRoadRouteService({env:{OPSMAP_ROAD_ROUTE_ENABLED:'1',KAKAO_R
  const sections=points.slice(0,-1).map((p,i)=>({distance:100,duration:60,roads:[{vertexes:[...p,p[0]+.0001,p[1]+.0002,...points[i+1]]}]}));
  return new Response(JSON.stringify({routes:[{result_code:0,summary:{distance:sections.length*100,duration:sections.length*60},sections}]}),{headers:{'content-type':'application/json'}});
 }});
-const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
+const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','opsmap-daily.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
 const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false,centers:[{id:'osan',verified:true,sourceVersion:'SYNTHETIC',lat:37,lng:127}]};window.__routeLines=new Set();
 document.body.dataset.mapStaffState='authenticated';window.MapStaffEntry={status(){},registerPurge(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
@@ -64,8 +65,12 @@ const server=http.createServer(async(req,res)=>{
    try{data=await service.route(body);}catch(e){res.statusCode=e.status||500;data={ok:false,error:e.code};}
   }
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-11-02',startDate:'2026-09-04',endDate:'2026-11-02'}};
-  if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:'e'.repeat(64),baseVehicleStale:false})),meta:{version:'e'.repeat(64),stale:false}};
-  if(u.pathname.endsWith('/assignments'))data={data:dailyRows.map(r=>({...r,deliveryDate:u.searchParams.get('date')})),meta:{complete:true,date:u.searchParams.get('date')}};
+  if(u.pathname.endsWith('/base-vehicles')){
+   let raw='';for await(const chunk of req)raw+=chunk;
+   const codes=JSON.parse(raw).customerCodes;
+   data={ok:true,data:rows.filter(row=>codes.includes(row.customerCode)).map(row=>({customerCode:row.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',baseVehicleSource:master.basis,baseVehicleVersion:master.version,baseVehicleCheckedAt:master.checkedAt,baseVehicleStale:master.stale})),meta:master};
+  }
+  if(u.pathname.endsWith('/assignments'))data={ok:true,data:dailyRows.map(r=>({...r,deliveryDate:u.searchParams.get('date')})),meta:{complete:true,date:u.searchParams.get('date')}};
   if(u.pathname.endsWith('/route-plan'))data={data:{vehicle:'101',stops:dailyRows,totalStops:4},meta:{complete:true}};
   res.setHeader('content-type','application/json');res.end(JSON.stringify(data));return;
  }
@@ -79,10 +84,29 @@ try{
  const page=await browser.newPage({viewport:{width:1366,height:900}});page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',route=>{if(!route.request().url().startsWith(origin)){external.push(route.request().url());return route.abort();}return route.continue();});
  await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady());
+ await page.waitForFunction(()=>MapUiLocalBridge.fixedTerritoryMasterState()?.version==='e'.repeat(64));
  const check=(name,value)=>{assert(value,name);checks.push(name);};
  const totals=page.locator('#mapRouteTotals');
+ const centers=page.locator('#mapTopControls #centers');
+ const topLayoutFits=()=>page.locator('.maptop').evaluate(toolbar=>{
+  const rect=selector=>toolbar.ownerDocument.querySelector(selector)?.getBoundingClientRect();
+  const map=rect('#map'),controls=rect('#mapTopControls'),badge=rect('#mapRouteTotals'),detail=rect('#detailSection.open');
+  const inside=r=>r.width>0&&r.left>=map.left&&r.right<=map.right&&r.top>=map.top&&r.bottom<=map.top+120;
+  const overlaps=(a,b)=>a.left<b.right&&b.left<a.right&&a.top<b.bottom&&b.top<a.bottom;
+  return inside(controls)&&(!badge.width||(inside(badge)&&!overlaps(badge,controls)&&(!detail||!overlaps(badge,detail))))
+    &&(!detail||!overlaps(controls,detail));
+ });
  await page.screenshot({path:path.join(output,'before-1366.png')});
  check('initial visit does not query Directions or show route totals',requests.length===0&&providerRequests.length===0&&!await totals.isVisible());
+ check('center buttons are next to the map reset and the vehicle picker remains on the left',await centers.locator('button').allTextContents().then(labels=>labels.join(',')==='전체,오산,영남,호남')&&await page.locator('#mapTopControls>#centers+#mapReset').isVisible()&&await page.locator('.sidebar #baseVehiclePicker summary').isVisible());
+ for(const center of ['yeongnam','honam','osan','all','osan']){
+  const button=centers.locator(`[data-source-center="${center}"]`);
+  await button.click();
+  check(`center ${center} uses the existing filter and updates selection`,await button.getAttribute('aria-pressed')==='true'&&await page.evaluate(()=>MapUiLocalBridge.state.centerFilter)===(center==='all'?'':center));
+ }
+ await page.locator('#mapTopControls>#mapReset').click();
+ await page.waitForFunction(()=>document.querySelector('[data-source-center="all"]').getAttribute('aria-pressed')==='true');
+ check('map reset restores the all-centers selection',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter===''));
  check('the verified Osan building appears once without territory controls',await page.locator('.osanCenterMarker svg').count()===1&&await page.locator('#areaToggle,#mobileAreaToggle,#territoryControls').count()===0);
  await page.locator('.osanCenterMarker').evaluate(n=>n.click());
  check('Osan marker opens its anchored card',await page.locator('#osanCenterCard').isVisible());
@@ -99,8 +123,9 @@ try{
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  assert.deepEqual(providerRequests[0],{method:'GET',points:[[127,37],[rows[3].lng,rows[3].lat]]});
  check('Osan center to one store displays synthetic road geometry, distance and duration',requests.length===1&&await page.evaluate(()=>__routeLines.size===1)&&await page.locator('#navDistance').textContent()==='0.1 km'&&await page.locator('#navDuration').textContent()==='1분');
- check('desktop totals are visible on the map and absent from route settings',await page.locator('.maparea > #mapRouteTotals').isVisible()&&await page.locator('#waypointPlanner #navDistance, #waypointPlanner #navDuration, #waypointPlanner .plannerMetrics').count()===0);
- await totals.screenshot({path:path.join(output,'map-route-totals-1366.png')});
+ check('desktop totals are visible at the top of the map and absent from route settings',await page.locator('.maparea > .maptop #mapRouteTotals').isVisible()&&await page.locator('#waypointPlanner #navDistance, #waypointPlanner #navDuration, #waypointPlanner .plannerMetrics').count()===0);
+ check('desktop map totals and center controls fit above the detail card',await topLayoutFits());
+ await page.locator('.maparea').screenshot({path:path.join(output,'map-route-totals-1366.png')});
  await page.locator('#clearPlanner').click();
  await page.evaluate(()=>MapNavigationEditor.replacePoints(['S990000','S990001','S990002','S990003']));
  await page.evaluate(()=>{for(let i=0;i<20;i++)window.dispatchEvent(new Event('map-coordinate-updated'));});
@@ -126,12 +151,17 @@ try{
  for(const width of [1920,1366,768,390]){
   await page.setViewportSize({width,height:900});await page.locator('#waypointPlanner').scrollIntoViewIfNeeded();
   check(width+'px editor stays inside the viewport',await page.locator('#waypointPlanner').evaluate(n=>{const r=n.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1}));
+  check(width+'px center controls stay inside the upper map edge',await topLayoutFits());
   await page.screenshot({path:path.join(output,'after-'+width+'.png')});
  }
+ await centers.locator('[data-source-center="osan"]').click();
+ check('390px center controls use the same center filter',await page.evaluate(()=>MapUiLocalBridge.state.centerFilter==='osan')&&await centers.locator('[data-source-center="osan"]').getAttribute('aria-pressed')==='true');
  await page.evaluate(()=>MapNavigationEditor.replacePoints(['S990000','S990003']));await page.locator('#planRoute').click();await page.waitForFunction(()=>MapNavigation.metrics().routeState==='success');
  check('mobile explicit route shows synthetic geometry and response metrics',requests.length===5&&await page.locator('#navDistance').textContent()==='0.1 km');
- check('mobile totals fit inside the map',await totals.evaluate(node=>{const badge=node.getBoundingClientRect(),map=node.parentElement.getBoundingClientRect();return badge.width>0&&badge.left>=map.left&&badge.right<=map.right&&badge.bottom<=map.bottom;}));
- await totals.screenshot({path:path.join(output,'map-route-totals-390.png')});
+ await page.locator('#query').fill('S990003');await page.locator('#searchBtn').click();
+ await page.locator('#detailSection.open').waitFor();
+ check('mobile map totals and center controls fit above the detail card',await totals.isVisible()&&await topLayoutFits());
+ await page.locator('.maparea').screenshot({path:path.join(output,'map-route-totals-390.png')});
  await page.locator('#addWaypoint').click();await page.evaluate(()=>MapNavigationEditor.setPoint('waypoint','S990001',0));await page.waitForFunction(()=>document.querySelector('#navDistance').textContent==='0.2 km');
  check('mobile add waypoint recalculates',requests.length===6&&requests.at(-1).waypoints.length===1);
  const beforeRemove=providerRequests.length;
@@ -144,6 +174,7 @@ try{
  assert.deepEqual(providerRequests.at(-1),{method:'POST',points:rows.map(r=>[r.lng,r.lat])});
  check('six waypoints use one synthetic POST with all seven legs',requests.length===8&&requests.at(-1).waypoints.length===6&&reservations.at(-1)==='waypoints'&&await page.evaluate(()=>__routeLines.size===7)&&await page.locator('#navDuration').textContent()==='7분');
  await page.locator('#clearPlanner').click();await page.locator('#modeDaily').click();
+ check('dated operation keeps the map reset and hides the base-map center controls',!await centers.isVisible()&&await page.locator('#mapTopControls>#mapReset').isVisible());
  await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-11-02','2026-11-02'));
  await page.evaluate(()=>{const input=document.querySelector('#vehicleList input[value="101"]');input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));});
  await page.waitForFunction(()=>MapUiLocalBridge.navigationVisitRows().length===4);
@@ -167,6 +198,10 @@ try{
  const payload=await response.json();
  await page.waitForFunction(()=>MapNavigation.metrics().routeState==='error');
  check('exhausted free budget returns local 429 and dispatches no provider request',response.status()===429&&payload.error==='QUOTA_EXCEEDED'&&requests.length===requestCount+1&&providerRequests.length===providerCount&&reservations.length===providerCount&&await page.evaluate(()=>__routeLines.size===0)&&await page.locator('#navDistance').textContent()==='— km'&&!await totals.isVisible());
+ for(const result of [{state:'partial',source:'kakao-directions',distanceMeters:100,durationSeconds:60,totalLegs:2,coveredLegs:1},{state:'success',source:'stationary-stops',distanceMeters:0,durationSeconds:0,totalLegs:1,noDrivingRequired:true}]){
+  await page.evaluate(detail=>window.dispatchEvent(new CustomEvent('map-manual-route',{detail})),result);
+  check(`${result.source}/${result.state} keeps its route status without presenting complete road totals`,!await totals.isVisible()&&await page.locator('#navRouteStatus').textContent()!=='');
+ }
  check('no external calls or JavaScript errors',external.length===0&&errors.length===0);
  const result={pass:checks.length,fail:0,scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_PROVIDER',checks,routePosts:requests.length,providerCalls:providerRequests.length,reservations:reservations.length,externalCalls:external.length,errors,artifacts:output};fs.writeFileSync(path.join(output,'RESULT.safe.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }catch(error){if(errors.length)console.error(JSON.stringify(errors));throw error;}finally{await browser?.close();await new Promise(r=>server.close(r));}
