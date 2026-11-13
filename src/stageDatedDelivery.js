@@ -1,12 +1,13 @@
 import {createOperationalPhotoTaskReader} from './opsmapOperationalPhotoTaskReader.js';
-import {assertDeliverySourceObservation} from './snapshotRefreshEvidence.js';
+import {assertDeliverySourceObservation, sourceTaskDate} from './snapshotRefreshEvidence.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {archiveAddressHash} from './stageArchivedDelivery.js';
 import {validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
 import {createStageDeliveryAdminPhotoSession} from './opsmapStageDeliveryAdminSession.js';
-import {createDeliveryAdminPhotoTransport} from './opsmapDeliveryAdminTransport.js';
+import {createDeliveryAdminPhotoTransport, readBoundedPhotoLoginJson} from './opsmapDeliveryAdminTransport.js';
+import {driverPhone, driverVehicle} from './privateDriverContact.js';
 import {setTimeout as delay} from 'node:timers/promises';
 import {validDeliveryPoint} from './opsmapDailyServer.js';
 import {confirmedTaskVehicle, DATED_DELIVERY_CONTRACT, datedDispatchSource, datedDispatchView, deliveryCompletion,
@@ -112,6 +113,9 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
   if (!readers.has('osan')) readers.set('osan',{center:'osan',id:'1',reader:read});
 
   const inflight = new Map(), cached = new Map(), lastReads=new Map();
+  // Share only pending exact-task reads; never attach contacts to a cached roster.
+  let privateDriverReadCount = 0;
+  const privateDriverReads = new Map();
   function authorize(date) {
     if (!enabled) throw error('DELIVERY_SOURCE_READ_ONLY', 503);
     if (!hasSource) throw error('DELIVERY_SOURCE_SESSION_REQUIRED', 401);
@@ -292,6 +296,62 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       value.views.set(vehicle,view);
     }
     return error?{...view.data,state:'STALE_VERIFIED',error,currentReadComplete:false,confirmedEmpty:false,previousVerifiedRetained:true}:view.data;
+  };
+  readDate.readDriverAssignment = async ({date,center,vehicle,customerCode,deliveryId}) => {
+    const fail = (code,status=503) => Object.assign(Error(code),{code,status});
+    const slot = cached.get(JSON.stringify([date,center]));
+    if (!slot || !readers.has(center) || slot.retainUntil <= now()) throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
+    const index = slot.value.prepared ??= prepareContract(slot.value);
+    const observed = index.rows.find(item => item.deliveryId === deliveryId);
+    const row = observed && slot.value.rows.find(item => item.customerCode === customerCode &&
+      deliveryTaskId(item.taskId) === observed.deliveryId);
+    if (!row || row.customerCode !== customerCode || driverVehicle(row.vehicle) !== vehicle || row.state === 'CANCELLED') {
+      throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED',409);
+    }
+    const lookup = JSON.stringify([date,center,deliveryId]);
+    if (privateDriverReads.has(lookup)) return privateDriverReads.get(lookup);
+    if (privateDriverReadCount >= 2) throw fail('DRIVER_ASSIGNMENT_SOURCE_BUSY');
+    privateDriverReadCount++;
+    const signal = AbortSignal.timeout(4500);
+    const pending = (async () => {
+      const url = new URL('/api/bali/task/'+row.taskId,deliveryOrigin);
+      const response = await request(url,signal);
+      if (response.status !== 200 || response.redirected) {
+        void response.body?.cancel().catch(() => {});
+        throw fail('DRIVER_ASSIGNMENT_SOURCE_HTTP_'+response.status);
+      }
+      const payload = await readBoundedPhotoLoginJson(response,65536,signal);
+      if (payload?.ok === false || payload?.success === false || payload?.error) throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
+      const task = payload?.data ?? payload;
+      const ids = [task?.logisticsCenter?.id,task?.logisticsCenterId,task?.carrier?.logisticsCenterId].filter(value => value != null);
+      const codes = [task?.customer?.erpCode,task?.customerErpCode].filter(value => value != null);
+      const dates = [task?.enteringDatedAt,task?.deliveryDate,task?.carrier?.enteringDatedAt].filter(value => value != null);
+      if (String(task?.id) !== row.taskId || !codes.length || codes.some(code => code !== customerCode) ||
+          !dates.length || dates.some(value => sourceTaskDate(value) !== date) ||
+          ids.some(id => String(id) !== readers.get(center).id) ||
+          driverVehicle(confirmedTaskVehicle(task)) !== vehicle || deliveryTaskState(task) === 'CANCELLED') {
+        throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED',409);
+      }
+      const cleanName = value => typeof value === 'string' && value.length <= 100 &&
+        !/[\x00-\x1f\x7f]/.test(value) ? value.normalize('NFKC').trim() : '';
+      const assignedDriver = task.driver || task.carrier?.driver;
+      const names = new Set([task.driverName, task.carrier?.driverName, assignedDriver?.driverName, assignedDriver?.name]
+        .map(cleanName).filter(name => name && !driverVehicle(name) && !/^(?:미확인|미등록|unknown|null|undefined)$/i.test(name)));
+      const phones = [task.driverPhone, task.driverTel, task.carrier?.driverPhone, assignedDriver?.phone, assignedDriver?.phoneNumber]
+        .map(driverPhone).filter(Boolean);
+      if (names.size > 1 || new Set(phones.map(phone => phone.replace(/\D/g,''))).size > 1) {
+        throw fail('DRIVER_ASSIGNMENT_CONFLICT',409);
+      }
+      const driverName = [...names][0] || '';
+      return {vehicle,date,center,basis:'DATED_ASSIGNMENT',driverName,driverPhone:driverName ? phones[0] || null : null,
+        checkedAt:new Date(now()).toISOString(),currentDeliveryVerified:!slot.error && slot.freshUntil>now(),stale:false};
+    })().catch(error => {
+      if (/^DRIVER_[A-Z_0-9]+$/.test(error.code || '')) throw error;
+      if (error.code === 'DELIVERY_SOURCE_VEHICLE_CONFLICT') throw fail('DRIVER_ASSIGNMENT_CONFLICT',409);
+      throw fail(signal.aborted ? 'DRIVER_ASSIGNMENT_SOURCE_TIMEOUT' : 'DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
+    }).finally(() => { privateDriverReadCount--; privateDriverReads.delete(lookup); });
+    privateDriverReads.set(lookup,pending);
+    return pending;
   };
   readDate.readObservation = async date => {
     const projected = [], visits = [], sources = [];

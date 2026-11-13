@@ -55,13 +55,15 @@ export function createDriverAssignmentReader({ readBaseVehicles, readStoredRoute
     if (context === 'BASE') {
       if (!readBaseVehicles) throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
       const result = await readBaseVehicles([customerCode]);
-      const row = result?.data?.find(row => row.customerCode === customerCode);
+      const rows = result?.data?.filter(row => row.customerCode === customerCode) || [];
+      if (rows.length > 1) throw fail('DRIVER_ASSIGNMENT_CONFLICT', 409);
+      const [row] = rows;
       if (!result?.ok || !row) throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED', 409);
       if (row.baseVehicleState === 'CONFLICT') throw fail('DRIVER_ASSIGNMENT_CONFLICT', 409);
       if (row.baseVehicleState !== 'VERIFIED_MASTER' || row.baseVehicleSource !== 'FIXED_DISPATCH_PRIMARY'
           || !/^[a-f0-9]{64}$/.test(row.baseVehicleVersion || '')
           || driverVehicle(row.baseVehicle) !== vehicle) throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED', 409);
-      return { vehicle, basis: 'FIXED_DISPATCH_PRIMARY', version: row.baseVehicleVersion,
+      return { vehicle, center: row.baseVehicleGroup, basis: 'FIXED_DISPATCH_PRIMARY', version: row.baseVehicleVersion,
         checkedAt: row.baseVehicleCheckedAt || null, stale: row.baseVehicleStale !== false };
     }
     if (!readStoredRoute) throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
@@ -81,16 +83,28 @@ export function createDriverAssignmentReader({ readBaseVehicles, readStoredRoute
   };
 }
 
-export function createDriverContactReader({ readDriverMaster, readAssignment } = {}) {
-  return async input => {
+export function createDriverContactReader({ readDriverMaster, readAssignment, datedIdentity, preferExactDatedContact = false } = {}) {
+  return async (input, options = {}) => {
     const customerCode = clean(input.customerCode), vehicle = driverVehicle(input.vehicle), date = clean(input.date), context = clean(input.context);
     if (!/^[A-Z]\d+$/.test(customerCode) || !vehicle || !validDate(date) || !['BASE', 'DATE_ROUTE'].includes(context))
       throw fail('DRIVER_CONTACT_INVALID_INPUT', 400);
     if (!readAssignment || !readDriverMaster) throw fail('DRIVER_SOURCE_NOT_CONFIGURED');
-    const identity = { customerCode, vehicle, date, context };
-    const assignment = await readAssignment(identity);
+    const extra = context === 'DATE_ROUTE' && datedIdentity ? datedIdentity(input) : {};
+    const identity = { customerCode, vehicle, date, context, ...extra };
+    const assignment = await readAssignment(identity, options);
     if (!assignment || driverVehicle(assignment.vehicle) !== vehicle) throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED', 409);
-    const master = await readDriverMaster(date);
+    const assignedName = context === 'DATE_ROUTE' ? clean(assignment.driverName) : '';
+    const assignmentPhone = driverPhone(assignment.driverPhone);
+    if (options.revalidate) await options.revalidate();
+    if (preferExactDatedContact && context === 'DATE_ROUTE' && (!assignedName || assignmentPhone)) {
+      return {ok:true,data:{driverName:assignedName || null,phone:assignedName ? assignmentPhone : null},
+        meta:{...identity,state:assignedName ? 'REGISTERED' : 'UNREGISTERED',source:'DATED_ASSIGNMENT',
+          effectiveDate:null,phoneBasis:assignedName ? 'DATED_ASSIGNMENT' : 'UNAVAILABLE',checkedAt:assignment.checkedAt || null,
+          assignmentVersion:null,assignmentCheckedAt:assignment.checkedAt || null,
+          assignmentStale:assignment.stale===true,effectiveDateVerified:false,
+          ...(!assignedName?{driverEvidence:'UNCONFIRMED'}:{})}};
+    }
+    const master = await readDriverMaster(date, assignment);
     if (!master || !Array.isArray(master.vehicles) || (!master.generatedAt && !master.sheetName))
       throw fail('DRIVER_SOURCE_UNAVAILABLE');
     const matching = master.vehicles.filter(row => driverVehicle(row.vehicle) === vehicle);
@@ -99,7 +113,6 @@ export function createDriverContactReader({ readDriverMaster, readAssignment } =
     if (row?.conflict) throw fail('DRIVER_MASTER_CONFLICT', 409);
     const effectiveDate = validDate(row?.effectiveDate) ? row.effectiveDate : null;
     if (effectiveDate && effectiveDate > date) throw fail('DRIVER_EFFECTIVE_DATE_INVALID', 409);
-    const assignedName = context === 'DATE_ROUTE' ? clean(assignment.driverName) : '';
     const masterName = clean(row?.driverName || row?.name);
     const name = context === 'DATE_ROUTE' ? assignedName : masterName;
     // A different historical driver's current phone is never substituted.
@@ -107,7 +120,6 @@ export function createDriverContactReader({ readDriverMaster, readAssignment } =
     const currentSnapshot = assignment.currentDeliveryVerified === true
       && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(master.generatedAt || '')
       && sourceTaskDate(master.generatedAt) === date;
-    const assignmentPhone = driverPhone(assignment.driverPhone);
     const phone = context === 'DATE_ROUTE'
       ? assignmentPhone || (sameDriver && (effectiveDate || currentSnapshot) ? driverPhone(row?.phone) : null)
       : driverPhone(row?.phone);
@@ -122,15 +134,30 @@ export function createDriverContactReader({ readDriverMaster, readAssignment } =
   };
 }
 
-export function mountPrivateDriverContact({ app, requireStaff, readDriverMaster, readAssignment, enabled=()=>true }) {
-  const read = createDriverContactReader({ readDriverMaster, readAssignment });
+export function mountPrivateDriverContact({ app, requireStaff, readDriverMaster, readAssignment, datedIdentity, preferExactDatedContact, enabled=()=>true, readiness, validateQuery }) {
+  const read = createDriverContactReader({ readDriverMaster, readAssignment, datedIdentity, preferExactDatedContact });
+  const ensureStaff = (req,res) => new Promise((resolve,reject) => {
+    const end = () => { cleanup(); reject(fail('DRIVER_SESSION_CLOSED')); };
+    const cleanup = () => { res.off('finish',end); res.off('close',end); };
+    if (res.headersSent || res.destroyed) return end();
+    res.once('finish',end);
+    res.once('close',end);
+    Promise.resolve().then(() => requireStaff(req,res,() => { cleanup(); resolve(); })).catch(error => {
+      cleanup();
+      reject(error);
+    });
+  });
   app.get('/api/map-phase2b/private/driver-contact', requireStaff, async (req, res) => {
     res.set('Cache-Control', 'private, no-store');
     if(enabled()!==true)return res.status(503).json({ok:false,error:'DRIVER_CONTACT_DISABLED'});
+    const unavailable = readiness?.();
+    if (unavailable) return res.status(503).json({ok:false,error:unavailable});
     try {
-      const result = await read(req.query);
+      validateQuery?.(req.query);
+      const result = await read(req.query,{revalidate:datedIdentity ? () => ensureStaff(req,res) : undefined});
       return requireStaff(req, res, () => res.json(result));
     } catch (error) {
+      if (res.headersSent || res.destroyed) return;
       const code = /^DRIVER_[A-Z_0-9]+$/.test(error.code || '') ? error.code : 'DRIVER_SOURCE_UNAVAILABLE';
       return res.status([400, 404, 409].includes(error.status) ? error.status : 503).json({ ok: false, error: code });
     }

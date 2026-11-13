@@ -42,6 +42,7 @@
    localCenters??=Array.isArray(config.centers)?config.centers:[];
    root.KAKAO_MAP_CONFIG={...config,allowIndependentAddressLookup:false,allowExternalAddressLookup:false,allowExternalPlaceLookup:false};
    root.OPSMAP_DRIVER_CONTACT_ENABLED=false;
+   root.OPSMAP_DRIVER_CONTACT_CENTER=null;
    const owner=addressEpoch;
    try{
     const response=await fetch(configPath+'?sdkOnly=1',{credentials:'same-origin',cache:'no-store'});
@@ -57,7 +58,9 @@
     }
     if(response.ok){const serverCenters=Array.isArray(payload.centers)?payload.centers:[];
      const centers=[...localCenters.filter(row=>!serverCenters.some(server=>server?.id===row?.id)),...serverCenters];
-     config={...config,javascriptKey:config.javascriptKey||payload.javascriptKey,...(centers.length?{centers}:{})};addressPending=payload.addressLookupPending===true;root.KAKAO_MAP_CONFIG={...config,...lookupCapabilities(addressPending?{}:payload),addressLookupServerProxy:true};root.OPSMAP_DRIVER_CONTACT_ENABLED=payload.driverContactEnabled===true;}else if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_JAVASCRIPT_KEY_UNCONFIGURED');}catch{if(finished)return;if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_SDK_CONFIG_UNAVAILABLE');}
+     config={...config,javascriptKey:config.javascriptKey||payload.javascriptKey,...(centers.length?{centers}:{})};addressPending=payload.addressLookupPending===true;root.KAKAO_MAP_CONFIG={...config,...lookupCapabilities(addressPending?{}:payload),addressLookupServerProxy:true};root.OPSMAP_DRIVER_CONTACT_ENABLED=payload.driverContactEnabled===true;
+     if(root.OPSMAP_DRIVER_CONTACT_ENABLED&&['osan','yeongnam','honam'].includes(payload.driverContactCenter))root.OPSMAP_DRIVER_CONTACT_CENTER=payload.driverContactCenter;
+    }else if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_JAVASCRIPT_KEY_UNCONFIGURED');}catch{if(finished)return;if(!config.javascriptKey&&!root.kakao?.maps?.load)return finish('MAP_SDK_CONFIG_UNAVAILABLE');}
    clearTimeout(timer);timer=setTimeout(()=>finish('MAP_SDK_TIMEOUT'),timeoutMs);
    root.dispatchEvent(new CustomEvent('map-driver-capability'));
    if(root.kakao?.maps?.load)return loaded();

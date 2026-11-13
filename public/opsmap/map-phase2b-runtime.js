@@ -1378,12 +1378,25 @@
     syncDriverMasterUi();
   }
   const selectedDriverContact=window.MapDriverContact?.create({getTarget:()=>$('#detailDriver'),onRender:()=>positionDetailPopup()});
+  function stageDriverCenter(row, routeMode) {
+    return vehicleListGroup(routeMode ? row.dispatchCenterCode : row.baseVehicleGroup);
+  }
   function refreshSelectedDriverContact(){
     if(window.OPSMAP_DRIVER_CONTACT_ENABLED!==true)return;
     const row=state.selected;if(!row||!selectedDriverContact)return;
     const route=state.mode==='DATE_ROUTE',vehicle=normalizeVehicle(route?row.vehicle:row.baseVehicle),date=driverReferenceDate();
     const verifiedBase=row.baseVehicleState==='VERIFIED_MASTER'&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'');
+    const scopedCenter=window.OPSMAP_DRIVER_CONTACT_CENTER;
+    if(scopedCenter&&stageDriverCenter(row,route)!==scopedCenter)return;
     const context=/^[A-Z]\d+$/.test(row.customerCode||'')&&vehicle&&(route||verifiedBase)?{customerCode:row.customerCode,vehicle,date,context:route?'DATE_ROUTE':'BASE'}:null;
+    if(context&&route&&scopedCenter){
+      if(!/^(?:osan|osanColdStorage|yeongnam|honam)$/.test(row.dispatchCenterCode||'')||!/^[a-f0-9]{64}$/.test(row.deliveryId||'')){
+        void selectedDriverContact.load(null);
+        return;
+      }
+      context.center=row.dispatchCenterCode;
+      context.deliveryId=row.deliveryId;
+    }
     void selectedDriverContact.load(context);
   }
   function storeDriverDetail(row){
@@ -1392,14 +1405,18 @@
     const vehicle=normalizeVehicle(routeMode?row.vehicle:row.baseVehicle);
     const detail={label:'담당 기사',text:'담당 기사 정보 없음',title:'',source:''};
     if(!routeMode&&(!verifiedBase||!vehicle)){detail.text+=' · 기준호차 확인 필요';return detail;}
+    const scopedCenter=window.OPSMAP_DRIVER_CONTACT_CENTER;
+    if(scopedCenter&&stageDriverCenter(row,routeMode)!==scopedCenter)return {...detail,text:'이 센터의 기사 연락처 자료 미연결',source:'CENTER_UNVERIFIED'};
     // A historical delivery driver is never the current base-vehicle assignment.
-    if(routeMode)return {...detail,text:String(row.driverName||'').trim()||'담당 기사 정보 없음',title:'',source:'ASSIGNMENT'};
+    if(routeMode)return {...detail,text:String(row.driverName||'').trim()||
+      (scopedCenter?'담당 기사 확인 중…':'담당 기사 정보 없음'),title:'',source:'ASSIGNMENT'};
     if(window.OPSMAP_DRIVER_CONTACT_ENABLED!==true)return {...detail,text:'기사 연락처 미연결',source:'DISABLED'};
     const driver=driverMasterDate===date?driverByVehicle.get(vehicle):null;
     const name=String(driver?.driverName||driver?.name||'').trim();
     if(!name){
       if(driverMasterState==='loading')detail.text='담당 기사 불러오는 중…';
       else if(driverMasterState==='error'&&driverMasterDate===date)detail.text='담당 기사 조회 실패';
+      else if(scopedCenter)detail.text='담당 기사 확인 중…';
       return detail;
     }
     return {...detail,text:name,title:'',source:'VEHICLE_DRIVER_MASTER'};
@@ -1419,13 +1436,19 @@
     if(window.OPSMAP_DRIVER_CONTACT_ENABLED!==true){driverMasterState='disabled';driverByVehicle.clear();syncDriverMasterUi();return;}
     const observedDate=driverReferenceDate(),observedMode=state.mode;
     if(!observedDate)return;
+    const scopedCenter=window.OPSMAP_DRIVER_CONTACT_CENTER;
+    if(scopedCenter&&(observedMode!=='BASE_60D'||state.centerFilter!==scopedCenter)){
+      if(driverMasterDate||driverMasterPending)resetDriverMaster();
+      return;
+    }
     if(driverMasterDate===observedDate&&['ready','error'].includes(driverMasterState)&&Date.now()-driverMasterCheckedAt<300000){syncDriverMasterUi();return;}
     if(driverMasterPending?.date===observedDate&&driverMasterPending.mode===observedMode){syncDriverMasterUi();return;}
     const requestId=++driverMasterRequestId;
     driverMasterPending={id:requestId,date:observedDate,mode:observedMode};driverMasterDate='';driverMasterState='loading';driverByVehicle.clear();syncDriverMasterUi();
     try {
-      const payload = await fetchJson(`/api/vehicle-driver-master?date=${encodeURIComponent(observedDate)}`, { channel: "driver-master", ttl: 300000, timeout: 15000 });
-      if(requestId!==driverMasterRequestId||state.mode!==observedMode||driverReferenceDate()!==observedDate)return;
+      const query = new URLSearchParams({date:observedDate,...(scopedCenter?{center:scopedCenter}:{})});
+      const payload = await fetchJson('/api/vehicle-driver-master?'+query, { channel: "driver-master", ttl: 300000, timeout: 15000 });
+      if(requestId!==driverMasterRequestId||state.mode!==observedMode||driverReferenceDate()!==observedDate||scopedCenter&&state.centerFilter!==scopedCenter)return;
       const rows = payload.vehicles || payload.results || [];
       if(!Array.isArray(rows))throw Error('DRIVER_MASTER_INVALID');
       rows.forEach(row=>{const vehicle=normalizeVehicle(row.vehicle||row.vehicleNumber);if(vehicle&&(!row.effectiveDate||row.effectiveDate<=observedDate))driverByVehicle.set(vehicle,row);});

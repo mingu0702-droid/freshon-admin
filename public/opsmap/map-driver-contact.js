@@ -9,10 +9,11 @@
     target.replaceChildren(); target.removeAttribute('title');
     target.dataset.state = value.state || 'UNREGISTERED';
     target.dataset.source = value.meta?.source || '';
-    if (!value.name) { target.textContent = value.state === 'LOADING' ? '담당 기사 불러오는 중…' : value.state === 'ERROR' ? '담당 기사 조회 실패' : value.state === 'ASSIGNMENT_UNCONFIRMED' ? '담당 기사 확인 필요' : '담당 기사 정보 없음'; return; }
+    if (!value.name) { target.textContent = value.state === 'LOADING' ? '담당 기사 불러오는 중…' : value.state === 'ERROR' ? '담당 기사 조회 실패' : value.state === 'ASSIGNMENT_UNCONFIRMED' ? '담당 기사 확인 필요' : value.state === 'UNCONNECTED' ? '기사 연락처 자료 미연결' : '담당 기사 정보 없음'; return; }
     const name = document.createElement('span'); name.textContent = value.name; target.append(name);
     const href = phoneHref(value.phone);
     if (href) { target.append(document.createTextNode(' · ')); const link = document.createElement('a'); link.href = href; link.textContent = value.phone; link.setAttribute('aria-label', value.name + ' 기사에게 전화'); target.append(link); }
+    else if(value.state === 'PHONE_UNREGISTERED') target.append(document.createTextNode(' · 연락처 미등록'));
   }
   function create({ fetcher = root.fetch.bind(root), getTarget, onRender = () => {} } = {}) {
     let generation = 0, current = '', saved = null, pending = null, controller = null;
@@ -31,10 +32,16 @@
           const payload = await response.json();
           if (!response.ok) throw Object.assign(Error('DRIVER_CONTACT_FAILED'), { code: payload.error });
           if (!payload.ok || Object.entries(context).some(([key, expected]) => payload.meta?.[key] !== expected)) throw Error('DRIVER_CONTACT_CONTEXT_MISMATCH');
-          value = { state: payload.meta.state, name: payload.data?.driverName, phone: payload.data?.phone, meta: payload.meta };
+          const state = payload.meta.driverEvidence === 'UNCONFIRMED' ? 'ASSIGNMENT_UNCONFIRMED' : payload.meta.state;
+          value = { state, name: payload.data?.driverName, phone: payload.data?.phone, meta: payload.meta };
         } catch (error) {
           if (error.name === 'AbortError') return;
-          value = { state: /^DRIVER_ASSIGNMENT_/.test(error.code || '') ? 'ASSIGNMENT_UNCONFIRMED' : 'ERROR' };
+          const code = error.code || '';
+          const state = /^DRIVER_(?:ASSIGNMENT_(?:UNCONFIRMED|NOT_FOUND|CONFLICT)|MASTER_CONFLICT|EFFECTIVE_DATE_INVALID)$/.test(code)
+            ? 'ASSIGNMENT_UNCONFIRMED'
+            : /^DRIVER_(?:CONTACT_DISABLED|CENTER_SOURCE_UNVERIFIED|CREDENTIALS_(?:MISSING|INVALID)|SHEET_CONFIG_INVALID|SOURCE_NOT_CONFIGURED)$/.test(code)
+              ? 'UNCONNECTED' : 'ERROR';
+          value = {state};
         }
         if (owner !== generation || identity !== current || document.body.dataset.mapStaffState !== 'authenticated') return;
         saved = value; render(value);

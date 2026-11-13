@@ -114,7 +114,10 @@ export function mountProductionMapApi(app,{
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).set('Cache-Control','private, no-store').json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED',...coverage});
     const sdkOnly = req.query.sdkOnly === '1';
     const lookup = sdkOnly ? null : await addressLookupService.status();
-    const respond=()=>res.set('Cache-Control','private, no-store').json({javascriptKey,...coverage,...(osanCenter?{centers:[osanCenter]}:{}),driverContactEnabled:env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',allowIndependentAddressLookup:lookup?.independentEnabled===true,allowExternalAddressLookup:lookup?.enabled===true,allowExternalPlaceLookup:lookup?.keywordEnabled===true,addressLookupReason:lookup?.reason||null,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true});
+    const driverContactEnabled = env.OPSMAP_DRIVER_CONTACT_ENABLED==='1';
+    const driverContactCenter = driverContactEnabled && stageOnly ? env.OPSMAP_STAGE_DRIVER_SHEET_CENTER : null;
+    const respond=()=>res.set('Cache-Control','private, no-store').json({javascriptKey,...coverage,...(osanCenter?{centers:[osanCenter]}:{}),driverContactEnabled,
+      ...(driverContactCenter?{driverContactCenter}:{}),allowIndependentAddressLookup:lookup?.independentEnabled===true,allowExternalAddressLookup:lookup?.enabled===true,allowExternalPlaceLookup:lookup?.keywordEnabled===true,addressLookupReason:lookup?.reason||null,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true});
     if(sdkOnly&&stageOnly){
       if(!mapStaff.isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
       res.locals.stageInlineStaffResponse=true;
