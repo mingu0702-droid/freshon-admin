@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {createFixedVehicleReader} from './fixedVehicleProjection.js';
-import {createPrivateGithubJsonStore, fixedEnvelope, validateFixedEnvelope} from './fixedVehicleStore.js';
+import {createPrivateGithubJsonStore, fixedEnvelope, fixedTupleData, validateFixedEnvelope} from './fixedVehicleStore.js';
 import {createFixedVehicleFileStore} from './opsmap-abc/fixedVehicleStore.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 
@@ -17,12 +17,29 @@ const noRetry = new Set(['FIXED_MASTER_SESSION_UNAVAILABLE','FIXED_MASTER_AUTH_R
 const nowISO = t => new Date(t).toISOString();
 const validTime = v => typeof v === 'string' && Number.isFinite(Date.parse(v)) && nowISO(Date.parse(v)) === v;
 const kstDay = t => nowISO(t + 9 * 3600000).slice(0,10);
-const day = /^\d{4}-\d{2}-\d{2}$/;
+export const isFixedMasterDay = value => typeof value==='string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+  Number.isFinite(Date.parse(value)) && nowISO(Date.parse(value)).slice(0,10)===value;
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = code => Object.assign(Error(code), {code});
 const failureCode = e => safeCode.test(e?.code || e?.message || '') ? e.code || e.message : 'FIXED_MASTER_DAILY_FAILED';
 const validRef = ref => ref && hash.test(ref.version) && hash.test(ref.rowsHash) && hash.test(ref.ledgerSha256) &&
   validTime(ref.checkedAt) && Number.isSafeInteger(ref.count) && ref.count > 0 && ref.count <= 10_000;
+function observationFromSuccess(ref, success) {
+  const evidence=success?.coverage;
+  return {ref,observedAt:evidence?.sourceObservedAt,publishedAt:success?.at,runId:success?.runId,
+    registryGeneration:evidence?.registryGeneration,sourceRows:evidence?.sourceRows,registryCount:evidence?.ledgerCount};
+}
+function validObservation(date, observation) {
+  const {ref,observedAt,publishedAt,runId,registryGeneration,sourceRows,registryCount}=observation || {};
+  return validRef(ref) && validTime(observedAt) && kstDay(Date.parse(observedAt))===date &&
+    validTime(publishedAt) && ref.checkedAt<=observedAt && observedAt<=publishedAt &&
+    hash.test(runId || '') && hash.test(registryGeneration || '') &&
+    Number.isSafeInteger(sourceRows) && Number.isSafeInteger(registryCount) &&
+    registryCount>=ref.count && registryCount<=10_000 && sourceRows>=ref.count;
+}
+function observedDate(value) {
+  return validTime(value) ? kstDay(Date.parse(value)) : null;
+}
 const minute = 60_000;
 const customerCode = /^[A-Z]\d{1,20}$/;
 
@@ -78,11 +95,21 @@ async function readHead(store) {
   const a=value?.attempt,s=value?.lastSuccess,f=value?.lastFailure;
   if (!/^[a-f0-9]{40}$/.test(sha || '') || value?.schema!==1 ||
       value.current!==null&&!validRef(value.current) || value.previous!==null&&(!validRef(value.previous)||!value.current) ||
-      a!==null&&(!hash.test(a?.runId || '')||!day.test(a.date)||![1,2].includes(a.count)||!validTime(a.startedAt)||
+      a!==null&&(!hash.test(a?.runId || '')||!isFixedMasterDay(a.date)||![1,2].includes(a.count)||!validTime(a.startedAt)||
         !['RUNNING','VERIFIED','FAILED'].includes(a.state)) ||
       value.current!==null && (a===null || s===null) ||
-      s!==null&&(!value.current||!validTime(s?.at)||!day.test(s.date)||s.version!==value.current.version||!hash.test(s.runId)) ||
+      s!==null&&(!value.current||!validTime(s?.at)||!isFixedMasterDay(s.date)||s.version!==value.current.version||!hash.test(s.runId)) ||
       f!==null&&(!validTime(f?.at)||!safeCode.test(f.code)||!hash.test(f.runId))) throw fail('FIXED_STORE_DAILY_HEAD');
+  if (value.observations!==undefined) {
+    const expected=observationFromSuccess(value.current,s);
+    const date=observedDate(expected.observedAt), indexed=value.observations?.[date];
+    // A rollback writer may advance the verified head without adding an archive entry.
+    if (!validObservation(date,expected) || !value.observations || typeof value.observations!=='object' ||
+        Array.isArray(value.observations) || Object.entries(value.observations).some(([day, entry])=>!validObservation(day,entry)) ||
+        indexed && indexed.observedAt>=expected.observedAt && JSON.stringify(indexed)!==JSON.stringify(expected)) {
+      throw fail('FIXED_STORE_DAILY_HISTORY');
+    }
+  }
   return {head:value,sha};
 }
 
@@ -168,9 +195,20 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
       await verifiedObject(store,current);
     }
     const at=nowISO(now());
+    const observedDay=observedDate(sourceObservedAt);
+    // The same CAS publishes the current pointer and its dated observation.
+    // An unchanged day records new evidence without copying the projection.
+    const lastSuccess={runId,date:receipt.date,at,version:current.version,
+      coverage:{...coverage,sourceObservedAt,registryGeneration:scope.generation}};
+    const previousObservation=observationFromSuccess(head.current,head.lastSuccess);
+    const previousDay=observedDate(previousObservation.observedAt);
+    const observations={...(validObservation(previousDay,previousObservation)?{[previousDay]:previousObservation}:{}),
+      ...head.observations,[observedDay]:observationFromSuccess(current,lastSuccess)};
     await finish({current,previous:unchanged?head.previous:head.current,attempt:{...attempt,state:'VERIFIED'},
-      lastSuccess:{runId,date:receipt.date,at,version:current.version,
-        coverage:{...coverage,sourceObservedAt,registryGeneration:scope.generation}}});
+      observations,lastSuccess});
+    const committed=(await readHead(store)).head;
+    if (committed.observations?.[observedDay]?.runId!==runId ||
+        committed.observations[observedDay].ref.version!==current.version) throw fail('FIXED_STORE_DAILY_READBACK');
     return {state:unchanged?'VERIFIED_NOOP':'PUBLISHED',runId,version:current.version,checkedAt:at,...coverage};
   } catch (error) {
     const code=failureCode(error);
@@ -190,6 +228,35 @@ export function createStageDailyFixedMasterReader({store, baseline}) {
   }
   return {
     status:()=>info,
+    async readObservation(date, codes) {
+      if (!isFixedMasterDay(date)) throw fail('FIXED_MASTER_DAILY_DATE');
+      let observation, readError;
+      try {
+        const {head}=await readHead(store);
+        const latest=observationFromSuccess(head.current,head.lastSuccess);
+        observation=validObservation(date,latest)?latest:head.observations?.[date];
+      }
+      catch (error) {readError=error;}
+      let envelope, meta;
+      if (observation) {
+        envelope=await verifiedObject(store,observation.ref);
+        meta={state:'SCHEDULED_OBSERVATION',observedAt:observation.observedAt,publishedAt:observation.publishedAt,
+          runId:observation.runId,registryGeneration:observation.registryGeneration,sourceRows:observation.sourceRows,
+          registryCount:observation.registryCount};
+      } else {
+        envelope=await loadBaseline();
+        if (!envelope || kstDay(Date.parse(envelope.checkedAt))!==date) {
+          if (readError) throw readError;
+          return null;
+        }
+        meta={state:'PRESERVED_MANUAL_OBSERVATION',observedAt:envelope.checkedAt,publishedAt:null,
+          runId:null,registryGeneration:null,sourceRows:null,registryCount:null};
+      }
+      const requested=new Set(codes);
+      const data=envelope.rows.filter(row=>requested.has(row[0])).map(fixedTupleData);
+      return {data,meta:{...meta,date,sourceAsOf:null,basis:'FIXED_DISPATCH_PRIMARY',version:envelope.version,
+        matchedCount:envelope.count,unconfirmedRequestedCount:requested.size-data.length}};
+    },
     async load() {
       let head;
       try {
@@ -205,7 +272,10 @@ export function createStageDailyFixedMasterReader({store, baseline}) {
           const success=head.lastSuccess;
           info={state:head.attempt.state,version:cached.version,lastSuccessAt:success.at,runId:success.runId,
             sourceObservedAt:validTime(success.coverage?.sourceObservedAt)?success.coverage.sourceObservedAt:null,
+            sourceObservationDate:observedDate(success.coverage?.sourceObservedAt),
             registryGeneration:hash.test(success.coverage?.registryGeneration || '')?success.coverage.registryGeneration:null,
+            sourceRows:Number.isSafeInteger(success.coverage?.sourceRows)?success.coverage.sourceRows:null,
+            matchedCount:cached.count,
             lastFailureAt:head.lastFailure?.at || null,lastError:head.attempt.state==='FAILED'?head.lastFailure?.code || null:null};
           return cached;
         }

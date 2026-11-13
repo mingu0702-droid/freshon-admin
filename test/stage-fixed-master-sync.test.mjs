@@ -7,10 +7,12 @@ import express from 'express';
 import {createStageDailyFixedMasterReader,createStageFixedMasterSource,stageFixedMasterScope,stageFixedMasterStorage,syncStageFixedMaster}
   from '../src/stageFixedMasterSync.js';
 import {fixedEnvelope} from '../src/fixedVehicleStore.js';
+import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
 import {projectFixedVehicles} from '../src/fixedVehicleProjection.js';
 import {createFixedVehicleCache} from '../src/opsmap-abc/fixedVehicleCache.js';
 import {mountOpsmapScheduledRun,OPSMAP_SCHEDULED_ROUTE} from '../src/opsmapScheduledRun.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
+import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
 
 const sha=(text,length=64)=>createHash(length===64?'sha256':'sha1').update(text).digest('hex');
 const codes=['S10001','S10002','S10003'], centers=['011','012','013'], head='fixed-master-daily-v1/head.json';
@@ -93,6 +95,14 @@ test('complete daily projection is scoped, single-flight, and a no-change day ve
   assert.equal(after.meta.scheduledRunId,receipt(tick).runId);
   assert.equal(after.meta.registryGeneration,scope.generation);
   assert.equal(after.meta.sourceAsOf,null);
+  assert.equal(after.meta.sourceObservationDate,receipt(tick).date);
+  assert.equal(after.meta.sourceRows,3);
+  assert.equal(after.meta.matchedCount,3);
+  const previousDay=await latest.readObservation(receipt(start).date,[codes[0]]);
+  const unchangedDay=await latest.readObservation(receipt(tick).date,[codes[0]]);
+  assert.equal(previousDay.meta.version,unchangedDay.meta.version);
+  assert.notEqual(previousDay.meta.observedAt,unchangedDay.meta.observedAt);
+  assert.equal(unchangedDay.meta.sourceAsOf,null);
   const lastVerifiedAt=after.meta.scheduledLastSuccessAt;
   const read=store.read;
   store.read=async name=>{
@@ -132,6 +142,112 @@ test('partial pages, authorization errors and restart preserve the last publishe
   assert.equal(data.meta.sourceObservedAt,new Date(start).toISOString());
   assert.equal(data.meta.lastError,'FIXED_MASTER_FORBIDDEN');
   assert.equal(data.meta.scheduledLastFailureAt,new Date(tick-hour).toISOString());
+  assert.equal(await restored.readObservation(receipt(tick).date,[codes[0]]),null);
+  assert.equal((await restored.readObservation(receipt(start).date,[codes[0]])).data[0].baseVehicle,'122');
+});
+
+test('dated reads preserve manual and changed assignments and never substitute today for an unobserved day',async ()=>{
+  const store=memory();
+  const baselineAt='2026-11-07T21:08:08.403Z';
+  const baseline=reader(fixedEnvelope(source('99').data,baselineAt));
+  let tick=start+24*hour;
+  const run=async route=>syncStageFixedMaster({store,receipt:receipt(tick),now:()=>tick,scope,
+    readMaster:async()=>source(route),loadBaseline:baseline.load});
+  await run('122');
+  const firstDate=receipt(tick).date;
+  const previousHead=store.files.get(head);
+  delete previousHead.value.observations;
+  const legacy=createStageDailyFixedMasterReader({store,baseline});
+  assert.equal((await legacy.readObservation(firstDate,[codes[0]])).data[0].baseVehicle,'122');
+  tick+=24*hour;
+  await run('오산신규');
+  const pendingDate=receipt(tick).date;
+  tick+=24*hour;
+  await run('오산보류');
+  const currentDate=receipt(tick).date;
+  const restarted=createStageDailyFixedMasterReader({store,baseline});
+  const manual=await restarted.readObservation('2026-11-08',[codes[0]]);
+  assert.equal(manual.meta.state,'PRESERVED_MANUAL_OBSERVATION');
+  assert.equal(manual.data[0].baseVehicle,'99');
+  assert.equal(await restarted.readObservation('2026-11-07',[codes[0]]),null);
+  assert.equal((await restarted.readObservation(firstDate,[codes[0]])).data[0].baseVehicle,'122');
+  assert.equal((await restarted.readObservation(pendingDate,[codes[0]])).data[0].baseVehicle,'오산신규');
+  const current=await restarted.readObservation(currentDate,[codes[0],'S10004']);
+  assert.equal(current.data[0].baseVehicle,'오산보류');
+  assert.equal(current.data[0].vehicle,undefined);
+  assert.equal(current.meta.unconfirmedRequestedCount,1);
+  assert.equal(current.meta.sourceAsOf,null);
+  await assert.rejects(restarted.readObservation('2026-02-30',[codes[0]]),/FIXED_MASTER_DAILY_DATE/);
+  // The old writer updates the serving fields and preserves archive metadata it does not understand.
+  const previousObservations=store.files.get(head).value.observations;
+  tick+=24*hour;
+  await run('205');
+  const rollbackDay=receipt(tick).date;
+  store.files.get(head).value.observations=previousObservations;
+  assert.equal((await restarted.readObservation(rollbackDay,[codes[0]])).data[0].baseVehicle,'205');
+  tick+=24*hour;
+  await run('206');
+  assert.equal((await restarted.readObservation(rollbackDay,[codes[0]])).data[0].baseVehicle,'205');
+  assert.equal((await restarted.readObservation(firstDate,[codes[0]])).data[0].baseVehicle,'122');
+  const read=store.read;
+  store.read=async name=>{if(name===head)throw Error('FIXED_STORE_READ');return read(name);};
+  assert.equal((await restarted.readObservation('2026-11-08',[codes[0]])).meta.observedAt,baselineAt);
+  await assert.rejects(restarted.readObservation(firstDate,[codes[0]]),/FIXED_STORE_READ/);
+});
+
+test('dated master is staff-only and separate from the latest master after restart',async t=>{
+  const store=memory(), baseline=base();
+  let tick=start;
+  const run=route=>syncStageFixedMaster({store,receipt:receipt(tick),scope,now:()=>tick,
+    readMaster:async()=>source(route),loadBaseline:reader(baseline).load});
+  await run('122');
+  const firstDate=receipt(tick).date;
+  tick+=24*hour;
+  await run('202');
+  const password='local-dated-master-fixture', config={...env,GITHUB_TOKEN:'fixture',
+    GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'stage/opsmap-manual-pins',
+    MAP_STAFF_ID:'fixture',MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash(password),
+    MAP_STAFF_SESSION_SECRET:'local-stage-fixture-secret-not-a-production-secret'};
+  const file=(value,sha1=sha(JSON.stringify(value),40))=>{
+    const bytes=Buffer.from(JSON.stringify(value));
+    return Response.json({sha:sha1,encoding:'base64',size:bytes.length,content:bytes.toString('base64')});
+  };
+  let sessions;
+  const app=createStageVerificationApp({env:config,now:()=>tick,async fetchImpl(input, options){
+    const url=new URL(input), name=url.pathname.split('/contents/opsmap-stage/').at(-1);
+    if(url.pathname==='/repos/mingu0702-droid/freshon-cache')return Response.json({private:true,permissions:{push:true}});
+    if(name==='staff-sessions-v1.json') {
+      if (options.method==='PUT') {
+        sessions=JSON.parse(Buffer.from(JSON.parse(options.body).content,'base64'));
+        return Response.json({});
+      }
+      return sessions?file(sessions):new Response(null,{status:404});
+    }
+    if (name==='fixed-vehicle-projection-v1.json') return file(baseline);
+    const saved=store.files.get(name);
+    return saved?file(saved.value,saved.sha):new Response(null,{status:404});
+  }});
+  const server=app.listen(0,'127.0.0.1');
+  await new Promise(resolve=>server.once('listening',resolve));
+  t.after(()=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve);}));
+  const root='http://127.0.0.1:'+server.address().port+'/opsmap/api/map-phase2b';
+  const dated='/private/fixed-master-observation?customerCodes='+codes[0]+'&date=';
+  assert.equal((await fetch(root+dated+firstDate)).status,401);
+  const login=await fetch(root+'/auth/login',{method:'POST',headers:{Origin:STAGE_ORIGIN,'Content-Type':'application/json'},
+    body:JSON.stringify({id:'fixture',password})});
+  assert.equal(login.status,200);
+  const headers={cookie:login.headers.get('set-cookie').split(';')[0],'sec-fetch-site':'same-origin'};
+  const old=await fetch(root+dated+firstDate,{headers});
+  assert.equal(old.status,200);
+  assert.match(old.headers.get('cache-control'),/\bno-store\b/);
+  assert.equal((await old.json()).data[0].baseVehicle,'122');
+  const missing=await fetch(root+dated+'2026-11-07',{headers});
+  assert.equal(missing.status,404);
+  assert.equal((await missing.json()).data,null);
+  assert.equal((await fetch(root+dated+'2026-11-31',{headers})).status,400);
+  const latest=await fetch(root+'/preview/base-vehicles?customerCode='+codes[0],{headers});
+  assert.equal(latest.status,200);
+  assert.equal((await latest.json()).data[0].baseVehicle,'202');
 });
 
 test('a corrupt active object cannot hide a recoverable previous generation after restart',async ()=>{

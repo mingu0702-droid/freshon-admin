@@ -31,7 +31,7 @@ import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from './opsmapDurableGeneration.js';
 import {mountOpsmapScheduledRun,opsmapScheduleConfig} from './opsmapScheduledRun.js';
-import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, stageFixedMasterScope,
+import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, isFixedMasterDay, stageFixedMasterScope,
   stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
@@ -392,6 +392,22 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       staffView = requireStaff;
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
         mountStageAbValidation(router,{...binding,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,readBaseVehicles:codes=>base.get(codes)});
+        if (dailyMaster) router.get('/api/map-phase2b/private/fixed-master-observation',requireStaff,async(req,res)=>{
+          const {date,customerCodes}=req.query;
+          const codes=typeof customerCodes==='string'&&customerCodes.length<=8000 ? customerCodes.split(',') : [];
+          if (!isFixedMasterDay(date) || date>today() || !codes.length || codes.length>500 ||
+              codes.some(code=>!/^[A-Z]\d{1,20}$/.test(code)) ||
+              Object.keys(req.query).some(key=>key!=='date'&&key!=='customerCodes')) {
+            return res.status(400).json({error:'FIXED_MASTER_OBSERVATION_QUERY'});
+          }
+          try {
+            const observation=await fixedStore.readObservation(date,codes);
+            return requireStaff(req,res,()=>observation ? res.json(observation) :
+              res.status(404).json({error:'FIXED_MASTER_OBSERVATION_UNCONFIRMED',date,data:null}));
+          } catch {
+            return requireStaff(req,res,()=>res.status(503).json({error:'FIXED_MASTER_OBSERVATION_UNAVAILABLE',date,data:null}));
+          }
+        });
         router.get('/api/map-phase2b/private/stage-sync-evidence',requireStaff,(_req,res)=>{
           const generation=validation.active();
           const windowDays=generation?.scheduled?.vehicleDelivery?.observedDates.all?.length ?? generation?.nearby?.observedDays;
