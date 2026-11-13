@@ -365,7 +365,7 @@
     const rect=node=>node?.getClientRects?.().length&&!node.hidden&&win.getComputedStyle?.(node).visibility!=='hidden'?node.getBoundingClientRect():null;
     const pin=measurePin&&(rect(doc?.querySelector('#map .marker.selected'))||rect(doc?.querySelector('#map .marker')));
     return {mapRect:element?.getBoundingClientRect?.(),viewportRect,headerRect:rect(doc?.querySelector('#approvedSiteHeader')),
-      occluders:[...(doc?.querySelectorAll('#leftPanel,#detailSection.open,#mapClusterPanel:not(.mapClusterPopup),#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#mapReset,.mobileMapControls')||[])].map(rect).filter(Boolean),
+      occluders:[...(doc?.querySelectorAll('#leftPanel,#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#mapTopControls,#mapRouteTotals:not([hidden]),#mapReset:not(#mapTopControls *),.mobileMapControls')||[])].map(rect).filter(Boolean),
       anchorHeight:pin?.height||0,
       anchorWidth:pin?.width||0,
       mobile:win.matchMedia?.('(max-width: 760px)')?.matches??Number(viewportRect.width)<=760};
@@ -419,6 +419,27 @@
       return {x:(pinRect.left+pinRect.width/2-mapRect.left)*w/mapRect.width-position.x,
         y:(pinRect.top+pinRect.height/2-mapRect.top)*h/mapRect.height-position.y};
     }
+    function fitPadding(){
+      const raw=layout(false), rect=cameraRect(raw.mapRect), {w,h}=measure();
+      const area=cameraFocusViewport({...raw,mobile:false})||rect;
+      if(!rect||!area||!w||!h)return [64,32,28,32];
+      const sx=w/rect.width, sy=h/rect.height;
+      const horizontal=Math.min(32,area.width*sx/4), vertical=area.height*sy/4;
+      return [
+        Math.ceil((area.top-rect.top)*sy+Math.min(64,vertical)),
+        Math.ceil((rect.right-area.right)*sx+horizontal),
+        Math.ceil((rect.bottom-area.bottom)*sy+Math.min(28,vertical)),
+        Math.ceil((area.left-rect.left)*sx+horizontal)
+      ];
+    }
+    function move(action){
+      if(disposed)return;
+      releaseFocus();
+      const {w,h}=measure();if(w<1||h<1)return;
+      // A pending resize must restore the old centre before the explicit move.
+      if(centerSize.w!==w||centerSize.h!==h)resizeMap(w,h);
+      action();rememberCenter();
+    }
     function geometry(){
       const centerPin=Boolean(active?.pinOffset),raw=layout(!centerPin);
       const target=cameraFocusViewport(centerPin?{...raw,mobile:false}:raw);
@@ -461,7 +482,7 @@
       if(active){active.corrections=0;scheduleFocus(true);}
     }
     function scheduleRelayout(){if(frame===null&&!disposed)frame=raf(()=>{frame=null;relayout();});}
-    return { userGesture, interaction:()=>interaction, scheduleRelayout, relayout,focus,scheduleFocus,releaseFocus,capturePinOffset,
+    return { userGesture, interaction:()=>interaction, scheduleRelayout, relayout,focus,scheduleFocus,releaseFocus,capturePinOffset,fitPadding,move,
       focusState:()=>lastFocus,
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };

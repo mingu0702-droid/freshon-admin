@@ -15,3 +15,13 @@ test('DOM resize already drifts SDK getCenter; relayout restores the last valid 
 test('normal-layout pan/zoom center changes become the next resize center and dispose removes its listener',()=>{
  const f=fixture();f.camera.relayout();const userCenter={lat:35.9,lng:129.1};f.map.setCenter(userCenter);f.resize(390,844);f.camera.relayout();assert.deepEqual(f.map.getCenter(),userCenter);assert.equal(f.listeners.size,1);f.camera.dispose();assert.equal(f.listeners.size,0);
 });
+
+test('explicit map navigation wins over a scheduled resize restoration',()=>{
+ const f=fixture();f.camera.relayout();f.resize(390,844);
+ const target={lat:37.75,lng:127.17};
+ let moves=0;
+ f.camera.move(()=>{moves++;f.map.setCenter(target);});
+ f.camera.relayout();
+ assert.deepEqual(f.map.getCenter(),target);
+ assert.equal(moves,1);
+});

@@ -61,3 +61,10 @@ test('direct mobile pin centers the visible body above the detail card, includin
  assert.equal(result.expectedX,195);assert.equal(result.expectedY,344);
  assert.equal(result.errorPx,0);assert.equal(result.state,'centered');
 });
+
+test('route extent padding reserves top controls and an open right card',()=>{
+ const f=cameraFixture(390,844);
+ f.setLayout({mapRect:rect(0,120,390,724),viewportRect:rect(0,0,390,844),
+  occluders:[rect(0,120,390,60),rect(0,580,390,264)]});
+ assert.deepEqual(Array.from(f.camera.fitPadding()),[124,32,292,32]);
+});

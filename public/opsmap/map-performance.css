@@ -78,7 +78,7 @@
 .approvedShellCandidate .marker.approvedMarker {
   width:44px!important; min-width:44px!important; height:56px!important; padding:0!important;
   border:0; border-radius:0!important; background:transparent!important;
-  transform:none; filter:none;
+  transform:none; filter:none; transition:none;
 }
 .approvedShellCandidate .marker.approvedMarker::after { display:none; }
 .approvedShellCandidate .marker.approvedMarker .pin {
@@ -105,36 +105,10 @@
 .areaVehicleMapBadge,.approvedShellCandidate .marker:is([data-representative-vehicle],[data-overview-vehicle-count]) { pointer-events:auto; }
 .approvedShellCandidate #map { overflow:hidden; }
 .areaVehicleMapBadge.mapBadgeObscured { visibility:hidden; }
-.approvedShellCandidate .clusterAssignments { margin:4px 0 8px; color:#50617b; font-size:11px; line-height:1.55; overflow-wrap:anywhere; }
-
-/* A clicked group exposes every store, including shops at the same coordinates. */
-.approvedShellCandidate .mapClusterPanel { position:absolute; z-index:440; left:16px; top:66px; width:290px; max-width:calc(100% - 32px); max-height:calc(100% - 84px); overflow:auto; overscroll-behavior:contain; border:1px solid #dce4ee; border-radius:12px; padding:14px; background:#fff; box-shadow:0 8px 28px #18354b1c; }
-.approvedShellCandidate .mapClusterPanel[hidden] { display:none!important; }
-.approvedShellCandidate .clusterPanelHeading { display:flex; justify-content:space-between; align-items:center; gap:10px; padding-bottom:10px; border-bottom:1px solid var(--line); }
-.approvedShellCandidate .clusterPanelHeading h3 { margin:0; font-size:14px; font-weight:650; }
-.approvedShellCandidate .clusterPanelHeading button { width:28px; height:28px; padding:0; font-size:20px; border:0; color:#78879a; background:#f3f6fa; }
-.approvedShellCandidate .clusterPanelActions { display:flex; flex-wrap:wrap; gap:6px; padding:10px 0; }
-.approvedShellCandidate .clusterPanelActions button { flex:1; font-size:11px; padding:7px 9px; }
-.approvedShellCandidate .clusterMemberList { display:grid; gap:2px; }
-.approvedShellCandidate .clusterMemberList button { display:flex; flex-direction:column; align-items:flex-start; gap:3px; padding:10px 8px; border:0; border-bottom:1px solid #eef2f7; border-radius:5px; text-align:left; white-space:normal; }
-.approvedShellCandidate .clusterMemberList button:hover { background:#f2f6ff; }
-.approvedShellCandidate .clusterMemberCode { color:#6a7e99; font-size:10px; font-weight:500; }
-.approvedShellCandidate .clusterMemberList strong { font-size:12px; line-height:1.4; font-weight:600; }
-.approvedShellCandidate .clusterMemberList small { font-size:10.5px; line-height:1.4; color:#7a889c; overflow-wrap:anywhere; }
-.mapClusterAnchor { position:relative; width:0; height:0; padding:0; }
-.approvedShellCandidate .mapClusterPanel.mapClusterPopup { position:absolute; inset:auto; left:0; bottom:52px; margin:0; transform:translateX(-50%); display:flex; flex-direction:column; gap:8px; box-sizing:border-box; max-width:none; min-height:0; padding:12px; overflow:visible; white-space:normal; }
-.approvedShellCandidate .mapClusterPopup .clusterPanelHeading { flex:none; padding-bottom:8px; }
-.approvedShellCandidate .mapClusterPopup .clusterPanelHeading h3 { font-size:13px; overflow-wrap:anywhere; }
-.approvedShellCandidate .mapClusterPopup .clusterPanelHeading button { flex:none; }
-.approvedShellCandidate .mapClusterPopup .clusterPanelActions { flex:none; padding:0; }
-.approvedShellCandidate .clusterPopupContent { min-height:0; display:flex; flex-direction:column; gap:8px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; }
-.approvedShellCandidate .mapClusterPopup input { flex:none; width:100%; min-width:0; height:32px; border:1px solid #dce4ee; border-radius:6px; padding:6px 8px; }
-.approvedShellCandidate .mapClusterPopup .clusterMemberList { flex:none; }
-.approvedShellCandidate .clusterPopupContent>button { flex:none; min-height:28px; }
-.approvedShellCandidate .mapClusterPopup:after { content:""; position:absolute; left:var(--cluster-tail-x,50%); bottom:-6px; width:10px; height:10px; border-right:1px solid #dce4ee; border-bottom:1px solid #dce4ee; background:#fff; transform:translateX(-50%) rotate(45deg); }
-.approvedShellCandidate .clusterBelow .mapClusterPopup:after { top:-6px; bottom:auto; transform:translateX(-50%) rotate(225deg); }
-.approvedShellCandidate .clusterLocationGroups { display:grid; gap:4px; margin:8px 0; }
-.approvedShellCandidate .clusterLocationGroups button { text-align:left; padding:8px; font-size:11px; white-space:normal; color:#275dd8; background:#f2f6ff; border:1px solid #dce4ee; border-radius:6px; }
+/* A compact chooser keeps stores sharing one pin accessible in the detail card. */
+.approvedShellCandidate .mapStoreChoices { display:grid; gap:5px; padding:8px 0; }
+.approvedShellCandidate .mapStoreChoices label { color:#485c77; font-size:12px; }
+.approvedShellCandidate .mapStoreChoices select { width:100%; min-width:0; min-height:38px; padding:6px 8px; border:1px solid #dce4ee; border-radius:6px; background:#fff; }
 
 /* Navigation fields identify roles directly and keep editing controls beside each value. */
 .approvedShellCandidate .navEditorField { margin:14px 0 0; }
@@ -155,7 +129,6 @@
 .approvedShellCandidate #mapStaffDialog { max-width:min(430px,calc(100vw - 24px)); }
 @media(max-width:900px) {
  .approvedShellCandidate.dotRestored #detailSection { top:auto!important; right:12px!important; bottom:12px!important; max-height:54%!important; max-width:calc(100% - 24px); }
- .approvedShellCandidate .mapClusterPanel { left:12px; right:12px; top:auto; bottom:12px; width:auto; max-width:none; max-height:58%; }
  .approvedShellCandidate.dotRestored .detailCard { padding:14px; }
  #detail .detailHead>.storeName { font-size:16px; }
  .approvedShellCandidate.dotRestored .dotDetailFacts { gap:8px 10px; }
