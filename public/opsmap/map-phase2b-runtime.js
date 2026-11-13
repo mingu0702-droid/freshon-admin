@@ -62,7 +62,7 @@
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();
-    indexedRows=null;pointIndex=null;baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
+    indexedRows=null;pointIndex=null;baseVehicleStatus='LOADING';baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
     searchIndex=searchFlight=stageAddressHashIndex=newAreaObservedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
     SOURCE={vehicles:[]};state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
     clearSelection();clearMap();updateOperationMetrics(null);renderPeriodStoreList([]);resetRoadRoute();clearNewAreaBatch();renderManualDraft();
@@ -561,13 +561,17 @@
       if(snapshotReadState!=='ready')throw Error('SNAPSHOT_READ_FAILED');
       applySnapshotRange();
       periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;
+      const customerCodes=latestSnapshotRows.map(row=>row.customerCode);
+      // Start the first master read while the map SDK and layout finish.
+      const masterLoading=baseVehicleStatus==='LOADING';
+      if(masterLoading)void loadBaseVehicles(customerCodes);
       setPeriodViewState(allStores.length?'ready':'empty');await loadBaseMap();
       if(id!==initialRequestId||!generalMap)return;
       $('#freshnessState').textContent='전체 저장 매장 반영됨 — 운영 전체 매장 완전성 미검증';syncSourceFreshness();
       scheduleSnapshotRecovery(id);
       void initMap().then(()=>afterSearchPaint(()=>{
         if(id!==initialRequestId||!generalMap)return;
-        void loadBaseVehicles(latestSnapshotRows.map(row=>row.customerCode));
+        if(!masterLoading)void loadBaseVehicles(customerCodes);
         void syncCustomerRegistry();
         if(recentPeriodMode&&adapter)void adapter.refreshLatest().then(value=>{
           const range=MapPeriodUi.recentRange(value);
@@ -773,7 +777,11 @@
         // This is status checking, not extending a blocking UI timeout.
         if(payload.meta?.refresh||payload.phase==='LOADING')baseVehicleTimer=setTimeout(()=>void loadBaseVehicles(),payload.meta?.refresh==='RUNNING'||payload.phase==='LOADING'?60000:300000);
         if(!Array.isArray(payload.data)){
-          baseVehicleStatus=baseVehicles.size?'READY':payload.phase==='ERROR'?'ERROR':'LOADING';
+          const nextStatus=baseVehicles.size?'READY':payload.phase==='ERROR'?'ERROR':'LOADING';
+          if(baseVehicleStatus!==nextStatus){
+            baseVehicleStatus=nextStatus;
+            if(state.mode==='BASE_60D'&&dateReady){state.fitRequested=false;await loadBaseMap();}
+          }
           return;
         }
         const previous=baseVehicles;
@@ -1578,6 +1586,36 @@
     mapCamera?.releaseFocus();overlay.setMap(map);schedule();
   }
 
+  function showOverviewRoutes(row){
+    closeClusterPanel();
+    mapCamera?.releaseFocus();
+    const panel=document.createElement('section');
+    panel.id='mapClusterPanel';panel.className='mapClusterPanel';panel.setAttribute('aria-label','묶음 호차 목록');
+    const heading=document.createElement('div');heading.className='clusterPanelHeading';
+    const title=document.createElement('h3');title.textContent=row.overviewRoutes.length+'개 호차';
+    const close=document.createElement('button');close.type='button';close.textContent='×';close.setAttribute('aria-label','묶음 목록 닫기');close.onclick=closeClusterPanel;
+    heading.append(title,close);panel.append(heading);
+    const zoom=document.createElement('button');zoom.type='button';zoom.textContent='이 지역 확대';
+    zoom.onclick=()=>{
+      const map=state.map;if(!map)return;
+      closeClusterPanel();
+      state.fitRequested=false;state.suppressMapEventsUntil=Date.now()+700;
+      map.setLevel(Math.max(5,map.getLevel()-2));map.setCenter(markerPosition(row));
+    };
+    const actions=document.createElement('div');actions.className='clusterPanelActions';actions.append(zoom);panel.append(actions);
+    const list=document.createElement('div');list.className='clusterMemberList';panel.append(list);
+    for(const route of [...row.overviewRoutes].sort((a,b)=>a.vehicle.localeCompare(b.vehicle,'ko',{numeric:true}))){
+      const button=document.createElement('button');button.type='button';button.dataset.overviewRoute=route.vehicle;
+      button.textContent=vehicleLabel(route.vehicle)+' · '+route.storeCount+'개 매장';
+      button.onclick=()=>void selectVehicleStatus(route,button);
+      list.append(button);
+    }
+    panel.addEventListener('keydown',event=>{if(event.key==='Escape'){event.stopPropagation();closeClusterPanel();}});
+    panel.dataset.overviewGroupKey=row.clusterKey;
+    clusterPanel=panel;
+    ($('#map').parentElement||document.body).append(panel);
+  }
+
   function showCluster(row,{keepView=false}={}){
     const members=(row.clusterRows||[]).filter(item=>item.customerCode);
     if(!members.length||!state.map)return;
@@ -1684,6 +1722,7 @@
   }
 
   function markerIsSelected(row){
+    if(row.overviewRoutes?.some(route=>selectedMapPins.has(markerPinKey(route))))return true;
     return selectedMapPins.has(markerPinKey(row))||markerShowsDetail(row)||
       Boolean(state.mode==='BASE_60D'&&selectedMapPins.size&&row.memberCodes?.some(code=>selectedMapPins.has('store:'+code)));
   }
@@ -1724,12 +1763,13 @@
       const hit=target===button?row:mapMarkerRows.get(target);
       const hitKey=target===button?key:markerPinKey(hit);
       ++cameraSelection;
-      const preserveCamera=state.mode==='BASE_60D'&&state.virtual?.searchTemporary;
+      const preserveCamera=Boolean(hit.overviewRoutes)||state.mode==='BASE_60D'&&state.virtual?.searchTemporary;
       if(preserveCamera)mapCamera?.releaseFocus();
       const pinOffset=preserveCamera?null:mapCamera?.capturePinOffset?.(markerPosition(hit),target.querySelector('.pin')||target)||{x:0,y:0};
       const wasSelected=hitKey&&selectedMapPins.delete(hitKey);
       if(hitKey&&!wasSelected)selectedMapPins.add(hitKey);
-      if(hit.clusterCount)showCluster(hit,{keepView:true});
+      if(hit.overviewRoutes)showOverviewRoutes(hit);
+      else if(hit.clusterCount)showCluster(hit,{keepView:true});
       else if(hit.representative||hit.nearbyVehicle)void selectVehicleStatus(hit,target);
       else if(!wasSelected)selectStoreMarker(hit,target);
       else if(markerShowsDetail(hit))clearSelection({keepMapPins:true});
@@ -1741,7 +1781,7 @@
   function markerLayer(row,selected,assigned){
     if(selected||assigned||row.virtual)return selected?40:assigned?25:15;
     if(state.mode==='BASE_60D'&&row.clusterKind==='location'&&state.map.getLevel()<=MapViewPolicy.storePinLevel)return 6;
-    return row.representativeUsesVisibleStore?6:row.clusterCount?3:5;
+    return row.overviewRoutes||row.representativeUsesVisibleStore?6:row.clusterCount?3:5;
   }
 
   function refreshMapPinSelection(){
@@ -1778,11 +1818,18 @@
       button.dataset.pinLabel = pinLabel;
     }
     button.title = [kind === 'virtual' ? '' : assignmentTitle,row.customerName || row.address].filter(Boolean).join(' · ');
+    if(row.overviewRoutes){
+      button.dataset.overviewVehicleCount=String(row.overviewRoutes.length);
+      button.dataset.overviewVehicles=row.overviewRoutes.map(route=>route.vehicle).join(',');
+      button.dataset.pinAssignment='overview';
+      button.dataset.pinLabel=String(row.overviewRoutes.length);
+      button.title=row.overviewRoutes.length+'개 호차 · 목록 보기';
+    }
     button.dataset.masterCheckedAt=row.baseVehicleCheckedAt||'';button.dataset.masterStale=String(row.baseVehicleStale===true);
     button.setAttribute("aria-label", base ? button.title : `${button.title} · ${completed ? "완료" : pending ? "미완료" : "상태 미확인"}`);
     if(markerIsSelected(row))button.classList.add('selected');
     const mixedColor = row.clusterKind === 'location' ? '#6d28d9' : window.MapViewPolicy.regionColors[row.clusterColorKey] || '#315888';
-    const pinColor = kind === 'virtual' ? vehicleColor(row.vehicle) :
+    const pinColor = row.overviewRoutes ? '#315888' : kind === 'virtual' ? vehicleColor(row.vehicle) :
       assignment.kind === 'mixed' ? mixedColor : assignment.kind === 'unverified' ? '#4b5563' : vehicleColor(assignment.code);
     button.style.setProperty('--pin-color',pinColor);
     if (kind === "store" && base) button.classList.add("store");
@@ -1802,7 +1849,10 @@
       pin.style.setProperty('--pin',pinColor);
       const label=document.createElement('span');
       const status = assignment.kind === 'new' || assignment.kind === 'held';
-      if(group&&assignment.kind==='mixed'){
+      if(row.overviewRoutes){
+        label.className='pinOverviewCount';
+        label.textContent=row.overviewRoutes.length+'\n호차';
+      }else if(group&&assignment.kind==='mixed'){
         const routes=row.clusterVehicles;
         label.className='pinRoutes';
         label.textContent=routes.slice(0,2).map(code=>{
@@ -1819,7 +1869,7 @@
       if(index&&!group)pin.title=`${assignmentTitle||'호차 정보 없음'} · 착순 ${index}`;
       button.classList.add('approvedMarker');button.append(pin);
     }else{
-      const label=group|| (kind==='virtual'?'임시':index||pinLabel);
+      const label=row.overviewRoutes?row.overviewRoutes.length+'호차':group||(kind==='virtual'?'임시':index||pinLabel);
       button.innerHTML=`<svg class="pinShape" viewBox="0 0 28 34" aria-hidden="true"><path d="M14 1C6.8 1 1 6.8 1 14C1 23 14 34 14 34S27 23 27 14C27 6.8 21.2 1 14 1Z"/></svg><span class="pinNumber">${esc(label)}</span><span class="markerLabel">${esc(button.title)}</span>`;
     }
     bindMapMarkerSelection(button,row,kind);
@@ -1835,18 +1885,16 @@
       if (!grouped.has(code)) grouped.set(code, []);
       grouped.get(code).push(row);
     }
-    const representatives = [...grouped].map(([vehicle, stores]) => ({
-      vehicle,
-      customerName: `${vehicleLabel(vehicle)} · ${stores.length}개 매장`,
-      address: stores[0]?.areaLabel || stores[0]?.vehicleGroup || "",
-      lat: stores.reduce((sum, row) => sum + row.lat, 0) / stores.length,
-      lng: stores.reduce((sum, row) => sum + row.lng, 0) / stores.length,
-      storeCount: stores.length,
-      clusterRows: stores,
-      clusterVehicles: [vehicle],
-      vehicleGroup: stores[0]?.vehicleGroup || "",
-      representative: true
-    }));
+    const representatives = [...grouped].map(([vehicle, stores]) => {
+      const lat=stores.reduce((sum,row)=>sum+row.lat,0)/stores.length;
+      const lng=stores.reduce((sum,row)=>sum+row.lng,0)/stores.length;
+      // An average can fall far from every delivery location.
+      const distance=row=>(row.lat-lat)**2+(row.lng-lng)**2;
+      const anchor=stores.reduce((nearest,row)=>distance(row)<distance(nearest)?row:nearest);
+      return {vehicle,customerName:vehicleLabel(vehicle)+' · '+stores.length+'개 매장',
+        address:anchor.areaLabel||anchor.vehicleGroup||'',lat:anchor.lat,lng:anchor.lng,
+        storeCount:stores.length,clusterRows:stores,clusterVehicles:[vehicle],vehicleGroup:anchor.vehicleGroup||'',representative:true};
+    });
     return {representatives, unassigned};
   }
 
@@ -1899,10 +1947,26 @@
     }
     if(assigned!==entry.assigned)button.classList.toggle('navAssigned',entry.assigned);
     if(overlay.getZIndex?.()!==entry.zIndex)overlay.setZIndex?.(entry.zIndex);
-    if(entry.row?.representative){
+    if(entry.row?.representative||entry.row?.overviewRoutes){
       mapMarkerRows.set(button,entry.row);
       moveMapOverlayButton(button,entry.row.representativeOffset,$('#map'));
     }
+  }
+
+  function overviewPinObstacles(mapNode,pins,project) {
+    const mapRect=mapNode.getBoundingClientRect();
+    const bounds=pins.map(row=>{
+      const {x,y}=project(row);
+      return {left:x-28,top:y-56,right:x+28,bottom:y+4};
+    });
+    const overlays=mapNode.querySelectorAll('.marker.virtual,.searchTemporaryRemove,.navRoutePoint,.osanCenterMarker');
+    for(const node of [...overlays,...$$('#mapReset,#detailSection.open,#mobileWorkspace:not(.collapsed),.mobileMapControls')]){
+      const rect=node.getBoundingClientRect();
+      if(rect.width&&rect.height&&rect.left<mapRect.right&&rect.right>mapRect.left&&rect.top<mapRect.bottom&&rect.bottom>mapRect.top){
+        bounds.push({left:rect.left-mapRect.left,top:rect.top-mapRect.top,right:rect.right-mapRect.left,bottom:rect.bottom-mapRect.top});
+      }
+    }
+    return bounds;
   }
 
   function renderStops(rows, options = {}) {
@@ -1917,13 +1981,18 @@
     const {valid,byCode}=pointIndex;
     const level=state.map.getLevel(),base=state.mode==='BASE_60D',fit=state.fitRequested;
     const mapNode=$('#map');mapNode.classList.toggle('mapZoomFar',level>=9);
-    const viewport=fit?null:{width:mapNode.clientWidth,height:mapNode.clientHeight};
+    const mapViewport={width:mapNode.clientWidth,height:mapNode.clientHeight};
+    const viewport=fit?null:mapViewport;
     const detailedStores=base&&viewport&&level<=window.MapViewPolicy.storePinLevel;
     const vehicleOverview=base&&level>=10&&periodBasis==='vehicle';
     const focusedStops=!base&&(state.selectedVehicles.length===1||periodBasis==='driver');
     const assignmentMode=base&&periodBasis!=='driver'?'BASE_60D':'DATE_ROUTE';
     const navCodes=window.MapNavigationEditor?.values?.().filter(Boolean)||[];
     const selectedCode=state.selected?.customerCode;
+    const protectedCodes=[selectedCode,...navCodes];
+    const awaitingMaster=base&&periodBasis==='vehicle'&&baseVehicleStatus==='LOADING';
+    const shouldShow=row=>row.virtual||row.nearbyVehicle||protectedCodes.some(code=>markerHasStore(row,code))||
+      MapViewPolicy.pinAssignment(row).kind!=='unverified';
     const selectedExtra=base&&selectedCode&&!byCode.has(selectedCode)&&Number.isFinite(state.selected.lat)&&Number.isFinite(state.selected.lng)?state.selected:null;
     const projection=state.map.getProjection();
     const projectPin=row=>projection.containerPointFromCoords(markerPosition(row));
@@ -1931,19 +2000,23 @@
       grouping:focusedStops?'individual':'territory',protectedCodes:navCodes,sourceVersion:markerSourceVersion,
       nearbyVehicleOnly:assignmentMode==='BASE_60D'};
     let pins,readyOverview=false;
-    if(detailedStores)pins=detailedMarkerRows(viewport,selectedExtra,assignmentMode,projectPin,[selectedCode,...navCodes]);
+    if(detailedStores)pins=detailedMarkerRows(viewport,selectedExtra,assignmentMode,projectPin,protectedCodes);
     else if(vehicleOverview){
       const overview=pointIndex.overview ||= representativeRows(valid);
       readyOverview=overview.representatives.length>0;
-      pins=[...window.MapViewPolicy.visibleVehicleRepresentatives(overview.representatives,projectPin,viewport,viewport?overviewVehicleStores():null)];
-      pins.push(...window.MapViewPolicy.stableClusters(overview.unassigned,projectPin,level,selectedCode,viewport,clusterOptions));
-      for(const code of new Set([selectedCode,...navCodes])){
+      pins=awaitingMaster?[]:MapViewPolicy.stableClusters(overview.unassigned,projectPin,level,selectedCode,mapViewport,clusterOptions);
+      for(const code of new Set(protectedCodes)){
         const row=byCode.get(code);if(row&&window.MapViewPolicy.pinAssignment(row).code)pins.push(row);
       }
+      const routes=readyOverview?MapViewPolicy.visibleVehicleRepresentatives(overview.representatives,projectPin,mapViewport,overviewVehicleStores()):[];
+      if(awaitingMaster)pins=pins.filter(shouldShow);
+      const obstacles=routes.length?overviewPinObstacles(mapNode,selectedExtra?[...pins,selectedExtra]:pins,projectPin):[];
+      pins.push(...MapViewPolicy.groupOverviewVehiclePins(routes,projectPin,mapViewport,obstacles));
     }else{
       pins=window.MapViewPolicy.stableClusters(valid,projectPin,level,selectedCode,viewport,clusterOptions);
     }
     if(!detailedStores&&selectedExtra)pins.push(selectedExtra);
+    if(awaitingMaster&&!vehicleOverview)pins=pins.filter(shouldShow);
     const markerMode=detailedStores?'STORES':readyOverview?'VEHICLES':'GROUPS';
     const entries = pins.map(row=>{
       const selected=markerIsSelected(row);
@@ -1951,7 +2024,7 @@
       const masterStatus=base&&(!row.baseVehicleState||row.baseVehicleState==='UNKNOWN')&&!row.baseVehicleVersion?baseVehicleStatus:null;
       let fingerprint=base&&!masterStatus?markerSignatures.get(row):null;
       if(!fingerprint){
-        fingerprint=JSON.stringify([row.lat,row.lng,row.clusterBounds,row.clusterMemberKey,row.vehicle,row.baseVehicle,row.baseVehicleState,row.baseVehicleEmptyVerified,row.customerName,row.address,row.status,row.order,row.clusterCount,row.lastDeliveryDate,row.visitCount,row.driverKey,row.clusterLabel,row.clusterColorKey,row.coordinateSource,row.baseVehicleStale,row.baseVehicleCheckedAt,Boolean(options.numbered),Boolean(row.virtual),row.representative||row.clusterCount?markerSourceVersion:null,Boolean(row.nearbyVehicle),assignmentMode,state.rangeStart,state.rangeEnd,
+        fingerprint=JSON.stringify([row.lat,row.lng,row.clusterBounds,row.clusterMemberKey,row.vehicle,row.baseVehicle,row.baseVehicleState,row.baseVehicleEmptyVerified,row.customerName,row.address,row.status,row.order,row.clusterCount,row.lastDeliveryDate,row.visitCount,row.driverKey,row.clusterLabel,row.clusterColorKey,row.coordinateSource,row.baseVehicleStale,row.baseVehicleCheckedAt,Boolean(options.numbered),Boolean(row.virtual),row.representative||row.clusterCount||row.overviewRoutes?markerSourceVersion:null,Boolean(row.nearbyVehicle),assignmentMode,state.rangeStart,state.rangeEnd,
           masterStatus]);
         if(base&&!masterStatus)markerSignatures.set(row,fingerprint);
       }
@@ -1959,6 +2032,8 @@
         key:row.representative?'vehicle:'+row.vehicle:row.clusterKey||[row.virtual?'virtual':'store',runVisitId(row),row.lat,row.lng].join('|')};
     });
     const planMs=performance.now()-started;
+    const openOverview=clusterPanel?.dataset?.overviewGroupKey;
+    if(openOverview&&!entries.some(entry=>entry.key===openOverview))closeClusterPanel();
     const reconciled = MapPeriodUi.reconcile(markerEntries, entries, entry => {
       const {row,zIndex}=entry;
       const overlay = new kakao.maps.CustomOverlay({
@@ -1970,7 +2045,7 @@
         zIndex
       });
       overlay.setMap(state.map);
-      if(row.representative)refreshMarkerSelection(overlay,entry);
+      if(row.representative||row.overviewRoutes)refreshMarkerSelection(overlay,entry);
       return overlay;
     }, overlay => overlay.setMap(null), refreshMarkerSelection);
     markerEntries = reconciled.next;
@@ -2004,7 +2079,7 @@
     }
     mapNode.setAttribute('data-render-metrics',JSON.stringify({...renderMetrics,sourceRows:rows.length,active:markerEntries.size,
       markerMode,planMs:+planMs.toFixed(2),
-      representedStores:pins.reduce((count,row)=>count+(row.clusterRows?.length||(row.customerCode?1:0)),0)}));
+      representedStores:pins.reduce((count,row)=>count+(row.overviewRoutes?.reduce((total,route)=>total+route.storeCount,0)??row.clusterRows?.length??(row.customerCode?1:0)),0)}));
   }
 
   function clearActualRoute() {
@@ -3238,11 +3313,6 @@
     dispatchBadgeFrame=null;
     for(const {value} of newAreaDispatchOverlays.values())value.overlay.setMap(null);
     newAreaDispatchOverlays.clear();
-    const map=$('#map');
-    for(const overlay of state.overlays){
-      const button=overlay.getContent?.(),row=mapMarkerRows.get(button);
-      if(row?.representative)moveMapOverlayButton(button,row.representativeOffset,map);
-    }
   }
 
   const areaVehicleKey=({vehicle,center})=>(center||'')+'|'+vehicle;
@@ -3279,7 +3349,7 @@
     const {left,top}=map.getBoundingClientRect();
     const bounds={left:Math.max(0,left+4),top:Math.max(0,top+4),right:Math.min(innerWidth,left+map.clientWidth)-4,
       bottom:Math.min(innerHeight,top+map.clientHeight)-4};
-    const obstacleSelector='.marker:not([data-representative-vehicle]) .pin,.marker.virtual,.searchTemporaryRemove,.navRoutePoint,.osanCenterMarker,.temporaryDistanceLabel';
+    const obstacleSelector='.marker .pin,.marker.virtual,.searchTemporaryRemove,.navRoutePoint,.osanCenterMarker,.temporaryDistanceLabel';
     const uiSelector='#approvedSiteHeader,#detailSection.open,#leftPanel,#mapReset,#mapClusterPanel';
     const obstacles=[...map.querySelectorAll(obstacleSelector),...$$(uiSelector)].flatMap(element=>{
       const rect=element.getBoundingClientRect();
@@ -3298,24 +3368,6 @@
       content.classList.toggle('mapBadgeObscured',!offset||offset.hidden===true);
       // Kakao keeps the wrapper at the anchor after the button moves.
       moveMapOverlayButton(content,offset,map);
-      if(offset&&!offset.hidden){
-        const {left,top,width,height}=badges[id];
-        obstacles.push({left:left+offset.x,top:top+offset.y,right:left+offset.x+width,bottom:top+offset.y+height});
-      }
-    });
-    const representatives=state.overlays.flatMap(overlay=>{
-      const content=overlay.getContent?.();
-      if(!content?.dataset.representativeVehicle)return [];
-      const position=projection.containerPointFromCoords(overlay.getPosition());
-      return [{content,left:left+position.x-28,top:top+position.y-56,width:56,height:56,
-        prioritize:mapMarkerRows.get(content)?.representativeUsesVisibleStore}];
-    });
-    const offsets=new Map(MapViewPolicy.placeOverlayLabels(representatives.map((badge,id)=>({...badge,id})),bounds,obstacles,
-      {retainWhenCrowded:true,maxColumns:3,maxRows:4}).map(value=>[value.id,value]));
-    representatives.forEach(({content},id)=>{
-      const fallback=mapMarkerRows.get(content)?.representativeOffset;
-      const offset=offsets.get(id);
-      moveMapOverlayButton(content,offset&&(offset.x||offset.y)?offset:fallback,map);
     });
   }
 

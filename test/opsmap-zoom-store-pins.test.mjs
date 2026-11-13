@@ -168,16 +168,23 @@ test('overview keeps a route visible when its average falls outside the viewport
   assert.equal(overview[0].lng,600);
 });
 
-test('overlapping overview pins stay separate while retaining both geographic anchors',()=>{
-  const {visibleVehicleRepresentatives}=MapViewPolicy;
+test('overview pixel groups contain every visible route once and open up on zoom',()=>{
+  const {visibleVehicleRepresentatives,groupOverviewVehiclePins}=MapViewPolicy;
   const project=row=>({x:row.lng,y:row.lat});
-  const rows=[{vehicle:'161',lat:195,lng:185},{vehicle:'157',lat:200,lng:190}];
-  const visible=visibleVehicleRepresentatives(rows,project,{width:390,height:420},new Map());
-  assert.strictEqual(visible[0],rows[0]);
-  assert.equal(visible[1].lng,rows[1].lng);
-  assert.equal(visible[1].lat,rows[1].lat);
-  assert.ok(Math.abs(visible[1].lng+visible[1].representativeOffset.x-rows[0].lng)>=44||
-    Math.abs(visible[1].lat+visible[1].representativeOffset.y-rows[0].lat)>=56);
+  const view={width:390,height:420};
+  const rows=[{vehicle:'161',lat:195,lng:185},{vehicle:'157',lat:200,lng:190},
+    {vehicle:'125',lat:201,lng:251},{vehicle:'122',lat:3,lng:2},{vehicle:'202',lat:30,lng:-140}];
+  const visible=visibleVehicleRepresentatives(rows,project,view);
+  const markers=groupOverviewVehiclePins(visible,project,view);
+  const bundle=markers.find(marker=>marker.overviewRoutes);
+  assert.deepEqual(bundle.overviewRoutes,[rows[0],rows[1]]);
+  assert.deepEqual(markers.flatMap(marker=>(marker.overviewRoutes||[marker]).map(r=>r.vehicle)).sort(),['122','125','157','161']);
+  assert.deepEqual([bundle.lat,bundle.lng],[rows[0].lat,rows[0].lng]);
+  assert.strictEqual(markers.find(marker=>marker.vehicle==='125'),rows[2]);
+  assert.deepEqual(markers.find(marker=>marker.vehicle==='122').representativeOffset,{x:30,y:57});
+  const zoomed=groupOverviewVehiclePins(visible, row=>({x:80+row.lng*14,y:200}),{width:3800,height:420});
+  assert.equal(zoomed.length,visible.length);
+  assert.ok(zoomed.every(marker=>!marker.overviewRoutes));
 });
 
 const nearbyPoint = (code, route, meters, pixel) => ({

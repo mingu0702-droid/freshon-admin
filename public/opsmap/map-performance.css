@@ -92,6 +92,9 @@
 .approvedShellCandidate .marker.approvedMarker .pin>.pinRoutes {
   position:relative; line-height:1.05; text-align:center; white-space:pre-line;
 }
+.approvedShellCandidate .marker.approvedMarker .pin>.pinOverviewCount {
+  line-height:1.05; text-align:center; white-space:pre-line;
+}
 .approvedShellCandidate .marker.approvedMarker .pin>.pinRoutes[data-more]::after {
   content:attr(data-more); position:absolute; left:100%; bottom:0; font-size:8px; line-height:1;
 }
@@ -99,7 +102,8 @@
 .approvedShellCandidate .marker.approvedMarker.selected .pin { outline:none; background-color:#ad1457; }
 .approvedShellCandidate .marker.navAssigned { visibility:visible!important; pointer-events:auto!important; }
 .approvedShellCandidate .marker.approvedMarker.navAssigned .pin { outline:3px solid #f59e0b66; }
-.areaVehicleMapBadge,.approvedShellCandidate .marker[data-representative-vehicle] { pointer-events:auto; }
+.areaVehicleMapBadge,.approvedShellCandidate .marker:is([data-representative-vehicle],[data-overview-vehicle-count]) { pointer-events:auto; }
+.approvedShellCandidate #map { overflow:hidden; }
 .areaVehicleMapBadge.mapBadgeObscured { visibility:hidden; }
 .approvedShellCandidate .clusterAssignments { margin:4px 0 8px; color:#50617b; font-size:11px; line-height:1.55; overflow-wrap:anywhere; }
 

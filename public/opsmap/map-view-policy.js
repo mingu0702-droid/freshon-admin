@@ -166,27 +166,60 @@
   }
   function visibleVehicleRepresentatives(rows, project, viewport, visibleStores) {
     if(!viewport)return rows;
-    const {width,height}=viewport, inside=({x,y},margin)=>
-      x>=-margin&&x<=width+margin&&y>=-margin&&y<=height+margin;
-    const preferred=rows.flatMap(row=>{
-      const center=project(row);
-      if(inside(center,0))return [{row,point:center,priority:center.y>height*0.82?1:0}];
+    const {width,height}=viewport;
+    const inside=({x,y})=>x>=0&&x<=width&&y>=0&&y<=height;
+    return rows.flatMap(row=>{
+      if(inside(project(row)))return [row];
       let anchor=null, nearest=Infinity;
       for(const store of visibleStores?.get(row.vehicle)||[]){
         const point=project(store);
-        if(!inside(point,0))continue;
+        if(!inside(point))continue;
         const distance=(point.x-width/2)**2+(point.y-height/2)**2;
-        if(distance<nearest){anchor={row:{...row,lat:store.lat,lng:store.lng,representativeUsesVisibleStore:true},point};nearest=distance;}
+        if(distance<nearest){anchor=store;nearest=distance;}
       }
-      return anchor?[{...anchor,priority:2}]:inside(center,36)?[{row,point:center,priority:0}]:[];
+      return anchor?[{...row,lat:anchor.lat,lng:anchor.lng,representativeUsesVisibleStore:true}]:[];
     });
-    if(!visibleStores)return preferred.map(({row})=>row);
-    const placed=placeOverlayLabels(preferred.map(({point,priority},id)=>({id,left:point.x-28,top:point.y-56,width:56,height:56,priority})),
-      {left:0,top:0,right:width,bottom:height},[],{retainWhenCrowded:true});
-    const byId=new Map(placed.map(offset=>[offset.id,offset]));
-    return preferred.map(({row},id)=>{
-      const offset=byId.get(id);
-      return offset&&(offset.x||offset.y)?{...row,representativeOffset:{x:offset.x,y:offset.y}}:row;
+  }
+
+  function groupOverviewVehiclePins(rows, project, {width,height}, obstacles=[]) {
+    // A rotated 40px pin and its button fit inside this pixel footprint.
+    // Groups use an actual anchor and never expand through a chain of pins.
+    const halfWidth=32, above=60, below=4, groups=[];
+    if(width<halfWidth*2||height<above+below)return [];
+    const clamp=(x,y)=>({
+      x:Math.max(halfWidth,Math.min(width-halfWidth,x)),
+      y:Math.max(above,Math.min(height-below,y))
+    });
+    const overlaps=(a,b)=>Math.abs(a.x-b.x)<halfWidth*2&&Math.abs(a.y-b.y)<above+below;
+    const blocked=({x,y})=>obstacles.some(box=>
+      x-halfWidth<box.right&&x+halfWidth>box.left&&y-above<box.bottom&&y+below>box.top);
+    for(const row of rows){
+      const point=project(row);
+      const original=clamp(point.x,point.y);
+      let nearest=null,best=Infinity;
+      for(const group of groups){
+        if(!overlaps(original,group.anchor))continue;
+        const distance=(group.anchor.x-original.x)**2+(group.anchor.y-original.y)**2;
+        if(distance<best){nearest=group;best=distance;}
+      }
+      if(nearest){nearest.routes.push(row);continue;}
+      let anchor=original;
+      if(blocked(anchor)){
+        // Keep an existing route, navigation or temporary pin reachable.
+        const alternatives=[[0,-36],[36,0],[-36,0],[0,36],[0,-64],[64,0],[-64,0],[0,64],
+          [48,-48],[-48,-48],[48,48],[-48,48]];
+        anchor=alternatives.map(([dx,dy])=>clamp(original.x+dx,original.y+dy))
+          .find(candidate=>!blocked(candidate)&&!groups.some(group=>overlaps(candidate,group.anchor)))||original;
+      }
+      groups.push({anchor,point,routes:[row]});
+    }
+    return groups.map(({anchor,point,routes})=>{
+      const [first]=routes;
+      const offset={x:anchor.x-point.x,y:anchor.y-point.y};
+      const representativeOffset=offset.x||offset.y?offset:undefined;
+      if(routes.length===1)return representativeOffset?{...first,representativeOffset}:first;
+      return {lat:first.lat,lng:first.lng,representativeOffset,overviewRoutes:routes,
+        clusterKey:'vehicle-overview:'+routes.map(route=>route.vehicle).sort().join('|')};
     });
   }
   function stableClusters(rows, project, level, selectedCode = '', viewport = null, options = {}) {
@@ -433,5 +466,5 @@
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,overlappingVehicleLocations,visibleVehicleRepresentatives,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint,placeOverlayLabels});
+  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,overlappingVehicleLocations,visibleVehicleRepresentatives,groupOverviewVehiclePins,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint,placeOverlayLabels});
 })(typeof window==='object'?window:globalThis);
