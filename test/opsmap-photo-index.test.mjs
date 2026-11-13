@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -134,6 +134,22 @@ test('a source timeout stops the collection batch and retains previously confirm
   const page = await index.read({customerCode:code});
   assert.equal(page.state, 'FAILED');
   assert.equal(page.counts[front], 2);
+});
+
+test('Render-safe index filename keeps the same photos and seeds the next collection', async t => {
+  const {index, directory} = await fixture(t);
+  const identity = {customerCode:code, date:today, deliveryId:'99'};
+  const collect = createPhotoIndexCollector({index,
+    readHubCandidates:async () => [stub(code, today, '99')],
+    readTask:async () => result(identity, [photo(front)])
+  });
+  await collect({plan:plan(), from:today, through:today, mode:'initial'});
+  const [original] = await readdir(directory);
+  await rename(path.join(directory, original), path.join(directory, 'opsmap_photo_s100.json'));
+  assert.equal((await index.read({customerCode:code})).counts[front], 1);
+  const next = await collect({plan:plan(), from:today, through:today, mode:'initial'});
+  assert.equal(next.tasksRead, 0);
+  assert.equal((await index.read({customerCode:code})).counts[front], 1);
 });
 
 test('actual parser shape keeps types distinct, list never hits upstream, and alias media rechecks old identity', async t => {

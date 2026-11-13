@@ -113,6 +113,10 @@ export function createOpsmapPhotoIndex({directory, appRoot = process.cwd(), now 
       fail('PHOTO_HISTORY_INDEX_INVALID');
     }
   }
+  async function loadCustomer(file, customerCode) {
+    // Render Secret Files require a leading letter or dot.
+    return await load(file) ?? await load(path.join(path.dirname(file), `opsmap_photo_${customerCode.toLowerCase()}.json`));
+  }
   async function update(plan, work) {
     const file = await indexFile(plan.customerCode);
     const lock = file + '.lock';
@@ -120,7 +124,7 @@ export function createOpsmapPhotoIndex({directory, appRoot = process.cwd(), now 
     try { handle = await fs.open(lock, 'wx', 0o600); }
     catch (error) { if (error.code === 'EEXIST') fail('PHOTO_HISTORY_INDEX_BUSY', 409); throw error; }
     try {
-      const prior = (await load(file))?.value;
+      const prior = (await loadCustomer(file, plan.customerCode))?.value;
       if (prior && (prior.plan.customerCode !== plan.customerCode || plan.through < prior.plan.through)) fail('PHOTO_HISTORY_INDEX_CONFLICT', 409);
       const value = await work(prior);
       const bytes = Buffer.from(JSON.stringify(value));
@@ -133,7 +137,7 @@ export function createOpsmapPhotoIndex({directory, appRoot = process.cwd(), now 
     }
   }
   async function read({customerCode, cursor = ''}) {
-    const saved = await load(await indexFile(customerCode));
+    const saved = await loadCustomer(await indexFile(customerCode), customerCode);
     const counts = Object.fromEntries(INDEX_PHOTO_KINDS.map(kind => [kind, 0]));
     if (!saved) {
       if (cursor) fail('PHOTO_HISTORY_CHANGED', 409);
