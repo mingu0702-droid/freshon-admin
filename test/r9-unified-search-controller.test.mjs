@@ -58,16 +58,17 @@ const store=(customerCode,customerName,address,more={})=>({customerCode,customer
 test('map gestures coalesce idle work and keep the out-of-filter selection in the address queue',async()=>{
  const selected=store('S990100','합성 선택점','',{vehicle:'223',lat:null,lng:null}),visible=store('S990101','합성 필터점','',{vehicle:'101'});
  const events=new Map(),frames=new Map(),renders=[],queues=[],badgeLayouts=[];
+ let clears=0,gestures=0;
  const mapElement={dataset:{},replaceChildren(){},addEventListener(){}};
  let frameId=0;
  const c={
-  dateReady:true,mapInitializing:null,mapCamera:null,mapMoving:false,mapHandlers:[],markerFrame:null,addressScheduleFrame:null,
+  dateReady:true,mapInitializing:null,mapCamera:null,mapMoving:false,mapHandlers:[],mapGestureEvents:null,markerFrame:null,addressScheduleFrame:null,resizeFrame:null,AbortController,
   viewportMetrics:{idles:0,renders:0,skipped:0,cancelled:0},
   state:{mode:'BASE_60D',map:null,selected,currentRows:[visible]},
   document:{hidden:false,body:{dataset:{mapStaffState:'authenticated'}}},
-  window:{KakaoMapsAdapter:{ready:async()=>{}},dispatchEvent(){}},
+  window:{KakaoMapsAdapter:{ready:async()=>{}},MapViewPolicy:{createCamera:()=>({userGesture(){gestures++;}})},dispatchEvent(){}},
   kakao:{maps:{Map:class {},LatLng:class {},event:{addListener:(_map,name,callback)=>events.set(name,callback)}}},
-  $:()=>mapElement,performance:{mark(){}},CustomEvent:class {},loadBaseMap(){},positionTemporaryDistanceLabel(){},
+  $:()=>mapElement,performance:{mark(){}},CustomEvent:class {},loadBaseMap(){},positionTemporaryDistanceLabel(){},clearSelection(){clears++;},
   scheduleNewAreaDispatchBadges:()=>badgeLayouts.push(true),
   setMapMessage:message=>assert.fail(message),
   requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},
@@ -81,7 +82,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
    callback();
   }
  }
- vm.runInNewContext(['scheduleMapAddressWork','deferMapAddressWork','cancelViewportRender','initMap'].map(declaration).join('\n'),c);
+ vm.runInNewContext(['scheduleMapAddressWork','deferMapAddressWork','cancelViewportRender','releaseMapHandlers','initMap'].map(declaration).join('\n'),c);
  assert(await c.initMap());
  events.get('idle')();
  events.get('dragstart')();
@@ -107,8 +108,14 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
  flushFrames();
  assert.equal(renders.length,1);
  events.get('idle')();
+ const oldGestures=gestures;
+ events.get('dragstart')();
+ events.get('zoom_start')();
+ events.get('click')();
  flushFrames();
  assert.equal(renders.length,1);
+ assert.equal(gestures,oldGestures);
+ assert.equal(clears,0);
 });
 
 test('search address normalization preserves building numbers and province aliases',()=>{

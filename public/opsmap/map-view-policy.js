@@ -240,7 +240,7 @@
       return Number.isFinite(p?.x) && Number.isFinite(p?.y) && p.x >= -margin && p.y >= -margin && p.x <= viewport.width + margin && p.y <= viewport.height + margin;
     };
     const nearbyOnly=options.nearbyVehicleOnly===true;
-    const cachePrefix=options.sourceVersion===undefined?null:JSON.stringify([options.sourceVersion,mode,band,nearbyOnly,[...protectedCodes].sort()]);
+    const cachePrefix=options.sourceVersion===undefined?null:JSON.stringify([options.sourceVersion,mode,nearbyOnly,[...protectedCodes].sort()]);
     // Cache geographic levels, never the viewport's chosen level. Reusing a
     // nationwide result at close zoom would keep distant stores over-grouped.
     const atLevel=(key,build)=>{
@@ -278,23 +278,29 @@
       return {territory,routes:new Set(territory.map(item=>item.route)).size};
     });
     const baseCell = [80, 700, 3500, 18000, 120000][band];
-    let visibleRows=[];
+    let visibleGroups=[];
     // Bucket in world metres, not screen pixels: pan and small zoom changes do
     // not move a group's anchor or alter membership at the same level.
     // The marker limit belongs to the viewport, not all nationwide stores.
     for (let pass = 0; pass < 26; pass++) {
-      const grouped=atLevel(pass,()=>{
+      const grouped=atLevel(band+':'+pass,()=>{
         const buckets = new Map(),cell = baseCell * (2 ** pass);
         for (const {row,point,route} of territory) {
           const key=`${mode}:${band}:${pass}:${route}:${Math.floor(point.x/cell)}:${Math.floor(point.y/cell)}`;
           let group=buckets.get(key);if(!group){group=makeGroup(key,route);buckets.set(key,group);}addRow(group,row,point);
         }
-        return mergeNearby(buckets,cell).map(group=>clusterRow(group,mode,band));
+        return mergeNearby(buckets,cell).map(group=>({
+          group,
+          // Compute display metadata only for the geographic pass we actually show.
+          anchor:group.rows.length===1?group.rows[0]:group.south===group.north&&group.west===group.east
+            ?{lat:group.south,lng:group.west}:{lat:group.lat/group.rows.length,lng:group.lng/group.rows.length},
+          marker:null
+        }));
       });
-      visibleRows=[...pinned,...grouped].filter(visible);
-      if(visibleRows.length-pinned.length<=available||nearbyOnly&&grouped.length===routes)break;
+      visibleGroups=grouped.filter(item=>visible(item.anchor));
+      if(visibleGroups.length<=available||nearbyOnly&&grouped.length===routes)break;
     }
-    return mergeDisplayed(visibleRows);
+    return mergeDisplayed([...pinned,...visibleGroups.map(item=>item.marker??=clusterRow(item.group,mode,band))]);
   }
   const cameraRect = rect => {
     const left=Number(rect?.left),top=Number(rect?.top),right=Number(rect?.right??left+Number(rect?.width)),bottom=Number(rect?.bottom??top+Number(rect?.height));

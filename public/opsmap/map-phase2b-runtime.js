@@ -7,7 +7,7 @@
   let SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
   const DEFAULT_PERIOD_CENTER = window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com'?'':'osan';
   const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", centerFilter: DEFAULT_PERIOD_CENTER, selectedDate: "", latestDate: "", map: null, overlays: [], lines: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
-  let mapInitializing=null,mapObserver=null,mapHandlers=[],mapCamera=null,cameraSelection=0;
+  let mapInitializing=null,mapObserver=null,mapHandlers=[],mapGestureEvents=null,mapCamera=null,cameraSelection=0;
   const selectedMapPins=new Set(),mapMarkerRows=new WeakMap();
   let activeMapPinKey='';
   const temporaryPins=new Map();
@@ -1505,6 +1505,14 @@
     return String(a).localeCompare(String(b), "ko", { numeric: true });
   }
 
+  function releaseMapHandlers() {
+    mapGestureEvents?.abort();mapGestureEvents=null;
+    mapObserver?.disconnect();mapObserver=null;
+    if(resizeFrame!==null){cancelAnimationFrame(resizeFrame);resizeFrame=null;}
+    for(const [owner,name,fn] of mapHandlers)window.kakao?.maps?.event?.removeListener?.(owner,name,fn);
+    mapHandlers=[];
+  }
+
   function initMap() {
     if(state.map){mapCamera?.scheduleRelayout();return Promise.resolve(state.map);}
     if(mapInitializing)return mapInitializing;
@@ -1515,11 +1523,15 @@
       $('#map').dataset.sdkState='ready';
       performance.mark('opsmap-sdk-ready');
       mapCamera=window.MapViewPolicy?.createCamera({map:state.map,element:$('#map')});
-      const userGesture=()=>{mapCamera?.userGesture();state.userMovedMap=true;state.fitRequested=false;};
-      for(const type of ['wheel','pointerdown','touchstart'])$('#map').addEventListener(type,userGesture,{passive:true});
-      if(window.KakaoMapsAdapter?.geocoder)window.kakaoGeocoder=window.KakaoMapsAdapter.geocoder();
       const owner=state.map;
-      const listen=(name,fn)=>{kakao.maps.event.addListener(owner,name,fn);mapHandlers.push([name,fn]);};
+      const userGesture=()=>{if(state.map!==owner)return;mapCamera?.userGesture();state.userMovedMap=true;state.fitRequested=false;};
+      mapGestureEvents=new AbortController();
+      for(const type of ['wheel','pointerdown','touchstart'])$('#map').addEventListener(type,userGesture,{passive:true,signal:mapGestureEvents.signal});
+      if(window.KakaoMapsAdapter?.geocoder)window.kakaoGeocoder=window.KakaoMapsAdapter.geocoder();
+      const listen=(name,fn)=>{
+        const guarded=(...args)=>{if(state.map===owner)fn(...args);};
+        kakao.maps.event.addListener(owner,name,guarded);mapHandlers.push([owner,name,guarded]);
+      };
       const startMotion=()=>{if(state.map===owner){mapMoving=true;cancelViewportRender();}};
       listen('dragstart',()=>{startMotion();userGesture();});
       listen('zoom_start',()=>{startMotion();if(Date.now()>=state.suppressMapEventsUntil)userGesture();});
@@ -1542,9 +1554,9 @@
         });
       });
       listen('click',event=>{if(searchTemporaryClick)return searchTemporaryClick(event);clearSelection();});
-      if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{markerLayoutVersion++;if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});for(const node of $$('#map,#leftPanel,#detailSection,#approvedSiteHeader,#mapTopReadout,#mapTopControls,#mobileWorkspace'))mapObserver.observe(node);}
+      if(window.ResizeObserver){mapObserver=new ResizeObserver(()=>{if(state.map!==owner)return;markerLayoutVersion++;if(resizeFrame)return;resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;if(state.map!==owner)return;mapCamera?.scheduleRelayout();scheduleDetailPosition();});});for(const node of $$('#map,#leftPanel,#detailSection,#approvedSiteHeader,#mapTopReadout,#mapTopControls,#mobileWorkspace'))mapObserver.observe(node);}
       loadBaseMap();window.dispatchEvent(new CustomEvent('map-sdk-ready'));return state.map;
-    }).catch(()=>{state.map=null;$('#map').dataset.sdkState='error';setMapMessage('카카오 지도 연결을 확인해 주세요. 매장 검색·목록은 계속 사용할 수 있습니다.');const retry=document.createElement('button');retry.id='retryMapSdk';retry.textContent='지도 다시 연결';retry.onclick=()=>{window.KakaoMapsAdapter.reset();void initMap();};$('#map').append(retry);loadBaseMap();return null;}).finally(()=>{mapInitializing=null;});
+    }).catch(()=>{cancelViewportRender();releaseMapHandlers();mapCamera?.dispose();mapCamera=null;state.map=null;$('#map').dataset.sdkState='error';setMapMessage('카카오 지도 연결을 확인해 주세요. 매장 검색·목록은 계속 사용할 수 있습니다.');const retry=document.createElement('button');retry.id='retryMapSdk';retry.textContent='지도 다시 연결';retry.onclick=()=>{window.KakaoMapsAdapter.reset();void initMap();};$('#map').append(retry);loadBaseMap();return null;}).finally(()=>{mapInitializing=null;});
     return mapInitializing;
   }
 
@@ -1959,6 +1971,7 @@
   function refreshMarkerSelection(overlay,entry) {
     const button=overlay.getContent?.();
     if(!button?.classList)return;
+    if(entry.row)mapMarkerRows.set(button,entry.row);
     const selected=button.classList.contains('selected'),assigned=button.classList.contains('navAssigned');
     if(selected!==entry.selected){
       button.classList.toggle('selected',entry.selected);
@@ -1967,7 +1980,6 @@
     if(assigned!==entry.assigned)button.classList.toggle('navAssigned',entry.assigned);
     if(overlay.getZIndex?.()!==entry.zIndex)overlay.setZIndex?.(entry.zIndex);
     if(entry.row?.representative||entry.row?.overviewRoutes){
-      mapMarkerRows.set(button,entry.row);
       moveMapOverlayButton(button,entry.row.representativeOffset,$('#map'));
     }
   }
@@ -1993,6 +2005,40 @@
     cancelAnimationFrame(markerFrame);markerFrame=null;viewportMetrics.cancelled++;
   }
 
+  let basePinOverlayClass, basePinOverlaySdk;
+  function createBasePinOverlay(options) {
+    const sdk=kakao.maps.AbstractOverlay;
+    if(!options.content.classList.contains('approvedMarker')||typeof sdk!=='function')return new kakao.maps.CustomOverlay(options);
+    if(basePinOverlaySdk!==sdk){
+      basePinOverlaySdk=sdk;
+      basePinOverlayClass=class extends sdk {
+        constructor({content,position,zIndex}){
+          super();
+          this.button=content;this.position=position;this.zIndex=zIndex;
+          this.anchor=document.createElement('div');
+          // The approved button is 44×56 CSS pixels, including its hit target.
+          // Match the SDK's .5/1 anchor without measuring or transforming each wrapper.
+          this.anchor.style.cssText='position:absolute;white-space:nowrap;margin:-56px 0 0 -22px;z-index:'+zIndex;
+          this.anchor.append(content);
+          const prevent=()=>kakao.maps.event.preventMap?.();
+          for(const type of ['click','mousedown','touchstart','MSPointerDown'])this.anchor.addEventListener(type,prevent,{passive:true});
+        }
+        onAdd(){this.getPanels().overlayLayer.append(this.anchor);}
+        draw(){
+          const point=this.getProjection().pointFromCoords(this.position);
+          if(point.x!==this.x){this.x=point.x;this.anchor.style.left=point.x+'px';}
+          if(point.y!==this.y){this.y=point.y;this.anchor.style.top=point.y+'px';}
+        }
+        onRemove(){this.anchor.remove();}
+        getContent(){return this.button;}
+        getPosition(){return this.position;}
+        getZIndex(){return this.zIndex;}
+        setZIndex(value){this.zIndex=value;this.anchor.style.zIndex=String(value);}
+      };
+    }
+    return new basePinOverlayClass(options);
+  }
+
   function renderStops(rows, options = {}) {
     const started = performance.now();
     const dataChanged = indexedRows !== rows;
@@ -2005,7 +2051,7 @@
     if (!options.viewportOnly) { state.lines.forEach(line => line.setMap(null)); state.lines = []; }
     const {valid,byCode}=pointIndex;
     const level=state.map.getLevel(),base=state.mode==='BASE_60D',fit=state.fitRequested;
-    const mapNode=$('#map');mapNode.classList.toggle('mapZoomFar',level>=9);
+    const mapNode=$('#map');
     const mapViewport={width:mapNode.clientWidth,height:mapNode.clientHeight};
     const viewport=fit?null:mapViewport;
     const detailedStores=base&&viewport&&level<=window.MapViewPolicy.storePinLevel;
@@ -2022,6 +2068,7 @@
       mapViewport.width,mapViewport.height,fit,assignmentMode,vehicleOverview,focusedStops,baseVehicleStatus,Boolean(options.numbered),
       selectedCode,state.selected?.lat,state.selected?.lng,state.virtual?.temporaryKey,navCodes]);
     if(options.fromIdle&&!fit&&lastMarkerViewport===viewportKey)return false;
+    mapNode.classList.toggle('mapZoomFar',level>=9);
     const shouldShow=row=>row.virtual||row.nearbyVehicle||protectedCodes.some(code=>markerHasStore(row,code))||
       MapViewPolicy.pinAssignment(row).kind!=='unverified';
     const selectedExtra=base&&selectedCode&&!byCode.has(selectedCode)&&Number.isFinite(state.selected.lat)&&Number.isFinite(state.selected.lng)?state.selected:null;
@@ -2085,14 +2132,15 @@
           return cached.overlay;
         }
       }
-      const overlay = new kakao.maps.CustomOverlay({
+      const config={
         position:markerPosition(row),
         clickable: true,
         content: markerElement(row, options.numbered ? Number(row.order) || '—' : null, row.virtual ? "virtual" : row.nearbyVehicle ? "nearbyVehicle" : row.representative ? "representative" : "store"),
         xAnchor: .5,
         yAnchor: 1,
         zIndex
-      });
+      };
+      const overlay=base&&!row.virtual?createBasePinOverlay(config):new kakao.maps.CustomOverlay(config);
       overlay.setMap(state.map);
       if(row.representative||row.overviewRoutes)refreshMarkerSelection(overlay,entry);
       return overlay;
@@ -4939,7 +4987,11 @@
     setSelectedVehicles(selected);
     refreshVehicleUi(false);
   });
-  window.addEventListener('pagehide',event=>{cancelViewportRender();cancelManualRoadRoute();resetRoadRoute();if(event.persisted)hybridUi?.cancel();else{hybridUi?.dispose();mapObserver?.disconnect();for(const [name,fn]of mapHandlers)kakao?.maps?.event?.removeListener?.(state.map,name,fn);mapHandlers=[];}});window.addEventListener('pageshow',event=>{if(event.persisted)mapCamera?.scheduleRelayout();});
+  window.addEventListener('pagehide',event=>{
+    cancelViewportRender();cancelManualRoadRoute();resetRoadRoute();
+    if(event.persisted)hybridUi?.cancel();else{hybridUi?.dispose();releaseMapHandlers();}
+  });
+  window.addEventListener('pageshow',event=>{if(event.persisted)mapCamera?.scheduleRelayout();});
   if(document.body.dataset.mapStaffState==='authenticated'||!window.MapStaffEntry){
     initMap();
     initializeGeneral();
