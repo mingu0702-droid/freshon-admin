@@ -303,6 +303,25 @@ test('the verified registry includes stores without ledger overrides and records
   assert.equal(values.data[1].baseVehicle,'');
 });
 
+test('a new registry code never inherits a retired code’s assignment',async ()=>{
+  const replacement='S10004', store=memory(), baseline=base();
+  const registry=new Map([[codes[1],{hasPoint:true}],[codes[2],{hasPoint:true}],[replacement,{hasPoint:true}]]);
+  const next=stageFixedMasterScope({...active,registry,generation:sha('verified registry with an explicit retirement')});
+  let tick=start;
+  const run=readMaster=>syncStageFixedMaster({store,receipt:receipt(tick),now:()=>tick,scope:next,readMaster,
+    loadBaseline:reader(baseline).load});
+  await run(async()=>source('122'));
+  const master=createStageDailyFixedMasterReader({store,baseline:reader(baseline)});
+  const cache=createFixedVehicleCache({store:master,now:()=>tick,readOnly:true,reloadReadOnlyAfterMs:300_000});
+  const initial=await cache.get([replacement,codes[0]]);
+  assert.deepEqual(initial.data.map(row=>[row.baseVehicleState,row.baseVehicle]),[['NOT_IN_MASTER',''],['NOT_IN_MASTER','']]);
+  tick+=24*hour;
+  await run(async()=>({...source(),data:projectFixedVehicles(raw('202').map(row=>row.estCd===codes[0]?{...row,estCd:replacement}:row))}));
+  const refreshed=await cache.get([replacement,codes[0]]);
+  assert.deepEqual(refreshed.data.map(row=>[row.baseVehicleState,row.baseVehicle]),[['VERIFIED_MASTER','202'],['NOT_IN_MASTER','']]);
+  assert.equal((await master.readObservation(receipt(start).date,[replacement])).meta.unconfirmedRequestedCount,1);
+});
+
 test('a delayed scan has a bounded lease and completion across midnight still counts once that day',async ()=>{
   const store=memory();
   let tick=Date.parse('2026-11-12T14:50:00Z');
