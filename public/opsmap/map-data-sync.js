@@ -37,7 +37,7 @@
    #approvedSiteHeader{height:auto!important;flex-wrap:wrap!important;row-gap:2px!important;padding-top:8px!important;padding-bottom:5px!important}
    .mapFreshnessStrip{display:block;flex:0 0 100%;order:10;width:100%;min-width:0;max-width:100%;border:0;border-radius:0;background:transparent!important;padding:2px 0 0;text-align:right;color:#68768c;font-size:11px;line-height:1.45;white-space:normal;overflow-wrap:anywhere;font-weight:400}
    .mapFreshnessStrip[data-state="QUERY_FAILED"]{color:#a64a32}.mapFreshnessStrip[data-state="TODAY_STORED"],.mapFreshnessStrip[data-state="PUBLISHED_VERIFIED"]{color:#386c58}
-   #dotDataStatus{display:none!important}
+   #dotDataStatus:not([data-period-notice]){display:none!important}
    @media(min-width:901px){.dotRestored .workspace{height:calc(100dvh - var(--r11-header-height,96px))}}
    @media(max-width:900px){.mapFreshnessStrip{text-align:left;font-size:10px}}
   `;

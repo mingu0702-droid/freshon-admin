@@ -35,6 +35,7 @@
     if(!text){const value=fresh?.textContent||'';text=/실패|오류|취소|부분|없음|준비|대기/.test(value)?value:'기준일 '+((bridge?.state.mode==='DATE_ROUTE'?bridge.state.selectedDate:bridge?.state.rangeEnd)||'확인 중');}
     const host=periodNotice?$('#mapTopReadout'):$('.sidefoot');
     if(host&&status.parentNode!==host)host.prepend(status);
+    status.toggleAttribute('data-period-notice',Boolean(periodNotice));
     if(status.textContent!==text)status.textContent=text;
     status.dataset.state=state||'unknown';
   }
