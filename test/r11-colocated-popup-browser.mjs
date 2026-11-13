@@ -113,7 +113,7 @@ const rows=[
  {customerCode:'S00001',customerName:'합성점',vehicle:'122',baseVehicle:'122',lat:37.5,lng:127},
  {customerCode:'S00002',customerName:'합성점',vehicle:'101',baseVehicle:'101',lat:37.5,lng:127.2},
 ];
-const markup='<!doctype html><html><head><style>*{box-sizing:border-box}body{margin:0;font:13px Arial}#map{position:fixed;inset:60px 0 0;background:#e8eee7}#mapTopControls{position:fixed;top:72px;right:0;width:170px;height:40px;background:white;z-index:75}#detailSection{display:none}#detailSection.open{display:block;position:fixed;right:12px;top:120px;width:min(300px,95%);padding:8px;background:#fff;z-index:80}.pin{display:grid;place-items:center;background:#275dd8}.marker{cursor:pointer}@media(max-width:760px){#detailSection.open{top:auto;bottom:12px}}'+css+'</style></head><body class="approvedShellCandidate"><div id="map"></div><div id="mapTopControls"><button id="mapReset">전체보기</button></div><div id="mobileWorkspace"></div><div id="detailSection"><div id="detail"></div><div id="staffAuxContent"></div></div><div id="vehicleList"><input type="checkbox" value="101"><input type="checkbox" value="122"></div><select id="mobileBaseVehicle"><option value=""></option><option>101</option><option>122</option></select></body></html>';
+const markup='<!doctype html><html><head><style>*{box-sizing:border-box}body{margin:0;font:13px Arial}#map{position:fixed;inset:60px 0 0;background:#e8eee7}#mapTopControls{position:fixed;top:72px;right:0;width:170px;height:40px;background:white;z-index:75}#detailSection{display:none}#detailSection.open{display:block;position:fixed;right:12px;top:120px;width:min(300px,95%);padding:8px;background:#fff;z-index:80}.pin{display:grid;place-items:center;background:#275dd8}.marker{cursor:pointer}@media(max-width:760px){#detailSection.open{top:auto;bottom:12px}}'+css+'</style></head><body class="approvedShellCandidate"><div id="map"></div><div id="mapTopControls"><button id="mapReset">전체보기</button></div><div id="mobileWorkspace"></div><div id="detailSection"><div id="detail"></div><div id="staffAuxContent"></div></div><div id="vehicleList"><input type="checkbox" value="101"><input type="checkbox" value="122"><input type="checkbox" value="보류"></div><select id="mobileBaseVehicle"><option value=""></option><option>101</option><option>122</option><option>보류</option></select></body></html>';
 const browser=await chromium.launch({headless:true,executablePath:process.env.OPSMAP_TEST_CHROMIUM||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
 const checks=[];
 try{
@@ -150,7 +150,13 @@ try{
   result=await stats();
   assert.deepEqual(result.moves,[{type:'jump',level:5,point:{lat:37.5,lng:127},options:{animate:false}}]);
   assertCase('one-point route uses one unanimated zoom',true);
+  await seed([{...rows[0],vehicle:'오산보류',baseVehicle:'보류'}],'route');
+  await click();
+  result=await stats();
+  assertCase('canonical held-status pin selects its stored filter value',result.filter[0]==='보류'&&result.drilledBaseVehicle==='오산보류');
   await seed(rows,'overview',{level:13,filter:'122'});
+  assert.match(await page.locator('[data-fixture-pin="0"]').getAttribute('aria-label'),/이 지역 확대/);
+
   await click();
   result=await stats();
   assertCase('pixel bundle zooms past overview without changing the filter',

@@ -1598,7 +1598,9 @@
     if(row.nearbyVehicle||state.virtual?.searchTemporary){
       showStoreChoices(members,vehicleLabel(vehicle),markerPinKey(row));return;
     }
-    if(!vehicleChecks().some(input=>input.value===vehicle))return;
+    const choices=vehicleChecks().filter(input=>MapViewPolicy.pinAssignment({baseVehicle:input.value}).code===vehicle)
+      .map(input=>input.value);
+    if(!choices.length)return;
     const locations=members.filter(item=>Number.isFinite(item.lat)&&Number.isFinite(item.lng)&&
       Math.abs(item.lat)<=90&&Math.abs(item.lng)<=180);
     if(!locations.length)return;
@@ -1606,7 +1608,7 @@
       clearSelection({preserveSearch:true,fast:true,keepMapPins:true});
     }else closeClusterPanel();
     state.fitRequested=false;drilledBaseVehicle=vehicle;
-    setSelectedVehicles([vehicle],{keepRoadRoute:true});
+    setSelectedVehicles(choices,{keepRoadRoute:true});
     refreshVehicleUi(false);
     if(innerWidth<=760)$('#mobileWorkspace')?.classList.add('collapsed');
     void loadBaseMap();
@@ -1765,7 +1767,7 @@
       button.dataset.overviewVehicles=row.overviewRoutes.map(route=>route.vehicle).join(',');
       button.dataset.pinAssignment='overview';
       button.dataset.pinLabel=String(row.overviewRoutes.length);
-      button.title=row.overviewRoutes.length+'개 호차 · 목록 보기';
+      button.title=row.overviewRoutes.length+'개 호차 · 이 지역 확대';
     }
     button.dataset.masterCheckedAt=row.baseVehicleCheckedAt||'';button.dataset.masterStale=String(row.baseVehicleStale===true);
     button.setAttribute("aria-label", base ? button.title : `${button.title} · ${completed ? "완료" : pending ? "미완료" : "상태 미확인"}`);
@@ -1784,7 +1786,7 @@
       const heading = row.clusterKind === 'location' ? '같은 위치' : '';
       button.title=[heading,summary||assignmentTitle,assignments.length&&row.clusterUnassigned?'호차 정보 없음 포함':'',
         assignments.length&&row.clusterUnverified?'기준호차 확인 필요 포함':'',group+'개 매장'].filter(Boolean).join(' · ');
-      button.setAttribute('aria-label',button.title+' · 목록 보기');
+      button.setAttribute('aria-label',button.title+(row.clusterKind==='location'||state.map?.getLevel()<=1?' · 매장 선택':' · 이 지역 확대'));
     }
     if(kind!=='virtual'&&document.body.classList.contains('approvedShellCandidate')){
       const pin=document.createElement('div');pin.className='pin';
@@ -1927,7 +1929,7 @@
     const viewport=fit?null:mapViewport;
     const detailedStores=base&&viewport&&level<=window.MapViewPolicy.storePinLevel;
     const vehicleOverview=base&&level>=10&&periodBasis==='vehicle'&&
-      (!drilledBaseVehicle||!state.selectedVehicles.includes(drilledBaseVehicle)||Boolean(state.virtual?.searchTemporary));
+      (!drilledBaseVehicle||Boolean(state.virtual?.searchTemporary));
     const focusedStops=!base&&(state.selectedVehicles.length===1||periodBasis==='driver');
     const assignmentMode=base&&periodBasis!=='driver'?'BASE_60D':'DATE_ROUTE';
     const navCodes=window.MapNavigationEditor?.values?.().filter(Boolean)||[];
