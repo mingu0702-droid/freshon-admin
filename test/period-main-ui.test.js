@@ -62,8 +62,12 @@ test('period view has one header, no daily ETA/status; mobile has distinct filte
  assert.match(runtime,/rangeStart: routeMode \? daysBefore\(state.selectedDate, 59\)/);
 });
 
-test('recent sixty days never regresses to a stale coordinate snapshot date',()=>{
- assert.deepEqual(MapPeriodUi.recentRange({ready:true,startDate:'2026-06-22',periodLatest:'2026-09-19'}),{start:'2026-07-22',end:'2026-09-19'});
+test('recent 60 and 90 day presets use the same verified coverage end and reject gaps',()=>{
+ const status={ready:true,completionVerified:true,completedThrough:'2026-09-19',expectedThrough:'2026-09-19',gaps:[]};
+ assert.deepEqual(MapPeriodUi.recentRange(status,60),{start:'2026-07-22',end:'2026-09-19'});
+ assert.deepEqual(MapPeriodUi.recentRange(status,90),{start:'2026-06-22',end:'2026-09-19'});
+ assert.equal(MapPeriodUi.recentRange({...status,gaps:['2026-09-18']},60),null);
+ assert.equal(MapPeriodUi.recentRange({ready:true,startDate:'2026-06-22',periodLatest:'2026-09-19'},60),null);
  assert.ok(!runtime.includes('changePeriod(daysBefore(localDate(),59), localDate())'));
 });
 

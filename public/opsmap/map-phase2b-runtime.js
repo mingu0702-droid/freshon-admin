@@ -79,6 +79,7 @@
   let periodSelectionCache = null;
   let baseVehicles = new Map(), baseVehicleRequest = null, baseVehicleTimer = null, baseVehicleTries = 0;
   let recentPeriodMode = true;
+  let recentPeriodDays = 90;
   let baseVehicleStatus='LOADING';
   let baseVehicleMeta=null;
   const baseVehicleExtraCodes=new Set();
@@ -539,6 +540,7 @@
   async function initializeGeneral() {
     startGeneralSnapshotPolling();
     recentPeriodMode=true;
+    recentPeriodDays=90;
     const id=++initialRequestId;
     ++periodRequestId;++dateRequestId;++state.routeRequestId;++state.todayRequestId;
     clearTimeout(initialTimer);clearTimeout(periodTimer);hybridUi?.closePeriod();hybridUi?.cancel();resetRoadRoute();
@@ -583,36 +585,35 @@
       }));
     }catch(error){if(id!==initialRequestId||isSilentRequestError(error))return;setPeriodViewState('error');renderPeriodStoreList([]);$('#freshnessState').textContent=snapshotFailureLabel();}
   }
-  async function initializePeriod() {
-    generalMap=false;
+  async function initializePeriod(days) {
     recentPeriodMode = true;
+    recentPeriodDays = days;
     const id = ++initialRequestId; clearTimeout(initialTimer);
-    ++periodRequestId; ++dateRequestId; clearTimeout(periodTimer); dateReady = false;
+    ++periodRequestId; ++dateRequestId; clearTimeout(periodTimer);
     switchMode("BASE_60D"); syncModeUi();
-    setPeriodViewState("loading"); renderPeriodStoreList([]);
+    if(!generalMap){dateReady=false;setPeriodViewState("loading");renderPeriodStoreList([]);}
     $("#periodIdentity").textContent = "데이터 확인 중";
     try {
-      const adapter=await hybridUiReady,newStatus=await adapter?.readPeriodStatus();
-      const response = window.MAP_ROLLING_DATE_INDEX_ENABLED===true?newStatus:await fetchJson("/api/map-phase2b/preview/period-status", { channel: "period-status", ttl: 0, timeout: 15000 });
+      const adapter=await hybridUiReady;
+      const response = window.MAP_ROLLING_DATE_INDEX_ENABLED===true?await adapter?.readPeriodStatus():await fetchJson("/api/map-phase2b/preview/period-status", { channel: "period-status", ttl: 0, timeout: 15000 });
       if(!response)throw Error('PERIOD_ADAPTER_UNAVAILABLE');
       if (id !== initialRequestId || state.mode !== "BASE_60D") return;
       modelStatus = response.data || response;
       if (!modelStatus.ready) {
         if (modelStatus.phase === "ERROR") throw new Error("기간 모델 확인 실패");
-        setPeriodViewState("not-ready"); renderPeriodStoreList([]);
-        $("#periodIdentity").textContent = $("#freshnessState").textContent = "기간 데이터를 준비 중입니다";
-        initialTimer = setTimeout(() => { if (id === initialRequestId) initializePeriod(); }, 15000);
+        if(!generalMap){setPeriodViewState("not-ready");renderPeriodStoreList([]);}
+        $("#periodIdentity").textContent = $("#freshnessState").textContent = `최근 ${days}일 이력이 아직 준비되지 않았습니다 · 기존 지도 유지`;
         return;
       }
-      const range = MapPeriodUi.recentRange(modelStatus);
+      const range = MapPeriodUi.recentRange(modelStatus, days);
       if (!range) throw new Error("기간 모델 날짜 확인 실패");
-      await refreshStoreSnapshot();
+      if (!latestSnapshotRows.length) await refreshStoreSnapshot();
       if (id !== initialRequestId || state.mode !== "BASE_60D") return;
       await changePeriod(range.start, range.end);
     } catch (error) {
       if (id !== initialRequestId || isSilentRequestError(error)) return;
-      setPeriodViewState("error"); renderPeriodStoreList([]);
-      $("#periodIdentity").textContent = $("#freshnessState").textContent = "기간 조회에 실패했습니다 · 최근 90일 버튼으로 재시도";
+      if(!generalMap){setPeriodViewState("error");renderPeriodStoreList([]);}
+      $("#periodIdentity").textContent = $("#freshnessState").textContent = `최근 ${days}일 이력을 확인하지 못했습니다 · 기존 지도 유지`;
     }
   }
   async function selectLatestRoute() {
@@ -4619,7 +4620,10 @@
     $("#modePeriod").onclick = () => { if(state.mode==='BASE_60D'&&generalMap&&dateReady)return;void initializeGeneral(); };
     $("#modeDaily").onclick = () => { state.routeDate ? changeSelectedDate(state.routeDate) : selectLatestRoute(); };
     $("#applyPeriod").onclick = () => { if(state.mode!=="BASE_60D")return;recentPeriodMode=false; return changePeriod($("#rangeStart").value, $("#rangeEnd").value); };
-    $("#recent60").onclick = () => {if(state.mode==="BASE_60D")return initializePeriod();};
+    for(const days of [60,90]){
+      const preset=$('#recent'+days);
+      if(preset)preset.onclick=()=>{if(state.mode==='BASE_60D')return initializePeriod(days);};
+    }
     ["#rangeStart", "#rangeEnd"].forEach(id => { $(id).oninput = syncDateHeading; });
     $("#periodDriver").onchange = event => { if(state.mode!=="BASE_60D")return;selectedDriverKeys=[...event.target.selectedOptions].map(option=>option.value).filter(Boolean);state.driverKey=selectedDriverKeys[0]||'';clearSelection();periodListLimit=0;requestMapFit();loadBaseMap(); };
     $$('input[name="periodBasis"]').forEach(input => input.onchange = () => { if(state.mode!=='BASE_60D')return;periodBasis = input.value; syncPeriodBasis(); clearSelection(); periodListLimit = 0; requestMapFit(); loadBaseMap(); });
@@ -4730,7 +4734,6 @@
   const freshnessFields=document.createElement('div');
   freshnessFields.innerHTML='<div id="sourceCollectedAt" role="status">최신 원천 수집일: 미확인</div><div id="mapAppliedRange">현재 지도 반영기간: 미확인</div><div id="packageReadState" role="status"></div>';
   $('#leftPanel .fresh').append(freshnessFields);
-  $('#recent60').textContent='최근 90일';
   $('#newAreaApplyDate').value=localDate();
   $('#leftPanel .head').append($('#mapDateBar'));
   for(const card of [$('#detailSection'),$('#staffAuxContent')])for(const type of ['click','dblclick','pointerdown','wheel','touchstart'])card.addEventListener(type,event=>event.stopPropagation(),{passive:true});
@@ -4739,13 +4742,13 @@
       const latest=await hybridUi?.refreshLatest();
       // Keep a manually chosen historical range pinned. Only the default recent
       // view follows a newly verified rolling publication, including corrections.
-      if(state.mode==='BASE_60D'&&recentPeriodMode){const range=MapPeriodUi.recentRange(latest);if(range)await changePeriod(range.start,range.end);}
+      if(state.mode==='BASE_60D'&&recentPeriodMode){const range=MapPeriodUi.recentRange(latest,recentPeriodDays);if(range)await changePeriod(range.start,range.end);}
       return;
     }
     modelStatus=status;periodMeta=null;baseVehicleTries=0;
     if(generalMap){await pollGeneralSnapshot();return;}
     if(state.mode!=='BASE_60D')return;
-    if(recentPeriodMode){const range=MapPeriodUi.recentRange(status);if(range)await changePeriod(range.start,range.end);}
+    if(recentPeriodMode){const range=MapPeriodUi.recentRange(status,recentPeriodDays);if(range)await changePeriod(range.start,range.end);}
     else await changePeriod(state.rangeStart,state.rangeEnd);
   };
   clearNewAreaBatch();

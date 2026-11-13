@@ -60,10 +60,11 @@
     }
     return [...selected, ...[...buckets.values()].flatMap(group => group.length === 1 ? group : [{ ...group[0], clusterCount: group.length }])];
   }
-  function recentRange(status) {
+  function recentRange(status, days = 90) {
+    if (days !== 60 && days !== 90) return null;
     const end = status?.completedThrough;
     if (!status?.ready || status.completionVerified!==true || end!==status.expectedThrough || !Array.isArray(status.gaps) || status.gaps.length || !/^\d{4}-\d{2}-\d{2}$/.test(end || '') || !Number.isFinite(Date.parse(end+'T00:00:00Z')) || new Date(end+'T00:00:00Z').toISOString().slice(0,10)!==end) return null;
-    return { start: new Date(Date.parse(end + 'T00:00:00Z') - 89 * 86400000).toISOString().slice(0,10), end };
+    return { start: new Date(Date.parse(end + 'T00:00:00Z') - (days - 1) * 86400000).toISOString().slice(0,10), end };
   }
   function spatialIndex(rows) {
     const bins=new Map(), byCode=new Map(), valid=[];
