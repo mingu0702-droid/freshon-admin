@@ -29,6 +29,15 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
   const password = dedicatedAccount ? env.OPSMAP_STAGE_DELIVERY_PHOTO_PASSWORD : env.DELIVERY_ADMIN_PASSWORD;
   const approvedStage = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE;
   const historyDirectory = approvedStage ? env.OPSMAP_PHOTO_HISTORY_DIRECTORY : null;
+  const historyIndex = historyDirectory ? createOpsmapPhotoIndex({directory:historyDirectory, now}) : null;
+  const readIndexedHistory = approvedStage ? async query => {
+    if (!historyIndex) throw new DeliveryPhotoError('PHOTO_HISTORY_NOT_CONFIGURED', 503, {stage:'source-index'});
+    try { return await historyIndex.read(query); }
+    catch (error) {
+      if (error instanceof DeliveryPhotoError) throw error;
+      throw new DeliveryPhotoError('PHOTO_HISTORY_INDEX_UNAVAILABLE', 503, {stage:'source-index'});
+    }
+  } : undefined;
   const account = accountMode && approvedStage && validSecret(id, 256) && validSecret(password, 1024)
     ? createStageDeliveryAdminPhotoSession({id, password, fetchImpl, now}) : null;
   const cookie = accountMode ? '' : String(env.OPSMAP_STAGE_DELIVERY_PHOTO_COOKIE || '').trim();
@@ -58,7 +67,7 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
     hasMemorySession:account?.hasSession ?? (() => cookieConfigured), prepareSession:account?.prepareSession,
     canPrepareSource:() => Boolean(account), prepareHistorySession:Boolean(account), prepareMediaSession:Boolean(account),
     listDeliveryMetadata, imageFetch:fetchImpl,
-    readIndexedHistory:historyDirectory ? createOpsmapPhotoIndex({directory:historyDirectory, now}).read : undefined,
+    readIndexedHistory,
     onSourceVerified:() => {
       if (account) account.markVerified();
       else if (legacyState !== 'AUTH_REQUIRED') legacyState = 'VERIFIED';

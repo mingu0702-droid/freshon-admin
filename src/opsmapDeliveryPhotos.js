@@ -270,7 +270,7 @@ export function createDeliveryPhotoService({ source = null, enabled = false, now
       const rows = await bounded(source.list(identity, { signal }), signal);
       return { customerCode: identity.customerCode, deliveries:publish(rows, identity, sessionKey) };
     },
-    async listHistory(query, sessionKey, {signal} = {}) {
+    async listHistory(query, sessionKey, {signal, observe} = {}) {
       ready();
       if (Object.keys(query).some(key => key !== 'customerCode' && (key !== 'cursor' || !source.readIndexedHistory)) ||
           (query.cursor !== undefined && (typeof query.cursor !== 'string' || !/^[a-f0-9]{64}\.\d{1,8}$/.test(query.cursor)))) {
@@ -279,14 +279,18 @@ export function createDeliveryPhotoService({ source = null, enabled = false, now
       const identity = validatePhotoQuery(query);
       if (!sessionKey) fail('STAFF_LOGIN_REQUIRED', 401);
       if (source.readIndexedHistory) {
-        const {state, scope, items, counts, nextCursor} = await bounded(source.readIndexedHistory({customerCode:identity.customerCode, cursor:query.cursor}), signal);
+        const started = performance.now();
+        let page;
+        try { page = await bounded(source.readIndexedHistory({customerCode:identity.customerCode, cursor:query.cursor}), signal); }
+        finally { observe?.('photo_index', performance.now() - started); }
+        const {state, scope, items, counts, nextCursor} = page;
         prune();
         return {customerCode:identity.customerCode, mode:'INDEXED', state, scope, counts, nextCursor,
           items:items.map(({date, deliveryId, customerCode, photo}) => ({date, deliveryId,
             photo:publishPhoto(photo, {date, deliveryId, customerCode}, sessionKey)}))};
       }
       if (typeof source.listHistory !== 'function') fail('SOURCE_UNAVAILABLE', 503);
-      const history = await bounded(source.listHistory(identity, {signal}), signal);
+      const history = await bounded(source.listHistory(identity, {signal, observe}), signal);
       if (history?.coverage !== 'INCOMPLETE') fail('INVALID_PHOTO_RESPONSE', 502);
       return {customerCode:identity.customerCode, coverage:history.coverage, deliveries:publish(history.deliveries, identity, sessionKey, true)};
     },

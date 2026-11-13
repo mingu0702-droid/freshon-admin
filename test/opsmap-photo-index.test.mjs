@@ -116,6 +116,26 @@ test('paginates more than 48 indexed photos and rejects a stale generation curso
   await assert.rejects(index.read({customerCode:code, cursor:first.nextCursor}), {code:'PHOTO_HISTORY_CHANGED'});
 });
 
+test('a source timeout stops the collection batch and retains previously confirmed photos', async t => {
+  const {index} = await fixture(t);
+  let timeout = false;
+  const collect = createPhotoIndexCollector({index,
+    async readHubCandidates() { return [stub(code, today, '99'), stub(code, today, '98')]; },
+    async readTask(task) {
+      if (timeout) throw new DeliveryPhotoError('PHOTO_TIMEOUT', 504);
+      return result(task, [photo(front, Number(task.deliveryId))]);
+    }
+  });
+  const collectWindow = mode => collect({plan:plan(), from:today, through:today, mode});
+  assert.equal((await collectWindow('initial')).tasksRead, 2);
+  timeout = true;
+  const attempt = await collectWindow('incremental');
+  assert.deepEqual([attempt.tasksRead, attempt.failures, attempt.authFailures], [1,1,0]);
+  const page = await index.read({customerCode:code});
+  assert.equal(page.state, 'FAILED');
+  assert.equal(page.counts[front], 2);
+});
+
 test('actual parser shape keeps types distinct, list never hits upstream, and alias media rechecks old identity', async t => {
   const {index} = await fixture(t);
   const calls = [];
@@ -220,17 +240,19 @@ test('browser lists both indexed types without loading media and keeps list on u
     await page.addScriptTag({path:fileURLToPath(new URL('../public/opsmap/opsmap-delivery-photos.js', import.meta.url))});
     await page.evaluate(async ({code, front, cold, today}) => {
       window.mediaCalls = 0;
+      window.historyFailure = null;
       const photo = (kind, id) => ({id,kind,recordId:'9',url:`/api/map-phase2b/private/delivery-photos/media/${id}`});
       const data = {mode:'INDEXED', customerCode:code, state:'AUTH_REQUIRED', scope:{from:today,through:today,missingDays:1},
         counts:{[front]:1,[cold]:1}, nextCursor:null, items:[{date:today,deliveryId:'10',photo:photo(front,'fakeFront1')},
           {date:today,deliveryId:'10',photo:photo(cold,'fakeCold12')}]};
-      const controller = MapDeliveryPhotos.createController({host:document.querySelector('#photos'), async fetcher(route) {
+      window.controller = MapDeliveryPhotos.createController({host:document.querySelector('#photos'), async fetcher(route) {
         if (route.endsWith('/auth/session')) return Response.json({authenticated:true, expiresAt:Date.now()+60000, idleExpiresAt:Date.now()+60000});
-        if (route.includes('/history?')) return Response.json({ok:true,data});
+        if (route.includes('/history?')) return window.historyFailure
+          ? Response.json({ok:false,error:{code:'PHOTO_TIMEOUT'}}, {status:window.historyFailure}) : Response.json({ok:true,data});
         window.mediaCalls++;
         return Response.json({ok:false,error:{code:'UPSTREAM_AUTH_REQUIRED'}}, {status:502});
       }});
-      await controller.open({customerCode:code, history:true});
+      await window.controller.open({customerCode:code, history:true});
     }, {code,front,cold,today});
     assert.equal(await page.evaluate(() => window.mediaCalls), 0);
     await page.getByRole('button',{name:`${today} · 사진 확대`}).last().click();
@@ -238,5 +260,14 @@ test('browser lists both indexed types without loading media and keeps list on u
     assert.equal(await page.evaluate(() => window.mediaCalls), 1);
     assert.equal(await page.getByRole('heading',{name:'납품 사진 · 1장'}).count(), 1);
     assert.equal(await page.getByRole('heading',{name:'냉장고 문 확인 사진 · 1장'}).count(), 1);
+    await page.getByRole('button',{name:'확대 사진 닫기'}).click();
+    await page.evaluate(() => { window.historyFailure = 504; });
+    await page.getByRole('button',{name:'다시 조회',exact:true}).click();
+    await page.getByText('과거 이력 갱신 실패 · 마지막 확인 목록입니다.').waitFor();
+    assert.equal(await page.getByRole('button',{name:`${today} · 사진 확대`}).count(), 2);
+    await page.evaluate(() => { window.historyFailure = 401; });
+    await page.getByRole('button',{name:'다시 조회',exact:true}).click();
+    await page.getByText('직원 인증이 만료되었습니다.',{exact:false}).waitFor();
+    assert.equal(await page.getByRole('button',{name:`${today} · 사진 확대`}).count(), 0);
   } finally { await browser.close(); }
 });

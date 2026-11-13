@@ -106,7 +106,11 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
       return rows;
     },
     async listHistory(identity, options) {
-      if (prepareHistorySession) await ensureSession(identity, options);
+      if (prepareHistorySession) {
+        const started = performance.now();
+        try { await ensureSession(identity, options); }
+        finally { options.observe?.('photo_session', performance.now() - started); }
+      }
       if (!hasSession()) throw new DeliveryPhotoError('UPSTREAM_AUTH_REQUIRED', 502, {stage:'source-session'});
       const history = await readHistory(identity, options);
       onSourceVerified?.();

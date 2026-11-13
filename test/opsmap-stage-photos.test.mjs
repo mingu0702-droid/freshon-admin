@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import {mkdtemp, rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {createStageOperationalPhotoExtension} from '../src/opsmapStagePhotos.js';
+import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
 
 const api = '/api/map-phase2b/private/delivery-photos';
 const code = 'S990001', date = '2026-11-04', deliveryId = '990001';
@@ -13,11 +17,11 @@ const mediaHost = 'static.chabyulhwa.com';
 const payload = (content, totalElements = content.length) => Response.json({data:{content, totalElements, totalPages:totalElements ? 1 : 0}});
 const staffSession = () => ({key:'first', expiresAt:Date.now() + 60000, idleExpiresAt:Date.now() + 60000});
 
-async function fixture({enabled = true, cookie = true, sourceStatus, mediaStatus, discovery, attachmentRows, statusByPath = {}, mediaNetworkError = false} = {}) {
+async function fixture({enabled = true, cookie = true, sourceStatus, mediaStatus, discovery, attachmentRows, statusByPath = {}, mediaNetworkError = false, stageEnv = {}} = {}) {
   const app = express(), calls = [];
   let staff = true, sourceHttp = sourceStatus;
   const extension = createStageOperationalPhotoExtension({
-    env:{...(enabled ? {} : {OPSMAP_STAGE_DELIVERY_PHOTOS_ENABLED:'0'}), ...(cookie ? {OPSMAP_STAGE_DELIVERY_PHOTO_COOKIE:'fixture=session'} : {})},
+    env:{...(enabled ? {} : {OPSMAP_STAGE_DELIVERY_PHOTOS_ENABLED:'0'}), ...(cookie ? {OPSMAP_STAGE_DELIVERY_PHOTO_COOKIE:'fixture=session'} : {}), ...stageEnv},
     defaultDate:() => date,
     fetchImpl:async (input, options) => {
       const url = new URL(input);
@@ -70,6 +74,35 @@ async function fixture({enabled = true, cookie = true, sourceStatus, mediaStatus
     close:() => new Promise(resolve => server.close(resolve))
   };
 }
+
+test('approved Stage never falls back to legacy history and leaves the dated route available', async t => {
+  const stageEnv = {RENDER_EXTERNAL_URL:STAGE_ORIGIN, RENDER_SERVICE_ID:STAGE_SERVICE};
+  const f = await fixture({stageEnv});
+  t.after(f.close);
+  const history = api + '/history?customerCode=' + code;
+  const result = await f.get(history);
+  assert.equal(result.status, 503);
+  assert.match(result.headers.get('server-timing'), /photo_index;dur=[\d.]+, photo_history;dur=[\d.]+/);
+  assert.deepEqual((await result.json()).error, {code:'PHOTO_HISTORY_NOT_CONFIGURED', stage:'source-index'});
+  assert.equal(f.calls.length, 0);
+  assert.equal((await f.get(exact)).status, 200);
+  assert.equal(f.calls.length, 2);
+
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'opsmap-stage-photo-'));
+  t.after(() => rm(directory, {recursive:true, force:true}));
+  for (const [configured, expectedStatus, expectedState] of [
+    [directory, 200, 'COLLECTING'], [path.join(directory,'missing'), 503, 'PHOTO_HISTORY_INDEX_UNAVAILABLE']
+  ]) {
+    const g = await fixture({stageEnv:{...stageEnv, OPSMAP_PHOTO_HISTORY_DIRECTORY:configured}, cookie:false});
+    t.after(g.close);
+    const response = await g.get(history);
+    assert.equal(response.status, expectedStatus);
+    const body = await response.json();
+    assert.equal(body.data?.state ?? body.error?.code, expectedState);
+    if (expectedStatus === 200) assert.equal(body.data.mode, 'INDEXED');
+    assert.equal(g.calls.length, 0);
+  }
+});
 
 test('Stage scopes task discovery, validates all three categories, and gates session-bound opaque media', async () => {
   const f = await fixture();

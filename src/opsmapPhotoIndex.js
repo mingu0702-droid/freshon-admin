@@ -238,8 +238,8 @@ export function createPhotoIndexCollector({index, readHubCandidates, readTask}) 
           const state = issueOf(error);
           tasks.set(id, {...task, state});
           stats[state === 'AUTH_REQUIRED' ? 'authFailures' : 'failures']++;
-          // Stop on account expiry or rate limiting instead of hitting every task.
-          if (state === 'AUTH_REQUIRED' || error?.status === 429 || error?.code === 'PHOTO_RATE_LIMITED') break;
+          // Leave remaining tasks pending when the source cannot serve the current batch.
+          if (state === 'AUTH_REQUIRED' || [429, 504].includes(error?.status) || ['PHOTO_RATE_LIMITED','PHOTO_TIMEOUT'].includes(error?.code)) break;
         }
       }
       signal?.throwIfAborted();

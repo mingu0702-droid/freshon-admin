@@ -5,7 +5,7 @@ const newestFirst = (a, b) => b.date.localeCompare(a.date)
   || b.deliveryId.length - a.deliveryId.length || b.deliveryId.localeCompare(a.deliveryId);
 
 export function createDeliveryPhotoHistoryReader({searchFrontDoorTasks, listHistoryRecord, now = Date.now}) {
-  return async ({customerCode}, {signal} = {}) => {
+  return async ({customerCode}, {signal, observe} = {}) => {
     // The provider search covers a bounded date range and has no authoritative
     // code-change links. Matching addresses cannot establish a store identity.
     const result = {coverage:'INCOMPLETE', deliveries:[]};
@@ -17,8 +17,10 @@ export function createDeliveryPhotoHistoryReader({searchFrontDoorTasks, listHist
     let issue;
     for (let page = 0; page < MAX_PAGES && !readSignal.aborted; page++) {
       let payload;
+      const started = performance.now();
       try { payload = await searchFrontDoorTasks({customerCode, startDate, endDate:current, page}, {signal:readSignal}); }
       catch (error) { issue = error; break; }
+      finally { observe?.('photo_search', performance.now() - started); }
       const batch = payload?.data ?? payload;
       if (payload?.ok === false || payload?.success === false || payload?.error
         || !Array.isArray(batch?.content) || batch.content.length > PAGE_SIZE) {
@@ -50,9 +52,12 @@ export function createDeliveryPhotoHistoryReader({searchFrontDoorTasks, listHist
         }
       }
     };
+    const started = performance.now();
     await Promise.all([verify(), verify()]);
+    observe?.('photo_details', performance.now() - started);
     if (!checked.length) {
-      if (readSignal.aborted) throw new DeliveryPhotoError('PHOTO_TIMEOUT', 504);
+      if (readSignal.aborted) throw (issue?.code === 'PHOTO_TIMEOUT' || issue?.code === 'UPSTREAM_AUTH_REQUIRED') ? issue :
+        new DeliveryPhotoError('PHOTO_TIMEOUT', 504, {stage:candidates.size ? 'source-task-detail' : 'source-task-search'});
       if (issue) throw issue;
     }
     let remaining = MAX_PHOTOS;

@@ -11,8 +11,8 @@
     'PHOTO_RATE_LIMITED', 'PHOTO_TIMEOUT', 'INVALID_PHOTO_RESPONSE', 'DELIVERY_IDENTITY_MISMATCH',
     'PHOTO_IDENTITY_UNVERIFIED', 'PHOTO_ATTACHMENTS_INVALID', 'PHOTO_ATTACHMENT_LIMIT_EXCEEDED',
     'PHOTO_IMAGES_INVALID', 'PHOTO_IMAGE_LIMIT_EXCEEDED', 'PHOTO_LOGIN_HTTP_ERROR', 'PHOTO_LOGIN_REDIRECT_REJECTED', 'PHOTO_LOGIN_NETWORK_ERROR', 'PHOTO_LOGIN_SESSION_MISSING', 'PHOTO_CONTENT_TYPE_INVALID', 'PHOTO_JSON_INVALID', 'PHOTO_BODY_UNAVAILABLE',
-    'PHOTO_UPSTREAM_UNAVAILABLE', 'PHOTO_MEDIA_AUTH_REQUIRED', 'PHOTO_IMAGE_DECODE_FAILED', 'INVALID_MEDIA_URL', 'PHOTO_JSON_TOO_LARGE', 'INVALID_PHOTO_REQUEST', 'PHOTO_LIMIT_EXCEEDED', 'MEDIA_ORIGIN_REJECTED', 'INVALID_MEDIA_TYPE', 'MEDIA_TOO_LARGE', 'UPSTREAM_REDIRECT_REJECTED', 'PHOTO_HISTORY_CHANGED', 'PHOTO_HISTORY_INDEX_INVALID']);
-  const SAFE_STAGES=new Set(['source-session','source-login','source-http','source-task-search','source-task-detail','source-content-type','source-json','source-identity','source-attachments','source-category','source-media','source-timeout','source-size','staff-session']);
+    'PHOTO_UPSTREAM_UNAVAILABLE', 'PHOTO_MEDIA_AUTH_REQUIRED', 'PHOTO_IMAGE_DECODE_FAILED', 'INVALID_MEDIA_URL', 'PHOTO_JSON_TOO_LARGE', 'INVALID_PHOTO_REQUEST', 'PHOTO_LIMIT_EXCEEDED', 'MEDIA_ORIGIN_REJECTED', 'INVALID_MEDIA_TYPE', 'MEDIA_TOO_LARGE', 'UPSTREAM_REDIRECT_REJECTED', 'PHOTO_HISTORY_CHANGED', 'PHOTO_HISTORY_INDEX_INVALID', 'PHOTO_HISTORY_NOT_CONFIGURED', 'PHOTO_HISTORY_INDEX_UNAVAILABLE']);
+  const SAFE_STAGES=new Set(['source-session','source-login','source-http','source-task-search','source-task-detail','source-content-type','source-json','source-identity','source-attachments','source-category','source-media','source-timeout','source-size','source-index','staff-session']);
   const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
   const safeText = (value, maximum) => typeof value === 'string' && value.length <= maximum;
   const validRecordId = value => typeof value === 'string' && /^\d{1,20}$/.test(value);
@@ -79,6 +79,7 @@
   }
   function createController({ host, fetcher = window.fetch.bind(window), requestTimeoutMs = 15000 } = {}) {
     let generation = 0, requestController, timer, deadline = 0, target = null, deliveries = [], selected = null, photoList = [], viewerController = null, viewerIndex = -1, focusBeforeViewer = null;
+    let indexedPage = null;
     const images = new Map(); // Active thumbnails and the open viewer only.
     const viewer = node('div', undefined, document.body, 'deliveryPhotoViewer'); viewer.hidden = true;
     viewer.setAttribute('role', 'dialog'); viewer.setAttribute('aria-modal', 'true'); viewer.setAttribute('aria-label', '납품 사진 확대 보기');
@@ -107,7 +108,7 @@
       delete host.dataset.failureStage; delete host.dataset.failureHttp; delete host.dataset.failureSourceHttp;
       for (const entry of images.values()) releaseImage(entry);
       images.clear();
-      deliveries = []; selected = null; photoList = []; host.replaceChildren();
+      deliveries = []; selected = null; photoList = []; indexedPage = null; host.replaceChildren();
     }
     function shell(message, state, action) {
       host.replaceChildren(); host.dataset.state = state;
@@ -172,7 +173,9 @@
           throw Object.assign(Error(code || 'REQUEST_FAILED'), { status: response.status, ...detail });
         }
         return await consume(response, timeout.signal);
-      } catch (error) { error.photoStage = photoStage; throw error;
+      } catch (error) {
+        if (timeout.signal.aborted && !signal?.aborted) error = Error('PHOTO_TIMEOUT');
+        error.photoStage = photoStage; throw error;
       } finally { clearTimeout(timeoutId); signal?.removeEventListener('abort', abort); if (response?.body && !response.body.locked) void response.body.cancel().catch(() => {}); }
     }
     async function authorize(id) {
@@ -191,6 +194,12 @@
       host.dataset.failureStage = SAFE_STAGES.has(error.sourceStage) ? error.sourceStage : ['staff-session', 'discovery', 'task', 'image'].includes(error.photoStage) ? error.photoStage : 'ui-response';
       if (Number.isInteger(error.status) && error.status >= 100 && error.status <= 599) host.dataset.failureHttp = String(error.status);
       if ([200,400,401,403,404,409,410,413,422,429,500,502,503,504].includes(error.sourceHttpStatus)) host.dataset.failureSourceHttp=String(error.sourceHttpStatus);
+      if (target?.history && ['PHOTO_HISTORY_NOT_CONFIGURED', 'PHOTO_HISTORY_INDEX_UNAVAILABLE', 'PHOTO_HISTORY_INDEX_INVALID'].includes(error.message)) {
+        const pending = error.message === 'PHOTO_HISTORY_NOT_CONFIGURED';
+        shell(pending ? '과거 사진 인덱스 연결 대기' : '과거 사진 인덱스 조회 실패', pending ? 'unverified' : 'error',
+          {label:'다시 조회', run:() => current === generation && target && open(target)});
+        dateSearch(); return;
+      }
       if (error.message === 'UPSTREAM_AUTH_REQUIRED') { shell('Delivery Admin 인증 연결이 필요합니다. 직원 로그인은 유지됩니다.', 'upstream-auth-required'); return; }
       if (error.message === 'PHOTO_SOURCE_DISABLED') { shell('납품 사진 연결이 비활성 상태입니다.', 'source-disabled'); return; }
       if (error.message === 'PHOTO_UPSTREAM_UNAVAILABLE') {
@@ -317,11 +326,13 @@
         }
       }
     }
-    function renderIndexedHistory({scope, counts, state, nextCursor, items}) {
+    function renderIndexedHistory({scope, counts, state, nextCursor, items}, failedRefresh = false) {
       const total = INDEX_KINDS.reduce((sum, kind) => sum + counts[kind], 0);
       const statuses = {COMPLETE: total ? '과거 사진 이력 확인 완료' : '사진 없음',
         COLLECTING:'과거 이력 확인 중', FAILED:'과거 이력 조회 실패', AUTH_REQUIRED:'과거 이력 조회 실패 · Delivery Admin 인증 필요'};
-      shell(statuses[state], state === 'COMPLETE' ? total ? 'ready' : 'empty' : state.toLowerCase());
+      shell(failedRefresh ? '과거 이력 갱신 실패 · 마지막 확인 목록입니다.' : statuses[state],
+        failedRefresh ? 'stale' : state === 'COMPLETE' ? total ? 'ready' : 'empty' : state.toLowerCase(),
+        failedRefresh || state !== 'COMPLETE' ? {label:'다시 조회', run:() => open(target)} : null);
       if (scope) node('p', `${scope.from} ~ ${scope.through} · 미확인 ${scope.missingDays}일`, host);
       dateSearch();
       photoList = items;
@@ -412,20 +423,29 @@
       } catch (error) { if (!requestController?.signal.aborted) failure(error, id); }
     }
     async function open(value) {
+      const retained = value.history === true && value.customerCode === target?.customerCode && deadline > Date.now()
+        && indexedPage?.items.length ? {page:indexedPage, target} : null;
       purge(); target = { customerCode: String(value.customerCode || ''), ...(value.history === true
         ? {history:true, ...(value.cursor ? {cursor:value.cursor} : {})} : validDate(value.date) ? {date:value.date} : {}) };
       if (!target.customerCode || target.customerCode.length > 128) { shell('사진 미확인 · 고객코드가 필요합니다.', 'unverified'); return; }
       const id = generation; requestController = new AbortController(); shell('배송 기록 확인 중…', 'loading');
+      let authorized = false;
       try {
-        if (!await authorize(id)) return;
+        authorized = await authorize(id);
+        if (!authorized) return;
         if (target.history) {
           const params = new URLSearchParams({customerCode:target.customerCode, ...(target.cursor ? {cursor:target.cursor} : {})});
           const payload = await request(API + '/history?' + params);
           if (!alive(id)) return;
           if (payload?.data?.mode === 'INDEXED') {
-            const indexed = normalizeIndexedHistory(payload, target);
+            const page = normalizeIndexedHistory(payload, target);
+            if (retained && page.state !== 'COMPLETE' && !page.items.length) {
+              target = retained.target; indexedPage = retained.page;
+              renderIndexedHistory({...indexedPage, state:page.state}, true); return;
+            }
+            indexedPage = page;
             target.indexed = true;
-            renderIndexedHistory(indexed);
+            renderIndexedHistory(indexedPage);
           } else renderHistory(normalize(payload, target));
           return;
         }
@@ -437,7 +457,14 @@
         await selectDelivery(selectedDelivery);
       } catch (error) {
         if (id !== generation || requestController?.signal.aborted) return;
-        if (error.message === 'PHOTO_HISTORY_CHANGED' && target.cursor) return open({customerCode:target.customerCode, history:true});
+        if (error.message === 'PHOTO_HISTORY_CHANGED' && target.cursor) {
+          if (retained) { target = retained.target; indexedPage = retained.page; }
+          return open({customerCode:target.customerCode, history:true});
+        }
+        if (retained && authorized && alive(id) && error.status !== 401 && error.status !== 403 && error.message !== 'PHOTO_SOURCE_DISABLED') {
+          target = retained.target; indexedPage = retained.page;
+          renderIndexedHistory(indexedPage, true); return;
+        }
         failure(error, id);
       }
     }

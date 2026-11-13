@@ -89,12 +89,15 @@ export function createDeliveryAdminPhotoTransport({ approvedRequest, hasApproved
     if (signal?.aborted) controller.abort();
     const timer = setTimeout(abort, timeoutMs); timer.unref?.();
     try {
-      if (controller.signal.aborted) fail('PHOTO_TIMEOUT', 504);
+      if (controller.signal.aborted) fail('PHOTO_TIMEOUT', 504, {stage});
       check();
       return await action(controller.signal);
     } catch (error) {
-      if (error instanceof DeliveryPhotoError) throw error;
-      if (controller.signal.aborted || error?.name === 'AbortError') fail('PHOTO_TIMEOUT', 504);
+      if (error instanceof DeliveryPhotoError) {
+        if (error.code === 'PHOTO_TIMEOUT' && !error.stage) fail('PHOTO_TIMEOUT', 504, {stage});
+        throw error;
+      }
+      if (controller.signal.aborted || error?.name === 'AbortError') fail('PHOTO_TIMEOUT', 504, {stage});
       // Preserve only a safe status from approved requesters, never their text,
       // headers, payloads, URLs or signed media details.
       if (safeHttp(error?.status)) throw deliveryPhotoUpstreamError(error.status, stage);
