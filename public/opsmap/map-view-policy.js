@@ -170,18 +170,18 @@
       x>=-margin&&x<=width+margin&&y>=-margin&&y<=height+margin;
     const preferred=rows.flatMap(row=>{
       const center=project(row);
-      if(inside(center,0))return [{row,point:center}];
+      if(inside(center,0))return [{row,point:center,priority:center.y>height*0.82?1:0}];
       let anchor=null, nearest=Infinity;
       for(const store of visibleStores?.get(row.vehicle)||[]){
         const point=project(store);
         if(!inside(point,0))continue;
         const distance=(point.x-width/2)**2+(point.y-height/2)**2;
-        if(distance<nearest){anchor={row:{...row,lat:store.lat,lng:store.lng},point};nearest=distance;}
+        if(distance<nearest){anchor={row:{...row,lat:store.lat,lng:store.lng,representativeUsesVisibleStore:true},point};nearest=distance;}
       }
-      return anchor?[anchor]:inside(center,36)?[{row,point:center}]:[];
+      return anchor?[{...anchor,priority:2}]:inside(center,36)?[{row,point:center,priority:0}]:[];
     });
     if(!visibleStores)return preferred.map(({row})=>row);
-    const placed=placeOverlayLabels(preferred.map(({point},id)=>({id,left:point.x-22,top:point.y-56,width:44,height:56})),
+    const placed=placeOverlayLabels(preferred.map(({point,priority},id)=>({id,left:point.x-28,top:point.y-56,width:56,height:56,priority})),
       {left:0,top:0,right:width,bottom:height},[],{retainWhenCrowded:true});
     const byId=new Map(placed.map(offset=>[offset.id,offset]));
     return preferred.map(({row},id)=>{
@@ -285,18 +285,31 @@
     return area?{...area,x:(area.left+area.right)/2,y:(area.top+area.bottom)/2,basis:'UNOBSCURED_MAP'}:null;
   }
   function placeOverlayLabels(badges, bounds, obstacles,{retainWhenCrowded=false,maxColumns=2,maxRows=3}={}) {
-    const gap=4, occupied=obstacles.slice(), placed=[];
+    const gap=4, cell=64, occupied=new Map(), placed=[];
     const intersects=(a,b)=>a.left<b.right+gap&&a.right+gap>b.left&&a.top<b.bottom+gap&&a.bottom+gap>b.top;
-    for(const badge of badges){
+    const visitCells=(box,visit)=>{
+      const x0=Math.floor((box.left-gap)/cell),x1=Math.floor((box.right+gap)/cell);
+      const y0=Math.floor((box.top-gap)/cell),y1=Math.floor((box.bottom+gap)/cell);
+      for(let x=x0;x<=x1;x++)for(let y=y0;y<=y1;y++)if(visit(`${x}:${y}`))return true;
+      return false;
+    };
+    const occupy=box=>visitCells(box,key=>{
+      if(!occupied.has(key))occupied.set(key,[]);
+      occupied.get(key).push(box);
+    });
+    obstacles.forEach(occupy);
+    const ordered=badges.some(badge=>badge.priority)
+      ?[...badges].sort((a,b)=>(b.priority||0)-(a.priority||0)):badges;
+    for(const badge of ordered){
       const {id,left,top,width,height}=badge;
       if(left+width<bounds.left||left>bounds.right||top+height<bounds.top||top>bounds.bottom)continue;
       const fits=box=>box.left>=bounds.left&&box.top>=bounds.top&&box.right<=bounds.right&&box.bottom<=bounds.bottom&&
-        !occupied.some(other=>intersects(box,other));
+        !visitCells(box,key=>occupied.get(key)?.some(other=>intersects(box,other)));
       const baseX=Math.max(bounds.left,Math.min(left,bounds.right-width))-left;
       const baseY=Math.max(bounds.top,Math.min(top,bounds.bottom-height))-top;
       const boxAt=(x,y)=>({left:left+x,top:top+y,right:left+x+width,bottom:top+y+height});
       const original=boxAt(baseX,baseY);
-      if(fits(original)){occupied.push(original);placed.push({id,x:baseX,y:baseY});continue;}
+      if(fits(original)){occupy(original);placed.push({id,x:baseX,y:baseY});continue;}
       const offsets=[];
       for(let row=-maxRows;row<=maxRows;row++)for(let column=-maxColumns;column<=maxColumns;column++){
         const x=baseX+column*(width+gap),y=baseY+row*(height+gap);
@@ -305,11 +318,11 @@
       offsets.sort((a,b)=>a.dist-b.dist||a.y-b.y||a.x-b.x);
       const position=offsets.map(({x,y})=>boxAt(x,y)).find(fits);
       if(!position){
-        if(retainWhenCrowded){occupied.push({left,top,right:left+width,bottom:top+height});placed.push({id,x:0,y:0});}
+        if(retainWhenCrowded){occupy(boxAt(0,0));placed.push({id,x:0,y:0});}
         else placed.push({id,hidden:true});
         continue;
       }
-      occupied.push(position);placed.push({id,x:position.left-left,y:position.top-top});
+      occupy(position);placed.push({id,x:position.left-left,y:position.top-top});
     }
     return placed;
   }

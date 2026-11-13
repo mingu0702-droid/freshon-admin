@@ -1712,7 +1712,7 @@
   }
 
   function markerLayer(row,selected,assigned){
-    return selected?40:assigned?25:row.virtual?15:row.clusterCount?3:5;
+    return selected?40:assigned?25:row.virtual?15:row.representativeUsesVisibleStore?6:row.clusterCount?3:5;
   }
 
   function refreshMapPinSelection(){
@@ -3278,12 +3278,15 @@
       const content=overlay.getContent?.();
       if(!content?.dataset.representativeVehicle)return [];
       const position=projection.containerPointFromCoords(overlay.getPosition());
-      return [{content,left:left+position.x-22,top:top+position.y-56,width:44,height:56}];
+      return [{content,left:left+position.x-28,top:top+position.y-56,width:56,height:56,
+        prioritize:mapMarkerRows.get(content)?.representativeUsesVisibleStore}];
     });
     const offsets=new Map(MapViewPolicy.placeOverlayLabels(representatives.map((badge,id)=>({...badge,id})),bounds,obstacles,
-      {retainWhenCrowded:true}).map(value=>[value.id,value]));
+      {retainWhenCrowded:true,maxColumns:3,maxRows:4}).map(value=>[value.id,value]));
     representatives.forEach(({content},id)=>{
-      moveMapOverlayButton(content,offsets.get(id),map);
+      const fallback=mapMarkerRows.get(content)?.representativeOffset;
+      const offset=offsets.get(id);
+      moveMapOverlayButton(content,offset&&(offset.x||offset.y)?offset:fallback,map);
     });
   }
 
