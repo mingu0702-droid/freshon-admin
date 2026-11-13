@@ -371,7 +371,7 @@
     const rect=node=>node?.getClientRects?.().length&&!node.hidden&&win.getComputedStyle?.(node).visibility!=='hidden'?node.getBoundingClientRect():null;
     const pin=measurePin&&(rect(doc?.querySelector('#map .marker.selected'))||rect(doc?.querySelector('#map .marker')));
     return {mapRect:element?.getBoundingClientRect?.(),viewportRect,headerRect:rect(doc?.querySelector('#approvedSiteHeader')),
-      occluders:[...(doc?.querySelectorAll('#leftPanel,#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#mapTopControls,#mapRouteTotals:not([hidden]),#mapReset:not(#mapTopControls *),.mobileMapControls')||[])].map(rect).filter(Boolean),
+      occluders:[...(doc?.querySelectorAll('#leftPanel,#detailSection.open,#mobileWorkspace:not(.collapsed),#manualPinEditor:not([hidden]),#mapTopControls,#mapTopReadout>#dotDataStatus,#mapRouteTotals:not([hidden]),#mapReset:not(#mapTopControls *),.mobileMapControls')||[])].map(rect).filter(Boolean),
       anchorHeight:pin?.height||0,
       anchorWidth:pin?.width||0,
       mobile:win.matchMedia?.('(max-width: 760px)')?.matches??Number(viewportRect.width)<=760};

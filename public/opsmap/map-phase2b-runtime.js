@@ -1958,7 +1958,7 @@
       return {left:x-28,top:y-56,right:x+28,bottom:y+4};
     });
     const overlays=mapNode.querySelectorAll('.marker.virtual,.searchTemporaryRemove,.navRoutePoint,.osanCenterMarker');
-    for(const node of [...overlays,...$$('#mapTopControls,#mapRouteTotals:not([hidden]),#mapReset:not(#mapTopControls *),#detailSection.open,#mobileWorkspace:not(.collapsed),.mobileMapControls')]){
+    for(const node of [...overlays,...$$('#mapTopControls,#mapTopReadout>#dotDataStatus,#mapRouteTotals:not([hidden]),#mapReset:not(#mapTopControls *),#detailSection.open,#mobileWorkspace:not(.collapsed),.mobileMapControls')]){
       const rect=node.getBoundingClientRect();
       if(rect.width&&rect.height&&rect.left<mapRect.right&&rect.right>mapRect.left&&rect.top<mapRect.bottom&&rect.bottom>mapRect.top){
         bounds.push({left:rect.left-mapRect.left,top:rect.top-mapRect.top,right:rect.right-mapRect.left,bottom:rect.bottom-mapRect.top});

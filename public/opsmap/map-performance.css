@@ -43,6 +43,10 @@
 .approvedShellCandidate .sidefoot { box-shadow:0 -2px 8px #172b4304; }
 .approvedShellCandidate #dotDataStatus { color:#718096; line-height:1.5; }
 .approvedShellCandidate #dotDataStatus:empty { display:none; }
+.approvedShellCandidate #mapTopReadout>#dotDataStatus {
+  max-width:100%; margin:0; padding:7px 9px; border:1px solid var(--line); border-radius:7px;
+  background:var(--panel,#fff); color:#39495f; font-size:12px;
+}
 .approvedShellCandidate #sourceBatch { min-height:36px; font-size:12px; margin-top:7px; }
 .approvedShellCandidate #sourceFooterLinks { gap:4px; }
 .approvedShellCandidate #sourceFooterLinks>button { padding:7px 4px; }

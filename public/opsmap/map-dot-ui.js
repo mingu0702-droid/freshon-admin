@@ -29,8 +29,12 @@
     const review=window.LOCAL_REVIEW_CONFIG;
     if(review?.currentStoredReview&&/^\d{4}-\d{2}-\d{2}$/.test(review.date)&&!['error','preparing','logged-out'].includes(state))text='자료 기준 '+review.date+' · 전체 기간 자료 아님';
     const bridge=window.MapUiLocalBridge;
-    if(bridge?.state.mode==='BASE_60D'&&fresh?.dataset.periodNotice==='true'&&!['error','logged-out'].includes(state)&&document.body.dataset.mapStaffState==='authenticated')text=fresh.textContent;
+    const periodNotice=bridge?.state.mode==='BASE_60D'&&fresh?.dataset.periodNotice==='true'&&
+      !['error','logged-out'].includes(state)&&document.body.dataset.mapStaffState==='authenticated';
+    if(periodNotice)text=fresh.textContent;
     if(!text){const value=fresh?.textContent||'';text=/실패|오류|취소|부분|없음|준비|대기/.test(value)?value:'기준일 '+((bridge?.state.mode==='DATE_ROUTE'?bridge.state.selectedDate:bridge?.state.rangeEnd)||'확인 중');}
+    const host=periodNotice?$('#mapTopReadout'):$('.sidefoot');
+    if(host&&status.parentNode!==host)host.prepend(status);
     if(status.textContent!==text)status.textContent=text;
     status.dataset.state=state||'unknown';
   }
