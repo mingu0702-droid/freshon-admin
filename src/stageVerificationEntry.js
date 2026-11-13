@@ -25,6 +25,7 @@ import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
 import {createCoverageStatusReader} from './shadowCoverage/storeStatus.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
+import {createStageDriverContacts} from './stageDriverContacts.js';
 import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,vehicleId} from './datedDeliveryContract.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
 import {createOfficialAddressLookup,createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
@@ -121,8 +122,10 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     fetchImpl:stageGithub(fetchImpl,{files:[roadBudgetFile],branch:pinsBranch,writable:roadBudgetFile})
   }) : null;
   const roadEnabled = stageRoadApproved && env.OPSMAP_STAGE_ROAD_ROUTE_ENABLED === '1';
+  const driverContacts = createStageDriverContacts({env,fetchImpl,now});
   const stage = {...env, OPSMAP_STAGE_VERIFY_ONLY:'1', MAP_STAFF_ORIGIN:stageOrigin, OPSMAP_MANUAL_PIN_WRITES:'0',
     OPSMAP_MANUAL_PIN_STORE_FILE:undefined, OPSMAP_MANUAL_PIN_SEARCH_CACHE_FILE:undefined, OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',
+    OPSMAP_DRIVER_CONTACT_ENABLED:driverContacts.configured?'1':'0',
     OPSMAP_KAKAO_GEOCODING_ENABLED:stageAddressApproved ? env.OPSMAP_KAKAO_GEOCODING_ENABLED : '0',
     OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:stageAddressApproved ? env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED : '0',
     OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED:stageAddressApproved && env.OPSMAP_STAGE_KAKAO_PLACE_APPROVED === '1'
@@ -406,6 +409,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       const {requireStaff,requireStageRead,isSessionCurrent}=binding;
       staffView = requireStaff;
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
+        driverContacts.mount(binding,{readBaseVehicles:codes=>base.get(codes),
+          readDatedAssignment:readDatedDelivery.readDriverAssignment});
         mountStageAbValidation(router,{...binding,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,readBaseVehicles:codes=>base.get(codes)});
         if (dailyMaster) router.get('/api/map-phase2b/private/fixed-master-observation',requireStaff,async(req,res)=>{
           const {date,customerCodes}=req.query;
