@@ -185,7 +185,7 @@
   }
   function baseVehicleLabel(row) {
     if(row.baseVehicleState==='CONFLICT')return '기준 충돌';
-    if(row.baseVehicleState==='NOT_IN_MASTER')return '마스터 미등록';
+    if(row.baseVehicleState==='NOT_IN_MASTER')return row.baseVehicleStale===true?'기준호차 확인 필요':'고정배차표에 없음';
     if(row.baseVehicleState==='UNASSIGNED')return row.baseVehicleEmptyVerified===true?'미지정':'확인 필요';
     const route=root.MapViewPolicy?.pinAssignment({baseVehicle:row.baseVehicle,baseVehicleState:row.baseVehicleState}).code??row.baseVehicle;
     return /^\d+$/.test(route||'')?route+'호':route==='보류'?'오산보류':route||'확인 필요';

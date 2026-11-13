@@ -19,7 +19,7 @@
     return regionColors[row.addressRegion] ? row.addressRegion : '';
   }
   const unverified = Object.freeze({code:'',label:'•',kind:'unverified'});
-  const pending = Object.freeze({code:'',label:'…',kind:'unverified'});
+  const pending = Object.freeze({code:'',label:'',kind:'unverified',loading:true});
   const unknown = Object.freeze({code:'',label:'?',kind:'unknown'});
   const datedUnknown = Object.freeze({code:'',label:'•',kind:'unverified'});
   const absence = /^(?:|[-?]|미확인|호차미확인|미지정|없음)$/;

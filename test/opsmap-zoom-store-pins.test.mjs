@@ -76,11 +76,13 @@ test('pins distinguish the primary fixed route, confirmed blank, and missing evi
   assert.equal(pinAssignment(blank).label,'•');
   assert.equal(pinAssignment({...blank,baseVehicleEmptyVerified:true}).label,'?');
   assert.equal(pinAssignment({...blank,baseVehicleState:'UNKNOWN',baseVehicleVersion:'v'}).label,'•');
-  assert.equal(pinAssignment({...blank,baseVehicleState:'UNKNOWN'}).label,'…');
+  assert.deepEqual(pinAssignment({...blank,baseVehicleState:'UNKNOWN'}),{code:'',label:'',kind:'unverified',loading:true});
   assert.equal(pinAssignment({...row,baseVehicleState:'CONFLICT'}).label,'•');
   assert.equal(MapPeriodUi.baseVehicleLabel(blank),'확인 필요');
   assert.equal(MapPeriodUi.baseVehicleLabel({...blank,baseVehicleEmptyVerified:true}),'미지정');
   assert.equal(MapPeriodUi.baseVehicleLabel({...row,baseVehicle:'보류'}),'오산보류');
+  assert.equal(MapPeriodUi.baseVehicleLabel({baseVehicleState:'NOT_IN_MASTER'}),'고정배차표에 없음');
+  assert.equal(MapPeriodUi.baseVehicleLabel({baseVehicleState:'NOT_IN_MASTER',baseVehicleStale:true}),'기준호차 확인 필요');
   const same=(code,assignment)=>({customerCode:code,lat:37.5,lng:127,...assignment});
   const [group]=exactLocations([same('S1',{...row,baseVehicle:'보류'}),same('S2',{...row,baseVehicle:'오산보류'})]);
   assert.equal(pinAssignment(group).label,'오산보류');
@@ -90,6 +92,44 @@ test('pins distinguish the primary fixed route, confirmed blank, and missing evi
   const [uncertain]=exactLocations([same('S1',blank),same('S2',{...blank,baseVehicleEmptyVerified:true})]);
   assert.equal(pinAssignment(uncertain).label,'•');
   assert.deepEqual(uncertain.memberCodes,['S1','S2']);
+});
+
+test('initial map pins use counts for groups and retain the loading message outside the pin label', () => {
+  class Element {
+    dataset = {};
+    children = [];
+    classList = { add() {} };
+    style = { setProperty() {} };
+    textContent = '';
+    attributes = {};
+    setAttribute(name, value) { this.attributes[name] = value; }
+    append(child) { this.children.push(child); }
+  }
+  const start = runtime.indexOf('  function markerElement(');
+  const end = runtime.indexOf('  function representativeRows(', start);
+  const state = { mode:'BASE_60D' };
+  const context = {
+    window:{ MapViewPolicy }, document:{ createElement:()=>new Element(), body:{ classList:{ contains:()=>true } } },
+    state, periodBasis:'vehicle', baseVehicleStatus:'LOADING', vehicleLabel:value=>value+'호', vehicleColor:()=>'',
+    markerIsSelected:()=>false, bindMapMarkerSelection:()=>{}
+  };
+  const makeMarker = vm.runInNewContext(runtime.slice(start,end)+'\nmarkerElement',context);
+  const pending = { customerCode:'S10001', customerName:'매장', baseVehicleState:'UNKNOWN' };
+  const label = marker=>marker.children[0].children[0].textContent;
+  const store = makeMarker(pending,null,'store');
+  assert.equal(label(store),'');
+  assert.match(store.attributes['aria-label'],/기준호차 조회 중/);
+  const group = makeMarker({...pending,customerCode:'',clusterCount:9,
+    clusterAssignment:{code:'',kind:'unverified',label:''}},null,'store');
+  assert.equal(label(group),'9');
+  assert.match(group.attributes['aria-label'],/9개 매장/);
+  context.baseVehicleStatus='ERROR';
+  const failed = makeMarker(pending,null,'store');
+  assert.equal(label(failed),'');
+  assert.match(failed.attributes['aria-label'],/기준호차 확인 필요/);
+  assert.equal(label(makeMarker({...pending,baseVehicle:'156',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'156');
+  assert.equal(label(makeMarker({...pending,baseVehicle:'오산신규',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'오산\n신규');
+  assert.equal(label(makeMarker({...pending,baseVehicle:'오산보류',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'오산\n보류');
 });
 
 test('a store with a verified empty delivery aggregate still uses its fixed route', () => {

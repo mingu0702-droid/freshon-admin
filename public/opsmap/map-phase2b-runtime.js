@@ -746,11 +746,12 @@
       try{
         const customerCodes=[...new Set([...periodRows.map(r=>r.customerCode),...baseVehicleExtraCodes,state.selected?.customerCode].filter(code=>/^[A-Z]\d+$/.test(code)))];
         const stageReadOnly=location.origin==='https://freshon-admin-stage-preview-template.onrender.com';
-        const batchSize=stageReadOnly?500:10000;
+        const batchSize=10000;
         const batches=[];for(let i=0;i<customerCodes.length;i+=batchSize)batches.push(customerCodes.slice(i,i+batchSize));
-        const payload=await collectBaseVehicleBatches(batches,async batch=>stageReadOnly
-            ?await fetchJson('/api/map-phase2b/preview/base-vehicles?customerCodes='+encodeURIComponent(batch.join(',')),{channel:'base-vehicles',ttl:0,timeout:30000})
-            :await fetchJson('/api/map-phase2b/preview/base-vehicles',{channel:'base-vehicles',ttl:0,timeout:30000,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customerCodes:batch})}));
+        // The protected endpoint accepts read-only POSTs on Stage as well.
+        // One response keeps the initial catalogue on a single master version.
+        const payload=await collectBaseVehicleBatches(batches,batch=>fetchJson('/api/map-phase2b/preview/base-vehicles',
+          {channel:'base-vehicles',ttl:0,timeout:30000,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customerCodes:batch})}));
         const rows=Array.isArray(payload?.data)?payload.data:[];
         const previousMeta=baseVehicleMeta;
         if(stageReadOnly&&payload?.meta?.refresh==='READ_ONLY'&&!Array.isArray(payload.data)){
@@ -759,7 +760,9 @@
           baseVehicleMeta=baseVehicles.size&&previousMeta?.checkedAt
             ? {...payload.meta,checkedAt:previousMeta.checkedAt,version:previousMeta.version,stale:true}
             : payload.meta;
-          baseVehicleStatus=baseVehicles.size?'READY':payload.phase==='ERROR'?'ERROR':'NOT_READY';return;
+          baseVehicleStatus=baseVehicles.size?'READY':payload.phase==='ERROR'?'ERROR':'NOT_READY';
+          if(state.mode==='BASE_60D'&&dateReady)await loadBaseMap();
+          return;
         }
         if(!MapPeriodUi.acceptsBaseVersion(previousMeta,payload.meta)){
           clearTimeout(baseVehicleTimer);baseVehicleTimer=setTimeout(()=>void loadBaseVehicles(),60000);return;
@@ -1729,7 +1732,7 @@
     const group = row.clusterCount;
     const assignmentTitle = assignment.code ? vehicleLabel(assignment.code) :
       assignment.kind === 'unknown' ? '호차 정보 없음' : assignment.kind === 'unverified' ?
-        (assignment.label==='…'?'기준호차 조회 중':base?'기준호차 확인 필요':'호차 확인 필요') : '';
+        (assignment.loading && baseVehicleStatus==='LOADING'?'기준호차 조회 중':base?'기준호차 확인 필요':'호차 확인 필요') : '';
     button.className = `marker${completed ? " done" : pending ? " pending" : ""}${kind === "virtual" ? " virtual" : ""}${kind === "nearbyVehicle" ? " nearbyVehicle" : ""}${compact ? " storeDot" : ""}`;
     button.dataset.customerCode = row.customerCode || "";
     if(row.deliveryId)button.dataset.deliveryId=row.deliveryId;
@@ -1776,7 +1779,8 @@
         if(routes.length>2)label.dataset.more='+'+(routes.length-2);
       }else{
         if(status || assignment.kind === 'unverified')label.className='pinStatus';
-        label.textContent=status ? assignment.label.slice(0,2)+'\n'+assignment.label.slice(2) : assignment.label;
+        label.textContent=status ? assignment.label.slice(0,2)+'\n'+assignment.label.slice(2) :
+          assignment.kind==='unverified' && group ? String(group) : assignment.label;
       }
       pin.append(label);
       if(index&&!group)pin.title=`${assignmentTitle||'호차 정보 없음'} · 착순 ${index}`;
@@ -1907,10 +1911,12 @@
     const entries = pins.map(row=>{
       const selected=markerIsSelected(row);
       const assigned=navCodes.some(code=>markerHasStore(row,code));
-      let fingerprint=base?markerSignatures.get(row):null;
+      const masterStatus=base&&row.baseVehicleState==='UNKNOWN'&&!row.baseVehicleVersion?baseVehicleStatus:null;
+      let fingerprint=base&&!masterStatus?markerSignatures.get(row):null;
       if(!fingerprint){
-        fingerprint=JSON.stringify([row.lat,row.lng,row.clusterBounds,row.clusterMemberKey,row.vehicle,row.baseVehicle,row.baseVehicleState,row.baseVehicleEmptyVerified,row.customerName,row.address,row.status,row.order,row.clusterCount,row.lastDeliveryDate,row.visitCount,row.driverKey,row.clusterLabel,row.clusterColorKey,row.coordinateSource,row.baseVehicleStale,row.baseVehicleCheckedAt,Boolean(options.numbered),Boolean(row.virtual),row.representative||row.clusterCount?markerSourceVersion:null,Boolean(row.nearbyVehicle),assignmentMode,state.rangeStart,state.rangeEnd]);
-        if(base)markerSignatures.set(row,fingerprint);
+        fingerprint=JSON.stringify([row.lat,row.lng,row.clusterBounds,row.clusterMemberKey,row.vehicle,row.baseVehicle,row.baseVehicleState,row.baseVehicleEmptyVerified,row.customerName,row.address,row.status,row.order,row.clusterCount,row.lastDeliveryDate,row.visitCount,row.driverKey,row.clusterLabel,row.clusterColorKey,row.coordinateSource,row.baseVehicleStale,row.baseVehicleCheckedAt,Boolean(options.numbered),Boolean(row.virtual),row.representative||row.clusterCount?markerSourceVersion:null,Boolean(row.nearbyVehicle),assignmentMode,state.rangeStart,state.rangeEnd,
+          masterStatus]);
+        if(base&&!masterStatus)markerSignatures.set(row,fingerprint);
       }
       return {row,selected,assigned,fingerprint,zIndex:markerLayer(row,selected,assigned),
         key:row.representative?'vehicle:'+row.vehicle:row.clusterKey||[row.virtual?'virtual':'store',runVisitId(row),row.lat,row.lng].join('|')};
