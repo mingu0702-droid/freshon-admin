@@ -138,7 +138,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       OPSMAP_ROAD_ROUTE_CACHE_MS:stage.OPSMAP_ROAD_ROUTE_CACHE_MS,OPSMAP_ROAD_ROUTE_TIMEOUT_MS:stage.OPSMAP_ROAD_ROUTE_TIMEOUT_MS},
     fetchImpl,now,budget:roadRouteBudget,requireDurableBudget:true
   });
-  const validation = createStageAbValidation({now});
+  const postalEnabled = stage.OPSMAP_SHADOW_COVERAGE_FORMAT==='postal';
+  const validation = createStageAbValidation({now,retainCoverageFiles:!postalEnabled});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   let baselineConfig, baselineStore, baselineRefresh, baselineRestoreMs, baselineState='NOT_CONFIGURED';
   if(stage.RENDER_SERVICE_ID===STAGE_SERVICE){
@@ -153,7 +154,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       const started=performance.now();
       let timing;
       baselineStore ||= createOpsmapDurableGeneration({
-        ...stageOpsmapDurableStorage({env:stage,fetchImpl,baselineKey:baselineConfig.baselineKey}),now,readOnlyView:true,
+        ...stageOpsmapDurableStorage({env:stage,fetchImpl,baselineKey:baselineConfig.baselineKey}),now,readOnlyView:true,retainCoverageFiles:!postalEnabled,
         onRestoreTiming:value=>{timing=value;}
       });
       const candidate=checkStageVerifiedBaseline(await baselineStore.readBaseline(baselineConfig.ref));
@@ -174,7 +175,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     if (!scheduledEnabled) return;
     scheduledRefresh ??= (async()=>{
       scheduledStore ||= remoteEnabled
-        ? createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:stage,fetchImpl}),now,readOnlyView:true})
+        ? createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:stage,fetchImpl}),now,readOnlyView:true,retainCoverageFiles:!postalEnabled})
         : await openScheduledStore(stage.OPSMAP_STAGE_SYNC_DIR,{writable:false});
       const result=remoteEnabled?await scheduledStore.readWithStatus():
         {generation:await scheduledStore.read(),status:await scheduledStore.readStatus()};
@@ -425,7 +426,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     phase2bKstDate:today,phase2bDispatchDate:dispatchDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:readDatedDelivery,
     callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
     sharedBaseCache:base,hybridEnabled:()=>false,roadRouteService,readRecordedRoadRoute,addressLookupService,
-    getShadowCoverageState:()=>validation.active() || coverageState==='ready' ? 'ready' :
+    getShadowCoverageState:()=>validation.active() || !postalEnabled && coverageState==='ready' ? 'ready' :
       baselineRefresh || scheduledRefresh || fileRestorePending ? 'restoring' : 'unavailable',
     getLocalDataEvidence:()=>validation.active()?.evidence || null,
     readArchivedAssignments:validation.archivedAssignments,
@@ -604,8 +605,21 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             ]).filter(([,digest])=>digest!==undefined))}));
         return (await providerReader)();
       }:undefined;
-      mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
+      mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:postalEnabled?undefined:coverageDirectory,
         appRoot:coverageAppRoot,readProviderCoverage,readStatus:readCoverageStatus,
+        postal:postalEnabled?{directory:stage.OPSMAP_SHADOW_POSTAL_DIR,
+          readPublication:()=>{
+            const active=validation.active();
+            const scheduled=active?.scheduled;
+            const index=scheduled?.index ?? active?.coverageIndex;
+            // The verified registry and coverage index identify one publication.
+            return index && {index,folder:active.directory,readCatalog:scheduled?.readPostalCatalog ?? active.readPostalCatalog};
+          },
+          boundarySha256:stage.OPSMAP_SHADOW_POSTAL_BOUNDARY_SHA256,releaseSha256:stage.OPSMAP_SHADOW_POSTAL_RELEASE_SHA256,
+          detailsDirectory:stage.OPSMAP_SHADOW_POSTAL_DETAILS_DIR,detailsIndexSha256:stage.OPSMAP_SHADOW_POSTAL_DETAILS_SHA256,
+          overviewDirectory:stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_DIR,overviewSha256:stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_SHA256,
+          reviewDirectory:stage.OPSMAP_SHADOW_POSTAL_REVIEW_DIR,reviewSha256:stage.OPSMAP_SHADOW_POSTAL_REVIEW_SHA256,
+          readFixed:codes=>base.get(codes)}:undefined,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>{const saved=selectSnapshot(snapshot);return saved && {count:saved.rows.length,asOf:saved.latestDate};}});
       manual.mount(binding);

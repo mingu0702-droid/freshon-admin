@@ -120,7 +120,7 @@ function prepareCoverageFiles(folder, directory, files) {
   })().catch(error=>{pending=null;throw error;});
 }
 
-export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=tmpdir(),appRoot=process.cwd(),onRestoreTiming,readOnlyView=false} = {}) {
+export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=tmpdir(),appRoot=process.cwd(),onRestoreTiming,readOnlyView=false,retainCoverageFiles=true} = {}) {
   if (!Buffer.isBuffer(key) || key.length!==32 || typeof store?.read!=='function' || readOnlyView&&store.write) throw Error('OPSMAP_DURABLE_CONFIG');
   const kdf = label => Buffer.from(hkdfSync('sha256',key,Buffer.from('opsmap-scheduled-release-v1'),Buffer.from(label),32));
   const encryption = kdf('objects'), signing = kdf('head');
@@ -220,13 +220,24 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
         // Verify every served file while the authenticated archive is in memory.
         // Only coverage needs its files on disk, and only when staff opens it.
         readFile('input/source-import.safe.json',expected.get('input/source-import.safe.json'));
-        const coverageFiles=new Map([[indexName,indexBytes]]);
+        const coverageFiles=retainCoverageFiles?new Map():null;
+        const catalogName='coverage/'+index.catalog.sha256+'.json';
+        let catalogBytes;
         const generation=await verifyOpsmapGeneration(state,folder,(name,limit)=>{
-          const data=coverageFiles.get(name) ?? readFile(name,limit);
-          if(name.startsWith('coverage/'))coverageFiles.set(name,data);
+          const data=name===indexName?indexBytes:readFile(name,limit);
+          if(coverageFiles && name.startsWith('coverage/'))coverageFiles.set(name,data);
+          if(!coverageFiles && name===catalogName)catalogBytes=data;
           return data;
         });
-        generation.prepareCoverage=prepareCoverageFiles(folder,generation.coverage,coverageFiles);
+        if(coverageFiles)generation.prepareCoverage=prepareCoverageFiles(folder,generation.coverage,coverageFiles);
+        else {
+          let catalog;
+          generation.readPostalCatalog=()=>{
+            catalog??=JSON.parse(catalogBytes);
+            catalogBytes=null;
+            return catalog;
+          };
+        }
         if(timing)onRestoreTiming({...timing,archiveValidationMs:Math.round(performance.now()-installing),archiveInstallMs:0});
         return {root,generation,ref};
       }

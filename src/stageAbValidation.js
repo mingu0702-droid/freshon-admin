@@ -185,7 +185,7 @@ function preservesVerifiedGeneration(previous, candidate) {
   return true;
 }
 
-export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = {}) {
+export function createStageAbValidation({now = Date.now, tempRoot = tmpdir(), retainCoverageFiles = true} = {}) {
   let temporary, durable, scheduled, installation, lastTemporary;
 
   function fallback() {
@@ -264,16 +264,17 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
       Buffer.from(bundle['opsmap-official-address-review-v1.json'], 'base64'), {sha256:expected.addressReview}) : null;
     const archived = expected.archive
       ? readStageArchivedDelivery(Buffer.from(bundle[expected.addressIndex ? 'opsmap-stage-dated-delivery-v1.json' : DELIVERY_ARCHIVE], 'base64'), expected.archive) : null;
-    const {registry, counts} = registryFromCatalog(JSON.parse(files.get(index.catalog.sha256 + '.json')), ledger, expected);
+    const catalog = JSON.parse(files.get(index.catalog.sha256 + '.json'));
+    const {registry, counts} = registryFromCatalog(catalog, ledger, expected);
     const nearby = expected.nearby ? readStageNearbyEvidence(Buffer.from(bundle['opsmap-stage-nearby-v1.json'], 'base64'), {
       expected:expected.nearby, generation:index.sha256, registry, window:JSON.parse(files.get(index.windows[90].sha256 + '.json'))
     }) : null;
     if (Object.keys(bundle).length !== files.size + 1 + Number(!!archived) + Number(!!bundledAddress) + Number(!!addressReview) + Number(!!nearby)) {
       throw Error('STAGE_BUNDLE_SCOPE');
     }
-    const directory = await mkdtemp(path.join(tempRoot, 'opsmap-ab-stage-'));
+    const directory = retainCoverageFiles ? await mkdtemp(path.join(tempRoot, 'opsmap-ab-stage-')) : null;
     try {
-      for (const [name, data] of files) await writeFile(path.join(directory, name), data, {mode:0o600, flag:'wx'});
+      if (directory) for (const [name, data] of files) await writeFile(path.join(directory, name), data, {mode:0o600, flag:'wx'});
       const appliedAt = now();
       const evidence = {
         coordinateAppliedAt:new Date(appliedAt).toISOString(),
@@ -284,6 +285,7 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
         coverageAsOf:index.asOf
       };
       const result = {directory, registry, ledger, counts, resolver:createFixedCoordinateResolver(ledger), asOf:index.asOf,
+        ...(!retainCoverageFiles && {coverageIndex:index,readPostalCatalog:()=>catalog}),
         generation:index.sha256, version:expected.version, archived, nearby, evidence, expiresAt:durableRead?Infinity:appliedAt + TTL,
         bundledAddress:addressReview ? {lookup:query => bundledAddress?.lookup(query) || addressReview.lookup(query)} : bundledAddress};
       if (!durableRead) {
@@ -291,18 +293,18 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
         lastTemporary={generation:result.generation,expiresAt:result.expiresAt};
         setTimeout(() => {
           if (temporary === result) temporary = null;
-          void rm(directory, {recursive:true, force:true}).catch(() => {});
+          if (directory) void rm(directory, {recursive:true, force:true}).catch(() => {});
         }, TTL).unref();
       } else {
         const previous=durable;
         durable=result;
-        if (previous) setTimeout(() => {
+        if (previous?.directory) setTimeout(() => {
           void rm(previous.directory, {recursive:true, force:true}).catch(() => {});
         },30_000).unref();
       }
       return result;
     } catch (error) {
-      await rm(directory, {recursive:true, force:true}).catch(() => {});
+      if (directory) await rm(directory, {recursive:true, force:true}).catch(() => {});
       throw error;
     }
   }

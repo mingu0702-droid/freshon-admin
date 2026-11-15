@@ -216,6 +216,18 @@ test('the first Osan-only release can reuse the protected baseline and preserve 
   await assert.rejects(verifyOpsmapGeneration(baseline.state,baseline.folder,(name)=>
     name===badWindow?Buffer.from('{}'):fs.readFile(path.join(baseline.folder,name))),/OPSMAP_SYNC_FILE_DIGEST/);
   await viewReader.dispose();
+  const postalReader=createOpsmapDurableGeneration({...readerOptions,readOnlyView:true,retainCoverageFiles:false});
+  const postal=await postalReader.readBaseline(ref);
+  assert.equal(postal.index.sha256,baseline.index.sha256);
+  assert.deepEqual(postal.snapshot,baseline.snapshot);
+  assert.equal(postal.prepareCoverage,undefined);
+  await assert.rejects(fs.access(postal.coverage),{code:'ENOENT'});
+  const originalCatalog=JSON.parse(await fs.readFile(path.join(baseline.coverage,baseline.index.catalog.sha256+'.json')));
+  const postalCatalog=postal.readPostalCatalog();
+  assert.deepEqual(postalCatalog,originalCatalog);
+  assert.equal(postal.readPostalCatalog(),postalCatalog);
+  await assert.rejects(fs.access(postal.coverage),{code:'ENOENT'});
+  await postalReader.dispose();
   const {env:runtimeEnv}=createStageShadowRuntime({...storageEnv,OPSMAP_SHADOW_ARCHIVE_KEY_B64:baselineKey.toString('base64')});
   assert.equal(runtimeEnv.OPSMAP_SHADOW_ARCHIVE_KEY_B64,undefined);
   const writer=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:runtimeEnv,write:true,fetchImpl:api.fetchImpl}),now,tempRoot:root});

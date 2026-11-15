@@ -14,6 +14,7 @@ if (tabs && workspace && period && daily) {
   tab.setAttribute('aria-controls', 'shadowCoverage');
 
   let panel, stylesheet, opening, active = false, previous;
+  let panelCode, pinObserver;
   let probeTimer, probeRequest, probeUntil = 0;
   let returnTabs = [];
 
@@ -46,12 +47,82 @@ if (tabs && workspace && period && daily) {
     });
   }
 
+  function openPostalStore(row) {
+    const bridge = window.MapUiLocalBridge;
+    if (!window.MapStaffEntry?.session() || !bridge?.navigationStores('BASE_60D').some(store => store.customerCode === row.code)) return false;
+    close(false);
+    if (bridge.state.mode !== 'BASE_60D') period.click();
+    requestAnimationFrame(() => {
+      if (!active && window.MapStaffEntry?.session()) bridge.selectNavigationStore(row.code);
+    });
+    return true;
+  }
+
   function stopAvailabilityProbe() {
     clearTimeout(probeTimer);
     probeTimer = null;
     probeUntil = 0;
     probeRequest?.abort();
     probeRequest = null;
+  }
+
+  function preparePanelCode() {
+    if (panelCode) return panelCode.task;
+    stylesheet ||= document.createElement('link');
+    if (!stylesheet.isConnected) {
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = new URL('./shadow-coverage.css?v=20261115-staff', import.meta.url);
+      document.head.append(stylesheet);
+    }
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal,AbortSignal.timeout(7000)]);
+    const preparation = { controller };
+    preparation.task = (async () => {
+      const response = await fetch('/api/map-phase2b/private/shadow-coverage/format',{ cache:'no-store', signal });
+      if (!response.ok && response.status !== 404) throw Error('COVERAGE_FORMAT_UNAVAILABLE');
+      const format = response.ok ? (await response.json()).format : 'h3';
+      signal.throwIfAborted();
+      if (format === 'h3') return import('./shadow-coverage-panel.mjs?v=20261115-staff');
+      if (format !== 'postal') throw Error('COVERAGE_FORMAT_UNAVAILABLE');
+      if (!document.querySelector('link[data-postal-coverage]')) {
+        const style = document.createElement('link');
+        style.rel = 'stylesheet';
+        style.dataset.postalCoverage = '1';
+        style.href = new URL('./postal-coverage.css?v=20261115-detail',import.meta.url);
+        document.head.append(style);
+      }
+      return import('./postal-coverage-panel.mjs?v=20261116-initial-view');
+    })().catch(error => {
+      if (panelCode === preparation) panelCode = null;
+      throw error;
+    });
+    panelCode = preparation;
+    return preparation.task;
+  }
+
+  function prepareAfterFirstPin() {
+    if (panel || panelCode || pinObserver) return;
+    const map = document.getElementById('map');
+    if (!map) return;
+    const warm = () => {
+      if (!map.dataset.bootMetrics || !map.querySelector('.marker')) return;
+      pinObserver?.disconnect();
+      pinObserver = null;
+      // Let the first map frame paint before requesting coverage.
+      requestAnimationFrame(() => {
+        if (!panel && tab.isConnected && window.MapStaffEntry?.session()) void preparePanelCode().catch(() => {});
+      });
+    };
+    if (map.dataset.bootMetrics && map.querySelector('.marker')) return warm();
+    pinObserver = new MutationObserver(warm);
+    pinObserver.observe(map, { attributes:true, attributeFilter:['data-boot-metrics'] });
+  }
+
+  function resetPanelPreparation() {
+    pinObserver?.disconnect();
+    pinObserver = null;
+    panelCode?.controller.abort();
+    panelCode = null;
   }
 
   async function checkAvailability() {
@@ -85,6 +156,7 @@ if (tabs && workspace && period && daily) {
     const available = session && config?.shadowCoverageEnabled === true;
     if (!available) {
       close();
+      resetPanelPreparation();
       panel?.disposeMap();
       tab.remove();
       if (session && config?.shadowCoverageRestoring === true) {
@@ -97,13 +169,8 @@ if (tabs && workspace && period && daily) {
     }
     stopAvailabilityProbe();
     if (tab.isConnected) return;
-    stylesheet ||= document.createElement('link');
-    if (!stylesheet.isConnected) {
-      stylesheet.rel = 'stylesheet';
-      stylesheet.href = new URL('./shadow-coverage.css?v=20261115-staff', import.meta.url);
-      document.head.append(stylesheet);
-    }
     tabs.append(tab);
+    prepareAfterFirstPin();
   }
 
   tab.onclick = async () => {
@@ -113,9 +180,9 @@ if (tabs && workspace && period && daily) {
       tab.setAttribute('aria-busy', 'true');
       tab.textContent = '음영권역 불러오는 중';
       try {
-        const { createCoveragePanel } = await import('./shadow-coverage-panel.mjs?v=20261115-staff');
+        const { createCoveragePanel } = await preparePanelCode();
         if (opening !== attempt || !tab.isConnected || !window.MapStaffEntry?.session()) return;
-        panel = createCoveragePanel({ workspace, header });
+        panel = createCoveragePanel({ workspace, header, openStore:openPostalStore });
       } catch {
         if (opening === attempt) {
           cancelOpening();
@@ -162,11 +229,13 @@ if (tabs && workspace && period && daily) {
   window.addEventListener('pageshow', event => { if (event.persisted) syncAvailability(); });
   window.addEventListener('pagehide', () => {
     stopAvailabilityProbe();
+    resetPanelPreparation();
     close();
     panel?.disposeMap();
   });
   window.MapStaffEntry?.registerPurge(() => {
     stopAvailabilityProbe();
+    resetPanelPreparation();
     close();
     panel?.disposeMap();
     tab.remove();
