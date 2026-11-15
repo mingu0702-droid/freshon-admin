@@ -163,7 +163,8 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
               /^상품을 잘 적치하셨나요\? - 매장\s?안$/u.test(attachment.typeText) ? INSIDE_PHOTO_KIND : undefined;
           if (history && !kind) continue;
           attachments.push({...attachment, photoRecordFingerprint:recordFingerprint,
-            photoDeliveryKind:kind, photoRecordId:kind ? String(record.id) : undefined});
+            photoDeliveryKind:kind, photoRecordId:kind ? String(record.id) : undefined,
+            photoInsideCompletion:inside});
           if (attachments.length > 20) fail('PHOTO_ATTACHMENT_LIMIT_EXCEEDED', 503);
         }
       }
@@ -196,10 +197,17 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
     async list(identity, { signal, scoped = deliveryOnly } = {}) {
       if (identity.deliveryId) {
         const task = await detail(identity, signal), photos = [], notes = [];
-        let unverified = false;
+        let unverified = false, unreviewedInsideChecklist = false;
         for (const [attachmentIndex, attachment] of task.taskAttachments.entries()) {
           if (attachment.text) notes.push(cleanText(attachment.text));
-          if (scoped && kinds.has(attachment.typeText)) continue;
+          if (scoped && kinds.has(attachment.typeText)) {
+            // Some indoor deliveries place product photos under inspection questions.
+            // Their presence is not proof of a delivery photo or an empty delivery.
+            if (readTaskStatusRecords && attachment.photoInsideCompletion && attachmentImages(attachment).length) {
+              unreviewedInsideChecklist = true;
+            }
+            continue;
+          }
           const images = attachmentImages(attachment);
           const kind = photoKind(attachment, false, scoped);
           if (!kind && images.length) { unverified = true; continue; }
@@ -211,6 +219,7 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
           }
         }
         if (photos.length > 40) fail('PHOTO_LIMIT_EXCEEDED', 503);
+        if (unreviewedInsideChecklist && !photos.some(photo => photo.kind === INSIDE_PHOTO_KIND)) unverified = true;
         // A narrowed verification category is not evidence that other photos are absent.
         if (!photos.length && firstPhotoKind !== null && task.taskAttachments.some(a => attachmentImages(a).length)) unverified = true;
         return [{ ...exact(task, identity), notes: notes.join('\n').slice(0, 4000), status: unverified ? 'UNVERIFIED' : photos.length ? 'READY' : 'EMPTY', photos }];

@@ -222,3 +222,23 @@ test('Stage a verified task with no attachments is distinct from a malformed sta
     } finally { await f.close(); }
   }
 });
+
+test('indoor completion with only checklist attachments stays unverified without exposing inspection media', async t => {
+  const image = {url:'https://' + mediaHost + '/checklist.png?token=fixture'};
+  const checklist = labels.slice(0, 2).map(typeText => ({typeText, images:[image]}));
+  const completedInside = {id:'1234', taskId:deliveryId, status:'COMPLETED', completeType:'BASIC', completeTypeText:'매장안'};
+  for (const [taskAttachments, status, kinds] of [
+    [checklist, 'UNVERIFIED', []],
+    [checklist.map(attachment => ({...attachment, images:[]})), 'EMPTY', []],
+    [[...checklist, {type:'INSIDE_PRODUCT', typeText:'상품을 잘 적치하셨나요? - 매장 안', images:[image]}], 'READY', ['INSIDE_DELIVERY']]
+  ]) {
+    const f = await fixture({attachmentRows:[{...completedInside, taskAttachments}]});
+    t.after(f.close);
+    const response = await f.get(exact);
+    assert.equal(response.status, 200);
+    const [row] = (await response.json()).data.deliveries;
+    assert.equal(row.status, status);
+    assert.deepEqual(row.photos.map(photo => photo.kind), kinds);
+    assert.equal(f.calls.length, 2);
+  }
+});
