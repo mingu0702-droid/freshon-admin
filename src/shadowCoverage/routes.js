@@ -33,10 +33,16 @@ const detailResolutions = ['8', '9', '10', '11'];
 export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, readRunId,
   readProviderCoverage, readStatus, staffResponseGuarded = false, postal } = {}) {
   const entry = staffResponseGuarded ? [] : [requireStaff];
+  const postalCoverage = postal && mountPostalCoverage({ app, requireStaff, readDirectory, appRoot, staffResponseGuarded, postal });
+  let preparedPostal = false;
   app.get(ROOT + '/format', ...entry, (_req, res) => {
     res.set('Cache-Control', 'private, no-store').vary('Cookie').json({ format: postal ? 'postal' : 'h3' });
+    if (postalCoverage && !preparedPostal) {
+      preparedPostal = true;
+      setImmediate(() => void postalCoverage.prepareDefaultPointData().catch(() => {})).unref();
+    }
   });
-  if (postal) return mountPostalCoverage({ app, requireStaff, readDirectory, appRoot, staffResponseGuarded, postal });
+  if (postalCoverage) return postalCoverage;
 
   let imports, current, providerModule;
   const load = async () => {

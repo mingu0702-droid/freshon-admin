@@ -78,7 +78,7 @@ export function createPostalGeometryReader(api) {
         : decodePostalTile(source.buffer.slice(offset,offset + size));
       const occupied = (vertices ? vertices * 8 : size) + zones.length * 176 +
         zones.reduce((count, zone) => count + zone.rings.length * 72,0);
-      const item = { zones, bytes:occupied };
+      const item = { zones, bytes:occupied, overview:Boolean(vertices) };
       tiles.set(id,item);
       retain(boundary + ':' + id,item);
       offset += size;
@@ -149,11 +149,19 @@ export function createPostalGeometryReader(api) {
       }
       return view.tiles.map(([id]) => found.get(id).zones);
     },
-    clear() {
+    hasOverview() {
+      for (const tile of cache.values()) if (tile.overview) return true;
+      return false;
+    },
+    clear(keepOverview = false) {
       for (const entry of pending.values()) entry.controller.abort();
       pending.clear();
-      cache.clear();
-      bytes = transferMs = parseMs = 0;
+      for (const [key, tile] of cache) {
+        if (keepOverview && tile.overview) continue;
+        cache.delete(key);
+        bytes -= tile.bytes;
+      }
+      transferMs = parseMs = 0;
     },
     metrics: () => ({ bytes, tiles: cache.size, limit: viewportCacheLimit,
       transferMs:+transferMs.toFixed(2), parseMs:+parseMs.toFixed(2) }),
@@ -175,13 +183,16 @@ export function createPostalMap(host, maps, { idle, select }) {
   const overlay = new maps.AbstractOverlay();
   const ctx = surface.getContext('2d');
   let scene, marker, circle, selected, rendered, selectedGeometry, selectedLevel;
-  let frame, active = true;
+  let frame, projectedVersion, active = true;
   let totalDraws = 0;
   const projected = new Map();
 
-  function clearProjected() {
-    for (const { image } of projected.values()) image.width = image.height = 1;
-    projected.clear();
+  function clearProjected(keep) {
+    for (const [key, { image }] of projected) {
+      if (key === keep) continue;
+      image.width = image.height = 1;
+      projected.delete(key);
+    }
   }
 
   function viewport() {
@@ -423,17 +434,19 @@ export function createPostalMap(host, maps, { idle, select }) {
     show(view, geometry) {
       const version = [view.generation,view.boundary,view.assignmentReview,view.period.days,view.center].join(':');
       const tileKey = [view.tier,view.overview,...view.tiles.map(([id]) => id)].join(':');
-      if (scene?.version !== version) clearProjected();
+      if (projectedVersion !== version) clearProjected();
+      projectedVersion = version;
       scene = { version, tileKey, tier:view.tier, overview:view.overview, tones:new Map(view.tones), badges:view.badges, geometry };
       schedule();
     },
     select(area) { selected = area; updateSelection(); },
-    clear() {
+    clear(keepOverview = false) {
       cancelAnimationFrame(frame);
       frame = undefined;
       ctx.clearRect(0, 0, surface.width, surface.height);
       surface.width = surface.height = 1;
-      clearProjected();
+      clearProjected(keepOverview && scene?.overview ? rendered?.key : undefined);
+      if (!projected.size) projectedVersion = undefined;
       selected = scene = rendered = null;
       updateSelection();
       marker?.setMap(null);

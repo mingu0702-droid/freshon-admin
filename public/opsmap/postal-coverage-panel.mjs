@@ -9,6 +9,7 @@ const labels = {
 };
 const centerNames = { all: '전체', osan: '오산', honam: '호남', yeongnam: '영남' };
 const presets = { nation: [124.1, 32.95, 131.95, 38.8], region: [126.67, 36.96, 127.29, 37.40] };
+const overviewReuseMs = 15000;
 const fmt = new Intl.NumberFormat('ko-KR');
 const node = (name, text) => Object.assign(document.createElement(name), { textContent: text });
 const statsText = period => period?.days + '일 · ' + period?.start + ' ~ ' + period?.end;
@@ -92,7 +93,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   const detail = find('coverageDetail'), status = find('coverageRetry');
   const searchResults = find('coverageSearchResults'), geometry = createPostalGeometryReader(API);
   let map, active = false, owner = 0, viewportRead, detailRead, searchRead, view, viewKey, loadingKey;
-  let timer, refresh, selectedArea, bootstrapScope;
+  let timer, refresh, selectedArea, bootstrapScope, releaseOverview;
   const resize = new ResizeObserver(entries => {
     if (!active) return;
     if (entries.some(entry => entry.target === header)) windowHeight();
@@ -210,7 +211,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       const signal = timeout(controller.signal);
       const requested = { ...params, level, ...(world ? { indexed:'1' } : {}),
         box:box.map(value => value.toFixed(5)).join(',') };
-      const frame = first ? await firstViewport(requested,signal) : null;
+      // Refresh the protected view before using any versioned overview cache.
+      const frame = first && !geometry.hasOverview() ? await firstViewport(requested,signal) : null;
       const data = frame?.view || await read('view',requested,signal);
       if (!active || viewportRead !== controller) return;
       const slices = frame ? geometry.acceptBootstrap(data,frame.bytes,frame.duration) : await geometry.read(data,signal);
@@ -347,14 +349,15 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     }
   }
 
-  function reset() {
+  function reset(keepOverview = false) {
     clearTimeout(timer);
+    clearTimeout(releaseOverview);
     [viewportRead, detailRead, searchRead].forEach(request => request?.abort());
     viewportRead = detailRead = searchRead = null;
     view = viewKey = loadingKey = bootstrapScope = null;
-    geometry.clear();
+    geometry.clear(keepOverview);
     delete host.dataset.postalGeometry;
-    map?.clear();
+    map?.clear(keepOverview && geometry.hasOverview());
     areaCard(null);
     searchResults.replaceChildren();
     find('coverageQuery').value = '';
@@ -385,6 +388,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
 
   return {
     open() {
+      clearTimeout(releaseOverview);
       active = true;
       root.hidden = false;
       windowHeight();
@@ -399,7 +403,11 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       root.hidden = true;
       clearInterval(refresh);
       resize.disconnect();
-      reset();
+      reset(true);
+      if (geometry.hasOverview()) releaseOverview = setTimeout(() => {
+        geometry.clear();
+        map?.clear();
+      },overviewReuseMs);
     },
     invalidate() { reset(); if (active) void readView(true); },
     disposeMap() {

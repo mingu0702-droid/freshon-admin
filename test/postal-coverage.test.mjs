@@ -125,6 +125,14 @@ test('the first viewport frame verifies the complete tile list and seeds the vie
   assert.deepEqual(await reader.read(view,new AbortController().signal),[zones]);
   assert.equal(request.mock.callCount(),0);
   assert.equal(reader.metrics().tiles,1);
+  reader.clear(true);
+  assert.equal(reader.hasOverview(),true);
+  assert.deepEqual(await reader.read(view,new AbortController().signal),[zones]);
+  await assert.rejects(reader.read({...view,overview:'b'.repeat(64)},new AbortController().signal), /UNEXPECTED_TILE_REQUEST/);
+  assert.equal(request.mock.callCount(),1);
+  reader.clear();
+  assert.equal(reader.hasOverview(),false);
+  assert.equal(reader.metrics().bytes,0);
 });
 
 test('screen projection must match the Kakao plane before requesting indexed tiles', () => {
