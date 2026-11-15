@@ -527,6 +527,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       }:undefined;
       const coverage=mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
         appRoot:coverageAppRoot,readProviderCoverage,readStatus:readCoverageStatus,
+        postal:stage.OPSMAP_SHADOW_COVERAGE_FORMAT==='postal'?{directory:stage.OPSMAP_SHADOW_POSTAL_DIR,
+          boundarySha256:stage.OPSMAP_SHADOW_POSTAL_BOUNDARY_SHA256,releaseSha256:stage.OPSMAP_SHADOW_POSTAL_RELEASE_SHA256}:undefined,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
       let preparedAddressRows, preparedCoverageGeneration;
@@ -540,7 +542,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             if (generation !== validation.active()?.generation || preparedCoverageGeneration === generation) return;
             preparedCoverageGeneration = generation;
             const addressIndexMs = Math.round(performance.now() - started);
-            // Background H3 file reads start after the map response and address preparation.
+            // Prepare the selected coverage format after the map and address response.
             setTimeout(() => {
               if (generation !== validation.active()?.generation) return;
               void coverage.prepareDefaultPointData(generation).then(timings => {

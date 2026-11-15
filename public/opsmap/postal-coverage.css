@@ -1,0 +1,69 @@
+.postal-coverage .coverage-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.postal-map-overlay { position: absolute; pointer-events: none; transform-origin: center; }
+.postal-map-selection { position: absolute; overflow: visible; pointer-events: none; }
+.postal-map-selection path { fill: none; stroke: #122e50; stroke-width: 2.3px; stroke-linejoin: round; }
+.postal-map-controls {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #d2deee;
+  border-radius: 8px;
+  background: #fff;
+}
+.postal-map-source {
+  position: absolute;
+  z-index: 3;
+  right: 10px;
+  bottom: 24px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #fffffff0;
+  color: #476078;
+  font-size: 10px;
+  pointer-events: none;
+}
+.postal-map-source:empty { display: none; }
+.postal-coverage .coverage-map-state {
+  inset: auto 10px 44px;
+  flex-direction: row;
+  justify-content: flex-start;
+  text-align: left;
+}
+.postal-legend [data-postal-tone="HIGH"]::before { background: #4176bd; border-color: #205295; }
+.postal-legend [data-postal-tone="LOW"]::before { background: #aed0ed; border-color: #4780b5; }
+.postal-legend [data-postal-tone="CANDIDATE"]::before { background: #f3bb76; border-color: #b87730; }
+.postal-legend [data-postal-tone="UNKNOWN"]::before { background: #e8edf2; border-color: #788b9a; }
+.postal-badges { margin: 7px 0; }
+.postal-badges span::before { width: 8px; height: 8px; border-radius: 50%; background: #088478; border-color: #088478; }
+.postal-badges [data-postal-badge="unverified"]::before { background: white; }
+.postal-badges [data-postal-badge="held"]::before { background: #8544a3; border-color: #8544a3; }
+.postal-coverage .coverage-detail > button { float: right; min-height: 0; }
+.postal-coverage .coverage-detail dl {
+  clear: both;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 3px 8px;
+  margin-top: 6px;
+}
+.postal-coverage .coverage-detail dt { color: #54667d; }
+.postal-coverage .coverage-detail dd { margin: 0; font-weight: 650; }
+.postal-coverage .coverage-detail [data-postal-tone="CANDIDATE"] { color: #954b13; }
+.postal-coverage .coverage-detail [data-postal-tone="UNKNOWN"] { color: #536679; }
+#postalCandidates { display: grid; gap: 4px; max-height: 146px; overflow: auto; }
+#postalObserved { color: #285899; font-weight: 650; }
+#postalEvidence { font-size: 12px; }
+@media (max-width: 760px) {
+  .postal-coverage {
+    height: calc(100dvh - var(--coverage-header-height, 105px));
+    min-height: 530px;
+  }
+  .postal-coverage .coverage-sidebar { max-height: min(44dvh, 365px); }
+  .postal-coverage .coverage-map-area { min-height: 300px; }
+  .postal-map-controls { top: 7px; left: 7px; }
+  .postal-coverage .coverage-map-state { inset: auto 7px 42px; }
+  .postal-coverage .coverage-map-state p { padding: 4px 6px; font-size: 11px; }
+}

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { activeDeliverySummary, cellStatusCounts } from './storeStatus.js';
 import { addStaffTiming } from '../opsmap-abc/staffLatency.js';
+import { mountPostalCoverage } from './postalRoutes.js';
 
 const ROOT = '/api/map-phase2b/private/shadow-coverage';
 const CENTERS = ['all', 'osan', 'yeongnam', 'honam'];
@@ -30,7 +31,13 @@ function resolutionFor(level) {
 const detailResolutions = ['8', '9', '10', '11'];
 
 export function mountShadowCoverage({ app, requireStaff, directory, readDirectory, appRoot, store, readPreservedMap, readRunId,
-  readProviderCoverage, readStatus, staffResponseGuarded = false } = {}) {
+  readProviderCoverage, readStatus, staffResponseGuarded = false, postal } = {}) {
+  const entry = staffResponseGuarded ? [] : [requireStaff];
+  app.get(ROOT + '/format', ...entry, (_req, res) => {
+    res.set('Cache-Control', 'private, no-store').vary('Cookie').json({ format: postal ? 'postal' : 'h3' });
+  });
+  if (postal) return mountPostalCoverage({ app, requireStaff, readDirectory, appRoot, staffResponseGuarded, postal });
+
   let imports, current, providerModule;
   const load = async () => {
     const folder = readDirectory ? await readDirectory() : directory;
@@ -43,7 +50,6 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     return {model, h3, reader:current.reader};
   };
   // The operating map authenticates the prefix and rechecks every JSON response.
-  const entry = staffResponseGuarded ? [] : [requireStaff];
   const sendData = (res, data) => res.json({ ok: true, data });
   const route = (suffix, parse, handle, reply = sendData, loadReady=load) => app.get(ROOT + suffix, ...entry, async (req, res) => {
     res.set('Cache-Control', 'private, no-store').vary('Cookie');

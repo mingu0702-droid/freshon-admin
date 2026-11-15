@@ -113,7 +113,12 @@ if (tabs && workspace && period && daily) {
       tab.setAttribute('aria-busy', 'true');
       tab.textContent = '음영권역 불러오는 중';
       try {
-        const { createCoveragePanel } = await import('./shadow-coverage-panel.mjs?v=20261113-address-notes');
+        const response = await fetch('/api/map-phase2b/private/shadow-coverage/format', { cache:'no-store' });
+        if (!response.ok && response.status !== 404) throw Error('COVERAGE_FORMAT_UNAVAILABLE');
+        const format = response.ok ? (await response.json()).format : 'h3';
+        const { createCoveragePanel } = format === 'postal'
+          ? await import('./postal-coverage-panel.mjs?v=20261115-postal')
+          : await import('./shadow-coverage-panel.mjs?v=20261113-address-notes');
         if (opening !== attempt || !tab.isConnected || !window.MapStaffEntry?.session()) return;
         panel = createCoveragePanel({ workspace, header });
       } catch {
