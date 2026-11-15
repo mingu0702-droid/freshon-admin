@@ -12,7 +12,8 @@ import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
 import {coordinateAddressHash} from '../src/opsmap-abc/opsmapAutoCoordinates.js';
 import {createOpsmapDataSync} from '../src/opsmapDataSync.js';
 import {reviseFixedCoordinateLedger} from '../src/fixedStoreCoordinates.js';
-import {createOpsmapDurableGeneration, stageOpsmapDurableStorage} from '../src/opsmapDurableGeneration.js';
+import {createOpsmapDurableGeneration, stageOpsmapDurableStorage, STAGE_BASELINE_PREFIX} from '../src/opsmapDurableGeneration.js';
+import {createPrivateGithubJsonStore} from '../src/fixedVehicleStore.js';
 import {mountOpsmapScheduledRun, OPSMAP_SCHEDULED_ROUTE, publishOpsmapScheduledRun, verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
 import {syncDigest, syncSha256} from '../src/opsmapSyncGeneration.js';
 import {archiveAddressHash} from '../src/stageArchivedDelivery.js';
@@ -163,6 +164,46 @@ test('Stage scheduler endpoint passes a valid receipt once and drops raw child d
   child.stderr.write('mock sensitive stack text');
   child.emit('close',1);
   assert.deepEqual(logs,[{component:'opsmap-scheduled-run',runId:receipt.runId,exitCode:1,error:'OPSMAP_SYNC_FAILED'}]);
+});
+
+test('the first scheduled release can reuse the protected baseline and retain archived days outside the coverage window',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'opsmap-scheduled-baseline-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const seed=await seedFor(root), api=github(), now=()=>clockStart;
+  const original=path.join(root,'original'), spool=path.join(root,'spool');
+  await fs.mkdir(original,{mode:0o700});
+  await fs.mkdir(spool,{mode:0o700});
+  const offline=await createOpsmapDataSync({directory:original,seed,now,readLedger:async()=>ledger,includeOfficialRegions:false});
+  await offline.sync({bootstrap:true});
+  const baseline=await offline.read();
+  const baselineKey=randomBytes(32);
+  const baselineWriter=createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',
+    GITHUB_CACHE_BRANCH:'stage/opsmap-snapshots',GITHUB_CACHE_DIR:STAGE_BASELINE_PREFIX,GITHUB_TOKEN:'fixture'},fetchImpl:api.fetchImpl});
+  const ref=await createOpsmapDurableGeneration({store:baselineWriter,key:baselineKey,now,tempRoot:root}).exportBaseline(baseline);
+  const reader=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:{...stage,GITHUB_TOKEN:'fixture'},baselineKey,fetchImpl:api.fetchImpl}),now,tempRoot:root});
+  const writer=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:storageEnv,write:true,fetchImpl:api.fetchImpl}),now,tempRoot:root});
+  assert.equal(await writer.restoreSpool(spool),undefined);
+  await assert.rejects(reader.restoreSpool(spool,{useVerifiedBaseline:true}),/BASELINE_REF/);
+  await reader.readBaseline(ref);
+  const restored=await reader.restoreSpool(spool,{useVerifiedBaseline:true});
+  assert.equal(restored.index.sha256,baseline.index.sha256);
+  await reader.dispose();
+
+  const sourceIds=Object.values(SYNC_DELIVERY_SOURCES);
+  const run=await publishOpsmapScheduledRun({durable:writer,receipt:signed(clockStart),createWorker:()=>createOpsmapDataSync({
+    directory:spool,now,includeOfficialRegions:false,readLedger:async()=>restored.ledger,
+    readRegistry:async()=>({complete:true,version:syncSha256('fixture-registry'),rows:[{customerCode:code,
+      customerName:'격리 매장',basicAddress:address,lifecycle:'ACTIVE'}]}),
+    async readDay(day){return {...observation(day),completeSources:sourceIds};},
+    completeCoordinates:async({stores,ledger})=>({stores,ledger}),requiredSourceIds:sourceIds
+  })});
+  assert.equal(run.state,'PUBLISHED');
+  assert.equal(run.revision,baseline.state.revision+1);
+  const published=await writer.read();
+  assert.equal(published.state.dates[oldDate],baseline.state.dates[oldDate]);
+  assert.deepEqual(await writer.readDay(oldDate,published),await offline.readDay(oldDate));
+  assert.equal(published.snapshot.latestDate,date);
+  assert.equal(published.snapshot.sourceRunId,run.runId);
 });
 
 test('publication CAS, source retry, restart, archive laziness, and one run ID across authenticated Stage snapshot and H3',async t=>{

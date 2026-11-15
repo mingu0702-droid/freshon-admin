@@ -14,7 +14,7 @@ import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {boundedRead, privateCoverageDirectory} from '../src/shadowCoverage/coverageFiles.js';
 import {atomicCoverageWrite} from '../src/shadowCoverage/fileStore.js';
-import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from '../src/opsmapDurableGeneration.js';
+import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from '../src/opsmapDurableGeneration.js';
 import {opsmapScheduleConfig,publishOpsmapScheduledRun,verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
 import {SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
 import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixedMasterBaseline, stageFixedMasterStorage,
@@ -40,13 +40,8 @@ async function buildWorker({mode,settingsFile,durable,recordSource}) {
     catch(error) {if(error.code!=='EEXIST'||(await fs.lstat(spool)).isSymbolicLink())throw error;}
   }
   const directory = await privateCoverageDirectory(config.directory,appRoot);
-  if (!path.isAbsolute(config.ledgerFile || '')) throw Error('OPSMAP_SYNC_LEDGER_PATH');
-  const ledgerFolder = await privateCoverageDirectory(path.dirname(config.ledgerFile),appRoot);
-  const readLedger = async () => {
-    const updated = await readSettings();
-    if (updated.directory !== config.directory || updated.ledgerFile !== config.ledgerFile) throw Error('OPSMAP_SYNC_STORAGE_CHANGED');
-    return readFixedCoordinateLedger(await boundedRead(path.join(ledgerFolder,path.basename(config.ledgerFile)),8*1024*1024),updated.ledgerSha256);
-  };
+  if ((!durable || config.ledgerFile !== undefined) && !path.isAbsolute(config.ledgerFile || '')) throw Error('OPSMAP_SYNC_LEDGER_PATH');
+  const ledgerFolder = config.ledgerFile ? await privateCoverageDirectory(path.dirname(config.ledgerFile),appRoot) : null;
   let readRegistry, readDay, readManualPins;
   if (mode !== 'bootstrap') {
     if (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN || env.OPSMAP_SYNC_SOURCE_READ_APPROVED !== '1') {
@@ -131,7 +126,24 @@ async function buildWorker({mode,settingsFile,durable,recordSource}) {
     };
   }
   if(durable&&!completeCoordinates)throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
-  await durable?.restoreSpool(directory);
+  let restored=await durable?.restoreSpool(directory);
+  if (durable && !restored && !config.seed) {
+    const baselineConfig=stageVerifiedBaselineConfig(env);
+    if (baselineConfig) {
+      const store=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env,baselineKey:baselineConfig.baselineKey}),appRoot});
+      try {
+        checkStageVerifiedBaseline(await store.readBaseline(baselineConfig.ref));
+        restored=await store.restoreSpool(directory,{useVerifiedBaseline:true});
+      } finally { await store.dispose().catch(()=>{}); }
+    }
+  }
+  if (!ledgerFolder && !restored) throw Error('OPSMAP_SYNC_LEDGER_PATH');
+  const readLedger = async () => {
+    const updated = await readSettings();
+    if (updated.directory !== config.directory || updated.ledgerFile !== config.ledgerFile) throw Error('OPSMAP_SYNC_STORAGE_CHANGED');
+    if (!ledgerFolder) return restored.ledger;
+    return readFixedCoordinateLedger(await boundedRead(path.join(ledgerFolder,path.basename(config.ledgerFile)),8*1024*1024),updated.ledgerSha256);
+  };
   return createOpsmapDataSync({directory,seed:config.seed,readLedger,readRegistry,readDay,readManualPins,appRoot,completeCoordinates,
     readMissingDay:durable?.readDay,requiredSourceIds:durable?Object.values(SYNC_DELIVERY_SOURCES):[]});
 }

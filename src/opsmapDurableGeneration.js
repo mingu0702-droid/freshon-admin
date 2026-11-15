@@ -1,4 +1,5 @@
 import {createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes, randomUUID, timingSafeEqual} from 'node:crypto';
+import {readFileSync} from 'node:fs';
 import fs from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -23,6 +24,29 @@ const metadataFiles = new Map([
   ['input/stores.private.json',3*1024*1024],['input/base.private.json',3*1024*1024],
   ['input/source-import.safe.json',32_768],['coverage/coverage-index.json',16_384]
 ]);
+
+export function stageVerifiedBaselineConfig(env = process.env) {
+  if (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN) return null;
+  try {
+    const config = JSON.parse(readFileSync('/etc/secrets/opsmap-stage-baseline-v1.json','utf8'));
+    const baselineKey = Buffer.from(config.key || '','base64');
+    if (baselineKey.length !== 32 || config.ref?.generation !== 'afa2699571a45ef38300a2c4477b18e27b29e235dd24c3f252983d3c110b5014') {
+      throw Error('STAGE_BASELINE_CONFIG');
+    }
+    return {ref:config.ref,baselineKey};
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw Error('STAGE_BASELINE_CONFIG');
+  }
+}
+
+export function checkStageVerifiedBaseline(generation) {
+  if (generation.ledger.sha256 !== 'a239aaf9f5b8138daaa75a0d662d03964a93ef62bd85e21cc230418be22e6115' ||
+      generation.registry.size !== 6043 || [...generation.registry.values()].some(row=>!row.hasPoint) || !generation.vehicleDelivery) {
+    throw Error('STAGE_BASELINE_SCOPE');
+  }
+  return generation;
+}
 
 export function stageOpsmapDurableStorage({env = process.env, fetchImpl = fetch, write = false, baselineKey = null} = {}) {
   const baseline=Buffer.isBuffer(baselineKey)&&baselineKey.length===32;
@@ -270,25 +294,36 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
   }, async readStatus() {
     const {head}=await readHead();
     return statusOf(head);
-  }, async restoreSpool(directory) {
+  }, async restoreSpool(directory,{useVerifiedBaseline=false}={}) {
     const target=await openOpsmapSyncGenerationStore(directory,{appRoot,writable:true});
-    const generation=await read();
+    if (useVerifiedBaseline && (!cached || cached.ref.runId !== undefined)) throw Error('OPSMAP_DURABLE_BASELINE_REF');
+    const generation=useVerifiedBaseline ? cached.generation : await read();
     if (!generation) return;
     const local=await target.read();
     if (local?.state.revision>=generation.state.revision) {
       if (local.state.revision===generation.state.revision && local.index.sha256!==generation.index.sha256) {
         throw Error('OPSMAP_DURABLE_SPOOL_CONFLICT');
       }
-      return;
+      return local;
     }
     const folder=path.join(target.root,'generations',generation.state.id);
     await fs.mkdir(path.join(folder,'input'),{recursive:true,mode:0o700});
     await fs.mkdir(path.join(folder,'coverage'),{recursive:true,mode:0o700});
-    for(const [name,limit] of payloadFiles(generation.index,generation.state)){
-      const bytes=await boundedRead(path.join(generation.folder,name),limit);
+    async function copy(name,bytes,limit) {
       const targetFile=path.join(folder,name);
       try {await fs.writeFile(targetFile,bytes,{flag:'wx',mode:0o600});}
       catch(error) {if(error.code!=='EEXIST'||!bytes.equals(await boundedRead(targetFile,limit)))throw error;}
+    }
+    for(const [name,limit] of payloadFiles(generation.index,generation.state)){
+      await copy(name,await boundedRead(path.join(generation.folder,name),limit),limit);
+    }
+    if (useVerifiedBaseline) {
+      await fs.mkdir(path.join(folder,'input','observed-days'),{recursive:true,mode:0o700});
+      // The first scheduled release is stored under a different encryption key.
+      // Copy verified archived days locally before publishing its parent pointer.
+      for (const [date,id] of Object.entries(generation.state.dates)) {
+        await copy('input/observed-days/'+date+'.json',await readDayBytes(id,date),SYNC_MAX_DAY_BYTES);
+      }
     }
     const {state}=generation;
     const file=path.join(target.root,'published',String(state.revision).padStart(12,'0')+'.json');
@@ -297,7 +332,9 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
       await fs.writeFile(pending,JSON.stringify({...state,sha256:syncDigest(state)}),{flag:'wx',mode:0o600});
       await fs.link(pending,file).catch(error=>{if(error.code!=='EEXIST')throw error;});
     } finally {await fs.unlink(pending).catch(()=>{});}
-    if ((await target.read())?.state.revision!==state.revision) throw Error('OPSMAP_DURABLE_SPOOL_RESTORE');
+    const restored=await target.read();
+    if (restored?.state.revision!==state.revision || restored.index.sha256!==generation.index.sha256) throw Error('OPSMAP_DURABLE_SPOOL_RESTORE');
+    return restored;
   }, async reserve(receipt) {
     if (!store.write) throw Error('OPSMAP_DURABLE_READ_ONLY');
     const {head,sha}=await readHead();

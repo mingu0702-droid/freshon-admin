@@ -31,7 +31,7 @@ import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConne
 import {createOfficialAddressLookup,createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
 import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
-import {createOpsmapDurableGeneration,stageOpsmapDurableStorage} from './opsmapDurableGeneration.js';
+import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from './opsmapDurableGeneration.js';
 import {mountOpsmapScheduledRun,opsmapScheduleConfig} from './opsmapScheduledRun.js';
 import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, isFixedMasterDay, stageFixedMasterScope,
   stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
@@ -141,23 +141,16 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   let baselineConfig, baselineStore, baselineRefresh, baselineRestoreMs, baselineState='NOT_CONFIGURED';
   if(stage.RENDER_SERVICE_ID===STAGE_SERVICE){
     try {
-      const config=JSON.parse(readFileSync('/etc/secrets/opsmap-stage-baseline-v1.json','utf8'));
-      const baselineKey=Buffer.from(config.key||'','base64');
-      if(baselineKey.length!==32||config.ref?.generation!=='afa2699571a45ef38300a2c4477b18e27b29e235dd24c3f252983d3c110b5014')throw Error('STAGE_BASELINE_CONFIG');
-      baselineConfig={ref:config.ref,baselineKey};
-      baselineState='PENDING';
-    } catch(error) {
-      if(error.code!=='ENOENT')baselineState='UNAVAILABLE';
-    }
+      baselineConfig=stageVerifiedBaselineConfig(stage);
+      if(baselineConfig)baselineState='PENDING';
+    } catch { baselineState='UNAVAILABLE'; }
   }
   function refreshBaseline(){
     if(!baselineConfig||['VERIFIED','SUPERSEDED'].includes(baselineState))return;
     baselineRefresh??=(async()=>{
       const started=performance.now();
       baselineStore ||= createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:stage,fetchImpl,baselineKey:baselineConfig.baselineKey}),now});
-      const candidate=await baselineStore.readBaseline(baselineConfig.ref);
-      if(candidate.ledger.sha256!=='a239aaf9f5b8138daaa75a0d662d03964a93ef62bd85e21cc230418be22e6115'||
-          candidate.registry.size!==6043||[...candidate.registry.values()].some(row=>!row.hasPoint)||!candidate.vehicleDelivery)throw Error('STAGE_BASELINE_SCOPE');
+      const candidate=checkStageVerifiedBaseline(await baselineStore.readBaseline(baselineConfig.ref));
       baselineState=validation.followScheduled(candidate,baselineStore.readDay,{baseline:true})?'VERIFIED':'SUPERSEDED';
       baselineRestoreMs=Math.round(performance.now()-started);
     })().catch(async()=>{baselineState='UNAVAILABLE';await baselineStore?.dispose().catch(()=>{});})
