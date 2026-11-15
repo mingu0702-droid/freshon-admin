@@ -79,6 +79,7 @@
   const viewportMetrics={idles:0,renders:0,skipped:0,cancelled:0};
   let markerSourceVersion=0;
   let markerEntries = new Map(), indexedRows = null, pointIndex = null, detailFrame = null, resizeFrame = null;
+  let indexedAssignmentMode;
   const detachedMarkers=new Map();
   let periodSelectionCache = null;
   let baseVehicles = new Map(), baseVehicleRequest = null, baseVehicleTimer = null, baseVehicleTries = 0;
@@ -1844,10 +1845,12 @@
     const completed = state.mode === "DATE_ROUTE" && row.status === "COMPLETED";
     const pending = state.mode === "DATE_ROUTE" && row.status && !completed;
     const compact = kind === "store" && !index;
-    const assignment = window.MapViewPolicy.pinAssignment(row, !base || periodBasis === 'driver' ? 'DATE_ROUTE' : 'BASE_60D');
+    const assignmentMode = !base || periodBasis === 'driver' ? 'DATE_ROUTE' : 'BASE_60D';
+    const assignment = window.MapViewPolicy.pinAssignment(row, assignmentMode);
     const group = row.clusterCount;
     const loading=assignment.loading&&baseVehicleStatus==='LOADING';
-    const pinLabel=loading?'조회 중':assignment.label;
+    const unregisteredStore = assignmentMode === 'BASE_60D' && row.baseVehicleState === 'NOT_IN_MASTER';
+    const pinLabel = unregisteredStore ? '매장' : loading ? '조회 중' : assignment.label;
     const assignmentTitle = assignment.code ? vehicleLabel(assignment.code) :
       assignment.kind === 'unknown' ? '호차 정보 없음' : assignment.kind === 'unverified' ?
         (loading?'기준호차 조회 중':assignment.label==='미등록'?(row.baseVehicleStale?'이전 고정배차표에 없음':'고정배차표에 없음'):
@@ -2054,18 +2057,26 @@
     return new basePinOverlayClass(options);
   }
 
+  function buildMapPinIndex(rows, assignmentMode) {
+    const pinRows = assignmentMode === 'BASE_60D' ? rows.filter(row => row.baseVehicleState !== 'NOT_IN_MASTER') : rows;
+    return MapPeriodUi.spatialIndex(pinRows);
+  }
+
   function renderStops(rows, options = {}) {
     const started = performance.now();
-    const dataChanged = indexedRows !== rows;
+    const base = state.mode === 'BASE_60D';
+    const assignmentMode = base && periodBasis !== 'driver' ? 'BASE_60D' : 'DATE_ROUTE';
+    const dataChanged = indexedRows !== rows || indexedAssignmentMode !== assignmentMode;
     state.currentRows = rows;
     if (!state.map) return;
     if (dataChanged || !pointIndex) {
-      markerSourceVersion++;indexedRows=rows;pointIndex=MapPeriodUi.spatialIndex(rows);markerSignatures=new WeakMap();
+      markerSourceVersion++;indexedRows=rows;indexedAssignmentMode=assignmentMode;
+      pointIndex=buildMapPinIndex(rows,assignmentMode);markerSignatures=new WeakMap();
       detachedMarkers.clear();
     }
     if (!options.viewportOnly) { state.lines.forEach(line => line.setMap(null)); state.lines = []; }
     const {valid,byCode}=pointIndex;
-    const level=state.map.getLevel(),base=state.mode==='BASE_60D',fit=state.fitRequested;
+    const level=state.map.getLevel(),fit=state.fitRequested;
     const mapNode=$('#map');
     const mapViewport={width:mapNode.clientWidth,height:mapNode.clientHeight};
     const viewport=fit?null:mapViewport;
@@ -2074,7 +2085,6 @@
     const vehicleOverview=base&&!selectedVehicleStores&&level>=10&&periodBasis==='vehicle'&&
       (!drilledBaseVehicle||Boolean(state.virtual?.searchTemporary));
     const focusedStops=!base&&(state.selectedVehicles.length===1||periodBasis==='driver');
-    const assignmentMode=base&&periodBasis!=='driver'?'BASE_60D':'DATE_ROUTE';
     const navCodes=window.MapNavigationEditor?.values?.().filter(Boolean)||[];
     const selectedCode=state.selected?.customerCode;
     const protectedCodes=[selectedCode,...navCodes];

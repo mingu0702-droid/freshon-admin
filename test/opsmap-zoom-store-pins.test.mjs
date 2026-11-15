@@ -126,6 +126,25 @@ test('pins distinguish the primary fixed route, confirmed blank, and missing evi
   assert.equal(oneRoute.clusterUnverified,true);
 });
 
+test('a missing master row is excluded before base pin grouping and retained for daily delivery', () => {
+  const start = runtime.indexOf('  function buildMapPinIndex(');
+  const end = runtime.indexOf('  function renderStops(', start);
+  assert(start >= 0 && end > start);
+  const build = vm.runInNewContext(runtime.slice(start, end) + '\nbuildMapPinIndex', { MapPeriodUi });
+  const rows = [
+    { customerCode:'S10001', lat:37.5, lng:127, baseVehicle:'101', baseVehicleState:'VERIFIED_MASTER' },
+    { customerCode:'S10002', lat:37.5, lng:127, vehicle:'202', baseVehicleState:'NOT_IN_MASTER' },
+    { customerCode:'S10003', lat:37.6, lng:127.1, baseVehicle:'오산신규', baseVehicleState:'VERIFIED_MASTER' },
+    { customerCode:'S10004', lat:37.7, lng:127.2, baseVehicle:'오산보류', baseVehicleState:'VERIFIED_MASTER' },
+    { customerCode:'S10005', lat:37.8, lng:127.3, baseVehicleState:'UNASSIGNED' },
+  ];
+  const base = build(rows, 'BASE_60D');
+  assert.deepEqual(base.valid, [rows[0], rows[2], rows[3], rows[4]]);
+  assert(!MapViewPolicy.exactLocations(base.valid).some(pin => pin.clusterRows?.includes(rows[1])));
+  assert.equal(build(rows, 'DATE_ROUTE').byCode.get('S10002'), rows[1]);
+  assert.equal(rows.length, 5);
+});
+
 test('loading and unknown pins use readable labels while grouping keeps the store count', () => {
   class Element {
     dataset = {};
@@ -161,6 +180,12 @@ test('loading and unknown pins use readable labels while grouping keeps the stor
   assert.equal(label(failed),'미확인');
   assert.equal(failed.dataset.pinAssignment,'unverified');
   assert.match(failed.attributes['aria-label'],/기준호차 확인 필요/);
+  const searchSelection = {...pending, vehicle:'202', baseVehicleState:'NOT_IN_MASTER'};
+  assert.equal(label(makeMarker(searchSelection,null,'store')),'매장');
+  assert.match(makeMarker(searchSelection,null,'store').attributes['aria-label'],/고정배차표에 없음/);
+  state.mode='DATE_ROUTE';
+  assert.equal(label(makeMarker(searchSelection,null,'store')),'202');
+  state.mode='BASE_60D';
   assert.equal(label(makeMarker({...pending,baseVehicle:'156',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'156');
   assert.equal(label(makeMarker({...pending,baseVehicle:'오산신규',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'오산\n신규');
   assert.equal(label(makeMarker({...pending,baseVehicle:'오산보류',baseVehicleState:'VERIFIED_MASTER'},null,'store')),'오산\n보류');
