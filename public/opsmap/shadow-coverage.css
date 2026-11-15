@@ -18,7 +18,6 @@
 body.shadow-coverage-open > main.workspace,
 body.shadow-coverage-open #approvedSiteHeader nav button[hidden],
 body.shadow-coverage-open #staffAuxContent,
-body.shadow-coverage-open #mapFreshnessStatus,
 .shadow-coverage[hidden], .shadow-coverage [hidden] { display: none !important }
 
 .shadow-coverage {

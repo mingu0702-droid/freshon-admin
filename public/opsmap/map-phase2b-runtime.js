@@ -41,7 +41,7 @@
       if(value.external)queueMicrotask(()=>void window.MapDataSync?.onPublished?.({}).catch(()=>{}));
       if(value.state==='logged-out')purgeStaffData();
       const panel = $('#packageReadState');
-      if (panel) { panel.dataset.state=value.state;panel.textContent=({cached:'저장된 지도 표시 중 · 최신 자료 확인 중', 'logged-out':'로그아웃되었습니다', held:'최신 자료 확인 중 · 이전 지도 표시',error:'자료 조회 실패 · 이전 지도 표시',loading:'자료 확인 중',legacy:'저장된 지도 표시 중',ready:'지도 자료 확인 완료 · 전체 자료 확인 필요',empty:'선택 범위에 매장이 없습니다',checking:'자료 확인 중',unconfirmed:'기간 자료 확인 필요',missing:'저장된 자료가 없습니다',preparing:'자료 준비 중', 'latest-available':'새 자료가 있습니다 · 선택 기간 유지',cancelled:'조회 취소 · 이전 지도 표시'})[value.state]||'자료 확인 필요'; }
+      if (panel) { panel.dataset.state=value.state;panel.textContent=({error:'최신 자료를 불러오지 못해 이전 지도를 표시합니다.',unconfirmed:'이 기간의 자료를 확인할 수 없습니다.',missing:'조회할 수 있는 자료가 없습니다.', 'latest-available':'새 자료가 있습니다. 조회 기간을 다시 선택해 주세요.'})[value.state]||''; }
     }});
     return hybridUi;
   });
@@ -110,7 +110,7 @@
   async function queryManualRoadRoute(){
     if(manualRoadController?.isLoading())return;
     const draft=manualDraft.validate();
-    if(!manualRoadController)throw Error('도로경로 API 모듈 미연결');
+    if(!manualRoadController)throw Error('도로 경로를 조회할 수 없습니다.');
     ++state.routeRequestId;++state.todayRequestId;
     requestControllers.get('route-plan')?.controller.abort('superseded');
     requestControllers.get('operation-status')?.controller.abort('superseded');
@@ -253,7 +253,6 @@
       customerRegistryCheckedAt=customerRegistrySourceCheckedAt;
       if(result.complete&&result.version!==before){replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();if(state.selected){const next=storesByCode.get(state.selected.customerCode);if(next)state.selected={...state.selected,...next};}state.fitRequested=false;await loadBaseMap();const added=allStores.filter(r=>!known.has(r.customerCode)).map(r=>r.customerCode);if(added.length)void loadBaseVehicles(added);window.dispatchEvent(new CustomEvent('map-customer-registry-updated',{detail:{count:result.count,checkedAt:customerRegistryCheckedAt,version:result.version}}));}
       if(result.complete&&!performance.getEntriesByName('opsmap-customer-ready','mark').length)performance.mark('opsmap-customer-ready');
-      syncSourceFreshness();
     }catch(error){if(owner===initialRequestId&&document.body.dataset.mapStaffState==='authenticated'){clearTimeout(customerRegistryRetry);customerRegistryRetry=setTimeout(()=>void syncCustomerRegistry(),15000);}}
     finally{customerRegistryBusy=false;}
   }
@@ -368,7 +367,10 @@
     if(generalMap&&state.mode==='BASE_60D')generalRegistryRows=new Map(next.map(row=>[row.customerCode,row]));
     liveAddressLocations?.onSourceSync(JSON.stringify([meta?.preservation?.version,meta?.sourceGeneration,meta?.sourceObservedAt,meta?.generatedAt,customerRegistry?.summary().version]),allStores);
     window.dispatchEvent(new Event('map-stores-replaced'));
-    if(state.mode==='BASE_60D')snapshotMeta = meta || snapshotMeta;
+    if(state.mode==='BASE_60D'){
+      snapshotMeta = meta || snapshotMeta;
+      if(generalMap&&latestSnapshotRows.length)window.MapDataSync?.applied?.(snapshotMeta?.latestDate||snapshotMeta?.endDate);
+    }
     if(state.virtual?.searchTemporary&&(temporaryAreaSourceVersion!==newAreaSourceVersion()||temporaryAreaDispatchMeta!==baseVehicleMeta)){
       renderSearchTemporaryNearby(state.virtual,{loadDispatch:false});
     }
@@ -396,14 +398,6 @@
     document.body.classList.toggle("historicalMode", state.selectedDate !== localDate());
     syncDateHeading();
     if(generalMap){$('#dateHeading').textContent='일반지도';$('#latestDate').textContent='전체 저장 매장';}
-    syncSourceFreshness();
-  }
-  function syncSourceFreshness() {
-    const meta=snapshotMeta||{};
-    const recovery=meta.recovery==='RESTORING'?' · 최신 자료 복원 중':
-      ['LAST_VERIFIED_RETAINED','UNAVAILABLE'].includes(meta.recovery)?' · 최신 자료 조회 실패, 확인된 자료 표시 중':'';
-    $('#sourceCollectedAt').textContent=`최신 원천 수집일: ${meta.sourceObservedAt||meta.sourceCollectedAt||'미확인'}${customerRegistryCheckedAt?' · Customer 확인 '+new Date(customerRegistryCheckedAt).toLocaleTimeString('ko-KR',{hour12:false}):''}${recovery}`;
-    $('#mapAppliedRange').textContent=`현재 지도 반영기간: ${!generalMap?state.mode==='DATE_ROUTE'?state.selectedDate||'미확인':state.rangeStart&&state.rangeEnd?`${state.rangeStart} ~ ${state.rangeEnd}`:'미확인':meta.startDate&&meta.endDate?`${meta.startDate} ~ ${meta.endDate}`:'기간 미확인'}`;
   }
   function syncPeriodBasis() {
     const driver = periodBasis === "driver";
@@ -442,7 +436,7 @@
       if(id!==initialRequestId)throw Object.assign(Error('QUERY_CANCELLED'),{name:'AbortError'});
       if(payload.meta?.phase==='ERROR')throw Error('SNAPSHOT_READ_FAILED');
       snapshotFailure=null;
-      if(payload.pending===true||payload.meta?.complete===false){snapshotReadState='pending';snapshotRetryAfter=2000;return;}
+      if(payload.pending===true||payload.meta?.complete===false){snapshotReadState='pending';snapshotRetryAfter=2000;window.MapDataSync?.setChecking?.(true);return;}
       if (!Array.isArray(payload.data)) throw new Error("스냅샷 확인 실패");
       snapshotReadState = 'ready';
       const generation=payload.meta?.sourceGeneration;
@@ -452,8 +446,8 @@
       }
       snapshotMeta = payload.meta || {};
       snapshotRetryAfter=snapshotMeta.recovery==='RESTORING'?Math.max(1000,Number(snapshotMeta.retryAfterMs)||2000):0;
+      window.MapDataSync?.setChecking?.(snapshotRetryAfter>0);
       performance.mark('opsmap-snapshot-ready');
-      syncSourceFreshness();
       state.latestDate = snapshotMeta.latestDate || latestDateFromRows(latestSnapshotRows);
       $("#selectedDate").max = localDate();
       // Coordinates and Snapshot freshness never select the Period or Daily date.
@@ -461,6 +455,7 @@
       if(isSilentRequestError(error))throw error;
       snapshotReadState = error.code==='PHASE2B_SNAPSHOT_RESTORING'?'pending':'error';
       snapshotRetryAfter=snapshotReadState==='pending'?error.retryAfterMs??2000:0;
+      window.MapDataSync?.setChecking?.(snapshotRetryAfter>0);
       snapshotFailure=error;
     }
   }
@@ -469,7 +464,8 @@
     const delay=Math.max(1000,snapshotRetryAfter);
     if(id!==initialRequestId||!generalMap||!snapshotRetryAfter)return;
     if(Date.now()+delay>until){
-      $('#freshnessState').textContent=dateReady?'매장 복원 지연 · 마지막 확인 지도 표시':'매장 복원 지연 · 다시 조회해 주세요.';
+      window.MapDataSync?.setChecking?.(false);
+      $('#freshnessState').textContent=dateReady?'새 매장정보를 불러오지 못해 이전 지도를 표시합니다.':'매장정보가 늦어지고 있습니다. 잠시 후 다시 조회해 주세요.';
       return;
     }
     snapshotRecoveryTimer=setTimeout(async()=>{
@@ -514,7 +510,11 @@
       await refreshStoreSnapshot();
       if(owner!==initialRequestId||!generalMap||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
       if(snapshotReadState!=='ready')throw Error('SNAPSHOT_READ_FAILED');
-      if(version(oldMeta)===version(snapshotMeta)&&oldRows.length===latestSnapshotRows.length)return{ok:true,changed:false};
+      if(version(oldMeta)===version(snapshotMeta)&&oldRows.length===latestSnapshotRows.length){
+        if(!recentPeriodNotice)$('#freshnessState').textContent=['LAST_VERIFIED_RETAINED','UNAVAILABLE'].includes(snapshotMeta?.recovery)
+          ?'새 매장정보를 불러오지 못해 이전 지도를 표시합니다.':'';
+        return{ok:true,changed:false};
+      }
       const previousByCode=new Map(oldRows.map(row=>[String(row.customerCode||row.code),row]));
       const added=latestSnapshotRows.map(row=>String(row.customerCode||row.code)).filter(code=>!previousByCode.has(code));
       // An approved registry generation can move a store even when its last delivery is older.
@@ -535,12 +535,13 @@
       if(oldRows.length)state.fitRequested=false;
       await loadBaseMap();
       void initMap().then(()=>afterSearchPaint(()=>{if(owner===initialRequestId&&generalMap&&added.length)void loadBaseVehicles(added);}));
-      void window.MapDataSync?.refresh?.();return{ok:true,changed:true,added:added.length,stores:allStores.length};
+      return{ok:true,changed:true,added:added.length,stores:allStores.length};
     }catch(error){
       if(owner!==initialRequestId||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
       latestSnapshotRows=oldRows;snapshotMeta=oldMeta;coordinateByCode.clear();oldRows.forEach(row=>coordinateByCode.set(String(row.customerCode||row.code),row));
       if(!snapshotRetryAfter&&!dateReady){setPeriodViewState('error');renderPeriodStoreList([]);$('#freshnessState').textContent=snapshotFailureLabel();}
-      const label=$('#mapFreshnessStatus');if(label)label.title='자동 매장 조회 지연 · 기존 지도 유지';return{ok:false,changed:false};
+      if(!snapshotRetryAfter&&dateReady)$('#freshnessState').textContent='새 매장정보를 불러오지 못해 이전 지도를 표시합니다.';
+      return{ok:false,changed:false};
     }finally{generalSnapshotPolling=false;}
   }
   function startGeneralSnapshotPolling(){
@@ -572,11 +573,11 @@
       if(cached){if(recentPeriodMode){state.rangeStart=cached.meta.startDate;state.rangeEnd=cached.meta.endDate;$('#rangeStart').value=state.rangeStart;$('#rangeEnd').value=state.rangeEnd;}latestSnapshotRows=cached.data;snapshotMeta=cached.meta;coordinateByCode.clear();cached.data.forEach(row=>coordinateByCode.set(row.customerCode,row));periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;setPeriodViewState(allStores.length?'ready':'empty');await loadBaseMap();}
       await refreshStoreSnapshot();
       if(id!==initialRequestId||!generalMap)return;
-      if(snapshotReadState==='error'&&cached){dateReady=true;setPeriodViewState(allStores.length?'ready':'empty');$('#freshnessState').textContent='저장된 정상 지도 유지 · 네트워크 최신성 미확인';return;}
+      if(snapshotReadState==='error'&&cached){dateReady=true;setPeriodViewState(allStores.length?'ready':'empty');$('#freshnessState').textContent='새 매장정보를 불러오지 못해 이전 지도를 표시합니다.';return;}
       if(snapshotReadState==='pending'){
         scheduleSnapshotRecovery(id);
-        if(cached){$('#freshnessState').textContent='최신 매장 자료 복원 중 · 저장된 지도 표시';return;}
-        setPeriodViewState('not-ready');renderPeriodStoreList([]);$('#freshnessState').textContent='매장 자료 복원 중 · 매장 수 미확인';return;
+        if(cached){$('#freshnessState').textContent='';return;}
+        setPeriodViewState('not-ready');renderPeriodStoreList([]);$('#freshnessState').textContent='매장정보를 불러오고 있습니다.';return;
       }
       if(snapshotReadState!=='ready')throw Error('SNAPSHOT_READ_FAILED');
       applySnapshotRange();
@@ -587,7 +588,6 @@
       if(masterLoading)void loadBaseVehicles(customerCodes);
       setPeriodViewState(allStores.length?'ready':'empty');await loadBaseMap();
       if(id!==initialRequestId||!generalMap)return;
-      $('#freshnessState').textContent='전체 저장 매장 반영됨 — 운영 전체 매장 완전성 미검증';syncSourceFreshness();
       scheduleSnapshotRecovery(id);
       void initMap().then(()=>afterSearchPaint(()=>{
         if(id!==initialRequestId||!generalMap)return;
@@ -667,7 +667,7 @@
   async function changePeriod(start, end, retry = false, nextPage = false) {
     const rollingEnabled=window.MAP_ROLLING_DATE_INDEX_ENABLED===true&&periodBasis!=='driver';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end || end > localDate() || !rollingEnabled&&(Date.parse(end)-Date.parse(start))/86400000 > 89) {
-      $("#freshnessState").textContent = rollingEnabled?"시작일과 종료일을 확인하세요.":"기존 경로는 최대 90일입니다 · 과거 색인 미연결"; return;
+      $("#freshnessState").textContent = rollingEnabled?"시작일과 종료일을 확인하세요.":"조회할 수 있는 기간은 최대 90일입니다."; return;
     }
     generalMap=false;recentPeriodNotice='';delete $('#freshnessState').dataset.periodNotice;
     ++initialRequestId; clearTimeout(initialTimer);
@@ -734,7 +734,7 @@
         if (id === periodRequestId && !isSilentRequestError(error)) {
           setPeriodViewState("error");
           $("#freshnessState").textContent = "기간 조회 실패 · 신규권역 판단 보류";
-          $("#periodIdentity").textContent = "기간 원천 조회 실패 · 매장 수 미확인";
+          $("#periodIdentity").textContent = "이 기간의 매장 자료를 불러오지 못했습니다.";
           $("#periodIdentity").textContent += " · 이전 지도 유지";
           $("#periodStoreListCount").textContent = "미확인";
           $("#periodStoreList").innerHTML = '<p class="notice show">기간 데이터를 불러오지 못했습니다. 조회 실패를 매장 0개로 판단하지 마세요.</p>';
@@ -1442,11 +1442,11 @@
     const detail={label:routeMode?'확정 기사':'정규 기사',text:'담당 기사 정보 없음',title:'',source:''};
     if(!routeMode&&(!verifiedBase||!vehicle)){detail.text+=' · 기준호차 확인 필요';return detail;}
     const scopedCenter=window.OPSMAP_DRIVER_CONTACT_CENTER;
-    if(scopedCenter&&stageDriverCenter(row,routeMode)!==scopedCenter)return {...detail,text:'이 센터의 기사 연락처 자료 미연결',source:'CENTER_UNVERIFIED'};
+    if(scopedCenter&&stageDriverCenter(row,routeMode)!==scopedCenter)return {...detail,text:'이 센터의 기사 연락처를 조회할 수 없습니다.',source:'CENTER_UNVERIFIED'};
     // A historical delivery driver is never the current base-vehicle assignment.
     if(routeMode)return {...detail,text:String(row.driverName||'').trim()||
       (scopedCenter?'담당 기사 확인 중…':'담당 기사 정보 없음'),title:'',source:'ASSIGNMENT'};
-    if(window.OPSMAP_DRIVER_CONTACT_ENABLED!==true)return {...detail,text:'기사 연락처 미연결',source:'DISABLED'};
+    if(window.OPSMAP_DRIVER_CONTACT_ENABLED!==true)return {...detail,text:'기사 연락처를 조회할 수 없습니다.',source:'DISABLED'};
     const driver=driverMasterDate===date?driverByVehicle.get(vehicle):null;
     const name=String(driver?.driverName||driver?.name||'').trim();
     if(!name){
@@ -2272,10 +2272,10 @@
   function coordinateEvidenceLabel(row) {
     if (numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) return '';
     if (row.coordinateSource === 'MANUAL_PIN') return '사용자 수동 확정 위치 · 원본 주소 보존';
-    if (row.coordinateEvidence === 'DELIVERY_COMPLETION_GPS') return '배송 완료 GPS 위치 · 출입구 위치 미검증';
+    if (row.coordinateEvidence === 'DELIVERY_COMPLETION_GPS') return '배송 완료 위치 · 출입구 확인 필요';
     if (row.coordinateSource === 'BUILDING_VERIFIED' && row.coordinateEvidence === 'BUILDING_LOCATION') return '공공 데이터로 확인한 건물 위치';
     if (row.coordinateSource === 'ADDRESS_REPRESENTATIVE' && row.coordinateEvidence === 'ADDRESS_LOCATION') return '공공 데이터의 주소 대표 위치';
-    if (row.coordinateSource === 'VERIFIED_STORE_POINT') return '검증된 저장 위치';
+    if (row.coordinateSource === 'VERIFIED_STORE_POINT') return '확인된 매장 위치';
     if (['KAKAO_ADDRESS_LIVE','KAKAO_BUILDING_EXACT_ADDRESS','KAKAO_VERIFIED_BUILDING','KAKAO_ADDRESS_REVALIDATION'].includes(row.coordinateSource)) return '주소 기준 위치';
     if (row.coordinateSource === 'HISTORICAL_GPS_SAME_BUILDING') return '동일 주소의 저장 위치';
     return '';
@@ -2565,15 +2565,12 @@
     if (mobile) $("#mobileWorkspace").classList.remove("collapsed");
   }
 
-  async function showDiagnostics() {
-    const panel = $("#operationsPanel"); panel.hidden = !panel.hidden;
-    if (panel.hidden) return;
-    panel.textContent = "상태 확인 중…";
+  async function readDiagnostics() {
+    if(!window.MapStaffEntry?.session())return null;
     const [status, periodStatus] = await Promise.all([
       fetchJson("/api/map-phase2b/preview/status", { channel: "diagnostics", ttl: 15000, timeout: 10000 }).catch(() => ({})),
       fetchJson("/api/map-phase2b/preview/period-status", { channel: "period-diagnostics", ttl: 15000, timeout: 10000 }).catch(() => ({}))
     ]);
-    if (panel.hidden) return;
     const snap = status.snapshot || {};
     const rows = [ ["조회 범위", state.mode === "BASE_60D" ? `${state.rangeStart} ~ ${state.rangeEnd}` : state.selectedDate],
       ["선택 호차", primarySelectedVehicle() || "없음"], ["Hub 인증", status.hubAuth || "확인 중"],
@@ -2584,7 +2581,7 @@
       ["기간 모델 범위", periodStatus.startDate && periodStatus.endDate ? `${periodStatus.startDate} ~ ${periodStatus.endDate}` : "확인 중"],
       ["현재 목록", periodViewState], ["최근 운행 조회", lastRefreshedAt || "확인 중"],
       ["주소 좌표 조회", geocodeDiagnostic], ...[...apiDiagnostics].map(([key, value]) => [key, `${value.ms}ms · ${value.cache} · HTTP ${value.status}`]) ];
-    panel.innerHTML = `<table class="diagnosticTable"><tbody>${rows.map(([label, value]) => `<tr><th>${esc(label)}</th><td>${esc(value || "미제공")}</td></tr>`).join("")}</tbody></table>`;
+    return Object.fromEntries(rows);
   }
 
   function showNearbyReference(point) {
@@ -3631,14 +3628,15 @@
       const range = !OpsmapDaily.day(state.rangeEnd)||!OpsmapDaily.day(state.rangeStart)?'조회 기간 미확인':
         state.rangeStart === daysBefore(state.rangeEnd, 89) ? "최근 90일" : state.rangeStart.slice(5) + " ~ " + state.rangeEnd.slice(5);
       $("#periodIdentity").textContent = `${subject} · ${generalAllStores && periodBasis === 'vehicle' ? '저장된 전체 매장' : range} · ${stores.length}개 매장`;
-      if (generalAllStores && snapshotReadState === 'error') $('#periodIdentity').textContent = '전체 매장 원천 조회 실패 · 전체 매장 수 미확인';
+      if (generalAllStores && snapshotReadState === 'error') $('#periodIdentity').textContent = '매장정보를 불러오지 못했습니다.';
       if(recentPeriodNotice)$('#periodIdentity').textContent=recentPeriodNotice;
     }
     $("#mapStatusTitle").textContent = period ? "매장·권역 지도" : "일자별 운행";
     $("#mapStatusSub").textContent = period ? `${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 배송지' : (baseVehicleMeta?.stale?'이전 기준호차':'기준호차')}`
       : dailyMeta?.roster&&!operationStops.length&&!verifiedEmptyDailyScope()?`${state.selectedDate} · 선택 범위 착지 수 미확인`:
         `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
-    if(period) $("#freshnessState").textContent=recentPeriodNotice||`지도 반영일 ${modelStatus?.periodLatest || periodMeta?.periodLatest || state.rangeEnd}`;
+    if(period) $("#freshnessState").textContent=recentPeriodNotice||(['LAST_VERIFIED_RETAINED','UNAVAILABLE'].includes(snapshotMeta?.recovery)
+      ?'새 매장정보를 불러오지 못해 이전 지도를 표시합니다.':'');
     else renderDailyReadState();
     const fixedStatus=period&&periodBasis==='vehicle'&&baseVehicleStatus!=='READY'
       ?baseVehicleStatus==='ERROR'?'기준호차 조회 실패':baseVehicleStatus==='NOT_READY'?'기준호차 자료 미확인':'기준호차 조회 중':'';
@@ -4067,7 +4065,7 @@
     if(evidence?.point&&['STORED','OFFICIAL'].includes(status))return judgeNewAreaPoint(row,evidence.point,batch);
     const error=evidence?.error;
     const http=evidence?.httpStatus;
-    const messages={STAGE_BATCH_GENERATION_EXPIRED:'검증 자료 사용 기간 만료 · 지도 새로고침 필요',STAGE_BATCH_GENERATION_CHANGED:'검증 자료가 변경됨 · 지도 새로고침 필요',
+    const messages={STAGE_BATCH_GENERATION_EXPIRED:'지도 자료를 다시 불러온 뒤 조회해 주세요.',STAGE_BATCH_GENERATION_CHANGED:'지도 자료가 바뀌었습니다. 새로고침 후 다시 조회해 주세요.',
       CUSTOMER_CODE_NOT_FOUND:'저장 자료에서 고객코드 미확인',STORED_COORDINATE_UNVERIFIED:'저장 고객 확인 · 좌표 검증 필요',
       ADDRESS_NOT_MATCHED:'저장·공식 자료에서 주소 일치 없음',ADDRESS_AMBIGUOUS:'주소에 연결된 저장 위치가 여러 곳입니다',
       INVALID_ADDRESS:'주소 입력 확인 필요',OFFICIAL_COORDINATE_UNVERIFIED:'공식 주소 확인 · 좌표 검증 필요',
@@ -4702,7 +4700,7 @@
     const stores = rows.filter(row => !row.virtual);
     if (generalAllStores && snapshotReadState === 'error') {
       $('#periodStoreListCount').textContent = '전체 수 미확인';
-      panel.textContent = '전체 매장 원천 조회 실패 · 기존 지도 유지. 최근 90일 버튼으로 다시 조회해 주세요.';
+      panel.textContent = '매장정보를 불러오지 못했습니다. 최근 90일 버튼으로 다시 조회해 주세요.';
       $('#periodListMore').hidden = true; return;
     }
     if(!stores.length&&state.centerFilter&&baseVehicleStatus!=='READY'){
@@ -4816,7 +4814,6 @@
     $("#closeMobileRoute").onclick = () => document.body.classList.remove("routeSheetOpen");
     $("#mobileToday").onclick = selectLatestRoute;
     $("#mobileRoutePlan").onclick = () => loadRoute("mobile");
-    $("#openOperations").onclick = showDiagnostics;
     $$('[data-run-filter]').forEach((button) => button.onclick = () => { runFilter = button.dataset.runFilter; void loadBaseMap(); });
     $$('[data-sheet-tab]').forEach((button) => button.onclick = () => activateSheet(button.dataset.sheetTab));
     $("#sheetExpand").onclick = () => { if ($("#mobileWorkspace").classList.contains("collapsed")) $("#mobileWorkspace").classList.remove("collapsed"); else $("#mobileWorkspace").classList.toggle("expanded"); };
@@ -4825,7 +4822,7 @@
     document.addEventListener("keydown", (event) => { if (event.key === "Escape") {cancelManualRoadRoute(); cancelNewAreaWork(); clearSelection(); } });
   }
 
-  function renderManualDraft(message = '도로거리·시간은 API 연결 전 미확인입니다.') {
+  function renderManualDraft(message = '도로 경로를 조회하면 거리와 예상 시간이 표시됩니다.') {
     const stops = manualDraft.stops();
     $('#manualStops').innerHTML = stops.map((stop, i) => `<li><b>${i === 0 ? '출발' : i === stops.length - 1 ? '도착' : '경유 ' + i}</b> · ${esc(stop.label)}<div class="manualStopControls"><button data-manual-up="${stop.id}" ${i === 0 ? 'disabled' : ''} aria-label="${esc(stop.label)} 위로">↑</button><button data-manual-down="${stop.id}" ${i === stops.length - 1 ? 'disabled' : ''} aria-label="${esc(stop.label)} 아래로">↓</button><button data-manual-remove="${stop.id}">삭제</button></div></li>`).join('');
     $('#manualStatus').textContent = message;
@@ -4839,7 +4836,7 @@
   }
   initVehicles();
   const freshnessFields=document.createElement('div');
-  freshnessFields.innerHTML='<div id="sourceCollectedAt" role="status">최신 원천 수집일: 미확인</div><div id="mapAppliedRange">현재 지도 반영기간: 미확인</div><div id="packageReadState" role="status"></div>';
+  freshnessFields.innerHTML='<div id="packageReadState" role="status"></div>';
   $('#leftPanel .fresh').append(freshnessFields);
   $('#newAreaApplyDate').value=localDate();
   $('#leftPanel .head').append($('#mapDateBar'));
@@ -4909,6 +4906,7 @@
   // Local design shell uses the same controllers; it cannot authorize API calls.
   window.MapUiLocalBridge={
     state,
+    readDiagnostics,
     searchSnapshotGeneration:()=>snapshotMeta?.sourceGeneration??null,
     findStoredSearchRows,
     storedSearchCustomers:currentStageSearchCustomers,

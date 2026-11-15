@@ -9,9 +9,10 @@
     if(data.state==='success')return data.noDrivingRequired?'모든 방문지가 같은 위치에 있습니다.':'자동차 경로 · 현재 교통 기준';
     if(data.state==='partial')return '일부 구간만 조회되었습니다.';
     if(data.state==='empty'||data.error==='NO_ROAD_ROUTE')return '이 지점을 잇는 자동차 경로가 없습니다.';
-    const errors={STAFF_LOGIN_REQUIRED:'직원 로그인이 필요합니다.',AUTHENTICATION_FAILED:'길찾기 제공자 인증 연결을 확인해야 합니다.',PERMISSION_DENIED:'길찾기 API 이용 권한을 확인해야 합니다.',STAGE_VERIFICATION_READ_ONLY:'이 화면의 길찾기 연결을 확인해 주세요.',ORIGIN_REJECTED:'길찾기 연결 주소를 확인해 주세요.',KEY_MISSING:'길찾기 연결이 준비되지 않았습니다.',FEATURE_DISABLED:'길찾기 연결이 준비되지 않았습니다.',PERSISTENT_BUDGET_REQUIRED:'길찾기 사용 한도 설정을 확인해 주세요.',QUOTA_EXCEEDED:'경로 조회 한도에 도달했습니다.',TIMEOUT:'경로 조회 시간이 초과되었습니다.',PROVIDER_UNAVAILABLE:'경로 서비스에 연결할 수 없습니다.',RECORDED_ORDER_REQUIRED:'호차와 저장된 방문 순서를 선택해 주세요.',INVALID_RESPONSE:'경로 응답을 확인할 수 없습니다.',ROAD_ROUTE_FAILED:'경로를 불러오지 못했습니다.'};
+    const errors={STAFF_LOGIN_REQUIRED:'직원 로그인이 필요합니다.',QUOTA_EXCEEDED:'경로 조회 한도에 도달했습니다.',TIMEOUT:'경로 조회 시간이 초과되었습니다.',PROVIDER_UNAVAILABLE:'경로 서비스에 연결할 수 없습니다.',RECORDED_ORDER_REQUIRED:'호차와 저장된 방문 순서를 선택해 주세요.',INVALID_RESPONSE:'경로를 불러오지 못했습니다.',ROAD_ROUTE_FAILED:'경로를 불러오지 못했습니다.'};
     if(errors[data.error])return errors[data.error];
-    if(data.state==='disabled'||data.error==='CALL_POLICY_BLOCKED')return '길찾기 연결 대기';
+    if(data.state==='disabled'||['AUTHENTICATION_FAILED','PERMISSION_DENIED','STAGE_VERIFICATION_READ_ONLY','ORIGIN_REJECTED',
+      'KEY_MISSING','FEATURE_DISABLED','PERSISTENT_BUDGET_REQUIRED','CALL_POLICY_BLOCKED','CALL_POLICY_UNCONFIRMED'].includes(data.error))return '도로 경로를 조회할 수 없습니다.';
     return '경로를 조회하지 못했습니다. 잠시 후 다시 시도해 주세요.';
   }
   function dockDetail(){

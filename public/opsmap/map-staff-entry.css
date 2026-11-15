@@ -8,5 +8,4 @@ body[data-map-staff-state]:not([data-map-staff-state="authenticated"]) > :not(#m
 #mapStaffEntry button{width:100%;min-height:44px;margin-top:20px;border:0;border-radius:8px;background:#2463eb;color:#fff;font:inherit;font-weight:700}
 #mapStaffEntry button:disabled{opacity:.55}
 #mapStaffEntry [role="status"]{min-height:40px;margin:14px 0 0;color:#536174}
-#mapStaffSessionState{font-size:11px;color:#536174;white-space:nowrap}
-@media(max-width:760px){#mapStaffEntry{padding:18px}#mapStaffEntry form{padding:24px}#mapStaffSessionState{font-size:10px}}
+@media(max-width:760px){#mapStaffEntry{padding:18px}#mapStaffEntry form{padding:24px}}

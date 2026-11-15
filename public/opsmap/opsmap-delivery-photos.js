@@ -195,29 +195,21 @@
       if ([200,400,401,403,404,409,410,413,422,429,500,502,503,504].includes(error.sourceHttpStatus)) host.dataset.failureSourceHttp=String(error.sourceHttpStatus);
       if (target?.history && ['PHOTO_HISTORY_NOT_CONFIGURED', 'PHOTO_HISTORY_INDEX_UNAVAILABLE', 'PHOTO_HISTORY_INDEX_INVALID'].includes(error.message)) {
         const pending = error.message === 'PHOTO_HISTORY_NOT_CONFIGURED';
-        shell(pending ? '과거 사진 인덱스 연결 대기' : '과거 사진 인덱스 조회 실패', pending ? 'unverified' : 'error',
+        shell(pending ? '과거 사진을 아직 확인할 수 없습니다.' : '과거 사진을 불러오지 못했습니다.', pending ? 'unverified' : 'error',
           {label:'다시 조회', run:() => current === generation && target && open(target)});
         dateSearch(); return;
       }
-      if (error.message === 'UPSTREAM_AUTH_REQUIRED') { shell('Delivery Admin 인증 연결이 필요합니다. 직원 로그인은 유지됩니다.', 'upstream-auth-required'); return; }
-      if (error.message === 'PHOTO_SOURCE_DISABLED') { shell('납품 사진 연결이 비활성 상태입니다.', 'source-disabled'); return; }
+      if (error.message === 'UPSTREAM_AUTH_REQUIRED') { shell('사진 서비스에 로그인해야 합니다. 관리자에게 문의해 주세요.', 'upstream-auth-required'); return; }
+      if (error.message === 'PHOTO_SOURCE_DISABLED') { shell('납품 사진을 조회할 수 없습니다.', 'source-disabled'); return; }
       if (error.message === 'PHOTO_UPSTREAM_UNAVAILABLE') {
-        shell('사진 원천 서비스가 일시 중단되었습니다.', 'source-unavailable', {label:'다시 조회', run:() => current === generation && target && open(target)});
+        shell('사진 서비스에 연결할 수 없습니다.', 'source-unavailable', {label:'다시 조회', run:() => current === generation && target && open(target)});
         return;
       }
-      const sourceContractErrors = {
-        PHOTO_CONTENT_TYPE_INVALID: '사진 원천 응답 형식이 JSON이 아닙니다.',
-        PHOTO_JSON_INVALID: '사진 원천의 JSON 형식을 확인하지 못했습니다.',
-        PHOTO_BODY_UNAVAILABLE: '사진 원천의 응답 내용을 읽지 못했습니다.',
-        PHOTO_IDENTITY_UNVERIFIED: '사진 원천의 고객·배송일·배송 기록을 확인하지 못했습니다.',
-        PHOTO_ATTACHMENTS_INVALID: '사진 원천의 첨부 목록 형식을 확인하지 못했습니다.',
-        PHOTO_ATTACHMENT_LIMIT_EXCEEDED: '사진 원천의 첨부 목록이 허용 범위를 초과했습니다.',
-        PHOTO_IMAGES_INVALID: '사진 원천의 이미지 목록 형식을 확인하지 못했습니다.',
-        PHOTO_IMAGE_LIMIT_EXCEEDED: '사진 원천의 이미지 목록이 허용 범위를 초과했습니다.'
-      };
-      if (Object.hasOwn(sourceContractErrors, error.message)) { shell(sourceContractErrors[error.message], 'unverified'); if (!target?.history) dateSearch(); return; }
+      const unconfirmedResponse = ['PHOTO_CONTENT_TYPE_INVALID','PHOTO_JSON_INVALID','PHOTO_BODY_UNAVAILABLE','PHOTO_IDENTITY_UNVERIFIED',
+        'PHOTO_ATTACHMENTS_INVALID','PHOTO_ATTACHMENT_LIMIT_EXCEEDED','PHOTO_IMAGES_INVALID','PHOTO_IMAGE_LIMIT_EXCEEDED'];
+      if (unconfirmedResponse.includes(error.message)) { shell('배송 기록의 사진을 확인할 수 없습니다.', 'unverified'); if (!target?.history) dateSearch(); return; }
       const forbidden = error.status === 403, unverified = ['UNVERIFIED', 'SOURCE_UNAVAILABLE', 'NOT_CONFIGURED', 'INVALID_SOURCE_RESPONSE'].includes(error.message) || error.status === 404 || error.status === 422 || error.status === 503;
-      shell(forbidden ? '사진 조회 권한이 없습니다.' : unverified ? '사진 미확인 · 배송 사진 원천 또는 연결 상태를 확인해 주세요.' : '사진 조회 실패 · 잠시 후 다시 시도해 주세요.', forbidden ? 'forbidden' : unverified ? 'unverified' : 'error', forbidden ? null : { label: '다시 조회', run: () => current === generation && target && open(target) });
+      shell(forbidden ? '사진 조회 권한이 없습니다.' : unverified ? '배송 사진을 확인할 수 없습니다.' : '사진을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.', forbidden ? 'forbidden' : unverified ? 'unverified' : 'error', forbidden ? null : { label: '다시 조회', run: () => current === generation && target && open(target) });
     }
     async function image(path, signal, thumbnail = false) {
       if (deadline <= Date.now()) throw Object.assign(Error('AUTH_REQUIRED'), { status: 401 });
@@ -246,7 +238,7 @@
       if (error.status === 404 || error.status === 410) return '사진 파일을 찾을 수 없습니다.';
       if (error.status === 403) return '사진 파일 접근이 거부되었습니다.';
       if (['PHOTO_MEDIA_AUTH_REQUIRED', 'UPSTREAM_AUTH_REQUIRED'].includes(error.message)) return '사진 파일 인증이 필요합니다.';
-      if (error.message === 'PHOTO_UPSTREAM_UNAVAILABLE') return '사진 원천 서비스를 사용할 수 없습니다.';
+      if (error.message === 'PHOTO_UPSTREAM_UNAVAILABLE') return '사진 서비스에 연결할 수 없습니다.';
       return '사진 파일을 불러오지 못했습니다.';
     }
     const requiresSession = error => error.status === 401 || error.message === 'UPSTREAM_AUTH_REQUIRED';
@@ -275,7 +267,7 @@
         if (requiresSession(error) && (!target?.indexed || error.status === 401)) { failure(error, id); return; }
         stage.replaceChildren();
         node('p', mediaFailureText(error), stage, 'deliveryPhotoViewerStatus');
-        node('small', safeMediaCode(error), stage);
+        stage.dataset.failureCode = safeMediaCode(error);
       }
     }
     async function loadThumbnail(thumb, photo, title, id) {
@@ -294,7 +286,7 @@
         if (requiresSession(error)) { failure(error, id); return false; }
         thumb.replaceChildren();
         node('span', mediaFailureText(error), thumb, 'deliveryPhotoMissing');
-        node('small', safeMediaCode(error), thumb);
+        thumb.dataset.failureCode = safeMediaCode(error);
         return false;
       }
     }

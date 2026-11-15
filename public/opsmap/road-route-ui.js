@@ -38,12 +38,12 @@
     return { cancel, load };
   }
   function describe(data) {
-    const reasons = { FEATURE_DISABLED: '길찾기 연결을 확인해 주세요.', KEY_MISSING: '길찾기 연결을 확인해 주세요.', CALL_POLICY_UNCONFIRMED: '호출 정책 확인 대기', ORIGIN_UNCONFIRMED: '출발지 좌표 확인 대기',
+    const reasons = { FEATURE_DISABLED: '도로 경로를 조회할 수 없습니다.', KEY_MISSING: '도로 경로를 조회할 수 없습니다.', CALL_POLICY_UNCONFIRMED: '도로 경로를 조회할 수 없습니다.', ORIGIN_UNCONFIRMED: '출발지 위치를 확인해 주세요.',
       STAFF_LOGIN_REQUIRED: '직원 로그인 후 조회 가능', RECORDED_ORDER_REQUIRED: '저장된 착순 확인 필요', STOP_COORDINATES_MISSING: '착지 좌표 누락 · 경로 조회 보류',
-      ROUTE_SOURCE_UNVERIFIED: '해당일 착순 근거 확인 필요', ROUTE_IDENTITY_MISMATCH: '해당일 호차 확인 필요', QUOTA_EXCEEDED: '쿼터 초과 · 추가 조회 중단',
-      AUTHENTICATION_FAILED: '도로경로 인증 오류 · 추가 조회 중단', PERMISSION_DENIED: '도로경로 권한 오류 · 추가 조회 중단', CALL_POLICY_BLOCKED: '무료 호출 예산 확인 필요', PERSISTENT_BUDGET_REQUIRED:'길찾기 사용 한도 설정을 확인해 주세요.',
-      PROVIDER_UNAVAILABLE:'도로경로 서버 오류 · 다시 조회해 주세요', TIMEOUT: '도로경로 응답 시간 초과', NO_ROAD_ROUTE: '도로경로를 찾지 못했습니다' };
-    if (!data || data.state === 'idle') return '경로 조회 버튼을 누르면 확인된 지점의 도로경로를 조회합니다.';
+      ROUTE_SOURCE_UNVERIFIED: '해당 날짜의 방문 순서를 확인할 수 없습니다.', ROUTE_IDENTITY_MISMATCH: '해당 날짜의 호차를 확인해 주세요.', QUOTA_EXCEEDED: '경로 조회 한도에 도달했습니다.',
+      AUTHENTICATION_FAILED: '도로 경로를 조회할 수 없습니다.', PERMISSION_DENIED: '도로 경로를 조회할 수 없습니다.', CALL_POLICY_BLOCKED: '도로 경로를 조회할 수 없습니다.', PERSISTENT_BUDGET_REQUIRED:'도로 경로를 조회할 수 없습니다.',
+      PROVIDER_UNAVAILABLE:'도로 경로를 불러오지 못했습니다. 잠시 후 다시 조회해 주세요.', TIMEOUT: '도로 경로 조회 시간이 초과됐습니다.', NO_ROAD_ROUTE: '도로 경로를 찾지 못했습니다.' };
+    if (!data || data.state === 'idle') return '방문할 지점을 선택한 뒤 경로를 조회해 주세요.';
     if (data.state === 'loading') return '도로경로 조회 중…';
     if (data.state === 'empty') return '해당일 운행 0건 · 도로경로 없음';
     if (data.state === 'disabled') return reasons[data.reason] || '길찾기 연결을 확인해 주세요.';

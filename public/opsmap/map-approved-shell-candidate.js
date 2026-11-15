@@ -163,7 +163,7 @@
   const loadMore=document.createElement('button');loadMore.id='loadMore';loadMore.className='full';loadMore.textContent='매장 더 보기';loadMore.onclick=()=>stores.classList.add('showMoreStores');stores.append(loadMore);$('#periodStoreList').className='sourceStoreList';
   const route=$('#runListTool');route.className='sourceItinerary';route.open=false;
   const foot=document.createElement('footer');foot.className='sidefoot';foot.innerHTML='<button id="sourceBatch" class="full">＋ 신규권역 일괄조회</button><div class="row" id="sourceFooterLinks"></div>';
-  sidebar.append(foot);const data=$('.dataHelp');data.remove();data.append(oldHead,$('#mapDataHealth'));oldHead.hidden=false;const advanced=document.createElement('details');advanced.innerHTML='<summary>추가 조회 조건</summary>';data.append(advanced);for(const node of [$('.periodBasis'),$('#allStoresControl'),$('#legacyVehicleState'),$('#periodDriver'),$('#periodCenter'),$('#manualRouteTool')])advanced.append(node);
+  sidebar.append(foot);const data=$('.dataHelp');data.remove();const advanced=document.createElement('details');advanced.innerHTML='<summary>추가 조회 조건</summary>';data.append(advanced);for(const node of [$('.periodBasis'),$('#allStoresControl'),$('#legacyVehicleState'),$('#periodDriver'),$('#periodCenter'),$('#manualRouteTool')])advanced.append(node);
   const picker=document.createElement('details');picker.id='sourceRoutePicker';picker.hidden=true;picker.innerHTML='<summary>호차 다중 선택</summary>';picker.append($('#operationVehicle'));dock.append(picker);$('#chooseRoutes').onclick=()=>{picker.hidden=!picker.hidden;picker.open=!picker.hidden;picker.append($('#legacyVehicleState'));};
   $('#sourceFooterLinks').append(data,$('#openOperations'));sidebar.append(foot);$('#sourceBatch').onclick=()=>{$('#newAreaBatchTool').hidden=false;$('#newAreaBatchTool').open=!$('#newAreaBatchTool').open;};$('#newAreaBatchTool').hidden=true;
   const maparea=document.createElement('div');maparea.className='maparea';maparea.append($('#map'));
@@ -188,7 +188,7 @@
   // Match the source element roles; IDs and existing controller handlers stay intact.
   for(const id of ['opTotal','opCompleted','opRemaining','opEta']){const old=$('#'+id),strong=document.createElement('strong');strong.id=id;strong.className=old.className;strong.textContent=old.textContent;old.replaceWith(strong);}
   $('#totalBadge').classList.add('sourceCount');
-  $('#openOperations').textContent='연결 상태';
+  $('#openOperations').textContent='조회 옵션';
   const runHead=route.querySelector('summary');runHead.className='sectiontitle';
   const runHeading=document.createElement('h2');$('#runListTitle').replaceWith(runHeading);runHeading.id='runListTitle';runHeading.textContent='방문 순서';
   const runListPanel=$('#runListPanel'),runFilters=runListPanel.querySelector('.runFilters');
@@ -236,7 +236,7 @@
   const batchDialog=document.createElement('dialog');batchDialog.id='mapBatchDialog';batchDialog.innerHTML='<div class="modalhead"><div><span class="eyebrow">배송 가능 지역</span><h2>신규권역 일괄조회</h2></div><button id="closeBatch" aria-label="신규권역 조회 닫기">✕</button></div>';document.body.append(batchDialog);batchDialog.append($('#newAreaBatchTool'));
   $('#sourceBatch').onclick=()=>{if(bridge.state.mode!=='BASE_60D')return;$('#newAreaBatchTool').hidden=false;$('#newAreaBatchTool').open=true;batchDialog.showModal();};$('#closeBatch').onclick=()=>{if($('#judgeNewAreaBatch').disabled)$('#cancelNewAreaBatch').click();batchDialog.close();};batchDialog.addEventListener('cancel',()=>{if($('#judgeNewAreaBatch').disabled)$('#cancelNewAreaBatch').click();});
   batchDialog.addEventListener('close',()=>{if($('#judgeNewAreaBatch').disabled)$('#cancelNewAreaBatch').click();$('#newAreaBatchTool').open=false;});
-  const dataDialog=document.createElement('dialog');dataDialog.id='mapDataInfoDialog';dataDialog.innerHTML='<div class="modalhead"><div><span class="eyebrow">조회 자료</span><h2>데이터 안내</h2></div><button id="closeDataInfo" aria-label="데이터 안내 닫기">✕</button></div>';document.body.append(dataDialog);
+  const dataDialog=document.createElement('dialog');dataDialog.id='mapDataInfoDialog';dataDialog.innerHTML='<div class="modalhead"><h2>조회 옵션</h2><button id="closeDataInfo" aria-label="조회 옵션 닫기">✕</button></div>';document.body.append(dataDialog);
   const dataContent=document.createElement('div');dataContent.className='sourceDataContent dataHelp';for(const child of [...data.children])if(child.tagName!=='SUMMARY')dataContent.append(child);dataDialog.append(dataContent);dataContent.append(periodButton);
   function modeVisible(node,visible){if(!node)return;node.hidden=!visible;node.inert=!visible;node.dataset.modeHidden=String(!visible);}
   let controlsMode=null;
@@ -254,9 +254,8 @@
     for(const label of dailyForm.querySelectorAll(':scope>label'))modeVisible(label,!daily);
     if(controlsMode!==daily&&routeDialog.open)routeDialog.close();if(daily&&batchDialog.open)batchDialog.close();controlsMode=daily;modeVisible($('#allStoresControl'),!daily);modeVisible($('#manualRouteTool'),false);
   }
-  const openDiagnostics=$('#openOperations').onclick;
-  $('#openOperations').onclick=event=>{advanced.open=true;$('#operationsPanel').hidden=true;if(!dataDialog.open)dataDialog.showModal();return openDiagnostics?.(event);};
-  const visibleStatus=document.createElement('div');visibleStatus.id='mapSourceStatus';visibleStatus.className='mapSourceStatus';visibleStatus.setAttribute('aria-label','지도 데이터 확인 상태');visibleStatus.append($('#packageReadState'),$('#sourceCollectedAt'),$('#mapAppliedRange'),$('#freshnessState'));maparea.append(visibleStatus);
+  $('#openOperations').onclick=()=>{advanced.open=true;if(!dataDialog.open)dataDialog.showModal();};
+  const visibleStatus=document.createElement('div');visibleStatus.id='mapSourceStatus';visibleStatus.className='mapSourceStatus';visibleStatus.setAttribute('aria-label','지도 조회 상태');visibleStatus.append($('#packageReadState'),$('#freshnessState'));maparea.append(visibleStatus);
   data.querySelector('summary').onclick=event=>{event.preventDefault();dataDialog.showModal();};$('#closeDataInfo').onclick=()=>dataDialog.close();
   manualShortcut.onclick=()=>{if(bridge.state.mode!=='DATE_ROUTE')return;dataDialog.close();planner.hidden=false;planner.scrollIntoView({block:'start'});};
   function sourceCenterLabel(row){

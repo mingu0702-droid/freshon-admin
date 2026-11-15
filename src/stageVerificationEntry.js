@@ -344,8 +344,15 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   }}) : fixedBaseline;
   const fixed = createFixedVehicleCache({readOnly:true,reloadReadOnlyAfterMs:dailyMaster?300_000:60_000,
     ...(dailyMaster?{ttl:FIXED_MASTER_DAILY_TTL}:{}),now,store:fixedStore});
+  let fixedMasterEvidence=null, lastSyncDiagnostic=null;
   const base={async get(codes) {
-    const primary=await fixed.get(codes);
+    const primary=await fixed.get(codes), meta=primary.meta;
+    fixedMasterEvidence={
+      state:primary.phase||'READY',checkedAt:meta?.checkedAt||null,stale:meta?.stale!==false,
+      sourceObservedAt:meta?.sourceObservedAt||null,sourceObservationDate:meta?.sourceObservationDate||null,
+      scheduledState:meta?.scheduledState||(dailyMaster?'NOT_OBSERVED':'NOT_CONFIGURED'),
+      scheduledLastSuccessAt:meta?.scheduledLastSuccessAt||null,lastError:meta?.lastError||null
+    };
     if (primary.ok) return primary;
     try {await readSnapshot();} catch {return primary;}
     const fallback=snapshotBase?.get(codes);
@@ -430,6 +437,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         });
         router.get('/api/map-phase2b/private/stage-sync-evidence',requireStaff,(_req,res)=>{
           const generation=validation.active();
+          const applied=generation?.scheduled?.snapshot||joinedSnapshot?.snapshot||(!generation?snapshot:null);
           const windowDays=generation?.scheduled?.vehicleDelivery?.observedDates.all?.length ?? generation?.nearby?.observedDays;
           const sourceRunId=generation?.scheduled?.state.runId || null;
           const persisted=generation?.scheduled?.state;
@@ -442,14 +450,17 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             confirmedSourceIds.length===requiredSourceIds.length &&
             scheduledRun.generation===generation.generation &&
             scheduledRun.date===today() && Number.isFinite(Date.parse(scheduledSuccessAt));
-          return res.set('Cache-Control','private, no-store').vary('Cookie').json({
+          const evidence={
             automaticSyncVerified,
             liveDeliveryByCenter:readDatedDelivery.sourceStatus(),
             sources:Object.fromEntries(['customerRegistry',...requiredSourceIds.map(id=>'delivery:'+id)].map(id=>[
               id,scheduledSources[id]||{lastSuccessAt:null,error:null}
             ])),
-            snapshot:{state:snapshotReadState,verifiedAt:snapshotVerifiedAt,latestDate:snapshot?.latestDate||null,
+            fixedMaster:fixedMasterEvidence,
+            snapshot:{state:snapshotReadState,verifiedAt:snapshotVerifiedAt,generatedAt:snapshot?.generatedAt||null,latestDate:snapshot?.latestDate||null,
               revision:snapshot?.preservation?.revision||null,selectedDateStorageVerified:snapshot?.selectedDateCheckpoint?.selectedDateStorageVerified===true},
+            serving:{latestDate:applied?.latestDate||null,generatedAt:applied?.generatedAt||null,generation:applied?.sourceGeneration||null,
+              rowCount:applied?.rows?.length??null},
             coverage:{state:generation?'VERIFIED_STAGE_GENERATION':coverageState,generation:generation?.generation||null,
               asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status(),baselineState,
               publishedAt:generation?.evidence.coverageGeneratedAt||null,unknownDays:Number.isInteger(windowDays)?90-windowDays:null,
@@ -474,7 +485,17 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
                 sourceReadComplete:scheduledRun.sourceReadComplete===true}:null,
               lastFailure:scheduledFailure?{runId:scheduledFailure.runId,at:scheduledFailure.completedAt,code:scheduledFailure.error,
                 date:scheduledFailure.failedDate,center:scheduledFailure.failedCenter,sourceId:scheduledFailure.failedSourceId||null}:null}
-          });
+          };
+          const diagnostic=JSON.stringify({component:'stage-map-sync',snapshotState:evidence.snapshot.state,
+            storedThrough:evidence.snapshot.latestDate,servingThrough:evidence.serving.latestDate,generation:evidence.serving.generation,
+            coverageThrough:evidence.coverage.asOf,unconfirmedDays:evidence.coverage.unknownDays,fixedMaster:evidence.fixedMaster,
+            scheduledState:evidence.scheduled.state,lastSuccessAt:evidence.scheduled.lastSuccessAt,
+            lastError:evidence.scheduled.lastFailure?.code||evidence.scheduled.error,
+            deliveryByCenter:Object.fromEntries(Object.entries(evidence.liveDeliveryByCenter).map(([center,result])=>[
+              center,{date:result.checkedDate,lastSuccessDate:result.lastSuccessDate,complete:result.complete,error:result.error}
+            ]))});
+          if(diagnostic!==lastSyncDiagnostic){lastSyncDiagnostic=diagnostic;console.info(diagnostic);}
+          return res.set('Cache-Control','private, no-store').vary('Cookie').json(evidence);
         });
         router.get('/api/map-phase2b/private/dated-delivery',requireStaff,async(req,res)=>{
           const privateResponse=()=>res.set('Cache-Control','private, no-store').vary('Cookie');
@@ -504,7 +525,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             const error=/^DELIVERY_SOURCE_[A-Z_]+$/.test(failure.code||'')?failure.code:'DELIVERY_SOURCE_READ_UNAVAILABLE';
             const saved=await retained(error);
             return requireStaff(req,res,()=>{
-              console.info(JSON.stringify({component:'stage-dated-delivery',status:saved?200:503,code:error}));
+              console.info(JSON.stringify({component:'stage-dated-delivery',status:saved?200:503,code:error,
+                date,center,sourceId,vehicleFiltered:vehicle!==null,retained:Boolean(saved)}));
               return saved?privateResponse().json(saved):privateResponse().status(503).json({contract:DATED_DELIVERY_CONTRACT,
                 date,center,sourceId,vehicle,generation:null,sourceGeneration:null,sourceRunId:null,state:'SOURCE_UNAVAILABLE',error,
                 source:{kind:'DELIVERY_ADMIN_READ',observedAt:null},sourceComplete:false,currentReadComplete:false,scopeComplete:false,confirmedEmpty:false,

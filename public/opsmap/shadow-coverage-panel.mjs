@@ -124,7 +124,7 @@ export function createCoveragePanel({ workspace, header }) {
           </div>
         </div>
         <details class="coverage-evidence" id="coverageEvidence">
-          <summary id="coverageEvidenceTitle">집계 근거와 날짜</summary>
+          <summary id="coverageEvidenceTitle">배송 자료 확인 기간</summary>
           <div id="coverageEvidenceBody"></div>
           <button type="button" id="coverageRefresh">다시 읽기</button>
         </details>
@@ -398,28 +398,24 @@ export function createCoveragePanel({ workspace, header }) {
     find('coverageNationalTitle').textContent = (loadedCenter === 'all' ? '전국 집계' : '전국 · ' + selectedCenter + ' 센터') +
       ' · H3 R' + data.summaryResolution;
     for (const stat of root.querySelectorAll('[data-metric]')) stat.textContent = fmt(summary[stat.dataset.metric]);
-    find('coveragePreserved').textContent = preservedMap
-      ? '보존 지도 ' + fmt(preservedMap.count) + '곳' + (preservedMap.asOf ? ' (' + preservedMap.asOf + ')' : '') + ' · 별도 범위'
-      : '보존 지도 미확인 · 별도 범위';
-    find('coverageGaps').textContent = '좌표 미확인 ' + fmt(summary.missingStoreLocation) + '곳 · 배송 위치 미연결 ' +
-      fmt(summary.unplacedVisits) + '건 · 원천 식별 미확인 ' + fmt(summary.unidentifiedVisits) + '건';
+    find('coveragePreserved').textContent = preservedMap ? '전체 지도 등록 매장 ' + fmt(preservedMap.count) + '곳' : '';
+    find('coverageGaps').textContent = summary.missingStoreLocation || summary.unplacedVisits || summary.unidentifiedVisits
+      ? '위치 미확인 매장 ' + fmt(summary.missingStoreLocation) + '곳 · 위치 미확인 배송 ' +
+        fmt(summary.unplacedVisits) + '건 · 매장 미확인 배송 ' + fmt(summary.unidentifiedVisits) + '건' : '';
     const stores = data.storeStatus;
     const deliveryFilter = stores?.deliveryFilter;
     const tally = (key, unknown) => stores?.[key] == null ? '미확인'
       : fmt(stores[key]) + '곳' + (unknown ? ' 확인' : '');
-    find('coverageNewCount').textContent = stores?.NEW == null ? '배송 검증 대기' : tally('NEW',deliveryFilter?.newUnknown);
+    find('coverageNewCount').textContent = stores?.NEW == null ? '배송 확인 대기' : tally('NEW',deliveryFilter?.newUnknown);
     find('coverageHeldCount').textContent = deliveryFilter ? fmt(deliveryFilter.held) + '곳' : tally('HELD',stores?.currentUnknown);
     const history = stores && (!stores.historyUnknown || stores.pastNew || stores.pastHeld)
-      ? '보존 90일 관측 신규 ' + fmt(stores.pastNew) + '곳(다른 현재 호차 ' + fmt(stores.changedFromNew) + ') · 보류 ' +
-        fmt(stores.pastHeld) + '곳(해제·다른 현재 호차 ' + fmt(stores.changedFromHeld) + ')' +
-        (stores.evidenceAsOf ? ' · ' + stores.historyStart + ' ~ ' + stores.evidenceAsOf : '') +
-        (stores.historyStart !== stores.rollingStart ? ' · 오늘 기준 90일 확인 신규 ' + fmt(stores.rollingNew) + '곳 · 보류 ' + fmt(stores.rollingHeld) + '곳' : '') +
+      ? '과거 신규 ' + fmt(stores.pastNew) + '곳(호차 변경 ' + fmt(stores.changedFromNew) + '곳) · 과거 보류 ' +
+        fmt(stores.pastHeld) + '곳(상태 변경 ' + fmt(stores.changedFromHeld) + '곳)' +
         (stores.historyUnknown ? ' · 일부 이력 미확인' : '')
       : '90일 기준호차 이력 미확인';
-    find('coverageStoreBasis').textContent = '매장 상태 전체 등록 기준 · ' + (stores?.fixedCheckedAt ? '기준호차 확인 ' + time.format(new Date(stores.fixedCheckedAt)) : '기준호차 미확인') +
-      ' · ' + history + (deliveryFilter?.source === 'SEALED_COMPLETED_DELIVERIES' ? ' · ' + deliveryCohortLabel(deliveryFilter) + ' (' + deliveryFilter.start + ' ~ ' + deliveryFilter.end + ')' :
-        ' · 완료 배송 검증 자료 미연결') +
-      ' · 마지막 배송 수집 ' + time.format(new Date(data.sourceObservedAt));
+    find('coverageStoreBasis').textContent = history + (deliveryFilter?.source === 'SEALED_COMPLETED_DELIVERIES'
+      ? ' · ' + deliveryCohortLabel(deliveryFilter)
+      : ' · 배송 완료 내역 미확인');
     find('coverageViewport').textContent = '화면 H3 R' + data.resolution + ' · ' + (candidateViewport
       ? (data.resolution > data.summaryResolution ? 'R8 ' : '') + '후보 ' + fmt(candidateViewport.cells) + '격자 · ' + fmt(candidateViewport.stores) + '곳' +
         (data.resolution < data.summaryResolution ? ' · 주황 숫자: 묶인 후보 격자 수' : '')
@@ -428,17 +424,19 @@ export function createCoveragePanel({ workspace, header }) {
     find('coverageMapSummary').hidden = false;
     evidence.replaceChildren(
       element('p', '', period.start + ' ~ ' + period.end + ' · 마지막 확인 ' + (period.latest || '미확인')),
-      element('p', '', '집계 갱신 ' + time.format(new Date(data.refreshedAt)) + ' · 원천 확인 ' + time.format(new Date(data.sourceObservedAt))),
       element('p', '', '등록 매장 ' + fmt(summary.registered) + '곳 · 위치 미확인 ' + fmt(summary.missingStoreLocation) + '곳'),
       element('p', '', '배송 완료 ' + fmt(completeness.recordedVisits) + '건 · 격자 연결 ' + fmt(summary.visits) + '건 · 위치 미연결 ' + fmt(summary.unplacedVisits) + '건'),
       element('p', '', '현재 지도 ' + fmt(viewportSummary.total) + '격자 · 표시 ' + fmt(data.cells.length) + '격자')
     );
+    if(stores?.evidenceAsOf) evidence.append(element('p', '', '신규·보류 이력 ' + stores.historyStart + ' ~ ' + stores.evidenceAsOf));
+    if(stores?.rollingStart && stores.historyStart !== stores.rollingStart) evidence.append(element('p', '',
+      '최근 90일 신규 ' + fmt(stores.rollingNew) + '곳 · 보류 ' + fmt(stores.rollingHeld) + '곳'));
     const centers = [['osan', '오산'], ['yeongnam', '영남'], ['honam', '호남']];
     evidence.append(element('p', '', centers.map(([key, label]) =>
       label + ' ' + (completeness.recordedCenters[key] ? fmt(completeness.recordedCenters[key]) + '건' : '기록 미확인')).join(' · ')));
     setDateList(evidence, '기록 미확인', completeness.missingDates);
-    setDateList(evidence, '원천 완전성 미확인', completeness.unverifiedDates);
-    if (!completeness.scopedCells) evidence.append(element('p', '', '이 격자 크기의 검증된 분석 범위가 확인되지 않았습니다.'));
+    setDateList(evidence, '일부 배송 내역만 확인된 날짜', completeness.unverifiedDates);
+    if (!completeness.scopedCells) evidence.append(element('p', '', '이 배율에서 표시할 배송 자료가 충분하지 않습니다.'));
     if (data.stale) {
       status.textContent = '마지막 정상 집계를 표시 중입니다 · ' + time.format(new Date(data.refreshedAt));
     } else if (!completeness.recordedVisits && center !== 'all' && !completeness.dateComplete) {
@@ -580,11 +578,11 @@ export function createCoveragePanel({ workspace, header }) {
     ];
     if (cell.storeStatus) {
       const count=(key,unknown)=>cell.storeStatus[key] || !unknown ? fmt(cell.storeStatus[key]) : '미확인';
-      const active = cell.deliveryFilter?.newActive == null ? '배송 검증 대기' : fmt(cell.deliveryFilter.newActive);
+      const active = cell.deliveryFilter?.newActive == null ? '배송 확인 대기' : fmt(cell.deliveryFilter.newActive);
       facts.push(['매장 상태', '활성 오산신규 ' + active +
         ' · 오산보류 ' + (cell.deliveryFilter ? fmt(cell.deliveryFilter.held) : count('HELD',cell.storeStatus.unknown)) +
         ' · 기준호차 미확인 ' + fmt(cell.storeStatus.unknown)],
-      ['완료 배송 확인', cell.deliveryFilter ? deliveryCohortLabel(cell.deliveryFilter) : '검증 자료 미연결']);
+      ['완료 배송 확인', cell.deliveryFilter ? deliveryCohortLabel(cell.deliveryFilter) : '배송 내역 미확인']);
     }
     for (const [label, value] of facts) {
       fields.append(element('dt', '', label), element('dd', '', value));
@@ -613,7 +611,7 @@ export function createCoveragePanel({ workspace, header }) {
       row.append(element('small', '', period.days + '일 ' + deliveryLabel(store.delivery)));
       if (store.newActive || store.newUnknown || store.current || store.pastNew || store.pastHeld) row.append(element('small', '',
         [store.newActive === true ? '활성 오산신규 · 완료 배송 확인' : '', store.current === 'HELD' ? '오산보류 · 기준호차 분류' : '',
-          store.newUnknown ? '활성 여부 배송 검증 대기' : '',
+          store.newUnknown ? '배송 여부 확인 대기' : '',
           store.pastNew ? (store.vehicle && store.vehicle !== '오산신규' ? '오산신규 이력 · 현재 다른 기준호차' : '오산신규 이력') : '',
           store.pastHeld ? '오산보류 이력' : ''].filter(Boolean).join(' · ')));
       if (store.location) {

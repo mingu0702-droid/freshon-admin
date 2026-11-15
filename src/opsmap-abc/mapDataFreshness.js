@@ -24,7 +24,7 @@ export function mapPublicationConnection(hubStatus,liveStatus){
 }
 
 export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicleView=requireView,previewEnabled,modelStatus,readBaseVehicleMaster,baseCache,getLocalDataEvidence,env=process.env,adminGuard=requireAdmin,baseStore=env.OPSMAP_STAGE_FIXED_MASTER_FILE?createFixedVehicleFileStore({env}):env.GITHUB_CACHE_REPO?createFixedVehicleStore({env}):null}){
-  let statusCache=null,statusAt=0,statusPending=null;
+  let statusCache=null,statusAt=0,statusPending=null,lastDiagnostic=null;
   const base=baseCache||createFixedVehicleCache({reader:readBaseVehicleMaster||(()=>{throw new Error('FIXED_MASTER_UNAVAILABLE');}),store:baseStore,readOnly:env.OPSMAP_STAGE_VERIFY_ONLY==='1'||env.OPSMAP_FIXED_MASTER_REFRESH_ENABLED==='0'});
   const cleanDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')?v:null;
   const cleanTime=v=>typeof v==='string'&&v.length<=40&&Number.isFinite(Date.parse(v))?new Date(v).toISOString():null;
@@ -80,7 +80,15 @@ export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicl
         coverageSourceObservedAt:cleanTime(evidence.coverageSourceObservedAt),
         coverageAsOf:cleanDate(evidence.coverageAsOf)
       }:null;
-      return r.status(available?200:503).json({ok:available,...(!available?{error:'MAP_DATA_STATUS_UNAVAILABLE'}:{}),data:{...status,partial:sources.some(source=>source.state==='UNKNOWN'),sources,live,localEvidence,publicationConnection:mapPublicationConnection(status,live)}});
+      const publicationConnection=mapPublicationConnection(status,live);
+      if(env.OPSMAP_STAGE_VERIFY_ONLY==='1'){
+        const diagnostic=JSON.stringify({component:'stage-map-sources',sources:sources.map(({action,state,errorCode,upstreamStatus})=>({action,state,errorCode,upstreamStatus})),
+          customer:status.customer,checkpoint:publicationConnection.checkpoint,serving:publicationConnection.serving,
+          publicationState:publicationConnection.status,job:status.job&&{phase:code(status.job.phase),error:code(status.job.lastError)},
+          automation:status.automation,localEvidence});
+        if(diagnostic!==lastDiagnostic){lastDiagnostic=diagnostic;console.info(diagnostic);}
+      }
+      return r.status(available?200:503).json({ok:available,...(!available?{error:'MAP_DATA_STATUS_UNAVAILABLE'}:{}),data:{...status,partial:sources.some(source=>source.state==='UNKNOWN'),sources,live,localEvidence,publicationConnection}});
     }catch{return r.status(503).json({error:'MAP_DATA_STATUS_UNAVAILABLE'});}
   });
   async function baseResponse(q,r){

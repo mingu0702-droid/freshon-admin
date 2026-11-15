@@ -11,7 +11,7 @@
     target.dataset.source = value.meta?.source || '';
     if (!value.name) {
       target.textContent=({LOADING:'담당 기사 불러오는 중…',ERROR:'담당 기사 조회 실패',ASSIGNMENT_UNCONFIRMED:'기사정보 확인 필요',
-        UNCONNECTED:'기사 연락처 자료 미연결',AUTH_REQUIRED:'직원 로그인이 필요합니다.',FORBIDDEN:'기사정보 조회 권한을 확인해 주세요.'})[value.state]||'담당 기사 정보 없음';
+        UNCONNECTED:'기사 연락처를 조회할 수 없습니다.',AUTH_REQUIRED:'직원 로그인이 필요합니다.',FORBIDDEN:'기사정보 조회 권한이 없습니다.'})[value.state]||'담당 기사 정보 없음';
       return;
     }
     const name = document.createElement('span'); name.textContent = value.name; target.append(name);

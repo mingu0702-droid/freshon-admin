@@ -90,12 +90,13 @@
 .approvedShellCandidate .marker.approvedMarker{width:36px;height:36px;filter:none}
 .approvedShellCandidate .marker.approvedMarker.periodCluster{width:44px;height:44px}
 .approvedShellCandidate .marker.approvedMarker.selected .pin{width:40px;height:40px;outline:5px solid #2962ed40}
-.approvedShellCandidate #sourceCollectedAt,.approvedShellCandidate #mapAppliedRange,.approvedShellCandidate #packageReadState{font-size:12px;overflow-wrap:anywhere}
+.approvedShellCandidate #packageReadState{font-size:12px;overflow-wrap:anywhere}
 .approvedShellCandidate #sourceRoutePicker{padding:8px;border:1px solid var(--line);margin-top:8px}
 .approvedShellCandidate .manualCoordinates,.approvedShellCandidate .manualActions{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .approvedShellCandidate #manualStops{list-style:none;padding:0}
 .approvedShellCandidate .detailCard{padding:18px;overflow-wrap:anywhere}
 .approvedShellCandidate .mapSourceStatus{position:absolute;z-index:410;right:22px;bottom:56px;max-width:min(640px,calc(100% - 44px));padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:7px;font-size:12px;overflow-wrap:anywhere;box-shadow:0 2px 8px #18345912}
+.approvedShellCandidate .mapSourceStatus:not(:has(#packageReadState:not(:empty),#freshnessState:not(:empty))){display:none}
 .approvedShellCandidate .mapSourceStatus #packageReadState[data-state="held"],.approvedShellCandidate .mapSourceStatus #packageReadState[data-state="error"]{color:#a33a16;font-weight:700}
 .approvedShellCandidate .mapSourceStatus #freshnessState{display:block;font-size:12px}
 .approvedShellCandidate .vehicleColorBadge{white-space:nowrap;color:var(--vehicle-color,#64748b);font-weight:650}
