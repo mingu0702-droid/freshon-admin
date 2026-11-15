@@ -49,6 +49,31 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
   const hasSource = enabled && (!!account || /^[\x20-\x7e]{1,8192}$/.test(cookie));
   const request = (url,signal) => account ? account.read(url,{signal}) : fetchImpl(url,{method:'GET',signal,redirect:'error',
     cache:'no-store',headers:{Accept:'application/json',Cookie:cookie}});
+  async function probeCenterRead(date, center) {
+    authorize(date);
+    const centerId=SYNC_DELIVERY_SOURCES[center];
+    if (!['2','3','4'].includes(centerId)) throw error('DELIVERY_SOURCE_CENTER_CONFIG',400);
+    const query=new URLSearchParams({logisticsCenterId:centerId,page:'0',pageSize:'1'});
+    for (let i=0;i<2;i++) query.append('enteringDatedAtBetween',`${date}T00:00:00+09:00`);
+    const signal=AbortSignal.timeout(10_000);
+    const response=await request(new URL('/api/bali/task?'+query,deliveryOrigin),signal);
+    if (response.status!==200) {
+      await response.body?.cancel().catch(()=>{});
+      return {centerId,http:response.status,state:'UPSTREAM_REJECTED'};
+    }
+    const payload=await readBoundedPhotoLoginJson(response,32_768,signal);
+    const page=payload.data??payload;
+    const rows=page.content;
+    if (!Number.isSafeInteger(page.totalElements)||page.totalElements<0||!Array.isArray(rows)||rows.length>1) {
+      return {centerId,http:200,state:'UNEXPECTED_RESPONSE'};
+    }
+    if (!rows.length) return {centerId,http:200,reportedTotal:page.totalElements,state:'NO_POSITIVE_SAMPLE'};
+    const row=rows[0], centers=[row?.logisticsCenter?.id,row?.logisticsCenterId,row?.carrier?.logisticsCenterId].filter(value=>value!=null);
+    const dates=[row?.enteringDatedAt,row?.deliveryDate,row?.carrier?.enteringDatedAt].filter(value=>value!=null);
+    const matches=page.totalElements>0&&centers.length>0&&centers.every(value=>String(value)===centerId)&&
+      dates.length>0&&dates.every(value=>sourceTaskDate(value)===date);
+    return {centerId,http:200,reportedTotal:page.totalElements,state:matches?'READ_SAMPLE_VERIFIED':'IDENTITY_UNCONFIRMED'};
+  }
   const eventTransport=hasSource&&env.OPSMAP_STAGE_DELIVERY_EVENT_READ_APPROVED==='1' ? createDeliveryAdminPhotoTransport({
     hasApprovedSession:()=>hasSource,timeoutMs:2500,approvedRequest:(path,{signal})=>{
       if(!/^\/api\/bali\/task\/\d{1,20}\/status-record$/.test(path)) throw error('DELIVERY_SOURCE_REQUEST_REJECTED',403);
@@ -396,6 +421,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       proofHash:deliveryDigest([date,tasks,observedVisits,dispatch]),completeCenters,completeSources,visits:observedVisits,tasks,dispatch},date);
   };
   readDate.configured = hasSource;
+  readDate.probeCenterRead=probeCenterRead;
   readDate.sourceStatus=()=>Object.fromEntries(Object.keys(SYNC_DELIVERY_SOURCES).map(center=>[center,lastReads.get(center)||{
     checkedDate:null,lastSuccessAt:null,complete:false,error:!hasSource?'DELIVERY_SOURCE_NOT_CONFIGURED':
       readers.has(center)?'DELIVERY_SOURCE_NOT_READ':'DELIVERY_SOURCE_CENTER_UNVERIFIED'
