@@ -6,8 +6,8 @@ import path from 'node:path';
 import {promisify} from 'node:util';
 import {gzip, gunzip} from 'node:zlib';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
-import {openOpsmapSyncGenerationStore, SYNC_MAX_DAY_BYTES, syncDigest, syncHash, syncSha256, validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
-import {boundedRead, isDay, parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
+import {openOpsmapSyncGenerationStore, SYNC_MAX_DAY_BYTES, syncDigest, syncHash, syncSha256, validateOpsmapSyncDay, verifyOpsmapGeneration} from './opsmapSyncGeneration.js';
+import {boundedRead, isDay, parseCoverageIndex, PERIODS, privateCoverageDirectory} from './shadowCoverage/coverageFiles.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 import {MAX_VEHICLE_DELIVERY_BYTES,VEHICLE_DELIVERY_FILE} from './opsmapVehicleDeliveryEvidence.js';
 
@@ -110,12 +110,22 @@ async function packGeneration(generation) {
   return Buffer.from(JSON.stringify({state:generation.state,files}));
 }
 
-export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=tmpdir(),appRoot=process.cwd(),onRestoreTiming} = {}) {
-  if (!Buffer.isBuffer(key) || key.length!==32 || typeof store?.read!=='function') throw Error('OPSMAP_DURABLE_CONFIG');
+function prepareCoverageFiles(folder, directory, files) {
+  let pending;
+  return () => pending ??= (async()=>{
+    await fs.mkdir(directory,{recursive:true,mode:0o700});
+    for(const [name,bytes] of files)await fs.writeFile(path.join(folder,name),bytes,{mode:0o600});
+    files.clear();
+    return directory;
+  })().catch(error=>{pending=null;throw error;});
+}
+
+export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=tmpdir(),appRoot=process.cwd(),onRestoreTiming,readOnlyView=false} = {}) {
+  if (!Buffer.isBuffer(key) || key.length!==32 || typeof store?.read!=='function' || readOnlyView&&store.write) throw Error('OPSMAP_DURABLE_CONFIG');
   const kdf = label => Buffer.from(hkdfSync('sha256',key,Buffer.from('opsmap-scheduled-release-v1'),Buffer.from(label),32));
   const encryption = kdf('objects'), signing = kdf('head');
   const mac = value => createHmac('sha256',signing).update(JSON.stringify(value)).digest('hex');
-  let cached, restoring;
+  let cached, restoring, baselineReading;
   const days=new Map(), dayFlights=new Map(), dayQueue=[];
   let dayBytes=0, activeDayReads=0;
   const maxDayCacheBytes=2*1024*1024;
@@ -146,7 +156,9 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     decipher.setAAD(Buffer.from(kind+':'+id));
     decipher.setAuthTag(Buffer.from(value.tag,'hex'));
     const encrypted = Buffer.from(value.ciphertext,'base64');
-    const bytes = await decompress(Buffer.concat([decipher.update(encrypted),decipher.final()]),{maxOutputLength:limit});
+    const plaintext = decipher.update(encrypted);
+    const tail = decipher.final();
+    const bytes = await decompress(tail.length?Buffer.concat([plaintext,tail]):plaintext,{maxOutputLength:limit});
     if (syncSha256(bytes)!==id) throw Error('OPSMAP_DURABLE_OBJECT_DIGEST');
     return bytes;
   }
@@ -188,20 +200,42 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     const {state,files} = JSON.parse(bytes);
     if (state?.revision!==ref.revision || state.generation!==ref.generation || state.asOf!==ref.asOf ||
         state.runId!==ref.runId || !/^[a-f0-9-]{36}$/.test(state.id || '') || !files) throw Error('OPSMAP_DURABLE_RELEASE');
-    const index = parseCoverageIndex(Buffer.from(files['coverage/coverage-index.json'] || '','base64'));
+    const indexName='coverage/coverage-index.json';
+    const readFile=(name,limit)=>{
+      const value=Object.hasOwn(files,name)?files[name]:null;
+      if(typeof value!=='string'||value.length>Math.ceil(limit/3)*4) throw Error('OPSMAP_DURABLE_RELEASE_FILES');
+      const data=Buffer.from(value,'base64');
+      if(!data.length||data.length>limit) throw Error('OPSMAP_DURABLE_RELEASE_FILES');
+      return data;
+    };
+    const indexBytes=readFile(indexName,16_384);
+    const index = parseCoverageIndex(indexBytes);
     const expected=payloadFiles(index,state);
     if (Object.keys(files).length!==expected.size) throw Error('OPSMAP_DURABLE_RELEASE_FILES');
     const root=await fs.mkdtemp(path.join(tempRoot,'opsmap-durable-view-'));
     try {
       const folder=path.join(root,'generations',state.id);
+      if(readOnlyView){
+        await privateCoverageDirectory(root,appRoot);
+        // Verify every served file while the authenticated archive is in memory.
+        // Only coverage needs its files on disk, and only when staff opens it.
+        readFile('input/source-import.safe.json',expected.get('input/source-import.safe.json'));
+        const coverageFiles=new Map([[indexName,indexBytes]]);
+        const generation=await verifyOpsmapGeneration(state,folder,(name,limit)=>{
+          const data=coverageFiles.get(name) ?? readFile(name,limit);
+          if(name.startsWith('coverage/'))coverageFiles.set(name,data);
+          return data;
+        });
+        generation.prepareCoverage=prepareCoverageFiles(folder,generation.coverage,coverageFiles);
+        if(timing)onRestoreTiming({...timing,archiveValidationMs:Math.round(performance.now()-installing),archiveInstallMs:0});
+        return {root,generation,ref};
+      }
       await fs.mkdir(path.join(folder,'input'),{recursive:true,mode:0o700});
       await fs.mkdir(path.join(folder,'coverage'),{mode:0o700});
       const entries=[...expected];
       for(let i=0;i<entries.length;i+=4) {
         const writes=await Promise.allSettled(entries.slice(i,i+4).map(async([name,limit])=>{
-          if (typeof files[name]!=='string' || files[name].length>Math.ceil(limit/3)*4) throw Error('OPSMAP_DURABLE_RELEASE_FILES');
-          const data=Buffer.from(files[name],'base64');
-          if (!data.length||data.length>limit) throw Error('OPSMAP_DURABLE_RELEASE_FILES');
+          const data=name===indexName?indexBytes:readFile(name,limit);
           await fs.writeFile(path.join(folder,name),data,{flag:'wx',mode:0o600});
         }));
         const failed=writes.find(write=>write.status==='rejected');
@@ -285,9 +319,19 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
   return {read,readWithStatus, async readBaseline(ref) {
     if (!Number.isSafeInteger(ref?.revision)||ref.revision<1||!isDay(ref.asOf)||!syncHash(ref.generation)||
         !syncHash(ref.blob)||ref.runId!==undefined) throw Error('OPSMAP_DURABLE_BASELINE_REF');
-    const restored=await restore(ref);
-    cached=restored;
-    return restored.generation;
+    const matches=entry=>entry?.ref.blob===ref.blob&&entry.ref.revision===ref.revision&&
+      entry.ref.generation===ref.generation&&entry.ref.asOf===ref.asOf&&entry.ref.runId===undefined;
+    if(matches(cached))return cached.generation;
+    if(matches(baselineReading))return baselineReading.promise;
+    if(baselineReading)throw Error('OPSMAP_DURABLE_BASELINE_BUSY');
+    const promise=restore(ref).then(restored=>{
+      const previous=cached;
+      cached=restored;
+      if(previous)setTimeout(()=>void fs.rm(previous.root,{recursive:true,force:true}).catch(()=>{}),30_000).unref();
+      return restored.generation;
+    }).finally(()=>{baselineReading=null;});
+    baselineReading={ref,promise};
+    return promise;
   }, async exportBaseline(generation) {
     if (generation?.state.runId!==undefined || typeof store.write!=='function') throw Error('OPSMAP_DURABLE_BASELINE_EXPORT');
     for(const [date,id] of Object.entries(generation.state.dates)){
@@ -313,6 +357,7 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     const {head}=await readHead();
     return statusOf(head);
   }, async restoreSpool(directory,{useVerifiedBaseline=false}={}) {
+    if(readOnlyView)throw Error('OPSMAP_DURABLE_READ_ONLY_VIEW');
     const target=await openOpsmapSyncGenerationStore(directory,{appRoot,writable:true});
     if (useVerifiedBaseline && (!cached || cached.ref.runId !== undefined)) throw Error('OPSMAP_DURABLE_BASELINE_REF');
     const generation=useVerifiedBaseline ? cached.generation : await read();

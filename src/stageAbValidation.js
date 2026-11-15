@@ -213,15 +213,22 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir()} = 
     const located = [...registry.values()].filter(row => row.hasPoint).length;
     const proof = Object.values(ledger.records).map(history => history.at(-1).point).filter(Boolean);
     const deliveries=generation.vehicleDelivery;
-    const vehicleEvidence=deliveries && collectStageVehicleWeekdays(deliveries,registry);
-    const unverifiedVehicleSources=deliveries && ['yeongnam','osanColdStorage'].filter(source=>
-      !deliveries.completeSources[SYNC_DELIVERY_SOURCES[source]].length);
+    let projectedNearby, resolver;
     scheduled = {scheduled:generation,baseline,directory:coverage,registry,ledger,
-      nearby:vehicleEvidence?{...nearby,vehicleDays:vehicleEvidence.vehicleDays,
-        vehicleCounts:vehicleEvidence.counts,unverifiedVehicleSources}:nearby,
+      get nearby() {
+        if(!deliveries)return nearby;
+        if(!projectedNearby){
+          const vehicleEvidence=collectStageVehicleWeekdays(deliveries,registry);
+          const unverifiedVehicleSources=['yeongnam','osanColdStorage'].filter(source=>
+            !deliveries.completeSources[SYNC_DELIVERY_SOURCES[source]].length);
+          projectedNearby={...nearby,vehicleDays:vehicleEvidence.vehicleDays,vehicleCounts:vehicleEvidence.counts,unverifiedVehicleSources};
+        }
+        return projectedNearby;
+      },
       snapshot,asOf:index.asOf,
       reference:fallback(),compatible:true,
-      generation:index.sha256,expiresAt:Infinity,resolver:createFixedCoordinateResolver(ledger),
+      generation:index.sha256,expiresAt:Infinity,
+      get resolver() {return resolver ??= createFixedCoordinateResolver(ledger);},
       counts:{registered:registry.size,located,pending:registry.size-located,
         gpsCompletion:proof.filter(row=>row.measurementKind==='DELIVERY_COMPLETION_GPS').length,
         officialBuilding:proof.filter(row=>row.measurementKind==='BUILDING_LOCATION').length,

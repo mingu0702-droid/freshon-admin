@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
 const source=fs.readFileSync(new URL('../public/opsmap/kakao-maps-adapter.js',import.meta.url),'utf8');
 function fixture(reply){let loads=0;const root={KAKAO_MAP_CONFIG:{},kakao:{maps:{load:callback=>{loads++;callback();}}},dispatchEvent(){}};
- vm.runInNewContext(source,{window:root,document:{getElementById:()=>null},fetch:reply,setTimeout,clearTimeout,AbortController,CustomEvent:class{}});
+ vm.runInNewContext(source,{window:root,document:{getElementById:()=>null},fetch:reply,setTimeout,clearTimeout,AbortController,Event:class{},CustomEvent:class{}});
  return{root,loads:()=>loads};}
 test('authenticated configuration waiting does not consume the SDK initialization deadline',async()=>{
  const f=fixture(async()=>{await new Promise(r=>setTimeout(r,30));return{ok:true,json:async()=>({allowExternalAddressLookup:true,addressLookupServerProxy:true})};});

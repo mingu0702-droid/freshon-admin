@@ -2,7 +2,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {hasFixedCoordinatePoint, validateFixedCoordinateLedger} from './fixedStoreCoordinates.js';
-import {materializeSnapshot, validateSnapshotProjection} from './productionSnapshotStore.js';
+import {materializeSnapshot} from './productionSnapshotStore.js';
 import {boundedRead, isDay, parseCoverageIndex, PERIODS, privateCoverageDirectory} from './shadowCoverage/coverageFiles.js';
 import {atomicCoverageWrite} from './shadowCoverage/fileStore.js';
 import {readStageNearbyEvidence} from './stageNearbyEvidence.js';
@@ -71,6 +71,75 @@ async function verifiedBytes(file, expected, limit) {
   return data;
 }
 
+export async function verifyOpsmapGeneration(state, folder, readFile = (name,limit) => boundedRead(path.join(folder,name),limit)) {
+  if (state.schema !== 1 || !Number.isSafeInteger(state.revision) || state.revision < 1 || !idPattern.test(state.id) ||
+      !syncHash(state.fingerprint) ||
+      !syncHash(state.snapshotSha256) || !syncHash(state.ledgerSha256) || !syncHash(state.indexSha256) ||
+      !syncHash(state.catalogSha256) || !syncHash(state.baseSha256) || !syncHash(state.nearbySha256) ||
+      state.vehicleDeliverySha256!==undefined&&!syncHash(state.vehicleDeliverySha256) ||
+      !isDay(state.asOf) || !Number.isFinite(Date.parse(state.committedAt)) ||
+      state.runId!==undefined&&(!syncHash(state.runId)||state.sourceReadComplete!==true||!syncHash(state.observationHash)) ||
+      state.osanDeliveryThrough!==undefined&&(!state.runId || state.osanDeliveryThrough!==state.asOf) ||
+      state.catchupAfter!=null&&(!isDay(state.catchupAfter)||state.catchupAfter>state.asOf) ||
+      state.plannedDates!==undefined&&(!Array.isArray(state.plannedDates) ||
+        new Set(state.plannedDates).size!==state.plannedDates.length || state.plannedDates.some(date=>!isDay(date)||!state.dates?.[date])) ||
+      !state.dates || Object.entries(state.dates).some(([date,hash]) => !isDay(date) || !syncHash(hash))) {
+    throw Error('OPSMAP_SYNC_HEAD');
+  }
+  const input = path.join(folder,'input');
+  const coverage = path.join(folder,'coverage');
+  const verifyFile = async (name,expected,limit) => {
+    const bytes = await readFile(name,limit);
+    if (!Buffer.isBuffer(bytes) || bytes.length>limit || syncSha256(bytes)!==expected) throw Error('OPSMAP_SYNC_FILE_DIGEST');
+    return bytes;
+  };
+  const [snapshotBytes, catalogBytes, baseBytes, ledgerBytes, indexBytes] = await Promise.all([
+    verifyFile('snapshot.json',state.snapshotSha256,8*1024*1024),
+    verifyFile('input/stores.private.json',state.catalogSha256,3*1024*1024),
+    verifyFile('input/base.private.json',state.baseSha256,3*1024*1024),
+    verifyFile('fixed-store-coordinates-v1.json',state.ledgerSha256,8*1024*1024),
+    verifyFile('coverage/coverage-index.json',state.indexSha256,16_384)
+  ]);
+  const sealedSnapshot = JSON.parse(snapshotBytes);
+  const snapshot = materializeSnapshot(sealedSnapshot);
+  const ledger = validateFixedCoordinateLedger(JSON.parse(ledgerBytes));
+  const catalog = JSON.parse(catalogBytes);
+  const index = parseCoverageIndex(indexBytes);
+  if (index.sha256 !== state.generation || index.asOf !== state.asOf || !Array.isArray(catalog.stores)) throw Error('OPSMAP_SYNC_GENERATION');
+  const [window90,nearbyBytes,vehicleDeliveryBytes]=await Promise.all([
+    Promise.all([index.catalog,...PERIODS.map(days=>index.windows[days])].map(async ref=>{
+      const bytes=await verifyFile('coverage/'+ref.sha256+'.json',ref.sha256,ref.bytes);
+      if(bytes.length!==ref.bytes)throw Error('OPSMAP_SYNC_COVERAGE_LENGTH');
+      return ref===index.windows[90]?JSON.parse(bytes):null;
+    })).then(windows=>windows.at(-1)),
+    verifyFile('nearby.json',state.nearbySha256,384*1024),
+    state.vehicleDeliverySha256?verifyFile(VEHICLE_DELIVERY_FILE,
+      state.vehicleDeliverySha256,MAX_VEHICLE_DELIVERY_BYTES):null
+  ]);
+  const registry = new Map(catalog.stores.filter(row => row.registered).map(row => {
+    const addressHash = coordinateAddressHash(row.address);
+    const proof = ledger.records[row.code]?.at(-1).point;
+    return [row.code,{...row,addressHash,hasPoint:hasFixedCoordinatePoint(row),proof:proof?.addressHash===addressHash?proof:null}];
+  }));
+  const nearby = readStageNearbyEvidence(nearbyBytes,
+    {expected:state.nearbySha256,generation:index.sha256,registry,window:window90});
+  const vehicleDelivery=vehicleDeliveryBytes?readOpsmapVehicleDelivery(vehicleDeliveryBytes,
+    {generation:index.sha256,registry,window:window90}):null;
+  if (state.osanDeliveryThrough && !vehicleDelivery?.completeSources[SYNC_DELIVERY_SOURCES.osan]?.includes(state.osanDeliveryThrough)) {
+    throw Error('OPSMAP_OSAN_RELEASE_SCOPE');
+  }
+  snapshot.rows = snapshot.rows.map(row => {
+    const store = registry.get(row.customerCode);
+    const matching = store?.hasPoint && store.addressHash===row.originalAddressHash &&
+      store.lat===row.lat && store.lng===row.lng;
+    const evidence = matching && (store.proof?.measurementKind || store.coordinateEvidence);
+    return {...row,address:store?.address || '',...(evidence?{coordinateEvidence:evidence}:{})};
+  });
+  return {state,folder,input,coverage,index,ledger,catalog,registry,nearby,vehicleDelivery,baseCatalog:JSON.parse(baseBytes),sealedSnapshot,
+    snapshot:{...snapshot,source:'STAGE_VERIFIED_REGISTRY',sourceGeneration:index.sha256,sourceRunId:state.runId || null,
+      ...(state.osanDeliveryThrough?{osanDeliveryThrough:state.osanDeliveryThrough}:{})}};
+}
+
 // Each committed revision is immutable. Linking a fully written pointer to the
 // next revision name publishes it atomically and rejects concurrent publishers.
 export async function openOpsmapSyncGenerationStore(directory, {appRoot = process.cwd(), writable = false, readMissingDay} = {}) {
@@ -91,68 +160,9 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
 
   async function readHead(name, file = path.join(heads,name)) {
     const {sha256,...state} = JSON.parse(await boundedRead(file,512*1024));
-    if (state.schema !== 1 || state.revision !== Number(name.slice(0,12)) || !idPattern.test(state.id) ||
-        !syncHash(sha256) || syncDigest(state) !== sha256 || !syncHash(state.fingerprint) ||
-        !syncHash(state.snapshotSha256) || !syncHash(state.ledgerSha256) || !syncHash(state.indexSha256) ||
-        !syncHash(state.catalogSha256) || !syncHash(state.baseSha256) || !syncHash(state.nearbySha256) ||
-        state.vehicleDeliverySha256!==undefined&&!syncHash(state.vehicleDeliverySha256) ||
-        !isDay(state.asOf) || !Number.isFinite(Date.parse(state.committedAt)) ||
-        state.runId!==undefined&&(!syncHash(state.runId)||state.sourceReadComplete!==true||!syncHash(state.observationHash)) ||
-        state.osanDeliveryThrough!==undefined&&(!state.runId || state.osanDeliveryThrough!==state.asOf) ||
-        state.catchupAfter!=null&&(!isDay(state.catchupAfter)||state.catchupAfter>state.asOf) ||
-        state.plannedDates!==undefined&&(!Array.isArray(state.plannedDates) ||
-          new Set(state.plannedDates).size!==state.plannedDates.length || state.plannedDates.some(date=>!isDay(date)||!state.dates?.[date])) ||
-        !state.dates || Object.entries(state.dates).some(([date,hash]) => !isDay(date) || !syncHash(hash))) {
-      throw Error('OPSMAP_SYNC_HEAD');
-    }
-    const folder = path.join(generations,state.id);
-    const input = path.join(folder,'input');
-    const coverage = path.join(folder,'coverage');
-    const [snapshotBytes, catalogBytes, baseBytes, ledgerBytes, indexBytes] = await Promise.all([
-      verifiedBytes(path.join(folder,'snapshot.json'),state.snapshotSha256,8*1024*1024),
-      verifiedBytes(path.join(input,'stores.private.json'),state.catalogSha256,3*1024*1024),
-      verifiedBytes(path.join(input,'base.private.json'),state.baseSha256,3*1024*1024),
-      verifiedBytes(path.join(folder,'fixed-store-coordinates-v1.json'),state.ledgerSha256,8*1024*1024),
-      verifiedBytes(path.join(coverage,'coverage-index.json'),state.indexSha256,16_384)
-    ]);
-    const sealedSnapshot = validateSnapshotProjection(JSON.parse(snapshotBytes));
-    const ledger = validateFixedCoordinateLedger(JSON.parse(ledgerBytes));
-    const catalog = JSON.parse(catalogBytes);
-    const index = parseCoverageIndex(indexBytes);
-    if (index.sha256 !== state.generation || index.asOf !== state.asOf || !Array.isArray(catalog.stores)) throw Error('OPSMAP_SYNC_GENERATION');
-    const [window90,nearbyBytes,vehicleDeliveryBytes]=await Promise.all([
-      Promise.all([index.catalog,...PERIODS.map(days=>index.windows[days])].map(async ref=>{
-        const bytes=await verifiedBytes(path.join(coverage,ref.sha256+'.json'),ref.sha256,ref.bytes);
-        if(bytes.length!==ref.bytes)throw Error('OPSMAP_SYNC_COVERAGE_LENGTH');
-        return ref===index.windows[90]?JSON.parse(bytes):null;
-      })).then(windows=>windows.at(-1)),
-      verifiedBytes(path.join(folder,'nearby.json'),state.nearbySha256,384*1024),
-      state.vehicleDeliverySha256?verifiedBytes(path.join(folder,VEHICLE_DELIVERY_FILE),
-        state.vehicleDeliverySha256,MAX_VEHICLE_DELIVERY_BYTES):null
-    ]);
-    const registry = new Map(catalog.stores.filter(row => row.registered).map(row => {
-      const addressHash = coordinateAddressHash(row.address);
-      const proof = ledger.records[row.code]?.at(-1).point;
-      return [row.code,{...row,addressHash,hasPoint:hasFixedCoordinatePoint(row),proof:proof?.addressHash===addressHash?proof:null}];
-    }));
-    const nearby = readStageNearbyEvidence(nearbyBytes,
-      {expected:state.nearbySha256,generation:index.sha256,registry,window:window90});
-    const vehicleDelivery=vehicleDeliveryBytes?readOpsmapVehicleDelivery(vehicleDeliveryBytes,
-      {generation:index.sha256,registry,window:window90}):null;
-    if (state.osanDeliveryThrough && !vehicleDelivery?.completeSources[SYNC_DELIVERY_SOURCES.osan]?.includes(state.osanDeliveryThrough)) {
-      throw Error('OPSMAP_OSAN_RELEASE_SCOPE');
-    }
-    const snapshot = materializeSnapshot(sealedSnapshot);
-    snapshot.rows = snapshot.rows.map(row => {
-      const store = registry.get(row.customerCode);
-      const matching = store?.hasPoint && store.addressHash===row.originalAddressHash &&
-        store.lat===row.lat && store.lng===row.lng;
-      const evidence = matching && (store.proof?.measurementKind || store.coordinateEvidence);
-      return {...row,address:store?.address || '',...(evidence?{coordinateEvidence:evidence}:{})};
-    });
-    return {state,folder,input,coverage,index,ledger,catalog,registry,nearby,vehicleDelivery,baseCatalog:JSON.parse(baseBytes),sealedSnapshot,
-      snapshot:{...snapshot,source:'STAGE_VERIFIED_REGISTRY',sourceGeneration:index.sha256,sourceRunId:state.runId || null,
-        ...(state.osanDeliveryThrough?{osanDeliveryThrough:state.osanDeliveryThrough}:{})}};
+    if (state.revision !== Number(name.slice(0,12)) || !idPattern.test(state.id) ||
+        !syncHash(sha256) || syncDigest(state) !== sha256) throw Error('OPSMAP_SYNC_HEAD');
+    return verifyOpsmapGeneration(state,path.join(generations,state.id));
   }
 
   async function read({recheck = false} = {}) {

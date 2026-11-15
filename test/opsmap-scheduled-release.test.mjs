@@ -15,7 +15,7 @@ import {reviseFixedCoordinateLedger} from '../src/fixedStoreCoordinates.js';
 import {createOpsmapDurableGeneration, stageOpsmapDurableStorage, STAGE_BASELINE_PREFIX} from '../src/opsmapDurableGeneration.js';
 import {createPrivateGithubJsonStore} from '../src/fixedVehicleStore.js';
 import {mountOpsmapScheduledRun, OPSMAP_SCHEDULED_ROUTE, publishOpsmapScheduledRun, verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
-import {syncDigest, syncSha256} from '../src/opsmapSyncGeneration.js';
+import {syncDigest, syncSha256, verifyOpsmapGeneration} from '../src/opsmapSyncGeneration.js';
 import {archiveAddressHash} from '../src/stageArchivedDelivery.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
@@ -199,7 +199,23 @@ test('the first Osan-only release can reuse the protected baseline and preserve 
   const baselineWriter=createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',
     GITHUB_CACHE_BRANCH:'stage/opsmap-snapshots',GITHUB_CACHE_DIR:STAGE_BASELINE_PREFIX,GITHUB_TOKEN:'fixture'},fetchImpl:api.fetchImpl});
   const ref=await createOpsmapDurableGeneration({store:baselineWriter,key:baselineKey,now,tempRoot:root}).exportBaseline(baseline);
-  const reader=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:{...stage,GITHUB_TOKEN:'fixture'},baselineKey,fetchImpl:api.fetchImpl}),now,tempRoot:root});
+  const readerOptions={...stageOpsmapDurableStorage({env:{...stage,GITHUB_TOKEN:'fixture'},baselineKey,fetchImpl:api.fetchImpl}),now,tempRoot:root};
+  const reader=createOpsmapDurableGeneration(readerOptions);
+  const viewReader=createOpsmapDurableGeneration({...readerOptions,readOnlyView:true});
+  const [view, simultaneous]=await Promise.all([viewReader.readBaseline(ref),viewReader.readBaseline(ref)]);
+  assert.equal(view,simultaneous);
+  assert.equal(view,await viewReader.readBaseline(ref));
+  assert.equal(api.calls.filter(call=>call.raw&&call.name==='release-'+ref.blob+'.json').length,1);
+  assert.deepEqual(view.snapshot,baseline.snapshot);
+  await assert.rejects(fs.access(view.coverage),{code:'ENOENT'});
+  const [prepared, preparedAgain]=await Promise.all([view.prepareCoverage(),view.prepareCoverage()]);
+  assert.equal(prepared,preparedAgain);
+  const viewCoverage=createShadowCoverageStore({directory:prepared});
+  assert.equal((await viewCoverage.readPeriod(90)).index.sha256,baseline.index.sha256);
+  const badWindow='coverage/'+baseline.index.windows[30].sha256+'.json';
+  await assert.rejects(verifyOpsmapGeneration(baseline.state,baseline.folder,(name)=>
+    name===badWindow?Buffer.from('{}'):fs.readFile(path.join(baseline.folder,name))),/OPSMAP_SYNC_FILE_DIGEST/);
+  await viewReader.dispose();
   const {env:runtimeEnv}=createStageShadowRuntime({...storageEnv,OPSMAP_SHADOW_ARCHIVE_KEY_B64:baselineKey.toString('base64')});
   assert.equal(runtimeEnv.OPSMAP_SHADOW_ARCHIVE_KEY_B64,undefined);
   const writer=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:runtimeEnv,write:true,fetchImpl:api.fetchImpl}),now,tempRoot:root});

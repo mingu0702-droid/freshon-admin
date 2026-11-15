@@ -19,7 +19,7 @@ import {createStageStaffSessionStore} from './staffSessionStore.js';
 import {createProductionSnapshotStore,materializeSnapshot} from './productionSnapshotStore.js';
 import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,createStageAbValidation,mountStageAbValidation} from './stageAbValidation.js';
 import {phase2bSnapshotMeta} from './phase2bOperations.js';
-import {mountPrivateCustomerSearch,preparePreservedAddressIndex} from './privateCustomerSearch.js';
+import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
@@ -151,14 +151,14 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       const started=performance.now();
       let timing;
       baselineStore ||= createOpsmapDurableGeneration({
-        ...stageOpsmapDurableStorage({env:stage,fetchImpl,baselineKey:baselineConfig.baselineKey}),now,
+        ...stageOpsmapDurableStorage({env:stage,fetchImpl,baselineKey:baselineConfig.baselineKey}),now,readOnlyView:true,
         onRestoreTiming:value=>{timing=value;}
       });
       const candidate=checkStageVerifiedBaseline(await baselineStore.readBaseline(baselineConfig.ref));
       baselineState=validation.followScheduled(candidate,baselineStore.readDay,{baseline:true})?'VERIFIED':'SUPERSEDED';
       baselineRestoreMs=Math.round(performance.now()-started);
       console.info(JSON.stringify({component:'opsmap-stage-baseline',...timing,restoreMs:baselineRestoreMs,
-        processUptimeMs:Math.round(process.uptime()*1000)}));
+        processUptimeMs:Math.round(process.uptime()*1000),maxRssMiB:Math.round(process.resourceUsage().maxRSS/1024)}));
     })().catch(async()=>{baselineState='UNAVAILABLE';await baselineStore?.dispose().catch(()=>{});baselineStore=null;})
       .finally(()=>{baselineRefresh=null;});
     return baselineRefresh;
@@ -172,7 +172,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     if (!scheduledEnabled) return;
     scheduledRefresh ??= (async()=>{
       scheduledStore ||= remoteEnabled
-        ? createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:stage,fetchImpl}),now})
+        ? createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:stage,fetchImpl}),now,readOnlyView:true})
         : await openScheduledStore(stage.OPSMAP_STAGE_SYNC_DIR,{writable:false});
       const result=remoteEnabled?await scheduledStore.readWithStatus():
         {generation:await scheduledStore.read(),status:await scheduledStore.readStatus()};
@@ -236,16 +236,17 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     }});
   let fallbackCoverageDirectory;
   let coverageState = readShadowDirectory || stage.OPSMAP_SHADOW_DATA_DIR ? 'ready' : 'unavailable';
+  const coverageFor = active => active?.scheduled?.prepareCoverage?.() ?? active?.directory;
   function coverageDirectory() {
     const active = validation.active();
-    if (active) return active.directory;
+    if (active) return coverageFor(active);
     fallbackCoverageDirectory ??= Promise.resolve()
       .then(() => readShadowDirectory ? readShadowDirectory() : stage.OPSMAP_SHADOW_DATA_DIR)
       .catch(() => null).then(directory => {
         coverageState = directory ? 'ready' : 'unavailable';
         return directory;
       });
-    return fallbackCoverageDirectory.then(directory => validation.active()?.directory || directory);
+    return fallbackCoverageDirectory.then(directory => coverageFor(validation.active()) ?? directory);
   }
   const sessions = createStageStaffSessionStore({env:stage,fetchImpl:stageGithub(fetchImpl,{files:['staff-sessions-v1.json'],branch:pinsBranch,writable:'staff-sessions-v1.json'})});
   const snapshotFetch = stageGithub(fetchImpl,{files:['map-snapshot-v1.json','map-date-checkpoint-v1.json','fixed-vehicle-projection-v1.json'],branch:snapshotBranch,allowBlob:true});
@@ -254,7 +255,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   let snapshot = null, snapshotPending = null, snapshotBase = null, joinedSnapshot = null;
   let fileRestorePending = null;
   let nextSnapshotCheck = 0;
-  let snapshotReadState=snapshotStore?'PENDING':'NOT_CONFIGURED', snapshotVerifiedAt=null;
+  let snapshotReadState=snapshotStore?(baselineConfig?'DEFERRED':'PENDING'):'NOT_CONFIGURED', snapshotVerifiedAt=null;
   async function readBaseSnapshot() {
     if (now() < nextSnapshotCheck) return snapshot;
     snapshotPending ??= Promise.resolve().then(()=>snapshotStore?.load()).then(value => {
@@ -300,33 +301,36 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return joinedSnapshot.snapshot;
   }
   function snapshotRecovery() {
-    if (snapshotPending || scheduledRefresh || fileRestorePending || baselineRefresh) return 'RESTORING';
+    if (!baselineConfig&&snapshotPending || scheduledRefresh || fileRestorePending || baselineRefresh) return 'RESTORING';
     const fileState=generationRestore.status().state;
     if ([snapshotReadState,scheduledState,fileState].includes('LAST_VERIFIED_RETAINED')) return 'LAST_VERIFIED_RETAINED';
     if ([snapshotReadState,scheduledState,fileState,baselineState].some(state=>['UNAVAILABLE','NOT_AVAILABLE'].includes(state))) return 'UNAVAILABLE';
     return snapshot || validation.active() ? 'READY' : 'UNAVAILABLE';
   }
   async function readSnapshot() {
-    const current=selectSnapshot(snapshot);
+    // A configured Stage baseline must be verified before serving its map.
+    // The legacy snapshot is still available to routes that explicitly need it.
+    const ready=()=>!baselineConfig||validation.active()?selectSnapshot(snapshot):null;
+    const current=ready();
     if (current && validation.active()) return current;
-    const baseRead=readBaseSnapshot().catch(()=>null);
-    const restore = [scheduledRefresh,fileRestorePending,baselineRefresh].filter(Boolean);
-    const reads = [baseRead,...restore];
+    const reads = [scheduledRefresh,fileRestorePending,baselineRefresh].filter(Boolean);
+    if(!baselineConfig)reads.unshift(readBaseSnapshot().catch(()=>null));
+    if(!reads.length)return current;
     let timer;
     // An existing copy may be served as soon as either source validates it. Bound a cold HTTP read.
     try {
       const deadline = new Promise(resolve=>{timer=setTimeout(resolve,snapshotWaitMs);});
       if (current) {
-        await Promise.race([baseRead,deadline]);
-        return selectSnapshot(snapshot) || current;
+        await Promise.race([reads[0],deadline]);
+        return ready() || current;
       }
       await Promise.race([
         Promise.any(reads.map(read=>Promise.resolve(read).then(()=>{
-          if (!selectSnapshot(snapshot)) throw Error('STAGE_SNAPSHOT_NOT_AVAILABLE');
+          if (!ready()) throw Error('STAGE_SNAPSHOT_NOT_AVAILABLE');
         }))).catch(()=>{}),
         deadline
       ]);
-      return selectSnapshot(snapshot);
+      return ready();
     } finally {clearTimeout(timer);}
   }
   const callHub = async (action, params, options) => {
@@ -337,6 +341,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   };
   const readRecordedRoadRoute = createRecordedRoadRouteReader({callHub,async readVehicleCenter({vehicle}) {
     const saved = await readSnapshot();
+    if(saved&&!snapshotBase)await readBaseSnapshot().catch(()=>null);
     if (!saved || !snapshotBase) return null;
     const groups = new Set(saved.rows.filter(row=>row.baseVehicle===vehicle && row.baseVehicleState==='VERIFIED_MASTER' &&
       row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY' && /^[a-f0-9]{64}$/.test(row.baseVehicleVersion || '')).map(row=>row.baseVehicleGroup));
@@ -363,7 +368,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       scheduledLastSuccessAt:meta?.scheduledLastSuccessAt||null,lastError:meta?.lastError||null
     };
     if (primary.ok) return primary;
-    try {await readSnapshot();} catch {return primary;}
+    try {await readBaseSnapshot();} catch {return primary;}
     const fallback=snapshotBase?.get(codes);
     return fallback?{...fallback,meta:{...fallback.meta,primaryCacheState:primary.meta?.cacheState,lastError:primary.meta?.lastError}}:primary;
   }};
@@ -383,7 +388,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
     const refresh=()=>{
-      if(snapshotStore)void readBaseSnapshot().catch(()=>{});
+      if(snapshotStore&&!baselineConfig)void readBaseSnapshot().catch(()=>{});
       if(generationRestore.status().state!=='NOT_CONFIGURED') {
         fileRestorePending ??= generationRestore.refresh().finally(()=>{fileRestorePending=null;});
       }
@@ -563,10 +568,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       let pendingStoreStatus;
       const statusApproved=stage.RENDER_SERVICE_ID===STAGE_SERVICE && stage.OPSMAP_STAGE_STORE_STATUS_APPROVED==='1';
       const readCoverageStatus = createCoverageStatusReader({
-        readFixed:async codes=>{
-          const primary=await fixed.get(codes);
-          return primary.ok ? primary : snapshotBase?.get(codes) || primary;
-        },
+        readFixed:codes=>base.get(codes),
         readEvidence:statusApproved ? generation=>{
           const active=validation.active();
           if (!active?.registry || active.generation!==generation) return null;
@@ -603,19 +605,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
         appRoot:coverageAppRoot,readProviderCoverage,readStatus:readCoverageStatus,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
-        readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
-      let preparedAddressRows;
-      function prepareStageSearch(saved) {
-        const generation = saved.sourceGeneration;
-        if (!generation || generation !== validation.active()?.generation || preparedAddressRows === saved.rows) return;
-        preparedAddressRows = saved.rows;
-        setImmediate(() => {
-          const started = performance.now();
-          void preparePreservedAddressIndex(saved).then(() => {
-            console.info(JSON.stringify({component:'stage-search-prepare',addressIndexMs:Math.round(performance.now()-started)}));
-          }).catch(() => { if (preparedAddressRows === saved.rows) preparedAddressRows = null; });
-        });
-      }
+        readPreservedMap:()=>{const saved=selectSnapshot(snapshot);return saved && {count:saved.rows.length,asOf:saved.latestDate};}});
       manual.mount(binding);
       photos.mount(binding);
       mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,allowPreservedBatch:true,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
@@ -649,10 +639,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           const meta = {...phase2bSnapshotMeta(saved), sourceGeneration:saved.sourceGeneration || null,sourceRunId:saved.sourceRunId || null,
             ...(saved.osanDeliveryThrough?{osanDeliveryThrough:saved.osanDeliveryThrough}:{}),
             recovery,...(recovery==='RESTORING'?{retryAfterMs:2000}:{})};
-          const respond=()=>{
-            prepareStageSearch(saved);
-            return res.json({ok:true,data:rows,meta,error:null});
-          };
+          const respond=()=>res.json({ok:true,data:rows,meta,error:null});
           if(!immediate)return requireStaff(req,res,respond);
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           res.locals.stageInlineStaffResponse=true;
