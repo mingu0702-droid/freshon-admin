@@ -94,6 +94,8 @@
     function closeViewer() {
       viewerController?.abort(); viewerController = null; viewerIndex = -1;
       stage.replaceChildren(); viewer.hidden = true;
+      delete stage.dataset.failureCode;
+      delete viewer.dataset.recordId;
       for (const [path, entry] of images) {
         if (entry.thumbnail) continue;
         releaseImage(entry);
@@ -113,7 +115,6 @@
       host.replaceChildren(); host.dataset.state = state;
       node('h3', '납품 사진', host);
       const status = node('p', message, host, 'deliveryPhotoStatus'); status.setAttribute('role', 'status');
-      if (host.dataset.failureCode) node('small', host.dataset.failureCode, host);
       if (action) { const button = node('button', action.label, host); button.type = 'button'; button.onclick = action.run; }
     }
     function dateSearch() {
@@ -251,9 +252,10 @@
       viewerController?.abort(); viewerController = new AbortController(); const controller = viewerController;
       if (viewer.hidden) focusBeforeViewer = document.activeElement;
       viewerIndex = index; stage.replaceChildren(); viewer.hidden = false; closeButton.focus();
-      viewerTitle.textContent = photo.recordId
-        ? `${photo.date} · 배송 ID ${photo.deliveryId} · 원본 기록 ID ${photo.recordId}`
-        : (photo.date || selected?.date || '') + ' · ' + title;
+      viewerTitle.textContent = (photo.date || selected?.date || '') + ' · ' + title;
+      delete stage.dataset.failureCode;
+      if (photo.recordId) viewer.dataset.recordId = photo.recordId;
+      else delete viewer.dataset.recordId;
       count.textContent = `${index + 1} / ${photoList.length}`; previous.disabled = index === 0; next.disabled = index === photoList.length - 1;
       node('p', '사진 불러오는 중…', stage, 'deliveryPhotoViewerStatus');
       try {
@@ -302,8 +304,9 @@
         const grid = node('div', undefined, group, 'deliveryPhotoGrid');
         for (const photo of delivery.photos) {
           const card = node('div', undefined, grid), index = photoList.indexOf(photo);
-          const button = node('button', `원본 기록 ID ${photo.recordId} · 사진 확대`, card);
+          const button = node('button', '사진 확대', card);
           button.type = 'button';
+          button.dataset.recordId = photo.recordId;
           button.onclick = () => enlarge(index);
           const preview = node('button', '썸네일 표시', card, 'deliveryPhotoThumb');
           preview.type = 'button';
@@ -320,7 +323,7 @@
     function renderIndexedHistory({scope, counts, state, nextCursor, items}, failedRefresh = false) {
       const total = INDEX_KINDS.reduce((sum, kind) => sum + counts[kind], 0);
       const statuses = {COMPLETE: total ? '과거 사진 이력 확인 완료' : '사진 없음',
-        COLLECTING:'과거 이력 확인 중', FAILED:'과거 이력 조회 실패', AUTH_REQUIRED:'과거 이력 조회 실패 · Delivery Admin 인증 필요'};
+        COLLECTING:'과거 이력 확인 중', FAILED:'과거 이력 조회 실패', AUTH_REQUIRED:'사진 서비스에 로그인해야 합니다. 관리자에게 문의해 주세요.'};
       shell(failedRefresh ? '과거 이력 갱신 실패 · 마지막 확인 목록입니다.' : statuses[state],
         failedRefresh ? 'stale' : state === 'COMPLETE' ? total ? 'ready' : 'empty' : state.toLowerCase(),
         failedRefresh || state !== 'COMPLETE' ? {label:'다시 조회', run:() => open(target)} : null);
@@ -373,7 +376,7 @@
         if (exact.length !== 1) throw Error('UNVERIFIED');
         selected = exact[0]; photoList = selected.photos;
         body.replaceChildren();
-        if (selected.status === 'UNVERIFIED') { node('p', '사진 미확인 · 사진 분류 또는 원천 확인이 필요합니다.', body, 'deliveryPhotoStatus'); host.dataset.state = 'unverified'; }
+        if (selected.status === 'UNVERIFIED') { node('p', '이 배송의 사진을 확인할 수 없습니다.', body, 'deliveryPhotoStatus'); host.dataset.state = 'unverified'; }
         if (!photoList.length && selected.status !== 'UNVERIFIED') { node('p', '사진 없음 · 해당 배송에 등록된 사진이 없습니다.', body, 'deliveryPhotoStatus'); host.dataset.state = 'empty'; }
         const groups = node('div', undefined, body, 'deliveryPhotoGroups'), tasks = [];
         let loaded = 0, failed = 0;

@@ -133,7 +133,7 @@ test('the Production history option prepares the existing source only after staf
   } finally { await f.close(); }
 });
 
-test('map selection opens photo history independent of the date filter and shows original record IDs in the viewer', async () => {
+test('map selection opens photo history independent of the date filter and retains the original record binding', async () => {
   const f = await fixture();
   const browser = await chromium.launch({channel:'chrome', headless:true});
   try {
@@ -146,8 +146,8 @@ test('map selection opens photo history independent of the date filter and shows
         await page.getByRole('button', {name:'과거 사진 조회'}).click();
         assert.equal(new URL((await awaited).url()).search, '?customerCode=' + customerCode);
         await page.getByText('과거 기록 확인 필요', {exact:true}).waitFor();
-        const records = page.getByRole('button', {name:/원본 기록 ID/});
-        assert.deepEqual(await records.allTextContents(), ['원본 기록 ID 11201 · 사진 확대', '원본 기록 ID 1110 · 사진 확대']);
+        const records = page.getByRole('button', {name:'사진 확대',exact:true});
+        assert.deepEqual(await records.evaluateAll(nodes => nodes.map(node => node.dataset.recordId)), ['11201', '1110']);
         const before = f.imageReads();
         await page.getByRole('button', {name:'썸네일 표시'}).first().click();
         await page.getByRole('img', {name:'매장 문 앞 납품 사진 썸네일'}).waitFor();
@@ -155,7 +155,8 @@ test('map selection opens photo history independent of the date filter and shows
         await records.first().click();
         await page.getByRole('img', {name:'매장 문 앞 납품 사진 확대 사진'}).waitFor();
         assert.equal(f.imageReads(), before + 1);
-        assert.match(await page.getByRole('dialog').innerText(), new RegExp(deliveryDay(1) + ' · 배송 ID 201 · 원본 기록 ID 11201'));
+        assert.match(await page.getByRole('dialog').innerText(), new RegExp(deliveryDay(1) + ' · 매장 문 앞 납품 사진'));
+        assert.equal(await page.getByRole('dialog').getAttribute('data-record-id'), '11201');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
         await page.keyboard.press('Escape');
         assert.equal(await page.getByRole('dialog').isVisible(), false);
