@@ -124,6 +124,7 @@ export async function restoreStageShadowCoverage(env, {
 export function createStageShadowRuntime(env, options) {
   const runtime = {...env, OPSMAP_SHADOW_DATA_DIR: ''};
   for (const key of Object.values(STAGE_ARCHIVE_ENV)) delete runtime[key];
+  const configured = Object.values(STAGE_ARCHIVE_ENV).every(name => Boolean(env[name]));
   let restored;
 
   async function restore() {
@@ -155,7 +156,7 @@ export function createStageShadowRuntime(env, options) {
     return directory;
   }
 
-  return {env: runtime, readDirectory: () => restored ??= restore()};
+  return {env: runtime, configured, readDirectory: () => restored ??= restore()};
 }
 
 export async function stageShadowRuntimeEnv(env, options) {

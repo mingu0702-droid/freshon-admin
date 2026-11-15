@@ -298,13 +298,4 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     return {...result,truncated:viewport.truncated,cells:result.cells.map(cell=>({...cell,boundary:cellToBoundary(cell.id)}))};
   },sendData,async()=>null);
 
-  return {
-    async prepareDefaultPointData(generation) {
-      const started = performance.now();
-      const {reader} = await load();
-      const restoring = performance.now();
-      await reader.readPeriod(90, generation);
-      return {restoreMs:Math.round(restoring-started),dataMs:Math.round(performance.now()-restoring)};
-    }
-  };
 }

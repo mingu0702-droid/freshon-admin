@@ -407,6 +407,9 @@
     $("#periodCenter").disabled = driver;
     $$('input[name="periodBasis"]').forEach(input => { input.checked = input.value === periodBasis; });
   }
+  function hasVerifiedStageLocations() {
+    return generalMap&&stageAddressBatchEnabled()&&/^[a-f0-9]{64}$/.test(snapshotMeta?.sourceGeneration||'');
+  }
   function filteredPeriodStores() {
     if (!dateReady || state.mode !== "BASE_60D") return [];
     if (periodBasis === "vehicle" && periodVehicleScope === "selected" && !selectedVehicles().length) return [];
@@ -414,9 +417,10 @@
     if (periodSelectionCache?.source === allStores && periodSelectionCache.key === key) return periodSelectionCache.rows;
     const driverKeys=selectedDriverKeys.length?selectedDriverKeys:[state.driverKey];
     const candidates=periodBasis==='driver'&&driverKeys.length>1?[...new Map(driverKeys.flatMap(key=>MapPeriodUi.select(allStores,[],key,{vehicleBasis:'actual'})).map(row=>[row.customerCode,row])).values()]:MapPeriodUi.select(allStores, periodBasis === "vehicle" ? selectedVehicles() : [], periodBasis === "driver" ? state.driverKey : "", {vehicleBasis:periodBasis === "vehicle" ? "base" : "actual", includeUnvisited:generalAllStores && periodBasis === 'vehicle',useResidentSummary:generalMap&&window.MAP_ROLLING_DATE_INDEX_ENABLED===true&&periodBasis==='vehicle',periodComplete:generalMap||periodMeta?.segmented!==true||periodMeta.aggregateComplete===true});
+    const savedCenters = baseVehicleStatus==='LOADING'&&hasVerifiedStageLocations();
     const rows = candidates
       .filter(row => (!generalMap||row.customerRegistryStatus!=='DELETED')&&(!state.centerFilter || periodBasis === "driver" ||
-        (row.baseVehicleGroup||vehicleListGroup(row.dispatchCenterCode||row.raw?.center)) === state.centerFilter));
+        (row.baseVehicleGroup||vehicleListGroup(row.dispatchCenterCode||row.raw?.center||(savedCenters?row.raw?.centerGroup:''))) === state.centerFilter));
     periodSelectionCache = {source:allStores,key,rows}; return rows;
   }
   let snapshotFlight, snapshotRecoveryTimer, snapshotRetryAfter=0, snapshotFailure;
@@ -532,6 +536,7 @@
         latestSnapshotRows.forEach(row=>coordinateByCode.set(String(row.customerCode||row.code),row));
       }
       applySnapshotRange();periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;
+      if(stageAddressBatchEnabled())performance.mark('opsmap-stores-prepared');
       if(state.selected){const next=storesByCode.get(state.selected.customerCode);if(next){state.selected={...state.selected,...next};refreshCoordinateEvidence(state.selected);void enrichStoreDetail(state.selected);}}
       if(oldRows.length)state.fitRequested=false;
       await loadBaseMap();
@@ -583,16 +588,17 @@
       if(snapshotReadState!=='ready')throw Error('SNAPSHOT_READ_FAILED');
       applySnapshotRange();
       periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();dateReady=true;
+      if(stageAddressBatchEnabled())performance.mark('opsmap-stores-prepared');
       const customerCodes=latestSnapshotRows.map(row=>row.customerCode);
-      // Start the first master read while the map SDK and layout finish.
       const masterLoading=baseVehicleStatus==='LOADING';
-      if(masterLoading)void loadBaseVehicles(customerCodes);
+      const deferMaster=hasVerifiedStageLocations();
+      if(masterLoading&&!deferMaster)void loadBaseVehicles(customerCodes);
       setPeriodViewState(allStores.length?'ready':'empty');await loadBaseMap();
       if(id!==initialRequestId||!generalMap)return;
       scheduleSnapshotRecovery(id);
       void initMap().then(()=>afterSearchPaint(()=>{
         if(id!==initialRequestId||!generalMap)return;
-        if(!masterLoading)void loadBaseVehicles(customerCodes);
+        if(!masterLoading||deferMaster)void loadBaseVehicles(customerCodes);
         void syncCustomerRegistry();
         if(recentPeriodMode&&adapter)void adapter.refreshLatest().then(value=>{
           const range=MapPeriodUi.recentRange(value);
@@ -2073,6 +2079,8 @@
     const selectedCode=state.selected?.customerCode;
     const protectedCodes=[selectedCode,...navCodes];
     const awaitingMaster=base&&periodBasis==='vehicle'&&baseVehicleStatus==='LOADING';
+    // A verified position can be drawn before its vehicle assignment is known.
+    const hideUnverified=awaitingMaster&&!hasVerifiedStageLocations();
     const center=state.map.getCenter?.();
     const viewportKey=JSON.stringify([markerSourceVersion,markerLayoutVersion,state.mode,level,center?.getLat?.(),center?.getLng?.(),
       mapViewport.width,mapViewport.height,fit,assignmentMode,vehicleOverview,selectedVehicleStores,focusedStops,baseVehicleStatus,Boolean(options.numbered),
@@ -2096,7 +2104,7 @@
     else if(vehicleOverview){
       const overview=pointIndex.overview ||= representativeRows(valid);
       readyOverview=overview.representatives.length>0;
-      pins=awaitingMaster?[]:MapViewPolicy.stableClusters(overview.unassigned,projectPin,level,selectedCode,mapViewport,clusterOptions);
+      pins=hideUnverified?[]:MapViewPolicy.stableClusters(overview.unassigned,projectPin,level,selectedCode,mapViewport,clusterOptions);
       for(const code of new Set(protectedCodes)){
         const row=byCode.get(code);if(row&&(awaitingMaster||window.MapViewPolicy.pinAssignment(row).code))pins.push(row);
       }
@@ -2104,14 +2112,14 @@
       const routes=readyOverview?MapViewPolicy.visibleVehicleRepresentatives(overview.representatives,projectPin,mapViewport,{
         get:vehicle=>(visibleStores??=overviewVehicleStores()).get(vehicle)
       }):[];
-      if(awaitingMaster)pins=pins.filter(shouldShow);
+      if(hideUnverified)pins=pins.filter(shouldShow);
       const obstacles=routes.length?overviewPinObstacles(mapNode,selectedExtra?[...pins,selectedExtra]:pins,projectPin):[];
       pins.push(...MapViewPolicy.groupOverviewVehiclePins(routes,projectPin,mapViewport,obstacles));
     }else{
       pins=window.MapViewPolicy.stableClusters(valid,projectPin,level,selectedCode,viewport,clusterOptions);
     }
     if(!detailedStores&&selectedExtra)pins.push(selectedExtra);
-    if(awaitingMaster&&!vehicleOverview)pins=pins.filter(shouldShow);
+    if(hideUnverified&&!vehicleOverview)pins=pins.filter(shouldShow);
     const markerMode=detailedStores?'STORES':readyOverview?'VEHICLES':'GROUPS';
     const entries = pins.map(row=>{
       const selected=markerIsSelected(row);
@@ -2187,6 +2195,7 @@
         $('#map').dataset.bootMetrics=JSON.stringify({serverResponse:Math.round(nav?.responseStart)||null,
           authentication:mark('staff-verified'),uiReady:mark('staff-ready'),snapshot:mark('snapshot-ready'),snapshotRequest:apiDiagnostics.get('snapshot')?.ms??null,
           restore:apiDiagnostics.get('snapshot')?.restoreMs??null,sdkRequest:mark('sdk-request'),sdkStart:mark('sdk-start'),sdk:mark('sdk-ready'),
+          storeData:mark('stores-prepared'),masterPending:awaitingMaster,
           firstPin:Math.round(performance.now()),pinRender:renderMetrics.firstMs,
           active:markerEntries.size,sourceRows:state.currentRows.length});
       });

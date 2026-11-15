@@ -22,6 +22,7 @@ import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
 import {opsmapDispatchDate} from '../src/snapshotRefreshEvidence.js';
 import {createShadowCoverageStore} from '../src/shadowCoverage/store.js';
+import {createStageShadowRuntime} from '../src/shadowCoverage/stageArchive.js';
 import {completeSyncObservation,SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
 import {collectOpsmapVehicleDelivery,opsmapVehicleDeliveryPage,readOpsmapVehicleDelivery} from '../src/opsmapVehicleDeliveryEvidence.js';
 import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,packDatedEvent,deliveryCompletion} from '../src/datedDeliveryContract.js';
@@ -34,7 +35,7 @@ const stage={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN};
 const clock={secret,scheduleId:triggerId,executorHash:principal};
 const key=randomBytes(32);
 const storageEnv={...stage,OPSMAP_STAGE_SYNC_REMOTE_APPROVED:'1',OPSMAP_STAGE_SYNC_PUBLISH_APPROVED:'1',
-  OPSMAP_STAGE_SYNC_WRITE_TOKEN:'fixture-writer',OPSMAP_STAGE_SYNC_READ_TOKEN:'fixture-reader',OPSMAP_SHADOW_ARCHIVE_KEY_B64:key.toString('base64')};
+  OPSMAP_STAGE_SYNC_WRITE_TOKEN:'fixture-writer',OPSMAP_STAGE_SYNC_READ_TOKEN:'fixture-reader',OPSMAP_STAGE_SYNC_ARCHIVE_KEY_B64:key.toString('base64')};
 const code='T99111', address='경기도 오산시 검증로 91';
 const ledgerBody={schema:'opsmap-fixed-store-coordinates-v1',revision:0,records:{}};
 const ledger={...ledgerBody,sha256:syncDigest(ledgerBody)};
@@ -197,7 +198,9 @@ test('the first Osan-only release can reuse the protected baseline and preserve 
     GITHUB_CACHE_BRANCH:'stage/opsmap-snapshots',GITHUB_CACHE_DIR:STAGE_BASELINE_PREFIX,GITHUB_TOKEN:'fixture'},fetchImpl:api.fetchImpl});
   const ref=await createOpsmapDurableGeneration({store:baselineWriter,key:baselineKey,now,tempRoot:root}).exportBaseline(baseline);
   const reader=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:{...stage,GITHUB_TOKEN:'fixture'},baselineKey,fetchImpl:api.fetchImpl}),now,tempRoot:root});
-  const writer=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:storageEnv,write:true,fetchImpl:api.fetchImpl}),now,tempRoot:root});
+  const {env:runtimeEnv}=createStageShadowRuntime({...storageEnv,OPSMAP_SHADOW_ARCHIVE_KEY_B64:baselineKey.toString('base64')});
+  assert.equal(runtimeEnv.OPSMAP_SHADOW_ARCHIVE_KEY_B64,undefined);
+  const writer=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:runtimeEnv,write:true,fetchImpl:api.fetchImpl}),now,tempRoot:root});
   assert.equal(await writer.restoreSpool(spool),undefined);
   await assert.rejects(reader.restoreSpool(spool,{useVerifiedBaseline:true}),/BASELINE_REF/);
   await reader.readBaseline(ref);
@@ -376,10 +379,13 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
     GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'stage/opsmap-manual-pins',
     MAP_STAFF_ID:'fixture',MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash(password),
     MAP_STAFF_SESSION_SECRET:randomBytes(32).toString('base64url')};
-  let release, headRequests=0, headOffline=false;
+  let release, headRequests=0, headOffline=false, fallbackReads=0;
   const delayedHead=new Promise(resolve=>{release=resolve;});
   const createStage=async()=>{
-    const app=createStageVerificationApp({env,now,snapshotWaitMs:100,async fetchImpl(input, options){
+    const app=createStageVerificationApp({env,now,snapshotWaitMs:100,async readShadowDirectory(){
+      fallbackReads++;
+      return restarted.read().then(current=>current.coverage);
+    },async fetchImpl(input, options){
       const pathname=new URL(input).pathname;
       if(pathname.endsWith('/map-snapshot-v1.json'))return new Response(null,{status:503});
       if(pathname.endsWith('/head-v1.json')){
@@ -406,6 +412,7 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   assert.equal(pending.headers.get('retry-after'),'2');
   assert.deepEqual(await pending.json(),{error:'PHASE2B_SNAPSHOT_RESTORING',recovery:'RESTORING'});
   assert.equal(headRequests,1);
+  assert.equal(fallbackReads,0);
   release();
   const waitForSnapshot=async root=>{
     for(let attempt=0;attempt<40;attempt++){
@@ -433,6 +440,7 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
     assert.equal(coverage.data.generation,replacement.generation);
     assert.equal(coverage.data.sourceRunId,replacement.runId);
   }
+  assert.equal(fallbackReads,0);
   const evidence=await get('/private/stage-sync-evidence');
   assert.equal(evidence.scheduled.sourceRunId,replacement.runId);
   assert.equal(evidence.scheduled.run.runId,unchanged.runId);
@@ -458,6 +466,11 @@ test('publication CAS, source retry, restart, archive laziness, and one run ID a
   const failed=await request(cold,'/preview/snapshot');
   assert.equal(failed.status,503);
   assert.deepEqual(await failed.json(),{error:'PHASE2B_SNAPSHOT_UNAVAILABLE',recovery:'UNAVAILABLE'});
+  assert.equal(fallbackReads,0);
+  const fallback=await request(cold,'/private/shadow-coverage/view?days=90&box=126.9,37.1,127.2,37.3');
+  assert.equal(fallback.status,200);
+  assert.equal((await fallback.json()).data.generation,replacement.generation);
+  assert.equal(fallbackReads,1);
   assert.equal((await get('/preview/snapshot')).meta.sourceGeneration,replacement.generation);
   headOffline=false;
   const restart=await createStage();

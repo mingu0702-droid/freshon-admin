@@ -149,11 +149,17 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     if(!baselineConfig||['VERIFIED','SUPERSEDED'].includes(baselineState))return;
     baselineRefresh??=(async()=>{
       const started=performance.now();
-      baselineStore ||= createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:stage,fetchImpl,baselineKey:baselineConfig.baselineKey}),now});
+      let timing;
+      baselineStore ||= createOpsmapDurableGeneration({
+        ...stageOpsmapDurableStorage({env:stage,fetchImpl,baselineKey:baselineConfig.baselineKey}),now,
+        onRestoreTiming:value=>{timing=value;}
+      });
       const candidate=checkStageVerifiedBaseline(await baselineStore.readBaseline(baselineConfig.ref));
       baselineState=validation.followScheduled(candidate,baselineStore.readDay,{baseline:true})?'VERIFIED':'SUPERSEDED';
       baselineRestoreMs=Math.round(performance.now()-started);
-    })().catch(async()=>{baselineState='UNAVAILABLE';await baselineStore?.dispose().catch(()=>{});})
+      console.info(JSON.stringify({component:'opsmap-stage-baseline',...timing,restoreMs:baselineRestoreMs,
+        processUptimeMs:Math.round(process.uptime()*1000)}));
+    })().catch(async()=>{baselineState='UNAVAILABLE';await baselineStore?.dispose().catch(()=>{});baselineStore=null;})
       .finally(()=>{baselineRefresh=null;});
     return baselineRefresh;
   }
@@ -228,10 +234,19 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         return point?.coordinateKind&&point.coordinateKind!=='BUILDING'?null:point;
       }});
     }});
-  let coverageState = 'restoring';
-  const baseDirectory = Promise.resolve().then(() => readShadowDirectory ? readShadowDirectory() : stage.OPSMAP_SHADOW_DATA_DIR)
-    .catch(() => null).then(directory => {coverageState = directory ? 'ready' : 'unavailable'; return directory;});
-  const coverageDirectory = () => validation.active()?.directory || baseDirectory;
+  let fallbackCoverageDirectory;
+  let coverageState = readShadowDirectory || stage.OPSMAP_SHADOW_DATA_DIR ? 'ready' : 'unavailable';
+  function coverageDirectory() {
+    const active = validation.active();
+    if (active) return active.directory;
+    fallbackCoverageDirectory ??= Promise.resolve()
+      .then(() => readShadowDirectory ? readShadowDirectory() : stage.OPSMAP_SHADOW_DATA_DIR)
+      .catch(() => null).then(directory => {
+        coverageState = directory ? 'ready' : 'unavailable';
+        return directory;
+      });
+    return fallbackCoverageDirectory.then(directory => validation.active()?.directory || directory);
+  }
   const sessions = createStageStaffSessionStore({env:stage,fetchImpl:stageGithub(fetchImpl,{files:['staff-sessions-v1.json'],branch:pinsBranch,writable:'staff-sessions-v1.json'})});
   const snapshotFetch = stageGithub(fetchImpl,{files:['map-snapshot-v1.json','map-date-checkpoint-v1.json','fixed-vehicle-projection-v1.json'],branch:snapshotBranch,allowBlob:true});
   const snapshotStore = createProductionSnapshotStore({env:stage,token:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,fetchImpl:snapshotFetch});
@@ -403,7 +418,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     phase2bKstDate:today,phase2bDispatchDate:dispatchDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:readDatedDelivery,
     callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
     sharedBaseCache:base,hybridEnabled:()=>false,roadRouteService,readRecordedRoadRoute,addressLookupService,
-    getShadowCoverageState:()=>validation.active() ? 'ready' : coverageState,
+    getShadowCoverageState:()=>validation.active() || coverageState==='ready' ? 'ready' :
+      baselineRefresh || scheduledRefresh || fileRestorePending ? 'restoring' : 'unavailable',
     getLocalDataEvidence:()=>validation.active()?.evidence || null,
     readArchivedAssignments:validation.archivedAssignments,
     mountPrivateExtensions:binding=>{
@@ -468,6 +484,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
                 deliveryEventApproved:stage.OPSMAP_STAGE_DELIVERY_EVENT_READ_APPROVED==='1',sourceReadsApproved:stage.OPSMAP_SYNC_SOURCE_READ_APPROVED==='1',
                 triggerIdConfigured:/^\d{1,30}$/.test(scheduleId||''),executorConfigured:/^[a-f0-9]{64}$/.test(executorHash||''),
                 hmacConfigured:typeof secret==='string'&&secret.length>=32&&secret.length<=512,
+                archiveKeyConfigured:/^[A-Za-z0-9+/]{43}=$/.test(stage.OPSMAP_STAGE_SYNC_ARCHIVE_KEY_B64||''),
                 jobSettingsPathConfigured:path.isAbsolute(stage.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE||''),
                 storageReaderCredentialPresent:!!(stage.OPSMAP_STAGE_SYNC_READ_TOKEN||stage.OPSMAP_SNAPSHOT_STORE_TOKEN||stage.OPSMAP_SHADOW_GITHUB_READ_TOKEN),
                 storageWriterCredentialPresent:!!(stage.OPSMAP_STAGE_SYNC_WRITE_TOKEN||
@@ -583,11 +600,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             ]).filter(([,digest])=>digest!==undefined))}));
         return (await providerReader)();
       }:undefined;
-      const coverage=mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
+      mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:coverageDirectory,
         appRoot:coverageAppRoot,readProviderCoverage,readStatus:readCoverageStatus,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});
-      let preparedAddressRows, preparedCoverageGeneration;
+      let preparedAddressRows;
       function prepareStageSearch(saved) {
         const generation = saved.sourceGeneration;
         if (!generation || generation !== validation.active()?.generation || preparedAddressRows === saved.rows) return;
@@ -595,16 +612,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         setImmediate(() => {
           const started = performance.now();
           void preparePreservedAddressIndex(saved).then(() => {
-            if (generation !== validation.active()?.generation || preparedCoverageGeneration === generation) return;
-            preparedCoverageGeneration = generation;
-            const addressIndexMs = Math.round(performance.now() - started);
-            // Background H3 file reads start after the map response and address preparation.
-            setTimeout(() => {
-              if (generation !== validation.active()?.generation) return;
-              void coverage.prepareDefaultPointData(generation).then(timings => {
-                console.info(JSON.stringify({component:'stage-search-prepare',addressIndexMs,...timings}));
-              }).catch(() => {});
-            }, 900).unref();
+            console.info(JSON.stringify({component:'stage-search-prepare',addressIndexMs:Math.round(performance.now()-started)}));
           }).catch(() => { if (preparedAddressRows === saved.rows) preparedAddressRows = null; });
         });
       }

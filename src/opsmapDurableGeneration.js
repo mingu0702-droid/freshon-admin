@@ -57,7 +57,7 @@ export function stageOpsmapDurableStorage({env = process.env, fetchImpl = fetch,
   const token = baseline ? env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.GITHUB_TOKEN : write
     ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN || (env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1' && env.OPSMAP_SNAPSHOT_STORE_TOKEN)
     : env.OPSMAP_STAGE_SYNC_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;
-  const key = baseline ? baselineKey : Buffer.from(env.OPSMAP_SHADOW_ARCHIVE_KEY_B64 || '','base64');
+  const key = baseline ? baselineKey : Buffer.from(env.OPSMAP_STAGE_SYNC_ARCHIVE_KEY_B64 || '','base64');
   if (!token || key.length !== 32) throw Error('OPSMAP_DURABLE_STAGE_CREDENTIALS');
   const repo = 'mingu0702-droid/freshon-cache', branch = 'stage/opsmap-snapshots';
   const prefix = baseline ? STAGE_BASELINE_PREFIX : 'opsmap-stage/scheduled-generations-v1';
@@ -104,7 +104,7 @@ async function packGeneration(generation) {
   return Buffer.from(JSON.stringify({state:generation.state,files}));
 }
 
-export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=tmpdir(),appRoot=process.cwd()} = {}) {
+export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=tmpdir(),appRoot=process.cwd(),onRestoreTiming} = {}) {
   if (!Buffer.isBuffer(key) || key.length!==32 || typeof store?.read!=='function') throw Error('OPSMAP_DURABLE_CONFIG');
   const kdf = label => Buffer.from(hkdfSync('sha256',key,Buffer.from('opsmap-scheduled-release-v1'),Buffer.from(label),32));
   const encryption = kdf('objects'), signing = kdf('head');
@@ -145,9 +145,17 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
     return bytes;
   }
 
-  async function readObject(kind,id,limit) {
+  async function readObject(kind,id,limit,timing) {
     if (!syncHash(id)) throw Error('OPSMAP_DURABLE_OBJECT_REF');
-    return decode(kind,id,(await store.read(kind+'-'+id+'.json')).value,limit);
+    const started=performance.now();
+    const {value}=await store.read(kind+'-'+id+'.json');
+    const downloaded=performance.now();
+    const bytes=await decode(kind,id,value,limit);
+    if(timing){
+      timing.archiveReadMs=Math.round(downloaded-started);
+      timing.archiveDecodeMs=Math.round(performance.now()-downloaded);
+    }
+    return bytes;
   }
 
   async function putObject(kind,bytes,limit) {
@@ -168,7 +176,10 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
   }
 
   async function restore(ref) {
-    const {state,files} = JSON.parse(await readObject('release',ref.blob,MAX_RELEASE_BYTES));
+    const timing=onRestoreTiming ? {} : null;
+    const bytes=await readObject('release',ref.blob,MAX_RELEASE_BYTES,timing);
+    const installing=performance.now();
+    const {state,files} = JSON.parse(bytes);
     if (state?.revision!==ref.revision || state.generation!==ref.generation || state.asOf!==ref.asOf ||
         state.runId!==ref.runId || !/^[a-f0-9-]{36}$/.test(state.id || '') || !files) throw Error('OPSMAP_DURABLE_RELEASE');
     const index = parseCoverageIndex(Buffer.from(files['coverage/coverage-index.json'] || '','base64'));
@@ -194,6 +205,7 @@ export function createOpsmapDurableGeneration({store,key,now=Date.now,tempRoot=t
       await fs.writeFile(path.join(root,'published',String(state.revision).padStart(12,'0')+'.json'),JSON.stringify({...state,sha256:syncDigest(state)}),{flag:'wx',mode:0o600});
       const generation=await (await openOpsmapSyncGenerationStore(root,{appRoot})).read();
       if (!generation) throw Error('OPSMAP_DURABLE_RELEASE');
+      if(timing)onRestoreTiming({...timing,archiveInstallMs:Math.round(performance.now()-installing)});
       return {root,generation,ref};
     } catch(error) {await fs.rm(root,{recursive:true,force:true}).catch(()=>{});throw error;}
   }
