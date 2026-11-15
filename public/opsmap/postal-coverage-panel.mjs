@@ -155,8 +155,14 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     }
   }
 
-  function applyView(data) {
+  function applyView(data, sameScope) {
     const { completeness, summary, source } = data;
+    root.dataset.postalView = JSON.stringify({ days: data.period.days, center: data.center, tier: data.tier,
+      observed: completeness.observed, missing: completeness.missing.length, registered: summary.registered, visits: summary.visits,
+      assignmentHeldStores:summary.assignmentHeldStores, assignmentHeldVisits:summary.assignmentHeldVisits,
+      areas: summary.areas, active: summary.newActive, unknown: summary.newUnknown, held: summary.held,
+      high: summary.high, low: summary.low, candidate: summary.candidate, unknownAreas: summary.unknown });
+    if (sameScope) return;
     find('postalPeriod').textContent = statsText(data.period) + ' · ' + centerNames[data.center];
     find('postalObserved').textContent = '배송 ' + completeness.observed + '/' + data.period.days + '일 관측 · 미확인 ' + completeness.missing.length + '일';
     const kpis = { ...summary, delivered: summary.high + summary.low };
@@ -176,6 +182,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
         (completeness.centerObserved[key] ? completeness.centerObserved[key] + '일' : '미확인')).join(' · ')),
       node('p', '주소·좌표 미연결 배송 ' + fmt.format(summary.unplaced) + '건 · 경계 미연결 배송 ' +
         fmt.format(summary.boundaryUnplaced) + '건 · 경계 미연결 등록 매장 ' + fmt.format(summary.unmatchedStores) + '곳'),
+      node('p', '경계 배정 보류 매장 ' + fmt.format(summary.assignmentHeldStores ?? 0) + '곳 · 배송 ' +
+        fmt.format(summary.assignmentHeldVisits ?? 0) + '건은 구역별 집계에서 보류'),
       node('p', '원천 전체 수집 완전성 미확인 ' + completeness.unverified.length + '일'),
       dates);
     const list = data.candidates.slice(0, 12).map(area => {
@@ -184,10 +192,6 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       return button;
     });
     find('postalCandidates').replaceChildren(...(list.length ? list : [node('p', '현재 범위에서 확인된 후보가 없습니다.')]));
-    root.dataset.postalView = JSON.stringify({ days: data.period.days, center: data.center, tier: data.tier,
-      observed: completeness.observed, missing: completeness.missing.length, registered: summary.registered, visits: summary.visits,
-      areas: summary.areas, active: summary.newActive, unknown: summary.newUnknown, held: summary.held,
-      high: summary.high, low: summary.low, candidate: summary.candidate, unknownAreas: summary.unknown });
   }
 
   async function readView(force = false) {
@@ -211,11 +215,12 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       if (!active || viewportRead !== controller) return;
       const slices = frame ? geometry.acceptBootstrap(data,frame.bytes,frame.duration) : await geometry.read(data,signal);
       if (!active || viewportRead !== controller) return;
-      const same = view?.period.days === data.period.days && view?.center === params.center && view?.generation === data.generation;
+      const same = view?.period.days === data.period.days && view.center === params.center && view.generation === data.generation &&
+        view.boundary === data.boundary && view.assignmentReview === data.assignmentReview;
       view = { ...data, center: params.center };
       viewKey = key;
       host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame), ...geometry.metrics() });
-      applyView(view);
+      applyView(view,same);
       map.show(view, slices);
       if (!same && selectedArea) {
         selectedArea = { id:selectedArea.id };
@@ -227,7 +232,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     } catch (error) {
       if (!active || viewportRead !== controller || controller.signal.aborted) return;
       const reason = error.code === 'POSTAL_GENERATION_MISMATCH' ? '최신 원장과 우편번호 자료의 세대가 다릅니다.'
-        : error.code === 'POSTAL_DATA_UNCONFIGURED' ? '국가기초구역 자료 연결을 확인해 주세요.' : '우편번호 자료를 읽지 못했습니다.';
+        : error.code === 'POSTAL_DATA_UNCONFIGURED' ? '국가기초구역 자료 연결을 확인해 주세요.'
+        : error.code?.startsWith('POSTAL_ASSIGNMENT_REVIEW_') ? '경계 배정 확인 자료를 연결해 주세요.' : '우편번호 자료를 읽지 못했습니다.';
       message(reason + (view ? ' 이전 화면을 유지합니다.' : ''), () => void readView(true));
     } finally {
       if (viewportRead === controller) {
@@ -240,7 +246,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   function scheduleView() {
     if (!active) return;
     clearTimeout(timer);
-    timer = setTimeout(() => void readView(), 85);
+    timer = setTimeout(() => void readView(), 60);
   }
   async function start(retryFailed = false) {
     const attempt = ++owner;
@@ -261,10 +267,14 @@ export function createCoveragePanel({ workspace, header, openStore }) {
 
   function searchItems(rows, signal, query) {
     const buttons = rows.map(row => {
-      const button = node('button', row.name || query);
+      const button = node('button', (row.name || query) + (row.assignmentPending ? ' · 우편번호 미확인' : ''));
       button.type = 'button'; button.className = 'coverage-search-result';
       button.onclick = () => {
         if (!active || signal.aborted) return;
+        if (row.kind === 'store' && !row.area) {
+          if (!openStore?.(row)) areaCard({ id:'unmatched' });
+          return;
+        }
         if (!row.location) { searchResults.replaceChildren(node('p', '등록 매장의 위치와 우편번호 연결을 확인해 주세요.')); return; }
         if (row.kind === 'store' && Number(find('coverageRadius').value)) void choosePoint(row.location, true, signal);
         else if (row.area || row.kind === 'area') pickArea(row.area || row, row.kind === 'store' ? row.location : null);
@@ -274,7 +284,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       return button;
     });
     searchResults.replaceChildren(...buttons);
-    if (rows.length === 1 && rows[0].exact !== false) buttons[0].click();
+    if (rows.length === 1 && rows[0].exact !== false && !rows[0].assignmentPending) buttons[0].click();
   }
 
   async function existingAddress(query, signal) {

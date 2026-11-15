@@ -144,6 +144,7 @@ export function createPostalAreaDetails(root, { read, dismiss, openStore }) {
       const address = make('p',row.address || '주소 미확인',{ className:'postal-store-address' });
       const badges = make('p',observation[row.deliveryObservation],{ className:'postal-store-status' });
       badges.dataset.observedDelivery = row.deliveryObservation;
+      if (row.assignmentPending) badges.append(' · 경계 배정 보류');
       if (row.newStore) badges.append(' · 오산신규 이력');
       if (row.heldHistory) badges.append(' · 오산보류 이력');
       const values = make('dl','',{ className:'postal-details-stat' });

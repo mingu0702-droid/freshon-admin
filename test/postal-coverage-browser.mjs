@@ -61,6 +61,8 @@ async function runServer(kind) {
       OPSMAP_STAGE_SYNC_READ_APPROVED:'1', OPSMAP_STAGE_SYNC_DIR:snapshotRoot, OPSMAP_SHADOW_DATA_DIR:generation.coverage,
       OPSMAP_STAGE_STORE_STATUS_APPROVED:'1', OPSMAP_STAGE_STORE_STATUS_FILE:statusFile, OPSMAP_STAGE_STORE_STATUS_SHA256:statusDigest,
       ...(kind === 'postal' ? { OPSMAP_SHADOW_COVERAGE_FORMAT:'postal', OPSMAP_SHADOW_POSTAL_DIR:packageDir,
+        OPSMAP_SHADOW_POSTAL_REVIEW_DIR:process.env.OPSMAP_SHADOW_POSTAL_REVIEW_DIR,
+        OPSMAP_SHADOW_POSTAL_REVIEW_SHA256:process.env.OPSMAP_SHADOW_POSTAL_REVIEW_SHA256,
         OPSMAP_SHADOW_POSTAL_BOUNDARY_SHA256:audit.manifestSha256, OPSMAP_SHADOW_POSTAL_RELEASE_SHA256:audit.releaseSha256 } : {})
     },
     openScheduledStore:async () => (await openOpsmapSyncGenerationStore(snapshotRoot)),

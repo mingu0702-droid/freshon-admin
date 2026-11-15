@@ -247,7 +247,7 @@ export function createPostalMap(host, maps, { idle, select }) {
     const anchor = base.getCenter();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const pixelWidth = Math.round(width * dpr), pixelHeight = Math.round(height * dpr);
-    const key = [scene.version,level,anchor.getLat().toFixed(7),anchor.getLng().toFixed(7),pixelWidth,pixelHeight].join(':');
+    const key = [scene.version,scene.tileKey,level,anchor.getLat().toFixed(7),anchor.getLng().toFixed(7),pixelWidth,pixelHeight,dpr].join(':');
     if (surface.width !== pixelWidth || surface.height !== pixelHeight) {
       surface.width = pixelWidth;
       surface.height = pixelHeight;
@@ -284,26 +284,33 @@ export function createPostalMap(host, maps, { idle, select }) {
     const outline = scene.tier === 'detail' ? null : rasterOutline(ctx, surface.width, surface.height);
     const verticesAt = outline && !world ? new Map() : null;
     let shown = 0, vertices = 0;
+    let vertexX, vertexY;
     function vertex(lng, lat) {
-      if (world) return [Math.round(((lng - world.x) * world.sx + width/2) * dpr) / dpr,
-        Math.round(((world.y - lat) * world.sy + height/2) * dpr) / dpr];
+      if (world) {
+        vertexX = Math.round(((lng - world.x) * world.sx + width/2) * dpr);
+        vertexY = Math.round(((world.y - lat) * world.sy + height/2) * dpr);
+        return;
+      }
       // Signed E6 coordinates fit exactly in this integer key throughout the validated source extent.
       const key = (lat - 32_000_000) * 10_000_001 + lng - 123_000_000;
       const known = verticesAt?.get(key);
-      if (known) return known;
+      if (known) {
+        [vertexX,vertexY] = known;
+        return;
+      }
       const point = projection.pointFromCoords(new maps.LatLng(lat / 1e6, lng / 1e6));
-      const projectedPoint = [Math.round((point.x + xOffset) * dpr) / dpr, Math.round((point.y + yOffset) * dpr) / dpr];
-      if (verticesAt && verticesAt.size < projectionCacheLimit) verticesAt.set(key,projectedPoint);
-      return projectedPoint;
+      vertexX = Math.round((point.x + xOffset) * dpr);
+      vertexY = Math.round((point.y + yOffset) * dpr);
+      if (verticesAt && verticesAt.size < projectionCacheLimit) verticesAt.set(key,[vertexX,vertexY]);
     }
     function append(path, ring) {
       let oldX, oldY;
       for (let i = 0; i < ring.length; i += 2) {
-        const [x, y] = vertex(ring[i], ring[i + 1]);
-        if (!i) path.moveTo(x, y);
-        else if (x !== oldX || y !== oldY) path.lineTo(x, y);
-        oldX = x;
-        oldY = y;
+        vertex(ring[i], ring[i + 1]);
+        if (!i) path.moveTo(vertexX/dpr, vertexY/dpr);
+        else if (vertexX !== oldX || vertexY !== oldY) path.lineTo(vertexX/dpr, vertexY/dpr);
+        oldX = vertexX;
+        oldY = vertexY;
       }
       path.closePath();
     }
@@ -312,12 +319,13 @@ export function createPostalMap(host, maps, { idle, select }) {
       const tone = scene.tones.get(zone.id) || 'UNKNOWN';
       for (const ring of zone.rings) {
         if (outline && tone === 'UNKNOWN') {
-          let [x, y] = vertex(ring.at(-2), ring.at(-1));
+          vertex(ring.at(-2), ring.at(-1));
+          let x = vertexX, y = vertexY;
           for (let i = 0; i < ring.length; i += 2) {
-            const [bx, by] = vertex(ring[i], ring[i + 1]);
-            if (x !== bx || y !== by) outline.line(Math.round(x*dpr), Math.round(y*dpr), Math.round(bx*dpr), Math.round(by*dpr));
-            x = bx;
-            y = by;
+            vertex(ring[i], ring[i + 1]);
+            if (x !== vertexX || y !== vertexY) outline.line(x,y,vertexX,vertexY);
+            x = vertexX;
+            y = vertexY;
           }
         } else append(tones[tone], ring);
         vertices += ring.length / 2;
@@ -336,7 +344,8 @@ export function createPostalMap(host, maps, { idle, select }) {
     }
     if (scene.tier !== 'national') {
       for (const [, [lat, lng], valid, missing, held] of scene.badges) {
-        const [x, y] = vertex(lng * 1e6, lat * 1e6);
+        vertex(lng * 1e6, lat * 1e6);
+        const x = vertexX/dpr, y = vertexY/dpr;
         const badges = [[valid, '#088478'], [missing, '#fff'], [held, '#8544a3']].filter(([value]) => value);
         badges.forEach(([, color], i) => {
           ctx.beginPath();
@@ -412,9 +421,10 @@ export function createPostalMap(host, maps, { idle, select }) {
       }
     },
     show(view, geometry) {
-      const version = [view.generation,view.overview || view.boundary,view.period.days,view.center].join(':');
+      const version = [view.generation,view.boundary,view.assignmentReview,view.period.days,view.center].join(':');
+      const tileKey = [view.tier,view.overview,...view.tiles.map(([id]) => id)].join(':');
       if (scene?.version !== version) clearProjected();
-      scene = { version, tier:view.tier, overview:view.overview, tones:new Map(view.tones), badges:view.badges, geometry };
+      scene = { version, tileKey, tier:view.tier, overview:view.overview, tones:new Map(view.tones), badges:view.badges, geometry };
       schedule();
     },
     select(area) { selected = area; updateSelection(); },

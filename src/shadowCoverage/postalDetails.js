@@ -95,6 +95,7 @@ function collectArea(opened, catalog, area, days, center, source) {
       .flatMap(([, , cars])=>cars.map(safeVehicle).filter(Boolean)))].sort();
     return [{ code:row.code, name:safeText(row.name,180) ?? row.code, address:safeText(row.address,450),
       registered:isRegistered, location:[row.lat,row.lng].every(Number.isFinite) ? [row.lat,row.lng] : null,
+      assignmentPending:item.reviewArea !== undefined,
       deliveryObservation:result.visits > 0 ? 'OBSERVED' : eligible ? 'CANDIDATE' : 'UNVERIFIED',
       observedDeliveryCount:result.visits, lastObservedDeliveryDate:result.latest, confirmedVehicles,
       newStore:flags & 1 ? 'OBSERVED' : flags & 2 ? 'UNVERIFIED' : flags & 8 ? 'VERIFIED_ZERO' : null,

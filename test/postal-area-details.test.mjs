@@ -106,6 +106,21 @@ test('history retains dated delivery rows and evidence dates without inventing o
   await assert.rejects(reader.history({...base,opened,code:'S105'}),/POSTAL_QUERY_INVALID/);
 });
 
+test('a delivery remains accessible when its boundary assignment is held',async t=>{
+  const {reader}=await fixture(t);
+  const effective={...opened,codes:new Map(opened.codes)};
+  effective.codes.set('S101',{...opened.codes.get('S101'),area:null,reviewArea:area});
+  const result=await reader.roster({...base,opened:effective,catalog,area:null,q:'S101'});
+  assert.equal(result.filteredCount,1);
+  assert.equal(result.stores[0].assignmentPending,true);
+  assert.equal(result.stores[0].observedDeliveryCount,2);
+  const history=await reader.history({...base,opened:effective,area:null,code:'S101'});
+  assert.equal(history.filteredCount,2);
+  assert.equal(history.orderNumber,null);
+  assert(history.deliveries.every(row=>row.deliveryId===null));
+  await assert.rejects(reader.history({...base,opened:effective,code:'S101'}),/POSTAL_QUERY_INVALID/);
+});
+
 test('mismatched or tampered detail package fails without synthesizing contents',async t=>{
   const {options,directory,reader}=await fixture(t);
   const absent=createPostalDetailsReader({...options,indexSha256:'0'.repeat(64)});

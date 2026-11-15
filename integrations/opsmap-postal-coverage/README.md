@@ -21,6 +21,8 @@
 
 배송 기준일은 2026-11-07입니다. 90일 위치 미연결 153건은 원천 합계에는 포함하며 경계에 임의 배정하지 않습니다.
 
+공식 도형 대조 대기 매장은 검토 부속 파일로 처리합니다. 기존 불일치 54곳, 주소 미확인 28곳, 주소표는 확인됐으나 보존 도형과 다른 86곳의 구역 배정을 보류합니다. 90일 좌표 연결 배송 87,983건 중 구역 집계 85,637건과 배정 보류 2,346건을 구분합니다. 보류 매장과 배송은 기존 미매칭 목록·검색·이력·상세카드에서 확인할 수 있습니다. 보류 때문에 관측 근거가 사라진 구역은 미배송 후보로 분류하지 않습니다.
+
 ## 권역별 업장과 배송 이력
 
 - 지도에서 선택한 우편번호와 기간에 해당하는 업장 12곳씩을 조회합니다. 업장을 펼치면 조회한 기간과 센터에 해당하는 관측 배송을 최신 날짜부터 12건씩 읽습니다. 자료의 관측 시각과 상세를 읽은 시각을 따로 표시합니다.
@@ -43,7 +45,7 @@ node --max-old-space-size=320 scripts/prepare-opsmap-postal.mjs $preparedBoundar
 node --max-old-space-size=320 scripts/prepare-opsmap-postal-details.mjs $newPrivatePackage $releaseSha $preparedBoundaries $committedSnapshot $newPrivateDetailsDir
 ```
 
-5. 새 원장 세대에는 2~4단계를 다시 실행합니다. 원장·경계·집계 세대가 다르면 상세 API는 503을 반환합니다. 화면은 조회 실패 시각과 같은 조회 조건의 이전 정상 시각을 구분합니다. 묶음은 실제 고객코드 및 집계 자료를 포함하므로 비공개로 보관합니다.
+5. `postal-assignment-review.json`을 앱 외부의 승인된 비공개 디렉터리에 두고 `OPSMAP_SHADOW_POSTAL_REVIEW_DIR`과 `OPSMAP_SHADOW_POSTAL_REVIEW_SHA256`을 지정합니다. 스키마는 `opsmap-postal-assignment-review-v1`입니다. `generation`, `boundary`, `release`는 같은 원장 세대·경계·릴리스의 지문이며, `previousMismatch`, `unresolved`, `addressMismatch`는 중복 없는 검토 대상입니다. 파일이나 지문이 다르면 우편번호 API는 503을 반환합니다. 새 공식 도형 패키지는 공간 대조를 마친 뒤 해당 지문으로 검토 파일도 다시 봉인합니다. 배송 이력 원본은 그대로 사용합니다.
 6. 실제 Render에서 전체 앱 메모리와 첫 화면을 확인합니다. 이번 후보의 선택 방식은 5자리 우편번호로 유지합니다.
 
 ## 불변 전국 표시 인덱스
@@ -60,7 +62,7 @@ python scripts/prepare-opsmap-postal-overview.py (Join-Path $newPrivatePackage g
 
 조작 시간은 응답의 `Server-Timing`에서 원천 읽기·집계 준비·화면 범위·점 공간 조인을 확인할 수 있습니다. 브라우저의 `data-postal-geometry`와 `data-postal-draw`에서 경계 다운로드·해제 완료, 타일 파싱 및 지도 그리기를 각각 확인합니다.
 
-이 변경을 되돌릴 때는 직전 후보 `aaf82f3b2657646a2951ec604ac29990a1862688`의 코드와 개별 타일 묶음의 디렉터리·인덱스 해시를 함께 선택합니다. 우편번호 방식은 계속 사용합니다.
+우편번호 표시 인덱스 장애 시 상세 도형 방식으로 복귀하는 선택지와 H3 전체 롤백을 구분합니다. 전자는 우편번호 모드에서 인덱스 설정 두 개만 해제합니다. 후자는 검증된 H3 데이터와 `OPSMAP_SHADOW_COVERAGE_FORMAT=h3`을 함께 적용합니다. 한 실행에서 해당 방식의 자료만 엽니다. 초기 우편번호 응답의 HTTP gzip은 단일 멤버를 사용합니다.
 
 ## 재현
 
@@ -72,4 +74,4 @@ node test/postal-coverage-browser.mjs h3 $committedSnapshot $storeStatusFile $ne
 
 브라우저 시험은 서버를 하나씩 열고, 로컬 전체 Stage 앱의 실제 보존본과 별도의 검증용 세션을 사용합니다. Playwright가 Chrome DevTools Protocol의 성능 추적 및 GC 뒤 JS Heap을 기록합니다. SDK 자원만 네트워크에서 읽으며 원장·Stage의 설정이나 배포를 변경하지 않습니다.
 
-도형 읽기 캐시는 서버 압축 바이트 4MiB, 브라우저 도형 추정 16MiB입니다. 브라우저는 동일 배율·카메라·기간·센터의 캔버스 최대 2장만 보관합니다. PC와 390px 모두 지도·필터 상태를 해제할 때 캐시를 비웁니다.
+서버는 개별 압축 도형과 검증된 첫 응답을 4MiB 캐시에서 함께 관리합니다. 동일 자료·범위의 첫 응답을 재사용하고 세대·범위·검토 자료가 달라지면 새 응답을 만듭니다. 브라우저 도형 캐시는 추정 16MiB이며 화면·배율·도형 버전별 캔버스는 최대 2장입니다. 지도 탭을 닫을 때 브라우저의 도형·캔버스 캐시를 비웁니다.

@@ -3,11 +3,12 @@ import { once } from 'node:events';
 import test from 'node:test';
 import { gzipSync, inflateRawSync } from 'node:zlib';
 import express from 'express';
-import { classifyPostalZone, encodePostalTileResponse, POSTAL_DENSITY_HIGH } from '../src/shadowCoverage/postal.js';
+import { applyPostalAssignmentReview, classifyPostalZone, createScope, encodePostalTileResponse,
+  POSTAL_DENSITY_HIGH } from '../src/shadowCoverage/postal.js';
 import { mountPostalCoverage } from '../src/shadowCoverage/postalRoutes.js';
 import { createPostalGeometryReader, postalWorldProjection } from '../public/opsmap/postal-coverage-map.mjs';
 import { decodePostalOverview, decodePostalTile, encodePostalZone, exactPostalPosition, postalText, postalTilePosition, postalTilesLevel,
-  splitPostalBootstrap } from '../public/opsmap/postal-geometry.mjs';
+  POSTAL_AREA_BYTES, splitPostalBootstrap } from '../public/opsmap/postal-geometry.mjs';
 
 const outer = [[127,37],[127.05,37],[127.05,37.05],[127,37.05],[127,37]];
 const hole = [[127.01,37.01],[127.03,37.01],[127.03,37.03],[127.01,37.03],[127.01,37.01]];
@@ -21,6 +22,39 @@ test('density uses area and a fixed inclusive threshold, evidence separates cand
   assert.equal(classifyPostalZone({ visits:0, registered:2, eligible:2 }, 1), 'CANDIDATE');
   assert.equal(classifyPostalZone({ visits:0, registered:2, eligible:1 }, 1), 'UNKNOWN');
   assert.equal(classifyPostalZone({ visits:0, registered:0, eligible:0 }, 1), 'UNKNOWN');
+});
+
+test('an assignment review withholds geometry without removing held visits or historical statuses', () => {
+  const generation = 'a'.repeat(64), boundary = 'b'.repeat(64), releaseSha = 'c'.repeat(64);
+  const [pending, neighbor, resolved] = ['Z90000000000000000001','Z90000000000000000002','Z90000000000000000003'];
+  const day = '2026-11-07';
+  const release = { generation,boundary,asOf:day,periods:{90:{
+    observed:{ all:[day],osan:[day] }, unverified:{ all:[],osan:[] }, missing:[], unidentified:0,
+    recorded:[5,0,0,0],unplaced:[0,0,0,0],unplacedBoundary:[0,0,0,0],unavailableCodes:[[],[],[],[]],
+    rows:[[pending,[[0,2,day,[]]]],[resolved,[[0,3,day,[]]]]], states:[[pending,5]],
+  }} };
+  const codes = new Map([pending,neighbor,resolved].map((id,i) => [id,{area:i<2?1234:1235,registered:true,center:0}]));
+  const review = { schema:'opsmap-postal-assignment-review-v1',generation,boundary,release:releaseSha,
+    previousMismatch:[pending],unresolved:[],addressMismatch:[] };
+  const effective = applyPostalAssignmentReview(review,release,releaseSha,codes);
+  assert.equal(codes.get(pending).area,1234);
+  assert.equal(effective.get(pending).area,null);
+  assert.throws(() => applyPostalAssignmentReview({...review,unresolved:[pending]},release,releaseSha,codes),
+    /POSTAL_ASSIGNMENT_REVIEW_INVALID/);
+  assert.throws(() => applyPostalAssignmentReview(review,release,'d'.repeat(64),codes),/POSTAL_ASSIGNMENT_REVIEW_INVALID/);
+
+  const areas = Buffer.alloc(POSTAL_AREA_BYTES*2);
+  for (const [i,id] of [1234,1235].entries()) {
+    areas.writeUInt32LE(id,i*POSTAL_AREA_BYTES);
+    areas.writeDoubleLE(1,i*POSTAL_AREA_BYTES+12);
+  }
+  const {groups,summary,candidates} = createScope(release,effective,areas,90,'all',2);
+  assert.deepEqual([summary.registered,summary.visits,summary.assignmentHeldStores,summary.assignmentHeldVisits],[3,5,1,2]);
+  assert.deepEqual([summary.located,summary.unmatchedStores,summary.newActive,summary.held],[2,1,1,1]);
+  assert.equal(groups.get(1234).status,'UNKNOWN');
+  assert.equal(groups.get(1234).visits,0);
+  assert.equal(groups.get(1235).visits,3);
+  assert.equal(candidates.length,0);
 });
 
 test('binary geometry identifies the same area with leading zero, holes and shared edges', () => {
