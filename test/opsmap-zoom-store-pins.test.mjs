@@ -5,8 +5,32 @@ import vm from 'node:vm';
 import '../public/opsmap/phase2b-ui-helpers.js';
 import '../public/opsmap/map-view-policy.js';
 import '../public/opsmap/map-period-ui.js';
+import { addressMunicipality } from '../public/opsmap/vehicle-picker-regions.js';
 
 const runtime = readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js', import.meta.url), 'utf8');
+
+test('a subset of selected base routes uses individual stores at any map level', () => {
+  const code = runtime.slice(runtime.indexOf('  function showSelectedVehicleStores('), runtime.indexOf('  function primarySelectedVehicle('));
+  const state = {mode:'BASE_60D', selectedVehicles:['101','172','182','208']};
+  const scope = {state, periodBasis:'vehicle', allVehiclesSelected:false};
+  const showStores = vm.runInNewContext(code + '\nshowSelectedVehicleStores', scope);
+  assert.equal(showStores(), true);
+  scope.allVehiclesSelected = true;
+  assert.equal(showStores(), false);
+  scope.allVehiclesSelected = false;
+  state.mode = 'DATE_ROUTE';
+  assert.equal(showStores(), false);
+  state.mode = 'BASE_60D';
+  state.selectedVehicles = [];
+  assert.equal(showStores(), false);
+});
+
+test('the municipality used by the route filter excludes street, building and access details', () => {
+  assert.equal(addressMunicipality('서울특별시 강남구 합성로 1 (건물)'), '강남구');
+  assert.equal(addressMunicipality('경기 포천시 합성면 합성로 1'), '포천시');
+  assert.equal(addressMunicipality('서울 강남구역빌딩 합성로 1'), '');
+  assert.equal(addressMunicipality('강남구 합성로 1'), '');
+});
 
 test('detailed map keeps all visible stores and groups only exact co-locations', () => {
   const rows = Array.from({ length: 305 }, (_, i) => ({ customerCode: `S${i}`, lat: 37.5, lng: 127 + i / 10000 }));

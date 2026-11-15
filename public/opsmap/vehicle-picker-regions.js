@@ -1,4 +1,4 @@
-(() => {
+export const addressMunicipality = (() => {
   // Only accept named municipalities at the beginning of a Customer address.
   const municipalities = [
     ['서울 서울시 서울특별시', '종로구 중구 용산구 성동구 광진구 동대문구 중랑구 성북구 강북구 도봉구 노원구 은평구 서대문구 마포구 양천구 강서구 구로구 금천구 영등포구 동작구 관악구 서초구 강남구 송파구 강동구'],
@@ -25,13 +25,13 @@
   }
   byProvince.set('전남광주통합특별시', new Set([...byProvince.get('전남'), ...byProvince.get('광주')]));
 
-  function addressMunicipality(address) {
+  return function addressMunicipality(address) {
     const [province, ...parts] = String(address || '').normalize('NFKC').trim().split(/\s+/);
     const [municipality, location] = province === '전남광주통합특별시' && parts[0] === '광주광역시' ? parts.slice(1) : parts;
     if (['세종', '세종시', '세종특별자치시'].includes(province) && municipality) return '세종시';
     if (byProvince.get(province)?.has(municipality) && location) return municipality;
     return '';
-  }
-
-  window.MapVehiclePickerRegions = { addressMunicipality };
+  };
 })();
+
+if (typeof window === 'object') window.MapVehiclePickerRegions = { addressMunicipality };

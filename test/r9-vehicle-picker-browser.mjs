@@ -43,7 +43,7 @@ class Overlay{constructor(opts){this.opts=opts}setMap(map){if(this.opts.content)
 window.kakao={maps:{LatLng:Coord,LatLngBounds:Bounds,Map:FixtureMap,CustomOverlay:Overlay,Polygon:Overlay,Polyline:Overlay,event:{addListener(){},removeListener(){}}}};window.KakaoMapsAdapter={ready:()=>Promise.resolve(),reset(){}};`;
 scripts.push('navigation-ui.js');
 let html=fs.readFileSync(path.join(root,'map-phase2b-preview.html'),'utf8').replace(/<script\b[\s\S]*?<\/script>/gi,'');
-html=html.replace('</body>','<script>'+fixture+'</script>'+scripts.map(file=>'<script src="'+file+'"></script>').join('')+'</body>');
+html=html.replace('</body>','<script>'+fixture+'</script>'+scripts.map(file=>'<script '+(file==='vehicle-picker-regions.js'?'type="module" ':'')+'src="'+file+'"></script>').join('')+'</body>');
 const server=http.createServer((req,res)=>{
  const u=new URL(req.url,'http://localhost');
  if(u.pathname.startsWith('/api/')){

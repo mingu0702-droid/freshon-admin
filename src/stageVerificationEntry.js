@@ -36,6 +36,7 @@ import {mountOpsmapScheduledRun,opsmapScheduleConfig} from './opsmapScheduledRun
 import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, isFixedMasterDay, stageFixedMasterScope,
   stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
+import {addressMunicipality} from '../public/opsmap/vehicle-picker-regions.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
 
 const stageOrigin = STAGE_ORIGIN;
@@ -628,7 +629,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           if(!rows){
             rows=redactPublicData(saved.rows);
             if(saved.source==='STAGE_VERIFIED_REGISTRY'){
-              for(const row of rows)for(const field of ['address','basicAddress','customerAddress','latestAddress','addressDetail'])delete row[field];
+              const active=validation.active();
+              const registry=active?.generation===saved.sourceGeneration?active.registry:null;
+              for(const row of rows){
+                const municipality=addressMunicipality(registry?.get(row.customerCode)?.address||row.address||row.basicAddress);
+                if(municipality)row.addressMunicipality=municipality;
+                for(const field of ['address','basicAddress','customerAddress','latestAddress','addressDetail'])delete row[field];
+              }
             }
             snapshotProjections.set(saved.rows,rows);
           }

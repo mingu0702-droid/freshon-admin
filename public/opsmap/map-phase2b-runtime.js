@@ -30,6 +30,7 @@
   const usesDeliveryRoster=()=>location.hostname==='freshon-admin-stage-preview-template.onrender.com';
   const modeViews = { BASE_60D: { vehicles: [], scope: "all", centerFilter: DEFAULT_PERIOD_CENTER }, DATE_ROUTE: { vehicles: [], scope: "all", centerFilter: "" } };
   let periodBasis = "vehicle", periodVehicleScope = "all", periodListLimit = 0;
+  let allVehiclesSelected = false;
   let generalAllStores = true;
   let generalMap = true;
   let selectedDriverKeys=[];
@@ -1248,6 +1249,7 @@
       deliveryPattern: customer.delivery_pattern || "",
       region: customer.region || "",
       addressRegion: customer.addressRegion || '',
+      addressMunicipality: customer.addressMunicipality || '',
       ton: customer.ton || vehicle.primary_ton || "",
       dailyAmount: customer.avg_order_amount ?? null,
       color: vehicleColor(vehicle.vehicle),
@@ -1272,8 +1274,15 @@
   }
 
   function selectedVehicles() {
-    state.selectedVehicles = vehicleChecks().filter((item) => item.checked).map((item) => item.value);
+    const checks = vehicleChecks();
+    state.selectedVehicles = checks.filter(item => item.checked).map(item => item.value);
+    allVehiclesSelected = checks.length === state.selectedVehicles.length;
     return state.selectedVehicles;
+  }
+
+  function showSelectedVehicleStores() {
+    return state.mode === 'BASE_60D' && periodBasis === 'vehicle' &&
+      state.selectedVehicles.length > 0 && !allVehiclesSelected;
   }
 
   function setSelectedVehicles(values,{keepRoadRoute=false}={}) {
@@ -1311,7 +1320,7 @@
       const verified = row.baseVehicleState === 'VERIFIED_MASTER' && row.baseVehicleSource === 'FIXED_DISPATCH_PRIMARY' && /^[a-f0-9]{64}$/.test(row.baseVehicleVersion || '');
       const vehicle = dated ? row.vehicle : verified && row.baseVehicle;
       if (!vehicle) continue;
-      const region = window.MapVehiclePickerRegions?.addressMunicipality(row.address);
+      const region = row.addressMunicipality || window.MapVehiclePickerRegions?.addressMunicipality(row.address);
       if (!region) continue;
       if (!byVehicle.has(vehicle)) byVehicle.set(vehicle, new Set());
       byVehicle.get(vehicle).add(region);
@@ -2054,8 +2063,9 @@
     const mapNode=$('#map');
     const mapViewport={width:mapNode.clientWidth,height:mapNode.clientHeight};
     const viewport=fit?null:mapViewport;
-    const detailedStores=base&&viewport&&level<=window.MapViewPolicy.storePinLevel;
-    const vehicleOverview=base&&level>=10&&periodBasis==='vehicle'&&
+    const selectedVehicleStores=showSelectedVehicleStores();
+    const detailedStores=selectedVehicleStores||base&&viewport&&level<=window.MapViewPolicy.storePinLevel;
+    const vehicleOverview=base&&!selectedVehicleStores&&level>=10&&periodBasis==='vehicle'&&
       (!drilledBaseVehicle||Boolean(state.virtual?.searchTemporary));
     const focusedStops=!base&&(state.selectedVehicles.length===1||periodBasis==='driver');
     const assignmentMode=base&&periodBasis!=='driver'?'BASE_60D':'DATE_ROUTE';
@@ -2065,7 +2075,7 @@
     const awaitingMaster=base&&periodBasis==='vehicle'&&baseVehicleStatus==='LOADING';
     const center=state.map.getCenter?.();
     const viewportKey=JSON.stringify([markerSourceVersion,markerLayoutVersion,state.mode,level,center?.getLat?.(),center?.getLng?.(),
-      mapViewport.width,mapViewport.height,fit,assignmentMode,vehicleOverview,focusedStops,baseVehicleStatus,Boolean(options.numbered),
+      mapViewport.width,mapViewport.height,fit,assignmentMode,vehicleOverview,selectedVehicleStores,focusedStops,baseVehicleStatus,Boolean(options.numbered),
       selectedCode,state.selected?.lat,state.selected?.lng,state.virtual?.temporaryKey,navCodes]);
     if(options.fromIdle&&!fit&&lastMarkerViewport===viewportKey)return false;
     mapNode.classList.toggle('mapZoomFar',level>=9);
@@ -2082,7 +2092,7 @@
       grouping:focusedStops?'individual':'territory',protectedCodes:navCodes,sourceVersion:markerSourceVersion,
       nearbyVehicleOnly:assignmentMode==='BASE_60D'};
     let pins,readyOverview=false;
-    if(detailedStores)pins=detailedMarkerRows(viewport,selectedExtra,assignmentMode,projectPin,protectedCodes);
+    if(detailedStores)pins=detailedMarkerRows(mapViewport,selectedExtra,assignmentMode,selectedVehicleStores?null:projectPin,protectedCodes);
     else if(vehicleOverview){
       const overview=pointIndex.overview ||= representativeRows(valid);
       readyOverview=overview.representatives.length>0;
@@ -2153,7 +2163,7 @@
     const overlayMs=performance.now()-started-planMs;
     markerEntries = reconciled.next;
     state.overlays = [...markerEntries.values()].map(entry=>entry.value);
-    const osanCenter=fit&&window.MapNavigationLookup?.registeredCenters?.().find(row=>row.id==='osan');
+    const osanCenter=fit&&!selectedVehicleStores&&window.MapNavigationLookup?.registeredCenters?.().find(row=>row.id==='osan');
     if((valid.length||osanCenter)&&fit&&!state.userMovedMap){
       const bounds=new kakao.maps.LatLngBounds(),mobileRoute=innerWidth<=760&&options.numbered;
       if(osanCenter)bounds.extend(markerPosition(osanCenter));
@@ -3551,7 +3561,7 @@
         const saved=dailyRosters.get(state.selectedDate);
         if(rosterCenters().some(center=>!saved?.scopes.has(center)&&!saved?.errors.has(center)))void changeRosterDate(state.selectedDate);
       }
-      if (!preserveSearch || (selected.length && !state.userMovedMap && !state.selected && !state.virtual)) requestMapFit();
+      if (!preserveSearch || (selected.length && (!state.userMovedMap || showSelectedVehicleStores()) && !state.selected && !state.virtual)) requestMapFit();
       else state.fitRequested = false;
       void loadBaseMap();
     }
