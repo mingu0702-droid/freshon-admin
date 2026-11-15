@@ -67,9 +67,11 @@ function github() {
     const folder=url.pathname.slice((root+'/contents/').length), name=folder.split('/').at(-1);
     const branch=method==='GET'?url.searchParams.get('ref'):JSON.parse(options.body).branch;
     const object=branch+'/'+folder;
-    calls.push({method,name});
+    const raw=options.headers?.Accept==='application/vnd.github.raw+json';
+    calls.push({method,name,raw});
     const current=files.get(object);
     if(method==='GET') {
+      if(raw&&current)return new Response(current.data);
       return current?Response.json({sha:current.sha,size:current.data.length,encoding:'base64',content:current.data.toString('base64')}):
         new Response(null,{status:404});
     }
@@ -204,6 +206,8 @@ test('the first Osan-only release can reuse the protected baseline and preserve 
   assert.equal(await writer.restoreSpool(spool),undefined);
   await assert.rejects(reader.restoreSpool(spool,{useVerifiedBaseline:true}),/BASELINE_REF/);
   await reader.readBaseline(ref);
+  assert.ok(api.calls.some(call=>call.raw&&call.name==='release-'+ref.blob+'.json'));
+  assert.ok(api.calls.some(call=>!call.raw&&call.name==='head-v1.json'));
   const restored=await reader.restoreSpool(spool,{useVerifiedBaseline:true});
   assert.equal(restored.index.sha256,baseline.index.sha256);
   await reader.dispose();

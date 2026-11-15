@@ -17,6 +17,7 @@ export const STAGE_BASELINE_PREFIX = 'opsmap-stage/scheduled-generations-v1/veri
 const LEASE_MS = 20 * 60_000;
 const MAX_RELEASE_BYTES = 14 * 1024 * 1024;
 const MAX_COMPRESSED_BYTES = 4 * 1024 * 1024;
+const MAX_ENCRYPTED_JSON_BYTES = Math.ceil(MAX_COMPRESSED_BYTES/3)*4+256;
 const objectName = /^(?:release|day)-[a-f0-9]{64}\.json$/;
 const gitSha = /^[a-f0-9]{40}$/;
 const metadataFiles = new Map([
@@ -76,6 +77,11 @@ export function stageOpsmapDurableStorage({env = process.env, fetchImpl = fetch,
     return fetchImpl(input,{...options,redirect:'error'});
   };
   const store = createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_CACHE_BRANCH:branch,GITHUB_CACHE_DIR:prefix,GITHUB_TOKEN:token},fetchImpl:guard});
+  if(baseline){
+    // The archive path is content-addressed and verified after decryption.
+    // Direct contents avoid re-encoding the authenticated envelope in base64.
+    return {store:{async read(name){return {value:await store.readRaw(name,MAX_ENCRYPTED_JSON_BYTES)};}},key};
+  }
   return {store:write?store:{read:store.read},key};
 }
 

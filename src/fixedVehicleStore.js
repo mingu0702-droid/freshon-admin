@@ -80,11 +80,31 @@ export function createPrivateGithubJsonStore({env=process.env,fetchImpl=fetch,no
     }catch{fail('FIXED_STORE_INVALID');}
     return {sha:meta.sha,value};
   }
+  async function readRaw(name,maxBytes){
+    await guard();
+    const r=await request(url(name)+'?ref='+encodeURIComponent(branch),{headers:{Accept:'application/vnd.github.raw+json'}});
+    if(r.status===404)return null;
+    if(!r.ok)fail('FIXED_STORE_READ');
+    if(!r.body||Number(r.headers.get('content-length'))>maxBytes){
+      await r.body?.cancel().catch(()=>{});
+      fail('FIXED_STORE_INVALID');
+    }
+    const chunks=[];
+    let length=0;
+    try{
+      for await(const chunk of r.body){
+        length+=chunk.byteLength;
+        if(length>maxBytes)fail('FIXED_STORE_INVALID');
+        chunks.push(chunk);
+      }
+      return JSON.parse(Buffer.concat(chunks,length).toString('utf8'));
+    }catch{fail('FIXED_STORE_INVALID');}
+  }
   async function write(name,value,sha){
     await guard();const r=await request(url(name),{method:'PUT',body:JSON.stringify({message:'Update private fixed vehicle projection',branch,content:Buffer.from(JSON.stringify(value),'utf8').toString('base64'),...(sha?{sha}:{})})});
     if([409,422].includes(r.status))fail('FIXED_STORE_CONFLICT');if(!r.ok)fail('FIXED_STORE_WRITE');
   }
-  return {read,write};
+  return {read,write,readRaw};
 }
 
 export function createFixedVehicleStore(options={}) {
