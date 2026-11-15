@@ -623,9 +623,15 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             if(recovery==='RESTORING')res.set('Retry-After','2');
             return res.status(503).json({error:recovery==='RESTORING'?'PHASE2B_SNAPSHOT_RESTORING':'PHASE2B_SNAPSHOT_UNAVAILABLE',recovery});
           }
-          let rows=snapshotProjections.get(saved.rows);
-          if(!rows){
-            rows=redactPublicData(saved.rows);
+          const recovery=snapshotRecovery();
+          const meta = {...phase2bSnapshotMeta(saved), sourceGeneration:saved.sourceGeneration || null,sourceRunId:saved.sourceRunId || null,
+            ...(saved.osanDeliveryThrough?{osanDeliveryThrough:saved.osanDeliveryThrough}:{}),
+            recovery,...(recovery==='RESTORING'?{retryAfterMs:2000}:{})};
+          // Only share the encoded, redacted response for this exact Snapshot and metadata.
+          const stamp=JSON.stringify(meta);
+          let projection=snapshotProjections.get(saved.rows);
+          if(projection?.stamp!==stamp){
+            const rows=redactPublicData(saved.rows);
             if(saved.source==='STAGE_VERIFIED_REGISTRY'){
               const active=validation.active();
               const registry=active?.generation===saved.sourceGeneration?active.registry:null;
@@ -635,13 +641,10 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
                 for(const field of ['address','basicAddress','customerAddress','latestAddress','addressDetail'])delete row[field];
               }
             }
-            snapshotProjections.set(saved.rows,rows);
+            projection={stamp,body:Buffer.from(JSON.stringify({ok:true,data:rows,meta,error:null}))};
+            snapshotProjections.set(saved.rows,projection);
           }
-          const recovery=snapshotRecovery();
-          const meta = {...phase2bSnapshotMeta(saved), sourceGeneration:saved.sourceGeneration || null,sourceRunId:saved.sourceRunId || null,
-            ...(saved.osanDeliveryThrough?{osanDeliveryThrough:saved.osanDeliveryThrough}:{}),
-            recovery,...(recovery==='RESTORING'?{retryAfterMs:2000}:{})};
-          const respond=()=>res.json({ok:true,data:rows,meta,error:null});
+          const respond=()=>res.type('application/json').send(projection.body);
           if(!immediate)return requireStaff(req,res,respond);
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           res.locals.stageInlineStaffResponse=true;

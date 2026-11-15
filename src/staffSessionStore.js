@@ -24,7 +24,7 @@ export function createStageStaffSessionStore({ env = process.env, fetchImpl = fe
   const leaseTime = now === Date.now ? () => performance.now() : now;
   const logged = new Map();
   const stats = { repositoryReads: 0, sessionReads: 0, sessionWrites: 0,
-    cacheHits: 0, joinedReads: 0, notModified: 0, cooldownSkips: 0, casConflicts: 0 };
+    cacheHits: 0, joinedReads: 0, notModified: 0, cooldownSkips: 0, casConflicts: 0, expiredLeaseRetries: 0 };
   let repository = null, snapshot = null, pendingRead = null, writeTail = Promise.resolve(), blockedUntil = 0;
 
   function numericHeader(response, name) {
@@ -133,7 +133,16 @@ export function createStageStaffSessionStore({ env = process.env, fetchImpl = fe
       stats.cacheHits++;
       return snapshot;
     }
-    const task = verifyRepository().then(() => readFile());
+    const task = verifyRepository().then(async () => {
+      const loaded = await readFile();
+      if (loaded.until > leaseTime()) return loaded;
+      // A late reply cannot extend its lease. Share one fresh read among the waiting callers.
+      stats.expiredLeaseRetries++;
+      await verifyRepository();
+      const fresh = await readFile();
+      if (fresh.until <= leaseTime()) fail('STATE_READ_LEASE_EXPIRED');
+      return fresh;
+    });
     pendingRead = task;
     try { return await task; } finally { if (pendingRead === task) pendingRead = null; }
   }

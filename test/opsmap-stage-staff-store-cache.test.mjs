@@ -206,11 +206,37 @@ test('a pre-revocation read cannot start a new lease after the revocation is ack
   const f = fixture(), a = f.start(), b = f.start();
   await a.set(key, future(f), fingerprint);
   const gate = f.holdNextResponse(), stale = b.get(key, fingerprint);
-  const rejected = assert.rejects(stale, /STAFF_SESSION_STORE_UNAVAILABLE/);
   await gate.started;
   try { await a.delete(key); } finally { gate.release(); }
-  await rejected;
+  assert.equal(await stale, null);
+  assert.equal(b.stats().expiredLeaseRetries, 1);
   assert.equal(await b.get(key, fingerprint), null);
+});
+
+test('an expired GitHub response permits one shared revalidation and never lengthens the lease', async () => {
+  const f = fixture(), saved = future(f);
+  await f.start().set(key, saved, fingerprint);
+  const store = f.start(), first = f.holdNextResponse();
+  const readers = Promise.all(Array.from({length:12}, () => store.get(key, fingerprint)));
+  await first.started;
+  f.advance(4001);
+  first.release();
+  assert.deepEqual(await readers, Array(12).fill(saved));
+  assert.equal(store.stats().expiredLeaseRetries, 1);
+  assert.equal(store.stats().sessionReads, 2);
+
+  f.advance(4001);
+  const late = f.holdNextResponse();
+  const refused = assert.rejects(store.get(key, fingerprint), /STAFF_SESSION_STORE_UNAVAILABLE/);
+  await late.started;
+  const later = f.holdNextResponse();
+  f.advance(4001);
+  late.release();
+  await later.started;
+  f.advance(4001);
+  later.release();
+  await refused;
+  assert.equal(store.stats().sessionReads, 4);
 });
 
 async function startHttp(t, f, config) {
