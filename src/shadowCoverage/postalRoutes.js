@@ -7,6 +7,7 @@ const postalRoot = '/api/map-phase2b/private/shadow-coverage/postal';
 const centers = ['all', 'osan', 'yeongnam', 'honam'];
 const hash = /^[a-f0-9]{64}$/;
 const gzipHeader = promisify(gzip);
+const historyQueryKeys = new Set(['area', 'center', 'days', 'generation', 'offset']);
 
 function criteria(query) {
   const { days = '90', center = 'all', generation } = query;
@@ -116,8 +117,9 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     return runtime.stores({ ...memberScope(req,scope), filter, q });
   });
   route('/history', (req, scope, { runtime }) => {
-    const code = req.get('X-Map-Customer-Code') ?? req.query.code;
-    if (typeof code !== 'string' || !/^[A-Z]\d{1,20}$/.test(code)) throw Error('POSTAL_QUERY_INVALID');
+    const code = req.get('X-Map-Customer-Code');
+    if (Object.keys(req.query).some(key => !historyQueryKeys.has(key)) ||
+        typeof code !== 'string' || !/^[A-Z]\d{1,20}$/.test(code)) throw Error('POSTAL_QUERY_INVALID');
     return runtime.history({ ...memberScope(req,scope), code });
   });
   route('/point', (req, scope, { runtime }, timing) => {

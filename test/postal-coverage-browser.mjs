@@ -102,7 +102,7 @@ async function runBrowser() {
   child.stdout.resume();
   child.stderr.resume();
   let browser, serial = 0, step = '서버 시작', page;
-  const network = [];
+  const responseStatuses = {};
   const report = { format:mode, sdk, fullStageApp:true, deployed:false, browser:[], server:[] };
   try {
     const [port] = await Promise.race([once(child, 'message'), ended.then(() => { throw Error('Local stage process exited'); })]);
@@ -133,23 +133,23 @@ async function runBrowser() {
         isMobile:phone, hasTouch:phone, serviceWorkers:'block' });
       page = await context.newPage();
       page.setDefaultTimeout(18000);
-      const sdkStatuses = [], sdkAssets = new Set(), rejectedSdkAssets = new Set(), sdkFailures = new Set(), errors = [];
+      const sdkStatuses = [], sdkAssets = new Set(), rejectedSdkAssets = new Set(), sdkFailures = new Set();
+      let pageErrorCount = 0;
       const shapes = '#coverageMap ' + (mode === 'postal' ? 'canvas.postal-map-overlay' : 'svg.coverage-overlay path');
       const reqs = { view:0, tile:0, h3:0, inspected:0, posted:0 };
-      page.on('response', async response => {
+      page.on('response', response => {
         const url = new URL(response.url());
         if (url.hostname === 'dapi.kakao.com' && url.pathname === '/v2/maps/sdk.js') sdkStatuses.push(response.status());
         if (url.origin !== origin && response.ok()) sdkAssets.add(url.hostname);
         if (url.origin === origin && /(?:postal|shadow-coverage|map-sdk-config)/.test(url.pathname)) {
-          const value = response.status() >= 400 ? await response.json().catch(() => ({})) : {};
-          network.push([url.pathname, response.status(), /^[A-Z_]+$/.test(value.error || '') ? value.error : null]);
-          if (network.length > 20) network.shift();
+          const status = response.status();
+          responseStatuses[status] = (responseStatuses[status] || 0) + 1;
         }
       });
-      page.on('pageerror', error => errors.push(error.name + ': ' + error.message.replace(/https?:\S+/g, '[URL]').slice(0,120)));
+      page.on('pageerror', () => { pageErrorCount++; });
       page.on('requestfailed', request => {
         const url = new URL(request.url());
-        if (/kakao|daum/.test(url.hostname)) sdkFailures.add(url.hostname + ' ' + request.failure()?.errorText);
+        if (/kakao|daum/.test(url.hostname)) sdkFailures.add(url.hostname);
       });
       await context.route('**/*', async route => {
         const request = route.request();
@@ -206,7 +206,7 @@ async function runBrowser() {
       const nativeSdk = await page.evaluate(async () => {
         let maps;
         try { maps = (await window.KakaoMapsAdapter.ready()).maps; }
-        catch (error) { return /^[A-Z_]+$/.test(error.message) ? error.message : 'MAP_SDK_UNAVAILABLE'; }
+        catch { return 'MAP_SDK_UNAVAILABLE'; }
         maps.Map = new Proxy(maps.Map, { construct(Target, args, next) {
           const result = Reflect.construct(Target, args, next);
           if (args[0]?.id === 'coverageMap') window.__postalTestMap = result;
@@ -425,7 +425,7 @@ async function runBrowser() {
         assert.equal(await page.locator('#coverageDetail').count(), 1);
         assert.equal(await page.locator('#coverageDetail').isHidden(), true);
       }
-      assert.deepEqual(errors, []);
+      assert.equal(pageErrorCount, 0, 'Unexpected page errors');
       data.mapAssets = [...sdkAssets];
       data.rejectedSdkAssets = [...rejectedSdkAssets];
       data.sdkFailures = [...sdkFailures];
@@ -442,15 +442,8 @@ async function runBrowser() {
     assert(report.server.every(item => item.rejectedRemoteCalls === 0));
     await writeFile(path.join(output, mode + '-' + sdk + '-full-service.json'), JSON.stringify(report,null,2));
     console.log(mode + ' ' + sdk + ' PASS, full service peak RSS ' + report.peakRssMiB + ' MiB');
-  } catch (error) {
-    console.error('Stopped at ' + step + ' (' + error.name + ')');
-    if (sdk === 'fixture' || /^[A-Z_]+$/.test(error.message)) console.error(error.message.replace(/https?:\S+/g,'[URL]'));
-    console.error(JSON.stringify({ network, screen:await page?.evaluate(() => ({
-      state:document.body.dataset.mapStaffState, message:document.getElementById('coverageMapMessage')?.textContent,
-      tab:document.getElementById('modeShadowCoverage')?.textContent,
-      bounds:window.__postalTestMap?.getBounds()?.getSouthWest()?.getLng(),
-      overlay:document.getElementById('coverageMap')?.dataset.postalDraw
-    })).catch(() => null) }));
+  } catch {
+    console.error(JSON.stringify({ error:'POSTAL_BROWSER_TEST_FAILED', step, responseStatuses }));
     process.exitCode = 1;
   } finally {
     await browser?.close();

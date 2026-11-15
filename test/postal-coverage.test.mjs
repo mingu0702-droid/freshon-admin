@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import test from 'node:test';
+import express from 'express';
 import { classifyPostalZone, POSTAL_DENSITY_HIGH } from '../src/shadowCoverage/postal.js';
+import { mountPostalCoverage } from '../src/shadowCoverage/postalRoutes.js';
 import { createPostalGeometryReader, postalWorldProjection } from '../public/opsmap/postal-coverage-map.mjs';
 import { decodePostalOverview, decodePostalTile, encodePostalZone, exactPostalPosition, postalText, postalTilePosition, postalTilesLevel,
   splitPostalBootstrap } from '../public/opsmap/postal-geometry.mjs';
@@ -119,4 +122,34 @@ test('a superseded viewport shares immutable tiles until the map is closed', asy
   reader.clear();
   await closed;
   assert.equal(reader.metrics().tiles,0);
+});
+
+test('postal history rejects customer identifiers in the request URL', async t => {
+  const app = express();
+  mountPostalCoverage({ app, postal:{}, appRoot:process.cwd(), requireStaff(req, res, next) {
+    return req.get('X-Fixture-Staff') === 'test' ? next() : res.sendStatus(401);
+  } });
+  const server = app.listen(0, '127.0.0.1');
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  await once(server, 'listening');
+  const url = new URL('/api/map-phase2b/private/shadow-coverage/postal/history',
+    'http://127.0.0.1:' + server.address().port);
+  url.searchParams.set('area', '01234');
+  url.searchParams.set('generation', 'a'.repeat(64));
+  const staff = { 'X-Fixture-Staff':'test' };
+  const code = 'Z99999999999999999999';
+  const headers = { ...staff, 'X-Map-Customer-Code':code };
+  assert.equal((await fetch(url, { headers:{ 'X-Map-Customer-Code':code } })).status, 401);
+  assert.equal((await fetch(url, { headers:staff })).status, 400);
+  const allowed = await fetch(url, { headers });
+  assert.equal(allowed.status, 503);
+  assert.equal(allowed.headers.get('Cache-Control'), 'private, no-store');
+  assert.equal((await allowed.json()).error, 'POSTAL_DATA_UNCONFIGURED');
+
+  url.searchParams.set('code', code);
+  for (const requestHeaders of [staff, headers]) {
+    const rejected = await fetch(url, { headers:requestHeaders });
+    assert.equal(rejected.status, 400);
+    assert.deepEqual(await rejected.json(), { ok:false, error:'POSTAL_QUERY_INVALID' });
+  }
 });
