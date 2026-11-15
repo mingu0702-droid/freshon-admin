@@ -138,7 +138,7 @@
     }
     return [...records.values(),...centers,...temporaryPlaces.values()];
   }
-  const resolve=value=>lookup.resolve(value,all());
+  const resolve=value=>lookup.normalize(value)?lookup.resolve(value,all()):[];
   const status=text=>{const node=$('#plannerStatus');node.hidden=!text;node.textContent=text;};
   function refreshPointActions(){
     const candidate=bridge.state.selected||bridge.state.virtual;
@@ -217,12 +217,15 @@
     finally{if(generation===addressSearchGeneration)addressSearchController=null;}
   }
   function describeInputs(){
+    let records;
     for(const input of inputs()){
       input.setAttribute('role','combobox');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-controls','navSearchResults');if(!input.hasAttribute('aria-expanded'))input.setAttribute('aria-expanded','false');
       const field=input.closest('.navEditorField')||input.parentNode;let detail=field.querySelector('.navFieldDetail');
       if(!input.id)input.id='navWaypoint'+(input.dataset.navIndex||inputs().indexOf(input));
       if(!detail){detail=document.createElement('small');detail.className='navFieldDetail';detail.dataset.navDetailFor=input.id;const after=input.closest('.pointInputRow')||input;after.after(detail);}
-      const found=resolve(input.dataset.pointCode||input.value),row=found.length===1?found[0]:null;
+      const value=input.dataset.pointCode||input.value;
+      const found=lookup.normalize(value)?lookup.resolve(value,records??=all()):[];
+      const row=found.length===1?found[0]:null;
       detail.textContent=row?[row.customerName,row.address].filter(Boolean).join(' · '):'';detail.hidden=!row;
       input.dataset.resolved=String(!!row&&lookup.located(row));
     }

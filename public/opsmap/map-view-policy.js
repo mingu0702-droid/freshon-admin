@@ -5,6 +5,10 @@
   const storePinLevel = 5;
   const vehicleOverlapPixels = 40;
   const vehicleOverlapKm = 0.5;
+  const territoryCellSizes = [80, 700, 3500, 18000, 120000];
+  // At 80 m the bounded Mercator plane uses fewer than 501,000 cells per axis.
+  const gridStride = 2 ** 20;
+  const compareGroupKeys = new Intl.Collator().compare;
   const groupingCache=new WeakMap();
   const finitePoint = row => Number.isFinite(row?.lat) && Number.isFinite(row?.lng) && Math.abs(row.lat)<=90 && Math.abs(row.lng)<=180;
   const regionColors = Object.freeze({ '수도권':'#2563eb', '강원권':'#0f766e', '충청권':'#b45309', '호남권':'#7c3aed', '영남권':'#047857', '제주권':'#0369a1' });
@@ -54,16 +58,31 @@
   function mergeNearby(groups, cell) {
     // Adjacent cells can both place a marker on their shared edge. Merge those
     // geographic neighbours too; the projection/viewport never owns membership.
-    const list=[...groups.values()].sort((a,b)=>a.key.localeCompare(b.key));
-    const parents=list.map((_,i)=>i), bins=new Map();
+    const list=groups.sort((a,b)=>compareGroupKeys(a.key,b.key));
+    const parents=list.map((_,i)=>i), binsByRoute=new Map();
+    const centers=list.map(group=>({x:group.x/group.rows.length,y:group.y/group.rows.length}));
+    const maxDistanceSquared=(cell*.65)**2;
     const find=i=>{while(parents[i]!==i){parents[i]=parents[parents[i]];i=parents[i];}return i;};
     for(let i=0;i<list.length;i++){
-      const g=list[i],x=g.x/g.rows.length,y=g.y/g.rows.length,bx=Math.floor(x/cell),by=Math.floor(y/cell);
-      for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)for(const j of bins.get(`${g.route}:${bx+dx}:${by+dy}`)||[]){
-        const other=list[j],ox=other.x/other.rows.length,oy=other.y/other.rows.length;
-        if((x-ox)**2+(y-oy)**2<(cell*.65)**2){const a=find(i),b=find(j);parents[Math.max(a,b)]=Math.min(a,b);}
+      const {route}=list[i],{x,y}=centers[i];
+      const key=Math.floor(x/cell)*gridStride+Math.floor(y/cell);
+      let bins=binsByRoute.get(route);
+      if(!bins){bins=new Map();binsByRoute.set(route,bins);}
+      for(let dx=-gridStride;dx<=gridStride;dx+=gridStride){
+        for(let dy=-1;dy<=1;dy++){
+          const adjacent=bins.get(key+dx+dy);
+          if(!adjacent)continue;
+          for(const j of adjacent){
+            const other=centers[j];
+            if((x-other.x)**2+(y-other.y)**2<maxDistanceSquared){
+              const a=find(i),b=find(j);
+              parents[Math.max(a,b)]=Math.min(a,b);
+            }
+          }
+        }
       }
-      const key=`${g.route}:${bx}:${by}`;if(!bins.has(key))bins.set(key,[]);bins.get(key).push(i);
+      const existing=bins.get(key);
+      if(existing)existing.push(i);else bins.set(key,[i]);
     }
     const merged=new Map();
     for(let i=0;i<list.length;i++){
@@ -74,6 +93,29 @@
       target.west=Math.min(target.west,g.west);target.east=Math.max(target.east,g.east);
     }
     return [...merged.values()];
+  }
+  function clusterTerritory(territory,mode,band,pass,cell) {
+    const bucketsByRoute=new Map(),groups=[];
+    for(const {row,point,route} of territory){
+      let buckets=bucketsByRoute.get(route);
+      if(!buckets){buckets=new Map();bucketsByRoute.set(route,buckets);}
+      const x=Math.floor(point.x/cell),y=Math.floor(point.y/cell);
+      const key=x*gridStride+y;
+      let group=buckets.get(key);
+      if(!group){
+        group=makeGroup(`${mode}:${band}:${pass}:${route}:${x}:${y}`,route);
+        buckets.set(key,group);
+        groups.push(group);
+      }
+      addRow(group,row,point);
+    }
+    return mergeNearby(groups,cell).map(group=>({
+      group,
+      // Compute display metadata only for the geographic pass we actually show.
+      anchor:group.rows.length===1?group.rows[0]:group.south===group.north&&group.west===group.east
+        ?{lat:group.south,lng:group.west}:{lat:group.lat/group.rows.length,lng:group.lng/group.rows.length},
+      marker:null
+    }));
   }
   function clusterRow(group, mode, band) {
     if(group.rows.length===1)return group.rows[0];
@@ -277,28 +319,21 @@
       const territory=ordinary.map(row=>({row,point:world(row),route:nearbyOnly?pinAssignment(row,mode).code:''}));
       return {territory,routes:new Set(territory.map(item=>item.route)).size};
     });
-    const baseCell = [80, 700, 3500, 18000, 120000][band];
+    const baseCell = territoryCellSizes[band];
     let visibleGroups=[];
     // Bucket in world metres, not screen pixels: pan and small zoom changes do
     // not move a group's anchor or alter membership at the same level.
     // The marker limit belongs to the viewport, not all nationwide stores.
     for (let pass = 0; pass < 26; pass++) {
-      const grouped=atLevel(band+':'+pass,()=>{
-        const buckets = new Map(),cell = baseCell * (2 ** pass);
-        for (const {row,point,route} of territory) {
-          const key=`${mode}:${band}:${pass}:${route}:${Math.floor(point.x/cell)}:${Math.floor(point.y/cell)}`;
-          let group=buckets.get(key);if(!group){group=makeGroup(key,route);buckets.set(key,group);}addRow(group,row,point);
-        }
-        return mergeNearby(buckets,cell).map(group=>({
-          group,
-          // Compute display metadata only for the geographic pass we actually show.
-          anchor:group.rows.length===1?group.rows[0]:group.south===group.north&&group.west===group.east
-            ?{lat:group.south,lng:group.west}:{lat:group.lat/group.rows.length,lng:group.lng/group.rows.length},
-          marker:null
-        }));
-      });
-      visibleGroups=grouped.filter(item=>visible(item.anchor));
-      if(visibleGroups.length<=available||nearbyOnly&&grouped.length===routes)break;
+      const grouped=atLevel(band+':'+pass,()=>clusterTerritory(territory,mode,band,pass,baseCell*(2**pass)));
+      const lastPass=pass===25||nearbyOnly&&grouped.length===routes;
+      visibleGroups=[];
+      for(const item of grouped){
+        if(!visible(item.anchor))continue;
+        visibleGroups.push(item);
+        if(!lastPass&&visibleGroups.length>available)break;
+      }
+      if(lastPass||visibleGroups.length<=available)break;
     }
     return mergeDisplayed([...pinned,...visibleGroups.map(item=>item.marker??=clusterRow(item.group,mode,band))]);
   }
