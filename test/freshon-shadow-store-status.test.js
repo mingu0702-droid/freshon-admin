@@ -79,9 +79,16 @@ test('mismatched delivery address blocks the event and a no-dispatch assertion',
   assert.equal(view.getStore(codes[0]).lastDispatch, null);
   assert.equal(view.summary.confirmedDispatchGap, 0);
   assert.throws(() => createFreshonStoreStatusIndex(projection, registry, 'd'.repeat(64)), /GENERATION/);
+  const nextGeneration = 'd'.repeat(64);
+  const retained = createFreshonStoreStatusIndex(projection, registry, nextGeneration, {verifiedBaselineGeneration:generation});
+  assert.equal(retained.metadata.generation, nextGeneration);
+  assert.equal(retained.metadata.evidenceGeneration, generation);
+  assert.equal(retained.metadata.asOf, view.metadata.asOf);
+  assert.deepEqual(retained.getDeliverySummary(90), view.getDeliverySummary(90));
   const changed = new Map(registry);
   changed.set(codes[0], { ...registry.get(codes[0]), addressHash: 'd'.repeat(64) });
   assert.throws(() => createFreshonStoreStatusIndex(projection, changed, generation), /ADDRESS/);
+  assert.throws(() => createFreshonStoreStatusIndex(projection, changed, nextGeneration, {verifiedBaselineGeneration:generation}), /ADDRESS/);
 });
 
 test('R8–R11 keep colocated customer codes distinct with independent counts and pagination', () => {

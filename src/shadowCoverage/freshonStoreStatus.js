@@ -170,9 +170,10 @@ export function buildFreshonStoreStatus({ generation, registry, asOf, observedDe
 }
 
 export function createFreshonStoreStatusIndex(projection, registry, generation,
-  { orderLookup, orderSource = 'NOT_CONNECTED' } = {}) {
+  { orderLookup, orderSource = 'NOT_CONNECTED', verifiedBaselineGeneration } = {}) {
+  const fromBaseline = digest(verifiedBaselineGeneration) && projection?.generation === verifiedBaselineGeneration;
   if (!digest(generation) || projection?.schema !== 1 || projection.provider !== 'FRESHON' ||
-      projection.generation !== generation || !Array.isArray(projection.stores) || projection.stores.length !== registry.size ||
+      (projection.generation !== generation && !fromBaseline) || !Array.isArray(projection.stores) || projection.stores.length !== registry.size ||
       typeof projection.currentComplete !== 'boolean') throw Error('FRESHON_SHADOW_GENERATION');
   const dates = datesFor(projection.asOf, 90);
   const received = new Set(projection.deliveryObservedDates);
@@ -185,6 +186,7 @@ export function createFreshonStoreStatusIndex(projection, registry, generation,
   const cells = new Map();
   const totals = counters();
   const metadata = Object.freeze({ provider: projection.provider, generation, start: projection.start,
+    ...(fromBaseline && projection.generation !== generation ? {evidenceGeneration:projection.generation} : {}),
     asOf: projection.asOf, currentAsOf: projection.currentAsOf, orderSource,
     deliveryObservedDates: Object.freeze([...received]), deliveryUnknownDates: Object.freeze([...projection.deliveryUnknownDates]) });
   for (const row of projection.stores) {
@@ -278,7 +280,7 @@ export function createFreshonStoreStatusIndex(projection, registry, generation,
 }
 
 export async function readFreshonStoreStatusFile({ file, expectedSha256, appRoot = process.cwd(), generation, registry,
-  orderFile, orderSha256 }) {
+  orderFile, orderSha256, verifiedBaselineGeneration }) {
   if (!path.isAbsolute(file || '') || !digest(expectedSha256)) throw Error('FRESHON_SHADOW_FILE_CONFIG');
   const resolved = await realpath(file);
   await privateCoverageDirectory(path.dirname(resolved), appRoot);
@@ -296,5 +298,5 @@ export async function readFreshonStoreStatusFile({ file, expectedSha256, appRoot
       orderSource = 'UNAVAILABLE';
     }
   }
-  return createFreshonStoreStatusIndex(projection, registry, generation, { orderLookup, orderSource });
+  return createFreshonStoreStatusIndex(projection, registry, generation, { orderLookup, orderSource, verifiedBaselineGeneration });
 }

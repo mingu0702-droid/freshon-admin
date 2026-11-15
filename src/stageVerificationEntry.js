@@ -557,7 +557,10 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             const request={generation};
             request.promise=import('./shadowCoverage/freshonStoreStatus.js').then(({readFreshonStoreStatusFile})=>
               readFreshonStoreStatusFile({file:stage.OPSMAP_STAGE_STORE_STATUS_FILE,expectedSha256:stage.OPSMAP_STAGE_STORE_STATUS_SHA256,
-                appRoot:coverageAppRoot,generation,registry:active.registry})).catch(error=>{
+                appRoot:coverageAppRoot,generation,registry:active.registry,
+                // The scheduled release retains the verified registry. Keep the approved
+                // status file at its original date and recheck every address binding.
+                verifiedBaselineGeneration:active.scheduled?.state.osanDeliveryThrough?baselineConfig?.ref.generation:undefined})).catch(error=>{
               if (pendingStoreStatus===request) pendingStoreStatus=undefined;
               throw error;
             });
