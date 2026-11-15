@@ -2,6 +2,7 @@ import express from 'express';
 import compression from 'compression';
 import {fileURLToPath} from 'node:url';
 import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
 import path from 'node:path';
 import {mountProductionMapApi} from './opsmap-abc/productionMapIntegration.js';
 import {callHub as hubRead} from './opsmap-abc/phase2bHubReadClient.js';
@@ -46,6 +47,7 @@ const github = `https://api.github.com/repos/${repo}`;
 const pinsBranch = 'stage/opsmap-manual-pins';
 const snapshotBranch = 'stage/opsmap-snapshots';
 const publicDir = fileURLToPath(new URL('../public/opsmap/', import.meta.url));
+const excelBrowserScript = createRequire(import.meta.url).resolve('xlsx/dist/xlsx.full.min.js');
 const readActions = new Set([
   'mapModelStatus', 'mapBounds', 'mapCoordinateSupplement', 'datedAssignments', 'periodAssignments', 'routePlan', 'routeStops',
   'customerDetailsStatus', 'customerDetail', 'staffCustomerDetail', 'customerDetailPrepared', 'staffDriverHistory',
@@ -683,6 +685,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   });
   router.use('/api',(_req,res)=>res.status(404).json({error:'OPSMAP_API_NOT_AVAILABLE'}));
   router.get('/',(_req,res)=>res.sendFile('map-phase2b-preview.html',{root:publicDir}));
+  router.get('/vendor/xlsx.full.min.js',(_req,res)=>res.sendFile(excelBrowserScript,{maxAge:'1h'}));
   router.use(express.static(publicDir));
   return app;
 }

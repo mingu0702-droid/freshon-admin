@@ -4670,14 +4670,43 @@
     return selectLatestRoute();
   }
 
+  let excelLoad;
+  function loadExcelExporter() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    excelLoad ??= new Promise((resolve,reject)=>{
+      const script=document.createElement('script');
+      const finish=()=>{
+        clearTimeout(timeout);
+        script.remove();
+        if(window.XLSX?.utils)resolve(window.XLSX);
+        else reject(Error('EXCEL_EXPORT_UNAVAILABLE'));
+      };
+      const timeout=setTimeout(finish,10000);
+      script.src=stageAddressBatchEnabled()?'/opsmap/vendor/xlsx.full.min.js':'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+      script.onload=script.onerror=finish;
+      document.head.append(script);
+    }).catch(error=>{excelLoad=null;throw error;});
+    return excelLoad;
+  }
+
   async function exportNewArea(format) {
     if (!state.newAreaResults.length) { $("#newAreaBatchStatus").textContent = "먼저 일괄 판단을 실행해주세요."; return; }
     if(!$('#newAreaApplyDate').value){$('#newAreaBatchStatus').textContent='적용일을 선택해 주세요.';return;}
-    if(format==='xlsx'&&!window.XLSX){$('#newAreaBatchStatus').textContent='Excel 내보내기 모듈이 연결되지 않았습니다. CSV 내보내기를 이용해 주세요.';return;}
+    const batch=state.newAreaResults;
     const results=newAreaExportRows(), date=$('#newAreaApplyDate').value, radius=newAreaRadius;
     const includeObserved=stageAddressBatchEnabled()&&!!snapshotMeta?.sourceGeneration;
     const generation=snapshotMeta?.sourceGeneration;
-    const observations=includeObserved?await readNewAreaObservations():null;
+    const observationsPromise=includeObserved?readNewAreaObservations():null;
+    let excel;
+    if(format==='xlsx'){
+      try{excel=await loadExcelExporter();}
+      catch{
+        if(state.newAreaResults===batch)$('#newAreaBatchStatus').textContent='Excel 내보내기를 불러오지 못했습니다. 다시 시도하거나 CSV를 이용해 주세요.';
+        return;
+      }
+    }
+    const observations=await observationsPromise;
+    if(state.newAreaResults!==batch||$('#newAreaApplyDate').value!==date)return;
     if(includeObserved&&(document.body.dataset.mapStaffState!=='authenticated'||snapshotMeta?.sourceGeneration!==generation))return;
     const headings=includeObserved?[...MapPeriodUi.areaExportHeadings,'실제 완료 배송 호차·직선거리·관측 요일']:MapPeriodUi.areaExportHeadings;
     const rows=MapPeriodUi.areaExportRows(results,date,radius).map((values,index)=>{
@@ -4688,8 +4717,8 @@
       }
       return Object.fromEntries(headings.map((key,i)=>[key,values[i]]));
     });
-    if (format === "xlsx" && window.XLSX) {
-      const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rows), "신규권역판정"); XLSX.writeFile(book, "신규권역판정.xlsx"); return;
+    if (excel) {
+      const book = excel.utils.book_new(); excel.utils.book_append_sheet(book, excel.utils.json_to_sheet(rows), "신규권역판정"); excel.writeFile(book, "신규권역판정.xlsx"); return;
     }
     const columns = Object.keys(rows[0]);
     const csv = [columns, ...rows.map((row) => columns.map((column) => row[column]))].map((line) => line.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");

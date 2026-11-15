@@ -2,7 +2,7 @@
   'use strict';
   const rawFetch = window.fetch.bind(window), ACTIVITY_THROTTLE_MS = 60000;
   const stage = location.origin === 'https://freshon-admin-stage-preview-template.onrender.com';
-  const preloadedScripts = new Set();
+  const preloadedScripts = new Set([...document.querySelectorAll('link[data-map-staff-preload]')].map(link => link.getAttribute('href')));
   let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivityCheck = 0, checking = null, checkingOwner = -1, confirming = null, confirmingOwner = -1, signingOut = null, logoutRequired = false;
   let recoveryTimer = null, initialSnapshot;
   const requests = new Set(), purges = new Set();
@@ -139,6 +139,7 @@
         if (response.ok) throw error;
         return {};
       }), ms: Math.round(performance.now() - started) })).catch(() => null);
+    return request.result;
   }
   async function takeInitialSnapshot(signal) {
     const request = initialSnapshot;
@@ -153,7 +154,7 @@
     } finally { signal.removeEventListener('abort', cancel); }
   }
   async function bootstrap(owner) {
-    if (stage) primeStageSnapshot(owner);
+    const stageSnapshot = stage ? primeStageSnapshot(owner) : null;
     const placeholders = document.querySelectorAll('script[type="application/x-map-staff"]');
     for (const placeholder of placeholders) {
       const src = placeholder.dataset.src;
@@ -170,12 +171,7 @@
       performance.mark('opsmap-sdk-request');
       void window.KakaoMapsAdapter?.ready().catch(() => {});
     }
-    if(stage){
-      void loadData(owner).then(()=>{
-        if(owner===epoch&&session&&document.body.dataset.mapStaffState==='authenticated'&&window.VEHICLE_AREA_DATA?.vehicles?.length)
-          window.dispatchEvent(new Event('map-staff-reference-ready'));
-      }).catch(()=>{});
-    }else await loadData(owner);
+    if(!stage)await loadData(owner);
     if (!booted) {
       for (const placeholder of placeholders) {
         if (placeholder.dataset.loaded === '1') continue;
@@ -196,6 +192,12 @@
     entry.hidden = true; document.body.dataset.mapStaffState = 'authenticated'; status();
     performance.mark('opsmap-staff-ready');
     window.dispatchEvent(new Event('map-staff-ready'));
+    if(stage)void stageSnapshot.then(async()=>{
+      if(owner!==epoch||!session)return;
+      await loadData(owner);
+      if(owner===epoch&&session&&window.VEHICLE_AREA_DATA?.vehicles?.length)
+        window.dispatchEvent(new Event('map-staff-reference-ready'));
+    }).catch(()=>{});
   }
   async function accept(value) {
     if (value?.authenticated !== true) { await revoke('직원 로그인 후 지도를 사용할 수 있습니다.'); return false; }
@@ -203,12 +205,12 @@
     session = value; lastActivityCheck = Date.now(); account.disabled = false; password.disabled = false; deadline(value);
     const owner = epoch; document.body.dataset.mapStaffState = 'loading'; message.textContent = '지도 불러오는 중…';
     entryMode('loading');
-    booting = bootstrap(owner);
-    try { await booting; return true; }
+    const attempt = booting = bootstrap(owner);
+    try { await attempt; return true; }
     catch (error) {
       if (owner === epoch && error.name !== 'AbortError') { message.textContent = '지도를 불러오지 못했습니다. 새로고침 후 다시 확인해 주세요.'; submit.disabled = true; }
       return false;
-    } finally { booting = null; }
+    } finally { if (booting === attempt) booting = null; }
   }
   async function check({activity = false, retryOnce = true} = {}) {
     if (logoutRequired) return null;

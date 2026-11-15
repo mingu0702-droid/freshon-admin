@@ -2,10 +2,12 @@
 <html lang="ko" data-reference-data-optional="true">
 <head>
   <base href="/opsmap/">
-  <script src="api-prefix.js"></script>
-  <meta name="opsmap-revision" content="20261028-r5">
   <meta charset="utf-8">
+  <meta name="opsmap-revision" content="20261028-r5">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <script src="api-prefix.js"></script>
+  <script defer fetchpriority="high" src="map-staff-entry.js?v=20261116-boot"></script>
+  <link rel="preload" as="script" href="map-phase2b-runtime.js?v=20261116-boot" fetchpriority="high" data-map-staff-preload>
   <title>운영지도 | Smart Food Networks</title>
   <style>
     :root{--blue:#2463eb;--ink:#172033;--muted:#6b7788;--line:#dde4ec;--panel:#fff;--actual:#14825d;--estimate:#f59e0b;--danger:#dc3545;--shadow:0 7px 22px #0f172a1c;--left:254px}
@@ -68,11 +70,9 @@
     <section id="mobileRouteSheet" class="mobileRouteSheet"><div class="toolBody"><div class="sheetHead"><b>특정일 운행 조회</b><button id="closeMobileRoute" class="ghost">×</button></div><div class="routeGrid"><input id="mobileDate" type="date" value=""><button id="mobileToday" class="tiny">최신일</button></div><div class="routeGrid"><select id="mobileVehicle"><option value="101">101호</option><option value="110">110호</option><option value="221">221호</option></select><button id="mobileRoutePlan" class="primary">동선 조회</button></div><div id="mobileRouteSummary" class="idle" style="margin-top:7px">날짜와 호차를 선택해 조회하세요.</div></div></section>
   </div>
   <script id="kakaoMapsSdk" data-sdk-src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=&amp;libraries=services&amp;autoload=false" src="kakao-maps-adapter.js?v=20261114-core-restore"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <section id="staffAuxContent" class="staffAuxCard" aria-label="직원 보호 상세" hidden></section>
   <section id="mobileWorkspace" class="mobileWorkspace"><button id="sheetExpand" class="sheetHandle" aria-label="패널 펼치기">━</button><nav class="sheetTabs" aria-label="지도 패널"><button data-sheet-tab="filters">호차·조건</button><button data-sheet-tab="stores" class="active">매장 목록</button><button data-sheet-tab="runs">운행목록</button><button data-sheet-tab="new">주소·신규권역</button><button data-sheet-tab="manual">경유 내비</button></nav><div id="mobileDateHome"></div><div id="mobileSheetContent"></div></section>
   <link rel="stylesheet" href="map-staff-entry.css?v=20261115-staff">
-  <script src="map-staff-entry.js?v=20261115-staff"></script>
   <script type="application/x-map-staff" data-src="phase2b-ui-helpers.js?v=20261113-pin-status-color"></script>
   <link rel="stylesheet" href="map-staff.css?v=20261028-r5">
   <link rel="stylesheet" href="map-period.css?v=20261113-temp-pin-cleanup">
@@ -95,7 +95,7 @@
   <script type="application/x-map-staff" data-module="1" data-src="vehicle-picker-regions.js?v=20261115"></script>
   <script type="application/x-map-staff" data-src="opsmap-daily.js?v=20261111-coverage-qa"></script>
   <script type="application/x-map-staff" data-module="1" data-src="fixed-delivery-weekdays.mjs?v=20261113"></script>
-  <script type="application/x-map-staff" data-src="map-phase2b-runtime.js?v=20261115-vehicle-stores"></script>
+  <script type="application/x-map-staff" data-src="map-phase2b-runtime.js?v=20261116-boot"></script>
 
 <link rel="stylesheet" href="approved-site-source.css?v=20261028-r5">
 <link rel="stylesheet" href="map-approved-shell-candidate.css?v=20261115-staff">
