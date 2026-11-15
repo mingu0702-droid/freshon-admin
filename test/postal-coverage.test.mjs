@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { classifyPostalZone, POSTAL_DENSITY_HIGH } from '../src/shadowCoverage/postal.js';
+import { createPostalGeometryReader } from '../public/opsmap/postal-coverage-map.mjs';
 import { decodePostalTile, encodePostalZone, exactPostalPosition, postalText, postalTilePosition, postalTilesLevel } from '../public/opsmap/postal-geometry.mjs';
 
 const outer = [[127,37],[127.05,37],[127.05,37.05],[127,37.05],[127,37]];
@@ -37,4 +38,33 @@ test('one zoom tier is chosen for the viewport and wide fields never load exact 
   assert.equal(postalTilesLevel([124,32.9,132,39]), 'national');
   assert.equal(postalTilesLevel([126.7,36.9,127.4,37.5]), 'regional');
   assert.equal(postalTilesLevel([127.03,37.10,127.10,37.19]), 'detail');
+});
+
+test('a superseded viewport shares immutable tiles until the map is closed', async t => {
+  const header = Buffer.alloc(8);
+  header.write('PCG1');
+  header.writeInt32LE(1,4);
+  const bytes = Buffer.concat([header, encodePostalZone(zone,[outer.slice(0,-1)])]);
+  const finish = [];
+  const request = t.mock.method(globalThis,'fetch',async (_url,{signal}) => new Promise((resolve,reject) => {
+    signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
+    finish.push(()=>resolve(new Response(bytes)));
+  }));
+  const view = { boundary:'a'.repeat(64), tiles:[['national-1',bytes.length]] };
+  const reader = createPostalGeometryReader('/postal');
+  const superseded = new AbortController(), active = new AbortController();
+  const rejected = assert.rejects(reader.read(view,superseded.signal),{name:'AbortError'});
+  superseded.abort();
+  const second = reader.read(view,active.signal);
+  assert.equal(request.mock.callCount(),1);
+  finish.shift()();
+  await rejected;
+  assert.equal((await second)[0][0].id,1234);
+  await reader.read(view,active.signal);
+  assert.equal(request.mock.callCount(),1);
+  reader.clear();
+  const closed = assert.rejects(reader.read(view,active.signal),{name:'AbortError'});
+  reader.clear();
+  await closed;
+  assert.equal(reader.metrics().tiles,0);
 });

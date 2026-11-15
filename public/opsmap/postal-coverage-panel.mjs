@@ -1,4 +1,5 @@
 import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs';
+import { createPostalAreaDetails } from './postal-area-details.mjs';
 
 const API = '/api/map-phase2b/private/shadow-coverage/postal';
 const labels = {
@@ -23,7 +24,7 @@ async function read(endpoint, params, signal, headers) {
   return payload.data;
 }
 
-export function createCoveragePanel({ workspace, header }) {
+export function createCoveragePanel({ workspace, header, openStore }) {
   const root = document.createElement('main');
   root.id = 'shadowCoverage';
   root.className = 'shadow-coverage postal-coverage';
@@ -42,7 +43,7 @@ export function createCoveragePanel({ workspace, header }) {
     '<option value="yeongnam">영남</option><option value="honam">호남</option></select></label>' +
     '<label>검색 반경 <select id="coverageRadius"><option value="0">구역만</option><option value="500">500m</option>' +
     '<option value="1000">1km</option></select></label></div>' +
-    '<div class="coverage-overview"><h2>전국 집계</h2><p id="postalPeriod"></p><p id="postalObserved"></p>' +
+    '<div id="postalOverview"><div class="coverage-overview"><h2>전국 집계</h2><p id="postalPeriod"></p><p id="postalObserved"></p>' +
     '<dl class="coverage-kpis"><div><dt>등록 매장</dt><dd data-postal-kpi="registered">—</dd></div>' +
     '<div><dt>좌표 연결 배송</dt><dd data-postal-kpi="visits">—</dd></div>' +
     '<div><dt>배송 있는 구역</dt><dd data-postal-kpi="delivered">—</dd></div>' +
@@ -55,9 +56,10 @@ export function createCoveragePanel({ workspace, header }) {
     '<div class="coverage-legend postal-badges" aria-label="오산 매장 상태">' +
     '<span data-postal-badge="active">오산신규 배송 확인</span><span data-postal-badge="unverified">오산신규 배송 미확인</span>' +
     '<span data-postal-badge="held">오산보류 이력</span></div>' +
-    '<div class="coverage-detail" id="coverageDetail" aria-label="우편번호 구역 상세" aria-live="polite" hidden></div>' +
+    '<button type="button" id="postalUnmatched">미매칭 업장</button>' +
     '<div class="coverage-list postal-candidates"><h2>관측기간 미배송 후보</h2><div id="postalCandidates"></div></div>' +
-    '<details class="coverage-evidence"><summary>경계 출처와 원천 날짜</summary><div id="postalEvidence"></div></details></div></aside>' +
+    '<details class="coverage-evidence"><summary>경계 출처와 원천 날짜</summary><div id="postalEvidence"></div></details></div>' +
+    '<section class="coverage-detail" id="coverageDetail" aria-label="우편번호 구역 상세" hidden></section></div></aside>' +
     '<section class="coverage-map-area" aria-label="국가기초구역 배송분포 지도"><div id="coverageMap"></div>' +
     '<div class="postal-map-controls" role="group" aria-label="지도 보기"><button type="button" data-preset="nation">전국</button>' +
     '<button type="button" data-preset="region">오산·화성</button><button type="button" id="postalZoomIn" aria-label="지도 확대">+</button>' +
@@ -71,7 +73,7 @@ export function createCoveragePanel({ workspace, header }) {
     const style = document.createElement('link');
     style.rel = 'stylesheet';
     style.dataset.postalCoverage = '1';
-    style.href = new URL('./postal-coverage.css?v=20261115', import.meta.url);
+    style.href = new URL('./postal-coverage.css?v=20261115-detail', import.meta.url);
     document.head.append(style);
   }
 
@@ -80,7 +82,7 @@ export function createCoveragePanel({ workspace, header }) {
   const detail = find('coverageDetail'), status = find('coverageRetry');
   const searchResults = find('coverageSearchResults'), geometry = createPostalGeometryReader(API);
   let map, active = false, owner = 0, viewportRead, detailRead, searchRead, view, viewKey, loadingKey;
-  let timer, refresh;
+  let timer, refresh, selectedArea;
   const resize = new ResizeObserver(entries => {
     if (!active) return;
     if (entries.some(entry => entry.target === header)) windowHeight();
@@ -89,6 +91,7 @@ export function createCoveragePanel({ workspace, header }) {
   const baseScope = () => ({ days: find('coverageDays').value, center: find('coverageCenter').value });
   const scope = () => view ? { days: view.period.days, center: view.center, generation: view.generation } : baseScope();
   const timeout = signal => AbortSignal.any([signal, AbortSignal.timeout(16000)]);
+  const areaDetails = createPostalAreaDetails(detail, { read, dismiss:() => { detailRead?.abort(); areaCard(null); }, openStore });
   function windowHeight() {
     root.style.setProperty('--coverage-header-height', header.getBoundingClientRect().height + 'px');
   }
@@ -105,31 +108,12 @@ export function createCoveragePanel({ workspace, header }) {
   }
 
   function areaCard(area) {
-    map?.select(area);
-    if (!area) { detail.hidden = true; delete detail.dataset.postalCode; detail.replaceChildren(); return; }
-    const heading = node('h2', '우편번호 ' + area.id);
-    const close = node('button', '닫기');
-    close.type = 'button'; close.onclick = () => areaCard(null);
-    const badge = node('span', labels[area.status]);
-    badge.className = 'coverage-badge'; badge.dataset.postalTone = area.status;
-    const list = document.createElement('dl');
-    const positive = area.visits > 0;
-    for (const [key, value] of [
-      ['자료 기간', view ? view.period.start + ' ~ ' + view.period.end : '미확인'], ['등록 매장', fmt.format(area.registered) + '곳'],
-      ['관측 배송', positive ? fmt.format(area.visits) + '건 · 배송 매장 ' + fmt.format(area.visitedStores) + '곳'
-        : area.status === 'UNKNOWN' ? '미확인' : '확인된 기록 없음'],
-      ['배송 밀도', positive ? Number(area.density.toFixed(2)).toLocaleString('ko-KR') + '건/km²' : '—'],
-      ['구역 면적', area.areaKm2.toFixed(3) + 'km²'], ['최근 배송일', area.latest || '미확인'],
-      ['방문 호차', area.vehicles.join(' · ') || '미확인'],
-      ['오산신규 배송 확인 / 미확인', area.newActive + ' / ' + area.newUnknown + '곳'],
-      ['오산보류 이력', area.held + '곳'],
-    ]) list.append(node('dt', key), node('dd', value));
-    if (area.nearby) list.append(node('dt', '직선 반경 ' + area.nearby.radius + 'm 등록'),
-      node('dd', fmt.format(area.nearby.registered) + '곳'));
-    detail.replaceChildren(heading, close, badge, list);
-    detail.hidden = false;
-    detail.dataset.postalCode = area.id;
-    collapse(false);
+    selectedArea = area;
+    const geographic = area && area.id !== 'unmatched' ? area : null;
+    map?.select(geographic);
+    root.classList.toggle('postal-area-active',!!area);
+    areaDetails.open(area,scope());
+    if (area) collapse(false);
   }
 
   function pickArea(area, location) {
@@ -138,7 +122,6 @@ export function createCoveragePanel({ workspace, header }) {
     if (point) map?.focus(point, null, location ? radius : 0);
     if (location) map?.point(location, radius);
     areaCard(area);
-    if (area) detail.scrollIntoView({ block: 'nearest' });
   }
   async function choosePoint(location, fromSearch = false, signal) {
     if (!view) return;
@@ -153,7 +136,7 @@ export function createCoveragePanel({ workspace, header }) {
         areaCard(null);
         searchResults.replaceChildren(node('p', data.state === 'AMBIGUOUS' ? '경계에 여러 우편번호가 닿아 있습니다.' : '공식 경계에서 우편번호를 찾지 못했습니다.'));
       } else if (fromSearch) pickArea(data.area, location);
-      else { areaCard(data.area); detail.scrollIntoView({ block: 'nearest' }); }
+      else areaCard(data.area);
     } catch (error) {
       if (active && detailRead === request && !signal?.aborted && !request.signal.aborted) {
         if (error.status === 409) void readView(true);
@@ -171,6 +154,7 @@ export function createCoveragePanel({ workspace, header }) {
     find('postalFormula').textContent = '밀도 = 좌표 연결 배송 ÷ 구역 면적. ' + data.densityHighAt + '건/km²부터 높음.';
     find('postalNewEvidence').textContent = '오산신규 배송 미확인 ' + fmt.format(summary.newUnknown) + '곳 · 자료 미확인 구역 ' +
       fmt.format(summary.unknown) + '곳';
+    find('postalUnmatched').textContent = '우편번호 미매칭 ' + fmt.format(summary.unmatchedStores) + '곳 보기';
     find('postalMapSource').textContent = source.label + ' · ' + (source.asOf || '경계 기준일 미공개');
     const credit = node('a', source.label);
     credit.href = source.url; credit.target = '_blank'; credit.rel = 'noopener';
@@ -213,9 +197,12 @@ export function createCoveragePanel({ workspace, header }) {
       const same = view?.period.days === data.period.days && view?.center === params.center && view?.generation === data.generation;
       view = { ...data, center: params.center };
       viewKey = key;
-      if (!same) areaCard(null);
       applyView(view);
       map.show(view, slices);
+      if (!same && selectedArea) {
+        selectedArea = { id:selectedArea.id };
+        areaDetails.open(selectedArea,scope());
+      }
       const stale = data.stale ? '마지막 확인 ' + data.period.end + ' 기준' : '';
       const missing = params.center !== 'all' && data.completeness.observed === 0 ? '선택 센터의 배송 자료 미확인' : '';
       message([stale, missing].filter(Boolean).join(' · '));
@@ -348,6 +335,7 @@ export function createCoveragePanel({ workspace, header }) {
   }
 
   find('coveragePanelToggle').onclick = () => collapse(!root.classList.contains('coverage-panel-collapsed'));
+  find('postalUnmatched').onclick = () => { if (view) areaCard({ id:'unmatched' }); };
   find('coverageSearch').onsubmit = search;
   find('coverageQuery').oninput = () => { searchRead?.abort(); searchResults.replaceChildren(); };
   find('coverageRadius').onchange = () => { searchRead?.abort(); searchResults.replaceChildren(); map?.point(null); };

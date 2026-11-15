@@ -46,6 +46,17 @@ if (tabs && workspace && period && daily) {
     });
   }
 
+  function openPostalStore(row) {
+    const bridge = window.MapUiLocalBridge;
+    if (!window.MapStaffEntry?.session() || !bridge?.navigationStores('BASE_60D').some(store => store.customerCode === row.code)) return false;
+    close(false);
+    if (bridge.state.mode !== 'BASE_60D') period.click();
+    requestAnimationFrame(() => {
+      if (!active && window.MapStaffEntry?.session()) bridge.selectNavigationStore(row.code);
+    });
+    return true;
+  }
+
   function stopAvailabilityProbe() {
     clearTimeout(probeTimer);
     probeTimer = null;
@@ -117,10 +128,10 @@ if (tabs && workspace && period && daily) {
         if (!response.ok && response.status !== 404) throw Error('COVERAGE_FORMAT_UNAVAILABLE');
         const format = response.ok ? (await response.json()).format : 'h3';
         const { createCoveragePanel } = format === 'postal'
-          ? await import('./postal-coverage-panel.mjs?v=20261115-postal')
+          ? await import('./postal-coverage-panel.mjs?v=20261115-postal-detail')
           : await import('./shadow-coverage-panel.mjs?v=20261113-address-notes');
         if (opening !== attempt || !tab.isConnected || !window.MapStaffEntry?.session()) return;
-        panel = createCoveragePanel({ workspace, header });
+        panel = createCoveragePanel({ workspace, header, openStore:openPostalStore });
       } catch {
         if (opening === attempt) {
           cancelOpening();

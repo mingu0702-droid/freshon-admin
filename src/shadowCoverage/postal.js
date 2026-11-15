@@ -203,9 +203,10 @@ function createScope(release, codes, areas, days, center, totalAreas) {
   } };
 }
 
-export function createPostalRuntime({ directory, boundarySha256, releaseSha256, appRoot, readDirectory,
+export function createPostalRuntime({ directory, boundarySha256, releaseSha256, appRoot, readDirectory, detailsDirectory, detailsIndexSha256, readFixed,
   now = Date.now } = {}) {
   let loaded, loadFlight, indexFlight, resolvedIndex, indexChecked = 0, scope, bulk = 0;
+  let storeDetails;
   const tileCache = new Map(), pending = new Map();
   let tileBytes = 0, reads = 0;
 
@@ -332,6 +333,12 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
     return opened.catalogSearch;
   }
 
+  async function detailReader() {
+    const { createPostalDetailsReader } = await import('./postalDetails.js');
+    return storeDetails ??= createPostalDetailsReader({ directory:detailsDirectory, indexSha256:detailsIndexSha256,
+      releaseSha256, appRoot, readFixed, now });
+  }
+
   return {
     async warm() { await Promise.all([assets(), activeIndex()]); },
     async view({ days, center, generation, box }) {
@@ -366,6 +373,15 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       });
     },
     async area({ days, center, generation, id }) { return detail(await ready(days, center, generation), id); },
+    async stores(args) {
+      const opened = await ready(args.days,args.center,args.generation);
+      const [reader, { stores }] = await Promise.all([detailReader(),catalogData(loaded)]);
+      return reader.roster({ ...args, opened, catalog:stores });
+    },
+    async history(args) {
+      const opened = await ready(args.days,args.center,args.generation);
+      return (await detailReader()).history({ ...args, opened });
+    },
     async point({ days, center, generation, lat, lng, radius }) {
       const opened = await ready(days, center, generation);
       return withBatch(async () => {

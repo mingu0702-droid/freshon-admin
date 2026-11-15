@@ -9,6 +9,7 @@ const styles = {
   HIGH: ['rgba(41,96,172,.73)', '#205295'],
 };
 const svgNS = 'http://www.w3.org/2000/svg';
+const projectionCacheLimit = 150000;
 
 function rasterOutline(ctx, width, height) {
   const pixels = ctx.createImageData(width, height);
@@ -31,9 +32,13 @@ function rasterOutline(ctx, width, height) {
 }
 
 export function createPostalGeometryReader(api) {
-  const cache = new Map();
+  const cache = new Map(), pending = new Map();
   let bytes = 0;
   function retain(key, payload) {
+    if (cache.has(key)) {
+      bytes -= cache.get(key).bytes;
+      cache.delete(key);
+    }
     while (cache.size && bytes + payload.bytes > viewportCacheLimit) {
       const oldest = cache.keys().next().value;
       bytes -= cache.get(oldest).bytes;
@@ -42,8 +47,49 @@ export function createPostalGeometryReader(api) {
     cache.set(key, payload);
     bytes += payload.bytes;
   }
+
+  async function readBatch(boundary, list, length, signal) {
+    const ids = list.map(tile => tile[0]).join(',');
+    const key = boundary + ':' + ids;
+    while (!pending.has(key) && pending.size >= 2) {
+      await Promise.race([...pending.values()].map(entry => entry.work)).catch(() => {});
+      signal.throwIfAborted();
+    }
+    signal.throwIfAborted();
+    if (!pending.has(key)) {
+      const controller = new AbortController();
+      const entry = { controller };
+      // Geometry is immutable by boundary hash. A new viewport can share a pending batch.
+      const batchSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(16000)]);
+      entry.work = (async () => {
+        const query = new URLSearchParams({ v: boundary, ids });
+        const response = await fetch(api + '/geometry?' + query, { signal:batchSignal, cache:'no-store' });
+        if (!response.ok) throw Object.assign(Error('POSTAL_GEOMETRY_UNAVAILABLE'), { status:response.status });
+        const buffer = await response.arrayBuffer();
+        batchSignal.throwIfAborted();
+        if (buffer.byteLength !== length) throw Error('POSTAL_GEOMETRY_SIZE');
+        const tiles = new Map();
+        let offset = 0;
+        for (const [id, size] of list) {
+          const zones = decodePostalTile(buffer.slice(offset, offset + size));
+          const occupied = size + zones.length * 176 + zones.reduce((count, zone) => count + zone.rings.length * 72, 0);
+          const item = { zones, bytes:occupied };
+          tiles.set(id,item);
+          retain(boundary + ':' + id,item);
+          offset += size;
+        }
+        return tiles;
+      })().finally(() => { if (pending.get(key) === entry) pending.delete(key); });
+      pending.set(key,entry);
+    }
+    const tiles = await pending.get(key).work;
+    signal.throwIfAborted();
+    return tiles;
+  }
+
   return {
     async read(view, signal) {
+      signal.throwIfAborted();
       const found = new Map();
       const missing = [];
       for (const tile of view.tiles) {
@@ -64,25 +110,16 @@ export function createPostalGeometryReader(api) {
           length += tile[1];
         }
         if (!list.length) throw Error('POSTAL_GEOMETRY_BUDGET');
-        const query = new URLSearchParams({ v: view.boundary, ids: list.map(tile => tile[0]).join(',') });
-        const response = await fetch(api + '/geometry?' + query, { signal, cache: 'no-store' });
-        if (!response.ok) throw Object.assign(Error('POSTAL_GEOMETRY_UNAVAILABLE'), { status: response.status });
-        const buffer = await response.arrayBuffer();
-        if (buffer.byteLength !== length || signal.aborted) throw Error('POSTAL_GEOMETRY_SIZE');
-        let offset = 0;
-        for (const [id, size] of list) {
-          const part = buffer.slice(offset, offset + size);
-          const zones = decodePostalTile(part);
-          const occupied = size + zones.length * 176 + zones.reduce((count, zone) => count + zone.rings.length * 72, 0);
-          const item = { zones, bytes: occupied };
-          found.set(id, item);
-          retain(view.boundary + ':' + id, item);
-          offset += size;
-        }
+        for (const [id, item] of await readBatch(view.boundary,list,length,signal)) found.set(id,item);
       }
       return view.tiles.map(([id]) => found.get(id).zones);
     },
-    clear() { cache.clear(); bytes = 0; },
+    clear() {
+      for (const entry of pending.values()) entry.controller.abort();
+      pending.clear();
+      cache.clear();
+      bytes = 0;
+    },
     metrics: () => ({ bytes, tiles: cache.size, limit: viewportCacheLimit }),
   };
 }
@@ -200,10 +237,17 @@ export function createPostalMap(host, maps, { idle, select }) {
     const viewportBox = current.box.map(v => Math.round(v * 1e6));
     const tones = Object.fromEntries(Object.keys(styles).map(k => [k, new Path2D()]));
     const outline = scene.tier === 'detail' ? null : rasterOutline(ctx, surface.width, surface.height);
+    const verticesAt = outline ? new Map() : null;
     let shown = 0, vertices = 0;
     function vertex(lng, lat) {
+      // Signed E6 coordinates fit exactly in this integer key throughout the validated source extent.
+      const key = (lat - 32_000_000) * 10_000_001 + lng - 123_000_000;
+      const known = verticesAt?.get(key);
+      if (known) return known;
       const point = projection.pointFromCoords(new maps.LatLng(lat / 1e6, lng / 1e6));
-      return [Math.round((point.x + xOffset) * dpr) / dpr, Math.round((point.y + yOffset) * dpr) / dpr];
+      const projectedPoint = [Math.round((point.x + xOffset) * dpr) / dpr, Math.round((point.y + yOffset) * dpr) / dpr];
+      if (verticesAt && verticesAt.size < projectionCacheLimit) verticesAt.set(key,projectedPoint);
+      return projectedPoint;
     }
     function append(path, ring) {
       let oldX, oldY;

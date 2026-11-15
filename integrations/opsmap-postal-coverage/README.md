@@ -7,9 +7,10 @@
 ## 경계 및 집계 확인
 
 - 확인한 경계는 서울시 공개 WFS `2.0.0`의 `magok:tl_kodis_bas` 34,525구역입니다. 2026-11-14 06:05 KST에 받은 파일의 공식 배포 기준일은 미공개이며 속성의 최신 변경일은 2020-12-16입니다. 유효하지 않은 도형 1개는 변환 과정에서 형상을 검증해 복구했습니다. [서울시 WFS](https://energyinfo.seoul.go.kr/gis/wfs?service=WFS&version=2.0.0&request=GetCapabilities)
-- 2026-10-13 시행 우정사업본부 고시의 34,403개와 개수가 다릅니다. 새 공식 경계의 배포일과 코드·형상이 일치하는지 확인한 뒤 운영 반영을 결정합니다. 행정안전부에서 최신 도형을 받고 재검증할 때는 기존 승인 계정으로 도형 제공을 신청합니다. [우정사업본부 고시](https://www.law.go.kr/LSW/admRulInfoP.do?admRulSeq=2100000286886) · [행정안전부 자료 경로](https://www.data.go.kr/data/15050416/fileData.do)
-- 등록 고객코드 6,043곳은 고객코드나 주소를 합치지 않고 원본 해상도 국가기초구역에 대조했습니다. 경계 미연결·모호 각 0곳입니다. 좌표와 배송 당시 주소 해시가 일치해야 위치에 반영합니다.
-- 배송 밀도는 **선택 기간에 위치가 확인된 고유 완료 배송 ID 수 ÷ 공식 구역의 EPSG:5179 투영 면적(km²)**입니다. 100 이상은 진한 파랑, 0 초과 100 미만은 옅은 파랑입니다. 위치가 확인된 등록 매장이 있고 관측 근거와 코드별 위치 연결을 점검한 구역의 관측 배송이 0이면 주황 후보입니다. 나머지는 회색 자료 미확인입니다.
+- 우정사업본부 제2026-54호는 2026-11-10 시행이며 11-03 기준 34,403개 번호를 공표했습니다. 보존 WFS와 공통인 코드는 34,131개입니다. 등록 주소의 엄격 대조 결과 5,774곳 일치, 54곳 불일치, 215곳 미확인입니다. [우정사업본부 고시](https://www.koreapost.go.kr/user/bbs/kpost/92/277/bbsDataView/100102427.do)
+- 국토교통부 VWorld의 공식 기초구역은 기준 2026-11, 갱신 2026-11-13으로 표시됩니다. 공식 로그인으로 최신 SHP를 확보한 뒤 좌표와 주소를 다시 대조해야 합니다. [VWorld 공식 기초구역 자료](https://www.vworld.kr/dtmk/dtmk_ntads_s002.do?svcCde=MK&dsId=30054)
+- 보존 WFS에서는 등록 고객코드 6,043곳이 3,394개 구역에 유일하게 연결됐습니다. 고객코드나 주소를 합치지 않습니다. 좌표와 배송 당시 주소 해시가 일치해야 위치에 반영합니다. 실제 배정이 달라지는 54곳의 공식 도형 대조는 운영 반영 전 검증 대상입니다.
+- 배송 밀도는 **선택 기간에 위치가 확인된 고유 완료 배송 관측 건수 ÷ 구역의 EPSG:5179 투영 면적(km²)**입니다. 100 이상은 진한 파랑, 0 초과 100 미만은 옅은 파랑입니다. 위치가 확인된 등록 매장이 있고 관측 근거와 코드별 위치 연결을 점검한 구역의 관측 배송이 0이면 주황 후보입니다. 나머지는 회색 자료 미확인입니다.
 - 범위가 미확인인 날·센터는 0건으로 표시하지 않습니다. 범례의 미배송 후보는 해당 기간 전체의 미배송 확정이나 신규 배차 가능 판정으로 사용하지 않습니다.
 
 | 기간 | 오산 관측 / 미확인 | 전체 관측 완료 | 좌표 연결 배송 | 오산신규 배송 확인 / 미확인 | 오산보류 이력 |
@@ -20,23 +21,35 @@
 
 배송 기준일은 2026-11-07입니다. 90일 위치 미연결 153건은 원천 합계에는 포함하며 경계에 임의 배정하지 않습니다.
 
+## 권역별 업장과 배송 이력
+
+- 지도에서 선택한 우편번호와 기간에 해당하는 업장 12곳씩을 조회합니다. 업장을 펼치면 조회한 기간과 센터에 해당하는 관측 배송을 최신 날짜부터 12건씩 읽습니다. 자료의 관측 시각과 상세를 읽은 시각을 따로 표시합니다.
+- 배송 당시 확정호차는 보존 이력에서 읽습니다. 현재 기준호차와 배송요일은 기존 직원용 기준호차 리더에서 읽으며 이전 정상 자료이면 시각을 함께 표시합니다.
+- 승인된 배송 보존본은 배송 관측일과 배송 요약키를 제공합니다. 실제 주문번호, 주문별 배송 상태, 원본 배송ID 및 개별 실제·예정 배송일은 해당 원천과 연결될 때까지 미연결 또는 미확인으로 남습니다. 원천 연동에는 승인된 주문 원장의 주문번호와 배송 원천의 관계 키가 필요합니다. 영업·휴업 여부도 전용 자료가 필요합니다.
+
 ## 승인 후 C 연결
 
-1. B의 최종 커밋 한 개만 적용합니다. 공통 연결부는 `src/shadowCoverage/routes.js`, `src/stageVerificationEntry.js`, `public/opsmap/shadow-coverage-tab.mjs`입니다. 기존 데이터 복원과 직원 인증을 유지합니다. 시안 비교용 A·B 커밋은 필요하지 않습니다.
+1. C에 우편번호 기반 커밋 `237bd2f67e0d95329b7880a8772b7d4da96a6d7b`가 없으면 먼저 해당 커밋을 적용한 뒤 B의 업장 상세 커밋을 적용합니다. 공통 연결부는 `src/shadowCoverage/routes.js`, `src/stageVerificationEntry.js`, `public/opsmap/shadow-coverage-tab.mjs`입니다. 기존 데이터 복원과 직원 인증을 유지합니다. 비교 전용 시안 커밋은 제외합니다.
 2. 기존 B의 공식 경계 변환기로 날짜가 확인된 전국 자료를 정리합니다. 검증된 원장 세대, 주소 해시·배송 ID 원천, 오산신규·보류 이력과 함께 작업 트리 밖에 새 디렉터리를 생성합니다.
 
 ```powershell
 node --max-old-space-size=320 scripts/prepare-opsmap-postal.mjs $preparedBoundaries $boundaryInputSha $committedSnapshot $storeStatusFile $statusSha $newPrivatePackage
 ```
 
-3. 생성된 `geometry/`와 `postal-release.json.gz`를 승인된 방식으로 같은 서버 내부 경로에 읽기 전용으로 연결합니다. 키는 `OPSMAP_SHADOW_POSTAL_DIR`, `OPSMAP_SHADOW_POSTAL_BOUNDARY_SHA256`, `OPSMAP_SHADOW_POSTAL_RELEASE_SHA256`입니다. 이 3개가 확인되면 격리 검증에서 `OPSMAP_SHADOW_COVERAGE_FORMAT=postal`을 설정합니다. 기존 H3 원본, H3 플래그 및 운영 원장 파일은 이 패키지에 포함하지 않습니다.
-4. 새 원장 세대가 발행될 때 같은 명령으로 새 우편번호 묶음을 만듭니다. 사전 집계와 읽기 승인 포인터의 원장 세대가 다르면 API는 503을 반환합니다. 브라우저의 동일 세션은 앞선 정상 화면과 자료 기준일을 표시합니다. 묶음에는 고객코드와 집계가 있어 비공개로 보관합니다.
-5. 실제 Render에서 전체 앱 메모리와 배율별 첫 화면을 확인합니다. 연결을 되돌릴 때는 `OPSMAP_SHADOW_COVERAGE_FORMAT`의 `postal` 설정을 해제해 기존 H3를 선택합니다.
+3. 생성된 `geometry/`와 `postal-release.json.gz`를 승인된 방식으로 같은 서버 내부 경로에 읽기 전용으로 연결합니다. 설정 키는 `OPSMAP_SHADOW_POSTAL_DIR`, `OPSMAP_SHADOW_POSTAL_BOUNDARY_SHA256`, `OPSMAP_SHADOW_POSTAL_RELEASE_SHA256`입니다. 확인 후 격리 검증에서 `OPSMAP_SHADOW_COVERAGE_FORMAT=postal`을 사용합니다.
+4. 같은 원장·경계·우편번호 묶음에서 아래 명령으로 비공개 업장 상세 파일 2개를 생성합니다. `details-index.json.gz`와 `customer-history.bin`을 앱 외부 동일 디렉터리에 함께 두고 `OPSMAP_SHADOW_POSTAL_DETAILS_DIR`에 지정합니다. `OPSMAP_SHADOW_POSTAL_DETAILS_SHA256`에는 인덱스 파일의 SHA-256을 설정합니다. 배송 이력은 읽을 고객의 압축 구간만 SHA-256으로 검증한 뒤 반환합니다.
+
+```powershell
+node --max-old-space-size=320 scripts/prepare-opsmap-postal-details.mjs $newPrivatePackage $releaseSha $preparedBoundaries $committedSnapshot $newPrivateDetailsDir
+```
+
+5. 새 원장 세대에는 2~4단계를 다시 실행합니다. 원장·경계·집계 세대가 다르면 상세 API는 503을 반환합니다. 화면은 조회 실패 시각과 같은 조회 조건의 이전 정상 시각을 구분합니다. 묶음은 실제 고객코드 및 집계 자료를 포함하므로 비공개로 보관합니다.
+6. 실제 Render에서 전체 앱 메모리와 첫 화면을 확인합니다. 연결을 되돌릴 때는 `OPSMAP_SHADOW_COVERAGE_FORMAT`의 `postal` 설정을 해제해 기존 H3를 선택합니다.
 
 ## 재현
 
 ```powershell
-node --test test/shadow-coverage.test.mjs test/postal-coverage.test.mjs
+node --test test/shadow-coverage.test.mjs test/postal-coverage.test.mjs test/postal-area-details.test.mjs
 node test/postal-coverage-browser.mjs postal $committedSnapshot $storeStatusFile $newPrivatePackage $buildAudit $results live-sdk
 node test/postal-coverage-browser.mjs h3 $committedSnapshot $storeStatusFile $newPrivatePackage $buildAudit $results live-sdk
 ```

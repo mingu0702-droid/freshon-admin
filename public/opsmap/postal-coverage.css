@@ -56,6 +56,44 @@
 #postalCandidates { display: grid; gap: 4px; max-height: 146px; overflow: auto; }
 #postalObserved { color: #285899; font-weight: 650; }
 #postalEvidence { font-size: 12px; }
+.postal-coverage #postalUnmatched { margin-top: 6px; min-height: 28px; }
+.postal-area-active #postalOverview { display: none; }
+.postal-region-head { display: flex; align-items: flex-start; gap: 5px; margin-bottom: 6px; }
+.postal-region-head > div { flex: 1; min-width: 0; }
+.postal-region-head h2 { font-size: 15px; }
+.postal-region-head p { font-size: 11px; color: #53677e; }
+.postal-coverage .postal-region-head button { min-height: 28px; padding: 3px 6px; white-space: nowrap; }
+.postal-region-head #postalAreaClose { min-width: 29px; font-size: 15px; line-height: 1; }
+.postal-region-evidence { margin: 4px 0; color: #54667d; font-size: 11px; }
+.postal-region-evidence p { overflow-wrap: anywhere; }
+#postalAreaSearch { margin: 7px 0; font-size: 12px; }
+#postalAreaSearch label { margin-right: 5px; }
+#postalStoreState { font-size: 11px; color: #435d75; }
+#postalStoreState button { min-height: 27px; }
+#postalStoreList { display: grid; gap: 7px; padding: 5px 0; }
+.postal-store-row { padding: 7px; border: 1px solid #dce7f5; border-radius: 7px; overflow-wrap: anywhere; }
+.postal-coverage .postal-store-title {
+  border: 0;
+  padding: 0;
+  min-height: 22px;
+  line-height: 1.35;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  color: #24548a;
+  font-weight: 700;
+}
+.postal-store-code, .postal-store-address, .postal-store-status { font-size: 11px; }
+.postal-store-code { color: #56657b; }
+.postal-store-status { color: #275b93; font-weight: 650; }
+.postal-store-status[data-observed-delivery="CANDIDATE"] { color: #925512; }
+.postal-store-status[data-observed-delivery="UNVERIFIED"] { color: #53667c; }
+.postal-store-row > details { border-top: 1px solid #deebf3; margin-top: 5px; font-size: 11px; }
+.postal-store-row details summary { cursor: pointer; }
+.postal-history-list { margin: 0; padding-left: 17px; }
+.postal-history-list > li { padding-bottom: 4px; border-bottom: 1px solid #e5edf5; }
+.postal-item-pages, #postalStorePages { display: flex; flex-wrap: wrap; gap: 4px; margin: 5px 0; }
+.postal-history-error { color: #994b15; }
 @media (max-width: 760px) {
   .postal-coverage {
     height: calc(100dvh - var(--coverage-header-height, 105px));
@@ -66,4 +104,6 @@
   .postal-map-controls { top: 7px; left: 7px; }
   .postal-coverage .coverage-map-state { inset: auto 7px 42px; }
   .postal-coverage .coverage-map-state p { padding: 4px 6px; font-size: 11px; }
+  .postal-area-active .coverage-sidebar { max-height: min(43dvh, 340px); }
+  .postal-coverage .postal-region-head button { min-height: 32px; }
 }

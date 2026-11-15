@@ -42,6 +42,8 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
           POSTAL_RELEASE_INTEGRITY: 503,
           POSTAL_GENERATION_MISMATCH: 503,
           POSTAL_DATA_UNCONFIGURED: 503,
+          POSTAL_DETAILS_UNCONFIGURED: 503,
+          POSTAL_DETAILS_INTEGRITY: 503,
         };
         const code = Object.hasOwn(reasons, problem.message) ? problem.message : 'POSTAL_DATA_UNAVAILABLE';
         return res.status(reasons[code] || 503).json({ ok: false, error: code });
@@ -70,6 +72,26 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
   route('/area', (req, scope, { runtime }) => {
     if (typeof req.query.id !== 'string' || !/^\d{5}$/.test(req.query.id)) throw Error('POSTAL_QUERY_INVALID');
     return runtime.area({ ...scope, id: Number(req.query.id) });
+  });
+  function memberScope(req, scope) {
+    const { area, offset = '0' } = req.query;
+    if (!scope.generation || typeof area !== 'string' || !/^(?:unmatched|\d{5})$/.test(area) ||
+        typeof offset !== 'string' || !/^\d{1,5}$/.test(offset) || Number(offset) > 15000) throw Error('POSTAL_QUERY_INVALID');
+    return { ...scope, area:area === 'unmatched' ? null : Number(area), offset:Number(offset) };
+  }
+  route('/stores', async (req, scope, { runtime }) => {
+    const { filter = 'all' } = req.query;
+    const { POSTAL_STORE_FILTERS } = await import('./postalDetails.js');
+    let q;
+    try { q=decodeURIComponent(req.get('X-Map-Customer-Query')||'').normalize('NFKC').trim(); }
+    catch { throw Error('POSTAL_QUERY_INVALID'); }
+    if (!POSTAL_STORE_FILTERS.includes(filter) || q.length > 200 || /[\x00-\x1f]/.test(q)) throw Error('POSTAL_QUERY_INVALID');
+    return runtime.stores({ ...memberScope(req,scope), filter, q });
+  });
+  route('/history', (req, scope, { runtime }) => {
+    const code = req.query.code;
+    if (typeof code !== 'string' || !/^[A-Z]\d{1,20}$/.test(code)) throw Error('POSTAL_QUERY_INVALID');
+    return runtime.history({ ...memberScope(req,scope), code });
   });
   route('/point', (req, scope, { runtime }) => {
     const point = req.get('X-Map-Coverage-Point') || '';
