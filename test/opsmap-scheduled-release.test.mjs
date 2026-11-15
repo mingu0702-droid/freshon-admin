@@ -89,6 +89,22 @@ function observation(day,status='OPEN') {
     visits:status==='COMPLETED'?[[rows[0][0],code,'122','osan',archiveAddressHash(address)]]:[]};
 }
 
+function scopedObservation(day, deliveries) {
+  const tasks=deliveries.map(({id,code,vehicle,center='osan',status='OPEN'})=>
+    [syncSha256(id),code,vehicle,center,coordinateAddressHash(address),status]);
+  const visits=tasks.filter(row=>row[5]==='COMPLETED').map(([id,code,vehicle,center])=>
+    [id,code,vehicle,center,archiveAddressHash(address)]);
+  const counts=new Map([['1',0]]);
+  const events=deliveries.map(({source='1',code,vehicle,status='OPEN'})=>{
+    counts.set(source,(counts.get(source)||0)+1);
+    return packDatedEvent(source,deliveryCompletion({status},{date:day,customerCode:code,vehicle}));
+  });
+  const dispatch={contract:DATED_DELIVERY_CONTRACT,sources:[...counts].map(([id,count])=>[id,1,count,0]),events};
+  return {date:day,sourceRows:tasks.length,unidentified:0,proof:'VERIFIED_COMPLETE_DAY',
+    completeCenters:[...new Set(['osan',...deliveries.map(row=>row.center||'osan')])],completeSources:[...counts.keys()],
+    tasks,visits,dispatch,proofHash:syncDigest([day,tasks,visits,dispatch])};
+}
+
 async function seedFor(root) {
   const directory=path.join(root,'seed'), observed=path.join(directory,'observed-days');
   await fs.mkdir(observed,{recursive:true,mode:0o700});
@@ -166,7 +182,7 @@ test('Stage scheduler endpoint passes a valid receipt once and drops raw child d
   assert.deepEqual(logs,[{component:'opsmap-scheduled-run',runId:receipt.runId,exitCode:1,error:'OPSMAP_SYNC_FAILED'}]);
 });
 
-test('the first scheduled release can reuse the protected baseline and retain archived days outside the coverage window',async t=>{
+test('the first Osan-only release can reuse the protected baseline and preserve unknown and archived days',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'opsmap-scheduled-baseline-'));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));
   const seed=await seedFor(root), api=github(), now=()=>clockStart;
@@ -189,21 +205,73 @@ test('the first scheduled release can reuse the protected baseline and retain ar
   assert.equal(restored.index.sha256,baseline.index.sha256);
   await reader.dispose();
 
-  const sourceIds=Object.values(SYNC_DELIVERY_SOURCES);
-  const run=await publishOpsmapScheduledRun({durable:writer,receipt:signed(clockStart),createWorker:()=>createOpsmapDataSync({
-    directory:spool,now,includeOfficialRegions:false,readLedger:async()=>restored.ledger,
-    readRegistry:async()=>({complete:true,version:syncSha256('fixture-registry'),rows:[{customerCode:code,
-      customerName:'격리 매장',basicAddress:address,lifecycle:'ACTIVE'}]}),
-    async readDay(day){return {...observation(day),completeSources:sourceIds};},
-    completeCoordinates:async({stores,ledger})=>({stores,ledger}),requiredSourceIds:sourceIds
+  const queried=[];
+  const run=await publishOpsmapScheduledRun({durable:writer,receipt:signed(clockStart),createWorker:record=>createOpsmapDataSync({
+    directory:spool,now,includeOfficialRegions:false,osanOnly:true,
+    async readDay(day){
+      queried.push(day);
+      record('delivery:1',day);
+      return scopedObservation(day,day===date?[{id:'osan delivery',code,vehicle:'122',status:'COMPLETED'}]:[]);
+    }
   })});
   assert.equal(run.state,'PUBLISHED');
   assert.equal(run.revision,baseline.state.revision+1);
   const published=await writer.read();
   assert.equal(published.state.dates[oldDate],baseline.state.dates[oldDate]);
   assert.deepEqual(await writer.readDay(oldDate,published),await offline.readDay(oldDate));
+  assert.deepEqual(queried,[previousDate,date]);
+  assert.equal(await writer.readDay('2026-11-08',published),null);
+  assert.equal(published.state.ledgerSha256,baseline.state.ledgerSha256);
+  assert.equal(published.state.catalogSha256,baseline.state.catalogSha256);
+  assert.deepEqual(published.vehicleDelivery.completeSources,{'1':[previousDate,date],'2':[],'3':[],'4':[]});
   assert.equal(published.snapshot.latestDate,date);
+  assert.equal(published.snapshot.osanDeliveryThrough,date);
   assert.equal(published.snapshot.sourceRunId,run.runId);
+  const coverage=createShadowCoverageStore({directory:published.coverage});
+  const {window}=await coverage.readPeriod(90);
+  assert(window.observedDates.osan.includes(previousDate));
+  assert(window.unverified.osan.includes(previousDate));
+  assert(window.missing.includes('2026-11-08'));
+  const restarted=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env:storageEnv,fetchImpl:api.fetchImpl}),now,tempRoot:root});
+  t.after(()=>restarted.dispose());
+  assert.equal((await restarted.read()).snapshot.osanDeliveryThrough,date);
+});
+
+test('Osan-only polling retains exact other-center deliveries and staff data from a shared date',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'opsmap-scoped-history-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const directory=path.join(root,'spool'), seed=await seedFor(root);
+  await fs.mkdir(directory,{mode:0o700});
+  const extraCode='T99112', extra={id:'honam delivery',code:extraCode,vehicle:'511',center:'honam',source:'4',status:'COMPLETED'};
+  const cold={id:'cold-storage delivery',code,vehicle:'173',source:'2',status:'COMPLETED'};
+  let tick=clockStart;
+  const now=()=>tick, receipt=()=>verifyOpsmapScheduleReceipt(signed(tick),{...clock,now});
+  const legacy=await createOpsmapDataSync({directory,seed,now,includeOfficialRegions:false,readLedger:async()=>ledger,
+    readRegistry:async()=>({complete:true,version:syncDigest('mixed registry'),rows:[{customerCode:extraCode,
+      customerName:'격리 호남 매장',basicAddress:address,lifecycle:'ACTIVE'}]}),
+    completeCoordinates:async options=>({stores:options.stores.map(row=>row.code===extraCode?{...row,center:'honam'}:row),ledger:options.ledger}),
+    readDay:async day=>({...scopedObservation(day,day===date?[extra,cold]:[]),completeCenters:['osan','yeongnam','honam']})});
+  await legacy.sync({scheduledRun:receipt()});
+  const generation=await legacy.read();
+  const old=await legacy.readDay(date);
+  let yesterdayComplete=true;
+  tick=Date.parse('2026-11-12T02:00:00+09:00');
+  const osan=await createOpsmapDataSync({directory,now,includeOfficialRegions:false,osanOnly:true,readDay:async day=>
+    yesterdayComplete?scopedObservation(day,day===date?[{id:'osan delivery',code,vehicle:'122',status:'COMPLETED'}]:[]):null});
+  await osan.sync({scheduledRun:receipt()});
+  const merged=await osan.readDay(date), saved=await osan.read();
+  assert.deepEqual(merged.completeSources,['1','4','2']);
+  assert(merged.tasks.some(row=>row[0]===syncSha256('osan delivery')));
+  for (const id of ['2','4']) {
+    const project=day=>day.tasks.filter((_,i)=>day.dispatch.events[i][0]===id);
+    assert.deepEqual(project(merged),project(old));
+  }
+  assert.deepEqual(saved.sealedSnapshot.rows.find(row=>row.customerCode===extraCode),
+    generation.sealedSnapshot.rows.find(row=>row.customerCode===extraCode));
+  tick+=86400_000;
+  yesterdayComplete=false;
+  await assert.rejects(osan.sync({scheduledRun:receipt()}),/OPSMAP_SCHEDULE_SOURCE_INCOMPLETE/);
+  assert.equal((await osan.read()).index.sha256,saved.index.sha256);
 });
 
 test('publication CAS, source retry, restart, archive laziness, and one run ID across authenticated Stage snapshot and H3',async t=>{

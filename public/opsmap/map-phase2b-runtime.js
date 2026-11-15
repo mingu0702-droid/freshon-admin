@@ -370,7 +370,7 @@
     window.dispatchEvent(new Event('map-stores-replaced'));
     if(state.mode==='BASE_60D'){
       snapshotMeta = meta || snapshotMeta;
-      if(generalMap&&latestSnapshotRows.length)window.MapDataSync?.applied?.(snapshotMeta?.latestDate||snapshotMeta?.endDate);
+      if(generalMap&&latestSnapshotRows.length)window.MapDataSync?.applied?.(snapshotMeta?.latestDate||snapshotMeta?.endDate,snapshotMeta?.osanDeliveryThrough);
     }
     if(state.virtual?.searchTemporary&&(temporaryAreaSourceVersion!==newAreaSourceVersion()||temporaryAreaDispatchMeta!==baseVehicleMeta)){
       renderSearchTemporaryNearby(state.virtual,{loadDispatch:false});

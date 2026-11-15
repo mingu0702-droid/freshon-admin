@@ -146,7 +146,7 @@ export async function buildShadowCoverage({ inputDirectory, outputDirectory, kin
         const store = byCode.get(code);
         return [code, store?.cell || null, store?.matchHash || null];
       });
-      const signature = digestJson([2, raw, bindings]);
+      const signature = digestJson([raw.dispatch?3:2, raw, bindings]);
       const shardFile = path.join(shards, date + '.json');
       const saved = await optionalJson(shardFile, 3 * 1024 * 1024).catch(() => null);
       if (saved?.signature === signature && saved.sha256 === digestJson(saved.value) && saved.value.date === date) {

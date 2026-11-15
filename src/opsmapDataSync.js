@@ -14,7 +14,7 @@ async function defaultCoverageBuilder(options) {
 import {openOpsmapSyncGenerationStore, syncDigest, syncHash, syncSha256, SYNC_MAX_DAY_BYTES,
   validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
 
-import {completeSyncObservation,nextSyncEvidence,SYNC_CENTERS} from './opsmapSyncPolicy.js';
+import {completeSyncObservation,nextSyncEvidence,STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_CENTERS} from './opsmapSyncPolicy.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
 import {collectOpsmapVehicleDelivery,MAX_VEHICLE_DELIVERY_BYTES,VEHICLE_DELIVERY_FILE} from './opsmapVehicleDeliveryEvidence.js';
 import {continuingFixedLedger} from './fixedCoordinateCompletion.js';
@@ -117,7 +117,43 @@ function snapshotRows(catalog, saved, docs) {
   });
 }
 
-async function materializeDays({store, current, seed, changes, directory, targetDate, plannedDates}) {
+function updateOsanSnapshot(saved, catalog, docs) {
+  const osanCodes = new Set(catalog.stores.filter(row=>row.registered && row.center==='osan').map(row=>row.code));
+  const {seen} = readAssignments(docs);
+  return saved.rows.map(row=>{
+    if (!osanCodes.has(row.customerCode)) return row;
+    const match = seen.get(row.customerCode+'|'+(row.originalAddressHash || row.addressHash));
+    if (!match || match.date < (row.lastDeliveryDate || row.deliveryDate || '')) return row;
+    const vehicle = match.vehicles.size===1 ? [...match.vehicles][0] : '';
+    return {...row,vehicle,confirmedVehicle:vehicle,deliveryDate:match.date,
+      ...(match.completed?{lastDeliveryDate:match.date}:{})};
+  });
+}
+
+function retainOtherSources(previous, incoming) {
+  if (!previous) return incoming;
+  if (!previous.dispatch) throw Error('OPSMAP_OSAN_HISTORY_SCOPE_UNVERIFIED');
+  const [osan] = STAGE_OSAN_SYNC_SOURCE_IDS;
+  const otherSources = previous.dispatch.sources.filter(([id])=>id!==osan);
+  if (!otherSources.length) return incoming;
+  if (Boolean(previous.planningOnly)!==Boolean(incoming.planningOnly)) throw Error('OPSMAP_OSAN_HISTORY_SCOPE_UNVERIFIED');
+  const bindings = previous.tasks.flatMap((task,index)=>{
+    const event = previous.dispatch.events[index];
+    return event[0]===osan?[]:[{task,event}];
+  });
+  const otherDeliveries = new Set(bindings.map(({task})=>task[0]));
+  bindings.push(...incoming.tasks.map((task,index)=>({task,event:incoming.dispatch.events[index]})));
+  bindings.sort((a,b)=>a.task[0].localeCompare(b.task[0]));
+  const tasks = bindings.map(({task})=>task);
+  const visits = [...incoming.visits,...previous.visits.filter(([id])=>otherDeliveries.has(id))]
+    .sort((a,b)=>a[0].localeCompare(b[0]));
+  const dispatch = {...incoming.dispatch,sources:[...incoming.dispatch.sources,...otherSources],events:bindings.map(({event})=>event)};
+  return validateOpsmapSyncDay({...incoming,sourceRows:tasks.length,tasks,visits,dispatch,
+    completeSources:dispatch.sources.map(([id])=>id),completeCenters:[...new Set([...incoming.completeCenters,...previous.completeCenters])],
+    proofHash:syncDigest([incoming.date,tasks,visits,dispatch])},incoming.date);
+}
+
+async function materializeDays({store, current, seed, changes, directory, targetDate, plannedDates, osanOnly}) {
   await fs.mkdir(directory,{recursive:true,mode:0o700});
   const dates = {...current?.state.dates};
   const newDocs = new Map();
@@ -131,13 +167,13 @@ async function materializeDays({store, current, seed, changes, directory, target
       newDocs.set(date,validateOpsmapSyncDay({...raw,proofHash:raw.proofHash || syncSha256(bytes),completeCenters:raw.completeCenters || []},date));
     }
   }
-  for (const [date,day] of changes) {
-    if (!day) continue;
+  for (const [date,incoming] of changes) {
     const old = await store.readDay(date,current);
+    const day = osanOnly?retainOtherSources(old,incoming):incoming;
     // Omission and incomplete pages cannot erase previously observed deliveries.
     const ids = new Set((day.tasks || day.visits).map(row => row[0]));
     if (!old?.planningOnly && (old?.tasks || old?.visits || []).some(row => !ids.has(row[0]))) throw Error('OPSMAP_SYNC_DAY_REGRESSION');
-    if (old?.dispatch) {
+    if (old?.dispatch && !old.planningOnly) {
       const incoming=new Map((day.tasks||[]).map((row,index)=>[row[0],{row,event:day.dispatch?.events[index]}]));
       if (old.tasks.some((row,index)=>{
         const next=incoming.get(row[0]);
@@ -184,9 +220,14 @@ async function copyCoverageCache(source, output) {
 
 export async function createOpsmapDataSync({directory, seed, readLedger, readRegistry, readDay, readMissingDay,
   readManualPins = async () => [], now = Date.now, appRoot = process.cwd(), includeOfficialRegions = true, buildCoverage = defaultCoverageBuilder,
-  completeCoordinates,requiredSourceIds=[]} = {}) {
+  completeCoordinates,requiredSourceIds=[],osanOnly=false} = {}) {
   const store = await openOpsmapSyncGenerationStore(directory,{appRoot,writable:true,readMissingDay});
   const statusFile = path.join(store.root,'sync-status.json');
+  const sourceIds = osanOnly?STAGE_OSAN_SYNC_SOURCE_IDS:requiredSourceIds;
+  function complete(day) {
+    return completeSyncObservation(day,osanOnly?['osan']:SYNC_CENTERS,sourceIds) &&
+      (!osanOnly || day.completeCenters.length===1 && day.completeSources.length===1 && Boolean(day.dispatch));
+  }
   let flight;
 
   async function loadSeed() {
@@ -205,13 +246,15 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
     const expected = await store.latestRevision();
     const current = await store.read();
     if (bootstrap && current) return {state:'NOOP',generation:current.index.sha256,revision:current.state.revision};
-    if (scheduledRun && (!syncHash(scheduledRun.runId)||!isDay(scheduledRun.date)||!completeCoordinates)) throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
+    if (osanOnly && (!current || !scheduledRun)) throw Error('OPSMAP_OSAN_BASELINE_REQUIRED');
+    if (scheduledRun && (!syncHash(scheduledRun.runId)||!isDay(scheduledRun.date)||(!osanOnly&&!completeCoordinates))) throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
     if (scheduledRun?.runId && current?.state.runId===scheduledRun.runId && current.state.sourceReadComplete===true &&
-        requiredSourceIds.every(id=>current.vehicleDelivery?.completeSources?.[id]?.includes(scheduledRun.date))) {
+        (!osanOnly || current.state.osanDeliveryThrough===scheduledRun.date) &&
+        sourceIds.every(id=>current.vehicleDelivery?.completeSources?.[id]?.includes(scheduledRun.date))) {
       return {state:'PUBLISHED',generation:current.index.sha256,revision:current.state.revision,observedToday:true,
         sourceReadComplete:true,observationHash:current.state.observationHash};
     }
-    if (!bootstrap && (!readRegistry || !readDay)) throw Error('OPSMAP_SYNC_SOURCES_NOT_CONFIGURED');
+    if (!bootstrap && (!readDay || !osanOnly && !readRegistry)) throw Error('OPSMAP_SYNC_SOURCES_NOT_CONFIGURED');
     const initial = current ? null : await loadSeed();
     const target = scheduledRun?.date || kstDate(now());
     if (!Array.isArray(backfillDates) || backfillDates.length > 2 || backfillDates.some(date => !isDay(date) || date > target)) {
@@ -222,27 +265,28 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
     const catchupAfter=scheduledRun?(current?.state.catchupAfter || current?.state.asOf || initial?.facts.end):null;
     const catchup=isDay(catchupAfter)?datesFor(target,90).filter(date=>date>catchupAfter && date<yesterday &&
       (!current?.state.dates[date]||plannedDates.has(date))).slice(0,2):[];
-    const datesToRead = bootstrap ? [] : [...new Set([yesterday,target,...catchup,...backfillDates])];
-    const [registry, suppliedLedger] = await Promise.all([bootstrap?null:readRegistry(),readLedger()]);
-    let ledger=completeCoordinates ? continuingFixedLedger(current?.ledger,suppliedLedger) : suppliedLedger;
-    const manual = await readManualPins();
+    const datesToRead = bootstrap ? [] : [...new Set([yesterday,target,...catchup,...backfillDates])]
+      .filter(date=>!osanOnly || date>catchupAfter);
+    const [registry, suppliedLedger, manual] = osanOnly ? [null,current.ledger,[]] :
+      await Promise.all([bootstrap?null:readRegistry(),readLedger(),readManualPins()]);
+    let ledger=!osanOnly && completeCoordinates ? continuingFixedLedger(current?.ledger,suppliedLedger) : suppliedLedger;
     preserveLedger(current?.ledger,ledger);
     const changes = new Map();
     for (const date of datesToRead) {
       const day = await readDay(date);
-      if (scheduledRun && requiredSourceIds.length && !completeSyncObservation(day,SYNC_CENTERS,requiredSourceIds)) {
+      if (scheduledRun && sourceIds.length && !complete(day)) {
         throw Object.assign(Error('OPSMAP_SCHEDULE_SOURCE_INCOMPLETE'),{date});
       }
       if (day) changes.set(date,validateOpsmapSyncDay(day,date));
     }
     const todayEvidence=changes.get(target);
-    const sourceReadComplete=completeSyncObservation(todayEvidence,SYNC_CENTERS,requiredSourceIds);
+    const sourceReadComplete=complete(todayEvidence);
     if (scheduledRun && !sourceReadComplete) throw Object.assign(Error('OPSMAP_SCHEDULE_SOURCE_INCOMPLETE'),{date:target});
     if (scheduledRun) {
       const planned=opsmapDispatchDate(Date.parse(scheduledRun.issuedAt));
       if(planned>target) {
         const plan=await readDay(planned);
-        if (!completeSyncObservation(plan,SYNC_CENTERS,requiredSourceIds) || plan.tasks.some(row=>row[5]==='COMPLETED')) {
+        if (!complete(plan) || plan.tasks.some(row=>row[5]==='COMPLETED')) {
           throw Object.assign(Error('OPSMAP_SCHEDULE_PLAN_INCOMPLETE'),{date:planned});
         }
         if (plan.sourceRows) changes.set(planned,validateOpsmapSyncDay({...plan,planningOnly:true},planned));
@@ -252,18 +296,19 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       if (day.planningOnly) plannedDates.add(date);
       else plannedDates.delete(date);
     }
-    const observationHash=scheduledRun?syncDigest([scheduledRun.runId,registry.version,[...changes].map(([date,day])=>[date,day.proofHash])]):null;
     const base = rebindCatalog(current?.baseCatalog || initial.base,registry);
     let completedStores=base.stores;
-    if (completeCoordinates) {
+    if (!osanOnly && completeCoordinates) {
       const result=await completeCoordinates({stores:base.stores,ledger,manualRows:manual,now});
       preserveLedger(ledger,result.ledger);ledger=result.ledger;completedStores=result.stores;
     }
-    const catalog = {...base,stores:createFixedCoordinateResolver(ledger,{manualRows:manual}).join(completedStores)};
+    const catalog = osanOnly?current.catalog:{...base,stores:createFixedCoordinateResolver(ledger,{manualRows:manual}).join(completedStores)};
     const registryVersion = registry?.version || current?.state.registryVersion || initial?.facts.stores.registryVersion || null;
+    const observationHash=scheduledRun?syncDigest([scheduledRun.runId,registryVersion,[...changes].map(([date,day])=>[date,day.proofHash])]):null;
     const sameDays = [...changes].every(([date,doc]) => current?.state.dates[date] === syncDigest(doc));
     const fingerprint = syncDigest([registryVersion,base,ledger.sha256,manual]);
     if (current?.vehicleDelivery && current.state.fingerprint === fingerprint && sameDays && current.state.revision === expected &&
+        (!osanOnly || current.state.osanDeliveryThrough===target) &&
         (!scheduledRun || durableActive?.generation===current.index.sha256 && durableActive.revision===current.state.revision)) {
       return {state:'NOOP',generation:current.index.sha256,revision:current.state.revision,
         observedToday:changes.has(target),sourceReadComplete,observationHash};
@@ -274,7 +319,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
       const input = path.join(candidate.folder,'input');
       const coverage = path.join(candidate.folder,'coverage');
       const observed = path.join(input,'observed-days');
-      const dates = await materializeDays({store,current,seed:initial,changes,directory:observed,targetDate:target,plannedDates});
+      const dates = await materializeDays({store,current,seed:initial,changes,directory:observed,targetDate:target,plannedDates,osanOnly});
       const asOf = Object.keys(dates).filter(date=>date<=target&&!plannedDates.has(date)).sort().at(-1);
       if (!isDay(asOf) || asOf > target) throw Error('OPSMAP_SYNC_DATE_FRONTIER');
       const source = current ? await readJson(path.join(current.input,'source-import.safe.json'),32_768) : initial.facts;
@@ -308,8 +353,10 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
           registered:catalog.stores.filter(row => row.registered).length,located:catalog.stores.filter(hasFixedCoordinatePoint).length,registryVersion},
         ...(!bootstrap?{syncRead:{target,registryVersion,observedDates:[...changes.keys()].sort()}}:{})};
       const previousSnapshot = current?.sealedSnapshot || initial?.snapshot;
+      const observedDays = [...changes.values()].filter(day=>!day.planningOnly);
       const sealedSnapshot = snapshotProjection({version:'phase2b-map-snapshot-v1',latestDate:asOf,startDate:source.start,
-        rows:snapshotRows(catalog,previousSnapshot,[...changes.values()].filter(day=>!day.planningOnly)),sourceFreshness:{targetDate:target,
+        rows:osanOnly?updateOsanSnapshot(previousSnapshot,catalog,observedDays):snapshotRows(catalog,previousSnapshot,observedDays),
+        sourceFreshness:{targetDate:target,
           sourceReadComplete,sourceDateVerified:Boolean(todayEvidence),
           phase:bootstrap?'VERIFIED_SEED':'VERIFIED_SCHEDULED_READ'}},
       {now,revision:candidate.revision});
@@ -335,6 +382,7 @@ export async function createOpsmapDataSync({directory, seed, readLedger, readReg
         snapshotSha256:syncSha256(snapshotBytes),ledgerSha256:syncSha256(ledgerBytes),baseSha256:syncSha256(baseBytes),
         catalogSha256:syncSha256(catalogBytes),indexSha256:syncSha256(indexBytes),nearbySha256:syncSha256(nearbyBytes),
         vehicleDeliverySha256:syncSha256(vehicleDeliveryBytes),
+        ...(osanOnly?{osanDeliveryThrough:target}:{}),
         ...(plannedDates.size?{plannedDates:[...plannedDates].sort()}:{}),
         ...(scheduledRun?{runId:scheduledRun.runId,observationHash,sourceReadComplete,catchupAfter}:{} )});
       published = true;

@@ -1,5 +1,6 @@
 import { cellToBoundary, cellToLatLng, cellToParent, getResolution, greatCircleDistance, gridDisk, isValidCell, latLngToCell, UNITS } from 'h3-js';
 import { isDay, PERIODS, datesFor } from './coverageFiles.js';
+import { SYNC_DELIVERY_SOURCES } from '../opsmapSyncPolicy.js';
 
 export { isDay, PERIODS, datesFor };
 export const CENTERS = ['all', 'osan', 'yeongnam', 'honam'];
@@ -141,10 +142,16 @@ export function aggregateDay(doc, stores) {
       group.assignments.set(assignment, (group.assignments.get(assignment) || 0) + 1);
     }
   }
+  // Coverage groups regular Osan and cold storage together. A verified read
+  // of one physical source establishes an observation, but cannot prove absence.
+  const partialOsan = doc.completeCenters?.includes('osan') && doc.dispatch &&
+    [SYNC_DELIVERY_SOURCES.osan,SYNC_DELIVERY_SOURCES.osanColdStorage].some(id=>!doc.completeSources?.includes(id));
   return {
     date: doc.date,
     verifiedCenters: doc.proof === 'VERIFIED_COMPLETE_DAY' && SHA.test(doc.proofHash || '') && doc.unidentified === 0 &&
-      Array.isArray(doc.completeCenters) ? CENTERS.slice(1).filter(center => doc.completeCenters.includes(center)) : [],
+      Array.isArray(doc.completeCenters) ? CENTERS.slice(1).filter(center => doc.completeCenters.includes(center) &&
+        (center!=='osan' || !partialOsan)) : [],
+    ...(partialOsan?{partialOsan:true}:{}),
     sourceRows: doc.sourceRows,
     completed: doc.visits.length,
     unidentified: doc.unidentified,
@@ -177,8 +184,8 @@ export function combineDays(end, days, daily) {
     for (const center of CENTERS) {
       const verified = center === 'all' ? day.verifiedCenters.length === 3 : day.verifiedCenters.includes(center);
       if (!verified) unverified[center].push(date);
-      const seen = center === 'all' ? day.completed > 0 || day.verifiedCenters.length > 0
-        : day.recorded[center] > 0 || verified;
+      const seen = center === 'all' ? day.completed > 0 || day.verifiedCenters.length > 0 || day.partialOsan
+        : day.recorded[center] > 0 || verified || center==='osan' && day.partialOsan;
       if (seen) observedDates[center].push(date);
     }
     latest = date;

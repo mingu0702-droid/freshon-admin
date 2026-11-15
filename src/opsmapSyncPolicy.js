@@ -1,6 +1,8 @@
 // Publication is not proof that every required source was read successfully.
 export const SYNC_CENTERS = Object.freeze(['osan','yeongnam','honam']);
 export const SYNC_DELIVERY_SOURCES = Object.freeze({osan:'1',osanColdStorage:'2',yeongnam:'3',honam:'4'});
+export const STAGE_OSAN_SYNC_CENTERS = Object.freeze({osan:SYNC_DELIVERY_SOURCES.osan});
+export const STAGE_OSAN_SYNC_SOURCE_IDS = Object.freeze(Object.values(STAGE_OSAN_SYNC_CENTERS));
 export function completeSyncObservation(day, requiredCenters = SYNC_CENTERS, requiredSources = []) {
   if (!day || day.planningOnly || day.proof !== 'VERIFIED_COMPLETE_DAY' || !Array.isArray(requiredCenters) || !requiredCenters.length ||
       requiredCenters.some(c => !SYNC_CENTERS.includes(c)) || new Set(requiredCenters).size !== requiredCenters.length ||

@@ -33,9 +33,9 @@ import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from './opsmapDurableGeneration.js';
 import {mountOpsmapScheduledRun,opsmapScheduleConfig} from './opsmapScheduledRun.js';
-import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, isFixedMasterDay, stageFixedMasterScope,
+import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, isFixedMasterDay,
   stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
-import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
+import {STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 import {addressMunicipality} from '../public/opsmap/vehicle-picker-regions.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
 
@@ -364,7 +364,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       return staffStoreDetail(response?.data,{customerCode:code,date:null});
     }});
   const app = express(), router = express.Router();
-  mountOpsmapScheduledRun(app,{env:stage,now,readFixedScope:()=>stageFixedMasterScope(validation.active())});
+  mountOpsmapScheduledRun(app,{env:stage,now});
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
     const refresh=()=>{
@@ -436,10 +436,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           const sourceRunId=generation?.scheduled?.state.runId || null;
           const persisted=generation?.scheduled?.state;
           const {secret,scheduleId,executorHash}=opsmapScheduleConfig(stage);
-          const requiredSourceIds=Object.values(SYNC_DELIVERY_SOURCES);
+          const requiredSourceIds=STAGE_OSAN_SYNC_SOURCE_IDS;
           const confirmedSourceIds=requiredSourceIds.filter(id=>
             generation?.scheduled?.vehicleDelivery?.completeSources[id]?.includes(scheduledRun?.date));
           const automaticSyncVerified=remoteEnabled && scheduledState==='VERIFIED_SCHEDULED_PROJECTION' && !!sourceRunId &&
+            persisted?.osanDeliveryThrough===scheduledRun?.date &&
             ['PUBLISHED','VERIFIED_NOOP'].includes(scheduledRun?.state) && scheduledRun.sourceReadComplete===true &&
             confirmedSourceIds.length===requiredSourceIds.length &&
             scheduledRun.generation===generation.generation &&
@@ -447,13 +448,14 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           const evidence={
             automaticSyncVerified,
             liveDeliveryByCenter:readDatedDelivery.sourceStatus(),
-            sources:Object.fromEntries(['customerRegistry',...requiredSourceIds.map(id=>'delivery:'+id)].map(id=>[
+            sources:Object.fromEntries(['customerRegistry',...Object.values(SYNC_DELIVERY_SOURCES).map(id=>'delivery:'+id)].map(id=>[
               id,scheduledSources[id]||{lastSuccessAt:null,error:null}
             ])),
             fixedMaster:fixedMasterEvidence,
             snapshot:{state:snapshotReadState,verifiedAt:snapshotVerifiedAt,generatedAt:snapshot?.generatedAt||null,latestDate:snapshot?.latestDate||null,
               revision:snapshot?.preservation?.revision||null,selectedDateStorageVerified:snapshot?.selectedDateCheckpoint?.selectedDateStorageVerified===true},
             serving:{latestDate:applied?.latestDate||null,generatedAt:applied?.generatedAt||null,generation:applied?.sourceGeneration||null,
+              osanDeliveryThrough:applied?.osanDeliveryThrough||null,
               rowCount:applied?.rows?.length??null},
             coverage:{state:generation?'VERIFIED_STAGE_GENERATION':coverageState,generation:generation?.generation||null,
               asOf:generation?.asOf||null,scope:generation?.evidence.coordinateScope||null,restore:generationRestore.status(),baselineState,
@@ -634,6 +636,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           }
           const recovery=snapshotRecovery();
           const meta = {...phase2bSnapshotMeta(saved), sourceGeneration:saved.sourceGeneration || null,sourceRunId:saved.sourceRunId || null,
+            ...(saved.osanDeliveryThrough?{osanDeliveryThrough:saved.osanDeliveryThrough}:{}),
             recovery,...(recovery==='RESTORING'?{retryAfterMs:2000}:{})};
           const respond=()=>{
             prepareStageSearch(saved);

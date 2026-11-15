@@ -9,6 +9,7 @@ import {readStageNearbyEvidence} from './stageNearbyEvidence.js';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {readOpsmapVehicleDelivery,MAX_VEHICLE_DELIVERY_BYTES,VEHICLE_DELIVERY_FILE} from './opsmapVehicleDeliveryEvidence.js';
 import {validateDatedDispatch} from './datedDeliveryContract.js';
+import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 
 export const syncSha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export const syncDigest = value => syncSha256(JSON.stringify(value));
@@ -97,6 +98,7 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
         state.vehicleDeliverySha256!==undefined&&!syncHash(state.vehicleDeliverySha256) ||
         !isDay(state.asOf) || !Number.isFinite(Date.parse(state.committedAt)) ||
         state.runId!==undefined&&(!syncHash(state.runId)||state.sourceReadComplete!==true||!syncHash(state.observationHash)) ||
+        state.osanDeliveryThrough!==undefined&&(!state.runId || state.osanDeliveryThrough!==state.asOf) ||
         state.catchupAfter!=null&&(!isDay(state.catchupAfter)||state.catchupAfter>state.asOf) ||
         state.plannedDates!==undefined&&(!Array.isArray(state.plannedDates) ||
           new Set(state.plannedDates).size!==state.plannedDates.length || state.plannedDates.some(date=>!isDay(date)||!state.dates?.[date])) ||
@@ -137,6 +139,9 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
       {expected:state.nearbySha256,generation:index.sha256,registry,window:window90});
     const vehicleDelivery=vehicleDeliveryBytes?readOpsmapVehicleDelivery(vehicleDeliveryBytes,
       {generation:index.sha256,registry,window:window90}):null;
+    if (state.osanDeliveryThrough && !vehicleDelivery?.completeSources[SYNC_DELIVERY_SOURCES.osan]?.includes(state.osanDeliveryThrough)) {
+      throw Error('OPSMAP_OSAN_RELEASE_SCOPE');
+    }
     const snapshot = materializeSnapshot(sealedSnapshot);
     snapshot.rows = snapshot.rows.map(row => {
       const store = registry.get(row.customerCode);
@@ -146,7 +151,8 @@ export async function openOpsmapSyncGenerationStore(directory, {appRoot = proces
       return {...row,address:store?.address || '',...(evidence?{coordinateEvidence:evidence}:{})};
     });
     return {state,folder,input,coverage,index,ledger,catalog,registry,nearby,vehicleDelivery,baseCatalog:JSON.parse(baseBytes),sealedSnapshot,
-      snapshot:{...snapshot,source:'STAGE_VERIFIED_REGISTRY',sourceGeneration:index.sha256,sourceRunId:state.runId || null}};
+      snapshot:{...snapshot,source:'STAGE_VERIFIED_REGISTRY',sourceGeneration:index.sha256,sourceRunId:state.runId || null,
+        ...(state.osanDeliveryThrough?{osanDeliveryThrough:state.osanDeliveryThrough}:{})}};
   }
 
   async function read({recheck = false} = {}) {
