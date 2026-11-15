@@ -7,6 +7,12 @@ import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 import {createOpsmapPhotoIndex} from './opsmapPhotoIndex.js';
 const DAY_MS = 86400000;
 const validSecret = (value, max) => typeof value === 'string' && value.length <= max && value.trim().length > 0 && !/[\x00-\x1f\x7f]/.test(value);
+// Exact attachment-and-image proofs from the two reviewed Stage deliveries.
+// The entries contain no customer IDs, photos, or source URLs.
+const reviewedInsidePhotoProofs = new Set([
+  'e1ed70714e074cbc61e83755a86d50c500e613e0a0bc23ecbd6f05b99104c9c5',
+  '35fda1063662a9204f2b9f9b0f7553da6e0e77b1e40b8320f6b1c2eeeef01d42'
+]);
 
 function taskSearchAllowed(url) {
   if (url.pathname !== '/api/bali/task') return false;
@@ -69,7 +75,7 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
     hasMemorySession:account?.hasSession ?? (() => cookieConfigured), prepareSession:account?.prepareSession,
     canPrepareSource:() => Boolean(account), prepareHistorySession:Boolean(account), prepareMediaSession:Boolean(account),
     listDeliveryMetadata, imageFetch:fetchImpl, deliveryOnly:true,
-    readIndexedHistory,
+    readIndexedHistory, reviewedInsidePhotoProofs:approvedStage ? reviewedInsidePhotoProofs : undefined,
     onSourceVerified:() => {
       if (account) account.markVerified();
       else if (legacyState !== 'AUTH_REQUIRED') legacyState = 'VERIFIED';

@@ -10,6 +10,7 @@ export const FRONT_DOOR_PHOTO_KIND = 'FRONT_DOOR_DELIVERY';
 export const INSIDE_PHOTO_KIND = 'INSIDE_DELIVERY';
 export const DELIVERY_PHOTO_KINDS = Object.freeze([FRONT_DOOR_PHOTO_KIND, INSIDE_PHOTO_KIND]);
 const FRONT_DOOR_PHOTO_LABEL = '상품을 잘 적치하셨나요? - 매장 문 앞';
+const INSIDE_CHECKLIST_PHOTO_LABEL = '냉장고 문은 잘 닫았나요?';
 export const PHOTO_KINDS = new Set(['REFRIGERATOR_DOOR', 'ENTRANCE_LOCK', ...DELIVERY_PHOTO_KINDS]);
 const fail = (code, status) => { throw new DeliveryPhotoError(code, status); };
 const cleanText = (value, max = 2000) => typeof value === 'string' ? value.slice(0, max) : '';
@@ -78,7 +79,7 @@ export const validDeliveryId = value => (typeof value === 'string' || Number.isS
 // carrier.enteringDatedAt and taskAttachments[{typeText,text,images:[{url}]}].
 // Live task ID equivalence and category labels require an authenticated one-record check.
 // This adapter performs no login and makes no request until explicitly injected and enabled.
-export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDeliveryMetadata, allowedImageHosts = [], categoryMap = {}, firstPhotoKind = null, readTaskStatusRecords = false, deliveryOnly = false, onIdentityVerified } = {}) {
+export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDeliveryMetadata, allowedImageHosts = [], categoryMap = {}, firstPhotoKind = null, readTaskStatusRecords = false, deliveryOnly = false, reviewedInsidePhotoProofs, onIdentityVerified } = {}) {
   if (typeof requestJson !== 'function' || typeof fetchImage !== 'function') fail('UNVERIFIED', 503);
   if (firstPhotoKind !== null && !PHOTO_KINDS.has(firstPhotoKind)) fail('UNVERIFIED', 503);
   const hosts = new Set(allowedImageHosts);
@@ -125,6 +126,20 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
     const fingerprint = createHash('sha256').update(url.origin + url.pathname).digest('hex');
     return { url, fingerprint };
   }
+  function reviewedInsidePhoto(identity, attachment, image) {
+    if (!readTaskStatusRecords || !reviewedInsidePhotoProofs?.size || !attachment.photoInsideCompletion ||
+        attachment.type !== 'INSIDE_PRODUCT' || attachment.typeText !== INSIDE_CHECKLIST_PHOTO_LABEL ||
+        !validDeliveryId(attachment.photoRecordId) || !validDeliveryId(attachment.id) || !validDeliveryId(image.id) ||
+        String(attachment.taskId) !== identity.deliveryId || String(image.taskId) !== identity.deliveryId ||
+        String(attachment.taskStatusRecordId) !== attachment.photoRecordId) return null;
+    let asset;
+    try { asset = mediaAsset(image.url); }
+    catch { return null; }
+    const proof = createHash('sha256').update(JSON.stringify(['DELIVERY_ADMIN_REVIEWED_INSIDE_V1',
+      identity.customerCode, identity.date, identity.deliveryId, attachment.photoRecordId,
+      String(attachment.id), String(image.id), asset.fingerprint])).digest('hex');
+    return reviewedInsidePhotoProofs.has(proof) ? asset : null;
+  }
   async function detail(identity, signal, history = false) {
     let task = unwrap(await bounded(requestJson(`/api/bali/task/${identity.deliveryId}`, { method: 'GET', signal, maxResponseBytes: 65536 }), signal));
     exact(task, identity);
@@ -151,19 +166,20 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
         if (history && (record.status !== 'COMPLETED' || !hasFrontDoorCompletion(record))) continue;
         if (!Array.isArray(record.taskAttachments)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
         if (history && !validDeliveryId(record.id)) fail('PHOTO_IDENTITY_UNVERIFIED', 503);
+        const recordId = validDeliveryId(record.id) ? String(record.id) : undefined;
         const recordFingerprint = createHash('sha256').update(JSON.stringify({source:'TASK_STATUS_RECORD', ...identity, recordIndex, id:record.id ?? null})).digest('hex');
         const frontDoor = hasFrontDoorCompletion(record);
         const inside = record.status === 'COMPLETED' && record.completeType === 'BASIC' && record.completeTypeText === '매장안';
         for (const attachment of record.taskAttachments) {
           if (!attachment || typeof attachment !== 'object' || Array.isArray(attachment)) fail('PHOTO_ATTACHMENTS_INVALID', 503);
-          const kind = !validDeliveryId(record.id) ? undefined :
+          const kind = !recordId ? undefined :
             frontDoor && attachment.typeText === FRONT_DOOR_PHOTO_LABEL && (attachment.type === undefined || attachment.type === 'FRONT_PRODUCT')
               ? FRONT_DOOR_PHOTO_KIND :
             !history && inside && attachment.type === 'INSIDE_PRODUCT' &&
               /^상품을 잘 적치하셨나요\? - 매장\s?안$/u.test(attachment.typeText) ? INSIDE_PHOTO_KIND : undefined;
           if (history && !kind) continue;
           attachments.push({...attachment, photoRecordFingerprint:recordFingerprint,
-            photoDeliveryKind:kind, photoRecordId:kind ? String(record.id) : undefined,
+            photoDeliveryKind:kind, photoRecordId:recordId,
             photoInsideCompletion:inside});
           if (attachments.length > 20) fail('PHOTO_ATTACHMENT_LIMIT_EXCEEDED', 503);
         }
@@ -200,21 +216,17 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
         let unverified = false, unreviewedInsideChecklist = false;
         for (const [attachmentIndex, attachment] of task.taskAttachments.entries()) {
           if (attachment.text) notes.push(cleanText(attachment.text));
-          if (scoped && kinds.has(attachment.typeText)) {
-            // Some indoor deliveries place product photos under inspection questions.
-            // Their presence is not proof of a delivery photo or an empty delivery.
-            if (readTaskStatusRecords && attachment.photoInsideCompletion && attachmentImages(attachment).length) {
-              unreviewedInsideChecklist = true;
-            }
-            continue;
-          }
+          const checklist = scoped && kinds.has(attachment.typeText);
+          if (checklist && (!readTaskStatusRecords || !attachment.photoInsideCompletion)) continue;
           const images = attachmentImages(attachment);
-          const kind = photoKind(attachment, false, scoped);
+          const kind = checklist ? INSIDE_PHOTO_KIND : photoKind(attachment, false, scoped);
+          if (checklist && images.length) unreviewedInsideChecklist = true;
           if (!kind && images.length) { unverified = true; continue; }
           for (const {imageIndex, childImageIndex, image} of images) {
             if (!permitted(task, attachmentIndex, imageIndex, childImageIndex)) continue;
-            const { fingerprint } = mediaAsset(image?.url);
-            photos.push({ kind, ...(DELIVERY_PHOTO_KINDS.includes(kind) ? {recordId:attachment.photoRecordId} : {}), ref: { kind, attachmentIndex, imageIndex, ...(childImageIndex === null ? {} : {childImageIndex}), fingerprint,
+            const asset = checklist ? reviewedInsidePhoto(identity, attachment, image) : mediaAsset(image.url);
+            if (!asset) continue;
+            photos.push({ kind, ...(DELIVERY_PHOTO_KINDS.includes(kind) ? {recordId:attachment.photoRecordId} : {}), ref: { kind, attachmentIndex, imageIndex, ...(childImageIndex === null ? {} : {childImageIndex}), fingerprint:asset.fingerprint,
               ...(readTaskStatusRecords === true ? {recordFingerprint:attachment.photoRecordFingerprint} : {}) } });
           }
         }
@@ -237,13 +249,13 @@ export function createDeliveryAdminPhotoSource({ requestJson, fetchImage, listDe
       const task = await detail(identity, signal, history);
       if (!permitted(task, ref.attachmentIndex, ref.imageIndex, ref.childImageIndex ?? null)) fail('PHOTO_FORBIDDEN', 403);
       const attachment = task.taskAttachments[ref.attachmentIndex];
-      if (readTaskStatusRecords === true && attachment?.photoRecordFingerprint !== ref.recordFingerprint) fail('PHOTO_NOT_FOUND', 404);
-      if (photoKind(attachment, history) !== ref.kind) fail('PHOTO_NOT_FOUND', 404);
+      if (!attachment || readTaskStatusRecords && attachment.photoRecordFingerprint !== ref.recordFingerprint) fail('PHOTO_NOT_FOUND', 404);
       const entry = attachmentImages(attachment).find(r => r.imageIndex === ref.imageIndex && r.childImageIndex === (ref.childImageIndex ?? null));
       if (!entry) fail('PHOTO_NOT_FOUND', 404);
-      const { url, fingerprint } = mediaAsset(entry.image.url);
-      if (!/^[a-f0-9]{64}$/.test(ref.fingerprint || '') || fingerprint !== ref.fingerprint) fail('PHOTO_NOT_FOUND', 404);
-      return bounded(fetchImage(url.href, { method: 'GET', redirect: 'error', credentials: 'omit', signal }), signal);
+      const asset = photoKind(attachment, history) === ref.kind ? mediaAsset(entry.image.url) :
+        !history && ref.kind === INSIDE_PHOTO_KIND ? reviewedInsidePhoto(identity, attachment, entry.image) : null;
+      if (!asset || asset.fingerprint !== ref.fingerprint) fail('PHOTO_NOT_FOUND', 404);
+      return bounded(fetchImage(asset.url.href, { method: 'GET', redirect: 'error', credentials: 'omit', signal }), signal);
     }
   };
 }

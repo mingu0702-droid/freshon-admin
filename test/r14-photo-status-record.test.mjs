@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {createDeliveryAdminPhotoSource} from '../src/opsmapDeliveryPhotos.js';
 import {createDeliveryAdminPhotoTransport, DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, DELIVERY_ADMIN_PHOTO_HOSTS} from '../src/opsmapDeliveryAdminTransport.js';
 
@@ -7,13 +8,14 @@ const identity={customerCode:'S990001',date:'2026-11-04',deliveryId:'990001'};
 const attachment={typeText:'냉장고 문은 잘 닫았나요?',images:[{url:'https://static.chabyulhwa.com/synthetic.jpg?signature=DO_NOT_DISCLOSE'}]};
 const parent=()=>({id:identity.deliveryId,customer:{erpCode:identity.customerCode},carrier:{enteringDatedAt:identity.date}});
 const record=()=>({id:'1990001',taskId:identity.deliveryId,createdAt:'2026-11-05T01:00:00+09:00',taskAttachments:[attachment]});
-function fixture({records=()=>[record()],getParent=parent,enabled=true}={}){
+function fixture({records=()=>[record()],getParent=parent,enabled=true,deliveryOnly=false,reviewedInsidePhotoProofs}={}){
   const paths=[];let medias=0;
   const transport=createDeliveryAdminPhotoTransport({hasApprovedSession:()=>true,approvedRequest:async(path,options)=>{
     paths.push(path);assert.equal(options.method,'GET');assert(options.signal instanceof AbortSignal);assert.equal(options.maxResponseBytes,65536);
     return Response.json({data:path.endsWith('/status-record')?records():getParent()});
   },imageFetch:async()=>{medias++;return new Response(new Uint8Array([1]),{headers:{'content-type':'image/jpeg'}});}});
-  return {paths,medias:()=>medias,source:createDeliveryAdminPhotoSource({...transport,categoryMap:DELIVERY_ADMIN_PHOTO_CATEGORY_MAP,allowedImageHosts:DELIVERY_ADMIN_PHOTO_HOSTS,readTaskStatusRecords:enabled})};
+  return {paths,medias:()=>medias,source:createDeliveryAdminPhotoSource({...transport,categoryMap:DELIVERY_ADMIN_PHOTO_CATEGORY_MAP,
+    allowedImageHosts:DELIVERY_ADMIN_PHOTO_HOSTS,readTaskStatusRecords:enabled,deliveryOnly,reviewedInsidePhotoProofs})};
 }
 test('operational attachments bind to the exact parent first and status-record ID/createdAt remain separate from task identity',async()=>{
   const f=fixture();const rows=await f.source.list(identity);assert.equal(rows[0].status,'READY');assert.equal(rows[0].photos.length,1);
@@ -39,6 +41,39 @@ test('media revalidation binds both the status-record source fingerprint and the
     let changed=false;const f=fixture({records:()=>[changed?mutate(record()):record()]});const rows=await f.source.list(identity);changed=true;
     await assert.rejects(f.source.openMedia(identity,rows[0].photos[0].ref),{code:'PHOTO_NOT_FOUND'});assert.equal(f.medias(),0);
   }
+});
+test('each reviewed indoor photo must match its task, completion record, attachment and exact image on list and media',async()=>{
+  const hash=value=>createHash('sha256').update(value).digest('hex');
+  const taskId=identity.deliveryId, completed=record();
+  const image={id:'101',taskId,url:'https://static.chabyulhwa.com/product.jpg?signature=first'};
+  const checklist={...attachment,id:'17',taskId,taskStatusRecordId:completed.id,type:'INSIDE_PRODUCT',
+    images:[{...image,id:'102',url:'https://static.chabyulhwa.com/check.jpg'},image]};
+  const lock={...checklist,type:'INSIDE_DOOR',typeText:'매장 출입문은 잘 잠궜나요?',images:[image]};
+  const proof=hash(JSON.stringify(['DELIVERY_ADMIN_REVIEWED_INSIDE_V1',identity.customerCode,identity.date,taskId,
+    completed.id,checklist.id,image.id,hash('https://static.chabyulhwa.com/product.jpg')]));
+  let current={...checklist};
+  const options={deliveryOnly:true,records:()=>[{...completed,status:'COMPLETED',completeType:'BASIC',completeTypeText:'매장안',
+    taskAttachments:[current,lock]}]};
+  assert.equal((await fixture(options).source.list(identity))[0].status,'UNVERIFIED');
+  const f=fixture({...options,reviewedInsidePhotoProofs:new Set([proof])});
+  const [row]=await f.source.list(identity);
+  assert.equal(row.status,'READY');
+  assert.equal(row.photos.length,1);
+  assert.equal(row.photos[0].kind,'INSIDE_DELIVERY');
+  assert.equal(row.photos[0].recordId,completed.id);
+  assert.equal(row.photos[0].ref.imageIndex,1);
+  const changed=patch=>[checklist.images[0],{...image,...patch}];
+  current={...checklist,images:changed({url:image.url.replace('first','rotated')})};
+  assert.equal((await f.source.openMedia(identity,row.photos[0].ref)).status,200);
+  for(const patch of [{id:'18'},{taskId:'12'},{taskStatusRecordId:'12'},
+    {images:changed({taskId:'12'})},{images:changed({id:'103'})},{images:changed({url:'https://static.chabyulhwa.com/replaced.jpg'})}]){
+    current={...checklist,...patch};
+    const [changedRow]=await f.source.list(identity);
+    assert.equal(changedRow.status,'UNVERIFIED');
+    assert.deepEqual(changedRow.photos,[]);
+    await assert.rejects(f.source.openMedia(identity,row.photos[0].ref),{code:'PHOTO_NOT_FOUND'});
+  }
+  assert.equal(f.medias(),1);
 });
 test('aborted status-record requests cancel late bodies and do not continue to media',async()=>{
   let resolveLate,observed,cancelled=false;const pending=new Promise(r=>{resolveLate=r;});

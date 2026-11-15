@@ -56,7 +56,7 @@ export function createOperationalPhotoMetadataReader({readTaskRows, defaultDate,
 // staff/session checks, exact identity checks, stream limits and host checks remain.
 export function createOperationalPhotoExtension({enabled = false, rawRequest,
   hasMemorySession, prepareSession, prepareHistorySession = false, prepareMediaSession = false, canPrepareSource, listDeliveryMetadata,
-  onSourceVerified, readIndexedHistory, deliveryOnly = false, imageFetch = globalThis.fetch} = {}) {
+  onSourceVerified, readIndexedHistory, deliveryOnly = false, reviewedInsidePhotoProofs, imageFetch = globalThis.fetch} = {}) {
   const isEnabled = () => typeof enabled === 'function' ? enabled() === true : enabled === true;
   const hasSession = () => isEnabled() && typeof hasMemorySession === 'function' && hasMemorySession() === true;
   const ensureSession = async (identity, {signal} = {}) => {
@@ -89,7 +89,7 @@ export function createOperationalPhotoExtension({enabled = false, rawRequest,
   };
   const photoSource = createDeliveryAdminPhotoSource({...transport, requestJson, listDeliveryMetadata: metadata,
     categoryMap: DELIVERY_ADMIN_PHOTO_CATEGORY_MAP, allowedImageHosts: DELIVERY_ADMIN_PHOTO_HOSTS, readTaskStatusRecords:true, deliveryOnly,
-    onIdentityVerified:onSourceVerified});
+    reviewedInsidePhotoProofs, onIdentityVerified:onSourceVerified});
   const readHistory = createDeliveryPhotoHistoryReader({
     searchFrontDoorTasks:transport.searchFrontDoorTasks, listHistoryRecord:photoSource.listHistoryRecord
   });
