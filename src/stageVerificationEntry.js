@@ -530,6 +530,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         postal:stage.OPSMAP_SHADOW_COVERAGE_FORMAT==='postal'?{directory:stage.OPSMAP_SHADOW_POSTAL_DIR,
           boundarySha256:stage.OPSMAP_SHADOW_POSTAL_BOUNDARY_SHA256,releaseSha256:stage.OPSMAP_SHADOW_POSTAL_RELEASE_SHA256,
           detailsDirectory:stage.OPSMAP_SHADOW_POSTAL_DETAILS_DIR,detailsIndexSha256:stage.OPSMAP_SHADOW_POSTAL_DETAILS_SHA256,
+          overviewDirectory:stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_DIR,overviewSha256:stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_SHA256,
           readFixed:codes=>base.get(codes)}:undefined,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>snapshot && {count:snapshot.rows.length,asOf:snapshot.latestDate}});

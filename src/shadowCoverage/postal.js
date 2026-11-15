@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join } from 'node:path';
 import { realpath } from 'node:fs/promises';
+import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { gunzip as decompress } from 'node:zlib';
 import { boundedRead, datesFor, isDay, parseCoverageIndex, PERIODS, privateCoverageDirectory, readStoredCoverageFile } from './coverageFiles.js';
@@ -36,6 +37,30 @@ async function verifiedRead(path, proof, limit, length) {
   const bytes = await boundedRead(path, limit);
   requireValid((length === undefined || bytes.length === length) && hash(bytes) === proof);
   return bytes;
+}
+
+async function openOverview(directory, proof, appRoot, boundary, baseTiles) {
+  if (!directory && !proof) return null;
+  requireValid(isAbsolute(directory || '') && sha.test(proof || ''));
+  const folder = await privateCoverageDirectory(directory,appRoot);
+  const index = JSON.parse(await verifiedRead(join(folder,'overview-index.json'),proof,64 * 1024));
+  const originals = [...baseTiles.values()].filter(tile => tile.id.startsWith('national-'));
+  requireValid(index?.schema === 'opsmap-postal-overview-v1' && index.boundary === boundary &&
+    index.projection === 'EPSG:5181*2.5' && Array.isArray(index.tiles) && index.tiles.length === originals.length &&
+    index.count === sum(originals.map(tile => tile.count)));
+  const tiles = new Map();
+  for (const tile of index.tiles) {
+    const id = tile?.id;
+    const original = typeof id === 'string' && /^overview-\d{1,3}-\d{1,3}-\d{1,2}$/.test(id) &&
+      baseTiles.get(id.replace('overview-','national-'));
+    requireValid(original && !tiles.has(id) && tile.count === original.count && sha.test(tile.sha256) &&
+      Number.isInteger(tile.vertices) && tile.vertices >= 3 * tile.count && tile.vertices <= original.rawBytes / 8 &&
+      Number.isInteger(tile.rawBytes) && tile.rawBytes > 4 && tile.rawBytes <= POSTAL_TILE_LIMIT &&
+      Number.isInteger(tile.bytes) && tile.bytes > 0 && tile.bytes <= POSTAL_TILE_LIMIT);
+    tiles.set(id,{ ...tile, box:original.box, folder });
+  }
+  requireValid(index.vertices === sum([...tiles.values()].map(tile => tile.vertices)));
+  return { tiles, proof };
 }
 
 export function classifyPostalZone({ visits, registered, eligible }, areaKm2) {
@@ -204,6 +229,7 @@ function createScope(release, codes, areas, days, center, totalAreas) {
 }
 
 export function createPostalRuntime({ directory, boundarySha256, releaseSha256, appRoot, readDirectory, detailsDirectory, detailsIndexSha256, readFixed,
+  overviewDirectory, overviewSha256,
   now = Date.now } = {}) {
   let loaded, loadFlight, indexFlight, resolvedIndex, indexChecked = 0, scope, bulk = 0;
   let storeDetails;
@@ -238,11 +264,14 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
         }
         requireValid(count === manifest.count);
       }
-      const areas = await verifiedRead(join(geometry, 'areas.bin'), manifest.areas.sha256, manifest.areas.bytes, manifest.areas.bytes);
-      const compressed = await verifiedRead(join(root, 'postal-release.json.gz'), releaseSha256, 1024 * 1024);
+      const [areas, compressed, overview] = await Promise.all([
+        verifiedRead(join(geometry,'areas.bin'),manifest.areas.sha256,manifest.areas.bytes,manifest.areas.bytes),
+        verifiedRead(join(root,'postal-release.json.gz'),releaseSha256,1024 * 1024),
+        openOverview(overviewDirectory,overviewSha256,appRoot,boundarySha256,tiles),
+      ]);
       const release = JSON.parse(await gunzip(compressed, { maxOutputLength: maxReleaseBytes }));
       const codes = checkRelease(release, boundarySha256, areas);
-      return loaded = { manifest, tiles, areas, release, codes, geometry };
+      return loaded = { manifest, tiles, areas, release, codes, geometry, overview };
     })().finally(() => { loadFlight = null; });
     return loadFlight;
   }
@@ -260,18 +289,22 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
     return indexFlight;
   }
 
-  async function ready(days, center, expected) {
+  async function ready(days, center, expected, timing) {
+    const started = performance.now();
     const [opened, { index }] = await Promise.all([assets(), activeIndex()]);
+    if (timing) timing.postal_source = performance.now() - started;
     const { release, areas, codes, manifest } = opened;
     if (expected && expected !== index.sha256) throw Error('COVERAGE_GENERATION_CHANGED');
     if (release.generation !== index.sha256 || release.catalog !== index.catalog.sha256 || release.asOf !== index.asOf) {
       throw Error('POSTAL_GENERATION_MISMATCH');
     }
     const key = [days, center].join(':');
+    const joined = performance.now();
     if (scope?.key !== key) {
       const next = createScope(release, codes, areas, days, center, manifest.count);
       scope = { key, ...next };
     }
+    if (timing) timing.postal_scope = performance.now() - joined;
     return { ...opened, scope };
   }
 
@@ -286,7 +319,7 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
     if (pending.size >= 12) throw Error('POSTAL_READ_BUSY');
     const work = (async () => {
       reads++;
-      const file = join(opened.geometry, tile.id + '.gz');
+      const file = join(tile.folder || opened.geometry,tile.id + '.gz');
       const bytes = await verifiedRead(file, tile.sha256, tile.bytes, tile.bytes);
       while (tileCache.size && tileBytes + bytes.length > POSTAL_TILE_CACHE_BYTES) {
         const oldest = tileCache.keys().next().value;
@@ -341,17 +374,21 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
 
   return {
     async warm() { await Promise.all([assets(), activeIndex()]); },
-    async view({ days, center, generation, box }) {
-      const opened = await ready(days, center, generation);
+    async view({ days, center, generation, box, indexed, timing }) {
+      const opened = await ready(days,center,generation,timing);
+      const selectedAt = performance.now();
       const { scope, manifest, release } = opened;
       const tier = postalTilesLevel(box);
-      const selectedTiles = manifest.tiers[tier].filter(tile => intersects(tile.box, box));
-      return {
+      const overview = tier === 'national' && indexed ? opened.overview : null;
+      const selectedTiles = [...(overview?.tiles.values() || manifest.tiers[tier])]
+        .filter(tile => intersects(tile.box,box));
+      const data = {
         generation: release.generation, boundary: boundarySha256, source: manifest.source, tier,
         period: { days, start: release.periods[days].start, end: release.asOf }, sourceObservedAt: release.sourceObservedAt,
         stale: now() - Date.parse(release.sourceObservedAt) > 36 * 3600000,
         densityHighAt: POSTAL_DENSITY_HIGH, completeness: scope.completeness, summary: scope.summary,
-        tiles: selectedTiles.map(({ id, rawBytes }) => [id, rawBytes]),
+        ...(overview ? { overview:overview.proof } : {}),
+        tiles: selectedTiles.map(({ id, rawBytes, vertices }) => overview ? [id,rawBytes,vertices] : [id,rawBytes]),
         tones: [...scope.groups].filter(([, group]) => group.status !== 'UNKNOWN' && intersects(group.place.box, box))
           .map(([id, group]) => [id, group.status]),
         candidates: scope.candidates.slice(0, 24).map(([id]) => detail(opened, id)),
@@ -359,16 +396,24 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
           (group.newActive || group.newUnknown || group.held) && intersects(group.place.box, box))
           .slice(0, 180).map(([id, group]) => [id, group.place.location, group.newActive, group.newUnknown, group.held]),
       };
+      if (timing) timing.postal_viewport = performance.now() - selectedAt;
+      return data;
     },
-    async tiles(ids, version, acceptGzip) {
+    async tiles(ids, version, acceptGzip, timing) {
       const opened = await assets();
-      if (version !== boundarySha256 || !ids.length || ids.length > 32 || new Set(ids).size !== ids.length) throw Error('POSTAL_QUERY_INVALID');
-      const files = ids.map(id => opened.tiles.get(id));
+      const index = version === boundarySha256 ? opened.tiles :
+        opened.overview && version === opened.overview.proof ? opened.overview.tiles : null;
+      if (!index || !ids.length || ids.length > 32 || new Set(ids).size !== ids.length) throw Error('POSTAL_QUERY_INVALID');
+      const files = ids.map(id => index.get(id));
       if (files.some(file => !file) || sum(files.map(file => file.rawBytes)) > POSTAL_MAX_BATCH_BYTES) throw Error('POSTAL_QUERY_INVALID');
       return withBatch(async () => {
+        const started = performance.now();
         const chunks = [];
-        for (const file of files) chunks.push(await getTile(opened, file));
+        for (let i = 0; i < files.length; i += 2) {
+          chunks.push(...await Promise.all(files.slice(i,i + 2).map(file => getTile(opened,file))));
+        }
         const bytes = Buffer.concat(chunks);
+        if (timing) timing.postal_tile_read = performance.now() - started;
         return acceptGzip ? bytes : gunzip(bytes, { maxOutputLength: POSTAL_MAX_BATCH_BYTES });
       });
     },
@@ -382,9 +427,10 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       const opened = await ready(args.days,args.center,args.generation);
       return (await detailReader()).history({ ...args, opened });
     },
-    async point({ days, center, generation, lat, lng, radius }) {
-      const opened = await ready(days, center, generation);
+    async point({ days, center, generation, lat, lng, radius, timing }) {
+      const opened = await ready(days,center,generation,timing);
       return withBatch(async () => {
+        const started = performance.now();
         let id = null, best = 0, ties = false;
         const box = [lng, lat, lng, lat];
         for (const tile of opened.manifest.tiers.detail) {
@@ -402,6 +448,7 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
           const { stores } = await catalogData(loaded);
           area.nearby = { radius, registered: registeredWithin(stores, opened.codes, center, [lat, lng], radius) };
         }
+        if (timing) timing.postal_point_join = performance.now() - started;
         return { state: ties ? 'AMBIGUOUS' : id === null ? 'OUTSIDE' : 'MATCHED', area };
       });
     },

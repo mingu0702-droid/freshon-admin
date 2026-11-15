@@ -28,9 +28,11 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
       const started = performance.now();
       try {
         const modules = await load();
-        const value = await perform(req, scope, modules);
+        const timing = {};
+        const value = await perform(req,scope,modules,timing);
         if (res.destroyed || res.writableEnded) return;
-        res.set('Server-Timing', 'postal;dur=' + (performance.now() - started).toFixed(2));
+        const parts = Object.entries({ postal:performance.now() - started, ...timing });
+        res.set('Server-Timing',parts.map(([key, ms]) => key + ';dur=' + ms.toFixed(2)).join(', '));
         const respond = () => send(res, value);
         return staffResponseGuarded ? respond() : requireStaff(req, res, respond);
       } catch (problem) {
@@ -50,21 +52,22 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
       }
     });
   }
-  route('/view', (req, scope, { runtime, postalBounds }) => {
-    const { box, level } = req.query;
+  route('/view', (req, scope, { runtime, postalBounds }, timing) => {
+    const { box, level, indexed } = req.query;
     if (typeof box !== 'string' || box.length > 100 || !/^-?\d+(\.\d+)?(,-?\d+(\.\d+)?){3}$/.test(box) ||
-        typeof level !== 'string' || !/^(?:[1-9]|1[01234])$/.test(level)) throw Error('POSTAL_QUERY_INVALID');
+        typeof level !== 'string' || !/^(?:[1-9]|1[01234])$/.test(level) ||
+        indexed !== undefined && indexed !== '1') throw Error('POSTAL_QUERY_INVALID');
     const coords = box.split(',').map(Number);
     if (!postalBounds(coords)) throw Error('POSTAL_QUERY_INVALID');
-    return runtime.view({ ...scope, box: coords, level: Number(level) });
+    return runtime.view({ ...scope, box:coords, indexed:indexed === '1', timing });
   });
-  route('/geometry', async (req, _scope, { runtime }) => {
+  route('/geometry', async (req, _scope, { runtime }, timing) => {
     const { ids, v } = req.query;
     if (typeof ids !== 'string' || ids.length > 950 || typeof v !== 'string' || !hash.test(v)) {
       throw Error('POSTAL_QUERY_INVALID');
     }
     const gzip = req.acceptsEncodings('gzip', 'identity') === 'gzip';
-    return { bytes: await runtime.tiles(ids.split(','), v, gzip), gzip };
+    return { bytes:await runtime.tiles(ids.split(','),v,gzip,timing), gzip };
   }, (res, { bytes, gzip }) => {
     if (gzip) res.set('Content-Encoding', 'gzip');
     res.set('X-Content-Type-Options', 'nosniff').vary('Accept-Encoding').type('application/octet-stream').send(bytes);
@@ -93,7 +96,7 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     if (typeof code !== 'string' || !/^[A-Z]\d{1,20}$/.test(code)) throw Error('POSTAL_QUERY_INVALID');
     return runtime.history({ ...memberScope(req,scope), code });
   });
-  route('/point', (req, scope, { runtime }) => {
+  route('/point', (req, scope, { runtime }, timing) => {
     const point = req.get('X-Map-Coverage-Point') || '';
     const radius = req.query.radius ?? '0';
     if (!/^[-]?\d{1,3}(?:\.\d{1,12})?,-?\d{1,3}(?:\.\d{1,12})?$/.test(point) || !['0','500','1000'].includes(radius)) {
@@ -101,7 +104,7 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     }
     const [lat, lng] = point.split(',').map(Number);
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) throw Error('POSTAL_QUERY_INVALID');
-    return runtime.point({ ...scope, lat, lng, radius: Number(radius) });
+    return runtime.point({ ...scope, lat, lng, radius:Number(radius), timing });
   });
   route('/search', (req, scope, { runtime }) => {
     let query;

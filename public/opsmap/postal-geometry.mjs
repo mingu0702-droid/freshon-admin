@@ -103,6 +103,54 @@ export function decodePostalTile(buffer) {
   return zones;
 }
 
+export function decodePostalOverview(bytes, vertices) {
+  if (bytes[0] !== 80 || bytes[1] !== 67 || bytes[2] !== 79 || bytes[3] !== 49 ||
+      !Number.isInteger(vertices) || vertices < 3 || vertices > POSTAL_TILE_LIMIT / 8) {
+    throw Error('POSTAL_OVERVIEW_TILE_INVALID');
+  }
+  let offset = 4, at = 0;
+  const points = new Int32Array(vertices * 2);
+  function read() {
+    let value = 0;
+    for (let shift = 0; shift <= 28 && offset < bytes.length; shift += 7) {
+      const byte = bytes[offset++];
+      if (shift === 28 && byte > 15) break;
+      value |= (byte & 127) << shift;
+      if (byte < 128) return value >>> 0;
+    }
+    throw Error('POSTAL_OVERVIEW_TILE_INVALID');
+  }
+  const count = read();
+  if (count < 1 || count > 10000 || count * 3 > vertices) throw Error('POSTAL_OVERVIEW_TILE_INVALID');
+  const zones = [];
+  for (let i = 0; i < count; i++) {
+    const id = read(), ringCount = read();
+    if (id < 1000 || id > 99999 || ringCount < 1 || ringCount > 800) throw Error('POSTAL_OVERVIEW_TILE_INVALID');
+    const rings = [];
+    let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
+    for (let j = 0; j < ringCount; j++) {
+      const size = read();
+      if (size < 3 || at + size * 2 > points.length) throw Error('POSTAL_OVERVIEW_TILE_INVALID');
+      const start = at;
+      let x = 0, y = 0;
+      for (let k = 0; k < size; k++) {
+        const dx = read(), dy = read();
+        x += dx % 2 ? -(dx + 1) / 2 : dx / 2;
+        y += dy % 2 ? -(dy + 1) / 2 : dy / 2;
+        if (Math.abs(x) > 2e6 || Math.abs(y) > 2e6) throw Error('POSTAL_OVERVIEW_TILE_INVALID');
+        points[at++] = x;
+        points[at++] = y;
+        west = Math.min(west,x); east = Math.max(east,x);
+        south = Math.min(south,y); north = Math.max(north,y);
+      }
+      rings.push(points.subarray(start,at));
+    }
+    zones.push({ id, box:[west,south,east,north], rings });
+  }
+  if (at !== points.length || offset !== bytes.length) throw Error('POSTAL_OVERVIEW_TILE_INVALID');
+  return zones;
+}
+
 export function postalTilePosition(zone, lng, lat) {
   const x = lng * px, y = lat * px;
   if (!intersects(zone.box, [x, y, x, y])) return 0;

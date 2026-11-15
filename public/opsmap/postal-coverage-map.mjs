@@ -1,4 +1,4 @@
-import { decodePostalTile, intersects, postalTilesLevel } from './postal-geometry.mjs';
+import { decodePostalOverview, decodePostalTile, intersects, postalTilesLevel } from './postal-geometry.mjs';
 
 const viewportCacheLimit = 16 * 1024 * 1024;
 const MAX_REQUEST_BYTES = 3 * 1024 * 1024;
@@ -10,6 +10,28 @@ const styles = {
 };
 const svgNS = 'http://www.w3.org/2000/svg';
 const projectionCacheLimit = 150000;
+
+// The index stores the public SDK's WCONG plane. Verify its pixel transform
+// against the active native projection before advertising support.
+export function postalWorldProjection(maps, projection, center) {
+  if (typeof center.toCoords !== 'function' || typeof maps.Coords !== 'function') return null;
+  try {
+    const { x: ox, y: oy } = projection.pointFromCoords(center);
+    const world = center.toCoords(), x = world.getX(), y = world.getY();
+    const step = 1_048_576;
+    const project = (a,b) => projection.pointFromCoords(new maps.Coords(a,b).toLatLng());
+    const east = project(x + step,y), north = project(x,y + step);
+    const sx = (east.x - ox) / step, sy = (oy - north.y) / step;
+    if (!(sx > 0 && sy > 0) || Math.abs(east.y - oy) > 1 || Math.abs(north.x - ox) > 1) return null;
+    for (const [dx,dy] of [[-step / 2,step / 2],[step / 3,-step / 2]]) {
+      const sample = project(x + dx,y + dy);
+      if (Math.abs(sample.x - (ox + dx * sx)) > 1 || Math.abs(sample.y - (oy - dy * sy)) > 1) return null;
+    }
+    return { x,y,sx,sy };
+  } catch {
+    return null;
+  }
+}
 
 function rasterOutline(ctx, width, height) {
   const pixels = ctx.createImageData(width, height);
@@ -33,7 +55,7 @@ function rasterOutline(ctx, width, height) {
 
 export function createPostalGeometryReader(api) {
   const cache = new Map(), pending = new Map();
-  let bytes = 0;
+  let bytes = 0, transferMs = 0, parseMs = 0;
   function retain(key, payload) {
     if (cache.has(key)) {
       bytes -= cache.get(key).bytes;
@@ -62,22 +84,28 @@ export function createPostalGeometryReader(api) {
       // Geometry is immutable by boundary hash. A new viewport can share a pending batch.
       const batchSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(16000)]);
       entry.work = (async () => {
+        const started = performance.now();
         const query = new URLSearchParams({ v: boundary, ids });
         const response = await fetch(api + '/geometry?' + query, { signal:batchSignal, cache:'no-store' });
         if (!response.ok) throw Object.assign(Error('POSTAL_GEOMETRY_UNAVAILABLE'), { status:response.status });
         const buffer = await response.arrayBuffer();
         batchSignal.throwIfAborted();
         if (buffer.byteLength !== length) throw Error('POSTAL_GEOMETRY_SIZE');
+        const received = performance.now();
         const tiles = new Map();
         let offset = 0;
-        for (const [id, size] of list) {
-          const zones = decodePostalTile(buffer.slice(offset, offset + size));
-          const occupied = size + zones.length * 176 + zones.reduce((count, zone) => count + zone.rings.length * 72, 0);
+        for (const [id, size, vertices] of list) {
+          const zones = vertices ? decodePostalOverview(new Uint8Array(buffer,offset,size),vertices)
+            : decodePostalTile(buffer.slice(offset,offset + size));
+          const occupied = (vertices ? vertices * 8 : size) + zones.length * 176 +
+            zones.reduce((count, zone) => count + zone.rings.length * 72, 0);
           const item = { zones, bytes:occupied };
           tiles.set(id,item);
           retain(boundary + ':' + id,item);
           offset += size;
         }
+        transferMs = received - started;
+        parseMs = performance.now() - received;
         return tiles;
       })().finally(() => { if (pending.get(key) === entry) pending.delete(key); });
       pending.set(key,entry);
@@ -92,8 +120,9 @@ export function createPostalGeometryReader(api) {
       signal.throwIfAborted();
       const found = new Map();
       const missing = [];
+      const version = view.overview || view.boundary;
       for (const tile of view.tiles) {
-        const key = view.boundary + ':' + tile[0];
+        const key = version + ':' + tile[0];
         const saved = cache.get(key);
         if (saved) {
           cache.delete(key);
@@ -110,7 +139,7 @@ export function createPostalGeometryReader(api) {
           length += tile[1];
         }
         if (!list.length) throw Error('POSTAL_GEOMETRY_BUDGET');
-        for (const [id, item] of await readBatch(view.boundary,list,length,signal)) found.set(id,item);
+        for (const [id, item] of await readBatch(version,list,length,signal)) found.set(id,item);
       }
       return view.tiles.map(([id]) => found.get(id).zones);
     },
@@ -118,9 +147,10 @@ export function createPostalGeometryReader(api) {
       for (const entry of pending.values()) entry.controller.abort();
       pending.clear();
       cache.clear();
-      bytes = 0;
+      bytes = transferMs = parseMs = 0;
     },
-    metrics: () => ({ bytes, tiles: cache.size, limit: viewportCacheLimit }),
+    metrics: () => ({ bytes, tiles: cache.size, limit: viewportCacheLimit,
+      transferMs:+transferMs.toFixed(2), parseMs:+parseMs.toFixed(2) }),
   };
 }
 
@@ -152,7 +182,9 @@ export function createPostalMap(host, maps, { idle, select }) {
     const bounds = base.getBounds();
     const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
     const box = [sw.getLng(), sw.getLat(), ne.getLng(), ne.getLat()];
-    return { box, level: Math.max(1, Math.min(14, Math.round(base.getLevel()))) };
+    const world = postalTilesLevel(box) === 'national'
+      ? postalWorldProjection(maps,overlay.getProjection(),base.getCenter()) : null;
+    return { box, level: Math.max(1, Math.min(14, Math.round(base.getLevel()))), world };
   }
 
   function translate() {
@@ -171,7 +203,10 @@ export function createPostalMap(host, maps, { idle, select }) {
         const commands = [];
         for (const ring of selectedGeometry.rings) {
           for (let i = 0; i < ring.length; i += 2) {
-            const point = projection.pointFromCoords(new maps.LatLng(ring[i + 1] / 1e6, ring[i] / 1e6));
+            const coords = scene.overview
+              ? new maps.Coords(ring[i],ring[i + 1]).toLatLng()
+              : new maps.LatLng(ring[i + 1] / 1e6,ring[i] / 1e6);
+            const point = projection.pointFromCoords(coords);
             commands.push((i ? 'L' : 'M') + (point.x - origin.x).toFixed(2) + ' ' + (point.y - origin.y).toFixed(2));
           }
           commands.push('Z');
@@ -200,6 +235,7 @@ export function createPostalMap(host, maps, { idle, select }) {
     const started = performance.now();
     const current = viewport(), { level } = current;
     if (scene.tier !== postalTilesLevel(current.box.map(value => Number(value.toFixed(5))))) { translate(); return; }
+    if (scene.overview && !current.world) { translate(); idle(); return; }
     const width = Math.ceil(host.clientWidth), height = Math.ceil(host.clientHeight);
     if (!width || !height) return;
     const anchor = base.getCenter();
@@ -215,7 +251,7 @@ export function createPostalMap(host, maps, { idle, select }) {
     function finish(shown, vertices, cached) {
       rendered = { anchor, width, height, level, shown, vertices, key };
       updateSelection();
-      host.dataset.postalDraw = JSON.stringify({ count: ++totalDraws, shown, vertices, level, cached,
+      host.dataset.postalDraw = JSON.stringify({ count: ++totalDraws, shown, vertices, level, cached, indexed:Boolean(scene.overview),
         tier: scene.tier, drawMs: +(performance.now() - started).toFixed(2) });
     }
     if (rendered?.key === key) { finish(rendered.shown, rendered.vertices, true); return; }
@@ -234,12 +270,17 @@ export function createPostalMap(host, maps, { idle, select }) {
     const projection = overlay.getProjection();
     const origin = projection.pointFromCoords(anchor);
     const xOffset = width / 2 - origin.x, yOffset = height / 2 - origin.y;
-    const viewportBox = current.box.map(v => Math.round(v * 1e6));
+    const world = scene.overview ? current.world : null;
+    const viewportBox = world ? [world.x - (width/2 + 1) / world.sx, world.y - (height/2 + 1) / world.sy,
+      world.x + (width/2 + 1) / world.sx,world.y + (height/2 + 1) / world.sy]
+      : current.box.map(v => Math.round(v * 1e6));
     const tones = Object.fromEntries(Object.keys(styles).map(k => [k, new Path2D()]));
     const outline = scene.tier === 'detail' ? null : rasterOutline(ctx, surface.width, surface.height);
-    const verticesAt = outline ? new Map() : null;
+    const verticesAt = outline && !world ? new Map() : null;
     let shown = 0, vertices = 0;
     function vertex(lng, lat) {
+      if (world) return [Math.round(((lng - world.x) * world.sx + width/2) * dpr) / dpr,
+        Math.round(((world.y - lat) * world.sy + height/2) * dpr) / dpr];
       // Signed E6 coordinates fit exactly in this integer key throughout the validated source extent.
       const key = (lat - 32_000_000) * 10_000_001 + lng - 123_000_000;
       const known = verticesAt?.get(key);
@@ -365,9 +406,9 @@ export function createPostalMap(host, maps, { idle, select }) {
       }
     },
     show(view, geometry) {
-      const version = [view.generation, view.boundary, view.period.days, view.center].join(':');
+      const version = [view.generation,view.overview || view.boundary,view.period.days,view.center].join(':');
       if (scene?.version !== version) clearProjected();
-      scene = { version, tier: view.tier, tones: new Map(view.tones), badges: view.badges, geometry };
+      scene = { version, tier:view.tier, overview:view.overview, tones:new Map(view.tones), badges:view.badges, geometry };
       schedule();
     },
     select(area) { selected = area; updateSelection(); },

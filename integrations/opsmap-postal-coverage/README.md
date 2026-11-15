@@ -44,7 +44,19 @@ node --max-old-space-size=320 scripts/prepare-opsmap-postal-details.mjs $newPriv
 ```
 
 5. 새 원장 세대에는 2~4단계를 다시 실행합니다. 원장·경계·집계 세대가 다르면 상세 API는 503을 반환합니다. 화면은 조회 실패 시각과 같은 조회 조건의 이전 정상 시각을 구분합니다. 묶음은 실제 고객코드 및 집계 자료를 포함하므로 비공개로 보관합니다.
-6. 실제 Render에서 전체 앱 메모리와 첫 화면을 확인합니다. 연결을 되돌릴 때는 `OPSMAP_SHADOW_COVERAGE_FORMAT`의 `postal` 설정을 해제해 기존 H3를 선택합니다.
+6. 실제 Render에서 전체 앱 메모리와 첫 화면을 확인합니다. 이번 후보의 선택 방식은 5자리 우편번호로 유지합니다.
+
+## 불변 전국 표시 인덱스
+
+공식 도형에서 생성한 우편번호 릴리스의 경계 해시를 입력합니다. 스크립트는 봉인된 전국 타일을 검증하고, 투영된 좌표를 델타 인코딩한 별도 표시 묶음을 만듭니다. 정점과 우편번호 ID를 유지합니다. 실제 매장 매칭과 클릭 판정은 기존 상세 경계를 사용합니다.
+
+```powershell
+python scripts/prepare-opsmap-postal-overview.py (Join-Path $newPrivatePackage geometry) $boundaryManifestSha $newPrivateOverview
+```
+
+앱 외부의 생성 경로와 출력된 인덱스 SHA-256을 `OPSMAP_SHADOW_POSTAL_OVERVIEW_DIR`과 `OPSMAP_SHADOW_POSTAL_OVERVIEW_SHA256`에 함께 지정합니다. 표시 인덱스에는 고객·주문·배송 정보가 없으며 경계 버전에 고정됩니다. 브라우저는 실제 Kakao 투영을 확인한 뒤 현재 화면과 겹치는 타일만 요청하고, 경계 해시별 메모리 캐시를 재사용합니다. 해당 두 설정을 해제하면 같은 5자리 우편번호의 기존 벡터 표시를 사용합니다. [Kakao 지도 좌표 변환 명세](https://apis.map.kakao.com/web/documentation/#MapProjection)
+
+조작 시간은 응답의 `Server-Timing`에서 원천 읽기·집계 준비·화면 범위·점 공간 조인을 확인할 수 있습니다. 브라우저의 `data-postal-geometry`와 `data-postal-draw`에서 경계 다운로드·해제 완료, 타일 파싱 및 지도 그리기를 각각 확인합니다.
 
 ## 재현
 

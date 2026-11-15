@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { classifyPostalZone, POSTAL_DENSITY_HIGH } from '../src/shadowCoverage/postal.js';
-import { createPostalGeometryReader } from '../public/opsmap/postal-coverage-map.mjs';
-import { decodePostalTile, encodePostalZone, exactPostalPosition, postalText, postalTilePosition, postalTilesLevel } from '../public/opsmap/postal-geometry.mjs';
+import { createPostalGeometryReader, postalWorldProjection } from '../public/opsmap/postal-coverage-map.mjs';
+import { decodePostalOverview, decodePostalTile, encodePostalZone, exactPostalPosition, postalText, postalTilePosition, postalTilesLevel } from '../public/opsmap/postal-geometry.mjs';
 
 const outer = [[127,37],[127.05,37],[127.05,37.05],[127,37.05],[127,37]];
 const hole = [[127.01,37.01],[127.03,37.01],[127.03,37.03],[127.01,37.03],[127.01,37.01]];
@@ -38,6 +38,33 @@ test('one zoom tier is chosen for the viewport and wide fields never load exact 
   assert.equal(postalTilesLevel([124,32.9,132,39]), 'national');
   assert.equal(postalTilesLevel([126.7,36.9,127.4,37.5]), 'regional');
   assert.equal(postalTilesLevel([127.03,37.10,127.10,37.19]), 'detail');
+});
+
+test('compact display tiles preserve zip identity, signed coordinates and exact vertex count', () => {
+  const bytes = Buffer.from([80,67,79,49,1,210,9,1,3,20,19,12,0,11,20]);
+  const [shape] = decodePostalOverview(bytes,3);
+  assert.equal(postalText(shape.id),'01234');
+  assert.deepEqual([...shape.rings[0]],[10,-10,16,-10,10,0]);
+  assert.deepEqual(shape.box,[10,-10,16,0]);
+  assert.throws(() => decodePostalOverview(bytes.subarray(0,-1),3), /POSTAL_OVERVIEW_TILE_INVALID/);
+  assert.throws(() => decodePostalOverview(bytes,4), /POSTAL_OVERVIEW_TILE_INVALID/);
+});
+
+test('screen projection must match the Kakao plane before requesting indexed tiles', () => {
+  class Coords {
+    constructor(x,y) { Object.assign(this,{ x,y }); }
+    toLatLng() { return this; }
+    toCoords() { return this; }
+    getX() { return this.x; }
+    getY() { return this.y; }
+  }
+  const center = new Coords(500000,972532);
+  const pointFromCoords = ({x,y}) => ({ x:Math.round(x / 4096) - 20, y:Math.round(-y / 4096) + 35 });
+  const projection = postalWorldProjection({Coords},{pointFromCoords},center);
+  assert.deepEqual(projection,{ x:500000,y:972532,sx:1/4096,sy:1/4096 });
+  const distorted = ({x,y}) => ({ x:Math.round(x / 4096 + y / 512), y:Math.round(-y / 4096) });
+  assert.equal(postalWorldProjection({Coords},{pointFromCoords:distorted},center),null);
+  assert.equal(postalWorldProjection({},{pointFromCoords},center),null);
 });
 
 test('a superseded viewport shares immutable tiles until the map is closed', async t => {

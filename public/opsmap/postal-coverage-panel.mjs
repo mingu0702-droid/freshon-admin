@@ -182,8 +182,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
 
   async function readView(force = false) {
     if (!active || !map) return;
-    const { box, level } = map.viewport(), params = baseScope();
-    const key = [params.days, params.center, level, ...box.map(value => value.toFixed(5))].join(':');
+    const { box, level, world } = map.viewport(), params = baseScope();
+    const key = [params.days,params.center,level,Boolean(world), ...box.map(value => value.toFixed(5))].join(':');
     if (loadingKey === key || (!force && key === viewKey)) return;
     viewportRead?.abort();
     const request = viewportRead = new AbortController();
@@ -191,12 +191,14 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     if (!view) message('우편번호 경계를 불러오는 중입니다.');
     try {
       const signal = timeout(request.signal);
-      const data = await read('view', { ...params, level, box: box.map(value => value.toFixed(5)).join(',') }, signal);
+      const data = await read('view', { ...params, level, ...(world ? { indexed:'1' } : {}),
+        box:box.map(value => value.toFixed(5)).join(',') },signal);
       const slices = await geometry.read(data, signal);
       if (!active || viewportRead !== request) return;
       const same = view?.period.days === data.period.days && view?.center === params.center && view?.generation === data.generation;
       view = { ...data, center: params.center };
       viewKey = key;
+      host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), ...geometry.metrics() });
       applyView(view);
       map.show(view, slices);
       if (!same && selectedArea) {
@@ -322,6 +324,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     viewportRead = detailRead = searchRead = null;
     view = viewKey = loadingKey = null;
     geometry.clear();
+    delete host.dataset.postalGeometry;
     map?.clear();
     areaCard(null);
     searchResults.replaceChildren();
