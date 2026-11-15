@@ -14,6 +14,7 @@ if (tabs && workspace && period && daily) {
   tab.setAttribute('aria-controls', 'shadowCoverage');
 
   let panel, stylesheet, opening, active = false, previous;
+  let panelCode;
   let probeTimer, probeRequest, probeUntil = 0;
   let returnTabs = [];
 
@@ -65,6 +66,38 @@ if (tabs && workspace && period && daily) {
     probeRequest = null;
   }
 
+  function preparePanelCode() {
+    if (panelCode) return panelCode.task;
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal,AbortSignal.timeout(7000)]);
+    const preparation = { controller };
+    preparation.task = (async () => {
+      const response = await fetch('/api/map-phase2b/private/shadow-coverage/format',{ cache:'no-store', signal });
+      if (!response.ok && response.status !== 404) throw Error('COVERAGE_FORMAT_UNAVAILABLE');
+      const format = response.ok ? (await response.json()).format : 'h3';
+      signal.throwIfAborted();
+      if (format !== 'postal') return import('./shadow-coverage-panel.mjs?v=20261113-address-notes');
+      if (!document.querySelector('link[data-postal-coverage]')) {
+        const style = document.createElement('link');
+        style.rel = 'stylesheet';
+        style.dataset.postalCoverage = '1';
+        style.href = new URL('./postal-coverage.css?v=20261115-detail',import.meta.url);
+        document.head.append(style);
+      }
+      return import('./postal-coverage-panel.mjs?v=20261116-initial-view');
+    })().catch(error => {
+      if (panelCode === preparation) panelCode = null;
+      throw error;
+    });
+    panelCode = preparation;
+    return preparation.task;
+  }
+
+  function resetPanelPreparation() {
+    panelCode?.controller.abort();
+    panelCode = null;
+  }
+
   async function checkAvailability() {
     probeTimer = null;
     const controller = probeRequest = new AbortController();
@@ -96,6 +129,7 @@ if (tabs && workspace && period && daily) {
     const available = session && config?.shadowCoverageEnabled === true;
     if (!available) {
       close();
+      resetPanelPreparation();
       panel?.disposeMap();
       tab.remove();
       if (session && config?.shadowCoverageRestoring === true) {
@@ -115,6 +149,8 @@ if (tabs && workspace && period && daily) {
       document.head.append(stylesheet);
     }
     tabs.append(tab);
+    // Only code and CSS are prepared here. The viewport starts when the tab opens.
+    if (!panel) void preparePanelCode().catch(() => {});
   }
 
   tab.onclick = async () => {
@@ -124,12 +160,7 @@ if (tabs && workspace && period && daily) {
       tab.setAttribute('aria-busy', 'true');
       tab.textContent = '음영권역 불러오는 중';
       try {
-        const response = await fetch('/api/map-phase2b/private/shadow-coverage/format', { cache:'no-store' });
-        if (!response.ok && response.status !== 404) throw Error('COVERAGE_FORMAT_UNAVAILABLE');
-        const format = response.ok ? (await response.json()).format : 'h3';
-        const { createCoveragePanel } = format === 'postal'
-          ? await import('./postal-coverage-panel.mjs?v=20261115-postal-detail')
-          : await import('./shadow-coverage-panel.mjs?v=20261113-address-notes');
+        const { createCoveragePanel } = await preparePanelCode();
         if (opening !== attempt || !tab.isConnected || !window.MapStaffEntry?.session()) return;
         panel = createCoveragePanel({ workspace, header, openStore:openPostalStore });
       } catch {
@@ -178,11 +209,13 @@ if (tabs && workspace && period && daily) {
   window.addEventListener('pageshow', event => { if (event.persisted) syncAvailability(); });
   window.addEventListener('pagehide', () => {
     stopAvailabilityProbe();
+    resetPanelPreparation();
     close();
     panel?.disposeMap();
   });
   window.MapStaffEntry?.registerPurge(() => {
     stopAvailabilityProbe();
+    resetPanelPreparation();
     close();
     panel?.disposeMap();
     tab.remove();

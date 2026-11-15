@@ -1,7 +1,6 @@
-import { decodePostalOverview, decodePostalTile, intersects, postalTilesLevel } from './postal-geometry.mjs';
+import { decodePostalOverview, decodePostalTile, intersects, postalTilesLevel, POSTAL_VIEWPORT_TILE_BYTES } from './postal-geometry.mjs';
 
 const viewportCacheLimit = 16 * 1024 * 1024;
-const MAX_REQUEST_BYTES = 3 * 1024 * 1024;
 const styles = {
   UNKNOWN: ['rgba(202,213,224,.24)', 'rgba(87,111,134,.45)'],
   CANDIDATE: ['rgba(239,163,67,.68)', '#b87730'],
@@ -70,6 +69,25 @@ export function createPostalGeometryReader(api) {
     bytes += payload.bytes;
   }
 
+  function decodeBatch(source, list, boundary, duration) {
+    const started = performance.now();
+    const tiles = new Map();
+    let offset = source.byteOffset;
+    for (const [id, size, vertices] of list) {
+      const zones = vertices ? decodePostalOverview(new Uint8Array(source.buffer,offset,size),vertices)
+        : decodePostalTile(source.buffer.slice(offset,offset + size));
+      const occupied = (vertices ? vertices * 8 : size) + zones.length * 176 +
+        zones.reduce((count, zone) => count + zone.rings.length * 72,0);
+      const item = { zones, bytes:occupied };
+      tiles.set(id,item);
+      retain(boundary + ':' + id,item);
+      offset += size;
+    }
+    transferMs = duration;
+    parseMs = performance.now() - started;
+    return tiles;
+  }
+
   async function readBatch(boundary, list, length, signal) {
     const ids = list.map(tile => tile[0]).join(',');
     const key = boundary + ':' + ids;
@@ -91,22 +109,7 @@ export function createPostalGeometryReader(api) {
         const buffer = await response.arrayBuffer();
         batchSignal.throwIfAborted();
         if (buffer.byteLength !== length) throw Error('POSTAL_GEOMETRY_SIZE');
-        const received = performance.now();
-        const tiles = new Map();
-        let offset = 0;
-        for (const [id, size, vertices] of list) {
-          const zones = vertices ? decodePostalOverview(new Uint8Array(buffer,offset,size),vertices)
-            : decodePostalTile(buffer.slice(offset,offset + size));
-          const occupied = (vertices ? vertices * 8 : size) + zones.length * 176 +
-            zones.reduce((count, zone) => count + zone.rings.length * 72, 0);
-          const item = { zones, bytes:occupied };
-          tiles.set(id,item);
-          retain(boundary + ':' + id,item);
-          offset += size;
-        }
-        transferMs = received - started;
-        parseMs = performance.now() - received;
-        return tiles;
+        return decodeBatch(new Uint8Array(buffer),list,boundary,performance.now() - started);
       })().finally(() => { if (pending.get(key) === entry) pending.delete(key); });
       pending.set(key,entry);
     }
@@ -116,6 +119,9 @@ export function createPostalGeometryReader(api) {
   }
 
   return {
+    acceptBootstrap(view, bytes, duration) {
+      return [...decodeBatch(bytes,view.tiles,view.overview,duration).values()].map(item => item.zones);
+    },
     async read(view, signal) {
       signal.throwIfAborted();
       const found = new Map();
@@ -133,7 +139,7 @@ export function createPostalGeometryReader(api) {
       while (missing.length) {
         let length = 0;
         const list = [];
-        while (missing.length && list.length < 24 && length + missing[0][1] <= MAX_REQUEST_BYTES) {
+        while (missing.length && list.length < 24 && length + missing[0][1] <= POSTAL_VIEWPORT_TILE_BYTES) {
           const tile = missing.shift();
           list.push(tile);
           length += tile[1];

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { classifyPostalZone, POSTAL_DENSITY_HIGH } from '../src/shadowCoverage/postal.js';
 import { createPostalGeometryReader, postalWorldProjection } from '../public/opsmap/postal-coverage-map.mjs';
-import { decodePostalOverview, decodePostalTile, encodePostalZone, exactPostalPosition, postalText, postalTilePosition, postalTilesLevel } from '../public/opsmap/postal-geometry.mjs';
+import { decodePostalOverview, decodePostalTile, encodePostalZone, exactPostalPosition, postalText, postalTilePosition, postalTilesLevel,
+  splitPostalBootstrap } from '../public/opsmap/postal-geometry.mjs';
 
 const outer = [[127,37],[127.05,37],[127.05,37.05],[127,37.05],[127,37]];
 const hole = [[127.01,37.01],[127.03,37.01],[127.03,37.03],[127.01,37.03],[127.01,37.01]];
@@ -48,6 +49,30 @@ test('compact display tiles preserve zip identity, signed coordinates and exact 
   assert.deepEqual(shape.box,[10,-10,16,0]);
   assert.throws(() => decodePostalOverview(bytes.subarray(0,-1),3), /POSTAL_OVERVIEW_TILE_INVALID/);
   assert.throws(() => decodePostalOverview(bytes,4), /POSTAL_OVERVIEW_TILE_INVALID/);
+});
+
+test('the first viewport frame verifies the complete tile list and seeds the viewport cache', async t => {
+  const tile = Buffer.from([80,67,79,49,1,210,9,1,3,20,19,12,0,11,20]);
+  const view = { overview:'a'.repeat(64), tiles:[['overview-1-1-0',tile.length,3]] };
+  const frame = info => {
+    const json = Buffer.from(JSON.stringify(info));
+    const header = Buffer.alloc(8);
+    header.write('PVF1');
+    header.writeUInt32LE(json.length,4);
+    const result = Buffer.concat([header,json,tile]);
+    return result.buffer.slice(result.byteOffset,result.byteOffset + result.length);
+  };
+  const packet = splitPostalBootstrap(frame(view));
+  assert.deepEqual(packet.view,view);
+  assert.throws(() => splitPostalBootstrap(frame({...view,tiles:[...view.tiles,...view.tiles]})),/POSTAL_BOOTSTRAP_INVALID/);
+  assert.throws(() => splitPostalBootstrap(frame(view).slice(0,-1)),/POSTAL_BOOTSTRAP_INVALID/);
+  const request = t.mock.method(globalThis,'fetch',async () => { throw Error('UNEXPECTED_TILE_REQUEST'); });
+  const reader = createPostalGeometryReader('/postal');
+  const [zones] = reader.acceptBootstrap(packet.view,packet.bytes,1.5);
+  assert.equal(zones[0].id,1234);
+  assert.deepEqual(await reader.read(view,new AbortController().signal),[zones]);
+  assert.equal(request.mock.callCount(),0);
+  assert.equal(reader.metrics().tiles,1);
 });
 
 test('screen projection must match the Kakao plane before requesting indexed tiles', () => {

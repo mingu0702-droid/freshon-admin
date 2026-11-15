@@ -1,5 +1,7 @@
 const px = 1e6;
 export const POSTAL_TILE_LIMIT = 1024 * 1024;
+export const POSTAL_BOOTSTRAP_METADATA_LIMIT = 256 * 1024;
+export const POSTAL_VIEWPORT_TILE_BYTES = 3 * 1024 * 1024;
 export const POSTAL_AREA_BYTES = 36;
 export const POSTAL_LEVELS = ['national', 'regional', 'detail'];
 
@@ -14,6 +16,29 @@ export function postalTilesLevel(box) {
 
 export function intersects(a, b) {
   return a[0] <= b[2] && a[1] <= b[3] && a[2] >= b[0] && a[3] >= b[1];
+}
+
+export function splitPostalBootstrap(buffer) {
+  if (buffer.byteLength < 8 || buffer.byteLength > POSTAL_VIEWPORT_TILE_BYTES + POSTAL_BOOTSTRAP_METADATA_LIMIT + 8) {
+    throw Error('POSTAL_BOOTSTRAP_INVALID');
+  }
+  const header = new DataView(buffer);
+  const length = header.getUint32(4,true);
+  if (header.getUint32(0,true) !== 0x31465650 || !length ||
+      length > POSTAL_BOOTSTRAP_METADATA_LIMIT || length > buffer.byteLength - 8) {
+    throw Error('POSTAL_BOOTSTRAP_INVALID');
+  }
+  const view = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer,8,length)));
+  if (!/^[a-f0-9]{64}$/.test(view?.overview || '') || !Array.isArray(view.tiles) || !view.tiles.length ||
+      view.tiles.length > 32 || view.tiles.some(tile => !Array.isArray(tile) || tile.length !== 3 ||
+        !/^overview-\d{1,3}-\d{1,3}-\d{1,2}$/.test(tile[0]) ||
+        !Number.isInteger(tile[1]) || tile[1] < 5 || tile[1] > POSTAL_TILE_LIMIT ||
+        !Number.isInteger(tile[2]) || tile[2] < 3 || tile[2] > POSTAL_TILE_LIMIT / 8) ||
+      new Set(view.tiles.map(tile => tile[0])).size !== view.tiles.length ||
+      view.tiles.reduce((sum,tile) => sum + tile[1],0) !== buffer.byteLength - length - 8) {
+    throw Error('POSTAL_BOOTSTRAP_INVALID');
+  }
+  return { view, bytes:new Uint8Array(buffer,length + 8) };
 }
 
 export function encodePostalZone(zone, rings) {

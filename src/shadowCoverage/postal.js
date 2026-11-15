@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join } from 'node:path';
-import { realpath } from 'node:fs/promises';
+import { open, realpath, stat } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { gunzip as decompress } from 'node:zlib';
@@ -49,6 +49,7 @@ async function openOverview(directory, proof, appRoot, boundary, baseTiles) {
     index.projection === 'EPSG:5181*2.5' && Array.isArray(index.tiles) && index.tiles.length === originals.length &&
     index.count === sum(originals.map(tile => tile.count)));
   const tiles = new Map();
+  let offset = 0;
   for (const tile of index.tiles) {
     const id = tile?.id;
     const original = typeof id === 'string' && /^overview-\d{1,3}-\d{1,3}-\d{1,2}$/.test(id) &&
@@ -57,10 +58,20 @@ async function openOverview(directory, proof, appRoot, boundary, baseTiles) {
       Number.isInteger(tile.vertices) && tile.vertices >= 3 * tile.count && tile.vertices <= original.rawBytes / 8 &&
       Number.isInteger(tile.rawBytes) && tile.rawBytes > 4 && tile.rawBytes <= POSTAL_TILE_LIMIT &&
       Number.isInteger(tile.bytes) && tile.bytes > 0 && tile.bytes <= POSTAL_TILE_LIMIT);
+    if (index.archive) requireValid(tile.offset === offset);
+    offset += tile.bytes;
     tiles.set(id,{ ...tile, box:original.box, folder });
   }
   requireValid(index.vertices === sum([...tiles.values()].map(tile => tile.vertices)));
-  return { tiles, proof };
+  let archive;
+  if (index.archive) {
+    requireValid(index.archive.bytes === offset && offset <= 8 * 1024 * 1024 &&
+      sha.test(index.archive.sha256));
+    archive = join(folder,'overview-tiles.gz');
+    const file = await stat(archive);
+    requireValid(file.isFile() && file.size === offset);
+  }
+  return { tiles, proof, archive };
 }
 
 export function classifyPostalZone({ visits, registered, eligible }, areaKm2) {
@@ -234,6 +245,7 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
   let loaded, loadFlight, indexFlight, resolvedIndex, indexChecked = 0, scope, bulk = 0;
   let storeDetails;
   const tileCache = new Map(), pending = new Map();
+  const overviewPending = new Map();
   let tileBytes = 0, reads = 0;
 
   async function assets() {
@@ -321,17 +333,79 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       reads++;
       const file = join(tile.folder || opened.geometry,tile.id + '.gz');
       const bytes = await verifiedRead(file, tile.sha256, tile.bytes, tile.bytes);
-      while (tileCache.size && tileBytes + bytes.length > POSTAL_TILE_CACHE_BYTES) {
-        const oldest = tileCache.keys().next().value;
-        tileBytes -= tileCache.get(oldest).length;
-        tileCache.delete(oldest);
-      }
-      tileCache.set(tile.id, bytes);
-      tileBytes += bytes.length;
+      retainTile(tile.id,bytes);
       return bytes;
     })().finally(() => pending.delete(tile.id));
     pending.set(tile.id, work);
     return work;
+  }
+
+  function retainTile(id, bytes) {
+    const previous = tileCache.get(id);
+    if (previous) {
+      tileBytes -= previous.length;
+      tileCache.delete(id);
+    }
+    while (tileCache.size && tileBytes + bytes.length > POSTAL_TILE_CACHE_BYTES) {
+      const oldest = tileCache.keys().next().value;
+      tileBytes -= tileCache.get(oldest).length;
+      tileCache.delete(oldest);
+    }
+    tileCache.set(id,bytes);
+    tileBytes += bytes.length;
+  }
+
+  async function readOverviewTiles(archive, files) {
+    const chunks = new Map();
+    const missing = [];
+    for (const tile of files) {
+      const cached = tileCache.get(tile.id);
+      if (cached) {
+        tileCache.delete(tile.id);
+        tileCache.set(tile.id,cached);
+        chunks.set(tile.id,cached);
+      } else missing.push(tile);
+    }
+    if (missing.length) {
+      missing.sort((a,b) => a.offset - b.offset);
+      const key = missing.map(tile => tile.id).join(',');
+      if (!overviewPending.has(key)) {
+        const work = (async () => {
+          const sections = [];
+          for (const tile of missing) {
+            const last = sections.at(-1);
+            if (last?.end === tile.offset) {
+              last.end += tile.bytes;
+              last.tiles.push(tile);
+            } else sections.push({ start:tile.offset,end:tile.offset + tile.bytes,tiles:[tile] });
+          }
+          const blocks = new Map();
+          const handle = await open(archive,'r');
+          try {
+            for (const section of sections) {
+              reads++;
+              const buffer = Buffer.allocUnsafe(section.end - section.start);
+              for (let at = 0; at < buffer.length;) {
+                const { bytesRead } = await handle.read(buffer,at,buffer.length - at,section.start + at);
+                requireValid(bytesRead > 0);
+                at += bytesRead;
+              }
+              for (const tile of section.tiles) {
+                const at = tile.offset - section.start;
+                const bytes = buffer.subarray(at,at + tile.bytes);
+                requireValid(hash(bytes) === tile.sha256);
+                blocks.set(tile.id,Buffer.from(bytes));
+              }
+            }
+          } finally { await handle.close(); }
+          for (const [id,bytes] of blocks) retainTile(id,bytes);
+          return blocks;
+        })().finally(() => overviewPending.delete(key));
+        overviewPending.set(key,work);
+      }
+      for (const [id,bytes] of await overviewPending.get(key)) chunks.set(id,bytes);
+    }
+    return files.map(tile => chunks.get(tile.id));
   }
 
   async function withBatch(work) {
@@ -373,7 +447,7 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
   }
 
   return {
-    async warm() { await Promise.all([assets(), activeIndex()]); },
+    async warm() { await ready(90,'all'); },
     async view({ days, center, generation, box, indexed, timing }) {
       const opened = await ready(days,center,generation,timing);
       const selectedAt = performance.now();
@@ -401,16 +475,18 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
     },
     async tiles(ids, version, acceptGzip, timing) {
       const opened = await assets();
-      const index = version === boundarySha256 ? opened.tiles :
-        opened.overview && version === opened.overview.proof ? opened.overview.tiles : null;
+      const overview = opened.overview && version === opened.overview.proof ? opened.overview : null;
+      const index = overview?.tiles || (version === boundarySha256 ? opened.tiles : null);
       if (!index || !ids.length || ids.length > 32 || new Set(ids).size !== ids.length) throw Error('POSTAL_QUERY_INVALID');
       const files = ids.map(id => index.get(id));
       if (files.some(file => !file) || sum(files.map(file => file.rawBytes)) > POSTAL_MAX_BATCH_BYTES) throw Error('POSTAL_QUERY_INVALID');
       return withBatch(async () => {
         const started = performance.now();
-        const chunks = [];
-        for (let i = 0; i < files.length; i += 2) {
-          chunks.push(...await Promise.all(files.slice(i,i + 2).map(file => getTile(opened,file))));
+        const chunks = overview?.archive ? await readOverviewTiles(overview.archive,files) : [];
+        if (!overview?.archive) {
+          for (let i = 0; i < files.length; i += 2) {
+            chunks.push(...await Promise.all(files.slice(i,i + 2).map(file => getTile(opened,file))));
+          }
         }
         const bytes = Buffer.concat(chunks);
         if (timing) timing.postal_tile_read = performance.now() - started;

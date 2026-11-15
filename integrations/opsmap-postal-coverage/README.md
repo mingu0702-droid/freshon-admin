@@ -56,7 +56,11 @@ python scripts/prepare-opsmap-postal-overview.py (Join-Path $newPrivatePackage g
 
 앱 외부의 생성 경로와 출력된 인덱스 SHA-256을 `OPSMAP_SHADOW_POSTAL_OVERVIEW_DIR`과 `OPSMAP_SHADOW_POSTAL_OVERVIEW_SHA256`에 함께 지정합니다. 표시 인덱스에는 고객·주문·배송 정보가 없으며 경계 버전에 고정됩니다. 브라우저는 실제 Kakao 투영을 확인한 뒤 현재 화면과 겹치는 타일만 요청하고, 경계 해시별 메모리 캐시를 재사용합니다. 해당 두 설정을 해제하면 같은 5자리 우편번호의 기존 벡터 표시를 사용합니다. [Kakao 지도 좌표 변환 명세](https://apis.map.kakao.com/web/documentation/#MapProjection)
 
+생성물은 `overview-index.json`과 `overview-tiles.gz`입니다. 인덱스에 기록된 오프셋으로 현재 화면의 연속 구간만 읽고, 각 타일의 SHA-256을 확인합니다. 종전 개별 파일 묶음도 같은 인덱스 설정으로 호환됩니다. 첫 화면에는 보호된 `/postal/bootstrap`이 집계와 타일을 함께 반환하며 이후에는 기존 범위 조회와 캐시를 사용합니다. 탭 준비 중에는 JS와 CSS만 읽습니다. 배송 이력은 고객코드를 `X-Map-Customer-Code` 헤더로 전달합니다.
+
 조작 시간은 응답의 `Server-Timing`에서 원천 읽기·집계 준비·화면 범위·점 공간 조인을 확인할 수 있습니다. 브라우저의 `data-postal-geometry`와 `data-postal-draw`에서 경계 다운로드·해제 완료, 타일 파싱 및 지도 그리기를 각각 확인합니다.
+
+이 변경을 되돌릴 때는 직전 후보 `aaf82f3b2657646a2951ec604ac29990a1862688`의 코드와 개별 타일 묶음의 디렉터리·인덱스 해시를 함께 선택합니다. 우편번호 방식은 계속 사용합니다.
 
 ## 재현
 

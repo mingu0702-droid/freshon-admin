@@ -1,8 +1,12 @@
 import { performance } from 'node:perf_hooks';
+import { promisify } from 'node:util';
+import { gzip } from 'node:zlib';
+import { POSTAL_BOOTSTRAP_METADATA_LIMIT, POSTAL_VIEWPORT_TILE_BYTES } from '../../public/opsmap/postal-geometry.mjs';
 
 const postalRoot = '/api/map-phase2b/private/shadow-coverage/postal';
 const centers = ['all', 'osan', 'yeongnam', 'honam'];
 const hash = /^[a-f0-9]{64}$/;
+const gzipHeader = promisify(gzip);
 
 function criteria(query) {
   const { days = '90', center = 'all', generation } = query;
@@ -44,6 +48,7 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
           POSTAL_RELEASE_INTEGRITY: 503,
           POSTAL_GENERATION_MISMATCH: 503,
           POSTAL_DATA_UNCONFIGURED: 503,
+          POSTAL_BOOTSTRAP_UNAVAILABLE: 404,
           POSTAL_DETAILS_UNCONFIGURED: 503,
           POSTAL_DETAILS_INTEGRITY: 503,
         };
@@ -52,7 +57,7 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
       }
     });
   }
-  route('/view', (req, scope, { runtime, postalBounds }, timing) => {
+  function view(req, scope, { runtime, postalBounds }, timing) {
     const { box, level, indexed } = req.query;
     if (typeof box !== 'string' || box.length > 100 || !/^-?\d+(\.\d+)?(,-?\d+(\.\d+)?){3}$/.test(box) ||
         typeof level !== 'string' || !/^(?:[1-9]|1[01234])$/.test(level) ||
@@ -60,7 +65,29 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     const coords = box.split(',').map(Number);
     if (!postalBounds(coords)) throw Error('POSTAL_QUERY_INVALID');
     return runtime.view({ ...scope, box:coords, indexed:indexed === '1', timing });
-  });
+  }
+  function binary(res, { bytes, gzip }) {
+    if (gzip) res.set('Content-Encoding','gzip');
+    res.set('X-Content-Type-Options','nosniff').vary('Accept-Encoding').type('application/octet-stream').send(bytes);
+  }
+  route('/view',view);
+  route('/bootstrap',async (req,scope,modules,timing) => {
+    const data = await view(req,scope,modules,timing);
+    const metadata = Buffer.from(JSON.stringify(data));
+    const size = data.tiles.reduce((sum,tile) => sum + tile[1],0);
+    if (!data.overview || !size || metadata.length > POSTAL_BOOTSTRAP_METADATA_LIMIT ||
+        size > POSTAL_VIEWPORT_TILE_BYTES || data.tiles.length > 32) throw Error('POSTAL_BOOTSTRAP_UNAVAILABLE');
+    const prefix = Buffer.allocUnsafe(8 + metadata.length);
+    prefix.write('PVF1');
+    prefix.writeUInt32LE(metadata.length,4);
+    metadata.copy(prefix,8);
+    const gzip = req.acceptsEncodings('gzip','identity') === 'gzip';
+    const [header, geometry] = await Promise.all([
+      gzip ? gzipHeader(prefix,{ level:1 }) : prefix,
+      modules.runtime.tiles(data.tiles.map(([id]) => id),data.overview,gzip,timing)
+    ]);
+    return { bytes:Buffer.concat([header,geometry]), gzip };
+  },binary);
   route('/geometry', async (req, _scope, { runtime }, timing) => {
     const { ids, v } = req.query;
     if (typeof ids !== 'string' || ids.length > 950 || typeof v !== 'string' || !hash.test(v)) {
@@ -68,10 +95,7 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     }
     const gzip = req.acceptsEncodings('gzip', 'identity') === 'gzip';
     return { bytes:await runtime.tiles(ids.split(','),v,gzip,timing), gzip };
-  }, (res, { bytes, gzip }) => {
-    if (gzip) res.set('Content-Encoding', 'gzip');
-    res.set('X-Content-Type-Options', 'nosniff').vary('Accept-Encoding').type('application/octet-stream').send(bytes);
-  });
+  },binary);
   route('/area', (req, scope, { runtime }) => {
     if (typeof req.query.id !== 'string' || !/^\d{5}$/.test(req.query.id)) throw Error('POSTAL_QUERY_INVALID');
     return runtime.area({ ...scope, id: Number(req.query.id) });
@@ -92,7 +116,7 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     return runtime.stores({ ...memberScope(req,scope), filter, q });
   });
   route('/history', (req, scope, { runtime }) => {
-    const code = req.query.code;
+    const code = req.get('X-Map-Customer-Code') ?? req.query.code;
     if (typeof code !== 'string' || !/^[A-Z]\d{1,20}$/.test(code)) throw Error('POSTAL_QUERY_INVALID');
     return runtime.history({ ...memberScope(req,scope), code });
   });

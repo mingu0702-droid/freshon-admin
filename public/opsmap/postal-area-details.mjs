@@ -115,7 +115,7 @@ export function createPostalAreaDetails(root, { read, dismiss, openStore }) {
     const requestedAt = new Date().toISOString();
     if (!target.dataset.historyAsOf) target.replaceChildren(make('p','이력을 불러오는 중입니다.'));
     try {
-      const data = await read('history',{...scope,area:chosen.id,code:row.code,offset},signalOf(request));
+      const data = await read('history',{...scope,area:chosen.id,offset},signalOf(request),{ 'X-Map-Customer-Code':row.code });
       if (historyQuery !== request || !owner.open) return;
       historyBody(data,target,row,owner);
     } catch (error) {

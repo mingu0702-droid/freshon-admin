@@ -1,5 +1,6 @@
 import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs';
 import { createPostalAreaDetails } from './postal-area-details.mjs';
+import { splitPostalBootstrap } from './postal-geometry.mjs';
 
 const API = '/api/map-phase2b/private/shadow-coverage/postal';
 const labels = {
@@ -13,15 +14,32 @@ const node = (name, text) => Object.assign(document.createElement(name), { textC
 const statsText = period => period?.days + '일 · ' + period?.start + ' ~ ' + period?.end;
 const pointLocation = item => Number.isFinite(item?.lat) && Number.isFinite(item?.lng) ? [item.lat, item.lng] : null;
 
-async function read(endpoint, params, signal, headers) {
+function request(endpoint, params, signal, headers) {
   const url = API + '/' + endpoint + '?' + new URLSearchParams(params);
-  const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal, headers });
+  return fetch(url,{ credentials:'same-origin', cache:'no-store', signal, headers });
+}
+
+async function reply(response) {
   const payload = await response.json();
   if (!response.ok || !payload.ok) {
     const message = payload?.error || 'POSTAL_DATA_UNAVAILABLE';
     throw Object.assign(Error(message), { status: response.status, code: message });
   }
   return payload.data;
+}
+
+async function read(endpoint, params, signal, headers) {
+  return reply(await request(endpoint,params,signal,headers));
+}
+
+async function firstViewport(params, signal) {
+  const started = performance.now();
+  const response = await request('bootstrap',params,signal);
+  if (response.status === 404) return null;
+  if (!response.ok) return reply(response);
+  const raw = await response.arrayBuffer();
+  signal.throwIfAborted();
+  return { ...splitPostalBootstrap(raw), duration:performance.now() - started };
 }
 
 export function createCoveragePanel({ workspace, header, openStore }) {
@@ -69,20 +87,12 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<button type="button" id="coverageRetry" hidden>다시 시도</button></div></section>';
   workspace.after(root);
 
-  if (!document.querySelector('link[data-postal-coverage]')) {
-    const style = document.createElement('link');
-    style.rel = 'stylesheet';
-    style.dataset.postalCoverage = '1';
-    style.href = new URL('./postal-coverage.css?v=20261115-detail', import.meta.url);
-    document.head.append(style);
-  }
-
   const find = id => root.querySelector('#' + id);
   const host = find('coverageMap'), mapState = find('coverageMapState'), mapText = find('coverageMapMessage');
   const detail = find('coverageDetail'), status = find('coverageRetry');
   const searchResults = find('coverageSearchResults'), geometry = createPostalGeometryReader(API);
   let map, active = false, owner = 0, viewportRead, detailRead, searchRead, view, viewKey, loadingKey;
-  let timer, refresh, selectedArea;
+  let timer, refresh, selectedArea, bootstrapScope;
   const resize = new ResizeObserver(entries => {
     if (!active) return;
     if (entries.some(entry => entry.target === header)) windowHeight();
@@ -184,21 +194,27 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     if (!active || !map) return;
     const { box, level, world } = map.viewport(), params = baseScope();
     const key = [params.days,params.center,level,Boolean(world), ...box.map(value => value.toFixed(5))].join(':');
-    if (loadingKey === key || (!force && key === viewKey)) return;
+    const first = !view && Boolean(world);
+    const firstScope = first ? [params.days,params.center].join(':') : null;
+    if (loadingKey === key || (!force && key === viewKey) || (first && firstScope === bootstrapScope)) return;
     viewportRead?.abort();
-    const request = viewportRead = new AbortController();
+    const controller = viewportRead = new AbortController();
     loadingKey = key;
+    bootstrapScope = firstScope;
     if (!view) message('우편번호 경계를 불러오는 중입니다.');
     try {
-      const signal = timeout(request.signal);
-      const data = await read('view', { ...params, level, ...(world ? { indexed:'1' } : {}),
-        box:box.map(value => value.toFixed(5)).join(',') },signal);
-      const slices = await geometry.read(data, signal);
-      if (!active || viewportRead !== request) return;
+      const signal = timeout(controller.signal);
+      const requested = { ...params, level, ...(world ? { indexed:'1' } : {}),
+        box:box.map(value => value.toFixed(5)).join(',') };
+      const frame = first ? await firstViewport(requested,signal) : null;
+      const data = frame?.view || await read('view',requested,signal);
+      if (!active || viewportRead !== controller) return;
+      const slices = frame ? geometry.acceptBootstrap(data,frame.bytes,frame.duration) : await geometry.read(data,signal);
+      if (!active || viewportRead !== controller) return;
       const same = view?.period.days === data.period.days && view?.center === params.center && view?.generation === data.generation;
       view = { ...data, center: params.center };
       viewKey = key;
-      host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), ...geometry.metrics() });
+      host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame), ...geometry.metrics() });
       applyView(view);
       map.show(view, slices);
       if (!same && selectedArea) {
@@ -209,12 +225,15 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       const missing = params.center !== 'all' && data.completeness.observed === 0 ? '선택 센터의 배송 자료 미확인' : '';
       message([stale, missing].filter(Boolean).join(' · '));
     } catch (error) {
-      if (!active || viewportRead !== request || request.signal.aborted) return;
+      if (!active || viewportRead !== controller || controller.signal.aborted) return;
       const reason = error.code === 'POSTAL_GENERATION_MISMATCH' ? '최신 원장과 우편번호 자료의 세대가 다릅니다.'
         : error.code === 'POSTAL_DATA_UNCONFIGURED' ? '국가기초구역 자료 연결을 확인해 주세요.' : '우편번호 자료를 읽지 못했습니다.';
       message(reason + (view ? ' 이전 화면을 유지합니다.' : ''), () => void readView(true));
     } finally {
-      if (viewportRead === request) loadingKey = null;
+      if (viewportRead === controller) {
+        loadingKey = bootstrapScope = null;
+        if (first && viewKey === key) scheduleView();
+      }
     }
   }
 
@@ -322,7 +341,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     clearTimeout(timer);
     [viewportRead, detailRead, searchRead].forEach(request => request?.abort());
     viewportRead = detailRead = searchRead = null;
-    view = viewKey = loadingKey = null;
+    view = viewKey = loadingKey = bootstrapScope = null;
     geometry.clear();
     delete host.dataset.postalGeometry;
     map?.clear();

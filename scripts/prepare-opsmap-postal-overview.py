@@ -75,32 +75,39 @@ def main():
     project = Transformer.from_crs(4326, 5181, always_xy=True).transform
     args.output.mkdir()
     tiles, count, vertices = [], 0, 0
-    for tile in source['tiers']['national']:
-        name = tile['id']
-        if re.fullmatch(r'national-\d+-\d+-\d+', name) is None or tile['rawBytes'] > 1024 * 1024:
-            raise ValueError('POSTAL_OVERVIEW_SOURCE_TILE')
-        compressed = (args.geometry / (name + '.gz')).read_bytes()
-        if len(compressed) != tile['bytes'] or sha(compressed) != tile['sha256']:
-            raise ValueError('POSTAL_OVERVIEW_SOURCE_HASH')
-        raw = gzip.decompress(compressed)
-        if len(raw) != tile['rawBytes']:
-            raise ValueError('POSTAL_OVERVIEW_SOURCE_LENGTH')
-        packed, size = projected_tile(raw, tile['count'], project)
-        encoded = gzip.compress(packed, compresslevel=6, mtime=0)
-        overview_name = name.replace('national-', 'overview-', 1)
-        (args.output / (overview_name + '.gz')).write_bytes(encoded)
-        tiles.append({'id': overview_name, 'count': tile['count'], 'vertices': size,
-                      'bytes': len(encoded), 'rawBytes': len(packed), 'sha256': sha(encoded)})
-        count += tile['count']
-        vertices += size
+    archive_sha = hashlib.sha256()
+    with (args.output / 'overview-tiles.gz').open('xb') as archive:
+        for tile in source['tiers']['national']:
+            name = tile['id']
+            if re.fullmatch(r'national-\d+-\d+-\d+', name) is None or tile['rawBytes'] > 1024 * 1024:
+                raise ValueError('POSTAL_OVERVIEW_SOURCE_TILE')
+            compressed = (args.geometry / (name + '.gz')).read_bytes()
+            if len(compressed) != tile['bytes'] or sha(compressed) != tile['sha256']:
+                raise ValueError('POSTAL_OVERVIEW_SOURCE_HASH')
+            raw = gzip.decompress(compressed)
+            if len(raw) != tile['rawBytes']:
+                raise ValueError('POSTAL_OVERVIEW_SOURCE_LENGTH')
+            packed, size = projected_tile(raw, tile['count'], project)
+            encoded = gzip.compress(packed, compresslevel=6, mtime=0)
+            overview_name = name.replace('national-', 'overview-', 1)
+            offset = archive.tell()
+            archive.write(encoded)
+            archive_sha.update(encoded)
+            tiles.append({'id': overview_name, 'count': tile['count'], 'vertices': size, 'offset': offset,
+                          'bytes': len(encoded), 'rawBytes': len(packed), 'sha256': sha(encoded)})
+            count += tile['count']
+            vertices += size
+        archive_size = archive.tell()
     if count != source['count']:
         raise ValueError('POSTAL_OVERVIEW_SOURCE_COUNT')
     proof = {'schema': 'opsmap-postal-overview-v1', 'boundary': args.boundary_sha256,
-             'projection': 'EPSG:5181*2.5', 'count': count, 'vertices': vertices, 'tiles': tiles}
+             'projection': 'EPSG:5181*2.5', 'count': count, 'vertices': vertices, 'tiles': tiles,
+             'archive': {'bytes': archive_size, 'sha256': archive_sha.hexdigest()}}
     index = json.dumps(proof, separators=(',', ':')).encode('utf-8')
     (args.output / 'overview-index.json').write_bytes(index)
     print(json.dumps({'indexSha256': sha(index), 'sourceBoundarySha256': args.boundary_sha256,
-                      'areas': count, 'vertices': vertices, 'files': len(tiles),
+                      'areas': count, 'vertices': vertices, 'tiles': len(tiles),
+                      'archiveSha256': archive_sha.hexdigest(),
                       'gzipBytes': sum(tile['bytes'] for tile in tiles),
                       'rawBytes': sum(tile['rawBytes'] for tile in tiles)}, indent=2))
 
