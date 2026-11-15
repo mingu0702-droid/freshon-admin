@@ -25,7 +25,6 @@ import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
 import {createCoverageStatusReader} from './shadowCoverage/storeStatus.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
-import {stagePermissionAudit} from './stagePermissionAudit.js';
 import {createStageDriverContacts} from './stageDriverContacts.js';
 import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,vehicleId} from './datedDeliveryContract.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
@@ -382,11 +381,6 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const datedSourceIds=new Set(['1',...String(stage.OPSMAP_STAGE_DELIVERY_DATED_VERIFIED_SOURCE_IDS||'').split(',').map(id=>id.trim())]);
   const readDatedDelivery = createStageDatedDeliveryReader({env:stage,fetchImpl,now,
     syncCenters:Object.fromEntries(Object.entries(SYNC_DELIVERY_SOURCES).filter(([,id])=>datedSourceIds.has(id)))});
-  if (exactStageService) app.once('opsmap-stage-listening',()=>{
-    stagePermissionAudit({env:stage,probeCenterRead:readDatedDelivery.probeCenterRead,fetchImpl})
-      .then(result=>{if(result) console.info(JSON.stringify(result));})
-      .catch(()=>console.info(JSON.stringify({component:'opsmap-stage-permission-audit',state:'UNAVAILABLE'})));
-  });
   const dispatchDate=readDatedDelivery.configured?()=>opsmapDispatchDate(now()):undefined;
   app.disable('x-powered-by');
   app.get('/api/health',(_req,res)=>res.json({ok:true,scope:'stage',release:/^[a-f0-9]{40}$/.test(stage.RENDER_GIT_COMMIT || '') ? stage.RENDER_GIT_COMMIT : null}));
