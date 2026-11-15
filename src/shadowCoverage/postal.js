@@ -3,12 +3,13 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { open, realpath, stat } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
-import { gunzip as decompress } from 'node:zlib';
+import { gunzip as decompress, gzip as compress } from 'node:zlib';
 import { boundedRead, datesFor, isDay, parseCoverageIndex, PERIODS, privateCoverageDirectory, readStoredCoverageFile } from './coverageFiles.js';
 import { decodePostalTile, intersects, postalText, postalTilesLevel, postalTilePosition, POSTAL_AREA_BYTES, POSTAL_LEVELS,
   POSTAL_TILE_LIMIT } from '../../public/opsmap/postal-geometry.mjs';
 
 const gunzip = promisify(decompress);
+const gzip = promisify(compress);
 const sha = /^[0-9a-f]{64}$/;
 const codePattern = /^[A-Z]\d{1,20}$/;
 const centers = ['osan', 'yeongnam', 'honam', 'unknown'];
@@ -25,6 +26,20 @@ const sum = values => values.reduce((a, b) => a + b, 0);
 
 function requireValid(value) {
   if (!value) throw Error('POSTAL_RELEASE_INTEGRITY');
+}
+export async function encodePostalTileResponse(chunks, rawLength, acceptGzip, timing, prefix) {
+  // Archive tiles are independent gzip members. Chrome consumes only the first member of an HTTP gzip response.
+  if (acceptGzip && !prefix && chunks.length === 1) return chunks[0];
+  const started = performance.now();
+  const decoded = await gunzip(Buffer.concat(chunks), { maxOutputLength:rawLength });
+  requireValid(decoded.length === rawLength);
+  if (timing) timing.postal_tile_inflate = performance.now() - started;
+  const body = prefix ? Buffer.concat([prefix,decoded]) : decoded;
+  if (!acceptGzip) return body;
+  const compressing = performance.now();
+  const encoded = await gzip(body, { level:1 });
+  if (timing) timing.postal_tile_compress = performance.now() - compressing;
+  return encoded;
 }
 function numericTuple(value, length) {
   return Array.isArray(value) && value.length === length && value.every(Number.isFinite);
@@ -473,13 +488,15 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       if (timing) timing.postal_viewport = performance.now() - selectedAt;
       return data;
     },
-    async tiles(ids, version, acceptGzip, timing) {
+    async tiles(ids, version, acceptGzip, timing, prefix) {
       const opened = await assets();
       const overview = opened.overview && version === opened.overview.proof ? opened.overview : null;
       const index = overview?.tiles || (version === boundarySha256 ? opened.tiles : null);
       if (!index || !ids.length || ids.length > 32 || new Set(ids).size !== ids.length) throw Error('POSTAL_QUERY_INVALID');
       const files = ids.map(id => index.get(id));
-      if (files.some(file => !file) || sum(files.map(file => file.rawBytes)) > POSTAL_MAX_BATCH_BYTES) throw Error('POSTAL_QUERY_INVALID');
+      if (files.some(file => !file)) throw Error('POSTAL_QUERY_INVALID');
+      const rawLength = sum(files.map(file => file.rawBytes));
+      if (rawLength > POSTAL_MAX_BATCH_BYTES) throw Error('POSTAL_QUERY_INVALID');
       return withBatch(async () => {
         const started = performance.now();
         const chunks = overview?.archive ? await readOverviewTiles(overview.archive,files) : [];
@@ -488,9 +505,8 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
             chunks.push(...await Promise.all(files.slice(i,i + 2).map(file => getTile(opened,file))));
           }
         }
-        const bytes = Buffer.concat(chunks);
         if (timing) timing.postal_tile_read = performance.now() - started;
-        return acceptGzip ? bytes : gunzip(bytes, { maxOutputLength: POSTAL_MAX_BATCH_BYTES });
+        return encodePostalTileResponse(chunks,rawLength,acceptGzip,timing,prefix);
       });
     },
     async area({ days, center, generation, id }) { return detail(await ready(days, center, generation), id); },

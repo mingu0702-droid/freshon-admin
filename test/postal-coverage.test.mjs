@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import test from 'node:test';
+import { gzipSync, inflateRawSync } from 'node:zlib';
 import express from 'express';
-import { classifyPostalZone, POSTAL_DENSITY_HIGH } from '../src/shadowCoverage/postal.js';
+import { classifyPostalZone, encodePostalTileResponse, POSTAL_DENSITY_HIGH } from '../src/shadowCoverage/postal.js';
 import { mountPostalCoverage } from '../src/shadowCoverage/postalRoutes.js';
 import { createPostalGeometryReader, postalWorldProjection } from '../public/opsmap/postal-coverage-map.mjs';
 import { decodePostalOverview, decodePostalTile, encodePostalZone, exactPostalPosition, postalText, postalTilePosition, postalTilesLevel,
@@ -52,6 +53,20 @@ test('compact display tiles preserve zip identity, signed coordinates and exact 
   assert.deepEqual(shape.box,[10,-10,16,0]);
   assert.throws(() => decodePostalOverview(bytes.subarray(0,-1),3), /POSTAL_OVERVIEW_TILE_INVALID/);
   assert.throws(() => decodePostalOverview(bytes,4), /POSTAL_OVERVIEW_TILE_INVALID/);
+});
+
+test('a compressed postal response contains the complete frame in one gzip member', async () => {
+  const prefix = Buffer.from('overview');
+  const pieces = ['one', 'two'].map(piece => gzipSync(piece));
+  const plain = await encodePostalTileResponse(pieces,6,false,undefined,prefix);
+  assert.equal(plain.toString(),'overviewonetwo');
+  for (const header of [undefined, prefix]) {
+    const encoded = await encodePostalTileResponse(pieces,6,true,undefined,header);
+    // A raw inflater stops at the end of the first deflate stream, as Chrome does for HTTP gzip.
+    const { buffer, engine } = inflateRawSync(encoded.subarray(10), { info:true });
+    assert.equal(buffer.toString(),header ? 'overviewonetwo' : 'onetwo');
+    assert.equal(engine.bytesWritten + 18,encoded.length);
+  }
 });
 
 test('the first viewport frame verifies the complete tile list and seeds the viewport cache', async t => {

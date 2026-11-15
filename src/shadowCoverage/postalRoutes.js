@@ -1,12 +1,9 @@
 import { performance } from 'node:perf_hooks';
-import { promisify } from 'node:util';
-import { gzip } from 'node:zlib';
 import { POSTAL_BOOTSTRAP_METADATA_LIMIT, POSTAL_VIEWPORT_TILE_BYTES } from '../../public/opsmap/postal-geometry.mjs';
 
 const postalRoot = '/api/map-phase2b/private/shadow-coverage/postal';
 const centers = ['all', 'osan', 'yeongnam', 'honam'];
 const hash = /^[a-f0-9]{64}$/;
-const gzipHeader = promisify(gzip);
 const historyQueryKeys = new Set(['area', 'center', 'days', 'generation', 'offset']);
 
 function criteria(query) {
@@ -83,11 +80,8 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     prefix.writeUInt32LE(metadata.length,4);
     metadata.copy(prefix,8);
     const gzip = req.acceptsEncodings('gzip','identity') === 'gzip';
-    const [header, geometry] = await Promise.all([
-      gzip ? gzipHeader(prefix,{ level:1 }) : prefix,
-      modules.runtime.tiles(data.tiles.map(([id]) => id),data.overview,gzip,timing)
-    ]);
-    return { bytes:Buffer.concat([header,geometry]), gzip };
+    const bytes = await modules.runtime.tiles(data.tiles.map(([id]) => id),data.overview,gzip,timing,prefix);
+    return { bytes, gzip };
   },binary);
   route('/geometry', async (req, _scope, { runtime }, timing) => {
     const { ids, v } = req.query;
