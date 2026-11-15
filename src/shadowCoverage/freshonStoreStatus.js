@@ -183,7 +183,7 @@ export function createFreshonStoreStatusIndex(projection, registry, generation,
     throw Error('FRESHON_SHADOW_DELIVERY_DATES');
   }
   const rows = new Map();
-  const cells = new Map();
+  const cellsByResolution = new Map();
   const totals = counters();
   const metadata = Object.freeze({ provider: projection.provider, generation, start: projection.start,
     ...(fromBaseline && projection.generation !== generation ? {evidenceGeneration:projection.generation} : {}),
@@ -196,13 +196,22 @@ export function createFreshonStoreStatusIndex(projection, registry, generation,
     const details = structuredClone({ ...row, address: store.address });
     rows.set(row.code, details);
     count(details, totals);
-    if (!store.hasPoint) continue;
-    for (const res of resolutions) {
-      const cell = latLngToCell(store.lat, store.lng, res);
-      const members = cells.get(cell) || [];
-      members.push(details);
-      cells.set(cell, members);
+  }
+  function membersOf(id) {
+    const resolution = getResolution(id);
+    if (!cellsByResolution.has(resolution)) {
+      const cells = new Map();
+      for (const [code, row] of rows) {
+        const store = registry.get(code);
+        if (!store.hasPoint) continue;
+        const cell = latLngToCell(store.lat, store.lng, resolution);
+        const members = cells.get(cell) || [];
+        members.push(row);
+        cells.set(cell, members);
+      }
+      cellsByResolution.set(resolution, cells);
     }
+    return cellsByResolution.get(resolution).get(id) || [];
   }
   const deliveryWindow = createFreshonCompletedDeliveryWindows(projection, rows, seen);
   const orderWindows = new Map();
@@ -265,7 +274,7 @@ export function createFreshonStoreStatusIndex(projection, registry, generation,
         !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       throw Error('FRESHON_SHADOW_CELL_QUERY');
     }
-    const members = cells.get(id) || [];
+    const members = membersOf(id);
     const cellTotals = counters();
     for (const row of members) count(row, cellTotals);
     const orders = orderWindow(days);

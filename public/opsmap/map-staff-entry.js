@@ -134,7 +134,7 @@
       if (initialSnapshot === request) initialSnapshot = null;
       controller.abort();
     }, 10000);
-    request.result = window.fetch('/api/map-phase2b/preview/snapshot', { cache: 'no-store', signal: controller.signal })
+    request.result = window.fetch('/api/map-phase2b/preview/snapshot', { cache: 'no-store', priority: 'high', signal: controller.signal })
       .then(async response => ({ response, json: await response.json().catch(error => {
         if (response.ok) throw error;
         return {};
@@ -155,6 +155,10 @@
   }
   async function bootstrap(owner) {
     const stageSnapshot = stage ? primeStageSnapshot(owner) : null;
+    if (document.documentElement.dataset.referenceDataOptional === 'true') {
+      performance.mark('opsmap-sdk-request');
+      void window.KakaoMapsAdapter?.ready().catch(() => {});
+    }
     const placeholders = document.querySelectorAll('script[type="application/x-map-staff"]');
     for (const placeholder of placeholders) {
       const src = placeholder.dataset.src;
@@ -166,11 +170,7 @@
       preloadedScripts.add(src);
       document.head.append(preload);
     }
-    // Fetch static dependencies in parallel while retaining the execution order below.
-    if (document.documentElement.dataset.referenceDataOptional === 'true') {
-      performance.mark('opsmap-sdk-request');
-      void window.KakaoMapsAdapter?.ready().catch(() => {});
-    }
+    // Fetch static dependencies in parallel while retaining their execution order.
     if(!stage)await loadData(owner);
     if (!booted) {
       for (const placeholder of placeholders) {

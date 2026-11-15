@@ -189,7 +189,8 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
     mark('coverageStatus', readingStatus);
     const enriching = performance.now();
     const storeStatus=cellStatusCounts(model.coverageMembers(view, data.catalog, id), statuses);
-    const deliverySummary=resolution >= 8 ? statuses?.deliveryCell?.(id) : null;
+    // Observation days belong to the verified period. Counts come from this cell and center.
+    const deliverySummary=resolution >= 8 ? statuses?.deliverySummary : null;
     const result = { ...detail, resolution, boundary: h3.cellToBoundary(id),
       deliveryFilter:deliverySummary ? activeDeliverySummary(deliverySummary,storeStatus) : null,
       storeStatus,

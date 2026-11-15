@@ -59,13 +59,15 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
         if (!byPeriod) deliveryProjections.set(evidence, byPeriod = new Map());
         deliveries = byPeriod.get(days);
         if (!deliveries) {
-          deliveries = new Map(codes.map(code => {
+          deliveries = new Map();
+          for (const code of codes) {
             const status = evidence.getDeliveryStatus(code, days);
-            const delivery = publicDelivery(status?.delivery);
-            const newActive = status?.newActive === true && delivery.state === 'CONFIRMED_DELIVERY' ? true :
-              status?.newActive === false && delivery.state === 'CONFIRMED_ZERO' ? false : null;
-            return [code, {newActive,historicalNew:status?.historicalNew === true,held:status?.held === true,delivery}];
-          }));
+            if (!status) continue;
+            const delivery = publicDelivery(status.delivery);
+            const newActive = status.newActive === true && delivery.state === 'CONFIRMED_DELIVERY' ? true :
+              status.newActive === false && delivery.state === 'CONFIRMED_ZERO' ? false : null;
+            deliveries.set(code, {newActive,historicalNew:status.historicalNew === true,held:status.held === true,delivery});
+          }
           byPeriod.set(days, deliveries);
         }
       }
@@ -111,8 +113,7 @@ export function createCoverageStatusReader({ readFixed, readEvidence, readSnapsh
       const deliverySummary = evidence?.getDeliverySummary?.(days);
       return { records, counts, fixedCheckedAt: fixedDay ? fixed.meta.checkedAt : null, evidenceAsOf: asOf, historyStart, rollingStart:first,
         version: fixed?.meta?.version || null, date: today,
-        deliverySummary:deliverySummary ? activeDeliverySummary(deliverySummary, counts) : null,
-        deliveryCell:id=>evidence?.getCell?.(id,{days,limit:1})?.deliveryFilter || null };
+        deliverySummary:deliverySummary ? activeDeliverySummary(deliverySummary, counts) : null };
     })().finally(() => { entry.pending = false; entry.until = now() + 30000; });
     periods.set(days, entry);
     return entry.value;
