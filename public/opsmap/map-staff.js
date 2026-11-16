@@ -159,7 +159,7 @@
         const fields=data.fieldState||{};
         line('출입방법',data.accessInfo,fields.accessInfo);line('비밀번호',data.password,fields.password);
         line('보안키',data.securityKey,fields.securityKey||'UNOBSERVED');line('일반 키',data.generalKey,fields.generalKey||'UNOBSERVED');
-        line('배송 특이사항',data.specialRemark,fields.specialRemark);line('배송요일',data.deliveryPattern,fields.deliveryPattern||'UNOBSERVED');
+        line('배송 특이사항',data.specialRemark,fields.specialRemark);line('배송요일',window.MapPeriodUi?.formatDeliveryWeekdays(data.deliveryPattern)??data.deliveryPattern,fields.deliveryPattern||'UNOBSERVED');
         clearTimeout(refreshTimer);
         refreshTimer=setTimeout(()=>{if(id===generation&&requested&&!document.hidden&&!detailPending){requested={...requested,refresh:true};void showRequested(id);}},60000);
 

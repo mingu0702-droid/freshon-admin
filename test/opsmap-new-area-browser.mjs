@@ -47,8 +47,8 @@ try{
     assert.equal(rows[0].decision,'O');assert.equal(rows[0].nearestDistanceMeters,0);assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
     assert.match(await page.locator('#newAreaBatchResults').innerText(),/배송 가능 \(O\)/);
     assert.match(await page.locator('#newAreaBatchResults').innerText(),/30km 내 참고 배차호차 · 2대 확인/);
-    assert.match(await page.locator('#newAreaBatchResults [data-area-nearest-weekdays]').first().innerText(),/101호 월 · 122호 수/);
-    assert.match(await page.locator('#newAreaBatchResults [data-area-fixed-weekdays]').first().innerText(),/월 · 수/);
+    assert.match(await page.locator('#newAreaBatchResults [data-area-nearest-weekdays]').first().innerText(),/101호 월 122호 수/);
+    assert.match(await page.locator('#newAreaBatchResults [data-area-fixed-weekdays]').first().innerText(),/월 수/);
     assert.equal(await page.locator('#newAreaBatchResults [data-area-dispatch-reference]').first().innerText(),
       '배차표 기준일 2026-09-24 · 최신 배정 미확인');
     for(const radius of ['40','50','30']){

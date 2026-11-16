@@ -123,7 +123,7 @@ test('new area displays the nearby fixed schedule without changing the nearest-s
   assert.deepEqual(row.fixedNearbyWeekdays,['월','수']);
   assert.equal(row.fixedNearbyWeekdayState,'PARTIAL');
   const column=MapPeriodUi.areaExportHeadings.indexOf('500m 내 등록 매장 배송요일');
-  assert.match(MapPeriodUi.areaExportRows([row])[0][column],/^월 · 수/);
+  assert.match(MapPeriodUi.areaExportRows([row])[0][column],/^월 수/);
 });
 test('changing 30/40/50 km and clearing all delivery history leave O, X and review unchanged',()=>{
   const f=fixture();
@@ -157,6 +157,17 @@ test('nearest registered store comes from the fixed registry even when a period 
   assert.equal(row.nearestStore,'배송 이력 없는 매장');
   assert.equal(row.nearestStoreCode,'S990002');assert.equal(row.nearestDistanceMeters,11);
 });
+test('staff weekday formatting expands ranges and keeps the order and unknown values',()=>{
+  for(const [input, expected] of [
+    ['월·화·수·목·금·토','월 화 수 목 금 토'],
+    ['월~금','월 화 수 목 금'], ['월요일 ～ 금요일','월 화 수 목 금'],
+    ['월수금','월 수 금'], ['화 목 토','화 목 토'], ['월','월'],
+    ['토~월','토 일 월'], ['미확인','미확인'], ['월~','월~'], ['', '']
+  ]) assert.equal(MapPeriodUi.formatDeliveryWeekdays(input), expected);
+  const observed=['일','수','월'];
+  assert.equal(MapPeriodUi.formatDeliveryWeekdays(observed),'일 수 월');
+  assert.deepEqual(observed,['일','수','월']);
+});
 test('verified dispatch days stay with their weekday vehicle and exclude Sunday',()=>{
   const f=fixture();
   f.setup([],{},[near]);
@@ -168,7 +179,7 @@ test('verified dispatch days stay with their weekday vehicle and exclude Sunday'
   const cells=MapPeriodUi.areaExportRows([row])[0];
   assert.equal(cells[6],'101호 · 122호');
   assert.match(cells[12],/101호 .*미확인/);
-  assert.equal(cells[13],'101호 미확인 · 122호 화');
+  assert.equal(cells[13],'101호 미확인 122호 화');
   assert.equal(cells[14],'배차표 기준일 2026-09-24 · 최신 배정 미확인');
   f.assign([{...assigned,baseVehicleState:'CONFLICT'}]);
   const unknown=f.judgeNewAreaPoint({address:near.address},{lat:near.lat,lng:near.lng});

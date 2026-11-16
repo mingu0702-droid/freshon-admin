@@ -1,4 +1,6 @@
-export const addressMunicipality = (() => {
+const provinceAliases = new Map();
+
+export const addressRegionParts = (() => {
   // Only accept named municipalities at the beginning of a Customer address.
   const municipalities = [
     ['서울 서울시 서울특별시', '종로구 중구 용산구 성동구 광진구 동대문구 중랑구 성북구 강북구 도봉구 노원구 은평구 서대문구 마포구 양천구 강서구 구로구 금천구 영등포구 동작구 관악구 서초구 강남구 송파구 강동구'],
@@ -20,18 +22,46 @@ export const addressMunicipality = (() => {
   ];
   const byProvince = new Map();
   for (const [provinces, names] of municipalities) {
+    const aliases = provinces.split(' ');
+    const canonical = aliases.at(-1);
     const allowed = new Set(names.split(' '));
-    for (const province of provinces.split(' ')) byProvince.set(province, allowed);
+    provinceAliases.set(canonical, aliases);
+    for (const province of aliases) byProvince.set(province, { canonical, allowed });
   }
-  byProvince.set('전남광주통합특별시', new Set([...byProvince.get('전남'), ...byProvince.get('광주')]));
+  const combined = '전남광주통합특별시';
+  byProvince.set(combined, {canonical: combined, allowed: new Set([...byProvince.get('전남').allowed, ...byProvince.get('광주').allowed])});
+  const sejong = '세종특별자치시';
+  const sejongAliases = ['세종', '세종시', sejong];
+  provinceAliases.set(sejong, sejongAliases);
+  const districts = new Map(Object.entries({
+    수원시: '장안구 권선구 팔달구 영통구', 성남시: '수정구 중원구 분당구', 부천시: '원미구 소사구 오정구',
+    안양시: '만안구 동안구', 안산시: '상록구 단원구', 고양시: '덕양구 일산동구 일산서구',
+    용인시: '처인구 기흥구 수지구', 청주시: '상당구 서원구 흥덕구 청원구', 천안시: '동남구 서북구',
+    전주시: '완산구 덕진구', 포항시: '남구 북구', 창원시: '의창구 성산구 마산합포구 마산회원구 진해구',
+    화성시: '만세구 효행구 병점구 동탄구'
+  }).map(([city, names]) => [city, new Set(names.split(' '))]));
 
-  return function addressMunicipality(address) {
+  return function addressRegionParts(address) {
     const [province, ...parts] = String(address || '').normalize('NFKC').trim().split(/\s+/);
-    const [municipality, location] = province === '전남광주통합특별시' && parts[0] === '광주광역시' ? parts.slice(1) : parts;
-    if (['세종', '세종시', '세종특별자치시'].includes(province) && municipality) return '세종시';
-    if (byProvince.get(province)?.has(municipality) && location) return municipality;
-    return '';
+    const nestedGwangju = province === combined && parts[0] === '광주광역시';
+    const [municipality, second, rest] = nestedGwangju ? parts.slice(1) : parts;
+    if (sejongAliases.includes(province) && municipality) return {municipality: '세종시', region: sejong};
+    const admin = byProvince.get(province);
+    if (!admin?.allowed.has(municipality) || !second) return null;
+    const district = rest && districts.get(municipality)?.has(second) ? second : '';
+    const region = [admin.canonical, nestedGwangju ? '광주광역시' : '', municipality, district].filter(Boolean).join(' ');
+    return {municipality, region};
   };
 })();
 
-if (typeof window === 'object') window.MapVehiclePickerRegions = { addressMunicipality };
+export const addressMunicipality = address => addressRegionParts(address)?.municipality || '';
+export const vehicleRegionQuery = value => String(value || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+
+export function vehicleRegionTerms(region) {
+  const [province, ...parts] = region.split(' ');
+  const aliases = provinceAliases.get(province) || [province];
+  return [...aliases.map(alias => [alias, ...parts]), ...parts.map((_, index) => parts.slice(index))]
+    .map(terms => vehicleRegionQuery(terms.join(' ')));
+}
+
+if (typeof window === 'object') window.MapVehiclePickerRegions = { addressRegionParts, addressMunicipality, vehicleRegionQuery, vehicleRegionTerms };

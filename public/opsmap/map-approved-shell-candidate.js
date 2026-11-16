@@ -41,7 +41,7 @@
   filters.querySelector('.label').remove();
   const centers=document.createElement('div');centers.className='centers';centers.id='centers';
   centers.setAttribute('role','group');centers.setAttribute('aria-label','담당 센터');
-  centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남']].map(([key,label])=>`<button type="button" data-source-center="${key}">${label}</button>`).join('');
+  centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남'],['unknown','미확인']].map(([key,label])=>`<button type="button" data-source-center="${key}"${key==='unknown'?' aria-label="센터 미확인"':''}>${label}</button>`).join('');
   const centerButtons=centers.querySelectorAll('button');
   function syncCenterButtons(){
     const center=$('#periodCenter').value||'all';
@@ -55,7 +55,7 @@
   basePicker.innerHTML='<summary>호차 선택</summary><p id="baseVehicleCount" role="status">선택 없음 · 전체 지도</p>';
   const pickerActions=document.createElement('div');pickerActions.className='vehiclePickerActions';
   pickerShell.append(basePicker,pickerActions);
-  const vehicleQuery=$('#vehicleQuery');vehicleQuery.type='search';vehicleQuery.placeholder='호차번호 · 담당 지역 검색';vehicleQuery.setAttribute('aria-label','호차번호 · 담당 지역 검색');
+  const vehicleQuery=$('#vehicleQuery');vehicleQuery.type='search';vehicleQuery.placeholder='호차검색/권역검색';vehicleQuery.setAttribute('aria-label','호차검색/권역검색');
   function setCenter(key){if(bridge.state.mode!=='BASE_60D')return;$('#periodCenter').value=key;$('#periodCenter').dispatchEvent(new Event('change'));syncCenterButtons();}
   centerButtons.forEach(button=>button.onclick=()=>setCenter(button.dataset.sourceCenter));
   const planner=document.createElement('details');planner.id='waypointPlanner';
@@ -263,7 +263,7 @@
     const verified=['VERIFIED_MASTER','UNASSIGNED'].includes(row.baseVehicleState)&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'');
     if(verified&&names[row.baseVehicleGroup])return names[row.baseVehicleGroup];
     // Only explicit dispatch-center fields may supply a center. The address is never a center source.
-    for(const raw of [row.dispatchCenterCode,row.centerId,row.centerCode,row.centerName,typeof row.center==='string'?row.center:row.center?.id,typeof row.center==='object'?row.center?.name:null]){const name=names[String(raw||'').trim()];if(name)return name;}
+    for(const raw of [row.dispatchCenterCode,row.centerId,row.centerCode,row.centerName,typeof row.center==='string'?row.center:row.center?.id,typeof row.center==='object'?row.center?.name:null,row.raw?.centerGroup]){const name=names[String(raw||'').trim()];if(name)return name;}
     return '';
   }
   const sourceRouteLabel=vehicle=>/\d$/.test(vehicle)?`${vehicle}호차`:vehicle==='보류'?'오산보류':vehicle;
@@ -273,7 +273,7 @@
     return !daily&&({NOT_IN_MASTER:'기준표 미등록',CONFLICT:'기준호차 충돌'}[row.baseVehicleState])||'호차 확인 필요';
   }
   function sourceCard(button,row,daily){
-    if(!row)return;const vehicle=String((daily?row.vehicle:Object.hasOwn(row,'baseVehicle')?row.baseVehicle:row.vehicle)||'').trim();const key=JSON.stringify([row.customerName,row.customerCode,vehicle,row.status,daily,row.address,row.customerAddress,row.baseVehicleState,row.baseVehicleEmptyVerified,row.baseVehicleSource,row.baseVehicleVersion,row.baseVehicleStale,row.baseVehicleGroup,row.baseVehicleCheckedAt,row.dispatchCenterCode,row.centerCode,row.centerId,row.center,row.centerName]);if(button.dataset.sourceCard===key)return;
+    if(!row)return;const vehicle=String((daily?row.vehicle:Object.hasOwn(row,'baseVehicle')?row.baseVehicle:row.vehicle)||'').trim();const key=JSON.stringify([row.customerName,row.customerCode,vehicle,row.status,daily,row.address,row.customerAddress,row.baseVehicleState,row.baseVehicleEmptyVerified,row.baseVehicleSource,row.baseVehicleVersion,row.baseVehicleStale,row.baseVehicleGroup,row.baseVehicleCheckedAt,row.dispatchCenterCode,row.centerCode,row.centerId,row.center,row.centerName,row.raw?.centerGroup]);if(button.dataset.sourceCard===key)return;
     button.dataset.sourceCard=key;button.classList.add('storeitem');
     button.title=[row.customerCode,row.customerName,row.address||row.customerAddress].filter(Boolean).join(' · ');button.replaceChildren();
     const icon=document.createElement('span');icon.className='icon';icon.textContent=daily?String(row.order||'—'):'•';icon.setAttribute('aria-hidden','true');
@@ -307,7 +307,11 @@
       const heading='자동차 경로';if($('#navigationPreview h2 span').textContent!==heading)$('#navigationPreview h2 span').textContent=heading;
       if($('#opEta').textContent.includes('과거')){$('#opEta').title=$('#opEta').textContent;$('#opEta').textContent='—';}
       // Route controllers own status, coverage and metrics; the shell must not replace them.
-    }else{const match=$('#periodStoreListCount').textContent.match(/^([\d,]+)/);if(match){const text=match[1]+' 매장';if($('#totalBadge').textContent!==text)$('#totalBadge').textContent=text;}}
+    }else{const match=$('#periodStoreListCount').textContent.match(/^([\d,]+)/);if(match){
+      const total=bridge.registeredStoreCount?.(),count=Number(match[1].replace(/,/g,''));
+      const text=total&&count!==total?`${match[1]} / ${total.toLocaleString('ko-KR')} 매장`:match[1]+' 매장';
+      if($('#totalBadge').textContent!==text)$('#totalBadge').textContent=text;
+    }}
     if($('#syncOperation').textContent!=='운행 새로고침')$('#syncOperation').textContent='운행 새로고침';
     const countMatch=controllerCount.textContent.match(/^([\d,]+)/),countText=countMatch?countMatch[1]:controllerCount.textContent;if(displayCount.textContent!==countText)displayCount.textContent=countText;
     const toggle=$('#togglePeriodList'),toggleText=toggle.getAttribute('aria-expanded')==='true'?'접기 −':'펼치기 ＋';if(toggle.textContent!==toggleText)toggle.textContent=toggleText;

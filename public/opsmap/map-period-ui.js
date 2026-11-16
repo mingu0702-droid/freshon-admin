@@ -124,11 +124,23 @@
     if (/^광주(광역시)?$|^전(라)?[남북](도)?$|^전북특별자치도$/.test(province)) return '호남권';
     return '';
   }
+  const weekdays = '월화수목금토일';
+  function formatDeliveryWeekdays(value) {
+    const text = (Array.isArray(value) ? value.join(' ') : String(value ?? '')).trim();
+    const expanded = text.replace(/([월화수목금토일])요일/g, '$1')
+      .replace(/([월화수목금토일])\s*[~～〜]\s*([월화수목금토일])/g, (_match, first, last) => {
+        const start = weekdays.indexOf(first);
+        const count = (weekdays.indexOf(last) - start + 7) % 7 + 1;
+        return Array.from({length:count}, (_, index) => weekdays[(start + index) % 7]).join(' ');
+      });
+    if (!/^[월화수목금토일\s·ㆍ,\/]+$/.test(expanded)) return text;
+    return expanded.match(/[월화수목금토일]/g)?.join(' ') || text;
+  }
   const areaRadius = value=>[30,40,50].includes(Number(value))?Number(value):30;
   const areaDispatchVehicles = (row,radius)=>root.Phase2bUi.vehiclesAtRadius(row.dispatchVehicles||[],areaRadius(radius));
-  const areaDispatchDays = item=>item.weekdays.join('·')||'미확인';
+  const areaDispatchDays = item=>formatDeliveryWeekdays(item.weekdays)||'미확인';
   function areaFixedWeekdayLabel(row) {
-    const days=row.fixedNearbyWeekdays?.join(' · ');
+    const days=formatDeliveryWeekdays(row.fixedNearbyWeekdays);
     if(days)return days+(row.fixedNearbyWeekdaysStale?' (이전 배차표)':row.fixedNearbyWeekdayState==='PARTIAL'?' (일부 자료 미확인)':'');
     return ({NO_DELIVERY:'등록된 배송요일 없음',NO_NEARBY_STORES:'500m 내 등록 매장 없음'})[row.fixedNearbyWeekdayState]||'미확인';
   }
@@ -154,7 +166,7 @@
       const vehicles=areaDispatchVehicles(row,radius).map(item=>areaVehicleLabel(item)+' / '+areaDistance(item.distance)+' / '+areaDispatchDays(item)).join(' | ');
       const assigned=row.nearestDispatch||[];
       const vehicleNames=assigned.map(item=>root.Phase2bUi.normalizeVehicleLabel(item.vehicle));
-      const weekdays=assigned.map((item,index)=>vehicleNames[index]+' '+areaDispatchDays(item)).join(' · ');
+      const weekdays=assigned.map((item,index)=>vehicleNames[index]+' '+areaDispatchDays(item)).join(' ');
       return [row.originalAddress??row.address??'',row.originalCustomer??row.customer??'',decision,reason,date,
         regionForAddress(row.address),vehicleNames.join(' · ')||(row.nearestStoreCode?row.nearestDispatchLabel:''),row.nearestStore||'',
         Number.isFinite(row.nearestDistance)?Number(row.nearestDistance.toFixed(3)):'',row.nearestStoreCode||'',
@@ -201,6 +213,6 @@
     return /^\d+$/.test(route||'')?route+'호':route==='보류'?'오산보류':route||'확인 필요';
   }
   root.MapPeriodUi = Object.freeze({ select, cluster, recentRange, spatialIndex, reconcile, parseAreaInput,
-    regionForAddress, areaRadius, areaDispatchVehicles, areaDispatchDays, areaDispatchReference, areaFixedWeekdayLabel, areaDistance, areaVehicleLabel, areaExportHeadings, areaExportRows, areaTsv,
+    regionForAddress, formatDeliveryWeekdays, areaRadius, areaDispatchVehicles, areaDispatchDays, areaDispatchReference, areaFixedWeekdayLabel, areaDistance, areaVehicleLabel, areaExportHeadings, areaExportRows, areaTsv,
     acceptsBaseVersion, mergeBaseVehicles, fixedVehicleEvidence, baseVehicleLabel });
 })(typeof window === 'undefined' ? globalThis : window);
