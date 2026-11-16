@@ -108,6 +108,7 @@
     return nearest;
   }
   const WEEKDAYS = ['일','월','화','수','목','금','토'];
+  let compareVehicleNumber;
   function observedWeekdays(mask) {
     return [1,2,3,4,5,6,0].filter(day => mask & (1 << day)).map(day => WEEKDAYS[day]);
   }
@@ -129,7 +130,8 @@
       }
       for (let day=0;day<7;day++) if (mask & (1 << day)) group.dayDistances[day] = Math.min(group.dayDistances[day],distance);
     }
-    return [...byVehicle.values()].sort((a,b)=>a.distance-b.distance||a.vehicle.localeCompare(b.vehicle,'ko',{numeric:true}));
+    return [...byVehicle.values()].sort((a,b)=>a.distance-b.distance||
+      (compareVehicleNumber ||= new Intl.Collator('ko',{numeric:true}).compare)(a.vehicle,b.vehicle));
   }
   function vehiclesAtRadius(vehicles, radius) {
     return vehicles.filter(item=>item.distance<=radius).map(({dayDistances,...item})=>({...item,

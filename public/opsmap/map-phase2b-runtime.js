@@ -3936,7 +3936,8 @@
     const status = point.coordinateStatus || point.raw?.coordinateStatus;
     const lat = numberOrNull(point.lat), lng = numberOrNull(point.lng);
     if (['CONFLICT','UNVERIFIED','MISSING'].includes(status) || point.resolutionStatus === 'ADDRESS_CHANGED_REVIEW_REQUIRED' || lat === null || lng === null || lat < 33 || lat > 39.5 || lng < 124 || lng > 132) return null;
-    return {...point, lat, lng};
+    point.lat=lat;point.lng=lng;
+    return point;
   }
 
   function storedAreaMatches(address, batch) {
@@ -4228,7 +4229,9 @@
     for(const store of registeredRows){
       const code=store.customerCode||store.code;
       if(!code)continue;
-      const point=newAreaCoordinate({...store,customerCode:code,customerName:store.customerName||store.name||''},{fixedOnly:true});
+      const registered=store.customerCode===code&&store.customerName
+        ?store:{...store,customerCode:code,customerName:store.customerName||store.name||''};
+      const point=newAreaCoordinate(registered,{fixedOnly:true});
       if(!point)continue;
       locationRows.push(point);
       const coordinateKey=point.lat+'|'+point.lng;
@@ -4559,7 +4562,7 @@
     if (newAreaBusy) return;
     const status = $(statusId), list = $(resultId);
     const started=performance.now();
-    let addressMs=0,decisionMs=0,renderMs=0,setupMs=0;
+    let addressMs=0,prepareMs=0,decisionMs=0,renderMs=0,setupMs=0;
     const stage=stageAddressBatchEnabled();
     const addressTiming={requests:0,storedHits:0,server:{}};
     if (state.mode !== 'BASE_60D') { status.textContent = '매장·권역 지도에서 조회해 주세요.'; return; }
@@ -4660,9 +4663,14 @@
           ?stageSingleAreaEvidence(rows[requested[0]],signal,requestId).then(result=>[result])
           :stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId,addressTiming);
         dispatchPending=prepareNewAreaDispatch();
+        const prepareStarted=performance.now();
+        // Prepare the fixed registry while the one protected address request is in flight.
+        const prepared=requested.length>1&&snapshotMeta?.sourceGeneration ? newAreaEvidence() : null;
+        prepareMs=performance.now()-prepareStarted;
         const results=await evidence;
         addressMs=Math.round(performance.now()-addressStarted);
         batch.stageRows=new Map(requested.map((index,i)=>[index,results[i]]));
+        if(prepared&&newAreaEvidenceMemo?.evidence===prepared&&prepared.source===baseVehicleMeta&&prepared.assignments===baseVehicles)batch.evidence=prepared;
       } else dispatchPending=prepareNewAreaDispatch();
       if (!current()) return;
       await Promise.all(Array.from({length:Math.min(3,indexes.length)},worker));
@@ -4688,7 +4696,7 @@
           renderMs+=performance.now()-renderStarted;
           if(stage){
             list.setAttribute('data-batch-timing',JSON.stringify({rows:rows.length,completed:counts.done,located:counts.located,addressMs,
-              setupMs:Math.round(setupMs),decisionMs:Math.round(decisionMs),renderMs:Math.round(renderMs),
+              setupMs:Math.round(setupMs),prepareMs:Math.round(prepareMs),decisionMs:Math.round(decisionMs),renderMs:Math.round(renderMs),
               ...(rows.length>1&&{addressRequests:addressTiming.requests,storedAddressHits:addressTiming.storedHits,server:addressTiming.server}),
               totalMs:Math.round(performance.now()-started)}));
             if(!document.hidden&&typeof requestAnimationFrame==='function')requestAnimationFrame(()=>requestAnimationFrame(()=>{
