@@ -3,8 +3,7 @@
   const failure = code => Object.assign(new Error(code), { code });
   // Search identity is separate from the unchanged X/Y cells and address hash.
   function addressQueries(address, variants) {
-    const normalized = String(address || '').normalize('NFKC').replace(/\s+/g, ' ').trim()
-      .replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)(?=\s|\(|\[|$)/g, '$1 $2');
+    const normalized = String(address || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
     const choices = variants(normalized);
     const primary = choices[choices.length - 1] || '';
     if(/[()[\]]/.test(primary)||!/(?:대로|로|길|동\d+가|동|읍|면|리|가)\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?$/.test(primary))return [];
@@ -24,6 +23,18 @@
     return [...new Set([primary,query])];
   }
   function addressQuery(address, variants) { return addressQueries(address,variants)[0] || ''; }
+  function batchAddressQueries(rows, variants) {
+    const unique = new Map();
+    const indexes = rows.map(row => {
+      const code = row.address.trim().toUpperCase();
+      const queries = /^[A-Z]\d{3,}$/.test(code) || /^\d{19}$/.test(code) ? [code] : addressQueries(row.address, variants);
+      if (!queries.length || queries.some(query=>query.length>200)) return -1;
+      const key = JSON.stringify(queries.map(addressKey));
+      if (!unique.has(key)) unique.set(key, {index:unique.size, queries});
+      return unique.get(key).index;
+    });
+    return { inputs:[...unique.values()].map(item=>item.queries), indexes };
+  }
   function addressFailureHint(address, variants) {
     const base = addressQuery(address, variants);
     if (!base) return '시·군·구와 도로명 주소 또는 지번을 확인해 주세요.';
@@ -159,7 +170,7 @@
     flights.clear();
   }
   root.addEventListener?.('map-staff-signed-out',()=>{resetStageAddress();temporary.clear();});
-  root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, addressFailureHint, stopsExternal, outcome, singleStoredLocation,
+  root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, batchAddressQueries, addressFailureHint, stopsExternal, outcome, singleStoredLocation,
     stageAddress, rememberTemporary, forgetTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
 })(typeof window === 'object' ? window : globalThis);
 

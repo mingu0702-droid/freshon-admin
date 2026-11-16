@@ -21,6 +21,7 @@ import {createProductionSnapshotStore,materializeSnapshot} from './productionSna
 import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,createStageAbValidation,mountStageAbValidation} from './stageAbValidation.js';
 import {phase2bSnapshotMeta} from './phase2bOperations.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
+import {createStageStoreDetails} from './stageStoreDetails.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
@@ -423,11 +424,16 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return res.status(403).json({error:'STAGE_READ_ONLY'});
   });
   let staffView;
+  const readStageStoreDetail = createStageStoreDetails({now,publication:()=>{
+    const active=validation.active();
+    if (!active) return null;
+    return {generation:active.generation,asOf:active.asOf,snapshot:selectSnapshot(snapshot)};
+  }});
   mountProductionMapApi(router,{
     previewEnabled:()=>true,requireView:(req,res,next)=>staffView(req,res,next),readPhase2bSnapshot:readSnapshot,
     getSnapshotMemory:()=>validation.active() ? validation.active().scheduled?.snapshot || joinedSnapshot?.snapshot || snapshot : snapshot,
     phase2bKstDate:today,phase2bDispatchDate:dispatchDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:readDatedDelivery,
-    callHub,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
+    callHub,readStageStoreDetail,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
     sharedBaseCache:base,hybridEnabled:()=>false,roadRouteService,readRecordedRoadRoute,addressLookupService,
     getShadowCoverageState:()=>validation.active() || !postalEnabled && coverageState==='ready' ? 'ready' :
       baselineRefresh || scheduledRefresh || fileRestorePending ? 'restoring' : 'unavailable',

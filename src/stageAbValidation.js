@@ -425,7 +425,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
       const generationError=validation.addressGenerationError(generation,prepared);
       if(generationError)return res.status(409).json({error:generationError});
       try{
-        const loaded=includeCustomers&&generation!==null ? prepared?.scheduled?.snapshot||readReadySnapshot?.() : null;
+        const loaded=generation!==null ? prepared?.scheduled?.snapshot||readReadySnapshot?.() : null;
         const immediate=loaded?.sourceGeneration===generation&&Array.isArray(loaded?.rows);
         const saved=immediate?loaded:await readSnapshot();
         const changed=validation.addressGenerationError(generation,validation.active());
@@ -453,11 +453,11 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         const respond=()=>{
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           if(validation.active()!==prepared)return res.status(409).json({error:validation.addressGenerationError(generation,validation.active())||'STAGE_BATCH_GENERATION_CHANGED'});
-          if(immediate)res.locals.stageInlineStaffResponse=true;
+          if(immediate&&includeCustomers)res.locals.stageInlineStaffResponse=true;
           res.set('Server-Timing',`opsmap-address-read;dur=${Math.round(preparing-started)}, opsmap-address-index;dur=${Math.round(matching-preparing)}, opsmap-address-match;dur=${Math.round(matched-matching)}, opsmap-address-recheck;dur=${Math.round(performance.now()-matched)}`);
           return res.json({ok:true,generation,data});
         };
-        return immediate?respond():requireStaff(req,res,respond);
+        return immediate&&includeCustomers?respond():requireStaff(req,res,respond);
       }catch{return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});}
     }
     if(!/^[a-f0-9]{64}$/.test(generation||'')||!Array.isArray(queries)||queries.length<1||queries.length>120||

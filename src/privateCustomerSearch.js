@@ -110,7 +110,8 @@ export function resolvePreservedAddressBatch(rows,snapshot,officialIndex,{includ
    const points=new Map();
    for(const row of matched){const point=approvedPoint(row);if(!point)return {status:'STORED_COORDINATE_UNVERIFIED',...customers};
     points.set(`${point.lat},${point.lng}`,point);}
-   if(points.size!==1)return {status:'ADDRESS_AMBIGUOUS',...customers};
+   if(points.size!==1)return {status:'ADDRESS_AMBIGUOUS',...customers,
+    points:[...points.values()].slice(0,12).map(point=>({...point,coordinateSource:'STAGE_PRESERVED_COORDINATE'}))};
    return {status:'STORED',...customers,point:{...points.values().next().value,coordinateSource:'STAGE_PRESERVED_COORDINATE'}};
   }
   if(isCode)return {status:'CUSTOMER_CODE_NOT_FOUND'};

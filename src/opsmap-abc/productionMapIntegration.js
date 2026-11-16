@@ -65,7 +65,7 @@ export function mountProductionMapApi(app,{
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
   publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement,sharedBaseCache,
   hybridEnabled=()=>process.env.MAP_HYBRID_90DAY_ENABLED==='true',hybridReadIndexedDay,hybridUiReadiness,hybridReadDateCatalog,hybridReadDatePage,hybridReadVerifiedDayText,hybridStoredIoEnabled=false,hubPublicationCutover=null,
-  mountPrivateExtensions,getShadowCoverageState,getLocalDataEvidence,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,readObservedStoreAddress,readApprovedCoordinateSearch,readArchivedAssignments
+  mountPrivateExtensions,getShadowCoverageState,getLocalDataEvidence,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,readObservedStoreAddress,readApprovedCoordinateSearch,readArchivedAssignments,readStageStoreDetail
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
@@ -207,6 +207,14 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
   if (req.query.view && !storeView) return res.status(400).json({error:'INVALID_DETAIL_VIEW'});
   const detailDate = req.query.date ? normalizeDateValue(req.query.date) : getSnapshotMemory()?.latestDate || phase2bKstDate();
   if (!detailDate || detailDate > phase2bKstDate()) return res.status(400).json({ error: "INVALID_DATE" });
+  const stageStore = storeView && readStageStoreDetail;
+  const started = performance.now();
+  let readState = 'UNAVAILABLE';
+  if (stageStore) {
+    res.set('Cache-Control','private, no-store').vary('Cookie');
+    res.once('finish',()=>console.info(JSON.stringify({component:'stage-customer-detail',status:res.statusCode,
+      state:readState,durationMs:Math.round(performance.now()-started)})));
+  }
   try {
     await privateSnapshotReady;
     const detailIdentity={customerCode,date:detailDate,view:storeView?'store':'notes'};
@@ -224,7 +232,9 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
     const loadDetail=async()=>env.OPSMAP_PREPARED_DETAILS_ENABLED==='1'
       ?await preparedCustomerDetails.read(detailIdentity,{legacyLoader,refresh:req.query.refresh==='1'})
       :await legacyLoader();
-    const result=addressLocationRead?await queueAutomaticAddressRead(loadDetail):await loadDetail();
+    const result=stageStore ? await readStageStoreDetail(detailIdentity,{refresh:req.query.refresh==='1',
+      automatic:addressLocationRead,load:loadDetail}) : addressLocationRead ? await queueAutomaticAddressRead(loadDetail) : await loadDetail();
+    readState=result.meta?.cache || 'SOURCE';
     if(storeView&&readApprovedCoordinateSearch){const coordinateSearch=await readApprovedCoordinateSearch(result.value);if(coordinateSearch)result.value={...result.value,coordinateSearch};}
     // Even a cache HIT must recheck the employee session. Plaintext is never
     // sent to public snapshots, browser persistent storage, or response caches.
@@ -237,8 +247,10 @@ app.get("/api/map-phase2b/private/customer-detail", async (req, res) => {
     res.set('X-Detail-Failure-Target', ['EXEC','OUTPUT'].includes(profile.requestStage)?profile.requestStage:'unknown');
     for (const key of ['responseHeadersMs','bodyReadMs','parseMs']) addStaffTiming(res, 'hub' + key.replace(/Ms$/, ''), Number(profile[key] || 0));
     const timeout = error?.name === 'AbortError';
-    const status = timeout ? 504 : Number(error?.upstreamStatus) === 404 && error?.failureType === "upstream" ? 404 : 502;
-    return res.status(status).json({ ok: false, data: null, error: timeout ? 'DETAIL_UPSTREAM_TIMEOUT' : 'PRIVATE_DETAIL_UNAVAILABLE' });
+    const stageCode = stageStore && ['DETAIL_SOURCE_RATE_LIMITED','DETAIL_SOURCE_BUSY','DETAIL_SELECTION_REQUIRED'].includes(error?.message) ? error.message : null;
+    if (stageCode && Number.isSafeInteger(error.retryAfter)) res.set('Retry-After',String(error.retryAfter));
+    const status = stageCode ? error.status : timeout ? 504 : Number(error?.upstreamStatus) === 404 && error?.failureType === "upstream" ? 404 : 502;
+    return res.status(status).json({ ok: false, data: null, error: stageCode || (timeout ? 'DETAIL_UPSTREAM_TIMEOUT' : 'PRIVATE_DETAIL_UNAVAILABLE') });
   }
 });
 

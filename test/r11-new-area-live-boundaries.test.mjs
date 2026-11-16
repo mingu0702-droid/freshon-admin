@@ -17,12 +17,20 @@ setup(saved){state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';dateReady
   for(const row of saved){storesByCode.set(row.customerCode,row);coordinateByCode.set(row.customerCode,row);if(row.vehicle)baseVehicles.set(row.customerCode,{baseVehicle:row.vehicle});}},
 saved:()=>latestSnapshotRows};})();`;
 const saved={customerCode:'S990001',customerName:'합성 저장매장',address:'경기도 화성시 합성로 1',lat:37.2,lng:127,vehicle:'101'};
-function fixture({rows=[],customer=()=>({data:[],meta:{complete:true}}),lookup=(query,callback)=>callback([{address_name:query,x:'127',y:'37.2'}],'OK')}={}){
-  const nodes=new Map(),headers=[],queries=[];
+function fixture({rows=[],stageBatch,customer=()=>({data:[],meta:{complete:true}}),lookup=(query,callback)=>callback([{address_name:query,x:'127',y:'37.2'}],'OK')}={}){
+  const nodes=new Map(),headers=[],queries=[],batches=[];
   const node=id=>{if(!nodes.has(id))nodes.set(id,batchDomNode());return nodes.get(id);};
   const window={addEventListener(){},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,
     KAKAO_MAP_CONFIG:{allowExternalAddressLookup:true},kakaoGeocoder:{serverProxy:true,addressSearch(query,callback,options){queries.push(query);lookup(query,callback,options);}}};
+  if(stageBatch)window.location={origin:'https://freshon-admin-stage-preview-template.onrender.com'};
   const fetch=async(url,options)=>{
+    if(stageBatch&&url==='/api/map-phase2b/private/stage-address-evidence'){
+      assert.equal(options.method,'POST');
+      const body=JSON.parse(options.body);
+      batches.push(body);
+      const {status=200,payload}=stageBatch(body);
+      return {ok:status===200,status,headers:{get(){return null;}},json:async()=>payload};
+    }
     assert.equal(url,'/api/map-phase2b/private/customer-search');
     assert.equal(options.method,undefined);
     const query=decodeURIComponent(options.headers['x-map-customer-query']);headers.push(query);
@@ -34,7 +42,7 @@ function fixture({rows=[],customer=()=>({data:[],meta:{complete:true}}),lookup=(
     location:{href:'https://example.invalid/opsmap/'},fetch,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
   vm.runInContext(exposed,context);window.qa.setup(rows);
   const run=input=>{node('#newAreaBatchInput').value=input;return window.qa.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');};
-  return {...window.qa,window,node,run,headers,queries};
+  return {...window.qa,window,node,run,headers,queries,batches};
 }
 const query=address=>globalThis.NewAreaRequests.addressQuery(address,globalThis.Phase2bUi.addressVariants);
 const queryChoices=address=>globalThis.NewAreaRequests.addressQueries(address,globalThis.Phase2bUi.addressVariants);
@@ -67,6 +75,48 @@ test('basic query reuses existing variants, keeps road/lot numbers and scopes of
   }
   assert.equal(query('합성건물 고객정보만'), '');
   assert.equal(query('합성건물 (경기 안성시 일죽면 서동대로 7184)'), '');
+});
+
+test('balanced address annotations and floor text stay out of the lookup identity',()=>{
+  const inputs=[
+    ['경기 고양시 일산서구 강선로 30 (주엽동, 강선마을15단지아파트)','경기 고양시 일산서구 강선로 30'],
+    ['서울 중구 장충단로 72 (장충동2가, 한국자유총연맹) 1층','서울 중구 장충단로 72'],
+    ['서울 중구 (장충동2가, 한국자유총연맹) 장충단로72 (본관(별관)) 1층','서울 중구 장충단로 72'],
+    ['서울 중구 장충단로 [본관] 72（한국자유총연맹） 별관','서울 중구 장충단로 72'],
+    ['경기 양주시 남면 황방리386 [건물] 1층','경기 양주시 남면 황방리 386'],
+    ['서울 중구 장충동2가 산3-2 (건물명) 3층','서울 중구 장충동2가 산3-2']
+  ];
+  for(const [input,expected] of inputs){
+    assert.equal(query(input),expected);
+    assert.equal(globalThis.Phase2bUi.addressLookupText(input),expected);
+  }
+  assert.equal(query('서울 중구 (장충동2가) 141'), '');
+  assert.equal(query('서울 중구 장충단로 72 (별관'), '');
+  assert.equal(query('서울 중구 장충단로 72 서울 종로구 새문안로 1'), '');
+  assert.equal(globalThis.Phase2bUi.addressMatches('서울 중구 장충단로 72','부산 중구 장충단로 72'),false);
+  assert.equal(globalThis.Phase2bUi.addressMatches('서울 중구 장충동2가 산3-2','서울 중구 장충동2가 3-2'),false);
+});
+
+test('46 Stage rows use one protected batch and preserve cells when the batch or source is incomplete',async()=>{
+  const lines=Array.from({length:46},(_,index)=>{
+    const address=index===45?'원문 주소 미확인':`경기도 화성시 합성로 ${index%24+1} (합성동, 본관) ${index+1}층`;
+    return {address,customer:`검증용 ${index+1}`};
+  });
+  for(const status of [200,400,409,503]){
+    const stageBatch=({generation,rows})=>({status,payload:status===200?{generation,data:rows.map((_,index)=>index<12
+      ?{status:'STORED',point:{lat:37.2,lng:127,coordinateSource:'STAGE_PRESERVED_COORDINATE'}}
+      :{status:'ADDRESS_NOT_MATCHED'})}:{error:'STAGE_BATCH_UNAVAILABLE'}});
+    const f=fixture({rows:[saved],stageBatch});
+    await f.run(lines.map(({address,customer})=>address+'\t'+customer).join('\n'));
+    assert.equal(f.batches.length,1);
+    assert.equal(f.batches[0].rows.length,24);
+    assert.equal(f.headers.length+f.queries.length,0);
+    assert.equal(f.state.newAreaResults.length,46);
+    f.state.newAreaResults.forEach((row,index)=>assert.deepEqual([row.originalAddress,row.originalCustomer],
+      [lines[index].address,lines[index].customer]));
+    assert.equal(f.state.newAreaResults.filter(row=>row.lookupStatus==='SUCCESS').length,status===200?24:0);
+    if(status!==200)assert.equal(f.state.newAreaResults[0].lookupHttpStatus,status);
+  }
 });
 
 test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with no Y transmission',async()=>{

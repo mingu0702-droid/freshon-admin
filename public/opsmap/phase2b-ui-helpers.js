@@ -42,39 +42,40 @@
     while (1.05 / (luminance(channels) + .05) < 4.5 && lightness > .20) channels = rgb(lightness -= .01);
     return "#" + channels.map(v => v.toString(16).padStart(2, "0")).join("");
   }
-  function addressLookupText(input) {
+  function addressLookupText(input, { exact = false } = {}) {
     const text = String(input || '').normalize('NFKC').replace(/\s+/g, ' ').trim()
       .replace(/(대로|로)\s+(\d+(?:번)?길)(?=\s|\d|$)/g, '$1$2')
-      .replace(/(동\d+가|동|읍|면|리|대로|로|길|가)(\d+(?:-\d+)?)(?=\s|\(|\[|$)/g, '$1 $2');
-    let base = text;
-    const notes = {')':'(', ']':'['};
-    while (notes[base.at(-1)]) {
-      const closing = base.at(-1), opening = notes[closing];
-      let depth = 1, start = base.length - 2;
-      for (; start >= 0; start--) {
-        if (base[start] === closing) depth++;
-        if (base[start] === opening && --depth === 0) break;
-      }
-      if (start < 0) return text;
-      base = base.slice(0, start).trimEnd();
+      .replace(/(동\d+가|동|읍|면|리|대로|로|길|가)(\d+(?:-\d+)?)(?=$|[\s,(\[])/g, '$1 $2');
+    let base = '';
+    const notes = [];
+    for (const char of text) {
+      if (char === '(' || char === '[') {
+        if (!notes.length) base += ' ';
+        notes.push(char === '(' ? ')' : ']');
+      } else if (char === ')' || char === ']') {
+        if (notes.pop() !== char) return exact ? '' : text;
+      } else if (!notes.length) base += char;
     }
-    // Parenthetical names at the end are reference text only after a complete address number.
-    return /(?:대로|로|길|동\d+가|동|리|읍|면|가)\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?$/.test(base) ? base : text;
+    if (notes.length) return exact ? '' : text;
+    base = base.replace(/\s+/g, ' ').trim();
+    const matches = [...base.matchAll(/(?:^|\s)[가-힣\d·.]+(?:대로|로|길|동\d+가|동|리|읍|면|가)\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?(?=$|[\s,])/g)];
+    // A legal locality or street and its number must be present outside annotations.
+    return matches.length === 1 ? base.slice(0, matches[0].index + matches[0][0].length) : exact ? '' : text;
   }
   function addressVariants(input) {
-    const base = addressLookupText(input);
-    const core = base.match(/^.*?(?:[가-힣\d·.]+(?:대로|로|길)|[가-힣\d·.]+(?:동\d+가|동|리|읍|면|가))\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?(?=$|[\s,(\[])/);
-    return [...new Set([base, core?.[0]].filter(Boolean))];
+    return [addressLookupText(input, {exact:true})].filter(Boolean);
   }
   function addressMatches(query, candidate) {
     const compact = (value) => String(value || "").replace(/\s/g, "");
-    const street = query.match(/([가-힣\d·.]+(?:대로|로|길))\s+(\d+(?:-\d+)?)/);
-    const lot = query.match(/([가-힣\d·.]+(?:동|리|가))\s+(?:산\s*)?(\d+(?:-\d+)?)/);
+    const street = query.match(/([가-힣\d·.]+(?:대로|로|길))\s+((?:지하\s*)?\d+(?:-\d+)?)/);
+    const lot = query.match(/([가-힣\d·.]+(?:동|리|가|읍|면))\s+((?:산\s*)?\d+(?:-\d+)?)/);
     const match = street || lot;
     if (!match) return false;
     const target = compact(candidate);
-    const numberPattern = new RegExp(`${match[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${match[2]}(?![\\d-])`);
+    const numberPattern = new RegExp(`${match[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${compact(match[2])}(?![\\d-])`);
     if (!numberPattern.test(target)) return false;
+    const province = query.split(/\s+/)[0]?.match(/^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|제주)(?:특별자치도|특별자치시|특별시|광역시|시|도)?$/)?.[1];
+    if (province && !target.startsWith(province)) return false;
     const districts = query.split(/\s+/).filter((part) => /[시군구]$/.test(part));
     return districts.every((part) => target.includes(part));
   }

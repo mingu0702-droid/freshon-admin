@@ -246,6 +246,8 @@ async function callHubUncached(action, params, key, privateRead = false, { deadl
       if (json && typeof json === 'object') requestProfiles.set(json, profile);
       if (!json || typeof json.ok !== "boolean" || !json.meta) throw Object.assign(new Error("HUB_INVALID_CONTRACT"), { upstreamStatus: response.status, failureType: "contract" });
       if (!response.ok || !json.ok) throw Object.assign(new Error(`HUB_${json?.error?.code || response.status}`), { upstreamStatus: Number(json?.meta?.httpStatus || response.status), failureType: json?.error?.code === "AUTH_FAILED" ? "auth" : "upstream",
+        ...(Number(json?.meta?.httpStatus || response.status)===429 && /^\d{1,6}$/.test(response.headers.get('retry-after')||'')
+          ? {retryAfter:Number(response.headers.get('retry-after'))} : {}),
         sourceNotFound: endpoint.isolated&&action==='customerDetail'&&response.ok&&json?.error?.code==='NOT_FOUND'&&json.meta.httpStatus===404&&json.meta.requestId===body.requestId,
         ...(endpoint.isolated&&action==='customerRegistry'&&json.meta.requestId===body.requestId&&/^REGISTRY_[A-Z_]+$/.test(json.meta.sourceErrorCode||'')?{code:json.meta.sourceErrorCode}:{}) });
       if (action==='customerSearch' && json.meta?.requestId!==body.requestId) throw new Error('HUB_INVALID_SEARCH_CONTRACT');

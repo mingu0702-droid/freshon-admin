@@ -61,6 +61,7 @@
     dailyRosters.clear(); rosterCoordinateRequest=null;
     dailySnapshots.clear(); dailyEvidenceReads.clear(); dailyRead = dailyError = dailyView = null;
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
+    storeDetailFlights.clear();storeDetailMemory.clear();
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();
     indexedRows=null;pointIndex=null;baseVehicleStatus='LOADING';baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
@@ -232,6 +233,9 @@
   const registrySelection=()=>({customerCode:state.selected?.customerCode||'',query:$('#query')?.value||'',center:state.centerFilter,vehicles:selectedVehicles()});
   function scheduleVisibleAddressRows(rows,{advance=false}={}){
     const candidates=rows.filter(row=>row.coordinateSearch||!(Number.isFinite(row.lat)&&Number.isFinite(row.lng)));
+    if(stageAddressBatchEnabled()){
+      liveAddressLocations?.schedule(candidates.filter(row=>row.customerCode===state.selected?.customerCode),{priority:true});return;
+    }
     const registry=customerRegistry?.summary();
     // Wait for the already requested bulk address projection instead of racing
     // hundreds of selected-customer reads during the same initial load.
@@ -275,7 +279,7 @@
     // The shared server still serializes provider calls and enforces the daily
     // ledger. Avoid an additional four-second delay for every visible store.
     spacingMs:400,
-    readAddress:async(row,signal)=>{const observedDate=row.raw?.lastDeliveryDate||storesByCode.get(row.customerCode)?.lastDeliveryDate||row.lastDeliveryDate||'',date=state.mode==='DATE_ROUTE'?row.deliveryDate||state.selectedDate:observedDate||snapshotMeta?.latestDate||localDate();const response=await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:'auto-address-'+row.customerCode,ttl:0,timeout:30000,headers:{'x-map-address-location':'1'}});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});const source=response.data,current=source?.sourceBasis==='CURRENT_CUSTOMER_LOOKUP',dated=source?.sourceBasis==='DATED_DELIVERY_LOOKUP'&&source.currentMasterState==='NOT_FOUND'&&source.detailDate===date&&observedDate===date;if(source?.customerCode!==row.customerCode||!current&&!dated||source?.locationState!=='SOURCE_ROW')throw Error('CURRENT_ADDRESS_UNCONFIRMED');return source;},
+    readAddress:async(row,signal)=>{const observedDate=row.raw?.lastDeliveryDate||storesByCode.get(row.customerCode)?.lastDeliveryDate||row.lastDeliveryDate||'',date=storeDetailDate(row);const response=stageAddressBatchEnabled()?await readSelectedStoreDetail(row,date):await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${date}`,{channel:'auto-address-'+row.customerCode,ttl:0,timeout:30000,headers:{'x-map-address-location':'1'}});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});const source=response.data,current=source?.sourceBasis==='CURRENT_CUSTOMER_LOOKUP',dated=source?.sourceBasis==='DATED_DELIVERY_LOOKUP'&&source.currentMasterState==='NOT_FOUND'&&source.detailDate===date&&observedDate===date;if(source?.customerCode!==row.customerCode||!current&&!dated||source?.locationState!=='SOURCE_ROW')throw Error('CURRENT_ADDRESS_UNCONFIRMED');return source;},
     lookup:(address,signal)=>geocodeAddress(address,signal),
     queryFor:address=>NewAreaRequests.addressQuery(address,Phase2bUi.addressVariants),
     enabled:()=>!document.hidden&&document.body.dataset.mapStaffState==='authenticated'&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&window.MapManualPins?.verified?.()===true,
@@ -2415,7 +2419,7 @@
     if($("#detail").contains($("#staffAuxContent")))$("#detailSection").append($("#staffAuxContent"));
     $("#detail").innerHTML = `<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">${esc(row.customerCode || "신규 주소")}</div><div class="storeName">${esc(row.customerName || "선택 위치")}</div></div>
       <div class="detailBody">
-        <dl class="dotDetailFacts"><dt>담당 센터</dt><dd>${esc(detailCenter)}</dd><dt hidden>주소 권역</dt><dd id="detailAddressRegion" hidden>${esc(detailAddressRegion)}</dd><dt>${routeMode?"확정호차":"기준호차"}</dt><dd${routeMode?'':' id="detailBaseVehicle"'}>${esc(routeMode?vehicleLabel(vehicle)||'선택일 편성 없음':MapPeriodUi.baseVehicleLabel(row))}</dd><dt id="detailDeliveryDaysLabel"${weekdaysHidden}>배송요일</dt><dd id="detailDeliveryDaysValue"${weekdaysHidden} data-weekday-state="${schedule?.status||'UNKNOWN'}" title="${schedule?.stale?'이전 확인 배차표 기준':''}">${esc(deliveryDays)}</dd><dt id="detailDriverLabel">${esc(detailDriver.label)}</dt><dd id="detailDriver" title="${esc(detailDriver.title)}" data-source="${esc(detailDriver.source)}">${esc(detailDriver.text)}</dd><dt>주소</dt><dd>${esc(row.address||'주소 불러오는 중…')}</dd><dt id="detailAddressLabel" hidden>상세주소</dt><dd id="detailAddressValue" hidden></dd></dl>
+        <dl class="dotDetailFacts"><dt>담당 센터</dt><dd>${esc(detailCenter)}</dd><dt hidden>주소 권역</dt><dd id="detailAddressRegion" hidden>${esc(detailAddressRegion)}</dd><dt>${routeMode?"확정호차":"기준호차"}</dt><dd${routeMode?'':' id="detailBaseVehicle"'}>${esc(routeMode?vehicleLabel(vehicle)||'선택일 편성 없음':MapPeriodUi.baseVehicleLabel(row))}</dd><dt id="detailDeliveryDaysLabel"${weekdaysHidden}>배송요일</dt><dd id="detailDeliveryDaysValue"${weekdaysHidden} data-weekday-state="${schedule?.status||'UNKNOWN'}" title="${schedule?.stale?'이전 확인 배차표 기준':''}">${esc(deliveryDays)}</dd><dt id="detailDriverLabel">${esc(detailDriver.label)}</dt><dd id="detailDriver" title="${esc(detailDriver.title)}" data-source="${esc(detailDriver.source)}">${esc(detailDriver.text)}</dd><dt>주소</dt><dd><span id="detailBasicAddress" data-state="loading">${esc(row.address||'주소 확인 중…')}</span> <small id="detailAddressBasis" hidden></small> <button id="detailAddressRetry" type="button" class="tiny" hidden>주소 다시 조회</button></dd><dt id="detailAddressLabel" hidden>상세주소</dt><dd id="detailAddressValue" hidden></dd></dl>
 
         ${navigationPointActions(row)}
         ${!routeMode&&state.virtual?temporaryDistanceActions():''}
@@ -2449,37 +2453,89 @@
       if (trace) afterSearchPaint(()=>{if(state.selected===row)void enrichStoreDetail(row,element);});
       else enrichStoreDetail(row, element);
     }
-    if(row.customerCode)liveAddressLocations?.schedule([row],{priority:true});
+    if(row.customerCode&&!stageAddressBatchEnabled())liveAddressLocations?.schedule([row],{priority:true});
   }
 
-  async function enrichStoreDetail(row, element) {
+  const storeDetailFlights = new Map(), storeDetailMemory = new Map();
+  function storeDetailDate(row){
+    return state.mode==='DATE_ROUTE'?row.deliveryDate||state.selectedDate:
+      row.raw?.lastDeliveryDate||storesByCode.get(row.customerCode)?.lastDeliveryDate||row.lastDeliveryDate||
+      snapshotMeta?.latestDate||state.latestDate||state.selectedDate||localDate();
+  }
+  function readSelectedStoreDetail(row,date,refresh=false){
+    const generation=snapshotMeta?.sourceGeneration||snapshotMeta?.version||'';
+    const key=JSON.stringify([row.customerCode,date,generation,row.originalAddressHash||row.addressHash||'']);
+    const saved=storeDetailMemory.get(key);
+    if(!refresh&&saved?.expires>Date.now())return Promise.resolve({...saved.payload,detailMs:0});
+    const pending=storeDetailFlights.get(key);
+    if(pending)return pending;
+    const started=performance.now();
+    const params=new URLSearchParams({view:'store',customerCode:row.customerCode,date});
+    if(refresh)params.set('refresh','1');
+    const request=fetchJson('/api/map-phase2b/private/customer-detail?'+params,{channel:'store-detail:'+key,timeout:17000})
+      .then(payload=>{
+        if(document.body.dataset.mapStaffState==='authenticated'&&storeDetailFlights.get(key)===request&&
+            Phase2bUi.storeDetailMatches(payload.data,row.customerCode,date)){
+          if(storeDetailMemory.size>=48)storeDetailMemory.delete(storeDetailMemory.keys().next().value);
+          storeDetailMemory.set(key,{payload,expires:Date.now()+60_000});
+        }
+        return {...payload,detailMs:Math.round(performance.now()-started)};
+      }).finally(()=>{if(storeDetailFlights.get(key)===request)storeDetailFlights.delete(key);});
+    storeDetailFlights.set(key,request);
+    return request;
+  }
+
+  async function enrichStoreDetail(row, element, refresh=false) {
     const requestId = ++state.detailRequestId, detailMode=state.mode, detailVehicle=row.vehicle;
+    const stage=stageAddressBatchEnabled();
+    const current=()=>requestId===state.detailRequestId&&state.mode===detailMode&&state.selected?.customerCode===row.customerCode&&
+      (detailMode!=='DATE_ROUTE'||state.selected?.vehicle===detailVehicle)&&document.body.dataset.mapStaffState==='authenticated';
+    const retry=$('#detailAddressRetry'), basis=$('#detailAddressBasis');
+    if(retry)retry.hidden=true;
     try {
-      const detailDate = detailMode === 'DATE_ROUTE' ? state.selectedDate : row.lastDeliveryDate || snapshotMeta?.latestDate || state.latestDate || state.selectedDate;
+      const detailDate = storeDetailDate(row);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(detailDate || '') || !Number.isFinite(Date.parse(detailDate)) || new Date(detailDate).toISOString().slice(0,10)!==detailDate) throw Error('DETAIL_DATE_UNCONFIRMED');
-      const payload = await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${detailDate}`, { channel: "store-detail", ttl: 0, timeout: 60000 });
-      if (requestId !== state.detailRequestId || state.mode!==detailMode || state.selected?.customerCode !== row.customerCode || detailMode==='DATE_ROUTE'&&state.selected?.vehicle!==detailVehicle || document.body.dataset.mapStaffState!=='authenticated') return;
+      const payload = stage ? await readSelectedStoreDetail(row,detailDate,refresh) :
+        await fetchJson(`/api/map-phase2b/private/customer-detail?view=store&customerCode=${encodeURIComponent(row.customerCode)}&date=${detailDate}`, { channel: "store-detail", ttl: 0, timeout: 60000 });
+      if (!current()) return;
       const exact = payload.data;
       if (!Phase2bUi.storeDetailMatches(exact,row.customerCode,detailDate)) throw Error('DETAIL_RESPONSE_CONTRACT');
-      liveAddressLocations?.acceptAddress(row,exact);liveAddressLocations?.schedule([row],{priority:true});
+      if(refresh&&!exact.address)throw Error('DETAIL_ADDRESS_UNCONFIRMED');
+      const preserved=exact.sourceBasis==='STAGE_VERIFIED_REGISTRY';
+      if(!preserved){liveAddressLocations?.acceptAddress(row,exact);liveAddressLocations?.schedule([row],{priority:true});}
       // DOM only: never merge Customer addresses into rows, public summaries or IndexedDB.
       const title=$('#detail .storeName');if(title&&exact.customerName)title.textContent=exact.customerName;
       const facts=$('#detail .dotDetailFacts');
-      const addressLabel=facts&&[...facts.querySelectorAll('dt')].find(node=>node.textContent==='주소');
-      if(addressLabel?.nextElementSibling)addressLabel.nextElementSibling.textContent=exact.address||'주소 미확인';
+      const address=$('#detailBasicAddress');
+      if(address){address.textContent=exact.address||'주소 미확인';address.dataset.state=exact.address?'ready':'unknown';}
+      if(basis){
+        basis.textContent=preserved?'저장 주소 · '+exact.sourceDate:exact.sourceBasis==='DATED_DELIVERY_LOOKUP'?'배송 기록 · '+(exact.detailDate||detailDate):'';
+        basis.dataset.addressBasis=basis.textContent;
+        basis.hidden=!basis.textContent;
+      }
+      if(retry&&preserved){retry.textContent='최신 주소 조회';retry.hidden=false;retry.onclick=()=>void enrichStoreDetail(row,element,true);}
       const regionNode=$('#detailAddressRegion');if(regionNode)regionNode.textContent=exact.addressRegion||window.MapLocationContract?.addressRegion(exact.address)||'주소 권역 미확인';
       if(facts){
         const detailAddress=String(exact.detailAddress||'').trim();
         const detailAddressLabel=$('#detailAddressLabel'),detailAddressValue=$('#detailAddressValue');
-        if(detailAddressLabel&&detailAddressValue){detailAddressLabel.hidden=detailAddressValue.hidden=!detailAddress;detailAddressValue.textContent=detailAddress;}
+        if(detailAddressLabel&&detailAddressValue){
+          const unconfirmed=stage&&exact.detailAddressState==='UNOBSERVED';
+          detailAddressLabel.hidden=detailAddressValue.hidden=!detailAddress&&!unconfirmed;
+          detailAddressValue.textContent=detailAddress||(unconfirmed?'미확인':'');
+        }
         facts.dataset.deliveryPattern=exact.deliveryPattern||'';facts.dataset.detailAddressState=exact.detailAddressState||'';
         facts.dataset.sourceBasis=exact.sourceBasis||'';facts.dataset.sourceDate=exact.sourceDate||'';
+        if(Number.isFinite(payload.detailMs))facts.dataset.detailReadMs=String(payload.detailMs);
       }
       positionDetailPopup();
     } catch (error) {
-      if (isSilentRequestError(error) || requestId!==state.detailRequestId || state.selected?.customerCode!==row.customerCode || document.body.dataset.mapStaffState!=='authenticated') return;
-      const label=[...($('#detail .dotDetailFacts')?.querySelectorAll('dt')||[])].find(node=>node.textContent==='주소');
-      if(label?.nextElementSibling&&!row.address)label.nextElementSibling.textContent='주소 조회 지연 · 다시 선택하면 재시도합니다.';
+      if (isSilentRequestError(error) || !current()) return;
+      const message=error.status===429?'주소 조회 한도에 도달했습니다. 잠시 후 다시 조회해 주세요.':'최신 주소를 확인하지 못했습니다.';
+      const address=$('#detailBasicAddress');
+      if(address&&address.dataset.state!=='ready'&&!row.address){address.textContent=message;address.dataset.state='error';}
+      else if(basis){basis.textContent=[basis.dataset.addressBasis,message].filter(Boolean).join(' · ');basis.hidden=false;}
+      if(retry){retry.textContent='주소 다시 조회';retry.hidden=false;retry.onclick=()=>void enrichStoreDetail(row,element,true);}
+      positionDetailPopup();
     }
   }
 
@@ -4035,10 +4091,7 @@
   }
   async function stageBatchAddressEvidence(rows,signal,requestId){
     const generation=snapshotMeta?.sourceGeneration??null;
-    const inputs=rows.map(row=>{
-      const code=row.address.trim().toUpperCase();
-      return /^[A-Z]\d{3,}$/.test(code)?[code]:NewAreaRequests.addressQueries(row.address,Phase2bUi.addressVariants);
-    });
+    const {inputs,indexes}=NewAreaRequests.batchAddressQueries(rows,Phase2bUi.addressVariants);
     const resolved=[];
     for(let offset=0;offset<inputs.length;offset+=120){
       const chunk=inputs.slice(offset,offset+120);
@@ -4051,7 +4104,7 @@
         result.generation!==generation||result.data?.length!==chunk.length?'STAGE_BATCH_UNAVAILABLE':null);
       resolved.push(...(error?chunk.map(()=>({error,httpStatus:result.status})):result.data));
     }
-    return resolved;
+    return indexes.map(index=>index<0?{status:'INVALID_ADDRESS'}:resolved[index]);
   }
   async function stageSingleAreaEvidence(row,signal,requestId){
     const query=row.address.trim();
@@ -4101,7 +4154,9 @@
       OFFICIAL_ADDRESS_INDEX_UNAVAILABLE:'공식 주소 자료를 사용할 수 없습니다',OFFICIAL_ADDRESS_UNAVAILABLE:'공식 주소 조회 실패',
       STORED_REGISTRY_UNAVAILABLE:'저장 매장 자료 복원 중 · 다시 조회해 주세요',
       REQUEST_TIMEOUT:'저장 주소 조회 시간 초과',STAGE_BATCH_UNAVAILABLE:'저장 주소 자료 조회 실패'};
-    const candidates=status==='OFFICIAL_ADDRESS_AMBIGUOUS'?evidence.points?.map(point=>({...point,coordinateSource:point.coordinateSource||'OFFICIAL_PUBLIC_BUILDING'})):null;
+    const candidates=['ADDRESS_AMBIGUOUS','OFFICIAL_ADDRESS_AMBIGUOUS'].includes(status)?evidence.points?.map(point=>({
+      ...point,coordinateSource:point.coordinateSource||(status==='ADDRESS_AMBIGUOUS'?'STAGE_PRESERVED_COORDINATE':'OFFICIAL_PUBLIC_BUILDING')
+    })):null;
     const failed=!!error||['OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_ADDRESS_UNAVAILABLE','STORED_REGISTRY_UNAVAILABLE'].includes(status)||!status;
     const reason=http===401?'직원 로그인 필요':http===403?'주소 조회 권한 없음':messages[error||status]|| (candidates?'주소 위치 후보 확인 필요':NewAreaRequests.message({code:error||status}));
     const pending=judgeNewAreaPoint(row,candidates?{candidates}:null);
@@ -4152,14 +4207,19 @@
     const locationIndex=MapPeriodUi.spatialIndex(locationRows);
     const locationCoverageComplete=Boolean(snapshotMeta?.sourceGeneration&&locationRows.length&&
       locationIndex.byCode.size===registeredRows.length);
-    return {locationRows,locationIndex,locationCoverageComplete,assignments:baseVehicles,source,dispatchByCode,dispatchStops,
+    return {locationRows,locationIndex,locationCoverageComplete,assignments:baseVehicles,source,dispatchByCode,
+      dispatchIndex:MapPeriodUi.spatialIndex(dispatchStops),
       dispatchCheckedAt:source?.checkedAt||'',dispatchStale:source?.stale!==false||!!source?.lastError};
   }
 
   function newAreaDispatchFacts(point,nearestCode,evidence) {
-    const {dispatchByCode,dispatchStops,dispatchCheckedAt,dispatchStale,locationIndex,assignments,source,locationCoverageComplete}=evidence;
+    const {dispatchByCode,dispatchIndex,dispatchCheckedAt,dispatchStale,locationIndex,assignments,source,locationCoverageComplete}=evidence;
     const assigned=dispatchByCode.get(nearestCode);
     const nearby=window.MapFixedDeliveryWeekdays?.nearbyFixedDeliveryWeekdays(point,locationIndex,assignments,{source,locationCoverageComplete});
+    const latitudePadding=50/109;
+    const longitudePadding=latitudePadding/Math.cos((Math.abs(point.lat)+latitudePadding)*Math.PI/180);
+    const dispatchStops=dispatchIndex.query({south:point.lat-latitudePadding,north:point.lat+latitudePadding,
+      west:point.lng-longitudePadding,east:point.lng+longitudePadding});
     return {nearestDispatch:assigned?.assignments||[],nearestDispatchLabel:assigned?.state==='UNASSIGNED'?'미배정':'미확인',
       dispatchVehicles:Phase2bUi.nearbyVehicleWeekdays(point,dispatchStops),dispatchCheckedAt,dispatchStale,
       fixedNearbyWeekdays:nearby?.days||[],fixedNearbyWeekdayState:nearby?.status||'UNKNOWN',
@@ -4278,7 +4338,7 @@
   }
 
   function newAreaVehicleTitle(row,radius) {
-    const count=MapPeriodUi.areaDispatchVehicles(row,radius).length;
+    const count=(row.dispatchVehicles||[]).filter(item=>item.distance<=radius).length;
     return `${radius}km 내 참고 배차호차 · ${count?count+'대 확인':'확인된 호차 없음'}`;
   }
 
@@ -4430,6 +4490,8 @@
   async function runNewArea(inputId, statusId, resultId, retry = false) {
     if (newAreaBusy) return;
     const status = $(statusId), list = $(resultId);
+    const started=performance.now();
+    let addressMs=0;
     if (state.mode !== 'BASE_60D') { status.textContent = '매장·권역 지도에서 조회해 주세요.'; return; }
     const periodKey = state.rangeStart + '|' + state.rangeEnd;
     const input = $(inputId).value;
@@ -4489,8 +4551,12 @@
         const index=indexes[next++], row=rows[index];
         active.add(index);showProgress();
         let result;
-        try { result=retainedPoints.has(index)?judgeNewAreaPoint(row,retainedPoints.get(index),batch):batch.stageRows&&!row.inputAmbiguous
-          ?judgeStageAreaRow(row,batch.stageRows.get(index),batch):await judgeBatchRow(row,signal,batch); }
+        try {
+          if(retainedPoints.has(index)) result=judgeNewAreaPoint(row,retainedPoints.get(index),batch);
+          else if(row.inputAmbiguous) result=await judgeNewAreaRow(row,signal,batch);
+          else if(batch.stageRows) result=judgeStageAreaRow(row,batch.stageRows.get(index),batch);
+          else result=await judgeBatchRow(row,signal,batch);
+        }
         catch (error) {
           if (!current()) return;
           if (NewAreaRequests.stopsExternal(error) || window.kakaoGeocoder?.blockedReason) batch.blocked=error.code || 'GEOCODE_AUTOMATICALLY_BLOCKED';
@@ -4512,9 +4578,11 @@
       showProgress();
       if (stageAddressBatchEnabled()) {
         const requested=indexes.filter(index=>!retainedPoints.has(index)&&!rows[index].inputAmbiguous);
+        const addressStarted=performance.now();
         const results=rows.length===1&&requested.length===1
           ?[await stageSingleAreaEvidence(rows[requested[0]],signal,requestId)]
           :await stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId);
+        addressMs=Math.round(performance.now()-addressStarted);
         batch.stageRows=new Map(requested.map((index,i)=>[index,results[i]]));
       }
       if (!current()) return;
@@ -4535,6 +4603,8 @@
         controller.abort(); batchController=null; setNewAreaBusy(false);
         if(valid){
           publishNewAreaResults();active.clear();showProgress();
+          if(stageAddressBatchEnabled())list.setAttribute('data-batch-timing',JSON.stringify({rows:rows.length,
+            completed:counts.done,located:counts.located,addressMs,totalMs:Math.round(performance.now()-started)}));
         } else {
           clearNewAreaBatch(false);status.textContent='조회 조건이 바뀌었습니다. 다시 판단해 주세요.';
         }
