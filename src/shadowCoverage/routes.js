@@ -36,7 +36,7 @@ export function mountShadowCoverage({ app, requireStaff, directory, readDirector
   const postalCoverage = postal && mountPostalCoverage({ app, requireStaff, readDirectory, appRoot, staffResponseGuarded, postal });
   let preparedPostal = false, postalPreparation;
   app.get(ROOT + '/format', ...entry, (_req, res) => {
-    if (postalCoverage && !preparedPostal) res.once('finish', () => {
+    if (postalCoverage && !postal.assetSource && !preparedPostal) res.once('finish', () => {
       if (res.statusCode !== 200 || preparedPostal || postalPreparation) return;
       postalPreparation = new Promise(resolve => setImmediate(resolve))
         .then(() => postalCoverage.prepareDefaultPointData())

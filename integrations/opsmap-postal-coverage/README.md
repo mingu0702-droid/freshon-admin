@@ -31,6 +31,13 @@
 
 ## 승인 후 C 연결
 
+Stage Free에서는 `scripts/pack-opsmap-stage-postal.mjs`로 원장 세대와 각 B 봉인 파일을 먼저 검증합니다.
+경계 묶음과 AES-256-GCM 배송 묶음을 비공개 `freshon-cache`의 `stage/opsmap-postal-v1` 참조에 보관합니다.
+`OPSMAP_SHADOW_POSTAL_REMOTE_CONFIG`에 묶음 manifest와 고정 Git 커밋 `ref`를 지정하고,
+`OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64`는 Stage 환경에 보관합니다. 서버는 기존 Stage GitHub 조회 자격의 GET만 사용합니다.
+탭 진입 시 전국 표시와 집계만 받고 줌·이력은 해당 묶음에 처음 접근할 때 검증해 임시 파일에 복원합니다.
+`OPSMAP_SHADOW_COVERAGE_FORMAT=h3`로 복귀하면 기존 H3 복원 경로를 사용합니다.
+
 1. C에 우편번호 기반 커밋 `237bd2f67e0d95329b7880a8772b7d4da96a6d7b`가 없으면 먼저 해당 커밋을 적용한 뒤 B의 업장 상세 커밋을 적용합니다. 공통 연결부는 `src/shadowCoverage/routes.js`, `src/stageVerificationEntry.js`, `public/opsmap/shadow-coverage-tab.mjs`입니다. 기존 데이터 복원과 직원 인증을 유지합니다. 비교 전용 시안 커밋은 제외합니다.
 2. 기존 B의 공식 경계 변환기로 날짜가 확인된 전국 자료를 정리합니다. 검증된 원장 세대, 주소 해시·배송 ID 원천, 오산신규·보류 이력과 함께 작업 트리 밖에 새 디렉터리를 생성합니다.
 

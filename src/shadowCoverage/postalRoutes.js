@@ -51,6 +51,11 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
           POSTAL_BOOTSTRAP_UNAVAILABLE: 404,
           POSTAL_DETAILS_UNCONFIGURED: 503,
           POSTAL_DETAILS_INTEGRITY: 503,
+          POSTAL_ASSET_FORMAT: 503,
+          POSTAL_ASSET_INTEGRITY: 503,
+          POSTAL_ASSET_DOWNLOAD: 503,
+          POSTAL_ASSET_UNAVAILABLE: 503,
+          POSTAL_ASSET_RETRY_LATER: 503,
         };
         const code = Object.hasOwn(reasons, problem.message) ? problem.message : 'POSTAL_DATA_UNAVAILABLE';
         return res.status(reasons[code] || 503).json({ ok: false, error: code });

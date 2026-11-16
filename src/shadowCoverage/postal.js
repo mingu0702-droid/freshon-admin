@@ -281,7 +281,7 @@ export function createScope(release, codes, areas, days, center, totalAreas) {
 }
 
 export function createPostalRuntime({ directory, boundarySha256, releaseSha256, appRoot, readDirectory, readPublication, detailsDirectory, detailsIndexSha256, readFixed,
-  overviewDirectory, overviewSha256, reviewDirectory, reviewSha256,
+  overviewDirectory, overviewSha256, reviewDirectory, reviewSha256, assetSource,
   now = Date.now } = {}) {
   let loaded, loadFlight, indexFlight, resolvedIndex, indexChecked = 0, scope, bulk = 0;
   let storeDetails;
@@ -292,12 +292,15 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
   async function assets() {
     if (loaded) return loaded;
     if (!loadFlight) loadFlight = (async () => {
-      if (!isAbsolute(directory || '') || !sha.test(boundarySha256 || '') || !sha.test(releaseSha256 || '')) {
+      const remote = await assetSource?.base();
+      const rootDirectory = remote?.directory ?? directory;
+      const reviewRoot = remote?.review ?? reviewDirectory;
+      if (!isAbsolute(rootDirectory || '') || !sha.test(boundarySha256 || '') || !sha.test(releaseSha256 || '')) {
         throw Error('POSTAL_DATA_UNCONFIGURED');
       }
-      if (!isAbsolute(reviewDirectory || '') || !sha.test(reviewSha256 || '')) throw Error('POSTAL_ASSIGNMENT_REVIEW_UNCONFIGURED');
-      const root = await privateCoverageDirectory(directory, appRoot);
-      const geometry = join(root, 'geometry');
+      if (!isAbsolute(reviewRoot || '') || !sha.test(reviewSha256 || '')) throw Error('POSTAL_ASSIGNMENT_REVIEW_UNCONFIGURED');
+      const root = await privateCoverageDirectory(rootDirectory, appRoot);
+      const geometry = remote ? await privateCoverageDirectory(remote.geometry, appRoot) : join(root, 'geometry');
       const manifest = JSON.parse(await verifiedRead(join(geometry, 'manifest.json'), boundarySha256, 1024 * 1024));
       requireValid(manifest.schema === 'opsmap-postal-geometry-v1' && Number.isInteger(manifest.count) &&
         manifest.count > 0 && manifest.count <= 50000 &&
@@ -321,8 +324,8 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       const [areas, compressed, overview, review] = await Promise.all([
         verifiedRead(join(geometry,'areas.bin'),manifest.areas.sha256,manifest.areas.bytes,manifest.areas.bytes),
         verifiedRead(join(root,'postal-release.json.gz'),releaseSha256,1024 * 1024),
-        openOverview(overviewDirectory,overviewSha256,appRoot,boundarySha256,tiles),
-        privateCoverageDirectory(reviewDirectory,appRoot)
+        openOverview(remote?.overview ?? overviewDirectory,overviewSha256,appRoot,boundarySha256,tiles),
+        privateCoverageDirectory(reviewRoot,appRoot)
           .then(folder => verifiedRead(join(folder,'postal-assignment-review.json'),reviewSha256,512 * 1024))
           .then(JSON.parse).catch(() => { throw Error('POSTAL_ASSIGNMENT_REVIEW_INVALID'); }),
       ]);
@@ -353,7 +356,9 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
 
   async function ready(days, center, expected, timing) {
     const started = performance.now();
-    const [opened, { index }] = await Promise.all([assets(), activeIndex()]);
+    const publication = activeIndex();
+    if (assetSource && (await publication).index.sha256 !== assetSource.config.generation) throw Error('POSTAL_GENERATION_MISMATCH');
+    const [opened, { index }] = await Promise.all([assets(), publication]);
     if (timing) timing.postal_source = performance.now() - started;
     const { release, areas, codes, manifest } = opened;
     if (expected && expected !== index.sha256) throw Error('COVERAGE_GENERATION_CHANGED');
@@ -386,7 +391,8 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
     if (pending.size >= 12) throw Error('POSTAL_READ_BUSY');
     const work = (async () => {
       reads++;
-      const file = join(tile.folder || opened.geometry,tile.id + '.gz');
+      const directory = tile.folder || await assetSource?.tiles(tile.id.split('-', 1)[0]) || opened.geometry;
+      const file = join(directory,tile.id + '.gz');
       const bytes = await verifiedRead(file, tile.sha256, tile.bytes, tile.bytes);
       retainTile(tile.id,bytes);
       return bytes;
@@ -501,7 +507,8 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
 
   async function detailReader() {
     const { createPostalDetailsReader } = await import('./postalDetails.js');
-    return storeDetails ??= createPostalDetailsReader({ directory:detailsDirectory, indexSha256:detailsIndexSha256,
+    const directory = await assetSource?.details() ?? detailsDirectory;
+    return storeDetails ??= createPostalDetailsReader({ directory, indexSha256:detailsIndexSha256,
       releaseSha256, appRoot, readFixed, now });
   }
 

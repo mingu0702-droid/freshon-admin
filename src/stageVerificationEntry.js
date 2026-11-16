@@ -24,6 +24,7 @@ import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
+import {createStagePostalAssets} from './shadowCoverage/stagePostalAssets.js';
 import {createCoverageStatusReader} from './shadowCoverage/storeStatus.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 import {createStageDriverContacts} from './stageDriverContacts.js';
@@ -139,6 +140,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     fetchImpl,now,budget:roadRouteBudget,requireDurableBudget:true
   });
   const postalEnabled = stage.OPSMAP_SHADOW_COVERAGE_FORMAT==='postal';
+  const remotePostal = postalEnabled ? createStagePostalAssets({env:stage,fetchImpl,now}) : null;
   const validation = createStageAbValidation({now,retainCoverageFiles:!postalEnabled});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   let baselineConfig, baselineStore, baselineRefresh, baselineRestoreMs, baselineState='NOT_CONFIGURED';
@@ -390,6 +392,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   mountOpsmapScheduledRun(app,{env:stage,now});
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
+    void remotePostal?.verifyReference();
     const refresh=()=>{
       if(snapshotStore&&!baselineConfig)void readBaseSnapshot().catch(()=>{});
       if(generationRestore.status().state!=='NOT_CONFIGURED') {
@@ -607,7 +610,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       }:undefined;
       mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:postalEnabled?undefined:coverageDirectory,
         appRoot:coverageAppRoot,readProviderCoverage,readStatus:readCoverageStatus,
-        postal:postalEnabled?{directory:stage.OPSMAP_SHADOW_POSTAL_DIR,
+        postal:postalEnabled?{directory:stage.OPSMAP_SHADOW_POSTAL_DIR,assetSource:remotePostal,
           readPublication:()=>{
             const active=validation.active();
             const scheduled=active?.scheduled;
@@ -615,10 +618,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             // The verified registry and coverage index identify one publication.
             return index && {index,folder:active.directory,readCatalog:scheduled?.readPostalCatalog ?? active.readPostalCatalog};
           },
-          boundarySha256:stage.OPSMAP_SHADOW_POSTAL_BOUNDARY_SHA256,releaseSha256:stage.OPSMAP_SHADOW_POSTAL_RELEASE_SHA256,
-          detailsDirectory:stage.OPSMAP_SHADOW_POSTAL_DETAILS_DIR,detailsIndexSha256:stage.OPSMAP_SHADOW_POSTAL_DETAILS_SHA256,
-          overviewDirectory:stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_DIR,overviewSha256:stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_SHA256,
-          reviewDirectory:stage.OPSMAP_SHADOW_POSTAL_REVIEW_DIR,reviewSha256:stage.OPSMAP_SHADOW_POSTAL_REVIEW_SHA256,
+          boundarySha256:remotePostal?.config.boundary ?? stage.OPSMAP_SHADOW_POSTAL_BOUNDARY_SHA256,
+          releaseSha256:remotePostal?.config.release ?? stage.OPSMAP_SHADOW_POSTAL_RELEASE_SHA256,
+          detailsDirectory:stage.OPSMAP_SHADOW_POSTAL_DETAILS_DIR,detailsIndexSha256:remotePostal?.config.details ?? stage.OPSMAP_SHADOW_POSTAL_DETAILS_SHA256,
+          overviewDirectory:stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_DIR,overviewSha256:remotePostal?.config.overview ?? stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_SHA256,
+          reviewDirectory:stage.OPSMAP_SHADOW_POSTAL_REVIEW_DIR,reviewSha256:remotePostal?.config.review ?? stage.OPSMAP_SHADOW_POSTAL_REVIEW_SHA256,
           readFixed:codes=>base.get(codes)}:undefined,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>{const saved=selectSnapshot(snapshot);return saved && {count:saved.rows.length,asOf:saved.latestDate};}});
