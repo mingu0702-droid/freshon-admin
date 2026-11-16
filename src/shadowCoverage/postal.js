@@ -214,6 +214,7 @@ export function createScope(release, codes, areas, days, center, totalAreas) {
     unplaced: linked(period.unplaced), boundaryUnplaced: linked(period.unplacedBoundary), unmatchedStores: 0,
     assignmentHeldStores: 0, assignmentHeldVisits: 0,
     high: 0, low: 0, candidate: 0, candidateStores: 0, unknown: totalAreas,
+    scopedAreas: 0, unverifiedScopedAreas: 0,
     newActive: 0, newUnknown: 0, newZero: 0, held: 0,
   };
   function groupFor(id) {
@@ -265,7 +266,11 @@ export function createScope(release, codes, areas, days, center, totalAreas) {
     const { areaKm2 } = group.place;
     group.status = classifyPostalZone(group, areaKm2);
     group.density = group.visits / areaKm2;
-    if (group.status === 'UNKNOWN') continue;
+    if (group.registered > 0 || group.visits > 0) summary.scopedAreas++;
+    if (group.status === 'UNKNOWN') {
+      if (group.registered > 0) summary.unverifiedScopedAreas++;
+      continue;
+    }
     summary.unknown--;
     summary[group.status.toLowerCase()]++;
     if (group.status === 'CANDIDATE') summary.candidateStores += group.registered;
@@ -529,7 +534,8 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
         densityHighAt: POSTAL_DENSITY_HIGH, completeness: scope.completeness, summary: scope.summary,
         ...(overview ? { overview:overview.proof } : {}),
         tiles: selectedTiles.map(({ id, rawBytes, vertices }) => overview ? [id,rawBytes,vertices] : [id,rawBytes]),
-        tones: [...scope.groups].filter(([, group]) => group.status !== 'UNKNOWN' && intersects(group.place.box, box))
+        tones: [...scope.groups].filter(([, group]) =>
+          (group.status !== 'UNKNOWN' || group.registered > 0) && intersects(group.place.box, box))
           .map(([id, group]) => [id, group.status]),
         candidates: scope.candidates.slice(0, 24).map(([id]) => detail(opened, id)),
         badges: tier === 'national' ? [] : [...scope.groups].filter(([, group]) =>

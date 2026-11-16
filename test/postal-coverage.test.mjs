@@ -7,6 +7,7 @@ import { applyPostalAssignmentReview, classifyPostalZone, createScope, encodePos
   POSTAL_DENSITY_HIGH } from '../src/shadowCoverage/postal.js';
 import { mountPostalCoverage } from '../src/shadowCoverage/postalRoutes.js';
 import { createPostalGeometryReader, postalWorldProjection } from '../public/opsmap/postal-coverage-map.mjs';
+import { coverageCenterBounds } from '../public/opsmap/coverage-center-viewport.mjs';
 import { decodePostalOverview, decodePostalTile, encodePostalZone, exactPostalPosition, postalText, postalTilePosition, postalTilesLevel,
   POSTAL_AREA_BYTES, splitPostalBootstrap } from '../public/opsmap/postal-geometry.mjs';
 
@@ -55,6 +56,47 @@ test('an assignment review withholds geometry without removing held visits or hi
   assert.equal(groups.get(1234).visits,0);
   assert.equal(groups.get(1235).visits,3);
   assert.equal(candidates.length,0);
+});
+
+test('postal scopes retain registered non-Osan areas when only Osan has observed deliveries', () => {
+  const day = '2026-11-07';
+  const entries = [
+    ['T900001',1234,0,127.1,37.1],
+    ['T900002',1235,1,129.1,35.2],
+    ['T900003',1236,2,126.9,35.1],
+    ['T900004',1237,3,127.5,36.0],
+  ];
+  const codes = new Map(entries.map(([code,area,center]) => [code,{area,center,registered:true}]));
+  const areas = Buffer.alloc(POSTAL_AREA_BYTES * entries.length);
+  for (const [index,[,id,,lng,lat]] of entries.entries()) {
+    areas.writeUInt32LE(id,index*POSTAL_AREA_BYTES);
+    areas.writeDoubleLE(1,index*POSTAL_AREA_BYTES+12);
+    const center = ['osan','yeongnam','honam','all'][index];
+    const [west,south,east,north] = coverageCenterBounds(center);
+    assert.ok(west < lng && lng < east && south < lat && lat < north);
+  }
+  const period = {
+    observed:{all:[day],osan:[day],yeongnam:[],honam:[]},
+    unverified:{all:[],osan:[],yeongnam:[],honam:[]},
+    recorded:[2,0,0,0], unplaced:[0,0,0,0], unplacedBoundary:[0,0,0,0], missing:[],
+    unavailableCodes:[[],[],[],[]], unidentified:0, rows:[['T900001',[[0,2,day,[]]]]], states:[],
+  };
+  const release = {asOf:day,periods:{30:period,60:period,90:period}};
+  for (const days of [30,60,90]) {
+    const all = createScope(release,codes,areas,days,'all',4);
+    assert.deepEqual([all.summary.registered,all.summary.recorded,all.summary.scopedAreas,all.summary.unverifiedScopedAreas],
+      [4,2,4,3]);
+    const osan = createScope(release,codes,areas,days,'osan',4);
+    assert.deepEqual([osan.summary.registered,osan.summary.recorded,osan.summary.low],[1,2,1]);
+    for (const [center,id] of [['yeongnam',1235],['honam',1236]]) {
+      const {groups,summary,candidates,completeness} = createScope(release,codes,areas,days,center,4);
+      assert.deepEqual([summary.registered,summary.scopedAreas,summary.unverifiedScopedAreas,summary.recorded],[1,1,1,0]);
+      assert.deepEqual([...groups.keys()],[id]);
+      assert.equal(groups.get(id).status,'UNKNOWN');
+      assert.equal(completeness.missing.length,days);
+      assert.equal(candidates.length,0);
+    }
+  }
 });
 
 test('binary geometry identifies the same area with leading zero, holes and shared edges', () => {

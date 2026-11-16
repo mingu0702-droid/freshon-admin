@@ -82,16 +82,16 @@ if (tabs && workspace && period && daily) {
       if (!response.ok && response.status !== 404) throw Error('COVERAGE_FORMAT_UNAVAILABLE');
       const format = response.ok ? (await response.json()).format : 'h3';
       signal.throwIfAborted();
-      if (format === 'h3') return import('./shadow-coverage-panel.mjs?v=20261115-staff');
+      if (format === 'h3') return import('./shadow-coverage-panel.mjs?v=20261116-center');
       if (format !== 'postal') throw Error('COVERAGE_FORMAT_UNAVAILABLE');
       if (!document.querySelector('link[data-postal-coverage]')) {
         const style = document.createElement('link');
         style.rel = 'stylesheet';
         style.dataset.postalCoverage = '1';
-        style.href = new URL('./postal-coverage.css?v=20261115-detail',import.meta.url);
+        style.href = new URL('./postal-coverage.css?v=20261116-center',import.meta.url);
         document.head.append(style);
       }
-      return import('./postal-coverage-panel.mjs?v=20261116-initial-view');
+      return import('./postal-coverage-panel.mjs?v=20261116-center');
     })().catch(error => {
       if (panelCode === preparation) panelCode = null;
       throw error;

@@ -3,6 +3,7 @@ import { decodePostalOverview, decodePostalTile, intersects, postalTilesLevel, P
 const viewportCacheLimit = 16 * 1024 * 1024;
 const styles = {
   UNKNOWN: ['rgba(202,213,224,.24)', 'rgba(87,111,134,.45)'],
+  UNVERIFIED: ['rgba(107,119,133,.45)', '#566577'],
   CANDIDATE: ['rgba(239,163,67,.68)', '#b87730'],
   LOW: ['rgba(120,179,227,.63)', '#4780b5'],
   HIGH: ['rgba(41,96,172,.73)', '#205295'],
@@ -265,13 +266,13 @@ export function createPostalMap(host, maps, { idle, select }) {
       surface.style.width = width + 'px';
       surface.style.height = height + 'px';
     }
-    function finish(shown, vertices, cached) {
-      rendered = { anchor, width, height, level, shown, vertices, key };
+    function finish(shown, scopedShown, vertices, cached) {
+      rendered = { anchor, width, height, level, shown, scopedShown, vertices, key };
       updateSelection();
-      host.dataset.postalDraw = JSON.stringify({ count: ++totalDraws, shown, vertices, level, cached, indexed:Boolean(scene.overview),
+      host.dataset.postalDraw = JSON.stringify({ count: ++totalDraws, shown, scopedShown, vertices, level, cached, indexed:Boolean(scene.overview),
         tier: scene.tier, drawMs: +(performance.now() - started).toFixed(2) });
     }
-    if (rendered?.key === key) { finish(rendered.shown, rendered.vertices, true); return; }
+    if (rendered?.key === key) { finish(rendered.shown, rendered.scopedShown, rendered.vertices, true); return; }
     if (projected.has(key)) {
       const saved = projected.get(key);
       projected.delete(key);
@@ -279,7 +280,7 @@ export function createPostalMap(host, maps, { idle, select }) {
       ctx.resetTransform();
       ctx.clearRect(0, 0, pixelWidth, pixelHeight);
       ctx.drawImage(saved.image, 0, 0);
-      finish(saved.shown, saved.vertices, true);
+      finish(saved.shown, saved.scopedShown, saved.vertices, true);
       return;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -294,7 +295,7 @@ export function createPostalMap(host, maps, { idle, select }) {
     const tones = Object.fromEntries(Object.keys(styles).map(k => [k, new Path2D()]));
     const outline = scene.tier === 'detail' ? null : rasterOutline(ctx, surface.width, surface.height);
     const verticesAt = outline && !world ? new Map() : null;
-    let shown = 0, vertices = 0;
+    let shown = 0, scopedShown = 0, vertices = 0;
     let vertexX, vertexY;
     function vertex(lng, lat) {
       if (world) {
@@ -327,7 +328,9 @@ export function createPostalMap(host, maps, { idle, select }) {
     }
     for (const tile of scene.geometry) for (const zone of tile) {
       if (!intersects(zone.box, viewportBox)) continue;
-      const tone = scene.tones.get(zone.id) || 'UNKNOWN';
+      const classification = scene.tones.get(zone.id);
+      const tone = classification === 'UNKNOWN' ? 'UNVERIFIED' : classification || 'UNKNOWN';
+      if (classification) scopedShown++;
       for (const ring of zone.rings) {
         if (outline && tone === 'UNKNOWN') {
           vertex(ring.at(-2), ring.at(-1));
@@ -378,9 +381,9 @@ export function createPostalMap(host, maps, { idle, select }) {
       image.width = pixelWidth;
       image.height = pixelHeight;
       image.getContext('2d').drawImage(surface, 0, 0);
-      projected.set(key, { image, shown, vertices });
+      projected.set(key, { image, shown, scopedShown, vertices });
     }
-    finish(shown, vertices, false);
+    finish(shown, scopedShown, vertices, false);
   }
 
   function schedule() {

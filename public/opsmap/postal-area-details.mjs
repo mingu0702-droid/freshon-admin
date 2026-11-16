@@ -60,10 +60,11 @@ export function createPostalAreaDetails(root, { read, dismiss, openStore }) {
     const list = find('postalAreaSummary');
     list.replaceChildren();
     const t = data.totals;
+    const deliveryUnverified = !t.visits && (!data.source.deliveryObservationDays || t.unknown > 0);
     for (const [key,value] of [
       ['분석 기간',data.period.days + '일'],
-      ['등록 업장 / 배송 확인',n(t.registered) + ' / ' + n(t.delivered) + '곳'],
-      ['관측 배송',n(t.visits) + '건'],
+      ['등록 업장 / 배송 확인',n(t.registered) + '곳 / ' + (deliveryUnverified ? '미확인' : n(t.delivered) + '곳')],
+      ['관측 배송',deliveryUnverified ? '미확인' : n(t.visits) + '건'],
       ['오산신규 확인 / 미확인',n(t.newActive) + ' / ' + n(t.newUnknown) + '곳'],
       ['오산보류 이력',n(t.held) + '곳'], ['관측 미배송 후보',n(t.candidates) + '곳'],
       ['배송 미확인',n(t.unknown) + '곳']
@@ -72,7 +73,8 @@ export function createPostalAreaDetails(root, { read, dismiss, openStore }) {
     const s = data.source;
     const evidence = find('postalAreaEvidence');
     evidence.replaceChildren(
-      make('p', data.period.start + ' ~ ' + data.period.end + ' · 배송 ' + n(s.deliveryObservationDays) + '일 관측'),
+      make('p', data.period.start + ' ~ ' + data.period.end + ' · ' + (s.deliveryObservationDays
+        ? '배송 ' + n(s.deliveryObservationDays) + '일 관측' : '배송 자료 미확인')),
       make('p','배송일 미확인 ' + n(s.missingDates.length) + '일' + (s.missingDates.length ? ' · ' + s.missingDates.join(', ') : '')),
       make('p','원천 전체 수집 확인 ' + n(s.completeDays) + '일'),
       make('p','배송 원천 관측 ' + time(s.observedAt)),

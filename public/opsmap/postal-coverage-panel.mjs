@@ -1,6 +1,7 @@
-import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs';
-import { createPostalAreaDetails } from './postal-area-details.mjs';
+import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs?v=20261116-center';
+import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261116-center';
 import { splitPostalBootstrap } from './postal-geometry.mjs';
+import { coverageCenterBounds } from './coverage-center-viewport.mjs';
 
 const API = '/api/map-phase2b/private/shadow-coverage/postal';
 const labels = {
@@ -8,12 +9,13 @@ const labels = {
   CANDIDATE: '관측기간 미배송 후보', UNKNOWN: '자료 미확인',
 };
 const centerNames = { all: '전체', osan: '오산', honam: '호남', yeongnam: '영남' };
-const presets = { nation: [124.1, 32.95, 131.95, 38.8], region: [126.67, 36.96, 127.29, 37.40] };
+const osanLocalBounds = [126.67, 36.96, 127.29, 37.40];
 const overviewReuseMs = 15000;
 const fmt = new Intl.NumberFormat('ko-KR');
 const node = (name, text) => Object.assign(document.createElement(name), { textContent: text });
 const statsText = period => period?.days + '일 · ' + period?.start + ' ~ ' + period?.end;
 const pointLocation = item => Number.isFinite(item?.lat) && Number.isFinite(item?.lng) ? [item.lat, item.lng] : null;
+const hasDeliveryEvidence = ({completeness,summary}) => completeness.observed > 0 || summary.recorded > 0;
 
 function request(endpoint, params, signal, headers) {
   const url = API + '/' + endpoint + '?' + new URLSearchParams(params);
@@ -62,9 +64,10 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<option value="yeongnam">영남</option><option value="honam">호남</option></select></label>' +
     '<label>검색 반경 <select id="coverageRadius"><option value="0">구역만</option><option value="500">500m</option>' +
     '<option value="1000">1km</option></select></label></div>' +
-    '<div id="postalOverview"><div class="coverage-overview"><h2>전국 집계</h2><p id="postalPeriod"></p><p id="postalObserved"></p>' +
+    '<div id="postalOverview"><div class="coverage-overview"><h2 id="postalOverviewTitle">전국 집계</h2><p id="postalPeriod"></p><p id="postalObserved"></p>' +
     '<dl class="coverage-kpis"><div><dt>등록 매장</dt><dd data-postal-kpi="registered">—</dd></div>' +
     '<div><dt>좌표 연결 배송</dt><dd data-postal-kpi="visits">—</dd></div>' +
+    '<div><dt>표시 대상 구역</dt><dd data-postal-kpi="scopedAreas">—</dd></div>' +
     '<div><dt>배송 있는 구역</dt><dd data-postal-kpi="delivered">—</dd></div>' +
     '<div><dt>미배송 후보 구역</dt><dd data-postal-kpi="candidate">—</dd></div>' +
     '<div><dt>활성 오산신규</dt><dd data-postal-kpi="newActive">—</dd></div>' +
@@ -92,6 +95,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   const host = find('coverageMap'), mapState = find('coverageMapState'), mapText = find('coverageMapMessage');
   const detail = find('coverageDetail'), status = find('coverageRetry');
   const searchResults = find('coverageSearchResults'), geometry = createPostalGeometryReader(API);
+  const regionButton = root.querySelector('[data-preset="region"]');
   let map, active = false, owner = 0, viewportRead, detailRead, searchRead, view, viewKey, loadingKey;
   let timer, refresh, selectedArea, bootstrapScope, releaseOverview;
   const resize = new ResizeObserver(entries => {
@@ -158,19 +162,28 @@ export function createCoveragePanel({ workspace, header, openStore }) {
 
   function applyView(data, sameScope) {
     const { completeness, summary, source } = data;
+    const observed = hasDeliveryEvidence(data);
     root.dataset.postalView = JSON.stringify({ days: data.period.days, center: data.center, tier: data.tier,
       observed: completeness.observed, missing: completeness.missing.length, registered: summary.registered, visits: summary.visits,
       assignmentHeldStores:summary.assignmentHeldStores, assignmentHeldVisits:summary.assignmentHeldVisits,
       areas: summary.areas, active: summary.newActive, unknown: summary.newUnknown, held: summary.held,
-      high: summary.high, low: summary.low, candidate: summary.candidate, unknownAreas: summary.unknown });
+      high: summary.high, low: summary.low, candidate: summary.candidate, unknownAreas: summary.unknown,
+      recorded: summary.recorded, hasDeliveryEvidence: observed, scopedAreas: summary.scopedAreas,
+      unverifiedScopedAreas: summary.unverifiedScopedAreas });
     if (sameScope) return;
+    find('postalOverviewTitle').textContent = data.center === 'all' ? '전국 집계' : centerNames[data.center] + '센터 집계';
     find('postalPeriod').textContent = statsText(data.period) + ' · ' + centerNames[data.center];
-    find('postalObserved').textContent = '배송 ' + completeness.observed + '/' + data.period.days + '일 관측 · 미확인 ' + completeness.missing.length + '일';
+    find('postalObserved').textContent = (observed ? '배송 ' + completeness.observed + '/' + data.period.days + '일 관측'
+      : '배송 자료 미확인') + ' · 미확인 ' + completeness.missing.length + '일';
     const kpis = { ...summary, delivered: summary.high + summary.low };
-    root.querySelectorAll('[data-postal-kpi]').forEach(entry => { entry.textContent = fmt.format(kpis[entry.dataset.postalKpi]); });
+    if (!observed) kpis.visits = kpis.delivered = kpis.candidate = null;
+    root.querySelectorAll('[data-postal-kpi]').forEach(entry => {
+      const value = kpis[entry.dataset.postalKpi];
+      entry.textContent = value == null ? '미확인' : fmt.format(value);
+    });
     find('postalFormula').textContent = '밀도 = 좌표 연결 배송 ÷ 구역 면적. ' + data.densityHighAt + '건/km²부터 높음.';
-    find('postalNewEvidence').textContent = '오산신규 배송 미확인 ' + fmt.format(summary.newUnknown) + '곳 · 자료 미확인 구역 ' +
-      fmt.format(summary.unknown) + '곳';
+    find('postalNewEvidence').textContent = '오산신규 배송 미확인 ' + fmt.format(summary.newUnknown) + '곳 · 등록 매장 구역 중 자료 미확인 ' +
+      fmt.format(summary.unverifiedScopedAreas) + '곳';
     find('postalUnmatched').textContent = '우편번호 미매칭 ' + fmt.format(summary.unmatchedStores) + '곳 보기';
     find('postalMapSource').textContent = source.label + ' · ' + (source.asOf || '경계 기준일 미공개');
     const credit = node('a', source.label);
@@ -192,7 +205,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       button.type = 'button'; button.className = 'coverage-search-result'; button.onclick = () => pickArea(area);
       return button;
     });
-    find('postalCandidates').replaceChildren(...(list.length ? list : [node('p', '현재 범위에서 확인된 후보가 없습니다.')]));
+    find('postalCandidates').replaceChildren(...(list.length ? list : [node('p', observed
+      ? '현재 범위에서 확인된 후보가 없습니다.' : '배송 자료 미확인')]));
   }
 
   async function readView(force = false) {
@@ -229,7 +243,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
         areaDetails.open(selectedArea,scope());
       }
       const stale = data.stale ? '마지막 확인 ' + data.period.end + ' 기준' : '';
-      const missing = params.center !== 'all' && data.completeness.observed === 0 ? '선택 센터의 배송 자료 미확인' : '';
+      const missing = !hasDeliveryEvidence(data) ? '선택 범위의 배송 자료 미확인' : '';
       message([stale, missing].filter(Boolean).join(' · '));
     } catch (error) {
       if (!active || viewportRead !== controller || controller.signal.aborted) return;
@@ -258,7 +272,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
         const { maps } = await window.KakaoMapsAdapter.ready({ retryFailed });
         if (!active || attempt !== owner) return;
         map = createPostalMap(host, maps, { idle: scheduleView, select: location => void choosePoint(location) });
-        map.focus(null, presets.nation);
+        map.focus(null, coverageCenterBounds(baseScope().center));
       }
       map.relayout();
       void readView(true);
@@ -374,15 +388,28 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   find('coverageSearch').onsubmit = search;
   find('coverageQuery').oninput = () => { searchRead?.abort(); searchResults.replaceChildren(); };
   find('coverageRadius').onchange = () => { searchRead?.abort(); searchResults.replaceChildren(); map?.point(null); };
-  for (const id of ['coverageDays','coverageCenter']) find(id).onchange = () => {
+  function changeScope(centerChanged) {
     searchRead?.abort();
     detailRead?.abort();
     searchResults.replaceChildren();
-    void readView();
-  };
-  for (const button of root.querySelectorAll('[data-preset]')) {
-    button.onclick = () => map?.focus(null, presets[button.dataset.preset]);
+    if (centerChanged) {
+      const {center} = baseScope();
+      viewportRead?.abort();
+      areaCard(null);
+      map?.point(null);
+      map?.focus(null, coverageCenterBounds(center));
+      regionButton.textContent = center === 'all' || center === 'osan' ? '오산·화성' : centerNames[center];
+      if (view?.center !== center) message(centerNames[center] + ' 센터 자료를 불러오는 중입니다.');
+    }
+    scheduleView();
   }
+  find('coverageDays').onchange = () => changeScope(false);
+  find('coverageCenter').onchange = () => changeScope(true);
+  root.querySelector('[data-preset="nation"]').onclick = () => map?.focus(null, coverageCenterBounds('all'));
+  regionButton.onclick = () => {
+    const {center} = baseScope();
+    map?.focus(null, center === 'all' || center === 'osan' ? osanLocalBounds : coverageCenterBounds(center));
+  };
   find('postalZoomIn').onclick = () => map?.zoom(-1);
   find('postalZoomOut').onclick = () => map?.zoom(1);
 
@@ -416,6 +443,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       map = null;
       find('coverageDays').value = '90';
       find('coverageCenter').value = 'all';
+      regionButton.textContent = '오산·화성';
       find('coverageRadius').value = '0';
       collapse(false);
       host.replaceChildren();
