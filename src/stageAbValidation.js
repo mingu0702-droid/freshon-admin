@@ -242,7 +242,10 @@ export function createStageAbValidation({now = Date.now, tempRoot = tmpdir(), re
         const day = await readDay(date==='latest'?index.asOf:date,generation).catch(()=>null);
         return archivedOpsmapAssignments(day,generation) ?? fallback()?.archived?.(date,registry) ?? null;
       }};
-    return active() === scheduled;
+    if (active() !== scheduled) return false;
+    // Build the private index as the verified projection becomes available.
+    void Promise.resolve().then(() => preparePreservedAddressIndex(snapshot)).catch(() => {});
+    return true;
   }
 
   async function load(bytes, expected, durableRead) {

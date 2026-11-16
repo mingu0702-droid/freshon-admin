@@ -244,7 +244,7 @@
       return [...merged.values()];
     }
 
-    return Object.freeze({sync, reconnect, purge, merge, summary, priorityRows, locationRows});
+    return Object.freeze({sync, reconnect, purge, merge, summary, currentVersion:()=>version, priorityRows, locationRows});
   }
   root.MapCustomerRegistry = Object.freeze({create, priorityRows, addressHash});
 })(typeof window === 'object' ? window : globalThis);

@@ -61,7 +61,7 @@
     dailyRosters.clear(); rosterCoordinateRequest=null;
     dailySnapshots.clear(); dailyEvidenceReads.clear(); dailyRead = dailyError = dailyView = null;
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
-    storeDetailFlights.clear();storeDetailMemory.clear();newAreaEvidenceMemo=null;
+    storeDetailFlights.clear();storeDetailMemory.clear();newAreaRegistryMemo=newAreaLocationsMemo=newAreaEvidenceMemo=null;deferredBatchMapRefresh=null;
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();
     indexedRows=null;pointIndex=null;baseVehicleStatus='LOADING';baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
@@ -84,6 +84,7 @@
   const detachedMarkers=new Map();
   let periodSelectionCache = null;
   let baseVehicles = new Map(), baseVehicleRequest = null, baseVehicleTimer = null, baseVehicleTries = 0;
+  let deferredBatchMapRefresh=null;
   let recentPeriodMode = true;
   let recentPeriodDays = 90;
   let recentPeriodNotice = '';
@@ -835,7 +836,8 @@
         const changed=JSON.stringify(previousMeta)!==JSON.stringify(baseVehicleMeta)||rows.some(r=>JSON.stringify(previous.get(r.customerCode))!==JSON.stringify(r));
         if(!changed)return;
         if(state.selected)syncStoreDeliveryWeekdays(state.selected);
-        if(state.mode==='BASE_60D'&&dateReady){
+        const applyView=async()=>{
+          if(state.mode!=='BASE_60D'||!dateReady)return;
           replaceStoreSnapshot(periodRows,snapshotMeta);ensureDateVehicles();periodSelectionCache=null;
           if(state.selected&&baseVehicles.has(state.selected.customerCode)){
             const selected=fixedVehicleFor(state.selected.customerCode,storesByCode.get(state.selected.customerCode));
@@ -849,6 +851,19 @@
             $('#mapStatusSub').textContent+=' · 선택 고객의 기준호차/센터가 갱신되어 현재 필터에서 제외됐습니다. 선택 정보는 유지합니다.';
           }
           $('#map').setAttribute('data-base-vehicle-metrics',JSON.stringify({apiMs:apiDiagnostics.get('base-vehicles')?.ms??null,appliedMs:Math.round(performance.now()-baseStarted),rows:rows.length,stale:!!baseVehicleMeta?.stale,refresh:baseVehicleMeta?.refresh||null,lastError:/^FIXED_(?:STORE|MASTER)_[A-Z_]+$/.test(baseVehicleMeta?.lastError||'')?baseVehicleMeta.lastError:null,cacheState:/^[A-Z_]{1,40}$/.test(baseVehicleMeta?.cacheState||'')?baseVehicleMeta.cacheState:null,progress:payload.progress?{phase:/^[A-Z_]{1,40}$/.test(payload.progress.phase||'')?payload.progress.phase:null,center:['011','012','013'].includes(payload.progress.center)?payload.progress.center:null,page:Number.isSafeInteger(payload.progress.page)?payload.progress.page:null,sourceRows:Number.isSafeInteger(payload.progress.sourceRows)?payload.progress.sourceRows:null,expectedRows:Number.isSafeInteger(payload.progress.expectedRows)?payload.progress.expectedRows:null}:null}));
+        };
+        const dialog=stageReadOnly&&$('#mapBatchDialog');
+        if(dialog?.open){
+          // The batch uses the verified assignments above while the map is behind the modal.
+          if(!deferredBatchMapRefresh)dialog.addEventListener('close',()=>{
+            const refresh=deferredBatchMapRefresh;
+            deferredBatchMapRefresh=null;
+            if(document.body.dataset.mapStaffState==='authenticated')void refresh?.().catch(()=>{});
+          },{once:true});
+          deferredBatchMapRefresh=applyView;
+        }else{
+          deferredBatchMapRefresh=null;
+          await applyView();
         }
       }catch(error){
         if(isSilentRequestError(error))return;
@@ -4103,7 +4118,13 @@
       if(timing)timing.requests++;
       const result=await fetchJson('/api/map-phase2b/private/stage-address-evidence',{
         channel:'stage-address-batch:'+requestId,method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({generation,rows:chunk}),timeout:12000,signal
+        body:JSON.stringify({generation,rows:chunk}),timeout:12000,signal,
+        onHeaders:timing&&((headers)=>{
+          const fields=/\b(session|total|opsmap-address-(?:read|index|match|recheck));dur=(\d+(?:\.\d+)?)/g;
+          for(const [,name,value] of (headers.get('Server-Timing')||'').matchAll(fields)){
+            timing.server[name]=(timing.server[name]||0)+Number(value);
+          }
+        })
       }).catch(error=>({error:error.code||error.message,status:error.status}));
       if(signal.aborted)break;
       const error=result.error||((snapshotMeta?.sourceGeneration??null)!==generation?'STAGE_BATCH_GENERATION_CHANGED':
@@ -4179,8 +4200,14 @@
     return {...pending,reason:pending.decision==='X'?pending.reason:reason,evidence:(pending.decision==='X'?pending.evidence+' · ':'')+(http?`${reason} · HTTP ${http}`:reason)+hint+restriction,
       lookupStatus:failed?'FAILED':'DEFERRED',lookupError:failed,lookupHttpStatus:http};
   }
+  let newAreaRegistryMemo=null,newAreaLocationsMemo=null,newAreaEvidenceMemo=null;
   function newAreaRegistryRows() {
-    return customerRegistry?.summary().version?customerRegistry.merge(latestSnapshotRows):latestSnapshotRows;
+    const version=customerRegistry?.currentVersion();
+    if(!version)return latestSnapshotRows;
+    if(newAreaRegistryMemo?.version!==version||newAreaRegistryMemo.source!==latestSnapshotRows){
+      newAreaRegistryMemo={version,source:latestSnapshotRows,rows:customerRegistry.merge(latestSnapshotRows)};
+    }
+    return newAreaRegistryMemo.rows;
   }
 
   function prepareNewAreaDispatch() {
@@ -4191,15 +4218,12 @@
     return codes.length?loadBaseVehicles(codes):null;
   }
 
-  let newAreaEvidenceMemo=null;
-  window.addEventListener('map-coordinate-updated',()=>{newAreaEvidenceMemo=null;});
-  function newAreaEvidence() {
-    const locationRows=[],dispatchByCode=new Map(),dispatchStops=[];
-    const generation=snapshotMeta?.sourceGeneration, version=newAreaSourceVersion();
-    const source=baseVehicleMeta;
-    const memo=newAreaEvidenceMemo;
-    if(generation&&memo?.version===version&&memo.rows===latestSnapshotRows&&memo.source===source&&memo.assignments===baseVehicles.size)return memo.evidence;
-    const registeredRows=newAreaRegistryRows().filter(row=>!row.deliveryOnly&&row.customerRegistryStatus!=='DELETED');
+  window.addEventListener('map-coordinate-updated',()=>{newAreaLocationsMemo=newAreaEvidenceMemo=null;});
+  function newAreaLocations(version,generation) {
+    const registry=newAreaRegistryRows();
+    if(generation&&newAreaLocationsMemo?.version===version&&newAreaLocationsMemo.registry===registry)return newAreaLocationsMemo.locations;
+    const registeredRows=registry.filter(row=>!row.deliveryOnly&&row.customerRegistryStatus!=='DELETED');
+    const locationRows=[];
     const exactSites=new Map();
     for(const store of registeredRows){
       const code=store.customerCode||store.code;
@@ -4210,6 +4234,21 @@
       const coordinateKey=point.lat+'|'+point.lng;
       const nearest=exactSites.get(coordinateKey);
       if(!nearest||point.customerCode<nearest.customerCode)exactSites.set(coordinateKey,{...point,distance:0});
+    }
+    const locationIndex=MapPeriodUi.spatialIndex(locationRows);
+    const locationCoverageComplete=Boolean(generation&&locationRows.length&&locationIndex.byCode.size===registeredRows.length);
+    const locations={locationRows,locationIndex,locationCoverageComplete,exactSites};
+    if(generation)newAreaLocationsMemo={version,registry,locations};
+    return locations;
+  }
+
+  function newAreaEvidence() {
+    const generation=snapshotMeta?.sourceGeneration,version=newAreaSourceVersion();
+    const source=baseVehicleMeta, memo=newAreaEvidenceMemo;
+    if(generation&&memo?.version===version&&memo.rows===latestSnapshotRows&&memo.source===source&&memo.assignments===baseVehicles)return memo.evidence;
+    const locations=newAreaLocations(version,generation),dispatchByCode=new Map(),dispatchStops=[];
+    for(const point of locations.locationRows){
+      const code=point.customerCode;
       const assignment=baseVehicles.get(code);
       if(assignment?.baseVehicleSource!=='FIXED_DISPATCH_PRIMARY'||!['VERIFIED_MASTER','UNASSIGNED'].includes(assignment.baseVehicleState))continue;
       const byVehicle=new Map();
@@ -4227,13 +4266,10 @@
       }
       dispatchByCode.set(code,{assignments,state:assignment.baseVehicleState});
     }
-    const locationIndex=MapPeriodUi.spatialIndex(locationRows);
-    const locationCoverageComplete=Boolean(snapshotMeta?.sourceGeneration&&locationRows.length&&
-      locationIndex.byCode.size===registeredRows.length);
-    const evidence={locationRows,locationIndex,locationCoverageComplete,assignments:baseVehicles,source,dispatchByCode,exactSites,
+    const evidence={...locations,assignments:baseVehicles,source,dispatchByCode,
       dispatchIndex:MapPeriodUi.spatialIndex(dispatchStops),
       dispatchCheckedAt:source?.checkedAt||'',dispatchStale:source?.stale!==false||!!source?.lastError,dispatchFacts:new Map()};
-    if(generation)newAreaEvidenceMemo={version,rows:latestSnapshotRows,source,assignments:baseVehicles.size,evidence};
+    if(generation)newAreaEvidenceMemo={version,rows:latestSnapshotRows,source,assignments:baseVehicles,evidence};
     return evidence;
   }
 
@@ -4327,6 +4363,7 @@
     state.newAreaResults = [];
     if (clearInput) $("#newAreaBatchInput").value = "";
     $("#newAreaBatchResults").innerHTML = "";
+    $("#newAreaBatchResults").removeAttribute('data-batch-paint');
     $("#newAreaBatchStatus").textContent = "입력 0 · 완료 0";
     $("#exportNewAreaCsv").disabled = true;
     $("#exportNewAreaExcel").disabled = true;
@@ -4402,7 +4439,7 @@
 
   function newAreaSourceVersion() {
     return JSON.stringify([snapshotMeta?.sourceGeneration,snapshotMeta?.preservation?.version,snapshotMeta?.version,
-      snapshotMeta?.generatedAt,customerRegistry?.summary().version]);
+      snapshotMeta?.generatedAt,customerRegistry?.currentVersion()]);
   }
 
   function reviewNewAreaPosition(list,row,index,dialog) {
@@ -4522,8 +4559,9 @@
     if (newAreaBusy) return;
     const status = $(statusId), list = $(resultId);
     const started=performance.now();
-    let addressMs=0;
-    const addressTiming={requests:0,storedHits:0};
+    let addressMs=0,decisionMs=0,renderMs=0,setupMs=0;
+    const stage=stageAddressBatchEnabled();
+    const addressTiming={requests:0,storedHits:0,server:{}};
     if (state.mode !== 'BASE_60D') { status.textContent = '매장·권역 지도에서 조회해 주세요.'; return; }
     const periodKey = state.rangeStart + '|' + state.rangeEnd;
     const input = $(inputId).value;
@@ -4548,7 +4586,8 @@
     const current = () => requestId === newAreaRequestId && !signal.aborted && state.mode === 'BASE_60D' &&
       periodKey === state.rangeStart + '|' + state.rangeEnd && sourceVersion===newAreaSourceVersion();
     const batch = {requestId,signal,customers:new Map(),queries:new Map(),blocked:null,selectedPoints:new Map(newAreaSelectedPoints)};
-    const dispatchPending=prepareNewAreaDispatch();
+    const fragment=stage&&!retry ? document.createDocumentFragment?.() : null;
+    let dispatchPending;
     const retainedPoints=new Map();
     for(const index of indexes){
       const row=rows[index];
@@ -4581,7 +4620,8 @@
     async function worker() {
       while (current() && next<indexes.length) {
         const index=indexes[next++], row=rows[index];
-        active.add(index);showProgress();
+        if(!fragment){active.add(index);showProgress();}
+        const decisionStarted=performance.now();
         let result;
         try {
           if(retainedPoints.has(index)) result=judgeNewAreaPoint(row,retainedPoints.get(index),batch);
@@ -4599,29 +4639,37 @@
             evidence:[unresolved.decision==='X'?unresolved.evidence:'',NewAreaRequests.message(error),'원문 보존'].filter(Boolean).join(' · '),
             lookupStatus,lookupError:lookupStatus==='FAILED'};
         }
+        decisionMs+=performance.now()-decisionStarted;
         if (!current()) return;
         countResult(judged[index],-1);
         active.delete(index);judged[index]=result;completed++;
         countResult(result,1);
-        appendBatchResult(list,result,index);showProgress();
+        const renderStarted=performance.now();
+        appendBatchResult(fragment||list,result,index);
+        if(!fragment)showProgress();
+        renderMs+=performance.now()-renderStarted;
       }
     }
     try {
       showProgress();
-      if (stageAddressBatchEnabled()) {
+      if (stage) {
         const requested=indexes.filter(index=>!retainedPoints.has(index)&&!rows[index].inputAmbiguous);
         const addressStarted=performance.now();
-        const results=rows.length===1&&requested.length===1
-          ?[await stageSingleAreaEvidence(rows[requested[0]],signal,requestId)]
-          :await stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId,addressTiming);
+        setupMs=addressStarted-started;
+        const evidence=rows.length===1&&requested.length===1
+          ?stageSingleAreaEvidence(rows[requested[0]],signal,requestId).then(result=>[result])
+          :stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId,addressTiming);
+        dispatchPending=prepareNewAreaDispatch();
+        const results=await evidence;
         addressMs=Math.round(performance.now()-addressStarted);
         batch.stageRows=new Map(requested.map((index,i)=>[index,results[i]]));
-      }
+      } else dispatchPending=prepareNewAreaDispatch();
       if (!current()) return;
       await Promise.all(Array.from({length:Math.min(3,indexes.length)},worker));
       if(dispatchPending)void dispatchPending.then(()=>{
         if(requestId!==newAreaRequestId||state.mode!=='BASE_60D'||sourceVersion!==newAreaSourceVersion()||judged!==newAreaBatch?.judged)return;
         const evidence=newAreaEvidence();
+        if(evidence===batch.evidence)return;
         judged.forEach((row,index)=>{
           if(row?.lookupStatus!=='SUCCESS')return;
           const updated={...row,...newAreaDispatchFacts(row,row.nearestStoreCode,evidence)};
@@ -4634,11 +4682,19 @@
         const valid = current();
         controller.abort(); batchController=null; setNewAreaBusy(false);
         if(valid){
+          const renderStarted=performance.now();
+          if(fragment)list.append(fragment);
           publishNewAreaResults();active.clear();showProgress();
-          if(stageAddressBatchEnabled())list.setAttribute('data-batch-timing',JSON.stringify({rows:rows.length,
-            completed:counts.done,located:counts.located,addressMs,
-            ...(rows.length>1&&{addressRequests:addressTiming.requests,storedAddressHits:addressTiming.storedHits}),
-            totalMs:Math.round(performance.now()-started)}));
+          renderMs+=performance.now()-renderStarted;
+          if(stage){
+            list.setAttribute('data-batch-timing',JSON.stringify({rows:rows.length,completed:counts.done,located:counts.located,addressMs,
+              setupMs:Math.round(setupMs),decisionMs:Math.round(decisionMs),renderMs:Math.round(renderMs),
+              ...(rows.length>1&&{addressRequests:addressTiming.requests,storedAddressHits:addressTiming.storedHits,server:addressTiming.server}),
+              totalMs:Math.round(performance.now()-started)}));
+            if(!document.hidden&&typeof requestAnimationFrame==='function')requestAnimationFrame(()=>requestAnimationFrame(()=>{
+              if(requestId===newAreaRequestId)list.setAttribute('data-batch-paint',JSON.stringify({paintMs:Math.round(performance.now()-started)}));
+            }));
+          }
         } else {
           clearNewAreaBatch(false);status.textContent='조회 조건이 바뀌었습니다. 다시 판단해 주세요.';
         }
@@ -4689,6 +4745,7 @@
     try {
       const prefetched = options.prefetch ? await options.prefetch(controller.signal) : null;
       const response = prefetched?.response || await fetch(url, { cache: "no-store", signal: controller.signal, headers: options.headers, method:options.method,body:options.body });
+      options.onHeaders?.(response.headers);
       apiDiagnostics.set(new URL(url, location.href).pathname.split("/").pop(), { ms: prefetched?.ms ?? Math.round(performance.now() - started), status: response.status, cache: response.headers.get("X-Phase2B-Cache") || "미제공",restoreMs:Number(response.headers.get('X-Opsmap-Restore-Ms'))||null });
       const json = prefetched ? prefetched.json : await response.json().catch(error=>{if(response.ok)throw error;return {};});
       if (requestControllers.get(channel)?.token !== token) { const stale = new Error("STALE_RESPONSE"); stale.silent = true; throw stale; }
