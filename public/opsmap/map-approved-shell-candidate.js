@@ -41,7 +41,7 @@
   filters.querySelector('.label').remove();
   const centers=document.createElement('div');centers.className='centers';centers.id='centers';
   centers.setAttribute('role','group');centers.setAttribute('aria-label','담당 센터');
-  centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남'],['unknown','미확인']].map(([key,label])=>`<button type="button" data-source-center="${key}"${key==='unknown'?' aria-label="센터 미확인"':''}>${label}</button>`).join('');
+  centers.innerHTML=[['all','전체'],['osan','오산'],['yeongnam','영남'],['honam','호남']].map(([key,label])=>`<button type="button" data-source-center="${key}">${label}</button>`).join('');
   const centerButtons=centers.querySelectorAll('button');
   function syncCenterButtons(){
     const center=$('#periodCenter').value||'all';
@@ -160,6 +160,8 @@
   };
   window.MapNavigationEditor=Object.freeze({values:editorValues,setPoint:setEditorPoint,removePoint:removeEditorPoint,replacePoints:replaceEditorPoints,reverse:reverseEditor,clear:()=>$('#clearPlanner').click()});
   const stores=$('#periodStoreListSection');stores.className='storeSection';stores.querySelector('.label').className='sectiontitle';const title=document.createElement('h2');title.append('매장 목록 ',$('#periodStoreListCount'));stores.querySelector('.sectiontitle').prepend(title);$('#togglePeriodList').className='textbtn';
+  const registrationScope=document.createElement('p');registrationScope.id='staffRegistrationScope';registrationScope.className='hint';registrationScope.hidden=true;
+  stores.querySelector('.sectiontitle').after(registrationScope);
   const loadMore=document.createElement('button');loadMore.id='loadMore';loadMore.className='full';loadMore.textContent='매장 더 보기';loadMore.onclick=()=>stores.classList.add('showMoreStores');stores.append(loadMore);$('#periodStoreList').className='sourceStoreList';
   const route=$('#runListTool');route.className='sourceItinerary';route.open=false;
   const foot=document.createElement('footer');foot.className='sidefoot';foot.innerHTML='<button id="sourceBatch" class="full">＋ 신규권역 일괄조회</button><div class="row" id="sourceFooterLinks"></div>';
@@ -183,7 +185,7 @@
   bridge.setGeneralLegend(legend.innerHTML);
   workspace.append(sidebar,maparea);document.body.insertBefore(workspace,header.nextSibling);
   for(const selector of ['#mapModeBar','#operationBar','.mapStatus','.mobileMapControls','#mobileBack','#mobileRouteSheet','#mobileWorkspace']){const node=$(selector);if(node)node.classList.add('compatibilityHidden');}
-  function sync(){const daily=$('#modeDaily').getAttribute('aria-pressed')==='true';document.body.classList.toggle('daily-mode',daily);$('#modePeriod').classList.toggle('active',!daily);$('#modeDaily').classList.toggle('active',daily);dock.hidden=!daily;address.hidden=true;filters.hidden=daily;context.hidden=true;route.hidden=!daily;syncModeControls(daily);if(!daily){picker.hidden=true;}$('#modeEyebrow').textContent=daily?'운행 조회':'매장 조회';$('#modeTitle').textContent=daily?'일자별 운행 조회':'매장·권역 조회';$('#totalBadge').textContent=$('#periodStoreListCount').textContent||'확인 중';const vehicles=bridge.state.selectedVehicles;$('#chooseRoutes').textContent=vehicles.length===1?`${vehicles[0]}호차 ▾`:vehicles.length?`${vehicles.length}개 호차 ▾`:'전체 호차 ▾';$('#navSelection').textContent=$('#chooseRoutes').textContent.replace(' ▾','');for(const card of $('#periodStoreList').querySelectorAll('button')){card.classList.add('storeitem');card.style.overflowWrap='anywhere';} }
+  function sync(){const daily=$('#modeDaily').getAttribute('aria-pressed')==='true';document.body.classList.toggle('daily-mode',daily);$('#modePeriod').classList.toggle('active',!daily);$('#modeDaily').classList.toggle('active',daily);dock.hidden=!daily;address.hidden=true;filters.hidden=daily;context.hidden=true;route.hidden=!daily;syncModeControls(daily);if(!daily){picker.hidden=true;}$('#modeEyebrow').textContent=daily?'운행 조회':'매장 조회';$('#modeTitle').textContent=daily?'일자별 운행 조회':'매장·권역 조회';const vehicles=bridge.state.selectedVehicles;$('#chooseRoutes').textContent=vehicles.length===1?`${vehicles[0]}호차 ▾`:vehicles.length?`${vehicles.length}개 호차 ▾`:'전체 호차 ▾';$('#navSelection').textContent=$('#chooseRoutes').textContent.replace(' ▾','');for(const card of $('#periodStoreList').querySelectorAll('button')){card.classList.add('storeitem');card.style.overflowWrap='anywhere';} }
   $('#totalBadge').onclick=()=>{$('#togglePeriodList').click();};
   // Match the source element roles; IDs and existing controller handlers stay intact.
   for(const id of ['opTotal','opCompleted','opRemaining','opEta']){const old=$('#'+id),strong=document.createElement('strong');strong.id=id;strong.className=old.className;strong.textContent=old.textContent;old.replaceWith(strong);}
@@ -300,6 +302,14 @@
     syncCenterButtons();
     const selected=bridge.state.selectedVehicles;const selectedText=selected.length?selected.length+'개 호차 선택':'선택 없음 · 전체 지도';if($('#baseVehicleCount').textContent!==selectedText)$('#baseVehicleCount').textContent=selectedText;
     // Reconcile only presentation of disabled state; operational partial/error messages remain.
+    const scope=daily?null:bridge.staffRegistrationScope?.();
+    registrationScope.hidden=!scope;
+    if(scope){
+      const label={REGISTERED:'등록',AVAILABLE:'등록 자료',PUBLISHED:'게시본 등록'}[scope.source];
+      const text=`${label} ${scope.registered.toLocaleString('ko-KR')}곳`+
+        (scope.missing?` · 좌표 미확인 ${scope.missing.toLocaleString('ko-KR')}곳`:'');
+      if(registrationScope.textContent!==text)registrationScope.textContent=text;
+    }
     if(daily){const count=new Set(bridge.state.currentRows.map(row=>row.customerCode)).size;const badge=count?`${count} 매장`:bridge.isDataReady()?'0 매장':'불러오는 중';if($('#totalBadge').textContent!==badge)$('#totalBadge').textContent=badge;
       if($('#runListTitle').textContent!=='방문 순서')$('#runListTitle').textContent='방문 순서';
       const visits=bridge.state.currentRows.length;
@@ -307,11 +317,11 @@
       const heading='자동차 경로';if($('#navigationPreview h2 span').textContent!==heading)$('#navigationPreview h2 span').textContent=heading;
       if($('#opEta').textContent.includes('과거')){$('#opEta').title=$('#opEta').textContent;$('#opEta').textContent='—';}
       // Route controllers own status, coverage and metrics; the shell must not replace them.
-    }else{const match=$('#periodStoreListCount').textContent.match(/^([\d,]+)/);if(match){
-      const total=bridge.registeredStoreCount?.(),count=Number(match[1].replace(/,/g,''));
-      const text=total&&count!==total?`${match[1]} / ${total.toLocaleString('ko-KR')} 매장`:match[1]+' 매장';
+    }else{
+      const listCount=$('#periodStoreListCount').textContent, count=listCount.match(/^([\d,]+)/)?.[1];
+      const text=count? `조회 ${Number(count.replaceAll(',','')).toLocaleString('ko-KR')}곳` : listCount||'확인 중';
       if($('#totalBadge').textContent!==text)$('#totalBadge').textContent=text;
-    }}
+    }
     if($('#syncOperation').textContent!=='운행 새로고침')$('#syncOperation').textContent='운행 새로고침';
     const countMatch=controllerCount.textContent.match(/^([\d,]+)/),countText=countMatch?countMatch[1]:controllerCount.textContent;if(displayCount.textContent!==countText)displayCount.textContent=countText;
     const toggle=$('#togglePeriodList'),toggleText=toggle.getAttribute('aria-expanded')==='true'?'접기 −':'펼치기 ＋';if(toggle.textContent!==toggleText)toggle.textContent=toggleText;
@@ -323,8 +333,9 @@
   }
   for(const node of [$('#runList'),$('#dailySummary'),$('#roadRoutePanel'),$('#periodStoreList')])new MutationObserver(sourceSync).observe(node,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
   new MutationObserver(sourceSync).observe($('#togglePeriodList'),{attributes:true,attributeFilter:['aria-expanded']});
-  new MutationObserver(sourceSync).observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});sourceSync();
-  new MutationObserver(sync).observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});new MutationObserver(sync).observe($('#periodStoreListCount'),{childList:true,subtree:true,characterData:true});sync();
+  new MutationObserver(()=>{sync();sourceSync();}).observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});
+  new MutationObserver(()=>{sync();sourceSync();}).observe($('#periodStoreListCount'),{childList:true,subtree:true,characterData:true});
+  sync();sourceSync();
   window.MapStaffEntry?.status();
 })();
 

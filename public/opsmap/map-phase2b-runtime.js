@@ -62,9 +62,10 @@
     dailySnapshots.clear(); dailyEvidenceReads.clear(); dailyRead = dailyError = dailyView = null;
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
     storeDetailFlights.clear();storeDetailMemory.clear();storeDetailLatest=Promise.resolve();newAreaRegistryMemo=newAreaLocationsMemo=newAreaEvidenceMemo=null;deferredBatchMapRefresh=null;
-    latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
+    latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;registrationCounts=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();
     indexedRows=null;pointIndex=null;baseVehicleStatus='LOADING';baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
+    customerRegistrySource='';customerRegistryCheckedAt='';customerRegistrySourceCheckedAt='';
     searchIndex=searchFlight=stageAddressHashIndex=newAreaObservedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
     SOURCE={vehicles:[]};state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
     clearSelection();clearMap();updateOperationMetrics(null);renderPeriodStoreList([]);resetRoadRoute();clearNewAreaBatch();renderManualDraft();
@@ -208,7 +209,7 @@
   const apiDiagnostics = new Map();
   let geocodeDiagnostic = "미조회", lastRefreshedAt = "", sheetTab = "detail";
   const panelHomes = new Map();
-  let allStores = [];
+  let allStores = [], registrationCounts=null;
   const storeByVehicleAndCode = new Map();
   const storesByCode = new Map();
   let snapshotMeta = null;
@@ -225,11 +226,12 @@
   let dateReady = false;
   let datedSourceDate = '', dailyMeta = null;
   const geocodeCache = new Map();
-  let customerRegistryBusy=false,customerRegistryRetry=null,customerRegistryCheckedAt='',customerRegistrySourceCheckedAt='';
+  let customerRegistryBusy=false,customerRegistryRetry=null,customerRegistryCheckedAt='',customerRegistrySourceCheckedAt='',customerRegistrySource='';
+  const stageRegistrationOnly=()=>customerRegistrySource==='STAGE_FRESHON_CENTER_REGISTRY'&&Boolean(customerRegistry?.currentVersion());
   const customerRegistry=window.MapCustomerRegistry?.create({
-    pageSize:500,
+    pageSize:stageAddressBatchEnabled()?1000:500,
     authenticated:()=>document.body.dataset.mapStaffState==='authenticated',
-    readPage:async({cursor,signal,limit})=>{if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});const params=new URLSearchParams({limit:String(limit)});if(cursor)params.set('cursor',cursor);else if(customerRegistry.summary().version)params.set('since',customerRegistry.summary().version);const result=await fetchJson('/api/map-phase2b/private/customer-registry?'+params,{channel:'customer-registry-page',ttl:0,timeout:30000});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});if(Number.isFinite(Date.parse(result.meta?.checkedAt)))customerRegistrySourceCheckedAt=result.meta.checkedAt;return result;}
+    readPage:async({cursor,signal,limit})=>{if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});const params=new URLSearchParams({limit:String(limit)});if(cursor)params.set('cursor',cursor);else if(customerRegistry.currentVersion())params.set('since',customerRegistry.currentVersion());const result=await fetchJson('/api/map-phase2b/private/customer-registry?'+params,{channel:'customer-registry-page',ttl:0,timeout:30000});if(signal.aborted)throw Object.assign(Error('CANCELLED'),{name:'AbortError'});if(Number.isFinite(Date.parse(result.meta?.checkedAt)))customerRegistrySourceCheckedAt=result.meta.checkedAt;customerRegistrySource=result.meta?.source||'';return result;}
   });
   const registrySelection=()=>({customerCode:state.selected?.customerCode||'',query:$('#query')?.value||'',center:state.centerFilter,vehicles:selectedVehicles()});
   function scheduleVisibleAddressRows(rows,{advance=false}={}){
@@ -255,10 +257,21 @@
   }
   async function syncCustomerRegistry(){
     if(!customerRegistry||customerRegistryBusy||!generalMap||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return;
-    customerRegistryBusy=true;const owner=initialRequestId,before=customerRegistry.summary().version,known=new Set(allStores.map(r=>r.customerCode));
+    customerRegistryBusy=true;const owner=initialRequestId,before=customerRegistry.currentVersion(),known=new Set(allStores.map(r=>r.customerCode));
     try{const options={selection:registrySelection(),maxPages:100},result=await (customerRegistry.summary().status==='logged-out'?customerRegistry.reconnect(options):customerRegistry.sync(options));if(owner!==initialRequestId||document.body.dataset.mapStaffState!=='authenticated'||state.mode!=='BASE_60D')return;
       customerRegistryCheckedAt=customerRegistrySourceCheckedAt;
-      if(result.complete&&result.version!==before){replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();if(state.selected){const next=storesByCode.get(state.selected.customerCode);if(next)state.selected={...state.selected,...next};}state.fitRequested=false;await loadBaseMap();const added=allStores.filter(r=>!known.has(r.customerCode)).map(r=>r.customerCode);if(added.length)void loadBaseVehicles(added);window.dispatchEvent(new CustomEvent('map-customer-registry-updated',{detail:{count:result.count,checkedAt:customerRegistryCheckedAt,version:result.version}}));}
+      if(result.complete&&result.version!==before){
+        replaceStoreSnapshot([],snapshotMeta);
+        if(!stageRegistrationOnly())ensureDateVehicles();
+        if(state.selected){const next=storesByCode.get(state.selected.customerCode);if(next)state.selected={...state.selected,...next};}
+        state.fitRequested=false;
+        await loadBaseMap();
+        if(!stageRegistrationOnly()){
+          const added=allStores.filter(row=>!known.has(row.customerCode)).map(row=>row.customerCode);
+          if(added.length)void loadBaseVehicles(added);
+        }
+        window.dispatchEvent(new CustomEvent('map-customer-registry-updated',{detail:{count:result.count,checkedAt:customerRegistryCheckedAt,version:result.version}}));
+      }
       if(result.complete&&!performance.getEntriesByName('opsmap-customer-ready','mark').length)performance.mark('opsmap-customer-ready');
     }catch(error){if(owner===initialRequestId&&document.body.dataset.mapStaffState==='authenticated'){clearTimeout(customerRegistryRetry);customerRegistryRetry=setTimeout(()=>void syncCustomerRegistry(),15000);}}
     finally{customerRegistryBusy=false;}
@@ -356,7 +369,7 @@
       if(item.periodAggregate?.verified===true)row.periodAggregate=item.periodAggregate;
       if(item.historyCoverage)row.historyCoverage=item.historyCoverage;
       if(item.currentMasterStatus)row.currentMasterStatus=item.currentMasterStatus;
-      for(const key of ['customerOnly','deliveryObserved','currentAddressHash','originalAddressHash','customerRegistryAddressHash','customerRegistryStatus','customerRegistryUpdatedAt','customerRegistryVersion','customerLifecycle','coordinateSearch','coordinateEvidence','addressChanged','coordinateStatus','resolutionStatus','addressLocationKey'])if(item[key]!==undefined)row[key]=item[key];
+      for(const key of ['customerOnly','deliveryObserved','staffRegistrationOnly','currentAddressHash','originalAddressHash','customerRegistryAddressHash','customerRegistryStatus','customerRegistryUpdatedAt','customerRegistryVersion','customerLifecycle','coordinateSearch','coordinateEvidence','addressChanged','coordinateStatus','resolutionStatus','addressLocationKey'])if(item[key]!==undefined)row[key]=item[key];
       row.driverKey = item.driverKey || "";
       row.driverIdentity = item.driverIdentity || '';
       row.driverName = item.driverName || "";
@@ -372,7 +385,7 @@
     });
     allStores = next;
     if(generalMap&&state.mode==='BASE_60D')generalRegistryRows=new Map(next.map(row=>[row.customerCode,row]));
-    liveAddressLocations?.onSourceSync(JSON.stringify([meta?.preservation?.version,meta?.sourceGeneration,meta?.sourceObservedAt,meta?.generatedAt,customerRegistry?.summary().version]),allStores);
+    liveAddressLocations?.onSourceSync(JSON.stringify([meta?.preservation?.version,meta?.sourceGeneration,meta?.sourceObservedAt,meta?.generatedAt,customerRegistry?.currentVersion()]),allStores);
     window.dispatchEvent(new Event('map-stores-replaced'));
     if(state.mode==='BASE_60D'){
       snapshotMeta = meta || snapshotMeta;
@@ -416,6 +429,28 @@
   function hasVerifiedStageLocations() {
     return generalMap&&stageAddressBatchEnabled()&&/^[a-f0-9]{64}$/.test(snapshotMeta?.sourceGeneration||'');
   }
+  function registrationCenter(row,savedCenters) {
+    if(row.staffRegistrationOnly)return row.raw.centerGroup;
+    const assigned=vehicleListGroup(row.baseVehicleGroup||row.dispatchCenterCode||row.raw?.center);
+    return assigned==='unknown'&&savedCenters?vehicleListGroup(row.raw?.centerGroup):assigned;
+  }
+  function staffRegistrationScope() {
+    if(!hasVerifiedStageLocations()||!dateReady||state.mode!=='BASE_60D')return null;
+    if(registrationCounts?.source!==allStores){
+      const total={registered:0,missing:0}, centers=new Map();
+      for(const row of allStores){
+        if(row.customerRegistryStatus==='DELETED')continue;
+        const center=registrationCenter(row,true);
+        if(!centers.has(center))centers.set(center,{registered:0,missing:0});
+        const local=centers.get(center), missing=Number(!Number.isFinite(row.lat)||!Number.isFinite(row.lng));
+        local.registered++;total.registered++;local.missing+=missing;total.missing+=missing;
+      }
+      registrationCounts={source:allStores,total,centers};
+    }
+    const center=state.centerFilter;
+    const count=center?(registrationCounts.centers.get(center)||{registered:0,missing:0}):registrationCounts.total;
+    return {...count,source:stageRegistrationOnly()?(center==='yeongnam'||center==='honam'?'REGISTERED':center?'PUBLISHED':'AVAILABLE'):'PUBLISHED'};
+  }
   function filteredPeriodStores() {
     if (!dateReady || state.mode !== "BASE_60D") return [];
     if (periodBasis === "vehicle" && periodVehicleScope === "selected" && !selectedVehicles().length) return [];
@@ -424,13 +459,9 @@
     const driverKeys=selectedDriverKeys.length?selectedDriverKeys:[state.driverKey];
     const candidates=periodBasis==='driver'&&driverKeys.length>1?[...new Map(driverKeys.flatMap(key=>MapPeriodUi.select(allStores,[],key,{vehicleBasis:'actual'})).map(row=>[row.customerCode,row])).values()]:MapPeriodUi.select(allStores, periodBasis === "vehicle" ? selectedVehicles() : [], periodBasis === "driver" ? state.driverKey : "", {vehicleBasis:periodBasis === "vehicle" ? "base" : "actual", includeUnvisited:generalAllStores && periodBasis === 'vehicle',useResidentSummary:generalMap&&window.MAP_ROLLING_DATE_INDEX_ENABLED===true&&periodBasis==='vehicle',periodComplete:generalMap||periodMeta?.segmented!==true||periodMeta.aggregateComplete===true});
     const savedCenters = hasVerifiedStageLocations();
-    const centerFor = row => {
-      const assigned=vehicleListGroup(row.baseVehicleGroup||row.dispatchCenterCode||row.raw?.center);
-      return assigned==='unknown'&&savedCenters ? vehicleListGroup(row.raw?.centerGroup) : assigned;
-    };
     const rows = candidates
       .filter(row => (!generalMap||row.customerRegistryStatus!=='DELETED')&&(!state.centerFilter || periodBasis === "driver" ||
-        centerFor(row) === state.centerFilter));
+        registrationCenter(row,savedCenters) === state.centerFilter));
     periodSelectionCache = {source:allStores,key,rows}; return rows;
   }
   let snapshotFlight, snapshotRecoveryTimer, snapshotRetryAfter=0, snapshotFailure;
@@ -2792,11 +2823,11 @@
   }
 
   function getSearchIndex() {
-    const registryVersion=customerRegistry?.summary().version;
+    const registryVersion=customerRegistry?.currentVersion();
     if (searchIndex?.period!==periodRows || searchIndex?.snapshot!==latestSnapshotRows ||
         searchIndex?.registryVersion!==registryVersion) {
       const records = new Map(), byAddress = new Map();
-      const currentRows=newAreaRegistryRows();
+      const currentRows=stageRegistrationOnly()?generalRegistryRows.values():newAreaRegistryRows();
       const sources=stageAddressBatchEnabled()&&snapshotMeta?.sourceGeneration?[currentRows]:[currentRows,allStores,periodRows];
       for (const source of sources) for (const value of source) {
         const code=String(value.customerCode||value.code||value.id||'').trim();
@@ -2932,6 +2963,7 @@
     try{selectStore(row,null,true,false,trace);}finally{unifiedSelectionActive=false;}
     setSearchState(row.lat===null?'매장 선택 · 좌표 미확인 · 위치 확인 필요':'매장 선택');
     trace?.finish('store');
+    if(row.staffRegistrationOnly)return true;
     // Fixed-dispatch lookup is optional enrichment, never a barrier to selection.
     const base=baseVehicles.get(row.customerCode);
     if(baseVehicleStatus==='READY'&&baseVehicleMeta?.version&&baseVehicleMeta.stale===false
@@ -2996,7 +3028,7 @@
     const code=/^[A-Z]\d{3,}$/i.test(query)?query.toUpperCase():null;
     if(code)return [currentSearchStore(code)].filter(Boolean);
     if(!address)return rankSearchRows(query);
-    const rows=latestSnapshotRows, registryVersion=customerRegistry?.summary().version;
+    const rows=latestSnapshotRows, registryVersion=customerRegistry?.currentVersion();
     if(searchIndex?.snapshot===rows&&searchIndex?.registryVersion===registryVersion||!stageAddressBatchEnabled()||registryVersion){
       const {byAddress,records}=getSearchIndex();
       const keys=[query,...NewAreaRequests.addressQueries(query,Phase2bUi.addressVariants)].map(normalizeSearchAddress);
@@ -3006,7 +3038,7 @@
     if(window.MapCustomerRegistry?.addressHash){
       const hashes=await Promise.all([...new Set([query,...NewAreaRequests.addressQueries(query,Phase2bUi.addressVariants)])]
         .map(value=>window.MapCustomerRegistry.addressHash(value).catch(()=>null)));
-      if(!signal?.aborted&&rows===latestSnapshotRows&&registryVersion===customerRegistry?.summary().version){
+      if(!signal?.aborted&&rows===latestSnapshotRows&&registryVersion===customerRegistry?.currentVersion()){
         const matches=new Map(hashes.flatMap(hash=>stageAddressHashMatches(rows,hash)).map(row=>[row.customerCode,row]));
         return [...matches.values()];
       }
@@ -4105,7 +4137,7 @@
     return judgeNewAreaPoint(row, await lookup, batch);
   }
 
-  const stageAddressBatchEnabled=()=>window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com';
+  function stageAddressBatchEnabled(){return window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com';}
 
   function readNewAreaObservations() {
     const generation=snapshotMeta?.sourceGeneration;
@@ -4255,7 +4287,7 @@
   let newAreaRegistryMemo=null,newAreaLocationsMemo=null,newAreaEvidenceMemo=null;
   function newAreaRegistryRows() {
     const version=customerRegistry?.currentVersion();
-    if(!version)return latestSnapshotRows;
+    if(!version||stageRegistrationOnly())return latestSnapshotRows;
     if(newAreaRegistryMemo?.version!==version||newAreaRegistryMemo.source!==latestSnapshotRows){
       newAreaRegistryMemo={version,source:latestSnapshotRows,rows:customerRegistry.merge(latestSnapshotRows)};
     }
@@ -4493,7 +4525,7 @@
 
   function newAreaSourceVersion() {
     return JSON.stringify([snapshotMeta?.sourceGeneration,snapshotMeta?.preservation?.version,snapshotMeta?.version,
-      snapshotMeta?.generatedAt,customerRegistry?.currentVersion()]);
+      snapshotMeta?.generatedAt,stageRegistrationOnly()?'':customerRegistry?.currentVersion()||'']);
   }
 
   function reviewNewAreaPosition(list,row,index,dialog) {
@@ -5192,7 +5224,7 @@
     refreshCustomerRegistry:syncCustomerRegistry,
     customerRegistryStatus:()=>customerRegistry?.summary(),
     isDataReady:()=>state.mode==='DATE_ROUTE'?isDailyDataReady():dateReady,
-    registeredStoreCount:()=>hasVerifiedStageLocations()?latestSnapshotRows.length:null,
+    staffRegistrationScope,
     initMap,
     stores:()=>allStores.slice(),
     refreshManualCoordinates(){indexedRows=null;pointIndex=null;for(const row of allStores){window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);}if(state.selected){window.MapManualPins?.apply(state.selected);applyUnifiedSearchCoordinateGuard(state.selected);liveAddressLocations?.apply(state.selected);refreshCoordinateEvidence(state.selected);}cancelManualRoadRoute();state.fitRequested=false;void loadBaseMap();window.dispatchEvent(new Event('map-coordinate-updated'));},

@@ -3,6 +3,7 @@
   // Private Customer metadata stays in page memory. Delivery rows remain evidence.
   const normalize = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
   const code = value => typeof value === 'string' && /^[A-Z]\d{1,20}$/.test(value);
+  const registrationCenters = new Set(['yeongnam', 'honam']);
   const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   const validText = (value, length) => typeof value === 'string' && value.length <= length && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
   const automatic = row => /^(?:KAKAO_ADDRESS_LIVE|KAKAO_ADDRESS_TEMPORARY|KAKAO_BUILDING_EXACT_ADDRESS|KAKAO_ADDRESS_REVALIDATION|AUTO_ADDRESS|ADDRESS_GEOCODE|GEOCODE_AUTO)$/.test(row.coordinateSource || '');
@@ -87,6 +88,7 @@
       const seen = new Set(), rows = [];
       for (const row of page.rows) {
         if (!row || !code(row.customerCode) || seen.has(row.customerCode) || !['ACTIVE', 'DELETED'].includes(row.lifecycle) ||
+          row.centerGroup != null && (!registrationCenters.has(row.centerGroup) || row.lifecycle !== 'ACTIVE') ||
           row.lifecycle === 'ACTIVE' && (!validText(row.customerName, 200) || !validText(row.basicAddress, 1000)) ||
           row.sourceUpdatedAt != null && !validText(row.sourceUpdatedAt, 100) ||
           row.addressHash != null && !hash(row.addressHash)) throw failure('CUSTOMER_REGISTRY_ROW_INVALID');
@@ -97,6 +99,7 @@
         // Never copy private detail fields, provider coordinates, visits, or notes from a bulk response.
         rows.push(Object.freeze({customerCode: row.customerCode, customerName: row.customerName || '', basicAddress: row.basicAddress || '',
           addressHash: currentHash, ...(search ? {coordinateSearch: search} : {}),
+          ...(row.centerGroup ? {centerGroup: row.centerGroup} : {}),
           sourceUpdatedAt: row.sourceUpdatedAt || '', lifecycle: row.lifecycle}));
       }
       return {...page, rows};
@@ -205,6 +208,7 @@
       }
       for (const record of records.values()) {
         const observed = merged.get(record.customerCode);
+        if (record.centerGroup && observed && !observed.staffRegistrationOnly) continue;
         if (record.lifecycle === 'DELETED') {
           if (observed) Object.assign(observed, {customerRegistryStatus: 'DELETED', customerLifecycle: 'DELETED', currentMasterStatus: 'DELETED'});
           continue;
@@ -228,6 +232,9 @@
           customerAddress: record.basicAddress, basicAddress: record.basicAddress, currentAddressHash: record.addressHash,
           customerRegistryAddressHash: record.addressHash, customerRegistryStatus: 'ACTIVE', customerLifecycle: 'ACTIVE',
           customerRegistryVersion: version, customerRegistryUpdatedAt: record.sourceUpdatedAt, currentMasterStatus: 'FOUND'});
+        if (record.centerGroup) Object.assign(row, {
+          centerGroup: record.centerGroup, center: record.centerGroup, staffRegistrationOnly: true
+        });
         row.raw = {...row.raw, customerCode: record.customerCode, customerName: record.customerName, name: record.customerName,
           address: record.basicAddress, customerAddress: record.basicAddress, basicAddress: record.basicAddress,
           currentAddressHash: record.addressHash, customerRegistryAddressHash: record.addressHash,

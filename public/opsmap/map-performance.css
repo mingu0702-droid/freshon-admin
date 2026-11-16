@@ -16,7 +16,7 @@
 .approvedShellCandidate .customerBlock .row { align-items:stretch; }
 .approvedShellCandidate .customerBlock .row button { min-width:48px; }
 .approvedShellCandidate .sectiontitle h2 { font-size:13px; font-weight:650; }
-.approvedShellCandidate .centers { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:5px; }
+.approvedShellCandidate .centers { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:5px; }
 .approvedShellCandidate .centers button { padding:7px 4px; font-size:12px; text-align:center; }
 .approvedShellCandidate #sourceCenterReset { display:none; }
 .approvedShellCandidate #baseVehiclePicker { padding-top:11px; }

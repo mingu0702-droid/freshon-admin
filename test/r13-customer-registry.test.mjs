@@ -35,6 +35,33 @@ test('same-address shop-in-shop codes remain independently searchable identities
   assert.equal(api.priorityRows(rows, {query: '다른매장'}, {limit: 1})[0].customerCode, 'S990002');
 });
 
+test('Stage center registrations stay searchable without replacing verified points or assuming zero deliveries', async () => {
+  const observed = {customerCode:'S990001', customerName:'출판 원장', lat:37.5, lng:127, centerGroup:'yeongnam'};
+  const {api} = load({readPage:async()=>page([
+    active('S990001',{centerGroup:'yeongnam'}),
+    active('S990002',{centerGroup:'honam'})
+  ])});
+  await api.sync();
+  const [retained, added] = api.merge([observed]);
+  assert.deepEqual(copy(retained), observed);
+  assert.equal(added.customerCode,'S990002');
+  assert.equal(added.centerGroup,'honam');
+  assert.equal(added.center,'honam');
+  assert.equal(added.staffRegistrationOnly,true);
+  assert.equal(added.basicAddress,'합성시 합성로 10');
+  assert.equal(added.baseVehicle,'');
+  assert.equal(added.lat,null);
+  assert.equal(added.coordinateStatus,'MISSING');
+
+  const context = {window:{}};
+  vm.runInNewContext(fs.readFileSync(new URL('../public/opsmap/map-period-ui.js',import.meta.url),'utf8'),context);
+  const result = context.window.MapPeriodUi.select([added],[],'',{vehicleBasis:'base',includeUnvisited:true,periodComplete:true});
+  assert.equal(result.length,1);
+  assert.equal(result[0].visitCount,null);
+  assert.equal(result[0].periodVisitCount,null);
+  assert.equal(context.window.MapPeriodUi.select([added],['101'],'',{vehicleBasis:'base',includeUnvisited:true}).length,0);
+});
+
 test('updated names, addresses and hashes reach row and cloned raw without changing Delivery evidence', async () => {
   const observed = {customerCode: 'S990001', customerName: '합성 구명칭', address: '합성시 구주소 1', originalAddressHash: sha('합성시 구주소 1'), raw: {address: '합성시 구주소 1', lastDeliveryDate: '2026-10-01'}, history: [{date: '2026-10-01'}]};
   const frozen = JSON.stringify(observed), {api} = load({readPage: async () => page([active('S990001')])});

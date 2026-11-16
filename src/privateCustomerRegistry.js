@@ -1,12 +1,12 @@
 import crypto from 'node:crypto';
 import {prepareApprovedCoordinateSearch} from './opsmap-abc/opsmapAutoCoordinates.js';
 const fail=code=>Object.assign(Error(code),{code});
-export function customerRegistryPage(snapshot,{cursor=null,since='',limit=250,secret,rules={}}={}){
+export function customerRegistryPage(snapshot,{cursor=null,since='',limit=250,maxLimit=500,secret,rules={}}={}){
  if(!snapshot?.complete||!Array.isArray(snapshot.rows)||!secret)throw fail('CUSTOMER_REGISTRY_NOT_READY');
  snapshot={...snapshot,registryVersion:snapshot.version,version:crypto.createHash('sha256').update(JSON.stringify([snapshot.version,rules])).digest('hex')};
  let offset=0;const sign=body=>crypto.createHmac('sha256',secret).update(body).digest('base64url');
  if(cursor){const [body,signature,...rest]=String(cursor).split('.');if(rest.length||!body||!signature||signature!==sign(body))throw fail('CUSTOMER_REGISTRY_CURSOR_INVALID');let value;try{value=JSON.parse(Buffer.from(body,'base64url'));}catch{throw fail('CUSTOMER_REGISTRY_CURSOR_INVALID');}if(value.version!==snapshot.version)throw fail('CUSTOMER_REGISTRY_VERSION_CHANGED');if(!Number.isSafeInteger(value.offset)||value.offset<0||value.offset>snapshot.rows.length)throw fail('CUSTOMER_REGISTRY_CURSOR_INVALID');offset=value.offset;}
- const size=Math.max(1,Math.min(500,Number.isSafeInteger(limit)?limit:250)),noop=!cursor&&since===snapshot.version;
+ const size=Math.max(1,Math.min(maxLimit,Number.isSafeInteger(limit)?limit:250)),noop=!cursor&&since===snapshot.version;
  const rows=noop?[]:snapshot.rows.slice(offset,offset+size).map(row=>{const coordinateSearch=prepareApprovedCoordinateSearch({customerCode:row.customerCode,originalAddress:row.basicAddress,rules});return{...row,...(coordinateSearch?{coordinateSearch}:{})};});
  const end=offset+rows.length,complete=noop||end>=snapshot.rows.length,body=Buffer.from(JSON.stringify({version:snapshot.version,offset:end})).toString('base64url');
  return{...snapshot,mode:noop?'NOOP':'FULL',rows,afterCursor:cursor,nextCursor:complete?null:body+'.'+sign(body),complete,total:snapshot.rows.length};

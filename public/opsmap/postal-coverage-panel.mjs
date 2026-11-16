@@ -65,7 +65,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<label>검색 반경 <select id="coverageRadius"><option value="0">구역만</option><option value="500">500m</option>' +
     '<option value="1000">1km</option></select></label></div>' +
     '<div id="postalOverview"><div class="coverage-overview"><h2 id="postalOverviewTitle">전국 집계</h2><p id="postalPeriod"></p><p id="postalObserved"></p>' +
-    '<dl class="coverage-kpis"><div><dt>등록 매장</dt><dd data-postal-kpi="registered">—</dd></div>' +
+    '<p class="coverage-note" id="postalRegistryScope">매장 수는 게시 자료 기준입니다. 최신 전체 등록 현황은 확인이 필요합니다.</p>' +
+    '<dl class="coverage-kpis"><div><dt>게시본 등록 매장</dt><dd data-postal-kpi="registered" aria-describedby="postalRegistryScope">—</dd></div>' +
     '<div><dt>좌표 연결 배송</dt><dd data-postal-kpi="visits">—</dd></div>' +
     '<div><dt>표시 대상 구역</dt><dd data-postal-kpi="scopedAreas">—</dd></div>' +
     '<div><dt>배송 있는 구역</dt><dd data-postal-kpi="delivered">—</dd></div>' +

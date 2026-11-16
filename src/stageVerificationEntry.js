@@ -21,6 +21,7 @@ import {createProductionSnapshotStore,materializeSnapshot} from './productionSna
 import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,createStageAbValidation,mountStageAbValidation} from './stageAbValidation.js';
 import {phase2bSnapshotMeta} from './phase2bOperations.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
+import {createStageStaffRegistryAsset,mountStageStaffRegistry} from './stageStaffRegistryAsset.js';
 import {createStageStoreDetails} from './stageStoreDetails.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
@@ -142,6 +143,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   });
   const postalEnabled = stage.OPSMAP_SHADOW_COVERAGE_FORMAT==='postal';
   const remotePostal = postalEnabled ? createStagePostalAssets({env:stage,fetchImpl,now}) : null;
+  const staffRegistry = createStageStaffRegistryAsset({env:stage,fetchImpl,now});
   const validation = createStageAbValidation({now,retainCoverageFiles:!postalEnabled});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   let baselineConfig, baselineStore, baselineRefresh, baselineRestoreMs, baselineState='NOT_CONFIGURED';
@@ -442,6 +444,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     mountPrivateExtensions:binding=>{
       const {requireStaff,requireStageRead,isSessionCurrent}=binding;
       staffView = requireStaff;
+      mountStageStaffRegistry({app:router,requireStaff,asset:staffRegistry,
+        getVerifiedRegistry:()=>validation.active()?.registry,now});
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
         driverContacts.mount(binding,{readBaseVehicles:codes=>base.get(codes),
           readDatedAssignment:readDatedDelivery.readDriverAssignment,readVerifiedVehicleRegistration});

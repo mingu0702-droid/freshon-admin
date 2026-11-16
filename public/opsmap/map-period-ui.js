@@ -32,10 +32,16 @@
       }
       const history = (row.history || []).filter(item => (useBase || !wanted.size || wanted.has(String(item.vehicle))) && (!driverKey || item.driverKey === driverKey))
         .sort((a,b) => b.deliveryDate.localeCompare(a.deliveryDate));
-      if (!history.length) return options.includeUnvisited && !driverKey ? [{ ...row,
-        vehicle: String(row.baseVehicle || ''), actualVehicle: '', driverKey: '', driverName: '',
-        lastDeliveryDate: '', visitCount: options.periodComplete===false?null:0, periodVisitCount: options.periodComplete===false?null:0, knownVisitCount:0, vehicles: [], drivers: [],
-        status: '', order: null, representativeLabel: options.periodComplete===false?'표시 페이지 이력 없음 · 전체 기간 미확인':'선택 기간 이력 없음', history: [] }] : [];
+      if (!history.length) {
+        if(!options.includeUnvisited||driverKey)return [];
+        const unconfirmed=options.periodComplete===false||row.staffRegistrationOnly;
+        const visits=unconfirmed?null:0;
+        return [{ ...row,
+          vehicle: String(row.baseVehicle || ''), actualVehicle: '', driverKey: '', driverName: '',
+          lastDeliveryDate: '', visitCount:visits, periodVisitCount:visits, knownVisitCount:0, vehicles: [], drivers: [],
+          status: '', order: null, representativeLabel:row.staffRegistrationOnly?'방문 이력 미확인':
+            unconfirmed?'표시 페이지 이력 없음 · 전체 기간 미확인':'선택 기간 이력 없음', history: [] }];
+      }
       const latest = history[0];
       return [{ ...row, vehicle: useBase ? String(row.baseVehicle||'') : latest.vehicle, actualVehicle:latest.vehicle, driverKey: latest.driverKey, driverName: latest.driverName,
         lastDeliveryDate: latest.deliveryDate, visitCount: options.periodComplete===false?null:history.reduce((n,item)=>n+(item.count || 1),0),

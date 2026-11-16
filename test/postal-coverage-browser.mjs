@@ -388,12 +388,16 @@ async function runBrowser() {
       if (mode === 'postal') {
         step = width + 'px period, center, search and rollback isolation';
         const view = () => page.evaluate(() => JSON.parse(document.getElementById('shadowCoverage').dataset.postalView || '{}'));
+        const publishedStores = page.locator('[data-postal-kpi="registered"]');
+        assert.equal(await page.locator('#postalOverview dt').first().innerText(), '게시본 등록 매장');
+        assert.match(await page.locator('#postalRegistryScope').innerText(), /최신 전체 등록 현황은 확인이 필요합니다/);
         const numbers = [];
         for (const days of [30,60,90]) {
           await page.locator('#coverageDays').selectOption(String(days));
           await page.waitForFunction(days => JSON.parse(document.getElementById('shadowCoverage').dataset.postalView || '{}').days === days, days);
           const v = await view();
           assert.equal(v.registered,6043);
+          assert.equal(await publishedStores.innerText(), '6,043');
           assert.equal(v.visits,audit.periods[days].located);
           assert.deepEqual([v.observed,v.missing,v.active,v.unknown,v.held],
             [audit.periods[days].observedOsan,audit.periods[days].missing,audit.periods[days].new,audit.periods[days].newUnknown,6]);
@@ -406,6 +410,7 @@ async function runBrowser() {
         let v = await view();
         assert.equal(v.observed,0);
         assert.equal(v.unknownAreas,34525);
+        assert.equal(await publishedStores.innerText(), v.registered.toLocaleString('ko-KR'));
         await page.locator('#coverageCenter').selectOption('all');
         await page.waitForFunction(() => JSON.parse(document.getElementById('shadowCoverage').dataset.postalView || '{}').center === 'all');
         const searchBox = page.locator('#coverageQuery');
