@@ -100,6 +100,7 @@
   const flights = new Map(), retained = new Map(), temporary = new Map();
   let addressEpoch = 0;
   let addressGeneration;
+  let storedBatch;
   const addressKey = value => String(value || '').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
   function remember(cache,key,value) {
     if (cache.size >= 64) cache.delete(cache.keys().next().value);
@@ -108,6 +109,35 @@
   function staffSessionExpiry() {
     const session=root.MapStaffEntry?.session?.();
     return session?.authenticated && Date.now()<Math.min(session.expiresAt,session.idleExpiresAt) ? session.expiresAt : null;
+  }
+  function stageStoredAddressCache(generation, version) {
+    const sessionExpiry = staffSessionExpiry();
+    if (root.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com' ||
+        !sessionExpiry || !/^[a-f0-9]{64}$/.test(generation || '')) return null;
+    if (storedBatch?.generation !== generation || storedBatch.version !== version || storedBatch.sessionExpiry !== sessionExpiry) {
+      storedBatch = {generation,version,sessionExpiry,entries:new Map()};
+    }
+    const scope = storedBatch, entries = scope.entries;
+    const active = () => storedBatch === scope && staffSessionExpiry() === sessionExpiry;
+    const key = queries => JSON.stringify(queries.map(addressKey));
+    return {
+      isCurrent: active,
+      get(queries) {
+        const lookup = key(queries), previous = entries.get(lookup);
+        if (active() && previous?.until > Date.now()) return previous.result;
+        entries.delete(lookup);
+      },
+      set(queries, result) {
+        const {lat,lng,coordinateSource} = result?.point || {};
+        if (!active() || result?.status !== 'STORED' || coordinateSource !== 'STAGE_PRESERVED_COORDINATE' ||
+            !Number.isFinite(lat) || !Number.isFinite(lng) || lat < 33 || lat > 39.5 || lng < 124 || lng > 132) return;
+        const lookup = key(queries);
+        entries.delete(lookup);
+        if (entries.size >= 256) entries.delete(entries.keys().next().value);
+        entries.set(lookup,{until:Date.now()+60_000,result:{status:'STORED',point:{lat,lng,coordinateSource}}});
+      },
+      clear() { if (storedBatch === scope) storedBatch = null; }
+    };
   }
   function stageAddress(query,generation,{signal}={}) {
     if (root.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com') return Promise.resolve(null);
@@ -165,12 +195,12 @@
     if(point.coordinateSource==='MAP_CLICK_TEMPORARY'&&saved?.lat===point.lat&&saved?.lng===point.lng)temporary.delete(key);
   }
   function resetStageAddress(){
-    addressEpoch++;retained.clear();
+    addressEpoch++;retained.clear();storedBatch=null;
     for(const flight of flights.values())flight.controller.abort();
     flights.clear();
   }
   root.addEventListener?.('map-staff-signed-out',()=>{resetStageAddress();temporary.clear();});
   root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, batchAddressQueries, addressFailureHint, stopsExternal, outcome, singleStoredLocation,
-    stageAddress, rememberTemporary, forgetTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
+    stageAddress, stageStoredAddressCache, rememberTemporary, forgetTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
 })(typeof window === 'object' ? window : globalThis);
 

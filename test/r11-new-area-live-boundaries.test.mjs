@@ -10,17 +10,19 @@ import {batchDomNode,batchDomTemplate} from './fixtures/new-area-dom.mjs';
 
 // Synthetic data and mocked transports only. No browser, API, source or coordinate writes.
 const runtime=fs.readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js',import.meta.url),'utf8');
+const areaRequests=fs.readFileSync(new URL('../public/opsmap/new-area-requests.js',import.meta.url),'utf8');
 const exposed=runtime.slice(0,runtime.indexOf('\n  initVehicles();'))+`
 window.qa={state,runNewArea,clearNewAreaBatch,judgeNewAreaRow,judgeNewAreaPoint,lookupInteractiveLocation,
+setGeneration(value){snapshotMeta={...snapshotMeta,sourceGeneration:value};},
 setup(saved){state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';dateReady=false;
   periodRows=[];periodMeta={complete:false};latestSnapshotRows=saved;allStores=saved;
   for(const row of saved){storesByCode.set(row.customerCode,row);coordinateByCode.set(row.customerCode,row);if(row.vehicle)baseVehicles.set(row.customerCode,{baseVehicle:row.vehicle});}},
 saved:()=>latestSnapshotRows};})();`;
 const saved={customerCode:'S990001',customerName:'합성 저장매장',address:'경기도 화성시 합성로 1',lat:37.2,lng:127,vehicle:'101'};
-function fixture({rows=[],stageBatch,customer=()=>({data:[],meta:{complete:true}}),lookup=(query,callback)=>callback([{address_name:query,x:'127',y:'37.2'}],'OK')}={}){
-  const nodes=new Map(),headers=[],queries=[],batches=[];
+function fixture({rows=[],stageBatch,verifiedStage=false,customer=()=>({data:[],meta:{complete:true}}),lookup=(query,callback)=>callback([{address_name:query,x:'127',y:'37.2'}],'OK')}={}){
+  const nodes=new Map(),headers=[],queries=[],batches=[],listeners=new Map();
   const node=id=>{if(!nodes.has(id))nodes.set(id,batchDomNode());return nodes.get(id);};
-  const window={addEventListener(){},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,
+  const window={addEventListener(event,fn){listeners.set(event,[...(listeners.get(event)||[]),fn]);},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,
     KAKAO_MAP_CONFIG:{allowExternalAddressLookup:true},kakaoGeocoder:{serverProxy:true,addressSearch(query,callback,options){queries.push(query);lookup(query,callback,options);}}};
   if(stageBatch)window.location={origin:'https://freshon-admin-stage-preview-template.onrender.com'};
   const fetch=async(url,options)=>{
@@ -40,9 +42,18 @@ function fixture({rows=[],stageBatch,customer=()=>({data:[],meta:{complete:true}
   const context=vm.createContext({window,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:{dataset:{}}},
     MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,
     location:{href:'https://example.invalid/opsmap/'},fetch,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
+  let staff={authenticated:true,expiresAt:Date.now()+600_000,idleExpiresAt:Date.now()+60_000};
+  if(verifiedStage){
+    window.MapStaffEntry={session:()=>staff};
+    vm.runInContext(areaRequests,context);
+    context.NewAreaRequests=window.NewAreaRequests;
+  }
   vm.runInContext(exposed,context);window.qa.setup(rows);
+  if(verifiedStage)window.qa.setGeneration('a'.repeat(64));
   const run=input=>{node('#newAreaBatchInput').value=input;return window.qa.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');};
-  return {...window.qa,window,node,run,headers,queries,batches};
+  return {...window.qa,window,node,run,headers,queries,batches,logout(){
+    staff={authenticated:false};for(const fn of listeners.get('map-staff-signed-out')||[])fn();
+  }};
 }
 const query=address=>globalThis.NewAreaRequests.addressQuery(address,globalThis.Phase2bUi.addressVariants);
 const queryChoices=address=>globalThis.NewAreaRequests.addressQueries(address,globalThis.Phase2bUi.addressVariants);
@@ -117,6 +128,39 @@ test('46 Stage rows use one protected batch and preserve cells when the batch or
     assert.equal(f.state.newAreaResults.filter(row=>row.lookupStatus==='SUCCESS').length,status===200?24:0);
     if(status!==200)assert.equal(f.state.newAreaResults[0].lookupHttpStatus,status);
   }
+});
+
+test('Stage keeps one request for new rows and never reuses held results, revoked staff or another generation',async()=>{
+  let status=200;
+  const f=fixture({rows:[saved],verifiedStage:true,stageBatch:({generation,rows})=>status===200
+    ?{payload:{generation,data:rows.map(([address])=>address.endsWith(' 99')?{status:'ADDRESS_NOT_MATCHED'}:
+      {status:'STORED',point:{lat:37.2,lng:127,coordinateSource:'STAGE_PRESERVED_COORDINATE'}})}}
+    :{status,payload:{error:'STAGE_BATCH_GENERATION_CHANGED'}}});
+  const addresses=Array.from({length:46},(_,index)=>`경기도 화성시 합성로 ${index+1} (본관) 2층`);
+  const paste=values=>f.run(values.map((address,index)=>address+'\t'+index).join('\n'));
+  await paste(addresses);
+  assert.deepEqual(f.batches.map(call=>call.rows.length),[46]);
+  const before=JSON.stringify(f.state.newAreaResults.map(row=>[row.originalAddress,row.lat,row.lng,row.decision]));
+  await paste(addresses);
+  assert.deepEqual(f.batches.map(call=>call.rows.length),[46]);
+  assert.equal(JSON.stringify(f.state.newAreaResults.map(row=>[row.originalAddress,row.lat,row.lng,row.decision])),before);
+  const mixed=[...addresses.slice(0,-1),'경기도 화성시 합성로 99 (별관)'];
+  await paste(mixed);
+  await paste(mixed);
+  assert.deepEqual(f.batches.map(call=>call.rows.length),[46,1,1]);
+  assert.equal(f.state.newAreaResults.at(-1).lookupStatus,'DEFERRED');
+  status=409;
+  await paste(mixed);
+  assert(f.state.newAreaResults.every(row=>row.lookupStatus==='FAILED'));
+  status=200;
+  f.setGeneration('b'.repeat(64));
+  await paste(addresses);
+  assert.equal(f.batches.at(-1).rows.length,46);
+  f.logout();
+  status=401;
+  await paste(addresses);
+  assert.equal(f.batches.at(-1).rows.length,46);
+  assert(f.state.newAreaResults.every(row=>row.lookupStatus==='FAILED'));
 });
 
 test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with no Y transmission',async()=>{

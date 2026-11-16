@@ -4089,12 +4089,18 @@
     details.ontoggle=render;
     if(details.open)void render();
   }
-  async function stageBatchAddressEvidence(rows,signal,requestId){
+  async function stageBatchAddressEvidence(rows,signal,requestId,timing){
     const generation=snapshotMeta?.sourceGeneration??null;
     const {inputs,indexes}=NewAreaRequests.batchAddressQueries(rows,Phase2bUi.addressVariants);
-    const resolved=[];
-    for(let offset=0;offset<inputs.length;offset+=120){
-      const chunk=inputs.slice(offset,offset+120);
+    const cache=NewAreaRequests.stageStoredAddressCache(generation,newAreaSourceVersion());
+    const resolved=inputs.map(queries=>cache?.get(queries));
+    const missing=inputs.flatMap((_,index)=>resolved[index]?[]:[index]);
+    const storedHits=inputs.length-missing.length;
+    if(timing)timing.storedHits=storedHits;
+    for(let offset=0;offset<missing.length;offset+=120){
+      const positions=missing.slice(offset,offset+120);
+      const chunk=positions.map(index=>inputs[index]);
+      if(timing)timing.requests++;
       const result=await fetchJson('/api/map-phase2b/private/stage-address-evidence',{
         channel:'stage-address-batch:'+requestId,method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({generation,rows:chunk}),timeout:12000,signal
@@ -4102,8 +4108,16 @@
       if(signal.aborted)break;
       const error=result.error||((snapshotMeta?.sourceGeneration??null)!==generation?'STAGE_BATCH_GENERATION_CHANGED':
         result.generation!==generation||result.data?.length!==chunk.length?'STAGE_BATCH_UNAVAILABLE':null);
-      resolved.push(...(error?chunk.map(()=>({error,httpStatus:result.status})):result.data));
+      if(error&&([401,403,409].includes(result.status)||error==='STAGE_BATCH_GENERATION_CHANGED')){
+        cache?.clear();
+        return indexes.map(index=>index<0?{status:'INVALID_ADDRESS'}:{error,httpStatus:result.status});
+      }
+      for(const [i,index] of positions.entries()){
+        resolved[index]=error?{error,httpStatus:result.status}:result.data[i];
+        if(!error)cache?.set(inputs[index],resolved[index]);
+      }
     }
+    if(storedHits&&!cache.isCurrent())resolved.fill({error:'STAFF_LOGIN_REQUIRED',httpStatus:401});
     return indexes.map(index=>index<0?{status:'INVALID_ADDRESS'}:resolved[index]);
   }
   async function stageSingleAreaEvidence(row,signal,requestId){
@@ -4218,23 +4232,29 @@
       locationIndex.byCode.size===registeredRows.length);
     const evidence={locationRows,locationIndex,locationCoverageComplete,assignments:baseVehicles,source,dispatchByCode,exactSites,
       dispatchIndex:MapPeriodUi.spatialIndex(dispatchStops),
-      dispatchCheckedAt:source?.checkedAt||'',dispatchStale:source?.stale!==false||!!source?.lastError};
+      dispatchCheckedAt:source?.checkedAt||'',dispatchStale:source?.stale!==false||!!source?.lastError,dispatchFacts:new Map()};
     if(generation)newAreaEvidenceMemo={version,rows:latestSnapshotRows,source,assignments:baseVehicles.size,evidence};
     return evidence;
   }
 
   function newAreaDispatchFacts(point,nearestCode,evidence) {
-    const {dispatchByCode,dispatchIndex,dispatchCheckedAt,dispatchStale,locationIndex,assignments,source,locationCoverageComplete}=evidence;
+    const {dispatchByCode,dispatchIndex,dispatchCheckedAt,dispatchStale,locationIndex,assignments,source,locationCoverageComplete,dispatchFacts}=evidence;
+    const key=point.lat+'|'+point.lng+'|'+(nearestCode||'');
+    const saved=dispatchFacts.get(key);
+    if(saved)return saved;
     const assigned=dispatchByCode.get(nearestCode);
     const nearby=window.MapFixedDeliveryWeekdays?.nearbyFixedDeliveryWeekdays(point,locationIndex,assignments,{source,locationCoverageComplete});
     const latitudePadding=50/109;
     const longitudePadding=latitudePadding/Math.cos((Math.abs(point.lat)+latitudePadding)*Math.PI/180);
     const dispatchStops=dispatchIndex.query({south:point.lat-latitudePadding,north:point.lat+latitudePadding,
       west:point.lng-longitudePadding,east:point.lng+longitudePadding});
-    return {nearestDispatch:assigned?.assignments||[],nearestDispatchLabel:assigned?.state==='UNASSIGNED'?'미배정':'미확인',
+    const facts={nearestDispatch:assigned?.assignments||[],nearestDispatchLabel:assigned?.state==='UNASSIGNED'?'미배정':'미확인',
       dispatchVehicles:Phase2bUi.nearbyVehicleWeekdays(point,dispatchStops),dispatchCheckedAt,dispatchStale,
       fixedNearbyWeekdays:nearby?.days||[],fixedNearbyWeekdayState:nearby?.status||'UNKNOWN',
       fixedNearbyWeekdaysStale:nearby?.stale===true};
+    if(dispatchFacts.size>=128)dispatchFacts.delete(dispatchFacts.keys().next().value);
+    dispatchFacts.set(key,facts);
+    return facts;
   }
 
   function judgeNewAreaPoint(row, point, batch) {
@@ -4503,6 +4523,7 @@
     const status = $(statusId), list = $(resultId);
     const started=performance.now();
     let addressMs=0;
+    const addressTiming={requests:0,storedHits:0};
     if (state.mode !== 'BASE_60D') { status.textContent = '매장·권역 지도에서 조회해 주세요.'; return; }
     const periodKey = state.rangeStart + '|' + state.rangeEnd;
     const input = $(inputId).value;
@@ -4592,7 +4613,7 @@
         const addressStarted=performance.now();
         const results=rows.length===1&&requested.length===1
           ?[await stageSingleAreaEvidence(rows[requested[0]],signal,requestId)]
-          :await stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId);
+          :await stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId,addressTiming);
         addressMs=Math.round(performance.now()-addressStarted);
         batch.stageRows=new Map(requested.map((index,i)=>[index,results[i]]));
       }
@@ -4615,7 +4636,9 @@
         if(valid){
           publishNewAreaResults();active.clear();showProgress();
           if(stageAddressBatchEnabled())list.setAttribute('data-batch-timing',JSON.stringify({rows:rows.length,
-            completed:counts.done,located:counts.located,addressMs,totalMs:Math.round(performance.now()-started)}));
+            completed:counts.done,located:counts.located,addressMs,
+            ...(rows.length>1&&{addressRequests:addressTiming.requests,storedAddressHits:addressTiming.storedHits}),
+            totalMs:Math.round(performance.now()-started)}));
         } else {
           clearNewAreaBatch(false);status.textContent='조회 조건이 바뀌었습니다. 다시 판단해 주세요.';
         }
