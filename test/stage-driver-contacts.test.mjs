@@ -19,7 +19,7 @@ const config = {
   OPSMAP_STAGE_DRIVER_GOOGLE_SERVICE_ACCOUNT_JSON_BASE64:Buffer.from(JSON.stringify({type:'service_account',
     client_email:'fixture@synthetic-stage.iam.gserviceaccount.com',private_key:privateKey})).toString('base64')
 };
-const vehicleByCode = {'S101':'101','S122':'122','S202':'202','S203':'203','S999':'101'};
+const vehicleByCode = {'S101':'101','S122':'122','S177':'177','S202':'202','S203':'203','S999':'101'};
 const baseReader = async codes => ({ok:true,data:codes.map(customerCode=>({customerCode,baseVehicle:vehicleByCode[customerCode],
   baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:customerCode==='S999'?'yeongnam':'osan',
   baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:'f'.repeat(64),baseVehicleCheckedAt:current,baseVehicleStale:false}))});
@@ -134,6 +134,17 @@ test('a verified vehicle registration fills only a matching contact and flags di
   assert.equal((await unverified.json()).meta.state,'UNREGISTERED');
   assert.deepEqual(seen.map(v=>v.vehicle),['101','122','202','203']);
   assert(seen.every(v=>v.center==='osan'&&v.date===current));
+});
+
+test('an explicit replacement assignment has no fixed driver and does not use the registration fallback', async t => {
+  const endpoint=await useHttp(t,{env:config,fetchImpl:googleSource([],[...syntheticValues,['177','대체 용차','','2026-11-01']])},{
+    readBaseVehicles:baseReader,readVerifiedVehicleRegistration:()=>assert.fail('replacement status must stay explicit')
+  });
+  const response=await endpoint.read(contactQuery('S177','177'));
+  assert.equal(response.status,200);
+  const body=await response.json();
+  assert.deepEqual(body.data,{driverName:null,phone:null});
+  assert.equal(body.meta.state,'NO_FIXED_DRIVER');
 });
 
 test('the dated reader opens one exact, observed task and rejects mismatches before releasing contacts', async t => {

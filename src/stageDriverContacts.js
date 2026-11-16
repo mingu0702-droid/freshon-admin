@@ -1,7 +1,7 @@
 import {createPrivateKey, sign} from 'node:crypto';
 import {readFileSync, statSync} from 'node:fs';
 import {parseDriverSheetValues} from './driverSheetRows.js';
-import {createDriverAssignmentReader, driverPhone, driverVehicle, mountPrivateDriverContact} from './privateDriverContact.js';
+import {createDriverAssignmentReader, driverPhone, driverVehicle, isReplacementDriver, mountPrivateDriverContact} from './privateDriverContact.js';
 import {readBoundedHubText} from './opsmap-abc/boundedHubResponse.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 
@@ -162,12 +162,13 @@ export function createStageDriverContacts({env=process.env, fetchImpl=fetch, now
     const readDriverMaster=readSheet&&async function(date, assignment) {
       const master=await readSheet(date);
       if(assignment?.basis!=='FIXED_DISPATCH_PRIMARY'||!readVerifiedVehicleRegistration)return master;
+      const existing=master.vehicles.find(row=>row.vehicle===assignment.vehicle);
+      if (!existing?.conflict && isReplacementDriver(existing?.driverName)) return master;
       const registered=await readVerifiedVehicleRegistration({date,center:assignment.center,vehicle:assignment.vehicle});
       if(registered?.verified!==true||registered.source!=='FRESHON_VEHICLE_REGISTRATION'||registered.date!==date||
         registered.center!==assignment.center||driverVehicle(registered.vehicle)!==assignment.vehicle)return master;
       const name=clean(registered.driverName),phone=driverPhone(registered.phone);
       if(!name||!phone)return master;
-      const existing=master.vehicles.find(row=>row.vehicle===assignment.vehicle);
       if(existing?.conflict||existing?.driverName&&existing.driverName.replace(/\s+/g,'')!==name.replace(/\s+/g,'')||
         existing?.phone&&existing.phone.replace(/\D/g,'')!==phone.replace(/\D/g,''))throw fail('DRIVER_SOURCE_CONFLICT',409);
       if(existing?.driverName&&existing.phone)return master;

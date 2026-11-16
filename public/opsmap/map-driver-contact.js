@@ -4,11 +4,19 @@
     const compact = String(value || '').replace(/[\s()-]/g, '');
     return /^(?:0\d{8,10}|\+82\d{8,10})$/.test(compact) ? 'tel:' + compact : null;
   }
+  const fixedDriverLabel = value => {
+    const name = String(value || '').normalize('NFKC').trim();
+    return name.replace(/\s+/g,'') === '대체용차' ? '고정기사 없음' : name;
+  };
   function paint(target, value) {
     if (!target) return;
     target.replaceChildren(); target.removeAttribute('title');
     target.dataset.state = value.state || 'UNREGISTERED';
     target.dataset.source = value.meta?.source || '';
+    if (value.state === 'NO_FIXED_DRIVER') {
+      target.textContent = '고정기사 없음';
+      return;
+    }
     if (!value.name) {
       target.textContent=({LOADING:'담당 기사 불러오는 중…',ERROR:'담당 기사 조회 실패',ASSIGNMENT_UNCONFIRMED:'기사정보 확인 필요',
         UNCONNECTED:'기사 연락처를 조회할 수 없습니다.',AUTH_REQUIRED:'직원 로그인이 필요합니다.',FORBIDDEN:'기사정보 조회 권한이 없습니다.'})[value.state]||'담당 기사 정보 없음';
@@ -57,5 +65,5 @@
     root.addEventListener('map-store-selected', event => { if (!event.detail?.customerCode) clear(); });
     return { load, clear };
   }
-  root.MapDriverContact = Object.freeze({ create, paint, phoneHref });
+  root.MapDriverContact = Object.freeze({ create, paint, phoneHref, fixedDriverLabel });
 })(typeof window === 'undefined' ? globalThis : window);

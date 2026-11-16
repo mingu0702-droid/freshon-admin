@@ -15,6 +15,7 @@ export function driverPhone(value) {
   const text = clean(value), compact = text.replace(/[\s()-]/g, '');
   return /^(?:0\d{8,10}|\+82\d{8,10})$/.test(compact) ? text : null;
 }
+export const isReplacementDriver = value => clean(value).replace(/\s+/g,'') === '대체용차';
 export function attachDatedStopDriver(stop, driver = {}) {
   stop.driverName = clean(driver.driverName);
   Object.defineProperty(stop, 'driverPhone', { value: driverPhone(driver.driverPhone), enumerable: false });
@@ -114,7 +115,8 @@ export function createDriverContactReader({ readDriverMaster, readAssignment, da
     const effectiveDate = validDate(row?.effectiveDate) ? row.effectiveDate : null;
     if (effectiveDate && effectiveDate > date) throw fail('DRIVER_EFFECTIVE_DATE_INVALID', 409);
     const masterName = clean(row?.driverName || row?.name);
-    const name = context === 'DATE_ROUTE' ? assignedName : masterName;
+    const noFixedDriver = context === 'BASE' && isReplacementDriver(masterName);
+    const name = context === 'DATE_ROUTE' ? assignedName : noFixedDriver ? '' : masterName;
     // A different historical driver's current phone is never substituted.
     const sameDriver = assignedName && key(assignedName) === key(masterName);
     const currentSnapshot = assignment.currentDeliveryVerified === true
@@ -127,7 +129,7 @@ export function createDriverContactReader({ readDriverMaster, readAssignment, da
     const phoneBasis = !name || !phone ? 'UNAVAILABLE' : context === 'BASE' ? masterSource
       : assignmentPhone ? 'DATED_ASSIGNMENT' : effectiveDate ? 'EFFECTIVE_DATED_MASTER' : 'CURRENT_DELIVERY_MATCHED_MASTER';
     return { ok: true, data: { driverName: name || null, phone: name ? phone : null },
-      meta: { ...identity, state: name ? phone ? 'REGISTERED' : 'PHONE_UNREGISTERED' : 'UNREGISTERED',
+      meta: { ...identity, state: noFixedDriver ? 'NO_FIXED_DRIVER' : name ? phone ? 'REGISTERED' : 'PHONE_UNREGISTERED' : 'UNREGISTERED',
         source: context === 'DATE_ROUTE' ? 'DATED_ASSIGNMENT' : masterSource,
         effectiveDate, phoneBasis, checkedAt: master.generatedAt || null,
         assignmentVersion: assignment.version || null, assignmentCheckedAt: assignment.checkedAt || null,

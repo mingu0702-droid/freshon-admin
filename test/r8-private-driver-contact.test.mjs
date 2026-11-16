@@ -70,8 +70,14 @@ test('isolated Chromium: phone link renders in the card and logout removes the v
  try{const page=await browser.newPage();await page.setContent('<body data-map-staff-state="authenticated"><dd id="driver"></dd></body>');await page.addScriptTag({path:new URL('../public/opsmap/map-driver-contact.js',import.meta.url).pathname.replace(/^\/(\w:)/,'$1')});
   const result=await page.evaluate(async({identity,name,phone})=>{
    const control=MapDriverContact.create({getTarget:()=>document.querySelector('#driver'),fetcher:async()=>({ok:true,json:async()=>({ok:true,data:{driverName:name,phone},meta:{...identity,state:'REGISTERED',source:'DRIVER_MASTER'}})})});
-   await control.load(identity);const link=document.querySelector('#driver a'),before={href:link?.getAttribute('href'),text:document.querySelector('#driver').textContent};window.dispatchEvent(new Event('map-staff-signed-out'));return {before,after:document.querySelector('#driver').textContent};
-  },{identity,name,phone});assert.equal(result.before.href,'tel:'+phone.replace(/-/g,''));assert(result.before.text.includes(name));assert.equal(result.after,'');
+   await control.load(identity);const target=document.querySelector('#driver'),link=target.querySelector('a');
+   const before={href:link?.getAttribute('href'),text:target.textContent};
+   MapDriverContact.paint(target,{state:'NO_FIXED_DRIVER'});
+   const replacement={text:target.textContent,hasLink:!!target.querySelector('a')};
+   window.dispatchEvent(new Event('map-staff-signed-out'));
+   return {before,replacement,after:target.textContent};
+  },{identity,name,phone});assert.equal(result.before.href,'tel:'+phone.replace(/-/g,''));assert(result.before.text.includes(name));
+  assert.deepEqual(result.replacement,{text:'고정기사 없음',hasLink:false});assert.equal(result.after,'');
  }finally{await browser.close();}
 });
 test('isolated Chromium: late previous-customer response and permission failure cannot retain a phone',async()=>{
