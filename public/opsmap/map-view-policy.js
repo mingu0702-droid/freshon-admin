@@ -461,9 +461,13 @@
       active.onSettled=null;
       onSettled?.(lastFocus);
     }
-    function focus(point,{key='',reason='selection',pinOffset,onSettled}={}){
+    function focus(point,{key='',reason='selection',pinOffset,onSettled,immediate=false}={}){
       if(disposed||!validPoint(point))return false;
-      releaseFocus();active={point,key,reason,pinOffset,onSettled,id:++sequence,interaction,geometry:null,corrections:0};report({state:'pending'});scheduleFocus(true);return true;
+      releaseFocus();active={point,key,reason,pinOffset,onSettled,id:++sequence,interaction,geometry:null,corrections:0};
+      report({state:'pending'});
+      if(immediate)alignFocus(active.id);
+      else scheduleFocus(true);
+      return true;
     }
     function relayout(){
       if(disposed)return;

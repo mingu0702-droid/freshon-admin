@@ -2326,8 +2326,7 @@
       neighborhood.trace=null;
       requestAnimationFrame(()=>{
         if(searchNeighborhood?.point!==point)return;
-        const marker=temporaryPins.get(point.temporaryKey)?.marker;
-        if(marker?.isConnected&&marker.getBoundingClientRect().width)trace.record('visiblePin');
+        recordVisibleSearchPin(point,trace);
         trace.record('nearbyPins');
       });
     }
@@ -2440,14 +2439,23 @@
     positionTemporaryDistanceLabel();scheduleNewAreaDispatchBadges();
   }
 
+  function recordVisibleSearchPin(point,trace) {
+    const marker=temporaryPins.get(point.temporaryKey)?.marker;
+    if(!marker?.isConnected)return;
+    const {left,top,width,height}=(marker.querySelector('.pin')||marker).getBoundingClientRect();
+    const hit=width&&height&&document.elementFromPoint(left+width/2,top+height/2);
+    if(hit&&marker.contains(hit))trace.record('visiblePin');
+  }
+
   function focusMapPoint(row,{zoom=false,key='',pinOffset,nearby=false,onSettled}={}) {
     if(!state.map||numberOrNull(row.lat)===null||numberOrNull(row.lng)===null)return;
     state.fitRequested=false;state.suppressMapEventsUntil=Date.now()+700;
     const level=window.MapViewPolicy.storePinLevel;
-    if(nearby?state.map.getLevel()!==level:zoom&&state.map.getLevel()>level)state.map.setLevel(level);
+    if(nearby)mapCamera?.relayout();
+    if(nearby?state.map.getLevel()!==level:zoom&&state.map.getLevel()>level)state.map.setLevel(level,{animate:false});
     const point=new kakao.maps.LatLng(Number(row.lat),Number(row.lng));
     if(nearby)state.map.setCenter?.(point);
-    if(!mapCamera?.focus(point,{key:key||row.customerCode||row.vehicle||'selection',pinOffset,onSettled})){
+    if(!mapCamera?.focus(point,{key:key||row.customerCode||row.vehicle||'selection',pinOffset,onSettled,immediate:nearby})){
       state.map.panTo(point);
       if(onSettled)afterSearchPaint(onSettled);
     }
@@ -2965,7 +2973,7 @@
     const mark=phase=>{if(phase!=='coordinates'||stages[phase]===undefined)stages[phase]=Math.round(performance.now()-started);};
     let kind;
     const publish=()=>{if(kind&&id===searchSequence)$('#map').dataset.searchMetrics=JSON.stringify({id,kind,...stages});};
-    return {mark,record(phase){mark(phase);publish();},count(name,value){stages[name]=value;publish();},finish(result){
+    return {mark,record(phase){if(stages[phase]===undefined){mark(phase);publish();}},count(name,value){stages[name]=value;publish();},finish(result){
       kind=result;mark('total');publish();
       requestAnimationFrame(()=>{mark('frame');publish();});
     }};
@@ -3608,6 +3616,12 @@
       }
     }:undefined});
     trace?.mark('map');
+    if(neighborhood&&dateReady){
+      renderStops(state.currentRows,{viewportOnly:true,fromIdle:true});
+      if(trace)requestAnimationFrame(()=>{
+        if(searchNeighborhood===neighborhood)recordVisibleSearchPin(row,trace);
+      });
+    }
     trace?.mark('detail');
     trace?.finish('temporary');
     const enrich=()=>{if(state.virtual===row)renderSearchTemporaryNearby(row);};
