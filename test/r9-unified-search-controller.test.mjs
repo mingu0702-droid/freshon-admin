@@ -127,7 +127,7 @@ test('an already visible official result can be reused only while its verified s
   NewAreaRequests:{cachedStageAddress:()=>({status:'OFFICIAL',point})},snapshotMeta:{sourceGeneration:'a'.repeat(64)},
   searchPinView:()=> 'same viewport',visibleSearchPin:()=>true,invalidateUnifiedSearch(){},cancelAddressLookup(){},closeUnifiedSearchResults(){},setSearchState(){}
  };
- const reuse=vm.runInNewContext(declaration('reuseVisibleOfficialSearch')+'\nreuseVisibleOfficialSearch',scope);
+ const reuse=vm.runInNewContext(declaration('reuseVisibleAddressSearch')+'\nreuseVisibleAddressSearch',scope);
  const trace={count:(key,value)=>expected.set(key,value),record:key=>expected.set(key,true),finish:key=>expected.set('kind',key)};
  assert.equal(reuse(point.address,trace),true);
  assert.equal(expected.get('nearbyShown'),2);
@@ -139,6 +139,17 @@ test('an already visible official result can be reused only while its verified s
  assert.equal(reuse(point.address,trace),false);
  scope.mapCamera.interaction=()=>0;
  scope.NewAreaRequests.cachedStageAddress=()=>null;
+ assert.equal(reuse(point.address,trace),false);
+ point.coordinateSource='KAKAO_ADDRESS_TEMPORARY';
+ scope.window={KAKAO_MAP_CONFIG:{allowExternalAddressLookup:true}};
+ scope.performance={now:()=>500};
+ assert.equal(reuse(point.address,trace),false);
+ point.kakaoAddressCheck={sourceGeneration:scope.snapshotMeta.sourceGeneration,expiresAt:1000};
+ assert.equal(reuse(point.address,trace),true);
+ scope.performance.now=()=>1000;
+ assert.equal(reuse(point.address,trace),false);
+ scope.performance.now=()=>500;
+ scope.snapshotMeta.sourceGeneration='b'.repeat(64);
  assert.equal(reuse(point.address,trace),false);
 });
 

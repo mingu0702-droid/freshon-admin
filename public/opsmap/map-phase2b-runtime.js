@@ -2498,14 +2498,22 @@
     });
   }
 
-  function reuseVisibleOfficialSearch(text,trace) {
+  function reuseVisibleAddressSearch(text,trace) {
     const point=state.virtual, neighborhood=searchNeighborhood;
     if(!point||!dateReady||mapMoving||!neighborhood||point!==neighborhood.point||point!==temporaryDetailPoint||
        point.address!==text||neighborhood.sourceRows!==allStores||neighborhood.paintedView!==searchPinView()||
        neighborhood.filterKey!==periodSelectionCache?.key||neighborhood.cameraInteraction!==mapCamera?.interaction())return false;
-    const cached=NewAreaRequests.cachedStageAddress(text,snapshotMeta?.sourceGeneration);
-    if(cached?.status!=='OFFICIAL'||cached.point?.lat!==point.lat||cached.point?.lng!==point.lng||
-       cached.point?.coordinateSource!==point.coordinateSource||!visibleSearchPin(point))return false;
+    const generation=snapshotMeta?.sourceGeneration;
+    const kakao=point.kakaoAddressCheck;
+    const exactKakao=point.coordinateSource==='KAKAO_ADDRESS_TEMPORARY'&&kakao&&
+      kakao.sourceGeneration===generation&&performance.now()<kakao.expiresAt&&
+      window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true;
+    if(!exactKakao){
+      const cached=NewAreaRequests.cachedStageAddress(text,generation);
+      if(cached?.status!=='OFFICIAL'||cached.point?.lat!==point.lat||cached.point?.lng!==point.lng||
+         cached.point?.coordinateSource!==point.coordinateSource)return false;
+    }
+    if(!visibleSearchPin(point))return false;
     invalidateUnifiedSearch();
     cancelAddressLookup();closeUnifiedSearchResults();
     setSearchState('임시 위치 표시 · 고객정보에 저장하지 않습니다.');
@@ -3209,7 +3217,7 @@
     if(state.mode!=='BASE_60D')return;
     if(searchFlight?.text===text)return searchFlight.task;
     const trace=startSearchTrace();
-    if(state.virtual&&reuseVisibleOfficialSearch(text,trace))return;
+    if(state.virtual&&reuseVisibleAddressSearch(text,trace))return;
     const task=searchPeriod(text,trace).finally(()=>{if(searchFlight?.task===task)searchFlight=null;});
     searchFlight={text,task};
     return task;
@@ -3485,6 +3493,7 @@
     const virtual={customerCode:'',customerName:point.placeName||'임시 위치',address:point.address,
       lat,lng,virtual:true,searchTemporary:true,customerMatchState,
       coordinateSource:point.coordinateSource||'KAKAO_ADDRESS_TEMPORARY',
+      ...(point.kakaoAddressCheck?{kakaoAddressCheck:point.kakaoAddressCheck}:{}),
       coordinateAccuracy:({MAP_CLICK_TEMPORARY:'USER_SELECTED',KAKAO_PLACE_TEMPORARY:'PLACE',OFFICIAL_PUBLIC_PARCEL:'PARCEL',
         OFFICIAL_PUBLIC_ADDRESS:'ADDRESS',STAGE_PRESERVED_COORDINATE:'PRESERVED'})[point.coordinateSource]||'BUILDING'};
     NewAreaRequests.rememberTemporary(point.address,virtual);
@@ -3579,7 +3588,11 @@
         placeName:row.place_name,coordinateSource:address?'KAKAO_ADDRESS_TEMPORARY':'KAKAO_PLACE_TEMPORARY'
       })).filter(newAreaCoordinate);
       if(!candidates.length)return null;
-      if(address&&candidates.length===1&&result.resolution?.kind==='EXACT')return candidates[0];
+      if(address&&candidates.length===1&&result.resolution?.kind==='EXACT'){
+        // Reuse only an exact result while its pin and the same map view are still shown.
+        return {...candidates[0],kakaoAddressCheck:{sourceGeneration:snapshotMeta?.sourceGeneration,
+          expiresAt:performance.now()+120000}};
+      }
       return {candidates,truncated:result.resolution?.kind==='TRUNCATED'};
     }
     return official;
@@ -3613,6 +3626,8 @@
       const overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(lat,lng),content,clickable:true,xAnchor:.5,yAnchor:1,zIndex:45});
       overlay.setMap(state.map);
       entry={point,overlay,marker,remove};temporaryPins.set(key,entry);
+    }else if(entry.point.coordinateSource==='KAKAO_ADDRESS_TEMPORARY'&&row.kakaoAddressCheck){
+      entry.point.kakaoAddressCheck=row.kakaoAddressCheck;
     }
     trace?.mark('pin');
     openTemporaryPin(entry.point,{areaFacts,focus:true,trace});
