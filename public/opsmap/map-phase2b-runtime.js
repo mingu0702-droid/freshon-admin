@@ -2499,19 +2499,23 @@
   }
 
   function reuseVisibleAddressSearch(text,trace) {
-    const point=state.virtual, neighborhood=searchNeighborhood;
-    if(!point||!dateReady||point.address!==text)return false;
-    const generation=snapshotMeta?.sourceGeneration;
-    const kakao=point.kakaoAddressCheck;
-    const exactKakao=point.coordinateSource==='KAKAO_ADDRESS_TEMPORARY'&&kakao&&
-      kakao.sourceGeneration===generation&&performance.now()<kakao.expiresAt&&
-      window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true;
-    const stillVisible=!mapMoving&&neighborhood?.point===point&&point===temporaryDetailPoint&&
+    if(!dateReady)return false;
+    const active=state.virtual, neighborhood=searchNeighborhood;
+    const generation=snapshotMeta?.sourceGeneration, now=performance.now();
+    const verifiedKakao=point=>point?.coordinateSource==='KAKAO_ADDRESS_TEMPORARY'&&
+      point.kakaoAddressCheck&&point.kakaoAddressCheck.sourceGeneration===generation&&
+      now<point.kakaoAddressCheck.expiresAt&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true;
+    const point=active?.address===text?active:[...temporaryPins.values()].find(entry=>
+      entry.point.address===text&&verifiedKakao(entry.point))?.point;
+    if(!point)return false;
+    const exactKakao=verifiedKakao(point);
+    const stillVisible=!mapMoving&&neighborhood?.point===point&&
       neighborhood.sourceRows===allStores&&neighborhood.paintedView===searchPinView()&&
       neighborhood.filterKey===periodSelectionCache?.key&&neighborhood.cameraInteraction===mapCamera?.interaction()&&
       visibleSearchPin(point);
     if(!stillVisible&&(!exactKakao||!state.map||temporaryPins.get(point.temporaryKey)?.point!==point))return false;
     if(!exactKakao){
+      if(temporaryDetailPoint!==point)return false;
       const cached=NewAreaRequests.cachedStageAddress(text,generation);
       if(cached?.status!=='OFFICIAL'||cached.point?.lat!==point.lat||cached.point?.lng!==point.lng||
          cached.point?.coordinateSource!==point.coordinateSource)return false;
@@ -2526,8 +2530,8 @@
       openTemporaryPin(point,{focus:true,trace});
       return true;
     }
-    for(const phase of ['coordinates','map','pin','visiblePin','nearbyPins'])trace.record(phase);
-    if(['centered','deviation'].includes(mapCamera?.focusState()?.state))trace.record('mapSettled');
+    for(const phase of ['coordinates','map','pin','visiblePin','nearbyPins','mapSettled'])trace.record(phase);
+    if(temporaryDetailPoint!==point)openTemporaryPin(point,{keepViewport:true,trace});
     trace.count('nearbyExpected',neighborhood.paintedCount);
     trace.count('nearbyShown',neighborhood.paintedCount);
     trace.finish('temporary');
@@ -3225,7 +3229,7 @@
     if(state.mode!=='BASE_60D')return;
     if(searchFlight?.text===text)return searchFlight.task;
     const trace=startSearchTrace();
-    if(state.virtual&&reuseVisibleAddressSearch(text,trace))return;
+    if(temporaryPins.size&&reuseVisibleAddressSearch(text,trace))return;
     const task=searchPeriod(text,trace).finally(()=>{if(searchFlight?.task===task)searchFlight=null;});
     searchFlight={text,task};
     return task;
@@ -3584,11 +3588,19 @@
     if(config?.allowExternalAddressLookup!==true||!address&&config.allowExternalPlaceLookup!==true){if(officialError)throw officialError;return official;}
     const queries=address?NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants):[text];
     if(!queries.length)return null;
-    let upstreamMs=0;
-    const onProviderTime=ms=>{upstreamMs+=ms;trace?.count('providerUpstreamMs',upstreamMs);};
+    const timings={};
+    const timingNames={providerMs:'providerUpstreamMs',ledgerMs:'ledgerReservationMs',staffMs:'protectedSessionMs',
+      clientParseMs:'clientParseMs',githubReads:'githubReads',githubWrites:'githubWrites'};
+    const onTiming=meta=>{
+      for(const [key,name] of Object.entries(timingNames)){
+        if(!Number.isFinite(meta[key]))continue;
+        timings[name]=(timings[name]||0)+meta[key];
+        trace?.count(name,Math.round(timings[name]*100)/100);
+      }
+    };
     for(const query of queries){
       trace?.record('providerStart');
-      const result=await NewAreaRequests.lookup(geocoder,query,{signal,mode:address?'address':'place',timeout,onProviderTime})
+      const result=await NewAreaRequests.lookup(geocoder,query,{signal,mode:address?'address':'place',timeout,onTiming})
         .finally(()=>trace?.mark('providerEnd'));
       if(!result.rows?.length)continue;
       const candidates=result.rows.map(row=>({
@@ -3646,7 +3658,7 @@
     openTemporaryPin({...row,searchTemporary:true},{focus:true});
   }
 
-  function openTemporaryPin(row,{areaFacts=null,focus=false,trace}={}) {
+  function openTemporaryPin(row,{areaFacts=null,focus=false,keepViewport=false,trace}={}) {
     clearSelection({preserveSearch:true,fast:!!trace,keepMapPins:true});
     if(state.virtual!==row){
       clearTemporaryContext();state.virtual=row;
@@ -3688,14 +3700,14 @@
     const neighborhood=verifiedSearch?{point:row,filterKey:periodSelectionCache?.key,sourceRows:allStores,
       cameraInteraction:mapCamera?.interaction(),trace}:null;
     if(neighborhood)searchNeighborhood=neighborhood;
-    if(innerWidth<=760)showMobileMap();
-    trace?.mark('map');
+    if(!keepViewport&&innerWidth<=760)showMobileMap();
+    if(!keepViewport)trace?.mark('map');
     if(focus)focusMapPoint(row,{zoom:true,key:'search-temporary',nearby:verifiedSearch,onSettled:neighborhood?()=>{
       if(searchNeighborhood!==neighborhood)return;
       trace?.record('mapSettled');
       const refreshed=neighborhood.paintedView===searchPinView();
       if(!refreshed)neighborhood.paintedView=null;
-      if(dateReady&&state.mode==='BASE_60D')renderStops(state.currentRows,{viewportOnly:true,fromIdle:refreshed||!trace});
+      if(dateReady&&state.mode==='BASE_60D')renderStops(state.currentRows,{viewportOnly:true,fromIdle:true});
     }:undefined});
     if(neighborhood&&dateReady){
       renderStops(state.currentRows,{viewportOnly:true,fromIdle:true});
@@ -3704,7 +3716,7 @@
       });
     }
     trace?.mark('detail');
-    trace?.finish('temporary');
+    if(!keepViewport)trace?.finish('temporary');
     const enrich=()=>{if(state.virtual===row)renderSearchTemporaryNearby(row);};
     afterSearchPaint(()=>{
       if(trace&&typeof window.requestIdleCallback==='function')window.requestIdleCallback(enrich,{timeout:800});

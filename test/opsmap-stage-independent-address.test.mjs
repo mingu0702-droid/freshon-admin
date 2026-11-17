@@ -136,10 +136,10 @@ test('Stage geocode reservations verify GitHub receipts and fail closed on a sta
   const branch='stage/opsmap-manual-pins';
   const blob=value=>createHash('sha1').update('blob '+value.length+'\0').update(value).digest('hex');
   let persisted=Buffer.from(JSON.stringify(createKakaoGeocodeLedger()));
-  let privateRepo=true, proofReturned=true;
+  let privateRepo=true, proofReturned=true, clock=0;
   const calls=[];
   const store=createStageGeocodeBudgetStore({
-    repo:'mingu0702-droid/freshon-cache',token:'fixture',branch,
+    repo:'mingu0702-droid/freshon-cache',token:'fixture',branch,clock:()=>clock,
     fetchImpl:async(input, options={})=>{
       const url=new URL(input);
       if(url.pathname.endsWith('/freshon-cache')){
@@ -171,8 +171,10 @@ test('Stage geocode reservations verify GitHub receipts and fail closed on a sta
   assert.equal(await reserve(),1);
   assert.equal(calls.filter(call=>call==='read').length,1);
   calls.length=0;
+  assert.equal(await store.transaction(state=>state.used,{status:true}),1);
+  assert.deepEqual(calls,[]);
   assert.equal(await reserve(),2);
-  assert.deepEqual(calls,['access','write']);
+  assert.deepEqual(calls,['write']);
 
   persisted=Buffer.from(JSON.stringify({...JSON.parse(persisted),used:3}));
   await assert.rejects(reserve(),{code:'MANUAL_PIN_GITHUB_CONFLICT'});
@@ -182,9 +184,10 @@ test('Stage geocode reservations verify GitHub receipts and fail closed on a sta
   calls.length=0;
   proofReturned=false;
   assert.equal(await reserve(),5);
-  assert.deepEqual(calls,['access','write','read']);
+  assert.deepEqual(calls,['write','read']);
 
   calls.length=0;
+  clock+=5000;
   privateRepo=false;
   await assert.rejects(reserve(),{code:'MANUAL_PIN_GITHUB_PRIVATE_WRITE_REQUIRED'});
   assert.deepEqual(calls,['access']);

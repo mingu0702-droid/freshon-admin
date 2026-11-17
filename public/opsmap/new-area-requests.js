@@ -46,7 +46,7 @@
     return /^(?:KAKAO_|GEOCODE_(?:DAILY_LIMIT|AUTOMATICALLY_BLOCKED|LEDGER_|DURABLE_|SESSION_|ORIGIN_)|GEOCODING_DISABLED|TARGET_APP_)/.test(error?.code || '');
   }
   function outcome(error) { return error?.code === 'GEOCODE_DAILY_LIMIT' ? 'LIMIT' : ['GEOCODE_AUTOMATICALLY_BLOCKED','NEW_AREA_ROW_TIMEOUT','REQUEST_TIMEOUT','GEOCODER_TIMEOUT'].includes(error?.code)||/^GEOCODER_(?:MULTIPLE_CANDIDATES|RESULT_TRUNCATED|ADDRESS_MISMATCH)$/.test(error?.code||'') ? 'DEFERRED' : 'FAILED'; }
-  function lookup(geocoder, query, { signal, mode, onProviderTime, timeout = geocoder?.serverProxy?45000:7000 } = {}) {
+  function lookup(geocoder, query, { signal, mode, onTiming, timeout = geocoder?.serverProxy?45000:7000 } = {}) {
     return new Promise((resolve, reject) => {
       let settled = false, timer;
       const finish = (error, rows) => {
@@ -61,7 +61,7 @@
       timer = setTimeout(() => finish(failure('GEOCODER_TIMEOUT')), timeout);
       try {
         geocoder.addressSearch(query, (rows, status, meta) => {
-          if(!settled&&Number.isFinite(meta?.providerMs))onProviderTime?.(meta.providerMs);
+          if(!settled&&meta)onTiming?.(meta);
           const problem=code=>Object.assign(failure(code),{status:meta?.status??meta?.httpStatus,httpStatus:meta?.httpStatus??meta?.status,providerHttp:Number.isInteger(meta?.providerHttp)?meta.providerHttp:null});
           if (status === 'ZERO_RESULT') {
             if (mode==='official' && meta?.resolution?.kind==='MANUAL') return finish(null,{rows:[],resolution:meta.resolution});

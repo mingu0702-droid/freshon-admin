@@ -63,7 +63,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
    return {enabled,independentEnabled,keywordEnabled:enabled&&keywordProof(),
    diagnosticAvailable:env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED==='1'&&!state.diagnosticUsed&&!state.blocked&&!blocked,
    reason:state.blocked||blocked?'GEOCODE_AUTOMATICALLY_BLOCKED':enabled?'READY':state.diagnosticPassed?'GEOCODING_DISABLED':'DIAGNOSTIC_REQUIRED',
-   dailyLimit,dailyUsed:Number(state.days[day(now())]||0),epoch:state.epoch,retention:'REQUEST_ONLY',lastAttempt:state.lastAttempt||null};});}
+   dailyLimit,dailyUsed:Number(state.days[day(now())]||0),epoch:state.epoch,retention:'REQUEST_ONLY',lastAttempt:state.lastAttempt||null};},{status:true});}
   catch{return {enabled:false,independentEnabled,reason:'GEOCODE_DURABLE_LEDGER_REQUIRED',retention:'REQUEST_ONLY'};}
  };
  const lookup=async(query,{diagnostic=false,mode='exact',assertCurrent=async()=>{}}={})=>{
@@ -98,11 +98,12 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
   if(diagnostic&&address!==KAKAO_DIAGNOSTIC_ADDRESS)fail('DIAGNOSTIC_ADDRESS_REJECTED',400);
   const queryHash=coordinateAddressHash(address),key=(diagnostic?'diagnostic':mode)+':'+queryHash;
   const shared=pending.get(key);
-  if(shared){await assertCurrent();const result=await shared;await assertCurrent();return result;}
+  if(shared){await assertCurrent();const result=await shared;await assertCurrent();return {...result,githubRequests:undefined};}
   const task=(async()=>{
    await assertCurrent();
    const reservationStarted=performance.now();
    let reservationAuthMs=0;
+   const githubRequests={reads:0,writes:0};
    await transaction(async(state,commit)=>{
     if(state.blocked||blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
     if(diagnostic){if(env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED!=='1'||state.diagnosticUsed)fail('DIAGNOSTIC_ALREADY_USED',429);}
@@ -115,7 +116,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
     state.used++;state.days[today]=count+1;state.queries[today+':'+queryHash]=Number(state.queries[today+':'+queryHash]||0)+1;
     if(diagnostic)state.diagnosticUsed=true;
     await commit(state);
-   },{reservation:!diagnostic});
+   },{reservation:!diagnostic,onRequest:method=>githubRequests[method==='GET'?'reads':'writes']++});
    const ledgerReservationMs=performance.now()-reservationStarted-reservationAuthMs;
    let stage='PROVIDER_REQUEST',providerHttp=null,providerStarted=null,providerDurationMs=null;const started=now();
    try{
@@ -146,7 +147,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
     stage='LEDGER_COMPLETION';if(diagnostic)await transaction(async(state,commit)=>{state.diagnosticPassed=true;await commit(state);});
     stage='SESSION_RECHECK';
     await assertCurrent();
-    return {ok:true,providerDurationMs,ledgerReservationMs,data:{documents,status:documents.length?'OK':'ZERO_RESULT',exact:!!point,
+    return {ok:true,providerDurationMs,ledgerReservationMs,githubRequests,data:{documents,status:documents.length?'OK':'ZERO_RESULT',exact:!!point,
      diagnostic,providerHttp:200,responseAppId:appHeader||null,resolution,retention:'REQUEST_ONLY',coordinatePersistence:false}};
    }catch(error){
     if(['GEOCODE_SESSION_EXPIRED','GEOCODE_RETRY_COOLDOWN','GEOCODE_AUTOMATICALLY_BLOCKED'].includes(error?.code))throw error;
@@ -194,10 +195,11 @@ export function mountKakaoCoordinateConnection({app,requireStaff,isSessionCurren
     try{if(!await isSessionCurrent(req,sessionKey))fail('GEOCODE_SESSION_EXPIRED',401);}
     finally{addStaffTiming(res,'session',performance.now()-started);}
    };
-   const {providerDurationMs,ledgerReservationMs,...payload}=await service.lookup(req.body.query,{diagnostic,mode:req.body.mode,assertCurrent});
+   const {providerDurationMs,ledgerReservationMs,githubRequests,...payload}=await service.lookup(req.body.query,{diagnostic,mode:req.body.mode,assertCurrent});
    addStaffTiming(res,'geocodeLedger',ledgerReservationMs);
    return requireStaff(req,res,()=>{
     if(Number.isFinite(providerDurationMs))res.set('Server-Timing','opsmap-kakao-provider;dur='+providerDurationMs);
+    if(githubRequests?.writes)res.set('X-Opsmap-Geocode-Github',githubRequests.reads+','+githubRequests.writes);
     return res.json(payload);
    });
   }catch(error){return requireStaff(req,res,()=>{

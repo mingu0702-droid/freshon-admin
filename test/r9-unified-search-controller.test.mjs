@@ -34,7 +34,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
-  searchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,
+  searchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,temporaryPins:new Map(),
   stageRegistrationOnly:()=>false,stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{...globalThis.NewAreaRequests,stageAddress,temporaryPoint:()=>null,message:error=>error.code},Phase2bUi:globalThis.Phase2bUi,MapPeriodUi:globalThis.MapPeriodUi,
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
@@ -121,7 +121,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
 test('an exact address can reuse its active pin without another lookup',()=>{
  const point=store('','합성 주소','서울 종로구 합성로 71',{coordinateSource:'OFFICIAL_PUBLIC_BUILDING'});
  const allStores=[point],expected=new Map();
- const scope={state:{virtual:point},dateReady:true,mapMoving:false,allStores,temporaryDetailPoint:point,
+ const scope={performance,state:{virtual:point},dateReady:true,mapMoving:false,allStores,temporaryDetailPoint:point,
   searchNeighborhood:{point,sourceRows:allStores,paintedView:'same viewport',paintedCount:2,filterKey:'ALL',cameraInteraction:0},
   periodSelectionCache:{key:'ALL'},mapCamera:{interaction:()=>0,focusState:()=>({state:'centered'})},
   NewAreaRequests:{cachedStageAddress:()=>({status:'OFFICIAL',point})},snapshotMeta:{sourceGeneration:'a'.repeat(64)},
@@ -146,6 +146,12 @@ test('an exact address can reuse its active pin without another lookup',()=>{
  assert.equal(reuse(point.address,trace),false);
  point.kakaoAddressCheck={sourceGeneration:scope.snapshotMeta.sourceGeneration,expiresAt:1000};
  assert.equal(reuse(point.address,trace),true);
+ scope.temporaryDetailPoint=null;
+ let reopenedWithoutMoving=false;
+ scope.openTemporaryPin=(target,{keepViewport,focus})=>{reopenedWithoutMoving=target===point&&keepViewport&&!focus;};
+ assert.equal(reuse(point.address,trace),true);
+ assert.equal(reopenedWithoutMoving,true);
+ scope.temporaryDetailPoint=point;
  scope.performance.now=()=>1000;
  assert.equal(reuse(point.address,trace),false);
  scope.performance.now=()=>500;
@@ -158,6 +164,10 @@ test('an exact address can reuse its active pin without another lookup',()=>{
  scope.temporaryPins=new Map([[point.temporaryKey,{point}]]);
  let refocused=false;
  scope.openTemporaryPin=(target,options)=>{refocused=target===point&&options.focus&&options.trace===trace;};
+ assert.equal(reuse(point.address,trace),true);
+ assert.equal(refocused,true);
+ refocused=false;
+ scope.state.virtual=null;
  assert.equal(reuse(point.address,trace),true);
  assert.equal(refocused,true);
  scope.temporaryPins.clear();
