@@ -2,6 +2,7 @@
 import {createHash} from 'node:crypto';
 import {coordinateAddressHash,externalCoordinateAddress} from './opsmapAutoCoordinates.js';
 import {classifyCoordinateLookup,prepareRecoveryCoordinateAddress} from '../coordinateLookupOutcome.js';
+import {addStaffTiming} from './staffLatency.js';
 export const KAKAO_GEOCODE_EPOCH='R10_USER_CONFIRMED_20261103';
 export const KAKAO_DIAGNOSTIC_ADDRESS='경기도 오산시 원동 380-38';
 export const KAKAO_EXPECTED_APP_ID='1464792';
@@ -100,6 +101,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
   if(shared){await assertCurrent();const result=await shared;await assertCurrent();return result;}
   const task=(async()=>{
    await assertCurrent();
+   const reservationStarted=performance.now();
    await transaction(async(state,commit)=>{
     if(state.blocked||blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
     if(diagnostic){if(env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED!=='1'||state.diagnosticUsed)fail('DIAGNOSTIC_ALREADY_USED',429);}
@@ -111,6 +113,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
     if(diagnostic)state.diagnosticUsed=true;
     await commit(state);
    });
+   const ledgerReservationMs=performance.now()-reservationStarted;
    let stage='PROVIDER_REQUEST',providerHttp=null,providerStarted=null,providerDurationMs=null;const started=now();
    try{
     await assertCurrent();
@@ -140,7 +143,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
     stage='LEDGER_COMPLETION';if(diagnostic)await transaction(async(state,commit)=>{state.diagnosticPassed=true;await commit(state);});
     stage='SESSION_RECHECK';
     await assertCurrent();
-    return {ok:true,providerDurationMs,data:{documents,status:documents.length?'OK':'ZERO_RESULT',exact:!!point,
+    return {ok:true,providerDurationMs,ledgerReservationMs,data:{documents,status:documents.length?'OK':'ZERO_RESULT',exact:!!point,
      diagnostic,providerHttp:200,responseAppId:appHeader||null,resolution,retention:'REQUEST_ONLY',coordinatePersistence:false}};
    }catch(error){
     if(['GEOCODE_SESSION_EXPIRED','GEOCODE_RETRY_COOLDOWN','GEOCODE_AUTOMATICALLY_BLOCKED'].includes(error?.code))throw error;
@@ -182,8 +185,14 @@ export function mountKakaoCoordinateConnection({app,requireStaff,isSessionCurren
    if(!req.is('application/json')||!fields.includes('query')||fields.some(key=>key!=='query'&&(key!=='mode'||diagnostic))||
       fields.includes('mode')&&!['address','place','official'].includes(req.body.mode))fail('GEOCODE_QUERY_INVALID',400);
    const sessionKey=res.locals.staffSession?.key;
-   const assertCurrent=async()=>{if(isSessionCurrent&&!await isSessionCurrent(req,sessionKey))fail('GEOCODE_SESSION_EXPIRED',401);};
-   const {providerDurationMs,...payload}=await service.lookup(req.body.query,{diagnostic,mode:req.body.mode,assertCurrent});
+   const assertCurrent=async()=>{
+    if(!isSessionCurrent)return;
+    const started=performance.now();
+    try{if(!await isSessionCurrent(req,sessionKey))fail('GEOCODE_SESSION_EXPIRED',401);}
+    finally{addStaffTiming(res,'session',performance.now()-started);}
+   };
+   const {providerDurationMs,ledgerReservationMs,...payload}=await service.lookup(req.body.query,{diagnostic,mode:req.body.mode,assertCurrent});
+   addStaffTiming(res,'geocodeLedger',ledgerReservationMs);
    return requireStaff(req,res,()=>{
     if(Number.isFinite(providerDurationMs))res.set('Server-Timing','opsmap-kakao-provider;dur='+providerDurationMs);
     return res.json(payload);

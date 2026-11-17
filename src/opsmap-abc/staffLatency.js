@@ -6,6 +6,7 @@ const endpoints = new Set([
 ]);
 const stageSearchEndpoints = new Set([
   '/api/map-phase2b/private/stage-address-evidence',
+  '/api/map-phase2b/private/address-lookup', '/api/map-phase2b/private/address-lookup-diagnostic',
   '/api/map-phase2b/private/shadow-coverage/point',
   '/api/map-phase2b/private/shadow-coverage/view'
 ]);
