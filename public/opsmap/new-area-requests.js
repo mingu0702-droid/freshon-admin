@@ -164,8 +164,12 @@
         if(epoch!==addressEpoch)return null;
         if(payload?.generation!==generation||payload.data?.length!==1)throw failure('STAGE_BATCH_UNAVAILABLE');
         const [result]=payload.data;
-        if(generation&&sessionExpiry&&sessionExpiry===staffSessionExpiry()&&['STORED','OFFICIAL'].includes(result.status)&&result.point){
-          remember(retained,key,{result,sessionExpiry,expiresAt:Date.now()+60_000});
+        const exact=['STORED','OFFICIAL'].includes(result.status)&&result.point;
+        const verifiedMiss=result.status==='ADDRESS_NOT_MATCHED';
+        if(generation&&sessionExpiry&&sessionExpiry===staffSessionExpiry()&&(exact||verifiedMiss)){
+          // Briefly share the authoritative miss between input preparation and submit.
+          // Geometry from an external provider never enters this cache.
+          remember(retained,key,{result,sessionExpiry,expiresAt:Date.now()+(exact?60_000:2_000)});
         }
         return result;
       }).finally(()=>{if(flights.get(key)===flight)flights.delete(key);});

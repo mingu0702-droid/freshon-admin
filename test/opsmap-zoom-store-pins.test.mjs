@@ -50,7 +50,7 @@ test('detailed map keeps all visible stores and groups only exact co-locations',
   assert.deepEqual(markers.find(marker => marker.clusterKind === 'location').memberCodes.sort(), ['S0', 'S305']);
 });
 
-test('level-six viewport preserves exact positions and does not retain an extra selection in the index', () => {
+test('close-up viewport preserves exact positions and does not retain an extra selection in the index', () => {
   const point = (customerCode, lat, lng, vehicle = '') => ({ customerCode, lat, lng, vehicle });
   const rows = [
     point('S00001', 37.5, 127, '104'), point('S00002', 37.5, 127, '108'),
@@ -322,40 +322,51 @@ test('overview pixel groups contain every visible route once and open up on zoom
 const nearbyPoint = (code, route, meters, pixel) => ({
   customerCode: code, baseVehicle: route, lat: 37.5 + meters / 6371000 * 180 / Math.PI, lng: 127, pixel,
 });
-const projectNearby = row => ({x: row.pixel, y: 150});
+const projectNearby = row => ({x: row.pixel??100+(row.lat-37.5)*2000, y: 150});
 
-test('different fixed routes merge only within 500m and one visible pin width', () => {
-  const {overlappingVehicleLocations} = MapViewPolicy;
-  const start = nearbyPoint('S1', '101', 0, 100);
-  for(const meters of [499.999, 500, 500.001]) {
-    const markers = overlappingVehicleLocations([start,nearbyPoint('S2','114',meters,139)],projectNearby);
-    assert.equal(markers.length,meters<=500?1:2);
-    if(meters<=500)assert.deepEqual(markers[0].clusterVehicles,['101','114']);
+test('levels five and four split nearby distinct coordinates and keep exact co-locations selectable', () => {
+  const {stableClusters, zoomBand} = MapViewPolicy;
+  const viewport={width:390,height:844}, settings={nearbyVehicleOnly:true,maxMarkers:40,sourceVersion:1};
+  const rows=[nearbyPoint('S1','101',0,100),nearbyPoint('S2','114',0,100),
+    nearbyPoint('S3','114',70,101),nearbyPoint('S4','114',71,102),
+    nearbyPoint('S5','122',499.999,137),nearbyPoint('S6','124',500.001,138)];
+  const codes = markers => markers.flatMap(marker=>marker.memberCodes||[marker.customerCode]).sort();
+  assert.deepEqual([10,9,7,6,5,4].map(zoomBand),[3,2,2,1,0,0]);
+  for(const level of [7,6,5,4]){
+    const markers=stableClusters(rows,projectNearby,level,'S1',viewport,settings);
+    assert.deepEqual(codes(markers),codes(rows));
+    if(level>5){
+      assert.ok(markers.some(row=>row.clusterKind==='vehicle'));
+      continue;
+    }
+    const clusters=markers.filter(row=>row.clusterCount);
+    assert.equal(clusters.length,1);
+    assert.equal(clusters[0].clusterKind,'location');
+    assert.deepEqual(clusters[0].memberCodes,['S1','S2']);
+    assert.ok(markers.includes(rows[4])&&markers.includes(rows[5]));
   }
-  for(const other of [nearbyPoint('S2','114',300,141),nearbyPoint('S2','101',100,120),nearbyPoint('S2','오산신규',100,120)]) {
-    assert.equal(overlappingVehicleLocations([start,other],projectNearby).length,2);
-  }
-  assert.equal(overlappingVehicleLocations([start,nearbyPoint('S2','척01',100,120)],projectNearby).length,1);
-  assert.equal(overlappingVehicleLocations([start,nearbyPoint('S2','114',100,120)],projectNearby,'BASE_60D',['S2']).length,2);
 });
 
-test('nearby route clusters cannot expand through a chain and broader bins keep routes separate', () => {
-  const {overlappingVehicleLocations,stableClusters} = MapViewPolicy;
-  const rows = [nearbyPoint('S1','101',0,100),nearbyPoint('S2','114',400,110),nearbyPoint('S3','122',800,120),nearbyPoint('S4','114',1500,130)];
-  const codes = markers => markers.flatMap(marker=>marker.memberCodes||[marker.customerCode]).sort();
-  const mixed = markers => markers.filter(marker=>marker.clusterVehicles?.length>1);
-  const close = overlappingVehicleLocations(rows,projectNearby);
-  assert.deepEqual(mixed(close).map(marker=>marker.memberCodes),[['S1','S2']]);
-  assert.deepEqual(codes(close),['S1','S2','S3','S4']);
-  const viewport={width:390,height:844};
-  const settings={nearbyVehicleOnly:true,sourceVersion:1};
-  const project = row=>({x:100+(row.lat-37.5)*2000,y:150});
-  const street=stableClusters(rows,project,6,'',viewport,settings);
-  assert.deepEqual(mixed(street).map(marker=>marker.memberCodes),[['S1','S2']]);
-  assert.deepEqual(codes(street),codes(close));
-  const broad=stableClusters(rows,project,8,'',viewport,settings);
-  assert.equal(mixed(broad).length,0);
-  assert.deepEqual(codes(broad),codes(close));
+test('the searched neighborhood includes verified out-of-filter stores without mutating the underlying pin index', () => {
+  const center={lat:37.5,lng:127};
+  const saved=(code,route,meters,patch)=>({...nearbyPoint(code,route,meters,100),...verifiedPoint,...patch});
+  const base=saved('S10001','101',0), colocated=saved('S10002','114',0), inside=saved('S10003','114',499.9);
+  const allStores=[base,colocated,inside,saved('S10004','114',500.1),saved('S10005','114',3,{coordinateStatus:'UNVERIFIED'}),
+    saved('S10006','114',5,{staffRegistrationOnly:true}),saved('S10007','114',6,{customerRegistryStatus:'DELETED'}),
+    saved('S10008','114',7,{currentAddressHash:'b'.repeat(64)})];
+  const pointIndex=MapPeriodUi.spatialIndex([base]);
+  const coord=(lat,lng)=>({getLat:()=>lat,getLng:()=>lng});
+  const state={map:{getBounds:()=>({getSouthWest:()=>coord(37.49,126.99),getNorthEast:()=>coord(37.51,127.01)})}};
+  const start=runtime.indexOf('  function nearbyVerifiedStores('),end=runtime.indexOf('  function overviewVehicleStores(',start);
+  const {nearbyVerifiedStores,detailedMarkerRows}=vm.runInNewContext(pointChecks+runtime.slice(start,end)+'\n({nearbyVerifiedStores,detailedMarkerRows})',{
+    allStores,nearbyStoreIndex:null,markerSourceVersion:1,pointIndex,state,Phase2bUi,MapPeriodUi,window:{MapViewPolicy}
+  });
+  const stores=nearbyVerifiedStores(center);
+  assert.deepEqual(Array.from(stores.map(row=>row.customerCode)),['S10001','S10002','S10003']);
+  const pins=detailedMarkerRows({width:390,height:600},null,'BASE_60D',{stores});
+  assert.deepEqual(Array.from(pins.flatMap(pin=>pin.memberCodes||[pin.customerCode])),['S10001','S10002','S10003']);
+  assert.deepEqual(pointIndex.valid,[base]);
+  assert.equal(pins[0].clusterKind,'location');
 });
 
 test('pin reconciliation reuses unchanged overlays across viewport and selection changes', () => {

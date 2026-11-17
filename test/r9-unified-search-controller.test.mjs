@@ -25,7 +25,7 @@ function declaration(name){
 // interface stubs here and are exercised by the independent full-browser QA.
 const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','getSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','fixedVehicleFor','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','cancelSearchAddressPreparation','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
- 'renderResults','unifiedAddressQuery','stageAddressHashMatches','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
+ 'renderResults','unifiedAddressQuery','completeAddressRegion','stageAddressHashMatches','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
  const nodes=new Map(),selected=[],fallback=[],queries=[],requests=new Map();let resets=0,tempClears=0;
  const node=key=>{if(!nodes.has(key))nodes.set(key,{dataset:{},value:'',hidden:true,html:'',replaceChildren(){this.html='';this.buttons=[];},setAttribute(k,v){this[k]=v;},dispatchEvent(){},get innerHTML(){return this.html;},set innerHTML(v){this.html=v;this.buttons=[...v.matchAll(/data-result="(\d+)"/g)].map(m=>({dataset:{result:m[1]}}));}});return nodes.get(key);};
@@ -35,7 +35,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
   searchIndex:null,searchFlight:null,searchAddressPreparation:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,
-  stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{...globalThis.NewAreaRequests,stageAddress,temporaryPoint:()=>null,message:error=>error.code},Phase2bUi:globalThis.Phase2bUi,MapPeriodUi:globalThis.MapPeriodUi,
+  stageRegistrationOnly:()=>false,stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{...globalThis.NewAreaRequests,stageAddress,temporaryPoint:()=>null,message:error=>error.code},Phase2bUi:globalThis.Phase2bUi,MapPeriodUi:globalThis.MapPeriodUi,
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
   window:{MapManualPins:{apply:row=>manual?.(row)}},
@@ -125,13 +125,33 @@ test('search address normalization preserves building numbers and province alias
  assert.notEqual(c.normalizeSearchAddress('서울 합성로 5-6'),c.normalizeSearchAddress('서울 합성로 56'));
 });
 test('normal-map fallback sends the base address while preserving the typed text', async () => {
- const f=fixture({stageAddress:async()=>({status:'ADDRESS_NOT_MATCHED'})});
+ const f=fixture({stageAddress:async()=>({status:'STORED_REGISTRY_UNAVAILABLE'})});
  const raw='부산 영도구 동삼로 56 （동삼동, 합성타워）';
  f.node('#query').value=raw;
  await f.context.searchPeriod(raw);
  assert.equal(decodeURIComponent(f.queries[0].options.headers['x-map-customer-query']),'부산 영도구 동삼로 56');
  assert.equal(f.node('#query').value,raw);
 });
+test('a complete road or lot address with a current protected miss skips live Customer and repeated official lookup', async () => {
+ const generation='a'.repeat(64), queries=[];
+ const f=fixture({stageAddress:async(query,value)=>{
+   assert.equal(value,generation);
+   queries.push(query);
+   return {status:'ADDRESS_NOT_MATCHED'};
+ }});
+ f.context.snapshotMeta={sourceGeneration:generation};
+ for(const raw of ['서울 중구 시험로30 (시험동, 시험빌딩) 3층','경기 김포시 시험면 시험리 12-3']){
+   f.node('#query').value=raw;
+   await f.context.searchPeriod(raw);
+   assert.equal(f.fallback.at(-1)?.text,raw);
+   assert.equal(f.fallback.at(-1)?.options.stageAddressStatus,'ADDRESS_NOT_MATCHED');
+   assert.notEqual(f.fallback.at(-1)?.options.customerMatchState,'NOT_IN_MASTER');
+   assert.equal(f.node('#query').value,raw);
+ }
+ assert.equal(queries.length,2);
+ assert.equal(f.queries.length,0);
+});
+
 test('existing local addresses cannot confuse building 14 with 140 or 14-1',()=>{
  const rows=[store('S990001','합성 다른건물','서울 종로구 합성로 140'),store('S990002','합성 다른번지','서울 종로구 합성로 14-1')],{context:c}=fixture({rows});
  assert.equal(c.rankSearchRows('서울특별시 종로구 합성로 14').length,0);

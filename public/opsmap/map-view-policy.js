@@ -3,9 +3,7 @@
   'use strict';
   const EARTH = 6378137;
   const storePinLevel = 5;
-  const vehicleOverlapPixels = 40;
-  const vehicleOverlapKm = 0.5;
-  const territoryCellSizes = [80, 700, 3500, 18000, 120000];
+  const territoryCellSizes = [0, 250, 3500, 18000, 120000];
   // At 80 m the bounded Mercator plane uses fewer than 501,000 cells per axis.
   const gridStride = 2 ** 20;
   const compareGroupKeys = new Intl.Collator().compare;
@@ -17,7 +15,7 @@
     return {x: EARTH * row.lng * Math.PI / 180, y: EARTH * Math.log(Math.tan(Math.PI / 4 + phi / 2))};
   }
   function zoomBand(level) {
-    return level >= 12 ? 4 : level >= 9 ? 3 : level >= 7 ? 2 : level >= 5 ? 1 : 0;
+    return level >= 12 ? 4 : level >= 10 ? 3 : level >= 7 ? 2 : level > storePinLevel ? 1 : 0;
   }
   function region(row) {
     return regionColors[row.addressRegion] ? row.addressRegion : '';
@@ -163,55 +161,6 @@
       return clusterRow({key,rows,south:lat,north:lat,west:lng,east:lng},mode,0);
     });
   }
-  function overlappingVehicleLocations(locations, project, mode='BASE_60D', protectedCodes=[]) {
-    const distanceKm=root.Phase2bUi?.distanceKm;
-    if(typeof distanceKm!=='function')return locations;
-    const protectedSet=new Set(protectedCodes.filter(Boolean));
-    const actualRoute=code=>/^(?:(?:용|척|척척)?\d+)$/.test(code);
-    const limitSquared=vehicleOverlapPixels**2;
-    const buckets=new Map(), groups=[], unchanged=[];
-    const ordered=[...locations].sort((a,b)=>a.lat-b.lat||a.lng-b.lng);
-    for(const row of ordered){
-      const vehicles=row.clusterVehicles||[pinAssignment(row,mode).code];
-      const areaGroup=row.clusterCount&&row.clusterKind!=='location';
-      const protectedLocation=protectedSet.has(row.customerCode)||row.memberCodes?.some(code=>protectedSet.has(code));
-      if(areaGroup||protectedLocation||!vehicles.length||!vehicles.every(actualRoute)){
-        unchanged.push(row);continue;
-      }
-      const {x,y}=project(row)||{};
-      if(!Number.isFinite(x)||!Number.isFinite(y)){unchanged.push(row);continue;}
-      const bx=Math.floor(x/vehicleOverlapPixels),by=Math.floor(y/vehicleOverlapPixels);
-      const screenDistance=point=>(point.x-x)**2+(point.y-y)**2;
-      let match=null, nearest=Infinity;
-      for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
-        for(const group of buckets.get(`${bx+dx}:${by+dy}`)||[]){
-          if(group.vehicles.size===1&&vehicles.every(code=>group.vehicles.has(code)))continue;
-          const distance=screenDistance(group.points[0]);
-          if(distance>limitSquared||distance>nearest||(distance===nearest&&group.index>match.index))continue;
-          // Every pair must fit. A third pin cannot chain two distant locations together.
-          if(!group.points.every(point=>screenDistance(point)<=limitSquared&&distanceKm(point.row,row)<=vehicleOverlapKm+1e-9))continue;
-          match=group;nearest=distance;
-        }
-      }
-      const point={row,x,y};
-      if(match){
-        match.points.push(point);
-        vehicles.forEach(code=>match.vehicles.add(code));
-      }else{
-        const group={points:[point],vehicles:new Set(vehicles),index:groups.length}, key=`${bx}:${by}`;
-        groups.push(group);
-        if(!buckets.has(key))buckets.set(key,[]);
-        buckets.get(key).push(group);
-      }
-    }
-    return [...unchanged,...groups.map(({points})=>{
-      const first=points[0].row;
-      if(points.length===1)return first;
-      const group=makeGroup(`${mode}:nearby:${first.lat}:${first.lng}`);
-      for(const {row} of points)for(const member of row.clusterRows||[row])addRow(group,member,{x:0,y:0});
-      return clusterRow(group,mode,0);
-    })];
-  }
   function visibleVehicleRepresentatives(rows, project, viewport, visibleStores) {
     if(!viewport)return rows;
     const {width,height}=viewport;
@@ -296,7 +245,7 @@
     // overview. Preserve every distinct positioned stop, irrespective of the
     // generic overview marker cap. Only truly co-located stores share a
     // selectable same-location card so none becomes inaccessible.
-    if(options.grouping==='locations')return atLevel('exact',()=>exactLocations(rows,mode)).filter(visible);
+    if(band===0||options.grouping==='locations')return atLevel('exact',()=>exactLocations(rows,mode)).filter(visible);
     const {pinned,ordinary}=atLevel('partition',()=>{
       const pinned=[],ordinary=[];
       for(const row of rows||[]){
@@ -305,16 +254,7 @@
       return {pinned,ordinary};
     });
     if(options.grouping==='individual')return atLevel('individual',()=>[...pinned,...exactLocations(ordinary,mode)]).filter(visible);
-    const mergeDisplayed=displayed=>nearbyOnly&&viewport&&level<=7
-      ?overlappingVehicleLocations(displayed,project,mode,[...protectedCodes]):displayed;
     const available=Math.max(1,limit-pinned.length);
-    // Close-up maps still need a selectable group for colocated stores. Two
-    // independent markers at identical coordinates would hide one another;
-    // distant stores must not force distinct visible addresses to merge.
-    if (band === 0) {
-      const close=atLevel('location',()=>[...pinned,...exactLocations(ordinary,mode)]).filter(visible);
-      if(close.length-pinned.length<=available)return mergeDisplayed(close);
-    }
     const {territory, routes}=atLevel('territory',()=>{
       const territory=ordinary.map(row=>({row,point:world(row),route:nearbyOnly?pinAssignment(row,mode).code:''}));
       return {territory,routes:new Set(territory.map(item=>item.route)).size};
@@ -335,7 +275,7 @@
       }
       if(lastPass||visibleGroups.length<=available)break;
     }
-    return mergeDisplayed([...pinned,...visibleGroups.map(item=>item.marker??=clusterRow(item.group,mode,band))]);
+    return [...pinned,...visibleGroups.map(item=>item.marker??=clusterRow(item.group,mode,band))];
   }
   const cameraRect = rect => {
     const left=Number(rect?.left),top=Number(rect?.top),right=Number(rect?.right??left+Number(rect?.width)),bottom=Number(rect?.bottom??top+Number(rect?.height));
@@ -536,5 +476,5 @@
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,overlappingVehicleLocations,visibleVehicleRepresentatives,groupOverviewVehiclePins,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint,placeOverlayLabels});
+  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,visibleVehicleRepresentatives,groupOverviewVehiclePins,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint,placeOverlayLabels});
 })(typeof window==='object'?window:globalThis);

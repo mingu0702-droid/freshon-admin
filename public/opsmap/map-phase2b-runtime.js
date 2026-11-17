@@ -77,7 +77,7 @@
   }
   const manualDraft = window.ManualWaypoints?.createDraft();
   let modeViewInitialized = false, markerFrame = null, mapMoving = false;
-  let lastMarkerViewport=null, markerLayoutVersion=0;
+  let lastMarkerViewport=null, markerLayoutVersion=0, searchNeighborhood=null, nearbyStoreIndex=null;
   const viewportMetrics={idles:0,renders:0,skipped:0,cancelled:0};
   let markerSourceVersion=0;
   let markerEntries = new Map(), indexedRows = null, pointIndex = null, detailFrame = null, resizeFrame = null;
@@ -1645,7 +1645,7 @@
       const userGesture=()=>{if(state.map!==owner)return;mapCamera?.userGesture();state.userMovedMap=true;state.fitRequested=false;};
       mapGestureEvents=new AbortController();
       for(const type of ['wheel','pointerdown','touchstart'])$('#map').addEventListener(type,userGesture,{passive:true,signal:mapGestureEvents.signal});
-      if(window.KakaoMapsAdapter?.geocoder)window.kakaoGeocoder=window.KakaoMapsAdapter.geocoder();
+      if(window.KakaoMapsAdapter?.geocoder)window.kakaoGeocoder ||= window.KakaoMapsAdapter.geocoder();
       const listen=(name,fn)=>{
         const guarded=(...args)=>{if(state.map===owner)fn(...args);};
         kakao.maps.event.addListener(owner,name,guarded);mapHandlers.push([owner,name,guarded]);
@@ -1684,6 +1684,7 @@
 
   function clearMap() {
     cancelViewportRender();lastMarkerViewport=null;
+    searchNeighborhood=nearbyStoreIndex=null;
     detachedMarkers.clear();
     clearSearchSelectedOverlay();
     closeClusterPanel(); clearActualRoute();
@@ -1875,7 +1876,8 @@
       if(!isStoreLocationPin(item))continue;
       hits.add(candidate);hasGroup ||= item.clusterKind==='location';
     }
-    if(!hasGroup||hits.size<2)return button;
+    const closeUp=state.map?.getLevel()<=MapViewPolicy.storePinLevel;
+    if(hits.size<2||!hasGroup&&!closeUp)return button;
     // The SDK's clickable wrappers extend beyond the visible pins. Give the
     // click to the nearest pin centre; exact ties retain the existing layer.
     let target=button,best=Infinity;
@@ -2058,7 +2060,18 @@
     markerPositions.set(row,{lat:row.lat,lng:row.lng,point});return point;
   }
 
-  function detailedMarkerRows(viewport,extra,assignmentMode,project,protectedCodes) {
+  function nearbyVerifiedStores(point) {
+    if(nearbyStoreIndex?.source!==allStores||nearbyStoreIndex.version!==markerSourceVersion){
+      const rows=allStores.filter(row=>!row.staffRegistrationOnly&&row.customerRegistryStatus!=='DELETED'&&hasVerifiedStageStorePoint(row));
+      nearbyStoreIndex={source:allStores,version:markerSourceVersion,index:MapPeriodUi.spatialIndex(rows)};
+    }
+    const latitude=0.005,longitude=latitude/Math.cos(point.lat*Math.PI/180);
+    return nearbyStoreIndex.index.query({
+      south:point.lat-latitude,north:point.lat+latitude,west:point.lng-longitude,east:point.lng+longitude
+    }).filter(row=>Phase2bUi.distanceKm(point,row)<=0.5);
+  }
+
+  function detailedMarkerRows(viewport,extra,assignmentMode,neighborhood) {
     const index=pointIndex.locations ||= MapPeriodUi.spatialIndex(window.MapViewPolicy.exactLocations(pointIndex.valid,assignmentMode));
     const view=state.map.getBounds?.(), sw=view?.getSouthWest(),ne=view?.getNorthEast();
     if(!sw||!ne)return [];
@@ -2068,13 +2081,23 @@
     const bounds={south:sw.getLat()-latitudePerPixel*56,north:ne.getLat()+latitudePerPixel*10,
       west:sw.getLng()-longitudePadding,east:ne.getLng()+longitudePadding};
     const visible=index.query(bounds);
-    if(extra&&extra.lat>=bounds.south&&extra.lat<=bounds.north&&extra.lng>=bounds.west&&extra.lng<=bounds.east){
-      const at=visible.findIndex(row=>row.lat===extra.lat&&row.lng===extra.lng);
-      if(at<0)visible.push(extra);
-      else visible.splice(at,1,...window.MapViewPolicy.exactLocations([...(visible[at].clusterRows||[visible[at]]),extra],assignmentMode));
+    const extras=new Map();
+    if(neighborhood)for(const row of neighborhood.stores){
+      if(!pointIndex.byCode.has(row.customerCode))extras.set(row.customerCode,row);
     }
-    return assignmentMode==='BASE_60D'&&project
-      ?window.MapViewPolicy.overlappingVehicleLocations(visible,project,assignmentMode,protectedCodes):visible;
+    if(extra)extras.set(extra.customerCode,extra);
+    if(!extras.size)return visible;
+    const byPoint=new Map(visible.map(row=>[row.lat+':'+row.lng,row]));
+    for(const row of extras.values()){
+      if(row.lat<bounds.south||row.lat>bounds.north||row.lng<bounds.west||row.lng>bounds.east)continue;
+      const key=row.lat+':'+row.lng, before=byPoint.get(key);
+      if(!before){byPoint.set(key,row);continue;}
+      const members=before.clusterRows||[before];
+      if(!members.some(member=>member.customerCode===row.customerCode)){
+        byPoint.set(key,window.MapViewPolicy.exactLocations([...members,row],assignmentMode)[0]);
+      }
+    }
+    return [...byPoint.values()];
   }
 
   function overviewVehicleStores() {
@@ -2186,7 +2209,14 @@
     const mapViewport={width:mapNode.clientWidth,height:mapNode.clientHeight};
     const viewport=fit?null:mapViewport;
     const selectedVehicleStores=showSelectedVehicleStores();
-    const detailedStores=selectedVehicleStores||base&&viewport&&level<=window.MapViewPolicy.storePinLevel;
+    const closeUp=level<=window.MapViewPolicy.storePinLevel;
+    const detailedStores=selectedVehicleStores||base&&closeUp;
+    if(searchNeighborhood&&searchNeighborhood.filterKey!==periodSelectionCache?.key)searchNeighborhood=null;
+    const neighborhood=base&&closeUp&&searchNeighborhood;
+    if(neighborhood&&neighborhood.version!==markerSourceVersion){
+      neighborhood.stores=nearbyVerifiedStores(neighborhood.point);
+      neighborhood.version=markerSourceVersion;
+    }
     const vehicleOverview=base&&!selectedVehicleStores&&level>=10&&periodBasis==='vehicle'&&
       (!drilledBaseVehicle||Boolean(state.virtual?.searchTemporary));
     const focusedStops=!base&&(state.selectedVehicles.length===1||periodBasis==='driver');
@@ -2199,7 +2229,7 @@
     const center=state.map.getCenter?.();
     const viewportKey=JSON.stringify([markerSourceVersion,markerLayoutVersion,state.mode,level,center?.getLat?.(),center?.getLng?.(),
       mapViewport.width,mapViewport.height,fit,assignmentMode,vehicleOverview,selectedVehicleStores,focusedStops,baseVehicleStatus,Boolean(options.numbered),
-      selectedCode,state.selected?.lat,state.selected?.lng,state.virtual?.temporaryKey,navCodes]);
+      selectedCode,state.selected?.lat,state.selected?.lng,state.virtual?.temporaryKey,neighborhood?.point?.temporaryKey,navCodes]);
     if(options.fromIdle&&!fit&&lastMarkerViewport===viewportKey)return false;
     mapNode.classList.toggle('mapZoomFar',level>=9);
     const shouldShow=row=>row.virtual||row.nearbyVehicle||protectedCodes.some(code=>markerHasStore(row,code))||
@@ -2215,7 +2245,7 @@
       grouping:focusedStops?'individual':'territory',protectedCodes:navCodes,sourceVersion:markerSourceVersion,
       nearbyVehicleOnly:assignmentMode==='BASE_60D'};
     let pins,readyOverview=false;
-    if(detailedStores)pins=detailedMarkerRows(mapViewport,selectedExtra,assignmentMode,selectedVehicleStores?null:projectPin,protectedCodes);
+    if(detailedStores)pins=detailedMarkerRows(mapViewport,selectedExtra,assignmentMode,neighborhood);
     else if(vehicleOverview){
       const overview=pointIndex.overview ||= representativeRows(valid);
       readyOverview=overview.representatives.length>0;
@@ -2235,7 +2265,7 @@
     }
     if(!detailedStores&&selectedExtra)pins.push(selectedExtra);
     if(hideUnverified&&!vehicleOverview)pins=pins.filter(shouldShow);
-    const markerMode=detailedStores?'STORES':readyOverview?'VEHICLES':'GROUPS';
+    const markerMode=detailedStores||closeUp?'STORES':readyOverview?'VEHICLES':'GROUPS';
     const entries = pins.map(row=>{
       const selected=markerIsSelected(row);
       const assigned=navCodes.some(code=>markerHasStore(row,code));
@@ -2286,6 +2316,20 @@
     const overlayMs=performance.now()-started-planMs;
     markerEntries = reconciled.next;
     state.overlays = [...markerEntries.values()].map(entry=>entry.value);
+    if(neighborhood?.trace&&mapCamera?.focusState()?.state==='centered'){
+      const {trace,stores,point}=neighborhood;
+      const expected=new Set(stores.map(row=>row.customerCode));
+      const shown=new Set(pins.flatMap(row=>row.memberCodes||[row.customerCode]).filter(code=>expected.has(code)));
+      trace.record('mapSettled');
+      trace.count('nearbyExpected',expected.size);
+      trace.count('nearbyShown',shown.size);
+      neighborhood.trace=null;
+      requestAnimationFrame(()=>{
+        if(searchNeighborhood?.point!==point)return;
+        trace.record('visiblePin');
+        trace.record('nearbyPins');
+      });
+    }
     const osanCenter=fit&&!selectedVehicleStores&&window.MapNavigationLookup?.registeredCenters?.().find(row=>row.id==='osan');
     if((valid.length||osanCenter)&&fit&&!state.userMovedMap){
       const bounds=new kakao.maps.LatLngBounds(),mobileRoute=innerWidth<=760&&options.numbered;
@@ -2395,11 +2439,13 @@
     positionTemporaryDistanceLabel();scheduleNewAreaDispatchBadges();
   }
 
-  function focusMapPoint(row,{zoom=false,key='',pinOffset}={}) {
+  function focusMapPoint(row,{zoom=false,key='',pinOffset,nearby=false}={}) {
     if(!state.map||numberOrNull(row.lat)===null||numberOrNull(row.lng)===null)return;
     state.fitRequested=false;state.suppressMapEventsUntil=Date.now()+700;
-    if(zoom&&state.map.getLevel()>5)state.map.setLevel(5);
+    const level=window.MapViewPolicy.storePinLevel;
+    if(nearby?state.map.getLevel()!==level:zoom&&state.map.getLevel()>level)state.map.setLevel(level);
     const point=new kakao.maps.LatLng(Number(row.lat),Number(row.lng));
+    if(nearby)state.map.setCenter?.(point);
     if(!mapCamera?.focus(point,{key:key||row.customerCode||row.vehicle||'selection',pinOffset}))state.map.panTo(point);
   }
 
@@ -2910,10 +2956,11 @@
 
   function startSearchTrace() {
     const id=++searchSequence, started=performance.now(), stages={input:Math.round(started-(searchInputAt??started))};
-    const mark=phase=>{stages[phase]=Math.round(performance.now()-started);};
-    return {mark,finish(kind){
-      const publish=()=>{if(id===searchSequence)$('#map').dataset.searchMetrics=JSON.stringify({id,kind,...stages});};
-      mark('total');publish();
+    const mark=phase=>{if(phase!=='coordinates'||stages[phase]===undefined)stages[phase]=Math.round(performance.now()-started);};
+    let kind;
+    const publish=()=>{if(kind&&id===searchSequence)$('#map').dataset.searchMetrics=JSON.stringify({id,kind,...stages});};
+    return {mark,record(phase){mark(phase);publish();},count(name,value){stages[name]=value;publish();},finish(result){
+      kind=result;mark('total');publish();
       requestAnimationFrame(()=>{mark('frame');publish();});
     }};
   }
@@ -3076,6 +3123,10 @@
     searchAddressPreparation=null;
   }
 
+  function completeAddressRegion(address) {
+    return /^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|충청북|충청남|전라북|전라남|경상북|경상남|제주|전남광주통합특별시)(?:특별자치도|특별자치시|특별시|광역시|시|도)?\s/.test(address);
+  }
+
   function queueSearchAddressPreparation() {
     cancelSearchAddressPreparation();
     const query=$('#query').value.normalize('NFKC').trim();
@@ -3083,8 +3134,7 @@
     if(!generation||!stageAddressBatchEnabled()||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return;
     const base=NewAreaRequests.addressQuery(query,Phase2bUi.addressVariants);
     // Only prepare complete base addresses on our protected service.
-    const region=/^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|충청북|충청남|전라북|전라남|경상북|경상남|제주)(?:특별자치도|특별자치시|특별시|광역시|시|도)?\s/;
-    if(!base||!region.test(base)||base.replace(/\s/g,'')!==Phase2bUi.addressLookupText(query).replace(/\s/g,''))return;
+    if(!base||!completeAddressRegion(base)||base.replace(/\s/g,'')!==Phase2bUi.addressLookupText(query).replace(/\s/g,''))return;
     const work=searchAddressPreparation={controller:new AbortController(),timer:null};
     const {signal}=work.controller;
     const current=()=>!signal.aborted&&generation===snapshotMeta?.sourceGeneration&&state.mode==='BASE_60D';
@@ -3121,6 +3171,11 @@
 
   function clearTemporaryPins() {
     cancelAddressLookup();
+    const hadNeighborhood=searchNeighborhood!==null;
+    searchNeighborhood=null;
+    if(hadNeighborhood&&dateReady&&state.map)requestAnimationFrame(()=>{
+      if(!searchNeighborhood&&state.mode==='BASE_60D'&&dateReady)renderStops(state.currentRows,{viewportOnly:true,fromIdle:true});
+    });
     for(const entry of temporaryPins.values())disposeTemporaryPin(entry);
     if(temporaryDetailPoint)clearSelection({preserveSearch:true,fast:true,keepMapPins:true});
     clearTemporaryContext();
@@ -3184,22 +3239,28 @@
     };
   }
 
-  async function searchExternalAddress(text,{owner=state.searchRequestId,signal,lookupAllowed=true,lookupError,customerMatchState='UNCONFIRMED',trace}={}) {
+  async function searchExternalAddress(text,{owner=state.searchRequestId,signal,lookupAllowed=true,lookupError,stageAddressStatus='',customerMatchState='UNCONFIRMED',trace}={}) {
     if(state.mode!=='BASE_60D'||owner!==state.searchRequestId||signal?.aborted)return;
     cancelAddressLookup();
     if (text.length<2||text.length>200||/^[A-Z]\d+$/i.test(text)) {setSearchState('주소 또는 상호를 정확히 입력하세요.');return;}
     const requestId=state.addressRequestId;
     const active=()=>owner===state.searchRequestId&&requestId===state.addressRequestId&&!signal?.aborted&&state.mode==='BASE_60D';
-    if(!state.map)await initMap();
+    const mapReady=state.map?null:initMap();
+    if(!window.KAKAO_MAP_CONFIG)await mapReady;
     if(!window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup&&!window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup)await window.KakaoMapsAdapter?.refreshAddressLookup?.();
     if(!active())return;
     const config=window.KAKAO_MAP_CONFIG;
-    const place=!unifiedAddressQuery(text);
-    const officialAllowed=!place&&config?.allowIndependentAddressLookup===true;
-    const externalAllowed=lookupAllowed&&config?.allowExternalAddressLookup===true&&(!place||config?.allowExternalPlaceLookup===true);
+    const pnu=/^\d{19}$/.test(text);
+    const place=!pnu&&!unifiedAddressQuery(text);
+    const officialAllowed=!stageAddressStatus&&!place&&!pnu&&config?.allowIndependentAddressLookup===true;
+    const externalAllowed=lookupAllowed&&!pnu&&config?.allowExternalAddressLookup===true&&(!place||config?.allowExternalPlaceLookup===true);
+    const unresolvedReason=stageAddressStatus==='OFFICIAL_COORDINATE_UNVERIFIED'?'공식 주소 확인 · 좌표 미확인':
+      stageAddressStatus==='OFFICIAL_ADDRESS_UNAVAILABLE'?'공식 주소 조회 실패':pnu?'공식 필지 위치 미확인':'';
     if(!officialAllowed&&!externalAllowed){
-      const reason=lookupError?.status===401||lookupError?.status===403?NewAreaRequests.message(lookupError):
-        lookupError?'저장 주소 조회 실패':config?.addressLookupReason?NewAreaRequests.message({code:config.addressLookupReason}):place?'외부 상호 검색 미승인':'외부 주소검색 미승인';
+      if(mapReady)await mapReady;
+      if(!active())return;
+      const reason=unresolvedReason||(lookupError?.status===401||lookupError?.status===403?NewAreaRequests.message(lookupError):
+        lookupError?'저장 주소 조회 실패':config?.addressLookupReason?NewAreaRequests.message({code:config.addressLookupReason}):place?'외부 상호 검색 미승인':'외부 주소검색 미승인');
       waitForSearchMapPoint(text,{owner,customerMatchState,reason});
       trace?.finish('unresolved');
       return;
@@ -3207,18 +3268,23 @@
     setSearchState(place?'상호 위치 확인 중':'주소 확인 중',true);
     const controller=new AbortController();addressController=controller;
     const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});
-    let point;
+    if(window.KakaoMapsAdapter?.geocoder)window.kakaoGeocoder ||= window.KakaoMapsAdapter.geocoder();
+    let point,error;
     trace?.mark('externalStart');
-    try {point=await lookupInteractiveLocation(text,controller.signal,{allowExternal:externalAllowed});}
-    catch(error){
-      if(active()&&!isSilentRequestError(error)){waitForSearchMapPoint(text,{owner,customerMatchState,reason:NewAreaRequests.message(error)});trace?.finish('error');}
-      return;
-    }finally{trace?.mark('externalEnd');signal?.removeEventListener('abort',abort);if(addressController===controller)addressController=null;}
+    try {point=await lookupInteractiveLocation(text,controller.signal,{allowExternal:externalAllowed,allowOfficial:officialAllowed,timeout:10000,trace});}
+    catch(failure){error=failure;}
+    finally{trace?.mark('externalEnd');signal?.removeEventListener('abort',abort);if(addressController===controller)addressController=null;}
+    if(point&&!point.candidates&&!point.verifiedAddressOnly)trace?.mark('coordinates');
+    if(mapReady)await mapReady;
     if(!active())return;
+    if(error){
+      if(!isSilentRequestError(error)){waitForSearchMapPoint(text,{owner,customerMatchState,reason:NewAreaRequests.message(error)});trace?.finish('error');}
+      return;
+    }
     if(!point||point.verifiedAddressOnly){
       waitForSearchMapPoint(point?.officialRoad||text,{owner,customerMatchState,
-        reason:point?.verifiedAddressOnly?'공식 주소 확인 · 좌표 미확인':!lookupAllowed?'기존 매장 조회 미확인':config?.allowExternalAddressLookup!==true&&config?.addressLookupReason
-          ?NewAreaRequests.message({code:config.addressLookupReason}):place?'일치하는 상호 없음':'일치하는 주소 위치 없음'});trace?.finish('unresolved');return;
+        reason:point?.verifiedAddressOnly?'공식 주소 확인 · 좌표 미확인':unresolvedReason||(!lookupAllowed?'기존 매장 조회 미확인':config?.allowExternalAddressLookup!==true&&config?.addressLookupReason
+          ?NewAreaRequests.message({code:config.addressLookupReason}):place?'일치하는 상호 없음':'일치하는 주소 위치 없음')});trace?.finish('unresolved');return;
     }
     const choose=candidate=>{
       if(!active())return;
@@ -3228,7 +3294,7 @@
         if(typeof selectUnifiedSearchStore==='function')return selectUnifiedSearchStore(row,{owner});
         return selectStore(row,null,true);
       }
-      finishAddress(candidate,{owner,customerMatchState,trace});
+      finishAddress({...candidate,address:point.candidates?candidate.address:text},{owner,customerMatchState,trace});
     };
     if(point.candidates){
       showAddressCandidates(point.candidates,choose);
@@ -3268,7 +3334,7 @@
       if(!address&&snapshotRetryAfter){setSearchState('저장 매장 자료 복원이 늦어지고 있습니다 · 잠시 후 다시 조회해 주세요.');trace.finish('unresolved');return;}
     }
     const generation=snapshotMeta?.sourceGeneration??null;
-    let evidenceError=null;
+    let evidenceError=null, stageAddressStatus='';
     if(stageLookup){
       trace.mark('apiStart');
       const reply=await NewAreaRequests.stageAddress(text,generation,{signal}).catch(error=>{evidenceError=error;return null;});
@@ -3281,6 +3347,7 @@
       if(evidence){
         const point=evidence?.point;
         if(point){
+          trace.mark('coordinates');
           if(!state.map)await initMap();
           if(active())finishAddress({...point,address:text},{owner,trace});
           return;
@@ -3290,11 +3357,19 @@
             coordinateSource:'OFFICIAL_PUBLIC_BUILDING'})),point=>finishAddress(point,{owner,trace}));
           setSearchState('주소 위치 후보를 선택해 주세요.');return;
         }
+        if(generation&&['ADDRESS_NOT_MATCHED','OFFICIAL_ADDRESS_UNAVAILABLE','OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_COORDINATE_UNVERIFIED'].includes(evidence.status)){
+          stageAddressStatus=evidence.status;
+        }
       }
       if([401,403,409].includes(evidenceError?.status)){setSearchState(NewAreaRequests.message(evidenceError));trace.finish('error');return;}
     }
     const temporary=address&&NewAreaRequests.temporaryPoint(text);
     if(temporary){if(!state.map)await initMap();if(active())finishAddress({...temporary,address:text},{owner,trace});return;}
+    // The protected batch already checked stored and official addresses for this generation.
+    // A location from an external service is not evidence of the customer's registration status.
+    if(stageAddressStatus&&lookupText.length<=200&&(completeAddressRegion(lookupText)||/^\d{19}$/.test(text))){
+      return searchExternalAddress(text,{owner,signal,trace,stageAddressStatus});
+    }
     let remote=[],meta=null,lookupError=null;
     trace.mark('remoteStart');
     try{
@@ -3327,7 +3402,7 @@
     // A failed Customer lookup is not proof that this is a new customer.
     if([401,403].includes(lookupError?.status)){setSearchState(NewAreaRequests.message(lookupError));trace.finish('error');return;}
     await searchExternalAddress(text,{owner,signal,lookupAllowed:address||!lookupError,trace,lookupError:evidenceError||lookupError,
-      customerMatchState:meta?.customerMatchVerified===true?'NOT_IN_MASTER':'UNCONFIRMED'});
+      stageAddressStatus,customerMatchState:meta?.customerMatchVerified===true?'NOT_IN_MASTER':'UNCONFIRMED'});
   }
 
   function finishAddress(point,{owner=state.searchRequestId,customerMatchState='UNCONFIRMED',trace}={}) {
@@ -3386,7 +3461,7 @@
     return null;
   }
 
-  async function lookupOfficialAddress(text, signal, queries = NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants),prefetched) {
+  async function lookupOfficialAddress(text, signal, queries = NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants),prefetched,timeout) {
     if(window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup!==true||window.kakaoGeocoder?.serverProxy!==true)return null;
     for(const query of queries){
       let result;
@@ -3396,7 +3471,7 @@
           if(!point)continue;
           const kind=point.kind||'EXACT', source=point.points||[[point.lat,point.lng]];
           result={resolution:{kind,road:point.road,lot:point.lot},rows:source.map(([y,x],i)=>({x,y,place_name:kind==='CHOOSE'?'공식 위치 후보 '+(i+1):undefined}))};
-        }else result=await NewAreaRequests.lookup(window.kakaoGeocoder,query,{signal,mode:'official'});
+        }else result=await NewAreaRequests.lookup(window.kakaoGeocoder,query,{signal,mode:'official',timeout});
       }
       catch(error){ if(error.code==='OFFICIAL_ADDRESS_LOOKUP_DISABLED')return null; throw error; }
       const {kind,road,lot}=result.resolution||{};
@@ -3409,11 +3484,11 @@
     return null;
   }
 
-  async function lookupInteractiveLocation(text, signal, {allowExternal=true} = {}) {
+  async function lookupInteractiveLocation(text, signal, {allowExternal=true,allowOfficial=true,timeout,trace} = {}) {
     const geocoder=window.kakaoGeocoder;
     const address=unifiedAddressQuery(text);
     let official=null,officialError;
-    if(address)try{official=await lookupOfficialAddress(text,signal);}catch(error){
+    if(address&&allowOfficial)try{official=await lookupOfficialAddress(text,signal,undefined,undefined,timeout);}catch(error){
       if(signal?.aborted||[401,403,409].includes(error.status))throw error;
       officialError=error;
     }
@@ -3425,7 +3500,9 @@
     const queries=address?NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants):[text];
     if(!queries.length)return null;
     for(const query of queries){
-      const result=await NewAreaRequests.lookup(geocoder,query,{signal,mode:address?'address':'place'});
+      trace?.mark('providerStart');
+      const result=await NewAreaRequests.lookup(geocoder,query,{signal,mode:address?'address':'place',timeout})
+        .finally(()=>trace?.mark('providerEnd'));
       if(!result.rows?.length)continue;
       const candidates=result.rows.map(row=>({
         lat:Number(row.y),lng:Number(row.x),address:row.road_address?.address_name||row.address_name,
@@ -3515,14 +3592,18 @@
     };
     window.dispatchEvent(new CustomEvent('map-store-selected',{detail:{customerCode:null}}));
     requestAnimationFrame(positionDetailPopup);
-    if(focus)focusMapPoint(row,{zoom:true,key:'search-temporary'});
-    trace?.mark('map');
+    const verifiedSearch=focus&&temporaryPins.get(row.temporaryKey)?.point===row&&row.coordinateSource!=='MAP_CLICK_TEMPORARY';
+    if(verifiedSearch)searchNeighborhood={point:row,filterKey:periodSelectionCache?.key,trace};
     if(innerWidth<=760)showMobileMap();
+    if(focus)focusMapPoint(row,{zoom:true,key:'search-temporary',nearby:verifiedSearch});
+    trace?.mark('map');
     trace?.mark('detail');
     trace?.finish('temporary');
     const enrich=()=>{if(state.virtual===row)renderSearchTemporaryNearby(row);};
-    if(trace&&typeof window.requestIdleCallback==='function')window.requestIdleCallback(enrich,{timeout:800});
-    else afterSearchPaint(enrich);
+    afterSearchPaint(()=>{
+      if(trace&&typeof window.requestIdleCallback==='function')window.requestIdleCallback(enrich,{timeout:800});
+      else enrich();
+    });
   }
 
   function temporaryDistanceActions() {
