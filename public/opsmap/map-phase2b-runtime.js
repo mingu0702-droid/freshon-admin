@@ -47,7 +47,6 @@
     return hybridUi;
   });
   function purgeStaffData(){
-    cancelSearchAddressPreparation();
     liveAddressLocations?.clear();
     if(addressScheduleFrame!==null)cancelAnimationFrame(addressScheduleFrame);
     addressScheduleFrame=null;
@@ -182,7 +181,6 @@
     }).observe({type:'longtask',buffered:false}); } catch (_) { /* Unsupported metric remains unavailable. */ }
   }
   function switchMode(next, {preservePeriod=false}={}) {
-    if(state.mode!==next)cancelSearchAddressPreparation();
     if(state.mode!==next){resetDriverMaster();if(state.mode==='DATE_ROUTE'){++dateRequestId;dailyRead?.controller.abort();dailyRead=null;dailyView=null;clearActualRoute();}}
     if(state.mode!==next){closeClusterPanel();window.dispatchEvent(new CustomEvent('map-navigation-context-changed',{detail:{mode:next,date:next==='DATE_ROUTE'?state.routeDate:''}}));}
     if(state.mode!==next&&next==='DATE_ROUTE'){dateReady=false;datedSourceDate='';dailyMeta=null;state.currentRows=[];state.routeRows=[];operationStops=[];}
@@ -1631,6 +1629,35 @@
     mapHandlers=[];
   }
 
+  let frameAudit=null,frameAuditId=0;
+  function auditMapFrames(map,gesture) {
+    if(!stageAddressBatchEnabled()||window.location.hash!=='#opsmap-frame-audit'||frameAudit)return;
+    const scope=frameAudit={id:++frameAuditId,started:performance.now(),previous:null,frames:[],focused:0,visible:0};
+    const before=map.getCenter(),lat=before.getLat(),lng=before.getLng(),level=map.getLevel();
+    const sample=timestamp=>{
+      if(state.map!==map||document.body.dataset.mapStaffState!=='authenticated'){
+        frameAudit=null;
+        return;
+      }
+      if(scope.previous!==null){
+        scope.frames.push(timestamp-scope.previous);
+        if(document.hasFocus())scope.focused++;
+        if(document.visibilityState==='visible')scope.visible++;
+      }
+      scope.previous=timestamp;
+      if(timestamp-scope.started<2200&&scope.frames.length<240){requestAnimationFrame(sample);return;}
+      frameAudit=null;
+      const after=map.getCenter(),changed=lat!==after.getLat()||lng!==after.getLng()||level!==map.getLevel();
+      const intervals=scope.frames.sort((a,b)=>a-b),count=intervals.length,total=intervals.reduce((a,b)=>a+b,0);
+      $('#map').dataset.frameAudit=JSON.stringify({id:scope.id,gesture,changed,frames:count,focused:scope.focused,
+        visible:scope.visible,levelBefore:level,levelAfter:map.getLevel(),viewport:innerWidth,
+        initialMs:Math.round(timestamp-scope.started-total),
+        fps:total>0?Number((1000*count/total).toFixed(2)):null,
+        p95Ms:count?Number(intervals[Math.ceil(count*.95)-1].toFixed(2)):null,maxMs:count?Number(intervals.at(-1).toFixed(2)):null});
+    };
+    requestAnimationFrame(sample);
+  }
+
   function initMap() {
     if(state.map){mapCamera?.scheduleRelayout();return Promise.resolve(state.map);}
     if(mapInitializing)return mapInitializing;
@@ -1651,8 +1678,11 @@
         kakao.maps.event.addListener(owner,name,guarded);mapHandlers.push([owner,name,guarded]);
       };
       const startMotion=()=>{if(state.map===owner){mapMoving=true;cancelViewportRender();}};
-      listen('dragstart',()=>{startMotion();userGesture();});
-      listen('zoom_start',()=>{startMotion();if(Date.now()>=state.suppressMapEventsUntil)userGesture();});
+      listen('dragstart',()=>{startMotion();userGesture();auditMapFrames(owner,'drag');});
+      listen('zoom_start',()=>{
+        startMotion();
+        if(Date.now()>=state.suppressMapEventsUntil){userGesture();auditMapFrames(owner,'zoom');}
+      });
       listen('idle',()=>{
         if(state.map!==owner)return;
         mapMoving=false;
@@ -2316,20 +2346,7 @@
     const overlayMs=performance.now()-started-planMs;
     markerEntries = reconciled.next;
     state.overlays = [...markerEntries.values()].map(entry=>entry.value);
-    if(neighborhood?.trace&&['centered','deviation'].includes(mapCamera?.focusState()?.state)){
-      const {trace,stores,point}=neighborhood;
-      const expected=new Set(stores.map(row=>row.customerCode));
-      const shown=new Set(pins.flatMap(row=>row.memberCodes||[row.customerCode]).filter(code=>expected.has(code)));
-      trace.record('mapSettled');
-      trace.count('nearbyExpected',expected.size);
-      trace.count('nearbyShown',shown.size);
-      neighborhood.trace=null;
-      requestAnimationFrame(()=>{
-        if(searchNeighborhood?.point!==point)return;
-        recordVisibleSearchPin(point,trace);
-        trace.record('nearbyPins');
-      });
-    }
+    if(neighborhood?.trace&&!neighborhood.paintedView)watchNearbyPinPaint(neighborhood,entries);
     const osanCenter=fit&&!selectedVehicleStores&&window.MapNavigationLookup?.registeredCenters?.().find(row=>row.id==='osan');
     if((valid.length||osanCenter)&&fit&&!state.userMovedMap){
       const bounds=new kakao.maps.LatLngBounds(),mobileRoute=innerWidth<=760&&options.numbered;
@@ -2439,12 +2456,63 @@
     positionTemporaryDistanceLabel();scheduleNewAreaDispatchBadges();
   }
 
-  function recordVisibleSearchPin(point,trace) {
+  function visibleSearchPin(point) {
     const marker=temporaryPins.get(point.temporaryKey)?.marker;
-    if(!marker?.isConnected)return;
+    if(!marker?.isConnected)return false;
     const {left,top,width,height}=(marker.querySelector('.pin')||marker).getBoundingClientRect();
     const hit=width&&height&&document.elementFromPoint(left+width/2,top+height/2);
-    if(hit&&marker.contains(hit))trace.record('visiblePin');
+    return Boolean(hit&&marker.contains(hit));
+  }
+
+  function searchPinView() {
+    const center=state.map?.getCenter?.(), map=$('#map');
+    return JSON.stringify([markerSourceVersion,map.clientWidth,map.clientHeight,state.map?.getLevel?.(),center?.getLat?.(),center?.getLng?.()]);
+  }
+
+  function watchNearbyPinPaint(neighborhood,entries) {
+    const {trace,stores,point}=neighborhood;
+    const expected=new Set(stores.map(row=>row.customerCode)), shown=new Set();
+    const overlays=[];
+    for(const {key,row} of entries){
+      const members=(row.memberCodes||[row.customerCode]).filter(code=>expected.has(code));
+      if(!members.length)continue;
+      members.forEach(code=>shown.add(code));
+      overlays.push(markerEntries.get(key)?.value);
+    }
+    trace.count('nearbyExpected',expected.size);
+    trace.count('nearbyShown',shown.size);
+    if(shown.size!==expected.size)return;
+    const view=searchPinView();
+    if(neighborhood.paintPending===view)return;
+    neighborhood.paintPending=view;
+    requestAnimationFrame(()=>{
+      if(searchNeighborhood!==neighborhood||neighborhood.paintPending!==view)return;
+      neighborhood.paintPending=null;
+      if(searchPinView()!==view||!overlays.every(overlay=>overlay?.getContent?.()?.isConnected))return;
+      neighborhood.paintedView=view;
+      neighborhood.paintedCount=shown.size;
+      if(visibleSearchPin(point))trace.record('visiblePin');
+      trace.record('nearbyPins');
+    });
+  }
+
+  function reuseVisibleOfficialSearch(text,trace) {
+    const point=state.virtual, neighborhood=searchNeighborhood;
+    if(!point||!dateReady||mapMoving||!neighborhood||point!==neighborhood.point||point!==temporaryDetailPoint||
+       point.address!==text||neighborhood.sourceRows!==allStores||neighborhood.paintedView!==searchPinView()||
+       neighborhood.filterKey!==periodSelectionCache?.key||!['centered','deviation'].includes(mapCamera?.focusState()?.state))return false;
+    const cached=NewAreaRequests.cachedStageAddress(text,snapshotMeta?.sourceGeneration);
+    if(cached?.status!=='OFFICIAL'||cached.point?.lat!==point.lat||cached.point?.lng!==point.lng||
+       cached.point?.coordinateSource!==point.coordinateSource||!visibleSearchPin(point))return false;
+    invalidateUnifiedSearch();
+    cancelAddressLookup();closeUnifiedSearchResults();
+    setSearchState('임시 위치 표시 · 고객정보에 저장하지 않습니다.');
+    trace.count('cacheHit',true);
+    for(const phase of ['coordinates','map','pin','visiblePin','mapSettled','nearbyPins'])trace.record(phase);
+    trace.count('nearbyExpected',neighborhood.paintedCount);
+    trace.count('nearbyShown',neighborhood.paintedCount);
+    trace.finish('temporary');
+    return true;
   }
 
   function focusMapPoint(row,{zoom=false,key='',pinOffset,nearby=false,onSettled}={}) {
@@ -2454,9 +2522,9 @@
     if(nearby)mapCamera?.relayout();
     if(nearby?state.map.getLevel()!==level:zoom&&state.map.getLevel()>level)state.map.setLevel(level,{animate:false});
     const point=new kakao.maps.LatLng(Number(row.lat),Number(row.lng));
-    if(nearby)state.map.setCenter?.(point);
     if(!mapCamera?.focus(point,{key:key||row.customerCode||row.vehicle||'selection',pinOffset,onSettled,immediate:nearby})){
-      state.map.panTo(point);
+      if(nearby&&state.map.setCenter)state.map.setCenter(point);
+      else state.map.panTo(point);
       if(onSettled)afterSearchPaint(onSettled);
     }
   }
@@ -3022,7 +3090,6 @@
     if(unifiedResetting)return;
     unifiedResetting=true;
     try{
-      cancelSearchAddressPreparation();
       invalidateUnifiedSearch();
       clearSelection({preserveSearch:true});
       clearTemporaryPins();closeUnifiedSearchResults();
@@ -3129,38 +3196,8 @@
     return [];
   }
 
-  let searchAddressPreparation;
-  function cancelSearchAddressPreparation() {
-    if(!searchAddressPreparation)return;
-    clearTimeout(searchAddressPreparation.timer);
-    searchAddressPreparation.controller.abort();
-    searchAddressPreparation=null;
-  }
-
   function completeAddressRegion(address) {
     return /^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|충청북|충청남|전라북|전라남|경상북|경상남|제주|전남광주통합특별시)(?:특별자치도|특별자치시|특별시|광역시|시|도)?\s/.test(address);
-  }
-
-  function queueSearchAddressPreparation() {
-    cancelSearchAddressPreparation();
-    const query=$('#query').value.normalize('NFKC').trim();
-    const generation=snapshotMeta?.sourceGeneration;
-    if(!generation||!stageAddressBatchEnabled()||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return;
-    const base=NewAreaRequests.addressQuery(query,Phase2bUi.addressVariants);
-    // Only prepare complete base addresses on our protected service.
-    if(!base||!completeAddressRegion(base)||base.replace(/\s/g,'')!==Phase2bUi.addressLookupText(query).replace(/\s/g,''))return;
-    const work=searchAddressPreparation={controller:new AbortController(),timer:null};
-    const {signal}=work.controller;
-    const current=()=>!signal.aborted&&generation===snapshotMeta?.sourceGeneration&&state.mode==='BASE_60D';
-    work.timer=setTimeout(async()=>{
-      work.timer=null;
-      try {
-        if(!current())return;
-        const stored=await findStoredSearchRows(query,{signal,address:true});
-        if(current()&&!stored.length)await NewAreaRequests.stageAddress(query,generation,{signal});
-      } catch { /* The submitted search reports any lookup error. */ }
-      finally { if(searchAddressPreparation===work)searchAddressPreparation=null; }
-    },350);
   }
 
   async function search() {
@@ -3168,8 +3205,8 @@
     if(!text){clearUnifiedSearch();return;}
     if(state.mode!=='BASE_60D')return;
     if(searchFlight?.text===text)return searchFlight.task;
-    if(searchAddressPreparation?.timer)cancelSearchAddressPreparation();
     const trace=startSearchTrace();
+    if(state.virtual&&reuseVisibleOfficialSearch(text,trace))return;
     const task=searchPeriod(text,trace).finally(()=>{if(searchFlight?.task===task)searchFlight=null;});
     searchFlight={text,task};
     return task;
@@ -3321,7 +3358,7 @@
     if(state.mode!=='BASE_60D')return;
     const owner=invalidateUnifiedSearch();
     clearTemporaryPins();closeUnifiedSearchResults();setSearchState('검색 중',true);
-    unifiedSearchController=new AbortController();const signal=unifiedSearchController.signal;
+    const controller=unifiedSearchController=new AbortController(),signal=controller.signal;
     const code=/^[A-Z]\d{3,}$/i.test(text)?text.toUpperCase():null;
     const address=unifiedAddressQuery(text)||/^\d{19}$/.test(text);
     const lookupText=address?(NewAreaRequests.addressQuery(text,Phase2bUi.addressVariants)||Phase2bUi.addressLookupText(text)):text;
@@ -3333,10 +3370,26 @@
       return true;
     };
     const active=()=>!signal.aborted&&owner===state.searchRequestId&&state.mode==='BASE_60D';
+    let evidenceError=null,stageAddressStatus='';
+    const resolveEvidence=generation=>{
+      const cached=NewAreaRequests.cachedStageAddress?.(text,generation);
+      if(cached){trace.count('cacheHit',true);return Promise.resolve({reply:cached});}
+      trace.mark('apiStart');
+      return NewAreaRequests.stageAddress(text,generation,{signal})
+        .then(reply=>({reply}),error=>({error}))
+        .finally(()=>trace.mark('apiEnd'));
+    };
+    const initialGeneration=snapshotMeta?.sourceGeneration;
+    const registryVersion=customerRegistry?.currentVersion();
+    // For the first submitted full address, overlap the protected lookup with
+    // local indexing. Any locally verified customer still takes precedence.
+    const coldIndex=registryVersion&&(searchIndex?.snapshot!==latestSnapshotRows||searchIndex?.registryVersion!==registryVersion);
+    const evidenceFlight=stageLookup&&initialGeneration&&!snapshotRetryAfter&&coldIndex&&completeAddressRegion(lookupText)
+      ?resolveEvidence(initialGeneration):null;
     const local=await findStoredSearchRows(text,{signal,address});
     if(!active())return;
     trace.mark('matching');
-    if(showMatches(local))return;
+    if(showMatches(local)){if(evidenceFlight)controller.abort('stored-match');return;}
     if(stageAddressBatchEnabled()&&snapshotRetryAfter){
       setSearchState('저장 매장 자료 복원 중',true);
       await waitForSearchSnapshot(signal);
@@ -3348,11 +3401,9 @@
       if(!address&&snapshotRetryAfter){setSearchState('저장 매장 자료 복원이 늦어지고 있습니다 · 잠시 후 다시 조회해 주세요.');trace.finish('unresolved');return;}
     }
     const generation=snapshotMeta?.sourceGeneration??null;
-    let evidenceError=null, stageAddressStatus='';
     if(stageLookup){
-      trace.mark('apiStart');
-      const reply=await NewAreaRequests.stageAddress(text,generation,{signal}).catch(error=>{evidenceError=error;return null;});
-      trace.mark('apiEnd');
+      const {reply,error}=await (evidenceFlight&&generation===initialGeneration?evidenceFlight:resolveEvidence(generation));
+      evidenceError=error;
       if(!active())return;
       const evidence=(snapshotMeta?.sourceGeneration??null)===generation ? reply : null;
       const codes=evidence?.customerCodes||[], stored=currentStageSearchCustomers(codes);
@@ -3513,9 +3564,11 @@
     if(config?.allowExternalAddressLookup!==true||!address&&config.allowExternalPlaceLookup!==true){if(officialError)throw officialError;return official;}
     const queries=address?NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants):[text];
     if(!queries.length)return null;
+    let upstreamMs=0;
+    const onProviderTime=ms=>{upstreamMs+=ms;trace?.count('providerUpstreamMs',upstreamMs);};
     for(const query of queries){
-      trace?.mark('providerStart');
-      const result=await NewAreaRequests.lookup(geocoder,query,{signal,mode:address?'address':'place',timeout})
+      trace?.record('providerStart');
+      const result=await NewAreaRequests.lookup(geocoder,query,{signal,mode:address?'address':'place',timeout,onProviderTime})
         .finally(()=>trace?.mark('providerEnd'));
       if(!result.rows?.length)continue;
       const candidates=result.rows.map(row=>({
@@ -3604,22 +3657,23 @@
       const open=$('#sourceBatch');
       if(open)open.click();else {const tool=$('#newAreaBatchTool');tool.hidden=false;tool.open=true;}
     };
-    window.dispatchEvent(new CustomEvent('map-store-selected',{detail:{customerCode:null}}));
     requestAnimationFrame(positionDetailPopup);
     const verifiedSearch=focus&&temporaryPins.get(row.temporaryKey)?.point===row&&row.coordinateSource!=='MAP_CLICK_TEMPORARY';
-    const neighborhood=verifiedSearch?{point:row,filterKey:periodSelectionCache?.key,trace}:null;
+    const neighborhood=verifiedSearch?{point:row,filterKey:periodSelectionCache?.key,sourceRows:allStores,trace}:null;
     if(neighborhood)searchNeighborhood=neighborhood;
     if(innerWidth<=760)showMobileMap();
-    if(focus)focusMapPoint(row,{zoom:true,key:'search-temporary',nearby:verifiedSearch,onSettled:neighborhood?()=>{
-      if(searchNeighborhood===neighborhood&&dateReady&&state.mode==='BASE_60D'){
-        renderStops(state.currentRows,{viewportOnly:true,fromIdle:!neighborhood.trace});
-      }
-    }:undefined});
     trace?.mark('map');
+    if(focus)focusMapPoint(row,{zoom:true,key:'search-temporary',nearby:verifiedSearch,onSettled:neighborhood?()=>{
+      if(searchNeighborhood!==neighborhood)return;
+      trace?.record('mapSettled');
+      const refreshed=neighborhood.paintedView===searchPinView();
+      if(!refreshed)neighborhood.paintedView=null;
+      if(dateReady&&state.mode==='BASE_60D')renderStops(state.currentRows,{viewportOnly:true,fromIdle:refreshed||!trace});
+    }:undefined});
     if(neighborhood&&dateReady){
       renderStops(state.currentRows,{viewportOnly:true,fromIdle:true});
       if(trace)requestAnimationFrame(()=>{
-        if(searchNeighborhood===neighborhood)recordVisibleSearchPin(row,trace);
+        if(searchNeighborhood===neighborhood&&visibleSearchPin(row))trace.record('visiblePin');
       });
     }
     trace?.mark('detail');
@@ -5189,18 +5243,17 @@
     $("#clearVehicles").onclick = () => applyVehicleFilter([]);
     $$("[data-center]").forEach((button) => { button.onclick = () => { selectCenter(button.dataset.center); $("#vehicleSelect").classList.remove("open"); }; });
     let composing = false;
-    $("#query").oncompositionstart = () => { composing = true; cancelSearchAddressPreparation(); };
-    $("#query").oncompositionend = () => { composing = false; queueSearchAddressPreparation(); };
+    $("#query").oncompositionstart = () => { composing = true; };
+    $("#query").oncompositionend = () => { composing = false; };
     $("#query").oninput = () => {
       if(unifiedResetting)return;
       searchInputAt=performance.now();
       invalidateUnifiedSearch();
       cancelAddressLookup();closeUnifiedSearchResults();setSearchState('');
       if(!$('#query').value.trim())clearUnifiedSearch();
-      else if(!composing)queueSearchAddressPreparation();
     };
     $("#query").onkeydown = (event) => {
-      if(event.key==='Escape'){cancelSearchAddressPreparation();invalidateUnifiedSearch();cancelAddressLookup();closeUnifiedSearchResults();return;}
+      if(event.key==='Escape'){invalidateUnifiedSearch();cancelAddressLookup();closeUnifiedSearchResults();return;}
       if(event.key==='Enter'&&!composing&&!event.isComposing){event.preventDefault();void search();}
     };
     $("#searchBtn").onclick = search;

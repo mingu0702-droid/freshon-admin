@@ -439,21 +439,29 @@
       const g=geometry();if(!g||!force&&g.key===active.geometry)return;
       const owner=active.id;focusFrame=raf(()=>{focusFrame=null;alignFocus(owner);});
     }
-    function alignFocus(owner){
+    function alignFocus(owner,readAfterMove=false){
       if(disposed||!active||active.id!==owner||active.interaction!==interaction)return;
-      const g=geometry(),size=measure(),projection=map.getProjection?.();if(!g||size.w<1||size.h<1||!projection)return;
+      const g=geometry(),size=measure(),projection=map.getProjection?.();if(!g||size.w<1||size.h<1||!projection)return false;
       if(width!==size.w||height!==size.h)resizeMap(size.w,size.h);
       if(active.geometry!==g.key)active.corrections=0;active.geometry=g.key;
       const rect=cameraRect(g.raw.mapRect),sx=rect.width/size.w,sy=rect.height/size.h;
-      const position=projection.containerPointFromCoords(active.point);if(!Number.isFinite(position?.x)||!Number.isFinite(position?.y))return;
+      const position=projection.containerPointFromCoords(active.point);if(!Number.isFinite(position?.x)||!Number.isFinite(position?.y))return false;
       const offset=active.pinOffset||{x:0,y:0};
       const actual={x:position.x+offset.x,y:position.y+offset.y};
       const wanted={x:(g.target.x-rect.left)/sx,y:(g.target.y-rect.top)/sy};
       const error=Math.hypot((actual.x-wanted.x)*sx,(actual.y-wanted.y)*sy);
-      if(error>.5&&active.corrections<3){
+      if(error>(active.immediate?1.5:.5)&&active.corrections<3){
         const next=projection.coordsFromContainerPoint(pixel(size.w/2+actual.x-wanted.x,size.h/2+actual.y-wanted.y));
         active.corrections++;map.setCenter(next);rememberCenter();
         report({state:'adjusting',expectedX:g.target.x,expectedY:g.target.y,actualX:rect.left+actual.x*sx,actualY:rect.top+actual.y*sy,errorPx:error,basis:g.target.basis});
+        // Kakao can update the projection during setCenter. Finish immediately
+        // when it has moved; wait for the SDK frame if the projection is stale.
+        if(readAfterMove){
+          const moved=projection.containerPointFromCoords(active.point);
+          if(Number.isFinite(moved?.x)&&Number.isFinite(moved?.y)&&(moved.x!==position.x||moved.y!==position.y)){
+            return alignFocus(owner);
+          }
+        }
         scheduleFocus(true);return;
       }
       report({state:error<=(active.pinOffset?1.5:30)?'centered':'deviation',expectedX:g.target.x,expectedY:g.target.y,actualX:rect.left+actual.x*sx,actualY:rect.top+actual.y*sy,errorPx:Math.round(error*100)/100,basis:g.target.basis});
@@ -463,10 +471,10 @@
     }
     function focus(point,{key='',reason='selection',pinOffset,onSettled,immediate=false}={}){
       if(disposed||!validPoint(point))return false;
-      releaseFocus();active={point,key,reason,pinOffset,onSettled,id:++sequence,interaction,geometry:null,corrections:0};
+      releaseFocus();active={point,key,reason,pinOffset,onSettled,immediate,id:++sequence,interaction,geometry:null,corrections:0};
       report({state:'pending'});
-      if(immediate)alignFocus(active.id);
-      else scheduleFocus(true);
+      if(!immediate)scheduleFocus(true);
+      else if(alignFocus(active.id,true)===false){releaseFocus();return false;}
       return true;
     }
     function relayout(){

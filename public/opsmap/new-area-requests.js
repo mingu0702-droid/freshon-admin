@@ -46,7 +46,7 @@
     return /^(?:KAKAO_|GEOCODE_(?:DAILY_LIMIT|AUTOMATICALLY_BLOCKED|LEDGER_|DURABLE_|SESSION_|ORIGIN_)|GEOCODING_DISABLED|TARGET_APP_)/.test(error?.code || '');
   }
   function outcome(error) { return error?.code === 'GEOCODE_DAILY_LIMIT' ? 'LIMIT' : ['GEOCODE_AUTOMATICALLY_BLOCKED','NEW_AREA_ROW_TIMEOUT','REQUEST_TIMEOUT','GEOCODER_TIMEOUT'].includes(error?.code)||/^GEOCODER_(?:MULTIPLE_CANDIDATES|RESULT_TRUNCATED|ADDRESS_MISMATCH)$/.test(error?.code||'') ? 'DEFERRED' : 'FAILED'; }
-  function lookup(geocoder, query, { signal, mode, timeout = geocoder?.serverProxy?45000:7000 } = {}) {
+  function lookup(geocoder, query, { signal, mode, onProviderTime, timeout = geocoder?.serverProxy?45000:7000 } = {}) {
     return new Promise((resolve, reject) => {
       let settled = false, timer;
       const finish = (error, rows) => {
@@ -61,6 +61,7 @@
       timer = setTimeout(() => finish(failure('GEOCODER_TIMEOUT')), timeout);
       try {
         geocoder.addressSearch(query, (rows, status, meta) => {
+          if(!settled&&Number.isFinite(meta?.providerMs))onProviderTime?.(meta.providerMs);
           const problem=code=>Object.assign(failure(code),{status:meta?.status??meta?.httpStatus,httpStatus:meta?.httpStatus??meta?.status,providerHttp:Number.isInteger(meta?.providerHttp)?meta.providerHttp:null});
           if (status === 'ZERO_RESULT') {
             if (mode==='official' && meta?.resolution?.kind==='MANUAL') return finish(null,{rows:[],resolution:meta.resolution});
@@ -139,17 +140,25 @@
       clear() { if (storedBatch === scope) storedBatch = null; }
     };
   }
+  const stageAddressVariants = query => /^\d{19}$/.test(query) ? [query] : addressQueries(query,root.Phase2bUi.addressVariants);
+  const stageAddressKey = variants => JSON.stringify(variants.map(addressKey));
+  function readRetainedAddress(key,sessionExpiry) {
+    const saved=retained.get(key);
+    if(saved?.expiresAt>Date.now()&&sessionExpiry&&saved.sessionExpiry===sessionExpiry)return saved.result;
+    if(saved)retained.delete(key);
+  }
+  function cachedStageAddress(query,generation) {
+    if(addressGeneration!==generation||!/^[a-f0-9]{64}$/.test(generation||''))return null;
+    return readRetainedAddress(stageAddressKey(stageAddressVariants(query)),staffSessionExpiry())??null;
+  }
   function stageAddress(query,generation,{signal}={}) {
-    if (root.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com') return Promise.resolve(null);
-    if(signal?.aborted)return Promise.resolve(null);
-    const variants = /^\d{19}$/.test(query) ? [query] : addressQueries(query,root.Phase2bUi.addressVariants);
+    if (root.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com'||signal?.aborted) return Promise.resolve(null);
+    const variants=stageAddressVariants(query);
     if (!variants.length) return Promise.resolve(null);
     if(addressGeneration!==generation){resetStageAddress();addressGeneration=generation;}
-    const key = JSON.stringify(variants.map(addressKey));
-    const sessionExpiry=staffSessionExpiry();
-    const cached=retained.get(key);
-    if(cached?.expiresAt>Date.now()&&sessionExpiry&&cached.sessionExpiry===sessionExpiry)return Promise.resolve(cached.result);
-    if(cached)retained.delete(key);
+    const key=stageAddressKey(variants),sessionExpiry=staffSessionExpiry();
+    const cached=readRetainedAddress(key,sessionExpiry);
+    if(cached)return Promise.resolve(cached);
     let flight=flights.get(key);
     if (!flight) {
       const epoch = addressEpoch;
@@ -167,7 +176,7 @@
         const exact=['STORED','OFFICIAL'].includes(result.status)&&result.point;
         const verifiedMiss=result.status==='ADDRESS_NOT_MATCHED';
         if(generation&&sessionExpiry&&sessionExpiry===staffSessionExpiry()&&(exact||verifiedMiss)){
-          // Briefly share the authoritative miss between input preparation and submit.
+          // Briefly share an authoritative miss across repeated submissions.
           // Geometry from an external provider never enters this cache.
           remember(retained,key,{result,sessionExpiry,expiresAt:Date.now()+(exact?60_000:2_000)});
         }
@@ -205,6 +214,6 @@
   }
   root.addEventListener?.('map-staff-signed-out',()=>{resetStageAddress();temporary.clear();});
   root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, batchAddressQueries, addressFailureHint, stopsExternal, outcome, singleStoredLocation,
-    stageAddress, stageStoredAddressCache, rememberTemporary, forgetTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
+    stageAddress, cachedStageAddress, stageStoredAddressCache, rememberTemporary, forgetTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
 })(typeof window === 'object' ? window : globalThis);
 

@@ -83,11 +83,18 @@
    const key=(mode||'exact')+':'+String(query||'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim(),owner=epoch;
    if(!inflight.has(key)&&!cache.has(key)){
     const task=fetch('/api/map-phase2b/private/address-lookup',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify(mode?{query,mode}:{query})})
-     .then(async response=>{const payload=await response.json().catch(()=>null);if(!response.ok||payload?.ok!==true)throw Object.assign(Error('LOOKUP_FAILED'),{code:/^[A-Z_]+$/.test(payload?.error||'')?payload.error:response.status===401?'GEOCODE_SESSION_EXPIRED':'GEOCODER_FAILED',status:response.status,providerHttp:Number.isInteger(payload?.providerHttp)?payload.providerHttp:null});
-      if(!mode&&owner===epoch&&payload.data.status==='OK'){while(cache.size>=512)cache.delete(cache.keys().next().value);cache.set(key,payload.data);}return payload.data;})
+     .then(async response=>{
+      const duration=response.headers?.get?.('Server-Timing')?.match(/(?:^|,\s*)opsmap-kakao-provider;dur=(\d+(?:\.\d+)?)/)?.[1];
+      const providerMs=duration===undefined?undefined:Number(duration);
+      const payload=await response.json().catch(()=>null);
+      if(!response.ok||payload?.ok!==true)throw Object.assign(Error('LOOKUP_FAILED'),{code:/^[A-Z_]+$/.test(payload?.error||'')?payload.error:response.status===401?'GEOCODE_SESSION_EXPIRED':'GEOCODER_FAILED',status:response.status,providerHttp:Number.isInteger(payload?.providerHttp)?payload.providerHttp:null,providerMs});
+      const data={...payload.data,providerMs};
+      if(!mode&&owner===epoch&&data.status==='OK'){while(cache.size>=512)cache.delete(cache.keys().next().value);cache.set(key,data);}
+      return data;
+     })
      .finally(()=>{if(inflight.get(key)===task)inflight.delete(key);});inflight.set(key,task);
    }
-   Promise.resolve(cache.get(key)||inflight.get(key)).then(data=>{if(signal?.aborted||owner!==epoch)return;callback(data.documents,data.status,{status:200,httpStatus:200,providerHttp:data.providerHttp,resolution:data.resolution});})
+   Promise.resolve(cache.get(key)||inflight.get(key)).then(data=>{if(signal?.aborted||owner!==epoch)return;callback(data.documents,data.status,{status:200,httpStatus:200,providerHttp:data.providerHttp,providerMs:data.providerMs,resolution:data.resolution});})
     .catch(error=>{if(signal?.aborted||owner!==epoch)return;
      const code=error.code||'GEOCODER_FAILED';
      if(code==='OFFICIAL_ADDRESS_LOOKUP_DISABLED')root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowIndependentAddressLookup:false};
@@ -96,7 +103,7 @@
       if(code==='GEOCODE_DAILY_LIMIT')dailyRetryAt=(Math.floor((Date.now()+32400000)/86400000)+1)*86400000-32400000;
       root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false,allowExternalPlaceLookup:false,addressLookupReason:code};
      }
-     callback([],/^GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED)$/.test(code)?code:'ERROR',{code,status:error.status,httpStatus:error.status||null,providerHttp:Number.isInteger(error.providerHttp)?error.providerHttp:null});});
+     callback([],/^GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED)$/.test(code)?code:'ERROR',{code,status:error.status,httpStatus:error.status||null,providerMs:error.providerMs,providerHttp:Number.isInteger(error.providerHttp)?error.providerHttp:null});});
   }};return proxy;
  }
  root.KakaoMapsAdapter=Object.freeze({ready,reset,geocoder,refreshAddressLookup});

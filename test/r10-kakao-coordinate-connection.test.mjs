@@ -120,7 +120,16 @@ test('staff and same-origin are enforced before reservation, and expired session
  const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));}),origin='http://127.0.0.1:'+server.address().port;
  mountKakaoCoordinateConnection({app,requireStaff,isSessionCurrent:(_q,key)=>current&&key==='SYNTHETIC',service:f.service,jsonBody:express.json(),origin});
  const url=origin+'/api/map-phase2b/private/address-lookup-diagnostic',options={method:'POST',headers:{'content-type':'application/json','x-synthetic-staff':'1',origin},body:JSON.stringify({query:KAKAO_DIAGNOSTIC_ADDRESS})};
- try{assert.equal((await fetch(url,{...options,headers:{'content-type':'application/json',origin}})).status,401);assert.equal((await fetch(url,{...options,headers:{...options.headers,origin:'https://wrong.invalid'}})).status,403);current=false;assert.equal((await fetch(url,options)).status,401);assert.equal(f.calls.length,0);}
+ try{assert.equal((await fetch(url,{...options,headers:{'content-type':'application/json',origin}})).status,401);assert.equal((await fetch(url,{...options,headers:{...options.headers,origin:'https://wrong.invalid'}})).status,403);current=false;assert.equal((await fetch(url,options)).status,401);assert.equal(f.calls.length,0);
+  current=true;
+  const response=await fetch(url,options);
+  assert.equal(response.status,200);
+  assert.match(response.headers.get('server-timing')||'',/^opsmap-kakao-provider;dur=\d+$/);
+  const payload=await response.json();
+  assert.equal(payload.data.retention,'REQUEST_ONLY');
+  assert.equal(payload.data.coordinatePersistence,false);
+  assert.equal('providerDurationMs' in payload,false);
+ }
  finally{await new Promise(r=>server.close(r));}
 });
 

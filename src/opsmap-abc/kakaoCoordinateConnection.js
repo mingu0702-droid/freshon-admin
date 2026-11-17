@@ -111,7 +111,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
     if(diagnostic)state.diagnosticUsed=true;
     await commit(state);
    });
-   let stage='PROVIDER_REQUEST',providerHttp=null;const started=now();
+   let stage='PROVIDER_REQUEST',providerHttp=null,providerStarted=null,providerDurationMs=null;const started=now();
    try{
     await assertCurrent();
     const url=new URL(place?'https://dapi.kakao.com/v2/local/search/keyword.json':'https://dapi.kakao.com/v2/local/search/address.json');
@@ -122,13 +122,16 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
      await assertCurrent();
      if(blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
      if(now()<cooldownUntil)fail('GEOCODE_RETRY_COOLDOWN');
+     providerStarted=performance.now();
      return fetchImpl(url,{method:'GET',headers:{Authorization:'KakaoAK '+String(env.KAKAO_REST_API_KEY).trim()},signal:AbortSignal.timeout(6000),redirect:'error',cache:'no-store'});
     });
     providerHttp=response.status;stage='PROVIDER_HEADERS';
     if(!response.ok)fail('KAKAO_HTTP_REJECTED',502);
     const appHeader=['x-kakao-app-id','x-kakao-appid'].map(name=>response.headers?.get?.(name)).find(value=>value!=null);
     if(appHeader!==undefined&&appHeader!==KAKAO_EXPECTED_APP_ID)fail('KAKAO_RESPONSE_APP_MISMATCH',502);
-    stage='PROVIDER_BODY';let body;try{body=await response.json();}catch{fail('KAKAO_JSON_INVALID',502);}
+    stage='PROVIDER_BODY';let body;
+    try{body=await response.json();}catch{fail('KAKAO_JSON_INVALID',502);}
+    providerDurationMs=Math.round(performance.now()-providerStarted);
     stage='CONTRACT';if(!Array.isArray(body?.documents)||typeof body.meta?.is_end!=='boolean')fail('KAKAO_RESPONSE_INVALID',502);
     const {point,resolution}=place?{point:null,resolution:{kind:body.meta.is_end?'KEYWORD':'TRUNCATED',candidateCount:body.documents.length}}:classifyCoordinateLookup(body,address);
     const documents=mode==='exact'?(point?[{address_name:address,x:String(point.lng),y:String(point.lat)}]:[]):interactiveDocuments(body,mode);
@@ -137,10 +140,11 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
     stage='LEDGER_COMPLETION';if(diagnostic)await transaction(async(state,commit)=>{state.diagnosticPassed=true;await commit(state);});
     stage='SESSION_RECHECK';
     await assertCurrent();
-    return {ok:true,data:{documents,status:documents.length?'OK':'ZERO_RESULT',exact:!!point,
+    return {ok:true,providerDurationMs,data:{documents,status:documents.length?'OK':'ZERO_RESULT',exact:!!point,
      diagnostic,providerHttp:200,responseAppId:appHeader||null,resolution,retention:'REQUEST_ONLY',coordinatePersistence:false}};
    }catch(error){
     if(['GEOCODE_SESSION_EXPIRED','GEOCODE_RETRY_COOLDOWN','GEOCODE_AUTOMATICALLY_BLOCKED'].includes(error?.code))throw error;
+    if(providerDurationMs===null&&providerStarted!==null)providerDurationMs=Math.round(performance.now()-providerStarted);
     const transportCode=['UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_SOCKET','ENOTFOUND','EAI_AGAIN','ETIMEDOUT','ECONNREFUSED','ECONNRESET','CERT_HAS_EXPIRED','UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(error?.cause?.code)?error.cause.code:null;
     const code=/^KAKAO_[A-Z_]+$/.test(error?.code||'')?error.code:stage==='LEDGER_COMPLETION'?'KAKAO_LEDGER_COMPLETION_FAILED':['TimeoutError','AbortError'].includes(error?.name)?'KAKAO_TIMEOUT':stage==='PROVIDER_REQUEST'?'KAKAO_NETWORK_FAILED':'KAKAO_LOOKUP_FAILED';
     const lastAttempt={stage,code,providerHttp:Number.isInteger(providerHttp)?providerHttp:null,transportCode,elapsedMs:Math.max(0,now()-started)};
@@ -149,7 +153,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
     const transient=['KAKAO_TIMEOUT','KAKAO_NETWORK_FAILED'].includes(code)||Number.isInteger(providerHttp)&&providerHttp>=500;
     if(transient)cooldownUntil=now()+30000;else blocked=true;
     try{await transaction(async(state,commit)=>{if(!transient)state.blocked=true;state.lastAttempt=lastAttempt;await commit(state);});}catch{blocked=true;}
-    throw Object.assign(Error(code),{code,status:502,providerHttp:lastAttempt.providerHttp});
+    throw Object.assign(Error(code),{code,status:502,providerHttp:lastAttempt.providerHttp,providerDurationMs});
    }
   })();pending.set(key,task);try{return await task;}finally{pending.delete(key);}
  };
@@ -179,8 +183,15 @@ export function mountKakaoCoordinateConnection({app,requireStaff,isSessionCurren
       fields.includes('mode')&&!['address','place','official'].includes(req.body.mode))fail('GEOCODE_QUERY_INVALID',400);
    const sessionKey=res.locals.staffSession?.key;
    const assertCurrent=async()=>{if(isSessionCurrent&&!await isSessionCurrent(req,sessionKey))fail('GEOCODE_SESSION_EXPIRED',401);};
-   const value=await service.lookup(req.body.query,{diagnostic,mode:req.body.mode,assertCurrent});return requireStaff(req,res,()=>res.json(value));
-  }catch(error){return requireStaff(req,res,()=>res.status(error.status||503).json({ok:false,error:/^[A-Z_]+$/.test(error.code||'')?error.code:'GEOCODE_FAILED',providerHttp:Number.isInteger(error.providerHttp)?error.providerHttp:null}));}
+   const {providerDurationMs,...payload}=await service.lookup(req.body.query,{diagnostic,mode:req.body.mode,assertCurrent});
+   return requireStaff(req,res,()=>{
+    if(Number.isFinite(providerDurationMs))res.set('Server-Timing','opsmap-kakao-provider;dur='+providerDurationMs);
+    return res.json(payload);
+   });
+  }catch(error){return requireStaff(req,res,()=>{
+   if(Number.isFinite(error.providerDurationMs))res.set('Server-Timing','opsmap-kakao-provider;dur='+error.providerDurationMs);
+   return res.status(error.status||503).json({ok:false,error:/^[A-Z_]+$/.test(error.code||'')?error.code:'GEOCODE_FAILED',providerHttp:Number.isInteger(error.providerHttp)?error.providerHttp:null});
+  });}
  };
  app.post('/api/map-phase2b/private/address-lookup',requireStaff,jsonBody,respond(false));
  app.post('/api/map-phase2b/private/address-lookup-diagnostic',requireStaff,jsonBody,respond(true));

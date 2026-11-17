@@ -24,7 +24,7 @@ function declaration(name){
 // Pick only A-owned declarations: B's interleaved temporary-pin functions remain
 // interface stubs here and are exercised by the independent full-browser QA.
 const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','getSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','fixedVehicleFor','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
- 'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','cancelSearchAddressPreparation','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
+ 'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
  'renderResults','unifiedAddressQuery','completeAddressRegion','stageAddressHashMatches','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
  const nodes=new Map(),selected=[],fallback=[],queries=[],requests=new Map();let resets=0,tempClears=0;
@@ -34,7 +34,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
-  searchIndex:null,searchFlight:null,searchAddressPreparation:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,
+  searchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,
   stageRegistrationOnly:()=>false,stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{...globalThis.NewAreaRequests,stageAddress,temporaryPoint:()=>null,message:error=>error.code},Phase2bUi:globalThis.Phase2bUi,MapPeriodUi:globalThis.MapPeriodUi,
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
@@ -69,7 +69,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
   window:{KakaoMapsAdapter:{ready:async()=>{}},MapViewPolicy:{createCamera:()=>({userGesture(){gestures++;}})},dispatchEvent(){}},
   kakao:{maps:{Map:class {},LatLng:class {},event:{addListener:(_map,name,callback)=>events.set(name,callback)}}},
   $:()=>mapElement,performance:{mark(){}},CustomEvent:class {},loadBaseMap(){},positionTemporaryDistanceLabel(){},clearSelection(){clears++;},
-  scheduleNewAreaDispatchBadges:()=>badgeLayouts.push(true),
+  auditMapFrames(){},scheduleNewAreaDispatchBadges:()=>badgeLayouts.push(true),
   setMapMessage:message=>assert.fail(message),
   requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},
   cancelAnimationFrame:id=>frames.delete(id),
@@ -118,6 +118,27 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
  assert.equal(clears,0);
 });
 
+test('an already visible official result can be reused only while its verified scene still matches',()=>{
+ const point=store('','합성 주소','서울 종로구 합성로 71',{coordinateSource:'OFFICIAL_PUBLIC_BUILDING'});
+ const allStores=[point],expected=new Map();
+ const scope={state:{virtual:point},dateReady:true,mapMoving:false,allStores,temporaryDetailPoint:point,
+  searchNeighborhood:{point,sourceRows:allStores,paintedView:'same viewport',paintedCount:2,filterKey:'ALL'},
+  periodSelectionCache:{key:'ALL'},mapCamera:{focusState:()=>({state:'centered'})},
+  NewAreaRequests:{cachedStageAddress:()=>({status:'OFFICIAL',point})},snapshotMeta:{sourceGeneration:'a'.repeat(64)},
+  searchPinView:()=> 'same viewport',visibleSearchPin:()=>true,invalidateUnifiedSearch(){},cancelAddressLookup(){},closeUnifiedSearchResults(){},setSearchState(){}
+ };
+ const reuse=vm.runInNewContext(declaration('reuseVisibleOfficialSearch')+'\nreuseVisibleOfficialSearch',scope);
+ const trace={count:(key,value)=>expected.set(key,value),record:key=>expected.set(key,true),finish:key=>expected.set('kind',key)};
+ assert.equal(reuse(point.address,trace),true);
+ assert.equal(expected.get('nearbyShown'),2);
+ assert.equal(expected.get('visiblePin'),true);
+ scope.searchPinView=()=> 'changed viewport';
+ assert.equal(reuse(point.address,trace),false);
+ scope.searchPinView=()=> 'same viewport';
+ scope.NewAreaRequests.cachedStageAddress=()=>null;
+ assert.equal(reuse(point.address,trace),false);
+});
+
 test('search address normalization preserves building numbers and province aliases',()=>{
  const {context:c}=fixture();
  assert.equal(c.normalizeSearchAddress('서울특별시 강남구 합성로 14 (합성동)'),c.normalizeSearchAddress('서울 강남구 합성로14'));
@@ -164,6 +185,26 @@ test('local names and preserved addresses avoid the live Customer reader',async(
  await f.context.searchPeriod('서울 합성구 보호로 5');
  assert.deepEqual(f.selected.map(result=>result.customerCode),[row.customerCode,row.customerCode]);
  assert.equal(f.queries.length,0);
+});
+
+test('a cold submitted address starts protected lookup and still prefers the local registered match',async()=>{
+ const row=store('S990209','합성 등록 매장','서울 종로구 합성로 71');
+ let calls=0,requestSignal;
+ const f=fixture({rows:[row],stageAddress:(_query,_generation,{signal})=>{
+   calls++; requestSignal=signal;
+   return new Promise(resolve=>signal.addEventListener('abort',()=>resolve(null),{once:true}));
+ }});
+ f.context.snapshotMeta={sourceGeneration:'a'.repeat(64)};
+ f.context.customerRegistry={currentVersion:()=> 'registry-v1'};
+ f.context.stageRegistrationOnly=()=>true;
+ f.context.generalRegistryRows.set(row.customerCode,row);
+ await f.context.searchPeriod(row.address);
+ assert.equal(calls,1);
+ assert.equal(requestSignal.aborted,true);
+ assert.equal(f.selected[0]?.customerCode,row.customerCode);
+ assert.equal(f.fallback.length,0);
+ await f.context.searchPeriod(row.address);
+ assert.equal(calls,1,'the loaded local index needs no protected request');
 });
 
 test('a sealed Stage address uses the generation-bound index without rebuilding the name index',async()=>{

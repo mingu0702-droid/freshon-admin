@@ -81,8 +81,12 @@ test('only the active focus reports settlement for the nearby marker refresh',()
 
 test('immediate address focus moves the map before the next animation frame',()=>{
  const f=cameraFixture();
+ f.camera.relayout();
+ const prior=f.counts.moves;
  assert.equal(f.camera.focus({lat:37.5,lng:127.1},{immediate:true}),true);
- assert(f.counts.moves>0);
- f.flush();
+ assert.equal(f.counts.moves,prior+1);
  assert.equal(f.camera.focusState().state,'centered');
+ f.flush();
+ assert.equal(f.camera.focus({lat:37.5,lng:127.1},{immediate:true}),true);
+ assert.equal(f.counts.moves,prior+1,'the same address does not move the already centered map');
 });
