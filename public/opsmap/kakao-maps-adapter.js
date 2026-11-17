@@ -104,6 +104,10 @@
       }else payload=await response.json().catch(()=>null);
       const timing={providerMs:Number(serverTimings.get('opsmap-kakao-provider')),
        ledgerMs:Number(serverTimings.get('geocodeLedger')),staffMs:Number(serverTimings.get('session')),
+       ledgerQueueMs:Number(serverTimings.get('geocodeLedgerQueue')),ledgerReadMs:Number(serverTimings.get('geocodeLedgerRead')),
+       ledgerWriteMs:Number(serverTimings.get('geocodeLedgerWrite')),providerQueueMs:Number(serverTimings.get('geocodeProviderQueue')),
+       providerHeadersMs:Number(serverTimings.get('geocodeProviderHeaders')),providerBodyMs:Number(serverTimings.get('geocodeProviderBody')),
+       providerServerMs:Number(serverTimings.get('total')),
        clientParseMs,githubReads:github?Number(github[1]):NaN,githubWrites:github?Number(github[2]):NaN};
       if(!response.ok||payload?.ok!==true)throw Object.assign(Error('LOOKUP_FAILED'),{code:/^[A-Z_]+$/.test(payload?.error||'')?payload.error:response.status===401?'GEOCODE_SESSION_EXPIRED':'GEOCODER_FAILED',status:response.status,providerHttp:Number.isInteger(payload?.providerHttp)?payload.providerHttp:null,timing});
       const data={...payload.data,timing};

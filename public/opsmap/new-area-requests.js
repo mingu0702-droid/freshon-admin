@@ -188,6 +188,10 @@
           protectedSessionMs:Number(timing.get('session')),
           providerUpstreamMs:Number(timing.get('opsmap-kakao-provider')),
           ledgerReservationMs:Number(timing.get('geocodeLedger')),
+          ledgerQueueMs:Number(timing.get('geocodeLedgerQueue')),ledgerReadMs:Number(timing.get('geocodeLedgerRead')),
+          ledgerWriteMs:Number(timing.get('geocodeLedgerWrite')),providerQueueMs:Number(timing.get('geocodeProviderQueue')),
+          providerHeadersMs:Number(timing.get('geocodeProviderHeaders')),providerBodyMs:Number(timing.get('geocodeProviderBody')),
+          evidenceServerMs:Number(timing.get('total')),
           clientParseMs:parseMs, githubReads:github?Number(github[1]):NaN, githubWrites:github?Number(github[2]):NaN
         };
         if(epoch!==addressEpoch)return null;

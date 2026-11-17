@@ -65,7 +65,7 @@
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();
     indexedRows=null;pointIndex=null;baseVehicleStatus='LOADING';baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
     customerRegistrySource='';customerRegistryCheckedAt='';customerRegistrySourceCheckedAt='';
-    searchIndex=searchFlight=stageAddressHashIndex=newAreaObservedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
+    searchIndex=pendingSearchIndex=searchFlight=stageAddressHashIndex=newAreaObservedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
     SOURCE={vehicles:[]};state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
     clearSelection();clearMap();updateOperationMetrics(null);renderPeriodStoreList([]);resetRoadRoute();clearNewAreaBatch();renderManualDraft();
     for(const selector of ['#results','#runList','#addressJudgeResults','#periodDriver','#vehicleList','#navSuggestions','#operationsPanel'])$(selector)?.replaceChildren();
@@ -216,7 +216,7 @@
   const driverByVehicle = new Map();
   const requestControllers = new Map();
   let unifiedSearchController = null, unifiedSelectionActive = false, unifiedResetting = false;
-  let searchIndex, searchFlight, stageAddressHashIndex, searchInputAt, searchSequence = 0;
+  let searchIndex, pendingSearchIndex, searchFlight, stageAddressHashIndex, searchInputAt, searchSequence = 0;
   const memoryResponses = new Map();
   let latestSnapshotRows = [];
   let generalRegistryRows = new Map();
@@ -279,6 +279,7 @@
   function scheduleMapAddressWork({advance=false}={}){
     if(!state.map||!dateReady||document.hidden||document.body.dataset.mapStaffState!=='authenticated')return;
     void window.KakaoMapsAdapter?.refreshAddressLookup?.();
+    prepareStageSearchIndex();
     const rows=state.selected?[state.selected,...state.currentRows]:state.currentRows;
     scheduleVisibleAddressRows(rows,{advance});
   }
@@ -2993,42 +2994,91 @@
     };
   }
 
-  function getSearchIndex() {
-    const registryVersion=customerRegistry?.currentVersion();
-    if (searchIndex?.period!==periodRows || searchIndex?.snapshot!==latestSnapshotRows ||
-        searchIndex?.registryVersion!==registryVersion) {
-      const records = new Map(), byAddress = new Map(), normalizedAddresses = new Map();
-      const addressKey = value => {
-        if(!value)return '';
-        if(!normalizedAddresses.has(value))normalizedAddresses.set(value,normalizeSearchAddress(value));
-        return normalizedAddresses.get(value);
-      };
-      const currentRows=stageRegistrationOnly()?generalRegistryRows.values():newAreaRegistryRows();
-      const sources=stageAddressBatchEnabled()&&snapshotMeta?.sourceGeneration?[currentRows]:[currentRows,allStores,periodRows];
-      for (const source of sources) for (const value of source) {
-        const code=String(value.customerCode||value.code||value.id||'').trim();
-        if(!/^[A-Z]\d{3,}$/.test(code))continue;
-        const addresses=storeSearchAddresses(value);
-        const primaryAddress=addressKey(addresses[0]);
-        let entry=records.get(code);
-        if(!entry){
-          const row=value.customerCode===code?value:{...value,customerCode:code};
-          entry={row,code:code.toLowerCase(),name:normalizeSearchText(row.customerName).replace(/\s/g,''),primaryAddress,addresses:[]};
-          records.set(code,entry);
-        }else if(entry.primaryAddress&&entry.primaryAddress!==primaryAddress){
-          continue;
-        }
-        for(const address of addresses){
-          const key=addressKey(address);
-          if(!key||entry.addresses.includes(key))continue;
-          entry.addresses.push(key);
-          if(!byAddress.has(key))byAddress.set(key,new Set());
-          byAddress.get(key).add(code);
-        }
+  function searchIndexCurrent(index) {
+    return index?.period===periodRows&&index.snapshot===latestSnapshotRows&&
+      index.registryVersion===customerRegistry?.currentVersion()&&index.generation===snapshotMeta?.sourceGeneration&&
+      index.registration===(stageRegistrationOnly()?generalRegistryRows:null);
+  }
+
+  function* buildSearchIndex(identity) {
+    const records=new Map(), byAddress=new Map(), normalizedAddresses=new Map();
+    const addressKey=value=>{
+      if(!value)return '';
+      if(!normalizedAddresses.has(value))normalizedAddresses.set(value,normalizeSearchAddress(value));
+      return normalizedAddresses.get(value);
+    };
+    const currentRows=identity.registration?.values()??newAreaRegistryRows();
+    const sources=stageAddressBatchEnabled()&&snapshotMeta?.sourceGeneration?[currentRows]:[currentRows,allStores,periodRows];
+    let rowsProcessed=0;
+    for(const source of sources)for(const value of source){
+      if(++rowsProcessed%64===0)yield;
+      const code=String(value.customerCode||value.code||value.id||'').trim();
+      if(!/^[A-Z]\d{3,}$/.test(code))continue;
+      const addresses=storeSearchAddresses(value);
+      const primaryAddress=addressKey(addresses[0]);
+      let entry=records.get(code);
+      if(!entry){
+        const row=value.customerCode===code?value:{...value,customerCode:code};
+        entry={row,code:code.toLowerCase(),name:normalizeSearchText(row.customerName).replace(/\s/g,''),primaryAddress,addresses:[]};
+        records.set(code,entry);
+      }else if(entry.primaryAddress&&entry.primaryAddress!==primaryAddress)continue;
+      for(const address of addresses){
+        const key=addressKey(address);
+        if(!key||entry.addresses.includes(key))continue;
+        entry.addresses.push(key);
+        if(!byAddress.has(key))byAddress.set(key,new Set());
+        byAddress.get(key).add(code);
       }
-      searchIndex={period:periodRows,snapshot:latestSnapshotRows,registryVersion,records,byAddress};
     }
+    return {...identity,records,byAddress};
+  }
+
+  function searchIndexWork() {
+    if(searchIndexCurrent(pendingSearchIndex))return pendingSearchIndex;
+    const identity={period:periodRows,snapshot:latestSnapshotRows,registryVersion:customerRegistry?.currentVersion(),
+      generation:snapshotMeta?.sourceGeneration,registration:stageRegistrationOnly()?generalRegistryRows:null};
+    return pendingSearchIndex={...identity,iterator:buildSearchIndex(identity),scheduled:false};
+  }
+
+  function advanceSearchIndex(work,until=Infinity) {
+    do{
+      const next=work.iterator.next();
+      if(next.done){
+        searchIndex=next.value;
+        pendingSearchIndex=null;
+        return;
+      }
+    }while(performance.now()<until);
+  }
+
+  function getSearchIndex() {
+    if(!searchIndexCurrent(searchIndex))advanceSearchIndex(searchIndexWork());
     return searchIndex;
+  }
+
+  function prepareStageSearchIndex() {
+    if(!stageAddressBatchEnabled()||!stageRegistrationOnly()||!window.requestIdleCallback||
+       document.body.dataset.mapStaffState!=='authenticated'||searchIndexCurrent(searchIndex))return;
+    const work=searchIndexWork();
+    if(work.scheduled)return;
+    work.scheduled=true;
+    const schedule=()=>window.requestIdleCallback(run,{timeout:250});
+    const run=deadline=>{
+      if(pendingSearchIndex!==work)return;
+      if(document.body.dataset.mapStaffState!=='authenticated'||!searchIndexCurrent(work)){
+        pendingSearchIndex=null;
+        return;
+      }
+      if(document.hidden||state.mode!=='BASE_60D'){
+        work.scheduled=false;
+        return;
+      }
+      if(!mapMoving&&(deadline.didTimeout||deadline.timeRemaining()>1)){
+        advanceSearchIndex(work,performance.now()+Math.min(5,Math.max(1,deadline.timeRemaining())));
+      }
+      if(pendingSearchIndex===work)schedule();
+    };
+    schedule();
   }
 
   function currentSearchStore(code,fallback) {
@@ -3202,7 +3252,7 @@
     if(code)return [currentSearchStore(code)].filter(Boolean);
     if(!address)return rankSearchRows(query);
     const rows=latestSnapshotRows, registryVersion=customerRegistry?.currentVersion();
-    if(searchIndex?.snapshot===rows&&searchIndex?.registryVersion===registryVersion||!stageAddressBatchEnabled()||registryVersion){
+    if(searchIndexCurrent(searchIndex)||!stageAddressBatchEnabled()||registryVersion){
       const {byAddress,records}=getSearchIndex();
       const keys=[query,...NewAreaRequests.addressQueries(query,Phase2bUi.addressVariants)].map(normalizeSearchAddress);
       const matches=[...new Set(keys.flatMap(key=>[...(byAddress.get(key)||[])]))].map(code=>records.get(code)?.row).filter(Boolean);
@@ -3227,11 +3277,12 @@
     const text=$('#query').value.normalize('NFKC').trim();
     if(!text){clearUnifiedSearch();return;}
     if(state.mode!=='BASE_60D')return;
-    if(searchFlight?.text===text)return searchFlight.task;
+    const key=text.replace(/\s+/g,' ');
+    if(searchFlight?.key===key)return searchFlight.task;
     const trace=startSearchTrace();
     if(temporaryPins.size&&reuseVisibleAddressSearch(text,trace))return;
     const task=searchPeriod(text,trace).finally(()=>{if(searchFlight?.task===task)searchFlight=null;});
-    searchFlight={text,task};
+    searchFlight={key,task};
     return task;
   }
 
@@ -3421,7 +3472,8 @@
     const registryVersion=customerRegistry?.currentVersion();
     // For the first submitted full address, overlap the protected lookup with
     // local indexing. Any locally verified customer still takes precedence.
-    const coldIndex=registryVersion&&(searchIndex?.snapshot!==latestSnapshotRows||searchIndex?.registryVersion!==registryVersion);
+    const coldIndex=registryVersion&&!searchIndexCurrent(searchIndex);
+    trace.count('localIndexReady',Boolean(registryVersion&&!coldIndex));
     const evidenceFlight=stageLookup&&initialGeneration&&!snapshotRetryAfter&&coldIndex&&completeAddressRegion(lookupText)
       ?resolveEvidence(initialGeneration,canCombine?'prepare':undefined):null;
     const local=await findStoredSearchRows(text,{signal,address});
@@ -3630,7 +3682,9 @@
     if(!queries.length)return null;
     const timings={};
     const timingNames={providerMs:'providerUpstreamMs',ledgerMs:'ledgerReservationMs',staffMs:'protectedSessionMs',
-      clientParseMs:'clientParseMs',githubReads:'githubReads',githubWrites:'githubWrites'};
+      clientParseMs:'clientParseMs',githubReads:'githubReads',githubWrites:'githubWrites',
+      ledgerQueueMs:'ledgerQueueMs',ledgerReadMs:'ledgerReadMs',ledgerWriteMs:'ledgerWriteMs',
+      providerQueueMs:'providerQueueMs',providerHeadersMs:'providerHeadersMs',providerBodyMs:'providerBodyMs',providerServerMs:'providerServerMs'};
     const onTiming=meta=>{
       for(const [key,name] of Object.entries(timingNames)){
         if(!Number.isFinite(meta[key]))continue;

@@ -485,6 +485,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
             externalResult=await externalAddressLookup.lookup(rows[0][0],{mode:'address',assertCurrent});
             data[0].external=externalResult.data;
             addStaffTiming(res,'geocodeLedger',externalResult.ledgerReservationMs);
+            for(const [phase,ms] of Object.entries(externalResult.serverTimings||{}))addStaffTiming(res,phase,ms);
             if(Number.isFinite(externalResult.providerDurationMs))baseTiming['opsmap-kakao-provider']=externalResult.providerDurationMs;
             const github=externalResult.githubRequests;
             if(github?.writes)res.set('X-Opsmap-Geocode-Github',github.reads+','+github.writes);

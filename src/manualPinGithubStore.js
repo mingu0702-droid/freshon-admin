@@ -8,7 +8,15 @@ const geocodeLedger=Symbol('stage-geocode-ledger');
 const geocodeReadLeaseMs=5000;
 export function createStageGeocodeBudgetStore(options){
  const store=createManualPinGithubStore({...options,[geocodeLedger]:true});let tail=Promise.resolve();
- return {...store,durable:true,transaction(work,options){const result=tail.then(()=>store.transaction(work,options));tail=result.catch(()=>{});return result;}};
+ return {...store,durable:true,transaction(work,options){
+  const queued=performance.now();
+  const result=tail.then(()=>{
+   options?.onTiming?.('geocodeLedgerQueue',performance.now()-queued);
+   return store.transaction(work,options);
+  });
+  tail=result.catch(()=>{});
+  return result;
+ }};
 }
 export function createManualPinGithubStore({repo,token,branch,productionBranch='main',fetchImpl=fetch,clock=()=>performance.now(),[geocodeLedger]:geocode=false}={}){
  if(!/^[-\w.]+\/[-\w.]+$/.test(repo||'')||!token||branch!=='stage/opsmap-manual-pins'||branch===productionBranch)fail('MANUAL_PIN_GITHUB_CONFIG');
@@ -67,12 +75,14 @@ export function createManualPinGithubStore({repo,token,branch,productionBranch='
  // The previous private Git commit is the backup; each new state also carries
  // the complete per-customer audit chain. No second file is written.
  return {kind:'github-stage-cas-v1',backupStore:{async transaction(work){return work(null,async()=>{});}},async transaction(work,options={}){
-  const {reservation=false,onRequest}=options;
+  const {reservation=false,onRequest,onTiming}=options;
   const useCommittedLedger=geocode&&reservation;
-  const old=await read(options),state=structuredClone(old.value);let wrote=false;
+  const started=performance.now(),old=await read(options),state=structuredClone(old.value);let wrote=false;
+  onTiming?.('geocodeLedgerRead',performance.now()-started);
   return work(state,async next=>{if(wrote)fail('MANUAL_PIN_GITHUB_SINGLE_WRITE');wrote=true;const bytes=safeBytes(next);
    // The expected blob SHA rejects stale reservations, including after another instance writes.
    committedLedger=null;
+   const writeStarted=performance.now();
    try{
     if(useCommittedLedger&&clock()>=repositoryUntil)await verifyPrivateWritePermission(false,onRequest);
     const response=await request(api,{method:'PUT',body:JSON.stringify({message:geocode?'Reserve Stage geocode request count':'Update isolated Stage manual pins',branch,sha:old.sha,content:bytes.toString('base64')})},onRequest);
@@ -89,7 +99,7 @@ export function createManualPinGithubStore({repo,token,branch,productionBranch='
    }catch(error){
     repositoryUntil=ledgerUntil=0;
     throw error;
-   }
+   }finally{onTiming?.('geocodeLedgerWrite',performance.now()-writeStarted);}
   });
  }};
 }

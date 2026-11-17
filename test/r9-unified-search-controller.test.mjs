@@ -13,7 +13,7 @@ import '../public/opsmap/map-period-ui.js';
 const publicRoot=process.env.OPSMAP_QA_PUBLIC_ROOT || fileURLToPath(new URL('../public/opsmap/',import.meta.url));
 const source=fs.readFileSync(path.join(publicRoot,'map-phase2b-runtime.js'),'utf8').replaceAll('\r\n','\n');
 function declaration(name){
- const match=new RegExp('^  (?:async )?function '+name+'\\(','m').exec(source);
+ const match=new RegExp('^  (?:async )?function\\*? '+name+'\\(','m').exec(source);
  assert(match,'required controller function: '+name);
  const start=match.index,lineEnd=source.indexOf('\n',start);
  if(source.slice(start,lineEnd).trim().endsWith('}'))return source.slice(start,lineEnd)+'\n';
@@ -23,7 +23,7 @@ function declaration(name){
 }
 // Pick only A-owned declarations: B's interleaved temporary-pin functions remain
 // interface stubs here and are exercised by the independent full-browser QA.
-const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','getSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','fixedVehicleFor','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
+const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','searchIndexCurrent','buildSearchIndex','searchIndexWork','advanceSearchIndex','getSearchIndex','prepareStageSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','fixedVehicleFor','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
  'renderResults','unifiedAddressQuery','completeAddressRegion','stageAddressHashMatches','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
@@ -34,7 +34,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
-  searchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,temporaryPins:new Map(),
+  searchIndex:null,pendingSearchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,temporaryPins:new Map(),
   stageRegistrationOnly:()=>false,stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{...globalThis.NewAreaRequests,stageAddress,temporaryPoint:()=>null,message:error=>error.code},Phase2bUi:globalThis.Phase2bUi,MapPeriodUi:globalThis.MapPeriodUi,
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
@@ -69,7 +69,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
   window:{KakaoMapsAdapter:{ready:async()=>{}},MapViewPolicy:{createCamera:()=>({userGesture(){gestures++;}})},dispatchEvent(){}},
   kakao:{maps:{Map:class {},LatLng:class {},event:{addListener:(_map,name,callback)=>events.set(name,callback)}}},
   $:()=>mapElement,performance:{mark(){}},CustomEvent:class {},loadBaseMap(){},positionTemporaryDistanceLabel(){},clearSelection(){clears++;},
-  auditMapFrames(){},scheduleNewAreaDispatchBadges:()=>badgeLayouts.push(true),
+  auditMapFrames(){},prepareStageSearchIndex(){},scheduleNewAreaDispatchBadges:()=>badgeLayouts.push(true),
   setMapMessage:message=>assert.fail(message),
   requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},
   cancelAnimationFrame:id=>frames.delete(id),
@@ -256,6 +256,36 @@ test('a cold submitted address starts protected lookup and still prefers the loc
  assert.equal(f.fallback.length,0);
  await f.context.searchPeriod(row.address);
  assert.equal(calls,1,'the loaded local index needs no protected request');
+});
+
+test('Stage prepares the address index in idle slices and discards it after the registry changes',async()=>{
+ const row=store('S990251','합성 준비 매장','서울 종로구 합성로 251'), callbacks=[];
+ const f=fixture({rows:[row],stageAddress:async()=>assert.fail('warm stored search must stay local')});
+ const c=f.context;
+ c.snapshotMeta={sourceGeneration:'a'.repeat(64)};
+ c.customerRegistry={currentVersion:()=> 'registry-v1'};
+ c.stageRegistrationOnly=()=>true;
+ c.document={hidden:false,body:{dataset:{mapStaffState:'authenticated'}}};
+ c.mapMoving=true;
+ c.window.requestIdleCallback=callback=>callbacks.push(callback);
+ c.generalRegistryRows.set(row.customerCode,row);
+ c.prepareStageSearchIndex();
+ callbacks.shift()({timeRemaining:()=>20});
+ assert.equal(c.searchIndex,null);
+ assert.equal(callbacks.length,1);
+ c.mapMoving=false;
+ callbacks.shift()({timeRemaining:()=>20});
+ assert.equal(c.searchIndex.records.size,1);
+ await c.searchPeriod(row.address);
+ assert.equal(f.selected[0]?.customerCode,row.customerCode);
+ assert.equal(JSON.parse(f.node('#map').dataset.searchMetrics).localIndexReady,true);
+ c.generalRegistryRows=new Map();
+ assert.equal(c.searchIndexCurrent(c.searchIndex),false);
+ c.prepareStageSearchIndex();
+ c.snapshotMeta={sourceGeneration:'b'.repeat(64)};
+ callbacks.shift()({timeRemaining:()=>20});
+ assert.equal(c.pendingSearchIndex,null);
+ assert.equal(c.getSearchIndex().records.size,0);
 });
 
 test('a sealed Stage address uses the generation-bound index without rebuilding the name index',async()=>{
