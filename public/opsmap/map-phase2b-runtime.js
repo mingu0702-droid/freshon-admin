@@ -2853,11 +2853,11 @@
   }
 
   function normalizeSearchText(value) {
-    return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("ko-KR").replace(/[\s\-_()[\]{}.,/\\]+/g, " ").replace(/\s+/g, " ").trim();
+    return String(value || "").normalize("NFKC").trim().toLowerCase().replace(/[\s\-_()[\]{}.,/\\]+/g, " ").replace(/\s+/g, " ").trim();
   }
 
   function normalizeSearchAddress(value) {
-    return Phase2bUi.addressLookupText(value).toLocaleLowerCase('ko-KR')
+    return Phase2bUi.addressLookupText(value).toLowerCase()
       .replace(/서울특별시|서울시/g,'서울').replace(/부산광역시|부산시/g,'부산')
       .replace(/대구광역시|대구시/g,'대구').replace(/인천광역시|인천시/g,'인천')
       .replace(/광주광역시|광주시/g,'광주').replace(/대전광역시|대전시/g,'대전')
@@ -2898,14 +2898,19 @@
     const registryVersion=customerRegistry?.currentVersion();
     if (searchIndex?.period!==periodRows || searchIndex?.snapshot!==latestSnapshotRows ||
         searchIndex?.registryVersion!==registryVersion) {
-      const records = new Map(), byAddress = new Map();
+      const records = new Map(), byAddress = new Map(), normalizedAddresses = new Map();
+      const addressKey = value => {
+        if(!value)return '';
+        if(!normalizedAddresses.has(value))normalizedAddresses.set(value,normalizeSearchAddress(value));
+        return normalizedAddresses.get(value);
+      };
       const currentRows=stageRegistrationOnly()?generalRegistryRows.values():newAreaRegistryRows();
       const sources=stageAddressBatchEnabled()&&snapshotMeta?.sourceGeneration?[currentRows]:[currentRows,allStores,periodRows];
       for (const source of sources) for (const value of source) {
         const code=String(value.customerCode||value.code||value.id||'').trim();
         if(!/^[A-Z]\d{3,}$/.test(code))continue;
         const addresses=storeSearchAddresses(value);
-        const primaryAddress=normalizeSearchAddress(addresses[0]);
+        const primaryAddress=addressKey(addresses[0]);
         let entry=records.get(code);
         if(!entry){
           const row=value.customerCode===code?value:{...value,customerCode:code};
@@ -2915,14 +2920,11 @@
           continue;
         }
         for(const address of addresses){
-          if(!address)continue;
-          const normalized=normalizeSearchAddress(address);
-          if(!entry.addresses.includes(normalized))entry.addresses.push(normalized);
-          const base=NewAreaRequests.addressQuery(address,Phase2bUi.addressVariants);
-          for(const key of new Set([normalized,normalizeSearchAddress(base)].filter(Boolean))){
-            if(!byAddress.has(key))byAddress.set(key,new Set());
-            byAddress.get(key).add(code);
-          }
+          const key=addressKey(address);
+          if(!key||entry.addresses.includes(key))continue;
+          entry.addresses.push(key);
+          if(!byAddress.has(key))byAddress.set(key,new Set());
+          byAddress.get(key).add(code);
         }
       }
       searchIndex={period:periodRows,snapshot:latestSnapshotRows,registryVersion,records,byAddress};
