@@ -76,6 +76,15 @@
   return task;
  }
  function reset(){script?.remove();script=null;pending=null;failed=false;}
+ function noteAddressFailure(error){
+  const code=error.code||'GEOCODER_FAILED';
+  if(code==='OFFICIAL_ADDRESS_LOOKUP_DISABLED')root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowIndependentAddressLookup:false};
+  if(/^(?:GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED|DURABLE_LEDGER_REQUIRED|LEDGER_INVALID)|GEOCODING_DISABLED|TARGET_APP_FREE_QUOTA_UNVERIFIED)$/.test(code)||[401,403,429].includes(error.providerHttp)){
+   blockedReason=code;
+   if(code==='GEOCODE_DAILY_LIMIT')dailyRetryAt=(Math.floor((Date.now()+32400000)/86400000)+1)*86400000-32400000;
+   root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false,allowExternalPlaceLookup:false,addressLookupReason:code};
+  }
+ }
  function geocoder(){
   const cache=new Map(),inflight=new Map();let epoch=0;
   const clear=()=>{epoch++;cache.clear();inflight.clear();};root.addEventListener?.('map-staff-signed-out',clear);root.addEventListener?.('pagehide',clear,{once:true});
@@ -86,13 +95,16 @@
      .then(async response=>{
       const serverTimings=new Map((response.headers?.get?.('Server-Timing')||'').split(',').map(item=>item.trim().split(';dur=')));
       const github=response.headers?.get?.('X-Opsmap-Geocode-Github')?.match(/^(\d+),(\d+)$/);
-      const body=await response.text().catch(()=>null);
-      const started=performance.now();
-      let payload;
-      try{payload=JSON.parse(body);}catch{payload=null;}
+      let payload,clientParseMs;
+      if(typeof response.text==='function'){
+       const body=await response.text().catch(()=>null);
+       const started=performance.now();
+       try{payload=JSON.parse(body);}catch{payload=null;}
+       clientParseMs=performance.now()-started;
+      }else payload=await response.json().catch(()=>null);
       const timing={providerMs:Number(serverTimings.get('opsmap-kakao-provider')),
        ledgerMs:Number(serverTimings.get('geocodeLedger')),staffMs:Number(serverTimings.get('session')),
-       clientParseMs:performance.now()-started,githubReads:github?Number(github[1]):NaN,githubWrites:github?Number(github[2]):NaN};
+       clientParseMs,githubReads:github?Number(github[1]):NaN,githubWrites:github?Number(github[2]):NaN};
       if(!response.ok||payload?.ok!==true)throw Object.assign(Error('LOOKUP_FAILED'),{code:/^[A-Z_]+$/.test(payload?.error||'')?payload.error:response.status===401?'GEOCODE_SESSION_EXPIRED':'GEOCODER_FAILED',status:response.status,providerHttp:Number.isInteger(payload?.providerHttp)?payload.providerHttp:null,timing});
       const data={...payload.data,timing};
       if(!mode&&owner===epoch&&data.status==='OK'){while(cache.size>=512)cache.delete(cache.keys().next().value);cache.set(key,data);}
@@ -103,15 +115,10 @@
    Promise.resolve(cache.get(key)||inflight.get(key)).then(data=>{if(signal?.aborted||owner!==epoch)return;callback(data.documents,data.status,{status:200,httpStatus:200,providerHttp:data.providerHttp,...data.timing,resolution:data.resolution});})
     .catch(error=>{if(signal?.aborted||owner!==epoch)return;
      const code=error.code||'GEOCODER_FAILED';
-     if(code==='OFFICIAL_ADDRESS_LOOKUP_DISABLED')root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowIndependentAddressLookup:false};
-     if(/^(?:GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED|DURABLE_LEDGER_REQUIRED|LEDGER_INVALID)|GEOCODING_DISABLED|TARGET_APP_FREE_QUOTA_UNVERIFIED)$/.test(code)||error.providerHttp===401||error.providerHttp===403||error.providerHttp===429){
-      blockedReason=code;
-      if(code==='GEOCODE_DAILY_LIMIT')dailyRetryAt=(Math.floor((Date.now()+32400000)/86400000)+1)*86400000-32400000;
-      root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false,allowExternalPlaceLookup:false,addressLookupReason:code};
-     }
+     noteAddressFailure(error);
      callback([],/^GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED)$/.test(code)?code:'ERROR',{code,status:error.status,httpStatus:error.status||null,...error.timing,providerHttp:Number.isInteger(error.providerHttp)?error.providerHttp:null});});
   }};return proxy;
  }
- root.KakaoMapsAdapter=Object.freeze({ready,reset,geocoder,refreshAddressLookup});
+ root.KakaoMapsAdapter=Object.freeze({ready,reset,geocoder,refreshAddressLookup,noteAddressFailure});
 })(typeof window==='object'?window:globalThis);
 

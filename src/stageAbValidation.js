@@ -5,11 +5,12 @@ import path from 'node:path';
 import {gunzip} from 'node:zlib';
 import {promisify} from 'node:util';
 import express from 'express';
-import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
+import {coordinateAddressHash,externalCoordinateAddress} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {createFixedCoordinateResolver, hasFixedCoordinatePoint, readFixedCoordinateLedger} from './fixedStoreCoordinates.js';
 import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
 import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
-import {createOfficialAddressLookup,createOfficialAddressReview} from './opsmapOfficialAddressLookup.js';
+import {createOfficialAddressLookup,createOfficialAddressReview,officialAddressKey} from './opsmapOfficialAddressLookup.js';
+import {addStaffTiming} from './opsmap-abc/staffLatency.js';
 import {createLegacyNearbyVehicleReader, readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
 import {preparePreservedAddressIndex,resolvePreservedAddressBatch,searchPreservedRegistry} from './privateCustomerSearch.js';
 import {archivedOpsmapAssignments} from './opsmapSyncGeneration.js';
@@ -364,7 +365,9 @@ function publicStatus(prepared) {
     expiresAt:Number.isFinite(prepared.expiresAt)?new Date(prepared.expiresAt).toISOString():null} : {active:false};
 }
 
-export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot, readReadySnapshot, readOfficialIndex}) {
+const externalAddressMisses=new Set(['ADDRESS_NOT_MATCHED','OFFICIAL_ADDRESS_UNAVAILABLE','OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_COORDINATE_UNVERIFIED']);
+
+export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot, readReadySnapshot, readOfficialIndex, externalAddressLookup}) {
   const noStore = (_req, res, next) => {res.set('Cache-Control','private, no-store').vary('Cookie'); next();};
   const readVehicleDays=createLegacyNearbyVehicleReader();
   router.get(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (_req, res) => res.json(publicStatus(validation.active())));
@@ -412,12 +415,14 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
     if(!req.is('application/json')) return res.status(415).json({error:'STAGE_BATCH_MEDIA_TYPE'});
     return next();
   },express.json({limit:'96kb'}),async(req,res)=>{
-    const {generation,queries,rows,includeCustomers}=req.body||{};
+    const {generation,queries,rows,includeCustomers,external}=req.body||{};
     const queryOk=query=>typeof query==='string'&&query.length>=2&&query.length<=200&&!/[\x00-\x1f]/.test(query);
     if(rows!==undefined){
       if(queries!==undefined||!(generation===null||typeof generation==='string'&&/^[a-f0-9]{64}$/.test(generation))||
         !Array.isArray(rows)||rows.length<1||rows.length>120||rows.some(row=>!Array.isArray(row)||row.length>2||!row.every(queryOk))||
-        includeCustomers!==undefined&&(includeCustomers!==true||rows.length!==1)) {
+        includeCustomers!==undefined&&(includeCustomers!==true||rows.length!==1)||
+        external!==undefined&&(!['prepare','resolve'].includes(external)||includeCustomers!==true||!generation||
+          rows[0].length!==1||!officialAddressKey(rows[0][0])||!externalCoordinateAddress(rows[0][0]))) {
         return res.status(400).json({error:'STAGE_BATCH_QUERY_INVALID'});
       }
       const started=performance.now();
@@ -448,22 +453,62 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         }
         if(res.destroyed||res.writableEnded)return;
         const matching=performance.now();
-        const data=resolvePreservedAddressBatch(rows,snapshotReady?saved:{rows:[]},official,{includeCustomers}).map(row=>
+        const lookupTimings=includeCustomers?{}:null;
+        const data=resolvePreservedAddressBatch(rows,snapshotReady?saved:{rows:[]},official,{includeCustomers,timings:lookupTimings}).map(row=>
           !snapshotReady&&['CUSTOMER_CODE_NOT_FOUND','ADDRESS_NOT_MATCHED'].includes(row.status)
             ?{status:'STORED_REGISTRY_UNAVAILABLE'}:row);
         const matched=performance.now();
         outcomes=data.reduce((counts,{status})=>({...counts,[status]:(counts[status]||0)+1}),{});
+        const baseTiming={
+          'opsmap-address-read':preparing-started, 'opsmap-address-index':matching-preparing,
+          'opsmap-address-match':matched-matching,
+          ...(lookupTimings?{'opsmap-address-customer':lookupTimings.customer||0, 'opsmap-address-official':lookupTimings.official||0}:{})
+        };
+        const canLookup=external&&externalAddressLookup&&immediate&&externalAddressMisses.has(data[0].status);
+        let externalResult;
+        if(canLookup){
+          const sessionKey=res.locals.staffSession?.key;
+          const assertCurrent=()=>{
+            if(res.destroyed||res.writableEnded)throw Object.assign(Error('STAGE_ADDRESS_CANCELLED'),{code:'STAGE_ADDRESS_CANCELLED',status:499});
+            if(!isSessionCurrent(req,sessionKey))throw Object.assign(Error('GEOCODE_SESSION_EXPIRED'),{code:'GEOCODE_SESSION_EXPIRED',status:401});
+            if(validation.active()!==prepared)throw Object.assign(Error('STAGE_BATCH_GENERATION_CHANGED'),{code:'STAGE_BATCH_GENERATION_CHANGED',status:409});
+          };
+          assertCurrent();
+          if(external==='prepare'){
+            let reads=0;
+            const precheck=performance.now();
+            const record=state=>{
+              if(reads)console.info(JSON.stringify({component:'stage-geocode-precheck',reads,state,ms:Math.round(performance.now()-precheck)}));
+            };
+            void externalAddressLookup.prepareReservation(()=>reads++).then(()=>record('READY'),()=>record('UNAVAILABLE'));
+          }else{
+            externalResult=await externalAddressLookup.lookup(rows[0][0],{mode:'address',assertCurrent});
+            data[0].external=externalResult.data;
+            addStaffTiming(res,'geocodeLedger',externalResult.ledgerReservationMs);
+            if(Number.isFinite(externalResult.providerDurationMs))baseTiming['opsmap-kakao-provider']=externalResult.providerDurationMs;
+            const github=externalResult.githubRequests;
+            if(github?.writes)res.set('X-Opsmap-Geocode-Github',github.reads+','+github.writes);
+          }
+        }
+        const checking=performance.now();
         const respond=()=>{
+          if(res.destroyed||res.writableEnded)return;
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           if(validation.active()!==prepared)return res.status(409).json({error:validation.addressGenerationError(generation,validation.active())||'STAGE_BATCH_GENERATION_CHANGED'});
-          if(immediate&&includeCustomers)res.locals.stageInlineStaffResponse=true;
-          res.set('Server-Timing',`opsmap-address-read;dur=${Math.round(preparing-started)}, opsmap-address-index;dur=${Math.round(matching-preparing)}, opsmap-address-match;dur=${Math.round(matched-matching)}, opsmap-address-recheck;dur=${Math.round(performance.now()-matched)}`);
+          if(immediate&&includeCustomers&&!externalResult)res.locals.stageInlineStaffResponse=true;
+          res.set('Server-Timing',Object.entries({...baseTiming,'opsmap-address-recheck':performance.now()-checking})
+            .map(([key,duration])=>key+';dur='+duration.toFixed(2)).join(', '));
           return res.json({ok:true,generation,data});
         };
-        return immediate&&includeCustomers?respond():requireStaff(req,res,respond);
-      }catch{return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});}
+        return immediate&&includeCustomers&&!externalResult?respond():requireStaff(req,res,respond);
+      }catch(error){
+        if(res.destroyed||res.writableEnded)return;
+        const code=external&&/^[A-Z_]+$/.test(error.code||'')?error.code:'STAGE_BATCH_UNAVAILABLE';
+        const status=[400,401,403,409,429,502,503].includes(error.status)?error.status:503;
+        return res.status(status).json({error:code,...(Number.isInteger(error.providerHttp)?{providerHttp:error.providerHttp}:{})});
+      }
     }
-    if(!/^[a-f0-9]{64}$/.test(generation||'')||!Array.isArray(queries)||queries.length<1||queries.length>120||
+    if(external!==undefined||!/^[a-f0-9]{64}$/.test(generation||'')||!Array.isArray(queries)||queries.length<1||queries.length>120||
       !queries.every(queryOk)) {
       return res.status(400).json({error:'STAGE_BATCH_QUERY_INVALID'});
     }
@@ -477,7 +522,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
       if(validation.active()!==prepared)return res.status(409).json({error:'STAGE_BATCH_GENERATION_CHANGED'});
       const data=queries.map(query=>{
         const match=searchPreservedRegistry(query,saved);
-        // This endpoint has no provider transport. A miss has no live-source meaning.
+        // The legacy query-list contract only returns preserved evidence.
         return {customer:{data:match.data.slice(0,12),meta:{truncated:match.meta.truncated||match.data.length>12}},
           official:match.data.length?null:prepared.bundledAddress?.lookup(query) ?? null};
       });

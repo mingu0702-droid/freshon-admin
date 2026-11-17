@@ -449,7 +449,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
         driverContacts.mount(binding,{readBaseVehicles:codes=>base.get(codes),
           readDatedAssignment:readDatedDelivery.readDriverAssignment,readVerifiedVehicleRegistration});
-        mountStageAbValidation(router,{...binding,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,readBaseVehicles:codes=>base.get(codes)});
+        mountStageAbValidation(router,{...binding,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,
+          readBaseVehicles:codes=>base.get(codes),externalAddressLookup:stageAddressApproved?addressLookupService:null});
         if (dailyMaster) router.get('/api/map-phase2b/private/fixed-master-observation',requireStaff,async(req,res)=>{
           const {date,customerCodes}=req.query;
           const codes=typeof customerCodes==='string'&&customerCodes.length<=8000 ? customerCodes.split(',') : [];

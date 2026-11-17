@@ -3313,21 +3313,23 @@
     };
   }
 
-  async function searchExternalAddress(text,{owner=state.searchRequestId,signal,lookupAllowed=true,lookupError,stageAddressStatus='',customerMatchState='UNCONFIRMED',trace}={}) {
+  async function searchExternalAddress(text,{owner=state.searchRequestId,signal,lookupAllowed=true,lookupError,stageAddressStatus='',customerMatchState='UNCONFIRMED',trace,externalEvidence}={}) {
     if(state.mode!=='BASE_60D'||owner!==state.searchRequestId||signal?.aborted)return;
     cancelAddressLookup();
     if (text.length<2||text.length>200||/^[A-Z]\d+$/i.test(text)) {setSearchState('주소 또는 상호를 정확히 입력하세요.');return;}
     const requestId=state.addressRequestId;
     const active=()=>owner===state.searchRequestId&&requestId===state.addressRequestId&&!signal?.aborted&&state.mode==='BASE_60D';
     const mapReady=state.map?null:initMap();
-    if(!window.KAKAO_MAP_CONFIG)await mapReady;
-    if(!window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup&&!window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup)await window.KakaoMapsAdapter?.refreshAddressLookup?.();
+    if(!externalEvidence){
+      if(!window.KAKAO_MAP_CONFIG)await mapReady;
+      if(!window.KAKAO_MAP_CONFIG?.allowIndependentAddressLookup&&!window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup)await window.KakaoMapsAdapter?.refreshAddressLookup?.();
+    }
     if(!active())return;
     const config=window.KAKAO_MAP_CONFIG;
     const pnu=/^\d{19}$/.test(text);
     const place=!pnu&&!unifiedAddressQuery(text);
     const officialAllowed=!stageAddressStatus&&!place&&!pnu&&config?.allowIndependentAddressLookup===true;
-    const externalAllowed=lookupAllowed&&!pnu&&config?.allowExternalAddressLookup===true&&(!place||config?.allowExternalPlaceLookup===true);
+    const externalAllowed=Boolean(externalEvidence)||lookupAllowed&&!pnu&&config?.allowExternalAddressLookup===true&&(!place||config?.allowExternalPlaceLookup===true);
     const unresolvedReason=stageAddressStatus==='OFFICIAL_COORDINATE_UNVERIFIED'?'공식 주소 확인 · 좌표 미확인':
       stageAddressStatus==='OFFICIAL_ADDRESS_UNAVAILABLE'?'공식 주소 조회 실패':pnu?'공식 필지 위치 미확인':'';
     if(!officialAllowed&&!externalAllowed){
@@ -3339,15 +3341,21 @@
       trace?.finish('unresolved');
       return;
     }
-    setSearchState(place?'상호 위치 확인 중':'주소 확인 중',true);
-    const controller=new AbortController();addressController=controller;
-    const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});
-    if(window.KakaoMapsAdapter?.geocoder)window.kakaoGeocoder ||= window.KakaoMapsAdapter.geocoder();
     let point,error;
-    trace?.mark('externalStart');
-    try {point=await lookupInteractiveLocation(text,controller.signal,{allowExternal:externalAllowed,allowOfficial:officialAllowed,timeout:10000,trace});}
-    catch(failure){error=failure;}
-    finally{trace?.mark('externalEnd');signal?.removeEventListener('abort',abort);if(addressController===controller)addressController=null;}
+    if(externalEvidence){
+      trace?.count('combinedRequest',true);
+      const {documents,resolution}=externalEvidence;
+      point=interactiveProviderPoint({rows:documents,resolution},true);
+    }else{
+      setSearchState(place?'상호 위치 확인 중':'주소 확인 중',true);
+      const controller=new AbortController();addressController=controller;
+      const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});
+      if(window.KakaoMapsAdapter?.geocoder)window.kakaoGeocoder ||= window.KakaoMapsAdapter.geocoder();
+      trace?.mark('externalStart');
+      try {point=await lookupInteractiveLocation(text,controller.signal,{allowExternal:externalAllowed,allowOfficial:officialAllowed,timeout:10000,trace});}
+      catch(failure){error=failure;}
+      finally{trace?.mark('externalEnd');signal?.removeEventListener('abort',abort);if(addressController===controller)addressController=null;}
+    }
     if(point&&!point.candidates&&!point.verifiedAddressOnly)trace?.mark('coordinates');
     if(mapReady)await mapReady;
     if(!active())return;
@@ -3394,11 +3402,18 @@
     };
     const active=()=>!signal.aborted&&owner===state.searchRequestId&&state.mode==='BASE_60D';
     let evidenceError=null,stageAddressStatus='';
-    const resolveEvidence=generation=>{
+    const canCombine=stageLookup&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&
+      completeAddressRegion(lookupText)&&lookupText.length<=200&&
+      NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants).length===1&&!NewAreaRequests.temporaryPoint(text);
+    const resolveEvidence=(generation,external)=>{
       const cached=NewAreaRequests.cachedStageAddress?.(text,generation);
       if(cached){trace.count('cacheHit',true);return Promise.resolve({reply:cached});}
       trace.mark('apiStart');
-      return NewAreaRequests.stageAddress(text,generation,{signal})
+      return NewAreaRequests.stageAddress(text,generation,{signal,external,onTiming:timings=>{
+        for(const [name,value] of Object.entries(timings)){
+          if(Number.isFinite(value))trace.count(name==='protectedSessionMs'&&external!=='resolve'?'addressEvidenceSessionMs':name,Math.round(value*100)/100);
+        }
+      }})
         .then(reply=>({reply}),error=>({error}))
         .finally(()=>trace.mark('apiEnd'));
     };
@@ -3408,7 +3423,7 @@
     // local indexing. Any locally verified customer still takes precedence.
     const coldIndex=registryVersion&&(searchIndex?.snapshot!==latestSnapshotRows||searchIndex?.registryVersion!==registryVersion);
     const evidenceFlight=stageLookup&&initialGeneration&&!snapshotRetryAfter&&coldIndex&&completeAddressRegion(lookupText)
-      ?resolveEvidence(initialGeneration):null;
+      ?resolveEvidence(initialGeneration,canCombine?'prepare':undefined):null;
     const local=await findStoredSearchRows(text,{signal,address});
     if(!active())return;
     trace.mark('matching');
@@ -3425,9 +3440,18 @@
     }
     const generation=snapshotMeta?.sourceGeneration??null;
     if(stageLookup){
-      const {reply,error}=await (evidenceFlight&&generation===initialGeneration?evidenceFlight:resolveEvidence(generation));
+      const readyFlight=generation===initialGeneration?evidenceFlight:null;
+      const combined=!readyFlight&&canCombine&&generation&&!snapshotRetryAfter;
+      const {reply,error}=await (readyFlight||resolveEvidence(generation,combined?'resolve':undefined));
       evidenceError=error;
       if(!active())return;
+      if(error&&combined){
+        window.KakaoMapsAdapter?.noteAddressFailure?.(error);
+        if([401,403,409].includes(error.status))setSearchState(NewAreaRequests.message(error));
+        else waitForSearchMapPoint(text,{owner,customerMatchState:'UNCONFIRMED',reason:NewAreaRequests.message(error)});
+        trace.finish('error');
+        return;
+      }
       const evidence=(snapshotMeta?.sourceGeneration??null)===generation ? reply : null;
       const codes=evidence?.customerCodes||[], stored=currentStageSearchCustomers(codes);
       if(codes.length&&stored.length!==codes.length){setSearchState('매장 주소가 변경되었습니다 · 현재 주소를 확인해 주세요.');trace.finish('unresolved');return;}
@@ -3448,6 +3472,7 @@
         if(generation&&['ADDRESS_NOT_MATCHED','OFFICIAL_ADDRESS_UNAVAILABLE','OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_COORDINATE_UNVERIFIED'].includes(evidence.status)){
           stageAddressStatus=evidence.status;
         }
+        if(evidence.external)return searchExternalAddress(text,{owner,signal,trace,stageAddressStatus,externalEvidence:evidence.external});
       }
       if([401,403,409].includes(evidenceError?.status)){setSearchState(NewAreaRequests.message(evidenceError));trace.finish('error');return;}
     }
@@ -3573,6 +3598,21 @@
     return null;
   }
 
+  function interactiveProviderPoint(result,address) {
+    if(!Array.isArray(result.rows))return null;
+    const candidates=result.rows.map(row=>({
+      lat:Number(row.y),lng:Number(row.x),address:row.road_address?.address_name||row.address_name,
+      placeName:row.place_name,coordinateSource:address?'KAKAO_ADDRESS_TEMPORARY':'KAKAO_PLACE_TEMPORARY'
+    })).filter(newAreaCoordinate);
+    if(!candidates.length)return null;
+    if(address&&candidates.length===1&&result.resolution?.kind==='EXACT'){
+      // An exact result can be reused only by its existing temporary pin.
+      return {...candidates[0],kakaoAddressCheck:{sourceGeneration:snapshotMeta?.sourceGeneration,
+        expiresAt:performance.now()+120000}};
+    }
+    return {candidates,truncated:result.resolution?.kind==='TRUNCATED'};
+  }
+
   async function lookupInteractiveLocation(text, signal, {allowExternal=true,allowOfficial=true,timeout,trace} = {}) {
     const geocoder=window.kakaoGeocoder;
     const address=unifiedAddressQuery(text);
@@ -3602,18 +3642,7 @@
       trace?.record('providerStart');
       const result=await NewAreaRequests.lookup(geocoder,query,{signal,mode:address?'address':'place',timeout,onTiming})
         .finally(()=>trace?.mark('providerEnd'));
-      if(!result.rows?.length)continue;
-      const candidates=result.rows.map(row=>({
-        lat:Number(row.y),lng:Number(row.x),address:row.road_address?.address_name||row.address_name,
-        placeName:row.place_name,coordinateSource:address?'KAKAO_ADDRESS_TEMPORARY':'KAKAO_PLACE_TEMPORARY'
-      })).filter(newAreaCoordinate);
-      if(!candidates.length)return null;
-      if(address&&candidates.length===1&&result.resolution?.kind==='EXACT'){
-        // Reuse only an exact result while its pin and the same map view are still shown.
-        return {...candidates[0],kakaoAddressCheck:{sourceGeneration:snapshotMeta?.sourceGeneration,
-          expiresAt:performance.now()+120000}};
-      }
-      return {candidates,truncated:result.resolution?.kind==='TRUNCATED'};
+      if(result.rows?.length)return interactiveProviderPoint(result,address);
     }
     return official;
   }

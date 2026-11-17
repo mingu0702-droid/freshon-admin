@@ -208,6 +208,22 @@ test('a complete road or lot address with a current protected miss skips live Cu
  assert.equal(f.queries.length,0);
 });
 
+test('a verified Stage external result paints through the existing presenter without another lookup',async()=>{
+ const generation='a'.repeat(64),query='서울 중구 합성로 21';
+ const external={documents:[{x:'127.1',y:'37.5'}],resolution:{kind:'EXACT'}};
+ const f=fixture({stageAddress:async(_query,_generation,options)=>{
+   assert.equal(options.external,'resolve');
+   options.onTiming({officialLookupMs:0.08,customerLookupMs:0.1,providerUpstreamMs:200,githubReads:1,githubWrites:1});
+   return {status:'ADDRESS_NOT_MATCHED',external};
+ }});
+ f.context.snapshotMeta={sourceGeneration:generation};
+ f.context.window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:true};
+ await f.context.searchPeriod(query);
+ assert.equal(f.queries.length,0);
+ assert.equal(f.fallback.length,1);
+ assert.equal(f.fallback[0].options.externalEvidence,external);
+});
+
 test('existing local addresses cannot confuse building 14 with 140 or 14-1',()=>{
  const rows=[store('S990001','합성 다른건물','서울 종로구 합성로 140'),store('S990002','합성 다른번지','서울 종로구 합성로 14-1')],{context:c}=fixture({rows});
  assert.equal(c.rankSearchRows('서울특별시 종로구 합성로 14').length,0);

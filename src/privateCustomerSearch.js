@@ -87,18 +87,24 @@ export function searchPreservedRegistry(query,snapshot){
 const safePoint = ({lat,lng}={}) => Number.isFinite(lat)&&Number.isFinite(lng)&&lat>=33&&lat<=39.5&&lng>=124&&lng<=132 ? {lat,lng} : null;
 const approvedPoint = row => !row.addressChanged && !['CONFLICT','UNVERIFIED','MISSING'].includes(row.coordinateStatus) &&
  row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED' ? safePoint(row) : null;
-export function resolvePreservedAddressBatch(rows,snapshot,officialIndex,{includeCustomers=false}={}){
+export function resolvePreservedAddressBatch(rows,snapshot,officialIndex,{includeCustomers=false,timings}={}){
+ const measure=(key,read)=>{
+  if(!timings)return read();
+  const start=performance.now();
+  try{return read();}finally{timings[key]=(timings[key]||0)+performance.now()-start;}
+ };
+ const find=query=>measure('customer',()=>preservedMatches(query,snapshot).matches);
  return rows.map(queries=>{
   if(!queries.length)return {status:'INVALID_ADDRESS'};
   const isCode=code(queries[0].toUpperCase());
-  const matched=new Set(queries.flatMap(query=>preservedMatches(query,snapshot).matches));
+  const matched=new Set(queries.flatMap(find));
   let official,officialError=false;
   // A verified road/lot pair is one address identity, including when the postal point is unverified.
   if(!isCode&&!matched.size){
    try{
-    const hits=queries.map(query=>officialIndex?.lookup(query)).filter(Boolean);
+    const hits=measure('official',()=>queries.map(query=>officialIndex?.lookup(query)).filter(Boolean));
     for(const alias of hits.flatMap(hit=>[hit.road,hit.lot]).filter(Boolean)){
-     for(const row of preservedMatches(alias,snapshot).matches)matched.add(row);
+     for(const row of find(alias))matched.add(row);
     }
     const signature=hit=>JSON.stringify([hit.kind||'EXACT',hit.points||[[hit.lat,hit.lng]]]);
     if(new Set(hits.map(signature)).size>1)return {status:'ADDRESS_AMBIGUOUS'};

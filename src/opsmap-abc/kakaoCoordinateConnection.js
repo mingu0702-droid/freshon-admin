@@ -66,6 +66,12 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
    dailyLimit,dailyUsed:Number(state.days[day(now())]||0),epoch:state.epoch,retention:'REQUEST_ONLY',lastAttempt:state.lastAttempt||null};},{status:true});}
   catch{return {enabled:false,independentEnabled,reason:'GEOCODE_DURABLE_LEDGER_REQUIRED',retention:'REQUEST_ONLY'};}
  };
+ // An address evidence miss may prepare the private CAS read while the
+ // browser is receiving the evidence. This step does not reserve a slot.
+ const prepareReservation=async onRequest=>{
+  if(externalDisabled||!proof()||blocked||now()<cooldownUntil||env.OPSMAP_KAKAO_GEOCODING_ENABLED!=='1')return;
+  await transaction(()=>{}, {reservation:true,onRequest});
+ };
  const lookup=async(query,{diagnostic=false,mode='exact',assertCurrent=async()=>{}}={})=>{
   if(typeof query!=='string'||query.normalize('NFKC').trim().length>200||
      !['exact','address','place','official'].includes(mode)||(diagnostic&&mode!=='exact'))fail('GEOCODE_QUERY_INVALID',400);
@@ -150,7 +156,8 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
     return {ok:true,providerDurationMs,ledgerReservationMs,githubRequests,data:{documents,status:documents.length?'OK':'ZERO_RESULT',exact:!!point,
      diagnostic,providerHttp:200,responseAppId:appHeader||null,resolution,retention:'REQUEST_ONLY',coordinatePersistence:false}};
    }catch(error){
-    if(['GEOCODE_SESSION_EXPIRED','GEOCODE_RETRY_COOLDOWN','GEOCODE_AUTOMATICALLY_BLOCKED'].includes(error?.code))throw error;
+    if(['GEOCODE_SESSION_EXPIRED','GEOCODE_RETRY_COOLDOWN','GEOCODE_AUTOMATICALLY_BLOCKED',
+      'STAGE_BATCH_GENERATION_CHANGED','STAGE_ADDRESS_CANCELLED'].includes(error?.code))throw error;
     if(providerDurationMs===null&&providerStarted!==null)providerDurationMs=Math.round(performance.now()-providerStarted);
     const transportCode=['UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_SOCKET','ENOTFOUND','EAI_AGAIN','ETIMEDOUT','ECONNREFUSED','ECONNRESET','CERT_HAS_EXPIRED','UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(error?.cause?.code)?error.cause.code:null;
     const code=/^KAKAO_[A-Z_]+$/.test(error?.code||'')?error.code:stage==='LEDGER_COMPLETION'?'KAKAO_LEDGER_COMPLETION_FAILED':['TimeoutError','AbortError'].includes(error?.name)?'KAKAO_TIMEOUT':stage==='PROVIDER_REQUEST'?'KAKAO_NETWORK_FAILED':'KAKAO_LOOKUP_FAILED';
@@ -178,7 +185,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
    evidence:{source:'USER_DEVELOPER_CONSOLE_20261103',appId:KAKAO_EXPECTED_APP_ID,addressDailyUsed:0,addressDailyQuota:100000,mapSdkUsed:14,mapSdkQuota:300000,paidApiEnabled:false},
    missingGateSettings:missing,...await status()};
  };
- return {status,lookup,configuration};
+ return {status,lookup,configuration,prepareReservation};
 }
 export function mountKakaoCoordinateConnection({app,requireStaff,isSessionCurrent,service,jsonBody,origin}){
  const respond=diagnostic=>async(req,res)=>{

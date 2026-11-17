@@ -151,38 +151,58 @@
     if(addressGeneration!==generation||!/^[a-f0-9]{64}$/.test(generation||''))return null;
     return readRetainedAddress(stageAddressKey(stageAddressVariants(query)),staffSessionExpiry())??null;
   }
-  function stageAddress(query,generation,{signal}={}) {
+  function stageAddress(query,generation,{signal,external,onTiming}={}) {
     if (root.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com'||signal?.aborted) return Promise.resolve(null);
     const variants=stageAddressVariants(query);
     if (!variants.length) return Promise.resolve(null);
     if(addressGeneration!==generation){resetStageAddress();addressGeneration=generation;}
     const key=stageAddressKey(variants),sessionExpiry=staffSessionExpiry();
     const cached=readRetainedAddress(key,sessionExpiry);
-    if(cached)return Promise.resolve(cached);
-    let flight=flights.get(key);
+    if(cached&&!(external==='resolve'&&cached.status==='ADDRESS_NOT_MATCHED'))return Promise.resolve(cached);
+    const flightKey=external?key+'|'+external:key;
+    let flight=flights.get(flightKey);
     if (!flight) {
       const epoch = addressEpoch;
       const controller=new AbortController();
       flight={controller,consumers:0};
       flight.task=fetch('/api/map-phase2b/private/stage-address-evidence',{
-        method:'POST', credentials:'same-origin', cache:'no-store', signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)]),
-        headers:{'Content-Type':'application/json'},body:JSON.stringify({generation,rows:[variants],includeCustomers:true})
+        method:'POST', credentials:'same-origin', cache:'no-store',
+        signal:AbortSignal.any([controller.signal,AbortSignal.timeout(external==='resolve'?20000:10000)]),
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({generation,rows:[variants],includeCustomers:true,...(external?{external}:{})})
       }).then(async response=>{
-        const payload=await response.json().catch(()=>null);
-        if(!response.ok)throw Object.assign(failure(payload?.error||'STAGE_BATCH_UNAVAILABLE'),{status:response.status});
+        const timing=new Map((response.headers?.get?.('Server-Timing')||'').split(',').map(item=>item.trim().split(';dur=')));
+        const github=response.headers?.get?.('X-Opsmap-Geocode-Github')?.match(/^(\d+),(\d+)$/);
+        let parseMs,payload;
+        if(onTiming&&typeof response.text==='function'){
+          const body=await response.text();
+          const start=performance.now();
+          try{payload=JSON.parse(body);}catch{payload=null;}
+          parseMs=performance.now()-start;
+        }else payload=await response.json().catch(()=>null);
+        if(!response.ok)throw Object.assign(failure(payload?.error||'STAGE_BATCH_UNAVAILABLE'),
+          {status:response.status,providerHttp:Number.isInteger(payload?.providerHttp)?payload.providerHttp:null});
+        const durations={
+          officialLookupMs:Number(timing.get('opsmap-address-official')),
+          customerLookupMs:Number(timing.get('opsmap-address-customer')),
+          serverIndexMs:Number(timing.get('opsmap-address-index')),
+          protectedSessionMs:Number(timing.get('session')),
+          providerUpstreamMs:Number(timing.get('opsmap-kakao-provider')),
+          ledgerReservationMs:Number(timing.get('geocodeLedger')),
+          clientParseMs:parseMs, githubReads:github?Number(github[1]):NaN, githubWrites:github?Number(github[2]):NaN
+        };
         if(epoch!==addressEpoch)return null;
         if(payload?.generation!==generation||payload.data?.length!==1)throw failure('STAGE_BATCH_UNAVAILABLE');
         const [result]=payload.data;
         const exact=['STORED','OFFICIAL'].includes(result.status)&&result.point;
         const verifiedMiss=result.status==='ADDRESS_NOT_MATCHED';
-        if(generation&&sessionExpiry&&sessionExpiry===staffSessionExpiry()&&(exact||verifiedMiss)){
+        if(generation&&sessionExpiry&&sessionExpiry===staffSessionExpiry()&&!result.external&&(exact||verifiedMiss)){
           // Briefly share an authoritative miss across repeated submissions.
           // Geometry from an external provider never enters this cache.
           remember(retained,key,{result,sessionExpiry,expiresAt:Date.now()+(exact?60_000:2_000)});
         }
-        return result;
-      }).finally(()=>{if(flights.get(key)===flight)flights.delete(key);});
-      flights.set(key,flight);
+        return {result,durations};
+      }).finally(()=>{if(flights.get(flightKey)===flight)flights.delete(flightKey);});
+      flights.set(flightKey,flight);
     }
     flight.consumers++;
     return new Promise((resolve,reject)=>{
@@ -190,12 +210,15 @@
       const finish=(fn,value)=>{
         if(released)return;
         released=true;signal?.removeEventListener('abort',cancel);
-        if(--flight.consumers===0&&flights.get(key)===flight){flights.delete(key);flight.controller.abort();}
+        if(--flight.consumers===0&&flights.get(flightKey)===flight){flights.delete(flightKey);flight.controller.abort();}
         fn(value);
       };
       const cancel=()=>finish(resolve,null);
       signal?.addEventListener('abort',cancel,{once:true});
-      flight.task.then(value=>finish(resolve,value),error=>finish(reject,error));
+      flight.task.then(value=>{
+        if(!released&&value)onTiming?.(value.durations);
+        finish(resolve,value?.result??null);
+      },error=>finish(reject,error));
     });
   }
   function rememberTemporary(query,point) {
