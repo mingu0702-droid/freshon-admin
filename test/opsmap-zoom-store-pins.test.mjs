@@ -126,23 +126,66 @@ test('pins distinguish the primary fixed route, confirmed blank, and missing evi
   assert.equal(oneRoute.clusterUnverified,true);
 });
 
-test('a missing master row is excluded before base pin grouping and retained for daily delivery', () => {
+const pointChecks = runtime.slice(runtime.indexOf('  function hasMapCoordinates('), runtime.indexOf('  function staffRegistrationScope('));
+const verifiedPoint = {
+  coordinateStatus:'CONFIRMED', coordinateSource:'VERIFIED_STORE_POINT', coordinateEvidence:'STAGE_REGISTRY_POINT',
+  originalAddressHash:'a'.repeat(64),
+};
+
+test('verified Stage store locations survive a missing fixed route without changing route membership', () => {
   const start = runtime.indexOf('  function buildMapPinIndex(');
   const end = runtime.indexOf('  function renderStops(', start);
   assert(start >= 0 && end > start);
-  const build = vm.runInNewContext(runtime.slice(start, end) + '\nbuildMapPinIndex', { MapPeriodUi });
+  let verifiedStage = false;
+  const coordinateByCode = new Map();
+  const build = vm.runInNewContext(pointChecks + runtime.slice(start, end) + '\nbuildMapPinIndex',
+    { MapPeriodUi, coordinateByCode, hasVerifiedStageLocations:()=>verifiedStage });
   const rows = [
     { customerCode:'S10001', lat:37.5, lng:127, baseVehicle:'101', baseVehicleState:'VERIFIED_MASTER' },
-    { customerCode:'S10002', lat:37.5, lng:127, vehicle:'202', baseVehicleState:'NOT_IN_MASTER' },
+    { customerCode:'S10002', lat:37.5, lng:127, vehicle:'202', baseVehicleState:'NOT_IN_MASTER', ...verifiedPoint },
     { customerCode:'S10003', lat:37.6, lng:127.1, baseVehicle:'오산신규', baseVehicleState:'VERIFIED_MASTER' },
     { customerCode:'S10004', lat:37.7, lng:127.2, baseVehicle:'오산보류', baseVehicleState:'VERIFIED_MASTER' },
     { customerCode:'S10005', lat:37.8, lng:127.3, baseVehicleState:'UNASSIGNED' },
+    { customerCode:'S10006', lat:37.8, lng:127.3, baseVehicleState:'NOT_IN_MASTER' },
+    { customerCode:'S10007', lat:37.8, lng:127.3, baseVehicleState:'NOT_IN_MASTER', staffRegistrationOnly:true, ...verifiedPoint },
+    { customerCode:'S10008', lat:37.8, lng:127.3, baseVehicleState:'NOT_IN_MASTER', ...verifiedPoint, currentAddressHash:'b'.repeat(64) },
+    { customerCode:'S10009', lat:37.9, lng:127.4, baseVehicleState:'NOT_IN_MASTER', ...verifiedPoint, coordinateEvidence:undefined },
+    { customerCode:'S10010', lat:37.8, lng:127.4, baseVehicleState:'NOT_IN_MASTER', ...verifiedPoint, coordinateEvidence:undefined },
   ];
+  coordinateByCode.set('S10009',{...rows[8]});
+  coordinateByCode.set('S10010',{...rows[9],lat:37.5});
   const base = build(rows, 'BASE_60D');
   assert.deepEqual(base.valid, [rows[0], rows[2], rows[3], rows[4]]);
   assert(!MapViewPolicy.exactLocations(base.valid).some(pin => pin.clusterRows?.includes(rows[1])));
+  verifiedStage = true;
+  const published = build(rows, 'BASE_60D');
+  assert.deepEqual(published.valid, [...rows.slice(0,5), rows[8]]);
+  const [group] = MapViewPolicy.exactLocations(published.valid);
+  assert.deepEqual(group.memberCodes, ['S10001','S10002']);
+  assert.deepEqual(group.clusterVehicles, ['101']);
+  assert.equal(MapViewPolicy.pinAssignment(rows[1]).code, '');
+  assert.equal(MapPeriodUi.select(rows, ['202'], '', {vehicleBasis:'base',includeUnvisited:true}).length, 0);
   assert.equal(build(rows, 'DATE_ROUTE').byCode.get('S10002'), rows[1]);
-  assert.equal(rows.length, 5);
+  assert.equal(rows.length, 10);
+});
+
+test('Stage counts bound verified points independently of populated coordinates', () => {
+  const start = runtime.indexOf('  function staffRegistrationScope(');
+  const end = runtime.indexOf('  function filteredPeriodStores(', start);
+  const state = {mode:'BASE_60D'};
+  const rows = [
+    {lat:37.5,lng:127,center:'osan', ...verifiedPoint},
+    {lat:37.5,lng:128,center:'osan'},
+    {lat:37.6,lng:127,center:'osan', ...verifiedPoint, coordinateSource:'KAKAO_ADDRESS_LIVE'},
+    {lat:null,lng:null,center:'yeongnam'},
+  ];
+  const count = vm.runInNewContext(pointChecks + runtime.slice(start,end) + '\nstaffRegistrationScope', {
+    registrationCounts:null, coordinateByCode:new Map(), allStores:rows, state, dateReady:true, registrationCenter:row=>row.center,
+    hasVerifiedStageLocations:()=>true, stageRegistrationOnly:()=>true,
+  });
+  assert.deepEqual({...count()}, {registered:4,coordinates:3,located:1,source:'AVAILABLE'});
+  state.centerFilter = 'yeongnam';
+  assert.deepEqual({...count()}, {registered:1,coordinates:0,located:0,source:'REGISTERED'});
 });
 
 test('loading and unknown pins use readable labels while grouping keeps the store count', () => {
@@ -183,6 +226,8 @@ test('loading and unknown pins use readable labels while grouping keeps the stor
   const searchSelection = {...pending, vehicle:'202', baseVehicleState:'NOT_IN_MASTER'};
   assert.equal(label(makeMarker(searchSelection,null,'store')),'매장');
   assert.match(makeMarker(searchSelection,null,'store').attributes['aria-label'],/고정배차표에 없음/);
+  const unassignedGroup = {...searchSelection, customerCode:'', clusterCount:3, clusterAssignment:MapViewPolicy.pinAssignment(searchSelection)};
+  assert.equal(label(makeMarker(unassignedGroup,null,'store')),'매장');
   state.mode='DATE_ROUTE';
   assert.equal(label(makeMarker(searchSelection,null,'store')),'202');
   state.mode='BASE_60D';

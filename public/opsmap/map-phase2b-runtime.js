@@ -435,22 +435,39 @@
     const assigned=vehicleListGroup(row.baseVehicleGroup||row.dispatchCenterCode||row.raw?.center);
     return assigned==='unknown'&&savedCenters?vehicleListGroup(row.raw?.centerGroup):assigned;
   }
+  function hasMapCoordinates(row) {
+    return Number.isFinite(row.lat) && Number.isFinite(row.lng) &&
+      row.lat >= 33 && row.lat <= 39.5 && row.lng >= 124 && row.lng <= 132;
+  }
+  function hasVerifiedStageStorePoint(row) {
+    const hash = row.manualPinAddressHash || row.originalAddressHash;
+    if (!hasMapCoordinates(row) || row.coordinateStatus !== 'CONFIRMED' || !/^[a-f0-9]{64}$/.test(hash || '') ||
+        (row.currentAddressHash && row.currentAddressHash !== hash) || row.resolutionStatus === 'ADDRESS_CHANGED_REVIEW_REQUIRED' ||
+        /(?:_LIVE|_TEMPORARY)$/.test(row.coordinateSource || '')) return false;
+    if (row.coordinateEvidence) return true;
+    // The sealed baseline also contains verified points without a measurement label.
+    const saved = coordinateByCode.get(row.customerCode);
+    return saved?.coordinateStatus === 'CONFIRMED' && saved.originalAddressHash === hash &&
+      saved.lat === row.lat && saved.lng === row.lng;
+  }
   function staffRegistrationScope() {
     if(!hasVerifiedStageLocations()||!dateReady||state.mode!=='BASE_60D')return null;
     if(registrationCounts?.source!==allStores){
-      const total={registered:0,located:0}, centers=new Map();
+      const total={registered:0,coordinates:0,located:0}, centers=new Map();
       for(const row of allStores){
         if(row.customerRegistryStatus==='DELETED')continue;
         const center=registrationCenter(row,true);
-        if(!centers.has(center))centers.set(center,{registered:0,located:0});
+        if(!centers.has(center))centers.set(center,{registered:0,coordinates:0,located:0});
         const local=centers.get(center);
-        const located=Number(row.coordinateStatus!=='CONFLICT'&&Number.isFinite(row.lat)&&Number.isFinite(row.lng));
-        local.registered++;total.registered++;local.located+=located;total.located+=located;
+        const coordinates=Number(hasMapCoordinates(row)), located=Number(hasVerifiedStageStorePoint(row));
+        local.registered++;total.registered++;
+        local.coordinates+=coordinates;total.coordinates+=coordinates;
+        local.located+=located;total.located+=located;
       }
       registrationCounts={source:allStores,total,centers};
     }
     const center=state.centerFilter;
-    const count=center?(registrationCounts.centers.get(center)||{registered:0,located:0}):registrationCounts.total;
+    const count=center?(registrationCounts.centers.get(center)||{registered:0,coordinates:0,located:0}):registrationCounts.total;
     return {...count,source:stageRegistrationOnly()?(center==='yeongnam'||center==='honam'?'REGISTERED':center?'PUBLISHED':'AVAILABLE'):'PUBLISHED'};
   }
   function filteredPeriodStores() {
@@ -1934,7 +1951,7 @@
     const assignment = window.MapViewPolicy.pinAssignment(row, assignmentMode);
     const group = row.clusterCount;
     const loading=assignment.loading&&baseVehicleStatus==='LOADING';
-    const unregisteredStore = assignmentMode === 'BASE_60D' && row.baseVehicleState === 'NOT_IN_MASTER';
+    const unregisteredStore = assignmentMode === 'BASE_60D' && assignment.label === '미등록';
     const pinLabel = unregisteredStore ? '매장' : loading ? '조회 중' : assignment.label;
     const assignmentTitle = assignment.code ? vehicleLabel(assignment.code) :
       assignment.kind === 'unknown' ? '호차 정보 없음' : assignment.kind === 'unverified' ?
@@ -2143,7 +2160,10 @@
   }
 
   function buildMapPinIndex(rows, assignmentMode) {
-    const pinRows = assignmentMode === 'BASE_60D' ? rows.filter(row => row.baseVehicleState !== 'NOT_IN_MASTER') : rows;
+    if (assignmentMode !== 'BASE_60D') return MapPeriodUi.spatialIndex(rows);
+    const verifiedStage = hasVerifiedStageLocations();
+    const pinRows = rows.filter(row => row.baseVehicleState !== 'NOT_IN_MASTER' ||
+      (verifiedStage && !row.staffRegistrationOnly && hasVerifiedStageStorePoint(row)));
     return MapPeriodUi.spatialIndex(pinRows);
   }
 
