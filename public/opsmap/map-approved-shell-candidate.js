@@ -306,8 +306,7 @@
     registrationScope.hidden=!scope;
     if(scope){
       const label={REGISTERED:'등록',AVAILABLE:'등록 자료',PUBLISHED:'게시본 등록'}[scope.source];
-      const text=`${label} ${scope.registered.toLocaleString('ko-KR')}곳`+
-        (scope.missing?` · 좌표 미확인 ${scope.missing.toLocaleString('ko-KR')}곳`:'');
+      const text=`${label} ${scope.registered.toLocaleString('ko-KR')}곳 · 위치 확인 ${scope.located.toLocaleString('ko-KR')}곳`;
       if(registrationScope.textContent!==text)registrationScope.textContent=text;
     }
     if(daily){const count=new Set(bridge.state.currentRows.map(row=>row.customerCode)).size;const badge=count?`${count} 매장`:bridge.isDataReady()?'0 매장':'불러오는 중';if($('#totalBadge').textContent!==badge)$('#totalBadge').textContent=badge;

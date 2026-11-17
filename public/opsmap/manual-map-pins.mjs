@@ -8,12 +8,14 @@ const ORIGINAL_PIN_BASE=Symbol('opsmap-original-pin-base');
 const $=s=>document.querySelector(s),base='/api/map-phase2b/private/manual-pins';let records=new Map(),bases=new WeakMap(),generation=0,edit=null,marker=null,mapClick=null,pending=null,refreshing=null,refreshingOwner=-1,touchClose=null,ignoreClickUntil=0;
 const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('map-manual-pins'):null;
 const panel=document.createElement('section');panel.id='manualPinEditor';panel.hidden=true;panel.setAttribute('role','dialog');panel.setAttribute('aria-label','배송지 핀 위치 수정');document.body.append(panel);
-const list=document.createElement('details');list.id='manualPinTargets';list.innerHTML='<summary>좌표 상태</summary><p>주소는 선택한 매장 1건씩 표시합니다. Customer 원본 주소는 바꾸지 않습니다.</p><div class="manualPinPending"></div><details><summary>위치가 확인된 수정 대상</summary><div class="manualPinResolved"></div></details>';
-const projectionStatus=document.createElement('p');projectionStatus.id='manualPinProjectionStatus';projectionStatus.setAttribute('role','status');projectionStatus.hidden=true;list.prepend(projectionStatus);
-// The legacy mobile controller may still hold the store section in its hidden sheet.
-// Keep the manual editor entry in the active Dot sidebar instead of that sheet.
-const targetHome=$('.approvedShellCandidate .scrollside');if(targetHome)targetHome.append(list);else $('#periodStoreListSection').before(list);
-list.after(projectionStatus);
+const list=bridge.isStagePreview?.()?null:document.createElement('details');
+if(list){
+ list.id='manualPinTargets';
+ list.innerHTML='<summary>좌표 상태</summary><p>주소는 선택한 매장 1건씩 표시합니다. Customer 원본 주소는 바꾸지 않습니다.</p><div class="manualPinPending"></div><details><summary>위치가 확인된 수정 대상</summary><div class="manualPinResolved"></div></details>';
+}
+const projectionStatus=document.createElement('p');projectionStatus.id='manualPinProjectionStatus';projectionStatus.setAttribute('role','status');projectionStatus.hidden=true;
+const sidebarNodes=list?[list,projectionStatus]:[projectionStatus];
+const targetHome=$('.approvedShellCandidate .scrollside');if(targetHome)targetHome.append(...sidebarNodes);else $('#periodStoreListSection').before(...sidebarNodes);
 function node(tag,text,parent){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;parent?.append(e);return e;}
 const button=(text,parent,fn)=>{const b=node('button',text,parent);b.type='button';b.onclick=fn;return b;};
 const stateText={MANUAL_PIN_STORE_NOT_CONFIGURED:'수동 위치 저장소가 연결되지 않았습니다.',MANUAL_PIN_WRITE_PERMISSION_REQUIRED:'수동 위치 수정 권한이 없습니다.',MANUAL_PIN_GEOCODER_BUDGET_EXHAUSTED:'주소 검색 예산이 소진됐습니다. 지도 클릭·핀 드래그는 사용할 수 있습니다.',MANUAL_PIN_REVISION_CONFLICT:'다른 수정이 먼저 저장됐습니다. 다시 열어 비교해 주세요.',MANUAL_PIN_ADDRESS_CHANGED:'원본 주소가 변경됐습니다. 다시 열어 비교해 주세요.',MANUAL_PIN_OPERATION_SUPERSEDED:'이미 후속 수정이 있습니다. 현재 저장본을 다시 확인해 주세요.',MANUAL_PIN_SESSION_EXPIRED:'직원 세션이 만료됐습니다.',MANUAL_PIN_CSRF_REJECTED:'수정 권한을 다시 확인해 주세요.'};
@@ -132,6 +134,7 @@ async function open(code,{searchNow=false}={}){
  }catch(e){if(owner===generation)status.textContent=e.message;}
 }
 function renderTargets(){
+ if(!list)return;
  targets=manualPinTargetCodes(bridge.stores(),[...records.values()],targets);
  const stores=new Map(bridge.stores().map(r=>[r.customerCode,r])),unresolved=list.querySelector('.manualPinPending'),resolved=list.querySelector('.manualPinResolved');unresolved.replaceChildren();resolved.replaceChildren();let count=0;
  for(const code of targets){const row=stores.get(code);if(!row)continue;const manual=records.get(code)?.resolutionStatus==='MANUAL_CONFIRMED',located=Number.isFinite(row.lat)&&Number.isFinite(row.lng)&&row.coordinateStatus!=='CONFLICT';const parent=located?resolved:unresolved;if(!located)count++;
@@ -146,6 +149,6 @@ window.addEventListener('map-store-selected',e=>{if(edit&&e.detail?.customerCode
 window.addEventListener('map-stores-replaced',()=>{renderTargets();if(!refreshing)void refresh().catch(()=>{});});
 window.addEventListener('map-coordinate-updated',()=>{window.MapNavigation?.sync();renderTargets();});
 window.addEventListener('map-staff-authenticated',()=>void refresh().catch(()=>{}));
-window.addEventListener('map-staff-signed-out',()=>{projectionVerified=false;projectionStatus.hidden=true;close();records.clear();bases=new WeakMap();list.querySelector('.manualPinPending').replaceChildren();list.querySelector('.manualPinResolved').replaceChildren();});
+window.addEventListener('map-staff-signed-out',()=>{projectionVerified=false;projectionStatus.hidden=true;close();records.clear();bases=new WeakMap();list?.querySelector('.manualPinPending').replaceChildren();list?.querySelector('.manualPinResolved').replaceChildren();});
 channel?.addEventListener('message',e=>{if(e.data==='changed'&&document.body.dataset.mapStaffState==='authenticated')void refresh().catch(()=>{});});
 window.addEventListener('pagehide',()=>{close();channel?.close();},{once:true});renderTargets();void refresh().catch(()=>{});

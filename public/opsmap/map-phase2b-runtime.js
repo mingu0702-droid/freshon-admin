@@ -210,6 +210,7 @@
   let geocodeDiagnostic = "미조회", lastRefreshedAt = "", sheetTab = "detail";
   const panelHomes = new Map();
   let allStores = [], registrationCounts=null;
+  window.addEventListener('map-coordinate-updated', () => { registrationCounts = null; });
   const storeByVehicleAndCode = new Map();
   const storesByCode = new Map();
   let snapshotMeta = null;
@@ -437,18 +438,19 @@
   function staffRegistrationScope() {
     if(!hasVerifiedStageLocations()||!dateReady||state.mode!=='BASE_60D')return null;
     if(registrationCounts?.source!==allStores){
-      const total={registered:0,missing:0}, centers=new Map();
+      const total={registered:0,located:0}, centers=new Map();
       for(const row of allStores){
         if(row.customerRegistryStatus==='DELETED')continue;
         const center=registrationCenter(row,true);
-        if(!centers.has(center))centers.set(center,{registered:0,missing:0});
-        const local=centers.get(center), missing=Number(!Number.isFinite(row.lat)||!Number.isFinite(row.lng));
-        local.registered++;total.registered++;local.missing+=missing;total.missing+=missing;
+        if(!centers.has(center))centers.set(center,{registered:0,located:0});
+        const local=centers.get(center);
+        const located=Number(row.coordinateStatus!=='CONFLICT'&&Number.isFinite(row.lat)&&Number.isFinite(row.lng));
+        local.registered++;total.registered++;local.located+=located;total.located+=located;
       }
       registrationCounts={source:allStores,total,centers};
     }
     const center=state.centerFilter;
-    const count=center?(registrationCounts.centers.get(center)||{registered:0,missing:0}):registrationCounts.total;
+    const count=center?(registrationCounts.centers.get(center)||{registered:0,located:0}):registrationCounts.total;
     return {...count,source:stageRegistrationOnly()?(center==='yeongnam'||center==='honam'?'REGISTERED':center?'PUBLISHED':'AVAILABLE'):'PUBLISHED'};
   }
   function filteredPeriodStores() {
@@ -5224,6 +5226,7 @@
     refreshCustomerRegistry:syncCustomerRegistry,
     customerRegistryStatus:()=>customerRegistry?.summary(),
     isDataReady:()=>state.mode==='DATE_ROUTE'?isDailyDataReady():dateReady,
+    isStagePreview:stageAddressBatchEnabled,
     staffRegistrationScope,
     initMap,
     stores:()=>allStores.slice(),

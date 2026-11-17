@@ -193,7 +193,12 @@ export function mountStageStaffRegistry({app,requireStaff,asset,getVerifiedRegis
       verifiedRegistry();
       const {snapshot,meta} = await asset.read();
       const current = verifiedRegistry();
-      if (!compatible.has(current)) compatible.set(current,snapshot.rows.every(row => !current.has(row.customerCode)));
+      if (!compatible.has(current)) {
+        const disjoint = snapshot.rows.every(row => !current.has(row.customerCode));
+        compatible.set(current,disjoint);
+        if (disjoint) console.info(JSON.stringify({component:'stage-coordinate-audit',date:meta.checkedAt,
+          registrationOnly:Object.fromEntries(meta.centers.map(center => [center.centerGroup,center.included]))}));
+      }
       if (!compatible.get(current)) return send(503,{ok:false,error:'CUSTOMER_REGISTRY_SCOPE_CHANGED'});
       const data = customerRegistryPage(snapshot,{cursor:cursor ?? null,since,limit:limit ? Number(limit) : 250,
         maxLimit:1000,secret:asset.cursorKey});

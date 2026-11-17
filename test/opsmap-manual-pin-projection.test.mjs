@@ -20,9 +20,10 @@ function element() {
   };
 }
 
-async function fixture(data) {
+async function fixture(data, {stage = false, mounted = [], stores = () => []} = {}) {
   const body = element();
-  const window = {MapUiLocalBridge:{stores:()=>[], refreshManualCoordinates(){}}, addEventListener(){}};
+  body.append = (...nodes) => mounted.push(...nodes);
+  const window = {MapUiLocalBridge:{isStagePreview:()=>stage, stores, refreshManualCoordinates(){}}, addEventListener(){}};
   runInNewContext(source, {
     window,
     document:{createElement:element, querySelector:() => body, body},
@@ -41,6 +42,15 @@ const manualPoint = {
   customerCode:code, originalAddressHash:oldHash, currentAddressHash:oldHash,
   resolutionStatus:'MANUAL_CONFIRMED', latitude:37.49, longitude:127.02
 };
+
+test('Stage staff view loads saved manual points without building the bulk coordinate audit', async () => {
+  const mounted = [];
+  let reads = 0;
+  const pins = await fixture([manualPoint], {stage:true, mounted, stores:()=>{reads++; return [];}});
+  assert.equal(reads,0);
+  assert.equal(mounted.some(node => node.id === 'manualPinTargets'),false);
+  assert.equal(pins.apply(fixedPoint(oldHash)).lat,manualPoint.latitude);
+});
 
 test('a stale manual projection cannot replace the verified coordinate of a moved store', async () => {
   const pins = await fixture([manualPoint]);
