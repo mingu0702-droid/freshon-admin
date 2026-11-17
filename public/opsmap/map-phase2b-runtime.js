@@ -2346,7 +2346,10 @@
     const overlayMs=performance.now()-started-planMs;
     markerEntries = reconciled.next;
     state.overlays = [...markerEntries.values()].map(entry=>entry.value);
-    if(neighborhood?.trace&&!neighborhood.paintedView)watchNearbyPinPaint(neighborhood,entries);
+    if(neighborhood?.trace&&temporaryDetailPoint===neighborhood.point&&neighborhood.cameraInteraction===mapCamera?.interaction()){
+      const view=searchPinView();
+      if(neighborhood.paintedView!==view)watchNearbyPinPaint(neighborhood,entries,view);
+    }
     const osanCenter=fit&&!selectedVehicleStores&&window.MapNavigationLookup?.registeredCenters?.().find(row=>row.id==='osan');
     if((valid.length||osanCenter)&&fit&&!state.userMovedMap){
       const bounds=new kakao.maps.LatLngBounds(),mobileRoute=innerWidth<=760&&options.numbered;
@@ -2469,7 +2472,8 @@
     return JSON.stringify([markerSourceVersion,map.clientWidth,map.clientHeight,state.map?.getLevel?.(),center?.getLat?.(),center?.getLng?.()]);
   }
 
-  function watchNearbyPinPaint(neighborhood,entries) {
+  function watchNearbyPinPaint(neighborhood,entries,view) {
+    if(neighborhood.paintPending===view)return;
     const {trace,stores,point}=neighborhood;
     const expected=new Set(stores.map(row=>row.customerCode)), shown=new Set();
     const overlays=[];
@@ -2482,8 +2486,6 @@
     trace.count('nearbyExpected',expected.size);
     trace.count('nearbyShown',shown.size);
     if(shown.size!==expected.size)return;
-    const view=searchPinView();
-    if(neighborhood.paintPending===view)return;
     neighborhood.paintPending=view;
     requestAnimationFrame(()=>{
       if(searchNeighborhood!==neighborhood||neighborhood.paintPending!==view)return;
@@ -2500,7 +2502,7 @@
     const point=state.virtual, neighborhood=searchNeighborhood;
     if(!point||!dateReady||mapMoving||!neighborhood||point!==neighborhood.point||point!==temporaryDetailPoint||
        point.address!==text||neighborhood.sourceRows!==allStores||neighborhood.paintedView!==searchPinView()||
-       neighborhood.filterKey!==periodSelectionCache?.key||!['centered','deviation'].includes(mapCamera?.focusState()?.state))return false;
+       neighborhood.filterKey!==periodSelectionCache?.key||neighborhood.cameraInteraction!==mapCamera?.interaction())return false;
     const cached=NewAreaRequests.cachedStageAddress(text,snapshotMeta?.sourceGeneration);
     if(cached?.status!=='OFFICIAL'||cached.point?.lat!==point.lat||cached.point?.lng!==point.lng||
        cached.point?.coordinateSource!==point.coordinateSource||!visibleSearchPin(point))return false;
@@ -2508,7 +2510,8 @@
     cancelAddressLookup();closeUnifiedSearchResults();
     setSearchState('임시 위치 표시 · 고객정보에 저장하지 않습니다.');
     trace.count('cacheHit',true);
-    for(const phase of ['coordinates','map','pin','visiblePin','mapSettled','nearbyPins'])trace.record(phase);
+    for(const phase of ['coordinates','map','pin','visiblePin','nearbyPins'])trace.record(phase);
+    if(['centered','deviation'].includes(mapCamera?.focusState()?.state))trace.record('mapSettled');
     trace.count('nearbyExpected',neighborhood.paintedCount);
     trace.count('nearbyShown',neighborhood.paintedCount);
     trace.finish('temporary');
@@ -3659,7 +3662,8 @@
     };
     requestAnimationFrame(positionDetailPopup);
     const verifiedSearch=focus&&temporaryPins.get(row.temporaryKey)?.point===row&&row.coordinateSource!=='MAP_CLICK_TEMPORARY';
-    const neighborhood=verifiedSearch?{point:row,filterKey:periodSelectionCache?.key,sourceRows:allStores,trace}:null;
+    const neighborhood=verifiedSearch?{point:row,filterKey:periodSelectionCache?.key,sourceRows:allStores,
+      cameraInteraction:mapCamera?.interaction(),trace}:null;
     if(neighborhood)searchNeighborhood=neighborhood;
     if(innerWidth<=760)showMobileMap();
     trace?.mark('map');

@@ -122,8 +122,8 @@ test('an already visible official result can be reused only while its verified s
  const point=store('','합성 주소','서울 종로구 합성로 71',{coordinateSource:'OFFICIAL_PUBLIC_BUILDING'});
  const allStores=[point],expected=new Map();
  const scope={state:{virtual:point},dateReady:true,mapMoving:false,allStores,temporaryDetailPoint:point,
-  searchNeighborhood:{point,sourceRows:allStores,paintedView:'same viewport',paintedCount:2,filterKey:'ALL'},
-  periodSelectionCache:{key:'ALL'},mapCamera:{focusState:()=>({state:'centered'})},
+  searchNeighborhood:{point,sourceRows:allStores,paintedView:'same viewport',paintedCount:2,filterKey:'ALL',cameraInteraction:0},
+  periodSelectionCache:{key:'ALL'},mapCamera:{interaction:()=>0,focusState:()=>({state:'centered'})},
   NewAreaRequests:{cachedStageAddress:()=>({status:'OFFICIAL',point})},snapshotMeta:{sourceGeneration:'a'.repeat(64)},
   searchPinView:()=> 'same viewport',visibleSearchPin:()=>true,invalidateUnifiedSearch(){},cancelAddressLookup(){},closeUnifiedSearchResults(){},setSearchState(){}
  };
@@ -135,6 +135,9 @@ test('an already visible official result can be reused only while its verified s
  scope.searchPinView=()=> 'changed viewport';
  assert.equal(reuse(point.address,trace),false);
  scope.searchPinView=()=> 'same viewport';
+ scope.mapCamera.interaction=()=>1;
+ assert.equal(reuse(point.address,trace),false);
+ scope.mapCamera.interaction=()=>0;
  scope.NewAreaRequests.cachedStageAddress=()=>null;
  assert.equal(reuse(point.address,trace),false);
 });
