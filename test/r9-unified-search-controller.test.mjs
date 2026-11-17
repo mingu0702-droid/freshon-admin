@@ -25,7 +25,7 @@ function declaration(name){
 // interface stubs here and are exercised by the independent full-browser QA.
 const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','searchIndexCurrent','buildSearchIndex','searchIndexWork','advanceSearchIndex','getSearchIndex','prepareStageSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','fixedVehicleFor','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
- 'renderResults','unifiedAddressQuery','completeAddressRegion','stageAddressHashMatches','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
+ 'renderResults','unifiedAddressQuery','completeAddressRegion','stageAddressHashMatches','findColdRegistrationAddressRows','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
  const nodes=new Map(),selected=[],fallback=[],queries=[],requests=new Map();let resets=0,tempClears=0;
  const node=key=>{if(!nodes.has(key))nodes.set(key,{dataset:{},value:'',hidden:true,html:'',replaceChildren(){this.html='';this.buttons=[];},setAttribute(k,v){this[k]=v;},dispatchEvent(){},get innerHTML(){return this.html;},set innerHTML(v){this.html=v;this.buttons=[...v.matchAll(/data-result="(\d+)"/g)].map(m=>({dataset:{result:m[1]}}));}});return nodes.get(key);};
@@ -34,7 +34,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
   unifiedSearchController:null,unifiedSelectionActive:false,unifiedResetting:false,
-  searchIndex:null,pendingSearchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,temporaryPins:new Map(),
+  searchIndex:null,pendingSearchIndex:null,searchFlight:null,stageAddressHashIndex:null,searchInputAt:null,searchSequence:0,snapshotMeta:null,snapshotRetryAfter:0,customerRegistry:null,temporaryPins:new Map(),newAreaRegistryMemo:null,
   stageRegistrationOnly:()=>false,stageAddressBatchEnabled:()=>!!stageAddress,NewAreaRequests:{...globalThis.NewAreaRequests,stageAddress,temporaryPoint:()=>null,message:error=>error.code},Phase2bUi:globalThis.Phase2bUi,MapPeriodUi:globalThis.MapPeriodUi,
   $:node,$$:selector=>selector==='[data-result]'?node('#results').buttons||[]:[],
   naturalCompare:(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true}),normalizeVehicle:v=>String(v||''),numberOrNull:v=>v===null||v===undefined||v===''?null:Number.isFinite(Number(v))?Number(v):null,
@@ -224,6 +224,43 @@ test('a verified Stage external result paints through the existing presenter wit
  assert.equal(f.fallback[0].options.externalEvidence,external);
 });
 
+test('the cold national registry preserves exact matches and resolves only a true miss through one protected request',async()=>{
+ const generation='a'.repeat(64);
+ const road='서울 종로구 합성로 14-1';
+ const lot='경기도 김포시 시험면 시험리 산 5-6';
+ const rows=[
+   store('S995000','원문','서울특별시 종로구 합성로１４-１ (합성동)'),
+   store('S995001','다른 번지','서울 종로구 합성로 14'),
+   store('S995002','동일 주소','서울 종로구 합성로14-1'),
+   store('S995003','이전 주소','경기 김포시 시험면 새주소로 2',{jibunAddress:lot,addressChanged:true}),
+   store('S995004','지번 별칭','경기 김포시 시험면 시험로 14',{jibunAddress:lot,staffRegistrationOnly:true})
+ ];
+ const external={documents:[{x:'127.1',y:'37.5'}],resolution:{kind:'EXACT'}}, requests=[];
+ const f=fixture({rows,stageAddress:async(query,version,options)=>{
+   requests.push({query,version,external:options.external});
+   return {status:'ADDRESS_NOT_MATCHED',external};
+ }});
+ const c=f.context;
+ c.snapshotMeta={sourceGeneration:generation};
+ c.customerRegistry={currentVersion:()=>generation};
+ c.generalRegistryRows=new Map(rows.map(row=>[row.customerCode,row]));
+ c.stageRegistrationOnly=()=>true;
+ c.window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:true};
+ const matched=async(address)=>Array.from(await c.findStoredSearchRows(address),row=>row.customerCode);
+ const cold=[[road,await matched(road)],[lot,await matched(lot)]];
+ assert.deepEqual(cold.map(([,codes])=>codes),[['S995000','S995002'],['S995004']]);
+ assert.equal(c.searchIndex,null);
+ await c.searchPeriod(lot);
+ assert.equal(f.selected.at(-1)?.customerCode,'S995004');
+ const miss='서울 종로구 합성로 141';
+ await c.searchPeriod(miss);
+ assert.deepEqual(requests,[{query:miss,version:generation,external:'resolve'}]);
+ assert.equal(f.fallback.at(-1)?.options.externalEvidence,external);
+ assert.equal(c.searchIndex,null);
+ c.getSearchIndex();
+ for(const [address,codes] of cold)assert.deepEqual(await matched(address),codes);
+});
+
 test('existing local addresses cannot confuse building 14 with 140 or 14-1',()=>{
  const rows=[store('S990001','합성 다른건물','서울 종로구 합성로 140'),store('S990002','합성 다른번지','서울 종로구 합성로 14-1')],{context:c}=fixture({rows});
  assert.equal(c.rankSearchRows('서울특별시 종로구 합성로 14').length,0);
@@ -238,7 +275,7 @@ test('local names and preserved addresses avoid the live Customer reader',async(
  assert.equal(f.queries.length,0);
 });
 
-test('a cold submitted address starts protected lookup and still prefers the local registered match',async()=>{
+test('without the national registry a cold address still overlaps protected lookup and prefers the local match',async()=>{
  const row=store('S990209','합성 등록 매장','서울 종로구 합성로 71');
  let calls=0,requestSignal;
  const f=fixture({rows:[row],stageAddress:(_query,_generation,{signal})=>{
@@ -246,9 +283,7 @@ test('a cold submitted address starts protected lookup and still prefers the loc
    return new Promise(resolve=>signal.addEventListener('abort',()=>resolve(null),{once:true}));
  }});
  f.context.snapshotMeta={sourceGeneration:'a'.repeat(64)};
- f.context.customerRegistry={currentVersion:()=> 'registry-v1'};
- f.context.stageRegistrationOnly=()=>true;
- f.context.generalRegistryRows.set(row.customerCode,row);
+ f.context.customerRegistry={currentVersion:()=> 'registry-v1',merge:rows=>rows};
  await f.context.searchPeriod(row.address);
  assert.equal(calls,1);
  assert.equal(requestSignal.aborted,true);

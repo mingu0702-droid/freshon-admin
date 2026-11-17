@@ -3246,16 +3246,48 @@
     return current;
   }
 
+  function findColdRegistrationAddressRows(keys, rows) {
+    const matches = new Map(keys.filter(Boolean).map(key => [key, []]));
+    // All digits in the final key occur in order in the NFKC source, even if
+    // normalizing an address removes spaces or annotations between them.
+    const digits = [...matches.keys()].map(key => key.replace(/[^0-9]/g, '').slice(-4));
+    for (const row of rows.values()) {
+      if (!/^[A-Z]\d{3,}$/.test(row.customerCode)) continue;
+      const addresses = storeSearchAddresses(row);
+      for (let index = 0; index < addresses.length; index++) {
+        const address = addresses[index];
+        if (!address || addresses.indexOf(address) !== index) continue;
+        const source = String(address).normalize('NFKC');
+        if (!digits.some(sequence => {
+          let position = -1;
+          for (const digit of sequence) {
+            position = source.indexOf(digit, position + 1);
+            if (position < 0) return false;
+          }
+          return true;
+        })) continue;
+        matches.get(normalizeSearchAddress(source))?.push(row);
+      }
+    }
+    return [...new Set(keys.flatMap(key => matches.get(key) || []))];
+  }
+
   async function findStoredSearchRows(query,{signal,address=unifiedAddressQuery(query)||/^\d{19}$/.test(query)}={}) {
     if(signal?.aborted)return [];
     const code=/^[A-Z]\d{3,}$/i.test(query)?query.toUpperCase():null;
     if(code)return [currentSearchStore(code)].filter(Boolean);
     if(!address)return rankSearchRows(query);
     const rows=latestSnapshotRows, registryVersion=customerRegistry?.currentVersion();
-    if(searchIndexCurrent(searchIndex)||!stageAddressBatchEnabled()||registryVersion){
-      const {byAddress,records}=getSearchIndex();
+    const indexed = searchIndexCurrent(searchIndex);
+    if(indexed||!stageAddressBatchEnabled()||registryVersion){
       const keys=[query,...NewAreaRequests.addressQueries(query,Phase2bUi.addressVariants)].map(normalizeSearchAddress);
-      const matches=[...new Set(keys.flatMap(key=>[...(byAddress.get(key)||[])]))].map(code=>records.get(code)?.row).filter(Boolean);
+      let matches;
+      if(!indexed&&stageAddressBatchEnabled()&&stageRegistrationOnly()&&registryVersion){
+        matches=findColdRegistrationAddressRows(keys,generalRegistryRows);
+      }else{
+        const {byAddress,records}=getSearchIndex();
+        matches=[...new Set(keys.flatMap(key=>[...(byAddress.get(key)||[])]))].map(code=>records.get(code)?.row).filter(Boolean);
+      }
       if(matches.length)return matches;
     }
     if(window.MapCustomerRegistry?.addressHash){
@@ -3470,11 +3502,12 @@
     };
     const initialGeneration=snapshotMeta?.sourceGeneration;
     const registryVersion=customerRegistry?.currentVersion();
-    // For the first submitted full address, overlap the protected lookup with
-    // local indexing. Any locally verified customer still takes precedence.
     const coldIndex=registryVersion&&!searchIndexCurrent(searchIndex);
+    // The national registry can answer an exact address before the full text
+    // index is ready. Its miss can then use the single protected resolution.
+    const coldRegistration=coldIndex&&stageRegistrationOnly();
     trace.count('localIndexReady',Boolean(registryVersion&&!coldIndex));
-    const evidenceFlight=stageLookup&&initialGeneration&&!snapshotRetryAfter&&coldIndex&&completeAddressRegion(lookupText)
+    const evidenceFlight=stageLookup&&initialGeneration&&!snapshotRetryAfter&&coldIndex&&!coldRegistration&&completeAddressRegion(lookupText)
       ?resolveEvidence(initialGeneration,canCombine?'prepare':undefined):null;
     const local=await findStoredSearchRows(text,{signal,address});
     if(!active())return;
