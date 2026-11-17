@@ -118,7 +118,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
  assert.equal(clears,0);
 });
 
-test('an already visible official result can be reused only while its verified scene still matches',()=>{
+test('an exact address can reuse its active pin without another lookup',()=>{
  const point=store('','합성 주소','서울 종로구 합성로 71',{coordinateSource:'OFFICIAL_PUBLIC_BUILDING'});
  const allStores=[point],expected=new Map();
  const scope={state:{virtual:point},dateReady:true,mapMoving:false,allStores,temporaryDetailPoint:point,
@@ -150,6 +150,17 @@ test('an already visible official result can be reused only while its verified s
  assert.equal(reuse(point.address,trace),false);
  scope.performance.now=()=>500;
  scope.snapshotMeta.sourceGeneration='b'.repeat(64);
+ assert.equal(reuse(point.address,trace),false);
+ scope.snapshotMeta.sourceGeneration=point.kakaoAddressCheck.sourceGeneration;
+ scope.searchPinView=()=> 'mobile search drawer changed the viewport';
+ scope.state.map={};
+ point.temporaryKey='exact-address-pin';
+ scope.temporaryPins=new Map([[point.temporaryKey,{point}]]);
+ let refocused=false;
+ scope.openTemporaryPin=(target,options)=>{refocused=target===point&&options.focus&&options.trace===trace;};
+ assert.equal(reuse(point.address,trace),true);
+ assert.equal(refocused,true);
+ scope.temporaryPins.clear();
  assert.equal(reuse(point.address,trace),false);
 });
 

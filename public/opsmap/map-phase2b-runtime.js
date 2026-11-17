@@ -2500,24 +2500,32 @@
 
   function reuseVisibleAddressSearch(text,trace) {
     const point=state.virtual, neighborhood=searchNeighborhood;
-    if(!point||!dateReady||mapMoving||!neighborhood||point!==neighborhood.point||point!==temporaryDetailPoint||
-       point.address!==text||neighborhood.sourceRows!==allStores||neighborhood.paintedView!==searchPinView()||
-       neighborhood.filterKey!==periodSelectionCache?.key||neighborhood.cameraInteraction!==mapCamera?.interaction())return false;
+    if(!point||!dateReady||point.address!==text)return false;
     const generation=snapshotMeta?.sourceGeneration;
     const kakao=point.kakaoAddressCheck;
     const exactKakao=point.coordinateSource==='KAKAO_ADDRESS_TEMPORARY'&&kakao&&
       kakao.sourceGeneration===generation&&performance.now()<kakao.expiresAt&&
       window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true;
+    const stillVisible=!mapMoving&&neighborhood?.point===point&&point===temporaryDetailPoint&&
+      neighborhood.sourceRows===allStores&&neighborhood.paintedView===searchPinView()&&
+      neighborhood.filterKey===periodSelectionCache?.key&&neighborhood.cameraInteraction===mapCamera?.interaction()&&
+      visibleSearchPin(point);
+    if(!stillVisible&&(!exactKakao||!state.map||temporaryPins.get(point.temporaryKey)?.point!==point))return false;
     if(!exactKakao){
       const cached=NewAreaRequests.cachedStageAddress(text,generation);
       if(cached?.status!=='OFFICIAL'||cached.point?.lat!==point.lat||cached.point?.lng!==point.lng||
          cached.point?.coordinateSource!==point.coordinateSource)return false;
     }
-    if(!visibleSearchPin(point))return false;
     invalidateUnifiedSearch();
     cancelAddressLookup();closeUnifiedSearchResults();
     setSearchState('임시 위치 표시 · 고객정보에 저장하지 않습니다.');
     trace.count('cacheHit',true);
+    if(!stillVisible){
+      trace.record('coordinates');
+      trace.record('pin');
+      openTemporaryPin(point,{focus:true,trace});
+      return true;
+    }
     for(const phase of ['coordinates','map','pin','visiblePin','nearbyPins'])trace.record(phase);
     if(['centered','deviation'].includes(mapCamera?.focusState()?.state))trace.record('mapSettled');
     trace.count('nearbyExpected',neighborhood.paintedCount);
