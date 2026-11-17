@@ -68,3 +68,13 @@ test('route extent padding reserves top controls and an open right card',()=>{
   occluders:[rect(0,120,390,60),rect(0,580,390,264)]});
  assert.deepEqual(Array.from(f.camera.fitPadding()),[124,32,292,32]);
 });
+
+test('only the active focus reports settlement for the nearby marker refresh',()=>{
+ const f=cameraFixture(),settled=[];
+ f.camera.focus({lat:36,lng:128},{onSettled:()=>settled.push('superseded')});
+ f.camera.focus({lat:37,lng:127},{onSettled:result=>settled.push(result.state)});
+ f.flush();
+ assert.deepEqual(settled,['centered']);
+ f.camera.scheduleFocus(true); f.flush();
+ assert.deepEqual(settled,['centered']);
+});

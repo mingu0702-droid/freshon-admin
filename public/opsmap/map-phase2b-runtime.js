@@ -2316,7 +2316,7 @@
     const overlayMs=performance.now()-started-planMs;
     markerEntries = reconciled.next;
     state.overlays = [...markerEntries.values()].map(entry=>entry.value);
-    if(neighborhood?.trace&&mapCamera?.focusState()?.state==='centered'){
+    if(neighborhood?.trace&&['centered','deviation'].includes(mapCamera?.focusState()?.state)){
       const {trace,stores,point}=neighborhood;
       const expected=new Set(stores.map(row=>row.customerCode));
       const shown=new Set(pins.flatMap(row=>row.memberCodes||[row.customerCode]).filter(code=>expected.has(code)));
@@ -2326,7 +2326,8 @@
       neighborhood.trace=null;
       requestAnimationFrame(()=>{
         if(searchNeighborhood?.point!==point)return;
-        trace.record('visiblePin');
+        const marker=temporaryPins.get(point.temporaryKey)?.marker;
+        if(marker?.isConnected&&marker.getBoundingClientRect().width)trace.record('visiblePin');
         trace.record('nearbyPins');
       });
     }
@@ -2439,14 +2440,17 @@
     positionTemporaryDistanceLabel();scheduleNewAreaDispatchBadges();
   }
 
-  function focusMapPoint(row,{zoom=false,key='',pinOffset,nearby=false}={}) {
+  function focusMapPoint(row,{zoom=false,key='',pinOffset,nearby=false,onSettled}={}) {
     if(!state.map||numberOrNull(row.lat)===null||numberOrNull(row.lng)===null)return;
     state.fitRequested=false;state.suppressMapEventsUntil=Date.now()+700;
     const level=window.MapViewPolicy.storePinLevel;
     if(nearby?state.map.getLevel()!==level:zoom&&state.map.getLevel()>level)state.map.setLevel(level);
     const point=new kakao.maps.LatLng(Number(row.lat),Number(row.lng));
     if(nearby)state.map.setCenter?.(point);
-    if(!mapCamera?.focus(point,{key:key||row.customerCode||row.vehicle||'selection',pinOffset}))state.map.panTo(point);
+    if(!mapCamera?.focus(point,{key:key||row.customerCode||row.vehicle||'selection',pinOffset,onSettled})){
+      state.map.panTo(point);
+      if(onSettled)afterSearchPaint(onSettled);
+    }
   }
 
   function coordinateEvidenceLabel(row) {
@@ -3593,9 +3597,14 @@
     window.dispatchEvent(new CustomEvent('map-store-selected',{detail:{customerCode:null}}));
     requestAnimationFrame(positionDetailPopup);
     const verifiedSearch=focus&&temporaryPins.get(row.temporaryKey)?.point===row&&row.coordinateSource!=='MAP_CLICK_TEMPORARY';
-    if(verifiedSearch)searchNeighborhood={point:row,filterKey:periodSelectionCache?.key,trace};
+    const neighborhood=verifiedSearch?{point:row,filterKey:periodSelectionCache?.key,trace}:null;
+    if(neighborhood)searchNeighborhood=neighborhood;
     if(innerWidth<=760)showMobileMap();
-    if(focus)focusMapPoint(row,{zoom:true,key:'search-temporary',nearby:verifiedSearch});
+    if(focus)focusMapPoint(row,{zoom:true,key:'search-temporary',nearby:verifiedSearch,onSettled:neighborhood?()=>{
+      if(searchNeighborhood===neighborhood&&dateReady&&state.mode==='BASE_60D'){
+        renderStops(state.currentRows,{viewportOnly:true,fromIdle:!neighborhood.trace});
+      }
+    }:undefined});
     trace?.mark('map');
     trace?.mark('detail');
     trace?.finish('temporary');

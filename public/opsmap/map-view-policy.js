@@ -457,10 +457,13 @@
         scheduleFocus(true);return;
       }
       report({state:error<=(active.pinOffset?1.5:30)?'centered':'deviation',expectedX:g.target.x,expectedY:g.target.y,actualX:rect.left+actual.x*sx,actualY:rect.top+actual.y*sy,errorPx:Math.round(error*100)/100,basis:g.target.basis});
+      const onSettled=active.onSettled;
+      active.onSettled=null;
+      onSettled?.(lastFocus);
     }
-    function focus(point,{key='',reason='selection',pinOffset}={}){
+    function focus(point,{key='',reason='selection',pinOffset,onSettled}={}){
       if(disposed||!validPoint(point))return false;
-      releaseFocus();active={point,key,reason,pinOffset,id:++sequence,interaction,geometry:null,corrections:0};report({state:'pending'});scheduleFocus(true);return true;
+      releaseFocus();active={point,key,reason,pinOffset,onSettled,id:++sequence,interaction,geometry:null,corrections:0};report({state:'pending'});scheduleFocus(true);return true;
     }
     function relayout(){
       if(disposed)return;
