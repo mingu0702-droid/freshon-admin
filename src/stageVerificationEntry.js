@@ -32,7 +32,6 @@ import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 import {createStageDriverContacts} from './stageDriverContacts.js';
 import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,vehicleId} from './datedDeliveryContract.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
-import {renderStageKakaoAddressDiagnostic} from './opsmap-abc/stageKakaoAddressDiagnostic.js';
 import {createOfficialAddressLookup,createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
 import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
@@ -719,9 +718,6 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     }
   });
   router.use('/api',(_req,res)=>res.status(404).json({error:'OPSMAP_API_NOT_AVAILABLE'}));
-  if (stageAddressApproved && stage.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED === '1') {
-    router.get('/kakao-address-diagnostic',renderStageKakaoAddressDiagnostic);
-  }
   router.get('/',(_req,res)=>res.sendFile('map-phase2b-preview.html',{root:publicDir}));
   router.get('/vendor/xlsx.full.min.js',(_req,res)=>res.sendFile(excelBrowserScript,{maxAge:'1h'}));
   router.use(express.static(publicDir));

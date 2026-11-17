@@ -52,7 +52,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
    !state.days||!state.queries||typeof state.diagnosticUsed!=='boolean'||typeof state.diagnosticPassed!=='boolean'||typeof state.blocked!=='boolean')fail('GEOCODE_LEDGER_INVALID');
   return state;
  };
- const transaction=work=>{if(!store?.durable||typeof store.transaction!=='function')fail('GEOCODE_DURABLE_LEDGER_REQUIRED');return store.transaction((state,commit)=>work(validate(state),commit));};
+ const transaction=(work,options)=>{if(!store?.durable||typeof store.transaction!=='function')fail('GEOCODE_DURABLE_LEDGER_REQUIRED');return store.transaction((state,commit)=>work(validate(state),commit),options);};
  const keywordProof=()=>env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED==='1';
  const status=async()=>{
   const independentEnabled=Boolean(independentAddressLookup());
@@ -102,18 +102,21 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
   const task=(async()=>{
    await assertCurrent();
    const reservationStarted=performance.now();
+   let reservationAuthMs=0;
    await transaction(async(state,commit)=>{
     if(state.blocked||blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
     if(diagnostic){if(env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED!=='1'||state.diagnosticUsed)fail('DIAGNOSTIC_ALREADY_USED',429);}
     else if(env.OPSMAP_KAKAO_GEOCODING_ENABLED!=='1'||!state.diagnosticPassed)fail('GEOCODING_DISABLED');
     const today=day(now()),count=Number(state.days[today]||0);
     if(!Number.isSafeInteger(count)||count<0||count>=dailyLimit)fail('GEOCODE_DAILY_LIMIT',429);
+    const authStarted=performance.now();
     await assertCurrent();
+    reservationAuthMs=performance.now()-authStarted;
     state.used++;state.days[today]=count+1;state.queries[today+':'+queryHash]=Number(state.queries[today+':'+queryHash]||0)+1;
     if(diagnostic)state.diagnosticUsed=true;
     await commit(state);
-   });
-   const ledgerReservationMs=performance.now()-reservationStarted;
+   },{reservation:!diagnostic});
+   const ledgerReservationMs=performance.now()-reservationStarted-reservationAuthMs;
    let stage='PROVIDER_REQUEST',providerHttp=null,providerStarted=null,providerDurationMs=null;const started=now();
    try{
     await assertCurrent();

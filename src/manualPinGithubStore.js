@@ -6,18 +6,42 @@ const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 const geocodeLedger=Symbol('stage-geocode-ledger');
 export function createStageGeocodeBudgetStore(options){
  const store=createManualPinGithubStore({...options,[geocodeLedger]:true});let tail=Promise.resolve();
- return {...store,durable:true,transaction(work){const result=tail.then(()=>store.transaction(work));tail=result.catch(()=>{});return result;}};
+ return {...store,durable:true,transaction(work,options){const result=tail.then(()=>store.transaction(work,options));tail=result.catch(()=>{});return result;}};
 }
 export function createManualPinGithubStore({repo,token,branch,productionBranch='main',fetchImpl=fetch,[geocodeLedger]:geocode=false}={}){
  if(!/^[-\w.]+\/[-\w.]+$/.test(repo||'')||!token||branch!=='stage/opsmap-manual-pins'||branch===productionBranch)fail('MANUAL_PIN_GITHUB_CONFIG');
- const root='https://api.github.com/repos/'+repo,api=root+'/contents/opsmap-stage/'+(geocode?'geocode-budget-v1.json':'manual-pins-v1.json'),headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'opsmap-manual-pin-stage'};
+ const root='https://api.github.com/repos/'+repo;
+ const filePath='opsmap-stage/'+(geocode?'geocode-budget-v1.json':'manual-pins-v1.json');
+ const api=root+'/contents/'+filePath;
+ const headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'opsmap-manual-pin-stage'};
+ let committedLedger=null;
  async function request(url,options={}){try{return await fetchImpl(url,{...options,headers,signal:AbortSignal.timeout(12000)});}catch{fail(options.method==='PUT'?'MANUAL_PIN_WRITE_OUTCOME_UNKNOWN':'MANUAL_PIN_GITHUB_NETWORK');}}
- async function read(){
-  const r=await request(root);if(!r.ok)fail('MANUAL_PIN_GITHUB_PERMISSION');const repoInfo=await r.json();if(repoInfo.private!==true||repoInfo.permissions?.push!==true)fail('MANUAL_PIN_GITHUB_PRIVATE_WRITE_REQUIRED');
+ async function verifyPrivateWritePermission(){
+  const response=await request(root);
+  if(!response.ok)fail('MANUAL_PIN_GITHUB_PERMISSION');
+  const info=await response.json();
+  if(info.private!==true||info.permissions?.push!==true)fail('MANUAL_PIN_GITHUB_PRIVATE_WRITE_REQUIRED');
+ }
+ async function readFile(){
   const v=await request(api+'?ref='+encodeURIComponent(branch));if(v.status===404)fail('MANUAL_PIN_GITHUB_FILE_OR_BRANCH_MISSING');if(!v.ok)fail('MANUAL_PIN_GITHUB_READ');const m=await v.json();
   if(!/^[a-f0-9]{40}$/.test(m.sha||'')||m.encoding!=='base64'||typeof m.content!=='string')fail('MANUAL_PIN_GITHUB_FORMAT');
   const b=Buffer.from(m.content,'base64');if(b.length>512000)fail('MANUAL_PIN_GITHUB_SIZE');let value;try{value=JSON.parse(b.toString('utf8'));}catch{fail('MANUAL_PIN_GITHUB_FORMAT');}
   return {sha:m.sha,value};
+ }
+ async function read(useCommittedLedger=false){
+  if(!geocode){await verifyPrivateWritePermission();return readFile();}
+  const file=useCommittedLedger&&committedLedger?committedLedger:readFile();
+  const [,state]=await Promise.all([verifyPrivateWritePermission(),file]);
+  committedLedger=state;
+  return state;
+ }
+ async function githubWriteReceipt(response,bytes){
+  let receipt;
+  try{receipt=await response.json();}catch{return null;}
+  const gitBlobSha=crypto.createHash('sha1').update('blob '+bytes.length+'\0').update(bytes).digest('hex');
+  if(receipt?.content?.type!=='file'||receipt.content.path!==filePath||receipt.content.sha!==gitBlobSha||
+    !/^[a-f0-9]{40}$/.test(receipt.commit?.sha||''))return null;
+  return {sha:gitBlobSha,value:JSON.parse(bytes.toString('utf8'))};
  }
  function safeBytes(value){
   const text=JSON.stringify(value);if(Buffer.byteLength(text)>512000)fail('MANUAL_PIN_GITHUB_SIZE');
@@ -28,11 +52,22 @@ export function createManualPinGithubStore({repo,token,branch,productionBranch='
  }
  // The previous private Git commit is the backup; each new state also carries
  // the complete per-customer audit chain. No second file is written.
- return {kind:'github-stage-cas-v1',backupStore:{async transaction(work){return work(null,async()=>{});}},async transaction(work){const old=await read(),state=structuredClone(old.value);let wrote=false;
+ return {kind:'github-stage-cas-v1',backupStore:{async transaction(work){return work(null,async()=>{});}},async transaction(work,{reservation=false}={}){
+  const useCommittedLedger=geocode&&reservation;
+  const old=await read(useCommittedLedger),state=structuredClone(old.value);let wrote=false;
   return work(state,async next=>{if(wrote)fail('MANUAL_PIN_GITHUB_SINGLE_WRITE');wrote=true;const bytes=safeBytes(next);
+   // The expected blob SHA rejects stale reservations, including after another instance writes.
+   committedLedger=null;
    const response=await request(api,{method:'PUT',body:JSON.stringify({message:geocode?'Reserve Stage geocode request count':'Update isolated Stage manual pins',branch,sha:old.sha,content:bytes.toString('base64')})});
    if([409,422].includes(response.status))fail('MANUAL_PIN_GITHUB_CONFLICT',409);if(!response.ok)fail('MANUAL_PIN_GITHUB_WRITE');
-   let saved;try{saved=await read();}catch{fail('MANUAL_PIN_GITHUB_READBACK_UNKNOWN');}if(hash(Buffer.from(JSON.stringify(saved.value),'utf8'))!==hash(bytes))fail('MANUAL_PIN_GITHUB_READBACK_UNKNOWN');
+   if(useCommittedLedger){
+    committedLedger=await githubWriteReceipt(response,bytes);
+    if(committedLedger)return;
+   }
+   let saved;
+   try{saved=await (geocode?readFile():read());}catch{fail('MANUAL_PIN_GITHUB_READBACK_UNKNOWN');}
+   if(hash(Buffer.from(JSON.stringify(saved.value),'utf8'))!==hash(bytes))fail('MANUAL_PIN_GITHUB_READBACK_UNKNOWN');
+   if(geocode)committedLedger=saved;
   });
  }};
 }

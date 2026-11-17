@@ -6,6 +6,7 @@ import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageAbValidation.js';
 import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
 import {createTemporaryOfficialAddressLookup,officialAddressKey} from '../src/opsmapOfficialAddressLookup.js';
 import {createKakaoGeocodeLedger,KAKAO_EXPECTED_APP_ID} from '../src/opsmap-abc/kakaoCoordinateConnection.js';
+import {createStageGeocodeBudgetStore} from '../src/manualPinGithubStore.js';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const address = '경기도 오산시 검증로 777';
@@ -128,4 +129,63 @@ test('approved Stage address queries use only the separate hash-only budget and 
   assert.equal(JSON.parse(budget).used,1);
   assert(!budget.toString().includes(address));
   assert(!budget.toString().includes('127.07'));
+});
+
+test('Stage geocode reservations verify GitHub receipts and fail closed on a stale blob', async () => {
+  const path='opsmap-stage/geocode-budget-v1.json';
+  const branch='stage/opsmap-manual-pins';
+  const blob=value=>createHash('sha1').update('blob '+value.length+'\0').update(value).digest('hex');
+  let persisted=Buffer.from(JSON.stringify(createKakaoGeocodeLedger()));
+  let privateRepo=true, proofReturned=true;
+  const calls=[];
+  const store=createStageGeocodeBudgetStore({
+    repo:'mingu0702-droid/freshon-cache',token:'fixture',branch,
+    fetchImpl:async(input, options={})=>{
+      const url=new URL(input);
+      if(url.pathname.endsWith('/freshon-cache')){
+        calls.push('access');
+        return Response.json({private:privateRepo,permissions:{push:true}});
+      }
+      assert(url.pathname.endsWith('/contents/'+path));
+      if(options.method!=='PUT'){
+        calls.push('read');
+        assert.equal(url.searchParams.get('ref'),branch);
+        return Response.json({sha:blob(persisted),encoding:'base64',content:persisted.toString('base64')});
+      }
+      calls.push('write');
+      const body=JSON.parse(options.body);
+      assert.equal(body.branch,branch);
+      if(body.sha!==blob(persisted))return new Response(null,{status:409});
+      persisted=Buffer.from(body.content,'base64');
+      return Response.json(proofReturned ? {
+        content:{type:'file',path,sha:blob(persisted)},commit:{sha:'a'.repeat(40)}
+      } : {});
+    }
+  });
+  const reserve=()=>store.transaction(async(state,commit)=>{
+    state.used++;
+    await commit(state);
+    return state.used;
+  },{reservation:true});
+
+  assert.equal(await reserve(),1);
+  assert.equal(calls.filter(call=>call==='read').length,1);
+  calls.length=0;
+  assert.equal(await reserve(),2);
+  assert.deepEqual(calls,['access','write']);
+
+  persisted=Buffer.from(JSON.stringify({...JSON.parse(persisted),used:3}));
+  await assert.rejects(reserve(),{code:'MANUAL_PIN_GITHUB_CONFLICT'});
+  assert.equal(JSON.parse(persisted).used,3);
+  assert.equal(await reserve(),4);
+
+  calls.length=0;
+  proofReturned=false;
+  assert.equal(await reserve(),5);
+  assert.deepEqual(calls,['access','write','read']);
+
+  calls.length=0;
+  privateRepo=false;
+  await assert.rejects(reserve(),{code:'MANUAL_PIN_GITHUB_PRIVATE_WRITE_REQUIRED'});
+  assert.deepEqual(calls,['access']);
 });
