@@ -3971,6 +3971,7 @@
     if(!keepViewport)trace?.mark('map');
     if(focus)focusMapPoint(row,{zoom:true,key:'search-temporary',nearby:verifiedSearch,onSettled:neighborhood?()=>{
       if(searchNeighborhood!==neighborhood)return;
+      requestAnimationFrame(positionTemporaryRemoveButtons);
       trace?.record('mapSettled');
       const refreshed=neighborhood.paintedView===searchPinView();
       if(!refreshed)neighborhood.paintedView=null;
