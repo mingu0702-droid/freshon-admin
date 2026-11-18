@@ -23,6 +23,9 @@ import {phase2bSnapshotMeta} from './phase2bOperations.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {createStageStaffRegistryAsset,mountStageStaffRegistry} from './stageStaffRegistryAsset.js';
 import {createStageNationalRegistryReader,createStageNationalRegistryStorage} from './stageNationalRegistry.js';
+import {createRecentOperationsReader,createStageRecentOperationsSeed,createStageRecentOperationsStore,
+  mountRecentOperations} from './stageRecentOperations.js';
+import {recentOperationsBaseline} from './stageRecentOperationsManifest.js';
 import {createStageStoreDetails} from './stageStoreDetails.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
@@ -146,6 +149,9 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const remotePostal = postalEnabled ? createStagePostalAssets({env:stage,fetchImpl,now}) : null;
   const staffRegistry = createStageStaffRegistryAsset({env:stage,fetchImpl,now});
   const nationalRegistry = createStageNationalRegistryReader({store:createStageNationalRegistryStorage({env:stage,fetchImpl,now}),now});
+  const readRecentOperations = createRecentOperationsReader({now,
+    readSeed:createStageRecentOperationsSeed({env:stage,fetchImpl,manifest:recentOperationsBaseline}),
+    store:createStageRecentOperationsStore({env:stage,fetchImpl,now})});
   const validation = createStageAbValidation({now,retainCoverageFiles:!postalEnabled});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   let baselineConfig, baselineStore, baselineRefresh, baselineRestoreMs, baselineState='NOT_CONFIGURED';
@@ -467,6 +473,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       mountStageStaffRegistry({app:router,requireStaff,asset:staffRegistry,nationalRegistry,
         getVerifiedRegistry:()=>validation.active()?.registry,now});
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
+        mountRecentOperations(router,{requireStaff,read:readRecentOperations});
         driverContacts.mount(binding,{readBaseVehicles:codes=>base.get(codes),
           readDatedAssignment:readDatedDelivery.readDriverAssignment,readVerifiedVehicleRegistration});
         mountStageAbValidation(router,{...binding,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,

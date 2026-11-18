@@ -1,0 +1,259 @@
+import {createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes} from 'node:crypto';
+import {promisify} from 'node:util';
+import {gzip, gunzip} from 'node:zlib';
+import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
+import {datesFor, isDay} from './shadowCoverage/coverageFiles.js';
+import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+
+export const RECENT_OPERATIONS_ROUTE = '/api/map-phase2b/private/recent-operations';
+export const RECENT_OPERATIONS_BASELINE_END = '2026-11-17';
+export const recentOperationsCenters = ['osan','yeongnam','honam'];
+const evidenceOrder = ['order_confirmed','dispatch_confirmed','delivery_completed'];
+const sourceEvidence = {
+  freshon_orders:'order_confirmed', wms_dispatch:'dispatch_confirmed', delivery_admin:'delivery_completed'
+};
+const binding = Buffer.from('opsmap-stage/recent-operations-v1');
+const repository = 'mingu0702-droid/freshon-cache', branch = 'stage/opsmap-snapshots';
+const prefix = 'recent-operations-v1/', currentFile = prefix+'current.json';
+const seedFile = prefix+'baseline.json';
+const codeRevision = /^[a-f0-9]{40}$/;
+const maxClearBytes = 32 * 1024 * 1024, maxPackedBytes = 4 * 1024 * 1024;
+const compress = promisify(gzip), decompress = promisify(gunzip);
+const customerCode = /^[A-Z]\d{1,20}$/;
+const hash = /^[a-f0-9]{64}$/;
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+const stageScope = env => env.RENDER_SERVICE_ID === STAGE_SERVICE && env.RENDER_EXTERNAL_URL === STAGE_ORIGIN;
+const latestClosedDay = at => new Date(at + 9 * 3600000 - 86400000).toISOString().slice(0,10);
+const dayKey = ({date,centerKey,source}) => [date,centerKey,source].join(':');
+const rejected = () => Error('RECENT_OPERATIONS_EVIDENCE_INVALID');
+
+export const stageRecentOperationsSyncEnabled = env => stageScope(env) &&
+  env.OPSMAP_STAGE_RECENT_OPERATIONS_SYNC_APPROVED === '1';
+
+export function normalizeRecentOperations({startDate,endDate,days} = {}) {
+  if (!isDay(endDate) || endDate < RECENT_OPERATIONS_BASELINE_END ||
+      startDate !== datesFor(endDate,90)[0] || !Array.isArray(days) || days.length > 810) throw rejected();
+  const keys = new Set(), normalized = [];
+  let rowCount = 0;
+  for (const {date,centerKey,source,coverage,rows} of days) {
+    const expectedEvidence = sourceEvidence[source];
+    const key = dayKey({date,centerKey,source});
+    if (!isDay(date) || date < startDate || date > endDate || !recentOperationsCenters.includes(centerKey) ||
+        !Object.hasOwn(sourceEvidence,source) || !['partial','complete'].includes(coverage) ||
+        source === 'delivery_admin' && coverage === 'complete' || keys.has(key) ||
+        !Array.isArray(rows) || rows.length > 30000 || (rowCount += rows.length) > 850000) throw rejected();
+    keys.add(key);
+    const codes = new Set();
+    for (const row of rows) {
+      if (typeof row?.customerCode !== 'string' || !customerCode.test(row.customerCode) ||
+          row.evidence !== expectedEvidence || codes.has(row.customerCode)) throw rejected();
+      codes.add(row.customerCode);
+    }
+    normalized.push({date,centerKey,source,coverage,rows:[...codes].sort().map(code=>({customerCode:code,evidence:expectedEvidence}))});
+  }
+  return {startDate,endDate,days:normalized.sort((a,b)=>dayKey(a).localeCompare(dayKey(b)))};
+}
+
+export function projectRecentOperations(ledger) {
+  const centers = Object.fromEntries(recentOperationsCenters.map(center=>[center,{
+    confirmedDays:[],observedDates:new Set(),activeCount:0,
+    sourceObservedDates:Object.fromEntries(Object.keys(sourceEvidence).map(key=>[key,new Set()])),
+    completeOrders:new Set(),completeDispatch:new Set()
+  }]));
+  const active = new Map();
+  for (const {date,centerKey,source,coverage,rows} of ledger.days) {
+    const center=centers[centerKey];
+    center.observedDates.add(date);
+    center.sourceObservedDates[source].add(date);
+    if (coverage==='complete') {
+      (source==='freshon_orders'?center.completeOrders:center.completeDispatch).add(date);
+    }
+    for (const {customerCode,evidence} of rows) {
+      const key=centerKey+':'+customerCode;
+      const previous=active.get(key);
+      if (!previous || previous.date<date || previous.date===date &&
+          evidenceOrder.indexOf(evidence)>evidenceOrder.indexOf(previous.evidence)) active.set(key,{customerCode,centerKey,date,evidence});
+    }
+  }
+  for (const {centerKey} of active.values()) centers[centerKey].activeCount++;
+  for (const [key,{completeOrders,completeDispatch,observedDates,sourceObservedDates,activeCount}] of Object.entries(centers)) {
+    centers[key]={activeCount,observedDates:[...observedDates].sort(),
+      confirmedDays:[...completeOrders].filter(day=>completeDispatch.has(day)).sort(),
+      sourceObservedDates:Object.fromEntries(Object.entries(sourceObservedDates).map(([source,days])=>[source,[...days].sort()]))};
+  }
+  return {ok:true,startDate:ledger.startDate,endDate:ledger.endDate,centers,rows:[...active.values()]};
+}
+
+export function mergeRecentOperations(previous, endDate, days) {
+  if (endDate < previous.endDate) throw rejected();
+  const startDate=datesFor(endDate,90)[0];
+  const scoped=normalizeRecentOperations({startDate,endDate,days});
+  const retained=new Map(previous.days.filter(day=>day.date>=startDate).map(day=>[dayKey(day),day]));
+  for (const day of scoped.days) {
+    const key=dayKey(day), existing=retained.get(key);
+    if (!existing || day.coverage==='complete') {
+      retained.set(key,day);
+    } else if (existing.coverage==='partial') {
+      const rows=new Map([...existing.rows,...day.rows].map(row=>[row.customerCode,row]));
+      retained.set(key,{...day,rows:[...rows.values()]});
+    }
+  }
+  return normalizeRecentOperations({...scoped,days:[...retained.values()]});
+}
+
+export function recentOperationsKey(encoded) {
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(encoded || '')) throw Error('RECENT_OPERATIONS_KEY');
+  return Buffer.from(hkdfSync('sha256',Buffer.from(encoded,'base64'),binding,Buffer.from('asset-encryption'),32));
+}
+
+export async function sealRecentOperations(ledger,key) {
+  const bytes=Buffer.from(JSON.stringify(normalizeRecentOperations(ledger)));
+  if (bytes.length>maxClearBytes) throw rejected();
+  const nonce=randomBytes(12), cipher=createCipheriv('aes-256-gcm',key,nonce);
+  cipher.setAAD(binding);
+  const packed=Buffer.concat([nonce,cipher.update(await compress(bytes)),cipher.final(),cipher.getAuthTag()]).toString('base64');
+  if (packed.length>maxPackedBytes) throw rejected();
+  return {version:sha256(bytes),packed};
+}
+
+export async function openRecentOperations(value,key) {
+  if (!hash.test(value?.version || '') || typeof value.packed!=='string' ||
+      value.packed.length>maxPackedBytes) throw rejected();
+  const data=Buffer.from(value.packed,'base64');
+  if (data.length<29) throw rejected();
+  const decipher=createDecipheriv('aes-256-gcm',key,data.subarray(0,12));
+  decipher.setAAD(binding);
+  decipher.setAuthTag(data.subarray(-16));
+  const bytes=await decompress(Buffer.concat([decipher.update(data.subarray(12,-16)),decipher.final()]),{maxOutputLength:maxClearBytes});
+  if (sha256(bytes)!==value.version) throw rejected();
+  return normalizeRecentOperations(JSON.parse(bytes));
+}
+
+export function createStageRecentOperationsSeed({env=process.env,fetchImpl=fetch,manifest}={}) {
+  if (!stageScope(env) || !manifest) return null;
+  const token=env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;
+  if (!token || !codeRevision.test(manifest.ref || '') || !hash.test(manifest.sha256 || '') ||
+      !Number.isSafeInteger(manifest.bytes) || manifest.bytes<=0 || manifest.bytes>maxPackedBytes+1024) return null;
+  const url='https://api.github.com/repos/'+repository+'/contents/opsmap-stage/'+seedFile+'?ref='+manifest.ref;
+  return async()=>{
+    const response=await fetchImpl(url,{method:'GET',redirect:'error',signal:AbortSignal.timeout(20000),
+      headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github.raw+json'}});
+    if (!response.ok || !response.body || Number(response.headers.get('content-length'))>manifest.bytes) {
+      await response.body?.cancel().catch(()=>{});
+      throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
+    }
+    const chunks=[];
+    let size=0;
+    for await (const chunk of response.body) {
+      size+=chunk.length;
+      if (size>manifest.bytes) throw rejected();
+      chunks.push(chunk);
+    }
+    const bytes=Buffer.concat(chunks);
+    if (size!==manifest.bytes || sha256(bytes)!==manifest.sha256) throw rejected();
+    return openRecentOperations(JSON.parse(bytes),recentOperationsKey(env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64));
+  };
+}
+
+export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetch,now=Date.now,write=false}={}) {
+  if (!stageRecentOperationsSyncEnabled(env) || env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1' ||
+      write && env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1') return null;
+  const token=write ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN ||
+    (env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1'&&env.OPSMAP_SNAPSHOT_STORE_TOKEN) :
+    env.OPSMAP_STAGE_SYNC_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN;
+  if (!token) return null;
+  let key;
+  try {key=recentOperationsKey(env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64);}
+  catch {return null;}
+  const root='https://api.github.com/repos/'+repository, contents=root+'/contents/opsmap-stage/';
+  const client=createPrivateGithubJsonStore({now,
+    env:{GITHUB_CACHE_REPO:repository,GITHUB_CACHE_BRANCH:branch,GITHUB_CACHE_DIR:'opsmap-stage',GITHUB_TOKEN:token},
+    fetchImpl(input,options={}) {
+      const url=new URL(input), address=url.origin+url.pathname, method=options.method || 'GET';
+      const file=address.startsWith(contents)?address.slice(contents.length):'';
+      const daily=file.startsWith(prefix+'day-') && /^day-\d{4}-\d{2}-\d{2}\.json$/.test(file.slice(prefix.length));
+      const blob=address.startsWith(root+'/git/blobs/') && codeRevision.test(address.slice((root+'/git/blobs/').length));
+      const read=method==='GET' && ((file===currentFile || write&&daily) && url.searchParams.size===1 && url.searchParams.get('ref')===branch ||
+        !url.search && (address===root || write&&blob));
+      const update=write && method==='PUT' && file===currentFile && !url.search && JSON.parse(options.body).branch===branch;
+      if ((!read && !update) || url.username || url.password || url.hash) throw Error('RECENT_OPERATIONS_STORAGE_SCOPE');
+      return fetchImpl(input,{...options,redirect:'error'});
+    }});
+  return {
+    async read() {
+      if (!write) {
+        const value=await client.readRaw(currentFile,maxPackedBytes+1024);
+        return value&&{ledger:await openRecentOperations(value,key)};
+      }
+      const {value,sha}=await client.read(currentFile);
+      return {sha,ledger:value?await openRecentOperations(value,key):null};
+    },
+    ...(write?{
+      async readDay(date) {
+        const value=await client.readRaw(prefix+'day-'+date+'.json',maxPackedBytes+1024);
+        if (!value) return null;
+        const ledger=await openRecentOperations(value,key);
+        if (ledger.endDate!==date || ledger.days.some(day=>day.date!==date)) throw rejected();
+        return ledger.days;
+      },
+      async write(ledger,sha) {await client.write(currentFile,await sealRecentOperations(ledger,key),sha);}
+    }:{})
+  };
+}
+
+export async function syncStageRecentOperations({store,receipt,readSeed,readSource,now=Date.now}={}) {
+  const day=latestClosedDay(now());
+  const kstDate=new Date(now()+9*3600000).toISOString().slice(0,10);
+  if (!store?.write || !hash.test(receipt?.runId || '') || receipt.date!==kstDate) throw Error('RECENT_OPERATIONS_RECEIPT');
+  if (day<RECENT_OPERATIONS_BASELINE_END) throw rejected();
+  const current=await store.read();
+  const base=current.ledger ?? await readSeed?.();
+  if (!base) throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
+  if (base.endDate>day) throw rejected();
+  const days=await (readSource?.(day) ?? store.readDay(day));
+  if (!days?.length) return {state:'SOURCE_UNAVAILABLE',endDate:base.endDate};
+  if (days.some(row=>row.date!==day)) throw rejected();
+  const next=mergeRecentOperations(base,day,days);
+  if (JSON.stringify(next)===JSON.stringify(base)) return {state:'VERIFIED_NOOP',endDate:base.endDate};
+  try {await store.write(next,current.sha);}
+  catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
+  const saved=await store.read();
+  if (JSON.stringify(saved.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
+  return {state:'PUBLISHED',endDate:day};
+}
+
+export function createRecentOperationsReader({readSeed,store,now=Date.now}={}) {
+  let checked=0, reading, saved, seed, returned;
+  return async () => {
+    if (now()<checked) return returned;
+    reading ??= (async()=>{
+      const current=await store?.read().catch(()=>null);
+      if (current?.ledger && current.ledger.endDate<=latestClosedDay(now()) &&
+          (!saved || current.ledger.endDate>=saved.endDate)) saved=projectRecentOperations(current.ledger);
+      if (!saved) {
+        seed ??= Promise.resolve().then(()=>readSeed?.()).catch(()=>null);
+        const ledger=await seed;
+        if (ledger) saved=projectRecentOperations(ledger);
+        else seed=null;
+      }
+      checked=now()+60000;
+      returned=saved??{...projectRecentOperations({startDate:datesFor(RECENT_OPERATIONS_BASELINE_END,90)[0],
+        endDate:RECENT_OPERATIONS_BASELINE_END,days:[]}),sourceUnavailable:true};
+      return returned;
+    })().finally(()=>{reading=null;});
+    return reading;
+  };
+}
+
+export function mountRecentOperations(app,{requireStaff,read}) {
+  app.get(RECENT_OPERATIONS_ROUTE,requireStaff,async(req,res)=>{
+    res.set('Cache-Control','private, no-store').vary('Cookie');
+    if (Object.keys(req.query).length) return res.status(400).json({error:'RECENT_OPERATIONS_QUERY'});
+    try {
+      const result=await read();
+      return requireStaff(req,res,()=>res.json(result));
+    } catch {
+      return res.status(503).json({error:'RECENT_OPERATIONS_UNAVAILABLE'});
+    }
+  });
+}

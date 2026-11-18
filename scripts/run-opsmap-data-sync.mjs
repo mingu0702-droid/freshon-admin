@@ -22,6 +22,9 @@ import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixed
 import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
 import {createStageNationalRegistryStorage,createStageNationalRegistrationSource,stageNationalRegistryEnabled,
   syncStageNationalRegistry} from '../src/stageNationalRegistry.js';
+import {createStageRecentOperationsSeed,createStageRecentOperationsStore,stageRecentOperationsSyncEnabled,
+  syncStageRecentOperations} from '../src/stageRecentOperations.js';
+import {recentOperationsBaseline} from '../src/stageRecentOperationsManifest.js';
 
 const appRoot = fileURLToPath(new URL('../',import.meta.url));
 const env = process.env;
@@ -186,7 +189,7 @@ async function run() {
     };
     const runFixedMaster = async () => {
       if (!stageFixedMasterSyncEnabled(env) || !fixedScope) {
-        if (mode==='fixed-scheduled'&&!stageNationalRegistryEnabled(env)) throw Error('FIXED_MASTER_STAGE_SOURCE_SCOPE');
+        if (mode==='fixed-scheduled'&&!stageNationalRegistryEnabled(env)&&!stageRecentOperationsSyncEnabled(env)) throw Error('FIXED_MASTER_STAGE_SOURCE_SCOPE');
         return;
       }
       try {
@@ -202,7 +205,24 @@ async function run() {
         if (mode==='fixed-scheduled') throw error;
       }
     };
-    const runMasterJobs=async()=>{await runNationalRegistry();await runFixedMaster();};
+    const runRecentOperations=async()=>{
+      if (!stageRecentOperationsSyncEnabled(env)) return;
+      const component='opsmap-recent-operations-sync';
+      try {
+        const result=await syncStageRecentOperations({store:createStageRecentOperationsStore({env,write:true}),receipt,
+          readSeed:createStageRecentOperationsSeed({env,manifest:recentOperationsBaseline})});
+        console.log(JSON.stringify({component,runId:receipt.runId,...result}));
+      } catch(error) {
+        const code=error.code||error.message;
+        console.log(JSON.stringify({component,runId:receipt.runId,state:'FAILED',
+          error:/^(?:RECENT_OPERATIONS|FIXED_STORE)_[A-Z_]+$/.test(code||'')?code:'RECENT_OPERATIONS_SYNC_FAILED'}));
+        if (mode==='fixed-scheduled'&&!stageFixedMasterSyncEnabled(env)&&!stageNationalRegistryEnabled(env)) throw error;
+      }
+    };
+    const runMasterJobs=async()=>{
+      try {await runNationalRegistry();await runFixedMaster();}
+      finally {await runRecentOperations();}
+    };
     if (mode==='fixed-scheduled') return runMasterJobs();
     let durable;
     try {

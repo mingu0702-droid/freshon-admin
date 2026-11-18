@@ -7,6 +7,7 @@ import {syncDigest,syncHash} from './opsmapSyncGeneration.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
 import {FIXED_MASTER_WORKER_LIMIT, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {NATIONAL_REGISTRY_WORKER_LIMIT, stageNationalRegistryEnabled} from './stageNationalRegistry.js';
+import {stageRecentOperationsSyncEnabled} from './stageRecentOperations.js';
 
 export const OPSMAP_SCHEDULED_ROUTE='/internal/opsmap/scheduled-sync';
 const maxDelay=10*60_000;
@@ -51,10 +52,11 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
   const fullJob=path.isAbsolute(settings || '');
   const fixedEnabled=stageFixedMasterSyncEnabled(env), nationalEnabled=stageNationalRegistryEnabled(env);
   const fixedJob=(fixedEnabled||nationalEnabled) && typeof readFixedScope==='function';
+  const recentJob=stageRecentOperationsSyncEnabled(env);
   if (env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
       env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||
       env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1'||
-      !fullJob&&!fixedJob) return;
+      !fullJob&&!fixedJob&&!recentJob) return;
   let child, starting=false;
   app.post(OPSMAP_SCHEDULED_ROUTE,express.json({limit:'2kb',inflate:false}), async (req,res)=>{
     res.set('Cache-Control','no-store');
@@ -71,12 +73,12 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     }
     let processHandle;
     const args=fullJob ? [jobFile,'scheduled',settings] : [jobFile,'fixed-scheduled'];
-    try {processHandle=launch(process.execPath,args,{env,stdio:['pipe',fixedJob?'pipe':'ignore','pipe'],windowsHide:true});}
+    try {processHandle=launch(process.execPath,args,{env,stdio:['pipe',fixedJob||recentJob?'pipe':'ignore','pipe'],windowsHide:true});}
     catch {return res.status(503).json({error:'OPSMAP_SCHEDULE_LAUNCH'});}
     child=processHandle;
     let diagnostic='',timedOut=false;
     // The child emits aggregate evidence only. Never forward raw output.
-    if (fixedJob && processHandle.stdout) {
+    if ((fixedJob||recentJob) && processHandle.stdout) {
       let line='', discarded=false;
       processHandle.stdout.on('data',chunk=>{
         for (const c of String(chunk)) {
@@ -96,6 +98,12 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
                 checkedAt:Number.isFinite(Date.parse(value.checkedAt))?value.checkedAt:null,
                 error:/^(?:NATIONAL_REGISTRY|FIXED_STORE)_[A-Z_]+$/.test(value.error||'')?value.error:null}));
             }
+            if(value?.component==='opsmap-recent-operations-sync' && value.runId===receipt.runId &&
+               ['PUBLISHED','VERIFIED_NOOP','SOURCE_UNAVAILABLE','BUSY','FAILED'].includes(value.state)) {
+              log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
+                endDate:/^\d{4}-\d{2}-\d{2}$/.test(value.endDate||'')?value.endDate:null,
+                error:/^(?:RECENT_OPERATIONS|FIXED_STORE)_[A-Z_]+$/.test(value.error||'')?value.error:null}));
+            }
           } catch {/* Ignore unrelated stdout and malformed lines. */}
           line='';discarded=false;
         }
@@ -103,7 +111,8 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     }
     processHandle.stderr.on('data',chunk=>{if(diagnostic.length<100) diagnostic=(diagnostic+chunk).slice(0,100);});
     const timeout=setTimeout(()=>{timedOut=true;processHandle.kill();},(fullJob?maxRuntime:0)+
-      (fixedJob&&fixedEnabled?FIXED_MASTER_WORKER_LIMIT:0)+(fixedJob&&nationalEnabled?NATIONAL_REGISTRY_WORKER_LIMIT:0));
+      (fixedJob&&fixedEnabled?FIXED_MASTER_WORKER_LIMIT:0)+(fixedJob&&nationalEnabled?NATIONAL_REGISTRY_WORKER_LIMIT:0)+
+      (recentJob?3*60_000:0));
     timeout.unref();
     const release=(exitCode,error)=>{
       if(child!==processHandle)return;
