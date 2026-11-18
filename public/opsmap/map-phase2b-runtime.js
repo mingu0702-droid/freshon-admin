@@ -33,6 +33,9 @@
   let allVehiclesSelected = false;
   let generalAllStores = true;
   let generalMap = true;
+  let recentOperationsScope = 'recent', recentOperationsState = 'loading', recentOperationsReport = null;
+  let recentOperationsFlight = null, recentOperationsNextRead = 0, recentOperationsSelection = null;
+  let recentOperationsSearchCode = '';
   let selectedDriverKeys=[];
   let hybridUi;
   const hybridUiReady = (window.HybridMapUiReady || Promise.resolve(null)).then(module => {
@@ -47,6 +50,9 @@
     return hybridUi;
   });
   function purgeStaffData(){
+    recentOperationsScope='recent';recentOperationsState='loading';recentOperationsSearchCode='';
+    recentOperationsReport=recentOperationsFlight=recentOperationsSelection=null;recentOperationsNextRead=0;
+    syncRecentOperationsUi();
     liveAddressLocations?.clear();
     if(addressScheduleFrame!==null)cancelAnimationFrame(addressScheduleFrame);
     addressScheduleFrame=null;
@@ -426,6 +432,7 @@
     $("#periodStoreListSection").hidden = false;
     document.body.classList.toggle("historicalMode", state.selectedDate !== localDate());
     syncDateHeading();
+    syncRecentOperationsUi();
     if(generalMap){$('#dateHeading').textContent='일반지도';$('#latestDate').textContent='전체 저장 매장';}
   }
   function syncPeriodBasis() {
@@ -442,6 +449,90 @@
     if(row.staffRegistrationOnly||row.raw?.nationalRegistry)return row.raw.centerGroup;
     const assigned=vehicleListGroup(row.baseVehicleGroup||row.dispatchCenterCode||row.raw?.center);
     return assigned==='unknown'&&savedCenters?vehicleListGroup(row.raw?.centerGroup):assigned;
+  }
+  function usesRecentOperations() {
+    return stageAddressBatchEnabled() && Boolean(window.MapRecentOperations) && generalMap &&
+      state.mode === 'BASE_60D' && periodBasis === 'vehicle';
+  }
+  function recentOperationsOnly() {
+    return usesRecentOperations() && recentOperationsScope === 'recent';
+  }
+  function recentOperationsCenter(row) {
+    const registered = generalRegistryRows.get(row.customerCode) || storesByCode.get(row.customerCode) || row;
+    return registrationCenter(registered, true);
+  }
+  function recentOperationsRows(rows) {
+    if (!recentOperationsOnly()) return rows;
+    if (recentOperationsSelection?.source === rows && recentOperationsSelection.report === recentOperationsReport) {
+      return recentOperationsSelection.rows;
+    }
+    const selected = rows.filter(row => window.MapRecentOperations.recentRecord(
+      recentOperationsReport, recentOperationsCenter(row), row.customerCode));
+    recentOperationsSelection = { source: rows, report: recentOperationsReport, rows: selected };
+    return selected;
+  }
+  function recentOperationsNotice() {
+    if (recentOperationsState === 'loading') return '최근 운영 이력 확인 중';
+    const coverage = window.MapRecentOperations.recentCoverage(recentOperationsReport, state.centerFilter);
+    if (coverage.state === 'unknown') return '최근 운영 이력 미확인';
+    if (recentOperationsState === 'stale') return '새 정보를 확인하지 못해 이전 자료를 표시합니다.';
+    if (coverage.state === 'complete') return '최근 90일 자료 확인';
+    return coverage.confirmedDays
+      ? ('일부 자료 · 90일 중 ' + coverage.confirmedDays + '일 확인')
+      : ('일부 자료 · 운영 기록 ' + coverage.observedDates + '일 확인');
+  }
+  function syncRecentOperationsUi() {
+    const controls = $('#recentOperationsControls');
+    if (!controls) return;
+    const enabled = usesRecentOperations() && document.body.dataset.mapStaffState === 'authenticated';
+    controls.hidden = !enabled;
+    if (!enabled) return;
+    for (const button of controls.querySelectorAll('[data-recent-operations-scope]')) {
+      button.setAttribute('aria-pressed', String(button.dataset.recentOperationsScope === recentOperationsScope));
+    }
+    const status = $('#recentOperationsStatus');
+    status.textContent = recentOperationsNotice();
+    status.dataset.state = recentOperationsState;
+  }
+  function refreshRecentOperationDetail() {
+    if (!usesRecentOperations() || !state.selected?.customerCode || state.selected.virtual) return;
+    const date = $('#detailRecentOperationDate');
+    const evidence = $('#detailRecentOperationEvidence');
+    if (!date || !evidence) return;
+    const recent = window.MapRecentOperations.recentDetail(recentOperationsReport, recentOperationsCenter(state.selected),
+      state.selected.customerCode, recentOperationsState === 'loading');
+    date.textContent = recent.date;
+    evidence.textContent = recent.evidence;
+  }
+  function refreshRecentOperations() {
+    if (!usesRecentOperations() || document.body.dataset.mapStaffState !== 'authenticated' ||
+        recentOperationsFlight || Date.now() < recentOperationsNextRead) return;
+    const flight = {};
+    const previous = recentOperationsReport;
+    recentOperationsFlight = flight;
+    if (!recentOperationsReport) recentOperationsState = 'loading';
+    syncRecentOperationsUi();
+    refreshRecentOperationDetail();
+    void fetchJson('/api/map-phase2b/private/recent-operations', { channel:'recent-operations', timeout:10000 })
+      .then(value => {
+        if (recentOperationsFlight !== flight) return;
+        recentOperationsReport = window.MapRecentOperations.readRecentOperations(value);
+        recentOperationsState = 'ready';
+        recentOperationsNextRead = Date.now() + 300000;
+      })
+      .catch(error => {
+        if (recentOperationsFlight !== flight) return;
+        if (error?.status === 401 || error?.status === 403) recentOperationsReport = null;
+        recentOperationsState = recentOperationsReport ? 'stale' : 'error';
+        recentOperationsNextRead = Date.now() + Math.max(60000, error?.retryAfterMs || 0);
+      })
+      .finally(() => {
+        if (recentOperationsFlight !== flight) return;
+        recentOperationsFlight = null;
+        syncRecentOperationsUi();
+        refreshRecentOperationDetail();
+        if (recentOperationsOnly() && dateReady && (!previous || recentOperationsReport !== previous)) void loadBaseMap();
+      });
   }
   function hasMapCoordinates(row) {
     return Number.isFinite(row.lat) && Number.isFinite(row.lng) &&
@@ -624,6 +715,7 @@
       if(document.hidden)return;
       void pollGeneralSnapshot();void syncCustomerRegistry();
       if(generalMap&&state.mode==='BASE_60D'){
+        refreshRecentOperations();
         scheduleMapAddressWork({advance:true});
         if(document.body.dataset.mapStaffState==='authenticated'&&$('#detailSection').classList.contains('open'))refreshSelectedDriverContact();
       }
@@ -641,6 +733,7 @@
     generalMap=true;generalAllStores=true;periodBasis='vehicle';state.driverKey='';
     switchMode('BASE_60D');refreshVehicleUi(false);syncModeUi();syncPeriodBasis();
     $('#includeUnvisitedStores').checked=true;dateReady=false;setPeriodViewState('loading');
+    refreshRecentOperations();
     try {
       const adapter=stageAddressBatchEnabled()?null:await hybridUiReady,cached=await adapter?.readCachedGeneral();
       if(id!==initialRequestId||!generalMap)return;
@@ -1737,6 +1830,8 @@
   }
 
   function clearSelection({preserveSearch=false,fast=false,keepMapPins=false}={}) {
+    const hadRecentSearchPoint = recentOperationsOnly() && Boolean(recentOperationsSearchCode);
+    recentOperationsSearchCode = '';
     clearSearchSelectedOverlay();
     addressFocusRequest=null;
     if(!preserveSearch){invalidateUnifiedSearch();closeUnifiedSearchResults();cancelAddressLookup();}
@@ -1761,6 +1856,7 @@
     $("#detail").textContent = "검색하거나 핀을 선택하면 점포정보가 표시됩니다.";
     if (state.mode === "BASE_60D"&&!fast) renderPeriodStoreList();
     if (temporarySelection && state.mode === "BASE_60D") { state.fitRequested = false; renderStops(state.currentRows); }
+    else if (hadRecentSearchPoint) { state.fitRequested = false; renderStops(state.currentRows, { viewportOnly:true }); }
   }
 
   function closeMapDetail(){
@@ -2277,7 +2373,8 @@
     mapNode.classList.toggle('mapZoomFar',level>=9);
     const shouldShow=row=>row.virtual||row.nearbyVehicle||protectedCodes.some(code=>markerHasStore(row,code))||
       MapViewPolicy.pinAssignment(row).kind!=='unverified';
-    const selectedExtra=base&&selectedCode&&!byCode.has(selectedCode)&&Number.isFinite(state.selected.lat)&&Number.isFinite(state.selected.lng)?state.selected:null;
+    const allowSelectedExtra = !recentOperationsOnly() || recentOperationsSearchCode === selectedCode;
+    const selectedExtra=base&&selectedCode&&allowSelectedExtra&&!byCode.has(selectedCode)&&Number.isFinite(state.selected.lat)&&Number.isFinite(state.selected.lng)?state.selected:null;
     const projection=state.map.getProjection();
     const projectedPins=new Map();
     const projectPin=row=>{
@@ -2615,6 +2712,7 @@
   }
 
   function selectStore(row, element, focus, skipEnrich = false, trace) {
+    if (!unifiedSelectionActive && recentOperationsSearchCode !== row.customerCode) recentOperationsSearchCode = '';
     clearSearchSelectedOverlay();
     if(!row.virtual){if(!unifiedSelectionActive)invalidateUnifiedSearch();cancelAddressLookup();closeUnifiedSearchResults();}
     temporaryDetailPoint=null;
@@ -2687,6 +2785,7 @@
       <div class="detailBody">
         <dl class="dotDetailFacts"><dt>담당 센터</dt><dd>${esc(detailCenter)}</dd><dt hidden>주소 권역</dt><dd id="detailAddressRegion" hidden>${esc(detailAddressRegion)}</dd><dt>${routeMode?"확정호차":"기준호차"}</dt><dd${routeMode?'':' id="detailBaseVehicle"'}>${esc(routeMode?vehicleLabel(vehicle)||'선택일 편성 없음':MapPeriodUi.baseVehicleLabel(row))}</dd><dt id="detailDeliveryDaysLabel"${weekdaysHidden}>배송요일</dt><dd id="detailDeliveryDaysValue"${weekdaysHidden} data-weekday-state="${schedule?.status||'UNKNOWN'}" title="${schedule?.stale?'이전 확인 배차표 기준':''}">${esc(deliveryDays)}</dd><dt id="detailDriverLabel">${esc(detailDriver.label)}</dt><dd id="detailDriver" title="${esc(detailDriver.title)}" data-source="${esc(detailDriver.source)}">${esc(detailDriver.text)}</dd><dt>주소</dt><dd><span id="detailBasicAddress" data-state="loading">${esc(row.address||'주소 확인 중…')}</span> <small id="detailAddressStatus"${row.address?'':' hidden'}>최신 주소 확인 중…</small></dd><dt id="detailAddressLabel" hidden>상세주소</dt><dd id="detailAddressValue" hidden></dd></dl>
 
+        ${usesRecentOperations()&&!row.virtual?'<dl class="dotDetailFacts"><dt>최근 운영 확인일</dt><dd id="detailRecentOperationDate"></dd><dt>확인 근거</dt><dd id="detailRecentOperationEvidence"></dd></dl>':''}
         ${navigationPointActions(row)}
         ${!routeMode&&state.virtual?temporaryDistanceActions():''}
         <div class="staffActions"><button id="staffNotes" aria-expanded="false" aria-controls="staffAuxContent">출입배송정보 ▸</button><button id="staffHistory" aria-expanded="false" aria-controls="staffAuxContent">최근 배송기사이력 ▸</button></div>
@@ -2694,6 +2793,7 @@
         <div class="mobileActions"><button id="mobileMapView" class="primary">매장 위치 중심으로 보기</button><button id="mobileRouteView" class="ghost">${esc(vehicleLabel(vehicle) || "선택 호차")} 운행동선</button></div>
         <div id="nearWrap"></div>
       </div>`;
+    refreshRecentOperationDetail();
     refreshCoordinateEvidence(row);
     refreshSelectedDriverContact();
     requestAnimationFrame(positionDetailPopup);
@@ -3199,6 +3299,7 @@
     if(!Number.isFinite(row.lat)||!Number.isFinite(row.lng)||row.lat<33||row.lat>39.5||row.lng<124||row.lng>132){row.lat=null;row.lng=null;}
     invalidateUnifiedSearch();closeUnifiedSearchResults();
     const selectedOwner=state.searchRequestId;
+    if (usesRecentOperations()) recentOperationsSearchCode = row.customerCode;
     unifiedSelectionActive=true;
     try{selectStore(row,null,true,false,trace);}finally{unifiedSelectionActive=false;}
     setSearchState(row.lat===null?'매장 선택 · 좌표 미확인 · 위치 확인 필요':'매장 선택');
@@ -4154,9 +4255,12 @@
       updateOperationMetrics({totalStops:known?operationStops.length:null,completedStops:known&&!projection.unknown?projection.completed:null,remainingStops:known&&!projection.unknown?projection.pending:null});
       $('#map').dataset.dailyStops=String(stores.length);
       $('#map').dataset.dailyLocated=String(state.routeRows.length);
-    }else stores=filteredPeriodStores().map(row=>({...row,color:vehicleColor(row.vehicle)}));
+    }else stores=recentOperationsRows(filteredPeriodStores()).map(row=>({...row,color:vehicleColor(row.vehicle)}));
     stores.forEach(row=>{if(!daily||!archivedDatedAssignments(dailyMeta)){window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);}});
+    const keepInitialFit = recentOperationsOnly() && !stores.length && recentOperationsState === 'loading' && state.fitRequested;
+    if (keepInitialFit) state.fitRequested = false;
     renderStops(stores,{numbered:daily,vehicles:selected});
+    if (keepInitialFit && !state.userMovedMap) state.fitRequested = true;
     if(daily){drawRoute();void loadDailyCompletionEvidence();}
     deferMapAddressWork();
 
@@ -4169,6 +4273,11 @@
       $("#periodIdentity").textContent = `${subject} · ${generalAllStores && periodBasis === 'vehicle' ? '저장된 전체 매장' : range} · ${stores.length}개 매장`;
       if (generalAllStores && snapshotReadState === 'error') $('#periodIdentity').textContent = '매장정보를 불러오지 못했습니다.';
       if(recentPeriodNotice)$('#periodIdentity').textContent=recentPeriodNotice;
+      if(recentOperationsOnly() && snapshotReadState!=='error'){
+        $('#periodIdentity').textContent=stores.length
+          ? (subject + ' · 최근 운영(90일) · ' + stores.length + '개 매장')
+          : recentOperationsNotice();
+      }
     }
     $("#mapStatusTitle").textContent = period ? "매장·권역 지도" : "일자별 운행";
     $("#mapStatusSub").textContent = period ? `${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 배송지' : (baseVehicleMeta?.stale?'이전 기준호차':'기준호차')}`
@@ -4183,6 +4292,8 @@
     const fixedNotice=$('#fixedMasterNotice');
     if(fixedNotice&&fixedNotice.textContent!==fixedStatus)fixedNotice.textContent=fixedStatus;
     syncDateHeading();
+    syncRecentOperationsUi();
+    refreshRecentOperationDetail();
     $("#vehicleModeLabel").textContent = period ? "기간별 매장" : "날짜별 편성";
     if (selected.length === 1) $("#operationVehicle").value = selected[0];
     renderPeriodStoreList(stores);
@@ -5368,6 +5479,13 @@
       panel.textContent = '매장정보를 불러오지 못했습니다. 최근 90일 버튼으로 다시 조회해 주세요.';
       $('#periodListMore').hidden = true; return;
     }
+    if (!stores.length && recentOperationsOnly() &&
+        (recentOperationsState === 'loading' || window.MapRecentOperations.recentCoverage(recentOperationsReport, state.centerFilter).state !== 'complete')) {
+      $('#periodStoreListCount').textContent = recentOperationsState === 'loading' ? '확인 중' : '이력 미확인';
+      panel.textContent = recentOperationsNotice();
+      $('#periodListMore').hidden = true;
+      return;
+    }
     if(!stores.length&&state.centerFilter&&baseVehicleStatus!=='READY'){
       $('#periodStoreListCount').textContent='미확인';panel.textContent=baseVehicleStatus==='ERROR'?'기준호차 조회 실패 · 센터 매장 수 확인 필요':'기준호차 확인 중 · 센터 매장 수 미확인';$('#periodListMore').hidden=true;return;
     }
@@ -5381,6 +5499,17 @@
   }
 
   function bindEvents() {
+    $$('[data-recent-operations-scope]').forEach(button => {
+      button.onclick = () => {
+        if (!usesRecentOperations() || recentOperationsScope === button.dataset.recentOperationsScope) return;
+        recentOperationsScope = button.dataset.recentOperationsScope;
+        periodListLimit = 0;
+        state.fitRequested = false;
+        syncRecentOperationsUi();
+        if (recentOperationsScope === 'recent') refreshRecentOperations();
+        void loadBaseMap();
+      };
+    });
     $("#modePeriod").onclick = () => {
       if(state.mode==='BASE_60D'&&generalMap&&dateReady){
         if(recentPeriodNotice){recentPeriodNotice='';delete $('#freshnessState').dataset.periodNotice;void loadBaseMap();}
@@ -5534,6 +5663,7 @@
   const sidebar = $("#leftPanel"), addressPanel = $(".addressBlock");
   const filters = document.createElement("section"); filters.id = "periodFilterPanel"; filters.className = "block";
   filters.innerHTML = '<div class="label">② 조회 기준</div><div class="periodBasis" role="group" aria-label="조회 기준"><label><input type="radio" name="periodBasis" value="vehicle" checked>호차 기준</label><label><input type="radio" name="periodBasis" value="driver">기사 기준</label></div>';
+  filters.insertAdjacentHTML('beforeend', '<div id="recentOperationsControls" hidden><div class="recentOperationsModes" role="group" aria-label="지도 매장 범위"><button class="tiny" type="button" data-recent-operations-scope="recent" aria-pressed="true">최근 90일 운영 매장</button><button class="tiny" type="button" data-recent-operations-scope="registered" aria-pressed="false">전체 등록 매장</button></div><p id="recentOperationsStatus" role="status">최근 운영 이력 확인 중</p></div>');
   filters.insertAdjacentHTML('beforeend', '<label id="allStoresControl"><input id="includeUnvisitedStores" type="checkbox" checked>기간 이력 없는 저장 매장도 표시</label>');
   $(".customerBlock").after(filters);
   filters.append($("#legacyVehicleState"), $("#periodDriver"));

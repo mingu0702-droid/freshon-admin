@@ -175,3 +175,30 @@
 @media(max-width:760px){.areaDispatchChoice{min-height:44px}}
 .areaFixedReference{margin-top:8px}
 @media(max-width:760px){.areaRadius select{min-height:40px}.areaVehicles summary{min-height:36px;padding-block:6px}}
+
+#recentOperationsControls {
+  margin: 0 0 12px;
+}
+.recentOperationsModes {
+  display: flex;
+  gap: 6px;
+}
+.recentOperationsModes button {
+  flex: 1 1 auto;
+  min-height: 36px;
+  padding: 4px 8px;
+}
+.recentOperationsModes button[aria-pressed="true"] {
+  border-color: #9db7f7;
+  background: #edf3ff;
+  color: #1845a3;
+}
+#recentOperationsStatus {
+  margin: 6px 0 0;
+  color: #53647a;
+  font-size: 12px;
+  line-height: 1.4;
+}
+@media (max-width: 760px) {
+  .recentOperationsModes button { min-height: 40px; }
+}
