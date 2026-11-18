@@ -226,7 +226,8 @@
   let datedSourceDate = '', dailyMeta = null;
   const geocodeCache = new Map();
   let customerRegistryBusy=false,customerRegistryRetry=null,customerRegistryCheckedAt='',customerRegistrySourceCheckedAt='',customerRegistrySource='';
-  const stageRegistrationOnly=()=>customerRegistrySource==='STAGE_FRESHON_CENTER_REGISTRY'&&Boolean(customerRegistry?.currentVersion());
+  const nationalRegistryPublished=()=>customerRegistrySource==='STAGE_FRESHON_NATIONAL_REGISTRY'&&Boolean(customerRegistry?.currentVersion());
+  const stageRegistrationOnly=()=>nationalRegistryPublished()||customerRegistrySource==='STAGE_FRESHON_CENTER_REGISTRY'&&Boolean(customerRegistry?.currentVersion());
   const customerRegistry=window.MapCustomerRegistry?.create({
     pageSize:stageAddressBatchEnabled()?1000:500,
     authenticated:()=>document.body.dataset.mapStaffState==='authenticated',
@@ -259,6 +260,7 @@
     customerRegistryBusy=true;const owner=initialRequestId,before=customerRegistry.currentVersion(),known=new Set(allStores.map(r=>r.customerCode));
     try{const options={selection:registrySelection(),maxPages:100},result=await (customerRegistry.summary().status==='logged-out'?customerRegistry.reconnect(options):customerRegistry.sync(options));if(owner!==initialRequestId||document.body.dataset.mapStaffState!=='authenticated'||state.mode!=='BASE_60D')return;
       customerRegistryCheckedAt=customerRegistrySourceCheckedAt;
+      if(result.complete&&nationalRegistryPublished())window.MapDataSync?.applied?.(localDate(new Date(customerRegistryCheckedAt)));
       if(result.complete&&result.version!==before){
         replaceStoreSnapshot([],snapshotMeta);
         if(!stageRegistrationOnly())ensureDateVehicles();
@@ -353,6 +355,7 @@
     storeByVehicleAndCode.clear();
     storesByCode.clear();
     (rows || []).forEach((item) => {
+      if(state.mode==='BASE_60D'&&item.customerRegistryStatus==='DELETED')return;
       const vehicle = normalizeVehicle(state.mode==='DATE_ROUTE' ? item.confirmedVehicle || item.vehicle || '미확인' : item.vehicle || item.primaryVehicle90d || item.latestVehicle);
       const found = vehicleMeta.get(vehicle) || { vehicle: { vehicle }, index: 0 };
       const previous = item.currentMasterStatus==='UNAVAILABLE'?{}:previousByCode.get(String(item.customerCode || item.code || "")) || {};
@@ -392,7 +395,10 @@
     window.dispatchEvent(new Event('map-stores-replaced'));
     if(state.mode==='BASE_60D'){
       snapshotMeta = meta || snapshotMeta;
-      if(generalMap&&latestSnapshotRows.length)window.MapDataSync?.applied?.(snapshotMeta?.latestDate||snapshotMeta?.endDate,snapshotMeta?.osanDeliveryThrough);
+      if(generalMap&&latestSnapshotRows.length) {
+        if(nationalRegistryPublished())window.MapDataSync?.applied?.(localDate(new Date(customerRegistryCheckedAt)));
+        else window.MapDataSync?.applied?.(snapshotMeta?.latestDate||snapshotMeta?.endDate,snapshotMeta?.osanDeliveryThrough);
+      }
     }
     if(state.virtual?.searchTemporary&&(temporaryAreaSourceVersion!==newAreaSourceVersion()||temporaryAreaDispatchMeta!==baseVehicleMeta)){
       renderSearchTemporaryNearby(state.virtual,{loadDispatch:false});
@@ -433,7 +439,7 @@
     return generalMap&&stageAddressBatchEnabled()&&/^[a-f0-9]{64}$/.test(snapshotMeta?.sourceGeneration||'');
   }
   function registrationCenter(row,savedCenters) {
-    if(row.staffRegistrationOnly)return row.raw.centerGroup;
+    if(row.staffRegistrationOnly||row.raw?.nationalRegistry)return row.raw.centerGroup;
     const assigned=vehicleListGroup(row.baseVehicleGroup||row.dispatchCenterCode||row.raw?.center);
     return assigned==='unknown'&&savedCenters?vehicleListGroup(row.raw?.centerGroup):assigned;
   }
@@ -848,7 +854,9 @@
     baseVehicleRequest=(async()=>{
       const baseStarted=performance.now();
       try{
-        const customerCodes=[...new Set([...periodRows.map(r=>r.customerCode),...baseVehicleExtraCodes,state.selected?.customerCode].filter(code=>/^[A-Z]\d+$/.test(code)))];
+        const customerCodes=[...new Set([...periodRows.map(r=>r.customerCode),...baseVehicleExtraCodes,state.selected?.customerCode]
+          .filter(code=>/^[A-Z]\d+$/.test(code)&&!customerRegistry?.isRetired?.(code)))];
+        if (!customerCodes.length) return;
         const stageReadOnly=location.origin==='https://freshon-admin-stage-preview-template.onrender.com';
         const batchSize=10000;
         const batches=[];for(let i=0;i<customerCodes.length;i+=batchSize)batches.push(customerCodes.slice(i,i+batchSize));
@@ -2662,7 +2670,9 @@
     const routeMode = state.mode === "DATE_ROUTE";
     const vehicle = normalizeVehicle(row.vehicle);
     const detailDriver=storeDriverDetail(row);
-    const detailCenter=window.MapLocationContract?.dispatchCenter(row).label||'담당 센터 미확인';
+    const registeredCenter=!routeMode&&(row.staffRegistrationOnly||row.raw?.nationalRegistry)&&
+      ({osan:'오산센터',yeongnam:'영남센터',honam:'호남센터'})[registrationCenter(row,true)];
+    const detailCenter=registeredCenter||window.MapLocationContract?.dispatchCenter(row).label||'담당 센터 미확인';
     const detailAddressRegion=row.addressRegion||window.MapLocationContract?.addressRegion(row.address)||'주소 권역 미확인';
     const schedule=storeDeliveryWeekdays(row);
     const deliveryDays=MapPeriodUi.formatDeliveryWeekdays(schedule?.days);
@@ -3087,6 +3097,7 @@
   }
 
   function currentSearchStore(code,fallback) {
+    if(state.mode==='BASE_60D'&&customerRegistry?.isRetired?.(code))return null;
     return generalRegistryRows.get(code)||(state.mode==='BASE_60D'?storesByCode.get(code):null)||fallback||coordinateByCode.get(code);
   }
 
@@ -3177,7 +3188,8 @@
   }
 
   function selectUnifiedSearchStore(value,{owner=state.searchRequestId,trace}={}) {
-    if(owner!==state.searchRequestId || !/^[A-Z]\d{3,}$/.test(String(value?.customerCode||'')))return false;
+    if(owner!==state.searchRequestId || !/^[A-Z]\d{3,}$/.test(String(value?.customerCode||'')) ||
+      customerRegistry?.isRetired?.(value.customerCode))return false;
     const row=normalizeApiStore(value);
     window.MapManualPins?.apply(row);
     if(value.addressChanged===true || value.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED' || value.coordinateStatus==='CONFLICT'){
@@ -3241,7 +3253,7 @@
       stageAddressHashIndex={rows,byHash};
     }
     const matches=stageAddressHashIndex.byHash.get(hash)||[];
-    const current=matches.map(row=>currentSearchStore(row.customerCode,row));
+    const current=matches.map(row=>currentSearchStore(row.customerCode,row)).filter(Boolean);
     // A newer address or a withheld point must go through the protected resolver.
     if(current.some(row=>row.addressChanged||row.searchAddressConflict||
       row.currentAddressHash&&row.currentAddressHash!==hash||
@@ -3543,7 +3555,9 @@
         return;
       }
       const evidence=(snapshotMeta?.sourceGeneration??null)===generation ? reply : null;
-      const codes=evidence?.customerCodes||[], stored=currentStageSearchCustomers(codes);
+      const evidenceCodes=evidence?.customerCodes||[];
+      const codes=evidenceCodes.filter(code=>!customerRegistry?.isRetired?.(code)), stored=currentStageSearchCustomers(codes);
+      if(evidenceCodes.length&&!codes.length){setSearchState('현재 등록된 매장이 없습니다.');trace.finish('unresolved');return;}
       if(codes.length&&stored.length!==codes.length){setSearchState('매장 주소가 변경되었습니다 · 현재 주소를 확인해 주세요.');trace.finish('unresolved');return;}
       if(stored.length){trace.mark('matching');if(showMatches(stored))return;}
       if(evidence){
@@ -3588,7 +3602,7 @@
     // The staff-only server can match a private address without returning it.
     // Do not re-filter that trusted match by the redacted public address field.
     for(const value of remote){
-      if(!/^[A-Z]\d{3,}$/.test(String(value?.customerCode||'')))continue;
+      if(!/^[A-Z]\d{3,}$/.test(String(value?.customerCode||''))||customerRegistry?.isRetired?.(value.customerCode))continue;
       const row=normalizeApiStore({...matched.get(value.customerCode),...value});
       matched.set(row.customerCode,row);
     }
@@ -5147,7 +5161,7 @@
 
   function formatDistance(value) { return Number.isFinite(Number(value)) ? `${Number(value).toFixed(Number(value) < 1 ? 2 : 1)}km` : "-"; }
   function normalizeVehicle(value) { return String(value || "").trim().replace(/호(?:차)?$/, ""); }
-  function localDate() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date()); }
+  function localDate(value=new Date()) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(value); }
   function formatTime(value,seconds=false) { if (!value) return ""; const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", ...(seconds?{second:"2-digit"}:{}), hour12: false }).format(date); }
   function formatShort(value) { const date = new Date(`${value}T00:00:00`); return `${String(date.getMonth() + 1).padStart(2, "0")}월 ${String(date.getDate()).padStart(2, "0")}일`; }
   function daysBefore(value, count) { const date = new Date(`${value}T00:00:00`); date.setDate(date.getDate() - count); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }

@@ -58,9 +58,20 @@ function validateFixedMasterScope(scope) {
   return {generation, ledgerSha256, codes};
 }
 
-export function stageFixedMasterScope(active, additionalRegistry) {
+export function stageFixedMasterScope(active, additionalRegistry, nationalRegistry) {
   if (active?.expiresAt !== Infinity || !(active.registry instanceof Map) ||
       active.registry.size !== active.counts?.registered) return null;
+  if (nationalRegistry) {
+    const {ref,rows}=nationalRegistry;
+    if (!hash.test(ref?.version||'') || !Array.isArray(rows)) return null;
+    const codes=new Set([...active.registry.keys(),...(additionalRegistry?.snapshot.rows||[]).map(row=>row.customerCode)]);
+    for(const row of rows) {
+      if (row.lifecycle==='ACTIVE') codes.add(row.customerCode);
+      else if (row.lifecycle==='DELETED') codes.delete(row.customerCode);
+    }
+    return validateFixedMasterScope({generation:digest([active.generation,ref.version]),
+      ledgerSha256:active.ledger?.sha256,codes:[...codes]});
+  }
   if (additionalRegistry) {
     const {snapshot} = additionalRegistry;
     if (!snapshot?.complete || !hash.test(snapshot.version || '') || !Array.isArray(snapshot.rows) ||

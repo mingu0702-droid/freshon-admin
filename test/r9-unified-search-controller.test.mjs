@@ -266,6 +266,18 @@ test('existing local addresses cannot confuse building 14 with 140 or 14-1',()=>
  assert.equal(c.rankSearchRows('서울특별시 종로구 합성로 14').length,0);
 });
 
+test('a retired customer cannot reappear from the retained address hash or the protected fallback',async()=>{
+ const retired=store('S995011','합성 폐점',''), active=store('S995012','합성 활성','');
+ const hash='a'.repeat(64);
+ retired.originalAddressHash=hash;active.originalAddressHash=hash;
+ const f=fixture({rows:[retired,active],remote:async()=>({data:[retired]})});
+ f.context.customerRegistry={currentVersion:()=>'',isRetired:code=>code===retired.customerCode};
+ assert.deepEqual(Array.from(f.context.stageAddressHashMatches([retired,active],hash),r=>r.customerCode),[active.customerCode]);
+ assert.equal(f.context.selectUnifiedSearchStore(retired),false);
+ await f.context.searchPeriod(retired.customerCode);
+ assert.equal(f.selected.length,0);
+});
+
 test('local names and preserved addresses avoid the live Customer reader',async()=>{
  const row=store('S990201','합성 로컬 매장','');
  const f=fixture({rows:[row],stageAddress:async()=>({status:'STORED',customerCodes:[row.customerCode]})});

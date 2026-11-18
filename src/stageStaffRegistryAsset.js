@@ -231,8 +231,9 @@ export function createStageStaffRegistryAsset({
   }};
 }
 
-export function mountStageStaffRegistry({app,requireStaff,asset,getVerifiedRegistry,now = Date.now}) {
+export function mountStageStaffRegistry({app,requireStaff,asset,nationalRegistry,getVerifiedRegistry,now = Date.now}) {
   const compatible = new WeakMap();
+  let nationalProjection;
   function verifiedRegistry() {
     const registry = getVerifiedRegistry();
     if (!(registry instanceof Map) || registry.size < 6043) throw unavailable(now() + 5_000);
@@ -254,6 +255,19 @@ export function mountStageStaffRegistry({app,requireStaff,asset,getVerifiedRegis
     if (!asset) return send(503,{ok:false,error:'CUSTOMER_REGISTRY_NOT_CONFIGURED'});
     try {
       verifiedRegistry();
+      const national=await nationalRegistry?.read();
+      if (national) {
+        if(nationalProjection?.source!==national) {
+          const rows=national.rows.map(row=>({...row,nationalRegistry:true}));
+          nationalProjection={source:national,snapshot:{contract:'customer-registry-v1',version:national.ref.version,
+            sourceVersion:national.ref.version,sourceVersionKind:'CUSTOMER_METADATA_SHA256',deletionPolicy:'EXPLICIT_ONLY',
+            lifecycleField:'lifecycle',complete:true,sourceRows:rows.length,sourceUniqueCodes:rows.length,sourceCount:rows.length,
+            exclusions:0,conflicts:0,rows},meta:{source:'STAGE_FRESHON_NATIONAL_REGISTRY',checkedAt:national.ref.checkedAt}};
+        }
+        const data=customerRegistryPage(nationalProjection.snapshot,{cursor:cursor??null,since,limit:limit?Number(limit):250,
+          maxLimit:1000,secret:asset.cursorKey});
+        return send(200,{ok:true,data,meta:nationalProjection.meta});
+      }
       const {snapshot,meta} = await asset.read();
       const current = verifiedRegistry();
       if (!compatible.has(current)) {

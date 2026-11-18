@@ -88,7 +88,8 @@
       const seen = new Set(), rows = [];
       for (const row of page.rows) {
         if (!row || !code(row.customerCode) || seen.has(row.customerCode) || !['ACTIVE', 'DELETED'].includes(row.lifecycle) ||
-          row.centerGroup != null && (!registrationCenters.has(row.centerGroup) || row.lifecycle !== 'ACTIVE') ||
+          row.centerGroup != null && (!(registrationCenters.has(row.centerGroup) || row.nationalRegistry===true&&row.centerGroup==='osan') ||
+          row.lifecycle !== 'ACTIVE'&&row.nationalRegistry!==true) ||
           row.lifecycle === 'ACTIVE' && (!validText(row.customerName, 200) || !validText(row.basicAddress, 1000)) ||
           row.sourceUpdatedAt != null && !validText(row.sourceUpdatedAt, 100) ||
           row.addressHash != null && !hash(row.addressHash)) throw failure('CUSTOMER_REGISTRY_ROW_INVALID');
@@ -97,7 +98,7 @@
         if (row.lifecycle === 'ACTIVE' && row.addressHash != null && row.addressHash !== currentHash) throw failure('CUSTOMER_REGISTRY_ADDRESS_HASH_INVALID');
         const search = row.lifecycle === 'ACTIVE' ? await coordinateSearch(row.coordinateSearch ?? row.raw?.coordinateSearch, row.customerCode, currentHash) : undefined;
         const location = row.verifiedLocation;
-        if (location !== undefined && (row.lifecycle !== 'ACTIVE' || !registrationCenters.has(row.centerGroup) ||
+        if (location !== undefined && (row.lifecycle !== 'ACTIVE' || !(registrationCenters.has(row.centerGroup) || row.nationalRegistry===true&&row.centerGroup==='osan') ||
           !location || location.addressHash !== currentHash || !Number.isFinite(location.lat) || !Number.isFinite(location.lng) ||
           location.lat < 33 || location.lat > 39.5 || location.lng < 124 || location.lng > 132 ||
           !['BUILDING', 'PARCEL', 'ADDRESS'].includes(location.kind))) throw failure('CUSTOMER_REGISTRY_LOCATION_INVALID');
@@ -105,6 +106,7 @@
         rows.push(Object.freeze({customerCode: row.customerCode, customerName: row.customerName || '', basicAddress: row.basicAddress || '',
           addressHash: currentHash, ...(search ? {coordinateSearch: search} : {}),
           ...(row.centerGroup ? {centerGroup: row.centerGroup} : {}),
+          ...(row.nationalRegistry===true ? {nationalRegistry:true} : {}),
           ...(location ? {verifiedLocation: Object.freeze({addressHash:currentHash,lat:location.lat,lng:location.lng,kind:location.kind})} : {}),
           sourceUpdatedAt: row.sourceUpdatedAt || '', lifecycle: row.lifecycle}));
       }
@@ -214,7 +216,7 @@
       }
       for (const record of records.values()) {
         const observed = merged.get(record.customerCode);
-        if (record.centerGroup && observed && !observed.staffRegistrationOnly) continue;
+        if (record.centerGroup && !record.nationalRegistry && observed && !observed.staffRegistrationOnly) continue;
         if (record.lifecycle === 'DELETED') {
           if (observed) Object.assign(observed, {customerRegistryStatus: 'DELETED', customerLifecycle: 'DELETED', currentMasterStatus: 'DELETED'});
           continue;
@@ -238,9 +240,11 @@
           customerAddress: record.basicAddress, basicAddress: record.basicAddress, currentAddressHash: record.addressHash,
           customerRegistryAddressHash: record.addressHash, customerRegistryStatus: 'ACTIVE', customerLifecycle: 'ACTIVE',
           customerRegistryVersion: version, customerRegistryUpdatedAt: record.sourceUpdatedAt, currentMasterStatus: 'FOUND'});
-        if (record.centerGroup) Object.assign(row, {
-          centerGroup: record.centerGroup, center: record.centerGroup, staffRegistrationOnly: true
-        });
+        if (record.centerGroup) {
+          Object.assign(row,{centerGroup: record.centerGroup, center: record.centerGroup});
+          if (record.nationalRegistry) row.nationalRegistry=true;
+          if (!record.nationalRegistry || !observed || observed.staffRegistrationOnly) row.staffRegistrationOnly=true;
+        }
         row.raw = {...row.raw, customerCode: record.customerCode, customerName: record.customerName, name: record.customerName,
           address: record.basicAddress, customerAddress: record.basicAddress, basicAddress: record.basicAddress,
           currentAddressHash: record.addressHash, customerRegistryAddressHash: record.addressHash,
@@ -266,7 +270,8 @@
       return [...merged.values()];
     }
 
-    return Object.freeze({sync, reconnect, purge, merge, summary, currentVersion:()=>version, priorityRows, locationRows});
+    return Object.freeze({sync, reconnect, purge, merge, summary, currentVersion:()=>version, priorityRows, locationRows,
+      isRetired:code=>active&&records.get(code)?.lifecycle==='DELETED'});
   }
   root.MapCustomerRegistry = Object.freeze({create, priorityRows, addressHash});
 })(typeof window === 'object' ? window : globalThis);

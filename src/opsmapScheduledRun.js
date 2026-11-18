@@ -6,6 +6,7 @@ import express from 'express';
 import {syncDigest,syncHash} from './opsmapSyncGeneration.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
 import {FIXED_MASTER_WORKER_LIMIT, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
+import {NATIONAL_REGISTRY_WORKER_LIMIT, stageNationalRegistryEnabled} from './stageNationalRegistry.js';
 
 export const OPSMAP_SCHEDULED_ROUTE='/internal/opsmap/scheduled-sync';
 const maxDelay=10*60_000;
@@ -48,7 +49,8 @@ export function opsmapScheduleConfig(env) {
 export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Date.now,log=console.log,readFixedScope}={}) {
   const settings=env.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE;
   const fullJob=path.isAbsolute(settings || '');
-  const fixedJob=stageFixedMasterSyncEnabled(env) && typeof readFixedScope==='function';
+  const fixedEnabled=stageFixedMasterSyncEnabled(env), nationalEnabled=stageNationalRegistryEnabled(env);
+  const fixedJob=(fixedEnabled||nationalEnabled) && typeof readFixedScope==='function';
   if (env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
       env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||
       env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1'||
@@ -87,13 +89,21 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
                 version:syncHash(value.version)?value.version:null,
                 error:/^FIXED_(?:MASTER|STORE)_[A-Z_]{1,70}$/.test(value.error||'')?value.error:null}));
             }
+            if(value?.component==='opsmap-national-registry-sync' && value.runId===receipt.runId &&
+               ['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','BUSY','ALREADY_ATTEMPTED','FAILED'].includes(value.state)) {
+              log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
+                count:Number.isSafeInteger(value.count)?value.count:null,
+                checkedAt:Number.isFinite(Date.parse(value.checkedAt))?value.checkedAt:null,
+                error:/^(?:NATIONAL_REGISTRY|FIXED_STORE)_[A-Z_]+$/.test(value.error||'')?value.error:null}));
+            }
           } catch {/* Ignore unrelated stdout and malformed lines. */}
           line='';discarded=false;
         }
       });
     }
     processHandle.stderr.on('data',chunk=>{if(diagnostic.length<100) diagnostic=(diagnostic+chunk).slice(0,100);});
-    const timeout=setTimeout(()=>{timedOut=true;processHandle.kill();},(fullJob?maxRuntime:0)+(fixedJob?FIXED_MASTER_WORKER_LIMIT:0));
+    const timeout=setTimeout(()=>{timedOut=true;processHandle.kill();},(fullJob?maxRuntime:0)+
+      (fixedJob&&fixedEnabled?FIXED_MASTER_WORKER_LIMIT:0)+(fixedJob&&nationalEnabled?NATIONAL_REGISTRY_WORKER_LIMIT:0));
     timeout.unref();
     const release=(exitCode,error)=>{
       if(child!==processHandle)return;

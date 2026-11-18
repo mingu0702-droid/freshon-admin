@@ -19,6 +19,9 @@ import {opsmapScheduleConfig,publishOpsmapScheduledRun,verifyOpsmapScheduleRecei
 import {STAGE_OSAN_SYNC_CENTERS,STAGE_OSAN_SYNC_SOURCE_IDS} from '../src/opsmapSyncPolicy.js';
 import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixedMasterBaseline, stageFixedMasterStorage,
   stageFixedMasterSyncEnabled, syncStageFixedMaster} from '../src/stageFixedMasterSync.js';
+import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
+import {createStageNationalRegistryStorage,createStageNationalRegistrationSource,stageNationalRegistryEnabled,
+  syncStageNationalRegistry} from '../src/stageNationalRegistry.js';
 
 const appRoot = fileURLToPath(new URL('../',import.meta.url));
 const env = process.env;
@@ -159,16 +162,38 @@ async function run() {
     for await(const chunk of process.stdin){input+=chunk;if(Buffer.byteLength(input)>FIXED_MASTER_SCOPE_INPUT_LIMIT)throw Error('OPSMAP_SCHEDULE_RECEIPT');}
     const job=JSON.parse(input);
     const receipt=verifyOpsmapScheduleReceipt(job?.receipt ?? job,opsmapScheduleConfig(env));
+    let fixedScope=job?.fixedScope;
+    const runNationalRegistry = async () => {
+      if (!stageNationalRegistryEnabled(env)) return;
+      const component='opsmap-national-registry-sync';
+      try {
+        const staff=createStageStaffRegistryAsset({env});
+        if (!staff || !fixedScope) throw Error('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+        const value=await syncStageNationalRegistry({store:createStageNationalRegistryStorage({env,write:true}),receipt,
+          readCenter:createStageNationalRegistrationSource({env}),readOfficial:async()=>(await staff.read()).snapshot.rows});
+        if (value.activeCodes) {
+          const codes=new Set([...fixedScope.codes,...value.activeCodes]);
+          for(const inactive of value.retiredCodes) codes.delete(inactive);
+          fixedScope={...fixedScope,generation:value.version,codes:[...codes]};
+        }
+        console.log(JSON.stringify({component,runId:receipt.runId,state:value.state,count:value.count,checkedAt:value.checkedAt}));
+      } catch(error) {
+        const code=error.code || error.message || '';
+        console.log(JSON.stringify({component,runId:receipt.runId,state:'FAILED',
+          error:/^(?:NATIONAL_REGISTRY|FIXED_STORE)_[A-Z_]+$/.test(code)?code:'NATIONAL_REGISTRY_SOURCE_FAILED'}));
+        if (mode==='fixed-scheduled'&&!stageFixedMasterSyncEnabled(env)) throw error;
+      }
+    };
     const runFixedMaster = async () => {
-      if (!stageFixedMasterSyncEnabled(env) || !job?.fixedScope) {
-        if (mode==='fixed-scheduled') throw Error('FIXED_MASTER_STAGE_SOURCE_SCOPE');
+      if (!stageFixedMasterSyncEnabled(env) || !fixedScope) {
+        if (mode==='fixed-scheduled'&&!stageNationalRegistryEnabled(env)) throw Error('FIXED_MASTER_STAGE_SOURCE_SCOPE');
         return;
       }
       try {
         const store=stageFixedMasterStorage({env,write:true});
         const source=createStageFixedMasterSource({env});
         const baseline=stageFixedMasterBaseline({env,store});
-        const result=await syncStageFixedMaster({store,receipt,scope:job?.fixedScope,readMaster:source,loadBaseline:baseline.load});
+        const result=await syncStageFixedMaster({store,receipt,scope:fixedScope,readMaster:source,loadBaseline:baseline.load});
         console.log(JSON.stringify({component:'opsmap-fixed-master-sync',runId:receipt.runId,state:result.state,version:result.version}));
       } catch(error) {
         const code=error.code || error.message || '';
@@ -177,12 +202,16 @@ async function run() {
         if (mode==='fixed-scheduled') throw error;
       }
     };
-    if (mode==='fixed-scheduled') return runFixedMaster();
-    const durable=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env,write:true}),appRoot});
-    try {report(await publishOpsmapScheduledRun({createWorker:recordSource=>buildWorker({mode,settingsFile,durable,recordSource}),durable,receipt}));}
+    const runMasterJobs=async()=>{await runNationalRegistry();await runFixedMaster();};
+    if (mode==='fixed-scheduled') return runMasterJobs();
+    let durable;
+    try {
+      durable=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env,write:true}),appRoot});
+      report(await publishOpsmapScheduledRun({createWorker:recordSource=>buildWorker({mode,settingsFile,durable,recordSource}),durable,receipt}));
+    }
     finally {
-      await durable.dispose().catch(()=>{});
-      await runFixedMaster();
+      await durable?.dispose().catch(()=>{});
+      await runMasterJobs();
     }
     return;
   }

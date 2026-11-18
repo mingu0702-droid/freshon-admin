@@ -22,6 +22,7 @@ import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,
 import {phase2bSnapshotMeta} from './phase2bOperations.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {createStageStaffRegistryAsset,mountStageStaffRegistry} from './stageStaffRegistryAsset.js';
+import {createStageNationalRegistryReader,createStageNationalRegistryStorage} from './stageNationalRegistry.js';
 import {createStageStoreDetails} from './stageStoreDetails.js';
 import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
@@ -144,6 +145,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const postalEnabled = stage.OPSMAP_SHADOW_COVERAGE_FORMAT==='postal';
   const remotePostal = postalEnabled ? createStagePostalAssets({env:stage,fetchImpl,now}) : null;
   const staffRegistry = createStageStaffRegistryAsset({env:stage,fetchImpl,now});
+  const nationalRegistry = createStageNationalRegistryReader({store:createStageNationalRegistryStorage({env:stage,fetchImpl,now}),now});
   const validation = createStageAbValidation({now,retainCoverageFiles:!postalEnabled});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   let baselineConfig, baselineStore, baselineRefresh, baselineRestoreMs, baselineState='NOT_CONFIGURED';
@@ -395,18 +397,32 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   mountOpsmapScheduledRun(app,{env:stage,now,readFixedScope:async()=>{
     if (!staffRegistry) return null;
     const additional=await staffRegistry.read();
-    return stageFixedMasterScope(validation.active(),additional);
+    return stageFixedMasterScope(validation.active(),additional,await nationalRegistry?.read());
   }});
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
     void remotePostal?.verifyReference();
+    let registryAuditPending, registryAudited=false;
+    function auditRegionalCoordinates() {
+      const current=validation.active();
+      if (!staffRegistry || registryAudited || registryAuditPending || !(current?.registry instanceof Map)) return;
+      registryAuditPending=staffRegistry.read().then(({snapshot,meta})=>{
+        if(validation.active()!==current || snapshot.rows.some(row=>current.registry.has(row.customerCode))) return;
+        if(!meta.officialLocations)return;
+        const {yeongnam,honam}=meta.officialLocations;
+        console.info(JSON.stringify({component:'stage-national-coordinate-audit',registered:current.registry.size+snapshot.rows.length,
+          existingCoordinates:current.counts.located,regionalLocations:{yeongnam,honam},located:current.counts.located+yeongnam+honam}));
+        registryAudited=true;
+      }).catch(()=>{}).finally(()=>{registryAuditPending=null;});
+    }
     const refresh=()=>{
       if(snapshotStore&&!baselineConfig)void readBaseSnapshot().catch(()=>{});
       if(generationRestore.status().state!=='NOT_CONFIGURED') {
         fileRestorePending ??= generationRestore.refresh().finally(()=>{fileRestorePending=null;});
       }
-      void refreshBaseline();
+      void Promise.resolve(refreshBaseline()).then(auditRegionalCoordinates);
       void refreshScheduled();
+      auditRegionalCoordinates();
     };
     refresh();
     setInterval(refresh,60_000).unref();
@@ -448,7 +464,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     mountPrivateExtensions:binding=>{
       const {requireStaff,requireStageRead,isSessionCurrent}=binding;
       staffView = requireStaff;
-      mountStageStaffRegistry({app:router,requireStaff,asset:staffRegistry,
+      mountStageStaffRegistry({app:router,requireStaff,asset:staffRegistry,nationalRegistry,
         getVerifiedRegistry:()=>validation.active()?.registry,now});
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
         driverContacts.mount(binding,{readBaseVehicles:codes=>base.get(codes),
