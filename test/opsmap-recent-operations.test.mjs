@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import express from 'express';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
+import {createStageRecentOrdersReader} from '../src/stageRecentOrders.js';
 import {
   createRecentOperationsReader,createStageRecentOperationsStore,mergeRecentOperations,mountRecentOperations,normalizeRecentOperations,openRecentOperations,
   projectRecentOperations,RECENT_OPERATIONS_ROUTE,recentOperationsKey,sealRecentOperations,syncStageRecentOperations
@@ -114,9 +115,10 @@ test('a new closed day combines sealed orders with explicit live delivery eviden
     writes++;
   }};
   const options={store,receipt:{runId:'a'.repeat(64),date:'2026-11-19'},now:()=>Date.parse('2026-11-18T21:10Z'),
-    async readLatestDay(day,existing){
+    async readLatestDay(day,existing,orders){
       assert.equal(day,date);
       assert.deepEqual([...existing],['honam']);
+      assert.deepEqual([...orders],['osan']);
       reads++;
       return [makeDay(day,'delivery_admin','partial',['A2'])];
     }};
@@ -126,6 +128,49 @@ test('a new closed day combines sealed orders with explicit live delivery eviden
   assert.equal(writes,1);
   assert.equal(saved.length,2);
   assert.deepEqual(projectRecentOperations(current.ledger).centers.osan.confirmedDays,[]);
+});
+
+test('source order reads require an exact day, center, confirmed rows and complete line totals',async()=>{
+  const date='2026-11-18', fetched=[];
+  const good={stockDate:date,logCdName:'오산물류센터',dcOutDate:'확정',estCd:'S1',dlvyEstCd:'S1',
+    orderNo:'O100',seq:1,orderQty:2,totalCnt:1};
+  const read=createStageRecentOrdersReader({env:{RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
+    OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'},async fetchImpl(url,opt){
+    assert.equal(url,'https://mis.freshon.co.kr/bo/sm/order/orderInfoList');
+    assert.equal(opt.method,'POST');
+    const query=new URLSearchParams(opt.body);
+    assert.equal(query.get('stockDateS'),date);
+    assert.equal(query.get('stockDateE'),date);
+    assert.equal(query.get('dcOutDate'),'1');
+    assert.equal(query.get('sortType'),'3');
+    const center=query.get('logCd');
+    fetched.push(center);
+    if(center==='011') return Response.json({data:[good,{stockDate:'소계'}]});
+    if(center==='012') return Response.json({data:[{...good,logCdName:'영남센터',totalCnt:2}]});
+    return Response.json({data:[{...good,logCdName:'호남센터',dcOutDate:'미확정'}]});
+  }});
+  assert.deepEqual(await read(date),[makeDay(date,'freshon_orders','partial',['S1'])]);
+  assert.deepEqual(fetched,['011','012','013']);
+  assert.deepEqual(await read(date,new Set(['osan'])),[]);
+  assert.deepEqual(fetched,['011','012','013','012','013']);
+});
+
+test('a newly sourced day is saved and verified before advancing the operating ledger',async()=>{
+  const date='2026-11-18', before=ledger(makeDay(initialEnd,'freshon_orders','partial',['S1']));
+  const incoming=makeDay(date,'freshon_orders','partial',['S2']);
+  let current={ledger:before,sha:'before'}, file, corrupt=true;
+  const store={read:async()=>current,readDay:async()=>file,async writeDay(day,items){
+    assert.equal(day,date);
+    file=corrupt?[]:normalizeRecentOperations({startDate:'2026-08-21',endDate:day,days:items}).days;
+  },async write(next,sha){assert.equal(sha,'before');assert.deepEqual(file,[incoming]);current={ledger:next,sha:'after'};}};
+  const options={store,receipt:{runId:'a'.repeat(64),date:'2026-11-19'},now:()=>Date.parse('2026-11-18T21:10Z'),
+    readLatestDay:async()=>[incoming]};
+  await assert.rejects(syncStageRecentOperations(options),/RECENT_OPERATIONS_STORAGE_READBACK/);
+  assert.equal(current.ledger,before);
+  corrupt=false;
+  file=undefined;
+  assert.equal((await syncStageRecentOperations(options)).state,'PUBLISHED');
+  assert.equal((await syncStageRecentOperations(options)).state,'VERIFIED_NOOP');
 });
 
 test('retries selected closed dates without scanning the entire window or assuming missing dates are empty',async()=>{

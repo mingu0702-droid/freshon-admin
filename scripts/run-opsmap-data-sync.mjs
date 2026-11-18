@@ -12,6 +12,7 @@ import {privateReaderEndpoint} from '../src/opsmap-abc/privateReaderEndpoint.js'
 import {createManualMapPins} from '../src/opsmap-abc/manualMapPins.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
+import {createStageRecentOrdersReader} from '../src/stageRecentOrders.js';
 import {boundedRead, privateCoverageDirectory} from '../src/shadowCoverage/coverageFiles.js';
 import {atomicCoverageWrite} from '../src/shadowCoverage/fileStore.js';
 import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from '../src/opsmapDurableGeneration.js';
@@ -209,9 +210,14 @@ async function run() {
       if (!stageRecentOperationsSyncEnabled(env)) return;
       const component='opsmap-recent-operations-sync';
       try {
-        const readLatestDay=env.OPSMAP_STAGE_RECENT_OPERATIONS_DELIVERY_APPROVED==='1' ?
+        const readDelivery=env.OPSMAP_STAGE_RECENT_OPERATIONS_DELIVERY_APPROVED==='1' ?
           createStageDatedDeliveryReader({env,syncCenters:{osan:SYNC_DELIVERY_SOURCES.osan,
             yeongnam:SYNC_DELIVERY_SOURCES.yeongnam,honam:SYNC_DELIVERY_SOURCES.honam}}).readRecentOperations : null;
+        const readOrders=createStageRecentOrdersReader({env});
+        const readLatestDay=readDelivery||readOrders?async(date,deliveryCenters,orderCenters)=>{
+          const evidence=await Promise.all([readDelivery?.(date,deliveryCenters),readOrders?.(date,orderCenters)]);
+          return evidence.flatMap(input=>input??[]);
+        }:null;
         const result=await syncStageRecentOperations({store:createStageRecentOperationsStore({env,write:true}),receipt,
           readLatestDay,
           retryDates:env.OPSMAP_STAGE_RECENT_OPERATIONS_RETRY_DATES?.split(',').map(date=>date.trim()),

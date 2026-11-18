@@ -205,7 +205,8 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
       const blob=address.startsWith(root+'/git/blobs/') && codeRevision.test(address.slice((root+'/git/blobs/').length));
       const read=method==='GET' && ((file===currentFile || write&&daily) && url.searchParams.size===1 && url.searchParams.get('ref')===branch ||
         !url.search && (address===root || write&&blob));
-      const update=write && method==='PUT' && file===currentFile && !url.search && JSON.parse(options.body).branch===branch;
+      const update=write && method==='PUT' && (file===currentFile || daily) && !url.search &&
+        JSON.parse(options.body).branch===branch;
       if ((!read && !update) || url.username || url.password || url.hash) throw Error('RECENT_OPERATIONS_STORAGE_SCOPE');
       return fetchImpl(input,{...options,redirect:'error'});
     }});
@@ -226,6 +227,12 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
         const envelopeEnd=date<RECENT_OPERATIONS_BASELINE_END?RECENT_OPERATIONS_BASELINE_END:date;
         if (ledger.endDate!==envelopeEnd || ledger.days.some(day=>day.date!==date)) throw rejected();
         return ledger.days;
+      },
+      async writeDay(date, days) {
+        if (!isDay(date) || days.some(day=>day.date!==date)) throw rejected();
+        const endDate=date<RECENT_OPERATIONS_BASELINE_END?RECENT_OPERATIONS_BASELINE_END:date;
+        const value=await sealRecentOperations({startDate:datesFor(endDate,90)[0],endDate,days},key);
+        return client.write(prefix+'day-'+date+'.json',value,null);
       },
       async write(ledger,sha) {await client.write(currentFile,await sealRecentOperations(ledger,key),sha);}
     }:{})
@@ -250,10 +257,21 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
   for (const date of dates) {
     const savedInput=await (readSource?.(date) ?? store.readDay(date));
     if (savedInput!=null && (!Array.isArray(savedInput) || savedInput.some(row=>row?.date!==date))) throw rejected();
-    const input=[...(savedInput??[])];
+    let input=[...(savedInput??[])];
     if (date===day && date>base.endDate && readLatestDay) {
-      const existing=new Set(input.filter(row=>row.source==='delivery_admin').map(row=>row.centerKey));
-      input.push(...await readLatestDay(date,existing));
+      const deliveryCenters=new Set(input.filter(row=>row.source==='delivery_admin').map(row=>row.centerKey));
+      const orderCenters=new Set(input.filter(row=>row.source==='freshon_orders').map(row=>row.centerKey));
+      input.push(...await readLatestDay(date,deliveryCenters,orderCenters));
+      if (input.length && !savedInput && store.writeDay) {
+        let created=true;
+        try {await store.writeDay(date,input);}
+        catch(error) {if(error.code!=='FIXED_STORE_CONFLICT')throw error;created=false;}
+        const persisted=await store.readDay(date);
+        const expected=normalizeRecentOperations({startDate:datesFor(date,90)[0],endDate:date,days:input}).days;
+        if (!persisted || created && JSON.stringify(persisted)!==JSON.stringify(expected))
+          throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
+        input=persisted;
+      }
     }
     if (!Array.isArray(input) || input.some(row=>row?.date!==date)) throw rejected();
     if (!input.length) continue;
