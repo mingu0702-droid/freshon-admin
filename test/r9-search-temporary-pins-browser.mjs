@@ -66,7 +66,7 @@ const runtime=fs.readFileSync(path.join(root,'map-phase2b-runtime.js'),'utf8').r
   window.tempPinTest={begin(text,options={}){++state.searchRequestId;return searchExternalAddress(text,{owner:state.searchRequestId,...options});},
    click(lat,lng){kakao.maps.event.trigger(state.map,'click',{latLng:new kakao.maps.LatLng(lat,lng)});},clear:clearTemporaryPins,
    finish:(p,owner=state.searchRequestId)=>finishAddress(p,{owner}),geocode:geocodeAddress,
-   move(){const {map}=state;map.setLevel(6);map.setCenter(new kakao.maps.LatLng(37.53,127.03));for(const name of ['zoom_changed','dragstart','center_changed','dragend','idle'])kakao.maps.event.trigger(map,name);},
+   move(lat=37.53,lng=127.03){const {map}=state;map.setLevel(6);map.setCenter(new kakao.maps.LatLng(lat,lng));for(const name of ['zoom_changed','dragstart','center_changed','dragend','idle'])kakao.maps.event.trigger(map,name);},
    releaseFocus:()=>mapCamera.releaseFocus(),positionButtons:positionTemporaryRemoveButtons,
    stats:()=>({count:document.querySelectorAll('[data-search-temporary-pin]').length,tracked:temporaryPins.size,pending:!!searchTemporaryClick,
     activeCircles:window.allCircles.filter(x=>x.map).length,stores:state.currentRows.length,markerCount:markerEntries.size,
@@ -229,9 +229,10 @@ try{
  await submit('서울 합성구 모바일길 36');await page.evaluate(()=>tempPinTest.click(37.55,127));
  const occlusion=await page.evaluate(()=>{
   tempPinTest.releaseFocus();
-  const button=document.querySelector('.searchTemporaryRemove'), anchor=button.offsetParent.getBoundingClientRect();
+  const button=document.querySelector('.searchTemporaryRemove');
+  const anchor=document.querySelector('[data-search-temporary-pin]').getBoundingClientRect();
   const drawer=document.createElement('div');drawer.className='mobileMapControls';
-  const left=anchor.left+button.offsetLeft, top=anchor.top+button.offsetTop;
+  const left=anchor.right+3, top=anchor.top;
   Object.assign(drawer.style,{position:'fixed',left:(left-5)+'px',top:(top-5)+'px',right:'auto',bottom:'auto',
     zIndex:'9999',display:'block',width:'48px',height:'48px'});
   document.body.append(drawer);
@@ -243,6 +244,50 @@ try{
  assert.deepEqual(occlusion,{originalBlocked:true,buttonClickable:true});
  await removeFromMap({touch:true});
  check('390px touch can delete a pin when the drawer covers the original button position',await page.evaluate(()=>tempPinTest.stats().count===0));
+ await submit('서울 합성구 상세카드길 37');
+ const firstTouch=await page.evaluate(()=>{
+  const map=MapUiLocalBridge.state.map, node=document.querySelector('#map');
+  const bounds=node.getBoundingClientRect();
+  const point=map.getCenter(), x=bounds.left+bounds.width/2,y=bounds.top+bounds.height/2;
+  const drawer=document.querySelector('#detailSection');
+  for(const [key,value] of Object.entries({position:'fixed',left:x+12+'px',top:y-68+'px',right:'auto',
+    bottom:'auto',width:'140px',height:'125px',margin:'0'}))drawer.style.setProperty(key,value,'important');
+  tempPinTest.click(point.getLat(),point.getLng());
+  const originalHit=drawer.contains(document.elementFromPoint(x+36,y-24));
+  const button=document.querySelector('.searchTemporaryRemove'), rect=button.getBoundingClientRect();
+  const touchX=rect.left+rect.width/2,touchY=rect.top+rect.height/2;
+  return {originalHit,actionable:button.contains(document.elementFromPoint(touchX,touchY))};
+ });
+ check('the initial drawer covers the nominal delete location',firstTouch.originalHit);
+ check('390px map delete is touchable as soon as the drawer opens',firstTouch.actionable);
+ await removeFromMap({touch:true});
+ check('the first physical tap deletes the temporary pin only',await page.evaluate(()=>{
+  const s=tempPinTest.stats();return s.count===0&&s.tracked===0&&s.stores===2&&s.activeCircles===0;
+ }));
+ await page.locator('#detailSection').evaluate(drawer=>drawer.removeAttribute('style'));
+ await submit('서울 합성구 회전길 38');
+ const mobilePoint=await page.evaluate(()=>{
+  const point=MapUiLocalBridge.state.map.getCenter();
+  tempPinTest.click(point.getLat(),point.getLng());
+  return {lat:point.getLat(),lng:point.getLng()};
+ });
+ await page.setViewportSize({width:844,height:390});
+ await page.waitForFunction(()=>{
+  const button=document.querySelector('.searchTemporaryRemove');
+  return button.parentElement.matches('.searchTemporaryMarker')&&!button.hasAttribute('data-floating-delete')&&!button.hidden;
+ });
+ await page.setViewportSize({width:390,height:844});
+ await page.waitForFunction(()=>document.querySelector('.searchTemporaryRemove').hasAttribute('data-floating-delete'));
+ check('viewport rotation keeps a single delete control and the saved stores',await page.evaluate(()=>{
+  const s=tempPinTest.stats();return document.querySelectorAll('.searchTemporaryRemove').length===1&&s.count===1&&s.stores===2;
+ }));
+ await page.evaluate(({lat,lng})=>tempPinTest.move(lat,lng+1),mobilePoint);
+ await page.waitForFunction(()=>document.querySelector('.searchTemporaryRemove').hidden);
+ await page.evaluate(({lat,lng})=>tempPinTest.move(lat,lng),mobilePoint);
+ await removeFromMap({touch:true});
+ check('zoom and drag hide and restore the control without removing stores',await page.evaluate(()=>{
+  const s=tempPinTest.stats();return s.count===0&&s.stores===2&&s.activeCircles===0;
+ }));
  check('synthetic browser has no unhandled errors',errors.length===0);check('no remote calls or persistent writes',external.length===0&&requests.every(r=>r.method==='GET'||r.path.endsWith('/base-vehicles')||r.path.endsWith('/manual-road-route')));
  const result={scope:'LOCAL_CHROMIUM_FIXTURE',pass:checks.length,fail:0,checks,errors,externalRequests:external.length,artifacts:out};fs.writeFileSync(path.join(out,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }catch(error){console.error(JSON.stringify({errors,requests,external,state:page?await page.evaluate(()=>({bridge:!!window.MapUiLocalBridge,rows:window.MapUiLocalBridge?.state.currentRows.length,status:document.querySelector('#freshnessState')?.textContent})):null}));throw error;}finally{await browser?.close();await new Promise(r=>server.close(r));}

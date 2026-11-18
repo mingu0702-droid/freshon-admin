@@ -11,7 +11,7 @@
   const selectedMapPins=new Set(),mapMarkerRows=new WeakMap();
   let activeMapPinKey='';
   const temporaryPins=new Map();
-  let temporaryDetailPoint=null,searchTemporaryRadius=null,searchTemporaryClick=null;
+  let temporaryDetailPoint=null,searchTemporaryRadius=null,searchTemporaryClick=null,temporaryRemoveFrame=null;
   let temporaryDistance=null,temporaryDistancePending=false;
   let searchSelectedOverlay=null;
   let newAreaPositionControl=null;
@@ -1739,6 +1739,7 @@
     mapGestureEvents?.abort();mapGestureEvents=null;
     mapObserver?.disconnect();mapObserver=null;
     if(resizeFrame!==null){cancelAnimationFrame(resizeFrame);resizeFrame=null;}
+    if(temporaryRemoveFrame!==null){cancelAnimationFrame(temporaryRemoveFrame);temporaryRemoveFrame=null;}
     for(const [owner,name,fn] of mapHandlers)window.kakao?.maps?.event?.removeListener?.(owner,name,fn);
     mapHandlers=[];
   }
@@ -1786,6 +1787,10 @@
       const userGesture=()=>{if(state.map!==owner)return;mapCamera?.userGesture();state.userMovedMap=true;state.fitRequested=false;};
       mapGestureEvents=new AbortController();
       for(const type of ['wheel','pointerdown','touchstart'])$('#map').addEventListener(type,userGesture,{passive:true,signal:mapGestureEvents.signal});
+      const layoutListener={capture:true,passive:true,signal:mapGestureEvents.signal};
+      window.addEventListener('scroll',scheduleTemporaryRemoveButtons,layoutListener);
+      window.visualViewport?.addEventListener('resize',scheduleTemporaryRemoveButtons,layoutListener);
+      window.visualViewport?.addEventListener('scroll',scheduleTemporaryRemoveButtons,layoutListener);
       if(window.KakaoMapsAdapter?.geocoder)window.kakaoGeocoder ||= window.KakaoMapsAdapter.geocoder();
       const listen=(name,fn)=>{
         const guarded=(...args)=>{if(state.map===owner)fn(...args);};
@@ -1797,6 +1802,8 @@
         startMotion();
         if(Date.now()>=state.suppressMapEventsUntil){userGesture();auditMapFrames(owner,'zoom');}
       });
+      listen('center_changed',scheduleTemporaryRemoveButtons);
+      listen('zoom_changed',scheduleTemporaryRemoveButtons);
       listen('idle',()=>{
         if(state.map!==owner)return;
         mapMoving=false;
@@ -1862,6 +1869,7 @@
     if(!fast)renderRunList();
     $("#detailSection").classList.remove("open");
     $("#detailSection").removeAttribute('data-temporary-inspection');
+    scheduleTemporaryRemoveButtons();
     $("#detail").className = "idle";
     $("#detail").textContent = "검색하거나 핀을 선택하면 점포정보가 표시됩니다.";
     if (state.mode === "BASE_60D"&&!fast) renderPeriodStoreList();
@@ -2282,8 +2290,8 @@
       const {x,y}=project(row);
       return {left:x-28,top:y-56,right:x+28,bottom:y+4};
     });
-    const overlays=mapNode.querySelectorAll('.marker.virtual,.searchTemporaryRemove,.navRoutePoint,.osanCenterMarker');
-    for(const node of [...overlays,...$$('#mapTopControls,#mapTopReadout>#dotDataStatus,#mapRouteTotals:not([hidden]),#mapReset:not(#mapTopControls *),#detailSection.open,#mobileWorkspace:not(.collapsed),.mobileMapControls')]){
+    const overlays=mapNode.querySelectorAll('.marker.virtual,.navRoutePoint,.osanCenterMarker');
+    for(const node of [...overlays,...$$('.searchTemporaryRemove:not([hidden]),#mapTopControls,#mapTopReadout>#dotDataStatus,#mapRouteTotals:not([hidden]),#mapReset:not(#mapTopControls *),#detailSection.open,#mobileWorkspace:not(.collapsed),.mobileMapControls')]){
       const rect=node.getBoundingClientRect();
       if(rect.width&&rect.height&&rect.left<mapRect.right&&rect.right>mapRect.left&&rect.top<mapRect.bottom&&rect.bottom>mapRect.top){
         bounds.push({left:rect.left-mapRect.left,top:rect.top-mapRect.top,right:rect.right-mapRect.left,bottom:rect.bottom-mapRect.top});
@@ -2580,31 +2588,61 @@
     positionTemporaryDistanceLabel();scheduleNewAreaDispatchBadges();
   }
 
+  function scheduleTemporaryRemoveButtons() {
+    if(innerWidth>760||!temporaryPins.size||temporaryRemoveFrame!==null)return;
+    temporaryRemoveFrame=requestAnimationFrame(()=>{
+      temporaryRemoveFrame=null;
+      positionTemporaryRemoveButtons();
+    });
+  }
+
   function positionTemporaryRemoveButtons() {
-    if (!temporaryPins.size) return;
-    const entries=[...temporaryPins.values()];
-    if (innerWidth>760) {
-      for (const {remove} of entries) remove.style.translate='';
+    if(!temporaryPins.size)return;
+    const mapNode=$('#map');
+    if(innerWidth>760){
+      for(const {content,remove} of temporaryPins.values()){
+        if(remove.parentElement===content)continue;
+        remove.removeAttribute('data-floating-delete');
+        remove.style.removeProperty('left');
+        remove.style.removeProperty('top');
+        remove.hidden=false;
+        content.append(remove);
+      }
       return;
     }
-    const map=$('#map').getBoundingClientRect();
-    const bounds={left:Math.max(0,map.left)+4,top:Math.max(0,map.top)+4,
-      right:Math.min(innerWidth,map.right)-4,bottom:Math.min(innerHeight,map.bottom)-4};
-    if (bounds.left>=bounds.right || bounds.top>=bounds.bottom) return;
-    const controls=$$('#approvedSiteHeader,#detailSection.open,#mapTopControls,#mobileWorkspace:not(.collapsed),.mobileMapControls');
-    const obstacles=[...controls,...entries.map(({marker})=>marker)].map(element=>element.getBoundingClientRect()).filter(rect=>
-      rect.width&&rect.height&&rect.right>bounds.left&&rect.left<bounds.right&&rect.bottom>bounds.top&&rect.top<bounds.bottom);
-    const buttons=entries.flatMap(({remove},id)=>{
-      if (!remove.isConnected || !remove.offsetParent) return [];
-      const anchor=remove.offsetParent.getBoundingClientRect();
-      return [{id,left:anchor.left+remove.offsetLeft,top:anchor.top+remove.offsetTop,
-        width:remove.offsetWidth,height:remove.offsetHeight}];
-    });
+    const map=mapNode.getBoundingClientRect();
+    const {offsetLeft=0,offsetTop=0,width=innerWidth,height=innerHeight}=window.visualViewport||{};
+    const bounds={left:Math.max(offsetLeft,map.left)+4,top:Math.max(offsetTop,map.top)+4,
+      right:Math.min(offsetLeft+width,map.right)-4,bottom:Math.min(offsetTop+height,map.bottom)-4};
+    const intersects=rect=>rect.width>0&&rect.height>0&&rect.right>bounds.left&&rect.left<bounds.right&&
+      rect.bottom>bounds.top&&rect.top<bounds.bottom;
+    const controls=$$('#approvedSiteHeader,#detailSection.open,#mapTopControls,#mapTopReadout,#mobileWorkspace:not(.collapsed),.mobileMapControls');
+    const obstacles=controls.map(node=>node.getBoundingClientRect()).filter(intersects);
+    // Keep mobile delete controls outside the SDK layer, so the drawer cannot clip them between frames.
+    for(const {remove} of temporaryPins.values()){
+      if(remove.parentElement===mapNode.parentElement)continue;
+      remove.setAttribute('data-floating-delete','');
+      mapNode.after(remove);
+    }
+    const buttons=[];
+    for(const [id,{marker,remove,point}] of temporaryPins){
+      const anchor=marker.getBoundingClientRect();
+      const buttonWidth=remove.offsetWidth||36,buttonHeight=remove.offsetHeight||36;
+      if(!intersects(anchor)||bounds.right-bounds.left<buttonWidth||bounds.bottom-bounds.top<buttonHeight){
+        remove.hidden=true;
+        continue;
+      }
+      obstacles.push(anchor);
+      buttons.push({id,width:buttonWidth,height:buttonHeight,priority:Number(point===temporaryDetailPoint),
+        left:Math.max(bounds.left,Math.min(anchor.right+3,bounds.right-buttonWidth)),
+        top:Math.max(bounds.top,Math.min(anchor.top,bounds.bottom-buttonHeight))});
+    }
     const offsets=new Map(MapViewPolicy.placeOverlayLabels(buttons,bounds,obstacles,{maxColumns:4,maxRows:6}).map(value=>[value.id,value]));
-    for (const [id,{remove}] of entries.entries()) {
-      const offset=offsets.get(id);
-      const translate=offset&&(offset.x||offset.y)?`${offset.x}px ${offset.y}px`:'';
-      if (remove.style.translate!==translate) remove.style.translate=translate;
+    for(const {id,left,top} of buttons){
+      const {remove}=temporaryPins.get(id), offset=offsets.get(id);
+      remove.style.left=`${left+(offset?.x??0)}px`;
+      remove.style.top=`${top+(offset?.y??0)}px`;
+      remove.hidden=false;
     }
   }
 
@@ -3500,6 +3538,7 @@
     NewAreaRequests.forgetTemporary(point.address,point);
     marker.onclick=null;
     remove.onclick=null;
+    remove.remove();
     mapMarkerRows.delete(marker);
     overlay.setMap(null);
   }
@@ -3920,7 +3959,7 @@
       content.append(marker,remove);
       const overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(lat,lng),content,clickable:true,xAnchor:.5,yAnchor:1,zIndex:45});
       overlay.setMap(state.map);
-      entry={point,overlay,marker,remove};temporaryPins.set(key,entry);
+      entry={point,overlay,content,marker,remove};temporaryPins.set(key,entry);
     }else if(entry.point.coordinateSource==='KAKAO_ADDRESS_TEMPORARY'&&row.kakaoAddressCheck){
       entry.point.kakaoAddressCheck=row.kakaoAddressCheck;
     }
@@ -3979,12 +4018,13 @@
     if(!keepViewport)trace?.mark('map');
     if(focus)focusMapPoint(row,{zoom:true,key:'search-temporary',nearby:verifiedSearch,onSettled:neighborhood?()=>{
       if(searchNeighborhood!==neighborhood)return;
-      requestAnimationFrame(positionTemporaryRemoveButtons);
+      scheduleTemporaryRemoveButtons();
       trace?.record('mapSettled');
       const refreshed=neighborhood.paintedView===searchPinView();
       if(!refreshed)neighborhood.paintedView=null;
       if(dateReady&&state.mode==='BASE_60D')renderStops(state.currentRows,{viewportOnly:true,fromIdle:true});
     }:undefined});
+    positionTemporaryRemoveButtons();
     if(neighborhood&&dateReady){
       renderStops(state.currentRows,{viewportOnly:true,fromIdle:true});
       if(trace)requestAnimationFrame(()=>{
@@ -4127,8 +4167,8 @@
     const {left,top}=map.getBoundingClientRect();
     const bounds={left:Math.max(0,left+4),top:Math.max(0,top+4),right:Math.min(innerWidth,left+map.clientWidth)-4,
       bottom:Math.min(innerHeight,top+map.clientHeight)-4};
-    const obstacleSelector='.marker .pin,.marker.virtual,.searchTemporaryRemove,.navRoutePoint,.osanCenterMarker,.temporaryDistanceLabel';
-    const uiSelector='#approvedSiteHeader,#detailSection.open,#leftPanel,#mapReset,#mapClusterPanel';
+    const obstacleSelector='.marker .pin,.marker.virtual,.navRoutePoint,.osanCenterMarker,.temporaryDistanceLabel';
+    const uiSelector='.searchTemporaryRemove:not([hidden]),#approvedSiteHeader,#detailSection.open,#leftPanel,#mapReset,#mapClusterPanel';
     const obstacles=[...map.querySelectorAll(obstacleSelector),...$$(uiSelector)].flatMap(element=>{
       const rect=element.getBoundingClientRect();
       return rect.width&&rect.height&&rect.left<bounds.right&&rect.right>bounds.left&&rect.top<bounds.bottom&&rect.bottom>bounds.top?[rect]:[];

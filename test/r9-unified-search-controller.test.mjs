@@ -62,11 +62,12 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
  const mapElement={dataset:{},replaceChildren(){},addEventListener(){}};
  let frameId=0;
  const c={
-  dateReady:true,mapInitializing:null,mapCamera:null,mapMoving:false,mapHandlers:[],mapGestureEvents:null,markerFrame:null,addressScheduleFrame:null,resizeFrame:null,AbortController,
+  dateReady:true,mapInitializing:null,mapCamera:null,mapMoving:false,mapHandlers:[],mapGestureEvents:null,mapObserver:null,markerFrame:null,addressScheduleFrame:null,resizeFrame:null,temporaryRemoveFrame:null,AbortController,
+  innerWidth:390,temporaryPins:new Map(),
   viewportMetrics:{idles:0,renders:0,skipped:0,cancelled:0},
   state:{mode:'BASE_60D',map:null,selected,currentRows:[visible]},
   document:{hidden:false,body:{dataset:{mapStaffState:'authenticated'}}},
-  window:{KakaoMapsAdapter:{ready:async()=>{}},MapViewPolicy:{createCamera:()=>({userGesture(){gestures++;}})},dispatchEvent(){}},
+  window:{KakaoMapsAdapter:{ready:async()=>{}},MapViewPolicy:{createCamera:()=>({userGesture(){gestures++;}})},addEventListener(){},dispatchEvent(){}},
   kakao:{maps:{Map:class {},LatLng:class {},event:{addListener:(_map,name,callback)=>events.set(name,callback)}}},
   $:()=>mapElement,performance:{mark(){}},CustomEvent:class {},loadBaseMap(){},positionTemporaryDistanceLabel(){},positionTemporaryRemoveButtons(){},clearSelection(){clears++;},
   auditMapFrames(){},prepareStageSearchIndex(){},scheduleNewAreaDispatchBadges:()=>badgeLayouts.push(true),
@@ -82,7 +83,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
    callback();
   }
  }
- vm.runInNewContext(['scheduleMapAddressWork','deferMapAddressWork','cancelViewportRender','releaseMapHandlers','initMap'].map(declaration).join('\n'),c);
+ vm.runInNewContext(['scheduleMapAddressWork','deferMapAddressWork','scheduleTemporaryRemoveButtons','cancelViewportRender','releaseMapHandlers','initMap'].map(declaration).join('\n'),c);
  assert(await c.initMap());
  events.get('idle')();
  events.get('dragstart')();
