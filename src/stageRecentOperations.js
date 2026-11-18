@@ -10,7 +10,8 @@ export const RECENT_OPERATIONS_BASELINE_END = '2026-11-17';
 export const recentOperationsCenters = ['osan','yeongnam','honam'];
 const evidenceOrder = ['order_confirmed','dispatch_confirmed','delivery_completed'];
 const sourceEvidence = {
-  freshon_orders:'order_confirmed', wms_dispatch:'dispatch_confirmed', delivery_admin:'delivery_completed'
+  freshon_orders:['order_confirmed'], wms_dispatch:['dispatch_confirmed'],
+  delivery_admin:['delivery_completed','dispatch_confirmed']
 };
 const binding = Buffer.from('opsmap-stage/recent-operations-v1');
 const repository = 'mingu0702-droid/freshon-cache', branch = 'stage/opsmap-snapshots';
@@ -36,20 +37,21 @@ export function normalizeRecentOperations({startDate,endDate,days} = {}) {
   const keys = new Set(), normalized = [];
   let rowCount = 0;
   for (const {date,centerKey,source,coverage,rows} of days) {
-    const expectedEvidence = sourceEvidence[source];
+    const allowedEvidence = sourceEvidence[source];
     const key = dayKey({date,centerKey,source});
     if (!isDay(date) || date < startDate || date > endDate || !recentOperationsCenters.includes(centerKey) ||
         !Object.hasOwn(sourceEvidence,source) || !['partial','complete'].includes(coverage) ||
         source === 'delivery_admin' && coverage === 'complete' || keys.has(key) ||
         !Array.isArray(rows) || rows.length > 30000 || (rowCount += rows.length) > 850000) throw rejected();
     keys.add(key);
-    const codes = new Set();
+    const codes = new Map();
     for (const row of rows) {
       if (typeof row?.customerCode !== 'string' || !customerCode.test(row.customerCode) ||
-          row.evidence !== expectedEvidence || codes.has(row.customerCode)) throw rejected();
-      codes.add(row.customerCode);
+          !allowedEvidence.includes(row.evidence) || codes.has(row.customerCode)) throw rejected();
+      codes.set(row.customerCode,row.evidence);
     }
-    normalized.push({date,centerKey,source,coverage,rows:[...codes].sort().map(code=>({customerCode:code,evidence:expectedEvidence}))});
+    normalized.push({date,centerKey,source,coverage,rows:[...codes].sort(([a],[b])=>a.localeCompare(b)).map(
+      ([customerCode,evidence])=>({customerCode,evidence}))});
   }
   return {startDate,endDate,days:normalized.sort((a,b)=>dayKey(a).localeCompare(dayKey(b)))};
 }
@@ -94,7 +96,10 @@ export function mergeRecentOperations(previous, endDate, days) {
     if (!existing || day.coverage==='complete') {
       retained.set(key,day);
     } else if (existing.coverage==='partial') {
-      const rows=new Map([...existing.rows,...day.rows].map(row=>[row.customerCode,row]));
+      const rows=new Map(existing.rows.map(row=>[row.customerCode,row]));
+      for (const row of day.rows) {
+        if (evidenceOrder.indexOf(row.evidence)>evidenceOrder.indexOf(rows.get(row.customerCode)?.evidence)) rows.set(row.customerCode,row);
+      }
       retained.set(key,{...day,rows:[...rows.values()]});
     }
   }

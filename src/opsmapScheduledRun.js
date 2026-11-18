@@ -69,7 +69,7 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       starting=true;
       try {scope=await readFixedScope();} catch { /* No verified scope. */ }
       finally {starting=false;}
-      if (!scope && !fullJob) return res.status(503).json({error:'FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE'});
+      if (!scope && !fullJob && !recentJob) return res.status(503).json({error:'FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE'});
     }
     let processHandle;
     const args=fullJob ? [jobFile,'scheduled',settings] : [jobFile,'fixed-scheduled'];

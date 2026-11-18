@@ -185,6 +185,29 @@ test('Stage scheduler endpoint passes a valid receipt once and drops raw child d
   assert.deepEqual(logs,[{component:'opsmap-scheduled-run',runId:receipt.runId,exitCode:1,error:'OPSMAP_SYNC_FAILED'}]);
 });
 
+test('recent operations can schedule while the independent fixed master scope is unavailable',async t=>{
+  const app=express();
+  const env={...storageEnv,OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED:'1',OPSMAP_STAGE_RECENT_OPERATIONS_SYNC_APPROVED:'1',
+    OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED:'1',OPSMAP_STAGE_SYNC_TRIGGER_ID:triggerId,
+    OPSMAP_STAGE_SYNC_EXECUTOR_SHA256:principal,OPSMAP_STAGE_SYNC_SCHEDULER_SECRET:secret};
+  let child,input='';
+  mountOpsmapScheduledRun(app,{env,now:()=>clockStart,readFixedScope:async()=>null,log:()=>{},
+    launch(_exec,args){
+      assert.deepEqual(args.slice(1),['fixed-scheduled']);
+      child=new EventEmitter();
+      child.stdin=new PassThrough();
+      child.stderr=new PassThrough();
+      child.stdin.on('data',bytes=>{input+=bytes;});
+      return child;
+    }});
+  const base=await listen(t,app),receipt=signed(clockStart);
+  const result=await fetch(base+OPSMAP_SCHEDULED_ROUTE,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(receipt)});
+  assert.equal(result.status,202);
+  assert.deepEqual(JSON.parse(input),{receipt,fixedScope:null});
+  child.emit('close',0);
+});
+
 test('the first Osan-only release can reuse the protected baseline and preserve unknown and archived days',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'opsmap-scheduled-baseline-'));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));
