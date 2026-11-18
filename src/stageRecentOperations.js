@@ -257,7 +257,7 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
   }
   if (!days.length) return {state:'SOURCE_UNAVAILABLE',endDate:base.endDate};
   const next=mergeRecentOperations(base,endDate,days);
-  if (JSON.stringify(next)===JSON.stringify(base)) return {state:'VERIFIED_NOOP',endDate:base.endDate};
+  if (current.ledger && JSON.stringify(next)===JSON.stringify(base)) return {state:'VERIFIED_NOOP',endDate:base.endDate};
   try {await store.write(next,current.sha);}
   catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
   const saved=await store.read();

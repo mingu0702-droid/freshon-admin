@@ -84,6 +84,25 @@ test('incremental publication adds only the last closed day, retains on missing 
   assert.equal(writes,1);
 });
 
+test('a signed first run publishes and verifies an identical protected seed before reporting no change',async()=>{
+  const source=makeDay('2026-11-18','delivery_admin','partial',['A1']);
+  const seed=normalizeRecentOperations({startDate:'2026-08-21',endDate:source.date,days:[source]});
+  let current={ledger:null,sha:null},reads=0,writes=0;
+  const store={async read(){reads++;return current;},readDay:async()=>[source],
+    async write(value,sha){
+      assert.equal(sha,current.sha);
+      assert.deepEqual(value,seed);
+      writes++;
+      current={ledger:value,sha:'initial-publication'};
+    }};
+  const options={store,receipt:{runId:'a'.repeat(64),date:'2026-11-19'},readSeed:async()=>seed,
+    now:()=>Date.parse('2026-11-19T03:00:00Z')};
+  assert.deepEqual(await syncStageRecentOperations(options),{state:'PUBLISHED',endDate:source.date});
+  assert.equal(reads,2);
+  assert.deepEqual(await syncStageRecentOperations(options),{state:'VERIFIED_NOOP',endDate:source.date});
+  assert.equal(writes,1);
+});
+
 test('retries selected closed dates without scanning the entire window or assuming missing dates are empty',async()=>{
   const original=ledger(makeDay(initialEnd,'freshon_orders','partial',['A1']));
   const readDates=[];
