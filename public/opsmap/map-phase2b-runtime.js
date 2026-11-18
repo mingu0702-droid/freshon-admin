@@ -268,6 +268,9 @@
         if(!stageRegistrationOnly()){
           const added=allStores.filter(row=>!known.has(row.customerCode)).map(row=>row.customerCode);
           if(added.length)void loadBaseVehicles(added);
+        }else if(allStores.some(row=>row.coordinateSource==='STAGE_REGISTERED_OFFICIAL')){
+          const registered=allStores.filter(row=>row.staffRegistrationOnly&&row.customerRegistryStatus!=='DELETED').map(row=>row.customerCode);
+          if(registered.length)afterSearchPaint(()=>{if(owner===initialRequestId&&document.body.dataset.mapStaffState==='authenticated')void loadBaseVehicles(registered);});
         }
         window.dispatchEvent(new CustomEvent('map-customer-registry-updated',{detail:{count:result.count,checkedAt:customerRegistryCheckedAt,version:result.version}}));
       }
@@ -2093,7 +2096,8 @@
 
   function nearbyVerifiedStores(point) {
     if(nearbyStoreIndex?.source!==allStores||nearbyStoreIndex.version!==markerSourceVersion){
-      const rows=allStores.filter(row=>!row.staffRegistrationOnly&&row.customerRegistryStatus!=='DELETED'&&hasVerifiedStageStorePoint(row));
+      const rows=allStores.filter(row=>(!row.staffRegistrationOnly||row.coordinateSource==='STAGE_REGISTERED_OFFICIAL')&&
+        row.customerRegistryStatus!=='DELETED'&&hasVerifiedStageStorePoint(row));
       nearbyStoreIndex={source:allStores,version:markerSourceVersion,index:MapPeriodUi.spatialIndex(rows)};
     }
     const latitude=0.005,longitude=latitude/Math.cos(point.lat*Math.PI/180);
@@ -2217,7 +2221,7 @@
     if (assignmentMode !== 'BASE_60D') return MapPeriodUi.spatialIndex(rows);
     const verifiedStage = hasVerifiedStageLocations();
     const pinRows = rows.filter(row => row.baseVehicleState !== 'NOT_IN_MASTER' ||
-      (verifiedStage && !row.staffRegistrationOnly && hasVerifiedStageStorePoint(row)));
+      (verifiedStage && (!row.staffRegistrationOnly||row.coordinateSource==='STAGE_REGISTERED_OFFICIAL')&&hasVerifiedStageStorePoint(row)));
     return MapPeriodUi.spatialIndex(pinRows);
   }
 
@@ -2556,6 +2560,7 @@
   function coordinateEvidenceLabel(row) {
     if (numberOrNull(row.lat) === null || numberOrNull(row.lng) === null) return '';
     if (row.coordinateSource === 'MANUAL_PIN') return '사용자 수동 확정 위치 · 원본 주소 보존';
+    if (row.coordinateSource === 'STAGE_REGISTERED_OFFICIAL') return row.coordinateAccuracy==='BUILDING'?'공식 건물 위치':'공식 주소 대표 위치';
     if (row.coordinateEvidence === 'DELIVERY_COMPLETION_GPS') return '배송 완료 위치 · 출입구 확인 필요';
     if (row.coordinateSource === 'BUILDING_VERIFIED' && row.coordinateEvidence === 'BUILDING_LOCATION') return '공공 데이터로 확인한 건물 위치';
     if (row.coordinateSource === 'ADDRESS_REPRESENTATIVE' && row.coordinateEvidence === 'ADDRESS_LOCATION') return '공공 데이터의 주소 대표 위치';
@@ -4678,8 +4683,8 @@
       const primary=normalizeVehicle(assignment.baseVehicle);
       if(/^(?:(?:용|척)?\d+)$/.test(primary))byVehicle.set(primary,0);
       const schedule=window.MapFixedDeliveryWeekdays?.fixedDeliveryWeekdays(assignment,{source});
-      schedule?.byDay.forEach(({route},index)=>{
-        if(route)byVehicle.set(route,(byVehicle.get(route)||0)|(1<<(index+1)));
+      schedule?.byDay.forEach(({route,key},index)=>{
+        if(route)byVehicle.set(route,(byVehicle.get(route)||0)|(1<<(key==='Sun'?0:index+1)));
       });
       const assignments=[];
       for(const [vehicle,mask] of byVehicle){

@@ -51,13 +51,15 @@ export function fixedDeliveryWeekdays(row, { source } = {}) {
   const trusted = row?.baseVehicleSource === 'FIXED_DISPATCH_PRIMARY' &&
     verifiedStates.has(row.baseVehicleState) && (!source?.version || source.version === row.baseVehicleVersion);
   const inactive = trusted && inactiveRoutes.has(compact(row.baseVehicle));
-  const byDay = DELIVERY_WEEKDAYS.map((key, i) => {
+  const verifiedSunday = trusted && !inactive && ['yeongnam','honam'].includes(row.baseVehicleGroup) && fixedRoute(row.weekdays?.Sun);
+  const daysToRead = verifiedSunday ? [...DELIVERY_WEEKDAYS,'Sun'] : DELIVERY_WEEKDAYS;
+  const byDay = daysToRead.map((key, i) => {
     const value = trusted && Object.hasOwn(row.weekdays ?? {}, key) ? row.weekdays[key] : '';
     const keyValue = compact(value);
     const route = inactive ? null : fixedRoute(value);
     const noDelivery = inactive || keyValue === NO_FIXED_ASSIGNMENT || inactiveRoutes.has(keyValue);
     const status = route ? 'DELIVERY' : !meta.stale && noDelivery ? 'NO_DELIVERY' : 'UNKNOWN';
-    return { key, label: labels[i], status, route };
+    return { key, label: labels[i] || '일', status, route };
   });
   const days = byDay.filter(day => day.status === 'DELIVERY').map(day => day.label);
   const unconfirmedDays = byDay.filter(day => day.status === 'UNKNOWN').map(day => day.label);
@@ -121,6 +123,8 @@ export function nearbyFixedDeliveryWeekdays(point, index, assignments, {
     base.stale ||= schedule.stale;
     if (schedule.days.length) deliveryCount++;
     for (const [i, day] of schedule.byDay.entries()) {
+      if (!byDay[i]) byDay[i] = {key:day.key,label:day.label,storeCount:0,
+        unconfirmedStoreCount:0,noDeliveryStoreCount:0,routes:[],stores:[]};
       if (day.status === 'UNKNOWN') {
         byDay[i].unconfirmedStoreCount++;
         continue;

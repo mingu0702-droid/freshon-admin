@@ -4,11 +4,12 @@ import {gunzip, gzip} from 'node:zlib';
 import {customerRegistryAddressHash} from './customerRegistry.js';
 import {customerRegistryPage} from './privateCustomerRegistry.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
-import {stageStaffRegistryManifest} from './stageStaffRegistryManifest.js';
+import {stageRegionalCoordinatesManifest, stageStaffRegistryManifest} from './stageStaffRegistryManifest.js';
 
 const route = '/api/map-phase2b/private/customer-registry';
 const repository = 'https://api.github.com/repos/mingu0702-droid/freshon-cache';
 export const STAGE_STAFF_REGISTRY_PATH = 'opsmap-stage/staff-registry-v1/registry.bin';
+export const STAGE_REGIONAL_COORDINATES_PATH = 'opsmap-stage/staff-registry-v1/official-coordinates.bin';
 export const STAGE_STAFF_REGISTRY_MAX_BYTES = 2 * 1024 * 1024;
 export const STAGE_STAFF_REGISTRY_MAX_CLEAR_BYTES = 8 * 1024 * 1024;
 const observedOn = '2026-11-17';
@@ -21,7 +22,7 @@ const sourceCount = expected.reduce((sum, center) => sum + center.registered, 0)
 const aad = Buffer.from(STAGE_STAFF_REGISTRY_PATH);
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const isHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
-const derive = (key, use) => Buffer.from(hkdfSync('sha256', key, aad, Buffer.from(use), 32));
+const derive = (key, use, context=aad) => Buffer.from(hkdfSync('sha256', key, context, Buffer.from(use), 32));
 const compress = promisify(gzip), decompress = promisify(gunzip);
 const rejected = () => Object.assign(Error('CUSTOMER_REGISTRY_ASSET_REJECTED'), {permanent:true});
 const unavailable = retryAt => Object.assign(Error('CUSTOMER_REGISTRY_UNAVAILABLE'), {retryAt});
@@ -81,15 +82,18 @@ export async function sealStageStaffRegistry(bytes, encodedKey) {
   return {packed,sha256:digest(packed)};
 }
 
-async function openRegistry(packed,key) {
-  let bytes;
+async function unpackAsset(packed,key,context=aad) {
   try {
-    const decipher = createDecipheriv('aes-256-gcm',derive(key,'asset-encryption'),packed.subarray(0,12));
-    decipher.setAAD(aad);
+    const decipher = createDecipheriv('aes-256-gcm',derive(key,'asset-encryption',context),packed.subarray(0,12));
+    decipher.setAAD(context);
     decipher.setAuthTag(packed.subarray(-16));
-    bytes = await decompress(Buffer.concat([decipher.update(packed.subarray(12,-16)),decipher.final()]),
+    return await decompress(Buffer.concat([decipher.update(packed.subarray(12,-16)),decipher.final()]),
       {maxOutputLength:STAGE_STAFF_REGISTRY_MAX_CLEAR_BYTES});
   } catch { throw rejected(); }
+}
+
+async function openRegistry(packed,key) {
+  const bytes = await unpackAsset(packed,key);
   const doc = parseRegistry(bytes);
   const version = digest(bytes);
   const rows = doc.rows.map(row => ({
@@ -103,6 +107,36 @@ async function openRegistry(packed,key) {
   };
 }
 
+function attachOfficialCoordinates(registry, doc, manifest, registryManifest) {
+  if (doc?.schema !== 'opsmap-official-regional-coordinates-v1' ||
+      doc.registrySha256 !== registry.snapshot.version || doc.registryAssetSha256 !== registryManifest.sha256 ||
+      doc.baseGeneration !== manifest.baseGeneration || doc.registrationAsOf !== registry.meta.checkedAt ||
+      !Array.isArray(doc.rows) || doc.rows.length !== manifest.count) throw rejected();
+  const byCode = new Map();
+  for (const point of doc.rows) {
+    if (!/^[A-Z]\d{1,20}$/.test(point?.customerCode || '') || byCode.has(point.customerCode) ||
+        !['yeongnam','honam'].includes(point.centerGroup) || !isHash(point.addressSha256) ||
+        !Number.isFinite(point.lat) || !Number.isFinite(point.lng) ||
+        point.lat < 33 || point.lat > 39.5 || point.lng < 124 || point.lng > 132 ||
+        point.coordinateEvidenceSource !== 'OFFICIAL_ADDRESS_DATA' ||
+        !['BUILDING_LOCATION','ADDRESS_LOCATION'].includes(point.coordinateMeasurementKind) ||
+        !isHash(point.coordinateDatasetSha256) ||
+        (point.coordinateMeasurementKind === 'BUILDING_LOCATION' && !isHash(point.officialBuildingSha256))) throw rejected();
+    byCode.set(point.customerCode,point);
+  }
+  const previous = registry.snapshot, counts = {yeongnam:0,honam:0};
+  const rows = previous.rows.map(row => {
+    const point = byCode.get(row.customerCode);
+    if (!point || row.centerGroup !== point.centerGroup || row.addressHash !== point.addressSha256) return row;
+    counts[row.centerGroup]++;
+    const kind = point.coordinateMeasurementKind === 'BUILDING_LOCATION' ? 'BUILDING' : 'ADDRESS';
+    return {...row,verifiedLocation:{addressHash:row.addressHash,lat:point.lat,lng:point.lng,kind}};
+  });
+  if (counts.yeongnam+counts.honam !== manifest.count) throw rejected();
+  const version = digest(Buffer.from(JSON.stringify([previous.version,manifest.sha256])));
+  return {snapshot:{...previous,version,sourceVersion:version,rows},meta:{...registry.meta,officialLocations:counts}};
+}
+
 function retryAt(response, now) {
   const retry = response.headers.get('retry-after');
   const advertised = /^\d+$/.test(retry || '') ? now + Number(retry) * 1000 : Date.parse(retry || '');
@@ -112,7 +146,8 @@ function retryAt(response, now) {
 }
 
 export function createStageStaffRegistryAsset({
-  env = process.env, fetchImpl = fetch, now = Date.now, manifest = stageStaffRegistryManifest
+  env = process.env, fetchImpl = fetch, now = Date.now, manifest = stageStaffRegistryManifest,
+  coordinateManifest = manifest === stageStaffRegistryManifest ? stageRegionalCoordinatesManifest : null
 } = {}) {
   if (env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN || env.RENDER_SERVICE_ID !== STAGE_SERVICE ||
       !manifest || !/^[a-f0-9]{40}$/.test(manifest.ref || '') || !isHash(manifest.sha256) ||
@@ -122,8 +157,9 @@ export function createStageStaffRegistryAsset({
   if (!key || !token) return null;
   const cursorKey = derive(key,'cursor-signing');
   let saved, pending, failed, repositoryChecked = false;
+  let regional, regionalPending, regionalFailure;
 
-  async function download() {
+  async function downloadAsset(path, reference) {
     const signal = AbortSignal.timeout(20_000);
     const request = async (url,accept) => {
       const response = await fetchImpl(url,{method:'GET',redirect:'error',signal,
@@ -139,21 +175,38 @@ export function createStageStaffRegistryAsset({
       if ((await info.json()).private !== true) throw rejected();
       repositoryChecked = true;
     }
-    const response = await request(repository + '/contents/' + STAGE_STAFF_REGISTRY_PATH + '?ref=' + manifest.ref,
+    const response = await request(repository + '/contents/' + path + '?ref=' + reference.ref,
       'application/vnd.github.raw+json');
-    if (!response.body || Number(response.headers.get('content-length')) > manifest.bytes) {
+    if (!response.body || Number(response.headers.get('content-length')) > reference.bytes) {
       await response.body?.cancel().catch(()=>{});
       throw rejected();
     }
-    const bytes = Buffer.alloc(manifest.bytes);
+    const bytes = Buffer.alloc(reference.bytes);
     let used = 0;
     for await (const chunk of response.body) {
       if (used + chunk.length > bytes.length) throw rejected();
       bytes.set(chunk,used);
       used += chunk.length;
     }
-    if (used !== bytes.length || digest(bytes) !== manifest.sha256) throw rejected();
-    return openRegistry(bytes,key);
+    if (used !== bytes.length || digest(bytes) !== reference.sha256) throw rejected();
+    return bytes;
+  }
+
+  function download() {
+    return downloadAsset(STAGE_STAFF_REGISTRY_PATH,manifest).then(packed=>openRegistry(packed,key));
+  }
+
+  async function readRegional(registry) {
+    if (!/^[a-f0-9]{40}$/.test(coordinateManifest.ref || '') || !isHash(coordinateManifest.sha256) ||
+        !Number.isSafeInteger(coordinateManifest.bytes) || coordinateManifest.bytes < 29 ||
+        coordinateManifest.bytes > STAGE_STAFF_REGISTRY_MAX_BYTES || !Number.isSafeInteger(coordinateManifest.count) ||
+        coordinateManifest.count < 1 || coordinateManifest.count > count || !isHash(coordinateManifest.baseGeneration))
+      throw rejected();
+    const packed = await downloadAsset(STAGE_REGIONAL_COORDINATES_PATH,coordinateManifest);
+    const bytes = await unpackAsset(packed,key,Buffer.from(STAGE_REGIONAL_COORDINATES_PATH));
+    let doc;
+    try { doc=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)); } catch { throw rejected(); }
+    return attachOfficialCoordinates(registry,doc,coordinateManifest,manifest);
   }
 
   function read() {
@@ -165,7 +218,17 @@ export function createStageStaffRegistryAsset({
     }).finally(() => { pending=null; });
     return pending;
   }
-  return {read,cursorKey};
+  if (!coordinateManifest) return {read,cursorKey};
+  return {cursorKey,read(){
+    if (regional) return Promise.resolve(regional);
+    if (regionalFailure && (regionalFailure.permanent || now() < regionalFailure.retryAt)) return read();
+    regionalPending ??= read().then(registry =>
+      readRegional(registry).then(result => { regional=result; return result; }).catch(error => {
+        regionalFailure=error?.permanent || error?.retryAt ? error : unavailable(now()+60_000);
+        return registry;
+      })).finally(()=>{regionalPending=null;});
+    return regionalPending;
+  }};
 }
 
 export function mountStageStaffRegistry({app,requireStaff,asset,getVerifiedRegistry,now = Date.now}) {

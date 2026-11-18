@@ -70,6 +70,24 @@ test('updated names, addresses and hashes reach row and cloned raw without chang
   assert.equal(row.originalAddressHash, observed.originalAddressHash); assert.equal(row.raw.lastDeliveryDate, '2026-10-01'); assert.equal(JSON.stringify(observed), frozen);
 });
 
+test('a Stage official point is bound to the registered address and cannot replace a published GPS point', async () => {
+  const location = {addressHash:sha('합성시 합성로 10'),lat:35.5,lng:128,kind:'BUILDING'};
+  let value=page([active('S990001',{centerGroup:'honam',verifiedLocation:location}),
+    active('S990002',{centerGroup:'honam',verifiedLocation:location})],{nextCursor:null});
+  const {api}=load({readPage:async()=>value});
+  await api.sync();
+  const observed={customerCode:'S990001',customerName:'기존 합성',lat:36,lng:128,coordinateSource:'DELIVERY_RECORDED'};
+  const [retained,added]=api.merge([observed]);
+  assert.deepEqual(copy(retained),observed);
+  assert.equal(added.coordinateSource,'STAGE_REGISTERED_OFFICIAL');
+  assert.equal(added.originalAddressHash,location.addressHash);
+  assert.equal(added.lat,location.lat);
+  assert.equal(added.deliveryObserved,false);
+  value=page([active('S990002',{centerGroup:'honam',verifiedLocation:{...location,addressHash:'a'.repeat(64)}})],{version:'v2'});
+  await assert.rejects(api.sync(),/CUSTOMER_REGISTRY_LOCATION_INVALID/);
+  assert.equal(api.merge([]).find(row=>row.customerCode==='S990002').lat,location.lat);
+});
+
 test('changed-address GPS, manual and verified points are held while their original evidence remains intact', async () => {
   const {api} = load({readPage: async () => page([active('S990001')])}); await api.sync();
   for (const coordinateSource of ['MANUAL_PIN', 'RAW_GPS', 'DELIVERY_RECORDED', 'HISTORICAL_GPS_SAME_BUILDING', 'KAKAO_VERIFIED_BUILDING']) {

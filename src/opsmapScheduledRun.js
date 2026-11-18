@@ -53,16 +53,18 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||
       env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1'||
       !fullJob&&!fixedJob) return;
-  let child;
-  app.post(OPSMAP_SCHEDULED_ROUTE,express.json({limit:'2kb',inflate:false}), (req,res)=>{
+  let child, starting=false;
+  app.post(OPSMAP_SCHEDULED_ROUTE,express.json({limit:'2kb',inflate:false}), async (req,res)=>{
     res.set('Cache-Control','no-store');
     let receipt;
     try {receipt=verifyOpsmapScheduleReceipt(req.body,{...opsmapScheduleConfig(env),now});}
     catch {return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});}
-    if (child) return res.status(409).json({error:'OPSMAP_SCHEDULE_BUSY'});
+    if (child || starting) return res.status(409).json({error:'OPSMAP_SCHEDULE_BUSY'});
     let scope=null;
     if (fixedJob) {
-      try {scope=readFixedScope();} catch { /* No verified scope. */ }
+      starting=true;
+      try {scope=await readFixedScope();} catch { /* No verified scope. */ }
+      finally {starting=false;}
       if (!scope && !fullJob) return res.status(503).json({error:'FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE'});
     }
     let processHandle;

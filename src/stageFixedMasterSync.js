@@ -12,6 +12,7 @@ const maxSourcePageBytes = 8 * 1024 * 1024;
 const objectFile = ref => prefix + 'projection-' + ref.version + '.json';
 const centers = ['011', '012', '013'];
 const hash = /^[a-f0-9]{64}$/;
+const maxRegisteredStores = 30_000;
 const safeCode = /^(?:FIXED_(?:MASTER|STORE)_[A-Z_]{1,70})$/;
 const noRetry = new Set(['FIXED_MASTER_SESSION_UNAVAILABLE','FIXED_MASTER_AUTH_REQUIRED','FIXED_MASTER_FORBIDDEN']);
 const nowISO = t => new Date(t).toISOString();
@@ -23,7 +24,7 @@ const digest = value => createHash('sha256').update(JSON.stringify(value)).diges
 const fail = code => Object.assign(Error(code), {code});
 const failureCode = e => safeCode.test(e?.code || e?.message || '') ? e.code || e.message : 'FIXED_MASTER_DAILY_FAILED';
 const validRef = ref => ref && hash.test(ref.version) && hash.test(ref.rowsHash) && hash.test(ref.ledgerSha256) &&
-  validTime(ref.checkedAt) && Number.isSafeInteger(ref.count) && ref.count > 0 && ref.count <= 10_000;
+  validTime(ref.checkedAt) && Number.isSafeInteger(ref.count) && ref.count > 0 && ref.count <= maxRegisteredStores;
 function observationFromSuccess(ref, success) {
   const evidence=success?.coverage;
   return {ref,observedAt:evidence?.sourceObservedAt,publishedAt:success?.at,runId:success?.runId,
@@ -35,7 +36,7 @@ function validObservation(date, observation) {
     validTime(publishedAt) && ref.checkedAt<=observedAt && observedAt<=publishedAt &&
     hash.test(runId || '') && hash.test(registryGeneration || '') &&
     Number.isSafeInteger(sourceRows) && Number.isSafeInteger(registryCount) &&
-    registryCount>=ref.count && registryCount<=10_000 && sourceRows>=ref.count;
+    registryCount>=ref.count && registryCount<=maxRegisteredStores && sourceRows>=ref.count;
 }
 function observedDate(value) {
   return validTime(value) ? kstDay(Date.parse(value)) : null;
@@ -45,21 +46,28 @@ const customerCode = /^[A-Z]\d{1,20}$/;
 
 export const FIXED_MASTER_DAILY_TTL = 26 * 3600000;
 export const FIXED_MASTER_WORKER_LIMIT = 45 * minute;
-export const FIXED_MASTER_SCOPE_INPUT_LIMIT = 256 * 1024;
+export const FIXED_MASTER_SCOPE_INPUT_LIMIT = 1024 * 1024;
 export const stageFixedMasterSyncEnabled = env => env.RENDER_SERVICE_ID === STAGE_SERVICE &&
   env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED === '1';
 
 function validateFixedMasterScope(scope) {
   const {generation, ledgerSha256, codes} = scope || {};
   if (!hash.test(generation || '') || !hash.test(ledgerSha256 || '') || !Array.isArray(codes) ||
-      !codes.length || codes.length > 10_000 || codes.some(code => typeof code !== 'string' || !customerCode.test(code)) ||
+      !codes.length || codes.length > maxRegisteredStores || codes.some(code => typeof code !== 'string' || !customerCode.test(code)) ||
       new Set(codes).size !== codes.length) throw fail('FIXED_MASTER_DAILY_SCOPE');
   return {generation, ledgerSha256, codes};
 }
 
-export function stageFixedMasterScope(active) {
+export function stageFixedMasterScope(active, additionalRegistry) {
   if (active?.expiresAt !== Infinity || !(active.registry instanceof Map) ||
       active.registry.size !== active.counts?.registered) return null;
+  if (additionalRegistry) {
+    const {snapshot} = additionalRegistry;
+    if (!snapshot?.complete || !hash.test(snapshot.version || '') || !Array.isArray(snapshot.rows) ||
+        snapshot.rows.some(row => active.registry.has(row.customerCode))) return null;
+    return validateFixedMasterScope({generation:digest([active.generation,snapshot.version]),
+      ledgerSha256:active.ledger?.sha256,codes:[...active.registry.keys(),...snapshot.rows.filter(row=>row.lifecycle==='ACTIVE').map(row=>row.customerCode)]});
+  }
   return validateFixedMasterScope({generation:active.generation, ledgerSha256:active.ledger?.sha256,
     codes:[...active.registry.keys()]});
 }

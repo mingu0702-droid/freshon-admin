@@ -96,10 +96,16 @@
         const currentHash = row.lifecycle === 'ACTIVE' ? await addressHash(row.basicAddress) : '';
         if (row.lifecycle === 'ACTIVE' && row.addressHash != null && row.addressHash !== currentHash) throw failure('CUSTOMER_REGISTRY_ADDRESS_HASH_INVALID');
         const search = row.lifecycle === 'ACTIVE' ? await coordinateSearch(row.coordinateSearch ?? row.raw?.coordinateSearch, row.customerCode, currentHash) : undefined;
+        const location = row.verifiedLocation;
+        if (location !== undefined && (row.lifecycle !== 'ACTIVE' || !registrationCenters.has(row.centerGroup) ||
+          !location || location.addressHash !== currentHash || !Number.isFinite(location.lat) || !Number.isFinite(location.lng) ||
+          location.lat < 33 || location.lat > 39.5 || location.lng < 124 || location.lng > 132 ||
+          !['BUILDING', 'PARCEL', 'ADDRESS'].includes(location.kind))) throw failure('CUSTOMER_REGISTRY_LOCATION_INVALID');
         // Never copy private detail fields, provider coordinates, visits, or notes from a bulk response.
         rows.push(Object.freeze({customerCode: row.customerCode, customerName: row.customerName || '', basicAddress: row.basicAddress || '',
           addressHash: currentHash, ...(search ? {coordinateSearch: search} : {}),
           ...(row.centerGroup ? {centerGroup: row.centerGroup} : {}),
+          ...(location ? {verifiedLocation: Object.freeze({addressHash:currentHash,lat:location.lat,lng:location.lng,kind:location.kind})} : {}),
           sourceUpdatedAt: row.sourceUpdatedAt || '', lifecycle: row.lifecycle}));
       }
       return {...page, rows};
@@ -245,6 +251,15 @@
         if (holdCoordinates) {
           Object.assign(row, {lat: null, lng: null, latitude: null, longitude: null, coordinateSource: automatic(row) ? '' : row.coordinateSource, coordinateStatus: 'CONFLICT',
             coordinateAccuracy: '', addressLocationKey: '', addressChanged: true, resolutionStatus: 'ADDRESS_CHANGED_REVIEW_REQUIRED'});
+        }
+        // The protected projection is bound to the current registered address.
+        // Keep an already verified point and its original provenance.
+        if (record.verifiedLocation && (row.lat == null || row.lng == null)) {
+          const {lat,lng,kind,addressHash} = record.verifiedLocation;
+          Object.assign(row, {lat,lng,latitude:lat,longitude:lng,originalAddressHash:addressHash,
+            coordinateAddressHash:addressHash,coordinateSource:'STAGE_REGISTERED_OFFICIAL',coordinateAccuracy:kind,
+            coordinateEvidence:'STAGE_REGISTRY_POINT',coordinateStatus:'CONFIRMED',
+            addressChanged:false,resolutionStatus:''});
         }
         merged.set(record.customerCode, row);
       }

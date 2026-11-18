@@ -38,7 +38,7 @@ import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from './opsmapDurableGeneration.js';
 import {mountOpsmapScheduledRun,opsmapScheduleConfig} from './opsmapScheduledRun.js';
 import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, isFixedMasterDay,
-  stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
+  stageFixedMasterScope, stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 import {addressRegionParts} from '../public/opsmap/vehicle-picker-regions.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
@@ -392,7 +392,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       return staffStoreDetail(response?.data,{customerCode:code,date:null});
     }});
   const app = express(), router = express.Router();
-  mountOpsmapScheduledRun(app,{env:stage,now});
+  mountOpsmapScheduledRun(app,{env:stage,now,readFixedScope:async()=>{
+    if (!staffRegistry) return null;
+    const additional=await staffRegistry.read();
+    return stageFixedMasterScope(validation.active(),additional);
+  }});
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
     void remotePostal?.verifyReference();

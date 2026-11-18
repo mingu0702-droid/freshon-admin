@@ -159,7 +159,11 @@ async function run() {
     for await(const chunk of process.stdin){input+=chunk;if(Buffer.byteLength(input)>FIXED_MASTER_SCOPE_INPUT_LIMIT)throw Error('OPSMAP_SCHEDULE_RECEIPT');}
     const job=JSON.parse(input);
     const receipt=verifyOpsmapScheduleReceipt(job?.receipt ?? job,opsmapScheduleConfig(env));
-    if (mode==='fixed-scheduled' && stageFixedMasterSyncEnabled(env)) {
+    const runFixedMaster = async () => {
+      if (!stageFixedMasterSyncEnabled(env) || !job?.fixedScope) {
+        if (mode==='fixed-scheduled') throw Error('FIXED_MASTER_STAGE_SOURCE_SCOPE');
+        return;
+      }
       try {
         const store=stageFixedMasterStorage({env,write:true});
         const source=createStageFixedMasterSource({env});
@@ -172,11 +176,14 @@ async function run() {
           error:/^FIXED_(?:MASTER|STORE)_[A-Z_]{1,70}$/.test(code)?code:'FIXED_MASTER_DAILY_FAILED'}));
         if (mode==='fixed-scheduled') throw error;
       }
-    } else if (mode==='fixed-scheduled') throw Error('FIXED_MASTER_STAGE_SOURCE_SCOPE');
-    if (mode==='fixed-scheduled') return;
+    };
+    if (mode==='fixed-scheduled') return runFixedMaster();
     const durable=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env,write:true}),appRoot});
     try {report(await publishOpsmapScheduledRun({createWorker:recordSource=>buildWorker({mode,settingsFile,durable,recordSource}),durable,receipt}));}
-    finally {await durable.dispose().catch(()=>{});}
+    finally {
+      await durable.dispose().catch(()=>{});
+      await runFixedMaster();
+    }
     return;
   }
   const worker=await buildWorker({mode,settingsFile});
