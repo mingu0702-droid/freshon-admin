@@ -159,8 +159,10 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
         for (const row of response.rows) {
           if (String(readField(row,contract.centerField))!==centerCodes[center] || readField(row,contract.activeField)!==status)
             throw failure('NATIONAL_REGISTRY_SOURCE_SCOPE');
+          const address=readField(row,contract.addressField);
+          if (status==='Y' && typeof address!=='string') throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
           rows.push(rowOf({customerCode:readField(row,'estCd'),customerName:readField(row,'estName')??'',
-            basicAddress:readField(row,contract.addressField)??'',centerGroup:center,lifecycle:status==='Y'?'ACTIVE':'DELETED',
+            basicAddress:address??'',centerGroup:center,lifecycle:status==='Y'?'ACTIVE':'DELETED',
             sourceUpdatedAt:contract.updatedAtField?readField(row,contract.updatedAtField)??'':''}));
         }
         collected+=response.rows.length;

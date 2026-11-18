@@ -171,10 +171,10 @@ async function run() {
       const component='opsmap-national-registry-sync';
       try {
         const staff=createStageStaffRegistryAsset({env});
-        if (!staff || !fixedScope) throw Error('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+        if (!staff) throw Error('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
         const value=await syncStageNationalRegistry({store:createStageNationalRegistryStorage({env,write:true}),receipt,
           readCenter:createStageNationalRegistrationSource({env}),readOfficial:async()=>(await staff.read()).snapshot.rows});
-        if (value.activeCodes) {
+        if (fixedScope && value.activeCodes) {
           const codes=new Set([...fixedScope.codes,...value.activeCodes]);
           for(const inactive of value.retiredCodes) codes.delete(inactive);
           fixedScope={...fixedScope,generation:value.version,codes:[...codes]};
@@ -188,11 +188,9 @@ async function run() {
       }
     };
     const runFixedMaster = async () => {
-      if (!stageFixedMasterSyncEnabled(env) || !fixedScope) {
-        if (mode==='fixed-scheduled'&&!stageNationalRegistryEnabled(env)&&!stageRecentOperationsSyncEnabled(env)) throw Error('FIXED_MASTER_STAGE_SOURCE_SCOPE');
-        return;
-      }
+      if (!stageFixedMasterSyncEnabled(env)) return;
       try {
+        if (!fixedScope) throw Error('FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE');
         const store=stageFixedMasterStorage({env,write:true});
         const source=createStageFixedMasterSource({env});
         const baseline=stageFixedMasterBaseline({env,store});

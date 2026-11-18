@@ -208,6 +208,35 @@ test('recent operations can schedule while the independent fixed master scope is
   child.emit('close',0);
 });
 
+test('registry scheduling does not require a fixed master scope',async t=>{
+  for (const fixedEnabled of [false,true]) {
+    const app=express();
+    const env={...storageEnv,OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED:'1',OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED:'1',
+      OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED:fixedEnabled?'1':'0',OPSMAP_STAGE_SYNC_TRIGGER_ID:triggerId,
+      OPSMAP_STAGE_SYNC_EXECUTOR_SHA256:principal,OPSMAP_STAGE_SYNC_SCHEDULER_SECRET:secret};
+    let child,input='',scopeReads=0;
+    mountOpsmapScheduledRun(app,{env,now:()=>clockStart,readFixedScope:async()=>{
+      scopeReads++;
+      return null;
+    },log:()=>{},launch(_exec,args,options){
+      assert.deepEqual(args.slice(1),['fixed-scheduled']);
+      assert.equal(options.stdio[1],'pipe');
+      child=new EventEmitter();
+      child.stdin=new PassThrough();
+      child.stderr=new PassThrough();
+      child.stdin.on('data',bytes=>{input+=bytes;});
+      return child;
+    }});
+    const base=await listen(t,app),receipt=signed(clockStart);
+    const response=await fetch(base+OPSMAP_SCHEDULED_ROUTE,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(receipt)});
+    assert.equal(response.status,202);
+    assert.equal(scopeReads,fixedEnabled?1:0);
+    assert.deepEqual(JSON.parse(input),fixedEnabled?{receipt,fixedScope:null}:receipt);
+    child.emit('close',0);
+  }
+});
+
 test('the first Osan-only release can reuse the protected baseline and preserve unknown and archived days',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'opsmap-scheduled-baseline-'));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));

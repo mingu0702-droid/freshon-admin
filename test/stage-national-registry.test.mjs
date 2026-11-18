@@ -53,7 +53,8 @@ test('the registration transport reads only the exact FreshOn master, rejects in
   const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED:'1',
     FRESHON_COOKIE:'isolated-fixture-only',OPSMAP_STAGE_NATIONAL_REGISTRY_CONTRACT_JSON:JSON.stringify({method:'POST',mode:'FULL',
       rowsKey:'data',totalField:'totalCnt',totalLocation:'BODY',centerField:'logCd',activeField:'useYn',addressField:'address'})};
-  let conflict=false;const calls=[];
+  let conflict=false, missingAddress=false;
+  const calls=[];
   const source=createStageNationalRegistrationSource({env,fetchImpl:async(url,options)=>{
     assert.equal(url.href,'https://mis.freshon.co.kr/bo/sm/standard/ciList');
     assert.equal(options.method,'POST');
@@ -61,6 +62,7 @@ test('the registration transport reads only the exact FreshOn master, rejects in
     calls.push([logCd,useYn]);
     const item={estCd:codes.yeongnam,estName:'합성 매장',address:'경기 합성시 합성로 10',
       logCd:conflict?centerIds.honam:logCd,useYn};
+    if (missingAddress) delete item.address;
     return Response.json(useYn==='Y'?{totalCnt:1,data:[item]}:{totalCnt:0,data:[]});
   }});
   const checked=await source('yeongnam');
@@ -68,5 +70,8 @@ test('the registration transport reads only the exact FreshOn master, rejects in
   assert.deepEqual(calls,[['012','Y'],['012','N']]);
   conflict=true;
   await assert.rejects(source('yeongnam'),{code:'NATIONAL_REGISTRY_SOURCE_SCOPE'});
+  conflict=false;
+  missingAddress=true;
+  await assert.rejects(source('yeongnam'),{code:'NATIONAL_REGISTRY_SOURCE_CONTRACT'});
   await assert.rejects(source('osanColdStorage'),{code:'NATIONAL_REGISTRY_SOURCE_SCOPE'});
 });

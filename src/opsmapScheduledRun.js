@@ -50,13 +50,14 @@ export function opsmapScheduleConfig(env) {
 export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Date.now,log=console.log,readFixedScope}={}) {
   const settings=env.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE;
   const fullJob=path.isAbsolute(settings || '');
-  const fixedEnabled=stageFixedMasterSyncEnabled(env), nationalEnabled=stageNationalRegistryEnabled(env);
-  const fixedJob=(fixedEnabled||nationalEnabled) && typeof readFixedScope==='function';
+  const nationalJob=stageNationalRegistryEnabled(env);
+  const fixedJob=stageFixedMasterSyncEnabled(env) && typeof readFixedScope==='function';
   const recentJob=stageRecentOperationsSyncEnabled(env);
+  const sourceJobs=nationalJob||fixedJob||recentJob;
   if (env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
       env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||
       env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1'||
-      !fullJob&&!fixedJob&&!recentJob) return;
+      !fullJob&&!sourceJobs) return;
   let child, starting=false;
   app.post(OPSMAP_SCHEDULED_ROUTE,express.json({limit:'2kb',inflate:false}), async (req,res)=>{
     res.set('Cache-Control','no-store');
@@ -69,16 +70,16 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       starting=true;
       try {scope=await readFixedScope();} catch { /* No verified scope. */ }
       finally {starting=false;}
-      if (!scope && !fullJob && !recentJob) return res.status(503).json({error:'FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE'});
+      if (!scope && !fullJob && !nationalJob && !recentJob) return res.status(503).json({error:'FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE'});
     }
     let processHandle;
     const args=fullJob ? [jobFile,'scheduled',settings] : [jobFile,'fixed-scheduled'];
-    try {processHandle=launch(process.execPath,args,{env,stdio:['pipe',fixedJob||recentJob?'pipe':'ignore','pipe'],windowsHide:true});}
+    try {processHandle=launch(process.execPath,args,{env,stdio:['pipe',sourceJobs?'pipe':'ignore','pipe'],windowsHide:true});}
     catch {return res.status(503).json({error:'OPSMAP_SCHEDULE_LAUNCH'});}
     child=processHandle;
     let diagnostic='',timedOut=false;
     // The child emits aggregate evidence only. Never forward raw output.
-    if ((fixedJob||recentJob) && processHandle.stdout) {
+    if (sourceJobs && processHandle.stdout) {
       let line='', discarded=false;
       processHandle.stdout.on('data',chunk=>{
         for (const c of String(chunk)) {
@@ -111,7 +112,7 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     }
     processHandle.stderr.on('data',chunk=>{if(diagnostic.length<100) diagnostic=(diagnostic+chunk).slice(0,100);});
     const timeout=setTimeout(()=>{timedOut=true;processHandle.kill();},(fullJob?maxRuntime:0)+
-      (fixedJob&&fixedEnabled?FIXED_MASTER_WORKER_LIMIT:0)+(fixedJob&&nationalEnabled?NATIONAL_REGISTRY_WORKER_LIMIT:0)+
+      (fixedJob?FIXED_MASTER_WORKER_LIMIT:0)+(nationalJob?NATIONAL_REGISTRY_WORKER_LIMIT:0)+
       (recentJob?3*60_000:0));
     timeout.unref();
     const release=(exitCode,error)=>{
