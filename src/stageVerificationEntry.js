@@ -401,13 +401,22 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       return staffStoreDetail(response?.data,{customerCode:code,date:null});
     }});
   const app = express(), router = express.Router();
+  async function readScheduleRegistry() {
+    if (validation.active()) return validation.active();
+    const pending=refreshBaseline() || fileRestorePending || scheduledRefresh;
+    if (!pending) return validation.active();
+    let timer;
+    try {
+      await Promise.race([pending,new Promise(resolve=>{timer=setTimeout(resolve,15_000);})]);
+    } finally {clearTimeout(timer);}
+    return validation.active();
+  }
   mountOpsmapScheduledRun(app,{env:stage,now,readFixedScope:async()=>{
     if (!staffRegistry) return null;
-    const [,additional]=await Promise.all([readSnapshot(),staffRegistry.read()]);
-    return stageFixedMasterScope(validation.active(),additional,await nationalRegistry?.read());
+    const [active,additional]=await Promise.all([readScheduleRegistry(),staffRegistry.read()]);
+    return stageFixedMasterScope(active,additional,await nationalRegistry?.read());
   },readNationalScope:async()=>{
-    await readSnapshot();
-    return stageNationalRegistryScope(validation.active());
+    return stageNationalRegistryScope(await readScheduleRegistry());
   }});
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
