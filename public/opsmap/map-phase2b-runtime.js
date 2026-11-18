@@ -4275,7 +4275,8 @@
       if(recentPeriodNotice)$('#periodIdentity').textContent=recentPeriodNotice;
       if(recentOperationsOnly() && snapshotReadState!=='error'){
         $('#periodIdentity').textContent=stores.length
-          ? (subject + ' · 최근 운영(90일) · ' + stores.length + '개 매장')
+          ? (subject + ' · 최근 운영(90일) · ' + stores.length.toLocaleString('ko-KR') + '곳 · 위치 확인 ' +
+            stores.filter(hasMapCoordinates).length.toLocaleString('ko-KR') + '곳')
           : recentOperationsNotice();
       }
     }
