@@ -493,6 +493,7 @@
     const status = $('#recentOperationsStatus');
     status.textContent = recentOperationsNotice();
     status.dataset.state = recentOperationsState;
+    status.title = recentOperationsReport ? recentOperationsReport.startDate + ' ~ ' + recentOperationsReport.endDate : '';
   }
   function refreshRecentOperationDetail() {
     if (!usesRecentOperations() || !state.selected?.customerCode || state.selected.virtual) return;
