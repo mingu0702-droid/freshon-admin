@@ -367,12 +367,12 @@ test('the source reads only the scoped FreshOn form with at most one authorized 
 
 test('an unstable final page and an oversized source reply cannot certify a new master',async ()=>{
   let tailReads=0;
-  const rows=Array.from({length:1000},(_,i)=>({estCd:'S'+(10001+i),totalCnt:1001,mainCarSeqNm:'122'}));
+  const rows=Array.from({length:1000},(_,i)=>({estCd:'S'+(10001+i),logCd:'011',totalCnt:1001,mainCarSeqNm:'122'}));
   const read=createStageFixedMasterSource({env:{...env,FRESHON_COOKIE:'fixture'},async fetchImpl(_url,options){
     const query=new URLSearchParams(options.body);
     assert.equal(query.get('logCd'),'011');
     if (query.get('page')==='0') return Response.json({data:rows});
-    return Response.json({data:[{estCd:'S11001',totalCnt:1001,mainCarSeqNm:++tailReads%2?'122':'202'}]});
+    return Response.json({data:[{estCd:'S11001',logCd:'011',totalCnt:1001,mainCarSeqNm:++tailReads%2?'122':'202'}]});
   }});
   await assert.rejects(read(new Set(codes)),/FIXED_MASTER_SOURCE_CHANGED/);
   assert.equal(tailReads,4);
@@ -383,6 +383,12 @@ test('an unstable final page and an oversized source reply cannot certify a new 
   }});
   await assert.rejects(oversized(new Set(codes)),/FIXED_MASTER_DAILY_PAGE_LIMIT/);
   assert.equal(calls,1);
+});
+
+test('the Stage fixed master rejects rows returned for a different center',async ()=>{
+  const read=createStageFixedMasterSource({env:{...env,FRESHON_COOKIE:'fixture'},
+    fetchImpl:async()=>Response.json({data:[{...raw()[1],totalCnt:1}]})});
+  await assert.rejects(read(new Set(codes)),{code:'FIXED_MASTER_STAGE_SOURCE_SCOPE'});
 });
 
 test('private GitHub guard exposes no Production or legacy-file writes',async ()=>{

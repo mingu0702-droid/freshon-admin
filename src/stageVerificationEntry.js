@@ -403,7 +403,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const app = express(), router = express.Router();
   mountOpsmapScheduledRun(app,{env:stage,now,readFixedScope:async()=>{
     if (!staffRegistry) return null;
-    const additional=await staffRegistry.read();
+    const [,additional]=await Promise.all([readSnapshot(),staffRegistry.read()]);
     return stageFixedMasterScope(validation.active(),additional,await nationalRegistry?.read());
   }});
   // Start after listen and reuse the same in-flight, read-only load as user queries.

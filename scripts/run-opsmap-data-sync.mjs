@@ -219,8 +219,9 @@ async function run() {
       }
     };
     const runMasterJobs=async()=>{
-      try {await runNationalRegistry();await runFixedMaster();}
-      finally {await runRecentOperations();}
+      // Record the closed-day result before the slower master reads.
+      try {await runRecentOperations();}
+      finally {await runNationalRegistry();await runFixedMaster();}
     };
     if (mode==='fixed-scheduled') return runMasterJobs();
     let durable;

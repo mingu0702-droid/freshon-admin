@@ -370,6 +370,8 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
       try {json=JSON.parse(Buffer.concat(chunks,bytes).toString('utf8'));}
       catch {throw fail('FIXED_MASTER_DAILY_RESPONSE_INVALID');}
       if (!Array.isArray(json?.data)) reject(502);
+      const center=new URLSearchParams(options.body).get('logCd');
+      if (json.data.some(row=>row?.logCd!==center)) throw fail('FIXED_MASTER_STAGE_SOURCE_SCOPE');
       return json;
     },
     extractRows:value=>value?.data
