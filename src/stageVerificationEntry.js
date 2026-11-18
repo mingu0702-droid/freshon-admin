@@ -22,7 +22,7 @@ import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,
 import {phase2bSnapshotMeta} from './phase2bOperations.js';
 import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
 import {createStageStaffRegistryAsset,mountStageStaffRegistry} from './stageStaffRegistryAsset.js';
-import {createStageNationalRegistryReader,createStageNationalRegistryStorage} from './stageNationalRegistry.js';
+import {createStageNationalRegistryReader,createStageNationalRegistryStorage,stageNationalRegistryScope} from './stageNationalRegistry.js';
 import {createRecentOperationsReader,createStageRecentOperationsSeed,createStageRecentOperationsStore,
   mountRecentOperations} from './stageRecentOperations.js';
 import {recentOperationsBaseline} from './stageRecentOperationsManifest.js';
@@ -405,6 +405,9 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     if (!staffRegistry) return null;
     const [,additional]=await Promise.all([readSnapshot(),staffRegistry.read()]);
     return stageFixedMasterScope(validation.active(),additional,await nationalRegistry?.read());
+  },readNationalScope:async()=>{
+    await readSnapshot();
+    return stageNationalRegistryScope(validation.active());
   }});
   // Start after listen and reuse the same in-flight, read-only load as user queries.
   if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{

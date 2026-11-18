@@ -47,12 +47,13 @@ export function opsmapScheduleConfig(env) {
     executorHash:env.OPSMAP_STAGE_SYNC_EXECUTOR_SHA256};
 }
 
-export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Date.now,log=console.log,readFixedScope}={}) {
+export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Date.now,log=console.log,readFixedScope,readNationalScope}={}) {
   const settings=env.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE;
   const fullJob=path.isAbsolute(settings || '');
   const nationalJob=stageNationalRegistryEnabled(env);
   const fixedJob=stageFixedMasterSyncEnabled(env) && typeof readFixedScope==='function';
   const recentJob=stageRecentOperationsSyncEnabled(env);
+  const scopedRegistry=nationalJob && typeof readNationalScope==='function';
   const sourceJobs=nationalJob||fixedJob||recentJob;
   if (env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
       env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||
@@ -65,12 +66,18 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     try {receipt=verifyOpsmapScheduleReceipt(req.body,{...opsmapScheduleConfig(env),now});}
     catch {return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});}
     if (child || starting) return res.status(409).json({error:'OPSMAP_SCHEDULE_BUSY'});
-    let scope=null;
-    if (fixedJob) {
+    let scope=null,registryScope=null;
+    if (fixedJob || scopedRegistry) {
       starting=true;
-      try {scope=await readFixedScope();} catch { /* No verified scope. */ }
+      try {
+        [scope,registryScope]=await Promise.all([
+          fixedJob?Promise.resolve().then(readFixedScope).catch(()=>null):null,
+          scopedRegistry?Promise.resolve().then(readNationalScope).catch(()=>null):null
+        ]);
+      }
       finally {starting=false;}
-      if (!scope && !fullJob && !nationalJob && !recentJob) return res.status(503).json({error:'FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE'});
+      if (fixedJob && !scope && !fullJob && !nationalJob && !recentJob)
+        return res.status(503).json({error:'FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE'});
     }
     let processHandle;
     const args=fullJob ? [jobFile,'scheduled',settings] : [jobFile,'fixed-scheduled'];
@@ -97,6 +104,8 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
               log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
                 count:Number.isSafeInteger(value.count)?value.count:null,
                 checkedAt:Number.isFinite(Date.parse(value.checkedAt))?value.checkedAt:null,
+                matchedByCenter:value.matchedByCenter?Object.fromEntries(['osan','yeongnam','honam'].map(center=>[center,
+                  Number.isSafeInteger(value.matchedByCenter[center])?value.matchedByCenter[center]:null])):null,
                 error:/^(?:NATIONAL_REGISTRY|FIXED_STORE)_[A-Z_]+$/.test(value.error||'')?value.error:null}));
             }
             if(value?.component==='opsmap-recent-operations-sync' && value.runId===receipt.runId &&
@@ -128,7 +137,8 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       release(code,code===0?null:/^[A-Z][A-Z_0-9]{1,95}$/.test(value)?value:'OPSMAP_SYNC_FAILED');
     });
     processHandle.stdin.on('error',()=>{});
-    processHandle.stdin.end(JSON.stringify(fixedJob?{receipt:req.body,fixedScope:scope}:req.body));
+    processHandle.stdin.end(JSON.stringify(fixedJob||scopedRegistry?{receipt:req.body,fixedScope:scope,
+      ...(scopedRegistry?{registryScope}:{})}:req.body));
     return res.status(202).json({state:'ACCEPTED',runId:receipt.runId});
   });
 }

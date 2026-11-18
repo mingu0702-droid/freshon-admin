@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createStageNationalRegistrationSource,createStageNationalRegistryReader,syncStageNationalRegistry}
+import {createStageNationalRegistrationSource,createStageNationalRegistryReader,scopedNationalRegistryMembership,syncStageNationalRegistry}
   from '../src/stageNationalRegistry.js';
 import {customerRegistryAddressHash} from '../src/customerRegistry.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
@@ -74,4 +74,32 @@ test('the registration transport reads only the exact FreshOn master, rejects in
   missingAddress=true;
   await assert.rejects(source('yeongnam'),{code:'NATIONAL_REGISTRY_SOURCE_CONTRACT'});
   await assert.rejects(source('osanColdStorage'),{code:'NATIONAL_REGISTRY_SOURCE_SCOPE'});
+});
+
+test('Stage registry accepts only known customer, center and address combinations from the broader active master',async()=>{
+  const address=row('osan').basicAddress;
+  const current=[['S10001','osan',customerRegistryAddressHash(address)]];
+  const regional=[row('yeongnam'),row('honam')];
+  const membership=scopedNationalRegistryMembership(current,regional);
+  assert.throws(()=>scopedNationalRegistryMembership(current,[row('osan'),...regional]),/SCOPE_UNAVAILABLE/);
+  const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED:'1',
+    FRESHON_COOKIE:'isolated-fixture-only',OPSMAP_STAGE_NATIONAL_REGISTRY_CONTRACT_JSON:JSON.stringify({method:'POST',mode:'PAGED',
+      rowsKey:'data',totalField:'totalCnt',totalLocation:'FIRST_ROW',centerField:'logCdName',activeField:'useYn',addressField:'address'})};
+  const incoming=[
+    {estCd:'S10001',address},
+    {estCd:'S10002',address},
+    {estCd:'S99999',address:'경기 합성시 미승인로 31'}
+  ];
+  const read=createStageNationalRegistrationSource({env,membership,fetchImpl:async(_url,options)=>{
+    const query=new URLSearchParams(options.body);
+    assert.equal(query.get('useYn'),'Y');
+    assert.equal(query.get('logCd'),'011');
+    assert.equal(query.get('sort'),'est_cd,ASC');
+    return Response.json({data:incoming.map(row=>({...row,estName:'새 이름',useYn:'Y',logCdName:'오산물류센터',totalCnt:3}))});
+  }});
+  const selected=await read('osan');
+  assert.equal(selected.complete,true);
+  assert.deepEqual(selected.rows.map(row=>row.customerCode),['S10001']);
+  incoming[0].address='경기 합성시 주소변경로 20';
+  assert.deepEqual((await read('osan')).rows,[]);
 });

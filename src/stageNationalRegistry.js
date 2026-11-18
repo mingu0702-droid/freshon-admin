@@ -11,15 +11,17 @@ const branch = 'stage/opsmap-snapshots';
 const freshonOrigin = 'https://mis.freshon.co.kr';
 const registrationPath = '/bo/sm/standard/ciList';
 const centerCodes = Object.freeze({osan:'011',yeongnam:'012',honam:'013'});
+const centerNames = Object.freeze({osan:'오산물류센터',yeongnam:'영남센터',honam:'호남센터'});
 const directory = 'stage-national-registry-v1';
 const headName = directory + '/head.json';
 const dataName = version => directory + '/registry-' + version + '.json';
 const binding = Buffer.from('opsmap-stage/' + directory);
 const limit = 30_000;
+const scanLimit = 120_000;
 const maxClearBytes = 12 * 1024 * 1024;
 const maxSealedBytes = 4 * 1024 * 1024;
 const dayMs = 24 * 60 * 60_000;
-const leaseMs = 20 * 60_000;
+const leaseMs = 50 * 60_000;
 const sha = value => createHash('sha256').update(value).digest('hex');
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const customerCode = value => typeof value === 'string' && /^[A-Z]\d{1,20}$/.test(value);
@@ -30,8 +32,31 @@ const failure = code => Object.assign(Error(code), {code});
 const privateText = /[\x00-\x1f\x7f]|(?:\+?82[- ]?)?01[016789][-. ]?\d{3,4}[-. ]?\d{4}|비밀번호|비번|보안키|출입코드|공동현관|도어락|패스워드|password|passcode|bearer\s|https?:\/\//i;
 const validText = (value,max) => typeof value === 'string' && value.length <= max && !privateText.test(value.normalize('NFKC'));
 const stage = env => env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE;
-export const NATIONAL_REGISTRY_WORKER_LIMIT = 12 * 60_000;
+export const NATIONAL_REGISTRY_WORKER_LIMIT = 45 * 60_000;
 export const stageNationalRegistryEnabled = env => stage(env) && env.OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED === '1';
+
+export function stageNationalRegistryScope(active) {
+  if (active?.expiresAt!==Infinity || !(active.registry instanceof Map) ||
+      active.registry.size!==active.counts?.registered) return null;
+  return [...active.registry.values()].filter(row=>SYNC_CENTERS.includes(row.center))
+    .map(row=>[row.code,row.center,customerRegistryAddressHash(row.address)]);
+}
+
+export function scopedNationalRegistryMembership(base, regional) {
+  if (!Array.isArray(base) || !base.length || !Array.isArray(regional) || base.length+regional.length>limit)
+    throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+  const membership=new Map();
+  for (const [code,center,addressHash] of [
+    ...base,...regional.map(row=>[row.customerCode,row.centerGroup,customerRegistryAddressHash(row.basicAddress)])
+  ]) {
+    if (!customerCode(code) || !SYNC_CENTERS.includes(center) || !hash(addressHash) || membership.has(code))
+      throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+    membership.set(code,{center,addressHash});
+  }
+  if (new Set([...membership.values()].map(row=>row.center)).size!==SYNC_CENTERS.length)
+    throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+  return membership;
+}
 
 function rowOf(value, withPoint=false) {
   const {customerCode:code, customerName, basicAddress, centerGroup, lifecycle, sourceUpdatedAt='', verifiedLocation} = value || {};
@@ -69,7 +94,7 @@ export async function collectStageNationalRegistry(readCenter) {
   return {rows:normalizeRows(rows),counts};
 }
 
-export function createStageNationalRegistrationSource({env=process.env,fetchImpl=fetch,login}={}) {
+export function createStageNationalRegistrationSource({env=process.env,fetchImpl=fetch,login,membership}={}) {
   if (!stageNationalRegistryEnabled(env) || (env.FRESHON_BASE_URL && new URL(env.FRESHON_BASE_URL).origin!==freshonOrigin))
     throw failure('NATIONAL_REGISTRY_SOURCE_APPROVAL');
   let contract;
@@ -82,7 +107,7 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
       !field(contract.centerField) || !field(contract.activeField) || contract.updatedAtField!=null&&!field(contract.updatedAtField))
     throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
   let cookie=String(env.FRESHON_COOKIE||''), loginAttempted=false;
-  const budget=AbortSignal.timeout(10*60_000);
+  const budget=AbortSignal.timeout(membership?NATIONAL_REGISTRY_WORKER_LIMIT-3*60_000:10*60_000);
   async function ensureSession(force=false) {
     if (!force && cookie) return;
     if (loginAttempted || !env.FRESHON_ID || !env.FRESHON_PASSWORD) throw failure('NATIONAL_REGISTRY_AUTH_REQUIRED');
@@ -99,7 +124,7 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
   const readField=(value,key)=>value&&Object.hasOwn(value,key)?value[key]:undefined;
   async function readPage(center,status,page) {
     await ensureSession();
-    const params=new URLSearchParams({logCd:centerCodes[center],useYn:status,sort:'ASC',page:String(page),
+    const params=new URLSearchParams({logCd:centerCodes[center],useYn:status,sort:membership?'est_cd,ASC':'ASC',page:String(page),
       size:contract.mode==='PAGED'?'1000':'100',isPaging:contract.mode==='PAGED'?'true':'false',isCount:'true'});
     const url=new URL(registrationPath,freshonOrigin);
     const headers={Cookie:cookie,Accept:'application/json, text/plain, */*','X-Requested-With':'XMLHttpRequest',
@@ -138,7 +163,7 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
       const rows=contract.rowsKey===null?result:readField(result,contract.rowsKey);
       const declared=readField(contract.totalLocation==='BODY'?result:rows?.[0],contract.totalField);
       const total=typeof declared==='number'||typeof declared==='string'&&/^\d+$/.test(declared)?Number(declared):null;
-      if (!Array.isArray(rows) || !Number.isSafeInteger(total) || total<0 || total>limit)
+      if (!Array.isArray(rows) || !Number.isSafeInteger(total) || total<0 || total>(membership?scanLimit:limit))
         throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
       return {rows,total};
     }
@@ -146,22 +171,40 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
   }
   return async center => {
     if (!Object.hasOwn(centerCodes,center)) throw failure('NATIONAL_REGISTRY_SOURCE_SCOPE');
+    const sourceCenter=contract.centerField==='logCdName'?centerNames[center]:centerCodes[center];
     const rows=[];
     let total=0;
-    for (const status of ['Y','N']) {
+    for (const status of (membership?['Y']:['Y','N'])) {
       let expected=null, collected=0;
-      for (let page=0;page<Math.ceil(limit/1000);page++) {
+      const pageHashes=new Set(), captured=new Set();
+      for (let page=0;page<Math.ceil((membership?scanLimit:limit)/1000);page++) {
         const response=await readPage(center,status,page);
         expected??=response.total;
         if (response.total!==expected || contract.mode==='PAGED'&&response.rows.length>1000 ||
             collected+response.rows.length>expected || !response.rows.length&&collected<expected)
           throw failure('NATIONAL_REGISTRY_CENTER_INCOMPLETE');
+        if (membership) {
+          const size=Math.min(1000,expected-collected);
+          const pageHash=sha(JSON.stringify(response.rows.map(row=>readField(row,'estCd'))));
+          if (contract.mode==='PAGED' && response.rows.length!==size || pageHashes.has(pageHash))
+            throw failure('NATIONAL_REGISTRY_CENTER_INCOMPLETE');
+          pageHashes.add(pageHash);
+        }
         for (const row of response.rows) {
-          if (String(readField(row,contract.centerField))!==centerCodes[center] || readField(row,contract.activeField)!==status)
+          if (String(readField(row,contract.centerField))!==sourceCenter || readField(row,contract.activeField)!==status)
             throw failure('NATIONAL_REGISTRY_SOURCE_SCOPE');
           const address=readField(row,contract.addressField);
+          const code=readField(row,'estCd');
+          if (membership) {
+            const approved=membership.get(code);
+            if (approved?.center!==center) continue;
+            if (captured.has(code)) throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
+            captured.add(code);
+            // Keep the verified point and its matching address until an address change is reviewed.
+            if (typeof address!=='string' || customerRegistryAddressHash(address)!==approved.addressHash) continue;
+          }
           if (status==='Y' && typeof address!=='string') throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
-          rows.push(rowOf({customerCode:readField(row,'estCd'),customerName:readField(row,'estName')??'',
+          rows.push(rowOf({customerCode:code,customerName:readField(row,'estName')??'',
             basicAddress:address??'',centerGroup:center,lifecycle:status==='Y'?'ACTIVE':'DELETED',
             sourceUpdatedAt:contract.updatedAtField?readField(row,contract.updatedAtField)??'':''}));
         }
@@ -172,7 +215,7 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
       if (collected!==expected) throw failure('NATIONAL_REGISTRY_CENTER_INCOMPLETE');
       total+=collected;
     }
-    return {center,rows,total,complete:true};
+    return {center,rows,total:membership?rows.length:total,complete:true};
   };
 }
 

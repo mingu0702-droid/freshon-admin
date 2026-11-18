@@ -21,7 +21,7 @@ import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixed
   stageFixedMasterSyncEnabled, syncStageFixedMaster} from '../src/stageFixedMasterSync.js';
 import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
 import {createStageNationalRegistryStorage,createStageNationalRegistrationSource,stageNationalRegistryEnabled,
-  syncStageNationalRegistry} from '../src/stageNationalRegistry.js';
+  scopedNationalRegistryMembership,syncStageNationalRegistry} from '../src/stageNationalRegistry.js';
 import {createStageRecentOperationsSeed,createStageRecentOperationsStore,stageRecentOperationsSyncEnabled,
   syncStageRecentOperations} from '../src/stageRecentOperations.js';
 import {recentOperationsBaseline} from '../src/stageRecentOperationsManifest.js';
@@ -165,21 +165,23 @@ async function run() {
     for await(const chunk of process.stdin){input+=chunk;if(Buffer.byteLength(input)>FIXED_MASTER_SCOPE_INPUT_LIMIT)throw Error('OPSMAP_SCHEDULE_RECEIPT');}
     const job=JSON.parse(input);
     const receipt=verifyOpsmapScheduleReceipt(job?.receipt ?? job,opsmapScheduleConfig(env));
-    let fixedScope=job?.fixedScope;
+    const fixedScope=job?.fixedScope;
     const runNationalRegistry = async () => {
       if (!stageNationalRegistryEnabled(env)) return;
       const component='opsmap-national-registry-sync';
       try {
         const staff=createStageStaffRegistryAsset({env});
         if (!staff) throw Error('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+        const {snapshot,meta}=await staff.read();
+        const expected=meta.officialLocations;
+        if (!expected || ![expected.yeongnam,expected.honam].every(count=>Number.isSafeInteger(count)&&count>0) ||
+            snapshot.rows.filter(row=>row.verifiedLocation).length!==expected.yeongnam+expected.honam)
+          throw Error('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+        const membership=scopedNationalRegistryMembership(job?.registryScope,snapshot.rows);
         const value=await syncStageNationalRegistry({store:createStageNationalRegistryStorage({env,write:true}),receipt,
-          readCenter:createStageNationalRegistrationSource({env}),readOfficial:async()=>(await staff.read()).snapshot.rows});
-        if (fixedScope && value.activeCodes) {
-          const codes=new Set([...fixedScope.codes,...value.activeCodes]);
-          for(const inactive of value.retiredCodes) codes.delete(inactive);
-          fixedScope={...fixedScope,generation:value.version,codes:[...codes]};
-        }
-        console.log(JSON.stringify({component,runId:receipt.runId,state:value.state,count:value.count,checkedAt:value.checkedAt}));
+          readCenter:createStageNationalRegistrationSource({env,membership}),readOfficial:async()=>snapshot.rows});
+        console.log(JSON.stringify({component,runId:receipt.runId,state:value.state,count:value.count,
+          checkedAt:value.checkedAt,matchedByCenter:value.counts}));
       } catch(error) {
         const code=error.code || error.message || '';
         console.log(JSON.stringify({component,runId:receipt.runId,state:'FAILED',
@@ -225,7 +227,10 @@ async function run() {
     const runMasterJobs=async()=>{
       // Record the closed-day result before the slower master reads.
       try {await runRecentOperations();}
-      finally {await runNationalRegistry();await runFixedMaster();}
+      finally {
+        try {await runFixedMaster();}
+        finally {await runNationalRegistry();}
+      }
     };
     if (mode==='fixed-scheduled') return runMasterJobs();
     let durable;
