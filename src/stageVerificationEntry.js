@@ -150,7 +150,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const staffRegistry = createStageStaffRegistryAsset({env:stage,fetchImpl,now});
   const nationalRegistry = createStageNationalRegistryReader({store:createStageNationalRegistryStorage({env:stage,fetchImpl,now}),now});
   const readRecentOperations = createRecentOperationsReader({now,
-    readSeed:createStageRecentOperationsSeed({env:stage,fetchImpl,manifest:recentOperationsBaseline}),
+    readSeed:createStageRecentOperationsSeed({env:stage,fetchImpl,manifest:recentOperationsBaseline,
+      log:value=>console.info(JSON.stringify({component:'stage-recent-operations-baseline',...value}))}),
     store:createStageRecentOperationsStore({env:stage,fetchImpl,now})});
   const validation = createStageAbValidation({now,retainCoverageFiles:!postalEnabled});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});

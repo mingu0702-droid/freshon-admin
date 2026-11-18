@@ -134,29 +134,53 @@ export async function openRecentOperations(value,key) {
   return normalizeRecentOperations(JSON.parse(bytes));
 }
 
-export function createStageRecentOperationsSeed({env=process.env,fetchImpl=fetch,manifest}={}) {
+export function createStageRecentOperationsSeed({env=process.env,fetchImpl=fetch,manifest,log=()=>{}}={}) {
   if (!stageScope(env) || !manifest) return null;
-  const token=env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;
+  const token=env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.GITHUB_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;
   if (!token || !codeRevision.test(manifest.ref || '') || !hash.test(manifest.sha256 || '') ||
-      !Number.isSafeInteger(manifest.bytes) || manifest.bytes<=0 || manifest.bytes>maxPackedBytes+1024) return null;
-  const url='https://api.github.com/repos/'+repository+'/contents/opsmap-stage/'+seedFile+'?ref='+manifest.ref;
+      !Number.isSafeInteger(manifest.bytes) || manifest.bytes<=0 || manifest.bytes>maxPackedBytes+1024) {
+    log({state:'CONFIGURATION_UNAVAILABLE'});
+    return null;
+  }
+  const root='https://api.github.com/repos/'+repository;
+  const url=root+'/contents/opsmap-stage/'+seedFile+'?ref='+manifest.ref;
+  let repositoryVerified=false;
   return async()=>{
-    const response=await fetchImpl(url,{method:'GET',redirect:'error',signal:AbortSignal.timeout(20000),
-      headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github.raw+json'}});
-    if (!response.ok || !response.body || Number(response.headers.get('content-length'))>manifest.bytes) {
-      await response.body?.cancel().catch(()=>{});
+    let state='REPOSITORY_UNAVAILABLE',http;
+    try {
+      const signal=AbortSignal.timeout(20000);
+      const request=(address,accept)=>fetchImpl(address,{method:'GET',redirect:'error',signal,
+        headers:{Authorization:'Bearer '+token,Accept:accept,'Accept-Encoding':'identity'}});
+      if (!repositoryVerified) {
+        const info=await request(root,'application/vnd.github+json');
+        http=info.status;
+        if (!info.ok) {await info.body?.cancel();throw rejected();}
+        if ((await info.json()).private!==true) throw rejected();
+        repositoryVerified=true;
+      }
+      state='DOWNLOAD_UNAVAILABLE';
+      const response=await request(url,'application/vnd.github.raw+json');
+      http=response.status;
+      if (!response.ok || !response.body) {await response.body?.cancel();throw rejected();}
+      state='INTEGRITY_REJECTED';
+      if (Number(response.headers.get('content-length'))>manifest.bytes) {await response.body.cancel();throw rejected();}
+      const chunks=[];
+      let size=0;
+      for await (const chunk of response.body) {
+        size+=chunk.length;
+        if (size>manifest.bytes) throw rejected();
+        chunks.push(chunk);
+      }
+      const bytes=Buffer.concat(chunks);
+      if (size!==manifest.bytes || sha256(bytes)!==manifest.sha256) throw rejected();
+      state='EVIDENCE_REJECTED';
+      const ledger=await openRecentOperations(JSON.parse(bytes),recentOperationsKey(env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64));
+      log({state:'VERIFIED',endDate:ledger.endDate});
+      return ledger;
+    } catch {
+      log({state,http});
       throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
     }
-    const chunks=[];
-    let size=0;
-    for await (const chunk of response.body) {
-      size+=chunk.length;
-      if (size>manifest.bytes) throw rejected();
-      chunks.push(chunk);
-    }
-    const bytes=Buffer.concat(chunks);
-    if (size!==manifest.bytes || sha256(bytes)!==manifest.sha256) throw rejected();
-    return openRecentOperations(JSON.parse(bytes),recentOperationsKey(env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64));
   };
 }
 
