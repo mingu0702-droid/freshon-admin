@@ -19,6 +19,7 @@ const prefix = 'recent-operations-v1/', currentFile = prefix+'current.json';
 const seedFile = prefix+'baseline.json';
 const codeRevision = /^[a-f0-9]{40}$/;
 const maxClearBytes = 32 * 1024 * 1024, maxPackedBytes = 4 * 1024 * 1024;
+const maxRetryDates = 7;
 const compress = promisify(gzip), decompress = promisify(gunzip);
 const customerCode = /^[A-Z]\d{1,20}$/;
 const hash = /^[a-f0-9]{64}$/;
@@ -189,7 +190,7 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
       write && env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1') return null;
   const token=write ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN ||
     (env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1'&&env.OPSMAP_SNAPSHOT_STORE_TOKEN) :
-    env.OPSMAP_STAGE_SYNC_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN;
+    env.OPSMAP_STAGE_SYNC_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;
   if (!token) return null;
   let key;
   try {key=recentOperationsKey(env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64);}
@@ -222,7 +223,8 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
         const value=await client.readRaw(prefix+'day-'+date+'.json',maxPackedBytes+1024);
         if (!value) return null;
         const ledger=await openRecentOperations(value,key);
-        if (ledger.endDate!==date || ledger.days.some(day=>day.date!==date)) throw rejected();
+        const envelopeEnd=date<RECENT_OPERATIONS_BASELINE_END?RECENT_OPERATIONS_BASELINE_END:date;
+        if (ledger.endDate!==envelopeEnd || ledger.days.some(day=>day.date!==date)) throw rejected();
         return ledger.days;
       },
       async write(ledger,sha) {await client.write(currentFile,await sealRecentOperations(ledger,key),sha);}
@@ -230,7 +232,7 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
   };
 }
 
-export async function syncStageRecentOperations({store,receipt,readSeed,readSource,now=Date.now}={}) {
+export async function syncStageRecentOperations({store,receipt,readSeed,readSource,retryDates=[],now=Date.now}={}) {
   const day=latestClosedDay(now());
   const kstDate=new Date(now()+9*3600000).toISOString().slice(0,10);
   if (!store?.write || !hash.test(receipt?.runId || '') || receipt.date!==kstDate) throw Error('RECENT_OPERATIONS_RECEIPT');
@@ -239,16 +241,28 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
   const base=current.ledger ?? await readSeed?.();
   if (!base) throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
   if (base.endDate>day) throw rejected();
-  const days=await (readSource?.(day) ?? store.readDay(day));
-  if (!days?.length) return {state:'SOURCE_UNAVAILABLE',endDate:base.endDate};
-  if (days.some(row=>row.date!==day)) throw rejected();
-  const next=mergeRecentOperations(base,day,days);
+  if (!Array.isArray(retryDates) || retryDates.length>maxRetryDates ||
+      retryDates.some(date=>!isDay(date) || date>day)) throw rejected();
+  const windowStart=datesFor(day,90)[0];
+  const dates=new Set([day,...retryDates.filter(date=>date>=windowStart)]);
+  const days=[];
+  let endDate=base.endDate;
+  for (const date of dates) {
+    const input=await (readSource?.(date) ?? store.readDay(date));
+    if (input==null) continue;
+    if (!Array.isArray(input) || input.some(row=>row?.date!==date)) throw rejected();
+    if (!input.length) continue;
+    days.push(...input);
+    if (date>endDate) endDate=date;
+  }
+  if (!days.length) return {state:'SOURCE_UNAVAILABLE',endDate:base.endDate};
+  const next=mergeRecentOperations(base,endDate,days);
   if (JSON.stringify(next)===JSON.stringify(base)) return {state:'VERIFIED_NOOP',endDate:base.endDate};
   try {await store.write(next,current.sha);}
   catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
   const saved=await store.read();
   if (JSON.stringify(saved.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
-  return {state:'PUBLISHED',endDate:day};
+  return {state:'PUBLISHED',endDate};
 }
 
 export function createRecentOperationsReader({readSeed,store,now=Date.now}={}) {

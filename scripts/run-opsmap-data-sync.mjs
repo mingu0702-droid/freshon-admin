@@ -208,6 +208,7 @@ async function run() {
       const component='opsmap-recent-operations-sync';
       try {
         const result=await syncStageRecentOperations({store:createStageRecentOperationsStore({env,write:true}),receipt,
+          retryDates:env.OPSMAP_STAGE_RECENT_OPERATIONS_RETRY_DATES?.split(',').map(date=>date.trim()),
           readSeed:createStageRecentOperationsSeed({env,manifest:recentOperationsBaseline})});
         console.log(JSON.stringify({component,runId:receipt.runId,...result}));
       } catch(error) {

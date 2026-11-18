@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import express from 'express';
+import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
 import {
-  createRecentOperationsReader,mergeRecentOperations,mountRecentOperations,normalizeRecentOperations,openRecentOperations,
-  projectRecentOperations,RECENT_OPERATIONS_ROUTE,sealRecentOperations,syncStageRecentOperations
+  createRecentOperationsReader,createStageRecentOperationsStore,mergeRecentOperations,mountRecentOperations,normalizeRecentOperations,openRecentOperations,
+  projectRecentOperations,RECENT_OPERATIONS_ROUTE,recentOperationsKey,sealRecentOperations,syncStageRecentOperations
 } from '../src/stageRecentOperations.js';
 
 const initialStart='2026-08-20', initialEnd='2026-11-17';
@@ -81,6 +82,45 @@ test('incremental publication adds only the last closed day, retains on missing 
   assert.equal((await syncStageRecentOperations(opts)).state,'VERIFIED_NOOP');
   assert.deepEqual(projectRecentOperations(current.ledger).rows.map(row=>row.customerCode),['B1']);
   assert.equal(writes,1);
+});
+
+test('retries selected closed dates without scanning the entire window or assuming missing dates are empty',async()=>{
+  const original=ledger(makeDay(initialEnd,'freshon_orders','partial',['A1']));
+  const readDates=[];
+  let current={ledger:original,sha:'initial'};
+  const store={read:async()=>current,async readDay(date){
+    readDates.push(date);
+    return date==='2026-10-31'?[makeDay(date,'wms_dispatch','partial',['B1'],'honam')]:null;
+  },async write(next,sha){
+    assert.equal(sha,current.sha);
+    current={ledger:next,sha:'written'};
+  }};
+  const options={store,receipt:{runId:'b'.repeat(64),date:'2026-11-19'},
+    now:()=>Date.parse('2026-11-19T03:00:00Z'),retryDates:['2026-10-31','2026-10-31','2026-08-20']};
+  assert.deepEqual(await syncStageRecentOperations(options),{state:'PUBLISHED',endDate:initialEnd});
+  assert.deepEqual(readDates,['2026-11-18','2026-10-31']);
+  assert.deepEqual(projectRecentOperations(current.ledger).centers.honam.confirmedDays,[]);
+  assert.equal((await syncStageRecentOperations(options)).state,'VERIFIED_NOOP');
+  await assert.rejects(syncStageRecentOperations({...options,retryDates:['2026-11-19']}),/EVIDENCE_INVALID/);
+});
+
+test('the Stage reader can read a published pointer with its existing read-only credential',async()=>{
+  const base=ledger(makeDay(initialEnd,'delivery_admin','partial',['A1']));
+  const encoded=Buffer.alloc(32,5).toString('base64');
+  const packed=await sealRecentOperations(base,recentOperationsKey(encoded));
+  const paths=[];
+  const reader=createStageRecentOperationsStore({env:{RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
+    OPSMAP_STAGE_RECENT_OPERATIONS_SYNC_APPROVED:'1',OPSMAP_STAGE_SYNC_REMOTE_APPROVED:'1',
+    OPSMAP_SHADOW_GITHUB_READ_TOKEN:'stage-read-fixture',OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64:encoded},
+  async fetchImpl(url,{method='GET',headers}){
+    assert.equal(method,'GET');
+    assert.equal(headers.Authorization,'Bearer stage-read-fixture');
+    paths.push(url);
+    return paths.length===1?Response.json({private:true}):Response.json(packed);
+  }});
+  assert.deepEqual((await reader.read()).ledger,base);
+  assert.equal(typeof reader.write,'undefined');
+  assert.match(paths[1],/recent-operations-v1\/current\.json\?ref=stage%2Fopsmap-snapshots$/);
 });
 
 test('protects positive evidence before reading and again after the asynchronous read',async t=>{
