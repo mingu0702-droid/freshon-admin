@@ -395,6 +395,34 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     return validateOpsmapSyncDay({date,sourceRows:tasks.length,unidentified:0,proof:'VERIFIED_COMPLETE_DAY',
       proofHash:deliveryDigest([date,tasks,observedVisits,dispatch]),completeCenters,completeSources,visits:observedVisits,tasks,dispatch},date);
   };
+  readDate.readRecentOperations = async (date, existingCenters=new Set()) => {
+    const input=[];
+    const recordedAt=value=>typeof value==='string' && /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+      Number.isFinite(Date.parse(value));
+    for (const [centerKey,id] of scope) {
+      if (centerKey==='osanColdStorage' || existingCenters.has(centerKey)) continue;
+      let tasks;
+      try {({tasks}=await readSyncTasks(date,readers.get(centerKey).reader,centerKey,id));}
+      catch {continue;}
+      if (tasks.some(task=>String(task.carrier?.logisticsCenterId)!==id)) continue;
+      const positives=new Map();
+      for (const task of tasks) {
+        const status=String(task.status||'').toUpperCase();
+        if (/CANCEL|RETURN|취소|반품/.test(status)) continue;
+        const customerCode=task.customer?.erpCode ?? task.customerErpCode;
+        if (status==='COMPLETED' && recordedAt(task.completeDatedAt)) {
+          positives.set(customerCode,'delivery_completed');
+        } else if (task.carrier.status==='CONFIRMED' && recordedAt(task.carrier.confirmDatedAt) &&
+            !positives.has(customerCode)) {
+          positives.set(customerCode,'dispatch_confirmed');
+        }
+      }
+      // An empty Delivery Admin page cannot prove a center had no operations.
+      if (positives.size) input.push({date,centerKey,source:'delivery_admin',coverage:'partial',
+        rows:[...positives].map(([customerCode,evidence])=>({customerCode,evidence}))});
+    }
+    return input;
+  };
   readDate.configured = hasSource;
   readDate.sourceStatus=()=>Object.fromEntries(Object.keys(SYNC_DELIVERY_SOURCES).map(center=>[center,lastReads.get(center)||{
     checkedDate:null,lastSuccessAt:null,complete:false,error:!hasSource?'DELIVERY_SOURCE_NOT_CONFIGURED':

@@ -103,6 +103,31 @@ test('a signed first run publishes and verifies an identical protected seed befo
   assert.equal(writes,1);
 });
 
+test('a new closed day combines sealed orders with explicit live delivery evidence once',async()=>{
+  const before=ledger(makeDay(initialEnd,'freshon_orders','partial',['A1']));
+  const date='2026-11-18';
+  const saved=[makeDay(date,'freshon_orders','partial',['A1']),makeDay(date,'delivery_admin','partial',['B1'],'honam')];
+  let current={ledger:before,sha:'before'}, reads=0, writes=0;
+  const store={read:async()=>current,readDay:async()=>saved,async write(next,sha){
+    assert.equal(sha,'before');
+    current={ledger:next,sha:'new'};
+    writes++;
+  }};
+  const options={store,receipt:{runId:'a'.repeat(64),date:'2026-11-19'},now:()=>Date.parse('2026-11-18T21:10Z'),
+    async readLatestDay(day,existing){
+      assert.equal(day,date);
+      assert.deepEqual([...existing],['honam']);
+      reads++;
+      return [makeDay(day,'delivery_admin','partial',['A2'])];
+    }};
+  assert.equal((await syncStageRecentOperations(options)).state,'PUBLISHED');
+  assert.equal((await syncStageRecentOperations(options)).state,'VERIFIED_NOOP');
+  assert.equal(reads,1);
+  assert.equal(writes,1);
+  assert.equal(saved.length,2);
+  assert.deepEqual(projectRecentOperations(current.ledger).centers.osan.confirmedDays,[]);
+});
+
 test('retries selected closed dates without scanning the entire window or assuming missing dates are empty',async()=>{
   const original=ledger(makeDay(initialEnd,'freshon_orders','partial',['A1']));
   const readDates=[];

@@ -16,7 +16,7 @@ import {boundedRead, privateCoverageDirectory} from '../src/shadowCoverage/cover
 import {atomicCoverageWrite} from '../src/shadowCoverage/fileStore.js';
 import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from '../src/opsmapDurableGeneration.js';
 import {opsmapScheduleConfig,publishOpsmapScheduledRun,verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
-import {STAGE_OSAN_SYNC_CENTERS,STAGE_OSAN_SYNC_SOURCE_IDS} from '../src/opsmapSyncPolicy.js';
+import {STAGE_OSAN_SYNC_CENTERS,STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
 import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixedMasterBaseline, stageFixedMasterStorage,
   stageFixedMasterSyncEnabled, syncStageFixedMaster} from '../src/stageFixedMasterSync.js';
 import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
@@ -207,7 +207,11 @@ async function run() {
       if (!stageRecentOperationsSyncEnabled(env)) return;
       const component='opsmap-recent-operations-sync';
       try {
+        const readLatestDay=env.OPSMAP_STAGE_RECENT_OPERATIONS_DELIVERY_APPROVED==='1' ?
+          createStageDatedDeliveryReader({env,syncCenters:{osan:SYNC_DELIVERY_SOURCES.osan,
+            yeongnam:SYNC_DELIVERY_SOURCES.yeongnam,honam:SYNC_DELIVERY_SOURCES.honam}}).readRecentOperations : null;
         const result=await syncStageRecentOperations({store:createStageRecentOperationsStore({env,write:true}),receipt,
+          readLatestDay,
           retryDates:env.OPSMAP_STAGE_RECENT_OPERATIONS_RETRY_DATES?.split(',').map(date=>date.trim()),
           readSeed:createStageRecentOperationsSeed({env,manifest:recentOperationsBaseline})});
         console.log(JSON.stringify({component,runId:receipt.runId,...result}));

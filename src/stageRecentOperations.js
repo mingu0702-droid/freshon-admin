@@ -232,7 +232,7 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
   };
 }
 
-export async function syncStageRecentOperations({store,receipt,readSeed,readSource,retryDates=[],now=Date.now}={}) {
+export async function syncStageRecentOperations({store,receipt,readSeed,readSource,readLatestDay,retryDates=[],now=Date.now}={}) {
   const day=latestClosedDay(now());
   const kstDate=new Date(now()+9*3600000).toISOString().slice(0,10);
   if (!store?.write || !hash.test(receipt?.runId || '') || receipt.date!==kstDate) throw Error('RECENT_OPERATIONS_RECEIPT');
@@ -248,8 +248,13 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
   const days=[];
   let endDate=base.endDate;
   for (const date of dates) {
-    const input=await (readSource?.(date) ?? store.readDay(date));
-    if (input==null) continue;
+    const savedInput=await (readSource?.(date) ?? store.readDay(date));
+    if (savedInput!=null && (!Array.isArray(savedInput) || savedInput.some(row=>row?.date!==date))) throw rejected();
+    const input=[...(savedInput??[])];
+    if (date===day && date>base.endDate && readLatestDay) {
+      const existing=new Set(input.filter(row=>row.source==='delivery_admin').map(row=>row.centerKey));
+      input.push(...await readLatestDay(date,existing));
+    }
     if (!Array.isArray(input) || input.some(row=>row?.date!==date)) throw rejected();
     if (!input.length) continue;
     days.push(...input);

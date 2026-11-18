@@ -55,6 +55,28 @@ test('authentication failures, partial pages and wrong dates never become verifi
   await assert.rejects(read(() => response([{...tasks[0], enteringDatedAt:'2026-05-15'}],1,1)), {code:'DELIVERY_SOURCE_IDENTITY_UNVERIFIED'});
 });
 
+test('only explicit matching-center delivery positives become partial operating evidence',async()=>{
+  const queries=[];
+  const recorded=date+'T02:30:00+09:00';
+  const row=(id,code,overrides={})=>({id,customer:{erpCode:code},status:'MISSING',
+    carrier:{enteringDatedAt:recorded,logisticsCenterId:1,status:'CONFIRMED',confirmDatedAt:recorded},...overrides});
+  const matches=[row(1,'S1'),row(2,'S1',{status:'COMPLETED',completeDatedAt:recorded}),
+    row(3,'S2',{status:'CANCELLED'}),row(4,'S3',{carrier:{enteringDatedAt:recorded,logisticsCenterId:1,status:'CONFIRMED'}}),
+    row(5,'S4')];
+  const read=createStageDatedDeliveryReader({env,syncCenters:{osan:'1',yeongnam:'3',honam:'4'},fetchImpl(url){
+    const center=url.searchParams.get('logisticsCenterId');
+    queries.push(center);
+    if(center==='1')return response(matches,matches.length,1);
+    if(center==='3')return response([],0,0);
+    return new Response('forbidden',{status:403});
+  }});
+  assert.deepEqual(await read.readRecentOperations(date),[{date,centerKey:'osan',source:'delivery_admin',coverage:'partial',
+    rows:[{customerCode:'S1',evidence:'delivery_completed'},{customerCode:'S4',evidence:'dispatch_confirmed'}]}]);
+  assert.deepEqual(queries,['1','3','4']);
+  assert.deepEqual(await read.readRecentOperations(date,new Set(['osan','honam'])),[]);
+  assert.deepEqual(queries,['1','3','4','3']);
+});
+
 test('Stage assignments and current status share the same authenticated source without a Hub read', async t => {
   const password = 'fixture-only-dated-read';
   let sessionContent;
