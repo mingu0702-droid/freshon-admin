@@ -4,12 +4,40 @@ import {createStageNationalRegistrationSource,createStageNationalRegistryReader,
   from '../src/stageNationalRegistry.js';
 import {customerRegistryAddressHash} from '../src/customerRegistry.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
+import {createStageSyncReaders} from '../src/stageVerificationEntry.js';
+import {createStageShadowRuntime} from '../src/shadowCoverage/stageArchive.js';
 
 const day=24*60*60_000;
 const codes={osan:'S10001',yeongnam:'S10002',honam:'S10003'};
 const centerIds={osan:'011',yeongnam:'012',honam:'013'};
 const row=(center,overrides={})=>({customerCode:codes[center],customerName:'합성 매장',basicAddress:'경기 합성시 합성로 10',
   centerGroup:center,lifecycle:'ACTIVE',...overrides});
+
+test('Stage can read all three sync stores when its archive token is excluded from the app environment',async()=>{
+  const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
+    OPSMAP_STAGE_SYNC_REMOTE_APPROVED:'1',OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED:'1',
+    OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED:'1',OPSMAP_STAGE_RECENT_OPERATIONS_SYNC_APPROVED:'1',
+    OPSMAP_SHADOW_GITHUB_READ_TOKEN:'stage-reader-test',OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64:Buffer.alloc(32,9).toString('base64')};
+  assert.equal(createStageShadowRuntime(env).env.OPSMAP_SHADOW_GITHUB_READ_TOKEN,undefined);
+  const paths=[];
+  const readers=createStageSyncReaders({env,fetchImpl:async(input,options)=>{
+    const url=new URL(input);
+    assert.equal(url.origin,'https://api.github.com');
+    assert.equal(options.method??'GET','GET');
+    assert.equal(options.headers.Authorization,'Bearer stage-reader-test');
+    if(!url.search)return Response.json({private:true});
+    assert.equal(url.searchParams.get('ref'),'stage/opsmap-snapshots');
+    paths.push(url.pathname.split('/contents/opsmap-stage/')[1]);
+    return new Response(null,{status:404});
+  }});
+  assert.equal(await readers.recentOperations.read(),null);
+  assert.deepEqual(await readers.nationalRegistry.readHead(),{sha:null,value:null});
+  assert.equal(await readers.fixedMaster().loadBaseline(),null);
+  assert.deepEqual(paths.sort(),['fixed-vehicle-projection-v1.json','recent-operations-v1/current.json','stage-national-registry-v1/head.json']);
+  assert.equal(readers.recentOperations.write,undefined);
+  assert.equal(readers.nationalRegistry.writeHead,undefined);
+  assert.equal(readers.fixedMaster().write,undefined);
+});
 
 test('a signed daily candidate preserves missing rows, updates new or revised rows and requires an explicit inactive record',async()=>{
   let tick=Date.parse('2026-11-18T02:00:00Z'), head=null, etag=null, serial=0;

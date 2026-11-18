@@ -116,7 +116,15 @@ function stageGithub(fetchImpl, {files, branch, writable, allowBlob = false}) {
   };
 }
 
-export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory,
+export function createStageSyncReaders({env,fetchImpl=fetch,now=Date.now}) {
+  return {
+    nationalRegistry:createStageNationalRegistryStorage({env,fetchImpl,now}),
+    recentOperations:createStageRecentOperationsStore({env,fetchImpl,now}),
+    fixedMaster:()=>stageFixedMasterStorage({env,fetchImpl})
+  };
+}
+
+export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory, syncReaders,
   openScheduledStore = openOpsmapSyncGenerationStore, readVerifiedVehicleRegistration, now = Date.now, snapshotWaitMs = 2500} = {}) {
   const today=()=>new Date(now()+9*3600000).toISOString().slice(0,10);
   if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
@@ -148,12 +156,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const postalEnabled = stage.OPSMAP_SHADOW_COVERAGE_FORMAT==='postal';
   const remotePostal = postalEnabled ? createStagePostalAssets({env:stage,fetchImpl,now}) : null;
   const staffRegistry = createStageStaffRegistryAsset({env:stage,fetchImpl,now});
-  const nationalRegistry = createStageNationalRegistryReader({store:createStageNationalRegistryStorage({env:stage,fetchImpl,now}),now,
+  const syncStorage = syncReaders ?? createStageSyncReaders({env:stage,fetchImpl,now});
+  const nationalRegistry = createStageNationalRegistryReader({store:syncStorage.nationalRegistry,now,
     log:result=>console.info(JSON.stringify({component:'stage-national-registry-readback',...result}))});
   const readRecentOperations = createRecentOperationsReader({now,
     readSeed:createStageRecentOperationsSeed({env:stage,fetchImpl,manifest:recentOperationsBaseline,
       log:value=>console.info(JSON.stringify({component:'stage-recent-operations-baseline',...value}))}),
-    store:createStageRecentOperationsStore({env:stage,fetchImpl,now})});
+    store:syncStorage.recentOperations});
   const validation = createStageAbValidation({now,retainCoverageFiles:!postalEnabled});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   let baselineConfig, baselineStore, baselineRefresh, baselineRestoreMs, baselineState='NOT_CONFIGURED';
@@ -372,7 +381,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const dailyMaster=stageFixedMasterSyncEnabled(stage);
   let dailyFixedStorage;
   const fixedStore=dailyMaster ? createStageDailyFixedMasterReader({baseline:fixedBaseline,store:{
-    read(...args) {return (dailyFixedStorage ??= stageFixedMasterStorage({env:stage,fetchImpl})).read(...args);}
+    read(...args) {return (dailyFixedStorage ??= syncStorage.fixedMaster()).read(...args);}
   }}) : fixedBaseline;
   const fixed = createFixedVehicleCache({readOnly:true,reloadReadOnlyAfterMs:dailyMaster?300_000:60_000,
     ...(dailyMaster?{ttl:FIXED_MASTER_DAILY_TTL}:{}),now,store:fixedStore});
