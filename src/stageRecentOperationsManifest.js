@@ -1,6 +1,6 @@
 // Only immutable, SHA-256 checked evidence from the private Stage repository is accepted.
 export const recentOperationsBaseline = Object.freeze({
-  ref:'8920cca287c597ea49775f6b42836d7d80ccf3c8',
-  sha256:'f8a36524c43670e7b7277642969ae449b8d955e94a53c138c54990d2df9219cf',
-  bytes:387806
+  ref:'483cd06b780bedfb5976fea896913cec50bd5018',
+  sha256:'9e9e99acb0f4458a334a909979d427d9cd2351744d3b443b444f043e7d1b6e17',
+  bytes:396042
 });
