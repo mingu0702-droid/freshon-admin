@@ -23,7 +23,7 @@ function declaration(name){
 }
 // Pick only A-owned declarations: B's interleaved temporary-pin functions remain
 // interface stubs here and are exercised by the independent full-browser QA.
-const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','searchIndexCurrent','buildSearchIndex','searchIndexWork','advanceSearchIndex','getSearchIndex','prepareStageSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','fixedVehicleFor','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows',
+const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','searchIndexCurrent','buildSearchIndex','searchIndexWork','advanceSearchIndex','getSearchIndex','prepareStageSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','fixedVehicleFor','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows','usesRecentOperations',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
  'renderResults','unifiedAddressQuery','completeAddressRegion','stageAddressHashMatches','findColdRegistrationAddressRows','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
