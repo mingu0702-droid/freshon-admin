@@ -1800,6 +1800,7 @@
           markerFrame=null;
           if(mapMoving||!dateReady||state.map!==owner||state.mode!==mode||mode==='DATE_ROUTE'&&!isDailyDataReady()||
             document.body.dataset.mapStaffState!=='authenticated'&&window.MapStaffEntry)return;
+          positionTemporaryRemoveButtons();
           if(renderStops(state.currentRows,{viewportOnly:true,fromIdle:true,numbered:mode==='DATE_ROUTE'})){
             viewportMetrics.renders++;
             positionTemporaryDistanceLabel();scheduleNewAreaDispatchBadges();deferMapAddressWork();
@@ -2567,7 +2568,36 @@
   function positionDetailPopup() {
     // Screen-space right panel: map projection and zoom never set panel geometry.
     window.MapDotUi?.dockDetail();mapCamera?.scheduleFocus();
+    positionTemporaryRemoveButtons();
     positionTemporaryDistanceLabel();scheduleNewAreaDispatchBadges();
+  }
+
+  function positionTemporaryRemoveButtons() {
+    if (!temporaryPins.size) return;
+    const entries=[...temporaryPins.values()];
+    if (innerWidth>760) {
+      for (const {remove} of entries) remove.style.translate='';
+      return;
+    }
+    const map=$('#map').getBoundingClientRect();
+    const bounds={left:Math.max(0,map.left)+4,top:Math.max(0,map.top)+4,
+      right:Math.min(innerWidth,map.right)-4,bottom:Math.min(innerHeight,map.bottom)-4};
+    if (bounds.left>=bounds.right || bounds.top>=bounds.bottom) return;
+    const controls=$$('#approvedSiteHeader,#detailSection.open,#mapTopControls,#mobileWorkspace:not(.collapsed),.mobileMapControls');
+    const obstacles=[...controls,...entries.map(({marker})=>marker)].map(element=>element.getBoundingClientRect()).filter(rect=>
+      rect.width&&rect.height&&rect.right>bounds.left&&rect.left<bounds.right&&rect.bottom>bounds.top&&rect.top<bounds.bottom);
+    const buttons=entries.flatMap(({remove},id)=>{
+      if (!remove.isConnected || !remove.offsetParent) return [];
+      const anchor=remove.offsetParent.getBoundingClientRect();
+      return [{id,left:anchor.left+remove.offsetLeft,top:anchor.top+remove.offsetTop,
+        width:remove.offsetWidth,height:remove.offsetHeight}];
+    });
+    const offsets=new Map(MapViewPolicy.placeOverlayLabels(buttons,bounds,obstacles,{maxColumns:4,maxRows:6}).map(value=>[value.id,value]));
+    for (const [id,{remove}] of entries.entries()) {
+      const offset=offsets.get(id);
+      const translate=offset&&(offset.x||offset.y)?`${offset.x}px ${offset.y}px`:'';
+      if (remove.style.translate!==translate) remove.style.translate=translate;
+    }
   }
 
   function visibleSearchPin(point) {

@@ -67,6 +67,7 @@ const runtime=fs.readFileSync(path.join(root,'map-phase2b-runtime.js'),'utf8').r
    click(lat,lng){kakao.maps.event.trigger(state.map,'click',{latLng:new kakao.maps.LatLng(lat,lng)});},clear:clearTemporaryPins,
    finish:(p,owner=state.searchRequestId)=>finishAddress(p,{owner}),geocode:geocodeAddress,
    move(){const {map}=state;map.setLevel(6);map.setCenter(new kakao.maps.LatLng(37.53,127.03));for(const name of ['zoom_changed','dragstart','center_changed','dragend','idle'])kakao.maps.event.trigger(map,name);},
+   releaseFocus:()=>mapCamera.releaseFocus(),positionButtons:positionTemporaryRemoveButtons,
    stats:()=>({count:document.querySelectorAll('[data-search-temporary-pin]').length,tracked:temporaryPins.size,pending:!!searchTemporaryClick,
     activeCircles:window.allCircles.filter(x=>x.map).length,stores:state.currentRows.length,markerCount:markerEntries.size,
     storePoints:state.currentRows.map(r=>[r.customerCode,r.lat,r.lng,r.coordinateSource]),
@@ -115,7 +116,7 @@ async function removeFromMap({touch=false}={}){
  const pin=page.locator('[data-search-temporary-pin]');
  const remove=page.getByRole('button',{name:'지도에서 임시 핀 삭제'});
  const marker=await pin.boundingBox(),button=await remove.boundingBox();
- assert(marker&&button&&button.x>=marker.x+marker.width&&button.width>=32);
+ assert(marker&&button&&button.width>=32);
  const handle=await remove.elementHandle();
  if(touch)await remove.tap();else await remove.click();
  assert(await handle.evaluate(node=>!node.isConnected&&node.onclick===null));
@@ -225,6 +226,23 @@ try{
  await submit('서울 합성구 모바일길 35');await page.evaluate(()=>tempPinTest.click(37.55,127));
  await removeFromMap({touch:true});
  check('390px touch removes the map pin and radius',await page.evaluate(()=>{const s=tempPinTest.stats();return s.count===0&&s.tracked===0&&!s.virtual&&s.activeCircles===0;}));
+ await submit('서울 합성구 모바일길 36');await page.evaluate(()=>tempPinTest.click(37.55,127));
+ const occlusion=await page.evaluate(()=>{
+  tempPinTest.releaseFocus();
+  const button=document.querySelector('.searchTemporaryRemove'), anchor=button.offsetParent.getBoundingClientRect();
+  const drawer=document.createElement('div');drawer.className='mobileMapControls';
+  const left=anchor.left+button.offsetLeft, top=anchor.top+button.offsetTop;
+  Object.assign(drawer.style,{position:'fixed',left:(left-5)+'px',top:(top-5)+'px',right:'auto',bottom:'auto',
+    zIndex:'9999',display:'block',width:'48px',height:'48px'});
+  document.body.append(drawer);
+  const originalBlocked=document.elementFromPoint(left+19,top+19)===drawer;
+  tempPinTest.positionButtons();
+  const rect=button.getBoundingClientRect();
+  return {originalBlocked,buttonClickable:button.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2))};
+ });
+ assert.deepEqual(occlusion,{originalBlocked:true,buttonClickable:true});
+ await removeFromMap({touch:true});
+ check('390px touch can delete a pin when the drawer covers the original button position',await page.evaluate(()=>tempPinTest.stats().count===0));
  check('synthetic browser has no unhandled errors',errors.length===0);check('no remote calls or persistent writes',external.length===0&&requests.every(r=>r.method==='GET'||r.path.endsWith('/base-vehicles')||r.path.endsWith('/manual-road-route')));
  const result={scope:'LOCAL_CHROMIUM_FIXTURE',pass:checks.length,fail:0,checks,errors,externalRequests:external.length,artifacts:out};fs.writeFileSync(path.join(out,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }catch(error){console.error(JSON.stringify({errors,requests,external,state:page?await page.evaluate(()=>({bridge:!!window.MapUiLocalBridge,rows:window.MapUiLocalBridge?.state.currentRows.length,status:document.querySelector('#freshnessState')?.textContent})):null}));throw error;}finally{await browser?.close();await new Promise(r=>server.close(r));}

@@ -68,7 +68,7 @@ test('map gestures coalesce idle work and keep the out-of-filter selection in th
   document:{hidden:false,body:{dataset:{mapStaffState:'authenticated'}}},
   window:{KakaoMapsAdapter:{ready:async()=>{}},MapViewPolicy:{createCamera:()=>({userGesture(){gestures++;}})},dispatchEvent(){}},
   kakao:{maps:{Map:class {},LatLng:class {},event:{addListener:(_map,name,callback)=>events.set(name,callback)}}},
-  $:()=>mapElement,performance:{mark(){}},CustomEvent:class {},loadBaseMap(){},positionTemporaryDistanceLabel(){},clearSelection(){clears++;},
+  $:()=>mapElement,performance:{mark(){}},CustomEvent:class {},loadBaseMap(){},positionTemporaryDistanceLabel(){},positionTemporaryRemoveButtons(){},clearSelection(){clears++;},
   auditMapFrames(){},prepareStageSearchIndex(){},scheduleNewAreaDispatchBadges:()=>badgeLayouts.push(true),
   setMapMessage:message=>assert.fail(message),
   requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},
