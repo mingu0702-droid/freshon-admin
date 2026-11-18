@@ -474,7 +474,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       mountStageStaffRegistry({app:router,requireStaff,asset:staffRegistry,nationalRegistry,
         getVerifiedRegistry:()=>validation.active()?.registry,now});
       if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
-        mountRecentOperations(router,{requireStaff,read:readRecentOperations});
+        mountRecentOperations(router,{requireStaff,read:readRecentOperations,now});
         driverContacts.mount(binding,{readBaseVehicles:codes=>base.get(codes),
           readDatedAssignment:readDatedDelivery.readDriverAssignment,readVerifiedVehicleRegistration});
         mountStageAbValidation(router,{...binding,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,

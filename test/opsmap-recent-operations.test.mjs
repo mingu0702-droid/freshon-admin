@@ -86,7 +86,7 @@ test('incremental publication adds only the last closed day, retains on missing 
 test('protects positive evidence before reading and again after the asynchronous read',async t=>{
   const app=express();
   let callbacks=0, revoke=false;
-  mountRecentOperations(app,{requireStaff(req,res,next){
+  mountRecentOperations(app,{now:()=>Date.parse('2026-11-18T19:00:00Z'),requireStaff(req,res,next){
     if (req.get('Authorization')!=='test-employee' || revoke) return res.sendStatus(401);
     next();
   },async read() {
@@ -103,6 +103,8 @@ test('protects positive evidence before reading and again after the asynchronous
   const options={headers:{Authorization:'test-employee'}};
   const allowed=await fetch(url,options);
   assert.equal(allowed.headers.get('cache-control'),'private, no-store');
-  assert.equal((await allowed.json()).rows.length,1);
+  const value=await allowed.json();
+  assert.equal(value.rows.length,1);
+  assert.equal(value.expectedEndDate,'2026-11-18');
   assert.equal((await fetch(url,options)).status,401);
 });

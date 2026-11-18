@@ -6,6 +6,7 @@ const labels = Object.freeze({
 });
 const daysInWindow = 90;
 const dayMilliseconds = 86_400_000;
+const customerCodePattern = /^[A-Z]\d{1,20}$/;
 
 function day(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return NaN;
@@ -43,16 +44,22 @@ export function readRecentOperations(response) {
   }));
 
   const latest = new Map(centers.map(center => [center, new Map()]));
+  const observedCustomers = new Set();
   for (const row of response.rows) {
     const center = latest.get(row?.centerKey);
     const time = day(row?.date);
-    if (!center || !/^[A-Z]\d{1,20}$/.test(row.customerCode || '') || !Object.hasOwn(labels, row.evidence) ||
+    if (!center || !customerCodePattern.test(row.customerCode || '') || !Object.hasOwn(labels, row.evidence) ||
         !(time >= start && time <= end)) continue;
     const prior = center.get(row.customerCode);
     if (!prior || prior.date < row.date) center.set(row.customerCode, { date: row.date, evidence: row.evidence });
     coverage.get(row.centerKey).observed.add(row.date);
+    observedCustomers.add(row.customerCode);
   }
-  return { startDate: response.startDate, endDate: response.endDate, coverage, latest };
+  const staleWindow=day(response.expectedEndDate)>end;
+  const absenceEligibleCenters=new Set(staleWindow ? [] : [...coverage].filter(([,scope])=>
+    scope.confirmed.size===daysInWindow&&!scope.unavailable).map(([center])=>center));
+  return { startDate: response.startDate, endDate: response.endDate, coverage, latest, observedCustomers,
+    staleWindow, absenceEligibleCenters };
 }
 
 export function recentRecord(report, center, customerCode) {
@@ -66,20 +73,27 @@ export function recentCoverage(report, center = '') {
 
   const confirmedDays = intersect(scope.map(row => row.confirmed));
   const observedDates = new Set(scope.flatMap(row => [...row.observed])).size;
-  const complete = confirmedDays === daysInWindow && !scope.some(row => row.unavailable);
+  const complete = confirmedDays === daysInWindow && !report.staleWindow && !scope.some(row => row.unavailable);
   return { state: complete ? 'complete' : observedDates ? 'partial' : 'unknown', confirmedDays, observedDates };
 }
 
-export function recentDetail(report, center, customerCode, loading = false) {
+export function recentOperationStatus(report, center, customerCode, allowAbsence = true) {
+  if (recentRecord(report, center, customerCode)) return 'operated';
+  if (allowAbsence && report?.absenceEligibleCenters.has(center) &&
+      customerCodePattern.test(customerCode || '') && !report.observedCustomers.has(customerCode)) return 'no-operation';
+  return 'unknown';
+}
+
+export function recentDetail(report, center, customerCode, loading = false, allowAbsence = true) {
   if (loading) return { date: '확인 중', evidence: '확인 중' };
   const record = recentRecord(report, center, customerCode);
-  if (record) return { date: record.date.replaceAll('-', '.'), evidence: labels[record.evidence] };
-  if (recentCoverage(report, center || 'unassigned').state === 'complete') {
-    return { date: '확인된 기록 없음', evidence: '최근 90일 확인' };
+  if (record) return { date: record.date.replaceAll('-', '.'), evidence: '운영 확인 · ' + labels[record.evidence] };
+  if (recentOperationStatus(report, center, customerCode, allowAbsence) === 'no-operation') {
+    return { date: '90일 전수 확인', evidence: '운영 없음 확인' };
   }
   return { date: '미확인', evidence: '이력 미확인' };
 }
 
 if (typeof window !== 'undefined') window.MapRecentOperations = Object.freeze({
-  readRecentOperations, recentRecord, recentCoverage, recentDetail,
+  readRecentOperations, recentRecord, recentCoverage, recentDetail, recentOperationStatus,
 });

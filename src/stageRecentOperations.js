@@ -274,13 +274,13 @@ export function createRecentOperationsReader({readSeed,store,now=Date.now}={}) {
   };
 }
 
-export function mountRecentOperations(app,{requireStaff,read}) {
+export function mountRecentOperations(app,{requireStaff,read,now=Date.now}) {
   app.get(RECENT_OPERATIONS_ROUTE,requireStaff,async(req,res)=>{
     res.set('Cache-Control','private, no-store').vary('Cookie');
     if (Object.keys(req.query).length) return res.status(400).json({error:'RECENT_OPERATIONS_QUERY'});
     try {
       const result=await read();
-      return requireStaff(req,res,()=>res.json(result));
+      return requireStaff(req,res,()=>res.json({...result,expectedEndDate:latestClosedDay(now())}));
     } catch {
       return res.status(503).json({error:'RECENT_OPERATIONS_UNAVAILABLE'});
     }

@@ -462,24 +462,29 @@
     return registrationCenter(registered, true);
   }
   function recentOperationsRows(rows) {
-    if (!recentOperationsOnly()) return rows;
+    if (!recentOperationsOnly() || recentOperationsState !== 'ready' ||
+        !recentOperationsReport?.absenceEligibleCenters.size) return rows;
     if (recentOperationsSelection?.source === rows && recentOperationsSelection.report === recentOperationsReport) {
       return recentOperationsSelection.rows;
     }
-    const selected = rows.filter(row => window.MapRecentOperations.recentRecord(
-      recentOperationsReport, recentOperationsCenter(row), row.customerCode));
+    const selected = rows.filter(row => window.MapRecentOperations.recentOperationStatus(
+      recentOperationsReport, recentOperationsCenter(row), row.customerCode) !== 'no-operation');
     recentOperationsSelection = { source: rows, report: recentOperationsReport, rows: selected };
     return selected;
   }
   function recentOperationsNotice() {
-    if (recentOperationsState === 'loading') return '최근 운영 이력 확인 중';
-    const coverage = window.MapRecentOperations.recentCoverage(recentOperationsReport, state.centerFilter);
-    if (coverage.state === 'unknown') return '최근 운영 이력 미확인';
-    if (recentOperationsState === 'stale') return '새 정보를 확인하지 못해 이전 자료를 표시합니다.';
-    if (coverage.state === 'complete') return '최근 90일 자료 확인';
-    return coverage.confirmedDays
-      ? ('일부 자료 · 90일 중 ' + coverage.confirmedDays + '일 확인')
-      : ('일부 자료 · 운영 기록 ' + coverage.observedDates + '일 확인');
+    if (recentOperationsState === 'loading') return '운영 이력 확인 중 · 등록 매장 표시';
+    const labels={osan:'오산',yeongnam:'영남',honam:'호남'};
+    const scope=state.centerFilter ? [state.centerFilter] : Object.keys(labels);
+    const summaries=scope.map(center=>{
+      const {observedDates,confirmedDays}=window.MapRecentOperations.recentCoverage(recentOperationsReport,center);
+      const prefix=labels[center]||'센터 미분류';
+      return prefix+(observedDates ? ' 자료 '+observedDates+'/90일 · 전수 확인 '+confirmedDays+'/90일' : ' 0/90일 · 이력 미확인');
+    });
+    if (recentOperationsState === 'stale') summaries.unshift('이전 확인 자료');
+    else if (recentOperationsReport?.staleWindow) summaries.unshift(recentOperationsReport.endDate.slice(5).replace('-','.')+'까지 확인');
+    if (recentOperationsOnly()) summaries.push('이력 미확인 매장 포함');
+    return summaries.join(' · ');
   }
   function syncRecentOperationsUi() {
     const controls = $('#recentOperationsControls');
@@ -501,7 +506,7 @@
     const evidence = $('#detailRecentOperationEvidence');
     if (!date || !evidence) return;
     const recent = window.MapRecentOperations.recentDetail(recentOperationsReport, recentOperationsCenter(state.selected),
-      state.selected.customerCode, recentOperationsState === 'loading');
+      state.selected.customerCode, recentOperationsState === 'loading', recentOperationsState === 'ready');
     date.textContent = recent.date;
     evidence.textContent = recent.evidence;
   }
@@ -510,6 +515,7 @@
         recentOperationsFlight || Date.now() < recentOperationsNextRead) return;
     const flight = {};
     const previous = recentOperationsReport;
+    const previousState = recentOperationsState;
     recentOperationsFlight = flight;
     if (!recentOperationsReport) recentOperationsState = 'loading';
     syncRecentOperationsUi();
@@ -517,6 +523,7 @@
     void fetchJson('/api/map-phase2b/private/recent-operations', { channel:'recent-operations', timeout:10000 })
       .then(value => {
         if (recentOperationsFlight !== flight) return;
+        if (value?.sourceUnavailable === true) throw Error('RECENT_OPERATIONS_UNAVAILABLE');
         recentOperationsReport = window.MapRecentOperations.readRecentOperations(value);
         recentOperationsState = 'ready';
         recentOperationsNextRead = Date.now() + 300000;
@@ -532,7 +539,8 @@
         recentOperationsFlight = null;
         syncRecentOperationsUi();
         refreshRecentOperationDetail();
-        if (recentOperationsOnly() && dateReady && (!previous || recentOperationsReport !== previous)) void loadBaseMap();
+        if (recentOperationsOnly() && dateReady && (recentOperationsReport !== previous ||
+            recentOperationsState !== previousState)) void loadBaseMap();
       });
   }
   function hasMapCoordinates(row) {
@@ -4289,10 +4297,7 @@
       $('#map').dataset.dailyLocated=String(state.routeRows.length);
     }else stores=recentOperationsRows(filteredPeriodStores()).map(row=>({...row,color:vehicleColor(row.vehicle)}));
     stores.forEach(row=>{if(!daily||!archivedDatedAssignments(dailyMeta)){window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);}});
-    const keepInitialFit = recentOperationsOnly() && !stores.length && recentOperationsState === 'loading' && state.fitRequested;
-    if (keepInitialFit) state.fitRequested = false;
     renderStops(stores,{numbered:daily,vehicles:selected});
-    if (keepInitialFit && !state.userMovedMap) state.fitRequested = true;
     if(daily){drawRoute();void loadDailyCompletionEvidence();}
     deferMapAddressWork();
 
@@ -4307,7 +4312,7 @@
       if(recentPeriodNotice)$('#periodIdentity').textContent=recentPeriodNotice;
       if(recentOperationsOnly() && snapshotReadState!=='error'){
         $('#periodIdentity').textContent=stores.length
-          ? (subject + ' · 최근 운영(90일) · ' + stores.length.toLocaleString('ko-KR') + '곳 · 위치 확인 ' +
+          ? (subject + ' · 표시 ' + stores.length.toLocaleString('ko-KR') + '곳 · 위치 확인 ' +
             stores.filter(hasMapCoordinates).length.toLocaleString('ko-KR') + '곳')
           : recentOperationsNotice();
       }
@@ -5524,7 +5529,13 @@
     }
     const visibleStores = periodListLimit ? stores.slice(0,periodListLimit) : [];
     $("#periodStoreListCount").textContent = stores.length + "개 매장";
-    panel.innerHTML = visibleStores.map(row => `<button class="resultItem periodStore${state.selected?.customerCode === row.customerCode ? " selected" : ""}" aria-pressed="${state.selected?.customerCode === row.customerCode}" data-period-store="${esc(row.customerCode)}"><span class="periodCode">${esc(row.customerCode)}</span><b>${esc(row.customerName || row.customerCode)}</b><span>${esc(row.lastDeliveryDate || "")} · ${esc(vehicleLabel(row.vehicle))}</span><span>${esc(row.driverName || "기사 미등록")} · ${row.visitCount===null?'방문횟수 미확인':(row.visitCount??row.history?.length??0)+'회'}</span></button>`).join("") || `<p class="hint">${stores.length ? '검색하거나 지도 핀을 선택하세요. 전체 목록은 요청할 때만 표시합니다.' : '조회 조건에 맞는 매장이 없습니다.'}</p>`;
+    const operationList=usesRecentOperations();
+    panel.innerHTML = visibleStores.map(row => {
+      const activity=operationList ? window.MapRecentOperations.recentDetail(recentOperationsReport,recentOperationsCenter(row),
+        row.customerCode,recentOperationsState==='loading',recentOperationsState==='ready').evidence :
+        row.visitCount===null?'방문횟수 미확인':(row.visitCount??row.history?.length??0)+'회';
+      return `<button class="resultItem periodStore${state.selected?.customerCode === row.customerCode ? " selected" : ""}" aria-pressed="${state.selected?.customerCode === row.customerCode}" data-period-store="${esc(row.customerCode)}"><span class="periodCode">${esc(row.customerCode)}</span><b>${esc(row.customerName || row.customerCode)}</b><span>${esc(row.lastDeliveryDate || "")} · ${esc(vehicleLabel(row.vehicle))}</span><span>${esc(row.driverName || "기사 미등록")} · ${esc(activity)}</span></button>`;
+    }).join("") || `<p class="hint">${stores.length ? '검색하거나 지도 핀을 선택하세요. 전체 목록은 요청할 때만 표시합니다.' : '조회 조건에 맞는 매장이 없습니다.'}</p>`;
     $("#periodListMore").hidden = !periodListLimit || stores.length <= periodListLimit;
     const toggle=$('#togglePeriodList');if(toggle){toggle.textContent=periodListLimit?'접기':'펼치기';toggle.setAttribute('aria-expanded',String(!!periodListLimit));}
     $("#periodListMore").textContent = periodListLimit ? '매장 100개 더 보기' : '목록 보기 (100개씩)';
