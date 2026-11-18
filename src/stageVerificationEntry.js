@@ -148,7 +148,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const postalEnabled = stage.OPSMAP_SHADOW_COVERAGE_FORMAT==='postal';
   const remotePostal = postalEnabled ? createStagePostalAssets({env:stage,fetchImpl,now}) : null;
   const staffRegistry = createStageStaffRegistryAsset({env:stage,fetchImpl,now});
-  const nationalRegistry = createStageNationalRegistryReader({store:createStageNationalRegistryStorage({env:stage,fetchImpl,now}),now});
+  const nationalRegistry = createStageNationalRegistryReader({store:createStageNationalRegistryStorage({env:stage,fetchImpl,now}),now,
+    log:result=>console.info(JSON.stringify({component:'stage-national-registry-readback',...result}))});
   const readRecentOperations = createRecentOperationsReader({now,
     readSeed:createStageRecentOperationsSeed({env:stage,fetchImpl,manifest:recentOperationsBaseline,
       log:value=>console.info(JSON.stringify({component:'stage-recent-operations-baseline',...value}))}),

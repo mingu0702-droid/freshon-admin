@@ -318,10 +318,11 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
   if (!stageFixedMasterSyncEnabled(env) || env.FRESHON_BASE_URL && new URL(env.FRESHON_BASE_URL).origin!==MIS) {
     throw fail('FIXED_MASTER_STAGE_SOURCE_SCOPE');
   }
-  // The verified three-center read took 33 minutes at the existing sequential page rate.
+  // Keep the existing count and boundary rechecks while shortening the time between pages.
   const limit=AbortSignal.timeout(FIXED_MASTER_WORKER_LIMIT-5*minute);
   let cookie=env.FRESHON_COOKIE || '', attemptedLogin=false, calls=0;
   const reader=createFixedVehicleReader({
+    pageConcurrency:2,
     verifyLastPage:true,
     async ensureSession(force) {
       limit.throwIfAborted();

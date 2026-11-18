@@ -299,9 +299,11 @@ async function readHead(store) {
   return {head:value,etag};
 }
 
-export function createStageNationalRegistryReader({store,now=Date.now}={}) {
+export function createStageNationalRegistryReader({store,now=Date.now,log=()=>{}}={}) {
   if (!store) return null;
   let saved,pending,checkAt=0;
+  const reportReadFailure=error=>log({state:'READ_FAILED',error:/^(?:NATIONAL_REGISTRY|FIXED_STORE)_[A-Z_]+$/.test(error?.code||'')?
+    error.code:'NATIONAL_REGISTRY_STORAGE_READ_FAILED',usingPrevious:!!saved});
   return {read() {
     if (now()<checkAt) return Promise.resolve(saved);
     pending ??= (async()=>{
@@ -309,10 +311,16 @@ export function createStageNationalRegistryReader({store,now=Date.now}={}) {
         const {head}=await readHead(store);
         if (!head.current) return saved;
         if (saved?.ref.version===head.current.version && saved.ref.checkedAt===head.current.checkedAt) return saved;
-        try {saved={ref:head.current,rows:await decode(store,head.current),lastSuccessAt:head.lastSuccessAt};}
-        catch(error) {if (!saved&&head.previous) saved={ref:head.previous,rows:await decode(store,head.previous),lastSuccessAt:null};}
+        try {
+          saved={ref:head.current,rows:await decode(store,head.current),lastSuccessAt:head.lastSuccessAt};
+          log({state:'VERIFIED',version:saved.ref.version,count:saved.rows.length,checkedAt:saved.ref.checkedAt});
+        }
+        catch(error) {
+          if (!saved&&head.previous) saved={ref:head.previous,rows:await decode(store,head.previous),lastSuccessAt:null};
+          reportReadFailure(error);
+        }
         return saved;
-      } catch {return saved;}
+      } catch(error) {reportReadFailure(error);return saved;}
       finally {checkAt=now()+60_000;}
     })().finally(()=>{pending=null;});
     return pending;
