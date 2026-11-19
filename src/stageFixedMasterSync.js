@@ -314,7 +314,7 @@ export function createStageDailyFixedMasterReader({store, baseline}) {
   };
 }
 
-export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, login}={}) {
+export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, login, onScan}={}) {
   if (!stageFixedMasterSyncEnabled(env) || env.FRESHON_BASE_URL && new URL(env.FRESHON_BASE_URL).origin!==MIS) {
     throw fail('FIXED_MASTER_STAGE_SOURCE_SCOPE');
   }
@@ -324,6 +324,8 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
   const reader=createFixedVehicleReader({
     pageConcurrency:2,
     verifyLastPage:true,
+    strictPageCounts:true,
+    onScan,
     async ensureSession(force) {
       limit.throwIfAborted();
       if (!force && cookie) return;

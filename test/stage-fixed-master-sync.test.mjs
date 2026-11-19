@@ -358,7 +358,7 @@ test('the source reads only the scoped FreshOn form with at most one authorized 
       return Response.json({data:[{...raw()[index],totalCnt:1}]});
     }});
   const result=await read(new Set([codes[1]]));
-  assert.equal(calls,4);
+  assert.equal(calls,7);
   assert.equal(logins,1);
   assert.equal(result.meta.uniqueCustomers,3);
   assert.deepEqual(result.data.map(row=>row.customerCode),[codes[1]]);

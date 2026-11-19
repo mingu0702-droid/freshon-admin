@@ -7,9 +7,9 @@ import {fixedEnvelope} from '../src/fixedVehicleStore.js';
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const row=(i,total,vehicle='221')=>({estCd:'T'+String(i).padStart(6,'0'),mainCarSeqNm:vehicle,totalCnt:total});
 
-function fixture(reply,{pageConcurrency=2,session=async()=>{}}={}){
+function fixture(reply,{pageConcurrency=2,session=async()=>{},verifyLastPage,strictPageCounts,onScan}={}){
   let active=0,maxActive=0;const calls=[];
-  const reader=createFixedVehicleReader({pageConcurrency,ensureSession:session,sleep:async()=>{},extractRows:p=>p.data,
+  const reader=createFixedVehicleReader({pageConcurrency,verifyLastPage,strictPageCounts,onScan,ensureSession:session,sleep:async()=>{},extractRows:p=>p.data,
     readJson:async(url,options)=>{
       assert.equal(url,'/bo/wm/standard/fixedAlctnList');assert.equal(options.method,'POST');assert.equal(options.timeoutMs,60000);
       const query=new URLSearchParams(options.body),center=query.get('logCd'),page=Number(query.get('page'));
@@ -53,6 +53,35 @@ test('a successful bounded rescan publishes none of the discarded batch values',
   });
   const result=await f.reader();assert.equal(result.meta.centers[0].scan,1);assert.equal(result.meta.sourceRows,3002);assert.equal(result.data.length,3002);
   assert(result.data.every(row=>row.baseVehicle==='202'));assert.equal(f.reader.getProgress().complete,true);assert.equal(f.reader.getProgress().failureCode,null);assert.equal(f.active,0);assert.equal(zeroReads,3);
+});
+
+test('Stage compares both page boundaries and logs count drift in the failing center across two scans',async()=>{
+  let first=0,last=0;const evidence=[];
+  const f=fixture(async({center,page})=>{
+    await pause(1);
+    if(center==='011')return {data:[row(2300,1)]};
+    assert.equal(center,'012');
+    if(page===0){first++;return {data:Array.from({length:1000},(_,i)=>row(i,1001))};}
+    last++;return {data:[row(1000,last%2===0?1002:1001)]};
+  },{verifyLastPage:true,strictPageCounts:true,onScan:item=>evidence.push(item)});
+  await assert.rejects(f.reader(),{code:'FIXED_MASTER_COUNT_CHANGED'});
+  assert.equal(first,4);assert.equal(last,4);assert.equal(f.active,0);assert.equal(f.maxActive,2);
+  assert.deepEqual(evidence.slice(1).map(e=>[e.center,e.scan,e.firstDeclaredRows,e.followupDeclaredRows,e.countChange]),
+    [1,2].map(attempt=>['012',attempt,1001,1001,{phase:'VERIFY',page:1,expectedRows:1001,declaredRows:1002}]));
+  assert(evidence.slice(1).every(e=>e.verification.length===2&&e.verification.some(page=>page.page===0&&page.declaredRows===1001)));
+});
+
+test('Stage requires a declared count on each populated page and verifies an exact-size final page',async()=>{
+  const stable=Array.from({length:1000},(_,i)=>row(i,1000));
+  const f=fixture(async({center,page})=>{
+    assert.equal(page,0);
+    return {data:center==='011'?stable:[row(center==='012'?2001:2002,1)]};
+  },{verifyLastPage:true,strictPageCounts:true});
+  assert.equal((await f.reader()).meta.sourceRows,1002);
+  assert.deepEqual(f.calls,[['011',0],['011',0],['012',0],['012',0],['013',0],['013',0]]);
+  const missing=fixture(async({page})=>({data:page===0?stable.map(item=>({...item,totalCnt:1001})):[row(1000,undefined)]}),
+    {verifyLastPage:true,strictPageCounts:true});
+  await assert.rejects(missing.reader(),{code:'FIXED_MASTER_COUNT_INVALID'});
 });
 
 test('parallel initial 401 responses share exactly one existing-session recovery',async()=>{
