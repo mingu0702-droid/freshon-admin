@@ -118,8 +118,10 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
       let complete = false,centerRows=0,expectedRows=null;
       let followupDeclaredRows=null, countChange=null;
       const verification=[];
-      const reportScan=(state,error=null)=>onScan?.({center:logCd,scan:scan+1,state,error,firstDeclaredRows:expectedRows,
-        followupDeclaredRows,acceptedPages:pageHashes.size,acceptedRows:centerRows,countChange,verification});
+      const reportScan=(state,error)=>onScan?.({center:logCd,scan:scan+1,state,error:error?progress.failureCode:null,
+        failedPage:error?(countChange?.page??verification.find(item=>item.state!=='SAME')?.page??progress.page):null,
+        sourceHttp:error?.status??null,firstDeclaredRows:expectedRows,followupDeclaredRows,
+        acceptedPages:pageHashes.size,acceptedRows:centerRows,countChange,verification});
       try{
       // Same bounded paging contract as scraper/freshonFixedDispatch.js.
       for (let page = 0; page < 120; page++) {
@@ -196,8 +198,11 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         const boundaries=[[firstReadOptions,firstPageHash],
           ...(verifyLastPage&&lastReadOptions&&lastReadOptions!==firstReadOptions?[[lastReadOptions,lastPageHash]]:[])];
         async function verifyPage([options,original]) {
-          const check=await readPage(options),rows=Array.isArray(check?.data)?check.data:extractRows(check);
           const page=Number(new URLSearchParams(options.body).get('page'));
+          let check;
+          try {check=await readPage(options);}
+          catch(error){verification.push({page,state:'REQUEST_FAILED'});throw error;}
+          const rows=Array.isArray(check?.data)?check.data:extractRows(check);
           const raw=rows?.[0]?.totalCnt,declaredRows=raw!=null&&Number.isSafeInteger(Number(raw))&&Number(raw)>=0?Number(raw):null;
           const comparison={page,declaredRows,rows:Array.isArray(rows)?rows.length:null,state:'SAME'};
           verification.push(comparison);
@@ -230,7 +235,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         // Outcome promises never reject, so unused failed pages cannot crash Node.
         await Promise.all(batch.values());batch.clear();
         progress={...progress,phase:'ERROR',complete:false,failureCode:/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_READ_FAILED'};
-        reportScan('REJECTED',progress.failureCode);
+        reportScan('REJECTED',error);
         if(!['FIXED_MASTER_COUNT_CHANGED','FIXED_MASTER_SOURCE_CHANGED'].includes(error.code)||scan===1)throw error;
         // Discard only the unstable candidate for this center. The existing
         // persisted projection is never changed by a failed or partial scan.

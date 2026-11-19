@@ -436,9 +436,18 @@ test('the existing Stage receipt route passes only the verified registry scope t
   approvedScope=scope;
   assert.equal((await post(signed)).status,202);
   assert.deepEqual(JSON.parse(input),{receipt:signed,fixedScope:scope});
+  const boundary={page:7,rows:699,declaredRows:7699,state:'COUNT_CHANGED'};
+  const drift={phase:'VERIFY',page:7,expectedRows:7693,declaredRows:7699};
+  const scan={component:'opsmap-fixed-master-pages',runId:signed.runId,center:'012',scan:1,state:'REJECTED',
+    error:'FIXED_MASTER_COUNT_CHANGED',firstDeclaredRows:7693,followupDeclaredRows:7693,acceptedPages:8,acceptedRows:7693,
+    failedPage:7,sourceHttp:200,countChange:drift,verification:[boundary]};
+  child.stdout.write(JSON.stringify({...scan,runId:sha('unrelated')})+'\n');
+  child.stdout.write(JSON.stringify({...scan,private:'ignored',verification:[{...boundary,customerCode:'S123456'}]})+'\n');
   child.stdout.write('secret fixture ignored\n'+JSON.stringify({component:'opsmap-fixed-master-sync',state:'PUBLISHED',
-    runId:signed.runId,version:sha('version'),private:'ignored'})+'\n');
+    runId:signed.runId,version:sha('version'),matchedCount:16100,private:'ignored'})+'\n');
   child.emit('close',0);
-  assert.deepEqual(logs[0],{component:'opsmap-fixed-master-sync',runId:signed.runId,state:'PUBLISHED',version:sha('version'),error:null});
-  assert.equal(logs.length,2);
+  assert.deepEqual(logs[0],scan);
+  assert.deepEqual(logs[1],{component:'opsmap-fixed-master-sync',runId:signed.runId,state:'PUBLISHED',version:sha('version'),
+    checkedAt:null,matchedCount:16100,error:null});
+  assert.equal(logs.length,3);
 });

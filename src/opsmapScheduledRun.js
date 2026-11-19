@@ -16,6 +16,24 @@ const maxRuntime=18*60_000;
 const kstDate=ms=>new Date(ms+9*HOUR).toISOString().slice(0,10);
 const jobFile=fileURLToPath(new URL('../scripts/run-opsmap-data-sync.mjs',import.meta.url));
 const sourceKeys=new Set(['customerRegistry','delivery:1','delivery:2','delivery:3','delivery:4']);
+const fixedCenters=['011','012','013'];
+const boundedCount=(value,max=120_000)=>Number.isSafeInteger(value)&&value>=0&&value<=max?value:null;
+const fixedError=value=>/^FIXED_(?:MASTER|STORE)_[A-Z_]{1,70}$/.test(value||'')?value:null;
+
+function fixedScanSummary(value) {
+  if (!fixedCenters.includes(value.center) || ![1,2].includes(value.scan) || !['VERIFIED','REJECTED'].includes(value.state)) return null;
+  const change=value.countChange;
+  const verification=Array.isArray(value.verification)?value.verification.slice(0,2).flatMap(page=>{
+    if (!page || !['SAME','COUNT_CHANGED','CUSTOMERS_CHANGED','ORDER_CHANGED','ASSIGNMENTS_CHANGED','REQUEST_FAILED'].includes(page.state)) return [];
+    return [{page:boundedCount(page.page,119),declaredRows:boundedCount(page.declaredRows),rows:boundedCount(page.rows,1000),state:page.state}];
+  }):[];
+  return {center:value.center,scan:value.scan,state:value.state,error:fixedError(value.error),
+    firstDeclaredRows:boundedCount(value.firstDeclaredRows),followupDeclaredRows:boundedCount(value.followupDeclaredRows),
+    acceptedPages:boundedCount(value.acceptedPages,120),acceptedRows:boundedCount(value.acceptedRows),
+    failedPage:boundedCount(value.failedPage,119),sourceHttp:Number.isSafeInteger(value.sourceHttp)&&value.sourceHttp>=100&&value.sourceHttp<=599?value.sourceHttp:null,
+    countChange:change&&['READ','VERIFY'].includes(change.phase)?{phase:change.phase,page:boundedCount(change.page,119),
+      expectedRows:boundedCount(change.expectedRows),declaredRows:boundedCount(change.declaredRows)}:null,verification};
+}
 
 function recordSource(sources,key,date,error,evidence) {
   if(!sourceKeys.has(key))return;
@@ -93,11 +111,16 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
           if (c!=='\n') {if (!discarded) {line+=c;if(line.length>1024)discarded=true;} continue;}
           try {
             const value=!discarded&&JSON.parse(line);
+            if(value?.component==='opsmap-fixed-master-pages' && value.runId===receipt.runId) {
+              const scan=fixedScanSummary(value);
+              if(scan)log(JSON.stringify({component:value.component,runId:receipt.runId,...scan}));
+            }
             if(value?.component==='opsmap-fixed-master-sync' && value.runId===receipt.runId &&
                ['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','BUSY','RETRY_HELD','FAILED'].includes(value.state)) {
               log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
                 version:syncHash(value.version)?value.version:null,
-                error:/^FIXED_(?:MASTER|STORE)_[A-Z_]{1,70}$/.test(value.error||'')?value.error:null}));
+                checkedAt:Number.isFinite(Date.parse(value.checkedAt))?value.checkedAt:null,
+                matchedCount:boundedCount(value.matchedCount),error:fixedError(value.error)}));
             }
             if(value?.component==='opsmap-national-registry-sync' && value.runId===receipt.runId &&
                ['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','BUSY','ALREADY_ATTEMPTED','FAILED'].includes(value.state)) {
