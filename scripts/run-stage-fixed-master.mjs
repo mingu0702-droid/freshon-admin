@@ -11,13 +11,18 @@ import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
 
 const env = process.env;
 
-async function readIndependentScope() {
+async function readIndependentScope(mode) {
+  // Local recovery can read the same private Stage repository with its
+  // approved writer if no separate snapshot reader was provided.
+  const readEnv=mode==='recover'&&!env.OPSMAP_SNAPSHOT_STORE_TOKEN
+    ? {...env,OPSMAP_SNAPSHOT_STORE_TOKEN:env.OPSMAP_STAGE_SYNC_WRITE_TOKEN}
+    : env;
   const baseline=stageVerifiedBaselineConfig(env,env.OPSMAP_STAGE_INDEPENDENT_BASELINE_JSON);
-  const staff=createStageStaffRegistryAsset({env});
-  const national=createStageNationalRegistryReader({store:createStageNationalRegistryStorage({env})});
+  const staff=createStageStaffRegistryAsset({env:readEnv});
+  const national=createStageNationalRegistryReader({store:createStageNationalRegistryStorage({env:readEnv})});
   if (!baseline || !staff || !national) throw Error('FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE');
   const durable=createOpsmapDurableGeneration({
-    ...stageOpsmapDurableStorage({env,baselineKey:baseline.baselineKey}),readOnlyView:true,retainCoverageFiles:false
+    ...stageOpsmapDurableStorage({env:readEnv,baselineKey:baseline.baselineKey}),readOnlyView:true,retainCoverageFiles:false
   });
   try {
     const generation=checkStageVerifiedBaseline(await durable.readBaseline(baseline.ref));
@@ -78,7 +83,7 @@ async function run() {
     return;
   }
   const store = stageFixedMasterStorage({env, write: true});
-  const scope = await readIndependentScope();
+  const scope = await readIndependentScope(mode);
   if (!scope) throw Error('FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE');
   const baseline = stageFixedMasterBaseline({env, store});
   const result = await syncStageFixedMaster({
