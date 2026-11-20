@@ -7,9 +7,9 @@ import {fixedEnvelope} from '../src/fixedVehicleStore.js';
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const row=(i,total,vehicle='221')=>({estCd:'T'+String(i).padStart(6,'0'),mainCarSeqNm:vehicle,totalCnt:total});
 
-function fixture(reply,{pageConcurrency=2,session=async()=>{},verifyLastPage,strictPageCounts,onScan,onPage,onPreflight}={}){
+function fixture(reply,{pageConcurrency=2,session=async()=>{},verifyLastPage,strictPageCounts,onScan,onPage,onPreflight,remainingPageRequests}={}){
   let active=0,maxActive=0;const calls=[];
-  const reader=createFixedVehicleReader({pageConcurrency,verifyLastPage,strictPageCounts,onScan,onPage,onPreflight,ensureSession:session,sleep:async()=>{},extractRows:p=>p.data,
+  const reader=createFixedVehicleReader({pageConcurrency,verifyLastPage,strictPageCounts,onScan,onPage,onPreflight,remainingPageRequests,ensureSession:session,sleep:async()=>{},extractRows:p=>p.data,
     readJson:async(url,options)=>{
       assert.equal(url,'/bo/wm/standard/fixedAlctnList');assert.equal(options.method,'POST');assert.equal(options.timeoutMs,60000);
       const query=new URLSearchParams(options.body),center=query.get('logCd'),page=Number(query.get('page'));
@@ -71,6 +71,18 @@ test('count drift discards only the failed center batch and stops after one boun
   assert.equal(f.reader.getProgress().complete,false);assert.equal(f.reader.getProgress().phase,'ERROR');assert.equal(f.reader.getProgress().completedCenters.length,0);
   assert.deepEqual(pages,[1,2].map(scan=>({center:'011',scan,page:0,rows:1000,
     declaredRows:3000+scan*2,acceptedRows:1000})));
+});
+
+test('does not start a rescan that cannot fit the remaining source requests',async()=>{
+  const evidence=[];
+  const f=fixture(async({page})=>({data:Array.from({length:1000},(_,index)=>row(page*1000+index,page?81611:81610))}),{
+    strictPageCounts:true,verifyLastPage:true,remainingPageRequests:()=>83,onScan:value=>evidence.push(value)
+  });
+  await assert.rejects(f.reader(),{code:'FIXED_MASTER_RETRY_BUDGET'});
+  assert.deepEqual(f.calls,[['011',0],['011',1],['011',2]]);
+  assert.equal(evidence[0].error,'FIXED_MASTER_COUNT_CHANGED');
+  assert.equal(evidence[0].countChange.declaredRows,81611);
+  assert.equal(f.reader.getProgress().complete,false);
 });
 
 test('a successful bounded rescan publishes none of the discarded batch values',async()=>{

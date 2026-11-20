@@ -325,6 +325,7 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
   }
   // Keep the existing count and boundary rechecks while shortening the time between pages.
   const limit=AbortSignal.timeout(preflightOnly?3*minute:FIXED_MASTER_WORKER_LIMIT-5*minute);
+  const pageRequestLimit=120;
   let cookie=env.FRESHON_COOKIE || '', attemptedLogin=false, calls=0;
   const reader=createFixedVehicleReader({
     pageConcurrency:2,
@@ -333,6 +334,7 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
     onScan,
     onPage,
     onPreflight,
+    remainingPageRequests:()=>pageRequestLimit-calls,
     async ensureSession(force) {
       limit.throwIfAborted();
       if (!force && cookie) return;
@@ -348,7 +350,7 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
       cookie=result.cookie;
     },
     async readJson(pathname,options) {
-      if (pathname!==fixedPath || options.method!=='POST' || ++calls>120) throw fail('FIXED_MASTER_STAGE_SOURCE_SCOPE');
+      if (pathname!==fixedPath || options.method!=='POST' || ++calls>pageRequestLimit) throw fail('FIXED_MASTER_STAGE_SOURCE_SCOPE');
       const pageDeadline=AbortSignal.timeout(options.timeoutMs);
       let response;
       try {

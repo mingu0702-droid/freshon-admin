@@ -67,7 +67,7 @@ const pageIdentity=rows=>{
 };
 
 export function createFixedVehicleReader({ensureSession, readJson, extractRows, pageConcurrency=1, verifyLastPage=false,
-  strictPageCounts=false, onScan, onPage, onPreflight, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
+  strictPageCounts=false, onScan, onPage, onPreflight, remainingPageRequests, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
   if(![1,2].includes(pageConcurrency))throw Object.assign(Error('FIXED_MASTER_CONCURRENCY_INVALID'),{code:'FIXED_MASTER_CONCURRENCY_INVALID'});
   let progress=null;
   const reader=async function readFixedVehicleMaster({signal, customerCodes,preflightOnly=false}={}) {
@@ -272,6 +272,15 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         progress={...progress,phase:'ERROR',complete:false,failureCode:/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_READ_FAILED'};
         reportScan('REJECTED',error);
         if(!['FIXED_MASTER_COUNT_CHANGED','FIXED_MASTER_SOURCE_CHANGED'].includes(error.code)||scan===1)throw error;
+        // Use the newest declared count to avoid starting a full rescan that
+        // cannot fit within the remaining approved source requests.
+        const nextRows=countChange?.declaredRows ?? expectedRows;
+        const pages=Math.ceil(nextRows/pageSize);
+        const rechecks=verifyLastPage&&pages>1?2:1;
+        if(pages>0&&remainingPageRequests&&remainingPageRequests()<pages+rechecks){
+          progress={...progress,failureCode:'FIXED_MASTER_RETRY_BUDGET'};
+          throw failure('FIXED_MASTER_RETRY_BUDGET',0,'REVALIDATING','SOURCE_LIMIT');
+        }
         // Discard only the unstable candidate for this center. The existing
         // persisted projection is never changed by a failed or partial scan.
         progress={...progress,phase:'REVALIDATING',scan:scan+1};await sleep(1000);
