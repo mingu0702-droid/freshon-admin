@@ -32,7 +32,9 @@ test('manual refresh retries an existing stale version once without automatic re
 
 test('overlapping stale refreshes share the active UI load and remain unconfirmed if the cache is still stale',async()=>{
  let finish;const f=fixture({stale:true,refreshMaster:()=>new Promise(resolve=>{finish=resolve;})});const pending=f.ui.toggle();
- await f.ui.refresh();assert.equal(f.reads(),1);assert.equal(f.ui.state().polygons,0);finish();await pending;assert.equal(f.reads(),1);assert.equal(f.ui.state().reason,'MASTER_STALE');assert.equal(f.ui.state().vehicles[0].reason,'MASTER_STALE');await f.ui.renderForSelection();assert.equal(f.reads(),1);
+ const overlapping=f.ui.refresh();assert.equal(f.reads(),1);assert.equal(f.ui.state().polygons,0);
+ finish();await Promise.all([pending,overlapping]);
+ assert.equal(f.reads(),1);assert.equal(f.ui.state().reason,'MASTER_STALE');assert.equal(f.ui.state().vehicles[0].reason,'MASTER_STALE');await f.ui.renderForSelection();assert.equal(f.reads(),1);
 });
 
 test('a missing master version still uses the existing loader once',async()=>{
