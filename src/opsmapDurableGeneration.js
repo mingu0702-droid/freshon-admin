@@ -26,10 +26,11 @@ const metadataFiles = new Map([
   ['input/source-import.safe.json',32_768],['coverage/coverage-index.json',16_384]
 ]);
 
-export function stageVerifiedBaselineConfig(env = process.env) {
+export function stageVerifiedBaselineConfig(env = process.env, independentBaselineJson) {
   if (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN) return null;
   try {
-    const config = JSON.parse(readFileSync('/etc/secrets/opsmap-stage-baseline-v1.json','utf8'));
+    const config = JSON.parse(independentBaselineJson ??
+      readFileSync('/etc/secrets/opsmap-stage-baseline-v1.json','utf8'));
     const baselineKey = Buffer.from(config.key || '','base64');
     if (baselineKey.length !== 32 || config.ref?.generation !== 'afa2699571a45ef38300a2c4477b18e27b29e235dd24c3f252983d3c110b5014') {
       throw Error('STAGE_BASELINE_CONFIG');

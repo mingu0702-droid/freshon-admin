@@ -14,16 +14,16 @@ const syntheticKey='a'.repeat(32);
 function fixture({cached=true,presetKey=false,reply=async()=>({ok:true,json:async()=>({javascriptKey:'b'.repeat(32),driverContactEnabled:true})}),lookupReply}={}) {
   const calls={config:0,scripts:0,loads:0,events:[],logs:0,configOptions:[],scriptUrls:[]};
   const root={location:{origin:'https://synthetic.invalid'},KAKAO_MAP_CONFIG:presetKey?{javascriptKey:syntheticKey}:{},
-    dispatchEvent:event=>calls.events.push({type:event.type,enabled:root.OPSMAP_DRIVER_CONTACT_ENABLED})};
+    dispatchEvent:event=>{if(event.type==='map-driver-capability')calls.events.push({type:event.type,enabled:root.OPSMAP_DRIVER_CONTACT_ENABLED});}};
   const sdk=()=>({maps:{load:callback=>{calls.loads++;callback();}}});
   if(cached)root.kakao=sdk();
   const document={getElementById:()=>null,createElement:()=>({remove(){}}),head:{append:node=>{
     calls.scripts++;calls.scriptUrls.push(node.src);root.kakao=sdk();queueMicrotask(()=>node.onload());
   }}};
-  const context={window:root,document,location:root.location,URL,CustomEvent:class{constructor(type){this.type=type;}},
+  const context={window:root,document,location:root.location,URL,Event,AbortController,CustomEvent:class{constructor(type){this.type=type;}},
     setTimeout,clearTimeout,queueMicrotask,
     console:Object.fromEntries(['log','info','warn','error','debug'].map(name=>[name,()=>{calls.logs++;}])),
-    fetch:async(url,options)=>{if(url==='/api/map-phase2b/private/address-lookup'){assert(lookupReply,'proxy must be explicitly stubbed');return lookupReply(url,options);}assert.equal(url,'/api/map-phase2b/private/map-sdk-config');calls.config++;calls.configOptions.push(options);return reply();}};
+    fetch:async(url,options)=>{if(url==='/api/map-phase2b/private/address-lookup'){assert(lookupReply,'proxy must be explicitly stubbed');return lookupReply(url,options);}assert.equal(url,'/api/map-phase2b/private/map-sdk-config?sdkOnly=1');calls.config++;calls.configOptions.push(options);return reply();}};
   vm.runInNewContext(source,context,{filename:'synthetic-kakao-adapter.js'});
   return {root,calls};
 }
@@ -45,16 +45,16 @@ test('production browser never enables an unreserved direct address lookup from 
  await root.KakaoMapsAdapter.ready();assert.equal(root.KAKAO_MAP_CONFIG.allowExternalAddressLookup,false);
 });
 
-test('authorized browser geocoder posts only to the staff REST proxy and closes on proxy error',async()=>{
+test('authorized browser geocoder posts only to the staff REST proxy and closes at the daily limit',async()=>{
  let requests=0;
  const {root}=fixture({reply:async()=>({ok:true,json:async()=>({allowExternalAddressLookup:true,addressLookupServerProxy:true})}),lookupReply:async(_url,options)=>{
-  requests++;assert.equal(options.method,'POST');assert.equal(options.cache,'no-store');assert.equal(JSON.parse(options.body).query,'합성주소');
-  return requests===1?{ok:true,json:async()=>({ok:true,data:{documents:[{x:'127',y:'37'}],status:'OK'}})}:{ok:false,json:async()=>({ok:false})};
+  requests++;assert.equal(options.method,'POST');assert.equal(options.cache,'no-store');assert.equal(JSON.parse(options.body).query,requests===1?'합성주소':'다른 합성주소');
+  return requests===1?{ok:true,json:async()=>({ok:true,data:{documents:[{x:'127',y:'37'}],status:'OK'}})}:{ok:false,status:429,json:async()=>({ok:false,error:'GEOCODE_DAILY_LIMIT'})};
  }});
  await root.KakaoMapsAdapter.ready();assert.equal(root.KAKAO_MAP_CONFIG.allowExternalAddressLookup,true);
  const geocoder=root.KakaoMapsAdapter.geocoder();assert.equal(geocoder.serverProxy,true);
  assert.equal((await new Promise(resolve=>geocoder.addressSearch('합성주소',(_rows,status)=>resolve(status)))),'OK');
- assert.equal((await new Promise(resolve=>geocoder.addressSearch('합성주소',(_rows,status)=>resolve(status)))),'ERROR');
+ assert.equal((await new Promise(resolve=>geocoder.addressSearch('다른 합성주소',(_rows,status)=>resolve(status)))),'GEOCODE_DAILY_LIMIT');
  assert.equal(root.KAKAO_MAP_CONFIG.allowExternalAddressLookup,false);assert.equal(requests,2);
 });
 

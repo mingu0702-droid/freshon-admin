@@ -67,10 +67,10 @@ const pageIdentity=rows=>{
 };
 
 export function createFixedVehicleReader({ensureSession, readJson, extractRows, pageConcurrency=1, verifyLastPage=false,
-  strictPageCounts=false, onScan, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
+  strictPageCounts=false, onScan, onPage, onPreflight, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
   if(![1,2].includes(pageConcurrency))throw Object.assign(Error('FIXED_MASTER_CONCURRENCY_INVALID'),{code:'FIXED_MASTER_CONCURRENCY_INVALID'});
   let progress=null;
-  const reader=async function readFixedVehicleMaster({signal, customerCodes}={}) {
+  const reader=async function readFixedVehicleMaster({signal, customerCodes,preflightOnly=false}={}) {
     progress={phase:'SESSION',center:null,page:0,sourceRows:0,retries:0,completedCenters:[],pageConcurrency};
     const failure=(code,http=0,step='READ',kind='UNKNOWN')=>Object.assign(new Error(code),{code,status:Number(http)||0,step,kind});
     try{await ensureSession();}catch(error){throw failure('FIXED_MASTER_SESSION_UNAVAILABLE',error.status);}
@@ -110,7 +110,42 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
     const projected = [], allCustomerKeys=customerCodes ? new Set() : null;
     let sourceRows=0, pagingFieldRows=0;
     const centers=[];
-    for (const logCd of ['011', '012', '013']) {
+    const centerCodes=['011','012','013'];
+    const pageOptions=(logCd,page)=>({
+      method:'POST',timeoutMs:60000,
+      headers:{'content-type':'application/x-www-form-urlencoded; charset=UTF-8'},
+      body:new URLSearchParams({page:String(page),size:String(pageSize),isPaging:'true',isCount:'true',
+        sort:'est_cd,ASC',logCd,estCd:'',estName:'',estNm:'',estGbn:'',startDate:'',endDate:'',
+        carCd:'',carNm:'',shipGbn:'1',baecha:''}).toString()
+    });
+    const firstPages=new Map();
+    if (onPreflight || preflightOnly) {
+      for (const center of centerCodes) {
+        let declaredRows=null;
+        try {
+          const payload=await readPage(pageOptions(center,0));
+          const rows=Array.isArray(payload?.data)?payload.data:extractRows(payload);
+          const declared=rows?.[0]?.totalCnt;
+          declaredRows=declared==null?null:Number(declared);
+          if (!Number.isSafeInteger(declaredRows)||declaredRows<=0||rows.length!==Math.min(pageSize,declaredRows)) {
+            throw failure('FIXED_MASTER_COUNT_INVALID',200,'PAGE_COUNT','SOURCE_CONTRACT');
+          }
+          if (inspectFixedMasterKeys(rows).invalid ||
+              !['mainCarSeqNm',...weekdayFields].every(key=>rows.some(row=>Object.hasOwn(row,key)))) {
+            throw failure('FIXED_MASTER_DAILY_RESPONSE_INVALID',200,'KEY_CONTRACT','SOURCE_CONTRACT');
+          }
+          if (!preflightOnly) firstPages.set(center,{data:rows.map(row=>({...projectedRow(row,center),totalCnt:row.totalCnt}))});
+          onPreflight?.({center,page:0,state:'VERIFIED',sourceHttp:200,declaredRows,rows:rows.length});
+        } catch (error) {
+          const code=/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_READ_FAILED';
+          onPreflight?.({center,page:0,state:'REJECTED',sourceHttp:error.status||null,
+            declaredRows:Number.isSafeInteger(declaredRows)?declaredRows:null,error:code});
+          throw error;
+        }
+      }
+      if (preflightOnly) return {state:'FIRST_PAGES_VERIFIED',centerCount:centerCodes.length};
+    }
+    for (const logCd of centerCodes) {
       let accepted=false;
       for(let scan=0;scan<2&&!accepted;scan++){
       const centerProjection=[],pageHashes=new Set(),centerCustomerKeys=new Set(),duplicateCustomerKeys=new Set(),batch=new Map();
@@ -126,13 +161,9 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
       // Same bounded paging contract as scraper/freshonFixedDispatch.js.
       for (let page = 0; page < 120; page++) {
         progress={...progress,phase:'READ',center:logCd,page,sourceRows:sourceRows+centerRows,scan,expectedRows,complete:false,failureCode:null,failureStep:null};
-        const body = new URLSearchParams({page: String(page), size: String(pageSize), isPaging: 'true', isCount: 'true',
-          sort: 'est_cd,ASC', logCd, estCd: '', estName: '', estNm: '', estGbn: '', startDate: '', endDate: '',
-          carCd: '', carNm: '', shipGbn: '1', baecha: ''});
         // Large existing master offset pages exceed the daily-reader 25s
         // deadline. Keep this read-only master budget separate from collectors.
-        const options={method: 'POST',timeoutMs:60000,
-          headers: {'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}, body: body.toString()};
+        const options=pageOptions(logCd,page);
         if(page===0)firstReadOptions=options;
         // Only the existing numbered-page contract is used. A known count may
         // fill one bounded batch; no new batch starts before the old one drains.
@@ -141,7 +172,10 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
           const width=pageConcurrency===2&&page>0&&page+1<declaredPages&&page+1<120?2:1;
           for(let offset=0;offset<width;offset++){
             const pageNumber=page+offset,body=new URLSearchParams(options.body);body.set('page',String(pageNumber));
-            batch.set(pageNumber,readPage({...options,body:body.toString()}).then(payload=>({payload}),error=>({error})));
+            const firstPage=pageNumber===0?firstPages.get(logCd):null;
+            if(firstPage)firstPages.delete(logCd);
+            batch.set(pageNumber,firstPage?Promise.resolve({payload:firstPage}):
+              readPage({...options,body:body.toString()}).then(payload=>({payload}),error=>({error})));
           }
         }
         const outcome=await batch.get(page);batch.delete(page);
@@ -188,6 +222,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         if(page===0)firstPageHash=pageIdentity(minimal);
         if(rows.length){lastPageHash=page===0?firstPageHash:pageIdentity(minimal);lastReadOptions=options;}
         centerProjection.push(...(customerCodes?minimal.filter(row=>customerCodes.has(normalizeFixedMasterCustomerKey(row.estCd))):minimal));
+        onPage?.({center:logCd,scan:scan+1,page,rows:rows.length,declaredRows:expectedRows,acceptedRows:centerRows});
         if (rows.length < pageSize || strictPageCounts&&centerRows===expectedRows) {
           if(expectedRows!==null&&centerRows!==expectedRows)throw failure('FIXED_MASTER_INCOMPLETE');complete = true; break;
         }

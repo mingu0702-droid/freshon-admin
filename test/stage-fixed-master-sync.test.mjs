@@ -55,6 +55,36 @@ function memory() {
 const base=() => fixedEnvelope(source('099').data,new Date(start-hour).toISOString());
 const reader=baseValue=>({load:async()=>baseValue??null});
 
+test('an expired reservation reports interruption while the verified projection remains readable',async()=>{
+  const store=memory(), baseline=base();
+  let tick=start;
+  const now=()=>tick;
+  const run=readMaster=>syncStageFixedMaster({store,receipt:receipt(tick),now,scope,
+    readMaster,loadBaseline:reader(baseline).load});
+  const published=await run(async()=>source('122'));
+  tick+=24*hour;
+  let begin, end;
+  const started=new Promise(resolve=>{begin=resolve;});
+  const wait=new Promise(resolve=>{end=resolve;});
+  const pending=run(async()=>{begin();await wait;throw Error('FIXED_MASTER_DAILY_TIMEOUT');});
+  const settled=assert.rejects(pending,/FIXED_MASTER_DAILY_TIMEOUT/);
+  try {
+    await started;
+    const daily=createStageDailyFixedMasterReader({store,baseline:reader(baseline),now});
+    assert.equal((await daily.load()).version,published.version);
+    assert.equal(daily.status().state,'RUNNING');
+    tick+=50*60_000;
+    const persistedBefore=store.files.get(head).sha;
+    assert.equal((await daily.load()).version,published.version);
+    assert.equal(daily.status().state,'INTERRUPTED');
+    assert.equal(daily.status().lastError,'FIXED_MASTER_DAILY_ATTEMPT_EXPIRED');
+    assert.equal(store.files.get(head).sha,persistedBefore);
+  } finally {
+    end();
+    await settled;
+  }
+});
+
 test('complete daily projection is scoped, single-flight, and a no-change day verifies without a new object',async ()=>{
   let tick=start, calls=0;
   const store=memory(), baseline=base(), now=()=>tick;
@@ -442,12 +472,17 @@ test('the existing Stage receipt route passes only the verified registry scope t
     error:'FIXED_MASTER_COUNT_CHANGED',firstDeclaredRows:7693,followupDeclaredRows:7693,acceptedPages:8,acceptedRows:7693,
     failedPage:7,sourceHttp:200,countChange:drift,verification:[boundary]};
   child.stdout.write(JSON.stringify({...scan,runId:sha('unrelated')})+'\n');
+  const page={component:'opsmap-fixed-master-page-progress',runId:signed.runId,center:'012',
+    scan:1,page:7,rows:693,declaredRows:7693,acceptedRows:7693};
+  child.stdout.write(JSON.stringify({...page,page:120})+'\n');
+  child.stdout.write(JSON.stringify({...page,customerCode:'S123456'})+'\n');
   child.stdout.write(JSON.stringify({...scan,private:'ignored',verification:[{...boundary,customerCode:'S123456'}]})+'\n');
   child.stdout.write('secret fixture ignored\n'+JSON.stringify({component:'opsmap-fixed-master-sync',state:'PUBLISHED',
     runId:signed.runId,version:sha('version'),matchedCount:16100,private:'ignored'})+'\n');
   child.emit('close',0);
-  assert.deepEqual(logs[0],scan);
-  assert.deepEqual(logs[1],{component:'opsmap-fixed-master-sync',runId:signed.runId,state:'PUBLISHED',version:sha('version'),
+  assert.deepEqual(logs[0],page);
+  assert.deepEqual(logs[1],scan);
+  assert.deepEqual(logs[2],{component:'opsmap-fixed-master-sync',runId:signed.runId,state:'PUBLISHED',version:sha('version'),
     checkedAt:null,matchedCount:16100,error:null});
-  assert.equal(logs.length,3);
+  assert.equal(logs.length,4);
 });

@@ -80,9 +80,16 @@ test("snapshot latest date changes the cache namespace", () => {
 
 test("snapshot freshness requires recent generation and completed refresh", () => {
   const now = Date.parse("2026-09-05T00:00:00Z");
-  assert.equal(phase2bSnapshotMeta({ generatedAt: "2026-09-04T23:00:00Z", latestDate: "2026-09-04", rowCount: 1, refreshComplete: true }, now).stale, false);
-  assert.equal(phase2bSnapshotMeta({ generatedAt: "2026-09-04T23:00:00Z", latestDate: "2026-09-04", rowCount: 1, refreshComplete: false }, now).stale, true);
-  assert.equal(phase2bSnapshotMeta({ generatedAt: "2026-09-03T00:00:00Z", latestDate: "2026-09-03", rowCount: 1, refreshComplete: true }, now).stale, true);
+  const day = "2026-09-04";
+  const snapshot = {
+    generatedAt: "2026-09-04T23:00:00Z", latestDate: day, refreshedThrough: day,
+    rowCount: 1, refreshComplete: true,
+    sourceFreshness: { sourceDateVerified: true, targetDate: day, checkedThrough: day }
+  };
+  assert.equal(phase2bSnapshotMeta(snapshot, now).stale, false);
+  assert.equal(phase2bSnapshotMeta({ ...snapshot, refreshComplete: false }, now).stale, true);
+  assert.equal(phase2bSnapshotMeta({ ...snapshot, generatedAt: "2026-09-03T00:00:00Z" }, now).stale, true);
+  assert.equal(phase2bSnapshotMeta({ ...snapshot, sourceFreshness: undefined }, now).stale, true);
 });
 
 test("max entries uses least-recently-used eviction", async () => {

@@ -7,9 +7,9 @@ import {fixedEnvelope} from '../src/fixedVehicleStore.js';
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const row=(i,total,vehicle='221')=>({estCd:'T'+String(i).padStart(6,'0'),mainCarSeqNm:vehicle,totalCnt:total});
 
-function fixture(reply,{pageConcurrency=2,session=async()=>{},verifyLastPage,strictPageCounts,onScan}={}){
+function fixture(reply,{pageConcurrency=2,session=async()=>{},verifyLastPage,strictPageCounts,onScan,onPage,onPreflight}={}){
   let active=0,maxActive=0;const calls=[];
-  const reader=createFixedVehicleReader({pageConcurrency,verifyLastPage,strictPageCounts,onScan,ensureSession:session,sleep:async()=>{},extractRows:p=>p.data,
+  const reader=createFixedVehicleReader({pageConcurrency,verifyLastPage,strictPageCounts,onScan,onPage,onPreflight,ensureSession:session,sleep:async()=>{},extractRows:p=>p.data,
     readJson:async(url,options)=>{
       assert.equal(url,'/bo/wm/standard/fixedAlctnList');assert.equal(options.method,'POST');assert.equal(options.timeoutMs,60000);
       const query=new URLSearchParams(options.body),center=query.get('logCd'),page=Number(query.get('page'));
@@ -29,19 +29,48 @@ test('opt-in two-page batches preserve source order, all centers and first-page 
   assert.deepEqual(result.meta.centers.map(c=>c.center),['011','012','013']);assert.equal(result.meta.pageConcurrency,2);assert.equal(result.meta.snapshotIsolationVerified,false);assert.equal(f.reader.getProgress().complete,true);
 });
 
+test('independent preflight verifies all first pages and reuses them until boundary rechecks',async()=>{
+  const dates=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const weekdays=Object.fromEntries(dates.map(day=>['carSeq'+day+'Nm','221']));
+  const evidence=[];
+  const f=fixture(async({center})=>({data:[{...row(Number(center),1),...weekdays}]}),{
+    strictPageCounts:true,verifyLastPage:true,onPreflight:value=>evidence.push(value)
+  });
+  const result=await f.reader();
+  const firstPages=['011','012','013'].map(c=>[c,0]);
+  assert.deepEqual(f.calls,[...firstPages,...firstPages]);
+  assert.deepEqual(evidence.map(e=>[e.center,e.sourceHttp,e.declaredRows]),firstPages.map(([c])=>[c,200,1]));
+  assert.equal(result.meta.sourceRows,3);
+});
+
 test('default remains one sequential page and invalid parallelism fails before any read',async()=>{
   const f=fixture(async()=>{await pause(1);return {data:[row(1,1)]};},{pageConcurrency:1});await f.reader();assert.equal(f.maxActive,1);
   for(const pageConcurrency of [0,3,-1,'2',NaN])assert.throws(()=>createFixedVehicleReader({pageConcurrency}),/FIXED_MASTER_CONCURRENCY_INVALID/);
 });
 
+test('source probe checks only the three first pages and returns no publishable projection',async()=>{
+  const evidence=[];
+  const weekdays=Object.fromEntries(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>['carSeq'+day+'Nm',null]));
+  const f=fixture(async({page})=>{
+    assert.equal(page,0);
+    return {data:Array.from({length:1000},(_,index)=>({...row(index,1001),...weekdays}))};
+  },{onPreflight:value=>evidence.push(value)});
+  assert.deepEqual(await f.reader({preflightOnly:true}),{state:'FIRST_PAGES_VERIFIED',centerCount:3});
+  assert.deepEqual(f.calls,[['011',0],['012',0],['013',0]]);
+  assert.deepEqual(evidence.map(value=>value.declaredRows),[1001,1001,1001]);
+  assert.notEqual(f.reader.getProgress().complete,true);
+});
+
 test('count drift discards only the failed center batch and stops after one bounded rescan',async()=>{
-  let scan=0;const f=fixture(async({center,page})=>{
+  let scan=0;const pages=[];const f=fixture(async({center,page})=>{
     assert.equal(center,'011');if(page===0)scan++;await pause(page===2?3:1);
     return {data:Array.from({length:1000},(_,i)=>row(page*1000+i,3000+scan*2+(page?1:0)))};
-  });
+  },{onPage:value=>pages.push(value)});
   await assert.rejects(f.reader(),e=>e.code==='FIXED_MASTER_COUNT_CHANGED');assert.equal(scan,2);assert.equal(f.active,0);assert.equal(f.maxActive,2);
   assert.deepEqual(f.calls,[['011',0],['011',1],['011',2],['011',0],['011',1],['011',2]]);
   assert.equal(f.reader.getProgress().complete,false);assert.equal(f.reader.getProgress().phase,'ERROR');assert.equal(f.reader.getProgress().completedCenters.length,0);
+  assert.deepEqual(pages,[1,2].map(scan=>({center:'011',scan,page:0,rows:1000,
+    declaredRows:3000+scan*2,acceptedRows:1000})));
 });
 
 test('a successful bounded rescan publishes none of the discarded batch values',async()=>{

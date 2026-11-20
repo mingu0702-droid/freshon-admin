@@ -5,7 +5,7 @@ import {completeSyncObservation,nextSyncEvidence} from '../../src/opsmapSyncPoli
 import {validateOpsmapSyncDay} from '../../src/opsmapSyncGeneration.js';
 const day='2026-11-10';
 const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,OPSMAP_STAGE_DELIVERY_DATED_ENABLED:'1',OPSMAP_STAGE_DELIVERY_DATED_COOKIE:'synthetic-test-cookie'};
-function reader(fetchImpl,extra={}){return createStageDatedDeliveryReader({env,syncCenters:{osan:'1',yeongnam:'7',honam:'8'},fetchImpl,...extra});}
+function reader(fetchImpl,extra={}){return createStageDatedDeliveryReader({env,syncCenters:{osan:'1',yeongnam:'3',honam:'4'},fetchImpl,...extra});}
 const response=()=>Response.json({content:[],totalElements:0,totalPages:0});
 test('verified empty days are stored with all completed center scopes',async()=>{
  let calls=0;const r=await reader(async()=>{calls++;return response();}).readObservation(day);

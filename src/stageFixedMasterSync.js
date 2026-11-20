@@ -46,6 +46,8 @@ const customerCode = /^[A-Z]\d{1,20}$/;
 
 export const FIXED_MASTER_DAILY_TTL = 26 * 3600000;
 export const FIXED_MASTER_WORKER_LIMIT = 45 * minute;
+const attemptLeaseMs = FIXED_MASTER_WORKER_LIMIT + 5 * minute;
+const attemptExpired = (attempt, now) => attempt?.state==='RUNNING' && now-Date.parse(attempt.startedAt)>=attemptLeaseMs;
 export const FIXED_MASTER_SCOPE_INPUT_LIMIT = 1024 * 1024;
 export const stageFixedMasterSyncEnabled = env => env.RENDER_SERVICE_ID === STAGE_SERVICE &&
   env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED === '1';
@@ -164,8 +166,8 @@ function verifyProjection(result, scope, baseline, observedAt) {
   return {envelope:fixedEnvelope(rows,observedAt),coverage};
 }
 
-// Only the existing signed Stage scheduler calls this. The reservation and
-// verified pointer share a CAS; a late process cannot publish over a new run.
+// Callers authenticate the signed schedule or explicitly approved Stage recovery.
+// The reservation and verified pointer share a CAS so a late process cannot publish over a new run.
 export async function syncStageFixedMaster({store, receipt, scope: input, readMaster, loadBaseline, now=Date.now}) {
   if (!hash.test(receipt?.runId || '') || receipt.date!==kstDay(now())) throw fail('FIXED_MASTER_DAILY_RECEIPT');
   const scope=validateFixedMasterScope(input), codes=new Set(scope.codes);
@@ -174,7 +176,7 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
   const today=head.lastSuccess?.date===receipt.date ||
     validTime(head.lastSuccess?.at)&&kstDay(Date.parse(head.lastSuccess.at))===receipt.date;
   if (today) return {state:'ALREADY_VERIFIED',runId};
-  if (old?.state==='RUNNING' && now()-Date.parse(old.startedAt)<FIXED_MASTER_WORKER_LIMIT+5*minute) return {state:'BUSY',runId};
+  if (old?.state==='RUNNING' && !attemptExpired(old,now())) return {state:'BUSY',runId};
   if (old?.runId===runId || sameDay && (old.count>=2 || old.state==='FAILED'&&noRetry.has(head.lastFailure?.code))) {
     return {state:'RETRY_HELD',runId};
   }
@@ -236,7 +238,7 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
   }
 }
 
-export function createStageDailyFixedMasterReader({store, baseline}) {
+export function createStageDailyFixedMasterReader({store, baseline,now=Date.now}) {
   let cached=null, baselineValue, info=null;
   async function loadBaseline() {
     if (baselineValue===undefined) {
@@ -280,25 +282,28 @@ export function createStageDailyFixedMasterReader({store, baseline}) {
       let head;
       try {
         ({head}=await readHead(store));
+        const expired=attemptExpired(head.attempt,now());
+        const state=expired?'INTERRUPTED':head.attempt?.state||'NOT_PUBLISHED';
+        const lastError=expired?'FIXED_MASTER_DAILY_ATTEMPT_EXPIRED':head.attempt?.state==='FAILED'?head.lastFailure?.code||null:null;
         if (head.current) {
           const initial=await loadBaseline().catch(()=>null);
           if (initial && initial.checkedAt>(head.lastSuccess.coverage?.sourceObservedAt||head.lastSuccess.at)) {
-            info={state:'APPROVED_BASELINE',lastError:head.attempt.state==='FAILED'?head.lastFailure?.code||null:null,
+            info={state:expired?state:'APPROVED_BASELINE',lastError,
               lastFailureAt:head.lastFailure?.at||null};
             return initial;
           }
           if (cached?.version!==head.current.version) cached=await verifiedObject(store,head.current);
           const success=head.lastSuccess;
-          info={state:head.attempt.state,version:cached.version,lastSuccessAt:success.at,runId:success.runId,
+          info={state,version:cached.version,lastSuccessAt:success.at,runId:success.runId,
             sourceObservedAt:validTime(success.coverage?.sourceObservedAt)?success.coverage.sourceObservedAt:null,
             sourceObservationDate:observedDate(success.coverage?.sourceObservedAt),
             registryGeneration:hash.test(success.coverage?.registryGeneration || '')?success.coverage.registryGeneration:null,
             sourceRows:Number.isSafeInteger(success.coverage?.sourceRows)?success.coverage.sourceRows:null,
             matchedCount:cached.count,
-            lastFailureAt:head.lastFailure?.at || null,lastError:head.attempt.state==='FAILED'?head.lastFailure?.code || null:null};
+            lastFailureAt:head.lastFailure?.at || null,lastError};
           return cached;
         }
-        info={state:head.attempt?.state||'NOT_PUBLISHED',lastError:head.lastFailure?.code||null,
+        info={state,lastError:lastError||head.lastFailure?.code||null,
           lastFailureAt:head.lastFailure?.at||null};
       } catch (e) {
         const retained=cached && info?.version===cached.version ? info : null;
@@ -314,18 +319,20 @@ export function createStageDailyFixedMasterReader({store, baseline}) {
   };
 }
 
-export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, login, onScan}={}) {
+export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, login, onScan, onPage, onPreflight, preflightOnly=false}={}) {
   if (!stageFixedMasterSyncEnabled(env) || env.FRESHON_BASE_URL && new URL(env.FRESHON_BASE_URL).origin!==MIS) {
     throw fail('FIXED_MASTER_STAGE_SOURCE_SCOPE');
   }
   // Keep the existing count and boundary rechecks while shortening the time between pages.
-  const limit=AbortSignal.timeout(FIXED_MASTER_WORKER_LIMIT-5*minute);
+  const limit=AbortSignal.timeout(preflightOnly?3*minute:FIXED_MASTER_WORKER_LIMIT-5*minute);
   let cookie=env.FRESHON_COOKIE || '', attemptedLogin=false, calls=0;
   const reader=createFixedVehicleReader({
     pageConcurrency:2,
     verifyLastPage:true,
     strictPageCounts:true,
     onScan,
+    onPage,
+    onPreflight,
     async ensureSession(force) {
       limit.throwIfAborted();
       if (!force && cookie) return;
@@ -354,9 +361,9 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
         throw error;
       }
       const reject=status=>{throw Object.assign(fail('FIXED_MASTER_READ_FAILED'),{status,diagnostic:{type:'http-error',status}});};
-      if (!response.ok || response.headers.get('content-type')?.includes('text/html')) {
+      if (response.status!==200 || response.headers.get('content-type')?.includes('text/html')) {
         await response.body?.cancel().catch(()=>{});
-        reject(response.status>=300 && response.status<400 || response.ok ? 401 : response.status);
+        reject(response.status>=300 && response.status<400 || response.status===200 ? 401 : response.status);
       }
       if (Number(response.headers.get('content-length'))>maxSourcePageBytes || !response.body) {
         await response.body?.cancel().catch(()=>{});
@@ -379,7 +386,7 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
     },
     extractRows:value=>value?.data
   });
-  return codes => reader({signal:limit,customerCodes:codes});
+  return codes => reader({signal:limit,customerCodes:codes,preflightOnly});
 }
 
 export function stageFixedMasterBaseline({env,store}) {

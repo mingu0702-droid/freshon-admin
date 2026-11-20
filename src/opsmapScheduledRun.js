@@ -115,6 +115,13 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
               const scan=fixedScanSummary(value);
               if(scan)log(JSON.stringify({component:value.component,runId:receipt.runId,...scan}));
             }
+            if(value?.component==='opsmap-fixed-master-page-progress' && value.runId===receipt.runId &&
+               fixedCenters.includes(value.center) && [1,2].includes(value.scan) &&
+               boundedCount(value.page,119)!==null && boundedCount(value.rows,1000)!==null) {
+              log(JSON.stringify({component:value.component,runId:receipt.runId,center:value.center,scan:value.scan,
+                page:value.page,rows:value.rows,declaredRows:boundedCount(value.declaredRows),
+                acceptedRows:boundedCount(value.acceptedRows)}));
+            }
             if(value?.component==='opsmap-fixed-master-sync' && value.runId===receipt.runId &&
                ['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','BUSY','RETRY_HELD','FAILED'].includes(value.state)) {
               log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
