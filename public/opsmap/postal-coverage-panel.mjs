@@ -99,6 +99,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   const regionButton = root.querySelector('[data-preset="region"]');
   let map, active = false, owner = 0, viewportRead, detailRead, searchRead, view, viewKey, loadingKey;
   let timer, refresh, selectedArea, bootstrapScope, releaseOverview;
+  let resumeArea, resumeQuery = '';
   const resize = new ResizeObserver(entries => {
     if (!active) return;
     if (entries.some(entry => entry.target === header)) windowHeight();
@@ -124,6 +125,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   }
 
   function areaCard(area) {
+    resumeArea = null;
     selectedArea = area;
     const geographic = area && area.id !== 'unmatched' ? area : null;
     map?.select(geographic);
@@ -239,7 +241,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame), ...geometry.metrics() });
       applyView(view,same);
       map.show(view, slices);
-      if (!same && selectedArea) {
+      if (resumeArea) areaCard(resumeArea);
+      else if (!same && selectedArea) {
         selectedArea = { id:selectedArea.id };
         areaDetails.open(selectedArea,scope());
       }
@@ -374,6 +377,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     delete host.dataset.postalGeometry;
     map?.clear(keepOverview && geometry.hasOverview());
     areaCard(null);
+    resumeQuery = '';
     searchResults.replaceChildren();
     find('coverageQuery').value = '';
     find('postalCandidates').replaceChildren();
@@ -419,6 +423,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       clearTimeout(releaseOverview);
       active = true;
       root.hidden = false;
+      find('coverageQuery').value = resumeQuery;
+      resumeQuery = '';
       windowHeight();
       resize.observe(header);
       resize.observe(host);
@@ -426,12 +432,16 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       refresh = setInterval(() => { if (active && !document.hidden) void readView(true); }, 60000);
     },
     close() {
+      const area = selectedArea ?? resumeArea;
+      const query = find('coverageQuery').value;
       active = false;
       owner++;
       root.hidden = true;
       clearInterval(refresh);
       resize.disconnect();
       reset(true);
+      resumeArea = area ? { id:area.id } : null;
+      resumeQuery = query;
       if (geometry.hasOverview()) releaseOverview = setTimeout(() => {
         geometry.clear();
         map?.clear();
