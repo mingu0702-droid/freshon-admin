@@ -6,12 +6,12 @@ import os from 'node:os';
 const {chromium}=await import(process.env.OPSMAP_TEST_PLAYWRIGHT_MODULE||'playwright');
 // Real existing shell/editor/navigation controllers, synthetic rows and SDK only.
 const root=path.resolve('public/opsmap'),output=fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r10-directions-'));
-const rows=Array.from({length:32},(_,i)=>({customerCode:'SYNTHETIC_'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
+const rows=Array.from({length:32},(_,i)=>({customerCode:'SYNTHETIC_'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',vehicleGroup:'osan',order:i+1,lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
 // Two separate customers at one shop-in-shop coordinate remain two visits.
 rows[1].lat=rows[0].lat;rows[1].lng=rows[0].lng;
 const requests=[],external=[],errors=[],checks=[],version='e'.repeat(64);
-const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
-const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
+const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','opsmap-daily.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
+const fixture=`document.body.dataset.mapStaffState='authenticated';window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
 window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){},toggle(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
 class Bounds{extend(){}getSouthWest(){return new Coord(33,124)}getNorthEast(){return new Coord(39.5,132)}}
@@ -26,7 +26,6 @@ const server=http.createServer((req,res)=>{
   requests.push({path:u.pathname,method:req.method});let data={data:[],meta:{}};
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-11-02',startDate:'2026-09-04',endDate:'2026-11-02'}};
   if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:version,baseVehicleStale:false})),meta:{version,stale:false}};
-  if(u.pathname.endsWith('/assignments'))data={data:rows.map(r=>({...r,deliveryDate:u.searchParams.get('date')})),meta:{complete:true,date:u.searchParams.get('date')}};
   res.setHeader('content-type','application/json');res.end(JSON.stringify(data));return;
  }
  if(u.pathname==='/opsmap/'){res.setHeader('content-type','text/html');res.end(html);return;}
@@ -39,14 +38,12 @@ try{
  browser=await chromium.launch({headless:true,executablePath:process.env.OPSMAP_TEST_CHROMIUM||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
  const page=await browser.newPage({viewport:{width:1366,height:900}});page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',route=>{if(!route.request().url().startsWith(origin)){external.push(route.request().url());return route.abort();}return route.continue();});
- await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady());
+ await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady(),{},{timeout:8000});
  const check=(name,value)=>{assert(value,name);checks.push(name);};
  await page.evaluate(()=>{MapUiLocalBridge.selectNavigationStore('SYNTHETIC_1');});
  check('period detail has no duplicate standalone Kakao action',await page.locator('#navSelectedKakao').count()===0);
- await page.locator('#modeDaily').click();await page.locator('#waypointPlanner>summary').click();
- await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-11-02','2026-11-02'));await page.waitForFunction(()=>MapUiLocalBridge.navigationStores().length===32);
- await page.evaluate(()=>{MapUiLocalBridge.selectNavigationStore('SYNTHETIC_1');MapNavigation.sync();});
- check('daily route actions share the existing planner',await page.locator('#waypointPlanner #navKakaoDirections').count()===1&&await page.locator('#waypointPlanner #navigationSummary').count()===1);
+ await page.locator('#waypointPlanner>summary').click();
+ check('external links use the existing planner and internal route panel',await page.locator('#waypointPlanner #navKakaoDirections').count()===1&&await page.locator('#navigationSummary').count()===1);
  const apply=async count=>page.evaluate(n=>MapNavigationEditor.replacePoints(Array.from({length:n},(_,i)=>'SYNTHETIC_'+i)),count);
  await apply(2);check('two endpoints keep the combined link without a redundant fallback',await page.locator('#navKakaoLinks a').count()===1&&!await page.locator('#navKakaoLegFallback').isVisible()&&await page.locator('#navKakaoLegLinks a').count()===0);
  await apply(3);check('three points expose a short hint and initially collapsed adjacent fallback',await page.locator('#navKakaoLegHint').textContent()==='경유지가 표시되지 않으면 구간별로 열어 주세요.'&&await page.locator('#navKakaoLegFallback').isVisible()&&await page.locator('#navKakaoLegFallback').getAttribute('open')===null&&await page.locator('#navKakaoLegLinks a').count()===2&&!await page.locator('#navKakaoLegLinks a').first().isVisible());

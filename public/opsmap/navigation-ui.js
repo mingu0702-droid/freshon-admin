@@ -79,7 +79,7 @@
   // These links never query Mobility Directions or calculate distance/time here.
   function kakaoPoint(row){
     if(!located(row))throw Error('카카오 길찾기에 전달할 지점의 위치를 확인해 주세요.');
-    const name=String(row.customerName||row.address||row.customerCode||'선택한 위치').trim();
+    const name=String(row.customerName||'').trim()||'선택한 위치';
     return encodeURIComponent(name)+','+row.lat+','+row.lng;
   }
   function kakaoDestinationLink(destination,origin){
@@ -123,6 +123,10 @@
   mapReadout.append(routeTotals);
   if($('#syncOperation'))$('#navigationSummary').append($('#syncOperation'));
   const centerChoices=document.createElement('div');centerChoices.className='navCenterChoices';centerChoices.setAttribute('aria-label','센터에서 출발');planner.querySelector('summary').after(centerChoices);
+  const externalRoute=document.createElement('section');
+  externalRoute.id='navKakaoDirections';externalRoute.hidden=true;externalRoute.setAttribute('aria-label','카카오맵 길찾기');
+  externalRoute.innerHTML='<p id="navKakaoStatus"></p><ol id="navKakaoLinks"></ol><p id="navKakaoLegHint" class="hint" hidden>경유지가 표시되지 않으면 구간별로 열어 주세요.</p><details id="navKakaoLegFallback" hidden><summary>구간별로 열기</summary><ol id="navKakaoLegLinks"></ol></details>';
+  planner.append(externalRoute);
   const roadDiagnostics=bridge.isStagePreview?.() ? document.createElement('details') : null;
   const readinessErrors=new Set(['FEATURE_DISABLED','KEY_MISSING','CALL_POLICY_UNCONFIRMED','CALL_POLICY_BLOCKED','PERSISTENT_BUDGET_REQUIRED','QUOTA_EXCEEDED']);
   let roadReadinessRequest=null;
@@ -187,6 +191,33 @@
   }
   const resolve=value=>lookup.normalize(value)?lookup.resolve(value,all()):[];
   const status=text=>{const node=$('#plannerStatus');node.hidden=!text;node.textContent=text;};
+  let externalRouteSignature='';
+  function appendKakaoLink(list,url,label){
+    const item=document.createElement('li'),link=document.createElement('a');
+    link.href=url;link.textContent=label;link.target='_blank';link.rel='noopener noreferrer';
+    item.append(link);list.append(item);return link;
+  }
+  function syncExternalRoute(points,values=editor.values()){
+    const rows=points.length>=2&&points.length<=32&&points.length===values.length?points.map(({row})=>row):[];
+    const signature=JSON.stringify(rows.map(row=>[row.customerCode,row.customerName,row.lat,row.lng]));
+    if(signature===externalRouteSignature)return;
+    externalRouteSignature=signature;
+    const links=$('#navKakaoLinks'),legs=$('#navKakaoLegLinks'),fallback=$('#navKakaoLegFallback');
+    links.replaceChildren();
+    legs.replaceChildren();
+    externalRoute.hidden=!rows.length;
+    fallback.hidden=$('#navKakaoLegHint').hidden=rows.length<3;
+    if(fallback.hidden)fallback.open=false;
+    if(externalRoute.hidden)return;
+    const segments=lookup.kakaoRouteLinks(rows);
+    $('#navKakaoStatus').textContent=segments.length===1?'선택한 순서대로 카카오맵에서 엽니다.':'모든 지점을 보존합니다. 아래 구간을 순서대로 열어 주세요.';
+    for(const {start,end,url} of segments)appendKakaoLink(links,url,`${start+1} → ${end+1} 카카오맵에서 열기`);
+    if(fallback.hidden)return;
+    for(const {start,end,sameCoordinate,url} of lookup.kakaoLegLinks(rows)){
+      const label=`${start+1} → ${end+1} · ${rows[start].customerName||'선택한 위치'} → ${rows[end].customerName||'선택한 위치'}${sameCoordinate?' · 같은 좌표 · 목적지로 열기':''}`;
+      appendKakaoLink(legs,url,label).dataset.sameCoordinate=String(sameCoordinate);
+    }
+  }
   function refreshPointActions(){
     const candidate=bridge.state.selected||bridge.state.virtual;
     document.querySelectorAll('#detail [data-nav-pick]').forEach(button=>button.disabled=!lookup.located(candidate));
@@ -332,9 +363,10 @@
     if(rolePinFrame!==null)cancelAnimationFrame(rolePinFrame);rolePinFrame=null;
     routePointOverlays.forEach(({overlay})=>overlay.setMap(null));routePointOverlays=[];
   }
-  function renderRolePins(){
+  function renderRolePins(roles){
     const map=bridge.state.map;if(!map)return;
-    const roles=roleRows(),signature=JSON.stringify(roles.map(item=>[item.row.customerCode,item.row.customerName,item.row.lat,item.row.lng,item.role,item.index]));
+    roles??=roleRows();
+    const signature=JSON.stringify(roles.map(item=>[item.row.customerCode,item.row.customerName,item.row.lat,item.row.lng,item.role,item.index]));
     if(rolePinMap===map&&signature===roleSignature){scheduleRolePins();return;}
     if(rolePinMap!==map){
       if(rolePinMap)kakao.maps.event?.removeListener(rolePinMap,'idle',scheduleRolePins);
@@ -507,17 +539,18 @@
       if(daily){if(planner.parentNode!==workspace)workspace.insertBefore(planner,missing);if(routeList.parentNode!==workspace)workspace.prepend(routeList);planner.hidden=false;routeList.hidden=false;}
       else{if(planner.parentNode!==plannerAnchor.parentNode)plannerAnchor.after(planner);if(routeList.parentNode!==routeAnchor.parentNode)routeAnchor.after(routeList);planner.hidden=true;}
     }
-    syncDailyOrigin();syncMissing();describeInputs();renderRolePins();refreshPointActions();bridge.relayoutPreservingView?.();
+    syncDailyOrigin();syncMissing();describeInputs();const roles=roleRows();renderRolePins(roles);syncExternalRoute(roles);refreshPointActions();bridge.relayoutPreservingView?.();
   }
   const onManual=event=>{if(event.detail?.state==='loading')clearTimeout(recalculateTimer);if(['success','partial'].includes(event.detail?.state))autoRecalculate=event.detail.manualOnly!==true;else if(['error','disabled'].includes(event.detail?.state))autoRecalculate=false;showResult(event.detail,'manual');},onRecorded=event=>showResult(event.detail,'recorded'),onSelected=()=>{closeCenterCard();refreshPointActions();},onReady=()=>{roleSignature='';drawCenters();sync();};
   const onDraft=()=>{
-    clearTimeout(recalculateTimer);status('');hideSuggestions();describeInputs();renderRolePins();window.MapDotUi?.arrangeNavigation?.();
-    const values=editor.values();temporaryPlaces.retainSearchPoints(values);
+    clearTimeout(recalculateTimer);status('');hideSuggestions();describeInputs();
+    const values=editor.values(),roles=roleRows();renderRolePins(roles);syncExternalRoute(roles,values);window.MapDotUi?.arrangeNavigation?.();
+    temporaryPlaces.retainSearchPoints(values);
     if(autoOrigin&&values[0]!==autoOrigin)autoOrigin='';
     if(values.every(value=>!String(value||'').trim()))autoRecalculate=false;
     // Only a route explicitly queried successfully enables recalculation.
     // Incomplete text, initial load and provider errors never cause API calls.
-    if(autoRecalculate&&values.length>=2&&roleRows().length===values.length)recalculateTimer=setTimeout(()=>{if(!disposed&&autoRecalculate&&roleRows().length===editor.values().length)$('#planRoute').click();},450);
+    if(autoRecalculate&&values.length>=2&&roles.length===values.length)recalculateTimer=setTimeout(()=>{if(!disposed&&autoRecalculate&&roleRows().length===editor.values().length)$('#planRoute').click();},450);
   };
   const onContext=event=>{
     autoRecalculate=false;clearTimeout(recalculateTimer);hideSuggestions();
