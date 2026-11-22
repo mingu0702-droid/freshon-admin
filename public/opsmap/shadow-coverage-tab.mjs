@@ -223,6 +223,7 @@ if (tabs && workspace && period && daily) {
 
   period.addEventListener('click', cancelOpening);
   daily.addEventListener('click', cancelOpening);
+  window.addEventListener('map-dispatch-reference-open', () => close());
   window.addEventListener('map-shadow-coverage-capability', syncAvailability);
   window.addEventListener('map-staff-ready', syncAvailability);
   window.addEventListener('map-customer-registry-updated', () => panel?.invalidate());
