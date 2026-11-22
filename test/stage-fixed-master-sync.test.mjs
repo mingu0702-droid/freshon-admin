@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createHash,createHmac} from 'node:crypto';
-import {EventEmitter} from 'node:events';
+import {EventEmitter,once} from 'node:events';
 import {PassThrough} from 'node:stream';
 import test from 'node:test';
 import express from 'express';
@@ -10,7 +10,8 @@ import {fixedEnvelope} from '../src/fixedVehicleStore.js';
 import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
 import {projectFixedVehicles} from '../src/fixedVehicleProjection.js';
 import {createFixedVehicleCache} from '../src/opsmap-abc/fixedVehicleCache.js';
-import {mountOpsmapScheduledRun,OPSMAP_SCHEDULED_ROUTE} from '../src/opsmapScheduledRun.js';
+import {claimQueuedOpsmapSchedule,mountOpsmapScheduledRun,opsmapScheduleConfig,OPSMAP_SCHEDULED_ROUTE}
+  from '../src/opsmapScheduledRun.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
 
@@ -54,6 +55,36 @@ function memory() {
 }
 const base=() => fixedEnvelope(source('099').data,new Date(start-hour).toISOString());
 const reader=baseValue=>({load:async()=>baseValue??null});
+
+test('the independent recipient publishes three verified centers after the dispatch web server stops',async()=>{
+  const store=memory(),baseline=base(),app=express();
+  let tick=start;
+  const now=()=>tick;
+  mountOpsmapScheduledRun(app,{env:{...env,OPSMAP_STAGE_SYNC_EXECUTION_OWNER:'independent'},now,
+    openDispatchStore:()=>store,log:()=>{},launch:()=>assert.fail('web process must not start a worker')});
+  const server=app.listen(0,'127.0.0.1');
+  await once(server,'listening');
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+OPSMAP_SCHEDULED_ROUTE,{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(receipt(tick))});
+    assert.equal((await response.json()).state,'QUEUED');
+  } finally {
+    await new Promise(resolve=>{server.closeAllConnections();server.close(resolve);});
+  }
+  const {receipt:queued,input}=await claimQueuedOpsmapSchedule({store,config:opsmapScheduleConfig(env),now,
+    prepare:()=>scope});
+  const result=await syncStageFixedMaster({store,receipt:queued,now,scope:input,loadBaseline:reader(baseline).load,
+    readMaster:async()=>{
+      tick+=18*60_000;
+      return source('122');
+    }});
+  assert.equal(result.state,'PUBLISHED');
+  assert.deepEqual(result.centers.map(center=>center.center),centers);
+  const current=await createStageDailyFixedMasterReader({store,baseline:reader(baseline),now}).load();
+  assert.equal(current.version,result.version);
+  assert.equal(current.rows.length,3);
+  assert.equal(store.files.get(head).value.lastSuccess.runId,queued.runId);
+});
 
 test('an expired reservation reports interruption while the verified projection remains readable',async()=>{
   const store=memory(), baseline=base();

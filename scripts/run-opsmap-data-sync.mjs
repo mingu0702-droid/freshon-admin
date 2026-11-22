@@ -3,6 +3,7 @@ import {openPublicAddressCatalog} from '../src/opsmapPublicAddressCatalog.js';
 import {completeFixedCoordinates, completeFixedCoordinatesFromCatalog} from '../src/fixedCoordinateCompletion.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {setTimeout as sleep} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 import {createCustomerRegistry} from '../src/customerRegistry.js';
 import {readFixedCoordinateLedger} from '../src/fixedStoreCoordinates.js';
@@ -16,7 +17,9 @@ import {createStageRecentOrdersReader} from '../src/stageRecentOrders.js';
 import {boundedRead, privateCoverageDirectory} from '../src/shadowCoverage/coverageFiles.js';
 import {atomicCoverageWrite} from '../src/shadowCoverage/fileStore.js';
 import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from '../src/opsmapDurableGeneration.js';
-import {opsmapScheduleConfig,publishOpsmapScheduledRun,verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
+import {claimQueuedOpsmapSchedule,independentStageSync,opsmapScheduleConfig,publishOpsmapScheduledRun,
+  verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
+import {readIndependentStageScopes} from '../src/stageIndependentSyncScope.js';
 import {STAGE_OSAN_SYNC_CENTERS,STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
 import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixedMasterBaseline, stageFixedMasterStorage,
   stageFixedMasterSyncEnabled, syncStageFixedMaster} from '../src/stageFixedMasterSync.js';
@@ -156,16 +159,81 @@ async function buildWorker({mode,settingsFile,durable,recordSource}) {
   return createOpsmapDataSync({directory,seed:config.seed,readLedger,readRegistry,readDay,readManualPins,appRoot,completeCoordinates});
 }
 
+async function readScheduledInput() {
+  let input='';
+  for await (const chunk of process.stdin) {
+    input+=chunk;
+    if (Buffer.byteLength(input)>FIXED_MASTER_SCOPE_INPUT_LIMIT) throw Error('OPSMAP_SCHEDULE_RECEIPT');
+  }
+  const job=JSON.parse(input);
+  return {...job,receipt:verifyOpsmapScheduleReceipt(job?.receipt ?? job,opsmapScheduleConfig(env))};
+}
+
+function scheduledQueueRunner() {
+  if (!independentStageSync(env) || env.OPSMAP_STAGE_SYNC_RUNNER_APPROVED!=='1')
+    throw Error('OPSMAP_SCHEDULE_RUNNER_NOT_APPROVED');
+  const store=stageFixedMasterStorage({env,write:true});
+  const settingsFile=env.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE || null;
+  if (settingsFile && !path.isAbsolute(settingsFile)) throw Error('OPSMAP_SYNC_USAGE');
+  const config=opsmapScheduleConfig(env);
+  return {
+    claim:()=>claimQueuedOpsmapSchedule({store,config,prepare:()=>readIndependentStageScopes(env)}),
+    async execute({receipt,input}) {
+      await runScheduled({...input,receipt},settingsFile);
+      console.log(JSON.stringify({component:'opsmap-independent-run',state:'WORKER_EXITED',runId:receipt.runId}));
+    }
+  };
+}
+
+async function watchScheduledQueue(runner) {
+  let handledDate=null;
+  while (true) {
+    const kst=new Date(Date.now()+9*3600000).toISOString();
+    const minute=Number(kst.slice(11,13))*60+Number(kst.slice(14,16));
+    if (minute>=360 && minute<430 && handledDate!==kst.slice(0,10)) {
+      let job;
+      try {
+        job=await runner.claim();
+        if (job) {
+          handledDate=job.receipt.date;
+          await runner.execute(job);
+        }
+      } catch (error) {
+        const code=error.code || error.message;
+        console.log(JSON.stringify({component:'opsmap-independent-run',state:'FAILED',runId:job?.receipt.runId??null,
+          error:/^(?:FIXED_(?:MASTER|STORE)|OPSMAP_(?:SCHEDULE|DURABLE)|STAGE_)_[A-Z_]{1,70}$/.test(code||'')?code:'OPSMAP_INDEPENDENT_FAILED'}));
+      }
+    }
+    await sleep(60_000);
+  }
+}
+
 async function run() {
   const [mode,settingsFile,...backfillDates] = process.argv.slice(2);
+  if (mode==='watch-scheduled-queue' && settingsFile===undefined) return watchScheduledQueue(scheduledQueueRunner());
+  if (mode==='run-scheduled-queue' && settingsFile===undefined) {
+    const runner=scheduledQueueRunner(),job=await runner.claim();
+    if (!job) throw Error('OPSMAP_SCHEDULE_DISPATCH_NOT_READY');
+    return runner.execute(job);
+  }
   if (!['bootstrap','once','watch','scheduled','fixed-scheduled'].includes(mode) ||
       (mode==='fixed-scheduled'?settingsFile!==undefined:!path.isAbsolute(settingsFile || ''))) throw Error('OPSMAP_SYNC_USAGE');
   if(mode==='scheduled'||mode==='fixed-scheduled'){
-    if(env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||backfillDates.length)throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
-    let input='';
-    for await(const chunk of process.stdin){input+=chunk;if(Buffer.byteLength(input)>FIXED_MASTER_SCOPE_INPUT_LIMIT)throw Error('OPSMAP_SCHEDULE_RECEIPT');}
-    const job=JSON.parse(input);
-    const receipt=verifyOpsmapScheduleReceipt(job?.receipt ?? job,opsmapScheduleConfig(env));
+    if(env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||independentStageSync(env)||backfillDates.length)
+      throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
+    return runScheduled(await readScheduledInput(),settingsFile);
+  }
+  const worker=await buildWorker({mode,settingsFile});
+  if (mode !== 'watch') {report(await worker.sync({bootstrap:mode==='bootstrap',backfillDates}));return;}
+  if (backfillDates.length) throw Error('OPSMAP_SYNC_USAGE');
+  const stop = startOpsmapDataSync(worker,{onResult:report});
+  process.once('SIGINT',stop);
+  process.once('SIGTERM',stop);
+}
+
+async function runScheduled(job,settingsFile){
+    const mode=settingsFile?'scheduled':'fixed-scheduled';
+    const {receipt}=job;
     const fixedScope=job?.fixedScope;
     const runNationalRegistry = async () => {
       if (!stageNationalRegistryEnabled(env)) return;
@@ -252,14 +320,6 @@ async function run() {
       await durable?.dispose().catch(()=>{});
       await runMasterJobs();
     }
-    return;
-  }
-  const worker=await buildWorker({mode,settingsFile});
-  if (mode !== 'watch') {report(await worker.sync({bootstrap:mode==='bootstrap',backfillDates}));return;}
-  if (backfillDates.length) throw Error('OPSMAP_SYNC_USAGE');
-  const stop = startOpsmapDataSync(worker,{onResult:report});
-  process.once('SIGINT',stop);
-  process.once('SIGTERM',stop);
 }
 
 try { await run(); }

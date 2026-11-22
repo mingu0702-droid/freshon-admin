@@ -1,11 +1,11 @@
-import {createHmac,timingSafeEqual} from 'node:crypto';
+import {createHmac,randomUUID,timingSafeEqual} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import express from 'express';
 import {syncDigest,syncHash} from './opsmapSyncGeneration.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
-import {FIXED_MASTER_WORKER_LIMIT, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
+import {FIXED_MASTER_WORKER_LIMIT, stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {NATIONAL_REGISTRY_WORKER_LIMIT, stageNationalRegistryEnabled} from './stageNationalRegistry.js';
 import {stageRecentOperationsSyncEnabled} from './stageRecentOperations.js';
 
@@ -19,6 +19,11 @@ const sourceKeys=new Set(['customerRegistry','delivery:1','delivery:2','delivery
 const fixedCenters=['011','012','013'];
 const boundedCount=(value,max=120_000)=>Number.isSafeInteger(value)&&value>=0&&value<=max?value:null;
 const fixedError=value=>/^FIXED_(?:MASTER|STORE)_[A-Z_]{1,70}$/.test(value||'')?value:null;
+const receiptFields=({version,origin,triggerId,principal,issuedAt,slot,date,runId})=>
+  [version,origin,triggerId,principal,issuedAt,slot,date,runId];
+const signReceipt=(value,secret,domain='')=>createHmac('sha256',secret)
+  .update(domain).update(JSON.stringify(receiptFields(value))).digest();
+const queueDomain='opsmap-stage-private-dispatch-v1\0';
 
 function fixedScanSummary(value) {
   if (!fixedCenters.includes(value.center) || ![1,2].includes(value.scan) || !['VERIFIED','REJECTED'].includes(value.state)) return null;
@@ -54,8 +59,7 @@ export function verifyOpsmapScheduleReceipt(value,{secret,scheduleId,executorHas
       runId!==syncDigest([version,origin,triggerId,principal,slot])||!syncHash(signature)||Object.keys(value).length!==9) {
     throw Error('OPSMAP_SCHEDULE_RECEIPT');
   }
-  const text=JSON.stringify([version,origin,triggerId,principal,issuedAt,slot,date,runId]);
-  const expected=createHmac('sha256',secret).update(text).digest();
+  const expected=signReceipt(value,secret);
   if (!timingSafeEqual(Buffer.from(signature,'hex'),expected)) throw Error('OPSMAP_SCHEDULE_SIGNATURE');
   return {version,origin,triggerId,principal,issuedAt,slot,date,runId};
 }
@@ -65,9 +69,73 @@ export function opsmapScheduleConfig(env) {
     executorHash:env.OPSMAP_STAGE_SYNC_EXECUTOR_SHA256};
 }
 
-export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Date.now,log=console.log,readFixedScope,readNationalScope}={}) {
+export const independentStageSync = env => stageFixedMasterSyncEnabled(env) &&
+  env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED==='1' &&
+  env.OPSMAP_STAGE_SYNC_EXECUTION_OWNER==='independent';
+
+function dispatchFile(date) {
+  return 'fixed-master-daily-v1/dispatch-'+date+'.json';
+}
+
+function verifyQueuedReceipt(value,config) {
+  const {stamp,claim,...receipt}=value || {};
+  const {secret}=config;
+  if (typeof secret!=='string'||!syncHash(stamp)||claim!==undefined&&
+      (!/^[a-f0-9-]{36}$/.test(claim?.id||'')||!Number.isFinite(Date.parse(claim?.at)))||
+      !timingSafeEqual(Buffer.from(stamp,'hex'),signReceipt(receipt,secret,queueDomain)))
+    throw Error('OPSMAP_SCHEDULE_DISPATCH_SIGNATURE');
+  return verifyOpsmapScheduleReceipt({...receipt,signature:signReceipt(receipt,secret).toString('hex')},config);
+}
+
+export async function claimQueuedOpsmapSchedule({store,config,prepare=()=>null,now=Date.now}) {
+  const date=kstDate(now());
+  const file=dispatchFile(date);
+  const {value,sha}=await store.read(file);
+  if (!value) return null;
+  const options={...config,now};
+  const receipt=verifyQueuedReceipt(value,options);
+  if (receipt.date!==date) throw Error('OPSMAP_SCHEDULE_RECEIPT');
+  if (value.claim) return null;
+  const input=await prepare(receipt);
+  verifyQueuedReceipt(value,options);
+  const claim={id:randomUUID(),at:new Date(now()).toISOString()};
+  try {await store.write(file,{...value,claim},sha);}
+  catch (error) {
+    const recorded=(await store.read(file)).value;
+    if (!recorded?.claim) throw error;
+    if (recorded.claim.id!==claim.id) return null;
+  }
+  const recorded=(await store.read(file)).value;
+  if (recorded?.claim?.id!==claim.id || verifyQueuedReceipt(recorded,options).runId!==receipt.runId)
+    throw Error('OPSMAP_SCHEDULE_DISPATCH_READBACK');
+  return {receipt,input};
+}
+
+async function enqueueOpsmapSchedule(store, receipt, config) {
+  const file=dispatchFile(receipt.date);
+  const confirm=async()=>{
+    const {value}=await store.read(file);
+    if (!value) return false;
+    const recorded=verifyQueuedReceipt(value,config);
+    if (recorded.runId!==receipt.runId) throw Error('OPSMAP_SCHEDULE_DISPATCH_CONFLICT');
+    return true;
+  };
+  if (await confirm()) return;
+  const value={...receipt,stamp:signReceipt(receipt,config.secret,queueDomain).toString('hex')};
+  try {await store.write(file,value,null);}
+  catch (error) {
+    // A competing request, or a lost write acknowledgement, may have queued this run.
+    if (await confirm()) return;
+    throw error;
+  }
+  if (!await confirm()) throw Error('OPSMAP_SCHEDULE_DISPATCH_READBACK');
+}
+
+export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Date.now,log=console.log,readFixedScope,readNationalScope,
+  openDispatchStore=()=>stageFixedMasterStorage({env,write:true})}={}) {
   const settings=env.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE;
   const fullJob=path.isAbsolute(settings || '');
+  const independent=independentStageSync(env);
   const nationalJob=stageNationalRegistryEnabled(env);
   const fixedJob=stageFixedMasterSyncEnabled(env) && typeof readFixedScope==='function';
   const recentJob=stageRecentOperationsSyncEnabled(env);
@@ -76,13 +144,20 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
   if (env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
       env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||
       env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1'||
-      !fullJob&&!sourceJobs) return;
+      !fullJob&&!sourceJobs&&!independent) return;
   let child, starting=false;
   app.post(OPSMAP_SCHEDULED_ROUTE,express.json({limit:'2kb',inflate:false}), async (req,res)=>{
     res.set('Cache-Control','no-store');
     let receipt;
-    try {receipt=verifyOpsmapScheduleReceipt(req.body,{...opsmapScheduleConfig(env),now});}
+    const config={...opsmapScheduleConfig(env),now};
+    try {receipt=verifyOpsmapScheduleReceipt(req.body,config);}
     catch {return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});}
+    if (independent) {
+      try {await enqueueOpsmapSchedule(openDispatchStore(),receipt,config);}
+      catch {return res.status(503).json({error:'OPSMAP_SCHEDULE_DISPATCH_UNCONFIRMED'});}
+      log(JSON.stringify({component:'opsmap-scheduled-dispatch',state:'QUEUED',runId:receipt.runId}));
+      return res.status(202).json({state:'QUEUED',runId:receipt.runId});
+    }
     if (child || starting) return res.status(409).json({error:'OPSMAP_SCHEDULE_BUSY'});
     let scope=null,registryScope=null;
     if (fixedJob || scopedRegistry) {

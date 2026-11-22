@@ -14,7 +14,9 @@ import {createOpsmapDataSync} from '../src/opsmapDataSync.js';
 import {reviseFixedCoordinateLedger} from '../src/fixedStoreCoordinates.js';
 import {createOpsmapDurableGeneration, stageOpsmapDurableStorage, STAGE_BASELINE_PREFIX} from '../src/opsmapDurableGeneration.js';
 import {createPrivateGithubJsonStore} from '../src/fixedVehicleStore.js';
-import {mountOpsmapScheduledRun, OPSMAP_SCHEDULED_ROUTE, publishOpsmapScheduledRun, verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
+import {claimQueuedOpsmapSchedule, mountOpsmapScheduledRun, OPSMAP_SCHEDULED_ROUTE, publishOpsmapScheduledRun,
+  verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
+import {stageFixedMasterStorage} from '../src/stageFixedMasterSync.js';
 import {syncDigest, syncSha256, verifyOpsmapGeneration} from '../src/opsmapSyncGeneration.js';
 import {archiveAddressHash} from '../src/stageArchivedDelivery.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
@@ -206,6 +208,52 @@ test('recent operations can schedule while the independent fixed master scope is
   assert.equal(result.status,202);
   assert.deepEqual(JSON.parse(input),{receipt,fixedScope:null});
   child.emit('close',0);
+});
+
+test('an approved independent owner accepts and claims one signed dispatch without starting the web worker',async t=>{
+  const api=github(),app=express(),now=()=>clockStart,logs=[];
+  const env={...storageEnv,OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED:'1',OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED:'1',
+    OPSMAP_STAGE_SYNC_EXECUTION_OWNER:'independent',OPSMAP_STAGE_SYNC_TRIGGER_ID:triggerId,
+    OPSMAP_STAGE_SYNC_EXECUTOR_SHA256:principal,OPSMAP_STAGE_SYNC_SCHEDULER_SECRET:secret};
+  const openDispatchStore=()=>stageFixedMasterStorage({env,fetchImpl:api.fetchImpl,write:true});
+  mountOpsmapScheduledRun(app,{env,now,openDispatchStore,log:value=>logs.push(JSON.parse(value)),
+    launch:()=>assert.fail('Render worker must remain stopped'),
+    readFixedScope:()=>assert.fail('Render must not resolve the private source scope')});
+  const base=await listen(t,app),receipt=signed(clockStart);
+  const post=body=>fetch(base+OPSMAP_SCHEDULED_ROUTE,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)});
+  const file='fixed-master-daily-v1/dispatch-'+date+'.json';
+  const claim=()=>claimQueuedOpsmapSchedule({store:openDispatchStore(),config:clock,now});
+
+  assert.equal(await claim(),null);
+  assert.equal((await post({...receipt,signature:'1'.repeat(64)})).status,403);
+  assert.equal(api.files.size,0);
+  api.deny(()=>true);
+  assert.equal((await post(receipt)).status,503);
+  assert.equal(logs.length,0);
+  api.deny(null);
+  for (const response of await Promise.all([post(receipt),post(receipt)])) {
+    assert.equal(response.status,202);
+    assert.deepEqual(await response.json(),{state:'QUEUED',runId:receipt.runId});
+  }
+  const {value}=await openDispatchStore().read(file);
+  assert.equal(value.signature,undefined);
+  assert.notEqual(value.stamp,receipt.signature);
+  const {stamp,...unsigned}=value;
+  assert.equal((await post({...unsigned,signature:stamp})).status,403);
+  await assert.rejects(claimQueuedOpsmapSchedule({store:{read:async()=>({value:{...value,stamp:'1'.repeat(64)}})},
+    config:clock,now}),/DISPATCH_SIGNATURE/);
+  await assert.rejects(claimQueuedOpsmapSchedule({store:openDispatchStore(),config:clock,now:()=>clockStart+11*60_000}),/RECEIPT/);
+  await assert.rejects(claimQueuedOpsmapSchedule({store:openDispatchStore(),config:clock,now,
+    prepare:()=>{throw Error('SOURCE_SCOPE_NOT_READY');}}),/SOURCE_SCOPE_NOT_READY/);
+  assert.equal((await openDispatchStore().read(file)).value.claim,undefined);
+  const claimed=(await Promise.all([claim(),claim()])).filter(Boolean);
+  assert.deepEqual(claimed,[{receipt:verifyOpsmapScheduleReceipt(receipt,{...clock,now}),input:null}]);
+  assert.equal(await claim(),null);
+  assert.equal((await post(receipt)).status,202);
+  assert.equal(api.files.size,1);
+  assert.equal([...api.files.keys()][0],'stage/opsmap-snapshots/opsmap-stage/'+file);
+  assert(logs.every(log=>log.state==='QUEUED'&&log.runId===receipt.runId&&!log.stamp));
 });
 
 test('registry scheduling does not require a fixed master scope',async t=>{
