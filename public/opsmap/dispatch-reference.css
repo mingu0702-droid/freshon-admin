@@ -65,7 +65,7 @@
 .dispatch-total b { justify-self:end; font-variant-numeric:tabular-nums; }
 .dispatch-total small { grid-column:1/-1; color:#506478; }
 .dispatch-detail-body dl { margin:8px 0; }
-.dispatch-detail-body dl div { border-top:1px solid #e6edf4; padding:5px 0; display:grid; gap:2px; }
+.dispatch-detail-body dl div { border-top:1px solid #e6edf4; padding:5px 0; display:grid; grid-template-columns:minmax(88px,.85fr) minmax(0,1.15fr); gap:6px; }
 .dispatch-detail-body dt { color:#52667b; }
 .dispatch-detail-body dd { margin:0; font-weight:650; overflow-wrap:anywhere; }
 .dispatch-simulation { padding:9px; background:#f5f0fb; border-radius:7px; }

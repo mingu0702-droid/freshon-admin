@@ -2,7 +2,8 @@ import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatc
 import {summarizeDispatchPeriod} from './dispatch-reference-period.mjs';
 
 const meters = km => Number.isFinite(km) ? new Intl.NumberFormat('ko-KR').format(Math.round(km*1000))+'m' : '미확인';
-const sourceClock=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',dateStyle:'short',timeStyle:'short'});
+const sourceClock=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',
+  hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 const sourceTime=value=>Number.isFinite(Date.parse(value))?sourceClock.format(new Date(value))+' KST':'미확인';
 
 export function nearestDispatchStop(stop, target) {
