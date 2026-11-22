@@ -1,0 +1,97 @@
+.dispatch-reference-open .workspace > #leftPanel {
+  width:auto; min-width:0; height:100%; grid-area:controls;
+}
+.dispatch-reference-open .workspace > .maparea {
+  width:auto; min-width:0; height:100%; grid-area:map; padding-top:0;
+}
+.dispatch-reference-open .workspace > .maparea > #map {
+  width:100%; height:100%; min-height:0;
+}
+.dispatch-reference-open .workspace > #leftPanel > .sidefoot,
+.dispatch-reference-open .workspace > #leftPanel > .sidehead,
+.dispatch-reference-open #leftPanel .scrollside > :not(:has(.customerBlock)):not(.customerBlock),
+.dispatch-reference-open #leftPanel .scrollside > section:has(.customerBlock) > :not(.customerBlock),
+.dispatch-reference-open .maparea > .mapbottom,
+.dispatch-reference-open .maparea > #navigationWorkspace,
+.dispatch-reference-open .maparea #vehicleQuickFilter,
+.dispatch-reference-open .maparea #mapTopControls > :not(#mapReset) { display:none; }
+.dispatch-reference-open #map .marker:not(.dispatch-map-pin,.selected,.virtual,.searchTemporaryMarker,.nearbyVehicle) { opacity:.26; }
+.dispatch-reference-open.dispatch-inspection:not(.dispatch-standard-detail-open) #detailSection { display:none; }
+.dispatch-native-detail { margin-top:7px; width:100%; }
+.dispatch-reference-open .dispatch-map-pin[data-dispatch-candidate] .pin {
+  outline:3px solid #8b4ac6; outline-offset:2px;
+}
+.approvedShellCandidate.dispatch-reference-open .marker.dispatch-map-pin.selected .pin {
+  background-color:var(--pin); outline:3px solid #1e293b; outline-offset:2px;
+}
+.approvedShellCandidate.dispatch-reference-open .dispatch-map-pin.selected[data-dispatch-candidate] .pin { outline-color:#8b4ac6; }
+.dispatch-reference-open #approvedSiteHeader .tab.active[aria-pressed="false"] { background:transparent; color:#536781; }
+.dispatch-controls, .dispatch-details {
+  color:#25374c; background:#fff; min-width:0;
+}
+.dispatch-controls { padding:14px; border-top:1px solid #e5ecf3; overflow:auto; }
+.dispatch-controls > summary, .dispatch-details > summary {
+  cursor:pointer; font-weight:700; color:#23364d;
+}
+.dispatch-controls > summary { font-size:15px; }
+.dispatch-controls[open] > summary { margin-bottom:10px; }
+.dispatch-status, .dispatch-coverage, .dispatch-empty,
+.dispatch-legend { color:#506478; font-size:12px; margin:5px 0 10px; }
+.dispatch-status:empty,.dispatch-coverage:empty { display:none; }
+.dispatch-date { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:6px; }
+.dispatch-date label, .dispatch-choices label { display:grid; gap:4px; font-size:12px; font-weight:650; }
+.dispatch-date [hidden], .dispatch-choices [hidden], .dispatch-choices[hidden] { display:none; }
+.dispatch-date input, .dispatch-date select, .dispatch-choices select, .dispatch-choices input { min-width:0; width:100%; padding:6px 5px; min-height:36px; }
+.dispatch-mode, .dispatch-period-field, .dispatch-period-basis { grid-column:1/-1; }
+.dispatch-choices label { margin-top:11px; }
+.dispatch-primary { color:#1455ab; }
+.dispatch-secondary { color:#a74911; }
+.dispatch-legend { display:grid; gap:3px; }
+.dispatch-legend i { width:8px; height:8px; border-radius:50%; background:#8b4ac6; display:inline-block; margin-right:3px; }
+.dispatch-legend span + span i { background:#008f85; }
+.dispatch-stores { border-top:1px solid #e5ecf3; margin-top:10px; padding-top:8px; font-size:12px; }
+.dispatch-stores:empty { display:none; }
+.dispatch-stores h3 { font-size:13px; margin:0 0 6px; }
+.dispatch-stores button {
+  width:100%; text-align:left; white-space:normal; overflow-wrap:anywhere; padding:6px; margin-top:4px;
+}
+.dispatch-details { grid-area:detail; border-left:1px solid #dfe8f1; overflow:auto; }
+.dispatch-details[hidden],.dispatch-controls[hidden] { display:none; }
+.dispatch-details > summary { padding:14px; border-bottom:1px solid #e5ecf3; }
+.dispatch-detail-body { padding:12px; font-size:12px; }
+.dispatch-detail-body h3 { font-size:15px; margin:12px 0 8px; overflow-wrap:anywhere; }
+.dispatch-total { display:grid; grid-template-columns:auto 1fr; gap:3px 8px; align-items:center; padding:8px; background:#f0f6ff; border-radius:7px; margin-bottom:5px; }
+.dispatch-total:nth-child(2) { background:#fff5eb; }
+.dispatch-total b { justify-self:end; font-variant-numeric:tabular-nums; }
+.dispatch-total small { grid-column:1/-1; color:#506478; }
+.dispatch-detail-body dl { margin:8px 0; }
+.dispatch-detail-body dl div { border-top:1px solid #e6edf4; padding:5px 0; display:grid; gap:2px; }
+.dispatch-detail-body dt { color:#52667b; }
+.dispatch-detail-body dd { margin:0; font-weight:650; overflow-wrap:anywhere; }
+.dispatch-simulation { padding:9px; background:#f5f0fb; border-radius:7px; }
+.dispatch-simulation h3,.dispatch-simulation p { margin:0 0 5px; }
+.dispatch-simulation small { color:#5b4b70; }
+.dispatch-gap { padding:5px 6px; border-radius:4px; background:#e9f0fb; }
+.dispatch-gap.worsening { background:#fff0de; color:#8a4211; font-weight:650; }
+.dispatch-fleet { border-top:1px solid #e5ecf3; margin:12px 0 0; padding:8px 0 0; font-size:12px; }
+.dispatch-fleet summary { cursor:pointer; font-weight:650; }
+.dispatch-fleet-summary { color:#52667b; margin:6px 0; }
+.dispatch-fleet-list { max-height:250px; overflow:auto; }
+.dispatch-fleet-result { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px; align-items:center; padding:6px 0; border-top:1px solid #e5ecf3; }
+.dispatch-choices .dispatch-fleet-result label { display:flex; align-items:center; margin:0; }
+.dispatch-fleet-result input[type=checkbox] { width:16px; min-height:16px; }
+.dispatch-fleet-result button { padding:3px 7px; }
+.dispatch-fleet-result small { grid-column:1/-1; overflow-wrap:anywhere; }
+.dispatch-detail-body details { border-top:1px solid #e6edf4; padding:6px 0; }
+.dispatch-detail-body details summary { cursor:pointer; }
+.dispatch-detail-body ul { margin:8px 0; padding-inline-start:18px; }
+.dispatch-detail-body h4 { margin:7px 0; }
+
+@media(min-width:901px) {
+  .dispatch-reference-open.dotRestored .workspace {
+    display:grid; grid-template-columns:minmax(172px,14fr) minmax(0,66fr) minmax(226px,20fr);
+    grid-template-rows:minmax(0,1fr); grid-template-areas:"controls map detail"; overflow:hidden;
+  }
+  .dispatch-reference-open #leftPanel .scrollside { flex:0 0 auto; overflow:visible; }
+  .dispatch-controls { flex:1 1 auto; min-height:0; }
+}

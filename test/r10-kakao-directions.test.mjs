@@ -12,6 +12,15 @@ test('official destination and from/to links encode names and preserve latitude/
   assert.equal(lookup.kakaoDestinationLink(row(1)),'https://map.kakao.com/link/to/'+encodeURIComponent(row(1).customerName)+',37.001,127.001');
   assert.equal(lookup.kakaoDestinationLink(row(1),row(0)),'https://map.kakao.com/link/from/'+encodeURIComponent(row(0).customerName)+',37,127/to/'+encodeURIComponent(row(1).customerName)+',37.001,127.001');
 });
+test('app launch is mobile-only and WGS84 payload omits internal customer data',()=>{
+  assert.equal(lookup.mobileNaviDevice({userAgent:'Windows NT 10.0',maxTouchPoints:2}),false);
+  assert.equal(lookup.mobileNaviDevice({userAgent:'Linux; Android 13'}),true);
+  assert.equal(lookup.mobileNaviDevice({userAgent:'Macintosh',platform:'MacIntel',maxTouchPoints:5}),true);
+  const selected={...row(4),address:'private-address',detailAddress:'private-detail',order:7};
+  assert.deepEqual({...lookup.naviDestination(selected)},{name:selected.customerName,x:selected.lng,y:selected.lat,coordType:'wgs84'});
+  assert.throws(()=>lookup.naviDestination({...selected,coordinateStatus:'CONFLICT'}));
+  assert.doesNotMatch(lookup.kakaoDestinationLink({...selected,customerName:''}),/SYNTHETIC|private/);
+});
 test('five via points use one official car link in exact input order',()=>{
   const segments=lookup.kakaoRouteLinks(rows(7));assert.equal(segments.length,1);assert.equal(segments[0].start,0);assert.equal(segments[0].end,6);
   assert.deepEqual(segments[0].url.split('/car/')[1].split('/').map(s=>decodeURIComponent(s.split(',')[0])),rows(7).map(r=>r.customerName));

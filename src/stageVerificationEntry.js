@@ -33,6 +33,9 @@ import {mountShadowCoverage} from './shadowCoverage/routes.js';
 import {createStagePostalAssets} from './shadowCoverage/stagePostalAssets.js';
 import {createCoverageStatusReader} from './shadowCoverage/storeStatus.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
+import {createOpsmapDispatchAmountsReader} from './opsmapDispatchAmounts.js';
+import {createOpsmapDispatchReferenceReader,mountOpsmapDispatchReference} from './opsmapDispatchReference.js';
+import {createStageWmsDispatchExportReader} from './opsmapWmsDispatchExport.js';
 import {createStageDriverContacts} from './stageDriverContacts.js';
 import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,vehicleId} from './datedDeliveryContract.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
@@ -669,7 +672,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             ]).filter(([,digest])=>digest!==undefined))}));
         return (await providerReader)();
       }:undefined;
-      mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:postalEnabled?undefined:coverageDirectory,
+      const postalCoverage = mountShadowCoverage({...binding,staffResponseGuarded:true,readDirectory:postalEnabled?undefined:coverageDirectory,
         appRoot:coverageAppRoot,readProviderCoverage,readStatus:readCoverageStatus,
         postal:postalEnabled?{directory:stage.OPSMAP_SHADOW_POSTAL_DIR,assetSource:remotePostal,
           readPublication:()=>{
@@ -733,6 +736,31 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           return respond();
         } catch {return res.status(503).json({error:'PHASE2B_SNAPSHOT_UNAVAILABLE'});}
       });
+      if (stage.RENDER_SERVICE_ID===STAGE_SERVICE) {
+        const readAmounts = createOpsmapDispatchAmountsReader({env:stage,fetchImpl,now});
+        const read = createOpsmapDispatchReferenceReader({
+          getPublication() {
+            const active = validation.active();
+            if (!active) return null;
+            const state = active.scheduled?.state;
+            const source = scheduledSources['delivery:'+SYNC_DELIVERY_SOURCES.osan];
+            return {generation:active.generation, registry:active.registry, postalGeneration:(active.scheduled?.index??active.coverageIndex)?.sha256,
+              runId:state?.runId, publishedAt:state?.committedAt ?? null, readDay:active.readNearbyDay,
+              dispatchDates:active.scheduled?.vehicleDelivery?.completeSources?.[SYNC_DELIVERY_SOURCES.osan],
+              observedAt:date=>source?.lastSuccessDate===date ? source.lastSuccessAt : null};
+          },
+          readAmounts,
+          readRetainedDated:readDatedDelivery.readRetained,
+          retainedDatedDates:readDatedDelivery.retainedDates,
+          readDated:date=>{
+            const hour=new Date(now()+9*3600000).getUTCHours();
+            return hour===6?null:readDatedDelivery(date);
+          },
+          readWmsExport:createStageWmsDispatchExportReader({env:stage}),
+          readPostcodes:(codes,generation)=>generation ? postalCoverage?.dispatchPostcodes(codes,generation) : null,
+        });
+        mountOpsmapDispatchReference(router,{requireStaff,read,today});
+      }
       router.get('/api/map-phase2b/preview/route-plan',requireStaff,async(req,res)=>{
         const date=normalizeDateValue(req.query.date),vehicle=normalizeCell(req.query.vehicle);
         if (!date || !vehicle || vehicle.length>40) return res.status(400).json({error:'INVALID_ROUTE'});

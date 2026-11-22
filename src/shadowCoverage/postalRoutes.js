@@ -102,6 +102,12 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     if (typeof req.query.id !== 'string' || !/^\d{5}$/.test(req.query.id)) throw Error('POSTAL_QUERY_INVALID');
     return runtime.area({ ...scope, id: Number(req.query.id) });
   });
+  route('/outline', (req, _scope, { runtime }) => {
+    if (Object.keys(req.query).length!==1 || typeof req.query.id !== 'string' || !/^\d{5}$/.test(req.query.id)) {
+      throw Error('POSTAL_QUERY_INVALID');
+    }
+    return runtime.outline(Number(req.query.id));
+  });
   function memberScope(req, scope) {
     const { area, offset = '0' } = req.query;
     if (!scope.generation || typeof area !== 'string' || !/^(?:unmatched|\d{5})$/.test(area) ||
@@ -141,6 +147,10 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     return runtime.search({ ...scope, query });
   });
   return {
+    async dispatchPostcodes(customerCodes,generation) {
+      const {runtime} = await load();
+      return runtime.dispatchPostcodes(customerCodes,generation);
+    },
     async prepareDefaultPointData() {
       const started = performance.now();
       const { runtime } = await load();

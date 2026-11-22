@@ -21,10 +21,14 @@ const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(
 const baseVehicleStatus='READY',periodBasis='vehicle';
 let clusterPanel=null,drilledBaseVehicle='',activeMapPinKey='',markerEntries=new Map(),indexedRows=null,pointIndex=null;
 let cameraSelection=0,selectedDriverContact=null,temporaryDetailPoint=null,addressFocusRequest=null;
+let recentOperationsSearchCode='';
+let lastMarkerViewport=null,searchNeighborhood=null,nearbyStoreIndex=null;
+const detachedMarkers=new Map();
 const selectedMapPins=new Set(),mapMarkerRows=new WeakMap(),requestControllers=new Map();
 const state={mode:'BASE_60D',currentRows:[],selected:null,detailRequestId:0,fitRequested:false,suppressMapEventsUntil:0,overlays:[],lines:[]};
 const invalidateUnifiedSearch=()=>{},closeUnifiedSearchResults=()=>{},cancelAddressLookup=()=>{},renderRunList=()=>{},renderPeriodStoreList=()=>{};
 const moveMapOverlayButton=()=>{},clearSearchSelectedOverlay=()=>{},clearActualRoute=()=>{},scheduleNewAreaDispatchBadges=()=>{},scheduleDetailPosition=()=>{};
+const recentOperationsOnly=()=>false,scheduleTemporaryRemoveButtons=()=>{},cancelViewportRender=()=>{};
 const runVisitId=row=>row?.deliveryId||row?.customerCode||'';
 const vehicleLabel=v=>v?v+'호차':'',vehicleColor=()=>'#275dd8',esc=v=>String(v).replace(/[&<>"']/g,'');
 const vehicleChecks=()=>$$('#vehicleList input');

@@ -359,17 +359,23 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
     return indexFlight;
   }
 
-  async function ready(days, center, expected, timing) {
+  async function verifiedRelease(expected, timing) {
     const started = performance.now();
     const publication = activeIndex();
     if (assetSource && (await publication).index.sha256 !== assetSource.config.generation) throw Error('POSTAL_GENERATION_MISMATCH');
     const [opened, { index }] = await Promise.all([assets(), publication]);
     if (timing) timing.postal_source = performance.now() - started;
-    const { release, areas, codes, manifest } = opened;
+    const { release } = opened;
     if (expected && expected !== index.sha256) throw Error('COVERAGE_GENERATION_CHANGED');
     if (release.generation !== index.sha256 || release.catalog !== index.catalog.sha256 || release.asOf !== index.asOf) {
       throw Error('POSTAL_GENERATION_MISMATCH');
     }
+    return opened;
+  }
+
+  async function ready(days, center, expected, timing) {
+    const opened = await verifiedRelease(expected,timing);
+    const {release,areas,codes,manifest} = opened;
     const key = [days, center].join(':');
     const joined = performance.now();
     if (scope?.key !== key) {
@@ -519,6 +525,17 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
 
   return {
     async warm() { await ready(90,'all'); },
+    async dispatchPostcodes(customerCodes,generation) {
+      const {codes} = await verifiedRelease(generation);
+      const result = new Map();
+      for (const code of customerCodes) {
+        const match = codes.get(code);
+        if (match?.registered && match.area != null && match.reviewArea === undefined) {
+          result.set(code,postalText(match.area));
+        }
+      }
+      return result;
+    },
     async view({ days, center, generation, box, indexed, timing }) {
       const opened = await ready(days,center,generation,timing);
       const selectedAt = performance.now();
@@ -580,6 +597,25 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       return work;
     },
     async area({ days, center, generation, id }) { return detail(await ready(days, center, generation), id); },
+    async outline(id) {
+      const opened = await assets();
+      const area = findArea(opened.areas,id);
+      if (!area) return null;
+      return withBatch(async () => {
+        for (const tile of opened.manifest.tiers.detail) {
+          if (!intersects(tile.box,area.box)) continue;
+          const bytes = await gunzip(await getTile(opened,tile),{maxOutputLength:POSTAL_TILE_LIMIT});
+          const zone = decodePostalTile(bytes).find(row=>row.id===id);
+          if (!zone) continue;
+          return {id:postalText(id),box:area.box,rings:zone.rings.map(ring=>{
+            const points=[];
+            for (let i=0;i<ring.length;i+=2) points.push([ring[i]/1e6,ring[i+1]/1e6]);
+            return points;
+          })};
+        }
+        throw Error('POSTAL_RELEASE_INTEGRITY');
+      });
+    },
     async stores(args) {
       const opened = await ready(args.days,args.center,args.generation);
       const [reader, { stores }] = await Promise.all([detailReader(),catalogData(loaded)]);

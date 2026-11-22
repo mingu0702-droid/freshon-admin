@@ -6,12 +6,12 @@ import os from 'node:os';
 const {chromium}=await import(process.env.OPSMAP_TEST_PLAYWRIGHT_MODULE||'playwright');
 // Real existing shell/editor/navigation controllers, synthetic rows and SDK only.
 const root=path.resolve('public/opsmap'),output=fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r10-directions-'));
-const rows=Array.from({length:32},(_,i)=>({customerCode:'SYNTHETIC_'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
+const rows=Array.from({length:32},(_,i)=>({customerCode:'SYNTHETIC_'+i,customerName:'합성 매장 '+i,address:'합성주소 '+i,vehicle:'101',vehicleGroup:'osan',order:i+1,lat:37+i*.001,lng:127+i*.001,lastDeliveryDate:'2026-11-02'}));
 // Two separate customers at one shop-in-shop coordinate remain two visits.
 rows[1].lat=rows[0].lat;rows[1].lng=rows[0].lng;
 const requests=[],external=[],errors=[],checks=[],version='e'.repeat(64);
-const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
-const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
+const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','opsmap-daily.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
+const fixture=`document.body.dataset.mapStaffState='authenticated';window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
 window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){},toggle(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}
 class Bounds{extend(){}getSouthWest(){return new Coord(33,124)}getNorthEast(){return new Coord(39.5,132)}}
@@ -26,7 +26,8 @@ const server=http.createServer((req,res)=>{
   requests.push({path:u.pathname,method:req.method});let data={data:[],meta:{}};
   if(u.pathname.endsWith('/snapshot'))data={data:rows,meta:{complete:true,latestDate:'2026-11-02',startDate:'2026-09-04',endDate:'2026-11-02'}};
   if(u.pathname.endsWith('/base-vehicles'))data={ok:true,data:rows.map(r=>({customerCode:r.customerCode,baseVehicle:'101',baseVehicleState:'VERIFIED_MASTER',baseVehicleGroup:'osan',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:version,baseVehicleStale:false})),meta:{version,stale:false}};
-  if(u.pathname.endsWith('/assignments'))data={data:rows.map(r=>({...r,deliveryDate:u.searchParams.get('date')})),meta:{complete:true,date:u.searchParams.get('date')}};
+  if(u.pathname.endsWith('/assignments'))data={ok:true,data:rows.map(r=>({...r,deliveryDate:u.searchParams.get('date')})),meta:{complete:true,date:u.searchParams.get('date')}};
+  if(u.pathname.endsWith('/route-plan'))data={data:{vehicle:'101',stops:rows,totalStops:rows.length},meta:{complete:true}};
   res.setHeader('content-type','application/json');res.end(JSON.stringify(data));return;
  }
  if(u.pathname==='/opsmap/'){res.setHeader('content-type','text/html');res.end(html);return;}
@@ -39,14 +40,14 @@ try{
  browser=await chromium.launch({headless:true,executablePath:process.env.OPSMAP_TEST_CHROMIUM||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
  const page=await browser.newPage({viewport:{width:1366,height:900}});page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',route=>{if(!route.request().url().startsWith(origin)){external.push(route.request().url());return route.abort();}return route.continue();});
- await page.goto(origin+'/opsmap/');await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady());
+ await page.goto(origin+'/opsmap/');
+ try{await page.waitForFunction(()=>window.MapNavigation&&MapUiLocalBridge.isDataReady(),{},{timeout:8000});}
+ catch(error){throw Error('Map fixture startup: '+JSON.stringify({errors,requests,state:await page.evaluate(()=>({map:!!window.MapUiLocalBridge,nav:!!window.MapNavigation,ready:window.MapUiLocalBridge?.isDataReady(),readout:!!document.querySelector('#mapTopReadout')}))}),{cause:error});}
  const check=(name,value)=>{assert(value,name);checks.push(name);};
  await page.evaluate(()=>{MapUiLocalBridge.selectNavigationStore('SYNTHETIC_1');});
- check('period detail has no duplicate standalone Kakao action',await page.locator('#navSelectedKakao').count()===0);
- await page.locator('#modeDaily').click();await page.locator('#waypointPlanner>summary').click();
- await page.evaluate(()=>MapUiLocalBridge.submitDailyQuery('2026-11-02','2026-11-02'));await page.waitForFunction(()=>MapUiLocalBridge.navigationStores().length===32);
- await page.evaluate(()=>{MapUiLocalBridge.selectNavigationStore('SYNTHETIC_1');MapNavigation.sync();});
- check('daily route actions share the existing planner',await page.locator('#waypointPlanner #navKakaoDirections').count()===1&&await page.locator('#waypointPlanner #navigationSummary').count()===1);
+ check('period detail exposes one precise Kakao map action and no PC native button',await page.locator('#detail [data-nav-external] a').count()===1&&await page.locator('#detail [data-nav-external] button').count()===0);
+ await page.locator('#waypointPlanner>summary').click();
+ check('route actions use the existing planner and result panel',await page.locator('#waypointPlanner #navKakaoDirections').count()===1&&await page.locator('#navigationSummary').count()===1);
  const apply=async count=>page.evaluate(n=>MapNavigationEditor.replacePoints(Array.from({length:n},(_,i)=>'SYNTHETIC_'+i)),count);
  await apply(2);check('two endpoints keep the combined link without a redundant fallback',await page.locator('#navKakaoLinks a').count()===1&&!await page.locator('#navKakaoLegFallback').isVisible()&&await page.locator('#navKakaoLegLinks a').count()===0);
  await apply(3);check('three points expose a short hint and initially collapsed adjacent fallback',await page.locator('#navKakaoLegHint').textContent()==='경유지가 표시되지 않으면 구간별로 열어 주세요.'&&await page.locator('#navKakaoLegFallback').isVisible()&&await page.locator('#navKakaoLegFallback').getAttribute('open')===null&&await page.locator('#navKakaoLegLinks a').count()===2&&!await page.locator('#navKakaoLegLinks a').first().isVisible());
@@ -54,7 +55,7 @@ try{
  check('same-coordinate first pair keeps both visit names and uses a labeled official destination link',adjacent[0].href==='https://map.kakao.com/link/to/'+encodeURIComponent(rows[1].customerName)+','+rows[1].lat+','+rows[1].lng&&adjacent[0].sameCoordinate==='true'&&adjacent[0].text.startsWith('1 → 2')&&adjacent[0].text.includes(rows[0].customerName)&&adjacent[0].text.includes(rows[1].customerName)&&adjacent[0].text.endsWith('같은 좌표 · 목적지로 열기'));
  check('different-coordinate second pair retains exact official from/to endpoints and visit order',adjacent[1].href==='https://map.kakao.com/link/from/'+encodeURIComponent(rows[1].customerName)+','+rows[1].lat+','+rows[1].lng+'/to/'+encodeURIComponent(rows[2].customerName)+','+rows[2].lat+','+rows[2].lng&&adjacent[1].sameCoordinate==='false'&&adjacent[1].text.startsWith('2 → 3')&&!adjacent[1].text.includes('같은 좌표'));
  await apply(7);check('five waypoint boundary opens one complete official car link',await page.locator('#navKakaoLinks a').count()===1&&(await page.locator('#navKakaoLinks a').getAttribute('href')).split('/car/')[1].split('/').length===7);
- check('one integrated Kakao section preserves input sequence',await page.locator('#navKakaoDirections').count()===1&&await page.locator('#navSelectedKakao').count()===0);
+ check('one integrated Kakao section preserves input sequence',await page.locator('#navKakaoDirections').count()===1);
  await apply(8);check('six waypoint boundary explicitly splits into two continuous links',await page.locator('#navKakaoLinks a').count()===2&&(await page.locator('#navKakaoStatus').textContent()).includes('모든 지점을 보존'));
  await apply(32);check('internal thirty waypoint editor is preserved with six external segments',await page.locator('#plannerStops input').count()===30&&await page.locator('#navKakaoLinks a').count()===6);
  check('thirty waypoint fallback preserves all thirty-one adjacent links with no extra provider',await page.locator('#navKakaoLegLinks a').count()===31&&await page.locator('#navKakaoLegLinks a').last().textContent().then(t=>t.startsWith('31 → 32')));
@@ -71,9 +72,28 @@ try{
  await page.locator('#navKakaoLegFallback summary').click();check('mobile user can expand adjacent links inside the existing panel',await page.locator('#navKakaoLegLinks a').first().isVisible()&&await page.locator('#navKakaoLegLinks a').evaluateAll(nodes=>nodes.every(n=>n.getBoundingClientRect().right<=innerWidth+1)));
  await page.locator('#navKakaoLegFallback').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(output,'directions-fallback-390.png')});
  await page.locator('#plannerWaypoint8').fill('UNKNOWN_SYNTHETIC');check('unresolved via point blocks all combined and fallback links',await page.locator('#navKakaoLinks a').count()===0&&await page.locator('#navKakaoLegLinks a').count()===0&&!await page.locator('#navKakaoLegFallback').isVisible()&&!await page.locator('#navKakaoLegHint').isVisible());
- await page.locator('#plannerStart').fill('UNKNOWN_ORIGIN');check('unresolved explicit origin leaves no standalone bypass',await page.locator('#navSelectedKakao').count()===0&&await page.locator('#navKakaoLinks a').count()===0);
- await page.evaluate(()=>MapNavigationEditor.clear());check('clear removes all combined and fallback route links',await page.locator('#navKakaoLinks a').count()===0&&await page.locator('#navKakaoLegLinks a').count()===0&&await page.locator('#navSelectedKakao').count()===0);
- await page.evaluate(()=>window.dispatchEvent(new CustomEvent('map-navigation-logout')));check('logout clears selected destination and route links',!await page.locator('#navSelectedKakao').isVisible()&&await page.locator('#navKakaoLinks a').count()===0);
+ await page.locator('#plannerStart').fill('UNKNOWN_ORIGIN');check('unresolved explicit origin leaves no combined route link',await page.locator('#navKakaoLinks a').count()===0);
+ await page.evaluate(()=>MapNavigationEditor.clear());check('clear removes all combined and fallback route links',await page.locator('#navKakaoLinks a').count()===0&&await page.locator('#navKakaoLegLinks a').count()===0);
+ await page.evaluate(()=>{
+  Object.defineProperty(navigator,'userAgent',{value:'Android Chrome',configurable:true});
+  MapUiLocalBridge.selectNavigationStore('SYNTHETIC_1');
+ });
+ const navi=page.getByRole('button',{name:'카카오내비 앱으로 안내'});
+ await navi.click();await page.locator('#detail [data-nav-feedback]').getByText('카카오내비 연결을 준비하지 못했습니다.',{exact:false}).waitFor();
+ check('mobile setup failure preserves the map link',await page.locator('#detail [data-nav-external] a').isVisible());
+ await page.evaluate(()=>{window.Kakao={isInitialized:()=>true,Navi:{start(payload){window.naviDestination=payload;}}};});
+ await navi.click();const appPayload=await page.evaluate(()=>window.naviDestination);
+ check('mobile app uses the exact co-located selection without transmitting internal code',JSON.stringify(appPayload)===JSON.stringify({name:rows[1].customerName,x:rows[1].lng,y:rows[1].lat,coordType:'wgs84'}));
+ const beforeReturn=await page.evaluate(()=>({code:MapUiLocalBridge.state.selected?.customerCode,mode:MapUiLocalBridge.state.mode,
+   vehicles:MapUiLocalBridge.state.selectedVehicles,link:document.querySelector('#detail [data-nav-external] a').href}));
+ await page.evaluate(()=>{
+   window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}));
+   window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));
+ });
+ const afterReturn=await page.evaluate(()=>({code:MapUiLocalBridge.state.selected?.customerCode,mode:MapUiLocalBridge.state.mode,
+   vehicles:MapUiLocalBridge.state.selectedVehicles,link:document.querySelector('#detail [data-nav-external] a').href}));
+ check('in-memory app return retains the selected customer, route and destination',JSON.stringify(beforeReturn)===JSON.stringify(afterReturn));
+ await page.evaluate(()=>window.dispatchEvent(new CustomEvent('map-navigation-logout')));check('logout clears selected destination and route links',!await page.locator('#detail [data-nav-external]').isVisible()&&await page.locator('#navKakaoLinks a').count()===0);
  check('no provider requests, geocoding, route POSTs or JavaScript errors',external.length===0&&!requests.some(r=>r.path.includes('road-route'))&&errors.length===0);
  const result={pass:checks.length,fail:0,scope:'LOCAL_REAL_EDGE_SYNTHETIC_SHELL_EDITOR_NO_PROVIDER',checks,externalCalls:external.length,errors,artifacts:output};fs.writeFileSync(path.join(output,'RESULT.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}
