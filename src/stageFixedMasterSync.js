@@ -319,13 +319,15 @@ export function createStageDailyFixedMasterReader({store, baseline,now=Date.now}
   };
 }
 
-export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, login, onScan, onPage, onPreflight, preflightOnly=false}={}) {
+export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, login, onScan, onPage, onPreflight,
+  preflightOnly=false, allowFullRescan=false}={}) {
   if (!stageFixedMasterSyncEnabled(env) || env.FRESHON_BASE_URL && new URL(env.FRESHON_BASE_URL).origin!==MIS) {
     throw fail('FIXED_MASTER_STAGE_SOURCE_SCOPE');
   }
   // Keep the existing count and boundary rechecks while shortening the time between pages.
   const limit=AbortSignal.timeout(preflightOnly?3*minute:FIXED_MASTER_WORKER_LIMIT-5*minute);
-  const pageRequestLimit=120;
+  const firstPassBudget=120;
+  let pageRequestLimit=firstPassBudget,rescanReserved=false;
   let cookie=env.FRESHON_COOKIE || '', attemptedLogin=false, calls=0;
   const reader=createFixedVehicleReader({
     pageConcurrency:2,
@@ -335,6 +337,14 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
     onPage,
     onPreflight,
     remainingPageRequests:()=>pageRequestLimit-calls,
+    ...(allowFullRescan&&!preflightOnly?{reserveRescanRequests(required){
+      // Fund at most one fresh center scan while keeping the ordinary 3-center
+      // allowance intact. The unchanged overall deadline also covers the retry.
+      if (rescanReserved || required>firstPassBudget) return false;
+      rescanReserved=true;
+      pageRequestLimit+=required;
+      return true;
+    }}:{}),
     async ensureSession(force) {
       limit.throwIfAborted();
       if (!force && cookie) return;

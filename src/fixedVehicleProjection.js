@@ -67,7 +67,8 @@ const pageIdentity=rows=>{
 };
 
 export function createFixedVehicleReader({ensureSession, readJson, extractRows, pageConcurrency=1, verifyLastPage=false,
-  strictPageCounts=false, onScan, onPage, onPreflight, remainingPageRequests, sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
+  strictPageCounts=false, onScan, onPage, onPreflight, remainingPageRequests, reserveRescanRequests,
+  sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
   if(![1,2].includes(pageConcurrency))throw Object.assign(Error('FIXED_MASTER_CONCURRENCY_INVALID'),{code:'FIXED_MASTER_CONCURRENCY_INVALID'});
   let progress=null;
   const reader=async function readFixedVehicleMaster({signal, customerCodes,preflightOnly=false}={}) {
@@ -277,7 +278,11 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         const nextRows=countChange?.declaredRows ?? expectedRows;
         const pages=Math.ceil(nextRows/pageSize);
         const rechecks=verifyLastPage&&pages>1?2:1;
-        if(pages>0&&remainingPageRequests&&remainingPageRequests()<pages+rechecks){
+        const required=pages+rechecks;
+        if(pages>0&&(
+          reserveRescanRequests&&!reserveRescanRequests(required) ||
+          remainingPageRequests&&remainingPageRequests()<required
+        )){
           progress={...progress,failureCode:'FIXED_MASTER_RETRY_BUDGET'};
           throw failure('FIXED_MASTER_RETRY_BUDGET',0,'REVALIDATING','SOURCE_LIMIT');
         }

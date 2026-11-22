@@ -56,6 +56,33 @@ function memory() {
 const base=() => fixedEnvelope(source('099').data,new Date(start-hour).toISOString());
 const reader=baseValue=>({load:async()=>baseValue??null});
 
+test('independent collection can restart an 82-page center once after late count drift',async()=>{
+  let firstPages=0,calls=0;
+  const scans=[];
+  const read=createStageFixedMasterSource({env:{...env,FRESHON_COOKIE:'fixture'},allowFullRescan:true,
+    onScan:item=>scans.push(item),
+    async fetchImpl(_url,{body}) {
+      calls++;
+      const params=new URLSearchParams(body),logCd=params.get('logCd'),page=Number(params.get('page'));
+      if (logCd==='011'&&page===0) firstPages++;
+      const rejected=logCd==='011'&&firstPages===1;
+      const totalCnt=logCd==='011'?(rejected&&page<71?81709:81710):1;
+      const offset=page*1000+(logCd==='012'?100000:logCd==='013'?200000:0);
+      const data=Array.from({length:Math.min(1000,totalCnt-page*1000)},(_,i)=>({
+        estCd:'S'+String(offset+i+1).padStart(6,'0'),logCd,totalCnt,mainCarSeqNm:rejected?'101':'122'
+      }));
+      return Response.json({data});
+    }});
+  const result=await read(new Set(['S000001','S100001','S200001']));
+  assert.deepEqual(result.meta.centers.map(({center,declaredRows,pages})=>[center,declaredRows,pages]),
+    [['011',81710,82],['012',1,1],['013',1,1]]);
+  assert(result.data.every(row=>row.baseVehicle==='122'));
+  assert.equal(result.data.length,3);
+  assert(calls>120 && calls<=204);
+  assert.deepEqual(scans.map(({center,scan,state})=>[center,scan,state]),
+    [['011',1,'REJECTED'],['011',2,'VERIFIED'],['012',1,'VERIFIED'],['013',1,'VERIFIED']]);
+});
+
 test('the independent recipient publishes three verified centers after the dispatch web server stops',async()=>{
   const store=memory(),baseline=base(),app=express();
   let tick=start;

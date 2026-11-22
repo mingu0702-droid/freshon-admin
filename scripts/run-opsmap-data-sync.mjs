@@ -179,7 +179,7 @@ function scheduledQueueRunner() {
   return {
     claim:()=>claimQueuedOpsmapSchedule({store,config,prepare:()=>readIndependentStageScopes(env)}),
     async execute({receipt,input}) {
-      await runScheduled({...input,receipt},settingsFile);
+      await runScheduled({...input,receipt},settingsFile,{independent:true});
       console.log(JSON.stringify({component:'opsmap-independent-run',state:'WORKER_EXITED',runId:receipt.runId}));
     }
   };
@@ -231,7 +231,7 @@ async function run() {
   process.once('SIGTERM',stop);
 }
 
-async function runScheduled(job,settingsFile){
+async function runScheduled(job,settingsFile,{independent=false}={}){
     const mode=settingsFile?'scheduled':'fixed-scheduled';
     const {receipt}=job;
     const fixedScope=job?.fixedScope;
@@ -263,7 +263,7 @@ async function runScheduled(job,settingsFile){
       try {
         if (!fixedScope) throw Error('FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE');
         const store=stageFixedMasterStorage({env,write:true});
-        const source=createStageFixedMasterSource({env,onScan:evidence=>console.info(JSON.stringify({
+        const source=createStageFixedMasterSource({env,allowFullRescan:independent,onScan:evidence=>console.info(JSON.stringify({
           component:'opsmap-fixed-master-pages',runId:receipt.runId,...evidence})),
           onPage:evidence=>console.info(JSON.stringify({
             component:'opsmap-fixed-master-page-progress',runId:receipt.runId,...evidence}))});
