@@ -123,6 +123,53 @@
   mapReadout.append(routeTotals);
   if($('#syncOperation'))$('#navigationSummary').append($('#syncOperation'));
   const centerChoices=document.createElement('div');centerChoices.className='navCenterChoices';centerChoices.setAttribute('aria-label','센터에서 출발');planner.querySelector('summary').after(centerChoices);
+  const roadDiagnostics=bridge.isStagePreview?.() ? document.createElement('details') : null;
+  const readinessErrors=new Set(['FEATURE_DISABLED','KEY_MISSING','CALL_POLICY_UNCONFIRMED','CALL_POLICY_BLOCKED','PERSISTENT_BUDGET_REQUIRED','QUOTA_EXCEEDED']);
+  let roadReadinessRequest=null;
+  if(roadDiagnostics){
+    roadDiagnostics.id='navRoadDiagnostics';
+    roadDiagnostics.innerHTML='<summary>도로경로 연결 상태</summary><div role="status"></div>';
+    planner.append(roadDiagnostics);
+    roadDiagnostics.addEventListener('toggle',()=>{
+      if(roadDiagnostics.open)void refreshRoadReadiness();
+      else clearRoadReadiness();
+    });
+  }
+  function clearRoadReadiness(){
+    roadReadinessRequest?.abort();
+    roadReadinessRequest=null;
+    roadDiagnostics?.querySelector('[role="status"]').replaceChildren();
+  }
+  async function refreshRoadReadiness(){
+    if(!roadDiagnostics?.open)return;
+    clearRoadReadiness();
+    const statusBox=roadDiagnostics.querySelector('[role="status"]');
+    const request=new AbortController();
+    roadReadinessRequest=request;
+    statusBox.textContent='도로경로 연결 상태 확인 중…';
+    const timeout=setTimeout(()=>request.abort(),25000);
+    try{
+      const response=await fetch('/api/map-phase2b/private/road-route/config',{
+        credentials:'same-origin',cache:'no-store',signal:request.signal
+      });
+      if(!response.ok)throw Object.assign(Error('ROAD_READINESS_UNAVAILABLE'),{status:response.status});
+      const payload=await response.json();
+      if(roadReadinessRequest!==request)return;
+      const list=document.createElement('ul');
+      for(const message of window.RoadRouteUi.describeReadiness(payload?.data)){
+        const item=document.createElement('li');
+        item.textContent=message;
+        list.append(item);
+      }
+      statusBox.replaceChildren(list);
+    }catch(error){
+      if(roadReadinessRequest===request)
+        statusBox.textContent=error?.status===401?'직원 로그인 후 확인할 수 있습니다.':'도로경로 연결 상태를 확인할 수 없습니다.';
+    }finally{
+      clearTimeout(timeout);
+      if(roadReadinessRequest===request)roadReadinessRequest=null;
+    }
+  }
   const suggestions=document.createElement('div');suggestions.id='navSearchResults';suggestions.className='navSearchResults';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label','매장 검색 결과');
   const missing=document.createElement('details');missing.id='navMissingStores';missing.innerHTML='<summary>위치 확인이 필요한 매장</summary><div></div>';workspace.append(missing);
   const temporaryPlaces=lookup.createTemporaryPlaces(),explicitStores=new Map();
@@ -318,6 +365,8 @@
   }
   function displayLabel(value,fallback){const found=resolve(value);return found.length===1?(found[0].customerName||found[0].customerCode):fallback;}
   function showResult(result,kind='manual'){
+    if(roadDiagnostics&&!roadDiagnostics.open&&readinessErrors.has(result?.error))roadDiagnostics.open=true;
+    else if(result?.state&&result.state!=='idle'&&result.state!=='loading')void refreshRoadReadiness();
     // A cancelled inactive controller must not erase the other controller's route.
     if(result?.state==='idle'&&lastKind!==kind&&['loading','success','partial'].includes(lastResult?.state))return;
     lastResult=result;lastKind=kind;renderRolePins();
@@ -474,12 +523,29 @@
     autoRecalculate=false;clearTimeout(recalculateTimer);hideSuggestions();
     temporaryPlaces.clear();explicitStores.clear();editor.clear();closeCenterCard();
     dailyContext='';defaultedDailyContext='';autoOrigin='';lastResult=null;lastKind='manual';showResult({state:'idle'});
-    if(event.type==='map-navigation-logout')clearCenters();
+    if(event.type==='map-navigation-logout'){
+      if(roadDiagnostics)roadDiagnostics.open=false;
+      clearRoadReadiness();
+      clearCenters();
+    }
   };
   const events=[['map-manual-route',onManual],['map-recorded-route',onRecorded],['map-store-selected',onSelected],['map-sdk-ready',onReady],['map-navigation-logout',onContext],['map-navigation-context-changed',onContext],['map-navigation-draft',onDraft],['map-coordinate-updated',sync]];
   events.forEach(([name,listener])=>window.addEventListener(name,listener));
   const observer=new MutationObserver(sync);if($('#modeDaily'))observer.observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});if($('#runList'))observer.observe($('#runList'),{childList:true});
-  window.addEventListener('pagehide',event=>{if(event.persisted)return;disposed=true;cancelAddressSearch();clearTimeout(suggestTimer);clearTimeout(recalculateTimer);observer.disconnect();events.forEach(([name,listener])=>window.removeEventListener(name,listener));document.removeEventListener('pointerdown',outsidePointer);$('#detail').removeEventListener('click',onPointClick);if(rolePinMap)kakao.maps.event?.removeListener(rolePinMap,'idle',scheduleRolePins);clearCenters();clearRolePins();},{once:true});
+  function dispose(event){
+    clearRoadReadiness();
+    if(event.persisted){
+      if(roadDiagnostics)roadDiagnostics.open=false;
+      return;
+    }
+    disposed=true;cancelAddressSearch();clearTimeout(suggestTimer);clearTimeout(recalculateTimer);
+    observer.disconnect();events.forEach(([name,listener])=>window.removeEventListener(name,listener));
+    document.removeEventListener('pointerdown',outsidePointer);$('#detail').removeEventListener('click',onPointClick);
+    if(rolePinMap)kakao.maps.event?.removeListener(rolePinMap,'idle',scheduleRolePins);
+    clearCenters();clearRolePins();
+    window.removeEventListener('pagehide',dispose);
+  }
+  window.addEventListener('pagehide',dispose);
   window.MapNavigation=Object.freeze({resolve,search:value=>lookup.search(value,all()),sync,metrics:()=>({centerOverlays:otherCenterMarkers.length+Number(Boolean(centerMarker)),routePointOverlays:routePointOverlays.length,routePointCount:roleRows().length,temporaryPointCount:temporaryPlaces.values().length,routeState:lastResult?.state||'idle'})});
   drawCenters();sync();
 })();

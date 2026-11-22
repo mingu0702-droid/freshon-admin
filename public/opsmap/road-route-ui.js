@@ -38,10 +38,10 @@
     return { cancel, load };
   }
   function describe(data) {
-    const reasons = { FEATURE_DISABLED: '도로 경로를 조회할 수 없습니다.', KEY_MISSING: '도로 경로를 조회할 수 없습니다.', CALL_POLICY_UNCONFIRMED: '도로 경로를 조회할 수 없습니다.', ORIGIN_UNCONFIRMED: '출발지 위치를 확인해 주세요.',
+    const reasons = { FEATURE_DISABLED: '도로경로 기능 OFF', KEY_MISSING: '도로경로 API 키 누락', CALL_POLICY_UNCONFIRMED: '도로경로 사용 승인 미확인', ORIGIN_UNCONFIRMED: '출발지 위치를 확인해 주세요.',
       STAFF_LOGIN_REQUIRED: '직원 로그인 후 조회 가능', RECORDED_ORDER_REQUIRED: '저장된 착순 확인 필요', STOP_COORDINATES_MISSING: '착지 좌표 누락 · 경로 조회 보류',
       ROUTE_SOURCE_UNVERIFIED: '해당 날짜의 방문 순서를 확인할 수 없습니다.', ROUTE_IDENTITY_MISMATCH: '해당 날짜의 호차를 확인해 주세요.', QUOTA_EXCEEDED: '경로 조회 한도에 도달했습니다.',
-      AUTHENTICATION_FAILED: '도로 경로를 조회할 수 없습니다.', PERMISSION_DENIED: '도로 경로를 조회할 수 없습니다.', CALL_POLICY_BLOCKED: '도로 경로를 조회할 수 없습니다.', PERSISTENT_BUDGET_REQUIRED:'도로 경로를 조회할 수 없습니다.',
+      AUTHENTICATION_FAILED: '도로 경로를 조회할 수 없습니다.', PERMISSION_DENIED: '도로 경로를 조회할 수 없습니다.', CALL_POLICY_BLOCKED: '도로경로 사용량 원장 검증 실패', PERSISTENT_BUDGET_REQUIRED:'도로경로 사용량 원장 연결 필요',
       PROVIDER_UNAVAILABLE:'도로 경로를 불러오지 못했습니다. 잠시 후 다시 조회해 주세요.', TIMEOUT: '도로 경로 조회 시간이 초과됐습니다.', NO_ROAD_ROUTE: '도로 경로를 찾지 못했습니다.' };
     if (!data || data.state === 'idle') return '방문할 지점을 선택한 뒤 경로를 조회해 주세요.';
     if (data.state === 'loading') return '도로경로 조회 중…';
@@ -52,6 +52,44 @@
     if (data.state === 'error') return reasons[data.error] || failure || '도로경로 조회 실패 · 거리와 시간 미확인';
     if (data.state === 'partial') return `일부 도로경로 ${data.coveredLegs}/${data.totalLegs}구간 · 성공 구간 합계${failure ? ' · ' + failure : ''}`;
     return data.noDrivingRequired?'모든 방문지가 같은 위치에 있습니다.':'방문 순서에 따른 자동차 경로 · 현재 교통 기준';
+  }
+  function describeReadiness(data) {
+    const stage = data?.stage;
+    if (!stage) return ['도로경로 연결 상태를 확인할 수 없습니다.'];
+    const switchText = stage.requested ? '실행 스위치 ON' : !stage.switchConfigured ? '실행 스위치 미설정' :
+      stage.switchValueValid ? '실행 스위치 OFF' : '실행 스위치 형식 불일치';
+    const approval = stage.approved ? 'Stage 사용 승인 확인' : !stage.approvalConfigured ? 'Stage 사용 승인 누락' :
+      stage.approvalValueValid ? 'Stage 사용 미승인' : 'Stage 승인 설정 형식 불일치';
+    const budgetErrors = {
+      ROAD_BUDGET_LEDGER_MISSING:'사용량 원장 누락',
+      ROAD_BUDGET_ACCOUNT_MISMATCH:'원장과 Kakao 키의 계정 불일치',
+      ROAD_BUDGET_STORE_PERMISSION:'사용량 원장 접근 권한 확인 필요',
+      ROAD_BUDGET_PRIVATE_WRITE_REQUIRED:'사용량 원장 차감 권한 없음',
+      ROAD_BUDGET_APPROVAL_EXPIRED:'사용량 원장 승인 만료',
+      ROAD_BUDGET_APPROVAL_REQUIRED:'사용량 원장 승인 미확인'
+    };
+    const ledger = budgetErrors[data.budgetError] || (data.budgetVerified ? '사용량 원장·계정 확인' :
+      data.persistentBudgetConfigured ? '사용량 원장 검증 실패' : '사용량 원장 미연결');
+    const remaining = data.budgetVerified && Number.isSafeInteger(data.approvedRemaining) ?
+      data.approvedRemaining > 0 ? '승인 잔량 ' + data.approvedRemaining.toLocaleString('ko-KR') + '회' : '승인 잔량 부족' :
+      '승인 잔량 미확인';
+    const lines = [
+      data.enabled ? '기능 ON' : '기능 OFF',
+      data.canRequest ? '도로경로 호출 가능' : '도로경로 호출 차단',
+      switchText,
+      approval,
+      data.keyConfigured ? 'Stage API 키 연결' : 'Stage API 키 누락',
+      stage.budgetTokenConfigured ? '원장 접근 설정 있음' : '원장 접근 설정 누락',
+      ledger,
+      remaining
+    ];
+    if (!stage.serviceVerified) lines.push('지정된 Stage 서비스 확인 필요');
+    if (stage.ignoredSharedSwitch) lines.push('공용 또는 Production 실행 스위치는 Stage에 적용되지 않습니다.');
+    if (data.budgetVerified && data.approvedRemaining > 0) {
+      if (data.apiRemaining?.directions === 0) lines.push('Directions 잔량 부족');
+      if (data.apiRemaining?.waypoints === 0) lines.push('Waypoints 사용 불가');
+    }
+    return lines;
   }
   function metrics(data) {
     const valid = ['success', 'partial'].includes(data?.state);
@@ -94,6 +132,6 @@
 
     return { clear, render };
   }
-  root.RoadRouteUi = { createController, describe, metrics, roadSegments, createLayer };
+  root.RoadRouteUi = { createController, describe, describeReadiness, metrics, roadSegments, createLayer };
 })(typeof window === 'object' ? window : globalThis);
 

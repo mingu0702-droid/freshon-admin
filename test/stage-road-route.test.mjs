@@ -4,6 +4,7 @@ import test from 'node:test';
 import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
+import '../public/opsmap/road-route-ui.js';
 
 const key = 'stage-fixture-key';
 const token = 'stage-fixture-budget-token';
@@ -30,7 +31,7 @@ const draft = {
 
 async function fixture(t, options = {}) {
   let session, revision = 1, budget = structuredClone(options.ledger ?? approved);
-  let budgetWrites = 0, providerCalls = 0;
+  let budgetReads = 0, budgetWrites = 0, providerCalls = 0;
   const file = (bytes, sha) => bytes ? Response.json({
     encoding:'base64', size:bytes.length, content:bytes.toString('base64'), sha
   }) : new Response(null,{status:404});
@@ -68,6 +69,7 @@ async function fixture(t, options = {}) {
     assert.equal(update?.branch ?? url.searchParams.get('ref'),branch);
     if (isBudget) {
       assert.match(url.pathname,/\/contents\/opsmap-stage\/road-budget-v1\.json$/);
+      if (!update) budgetReads++;
       if(options.missing) return new Response(null,{status:404});
       if (update) {
         budgetWrites++;
@@ -95,11 +97,12 @@ async function fixture(t, options = {}) {
   const login = await request('auth/login',{method:'POST',headers,body:JSON.stringify({id:'stage-fixture',password})});
   assert.equal(login.status,200);
   const cookie = login.headers.get('set-cookie').split(';')[0];
-  const config = async()=> (await request('private/road-route/config',{headers:{cookie}})).json().then(p=>p.data);
+  const configResponse = (staff=true)=>request('private/road-route/config',{headers:staff?{cookie}:{}});
+  const config = async()=> (await configResponse()).json().then(p=>p.data);
   const route = ({input=draft, origin=STAGE_ORIGIN, staff=true}={})=>request('private/manual-road-route',{
     method:'POST', headers:{...headers,origin,...(staff?{cookie}:{})},body:JSON.stringify(input)
   });
-  return {config,route,counts:()=>({budgetWrites,providerCalls})};
+  return {config,configResponse,route,budgetReads:()=>budgetReads,counts:()=>({budgetWrites,providerCalls})};
 }
 
 test('Stage ignores shared or Production road credentials and a flag without approval',async t=>{
@@ -110,12 +113,28 @@ test('Stage ignores shared or Production road credentials and a flag without app
   }});
   const config = await f.config();
   assert.deepEqual(config.blockedReasons,['FEATURE_DISABLED','KEY_MISSING','PERSISTENT_BUDGET_REQUIRED']);
+  assert.equal(config.stage.requested,true);
+  assert.equal(config.stage.approved,false);
+  assert.equal(config.stage.approvalConfigured,false);
+  assert.equal(config.stage.ignoredSharedSwitch,true);
+  assert.equal(config.stage.budgetTokenConfigured,false);
+  const lines = globalThis.RoadRouteUi.describeReadiness(config);
+  assert(lines.includes('실행 스위치 ON'));
+  assert(lines.includes('기능 OFF'));
+  assert(lines.includes('Stage 사용 승인 누락'));
+  assert(lines.includes('Stage API 키 누락'));
   assert.equal((await f.route()).status,503);
   assert.deepEqual(f.counts(),{budgetWrites:0,providerCalls:0});
 });
 
 test('Stage road readiness reads its ledger; staff and same-origin calls reserve before dispatch',async t=>{
   const f = await fixture(t);
+  assert.equal(f.budgetReads(),1,'startup checks the ledger before the staff diagnostic is opened');
+  assert.deepEqual(f.counts(),{budgetWrites:0,providerCalls:0});
+  assert.equal((await f.configResponse(false)).status,401);
+  const response=await f.configResponse();
+  assert.match(response.headers.get('cache-control'),/no-store/);
+  await response.body.cancel();
   const config = await f.config();
   assert.equal(config.canRequest,true);
   assert.equal(config.budgetBackend,'STAGE_PRIVATE_GITHUB_CAS');
@@ -134,22 +153,52 @@ test('Stage road readiness reads its ledger; staff and same-origin calls reserve
   assert.equal(data.data.durationSeconds,310);
   assert.equal(data.data.chunks[0].geometry.length,2);
   assert.equal((await f.config()).approvedRemaining,0);
+  assert(globalThis.RoadRouteUi.describeReadiness(await f.config()).includes('승인 잔량 부족'));
   const other = {...draft,destination:{...draft.destination,lat:37.03}};
   assert.equal((await f.route({input:other})).status,429);
   assert.deepEqual(f.counts(),{budgetWrites:1,providerCalls:1});
 });
 
+test('the same approved settings survive a restart while the recorded deploy SHA changes',async t=>{
+  const first = await fixture(t,{env:{RENDER_GIT_COMMIT:'a'.repeat(40)}});
+  const restarted = await fixture(t,{env:{RENDER_GIT_COMMIT:'b'.repeat(40)}});
+  const a=await first.config(),b=await restarted.config();
+  assert.equal(a.stage.deployment,'a'.repeat(40));
+  assert.equal(b.stage.deployment,'b'.repeat(40));
+  const {deployment:oldDeployment,...oldSettings}=a.stage;
+  const {deployment:newDeployment,...newSettings}=b.stage;
+  assert.deepEqual(oldSettings,newSettings);
+  assert(a.enabled&&b.enabled&&a.budgetVerified&&b.budgetVerified);
+  assert.deepEqual(first.counts(),{budgetWrites:0,providerCalls:0});
+  assert.deepEqual(restarted.counts(),{budgetWrites:0,providerCalls:0});
+  const disabled = await fixture(t,{env:{OPSMAP_STAGE_ROAD_ROUTE_ENABLED:'0'}});
+  const off=await disabled.config();
+  assert(!off.enabled&&off.stage.switchConfigured&&!off.stage.requested&&off.stage.approved);
+  assert(globalThis.RoadRouteUi.describeReadiness(off).includes('실행 스위치 OFF'));
+  const invalid=await fixture(t,{env:{OPSMAP_STAGE_ROAD_ROUTE_ENABLED:'true',OPSMAP_STAGE_ROAD_ROUTE_APPROVED:'true'}});
+  const invalidConfig=await invalid.config();
+  assert(!invalidConfig.enabled&&invalidConfig.stage.switchConfigured&&invalidConfig.stage.approvalConfigured);
+  const lines=globalThis.RoadRouteUi.describeReadiness(invalidConfig);
+  assert(lines.includes('실행 스위치 형식 불일치'));
+  assert(lines.includes('Stage 승인 설정 형식 불일치'));
+});
+
 test('missing ledger, write permission, expired approval and CAS conflicts never dispatch',async t=>{
   const expired = structuredClone(approved);
   expired.roadBudget.expiresAt = '2026-11-14T02:20:00Z';
+  const wrongAccount = structuredClone(approved);
+  wrongAccount.roadBudget.accountHash = '9'.repeat(64);
   for (const [input, reason] of [
     [{missing:true},'ROAD_BUDGET_LEDGER_MISSING'],
     [{budgetWriteAllowed:false},'ROAD_BUDGET_PRIVATE_WRITE_REQUIRED'],
     [{ledger:expired},'ROAD_BUDGET_APPROVAL_EXPIRED'],
+    [{ledger:wrongAccount},'ROAD_BUDGET_ACCOUNT_MISMATCH'],
     [{conflict:true},null]
   ]) {
     const f = await fixture(t,input);
-    assert.equal((await f.config()).budgetError,reason);
+    const config=await f.config();
+    assert.equal(config.budgetError,reason);
+    if(input.missing) assert(globalThis.RoadRouteUi.describeReadiness(config).includes('사용량 원장 누락'));
     assert.equal((await f.route()).status,429);
     assert.deepEqual(f.counts(),{budgetWrites:input.conflict?1:0,providerCalls:0});
   }

@@ -133,13 +133,27 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     /^(?:[1-9][0-9]?|100)$/.test(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT || '') && !!env.GITHUB_TOKEN;
   const exactStageService = env.RENDER_SERVICE_ID === stageService;
   const stageRoadApproved = exactStageService && env.OPSMAP_STAGE_ROAD_ROUTE_APPROVED === '1';
+  const stageRoadRequested = env.OPSMAP_STAGE_ROAD_ROUTE_ENABLED === '1';
   const stageRoadKey = exactStageService ? String(env.OPSMAP_STAGE_KAKAO_MOBILITY_REST_API_KEY || '').trim() : '';
+  const stageRoadBudgetToken = exactStageService ? String(env.OPSMAP_STAGE_ROAD_BUDGET_STORE_TOKEN || '').trim() : '';
+  const roadSettings = {
+    serviceVerified:exactStageService,
+    approvalConfigured:Boolean(env.OPSMAP_STAGE_ROAD_ROUTE_APPROVED),
+    approvalValueValid:['0','1'].includes(env.OPSMAP_STAGE_ROAD_ROUTE_APPROVED),
+    approved:stageRoadApproved,
+    switchConfigured:Boolean(env.OPSMAP_STAGE_ROAD_ROUTE_ENABLED),
+    switchValueValid:['0','1'].includes(env.OPSMAP_STAGE_ROAD_ROUTE_ENABLED),
+    requested:stageRoadRequested,
+    ignoredSharedSwitch:['1','true'].includes(env.OPSMAP_ROAD_ROUTE_ENABLED) || env.OPSMAP_PRODUCTION_ROAD_ROUTE_ENABLED === '1',
+    budgetTokenConfigured:Boolean(stageRoadBudgetToken),
+    deployment:/^[a-f0-9]{40}$/i.test(env.RENDER_GIT_COMMIT || '') ? env.RENDER_GIT_COMMIT : null
+  };
   const roadBudgetFile = 'road-budget-v1.json';
   const roadRouteBudget = stageRoadApproved ? createStageRoadBudget({
-    key:stageRoadKey,token:env.OPSMAP_STAGE_ROAD_BUDGET_STORE_TOKEN,now,
+    key:stageRoadKey,token:stageRoadBudgetToken,now,
     fetchImpl:stageGithub(fetchImpl,{files:[roadBudgetFile],branch:pinsBranch,writable:roadBudgetFile})
   }) : null;
-  const roadEnabled = stageRoadApproved && env.OPSMAP_STAGE_ROAD_ROUTE_ENABLED === '1';
+  const roadEnabled = stageRoadApproved && stageRoadRequested;
   const driverContacts = createStageDriverContacts({env,fetchImpl,now});
   const stage = {...env, OPSMAP_STAGE_VERIFY_ONLY:'1', MAP_STAFF_ORIGIN:stageOrigin, OPSMAP_MANUAL_PIN_WRITES:'0',
     OPSMAP_MANUAL_PIN_STORE_FILE:undefined, OPSMAP_MANUAL_PIN_SEARCH_CACHE_FILE:undefined, OPSMAP_PRIVATE_DETAIL_CACHE_ENABLED:'0',
@@ -148,11 +162,17 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     OPSMAP_KAKAO_DIAGNOSTIC_ENABLED:stageAddressApproved ? env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED : '0',
     OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED:stageAddressApproved && env.OPSMAP_STAGE_KAKAO_PLACE_APPROVED === '1'
       ? env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED : '0', OPSMAP_ROAD_ROUTE_ENABLED:roadEnabled?'1':'0'};
-  const roadRouteService = createRoadRouteService({
+  const roadService = createRoadRouteService({
     env:{OPSMAP_ROAD_ROUTE_ENABLED:stage.OPSMAP_ROAD_ROUTE_ENABLED,KAKAO_MOBILITY_REST_API_KEY:stageRoadKey,
       OPSMAP_ROAD_ROUTE_CACHE_MS:stage.OPSMAP_ROAD_ROUTE_CACHE_MS,OPSMAP_ROAD_ROUTE_TIMEOUT_MS:stage.OPSMAP_ROAD_ROUTE_TIMEOUT_MS},
     fetchImpl,now,budget:roadRouteBudget,requireDurableBudget:true
   });
+  const roadRouteService = {
+    ...roadService,
+    async readiness(){
+      return {...await roadService.readiness(),stage:roadSettings};
+    }
+  };
   const postalEnabled = stage.OPSMAP_SHADOW_COVERAGE_FORMAT==='postal';
   const remotePostal = postalEnabled ? createStagePostalAssets({env:stage,fetchImpl,now}) : null;
   const staffRegistry = createStageStaffRegistryAsset({env:stage,fetchImpl,now});
@@ -772,5 +792,12 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   router.get('/',(_req,res)=>res.sendFile('map-phase2b-preview.html',{root:publicDir}));
   router.get('/vendor/xlsx.full.min.js',(_req,res)=>res.sendFile(excelBrowserScript,{maxAge:'1h'}));
   router.use(express.static(publicDir));
+  if (exactStageService) {
+    void roadRouteService.readiness().then(({stage,enabled,keyConfigured,budgetVerified,budgetError,blockedReasons})=>{
+      console.info(JSON.stringify({component:'stage-road-readiness',event:'startup',stage,enabled,keyConfigured,budgetVerified,budgetError,blockedReasons}));
+    }).catch(()=>{
+      console.warn(JSON.stringify({component:'stage-road-readiness',event:'startup',stage:roadSettings,error:'READINESS_UNAVAILABLE'}));
+    });
+  }
   return app;
 }
