@@ -498,6 +498,13 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     stores.append(list);
   }
 
+  function clearDispatchSelection() {
+    const code=selection?.customerCode;
+    selection=null;
+    if (code) bridge.clearDispatchReferenceSelection?.(code);
+    document.body.classList.remove('dispatch-inspection','dispatch-standard-detail-open');
+  }
+
   function updateRoutes({focusMatch=false}={}) {
     if (!model) return;
     const first=model.vehicles.get(primary.value), second=model.vehicles.get(secondary.value);
@@ -510,8 +517,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       primary:compareDispatchRoutes(model,second.vehicle,first.vehicle,.5),
       secondary:compareDispatchRoutes(model,first.vehicle,second.vehicle,.5),
     }:null;
-    selection=null;
-    document.body.classList.remove('dispatch-inspection','dispatch-standard-detail-open');
+    clearDispatchSelection();
     selectedPostcodes=comparisons?.secondary.sharedPostalCodes || [];
     markerRows=[];
     const extra=[...additionalVehicles].filter(vehicle=>vehicle!==first?.vehicle&&vehicle!==second?.vehicle)
@@ -585,10 +591,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   function reset() {
     request?.abort();
     request=null;
-    const selectedCode=selection?.customerCode;
-    model=routes=comparisons=selection=period=analysis=chosenArea=null;
-    if (selectedCode) bridge.clearDispatchReferenceSelection?.(selectedCode);
-    document.body.classList.remove('dispatch-inspection','dispatch-standard-detail-open');
+    model=routes=comparisons=period=analysis=chosenArea=null;
+    clearDispatchSelection();
     markerRows=[];
     dayVehicles=periodVehicles=discoveries=[];
     focusedAnchor=null;

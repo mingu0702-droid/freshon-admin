@@ -169,6 +169,7 @@ async function exercise() {
   assert.equal(await secondary.inputValue(),'208');
   await page.getByRole('button',{name:compareVehicle+'호 비교 및 확대'}).click();
   assert.equal(await secondary.inputValue(),compareVehicle);
+  assert.equal(await page.locator('#detailSection.open').count(),0);
   if (output) await page.screenshot({path:path.join(output,'opsmap-dispatch-fleet-pc.png')});
   await page.getByLabel('오산 호차 검색').fill('');
   await secondary.selectOption('208');
