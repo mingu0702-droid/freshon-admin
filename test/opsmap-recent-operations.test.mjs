@@ -193,6 +193,40 @@ test('retries selected closed dates without scanning the entire window or assumi
   await assert.rejects(syncStageRecentOperations({...options,retryDates:['2026-11-19']}),/EVIDENCE_INVALID/);
 });
 
+test('the scheduled run can recover one explicitly selected gap behind a published newer day',async()=>{
+  const endDate='2026-11-21', missingDate='2026-11-20';
+  const currentDay=makeDay(endDate,'freshon_orders','partial',['A1']);
+  const recovered=makeDay(missingDate,'freshon_orders','partial',['B1'],'honam');
+  const before=normalizeRecentOperations({startDate:'2026-08-24',endDate,days:[currentDay]});
+  const files=new Map([[endDate,[currentDay]]]), fetched=[];
+  let current={ledger:before,sha:'initial'};
+  const store={read:async()=>current,readDay:async date=>files.get(date),
+    async writeDay(date,days){
+      assert.equal(date,missingDate);
+      assert(!files.has(date));
+      files.set(date,normalizeRecentOperations({startDate:before.startDate,endDate,days}).days);
+    },
+    async write(next,sha){assert.equal(sha,current.sha);assert.deepEqual(files.get(missingDate),[recovered]);
+      current={ledger:next,sha:'updated'};}};
+  const options={store,receipt:{runId:'b'.repeat(64),date:'2026-11-22'},
+    now:()=>Date.parse('2026-11-21T21:45Z'),retryDates:[missingDate,'2026-11-19'],
+    async readLatestDay(date,delivery,orders){
+      fetched.push(date);
+      assert.equal(delivery.size+orders.size,0);
+      return date===missingDate?[recovered]:[];
+    }};
+  assert.deepEqual(await syncStageRecentOperations({...options,retryDates:[]}),{state:'VERIFIED_NOOP',endDate});
+  assert.deepEqual(fetched,[]);
+  assert.deepEqual(await syncStageRecentOperations(options),{state:'PUBLISHED',endDate});
+  assert.deepEqual(fetched,[missingDate]);
+  const coverage=projectRecentOperations(current.ledger).centers.honam;
+  assert.deepEqual(coverage.observedDates,[missingDate]);
+  assert.deepEqual(coverage.confirmedDays,[]);
+  assert.deepEqual(await syncStageRecentOperations(options),{state:'VERIFIED_NOOP',endDate});
+  assert.deepEqual(fetched,[missingDate,'2026-11-19']);
+  assert.equal(files.has('2026-11-19'),false);
+});
+
 test('the Stage reader can read a published pointer with its existing read-only credential',async()=>{
   const base=ledger(makeDay(initialEnd,'delivery_admin','partial',['A1']));
   const encoded=Buffer.alloc(32,5).toString('base64');

@@ -254,11 +254,18 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
   const dates=new Set([day,...retryDates.filter(date=>date>=windowStart)]);
   const days=[];
   let endDate=base.endDate;
+  let retriedMissingDay=false;
   for (const date of dates) {
     const savedInput=await (readSource?.(date) ?? store.readDay(date));
     if (savedInput!=null && (!Array.isArray(savedInput) || savedInput.some(row=>row?.date!==date))) throw rejected();
     let input=[...(savedInput??[])];
-    if (date===day && date>base.endDate && readLatestDay) {
+    const latestUnpublished=date===day && date>base.endDate;
+    // Retry one explicitly selected historical gap per run. The latest day
+    // takes priority, and existing sealed files and published dates are retained.
+    const missingPastDay=date<day && !retriedMissingDay && savedInput==null &&
+      !base.days.some(item=>item.date===date);
+    if (readLatestDay && (latestUnpublished || missingPastDay)) {
+      if (missingPastDay) retriedMissingDay=true;
       const deliveryCenters=new Set(input.filter(row=>row.source==='delivery_admin').map(row=>row.centerKey));
       const orderCenters=new Set(input.filter(row=>row.source==='freshon_orders').map(row=>row.centerKey));
       input.push(...await readLatestDay(date,deliveryCenters,orderCenters));
