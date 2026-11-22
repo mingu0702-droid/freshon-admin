@@ -188,16 +188,17 @@ test('Stage scheduler endpoint passes a valid receipt once and drops raw child d
 });
 
 test('recent operations can schedule while the independent fixed master scope is unavailable',async t=>{
-  const app=express();
+  const app=express(),logs=[];
   const env={...storageEnv,OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED:'1',OPSMAP_STAGE_RECENT_OPERATIONS_SYNC_APPROVED:'1',
     OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED:'1',OPSMAP_STAGE_SYNC_TRIGGER_ID:triggerId,
     OPSMAP_STAGE_SYNC_EXECUTOR_SHA256:principal,OPSMAP_STAGE_SYNC_SCHEDULER_SECRET:secret};
   let child,input='';
-  mountOpsmapScheduledRun(app,{env,now:()=>clockStart,readFixedScope:async()=>null,log:()=>{},
+  mountOpsmapScheduledRun(app,{env,now:()=>clockStart,readFixedScope:async()=>null,log:value=>logs.push(JSON.parse(value)),
     launch(_exec,args){
       assert.deepEqual(args.slice(1),['fixed-scheduled']);
       child=new EventEmitter();
       child.stdin=new PassThrough();
+      child.stdout=new PassThrough();
       child.stderr=new PassThrough();
       child.stdin.on('data',bytes=>{input+=bytes;});
       return child;
@@ -207,6 +208,11 @@ test('recent operations can schedule while the independent fixed master scope is
     body:JSON.stringify(receipt)});
   assert.equal(result.status,202);
   assert.deepEqual(JSON.parse(input),{receipt,fixedScope:null});
+  const diagnostic={component:'opsmap-recent-orders-source',runId:receipt.runId,date,
+    centerKey:'osan',state:'ROW_NOT_CONFIRMED'};
+  child.stdout.write(JSON.stringify({...diagnostic,raw:'not safe for logging'})+'\n');
+  child.stdout.write(JSON.stringify({...diagnostic,state:'UNKNOWN_DIAGNOSTIC'})+'\n');
+  assert.deepEqual(logs,[diagnostic]);
   child.emit('close',0);
 });
 

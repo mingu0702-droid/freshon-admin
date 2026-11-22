@@ -1749,8 +1749,36 @@
     if(!stageAddressBatchEnabled()||window.location.hash!=='#opsmap-frame-audit'||frameAudit)return;
     const scope=frameAudit={id:++frameAuditId,started:performance.now(),previous:null,frames:[],focused:0,visible:0};
     const before=map.getCenter(),lat=before.getLat(),lng=before.getLng(),level=map.getLevel();
+    const longFrames={count:0,maxMs:0,blockingMs:0,styleLayoutMs:0,scripts:{}};
+    let observer=null;
+    const recordLongFrames=entries=>{
+      for(const entry of entries){
+        if(entry.startTime+entry.duration<scope.started)continue;
+        longFrames.count++;
+        longFrames.maxMs=Math.max(longFrames.maxMs,Math.round(entry.duration));
+        longFrames.blockingMs+=Math.round(entry.blockingDuration||0);
+        if(entry.styleAndLayoutStart)longFrames.styleLayoutMs+=Math.round(Math.max(0,entry.startTime+entry.duration-entry.styleAndLayoutStart));
+        for(const script of entry.scripts||[]){
+          let url;
+          try{url=new URL(script.sourceURL);}catch{ /* An unattributed script has no absolute URL. */ }
+          const owner=url?.origin===location.origin
+            ?(url.pathname.endsWith('/map-phase2b-runtime.js')?'mapRuntime':'stage')
+            :url&&/(?:^|\.)(?:kakao\.com|kakaocdn\.net|daumcdn\.net)$/.test(url.hostname)?'kakao':'other';
+          const summary=longFrames.scripts[owner]??={count:0,maxMs:0,totalMs:0,forcedStyleLayoutMs:0};
+          summary.count++;
+          summary.maxMs=Math.max(summary.maxMs,Math.round(script.duration));
+          summary.totalMs+=Math.round(script.duration);
+          summary.forcedStyleLayoutMs+=Math.round(script.forcedStyleAndLayoutDuration||0);
+        }
+      }
+    };
+    if(window.PerformanceObserver?.supportedEntryTypes?.includes('long-animation-frame')){
+      observer=new PerformanceObserver(list=>recordLongFrames(list.getEntries()));
+      observer.observe({type:'long-animation-frame'});
+    }
     const sample=timestamp=>{
       if(state.map!==map||document.body.dataset.mapStaffState!=='authenticated'){
+        observer?.disconnect();
         frameAudit=null;
         return;
       }
@@ -1761,12 +1789,14 @@
       }
       scope.previous=timestamp;
       if(timestamp-scope.started<2200&&scope.frames.length<240){requestAnimationFrame(sample);return;}
+      if(observer){recordLongFrames(observer.takeRecords());observer.disconnect();}
       frameAudit=null;
       const after=map.getCenter(),changed=lat!==after.getLat()||lng!==after.getLng()||level!==map.getLevel();
       const intervals=scope.frames.sort((a,b)=>a-b),count=intervals.length,total=intervals.reduce((a,b)=>a+b,0);
       $('#map').dataset.frameAudit=JSON.stringify({id:scope.id,gesture,changed,frames:count,focused:scope.focused,
         visible:scope.visible,levelBefore:level,levelAfter:map.getLevel(),viewport:innerWidth,
         initialMs:Math.round(timestamp-scope.started-total),
+        longAnimationFrames:observer?longFrames:null,
         fps:total>0?Number((1000*count/total).toFixed(2)):null,
         p95Ms:count?Number(intervals[Math.ceil(count*.95)-1].toFixed(2)):null,maxMs:count?Number(intervals.at(-1).toFixed(2)):null});
     };

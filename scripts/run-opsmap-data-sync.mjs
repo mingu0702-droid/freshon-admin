@@ -285,14 +285,19 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
         const readDelivery=env.OPSMAP_STAGE_RECENT_OPERATIONS_DELIVERY_APPROVED==='1' ?
           createStageDatedDeliveryReader({env,syncCenters:{osan:SYNC_DELIVERY_SOURCES.osan,
             yeongnam:SYNC_DELIVERY_SOURCES.yeongnam,honam:SYNC_DELIVERY_SOURCES.honam}}).readRecentOperations : null;
-        const readOrders=createStageRecentOrdersReader({env});
+        const readOrders=createStageRecentOrdersReader({env,onDiagnostic:value=>console.info(JSON.stringify({
+          component:'opsmap-recent-orders-source',runId:receipt.runId,...value
+        }))});
         const readLatestDay=readDelivery||readOrders?async(date,deliveryCenters,orderCenters)=>{
           const evidence=await Promise.all([readDelivery?.(date,deliveryCenters),readOrders?.(date,orderCenters)]);
           return evidence.flatMap(input=>input??[]);
         }:null;
+        const repair=/^(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})$/.exec(env.OPSMAP_STAGE_RECENT_OPERATIONS_REPAIR_REQUEST||'');
+        const retryDates=repair?.[2]===receipt.date?[repair[1]]:
+          env.OPSMAP_STAGE_RECENT_OPERATIONS_RETRY_DATES?.split(',').map(date=>date.trim());
         const result=await syncStageRecentOperations({store:createStageRecentOperationsStore({env,write:true}),receipt,
           readLatestDay,
-          retryDates:env.OPSMAP_STAGE_RECENT_OPERATIONS_RETRY_DATES?.split(',').map(date=>date.trim()),
+          retryDates,
           readSeed:createStageRecentOperationsSeed({env,manifest:recentOperationsBaseline})});
         console.log(JSON.stringify({component,runId:receipt.runId,...result}));
       } catch(error) {

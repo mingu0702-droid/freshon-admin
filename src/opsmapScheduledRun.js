@@ -19,6 +19,9 @@ const sourceKeys=new Set(['customerRegistry','delivery:1','delivery:2','delivery
 const fixedCenters=['011','012','013'];
 const boundedCount=(value,max=120_000)=>Number.isSafeInteger(value)&&value>=0&&value<=max?value:null;
 const fixedError=value=>/^FIXED_(?:MASTER|STORE)_[A-Z_]{1,70}$/.test(value||'')?value:null;
+const recentOrderStates=new Set(['VERIFIED','ALREADY_OBSERVED','AUTH_UNAVAILABLE','HTTP_REJECTED','READ_FAILED',
+  'BUDGET_EXHAUSTED','RESPONSE_INVALID','SOURCE_EMPTY','COUNT_UNVERIFIED','ROW_DATE_MISMATCH','ROW_CENTER_MISMATCH',
+  'ROW_NOT_CONFIRMED','ROW_CUSTOMER_INVALID','ROW_ORDER_KEY_INVALID','ROW_DUPLICATE','ROW_QUANTITY_INVALID']);
 const receiptFields=({version,origin,triggerId,principal,issuedAt,slot,date,runId})=>
   [version,origin,triggerId,principal,issuedAt,slot,date,runId];
 const signReceipt=(value,secret,domain='')=>createHmac('sha256',secret)
@@ -218,6 +221,12 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
               log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
                 endDate:/^\d{4}-\d{2}-\d{2}$/.test(value.endDate||'')?value.endDate:null,
                 error:/^(?:RECENT_OPERATIONS|FIXED_STORE)_[A-Z_]+$/.test(value.error||'')?value.error:null}));
+            }
+            if(value?.component==='opsmap-recent-orders-source' && value.runId===receipt.runId &&
+               /^\d{4}-\d{2}-\d{2}$/.test(value.date||'') && ['osan','yeongnam','honam'].includes(value.centerKey) &&
+               recentOrderStates.has(value.state)) {
+              log(JSON.stringify({component:value.component,runId:receipt.runId,date:value.date,
+                centerKey:value.centerKey,state:value.state}));
             }
           } catch {/* Ignore unrelated stdout and malformed lines. */}
           line='';discarded=false;

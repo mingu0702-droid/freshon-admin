@@ -131,11 +131,12 @@ test('a new closed day combines sealed orders with explicit live delivery eviden
 });
 
 test('source order reads require an exact day, center, confirmed rows and complete line totals',async()=>{
-  const date='2026-11-18', fetched=[];
+  const date='2026-11-18', fetched=[], diagnostics=[];
   const good={stockDate:date,logCdName:'오산물류센터',dcOutDate:'확정',estCd:'S1',dlvyEstCd:'S1',
     orderNo:'O100',seq:1,orderQty:2,totalCnt:1};
   const read=createStageRecentOrdersReader({env:{RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
-    OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'},async fetchImpl(url,opt){
+    OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'},
+    onDiagnostic:diagnostic=>diagnostics.push(diagnostic),async fetchImpl(url,opt){
     assert.equal(url,'https://mis.freshon.co.kr/bo/sm/order/orderInfoList');
     assert.equal(opt.method,'POST');
     const query=new URLSearchParams(opt.body);
@@ -153,6 +154,51 @@ test('source order reads require an exact day, center, confirmed rows and comple
   assert.deepEqual(fetched,['011','012','013']);
   assert.deepEqual(await read(date,new Set(['osan'])),[]);
   assert.deepEqual(fetched,['011','012','013','012','013']);
+  assert.deepEqual(diagnostics,[
+    {date,centerKey:'osan',state:'VERIFIED'},
+    {date,centerKey:'yeongnam',state:'COUNT_UNVERIFIED'},
+    {date,centerKey:'honam',state:'ROW_NOT_CONFIRMED'},
+    {date,centerKey:'osan',state:'ALREADY_OBSERVED'},
+    {date,centerKey:'yeongnam',state:'COUNT_UNVERIFIED'},
+    {date,centerKey:'honam',state:'ROW_NOT_CONFIRMED'}
+  ]);
+});
+
+test('order diagnostics distinguish empty, unsafe and inaccessible source results without row fields',async()=>{
+  const date='2026-11-20', env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
+    OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'};
+  const row={stockDate:date,logCdName:'오산물류센터',logCd:'011',dcOutDate:'확정',estCd:'S1',dlvyEstCd:'S1',
+    orderNo:'private-fixture-order',seq:1,orderQty:2,totalCnt:1};
+  const cases=[
+    ['SOURCE_EMPTY',[]],['RESPONSE_INVALID',null],
+    ['ROW_DATE_MISMATCH',[{...row,stockDate:'2026-11-19'}]],
+    ['ROW_CENTER_MISMATCH',[{...row,logCd:'012'}]],
+    ['ROW_CUSTOMER_INVALID',[{...row,dlvyEstCd:'S2'}]],
+    ['ROW_ORDER_KEY_INVALID',[{...row,seq:0.5}]],
+    ['ROW_DUPLICATE',[{...row,totalCnt:2},row]],
+    ['ROW_QUANTITY_INVALID',[{...row,orderQty:0}]]
+  ];
+  const onlyOsan=new Set(['yeongnam','honam']);
+  for (const [state,data] of cases) {
+    const diagnostics=[];
+    const read=createStageRecentOrdersReader({env,fetchImpl:async()=>Response.json({data}),
+      onDiagnostic:diagnostic=>diagnostics.push(diagnostic)});
+    assert.deepEqual(await read(date,onlyOsan),[]);
+    assert.deepEqual(diagnostics[0],{date,centerKey:'osan',state});
+  }
+  for (const [state,fetchImpl] of [
+    ['HTTP_REJECTED',async()=>new Response(null,{status:403})],
+    ['READ_FAILED',async()=>{throw Error('private-fixture-error');}],
+    ['AUTH_UNAVAILABLE',async()=>new Response(null,{status:401})]
+  ]) {
+    const diagnostics=[];
+    const read=createStageRecentOrdersReader({env,fetchImpl,onDiagnostic:diagnostic=>diagnostics.push(diagnostic)});
+    assert.deepEqual(await read(date,onlyOsan),[]);
+    assert.deepEqual(diagnostics[0],{date,centerKey:'osan',state});
+  }
+  const read=createStageRecentOrdersReader({env,fetchImpl:async()=>Response.json({data:[row]}),
+    onDiagnostic:()=>{throw Error('fixture diagnostic failure');}});
+  assert.deepEqual(await read(date,onlyOsan),[makeDay(date,'freshon_orders','partial',['S1'])]);
 });
 
 test('a newly sourced day is saved and verified before advancing the operating ledger',async()=>{

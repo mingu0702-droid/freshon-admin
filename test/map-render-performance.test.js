@@ -1,7 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
 import '../public/map-period-ui.js';
 const {spatialIndex,reconcile}=globalThis.MapPeriodUi;
+test('Stage gesture frame audit groups long-frame scripts without exposing URLs',()=>{
+ const source=readFileSync(new URL('../public/opsmap/map-phase2b-runtime.js',import.meta.url),'utf8');
+ const audit=source.slice(source.indexOf('  let frameAudit='),source.indexOf('  function initMap()'));
+ const dataset={},frames=[];
+ let path='#opsmap-frame-audit',approved=false,disconnects=0,callback;
+ const map={getCenter:()=>({getLat:()=>37,getLng:()=>127}),getLevel:()=>12};
+ class Observer{
+  static supportedEntryTypes=['long-animation-frame'];
+  constructor(fn){callback=fn;}
+  observe(options){assert.equal(options.type,'long-animation-frame');}
+  takeRecords(){return [];}
+  disconnect(){disconnects++;}
+ }
+ const context={URL,location:{origin:'https://stage.example'},window:{location:{get hash(){return path;}},PerformanceObserver:Observer},
+  PerformanceObserver:Observer,performance:{now:()=>100},stageAddressBatchEnabled:()=>approved,state:{map},innerWidth:390,
+  document:{body:{dataset:{mapStaffState:'authenticated'}},hasFocus:()=>true,visibilityState:'visible'},$:()=>({dataset}),requestAnimationFrame:fn=>frames.push(fn)};
+ const run=vm.runInNewContext(audit+'auditMapFrames;',context);
+ run(map,'zoom');assert.equal(frames.length,0);
+ approved=true;path='';run(map,'zoom');assert.equal(frames.length,0);
+ path='#opsmap-frame-audit';run(map,'zoom');frames.shift()(110);
+ callback({getEntries:()=>[{startTime:0,duration:60,scripts:[]},{startTime:110,duration:125,blockingDuration:75,styleAndLayoutStart:220,scripts:[
+  {sourceURL:'https://stage.example/opsmap/map-phase2b-runtime.js?secret=omit',duration:80,forcedStyleAndLayoutDuration:12},
+  {sourceURL:'https://dapi.kakao.com/maps/sdk.js',duration:30},{sourceURL:'',duration:5}]}]});
+ frames.shift()(2310);
+ const result=JSON.parse(dataset.frameAudit).longAnimationFrames;
+ assert.deepEqual(result,{count:1,maxMs:125,blockingMs:75,styleLayoutMs:15,scripts:{
+  mapRuntime:{count:1,maxMs:80,totalMs:80,forcedStyleLayoutMs:12},kakao:{count:1,maxMs:30,totalMs:30,forcedStyleLayoutMs:0},
+  other:{count:1,maxMs:5,totalMs:5,forcedStyleLayoutMs:0}}});
+ assert.doesNotMatch(dataset.frameAudit,/secret|https:/);
+ assert.equal(disconnects,1);
+});
 test('spatial index retains full search data while projecting only viewport candidates',()=>{
  const rows=Array.from({length:6000},(_,i)=>({customerCode:'S'+i,lat:33+i/1000,lng:127}));
  const index=spatialIndex(rows),found=index.query({south:37,north:37.02,west:126,east:128});
