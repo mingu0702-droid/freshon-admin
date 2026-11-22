@@ -8,6 +8,7 @@
   const DEFAULT_PERIOD_CENTER = window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com'?'':'osan';
   const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", centerFilter: DEFAULT_PERIOD_CENTER, selectedDate: "", latestDate: "", map: null, overlays: [], lines: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
   let mapInitializing=null,mapObserver=null,mapHandlers=[],mapGestureEvents=null,mapCamera=null,cameraSelection=0;
+  let dispatchReferenceFitsMap=false;
   const selectedMapPins=new Set(),mapMarkerRows=new WeakMap();
   let activeMapPinKey='';
   const temporaryPins=new Map();
@@ -1001,6 +1002,7 @@
         if(reviewNote&&baseVehicleMeta?.stale===true){reviewNote.dataset.masterReference='stale';reviewNote.textContent=`10/23 저장자료 · 기준호차 ${String(baseVehicleMeta.checkedAt||'').slice(0,10)||'시점 미확인'} 이전 확인값 · 현재 기준 미확인 · 미게시`;window.dispatchEvent(new Event('resize'));}
         const changed=JSON.stringify(previousMeta)!==JSON.stringify(baseVehicleMeta)||rows.some(r=>JSON.stringify(previous.get(r.customerCode))!==JSON.stringify(r));
         if(!changed)return;
+        window.dispatchEvent(new Event('map-fixed-master-ready'));
         if(state.selected)syncStoreDeliveryWeekdays(state.selected);
         const applyView=async()=>{
           if(state.mode!=='BASE_60D'||!dateReady)return;
@@ -1489,6 +1491,7 @@
   }
 
   function requestMapFit() {
+    if (dispatchReferenceFitsMap) return;
     mapCamera?.releaseFocus();
     state.fitRequested = true;
     state.userMovedMap = false;
@@ -5833,6 +5836,41 @@
     fixedTerritoryMasterState:()=>baseVehicleMeta?{version:baseVehicleMeta.version,checkedAt:baseVehicleMeta.checkedAt,stale:baseVehicleMeta.stale}:null,
     printCoordinateStores:()=>latestSnapshotRows.slice(),
     fixedTerritoryStores:()=>window.MapUiLocalBridge.navigationStores('BASE_60D').map(row=>({...row,...fixedVehicleFor(row.customerCode,row)})),
+    dispatchReferencePin(row,{color,label,title,pick}) {
+      const button=markerElement(row,null,'store');
+      button.classList.add('dispatch-map-pin');
+      button.style.setProperty('--pin-color',color);
+      const pin=button.querySelector('.pin');
+      pin?.style.setProperty('--pin',color);
+      const text=pin?.querySelector('span') || button.querySelector('.pinNumber');
+      if (text) text.textContent=label;
+      button.title=title;
+      button.setAttribute('aria-label',title);
+      button.onclick=event=>{event.stopPropagation();kakao.maps.event.preventMap?.();pick();};
+      return button;
+    },
+    dispatchReferenceFixedVehicle(code) {
+      const known=storesByCode.get(code);
+      return fixedVehicleFor(code,known).baseVehicle||null;
+    },
+    setDispatchReferenceMapFit(value) {
+      dispatchReferenceFitsMap=Boolean(value);
+      if (dispatchReferenceFitsMap) {
+        state.fitRequested=false;
+        mapCamera?.releaseFocus();
+      }
+    },
+    selectDispatchReferenceStore(code,point) {
+      const row=storesByCode.get(code)||latestSnapshotRows.find(item=>item.customerCode===code);
+      if (!row||!point||!Number.isFinite(row.lat)||!Number.isFinite(row.lng)||
+          Math.abs(row.lat-point.lat)>0.000001||Math.abs(row.lng-point.lng)>0.000001) return false;
+      selectStore({...row});
+      if (!baseVehicles.has(code)) void loadBaseVehicles([code]);
+      return true;
+    },
+    clearDispatchReferenceSelection(code) {
+      if (state.selected?.customerCode===code) clearSelection();
+    },
     navigationStores:(mode=state.mode)=>{if(mode==='DATE_ROUTE')return isDailyDataReady()?allStores.map(row=>liveAddressLocations?.apply({...row})||{...row}):[];const list=new Map(latestSnapshotRows.map(r=>[r.customerCode,r]));for(const row of allStores){const prior=list.get(row.customerCode);const conflict=prior&&row.address&&prior.address&&row.address.replace(/\s/g,'')!==prior.address.replace(/\s/g,'');list.set(row.customerCode,{...row,...(conflict?{coordinateStatus:'CONFLICT'}:{})});}return [...list.values()].map(row=>liveAddressLocations?.apply({...row})||row);},
     selectNavigationStore:code=>{const row=(state.mode==='DATE_ROUTE'&&!isDailyDataReady()?[]:allStores).find(r=>r.customerCode===code)||(state.mode==='BASE_60D'?latestSnapshotRows.find(r=>r.customerCode===code):null);if(row)selectStore(row,null,true);},
     queryRecordedRoute:()=>{cancelManualRoadRoute();const v=primarySelectedVehicle();if(!v||!operationStops.length||!dailyMeta?.roster&&operationStops.some(s=>!Number.isSafeInteger(s.order)||s.order<1)){roadResult={state:'error',error:'RECORDED_ORDER_REQUIRED'};window.dispatchEvent(new CustomEvent('map-recorded-route',{detail:roadResult}));syncRoadRoutePanel();return;}loadRoadRoute(v,{explicit:true});},

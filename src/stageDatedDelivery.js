@@ -271,6 +271,13 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const {value,error}=await loadCenter(date,'osan');
     return error?{...value.legacy,sourceReadState:'STALE_VERIFIED',sourceError:error}:value.legacy;
   }
+  readDate.readRetained=date=>{
+    const slot=cached.get(JSON.stringify([date,'osan']));
+    if (!slot||slot.retainUntil<=now()) return null;
+    return {...slot.value.legacy,sourceReadState:'STALE_VERIFIED',sourceError:slot.error};
+  };
+  readDate.retainedDates=()=>[...cached.keys()].map(key=>JSON.parse(key)).filter(
+    ([date,center])=>center==='osan'&&readDate.readRetained(date)).map(([date])=>date);
   readDate.readContract=async(date,center,vehicle)=>{
     const {value,error}=await loadCenter(date,center);
     const prepared=value.prepared??=prepareContract(value);
