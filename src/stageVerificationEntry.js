@@ -11,7 +11,7 @@ import {createFixedVehicleFileStore} from './opsmap-abc/fixedVehicleStore.js';
 import {canonicalFixedMasterVehicle} from './fixedMasterVehicle.js';
 import {createManualMapPins} from './opsmap-abc/manualMapPins.js';
 import {createRoadRouteService,isRoadRouteRequest} from './opsmap-abc/roadRouteService.js';
-import {createStageRoadBudget} from './opsmap-abc/productionRoadBudget.js';
+import {createStageRoadBudget,createStageSharedRoadTrial} from './opsmap-abc/productionRoadBudget.js';
 import {createRecordedRoadRouteReader} from './opsmap-abc/recordedRoadRoute.js';
 import {staffStoreDetail} from './opsmap-abc/mapStaffDetail.js';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
@@ -102,11 +102,11 @@ function stageHubUrl(value) {
   } catch {return false;}
 }
 
-function stageGithub(fetchImpl, {files, branch, writable, allowBlob = false}) {
+function stageGithub(fetchImpl, {files, branch, writable, allowBlob = false, directory = 'opsmap-stage'}) {
   return (input, options = {}) => {
     const url = new URL(input), method = options.method || 'GET';
     const endpoint = `${url.origin}${url.pathname}`;
-    const file = files.find(name => endpoint === `${github}/contents/opsmap-stage/${name}`);
+    const file = files.find(name => endpoint === `${github}/contents/${directory}/${name}`);
     const query = url.searchParams;
     const read = method === 'GET' && (file && query.size === 1 && query.get('ref') === branch || !url.search &&
       (endpoint === github || allowBlob && endpoint.startsWith(`${github}/git/blobs/`) && /^[a-f0-9]{40}$/.test(endpoint.split('/').at(-1))));
@@ -134,8 +134,9 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const exactStageService = env.RENDER_SERVICE_ID === stageService;
   const stageRoadApproved = exactStageService && env.OPSMAP_STAGE_ROAD_ROUTE_APPROVED === '1';
   const stageRoadRequested = env.OPSMAP_STAGE_ROAD_ROUTE_ENABLED === '1';
-  const stageRoadKey = exactStageService ? String(env.OPSMAP_STAGE_KAKAO_MOBILITY_REST_API_KEY || '').trim() : '';
-  const stageRoadBudgetToken = exactStageService ? String(env.OPSMAP_STAGE_ROAD_BUDGET_STORE_TOKEN || '').trim() : '';
+  const sharedRoadTrial = exactStageService && env.OPSMAP_STAGE_ROAD_SHARED_TRIAL !== undefined;
+  const stageRoadKey = exactStageService ? String(env.OPSMAP_STAGE_KAKAO_MOBILITY_REST_API_KEY || (sharedRoadTrial ? env.KAKAO_REST_API_KEY : '') || '').trim() : '';
+  const stageRoadBudgetToken = exactStageService ? String(env.OPSMAP_STAGE_ROAD_BUDGET_STORE_TOKEN || (sharedRoadTrial ? env.GITHUB_TOKEN : '') || '').trim() : '';
   const roadSettings = {
     serviceVerified:exactStageService,
     approvalConfigured:Boolean(env.OPSMAP_STAGE_ROAD_ROUTE_APPROVED),
@@ -149,10 +150,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     deployment:/^[a-f0-9]{40}$/i.test(env.RENDER_GIT_COMMIT || '') ? env.RENDER_GIT_COMMIT : null
   };
   const roadBudgetFile = 'road-budget-v1.json';
-  const roadRouteBudget = stageRoadApproved ? createStageRoadBudget({
+  const roadRouteBudget = !stageRoadApproved ? null : sharedRoadTrial ? createStageSharedRoadTrial({
+    key:stageRoadKey,token:stageRoadBudgetToken,grant:env.OPSMAP_STAGE_ROAD_SHARED_TRIAL,now,
+    fetchImpl:stageGithub(fetchImpl,{directory:'opsmap-production',files:[roadBudgetFile],branch:'production/opsmap-auth',writable:roadBudgetFile})
+  }) : createStageRoadBudget({
     key:stageRoadKey,token:stageRoadBudgetToken,now,
     fetchImpl:stageGithub(fetchImpl,{files:[roadBudgetFile],branch:pinsBranch,writable:roadBudgetFile})
-  }) : null;
+  });
   const roadEnabled = stageRoadApproved && stageRoadRequested;
   const driverContacts = createStageDriverContacts({env,fetchImpl,now});
   const stage = {...env, OPSMAP_STAGE_VERIFY_ONLY:'1', MAP_STAFF_ORIGIN:stageOrigin, OPSMAP_MANUAL_PIN_WRITES:'0',
@@ -169,6 +173,16 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   });
   const roadRouteService = {
     ...roadService,
+    ...(sharedRoadTrial?{
+      authorizeRequest({recorded,manual,body}){
+        if(recorded||!manual)throw Object.assign(Error('CALL_POLICY_UNCONFIRMED'),{code:'CALL_POLICY_UNCONFIRMED',status:403});
+        if(body?.waypoints?.length!==2)throw Object.assign(Error('INVALID_MANUAL_ROUTE'),{code:'INVALID_MANUAL_ROUTE',status:400});
+      },
+      async route(body){
+        const result=await roadService.route(body);
+        return {...result,data:{...result.data,manualOnly:true}};
+      }
+    }:{}),
     async readiness(){
       return {...await roadService.readiness(),stage:roadSettings};
     }

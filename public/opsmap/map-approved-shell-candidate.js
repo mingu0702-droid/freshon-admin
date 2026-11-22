@@ -142,7 +142,7 @@
   $('#addWaypoint').onclick=()=>{if(waypoints.length>=30){$('#plannerStatus').hidden=false;$('#plannerStatus').textContent='경유지는 최대 30개입니다.';return;}waypoints.push('');renderWaypoints();draftChanged();$('#plannerWaypoint'+(waypoints.length-1)).focus();};
   $('#clearOrigin').onclick=()=>removeEditorPoint('origin');$('#clearDestination').onclick=()=>removeEditorPoint('destination');$('#reversePlanner').onclick=reverseEditor;
   $('#clearPlanner').onclick=()=>{waypoints.length=0;writeEditorInput($('#plannerStart'),'');writeEditorInput($('#plannerEnd'),'');renderWaypoints();draftChanged({clearDraft:true});};
-  $('#planRoute').onclick=async()=>{
+  $('#planRoute').onclick=async event=>{
     if($('#planRoute').disabled)return;const status=$('#plannerStatus');
     try{
       const values=editorValues();
@@ -155,7 +155,7 @@
         return {...found[0],label:found[0].customerName||value};
       });
       status.hidden=false;status.textContent='도로 경로를 조회하고 있습니다.';
-      bridge.replaceManualStops(points);await bridge.queryManualRoute();
+      bridge.replaceManualStops(points);await bridge.queryManualRoute(event?.isTrusted===true);
     }catch(error){status.hidden=false;status.textContent=error.message;}
   };
   window.MapNavigationEditor=Object.freeze({values:editorValues,setPoint:setEditorPoint,removePoint:removeEditorPoint,replacePoints:replaceEditorPoints,reverse:reverseEditor,clear:()=>$('#clearPlanner').click()});

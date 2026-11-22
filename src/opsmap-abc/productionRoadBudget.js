@@ -26,7 +26,18 @@ export function createStageRoadBudget({key,token,fetchImpl=fetch,now=Date.now}={
  return createPrivateRoadBudget({key,token,configured:true,branch:stageBranch,stage:true,fetchImpl,now});
 }
 
-function createPrivateRoadBudget({key,token,configured,branch,stage,fetchImpl,now}){
+export function createStageSharedRoadTrial({key,token,grant,fetchImpl=fetch,now=Date.now}={}){
+  let trial;
+  try{trial=JSON.parse(grant);}catch{return null;}
+  if(!key||!token||!trial||!/^[-A-Za-z0-9_]{8,100}$/.test(trial.approvalId||'')||
+     !integer(trial.startUsed)||trial.startUsed>30000||!integer(trial.startsAt)||!integer(trial.expiresAt)||
+     trial.expiresAt<=trial.startsAt||trial.expiresAt-trial.startsAt>2*3600000||
+     !Number.isFinite(new Date(trial.expiresAt+9*3600000).getTime())||
+     kst(trial.startsAt)!==kst(trial.expiresAt-1))return null;
+  return createPrivateRoadBudget({key,token,configured:true,branch:productionBranch,stage:false,trial,fetchImpl,now});
+}
+
+function createPrivateRoadBudget({key,token,configured,branch,stage,trial,fetchImpl,now}){
  const accountHash=createHash('sha256').update(key).digest('hex');
  const file=root+'/contents/'+(stage?'opsmap-stage':'opsmap-production')+'/road-budget-v1.json';
  const headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':stage?'opsmap-stage-road-budget':'opsmap-production-road-budget'};
@@ -96,10 +107,18 @@ function createPrivateRoadBudget({key,token,configured,branch,stage,fetchImpl,no
    const remaining=b.monthlyApproval?(day===approvalDay?value.freeRemainingAtApproval:dailyLimits[api])-(b.monthlyApproval.dailyUsage[day]?.[api]||0):value.freeRemainingAtApproval-value.used;
    return [api,Math.max(0,remaining)];
   }));
+  if(trial){
+   if(time<trial.startsAt||time>=trial.expiresAt)fail('ROAD_BUDGET_TRIAL_WINDOW');
+   if(b.approvalId!==trial.approvalId||b.used<trial.startUsed||!b.approvedApis?.includes('directions'))fail('ROAD_BUDGET_TRIAL_APPROVAL_CHANGED');
+   // Production and Stage advance the same monotonic counter under CAS.
+   // A concurrent Production reservation can only shrink this trial's two-call window.
+   apis.directions=Math.min(apis.directions,Math.max(0,trial.startUsed+2-b.used));
+   apis.waypoints=0;
+  }
   return {durable:true,scope:b.scope,remaining:Math.max(0,Math.min(b.limit-b.used,b.monthlyFreeRemainingAtApproval-b.used,apis.directions+apis.waypoints)),apiRemaining:apis,freeOnly:true,approvalExpiresAt:b.expiresAt,approvalWindow:b.monthlyApproval?'KST_MONTH':'KST_DAY',usageDate:day};
  }
  function transaction(work){const task=tail.catch(()=>{}).then(async()=>work(await read()));tail=task;return task;}
- return {kind:stage?'STAGE_PRIVATE_GITHUB_CAS':'PRODUCTION_PRIVATE_GITHUB_CAS',durable:configured,inspectWhenDisabled:true,
+ return {kind:trial?'STAGE_SHARED_DIRECTIONS_TRIAL':stage?'STAGE_PRIVATE_GITHUB_CAS':'PRODUCTION_PRIVATE_GITHUB_CAS',durable:configured,inspectWhenDisabled:true,
   status:()=>transaction(async({state})=>{
    const time=now();return stateStatus(validate(state,time),time);
   }),
@@ -123,7 +142,7 @@ function createPrivateRoadBudget({key,token,configured,branch,stage,fetchImpl,no
     dailyUsage:structuredClone(b.monthlyApproval.dailyUsage)
    };
    const bytes=Buffer.from(JSON.stringify(clean));if(bytes.length>32768)fail('ROAD_BUDGET_FORMAT');
-   const message=stage?'Reserve approved Stage free Directions call':'Reserve approved Production free Directions call';
+   const message=trial?'Reserve approved Stage Directions test call':stage?'Reserve approved Stage free Directions call':'Reserve approved Production free Directions call';
    const response=await request(file,{method:'PUT',body:JSON.stringify({message,branch,sha,content:bytes.toString('base64')})});
    if([409,422].includes(response.status))fail('ROAD_BUDGET_CONFLICT');if(!response.ok)fail('ROAD_BUDGET_WRITE');
    const saved=await read();if(JSON.stringify(saved.state)!==JSON.stringify(clean))fail('ROAD_BUDGET_READBACK_UNKNOWN');

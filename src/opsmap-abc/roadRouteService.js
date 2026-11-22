@@ -200,6 +200,7 @@ export function mountRoadRouteRoutes({app,requireStaff,jsonBody,service,env=proc
   const respond=async(req,res,recorded)=>{
     res.set('Cache-Control','private, no-store');
     try{
+      service.authorizeRequest?.({recorded,manual:req.get('X-Opsmap-Manual-Route')==='1',body:req.body});
       let body=req.body;
       if(recorded){
         if(typeof readRecordedRoute!=='function')throw error('RECORDED_ORDER_REQUIRED',409);

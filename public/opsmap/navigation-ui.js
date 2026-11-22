@@ -509,7 +509,7 @@
     }
     syncDailyOrigin();syncMissing();describeInputs();renderRolePins();refreshPointActions();bridge.relayoutPreservingView?.();
   }
-  const onManual=event=>{if(event.detail?.state==='loading')clearTimeout(recalculateTimer);if(['success','partial'].includes(event.detail?.state))autoRecalculate=true;else if(['error','disabled'].includes(event.detail?.state))autoRecalculate=false;showResult(event.detail,'manual');},onRecorded=event=>showResult(event.detail,'recorded'),onSelected=()=>{closeCenterCard();refreshPointActions();},onReady=()=>{roleSignature='';drawCenters();sync();};
+  const onManual=event=>{if(event.detail?.state==='loading')clearTimeout(recalculateTimer);if(['success','partial'].includes(event.detail?.state))autoRecalculate=event.detail.manualOnly!==true;else if(['error','disabled'].includes(event.detail?.state))autoRecalculate=false;showResult(event.detail,'manual');},onRecorded=event=>showResult(event.detail,'recorded'),onSelected=()=>{closeCenterCard();refreshPointActions();},onReady=()=>{roleSignature='';drawCenters();sync();};
   const onDraft=()=>{
     clearTimeout(recalculateTimer);status('');hideSuggestions();describeInputs();renderRolePins();window.MapDotUi?.arrangeNavigation?.();
     const values=editor.values();temporaryPlaces.retainSearchPoints(values);

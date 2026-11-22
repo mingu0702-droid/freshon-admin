@@ -12,13 +12,15 @@
     if(!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>60000)throw Error('INVALID_TIMEOUT');
     let generation=0,active=null,blocked=null;
     function cancel(){generation++;active?.abort();active=null;onChange({state:'idle'});}
-    async function load(draft){
+    async function load(draft,explicitClick=false){
       if(active)return; // Explicit duplicate clicks do not reserve another call.
       blocked=null;
       const requestId=++generation,body=requestBody(draft,requestId),controller=new AbortController();active=controller;
       let timer,stop;const timeout=new Promise((_,reject)=>{stop=()=>reject(Error('TIMEOUT'));controller.signal.addEventListener('abort',stop,{once:true});timer=setTimeout(()=>controller.abort(),timeoutMs);});onChange({state:'loading',requestId});
       try{
-        const response=await Promise.race([timeout,fetchImpl('/api/map-phase2b/private/manual-road-route',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal})]);
+        const headers={'Content-Type':'application/json'};
+        if(explicitClick===true)headers['X-Opsmap-Manual-Route']='1';
+        const response=await Promise.race([timeout,fetchImpl('/api/map-phase2b/private/manual-road-route',{method:'POST',credentials:'same-origin',cache:'no-store',headers,body:JSON.stringify(body),signal:controller.signal})]);
         if(requestId!==generation)return;
         if(!response.ok){const code=await Promise.race([timeout,root.KakaoDirectionsAdapter.responseError(response)]);if(requestId!==generation)return;if(terminal.has(code))blocked=code;onChange({state:'error',error:code,requestId});return;}
         const payload=await Promise.race([timeout,(async()=>{if(!response.body?.getReader)throw Error('INVALID_RESPONSE');const reader=response.body.getReader(),parts=[];let bytes=0;try{for(;;){const item=await Promise.race([timeout,reader.read()]);if(item.done)break;bytes+=item.value.byteLength;if(bytes>8388608)throw Error('RESPONSE_TOO_LARGE');parts.push(item.value);}}finally{void reader.cancel().catch(()=>{});reader.releaseLock();}const joined=new Uint8Array(bytes);let offset=0;for(const part of parts){joined.set(part,offset);offset+=part.byteLength;}return JSON.parse(new TextDecoder().decode(joined));})()]);if(requestId!==generation)return;

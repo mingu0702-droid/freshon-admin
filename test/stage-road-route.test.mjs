@@ -30,7 +30,8 @@ const draft = {
 };
 
 async function fixture(t, options = {}) {
-  let session, revision = 1, budget = structuredClone(options.ledger ?? approved);
+  let session;
+  const shared = options.shared ?? { revision:1,budget:structuredClone(options.ledger ?? approved) };
   let budgetReads = 0, budgetWrites = 0, providerCalls = 0;
   const file = (bytes, sha) => bytes ? Response.json({
     encoding:'base64', size:bytes.length, content:bytes.toString('base64'), sha
@@ -46,40 +47,41 @@ async function fixture(t, options = {}) {
   };
   const app = createStageVerificationApp({env, now:()=>at, fetchImpl:async(input, request={})=>{
     const url = new URL(input);
-    const isBudget = request.headers.Authorization === 'Bearer '+token;
+    const isBudget = request.headers.Authorization === 'Bearer '+token || url.pathname.endsWith('/road-budget-v1.json');
     if (url.origin === 'https://apis-navi.kakaomobility.com') {
       providerCalls++;
       assert.equal(url.pathname,'/v1/directions');
-      assert.equal(url.searchParams.get('waypoints'),'127.01,37.01');
+      if(options.shared)assert.equal(url.searchParams.get('waypoints').split('|').length,2);
+      else assert.equal(url.searchParams.get('waypoints'),'127.01,37.01');
       assert.equal(request.headers.Authorization,'KakaoAK '+key);
-      assert.equal(budget.roadBudget.used,1,'reserve before dispatch');
+      assert.equal(shared.budget.roadBudget.used,options.shared ? options.expectedUsed : 1,'reserve before dispatch');
       if(options.providerHttp) return new Response(null,{status:options.providerHttp});
-      return Response.json({routes:[{result_code:0,summary:{distance:2400,duration:310},sections:[
-        {distance:1200,duration:150,roads:[{vertexes:[127,37,127.01,37.01]}]},
-        {distance:1200,duration:160,roads:[{vertexes:[127.01,37.01,127.02,37.02]}]}
-      ]}]});
+      const points=[url.searchParams.get('origin'),...url.searchParams.get('waypoints').split('|'),url.searchParams.get('destination')].map(value=>value.split(',').map(Number));
+      const sections=points.slice(1).map((point,index)=>({distance:1200,duration:index===0?150:160,roads:[{vertexes:[...points[index],...point]}]}));
+      return Response.json({routes:[{result_code:0,summary:{distance:1200*sections.length,duration:150+160*(sections.length-1)},sections}]});
     }
     assert.equal(url.origin,'https://api.github.com');
     assert.equal(request.redirect,'error');
     if (url.pathname.endsWith('/freshon-cache')) {
       return Response.json({private:true,permissions:{push:!isBudget || options.budgetWriteAllowed!==false}});
     }
-    const branch = 'stage/opsmap-manual-pins';
+    const branch = isBudget&&options.shared ? 'production/opsmap-auth' : 'stage/opsmap-manual-pins';
     const update = request.method === 'PUT' ? JSON.parse(request.body) : null;
     assert.equal(update?.branch ?? url.searchParams.get('ref'),branch);
     if (isBudget) {
-      assert.match(url.pathname,/\/contents\/opsmap-stage\/road-budget-v1\.json$/);
+      assert.equal(url.pathname.endsWith(options.shared?'/opsmap-production/road-budget-v1.json':'/opsmap-stage/road-budget-v1.json'),true);
       if (!update) budgetReads++;
       if(options.missing) return new Response(null,{status:404});
       if (update) {
         budgetWrites++;
-        assert.equal(update.sha,String(revision).padStart(40,'0'));
+        assert.equal(update.sha,String(shared.revision).padStart(40,'0'));
+        if(options.shared)assert.equal(update.message,'Reserve approved Stage Directions test call');
         if(options.conflict) return new Response(null,{status:409});
-        budget = JSON.parse(Buffer.from(update.content,'base64'));
-        revision++;
+        shared.budget = JSON.parse(Buffer.from(update.content,'base64'));
+        shared.revision++;
         return Response.json({});
       }
-      return file(Buffer.from(JSON.stringify(budget)),String(revision).padStart(40,'0'));
+      return file(Buffer.from(JSON.stringify(shared.budget)),String(shared.revision).padStart(40,'0'));
     }
     assert.match(url.pathname,/\/contents\/opsmap-stage\/staff-sessions-v1\.json$/);
     if (update) {
@@ -99,8 +101,8 @@ async function fixture(t, options = {}) {
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const configResponse = (staff=true)=>request('private/road-route/config',{headers:staff?{cookie}:{}});
   const config = async()=> (await configResponse()).json().then(p=>p.data);
-  const route = ({input=draft, origin=STAGE_ORIGIN, staff=true}={})=>request('private/manual-road-route',{
-    method:'POST', headers:{...headers,origin,...(staff?{cookie}:{})},body:JSON.stringify(input)
+  const route = ({input=draft, origin=STAGE_ORIGIN, staff=true,clicked=false,recorded=false}={})=>request(recorded?'private/road-route':'private/manual-road-route',{
+    method:'POST', headers:{...headers,origin,...(staff?{cookie}:{}),...(clicked?{'X-Opsmap-Manual-Route':'1'}:{})},body:JSON.stringify(input)
   });
   return {config,configResponse,route,budgetReads:()=>budgetReads,counts:()=>({budgetWrites,providerCalls})};
 }
@@ -125,6 +127,83 @@ test('Stage ignores shared or Production road credentials and a flag without app
   assert(lines.includes('Stage API 키 누락'));
   assert.equal((await f.route()).status,503);
   assert.deepEqual(f.counts(),{budgetWrites:0,providerCalls:0});
+});
+
+test('shared Directions trial reuses the existing Stage key and reserves only two manual calls across restarts',async t=>{
+  const shared={revision:1,budget:structuredClone(approved)};
+  const budget=shared.budget.roadBudget;
+  delete budget.environment;
+  budget.used=budget.apis.directions.used=4;
+  budget.limit=12;
+  const grant={approvalId:budget.approvalId,startUsed:budget.used,startsAt:at-60000,expiresAt:at+60000};
+  const env={
+    OPSMAP_STAGE_ROAD_SHARED_TRIAL:JSON.stringify(grant),
+    KAKAO_REST_API_KEY:key,
+    OPSMAP_STAGE_KAKAO_MOBILITY_REST_API_KEY:undefined,
+    OPSMAP_STAGE_ROAD_BUDGET_STORE_TOKEN:undefined
+  };
+  const routeDraft={...draft,waypoints:[...draft.waypoints,{id:'visit-2',order:2,lat:37.02,lng:127.02}],destination:{id:'end',lat:37.03,lng:127.03}};
+  const f=await fixture(t,{env,shared,expectedUsed:5});
+  const config=await f.config();
+  assert.equal(config.budgetBackend,'STAGE_SHARED_DIRECTIONS_TRIAL');
+  assert.deepEqual(config.apiRemaining,{directions:2,waypoints:0});
+  assert.equal((await f.route({input:routeDraft})).status,403);
+  assert.equal((await f.route({input:routeDraft,clicked:true,recorded:true})).status,403);
+  assert.equal((await f.route({input:draft,clicked:true})).status,400);
+  assert.deepEqual(f.counts(),{budgetWrites:0,providerCalls:0});
+  const first=await f.route({input:routeDraft,clicked:true});
+  assert.equal(first.status,200);
+  const result=await first.json();
+  assert.equal(result.data.manualOnly,true);
+  assert.equal(result.data.distanceMeters,3600);
+  assert.equal(result.data.durationSeconds,470);
+  assert.equal(result.data.chunks[0].geometry.length,3);
+  assert.deepEqual(f.counts(),{budgetWrites:1,providerCalls:1});
+  const restarted=await fixture(t,{env,shared,expectedUsed:6});
+  assert.equal((await restarted.config()).approvedRemaining,1);
+  const revised={...routeDraft,waypoints:[routeDraft.waypoints[0],{...routeDraft.waypoints[1],lat:37.021}]};
+  assert.equal((await restarted.route({input:revised,clicked:true})).status,200);
+  assert.equal((await restarted.config()).approvedRemaining,0);
+  assert.equal((await restarted.route({input:routeDraft,clicked:true})).status,429);
+  assert.equal(shared.budget.roadBudget.used,6);
+  assert.equal(shared.budget.roadBudget.apis.waypoints.used,0);
+  assert.deepEqual(restarted.counts(),{budgetWrites:1,providerCalls:1});
+});
+
+test('shared trial fails closed if the approval, account or trial time is wrong',async t=>{
+  for(const [adjustGrant,stageKey,reason] of [
+    [grant=>({...grant,approvalId:'different-approval'}),key,'ROAD_BUDGET_TRIAL_APPROVAL_CHANGED'],
+    [grant=>({...grant,expiresAt:at-1}),key,'ROAD_BUDGET_TRIAL_WINDOW'],
+    [grant=>grant,'other-synthetic-key','ROAD_BUDGET_ACCOUNT_MISMATCH']
+  ]){
+    const shared={revision:1,budget:structuredClone(approved)};
+    const grant=adjustGrant({approvalId:approved.roadBudget.approvalId,startUsed:0,startsAt:at-60000,expiresAt:at+60000});
+    const f=await fixture(t,{shared,env:{
+      OPSMAP_STAGE_ROAD_SHARED_TRIAL:JSON.stringify(grant),
+      OPSMAP_STAGE_KAKAO_MOBILITY_REST_API_KEY:stageKey
+    }});
+    assert.equal((await f.config()).budgetError,reason);
+    assert.deepEqual(f.counts(),{budgetWrites:0,providerCalls:0});
+  }
+});
+
+test('an intervening Production debit consumes part of the shared two-call window',async t=>{
+  const shared={revision:1,budget:structuredClone(approved)};
+  const budget=shared.budget.roadBudget;
+  delete budget.environment;
+  budget.used=budget.apis.directions.used=4;
+  budget.limit=12;
+  const grant={approvalId:budget.approvalId,startUsed:budget.used,startsAt:at-60000,expiresAt:at+60000};
+  const f=await fixture(t,{shared,expectedUsed:6,env:{OPSMAP_STAGE_ROAD_SHARED_TRIAL:JSON.stringify(grant)}});
+  assert.equal((await f.config()).approvedRemaining,2);
+  budget.used++;
+  budget.apis.directions.used++;
+  shared.revision++;
+  assert.equal((await f.config()).approvedRemaining,1);
+  const routeDraft={...draft,waypoints:[...draft.waypoints,{id:'visit-2',order:2,lat:37.02,lng:127.02}],destination:{id:'end',lat:37.03,lng:127.03}};
+  assert.equal((await f.route({input:routeDraft,clicked:true})).status,200);
+  assert.equal((await f.config()).approvedRemaining,0);
+  assert.deepEqual(f.counts(),{budgetWrites:1,providerCalls:1});
 });
 
 test('Stage road readiness reads its ledger; staff and same-origin calls reserve before dispatch',async t=>{

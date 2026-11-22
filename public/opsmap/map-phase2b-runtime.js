@@ -117,7 +117,7 @@
     const badge=$('#waypointPlanner .sectiontitle .muted');if(badge)badge.textContent=['success','partial'].includes(result?.state)?'자동차 경로':result?.state==='loading'?'조회 중':result?.state==='error'?'조회 실패':result?.state==='empty'?'경로 없음':result?.state==='disabled'?'연결 대기':'자동차';
   }
   function cancelManualRoadRoute(){manualRoadController?.cancel();manualRoadLayer?.clear();}
-  async function queryManualRoadRoute(){
+  async function queryManualRoadRoute(explicitClick=false){
     if(manualRoadController?.isLoading())return;
     const draft=manualDraft.validate();
     if(!manualRoadController)throw Error('도로 경로를 조회할 수 없습니다.');
@@ -125,7 +125,7 @@
     requestControllers.get('route-plan')?.controller.abort('superseded');
     requestControllers.get('operation-status')?.controller.abort('superseded');
     $('#syncOperation').disabled=false;
-    resetRoadRoute();routeCameraEpoch=mapCamera?.interaction()??0;return manualRoadController.load(draft);
+    resetRoadRoute();routeCameraEpoch=mapCamera?.interaction()??0;return manualRoadController.load(draft,explicitClick);
   }
   let originalRouteLegend = $('.legend')?.innerHTML || '';
   const roadController = window.RoadRouteUi?.createController({ onChange: result => {
