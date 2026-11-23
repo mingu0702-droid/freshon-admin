@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import XLSX from 'xlsx';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
 import {readStageFreshonWmsWorkbookEvidence,verifyStageFreshonWmsDispatchWorkbook,
-  publishStageFreshonWmsDispatchWorkbook} from '../src/stageFreshonWmsWorkbookGate.js';
+  publishStageFreshonWmsDispatchWorkbook,verifyStageFreshonWmsWorkbookOnce} from '../src/stageFreshonWmsWorkbookGate.js';
 
 const date='2026-11-24', observedAt='2026-11-23T14:08:19.582Z';
 const env={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
@@ -90,4 +90,42 @@ test('same headline totals with a different base vehicle cannot publish; workboo
   await assert.rejects(publishStageFreshonWmsDispatchWorkbook({evidence,date,observedAt,
     sha256:hash(bytes),env,fetchImpl}),code('WORKBOOK_SCOPE'));
   assert.equal(outbound,0);
+});
+
+test('one-shot preview runs one approved login and one pinned read, without archive access',async()=>{
+  const bytes=workbook(), options={bytes,date,observedAt,sha256:hash(bytes),env};
+  let logins=0,reads=0;
+  const login=async()=>{logins++;return {cookie:'synthetic-session'}};
+  const fetchImpl=async(url,request)=>{
+    reads++;
+    assert.equal(url,'https://mis.freshon.co.kr/bo/wm/dispatch/baecha_list');
+    assert.equal(request.method,'POST');
+    assert.equal(request.redirect,'error');
+    assert.equal(request.headers.Cookie,'synthetic-session');
+    assert.ok(request.signal instanceof AbortSignal);
+    return Response.json(fixture());
+  };
+  await assert.rejects(verifyStageFreshonWmsWorkbookOnce({...options,sha256:'0'.repeat(64),login,fetchImpl}),code('WORKBOOK_SCOPE'));
+  await assert.rejects(verifyStageFreshonWmsWorkbookOnce({...options,env:{},login,fetchImpl}),code('SCOPE'));
+  assert.deepEqual([logins,reads],[0,0]);
+  assert.equal((await verifyStageFreshonWmsWorkbookOnce({...options,login,fetchImpl})).state,'VERIFIED_SOURCE_WORKBOOK');
+  assert.deepEqual([logins,reads],[1,1]);
+});
+
+test('one-shot preview rejects session failures, redirects, bad JSON and oversized bodies without retry',async()=>{
+  const bytes=workbook(), options={bytes,date,observedAt,sha256:hash(bytes),env,login:async()=>({cookie:'synthetic-session'})};
+  const variants=[
+    [()=>new Response('expired',{status:401}),'RESPONSE'],
+    [()=>new Response('redirect',{status:302}),'RESPONSE'],
+    [()=>new Response('invalid',{headers:{'Content-Type':'application/json'}}),'RESPONSE'],
+    [()=>new Response('large',{headers:{'Content-Type':'application/json','Content-Length':String(8*1024*1024+1)}}),'RESPONSE_SIZE'],
+    [()=>new Response(new Uint8Array(8*1024*1024+1),{headers:{'Content-Type':'application/json'}}),'RESPONSE_SIZE'],
+  ];
+  for(const [response,reason] of variants){
+    let calls=0;
+    await assert.rejects(verifyStageFreshonWmsWorkbookOnce({...options,fetchImpl:async()=>{calls++;return response()}}),code(reason));
+    assert.equal(calls,1);
+  }
+  await assert.rejects(verifyStageFreshonWmsWorkbookOnce({...options,login:async()=>({cookie:'bad\nheader'}),
+    fetchImpl:()=>assert.fail('must stop before provider read')}),code('SESSION'));
 });

@@ -142,3 +142,51 @@ export async function publishStageFreshonWmsDispatchWorkbook({evidence,bytes,dat
   verifyStageFreshonWmsDispatchWorkbook({evidence,bytes:original,date,observedAt,sha256,env});
   return publishStageWmsDispatchExport({bytes:original,date,observedAt,sha256,replaceSha256,env,fetchImpl});
 }
+
+// The CLI injects the existing approved one-request login. No automatic
+// credential renewal is attempted when the pinned read rejects that session.
+export async function verifyStageFreshonWmsWorkbookOnce({
+  bytes,date,observedAt,sha256,login,fetchImpl=fetch,env=process.env
+}={}) {
+  requestScope(date,env);
+  if(!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>maxWorkbookBytes||!sha.test(sha256||'')||
+    createHash('sha256').update(bytes).digest('hex')!==sha256)fail('WORKBOOK_SCOPE');
+  parseOpsmapWmsDispatchExport(bytes,{date,observedAt});
+  if(typeof login!=='function')fail('TRANSPORT');
+  const {cookie}=await login();
+  if(typeof cookie!=='string'||!cookie||/[\r\n]/.test(cookie))fail('SESSION');
+  const evidence=await readStageFreshonWmsWorkbookEvidence({date,env,readJson:async (url,options)=>{
+    const origin=new URL(sourceUrl).origin;
+    const response=await fetchImpl(url,{...options,signal:AbortSignal.timeout(25000),
+      headers:{...options.headers,Accept:'application/json',Origin:origin,
+        Referer:origin+'/bo/main#/bo/wm/dispatch/LOTMTR005_list',Cookie:cookie}});
+    if(response.status!==200||!response.body||
+      !/^application\/(?:json|[a-z0-9.+-]+\+json)(?:\s*;|$)/i.test(response.headers.get('content-type')||'')){
+      await response.body?.cancel();
+      fail('RESPONSE');
+    }
+    const limit=8*1024*1024;
+    if(Number(response.headers.get('content-length'))>limit){
+      await response.body.cancel();
+      fail('RESPONSE_SIZE');
+    }
+    const chunks=[];
+    let size=0;
+    const reader=response.body.getReader();
+    try{
+      for(;;){
+        const {value,done}=await reader.read();
+        if(done)break;
+        size+=value.byteLength;
+        if(size>limit){
+          await reader.cancel();
+          fail('RESPONSE_SIZE');
+        }
+        chunks.push(value);
+      }
+      try{return JSON.parse(Buffer.concat(chunks,size).toString('utf8'));}
+      catch{fail('RESPONSE');}
+    }finally{reader.releaseLock();}
+  }});
+  return verifyStageFreshonWmsDispatchWorkbook({evidence,bytes,date,observedAt,sha256,env});
+}
