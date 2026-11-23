@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import XLSX from 'xlsx';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
 import {readStageFreshonWmsWorkbookEvidence,verifyStageFreshonWmsDispatchWorkbook,
-  publishStageFreshonWmsDispatchWorkbook,verifyStageFreshonWmsWorkbookOnce} from '../src/stageFreshonWmsWorkbookGate.js';
+  publishStageFreshonWmsDispatchWorkbook,runStageFreshonWmsWorkbookOnce} from '../src/stageFreshonWmsWorkbookGate.js';
 
 const date='2026-11-24', observedAt='2026-11-23T14:08:19.582Z';
 const env={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
@@ -105,10 +105,12 @@ test('one-shot preview runs one approved login and one pinned read, without arch
     assert.ok(request.signal instanceof AbortSignal);
     return Response.json(fixture());
   };
-  await assert.rejects(verifyStageFreshonWmsWorkbookOnce({...options,sha256:'0'.repeat(64),login,fetchImpl}),code('WORKBOOK_SCOPE'));
-  await assert.rejects(verifyStageFreshonWmsWorkbookOnce({...options,env:{},login,fetchImpl}),code('SCOPE'));
+  await assert.rejects(runStageFreshonWmsWorkbookOnce({...options,sha256:'0'.repeat(64),login,fetchImpl}),code('WORKBOOK_SCOPE'));
+  await assert.rejects(runStageFreshonWmsWorkbookOnce({...options,env:{},login,fetchImpl}),code('SCOPE'));
+  await assert.rejects(runStageFreshonWmsWorkbookOnce({...options,login,fetchImpl,publish:true}),code('RELEASE_CONFIGURATION'));
+  await assert.rejects(runStageFreshonWmsWorkbookOnce({...options,login,fetchImpl,replaceSha256:'9'.repeat(64)}),code('WORKBOOK_SCOPE'));
   assert.deepEqual([logins,reads],[0,0]);
-  assert.equal((await verifyStageFreshonWmsWorkbookOnce({...options,login,fetchImpl})).state,'VERIFIED_SOURCE_WORKBOOK');
+  assert.equal((await runStageFreshonWmsWorkbookOnce({...options,login,fetchImpl})).state,'VERIFIED_SOURCE_WORKBOOK');
   assert.deepEqual([logins,reads],[1,1]);
 });
 
@@ -123,9 +125,9 @@ test('one-shot preview rejects session failures, redirects, bad JSON and oversiz
   ];
   for(const [response,reason] of variants){
     let calls=0;
-    await assert.rejects(verifyStageFreshonWmsWorkbookOnce({...options,fetchImpl:async()=>{calls++;return response()}}),code(reason));
+    await assert.rejects(runStageFreshonWmsWorkbookOnce({...options,fetchImpl:async()=>{calls++;return response()}}),code(reason));
     assert.equal(calls,1);
   }
-  await assert.rejects(verifyStageFreshonWmsWorkbookOnce({...options,login:async()=>({cookie:'bad\nheader'}),
+  await assert.rejects(runStageFreshonWmsWorkbookOnce({...options,login:async()=>({cookie:'bad\nheader'}),
     fetchImpl:()=>assert.fail('must stop before provider read')}),code('SESSION'));
 });
