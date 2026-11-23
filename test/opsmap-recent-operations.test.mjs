@@ -367,6 +367,35 @@ test('explicit repair fills a missing center/source without rewriting the day ar
   await assert.rejects(syncStageRecentOperations({...options,readLatestDay:async()=>[oldDelivery]}),/EVIDENCE_INVALID/);
 });
 
+test('the signed latest-day collection fills source gaps after an Osan WMS-only publication',async()=>{
+  const date='2026-11-23', sha='already-published';
+  const dispatch=makeDay(date,'wms_dispatch','partial',Array.from({length:1629},(_,i)=>'S'+(i+1)));
+  const osanOrder=makeDay(date,'freshon_orders','partial',['S1']);
+  const honamDelivery=makeDay(date,'delivery_admin','partial',['S2'],'honam');
+  let current={ledger:mergeRecentOperations(ledger(),date,[dispatch]),sha}, sealed, writes=0;
+  const options={now:()=>Date.parse('2026-11-24T00:10Z'),receipt:{runId:'b'.repeat(64),date:'2026-11-24'},
+    store:{async read(){return current;},async readDay(){return sealed;},
+      async writeDay(selected,days){assert.equal(selected,date);assert.equal(sealed,undefined);sealed=days;},
+      async write(next,expected){assert.equal(expected,sha);current={ledger:next,sha:'updated'};writes++;}},
+    async readLatestDay(day,delivery,orders){
+      assert.equal(day,date);
+      if (sealed) {
+        assert.deepEqual([...delivery],['honam']);
+        assert.deepEqual([...orders],['osan']);
+        return [];
+      }
+      assert.equal(delivery.size+orders.size,0);
+      return [osanOrder,honamDelivery];
+    }};
+  assert.equal((await syncStageRecentOperations(options)).state,'PUBLISHED');
+  assert.deepEqual(sealed,[honamDelivery,osanOrder,current.ledger.days.find(row=>row.source==='wms_dispatch')]
+    .sort((a,b)=>(a.centerKey+':'+a.source).localeCompare(b.centerKey+':'+b.source)));
+  assert.equal(sealed.find(row=>row.source==='wms_dispatch').rows.length,1629);
+  assert.deepEqual(sealed,current.ledger.days);
+  assert.equal((await syncStageRecentOperations(options)).state,'VERIFIED_NOOP');
+  assert.equal(writes,1);
+});
+
 test('the Stage reader can read a published pointer with its existing read-only credential',async()=>{
   const base=ledger(makeDay(initialEnd,'delivery_admin','partial',['A1']));
   const encoded=Buffer.alloc(32,5).toString('base64');

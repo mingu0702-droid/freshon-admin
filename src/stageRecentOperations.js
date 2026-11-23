@@ -281,10 +281,13 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     const completeRows=new Map(previous.filter(item=>item.coverage==='complete').map(item=>[dayKey(item),item]));
     let input=(savedInput??[]).map(item=>completeRows.get(dayKey(item))??item);
     const latestUnpublished=date===day && date>base.endDate;
+    // A pinned WMS export can publish the date before the signed scheduled
+    // collection fills its independent FreshOn and Delivery Admin scopes.
+    const latestHasWms=date===day && previous.some(item=>item.source==='wms_dispatch');
     // Retry one explicitly selected historical gap per run. The latest day
     // takes priority, and existing sealed files and published dates are retained.
     const missingPastDay=date<day && !retriedMissingDay && savedInput==null && previous.length===0;
-    if (readLatestDay && (latestUnpublished || date===repairDate || missingPastDay && repairDate===undefined)) {
+    if (readLatestDay && (latestUnpublished || latestHasWms || date===repairDate || missingPastDay && repairDate===undefined)) {
       if (date<day) retriedMissingDay=true;
       const observed=[...previous,...input];
       const deliveryCenters=new Set(observed.filter(row=>row.source==='delivery_admin').map(row=>row.centerKey));
@@ -297,13 +300,14 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
           row.source!=='delivery_admin'&&row.source!=='freshon_orders')) throw rejected();
         input.push(...additions);
       }
-      if (input.length && savedInput==null && previous.length===0 && store.writeDay) {
+      if (input.length && savedInput==null && (previous.length===0 || latestHasWms) && store.writeDay) {
+        const envelopeEnd=date<RECENT_OPERATIONS_BASELINE_END?RECENT_OPERATIONS_BASELINE_END:date;
+        const startDate=datesFor(envelopeEnd,90)[0];
+        const expected=mergeRecentOperations({startDate,endDate:envelopeEnd,days:previous},envelopeEnd,input).days;
         let created=true;
-        try {await store.writeDay(date,input);}
+        try {await store.writeDay(date,expected);}
         catch(error) {if(error.code!=='FIXED_STORE_CONFLICT')throw error;created=false;}
         const persisted=await store.readDay(date);
-        const envelopeEnd=date<RECENT_OPERATIONS_BASELINE_END?RECENT_OPERATIONS_BASELINE_END:date;
-        const expected=normalizeRecentOperations({startDate:datesFor(envelopeEnd,90)[0],endDate:envelopeEnd,days:input}).days;
         if (!persisted || created && JSON.stringify(persisted)!==JSON.stringify(expected))
           throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
         input=persisted;
