@@ -16,6 +16,12 @@ const assignment={customerCode:row.customerCode,baseVehicle:'101',baseVehicleGro
 app.get('/',(_q,r)=>r.send(html));
 app.get('/api/map-phase2b/preview/snapshot',(_q,r)=>r.json({data:[row],meta:{complete:true,latestDate:'2026-11-02'}}));
 app.post('/api/map-phase2b/preview/base-vehicles',(_q,r)=>r.json({ok:true,data:[assignment],meta:{basis,version,checkedAt,stale:true}}));
+app.post('/api/map-phase2b/private/stage-address-evidence',express.json(),(req,res)=>{
+  const {generation,rows}=req.body;
+  return res.json({generation,data:rows.map(()=>({status:'OFFICIAL_ADDRESS_AMBIGUOUS',state:'CANDIDATE_REVIEW',points:[
+    {address:'합성 공식 후보 하나',lat:37.2,lng:127},{address:'합성 공식 후보 둘',lat:37.3,lng:127.1}
+  ]}))});
+});
 app.use('/opsmap',express.static(base));
 app.use(express.static(base));
 const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
@@ -34,7 +40,8 @@ try{
   for(const name of ['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','manual-waypoints.js','new-area-requests.js','opsmap-daily.js','new-area-detail-panel.js','new-area-row-edit.js'])await page.addScriptTag({path:path.join(base,name)});
   await page.evaluate(()=>import('/opsmap/fixed-delivery-weekdays.mjs').then(()=>true));
   await page.addScriptTag({path:path.resolve('node_modules/xlsx/dist/xlsx.full.min.js')});
-  const runtime=fs.readFileSync(path.join(base,'map-phase2b-runtime.js'),'utf8');
+  const runtime=fs.readFileSync(path.join(base,'map-phase2b-runtime.js'),'utf8')
+    .replace('function stageAddressBatchEnabled(){return ','function stageAddressBatchEnabled(){return window.__stageChoiceFixture||');
   await page.addScriptTag({content:runtime.replace('\n  initVehicles();',`\n  window.newAreaBrowser={setup(){state.rangeStart='2026-09-01';state.rangeEnd='2026-11-02';},setJudge:fn=>judgeNewAreaRow=fn,realJudge:judgeNewAreaRow,enableMapClick(){state.map={};$('#map').onclick=()=>searchTemporaryClick?.({latLng:{getLat:()=>37.2,getLng:()=>127}});}};\n  initVehicles();`)});
   await page.waitForFunction(()=>window.MapUiLocalBridge?.stores().length===1&&!!window.MapUiLocalBridge.fixedTerritoryMasterState()?.version);
   await page.addScriptTag({path:path.join(base,'map-approved-shell-candidate.js')});
@@ -156,5 +163,18 @@ try{
     await page.screenshot({path:path.join(artifacts,'manual-results-'+width+'.png'),fullPage:true});
     await page.locator('#clearNewAreaBatch').click();
   }
+  // The Stage list is initially built in a fragment and moved into the live dialog.
+  await page.setViewportSize({width:1440,height:1000});
+  await page.evaluate(()=>{window.__stageChoiceFixture=true;});
+  await page.locator('#newAreaBatchInput').fill('경기도 화성시 합성로 2\n경기도 화성시 합성로 3');
+  await page.locator('#judgeNewAreaBatch').click();
+  const stageReview=page.locator('[data-area-index="0"][data-location-state="CANDIDATE_REVIEW"]');
+  await stageReview.locator('[data-judged="0"]').click();
+  await page.locator('.newAreaPositionControl').getByRole('button',{name:'합성 공식 후보 둘'}).click();
+  const visibleChoice=page.locator('#newAreaBatchResults [data-area-index="0"][data-location-state="USER_SELECTED_LOCATION"]');
+  await visibleChoice.waitFor();
+  assert.match(await visibleChoice.innerText(),/사용자가 지정한 임시 위치.*검토 필요/s);
+  assert.equal(await page.locator('#newAreaBatchResults [data-area-index="1"][data-location-state="CANDIDATE_REVIEW"]').count(),1);
+  result.stageChoiceVisible=true;
   result.cancelRerun=true;result.failedAndPendingOnly=true;assert.deepEqual(errors,[]);assert.deepEqual(blocked,[]);result.externalRequests=0;result.artifacts=artifacts;console.log(JSON.stringify(result));
 }catch(error){await page?.screenshot({path:path.join(artifacts,'failure.png'),fullPage:true});console.error(JSON.stringify({artifacts,errors}));throw error;}finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

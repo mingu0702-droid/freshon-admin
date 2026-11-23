@@ -5206,7 +5206,7 @@
       snapshotMeta?.generatedAt,stageRegistrationOnly()?'':customerRegistry?.currentVersion()||'']);
   }
 
-  function reviewNewAreaPosition(list,row,index,dialog) {
+  function reviewNewAreaPosition(row,index,dialog) {
     const batch=newAreaBatch;
     cancelAddressLookup();
     dialog.close();
@@ -5236,7 +5236,7 @@
       const resolved=judgeNewAreaPoint(batch.rows[index],location,batch);
       batch.manualPoints.set(index,location);
       batch.judged[index]=resolved;
-      appendBatchResult(list,resolved,index);publishNewAreaResults();setNewAreaBusy(false);
+      appendBatchResult($('#newAreaBatchResults'),resolved,index);publishNewAreaResults();setNewAreaBusy(false);
       const located=batch.judged.filter(item=>item&&Number.isFinite(item.lat)&&Number.isFinite(item.lng)).length;
       $('#newAreaBatchStatus').textContent=`${index+1}번 행 위치 선택 · 입력 ${batch.rows.length} · 지도 위치 표시 ${located}`;
       finish();
@@ -5314,7 +5314,7 @@
         if (row.inputAmbiguous || (!row.customerCode && /^[A-Z]\d{3,}$/i.test(row.address))) return;
         if (row.customerCode && window.MapManualPins?.open) { dialog?.close(); void window.MapManualPins.open(row.customerCode); return; }
         if (!row.customerCode && dialog?.open && newAreaBatch && !newAreaBusy && state.map) {
-          reviewNewAreaPosition(list,row,index,dialog);
+          reviewNewAreaPosition(row,index,dialog);
           return;
         }
         manual.open = true; manual.hidden = false; manual.inert = false; manual.dataset.modeHidden = 'false';
