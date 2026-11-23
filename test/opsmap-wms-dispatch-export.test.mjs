@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import XLSX from 'xlsx';
 import { createStageWmsDispatchExportReader, parseOpsmapWmsDispatchExport, projectOpsmapWmsDispatch,
-  sealOpsmapWmsDispatchExport } from '../src/opsmapWmsDispatchExport.js';
+  sealOpsmapWmsDispatchExport, publishStageWmsDispatchExport } from '../src/opsmapWmsDispatchExport.js';
 import { createOpsmapDispatchReferenceReader } from '../src/opsmapDispatchReference.js';
 import { coordinateAddressHash } from '../src/opsmap-abc/opsmapAutoCoordinates.js';
 import { STAGE_ORIGIN, STAGE_SERVICE } from '../src/stageScope.js';
@@ -163,7 +163,6 @@ test('the approved archive authenticates a dated XLSX from a private, pinned Git
     env:{...env,...overrides},fetchImpl,readSecret:async()=>assert.fail('unexpected Secret File fallback'),
   });
   const read=reader();
-  assert.equal(await read('2026-11-22'),null);
   assert.equal(await reader({RENDER_SERVICE_ID:'other-service'})(date),null);
   assert.equal(calls.length,0);
   assert.equal((await read(date)).vehicles[0].amount,500);
@@ -195,4 +194,104 @@ test('the approved archive authenticates a dated XLSX from a private, pinned Git
   calls.length=0;
   await assert.rejects(reader()(date),{code:'WMS_EXPORT_ARCHIVE_PERMISSION'});
   assert.deepEqual(calls,[root]);
+});
+test('published Stage WMS releases verify key, ciphertext, date and CAS without changing approved legacy files',async()=>{
+  const key=Buffer.alloc(32,0x31);
+  const ref='b'.repeat(40), branch='stage/opsmap-wms-exports';
+  const root='https://api.github.com/repos/mingu0702-droid/freshon-cache';
+  const prefix=root+'/contents/opsmap-stage/wms-dispatch-v1/';
+  const {manifest,archive}=sealOpsmapWmsDispatchExport(workbook(),{date,observedAt,key});
+  const env={
+    RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
+    OPSMAP_STAGE_WMS_DISPATCH_EXPORT_APPROVED:'1',OPSMAP_STAGE_WMS_DISPATCH_EXPORT_PUBLISH_APPROVED:'1',
+    OPSMAP_STAGE_WMS_DISPATCH_EXPORTS_JSON:JSON.stringify({[date]:manifest}),
+    OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_REF:ref,
+    OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_KEY_B64:key.toString('base64'),
+    OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_WRITE_TOKEN:'stage-test-write',
+    OPSMAP_SHADOW_GITHUB_READ_TOKEN:'stage-test-read',
+  };
+  const files=new Map(), events=[];
+  let rejectsOnce=true;
+  const fetchImpl=async(input,options)=>{
+    const url=new URL(input),address=url.origin+url.pathname, method=options.method||'GET';
+    assert.equal(options.redirect,'error');
+    if(address===root) return Response.json({private:true});
+    assert.ok(address.startsWith(prefix));
+    const name=address.slice(prefix.length);
+    if(url.searchParams.get('ref')===ref){
+      assert.equal(name,date+'.json');
+      assert.equal(method,'GET');
+      return Response.json(archive);
+    }
+    const previous=files.get(name);
+    if(method==='PUT'){
+      assert.equal(options.headers.Authorization,'Bearer stage-test-write');
+      const data=JSON.parse(options.body);
+      assert.equal(data.branch,branch);
+      events.push(name);
+      if(name==='release-index-v1.json'&&rejectsOnce){
+        rejectsOnce=false;return new Response(null,{status:409});
+      }
+      if(previous&&data.sha!==previous.sha||!previous&&data.sha) return new Response(null,{status:409});
+      const text=Buffer.from(data.content,'base64').toString('utf8');
+      files.set(name,{sha:createHash('sha1').update(text).digest('hex'),value:JSON.parse(text),content:data.content});
+      return Response.json({ok:true});
+    }
+    assert.equal(url.searchParams.get('ref'),branch);
+    if(!previous)return new Response(null,{status:404});
+    return Response.json(options.headers.Accept==='application/vnd.github.raw+json'?previous.value:previous);
+  };
+  const date2='2026-11-24', date3='2026-11-25';
+  const nextBook=target=>workbook(input().map(row=>{
+    if(row[0]==='20261123'||row[0]===date) return [target,...row.slice(1)];
+    return row;
+  }));
+  const upload=(target,opts={})=>{
+    const bytes=opts.bytes||nextBook(target);
+    return publishStageWmsDispatchExport({date:target,observedAt,bytes,
+      sha256:createHash('sha256').update(bytes).digest('hex'),env:opts.env||env,fetchImpl});
+  };
+
+  const reader=()=>createStageWmsDispatchExportReader({env,fetchImpl,readSecret:async()=>assert.fail('no plaintext fallback')});
+  assert.equal(await reader()(date2),null);
+  await assert.rejects(upload(date2,{env:{...env,RENDER_SERVICE_ID:'other'}}),{code:'WMS_EXPORT_RELEASE_CONFIGURATION'});
+  await assert.rejects(upload(date2,{env:{...env,OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_KEY_B64:Buffer.alloc(32,9).toString('base64')}}),
+    {code:'WMS_EXPORT_ARCHIVE_INTEGRITY'});
+  assert.equal(events.length,0);
+  const [first,second]=await Promise.all([upload(date2),upload(date3)]);
+  assert.equal(first.state,'PUBLISHED');
+  assert.equal(second.state,'PUBLISHED');
+  for(const file of [...files.keys()].filter(f=>f.startsWith('release-2026-'))){
+    assert.deepEqual(Object.keys(files.get(file).value).sort(),['ciphertext','nonce','schema','tag']);
+  }
+  const countsBefore=events.length;
+  assert.equal((await upload(date2)).state,'VERIFIED_NOOP');
+  assert.equal(events.length,countsBefore);
+  await assert.rejects(upload(date),{code:'WMS_EXPORT_RELEASE_LEGACY_DATE'});
+  const modified=input();
+  modified[1][3]='440';
+  const incompatible=workbook(modified.map(row=>row[0]===date||row[0]==='20261123'?[date2,...row.slice(1)]:row));
+  await assert.rejects(upload(date2,{bytes:incompatible}),{code:'WMS_EXPORT_RELEASE_DATE_CONFLICT'});
+  assert.equal(events.length,countsBefore);
+
+  const staged=reader();
+  assert.deepEqual(await staged.availableDates(),[date,date2,date3]);
+  assert.equal((await staged(date)).total,1501);
+  assert.equal((await staged(date2)).date,date2);
+  assert.equal((await staged(date3)).total,1501);
+  const department=createOpsmapDispatchReferenceReader({getPublication:()=>null,readWmsExport:staged});
+  const result=await department.period(date3,7);
+  const selected=result.dates.find(day=>day.date===date3);
+  assert.equal(selected.wmsVerified,true);
+  assert.deepEqual(selected.amounts,[['101',500],['208',900]]);
+
+  const idx=files.get('release-index-v1.json');
+  files.set('release-index-v1.json',{...idx,value:{...idx.value,tag:'0'.repeat(64)}});
+  await assert.rejects(reader()(date2),{code:'WMS_EXPORT_RELEASE_INDEX_INVALID'});
+  assert.equal((await reader()(date)).total,1501);
+  files.set('release-index-v1.json',idx);
+  const identified=[...files.keys()].find(name=>name.startsWith('release-'+date2+'-'));
+  const doc=files.get(identified);
+  files.set(identified,{...doc,value:{...doc.value,tag:'0'.repeat(32)}});
+  await assert.rejects(reader()(date2),{code:'WMS_EXPORT_ARCHIVE_INTEGRITY'});
 });

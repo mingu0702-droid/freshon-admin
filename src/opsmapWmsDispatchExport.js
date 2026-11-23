@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { coordinateAddressHash } from './opsmap-abc/opsmapAutoCoordinates.js';
 import { createPrivateGithubJsonStore } from './fixedVehicleStore.js';
 import { STAGE_ORIGIN, STAGE_SERVICE } from './stageScope.js';
+import {createStageWmsReleaseStore,isStageWmsDay,stageWmsArchiveKey,WMS_ARCHIVE_REPO,WMS_ARCHIVE_DIR} from './stageWmsExportIndex.js';
 
 const source = 'WMS_CONFIRMED_DISPATCH_EXPORT';
 const require = createRequire(import.meta.url);
@@ -11,8 +12,6 @@ const required = ['입고요청일','확정호차','고객','매출금액','배�
 const dayKey = /^\d{4}-\d{2}-\d{2}$/;
 const codeKey = /^[A-Z]\d{1,20}$/;
 const maxWorkbookBytes = 4 * 1024 * 1024;
-const archiveRepo = 'mingu0702-droid/freshon-cache';
-const archiveDir = 'opsmap-stage/wms-dispatch-v1';
 const maxArchiveBytes = Math.ceil(maxWorkbookBytes / 3) * 4 + 256;
 const scopeError = code => Object.assign(Error(code),{code});
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -131,17 +130,32 @@ export function sealOpsmapWmsDispatchExport(bytes, {date,observedAt,key}) {
     ciphertext:ciphertext.toString('base64')}};
 }
 
+function unpackArchive(value,date,expected,key) {
+  if (value===null) throw scopeError('WMS_EXPORT_ARCHIVE_NOT_FOUND');
+  if (value?.schema!==1 || !/^[0-9a-f]{24}$/.test(value.nonce) || !/^[0-9a-f]{32}$/.test(value.tag) ||
+      typeof value.ciphertext!=='string' || !/^[A-Za-z0-9+/]+=*$/.test(value.ciphertext)) {
+    throw scopeError('WMS_EXPORT_ARCHIVE_FORMAT');
+  }
+  try {
+    const decipher = createDecipheriv('aes-256-gcm',key,Buffer.from(value.nonce,'hex'));
+    decipher.setAAD(archiveBinding(date,expected));
+    decipher.setAuthTag(Buffer.from(value.tag,'hex'));
+    const bytes = Buffer.concat([decipher.update(Buffer.from(value.ciphertext,'base64')),decipher.final()]);
+    if (!bytes.length || bytes.length>maxWorkbookBytes) throw Error('Invalid workbook size');
+    return bytes;
+  } catch { throw scopeError('WMS_EXPORT_ARCHIVE_INTEGRITY'); }
+}
+
 function createArchiveReader(env, fetchImpl) {
   const ref = env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_REF;
-  const encodedKey = env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_KEY_B64 || '';
-  const key = Buffer.from(encodedKey,'base64');
+  const key = stageWmsArchiveKey(env);
   const token = env.OPSMAP_SHADOW_GITHUB_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN;
-  const configuration={refValid:/^[a-f0-9]{40}$/.test(ref),keyValid:key.length===32&&key.toString('base64')===encodedKey,
+  const configuration={refValid:/^[a-f0-9]{40}$/.test(ref),keyValid:Boolean(key),
     tokenPresent:Boolean(token)};
   const configFailure=!configuration.refValid?'WMS_EXPORT_ARCHIVE_REF_INVALID':
     !configuration.keyValid?'WMS_EXPORT_ARCHIVE_KEY_INVALID':!configuration.tokenPresent?'WMS_EXPORT_ARCHIVE_TOKEN_MISSING':null;
   const store = !configFailure && createPrivateGithubJsonStore({
-    env:{GITHUB_CACHE_REPO:archiveRepo,GITHUB_CACHE_BRANCH:ref,GITHUB_CACHE_DIR:archiveDir,GITHUB_TOKEN:token},
+    env:{GITHUB_CACHE_REPO:WMS_ARCHIVE_REPO,GITHUB_CACHE_BRANCH:ref,GITHUB_CACHE_DIR:WMS_ARCHIVE_DIR,GITHUB_TOKEN:token},
     fetchImpl:(url,options)=>fetchImpl(url,{...options,method:'GET',redirect:'error'}),
   });
   const read = async (date, expected) => {
@@ -153,19 +167,7 @@ function createArchiveReader(env, fetchImpl) {
         FIXED_STORE_NOT_PRIVATE:'WMS_EXPORT_ARCHIVE_PERMISSION',FIXED_STORE_INVALID:'WMS_EXPORT_ARCHIVE_FORMAT'}[error?.code];
       throw scopeError(code || 'WMS_EXPORT_ARCHIVE_READ');
     }
-    if (value===null) throw scopeError('WMS_EXPORT_ARCHIVE_NOT_FOUND');
-    if (value?.schema!==1 || !/^[0-9a-f]{24}$/.test(value.nonce) || !/^[0-9a-f]{32}$/.test(value.tag) ||
-        typeof value.ciphertext!=='string' || !/^[A-Za-z0-9+/]+=*$/.test(value.ciphertext)) {
-      throw scopeError('WMS_EXPORT_ARCHIVE_FORMAT');
-    }
-    try {
-      const decipher = createDecipheriv('aes-256-gcm',key,Buffer.from(value.nonce,'hex'));
-      decipher.setAAD(archiveBinding(date,expected));
-      decipher.setAuthTag(Buffer.from(value.tag,'hex'));
-      const bytes = Buffer.concat([decipher.update(Buffer.from(value.ciphertext,'base64')),decipher.final()]);
-      if (!bytes.length || bytes.length>maxWorkbookBytes) throw Error('Invalid workbook size');
-      return bytes;
-    } catch { throw scopeError('WMS_EXPORT_ARCHIVE_INTEGRITY'); }
+    return unpackArchive(value,date,expected,key);
   };
   return {read,configuration};
 }
@@ -193,26 +195,48 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
     }
     return null;
   };
+  const releaseStore = archive?.configuration.refValid&&archive.configuration.keyValid&&archive.configuration.tokenPresent
+    ? createStageWmsReleaseStore({env,fetchImpl}) : null;
+  const releaseKey = releaseStore ? stageWmsArchiveKey(env) : null;
+  let indexRead,indexCache=null;
+  async function releases(){
+    if(!releaseStore)return [];
+    if(indexCache?.until>Date.now())return indexCache.entries;
+    if(!indexRead)indexRead=releaseStore.readIndex().then(({entries})=>{
+      indexCache={until:Date.now()+30_000,entries};
+      return entries;
+    }).catch(error=>{
+      if(error.code==='WMS_EXPORT_RELEASE_INDEX_INVALID')throw error;
+      throw scopeError('WMS_EXPORT_RELEASE_INDEX_UNAVAILABLE');
+    }).finally(()=>{indexRead=null;});
+    return indexRead;
+  }
   function verifyWorkbook(date,bytes) {
     const failure=configurationFailure(date);
     if (failure) throw scopeError(failure);
-    if (!bytes?.length || bytes.length>maxWorkbookBytes || digest(bytes)!==manifest[date].sha256) {
-      throw scopeError('WMS_EXPORT_DIGEST');
-    }
-    try {return parseOpsmapWmsDispatchExport(bytes,{date,observedAt:manifest[date].observedAt});}
-    catch (error) {
-      throw scopeError(error?.code==='WMS_EXPORT_DATE_MISMATCH'?error.code:'WMS_EXPORT_WORKBOOK_INVALID');
-    }
+    return verifyManifestWorkbook(date,bytes,manifest[date]);
   }
   const jobs = new Map();
-  const read=date=>{
-    if (configurationFailure(date)) return Promise.resolve(null);
-    const expected=manifest[date];
-    if (!jobs.has(date)) {
+  const read=async date=>{
+    const failure=configurationFailure(date);
+    let entry;
+    if(failure){
+      if(failure!=='WMS_EXPORT_DATE_NOT_APPROVED'||!releaseStore||!isStageWmsDay(date))return null;
+      entry=(await releases()).find(value=>value.date===date);
+      if(!entry)return null;
+    }
+    const expected=entry||manifest[date];
+    const cacheKey=entry?[date,entry.sha256,entry.observedAt].join('|'):date;
+    if (!jobs.has(cacheKey)) {
       if (jobs.size>=4) jobs.delete(jobs.keys().next().value);
       const task=Promise.resolve().then(async()=>{
         let bytes;
-        if (archive) bytes=await archive.read(date,expected);
+        if(entry){
+          let value;
+          try {value=await releaseStore.readArchive(entry,maxArchiveBytes);}
+          catch {throw scopeError('WMS_EXPORT_ARCHIVE_READ');}
+          bytes=unpackArchive(value,date,entry,releaseKey);
+        }else if (archive) bytes=await archive.read(date,expected);
         else {
           let encoded;
           try { encoded=(await readSecret('/etc/secrets/opsmap-wms-dispatch-'+date+'.xlsx.b64','utf8')).trim(); }
@@ -220,19 +244,87 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
           if (encoded.length>5_600_000 || !/^[A-Za-z0-9+/]+=*$/.test(encoded)) throw scopeError('WMS_EXPORT_ENCODING');
           bytes=Buffer.from(encoded,'base64');
         }
-        return verifyWorkbook(date,bytes);
+        return verifyManifestWorkbook(date,bytes,expected);
       }).catch(error=>{
-        if(jobs.get(date)===task)jobs.delete(date);
+        if(jobs.get(cacheKey)===task)jobs.delete(cacheKey);
         throw error;
       });
-      jobs.set(date,task);
+      jobs.set(cacheKey,task);
     }
-    return jobs.get(date);
+    return jobs.get(cacheKey);
   };
   read.dates=Object.keys(manifest??{}).filter(date=>dayKey.test(date));
   read.verifyWorkbook=verifyWorkbook;
+  read.availableDates=async()=>{
+    const list=await releases().catch(()=>[]);
+    return [...new Set([...read.dates,...list.map(entry=>entry.date)])];
+  };
+  read.hasVerifiedSource=date=>read.dates.includes(date)||indexCache?.entries.some(entry=>entry.date===date);
   read.configurationFailure=configurationFailure;
   read.configuration={serviceVerified,approved,manifestValid:Boolean(manifest),archive:archive?.configuration??null,
     dates:Object.fromEntries(read.dates.map(date=>[date,configurationFailure(date)??'VERIFIED']))};
   return read;
+}
+
+
+function verifyManifestWorkbook(date,bytes,manifest) {
+  if (!bytes?.length || bytes.length>maxWorkbookBytes || digest(bytes)!==manifest.sha256) {
+    throw scopeError('WMS_EXPORT_DIGEST');
+  }
+  try {return parseOpsmapWmsDispatchExport(bytes,{date,observedAt:manifest.observedAt});}
+  catch (error) {
+    throw scopeError(error?.code==='WMS_EXPORT_DATE_MISMATCH'?error.code:'WMS_EXPORT_WORKBOOK_INVALID');
+  }
+}
+
+export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha256,env=process.env,fetchImpl=fetch}={}){
+  if(!isStageWmsDay(date))throw scopeError('WMS_EXPORT_SCOPE');
+  const key=stageWmsArchiveKey(env);
+  const archive=createStageWmsReleaseStore({env,fetchImpl,write:true});
+  if(!archive||!key)throw scopeError('WMS_EXPORT_RELEASE_CONFIGURATION');
+  let legacy;
+  try {legacy=JSON.parse(env.OPSMAP_STAGE_WMS_DISPATCH_EXPORTS_JSON);}
+  catch {throw scopeError('WMS_EXPORT_MANIFEST_INVALID');}
+  if(!legacy||Array.isArray(legacy)||typeof legacy!=='object')throw scopeError('WMS_EXPORT_MANIFEST_INVALID');
+  if(Object.hasOwn(legacy,date))throw scopeError('WMS_EXPORT_RELEASE_LEGACY_DATE');
+  verifyManifestWorkbook(date,bytes,{sha256,observedAt});
+  // Prove the operator's key opens an already approved pinned export before the
+  // first release write. A newly generated or mistyped key cannot fork the archive.
+  const probe=Object.keys(legacy).filter(isStageWmsDay).sort().at(-1);
+  const pinned=legacy[probe];
+  if(pinned?.warehouse!=='011'||!/^[a-f0-9]{64}$/.test(pinned.sha256||'')||
+      !Number.isFinite(Date.parse(pinned.observedAt)))throw scopeError('WMS_EXPORT_MANIFEST_ENTRY_INVALID');
+  const writer=env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_WRITE_TOKEN||env.OPSMAP_STAGE_SYNC_WRITE_TOKEN;
+  const checkedArchive=createArchiveReader({...env,OPSMAP_SHADOW_GITHUB_READ_TOKEN:writer},fetchImpl);
+  verifyManifestWorkbook(probe,await checkedArchive.read(probe,pinned),pinned);
+  const dateEntry={date,warehouse:'011',sha256,observedAt};
+  const verifyStored=async entry=>{
+    const value=await archive.readArchive(entry,maxArchiveBytes);
+    return verifyManifestWorkbook(date,unpackArchive(value,date,entry,key),entry);
+  };
+  for(let attempt=0;attempt<3;attempt++){
+    const {sha,entries}=await archive.readIndex();
+    const existing=entries.find(entry=>entry.date===date);
+    if(existing){
+      if(existing.sha256!==sha256)throw scopeError('WMS_EXPORT_RELEASE_DATE_CONFLICT');
+      await verifyStored(existing);
+      return {state:'VERIFIED_NOOP',date,sha256};
+    }
+    if(attempt===0){
+      const {archive:sealed}=sealOpsmapWmsDispatchExport(bytes,{date,observedAt,key});
+      try {await archive.createArchive(dateEntry,sealed);}
+      catch(error){if(error.code!=='FIXED_STORE_CONFLICT')throw error;}
+      await verifyStored(dateEntry);
+    }
+    try {await archive.writeIndex([...entries,dateEntry],sha);}
+    catch(error){
+      if(error.code==='FIXED_STORE_CONFLICT')continue;
+      throw error;
+    }
+    const saved=(await archive.readIndex()).entries.find(entry=>entry.date===date);
+    if(saved?.sha256!==sha256||saved.observedAt!==observedAt)throw scopeError('WMS_EXPORT_RELEASE_READBACK');
+    await verifyStored(saved);
+    return {state:'PUBLISHED',date,sha256};
+  }
+  throw scopeError('WMS_EXPORT_RELEASE_INDEX_BUSY');
 }

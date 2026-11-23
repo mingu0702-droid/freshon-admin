@@ -13,7 +13,7 @@ const exportFailures = new Set([
   'WMS_EXPORT_APPROVAL_MISSING','WMS_EXPORT_MANIFEST_INVALID','WMS_EXPORT_DATE_NOT_APPROVED',
   'WMS_EXPORT_WAREHOUSE_INVALID','WMS_EXPORT_MANIFEST_ENTRY_INVALID','WMS_EXPORT_ARCHIVE_REF_INVALID',
   'WMS_EXPORT_ARCHIVE_KEY_INVALID','WMS_EXPORT_ARCHIVE_TOKEN_MISSING','WMS_EXPORT_ARCHIVE_PERMISSION',
-  'WMS_EXPORT_ARCHIVE_READ','WMS_EXPORT_ARCHIVE_NOT_FOUND','WMS_EXPORT_ARCHIVE_FORMAT','WMS_EXPORT_ARCHIVE_INTEGRITY',
+  'WMS_EXPORT_ARCHIVE_READ','WMS_EXPORT_ARCHIVE_NOT_FOUND','WMS_EXPORT_ARCHIVE_FORMAT','WMS_EXPORT_ARCHIVE_INTEGRITY','WMS_EXPORT_RELEASE_INDEX_INVALID','WMS_EXPORT_RELEASE_INDEX_UNAVAILABLE',
   'WMS_EXPORT_SECRET_FILE_READ','WMS_EXPORT_ENCODING','WMS_EXPORT_DIGEST','WMS_EXPORT_WORKBOOK_INVALID',
 ]);
 const safeExportFailure = code => code==='WMS_EXPORT_DATE_MISMATCH'?'DATE_MISMATCH':
@@ -174,7 +174,7 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
     const publication=getPublication();
     const dates=dispatchPeriodDates(end,days);
     const indexed=Array.isArray(publication?.dispatchDates)?new Set(publication.dispatchDates):null;
-    const exports=new Set(readWmsExport?.dates??[]);
+    const exports=new Set(await readWmsExport?.availableDates?.()??readWmsExport?.dates??[]);
     const retained=new Set(retainedDatedDates?.()??[]);
     const latest=await Promise.resolve().then(()=>readAmounts?.latest?.()).catch(()=>null);
     const result=dates.map(date=>({date,state:'UNAVAILABLE'}));

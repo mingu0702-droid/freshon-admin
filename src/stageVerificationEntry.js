@@ -796,7 +796,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           readPostcodes:(codes,generation)=>generation ? postalCoverage?.dispatchPostcodes(codes,generation) : null,
         });
         mountOpsmapDispatchReference(router,{requireStaff,read,today,onDay:({date,route,amounts})=>{
-          if (!readWmsExport.dates?.includes(date)) return;
+          if (!(readWmsExport.hasVerifiedSource?.(date)??readWmsExport.dates?.includes(date))) return;
           console.info(JSON.stringify({component:'stage-wms-export-day',date,
             route:{state:route.state,source:route.source??null,rows:route.rows.length,projectionFailure:route.projectionFailure??null},
             amounts:{state:amounts.state,vehicles:amounts.vehicles.length,exportFailure:amounts.exportFailure??null}}));
