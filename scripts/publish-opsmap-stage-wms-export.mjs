@@ -2,19 +2,22 @@ import {createHash} from 'node:crypto';
 import {readFile,stat} from 'node:fs/promises';
 import path from 'node:path';
 import {parseOpsmapWmsDispatchExport,publishStageWmsDispatchExport} from '../src/opsmapWmsDispatchExport.js';
-import {verifyStageFreshonWmsWorkbookOnce} from '../src/stageFreshonWmsWorkbookGate.js';
+import {runStageFreshonWmsWorkbookOnce} from '../src/stageFreshonWmsWorkbookGate.js';
 
 try {
   const [mode,date,observedAt,sha256,input,replaceSha256,...extra]=process.argv.slice(2);
-  if(!['--preview','--publish','--replace','--verify-freshon'].includes(mode)||extra.length||!path.isAbsolute(input||'')||
-      (mode==='--replace'?!/^[a-f0-9]{64}$/.test(replaceSha256||''):replaceSha256!==undefined)||
+  const providerModes=['--verify-freshon','--publish-freshon','--replace-freshon'];
+  const replace=mode==='--replace'||mode==='--replace-freshon';
+  if(!['--preview','--publish','--replace',...providerModes].includes(mode)||extra.length||!path.isAbsolute(input||'')||
+      (replace?!/^[a-f0-9]{64}$/.test(replaceSha256||''):replaceSha256!==undefined)||
       !/^[a-f0-9]{64}$/.test(sha256||''))throw Error('WMS_EXPORT_SCOPE');
   const file=await stat(input);
   if(!file.isFile()||file.size<1||file.size>4*1024*1024)throw Error('WMS_EXPORT_WORKBOOK_INVALID');
   const bytes=await readFile(input);
   if(bytes.length!==file.size||createHash('sha256').update(bytes).digest('hex')!==sha256)throw Error('WMS_EXPORT_DIGEST');
-  if(mode==='--verify-freshon'){
-    const proof=await verifyStageFreshonWmsWorkbookOnce({bytes,date,observedAt,sha256,login:async()=>{
+  if(providerModes.includes(mode)){
+    const proof=await runStageFreshonWmsWorkbookOnce({bytes,date,observedAt,sha256,replaceSha256,
+      publish:mode!=='--verify-freshon',login:async()=>{
       const {config}=await import('../src/config.js');
       if(new URL(config.freshonBaseUrl).origin!=='https://mis.freshon.co.kr')throw Error('WMS_EXPORT_FRESHON_SCOPE');
       const {loginFreshonSession}=await import('../src/scraper/freshonDailyRoute.js');

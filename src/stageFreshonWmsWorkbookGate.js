@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {parseOpsmapWmsDispatchExport,publishStageWmsDispatchExport} from './opsmapWmsDispatchExport.js';
-import {isStageWmsDay,stageWmsError,stageWmsReleaseEnabled} from './stageWmsExportIndex.js';
+import {createStageWmsReleaseStore,isStageWmsDay,stageWmsError,stageWmsReleaseEnabled} from './stageWmsExportIndex.js';
 
 const require=createRequire(import.meta.url);
 const warehouse='011', pageSize=3000, maxWorkbookBytes=4*1024*1024;
@@ -145,10 +145,12 @@ export async function publishStageFreshonWmsDispatchWorkbook({evidence,bytes,dat
 
 // The CLI injects the existing approved one-request login. No automatic
 // credential renewal is attempted when the pinned read rejects that session.
-export async function verifyStageFreshonWmsWorkbookOnce({
-  bytes,date,observedAt,sha256,login,fetchImpl=fetch,env=process.env
+export async function runStageFreshonWmsWorkbookOnce({
+  bytes,date,observedAt,sha256,login,publish=false,replaceSha256,fetchImpl=fetch,env=process.env
 }={}) {
   requestScope(date,env);
+  if(replaceSha256!==undefined&&(!publish||!sha.test(replaceSha256)))fail('WORKBOOK_SCOPE');
+  if(publish&&!createStageWmsReleaseStore({env,write:true}))fail('RELEASE_CONFIGURATION');
   if(!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>maxWorkbookBytes||!sha.test(sha256||'')||
     createHash('sha256').update(bytes).digest('hex')!==sha256)fail('WORKBOOK_SCOPE');
   parseOpsmapWmsDispatchExport(bytes,{date,observedAt});
@@ -188,5 +190,8 @@ export async function verifyStageFreshonWmsWorkbookOnce({
       catch{fail('RESPONSE');}
     }finally{reader.releaseLock();}
   }});
+  if(publish){
+    return publishStageFreshonWmsDispatchWorkbook({evidence,bytes,date,observedAt,sha256,replaceSha256,env,fetchImpl});
+  }
   return verifyStageFreshonWmsDispatchWorkbook({evidence,bytes,date,observedAt,sha256,env});
 }
