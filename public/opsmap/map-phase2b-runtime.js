@@ -4864,7 +4864,8 @@
       }
       if(signal.aborted)return saved;
       if(saved?.external){
-        const point=interactiveProviderPoint(saved.external,true);
+        const {documents,resolution}=saved.external;
+        const point=interactiveProviderPoint({rows:documents,resolution},true);
         if(point?.candidates)return {...saved,status:'OFFICIAL_ADDRESS_AMBIGUOUS',points:point.candidates};
         return point?{...saved,status:'OFFICIAL',point}:saved;
       }

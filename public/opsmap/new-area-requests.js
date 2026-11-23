@@ -55,7 +55,7 @@
     if (!base) return '시·군·구와 도로명 주소 또는 지번을 확인해 주세요.';
     const type = /(?:대로|로|길)\s+(?:지하\s*)?\d+(?:-\d+)?$/.test(base) ? '도로명과 건물번호' : '법정동·리와 지번';
     return /(?:^|\s)[가-힣]+[시군구]\s/.test(base)
-      ? `${type}, 시·군·구 표기를 확인해 주세요.` : `시·군·구를 포함해 ${type} 표기를 확인해 주세요.`;
+      ? `${type}, 시·군·구 표기를 확인해 주세요.` : `지역이 빠진 주소입니다. 시·군·구를 포함해 ${type} 표기를 확인해 주세요.`;
   }
   function stopsExternal(error) {
     return /^(?:KAKAO_|GEOCODE_(?:DAILY_LIMIT|AUTOMATICALLY_BLOCKED|LEDGER_|DURABLE_|SESSION_|ORIGIN_)|GEOCODING_DISABLED|TARGET_APP_)/.test(error?.code || '');

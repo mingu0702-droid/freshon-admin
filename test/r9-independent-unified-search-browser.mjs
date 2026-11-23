@@ -16,7 +16,7 @@ const rows=[
  {customerCode:'B990004',customerName:'합성 미확인 매장',lat:null,lng:null,vehicle:'202'},
  {customerCode:'S990005',customerName:'합성 주소변경 매장',lat:37.54,lng:127.04,vehicle:'172'}
 ].map(row=>({...row,address:'',lastDeliveryDate:day,coordinateSource:'SYNTHETIC_GPS'}));
-const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','new-area-detail-panel.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
+const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','new-area-detail-panel.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','opsmap-daily.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
 const fixture=`
 window.VEHICLE_AREA_DATA={vehicles:${JSON.stringify(['101','122','172','202'].map(vehicle=>({vehicle,group:'osan',customers:[]})))}};
 window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};window.fixturePurges=[];window.fixtureOverlays=[];window.fixtureGeocodes=0;
@@ -114,7 +114,9 @@ try{
  check('clearing the route releases its temporary point',await page.evaluate(()=>MapNavigation.metrics().temporaryPointCount===0));
  for(const cleanup of ['mapReset','modeDaily']){
   await search('서울 중구 합성로 701');await page.locator('#map').click({position:{x:220,y:200}});await page.waitForFunction(()=>MapUiLocalBridge.state.virtual?.searchTemporary===true);
-  await page.locator('#'+cleanup).click();check(cleanup+' clears the temporary position',!await virtual()&&await page.locator('[data-search-temporary-pin]').count()===0);
+  await page.locator('#'+cleanup).click();
+  if(cleanup==='mapReset')check('map overview preserves the temporary position for later inspection',await virtual()&&await page.locator('[data-search-temporary-pin]').count()===1);
+  else check('daily mode preserves the temporary position without changing the saved stores',await virtual()&&await page.evaluate(()=>MapUiLocalBridge.navigationStores('BASE_60D').length===5));
   if(cleanup==='modeDaily'){await page.locator('#modePeriod').click();await page.waitForFunction(()=>MapUiLocalBridge.state.mode==='BASE_60D');}
  }
  for(const width of [1920,1366,760,390]){
