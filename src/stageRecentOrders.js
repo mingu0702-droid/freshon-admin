@@ -51,18 +51,19 @@ export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,
       return !!cookie;
     } catch {return false;}
   }
-  return async(date,existingCenters=new Set())=>{
+  return async(date,existingCenters=new Set(),{signal,allowLogin=true}={})=>{
     const input=[];
     if (!isDay(date)) return input;
     const report=(centerKey,state)=>{
       try {onDiagnostic?.({date,centerKey,state});}
       catch { /* Diagnostics cannot change accepted evidence. */ }
     };
-    if (!cookie && !await authenticate()) {
+    if (!cookie && (!allowLogin || !await authenticate())) {
       for (const centerKey of Object.keys(centers)) report(centerKey,existingCenters.has(centerKey)?'ALREADY_OBSERVED':'AUTH_UNAVAILABLE');
       return input;
     }
-    const budget=AbortSignal.timeout(90_000);
+    const timeout=AbortSignal.timeout(90_000);
+    const budget=signal?AbortSignal.any([timeout,signal]):timeout;
     for (const [centerKey,[logCd]] of Object.entries(centers)) {
       if (existingCenters.has(centerKey)) {report(centerKey,'ALREADY_OBSERVED');continue;}
       if (budget.aborted) {report(centerKey,'BUDGET_EXHAUSTED');continue;}
@@ -78,7 +79,7 @@ export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,
         if (response.status===401 || response.status>=300&&response.status<400 ||
             response.headers.get('content-type')?.includes('text/html')) {
           await response.body?.cancel();
-          if (!await authenticate()) {report(centerKey,'AUTH_UNAVAILABLE');continue;}
+          if (!allowLogin || !await authenticate()) {report(centerKey,'AUTH_UNAVAILABLE');continue;}
           response=await request();
         }
         if (!response.ok) {await response.body?.cancel();report(centerKey,'HTTP_REJECTED');continue;}

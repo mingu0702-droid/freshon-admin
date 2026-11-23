@@ -24,6 +24,7 @@ const maxRetryDates = 7;
 const historicalSources = ['delivery_admin','freshon_orders'];
 const historicalStates = ['VERIFIED','NO_ACCEPTED_EVIDENCE','READ_FAILED'];
 const recoveryBudgetMs = 90_000;
+const historicalReadMs = 30_000;
 const compress = promisify(gzip), decompress = promisify(gunzip);
 const customerCode = /^[A-Z]\d{1,20}$/;
 const hash = /^[a-f0-9]{64}$/;
@@ -250,16 +251,18 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
   try {key=recentOperationsKey(env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64);}
   catch {return null;}
   const root='https://api.github.com/repos/'+repository, contents=root+'/contents/opsmap-stage/';
+  const allowRepair=env.OPSMAP_STAGE_RECENT_OPERATIONS_AUTO_REPAIR_APPROVED==='1';
   const client=createPrivateGithubJsonStore({now,
     env:{GITHUB_CACHE_REPO:repository,GITHUB_CACHE_BRANCH:branch,GITHUB_CACHE_DIR:'opsmap-stage',GITHUB_TOKEN:token},
     fetchImpl(input,options={}) {
       const url=new URL(input), address=url.origin+url.pathname, method=options.method || 'GET';
       const file=address.startsWith(contents)?address.slice(contents.length):'';
       const daily=file.startsWith(prefix+'day-') && /^day-\d{4}-\d{2}-\d{2}\.json$/.test(file.slice(prefix.length));
+      const recoveryClaim=file.startsWith(prefix+'repair-') && /^repair-\d{4}-\d{2}-\d{2}\.json$/.test(file.slice(prefix.length));
       const blob=address.startsWith(root+'/git/blobs/') && codeRevision.test(address.slice((root+'/git/blobs/').length));
       const read=method==='GET' && ((file===currentFile || write&&daily) && url.searchParams.size===1 && url.searchParams.get('ref')===branch ||
         !url.search && (address===root || (write||withSha)&&blob));
-      const update=write && method==='PUT' && (file===currentFile || daily) && !url.search &&
+      const update=write && method==='PUT' && (file===currentFile || daily || allowRepair&&recoveryClaim) && !url.search &&
         JSON.parse(options.body).branch===branch;
       if ((!read && !update) || url.username || url.password || url.hash) throw Error('RECENT_OPERATIONS_STORAGE_SCOPE');
       return fetchImpl(input,{...options,redirect:'error'});
@@ -274,6 +277,11 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
       return {sha,ledger:value?await openRecentOperations(value,key):null};
     },
     ...(write?{
+      ...(allowRepair?{async claimRecovery(date,runId) {
+        if (date!==new Date(now()+9*3600000).toISOString().slice(0,10)||!hash.test(runId??'')) throw rejected();
+        try {await client.write(prefix+'repair-'+date+'.json',{runId},null);return true;}
+        catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return false;throw error;}
+      }}:{}),
       async readDay(date) {
         const value=await client.readRaw(prefix+'day-'+date+'.json',maxPackedBytes+1024);
         if (!value) return null;
@@ -357,7 +365,7 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     if (date>endDate) endDate=date;
   }
   let attempt;
-  if (readHistoricalScope && !repairDate && !retryDates.length && now()-startedAt<recoveryBudgetMs) {
+  if (readHistoricalScope && store.claimRecovery && !repairDate && !retryDates.length && now()-startedAt<recoveryBudgetMs) {
     const sources=historicalSources.filter(source=>recoverySources.includes(source));
     const scope=nextHistoricalScope({base,additions:days,day,receiptDate:kstDate,sources});
     if (scope) {
@@ -367,10 +375,15 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
       if (archive!=null && (!Array.isArray(archive)||archive.some(row=>row?.date!==scope.date))) throw rejected();
       const sealed=archive?.find(row=>dayKey(row)===dayKey(scope));
       let result=[], state='NO_ACCEPTED_EVIDENCE';
-      const providerAdmitted=!archiveFailed&&now()-startedAt<recoveryBudgetMs;
+      let claimed=false;
+      if (!archiveFailed && sealed?.coverage!=='complete' && now()-startedAt<recoveryBudgetMs) {
+        try {claimed=await store.claimRecovery(kstDate,receipt.runId);}
+        catch { /* Latest evidence can still be published. */ }
+      }
+      const providerAdmitted=claimed&&now()-startedAt<recoveryBudgetMs;
       if (sealed?.coverage==='complete') result=[sealed];
       else if (providerAdmitted) {
-        try {result=await readHistoricalScope(scope);}
+        try {result=await readHistoricalScope(scope,AbortSignal.timeout(historicalReadMs));}
         catch {state='READ_FAILED';}
       }
       if (!Array.isArray(result) || result.length>1 || result.some(row=>!row||dayKey(row)!==dayKey(scope))) throw rejected();

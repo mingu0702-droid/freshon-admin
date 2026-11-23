@@ -126,10 +126,10 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     if (!hasSource) throw error('DELIVERY_SOURCE_SESSION_REQUIRED', 401);
     if (!validDate(date)) throw error('DELIVERY_SOURCE_DATE_INVALID', 400);
   }
-  async function readTasks(date, reader = read, expectedCenter = '1') {
+  async function readTasks(date, reader = read, expectedCenter = '1',signal) {
     authorize(date);
     let tasks;
-    try { tasks = await reader(date); }
+    try { tasks = await reader(date,{signal}); }
     catch (failure) {
       const code = ({UPSTREAM_AUTH_REQUIRED:'DELIVERY_SOURCE_AUTH_REQUIRED', PHOTO_FORBIDDEN:'DELIVERY_SOURCE_FORBIDDEN',
         PHOTO_TIMEOUT:'DELIVERY_SOURCE_TIMEOUT', PHOTO_RATE_LIMITED:'DELIVERY_SOURCE_RATE_LIMITED',
@@ -154,16 +154,16 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     return {tasks,vehicles,observation};
   }
 
-  async function readSyncTasks(date,reader,center,sourceId) {
+  async function readSyncTasks(date,reader,center,sourceId,signal) {
     try {
       let result;
-      try {result=await readTasks(date,reader,sourceId);}
+      try {result=await readTasks(date,reader,sourceId,signal);}
       catch(error) {
         const retryable=error.code==='DELIVERY_SOURCE_TIMEOUT' ||
           error.code==='DELIVERY_SOURCE_READ_UNAVAILABLE' && [500,502,503,504].includes(error.diagnostic?.status);
-        if(!retryable)throw error;
-        await delay(250);
-        result=await readTasks(date,reader,sourceId);
+        if(!retryable||signal?.aborted)throw error;
+        await delay(250,undefined,{signal});
+        result=await readTasks(date,reader,sourceId,signal);
       }
       recordSource?.('delivery:'+sourceId,date,null,result.observation);
       const {pages,rawRows,duplicateRows,responseRows}=result.observation;
@@ -407,7 +407,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     return validateOpsmapSyncDay({date,sourceRows:tasks.length,unidentified:0,proof:'VERIFIED_COMPLETE_DAY',
       proofHash:deliveryDigest([date,tasks,observedVisits,dispatch]),completeCenters,completeSources,visits:observedVisits,tasks,dispatch},date);
   };
-  readDate.readRecentOperations = async (date, existingCenters=new Set(), onDiagnostic) => {
+  readDate.readRecentOperations = async (date, existingCenters=new Set(), onDiagnostic, signal) => {
     const input=[];
     if (!validDate(date)) return input;
     const report=(centerKey,state)=>{
@@ -420,7 +420,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       if (centerKey==='osanColdStorage') continue;
       if (existingCenters.has(centerKey)) {report(centerKey,'ALREADY_OBSERVED');continue;}
       let tasks;
-      try {({tasks}=await readSyncTasks(date,readers.get(centerKey).reader,centerKey,id));}
+      try {({tasks}=await readSyncTasks(date,readers.get(centerKey).reader,centerKey,id,signal));}
       catch (failure) {
         report(centerKey,recentReadFailures.has(failure?.code)?failure.code:'DELIVERY_SOURCE_READ_UNAVAILABLE');
         continue;

@@ -300,9 +300,10 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
           ...(readOrders?['freshon_orders']:[]),
           ...(readDelivery?['delivery_admin']:[])
         ];
-        const readHistoricalScope=autoRepair?({date,centerKey,source})=>{
+        const readHistoricalScope=autoRepair?({date,centerKey,source},signal)=>{
           const skip=new Set(['osan','yeongnam','honam'].filter(center=>center!==centerKey));
-          return source==='freshon_orders'?readOrders(date,skip):readDelivery(date,skip,deliveryDiagnostics);
+          return source==='freshon_orders'?readOrders(date,skip,{signal,allowLogin:false}):
+            readDelivery(date,skip,deliveryDiagnostics,signal);
         }:undefined;
         const repair=/^(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})$/.exec(env.OPSMAP_STAGE_RECENT_OPERATIONS_REPAIR_REQUEST||'');
         const repairDate=repair?.[2]===receipt.date?repair[1]:undefined;

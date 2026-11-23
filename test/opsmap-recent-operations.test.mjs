@@ -403,10 +403,14 @@ test('one bounded historical scope resumes on the next signed day, preserving ar
   const delivered=makeDay(date,'delivery_admin','partial',['S30'],'yeongnam');
   const extraOrder=makeDay(date,'freshon_orders','partial',['S40'],'yeongnam');
   let current={ledger:mergeRecentOperations(ledger(),latest,[old,wms]),sha:'before'};
-  const archive=[old], calls=[];
+  const archive=[old], calls=[], claims=new Set();
   let receiptDate='2026-11-24', writes=0, conflict=false, elapsed=0;
   const options=()=>({
     store:{async read(){return current;},async readDay(day){return day===date?archive:null;},
+      async claimRecovery(day){
+        if(claims.has(day))return false;
+        claims.add(day);return true;
+      },
       async writeDay(){assert.fail('Historical repair must preserve the sealed daily archive');},
       async write(next,sha){
         assert.equal(sha,current.sha);
@@ -416,7 +420,8 @@ test('one bounded historical scope resumes on the next signed day, preserving ar
     receipt:{runId:'c'.repeat(64),date:receiptDate},now:()=>Date.parse(receiptDate+'T00:00Z')+elapsed,
     recoverySources:['delivery_admin','freshon_orders'],
     async readLatestDay(day){calls.push(['latest',day]);return [];},
-    async readHistoricalScope(scope){
+    async readHistoricalScope(scope,signal){
+      assert(signal instanceof AbortSignal && !signal.aborted);
       calls.push(['historical',scope.date,scope.centerKey,scope.source]);
       if(scope.centerKey==='honam')return [];
       return [scope.source==='delivery_admin'?delivered:extraOrder];
@@ -437,12 +442,15 @@ test('one bounded historical scope resumes on the next signed day, preserving ar
   assert.equal((await syncStageRecentOperations(options())).state,'BUSY');
   assert.equal(current.ledger.recovery.length,1);
   conflict=false;
+  assert.equal((await syncStageRecentOperations(options())).state,'VERIFIED_NOOP');
+  assert.equal(calls.filter(([kind])=>kind==='historical').length,2);
+  receiptDate='2026-11-26';
   assert.equal((await syncStageRecentOperations(options())).state,'PUBLISHED');
   assert.deepEqual(current.ledger.days.find(d=>d.source==='freshon_orders').rows.map(r=>r.customerCode),['S20','S40']);
   assert.deepEqual(calls.filter(([kind])=>kind==='historical').slice(-2),
     [['historical',date,'yeongnam','freshon_orders'],['historical',date,'yeongnam','freshon_orders']]);
 
-  receiptDate='2026-11-26';
+  receiptDate='2026-11-27';
   const late=options();
   late.readLatestDay=async()=>{elapsed=95_000;return [];};
   assert.equal((await syncStageRecentOperations(late)).state,'SOURCE_UNAVAILABLE');
@@ -451,6 +459,33 @@ test('one bounded historical scope resumes on the next signed day, preserving ar
   assert.equal((await syncStageRecentOperations(options())).state,'RECOVERY_CHECKPOINTED');
   assert.equal(current.ledger.recovery.find(r=>r.centerKey==='honam').state,'NO_ACCEPTED_EVIDENCE');
   assert.equal(mergeRecentOperations(current.ledger,'2027-02-22',[]).recovery,undefined);
+});
+
+test('the Stage historical sender claim can be created once per current Seoul day',async()=>{
+  const date='2026-11-24', claims=new Set();
+  const env={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
+    OPSMAP_STAGE_RECENT_OPERATIONS_SYNC_APPROVED:'1',OPSMAP_STAGE_SYNC_REMOTE_APPROVED:'1',
+    OPSMAP_STAGE_SYNC_PUBLISH_APPROVED:'1',OPSMAP_STAGE_SYNC_WRITE_TOKEN:'synthetic-stage',
+    OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64:Buffer.alloc(32,4).toString('base64')};
+  const make=(extra={})=>createStageRecentOperationsStore({env:{...env,...extra},write:true,
+    now:()=>Date.parse('2026-11-23T21:40Z'),async fetchImpl(url,options){
+      assert.equal(options.redirect,'error');
+      const address=new URL(url);
+      if (!options.method) return Response.json({private:true});
+      assert.equal(options.method,'PUT');
+      assert.match(address.pathname,/\/recent-operations-v1\/repair-2026-11-24\.json$/);
+      const body=JSON.parse(options.body);
+      assert.equal(body.sha,undefined);
+      assert.equal(body.branch,'stage/opsmap-snapshots');
+      if (claims.has(address.pathname)) return new Response(null,{status:422});
+      claims.add(address.pathname);
+      return new Response(null,{status:201});
+    }});
+  assert.equal(make().claimRecovery,undefined);
+  const enabled=()=>make({OPSMAP_STAGE_RECENT_OPERATIONS_AUTO_REPAIR_APPROVED:'1'});
+  await assert.rejects(enabled().claimRecovery('2026-11-23','a'.repeat(64)),/EVIDENCE_INVALID/);
+  assert.deepEqual(await Promise.all([enabled().claimRecovery(date,'a'.repeat(64)),
+    enabled().claimRecovery(date,'b'.repeat(64))]),[true,false]);
 });
 
 test('the Stage reader can read a published pointer with its existing read-only credential',async()=>{
