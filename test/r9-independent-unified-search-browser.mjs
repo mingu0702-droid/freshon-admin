@@ -101,6 +101,12 @@ try{
  check('qualified address guidance has no missing-region warning',await page.locator('#results a').count()===0&&await page.locator('[data-search-address-guide]').innerText().then(t=>!t.includes('지역이 빠진 주소')));
  await page.locator('#map').click({position:{x:200,y:180}});await page.waitForFunction(()=>MapUiLocalBridge.state.virtual?.searchTemporary===true);
  check('manual map position creates exactly one temporary pin',await page.locator('[data-search-temporary-pin]').count()===1);
+ check('the approved shell retains the temporary panel and its bounded list styles',await page.evaluate(()=>{
+   const panel=document.querySelector('.newAreaTemporaryPanel'),list=document.createElement('div');
+   list.className='areaPanelScroll';panel.append(list);
+   const style=getComputedStyle(list), bounded=style.maxHeight==='180px'&&style.overflowY==='auto';
+   list.remove();return bounded;
+ }));
  check('temporary map point has all three route actions',await page.locator('#detail [data-nav-pick]:enabled').count()===3);
  await page.locator('#detail [data-nav-pick="waypoint"]').click();
  check('temporary map point enters the existing route editor',await page.evaluate(()=>MapNavigationEditor.values().some(value=>/^POINT_/.test(value))));
