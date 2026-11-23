@@ -4009,7 +4009,7 @@
       }
     }
     temporaryDetailPoint=row;
-    const locationBasis=({OFFICIAL_PUBLIC_BUILDING:'공식 자료 건물 위치',OFFICIAL_PUBLIC_ADDRESS:'공식 주소 대표점',
+    const locationBasis=row.userSelectedLocation?'사용자가 지정한 위치':({OFFICIAL_PUBLIC_BUILDING:'공식 자료 건물 위치',OFFICIAL_PUBLIC_ADDRESS:'공식 주소 대표점',
       OFFICIAL_PUBLIC_PARCEL:'공식 필지 대표점',STAGE_PRESERVED_COORDINATE:'저장 좌표'})[row.coordinateSource];
     $('#detailSection').classList.add('open');$('#detail').className='detailCard';
     $('#detailSection').setAttribute('data-temporary-inspection','');
@@ -5053,7 +5053,8 @@
       evidence:'최근접 고정 등록 매장까지 반올림 전 직선거리 500m 초과'};
   }
 
-  function areaLocationState({coordinateSource:source}){
+  function areaLocationState({coordinateSource:source,userSelectedLocation}){
+    if(userSelectedLocation)return 'USER_SELECTED_LOCATION';
     if(source?.startsWith('OFFICIAL_PUBLIC_'))return 'OFFICIAL_VERIFIED';
     if(source==='KAKAO_ADDRESS_TEMPORARY')return 'EXTERNAL_VERIFIED';
     if(source==='MAP_CLICK_TEMPORARY'||source==='MANUAL_WAYPOINT')return 'USER_SELECTED_LOCATION';
@@ -5230,7 +5231,8 @@
       const selected=newAreaCoordinate(point);
       if(!selected)return;
       const {lat,lng,address,coordinateSource,customerCode}=selected;
-      const location={lat,lng,address:address||row.address,coordinateSource,customerCode,officialRoad:row.officialRoad,officialLot:row.officialLot};
+      const location={lat,lng,address:address||row.address,coordinateSource,customerCode,userSelectedLocation:true,
+        officialRoad:row.officialRoad,officialLot:row.officialLot};
       const resolved=judgeNewAreaPoint(batch.rows[index],location,batch);
       batch.manualPoints.set(index,location);
       batch.judged[index]=resolved;
