@@ -248,7 +248,7 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   }));
   const upload=(target,opts={})=>{
     const bytes=opts.bytes||nextBook(target);
-    return publishStageWmsDispatchExport({date:target,observedAt:opts.observedAt||observedAt,bytes,
+    return publishStageWmsDispatchExport({date:target,observedAt:opts.observedAt||observedAt,bytes,replaceSha256:opts.replaceSha256,
       sha256:createHash('sha256').update(bytes).digest('hex'),env:opts.env||env,fetchImpl});
   };
 
@@ -297,4 +297,35 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   const doc=files.get(identified);
   files.set(identified,{...doc,value:{...doc.value,tag:'0'.repeat(32)}});
   await assert.rejects(reader()(date2),{code:'WMS_EXPORT_ARCHIVE_INTEGRITY'});
+  files.set(identified,doc);
+
+  const priorSha=idx.value.entries.find(entry=>entry.date===date2).sha256;
+  const revisionTime='2026-11-26T03:20:00.000Z';
+  const changeAmount=add=>{
+    const corrected=input();
+    for(const i of [1,3,5])corrected[i][0]=date2;
+    for(const i of [1,2,7])corrected[i][3]=String(Number(corrected[i][3])+add);
+    return workbook(corrected);
+  };
+  const bytes=changeAmount(20);
+  const priorEvents=events.length;
+  await assert.rejects(upload(date2,{bytes,replaceSha256:'a'.repeat(64),observedAt:revisionTime}),{code:'WMS_EXPORT_RELEASE_BASE_CHANGED'});
+  await assert.rejects(upload(date2,{bytes,replaceSha256:priorSha,observedAt:localTime}),{code:'WMS_EXPORT_RELEASE_STALE'});
+  await assert.rejects(upload('2026-11-26',{replaceSha256:priorSha,observedAt:revisionTime}),{code:'WMS_EXPORT_RELEASE_BASE_CHANGED'});
+  assert.equal(events.length,priorEvents);
+  const updates=await Promise.allSettled([bytes,changeAmount(30)].map(next=>upload(date2,{
+    bytes:next,replaceSha256:priorSha,observedAt:revisionTime
+  })));
+  const successful=updates.find(result=>result.status==='fulfilled');
+  const rejected=updates.find(result=>result.status==='rejected');
+  assert.equal(successful.value.supersedes,priorSha);
+  assert.equal(rejected.reason.code,'WMS_EXPORT_RELEASE_BASE_CHANGED');
+  assert.deepEqual(files.get(identified),doc);
+  const activeIndex=files.get('release-index-v1.json').value;
+  assert.equal(activeIndex.entries.filter(entry=>entry.date===date2).length,1);
+  assert.equal(activeIndex.entries.find(entry=>entry.date===date2).sha256,successful.value.sha256);
+  const verified=await reader()(date2);
+  assert.equal(verified.observedAt,revisionTime);
+  assert.equal(verified.total,updates[0].status==='fulfilled'?1521:1531);
+  assert.equal((await reader()(date3)).total,1501);
 });

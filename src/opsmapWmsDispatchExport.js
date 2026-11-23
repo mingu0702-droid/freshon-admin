@@ -277,8 +277,9 @@ function verifyManifestWorkbook(date,bytes,manifest) {
   }
 }
 
-export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha256,env=process.env,fetchImpl=fetch}={}){
+export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha256,replaceSha256,env=process.env,fetchImpl=fetch}={}){
   if(!isStageWmsDay(date))throw scopeError('WMS_EXPORT_SCOPE');
+  if(replaceSha256!==undefined&&!/^[a-f0-9]{64}$/.test(replaceSha256))throw scopeError('WMS_EXPORT_RELEASE_BASE_INVALID');
   const key=stageWmsArchiveKey(env);
   const archive=createStageWmsReleaseStore({env,fetchImpl,write:true});
   if(!archive||!key)throw scopeError('WMS_EXPORT_RELEASE_CONFIGURATION');
@@ -305,10 +306,16 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
   for(let attempt=0;attempt<3;attempt++){
     const {sha,entries}=await archive.readIndex();
     const existing=entries.find(entry=>entry.date===date);
-    if(existing){
-      if(existing.sha256!==sha256)throw scopeError('WMS_EXPORT_RELEASE_DATE_CONFLICT');
+    if(existing?.sha256===sha256){
       await verifyStored(existing);
       return {state:'VERIFIED_NOOP',date,sha256};
+    }
+    if(replaceSha256===undefined){
+      if(existing)throw scopeError('WMS_EXPORT_RELEASE_DATE_CONFLICT');
+    }else{
+      if(existing?.sha256!==replaceSha256)throw scopeError('WMS_EXPORT_RELEASE_BASE_CHANGED');
+      if(Date.parse(existing.observedAt)>=Date.parse(dateEntry.observedAt))throw scopeError('WMS_EXPORT_RELEASE_STALE');
+      await verifyStored(existing);
     }
     if(attempt===0){
       const {archive:sealed}=sealOpsmapWmsDispatchExport(bytes,{date,observedAt,key});
@@ -316,7 +323,7 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
       catch(error){if(error.code!=='FIXED_STORE_CONFLICT')throw error;}
       await verifyStored(dateEntry);
     }
-    try {await archive.writeIndex([...entries,dateEntry],sha);}
+    try {await archive.writeIndex([...entries.filter(entry=>entry.date!==date),dateEntry],sha);}
     catch(error){
       if(error.code==='FIXED_STORE_CONFLICT')continue;
       throw error;
@@ -324,7 +331,7 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
     const saved=(await archive.readIndex()).entries.find(entry=>entry.date===date);
     if(saved?.sha256!==sha256||saved.observedAt!==dateEntry.observedAt)throw scopeError('WMS_EXPORT_RELEASE_READBACK');
     await verifyStored(saved);
-    return {state:'PUBLISHED',date,sha256};
+    return {state:'PUBLISHED',date,sha256,...(existing?{supersedes:existing.sha256}:{})};
   }
   throw scopeError('WMS_EXPORT_RELEASE_INDEX_BUSY');
 }
