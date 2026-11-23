@@ -42,6 +42,8 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
         const reasons = {
           POSTAL_QUERY_INVALID: 400,
           COVERAGE_GENERATION_CHANGED: 409,
+          POSTAL_CURRENT_REGISTRATION_CHANGED: 409,
+          POSTAL_CURRENT_REGISTRATION_INVALID: 503,
           POSTAL_READ_BUSY: 503,
           POSTAL_RELEASE_INTEGRITY: 503,
           POSTAL_GENERATION_MISMATCH: 503,
@@ -85,6 +87,17 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
       throw Error('POSTAL_QUERY_INVALID');
     }
     return runtime.operations({...scope,area:area===undefined?undefined:Number(area),offset:Number(offset)});
+  });
+  if(postal?.readCurrentRegistration) route('/current-registration',(req,scope,{runtime})=>{
+    const {registry,area,offset='0'}=req.query;
+    if(!scope.generation || typeof registry!=='string'||!hash.test(registry) ||
+        Object.keys(req.query).some(key=>!['center','generation','registry','area','offset'].includes(key)) ||
+        area!==undefined&&(typeof area!=='string'||!/^\d{5}$/.test(area)) ||
+        typeof offset!=='string'||!/^\d{1,5}$/.test(offset)||Number(offset)>30000||area===undefined&&offset!=='0'){
+      throw Error('POSTAL_QUERY_INVALID');
+    }
+    return runtime.currentRegistration({generation:scope.generation,registry,center:scope.center,
+      area:area===undefined?undefined:Number(area),offset:Number(offset)});
   });
   route('/bootstrap',async (req,scope,modules,timing) => {
     const data = await view(req,scope,modules,timing);

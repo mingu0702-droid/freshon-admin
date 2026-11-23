@@ -271,3 +271,29 @@ test('postal history rejects customer identifiers in the request URL', async t =
     assert.deepEqual(await rejected.json(), { ok:false, error:'POSTAL_QUERY_INVALID' });
   }
 });
+
+test('supplemental postal registration route is opt-in and session-protected', async t => {
+  const app=express();
+  const denied=(_req,res)=>res.sendStatus(401);
+  mountPostalCoverage({app:app,postal:{},appRoot:process.cwd(),requireStaff:denied});
+  const enabled=express();
+  let read=0;
+  mountPostalCoverage({app:enabled,postal:{readCurrentRegistration:()=>{read++;}},appRoot:process.cwd(),
+    requireStaff(req,res,next){return req.get('X-Fixture-Staff')==='test'?next():res.sendStatus(401);}});
+  const servers=[app,enabled].map(item=>item.listen(0,'127.0.0.1'));
+  t.after(()=>servers.forEach(server=>{server.closeAllConnections();server.close();}));
+  await Promise.all(servers.map(server=>once(server,'listening')));
+  const url=server=>new URL('/api/map-phase2b/private/shadow-coverage/postal/current-registration',
+    'http://127.0.0.1:'+server.address().port);
+  assert.equal((await fetch(url(servers[0]))).status,404);
+  const available=url(servers[1]);
+  const staff={'X-Fixture-Staff':'test'};
+  assert.equal((await fetch(available)).status,401);
+  assert.equal((await fetch(available,{headers:staff})).status,400);
+  available.searchParams.set('registry','a'.repeat(64));
+  available.searchParams.set('generation','b'.repeat(64));
+  const response=await fetch(available,{headers:staff});
+  assert.equal(response.status,503);
+  assert.equal(response.headers.get('Cache-Control'),'private, no-store');
+  assert.equal(read,0,'unconfigured geometry must fail before the supplemental asset');
+});

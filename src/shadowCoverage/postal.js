@@ -286,7 +286,7 @@ export function createScope(release, codes, areas, days, center, totalAreas) {
   } };
 }
 
-export function createPostalRuntime({ directory, boundarySha256, releaseSha256, appRoot, readDirectory, readPublication, detailsDirectory, detailsIndexSha256, readFixed, readOperations,
+export function createPostalRuntime({ directory, boundarySha256, releaseSha256, appRoot, readDirectory, readPublication, detailsDirectory, detailsIndexSha256, readFixed, readOperations, readCurrentRegistration,
   overviewDirectory, overviewSha256, reviewDirectory, reviewSha256, assetSource,
   now = Date.now } = {}) {
   let loaded, loadFlight, indexFlight, resolvedIndex, indexChecked = 0, scope, bulk = 0;
@@ -555,6 +555,14 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       return {period:report.period,publishedThrough:report.publishedThrough,area:postalText(area),counts:match?.counts??null,
         total:members.length,offset,next:members.length>offset+limit?offset+limit:null,
         members:members.slice(offset,offset+limit).map(row=>({code:row.code,name:postalCustomerName(row),flags:match.members.get(row.code)}))};
+    },
+    async currentRegistration({generation,registry,center,area,offset}) {
+      const opened=await verifiedRelease(generation);
+      const data=await readCurrentRegistration({registry,boundary:boundarySha256,release:releaseSha256,center,area,offset,
+        hasArea:id=>Boolean(findArea(opened.areas,id)),hasLegacyCode:code=>opened.codes.get(code)?.registered===true});
+      const {index}=await activeIndex();
+      if(index.sha256!==generation)throw Error('COVERAGE_GENERATION_CHANGED');
+      return {...data,generation};
     },
     async dispatchPostcodes(customerCodes,generation) {
       const {codes} = await verifiedRelease(generation);

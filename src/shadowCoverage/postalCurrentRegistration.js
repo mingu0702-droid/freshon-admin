@@ -6,6 +6,13 @@ const centers = new Set(['osan','yeongnam','honam']);
 const kinds = new Set(['BUILDING','ADDRESS']);
 const within = (box,lat,lng) => lng>=box[0] && lng<=box[2] && lat>=box[1] && lat<=box[3];
 
+export function isCurrentPostalPoint(row) {
+  const {verifiedLocation:point,basicAddress,addressHash} = row;
+  return Boolean(point && kinds.has(point.kind) && typeof basicAddress==='string' && basicAddress.trim() &&
+    addressHash===customerRegistryAddressHash(basicAddress) && point.addressHash===addressHash &&
+    Number.isFinite(point.lat) && Number.isFinite(point.lng) && within([124,33,132,39.5],point.lat,point.lng));
+}
+
 // Callers supply checked national rows and authenticated detail tiles. This
 // projection is for current registration only. It carries no dated evidence.
 export async function projectCurrentPostalRegistration(rows, existingCodes, detailTiles) {
@@ -14,16 +21,14 @@ export async function projectCurrentPostalRegistration(rows, existingCodes, deta
   const seen = new Set();
   for (const row of rows) {
     if (row?.lifecycle!=='ACTIVE') continue;
-    const {customerCode:code,addressHash,basicAddress,centerGroup,verifiedLocation:point} = row;
+    const {customerCode:code,centerGroup,verifiedLocation:point} = row;
     if (!identifiable.test(code) || seen.has(code)) throw Error('POSTAL_CURRENT_REGISTRY_IDENTITY');
     seen.add(code);
     if (existingCodes.has(code)) {
       counts.alreadyScoped++;
       continue;
     }
-    if (!point || !kinds.has(point.kind) || typeof basicAddress!=='string' || !basicAddress.trim() ||
-        addressHash!==customerRegistryAddressHash(basicAddress) || point.addressHash!==addressHash ||
-        !Number.isFinite(point.lat) || !Number.isFinite(point.lng) || !within([124,33,132,39.5],point.lat,point.lng)) {
+    if (!isCurrentPostalPoint(row)) {
       counts.missingProof++;
       continue;
     }
