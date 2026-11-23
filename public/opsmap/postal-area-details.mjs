@@ -1,8 +1,8 @@
 const fmt = new Intl.NumberFormat('ko-KR');
 const kst = new Intl.DateTimeFormat('ko-KR', { timeZone:'Asia/Seoul', dateStyle:'medium', timeStyle:'short' });
 const weekdays = { Mon:'월', Tue:'화', Wed:'수', Thu:'목', Fri:'금', Sat:'토' };
-const filters = [['all','전체'],['confirmed','배송 확인'],['candidate','미배송 후보'],['unknown','배송 미확인'],['new','오산신규 이력'],['held','오산보류 이력']];
-const observation = { OBSERVED:'배송 확인', CANDIDATE:'관측 미배송 후보', UNVERIFIED:'배송 미확인' };
+const filters = [['all','전체'],['confirmed','배송 확인'],['candidate','미배송 확인'],['unknown','배송 미확인'],['new','오산신규 이력'],['held','오산보류 이력']];
+const observation = { OBSERVED:'배송 확인', CANDIDATE:'기간 내 미배송 확인', UNVERIFIED:'배송 미확인' };
 const n = value => fmt.format(value ?? 0);
 const time = value => Number.isFinite(Date.parse(value)) ? kst.format(new Date(value)) : '미확인';
 const number = value => Number.isInteger(value) ? n(value) + '건' : '미확인';
@@ -66,7 +66,7 @@ export function createPostalAreaDetails(root, { read, dismiss, openStore }) {
       ['등록 업장 / 배송 확인',n(t.registered) + '곳 / ' + (deliveryUnverified ? '미확인' : n(t.delivered) + '곳')],
       ['관측 배송',deliveryUnverified ? '미확인' : n(t.visits) + '건'],
       ['오산신규 확인 / 미확인',n(t.newActive) + ' / ' + n(t.newUnknown) + '곳'],
-      ['오산보류 이력',n(t.held) + '곳'], ['관측 미배송 후보',n(t.candidates) + '곳'],
+      ['오산보류 이력',n(t.held) + '곳'], ['기간 내 미배송 확인',n(t.candidates) + '곳'],
       ['배송 미확인',n(t.unknown) + '곳']
     ]) definition(list,key,value);
     if (chosen.nearby) definition(list,'직선 ' + chosen.nearby.radius + 'm 내 등록',n(chosen.nearby.registered) + '곳');
@@ -100,7 +100,7 @@ export function createPostalAreaDetails(root, { read, dismiss, openStore }) {
       rows.append(li);
     }
     const line = make('p',data.filteredCount ? '관측 완료 배송 ' + n(data.filteredCount) + '건' :
-      row.deliveryObservation === 'CANDIDATE' ? '관측기간에 확인된 배송 기록이 없습니다.' : '연결된 배송 기록이 미확인입니다.');
+      row.deliveryObservation === 'CANDIDATE' ? '기간 전체 배송 자료에서 배송 기록이 없습니다.' : '연결된 배송 기록이 미확인입니다.');
     const pages = make('nav','',{ className:'postal-item-pages' });
     pages.setAttribute('aria-label','배송 이력 페이지');
     if (data.offset > 0) pages.append(button('이전',()=>void loadHistory(row,owner,target,Math.max(0,data.offset-data.limit))));

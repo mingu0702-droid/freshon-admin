@@ -4,9 +4,10 @@ import { splitPostalBootstrap } from './postal-geometry.mjs';
 import { coverageCenterBounds } from './coverage-center-viewport.mjs';
 
 const API = '/api/map-phase2b/private/shadow-coverage/postal';
+const recentOperationsApi = '/api/map-phase2b/private/recent-operations';
 const labels = {
   HIGH: '배송 밀도 높음', LOW: '배송 밀도 낮음',
-  CANDIDATE: '관측기간 미배송 후보', UNKNOWN: '자료 미확인',
+  CANDIDATE: '기간 내 미배송 확인', UNKNOWN: '자료 미확인',
 };
 const centerNames = { all: '전체', osan: '오산', honam: '호남', yeongnam: '영남' };
 const osanLocalBounds = [126.67, 36.96, 127.29, 37.40];
@@ -70,7 +71,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<div><dt>좌표 연결 배송</dt><dd data-postal-kpi="visits">—</dd></div>' +
     '<div><dt>표시 대상 구역</dt><dd data-postal-kpi="scopedAreas">—</dd></div>' +
     '<div><dt>배송 있는 구역</dt><dd data-postal-kpi="delivered">—</dd></div>' +
-    '<div><dt>미배송 후보 구역</dt><dd data-postal-kpi="candidate">—</dd></div>' +
+    '<div><dt>미배송 확인 구역</dt><dd data-postal-kpi="candidate">—</dd></div>' +
     '<div><dt>활성 오산신규</dt><dd data-postal-kpi="newActive">—</dd></div>' +
     '<div><dt>오산보류 이력</dt><dd data-postal-kpi="held">—</dd></div></dl></div>' +
     '<div class="coverage-legend postal-legend" aria-label="배송 분류 범례">' +
@@ -80,8 +81,12 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<span data-postal-badge="active">오산신규 배송 확인</span><span data-postal-badge="unverified">오산신규 배송 미확인</span>' +
     '<span data-postal-badge="held">오산보류 이력</span></div>' +
     '<button type="button" id="postalUnmatched">미매칭 업장</button>' +
-    '<div class="coverage-list postal-candidates"><h2>관측기간 미배송 후보</h2><div id="postalCandidates"></div></div>' +
-    '<details class="coverage-evidence"><summary>경계 출처와 원천 날짜</summary><div id="postalEvidence"></div></details></div>' +
+    '<div class="coverage-list postal-candidates"><h2>기간 내 미배송 확인 구역</h2><div id="postalCandidates"></div></div>' +
+    '<details class="coverage-evidence"><summary>경계 출처와 원천 날짜</summary><div id="postalEvidence"></div></details>' +
+    '<details class="coverage-evidence" id="recentOperationWindow"><summary>기간별 운영 근거</summary>' +
+    '<label>자료 기간 <select id="recentOperationDays"><option value="7">7일</option><option value="30">30일</option>' +
+    '<option value="60">60일</option><option value="90" selected>90일</option></select></label>' +
+    '<div id="recentOperationSummary" aria-live="polite"></div></details></div>' +
     '<section class="coverage-detail" id="coverageDetail" aria-label="우편번호 구역 상세" hidden></section></div></aside>' +
     '<section class="coverage-map-area" aria-label="국가기초구역 배송분포 지도"><div id="coverageMap"></div>' +
     '<div class="postal-map-controls" role="group" aria-label="지도 보기"><button type="button" data-preset="nation">전국</button>' +
@@ -98,7 +103,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   const searchResults = find('coverageSearchResults'), geometry = createPostalGeometryReader(API);
   const regionButton = root.querySelector('[data-preset="region"]');
   let map, active = false, owner = 0, viewportRead, detailRead, searchRead, view, viewKey, loadingKey;
-  let timer, refresh, selectedArea, bootstrapScope, releaseOverview;
+  let timer, refresh, selectedArea, bootstrapScope, releaseOverview, recentOperationRead;
   let resumeArea, resumeQuery = '';
   const resize = new ResizeObserver(entries => {
     if (!active) return;
@@ -109,6 +114,33 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   const scope = () => view ? { days: view.period.days, center: view.center, generation: view.generation } : baseScope();
   const timeout = signal => AbortSignal.any([signal, AbortSignal.timeout(16000)]);
   const areaDetails = createPostalAreaDetails(detail, { read, dismiss:() => { detailRead?.abort(); areaCard(null); }, openStore });
+
+  async function readOperationWindow() {
+    const section=find('recentOperationWindow'), target=find('recentOperationSummary');
+    recentOperationRead?.abort();
+    if (!active || !section.open) return;
+    const request = recentOperationRead = new AbortController();
+    const days=find('recentOperationDays').value;
+    const center=find('coverageCenter').value;
+    target.textContent='기간별 운영 근거 확인 중';
+    try {
+      const response=await fetch(recentOperationsApi+'?'+new URLSearchParams({days,summary:'1'}),{
+        credentials:'same-origin',cache:'no-store',signal:timeout(request.signal)
+      });
+      if (!response.ok) throw Error('RECENT_OPERATION_WINDOW_UNAVAILABLE');
+      const report=await response.json();
+      if (!report.ok || !report.centers || report.days!==Number(days)) throw Error('RECENT_OPERATION_WINDOW_UNAVAILABLE');
+      if (request.signal.aborted || recentOperationRead!==request || !active) return;
+      const selected=center==='all'?['osan','yeongnam','honam']:[center];
+      target.replaceChildren(node('p',report.startDate+' ~ '+report.endDate),...selected.map(key=>{
+        const {observedDates,confirmedDays}=report.centers[key];
+        return node('p',centerNames[key]+' · 근거 '+observedDates.length+'일 · 전수 확인 '+confirmedDays.length+'일 · 미확인 '+
+          (report.days-observedDates.length)+'일');
+      }));
+    } catch {
+      if (!request.signal.aborted && recentOperationRead===request && active) target.textContent='기간별 운영 근거 미확인';
+    }
+  }
   function windowHeight() {
     root.style.setProperty('--coverage-header-height', header.getBoundingClientRect().height + 'px');
   }
@@ -209,7 +241,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       return button;
     });
     find('postalCandidates').replaceChildren(...(list.length ? list : [node('p', observed
-      ? '현재 범위에서 확인된 후보가 없습니다.' : '배송 자료 미확인')]));
+      ? '현재 범위에서 미배송이 확인된 구역이 없습니다.' : '배송 자료 미확인')]));
   }
 
   async function readView(force = false) {
@@ -370,8 +402,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   function reset(keepOverview = false) {
     clearTimeout(timer);
     clearTimeout(releaseOverview);
-    [viewportRead, detailRead, searchRead].forEach(request => request?.abort());
-    viewportRead = detailRead = searchRead = null;
+    [viewportRead, detailRead, searchRead, recentOperationRead].forEach(request => request?.abort());
+    viewportRead = detailRead = searchRead = recentOperationRead = null;
     view = viewKey = loadingKey = bootstrapScope = null;
     geometry.clear(keepOverview);
     delete host.dataset.postalGeometry;
@@ -382,6 +414,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     find('coverageQuery').value = '';
     find('postalCandidates').replaceChildren();
     find('postalEvidence').replaceChildren();
+    find('recentOperationSummary').replaceChildren();
     for (const id of ['postalPeriod','postalObserved','postalFormula','postalNewEvidence','postalMapSource']) find(id).textContent = '';
     root.querySelectorAll('[data-postal-kpi]').forEach(entry => { entry.textContent = '—'; });
     delete root.dataset.postalView;
@@ -389,6 +422,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   }
 
   find('coveragePanelToggle').onclick = () => collapse(!root.classList.contains('coverage-panel-collapsed'));
+  find('recentOperationWindow').ontoggle = readOperationWindow;
+  find('recentOperationDays').onchange = readOperationWindow;
   find('postalUnmatched').onclick = () => { if (view) areaCard({ id:'unmatched' }); };
   find('coverageSearch').onsubmit = search;
   find('coverageQuery').oninput = () => { searchRead?.abort(); searchResults.replaceChildren(); };
@@ -405,6 +440,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       map?.focus(null, coverageCenterBounds(center));
       regionButton.textContent = center === 'all' || center === 'osan' ? '오산·화성' : centerNames[center];
       if (view?.center !== center) message(centerNames[center] + ' 센터 자료를 불러오는 중입니다.');
+      void readOperationWindow();
     }
     scheduleView();
   }
@@ -429,6 +465,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       resize.observe(header);
       resize.observe(host);
       void start();
+      void readOperationWindow();
       refresh = setInterval(() => { if (active && !document.hidden) void readView(true); }, 60000);
     },
     close() {

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { gunzip as decompress } from 'node:zlib';
 import { fixedDeliveryWeekdays } from '../../public/opsmap/fixed-delivery-weekdays.mjs';
-import { boundedRead, isDay, privateCoverageDirectory } from './coverageFiles.js';
+import { boundedRead, isDay, postalCompleteCenters, privateCoverageDirectory } from './coverageFiles.js';
 import { canonicalFixedMasterVehicle, isProjectedFixedMasterVehicle } from '../fixedMasterVehicle.js';
 
 export const POSTAL_STORE_PAGE = 12;
@@ -76,7 +76,7 @@ function collectArea(opened, catalog, area, days, center, source) {
   const selected = [];
   const blocked = new Set(period.unavailableCodes.flatMap((set, i) => centerIn(center,i) ? set : []));
   const states = new Map(period.states);
-  const observed = new Set(centers.filter(key => period.observed[key]?.length));
+  const completeCenters = postalCompleteCenters(period, days);
   for (const row of catalog) {
     const item = opened.codes.get(row.code);
     if (!item || item.area !== area) continue;
@@ -88,7 +88,7 @@ function collectArea(opened, catalog, area, days, center, source) {
     const result = deliveryTotals(visits.get(row.code), center, period.start);
     const isRegistered = registered.has(row.code);
     if (!isRegistered && !result.visits) return [];
-    const eligible = area !== null && isRegistered && observed.has(centers[item.center]) && !period.unidentified && !blocked.has(row.code);
+    const eligible = area !== null && isRegistered && completeCenters.has(centers[item.center]) && !blocked.has(row.code);
     const flags = isRegistered ? states.get(row.code) ?? 0 : 0;
     const recent = source.parts.get(row.code)?.recent || [];
     const confirmedVehicles = [...new Set(recent.filter(([i,day])=>centerIn(center,i)&&day===result.latest)

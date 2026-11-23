@@ -8,6 +8,7 @@ import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 export const RECENT_OPERATIONS_ROUTE = '/api/map-phase2b/private/recent-operations';
 export const RECENT_OPERATIONS_BASELINE_END = '2026-11-17';
 export const recentOperationsCenters = ['osan','yeongnam','honam'];
+const reportPeriods = new Set(['7','30','60','90']);
 const evidenceOrder = ['order_confirmed','dispatch_confirmed','delivery_completed'];
 const sourceEvidence = {
   freshon_orders:['order_confirmed'], wms_dispatch:['dispatch_confirmed'],
@@ -57,15 +58,24 @@ export function normalizeRecentOperations({startDate,endDate,days} = {}) {
   return {startDate,endDate,days:normalized.sort((a,b)=>dayKey(a).localeCompare(dayKey(b)))};
 }
 
-export function projectRecentOperations(ledger) {
+export function projectRecentOperations(ledger,{days,endDate=ledger.endDate,summaryOnly=false}={}) {
+  if (days!==undefined && !reportPeriods.has(String(days))) throw rejected();
+  const calendar=days===undefined?null:datesFor(endDate,90).slice(-days);
+  const startDate=calendar?.[0]??ledger.startDate;
   const centers = Object.fromEntries(recentOperationsCenters.map(center=>[center,{
     confirmedDays:[],observedDates:new Set(),activeCount:0,
     sourceObservedDates:Object.fromEntries(Object.keys(sourceEvidence).map(key=>[key,new Set()])),
-    completeOrders:new Set(),completeDispatch:new Set()
+    completeOrders:new Set(),completeDispatch:new Set(),
+    ...(calendar?{evidenceByDate:new Map()}:{})
   }]));
   const active = new Map();
   for (const {date,centerKey,source,coverage,rows} of ledger.days) {
+    if (date<startDate || date>endDate) continue;
     const center=centers[centerKey];
+    if (calendar) {
+      if (!center.evidenceByDate.has(date)) center.evidenceByDate.set(date,{});
+      center.evidenceByDate.get(date)[source]={coverage,customerCount:rows.length};
+    }
     center.observedDates.add(date);
     center.sourceObservedDates[source].add(date);
     if (coverage==='complete') {
@@ -79,12 +89,18 @@ export function projectRecentOperations(ledger) {
     }
   }
   for (const {centerKey} of active.values()) centers[centerKey].activeCount++;
-  for (const [key,{completeOrders,completeDispatch,observedDates,sourceObservedDates,activeCount}] of Object.entries(centers)) {
+  for (const [key,{completeOrders,completeDispatch,observedDates,sourceObservedDates,activeCount,evidenceByDate}] of Object.entries(centers)) {
     centers[key]={activeCount,observedDates:[...observedDates].sort(),
       confirmedDays:[...completeOrders].filter(day=>completeDispatch.has(day)).sort(),
       sourceObservedDates:Object.fromEntries(Object.entries(sourceObservedDates).map(([source,days])=>[source,[...days].sort()]))};
+    if (calendar) centers[key].calendar=calendar.map(date=>({
+      date,state:completeOrders.has(date)&&completeDispatch.has(date)?'COMPLETE':
+        observedDates.has(date)?'PARTIAL':date>ledger.endDate?'NOT_PUBLISHED':'NOT_OBSERVED',
+      sources:evidenceByDate.get(date)??{}
+    }));
   }
-  return {ok:true,startDate:ledger.startDate,endDate:ledger.endDate,centers,rows:[...active.values()]};
+  return {ok:true,startDate,endDate,centers,...(calendar?{days:Number(days),publishedThrough:ledger.endDate}:{}),
+    ...(!summaryOnly?{rows:[...active.values()]}:{})};
 }
 
 export function mergeRecentOperations(previous, endDate, days) {
@@ -296,34 +312,53 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
 }
 
 export function createRecentOperationsReader({readSeed,store,now=Date.now}={}) {
-  let checked=0, reading, saved, seed, returned;
-  return async () => {
-    if (now()<checked) return returned;
-    reading ??= (async()=>{
-      const current=await store?.read().catch(()=>null);
-      if (current?.ledger && current.ledger.endDate<=latestClosedDay(now()) &&
-          (!saved || current.ledger.endDate>=saved.endDate)) saved=projectRecentOperations(current.ledger);
-      if (!saved) {
-        seed ??= Promise.resolve().then(()=>readSeed?.()).catch(()=>null);
-        const ledger=await seed;
-        if (ledger) saved=projectRecentOperations(ledger);
-        else seed=null;
-      }
-      checked=now()+60000;
-      returned=saved??{...projectRecentOperations({startDate:datesFor(RECENT_OPERATIONS_BASELINE_END,90)[0],
-        endDate:RECENT_OPERATIONS_BASELINE_END,days:[]}),sourceUnavailable:true};
-      return returned;
-    })().finally(()=>{reading=null;});
-    return reading;
+  let checked=0, reading, saved, seed;
+  const projections=new Map();
+  const emptyLedger={startDate:datesFor(RECENT_OPERATIONS_BASELINE_END,90)[0],endDate:RECENT_OPERATIONS_BASELINE_END,days:[]};
+  return async ({days,summaryOnly=false}={}) => {
+    if (now()>=checked) {
+      reading ??= (async()=>{
+        const current=await store?.read().catch(()=>null);
+        if (current?.ledger && current.ledger.endDate<=latestClosedDay(now()) &&
+            (!saved || current.ledger.endDate>=saved.endDate) && current.ledger!==saved) {
+          saved=current.ledger;
+          seed=null;
+          projections.clear();
+        }
+        if (!saved) {
+          seed ??= Promise.resolve().then(()=>readSeed?.()).catch(()=>null);
+          const ledger=await seed;
+          if (ledger) {
+            saved=ledger;
+            projections.clear();
+          } else seed=null;
+        }
+        checked=now()+60000;
+      })().finally(()=>{reading=null;});
+      await reading;
+    }
+    const ledger=saved??emptyLedger;
+    const endDate=days===undefined?ledger.endDate:latestClosedDay(now());
+    const key=[days,summaryOnly].join(':');
+    const cached=projections.get(key);
+    if (cached?.endDate===endDate) return cached;
+    const report=projectRecentOperations(ledger,{days,endDate,summaryOnly});
+    const result=saved?report:{...report,sourceUnavailable:true};
+    projections.set(key,result);
+    return result;
   };
 }
 
 export function mountRecentOperations(app,{requireStaff,read,now=Date.now}) {
   app.get(RECENT_OPERATIONS_ROUTE,requireStaff,async(req,res)=>{
     res.set('Cache-Control','private, no-store').vary('Cookie');
-    if (Object.keys(req.query).length) return res.status(400).json({error:'RECENT_OPERATIONS_QUERY'});
+    const {days,summary}=req.query;
+    if (Object.keys(req.query).some(key=>key!=='days'&&key!=='summary') ||
+        days!==undefined&&!reportPeriods.has(days) || summary!==undefined&&(days===undefined||summary!=='1')) {
+      return res.status(400).json({error:'RECENT_OPERATIONS_QUERY'});
+    }
     try {
-      const result=await read();
+      const result=days===undefined?await read():await read({days:Number(days),summaryOnly:summary==='1'});
       return requireStaff(req,res,()=>res.json({...result,expectedEndDate:latestClosedDay(now())}));
     } catch {
       return res.status(503).json({error:'RECENT_OPERATIONS_UNAVAILABLE'});

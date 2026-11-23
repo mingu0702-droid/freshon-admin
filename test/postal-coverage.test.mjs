@@ -6,6 +6,7 @@ import express from 'express';
 import { applyPostalAssignmentReview, classifyPostalZone, createScope, encodePostalTileResponse,
   POSTAL_DENSITY_HIGH } from '../src/shadowCoverage/postal.js';
 import { mountPostalCoverage } from '../src/shadowCoverage/postalRoutes.js';
+import { datesFor } from '../src/shadowCoverage/coverageFiles.js';
 import { createPostalGeometryReader, postalWorldProjection } from '../public/opsmap/postal-coverage-map.mjs';
 import { coverageCenterBounds } from '../public/opsmap/coverage-center-viewport.mjs';
 import { decodePostalOverview, decodePostalTile, encodePostalZone, exactPostalPosition, postalText, postalTilePosition, postalTilesLevel,
@@ -23,6 +24,24 @@ test('density uses area and a fixed inclusive threshold, evidence separates cand
   assert.equal(classifyPostalZone({ visits:0, registered:2, eligible:2 }, 1), 'CANDIDATE');
   assert.equal(classifyPostalZone({ visits:0, registered:2, eligible:1 }, 1), 'UNKNOWN');
   assert.equal(classifyPostalZone({ visits:0, registered:0, eligible:0 }, 1), 'UNKNOWN');
+});
+
+test('a registered postal area needs the full center period before absence becomes verified', () => {
+  const day='2026-11-07', days=30, dates=datesFor(day,days);
+  const code='T900001', codes=new Map([[code,{area:1234,registered:true,center:0}]]);
+  const areas=Buffer.alloc(POSTAL_AREA_BYTES);
+  areas.writeUInt32LE(1234,0);
+  areas.writeDoubleLE(1,12);
+  const period={observed:{all:dates,osan:dates},unverified:{all:[],osan:[dates[0]]},
+    recorded:[0,0,0,0],unplaced:[0,0,0,0],unplacedBoundary:[0,0,0,0],unavailableCodes:[[],[],[],[]],
+    missing:[],unidentified:0,rows:[],states:[]};
+  const release={asOf:day,periods:{30:period}};
+  const state=()=>createScope(release,codes,areas,days,'osan',1).groups.get(1234).status;
+  assert.equal(state(),'UNKNOWN','one unverified date can hide deliveries');
+  period.unverified.osan=[];
+  assert.equal(state(),'CANDIDATE');
+  period.unavailableCodes[0].push(code);
+  assert.equal(state(),'UNKNOWN','unplaced evidence can hide this store’s deliveries');
 });
 
 test('an assignment review withholds geometry without removing held visits or historical statuses', () => {

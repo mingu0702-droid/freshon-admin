@@ -34,6 +34,33 @@ test('projects verified positives and distinguishes source observations from com
   assert.throws(()=>ledger(makeDay(initialEnd,'wms_dispatch','partial',['A1','A1'])),/EVIDENCE_INVALID/);
 });
 
+test('selected rolling periods use their own evidence and expose unpublished dates without customer data',async()=>{
+  const before=ledger(
+    makeDay('2026-08-25','delivery_admin','partial',['A1']),
+    makeDay('2026-09-25','delivery_admin','partial',['A2']),
+    makeDay('2026-10-25','delivery_admin','partial',['A3']),
+    makeDay('2026-11-16','delivery_admin','partial',['A4']),
+    makeDay(initialEnd,'freshon_orders','complete',['A5']),
+    makeDay(initialEnd,'wms_dispatch','complete',['A5']));
+  let count=0;
+  const read=createRecentOperationsReader({now:()=>Date.parse('2026-11-20T00:10:00Z'),store:{
+    async read(){count++;return {ledger:before};}
+  }});
+  const summaries=await Promise.all([7,30,60,90].map(days=>read({days,summaryOnly:true})));
+  assert.equal(count,1);
+  assert.deepEqual(summaries.map(result=>result.centers.osan.activeCount),[2,3,4,5]);
+  for (const result of summaries) {
+    assert.equal(result.endDate,'2026-11-19');
+    assert.equal(result.publishedThrough,initialEnd);
+    assert.equal(Object.hasOwn(result,'rows'),false);
+    const tail=result.centers.osan.calendar.slice(-4).map(({date,state})=>[date,state]);
+    assert.deepEqual(tail,[['2026-11-16','PARTIAL'],['2026-11-17','COMPLETE'],['2026-11-18','NOT_PUBLISHED'],['2026-11-19','NOT_PUBLISHED']]);
+    assert.equal(result.centers.yeongnam.calendar.at(-3).state,'NOT_OBSERVED');
+    assert.equal(result.centers.osan.calendar.at(-3).sources.wms_dispatch.customerCount,1);
+  }
+  assert.equal((await read()).endDate,initialEnd,'default employee map keeps the published range');
+});
+
 test('retains earlier confirmed data on a partial input, expires old dates and separates centers',()=>{
   const base=ledger(makeDay(initialStart,'wms_dispatch','complete',['Z1']),
     makeDay(initialEnd,'freshon_orders','complete',['A1']),makeDay(initialEnd,'delivery_admin','partial',['B1'],'honam'));
@@ -316,4 +343,31 @@ test('protects positive evidence before reading and again after the asynchronous
   assert.equal(value.rows.length,1);
   assert.equal(value.expectedEndDate,'2026-11-18');
   assert.equal((await fetch(url,options)).status,401);
+});
+
+test('employee period request selects the summary and rejects unsupported or repeated options',async t=>{
+  const app=express();
+  const current=ledger(makeDay(initialEnd,'delivery_admin','partial',['A1']));
+  const now=()=>Date.parse('2026-11-19T20:00:00Z');
+  const read=createRecentOperationsReader({now,store:{async read(){return {ledger:current};}}});
+  mountRecentOperations(app,{now,read,requireStaff(req,res,next){
+    if (req.get('Authorization')!=='test-employee') return res.sendStatus(401);
+    return next();
+  }});
+  const server=app.listen(0,'127.0.0.1');
+  t.after(()=>server.close());
+  await new Promise(resolve=>server.once('listening',resolve));
+  const url='http://127.0.0.1:'+server.address().port+RECENT_OPERATIONS_ROUTE;
+  const options={headers:{Authorization:'test-employee'}};
+  assert.equal((await fetch(url+'?days=7&summary=1')).status,401);
+  const allowed=await fetch(url+'?days=7&summary=1',options);
+  assert.equal(allowed.status,200);
+  assert.equal(allowed.headers.get('cache-control'),'private, no-store');
+  const result=await allowed.json();
+  assert.equal(result.days,7);
+  assert.equal(result.centers.osan.calendar.length,7);
+  assert.equal(Object.hasOwn(result,'rows'),false);
+  for (const query of ['days=14','days=7&days=30','summary=1','days=30&summary=0','days=7&customer=A1']) {
+    assert.equal((await fetch(url+'?'+query,options)).status,400);
+  }
 });

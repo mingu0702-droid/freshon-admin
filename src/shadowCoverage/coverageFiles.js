@@ -77,3 +77,10 @@ export function datesFor(end, days) {
   return Array.from({ length: days }, (_, index) =>
     new Date(Date.parse(end) - (days - 1 - index) * 86_400_000).toISOString().slice(0, 10));
 }
+
+export function postalCompleteCenters(period, days) {
+  if (!Array.isArray(period.missing) || period.missing.length || period.unidentified) return new Set();
+  return new Set(['osan','yeongnam','honam'].filter(center =>
+    period.observed?.[center]?.length===days && Array.isArray(period.unverified?.[center]) &&
+    !period.unverified[center].length));
+}

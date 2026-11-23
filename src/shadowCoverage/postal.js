@@ -4,7 +4,7 @@ import { open, realpath, stat } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { gunzip as decompress, gzip as compress } from 'node:zlib';
-import { boundedRead, datesFor, isDay, parseCoverageIndex, PERIODS, privateCoverageDirectory, readStoredCoverageFile } from './coverageFiles.js';
+import { boundedRead, datesFor, isDay, parseCoverageIndex, PERIODS, postalCompleteCenters, privateCoverageDirectory, readStoredCoverageFile } from './coverageFiles.js';
 import { decodePostalTile, intersects, postalText, postalTilesLevel, postalTilePosition, POSTAL_AREA_BYTES, POSTAL_LEVELS,
   POSTAL_TILE_LIMIT } from '../../public/opsmap/postal-geometry.mjs';
 
@@ -206,7 +206,7 @@ export function applyPostalAssignmentReview(review, release, releaseSha256, code
 
 export function createScope(release, codes, areas, days, center, totalAreas) {
   const period = release.periods[days], groups = new Map();
-  const observed = new Set(centers.filter(key => period.observed[key]?.length));
+  const completeCenters = postalCompleteCenters(period, days);
   const unavailable = new Set(period.unavailableCodes.flatMap((codes, index) => inCenter(center, index) ? codes : []));
   const linked = keys => sum(keys.filter((_, i) => inCenter(center, i)));
   const summary = {
@@ -242,7 +242,7 @@ export function createScope(release, codes, areas, days, center, totalAreas) {
     if (flags & 2) group.newUnknown++;
     if (flags & 4) group.held++;
     if (flags & 8) group.newZero++;
-    if (observed.has(centers[store.center]) && !unavailable.has(code) && !period.unidentified) group.eligible++;
+    if (completeCenters.has(centers[store.center]) && !unavailable.has(code)) group.eligible++;
   }
   for (const [code, delivery] of period.rows) {
     const store = codes.get(code);

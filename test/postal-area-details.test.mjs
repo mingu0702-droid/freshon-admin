@@ -71,7 +71,7 @@ test('roster conserves registered scope and includes distinct observed visits fr
   const {reader,checkedAt}=await fixture(t);
   const result=await reader.roster({...base,opened,catalog});
   assert.equal(result.name,'경기 오산시');
-  assert.deepEqual(result.totals,{registered:2,delivered:2,visits:3,newActive:1,newUnknown:1,newZero:0,held:0,candidates:1,unknown:0,records:3});
+  assert.deepEqual(result.totals,{registered:2,delivered:2,visits:3,newActive:1,newUnknown:1,newZero:0,held:0,candidates:0,unknown:1,records:3});
   assert.equal(result.source.fixed.state,'LAST_VERIFIED_RETAINED');
   assert.equal(result.source.fixed.checkedAt,checkedAt);
   const obj=result.stores.find(row=>row.code==='S101');
@@ -84,7 +84,7 @@ test('roster conserves registered scope and includes distinct observed visits fr
   assert.equal(redacted.registered,false);
   assert.equal(redacted.address,null);
   assert(!JSON.stringify(result).includes('sensitive'));
-  const query=await reader.roster({...base,opened,catalog,q:'s103',filter:'candidate'});
+  const query=await reader.roster({...base,opened,catalog,q:'s103',filter:'unknown'});
   assert.deepEqual(query.stores.map(row=>row.code),['S103']);
   assert.equal(query.totals.registered,2);
   const unmatched=await reader.roster({...base,opened,catalog,area:null});
