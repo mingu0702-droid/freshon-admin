@@ -5,6 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { gunzip as decompress, gzip as compress } from 'node:zlib';
 import { boundedRead, datesFor, isDay, parseCoverageIndex, PERIODS, postalCompleteCenters, privateCoverageDirectory, readStoredCoverageFile } from './coverageFiles.js';
+import { projectPostalOperations } from './postalOperations.js';
 import { decodePostalTile, intersects, postalText, postalTilesLevel, postalTilePosition, POSTAL_AREA_BYTES, POSTAL_LEVELS,
   POSTAL_TILE_LIMIT } from '../../public/opsmap/postal-geometry.mjs';
 
@@ -285,11 +286,12 @@ export function createScope(release, codes, areas, days, center, totalAreas) {
   } };
 }
 
-export function createPostalRuntime({ directory, boundarySha256, releaseSha256, appRoot, readDirectory, readPublication, detailsDirectory, detailsIndexSha256, readFixed,
+export function createPostalRuntime({ directory, boundarySha256, releaseSha256, appRoot, readDirectory, readPublication, detailsDirectory, detailsIndexSha256, readFixed, readOperations,
   overviewDirectory, overviewSha256, reviewDirectory, reviewSha256, assetSource,
   now = Date.now } = {}) {
   let loaded, loadFlight, indexFlight, resolvedIndex, indexChecked = 0, scope, bulk = 0;
   let storeDetails;
+  let operationsLedger, operationsEnd, operationsScopes = new Map();
   const tileCache = new Map(), pending = new Map();
   const overviewPending = new Map();
   let tileBytes = 0, reads = 0;
@@ -525,6 +527,35 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
 
   return {
     async warm() { await ready(90,'all'); },
+    async operations({days,center,generation,area,offset=0}) {
+      const opened = await verifiedRelease(generation);
+      const ledger = await readOperations?.();
+      if (!ledger) throw Error('POSTAL_OPERATIONS_UNAVAILABLE');
+      const end = new Date(now()+9*3600000-86400000).toISOString().slice(0,10);
+      if (operationsLedger !== ledger || operationsEnd !== end) {
+        operationsLedger = ledger;
+        operationsEnd = end;
+        operationsScopes = new Map();
+      }
+      const key = days + ':' + center;
+      if (!operationsScopes.has(key)) {
+        if (operationsScopes.size >= 4) operationsScopes.delete(operationsScopes.keys().next().value);
+        operationsScopes.set(key,projectPostalOperations(ledger,opened.codes,{days,center,end}));
+      }
+      const {areas,...report} = operationsScopes.get(key);
+      if (area === undefined) {
+        const tones = [...areas].map(([id,{counts}])=>[id,counts.completed ? 'COMPLETED' : counts.dispatch ? 'DISPATCH' : counts.orders ? 'ORDER' : 'UNKNOWN']);
+        return {...report,tones};
+      }
+      const match = areas.get(area);
+      const {stores} = await catalogData(loaded);
+      const {postalCustomerName} = await import('./postalDetails.js');
+      const members = match ? stores.filter(row=>match.members.has(row.code)) : [];
+      const limit=12;
+      return {period:report.period,publishedThrough:report.publishedThrough,area:postalText(area),counts:match?.counts??null,
+        total:members.length,offset,next:members.length>offset+limit?offset+limit:null,
+        members:members.slice(offset,offset+limit).map(row=>({code:row.code,name:postalCustomerName(row),flags:match.members.get(row.code)}))};
+    },
     async dispatchPostcodes(customerCodes,generation) {
       const {codes} = await verifiedRelease(generation);
       const result = new Map();
@@ -546,6 +577,7 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
         .filter(tile => intersects(tile.box,box));
       const data = {
         generation: release.generation, boundary: boundarySha256, assignmentReview:reviewSha256, source: manifest.source, tier,
+        ...(readOperations ? {operationsAvailable:true} : {}),
         period: { days, start: release.periods[days].start, end: release.asOf }, sourceObservedAt: release.sourceObservedAt,
         stale: now() - Date.parse(release.sourceObservedAt) > 36 * 3600000,
         densityHighAt: POSTAL_DENSITY_HIGH, completeness: scope.completeness, summary: scope.summary,

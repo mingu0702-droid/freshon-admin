@@ -21,6 +21,7 @@ const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const centerIn = (center, i) => center === 'all' || center === centers[i];
 const norm = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[\s·]/g, '');
 const safeText = (value, max) => typeof value === 'string' && value.length <= max && !sensitive.test(value) ? value : null;
+export const postalCustomerName = ({code,name}) => safeText(name,180) ?? code;
 const safeVehicle = value => typeof value === 'string' && vehiclePattern.test(value) ? value : null;
 const bad = () => { throw Error('POSTAL_DETAILS_INTEGRITY'); };
 
@@ -93,7 +94,7 @@ function collectArea(opened, catalog, area, days, center, source) {
     const recent = source.parts.get(row.code)?.recent || [];
     const confirmedVehicles = [...new Set(recent.filter(([i,day])=>centerIn(center,i)&&day===result.latest)
       .flatMap(([, , cars])=>cars.map(safeVehicle).filter(Boolean)))].sort();
-    return [{ code:row.code, name:safeText(row.name,180) ?? row.code, address:safeText(row.address,450),
+    return [{ code:row.code, name:postalCustomerName(row), address:safeText(row.address,450),
       registered:isRegistered, location:[row.lat,row.lng].every(Number.isFinite) ? [row.lat,row.lng] : null,
       assignmentPending:item.reviewArea !== undefined,
       deliveryObservation:result.visits > 0 ? 'OBSERVED' : eligible ? 'CANDIDATE' : 'UNVERIFIED',

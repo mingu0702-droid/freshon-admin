@@ -6,9 +6,9 @@ const centers = ['all', 'osan', 'yeongnam', 'honam'];
 const hash = /^[a-f0-9]{64}$/;
 const historyQueryKeys = new Set(['area', 'center', 'days', 'generation', 'offset']);
 
-function criteria(query) {
+function criteria(query, operations = false) {
   const { days = '90', center = 'all', generation } = query;
-  if (!['30', '60', '90'].includes(days) || !centers.includes(center) ||
+  if (!(operations ? ['7','30','60','90'] : ['30','60','90']).includes(days) || !centers.includes(center) ||
     generation !== undefined && (typeof generation !== 'string' || !hash.test(generation))) return null;
   return { days: Number(days), center, generation };
 }
@@ -25,7 +25,7 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
   function route(path, perform, send = json) {
     app.get(postalRoot + path, ...entry, async (req, res) => {
       res.set('Cache-Control', 'private, no-store').vary('Cookie');
-      const scope = criteria(req.query);
+      const scope = criteria(req.query,path==='/operations');
       if (!scope) return res.status(400).json({ ok: false, error: 'POSTAL_QUERY_INVALID' });
       const started = performance.now();
       try {
@@ -46,6 +46,7 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
           POSTAL_RELEASE_INTEGRITY: 503,
           POSTAL_GENERATION_MISMATCH: 503,
           POSTAL_DATA_UNCONFIGURED: 503,
+          POSTAL_OPERATIONS_UNAVAILABLE: 503,
           POSTAL_ASSIGNMENT_REVIEW_UNCONFIGURED: 503,
           POSTAL_ASSIGNMENT_REVIEW_INVALID: 503,
           POSTAL_BOOTSTRAP_UNAVAILABLE: 404,
@@ -76,6 +77,15 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     res.set('X-Content-Type-Options','nosniff').vary('Accept-Encoding').type('application/octet-stream').send(bytes);
   }
   route('/view',view);
+  if (postal?.readOperations) route('/operations',(req,scope,{runtime})=>{
+    const {area,offset='0'} = req.query;
+    if (!scope.generation || Object.keys(req.query).some(key=>!['days','center','generation','area','offset'].includes(key)) ||
+        area!==undefined && (typeof area!=='string'||!/^\d{5}$/.test(area)) ||
+        typeof offset!=='string'||!/^\d{1,5}$/.test(offset)||Number(offset)>15000||area===undefined&&offset!=='0') {
+      throw Error('POSTAL_QUERY_INVALID');
+    }
+    return runtime.operations({...scope,area:area===undefined?undefined:Number(area),offset:Number(offset)});
+  });
   route('/bootstrap',async (req,scope,modules,timing) => {
     const data = await view(req,scope,modules,timing);
     const metadata = Buffer.from(JSON.stringify(data));

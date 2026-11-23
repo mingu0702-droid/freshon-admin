@@ -373,7 +373,7 @@ export function createRecentOperationsReader({readSeed,store,now=Date.now}={}) {
   let checked=0, reading, saved, seed;
   const projections=new Map();
   const emptyLedger={startDate:datesFor(RECENT_OPERATIONS_BASELINE_END,90)[0],endDate:RECENT_OPERATIONS_BASELINE_END,days:[]};
-  return async ({days,summaryOnly=false}={}) => {
+  async function loadLedger() {
     if (now()>=checked) {
       reading ??= (async()=>{
         const current=await store?.read().catch(()=>null);
@@ -395,6 +395,10 @@ export function createRecentOperationsReader({readSeed,store,now=Date.now}={}) {
       })().finally(()=>{reading=null;});
       await reading;
     }
+    return saved;
+  }
+  const read=async ({days,summaryOnly=false}={})=>{
+    await loadLedger();
     const ledger=saved??emptyLedger;
     const endDate=days===undefined?ledger.endDate:latestClosedDay(now());
     const key=[days,summaryOnly].join(':');
@@ -405,6 +409,8 @@ export function createRecentOperationsReader({readSeed,store,now=Date.now}={}) {
     projections.set(key,result);
     return result;
   };
+  read.ledger=loadLedger;
+  return read;
 }
 
 export function mountRecentOperations(app,{requireStaff,read,now=Date.now}) {

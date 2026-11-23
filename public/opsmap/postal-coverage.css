@@ -37,6 +37,9 @@
 .postal-legend [data-postal-tone="LOW"]::before { background: #aed0ed; border-color: #4780b5; }
 .postal-legend [data-postal-tone="CANDIDATE"]::before { background: #f3bb76; border-color: #b87730; }
 .postal-legend [data-postal-tone="UNKNOWN"]::before { background: #bcc2c8; border-color: #566577; }
+.postal-legend [data-postal-tone="COMPLETED"]::before { background: #59a995; border-color: #126c56; }
+.postal-legend [data-postal-tone="DISPATCH"]::before { background: #7ea9d9; border-color: #245d9c; }
+.postal-legend [data-postal-tone="ORDER"]::before { background: #b7a7d4; border-color: #695091; }
 .postal-badges { margin: 7px 0; }
 .postal-badges span::before { width: 8px; height: 8px; border-radius: 50%; background: #088478; border-color: #088478; }
 .postal-badges [data-postal-badge="unverified"]::before { background: white; }

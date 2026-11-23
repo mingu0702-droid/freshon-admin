@@ -88,10 +88,10 @@ if (tabs && workspace && period && daily) {
         const style = document.createElement('link');
         style.rel = 'stylesheet';
         style.dataset.postalCoverage = '1';
-        style.href = new URL('./postal-coverage.css?v=20261116-center',import.meta.url);
+        style.href = new URL('./postal-coverage.css?v=20261124-operations',import.meta.url);
         document.head.append(style);
       }
-      return import('./postal-coverage-panel.mjs?v=20261124-coverage-dates');
+      return import('./postal-coverage-panel.mjs?v=20261124-operations');
     })().catch(error => {
       if (panelCode === preparation) panelCode = null;
       throw error;

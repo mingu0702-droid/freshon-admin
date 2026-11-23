@@ -7,6 +7,7 @@ const origin = 'http://127.0.0.1:44711';
 const postalCode = '06241';
 const errors = [];
 const rosterReads = [];
+const operationsReads = [];
 let generation = 'before-switch';
 let searchReads = 0;
 const period = { days:90, start:'2026-08-10', end:'2026-11-07' };
@@ -37,8 +38,16 @@ try {
     if (endpoint === 'view') {
       data = {
         period, generation, completeness:{ observed:76, missing:[], sourceMissing:[], centerObserved:{}, unverified:[] },
-        summary:{ recorded:1 }, source:{ label:'fixture', url:'#' }, candidates:[], tiles:[], tones:[], badges:[],
+        summary:{ recorded:1 }, source:{ label:'fixture', url:'#' }, candidates:[], tiles:[], tones:[], badges:[], operationsAvailable:true,
       };
+    } else if(endpoint === 'operations') {
+      const days=Number(url.searchParams.get('days')),area=url.searchParams.get('area');
+      operationsReads.push([days,area]);
+      const counts={registered:3,observed:2,orders:1,dispatch:1,completed:1};
+      const operationPeriod={days,start:{7:'2026-11-17',30:'2026-10-25',60:'2026-09-25',90:'2026-08-26'}[days],end:'2026-11-23'};
+      const scoped=area ? {counts,next:null,members:[{code:'S123',name:'검증 매장',flags:4}]} :
+        {summary:{...counts,observedAreas:1,missingAreas:0},tones:[[6241,'COMPLETED']]};
+      data={period:operationPeriod,publishedThrough:'2026-11-23',...scoped};
     } else if (endpoint === 'search') {
       searchReads++;
       data = [{ id:postalCode, name:postalCode, kind:'area', location }];
@@ -87,6 +96,19 @@ try {
   assert.equal(await page.locator('#coverageQuery').inputValue(), postalCode);
   assert.deepEqual(rosterReads.at(-1), [postalCode, generation]);
   assert.equal(searchReads, 1);
+
+  await page.locator('#postalLayer').selectOption('operations');
+  await page.locator('#postalOperationsSummary').getByText('운영이력 원장 기준 2026-11-23',{exact:true}).waitFor();
+  for (const value of ['7','30','60','90']) {
+    await page.locator('#coverageDays').selectOption(value);
+    await page.locator('#postalOperationsSummary').getByText(new RegExp('^'+value+'일 · .*2026-11-23$')).waitFor();
+    await page.locator('#postalOperationsDetail').getByRole('button',{name:'검증 매장 · S123'}).waitFor();
+    assert.deepEqual(operationsReads.findLast(([,area])=>area),[Number(value),postalCode]);
+  }
+  assert.equal(await page.locator('#postalArchive').isVisible(),false);
+  await page.locator('#postalLayer').selectOption('archive');
+  await page.locator('#postalPeriod').getByText(/2026-11-07/).waitFor();
+  await page.getByText(generation, { exact:true }).waitFor();
 
   await page.evaluate(() => {
     window.coverageFixture.close();

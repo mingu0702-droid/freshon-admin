@@ -729,7 +729,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           detailsDirectory:stage.OPSMAP_SHADOW_POSTAL_DETAILS_DIR,detailsIndexSha256:remotePostal?.config.details ?? stage.OPSMAP_SHADOW_POSTAL_DETAILS_SHA256,
           overviewDirectory:stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_DIR,overviewSha256:remotePostal?.config.overview ?? stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_SHA256,
           reviewDirectory:stage.OPSMAP_SHADOW_POSTAL_REVIEW_DIR,reviewSha256:remotePostal?.config.review ?? stage.OPSMAP_SHADOW_POSTAL_REVIEW_SHA256,
-          readFixed:codes=>base.get(codes)}:undefined,
+          readFixed:codes=>base.get(codes),readOperations:readRecentOperations.ledger}:undefined,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>{const saved=selectSnapshot(snapshot);return saved && {count:saved.rows.length,asOf:saved.latestDate};}});
       manual.mount(binding);

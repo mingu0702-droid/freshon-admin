@@ -7,6 +7,9 @@ const styles = {
   CANDIDATE: ['rgba(239,163,67,.68)', '#b87730'],
   LOW: ['rgba(120,179,227,.63)', '#4780b5'],
   HIGH: ['rgba(41,96,172,.73)', '#205295'],
+  COMPLETED: ['rgba(31,140,113,.69)', '#126c56'],
+  DISPATCH: ['rgba(57,126,203,.65)', '#245d9c'],
+  ORDER: ['rgba(141,118,185,.61)', '#695091'],
 };
 const svgNS = 'http://www.w3.org/2000/svg';
 const projectionCacheLimit = 150000;
