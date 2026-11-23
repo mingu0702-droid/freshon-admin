@@ -335,6 +335,36 @@ test('the scheduled run can recover one explicitly selected gap behind a publish
   assert.equal(files.has('2026-11-19'),false);
 });
 
+test('explicit repair fills a missing center/source without rewriting the day archive or weakening current evidence',async()=>{
+  const date='2026-11-23', sha='already-published';
+  const dispatch=makeDay(date,'wms_dispatch','partial',['A1']);
+  const completeOrders=makeDay(date,'freshon_orders','complete',['A1','A2']);
+  const partialOrders=makeDay(date,'freshon_orders','partial',['A1']);
+  const oldDelivery=makeDay(date,'delivery_admin','partial',['B2'],'honam');
+  const newDelivery=makeDay(date,'delivery_admin','partial',['C1'],'yeongnam');
+  let current={ledger:mergeRecentOperations(ledger(),date,[dispatch,completeOrders,oldDelivery]),sha};
+  const archive=[partialOrders,oldDelivery];
+  const calls=[];
+  const options={repairDate:date,retryDates:['2026-11-22'],
+    now:()=>Date.parse('2026-11-24T00:10Z'),receipt:{runId:'b'.repeat(64),date:'2026-11-24'},
+    store:{async read(){return current;},async readDay(day){return day===date?archive:null;},
+      async writeDay(){assert.fail('Do not rewrite a day archive');},
+      async write(next,expected){assert.equal(expected,sha);current={ledger:next,sha:'updated'};}},
+    async readLatestDay(day,delivery,orders){
+      calls.push(day);
+      assert.deepEqual([...orders],['osan']);
+      assert(delivery.has('honam'));
+      return delivery.has('yeongnam')?[]:[newDelivery];
+    }};
+  assert.equal((await syncStageRecentOperations(options)).state,'PUBLISHED');
+  assert.deepEqual(calls,[date]);
+  assert.deepEqual(archive,[partialOrders,oldDelivery]);
+  assert.deepEqual(current.ledger.days,[oldDelivery,completeOrders,dispatch,newDelivery]);
+  assert.equal((await syncStageRecentOperations(options)).state,'VERIFIED_NOOP');
+  assert.deepEqual(calls,[date,date]);
+  await assert.rejects(syncStageRecentOperations({...options,readLatestDay:async()=>[oldDelivery]}),/EVIDENCE_INVALID/);
+});
+
 test('the Stage reader can read a published pointer with its existing read-only credential',async()=>{
   const base=ledger(makeDay(initialEnd,'delivery_admin','partial',['A1']));
   const encoded=Buffer.alloc(32,5).toString('base64');

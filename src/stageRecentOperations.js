@@ -255,7 +255,7 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
   };
 }
 
-export async function syncStageRecentOperations({store,receipt,readSeed,readSource,readLatestDay,retryDates=[],now=Date.now}={}) {
+export async function syncStageRecentOperations({store,receipt,readSeed,readSource,readLatestDay,retryDates=[],repairDate,now=Date.now}={}) {
   const day=latestClosedDay(now());
   const kstDate=new Date(now()+9*3600000).toISOString().slice(0,10);
   if (!store?.write || !hash.test(receipt?.runId || '') || receipt.date!==kstDate) throw Error('RECENT_OPERATIONS_RECEIPT');
@@ -267,30 +267,41 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
   if (!Array.isArray(retryDates) || retryDates.length>maxRetryDates ||
       retryDates.some(date=>!isDay(date) || date>day)) throw rejected();
   const windowStart=datesFor(day,90)[0];
-  const dates=new Set([day,...retryDates.filter(date=>date>=windowStart)]);
+  if (repairDate!==undefined && (!isDay(repairDate) || repairDate<windowStart || repairDate>day)) throw rejected();
+  const dates=new Set([day,...(repairDate?[repairDate]:[]),...retryDates.filter(date=>date>=windowStart)]);
   const days=[];
   let endDate=base.endDate;
   let retriedMissingDay=false;
   for (const date of dates) {
     const savedInput=await (readSource?.(date) ?? store.readDay(date));
     if (savedInput!=null && (!Array.isArray(savedInput) || savedInput.some(row=>row?.date!==date))) throw rejected();
-    let input=[...(savedInput??[])];
+    const previous=base.days.filter(item=>item.date===date);
+    const completeRows=new Map(previous.filter(item=>item.coverage==='complete').map(item=>[dayKey(item),item]));
+    let input=(savedInput??[]).map(item=>completeRows.get(dayKey(item))??item);
     const latestUnpublished=date===day && date>base.endDate;
     // Retry one explicitly selected historical gap per run. The latest day
     // takes priority, and existing sealed files and published dates are retained.
-    const missingPastDay=date<day && !retriedMissingDay && savedInput==null &&
-      !base.days.some(item=>item.date===date);
-    if (readLatestDay && (latestUnpublished || missingPastDay)) {
-      if (missingPastDay) retriedMissingDay=true;
-      const deliveryCenters=new Set(input.filter(row=>row.source==='delivery_admin').map(row=>row.centerKey));
-      const orderCenters=new Set(input.filter(row=>row.source==='freshon_orders').map(row=>row.centerKey));
-      input.push(...await readLatestDay(date,deliveryCenters,orderCenters));
-      if (input.length && !savedInput && store.writeDay) {
+    const missingPastDay=date<day && !retriedMissingDay && savedInput==null && previous.length===0;
+    if (readLatestDay && (latestUnpublished || date===repairDate || missingPastDay && repairDate===undefined)) {
+      if (date<day) retriedMissingDay=true;
+      const observed=[...previous,...input];
+      const deliveryCenters=new Set(observed.filter(row=>row.source==='delivery_admin').map(row=>row.centerKey));
+      const orderCenters=new Set(observed.filter(row=>row.source==='freshon_orders').map(row=>row.centerKey));
+      if (deliveryCenters.size<recentOperationsCenters.length || orderCenters.size<recentOperationsCenters.length) {
+        const additions=await readLatestDay(date,deliveryCenters,orderCenters);
+        if (!Array.isArray(additions) || additions.some(row=>!row || row.date!==date ||
+          row.source==='delivery_admin'&&deliveryCenters.has(row.centerKey) ||
+          row.source==='freshon_orders'&&orderCenters.has(row.centerKey) ||
+          row.source!=='delivery_admin'&&row.source!=='freshon_orders')) throw rejected();
+        input.push(...additions);
+      }
+      if (input.length && savedInput==null && previous.length===0 && store.writeDay) {
         let created=true;
         try {await store.writeDay(date,input);}
         catch(error) {if(error.code!=='FIXED_STORE_CONFLICT')throw error;created=false;}
         const persisted=await store.readDay(date);
-        const expected=normalizeRecentOperations({startDate:datesFor(date,90)[0],endDate:date,days:input}).days;
+        const envelopeEnd=date<RECENT_OPERATIONS_BASELINE_END?RECENT_OPERATIONS_BASELINE_END:date;
+        const expected=normalizeRecentOperations({startDate:datesFor(envelopeEnd,90)[0],endDate:envelopeEnd,days:input}).days;
         if (!persisted || created && JSON.stringify(persisted)!==JSON.stringify(expected))
           throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
         input=persisted;
