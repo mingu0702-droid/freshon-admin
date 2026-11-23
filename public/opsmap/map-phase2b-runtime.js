@@ -5,6 +5,7 @@
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   let SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
+  const vehicleColors = new Map();
   const DEFAULT_PERIOD_CENTER = window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com'?'':'osan';
   const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", centerFilter: DEFAULT_PERIOD_CENTER, selectedDate: "", latestDate: "", map: null, overlays: [], lines: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
   let mapInitializing=null,mapObserver=null,mapHandlers=[],mapGestureEvents=null,mapCamera=null,cameraSelection=0;
@@ -68,7 +69,7 @@
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
     storeDetailFlights.clear();storeDetailMemory.clear();storeDetailLatest=Promise.resolve();newAreaRegistryMemo=newAreaLocationsMemo=newAreaEvidenceMemo=null;deferredBatchMapRefresh=null;
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;registrationCounts=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
-    storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();
+    storeByVehicleAndCode.clear();storesByCode.clear();vehicleColors.clear();resetDriverMaster();geocodeCache.clear();
     indexedRows=null;pointIndex=null;baseVehicleStatus='LOADING';baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
     customerRegistrySource='';customerRegistryCheckedAt='';customerRegistrySourceCheckedAt='';
     searchIndex=pendingSearchIndex=searchFlight=stageAddressHashIndex=newAreaDatedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
@@ -332,7 +333,8 @@
     const currentHash = incoming.currentAddressHash || incoming.originalAddressHash || incoming.addressHash || "";
     const savedHash = saved.currentAddressHash || saved.originalAddressHash || saved.addressHash || "";
     if (currentHash && savedHash && currentHash !== savedHash) return false;
-    const sameText = currentAddress && savedAddress && currentAddress.normalize('NFKC').replace(/\s+/g,' ').trim() === savedAddress.normalize('NFKC').replace(/\s+/g,' ').trim();
+    const sameText = currentAddress && savedAddress && (currentAddress === savedAddress ||
+      currentAddress.normalize('NFKC').replace(/\s+/g,' ').trim() === savedAddress.normalize('NFKC').replace(/\s+/g,' ').trim());
     if (currentAddress && savedAddress && !sameText) return false;
     const requiresProof = ['STAGE_REGISTRY_POINT','DELIVERY_COMPLETION_GPS','BUILDING_LOCATION','ADDRESS_LOCATION'].includes(saved.coordinateEvidence);
     return !requiresProof || Boolean(sameText || currentHash && currentHash === savedHash);
@@ -358,6 +360,7 @@
     if(generalMap&&state.mode==='BASE_60D'&&customerRegistry){const observed=new Map(rows.map(row=>[String(row.customerCode||row.code),{...previousByCode.get(String(row.customerCode||row.code)),...row,customerOnly:false,deliveryObserved:true}]));for(const row of generalRegistryRows.values())if(row.customerOnly&&!observed.has(row.customerCode))observed.set(row.customerCode,row);rows=customerRegistry.merge([...observed.values()]);}
     const vehicleMeta = new Map(SOURCE.vehicles.map((vehicle, index) => [String(vehicle.vehicle), { vehicle, index }]));
     const next = [];
+    const projectCoordinates = !archivedDatedAssignments(meta);
     storeByVehicleAndCode.clear();
     storesByCode.clear();
     (rows || []).forEach((item) => {
@@ -386,7 +389,7 @@
       row.driverIdentity = item.driverIdentity || '';
       row.driverName = item.driverName || "";
       Object.assign(row,fixedVehicleFor(row.customerCode,item,previous));
-      if(!archivedDatedAssignments(meta)){
+      if(projectCoordinates){
         window.MapManualPins?.apply(row);
         liveAddressLocations?.apply(row);
       }
@@ -1448,13 +1451,19 @@
   }
 
   function numberOrNull(value) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
     if (value == null || String(value).trim() === "") return null;
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
   }
 
   function vehicleColor(vehicle) {
-    return Phase2bUi.vehicleColor(vehicle);
+    const key = String(vehicle ?? "");
+    if (!vehicleColors.has(key)) {
+      if (vehicleColors.size >= 1024) vehicleColors.clear();
+      vehicleColors.set(key, Phase2bUi.vehicleColor(key));
+    }
+    return vehicleColors.get(key);
   }
 
   function selectedVehicles() {
@@ -4303,7 +4312,9 @@
       $('#map').dataset.dailyStops=String(stores.length);
       $('#map').dataset.dailyLocated=String(state.routeRows.length);
     }else stores=recentOperationsRows(filteredPeriodStores()).map(row=>({...row,color:vehicleColor(row.vehicle)}));
-    stores.forEach(row=>{if(!daily||!archivedDatedAssignments(dailyMeta)){window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);}});
+    if(!daily||!archivedDatedAssignments(dailyMeta))stores.forEach(row=>{
+      window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);
+    });
     renderStops(stores,{numbered:daily,vehicles:selected});
     if(daily){drawRoute();void loadDailyCompletionEvidence();}
     deferMapAddressWork();
