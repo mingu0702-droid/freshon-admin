@@ -61,6 +61,9 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
           POSTAL_ASSET_RETRY_LATER: 503,
         };
         const code = Object.hasOwn(reasons, problem.message) ? problem.message : 'POSTAL_DATA_UNAVAILABLE';
+        if (path === '/current-registration') {
+          console.warn(JSON.stringify({ component:'opsmap-postal-current-registration', error:code, status:reasons[code] || 503 }));
+        }
         return res.status(reasons[code] || 503).json({ ok: false, error: code });
       }
     });
