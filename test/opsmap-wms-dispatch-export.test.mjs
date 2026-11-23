@@ -101,6 +101,13 @@ test('Stage can only read the approved dated, pinned Osan file and caches succes
   assert.equal(approved.configurationFailure('2026-11-22'),'WMS_EXPORT_DATE_NOT_APPROVED');
   assert.equal(await blocked(date),null);
   assert.equal(blocked.configurationFailure(date),'WMS_EXPORT_APPROVAL_MISSING');
+  const verifyLocal=createStageWmsDispatchExportReader({env:{
+    ...env,OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_REF:'a'.repeat(40)
+  },fetchImpl:()=>assert.fail('Same-byte verification must not read the archive')});
+  assert.equal(verifyLocal.verifyWorkbook(date,data).observedAt,new Date(observedAt).toISOString());
+  assert.throws(()=>verifyLocal.verifyWorkbook(date,Buffer.from('other')),{code:'WMS_EXPORT_DIGEST'});
+  assert.throws(()=>verifyLocal.verifyWorkbook('2026-11-22',data),{code:'WMS_EXPORT_DATE_NOT_APPROVED'});
+  assert.throws(()=>blocked.verifyWorkbook(date,data),{code:'WMS_EXPORT_APPROVAL_MISSING'});
   assert.equal(reads,0);
   const [first,second]=await Promise.all([approved(date),approved(date)]);
   assert.equal(first,second);

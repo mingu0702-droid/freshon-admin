@@ -193,6 +193,17 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
     }
     return null;
   };
+  function verifyWorkbook(date,bytes) {
+    const failure=configurationFailure(date);
+    if (failure) throw scopeError(failure);
+    if (!bytes?.length || bytes.length>maxWorkbookBytes || digest(bytes)!==manifest[date].sha256) {
+      throw scopeError('WMS_EXPORT_DIGEST');
+    }
+    try {return parseOpsmapWmsDispatchExport(bytes,{date,observedAt:manifest[date].observedAt});}
+    catch (error) {
+      throw scopeError(error?.code==='WMS_EXPORT_DATE_MISMATCH'?error.code:'WMS_EXPORT_WORKBOOK_INVALID');
+    }
+  }
   const jobs = new Map();
   const read=date=>{
     if (configurationFailure(date)) return Promise.resolve(null);
@@ -209,11 +220,7 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
           if (encoded.length>5_600_000 || !/^[A-Za-z0-9+/]+=*$/.test(encoded)) throw scopeError('WMS_EXPORT_ENCODING');
           bytes=Buffer.from(encoded,'base64');
         }
-        if (digest(bytes)!==expected.sha256) throw scopeError('WMS_EXPORT_DIGEST');
-        try { return parseOpsmapWmsDispatchExport(bytes,{date,observedAt:expected.observedAt}); }
-        catch (error) {
-          throw scopeError(error?.code==='WMS_EXPORT_DATE_MISMATCH'?error.code:'WMS_EXPORT_WORKBOOK_INVALID');
-        }
+        return verifyWorkbook(date,bytes);
       }).catch(error=>{
         if(jobs.get(date)===task)jobs.delete(date);
         throw error;
@@ -223,6 +230,7 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
     return jobs.get(date);
   };
   read.dates=Object.keys(manifest??{}).filter(date=>dayKey.test(date));
+  read.verifyWorkbook=verifyWorkbook;
   read.configurationFailure=configurationFailure;
   read.configuration={serviceVerified,approved,manifestValid:Boolean(manifest),archive:archive?.configuration??null,
     dates:Object.fromEntries(read.dates.map(date=>[date,configurationFailure(date)??'VERIFIED']))};
