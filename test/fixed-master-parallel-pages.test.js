@@ -125,6 +125,32 @@ test('Stage requires a declared count on each populated page and verifies an exa
   await assert.rejects(missing.reader(),{code:'FIXED_MASTER_COUNT_INVALID'});
 });
 
+test('Stage distinguishes a contradictory total within one page from count drift between pages',async()=>{
+  const scans=[];
+  const f=fixture(async()=>({data:[row(1,2),row(2,3)]}),{
+    verifyLastPage:true,strictPageCounts:true,onScan:scan=>scans.push(scan)
+  });
+  await assert.rejects(f.reader(),{code:'FIXED_MASTER_PAGE_COUNT_INCONSISTENT'});
+  assert.deepEqual(f.calls,[['011',0]]);
+  assert.equal(scans[0].acceptedRows,0);
+  assert.equal(scans[0].sourceHttp,200);
+});
+
+test('Stage rejects same-count shifted or repeated pages without counting their rows as accepted',async()=>{
+  const first=Array.from({length:1000},(_,i)=>row(i,2000));
+  for(const [second,error] of [[first,'FIXED_MASTER_PAGE_REPEATED'],[
+    Array.from({length:1000},(_,i)=>row(i+999,2000)),'FIXED_MASTER_PAGE_CUSTOMER_OVERLAP'
+  ]]){
+    const scans=[];
+    const f=fixture(async({page})=>({data:page===0?first:second}),{
+      verifyLastPage:true,strictPageCounts:true,onScan:scan=>scans.push(scan)
+    });
+    await assert.rejects(f.reader(),{code:error});
+    assert.deepEqual(f.calls,[['011',0],['011',1]]);
+    assert.deepEqual(scans.map(item=>[item.acceptedPages,item.acceptedRows,item.failedPage,item.countChange]),[[1,1000,1,null]]);
+  }
+});
+
 test('parallel initial 401 responses share exactly one existing-session recovery',async()=>{
   let initialSessions=0,forcedSessions=0,recovered=false;
   const rows=Array.from({length:2501},(_,i)=>row(i,2501));

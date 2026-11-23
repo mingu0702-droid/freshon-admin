@@ -112,6 +112,23 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
     let sourceRows=0, pagingFieldRows=0;
     const centers=[];
     const centerCodes=['011','012','013'];
+    const validateStrictPage=(rows,center)=>{
+      if(!Array.isArray(rows)||rows.length>pageSize||rows.some(row=>!row||typeof row!=='object'))
+        throw failure('FIXED_MASTER_CONTRACT',200,'PAGE_CONTRACT','SOURCE_CONTRACT');
+      if(rows.some(row=>row.logCd!=null&&row.logCd!==center))
+        throw failure('FIXED_MASTER_PAGE_CENTER_MISMATCH',200,'PAGE_CENTER','SOURCE_CONTRACT');
+      const parseTotal=value=>typeof value==='number'||typeof value==='string'&&/^\d+$/.test(value) ? Number(value) : NaN;
+      const count=parseTotal(rows[0]?.totalCnt);
+      if(!Number.isSafeInteger(count)||count<0)
+        throw failure('FIXED_MASTER_COUNT_INVALID',200,'PAGE_COUNT','SOURCE_CONTRACT');
+      for(const row of rows) if(row.totalCnt!=null){
+        const other=parseTotal(row.totalCnt);
+        if(!Number.isSafeInteger(other)||other<0)
+          throw failure('FIXED_MASTER_COUNT_INVALID',200,'PAGE_COUNT','SOURCE_CONTRACT');
+        if(other!==count)throw failure('FIXED_MASTER_PAGE_COUNT_INCONSISTENT',200,'PAGE_COUNT','SOURCE_CHANGED');
+      }
+      return count;
+    };
     const pageOptions=(logCd,page)=>({
       method:'POST',timeoutMs:60000,
       headers:{'content-type':'application/x-www-form-urlencoded; charset=UTF-8'},
@@ -127,7 +144,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
           const payload=await readPage(pageOptions(center,0));
           const rows=Array.isArray(payload?.data)?payload.data:extractRows(payload);
           const declared=rows?.[0]?.totalCnt;
-          declaredRows=declared==null?null:Number(declared);
+          declaredRows=strictPageCounts?validateStrictPage(rows,center):declared==null?null:Number(declared);
           if (!Number.isSafeInteger(declaredRows)||declaredRows<=0||rows.length!==Math.min(pageSize,declaredRows)) {
             throw failure('FIXED_MASTER_COUNT_INVALID',200,'PAGE_COUNT','SOURCE_CONTRACT');
           }
@@ -194,8 +211,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
           progress={...progress,phase:'ERROR',failureStep:'KEY_CONTRACT',failureCode:'FIXED_MASTER_KEY_INVALID',complete:false};
           throw failure('FIXED_MASTER_KEY_INVALID',200,'KEY_CONTRACT','SOURCE_CONTRACT');
         }
-        const declared=rows[0]?.totalCnt;
-        if(strictPageCounts&&((rows.length||page===0)&&declared==null))throw failure('FIXED_MASTER_COUNT_INVALID',200,'PAGE_COUNT','SOURCE_CONTRACT');
+        const declared=strictPageCounts&&(rows.length||page===0)?validateStrictPage(rows,logCd):rows[0]?.totalCnt;
         if(declared!=null){
           const count=Number(declared);
           if(!Number.isSafeInteger(count)||count<0)throw failure('FIXED_MASTER_COUNT_INVALID');
@@ -210,15 +226,21 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         if(strictPageCounts&&rows.length!==Math.min(pageSize,Math.max(0,expectedRows-page*pageSize))) {
           throw failure('FIXED_MASTER_INCOMPLETE',200,'PAGE_SIZE','SOURCE_CONTRACT');
         }
-        centerRows+=rows.length;
-        centerPagingRows+=rows.filter(row=>row&&row.estCd&&(row.totalCnt!=null||row.totalPages!=null||row.isPaging!=null||row.sortName!=null)).length;
         // Keep no contact/access/memo values between batches.
         const minimal=rows.map(row=>projectedRow(row,logCd));
-        for(const row of minimal){const code=normalizeFixedMasterCustomerKey(row.estCd);if(centerCustomerKeys.has(code))duplicateCustomerKeys.add(code);centerCustomerKeys.add(code);}
         const pageHash=digest(minimal);
         // A repeated full page cannot prove pagination completeness. Source
         // row count is deliberately NOT compared with customerCode unique count.
-        if(rows.length&&pageHashes.has(pageHash))throw failure('FIXED_MASTER_PAGE_REPEATED');
+        if(rows.length&&pageHashes.has(pageHash))throw failure('FIXED_MASTER_PAGE_REPEATED',200,'PAGE_IDENTITY','SOURCE_CHANGED');
+        const keys=minimal.map(row=>normalizeFixedMasterCustomerKey(row.estCd));
+        // A duplicated row within a page is source data. A key that occurs
+        // across offset pages has no proven ordering tie-breaker and could
+        // hide a lost customer when rows move during collection.
+        if(strictPageCounts&&keys.some(key=>centerCustomerKeys.has(key)))
+          throw failure('FIXED_MASTER_PAGE_CUSTOMER_OVERLAP',200,'PAGE_IDENTITY','SOURCE_CHANGED');
+        for(const key of keys){if(centerCustomerKeys.has(key))duplicateCustomerKeys.add(key);centerCustomerKeys.add(key);}
+        centerRows+=rows.length;
+        centerPagingRows+=rows.filter(row=>row&&row.estCd&&(row.totalCnt!=null||row.totalPages!=null||row.isPaging!=null||row.sortName!=null)).length;
         if(rows.length)pageHashes.add(pageHash);
         if(page===0)firstPageHash=pageIdentity(minimal);
         if(rows.length){lastPageHash=page===0?firstPageHash:pageIdentity(minimal);lastReadOptions=options;}
@@ -239,7 +261,10 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
           try {check=await readPage(options);}
           catch(error){verification.push({page,state:'REQUEST_FAILED'});throw error;}
           const rows=Array.isArray(check?.data)?check.data:extractRows(check);
-          const raw=rows?.[0]?.totalCnt,declaredRows=raw!=null&&Number.isSafeInteger(Number(raw))&&Number(raw)>=0?Number(raw):null;
+          let raw;
+          try{raw=strictPageCounts?validateStrictPage(rows,logCd):rows?.[0]?.totalCnt;}
+          catch(error){verification.push({page,state:'REQUEST_FAILED'});throw error;}
+          const declaredRows=raw!=null&&Number.isSafeInteger(Number(raw))&&Number(raw)>=0?Number(raw):null;
           const comparison={page,declaredRows,rows:Array.isArray(rows)?rows.length:null,state:'SAME'};
           verification.push(comparison);
           if(declaredRows!==expectedRows){
