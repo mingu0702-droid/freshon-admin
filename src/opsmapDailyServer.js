@@ -11,7 +11,7 @@ const done = new Set(['COMPLETED','DELIVERED','DELIVERY_COMPLETED','배송완료
 const open = new Set(['PENDING','BEFORE','OPEN','INCOMPLETE','ASSIGNED','DISPATCHED','IN_PROGRESS','미완료']);
 const individual = new Set(['DRIVER_APP','COURIER_APP','INDIVIDUAL_DRIVER_EVENT']);
 const excluded = new Set(['BULK','BATCH','AUTO_CLOSE','SYSTEM','SCHEDULED','ADMIN_BULK','APP_UNUSED','일괄완료','앱미사용']);
-const flag = value => value?.bulk===true || value?.batch===true || value?.isBulk===true || value?.isBatch===true ||
+export const isExcludedDeliveryCompletion = value => value?.bulk===true || value?.batch===true || value?.isBulk===true || value?.isBatch===true ||
   value?.isBulkCompleted===true || value?.batchId!=null || value?.appUsed===false ||
   [value?.source,value?.completionSource,value?.mode,value?.completionType].some(v=>excluded.has(token(v)));
 const strictTime = value => typeof value==='string' &&
@@ -27,14 +27,14 @@ const utcTime=value=>{
 // A task status or completedAt by itself cannot distinguish a driver action from a bulk closure.
 export function datedCompletionEvent(task) {
   const id=String(task?.id??'');
-  if(!/^[A-Za-z0-9_-]{1,96}$/.test(id)||flag(task)||/^CANCEL/.test(token(task?.status||task?.taskStatus)))return null;
+  if(!/^[A-Za-z0-9_-]{1,96}$/.test(id)||isExcludedDeliveryCompletion(task)||/^CANCEL/.test(token(task?.status||task?.taskStatus)))return null;
   const record=task.completionEvent;
   const events=[...(Array.isArray(task.deliveryEvents)?task.deliveryEvents.slice(0,100):[]), ...(record?[record]:[]),
     {type:task.completionType,status:task.status||task.taskStatus,source:task.completionSource,
       at:task.completedAt||task.completeDatedAt||task.deliveryCompletedAt}];
   let result=null;
   for(const event of events){
-    if(!event||flag(event)||event.deliveryId!=null&&String(event.deliveryId)!==id)continue;
+    if(!event||isExcludedDeliveryCompletion(event)||event.deliveryId!=null&&String(event.deliveryId)!==id)continue;
     const kind=kinds.get(token(event.type||event.eventType));
     const status=token(event.status||event.resultStatus||task.status||task.taskStatus);
     const at=event.at||event.occurredAt||event.completedAt;
@@ -54,7 +54,7 @@ export function validDeliveryPoint(point) {
 const rawCompletionType=new Map([['DIRECT','DIRECT_HANDOFF'],['BASIC','DELIVERY_COMPLETED'],['FRONT_DOOR','DELIVERY_COMPLETED']]);
 export function deliveryStatusRecordEvent(task,record) {
   if(!record||!task||!/^\d{1,20}$/.test(String(task.id))||String(record.taskId)!==String(task.id)
-    ||!/^\d{1,20}$/.test(String(record.id))||flag(task)||flag(record)
+    ||!/^\d{1,20}$/.test(String(record.id))||isExcludedDeliveryCompletion(task)||isExcludedDeliveryCompletion(record)
     ||task.status!=='COMPLETED'||record.status!=='COMPLETED'||record.completeType!==task.completeType
     ||!rawCompletionType.has(record.completeType)||!text(record.createdBy)||excluded.has(token(record.createdBy))||!validDeliveryPoint(record.gpsPosition)
     ||!strictTime(record.createdAt)||!strictTime(task.completeDatedAt)

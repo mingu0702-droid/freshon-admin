@@ -1,3 +1,4 @@
+import {dailyCompletionCandidates} from '../src/opsmapDailyCompletionReader.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
@@ -167,4 +168,16 @@ test('dated selection preserves the exact revisit while actual route order follo
   assert.deepEqual(daily.rosterPoints(scopedRows, points).map(({row}) => row),
     [incoming, earlierListRow]);
   assert.deepEqual(daily.projection(scopedRows, 'COMPLETED').shown, [earlierListRow, incoming]);
+});
+
+test('exclusive driver timeline skips bulk and explicitly non-individual tasks before detail reads',()=>{
+  const task={id:101,status:'COMPLETED',completeType:'BASIC',completeDatedAt:'2026-11-17T08:01:00+09:00',
+    customerErpCode:'S123'};
+  const rejected=[
+    {mode:'ADMIN_BULK'},{source:'SYSTEM'},{completionType:'APP_UNUSED'},
+    {completionSource:'BATCH'},{isBulkCompleted:true},{appUsed:false}
+  ].map((marker,index)=>({...task,id:102+index,...marker}));
+  assert.deepEqual(dailyCompletionCandidates([...rejected,task],()=> '102').get('102'),[{
+    id:101,status:task.status,completeType:task.completeType,completeDatedAt:task.completeDatedAt,customerCode:'S123'
+  }]);
 });

@@ -1,4 +1,4 @@
-import {deliveryStatusRecordEvent} from './opsmapDailyServer.js';
+import {deliveryStatusRecordEvent,isExcludedDeliveryCompletion} from './opsmapDailyServer.js';
 import {readBoundedPhotoLoginJson} from './opsmapDeliveryAdminTransport.js';
 const error=(code,status)=>Object.assign(Error(code),{code,diagnostic:{status}});
 
@@ -6,11 +6,10 @@ export function dailyCompletionCandidates(tasks,resolveVehicle){
   const candidates=new Map();
   for(const task of tasks){
     const vehicle=resolveVehicle(task),customerCode=task.customer?.erpCode??task.customerErpCode;
-    if(!vehicle||typeof customerCode!=='string'||!customerCode||task.status!=='COMPLETED'||!/^\d{1,20}$/.test(String(task.id)))continue;
+    if(!vehicle||typeof customerCode!=='string'||!customerCode||task.status!=='COMPLETED'||
+        !/^\d{1,20}$/.test(String(task.id))||isExcludedDeliveryCompletion(task))continue;
     const list=candidates.get(vehicle)||[];
-    list.push({id:task.id,status:task.status,completeType:task.completeType,completeDatedAt:task.completeDatedAt,customerCode,
-      bulk:task.bulk===true||task.batch===true||task.isBulk===true||task.isBatch===true||task.isBulkCompleted===true||
-      task.batchId!=null||task.appUsed===false,completionSource:task.completionSource});
+    list.push({id:task.id,status:task.status,completeType:task.completeType,completeDatedAt:task.completeDatedAt,customerCode});
     candidates.set(vehicle,list);
   }
   return candidates;
