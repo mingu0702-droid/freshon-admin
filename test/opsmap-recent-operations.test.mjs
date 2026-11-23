@@ -38,7 +38,9 @@ test('archived recovery changes only one exact Osan dispatch day with CAS and ke
   assert.equal((await recoverArchivedOsanDispatch(publish)).state,'VERIFIED_NOOP');
   for (const days of [7,30,60,90]) {
     const report=projectRecentOperations(current,{days,summaryOnly:true});
-    assert.deepEqual(report.centers.osan.calendar.at(-1),{date,state:'PARTIAL',sources:{wms_dispatch:{coverage:'partial',customerCount:2}}});
+    assert.deepEqual(report.centers.osan.calendar.at(-1),{
+      date,state:'PARTIAL',sources:{wms_dispatch:{coverage:'partial',customerCount:2,evidence:['dispatch_confirmed']}}
+    });
     assert.equal(report.centers.yeongnam.calendar.at(-1).state,'NOT_OBSERVED');
     assert.deepEqual(report.centers.osan.confirmedDays,[]);
   }

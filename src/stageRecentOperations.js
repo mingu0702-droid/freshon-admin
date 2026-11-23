@@ -74,7 +74,9 @@ export function projectRecentOperations(ledger,{days,endDate=ledger.endDate,summ
     const center=centers[centerKey];
     if (calendar) {
       if (!center.evidenceByDate.has(date)) center.evidenceByDate.set(date,{});
-      center.evidenceByDate.get(date)[source]={coverage,customerCount:rows.length};
+      const kinds=new Set(rows.map(row=>row.evidence));
+      center.evidenceByDate.get(date)[source]={coverage,customerCount:rows.length,
+        evidence:evidenceOrder.filter(kind=>kinds.has(kind))};
     }
     center.observedDates.add(date);
     center.sourceObservedDates[source].add(date);

@@ -135,11 +135,11 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       target.replaceChildren(node('p',report.startDate+' ~ '+report.endDate),...selected.map(key=>{
         const {confirmedDays,calendar=[]}=report.centers[key];
         if (report.sourceUnavailable) return node('p',centerNames[key]+' · 배송이력 확인 필요');
-        const observedSources=calendar.flatMap(day=>Object.keys(day.sources));
-        const observed=observedSources.includes('delivery_admin')?'일부 배송 근거 확인 · ':
-          observedSources.includes('wms_dispatch')?'일부 배차 근거 확인 · ':
-          observedSources.includes('freshon_orders')?'일부 주문 근거 확인 · ':'';
-        return node('p',centerNames[key]+' · '+(confirmedDays.length===report.days?'배송이력 확인':observed+'배송이력 확인 필요'));
+        const observed=new Set(calendar.flatMap(day=>Object.values(day.sources).flatMap(source=>source.evidence??[])));
+        const labels=[['order_confirmed','주문확정'],['dispatch_confirmed','배차확정'],['delivery_completed','배송완료']]
+          .filter(([kind])=>observed.has(kind)).map(([,label])=>label);
+        const partial=labels.length?'일부 '+labels.join('·')+' 근거 확인 · ':'';
+        return node('p',centerNames[key]+' · '+(confirmedDays.length===report.days?'배송이력 확인':partial+'배송이력 확인 필요'));
       }));
     } catch {
       if (!request.signal.aborted && recentOperationRead===request && active) target.textContent='기간별 운영 근거 미확인';
