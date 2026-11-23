@@ -396,6 +396,63 @@ test('the signed latest-day collection fills source gaps after an Osan WMS-only 
   assert.equal(writes,1);
 });
 
+test('one bounded historical scope resumes on the next signed day, preserving archived and partial evidence',async()=>{
+  const date='2026-11-22', latest='2026-11-23';
+  const wms=makeDay(latest,'wms_dispatch','partial',['S10']);
+  const old=makeDay(date,'freshon_orders','partial',['S20'],'yeongnam');
+  const delivered=makeDay(date,'delivery_admin','partial',['S30'],'yeongnam');
+  const extraOrder=makeDay(date,'freshon_orders','partial',['S40'],'yeongnam');
+  let current={ledger:mergeRecentOperations(ledger(),latest,[old,wms]),sha:'before'};
+  const archive=[old], calls=[];
+  let receiptDate='2026-11-24', writes=0, conflict=false, elapsed=0;
+  const options=()=>({
+    store:{async read(){return current;},async readDay(day){return day===date?archive:null;},
+      async writeDay(){assert.fail('Historical repair must preserve the sealed daily archive');},
+      async write(next,sha){
+        assert.equal(sha,current.sha);
+        if(conflict)throw Object.assign(Error(),{code:'FIXED_STORE_CONFLICT'});
+        current={ledger:next,sha:'writer-'+ ++writes};
+      }},
+    receipt:{runId:'c'.repeat(64),date:receiptDate},now:()=>Date.parse(receiptDate+'T00:00Z')+elapsed,
+    recoverySources:['delivery_admin','freshon_orders'],
+    async readLatestDay(day){calls.push(['latest',day]);return [];},
+    async readHistoricalScope(scope){
+      calls.push(['historical',scope.date,scope.centerKey,scope.source]);
+      if(scope.centerKey==='honam')return [];
+      return [scope.source==='delivery_admin'?delivered:extraOrder];
+    }
+  });
+  assert.equal((await syncStageRecentOperations(options())).state,'PUBLISHED');
+  assert.deepEqual(calls,[['latest',latest],['historical',date,'yeongnam','delivery_admin']]);
+  assert.equal(current.ledger.recovery[0].state,'VERIFIED');
+  assert.deepEqual(archive,[old]);
+  assert(current.ledger.days.some(d=>d.source==='wms_dispatch'));
+  assert.equal(projectRecentOperations(current.ledger,{days:7}).centers.yeongnam.calendar.at(-2).state,'PARTIAL');
+  await syncStageRecentOperations(options());
+  assert.equal(calls.filter(([kind])=>kind==='historical').length,1);
+  assert.equal(writes,1);
+
+  receiptDate='2026-11-25';
+  conflict=true;
+  assert.equal((await syncStageRecentOperations(options())).state,'BUSY');
+  assert.equal(current.ledger.recovery.length,1);
+  conflict=false;
+  assert.equal((await syncStageRecentOperations(options())).state,'PUBLISHED');
+  assert.deepEqual(current.ledger.days.find(d=>d.source==='freshon_orders').rows.map(r=>r.customerCode),['S20','S40']);
+  assert.deepEqual(calls.filter(([kind])=>kind==='historical').slice(-2),
+    [['historical',date,'yeongnam','freshon_orders'],['historical',date,'yeongnam','freshon_orders']]);
+
+  receiptDate='2026-11-26';
+  const late=options();
+  late.readLatestDay=async()=>{elapsed=95_000;return [];};
+  assert.equal((await syncStageRecentOperations(late)).state,'SOURCE_UNAVAILABLE');
+  assert.equal(writes,2);
+  elapsed=0;
+  assert.equal((await syncStageRecentOperations(options())).state,'RECOVERY_CHECKPOINTED');
+  assert.equal(current.ledger.recovery.find(r=>r.centerKey==='honam').state,'NO_ACCEPTED_EVIDENCE');
+  assert.equal(mergeRecentOperations(current.ledger,'2027-02-22',[]).recovery,undefined);
+});
+
 test('the Stage reader can read a published pointer with its existing read-only credential',async()=>{
   const base=ledger(makeDay(initialEnd,'delivery_admin','partial',['A1']));
   const encoded=Buffer.alloc(32,5).toString('base64');

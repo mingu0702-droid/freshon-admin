@@ -228,9 +228,17 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
                 error:/^(?:NATIONAL_REGISTRY|FIXED_STORE)_[A-Z_]+$/.test(value.error||'')?value.error:null}));
             }
             if(value?.component==='opsmap-recent-operations-sync' && value.runId===receipt.runId &&
-               ['PUBLISHED','VERIFIED_NOOP','SOURCE_UNAVAILABLE','BUSY','FAILED'].includes(value.state)) {
+               ['PUBLISHED','VERIFIED_NOOP','RECOVERY_CHECKPOINTED','SOURCE_UNAVAILABLE','BUSY','FAILED'].includes(value.state)) {
+              const attempt=value.recovery;
+              const recovery=attempt&&/^\d{4}-\d{2}-\d{2}$/.test(attempt.date||'') &&
+                ['osan','yeongnam','honam'].includes(attempt.centerKey) &&
+                ['freshon_orders','delivery_admin'].includes(attempt.source) &&
+                ['VERIFIED','NO_ACCEPTED_EVIDENCE','READ_FAILED'].includes(attempt.state) &&
+                attempt.attemptedOn===receipt.date?
+                {date:attempt.date,centerKey:attempt.centerKey,source:attempt.source,state:attempt.state}:null;
               log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
                 endDate:/^\d{4}-\d{2}-\d{2}$/.test(value.endDate||'')?value.endDate:null,
+                ...(recovery?{recovery}:{}),
                 error:/^(?:RECENT_OPERATIONS|FIXED_STORE)_[A-Z_]+$/.test(value.error||'')?value.error:null}));
             }
             if(value?.component==='opsmap-recent-orders-source' && value.runId===receipt.runId &&

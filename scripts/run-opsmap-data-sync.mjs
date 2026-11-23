@@ -288,19 +288,28 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
         const readOrders=createStageRecentOrdersReader({env,onDiagnostic:value=>console.info(JSON.stringify({
           component:'opsmap-recent-orders-source',runId:receipt.runId,...value
         }))});
+        const deliveryDiagnostics=value=>console.info(JSON.stringify({
+          component:'opsmap-recent-delivery-source',runId:receipt.runId,...value
+        }));
         const readLatestDay=readDelivery||readOrders?async(date,deliveryCenters,orderCenters)=>{
-          const deliveryDiagnostics=value=>console.info(JSON.stringify({
-            component:'opsmap-recent-delivery-source',runId:receipt.runId,...value
-          }));
           const evidence=await Promise.all([readDelivery?.(date,deliveryCenters,deliveryDiagnostics),readOrders?.(date,orderCenters)]);
           return evidence.flatMap(input=>input??[]);
         }:null;
+        const autoRepair=env.OPSMAP_STAGE_RECENT_OPERATIONS_AUTO_REPAIR_APPROVED==='1';
+        const recoverySources=[
+          ...(readOrders?['freshon_orders']:[]),
+          ...(readDelivery?['delivery_admin']:[])
+        ];
+        const readHistoricalScope=autoRepair?({date,centerKey,source})=>{
+          const skip=new Set(['osan','yeongnam','honam'].filter(center=>center!==centerKey));
+          return source==='freshon_orders'?readOrders(date,skip):readDelivery(date,skip,deliveryDiagnostics);
+        }:undefined;
         const repair=/^(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})$/.exec(env.OPSMAP_STAGE_RECENT_OPERATIONS_REPAIR_REQUEST||'');
         const repairDate=repair?.[2]===receipt.date?repair[1]:undefined;
         const retryDates=env.OPSMAP_STAGE_RECENT_OPERATIONS_RETRY_DATES?.split(',').map(date=>date.trim());
         const result=await syncStageRecentOperations({store:createStageRecentOperationsStore({env,write:true}),receipt,
           readLatestDay,
-          retryDates,repairDate,
+          retryDates,repairDate,readHistoricalScope,recoverySources,
           readSeed:createStageRecentOperationsSeed({env,manifest:recentOperationsBaseline})});
         console.log(JSON.stringify({component,runId:receipt.runId,...result}));
       } catch(error) {

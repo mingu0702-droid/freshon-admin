@@ -21,6 +21,9 @@ const seedFile = prefix+'baseline.json';
 const codeRevision = /^[a-f0-9]{40}$/;
 const maxClearBytes = 32 * 1024 * 1024, maxPackedBytes = 4 * 1024 * 1024;
 const maxRetryDates = 7;
+const historicalSources = ['delivery_admin','freshon_orders'];
+const historicalStates = ['VERIFIED','NO_ACCEPTED_EVIDENCE','READ_FAILED'];
+const recoveryBudgetMs = 90_000;
 const compress = promisify(gzip), decompress = promisify(gunzip);
 const customerCode = /^[A-Z]\d{1,20}$/;
 const hash = /^[a-f0-9]{64}$/;
@@ -33,7 +36,7 @@ const rejected = () => Error('RECENT_OPERATIONS_EVIDENCE_INVALID');
 export const stageRecentOperationsSyncEnabled = env => stageScope(env) &&
   env.OPSMAP_STAGE_RECENT_OPERATIONS_SYNC_APPROVED === '1';
 
-export function normalizeRecentOperations({startDate,endDate,days} = {}) {
+export function normalizeRecentOperations({startDate,endDate,days,recovery=[]} = {}) {
   if (!isDay(endDate) || endDate < RECENT_OPERATIONS_BASELINE_END ||
       startDate !== datesFor(endDate,90)[0] || !Array.isArray(days) || days.length > 810) throw rejected();
   const keys = new Set(), normalized = [];
@@ -55,7 +58,18 @@ export function normalizeRecentOperations({startDate,endDate,days} = {}) {
     normalized.push({date,centerKey,source,coverage,rows:[...codes].sort(([a],[b])=>a.localeCompare(b)).map(
       ([customerCode,evidence])=>({customerCode,evidence}))});
   }
-  return {startDate,endDate,days:normalized.sort((a,b)=>dayKey(a).localeCompare(dayKey(b)))};
+  if (!Array.isArray(recovery) || recovery.length>540) throw rejected();
+  const attempts=new Set();
+  const journal=recovery.map(({date,centerKey,source,attemptedOn,state})=>{
+    const key=dayKey({date,centerKey,source});
+    if (!isDay(date)||date<startDate||!isDay(attemptedOn)||date>=attemptedOn||
+        !recentOperationsCenters.includes(centerKey)||!historicalSources.includes(source)||
+        !historicalStates.includes(state)||attempts.has(key)) throw rejected();
+    attempts.add(key);
+    return {date,centerKey,source,attemptedOn,state};
+  }).sort((a,b)=>dayKey(a).localeCompare(dayKey(b)));
+  return {startDate,endDate,days:normalized.sort((a,b)=>dayKey(a).localeCompare(dayKey(b))),
+    ...(journal.length?{recovery:journal}:{})};
 }
 
 export function projectRecentOperations(ledger,{days,endDate=ledger.endDate,summaryOnly=false}={}) {
@@ -122,7 +136,29 @@ export function mergeRecentOperations(previous, endDate, days) {
       retained.set(key,{...day,rows:[...rows.values()]});
     }
   }
-  return normalizeRecentOperations({...scoped,days:[...retained.values()]});
+  return normalizeRecentOperations({...scoped,days:[...retained.values()],
+    recovery:previous.recovery?.filter(item=>item.date>=startDate)});
+}
+
+function nextHistoricalScope({base, additions, day, receiptDate, sources}) {
+  const journal=base.recovery??[];
+  if (journal.some(row=>row.attemptedOn===receiptDate)) return null;
+  const complete=new Set([...base.days,...additions].filter(row=>row.coverage==='complete').map(dayKey));
+  const attempted=new Set(journal.map(dayKey));
+  const dates=datesFor(day,90).slice(0,-1).reverse();
+  const priorities=['yeongnam','honam','osan'];
+  const eligible=scope=>!complete.has(dayKey(scope))&&!attempted.has(dayKey(scope));
+  if (dates.includes('2026-11-22')) {
+    for (const centerKey of priorities) for (const source of sources) {
+      const scope={date:'2026-11-22',centerKey,source};
+      if (eligible(scope)) return scope;
+    }
+  }
+  for (const centerKey of priorities) for (const date of dates) for (const source of sources) {
+    const scope={date,centerKey,source};
+    if (eligible(scope)) return scope;
+  }
+  return null;
 }
 
 export function recentOperationsKey(encoded) {
@@ -257,9 +293,11 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
   };
 }
 
-export async function syncStageRecentOperations({store,receipt,readSeed,readSource,readLatestDay,retryDates=[],repairDate,now=Date.now}={}) {
-  const day=latestClosedDay(now());
-  const kstDate=new Date(now()+9*3600000).toISOString().slice(0,10);
+export async function syncStageRecentOperations({store,receipt,readSeed,readSource,readLatestDay,retryDates=[],repairDate,
+  readHistoricalScope,recoverySources=[],now=Date.now}={}) {
+  const startedAt=now();
+  const day=latestClosedDay(startedAt);
+  const kstDate=new Date(startedAt+9*3600000).toISOString().slice(0,10);
   if (!store?.write || !hash.test(receipt?.runId || '') || receipt.date!==kstDate) throw Error('RECENT_OPERATIONS_RECEIPT');
   if (day<RECENT_OPERATIONS_BASELINE_END) throw rejected();
   const current=await store.read();
@@ -318,14 +356,47 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     days.push(...input);
     if (date>endDate) endDate=date;
   }
-  if (!days.length) return {state:'SOURCE_UNAVAILABLE',endDate:base.endDate};
-  const next=mergeRecentOperations(base,endDate,days);
+  let attempt;
+  if (readHistoricalScope && !repairDate && !retryDates.length && now()-startedAt<recoveryBudgetMs) {
+    const sources=historicalSources.filter(source=>recoverySources.includes(source));
+    const scope=nextHistoricalScope({base,additions:days,day,receiptDate:kstDate,sources});
+    if (scope) {
+      let archive,archiveFailed=false;
+      try {archive=await (readSource?.(scope.date) ?? store.readDay(scope.date));}
+      catch {archiveFailed=true;}
+      if (archive!=null && (!Array.isArray(archive)||archive.some(row=>row?.date!==scope.date))) throw rejected();
+      const sealed=archive?.find(row=>dayKey(row)===dayKey(scope));
+      let result=[], state='NO_ACCEPTED_EVIDENCE';
+      const providerAdmitted=!archiveFailed&&now()-startedAt<recoveryBudgetMs;
+      if (sealed?.coverage==='complete') result=[sealed];
+      else if (providerAdmitted) {
+        try {result=await readHistoricalScope(scope);}
+        catch {state='READ_FAILED';}
+      }
+      if (!Array.isArray(result) || result.length>1 || result.some(row=>!row||dayKey(row)!==dayKey(scope))) throw rejected();
+      if (sealed && sealed.coverage!=='complete') {
+        const startDate=datesFor(day,90)[0];
+        result=mergeRecentOperations({startDate,endDate:day,days:[sealed]},day,result).days;
+      }
+      if (result.length) {
+        days.push(...result);
+        if (scope.date>endDate) endDate=scope.date;
+        if (state!=='READ_FAILED') state='VERIFIED';
+      }
+      if (sealed?.coverage==='complete'||providerAdmitted) attempt={...scope,attemptedOn:kstDate,state};
+    }
+  }
+  if (!days.length && !attempt) return {state:'SOURCE_UNAVAILABLE',endDate:base.endDate};
+  let next=mergeRecentOperations(base,endDate,days);
+  if (attempt) next=normalizeRecentOperations({...next,recovery:[...(next.recovery??[]),attempt]});
   if (current.ledger && JSON.stringify(next)===JSON.stringify(base)) return {state:'VERIFIED_NOOP',endDate:base.endDate};
   try {await store.write(next,current.sha);}
   catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
   const saved=await store.read();
   if (JSON.stringify(saved.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
-  return {state:'PUBLISHED',endDate};
+  const evidenceChanged=attempt&&(endDate!==base.endDate||JSON.stringify(next.days)!==JSON.stringify(base.days));
+  return {state:attempt&&!evidenceChanged&&current.ledger?'RECOVERY_CHECKPOINTED':'PUBLISHED',endDate,
+    ...(attempt?{recovery:attempt}:{})};
 }
 
 export async function recoverArchivedOsanDispatch({
