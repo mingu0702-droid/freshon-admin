@@ -563,7 +563,7 @@
       }
       registrationCounts={source:allStores,total,centers};
     }
-    const center=state.centerFilter;
+    const center=searchNeighborhood?.center??state.centerFilter;
     const count=center?(registrationCounts.centers.get(center)||{registered:0,coordinates:0,located:0}):registrationCounts.total;
     return {...count,source:stageRegistrationOnly()?(center==='yeongnam'||center==='honam'?'REGISTERED':center?'PUBLISHED':'AVAILABLE'):'PUBLISHED'};
   }
@@ -2255,7 +2255,7 @@
   }
 
   function registeredAreaIndex(){
-    const center=state.centerFilter, verified=hasVerifiedStageLocations();
+    const center=searchNeighborhood?.center??state.centerFilter, verified=hasVerifiedStageLocations();
     if(areaViewportIndex?.source===allStores&&areaViewportIndex.center===center&&areaViewportIndex.verified===verified)return areaViewportIndex.index;
     const stores=allStores.flatMap(row=>{
       if(row.customerRegistryStatus==='DELETED'||row.deliveryOnly||row.raw?.deliveryOnly||
@@ -2430,7 +2430,7 @@
     const viewportKey=JSON.stringify([markerSourceVersion,markerLayoutVersion,state.mode,level,center?.getLat?.(),center?.getLng?.(),
       mapViewport.width,mapViewport.height,fit,assignmentMode,vehicleOverview,selectedVehicleStores,focusedStops,baseVehicleStatus,Boolean(options.numbered),
       selectedCode,state.selected?.lat,state.selected?.lng,state.virtual?.temporaryKey,searchNeighborhood?.point?.temporaryKey,
-      state.centerFilter,navCodes]);
+      searchNeighborhood?.center??state.centerFilter,navCodes]);
     if(options.fromIdle&&!fit&&lastMarkerViewport===viewportKey)return false;
     mapNode.classList.toggle('mapZoomFar',level>=9);
     const shouldShow=row=>row.virtual||row.nearbyVehicle||protectedCodes.some(code=>markerHasStore(row,code))||
@@ -2459,7 +2459,7 @@
         areaCount=areaViewportDots.draw(visible,markerPosition,selectedCode);
         pins=[];
       }
-      mapNode.dataset.areaViewport=JSON.stringify({mode:closeUp?'pins':'dots',visible:areaCount,located:areaIndex.valid.length,center:state.centerFilter||'all'});
+      mapNode.dataset.areaViewport=JSON.stringify({mode:closeUp?'pins':'dots',visible:areaCount,located:areaIndex.valid.length,center:searchNeighborhood.center||'all'});
     }else if(detailedStores){
       pins=detailedMarkerRows(mapViewport,selectedExtra,assignmentMode);
     }else if(vehicleOverview){
@@ -2571,7 +2571,7 @@
     }
     mapNode.setAttribute('data-render-metrics',JSON.stringify({...renderMetrics,sourceRows:rows.length,active:markerEntries.size,
       markerMode,planMs:+planMs.toFixed(2),overlayMs:+overlayMs.toFixed(2),detached:detachedMarkers.size,
-      representedStores:pins.reduce((count,row)=>count+(row.overviewRoutes?.reduce((total,route)=>total+route.storeCount,0)??row.clusterRows?.length??(row.customerCode?1:0)),0)}));
+      representedStores:areaIndex?areaCount:pins.reduce((count,row)=>count+(row.overviewRoutes?.reduce((total,route)=>total+route.storeCount,0)??row.clusterRows?.length??(row.customerCode?1:0)),0)}));
     lastMarkerViewport=fit?null:viewportKey;
     return true;
   }
@@ -3584,7 +3584,9 @@
     searchNeighborhood=null;
     clearAreaViewportDots();
     delete $('#map').dataset.areaViewport;
+    $('#periodCenter').value=$('#mobileCenter').value=state.centerFilter||'all';
     syncRecentOperationsUi();
+    window.dispatchEvent(new Event('map-area-scope-changed'));
     if(dateReady&&state.map&&state.mode==='BASE_60D'){
       renderStops(state.currentRows,{viewportOnly:true});
     }
@@ -4071,7 +4073,8 @@
     requestAnimationFrame(positionDetailPopup);
     const activeArea=state.mode==='BASE_60D'&&canRemove;
     const previous=searchNeighborhood?.point===row&&!focus?searchNeighborhood:null;
-    const neighborhood=activeArea&&(previous||{point:row,sourceRows:allStores,cameraInteraction:mapCamera?.interaction(),trace});
+    const neighborhood=activeArea&&(previous||{point:row,center:searchNeighborhood?.center??state.centerFilter,
+      sourceRows:allStores,cameraInteraction:mapCamera?.interaction(),trace});
     if(neighborhood){
       searchNeighborhood=neighborhood;
       syncRecentOperationsUi();
@@ -4200,7 +4203,7 @@
   }
 
   function refreshVehicleUi(run, { preserveSearch = false } = {}) {
-    $("#periodCenter").value = $("#mobileCenter").value = state.centerFilter || "all";
+    $("#periodCenter").value = $("#mobileCenter").value = (searchNeighborhood?.center??state.centerFilter) || "all";
     filterVehicleList();
     if (run) {closeClusterPanel();resetRoadRoute();}
     syncRoadRoutePanel();
@@ -4460,14 +4463,22 @@
   }
 
   function selectCenter(group) {
+    const center=group==='all'?'':group;
+    if(searchNeighborhood){
+      if(center===searchNeighborhood.center)return;
+      searchNeighborhood.center=center;
+      $('#periodCenter').value=$('#mobileCenter').value=group;
+      clearTemporaryDistance();
+      openTemporaryPin(searchNeighborhood.point,{keepViewport:true});
+      window.dispatchEvent(new Event('map-area-scope-changed'));
+      return;
+    }
     ++state.searchRequestId; ++state.addressRequestId; ++state.detailRequestId;
     $('#results').replaceChildren();$('#addressJudgeResults').replaceChildren();
     setSelectedVehicles([]);state.driverKey='';$('#periodDriver').value='';periodVehicleScope='all';periodListLimit=0;periodSelectionCache=null;
-    const area=searchNeighborhood?.point;
     clearSelection();
-    state.centerFilter = group === "all" ? "" : group;
+    state.centerFilter = center;
     $('#periodCenter').value=group;$('#mobileCenter').value=group;
-    if(area)openTemporaryPin(area,{keepViewport:true});
     filterVehicleList();
     $("#mobileBaseVehicle").value = "";
     refreshVehicleUi(true);

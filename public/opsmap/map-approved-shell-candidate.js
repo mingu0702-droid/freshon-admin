@@ -331,6 +331,7 @@
     for(const button of $('#runList').querySelectorAll('[data-run-code]'))sourceCard(button,bridge.state.routeRows.find(row=>row.customerCode===button.dataset.runCode&&row.vehicle===button.dataset.runVehicle),true);
   }
   for(const node of [$('#runList'),$('#dailySummary'),$('#roadRoutePanel'),$('#periodStoreList')])new MutationObserver(sourceSync).observe(node,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
+  window.addEventListener('map-area-scope-changed',sourceSync);
   new MutationObserver(sourceSync).observe($('#togglePeriodList'),{attributes:true,attributeFilter:['aria-expanded']});
   new MutationObserver(()=>{sync();sourceSync();}).observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});
   new MutationObserver(()=>{sync();sourceSync();}).observe($('#periodStoreListCount'),{childList:true,subtree:true,characterData:true});

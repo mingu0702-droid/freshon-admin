@@ -218,7 +218,7 @@
 #detail .newAreaTemporaryPanel .detailHead { gap: 5px; padding-bottom: 12px; }
 .newAreaTemporaryPanel .areaPanelAddress { margin: 0; font-size: 20px; line-height: 1.35; overflow-wrap: anywhere; }
 .newAreaTemporaryPanel .areaPanelStatus, .newAreaTemporaryPanel .areaPanelHint { margin: 0; color: var(--area-panel-muted); font-size: 12px; line-height: 1.5; }
-.newAreaTemporaryPanel .areaPanelBody { display: grid; gap: 10px; min-width: 0; }
+.newAreaTemporaryPanel .areaPanelBody { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
 .newAreaTemporaryPanel .areaPanelSection { padding: 10px 0; border-top: 1px solid var(--area-panel-border); }
 .newAreaTemporaryPanel .areaPanelHeading { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; }
 .newAreaTemporaryPanel .areaPanelHeading b, .newAreaTemporaryPanel .areaPanelClosest > b { color: var(--area-panel-accent); white-space: nowrap; }

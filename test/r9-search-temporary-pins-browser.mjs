@@ -306,6 +306,11 @@ try{
  await page.evaluate(()=>tempPinTest.setFilters('osan','selected'));
  await submit('서울 합성구 필터길 50');
  await page.evaluate(()=>tempPinTest.click(37.55,127));
+ await page.locator('[data-source-center="yeongnam"]').click();
+ check('the viewport center can change while the original filters and address panel stay intact',await page.evaluate(()=>{
+   const s=tempPinTest.stats();return s.viewport?.center==='yeongnam'&&s.centerFilter==='osan'&&s.vehicleScope==='selected'&&
+     document.querySelector('.areaPanelAddress')?.textContent==='서울 합성구 필터길 50';
+ }));
  await page.locator('#detailClose').evaluate(button=>button.click());
  check('closing search restores a non-default center and vehicle scope',await page.evaluate(()=>{
    const s=tempPinTest.stats();return !s.viewport&&s.centerFilter==='osan'&&s.vehicleScope==='selected';
