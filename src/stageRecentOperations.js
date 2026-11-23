@@ -201,7 +201,7 @@ export function createStageRecentOperationsSeed({env=process.env,fetchImpl=fetch
   };
 }
 
-export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetch,now=Date.now,write=false}={}) {
+export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetch,now=Date.now,write=false,withSha=false}={}) {
   if (!stageRecentOperationsSyncEnabled(env) || env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1' ||
       write && env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1') return null;
   const token=write ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN ||
@@ -220,7 +220,7 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
       const daily=file.startsWith(prefix+'day-') && /^day-\d{4}-\d{2}-\d{2}\.json$/.test(file.slice(prefix.length));
       const blob=address.startsWith(root+'/git/blobs/') && codeRevision.test(address.slice((root+'/git/blobs/').length));
       const read=method==='GET' && ((file===currentFile || write&&daily) && url.searchParams.size===1 && url.searchParams.get('ref')===branch ||
-        !url.search && (address===root || write&&blob));
+        !url.search && (address===root || (write||withSha)&&blob));
       const update=write && method==='PUT' && (file===currentFile || daily) && !url.search &&
         JSON.parse(options.body).branch===branch;
       if ((!read && !update) || url.username || url.password || url.hash) throw Error('RECENT_OPERATIONS_STORAGE_SCOPE');
@@ -228,7 +228,7 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
     }});
   return {
     async read() {
-      if (!write) {
+      if (!write && !withSha) {
         const value=await client.readRaw(currentFile,maxPackedBytes+1024);
         return value&&{ledger:await openRecentOperations(value,key)};
       }
@@ -309,6 +309,47 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
   const saved=await store.read();
   if (JSON.stringify(saved.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
   return {state:'PUBLISHED',endDate};
+}
+
+export async function recoverArchivedOsanDispatch({
+  store,readArchive,date,approvedDate,publish=false,now=Date.now
+}={}) {
+  const closedDay=latestClosedDay(now());
+  if (!isDay(date) || date!==approvedDate || date>closedDay ||
+      date<datesFor(closedDay,90)[0] || !store?.read || !readArchive || publish&&!store.write) {
+    throw Error('RECENT_OPERATIONS_RECOVERY_SCOPE');
+  }
+  const {ledger:base,sha}=await store.read()??{};
+  if (!base || base.endDate>closedDay || date<base.startDate || !codeRevision.test(sha??'')) {
+    throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
+  }
+  const archive=await readArchive(date);
+  if (archive?.date!==date || archive.center!=='osan' || archive.source!=='WMS_CONFIRMED_DISPATCH_EXPORT' ||
+      !Array.isArray(archive.vehicles)) throw rejected();
+  const customers=new Set();
+  let assignmentCount=0;
+  for (const {vehicle,details} of archive.vehicles) {
+    if (vehicle==='미배정') continue;
+    if (typeof vehicle!=='string' || !/^[0-9가-힣 -]{1,24}$/.test(vehicle) || !Array.isArray(details)) throw rejected();
+    for (const {customerCode:code} of details) {
+      if (!customerCode.test(code)) throw rejected();
+      assignmentCount++;
+      customers.add(code);
+    }
+  }
+  if (!customers.size) throw rejected();
+  const endDate=date>base.endDate?date:base.endDate;
+  const evidence={date,centerKey:'osan',source:'wms_dispatch',coverage:'partial',
+    rows:[...customers].map(customerCode=>({customerCode,evidence:'dispatch_confirmed'}))};
+  const next=mergeRecentOperations(base,endDate,[evidence]);
+  const report={date,centerKey:'osan',source:'wms_dispatch',assignmentCount,customerCount:customers.size,endDate};
+  if (JSON.stringify(next)===JSON.stringify(base)) return {state:'VERIFIED_NOOP',...report};
+  if (!publish) return {state:'VERIFIED_PREVIEW',...report};
+  try {await store.write(next,sha);}
+  catch (error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',...report,endDate:base.endDate};throw error;}
+  const saved=await store.read();
+  if (JSON.stringify(saved?.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
+  return {state:'PUBLISHED',...report};
 }
 
 export function createRecentOperationsReader({readSeed,store,now=Date.now}={}) {

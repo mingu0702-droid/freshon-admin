@@ -5,7 +5,7 @@ import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageRecentOrdersReader} from '../src/stageRecentOrders.js';
 import {
   createRecentOperationsReader,createStageRecentOperationsStore,mergeRecentOperations,mountRecentOperations,normalizeRecentOperations,openRecentOperations,
-  projectRecentOperations,RECENT_OPERATIONS_ROUTE,recentOperationsKey,sealRecentOperations,syncStageRecentOperations
+  projectRecentOperations,RECENT_OPERATIONS_ROUTE,recentOperationsKey,recoverArchivedOsanDispatch,sealRecentOperations,syncStageRecentOperations
 } from '../src/stageRecentOperations.js';
 
 const initialStart='2026-08-20', initialEnd='2026-11-17';
@@ -14,6 +14,41 @@ const makeDay=(date,source,coverage,codes=[],centerKey='osan')=>({date,source,ce
     freshon_orders:'order_confirmed',wms_dispatch:'dispatch_confirmed',delivery_admin:'delivery_completed'
   }[source]}))});
 const ledger=(...days)=>normalizeRecentOperations({startDate:initialStart,endDate:initialEnd,days});
+
+test('archived recovery changes only one exact Osan dispatch day with CAS and keeps evidence partial',async()=>{
+  const date='2026-11-23', sha='a'.repeat(40), now=()=>Date.parse('2026-11-24T00:00:00Z');
+  const existing=makeDay('2026-11-22','delivery_admin','partial',['B2'],'honam');
+  let current=mergeRecentOperations(ledger(),existing.date,[existing]);
+  const archive={date,center:'osan',source:'WMS_CONFIRMED_DISPATCH_EXPORT',vehicles:[
+    {vehicle:'101',details:[{customerCode:'A1',amount:123}]},
+    {vehicle:'102',details:[{customerCode:'A1'},{customerCode:'A2'}]},
+    {vehicle:'미배정',details:[{customerCode:'A3'}]}
+  ]};
+  const store={async read(){return {ledger:current,sha};},async write(next,expected){assert.equal(expected,sha);current=next;}};
+  const request={store,date,approvedDate:date,now,readArchive:async selected=>{assert.equal(selected,date);return archive;}};
+  await assert.rejects(recoverArchivedOsanDispatch({...request,approvedDate:existing.date}),/RECOVERY_SCOPE/);
+  await assert.rejects(recoverArchivedOsanDispatch({...request,readArchive:async()=>({...archive,center:'yeongnam'})}),/EVIDENCE_INVALID/);
+  assert.equal((await recoverArchivedOsanDispatch(request)).state,'VERIFIED_PREVIEW');
+  assert.deepEqual(current.days,[existing]);
+  const publish={...request,publish:true};
+  assert.deepEqual(await recoverArchivedOsanDispatch(publish),{
+    state:'PUBLISHED',date,centerKey:'osan',source:'wms_dispatch',assignmentCount:3,customerCount:2,endDate:date
+  });
+  assert.deepEqual(current.days,[existing,makeDay(date,'wms_dispatch','partial',['A1','A2'])]);
+  assert.equal((await recoverArchivedOsanDispatch(publish)).state,'VERIFIED_NOOP');
+  for (const days of [7,30,60,90]) {
+    const report=projectRecentOperations(current,{days,summaryOnly:true});
+    assert.deepEqual(report.centers.osan.calendar.at(-1),{date,state:'PARTIAL',sources:{wms_dispatch:{coverage:'partial',customerCount:2}}});
+    assert.equal(report.centers.yeongnam.calendar.at(-1).state,'NOT_OBSERVED');
+    assert.deepEqual(report.centers.osan.confirmedDays,[]);
+  }
+  current=ledger();
+  assert.equal((await recoverArchivedOsanDispatch({...publish,store:{...store,async write(){
+    throw Object.assign(Error('conflict'),{code:'FIXED_STORE_CONFLICT'});
+  }}})).state,'BUSY');
+  assert.deepEqual(current.days,[]);
+  await assert.rejects(recoverArchivedOsanDispatch({...publish,store:{...store,async write(){}}}),/STORAGE_READBACK/);
+});
 
 test('projects verified positives and distinguishes source observations from complete dates',()=>{
   const result=projectRecentOperations(ledger(
