@@ -27,7 +27,7 @@ app.use(express.static(base));
 const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
 const origin='http://127.0.0.1:'+server.address().port;
 const artifacts=fs.mkdtempSync(path.join(os.tmpdir(),'opsmap-r9-new-area-'));
-const browser=await chromium.launch({headless:true});
+const browser=await chromium.launch({headless:true,...(process.env.OPSMAP_TEST_CHROMIUM?{executablePath:process.env.OPSMAP_TEST_CHROMIUM}:{})});
 let page;
 const errors=[],blocked=[],result={scope:'LOCAL_PRODUCTION_HTML_RUNTIME_SYNTHETIC_NO_KAKAO',checks:[]};
 try{
@@ -37,7 +37,7 @@ try{
   await page.goto(origin);
   await page.evaluate(()=>{document.body.dataset.mapStaffState='authenticated';window.MapStaffEntry={registerPurge(){},status(){}};
     window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};window.VEHICLE_AREA_DATA={vehicles:[]};window.KakaoMapsAdapter={ready:()=>new Promise(()=>{})};window.kakaoGeocoder={addressSearch(){throw Error('EXTERNAL_GEOCODING_FORBIDDEN');}};});
-  for(const name of ['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','manual-waypoints.js','new-area-requests.js','opsmap-daily.js','new-area-detail-panel.js','new-area-row-edit.js'])await page.addScriptTag({path:path.join(base,name)});
+  for(const name of ['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','manual-waypoints.js','new-area-requests.js','opsmap-daily.js','new-area-detail-panel.js','new-area-viewport.js','new-area-row-edit.js'])await page.addScriptTag({path:path.join(base,name)});
   await page.evaluate(()=>import('/opsmap/fixed-delivery-weekdays.mjs').then(()=>true));
   await page.addScriptTag({path:path.resolve('node_modules/xlsx/dist/xlsx.full.min.js')});
   const runtime=fs.readFileSync(path.join(base,'map-phase2b-runtime.js'),'utf8')
@@ -54,24 +54,23 @@ try{
     const rows=await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults);
     assert.equal(rows[0].decision,'O');assert.equal(rows[0].nearestDistanceMeters,0);assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
     assert.match(await page.locator('#newAreaBatchResults').innerText(),/배송 가능 \(O\)/);
-    assert.match(await page.locator('#newAreaBatchResults').innerText(),/30km 내 참고 배차호차 · 2대 확인/);
+    assert.doesNotMatch(await page.locator('#newAreaBatchResults').innerText(),/(?:30|40|50)km|참고 배차호차/);
     assert.match(await page.locator('#newAreaBatchResults [data-area-nearest-weekdays]').first().innerText(),/101호 월 122호 수/);
     assert.match(await page.locator('#newAreaBatchResults [data-area-fixed-weekdays]').first().innerText(),/월 수/);
+    assert.equal(await page.locator('#newAreaBatchRadius').count(),0);
     assert.equal(await page.locator('#newAreaBatchResults [data-area-dispatch-reference]').first().innerText(),
       '배차표 기준일 2026-09-24 · 최신 배정 미확인');
-    for(const radius of ['40','50','30']){
-      await page.locator('#newAreaBatchRadius').selectOption(radius);
-      assert.deepEqual(await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults.map(row=>row.decision)),rows.map(row=>row.decision));
-    }
     await page.locator('#newAreaApplyDate').fill('2026-11-02');await page.locator('#copyAreaDecision').click();
     assert.equal((await page.evaluate(()=>navigator.clipboard.readText())).split('\r\n').length,3);
     await page.locator('#copyAreaMatching').click();assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/합성 배송처/);
     const csvPending=page.waitForEvent('download');await page.locator('#exportNewAreaCsv').click();const csv=await csvPending;await csv.saveAs(path.join(artifacts,'result-'+width+'.csv'));
     const csvText=fs.readFileSync(path.join(artifacts,'result-'+width+'.csv'),'utf8');assert.match(csvText,/검토필요/);assert.match(csvText,/S990001/);assert.match(csvText,/합성 고객\n상세주소/);
     assert.match(csvText,/2026-09-24 · 최신 배정 미확인/);
+    assert.doesNotMatch(csvText,/(?:30|40|50)km/);
     const excelPending=page.waitForEvent('download');await page.locator('#exportNewAreaExcel').click();const excel=await excelPending;await excel.saveAs(path.join(artifacts,'result-'+width+'.xlsx'));
     const book=XLSX.readFile(path.join(artifacts,'result-'+width+'.xlsx'));const cells=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{header:1});assert.equal(cells.length,4);assert.equal(cells[1][0],'S990001');assert.equal(cells[1][2],'O');assert.match(cells[1][cells[0].indexOf('판정 근거')],/500m 이내/);
     assert.equal(cells[1][cells[0].indexOf('배차표 기준일·확인 상태')],'배차표 기준일 2026-09-24 · 최신 배정 미확인');
+    assert(cells[0].every(heading=>!/(?:30|40|50)km/.test(heading)));
     await page.locator('[data-judged="1"]').click();assert.equal(await page.locator('#manualLabel').inputValue(),'대구광역시 동구 합성로 2');assert.equal(await page.locator('#manualLat').inputValue(),'');
     await page.locator('#manualLat').fill('35.9');await page.locator('#manualLng').fill('128.65');await page.locator('#manualAdd').click();
     await page.evaluate(()=>{if(!document.querySelector('#mapBatchDialog').open)document.querySelector('#sourceBatch').click();});

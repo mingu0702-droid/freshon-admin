@@ -204,7 +204,7 @@ test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with n
     assert.equal(row.originalAddress,cells[i].x);assert.equal(row.originalCustomer,cells[i].y);
     assert.equal(row.address,cells[i].x.trim());assert.equal(row.customer,cells[i].y);assert.equal(row.decision,'O');
     assert.equal(row.lookupStatus,'SUCCESS');assert.equal(row.nearestDistanceMeters,0);
-    assert.equal(row.nearestStoreCode,saved.customerCode);assert.equal(row.dispatchVehicles.length,0);
+    assert.equal(row.nearestStoreCode,saved.customerCode);assert.equal(row.nearestDispatch.length,0);
     assert.equal(row.eligibilityBasis,'FIXED_REGISTRY_500M');assert.equal(row.nearestDispatchLabel,'미확인');
     assert.equal(f.queries[i],`경기도 화성시 합성로 ${i+100}`);assert.equal(f.headers[i],f.queries[i]);
   }
@@ -212,7 +212,7 @@ test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with n
   assert.deepEqual(Array.from(exported,row=>Array.from(row).slice(0,2)),cells.map(({x,y})=>[x,y]));
   assert.match(f.node('#newAreaBatchStatus').textContent,/처리 60 · 위치 확인 60 .*후보·입력 검토 0 · 자료 범위 밖 0 · 권한·한도 0 · 조회 실패 0/);
   assert.match(f.node('#newAreaBatchResults').innerHTML,/가장 가까운 등록 매장\(직선거리\)/);
-  assert.match(f.node('#newAreaBatchResults').innerHTML,/참고 배차호차 · 확인된 호차 없음/);
+  assert.doesNotMatch(f.node('#newAreaBatchResults').innerHTML,/참고 배차호차/);
   assert.equal(JSON.stringify(f.saved()),original,'REST coordinates never mutate the saved snapshot');
 });
 
