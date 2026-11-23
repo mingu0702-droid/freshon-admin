@@ -133,9 +133,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       if (request.signal.aborted || recentOperationRead!==request || !active) return;
       const selected=center==='all'?['osan','yeongnam','honam']:[center];
       target.replaceChildren(node('p',report.startDate+' ~ '+report.endDate),...selected.map(key=>{
-        const {observedDates,confirmedDays}=report.centers[key];
-        return node('p',centerNames[key]+' · 근거 '+observedDates.length+'일 · 전수 확인 '+confirmedDays.length+'일 · 미확인 '+
-          (report.days-observedDates.length)+'일');
+        const {confirmedDays}=report.centers[key];
+        return node('p',centerNames[key]+' · '+(confirmedDays.length===report.days?'배송이력 확인':'배송이력 확인 필요'));
       }));
     } catch {
       if (!request.signal.aborted && recentOperationRead===request && active) target.textContent='기간별 운영 근거 미확인';
