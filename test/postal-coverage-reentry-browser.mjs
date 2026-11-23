@@ -9,7 +9,7 @@ const errors = [];
 const rosterReads = [];
 let generation = 'before-switch';
 let searchReads = 0;
-const period = { days:90, start:'2026-08-23', end:'2026-11-20' };
+const period = { days:90, start:'2026-08-10', end:'2026-11-07' };
 const location = [37.497, 127.029];
 const browser = await chromium.launch({ channel:'chrome', headless:true });
 
@@ -27,6 +27,12 @@ try {
         await readFile(new URL('../public/opsmap' + url.pathname, import.meta.url)) });
     }
     const endpoint = url.pathname.split('/').pop();
+    if (endpoint === 'recent-operations') {
+      return route.fulfill({json:{
+        ok:true,days:90,startDate:'2026-08-26',endDate:'2026-11-23',publishedThrough:'2026-11-23',
+        centers:Object.fromEntries(['osan','yeongnam','honam'].map(center=>[center,{confirmedDays:[],calendar:[]}]))
+      }});
+    }
     let data;
     if (endpoint === 'view') {
       data = {
@@ -58,6 +64,10 @@ try {
     window.coverageFixture.open();
   });
   await page.locator('#shadowCoverage[data-postal-view]').waitFor();
+  assert.match(await page.locator('#postalPeriod').innerText(),/지도 색상·구역 집계 기준.*2026-11-07/);
+  await page.locator('#recentOperationWindow summary').click();
+  await page.getByText(/운영이력 원장 기준 2026-11-23/).waitFor();
+  assert.match(await page.locator('#postalPeriod').innerText(),/2026-11-07/);
   await page.locator('#coverageQuery').fill(postalCode);
   await page.locator('#coverageQuery').press('Enter');
   await page.getByText(generation, { exact:true }).waitFor();

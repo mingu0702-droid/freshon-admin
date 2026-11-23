@@ -59,7 +59,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<div class="coverage-search-row"><input id="coverageQuery" type="search" placeholder="주소, 매장명, 고객코드, 5자리 우편번호" ' +
     'maxlength="200" required autocomplete="off"><button type="submit" class="coverage-primary">검색</button></div></form>' +
     '<div id="coverageSearchResults" class="coverage-results" aria-live="polite"></div>' +
-    '<div id="coverageAnalysis"><div class="coverage-filters"><label>자료 기간 <select id="coverageDays">' +
+    '<div id="coverageAnalysis"><div class="coverage-filters"><label>지도 집계 기간 <select id="coverageDays">' +
     '<option value="30">30일</option><option value="60">60일</option><option value="90" selected>90일</option></select></label>' +
     '<label>담당 센터 <select id="coverageCenter"><option value="all">전체</option><option value="osan">오산</option>' +
     '<option value="yeongnam">영남</option><option value="honam">호남</option></select></label>' +
@@ -84,7 +84,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<div class="coverage-list postal-candidates"><h2>기간 내 미배송 확인 구역</h2><div id="postalCandidates"></div></div>' +
     '<details class="coverage-evidence"><summary>경계 출처와 원천 날짜</summary><div id="postalEvidence"></div></details>' +
     '<details class="coverage-evidence" id="recentOperationWindow"><summary>기간별 운영 근거</summary>' +
-    '<label>자료 기간 <select id="recentOperationDays"><option value="7">7일</option><option value="30">30일</option>' +
+    '<label>운영이력 기간 <select id="recentOperationDays"><option value="7">7일</option><option value="30">30일</option>' +
     '<option value="60">60일</option><option value="90" selected>90일</option></select></label>' +
     '<div id="recentOperationSummary" aria-live="polite"></div></details></div>' +
     '<section class="coverage-detail" id="coverageDetail" aria-label="우편번호 구역 상세" hidden></section></div></aside>' +
@@ -132,7 +132,11 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       if (!report.ok || !report.centers || report.days!==Number(days)) throw Error('RECENT_OPERATION_WINDOW_UNAVAILABLE');
       if (request.signal.aborted || recentOperationRead!==request || !active) return;
       const selected=center==='all'?['osan','yeongnam','honam']:[center];
-      target.replaceChildren(node('p',report.startDate+' ~ '+report.endDate),...selected.map(key=>{
+      const dates=[node('p','조회 기간 '+report.startDate+' ~ '+report.endDate)];
+      if (!report.sourceUnavailable && report.publishedThrough) {
+        dates.push(node('p','운영이력 원장 기준 '+report.publishedThrough+'. 지도 색상과 구역 집계는 별도 게시본 기준입니다.'));
+      }
+      target.replaceChildren(...dates,...selected.map(key=>{
         const {confirmedDays,calendar=[]}=report.centers[key];
         if (report.sourceUnavailable) return node('p',centerNames[key]+' · 배송이력 확인 필요');
         const observed=new Set(calendar.flatMap(day=>Object.values(day.sources).flatMap(source=>source.evidence??[])));
@@ -211,7 +215,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       unverifiedScopedAreas: summary.unverifiedScopedAreas });
     if (sameScope) return;
     find('postalOverviewTitle').textContent = data.center === 'all' ? '전국 집계' : centerNames[data.center] + '센터 집계';
-    find('postalPeriod').textContent = statsText(data.period) + ' · ' + centerNames[data.center];
+    find('postalPeriod').textContent = '지도 색상·구역 집계 기준 ' + statsText(data.period) + ' · ' + centerNames[data.center];
     find('postalObserved').textContent = (observed ? '배송 ' + completeness.observed + '/' + data.period.days + '일 관측'
       : '배송 자료 미확인') + ' · 미확인 ' + completeness.missing.length + '일';
     const kpis = { ...summary, delivered: summary.high + summary.low };
@@ -282,7 +286,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
         selectedArea = { id:selectedArea.id };
         areaDetails.open(selectedArea,scope());
       }
-      const stale = data.stale ? '마지막 확인 ' + data.period.end + ' 기준' : '';
+      const stale = data.stale ? '지도 집계 게시본 ' + data.period.end + ' 기준' : '';
       const missing = !hasDeliveryEvidence(data) ? '선택 범위의 배송 자료 미확인' : '';
       message([stale, missing].filter(Boolean).join(' · '));
     } catch (error) {
