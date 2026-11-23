@@ -38,7 +38,7 @@ const service=createRoadRouteService({env:{OPSMAP_ROAD_ROUTE_ENABLED:'1',KAKAO_R
  const sections=points.slice(0,-1).map((p,i)=>({distance:100,duration:60,roads:[{vertexes:[...p,p[0]+.0001,p[1]+.0002,...points[i+1]]}]}));
  return new Response(JSON.stringify({routes:[{result_code:0,summary:{distance:sections.length*100,duration:sections.length*60},sections}]}),{headers:{'content-type':'application/json'}});
 }});
-const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','opsmap-daily.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
+const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','new-area-detail-panel.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','opsmap-daily.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
 const fixture=`window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false,centers:[{id:'osan',verified:true,sourceVersion:'SYNTHETIC',lat:37,lng:127}]};window.__routeLines=new Set();
 document.body.dataset.mapStaffState='authenticated';window.MapStaffEntry={status(){},registerPurge(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}

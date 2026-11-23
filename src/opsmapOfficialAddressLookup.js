@@ -1,4 +1,6 @@
 import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
 
 export const OFFICIAL_BUSINESS_SOURCE = 'https://www.data.go.kr/data/15083033/fileData.do';
 export const OFFICIAL_BUILDING_SOURCE = 'https://www.data.go.kr/data/15156424/fileData.do';
@@ -21,6 +23,7 @@ const aliases = new Map(Object.entries({
 export function officialAddressKey(value) {
   if (typeof value !== 'string' || value.length > 200) return null;
   const normalized = value.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ')
+    .replace(/(\d)\s*[-‐‑‒–—−]\s*(?=\d)/g, '$1-')
     .replace(/(대로|로)\s+(\d+(?:번)?길)/g, '$1$2');
   if (/^\d{10}[12](?!0000)\d{8}$/.test(normalized)) return 'pnu:'+normalized;
   const road = /^.*?[가-힣0-9·.]+(?:대로|로|길)\s*(?:지하\s*)?\d+(?:-\d+)?(?=$|[\s,(\[])/;
@@ -65,9 +68,36 @@ export function createOfficialAddressLookup(buffer, {sha256: expected, allowMixe
   }});
 }
 
+function readStageAddressAsset(env,variable,file,create,{readFile=readFileSync,onReject=()=>{}}={}) {
+  if (env.RENDER_SERVICE_ID!==STAGE_SERVICE || env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN) return null;
+  const expected=env[variable];
+  if (!expected) return null;
+  try {
+    if (!digest.test(expected)) throw Error('OFFICIAL_ADDRESS_INDEX_DIGEST');
+    return create(readFile(file),{sha256:expected});
+  } catch {
+    onReject();
+    return null;
+  }
+}
+
+export function readStageOfficialAddressSupplement(env,options) {
+  return readStageAddressAsset(env,'OPSMAP_STAGE_OFFICIAL_ADDRESS_SUPPLEMENT_SHA256',
+    '/etc/secrets/opsmap-stage-official-address-supplement-v1.json',createOfficialAddressLookup,options);
+}
+
+export function readStageOfficialAddressReview(env,options) {
+  return readStageAddressAsset(env,'OPSMAP_STAGE_OFFICIAL_ADDRESS_REVIEW_SHA256',
+    '/etc/secrets/opsmap-stage-official-address-review-v1.json',
+    (bytes,settings)=>{
+      const review=createOfficialAddressReview(bytes,{...settings,allowExact:false});
+      return {lookup(query){const found=review.lookup(query);return found&&{...found,reviewOnly:true};}};
+    },options);
+}
+
 // Postal building identifiers were matched offline. A postal address without a
 // verified building position must never be turned into a pin automatically.
-export function createOfficialAddressReview(buffer, {sha256: expected} = {}) {
+export function createOfficialAddressReview(buffer, {sha256: expected, allowExact = true} = {}) {
   if (!Buffer.isBuffer(buffer) || buffer.length > 256 * 1024 || !digest.test(expected || '') ||
       sha256(buffer) !== expected) throw Error('OFFICIAL_ADDRESS_REVIEW_DIGEST');
   const value = JSON.parse(buffer);
@@ -78,7 +108,7 @@ export function createOfficialAddressReview(buffer, {sha256: expected} = {}) {
     !/[\r\n\x00-\x1f]/.test(input) && !!officialAddressKey(input);
   for (const {key, road, lot, kind, points} of value.rows) {
     if (!digest.test(key || '') || rows.has(key) || !publicAddress(road) || !publicAddress(lot) ||
-        !Array.isArray(points) || !(kind === 'EXACT' && points.length === 1 ||
+        !Array.isArray(points) || !(allowExact && kind === 'EXACT' && points.length === 1 ||
         kind === 'CHOOSE' && points.length >= 2 && points.length <= 12 ||
         kind === 'MANUAL' && !points.length)) throw Error('OFFICIAL_ADDRESS_REVIEW_ROW');
     const seen = new Set();

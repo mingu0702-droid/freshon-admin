@@ -38,7 +38,7 @@ import {createStageWmsDispatchExportReader} from './opsmapWmsDispatchExport.js';
 import {createStageDriverContacts} from './stageDriverContacts.js';
 import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,vehicleId} from './datedDeliveryContract.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
-import {createOfficialAddressLookup,createTemporaryOfficialAddressLookup} from './opsmapOfficialAddressLookup.js';
+import {createOfficialAddressLookup,createTemporaryOfficialAddressLookup,readStageOfficialAddressSupplement,readStageOfficialAddressReview} from './opsmapOfficialAddressLookup.js';
 import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from './opsmapDurableGeneration.js';
@@ -264,6 +264,10 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return scheduledRefresh;
   }
   const officialIndex = createTemporaryOfficialAddressLookup({sha256:stage.OPSMAP_STAGE_OFFICIAL_ADDRESS_INDEX_SHA256});
+  const supplementalOfficialIndex=readStageOfficialAddressSupplement(stage,{onReject:()=>
+    console.warn(JSON.stringify({component:'stage-official-address-supplement',state:'REJECTED'}))});
+  const supplementalOfficialReview=readStageOfficialAddressReview(stage,{onReject:()=>
+    console.warn(JSON.stringify({component:'stage-official-address-review',state:'REJECTED'}))});
   let preservedOfficialIndex = null, coverageOfficialIndex = null;
   if(stage.RENDER_SERVICE_ID===STAGE_SERVICE) {
     try {
@@ -284,19 +288,22 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   }
   const readOfficialIndex=()=>{
     const temporary=officialIndex.active();
-    if(!coverageOfficialIndex)return temporary || preservedOfficialIndex;
-    return {lookup:query=>temporary?.lookup(query)??preservedOfficialIndex?.lookup(query)??coverageOfficialIndex.lookup(query)};
+    if(!temporary&&!preservedOfficialIndex&&!coverageOfficialIndex&&!supplementalOfficialIndex&&!supplementalOfficialReview)return null;
+    return {lookup:query=>temporary?.lookup(query)??preservedOfficialIndex?.lookup(query)??
+      coverageOfficialIndex?.lookup(query)??supplementalOfficialIndex?.lookup(query)??supplementalOfficialReview?.lookup(query)??null};
   };
   const geocodeBudgetFile = 'geocode-budget-v1.json';
   const geocodeBudget = stageAddressApproved ? createStageGeocodeBudgetStore({repo,token:stage.GITHUB_TOKEN,branch:pinsBranch,
     fetchImpl:stageGithub(fetchImpl,{files:[geocodeBudgetFile],branch:pinsBranch,writable:geocodeBudgetFile})}) : null;
   const addressLookupService = createKakaoCoordinateConnection({env:stage,fetchImpl,store:geocodeBudget,
     stageAddressApproved,independentAddressLookup:()=>{
-      const index=readOfficialIndex();
-      return validation.active()?.bundledAddress || (index&&{lookup(query){
-        const point=index.lookup(query);
-        return point?.coordinateKind&&point.coordinateKind!=='BUILDING'?null:point;
-      }});
+      const bundled=validation.active()?.bundledAddress,index=readOfficialIndex();
+      return (bundled||index)?{lookup(query){
+        const existing=bundled?.lookup(query);
+        if(existing&&existing.kind!=='MANUAL')return existing;
+        const point=index?.lookup(query);
+        return point&&(!point.coordinateKind||point.coordinateKind==='BUILDING')?point:existing??null;
+      }}:null;
     }});
   let fallbackCoverageDirectory;
   let coverageState = readShadowDirectory || stage.OPSMAP_SHADOW_DATA_DIR ? 'ready' : 'unavailable';
@@ -537,6 +544,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
         driverContacts.mount(binding,{readBaseVehicles:codes=>base.get(codes),
           readDatedAssignment:readDatedDelivery.readDriverAssignment,readVerifiedVehicleRegistration});
         mountStageAbValidation(router,{...binding,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,
+          readAddressMaster:()=>nationalRegistry?.read(),
           readBaseVehicles:codes=>base.get(codes),externalAddressLookup:stageAddressApproved?addressLookupService:null});
         if (dailyMaster) router.get('/api/map-phase2b/private/fixed-master-observation',requireStaff,async(req,res)=>{
           const {date,customerCodes}=req.query;

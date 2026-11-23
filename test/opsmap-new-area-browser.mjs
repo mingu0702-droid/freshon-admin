@@ -29,8 +29,9 @@ try{
   page=await context.newPage();page.setDefaultTimeout(5000);page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!==origin){blocked.push(u.hostname);return route.abort();}return route.continue();});
   await page.goto(origin);
-  await page.evaluate(()=>{window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};window.VEHICLE_AREA_DATA={vehicles:[]};window.KakaoMapsAdapter={ready:()=>new Promise(()=>{})};window.kakaoGeocoder={addressSearch(){throw Error('EXTERNAL_GEOCODING_FORBIDDEN');}};});
-  for(const name of ['phase2b-ui-helpers.js','map-period-ui.js','manual-waypoints.js','new-area-requests.js'])await page.addScriptTag({path:path.join(base,name)});
+  await page.evaluate(()=>{document.body.dataset.mapStaffState='authenticated';window.MapStaffEntry={registerPurge(){},status(){}};
+    window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};window.VEHICLE_AREA_DATA={vehicles:[]};window.KakaoMapsAdapter={ready:()=>new Promise(()=>{})};window.kakaoGeocoder={addressSearch(){throw Error('EXTERNAL_GEOCODING_FORBIDDEN');}};});
+  for(const name of ['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','manual-waypoints.js','new-area-requests.js','opsmap-daily.js','new-area-detail-panel.js','new-area-row-edit.js'])await page.addScriptTag({path:path.join(base,name)});
   await page.evaluate(()=>import('/opsmap/fixed-delivery-weekdays.mjs').then(()=>true));
   await page.addScriptTag({path:path.resolve('node_modules/xlsx/dist/xlsx.full.min.js')});
   const runtime=fs.readFileSync(path.join(base,'map-phase2b-runtime.js'),'utf8');
@@ -62,7 +63,7 @@ try{
     const csvText=fs.readFileSync(path.join(artifacts,'result-'+width+'.csv'),'utf8');assert.match(csvText,/검토필요/);assert.match(csvText,/S990001/);assert.match(csvText,/합성 고객\n상세주소/);
     assert.match(csvText,/2026-09-24 · 최신 배정 미확인/);
     const excelPending=page.waitForEvent('download');await page.locator('#exportNewAreaExcel').click();const excel=await excelPending;await excel.saveAs(path.join(artifacts,'result-'+width+'.xlsx'));
-    const book=XLSX.readFile(path.join(artifacts,'result-'+width+'.xlsx'));const cells=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{header:1});assert.equal(cells.length,4);assert.equal(cells[1][0],'S990001');assert.equal(cells[1][2],'O');assert.match(cells[1].at(-1),/500m 이내/);
+    const book=XLSX.readFile(path.join(artifacts,'result-'+width+'.xlsx'));const cells=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{header:1});assert.equal(cells.length,4);assert.equal(cells[1][0],'S990001');assert.equal(cells[1][2],'O');assert.match(cells[1][cells[0].indexOf('판정 근거')],/500m 이내/);
     assert.equal(cells[1][cells[0].indexOf('배차표 기준일·확인 상태')],'배차표 기준일 2026-09-24 · 최신 배정 미확인');
     await page.locator('[data-judged="1"]').click();assert.equal(await page.locator('#manualLabel').inputValue(),'대구광역시 동구 합성로 2');assert.equal(await page.locator('#manualLat').inputValue(),'');
     await page.locator('#manualLat').fill('35.9');await page.locator('#manualLng').fill('128.65');await page.locator('#manualAdd').click();
@@ -107,7 +108,7 @@ try{
     newAreaBrowser.enableMapClick();
     window.manualLookups=[];
     newAreaBrowser.setJudge(row=>{
-      manualLookups.push(row.customer);
+      manualLookups.push({address:row.address,customer:row.customer});
       const candidates=row.customer==='후보 확인'?[{address:'합성 후보 하나',lat:37.2,lng:127},{address:'합성 후보 둘',lat:37.3,lng:127.1}]:undefined;
       return {...row,decision:'검토',lookupStatus:'DEFERRED',candidates};
     });
@@ -138,7 +139,20 @@ try{
     await first.waitFor();
     assert.deepEqual(await page.evaluate(()=>manualLookups),[]);
     assert.deepEqual(await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults.map(row=>row.customer)),['지도 선택','후보 확인']);
-    result.checks.push({width,manualMapClick:true,manualCandidate:true,cancelPreservesRows:true,rerunPreservesChoices:true});
+    const edit=page.locator('[data-area-index="1"] .areaRowEdit');
+    await edit.locator('summary').click();
+    await edit.getByRole('textbox',{name:'주소',exact:true}).fill('경기도 화성시 합성로 19');
+    await edit.getByRole('textbox',{name:'고객정보',exact:true}).fill('수정한 고객');
+    await edit.getByRole('button',{name:'이 행 재조회'}).click();
+    await page.waitForFunction(()=>MapUiLocalBridge.state.newAreaResults[1]?.address==='경기도 화성시 합성로 19');
+    assert.equal(await page.evaluate(()=>MapUiLocalBridge.state.newAreaResults[0]?.coordinateSource),'MAP_CLICK_TEMPORARY');
+    assert.deepEqual(await page.evaluate(()=>manualLookups),[{address:'경기도 화성시 합성로 19',customer:'수정한 고객'}]);
+    const editedCsvEvent=page.waitForEvent('download');await page.locator('#exportNewAreaCsv').click();
+    const editedCsv=await editedCsvEvent;
+    const editedText=fs.readFileSync(await editedCsv.path(),'utf8');
+    assert.match(editedText,/경기도 화성시 합성로 2","지도 선택/);
+    assert.match(editedText,/경기도 화성시 합성로 19","수정한 고객/);
+    result.checks.push({width,manualMapClick:true,manualCandidate:true,cancelPreservesRows:true,rerunPreservesChoices:true,singleRowEdit:true,editedCsv:true});
     await page.screenshot({path:path.join(artifacts,'manual-results-'+width+'.png'),fullPage:true});
     await page.locator('#clearNewAreaBatch').click();
   }

@@ -15,9 +15,9 @@
   let temporaryDetailPoint=null,searchTemporaryRadius=null,searchTemporaryClick=null,temporaryRemoveFrame=null;
   let temporaryDistance=null,temporaryDistancePending=false;
   let searchSelectedOverlay=null;
-  let newAreaPositionControl=null;
+    let newAreaPositionControl=null;
   let addressCandidateOverlays=[];
-  let temporaryAreaFacts=null, newAreaVehicleKey=null, newAreaObservedFlight=null;
+  let temporaryAreaFacts=null, newAreaVehicleKey=null, newAreaObservedFlight=null, newAreaDatedFlight=null;
   let temporaryAreaSourceVersion=null, temporaryAreaDispatchMeta=null, temporaryAreaEvidence=null;
   let newAreaDispatchOverlays=new Map(),dispatchBadgeFrame=null;
   let clusterPanel=null,drilledBaseVehicle='';
@@ -72,7 +72,7 @@
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();
     indexedRows=null;pointIndex=null;baseVehicleStatus='LOADING';baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
     customerRegistrySource='';customerRegistryCheckedAt='';customerRegistrySourceCheckedAt='';
-    searchIndex=pendingSearchIndex=searchFlight=stageAddressHashIndex=newAreaObservedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
+    searchIndex=pendingSearchIndex=searchFlight=stageAddressHashIndex=newAreaObservedFlight=newAreaDatedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
     SOURCE={vehicles:[]};state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
     clearSelection();clearMap();updateOperationMetrics(null);renderPeriodStoreList([]);resetRoadRoute();clearNewAreaBatch();renderManualDraft();
     for(const selector of ['#results','#runList','#addressJudgeResults','#periodDriver','#vehicleList','#navSuggestions','#operationsPanel'])$(selector)?.replaceChildren();
@@ -474,18 +474,9 @@
     return selected;
   }
   function recentOperationsNotice() {
-    if (recentOperationsState === 'loading') return '운영 이력 확인 중 · 등록 매장 표시';
-    const labels={osan:'오산',yeongnam:'영남',honam:'호남'};
-    const scope=state.centerFilter ? [state.centerFilter] : Object.keys(labels);
-    const summaries=scope.map(center=>{
-      const {observedDates,confirmedDays}=window.MapRecentOperations.recentCoverage(recentOperationsReport,center);
-      const prefix=labels[center]||'센터 미분류';
-      return prefix+(observedDates ? ' 자료 '+observedDates+'/90일 · 전수 확인 '+confirmedDays+'/90일' : ' 0/90일 · 이력 미확인');
-    });
-    if (recentOperationsState === 'stale') summaries.unshift('이전 확인 자료');
-    else if (recentOperationsReport?.staleWindow) summaries.unshift(recentOperationsReport.endDate.slice(5).replace('-','.')+'까지 확인');
-    if (recentOperationsOnly()) summaries.push('이력 미확인 매장 포함');
-    return summaries.join(' · ');
+    if (!recentOperationsOnly()) return '';
+    const {state:coverage}=window.MapRecentOperations.recentCoverage(recentOperationsReport,state.centerFilter);
+    return recentOperationsState==='ready'&&coverage==='complete'?'':'배송이력 확인 필요';
   }
   function syncRecentOperationsUi() {
     const controls = $('#recentOperationsControls');
@@ -497,9 +488,9 @@
       button.setAttribute('aria-pressed', String(button.dataset.recentOperationsScope === recentOperationsScope));
     }
     const status = $('#recentOperationsStatus');
-    status.textContent = recentOperationsNotice();
-    status.dataset.state = recentOperationsState;
-    status.title = recentOperationsReport ? recentOperationsReport.startDate + ' ~ ' + recentOperationsReport.endDate : '';
+    const notice=recentOperationsNotice();
+    status.textContent=notice;
+    status.hidden=!notice;
   }
   function refreshRecentOperationDetail() {
     if (!usesRecentOperations() || !state.selected?.customerCode || state.selected.virtual) return;
@@ -508,8 +499,8 @@
     if (!date || !evidence) return;
     const recent = window.MapRecentOperations.recentDetail(recentOperationsReport, recentOperationsCenter(state.selected),
       state.selected.customerCode, recentOperationsState === 'loading', recentOperationsState === 'ready');
-    date.textContent = recent.date;
-    evidence.textContent = recent.evidence;
+    date.textContent = recent.date==='90일 전수 확인'?'최근 90일':recent.date;
+    evidence.textContent = recent.evidence==='이력 미확인'?'배송이력 확인 필요':recent.evidence;
   }
   function refreshRecentOperations() {
     if (!usesRecentOperations() || document.body.dataset.mapStaffState !== 'authenticated' ||
@@ -907,7 +898,8 @@
         for(const key of retainedDrivers)if(!drivers.has(key))$('#periodDriver').add(new Option(key+' · 기간 내 기사 근거 미확인',key));
         [...$('#periodDriver').options].forEach(option=>option.selected=retainedDrivers.length?retainedDrivers.includes(option.value):option.value==='');
         await loadBaseMap();
-        if(payload.meta.segmented)$('#periodIdentity').textContent=`선택 ${start} ~ ${end} · 이력 표시 ${payload.meta.displayStartDate} ~ ${payload.meta.displayEndDate} · ${payload.meta.aggregateComplete?'선택 기간 집계 완료 · 상세 이력은 페이지별':'페이지 집계만 완료 · 전체 기간 집계 미완료'}${payload.meta.currentMasterMissingCount?' · 현재 매장정보 미확인 '+payload.meta.currentMasterMissingCount+'건 (좌표 임의 생성 없음)':''}`;
+        if(payload.meta.segmented)$('#periodIdentity').textContent=
+          `${start} ~ ${end}${payload.meta.aggregateComplete?'':' · 배송이력 확인 필요'}`;
       } catch (error) {
         if (id === periodRequestId && !isSilentRequestError(error)) {
           setPeriodViewState("error");
@@ -2250,15 +2242,17 @@
   }
 
   function nearbyVerifiedStores(point) {
-    if(nearbyStoreIndex?.source!==allStores||nearbyStoreIndex.version!==markerSourceVersion){
+    const generation=snapshotMeta?.sourceGeneration;
+    const registered=stageAddressBatchEnabled()&&generation?newAreaLocations(newAreaSourceVersion(),generation).locationIndex:null;
+    if(!registered&&(nearbyStoreIndex?.source!==allStores||nearbyStoreIndex.version!==markerSourceVersion)){
       const rows=allStores.filter(row=>(!row.staffRegistrationOnly||row.coordinateSource==='STAGE_REGISTERED_OFFICIAL')&&
         row.customerRegistryStatus!=='DELETED'&&hasVerifiedStageStorePoint(row));
       nearbyStoreIndex={source:allStores,version:markerSourceVersion,index:MapPeriodUi.spatialIndex(rows)};
     }
     const latitude=0.005,longitude=latitude/Math.cos(point.lat*Math.PI/180);
-    return nearbyStoreIndex.index.query({
+    return (registered||nearbyStoreIndex.index).query({
       south:point.lat-latitude,north:point.lat+latitude,west:point.lng-longitude,east:point.lng+longitude
-    }).filter(row=>Phase2bUi.distanceKm(point,row)<=0.5);
+    }).filter(row=>hasVerifiedStageStorePoint(row)&&Phase2bUi.distanceKm(point,row)<=0.5);
   }
 
   function detailedMarkerRows(viewport,extra,assignmentMode,neighborhood) {
@@ -3080,11 +3074,10 @@
 
   async function renderNearest(point) {
     if (!point.virtual) return;
-    if (!dateReady) { $("#nearWrap").textContent = "기준일 편성 확인 전 주변호차 판단 보류"; return; }
     const rows = Phase2bUi.nearbyVehicles(point, comparisonStores(), 30);
     $("#nearWrap").innerHTML = rows.length
       ? `<details class="detailMore"><summary>30km 주변 호차 ${rows.length}대 · 참고용</summary>${rows.map((row) => `<div class="judgeCard"><b>${esc(vehicleLabel(row.vehicle))}</b> · ${formatDistance(row.distance)}<br>최근접 배송점 ${esc(row.customerName)}</div>`).join("")}</details>`
-      : `<div class="hint">30km 내 주변 호차가 없습니다.</div>`;
+      : `<div class="hint">30km 내 확인된 기준호차가 없습니다.</div>`;
   }
 
   function renderRunList() {
@@ -3166,7 +3159,6 @@
   function showNearbyReference(point) {
     closeClusterPanel();
     if(point?.searchTemporary){openTemporaryPin(point);return;}
-    if (!dateReady) { selectStore(point, null, false); return; }
     const retained = state.currentRows.filter((row) => !row.nearbyVehicle && !row.virtual);
     const routes = state.routeRows.slice();
     const nearby = Phase2bUi.nearbyVehicles(point, comparisonStores(), 30).map((row) => ({ ...row, nearbyVehicle: true }));
@@ -3678,7 +3670,7 @@
     if(!point||point.verifiedAddressOnly){
       waitForSearchMapPoint(point?.officialRoad||text,{owner,customerMatchState,
         reason:point?.verifiedAddressOnly?'공식 주소 확인 · 좌표 미확인':unresolvedReason||(!lookupAllowed?'기존 매장 조회 미확인':config?.allowExternalAddressLookup!==true&&config?.addressLookupReason
-          ?NewAreaRequests.message({code:config.addressLookupReason}):place?'일치하는 상호 없음':'일치하는 주소 위치 없음')});trace?.finish('unresolved');return;
+          ?NewAreaRequests.message({code:config.addressLookupReason}):place?'일치하는 상호 없음':'현재 연결된 자료에서 주소 위치를 찾지 못했습니다.')});trace?.finish('unresolved');return;
     }
     const choose=candidate=>{
       if(!active())return;
@@ -4022,8 +4014,8 @@
     $('#detailSection').classList.add('open');$('#detail').className='detailCard';
     $('#detailSection').setAttribute('data-temporary-inspection','');
     const canRemove=temporaryPins.get(row.temporaryKey)?.point===row;
-    const removeAction=canRemove?'<button type="button" id="removeTemporaryPin" class="tiny">임시 핀 삭제</button>':'';
-    $('#detail').innerHTML=`<div class="detailHead"><button id="detailClose" class="detailClose" aria-label="닫기">×</button><div class="code">임시 위치</div><div class="storeName">${esc(row.address||row.customerName||'선택 위치')}</div></div><div class="detailBody"><p class="hint">저장하지 않는 임시 핀입니다.${locationBasis?' · '+locationBasis:''}</p>${navigationPointActions(row)}${temporaryDistanceActions()}<div class="temporaryPinActions">${removeAction}${state.mode==='BASE_60D'?'<button type="button" id="searchPointToBatch" class="tiny">신규권역 일괄조회에 추가</button>':''}</div><label class="areaRadius">인근 호차 반경 <select id="newAreaSingleRadius"><option value="30">30km</option><option value="40">40km</option><option value="50">50km</option></select></label><div id="nearWrap" aria-live="polite">주변 배송 근거 확인 중</div></div>`;
+    $('#detail').innerHTML=window.MapNewAreaDetailPanel.shell({address:row.address||row.customerName,locationBasis,canRemove,
+      allowBatch:state.mode==='BASE_60D',navigationMarkup:navigationPointActions(row),distanceMarkup:temporaryDistanceActions()});
     $('#detailClose').onclick=closeMapDetail;
     if(canRemove)$('#removeTemporaryPin').onclick=()=>removeTemporaryPin(row);
     bindTemporaryDistanceActions();
@@ -4080,7 +4072,8 @@
   function bindTemporaryDistanceActions() {
     const result=$('#detail [data-temp-distance-result]'),clear=$('#detail [data-temp-distance-clear]');
     if(!result||!clear)return;
-    result.textContent=temporaryDistance?temporaryDistance.text:'매장 핀을 누르면 임시 위치에서의 직선거리를 표시합니다.';
+    result.textContent=temporaryDistance?.text||'';
+    result.hidden=clear.hidden=!temporaryDistance;
     clear.disabled=!temporaryDistance;clear.onclick=clearTemporaryDistance;
   }
 
@@ -4115,7 +4108,7 @@
     temporaryDistance={line,label,path,text};bindTemporaryDistanceActions();positionTemporaryDistanceLabel();
   }
 
-  function renderSearchTemporaryNearby(point,{loadDispatch=true,fit=false}={}) {
+  function renderSearchTemporaryNearby(point,{loadDispatch=true,loadObserved=true,fit=false}={}) {
     if(!point?.searchTemporary||point!==state.virtual)return;
     const sourceVersion=newAreaSourceVersion();
     if(temporaryAreaSourceVersion!==sourceVersion){
@@ -4136,26 +4129,35 @@
     if(!selected)newAreaVehicleKey=null;
     const panel=temporaryDetailPoint===point?$('#nearWrap'):null;
     if(panel){
-      const customerStatus=({NOT_IN_MASTER:'고객 원장 미등록',REGISTERED:'등록 매장 주소'})[point.customerMatchState]||'고객 등록 여부 미확인';
-      const wasOpen=panel.querySelector('details')?.open??true;
-      const observedOpen=panel.querySelector('.areaObservedRoutes')?.open??false;
-      panel.innerHTML=`<div class="areaInquiry">${customerStatus}${newAreaSummaryMarkup(facts)}
-        <details class="areaVehicles"${wasOpen?' open':''}><summary>${newAreaVehicleTitle(facts,newAreaRadius)}</summary>
-          ${newAreaVehicleContent(facts,newAreaRadius,true)}<p class="areaInquiryHint" data-area-dispatch-stop>${selected?esc(areaDispatchStopLabel(selected)):''}</p></details>
-          ${newAreaObservationMarkup(observedOpen)}</div>`;
-      bindNewAreaObservation(panel,facts);
+      const observed=newAreaObservedFlight?.generation===snapshotMeta?.sourceGeneration?newAreaObservedFlight?.value:null;
+      const recent=observedNewAreaVehicles(facts,observed,newAreaRadius).slice(0,5).map(MapPeriodUi.areaVehicleLabel);
+      const expanded={stores:panel.querySelector('[data-nearby-stores]')?.open,vehicles:panel.querySelector('[data-nearby-vehicles]')?.open};
+      panel.innerHTML=window.MapNewAreaDetailPanel.nearby({facts,groups,radius:newAreaRadius,activeIndex:groups.indexOf(selected),recent,expanded});
+      panel.querySelectorAll('[data-area-nearby-code]').forEach(button=>button.onclick=()=>{
+        const store=temporaryAreaEvidence?.locationIndex.byCode.get(button.dataset.areaNearbyCode);
+        if(!store||point!==state.virtual)return;
+        measureTemporaryDistance(point,store);
+        selectStore({...store},null,true);
+      });
       panel.querySelector('[data-area-dispatch-overview]')?.addEventListener('click',()=>{
-        newAreaVehicleKey=null;renderSearchTemporaryNearby(point,{loadDispatch:false,fit:true});
+        newAreaVehicleKey=null;renderSearchTemporaryNearby(point,{loadDispatch:false,loadObserved:false,fit:true});
       });
       panel.querySelectorAll('[data-area-dispatch-vehicle]').forEach(button=>button.onclick=()=>{
         selectNewAreaDispatchVehicle(point,groups[Number(button.dataset.areaDispatchVehicle)]);
       });
+      if(loadObserved&&!observed&&stageAddressBatchEnabled()&&snapshotMeta?.sourceGeneration){
+        void readNewAreaObservations().then(result=>{
+          if(result&&point===state.virtual&&temporaryDetailPoint===point){
+            renderSearchTemporaryNearby(point,{loadDispatch:false,loadObserved:false});
+          }
+        });
+      }
     }
     renderNewAreaDispatchMap(point,groups,{fit});
     const pending=loadDispatch&&prepareNewAreaDispatch();
     if(pending)void pending.then(()=>{
       if(point!==state.virtual)return;
-      renderSearchTemporaryNearby(point,{loadDispatch:false});
+      renderSearchTemporaryNearby(point,{loadDispatch:false,loadObserved:false});
     });
   }
 
@@ -4375,6 +4377,7 @@
     deferMapAddressWork();
 
     const period = state.mode === "BASE_60D";
+    const partialPeriodEmpty=period&&!stores.length&&periodMeta?.segmented===true&&periodMeta.aggregateComplete!==true;
     if (period) {
       setPeriodViewState(generalAllStores && snapshotReadState === 'error' ? 'error' : stores.length ? "ready" : "empty");
       const subject = periodBasis === "driver" ? ($("#periodDriver").selectedOptions[0]?.textContent || "전체 기사") : periodVehicleScope === "all" ? "전체 호차" : selected.length === 1 ? vehicleLabel(selected[0]) : selected.length ? selected.length + "개 호차" : "호차 선택 없음";
@@ -4389,9 +4392,11 @@
             stores.filter(hasMapCoordinates).length.toLocaleString('ko-KR') + '곳')
           : recentOperationsNotice();
       }
+      if(partialPeriodEmpty)$('#periodIdentity').textContent='배송이력 확인 필요';
     }
     $("#mapStatusTitle").textContent = period ? "매장·권역 지도" : "일자별 운행";
-    $("#mapStatusSub").textContent = period ? `${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 배송지' : (baseVehicleMeta?.stale?'이전 기준호차':'기준호차')}`
+    $("#mapStatusSub").textContent = period ? (partialPeriodEmpty?'배송이력 확인 필요':
+      `${stores.length}개 매장 · ${periodBasis === 'driver' ? '선택 기사 배송지' : (baseVehicleMeta?.stale?'이전 기준호차':'기준호차')}`)
       : dailyMeta?.roster&&!operationStops.length&&!verifiedEmptyDailyScope()?`${state.selectedDate} · 선택 범위 착지 수 미확인`:
         `${state.selectedDate} · ${stores.length}개 매장 · 해당일 편성`;
     if(period) $("#freshnessState").textContent=recentPeriodNotice||(['LAST_VERIFIED_RETAINED','UNAVAILABLE'].includes(snapshotMeta?.recovery)
@@ -4537,18 +4542,8 @@
   }
 
   function comparisonStores() {
-    if (!periodMeta?.complete || periodMeta.startDate !== state.rangeStart || periodMeta.endDate !== state.rangeEnd) return [];
-    return periodRows.map(row => ({...row,
-      lat:numberOrNull(row.lat)??coordinateByCode.get(row.customerCode)?.lat,
-      lng:numberOrNull(row.lng)??coordinateByCode.get(row.customerCode)?.lng,
-      vehicle:baseVehicles.get(row.customerCode)?.baseVehicle||''}));
-  }
-  function nearestStores(point, limit = 8) {
-    return comparisonStores().map((row) => ({ ...row, distance: distanceKm(point, row) })).filter((row) => Number.isFinite(row.distance)).sort((a, b) => a.distance - b.distance).slice(0, limit);
-  }
-
-  function withinRadius(point, radiusKm) {
-    return comparisonStores().map((row) => ({ ...row, distance: distanceKm(point, row) })).filter((row) => Number.isFinite(row.distance) && row.distance <= radiusKm).sort((a, b) => a.distance - b.distance);
+    const {locationRows,dispatchByCode}=newAreaEvidence();
+    return locationRows.map(row=>({...row,vehicle:dispatchByCode.get(row.customerCode)?.baseVehicle||''}));
   }
 
   function facilityReview(text) { return /(백화점|대형마트|쇼핑몰|복합몰|아울렛|몰\b|지하\s*(주차장|하역장|하역)|차량\s*(높이|진입)|탑차)/i.test(String(text || "")); }
@@ -4575,7 +4570,7 @@
   }
 
   function parseNewArea(inputId) {
-    return MapPeriodUi.parseAreaInput($(inputId).value);
+    return NewAreaRequests.parseAreaInput($(inputId).value,MapPeriodUi.parseAreaInput);
   }
 
   function validNewAreaInput(value) {
@@ -4732,7 +4727,10 @@
       });
       if(proof.vehicleCounts&&rows.length!==proof.vehicleCounts.rows)return null;
       return {rows,unknownDays:proof.unknownDays,unverified:proof.unverifiedVehicleSources,byPoint:new WeakMap()};
-    }).catch(()=>null).then(result=>{if(!result&&newAreaObservedFlight===owner)newAreaObservedFlight=null;return result;});
+    }).catch(()=>null).then(result=>{
+      if(newAreaObservedFlight===owner){if(result)owner.value=result;else newAreaObservedFlight=null;}
+      return result;
+    });
     newAreaObservedFlight=owner;
     return owner.task;
   }
@@ -4762,6 +4760,37 @@
       body.innerHTML=`<p class="areaInquiryHint">${newAreaRadius}km · 실제 완료 배송 ${vehicles.length}호차${scope?' · '+esc(scope):''}</p>
         <ul class="areaRouteList">${vehicles.map(item=>`<li>${esc(MapPeriodUi.areaVehicleLabel(item))} · 직선 ${MapPeriodUi.areaDistance(item.distance)} · ${esc(MapPeriodUi.formatDeliveryWeekdays(item.weekdays))}</li>`).join('')}</ul>
         <p class="areaInquiryHint">관측 요일이며 정기 배차 일정은 별도 확인이 필요합니다.</p>`;
+    };
+    details.ontoggle=render;
+    if(details.open)void render();
+  }
+
+  function bindNewAreaDatedDispatch(parent,row) {
+    const details=parent.querySelector?.('.areaDatedDispatch');
+    if(!details)return;
+    const render=async()=>{
+      if(!details.open)return;
+      const date=$('#newAreaApplyDate').value,generation=snapshotMeta?.sourceGeneration;
+      const body=details.lastElementChild;
+      body.textContent=!date?'적용일을 선택해 주세요.':!generation?'현재 지도 기준의 적용일 배차 미확인':date+' 확정 배차·배송완료 기록 조회 중';
+      if(!date||!generation)return;
+      const key=generation+'|'+date;
+      if(newAreaDatedFlight?.key!==key){
+        const flight={key};
+        const params=new URLSearchParams({view:'day',date,generation});
+        flight.task=fetchJson('/api/map-phase2b/private/stage-nearby-evidence?'+params,
+          {channel:'area-dated-dispatch',timeout:12000}).catch(()=>{
+            if(newAreaDatedFlight===flight)newAreaDatedFlight=null;
+            return null;
+          });
+        newAreaDatedFlight=flight;
+      }
+      const evidence=await newAreaDatedFlight.task;
+      if(!details.isConnected||!details.open||$('#newAreaApplyDate').value!==date||snapshotMeta?.sourceGeneration!==generation)return;
+      const matches=evidence?.contract==='opsmap-nearby-dispatch-day-v1'&&evidence.date===date&&evidence.generation===generation&&Array.isArray(evidence.rows)
+        ?evidence.rows.filter(item=>item.customerCode===row.nearestStoreCode):[];
+      body.textContent=matches.length?date+' · '+matches.map(item=>MapPeriodUi.areaVehicleLabel(item)+
+        ' · '+(item.completed?'배송완료 확인':'배송완료 미확인')).join(' / '):date+' · 이 매장의 확정 배차와 배송완료 미확인';
     };
     details.ontoggle=render;
     if(details.open)void render();
@@ -4803,7 +4832,7 @@
     if(storedHits&&!cache.isCurrent())resolved.fill({error:'STAFF_LOGIN_REQUIRED',httpStatus:401});
     return indexes.map(index=>index<0?{status:'INVALID_ADDRESS'}:resolved[index]);
   }
-  async function stageSingleAreaEvidence(row,signal,requestId){
+  async function stageSingleAreaEvidence(row,signal,requestId,{allowProvider=false}={}){
     const query=row.address.trim();
     const code=/^[A-Z]\d{3,}$/i.test(query);
     const address=unifiedAddressQuery(query)||/^\d{19}$/.test(query);
@@ -4823,30 +4852,39 @@
       return {status:'ADDRESS_NOT_MATCHED'};
     }
     try{
-      const saved=await NewAreaRequests.stageAddress(query,snapshotMeta?.sourceGeneration??null,{signal});
+      const generation=snapshotMeta?.sourceGeneration??null;
+      const canResolve=allowProvider&&generation&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&
+        unifiedAddressQuery(query)&&completeAddressRegion(NewAreaRequests.addressQuery(query))&&
+        NewAreaRequests.addressQueries(query).length===1;
+      const saved=canResolve?await NewAreaRequests.stageAddress(query,generation,{signal,external:'resolve'}):
+        (await stageBatchAddressEvidence([row],signal,requestId))[0];
       if(!saved&&!signal.aborted)return {status:'INVALID_ADDRESS'};
       if(saved?.customerCodes?.length&&currentStageSearchCustomers(saved.customerCodes).length!==saved.customerCodes.length){
         return {status:'STORED_COORDINATE_UNVERIFIED'};
       }
-      if(signal.aborted||saved?.status!=='ADDRESS_NOT_MATCHED'||!unifiedAddressQuery(query))return saved;
+      if(signal.aborted)return saved;
+      if(saved?.external){
+        const point=interactiveProviderPoint(saved.external,true);
+        if(point?.candidates)return {...saved,status:'OFFICIAL_ADDRESS_AMBIGUOUS',points:point.candidates};
+        return point?{...saved,status:'OFFICIAL',point}:saved;
+      }
+      if(saved?.status!=='ADDRESS_NOT_MATCHED'||!unifiedAddressQuery(query))return saved;
       const temporary=NewAreaRequests.temporaryPoint(query);
       if(temporary)return {status:'OFFICIAL',point:temporary};
-      if(window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup!==true){
-        return {...saved,externalBlockedReason:window.KAKAO_MAP_CONFIG?.addressLookupReason||'GEOCODING_DISABLED'};
-      }
-      const point=await lookupInteractiveLocation(query,signal);
-      if(!point||point.verifiedAddressOnly)return saved;
-      return point.candidates?{status:'OFFICIAL_ADDRESS_AMBIGUOUS',points:point.candidates}:{status:'OFFICIAL',point};
+      return saved;
     }catch(error){return {error:error.code||error.message,httpStatus:error.status};}
   }
   function judgeStageAreaRow(row,evidence,batch){
     const status=evidence?.status;
-    if(evidence?.point&&['STORED','OFFICIAL'].includes(status))return judgeNewAreaPoint(row,evidence.point,batch);
+    if(evidence?.point&&['STORED','OFFICIAL'].includes(status)){
+      const resolved=judgeNewAreaPoint(row,evidence.point,batch);
+      return {...resolved,lookupState:resolved.lookupStatus==='SUCCESS'?(evidence.state??resolved.lookupState):'CANDIDATE_REVIEW'};
+    }
     const error=evidence?.error;
     const http=evidence?.httpStatus;
     const messages={STAGE_BATCH_GENERATION_EXPIRED:'지도 자료를 다시 불러온 뒤 조회해 주세요.',STAGE_BATCH_GENERATION_CHANGED:'지도 자료가 바뀌었습니다. 새로고침 후 다시 조회해 주세요.',
       CUSTOMER_CODE_NOT_FOUND:'저장 자료에서 고객코드 미확인',STORED_COORDINATE_UNVERIFIED:'저장 고객 확인 · 좌표 검증 필요',
-      ADDRESS_NOT_MATCHED:'저장·공식 자료에서 주소 일치 없음',ADDRESS_AMBIGUOUS:'주소에 연결된 저장 위치가 여러 곳입니다',
+      ADDRESS_NOT_MATCHED:'현재 연결된 자료에서 주소 위치를 찾지 못했습니다.',ADDRESS_AMBIGUOUS:'주소에 연결된 저장 위치가 여러 곳입니다',
       INVALID_ADDRESS:'주소 입력 확인 필요',OFFICIAL_COORDINATE_UNVERIFIED:'공식 주소 확인 · 좌표 검증 필요',
       OFFICIAL_ADDRESS_INDEX_UNAVAILABLE:'공식 주소 자료를 사용할 수 없습니다',OFFICIAL_ADDRESS_UNAVAILABLE:'공식 주소 조회 실패',
       STORED_REGISTRY_UNAVAILABLE:'저장 매장 자료 복원 중 · 다시 조회해 주세요',
@@ -4854,13 +4892,20 @@
     const candidates=['ADDRESS_AMBIGUOUS','OFFICIAL_ADDRESS_AMBIGUOUS'].includes(status)?evidence.points?.map(point=>({
       ...point,coordinateSource:point.coordinateSource||(status==='ADDRESS_AMBIGUOUS'?'STAGE_PRESERVED_COORDINATE':'OFFICIAL_PUBLIC_BUILDING')
     })):null;
-    const failed=!!error||['OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_ADDRESS_UNAVAILABLE','STORED_REGISTRY_UNAVAILABLE'].includes(status)||!status;
-    const reason=http===401?'직원 로그인 필요':http===403?'주소 조회 권한 없음':messages[error||status]|| (candidates?'주소 위치 후보 확인 필요':NewAreaRequests.message({code:error||status}));
+    const blocked=evidence?.state==='LOOKUP_BLOCKED'||[401,403,429].includes(http)||NewAreaRequests.stopsExternal({code:error});
+    const failed=!blocked&&(evidence?.state==='LOOKUP_FAILED'||!!error||
+      ['OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_ADDRESS_UNAVAILABLE','STORED_REGISTRY_UNAVAILABLE'].includes(status)||!status);
+    const reason=http===401?'직원 로그인 필요':http===403?'주소 조회 권한 없음':
+      blocked?NewAreaRequests.message({code:error||evidence?.externalBlockedReason||'GEOCODING_DISABLED'}):
+      messages[error||status]||(candidates?'주소 위치 후보 확인 필요':NewAreaRequests.message({code:error||status}));
     const pending=judgeNewAreaPoint(row,candidates?{candidates}:null);
     const hint=['INVALID_ADDRESS','ADDRESS_NOT_MATCHED'].includes(status)?' · '+NewAreaRequests.addressFailureHint(row.address,Phase2bUi.addressVariants):'';
     const restriction=evidence?.externalBlockedReason?' · '+NewAreaRequests.message({code:evidence.externalBlockedReason}):'';
     return {...pending,reason:pending.decision==='X'?pending.reason:reason,evidence:(pending.decision==='X'?pending.evidence+' · ':'')+(http?`${reason} · HTTP ${http}`:reason)+hint+restriction,
-      lookupStatus:failed?'FAILED':'DEFERRED',lookupError:failed,lookupHttpStatus:http};
+      lookupStatus:failed?'FAILED':blocked?'LIMIT':'DEFERRED',
+      lookupState:failed?'LOOKUP_FAILED':blocked?'LOOKUP_BLOCKED':evidence?.state||
+        (candidates||['STORED_COORDINATE_UNVERIFIED','OFFICIAL_COORDINATE_UNVERIFIED','INVALID_ADDRESS'].includes(status)?'CANDIDATE_REVIEW':'SOURCE_NOT_COVERED'),
+      lookupError:failed,lookupHttpStatus:http,officialRoad:evidence?.officialRoad,officialLot:evidence?.officialLot};
   }
   let newAreaRegistryMemo=null,newAreaLocationsMemo=null,newAreaEvidenceMemo=null;
   function newAreaRegistryRows() {
@@ -4928,7 +4973,7 @@
         dispatchStops.push({customerCode:code,customerName:point.customerName,lat:point.lat,lng:point.lng,
           vehicle,center:assignment.baseVehicleGroup,mask});
       }
-      dispatchByCode.set(code,{assignments,state:assignment.baseVehicleState});
+      dispatchByCode.set(code,{assignments,baseVehicle:/^(?:(?:용|척)?\d+)$/.test(primary)?primary:'',state:assignment.baseVehicleState});
     }
     const evidence={...locations,assignments:baseVehicles,source,dispatchByCode,
       dispatchIndex:MapPeriodUi.spatialIndex(dispatchStops),
@@ -4946,10 +4991,34 @@
     const nearby=window.MapFixedDeliveryWeekdays?.nearbyFixedDeliveryWeekdays(point,locationIndex,assignments,{source,locationCoverageComplete});
     const latitudePadding=50/109;
     const longitudePadding=latitudePadding/Math.cos((Math.abs(point.lat)+latitudePadding)*Math.PI/180);
-    const dispatchStops=dispatchIndex.query({south:point.lat-latitudePadding,north:point.lat+latitudePadding,
-      west:point.lng-longitudePadding,east:point.lng+longitudePadding});
-    const facts={nearestDispatch:assigned?.assignments||[],nearestDispatchLabel:assigned?.state==='UNASSIGNED'?'미배정':'미확인',
-      dispatchVehicles:Phase2bUi.nearbyVehicleWeekdays(point,dispatchStops),dispatchCheckedAt,dispatchStale,
+    const bounds={south:point.lat-latitudePadding,north:point.lat+latitudePadding,
+      west:point.lng-longitudePadding,east:point.lng+longitudePadding};
+    const registered=locationIndex.query(bounds);
+    const registeredDistances=new Map(registered.map(row=>[row.customerCode,distanceKm(point,row)]));
+    const distances=[...registeredDistances.values()];
+    const storeCounts={};
+    for(const radius of [0.5,30,40,50])storeCounts[radius]=distances.filter(distance=>distance<=radius).length;
+    const nearbyRegistered=registered.flatMap(row=>{
+      const distance=registeredDistances.get(row.customerCode);
+      return distance<=0.5?[{customerCode:row.customerCode,customerName:row.customerName,
+        baseVehicle:dispatchByCode.get(row.customerCode)?.baseVehicle,distance}]:[];
+    }).sort((a,b)=>a.distance-b.distance||a.customerCode.localeCompare(b.customerCode));
+    const dispatchStops=dispatchIndex.query(bounds);
+    const vehicleDistances=new Map();
+    for(const stop of dispatchStops){
+      const key=areaVehicleKey(stop), distance=registeredDistances.get(stop.customerCode);
+      if(!Number.isFinite(distance)||distance>50)continue;
+      if(!vehicleDistances.has(key))vehicleDistances.set(key,[]);
+      vehicleDistances.get(key).push(distance);
+    }
+    const dispatchVehicles=Phase2bUi.nearbyVehicleWeekdays(point,dispatchStops).map(group=>{
+      const distances=vehicleDistances.get(areaVehicleKey(group))||[];
+      return {...group,storeCounts:Object.fromEntries([30,40,50].map(radius=>[radius,distances.filter(distance=>distance<=radius).length]))};
+    });
+    const facts={nearestDispatch:assigned?.assignments||[],nearestBaseVehicle:assigned?.baseVehicle||'',
+      nearestDispatchLabel:assigned?.state==='UNASSIGNED'?'미배정':'미확인',
+      storeCounts:locationIndex.valid.length?storeCounts:null,nearbyRegistered:locationIndex.valid.length?nearbyRegistered:null,
+      dispatchVehicles,dispatchCheckedAt,dispatchStale,
       fixedNearbyWeekdays:nearby?.days||[],fixedNearbyWeekdayState:nearby?.status||'UNKNOWN',
       fixedNearbyWeekdaysStale:nearby?.stale===true};
     if(dispatchFacts.size>=128)dispatchFacts.delete(dispatchFacts.keys().next().value);
@@ -4962,7 +5031,9 @@
     const text=row.address+' '+(row.customer||'');
     const exception=legacyException(text)||(checked?.address?legacyException(checked.address+' '+(row.customer||'')):'');
     const base={...row,...point,...checked,address:row.address,customer:row.customer,originalAddress:row.originalAddress,originalCustomer:row.originalCustomer,
-      resolvedAddress:point?.address,lookupStatus:checked?'SUCCESS':'DEFERRED',addressRegion:row.addressRegion||point?.addressRegion||window.MapLocationContract?.addressRegion(row.address)||'주소 권역 미확인',
+      resolvedAddress:point?.address,lookupStatus:checked?'SUCCESS':'DEFERRED',
+      lookupState:checked?areaLocationState(checked):point?.candidates?'CANDIDATE_REVIEW':'SOURCE_NOT_COVERED',
+      addressRegion:row.addressRegion||point?.addressRegion||window.MapLocationContract?.addressRegion(row.address)||'주소 권역 미확인',
       actualDispatchCenter:row.actualDispatchCenter||point?.actualDispatchCenter||{state:'UNCONFIRMED',label:'담당 센터 미확인'},rangeStart:state.rangeStart,rangeEnd:state.rangeEnd,
       decision:'검토',nearestDistance:null,facility:facilityReview(text)||facilityReview(checked?.address)};
     if(!checked||point.candidates)return {...base,...(exception?{decision:'X',reason:exception,evidence:'기존 배송 제외 규칙 · 위치 미확인'}:
@@ -4973,13 +5044,26 @@
     const facts={...base,nearestStore:nearest?.customerName||'',nearestStoreCode:nearest?.customerCode||'',
       nearestDistance:nearest?.distance??null,nearestDistanceMeters,...newAreaDispatchFacts(checked,nearest?.customerCode,evidence)};
     if(exception)return {...facts,decision:'X',reason:exception,evidence:'기존 지역·시설·배송동선 제외 규칙'};
-    if(point.coordinateSource==='MAP_CLICK_TEMPORARY')return {...facts,reason:'임시 위치 선택 · 배송판정 검토',evidence:'직접 선택한 위치의 실제 주소를 확인해 주세요.'};
+    if(facts.lookupState==='USER_SELECTED_LOCATION')return {...facts,reason:'임시 위치 선택 · 배송판정 검토',evidence:'직접 선택한 위치의 실제 주소를 확인해 주세요.'};
     if(!nearest)return {...facts,reason:'등록 매장 위치 미확인',evidence:'검증된 고정 등록 매장 좌표를 확인해 주세요.'};
     if(nearest.distance<=0.5)return {...facts,decision:'O',reason:'',eligibilityBasis:'FIXED_REGISTRY_500M',
       evidence:'최근접 고정 등록 매장까지 직선 '+nearestDistanceMeters+'m(500m 이내) · 실제 수락·배송일'+(base.facility?'·차량 진입':'')+' 별도 확인'};
     return {...facts,decision:'X',reason:'배송동선 맞지않음',
       evidence:'최근접 고정 등록 매장까지 반올림 전 직선거리 500m 초과'};
   }
+
+  function areaLocationState({coordinateSource:source}){
+    if(source?.startsWith('OFFICIAL_PUBLIC_'))return 'OFFICIAL_VERIFIED';
+    if(source==='KAKAO_ADDRESS_TEMPORARY')return 'EXTERNAL_VERIFIED';
+    if(source==='MAP_CLICK_TEMPORARY'||source==='MANUAL_WAYPOINT')return 'USER_SELECTED_LOCATION';
+    return 'STORED_VERIFIED';
+  }
+
+  const areaLocationLabels=Object.freeze({
+    STORED_VERIFIED:'저장 위치 확인',OFFICIAL_VERIFIED:'공식 위치 확인',EXTERNAL_VERIFIED:'외부 주소 위치 확인',
+    USER_SELECTED_LOCATION:'사용자가 지정한 임시 위치',CANDIDATE_REVIEW:'주소 후보·좌표 검토 필요',
+    SOURCE_NOT_COVERED:'현재 자료 범위 밖',LOOKUP_BLOCKED:'조회 권한·한도 확인 필요',LOOKUP_FAILED:'주소 조회 실패',
+  });
 
   let newAreaRequestId = 0;
   let newAreaRadius = 30;
@@ -5007,7 +5091,7 @@
     $('#newAreaBatchResults').setAttribute('aria-busy', String(value));
   }
   function retryableAreaRow(row,result) {
-    return !row.inputAmbiguous&&(!result||['FAILED','DEFERRED','LIMIT'].includes(result.lookupStatus));
+    return !row.inputAmbiguous&&(!result?.lookupStatus||['FAILED','DEFERRED','LIMIT'].includes(result.lookupStatus));
   }
   function cancelNewAreaWork() {
     if(!newAreaBusy)return;
@@ -5015,7 +5099,7 @@
     batchController=null;
     setNewAreaBusy(false);
     publishNewAreaResults();
-    $('#newAreaBatchStatus').textContent='조회 취소 · 완료 '+state.newAreaResults.length+'행 유지';
+    $('#newAreaBatchStatus').textContent='조회 취소 · 처리한 '+state.newAreaResults.length+'행 유지';
   }
   function clearNewAreaBatch(clearInput = true) {
     ++newAreaRequestId;
@@ -5028,7 +5112,7 @@
     if (clearInput) $("#newAreaBatchInput").value = "";
     $("#newAreaBatchResults").innerHTML = "";
     $("#newAreaBatchResults").removeAttribute('data-batch-paint');
-    $("#newAreaBatchStatus").textContent = "입력 0 · 완료 0";
+    $("#newAreaBatchStatus").textContent = "입력 0 · 처리 0";
     $("#exportNewAreaCsv").disabled = true;
     $("#exportNewAreaExcel").disabled = true;
     $('#copyAreaDecision')?.setAttribute('disabled','');$('#copyAreaMatching')?.setAttribute('disabled','');
@@ -5058,11 +5142,11 @@
     const nearest=row.nearestStoreCode&&Number.isFinite(row.nearestDistanceMeters)
       ?`<strong>${esc(row.nearestStore||'매장명 미확인')} · ${esc(row.nearestStoreCode)}</strong> · <strong>${row.nearestDistanceMeters}m</strong>`:'등록 매장 위치 미확인';
     const assigned=row.nearestDispatch||[];
-    const vehicles=assigned.map(item=>vehicleLabel(item.vehicle)).join(' · ')||row.nearestDispatchLabel||'미확인';
+    const vehicle=row.nearestBaseVehicle?vehicleLabel(row.nearestBaseVehicle):row.nearestDispatchLabel||'미확인';
     const weekdays=assigned.map(item=>vehicleLabel(item.vehicle)+' '+MapPeriodUi.areaDispatchDays(item)).join(' ')||'미확인';
     return `<div><span class="judgeBadge ${kind}">${label}</span> ${esc(row.reason||'')}</div>
       <div data-area-nearest>가장 가까운 등록 매장(직선거리): ${nearest}</div>
-      <div data-area-nearest-vehicles>배차표상 호차: <strong>${esc(vehicles)}</strong></div>
+      <div data-area-nearest-vehicles>가장 가까운 매장 기준호차: <strong>${esc(vehicle)}</strong></div>
       <div data-area-nearest-weekdays>가까운 매장 배정 요일: <strong>${esc(weekdays)}</strong></div>
       <div data-area-fixed-weekdays data-state="${row.fixedNearbyWeekdayState||'UNKNOWN'}">500m 내 등록 매장 배송요일: <strong>${esc(MapPeriodUi.areaFixedWeekdayLabel(row))}</strong></div>
       <div class="areaInquiryHint" data-area-dispatch-reference>${esc(MapPeriodUi.areaDispatchReference(row))}</div>
@@ -5074,16 +5158,30 @@
     return `${radius}km 내 참고 배차호차 · ${count?count+'대 확인':'확인된 호차 없음'}`;
   }
 
-  function newAreaVehicleContent(row,radius,interactive=false) {
+  function newAreaVehicleContent(row,radius) {
     const groups=MapPeriodUi.areaDispatchVehicles(row,radius);
-    if(!groups.length)return '<p>이 범위에서 확인된 배차호차가 없습니다.</p>';
-    const list=groups.map((item,index)=>{
-      const nearest=interactive?` · ${esc(item.nearestStop.customerName||item.nearestStop.customerCode)}`:'';
-      const label=`<b>${esc(MapPeriodUi.areaVehicleLabel(item))}</b>${nearest} · 직선 ${MapPeriodUi.areaDistance(item.distance)} · ${esc(MapPeriodUi.areaDispatchDays(item))}`;
-      return `<li>${interactive?`<button type="button" class="tiny areaDispatchChoice" data-area-dispatch-vehicle="${index}" aria-pressed="${newAreaVehicleKey===areaVehicleKey(item)}">${label}</button>`:label}</li>`;
+    const counts=`<p>${radius}km 내 좌표 확인 등록 매장 ${row.storeCounts?.[radius]??'미확인'}곳 · 500m 내 ${row.storeCounts?.[0.5]??'미확인'}곳</p>`;
+    if(!groups.length)return counts+'<p>이 범위에서 확인된 배차호차가 없습니다.</p>';
+    const list=groups.map(item=>{
+      const stores=Number.isInteger(item.storeCounts?.[radius])?` · 등록 매장 ${item.storeCounts[radius]}곳`:'';
+      return `<li><b>${esc(MapPeriodUi.areaVehicleLabel(item))}</b>${stores} · 직선 ${MapPeriodUi.areaDistance(item.distance)} · ${esc(MapPeriodUi.areaDispatchDays(item))}</li>`;
     }).join('');
-    return `<p class="areaInquiryHint">호차별 가장 가까운 배정 매장까지의 직선거리와 배차요일입니다.</p>
-      ${interactive?'<button type="button" class="tiny" data-area-dispatch-overview>반경 지도 보기</button>':''}<ul class="areaRouteList">${list}</ul>`;
+    return counts+`<p class="areaInquiryHint">호차별 가장 가까운 배정 매장까지의 직선거리와 배차요일입니다.</p>
+      <ul class="areaRouteList">${list}</ul>`;
+  }
+
+  function nearbyRegisteredMarkup(row) {
+    if(!Array.isArray(row.nearbyRegistered))return '';
+    return `<details class="areaNearbyRegistered"><summary>500m 내 좌표 확인 매장 ${row.nearbyRegistered.length}곳</summary><div></div></details>`;
+  }
+
+  function bindNearbyRegistered(parent,row) {
+    const details=parent.querySelector?.('.areaNearbyRegistered');
+    if(!details)return;
+    details.ontoggle=()=>{
+      details.lastElementChild.innerHTML=details.open?`<ul class="areaRouteList">${row.nearbyRegistered.map(store=>
+        `<li>${esc(store.customerName||'매장명 미확인')} · ${esc(store.customerCode)} · ${MapPeriodUi.areaDistance(store.distance)}</li>`).join('')}</ul>`:'';
+    };
   }
 
   function setNewAreaRadius(value) {
@@ -5137,7 +5235,7 @@
       batch.judged[index]=resolved;
       appendBatchResult(list,resolved,index);publishNewAreaResults();setNewAreaBusy(false);
       const located=batch.judged.filter(item=>item&&Number.isFinite(item.lat)&&Number.isFinite(item.lng)).length;
-      $('#newAreaBatchStatus').textContent=`${index+1}번 행 위치 선택 완료 · 입력 ${batch.rows.length} · 위치 표시 ${located}`;
+      $('#newAreaBatchStatus').textContent=`${index+1}번 행 위치 선택 · 입력 ${batch.rows.length} · 지도 위치 표시 ${located}`;
       finish();
     };
     const candidates=(row.candidates||[]).filter(newAreaCoordinate);
@@ -5161,17 +5259,44 @@
     const pointLabel={OFFICIAL_PUBLIC_PARCEL:'공식 필지 대표점',OFFICIAL_PUBLIC_ADDRESS:'공식 주소 대표점',
       OFFICIAL_PUBLIC_BUILDING:'공식 자료 건물 위치',MAP_CLICK_TEMPORARY:'지도에서 직접 선택한 임시 위치'}[row.coordinateSource];
     const located=row.lookupStatus==='SUCCESS'&&Number.isFinite(row.lat)&&Number.isFinite(row.lng);
-    template.innerHTML = `<div class="areaBatchEntry" data-area-index="${index}"><button type="button" class="judgeCard batchResult" data-judged="${index}">
+    const locationLabel=areaLocationLabels[row.lookupState];
+    const pinHint=located?'':row.inputAmbiguous?'입력 열을 확인해 주세요.':row.candidates?.length?'클릭하여 지도에서 주소 후보 비교':'클릭하여 확인된 위치 입력';
+    const canLookUp=stageAddressBatchEnabled()&&row.lookupState==='SOURCE_NOT_COVERED'&&unifiedAddressQuery(row.address)&&
+      completeAddressRegion(NewAreaRequests.addressQuery(row.address))&&NewAreaRequests.addressQueries(row.address).length===1&&
+      window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true;
+    template.innerHTML = `<div class="areaBatchEntry" data-area-index="${index}" data-location-state="${esc(row.lookupState||'')}"><button type="button" class="judgeCard batchResult" data-judged="${index}">
       <b>${esc(row.customer || row.address)}</b><div>사용 주소: ${esc(row.address)}</div>
+      ${locationLabel?`<div data-area-location-label>${esc(locationLabel)}</div>`:''}
       ${pointLabel?`<div>${pointLabel}</div>`:''}
-      ${!located?'<div>클릭하여 확인된 위치 입력</div>':''}
+      ${pinHint?`<div>${esc(pinHint)}</div>`:''}
       ${newAreaSummaryMarkup(row)}
       ${row.officialRoad?`<div>공식 도로명: ${esc(row.officialRoad)} · 지번: ${esc(row.officialLot||'미확인')}</div>`:''}</button>
-      ${located?`<details class="areaVehicles"><summary>${newAreaVehicleTitle(row,newAreaRadius)}</summary><div></div></details>${newAreaObservationMarkup()}`:''}</div>`;
+      ${located?`<details class="areaVehicles"><summary>${newAreaVehicleTitle(row,newAreaRadius)}</summary><div></div></details>${nearbyRegisteredMarkup(row)}
+        ${stageAddressBatchEnabled()&&row.nearestStoreCode?'<details class="areaDatedDispatch"><summary>적용일 실제 배차·배송완료</summary><div></div></details>':''}
+        ${newAreaObservationMarkup()}`:''}
+      ${canLookUp?'<button type="button" class="tiny" data-area-provider>외부 주소 1건 확인</button>':''}
+      <details class="areaRowEdit"><summary>이 행 수정</summary><form>
+        <label>주소 <input name="address" required value="${esc(row.address)}"></label>
+        <label>고객정보 <input name="customer" value="${esc(row.customer||'')}"></label>
+        <button type="submit" class="tiny">이 행 재조회</button>
+      </form></details></div>`;
     const entry = template.content.firstElementChild;
     const button = entry.querySelector?.('button') || entry;
     const details=entry.querySelector?.('.areaVehicles');
     bindNewAreaObservation(entry,row);
+    bindNewAreaDatedDispatch(entry,row);
+    bindNearbyRegistered(entry,row);
+    const edit=entry.querySelector?.('.areaRowEdit form');
+    const owner=newAreaBatch;
+    if(edit)edit.onsubmit=event=>{
+      event.preventDefault();
+      if(owner!==newAreaBatch||newAreaBusy)return;
+      reviseNewAreaRow(index,edit,owner);
+    };
+    const provider=entry.querySelector?.('[data-area-provider]');
+    if(provider)provider.onclick=()=>{
+      if(owner===newAreaBatch)void runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults',true,index,true);
+    };
     details?.addEventListener('toggle',()=>{
       details.lastElementChild.innerHTML=details.open?newAreaVehicleContent(row,newAreaRadius):'';
     });
@@ -5205,6 +5330,21 @@
     };
   }
 
+  function reviseNewAreaRow(index,form,batch) {
+    const input=$('#newAreaBatchInput'),status=$('#newAreaBatchStatus');
+    if(batch.input!==input.value||batch.sourceVersion!==newAreaSourceVersion())return;
+    const edited=window.MapNewAreaRowEdit?.replace(input.value,index,batch.rows[index]?.originalInput,
+      {address:form.elements.address.value,customer:form.elements.customer.value});
+    const row=edited&&NewAreaRequests.parseAreaInput(edited.originalInput,MapPeriodUi.parseAreaInput)[0];
+    if(!row||row.inputAmbiguous){status.textContent='이 행의 주소·고객정보를 확인해 주세요.';return;}
+    input.value=edited.input;
+    batch.input=input.value;
+    batch.rows[index]=row;
+    batch.manualPoints.delete(index);
+    batch.judged[index]=undefined;
+    void runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults',true,index);
+  }
+
   function publishNewAreaResults() {
     state.newAreaResults = newAreaBatch?.judged.filter(Boolean)||[];
     const empty=!state.newAreaResults.length;
@@ -5219,7 +5359,7 @@
     return newAreaBatch?newAreaBatch.rows.map((row,index)=>newAreaBatch.judged[index]||{...row,decision:'검토'}):state.newAreaResults;
   }
 
-  async function runNewArea(inputId, statusId, resultId, retry = false) {
+  async function runNewArea(inputId, statusId, resultId, retry = false, onlyIndex = null, allowProvider = false) {
     if (newAreaBusy) return;
     const status = $(statusId), list = $(resultId);
     const started=performance.now();
@@ -5242,14 +5382,17 @@
       newAreaBatch={input,periodKey,sourceVersion,rows,manualPoints,judged:new Array(rows.length)};
     }
     const {rows,judged,manualPoints}=newAreaBatch;
-    const indexes=rows.map((_row,index)=>index).filter(index=>!retry||retryableAreaRow(rows[index],judged[index]));
+    const indexes=rows.map((_row,index)=>index).filter(index=>(onlyIndex===null||onlyIndex===index)&&
+      (!retry||retryableAreaRow(rows[index],judged[index])));
     if(!indexes.length)return;
     const requestId = ++newAreaRequestId;
     const controller = batchController = new AbortController();
     const {signal} = controller;
     const current = () => requestId === newAreaRequestId && !signal.aborted && state.mode === 'BASE_60D' &&
       periodKey === state.rangeStart + '|' + state.rangeEnd && sourceVersion===newAreaSourceVersion();
-    const batch = {requestId,signal,customers:new Map(),queries:new Map(),blocked:null,selectedPoints:new Map(newAreaSelectedPoints)};
+    const selectedPoints=new Map(newAreaSelectedPoints);
+    if(onlyIndex!==null)selectedPoints.delete(rows[onlyIndex].address);
+    const batch = {requestId,signal,customers:new Map(),queries:new Map(),blocked:null,selectedPoints};
     const fragment=stage&&!retry ? document.createDocumentFragment?.() : null;
     let dispatchPending;
     const retainedPoints=new Map();
@@ -5261,25 +5404,27 @@
     const active = new Set();
     let next = 0, completed = 0;
     setNewAreaBusy(true);
-    const counts={done:0,located:0,deferred:0,deliveryHold:0,failed:0,limited:0,inside:0};
+    const counts={done:0,located:0,manual:0,candidate:0,outside:0,failed:0,blocked:0,assigned:0,judged:0,inside:0};
     function countResult(row, change) {
       if(!row)return;
       counts.done+=change;
       if(row.lookupStatus==='SUCCESS'||newAreaCoordinate(row)){
-        counts.located+=change;
-        if(row.decision==='검토')counts.deliveryHold+=change;
+        if(row.lookupState==='USER_SELECTED_LOCATION')counts.manual+=change;
+        else counts.located+=change;
+        if(row.nearestBaseVehicle||row.nearestDispatch?.length||row.dispatchVehicles?.length)counts.assigned+=change;
+        if(row.decision==='O'||row.decision==='X')counts.judged+=change;
       }
-      else if(row.lookupStatus==='FAILED')counts.failed+=change;
-      else if(row.lookupStatus==='LIMIT')counts.limited+=change;
-      else counts.deferred+=change;
+      else if(row.lookupStatus==='FAILED'||row.lookupState==='LOOKUP_FAILED')counts.failed+=change;
+      else if(row.lookupStatus==='LIMIT'||row.lookupState==='LOOKUP_BLOCKED')counts.blocked+=change;
+      else if(row.inputAmbiguous||row.lookupState==='CANDIDATE_REVIEW')counts.candidate+=change;
+      else counts.outside+=change;
       if(row.decision==='O')counts.inside+=change;
     }
     judged.forEach(row=>countResult(row,1));
     function showProgress() {
       const checking=[...active].map(index=>index+1).sort((a,b)=>a-b).join(', ');
-      const details=stageAddressBatchEnabled()?` · 위치 보류 ${counts.deferred} · 배송판정 보류 ${counts.deliveryHold} · 시스템 오류 ${counts.failed}`:` · 보류 ${counts.deferred} · 실패 ${counts.failed}`;
-      status.textContent='입력 '+rows.length+' · 완료 '+counts.done+' · 위치 확인 '+counts.located+details+' · 한도대기 '+counts.limited+
-        ' · 권역 내 '+counts.inside+(retry&&completed<indexes.length?' · 재조회 '+completed+'/'+indexes.length:'')+(checking?' · 확인 중 '+checking+'번':'');
+      status.textContent=`입력 ${rows.length} · 처리 ${counts.done} · 위치 확인 ${counts.located} · 직접 지정 ${counts.manual} · 후보·입력 검토 ${counts.candidate} · 자료 범위 밖 ${counts.outside} · 권한·한도 ${counts.blocked} · 조회 실패 ${counts.failed} · 배차 참고 확인 ${counts.assigned} · 권역 판단 가능 ${counts.judged} (권역 내 ${counts.inside})`+
+        (retry&&completed<indexes.length?' · 재조회 '+completed+'/'+indexes.length:'')+(checking?' · 확인 중 '+checking+'번':'');
     }
     async function worker() {
       while (current() && next<indexes.length) {
@@ -5301,7 +5446,8 @@
           const unresolved=judgeNewAreaPoint(row,null);
           result={...unresolved,reason:unresolved.decision==='X'?unresolved.reason:reason,
             evidence:[unresolved.decision==='X'?unresolved.evidence:'',NewAreaRequests.message(error),'원문 보존'].filter(Boolean).join(' · '),
-            lookupStatus,lookupError:lookupStatus==='FAILED'};
+            lookupStatus,lookupState:lookupStatus==='FAILED'?'LOOKUP_FAILED':lookupStatus==='LIMIT'?'LOOKUP_BLOCKED':'SOURCE_NOT_COVERED',
+            lookupError:lookupStatus==='FAILED'};
         }
         decisionMs+=performance.now()-decisionStarted;
         if (!current()) return;
@@ -5320,8 +5466,9 @@
         const requested=indexes.filter(index=>!retainedPoints.has(index)&&!rows[index].inputAmbiguous);
         const addressStarted=performance.now();
         setupMs=addressStarted-started;
-        const evidence=rows.length===1&&requested.length===1
-          ?stageSingleAreaEvidence(rows[requested[0]],signal,requestId).then(result=>[result])
+        const useSingle=requested.length===1&&(rows.length===1||allowProvider);
+        const evidence=useSingle
+          ?stageSingleAreaEvidence(rows[requested[0]],signal,requestId,{allowProvider:allowProvider||!retry}).then(result=>[result])
           :stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId,addressTiming);
         dispatchPending=prepareNewAreaDispatch();
         const prepareStarted=performance.now();
@@ -5341,9 +5488,10 @@
         judged.forEach((row,index)=>{
           if(row?.lookupStatus!=='SUCCESS')return;
           const updated={...row,...newAreaDispatchFacts(row,row.nearestStoreCode,evidence)};
+          countResult(row,-1);countResult(updated,1);
           judged[index]=updated;appendBatchResult(list,updated,index);
         });
-        publishNewAreaResults();
+        publishNewAreaResults();showProgress();
       });
     } finally {
       if (batchController===controller && requestId===newAreaRequestId) {
@@ -5356,6 +5504,7 @@
           renderMs+=performance.now()-renderStarted;
           if(stage){
             list.setAttribute('data-batch-timing',JSON.stringify({rows:rows.length,completed:counts.done,located:counts.located,addressMs,
+              candidate:counts.candidate,outside:counts.outside,blocked:counts.blocked,failed:counts.failed,assigned:counts.assigned,
               setupMs:Math.round(setupMs),prepareMs:Math.round(prepareMs),decisionMs:Math.round(decisionMs),renderMs:Math.round(renderMs),
               ...(rows.length>1&&{addressRequests:addressTiming.requests,storedAddressHits:addressTiming.storedHits,server:addressTiming.server}),
               totalMs:Math.round(performance.now()-started)}));
@@ -5597,6 +5746,12 @@
       $('#periodListMore').hidden = true;
       return;
     }
+    if(!stores.length&&periodMeta?.segmented===true&&periodMeta.aggregateComplete!==true){
+      $('#periodStoreListCount').textContent='이력 미확인';
+      panel.textContent='배송이력 확인 필요';
+      $('#periodListMore').hidden=true;
+      return;
+    }
     if(!stores.length&&state.centerFilter&&baseVehicleStatus!=='READY'){
       $('#periodStoreListCount').textContent='미확인';panel.textContent=baseVehicleStatus==='ERROR'?'기준호차 조회 실패 · 센터 매장 수 확인 필요':'기준호차 확인 중 · 센터 매장 수 미확인';$('#periodListMore').hidden=true;return;
     }
@@ -5702,6 +5857,13 @@
     $("#clearNewAreaBatch").onclick = () => clearNewAreaBatch();
     $('#cancelNewAreaBatch').onclick = cancelNewAreaWork;
     $('#retryNewAreaBatch').onclick = () => runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults',true);
+    $('#retryNewAreaBatch').textContent = '보류·실패·미처리 재조회';
+    $('#newAreaApplyDate').onchange=()=>{
+      for(const entry of $('#newAreaBatchResults').children){
+        const row=newAreaBatch?.judged[Number(entry.dataset.areaIndex)];
+        if(row)bindNewAreaDatedDispatch(entry,row);
+      }
+    };
     $('#newAreaBatchTool').addEventListener('toggle', event => { if (!event.target.open) cancelNewAreaWork(); });
     $('#newAreaBatchTool > summary').addEventListener('click', () => { if ($('#newAreaBatchTool').open) cancelNewAreaWork(); });
     $('#newAreaBatchInput').oninput = () => {

@@ -77,3 +77,19 @@ test('indexed customer search retains source metadata and does not call Hub for 
  const r=await searchCustomerSummaries({query:'T990001',snapshot,searchMaster:()=>{throw Error('must not run');}});
  assert.equal(r.data[0].customerCode,'T990001');assert.equal(r.meta.currentness,'UNCONFIRMED');
 });
+test('current Stage customer master fills address coverage and never reuses moved or retired customer coordinates',()=>{
+ const oldAddress='경기 오산시 합성로 10', currentAddress='경기 오산시 합성로 20';
+ const addressHash='a'.repeat(64);
+ const snapshot={rows:[{customerCode:'T990001',address:oldAddress,lat:37.1,lng:127.1},
+  {customerCode:'T990002',address:oldAddress,lat:37.2,lng:127.2}]};
+ const master={rows:[{customerCode:'T990001',basicAddress:currentAddress,lifecycle:'ACTIVE',addressHash},
+  {customerCode:'T990002',basicAddress:oldAddress,lifecycle:'DELETED',addressHash}]};
+ const official={lookup:address=>address===currentAddress?{lat:37.12,lng:127.12}:null};
+ const [old,current,customer]=resolvePreservedAddressBatch([[oldAddress],[currentAddress],['T990001']],snapshot,official,{includeCustomers:true,master});
+ assert.deepEqual(old,{status:'ADDRESS_NOT_MATCHED'});
+ assert.deepEqual(current,{status:'OFFICIAL',customerCodes:['T990001'],point:{lat:37.12,lng:127.12,coordinateSource:'OFFICIAL_PUBLIC_BUILDING'}});
+ assert.deepEqual(customer,{status:'STORED_COORDINATE_UNVERIFIED',customerCodes:['T990001']});
+ const withPoint={rows:[{...master.rows[0],verifiedLocation:{lat:37.13,lng:127.13,addressHash}}]};
+ assert.deepEqual(resolvePreservedAddressBatch([[currentAddress]],snapshot,official,{includeCustomers:true,master:withPoint}),
+  [{status:'STORED',customerCodes:['T990001'],point:{lat:37.13,lng:127.13,coordinateSource:'STAGE_PRESERVED_COORDINATE'}}]);
+});

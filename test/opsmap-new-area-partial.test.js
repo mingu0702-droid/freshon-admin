@@ -231,7 +231,8 @@ test('TSV multiline preserves X/Y order and separates invalid addresses and row 
   const rows=f.state.newAreaResults;assert.equal(rows.length,3);assert.equal(rows[0].originalCustomer,'합성 고객\n상세주소');assert.equal(rows[1].reason,'주소 확인 필요');assert.equal(rows[2].reason,'입력 열 확인 필요');
   assert.equal(f.node('#exportNewAreaCsv').disabled,false);assert.match(f.node('#newAreaBatchResults').innerHTML,/30km 내 참고 배차호차/);
   const output=globalThis.MapPeriodUi.areaExportRows(rows,'2026-11-02');assert.equal(output[0][0],near.customerCode);assert.equal(output[0][2],'O');assert.equal(output[0][1],'합성 고객\n상세주소');
-  assert.equal(MapPeriodUi.areaExportHeadings.at(-1),'판정 근거');assert.match(output[0].at(-1),/500m 이내/);
+  assert.equal(MapPeriodUi.areaExportHeadings[16],'판정 근거');assert.match(output[0][16],/500m 이내/);
+  assert.equal(output[0][17],'STORED_VERIFIED');
   assert.equal(globalThis.MapPeriodUi.areaTsv(rows,'2026-11-02','decision').split('\r\n').length,3);
   f.setJudge(async row=>{if(row.address==='실패')throw Error('SYNTHETIC_ROW_FAILURE');return {...row,decision:'검토',reason:'주소 확인 필요',nearby:[]};});
   f.node('#newAreaBatchInput').value='실패\t고객1\n경기도 화성시 합성로 2\t고객2';await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
@@ -251,12 +252,12 @@ test('Stage recovers 57 failed rows in one retry and keeps the already located r
   const run=retry=>f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults',retry);
   await run(false);
   const first=f.state.newAreaResults[0];
-  assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 1 .*시스템 오류 57/);
+  assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 1 .*조회 실패 57/);
   await run(true);
   assert.deepEqual(requests.map(rows=>rows.length),[58,57]);
   assert.equal(f.state.newAreaResults[0],first);
   assert.equal(f.state.newAreaResults.map(row=>row.originalAddress).join('\n'),original.join('\n'));
-  assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 58 .*시스템 오류 0/);
+  assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 58 .*조회 실패 0/);
   assert.equal(f.externalCalls(),0);
 });
 test('Stage preserves HTTP status even when a gateway sends HTML',async()=>{
@@ -265,7 +266,7 @@ test('Stage preserves HTTP status even when a gateway sends HTML',async()=>{
   f.setup([]);f.node('#newAreaBatchInput').value=near.customerCode;
   await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
   const result=f.state.newAreaResults[0];
-  assert.equal(result.lookupStatus,'FAILED');assert.equal(result.lookupHttpStatus,403);
+  assert.equal(result.lookupState,'LOOKUP_BLOCKED');assert.equal(result.lookupHttpStatus,403);
   assert.match(MapPeriodUi.areaExportRows([result])[0][3],/HTTP 403/);
 });
 test('Stage never requests completed-delivery records and retries only missing addresses',async()=>{

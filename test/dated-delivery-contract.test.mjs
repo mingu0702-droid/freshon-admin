@@ -4,6 +4,7 @@ import {archivedDatedDispatch,deliveryDigest,deliveryTaskId} from '../src/datedD
 import {validateOpsmapSyncDay} from '../src/opsmapSyncGeneration.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
+import {stageNearbyDispatchDay} from '../src/stageAbValidation.js';
 
 const date='2026-11-11', at=(time)=>`${date}T${time}:00+09:00`;
 const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
@@ -100,6 +101,11 @@ test('four physical sources persist counts, deduplicate exact in-page IDs and bi
   assert.equal(restored.state,'PUBLISHED_VERIFIED');
   assert.equal(archivedDatedDispatch(copy,{center:'osanColdStorage',vehicle:'105'}).count,1);
   assert.equal(archivedDatedDispatch(copy,{center:'yeongnam'}).lastVerifiedEmpty,true);
+  const nearby=stageNearbyDispatchDay({generation:'a'.repeat(64)},date,copy);
+  assert.deepEqual(nearby.centers,{osan:'VERIFIED',yeongnam:'VERIFIED',honam:'VERIFIED'});
+  assert.deepEqual(nearby.rows,[{customerCode:'S1',center:'osan',vehicle:'101',completed:true}]);
+  assert.deepEqual(stageNearbyDispatchDay({generation:'a'.repeat(64)},'2026-11-10',copy).centers,
+    {osan:'UNKNOWN',yeongnam:'UNKNOWN',honam:'UNKNOWN'});
   const legacy=structuredClone(copy);
   legacy.dispatch.events=legacy.dispatch.events.map(event=>event.slice(0,7));
   legacy.proofHash=deliveryDigest([date,legacy.tasks,legacy.visits,legacy.dispatch]);

@@ -86,21 +86,50 @@ export function searchPreservedRegistry(query,snapshot){
 }
 const safePoint = ({lat,lng}={}) => Number.isFinite(lat)&&Number.isFinite(lng)&&lat>=33&&lat<=39.5&&lng>=124&&lng<=132 ? {lat,lng} : null;
 const approvedPoint = row => !row.addressChanged && !['CONFLICT','UNVERIFIED','MISSING'].includes(row.coordinateStatus) &&
- row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED' ? safePoint(row) : null;
-export function resolvePreservedAddressBatch(rows,snapshot,officialIndex,{includeCustomers=false,timings}={}){
+ row.resolutionStatus!=='ADDRESS_CHANGED_REVIEW_REQUIRED' && !/(?:_LIVE|_TEMPORARY)$/.test(row.coordinateSource||'') ? safePoint(row) : null;
+const masterIndexes=new WeakMap();
+function stageMasterSnapshot(master) {
+ if (!Array.isArray(master?.rows)) return null;
+ if (masterIndexes.has(master.rows)) return masterIndexes.get(master.rows);
+ const registered=new Map();
+ const rows=[];
+ for (const row of master.rows) {
+  if (!code(row?.customerCode)) continue;
+  registered.set(row.customerCode,row);
+  if (row.lifecycle!=='ACTIVE') continue;
+  const point=row.verifiedLocation?.addressHash===row.addressHash&&/^[a-f0-9]{64}$/.test(row.addressHash||'') ? safePoint(row.verifiedLocation) : null;
+  rows.push({customerCode:row.customerCode,address:row.basicAddress,...point});
+ }
+ const value={snapshot:{rows},registered};
+ masterIndexes.set(master.rows,value);
+ return value;
+}
+export function prepareStageAddressMasterIndex(master) {
+ return preparePreservedAddressIndex(stageMasterSnapshot(master)?.snapshot);
+}
+export function resolvePreservedAddressBatch(rows,snapshot,officialIndex,{includeCustomers=false,timings,master,includeExternalEligibility=false}={}){
  const measure=(key,read)=>{
   if(!timings)return read();
   const start=performance.now();
   try{return read();}finally{timings[key]=(timings[key]||0)+performance.now()-start;}
  };
- const find=query=>measure('customer',()=>preservedMatches(query,snapshot).matches);
+ const current=stageMasterSnapshot(master);
+ const find=query=>measure('customer',()=>{
+  const preserved=preservedMatches(query,snapshot).matches.filter(row=>{
+   const active=current?.registered.get(row.customerCode);
+   if (!active) return true;
+   const key=exactAddressKey(active.basicAddress);
+   return active.lifecycle==='ACTIVE'&&key!==null&&key===exactAddressKey(row.address||row.customerAddress||row.basicAddress||row.latestAddress);
+  });
+  return current ? [...preserved,...preservedMatches(query,current.snapshot).matches] : preserved;
+ });
  return rows.map(queries=>{
   if(!queries.length)return {status:'INVALID_ADDRESS'};
   const isCode=code(queries[0].toUpperCase());
   const matched=new Set(queries.flatMap(find));
   let official,officialError=false;
   // A verified road/lot pair is one address identity, including when the postal point is unverified.
-  if(!isCode&&!matched.size){
+  if(!isCode&&![...matched].some(approvedPoint)){
    try{
     const hits=measure('official',()=>queries.map(query=>officialIndex?.lookup(query)).filter(Boolean));
     for(const alias of hits.flatMap(hit=>[hit.road,hit.lot]).filter(Boolean)){
@@ -111,24 +140,28 @@ export function resolvePreservedAddressBatch(rows,snapshot,officialIndex,{includ
     official=hits[0];
    }catch{officialError=true;}
   }
+  const customers=includeCustomers&&matched.size?{customerCodes:[...new Set([...matched].map(row=>row.customerCode))].slice(0,50)}:{};
   if(matched.size){
-   const customers=includeCustomers?{customerCodes:[...new Set([...matched].map(row=>row.customerCode))].slice(0,50)}:{};
+   if([...matched].some(row=>row.addressChanged||row.coordinateStatus==='CONFLICT'||row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED'))
+    return {status:'STORED_COORDINATE_UNVERIFIED',...customers};
    const points=new Map();
-   for(const row of matched){const point=approvedPoint(row);if(!point)return {status:'STORED_COORDINATE_UNVERIFIED',...customers};
-    points.set(`${point.lat},${point.lng}`,point);}
-   if(points.size!==1)return {status:'ADDRESS_AMBIGUOUS',...customers,
+   for(const row of matched){const point=approvedPoint(row);if(point)points.set(`${point.lat},${point.lng}`,point);}
+   if(points.size>1)return {status:'ADDRESS_AMBIGUOUS',...customers,
     points:[...points.values()].slice(0,12).map(point=>({...point,coordinateSource:'STAGE_PRESERVED_COORDINATE'}))};
-   return {status:'STORED',...customers,point:{...points.values().next().value,coordinateSource:'STAGE_PRESERVED_COORDINATE'}};
+   if(points.size===1)return {status:'STORED',...customers,point:{...points.values().next().value,coordinateSource:'STAGE_PRESERVED_COORDINATE'}};
+   if(isCode||!official)return {status:'STORED_COORDINATE_UNVERIFIED',...customers,
+    ...(includeExternalEligibility&&!isCode?{externalEligible:true}:{})};
   }
   if(isCode)return {status:'CUSTOMER_CODE_NOT_FOUND'};
   if(officialError)return {status:'OFFICIAL_ADDRESS_UNAVAILABLE'};
   if(!official)return {status:officialIndex?'ADDRESS_NOT_MATCHED':'OFFICIAL_ADDRESS_INDEX_UNAVAILABLE'};
   const points=(official.points||[[official.lat,official.lng]]).map(([lat,lng])=>safePoint({lat,lng})).filter(Boolean);
-  if(official.kind==='CHOOSE'&&points.length>1)return {status:'OFFICIAL_ADDRESS_AMBIGUOUS',points};
-  if(official.coordinateKind==='STORED'&&points.length===1)return {status:'STORED',point:{...points[0],coordinateSource:'STAGE_PRESERVED_COORDINATE'}};
-  if((!official.kind||official.kind==='EXACT')&&points.length===1)return {status:'OFFICIAL',point:{...points[0],
+  if(official.kind==='CHOOSE'&&points.length>1)return {status:'OFFICIAL_ADDRESS_AMBIGUOUS',...customers,points};
+  if(official.coordinateKind==='STORED'&&points.length===1)return {status:'STORED',...customers,point:{...points[0],coordinateSource:'STAGE_PRESERVED_COORDINATE'}};
+  if((!official.kind||official.kind==='EXACT')&&points.length===1)return {status:'OFFICIAL',...customers,point:{...points[0],
     coordinateSource:official.coordinateKind==='PARCEL'?'OFFICIAL_PUBLIC_PARCEL':official.coordinateKind==='ADDRESS'?'OFFICIAL_PUBLIC_ADDRESS':'OFFICIAL_PUBLIC_BUILDING'}};
-  return {status:'OFFICIAL_COORDINATE_UNVERIFIED'};
+  if(official.reviewOnly)return {status:'OFFICIAL_ADDRESS_REVIEW_REQUIRED',...customers};
+  return {status:'OFFICIAL_COORDINATE_UNVERIFIED',...customers};
  });
 }
 export async function searchCustomerSummaries({query,snapshot,searchMaster,signal,deadline}){

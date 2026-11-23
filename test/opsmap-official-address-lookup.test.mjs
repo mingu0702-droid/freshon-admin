@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {createOfficialAddressLookup,officialAddressKey} from '../src/opsmapOfficialAddressLookup.js';
+import {createOfficialAddressLookup,officialAddressKey,readStageOfficialAddressReview,readStageOfficialAddressSupplement} from '../src/opsmapOfficialAddressLookup.js';
+import {resolvePreservedAddressBatch} from '../src/privateCustomerSearch.js';
+import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
 import {createKakaoCoordinateConnection} from '../src/opsmap-abc/kakaoCoordinateConnection.js';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -19,6 +21,9 @@ test('only an exact normalized whole building address resolves',()=>{
   assert.equal(officialAddressKey('경기 합성시 합성대로77번길 24-1 (합성동)'), '경기도합성시합성대로77번길24-1');
   assert.deepEqual(index.lookup(address),{lat:37.4,lng:127.1});
   assert.deepEqual(index.lookup('경기 합성시 합성대로77번길24-1 (합성동)'),{lat:37.4,lng:127.1});
+  assert.deepEqual(index.lookup('경기 합성시 합성대로77번길 24 – 1 (합성동)'),{lat:37.4,lng:127.1});
+  assert.equal(officialAddressKey('경기 합성시 합성동 34 - 4'),'경기도합성시합성동34-4');
+  assert.notEqual(officialAddressKey('경기 합성시 합성동 34 - 4'),officialAddressKey('경기 합성시 합성동 34'));
   for(const invalid of ['경기 합성시 합성대로77번길 24','경기 합성시 합성대로77번길 24-11','서울 합성시 합성대로77번길 24-1','합성시 합성대로77번길 24-1','합성상호']) {
     assert.equal(index.lookup(invalid),null);
   }
@@ -30,6 +35,47 @@ test('digest, provenance, address hashes and bounds fail closed without includin
   for(const rows of [[row,row],[{...row,lat:127.1}],[{...row,address}], [{...row,addressSha256:'X'.repeat(64)}]]){
     assert.throws(()=>create({...document,rows}),/OFFICIAL_ADDRESS_INDEX_ROW/);
   }
+});
+
+test('persistent supplemental address index uses exact Stage and digest-pinned official v1 bytes',()=>{
+  const payload=bytes(document),env={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
+    OPSMAP_STAGE_OFFICIAL_ADDRESS_SUPPLEMENT_SHA256:digest(payload)};
+  let reads=0,rejected=0;
+  const readFile=file=>{reads++;assert.equal(file,'/etc/secrets/opsmap-stage-official-address-supplement-v1.json');return payload;};
+  const onReject=()=>rejected++;
+  assert.equal(readStageOfficialAddressSupplement({...env,RENDER_EXTERNAL_URL:'https://production.invalid'},{readFile,onReject}),null);
+  assert.equal(reads,0);
+  assert.deepEqual(readStageOfficialAddressSupplement(env,{readFile,onReject}).lookup(address),{lat:37.4,lng:127.1});
+  assert.equal(reads,1);
+  assert.equal(readStageOfficialAddressSupplement({...env,OPSMAP_STAGE_OFFICIAL_ADDRESS_SUPPLEMENT_SHA256:'f'.repeat(64)},{readFile,onReject}),null);
+  const mixed=bytes({...document,schema:'opsmap-official-address-index-v2',rows:[{...row,coordinateKind:'BUILDING'}]});
+  assert.equal(readStageOfficialAddressSupplement({...env,OPSMAP_STAGE_OFFICIAL_ADDRESS_SUPPLEMENT_SHA256:digest(mixed)},
+    {readFile:()=>mixed,onReject}),null);
+  assert.equal(rejected,2);
+});
+
+test('supplemental review accepts only Stage-pinned candidates and never selects a point automatically',()=>{
+  const lot='경기도 합성시 합성동 10';
+  const base={road:address,lot};
+  const candidates=[[37.4,127.1],[37.401,127.101]];
+  const first={...base,key:digest(officialAddressKey(address)),kind:'CHOOSE',points:candidates};
+  const second={...base,key:digest(officialAddressKey(lot)),kind:'MANUAL',points:[]};
+  const data={schema:'opsmap-official-address-review-v1',rows:[first,second]};
+  const payload=bytes(data);
+  const env={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
+    OPSMAP_STAGE_OFFICIAL_ADDRESS_REVIEW_SHA256:digest(payload)};
+  let reads=0,rejected=0;
+  const onReject=()=>rejected++;
+  const readFile=path=>{reads++;assert.equal(path,'/etc/secrets/opsmap-stage-official-address-review-v1.json');return payload;};
+  assert.equal(readStageOfficialAddressReview({...env,RENDER_SERVICE_ID:'production'},{readFile,onReject}),null);
+  assert.equal(reads,0);
+  const index=readStageOfficialAddressReview(env,{readFile,onReject});
+  const results=resolvePreservedAddressBatch([[address],[lot]],{rows:[]},index);
+  assert.deepEqual(results,[{status:'OFFICIAL_ADDRESS_AMBIGUOUS',points:[{lat:37.4,lng:127.1},{lat:37.401,lng:127.101}]},
+    {status:'OFFICIAL_ADDRESS_REVIEW_REQUIRED'}]);
+  const exact=bytes({...data,rows:[{...first,kind:'EXACT',points:[candidates[0]]}]});
+  assert.equal(readStageOfficialAddressReview({...env,OPSMAP_STAGE_OFFICIAL_ADDRESS_REVIEW_SHA256:digest(exact)},{readFile:()=>exact,onReject}),null);
+  assert.equal(rejected,1);
 });
 
 test('official-only relay is independent of the external ledger and is revoked with its index',async()=>{

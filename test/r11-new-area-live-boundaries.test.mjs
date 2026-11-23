@@ -45,6 +45,7 @@ function fixture({rows=[],stageBatch,verifiedStage=false,customer=()=>({data:[],
   let staff={authenticated:true,expiresAt:Date.now()+600_000,idleExpiresAt:Date.now()+60_000};
   if(verifiedStage){
     window.MapStaffEntry={session:()=>staff};
+    window.Phase2bUi=globalThis.Phase2bUi;
     vm.runInContext(areaRequests,context);
     context.NewAreaRequests=window.NewAreaRequests;
   }
@@ -82,10 +83,41 @@ test('basic query reuses existing variants, keeps road/lot numbers and scopes of
   ];
   for(const [input,expected] of cases){
     assert.equal(queryChoices(input).at(-1),expected,input);assert.ok(queryChoices(input).length<=2);
-    assert.equal(query(input),globalThis.Phase2bUi.addressVariants(input.normalize('NFKC').replace(/(동|읍|면|리|대로|로|길)(\d+(?:-\d+)?)(?=\s|\(|\[|$)/g,'$1 $2')).at(-1));
+    assert.equal(query(input),globalThis.Phase2bUi.addressVariants(input)[0]);
   }
   assert.equal(query('합성건물 고객정보만'), '');
   assert.equal(query('합성건물 (경기 안성시 일죽면 서동대로 7184)'), '');
+});
+
+test('paste and address normalization preserve original cells, unit text and exact building identity',()=>{
+  const raw='  서울동대문구 합성로40번길7 （법정동, 합성건물） 101동 803호  ';
+  const row=globalThis.NewAreaRequests.parseAreaInput(raw+'\t"상호"')[0];
+  assert.deepEqual([row.originalAddress,row.originalCustomer,row.originalInput],[raw,'상호',raw+'\t"상호"']);
+  assert.deepEqual([row.inputKind,row.lookupAddress,row.detailAddress,row.addressAnnotations],
+    ['ROAD','서울 동대문구 합성로40번길 7','101동 803호',['(법정동, 합성건물)']]);
+  assert.deepEqual(globalThis.Phase2bUi.addressVariants(raw,{equivalents:true}),
+    ['서울 동대문구 합성로40번길 7','서울특별시 동대문구 합성로40번길 7']);
+  assert.deepEqual(queryChoices(raw),['서울 동대문구 합성로40번길 7']);
+  assert.equal(query('경기 성남시 분당구 합성동34 − 4번지'),'경기 성남시 분당구 합성동 34-4');
+  assert.equal(query('경기 성남시 분당구 합성동 34 -'),'');
+  assert.equal(globalThis.Phase2bUi.addressMatches('서울 동대문구 합성로 80','서울특별시 동대문구 합성로 80'),true);
+  assert.equal(globalThis.Phase2bUi.addressMatches('서울 동대문구 합성로 80','서울특별시 동대문구 새합성로 80'),false);
+  assert.equal(globalThis.Phase2bUi.addressMatches('서울 동대문구 합성로 80','서울특별시 동대문구 합성로 80-1'),false);
+  assert.equal(globalThis.Phase2bUi.addressMatches('경기 성남시 분당구 합성동 산34-4','경기도 성남시 분당구 합성동 산 34-4번지'),true);
+  const rows=globalThis.NewAreaRequests.parseAreaInput('ｓ１２３４\t업체\n'+raw+'\t업체\t기타');
+  assert.deepEqual(rows.map(row=>row.inputKind),['CUSTOMER_CODE','AMBIGUOUS']);
+  assert.deepEqual(globalThis.NewAreaRequests.batchAddressQueries(rows),{inputs:[['S1234']],indexes:[0,-1]});
+});
+
+test('the protected batch can match historical district names without adding external provider queries',()=>{
+  for(const [address,primary,alias] of [
+    ['인천 검단구 합성로40번길 7 (원당동)','인천 검단구 합성로40번길 7','인천광역시 서구 합성로40번길 7'],
+    ['전남광주통합특별시 목포시 합성로 21','전남광주통합특별시 목포시 합성로 21','전라남도 목포시 합성로 21'],
+    ['전남광주통합특별시 고흥군 고흥읍 합성길 21','전남광주통합특별시 고흥군 고흥읍 합성길 21','전라남도 고흥군 고흥읍 합성길 21']
+  ]){
+    assert.deepEqual(queryChoices(address),[primary]);
+    assert.deepEqual(globalThis.NewAreaRequests.batchAddressQueries([{address}]),{inputs:[[primary,alias]],indexes:[0]});
+  }
 });
 
 test('balanced address annotations and floor text stay out of the lookup identity',()=>{
@@ -160,7 +192,7 @@ test('Stage keeps one request for new rows and never reuses held results, revoke
   status=401;
   await paste(addresses);
   assert.equal(f.batches.at(-1).rows.length,46);
-  assert(f.state.newAreaResults.every(row=>row.lookupStatus==='FAILED'));
+  assert(f.state.newAreaResults.every(row=>row.lookupState==='LOOKUP_BLOCKED'));
 });
 
 test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with no Y transmission',async()=>{
@@ -178,7 +210,7 @@ test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with n
   }
   const exported=globalThis.MapPeriodUi.areaExportRows(f.state.newAreaResults,'2026-11-03');
   assert.deepEqual(Array.from(exported,row=>Array.from(row).slice(0,2)),cells.map(({x,y})=>[x,y]));
-  assert.match(f.node('#newAreaBatchStatus').textContent,/완료 60 · 위치 확인 60 · 보류 0 · 실패 0 · 한도대기 0/);
+  assert.match(f.node('#newAreaBatchStatus').textContent,/처리 60 · 위치 확인 60 .*후보·입력 검토 0 · 자료 범위 밖 0 · 권한·한도 0 · 조회 실패 0/);
   assert.match(f.node('#newAreaBatchResults').innerHTML,/가장 가까운 등록 매장\(직선거리\)/);
   assert.match(f.node('#newAreaBatchResults').innerHTML,/참고 배차호차 · 확인된 호차 없음/);
   assert.equal(JSON.stringify(f.saved()),original,'REST coordinates never mutate the saved snapshot');
@@ -255,7 +287,7 @@ test('zero result, ambiguous response and individual query failure do not stop l
   await f.run([2,3,4,5,1].map(i=>`경기도 화성시 합성로 ${i}\t합성${i}`).join('\n'));
   assert.equal(f.state.newAreaResults.length,5);assert.equal(f.state.newAreaResults[0].reason,'주소 확인 필요');assert.equal(f.state.newAreaResults[1].reason,'주소 복수 후보');
   assert.equal(f.state.newAreaResults[2].lookupStatus,'FAILED');assert.equal(f.state.newAreaResults[3].lookupStatus,'SUCCESS');assert.equal(f.state.newAreaResults[4].lookupStatus,'SUCCESS');
-  assert.equal(f.queries.length,4);assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 2 · 보류 2 · 실패 1 · 한도대기 0/);
+  assert.equal(f.queries.length,4);assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 2 .*후보·입력 검토 1 · 자료 범위 밖 1 · 권한·한도 0 · 조회 실패 1/);
 });
 
 for(const code of ['KAKAO_HTTP_REJECTED','GEOCODE_DAILY_LIMIT'])test(`${code} stops subsequent REST calls but finishes every row and reuses saved coordinates`,async()=>{
@@ -264,10 +296,10 @@ for(const code of ['KAKAO_HTTP_REJECTED','GEOCODE_DAILY_LIMIT'])test(`${code} st
   assert.equal(f.state.newAreaResults.length,3);assert.equal(f.queries.length,1);assert.equal(f.state.newAreaResults[2].lookupStatus,'SUCCESS');
   if(code==='GEOCODE_DAILY_LIMIT'){
     assert.equal(f.state.newAreaResults[0].lookupStatus,'LIMIT');assert.equal(f.state.newAreaResults[1].lookupStatus,'LIMIT');
-    assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 1 · 보류 0 · 실패 0 · 한도대기 2/);
+    assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 1 .*자료 범위 밖 0 · 권한·한도 2 · 조회 실패 0/);
   }else{
     assert.equal(f.state.newAreaResults[0].lookupStatus,'FAILED');assert.equal(f.state.newAreaResults[1].lookupStatus,'DEFERRED');
-    assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 1 · 보류 1 · 실패 1 · 한도대기 0/);
+    assert.match(f.node('#newAreaBatchStatus').textContent,/위치 확인 1 .*자료 범위 밖 1 · 권한·한도 0 · 조회 실패 1/);
   }
 });
 
@@ -312,7 +344,7 @@ test('anonymous temporary points never enter manual-pin projection and complete 
   await f.run(Array.from({length:60},(_,i)=>`경기도 화성시 합성로 ${i+100}\t합성고객${i}`).join('\n'));
   assert.equal(f.state.newAreaResults.length,60);assert.equal(f.queries.length,60);
   assert.ok(f.state.newAreaResults.every(row=>row.lookupStatus==='SUCCESS'&&!row.lookupError));
-  assert.match(f.node('#newAreaBatchStatus').textContent,/완료 60 · 위치 확인 60 · 보류 0 · 실패 0 · 한도대기 0/);
+  assert.match(f.node('#newAreaBatchStatus').textContent,/처리 60 · 위치 확인 60 .*후보·입력 검토 0 · 자료 범위 밖 0 · 권한·한도 0 · 조회 실패 0/);
   assert.equal(manualCalls,0,'anonymous points must bypass the customer-only manual projection');
 });
 

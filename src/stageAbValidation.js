@@ -7,15 +7,16 @@ import {promisify} from 'node:util';
 import express from 'express';
 import {coordinateAddressHash,externalCoordinateAddress} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {createFixedCoordinateResolver, hasFixedCoordinatePoint, readFixedCoordinateLedger} from './fixedStoreCoordinates.js';
-import {parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
+import {isDay, parseCoverageIndex, PERIODS} from './shadowCoverage/coverageFiles.js';
 import {readStageArchivedDelivery} from './stageArchivedDelivery.js';
 import {createOfficialAddressLookup,createOfficialAddressReview,officialAddressKey} from './opsmapOfficialAddressLookup.js';
 import {addStaffTiming} from './opsmap-abc/staffLatency.js';
 import {createLegacyNearbyVehicleReader, readStageNearbyEvidence, stageNearbyResponse} from './stageNearbyEvidence.js';
-import {preparePreservedAddressIndex,resolvePreservedAddressBatch,searchPreservedRegistry} from './privateCustomerSearch.js';
+import {preparePreservedAddressIndex,prepareStageAddressMasterIndex,resolvePreservedAddressBatch,searchPreservedRegistry} from './privateCustomerSearch.js';
 import {archivedOpsmapAssignments} from './opsmapSyncGeneration.js';
 import {collectStageVehicleWeekdays, opsmapVehicleDeliveryPage} from './opsmapVehicleDeliveryEvidence.js';
 import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
+import {archivedDatedDispatch} from './datedDeliveryContract.js';
 
 import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_NEARBY_ROUTE,STAGE_VEHICLE_DELIVERY_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,MAX_STAGE_BUNDLE_BYTES} from './stageScope.js';
 export {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_NEARBY_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,MAX_STAGE_BUNDLE_BYTES} from './stageScope.js';
@@ -366,13 +367,60 @@ function publicStatus(prepared) {
 }
 
 const externalAddressMisses=new Set(['ADDRESS_NOT_MATCHED','OFFICIAL_ADDRESS_UNAVAILABLE','OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_COORDINATE_UNVERIFIED']);
+const reviewAddressResults=new Set(['ADDRESS_AMBIGUOUS','OFFICIAL_ADDRESS_AMBIGUOUS','OFFICIAL_ADDRESS_REVIEW_REQUIRED',
+  'STORED_COORDINATE_UNVERIFIED','OFFICIAL_COORDINATE_UNVERIFIED','INVALID_ADDRESS']);
+const failedAddressResults=new Set(['OFFICIAL_ADDRESS_UNAVAILABLE','OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','STORED_REGISTRY_UNAVAILABLE']);
+const blockedExternalErrors=new Set(['GEOCODING_DISABLED','GEOCODE_DAILY_LIMIT','GEOCODE_AUTOMATICALLY_BLOCKED',
+  'GEOCODE_RETRY_COOLDOWN','TARGET_APP_FREE_QUOTA_UNVERIFIED','TARGET_APP_KEYWORD_FREE_QUOTA_UNVERIFIED','GEOCODE_QUERY_INVALID']);
+const addressState=status=>status==='STORED'?'STORED_VERIFIED':status==='OFFICIAL'?'OFFICIAL_VERIFIED':
+  reviewAddressResults.has(status)?'CANDIDATE_REVIEW':failedAddressResults.has(status)?'LOOKUP_FAILED':'SOURCE_NOT_COVERED';
 
-export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot, readReadySnapshot, readOfficialIndex, externalAddressLookup}) {
+const dailyCenters=['osan','yeongnam','honam'];
+export function stageNearbyDispatchDay(prepared,date,day) {
+  const centers=Object.fromEntries(dailyCenters.map(center=>[center,'UNKNOWN']));
+  const rows=new Map();
+  if(day?.date===date&&Array.isArray(day.dispatch?.sources)) for(const center of dailyCenters){
+    const view=archivedDatedDispatch(day,{center,generation:prepared.generation,
+      sourceRunId:prepared.scheduled?.state?.runId,publishedAt:prepared.scheduled?.state?.committedAt});
+    if(view?.sourceComplete!==true||view.scopeComplete!==true||view.date!==date)continue;
+    centers[center]='VERIFIED';
+    for(const row of view.rows){
+      if(!row.vehicle||row.state==='CANCELLED'||!/^[A-Z]\d{1,20}$/.test(row.customerCode))continue;
+      const key=`${center}|${row.customerCode}|${row.vehicle}`;
+      const completed=row.state==='COMPLETED'||rows.get(key)?.completed===true;
+      rows.set(key,{customerCode:row.customerCode,center,vehicle:row.vehicle,completed});
+    }
+  }
+  const verified=Object.values(centers).filter(state=>state==='VERIFIED').length;
+  return {contract:'opsmap-nearby-dispatch-day-v1',generation:prepared.generation,date,
+    state:verified===dailyCenters.length?'VERIFIED':verified?'PARTIAL':'UNAVAILABLE',centers,rows:[...rows.values()]};
+}
+
+export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot, readReadySnapshot, readOfficialIndex, readAddressMaster, externalAddressLookup}) {
   const noStore = (_req, res, next) => {res.set('Cache-Control','private, no-store').vary('Cookie'); next();};
   const readVehicleDays=createLegacyNearbyVehicleReader();
   router.get(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (_req, res) => res.json(publicStatus(validation.active())));
   router.get(STAGE_NEARBY_ROUTE, requireStaff, noStore, async (req, res) => {
     const prepared = validation.active();
+    if(req.query.view==='day'){
+      const {date,generation}=req.query;
+      const today=new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+      if(!isDay(date)||date>today||typeof generation!=='string'||!/^[a-f0-9]{64}$/.test(generation)||
+         Object.keys(req.query).some(key=>!['view','date','generation'].includes(key)))
+        return res.status(400).json({error:'STAGE_NEARBY_DAY_QUERY'});
+      if(!prepared)return res.status(503).json({error:'STAGE_NEARBY_NOT_READY'});
+      if(generation!==prepared.generation)return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
+      let archive,result;
+      try {
+        archive=await prepared.readNearbyDay?.(date);
+        result=stageNearbyDispatchDay(prepared,date,archive);
+      } catch {result=stageNearbyDispatchDay(prepared,date,null);}
+      return requireStaff(req,res,()=>{
+        if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
+        if(validation.active()!==prepared)return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
+        return res.json(result);
+      });
+    }
     if (!prepared?.nearby) return res.status(503).json({error:'STAGE_NEARBY_NOT_READY'});
     if (req.query.generation && req.query.generation!==prepared.generation) return res.status(409).json({error:'STAGE_NEARBY_GENERATION_CHANGED'});
     const codes = [...prepared.registry.values()].filter(store => store.hasPoint).map(store => store.code);
@@ -422,41 +470,47 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         !Array.isArray(rows)||rows.length<1||rows.length>120||rows.some(row=>!Array.isArray(row)||row.length>2||!row.every(queryOk))||
         includeCustomers!==undefined&&(includeCustomers!==true||rows.length!==1)||
         external!==undefined&&(!['prepare','resolve'].includes(external)||includeCustomers!==true||!generation||
-          rows[0].length!==1||!officialAddressKey(rows[0][0])||!externalCoordinateAddress(rows[0][0]))) {
+          !officialAddressKey(rows[0][0])||!externalCoordinateAddress(rows[0][0])||
+          rows[0].some(query=>officialAddressKey(query)!==officialAddressKey(rows[0][0])))) {
         return res.status(400).json({error:'STAGE_BATCH_QUERY_INVALID'});
       }
       const started=performance.now();
-      let outcomes=null;
+      let outcomes=null, stateRows;
       res.once('finish',()=>console.info(JSON.stringify({component:'stage-address-batch',rows:rows.length,
-        status:res.statusCode,durationMs:Math.round(performance.now()-started),outcomes})));
+        status:res.statusCode,durationMs:Math.round(performance.now()-started),outcomes,
+        states:stateRows?.reduce((counts,{state})=>({...counts,[state]:(counts[state]||0)+1}),{})??null})));
       const prepared=validation.active();
       const generationError=validation.addressGenerationError(generation,prepared);
       if(generationError)return res.status(409).json({error:generationError});
       try{
         const loaded=generation!==null ? prepared?.scheduled?.snapshot||readReadySnapshot?.() : null;
         const immediate=loaded?.sourceGeneration===generation&&Array.isArray(loaded?.rows);
-        const saved=immediate?loaded:await readSnapshot();
+        const [saved,master]=await Promise.all([
+          immediate?loaded:readSnapshot(),Promise.resolve().then(()=>readAddressMaster?.()).catch(()=>null)
+        ]);
         const changed=validation.addressGenerationError(generation,validation.active());
         if(changed||validation.active()!==prepared||generation!==null&&saved?.sourceGeneration!==generation)
           return res.status(409).json({error:changed||'STAGE_BATCH_GENERATION_CHANGED'});
         const bundled=prepared?.bundledAddress, independent=readOfficialIndex?.();
         const official=bundled||independent?{lookup(query){
           const primary=bundled?.lookup(query);
-          if(primary&&(!primary.kind||primary.kind==='EXACT'))return primary;
+          if(primary&&(!primary.kind||primary.kind==='EXACT'||primary.kind==='CHOOSE'))return primary;
           return independent?.lookup(query)??primary;
         }}:null;
         const snapshotReady=Array.isArray(saved?.rows);
-        if(!snapshotReady&&!official)return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});
+        if(!snapshotReady&&!official&&!master)return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE',state:'LOOKUP_FAILED'});
         const preparing=performance.now();
-        if(snapshotReady&&rows.some(row=>row.some(query=>!/^[A-Z]\d{1,20}$/i.test(query)))) {
-          await preparePreservedAddressIndex(saved);
+        if(rows.some(row=>row.some(query=>!/^[A-Z]\d{1,20}$/i.test(query)))) {
+          await Promise.all([preparePreservedAddressIndex(saved),prepareStageAddressMasterIndex(master)]);
         }
         if(res.destroyed||res.writableEnded)return;
         const matching=performance.now();
         const lookupTimings=includeCustomers?{}:null;
-        const data=resolvePreservedAddressBatch(rows,snapshotReady?saved:{rows:[]},official,{includeCustomers,timings:lookupTimings}).map(row=>
+        const data=resolvePreservedAddressBatch(rows,snapshotReady?saved:{rows:[]},official,{includeCustomers,timings:lookupTimings,master,
+          includeExternalEligibility:!!external}).map(row=>
           !snapshotReady&&['CUSTOMER_CODE_NOT_FOUND','ADDRESS_NOT_MATCHED'].includes(row.status)
-            ?{status:'STORED_REGISTRY_UNAVAILABLE'}:row);
+            ?{status:'STORED_REGISTRY_UNAVAILABLE',state:'LOOKUP_FAILED'}:{...row,state:addressState(row.status)});
+        stateRows=data;
         const matched=performance.now();
         outcomes=data.reduce((counts,{status})=>({...counts,[status]:(counts[status]||0)+1}),{});
         const baseTiming={
@@ -464,7 +518,10 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
           'opsmap-address-match':matched-matching,
           ...(lookupTimings?{'opsmap-address-customer':lookupTimings.customer||0, 'opsmap-address-official':lookupTimings.official||0}:{})
         };
-        const canLookup=external&&externalAddressLookup&&immediate&&externalAddressMisses.has(data[0].status);
+        const eligibleForExternal=externalAddressMisses.has(data[0].status)||data[0].externalEligible===true;
+        delete data[0].externalEligible;
+        const canLookup=external&&externalAddressLookup&&immediate&&eligibleForExternal;
+        if(external==='resolve'&&!canLookup&&eligibleForExternal)data[0].state='LOOKUP_BLOCKED';
         let externalResult;
         if(canLookup){
           const sessionKey=res.locals.staffSession?.key;
@@ -484,6 +541,8 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
           }else{
             externalResult=await externalAddressLookup.lookup(rows[0][0],{mode:'address',assertCurrent});
             data[0].external=externalResult.data;
+            data[0].state=externalResult.data.exact===true&&externalResult.data.resolution?.kind==='EXACT'?'EXTERNAL_VERIFIED':
+              externalResult.data.resolution?.kind==='ZERO_RESULT'?'SOURCE_NOT_COVERED':'CANDIDATE_REVIEW';
             addStaffTiming(res,'geocodeLedger',externalResult.ledgerReservationMs);
             for(const [phase,ms] of Object.entries(externalResult.serverTimings||{}))addStaffTiming(res,phase,ms);
             if(Number.isFinite(externalResult.providerDurationMs))baseTiming['opsmap-kakao-provider']=externalResult.providerDurationMs;
@@ -506,7 +565,10 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         if(res.destroyed||res.writableEnded)return;
         const code=external&&/^[A-Z_]+$/.test(error.code||'')?error.code:'STAGE_BATCH_UNAVAILABLE';
         const status=[400,401,403,409,429,502,503].includes(error.status)?error.status:503;
-        return res.status(status).json({error:code,...(Number.isInteger(error.providerHttp)?{providerHttp:error.providerHttp}:{})});
+        const state=blockedExternalErrors.has(code)||status===429||[401,403,429].includes(error.providerHttp)?'LOOKUP_BLOCKED':'LOOKUP_FAILED';
+        if(external==='resolve'&&stateRows?.[0])stateRows[0].state=state;
+        return res.status(status).json({error:code,state,
+          ...(Number.isInteger(error.providerHttp)?{providerHttp:error.providerHttp}:{})});
       }
     }
     if(external!==undefined||!/^[a-f0-9]{64}$/.test(generation||'')||!Array.isArray(queries)||queries.length<1||queries.length>120||

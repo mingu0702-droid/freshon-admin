@@ -42,7 +42,7 @@ const liveVehicles=['101','122'].map(vehicle=>({vehicle,stops:todayRows.filter(r
 }))}));
 const version='f'.repeat(64),requests=[],external=[],errors=[],checks=[];
 const checkedAt='2026-10-20T00:00:00.000Z',basis='FIXED_DISPATCH_PRIMARY';
-const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','vehicle-picker-regions.js','opsmap-daily.js','map-phase2b-runtime.js','map-approved-shell-candidate.js'];
+const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','new-area-detail-panel.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','vehicle-picker-regions.js','opsmap-daily.js','map-phase2b-runtime.js','map-approved-shell-candidate.js'];
 const fixture=`window.VEHICLE_AREA_DATA=${JSON.stringify({vehicles})};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
 document.body.dataset.mapStaffState='authenticated';
 window.MapStaffEntry={status(){},registerPurge(){}};

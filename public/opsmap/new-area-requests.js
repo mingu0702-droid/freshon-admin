@@ -1,16 +1,18 @@
 (function (root) {
   'use strict';
   const failure = code => Object.assign(new Error(code), { code });
+  const customerCode = /^[A-Z]\d{3,}$/;
+  const parcelNumber = /^\d{10}[12](?!0000)\d{8}$/;
+  const lookupIdentity = value => String(value ?? '').normalize('NFKC').trim().toUpperCase();
   // Search identity is separate from the unchanged X/Y cells and address hash.
-  function addressQueries(address, variants) {
+  function addressQueries(address, variants = root.Phase2bUi.addressVariants, {historicCatalog = false} = {}) {
     const normalized = String(address || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
-    const choices = variants(normalized);
-    const primary = choices[choices.length - 1] || '';
+    const [primary=''] = variants(normalized);
     if(/[()[\]]/.test(primary)||!/(?:대로|로|길|동\d+가|동|읍|면|리|가)\s+(?:(?:산|지하)\s*)?\d+(?:-\d+)?$/.test(primary))return [];
     let query = primary;
     // Official search aliases only; the original address and its identity are untouched.
     // https://www.incheon.go.kr/IC01070101 (2026-07-01 administrative reorganization)
-    const districtHints=[['제물포구','송림동','동구'],['영종구','운남동','중구'],['검단구','당하동','서구']];
+    const districtHints=[['제물포구','송림동','동구'],['영종구','운남동','중구'],['검단구',historicCatalog?'(?:당하동|원당동)':'당하동','서구']];
     for(const [current,dong,previous] of districtHints){
       if(new RegExp('(?:^|[\\s(,])'+dong+'(?=[\\s),]|$)').test(normalized))query=query.replace(new RegExp('^인천(?:광역시|시)?\\s+'+current+'(?=\\s)'), '인천광역시 '+previous);
     }
@@ -18,16 +20,29 @@
     query=query.replace(/^((?:경기도|경기)\s+화성시)\s+(?:만세구|효행구|병점구|동탄구)\s+/, '$1 ');
     // Law 21446 (2026-07-01), Jeonnam Education Office official copy:
     // https://www.jne.go.kr/upload/open/na/bbs_297/ntt_5170418/doc_3519ab36-5a2c-41ed-a852-2eb33fc1588f1773a1213b74675.pdf
-    query=query.replace(/^전남광주통합특별시\s+(?=(?:순천시|광양시|강진군)\s)/,'전라남도 ');
+    const formerJeonnam=historicCatalog?'순천시|광양시|목포시|강진군|고흥군':'순천시|광양시|강진군';
+    query=query.replace(new RegExp('^전남광주통합특별시\\s+(?=(?:'+formerJeonnam+')\\s)'),'전라남도 ');
     if(/(?:^|[\s(,])용봉동(?=[\s),]|$)/.test(normalized))query=query.replace(/^전남광주통합특별시\s+북구(?=\s)/,'광주광역시 북구');
-    return [...new Set([primary,query])];
+    // Equivalent province spellings already share an official index key.
+    // Reserve the second query for a scoped administrative boundary change.
+    return query !== primary ? [primary,query] : [primary];
   }
   function addressQuery(address, variants) { return addressQueries(address,variants)[0] || ''; }
+  function parseAreaInput(text, parse = root.MapPeriodUi.parseAreaInput) {
+    return parse(text).map(row => {
+      const key = lookupIdentity(row.address);
+      const parsed = root.Phase2bUi.parseAddress(row.originalAddress);
+      const inputKind = row.inputAmbiguous ? 'AMBIGUOUS' : customerCode.test(key) ? 'CUSTOMER_CODE' :
+        parcelNumber.test(key) ? 'PARCEL_NUMBER' : parsed.kind ? parsed.kind.toUpperCase() : 'UNPARSED';
+      return {...row,inputKind,lookupAddress:parsed.base,detailAddress:parsed.details,addressAnnotations:parsed.annotations};
+    });
+  }
   function batchAddressQueries(rows, variants) {
     const unique = new Map();
     const indexes = rows.map(row => {
-      const code = row.address.trim().toUpperCase();
-      const queries = /^[A-Z]\d{3,}$/.test(code) || /^\d{19}$/.test(code) ? [code] : addressQueries(row.address, variants);
+      if (row.inputAmbiguous) return -1;
+      const code = lookupIdentity(row.address);
+      const queries = customerCode.test(code) || parcelNumber.test(code) ? [code] : addressQueries(row.address, variants,{historicCatalog:true});
       if (!queries.length || queries.some(query=>query.length>200)) return -1;
       const key = JSON.stringify(queries.map(addressKey));
       if (!unique.has(key)) unique.set(key, {index:unique.size, queries});
@@ -140,7 +155,10 @@
       clear() { if (storedBatch === scope) storedBatch = null; }
     };
   }
-  const stageAddressVariants = query => /^\d{19}$/.test(query) ? [query] : addressQueries(query,root.Phase2bUi.addressVariants);
+  const stageAddressVariants = query => {
+    const key=lookupIdentity(query);
+    return customerCode.test(key) || parcelNumber.test(key) ? [key] : addressQueries(query,root.Phase2bUi.addressVariants);
+  };
   const stageAddressKey = variants => JSON.stringify(variants.map(addressKey));
   function readRetainedAddress(key,sessionExpiry) {
     const saved=retained.get(key);
@@ -240,7 +258,7 @@
     flights.clear();
   }
   root.addEventListener?.('map-staff-signed-out',()=>{resetStageAddress();temporary.clear();});
-  root.NewAreaRequests = { lookup, message, addressQuery, addressQueries, batchAddressQueries, addressFailureHint, stopsExternal, outcome, singleStoredLocation,
+  root.NewAreaRequests = { lookup, message, parseAreaInput, addressQuery, addressQueries, batchAddressQueries, addressFailureHint, stopsExternal, outcome, singleStoredLocation,
     stageAddress, cachedStageAddress, stageStoredAddressCache, rememberTemporary, forgetTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
 })(typeof window === 'object' ? window : globalThis);
 

@@ -10,7 +10,7 @@ const rows=Array.from({length:32},(_,i)=>({customerCode:'SYNTHETIC_'+i,customerN
 // Two separate customers at one shop-in-shop coordinate remain two visits.
 rows[1].lat=rows[0].lat;rows[1].lng=rows[0].lng;
 const requests=[],external=[],errors=[],checks=[],version='e'.repeat(64);
-const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','opsmap-daily.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
+const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','new-area-detail-panel.js','manual-waypoints.js','kakao-directions-adapter.js','manual-road-route-ui.js','map-dot-ui.js','opsmap-daily.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
 const fixture=`document.body.dataset.mapStaffState='authenticated';window.VEHICLE_AREA_DATA={vehicles:[{vehicle:'101',group:'osan',customers:[]}]};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
 window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){},toggle(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}

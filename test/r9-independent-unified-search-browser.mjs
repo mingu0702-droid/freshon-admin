@@ -16,7 +16,7 @@ const rows=[
  {customerCode:'B990004',customerName:'합성 미확인 매장',lat:null,lng:null,vehicle:'202'},
  {customerCode:'S990005',customerName:'합성 주소변경 매장',lat:37.54,lng:127.04,vehicle:'172'}
 ].map(row=>({...row,address:'',lastDeliveryDate:day,coordinateSource:'SYNTHETIC_GPS'}));
-const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
+const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','new-area-detail-panel.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js','navigation-ui.js'];
 const fixture=`
 window.VEHICLE_AREA_DATA={vehicles:${JSON.stringify(['101','122','172','202'].map(vehicle=>({vehicle,group:'osan',customers:[]})))}};
 window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};window.fixturePurges=[];window.fixtureOverlays=[];window.fixtureGeocodes=0;

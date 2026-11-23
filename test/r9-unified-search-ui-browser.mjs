@@ -9,7 +9,7 @@ const root=path.resolve('public/opsmap'),output=path.resolve('reports/r9-search-
 const vehicles=[['203','osan'],['102','osan'],['202-1','osan'],['101','osan'],['202','osan'],['용10','osan'],['용2','osan'],['310','yeongnam'],['301','yeongnam'],['410','honam'],['미확인','']].map(([vehicle,group])=>({vehicle,group,customers:[]}));
 const rows=vehicles.filter(v=>/^\d/.test(v.vehicle)).map((v,i)=>({customerCode:'S9800'+String(i+1).padStart(2,'0'),customerName:'SYNTHETIC_ONLY_'+v.vehicle,address:'합성주소 '+i,vehicle:v.vehicle,baseVehicle:v.vehicle,lat:35+i*.15,lng:127+i*.04,lastDeliveryDate:'2026-10-20'}));
 const version='f'.repeat(64),requests=[],external=[],errors=[],checks=[];
-const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js'];
+const scripts=['phase2b-ui-helpers.js','map-period-ui.js','map-view-policy.js','road-route-ui.js','new-area-requests.js','new-area-detail-panel.js','manual-waypoints.js','manual-road-route-ui.js','map-dot-ui.js','map-phase2b-runtime.js','map-approved-shell-candidate.js'];
 const fixture=`window.VEHICLE_AREA_DATA=${JSON.stringify({vehicles})};window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:false};
 window.MapStaffEntry={status(){},registerPurge(){}};window.MapTerritoryUi={renderForSelection(){window.territoryRenders=(window.territoryRenders||0)+1},toggle(){}};
 class Coord{constructor(lat,lng){this.lat=lat;this.lng=lng}getLat(){return this.lat}getLng(){return this.lng}}

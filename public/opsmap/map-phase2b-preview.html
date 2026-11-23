@@ -7,7 +7,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <script src="api-prefix.js"></script>
   <script defer fetchpriority="high" src="map-staff-entry.js?v=20261116-boot2"></script>
-  <link rel="preload" as="script" href="map-phase2b-runtime.js?v=20261123-road-dispatch" fetchpriority="high" data-map-staff-preload>
+  <link rel="preload" as="script" href="map-phase2b-runtime.js?v=20261124-area-recovery" fetchpriority="high" data-map-staff-preload>
   <title>운영지도 | Smart Food Networks</title>
   <style>
     :root{--blue:#2463eb;--ink:#172033;--muted:#6b7788;--line:#dde4ec;--panel:#fff;--actual:#14825d;--estimate:#f59e0b;--danger:#dc3545;--shadow:0 7px 22px #0f172a1c;--left:254px}
@@ -28,6 +28,7 @@
     @media(max-width:760px){.operationBar{display:grid;z-index:65;left:0;right:0;top:0;border-radius:0;grid-template-columns:1.5fr .65fr 1.1fr 1fr;padding:5px;gap:4px;height:86px}.operationField,.operationSync{font-size:10px;height:32px}.opMetric{padding:2px}.leftPanel{padding-top:86px}.operationBar .clock{font-size:10px}body.mobileMap .leftPanel{top:86px;padding-top:0}body.mobileMap .mobileBack{top:96px}body.mobileMap .mobileMapControls{top:147px}body.mobileMap #map{top:190px}.detailWrap{left:auto!important;right:auto!important}.operationBar .operationSync{padding:0 3px}.opMetric b{font-size:10px}}
     .operationSync{font-size:10px;white-space:nowrap}.vehicleSelect.open .vehicleDropdown{top:calc(100% + 4px)}
     @media(max-width:760px){body.mobileMap .detailWrap.open{right:7px!important}}
+    .areaRowEdit form{display:grid;gap:6px;padding:6px 0}.areaRowEdit label{display:grid;gap:3px}.areaRowEdit input{min-width:0;width:100%;padding:5px 7px;border:1px solid var(--line);border-radius:5px}
   </style>
   <link rel="stylesheet" href="phase2b-operations-ui.css?v=20261028-r5">
   <link rel="stylesheet" href="phase2b-review-final.css?v=20261028-r5">
@@ -73,15 +74,17 @@
   <section id="staffAuxContent" class="staffAuxCard" aria-label="직원 보호 상세" hidden></section>
   <section id="mobileWorkspace" class="mobileWorkspace"><button id="sheetExpand" class="sheetHandle" aria-label="패널 펼치기">━</button><nav class="sheetTabs" aria-label="지도 패널"><button data-sheet-tab="filters">호차·조건</button><button data-sheet-tab="stores" class="active">매장 목록</button><button data-sheet-tab="runs">운행목록</button><button data-sheet-tab="new">주소·신규권역</button><button data-sheet-tab="manual">경유 내비</button></nav><div id="mobileDateHome"></div><div id="mobileSheetContent"></div></section>
   <link rel="stylesheet" href="map-staff-entry.css?v=20261115-staff">
-  <script type="application/x-map-staff" data-src="phase2b-ui-helpers.js?v=20261117-first-area-overlap"></script>
+  <script type="application/x-map-staff" data-src="phase2b-ui-helpers.js?v=20261124-area-recovery"></script>
   <link rel="stylesheet" href="map-staff.css?v=20261028-r5">
   <link rel="stylesheet" href="map-period.css?v=20261113-temp-pin-cleanup">
   <script type="application/x-map-staff" data-src="map-staff.js?v=20261117-staff-workflow"></script>
   <script type="application/x-map-staff" data-src="map-view-policy.js?v=20261118-address-timing"></script>
-  <script type="application/x-map-staff" data-src="map-period-ui.js?v=20261117-center-registration"></script>
+  <script type="application/x-map-staff" data-src="map-period-ui.js?v=20261124-area-recovery"></script>
   <script type="application/x-map-staff" data-src="map-data-sync.js?v=20261115-staff"></script>
   <script type="application/x-map-staff" data-src="road-route-ui.js?v=20261123-road-readiness"></script>
-  <script type="application/x-map-staff" data-src="new-area-requests.js?v=20261118-address-index"></script>
+  <script type="application/x-map-staff" data-src="new-area-requests.js?v=20261124-area-recovery"></script>
+  <script type="application/x-map-staff" data-src="new-area-row-edit.js?v=20261124-area-recovery"></script>
+  <script type="application/x-map-staff" data-src="new-area-detail-panel.js?v=20261124-area-recovery"></script>
   <script type="application/x-map-staff" data-src="manual-waypoints.js?v=20261028-r5"></script>
   <script type="application/x-map-staff" data-src="kakao-directions-adapter.js?v=20261028-r5"></script>
   <script type="application/x-map-staff" data-src="manual-road-route-ui.js?v=20261123-road-trial"></script>
@@ -96,10 +99,11 @@
   <script type="application/x-map-staff" data-src="opsmap-daily.js?v=20261111-coverage-qa"></script>
   <script type="application/x-map-staff" data-module="1" data-src="fixed-delivery-weekdays.mjs?v=20261118-national-master"></script>
   <script type="application/x-map-staff" data-module="1" data-src="recent-operations.mjs?v=20261119-evidence"></script>
-  <script type="application/x-map-staff" data-src="map-phase2b-runtime.js?v=20261123-road-dispatch"></script>
+  <script type="application/x-map-staff" data-src="map-phase2b-runtime.js?v=20261124-area-recovery"></script>
 
 <link rel="stylesheet" href="approved-site-source.css?v=20261028-r5">
 <link rel="stylesheet" href="map-approved-shell-candidate.css?v=20261118-operations">
+<link rel="stylesheet" href="new-area-detail-panel.css?v=20261124-area-recovery">
 <script type="application/x-map-staff" data-src="map-approved-shell-candidate.js?v=20261123-road-trial"></script>
 <link rel="stylesheet" href="navigation-ui.css?v=20261114-c-final">
 <script type="application/x-map-staff" data-src="navigation-ui.js?v=20261123-road-dispatch"></script>

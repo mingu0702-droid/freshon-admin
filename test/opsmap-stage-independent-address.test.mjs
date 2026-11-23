@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import test from 'node:test';
 import express from 'express';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
-import {STAGE_ORIGIN,STAGE_SERVICE,mountStageAbValidation,STAGE_ADDRESS_BATCH_ROUTE} from '../src/stageAbValidation.js';
+import {STAGE_ORIGIN,STAGE_SERVICE,mountStageAbValidation,STAGE_ADDRESS_BATCH_ROUTE,STAGE_NEARBY_ROUTE} from '../src/stageAbValidation.js';
 import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
 import {createTemporaryOfficialAddressLookup,officialAddressKey} from '../src/opsmapOfficialAddressLookup.js';
 import {createKakaoGeocodeLedger,KAKAO_EXPECTED_APP_ID} from '../src/opsmap-abc/kakaoCoordinateConnection.js';
@@ -136,7 +136,8 @@ test('single Stage evidence resolves only an approved unmatched address and leav
   const app=express(), generation='a'.repeat(64);
   const stored='경기도 오산시 저장로 124';
   const snapshot={sourceGeneration:generation,rows:[{customerCode:'T12345',address:stored,...point}]};
-  let prepared={generation};
+  let dayReads=0;
+  let prepared={generation,readNearbyDay:async date=>{assert.equal(date,'2026-11-11');dayReads++;return null;}};
   let prechecks=0, providerCalls=0, invalidateProvider=false;
   const requireStaff=(req,res,next)=>{
     if(req.get('X-Test-Staff')!=='ok')return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
@@ -156,13 +157,21 @@ test('single Stage evidence resolves only an approved unmatched address and leav
         if(invalidateProvider)prepared={generation:'b'.repeat(64)};
         assertCurrent();
         return {ledgerReservationMs:5,providerDurationMs:20,githubRequests:{reads:0,writes:1},
-          data:{documents:[{x:'127.07',y:'37.15'}],resolution:{kind:'EXACT'}}};
+          data:{documents:[{x:'127.07',y:'37.15'}],exact:true,resolution:{kind:'EXACT'}}};
       }
     }});
   const server=app.listen(0,'127.0.0.1');
   t.after(()=>{server.closeAllConnections();server.close();});
   await new Promise(resolve=>server.once('listening',resolve));
   const endpoint=`http://127.0.0.1:${server.address().port}${STAGE_ADDRESS_BATCH_ROUTE}`;
+  const dayEndpoint=`http://127.0.0.1:${server.address().port}${STAGE_NEARBY_ROUTE}?view=day&date=2026-11-11&generation=${generation}`;
+  assert.equal((await fetch(dayEndpoint)).status,401);
+  assert.equal(dayReads,0);
+  const nearbyDay=await fetch(dayEndpoint,{headers:{'x-test-staff':'ok'}});
+  assert.equal(nearbyDay.status,200);
+  assert.deepEqual(await nearbyDay.json(),{contract:'opsmap-nearby-dispatch-day-v1',generation,date:'2026-11-11',state:'UNAVAILABLE',
+    centers:{osan:'UNKNOWN',yeongnam:'UNKNOWN',honam:'UNKNOWN'},rows:[]});
+  assert.equal(dayReads,1);
   const request=(rows,external,headers={})=>fetch(endpoint,{method:'POST',
     headers:{origin:STAGE_ORIGIN,'content-type':'application/json','x-test-staff':'ok',...headers},
     body:JSON.stringify({generation,rows,includeCustomers:true,external})});
@@ -171,9 +180,12 @@ test('single Stage evidence resolves only an approved unmatched address and leav
   assert.equal((await request([[address+'-2']],'resolve',{origin:'https://example.test'})).status,403);
   assert.equal((await request([[address+'-2',address]],'resolve')).status,400);
   assert.equal((await request([['1234567890100010000']],'resolve')).status,400);
-  assert.equal((await (await request([[stored]],'resolve')).json()).data[0].status,'STORED');
-  assert.equal((await (await request([[address]],'resolve')).json()).data[0].status,'OFFICIAL');
-  assert.equal((await (await request([[address+'-2']])).json()).data[0].status,'ADDRESS_NOT_MATCHED');
+  assert.equal((await (await request([[stored]],'resolve')).json()).data[0].state,'STORED_VERIFIED');
+  assert.equal((await (await request([[address]],'resolve')).json()).data[0].state,'OFFICIAL_VERIFIED');
+  assert.equal((await (await request([[address+'-2']])).json()).data[0].state,'SOURCE_NOT_COVERED');
+  const bulk=await fetch(endpoint,{method:'POST',headers:{origin:STAGE_ORIGIN,'content-type':'application/json','x-test-staff':'ok'},
+    body:JSON.stringify({generation,rows:[[stored],[address+'-2']]})});
+  assert.deepEqual((await bulk.json()).data.map(row=>row.state),['STORED_VERIFIED','SOURCE_NOT_COVERED']);
   assert.equal((await (await request([[address+'-2']],'prepare')).json()).data[0].status,'ADDRESS_NOT_MATCHED');
   assert.equal(prechecks,1);
   assert.equal(providerCalls,0);
@@ -182,7 +194,9 @@ test('single Stage evidence resolves only an approved unmatched address and leav
   assert.equal(exact.headers.get('x-opsmap-geocode-github'),'0,1');
   assert.match(exact.headers.get('server-timing'),/opsmap-address-customer;dur=/);
   assert.match(exact.headers.get('server-timing'),/opsmap-address-official;dur=/);
-  assert.equal((await exact.json()).data[0].external.resolution.kind,'EXACT');
+  const resolved=(await exact.json()).data[0];
+  assert.equal(resolved.external.resolution.kind,'EXACT');
+  assert.equal(resolved.state,'EXTERNAL_VERIFIED');
   assert.equal(providerCalls,1);
   invalidateProvider=true;
   const expired=await request([[address+'-2']],'resolve');
