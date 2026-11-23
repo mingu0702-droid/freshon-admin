@@ -289,7 +289,10 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
           component:'opsmap-recent-orders-source',runId:receipt.runId,...value
         }))});
         const readLatestDay=readDelivery||readOrders?async(date,deliveryCenters,orderCenters)=>{
-          const evidence=await Promise.all([readDelivery?.(date,deliveryCenters),readOrders?.(date,orderCenters)]);
+          const deliveryDiagnostics=value=>console.info(JSON.stringify({
+            component:'opsmap-recent-delivery-source',runId:receipt.runId,...value
+          }));
+          const evidence=await Promise.all([readDelivery?.(date,deliveryCenters,deliveryDiagnostics),readOrders?.(date,orderCenters)]);
           return evidence.flatMap(input=>input??[]);
         }:null;
         const repair=/^(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})$/.exec(env.OPSMAP_STAGE_RECENT_OPERATIONS_REPAIR_REQUEST||'');

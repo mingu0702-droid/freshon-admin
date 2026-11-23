@@ -19,6 +19,22 @@ test('one queried center is not a complete nationwide success',async()=>{
 test('HTTP 403 never becomes an empty successful day',async()=>{
  await assert.rejects(reader(async()=>new Response(null,{status:403})).readObservation(day),{code:'DELIVERY_SOURCE_FORBIDDEN'});
 });
+test('recent delivery diagnostics distinguish unavailable centers from empty reads without extra calls',async()=>{
+ const calls=[],reports=[];
+ const read=reader(async url=>{
+  const center=new URL(url).searchParams.get('logisticsCenterId');
+  calls.push(center);
+  return center==='3'?new Response(null,{status:403}):response();
+ });
+ const result=await read.readRecentOperations(day,new Set(['osan']),value=>reports.push(value));
+ assert.deepEqual(result,[]);
+ assert.deepEqual(calls,['3','4']);
+ assert.deepEqual(reports,[
+  {date:day,centerKey:'osan',state:'ALREADY_OBSERVED'},
+  {date:day,centerKey:'yeongnam',state:'DELIVERY_SOURCE_FORBIDDEN'},
+  {date:day,centerKey:'honam',state:'SOURCE_EMPTY'}
+ ]);
+});
 test('missing pagination completeness does not certify zero deliveries',async()=>{
  await assert.rejects(reader(async()=>Response.json({content:[]})).readObservation(day),{code:'DELIVERY_SOURCE_INCOMPLETE'});
 });

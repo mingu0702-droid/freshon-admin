@@ -22,6 +22,11 @@ const cacheTtl = 60_000;
 const staleLimit = 24 * 60 * 60_000;
 const focusedVehicles=new Set(['101','105','122','202']);
 const vehicleEventLimit=32;
+const recentReadFailures=new Set([
+  'DELIVERY_SOURCE_READ_ONLY','DELIVERY_SOURCE_SESSION_REQUIRED','DELIVERY_SOURCE_AUTH_REQUIRED',
+  'DELIVERY_SOURCE_FORBIDDEN','DELIVERY_SOURCE_TIMEOUT','DELIVERY_SOURCE_RATE_LIMITED','DELIVERY_SOURCE_IDENTITY_UNVERIFIED',
+  'DELIVERY_SOURCE_INCOMPLETE','DELIVERY_SOURCE_PAGE_DUPLICATE','DELIVERY_SOURCE_SCOPE','DELIVERY_SOURCE_CUSTOMER_CONFLICT'
+]);
 
 function taskEvent(task,date,customerCode,vehicle) {
   return deliveryCompletion(vehicle?task:{status:task.status,taskStatus:task.taskStatus,statusText:task.statusText},
@@ -402,16 +407,25 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     return validateOpsmapSyncDay({date,sourceRows:tasks.length,unidentified:0,proof:'VERIFIED_COMPLETE_DAY',
       proofHash:deliveryDigest([date,tasks,observedVisits,dispatch]),completeCenters,completeSources,visits:observedVisits,tasks,dispatch},date);
   };
-  readDate.readRecentOperations = async (date, existingCenters=new Set()) => {
+  readDate.readRecentOperations = async (date, existingCenters=new Set(), onDiagnostic) => {
     const input=[];
+    if (!validDate(date)) return input;
+    const report=(centerKey,state)=>{
+      try {onDiagnostic?.({date,centerKey,state});}
+      catch { /* Diagnostics cannot change accepted evidence. */ }
+    };
     const recordedAt=value=>typeof value==='string' && /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
       Number.isFinite(Date.parse(value));
     for (const [centerKey,id] of scope) {
-      if (centerKey==='osanColdStorage' || existingCenters.has(centerKey)) continue;
+      if (centerKey==='osanColdStorage') continue;
+      if (existingCenters.has(centerKey)) {report(centerKey,'ALREADY_OBSERVED');continue;}
       let tasks;
       try {({tasks}=await readSyncTasks(date,readers.get(centerKey).reader,centerKey,id));}
-      catch {continue;}
-      if (tasks.some(task=>String(task.carrier?.logisticsCenterId)!==id)) continue;
+      catch (failure) {
+        report(centerKey,recentReadFailures.has(failure?.code)?failure.code:'DELIVERY_SOURCE_READ_UNAVAILABLE');
+        continue;
+      }
+      if (tasks.some(task=>String(task.carrier?.logisticsCenterId)!==id)) {report(centerKey,'CARRIER_CENTER_UNVERIFIED');continue;}
       const positives=new Map();
       for (const task of tasks) {
         const status=String(task.status||'').toUpperCase();
@@ -427,6 +441,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       // An empty Delivery Admin page cannot prove a center had no operations.
       if (positives.size) input.push({date,centerKey,source:'delivery_admin',coverage:'partial',
         rows:[...positives].map(([customerCode,evidence])=>({customerCode,evidence}))});
+      report(centerKey,positives.size?'VERIFIED_PARTIAL':tasks.length?'NO_CONFIRMED_EVIDENCE':'SOURCE_EMPTY');
     }
     return input;
   };
