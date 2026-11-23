@@ -7,9 +7,9 @@ import {fixedEnvelope} from '../src/fixedVehicleStore.js';
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const row=(i,total,vehicle='221')=>({estCd:'T'+String(i).padStart(6,'0'),mainCarSeqNm:vehicle,totalCnt:total});
 
-function fixture(reply,{pageConcurrency=2,session=async()=>{},verifyLastPage,strictPageCounts,onScan,onPage,onPreflight,remainingPageRequests}={}){
+function fixture(reply,{pageConcurrency=2,session=async()=>{},verifyLastPage,strictPageCounts,preflightFirstPages,onScan,onPage,onPreflight,remainingPageRequests}={}){
   let active=0,maxActive=0;const calls=[];
-  const reader=createFixedVehicleReader({pageConcurrency,verifyLastPage,strictPageCounts,onScan,onPage,onPreflight,remainingPageRequests,ensureSession:session,sleep:async()=>{},extractRows:p=>p.data,
+  const reader=createFixedVehicleReader({pageConcurrency,verifyLastPage,strictPageCounts,preflightFirstPages,onScan,onPage,onPreflight,remainingPageRequests,ensureSession:session,sleep:async()=>{},extractRows:p=>p.data,
     readJson:async(url,options)=>{
       assert.equal(url,'/bo/wm/standard/fixedAlctnList');assert.equal(options.method,'POST');assert.equal(options.timeoutMs,60000);
       const query=new URLSearchParams(options.body),center=query.get('logCd'),page=Number(query.get('page'));
@@ -83,6 +83,30 @@ test('does not start a rescan that cannot fit the remaining source requests',asy
   assert.equal(evidence[0].error,'FIXED_MASTER_COUNT_CHANGED');
   assert.equal(evidence[0].countChange.declaredRows,81611);
   assert.equal(f.reader.getProgress().complete,false);
+});
+
+test('the Stage preflight rejects a retry that could rescan Osan but would strand the other centers',async()=>{
+  const evidence=[];
+  let requests=0;
+  const f=fixture(async({center,page})=>{
+    requests++;
+    const total=center==='011'?(page===0?3001:3002):1001;
+    return {data:Array.from({length:1000},(_,i)=>row(Number(center)*100000+page*1000+i,total))};
+  },{strictPageCounts:true,verifyLastPage:true,preflightFirstPages:true,
+    remainingPageRequests:()=>14-requests,onScan:value=>evidence.push(value)});
+  await assert.rejects(f.reader(),{code:'FIXED_MASTER_RETRY_BUDGET'});
+  assert.deepEqual(f.calls,[['011',0],['012',0],['013',0],['011',1],['011',2]]);
+  assert.equal(evidence[0].error,'FIXED_MASTER_COUNT_CHANGED');
+  assert.deepEqual(evidence[0].retryBudget,{rescanRequests:6,remainingCenterRequests:6,availableRequests:9,canRetry:false});
+});
+
+test('the first three Stage pages establish an initial whole-run budget before interior pages',async()=>{
+  const f=fixture(async({center})=>({data:Array.from({length:1000},(_,i)=>row(Number(center)*10000+i,1001))}),{
+    strictPageCounts:true,verifyLastPage:true,preflightFirstPages:true,remainingPageRequests:()=>8
+  });
+  await assert.rejects(f.reader(),{code:'FIXED_MASTER_INITIAL_BUDGET'});
+  assert.deepEqual(f.calls,[['011',0],['012',0],['013',0]]);
+  assert.equal(f.reader.getProgress().requiredRequests,9);
 });
 
 test('a successful bounded rescan publishes none of the discarded batch values',async()=>{

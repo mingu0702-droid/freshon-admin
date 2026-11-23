@@ -458,7 +458,11 @@ test('an unstable final page and an oversized source reply cannot certify a new 
   const rows=Array.from({length:1000},(_,i)=>({estCd:'S'+(10001+i),logCd:'011',totalCnt:1001,mainCarSeqNm:'122'}));
   const read=createStageFixedMasterSource({env:{...env,FRESHON_COOKIE:'fixture'},async fetchImpl(_url,options){
     const query=new URLSearchParams(options.body);
-    assert.equal(query.get('logCd'),'011');
+    const center=query.get('logCd');
+    if(center!=='011') {
+      assert.equal(query.get('page'),'0');
+      return Response.json({data:[{...raw()[centers.indexOf(center)],totalCnt:1}]});
+    }
     if (query.get('page')==='0') return Response.json({data:rows});
     return Response.json({data:[{estCd:'S11001',logCd:'011',totalCnt:1001,mainCarSeqNm:++tailReads%2?'122':'202'}]});
   }});

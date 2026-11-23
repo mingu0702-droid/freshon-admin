@@ -67,7 +67,7 @@ const pageIdentity=rows=>{
 };
 
 export function createFixedVehicleReader({ensureSession, readJson, extractRows, pageConcurrency=1, verifyLastPage=false,
-  strictPageCounts=false, onScan, onPage, onPreflight, remainingPageRequests, reserveRescanRequests,
+  strictPageCounts=false, preflightFirstPages=false, onScan, onPage, onPreflight, remainingPageRequests, reserveRescanRequests,
   sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
   if(![1,2].includes(pageConcurrency))throw Object.assign(Error('FIXED_MASTER_CONCURRENCY_INVALID'),{code:'FIXED_MASTER_CONCURRENCY_INVALID'});
   let progress=null;
@@ -137,7 +137,11 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         carCd:'',carNm:'',shipGbn:'1',baecha:''}).toString()
     });
     const firstPages=new Map();
-    if (onPreflight || preflightOnly) {
+    const pagePlan=rows=>{
+      const pages=Math.ceil(rows/pageSize);
+      return pages+(verifyLastPage&&pages>1?2:1);
+    };
+    if (preflightFirstPages || onPreflight || preflightOnly) {
       for (const center of centerCodes) {
         let declaredRows=null;
         try {
@@ -148,7 +152,7 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
           if (!Number.isSafeInteger(declaredRows)||declaredRows<=0||rows.length!==Math.min(pageSize,declaredRows)) {
             throw failure('FIXED_MASTER_COUNT_INVALID',200,'PAGE_COUNT','SOURCE_CONTRACT');
           }
-          if (inspectFixedMasterKeys(rows).invalid ||
+          if (inspectFixedMasterKeys(rows).invalid || (onPreflight||preflightOnly)&&
               !['mainCarSeqNm',...weekdayFields].every(key=>rows.some(row=>Object.hasOwn(row,key)))) {
             throw failure('FIXED_MASTER_DAILY_RESPONSE_INVALID',200,'KEY_CONTRACT','SOURCE_CONTRACT');
           }
@@ -162,6 +166,12 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         }
       }
       if (preflightOnly) return {state:'FIRST_PAGES_VERIFIED',centerCount:centerCodes.length};
+      const initialNeed=[...firstPages.values()].reduce((sum,page)=>sum+pagePlan(Number(page.data[0].totalCnt))-1,0);
+      if(remainingPageRequests&&remainingPageRequests()<initialNeed){
+        progress={...progress,phase:'ERROR',failureCode:'FIXED_MASTER_INITIAL_BUDGET',requiredRequests:initialNeed,
+          remainingRequests:remainingPageRequests()};
+        throw failure('FIXED_MASTER_INITIAL_BUDGET',0,'PREFLIGHT','SOURCE_LIMIT');
+      }
     }
     for (const logCd of centerCodes) {
       let accepted=false;
@@ -169,12 +179,12 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
       const centerProjection=[],pageHashes=new Set(),centerCustomerKeys=new Set(),duplicateCustomerKeys=new Set(),batch=new Map();
       let centerPagingRows=0,firstPageHash=null,firstReadOptions=null,lastPageHash=null,lastReadOptions=null;
       let complete = false,centerRows=0,expectedRows=null;
-      let followupDeclaredRows=null, countChange=null;
+      let followupDeclaredRows=null, countChange=null, retryBudget=null;
       const verification=[];
       const reportScan=(state,error)=>onScan?.({center:logCd,scan:scan+1,state,error:error?progress.failureCode:null,
         failedPage:error?(countChange?.page??verification.find(item=>item.state!=='SAME')?.page??progress.page):null,
         sourceHttp:error?.status??null,firstDeclaredRows:expectedRows,followupDeclaredRows,
-        acceptedPages:pageHashes.size,acceptedRows:centerRows,countChange,verification});
+        acceptedPages:pageHashes.size,acceptedRows:centerRows,countChange,verification,...(retryBudget?{retryBudget}:{})});
       try{
       // Same bounded paging contract as scraper/freshonFixedDispatch.js.
       for (let page = 0; page < 120; page++) {
@@ -296,19 +306,22 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         // Outcome promises never reject, so unused failed pages cannot crash Node.
         await Promise.all(batch.values());batch.clear();
         progress={...progress,phase:'ERROR',complete:false,failureCode:/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_READ_FAILED'};
-        reportScan('REJECTED',error);
-        if(!['FIXED_MASTER_COUNT_CHANGED','FIXED_MASTER_SOURCE_CHANGED'].includes(error.code)||scan===1)throw error;
+        if(!['FIXED_MASTER_COUNT_CHANGED','FIXED_MASTER_SOURCE_CHANGED'].includes(error.code)||scan===1){
+          reportScan('REJECTED',error);
+          throw error;
+        }
         // Use the newest declared count to avoid starting a full rescan that
         // cannot fit within the remaining approved source requests.
         const nextRows=countChange?.declaredRows ?? expectedRows;
-        const pages=Math.ceil(nextRows/pageSize);
-        const rechecks=verifyLastPage&&pages>1?2:1;
-        const required=pages+rechecks;
-        if(pages>0&&(
-          reserveRescanRequests&&!reserveRescanRequests(required) ||
-          remainingPageRequests&&remainingPageRequests()<required
-        )){
-          progress={...progress,failureCode:'FIXED_MASTER_RETRY_BUDGET'};
+        const required=Number.isSafeInteger(nextRows)&&nextRows>0?pagePlan(nextRows):null;
+        const remainingCenters=[...firstPages.values()].reduce((sum,page)=>sum+pagePlan(Number(page.data[0].totalCnt))-1,0);
+        const reserved=required!==null&&(!reserveRescanRequests||reserveRescanRequests(required));
+        const remaining=remainingPageRequests?.()??null;
+        const canRetry=reserved&&(remaining===null||remaining>=required+remainingCenters);
+        retryBudget={rescanRequests:required,remainingCenterRequests:remainingCenters,availableRequests:remaining,canRetry};
+        reportScan('REJECTED',error);
+        if(!canRetry){
+          progress={...progress,failureCode:'FIXED_MASTER_RETRY_BUDGET',retryBudget};
           throw failure('FIXED_MASTER_RETRY_BUDGET',0,'REVALIDATING','SOURCE_LIMIT');
         }
         // Discard only the unstable candidate for this center. The existing

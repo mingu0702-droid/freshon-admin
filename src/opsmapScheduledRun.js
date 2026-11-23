@@ -31,6 +31,11 @@ const queueDomain='opsmap-stage-private-dispatch-v1\0';
 function fixedScanSummary(value) {
   if (!fixedCenters.includes(value.center) || ![1,2].includes(value.scan) || !['VERIFIED','REJECTED'].includes(value.state)) return null;
   const change=value.countChange;
+  const planned=value.retryBudget;
+  const retryBudget=planned&&typeof planned.canRetry==='boolean'?{
+    rescanRequests:boundedCount(planned.rescanRequests,240),remainingCenterRequests:boundedCount(planned.remainingCenterRequests,240),
+    availableRequests:boundedCount(planned.availableRequests,240),canRetry:planned.canRetry
+  }:null;
   const verification=Array.isArray(value.verification)?value.verification.slice(0,2).flatMap(page=>{
     if (!page || !['SAME','COUNT_CHANGED','CUSTOMERS_CHANGED','ORDER_CHANGED','ASSIGNMENTS_CHANGED','REQUEST_FAILED'].includes(page.state)) return [];
     return [{page:boundedCount(page.page,119),declaredRows:boundedCount(page.declaredRows),rows:boundedCount(page.rows,1000),state:page.state}];
@@ -40,7 +45,8 @@ function fixedScanSummary(value) {
     acceptedPages:boundedCount(value.acceptedPages,120),acceptedRows:boundedCount(value.acceptedRows),
     failedPage:boundedCount(value.failedPage,119),sourceHttp:Number.isSafeInteger(value.sourceHttp)&&value.sourceHttp>=100&&value.sourceHttp<=599?value.sourceHttp:null,
     countChange:change&&['READ','VERIFY'].includes(change.phase)?{phase:change.phase,page:boundedCount(change.page,119),
-      expectedRows:boundedCount(change.expectedRows),declaredRows:boundedCount(change.declaredRows)}:null,verification};
+      expectedRows:boundedCount(change.expectedRows),declaredRows:boundedCount(change.declaredRows)}:null,verification,
+    ...(retryBudget?{retryBudget}:{})};
 }
 
 function recordSource(sources,key,date,error,evidence) {
