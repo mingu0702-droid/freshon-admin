@@ -21,10 +21,12 @@
   const conflicted=row=>row.searchAddressConflict===true||row.addressChanged===true||row.resolutionStatus==='ADDRESS_CHANGED_REVIEW_REQUIRED';
   const addressFor=row=>{
    const cached=addresses.get(row.customerCode),bound=cached?.sourceHash===sourceHash(row);
+   if(!conflicted(row))return bound?cached.address:row.address||'';
+   if(bound&&cached.conflict)return cached.address;
    const registryAddress=row.currentMasterStatus==='FOUND'&&validHash(row.customerRegistryAddressHash)&&row.currentAddressHash===row.customerRegistryAddressHash;
-   const sameRegistryAddress=row.raw?.customerRegistryAddressHash===row.currentAddressHash&&normalize(row.raw?.address)===normalize(row.address);
-   if(conflicted(row))return bound&&cached.conflict?cached.address:registryAddress&&(!row.searchAddressConflict||sameRegistryAddress)?row.address||'':'';
-   return bound?cached.address:row.address||'';
+   if(!registryAddress||row.searchAddressConflict&&(row.raw?.customerRegistryAddressHash!==row.currentAddressHash||
+     normalize(row.raw?.address)!==normalize(row.address)))return '';
+   return row.address||'';
   };
   const searchFor=row=>{const value=searches.get(row.customerCode);return !searchRevoked(row)&&value?.sourceHash===sourceHash(row)&&value.originalAddress===normalize(addressFor(row))?value:null;};
   const queryForRow=row=>searchFor(row)?.query||queryFor?.(addressFor(row));
