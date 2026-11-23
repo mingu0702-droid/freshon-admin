@@ -1317,8 +1317,7 @@
       const selected=state.selected;
       replaceStoreSnapshot(payload.data,payload.meta);
       if(selected?.customerCode){
-        const next=selected.deliveryId ? allStores.find(row=>row.deliveryId===selected.deliveryId)
-          : storeByVehicleAndCode.get(datedVisitKey(selected.vehicle,selected.customerCode));
+        const next=OpsmapDaily.selectVisit(allStores,selected,date);
         if(next)state.selected={...selected,...next};
         else if(!selected.outsideReason)clearSelection({preserveSearch:true});
       }
@@ -1417,6 +1416,7 @@
     return {
       customerCode: String(customer.id || customer.code || customer.customerCode || "").trim(),
       deliveryId: customer.deliveryId || "",
+      deliveryDate: customer.deliveryDate || "",
       customerName: customer.name || customer.customerName || "",
       address: customer.address || "",
       vehicle: String(vehicle.vehicle || "").replace(/호(?:차)?$/, ""),
@@ -2862,7 +2862,7 @@
     closeClusterPanel();
     ++state.detailRequestId;requestControllers.get("store-detail")?.controller.abort("superseded");
     window.MapStaff?.clear();selectedDriverContact?.clear();
-    const routeStop = state.mode === "DATE_ROUTE" && operationStops.find((stop) => stop.customerCode === row.customerCode && stop.vehicle === row.vehicle);
+    const routeStop = state.mode === "DATE_ROUTE" && OpsmapDaily.selectVisit(operationStops,row,state.selectedDate);
     if (routeStop) row = { ...row, ...routeStop, ...Object.fromEntries(["accessInfo", "accessMemo", "password", "detailAddress", "specialRemark"].filter((key) => row[key]).map((key) => [key, row[key]])) };
     // Search and dated stops may be fresh copies of the stored source rows.
     // Apply the confirmed overlay again before rendering their coordinate origin.

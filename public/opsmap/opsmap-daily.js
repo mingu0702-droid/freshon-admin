@@ -107,6 +107,14 @@
     }
     return [...rows.values()];
   }
+  function selectVisit(rows, selection, date) {
+    if (!day(date) || !selection?.customerCode || !selection.vehicle ||
+      selection.deliveryDate && selection.deliveryDate !== date) return null;
+    const matches = rows.filter(row => row.deliveryDate === date &&
+      row.customerCode === selection.customerCode && row.vehicle === selection.vehicle &&
+      (!selection.deliveryId || row.deliveryId === selection.deliveryId));
+    return matches.length === 1 ? matches[0] : null;
+  }
   function sameRosterScope(a, b) {
     return a.date === b.date && a.center === b.center && a.generation === b.generation &&
       a.lastSuccessAt === b.lastSuccessAt && a.source.sha256 === b.source.sha256;
@@ -159,5 +167,5 @@
         Number.isFinite(row.lng) && Math.abs(row.lng) <= 180 && row.coordinateStatus !== 'CONFLICT' ? [{row, at}] : [];
     });
   }
-  root.OpsmapDaily = Object.freeze({archive, calendar, day, dispatch, errorLabel, validate, projection, actualPoints, centers, verifyRoster, rosterRows, sameRosterScope, chronology, rosterPoints});
+  root.OpsmapDaily = Object.freeze({archive, calendar, day, dispatch, errorLabel, validate, projection, actualPoints, centers, verifyRoster, rosterRows, selectVisit, sameRosterScope, chronology, rosterPoints});
 })(globalThis);

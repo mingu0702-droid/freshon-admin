@@ -148,3 +148,23 @@ test('a new HTTP service serves the last complete disk result while its source i
     assert.equal((await second.read()).meta.retained,undefined);
   }finally{releaseSource?.();await first?.close();await second?.close();await rm(directory,{recursive:true,force:true});}
 });
+
+test('dated selection preserves the exact revisit while actual route order follows completion evidence', () => {
+  const incoming = visit('S1', null, {deliveryId:'second', order:2, actualCompletedAt:at('08')});
+  const earlierListRow = visit('S1', null, {deliveryId:'first', order:1, actualCompletedAt:at('17')});
+  const previousDay = {...incoming, deliveryDate:'2026-11-10'};
+  const rows = [previousDay, earlierListRow, incoming];
+  assert.equal(daily.selectVisit(rows, incoming, date), incoming);
+  assert.equal(daily.selectVisit(rows, previousDay, date), null);
+  assert.equal(daily.selectVisit(rows, {...incoming, deliveryId:'unknown'}, date), null);
+  assert.equal(daily.selectVisit(rows, {...incoming, customerCode:'S2'}, date), null);
+  assert.equal(daily.selectVisit(rows, {...incoming, deliveryId:''}, date), null);
+  assert.equal(daily.selectVisit([incoming], {...incoming, deliveryId:''}, date), incoming);
+  assert.equal(daily.selectVisit([incoming, incoming], incoming, date), null);
+
+  const points = new Map([[incoming.deliveryId, at('08')], [earlierListRow.deliveryId, at('17')]]);
+  const scopedRows = rows.filter(row => row.deliveryDate === date);
+  assert.deepEqual(daily.rosterPoints(scopedRows, points).map(({row}) => row),
+    [incoming, earlierListRow]);
+  assert.deepEqual(daily.projection(scopedRows, 'COMPLETED').shown, [earlierListRow, incoming]);
+});
