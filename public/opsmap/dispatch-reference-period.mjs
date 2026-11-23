@@ -1,6 +1,6 @@
 export function summarizeDispatchPeriod(period,selected,basis='dispatch') {
   const vehicles=new Map(), areas=new Map(), neighbors=new Map();
-  const verified=[], unavailable=[], completed=[], wms=[], exportScoped=[], osanScoped=[];
+  const verified=[], unavailable=[], completed=[], partialCompleted=[], wms=[], exportScoped=[], osanScoped=[];
   function truck(vehicle) {
     if (!vehicles.has(vehicle)) vehicles.set(vehicle,{vehicle,days:0,stops:0,unknown:0,trend:[],first:null,last:null});
     return vehicles.get(vehicle);
@@ -11,7 +11,7 @@ export function summarizeDispatchPeriod(period,selected,basis='dispatch') {
       if (dispatchScope==='WMS_EXPORT') exportScoped.push(date);
       if (dispatchScope==='OSAN_SOURCE') osanScoped.push(date);
     } else unavailable.push(date);
-    if (delivery) completed.push(date);
+    if (delivery) (delivery.coverage==='PARTIAL'?partialCompleted:completed).push(date);
     if (wmsVerified) {
       wms.push(date);
       for (const [vehicle,amount] of amounts) truck(vehicle).trend.push([date,amount]);
@@ -47,6 +47,6 @@ export function summarizeDispatchPeriod(period,selected,basis='dispatch') {
       neighbors.set(key,pair);
     }
   }
-  return {verified,unavailable,completed,wms,exportScoped,osanScoped,vehicles,areas:[...areas.values()].sort((a,b)=>b.overlapDays-a.overlapDays||a.zip.localeCompare(b.zip)),
+  return {verified,unavailable,completed,partialCompleted,wms,exportScoped,osanScoped,vehicles,areas:[...areas.values()].sort((a,b)=>b.overlapDays-a.overlapDays||a.zip.localeCompare(b.zip)),
     neighbors:[...neighbors.values()].sort((a,b)=>b.days-a.days||a.meters-b.meters)};
 }

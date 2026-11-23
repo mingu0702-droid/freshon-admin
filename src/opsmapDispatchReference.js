@@ -3,6 +3,7 @@ import { projectOpsmapWmsDispatch } from './opsmapWmsDispatchExport.js';
 import { DISPATCH_PERIODS, dispatchPeriodDates, projectDispatchPeriodDay } from './opsmapDispatchPeriod.js';
 import { assertDeliverySourceObservation } from './snapshotRefreshEvidence.js';
 import { coordinateAddressHash } from './opsmap-abc/opsmapAutoCoordinates.js';
+import { SYNC_DELIVERY_SOURCES } from './opsmapSyncPolicy.js';
 
 const CONTRACT = 'opsmap-dispatch-reference-v1';
 const CENTER = 'osan';
@@ -73,8 +74,11 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
       publishedAt:publication.publishedAt,lastSuccessAt:publication.observedAt?.(date),error:null}):null;
     const complete=evidence?.sourceComplete===true&&evidence.scopeComplete===true;
     const addresses=new Map((complete?archive.tasks:archive.visits??[]).map(([id,,,,addressHash])=>[id,addressHash]));
+    const archiveSourceIds=!complete&&Array.isArray(archive.dispatch?.events)&&Array.isArray(archive.tasks)
+      ? new Map(archive.tasks.map(([id],index)=>[id,archive.dispatch.events[index]?.[0]])) : null;
     const observed=complete?evidence.rows:(archive.visits??[]).flatMap(([deliveryId,customerCode,vehicle,center])=>
-      center===CENTER?[{deliveryId,customerCode,vehicle}]:[]);
+      center===CENTER&&(!archiveSourceIds||archiveSourceIds.get(deliveryId)===SYNC_DELIVERY_SOURCES[CENTER])
+        ?[{deliveryId,customerCode,vehicle,state:'COMPLETED'}]:[]);
     if (!complete&&!observed.length) return unavailableRoute();
     const records=new Map();
     for (const row of observed) {
@@ -89,7 +93,8 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
     }
     return {state:complete?'VERIFIED':'PARTIAL',observedAt:publication.observedAt?.(date)??null,publishedAt:publication.publishedAt??null,
       source:complete?'PUBLISHED_DELIVERY_ARCHIVE':'PUBLISHED_COMPLETED_OBSERVATIONS',unassigned:complete?evidence.source.unassigned:null,
-      ...await projectRecords(records,publication,includeCompleted&&complete)};
+      ...await projectRecords(records,publication,includeCompleted),
+      ...(includeCompleted?{completedCoverage:complete?'VERIFIED':'PARTIAL'}:{})};
   }
 
   async function read(date,publication=getPublication(),allowSource=false,includeCompleted=false) {
@@ -109,17 +114,20 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
       const postcodes = codes.length && readPostcodes
         ? await Promise.resolve().then(()=>readPostcodes(codes,publication?.postalGeneration)).catch(()=>null)
         : null;
-      let completed;
+      let completion;
       if (includeCompleted) {
-        completed=(await archivedRoute(date,publication,true)).completedRows;
-        if (!completed&&readRetainedDated) {
-          completed=(await confirmedRoute(date,publication,readRetainedDated,true).catch(()=>null))?.completedRows;
+        completion=await archivedRoute(date,publication,true);
+        if ((!completion.completedRows||completion.completedCoverage==='PARTIAL'&&!completion.completedRows.length)&&readRetainedDated) {
+          completion=await confirmedRoute(date,publication,readRetainedDated,true).catch(()=>null);
         }
       }
       const current = getPublication();
       const matching = current?.generation===publication?.generation;
       const projected=projectOpsmapWmsDispatch(wms,matching?publication?.registry:null,matching?postcodes??undefined:undefined);
-      if (matching&&completed) projected.route.completedRows=completed;
+      if (matching&&completion?.completedRows) {
+        projected.route.completedRows=completion.completedRows;
+        projected.route.completedCoverage=completion.completedCoverage??'VERIFIED';
+      }
       if (!matching) projected.route.projectionFailure='PROJECTION_PUBLICATION_CHANGED';
       else if (projected.route.rows.length && !projected.route.rows.some(row=>row.coordinateVerified)) {
         projected.route.projectionFailure='PROJECTION_NO_VERIFIED_COORDINATES';
@@ -159,7 +167,7 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
     const entry={until:Date.now()+60_000,promise};
     dayJobs.set(key,entry);
     const expire=()=>{if (dayJobs.get(key)===entry) dayJobs.delete(key);};
-    promise.then(result=>{if(result.state!=='VERIFIED') expire();},expire);
+    promise.then(result=>{if(result.state!=='VERIFIED'&&!result.completed) expire();},expire);
     return promise;
   }
   read.period=async (end,days)=>{

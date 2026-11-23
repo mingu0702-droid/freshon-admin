@@ -787,7 +787,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             const source = scheduledSources['delivery:'+SYNC_DELIVERY_SOURCES.osan];
             return {generation:active.generation, registry:active.registry, postalGeneration:(active.scheduled?.index??active.coverageIndex)?.sha256,
               runId:state?.runId, publishedAt:state?.committedAt ?? null, readDay:active.readNearbyDay,
-              dispatchDates:active.scheduled?.vehicleDelivery?.completeSources?.[SYNC_DELIVERY_SOURCES.osan],
+              dispatchDates:active.scheduled?.vehicleDelivery?.observedDates?.osan,
               observedAt:date=>source?.lastSuccessDate===date ? source.lastSuccessAt : null};
           },
           readRetainedDated:readDatedDelivery.readRetained,

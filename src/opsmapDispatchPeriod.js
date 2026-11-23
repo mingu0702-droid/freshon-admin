@@ -58,9 +58,11 @@ export function projectDispatchPeriodDay(value) {
   const evidence={date,wmsVerified,
     amounts:wmsVerified?amounts.vehicles.filter(({amount,vehicle})=>vehicle!=='미배정'&&Number.isSafeInteger(amount))
       .map(({vehicle,amount})=>[vehicle,amount]):[]};
-  if (route?.state!=='VERIFIED') return {...evidence,state:route?.state==='PARTIAL'?'PARTIAL':'UNAVAILABLE'};
+  const completed=Array.isArray(route?.completedRows)&&
+    (route.completedCoverage!=='PARTIAL'||route.completedRows.length>0)
+    ? {completed:{...summarizeRoutes(route.completedRows),coverage:route.completedCoverage??'VERIFIED'}} : {};
+  if (route?.state!=='VERIFIED') return {...evidence,state:route?.state==='PARTIAL'?'PARTIAL':'UNAVAILABLE',...completed};
   const dispatchScope=route.source==='WMS_CONFIRMED_DISPATCH_EXPORT'?'WMS_EXPORT':
     ['PUBLISHED_DELIVERY_ARCHIVE','DATED_DELIVERY_SOURCE'].includes(route.source)?'OSAN_SOURCE':null;
-  return {...evidence,state:'VERIFIED',dispatchScope,...summarizeRoutes(route.rows),
-    ...(Array.isArray(route.completedRows)?{completed:summarizeRoutes(route.completedRows)}:{})};
+  return {...evidence,state:'VERIFIED',dispatchScope,...summarizeRoutes(route.rows),...completed};
 }

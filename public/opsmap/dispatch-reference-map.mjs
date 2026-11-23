@@ -394,14 +394,15 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
 
   function renderPeriodDetail() {
     if (!analysis) return;
-    const {verified,unavailable,completed,wms,exportScoped,osanScoped,areas,neighbors}=analysis;
+    const {verified,unavailable,completed,partialCompleted,wms,exportScoped,osanScoped,areas,neighbors}=analysis;
     const selection=[...vehicles.selectedOptions].map(option=>option.value);
     const area=areas.find(entry=>entry.zip===chosenArea);
     const list=(items,show)=>items.length?'<ul>'+items.map(show).join('')+'</ul>':'<p class="dispatch-empty">확인 자료 없음</p>';
     const interval='<p>'+escape(period.start)+' ~ '+escape(period.end)+' · '+period.days+'일</p>'+
       '<p>배차 <strong>확정 '+verified.length+'일</strong> · 미확인 '+unavailable.length+'일</p>'+
       '<p>WMS 내보내기 범위 '+exportScoped.length+'일 · 오산 원장 검증 '+osanScoped.length+'일</p>'+
-      '<p>배송완료 상태 확인 '+completed.length+'일 · 미확인 '+(period.days-completed.length)+'일</p>'+
+      '<p>배송완료 상태 확인 '+completed.length+'일'+(partialCompleted.length?' · 일부 확인 '+partialCompleted.length+'일':'')+
+      ' · 미확인 '+(period.days-completed.length-partialCompleted.length)+'일</p>'+
       '<p>WMS 금액 확인 '+wms.length+'일 · 미확인 '+(period.days-wms.length)+'일</p>';
     const evidence=unavailable.length?'<details><summary>미확인 날짜 '+unavailable.length+'일</summary><p>'+
       escape(unavailable.join(' · '))+'</p></details>':'';

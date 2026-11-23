@@ -70,8 +70,27 @@ test('published historical observations remain partial and include only positive
   assert.equal(result.route.unassigned,null);
   assert.equal(result.route.rows.length,1);
   assert.equal(result.route.rows[0].coordinateVerified,true);
+  const period=await read.period(date,7);
+  const summary=summarizeDispatchPeriod(period,new Set(['101','301']),'completed');
+  assert.deepEqual(summary.verified,[]);
+  assert.deepEqual(summary.completed,[]);
+  assert.deepEqual(summary.partialCompleted,[date]);
+  assert.equal(summary.vehicles.get('101').stops,1);
+  assert.equal(summary.vehicles.has('301'),false);
+  assert.equal(period.dates.at(-1).routes,undefined);
   archived = {...archived,planningOnly:true};
   assert.equal((await read(date)).route.state,'UNAVAILABLE');
+});
+
+test('a cold-storage-only archive cannot prove an Osan main-center delivery',async()=>{
+  const visited=['id-cold','S91001','101','osan',address];
+  const archive={date,visits:[visited],tasks:[[...visited,'COMPLETED']],
+    dispatch:{sources:[['2',1,1,0]],events:[event('2')]}};
+  const read=createOpsmapDispatchReferenceReader({getPublication:()=>({...publication,readDay:async()=>archive})});
+  assert.equal((await read(date)).route.state,'UNAVAILABLE');
+  const period=await read.period(date,7);
+  assert.equal(period.dates.at(-1).state,'UNAVAILABLE');
+  assert.equal(period.dates.at(-1).completed,undefined);
 });
 
 test('historical explicit and retained delivery reads keep exact address and route evidence without starting period source reads', async()=>{
