@@ -248,7 +248,7 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   }));
   const upload=(target,opts={})=>{
     const bytes=opts.bytes||nextBook(target);
-    return publishStageWmsDispatchExport({date:target,observedAt,bytes,
+    return publishStageWmsDispatchExport({date:target,observedAt:opts.observedAt||observedAt,bytes,
       sha256:createHash('sha256').update(bytes).digest('hex'),env:opts.env||env,fetchImpl});
   };
 
@@ -258,7 +258,8 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   await assert.rejects(upload(date2,{env:{...env,OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_KEY_B64:Buffer.alloc(32,9).toString('base64')}}),
     {code:'WMS_EXPORT_ARCHIVE_INTEGRITY'});
   assert.equal(events.length,0);
-  const [first,second]=await Promise.all([upload(date2),upload(date3)]);
+  const localTime='2026-11-24T23:08:19.5824678+09:00';
+  const [first,second]=await Promise.all([upload(date2,{observedAt:localTime}),upload(date3)]);
   assert.equal(first.state,'PUBLISHED');
   assert.equal(second.state,'PUBLISHED');
   for(const file of [...files.keys()].filter(f=>f.startsWith('release-2026-'))){
@@ -277,7 +278,9 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   const staged=reader();
   assert.deepEqual(await staged.availableDates(),[date,date2,date3]);
   assert.equal((await staged(date)).total,1501);
-  assert.equal((await staged(date2)).date,date2);
+  const localTimeRelease=await staged(date2);
+  assert.equal(localTimeRelease.date,date2);
+  assert.equal(localTimeRelease.observedAt,new Date(localTime).toISOString());
   assert.equal((await staged(date3)).total,1501);
   const department=createOpsmapDispatchReferenceReader({getPublication:()=>null,readWmsExport:staged});
   const result=await department.period(date3,7);

@@ -287,7 +287,7 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
   catch {throw scopeError('WMS_EXPORT_MANIFEST_INVALID');}
   if(!legacy||Array.isArray(legacy)||typeof legacy!=='object')throw scopeError('WMS_EXPORT_MANIFEST_INVALID');
   if(Object.hasOwn(legacy,date))throw scopeError('WMS_EXPORT_RELEASE_LEGACY_DATE');
-  verifyManifestWorkbook(date,bytes,{sha256,observedAt});
+  const verified=verifyManifestWorkbook(date,bytes,{sha256,observedAt});
   // Prove the operator's key opens an already approved pinned export before the
   // first release write. A newly generated or mistyped key cannot fork the archive.
   const probe=Object.keys(legacy).filter(isStageWmsDay).sort().at(-1);
@@ -297,7 +297,7 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
   const writer=env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_WRITE_TOKEN||env.OPSMAP_STAGE_SYNC_WRITE_TOKEN;
   const checkedArchive=createArchiveReader({...env,OPSMAP_SHADOW_GITHUB_READ_TOKEN:writer},fetchImpl);
   verifyManifestWorkbook(probe,await checkedArchive.read(probe,pinned),pinned);
-  const dateEntry={date,warehouse:'011',sha256,observedAt};
+  const dateEntry={date,warehouse:'011',sha256,observedAt:verified.observedAt};
   const verifyStored=async entry=>{
     const value=await archive.readArchive(entry,maxArchiveBytes);
     return verifyManifestWorkbook(date,unpackArchive(value,date,entry,key),entry);
@@ -322,7 +322,7 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
       throw error;
     }
     const saved=(await archive.readIndex()).entries.find(entry=>entry.date===date);
-    if(saved?.sha256!==sha256||saved.observedAt!==observedAt)throw scopeError('WMS_EXPORT_RELEASE_READBACK');
+    if(saved?.sha256!==sha256||saved.observedAt!==dateEntry.observedAt)throw scopeError('WMS_EXPORT_RELEASE_READBACK');
     await verifyStored(saved);
     return {state:'PUBLISHED',date,sha256};
   }
