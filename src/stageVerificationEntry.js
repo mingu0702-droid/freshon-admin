@@ -783,7 +783,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           },
           readRetainedDated:readDatedDelivery.readRetained,
           retainedDatedDates:readDatedDelivery.retainedDates,
-          readWmsExport:createStageWmsDispatchExportReader({env:stage}),
+          readWmsExport:createStageWmsDispatchExportReader({env:stage,fetchImpl}),
           readPostcodes:(codes,generation)=>generation ? postalCoverage?.dispatchPostcodes(codes,generation) : null,
         });
         mountOpsmapDispatchReference(router,{requireStaff,read,today});

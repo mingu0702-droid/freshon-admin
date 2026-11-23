@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import XLSX from 'xlsx';
-import { createStageWmsDispatchExportReader, parseOpsmapWmsDispatchExport, projectOpsmapWmsDispatch } from '../src/opsmapWmsDispatchExport.js';
+import { createStageWmsDispatchExportReader, parseOpsmapWmsDispatchExport, projectOpsmapWmsDispatch,
+  sealOpsmapWmsDispatchExport } from '../src/opsmapWmsDispatchExport.js';
 import { createOpsmapDispatchReferenceReader } from '../src/opsmapDispatchReference.js';
 import { coordinateAddressHash } from '../src/opsmap-abc/opsmapAutoCoordinates.js';
 import { STAGE_ORIGIN, STAGE_SERVICE } from '../src/stageScope.js';
@@ -124,4 +125,49 @@ test('one approved WMS export supplies both confirmed stops and amounts without 
   const missing=await wrong(date);
   assert.equal(missing.amounts.exportFailure,'DATE_MISMATCH');
   assert.equal(missing.route.state,'UNAVAILABLE');
+});
+
+test('the approved archive authenticates a dated XLSX from a private, pinned GitHub revision',async()=>{
+  const key=Buffer.alloc(32,0x31),ref='b'.repeat(40);
+  const {manifest,archive}=sealOpsmapWmsDispatchExport(workbook(),{date,observedAt,key});
+  const env={
+    RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,OPSMAP_STAGE_WMS_DISPATCH_EXPORT_APPROVED:'1',
+    OPSMAP_STAGE_WMS_DISPATCH_EXPORTS_JSON:JSON.stringify({[date]:manifest}),
+    OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_REF:ref,
+    OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_KEY_B64:key.toString('base64'),
+    OPSMAP_SHADOW_GITHUB_READ_TOKEN:'test-read-token',
+  };
+  const root='https://api.github.com/repos/mingu0702-droid/freshon-cache';
+  const calls=[];
+  let privateRepo=true, response=archive;
+  const fetchImpl=async(url,options)=>{
+    calls.push(url);
+    assert.equal(options.method,'GET');
+    assert.equal(options.redirect,'error');
+    assert.equal(options.headers.Authorization,'Bearer test-read-token');
+    if (url===root) return Response.json({private:privateRepo});
+    assert.equal(url,root+'/contents/opsmap-stage/wms-dispatch-v1/'+date+'.json?ref='+ref);
+    return Response.json(response);
+  };
+  const reader=(overrides={})=>createStageWmsDispatchExportReader({
+    env:{...env,...overrides},fetchImpl,readSecret:async()=>assert.fail('unexpected Secret File fallback'),
+  });
+  const read=reader();
+  assert.equal(await read('2026-11-22'),null);
+  assert.equal(await reader({RENDER_SERVICE_ID:'other-service'})(date),null);
+  assert.equal(calls.length,0);
+  assert.equal((await read(date)).vehicles[0].amount,500);
+  assert.equal((await read(date)).date,date);
+  assert.equal(calls.length,2);
+
+  const changed={...manifest,sha256:'a'.repeat(64)};
+  await assert.rejects(reader({OPSMAP_STAGE_WMS_DISPATCH_EXPORTS_JSON:JSON.stringify({[date]:changed})})(date),
+    {code:'WMS_EXPORT_ARCHIVE_INTEGRITY'});
+  response={...archive,tag:'0'.repeat(32)};
+  await assert.rejects(reader()(date),{code:'WMS_EXPORT_ARCHIVE_INTEGRITY'});
+
+  privateRepo=false;
+  calls.length=0;
+  await assert.rejects(reader()(date),{code:'WMS_EXPORT_ARCHIVE_READ'});
+  assert.deepEqual(calls,[root]);
 });
