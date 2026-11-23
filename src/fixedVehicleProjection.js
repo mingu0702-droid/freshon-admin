@@ -306,7 +306,11 @@ export function createFixedVehicleReader({ensureSession, readJson, extractRows, 
         // Outcome promises never reject, so unused failed pages cannot crash Node.
         await Promise.all(batch.values());batch.clear();
         progress={...progress,phase:'ERROR',complete:false,failureCode:/^FIXED_MASTER_[A-Z_]+$/.test(error.code||'')?error.code:'FIXED_MASTER_READ_FAILED'};
-        if(!['FIXED_MASTER_COUNT_CHANGED','FIXED_MASTER_SOURCE_CHANGED'].includes(error.code)||scan===1){
+        // A scheduled strict scan can retry detected page drift under its
+        // existing whole-run quota. The malformed page is never reused.
+        const boundaryDrift=['FIXED_MASTER_COUNT_CHANGED','FIXED_MASTER_SOURCE_CHANGED'].includes(error.code);
+        const budgetedPageDrift=strictPageCounts&&remainingPageRequests&&expectedRows!==null&&error.kind==='SOURCE_CHANGED';
+        if(!(boundaryDrift||budgetedPageDrift)||scan===1){
           reportScan('REJECTED',error);
           throw error;
         }

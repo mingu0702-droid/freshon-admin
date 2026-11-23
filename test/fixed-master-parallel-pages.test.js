@@ -175,6 +175,37 @@ test('Stage rejects same-count shifted or repeated pages without counting their 
   }
 });
 
+test('a budgeted strict scan can replace shifted pages without weakening validation',async()=>{
+  for(const requestLimit of [10,9]){
+    const evidence=[];
+    const expected=Array.from({length:2000},(_,i)=>row(i,2000,'202'));
+    let firstOsanReads=0;
+    let spent=0;
+    const f=fixture(async({center,page})=>{
+      spent++;
+      if(center!=='011')return {data:[row(Number(center)+10000,1)]};
+      if(page===0)firstOsanReads++;
+      if(firstOsanReads===1){
+        return {data:page===0?expected.slice(0,1000).map(r=>({...r,mainCarSeqNm:'101'})):expected.slice(999,1999)};
+      }
+      return {data:expected.slice(page*1000,(page+1)*1000)};
+    },{strictPageCounts:true,verifyLastPage:true,preflightFirstPages:true,
+      remainingPageRequests:()=>requestLimit-spent,onScan:item=>evidence.push(item)});
+    if(requestLimit===9){
+      await assert.rejects(f.reader(),{code:'FIXED_MASTER_RETRY_BUDGET'});
+      assert.equal(spent,4);
+    }else{
+      const result=await f.reader();
+      assert.equal(result.meta.centers[0].scan,1);
+      assert(result.data.every(item=>item.baseVehicle==='202'||Number(item.customerCode.slice(1))>10000));
+      assert.equal(spent,10);
+    }
+    assert.equal(evidence[0].error,'FIXED_MASTER_PAGE_CUSTOMER_OVERLAP');
+    assert.equal(evidence[0].retryBudget.rescanRequests,4);
+    assert.equal(evidence[0].retryBudget.remainingCenterRequests,2);
+  }
+});
+
 test('parallel initial 401 responses share exactly one existing-session recovery',async()=>{
   let initialSessions=0,forcedSessions=0,recovered=false;
   const rows=Array.from({length:2501},(_,i)=>row(i,2501));
