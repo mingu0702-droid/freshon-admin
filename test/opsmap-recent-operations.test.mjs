@@ -251,7 +251,8 @@ test('order diagnostics distinguish empty, unsafe and inaccessible source result
     assert.deepEqual(diagnostics[0],{date,centerKey:'osan',state});
   }
   for (const [state,fetchImpl] of [
-    ['HTTP_REJECTED',async()=>new Response(null,{status:403})],
+    ['SOURCE_FORBIDDEN',async()=>new Response(null,{status:403,headers:{'Content-Type':'text/html'}})],
+    ['HTTP_REJECTED',async()=>new Response(null,{status:503})],
     ['READ_FAILED',async()=>{throw Error('private-fixture-error');}],
     ['AUTH_UNAVAILABLE',async()=>new Response(null,{status:401})]
   ]) {
@@ -442,7 +443,7 @@ test('one bounded historical scope resumes on the next signed day, preserving ar
   assert.equal((await syncStageRecentOperations(options())).state,'BUSY');
   assert.equal(current.ledger.recovery.length,1);
   conflict=false;
-  assert.equal((await syncStageRecentOperations(options())).state,'VERIFIED_NOOP');
+  assert.equal((await syncStageRecentOperations(options())).state,'SOURCE_UNAVAILABLE');
   assert.equal(calls.filter(([kind])=>kind==='historical').length,2);
   receiptDate='2026-11-26';
   assert.equal((await syncStageRecentOperations(options())).state,'PUBLISHED');
@@ -459,6 +460,53 @@ test('one bounded historical scope resumes on the next signed day, preserving ar
   assert.equal((await syncStageRecentOperations(options())).state,'RECOVERY_CHECKPOINTED');
   assert.equal(current.ledger.recovery.find(r=>r.centerKey==='honam').state,'NO_ACCEPTED_EVIDENCE');
   assert.equal(mergeRecentOperations(current.ledger,'2027-02-22',[]).recovery,undefined);
+});
+
+test('explicit multi-scope budget shares one claim, persists cooldown, and stops retrying blocked scopes',async()=>{
+  const target='2026-11-22';
+  let receiptDate='2026-11-24',clock=0,claims=0;
+  const scopes=[];
+  let current={ledger:mergeRecentOperations(ledger(),'2026-11-23',[]),sha:'first'};
+  const options=()=>({store:{
+    async read(){return current;},async readDay(){return null;},
+    async claimRecovery(day){assert.equal(day,receiptDate);claims++;return true;},
+    async write(next,sha){assert.equal(sha,current.sha);current={ledger:next,sha:'published-'+claims};}
+  },receipt:{runId:'d'.repeat(64),date:receiptDate},
+  now:()=>Date.parse(receiptDate+'T00:00Z')+clock,recoveryScopeLimit:2,
+  recoverySources:['delivery_admin','freshon_orders'],async readHistoricalScope(scope,signal){
+    assert(!signal.aborted);
+    scopes.push([receiptDate,scope.date,scope.centerKey,scope.source]);
+    if(scope.date===target&&scope.centerKey==='yeongnam'){
+      return {rows:[],state:scope.source==='delivery_admin'?'RETRY_LATER':'SCOPE_BLOCKED'};
+    }
+    clock=95_000;
+    return {rows:[makeDay(scope.date,scope.source,'partial',['B1'],scope.centerKey)]};
+  }});
+  let result=await syncStageRecentOperations(options());
+  assert.equal(result.state,'RECOVERY_CHECKPOINTED');
+  assert.equal(claims,1);
+  assert.deepEqual(result.recoveryBatch.map(r=>[r.source,r.state,r.attemptCount,r.nextEligibleOn]),[
+    ['delivery_admin','RETRY_LATER',1,'2026-11-25'],
+    ['freshon_orders','SCOPE_BLOCKED',1,undefined]
+  ]);
+  await syncStageRecentOperations(options());
+  assert.equal(claims,1);
+  receiptDate='2026-11-25';
+  result=await syncStageRecentOperations(options());
+  assert.equal(result.state,'PUBLISHED');
+  assert.deepEqual(result.recoveryBatch.map(r=>[r.centerKey,r.source,r.attemptCount,r.nextEligibleOn]),[
+    ['yeongnam','delivery_admin',2,'2026-11-27'],['honam','delivery_admin',1,undefined]
+  ]);
+  receiptDate='2026-11-26';
+  clock=0;
+  await syncStageRecentOperations(options());
+  assert(scopes.filter(([date])=>date===receiptDate).every(scope=>scope[2]!=='yeongnam'));
+  receiptDate='2026-11-27';
+  clock=0;
+  await syncStageRecentOperations(options());
+  assert.equal(current.ledger.recovery.find(r=>r.centerKey==='yeongnam'&&r.source==='delivery_admin').attemptCount,3);
+  assert.equal(current.ledger.recovery.find(r=>r.centerKey==='yeongnam'&&r.source==='delivery_admin').nextEligibleOn,undefined);
+  assert.equal(scopes.filter(row=>row[2]==='yeongnam'&&row[3]==='freshon_orders').length,1);
 });
 
 test('the Stage historical sender claim can be created once per current Seoul day',async()=>{

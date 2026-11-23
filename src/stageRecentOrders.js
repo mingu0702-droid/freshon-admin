@@ -51,12 +51,14 @@ export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,
       return !!cookie;
     } catch {return false;}
   }
-  return async(date,existingCenters=new Set(),{signal,allowLogin=true}={})=>{
+  return async(date,existingCenters=new Set(),{signal,allowLogin=true,onScopeDiagnostic}={})=>{
     const input=[];
     if (!isDay(date)) return input;
     const report=(centerKey,state)=>{
       try {onDiagnostic?.({date,centerKey,state});}
       catch { /* Diagnostics cannot change accepted evidence. */ }
+      try {onScopeDiagnostic?.({centerKey,state});}
+      catch { /* Recovery outcomes cannot change accepted evidence. */ }
     };
     if (!cookie && (!allowLogin || !await authenticate())) {
       for (const centerKey of Object.keys(centers)) report(centerKey,existingCenters.has(centerKey)?'ALREADY_OBSERVED':'AUTH_UNAVAILABLE');
@@ -77,12 +79,16 @@ export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,
             'X-Requested-With':'XMLHttpRequest',Origin:origin,Referer:origin+'/bo/main'}});
         let response=await request();
         if (response.status===401 || response.status>=300&&response.status<400 ||
-            response.headers.get('content-type')?.includes('text/html')) {
+            response.ok&&response.headers.get('content-type')?.includes('text/html')) {
           await response.body?.cancel();
           if (!allowLogin || !await authenticate()) {report(centerKey,'AUTH_UNAVAILABLE');continue;}
           response=await request();
         }
-        if (!response.ok) {await response.body?.cancel();report(centerKey,'HTTP_REJECTED');continue;}
+        if (!response.ok) {
+          await response.body?.cancel();
+          report(centerKey,response.status===403?'SOURCE_FORBIDDEN':'HTTP_REJECTED');
+          continue;
+        }
         const evidence=projectOrders(await readBoundedPhotoLoginJson(response,48*1024*1024,budget),date,centerKey);
         if (typeof evidence==='string') report(centerKey,evidence);
         else {input.push(evidence);report(centerKey,'VERIFIED');}

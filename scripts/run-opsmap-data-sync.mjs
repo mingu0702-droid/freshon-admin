@@ -26,7 +26,7 @@ import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixed
 import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
 import {createStageNationalRegistryStorage,createStageNationalRegistrationSource,stageNationalRegistryEnabled,
   scopedNationalRegistryMembership,syncStageNationalRegistry} from '../src/stageNationalRegistry.js';
-import {createStageRecentOperationsSeed,createStageRecentOperationsStore,stageRecentOperationsSyncEnabled,
+import {createStageRecentOperationsSeed,createStageRecentOperationsStore,historicalRecoveryOutcome,stageRecentOperationsSyncEnabled,
   syncStageRecentOperations} from '../src/stageRecentOperations.js';
 import {recentOperationsBaseline} from '../src/stageRecentOperationsManifest.js';
 
@@ -296,21 +296,26 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
           return evidence.flatMap(input=>input??[]);
         }:null;
         const autoRepair=env.OPSMAP_STAGE_RECENT_OPERATIONS_AUTO_REPAIR_APPROVED==='1';
+        const approvedScopeLimit=env.OPSMAP_STAGE_RECENT_OPERATIONS_REPAIR_SCOPE_LIMIT;
+        const recoveryScopeLimit=approvedScopeLimit===undefined?1:/^[1-3]$/.test(approvedScopeLimit)?Number(approvedScopeLimit):0;
         const recoverySources=[
           ...(readOrders?['freshon_orders']:[]),
           ...(readDelivery?['delivery_admin']:[])
         ];
-        const readHistoricalScope=autoRepair?({date,centerKey,source},signal)=>{
+        const readHistoricalScope=autoRepair?async({date,centerKey,source},signal)=>{
           const skip=new Set(['osan','yeongnam','honam'].filter(center=>center!==centerKey));
-          return source==='freshon_orders'?readOrders(date,skip,{signal,allowLogin:false}):
-            readDelivery(date,skip,deliveryDiagnostics,signal);
+          let outcome;
+          const capture=value=>{if(value.centerKey===centerKey)outcome=value.state;};
+          const rows=source==='freshon_orders'?await readOrders(date,skip,{signal,allowLogin:false,onScopeDiagnostic:capture}):
+            await readDelivery(date,skip,value=>{deliveryDiagnostics(value);capture(value);},signal);
+          return {rows,state:historicalRecoveryOutcome(outcome)};
         }:undefined;
         const repair=/^(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})$/.exec(env.OPSMAP_STAGE_RECENT_OPERATIONS_REPAIR_REQUEST||'');
         const repairDate=repair?.[2]===receipt.date?repair[1]:undefined;
         const retryDates=env.OPSMAP_STAGE_RECENT_OPERATIONS_RETRY_DATES?.split(',').map(date=>date.trim());
         const result=await syncStageRecentOperations({store:createStageRecentOperationsStore({env,write:true}),receipt,
           readLatestDay,
-          retryDates,repairDate,readHistoricalScope,recoverySources,
+          retryDates,repairDate,readHistoricalScope,recoverySources,recoveryScopeLimit,
           readSeed:createStageRecentOperationsSeed({env,manifest:recentOperationsBaseline})});
         console.log(JSON.stringify({component,runId:receipt.runId,...result}));
       } catch(error) {

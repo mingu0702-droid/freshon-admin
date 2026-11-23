@@ -22,9 +22,13 @@ const codeRevision = /^[a-f0-9]{40}$/;
 const maxClearBytes = 32 * 1024 * 1024, maxPackedBytes = 4 * 1024 * 1024;
 const maxRetryDates = 7;
 const historicalSources = ['delivery_admin','freshon_orders'];
-const historicalStates = ['VERIFIED','NO_ACCEPTED_EVIDENCE','READ_FAILED'];
+const historicalStates = ['VERIFIED','NO_ACCEPTED_EVIDENCE','READ_FAILED','RETRY_LATER','SCOPE_BLOCKED'];
 const recoveryBudgetMs = 90_000;
 const historicalReadMs = 30_000;
+const maxHistoricalScopes = recoveryBudgetMs/historicalReadMs;
+const maxHistoricalAttempts = 3;
+const dayAfter = (date,days) => new Date(Date.parse(date)+days*86400000).toISOString().slice(0,10);
+const retryable = new Set(['READ_FAILED','RETRY_LATER']);
 const compress = promisify(gzip), decompress = promisify(gunzip);
 const customerCode = /^[A-Z]\d{1,20}$/;
 const hash = /^[a-f0-9]{64}$/;
@@ -61,13 +65,17 @@ export function normalizeRecentOperations({startDate,endDate,days,recovery=[]} =
   }
   if (!Array.isArray(recovery) || recovery.length>540) throw rejected();
   const attempts=new Set();
-  const journal=recovery.map(({date,centerKey,source,attemptedOn,state})=>{
+  const journal=recovery.map(({date,centerKey,source,attemptedOn,state,attemptCount,nextEligibleOn})=>{
     const key=dayKey({date,centerKey,source});
     if (!isDay(date)||date<startDate||!isDay(attemptedOn)||date>=attemptedOn||
         !recentOperationsCenters.includes(centerKey)||!historicalSources.includes(source)||
-        !historicalStates.includes(state)||attempts.has(key)) throw rejected();
+        !historicalStates.includes(state)||attempts.has(key)||
+        attemptCount!==undefined&&(!Number.isInteger(attemptCount)||attemptCount<1||attemptCount>maxHistoricalAttempts)||
+        nextEligibleOn!==undefined&&(!retryable.has(state)||!isDay(nextEligibleOn)||
+          attemptCount===undefined||attemptCount===maxHistoricalAttempts||nextEligibleOn!==dayAfter(attemptedOn,attemptCount))) throw rejected();
     attempts.add(key);
-    return {date,centerKey,source,attemptedOn,state};
+    return {date,centerKey,source,attemptedOn,state,...(attemptCount!==undefined?{attemptCount}:{}),
+      ...(nextEligibleOn?{nextEligibleOn}:{})};
   }).sort((a,b)=>dayKey(a).localeCompare(dayKey(b)));
   return {startDate,endDate,days:normalized.sort((a,b)=>dayKey(a).localeCompare(dayKey(b))),
     ...(journal.length?{recovery:journal}:{})};
@@ -141,14 +149,17 @@ export function mergeRecentOperations(previous, endDate, days) {
     recovery:previous.recovery?.filter(item=>item.date>=startDate)});
 }
 
-function nextHistoricalScope({base, additions, day, receiptDate, sources}) {
-  const journal=base.recovery??[];
-  if (journal.some(row=>row.attemptedOn===receiptDate)) return null;
+function nextHistoricalScope({base, additions, day, receiptDate, sources,journal,unreadableDates}) {
   const complete=new Set([...base.days,...additions].filter(row=>row.coverage==='complete').map(dayKey));
-  const attempted=new Set(journal.map(dayKey));
   const dates=datesFor(day,90).slice(0,-1).reverse();
   const priorities=['yeongnam','honam','osan'];
-  const eligible=scope=>!complete.has(dayKey(scope))&&!attempted.has(dayKey(scope));
+  const eligible=scope=>{
+    const attempt=journal.get(dayKey(scope));
+    if(unreadableDates.has(scope.date)||complete.has(dayKey(scope)))return false;
+    if(!attempt)return true;
+    return retryable.has(attempt.state)&&(attempt.attemptCount??1)<maxHistoricalAttempts&&
+      (attempt.nextEligibleOn??dayAfter(attempt.attemptedOn,1))<=receiptDate;
+  };
   if (dates.includes('2026-11-22')) {
     for (const centerKey of priorities) for (const source of sources) {
       const scope={date:'2026-11-22',centerKey,source};
@@ -160,6 +171,13 @@ function nextHistoricalScope({base, additions, day, receiptDate, sources}) {
     if (eligible(scope)) return scope;
   }
   return null;
+}
+
+export function historicalRecoveryOutcome(state) {
+  if (['SOURCE_EMPTY','NO_CONFIRMED_EVIDENCE'].includes(state)) return 'NO_ACCEPTED_EVIDENCE';
+  if (['SOURCE_FORBIDDEN','DELIVERY_SOURCE_FORBIDDEN','DELIVERY_SOURCE_READ_ONLY','CARRIER_CENTER_UNVERIFIED',
+    'DELIVERY_SOURCE_SCOPE','ROW_DATE_MISMATCH','ROW_CENTER_MISMATCH','DELIVERY_SOURCE_CUSTOMER_CONFLICT'].includes(state)) return 'SCOPE_BLOCKED';
+  return 'RETRY_LATER';
 }
 
 export function recentOperationsKey(encoded) {
@@ -302,7 +320,7 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
 }
 
 export async function syncStageRecentOperations({store,receipt,readSeed,readSource,readLatestDay,retryDates=[],repairDate,
-  readHistoricalScope,recoverySources=[],now=Date.now}={}) {
+  readHistoricalScope,recoverySources=[],recoveryScopeLimit=1,now=Date.now}={}) {
   const startedAt=now();
   const day=latestClosedDay(startedAt);
   const kstDate=new Date(startedAt+9*3600000).toISOString().slice(0,10);
@@ -364,28 +382,41 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     days.push(...input);
     if (date>endDate) endDate=date;
   }
-  let attempt;
-  if (readHistoricalScope && store.claimRecovery && !repairDate && !retryDates.length && now()-startedAt<recoveryBudgetMs) {
+  const attempts=[],journal=new Map((base.recovery??[]).map(entry=>[dayKey(entry),entry]));
+  if (readHistoricalScope && store.claimRecovery && !repairDate && !retryDates.length &&
+      Number.isInteger(recoveryScopeLimit)&&recoveryScopeLimit>=1&&recoveryScopeLimit<=maxHistoricalScopes &&
+      ![...journal.values()].some(row=>row.attemptedOn===kstDate)) {
     const sources=historicalSources.filter(source=>recoverySources.includes(source));
-    const scope=nextHistoricalScope({base,additions:days,day,receiptDate:kstDate,sources});
-    if (scope) {
-      let archive,archiveFailed=false;
-      try {archive=await (readSource?.(scope.date) ?? store.readDay(scope.date));}
-      catch {archiveFailed=true;}
+    const archives=new Map(),unreadableDates=new Set();
+    let claimed=false;
+    for (let slot=0;slot<recoveryScopeLimit&&now()-startedAt<recoveryBudgetMs;slot++) {
+      const scope=nextHistoricalScope({base,additions:days,day,receiptDate:kstDate,sources,journal,unreadableDates});
+      if(!scope)break;
+      let archive;
+      try {
+        if(!archives.has(scope.date)) archives.set(scope.date,await (readSource?.(scope.date) ?? store.readDay(scope.date)));
+        archive=archives.get(scope.date);
+      }
+      catch {unreadableDates.add(scope.date);continue;}
       if (archive!=null && (!Array.isArray(archive)||archive.some(row=>row?.date!==scope.date))) throw rejected();
       const sealed=archive?.find(row=>dayKey(row)===dayKey(scope));
       let result=[], state='NO_ACCEPTED_EVIDENCE';
-      let claimed=false;
-      if (!archiveFailed && sealed?.coverage!=='complete' && now()-startedAt<recoveryBudgetMs) {
+      if (!claimed && sealed?.coverage!=='complete' && now()-startedAt<recoveryBudgetMs) {
         try {claimed=await store.claimRecovery(kstDate,receipt.runId);}
         catch { /* Latest evidence can still be published. */ }
       }
-      const providerAdmitted=claimed&&now()-startedAt<recoveryBudgetMs;
+      const availableMs=recoveryBudgetMs-(now()-startedAt);
+      const providerAdmitted=claimed&&availableMs>0;
       if (sealed?.coverage==='complete') result=[sealed];
       else if (providerAdmitted) {
-        try {result=await readHistoricalScope(scope,AbortSignal.timeout(historicalReadMs));}
+        try {
+          const read=await readHistoricalScope(scope,AbortSignal.timeout(Math.min(historicalReadMs,availableMs)));
+          result=Array.isArray(read)?read:read?.rows;
+          if (!result?.length && historicalStates.includes(read?.state)) state=read.state;
+        }
         catch {state='READ_FAILED';}
       }
+      else break;
       if (!Array.isArray(result) || result.length>1 || result.some(row=>!row||dayKey(row)!==dayKey(scope))) throw rejected();
       if (sealed && sealed.coverage!=='complete') {
         const startDate=datesFor(day,90)[0];
@@ -394,22 +425,27 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
       if (result.length) {
         days.push(...result);
         if (scope.date>endDate) endDate=scope.date;
-        if (state!=='READ_FAILED') state='VERIFIED';
+        if (state==='NO_ACCEPTED_EVIDENCE') state='VERIFIED';
       }
-      if (sealed?.coverage==='complete'||providerAdmitted) attempt={...scope,attemptedOn:kstDate,state};
+      const key=dayKey(scope), previous=journal.get(key);
+      const attemptCount=(previous?.attemptCount??(previous?1:0))+1;
+      const attempt={...scope,attemptedOn:kstDate,state,attemptCount,
+        ...(retryable.has(state)&&attemptCount<maxHistoricalAttempts?{nextEligibleOn:dayAfter(kstDate,attemptCount)}:{})};
+      journal.set(key,attempt);
+      attempts.push(attempt);
     }
   }
-  if (!days.length && !attempt) return {state:'SOURCE_UNAVAILABLE',endDate:base.endDate};
+  if (!days.length && !attempts.length) return {state:'SOURCE_UNAVAILABLE',endDate:base.endDate};
   let next=mergeRecentOperations(base,endDate,days);
-  if (attempt) next=normalizeRecentOperations({...next,recovery:[...(next.recovery??[]),attempt]});
+  if (attempts.length) next=normalizeRecentOperations({...next,recovery:[...journal.values()].filter(entry=>entry.date>=next.startDate)});
   if (current.ledger && JSON.stringify(next)===JSON.stringify(base)) return {state:'VERIFIED_NOOP',endDate:base.endDate};
   try {await store.write(next,current.sha);}
   catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
   const saved=await store.read();
   if (JSON.stringify(saved.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
-  const evidenceChanged=attempt&&(endDate!==base.endDate||JSON.stringify(next.days)!==JSON.stringify(base.days));
-  return {state:attempt&&!evidenceChanged&&current.ledger?'RECOVERY_CHECKPOINTED':'PUBLISHED',endDate,
-    ...(attempt?{recovery:attempt}:{})};
+  const evidenceChanged=attempts.length&&(endDate!==base.endDate||JSON.stringify(next.days)!==JSON.stringify(base.days));
+  return {state:attempts.length&&!evidenceChanged&&current.ledger?'RECOVERY_CHECKPOINTED':'PUBLISHED',endDate,
+    ...(attempts.length?{recovery:attempts.at(-1),recoveryBatch:attempts}:{})};
 }
 
 export async function recoverArchivedOsanDispatch({

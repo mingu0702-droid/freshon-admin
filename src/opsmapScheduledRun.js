@@ -19,7 +19,7 @@ const sourceKeys=new Set(['customerRegistry','delivery:1','delivery:2','delivery
 const fixedCenters=['011','012','013'];
 const boundedCount=(value,max=120_000)=>Number.isSafeInteger(value)&&value>=0&&value<=max?value:null;
 const fixedError=value=>/^FIXED_(?:MASTER|STORE)_[A-Z_]{1,70}$/.test(value||'')?value:null;
-const recentOrderStates=new Set(['VERIFIED','ALREADY_OBSERVED','AUTH_UNAVAILABLE','HTTP_REJECTED','READ_FAILED',
+const recentOrderStates=new Set(['VERIFIED','ALREADY_OBSERVED','AUTH_UNAVAILABLE','SOURCE_FORBIDDEN','HTTP_REJECTED','READ_FAILED',
   'BUDGET_EXHAUSTED','RESPONSE_INVALID','SOURCE_EMPTY','COUNT_UNVERIFIED','ROW_DATE_MISMATCH','ROW_CENTER_MISMATCH',
   'ROW_NOT_CONFIRMED','ROW_CUSTOMER_INVALID','ROW_ORDER_KEY_INVALID','ROW_DUPLICATE','ROW_QUANTITY_INVALID']);
 const recentDeliveryStates=new Set(['VERIFIED_PARTIAL','ALREADY_OBSERVED','CARRIER_CENTER_UNVERIFIED','NO_CONFIRMED_EVIDENCE',
@@ -229,16 +229,17 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
             }
             if(value?.component==='opsmap-recent-operations-sync' && value.runId===receipt.runId &&
                ['PUBLISHED','VERIFIED_NOOP','RECOVERY_CHECKPOINTED','SOURCE_UNAVAILABLE','BUSY','FAILED'].includes(value.state)) {
-              const attempt=value.recovery;
-              const recovery=attempt&&/^\d{4}-\d{2}-\d{2}$/.test(attempt.date||'') &&
+              const attempts=Array.isArray(value.recoveryBatch)&&value.recoveryBatch.length<=3?value.recoveryBatch:[value.recovery];
+              const recovery=attempts.filter(attempt=>attempt&&/^\d{4}-\d{2}-\d{2}$/.test(attempt.date||'') &&
                 ['osan','yeongnam','honam'].includes(attempt.centerKey) &&
                 ['freshon_orders','delivery_admin'].includes(attempt.source) &&
-                ['VERIFIED','NO_ACCEPTED_EVIDENCE','READ_FAILED'].includes(attempt.state) &&
-                attempt.attemptedOn===receipt.date?
-                {date:attempt.date,centerKey:attempt.centerKey,source:attempt.source,state:attempt.state}:null;
+                ['VERIFIED','NO_ACCEPTED_EVIDENCE','READ_FAILED','RETRY_LATER','SCOPE_BLOCKED'].includes(attempt.state) &&
+                attempt.attemptedOn===receipt.date).map(attempt=>({date:attempt.date,centerKey:attempt.centerKey,source:attempt.source,
+                state:attempt.state,attemptCount:[1,2,3].includes(attempt.attemptCount)?attempt.attemptCount:null,
+                nextEligibleOn:/^\d{4}-\d{2}-\d{2}$/.test(attempt.nextEligibleOn||'')?attempt.nextEligibleOn:null}));
               log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
                 endDate:/^\d{4}-\d{2}-\d{2}$/.test(value.endDate||'')?value.endDate:null,
-                ...(recovery?{recovery}:{}),
+                ...(recovery.length?{recovery}:{}),
                 error:/^(?:RECENT_OPERATIONS|FIXED_STORE)_[A-Z_]+$/.test(value.error||'')?value.error:null}));
             }
             if(value?.component==='opsmap-recent-orders-source' && value.runId===receipt.runId &&
