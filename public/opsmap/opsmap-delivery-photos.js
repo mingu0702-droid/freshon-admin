@@ -15,6 +15,18 @@
   const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
   const safeText = (value, maximum) => typeof value === 'string' && value.length <= maximum;
   const validRecordId = value => typeof value === 'string' && /^\d{1,20}$/.test(value);
+  const validVisitKey = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  async function matchingVisit(deliveries, key) {
+    if (!window.crypto?.subtle) return null;
+    const encoder = new TextEncoder();
+    const matches = await Promise.all(deliveries.map(async delivery => {
+      if (!validRecordId(delivery.deliveryId)) return null;
+      const bytes = await window.crypto.subtle.digest('SHA-256', encoder.encode('delivery:' + delivery.deliveryId));
+      const hash = Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, '0')).join('');
+      return hash === key ? delivery : null;
+    }));
+    return matches.find(Boolean) || null;
+  }
   const photoTitle = photo => KINDS[photo.kind];
   function mediaPath(value) {
     if (typeof value !== 'string') throw Error('UNVERIFIED');
@@ -118,15 +130,19 @@
       if (action) { const button = node('button', action.label, host); button.type = 'button'; button.onclick = action.run; }
     }
     function dateSearch() {
+      const owner = generation;
       const controls = node('div', undefined, host, 'deliveryPhotoControls');
       const label = node('label', '배송일 ', controls), input = node('input', undefined, label);
       input.type = 'date'; input.setAttribute('aria-label', '납품 사진 조회 배송일');
       input.value = target?.date || new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
       const button = node('button', '배송일 조회', controls); button.type = 'button';
-      button.onclick = () => { if (target && validDate(input.value)) void open({customerCode: target.customerCode, date: input.value}); };
+      button.onclick = () => {
+        if (owner===generation && target && validDate(input.value)) void open({customerCode:target.customerCode,date:input.value,
+          ...(target.date===input.value&&target.visitKey ? {visitKey:target.visitKey} : {})});
+      };
       if (target && !target.history) {
         const history = node('button', '과거 사진 조회', controls);
-        history.type = 'button'; history.onclick = () => open({customerCode:target.customerCode, history:true});
+        history.type = 'button'; history.onclick = () => { if(owner===generation) void open({customerCode:target.customerCode, history:true}); };
       }
     }
     function block(message = '직원 인증이 만료되었습니다. 로그인 후 다시 조회해 주세요.') {
@@ -353,11 +369,15 @@
       }
     }
     function renderList() {
+      const owner = generation, choices = deliveries;
       host.replaceChildren(); host.dataset.state = 'ready'; node('h3', '납품 사진', host);
       dateSearch();
       const label = node('label', '배송일 · 배송 기록', host), select = node('select', undefined, label); select.setAttribute('aria-label', '납품 사진 배송일');
       deliveries.forEach((delivery, i) => { const option = node('option', delivery.date + ' · ' + delivery.deliveryId, select); option.value = String(i); });
-      const button = node('button', '조회', host); button.type = 'button'; button.onclick = () => selectDelivery(deliveries[Number(select.value)]);
+      const button = node('button', '조회', host); button.type = 'button';
+      button.onclick = () => {
+        if (alive(owner) && select.value !== '') void selectDelivery(choices[Number(select.value)]);
+      };
       const body = node('div', undefined, host); body.id = 'deliveryPhotoContent';
       return { select, body };
     }
@@ -420,6 +440,7 @@
         && indexedPage?.items.length ? {page:indexedPage, target} : null;
       purge(); target = { customerCode: String(value.customerCode || ''), ...(value.history === true
         ? {history:true, ...(value.cursor ? {cursor:value.cursor} : {})} : validDate(value.date) ? {date:value.date} : {}) };
+      if (target.date && validVisitKey(value.visitKey)) target.visitKey=value.visitKey;
       if (!target.customerCode || target.customerCode.length > 128) { shell('사진 미확인 · 고객코드가 필요합니다.', 'unverified'); return; }
       const id = generation; requestController = new AbortController(); shell('배송 기록 확인 중…', 'loading');
       let authorized = false;
@@ -442,12 +463,21 @@
           } else renderHistory(normalize(payload, target));
           return;
         }
-        const list = normalize(await request(API + '?' + new URLSearchParams(target)), target);
+        const {visitKey,...query}=target;
+        const list = normalize(await request(API + '?' + new URLSearchParams(query)), target);
         if (!alive(id)) return;
         deliveries = list;
         if (!list.length) { shell('사진 없음 · 선택한 배송일에 조회 가능한 배송 기록이 없습니다.', 'empty'); dateSearch(); return; }
-        const selectedDelivery = list.find(d => d.date === target.date) || list[0];
-        await selectDelivery(selectedDelivery);
+        const selectedDelivery = visitKey ? await matchingVisit(list,visitKey).catch(()=>null) :
+          target.date && list.length===1 ? list[0] : null;
+        if (!alive(id)) return;
+        if (selectedDelivery) { await selectDelivery(selectedDelivery); return; }
+        const {select,body}=renderList();
+        const prompt=node('option','배송 기록을 선택하세요'); prompt.value=''; prompt.disabled=true;
+        select.prepend(prompt); select.value='';
+        host.dataset.state='choose-delivery';
+        node('p',visitKey?'선택한 방문과 일치하는 사진 기록을 확인하지 못했습니다. 조회할 배송 기록을 선택하세요.':
+          '사진을 열기 전에 배송 기록을 선택하세요.',body,'deliveryPhotoStatus');
       } catch (error) {
         if (id !== generation || requestController?.signal.aborted) return;
         if (error.message === 'PHOTO_HISTORY_CHANGED' && target.cursor) {
@@ -471,23 +501,26 @@
     });
     return Object.freeze({ open, clear, expire: block, destroy() { clear(); viewer.remove(); } });
   }
-  let current = null, currentHost = null, mounted = false, observing = false, observer;
-  function reset() { current?.destroy(); current = null; currentHost?.remove(); currentHost = null; }
+  let current = null, currentHost = null, currentVisitKey = '', mounted = false, observing = false, observer;
+  function reset() { current?.destroy(); current = null; currentHost?.remove(); currentHost = null; currentVisitKey=''; }
   function mountSelection() {
     if (document.hidden) { reset(); return; }
     const state = window.MapUiLocalBridge?.state, row = state?.selected, detail = document.querySelector('#detailSection.open #detail .detailBody');
     if (!row?.customerCode || !detail) { reset(); return; }
     const date = (state.mode === 'DATE_ROUTE' ? state.selectedDate : row.lastDeliveryDate) || '';
-    if (currentHost?.isConnected && currentHost.dataset.customerCode === String(row.customerCode) && currentHost.dataset.deliveryDate === date) return;
+    const visitKey=state.mode==='DATE_ROUTE'&&validVisitKey(row.deliveryId)?row.deliveryId:'';
+    if (currentHost?.isConnected && currentHost.dataset.customerCode === String(row.customerCode) &&
+        currentHost.dataset.deliveryDate === date && currentVisitKey === visitKey) return;
     reset(); currentHost = node('section', undefined, detail, 'deliveryPhotos');
     currentHost.dataset.customerCode = String(row.customerCode); currentHost.dataset.deliveryDate = date;
+    currentVisitKey = visitKey;
     currentHost.setAttribute('aria-label', '납품 사진');
-    current = createController({ host: currentHost });
+    const owner = current = createController({ host: currentHost });
     node('h3', '납품 사진', currentHost); node('p', '직원 인증 후 배송일별 사진을 조회합니다.', currentHost, 'deliveryPhotoStatus');
     const button = node('button', '납품 사진 조회', currentHost); button.type = 'button';
-    button.onclick = () => current?.open({customerCode:row.customerCode, date});
+    button.onclick = () => { if(current===owner) void owner.open({customerCode:row.customerCode,date,visitKey}); };
     const historyButton = node('button', '과거 사진 조회', currentHost); historyButton.type = 'button';
-    historyButton.onclick = () => current?.open({customerCode:row.customerCode, history:true});
+    historyButton.onclick = () => { if(current===owner) void owner.open({customerCode:row.customerCode, history:true}); };
   }
   function schedule() { if (observing) return; observing = true; queueMicrotask(() => { observing = false; mountSelection(); }); }
   function mount() {

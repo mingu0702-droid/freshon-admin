@@ -1,6 +1,7 @@
 // SYNTHETIC component fixture, isolated headless Edge. No existing browser/session.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {resolve,join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
@@ -23,14 +24,17 @@ test('SYNTHETIC Edge component: photo failure separation, identity race and esca
       await page.goto('http://127.0.0.1:'+server.address().port+'/');
       await page.evaluate(()=>{
         window.qa={mode:'empty',calls:[],delayedResolve:null};
-        const row=(customerCode,date,detail)=>({customerCode,date,deliveryId:'990091',status:detail?'EMPTY':'UNVERIFIED',photos:[],notes:detail?'SYNTHETIC '+customerCode+' <img src=x onerror="window.qa.xss=true">':''});
+        const row=(customerCode,date,detail,deliveryId='990091')=>({customerCode,date,deliveryId,status:detail?'EMPTY':'UNVERIFIED',photos:[],notes:detail?'SYNTHETIC '+customerCode+' <img src=x onerror="window.qa.xss=true">':''});
         const fetcher=async(path)=>{
           const url=new URL(path,location.href);qa.calls.push(url.pathname+url.search);
           if(url.pathname.endsWith('/auth/session'))return Response.json({authenticated:true,expiresAt:Date.now()+60000,idleExpiresAt:Date.now()+60000});
           if(qa.mode==='delayed'&&url.searchParams.get('customerCode')==='S990091')return new Promise(resolve=>{qa.delayedResolve=()=>resolve(Response.json({ok:true,data:{customerCode:'S990091',deliveries:[row('S990091','2026-11-04',false)]}}));});
           if(qa.mode==='error')return Response.json({ok:false,error:{code:qa.code}},{status:qa.http});
           const customerCode=url.searchParams.get('customerCode'),date=url.searchParams.get('date');
-          return Response.json({ok:true,data:{customerCode,deliveries:qa.mode==='empty'?[]:[row(customerCode,date,url.searchParams.has('deliveryId'))]}});
+          const deliveryId=url.searchParams.get('deliveryId');
+          const deliveries=qa.mode==='empty'?[]:deliveryId?[row(customerCode,date,true,deliveryId)]:
+            qa.mode==='multiple'?[row(customerCode,date,false),row(customerCode,date,false,'990092')]:[row(customerCode,date,false)];
+          return Response.json({ok:true,data:{customerCode,deliveries}});
         };
         window.photoController=MapDeliveryPhotos.createController({host:document.querySelector('#photos'),fetcher});
       });
@@ -46,6 +50,30 @@ test('SYNTHETIC Edge component: photo failure separation, identity race and esca
       await page.waitForFunction(()=>typeof qa.delayedResolve==='function');
       await page.evaluate(async()=>{qa.mode='record';await photoController.open({customerCode:'S990092',date:'2026-11-04'});qa.delayedResolve();await qa.oldOpen;});
       const text=await page.locator('#photos').innerText();assert(text.includes('S990092'));assert(!text.includes('S990091'));assert(text.includes('<img src=x onerror='));assert.equal(await page.locator('#photos img').count(),0);assert.equal(await page.evaluate(()=>qa.xss),undefined);
+      await page.evaluate(async()=>{
+        qa.mode='multiple';qa.calls=[];await photoController.open({customerCode:'S990091',date:'2026-11-04'});
+        qa.oldChoice=document.querySelector('#photos select').parentElement.nextElementSibling;
+      });
+      assert.equal(await page.locator('#photos').getAttribute('data-state'),'choose-delivery');
+      assert.equal(await page.getByLabel('납품 사진 배송일').inputValue(),'');
+      assert.deepEqual(await page.evaluate(()=>qa.calls.filter(path=>path.includes('deliveryId=')||path.includes('/media/'))),[]);
+      await page.getByLabel('납품 사진 배송일').selectOption('1');
+      await page.getByRole('button',{name:'조회',exact:true}).click();
+      await page.waitForFunction(()=>qa.calls.some(path=>path.includes('deliveryId=990092')));
+      const selectedKey=createHash('sha256').update('delivery:990092').digest('hex');
+      await page.evaluate(async visitKey=>{
+        qa.calls=[];await photoController.open({customerCode:'S990091',date:'2026-11-04',visitKey});
+        qa.oldChoice.click();
+      },selectedKey);
+      const exact=await page.evaluate(()=>qa.calls.filter(path=>path.includes('deliveryId=')));
+      assert.equal(exact.length,1);
+      assert.match(exact[0],/deliveryId=990092$/);
+      assert(!await page.evaluate(()=>qa.calls.some(path=>path.includes('visitKey='))));
+      await page.evaluate(async()=>{
+        qa.mode='record';qa.calls=[];await photoController.open({customerCode:'S990091',date:'2026-11-04',visitKey:'a'.repeat(64)});
+      });
+      assert.equal(await page.locator('#photos').getAttribute('data-state'),'choose-delivery');
+      assert.deepEqual(await page.evaluate(()=>qa.calls.filter(path=>path.includes('deliveryId='))),[]);
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
       assert.equal(await page.evaluate(()=>Array.from(document.querySelectorAll('#photos button,#photos input,#photos select')).every(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth;})),true);
       assert.deepEqual(errors,[]);await page.screenshot({path:join(out,'synthetic-photo-component-'+width+'.png'),fullPage:true});
