@@ -559,7 +559,15 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
     async currentRegistration({generation,registry,center,area,offset}) {
       const opened=await verifiedRelease(generation);
       const data=await readCurrentRegistration({registry,boundary:boundarySha256,release:releaseSha256,center,area,offset,
-        hasArea:id=>Boolean(findArea(opened.areas,id)),hasLegacyCode:code=>opened.codes.get(code)?.registered===true});
+        hasArea:id=>Boolean(findArea(opened.areas,id)),hasLegacyCode:code=>opened.codes.get(code)?.registered===true,
+        readLegacy:async()=>{
+          const {stores}=await catalogData(opened);
+          return stores.flatMap(row=>{
+            const assignment=opened.codes.get(row.code);
+            return assignment?.registered?[{code:row.code,name:row.name,address:row.address,
+              center:centers[assignment.center],id:assignment.reviewArea===undefined?assignment.area:null}]:[];
+          });
+        }});
       const {index}=await activeIndex();
       if(index.sha256!==generation)throw Error('COVERAGE_GENERATION_CHANGED');
       return {...data,generation};
@@ -586,6 +594,7 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       const data = {
         generation: release.generation, boundary: boundarySha256, assignmentReview:reviewSha256, source: manifest.source, tier,
         ...(readOperations ? {operationsAvailable:true} : {}),
+        ...(readCurrentRegistration ? {currentRegistrationAvailable:true} : {}),
         period: { days, start: release.periods[days].start, end: release.asOf }, sourceObservedAt: release.sourceObservedAt,
         stale: now() - Date.parse(release.sourceObservedAt) > 36 * 3600000,
         densityHighAt: POSTAL_DENSITY_HIGH, completeness: scope.completeness, summary: scope.summary,

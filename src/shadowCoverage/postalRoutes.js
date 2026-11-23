@@ -90,9 +90,9 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
   });
   if(postal?.readCurrentRegistration) route('/current-registration',(req,scope,{runtime})=>{
     const {registry,area,offset='0'}=req.query;
-    if(!scope.generation || typeof registry!=='string'||!hash.test(registry) ||
+    if(!scope.generation || registry!==undefined&&(typeof registry!=='string'||!hash.test(registry)) ||
         Object.keys(req.query).some(key=>!['center','generation','registry','area','offset'].includes(key)) ||
-        area!==undefined&&(typeof area!=='string'||!/^\d{5}$/.test(area)) ||
+        area!==undefined&&(registry===undefined||typeof area!=='string'||!/^\d{5}$/.test(area)) ||
         typeof offset!=='string'||!/^\d{1,5}$/.test(offset)||Number(offset)>30000||area===undefined&&offset!=='0'){
       throw Error('POSTAL_QUERY_INVALID');
     }

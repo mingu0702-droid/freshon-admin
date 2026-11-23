@@ -91,7 +91,7 @@ if (tabs && workspace && period && daily) {
         style.href = new URL('./postal-coverage.css?v=20261124-operations',import.meta.url);
         document.head.append(style);
       }
-      return import('./postal-coverage-panel.mjs?v=20261124-operations');
+      return import('./postal-coverage-panel.mjs?v=20261124-current-registration');
     })().catch(error => {
       if (panelCode === preparation) panelCode = null;
       throw error;

@@ -1,6 +1,7 @@
 import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs?v=20261124-operations';
 import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261124-coverage-window';
 import { splitPostalBootstrap } from './postal-geometry.mjs';
+import { createCurrentRegistrationPanel } from './postal-current-registration-panel.mjs?v=20261124-current-registration';
 import { coverageCenterBounds } from './coverage-center-viewport.mjs';
 
 const API = '/api/map-phase2b/private/shadow-coverage/postal';
@@ -93,6 +94,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<label>운영이력 기간 <select id="recentOperationDays"><option value="7">7일</option><option value="30">30일</option>' +
     '<option value="60">60일</option><option value="90" selected>90일</option></select></label>' +
     '<div id="recentOperationSummary" aria-live="polite"></div></details></div>' +
+    '<details class="coverage-evidence" id="postalCurrentRegistration" hidden><summary>현재 등록 매장</summary>' +
+    '<p data-current-postal-summary aria-live="polite"></p><div data-current-postal-roster aria-live="polite"></div></details>' +
     '<section class="coverage-detail" id="postalOperationsDetail" aria-label="우편번호 운영 근거 상세" hidden></section>' +
     '<section class="coverage-detail" id="coverageDetail" aria-label="우편번호 구역 상세" hidden></section></div></aside>' +
     '<section class="coverage-map-area" aria-label="국가기초구역 배송분포 지도"><div id="coverageMap"></div>' +
@@ -124,6 +127,11 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   const scope = () => view ? { days: view.period.days, center: view.center, generation: view.generation } : baseScope();
   const timeout = signal => AbortSignal.any([signal, AbortSignal.timeout(16000)]);
   const areaDetails = createPostalAreaDetails(detail, { read, dismiss:() => { detailRead?.abort(); areaCard(null); }, openStore });
+  const currentRegistration=createCurrentRegistrationPanel(find('postalCurrentRegistration'),{read,openStore});
+  function updateCurrentRegistration(refresh=false) {
+    currentRegistration.update({available:view?.currentRegistrationAvailable,generation:view?.generation,
+      center:baseScope().center,area:selectedArea?.id,refresh});
+  }
   const operationsParameters = generation => ({days:range(),center:baseScope().center,generation});
   const operationFigures = ({registered,observed,orders,dispatch,completed}) =>
     ['권역 게시본 등록 '+fmt.format(registered)+'곳','운영 근거 확인 '+fmt.format(observed)+'곳',
@@ -240,6 +248,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     root.classList.toggle('postal-area-active',!!area);
     areaDetails.open(latest()?null:area,scope());
     void showOperationsArea(latest()?area:null);
+    updateCurrentRegistration();
     if (area) collapse(false);
   }
 
@@ -355,6 +364,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       viewKey = key;
       host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame), ...geometry.metrics() });
       applyView(view,same);
+      updateCurrentRegistration(force);
       if (latest()) showOperations(operations);
       map.show(latest()?{...view,tones:operations?.tones??[],badges:[]}:view,slices);
       if (resumeArea) areaCard(resumeArea);

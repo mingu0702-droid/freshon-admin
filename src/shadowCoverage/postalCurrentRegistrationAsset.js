@@ -1,9 +1,11 @@
 import {createCipheriv,createDecipheriv,createHash,hkdfSync,randomBytes} from 'node:crypto';
 import {open} from 'node:fs/promises';
 import {isAbsolute} from 'node:path';
+import {customerRegistryAddressHash} from '../customerRegistry.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../stageScope.js';
 import {isCurrentPostalPoint} from './postalCurrentRegistration.js';
 
+const assetUrl='https://api.github.com/repos/mingu0702-droid/freshon-cache/contents/opsmap-stage/postal-v1/current-registration-v1.sealed';
 const schema='opsmap-postal-current-registration-v1';
 const maxBytes=512*1024;
 const maxRows=30000;
@@ -54,59 +56,93 @@ export function verifyCurrentPostalRegistration(bytes,sha256,key) {
 // reads must identify the generation that was used for the geometry join.
 export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
   readRegistryVersion=async()=> (await readRegistry())?.ref?.version}) {
-  let cached, pending, index;
+  let cached, pending, index, indexFlight;
   async function load(){
     if(cached)return cached;
     pending??=Promise.resolve().then(readAsset).then(value=>cached=value).finally(()=>{pending=null;});
     return pending;
   }
-  return async({center='all',area,offset=0,registry,boundary,release,hasArea,hasLegacyCode})=>{
+  async function buildIndex(before,asset,{hasArea,hasLegacyCode,readLegacy}){
+    if(!Array.isArray(before.rows)||before.rows.length>maxRows)throw invalid();
+    const byCode=new Map(before.rows.map(row=>[row.customerCode,row]));
+    if(byCode.size!==before.rows.length)throw invalid();
+    const byCenter={all:new Map(),osan:new Map(),yeongnam:new Map(),honam:new Map()};
+    const scope={all:0,osan:0,yeongnam:0,honam:0}, additional={...scope};
+    const countScope=center=>{
+      scope.all++;
+      if(centers.has(center))scope[center]++;
+    };
+    const add=(code,name,center,id,supplement)=>{
+      const currentCenter=centers.has(center)?center:null;
+      const match={code,name,center:currentCenter};
+      for(const group of ['all',...(currentCenter?[currentCenter]:[])]){
+        const list=byCenter[group].get(id)||[];
+        list.push(match);
+        byCenter[group].set(id,list);
+        if(supplement)additional[group]++;
+      }
+    };
+    for(const row of byCode.values())if(row.lifecycle==='ACTIVE')countScope(row.centerGroup);
+    const legacy=readLegacy?await readLegacy():[];
+    const seenLegacy=new Set();
+    for(const {code,name,address,center,id} of legacy){
+      if(!identity.test(code)||seenLegacy.has(code))throw invalid();
+      seenLegacy.add(code);
+      const current=byCode.get(code);
+      if(!current)countScope(center);
+      if(id==null||!hasArea(id)||!address)continue;
+      if(current&&(current.lifecycle!=='ACTIVE'||current.addressHash!==customerRegistryAddressHash(address)||
+          centers.has(current.centerGroup)&&current.centerGroup!==center))continue;
+      add(code,current?.customerName||name,current?.centerGroup||center,id,false);
+    }
+    for(const [code,id] of asset.rows){
+      const row=byCode.get(code);
+      if(row?.lifecycle!=='ACTIVE'||!isCurrentPostalPoint(row)||hasLegacyCode(code)||seenLegacy.has(code)||!hasArea(id))throw invalid();
+      add(code,row.customerName,row.centerGroup,id,true);
+    }
+    return {byCenter,scope,additional};
+  }
+  return async({center='all',area,offset=0,registry,boundary,release,hasArea,hasLegacyCode,readLegacy})=>{
     if(!['all',...centers].includes(center)||!Number.isSafeInteger(offset)||offset<0||offset>maxRows||
         (area===undefined?offset!==0:!isPostalId(area)))throw Error('POSTAL_QUERY_INVALID');
     const before=await readRegistry();
-    if(!digest.test(registry||'')||before?.ref?.version!==registry)throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
+    const version=before?.ref?.version;
+    if(!digest.test(version||'')||registry!==undefined&&registry!==version)throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
     const asset=await load();
-    if(asset.binding.registry!==registry||asset.binding.boundary!==boundary||asset.binding.release!==release) {
+    if(asset.binding.registry!==version||asset.binding.boundary!==boundary||asset.binding.release!==release) {
       throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
     }
     if(!index){
-      if(!Array.isArray(before.rows)||before.rows.length>maxRows)throw invalid();
-      const byCode=new Map(before.rows.map(row=>[row.customerCode,row]));
-      if(byCode.size!==before.rows.length)throw invalid();
-      const byCenter={all:new Map(),osan:new Map(),yeongnam:new Map(),honam:new Map()};
-      for(const [code,id] of asset.rows){
-        const row=byCode.get(code);
-        if(row?.lifecycle!=='ACTIVE'||!isCurrentPostalPoint(row)||hasLegacyCode(code)||!hasArea(id))throw invalid();
-        const match={code,name:row.customerName,center:centers.has(row.centerGroup)?row.centerGroup:null};
-        for(const group of [byCenter.all,...(match.center?[byCenter[match.center]]:[])]){
-          const list=group.get(id)||[];
-          list.push(match);
-          group.set(id,list);
-        }
-      }
-      index=byCenter;
+      indexFlight??=buildIndex(before,asset,{hasArea,hasLegacyCode,readLegacy}).then(value=>index=value)
+        .finally(()=>{indexFlight=null;});
+      await indexFlight;
     }
-    if(await readRegistryVersion()!==registry)throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
-    const groups=index[center];
+    if(await readRegistryVersion()!==version)throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
+    const groups=index.byCenter[center];
     if(area===undefined){
       const counts=[...groups].map(([id,rows])=>[id,rows.length]);
-      return {registry,additionalRegistered:counts.reduce((total,[,count])=>total+count,0),counts};
+      return {registry:version,registeredScope:index.scope[center],additionalRegistered:index.additional[center],
+        registered:counts.reduce((total,[,count])=>total+count,0),counts};
     }
     const members=groups.get(area)||[],limit=12;
-    return {registry,area,additionalRegistered:members.length,offset,next:members.length>offset+limit?offset+limit:null,
+    return {registry:version,area,registered:members.length,offset,next:members.length>offset+limit?offset+limit:null,
       members:members.slice(offset,offset+limit)};
   };
 }
 
-export function stageCurrentPostalRegistrationReader({env=process.env,readRegistry,readRegistryVersion}={}) {
+export function stageCurrentPostalRegistrationReader({env=process.env,readRegistry,readRegistryVersion,fetchImpl=fetch,approvedRelease}={}) {
+  const approval=env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_APPROVED;
   if(env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
-      env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_APPROVED!=='1')return null;
-  const file=env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_FILE;
-  const sha256=env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_SHA256;
+      (approval!==undefined?approval!=='1':!approvedRelease))return null;
+  const file=approval==='1'?env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_FILE:null;
+  const ref=approval==='1'?env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_ARCHIVE_REF:approvedRelease.ref;
+  const token=env.OPSMAP_SNAPSHOT_STORE_TOKEN||env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;
+  const sha256=approval==='1'?env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_SHA256:approvedRelease.sha256;
   const encoded=env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64||'';
   const key=Buffer.from(encoded,'base64');
   if(typeof readRegistry!=='function'||typeof readRegistryVersion!=='function'||
-      !isAbsolute(file||'')||!digest.test(sha256||'')||key.length!==32||key.toString('base64')!==encoded) {
+      (ref?!/^[a-f0-9]{40}$/.test(ref)||!token||file:!isAbsolute(file||''))||
+      !digest.test(sha256||'')||key.length!==32||key.toString('base64')!==encoded) {
     return async()=>{throw invalid();};
   }
   let versionFlight;
@@ -115,6 +151,21 @@ export function stageCurrentPostalRegistrationReader({env=process.env,readRegist
     return versionFlight;
   };
   return createCurrentPostalRegistrationReader({readRegistry,readRegistryVersion:currentVersion,async readAsset(){
+    if(ref){
+      const response=await fetchImpl(assetUrl+'?ref='+ref,{method:'GET',redirect:'error',signal:AbortSignal.timeout(8000),
+        headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github.raw+json','Accept-Encoding':'identity'}});
+      if(!response.ok||!response.body){
+        await response.body?.cancel().catch(()=>{});
+        throw invalid();
+      }
+      let size=0;const chunks=[];
+      for await(const chunk of response.body){
+        size+=chunk.byteLength;
+        if(size>maxBytes)throw invalid();
+        chunks.push(chunk);
+      }
+      return verifyCurrentPostalRegistration(Buffer.concat(chunks,size),sha256,key);
+    }
     const f=await open(file,'r');
     try{
       const st=await f.stat();

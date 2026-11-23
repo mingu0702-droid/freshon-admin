@@ -66,7 +66,7 @@ test('current counts and roster use latest verified identity, cache one verified
     readAsset:async()=>{fetches++;return checked();}});
   const [summary,roster]=await Promise.all([read(args),read({...args,area:11111,center:'osan'})]);
   assert.equal(fetches,1);
-  assert.deepEqual(summary,{registry:binding.registry,additionalRegistered:2,counts:[[11111,2]]});
+  assert.deepEqual(summary,{registry:binding.registry,registeredScope:2,registered:2,additionalRegistered:2,counts:[[11111,2]]});
   assert.deepEqual(roster.members,[{code:'S1',name:'Current A',center:'osan'}]);
   await assert.rejects(()=>read({...args,boundary:'d'.repeat(64)}),/REGISTRATION_CHANGED/);
   await assert.rejects(()=>read({...args,release:'d'.repeat(64)}),/REGISTRATION_CHANGED/);
@@ -92,4 +92,39 @@ test('current roster rejects deleted, drifted, duplicate, already-sealed or out-
     [valid,{hasArea:()=>false}],
     [valid,{hasLegacyCode:code=>code==='S2'}],
   ]) await assert.rejects(()=>makeReader(rows)({...args,...overrides}),/REGISTRATION_INVALID/);
+});
+
+test('current roster combines safe legacy and added identities while old holds and conflicts stay unlinked',async()=>{
+  const rows=[makeRow('S1',126.5),makeRow('S2',126.5),makeRow('S3',126.5),makeRow('S4',126.5),makeRow('S5',126.5)];
+  const read=createCurrentPostalRegistrationReader({readRegistry:async()=>({ref:{version:binding.registry},rows}),readAsset:async()=>checked()});
+  const legacy=[
+    {code:'S3',id:11111,address:rows[2].basicAddress,center:'osan'},
+    {code:'S4',id:11111,address:'Old address',center:'osan'},
+    {code:'S5',id:null,address:rows[4].basicAddress,center:'osan'},
+    {code:'S6',id:11111,address:'Preserved signed base address',center:'honam'}
+  ];
+  const params={...args,readLegacy:async()=>legacy};
+  const summary=await read(params);
+  assert.deepEqual(summary,{registry:binding.registry,registeredScope:6,registered:4,additionalRegistered:2,counts:[[11111,4]]});
+  const roster=await read({...params,area:11111});
+  assert.deepEqual(roster.members.map(row=>row.code),['S3','S6','S1','S2']);
+  assert.deepEqual(Object.keys(roster).sort(),['area','members','next','offset','registered','registry']);
+});
+
+test('remote read is immutable, read-only and checked against independent head',async()=>{
+  const {bytes,sha256}=sealCurrentPostalRegistration({binding,assignments:new Map([['S1',{area:11111}]])},key);
+  const ref='f'.repeat(40),approvedRelease={ref,sha256};
+  const env={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
+    OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64:key.toString('base64'),OPSMAP_SNAPSHOT_STORE_TOKEN:'fixture'};
+  const calls=[];
+  const read=stageCurrentPostalRegistrationReader({env,approvedRelease,
+    readRegistry:async()=>({ref:{version:binding.registry},rows:[makeRow('S1',126.5)]}),
+    readRegistryVersion:async()=>binding.registry,fetchImpl:async(url,options)=>{
+      calls.push({url,method:options.method,redirect:options.redirect});
+      return new Response(bytes);
+    }});
+  assert.equal((await read({...args,registry:undefined})).registered,1);
+  assert.deepEqual(calls,[{url:'https://api.github.com/repos/mingu0702-droid/freshon-cache/contents/opsmap-stage/postal-v1/current-registration-v1.sealed?ref='+ref,method:'GET',redirect:'error'}]);
+  assert.equal(stageCurrentPostalRegistrationReader({env:{...env,OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_APPROVED:'0'},approvedRelease}),null);
+  assert.equal(stageCurrentPostalRegistrationReader({env:{...env,RENDER_EXTERNAL_URL:'https://prod.example'},approvedRelease}),null);
 });
