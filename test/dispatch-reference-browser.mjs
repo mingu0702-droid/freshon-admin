@@ -226,7 +226,7 @@ async function exercise() {
   }
 
   await changeDay('2026-11-20');
-  await page.getByText(/선택한 배송일의 저장된 확정 배차와 WMS 금액을 확인할 수 없습니다/).waitFor();
+  await page.getByText(/선택한 배송일의 확정 배차 미확인 · WMS 금액 미확인/).waitFor();
   assert.equal(await page.locator('#map .dispatch-map-pin').count(),0);
   assert(!((await details.innerText()).includes(number(sample.amount)+'원')));
   await changeDay(day);

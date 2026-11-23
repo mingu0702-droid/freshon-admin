@@ -665,7 +665,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       }
       model=createDispatchReference(value,[],date.value);
       if (!model.routeVerified && !model.vehicles.size) {
-        status.textContent='선택한 배송일의 저장된 확정 배차와 WMS 금액을 확인할 수 없습니다.';
+        status.textContent='선택한 배송일의 확정 배차 미확인 · WMS 금액 미확인';
         return;
       }
       status.textContent=[!model.routeVerified&&'확정 배차 미확인',!model.amountsVerified&&'같은 배송일 WMS 금액 미확인'].filter(Boolean).join(' · ');

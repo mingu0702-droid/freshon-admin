@@ -127,6 +127,7 @@ export function createStageSyncReaders({env,fetchImpl=fetch,now=Date.now}) {
 }
 
 export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory, syncReaders,
+  readWmsExport = createStageWmsDispatchExportReader({env,fetchImpl}),
   openScheduledStore = openOpsmapSyncGenerationStore, readVerifiedVehicleRegistration, now = Date.now, snapshotWaitMs = 2500} = {}) {
   const today=()=>new Date(now()+9*3600000).toISOString().slice(0,10);
   if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
@@ -783,10 +784,15 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           },
           readRetainedDated:readDatedDelivery.readRetained,
           retainedDatedDates:readDatedDelivery.retainedDates,
-          readWmsExport:createStageWmsDispatchExportReader({env:stage,fetchImpl}),
+          readWmsExport,
           readPostcodes:(codes,generation)=>generation ? postalCoverage?.dispatchPostcodes(codes,generation) : null,
         });
-        mountOpsmapDispatchReference(router,{requireStaff,read,today});
+        mountOpsmapDispatchReference(router,{requireStaff,read,today,onDay:({date,route,amounts})=>{
+          if (!readWmsExport.dates?.includes(date)) return;
+          console.info(JSON.stringify({component:'stage-wms-export-day',date,
+            route:{state:route.state,source:route.source??null,rows:route.rows.length,projectionFailure:route.projectionFailure??null},
+            amounts:{state:amounts.state,vehicles:amounts.vehicles.length,exportFailure:amounts.exportFailure??null}}));
+        }});
       }
       router.get('/api/map-phase2b/preview/route-plan',requireStaff,async(req,res)=>{
         const date=normalizeDateValue(req.query.date),vehicle=normalizeCell(req.query.vehicle);

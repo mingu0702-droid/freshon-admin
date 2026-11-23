@@ -8,6 +8,15 @@ const CONTRACT = 'opsmap-dispatch-reference-v1';
 const CENTER = 'osan';
 const unavailableRoute = () => ({state:'UNAVAILABLE', observedAt:null, rows:[], unassigned:null});
 const unavailableAmounts = date => ({state:'UNAVAILABLE', date, observedAt:null, vehicles:[]});
+const exportFailures = new Set([
+  'WMS_EXPORT_APPROVAL_MISSING','WMS_EXPORT_MANIFEST_INVALID','WMS_EXPORT_DATE_NOT_APPROVED',
+  'WMS_EXPORT_WAREHOUSE_INVALID','WMS_EXPORT_MANIFEST_ENTRY_INVALID','WMS_EXPORT_ARCHIVE_REF_INVALID',
+  'WMS_EXPORT_ARCHIVE_KEY_INVALID','WMS_EXPORT_ARCHIVE_TOKEN_MISSING','WMS_EXPORT_ARCHIVE_PERMISSION',
+  'WMS_EXPORT_ARCHIVE_READ','WMS_EXPORT_ARCHIVE_NOT_FOUND','WMS_EXPORT_ARCHIVE_FORMAT','WMS_EXPORT_ARCHIVE_INTEGRITY',
+  'WMS_EXPORT_SECRET_FILE_READ','WMS_EXPORT_ENCODING','WMS_EXPORT_DIGEST','WMS_EXPORT_WORKBOOK_INVALID',
+]);
+const safeExportFailure = code => code==='WMS_EXPORT_DATE_MISMATCH'?'DATE_MISMATCH':
+  exportFailures.has(code)?code:'EXPORT_NOT_VERIFIED';
 
 function exactDay(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
@@ -86,10 +95,15 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
   async function read(date,publication=getPublication(),allowSource=false,includeCompleted=false) {
     let wmsFailure = null;
     const wms = await Promise.resolve().then(()=>readWmsExport?.(date)).catch(error=>{
-      wmsFailure = error?.code==='WMS_EXPORT_DATE_MISMATCH' ? 'DATE_MISMATCH' : 'EXPORT_NOT_VERIFIED';
+      wmsFailure = safeExportFailure(error?.code);
       return null;
     });
-    if (wms?.date===date && wms.center===CENTER) {
+    if (!wms && !wmsFailure) {
+      const failure=readWmsExport?.configurationFailure?.(date);
+      if (failure) wmsFailure=safeExportFailure(failure);
+    }
+    let projectionFailure = null;
+    if (wms?.date===date && wms.center===CENTER) try {
       const codes = [...new Set(wms.vehicles.flatMap(({details})=>details.filter(row=>
         row.addressHash && publication?.registry?.get(row.customerCode)?.addressHash===row.addressHash).map(row=>row.customerCode)))];
       const postcodes = codes.length && readPostcodes
@@ -106,8 +120,19 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
       const matching = current?.generation===publication?.generation;
       const projected=projectOpsmapWmsDispatch(wms,matching?publication?.registry:null,matching?postcodes??undefined:undefined);
       if (matching&&completed) projected.route.completedRows=completed;
+      if (!matching) projected.route.projectionFailure='PROJECTION_PUBLICATION_CHANGED';
+      else if (projected.route.rows.length && !projected.route.rows.some(row=>row.coordinateVerified)) {
+        projected.route.projectionFailure='PROJECTION_NO_VERIFIED_COORDINATES';
+      }
       return {contract:CONTRACT,...projected};
-    }
+    } catch {
+      projectionFailure='PROJECTION_FAILED';
+      // A registry/projection error can still leave verified amounts intact.
+      try {
+        const projected=projectOpsmapWmsDispatch(wms,null);
+        return {contract:CONTRACT,...projected,route:{...projected.route,projectionFailure}};
+      } catch { /* Existing verified dispatch and amount sources remain available below. */ }
+    } else if (wms) wmsFailure=wms.date!==date?'DATE_MISMATCH':'WMS_EXPORT_WAREHOUSE_INVALID';
     const amountsRead = Promise.resolve().then(() => readAmounts?.(date)).catch(() => null);
     let route=await archivedRoute(date,publication,includeCompleted);
     if (route.state!=='VERIFIED'&&readRetainedDated) {
@@ -118,7 +143,8 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
     }
     const amounts = await amountsRead;
     return {contract:CONTRACT,date,center:CENTER,
-      route:publication && getPublication()?.generation !== publication.generation ? unavailableRoute() : route,
+      route:{...(publication && getPublication()?.generation !== publication.generation ? unavailableRoute() : route),
+        ...(projectionFailure?{projectionFailure}:{})},
       amounts:{...(amounts?.date===date ? amounts : unavailableAmounts(date)), ...(wmsFailure?{exportFailure:wmsFailure}:{})}};
   }
   read.dated=date=>read(date,getPublication(),true);
@@ -159,7 +185,7 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
   return read;
 }
 
-export function mountOpsmapDispatchReference(app,{requireStaff, read, today}) {
+export function mountOpsmapDispatchReference(app,{requireStaff, read, today, onDay}) {
   app.get('/api/map-phase2b/private/dispatch-reference-day',requireStaff,async (req,res) => {
     res.set('Cache-Control','private, no-store').vary('Cookie');
     const {date,source} = req.query;
@@ -170,7 +196,10 @@ export function mountOpsmapDispatchReference(app,{requireStaff, read, today}) {
     try {
       const result = await (source==='dated'&&read.dated?read.dated(date):read(date));
       if (res.destroyed || res.writableEnded) return;
-      return requireStaff(req,res,()=>res.json(result));
+      return requireStaff(req,res,()=>{
+        onDay?.(result);
+        return res.json(result);
+      });
     } catch {
       if (res.destroyed || res.writableEnded) return;
       return requireStaff(req,res,()=>res.status(503).json({error:'DISPATCH_REFERENCE_UNAVAILABLE'}));

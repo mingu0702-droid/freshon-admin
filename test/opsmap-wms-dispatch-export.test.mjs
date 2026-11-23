@@ -7,6 +7,7 @@ import { createStageWmsDispatchExportReader, parseOpsmapWmsDispatchExport, proje
 import { createOpsmapDispatchReferenceReader } from '../src/opsmapDispatchReference.js';
 import { coordinateAddressHash } from '../src/opsmap-abc/opsmapAutoCoordinates.js';
 import { STAGE_ORIGIN, STAGE_SERVICE } from '../src/stageScope.js';
+import { createStageShadowRuntime } from '../src/shadowCoverage/stageArchive.js';
 
 const date='2026-11-23',observedAt='2026-11-22T13:15:00.000Z';
 const address='경기도 오산시 합성로 10';
@@ -97,7 +98,9 @@ test('Stage can only read the approved dated, pinned Osan file and caches succes
   const approved=createStageWmsDispatchExportReader({env,readSecret});
   const blocked=createStageWmsDispatchExportReader({env:{...env,RENDER_EXTERNAL_URL:'https://example.invalid'},readSecret});
   assert.equal(await approved('2026-11-22'),null);
+  assert.equal(approved.configurationFailure('2026-11-22'),'WMS_EXPORT_DATE_NOT_APPROVED');
   assert.equal(await blocked(date),null);
+  assert.equal(blocked.configurationFailure(date),'WMS_EXPORT_APPROVAL_MISSING');
   assert.equal(reads,0);
   const [first,second]=await Promise.all([approved(date),approved(date)]);
   assert.equal(first,second);
@@ -160,6 +163,21 @@ test('the approved archive authenticates a dated XLSX from a private, pinned Git
   assert.equal((await read(date)).date,date);
   assert.equal(calls.length,2);
 
+  // Stage removes the shared read credential from the general app environment.
+  const {env:appEnv}=createStageShadowRuntime(env);
+  assert.equal(appEnv.OPSMAP_SHADOW_GITHUB_READ_TOKEN,undefined);
+  const stripped=createStageWmsDispatchExportReader({env:appEnv,fetchImpl});
+  const oldPath=createOpsmapDispatchReferenceReader({getPublication:()=>null,readWmsExport:stripped});
+  const missing=await oldPath(date);
+  assert.equal(missing.route.state,'UNAVAILABLE');
+  assert.equal(missing.amounts.exportFailure,'WMS_EXPORT_ARCHIVE_TOKEN_MISSING');
+  assert.equal(calls.length,2);
+  const startupReader=reader();
+  assert.deepEqual(startupReader.configuration.archive,{refValid:true,keyValid:true,tokenPresent:true});
+  const newPath=createOpsmapDispatchReferenceReader({getPublication:()=>null,readWmsExport:startupReader});
+  assert.equal((await newPath(date)).amounts.vehicles[0].amount,500);
+  assert.equal(calls.length,4);
+
   const changed={...manifest,sha256:'a'.repeat(64)};
   await assert.rejects(reader({OPSMAP_STAGE_WMS_DISPATCH_EXPORTS_JSON:JSON.stringify({[date]:changed})})(date),
     {code:'WMS_EXPORT_ARCHIVE_INTEGRITY'});
@@ -168,6 +186,6 @@ test('the approved archive authenticates a dated XLSX from a private, pinned Git
 
   privateRepo=false;
   calls.length=0;
-  await assert.rejects(reader()(date),{code:'WMS_EXPORT_ARCHIVE_READ'});
+  await assert.rejects(reader()(date),{code:'WMS_EXPORT_ARCHIVE_PERMISSION'});
   assert.deepEqual(calls,[root]);
 });

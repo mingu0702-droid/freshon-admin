@@ -136,16 +136,24 @@ function createArchiveReader(env, fetchImpl) {
   const encodedKey = env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_KEY_B64 || '';
   const key = Buffer.from(encodedKey,'base64');
   const token = env.OPSMAP_SHADOW_GITHUB_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN;
-  const configured = /^[a-f0-9]{40}$/.test(ref) && key.length===32 && key.toString('base64')===encodedKey && token;
-  const store = configured && createPrivateGithubJsonStore({
+  const configuration={refValid:/^[a-f0-9]{40}$/.test(ref),keyValid:key.length===32&&key.toString('base64')===encodedKey,
+    tokenPresent:Boolean(token)};
+  const configFailure=!configuration.refValid?'WMS_EXPORT_ARCHIVE_REF_INVALID':
+    !configuration.keyValid?'WMS_EXPORT_ARCHIVE_KEY_INVALID':!configuration.tokenPresent?'WMS_EXPORT_ARCHIVE_TOKEN_MISSING':null;
+  const store = !configFailure && createPrivateGithubJsonStore({
     env:{GITHUB_CACHE_REPO:archiveRepo,GITHUB_CACHE_BRANCH:ref,GITHUB_CACHE_DIR:archiveDir,GITHUB_TOKEN:token},
     fetchImpl:(url,options)=>fetchImpl(url,{...options,method:'GET',redirect:'error'}),
   });
-  return async (date, expected) => {
-    if (!store) throw scopeError('WMS_EXPORT_ARCHIVE_CONFIG');
+  const read = async (date, expected) => {
+    if (configFailure) throw scopeError(configFailure);
     let value;
     try { value = await store.readRaw(date+'.json',maxArchiveBytes); }
-    catch { throw scopeError('WMS_EXPORT_ARCHIVE_READ'); }
+    catch (error) {
+      const code = {FIXED_STORE_PERMISSION:'WMS_EXPORT_ARCHIVE_PERMISSION',
+        FIXED_STORE_NOT_PRIVATE:'WMS_EXPORT_ARCHIVE_PERMISSION',FIXED_STORE_INVALID:'WMS_EXPORT_ARCHIVE_FORMAT'}[error?.code];
+      throw scopeError(code || 'WMS_EXPORT_ARCHIVE_READ');
+    }
+    if (value===null) throw scopeError('WMS_EXPORT_ARCHIVE_NOT_FOUND');
     if (value?.schema!==1 || !/^[0-9a-f]{24}$/.test(value.nonce) || !/^[0-9a-f]{32}$/.test(value.tag) ||
         typeof value.ciphertext!=='string' || !/^[A-Za-z0-9+/]+=*$/.test(value.ciphertext)) {
       throw scopeError('WMS_EXPORT_ARCHIVE_FORMAT');
@@ -159,34 +167,53 @@ function createArchiveReader(env, fetchImpl) {
       return bytes;
     } catch { throw scopeError('WMS_EXPORT_ARCHIVE_INTEGRITY'); }
   };
+  return {read,configuration};
 }
 
 export function createStageWmsDispatchExportReader({env=process.env,readSecret=readFile,fetchImpl=fetch}={}) {
+  const serviceVerified=env.RENDER_SERVICE_ID===STAGE_SERVICE && env.RENDER_EXTERNAL_URL===STAGE_ORIGIN;
+  const approved=env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_APPROVED==='1';
   let manifest;
-  if (env.RENDER_SERVICE_ID===STAGE_SERVICE && env.RENDER_EXTERNAL_URL===STAGE_ORIGIN &&
-      env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_APPROVED==='1') {
-    try { manifest=JSON.parse(env.OPSMAP_STAGE_WMS_DISPATCH_EXPORTS_JSON ?? '{}'); }
-    catch { /* An unrecognized manifest has no approved files. */ }
+  if (serviceVerified && approved) {
+    try {
+      const parsed=JSON.parse(env.OPSMAP_STAGE_WMS_DISPATCH_EXPORTS_JSON);
+      if (parsed && typeof parsed==='object' && !Array.isArray(parsed)) manifest=parsed;
+    } catch { /* An unrecognized manifest has no approved files. */ }
   }
-  const readArchive = manifest && env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_REF!==undefined
+  const archive = manifest && env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_REF!==undefined
     ? createArchiveReader(env,fetchImpl) : null;
+  const configurationFailure=date=>{
+    if (!serviceVerified || !approved) return 'WMS_EXPORT_APPROVAL_MISSING';
+    if (!manifest) return 'WMS_EXPORT_MANIFEST_INVALID';
+    if (!dayKey.test(date||'') || !Object.hasOwn(manifest,date)) return 'WMS_EXPORT_DATE_NOT_APPROVED';
+    const expected=manifest[date];
+    if (expected?.warehouse!=='011') return 'WMS_EXPORT_WAREHOUSE_INVALID';
+    if (!/^[a-f0-9]{64}$/.test(expected.sha256||'') || !Number.isFinite(Date.parse(expected.observedAt))) {
+      return 'WMS_EXPORT_MANIFEST_ENTRY_INVALID';
+    }
+    return null;
+  };
   const jobs = new Map();
   const read=date=>{
-    const expected=dayKey.test(date||'') && manifest && Object.hasOwn(manifest,date) ? manifest[date] : null;
-    if (!expected || expected.warehouse!=='011' || !/^[a-f0-9]{64}$/.test(expected.sha256||'') ||
-        !Number.isFinite(Date.parse(expected.observedAt))) return Promise.resolve(null);
+    if (configurationFailure(date)) return Promise.resolve(null);
+    const expected=manifest[date];
     if (!jobs.has(date)) {
       if (jobs.size>=4) jobs.delete(jobs.keys().next().value);
       const task=Promise.resolve().then(async()=>{
         let bytes;
-        if (readArchive) bytes=await readArchive(date,expected);
+        if (archive) bytes=await archive.read(date,expected);
         else {
-          const encoded=(await readSecret('/etc/secrets/opsmap-wms-dispatch-'+date+'.xlsx.b64','utf8')).trim();
+          let encoded;
+          try { encoded=(await readSecret('/etc/secrets/opsmap-wms-dispatch-'+date+'.xlsx.b64','utf8')).trim(); }
+          catch { throw scopeError('WMS_EXPORT_SECRET_FILE_READ'); }
           if (encoded.length>5_600_000 || !/^[A-Za-z0-9+/]+=*$/.test(encoded)) throw scopeError('WMS_EXPORT_ENCODING');
           bytes=Buffer.from(encoded,'base64');
         }
         if (digest(bytes)!==expected.sha256) throw scopeError('WMS_EXPORT_DIGEST');
-        return parseOpsmapWmsDispatchExport(bytes,{date,observedAt:expected.observedAt});
+        try { return parseOpsmapWmsDispatchExport(bytes,{date,observedAt:expected.observedAt}); }
+        catch (error) {
+          throw scopeError(error?.code==='WMS_EXPORT_DATE_MISMATCH'?error.code:'WMS_EXPORT_WORKBOOK_INVALID');
+        }
       }).catch(error=>{
         if(jobs.get(date)===task)jobs.delete(date);
         throw error;
@@ -196,5 +223,8 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
     return jobs.get(date);
   };
   read.dates=Object.keys(manifest??{}).filter(date=>dayKey.test(date));
+  read.configurationFailure=configurationFailure;
+  read.configuration={serviceVerified,approved,manifestValid:Boolean(manifest),archive:archive?.configuration??null,
+    dates:Object.fromEntries(read.dates.map(date=>[date,configurationFailure(date)??'VERIFIED']))};
   return read;
 }
