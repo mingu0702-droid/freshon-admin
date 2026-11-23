@@ -212,7 +212,12 @@ test('recent operations can schedule while the independent fixed master scope is
     centerKey:'osan',state:'ROW_NOT_CONFIRMED'};
   child.stdout.write(JSON.stringify({...diagnostic,raw:'not safe for logging'})+'\n');
   child.stdout.write(JSON.stringify({...diagnostic,state:'UNKNOWN_DIAGNOSTIC'})+'\n');
-  assert.deepEqual(logs,[diagnostic]);
+  const deliveryDiagnostic={...diagnostic,component:'opsmap-recent-delivery-source',
+    centerKey:'yeongnam',state:'DELIVERY_SOURCE_FORBIDDEN'};
+  child.stdout.write(JSON.stringify({...deliveryDiagnostic,raw:'not safe for logging'})+'\n');
+  child.stdout.write(JSON.stringify({...deliveryDiagnostic,state:'DELIVERY_SOURCE_PRIVATE_FIELD'})+'\n');
+  child.stdout.write(JSON.stringify({...deliveryDiagnostic,runId:'f'.repeat(64)})+'\n');
+  assert.deepEqual(logs,[diagnostic,deliveryDiagnostic]);
   child.emit('close',0);
 });
 

@@ -22,6 +22,11 @@ const fixedError=value=>/^FIXED_(?:MASTER|STORE)_[A-Z_]{1,70}$/.test(value||'')?
 const recentOrderStates=new Set(['VERIFIED','ALREADY_OBSERVED','AUTH_UNAVAILABLE','HTTP_REJECTED','READ_FAILED',
   'BUDGET_EXHAUSTED','RESPONSE_INVALID','SOURCE_EMPTY','COUNT_UNVERIFIED','ROW_DATE_MISMATCH','ROW_CENTER_MISMATCH',
   'ROW_NOT_CONFIRMED','ROW_CUSTOMER_INVALID','ROW_ORDER_KEY_INVALID','ROW_DUPLICATE','ROW_QUANTITY_INVALID']);
+const recentDeliveryStates=new Set(['VERIFIED_PARTIAL','ALREADY_OBSERVED','CARRIER_CENTER_UNVERIFIED','NO_CONFIRMED_EVIDENCE',
+  'SOURCE_EMPTY','DELIVERY_SOURCE_READ_ONLY','DELIVERY_SOURCE_SESSION_REQUIRED','DELIVERY_SOURCE_AUTH_REQUIRED',
+  'DELIVERY_SOURCE_FORBIDDEN','DELIVERY_SOURCE_TIMEOUT','DELIVERY_SOURCE_RATE_LIMITED','DELIVERY_SOURCE_IDENTITY_UNVERIFIED',
+  'DELIVERY_SOURCE_INCOMPLETE','DELIVERY_SOURCE_PAGE_DUPLICATE','DELIVERY_SOURCE_SCOPE','DELIVERY_SOURCE_CUSTOMER_CONFLICT',
+  'DELIVERY_SOURCE_READ_UNAVAILABLE']);
 const receiptFields=({version,origin,triggerId,principal,issuedAt,slot,date,runId})=>
   [version,origin,triggerId,principal,issuedAt,slot,date,runId];
 const signReceipt=(value,secret,domain='')=>createHmac('sha256',secret)
@@ -231,6 +236,12 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
             if(value?.component==='opsmap-recent-orders-source' && value.runId===receipt.runId &&
                /^\d{4}-\d{2}-\d{2}$/.test(value.date||'') && ['osan','yeongnam','honam'].includes(value.centerKey) &&
                recentOrderStates.has(value.state)) {
+              log(JSON.stringify({component:value.component,runId:receipt.runId,date:value.date,
+                centerKey:value.centerKey,state:value.state}));
+            }
+            if(value?.component==='opsmap-recent-delivery-source' && value.runId===receipt.runId &&
+               /^\d{4}-\d{2}-\d{2}$/.test(value.date||'') && ['osan','yeongnam','honam'].includes(value.centerKey) &&
+               recentDeliveryStates.has(value.state)) {
               log(JSON.stringify({component:value.component,runId:receipt.runId,date:value.date,
                 centerKey:value.centerKey,state:value.state}));
             }
