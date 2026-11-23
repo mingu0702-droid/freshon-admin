@@ -31,6 +31,7 @@ import {redactPublicData} from './publicDataSecurity.js';
 import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
 import {createStagePostalAssets} from './shadowCoverage/stagePostalAssets.js';
+import {stageCurrentPostalRegistrationReader} from './shadowCoverage/postalCurrentRegistrationAsset.js';
 import {createCoverageStatusReader} from './shadowCoverage/storeStatus.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 import {createOpsmapDispatchReferenceReader,mountOpsmapDispatchReference} from './opsmapDispatchReference.js';
@@ -196,6 +197,9 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const syncStorage = syncReaders ?? createStageSyncReaders({env:stage,fetchImpl,now});
   const nationalRegistry = createStageNationalRegistryReader({store:syncStorage.nationalRegistry,now,
     log:result=>console.info(JSON.stringify({component:'stage-national-registry-readback',...result}))});
+  const readCurrentPostalRegistration = postalEnabled && nationalRegistry ? stageCurrentPostalRegistrationReader({env:stage,
+    readRegistry:()=>nationalRegistry.read(),
+    readRegistryVersion:async()=> (await syncStorage.nationalRegistry.readHead()).value?.current?.version}) : null;
   const readRecentOperations = createRecentOperationsReader({now,
     readSeed:createStageRecentOperationsSeed({env:stage,fetchImpl,manifest:recentOperationsBaseline,
       log:value=>console.info(JSON.stringify({component:'stage-recent-operations-baseline',...value}))}),
@@ -729,7 +733,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           detailsDirectory:stage.OPSMAP_SHADOW_POSTAL_DETAILS_DIR,detailsIndexSha256:remotePostal?.config.details ?? stage.OPSMAP_SHADOW_POSTAL_DETAILS_SHA256,
           overviewDirectory:stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_DIR,overviewSha256:remotePostal?.config.overview ?? stage.OPSMAP_SHADOW_POSTAL_OVERVIEW_SHA256,
           reviewDirectory:stage.OPSMAP_SHADOW_POSTAL_REVIEW_DIR,reviewSha256:remotePostal?.config.review ?? stage.OPSMAP_SHADOW_POSTAL_REVIEW_SHA256,
-          readFixed:codes=>base.get(codes),readOperations:readRecentOperations.ledger}:undefined,
+          readFixed:codes=>base.get(codes),readOperations:readRecentOperations.ledger,
+          readCurrentRegistration:readCurrentPostalRegistration}:undefined,
         readRunId:generation=>{const active=validation.active();return active?.generation===generation?active.scheduled?.state.runId || null:null;},
         readPreservedMap:()=>{const saved=selectSnapshot(snapshot);return saved && {count:saved.rows.length,asOf:saved.latestDate};}});
       manual.mount(binding);
