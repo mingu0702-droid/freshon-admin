@@ -1,5 +1,5 @@
 import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs?v=20261116-center';
-import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261116-center';
+import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261124-coverage-window';
 import { splitPostalBootstrap } from './postal-geometry.mjs';
 import { coverageCenterBounds } from './coverage-center-viewport.mjs';
 

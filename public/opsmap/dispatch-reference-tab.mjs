@@ -59,7 +59,7 @@ if (tabs && sidebar && bridge) {
           rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261123-review',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261123-wms-status');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261124-period-proof');
         if (opening!==attempt||!session()) return;
         feature=mountDispatchReference({workspace,sidebar,bridge,readDay,readPeriod,readOutline});
       }
