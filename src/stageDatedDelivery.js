@@ -203,7 +203,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       stops.push({customerCode,
         customerName:field(task.customerName, customer.name),
         address:field(task.customerAddress, task.address, customer.address, location.address),
-        sequence:stops.length + 1, deliveryStatus:event.sourceStatus, deliveryCompletedAt:event.individualCompletedAt,
+        deliveryStatus:event.sourceStatus, deliveryCompletedAt:event.individualCompletedAt,
         appRecorded:state==='COMPLETED',dispatchCenterCode:({osan:'011',osanColdStorage:'011',yeongnam:'012',honam:'013'})[center],...point});
       groups.set(vehicle, stops);
     }

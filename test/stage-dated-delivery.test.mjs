@@ -45,6 +45,7 @@ test('the authorized reader returns the exact old date with 101, 122 and 202 acr
   assert.equal(value.sourceObservation.responseRows, 301);
   assert.deepEqual(value.vehicles.map(({vehicle,stops}) => [vehicle,stops.length]), [['101',101],['122',100],['202',100]]);
   assert.equal(value.vehicles[0].stops[0].appRecorded, true);
+  assert(value.vehicles.every(({stops})=>stops.every(stop=>!Object.hasOwn(stop,'sequence')&&!Object.hasOwn(stop,'order'))));
 });
 
 test('authentication failures, partial pages and wrong dates never become verified results', async () => {
