@@ -115,16 +115,22 @@ test('remote read is immutable, read-only and checked against independent head',
   const {bytes,sha256}=sealCurrentPostalRegistration({binding,assignments:new Map([['S1',{area:11111}]])},key);
   const ref='f'.repeat(40),approvedRelease={ref,sha256};
   const env={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
-    OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64:key.toString('base64'),OPSMAP_SNAPSHOT_STORE_TOKEN:'fixture'};
-  const calls=[];
-  const read=stageCurrentPostalRegistrationReader({env,approvedRelease,
-    readRegistry:async()=>({ref:{version:binding.registry},rows:[makeRow('S1',126.5)]}),
-    readRegistryVersion:async()=>binding.registry,fetchImpl:async(url,options)=>{
-      calls.push({url,method:options.method,redirect:options.redirect});
-      return new Response(bytes);
-    }});
-  assert.equal((await read({...args,registry:undefined})).registered,1);
-  assert.deepEqual(calls,[{url:'https://api.github.com/repos/mingu0702-droid/freshon-cache/contents/opsmap-stage/postal-v1/current-registration-v1.sealed?ref='+ref,method:'GET',redirect:'error'}]);
+    OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64:key.toString('base64'),GITHUB_TOKEN:'verified-postal-token',
+    OPSMAP_SHADOW_GITHUB_READ_TOKEN:'other-read-scope'};
+  const endpoint='https://api.github.com/repos/mingu0702-droid/freshon-cache/contents/opsmap-stage/postal-v1/current-registration-v1.sealed?ref='+ref;
+  for(const [settings,preferred] of [[env,env.GITHUB_TOKEN],
+    [{...env,OPSMAP_SNAPSHOT_STORE_TOKEN:'dedicated-postal-token'},'dedicated-postal-token']]){
+    const calls=[];
+    const read=stageCurrentPostalRegistrationReader({env:settings,approvedRelease,
+      readRegistry:async()=>({ref:{version:binding.registry},rows:[makeRow('S1',126.5)]}),
+      readRegistryVersion:async()=>binding.registry,fetchImpl:async(url,options)=>{
+        calls.push({url,method:options.method,redirect:options.redirect});
+        assert.equal(options.headers.Authorization,'Bearer '+preferred);
+        return new Response(bytes);
+      }});
+    assert.equal((await read({...args,registry:undefined})).registered,1);
+    assert.deepEqual(calls,[{url:endpoint,method:'GET',redirect:'error'}]);
+  }
   assert.equal(stageCurrentPostalRegistrationReader({env:{...env,OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_APPROVED:'0'},approvedRelease}),null);
   assert.equal(stageCurrentPostalRegistrationReader({env:{...env,RENDER_EXTERNAL_URL:'https://prod.example'},approvedRelease}),null);
 });

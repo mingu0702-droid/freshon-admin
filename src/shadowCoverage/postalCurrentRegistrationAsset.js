@@ -4,6 +4,7 @@ import {isAbsolute} from 'node:path';
 import {customerRegistryAddressHash} from '../customerRegistry.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../stageScope.js';
 import {isCurrentPostalPoint} from './postalCurrentRegistration.js';
+import {stagePostalReadToken} from './stagePostalAssets.js';
 
 const assetUrl='https://api.github.com/repos/mingu0702-droid/freshon-cache/contents/opsmap-stage/postal-v1/current-registration-v1.sealed';
 const schema='opsmap-postal-current-registration-v1';
@@ -136,7 +137,7 @@ export function stageCurrentPostalRegistrationReader({env=process.env,readRegist
       (approval!==undefined?approval!=='1':!approvedRelease))return null;
   const file=approval==='1'?env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_FILE:null;
   const ref=approval==='1'?env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_ARCHIVE_REF:approvedRelease.ref;
-  const token=env.OPSMAP_SNAPSHOT_STORE_TOKEN||env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;
+  const token=stagePostalReadToken(env);
   const sha256=approval==='1'?env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_SHA256:approvedRelease.sha256;
   const encoded=env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64||'';
   const key=Buffer.from(encoded,'base64');

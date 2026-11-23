@@ -96,12 +96,14 @@ function configuration(env) {
   return config;
 }
 
+export const stagePostalReadToken = env => env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.GITHUB_TOKEN;
+
 export function createStagePostalAssets({ env = process.env, fetchImpl = fetch, tempRoot = tmpdir(), now = Date.now,
   log = value => console.info(JSON.stringify(value)) } = {}) {
   if (!env.OPSMAP_SHADOW_POSTAL_REMOTE_CONFIG) return null;
   if (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN) throw Error('POSTAL_ASSET_STAGE_SCOPE');
   const config = configuration(env);
-  const token = env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.GITHUB_TOKEN;
+  const token = stagePostalReadToken(env);
   const encodedKey = env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64 || '';
   const key = Buffer.from(encodedKey, 'base64');
   if (!token || key.length !== 32 || key.toString('base64') !== encodedKey) throw Error('POSTAL_ASSET_CONFIG');
