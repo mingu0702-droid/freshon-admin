@@ -134,3 +134,25 @@ test('remote read is immutable, read-only and checked against independent head',
   assert.equal(stageCurrentPostalRegistrationReader({env:{...env,OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_APPROVED:'0'},approvedRelease}),null);
   assert.equal(stageCurrentPostalRegistrationReader({env:{...env,RENDER_EXTERNAL_URL:'https://prod.example'},approvedRelease}),null);
 });
+
+test('same-runtime reads can recover when a newer pin appears after a temporary mismatch',async()=>{
+  let version=binding.registry,available=binding.registry,calls=0;
+  const row=makeRow('S1',126.5);
+  const read=createCurrentPostalRegistrationReader({
+    readRegistry:async()=>({ref:{version},rows:[row]}),
+    readRegistryVersion:async()=>version,
+    readAsset:async()=>{
+      calls++;
+      const asset=checked(new Map([['S1',{area:11111}]]));
+      return {...asset,binding:{...asset.binding,registry:available}};
+    }
+  });
+  assert.equal((await read({...args,registry:undefined})).registry,version);
+  const old=version;
+  version='e'.repeat(64);
+  await assert.rejects(()=>read({...args,registry:undefined}),/REGISTRATION_CHANGED/);
+  available=version;
+  assert.equal((await read({...args,registry:undefined})).registry,version);
+  await assert.rejects(()=>read({...args,registry:old}),/REGISTRATION_CHANGED/);
+  assert.equal(calls,3);
+});

@@ -32,6 +32,7 @@ import {createStageOperationalPhotoExtension} from './opsmapStagePhotos.js';
 import {mountShadowCoverage} from './shadowCoverage/routes.js';
 import {createStagePostalAssets} from './shadowCoverage/stagePostalAssets.js';
 import {stageCurrentPostalRegistrationReader} from './shadowCoverage/postalCurrentRegistrationAsset.js';
+import {currentPostalRegistrationFallback} from './shadowCoverage/postalCurrentRegistrationStore.js';
 import {createCoverageStatusReader} from './shadowCoverage/storeStatus.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 import {createOpsmapDispatchReferenceReader,mountOpsmapDispatchReference} from './opsmapDispatchReference.js';
@@ -198,8 +199,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const nationalRegistry = createStageNationalRegistryReader({store:syncStorage.nationalRegistry,now,
     log:result=>console.info(JSON.stringify({component:'stage-national-registry-readback',...result}))});
   const readCurrentPostalRegistration = postalEnabled && nationalRegistry ? stageCurrentPostalRegistrationReader({env:stage,fetchImpl,
-    approvedRelease:{ref:'a0b2746a9b7c7d85e728bf4f303bf02b5631a947',
-      sha256:'03195e7bae0dffe989204d7a248c5c42ffdcde13887dca7a196d227c882cea50'},
+    approvedRelease:currentPostalRegistrationFallback,
     readRegistry:()=>nationalRegistry.read(),
     readRegistryVersion:async()=> (await syncStorage.nationalRegistry.readHead()).value?.current?.version}) : null;
   const readRecentOperations = createRecentOperationsReader({now,

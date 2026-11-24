@@ -283,8 +283,14 @@ async function decode(store, ref) {
   const bytes=await unzip(Buffer.concat([decipher.update(packed.subarray(12,-16)),decipher.final()]),{maxOutputLength:maxClearBytes});
   if (sha(bytes)!==ref.version) throw failure('NATIONAL_REGISTRY_STORAGE_INTEGRITY');
   const rows=normalizeRows(JSON.parse(bytes.toString('utf8')),true);
-  if (rows.length!==ref.count) throw failure('NATIONAL_REGISTRY_STORAGE_COUNT');
+  if (ref.count!==undefined&&rows.length!==ref.count) throw failure('NATIONAL_REGISTRY_STORAGE_COUNT');
   return rows;
+}
+
+// The encrypted immutable object's SHA authenticates an exact previous version.
+export async function readStageNationalRegistryRows(store,version) {
+  if(!store||!hash(version))throw failure('NATIONAL_REGISTRY_STORAGE_OBJECT');
+  return decode(store,{version});
 }
 
 async function readHead(store) {

@@ -5,6 +5,7 @@ import {customerRegistryAddressHash} from '../customerRegistry.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../stageScope.js';
 import {isCurrentPostalPoint} from './postalCurrentRegistration.js';
 import {stagePostalReadToken} from './stagePostalAssets.js';
+import {createStageCurrentPostalRefreshStore} from './postalCurrentRegistrationStore.js';
 
 const assetUrl='https://api.github.com/repos/mingu0702-droid/freshon-cache/contents/opsmap-stage/postal-v1/current-registration-v1.sealed';
 const schema='opsmap-postal-current-registration-v1';
@@ -53,15 +54,23 @@ export function verifyCurrentPostalRegistration(bytes,sha256,key) {
   return value;
 }
 
-// An immutable package has no independent mutable pointer. Both active registry
-// reads must identify the generation that was used for the geometry join.
+// Asset and roster caches belong to one exact registry version.
 export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
   readRegistryVersion=async()=> (await readRegistry())?.ref?.version}) {
-  let cached, pending, index, indexFlight;
-  async function load(){
-    if(cached)return cached;
-    pending??=Promise.resolve().then(readAsset).then(value=>cached=value).finally(()=>{pending=null;});
-    return pending;
+  let cached;
+  async function load(version){
+    if(cached?.version!==version){
+      const entry={version};
+      entry.asset=Promise.resolve().then(()=>readAsset(version)).then(asset=>{
+        if(asset?.binding?.registry!==version)throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
+        return asset;
+      }).catch(error=>{
+        if(cached===entry)cached=null;
+        throw error;
+      });
+      cached=entry;
+    }
+    return cached;
   }
   async function buildIndex(before,asset,{hasArea,hasLegacyCode,readLegacy}){
     if(!Array.isArray(before.rows)||before.rows.length>maxRows)throw invalid();
@@ -109,15 +118,16 @@ export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
     const before=await readRegistry();
     const version=before?.ref?.version;
     if(!digest.test(version||'')||registry!==undefined&&registry!==version)throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
-    const asset=await load();
+    const entry=await load(version);
+    const asset=await entry.asset;
     if(asset.binding.registry!==version||asset.binding.boundary!==boundary||asset.binding.release!==release) {
       throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
     }
-    if(!index){
-      indexFlight??=buildIndex(before,asset,{hasArea,hasLegacyCode,readLegacy}).then(value=>index=value)
-        .finally(()=>{indexFlight=null;});
-      await indexFlight;
-    }
+    entry.index??=buildIndex(before,asset,{hasArea,hasLegacyCode,readLegacy}).catch(error=>{
+      entry.index=null;
+      throw error;
+    });
+    const index=await entry.index;
     if(await readRegistryVersion()!==version)throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
     const groups=index.byCenter[center];
     if(area===undefined){
@@ -151,7 +161,18 @@ export function stageCurrentPostalRegistrationReader({env=process.env,readRegist
     versionFlight??=Promise.resolve().then(readRegistryVersion).finally(()=>{versionFlight=null;});
     return versionFlight;
   };
-  return createCurrentPostalRegistrationReader({readRegistry,readRegistryVersion:currentVersion,async readAsset(){
+  let refreshStore;
+  return createCurrentPostalRegistrationReader({readRegistry,readRegistryVersion:currentVersion,async readAsset(version){
+    refreshStore??=createStageCurrentPostalRefreshStore({env,fetchImpl});
+    if(refreshStore){
+      const {current}=await refreshStore.readHead();
+      if(current){
+        if(current.registry!==version)throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
+        const asset=verifyCurrentPostalRegistration(await refreshStore.readObject(current),current.sha256,key);
+        if(['registry','boundary','release'].some(field=>asset.binding[field]!==current[field]))throw invalid();
+        return asset;
+      }
+    }
     if(ref){
       const response=await fetchImpl(assetUrl+'?ref='+ref,{method:'GET',redirect:'error',signal:AbortSignal.timeout(8000),
         headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github.raw+json','Accept-Encoding':'identity'}});
