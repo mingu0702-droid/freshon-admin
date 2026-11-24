@@ -89,6 +89,13 @@ test('only the approved active Osan recovery set enters the scheduled registrati
   const readManifest=async()=>text;
   const available=await readApprovedOsanRegistryRecovery({env,readRegistry,readManifest});
   assert.equal(available.length,374);
+  const extra=Array.from({length:24},(_,i)=>row('osan',{customerCode:'S'+(24000+i),addressHash}));
+  const cutover=JSON.stringify({schema:1,approval:'FRESHON_OSAN_CUTOVER_20261125',
+    rows:[...recovery,...extra].map(r=>[r.customerCode,addressHash])});
+  const cutoverEnv={...env,OPSMAP_OSAN_REGISTRY_RECOVERY_SHA256:createHash('sha256').update(cutover).digest('hex')};
+  assert.equal((await readApprovedOsanRegistryRecovery({env:cutoverEnv,readManifest:async()=>cutover,
+    readRegistry:async()=>({ref:{version:'a'.repeat(64)},rows:[...recovery,...extra]})})).length,398);
+  await assert.rejects(readApprovedOsanRegistryRecovery({env:cutoverEnv,readRegistry,readManifest:async()=>cutover}),/RECOVERY_SCOPE/);
   const original=Object.entries(codes).map(([center,code])=>[code,center,addressHash]);
   const membership=scopedNationalRegistryMembership(original,[],available);
   assert.equal(membership.size,377);

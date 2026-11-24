@@ -55,10 +55,11 @@ export async function readApprovedOsanRegistryRecoveryManifest({env=process.env,
     if(typeof raw!=='string'||Buffer.byteLength(raw)>64*1024||sha(raw)!==approved)throw denied();
     manifest=JSON.parse(raw);
   }catch{throw denied();}
-  if(manifest?.schema!==1||manifest.approval!=='FRESHON_OSAN_RECOVERY_20261125'||
-    !Array.isArray(manifest.rows)||manifest.rows.length!==374||
+  const expectedCount=manifest?.approval==='FRESHON_OSAN_RECOVERY_20261125'?374:
+    manifest?.approval==='FRESHON_OSAN_CUTOVER_20261125'?398:0;
+  if(manifest?.schema!==1||!expectedCount||!Array.isArray(manifest.rows)||manifest.rows.length!==expectedCount||
     manifest.rows.some(row=>!Array.isArray(row)||row.length!==2||!customerCode(row[0])||!hash(row[1]))||
-    new Set(manifest.rows.map(row=>row[0])).size!==374)throw denied();
+    new Set(manifest.rows.map(row=>row[0])).size!==expectedCount)throw denied();
   const held=manifest.held;
   if(held!==undefined&&(!customerCode(held?.customerCode)||!hash(held.legacyVersion)||
     held.state!=='SOURCE_INACTIVE_UNCONFIRMED'||manifest.rows.some(([code])=>code===held.customerCode)))throw denied();

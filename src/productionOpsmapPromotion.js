@@ -14,13 +14,14 @@ const archiveRoots={
   legacyPinsArchive:'production/opsmap-manual-pins',stagePinsArchive:'stage/opsmap-manual-pins'
 };
 
-async function checkArchiveBaselines(env,fetchImpl) {
+async function checkArchiveBaselines(env,fetchImpl,{baselineOnly=false}={}) {
   const evidence=primaryPreservationEvidence(env);
+  const fetchArchive=suffix=>fetchImpl(archiveRepo+suffix,{redirect:'error',signal:AbortSignal.timeout(10000),headers:{
+    Authorization:'Bearer '+env.OPSMAP_PRIMARY_ARCHIVE_READ_TOKEN,
+    Accept:'application/vnd.github+json','User-Agent':'opsmap-primary-preservation'
+  }});
   const request=async suffix=>{
-    const response=await fetchImpl(archiveRepo+suffix,{redirect:'error',signal:AbortSignal.timeout(10000),headers:{
-      Authorization:'Bearer '+env.OPSMAP_PRIMARY_ARCHIVE_READ_TOKEN,
-      Accept:'application/vnd.github+json','User-Agent':'opsmap-primary-preservation'
-    }});
+    const response=await fetchArchive(suffix);
     if(!response.ok)throw Error('OPSMAP_PRIMARY_ARCHIVE_UNAVAILABLE');
     return response.json();
   };
@@ -30,6 +31,11 @@ async function checkArchiveBaselines(env,fetchImpl) {
     if(!/^[a-f0-9]{40}$/.test(head.object?.sha||''))throw Error('OPSMAP_PRIMARY_ARCHIVE_REF');
     const pinned=await request('/git/commits/'+evidence[key]);
     if(pinned.sha!==evidence[key])throw Error('OPSMAP_PRIMARY_ARCHIVE_REF');
+  }
+  if(baselineOnly){
+    const generation=await fetchArchive('/contents/opsmap-stage/scheduled-generations-v1/head-v1.json?ref=stage%2Fopsmap-snapshots');
+    await generation.body?.cancel().catch(()=>{});
+    if(generation.status!==404)throw Error('OPSMAP_PRIMARY_GENERATION_KEY_REQUIRED');
   }
 }
 
@@ -88,16 +94,20 @@ export function primaryMapDispatch(operationalApp) {
 export async function createPrimaryOperationalMap({env=process.env,fetchImpl=fetch}={}) {
   const operational=primaryOperationalEnv(env);
   if(!operational)return null;
+  // Some approved deployments use the sealed baseline and independent daily ledgers.
+  // An existing full-generation pointer always requires its original archive key.
+  const baselineOnly=operational.OPSMAP_PRIMARY_BASELINE_ONLY_APPROVED==='1'&&
+    !operational.OPSMAP_STAGE_SYNC_ARCHIVE_KEY_B64&&!operational.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE;
   try {
     if(!stageVerifiedBaselineConfig(operational))throw Error('BASELINE_REQUIRED');
-    stageOpsmapDurableStorage({env:operational,fetchImpl});
+    if(!baselineOnly)stageOpsmapDurableStorage({env:operational,fetchImpl});
   } catch { throw Error('OPSMAP_PRIMARY_ARCHIVE_KEY_OR_BASELINE'); }
   if(primaryPreservationEvidence(operational)?.legacyRegistryHeldInArchive===1){
     try{
       if(!(await readApprovedOsanRegistryRecoveryManifest({env:operational}))?.held)throw Error('RECOVERY_MANIFEST_MISSING');
     }catch{throw Error('OPSMAP_PRIMARY_RECOVERY_MANIFEST');}
   }
-  await checkArchiveBaselines(operational,fetchImpl);
+  await checkArchiveBaselines(operational,fetchImpl,{baselineOnly});
   const [{createStageVerificationApp,createStageSyncReaders},{createStageShadowRuntime},{createStageWmsDispatchExportReader}]=
     await Promise.all([import('./stageVerificationEntry.js'),import('./shadowCoverage/stageArchive.js'),import('./opsmapWmsDispatchExport.js')]);
   const syncReaders=createStageSyncReaders({env:operational,fetchImpl});
