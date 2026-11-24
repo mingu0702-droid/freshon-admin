@@ -123,6 +123,7 @@ export function createDispatchScreenReview({variant,workspace,bridge,readFixedAr
     view=next;
     const key=[view?.model?.date,view?.routes?.primary?.vehicle,view?.routes?.secondary?.vehicle,view?.zip].join(':');
     if(scope!==key) {
+      view?.showDistance();
       const old=scope;
       scope=key;
       selected=new Set();picked='';
@@ -134,6 +135,7 @@ export function createDispatchScreenReview({variant,workspace,bridge,readFixedAr
     const routeData=routesForDirection(), rows=candidatesFor(routeData.comparison);
     const chosen=rows.find(row=>row.customerCode===view.selection?.customerCode&&view.selection.vehicle===routeData.source?.vehicle);
     if(chosen&&!(variant==='fleet'&&fleetVisible))picked=chosen.customerCode;
+    view.showDistance(rows.find(row=>row.customerCode===picked));
     if(variant==='fleet'&&fleetVisible)renderFleet();
     else renderCandidates(rows);
     renderResult(routeData);

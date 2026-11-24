@@ -23,7 +23,7 @@ if (tabs && sidebar && bridge) {
     return response.json();
   }
   async function readDay(date,{signal}) {
-    const result=await read('dispatch-reference-day',{date},signal);
+    const result=await read('dispatch-reference-day',{date},signal,review?45_000:15_000);
     if (result.contract!=='opsmap-dispatch-reference-v1'||result.date!==date||result.center!=='osan') throw Error('DISPATCH_REFERENCE_DAY_INVALID');
     return result;
   }
@@ -85,12 +85,12 @@ if (tabs && sidebar && bridge) {
     try {
       if (!feature) {
         stylesheet ||= Object.assign(document.createElement('link'),{
-          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261124-staff-screen-review',import.meta.url),
+          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261124-staff-screen-review-v2',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261124-staff-screen-review');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261124-staff-screen-review-v2');
         if (opening!==attempt||!session()) return;
-        const createReview=review?(await import('./dispatch-reference-review.mjs?v=20261124-staff-screen-review')).createDispatchScreenReview:null;
+        const createReview=review?(await import('./dispatch-reference-review.mjs?v=20261124-staff-screen-review-v2')).createDispatchScreenReview:null;
         if (opening!==attempt||!session()) return;
         const screenReview=createReview?.({variant:review,workspace,bridge,readFixedArea});
         feature=mountDispatchReference({workspace,sidebar,bridge,readDay,readPeriod,readOutline,screenReview});

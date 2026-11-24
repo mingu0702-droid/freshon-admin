@@ -76,7 +76,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   let repeatedCustomers=new Map();
   const additionalVehicles=new Set();
   let markerMap, markers=new Map(), polygons=[], polygonBounds=new Map();
-  let savedView=null;
+  let savedView=null,reviewLine=null,reviewLineKey=null;
   const isOpen=()=>active&&!controls.hidden;
   const dayNow=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const tomorrow=day=>new Date(Date.parse(day)+86400_000).toISOString().slice(0,10);
@@ -85,6 +85,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     date.max=periodMode?today:tomorrow(today);
     return today;
   }
+  if(screenReview)choices.prepend(postcodeSearch.closest('label'),postcode.closest('label'));
   const map=()=>bridge.state.map;
   const sdk=()=>window.kakao?.maps;
 
@@ -470,9 +471,25 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     fit(markerRows.map(row=>row.point));
   }
 
+  function showReviewDistance(candidate) {
+    const left=candidate?.point,right=candidate?.nearest?.point;
+    const current=map(),maps=sdk();
+    const key=left&&right&&Number.isFinite(candidate.km)&&candidate.km<=.5?
+      [left.lat,left.lng,right.lat,right.lng].join('|'):null;
+    if(key===reviewLineKey)return;
+    reviewLine?.setMap(null);
+    reviewLine=null;
+    reviewLineKey=null;
+    if(!key||!current||!maps?.Polyline)return;
+    reviewLineKey=key;
+    reviewLine=new maps.Polyline({path:[new maps.LatLng(left.lat,left.lng),new maps.LatLng(right.lat,right.lng)],
+      strokeWeight:4,strokeColor:'#7847a6',strokeOpacity:.9,strokeStyle:'shortdash',zIndex:28});
+    reviewLine.setMap(current);
+  }
+
   function renderDetail() {
     screenReview?.update({
-      model:period?null:model,routes,zip:model?postcode.value:'',selection,
+      model:period?null:model,routes,zip:model?postcode.value:'',selection,showDistance:showReviewDistance,
       pickStop(code,vehicle){
         const row=markerRows.find(item=>item.customerCode===code&&(!vehicle||item.vehicle===vehicle));
         if(row)selectStop(row);
@@ -622,6 +639,14 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       }
       renderPeriodDetail();
     }
+    if(screenReview&&!period){
+      const expected=code?[code]:(comparisons?.secondary?.sharedPostalCodes||[]).slice(0,8);
+      if(JSON.stringify(selectedPostcodes)!==JSON.stringify(expected)){
+        clearOutlines();
+        selectedPostcodes=expected;
+        addOutlines();
+      }
+    }
     for (const {code:area,polygon} of polygons) polygon.setOptions({fillOpacity:!code||area===code? .24 : .05});
     const box=polygonBounds.get(code);
     if (box) fit([{lat:box[1],lng:box[0]},{lat:box[3],lng:box[2]}]);
@@ -754,6 +779,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       if (!active) return;
       active=false;
       screenReview?.close();
+      showReviewDistance();
       reset();
       observer.disconnect();
       mapReset?.removeEventListener('click',fitRoutes);
