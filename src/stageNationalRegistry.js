@@ -127,19 +127,63 @@ function normalizeRows(input, withPoint=false) {
 }
 
 export async function collectStageNationalRegistry(readCenter) {
-  const rows=[], counts={};
+  const rows=[], counts={}, activeCustomers=new Set();
   for (const center of SYNC_CENTERS) {
     const response=await readCenter(center);
     if (response?.center!==center || response.complete!==true || !Array.isArray(response.rows) ||
         !Number.isSafeInteger(response.total) || response.total<1 || response.rows.length!==response.total ||
         response.rows.some(row=>row?.centerGroup!==center)) throw failure('NATIONAL_REGISTRY_CENTER_INCOMPLETE');
+    if(response.activeCustomers!==undefined){
+      if(!Array.isArray(response.activeCustomers)||response.activeCustomers.length>limit)
+        throw failure('NATIONAL_REGISTRY_CENTER_INCOMPLETE');
+      const centerCustomers=new Set(response.activeCustomers);
+      if(response.rows.some(row=>!centerCustomers.has(row.customerCode)))
+        throw failure('NATIONAL_REGISTRY_CENTER_INCOMPLETE');
+      for(const code of response.activeCustomers){
+        if(!customerCode(code)||activeCustomers.has(code))throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
+        activeCustomers.add(code);
+      }
+    }
     counts[center]=response.total;
     rows.push(...response.rows);
   }
   return {rows:normalizeRows(rows),counts};
 }
 
-export function createStageNationalRegistrationSource({env=process.env,fetchImpl=fetch,login,membership}={}) {
+// First-seen registrations need positive, independent in-scope evidence. A
+// previously published active registration remains eligible on subsequent days.
+export function verifiedNationalRegistryMembership(approved,previous,recentDays,closedDate) {
+  const closedAt=Date.parse(closedDate+'T00:00:00Z');
+  if(!(approved instanceof Map)||!Array.isArray(recentDays)||!Number.isFinite(closedAt)||
+      new Date(closedAt).toISOString().slice(0,10)!==closedDate)
+    throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+  const firstDate=new Date(closedAt-6*86400000).toISOString().slice(0,10);
+  const membership=new Map(approved), blocked=new Set(), admissions=new Map();
+  for(const row of normalizeRows(previous,true)){
+    const {customerCode:code,centerGroup:center,addressHash,lifecycle}=row;
+    if(lifecycle==='DELETED'){
+      membership.delete(code);
+      blocked.add(code);
+    }else membership.set(code,{center,addressHash});
+  }
+  for(const day of recentDays){
+    if(day.source!=='freshon_orders'||day.date<firstDate||day.date>closedDate)continue;
+    if(!SYNC_CENTERS.includes(day.centerKey)||!Array.isArray(day.rows))
+      throw failure('NATIONAL_REGISTRY_ADMISSION_EVIDENCE');
+    for(const {customerCode:code,evidence} of day.rows){
+      if(!customerCode(code)||evidence!=='order_confirmed')throw failure('NATIONAL_REGISTRY_ADMISSION_EVIDENCE');
+      if(membership.has(code)||blocked.has(code))continue;
+      if(admissions.has(code)&&admissions.get(code)!==day.centerKey){
+        admissions.delete(code);
+        blocked.add(code);
+      }else admissions.set(code,day.centerKey);
+    }
+  }
+  if(membership.size+admissions.size>limit)throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+  return {membership,admissions};
+}
+
+export function createStageNationalRegistrationSource({env=process.env,fetchImpl=fetch,login,membership,admissions}={}) {
   if (!stageNationalRegistryEnabled(env) || (env.FRESHON_BASE_URL && new URL(env.FRESHON_BASE_URL).origin!==freshonOrigin))
     throw failure('NATIONAL_REGISTRY_SOURCE_APPROVAL');
   let contract;
@@ -151,6 +195,9 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
       !['BODY','FIRST_ROW'].includes(contract.totalLocation) || !field(contract.addressField) ||
       !field(contract.centerField) || !field(contract.activeField) || contract.updatedAtField!=null&&!field(contract.updatedAtField))
     throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
+  const verifiedChanges=admissions!==undefined;
+  if(verifiedChanges&&(!(membership instanceof Map)||!(admissions instanceof Map)))
+    throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
   let cookie=String(env.FRESHON_COOKIE||''), loginAttempted=false;
   const budget=AbortSignal.timeout(membership?NATIONAL_REGISTRY_WORKER_LIMIT-3*60_000:10*60_000);
   async function ensureSession(force=false) {
@@ -218,6 +265,7 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
     if (!Object.hasOwn(centerCodes,center)) throw failure('NATIONAL_REGISTRY_SOURCE_SCOPE');
     const sourceCenter=contract.centerField==='logCdName'?centerNames[center]:centerCodes[center];
     const rows=[];
+    const activeCustomers=verifiedChanges?new Set():null;
     let total=0;
     for (const status of (membership?['Y']:['Y','N'])) {
       let expected=null, collected=0;
@@ -242,11 +290,18 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
           const code=readField(row,'estCd');
           if (membership) {
             const approved=membership.get(code);
-            if (approved?.center!==center) continue;
-            if (captured.has(code)) throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
-            captured.add(code);
-            // Keep the verified point and its matching address until an address change is reviewed.
-            if (typeof address!=='string' || customerRegistryAddressHash(address)!==approved.addressHash) continue;
+            if(verifiedChanges){
+              const admitted=admissions.get(code);
+              if(!approved&&!admitted)continue;
+              if(activeCustomers.has(code))throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
+              activeCustomers.add(code);
+              if((!approved&&admitted!==center)||typeof address!=='string'||!address.trim())continue;
+            }else{
+              if (approved?.center!==center) continue;
+              if (captured.has(code)) throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
+              captured.add(code);
+              if (typeof address!=='string' || customerRegistryAddressHash(address)!==approved.addressHash) continue;
+            }
           }
           if (status==='Y' && typeof address!=='string') throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
           rows.push(rowOf({customerCode:code,customerName:readField(row,'estName')??'',
@@ -260,7 +315,8 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
       if (collected!==expected) throw failure('NATIONAL_REGISTRY_CENTER_INCOMPLETE');
       total+=collected;
     }
-    return {center,rows,total:membership?rows.length:total,complete:true};
+    return {center,rows,total:membership?rows.length:total,complete:true,
+      ...(activeCustomers?{activeCustomers:[...activeCustomers]}:{})};
   };
 }
 
@@ -378,7 +434,7 @@ export function createStageNationalRegistryReader({store,now=Date.now,log=()=>{}
   }};
 }
 
-export async function syncStageNationalRegistry({store,receipt,readCenter,readOfficial,now=Date.now}) {
+export async function syncStageNationalRegistry({store,receipt,readCenter,readOfficial,prepareSource,confirmCenterMoves,now=Date.now}) {
   if (!store?.writeHead || !hash(receipt?.runId) || receipt.date!==kstDay(now())) throw failure('NATIONAL_REGISTRY_RECEIPT');
   const {head,etag}=await readHead(store);
   if (head.lastSuccessAt && kstDay(Date.parse(head.lastSuccessAt))===receipt.date) return {state:'ALREADY_VERIFIED'};
@@ -393,10 +449,33 @@ export async function syncStageNationalRegistry({store,receipt,readCenter,readOf
     await store.writeHead({...latest,...next},etag);
   }
   try {
-    const observed=await collectStageNationalRegistry(readCenter);
     const official=await readOfficial?.() || [];
     const previous=head.current ? await decode(store,head.current) : official;
-    const rows=mergeStageNationalRegistry(previous,observed.rows,official);
+    const source=prepareSource?await prepareSource(previous):{readCenter};
+    const observed=await collectStageNationalRegistry(source.readCenter);
+    let accepted=observed.rows, withheld=new Set();
+    const previousByCode=prepareSource?new Map(previous.map(row=>[row.customerCode,row])):null;
+    const previousCenter=row=>previousByCode?.get(row.customerCode)?.centerGroup??source.membership?.get(row.customerCode)?.center;
+    if(prepareSource){
+      const centerMoves=accepted.filter(row=>previousCenter(row)&&previousCenter(row)!==row.centerGroup);
+      // A move is published only when this run's independent fixed master also
+      // confirms the target center; a retained assignment is not that evidence.
+      const verifiedCenters=centerMoves.length?await confirmCenterMoves?.(centerMoves.map(row=>row.customerCode)):null;
+      withheld=new Set(centerMoves.filter(row=>verifiedCenters?.get(row.customerCode)!==row.centerGroup).map(row=>row.customerCode));
+      accepted=accepted.filter(row=>!withheld.has(row.customerCode));
+    }
+    const rows=mergeStageNationalRegistry(previous,accepted,official);
+    let changes;
+    if(prepareSource){
+      changes={admitted:0,addressChanged:0,centerMoved:0,centerMoveUnconfirmed:withheld.size};
+      for(const row of rows){
+        if(row.lifecycle!=='ACTIVE')continue;
+        const prior=previousByCode.get(row.customerCode), center=previousCenter(row);
+        if(!prior&&!source.membership.has(row.customerCode))changes.admitted++;
+        if(prior&&prior.addressHash!==row.addressHash)changes.addressChanged++;
+        if(center&&center!==row.centerGroup)changes.centerMoved++;
+      }
+    }
     const candidate=await encode(rows,store.key), checkedAt=new Date(now()).toISOString();
     const current={version:candidate.version,count:rows.length,checkedAt};
     const unchanged=head.current?.version===current.version;
@@ -411,6 +490,7 @@ export async function syncStageNationalRegistry({store,receipt,readCenter,readOf
     if (committed.current?.version!==current.version || committed.attempt?.id!==receipt.runId ||
         committed.lastSuccessAt!==checkedAt) throw failure('NATIONAL_REGISTRY_STORAGE_READBACK');
     return {state:unchanged?'VERIFIED_NOOP':'PUBLISHED',version:current.version,count:rows.length,checkedAt,counts:observed.counts,
+      ...(changes?{changes}:{}),
       activeCodes:rows.filter(row=>row.lifecycle==='ACTIVE').map(row=>row.customerCode),
       retiredCodes:rows.filter(row=>row.lifecycle==='DELETED').map(row=>row.customerCode)};
   } catch(error) {

@@ -22,12 +22,13 @@ import {claimQueuedOpsmapSchedule,independentStageSync,opsmapScheduleConfig,publ
 import {verifyStageScheduledTask,stageWmsNightDate} from '../src/stageScheduledJobs.js';
 import {readIndependentStageScopes} from '../src/stageIndependentSyncScope.js';
 import {STAGE_OSAN_SYNC_CENTERS,STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
-import {FIXED_MASTER_SCOPE_INPUT_LIMIT,stageFixedMasterStorage,stageFixedMasterSyncEnabled} from '../src/stageFixedMasterSync.js';
+import {createStageDailyFixedMasterReader,FIXED_MASTER_SCOPE_INPUT_LIMIT,stageFixedMasterBaseline,stageFixedMasterStorage,stageFixedMasterSyncEnabled} from '../src/stageFixedMasterSync.js';
 import {runStageFixedMaster} from '../src/stageFixedMasterWorker.js';
 import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
 import {createStageWmsDispatchExportReader} from '../src/opsmapWmsDispatchExport.js';
 import {createStageNationalRegistryStorage,createStageNationalRegistrationSource,stageNationalRegistryEnabled,
-  createStageNationalRegistryReader,readApprovedOsanRegistryRecovery,readStageNationalRegistryRows,scopedNationalRegistryMembership,syncStageNationalRegistry} from '../src/stageNationalRegistry.js';
+  createStageNationalRegistryReader,readApprovedOsanRegistryRecovery,readStageNationalRegistryRows,scopedNationalRegistryMembership,
+  syncStageNationalRegistry,verifiedNationalRegistryMembership} from '../src/stageNationalRegistry.js';
 import {createStageRecentOperationsSeed,createStageRecentOperationsStore,historicalRecoveryOutcome,stageRecentOperationsSyncEnabled,
   syncStageRecentOperations} from '../src/stageRecentOperations.js';
 import {recentOperationsBaseline} from '../src/stageRecentOperationsManifest.js';
@@ -261,10 +262,31 @@ async function runScheduled(job,settingsFile){
           return createStageNationalRegistryReader({store})?.read();
         }});
         const membership=scopedNationalRegistryMembership(job?.registryScope,snapshot.rows,recovered);
+        const verifiedChanges=env.OPSMAP_STAGE_NATIONAL_REGISTRY_VERIFIED_CHANGES_APPROVED==='1'&&
+          env.OPSMAP_STAGE_FIXED_MASTER_SOURCE==='excel';
+        const source=verifiedChanges?{
+          async prepareSource(previous){
+            const date=new Date(Date.parse(receipt.date+'T00:00:00Z')-86400000).toISOString().slice(0,10);
+            const recent=createStageRecentOperationsStore({env});
+            const sealed=recent?await recent.read().catch(()=>null):null;
+            const selection=verifiedNationalRegistryMembership(membership,previous,sealed?.ledger?.days??[],date);
+            return {...selection,readCenter:createStageNationalRegistrationSource({env,...selection})};
+          },
+          async confirmCenterMoves(codes){
+            try{
+              const store=stageFixedMasterStorage({env});
+              const daily=createStageDailyFixedMasterReader({store,baseline:stageFixedMasterBaseline({env,store})});
+              const observation=await daily.readObservation(receipt.date,codes);
+              if(observation?.meta.state!=='SCHEDULED_OBSERVATION'||observation.meta.runId!==receipt.runId)return new Map();
+              return new Map(observation.data.filter(row=>row.baseVehicleState==='VERIFIED_MASTER'||
+                row.baseVehicleEmptyVerified===true).map(row=>[row.customerCode,row.baseVehicleGroup]));
+            }catch{return new Map();}
+          }
+        }:{readCenter:createStageNationalRegistrationSource({env,membership})};
         const value=await syncStageNationalRegistry({store:createStageNationalRegistryStorage({env,write:true}),receipt,
-          readCenter:createStageNationalRegistrationSource({env,membership}),readOfficial:async()=>snapshot.rows});
+          ...source,readOfficial:async()=>snapshot.rows});
         console.log(JSON.stringify({component,runId:receipt.runId,state:value.state,count:value.count,
-          checkedAt:value.checkedAt,matchedByCenter:value.counts}));
+          checkedAt:value.checkedAt,matchedByCenter:value.counts,...(value.changes?{changes:value.changes}:{})}));
         return value;
       } catch(error) {
         const code=error.code || error.message || '';

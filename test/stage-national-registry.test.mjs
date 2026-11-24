@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {createStageNationalRegistrationSource,createStageNationalRegistryReader,readApprovedOsanRegistryRecovery,scopedNationalRegistryMembership,syncStageNationalRegistry}
+import {createStageNationalRegistrationSource,createStageNationalRegistryReader,readApprovedOsanRegistryRecovery,
+  scopedNationalRegistryMembership,syncStageNationalRegistry,verifiedNationalRegistryMembership}
   from '../src/stageNationalRegistry.js';
 import {customerRegistryAddressHash} from '../src/customerRegistry.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
@@ -171,4 +172,79 @@ test('Stage registry accepts only known customer, center and address combination
   assert.deepEqual(selected.rows.map(row=>row.customerCode),['S10001']);
   incoming[0].address='경기 합성시 주소변경로 20';
   assert.deepEqual((await read('osan')).rows,[]);
+});
+
+test('verified registry changes admit evidenced customers, invalidate old points and hold unverified moves',async()=>{
+  let tick=Date.parse('2026-11-19T02:00:00Z'), head=null, etag=null, revision=0;
+  const objects=new Map();
+  const store={key:Buffer.alloc(32,9),async readHead(){return {value:structuredClone(head),sha:etag};},
+    async writeHead(value,expected){assert.equal(expected,etag);head=structuredClone(value);etag=(++revision).toString(16).padStart(40,'0');},
+    async readObject(id){return objects.get(id);},async writeObject(id,value){objects.set(id,value);}};
+  const receipt=id=>({date:new Date(tick+9*3600000).toISOString().slice(0,10),runId:id.repeat(64)});
+  const location={addressHash:customerRegistryAddressHash(row('osan').basicAddress),lat:37.5,lng:127,kind:'BUILDING'};
+  const pending='S10004', added='S10005', unproven='S10006', omitted='S10007', stable='S10008', otherCenter='S10009';
+  const original={
+    osan:[row('osan'),row('osan',{customerCode:omitted})],
+    yeongnam:[row('yeongnam'),row('yeongnam',{customerCode:stable})],
+    honam:[row('honam'),row('honam',{customerCode:pending})]
+  };
+  const scoped=new Map(Object.entries(original).flatMap(([center,rows])=>rows.map(r=>[r.customerCode,
+    {center,addressHash:customerRegistryAddressHash(r.basicAddress)}])));
+  const publish=await syncStageNationalRegistry({store,receipt:receipt('a'),now:()=>tick,
+    readCenter:async center=>({center,complete:true,rows:original[center],total:original[center].length}),
+    readOfficial:async()=>[{...row('osan'),verifiedLocation:location}]});
+  tick+=day;
+  const closedDate='2026-11-19';
+  const orders=[
+    {date:'2026-11-13',centerKey:'osan',source:'freshon_orders',rows:[{customerCode:added,evidence:'order_confirmed'}]},
+    {date:'2026-11-12',centerKey:'osan',source:'freshon_orders',rows:[{customerCode:unproven,evidence:'order_confirmed'}]},
+    {date:closedDate,centerKey:'osan',source:'wms_dispatch',rows:[{customerCode:unproven,evidence:'dispatch_confirmed'}]},
+    {date:closedDate,centerKey:'osan',source:'freshon_orders',rows:[{customerCode:otherCenter,evidence:'order_confirmed'}]}
+  ];
+  const observations={
+    osan:[row('osan',{basicAddress:'경기 합성시 새주소로 20'}),row('osan',{customerCode:added}),row('osan',{customerCode:unproven})],
+    yeongnam:[row('yeongnam',{customerCode:pending}),row('yeongnam',{customerCode:stable}),row('yeongnam',{customerCode:otherCenter})],
+    honam:[row('honam'),row('honam',{customerCode:codes.yeongnam})]
+  };
+  const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED:'1',
+    FRESHON_COOKIE:'fixture',OPSMAP_STAGE_NATIONAL_REGISTRY_CONTRACT_JSON:JSON.stringify({method:'POST',mode:'PAGED',
+      rowsKey:'data',totalField:'totalCnt',totalLocation:'BODY',centerField:'logCd',activeField:'useYn',addressField:'address'})};
+  const prepareFor=orderEvidence=>async previous=>{
+    const selection=verifiedNationalRegistryMembership(scoped,previous,orderEvidence,closedDate);
+    const readCenter=createStageNationalRegistrationSource({env,...selection,fetchImpl:async(_url,options)=>{
+      const query=new URLSearchParams(options.body);
+      const center=Object.keys(centerIds).find(key=>centerIds[key]===query.get('logCd'));
+      assert.equal(query.get('useYn'),'Y');
+      const rows=observations[center];
+      return Response.json({totalCnt:rows.length,data:rows.map(r=>({estCd:r.customerCode,estName:r.customerName,address:r.basicAddress,
+        logCd:centerIds[center],useYn:'Y'}))});
+    }});
+    return {...selection,readCenter};
+  };
+  const run=(id,orderEvidence=orders)=>syncStageNationalRegistry({store,receipt:receipt(id),now:()=>tick,prepareSource:prepareFor(orderEvidence),
+    confirmCenterMoves:async requested=>new Map(requested.includes(codes.yeongnam)?[[codes.yeongnam,'honam']]:[])});
+  const result=await run('b');
+  assert.deepEqual(result.changes,{admitted:1,addressChanged:1,centerMoved:1,centerMoveUnconfirmed:1});
+  assert.equal(head.previous.version,publish.version);
+  const published=async()=>new Map((await createStageNationalRegistryReader({store,now:()=>tick}).read()).rows.map(r=>[r.customerCode,r]));
+  let admitted=await published();
+  assert.equal(admitted.get(codes.osan).basicAddress,'경기 합성시 새주소로 20');
+  assert.equal(admitted.get(codes.osan).verifiedLocation,undefined);
+  assert.equal(admitted.get(codes.yeongnam).centerGroup,'honam');
+  assert.equal(admitted.get(pending).centerGroup,'honam');
+  assert.equal(admitted.get(omitted).lifecycle,'ACTIVE');
+  assert.equal(admitted.get(added).lifecycle,'ACTIVE');
+  assert(!admitted.has(unproven)&&!admitted.has(otherCenter));
+
+  tick+=day;
+  observations.osan[1].basicAddress='경기 합성시 등록후이전로 51';
+  const subsequent=await run('c',[]);
+  assert.deepEqual(subsequent.changes,{admitted:0,addressChanged:1,centerMoved:0,centerMoveUnconfirmed:1});
+  admitted=await published();
+  assert.equal(admitted.get(added).basicAddress,'경기 합성시 등록후이전로 51');
+
+  tick+=day;
+  observations.honam.push(row('honam',{customerCode:added}));
+  await assert.rejects(run('d',[]),{code:'NATIONAL_REGISTRY_DUPLICATE_CUSTOMER'});
+  assert.equal(head.current.version,subsequent.version);
 });

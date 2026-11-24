@@ -332,11 +332,14 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
             }
             if(value?.component==='opsmap-national-registry-sync' && value.runId===receipt.runId &&
                ['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','BUSY','ALREADY_ATTEMPTED','FAILED'].includes(value.state)) {
+              const changes=value.changes&&Object.fromEntries(
+                ['admitted','addressChanged','centerMoved','centerMoveUnconfirmed'].map(key=>[key,boundedCount(value.changes[key],30_000)]));
               log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
                 count:Number.isSafeInteger(value.count)?value.count:null,
                 checkedAt:Number.isFinite(Date.parse(value.checkedAt))?value.checkedAt:null,
                 matchedByCenter:value.matchedByCenter?Object.fromEntries(['osan','yeongnam','honam'].map(center=>[center,
                   Number.isSafeInteger(value.matchedByCenter[center])?value.matchedByCenter[center]:null])):null,
+                ...(changes&&Object.values(changes).every(count=>count!==null)?{changes}:{}),
                 error:/^(?:NATIONAL_REGISTRY|FIXED_STORE)_[A-Z_]+$/.test(value.error||'')?value.error:null}));
             }
             if(value?.component==='opsmap-recent-operations-sync' && value.runId===receipt.runId &&
