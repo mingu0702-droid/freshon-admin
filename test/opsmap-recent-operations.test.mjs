@@ -43,6 +43,21 @@ test('sealed order recovery adds only exact partial orders and verifies the CAS 
   assert.equal(writes,1);
 });
 
+test('an explicitly approved one-center archive previews only its verified night orders',async()=>{
+  const date='2026-11-20', sha='a'.repeat(40);
+  const key=recentOperationsKey(Buffer.alloc(32,6).toString('base64'));
+  const before=mergeRecentOperations(ledger(),'2026-11-23',[makeDay(date,'delivery_admin','partial',['A1'])]);
+  const bytes=Buffer.from(JSON.stringify(await sealRecentOperations(mergeRecentOperations(ledger(),date,
+    [makeNightOrderDay(date,'yeongnam',['A2'])]),key)));
+  const request={date,approvedDate:date,approvedCenter:'yeongnam',approvedSha256:createHash('sha256').update(bytes).digest('hex'),
+    key,store:{read:async()=>({ledger:before,sha})},readArchive:async()=>bytes,now:()=>Date.parse('2026-11-24T14:00Z')};
+  const result=await recoverSealedRecentOrders(request);
+  assert.equal(result.state,'VERIFIED_PREVIEW');
+  assert.deepEqual(result.after,{osan:{delivery_admin:1},yeongnam:{freshon_orders:1},honam:{}});
+  await assert.rejects(recoverSealedRecentOrders({...request,approvedCenter:'honam'}),/EVIDENCE_INVALID/);
+  await assert.rejects(recoverSealedRecentOrders({...request,approvedCenter:undefined}),/EVIDENCE_INVALID/);
+});
+
 test('archived recovery changes only one exact Osan dispatch day with CAS and keeps evidence partial',async()=>{
   const date='2026-11-23', sha='a'.repeat(40), now=()=>Date.parse('2026-11-24T00:00:00Z');
   const existing=makeDay('2026-11-22','delivery_admin','partial',['B2'],'honam');

@@ -13,7 +13,8 @@ try {
   const publish=mode==='--publish';
   const result=await recoverSealedRecentOrders({
     store:createStageRecentOperationsStore({env,write:publish,withSha:true}),
-    date,approvedDate,approvedSha256,publish,key:recentOperationsKey(env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64),
+    date,approvedDate,approvedCenter:env.OPSMAP_STAGE_RECENT_OPERATIONS_ORDER_ARCHIVE_CENTER,
+    approvedSha256,publish,key:recentOperationsKey(env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64),
     async readArchive() {
       const file=await open(filename,'r');
       try {
