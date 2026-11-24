@@ -98,6 +98,27 @@ test('formal Stage caps the shared Seoul day without resetting the provider ledg
  assert.equal((await formal(next+86400000).status()).apiRemaining.directions,3);
  await assert.rejects(formal(Date.parse('2026-11-30T15:00:00Z')).status(),e=>e.code==='ROAD_BUDGET_APPROVAL_EXPIRED');
 });
+test('a reservation preserves both independent monthly free-use proofs',async()=>{
+ const state=ledger(),b=state.roadBudget;
+ b.approvedApis=['directions'];
+ b.apis.directions.freeRemainingAtApproval=9999;
+ b.providerDailyUsedAtApproval={directions:1};
+ b.monthlyApproval.providerRejectsFreeOverage=true;
+ const r=remote(state);
+ const formal=()=>createStageSharedRoadFreeOnly({
+  key,token:'synthetic-token',fetchImpl:r.fetchImpl,now:()=>next,
+  grant:JSON.stringify({approvalId:b.approvalId,dailyLimit:2})
+ });
+ assert.equal((await formal().status()).apiRemaining.directions,2);
+ await reserve(budget(r,next));
+ assert.equal((await formal().status()).apiRemaining.directions,1);
+ assert.equal((await reserve(formal())).reserved,true);
+ assert.equal(r.state.roadBudget.monthlyApproval.exclusiveDirectionsUsage,true);
+ assert.equal(r.state.roadBudget.monthlyApproval.providerRejectsFreeOverage,true);
+ assert.equal(r.state.roadBudget.used,11);
+ assert.equal(r.writes,2);
+ await assert.rejects(reserve(formal()),e=>e.code==='QUOTA_EXCEEDED');
+});
 test('a CAS readback crossing KST midnight retains the debit on its original day and blocks dispatch',async()=>{
  const midnight=Date.parse('2026-11-03T15:00:00Z'),r=remote();let time=midnight-1;
  const b=createProductionRoadBudget({env,token:'synthetic-token',now:()=>time,fetchImpl:async(url,options)=>{

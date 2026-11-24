@@ -157,7 +157,8 @@ function createPrivateRoadBudget({key,token,configured,branch,stage,trial,formal
    clean.roadBudget.apis=Object.fromEntries(supportedApis.map(api=>[api,{freeRemainingAtApproval:b.apis[api].freeRemainingAtApproval,used:b.apis[api].used}]));
    if(b.monthlyApproval)clean.roadBudget.monthlyApproval={
     period:b.monthlyApproval.period,
-    ...(b.monthlyApproval.exclusiveDirectionsUsage===true?{exclusiveDirectionsUsage:true}:{providerRejectsFreeOverage:true}),
+    ...(b.monthlyApproval.exclusiveDirectionsUsage===true?{exclusiveDirectionsUsage:true}:{}),
+    ...(b.monthlyApproval.providerRejectsFreeOverage===true?{providerRejectsFreeOverage:true}:{}),
     usedBeforeWindow:{directions:b.monthlyApproval.usedBeforeWindow.directions,waypoints:b.monthlyApproval.usedBeforeWindow.waypoints},
     dailyUsage:structuredClone(b.monthlyApproval.dailyUsage)
    };
