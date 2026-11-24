@@ -1,4 +1,5 @@
 import {createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {promisify} from 'node:util';
 import {gzip, gunzip} from 'node:zlib';
 import {customerRegistryAddressHash} from './customerRegistry.js';
@@ -42,7 +43,45 @@ export function stageNationalRegistryScope(active) {
     .map(row=>[row.code,row.center,customerRegistryAddressHash(row.address)]);
 }
 
-export function scopedNationalRegistryMembership(base, regional) {
+export async function readApprovedOsanRegistryRecoveryManifest({env=process.env,
+  readManifest=()=>readFile('/etc/secrets/opsmap-osan-registry-recovery-v1.json','utf8')}={}) {
+  const approved=env.OPSMAP_OSAN_REGISTRY_RECOVERY_SHA256;
+  if(approved===undefined)return null;
+  const denied=()=>failure('NATIONAL_REGISTRY_RECOVERY_SCOPE');
+  if(!stageNationalRegistryEnabled(env)||!hash(approved))throw denied();
+  let manifest;
+  try{
+    const raw=await readManifest();
+    if(typeof raw!=='string'||Buffer.byteLength(raw)>64*1024||sha(raw)!==approved)throw denied();
+    manifest=JSON.parse(raw);
+  }catch{throw denied();}
+  if(manifest?.schema!==1||manifest.approval!=='FRESHON_OSAN_RECOVERY_20261125'||
+    !Array.isArray(manifest.rows)||manifest.rows.length!==374||
+    manifest.rows.some(row=>!Array.isArray(row)||row.length!==2||!customerCode(row[0])||!hash(row[1]))||
+    new Set(manifest.rows.map(row=>row[0])).size!==374)throw denied();
+  const held=manifest.held;
+  if(held!==undefined&&(!customerCode(held?.customerCode)||!hash(held.legacyVersion)||
+    held.state!=='SOURCE_INACTIVE_UNCONFIRMED'||manifest.rows.some(([code])=>code===held.customerCode)))throw denied();
+  return manifest;
+}
+
+export async function readApprovedOsanRegistryRecovery({env=process.env, readRegistry, readManifest}={}) {
+  const manifest=await readApprovedOsanRegistryRecoveryManifest({env,readManifest});
+  if(!manifest)return [];
+  const denied=()=>failure('NATIONAL_REGISTRY_RECOVERY_SCOPE');
+  if(typeof readRegistry!=='function')throw denied();
+  const published=await readRegistry();
+  if(!hash(published?.ref?.version)||!Array.isArray(published.rows))throw denied();
+  const current=new Map(published.rows.map(row=>[row.customerCode,row]));
+  if(manifest.rows.some(([code])=>!current.has(code)))throw denied();
+  return manifest.rows.flatMap(([code,addressHash])=>{
+    const row=current.get(code);
+    return row.lifecycle==='ACTIVE'&&row.centerGroup==='osan'&&row.addressHash===addressHash
+      ?[[code,'osan',addressHash]]:[];
+  });
+}
+
+export function scopedNationalRegistryMembership(base, regional, approvedRecovery=[]) {
   if (!Array.isArray(base) || !base.length || !Array.isArray(regional) || base.length+regional.length>limit)
     throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
   const membership=new Map();
@@ -53,7 +92,12 @@ export function scopedNationalRegistryMembership(base, regional) {
       throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
     membership.set(code,{center,addressHash});
   }
-  if (new Set([...membership.values()].map(row=>row.center)).size!==SYNC_CENTERS.length)
+  if(!Array.isArray(approvedRecovery))throw failure('NATIONAL_REGISTRY_RECOVERY_SCOPE');
+  for(const [code,center,addressHash] of approvedRecovery){
+    if(!customerCode(code)||center!=='osan'||!hash(addressHash))throw failure('NATIONAL_REGISTRY_RECOVERY_SCOPE');
+    if(!membership.has(code))membership.set(code,{center,addressHash});
+  }
+  if(membership.size>limit||new Set([...membership.values()].map(row=>row.center)).size!==SYNC_CENTERS.length)
     throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
   return membership;
 }

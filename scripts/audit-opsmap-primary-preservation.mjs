@@ -3,7 +3,7 @@ import {readIndependentStageScopes} from '../src/stageIndependentSyncScope.js';
 import {createProductionSnapshotStore} from '../src/productionSnapshotStore.js';
 import {createCustomerRegistryStorage} from '../src/customerRegistryStorage.js';
 import {validateCustomerRegistryState} from '../src/customerRegistry.js';
-import {createStageNationalRegistryReader,createStageNationalRegistryStorage} from '../src/stageNationalRegistry.js';
+import {createStageNationalRegistryReader,createStageNationalRegistryStorage,readApprovedOsanRegistryRecoveryManifest} from '../src/stageNationalRegistry.js';
 import {createStageDailyFixedMasterReader,stageFixedMasterStorage,stageFixedMasterBaseline} from '../src/stageFixedMasterSync.js';
 import {PRIMARY_ORIGIN,PRIMARY_SERVICE,STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
 
@@ -92,9 +92,23 @@ try{
     Number.isFinite(Date.parse(row.baseVehicleCheckedAt))&&Date.parse(row.baseVehicleCheckedAt)<Date.parse(fixed.checkedAt));
   const currentStagePins=Object.entries(stagePins).filter(([,row])=>row.current);
   const stagePinsUnconfirmed=currentStagePins.filter(([code,row])=>!samePin(row.current,legacyPins[code]?.current)).length;
+  const manifest=await readApprovedOsanRegistryRecoveryManifest({env:stage});
+  const held=manifest?.held;
+  const nationalIndex=new Map(national.rows.map(row=>[row.customerCode,row]));
+  const heldCodes=new Set();
+  if(held){
+    if(held.legacyVersion!==legacy.sha256||!missing.includes(held.customerCode)||
+      nationalIndex.has(held.customerCode)||!legacy.rows.some(row=>row.customerCode===held.customerCode)||
+      manifest.rows.some(([code,addressHash])=>{
+        const row=nationalIndex.get(code);
+        return !row||row.lifecycle!=='ACTIVE'||row.centerGroup!=='osan'||row.addressHash!==addressHash||!currentFixed.has(code);
+      }))throw Error('OPSMAP_PRIMARY_RECOVERY_READBACK');
+    heldCodes.add(held.customerCode);
+  }
   const evidence={schema:1,destination:PRIMARY_ORIGIN,...before,
     legacyRegistryChecked:legacyRegistryCandidates.size,legacyFixedChecked:legacyFixed.length,
-    legacyRegistryUnconfirmed:missing.length,
+    legacyRegistryUnconfirmed:missing.filter(code=>!heldCodes.has(code)).length,
+    ...(heldCodes.size?{legacyRegistryHeldInArchive:1,osanRecoveryApprovalSha256:stage.OPSMAP_OSAN_REGISTRY_RECOVERY_SHA256}:{}),
     legacyFixedUnconfirmed:disagreements.length-newer.length,
     legacyRegistryVerified:!!registry?.current,stagePinsUnconfirmed};
   const ready=evidence.legacyRegistryVerified&&evidence.legacyRegistryUnconfirmed===0&&evidence.legacyFixedUnconfirmed===0&&

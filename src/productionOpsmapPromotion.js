@@ -5,6 +5,7 @@ import {createProductionRoadBudget,productionRoadRouteFlag} from './opsmap-abc/p
 import {createRoadRouteService} from './opsmap-abc/roadRouteService.js';
 import {createProductionGeocodeBudgetGithubStore} from './opsmap-abc/manualPinGithubStore.js';
 import {stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from './opsmapDurableGeneration.js';
+import {readApprovedOsanRegistryRecoveryManifest} from './stageNationalRegistry.js';
 
 const archiveRepo='https://api.github.com/repos/mingu0702-droid/freshon-cache';
 const archiveRoots={
@@ -91,6 +92,11 @@ export async function createPrimaryOperationalMap({env=process.env,fetchImpl=fet
     if(!stageVerifiedBaselineConfig(operational))throw Error('BASELINE_REQUIRED');
     stageOpsmapDurableStorage({env:operational,fetchImpl});
   } catch { throw Error('OPSMAP_PRIMARY_ARCHIVE_KEY_OR_BASELINE'); }
+  if(primaryPreservationEvidence(operational)?.legacyRegistryHeldInArchive===1){
+    try{
+      if(!(await readApprovedOsanRegistryRecoveryManifest({env:operational}))?.held)throw Error('RECOVERY_MANIFEST_MISSING');
+    }catch{throw Error('OPSMAP_PRIMARY_RECOVERY_MANIFEST');}
+  }
   await checkArchiveBaselines(operational,fetchImpl);
   const [{createStageVerificationApp,createStageSyncReaders},{createStageShadowRuntime},{createStageWmsDispatchExportReader}]=
     await Promise.all([import('./stageVerificationEntry.js'),import('./shadowCoverage/stageArchive.js'),import('./opsmapWmsDispatchExport.js')]);

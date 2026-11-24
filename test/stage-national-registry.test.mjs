@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createStageNationalRegistrationSource,createStageNationalRegistryReader,scopedNationalRegistryMembership,syncStageNationalRegistry}
+import {createHash} from 'node:crypto';
+import {createStageNationalRegistrationSource,createStageNationalRegistryReader,readApprovedOsanRegistryRecovery,scopedNationalRegistryMembership,syncStageNationalRegistry}
   from '../src/stageNationalRegistry.js';
 import {customerRegistryAddressHash} from '../src/customerRegistry.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
@@ -75,6 +76,39 @@ test('a signed daily candidate preserves missing rows, updates new or revised ro
     ['S10001','DELETED'],['S10002','ACTIVE'],['S10003','ACTIVE'],['S10004','ACTIVE']]);
   assert(!saved[1].verifiedLocation);
   assert.equal(objects.size,2);
+});
+
+test('only the approved active Osan recovery set enters the scheduled registration membership',async()=>{
+  const addressHash=customerRegistryAddressHash(row('osan').basicAddress);
+  const recovery=Array.from({length:374},(_,i)=>row('osan',{customerCode:'S'+(20000+i),addressHash}));
+  const text=JSON.stringify({schema:1,approval:'FRESHON_OSAN_RECOVERY_20261125',rows:recovery.map(r=>[r.customerCode,addressHash])});
+  const digest=createHash('sha256').update(text).digest('hex');
+  const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
+    OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED:'1',OPSMAP_OSAN_REGISTRY_RECOVERY_SHA256:digest};
+  const readRegistry=async()=>({ref:{version:'a'.repeat(64)},rows:recovery});
+  const readManifest=async()=>text;
+  const available=await readApprovedOsanRegistryRecovery({env,readRegistry,readManifest});
+  assert.equal(available.length,374);
+  const original=Object.entries(codes).map(([center,code])=>[code,center,addressHash]);
+  const membership=scopedNationalRegistryMembership(original,[],available);
+  assert.equal(membership.size,377);
+  assert.deepEqual(membership.get(recovery[0].customerCode),{center:'osan',addressHash});
+  assert.equal(membership.has('S29999'),false);
+  assert.equal(scopedNationalRegistryMembership([...original,available[0]],[],available).size,377);
+  await assert.rejects(readApprovedOsanRegistryRecovery({env,readRegistry,readManifest:async()=>text+' '}),/RECOVERY_SCOPE/);
+  await assert.rejects(readApprovedOsanRegistryRecovery({env,readManifest,
+    readRegistry:async()=>({...await readRegistry(),rows:recovery.slice(1)})}),/RECOVERY_SCOPE/);
+  recovery[0].lifecycle='DELETED';recovery[1].addressHash='b'.repeat(64);recovery[2].centerGroup='honam';
+  assert.equal((await readApprovedOsanRegistryRecovery({env,readRegistry,readManifest})).length,371);
+  assert.deepEqual(await readApprovedOsanRegistryRecovery({env:{}}),[]);
+  const held={customerCode:'S29999',legacyVersion:'c'.repeat(64),state:'SOURCE_INACTIVE_UNCONFIRMED'};
+  const includingHeld=JSON.stringify({...JSON.parse(text),held});
+  const heldEnv={...env,OPSMAP_OSAN_REGISTRY_RECOVERY_SHA256:createHash('sha256').update(includingHeld).digest('hex')};
+  const activeOnly=await readApprovedOsanRegistryRecovery({env:heldEnv,readRegistry,readManifest:async()=>includingHeld});
+  assert(!activeOnly.some(([code])=>code===held.customerCode));
+  const invalid=JSON.stringify({...JSON.parse(text),held:{...held,customerCode:recovery[0].customerCode}});
+  const invalidEnv={...env,OPSMAP_OSAN_REGISTRY_RECOVERY_SHA256:createHash('sha256').update(invalid).digest('hex')};
+  await assert.rejects(readApprovedOsanRegistryRecovery({env:invalidEnv,readRegistry,readManifest:async()=>invalid}),/RECOVERY_SCOPE/);
 });
 
 test('the registration transport reads only the exact FreshOn master, rejects incomplete or unrelated pages and never calls Delivery Admin',async()=>{

@@ -27,7 +27,7 @@ import {runStageFixedMaster} from '../src/stageFixedMasterWorker.js';
 import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
 import {createStageWmsDispatchExportReader} from '../src/opsmapWmsDispatchExport.js';
 import {createStageNationalRegistryStorage,createStageNationalRegistrationSource,stageNationalRegistryEnabled,
-  createStageNationalRegistryReader,readStageNationalRegistryRows,scopedNationalRegistryMembership,syncStageNationalRegistry} from '../src/stageNationalRegistry.js';
+  createStageNationalRegistryReader,readApprovedOsanRegistryRecovery,readStageNationalRegistryRows,scopedNationalRegistryMembership,syncStageNationalRegistry} from '../src/stageNationalRegistry.js';
 import {createStageRecentOperationsSeed,createStageRecentOperationsStore,historicalRecoveryOutcome,stageRecentOperationsSyncEnabled,
   syncStageRecentOperations} from '../src/stageRecentOperations.js';
 import {recentOperationsBaseline} from '../src/stageRecentOperationsManifest.js';
@@ -256,7 +256,11 @@ async function runScheduled(job,settingsFile){
         if (!expected || ![expected.yeongnam,expected.honam].every(count=>Number.isSafeInteger(count)&&count>0) ||
             snapshot.rows.filter(row=>row.verifiedLocation).length!==expected.yeongnam+expected.honam)
           throw Error('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
-        const membership=scopedNationalRegistryMembership(job?.registryScope,snapshot.rows);
+        const recovered=await readApprovedOsanRegistryRecovery({env,readRegistry:()=>{
+          const store=createStageNationalRegistryStorage({env});
+          return createStageNationalRegistryReader({store})?.read();
+        }});
+        const membership=scopedNationalRegistryMembership(job?.registryScope,snapshot.rows,recovered);
         const value=await syncStageNationalRegistry({store:createStageNationalRegistryStorage({env,write:true}),receipt,
           readCenter:createStageNationalRegistrationSource({env,membership}),readOfficial:async()=>snapshot.rows});
         console.log(JSON.stringify({component,runId:receipt.runId,state:value.state,count:value.count,

@@ -35,6 +35,11 @@ test('the promotion fails closed with a wrong host, unread old rows, or missing 
   assert.equal(opsmapArchiveSite(approved({legacyRegistryUnconfirmed:1})),null);
   assert.equal(opsmapArchiveSite(approved({legacyRegistryVerified:false})),null);
   assert.equal(opsmapArchiveSite(approved({stagePinsUnconfirmed:1})),null);
+  const heldProof=approved({legacyRegistryHeldInArchive:1,osanRecoveryApprovalSha256:'8'.repeat(64)});
+  assert.equal(opsmapArchiveSite(heldProof),null);
+  assert.equal(opsmapArchiveSite({...heldProof,OPSMAP_OSAN_REGISTRY_RECOVERY_SHA256:'8'.repeat(64)}),'primary');
+  assert.equal(opsmapArchiveSite({...approved({legacyRegistryHeldInArchive:1,legacyRegistryUnconfirmed:1,
+    osanRecoveryApprovalSha256:'8'.repeat(64)}),OPSMAP_OSAN_REGISTRY_RECOVERY_SHA256:'8'.repeat(64)}),null);
   const copy=primaryOperationalEnv({...env,OPSMAP_STAGE_SYNC_WRITE_TOKEN:'old-stage-writer'});
   assert.equal(copy.GITHUB_TOKEN,'production-auth-only');
   assert.equal(copy.OPSMAP_STAGE_SYNC_READ_TOKEN,'fixture-reader');

@@ -18,6 +18,10 @@ export function primaryPreservationEvidence(env) {
       value.legacyRegistryVerified!==true||value.legacyRegistryUnconfirmed!==0||value.legacyFixedUnconfirmed!==0||value.stagePinsUnconfirmed!==0||
       !Number.isSafeInteger(value.legacyRegistryChecked)||value.legacyRegistryChecked<1||
       !Number.isSafeInteger(value.legacyFixedChecked)||value.legacyFixedChecked<1)return null;
+  if(value.legacyRegistryHeldInArchive!==undefined&&
+      (value.legacyRegistryHeldInArchive!==1||
+        !/^[a-f0-9]{64}$/.test(value.osanRecoveryApprovalSha256||'')||
+        value.osanRecoveryApprovalSha256!==env.OPSMAP_OSAN_REGISTRY_RECOVERY_SHA256))return null;
   return value;
 }
 
