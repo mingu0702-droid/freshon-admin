@@ -42,8 +42,8 @@ const code='T99111', address='경기도 오산시 검증로 91';
 const ledgerBody={schema:'opsmap-fixed-store-coordinates-v1',revision:0,records:{}};
 const ledger={...ledgerBody,sha256:syncDigest(ledgerBody)};
 
-function signed(at) {
-  const slot=Math.floor(at/3600000), issuedAt=new Date(at).toISOString(), origin='APPS_SCRIPT_TIME_TRIGGER';
+function signed(at,origin='APPS_SCRIPT_TIME_TRIGGER') {
+  const slot=Math.floor(at/3600000), issuedAt=new Date(at).toISOString();
   const day=new Date(at+9*3600000).toISOString().slice(0,10);
   const runId=syncDigest([1,origin,triggerId,principal,slot]);
   const signature=createHmac('sha256',secret).update(JSON.stringify([1,origin,triggerId,principal,issuedAt,slot,day,runId])).digest('hex');
@@ -850,20 +850,40 @@ test('the signed Stage route schedules only nighttime WMS from the existing hour
     measureMemory:async()=>({bytes:400*1024*1024,limit:512*1024*1024,measured:'synthetic'}),
     launch(){assert.fail('this fixture has no memory headroom for an actual launch');}});
   const base=await listen(t,app);
-  async function post(body){
-    return fetch(base+OPSMAP_SCHEDULED_ROUTE,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  async function post(body,path=OPSMAP_SCHEDULED_ROUTE){
+    return fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   }
-  const night=signed(at);
-  assert.equal((await post({...night,signature:'c'.repeat(64)})).status,403);
-  assert.deepEqual(await (await post(night)).json(),{state:'WMS_NIGHT_ACCEPTED',runId:night.runId});
+  const nightPath=OPSMAP_SCHEDULED_ROUTE+'/wms-night';
+  const night=signed(at,'APPS_SCRIPT_TIME_TRIGGER_WMS_NIGHT');
+  assert.equal((await post(night)).status,403);
+  assert.equal((await post(signed(at),nightPath)).status,403);
+  assert.equal((await post({...night,signature:'c'.repeat(64)},nightPath)).status,403);
+  assert.deepEqual(await (await post(night,nightPath)).json(),{state:'WMS_NIGHT_ACCEPTED',runId:night.runId});
   const nightName='fixed-master-daily-v1/jobs-wms-night-'+date+'.json';
   assert.deepEqual(files.get(nightName).value.jobs,[{kind:'wms-night',state:'PENDING'}]);
   assert.equal(files.size,1);
   at=Date.parse(date+'T21:04:00+09:00');
-  assert.deepEqual(await (await post(signed(at))).json(),{state:'WMS_NIGHT_ACCEPTED',runId:night.runId});
+  assert.deepEqual(await (await post(signed(at,'APPS_SCRIPT_TIME_TRIGGER_WMS_NIGHT'),nightPath)).json(),{state:'WMS_NIGHT_ACCEPTED',runId:night.runId});
   assert.equal(files.size,1);
   // Separate test clock observes a signed daylight handoff and its normal plan.
   at=Date.parse(date+'T07:10:00+09:00');
   assert.equal((await post(signed(at))).status,202);
   assert.deepEqual(files.get('fixed-master-daily-v1/jobs-'+date+'.json').value.jobs,[{kind:'fixed',state:'PENDING'}]);
+});
+
+test('a valid evening-only receipt cannot start daily work when the night feature is off',async t=>{
+  const app=express(),at=Date.parse(date+'T21:35:00+09:00');
+  const env={...storageEnv,OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED:'1',
+    OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE:path.join(os.tmpdir(),'fixture-settings.json'),
+    OPSMAP_STAGE_SYNC_TRIGGER_ID:triggerId,OPSMAP_STAGE_SYNC_EXECUTOR_SHA256:principal,
+    OPSMAP_STAGE_SYNC_SCHEDULER_SECRET:secret};
+  mountOpsmapScheduledRun(app,{env,now:()=>at,log(){},launch(){assert.fail('unexpected general worker');}});
+  const base=await listen(t,app);
+  const receipt=signed(at,'APPS_SCRIPT_TIME_TRIGGER_WMS_NIGHT');
+  const request=path=>fetch(base+OPSMAP_SCHEDULED_ROUTE+path,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(receipt)});
+  assert.equal((await request('')).status,403);
+  const night=await request('/wms-night');
+  assert.equal(night.status,503);
+  assert.deepEqual(await night.json(),{error:'WMS_NIGHT_QUEUE_UNAVAILABLE'});
 });

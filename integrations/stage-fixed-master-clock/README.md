@@ -1,0 +1,24 @@
+# Stage 정기 실행 시계
+
+기본 동작은 기존 Stage 프로젝트의 오전 트리거입니다. `OPSMAP_STAGE_SYNC_DISPATCH_V1`에 `profile`이 없으면 기존 호출과 서명을 사용합니다. 이 프로젝트는 Production Hub 트리거와 별개입니다.
+
+`profile: "STAGE_HOURLY_WMS_V1"`는 같은 Stage 프로젝트에 **시간당 트리거 1개**를 사용합니다.
+
+| 서울 시각 | 전송 |
+| --- | --- |
+| 06:00~07:00 | 기존 Stage 일일 작업 영수증 |
+| 20:00~22:00 | 다음 날짜 WMS 전용 영수증 |
+| 나머지 | 요청 없음 |
+
+WMS 전용 영수증은 전용 경로에서만 검증됩니다. Stage는 앞선 날 21:10부터 22:00 전까지만 수집을 시작하며, 20시·21시 영수증을 같은 날짜의 작업 하나에 연결합니다. 트리거의 실행 분은 Apps Script가 정하고, 무료 Stage가 잠들면 21:10 정각 실행은 보장되지 않습니다. 22시 이후에는 그 작업을 실행하지 않습니다.
+
+## 승인 후 교체
+
+1. 다음 06~07시 실행을 보존할 수 있는 시간에 별도 Stage 경로가 배포됐는지 확인합니다. WMS 야간 플래그는 아직 켜지 않아도 전용 경로가 기존 일일 작업을 호출하지 않습니다.
+2. 현재 Stage 프로젝트에서 `opsmapStageClockStatus`를 실행합니다. `triggerCount=1`, `triggerMatched=true`, `executorMatched=true`와 기존 오전 시간대를 확인하고 교체 전 구성을 보관합니다. 상태 함수는 트리거나 속성을 변경하지 않습니다. Apps Script 트리거 화면에서 실제 주기를 별도로 확인합니다.
+3. 코드와 매니페스트 후보를 별도 Stage 프로젝트에 승인 후 반영합니다. 기존 `OPSMAP_STAGE_SYNC_DISPATCH_V1`의 `enabled`만 먼저 `false`로 바꿉니다. 기존 승인 계정으로 오전 1개를 제거하고, 같은 함수 `opsmapStageFixedMasterClockTick`에 시간 기반 1시간 간격 트리거 **1개**를 등록합니다.
+4. 상태 함수에서 새 `clockTriggerId`를 확인합니다. Stage 서버의 `OPSMAP_STAGE_SYNC_TRIGGER_ID`와 Apps Script 설정의 `triggerId`에 같은 값을 사용합니다. 기존 실행자와 서명 키는 유지합니다. Server 설정을 적용한 뒤 새 트리거 1개와 실행자 일치를 재확인합니다.
+5. 두 쪽이 준비된 뒤 Stage WMS 야간 승인 플래그와 Apps Script의 `profile: "STAGE_HOURLY_WMS_V1"`, `enabled: true`를 승인 범위에서 적용합니다. 오전에는 일일 실행, 저녁에는 WMS 전용 수락 및 실제 게시를 각각 확인합니다.
+6. 되돌릴 때는 먼저 발송을 중지하고, 시간당 트리거를 제거한 뒤 기존 06~07시 일일 트리거 1개를 등록합니다. 새 UID를 양쪽에 맞추고 `profile`을 제거한 뒤 일일 발송을 다시 활성화합니다.
+
+트리거 설치 함수를 제공하지 않습니다. 상태 출력의 트리거 UID는 설정 대조에만 사용합니다. 서명키, 실행자 이메일 또는 실행자 지문은 출력하지 않습니다.

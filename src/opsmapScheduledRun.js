@@ -11,6 +11,7 @@ import {stageRecentOperationsSyncEnabled} from './stageRecentOperations.js';
 import {createStageScheduledJobs,signStageScheduledTask,stageSyncMemory,stageWmsNightWindow} from './stageScheduledJobs.js';
 
 export const OPSMAP_SCHEDULED_ROUTE='/internal/opsmap/scheduled-sync';
+export const OPSMAP_WMS_NIGHT_SCHEDULED_ROUTE=OPSMAP_SCHEDULED_ROUTE+'/wms-night';
 const maxDelay=10*60_000;
 const HOUR=3_600_000;
 const maxRuntime=18*60_000;
@@ -65,11 +66,11 @@ function recordSource(sources,key,date,error,evidence) {
       ...(evidence?.complete===true?{pages:evidence.pages,sourceRows:evidence.rawRows,uniqueDeliveries:evidence.responseRows,complete:true}:{})};
 }
 
-export function verifyOpsmapScheduleReceipt(value,{secret,scheduleId,executorHash,now=Date.now}={}) {
+export function verifyOpsmapScheduleReceipt(value,{secret,scheduleId,executorHash,now=Date.now,night=false}={}) {
   const {version,origin,triggerId,principal,issuedAt,slot,date,runId,signature}=value || {};
   const time=typeof issuedAt==='string'?Date.parse(issuedAt):NaN;
   if (typeof secret!=='string'||secret.length<32||secret.length>512||!/^\d{1,30}$/.test(scheduleId || '')||
-      !syncHash(executorHash)||version!==1||origin!=='APPS_SCRIPT_TIME_TRIGGER'||triggerId!==scheduleId||principal!==executorHash||
+      !syncHash(executorHash)||version!==1||origin!==(night?'APPS_SCRIPT_TIME_TRIGGER_WMS_NIGHT':'APPS_SCRIPT_TIME_TRIGGER')||triggerId!==scheduleId||principal!==executorHash||
       !Number.isFinite(time)||Math.abs(now()-time)>maxDelay||slot!==Math.floor(time/HOUR)||date!==kstDate(time)||
       runId!==syncDigest([version,origin,triggerId,principal,slot])||!syncHash(signature)||Object.keys(value).length!==9) {
     throw Error('OPSMAP_SCHEDULE_RECEIPT');
@@ -207,21 +208,31 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     },delay);
     jobTimer.unref();
   }
+  async function acceptNight(receipt,res){
+    if(!jobs||!nightWms||!wmsPublish)return res.status(503).json({error:'WMS_NIGHT_QUEUE_UNAVAILABLE'});
+    let runId;
+    try {runId=await jobs.accept(receipt,['wms-night'],{night:true});}
+    catch{return res.status(503).json({error:'WMS_NIGHT_QUEUE_UNCONFIRMED'});}
+    if(jobFlight)jobWake=true;
+    else scheduleJobs(0);
+    return res.status(202).json({state:'WMS_NIGHT_ACCEPTED',runId});
+  }
+  app.post(OPSMAP_WMS_NIGHT_SCHEDULED_ROUTE,express.json({limit:'2kb',inflate:false}),async(req,res)=>{
+    res.set('Cache-Control','no-store');
+    let receipt;
+    try{
+      receipt=verifyOpsmapScheduleReceipt(req.body,{...opsmapScheduleConfig(env),now,night:true});
+      if(!stageWmsNightWindow(receipt))throw Error('WMS_NIGHT_WINDOW_MISSED');
+    }catch{return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});}
+    return acceptNight(receipt,res);
+  });
   app.post(OPSMAP_SCHEDULED_ROUTE,express.json({limit:'2kb',inflate:false}), async (req,res)=>{
     res.set('Cache-Control','no-store');
     let receipt;
     const config={...opsmapScheduleConfig(env),now};
     try {receipt=verifyOpsmapScheduleReceipt(req.body,config);}
     catch {return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});}
-    if(nightWms&&stageWmsNightWindow(receipt)){
-      if(!jobs||!wmsPublish)return res.status(503).json({error:'WMS_NIGHT_QUEUE_UNAVAILABLE'});
-      let runId;
-      try {runId=await jobs.accept(receipt,['wms-night'],{night:true});}
-      catch{return res.status(503).json({error:'WMS_NIGHT_QUEUE_UNCONFIRMED'});}
-      if(jobFlight)jobWake=true;
-      else scheduleJobs(0);
-      return res.status(202).json({state:'WMS_NIGHT_ACCEPTED',runId});
-    }
+    if(nightWms&&stageWmsNightWindow(receipt))return acceptNight(receipt,res);
     if (independent) {
       try {await enqueueOpsmapSchedule(openDispatchStore(),receipt,config);}
       catch {return res.status(503).json({error:'OPSMAP_SCHEDULE_DISPATCH_UNCONFIRMED'});}

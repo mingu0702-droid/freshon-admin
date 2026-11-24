@@ -8,6 +8,7 @@
     "https://www.googleapis.com/auth/userinfo.email"
   ],
   "urlFetchWhitelist": [
-    "https://freshon-admin-stage-preview-template.onrender.com/internal/opsmap/scheduled-sync"
+    "https://freshon-admin-stage-preview-template.onrender.com/internal/opsmap/scheduled-sync",
+    "https://freshon-admin-stage-preview-template.onrender.com/internal/opsmap/scheduled-sync/wms-night"
   ]
 }
