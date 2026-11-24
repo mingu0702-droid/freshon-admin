@@ -80,6 +80,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   let transferKeys=new Set();
   let savedView=null,reviewLine=null,reviewLineKey=null;
   const isOpen=()=>active&&!controls.hidden;
+  const comparisonMode=()=>Boolean(screenReview&&mode.value==='day');
   const dayNow=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const tomorrow=day=>new Date(Date.parse(day)+86400_000).toISOString().slice(0,10);
   function updateDateLimit(periodMode) {
@@ -90,14 +91,26 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   if(screenReview) {
     const anchor=primary.closest('label'), search=vehicleSearch.closest('label');
     anchor.firstChild.textContent='비교 기준 호차';
-    search.firstChild.textContent='배송 매장 검색';
-    vehicleSearch.placeholder='매장명·고객코드·우편번호·호차';
     choices.prepend(anchor,search);
     screenReview.attach({choices,detail});
-    details.querySelector('summary').textContent='호차 비교 및 가상 이관';
   }
   const map=()=>bridge.state.map;
   const sdk=()=>window.kakao?.maps;
+
+  function syncComparisonLayout() {
+    if (!screenReview) return;
+    const visible=active&&comparisonMode();
+    if (visible===(document.body.dataset.dispatchReview==='compare')) return;
+    vehicleSearch.closest('label').firstChild.textContent=visible?'배송 매장 검색':'오산 호차 검색';
+    vehicleSearch.placeholder=visible?'매장명·고객코드·우편번호·호차':'호차 번호';
+    if (visible) {
+      document.body.dataset.dispatchReview='compare';
+      screenReview.open();
+    } else {
+      delete document.body.dataset.dispatchReview;
+      screenReview.close();
+    }
+  }
 
   function clearMarkers() {
     for (const {overlay} of markers.values()) overlay.setMap(null);
@@ -121,7 +134,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     const points=window.MapViewPolicy.stableClusters(markerRows, row=>project.containerPointFromCoords(
       new (sdk().LatLng)(row.lat,row.lng)), level, '', {width:mapNode.clientWidth,height:mapNode.clientHeight},
       {mode:'DATE_ROUTE',grouping:level<=5?'locations':'territory',maxMarkers:180,
-        ...(screenReview?{sourceVersion:'dispatch-deliveries'}:{})});
+        ...(comparisonMode()?{sourceVersion:'dispatch-deliveries'}:{})});
     const next=new Map();
     for (const row of points) {
       const members=row.clusterRows||[row];
@@ -130,7 +143,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       const existing=markers.get(key);
       const rendering=existing || makeMarker(row,members);
       rendering.button.classList.toggle('selected',selected);
-      if (screenReview) rendering.button.toggleAttribute('data-transfer-draft',
+      if (comparisonMode()) rendering.button.toggleAttribute('data-transfer-draft',
         members.some(member=>transferKeys.has(member.dispatchKey)));
       rendering.button.setAttribute('aria-pressed',String(selected));
       rendering.overlay.setZIndex?.(selected?62:50);
@@ -156,7 +169,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
           if (role!=='overview'&&map().getLevel()>5) map().setLevel(5);
         } else {
           controls.open=true;
-          if(screenReview) screenReview.showSharedLocation(members);
+          if(comparisonMode()) screenReview.showSharedLocation(members);
           else {
             renderStoreList(members);
             stores.querySelector('button')?.focus({preventScroll:true});
@@ -164,7 +177,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
         }
       }});
     button.dataset.dispatchRole=role;
-    if(screenReview)button.dataset.dispatchMembers=String(members.length);
+    if(comparisonMode())button.dataset.dispatchMembers=String(members.length);
     if (members.some(member=>member.dispatchCandidate)) button.dataset.dispatchCandidate='';
     if (!isGroup&&row.customerCode) button.dataset.dispatchCustomer=row.customerCode;
     if (!isGroup&&row.dispatchArea) button.dataset.dispatchArea=row.dispatchArea;
@@ -515,7 +528,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   }
 
   function renderDetail() {
-    if (screenReview) return screenReview.update({
+    if (period) return renderPeriodDetail();
+    if (comparisonMode()) return screenReview.update({
       model:period?null:model,routes,deliveryRows,zip:model?postcode.value:'',selection,showDistance:showReviewDistance,
       nearest:nearestDispatchStop,
       pickStop(code,vehicle){
@@ -547,7 +561,6 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
         queueMarkers();
       },
     });
-    if (period) return renderPeriodDetail();
     if (!model) {
       detail.innerHTML='<p class="dispatch-empty">배송일을 조회하면 금액과 매장을 비교할 수 있습니다.</p>';
       return;
@@ -727,7 +740,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   secondary.onchange=updateRoutes;
   fleetScope.onchange=renderFleet;
   vehicleSearch.oninput=()=>{
-    if (screenReview) screenReview.search(vehicleSearch.value);
+    if (comparisonMode()) screenReview.search(vehicleSearch.value);
     else if (period) populatePeriodVehicles();
     else if (model) {populateDayVehicles();renderFleet();}
   };
@@ -806,6 +819,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     fleet.hidden=periodMode;
     $('.dispatch-legend').hidden=periodMode;
     $('[data-date-label]').textContent=periodMode?'기간 종료일':'배송일';
+    syncComparisonLayout();
+    requestAnimationFrame(()=>{if(isOpen())map()?.relayout();});
     form.requestSubmit();
   };
   controls.addEventListener('keydown',event=>{if(event.key==='Escape' && document.activeElement?.tagName==='SELECT') event.stopPropagation();});
@@ -823,7 +838,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       mapReset?.addEventListener('click',fitRoutes);
       const today=updateDateLimit(mode.value==='period');
       date.value=today;
-      screenReview?.open();
+      syncComparisonLayout();
       window.addEventListener('map-sdk-ready',wireMap);
       window.addEventListener('map-store-selected',selectFromMap);
       window.addEventListener('map-fixed-master-ready',renderDetail);

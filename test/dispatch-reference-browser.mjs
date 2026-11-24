@@ -31,7 +31,7 @@ const outline={id:'01234',box:[127.0347,37.4999,127.0353,37.5013],rings:[
   [[127.0347,37.4999],[127.0353,37.4999],[127.0353,37.5013],[127.0347,37.5013]],
 ]};
 
-function fixtureHtml() {
+function fixtureHtml({stage=false}={}) {
   return '<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'+
     '<style>.workspace{height:calc(100vh - 95px)}#leftPanel{display:flex;flex-direction:column;}#map{position:relative;overflow:hidden;}'+
     '.pin{padding:4px;color:#fff;background:var(--pin)} label{display:block}</style><body class="dotRestored">'+
@@ -45,7 +45,7 @@ function fixtureHtml() {
     'window.MapUiLocalBridge={state:{map},dispatchReferencePin:(row,{color,label,title,pick})=>{const button=document.createElement("button");'+
     'button.className="dispatch-map-pin";button.title=title;button.onclick=pick;const pin=document.createElement("span");pin.className="pin";'+
     'pin.style.setProperty("--pin",color);pin.textContent=label;button.append(pin);return button;},'+
-    'isStagePreview:()=>true,dispatchReferenceRegisteredAddress:()=>"검증된 등록 주소",'+
+    'isStagePreview:()=>'+stage+',dispatchReferenceRegisteredAddress:()=>"검증된 등록 주소",'+
     'dispatchReferenceFixedVehicle:()=>208,selectDispatchReferenceStore:code=>{window.picked=code;'+
     'dispatchEvent(new CustomEvent("map-store-selected",{detail:{customerCode:code}}));return true;}};'+
     'document.querySelector("#modeDaily").onclick=()=>{document.querySelector("#modePeriod").setAttribute("aria-pressed","false");'+
@@ -84,7 +84,7 @@ async function exercise() {
     const url=new URL(route.request().url());
     assert.equal(url.origin,origin);
     const filename=path.posix.basename(url.pathname);
-    if (url.pathname==='/') return route.fulfill({contentType:'text/html',body:fixtureHtml()});
+    if (url.pathname==='/') return route.fulfill({contentType:'text/html',body:fixtureHtml({stage:overviewFixture})});
     if (filename==='fixture.js') return route.fulfill({contentType:'text/javascript',body:fixture});
     if (filename==='dispatch-reference-day') {
       reads++;
@@ -264,8 +264,12 @@ async function exercise() {
     await page.evaluate(()=>{window.signedIn=false;window.purge();});
     assert.equal(await page.locator('#modeDispatchReference').count(),0);
     overviewFixture=true;
-    await page.goto(origin+'/?dispatch-review=compare');
+    await page.goto(origin+'/');
+    const previousReads=reads;
     await page.evaluate(()=>{window.signedIn=true;dispatchEvent(new Event('map-staff-ready'));});
+    assert.equal(await page.locator('#modeDispatchReference').getAttribute('aria-pressed'),'false');
+    assert.equal(reads,previousReads);
+    await page.locator('#modeDispatchReference').click();
     const comparison=page.getByLabel('비교 기준 호차');
     await comparison.waitFor({state:'visible'});
     const roster=page.getByRole('list',{name:'확정배차 매장 목록'});
@@ -322,9 +326,23 @@ async function exercise() {
     assert.equal(await page.locator('.dispatch-review-dock').count(),0);
     assert.equal(await page.locator('#map').count(),1);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    await page.getByLabel('조회 방식').selectOption('period');
+    await details.getByRole('heading',{name:'오산 기간별 배송 분석'}).waitFor();
+    assert.equal(await roster.isVisible(),false);
+    assert.equal(await page.locator('body').getAttribute('data-dispatch-review'),null);
+    await page.getByLabel('분석기간').selectOption('90');
+    await details.getByText('미확인 날짜 88일',{exact:true}).waitFor();
+    await page.getByLabel('조회 방식').selectOption('day');
+    await page.getByRole('button',{name:'배송 매장',exact:true}).click();
+    await roster.getByRole('listitem').first().waitFor({state:'visible'});
+    assert.equal(await page.locator('body').getAttribute('data-dispatch-review'),'compare');
     await page.evaluate(()=>{window.signedIn=false;window.purge();});
     assert.equal(await page.locator('[data-compare-vehicle]').count(),0);
     assert.equal(await page.locator('#map .dispatch-map-pin').count(),0);
+    await page.goto(origin+'/?dispatch-review=compare');
+    await page.evaluate(()=>{window.signedIn=true;dispatchEvent(new Event('map-staff-ready'));});
+    await details.getByRole('heading',{name:'오산 전체 배송 현황'}).waitFor();
+    assert.equal(await page.locator('#modeDispatchReference').getAttribute('aria-pressed'),'true');
   }
   assert.deepEqual(errors,[]);
   assert.deepEqual(writes,[]);

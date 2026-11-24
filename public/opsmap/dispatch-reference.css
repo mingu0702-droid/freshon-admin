@@ -116,7 +116,6 @@
   body[data-dispatch-review=compare] .dispatch-controls { padding:16px 13px; }
   body[data-dispatch-review=compare] .dispatch-controls > summary { font-size:16px; }
   body[data-dispatch-review=compare] #leftPanel > .scrollside,
-  body[data-dispatch-review=compare] .dispatch-date .dispatch-mode,
   body[data-dispatch-review=compare] .dispatch-secondary,
   body[data-dispatch-review=compare] .dispatch-choices > label:has([name=postcodeSearch],[name=postcode]),
   body[data-dispatch-review=compare] .dispatch-choices > .dispatch-fleet,

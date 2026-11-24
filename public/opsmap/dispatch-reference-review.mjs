@@ -13,6 +13,7 @@ const fixedClock=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'n
 export function createDispatchScreenReview({bridge,readFixedArea}) {
   const left=document.createElement('div');
   left.className='dispatch-compare-left';
+  left.hidden=true;
   left.innerHTML='<div class="dispatch-compare-switch" role="group" aria-label="배차 목록">' +
     '<button type="button" data-left-view="stores" aria-pressed="true">배송 매장</button>' +
     '<button type="button" data-left-view="nearby" aria-pressed="false" disabled>인접 호차</button></div>' +
@@ -285,9 +286,9 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
   }
 
   return {attach,update,updateNearby,search,showSharedLocation(members){sharedLocation=members;render();},
-    open(){active=true;render();},
+    open(){active=true;left.hidden=false;render();},
     close(){active=false;areaRequest?.abort();areaProof=null;view=null;sharedLocation=[];drafts.clear();comparisons.clear();
-      indexedRows=[];overview=null;roster.setRows([]);showLeft('stores');
+      indexedRows=[];overview=null;left.hidden=true;roster.setRows([]);showLeft('stores');
       sourceDetailsOpen=draftsOpen=false;nearby.replaceChildren();panel.replaceChildren();},
   };
 }

@@ -6,7 +6,8 @@ const bridge=window.MapUiLocalBridge;
 if (tabs && sidebar && bridge) {
   const desktop=matchMedia('(min-width:901px) and (any-pointer:fine)');
   const requestedReview=new URLSearchParams(location.search).get('dispatch-review');
-  const review=bridge.isStagePreview?.()&&requestedReview==='compare';
+  const comparisonEnabled=bridge.isStagePreview?.()===true;
+  const openFromLink=comparisonEnabled&&requestedReview==='compare';
   const tab=document.createElement('button');
   Object.assign(tab,{id:'modeDispatchReference',className:'tab',type:'button',textContent:'배차 참고'});
   tab.setAttribute('aria-pressed','false');
@@ -23,7 +24,7 @@ if (tabs && sidebar && bridge) {
     return response.json();
   }
   async function readDay(date,{signal}) {
-    const result=await read('dispatch-reference-day',{date},signal,review?45_000:15_000);
+    const result=await read('dispatch-reference-day',{date},signal,comparisonEnabled?45_000:15_000);
     if (result.contract!=='opsmap-dispatch-reference-v1'||result.date!==date||result.center!=='osan') throw Error('DISPATCH_REFERENCE_DAY_INVALID');
     return result;
   }
@@ -35,7 +36,7 @@ if (tabs && sidebar && bridge) {
     return result;
   }
   async function readOutline(id,{signal}) {
-    const result=await read('shadow-coverage/postal/outline',{id},signal,review?40_000:15_000);
+    const result=await read('shadow-coverage/postal/outline',{id},signal,comparisonEnabled?40_000:15_000);
     return result.data?.id===id?result.data:null;
   }
 
@@ -85,12 +86,12 @@ if (tabs && sidebar && bridge) {
     try {
       if (!feature) {
         stylesheet ||= Object.assign(document.createElement('link'),{
-          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261125-overview',import.meta.url),
+          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261125-staff-compare',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261125-overview');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261125-staff-compare');
         if (opening!==attempt||!session()) return;
-        const createReview=review?(await import('./dispatch-reference-review.mjs?v=20261125-overview')).createDispatchScreenReview:null;
+        const createReview=comparisonEnabled?(await import('./dispatch-reference-review.mjs?v=20261125-staff-compare')).createDispatchScreenReview:null;
         if (opening!==attempt||!session()) return;
         const screenReview=createReview?.({bridge,readFixedArea});
         feature=mountDispatchReference({workspace,sidebar,bridge,readDay,readPeriod,readOutline,screenReview});
@@ -99,7 +100,6 @@ if (tabs && sidebar && bridge) {
       previous=[...tabs.querySelectorAll('button[aria-pressed="true"]')];
       for (const button of previous) button.setAttribute('aria-pressed','false');
       document.body.classList.add('dispatch-reference-open');
-      if(review)document.body.dataset.dispatchReview='compare';
       tab.textContent='배차 참고';
       tab.setAttribute('aria-pressed','true');
       feature.open();
@@ -130,7 +130,7 @@ if (tabs && sidebar && bridge) {
   function sync() {
     if (session()&&desktop.matches) {
       if (!tab.isConnected) tabs.append(tab);
-      if(review&&!openedReview){openedReview=true;requestAnimationFrame(()=>tab.click());}
+      if(openFromLink&&!openedReview){openedReview=true;requestAnimationFrame(()=>tab.click());}
     } else {
       close();
       tab.remove();
