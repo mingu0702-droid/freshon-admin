@@ -225,7 +225,7 @@ test('a new closed day combines sealed orders with explicit live delivery eviden
 
 test('source order reads require an exact day, center, confirmed rows and complete line totals',async()=>{
   const date='2026-11-18', fetched=[], diagnostics=[];
-  const good={stockDate:date,logCdName:'오산물류센터',dcOutDate:'확정',estCd:'S1',dlvyEstCd:'S1',
+  const good={stockDate:date,logCdName:'오산물류센터',dcOutDate:'확정',baechaName:'야간배송',estCd:'S1',dlvyEstCd:'S1',
     orderNo:'O100',seq:1,orderQty:2,totalCnt:1};
   const read=createStageRecentOrdersReader({env:{RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
     OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'},
@@ -236,6 +236,8 @@ test('source order reads require an exact day, center, confirmed rows and comple
     assert.equal(query.get('stockDateS'),date);
     assert.equal(query.get('stockDateE'),date);
     assert.equal(query.get('dcOutDate'),'1');
+    assert.equal(query.get('baecha'),'2');
+    assert.equal(query.get('deliveGbn'),'');
     assert.equal(query.get('sortType'),'3');
     const center=query.get('logCd');
     fetched.push(center);
@@ -260,12 +262,15 @@ test('source order reads require an exact day, center, confirmed rows and comple
 test('order diagnostics distinguish empty, unsafe and inaccessible source results without row fields',async()=>{
   const date='2026-11-20', env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
     OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'};
-  const row={stockDate:date,logCdName:'오산물류센터',logCd:'011',dcOutDate:'확정',estCd:'S1',dlvyEstCd:'S1',
+  const row={stockDate:date,logCdName:'오산물류센터',logCd:'011',dcOutDate:'확정',baechaName:'야간배송',estCd:'S1',dlvyEstCd:'S1',
     orderNo:'private-fixture-order',seq:1,orderQty:2,totalCnt:1};
   const cases=[
     ['SOURCE_EMPTY',[]],['RESPONSE_INVALID',null],
     ['ROW_DATE_MISMATCH',[{...row,stockDate:'2026-11-19'}]],
     ['ROW_CENTER_MISMATCH',[{...row,logCd:'012'}]],
+    ['ROW_DISPATCH_SCOPE_MISMATCH',[{...row,baechaName:'주간 CJ'}]],
+    ['ROW_DISPATCH_SCOPE_MISMATCH',[{...row,baecha:'1'}]],
+    ['ROW_DISPATCH_SCOPE_MISMATCH',[{...row,baechaName:undefined}]],
     ['ROW_CUSTOMER_INVALID',[{...row,dlvyEstCd:'S2'}]],
     ['ROW_ORDER_KEY_INVALID',[{...row,seq:0.5}]],
     ['ROW_DUPLICATE',[{...row,totalCnt:2},row]],
@@ -299,7 +304,7 @@ test('streamed orders validate fragmented UTF-8, row/scope counts, and the compl
   const date='2026-11-20', diagnostics=[];
   const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
     OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'};
-  const detail={stockDate:date,logCdName:'영남센터',dcOutDate:'확정',estCd:'S1',dlvyEstCd:'S1',
+  const detail={stockDate:date,logCdName:'영남센터',dcOutDate:'확정',baechaName:'야간배송',estCd:'S1',dlvyEstCd:'S1',
     orderNo:'O100',seq:1,orderQty:2,totalCnt:1,extra:'한글 " \\ } ] : , '.repeat(6_000)};
   const body=JSON.stringify({other:{data:[1,{text:'[[]]'}]},data:[detail,{stockDate:'소계'}],ok:true});
   let responseText=body, cancelCount=0;

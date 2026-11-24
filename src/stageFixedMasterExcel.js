@@ -6,6 +6,7 @@ import {normalizeFixedMasterCustomerKey} from './fixedMasterCustomerKey.js';
 import {projectFixedVehicles} from './fixedVehicleProjection.js';
 import {FIXED_MASTER_EXCEL_SOURCE,stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {loginFreshonOverHttp} from './scraper/freshonHttpSession.js';
+import {FRESHON_NIGHT_DISPATCH} from './opsmapSyncPolicy.js';
 
 const origin='https://mis.freshon.co.kr';
 const endpoint=origin+'/bo/wm/standard/fixedAlctnList';
@@ -85,7 +86,7 @@ export function createStageFixedMasterExcelSource({env=process.env,fetchImpl=fet
       const form=new URLSearchParams({
         page:'0',isCount:'true',isPaging:excel?'false':'true',size:excel?'1000':'1',sort:'est_cd,ASC',
         excelFileNm:'고정배차정보 내역_'+observedOn.replaceAll('-',''),logCd:center,estCd:'',estName:'',estNm:'',
-        estGbn:'',startDate:'',endDate:'',carCd:'',carNm:'',shipGbn:'1',baecha:'',
+        estGbn:'',startDate:'',endDate:'',carCd:'',carNm:'',shipGbn:'1',baecha:FRESHON_NIGHT_DISPATCH,
         ...(excel?{sortYn:'',excelExcute:'true'}:{})
       });
       const signal=AbortSignal.any([timeout,AbortSignal.timeout(excel?5*60_000:30_000)]);

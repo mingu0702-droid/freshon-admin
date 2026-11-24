@@ -156,6 +156,7 @@ test('Excel verifies each center around a sequential download and stops on sourc
         assert.equal(request.headers.Cookie,'fixture-session');
         assert.equal(request.body.get('isPaging'),excel?'false':'true');
         assert.equal(request.body.get('shipGbn'),'1');
+        assert.equal(request.body.get('baecha'),'2');
         if(excel)return new Response(String(index));
         return Response.json({status:200,data:[{estCd:codes[index],logCd:center,mainCarSeqNm:'101',
           totalCnt:drift&&requests.length===3?2:1,...Object.fromEntries(fieldNames.map(field=>[field,'101']))}]});
@@ -563,6 +564,7 @@ test('the source reads only the scoped FreshOn form with at most one authorized 
       assert.equal(options.method,'POST');
       assert.equal(options.redirect,'manual');
       const params=new URLSearchParams(options.body);
+      assert.equal(params.get('baecha'),'2');
       if (++calls===1) {
         assert.equal(options.headers.Cookie,'initial');
         return new Response(null,{status:302,headers:{Location:'/login'}});

@@ -5,7 +5,7 @@ import {gzip, gunzip} from 'node:zlib';
 import {customerRegistryAddressHash} from './customerRegistry.js';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
 import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
-import {SYNC_CENTERS} from './opsmapSyncPolicy.js';
+import {FRESHON_NIGHT_DISPATCH,FRESHON_NIGHT_DISPATCH_LABEL,SYNC_CENTERS} from './opsmapSyncPolicy.js';
 
 const repository = 'mingu0702-droid/freshon-cache';
 const branch = 'stage/opsmap-snapshots';
@@ -150,40 +150,21 @@ export async function collectStageNationalRegistry(readCenter) {
   return {rows:normalizeRows(rows),counts};
 }
 
-// First-seen registrations need positive, independent in-scope evidence. A
-// previously published active registration remains eligible on subsequent days.
-export function verifiedNationalRegistryMembership(approved,previous,recentDays,closedDate) {
-  const closedAt=Date.parse(closedDate+'T00:00:00Z');
-  if(!(approved instanceof Map)||!Array.isArray(recentDays)||!Number.isFinite(closedAt)||
-      new Date(closedAt).toISOString().slice(0,10)!==closedDate)
-    throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
-  const firstDate=new Date(closedAt-6*86400000).toISOString().slice(0,10);
-  const membership=new Map(approved), blocked=new Set(), admissions=new Map();
+export function verifiedNationalRegistryMembership(approved,previous) {
+  if(!(approved instanceof Map))throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+  const membership=new Map(approved), excludedCustomers=new Set();
   for(const row of normalizeRows(previous,true)){
     const {customerCode:code,centerGroup:center,addressHash,lifecycle}=row;
     if(lifecycle==='DELETED'){
       membership.delete(code);
-      blocked.add(code);
+      excludedCustomers.add(code);
     }else membership.set(code,{center,addressHash});
   }
-  for(const day of recentDays){
-    if(day.source!=='freshon_orders'||day.date<firstDate||day.date>closedDate)continue;
-    if(!SYNC_CENTERS.includes(day.centerKey)||!Array.isArray(day.rows))
-      throw failure('NATIONAL_REGISTRY_ADMISSION_EVIDENCE');
-    for(const {customerCode:code,evidence} of day.rows){
-      if(!customerCode(code)||evidence!=='order_confirmed')throw failure('NATIONAL_REGISTRY_ADMISSION_EVIDENCE');
-      if(membership.has(code)||blocked.has(code))continue;
-      if(admissions.has(code)&&admissions.get(code)!==day.centerKey){
-        admissions.delete(code);
-        blocked.add(code);
-      }else admissions.set(code,day.centerKey);
-    }
-  }
-  if(membership.size+admissions.size>limit)throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
-  return {membership,admissions};
+  if(membership.size>limit)throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+  return {membership,excludedCustomers};
 }
 
-export function createStageNationalRegistrationSource({env=process.env,fetchImpl=fetch,login,membership,admissions}={}) {
+export function createStageNationalRegistrationSource({env=process.env,fetchImpl=fetch,login,membership,excludedCustomers}={}) {
   if (!stageNationalRegistryEnabled(env) || (env.FRESHON_BASE_URL && new URL(env.FRESHON_BASE_URL).origin!==freshonOrigin))
     throw failure('NATIONAL_REGISTRY_SOURCE_APPROVAL');
   let contract;
@@ -195,9 +176,10 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
       !['BODY','FIRST_ROW'].includes(contract.totalLocation) || !field(contract.addressField) ||
       !field(contract.centerField) || !field(contract.activeField) || contract.updatedAtField!=null&&!field(contract.updatedAtField))
     throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
-  const verifiedChanges=admissions!==undefined;
-  if(verifiedChanges&&(!(membership instanceof Map)||!(admissions instanceof Map)))
+  const verifiedChanges=excludedCustomers!==undefined;
+  if(verifiedChanges&&(!(membership instanceof Map)||!(excludedCustomers instanceof Set)))
     throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
+  const seen=verifiedChanges?new Set():null, selected=verifiedChanges?new Set():null;
   let cookie=String(env.FRESHON_COOKIE||''), loginAttempted=false;
   const budget=AbortSignal.timeout(membership?NATIONAL_REGISTRY_WORKER_LIMIT-3*60_000:10*60_000);
   async function ensureSession(force=false) {
@@ -291,11 +273,19 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
           if (membership) {
             const approved=membership.get(code);
             if(verifiedChanges){
-              const admitted=admissions.get(code);
-              if(!approved&&!admitted)continue;
-              if(activeCustomers.has(code))throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
+              if(!customerCode(code))continue;
+              // ciList ignores a submitted baecha filter. Check the official
+              // classification returned for each active registration instead.
+              const night=readField(row,'baecha')===FRESHON_NIGHT_DISPATCH&&
+                readField(row,'baechaName')===FRESHON_NIGHT_DISPATCH_LABEL;
+              const eligible=night&&!excludedCustomers.has(code);
+              if(selected.has(code)||(approved||eligible)&&seen.has(code))
+                throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
+              seen.add(code);
+              if(approved||eligible)selected.add(code);
+              if(!eligible)continue;
               activeCustomers.add(code);
-              if((!approved&&admitted!==center)||typeof address!=='string'||!address.trim())continue;
+              if(approved&&(typeof address!=='string'||!address.trim()))continue;
             }else{
               if (approved?.center!==center) continue;
               if (captured.has(code)) throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
@@ -303,7 +293,8 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
               if (typeof address!=='string' || customerRegistryAddressHash(address)!==approved.addressHash) continue;
             }
           }
-          if (status==='Y' && typeof address!=='string') throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
+          if (status==='Y' && typeof address!=='string' && (!verifiedChanges||address!=null))
+            throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
           rows.push(rowOf({customerCode:code,customerName:readField(row,'estName')??'',
             basicAddress:address??'',centerGroup:center,lifecycle:status==='Y'?'ACTIVE':'DELETED',
             sourceUpdatedAt:contract.updatedAtField?readField(row,contract.updatedAtField)??'':''}));

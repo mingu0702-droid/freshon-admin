@@ -3,6 +3,7 @@ import {createFixedVehicleReader} from './fixedVehicleProjection.js';
 import {createPrivateGithubJsonStore, fixedEnvelope, fixedTupleData, validateFixedEnvelope} from './fixedVehicleStore.js';
 import {createFixedVehicleFileStore} from './opsmap-abc/fixedVehicleStore.js';
 import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
+import {FRESHON_NIGHT_DISPATCH} from './opsmapSyncPolicy.js';
 
 const MIS = 'https://mis.freshon.co.kr', fixedPath = '/bo/wm/standard/fixedAlctnList';
 const repo = 'mingu0702-droid/freshon-cache', branch = 'stage/opsmap-snapshots';
@@ -420,9 +421,11 @@ export function createStageFixedMasterSource({env=process.env, fetchImpl=fetch, 
     async readJson(pathname,options) {
       if (pathname!==fixedPath || options.method!=='POST' || ++calls>pageRequestLimit) throw fail('FIXED_MASTER_STAGE_SOURCE_SCOPE');
       const pageDeadline=AbortSignal.timeout(options.timeoutMs);
+      const body=new URLSearchParams(options.body);
+      body.set('baecha',FRESHON_NIGHT_DISPATCH);
       let response;
       try {
-        response=await fetchImpl(MIS+fixedPath,{method:'POST',redirect:'manual',body:options.body,
+        response=await fetchImpl(MIS+fixedPath,{method:'POST',redirect:'manual',body:body.toString(),
           signal:AbortSignal.any([limit,pageDeadline]),
           headers:{...options.headers,Accept:'application/json, text/plain, */*','X-Requested-With':'XMLHttpRequest',
             Origin:MIS,Referer:MIS+'/bo/main',Cookie:cookie}});

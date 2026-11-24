@@ -262,17 +262,14 @@ async function runScheduled(job,settingsFile){
           return createStageNationalRegistryReader({store})?.read();
         }});
         const membership=scopedNationalRegistryMembership(job?.registryScope,snapshot.rows,recovered);
-        const verifiedChanges=env.OPSMAP_STAGE_NATIONAL_REGISTRY_VERIFIED_CHANGES_APPROVED==='1'&&
-          env.OPSMAP_STAGE_FIXED_MASTER_SOURCE==='excel';
+        const verifiedChanges=env.OPSMAP_STAGE_NATIONAL_REGISTRY_VERIFIED_CHANGES_APPROVED==='1';
         const source=verifiedChanges?{
           async prepareSource(previous){
-            const date=new Date(Date.parse(receipt.date+'T00:00:00Z')-86400000).toISOString().slice(0,10);
-            const recent=createStageRecentOperationsStore({env});
-            const sealed=recent?await recent.read().catch(()=>null):null;
-            const selection=verifiedNationalRegistryMembership(membership,previous,sealed?.ledger?.days??[],date);
+            const selection=verifiedNationalRegistryMembership(membership,previous);
             return {...selection,readCenter:createStageNationalRegistrationSource({env,...selection})};
           },
           async confirmCenterMoves(codes){
+            if(env.OPSMAP_STAGE_FIXED_MASTER_SOURCE!=='excel')return new Map();
             try{
               const store=stageFixedMasterStorage({env});
               const daily=createStageDailyFixedMasterReader({store,baseline:stageFixedMasterBaseline({env,store})});

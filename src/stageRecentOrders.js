@@ -1,6 +1,7 @@
 import {opsmapArchiveSite} from './stageScope.js';
 import {waitForPhotoSignal} from './opsmapDeliveryAdminTransport.js';
 import {isDay} from './shadowCoverage/coverageFiles.js';
+import {FRESHON_NIGHT_DISPATCH,FRESHON_NIGHT_DISPATCH_LABEL} from './opsmapSyncPolicy.js';
 
 const origin='https://mis.freshon.co.kr';
 const orderUrl=origin+'/bo/sm/order/orderInfoList';
@@ -19,6 +20,8 @@ function projectOrders(date, centerKey) {
     if (row.stockDate!==date) return 'ROW_DATE_MISMATCH';
     if (!labels.includes(row.logCdName) || row.logCd && String(row.logCd)!==center) return 'ROW_CENTER_MISMATCH';
     if (row.dcOutDate!=='확정') return 'ROW_NOT_CONFIRMED';
+    if (row.baechaName!==FRESHON_NIGHT_DISPATCH_LABEL ||
+        row.baecha && row.baecha!==FRESHON_NIGHT_DISPATCH) return 'ROW_DISPATCH_SCOPE_MISMATCH';
     if (!/^[A-Z]\d{1,20}$/.test(row.estCd||'') || row.estCd!==row.dlvyEstCd) return 'ROW_CUSTOMER_INVALID';
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(row.orderNo||'') || !/^\d{1,12}$/.test(row.seq??'')) return 'ROW_ORDER_KEY_INVALID';
     const line=row.orderNo+':'+row.seq;
@@ -196,7 +199,7 @@ export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,
       if (existingCenters.has(centerKey)) {report(centerKey,'ALREADY_OBSERVED');continue;}
       if (budget.aborted) {report(centerKey,'BUDGET_EXHAUSTED');continue;}
       const body=new URLSearchParams({stockDateS:date,stockDateE:date,logCd,dcOutDate:'1',
-        shipGbn:'1',deliveGbn:'',orderGbn:'',sortType:'3',sort:',ASC',page:'0',size:'1000',
+        shipGbn:'1',deliveGbn:'',baecha:FRESHON_NIGHT_DISPATCH,orderGbn:'',sortType:'3',sort:',ASC',page:'0',size:'1000',
         isPaging:'false',isCount:'true'});
       try {
         const request=()=>fetchImpl(orderUrl,{method:'POST',redirect:'manual',
