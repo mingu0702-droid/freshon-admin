@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {createFixedVehicleReader} from './fixedVehicleProjection.js';
 import {createPrivateGithubJsonStore, fixedEnvelope, fixedTupleData, validateFixedEnvelope} from './fixedVehicleStore.js';
 import {createFixedVehicleFileStore} from './opsmap-abc/fixedVehicleStore.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
 
 const MIS = 'https://mis.freshon.co.kr', fixedPath = '/bo/wm/standard/fixedAlctnList';
 const repo = 'mingu0702-droid/freshon-cache', branch = 'stage/opsmap-snapshots';
@@ -51,8 +51,7 @@ export const FIXED_MASTER_WORKER_LIMIT = 45 * minute;
 const attemptLeaseMs = FIXED_MASTER_WORKER_LIMIT + 5 * minute;
 const attemptExpired = (attempt, now) => attempt?.state==='RUNNING' && now-Date.parse(attempt.startedAt)>=attemptLeaseMs;
 export const FIXED_MASTER_SCOPE_INPUT_LIMIT = 1024 * 1024;
-export const stageFixedMasterSyncEnabled = env => env.RENDER_SERVICE_ID === STAGE_SERVICE &&
-  env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED === '1';
+export const stageFixedMasterSyncEnabled = env => Boolean(opsmapArchiveSite(env)) && env.OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED === '1';
 
 function validateFixedMasterScope(scope) {
   const {generation, ledgerSha256, codes} = scope || {};
@@ -89,7 +88,7 @@ export function stageFixedMasterScope(active, additionalRegistry, nationalRegist
 
 export function stageFixedMasterStorage({env=process.env, fetchImpl=fetch, write=false}={}) {
   if (!stageFixedMasterSyncEnabled(env) || env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED !== '1' ||
-      write && env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED !== '1') throw fail('FIXED_STORE_STAGE_APPROVAL');
+      write && (!opsmapArchiveWriteApproved(env) || env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED !== '1')) throw fail('FIXED_STORE_STAGE_APPROVAL');
   const token = write ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN ||
     (env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER === '1' && env.OPSMAP_SNAPSHOT_STORE_TOKEN)
     : env.OPSMAP_STAGE_SYNC_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;
@@ -98,7 +97,11 @@ export function stageFixedMasterStorage({env=process.env, fetchImpl=fetch, write
   function scopedFetch(input, options={}) {
     const url=new URL(input), endpoint=url.origin+url.pathname, method=options.method || 'GET';
     const file=endpoint.startsWith(contents) ? endpoint.slice(contents.length) : '';
-    const dailyFile = file===headFile || /^fixed-master-daily-v1\/(?:projection-[a-f0-9]{64}|(?:dispatch|jobs(?:-wms-night)?)-\d{4}-\d{2}-\d{2})\.json$/.test(file);
+    const primary=opsmapArchiveSite(env)==='primary';
+    const checkpoint=primary
+      ? /^fixed-master-daily-v1\/primary-jobs(?:-wms-night)?-\d{4}-\d{2}-\d{2}\.json$/.test(file)
+      : /^fixed-master-daily-v1\/(?:dispatch|jobs(?:-wms-night)?)-\d{4}-\d{2}-\d{2}\.json$/.test(file);
+    const dailyFile = file===headFile || checkpoint || /^fixed-master-daily-v1\/projection-[a-f0-9]{64}\.json$/.test(file);
     const read = method==='GET' && ((dailyFile || file===baselineFile) && url.searchParams.size===1 &&
       url.searchParams.get('ref')===branch || !url.search && (endpoint===root ||
       endpoint.startsWith(root+'/git/blobs/') && /^[a-f0-9]{40}$/.test(endpoint.split('/').at(-1))));

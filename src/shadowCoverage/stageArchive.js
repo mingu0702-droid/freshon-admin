@@ -7,9 +7,8 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {gunzip} from 'node:zlib';
 import {parseCoverageIndex, PERIODS, privateCoverageDirectory} from './coverageFiles.js';
+import {opsmapArchiveSite,STAGE_ORIGIN,STAGE_SERVICE} from '../stageScope.js';
 
-const STAGE_ORIGIN = 'https://freshon-admin-stage-preview-template.onrender.com';
-const STAGE_SERVICE = 'srv-da47hugu01pc73etpfa0';
 const BLOB_API = 'https://api.github.com/repos/mingu0702-droid/freshon-cache/git/blobs/';
 const MAX_ARCHIVE_BYTES = 1024 * 1024;
 const MAX_RESTORED_BYTES = 4 * 1024 * 1024;
@@ -96,7 +95,8 @@ async function restoreFiles(bytes, tempRoot, appRoot) {
 export async function restoreStageShadowCoverage(env, {
   fetchImpl = fetch, tempRoot = '/tmp', appRoot = APP_ROOT, signal = AbortSignal.timeout(10_000)
 } = {}) {
-  if (env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== STAGE_SERVICE)) {
+  if (opsmapArchiveSite(env)!=='primary'&&
+      (env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== STAGE_SERVICE))) {
     throw Error('COVERAGE_ARCHIVE_STAGE_ONLY');
   }
   const token = env[STAGE_ARCHIVE_ENV.token];

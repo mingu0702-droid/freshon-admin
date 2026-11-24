@@ -3,6 +3,8 @@
   const failure = code => Object.assign(new Error(code), { code });
   const customerCode = /^[A-Z]\d{3,}$/;
   const parcelNumber = /^\d{10}[12](?!0000)\d{8}$/;
+  const archiveView = () => root.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com' ||
+    root.location?.origin==='https://freshon-admin-1.onrender.com'&&root.document?.documentElement?.dataset?.opsmapArchive==='primary';
   const lookupIdentity = value => String(value ?? '').normalize('NFKC').trim().toUpperCase();
   // Search identity is separate from the unchanged X/Y cells and address hash.
   function addressQueries(address, variants = root.Phase2bUi.addressVariants, {historicCatalog = false} = {}) {
@@ -128,7 +130,7 @@
   }
   function stageStoredAddressCache(generation, version) {
     const sessionExpiry = staffSessionExpiry();
-    if (root.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com' ||
+    if (!archiveView() ||
         !sessionExpiry || !/^[a-f0-9]{64}$/.test(generation || '')) return null;
     if (storedBatch?.generation !== generation || storedBatch.version !== version || storedBatch.sessionExpiry !== sessionExpiry) {
       storedBatch = {generation,version,sessionExpiry,entries:new Map()};
@@ -170,7 +172,7 @@
     return readRetainedAddress(stageAddressKey(stageAddressVariants(query)),staffSessionExpiry())??null;
   }
   function stageAddress(query,generation,{signal,external,onTiming}={}) {
-    if (root.location?.origin !== 'https://freshon-admin-stage-preview-template.onrender.com'||signal?.aborted) return Promise.resolve(null);
+    if (!archiveView()||signal?.aborted) return Promise.resolve(null);
     const variants=stageAddressVariants(query);
     if (!variants.length) return Promise.resolve(null);
     if(addressGeneration!==generation){resetStageAddress();addressGeneration=generation;}

@@ -3,7 +3,7 @@ import {deliveryPhotoUpstreamError} from './opsmapDeliveryAdminTransport.js';
 import {createOperationalPhotoExtension, createOperationalPhotoMetadataReader, createOperationalPhotoTaskReader} from './opsmapOperationalPhotos.js';
 import {mountDeliveryPhotoConfig} from './opsmapDeliveryPhotoRouter.js';
 import {createStageDeliveryAdminPhotoSession, STAGE_DELIVERY_ORIGIN} from './opsmapStageDeliveryAdminSession.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite} from './stageScope.js';
 import {createOpsmapPhotoIndex} from './opsmapPhotoIndex.js';
 const DAY_MS = 86400000;
 const validSecret = (value, max) => typeof value === 'string' && value.length <= max && value.trim().length > 0 && !/[\x00-\x1f\x7f]/.test(value);
@@ -33,7 +33,7 @@ export function createStageOperationalPhotoExtension({env = process.env, fetchIm
   const accountMode = dedicatedAccount || approvedExistingAccount;
   const id = dedicatedAccount ? env.OPSMAP_STAGE_DELIVERY_PHOTO_ID : env.DELIVERY_ADMIN_ID;
   const password = dedicatedAccount ? env.OPSMAP_STAGE_DELIVERY_PHOTO_PASSWORD : env.DELIVERY_ADMIN_PASSWORD;
-  const approvedStage = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE;
+  const approvedStage = Boolean(opsmapArchiveSite(env));
   const historyDirectory = approvedStage ? env.OPSMAP_PHOTO_HISTORY_DIRECTORY : null;
   const historyIndex = historyDirectory ? createOpsmapPhotoIndex({
     directory:historyDirectory, now, allowMountedLinks:historyDirectory === '/etc/secrets'

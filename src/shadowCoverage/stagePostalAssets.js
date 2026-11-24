@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { STAGE_ORIGIN, STAGE_SERVICE } from '../stageScope.js';
+import { opsmapArchiveSite } from '../stageScope.js';
 
 const MiB = 1024 * 1024;
 const maxHeaderBytes = 512 * 1024;
@@ -101,7 +101,7 @@ export const stagePostalReadToken = env => env.OPSMAP_SNAPSHOT_STORE_TOKEN || en
 export function createStagePostalAssets({ env = process.env, fetchImpl = fetch, tempRoot = tmpdir(), now = Date.now,
   log = value => console.info(JSON.stringify(value)) } = {}) {
   if (!env.OPSMAP_SHADOW_POSTAL_REMOTE_CONFIG) return null;
-  if (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN) throw Error('POSTAL_ASSET_STAGE_SCOPE');
+  if (!opsmapArchiveSite(env)) throw Error('POSTAL_ASSET_STAGE_SCOPE');
   const config = configuration(env);
   const token = stagePostalReadToken(env);
   const encodedKey = env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64 || '';

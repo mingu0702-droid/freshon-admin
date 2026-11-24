@@ -9,6 +9,8 @@
   ],
   "urlFetchWhitelist": [
     "https://freshon-admin-stage-preview-template.onrender.com/internal/opsmap/scheduled-sync",
-    "https://freshon-admin-stage-preview-template.onrender.com/internal/opsmap/scheduled-sync/wms-night"
+    "https://freshon-admin-stage-preview-template.onrender.com/internal/opsmap/scheduled-sync/wms-night",
+    "https://freshon-admin-1.onrender.com/internal/opsmap/scheduled-sync",
+    "https://freshon-admin-1.onrender.com/internal/opsmap/scheduled-sync/wms-night"
   ]
 }

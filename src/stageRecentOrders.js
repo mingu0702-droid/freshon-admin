@@ -1,4 +1,4 @@
-import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite} from './stageScope.js';
 import {waitForPhotoSignal} from './opsmapDeliveryAdminTransport.js';
 import {isDay} from './shadowCoverage/coverageFiles.js';
 
@@ -164,7 +164,7 @@ async function readOrderEvidence(response,date,centerKey,signal) {
 
 export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,onDiagnostic,
   login=async()=>(await import('./scraper/freshonDailyRoute.js')).loginFreshonSession()}={}) {
-  if (env.RENDER_SERVICE_ID!==STAGE_SERVICE || env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN ||
+  if (!opsmapArchiveSite(env) ||
       env.OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED!=='1' ||
       env.FRESHON_BASE_URL && new URL(env.FRESHON_BASE_URL).origin!==origin) return null;
   let cookie=String(env.FRESHON_COOKIE??''), attemptedLogin=false;

@@ -12,7 +12,6 @@ const kinds=['generation','recent','fixed','national','wms','postal','wms-night'
 const finished=new Set(['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','SOURCE_UNAVAILABLE',
   'RECOVERY_CHECKPOINTED','ALREADY_ATTEMPTED','RETRY_HELD','BUSY','FAILED','INTERRUPTED','SKIPPED']);
 const kstDay=at=>new Date(at+9*3600_000).toISOString().slice(0,10);
-const stateFile=(date,night)=>'fixed-master-daily-v1/jobs-'+(night?'wms-night-':'')+date+'.json';
 const error=code=>Object.assign(Error(code),{code});
 
 // The existing hourly tick may arrive before 21:10. Its signed receipt can
@@ -72,8 +71,10 @@ export function stageSyncHeadroom({bytes,limit,measured},running=false) {
 }
 
 export function createStageScheduledJobs({store,secret,now=Date.now,execute,measure=stageSyncMemory,
-  log=console.log,intervalMs=heartbeatMs}={}) {
-  if(typeof secret!=='string'||secret.length<32||!store?.read||!store?.write)throw error('OPSMAP_JOBS_CONFIG');
+  log=console.log,intervalMs=heartbeatMs,namespace='jobs'}={}) {
+  if(typeof secret!=='string'||secret.length<32||!store?.read||!store?.write||
+      !['jobs','primary-jobs'].includes(namespace))throw error('OPSMAP_JOBS_CONFIG');
+  const stateFile=(date,night)=>'fixed-master-daily-v1/'+namespace+'-'+(night?'wms-night-':'')+date+'.json';
   const stamp=data=>createHmac('sha256',secret).update('opsmap-stage-jobs-v1\0').update(JSON.stringify(data)).digest();
   function verify(value,date,night) {
     if(!value)return null;

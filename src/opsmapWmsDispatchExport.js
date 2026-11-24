@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { coordinateAddressHash } from './opsmap-abc/opsmapAutoCoordinates.js';
 import { createPrivateGithubJsonStore } from './fixedVehicleStore.js';
-import { STAGE_ORIGIN, STAGE_SERVICE } from './stageScope.js';
+import { opsmapArchiveSite } from './stageScope.js';
 import {decodeFreshonWmsDispatch,freshonWmsVehicle,verifiedFreshonWmsWorkbookLines} from './stageFreshonWmsDispatch.js';
 import {FRESHON_JSON_WMS_FORMAT,createStageWmsReleaseStore,isStageWmsDay,stageWmsArchiveKey,WMS_ARCHIVE_REPO,WMS_ARCHIVE_DIR} from './stageWmsExportIndex.js';
 
@@ -183,7 +183,7 @@ function createArchiveReader(env, fetchImpl) {
 }
 
 export function createStageWmsDispatchExportReader({env=process.env,readSecret=readFile,fetchImpl=fetch}={}) {
-  const serviceVerified=env.RENDER_SERVICE_ID===STAGE_SERVICE && env.RENDER_EXTERNAL_URL===STAGE_ORIGIN;
+  const serviceVerified=Boolean(opsmapArchiveSite(env));
   const approved=env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_APPROVED==='1';
   let manifest;
   if (serviceVerified && approved) {

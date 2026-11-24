@@ -3,7 +3,7 @@ import {readFileSync, statSync} from 'node:fs';
 import {parseDriverSheetValues} from './driverSheetRows.js';
 import {createDriverAssignmentReader, driverPhone, driverVehicle, isReplacementDriver, mountPrivateDriverContact} from './privateDriverContact.js';
 import {readBoundedHubText} from './opsmap-abc/boundedHubResponse.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite} from './stageScope.js';
 
 const tokenUrl = 'https://oauth2.googleapis.com/token';
 const sheetUrl = 'https://sheets.googleapis.com/v4/spreadsheets/';
@@ -146,7 +146,7 @@ function datedIdentity(input) {
 
 export function createStageDriverContacts({env=process.env, fetchImpl=fetch, now=Date.now} = {}) {
   const switchEnabled=env.OPSMAP_DRIVER_CONTACT_ENABLED==='1', approved=env.OPSMAP_STAGE_DRIVER_CONTACT_APPROVED==='1';
-  const enabled = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE && switchEnabled && approved;
+  const enabled = Boolean(opsmapArchiveSite(env)) && switchEnabled && approved;
   const connection={switchEnabled,approved,sheetConfigured:Boolean(env.OPSMAP_STAGE_DRIVER_SHEET_ID),
     gidConfigured:Boolean(env.OPSMAP_STAGE_DRIVER_SHEET_GID),centerConfigured:Boolean(env.OPSMAP_STAGE_DRIVER_SHEET_CENTER),
     stageCredentialConfigured:Boolean(env.OPSMAP_STAGE_DRIVER_GOOGLE_SERVICE_ACCOUNT_FILE||env.OPSMAP_STAGE_DRIVER_GOOGLE_SERVICE_ACCOUNT_JSON_BASE64)};

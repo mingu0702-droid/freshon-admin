@@ -4,7 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import express from 'express';
 import {syncDigest,syncHash} from './opsmapSyncGeneration.js';
-import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite,opsmapArchiveWriteApproved,PRIMARY_ORIGIN} from './stageScope.js';
 import {FIXED_MASTER_WORKER_LIMIT, stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {NATIONAL_REGISTRY_WORKER_LIMIT, stageNationalRegistryEnabled} from './stageNationalRegistry.js';
 import {stageRecentOperationsSyncEnabled} from './stageRecentOperations.js';
@@ -30,8 +30,8 @@ const recentDeliveryStates=new Set(['VERIFIED_PARTIAL','ALREADY_OBSERVED','CARRI
   'DELIVERY_SOURCE_FORBIDDEN','DELIVERY_SOURCE_TIMEOUT','DELIVERY_SOURCE_RATE_LIMITED','DELIVERY_SOURCE_IDENTITY_UNVERIFIED',
   'DELIVERY_SOURCE_INCOMPLETE','DELIVERY_SOURCE_PAGE_DUPLICATE','DELIVERY_SOURCE_SCOPE','DELIVERY_SOURCE_CUSTOMER_CONFLICT',
   'DELIVERY_SOURCE_READ_UNAVAILABLE']);
-const receiptFields=({version,origin,triggerId,principal,issuedAt,slot,date,runId})=>
-  [version,origin,triggerId,principal,issuedAt,slot,date,runId];
+const receiptFields=({version,origin,triggerId,principal,issuedAt,slot,date,runId,audience})=>
+  [version,origin,triggerId,principal,issuedAt,slot,date,runId,...(version===2?[audience]:[])];
 const signReceipt=(value,secret,domain='')=>createHmac('sha256',secret)
   .update(domain).update(JSON.stringify(receiptFields(value))).digest();
 const queueDomain='opsmap-stage-private-dispatch-v1\0';
@@ -67,21 +67,26 @@ function recordSource(sources,key,date,error,evidence) {
       ...(evidence?.complete===true?{pages:evidence.pages,sourceRows:evidence.rawRows,uniqueDeliveries:evidence.responseRows,complete:true}:{})};
 }
 
-export function verifyOpsmapScheduleReceipt(value,{secret,scheduleId,executorHash,now=Date.now,night=false}={}) {
+export function verifyOpsmapScheduleReceipt(value,{secret,scheduleId,executorHash,now=Date.now,night=false,audience}={}) {
   const {version,origin,triggerId,principal,issuedAt,slot,date,runId,signature}=value || {};
   const time=typeof issuedAt==='string'?Date.parse(issuedAt):NaN;
   if (typeof secret!=='string'||secret.length<32||secret.length>512||!/^\d{1,30}$/.test(scheduleId || '')||
-      !syncHash(executorHash)||version!==1||origin!==(night?'APPS_SCRIPT_TIME_TRIGGER_WMS_NIGHT':'APPS_SCRIPT_TIME_TRIGGER')||triggerId!==scheduleId||principal!==executorHash||
+      !syncHash(executorHash)||version!==(audience?2:1)||value?.audience!==audience||
+      origin!==(night?'APPS_SCRIPT_TIME_TRIGGER_WMS_NIGHT':'APPS_SCRIPT_TIME_TRIGGER')||triggerId!==scheduleId||principal!==executorHash||
       !Number.isFinite(time)||Math.abs(now()-time)>maxDelay||slot!==Math.floor(time/HOUR)||date!==kstDate(time)||
-      runId!==syncDigest([version,origin,triggerId,principal,slot])||!syncHash(signature)||Object.keys(value).length!==9) {
+      runId!==syncDigest([version,origin,triggerId,principal,slot,...(audience?[audience]:[])])||
+      !syncHash(signature)||Object.keys(value).length!==(audience?10:9)) {
     throw Error('OPSMAP_SCHEDULE_RECEIPT');
   }
   const expected=signReceipt(value,secret);
   if (!timingSafeEqual(Buffer.from(signature,'hex'),expected)) throw Error('OPSMAP_SCHEDULE_SIGNATURE');
-  return {version,origin,triggerId,principal,issuedAt,slot,date,runId};
+  return {version,origin,triggerId,principal,issuedAt,slot,date,runId,...(audience?{audience}:{})};
 }
 
 export function opsmapScheduleConfig(env) {
+  if(opsmapArchiveSite(env)==='primary')return {secret:env.OPSMAP_PRIMARY_CLOCK_SECRET,
+    scheduleId:env.OPSMAP_PRIMARY_CLOCK_TRIGGER_ID,executorHash:env.OPSMAP_PRIMARY_CLOCK_EXECUTOR_SHA256,
+    audience:PRIMARY_ORIGIN};
   return {secret:env.OPSMAP_STAGE_SYNC_SCHEDULER_SECRET,scheduleId:env.OPSMAP_STAGE_SYNC_TRIGGER_ID,
     executorHash:env.OPSMAP_STAGE_SYNC_EXECUTOR_SHA256};
 }
@@ -158,7 +163,7 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
   const recentJob=stageRecentOperationsSyncEnabled(env);
   const scopedRegistry=nationalJob && typeof readNationalScope==='function';
   const sourceJobs=nationalJob||fixedJob||recentJob;
-  if (env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
+  if (!opsmapArchiveWriteApproved(env)||
       env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||
       env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1'||
       !fullJob&&!sourceJobs&&!independent) return;
@@ -177,6 +182,7 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
   if(durable){
     const secret=opsmapScheduleConfig(env).secret;
     jobs=createStageScheduledJobs({store:(openJobStore||openDispatchStore)(),secret,now,log,measure:measureMemory,
+      namespace:opsmapArchiveSite(env)==='primary'?'primary-jobs':'jobs',
       async execute({receipt,kind,signal}) {
         const scope=kind==='fixed'?await readFixedScope():null;
         const registryScope=kind==='national'&&scopedRegistry?await readNationalScope():null;
@@ -233,7 +239,7 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     const config={...opsmapScheduleConfig(env),now};
     try {receipt=verifyOpsmapScheduleReceipt(req.body,config);}
     catch {return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});}
-    if(nightWms&&(receipt.slot+9)%24!==6)
+    if((nightWms||opsmapArchiveSite(env)==='primary')&&(receipt.slot+9)%24!==6)
       return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});
     if (independent) {
       try {await enqueueOpsmapSchedule(openDispatchStore(),receipt,config);}

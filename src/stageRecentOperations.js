@@ -3,7 +3,7 @@ import {promisify} from 'node:util';
 import {gzip, gunzip} from 'node:zlib';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
 import {datesFor, isDay} from './shadowCoverage/coverageFiles.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
 
 export const RECENT_OPERATIONS_ROUTE = '/api/map-phase2b/private/recent-operations';
 export const RECENT_OPERATIONS_BASELINE_END = '2026-11-17';
@@ -33,7 +33,7 @@ const compress = promisify(gzip), decompress = promisify(gunzip);
 const customerCode = /^[A-Z]\d{1,20}$/;
 const hash = /^[a-f0-9]{64}$/;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-const stageScope = env => env.RENDER_SERVICE_ID === STAGE_SERVICE && env.RENDER_EXTERNAL_URL === STAGE_ORIGIN;
+const stageScope = env => Boolean(opsmapArchiveSite(env));
 const latestClosedDay = at => new Date(at + 9 * 3600000 - 86400000).toISOString().slice(0,10);
 const dayKey = ({date,centerKey,source}) => [date,centerKey,source].join(':');
 const rejected = () => Error('RECENT_OPERATIONS_EVIDENCE_INVALID');
@@ -260,7 +260,7 @@ export function createStageRecentOperationsSeed({env=process.env,fetchImpl=fetch
 
 export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetch,now=Date.now,write=false,withSha=false}={}) {
   if (!stageRecentOperationsSyncEnabled(env) || env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1' ||
-      write && env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1') return null;
+      write && (!opsmapArchiveWriteApproved(env)||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1')) return null;
   const token=write ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN ||
     (env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1'&&env.OPSMAP_SNAPSHOT_STORE_TOKEN) :
     env.OPSMAP_STAGE_SYNC_READ_TOKEN || env.OPSMAP_SNAPSHOT_STORE_TOKEN || env.OPSMAP_SHADOW_GITHUB_READ_TOKEN;

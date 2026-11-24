@@ -1,7 +1,8 @@
 (() => {
   'use strict';
   const rawFetch = window.fetch.bind(window), ACTIVITY_THROTTLE_MS = 60000;
-  const stage = location.origin === 'https://freshon-admin-stage-preview-template.onrender.com';
+  const stage = location.origin === 'https://freshon-admin-stage-preview-template.onrender.com'||
+    location.origin==='https://freshon-admin-1.onrender.com'&&document.documentElement?.dataset?.opsmapArchive==='primary';
   const preloadedScripts = new Set([...document.querySelectorAll('link[data-map-staff-preload]')].map(link => link.getAttribute('href')));
   let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivityCheck = 0, checking = null, checkingOwner = -1, confirming = null, confirmingOwner = -1, signingOut = null, logoutRequired = false;
   let recoveryTimer = null, initialSnapshot;

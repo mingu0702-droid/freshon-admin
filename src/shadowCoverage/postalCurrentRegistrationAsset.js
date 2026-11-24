@@ -2,7 +2,7 @@ import {createCipheriv,createDecipheriv,createHash,hkdfSync,randomBytes} from 'n
 import {open} from 'node:fs/promises';
 import {isAbsolute} from 'node:path';
 import {customerRegistryAddressHash} from '../customerRegistry.js';
-import {STAGE_ORIGIN,STAGE_SERVICE} from '../stageScope.js';
+import {opsmapArchiveSite} from '../stageScope.js';
 import {isCurrentPostalPoint} from './postalCurrentRegistration.js';
 import {stagePostalReadToken} from './stagePostalAssets.js';
 import {createStageCurrentPostalRefreshStore} from './postalCurrentRegistrationStore.js';
@@ -143,7 +143,7 @@ export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
 
 export function stageCurrentPostalRegistrationReader({env=process.env,readRegistry,readRegistryVersion,fetchImpl=fetch,approvedRelease}={}) {
   const approval=env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_APPROVED;
-  if(env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
+  if(!opsmapArchiveSite(env)||
       (approval!==undefined?approval!=='1':!approvedRelease))return null;
   const file=approval==='1'?env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_FILE:null;
   const ref=approval==='1'?env.OPSMAP_STAGE_CURRENT_POSTAL_REGISTRATION_ARCHIVE_REF:approvedRelease.ref;

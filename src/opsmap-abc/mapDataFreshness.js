@@ -96,7 +96,10 @@ export function mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicl
     const requested=q.method==='POST'?q.body?.customerCodes:q.query.customerCodes?String(q.query.customerCodes).split(','):q.query.customerCode?[q.query.customerCode]:[];
     if(q.method==='GET'&&(q.query.customerCodes?.length>8000||requested.length>500))return r.status(400).json({error:'INVALID_CUSTOMER_CODES'});
     if(!Array.isArray(requested)||requested.length>10000||requested.some(v=>typeof v!=='string'||!/^[A-Z]\d+$/.test(v)))return r.status(400).json({error:'INVALID_CUSTOMER_CODES'});
-    const payload=await base.get([...new Set(requested)]);
+    const knownVersion=q.get('X-Opsmap-Known-Fixed');
+    const payload=await base.get([...new Set(requested)],{
+      knownVersion:/^[a-f0-9]{64}$/.test(knownVersion||'')?knownVersion:undefined
+    });
     return r.status(payload.ok?200:payload.phase==='ERROR'?503:202).json({...payload,progress:readBaseVehicleMaster?.getProgress?.()||null});
   }
   app.get('/api/map-phase2b/preview/base-vehicles',requireBaseVehicleView,enabled,compression({threshold:1024}),baseResponse);

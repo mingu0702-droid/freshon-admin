@@ -11,7 +11,7 @@ import {createOpsmapDataSync, startOpsmapDataSync} from '../src/opsmapDataSync.j
 import {callHub} from '../src/opsmap-abc/phase2bHubReadClient.js';
 import {privateReaderEndpoint} from '../src/opsmap-abc/privateReaderEndpoint.js';
 import {createManualMapPins} from '../src/opsmap-abc/manualMapPins.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageScope.js';
+import {opsmapArchiveSite,opsmapArchiveWriteApproved} from '../src/stageScope.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {createStageRecentOrdersReader} from '../src/stageRecentOrders.js';
 import {boundedRead, privateCoverageDirectory} from '../src/shadowCoverage/coverageFiles.js';
@@ -55,7 +55,7 @@ async function buildWorker({mode,settingsFile,durable,recordSource}) {
   if (!durable && !path.isAbsolute(config.ledgerFile || '')) throw Error('OPSMAP_SYNC_LEDGER_PATH');
   const ledgerFolder = !durable ? await privateCoverageDirectory(path.dirname(config.ledgerFile),appRoot) : null;
   let readRegistry, readDay, readManualPins;
-  if (mode !== 'bootstrap' && (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN ||
+  if (mode !== 'bootstrap' && (!opsmapArchiveSite(env) || !opsmapArchiveWriteApproved(env) ||
       env.OPSMAP_SYNC_SOURCE_READ_APPROVED !== '1')) {
     throw Error('OPSMAP_SYNC_SOURCE_APPROVAL_REQUIRED');
   }

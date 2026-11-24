@@ -1,6 +1,6 @@
 import {createOperationalPhotoTaskReader} from './opsmapOperationalPhotoTaskReader.js';
 import {assertDeliverySourceObservation, sourceTaskDate} from './snapshotRefreshEvidence.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite} from './stageScope.js';
 import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
 import {coordinateAddressHash} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {archiveAddressHash} from './stageArchivedDelivery.js';
@@ -41,7 +41,7 @@ function eventCandidate(task, state, event, customerCode, vehicle) {
 }
 
 export function createStageDatedDeliveryReader({env = process.env, fetchImpl = fetch, syncCenters = {osan:'1'},recordSource,now=Date.now} = {}) {
-  const enabled = env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE &&
+  const enabled = Boolean(opsmapArchiveSite(env)) &&
     env.OPSMAP_STAGE_DELIVERY_DATED_ENABLED === '1';
   const cookie = String(env.OPSMAP_STAGE_DELIVERY_DATED_COOKIE || '').trim();
   const dedicated = env.OPSMAP_STAGE_DELIVERY_PHOTO_AUTH_ENABLED === '1';

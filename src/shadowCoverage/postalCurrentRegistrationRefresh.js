@@ -2,7 +2,7 @@ import {isCurrentPostalPoint,projectCurrentPostalRegistration} from './postalCur
 import {sealCurrentPostalRegistration,verifyCurrentPostalRegistration} from './postalCurrentRegistrationAsset.js';
 import {currentPostalRegistrationFallback} from './postalCurrentRegistrationStore.js';
 import {stagePostalReadToken} from './stagePostalAssets.js';
-import {STAGE_ORIGIN,STAGE_SERVICE} from '../stageScope.js';
+import {opsmapArchiveSite} from '../stageScope.js';
 
 const hex=/^[a-f0-9]{64}$/;
 const conflict=error=>error?.code==='FIXED_STORE_CONFLICT';
@@ -10,7 +10,7 @@ const fail=code=>Error('POSTAL_REGISTRATION_REFRESH_'+code);
 const sameBinding=(a,b)=>a?.registry===b?.registry&&a?.boundary===b?.boundary&&a?.release===b?.release;
 
 export async function readStageCurrentPostalFallback({env,fetchImpl=fetch}) {
-  if(env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
+  if(!opsmapArchiveSite(env)||
       env.OPSMAP_STAGE_CURRENT_POSTAL_REFRESH_APPROVED!=='1')throw fail('SCOPE');
   const token=stagePostalReadToken(env);
   if(!token)throw fail('CREDENTIALS');

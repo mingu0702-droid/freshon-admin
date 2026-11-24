@@ -22,6 +22,8 @@ import {createCustomerRegistryStorage} from './customerRegistryStorage.js';
 import {mountPrivateCustomerRegistry} from './privateCustomerRegistry.js';
 import {holdReviewedLegacyPoint,prepareApprovedCoordinateSearch} from './opsmap-abc/opsmapAutoCoordinates.js';
 import {callHub as protectedHubRead} from './opsmap-abc/phase2bHubReadClient.js';
+import compression from 'compression';
+import {createSnapshotTransfer,sendSnapshotTransfer} from './opsmapTransferVersion.js';
 export function createProductionDetailReader(existing,{env=process.env,protectedRead=protectedHubRead}={}){
  return (action,params,options)=>env.OPSMAP_PRIVATE_READER_ENABLED==='true'&&['customerDetail','staffCustomerDetail'].includes(action)?protectedRead(action,params,options):existing(action,params,options);
 }
@@ -78,9 +80,28 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
   router.get('/api/map-phase2b/preview/search',binding.requireStaff,async(q,r)=>{const text=String(q.query.q||'').trim();if(!text||text.length>200)return r.status(400).json({error:'INVALID_QUERY'});try{const value=await (readers.readUnifiedSearch?readers.readUnifiedSearch(text):readers.callHub?.('unifiedSearch',{q:text,limit:20}));if(!value)return r.status(503).json({error:'SEARCH_SOURCE_NOT_CONFIGURED'});return binding.requireStaff(q,r,()=>r.json(redactPublicData(value)));}catch{return r.status(503).json({error:'SEARCH_SOURCE_UNAVAILABLE'});}});
   router.get('/api/map-phase2b/preview/today-status',binding.requireStaff,async(q,r)=>{const date=readers.normalizeDateValue(q.query.date)||readers.phase2bKstDate();try{const value=await readers.phase2bTodayStatus(date);const vehicle=String(q.query.vehicle||'').trim(),vehicles=vehicle?(value.vehicles||[]).filter(v=>String(v.vehicle)===vehicle):value.vehicles;return binding.requireStaff(q,r,()=>r.json({ok:true,data:redactPublicData({...value,vehicles}),error:null}));}catch(error){return r.status(503).json({error:'DELIVERY_STATUS_UNAVAILABLE',sourceCode:/^DELIVERY_(?:SOURCE|TASK)_[A-Z_]+$/.test(error.code||'')?error.code:'SOURCE_FAILED',sourceHttp:[400,401,403,404,429,500,502,503,504].includes(error.diagnostic?.status)?error.diagnostic.status:null,sourceObservation:error.sourceObservation?.source==='DELIVERY_ADMIN_READ'&&error.sourceObservation.requestedDate===date?error.sourceObservation:null});}});
 
-  const readStaffSnapshot=async()=>{const [snap,rules]=await Promise.all([readers.readPhase2bSnapshot(),approvedRules()]);return snap&&{...snap,rows:(snap.rows||[]).map(row=>holdReviewedLegacyPoint(row,rules))};};
+  const staffSnapshotRows=new WeakMap(), snapshotTransfer=createSnapshotTransfer();
+  const readStaffSnapshot=async()=>{
+   const [snap,rules]=await Promise.all([readers.readPhase2bSnapshot(),approvedRules()]);
+   if(!Array.isArray(snap?.rows))return null;
+   const stamp=JSON.stringify(rules);
+   let projection=staffSnapshotRows.get(snap.rows);
+   if(projection?.stamp!==stamp){
+    projection={stamp,rows:snap.rows.map(row=>holdReviewedLegacyPoint(row,rules))};
+    staffSnapshotRows.set(snap.rows,projection);
+   }
+   return {...snap,rows:projection.rows};
+  };
   const safeRows=rows=>(rows||[]).map(row=>{const clean=redactPublicData(row);for(const field of ['address','customerAddress','detailAddress','addressDetail'])delete clean[field];return clean;});
-  router.get('/api/map-phase2b/preview/snapshot',binding.requireStaff,async(_q,r)=>{try{const snap=await readStaffSnapshot();if(!snap)return r.status(503).json({error:'PHASE2B_SNAPSHOT_NOT_READY'});return binding.requireStaff(_q,r,()=>r.json({ok:true,data:safeRows(snap.rows),meta:readers.phase2bSnapshotMeta(snap),error:null}));}catch{return r.status(503).json({error:'PHASE2B_SNAPSHOT_UNAVAILABLE'});}});
+  router.get('/api/map-phase2b/preview/snapshot',binding.requireStaff,compression(),async(q,r)=>{
+   try{
+    const snap=await readStaffSnapshot();
+    if(!snap)return r.status(503).json({error:'PHASE2B_SNAPSHOT_NOT_READY'});
+    const meta=readers.phase2bSnapshotMeta(snap);
+    const projection=snapshotTransfer(snap.rows,meta,safeRows);
+    return binding.requireStaff(q,r,()=>sendSnapshotTransfer(q,r,projection,meta));
+   }catch{return r.status(503).json({error:'PHASE2B_SNAPSHOT_UNAVAILABLE'});}
+  });
   mountPrivateCustomerSearch({app:router,requireStaff:binding.requireStaff,readSnapshot:readStaffSnapshot,searchMaster:env.OPSMAP_PRIVATE_READER_ENABLED==='true'?(q,options)=>protectedHubRead('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536}):null});
   router.get('/api/map-phase2b/preview/route-plan',binding.requireStaff,async(q,r)=>{const date=readers.normalizeDateValue(q.query.date),vehicle=String(q.query.vehicle||'');if(!date||!vehicle||vehicle.length>40)return r.status(400).json({error:'INVALID_ROUTE'});try{const payload=await (readers.readStoredRoute?readers.readStoredRoute(date,vehicle):readers.callHub?.('routePlan',{date,vehicle}));if(!payload)return r.status(503).json({error:'ROUTE_SOURCE_NOT_CONFIGURED'});return binding.requireStaff(q,r,()=>r.json(redactPublicData(payload)));}catch{return r.status(503).json({error:'ROUTE_SOURCE_UNAVAILABLE'});}});
 

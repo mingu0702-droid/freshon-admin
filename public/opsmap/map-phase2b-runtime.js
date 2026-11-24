@@ -5,7 +5,9 @@
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   let SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
-  const DEFAULT_PERIOD_CENTER = window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com'?'':'osan';
+  const archiveView = window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com'||
+    window.location?.origin==='https://freshon-admin-1.onrender.com'&&document.documentElement?.dataset?.opsmapArchive==='primary';
+  const DEFAULT_PERIOD_CENTER = archiveView?'':'osan';
   const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", centerFilter: DEFAULT_PERIOD_CENTER, selectedDate: "", latestDate: "", map: null, overlays: [], lines: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
   let mapInitializing=null,mapObserver=null,mapHandlers=[],mapGestureEvents=null,mapCamera=null,cameraSelection=0;
   let dispatchReferenceFitsMap=false;
@@ -27,7 +29,7 @@
   const dailyEvidenceReads=new Map();
   const dailyRosters=new Map();
   let rosterAuthorized=true, rosterCoordinateRequest=null;
-  const usesDeliveryRoster=()=>location.hostname==='freshon-admin-stage-preview-template.onrender.com';
+  const usesDeliveryRoster=()=>archiveView;
   const modeViews = { BASE_60D: { vehicles: [], scope: "all", centerFilter: DEFAULT_PERIOD_CENTER }, DATE_ROUTE: { vehicles: [], scope: "all", centerFilter: "" } };
   let periodBasis = "vehicle", periodVehicleScope = "all", periodListLimit = 0;
   let allVehiclesSelected = false;
@@ -68,6 +70,7 @@
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
     storeDetailFlights.clear();storeDetailMemory.clear();storeDetailLatest=Promise.resolve();newAreaRegistryMemo=newAreaLocationsMemo=newAreaEvidenceMemo=null;deferredBatchMapRefresh=null;
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;registrationCounts=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
+    snapshotTransferVersion=null;baseVehicleTransfers.clear();
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();
     indexedRows=null;pointIndex=null;baseVehicleStatus='LOADING';baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
     customerRegistrySource='';customerRegistryCheckedAt='';customerRegistrySourceCheckedAt='';
@@ -90,6 +93,7 @@
   const detachedMarkers=new Map();
   let periodSelectionCache = null;
   let baseVehicles = new Map(), baseVehicleRequest = null, baseVehicleTimer = null, baseVehicleTries = 0;
+  let baseVehicleTransfers=new Map(),snapshotTransferVersion=null;
   let deferredBatchMapRefresh=null;
   let recentPeriodMode = true;
   let recentPeriodDays = 90;
@@ -593,20 +597,30 @@
     try {
       const stage = stageAddressBatchEnabled();
       const adapter=stage?null:await hybridUiReady;
+      const known=snapshotReadState==='ready'&&latestSnapshotRows.length?snapshotTransferVersion:null;
+      let received;
       const payload = await adapter?.readGeneral({masterOnly:true}) || await fetchJson("/api/map-phase2b/preview/snapshot", {
-        channel: "map-snapshot", ttl: 0, timeout: 10000, prefetch: stage ? window.MapStaffEntry?.takeInitialSnapshot : undefined });
+        channel: "map-snapshot", ttl: 0, timeout: 10000,
+        headers:known?{'X-Opsmap-Known-Snapshot':known}:undefined,
+        onHeaders:headers=>{received=headers.get('X-Opsmap-Transfer-Version');},
+        prefetch: stage&&!known ? window.MapStaffEntry?.takeInitialSnapshot : undefined });
       if(id!==initialRequestId)throw Object.assign(Error('QUERY_CANCELLED'),{name:'AbortError'});
+      if(payload.notModified===true){
+        if(payload.ok!==true||!known||known!==received)throw Error('SNAPSHOT_TRANSFER_VERSION');
+        return;
+      }
       if(payload.meta?.phase==='ERROR')throw Error('SNAPSHOT_READ_FAILED');
       snapshotFailure=null;
       if(payload.pending===true||payload.meta?.complete===false){snapshotReadState='pending';snapshotRetryAfter=2000;window.MapDataSync?.setChecking?.(true);return;}
       if (!Array.isArray(payload.data)) throw new Error("스냅샷 확인 실패");
       snapshotReadState = 'ready';
       const generation=payload.meta?.sourceGeneration;
-      if(!/^[a-f0-9]{64}$/.test(generation||'')||generation!==snapshotMeta?.sourceGeneration||latestSnapshotRows.length!==payload.data.length){
+      const version=/^[a-f0-9]{64}$/.test(received||'')?received:null;
         latestSnapshotRows=payload.data;coordinateByCode.clear();
         latestSnapshotRows.forEach(row=>coordinateByCode.set(String(row.customerCode||row.code),row));
       }
       snapshotMeta = payload.meta || {};
+      snapshotTransferVersion=version;
       snapshotRetryAfter=snapshotMeta.recovery==='RESTORING'?Math.max(1000,Number(snapshotMeta.retryAfterMs)||2000):0;
       window.MapDataSync?.setChecking?.(snapshotRetryAfter>0);
       performance.mark('opsmap-snapshot-ready');
@@ -868,7 +882,7 @@
             $("#periodIdentity").textContent = $("#freshnessState").textContent = "조회 가능한 기간 범위 밖입니다";
             return;
           }
-          if(location.origin==='https://freshon-admin-stage-preview-template.onrender.com'&&payload.pendingReason==='READ_MODEL_NOT_READY'){
+          if(archiveView&&payload.pendingReason==='READ_MODEL_NOT_READY'){
             setPeriodViewState('not-ready');renderPeriodStoreList([]);
             recentPeriodNotice='기간 이력이 아직 준비되지 않았습니다 · 기존 지도 유지';
             $('#freshnessState').dataset.periodNotice='true';
@@ -929,7 +943,7 @@
       const expected=new Set(batch),seen=new Set();
       for(const row of payload.data){
         if(!expected.has(row.customerCode)||seen.has(row.customerCode)||row.baseVehicleVersion!==meta.version
-          ||row.baseVehicleCheckedAt!==meta.checkedAt||row.baseVehicleStale!==meta.stale||row.baseVehicleSource!==meta.basis)throw new Error('BASE_BATCH_ROW_EVIDENCE');
+          ||row.baseVehicleCheckedAt!==meta.checkedAt||row.baseVehicleStale!==meta.stale&&row.baseVehicleStale!==true||row.baseVehicleSource!==meta.basis)throw new Error('BASE_BATCH_ROW_EVIDENCE');
         seen.add(row.customerCode);
       }
       if(seen.size!==expected.size)throw new Error('BASE_BATCH_INCOMPLETE');
@@ -949,13 +963,25 @@
         const customerCodes=[...new Set([...periodRows.map(r=>r.customerCode),...baseVehicleExtraCodes,state.selected?.customerCode]
           .filter(code=>/^[A-Z]\d+$/.test(code)&&!customerRegistry?.isRetired?.(code)))];
         if (!customerCodes.length) return;
-        const stageReadOnly=location.origin==='https://freshon-admin-stage-preview-template.onrender.com';
+        const stageReadOnly=archiveView;
         const batchSize=10000;
         const batches=[];for(let i=0;i<customerCodes.length;i+=batchSize)batches.push(customerCodes.slice(i,i+batchSize));
         // The protected endpoint accepts read-only POSTs on Stage as well.
         // One response keeps the initial catalogue on a single master version.
-        const payload=await collectBaseVehicleBatches(batches,batch=>fetchJson('/api/map-phase2b/preview/base-vehicles',
-          {channel:'base-vehicles',ttl:0,timeout:30000,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customerCodes:batch})}));
+        const transferVersions=new Map();
+        const payload=await collectBaseVehicleBatches(batches,async batch=>{
+          const key=batch.join(','),headers={'Content-Type':'application/json'};
+          const known=batch.every(code=>baseVehicles.has(code))?baseVehicleTransfers.get(key):null;
+          if(known)headers['X-Opsmap-Known-Fixed']=known;
+          const result=await fetchJson('/api/map-phase2b/preview/base-vehicles',
+            {channel:'base-vehicles',ttl:0,timeout:30000,method:'POST',headers,body:JSON.stringify({customerCodes:batch})});
+          if(result.notModified===true){
+            if(!known||known!==result.transferVersion)throw Error('BASE_TRANSFER_VERSION');
+            result.data=batch.map(code=>baseVehicles.get(code));
+          }
+          if(/^[a-f0-9]{64}$/.test(result.transferVersion||''))transferVersions.set(key,result.transferVersion);
+          return result;
+        });
         const rows=Array.isArray(payload?.data)?payload.data:[];
         const previousMeta=baseVehicleMeta;
         if(stageReadOnly&&payload?.meta?.refresh==='READ_ONLY'&&!Array.isArray(payload.data)){
@@ -987,6 +1013,7 @@
         const previous=baseVehicles;
         if(baseVehicleMeta?.version&&[...baseVehicles.values()].some(r=>r.baseVehicleVersion&&r.baseVehicleVersion!==baseVehicleMeta.version))baseVehicles=new Map();
         baseVehicles=MapPeriodUi.mergeBaseVehicles(baseVehicles,rows);baseVehicleStatus='READY';
+        baseVehicleTransfers=transferVersions;
         const reviewNote=document.querySelector('#reviewBanner small');
         if(reviewNote&&baseVehicleMeta?.stale===true){reviewNote.dataset.masterReference='stale';reviewNote.textContent=`10/23 저장자료 · 기준호차 ${String(baseVehicleMeta.checkedAt||'').slice(0,10)||'시점 미확인'} 이전 확인값 · 현재 기준 미확인 · 미게시`;window.dispatchEvent(new Event('resize'));}
         const changed=JSON.stringify(previousMeta)!==JSON.stringify(baseVehicleMeta)||rows.some(r=>JSON.stringify(previous.get(r.customerCode))!==JSON.stringify(r));
@@ -1041,7 +1068,7 @@
   const archivedDatedAssignments = meta => meta?.reviewOnly === true && meta.source === 'STAGE_VERIFIED_DELIVERY_ARCHIVE';
   const usableDatedAssignments = meta => meta?.complete === true || archivedDatedAssignments(meta);
   function maxDailyDate() {
-    return location.hostname==='freshon-admin-stage-preview-template.onrender.com' ? OpsmapDaily.dispatch(Date.now()) : localDate();
+    return archiveView ? OpsmapDaily.dispatch(Date.now()) : localDate();
   }
 
   function rosterCenters() {
@@ -4668,7 +4695,7 @@
     return judgeNewAreaPoint(row, await lookup, batch);
   }
 
-  function stageAddressBatchEnabled(){return window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com';}
+  function stageAddressBatchEnabled(){return archiveView;}
 
   function bindNewAreaDatedDispatch(parent,row) {
     const details=parent.querySelector?.('.areaDatedDispatch');

@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {createHash,createHmac} from 'node:crypto';
 import {OPSMAP_SCHEDULED_ROUTE,OPSMAP_WMS_NIGHT_SCHEDULED_ROUTE,verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
-import {STAGE_ORIGIN} from '../src/stageScope.js';
+import {STAGE_ORIGIN,PRIMARY_ORIGIN} from '../src/stageScope.js';
 
 const directory = new URL('../integrations/stage-fixed-master-clock/', import.meta.url);
 const source = readFileSync(new URL('StageFixedMasterClock.js', directory), 'utf8');
@@ -14,6 +14,7 @@ const triggerId = '4034124084959907503';
 const owner = 'stage-fixture@example.invalid';
 const executorHash = createHash('sha256').update(owner).digest('hex');
 const secret = 'stage-fixture-secret-never-used-outside-test';
+const primaryKey='primary-fixture-secret-never-used-outside-test';
 const tick = Date.parse('2026-11-13T15:02:00.000Z');
 const url = STAGE_ORIGIN + OPSMAP_SCHEDULED_ROUTE;
 const nightUrl = STAGE_ORIGIN + OPSMAP_WMS_NIGHT_SCHEDULED_ROUTE;
@@ -77,7 +78,8 @@ test('one Stage-only CLOCK sends the receipt accepted by the existing verifier',
   assert.equal(calls.length,1);
   const [{target,options}]=calls;
   assert.equal(target,url);
-  assert.deepEqual(manifest.urlFetchWhitelist,[url,nightUrl]);
+  assert.deepEqual(manifest.urlFetchWhitelist,[url,nightUrl,
+    PRIMARY_ORIGIN+OPSMAP_SCHEDULED_ROUTE,PRIMARY_ORIGIN+OPSMAP_WMS_NIGHT_SCHEDULED_ROUTE]);
   assert.equal(options.method,'post');
   assert.equal(options.followRedirects,false);
   const receipt=JSON.parse(options.payload);
@@ -92,6 +94,18 @@ test('one Stage-only CLOCK sends the receipt accepted by the existing verifier',
   assert.throws(() => verifyOpsmapScheduleReceipt({...receipt,date:'2026-11-13'},{
     secret,scheduleId:triggerId,executorHash,now:() => tick
   }),/OPSMAP_SCHEDULE_RECEIPT/);
+});
+
+test('switching the existing clock profile signs one request for the primary origin',()=>{
+  const now=Date.parse('2026-11-30T21:25:00.000Z');
+  const properties=new Map([['OPSMAP_PRIMARY_CLOCK_SECRET',primaryKey]]);
+  const {calls}=simulate({configured:{enabled:true,triggerId,executorHash,profile:'PRIMARY_HOURLY_WMS_V1'},time:now,properties});
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].target,PRIMARY_ORIGIN+OPSMAP_SCHEDULED_ROUTE);
+  const payload=JSON.parse(calls[0].options.payload);
+  const config={secret:primaryKey,scheduleId:triggerId,executorHash,now:()=>now};
+  assert.equal(verifyOpsmapScheduleReceipt(payload,{...config,audience:PRIMARY_ORIGIN}).audience,PRIMARY_ORIGIN);
+  assert.throws(()=>verifyOpsmapScheduleReceipt(payload,config),/OPSMAP_SCHEDULE_RECEIPT/);
 });
 
 test('missing approval, manual invocation, duplicate triggers, Hub CLOCK and another executor cannot send', () => {

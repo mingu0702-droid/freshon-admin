@@ -396,7 +396,7 @@ export function stageNearbyDispatchDay(prepared,date,day) {
     state:verified===dailyCenters.length?'VERIFIED':verified?'PARTIAL':'UNAVAILABLE',centers,rows:[...rows.values()]};
 }
 
-export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot, readReadySnapshot, readOfficialIndex, readAddressMaster, externalAddressLookup}) {
+export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, validation, readBaseVehicles, readSnapshot, readReadySnapshot, readOfficialIndex, readAddressMaster, externalAddressLookup,origin=STAGE_ORIGIN}) {
   const noStore = (_req, res, next) => {res.set('Cache-Control','private, no-store').vary('Cookie'); next();};
   const readVehicleDays=createLegacyNearbyVehicleReader();
   router.get(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (_req, res) => res.json(publicStatus(validation.active())));
@@ -459,7 +459,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
   });
   const addressStaff=(req,res,next)=>res.locals.staffSession?.key ? next() : requireStaff(req,res,next);
   router.post(STAGE_ADDRESS_BATCH_ROUTE,addressStaff,noStore,(req,res,next)=>{
-    if(req.get('Origin')!==STAGE_ORIGIN) return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});
+    if(req.get('Origin')!==origin) return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});
     if(!req.is('application/json')) return res.status(415).json({error:'STAGE_BATCH_MEDIA_TYPE'});
     return next();
   },express.json({limit:'96kb'}),async(req,res)=>{
@@ -594,7 +594,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
     }catch{return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE'});}
   });
   router.post(STAGE_BUNDLE_ROUTE, requireStaff, noStore, (req,res,next) => {
-    if (req.get('Origin') !== STAGE_ORIGIN || req.get('X-Opsmap-Stage-Verification') !== '1') return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});
+    if (origin!==STAGE_ORIGIN || req.get('Origin') !== origin || req.get('X-Opsmap-Stage-Verification') !== '1') return res.status(403).json({error:'STAGE_ORIGIN_REQUIRED'});
     next();
   }, express.raw({type:'application/octet-stream',limit:MAX_STAGE_BUNDLE_BYTES,inflate:false}), async (req,res) => {
     try {

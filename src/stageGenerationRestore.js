@@ -1,6 +1,6 @@
 import {constants} from 'node:fs';
 import {open,realpath} from 'node:fs/promises';
-import {MAX_STAGE_BUNDLE_BYTES,STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
+import {MAX_STAGE_BUNDLE_BYTES,opsmapArchiveSite} from './stageScope.js';
 
 const file='/var/data/opsmap-stage/verified-generation-v1.json.gz';
 
@@ -12,7 +12,7 @@ async function openApprovedFile() {
 // A read-only follower. The publisher, source credentials and mount require
 // separate owner configuration. A failed read cannot replace a verified bundle.
 export function createStageGenerationRestore({env,validation,openFile=openApprovedFile,now=Date.now}) {
-  const enabled=env.RENDER_SERVICE_ID===STAGE_SERVICE && env.RENDER_EXTERNAL_URL===STAGE_ORIGIN &&
+  const enabled=Boolean(opsmapArchiveSite(env)) &&
     env.OPSMAP_STAGE_APPROVED_GENERATION_FILE==='1';
   let attemptAt=null, verifiedAt=null, signature, flight, failures=0;
   let state=enabled?'PENDING':'NOT_CONFIGURED', nextCheck=0;

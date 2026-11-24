@@ -3,7 +3,7 @@ import {promisify} from 'node:util';
 import {gunzip, gzip} from 'node:zlib';
 import {customerRegistryAddressHash} from './customerRegistry.js';
 import {customerRegistryPage} from './privateCustomerRegistry.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite} from './stageScope.js';
 import {stageRegionalCoordinatesManifest, stageStaffRegistryManifest} from './stageStaffRegistryManifest.js';
 
 const route = '/api/map-phase2b/private/customer-registry';
@@ -149,7 +149,7 @@ export function createStageStaffRegistryAsset({
   env = process.env, fetchImpl = fetch, now = Date.now, manifest = stageStaffRegistryManifest,
   coordinateManifest = manifest === stageStaffRegistryManifest ? stageRegionalCoordinatesManifest : null
 } = {}) {
-  if (env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN || env.RENDER_SERVICE_ID !== STAGE_SERVICE ||
+  if (!opsmapArchiveSite(env) ||
       !manifest || !/^[a-f0-9]{40}$/.test(manifest.ref || '') || !isHash(manifest.sha256) ||
       !Number.isSafeInteger(manifest.bytes) || manifest.bytes < 29 || manifest.bytes > STAGE_STAFF_REGISTRY_MAX_BYTES) return null;
   const key = postalKey(env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64);

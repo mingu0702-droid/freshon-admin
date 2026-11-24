@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import {fixedEnvelope,validateFixedEnvelope,fixedTupleData} from './fixedVehicleStore.js';
+import {transferVersion} from '../opsmapTransferVersion.js';
 
 export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000,readOnly=false,reloadReadOnlyAfterMs=0}) {
   let current=null,index=new Map(),loadPending=null,loaded=false,loadedAt=0,pending=null,error=null,retryAt=0,refreshStartedAt=null,refreshMs=null;
@@ -38,7 +39,7 @@ export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000,r
       finally{clearInterval(timer);if(renewPending)await renewPending;if(acquired)await store.release(owner).catch(()=>{});}
     }).finally(()=>{pending=null;});return pending;
   }
-  async function get(codes){
+  async function get(codes,{knownVersion}={}){
     try{await initialize();}catch(e){error=/^FIXED_STORE_[A-Z_]+$/.test(e.code||'')?e.code:'FIXED_STORE_UNAVAILABLE';retryAt=now()+300000;}
     const sync=store?.status?.();
     const checkedAt=sync?.version===current?.version&&sync?.lastSuccessAt||current?.checkedAt||null;
@@ -51,11 +52,13 @@ export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000,r
         sourceObservationDate:sync.sourceObservationDate||null,sourceRows:sync.sourceRows??null,
         matchedCount:sync.matchedCount??null,sourceAsOf:null}:{})};
     if(!current)return {ok:false,phase:pending?'LOADING':error?'ERROR':readOnly?'NOT_READY':'LOADING',meta};
+    const retainedCodes=sync?.version===current.version?sync.retainedCustomerCodes:null;
+    const version=transferVersion([meta,retainedCodes,codes]);
+    if(knownVersion===version)return {ok:true,notModified:true,transferVersion:version,meta};
     const rows=codes===null?[...index.values()].map(fixedTupleData):(codes||[]).map(customerCode=>index.has(customerCode)?fixedTupleData(index.get(customerCode)):{customerCode,baseVehicle:'',baseVehicleGroup:'',baseVehicleState:'NOT_IN_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'});
-    const retained=sync?.version===current.version&&sync.retainedCustomerCodes?.length ?
-      new Set(sync.retainedCustomerCodes) : null;
+    const retained=retainedCodes?.length?new Set(retainedCodes):null;
     return {ok:true,data:rows.map(r=>({...r,baseVehicleCheckedAt:meta.checkedAt,baseVehicleVersion:meta.version,
-      baseVehicleStale:stale||retained?.has(r.customerCode)===true})),meta};
+      baseVehicleStale:stale||retained?.has(r.customerCode)===true})),transferVersion:version,meta};
   }
   return {get,settled:()=>pending,refresh};
 }

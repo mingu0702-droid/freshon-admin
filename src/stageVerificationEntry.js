@@ -7,6 +7,8 @@ import path from 'node:path';
 import {mountProductionMapApi} from './opsmap-abc/productionMapIntegration.js';
 import {callHub as hubRead} from './opsmap-abc/phase2bHubReadClient.js';
 import {createFixedVehicleCache} from './opsmap-abc/fixedVehicleCache.js';
+import {createSnapshotTransfer,sendSnapshotTransfer} from './opsmapTransferVersion.js';
+import {opsmapArchiveSite,PRIMARY_ORIGIN} from './stageScope.js';
 import {createFixedVehicleFileStore} from './opsmap-abc/fixedVehicleStore.js';
 import {canonicalFixedMasterVehicle} from './fixedMasterVehicle.js';
 import {createManualMapPins} from './opsmap-abc/manualMapPins.js';
@@ -51,8 +53,6 @@ import {STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_DELIVERY_SOURCES} from './opsmapSyncPoli
 import {addressRegionParts} from '../public/opsmap/vehicle-picker-regions.js';
 import {opsmapDispatchDate} from './snapshotRefreshEvidence.js';
 
-const stageOrigin = STAGE_ORIGIN;
-const stageService = STAGE_SERVICE;
 const repo = 'mingu0702-droid/freshon-cache';
 const github = `https://api.github.com/repos/${repo}`;
 const pinsBranch = 'stage/opsmap-manual-pins';
@@ -130,13 +130,17 @@ export function createStageSyncReaders({env,fetchImpl=fetch,now=Date.now}) {
 
 export function createStageVerificationApp({env = process.env, fetchImpl = fetch, readHub = hubRead, readShadowDirectory, syncReaders,
   readWmsExport = createStageWmsDispatchExportReader({env,fetchImpl}),
-  openScheduledStore = openOpsmapSyncGenerationStore, readVerifiedVehicleRegistration, now = Date.now, snapshotWaitMs = 2500} = {}) {
+  openScheduledStore = openOpsmapSyncGenerationStore, readVerifiedVehicleRegistration, primaryServices,
+  now = Date.now, snapshotWaitMs = 2500} = {}) {
   const today=()=>new Date(now()+9*3600000).toISOString().slice(0,10);
-  if (env.RENDER_EXTERNAL_URL !== stageOrigin || (env.RENDER_SERVICE_ID && env.RENDER_SERVICE_ID !== stageService)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
+  const archiveSite=opsmapArchiveSite(env), primary=archiveSite==='primary';
+  const stageOrigin=primary?PRIMARY_ORIGIN:STAGE_ORIGIN;
+  if (!archiveSite&&(env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||env.RENDER_SERVICE_ID)) throw new Error('EXACT_STAGE_ORIGIN_REQUIRED');
+  if(primary&&(!primaryServices?.sessions||!primaryServices?.roadRouteService))throw Error('OPSMAP_PRIMARY_AUTH_REQUIRED');
   if (![env.HUB_API_URL,env.OPSMAP_PRIVATE_READER_URL].every(stageHubUrl)) throw new Error('STAGE_READ_SOURCE_CONFIG');
-  const stageAddressApproved = env.RENDER_SERVICE_ID === stageService && env.OPSMAP_STAGE_KAKAO_ADDRESS_APPROVED === '1' &&
+  const stageAddressApproved = archiveSite==='stage' && env.OPSMAP_STAGE_KAKAO_ADDRESS_APPROVED === '1' &&
     /^(?:[1-9][0-9]?|100)$/.test(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT || '') && !!env.GITHUB_TOKEN;
-  const exactStageService = env.RENDER_SERVICE_ID === stageService;
+  const exactStageService = archiveSite==='stage';
   const stageRoadApproved = exactStageService && env.OPSMAP_STAGE_ROAD_ROUTE_APPROVED === '1';
   const stageRoadRequested = env.OPSMAP_STAGE_ROAD_ROUTE_ENABLED === '1';
   const sharedRoadFormal = exactStageService && env.OPSMAP_STAGE_ROAD_SHARED_FREE_ONLY !== undefined;
@@ -179,7 +183,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       OPSMAP_ROAD_ROUTE_CACHE_MS:stage.OPSMAP_ROAD_ROUTE_CACHE_MS,OPSMAP_ROAD_ROUTE_TIMEOUT_MS:stage.OPSMAP_ROAD_ROUTE_TIMEOUT_MS},
     fetchImpl,now,budget:roadRouteBudget,requireDurableBudget:true
   });
-  const roadRouteService = {
+  const roadRouteService = primary?primaryServices.roadRouteService:{
     ...roadService,
     ...(sharedRoad?{
       authorizeRequest({recorded,manual,body}){
@@ -215,7 +219,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const validation = createStageAbValidation({now,retainCoverageFiles:!postalEnabled});
   const generationRestore=createStageGenerationRestore({env:stage,validation,now});
   let baselineConfig, baselineStore, baselineRefresh, baselineRestoreMs, baselineState='NOT_CONFIGURED';
-  if(stage.RENDER_SERVICE_ID===STAGE_SERVICE){
+  if(archiveSite){
     try {
       baselineConfig=stageVerifiedBaselineConfig(stage);
       if(baselineConfig)baselineState='PENDING';
@@ -239,7 +243,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       .finally(()=>{baselineRefresh=null;});
     return baselineRefresh;
   }
-  const scheduledEnabled = stage.RENDER_SERVICE_ID===stageService && stage.OPSMAP_STAGE_SYNC_READ_APPROVED==='1';
+  const scheduledEnabled = Boolean(archiveSite) && stage.OPSMAP_STAGE_SYNC_READ_APPROVED==='1';
   const remoteEnabled=scheduledEnabled && stage.OPSMAP_STAGE_SYNC_REMOTE_APPROVED==='1';
   let scheduledStore, scheduledRefresh, scheduledSuccessAt = null;
   let scheduledRun=null,scheduledFailure=null,scheduledError=null,scheduledSources={};
@@ -281,7 +285,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const supplementalOfficialReview=readStageOfficialAddressReview(stage,{onReject:()=>
     console.warn(JSON.stringify({component:'stage-official-address-review',state:'REJECTED'}))});
   let preservedOfficialIndex = null, coverageOfficialIndex = null;
-  if(stage.RENDER_SERVICE_ID===STAGE_SERVICE) {
+  if(archiveSite) {
     try {
       preservedOfficialIndex=createOfficialAddressLookup(readFileSync('/etc/secrets/opsmap-stage-official-address-index-v2.json'),{
         // The two stored matches are bound to the approved A ledger and original 58-row addresses.
@@ -307,7 +311,9 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const geocodeBudgetFile = 'geocode-budget-v1.json';
   const geocodeBudget = stageAddressApproved ? createStageGeocodeBudgetStore({repo,token:stage.GITHUB_TOKEN,branch:pinsBranch,
     fetchImpl:stageGithub(fetchImpl,{files:[geocodeBudgetFile],branch:pinsBranch,writable:geocodeBudgetFile})}) : null;
-  const addressLookupService = createKakaoCoordinateConnection({env:stage,fetchImpl,store:geocodeBudget,
+  const addressEnv=primary?env:stage;
+  const addressLookupService = createKakaoCoordinateConnection({env:addressEnv,fetchImpl,
+    store:primary?primaryServices.geocodeBudget:geocodeBudget,
     stageAddressApproved,independentAddressLookup:()=>{
       const bundled=validation.active()?.bundledAddress,index=readOfficialIndex();
       return (bundled||index)?{lookup(query){
@@ -331,9 +337,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       });
     return fallbackCoverageDirectory.then(directory => coverageFor(validation.active()) ?? directory);
   }
-  const sessions = createStageStaffSessionStore({env:stage,fetchImpl:stageGithub(fetchImpl,{files:['staff-sessions-v1.json'],branch:pinsBranch,writable:'staff-sessions-v1.json'})});
+  const sessions = primary?primaryServices.sessions:createStageStaffSessionStore({env:stage,
+    fetchImpl:stageGithub(fetchImpl,{files:['staff-sessions-v1.json'],branch:pinsBranch,writable:'staff-sessions-v1.json'})});
   const snapshotFetch = stageGithub(fetchImpl,{files:['map-snapshot-v1.json','map-date-checkpoint-v1.json','fixed-vehicle-projection-v1.json'],branch:snapshotBranch,allowBlob:true});
-  const snapshotStore = createProductionSnapshotStore({env:stage,token:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,fetchImpl:snapshotFetch});
+  const snapshotStore = primary?null:createProductionSnapshotStore({env:stage,
+    token:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,fetchImpl:snapshotFetch});
   const masterStore = createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_TOKEN:stage.OPSMAP_SNAPSHOT_STORE_TOKEN || stage.GITHUB_TOKEN,GITHUB_CACHE_BRANCH:snapshotBranch,GITHUB_CACHE_DIR:'opsmap-stage'},fetchImpl:snapshotFetch});
   let snapshot = null, snapshotPending = null, snapshotBase = null, joinedSnapshot = null;
   let fileRestorePending = null;
@@ -442,8 +450,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const fixed = createFixedVehicleCache({readOnly:true,reloadReadOnlyAfterMs:dailyMaster?300_000:60_000,
     ...(dailyMaster?{ttl:FIXED_MASTER_DAILY_TTL}:{}),now,store:fixedStore});
   let fixedMasterEvidence=null, lastSyncDiagnostic=null;
-  const base={async get(codes) {
-    const primary=await fixed.get(codes), meta=primary.meta;
+  const base={async get(codes,options) {
+    const primary=await fixed.get(codes,options), meta=primary.meta;
     fixedMasterEvidence={
       state:primary.phase||'READY',checkedAt:meta?.checkedAt||null,stale:meta?.stale!==false,
       sourceObservedAt:meta?.sourceObservedAt||null,sourceObservationDate:meta?.sourceObservationDate||null,
@@ -485,7 +493,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return stageNationalRegistryScope(await readScheduleRegistry());
   }});
   // Start after listen and reuse the same in-flight, read-only load as user queries.
-  if(stage.RENDER_SERVICE_ID===stageService) app.once('opsmap-stage-listening',()=>{
+  if(archiveSite) app.once('opsmap-stage-listening',()=>{
     void remotePostal?.verifyReference();
     let registryAuditPending, registryAudited=false;
     function auditRegionalCoordinates() {
@@ -517,7 +525,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     syncCenters:Object.fromEntries(Object.entries(SYNC_DELIVERY_SOURCES).filter(([,id])=>datedSourceIds.has(id)))});
   const dispatchDate=readDatedDelivery.configured?()=>opsmapDispatchDate(now()):undefined;
   app.disable('x-powered-by');
-  app.get('/api/health',(_req,res)=>res.json({ok:true,scope:'stage',release:/^[a-f0-9]{40}$/.test(stage.RENDER_GIT_COMMIT || '') ? stage.RENDER_GIT_COMMIT : null}));
+  app.get('/api/health',(_req,res)=>res.json({ok:true,scope:primary?'primary':'stage',release:/^[a-f0-9]{40}$/.test(stage.RENDER_GIT_COMMIT || '') ? stage.RENDER_GIT_COMMIT : null}));
   app.get(['/','/index.html','/map-phase2b-preview.html'],(_req,res)=>res.redirect(302,'/opsmap/'));
   app.use('/opsmap',router);
   app.use((req,res,next)=>req.path.startsWith('/api/') ? router(req,res,next) : next());
@@ -525,6 +533,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   router.use((req,res,next)=>{
     let route;
     try {route=decodeURIComponent(req.path).toLowerCase().replace(/\/$/,'');} catch {return res.status(400).end();}
+    if(primary&&route===STAGE_BUNDLE_ROUTE)return res.status(404).end();
     if (/^\/(?:internal|api\/collector|api\/map-phase2b\/admin)(?:\/|$)/.test(route)) return res.status(404).end();
     if (req.method==='GET' || req.method==='HEAD' || req.method==='POST' && (authPosts.has(route) || readPosts.has(route) ||
         route===addressDiagnosticRoute&&stageAddressApproved || isRoadRouteRequest(req))) return next();
@@ -551,11 +560,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       staffView = requireStaff;
       mountStageStaffRegistry({app:router,requireStaff,asset:staffRegistry,nationalRegistry,
         getVerifiedRegistry:()=>validation.active()?.registry,now});
-      if (stage.RENDER_SERVICE_ID === STAGE_SERVICE) {
+      if (archiveSite) {
         mountRecentOperations(router,{requireStaff,read:readRecentOperations,now});
         driverContacts.mount(binding,{readBaseVehicles:codes=>base.get(codes),
           readDatedAssignment:readDatedDelivery.readDriverAssignment,readVerifiedVehicleRegistration});
-        mountStageAbValidation(router,{...binding,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,
+        mountStageAbValidation(router,{...binding,origin:stageOrigin,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,
           readAddressMaster:()=>nationalRegistry?.read(),
           readBaseVehicles:codes=>base.get(codes),externalAddressLookup:stageAddressApproved?addressLookupService:null});
         if (dailyMaster) router.get('/api/map-phase2b/private/fixed-master-observation',requireStaff,async(req,res)=>{
@@ -748,7 +757,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       manual.mount(binding);
       photos.mount(binding);
       mountPrivateCustomerSearch({app:router,requireStaff,readSnapshot,allowPreservedBatch:true,searchMaster:(q,options)=>callHub('customerSearch',{q,limit:50},{...options,useCache:false,privateRead:true,maxResponseBytes:65536})});
-      const snapshotProjections=new WeakMap();
+      const snapshotTransfer=createSnapshotTransfer();
       router.get('/api/map-phase2b/preview/snapshot',requireStageRead,async(req,res)=>{
         try {
           const immediate=validation.active()?.scheduled?.snapshot;
@@ -765,10 +774,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             ...(saved.osanDeliveryThrough?{osanDeliveryThrough:saved.osanDeliveryThrough}:{}),
             recovery,...(recovery==='RESTORING'?{retryAfterMs:2000}:{})};
           // Only share the encoded, redacted response for this exact Snapshot and metadata.
-          const stamp=JSON.stringify(meta);
-          let projection=snapshotProjections.get(saved.rows);
-          if(projection?.stamp!==stamp){
-            const rows=redactPublicData(saved.rows);
+          const projection=snapshotTransfer(saved.rows,meta,values=>{
+            const rows=redactPublicData(values);
             if(saved.source==='STAGE_VERIFIED_REGISTRY'){
               const active=validation.active();
               const registry=active?.generation===saved.sourceGeneration?active.registry:null;
@@ -781,17 +788,16 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
                 for(const field of ['address','basicAddress','customerAddress','latestAddress','addressDetail'])delete row[field];
               }
             }
-            projection={stamp,body:Buffer.from(JSON.stringify({ok:true,data:rows,meta,error:null}))};
-            snapshotProjections.set(saved.rows,projection);
-          }
-          const respond=()=>res.type('application/json').send(projection.body);
+            return rows;
+          });
+          const respond=()=>sendSnapshotTransfer(req,res,projection,meta);
           if(!immediate)return requireStaff(req,res,respond);
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
           res.locals.stageInlineStaffResponse=true;
           return respond();
         } catch {return res.status(503).json({error:'PHASE2B_SNAPSHOT_UNAVAILABLE'});}
       });
-      if (stage.RENDER_SERVICE_ID===STAGE_SERVICE) {
+      if (archiveSite) {
         const read = createOpsmapDispatchReferenceReader({
           getPublication() {
             const active = validation.active();
@@ -851,7 +857,10 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     }
   });
   router.use('/api',(_req,res)=>res.status(404).json({error:'OPSMAP_API_NOT_AVAILABLE'}));
-  router.get('/',(_req,res)=>res.sendFile('map-phase2b-preview.html',{root:publicDir}));
+  const primaryHtml=primary?readFileSync(path.join(publicDir,'map-phase2b-preview.html'),'utf8')
+    .replace('<html','<html data-opsmap-archive="primary"'):null;
+  router.get('/',(_req,res)=>primary?res.set('Cache-Control','private, no-store').type('html').send(primaryHtml):
+    res.sendFile('map-phase2b-preview.html',{root:publicDir}));
   router.get('/vendor/xlsx.full.min.js',(_req,res)=>res.sendFile(excelBrowserScript,{maxAge:'1h'}));
   router.use(express.static(publicDir));
   if (exactStageService) {

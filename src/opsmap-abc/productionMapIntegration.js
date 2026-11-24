@@ -142,7 +142,8 @@ export function mountProductionMapApi(app,{
   app.get('/api/map-phase2b/preview/snapshot',requireView,(_req,res,next)=>publishedReads.isActive()?pagedRequired(res):next());
   const mapFreshness=mountMapDataFreshness(app,{callHub,requireView,requireBaseVehicleView:mapStaff.requireStaff,previewEnabled,modelStatus:stageReadModel.status,readBaseVehicleMaster,baseCache:sharedBaseCache,baseStore:null,getLocalDataEvidence,env});
   const coordinateSupplement=sharedCoordinateSupplement||createCoordinateSupplement({callHub});
-  if(process.env.RENDER_EXTERNAL_URL==='https://freshon-admin-1.onrender.com')void coordinateSupplement.refresh();
+  if(!sharedCoordinateSupplement&&env.RENDER_EXTERNAL_URL==='https://freshon-admin-1.onrender.com'&&env.OPSMAP_STAGE_VERIFY_ONLY!=='1')
+    void coordinateSupplement.refresh();
   if(publicDir)app.get(['/map-phase2b-snapshot.json','/customer-master-20260604.json','/vehicle-data.js','/new-area-data.js'],async(req,res)=>{
     try{
       const raw=await fs.readFile(path.join(publicDir,path.basename(req.path)),'utf8');

@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite} from './stageScope.js';
 
 export const OFFICIAL_BUSINESS_SOURCE = 'https://www.data.go.kr/data/15083033/fileData.do';
 export const OFFICIAL_BUILDING_SOURCE = 'https://www.data.go.kr/data/15156424/fileData.do';
@@ -69,7 +69,7 @@ export function createOfficialAddressLookup(buffer, {sha256: expected, allowMixe
 }
 
 function readStageAddressAsset(env,variable,file,create,{readFile=readFileSync,onReject=()=>{}}={}) {
-  if (env.RENDER_SERVICE_ID!==STAGE_SERVICE || env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN) return null;
+  if (!opsmapArchiveSite(env)) return null;
   const expected=env[variable];
   if (!expected) return null;
   try {

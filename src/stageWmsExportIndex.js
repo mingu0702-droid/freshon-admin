@@ -1,6 +1,6 @@
 import {createHash,createHmac,timingSafeEqual} from 'node:crypto';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
-import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
 
 export const WMS_ARCHIVE_REPO='mingu0702-droid/freshon-cache';
 export const WMS_ARCHIVE_DIR='opsmap-stage/wms-dispatch-v1';
@@ -56,12 +56,12 @@ export function stageWmsReleaseFile({date,warehouse,sha256,observedAt,format}){
   return 'release-'+date+'-'+createHash('sha256').update(JSON.stringify(identity)).digest('hex')+'.json';
 }
 export const stageWmsReleaseEnabled=env=>
-  env.RENDER_SERVICE_ID===STAGE_SERVICE&&env.RENDER_EXTERNAL_URL===STAGE_ORIGIN&&
+  Boolean(opsmapArchiveSite(env))&&
   env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_APPROVED==='1'&&sha40.test(env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_REF||'');
 
 export function createStageWmsReleaseStore({env=process.env,fetchImpl=fetch,write=false}={}){
   if(!stageWmsReleaseEnabled(env))return null;
-  if(write&&env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_PUBLISH_APPROVED!=='1')return null;
+  if(write&&(!opsmapArchiveWriteApproved(env)||env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_PUBLISH_APPROVED!=='1'))return null;
   const key=stageWmsArchiveKey(env);
   const token=write?(env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_WRITE_TOKEN||env.OPSMAP_STAGE_SYNC_WRITE_TOKEN):
     (env.OPSMAP_SHADOW_GITHUB_READ_TOKEN||env.OPSMAP_SNAPSHOT_STORE_TOKEN);

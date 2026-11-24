@@ -8,7 +8,7 @@ import {gzip, gunzip} from 'node:zlib';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
 import {openOpsmapSyncGenerationStore, SYNC_MAX_DAY_BYTES, syncDigest, syncHash, syncSha256, validateOpsmapSyncDay, verifyOpsmapGeneration} from './opsmapSyncGeneration.js';
 import {boundedRead, isDay, parseCoverageIndex, PERIODS, privateCoverageDirectory} from './shadowCoverage/coverageFiles.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
 import {MAX_VEHICLE_DELIVERY_BYTES,VEHICLE_DELIVERY_FILE} from './opsmapVehicleDeliveryEvidence.js';
 
 const compress = promisify(gzip), decompress = promisify(gunzip);
@@ -27,7 +27,7 @@ const metadataFiles = new Map([
 ]);
 
 export function stageVerifiedBaselineConfig(env = process.env, independentBaselineJson) {
-  if (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN) return null;
+  if (!opsmapArchiveSite(env)) return null;
   try {
     const config = JSON.parse(independentBaselineJson ??
       readFileSync('/etc/secrets/opsmap-stage-baseline-v1.json','utf8'));
@@ -52,7 +52,7 @@ export function checkStageVerifiedBaseline(generation) {
 
 export function stageOpsmapDurableStorage({env = process.env, fetchImpl = fetch, write = false, baselineKey = null} = {}) {
   const baseline=Buffer.isBuffer(baselineKey)&&baselineKey.length===32;
-  if (env.RENDER_SERVICE_ID !== STAGE_SERVICE || env.RENDER_EXTERNAL_URL !== STAGE_ORIGIN ||
+  if (!opsmapArchiveSite(env) || write&&!opsmapArchiveWriteApproved(env) ||
       (baseline ? write : env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED !== '1' || write && env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED !== '1')) {
     throw Error('OPSMAP_DURABLE_STAGE_APPROVAL');
   }

@@ -1,4 +1,7 @@
-﻿import express from "express";
+import express from "express";
+import compression from "compression";
+import {createSnapshotTransfer,sendSnapshotTransfer} from "./opsmapTransferVersion.js";
+import {opsmapArchiveSite} from "./stageScope.js";
 import {createProductionPhotoBudgetStore} from "./productionPhotoBudgetStore.js";
 import {createOperationalPhotoMetadataReader,createOperationalPhotoTaskReader} from "./opsmapOperationalPhotos.js";
 import {mountProductionOpsmapCandidate,resolveProductionCredentials} from "./productionOpsmapCandidate.js";
@@ -53,6 +56,17 @@ fsSync.mkdirSync(uploadDir, { recursive: true });
 fsSync.mkdirSync(chunkDir, { recursive: true });
 
 const app = express();
+let primaryMap;
+if(opsmapArchiveSite(process.env)==='primary'){
+  const {createPrimaryOperationalMap,primaryMapDispatch}=await import('./productionOpsmapPromotion.js');
+  try{
+    primaryMap=await createPrimaryOperationalMap();
+    if(primaryMap)app.use(primaryMapDispatch(primaryMap));
+  }catch(error){
+    console.warn(JSON.stringify({component:'opsmap-primary-cutover',state:'LEGACY_RETAINED',
+      error:/^OPSMAP_PRIMARY_[A-Z_]+$/.test(error.message||'')?error.message:'OPSMAP_PRIMARY_PREFLIGHT_FAILED'}));
+  }
+}
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, callback) => callback(null, uploadDir),
@@ -3884,11 +3898,13 @@ app.get("/api/map-phase2b/preview/detail", requireView, async (req, res) => {
   }
 });
 
-app.get("/api/map-phase2b/preview/snapshot", requireView, async (_req, res) => {
+const productionSnapshotTransfer=createSnapshotTransfer();
+app.get("/api/map-phase2b/preview/snapshot", requireView, compression(), async (req, res) => {
   if (!previewEnabled()) return res.status(404).json({ error: "PREVIEW_DISABLED" });
   const payload = await readPhase2bSnapshot();
   if (!payload) return res.status(503).json({ error: "PHASE2B_SNAPSHOT_NOT_READY" });
-  return res.json({ ok: true, data: payload.rows, meta: phase2bSnapshotMeta(payload), error: null });
+  const meta=redactPublicData(phase2bSnapshotMeta(payload));
+  return sendSnapshotTransfer(req,res,productionSnapshotTransfer(payload.rows,meta,redactPublicData),meta);
 });
 
 async function loadPhase2bBounds(params) {
@@ -4007,12 +4023,14 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
-if(phase2bDurableSnapshotStore){
+if(phase2bDurableSnapshotStore&&!primaryMap){
   const saved=await readPhase2bSnapshot();
   console.info(JSON.stringify({component:'phase2b-snapshot',event:saved?.preservation?'DURABLE_LOADED':'DURABLE_NOT_LOADED',rowCount:saved?.preservation?saved.rowCount:null,version:saved?.preservation?.version||null,revision:saved?.preservation?.revision||null,automaticSyncVerified:false}));
 }
 const server = app.listen(config.port, config.host, () => {
   console.log(`Freshon dispatch admin listening on ${config.host}:${config.port}`);
+  if(primaryMap){primaryMap.emit('opsmap-stage-listening');return;}
+  if(process.env.RENDER_EXTERNAL_URL==='https://freshon-admin-1.onrender.com')void sharedCoordinateSupplement.refresh();
   void productionMap.requestPublishedModel();
   if (previewEnabled()) {
     schedulePhase2bSnapshotRefresh();

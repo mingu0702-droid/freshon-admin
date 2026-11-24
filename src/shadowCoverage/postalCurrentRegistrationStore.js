@@ -1,6 +1,6 @@
 import {createHmac,hkdfSync,timingSafeEqual} from 'node:crypto';
 import {createPrivateGithubJsonStore} from '../fixedVehicleStore.js';
-import {STAGE_ORIGIN,STAGE_SERVICE} from '../stageScope.js';
+import {opsmapArchiveSite,opsmapArchiveWriteApproved} from '../stageScope.js';
 import {stagePostalReadToken} from './stagePostalAssets.js';
 
 const repo='mingu0702-droid/freshon-cache', branch='stage/opsmap-postal-v1';
@@ -39,9 +39,9 @@ function headCodec(key){
 }
 
 export function createStageCurrentPostalRefreshStore({env=process.env,fetchImpl=fetch,write=false,now=Date.now}={}) {
-  if(env.RENDER_SERVICE_ID!==STAGE_SERVICE||env.RENDER_EXTERNAL_URL!==STAGE_ORIGIN||
+  if(!opsmapArchiveSite(env)||
       env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1'||env.OPSMAP_STAGE_CURRENT_POSTAL_REFRESH_APPROVED!=='1'||
-      write&&(env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||env.OPSMAP_STAGE_CURRENT_POSTAL_REFRESH_WRITE_APPROVED!=='1'))return null;
+      write&&(!opsmapArchiveWriteApproved(env)||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||env.OPSMAP_STAGE_CURRENT_POSTAL_REFRESH_WRITE_APPROVED!=='1'))return null;
   const encoded=env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64||'', key=Buffer.from(encoded,'base64');
   const token=write?env.OPSMAP_STAGE_SYNC_WRITE_TOKEN:stagePostalReadToken(env);
   if(!token||key.length!==32||key.toString('base64')!==encoded)throw error();

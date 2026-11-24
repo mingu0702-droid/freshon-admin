@@ -3,7 +3,7 @@ import {promisify} from 'node:util';
 import {gzip, gunzip} from 'node:zlib';
 import {customerRegistryAddressHash} from './customerRegistry.js';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
-import {STAGE_ORIGIN, STAGE_SERVICE} from './stageScope.js';
+import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
 import {SYNC_CENTERS} from './opsmapSyncPolicy.js';
 
 const repository = 'mingu0702-droid/freshon-cache';
@@ -31,7 +31,7 @@ const zip = promisify(gzip), unzip = promisify(gunzip);
 const failure = code => Object.assign(Error(code), {code});
 const privateText = /[\x00-\x1f\x7f]|(?:\+?82[- ]?)?01[016789][-. ]?\d{3,4}[-. ]?\d{4}|비밀번호|비번|보안키|출입코드|공동현관|도어락|패스워드|password|passcode|bearer\s|https?:\/\//i;
 const validText = (value,max) => typeof value === 'string' && value.length <= max && !privateText.test(value.normalize('NFKC'));
-const stage = env => env.RENDER_EXTERNAL_URL === STAGE_ORIGIN && env.RENDER_SERVICE_ID === STAGE_SERVICE;
+const stage = env => Boolean(opsmapArchiveSite(env));
 export const NATIONAL_REGISTRY_WORKER_LIMIT = 45 * 60_000;
 export const stageNationalRegistryEnabled = env => stage(env) && env.OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED === '1';
 
@@ -237,7 +237,7 @@ export function mergeStageNationalRegistry(previous, incoming, official=[]) {
 
 export function createStageNationalRegistryStorage({env=process.env, fetchImpl=fetch, now=Date.now, write=false}={}) {
   if (!stageNationalRegistryEnabled(env) || env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1' ||
-      write && env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1') return null;
+      write && (!opsmapArchiveWriteApproved(env)||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1')) return null;
   const encoded=env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64;
   const token=write ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN ||
     (env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1'&&env.OPSMAP_SNAPSHOT_STORE_TOKEN) :
