@@ -351,11 +351,11 @@ async function runScheduled(job,settingsFile){
       }
     };
     async function runWms(night=false){
-      if(night!==(env.OPSMAP_STAGE_WMS_NIGHT_SLOT_APPROVED==='1'))return {state:'SKIPPED'};
+      if(night&&env.OPSMAP_STAGE_WMS_NIGHT_SLOT_APPROVED!=='1')return {state:'SKIPPED'};
       const {syncStageFreshonWmsDispatch}=await import('../src/stageFreshonWmsWorkbookGate.js');
       const date=night?stageWmsNightDate(receipt):receipt.date;
       const verifyWindow=()=>{if(night)stageWmsNightDate(receipt);};
-      return syncStageFreshonWmsDispatch({env,date,observedAt:new Date().toISOString(),
+      return syncStageFreshonWmsDispatch({env,date,observedAt:new Date().toISOString(),reconcileExisting:night,
         fetchImpl:(...args)=>{verifyWindow();return fetch(...args);},
         login:async()=>{
           const {config}=await import('../src/config.js');

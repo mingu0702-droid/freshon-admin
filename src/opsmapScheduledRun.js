@@ -170,7 +170,7 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
   const wmsPublish=env.OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED==='1';
   const jobPlan=[...(fullJob?['generation']:[]),...(recentJob?['recent']:[]),
     ...(fixedJob?['fixed']:[]),...(nationalJob?['national']:[]),
-    ...(!nightWms&&wmsPublish?['wms']:[]),
+    ...(wmsPublish?['wms']:[]),
     ...(env.OPSMAP_STAGE_CURRENT_POSTAL_REFRESH_APPROVED==='1'&&nationalJob?['postal']:[])];
   let jobs;
   if(durable){
@@ -232,7 +232,8 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     const config={...opsmapScheduleConfig(env),now};
     try {receipt=verifyOpsmapScheduleReceipt(req.body,config);}
     catch {return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});}
-    if(nightWms&&stageWmsNightWindow(receipt))return acceptNight(receipt,res);
+    if(nightWms&&(receipt.slot+9)%24!==6)
+      return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});
     if (independent) {
       try {await enqueueOpsmapSchedule(openDispatchStore(),receipt,config);}
       catch {return res.status(503).json({error:'OPSMAP_SCHEDULE_DISPATCH_UNCONFIRMED'});}
