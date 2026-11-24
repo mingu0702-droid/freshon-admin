@@ -616,6 +616,9 @@
       snapshotReadState = 'ready';
       const generation=payload.meta?.sourceGeneration;
       const version=/^[a-f0-9]{64}$/.test(received||'')?received:null;
+      const sameGeneration=/^[a-f0-9]{64}$/.test(generation||'')&&generation===snapshotMeta?.sourceGeneration;
+      const changed=version?version!==snapshotTransferVersion:!sameGeneration;
+      if(changed||latestSnapshotRows.length!==payload.data.length){
         latestSnapshotRows=payload.data;coordinateByCode.clear();
         latestSnapshotRows.forEach(row=>coordinateByCode.set(String(row.customerCode||row.code),row));
       }
