@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {createHash,createHmac} from 'node:crypto';
-import {OPSMAP_SCHEDULED_ROUTE,verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
+import {OPSMAP_SCHEDULED_ROUTE,OPSMAP_WMS_NIGHT_SCHEDULED_ROUTE,verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
 import {STAGE_ORIGIN} from '../src/stageScope.js';
 
 const directory = new URL('../integrations/stage-fixed-master-clock/', import.meta.url);
@@ -16,6 +16,8 @@ const executorHash = createHash('sha256').update(owner).digest('hex');
 const secret = 'stage-fixture-secret-never-used-outside-test';
 const tick = Date.parse('2026-11-13T15:02:00.000Z');
 const url = STAGE_ORIGIN + OPSMAP_SCHEDULED_ROUTE;
+const nightUrl = STAGE_ORIGIN + OPSMAP_WMS_NIGHT_SCHEDULED_ROUTE;
+const profile='STAGE_HOURLY_WMS_V1';
 const clockTrigger = (handlerName=handler,id=triggerId,source='CLOCK') => ({
   getHandlerFunction: () => handlerName,
   getUniqueId: () => id,
@@ -26,7 +28,7 @@ const signedBytes = buffer => Array.from(buffer,byte => byte > 127 ? byte - 256 
 function simulate({
   configured={enabled:true,triggerId,executorHash},key=secret,
   triggers=[clockTrigger()],event={triggerUid:triggerId},
-  effectiveAccount=owner,time=tick,httpStatus=202,failFetch=false
+  effectiveAccount=owner,time=tick,httpStatus=202,failFetch=false,properties=new Map(),lockAvailable=true
 }={}) {
   const calls=[], logs=[];
   class ClockDate extends Date {
@@ -36,12 +38,14 @@ function simulate({
     Date: ClockDate,
     PropertiesService: {
       getScriptProperties: () => ({
-        getProperty: name => ({
+        setProperty:(name,value)=>properties.set(name,value),
+        getProperty: name => (properties.get(name) ?? ({
           OPSMAP_STAGE_SYNC_DISPATCH_V1: configured && JSON.stringify(configured),
           OPSMAP_STAGE_SYNC_SCHEDULER_SECRET: key
-        })[name]
+        })[name])
       })
     },
+    LockService:{getScriptLock:()=>({tryLock:()=>lockAvailable,releaseLock(){}})},
     ScriptApp: {TriggerSource:{CLOCK:'CLOCK'},getProjectTriggers:() => triggers},
     Session: {getEffectiveUser:() => ({getEmail:() => effectiveAccount})},
     Utilities: {
@@ -65,7 +69,7 @@ function simulate({
   });
   vm.runInContext(source,context);
   context[handler](event);
-  return {calls,logs};
+  return {calls,logs,status:context.opsmapStageClockStatus};
 }
 
 test('one Stage-only CLOCK sends the receipt accepted by the existing verifier', () => {
@@ -73,7 +77,7 @@ test('one Stage-only CLOCK sends the receipt accepted by the existing verifier',
   assert.equal(calls.length,1);
   const [{target,options}]=calls;
   assert.equal(target,url);
-  assert.deepEqual(manifest.urlFetchWhitelist,[url]);
+  assert.deepEqual(manifest.urlFetchWhitelist,[url,nightUrl]);
   assert.equal(options.method,'post');
   assert.equal(options.followRedirects,false);
   const receipt=JSON.parse(options.payload);
@@ -115,4 +119,50 @@ test('a failed send is logged once without returning a key, principal or payload
   assert.equal(rejected.calls.length,1);
   assert.equal(rejected.logs[0].status,403);
   assert.ok(!('signature' in rejected.logs[0]));
+});
+
+test('experimental hourly Stage clock sends only 06 daily and 20/21 purpose-bound WMS signals',()=>{
+  const configured={enabled:true,triggerId,executorHash,profile};
+  const timeAt=hours=>Date.parse('2026-11-24T'+hours+'+09:00');
+  for(const inactive of ['05:59:59','07:00:00','14:30:00','19:59:59','22:00:00']){
+    assert.equal(simulate({configured,time:timeAt(inactive)}).calls.length,0);
+  }
+  for(const [at,target,purpose] of [['06:34:00',url,false],['20:33:00',nightUrl,true],['21:35:00',nightUrl,true]]){
+    const time=timeAt(at);
+    const {calls}=simulate({configured,time});
+    assert.equal(calls.length,1);
+    const [{target:actual,options}]=calls;
+    assert.equal(actual,target);
+    const receipt=JSON.parse(options.payload);
+    const opts={secret,scheduleId:triggerId,executorHash,now:()=>time,night:purpose};
+    assert.equal(verifyOpsmapScheduleReceipt(receipt,opts).runId,receipt.runId);
+    assert.throws(()=>verifyOpsmapScheduleReceipt(receipt,{...opts,night:!purpose}),/OPSMAP_SCHEDULE_RECEIPT/);
+  }
+});
+
+test('script lock and accepted hour/purpose marker avoid repeated signed calls',()=>{
+  const configured={enabled:true,triggerId,executorHash,profile};
+  const cache=new Map();
+  const time=Date.parse('2026-11-24T20:20:00+09:00');
+  const opts={configured,time,properties:cache};
+  assert.equal(simulate({...opts,lockAvailable:false}).calls.length,0);
+  const failed=simulate({...opts,httpStatus:503});
+  const accepted=simulate({...opts,time:time+60_000});
+  assert.equal(failed.calls.length,1);
+  assert.equal(accepted.calls.length,1);
+  assert.equal(failed.logs[0].runId,accepted.logs[0].runId);
+  assert.equal(simulate({...opts,time:time+120_000}).calls.length,0);
+  assert.equal(simulate({...opts,time:time+3600_000}).calls.length,1,'next hour can wake the same server checkpoint');
+  assert.equal(simulate({...opts,time:time+3600_000+60000}).calls.length,0);
+});
+
+test('status reads a single Stage CLOCK identity without exposing executor or credentials',()=>{
+  const configured={enabled:false,triggerId,executorHash,profile};
+  const {status,calls}=simulate({configured});
+  const data=JSON.parse(JSON.stringify(status()));
+  assert.deepEqual(data,{enabled:false,profile,triggerCount:1,clockTriggerId:triggerId,
+    triggerMatched:true,executorMatched:true,secretConfigured:true});
+  assert.equal(calls.length,0);
+  assert(!JSON.stringify(data).includes(executorHash));
+  assert(!JSON.stringify(data).includes(secret));
 });
