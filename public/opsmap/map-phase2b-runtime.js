@@ -5861,6 +5861,11 @@
       const known=storesByCode.get(code);
       return fixedVehicleFor(code,known).baseVehicle||null;
     },
+    dispatchReferenceRegisteredAddress(code,point) {
+      const row=storesByCode.get(code);
+      return row&&point&&Number.isFinite(row.lat)&&Number.isFinite(row.lng)&&
+        Math.abs(row.lat-point.lat)<=0.000001&&Math.abs(row.lng-point.lng)<=0.000001?row.address||null:null;
+    },
     setDispatchReferenceMapFit(value) {
       dispatchReferenceFitsMap=Boolean(value);
       if (dispatchReferenceFitsMap) {

@@ -6,7 +6,7 @@ const bridge=window.MapUiLocalBridge;
 if (tabs && sidebar && bridge) {
   const desktop=matchMedia('(min-width:901px) and (any-pointer:fine)');
   const requestedReview=new URLSearchParams(location.search).get('dispatch-review');
-  const review=bridge.isStagePreview?.()&&['map','fleet','workbench'].includes(requestedReview)?requestedReview:null;
+  const review=bridge.isStagePreview?.()&&requestedReview==='compare';
   const tab=document.createElement('button');
   Object.assign(tab,{id:'modeDispatchReference',className:'tab',type:'button',textContent:'배차 참고'});
   tab.setAttribute('aria-pressed','false');
@@ -85,21 +85,21 @@ if (tabs && sidebar && bridge) {
     try {
       if (!feature) {
         stylesheet ||= Object.assign(document.createElement('link'),{
-          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261124-osan-layer',import.meta.url),
+          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261125-comparison',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261124-stable-review-outline');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261125-comparison');
         if (opening!==attempt||!session()) return;
-        const createReview=review?(await import('./dispatch-reference-review.mjs?v=20261124-staff-screen-review-v2')).createDispatchScreenReview:null;
+        const createReview=review?(await import('./dispatch-reference-review.mjs?v=20261125-comparison')).createDispatchScreenReview:null;
         if (opening!==attempt||!session()) return;
-        const screenReview=createReview?.({variant:review,workspace,bridge,readFixedArea});
+        const screenReview=createReview?.({bridge,readFixedArea});
         feature=mountDispatchReference({workspace,sidebar,bridge,readDay,readPeriod,readOutline,screenReview});
       }
       window.dispatchEvent(new Event('map-dispatch-reference-open'));
       previous=[...tabs.querySelectorAll('button[aria-pressed="true"]')];
       for (const button of previous) button.setAttribute('aria-pressed','false');
       document.body.classList.add('dispatch-reference-open');
-      if(review)document.body.dataset.dispatchReview=review;
+      if(review)document.body.dataset.dispatchReview='compare';
       tab.textContent='배차 참고';
       tab.setAttribute('aria-pressed','true');
       feature.open();

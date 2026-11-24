@@ -93,7 +93,7 @@ export function simulateDispatchReviewMoves(model, moves) {
     const candidates=move.mode==='same-postal'?comparison.samePostalCandidates:
       move.mode==='adjacent'?comparison.adjacentCandidates:comparison.nearbyCandidates;
     const candidate=candidates.find(row=>row.customerCode===move.customerCode);
-    if (!Number.isSafeInteger(candidate?.amount) || candidate.amount<=0 ||
+    if (!Number.isSafeInteger(candidate?.amount) || candidate.amount<0 ||
         [source,target].some(route=>!route.detail || !Number.isSafeInteger(route.amount) ||
           !Number.isSafeInteger(route.storeCount) || route.storeCount!==route.stops.length)) return null;
     seen.add(move.customerCode);
@@ -119,7 +119,13 @@ export function simulateDispatchReviewMoves(model, moves) {
     if (route.amount<draft.outgoing || !Number.isSafeInteger(amount) || draft.count<0) return null;
     vehicles.set(route.vehicle,{amount,storeCount:draft.count});
   }
-  return {vehicles,amountTotal:model.amountTotal,movedAmount,moveCount:seen.size};
+  const touched=[...totals.keys()];
+  const sum=(route,field)=>touched.reduce((total,vehicle)=>total+route.get(vehicle)[field],0);
+  const verified=['amount','storeCount'].every(field=>{
+    const before=sum(model.vehicles,field),after=sum(vehicles,field);
+    return Number.isSafeInteger(before)&&before===after;
+  });
+  return verified?{vehicles,amountTotal:model.amountTotal,movedAmount,moveCount:seen.size}:null;
 }
 
 export function groupFixedPostalRoutes(members, fixedVehicle) {

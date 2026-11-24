@@ -76,6 +76,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   let repeatedCustomers=new Map();
   const additionalVehicles=new Set();
   let markerMap, markers=new Map(), polygons=[], polygonBounds=new Map();
+  let transferKeys=new Set();
   let savedView=null,reviewLine=null,reviewLineKey=null;
   const isOpen=()=>active&&!controls.hidden;
   const dayNow=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -85,7 +86,14 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     date.max=periodMode?today:tomorrow(today);
     return today;
   }
-  if(screenReview)choices.prepend(postcodeSearch.closest('label'),postcode.closest('label'));
+  if(screenReview) {
+    const anchor=primary.closest('label'), search=vehicleSearch.closest('label');
+    anchor.firstChild.textContent='비교 기준 호차';
+    search.firstChild.textContent='호차 검색';
+    choices.prepend(anchor,search);
+    screenReview.attach({choices,detail});
+    details.querySelector('summary').textContent='호차 비교 및 가상 이관';
+  }
   const map=()=>bridge.state.map;
   const sdk=()=>window.kakao?.maps;
 
@@ -119,6 +127,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       const existing=markers.get(key);
       const rendering=existing || makeMarker(row,members);
       rendering.button.classList.toggle('selected',selected);
+      if (screenReview) rendering.button.toggleAttribute('data-transfer-draft',
+        members.some(member=>transferKeys.has(member.dispatchKey)));
       rendering.button.setAttribute('aria-pressed',String(selected));
       rendering.overlay.setZIndex?.(selected?62:50);
       if (!existing) rendering.overlay.setMap(current);
@@ -143,8 +153,11 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
           if (map().getLevel()>5) map().setLevel(5);
         } else {
           controls.open=true;
-          renderStoreList(members);
-          stores.querySelector('button')?.focus({preventScroll:true});
+          if(screenReview) screenReview.showSharedLocation(members);
+          else {
+            renderStoreList(members);
+            stores.querySelector('button')?.focus({preventScroll:true});
+          }
         }
       }});
     button.dataset.dispatchRole=role;
@@ -232,7 +245,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     selection=row;
     document.body.classList.remove('dispatch-standard-detail-open');
     document.body.classList.add('dispatch-inspection');
-    const nativeStore=bridge.selectDispatchReferenceStore(row.customerCode,row.point);
+    const nativeStore=!screenReview&&bridge.selectDispatchReferenceStore(row.customerCode,row.point);
     details.open=true;
     renderDetail();
     if (!nativeStore) detail.querySelector('.dispatch-native-detail')?.remove();
@@ -299,6 +312,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     fleetList.replaceChildren();
     const anchor=primary.value;
     if (!anchor) {
+      screenReview?.updateNearby([], {hasAnchor:false});
       fleetSummary.textContent='비교의 기준이 될 첫 번째 호차를 선택하세요.';
       return;
     }
@@ -308,6 +322,11 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     }
     const within=item=>item.minimumKm!==null&&item.minimumKm<=.5;
     const postal=item=>item.sharedPostalCodes.length>0;
+    if (screenReview) {
+      screenReview.updateNearby(discoveries.filter(item=>
+        matchesVehicle(item.source.vehicle)&&(postal(item)||within(item))), {hasAnchor:true});
+      return;
+    }
     const scope=fleetScope.value;
     const results=discoveries.filter(item=>matchesVehicle(item.source.vehicle)&&
       (scope==='all'||scope!=='nearby'&&postal(item)||scope!=='postal'&&within(item)));
@@ -488,16 +507,26 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   }
 
   function renderDetail() {
-    screenReview?.update({
+    if (screenReview) return screenReview.update({
       model:period?null:model,routes,zip:model?postcode.value:'',selection,showDistance:showReviewDistance,
+      nearest:nearestDispatchStop,
       pickStop(code,vehicle){
         const row=markerRows.find(item=>item.customerCode===code&&(!vehicle||item.vehicle===vehicle));
         if(row)selectStop(row);
       },
       chooseRoute(vehicle) {
-        if(!primary.value)primary.value=vehicle;
-        else if(primary.value!==vehicle)secondary.value=vehicle;
-        updateRoutes({focusMatch:true});
+        if (!primary.value||primary.value===vehicle) return;
+        populateDayVehicles(primary.value,vehicle);
+        updateRoutes();
+      },
+      choosePostal(code) {
+        postcodeSearch.value='';
+        populatePostcodes(code);
+        showPostcode();
+      },
+      highlightMoves(moves) {
+        transferKeys=new Set(moves.map(move=>move.source+'|'+move.customerCode));
+        queueMarkers();
       },
     });
     if (period) return renderPeriodDetail();
@@ -570,7 +599,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   function clearDispatchSelection() {
     const code=selection?.customerCode;
     selection=null;
-    if (code) bridge.clearDispatchReferenceSelection?.(code);
+    if (code&&!screenReview) bridge.clearDispatchReferenceSelection?.(code);
     document.body.classList.remove('dispatch-inspection','dispatch-standard-detail-open');
   }
 
@@ -588,8 +617,9 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     }:null;
     clearDispatchSelection();
     selectedPostcodes=comparisons?.secondary.sharedPostalCodes || [];
+    if (screenReview) selectedPostcodes=selectedPostcodes.slice(0,8);
     markerRows=[];
-    const extra=[...additionalVehicles].filter(vehicle=>vehicle!==first?.vehicle&&vehicle!==second?.vehicle)
+    const extra=(screenReview?[]:[...additionalVehicles]).filter(vehicle=>vehicle!==first?.vehicle&&vehicle!==second?.vehicle)
       .map(vehicle=>model.vehicles.get(vehicle)).filter(Boolean);
     const mapped=[...Object.entries(routes),...extra.map(route=>['extra',route])];
     const extraColors=['#137f5e','#7252b6','#a83d59','#177991'];
@@ -599,7 +629,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       const routeColor=side==='extra'?extraColors[extraIndex++%extraColors.length]:null;
       for (const stop of route?.stops||[]) markerRows.push({...stop,lat:stop.point?.lat,lng:stop.point?.lng,
         customerName:stop.name,vehicle:route.vehicle,dispatchKey:route.vehicle+'|'+stop.customerCode,
-        dispatchSide:side,dispatchRole:side,routeColor,dispatchCandidate:candidates.has(stop.customerCode)});
+        dispatchSide:side,dispatchRole:side,routeColor,dispatchCandidate:!screenReview&&candidates.has(stop.customerCode)});
     }
     const byCustomer=new Map();
     for (const {customerCode,vehicle} of markerRows) {
@@ -641,11 +671,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     }
     if(screenReview&&!period){
       const expected=code?[code]:(comparisons?.secondary?.sharedPostalCodes||[]).slice(0,8);
-      if(code&&!selectedPostcodes.includes(code)){
-        clearOutlines();
-        selectedPostcodes=expected;
-        addOutlines();
-      }else if(!outlineRequest&&!polygonBounds.has(code)&&code){
+      if(code?(!selectedPostcodes.includes(code)||!outlineRequest&&!polygonBounds.has(code)):
+          expected.join('|')!==selectedPostcodes.join('|')){
         clearOutlines();
         selectedPostcodes=expected;
         addOutlines();
@@ -669,7 +696,11 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     }
   };
   vehicles.onchange=updatePeriod;
-  primary.onchange=secondary.onchange=updateRoutes;
+  primary.onchange=()=>{
+    if (screenReview) secondary.value='';
+    updateRoutes();
+  };
+  secondary.onchange=updateRoutes;
   fleetScope.onchange=renderFleet;
   vehicleSearch.oninput=()=>{
     if (period) populatePeriodVehicles();
@@ -728,15 +759,9 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       }
       status.textContent=[!model.routeVerified&&'확정 배차 미확인',!model.amountsVerified&&'같은 배송일 WMS 금액 미확인'].filter(Boolean).join(' · ');
       dayVehicles=[...model.vehicles.values()].filter(route=>route.stops.length).sort((a,b)=>a.vehicle.localeCompare(b.vehicle,'ko',{numeric:true}));
-      const example=screenReview&&selectedDate==='2026-11-25'&&!prior.some(Boolean)&&
-        ['101','208'].every(vehicle=>dayVehicles.some(route=>route.vehicle===vehicle));
-      populateDayVehicles(...(example?['101','208']:prior));
+      populateDayVehicles(...(screenReview?[prior[0],'']:prior));
       choices.hidden=!dayVehicles.length;
       updateRoutes();
-      if(example&&choicesPostcodes.some(({zip,overlap})=>zip==='06312'&&overlap)){
-        postcode.value='06312';
-        showPostcode();
-      }
     } catch {
       if (!controller.signal.aborted) status.textContent='배송 자료를 불러오지 못했습니다. 다시 조회하세요.';
     }
@@ -771,7 +796,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       if (mapNode) observer.observe(mapNode);
       mapReset?.addEventListener('click',fitRoutes);
       const today=updateDateLimit(mode.value==='period');
-      date.value=screenReview&&mode.value==='day'&&date.max>='2026-11-25'?'2026-11-25':today;
+      date.value=today;
       screenReview?.open();
       window.addEventListener('map-sdk-ready',wireMap);
       window.addEventListener('map-store-selected',selectFromMap);
