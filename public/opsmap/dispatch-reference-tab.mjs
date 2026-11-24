@@ -85,7 +85,7 @@ if (tabs && sidebar && bridge) {
     try {
       if (!feature) {
         stylesheet ||= Object.assign(document.createElement('link'),{
-          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261124-staff-screen-review-v2',import.meta.url),
+          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261124-osan-layer',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
         const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261124-staff-screen-review-v2');

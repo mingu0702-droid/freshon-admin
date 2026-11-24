@@ -15,8 +15,9 @@
 .dispatch-reference-open .maparea > #navigationWorkspace,
 .dispatch-reference-open .maparea #vehicleQuickFilter,
 .dispatch-reference-open .maparea #mapTopControls > :not(#mapReset) { display:none; }
-.dispatch-reference-open #map .marker:not(.dispatch-map-pin,.selected,.virtual,.searchTemporaryMarker,.nearbyVehicle) { opacity:.26; }
-.dispatch-reference-open.dispatch-inspection:not(.dispatch-standard-detail-open) #detailSection { display:none; }
+.dispatch-reference-open #map .marker:not(.dispatch-map-pin,.virtual,.searchTemporaryMarker) { display:none; }
+.dispatch-reference-open #detailSection:not(:has([data-temp-distance-result])) { display:none; }
+.dispatch-reference-open.dispatch-standard-detail-open #detailSection.open { display:block; }
 .dispatch-native-detail { margin-top:7px; width:100%; }
 .dispatch-reference-open .dispatch-map-pin[data-dispatch-candidate] .pin {
   outline:3px solid #8b4ac6; outline-offset:2px;

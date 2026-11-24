@@ -22,6 +22,15 @@
 #mapRouteTotals > span + span { border-inline-start:1px solid #d9e5f2; }
 #mapRouteTotals small { color:#435a77; font-size:12px; font-weight:650; line-height:1.2; }
 #mapRouteTotals b { color:#174f9d; font-size:clamp(20px,2.3vw,31px); line-height:1.15; white-space:nowrap; }
+#navKakaoDirections { margin-block:8px; }
+#navKakaoDirections[hidden], #navKakaoLegFallback[hidden] { display:none; }
+#navKakaoLinks a {
+  display:inline-block; padding:5px 9px; color:#265997; border:1px solid #cbd9e8;
+  border-radius:6px; font-size:12px; font-weight:650; text-decoration:none;
+}
+#navKakaoLinks a:hover { background:#f0f6ff; }
+#navKakaoLegFallback { color:#435a77; font-size:12px; }
+#navKakaoLegLinks { margin:4px 0; padding-inline-start:20px; }
 .approvedShellCandidate .navToggles{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin:12px 0}
 .approvedShellCandidate .navToggles input{width:auto;height:auto}
 .approvedShellCandidate #navRouteStatus{font-size:12px;overflow-wrap:anywhere}

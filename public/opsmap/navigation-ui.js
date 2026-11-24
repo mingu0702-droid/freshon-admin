@@ -126,10 +126,11 @@
   const centerChoices=document.createElement('div');centerChoices.className='navCenterChoices';centerChoices.setAttribute('aria-label','센터에서 출발');planner.querySelector('summary').after(centerChoices);
   const externalRoute=document.createElement('section');
   externalRoute.id='navKakaoDirections';externalRoute.hidden=true;externalRoute.setAttribute('aria-label','카카오맵 길찾기');
-  externalRoute.innerHTML='<p id="navKakaoStatus"></p><ol id="navKakaoLinks"></ol><p id="navKakaoLegHint" class="hint" hidden>경유지가 표시되지 않으면 구간별로 열어 주세요.</p><details id="navKakaoLegFallback" hidden><summary>구간별로 열기</summary><ol id="navKakaoLegLinks"></ol></details>';
+  externalRoute.innerHTML='<div id="navKakaoLinks"></div><details id="navKakaoLegFallback" hidden>'+
+    '<summary>카카오맵에서 구간별로 열기</summary><ol id="navKakaoLegLinks"></ol></details>';
   planner.append(externalRoute);
-  const roadDiagnostics=bridge.isStagePreview?.() ? document.createElement('details') : null;
-  const readinessErrors=new Set(['FEATURE_DISABLED','KEY_MISSING','CALL_POLICY_UNCONFIRMED','CALL_POLICY_BLOCKED','PERSISTENT_BUDGET_REQUIRED','QUOTA_EXCEEDED']);
+  const showDiagnostics=bridge.isStagePreview?.()&&new URLSearchParams(location.search).get('road-diagnostics')==='1';
+  const roadDiagnostics=showDiagnostics?document.createElement('details'):null;
   let roadReadinessRequest=null;
   if(roadDiagnostics){
     roadDiagnostics.id='navRoadDiagnostics';
@@ -193,10 +194,10 @@
   const resolve=value=>lookup.normalize(value)?lookup.resolve(value,all()):[];
   const status=text=>{const node=$('#plannerStatus');node.hidden=!text;node.textContent=text;};
   let externalRouteSignature='';
-  function appendKakaoLink(list,url,label){
-    const item=document.createElement('li'),link=document.createElement('a');
+  function kakaoLink(url,label) {
+    const link=document.createElement('a');
     link.href=url;link.textContent=label;link.target='_blank';link.rel='noopener noreferrer';
-    item.append(link);list.append(item);return link;
+    return link;
   }
   function syncExternalRoute(points,values=editor.values()){
     const rows=points.length>=2&&points.length<=32&&points.length===values.length?points.map(({row})=>row):[];
@@ -206,17 +207,20 @@
     const links=$('#navKakaoLinks'),legs=$('#navKakaoLegLinks'),fallback=$('#navKakaoLegFallback');
     links.replaceChildren();
     legs.replaceChildren();
+    fallback.open=false;
+    fallback.hidden=true;
     externalRoute.hidden=!rows.length;
-    fallback.hidden=$('#navKakaoLegHint').hidden=rows.length<3;
-    if(fallback.hidden)fallback.open=false;
     if(externalRoute.hidden)return;
     const segments=lookup.kakaoRouteLinks(rows);
-    $('#navKakaoStatus').textContent=segments.length===1?'선택한 순서대로 카카오맵에서 엽니다.':'모든 지점을 보존합니다. 아래 구간을 순서대로 열어 주세요.';
-    for(const {start,end,url} of segments)appendKakaoLink(links,url,`${start+1} → ${end+1} 카카오맵에서 열기`);
-    if(fallback.hidden)return;
-    for(const {start,end,sameCoordinate,url} of lookup.kakaoLegLinks(rows)){
-      const label=`${start+1} → ${end+1} · ${rows[start].customerName||'선택한 위치'} → ${rows[end].customerName||'선택한 위치'}${sameCoordinate?' · 같은 좌표 · 목적지로 열기':''}`;
-      appendKakaoLink(legs,url,label).dataset.sameCoordinate=String(sameCoordinate);
+    if(segments.length===1) {
+      links.append(kakaoLink(segments[0].url,'카카오맵에서 열기'));
+      return;
+    }
+    fallback.hidden=!segments.length;
+    for(const {start,end,url} of segments) {
+      const item=document.createElement('li');
+      item.append(kakaoLink(url,(start+1)+' → '+(end+1)+' 구간'));
+      legs.append(item);
     }
   }
   function refreshPointActions(){
@@ -398,8 +402,7 @@
   }
   function displayLabel(value,fallback){const found=resolve(value);return found.length===1?(found[0].customerName||found[0].customerCode):fallback;}
   function showResult(result,kind='manual'){
-    if(roadDiagnostics&&!roadDiagnostics.open&&readinessErrors.has(result?.error))roadDiagnostics.open=true;
-    else if(result?.state&&result.state!=='idle'&&result.state!=='loading')void refreshRoadReadiness();
+    if(result?.state&&result.state!=='idle'&&result.state!=='loading')void refreshRoadReadiness();
     // A cancelled inactive controller must not erase the other controller's route.
     if(result?.state==='idle'&&lastKind!==kind&&['loading','success','partial'].includes(lastResult?.state))return;
     lastResult=result;lastKind=kind;renderRolePins();

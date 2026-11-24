@@ -46,16 +46,26 @@ try{
  check('external links use the existing planner and internal route panel',await page.locator('#waypointPlanner #navKakaoDirections').count()===1&&await page.locator('#navigationSummary').count()===1);
  const apply=async count=>page.evaluate(n=>MapNavigationEditor.replacePoints(Array.from({length:n},(_,i)=>'SYNTHETIC_'+i)),count);
  await apply(2);check('two endpoints keep the combined link without a redundant fallback',await page.locator('#navKakaoLinks a').count()===1&&!await page.locator('#navKakaoLegFallback').isVisible()&&await page.locator('#navKakaoLegLinks a').count()===0);
- await apply(3);check('three points expose a short hint and initially collapsed adjacent fallback',await page.locator('#navKakaoLegHint').textContent()==='경유지가 표시되지 않으면 구간별로 열어 주세요.'&&await page.locator('#navKakaoLegFallback').isVisible()&&await page.locator('#navKakaoLegFallback').getAttribute('open')===null&&await page.locator('#navKakaoLegLinks a').count()===2&&!await page.locator('#navKakaoLegLinks a').first().isVisible());
- const adjacent=await page.locator('#navKakaoLegLinks a').evaluateAll(nodes=>nodes.map(n=>({href:n.href,text:n.textContent,sameCoordinate:n.dataset.sameCoordinate})));
- check('same-coordinate first pair keeps both visit names and uses a labeled official destination link',adjacent[0].href==='https://map.kakao.com/link/to/'+encodeURIComponent(rows[1].customerName)+','+rows[1].lat+','+rows[1].lng&&adjacent[0].sameCoordinate==='true'&&adjacent[0].text.startsWith('1 → 2')&&adjacent[0].text.includes(rows[0].customerName)&&adjacent[0].text.includes(rows[1].customerName)&&adjacent[0].text.endsWith('같은 좌표 · 목적지로 열기'));
- check('different-coordinate second pair retains exact official from/to endpoints and visit order',adjacent[1].href==='https://map.kakao.com/link/from/'+encodeURIComponent(rows[1].customerName)+','+rows[1].lat+','+rows[1].lng+'/to/'+encodeURIComponent(rows[2].customerName)+','+rows[2].lat+','+rows[2].lng&&adjacent[1].sameCoordinate==='false'&&adjacent[1].text.startsWith('2 → 3')&&!adjacent[1].text.includes('같은 좌표'));
+ await apply(3);
+ check('a three-point route shows one ordinary Kakao button and no duplicate segment controls',
+  await page.locator('#navKakaoLinks a').textContent()==='카카오맵에서 열기'&&
+  await page.locator('#navKakaoLegFallback').isHidden()&&await page.locator('#navKakaoLegLinks a').count()===0);
+ const combined=decodeURIComponent(await page.locator('#navKakaoLinks a').getAttribute('href'));
+ check('the combined button keeps both visits at the same coordinate and preserves the third waypoint',
+  rows.slice(0,3).every((row,index)=>combined.split('/car/')[1].split('/')[index]===row.customerName+','+row.lat+','+row.lng));
+ check('employee route planner has no technical diagnostics by default',await page.locator('#navRoadDiagnostics').count()===0);
  await apply(7);check('five waypoint boundary opens one complete official car link',await page.locator('#navKakaoLinks a').count()===1&&(await page.locator('#navKakaoLinks a').getAttribute('href')).split('/car/')[1].split('/').length===7);
  check('one integrated Kakao section preserves input sequence',await page.locator('#navKakaoDirections').count()===1&&await page.locator('#navSelectedKakao').count()===0);
- await apply(8);check('six waypoint boundary explicitly splits into two continuous links',await page.locator('#navKakaoLinks a').count()===2&&(await page.locator('#navKakaoStatus').textContent()).includes('모든 지점을 보존'));
- await apply(32);check('internal thirty waypoint editor is preserved with six external segments',await page.locator('#plannerStops input').count()===30&&await page.locator('#navKakaoLinks a').count()===6);
- check('thirty waypoint fallback preserves all thirty-one adjacent links with no extra provider',await page.locator('#navKakaoLegLinks a').count()===31&&await page.locator('#navKakaoLegLinks a').last().textContent().then(t=>t.startsWith('31 → 32')));
- const links=await page.locator('#navKakaoLinks a').evaluateAll(nodes=>nodes.map(n=>({href:n.href,target:n.target,rel:n.rel})));
+ await apply(8);check('six waypoints offer a collapsed control with two continuous links',
+  await page.locator('#navKakaoLinks a').count()===0&&await page.locator('#navKakaoLegLinks a').count()===2&&
+  await page.locator('#navKakaoLegFallback').getAttribute('open')===null);
+ await apply(32);check('the existing thirty waypoint editor retains six ordered external segments',
+  await page.locator('#plannerStops input').count()===30&&await page.locator('#navKakaoLegLinks a').count()===6);
+ const links=await page.locator('#navKakaoLegLinks a').evaluateAll(nodes=>nodes.map(n=>({href:n.href,target:n.target,rel:n.rel})));
+ check('the six coded segments cover all thirty-two inputs with only consecutive boundary overlap',
+  links.map(x=>decodeURIComponent(x.href.split('/car/')[1]).split('/')).flatMap((points,index)=>index?points.slice(1):points)
+    .every((point,index)=>point===rows[index].customerName+','+rows[index].lat+','+rows[index].lng)&&
+  links.map(x=>x.href.split('/car/')[1].split('/').length).reduce((sum,length)=>sum+length,0)-5===32);
  check('all anchors are explicit isolated user navigation with no API key',links.every(x=>x.href.startsWith('https://map.kakao.com/link/by/car/')&&x.target==='_blank'&&x.rel.includes('noreferrer')&&!/appkey|apikey|token/i.test(x.href)));
  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('map-manual-route',{detail:{state:'disabled',error:'FEATURE_DISABLED',noDrivingRequired:true}})));
  check('Directions OFF cannot claim zero driving distance',!/(?:0 km|0분)/.test(await page.locator('#navRouteStatus').textContent()));
@@ -65,9 +75,9 @@ try{
   check(width+'px links remain within viewport',await page.locator('#navKakaoDirections').evaluate(n=>{const r=n.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1}));
   await page.screenshot({path:path.join(output,'directions-'+width+'.png')});
  }
- await page.locator('#navKakaoLegFallback summary').click();check('mobile user can expand adjacent links inside the existing panel',await page.locator('#navKakaoLegLinks a').first().isVisible()&&await page.locator('#navKakaoLegLinks a').evaluateAll(nodes=>nodes.every(n=>n.getBoundingClientRect().right<=innerWidth+1)));
+ await page.locator('#navKakaoLegFallback summary').click();check('mobile user can expand long-route segments inside the existing panel',await page.locator('#navKakaoLegLinks a').first().isVisible()&&await page.locator('#navKakaoLegLinks a').evaluateAll(nodes=>nodes.every(n=>n.getBoundingClientRect().right<=innerWidth+1)));
  await page.locator('#navKakaoLegFallback').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(output,'directions-fallback-390.png')});
- await page.locator('#plannerWaypoint8').fill('UNKNOWN_SYNTHETIC');check('unresolved via point blocks all combined and fallback links',await page.locator('#navKakaoLinks a').count()===0&&await page.locator('#navKakaoLegLinks a').count()===0&&!await page.locator('#navKakaoLegFallback').isVisible()&&!await page.locator('#navKakaoLegHint').isVisible());
+ await page.locator('#plannerWaypoint8').fill('UNKNOWN_SYNTHETIC');check('unresolved via point blocks all combined and fallback links',await page.locator('#navKakaoLinks a').count()===0&&await page.locator('#navKakaoLegLinks a').count()===0&&!await page.locator('#navKakaoLegFallback').isVisible());
  await page.locator('#plannerStart').fill('UNKNOWN_ORIGIN');check('unresolved explicit origin leaves no standalone bypass',await page.locator('#navSelectedKakao').count()===0&&await page.locator('#navKakaoLinks a').count()===0);
  await page.evaluate(()=>MapNavigationEditor.clear());check('clear removes all combined and fallback route links',await page.locator('#navKakaoLinks a').count()===0&&await page.locator('#navKakaoLegLinks a').count()===0&&await page.locator('#navSelectedKakao').count()===0);
  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('map-navigation-logout')));check('logout clears selected destination and route links',!await page.locator('#navSelectedKakao').isVisible()&&await page.locator('#navKakaoLinks a').count()===0);

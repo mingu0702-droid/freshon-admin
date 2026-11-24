@@ -1457,10 +1457,18 @@
     return Phase2bUi.vehicleColor(vehicle);
   }
 
+  const optionalNewVehicles = new Set(['영남신규','호남신규']);
+  const baseVehicleKey = value => normalizeVehicle(value).replace(/\s/g,'');
+  const optionalNewVehicle = value => optionalNewVehicles.has(baseVehicleKey(value));
+  function mapShowsNewVehicle(row,selected) {
+    const key=baseVehicleKey(row.baseVehicle||row.vehicle);
+    return !optionalNewVehicles.has(key)||selected.has(key);
+  }
+
   function selectedVehicles() {
     const checks = vehicleChecks();
     state.selectedVehicles = checks.filter(item => item.checked).map(item => item.value);
-    allVehiclesSelected = checks.length === state.selectedVehicles.length;
+    allVehiclesSelected = checks.every(item => item.checked || state.mode==='BASE_60D'&&optionalNewVehicle(item.value));
     return state.selectedVehicles;
   }
 
@@ -2256,15 +2264,18 @@
 
   function registeredAreaIndex(){
     const center=searchNeighborhood?.center??state.centerFilter, verified=hasVerifiedStageLocations();
-    if(areaViewportIndex?.source===allStores&&areaViewportIndex.center===center&&areaViewportIndex.verified===verified)return areaViewportIndex.index;
+    const enabledNew=state.selectedVehicles.map(baseVehicleKey).filter(value=>optionalNewVehicles.has(value)).sort().join('|');
+    if(areaViewportIndex?.source===allStores&&areaViewportIndex.center===center&&areaViewportIndex.verified===verified&&
+      areaViewportIndex.enabledNew===enabledNew)return areaViewportIndex.index;
+    const enabled=new Set(enabledNew.split('|'));
     const stores=allStores.flatMap(row=>{
-      if(row.customerRegistryStatus==='DELETED'||row.deliveryOnly||row.raw?.deliveryOnly||
+      if(row.customerRegistryStatus==='DELETED'||row.deliveryOnly||row.raw?.deliveryOnly||!mapShowsNewVehicle(row,enabled)||
         center&&registrationCenter(row,verified)!==center)return [];
       const point=verified?(hasVerifiedStageStorePoint(row)?row:null):newAreaCoordinate(row,{fixedOnly:true});
       return point?[point]:[];
     });
     const index=MapPeriodUi.spatialIndex(stores);
-    areaViewportIndex={source:allStores,center,verified,index};
+    areaViewportIndex={source:allStores,center,verified,enabledNew,index};
     return index;
   }
 
@@ -4302,7 +4313,11 @@
       updateOperationMetrics({totalStops:known?operationStops.length:null,completedStops:known&&!projection.unknown?projection.completed:null,remainingStops:known&&!projection.unknown?projection.pending:null});
       $('#map').dataset.dailyStops=String(stores.length);
       $('#map').dataset.dailyLocated=String(state.routeRows.length);
-    }else stores=recentOperationsRows(filteredPeriodStores()).map(row=>({...row,color:vehicleColor(row.vehicle)}));
+    }else {
+      const enabled=new Set(selected.map(baseVehicleKey));
+      stores=recentOperationsRows(filteredPeriodStores()).filter(row=>mapShowsNewVehicle(row,enabled))
+        .map(row=>({...row,color:vehicleColor(row.vehicle)}));
+    }
     stores.forEach(row=>{if(!daily||!archivedDatedAssignments(dailyMeta)){window.MapManualPins?.apply(row);liveAddressLocations?.apply(row);}});
     renderStops(stores,{numbered:daily,vehicles:selected});
     if(daily){drawRoute();void loadDailyCompletionEvidence();}
@@ -5644,7 +5659,10 @@
       input.checked = !input.checked;
       applyVehicleFilter(selectedVehicles());
     };
-    $("#selectAllVehicles").onclick = () => applyVehicleFilter(visibleVehicleItems().map(item => item.querySelector('input').value));
+    $("#selectAllVehicles").onclick = () => applyVehicleFilter(visibleVehicleItems()
+      .map(item=>item.querySelector('input'))
+      .filter(input=>state.mode!=='BASE_60D'||input.checked||!optionalNewVehicle(input.value))
+      .map(input=>input.value));
     $("#clearVehicles").onclick = () => applyVehicleFilter([]);
     $$("[data-center]").forEach((button) => { button.onclick = () => { selectCenter(button.dataset.center); $("#vehicleSelect").classList.remove("open"); }; });
     let composing = false;
