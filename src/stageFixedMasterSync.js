@@ -11,6 +11,8 @@ const baselineFile = 'fixed-vehicle-projection-v1.json';
 const maxSourcePageBytes = 8 * 1024 * 1024;
 const objectFile = ref => prefix + 'projection-' + ref.version + '.json';
 const centers = ['011', '012', '013'];
+const weekdays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+export const FIXED_MASTER_EXCEL_SOURCE = 'FRESHON_FIXED_DISPATCH_EXCEL';
 const hash = /^[a-f0-9]{64}$/;
 const maxRegisteredStores = 30_000;
 const safeCode = /^(?:FIXED_(?:MASTER|STORE)_[A-Z_]{1,70})$/;
@@ -144,26 +146,39 @@ async function verifiedObject(store, ref) {
 
 function verifyProjection(result, scope, baseline, observedAt) {
   const {data,meta}=result || {};
-  if (!Array.isArray(data) || meta?.readHttp!==200 ||
+  const excel=meta?.source===FIXED_MASTER_EXCEL_SOURCE;
+  if (!Array.isArray(data) || !excel&&meta?.readHttp!==200 ||
       meta.centers?.length!==centers.length || !Number.isSafeInteger(meta.sourceRows) ||
       meta.centers.some((item,i)=>item.center!==centers[i] || !Number.isSafeInteger(item.declaredRows) ||
-        item.declaredRows<1 || item.declaredRows!==item.sourceRows || item.pages!==Math.ceil(item.sourceRows/1000)) ||
+        item.declaredRows<1 || item.declaredRows!==item.sourceRows ||
+        (excel ? item.duplicateCustomerRows!==0 || !hash.test(item.sha256 || '') || !validTime(item.observedAt) ||
+          observedDate(item.observedAt)!==observedDate(observedAt) || item.observedAt>observedAt
+          : item.pages!==Math.ceil(item.sourceRows/1000))) ||
       meta.centers.reduce((n,c)=>n+c.sourceRows,0)!==meta.sourceRows ||
       !Number.isSafeInteger(meta.uniqueCustomers) || meta.uniqueCustomers>meta.sourceRows ||
+      excel && (meta.uniqueCustomers!==meta.sourceRows || new Set(meta.centers.map(c=>c.sha256)).size!==centers.length) ||
       (meta.projectedCustomers ?? meta.uniqueCustomers)!==data.length || meta.uniqueCustomers<data.length ||
       new Set(data.map(row=>row.customerCode)).size!==data.length) {
     throw fail('FIXED_MASTER_DAILY_INCOMPLETE');
   }
+  if (excel && (!baseline || meta.baselineVersion!==baseline.version ||
+      meta.centers.some(item=>item.observedAt<=baseline.checkedAt))) throw fail('FIXED_STORE_DAILY_SUPERSEDED');
   const rows=data.filter(row=>scope.has(row.customerCode)), byCode=new Map(rows.map(row=>[row.customerCode,row]));
   if (rows.some(row=>row.baseVehicleState==='CONFLICT') || baseline?.rows.some(row=>{
-    if (!scope.has(row[0]) || row[3]!=='VERIFIED_MASTER') return false;
+    if (!scope.has(row[0])) return excel;
+    if (row[3]!=='VERIFIED_MASTER') return false;
     const incoming=byCode.get(row[0]);
+    if (excel) return incoming?.baseVehicleState!=='VERIFIED_MASTER' ||
+      row[4]?.some((value,i)=>value && !incoming.weekdays?.[weekdays[i]]);
     return !incoming || incoming.baseVehicleState!=='VERIFIED_MASTER'&&incoming.baseVehicleEmptyVerified!==true;
   })) throw fail('FIXED_MASTER_DAILY_ASSIGNMENT_GAP');
   const coverage={ledgerCount:scope.size, matchedCount:rows.length, missingCount:scope.size-rows.length, sourceRows:meta.sourceRows,
-    centers:meta.centers.map(({center,sourceRows,pages,duplicateCustomerRows})=>({center,sourceRows,pages,
-      duplicateCustomerRows:Number.isSafeInteger(duplicateCustomerRows)?duplicateCustomerRows:null}))};
-  return {envelope:fixedEnvelope(rows,observedAt),coverage};
+    centers:meta.centers.map(({center,sourceRows,pages,duplicateCustomerRows,sha256,observedAt})=>({center,sourceRows,
+      duplicateCustomerRows:Number.isSafeInteger(duplicateCustomerRows)?duplicateCustomerRows:null,
+      ...(excel?{sha256,observedAt}:{pages})})),
+    ...(excel?{source:FIXED_MASTER_EXCEL_SOURCE,baselineVersion:baseline.version}:{})};
+  const sourceObservedAt=excel ? meta.centers.map(item=>item.observedAt).sort().at(-1) : observedAt;
+  return {envelope:fixedEnvelope(rows,sourceObservedAt),coverage,sourceObservedAt};
 }
 
 // Callers authenticate the signed schedule or explicitly approved Stage recovery.
@@ -200,8 +215,7 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
       if (error.name==='TimeoutError') throw fail('FIXED_MASTER_DAILY_TIMEOUT');
       throw error;
     }
-    const sourceObservedAt=nowISO(now());
-    const {envelope,coverage}=verifyProjection(result,codes,baseline,sourceObservedAt);
+    const {envelope,coverage,sourceObservedAt}=verifyProjection(result,codes,baseline,nowISO(now()));
     if (baseline && Date.parse(envelope.checkedAt)<=Date.parse(baseline.checkedAt)) throw fail('FIXED_STORE_DAILY_SUPERSEDED');
     const rowsHash=digest(envelope.rows);
     const unchanged=head.current?.rowsHash===rowsHash;

@@ -4,7 +4,7 @@ import {EventEmitter,once} from 'node:events';
 import {PassThrough} from 'node:stream';
 import test from 'node:test';
 import express from 'express';
-import {createStageDailyFixedMasterReader,createStageFixedMasterSource,stageFixedMasterScope,stageFixedMasterStorage,syncStageFixedMaster}
+import {FIXED_MASTER_EXCEL_SOURCE,createStageDailyFixedMasterReader,createStageFixedMasterSource,stageFixedMasterScope,stageFixedMasterStorage,syncStageFixedMaster}
   from '../src/stageFixedMasterSync.js';
 import {fixedEnvelope} from '../src/fixedVehicleStore.js';
 import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
@@ -55,6 +55,39 @@ function memory() {
 }
 const base=() => fixedEnvelope(source('099').data,new Date(start-hour).toISOString());
 const reader=baseValue=>({load:async()=>baseValue??null});
+
+test('an Excel recovery publishes workbook evidence and preserves the previous projection',async()=>{
+  const store=memory(), baseline=base();
+  let tick=start;
+  const run=readMaster=>syncStageFixedMaster({store,receipt:receipt(tick),now:()=>tick,scope,
+    readMaster,loadBaseline:reader(baseline).load});
+  const previous=await run(async()=>source('122'));
+  tick+=24*hour;
+  const excel=()=>{
+    const {data}=source('202');
+    return {data,meta:{source:FIXED_MASTER_EXCEL_SOURCE,baselineVersion:previous.version,
+      sourceRows:3,uniqueCustomers:3,centers:centers.map(center=>({
+        center,sourceRows:1,declaredRows:1,duplicateCustomerRows:0,sha256:sha(center),
+        observedAt:new Date(tick-60000).toISOString()
+      }))}};
+  };
+  const conflict=excel();
+  conflict.data[0].weekdays.Mon='';
+  await assert.rejects(run(async()=>conflict),/FIXED_MASTER_DAILY_ASSIGNMENT_GAP/);
+  assert.equal(store.files.get(head).value.current.version,previous.version);
+  tick+=hour;
+  const published=await run(async()=>excel());
+  const saved=store.files.get(head).value;
+  assert.equal(published.state,'PUBLISHED');
+  assert.equal(saved.previous.version,previous.version);
+  assert.equal(saved.lastSuccess.coverage.source,FIXED_MASTER_EXCEL_SOURCE);
+  assert.equal(saved.lastSuccess.coverage.centers[0].sha256,sha('011'));
+  assert.equal(saved.lastSuccess.coverage.centers[0].pages,undefined);
+  assert.equal(saved.current.checkedAt,new Date(tick-60000).toISOString());
+  const daily=createStageDailyFixedMasterReader({store,baseline:reader(baseline),now:()=>tick});
+  assert.equal((await daily.load()).version,published.version);
+  assert.equal((await run(async()=>assert.fail('same-day duplicate read'))).state,'ALREADY_VERIFIED');
+});
 
 test('independent collection can restart an 82-page center once after late count drift',async()=>{
   let firstPages=0,calls=0;
