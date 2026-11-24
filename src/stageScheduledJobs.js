@@ -1,5 +1,6 @@
 import {createHmac,randomUUID,timingSafeEqual} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
+import {setTimeout as delay} from 'node:timers/promises';
 
 const MiB=1024*1024;
 const leaseMs=90_000;
@@ -98,6 +99,24 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
   async function write(record,expected,night) {
     await store.write(stateFile(record.receipt.date,night),{...record,proof:stamp(record).toString('hex')},expected);
   }
+  async function confirmReservation(date,night,lease,runId) {
+    let failure=error('OPSMAP_JOBS_RESERVATION_READBACK');
+    for(const wait of [0,250,750]){
+      if(now()+wait>=lease.until)break;
+      if(wait)await delay(wait);
+      try{
+        const saved=(await read(date,night)).record;
+        if(saved?.receipt.runId===runId&&saved.lease?.id===lease.id&&saved.lease.kind===lease.kind&&
+           saved.lease.until===lease.until&&saved.expiresAt>now()&&lease.until>now())return;
+        if(saved?.lease&&saved.lease.id!==lease.id)throw error('FIXED_STORE_CONFLICT');
+        failure=error('OPSMAP_JOBS_RESERVATION_READBACK');
+      }catch(problem){
+        if(!['FIXED_STORE_READ','FIXED_STORE_NETWORK'].includes(problem.code))throw problem;
+        failure=problem;
+      }
+    }
+    throw failure;
+  }
   const output=(runId,kind,state,fields={})=>log(JSON.stringify({component:'opsmap-stage-jobs',runId,job:kind,state,...fields}));
 
   async function accept(receipt,plan,{night=false}={}) {
@@ -158,9 +177,13 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
     const lease={id:randomUUID(),kind:next.kind,until:now()+leaseMs};
     record.lease=lease;
     next.state='RUNNING';
-    await write(record,sha,night);
-    const saved=(await read(date,night)).record;
-    if(saved?.lease?.id!==lease.id)throw error('OPSMAP_JOBS_RESERVATION_READBACK');
+    try{await write(record,sha,night);}
+    catch(problem){
+      // A failed write response can arrive after the CAS was applied. Confirm
+      // this exact lease before any source starts, without reissuing the write.
+      if(!['FIXED_STORE_WRITE','FIXED_STORE_NETWORK'].includes(problem.code))throw problem;
+    }
+    await confirmReservation(date,night,lease,record.receipt.runId);
     return {lease,receipt:record.receipt,memory};
   }
 

@@ -205,8 +205,9 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       try{
         const result=await jobFlight;
         if(!result.done)scheduleJobs(Math.max(250,result.nextAt-now()));
-      }catch{
-        log(JSON.stringify({component:'opsmap-stage-jobs',state:'CHECKPOINT_UNAVAILABLE'}));
+      }catch(error){
+        const code=/^(?:OPSMAP_JOBS|FIXED_STORE)_[A-Z_]{1,60}$/.test(error?.code||'')?error.code:null;
+        log(JSON.stringify({component:'opsmap-stage-jobs',state:'CHECKPOINT_UNAVAILABLE',code}));
         scheduleJobs(60_000);
       }finally{
         jobFlight=null;

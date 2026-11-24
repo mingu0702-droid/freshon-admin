@@ -85,6 +85,41 @@ test('high cgroup memory defers the pending job before any source runs and the m
   assert.equal(inspect().jobs[0].state,'PUBLISHED');
 });
 
+test('a missing CAS response and transient lease readback failure start the exact worker only once',async()=>{
+  const backing=fixture();
+  let failNextRead=false, lostWrite=false, calls=0;
+  const store={
+    async write(file,value,sha){
+      await backing.store.write(file,value,sha);
+      if(value.lease&&!lostWrite){
+        lostWrite=true;
+        failNextRead=true;
+        throw Object.assign(Error(),{code:'FIXED_STORE_NETWORK'});
+      }
+    },
+    async read(file){
+      if(failNextRead){
+        failNextRead=false;
+        assert.equal(calls,0);
+        throw Object.assign(Error(),{code:'FIXED_STORE_READ'});
+      }
+      return backing.store.read(file);
+    }
+  };
+  const jobs=createStageScheduledJobs({store,secret,now:()=>start,measure:async()=>memory(272),log(){},
+    async execute({receipt:received,kind}){
+      assert.equal(received.runId,receipt.runId);
+      assert.equal(kind,'recent');
+      calls++;
+      return {state:'PUBLISHED'};
+    }});
+  await jobs.accept(receipt,['recent']);
+  await jobs.drain();
+  assert.equal(backing.inspect().jobs[0].state,'PUBLISHED');
+  assert.deepEqual(await jobs.drain(),{done:true});
+  assert.equal(calls,1);
+});
+
 test('scheduled job records combined memory at start, sampled peak and end without any extra source call',async()=>{
   const {store,inspect}=fixture();
   let releaseJob;
