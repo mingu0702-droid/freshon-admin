@@ -51,7 +51,7 @@ async function fixture(t, options = {}) {
     if (url.origin === 'https://apis-navi.kakaomobility.com') {
       providerCalls++;
       assert.equal(url.pathname,'/v1/directions');
-      if(options.shared)assert.equal(url.searchParams.get('waypoints').split('|').length,2);
+      if(options.shared&&!options.formal)assert.equal(url.searchParams.get('waypoints').split('|').length,2);
       else assert.equal(url.searchParams.get('waypoints'),'127.01,37.01');
       assert.equal(request.headers.Authorization,'KakaoAK '+key);
       assert.equal(shared.budget.roadBudget.used,options.shared ? options.expectedUsed : 1,'reserve before dispatch');
@@ -75,7 +75,8 @@ async function fixture(t, options = {}) {
       if (update) {
         budgetWrites++;
         assert.equal(update.sha,String(shared.revision).padStart(40,'0'));
-        if(options.shared)assert.equal(update.message,'Reserve approved Stage Directions test call');
+        if(options.shared)assert.equal(update.message,options.formal?'Reserve approved Stage shared free Directions call':
+          'Reserve approved Stage Directions test call');
         if(options.conflict) return new Response(null,{status:409});
         shared.budget = JSON.parse(Buffer.from(update.content,'base64'));
         shared.revision++;
@@ -204,6 +205,66 @@ test('an intervening Production debit consumes part of the shared two-call windo
   assert.equal((await f.route({input:routeDraft,clicked:true})).status,200);
   assert.equal((await f.config()).approvedRemaining,0);
   assert.deepEqual(f.counts(),{budgetWrites:1,providerCalls:1});
+});
+
+function formalFixtureState(){
+  const shared={revision:1,budget:structuredClone(approved)};
+  const b=shared.budget.roadBudget;
+  delete b.environment;
+  b.expiresAt='2026-11-30T15:00:00Z';
+  b.limit=12;
+  b.used=b.apis.directions.used=4;
+  b.monthlyApproval={period:'2026-11',providerRejectsFreeOverage:true,
+    usedBeforeWindow:{directions:3,waypoints:0},dailyUsage:{'2026-11-14':{directions:1,waypoints:0}}};
+  return shared;
+}
+
+test('formal Stage routes coalesce and share the paid-disabled ledger within the KST cap',async t=>{
+  const shared=formalFixtureState();
+  const grant={approvalId:approved.roadBudget.approvalId,dailyLimit:6};
+  const f=await fixture(t,{shared,formal:true,expectedUsed:5,env:{
+    OPSMAP_STAGE_ROAD_SHARED_FREE_ONLY:JSON.stringify(grant),OPSMAP_STAGE_ROAD_SHARED_TRIAL:'expired-or-malformed'
+  }});
+  assert.equal((await f.configResponse(false)).status,401);
+  const ready=await f.config();
+  assert.equal(ready.stage.sharedMode,'FREE_ONLY');
+  assert.equal(ready.stage.sharedKstDailyLimit,6);
+  assert.equal(ready.budgetBackend,'STAGE_SHARED_DIRECTIONS_FREE_ONLY');
+  assert.deepEqual(ready.apiRemaining,{directions:2,waypoints:0});
+  assert.doesNotMatch(JSON.stringify(ready),/stage-fixture-key|stage-fixture-budget-token|stage-test-approval/);
+  assert.equal((await f.route()).status,403);
+  assert.equal((await f.route({clicked:true,recorded:true})).status,403);
+  assert.equal((await f.route({clicked:true,input:{...draft,waypoints:Array.from({length:6},(_,i)=>
+    ({id:'w'+i,order:i+1,lat:37+i/100,lng:127+i/100}))}})).status,400);
+  const pair=await Promise.all([f.route({clicked:true}),f.route({clicked:true,input:{...draft,requestId:2}})]);
+  assert.deepEqual(pair.map(response=>response.status),[200,200]);
+  assert.equal((await pair[0].json()).data.manualOnly,true);
+  assert.equal((await pair[1].json()).data.requestId,2);
+  assert.deepEqual(f.counts(),{budgetWrites:1,providerCalls:1});
+
+  const b=shared.budget.roadBudget;
+  b.used++;b.apis.directions.used++;b.monthlyApproval.dailyUsage['2026-11-14'].directions++;shared.revision++;
+  assert.equal((await f.config()).approvedRemaining,0);
+  assert.equal((await f.route({clicked:true,input:{...draft,destination:{...draft.destination,lat:37.04}}})).status,429);
+  assert.equal((await f.route({clicked:true})).status,200,'an already cached route needs no extra call');
+  assert.deepEqual(f.counts(),{budgetWrites:1,providerCalls:1});
+});
+
+test('formal mode fails closed on missing provider hard-stop proof or invalid cap',async t=>{
+  for(const [dailyLimit,invalidate,reason] of [
+    [6,true,'ROAD_BUDGET_SHARED_FREE_APPROVAL_REQUIRED'],
+    [10001,false,null]
+  ]){
+    const shared=formalFixtureState(), b=shared.budget.roadBudget;
+    if(invalidate){delete b.monthlyApproval.providerRejectsFreeOverage;b.monthlyApproval.exclusiveDirectionsUsage=true;}
+    const f=await fixture(t,{shared,formal:true,env:{
+      OPSMAP_STAGE_ROAD_SHARED_FREE_ONLY:JSON.stringify({approvalId:b.approvalId,dailyLimit})
+    }});
+    assert.equal((await f.config()).budgetError,reason);
+    assert.equal((await f.config()).canRequest,false);
+    assert([429,503].includes((await f.route({clicked:true})).status));
+    assert.deepEqual(f.counts(),{budgetWrites:0,providerCalls:0});
+  }
 });
 
 test('Stage road readiness reads its ledger; staff and same-origin calls reserve before dispatch',async t=>{
