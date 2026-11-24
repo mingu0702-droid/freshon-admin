@@ -115,6 +115,7 @@
   }
   body[data-dispatch-review=compare] .dispatch-controls { padding:16px 13px; }
   body[data-dispatch-review=compare] .dispatch-controls > summary { font-size:16px; }
+  body[data-dispatch-review=compare] #leftPanel > .scrollside,
   body[data-dispatch-review=compare] .dispatch-date .dispatch-mode,
   body[data-dispatch-review=compare] .dispatch-secondary,
   body[data-dispatch-review=compare] .dispatch-choices > label:has([name=postcodeSearch],[name=postcode]),
@@ -128,15 +129,15 @@
   body[data-dispatch-review=compare] #map .dispatch-map-pin[data-transfer-draft] .pin {
     outline:3px solid #8047aa; outline-offset:2px;
   }
-  body[data-dispatch-review=compare] .dispatch-detail-body { padding:16px 15px; font-size:13px; line-height:1.45; }
+  body[data-dispatch-review=compare] .dispatch-detail-body { margin:0; padding:12px 13px; font-size:13px; line-height:1.4; }
   .dispatch-compare-nearby h3,.dispatch-detail-body :is(.dispatch-compare-heading,.dispatch-compare-postal,.dispatch-compare-selection) h3 {
-    display:flex; align-items:baseline; justify-content:space-between; gap:6px; font-size:15px; margin:0 0 8px;
+    display:flex; align-items:baseline; justify-content:space-between; gap:6px; font-size:15px; margin:0 0 5px;
   }
   .dispatch-compare-nearby h3 span,.dispatch-compare-postal h3 span { color:#536781; font-size:13px; }
   .dispatch-compare-nearby { margin-top:18px; }
   .dispatch-compare-nearby h3:not(:first-child) { margin-top:14px; }
   .dispatch-compare-nearby p,.dispatch-compare-source,.dispatch-compare-postal p,.dispatch-compare-selection p,
-  .dispatch-compare-simulation p { color:#536781; margin:4px 0 8px; }
+  .dispatch-compare-simulation p { color:#536781; margin:4px 0; }
   .dispatch-compare-near-list { display:grid; gap:6px; }
   .dispatch-compare-near-list button {
     display:grid; gap:4px; width:100%; text-align:left; padding:7px 8px;
@@ -152,7 +153,8 @@
   body[data-dispatch-review=compare] .dispatch-detail-body h2 { margin:0 0 4px; font-size:19px; color:#21364f; }
   .dispatch-compare-totals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
   .dispatch-compare-total {
-    min-width:0; display:grid; gap:0; align-content:start; line-height:1.35; padding:8px 10px;
+    min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 5px; align-items:baseline;
+    margin:0; line-height:1.2; padding:7px 8px;
     border-left:3px solid #1767d4; border-radius:4px; background:#edf5ff; color:#204d87;
   }
   .dispatch-compare-total.secondary { border-color:#dc6714; background:#fff4e7; color:#944515; }
@@ -160,8 +162,9 @@
   .dispatch-compare-total b { font-size:18px; white-space:nowrap; font-variant-numeric:tabular-nums; }
   .dispatch-compare-stop-count { font-weight:700; font-size:15px; }
   .dispatch-compare-gap { margin:6px 0; color:#415870; }
-  .dispatch-compare-postal,.dispatch-compare-selection,.dispatch-compare-simulation,.dispatch-compare-candidates {
-    border-top:1px solid #e0e9f2; margin-top:10px; padding-top:9px;
+  body[data-dispatch-review=compare] .dispatch-detail-body > :is(.dispatch-compare-postal,.dispatch-compare-selection,
+    .dispatch-compare-simulation,.dispatch-compare-candidates) {
+    border-top:1px solid #e0e9f2; margin:7px 0 0; padding:7px 0 0;
   }
   .dispatch-compare-chips { display:flex; flex-wrap:wrap; gap:4px; }
   .dispatch-compare-chips button {
@@ -170,7 +173,7 @@
   .dispatch-compare-chips [aria-pressed=true] { border-color:#008f85; background:#dbf1ed; font-weight:700; }
   .dispatch-compare-store-name { display:block; font-size:16px; overflow-wrap:anywhere; }
   body[data-dispatch-review=compare] .dispatch-compare-selection dl { margin:4px 0 7px; }
-  body[data-dispatch-review=compare] .dispatch-compare-selection dl div { grid-template-columns:116px minmax(0,1fr); padding:4px 0; }
+  body[data-dispatch-review=compare] .dispatch-compare-selection dl div { grid-template-columns:100px minmax(0,1fr); padding:3px 0; }
   .dispatch-compare-selection p { overflow-wrap:anywhere; }
   .dispatch-compare-add {
     width:100%; min-height:34px; background:#1767d4; color:white; border-color:#1767d4; font-weight:700;
@@ -180,7 +183,7 @@
   .dispatch-compare-heading button { min-height:30px; padding:3px 8px; }
   .dispatch-compare-simulation table { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
   .dispatch-compare-simulation :is(th,td) {
-    border-bottom:1px solid #e1eaf3; text-align:right; padding:5px 3px; white-space:nowrap;
+    border-bottom:1px solid #e1eaf3; text-align:right; padding:3px; white-space:nowrap;
   }
   .dispatch-compare-simulation th:first-child { text-align:left; }
   .dispatch-compare-simulation thead th { color:#52667b; }

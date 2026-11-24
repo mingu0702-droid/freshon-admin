@@ -56,23 +56,28 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
       '<b>'+money(route?.amount)+'</b><span class="dispatch-compare-stop-count">'+stops(route?.storeCount)+'</span></section>';
   }
 
+  function fixedSummary() {
+    const {zip,routes}=view;
+    const proof=areaProof?.area===zip?areaProof:null;
+    const checked=bridge.fixedTerritoryMasterState?.()?.checkedAt;
+    const date=Number.isFinite(Date.parse(checked))?' · '+fixedClock.format(new Date(checked)):'';
+    const fixed=proof?.members?groupFixedPostalRoutes(proof.members,code=>bridge.dispatchReferenceFixedVehicle(code)):[];
+    const pair=fixed.filter(entry=>[routes?.primary?.vehicle,routes?.secondary?.vehicle].includes(entry.vehicle));
+    const fixedText=pair.length?pair.map(r=>label(r.vehicle)+' '+r.count+'착').join(' · ')+
+      (proof.complete&&fixed.reduce((sum,r)=>sum+r.count,0)===proof.total?'':' · 일부 미확인'):
+      proof?.loading?'확인 중':'해당 호차 확인 자료 없음';
+    return '등록 매장 기준호차'+date+' · '+fixedText;
+  }
+
   function renderPostcodes() {
     const first=view.routes?.primary,second=view.routes?.secondary;
     if(!first||!second)return '';
     const common=comparisons.get(first.vehicle)?.sharedPostalCodes||[];
     const zip=view.zip;
-    const proof=areaProof?.area===zip?areaProof:null;
-    const checked=bridge.fixedTerritoryMasterState?.()?.checkedAt;
-    const date=Number.isFinite(Date.parse(checked))?' · '+fixedClock.format(new Date(checked)):'';
-    const fixed=proof?.members?groupFixedPostalRoutes(proof.members,code=>bridge.dispatchReferenceFixedVehicle(code)):[];
-    const pair=fixed.filter(entry=>[first.vehicle,second.vehicle].includes(entry.vehicle));
-    const fixedText=pair.length?pair.map(r=>escape(label(r.vehicle))+' '+r.count+'착').join(' · ')+
-      (proof.complete&&fixed.reduce((sum,r)=>sum+r.count,0)===proof.total?'':' · 일부 미확인'):
-      proof?.loading?'확인 중':'해당 호차 확인 자료 없음';
     return '<section class="dispatch-compare-postal"><h3>확정배차 공통 우편번호 <span>'+common.length+'곳</span></h3>'+
       (common.length?'<div class="dispatch-compare-chips">'+common.map(code=>
         '<button type="button" data-compare-action="postal" data-code="'+code+'" aria-pressed="'+(zip===code)+'">'+code+'</button>').join('')+'</div>':'')+
-      (zip?'<p>등록 매장 기준호차'+escape(date)+' · '+fixedText+'</p>':'')+'</section>';
+      (zip?'<p data-compare-fixed>'+escape(fixedSummary())+'</p>':'')+'</section>';
   }
 
   function renderSelected() {
@@ -95,7 +100,7 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
       nearest.km>.5?'500m 이내 이관 후보가 아닙니다.':!move?'복수 호차에 배정됐거나 이관 금액을 대조할 수 없습니다.':'';
     return '<section class="dispatch-compare-selection"><h3>이관할 매장</h3>'+shared+
       '<strong class="dispatch-compare-store-name">'+escape(row.name)+'</strong><p>'+escape(row.customerCode)+' · '+escape(address||'등록 주소 미확인')+'</p>'+
-      '<dl><div><dt>배송금액</dt><dd>'+money(stopAmount)+'</dd></div><div><dt>확정호차 → 이관 대상</dt><dd>'+
+      '<dl><div><dt>배송금액</dt><dd>'+money(stopAmount)+'</dd></div><div><dt>확정 → 이관</dt><dd>'+
       escape(label(route?.vehicle))+' → '+escape(label(other?.vehicle))+'</dd></div><div><dt>상대 호차 최근접</dt><dd>'+
       (nearest?escape(nearest.stop.name)+' · <strong>'+meters(nearest.km)+'</strong> 직선':'미확인')+'</dd></div></dl>'+
       (move?'<button class="dispatch-compare-add" type="button" data-compare-action="draft" aria-pressed="'+Boolean(activeDraft)+'">'+
@@ -123,11 +128,12 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
       entries.length?'<p role="status">이관 결과를 대조할 수 없습니다. 선택한 매장을 확인하세요.</p>':'';
     return '<section class="dispatch-compare-simulation"><div class="dispatch-compare-heading"><h3>가상 이관 '+entries.length+'착</h3>'+
       (entries.length?'<button type="button" data-compare-action="clear">초기화</button>':'')+'</div>'+
+      table+status+
       (entries.length?'<details class="dispatch-compare-drafts"'+(draftsOpen?' open':'')+'><summary>선택한 매장 '+entries.length+'곳</summary><ul>'+
         entries.map(({candidate,customerCode,source,target})=>'<li><span>'+escape(candidate.name)+' · '+
           escape(label(source))+' → '+escape(label(target))+'</span><button type="button" data-compare-action="remove" data-code="'+escape(customerCode)+
           '" aria-label="'+escape(candidate.name)+' 이관 취소">취소</button></li>').join('')+'</ul></details>':'')+
-      table+status+'<p>이관 참고용 · 실제 동선·적재량·시간은 별도 확인</p></section>';
+      '<p>이관 참고용 · 실제 동선·적재량·시간은 별도 확인</p></section>';
   }
 
   function renderCandidates() {
@@ -169,10 +175,11 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
     if (!zip) return;
     areaProof={area:zip,loading:true};
     const request=areaRequest=new AbortController();
-    void readFixedArea(zip,{signal:request.signal}).then(data=>{
-      if(!request.signal.aborted){areaProof={area:zip,...data};render();}
-    }).catch(()=>{
-      if(!request.signal.aborted){areaProof={area:zip};render();}
+    void readFixedArea(zip,{signal:request.signal}).catch(()=>null).then(data=>{
+      if(request.signal.aborted)return;
+      areaProof={area:zip,...data};
+      const status=panel.querySelector('[data-compare-fixed]');
+      if(status)status.textContent=fixedSummary();
     });
   }
 
