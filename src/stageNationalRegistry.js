@@ -150,7 +150,7 @@ export async function collectStageNationalRegistry(readCenter) {
   return {rows:normalizeRows(rows),counts};
 }
 
-export function verifiedNationalRegistryMembership(approved,previous) {
+export function verifiedNationalRegistryMembership(approved,previous,{orderCustomersByCenter,skipRefresh}={}) {
   if(!(approved instanceof Map))throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
   const membership=new Map(approved), excludedCustomers=new Set();
   for(const row of normalizeRows(previous,true)){
@@ -161,10 +161,11 @@ export function verifiedNationalRegistryMembership(approved,previous) {
     }else membership.set(code,{center,addressHash});
   }
   if(membership.size>limit)throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
-  return {membership,excludedCustomers};
+  return {membership,excludedCustomers,orderCustomersByCenter,skipRefresh};
 }
 
-export function createStageNationalRegistrationSource({env=process.env,fetchImpl=fetch,login,membership,excludedCustomers}={}) {
+export function createStageNationalRegistrationSource({env=process.env,fetchImpl=fetch,login,membership,
+  excludedCustomers,orderCustomersByCenter,skipRefresh}={}) {
   if (!stageNationalRegistryEnabled(env) || (env.FRESHON_BASE_URL && new URL(env.FRESHON_BASE_URL).origin!==freshonOrigin))
     throw failure('NATIONAL_REGISTRY_SOURCE_APPROVAL');
   let contract;
@@ -177,7 +178,8 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
       !field(contract.centerField) || !field(contract.activeField) || contract.updatedAtField!=null&&!field(contract.updatedAtField))
     throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
   const verifiedChanges=excludedCustomers!==undefined;
-  if(verifiedChanges&&(!(membership instanceof Map)||!(excludedCustomers instanceof Set)))
+  if(verifiedChanges&&(!(membership instanceof Map)||!(excludedCustomers instanceof Set)||
+      !(orderCustomersByCenter instanceof Map)||!(skipRefresh instanceof Set)))
     throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
   const seen=verifiedChanges?new Set():null, selected=verifiedChanges?new Set():null;
   let cookie=String(env.FRESHON_COOKIE||''), loginAttempted=false;
@@ -278,7 +280,8 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
               // classification returned for each active registration instead.
               const night=readField(row,'baecha')===FRESHON_NIGHT_DISPATCH&&
                 readField(row,'baechaName')===FRESHON_NIGHT_DISPATCH_LABEL;
-              const eligible=night&&!excludedCustomers.has(code);
+              const eligible=night&&!excludedCustomers.has(code)&&!skipRefresh.has(code)&&
+                (approved||orderCustomersByCenter.get(center)?.has(code));
               if(selected.has(code)||(approved||eligible)&&seen.has(code))
                 throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
               seen.add(code);

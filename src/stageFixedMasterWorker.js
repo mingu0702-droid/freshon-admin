@@ -2,7 +2,7 @@ import {createStageFixedMasterSource,stageFixedMasterBaseline,stageFixedMasterSt
   syncStageFixedMaster} from './stageFixedMasterSync.js';
 import {createStageFixedMasterExcelSource} from './stageFixedMasterExcel.js';
 
-export async function runStageFixedMaster({env=process.env,receipt,scope,log=console.info}) {
+export async function runStageFixedMaster({env=process.env,receipt,scope,skipRefresh,log=console.info}) {
   if(!scope) throw Error('FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE');
   const store=stageFixedMasterStorage({env,write:true}),baseline=stageFixedMasterBaseline({env,store});
   const emit=(component,evidence)=>log(JSON.stringify({component,runId:receipt.runId,...evidence}));
@@ -11,7 +11,7 @@ export async function runStageFixedMaster({env=process.env,receipt,scope,log=con
       onPage:e=>emit('opsmap-fixed-master-page-progress',e)}) :
     createStageFixedMasterExcelSource({env,onCenter:({center,sourceRows})=>
       emit('opsmap-fixed-master-excel-center',{center,sourceRows})});
-  const result=await syncStageFixedMaster({store,receipt,scope,readMaster,loadBaseline:baseline.load});
+  const result=await syncStageFixedMaster({store,receipt,scope,readMaster,loadBaseline:baseline.load,skipRefresh});
   emit('opsmap-fixed-master-sync',result);
   return result;
 }

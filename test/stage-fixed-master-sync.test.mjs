@@ -140,6 +140,25 @@ test('Excel source clears a proven empty assignment, moves centers and retains a
   assert.deepEqual((await cache.get(codes)).data.map(row=>row.baseVehicleStale),[false,false,true]);
 });
 
+test('a confirmed inactive refresh exclusion retains the fixed master and omits a new observation',async()=>{
+  const store=memory(), baseline=base(), tick=start;
+  const held=codes[0], skipped=new Set([held]);
+  const result=await syncStageFixedMaster({store,receipt:receipt(tick),now:()=>tick,scope,skipRefresh:skipped,
+    loadBaseline:reader(baseline).load,readMaster:async(refresh,approved)=>{
+      assert.deepEqual([...refresh],codes.slice(1));
+      return {data:source('122').data.slice(1),meta:{source:FIXED_MASTER_EXCEL_SOURCE,baselineVersion:approved.version,
+        sourceRows:3,uniqueCustomers:3,projectedCustomers:2,centers:centers.map(center=>({
+          center,sourceRows:1,declaredRows:1,duplicateCustomerRows:0,sha256:sha(center),
+          observedAt:new Date(tick-60000).toISOString()
+        }))}};
+    }});
+  assert.equal(result.observedMatchedCount,2);
+  assert.equal(result.retainedUnconfirmedCount,1);
+  const daily=createStageDailyFixedMasterReader({store,baseline:reader(baseline),now:()=>tick});
+  assert.deepEqual((await daily.load()).rows,baseline.rows);
+  assert.deepEqual((await daily.readObservation(receipt(tick).date,codes)).data.map(row=>row.customerCode),codes.slice(1));
+});
+
 test('Excel verifies each center around a sequential download and stops on source drift',async()=>{
   async function collect(drift){
     const requests=[], selected=new Set(codes);

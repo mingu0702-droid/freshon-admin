@@ -16,6 +16,8 @@ const makeDay=(date,source,coverage,codes=[],centerKey='osan')=>({date,source,ce
     freshon_orders:'order_confirmed',wms_dispatch:'dispatch_confirmed',delivery_admin:'delivery_completed'
   }[source]}))});
 const ledger=(...days)=>normalizeRecentOperations({startDate:initialStart,endDate:initialEnd,days});
+const makeNightOrderDay=(date,centerKey,codes)=>({date,centerKey,source:'freshon_orders',coverage:'partial',
+  rows:codes.map(customerCode=>({customerCode,evidence:'order_confirmed',nightOrder:true}))});
 
 test('sealed order recovery adds only exact partial orders and verifies the CAS readback',async()=>{
   const date='2026-11-19', sha='b'.repeat(40), latest='2026-11-23';
@@ -245,7 +247,7 @@ test('source order reads require an exact day, center, confirmed rows and comple
     if(center==='012') return Response.json({data:[{...good,logCdName:'영남센터',totalCnt:2}]});
     return Response.json({data:[{...good,logCdName:'호남센터',dcOutDate:'미확정'}]});
   }});
-  assert.deepEqual(await read(date),[makeDay(date,'freshon_orders','partial',['S1'])]);
+  assert.deepEqual(await read(date),[makeNightOrderDay(date,'osan',['S1'])]);
   assert.deepEqual(fetched,['011','012','013']);
   assert.deepEqual(await read(date,new Set(['osan'])),[]);
   assert.deepEqual(fetched,['011','012','013','012','013']);
@@ -297,7 +299,29 @@ test('order diagnostics distinguish empty, unsafe and inaccessible source result
   }
   const read=createStageRecentOrdersReader({env,fetchImpl:async()=>Response.json({data:[row]}),
     onDiagnostic:()=>{throw Error('fixture diagnostic failure');}});
-  assert.deepEqual(await read(date,onlyOsan),[makeDay(date,'freshon_orders','partial',['S1'])]);
+  assert.deepEqual(await read(date,onlyOsan),[makeNightOrderDay(date,'osan',['S1'])]);
+});
+
+test('unpaged night orders with an absent count require the same first line and declared total from the official paged request',async()=>{
+  const date='2026-11-20', env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
+    OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'};
+  const row={stockDate:date,logCdName:'영남센터',logCd:'012',dcOutDate:'확정',baechaName:'야간배송',estCd:'S1',dlvyEstCd:'S1',
+    orderNo:'O100',seq:1,orderQty:2,totalCnt:0};
+  const requests=[], diagnostics=[];
+  let firstLine='O100';
+  const read=createStageRecentOrdersReader({env,onDiagnostic:signal=>diagnostics.push(signal),async fetchImpl(_,options){
+    const p=new URLSearchParams(options.body);
+    requests.push([p.get('baecha'),p.get('logCd'),p.get('stockDateS'),p.get('isPaging'),p.get('size')]);
+    return p.get('isPaging')==='true'?
+      Response.json({status:200,data:[{...row,orderNo:firstLine,totalCnt:2}]}):
+      Response.json({status:200,data:[row,{...row,seq:2},{stockDate:'소계'}]});
+  }});
+  const otherCenters=new Set(['osan','honam']);
+  assert.deepEqual(await read(date,otherCenters),[makeNightOrderDay(date,'yeongnam',['S1'])]);
+  assert.deepEqual(requests,[['2','012',date,'false','1000'],['2','012',date,'true','1']]);
+  firstLine='DIFFERENT';
+  assert.deepEqual(await read(date,otherCenters),[]);
+  assert.equal(diagnostics.filter(item=>item.centerKey==='yeongnam').at(-1).state,'COUNT_UNVERIFIED');
 });
 
 test('streamed orders validate fragmented UTF-8, row/scope counts, and the complete envelope before accepting evidence',async()=>{
@@ -321,7 +345,7 @@ test('streamed orders validate fragmented UTF-8, row/scope counts, and the compl
     }),{headers:{'content-type':'application/json; charset=utf-8'}});
   }});
   const skip=new Set(['osan','honam']);
-  assert.deepEqual(await read(date,skip),[makeDay(date,'freshon_orders','partial',['S1'],'yeongnam')]);
+  assert.deepEqual(await read(date,skip),[makeNightOrderDay(date,'yeongnam',['S1'])]);
   for (const [invalid,state] of [
     [body.replace('"ok":true','"ok":false'),'RESPONSE_INVALID'],
     [body.replace('"ok":true','"status":500'),'RESPONSE_INVALID'],

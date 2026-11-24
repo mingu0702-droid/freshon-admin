@@ -27,11 +27,13 @@ import {runStageFixedMaster} from '../src/stageFixedMasterWorker.js';
 import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
 import {createStageWmsDispatchExportReader} from '../src/opsmapWmsDispatchExport.js';
 import {createStageNationalRegistryStorage,createStageNationalRegistrationSource,stageNationalRegistryEnabled,
-  createStageNationalRegistryReader,readApprovedOsanRegistryRecovery,readStageNationalRegistryRows,scopedNationalRegistryMembership,
+  createStageNationalRegistryReader,readApprovedOsanRegistryRecovery,readApprovedOsanRegistryRecoveryManifest,
+  readStageNationalRegistryRows,scopedNationalRegistryMembership,
   syncStageNationalRegistry,verifiedNationalRegistryMembership} from '../src/stageNationalRegistry.js';
 import {createStageRecentOperationsSeed,createStageRecentOperationsStore,historicalRecoveryOutcome,stageRecentOperationsSyncEnabled,
   syncStageRecentOperations} from '../src/stageRecentOperations.js';
 import {recentOperationsBaseline} from '../src/stageRecentOperationsManifest.js';
+import {planStageNightOrderExclusions,stageNightOrderScope} from '../src/stageNightOrderScope.js';
 
 const appRoot = fileURLToPath(new URL('../',import.meta.url));
 const env = process.env;
@@ -241,6 +243,22 @@ async function runScheduled(job,settingsFile){
     const mode=settingsFile?'scheduled':'fixed-scheduled';
     const {receipt}=job;
     const fixedScope=job?.fixedScope;
+    const verifiedChanges=env.OPSMAP_STAGE_NATIONAL_REGISTRY_VERIFIED_CHANGES_APPROVED==='1';
+    async function readNightOrderScope() {
+      const archive=createStageRecentOperationsStore({env});
+      const saved=await archive?.read().catch(()=>null);
+      return stageNightOrderScope(saved?.ledger,receipt.date);
+    }
+    async function refreshExclusions(orderScope,codes) {
+      if(!orderScope.allDaysVerified)return new Set();
+      const manifest=await readApprovedOsanRegistryRecoveryManifest({env}).catch(()=>null);
+      if(!manifest)return new Set();
+      const review=planStageNightOrderExclusions(orderScope,codes,new Set(manifest.rows.map(([code])=>code)),
+        env.OPSMAP_STAGE_NIGHT_ORDER_EXCLUSIONS_SHA256);
+      if(review.reviewSha256)console.info(JSON.stringify({component:'opsmap-night-order-review',runId:receipt.runId,
+        proposed:review.proposed,sha256:review.reviewSha256}));
+      return review.skip;
+    }
     const memory=phase=>{
       const {rss,heapUsed,external,arrayBuffers}=process.memoryUsage();
       console.log(JSON.stringify({component:'opsmap-stage-job-memory',runId:receipt.runId,
@@ -262,10 +280,12 @@ async function runScheduled(job,settingsFile){
           return createStageNationalRegistryReader({store})?.read();
         }});
         const membership=scopedNationalRegistryMembership(job?.registryScope,snapshot.rows,recovered);
-        const verifiedChanges=env.OPSMAP_STAGE_NATIONAL_REGISTRY_VERIFIED_CHANGES_APPROVED==='1';
         const source=verifiedChanges?{
           async prepareSource(previous){
-            const selection=verifiedNationalRegistryMembership(membership,previous);
+            const orderScope=await readNightOrderScope();
+            const selection=verifiedNationalRegistryMembership(membership,previous,{
+              orderCustomersByCenter:orderScope.byCenter});
+            selection.skipRefresh=await refreshExclusions(orderScope,[...selection.membership.keys()]);
             return {...selection,readCenter:createStageNationalRegistrationSource({env,...selection})};
           },
           async confirmCenterMoves(codes){
@@ -295,7 +315,9 @@ async function runScheduled(job,settingsFile){
     const runFixedMaster = async () => {
       if (!stageFixedMasterSyncEnabled(env)) return;
       try {
-        return await runStageFixedMaster({env,receipt,scope:fixedScope});
+        const skipRefresh=verifiedChanges&&fixedScope?
+          await refreshExclusions(await readNightOrderScope(),fixedScope.codes):undefined;
+        return await runStageFixedMaster({env,receipt,scope:fixedScope,skipRefresh});
       } catch(error) {
         const code=error.code || error.message || '';
         console.log(JSON.stringify({component:'opsmap-fixed-master-sync',runId:receipt.runId,state:'FAILED',

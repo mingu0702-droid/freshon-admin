@@ -153,7 +153,7 @@ async function verifiedObject(store, ref) {
   return envelope;
 }
 
-function verifyProjection(result, scope, baseline, observedAt) {
+function verifyProjection(result, scope, baseline, observedAt, skipRefresh) {
   const {data,meta}=result || {};
   const excel=meta?.source===FIXED_MASTER_EXCEL_SOURCE;
   if (!Array.isArray(data) || !excel&&meta?.readHttp!==200 ||
@@ -172,9 +172,10 @@ function verifyProjection(result, scope, baseline, observedAt) {
   }
   if (excel && (!baseline || meta.baselineVersion!==baseline.version ||
       meta.centers.some(item=>item.observedAt<=baseline.checkedAt))) throw fail('FIXED_STORE_DAILY_SUPERSEDED');
-  const rows=data.filter(row=>scope.has(row.customerCode)), byCode=new Map(rows.map(row=>[row.customerCode,row]));
+  const rows=data.filter(row=>scope.has(row.customerCode)&&!skipRefresh.has(row.customerCode));
+  const byCode=new Map(rows.map(row=>[row.customerCode,row]));
   if (rows.some(row=>row.baseVehicleState==='CONFLICT') || baseline?.rows.some(row=>{
-    if (!scope.has(row[0])) return false;
+    if (!scope.has(row[0]) || skipRefresh.has(row[0])) return false;
     if (row[3]!=='VERIFIED_MASTER') return false;
     const incoming=byCode.get(row[0]);
     if (excel) return incoming && (incoming.baseVehicleState!=='VERIFIED_MASTER' &&
@@ -185,11 +186,11 @@ function verifyProjection(result, scope, baseline, observedAt) {
   const retainedCodes=[];
   if(excel){
     if(!observedMatchedCount) throw fail('FIXED_MASTER_DAILY_ASSIGNMENT_GAP');
-    for(const tuple of baseline.rows){
-      if(scope.has(tuple[0])&&!byCode.has(tuple[0])){
-        rows.push(fixedTupleData(tuple));
-        retainedCodes.push(tuple[0]);
-      }
+  }
+  for(const tuple of baseline?.rows??[]){
+    if(scope.has(tuple[0])&&!byCode.has(tuple[0])&&(excel||skipRefresh.has(tuple[0]))){
+      rows.push(fixedTupleData(tuple));
+      retainedCodes.push(tuple[0]);
     }
   }
   const coverage={ledgerCount:scope.size, matchedCount:rows.length, missingCount:scope.size-rows.length, sourceRows:meta.sourceRows,
@@ -204,7 +205,7 @@ function verifyProjection(result, scope, baseline, observedAt) {
 
 // Callers authenticate the signed schedule or explicitly approved Stage recovery.
 // The reservation and verified pointer share a CAS so a late process cannot publish over a new run.
-export async function syncStageFixedMaster({store, receipt, scope: input, readMaster, loadBaseline, now=Date.now}) {
+export async function syncStageFixedMaster({store, receipt, scope: input, readMaster, loadBaseline, skipRefresh=new Set(), now=Date.now}) {
   if (!hash.test(receipt?.runId || '') || receipt.date!==kstDay(now())) throw fail('FIXED_MASTER_DAILY_RECEIPT');
   const scope=validateFixedMasterScope(input), codes=new Set(scope.codes);
   const {head,sha}=await readHead(store);
@@ -231,12 +232,13 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
     const baseline=approved && (!saved || approved.checkedAt>saved.checkedAt) ? approved : saved;
     let result;
     try {
-      result=await readMaster(codes,baseline);
+      const refreshCodes=skipRefresh.size?new Set([...codes].filter(code=>!skipRefresh.has(code))):codes;
+      result=await readMaster(refreshCodes,baseline);
     } catch (error) {
       if (error.name==='TimeoutError') throw fail('FIXED_MASTER_DAILY_TIMEOUT');
       throw error;
     }
-    const {envelope,coverage,sourceObservedAt,retainedCodes}=verifyProjection(result,codes,baseline,nowISO(now()));
+    const {envelope,coverage,sourceObservedAt,retainedCodes}=verifyProjection(result,codes,baseline,nowISO(now()),skipRefresh);
     if (baseline && Date.parse(envelope.checkedAt)<=Date.parse(baseline.checkedAt)) throw fail('FIXED_STORE_DAILY_SUPERSEDED');
     const rowsHash=digest(envelope.rows);
     const unchanged=head.current?.rowsHash===rowsHash;

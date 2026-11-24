@@ -46,22 +46,25 @@ export function normalizeRecentOperations({startDate,endDate,days,recovery=[]} =
       startDate !== datesFor(endDate,90)[0] || !Array.isArray(days) || days.length > 810) throw rejected();
   const keys = new Set(), normalized = [];
   let rowCount = 0;
-  for (const {date,centerKey,source,coverage,rows} of days) {
+  for (const {date,centerKey,source,coverage,rows,completeNightOrders} of days) {
     const allowedEvidence = sourceEvidence[source];
     const key = dayKey({date,centerKey,source});
     if (!isDay(date) || date < startDate || date > endDate || !recentOperationsCenters.includes(centerKey) ||
         !Object.hasOwn(sourceEvidence,source) || !['partial','complete'].includes(coverage) ||
         source === 'delivery_admin' && coverage === 'complete' || keys.has(key) ||
+        completeNightOrders!==undefined && (completeNightOrders!==true || source!=='freshon_orders' || coverage!=='complete') ||
         !Array.isArray(rows) || rows.length > 30000 || (rowCount += rows.length) > 850000) throw rejected();
     keys.add(key);
     const codes = new Map();
     for (const row of rows) {
       if (typeof row?.customerCode !== 'string' || !customerCode.test(row.customerCode) ||
-          !allowedEvidence.includes(row.evidence) || codes.has(row.customerCode)) throw rejected();
-      codes.set(row.customerCode,row.evidence);
+          !allowedEvidence.includes(row.evidence) || codes.has(row.customerCode) ||
+          row.nightOrder!==undefined && (row.nightOrder!==true || source!=='freshon_orders')) throw rejected();
+      codes.set(row.customerCode,{customerCode:row.customerCode,evidence:row.evidence,
+        ...(row.nightOrder?{nightOrder:true}:{})});
     }
-    normalized.push({date,centerKey,source,coverage,rows:[...codes].sort(([a],[b])=>a.localeCompare(b)).map(
-      ([customerCode,evidence])=>({customerCode,evidence}))});
+    normalized.push({date,centerKey,source,coverage,...(completeNightOrders?{completeNightOrders:true}:{}),
+      rows:[...codes.values()].sort((a,b)=>a.customerCode.localeCompare(b.customerCode))});
   }
   if (!Array.isArray(recovery) || recovery.length>540) throw rejected();
   const attempts=new Set();
@@ -135,14 +138,19 @@ export function mergeRecentOperations(previous, endDate, days) {
   const retained=new Map(previous.days.filter(day=>day.date>=startDate).map(day=>[dayKey(day),day]));
   for (const day of scoped.days) {
     const key=dayKey(day), existing=retained.get(key);
-    if (!existing || day.coverage==='complete') {
+    const preserveNightEvidence=day.source==='freshon_orders'&&(day.completeNightOrders||existing?.completeNightOrders||
+      day.rows.some(row=>row.nightOrder)||existing?.rows.some(row=>row.nightOrder));
+    if (!existing || day.coverage==='complete'&&!preserveNightEvidence) {
       retained.set(key,day);
-    } else if (existing.coverage==='partial') {
+    } else if (existing.coverage==='partial'||preserveNightEvidence) {
       const rows=new Map(existing.rows.map(row=>[row.customerCode,row]));
       for (const row of day.rows) {
-        if (evidenceOrder.indexOf(row.evidence)>evidenceOrder.indexOf(rows.get(row.customerCode)?.evidence)) rows.set(row.customerCode,row);
+        const earlier=rows.get(row.customerCode);
+        if (evidenceOrder.indexOf(row.evidence)>evidenceOrder.indexOf(earlier?.evidence) || row.nightOrder&&!earlier?.nightOrder)
+          rows.set(row.customerCode,row);
       }
-      retained.set(key,{...day,rows:[...rows.values()]});
+      retained.set(key,{...day,coverage:existing.coverage==='complete'?'complete':day.coverage,
+        ...(existing.completeNightOrders?{completeNightOrders:true}:{}),rows:[...rows.values()]});
     }
   }
   return normalizeRecentOperations({...scoped,days:[...retained.values()],

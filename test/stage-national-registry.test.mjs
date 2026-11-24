@@ -174,7 +174,7 @@ test('Stage registry accepts only known customer, center and address combination
   assert.deepEqual((await read('osan')).rows,[]);
 });
 
-test('official night registrations need no orders and preserve the previous registry on failed validation',async()=>{
+test('new registrations need a verified night order and later refreshes preserve existing registry safeguards',async()=>{
   let tick=Date.parse('2026-11-19T02:00:00Z'), head=null, etag=null, revision=0;
   const objects=new Map();
   const store={key:Buffer.alloc(32,9),async readHead(){return {value:structuredClone(head),sha:etag};},
@@ -183,7 +183,7 @@ test('official night registrations need no orders and preserve the previous regi
   const receipt=id=>({date:new Date(tick+9*3600000).toISOString().slice(0,10),runId:id.repeat(64)});
   const location={addressHash:customerRegistryAddressHash(row('osan').basicAddress),lat:37.5,lng:127,kind:'BUILDING'};
   const pending='S10004', added='S10005', unproven='S10006', omitted='S10007', stable='S10008',
-    parcel='S10009', noAddress='S10010', retired='S10011', missingClass='S10012';
+    parcel='S10009', noAddress='S10010', retired='S10011', missingClass='S10012', noOrder='S10013';
   const original={
     osan:[row('osan'),row('osan',{customerCode:omitted}),row('osan',{customerCode:retired,lifecycle:'DELETED'})],
     yeongnam:[row('yeongnam'),row('yeongnam',{customerCode:stable})],
@@ -198,7 +198,7 @@ test('official night registrations need no orders and preserve the previous regi
   const observations={
     osan:[row('osan',{basicAddress:'경기 합성시 새주소로 20'}),row('osan',{customerCode:added}),
       row('osan',{customerCode:unproven,dispatch:'3',dispatchName:'주간 CJ'}),
-      row('osan',{customerCode:noAddress,basicAddress:''}),row('osan',{customerCode:retired})],
+      row('osan',{customerCode:noAddress,basicAddress:''}),row('osan',{customerCode:retired}),row('osan',{customerCode:noOrder})],
     yeongnam:[row('yeongnam',{customerCode:pending}),row('yeongnam',{customerCode:stable}),
       row('yeongnam',{customerCode:parcel,dispatch:'1',dispatchName:'택배배송'})],
     honam:[row('honam'),row('honam',{customerCode:codes.yeongnam}),
@@ -207,8 +207,10 @@ test('official night registrations need no orders and preserve the previous regi
   const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED:'1',
     FRESHON_COOKIE:'fixture',OPSMAP_STAGE_NATIONAL_REGISTRY_CONTRACT_JSON:JSON.stringify({method:'POST',mode:'PAGED',
       rowsKey:'data',totalField:'totalCnt',totalLocation:'BODY',centerField:'logCd',activeField:'useYn',addressField:'address'})};
+  const orderCustomersByCenter=new Map([['osan',new Set([added,unproven,retired,noAddress])],['yeongnam',new Set([parcel])]]);
+  const skipRefresh=new Set();
   const prepareSource=async previous=>{
-    const selection=verifiedNationalRegistryMembership(scoped,previous);
+    const selection=verifiedNationalRegistryMembership(scoped,previous,{orderCustomersByCenter,skipRefresh});
     const readCenter=createStageNationalRegistrationSource({env,...selection,fetchImpl:async(url,options)=>{
       assert.equal(url.pathname,'/bo/sm/standard/ciList');
       const query=new URLSearchParams(options.body);
@@ -237,10 +239,13 @@ test('official night registrations need no orders and preserve the previous regi
   assert.equal(admitted.get(noAddress).basicAddress,'');
   assert.equal(admitted.get(noAddress).verifiedLocation,undefined);
   assert.equal(admitted.get(retired).lifecycle,'DELETED');
-  assert(!admitted.has(unproven)&&!admitted.has(parcel)&&!admitted.has(missingClass));
+  assert(!admitted.has(unproven)&&!admitted.has(parcel)&&!admitted.has(missingClass)&&!admitted.has(noOrder));
 
   tick+=day;
   observations.osan[1].basicAddress='경기 합성시 등록후이전로 51';
+  orderCustomersByCenter.clear();
+  skipRefresh.add(codes.honam);
+  observations.honam[0].basicAddress='경기 합성시 미발주로 55';
   observations.yeongnam[1].basicAddress='경기 합성시 제외로 99';
   observations.yeongnam[1].dispatch='3';
   observations.yeongnam[1].dispatchName='주간배송';
@@ -249,6 +254,7 @@ test('official night registrations need no orders and preserve the previous regi
   admitted=await published();
   assert.equal(admitted.get(added).basicAddress,'경기 합성시 등록후이전로 51');
   assert.equal(admitted.get(stable).basicAddress,original.yeongnam[1].basicAddress);
+  assert.equal(admitted.get(codes.honam).basicAddress,original.honam[0].basicAddress);
 
   tick+=day;
   observations.honam.push(row('honam',{customerCode:added,dispatch:'1',dispatchName:'택배배송'}));

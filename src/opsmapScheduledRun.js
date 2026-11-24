@@ -342,6 +342,11 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
                 ...(changes&&Object.values(changes).every(count=>count!==null)?{changes}:{}),
                 error:/^(?:NATIONAL_REGISTRY|FIXED_STORE)_[A-Z_]+$/.test(value.error||'')?value.error:null}));
             }
+            if(value?.component==='opsmap-night-order-review'&&value.runId===receipt.runId&&
+               boundedCount(value.proposed,30_000)>0&&syncHash(value.sha256)) {
+              log(JSON.stringify({component:value.component,runId:receipt.runId,job:input.scheduledKind,
+                proposed:value.proposed,sha256:value.sha256}));
+            }
             if(value?.component==='opsmap-recent-operations-sync' && value.runId===receipt.runId &&
                ['PUBLISHED','VERIFIED_NOOP','RECOVERY_CHECKPOINTED','SOURCE_UNAVAILABLE','BUSY','FAILED'].includes(value.state)) {
               const attempts=Array.isArray(value.recoveryBatch)&&value.recoveryBatch.length<=3?value.recoveryBatch:[value.recovery];

@@ -10,11 +10,13 @@ const centers={
   yeongnam:['012',['영남센터']],
   honam:['013',['호남센터']]
 };
+const orderLineKey=row=>JSON.stringify([row.stockDate,row.logCdName,row.baechaName,row.dcOutDate,
+  row.estCd,row.dlvyEstCd,row.orderNo,String(row.seq),Number(String(row.orderQty).replaceAll(',',''))]);
 
 function projectOrders(date, centerKey) {
   const [center,labels]=centers[centerKey];
   const customers=new Set(), lines=new Set();
-  let count=0,rawCount=0,total=0,firstRejection;
+  let count=0,rawCount=0,total=0,firstRejection,firstLine;
   function validate(row) {
     if (!row) return 'RESPONSE_INVALID';
     if (row.stockDate!==date) return 'ROW_DATE_MISMATCH';
@@ -37,13 +39,17 @@ function projectOrders(date, centerKey) {
       if (row&&['소계','합계','총계'].includes(row.stockDate)&&!row.estCd&&!row.dlvyEstCd) return;
       if (++count===1) total=Number(row?.totalCnt);
       if (!firstRejection) firstRejection=validate(row);
+      if(count===1&&!firstRejection)firstLine=orderLineKey(row);
     },
     finish({data,statusFailed,okFailed}) {
       if (!data||statusFailed||okFailed) return 'RESPONSE_INVALID';
       if (!count) return 'SOURCE_EMPTY';
-      if (!Number.isSafeInteger(total)||total<1||count!==total) return 'COUNT_UNVERIFIED';
-      return firstRejection||{date,centerKey,source:'freshon_orders',coverage:'partial',
-        rows:[...customers].map(customerCode=>({customerCode,evidence:'order_confirmed'}))};
+      const declared=Number.isSafeInteger(total)&&total>0;
+      if(declared&&count!==total)return 'COUNT_UNVERIFIED';
+      if(firstRejection)return firstRejection;
+      return {evidence:{date,centerKey,source:'freshon_orders',coverage:'partial',
+        rows:[...customers].map(customerCode=>({customerCode,evidence:'order_confirmed',nightOrder:true}))},
+        ...(declared?{}:{verify:{count,firstLine}})};
     }
   };
 }
@@ -165,6 +171,25 @@ async function readOrderEvidence(response,date,centerKey,signal) {
   }
 }
 
+// This endpoint can omit totalCnt for an unpaged response. Reuse the same
+// scope with a single-row page to verify its official count and first line.
+async function verifyOrderCount(response,{count,firstLine}) {
+  try{
+    if(!response.ok||!response.body||!response.headers.get('content-type')?.includes('json'))return false;
+    const chunks=[];
+    let size=0;
+    for await(const chunk of response.body){
+      size+=chunk.length;
+      if(size>256*1024)return false;
+      chunks.push(chunk);
+    }
+    const {data,status}=JSON.parse(Buffer.concat(chunks,size).toString('utf8'));
+    return status===200&&Array.isArray(data)&&data.length===1&&Number(data[0]?.totalCnt)===count&&
+      orderLineKey(data[0])===firstLine;
+  }catch{return false;}
+  finally{await response.body?.cancel().catch(()=>{});}
+}
+
 export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,onDiagnostic,
   login=async()=>(await import('./scraper/freshonDailyRoute.js')).loginFreshonSession()}={}) {
   if (!opsmapArchiveSite(env) ||
@@ -202,8 +227,8 @@ export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,
         shipGbn:'1',deliveGbn:'',baecha:FRESHON_NIGHT_DISPATCH,orderGbn:'',sortType:'3',sort:',ASC',page:'0',size:'1000',
         isPaging:'false',isCount:'true'});
       try {
-        const request=()=>fetchImpl(orderUrl,{method:'POST',redirect:'manual',
-          signal:AbortSignal.any([budget,AbortSignal.timeout(30_000)]),body:body.toString(),
+        const request=(form=body)=>fetchImpl(orderUrl,{method:'POST',redirect:'manual',
+          signal:AbortSignal.any([budget,AbortSignal.timeout(30_000)]),body:form.toString(),
           headers:{Cookie:cookie,Accept:'application/json','Content-Type':'application/x-www-form-urlencoded; charset=UTF-8',
             'X-Requested-With':'XMLHttpRequest',Origin:origin,Referer:origin+'/bo/main'}});
         let response=await request();
@@ -218,9 +243,18 @@ export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,
           report(centerKey,response.status===403?'SOURCE_FORBIDDEN':'HTTP_REJECTED');
           continue;
         }
-        const evidence=await readOrderEvidence(response,date,centerKey,budget);
-        if (typeof evidence==='string') report(centerKey,evidence);
-        else {input.push(evidence);report(centerKey,'VERIFIED');}
+        const result=await readOrderEvidence(response,date,centerKey,budget);
+        if (typeof result==='string') {report(centerKey,result);continue;}
+        if(result.verify){
+          const probe=new URLSearchParams(body);
+          probe.set('isPaging','true');
+          probe.set('size','1');
+          if(!await verifyOrderCount(await request(probe),result.verify)){
+            report(centerKey,'COUNT_UNVERIFIED');continue;
+          }
+        }
+        input.push(result.evidence);
+        report(centerKey,'VERIFIED');
       } catch (error) {report(centerKey,budget.aborted?'BUDGET_EXHAUSTED':
         error?.code==='ORDER_RESPONSE_INVALID'?'RESPONSE_INVALID':'READ_FAILED');}
     }
