@@ -1,28 +1,67 @@
 import {money} from './dispatch-reference.mjs?v=20261124-wms-totals';
 import {compareDispatchReview,groupFixedPostalRoutes,simulateDispatchReviewMoves} from './dispatch-reference-review-model.mjs?v=20261125-comparison';
+import {dispatchVehicleLabel as label,indexDispatchStores,matchDispatchStores,mountDispatchRoster,
+  summarizeDispatchOverview} from './dispatch-reference-roster.mjs?v=20261125-overview';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch]);
 const format=new Intl.NumberFormat('ko-KR');
 const plus=new Intl.NumberFormat('ko-KR',{signDisplay:'exceptZero'});
-const label=value=>/^\d+$/.test(value||'')?value+'호':value||'—';
 const meters=km=>Number.isFinite(km)?format.format(Math.round(km*1000))+'m':'미확인';
 const stops=value=>Number.isSafeInteger(value)?format.format(value)+'착':'미확인';
 const fixedClock=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric'});
 
 export function createDispatchScreenReview({bridge,readFixedArea}) {
-  const nearby=document.createElement('section');
-  nearby.className='dispatch-compare-nearby';
+  const left=document.createElement('div');
+  left.className='dispatch-compare-left';
+  left.innerHTML='<div class="dispatch-compare-switch" role="group" aria-label="배차 목록">' +
+    '<button type="button" data-left-view="stores" aria-pressed="true">배송 매장</button>' +
+    '<button type="button" data-left-view="nearby" aria-pressed="false" disabled>인접 호차</button></div>' +
+    '<div class="dispatch-compare-store-pane"><p class="dispatch-compare-list-count" role="status"></p>' +
+    '<div class="dispatch-compare-roster" role="list" tabindex="0" aria-label="확정배차 매장 목록"><div class="dispatch-roster-track"></div></div></div>' +
+    '<div class="dispatch-compare-nearby" hidden></div>';
+  const nearby=left.querySelector('.dispatch-compare-nearby');
+  const storePane=left.querySelector('.dispatch-compare-store-pane');
+  const listCount=left.querySelector('.dispatch-compare-list-count');
+  const roster=mountDispatchRoster(left.querySelector('.dispatch-compare-roster'),row=>view?.pickStop(row.customerCode,row.vehicle));
   const drafts=new Map(), comparisons=new Map();
   let panel,view,active=false,areaProof,areaRequest,sharedLocation=[],sourceDetailsOpen=false,draftsOpen=false;
+  let indexedRows=[],overview=null;
+
+  function showLeft(name) {
+    storePane.hidden=name!=='stores';
+    nearby.hidden=name!=='nearby';
+    for(const button of left.querySelectorAll('[data-left-view]')) {
+      button.disabled=button.dataset.leftView==='nearby'&&!view?.routes?.primary;
+      button.setAttribute('aria-pressed',String(button.dataset.leftView===name));
+    }
+    if(name==='stores')roster.refresh();
+  }
 
   function attach({choices,detail}) {
     panel=detail;
-    choices.append(nearby);
+    choices.append(left);
+    left.addEventListener('click',event=>{
+      const tab=event.target.closest('[data-left-view]');
+      if(tab)showLeft(tab.dataset.leftView);
+    });
     nearby.addEventListener('click',event=>{
       const button=event.target.closest('[data-compare-vehicle]');
       if(button) view?.chooseRoute(button.dataset.compareVehicle);
     });
     panel.addEventListener('click',handleAction);
+  }
+
+  function setList(rows) {
+    const scope=view?.model?.routeVerified?'호차별 매장 배정 ':'확인된 운행 기록 ';
+    listCount.textContent=rows.length?scope+format.format(rows.length)+'건':'일치하는 배송 매장이 없습니다.';
+    roster.setRows(rows);
+  }
+
+  function search(query) {
+    const matches=matchDispatchStores(indexedRows,query);
+    showLeft('stores');
+    setList(matches);
+    view?.filterStops(matches);
   }
 
   function updateNearby(items,{hasAnchor}) {
@@ -82,8 +121,8 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
 
   function renderSelected() {
     const row=view.selection;
-    const route=view.routes?.[row?.dispatchSide];
-    const other=view.routes?.[row?.dispatchSide==='primary'?'secondary':'primary'];
+    const route=view.model?.vehicles.get(row?.vehicle);
+    const other=row?view.routes?.[row.dispatchSide==='primary'?'secondary':'primary']:null;
     const move=row&&findMove(row);
     const nearest=move?{stop:move.candidate.nearest,km:move.candidate.km}:row&&other?view.nearest(row,other):null;
     const activeDraft=move&&drafts.has(move.customerCode);
@@ -91,15 +130,20 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
     const shared=sharedLocation.length?'<div class="dispatch-compare-location">'+sharedLocation.map(stop=>
       '<button type="button" data-compare-action="store" data-code="'+escape(stop.customerCode)+'" data-vehicle="'+escape(stop.vehicle)+'">'+
       escape(label(stop.vehicle)+' '+stop.name)+' · '+escape(stop.customerCode)+'</button>').join('')+'</div>':'';
-    if(!row) return '<section class="dispatch-compare-selection"><h3>이관할 매장</h3>'+
-      '<p>지도 핀 또는 이관 후보 목록에서 매장을 선택하세요.</p>'+shared+'</section>';
+    if(!row) return shared?'<section class="dispatch-compare-selection"><h3>같은 위치의 매장</h3>'+shared+'</section>':'';
     const address=bridge.dispatchReferenceRegisteredAddress?.(row.customerCode,row.point);
     const stopAmount=route?.displayAmounts?.get(row.customerCode);
     const hint=!other?'비교호차를 선택하세요.':!view.model.sameWmsExport||!route?.detail||!other.detail||!Number.isSafeInteger(stopAmount)?
       '검증된 상세 금액이 필요합니다.':!nearest?'비교호차 매장 거리를 확인할 수 없습니다.':
       nearest.km>.5?'500m 이내 이관 후보가 아닙니다.':!move?'복수 호차에 배정됐거나 이관 금액을 대조할 수 없습니다.':'';
+    const shop='<strong class="dispatch-compare-store-name">'+escape(row.name)+'</strong><p>'+escape(row.customerCode)+' · '+
+      escape(address||'등록 주소 미확인')+'</p>';
+    if(!other)return '<section class="dispatch-compare-selection"><h3>매장 상세</h3>'+shared+shop+
+      '<dl><div><dt>확정호차</dt><dd>'+escape(label(row.vehicle))+'</dd></div><div><dt>배송금액</dt><dd>'+money(stopAmount)+
+      '</dd></div><div><dt>우편번호</dt><dd>'+escape(row.postalCode||'미확인')+'</dd></div></dl>'+
+      (row.point?'':'<p>지도 위치 미확인</p>')+'</section>';
     return '<section class="dispatch-compare-selection"><h3>이관할 매장</h3>'+shared+
-      '<strong class="dispatch-compare-store-name">'+escape(row.name)+'</strong><p>'+escape(row.customerCode)+' · '+escape(address||'등록 주소 미확인')+'</p>'+
+      shop+
       '<dl><div><dt>배송금액</dt><dd>'+money(stopAmount)+'</dd></div><div><dt>확정 → 이관</dt><dd>'+
       escape(label(route?.vehicle))+' → '+escape(label(other?.vehicle))+'</dd></div><div><dt>상대 호차 최근접</dt><dd>'+
       (nearest?escape(nearest.stop.name)+' · <strong>'+meters(nearest.km)+'</strong> 직선':'미확인')+'</dd></div></dl>'+
@@ -155,13 +199,24 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
     draftsOpen=panel.querySelector('.dispatch-compare-drafts')?.open??draftsOpen;
     const totals=model?.sourceTotals;
     const gap=Number.isSafeInteger(first?.amount)&&Number.isSafeInteger(second?.amount)?money(Math.abs(first.amount-second.amount)):'미확인';
+    const stateCount=value=>Number.isSafeInteger(value)?format.format(value):'미확인';
+    const summary=overview?'<dl class="dispatch-compare-overview"><div><dt>WMS 배송금액</dt><dd>'+money(overview.amount)+
+      '</dd></div><div><dt>배송건수</dt><dd>'+stateCount(overview.deliveries)+'</dd></div><div><dt>고유 매장 수</dt><dd>'+
+      (overview.complete?stateCount(overview.stores):'미확인')+'</dd></div><div><dt>좌표 확인 매장</dt><dd>'+stateCount(overview.located)+
+      '</dd></div><div><dt>배차 확인 호차</dt><dd>'+stateCount(overview.vehicles)+'</dd></div></dl>'+
+      (overview.unassigned>0?'<p class="dispatch-compare-source">미배정 '+stateCount(overview.unassigned)+'건 포함</p>':''):'';
+    view?.highlightMoves([...drafts.values()]);
+    roster.select(view?.selection?.dispatchKey??'');
+    if (!first) {
+      panel.innerHTML='<h2>오산 전체 배송 현황</h2>'+summary+(model?renderSelected():'');
+      return;
+    }
     panel.innerHTML='<h2>호차 비교 및 가상 이관</h2>'+
       (totals?'<p class="dispatch-compare-source">오산 WMS '+money(totals.amount)+' · 배송 '+format.format(totals.deliveryCount)+'건</p>':'')+
-      '<div class="dispatch-compare-totals">'+renderRoute(first,'비교 기준','primary')+renderRoute(second,'비교 호차','secondary')+'</div>'+
+      '<div class="dispatch-compare-totals">'+renderRoute(first,'비교 기준','primary')+(second?renderRoute(second,'비교 호차','secondary'):'')+'</div>'+
       (first&&second?'<p class="dispatch-compare-gap">현재 차이 <strong>'+gap+'</strong> · '+
         (Number.isSafeInteger(first.storeCount)&&Number.isSafeInteger(second.storeCount)?stops(Math.abs(first.storeCount-second.storeCount)):'착지 미확인')+'</p>':'')+
       (model?renderPostcodes()+renderSelected()+renderSimulation(first,second)+renderCandidates():'');
-    view?.highlightMoves([...drafts.values()]);
     if (focus?.dataset.compareAction) {
       const replacement=[...panel.querySelectorAll('[data-compare-action]')].find(button=>
         ['compareAction','code','vehicle'].every(key=>button.dataset[key]===focus.dataset[key]));
@@ -184,6 +239,9 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
   }
 
   function update(next) {
+    const differentAnchor=next?.routes?.primary!==view?.routes?.primary;
+    const differentRows=next?.deliveryRows!==view?.deliveryRows;
+    if(next?.model!==view?.model)overview=next.model?summarizeDispatchOverview(next.model):null;
     if (!next?.model || next.model!==view?.model || next.routes?.primary!==view?.routes?.primary ||
       next.routes?.secondary!==view?.routes?.secondary) {
       sharedLocation=[];
@@ -201,6 +259,11 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
     if (next?.selection&&next.selection!==view?.selection) sharedLocation=[];
     if (next?.zip!==view?.zip) loadArea(next?.zip);
     view=next;
+    if(differentRows){
+      indexedRows=indexDispatchStores(next.deliveryRows??[]);
+      setList(next.deliveryRows??[]);
+    }
+    if(differentAnchor||!next?.routes?.primary)showLeft(next?.routes?.primary?'nearby':'stores');
     render();
   }
 
@@ -221,9 +284,10 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
     render();
   }
 
-  return {attach,update,updateNearby,showSharedLocation(members){sharedLocation=members;render();},
+  return {attach,update,updateNearby,search,showSharedLocation(members){sharedLocation=members;render();},
     open(){active=true;render();},
     close(){active=false;areaRequest?.abort();areaProof=null;view=null;sharedLocation=[];drafts.clear();comparisons.clear();
+      indexedRows=[];overview=null;roster.setRows([]);showLeft('stores');
       sourceDetailsOpen=draftsOpen=false;nearby.replaceChildren();panel.replaceChildren();},
   };
 }

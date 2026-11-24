@@ -18,7 +18,7 @@ export function nearestDispatchStop(stop, target) {
 }
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch]);
-const color = {primary:'#1767d4', secondary:'#dc6714', overlap:'#008f85'};
+const color = {primary:'#1767d4', secondary:'#dc6714', overlap:'#008f85', overview:'#1767d4'};
 
 export function mountDispatchReference({workspace, sidebar, bridge, readDay, readPeriod, readOutline, screenReview}) {
   const controls = document.createElement('details');
@@ -71,6 +71,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   const mapReset=workspace.querySelector('#mapReset');
   const observer=new ResizeObserver(queueMarkers);
   let active=false, model, routes, comparisons, selection, selectedPostcodes=[], markerRows=[], request, outlineRequest, frame;
+  let deliveryRows=[];
   let period, analysis, chosenArea, choicesPostcodes=[];
   let dayVehicles=[], periodVehicles=[], focusedAnchor=null, discoveries=[];
   let repeatedCustomers=new Map();
@@ -89,7 +90,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   if(screenReview) {
     const anchor=primary.closest('label'), search=vehicleSearch.closest('label');
     anchor.firstChild.textContent='비교 기준 호차';
-    search.firstChild.textContent='호차 검색';
+    search.firstChild.textContent='배송 매장 검색';
+    vehicleSearch.placeholder='매장명·고객코드·우편번호·호차';
     choices.prepend(anchor,search);
     screenReview.attach({choices,detail});
     details.querySelector('summary').textContent='호차 비교 및 가상 이관';
@@ -118,7 +120,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     if (!project || !mapNode) return;
     const points=window.MapViewPolicy.stableClusters(markerRows, row=>project.containerPointFromCoords(
       new (sdk().LatLng)(row.lat,row.lng)), level, '', {width:mapNode.clientWidth,height:mapNode.clientHeight},
-      {mode:'DATE_ROUTE',grouping:level<=5?'locations':'territory',maxMarkers:180});
+      {mode:'DATE_ROUTE',grouping:level<=5?'locations':'territory',maxMarkers:180,
+        ...(screenReview?{sourceVersion:'dispatch-deliveries'}:{})});
     const next=new Map();
     for (const row of points) {
       const members=row.clusterRows||[row];
@@ -141,16 +144,16 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   function makeMarker(row,members) {
     const isGroup=members.length>1;
     const mixed=isGroup&&!members.every(member=>member.vehicle===members[0].vehicle);
-    const role=mixed?'overlap':members[0].dispatchRole;
+    const role=members[0].dispatchRole==='overview'?'overview':mixed?'overlap':members[0].dispatchRole;
     const text=isGroup?String(members.length):row.vehicle;
     const title=isGroup?members.length+(period?'개 배송 지역':'개 배송 매장'):row.vehicle+'호 · '+row.customerName+
       (row.customerCode?' · '+row.customerCode:'');
-    const button=bridge.dispatchReferencePin(row,{color:mixed?color.overlap:members[0].routeColor||color[role],label:text,title,
+    const button=bridge.dispatchReferencePin(row,{color:role==='overlap'?color.overlap:members[0].routeColor||color[role],label:text,title,
       pick:()=>{
         if (!isGroup) return activateItem(row);
         if (row.clusterKind!=='location') {
           fit(members.map(member=>member.point));
-          if (map().getLevel()>5) map().setLevel(5);
+          if (role!=='overview'&&map().getLevel()>5) map().setLevel(5);
         } else {
           controls.open=true;
           if(screenReview) screenReview.showSharedLocation(members);
@@ -161,6 +164,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
         }
       }});
     button.dataset.dispatchRole=role;
+    if(screenReview)button.dataset.dispatchMembers=String(members.length);
     if (members.some(member=>member.dispatchCandidate)) button.dataset.dispatchCandidate='';
     if (!isGroup&&row.customerCode) button.dataset.dispatchCustomer=row.customerCode;
     if (!isGroup&&row.dispatchArea) button.dataset.dispatchArea=row.dispatchArea;
@@ -233,7 +237,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     if (markerRows.length) fit(markerRows.map(row=>row.point));
   }
 
-  function selectStop(row) {
+  function selectStop(row,{focus=false}={}) {
     if (row.dispatchSide==='extra'&&primary.value) {
       secondary.value=row.vehicle;
       if (!secondary.value) {
@@ -253,6 +257,11 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       if (!isOpen() || selection!==row || !row.point || !map() || !sdk()) return;
       const view=mapNode.getBoundingClientRect(), projection=map().getProjection();
       const point=new (sdk().LatLng)(row.point.lat,row.point.lng);
+      if(focus){
+        if(map().getLevel()>5)map().setLevel(5);
+        map().panTo(point);
+        return;
+      }
       const pixel=projection.containerPointFromCoords(point);
       if(pixel.x>=45&&pixel.x<=view.width-45&&pixel.y>=54&&pixel.y<=view.height-32) return;
       map().panTo(point);
@@ -295,7 +304,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     for (const [select,selected] of [[primary,anchor],[secondary,comparison]]) {
       select.replaceChildren(new Option('호차 선택',''));
       for (const route of dayVehicles) {
-        if (!matchesVehicle(route.vehicle)&&route.vehicle!==selected) continue;
+        if (!screenReview&&!matchesVehicle(route.vehicle)&&route.vehicle!==selected) continue;
         select.add(new Option(route.vehicle+'호 · '+(route.storeCount??route.stops.length)+'곳',route.vehicle));
       }
       if (dayVehicles.some(route=>route.vehicle===selected)) select.value=selected;
@@ -323,8 +332,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     const within=item=>item.minimumKm!==null&&item.minimumKm<=.5;
     const postal=item=>item.sharedPostalCodes.length>0;
     if (screenReview) {
-      screenReview.updateNearby(discoveries.filter(item=>
-        matchesVehicle(item.source.vehicle)&&(postal(item)||within(item))), {hasAnchor:true});
+      screenReview.updateNearby(discoveries.filter(item=>postal(item)||within(item)), {hasAnchor:true});
       return;
     }
     const scope=fleetScope.value;
@@ -508,11 +516,21 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
 
   function renderDetail() {
     if (screenReview) return screenReview.update({
-      model:period?null:model,routes,zip:model?postcode.value:'',selection,showDistance:showReviewDistance,
+      model:period?null:model,routes,deliveryRows,zip:model?postcode.value:'',selection,showDistance:showReviewDistance,
       nearest:nearestDispatchStop,
       pickStop(code,vehicle){
         const row=markerRows.find(item=>item.customerCode===code&&(!vehicle||item.vehicle===vehicle));
-        if(row)selectStop(row);
+        if(row)selectStop(row,{focus:true});
+      },
+      filterStops(rows) {
+        markerRows=rows;
+        if(selection&&!rows.includes(selection)){
+          clearDispatchSelection();
+          renderDetail();
+        }
+        clearMarkers();
+        queueMarkers();
+        fitRoutes();
       },
       chooseRoute(vehicle) {
         if (!primary.value||primary.value===vehicle) return;
@@ -617,11 +635,15 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     }:null;
     clearDispatchSelection();
     selectedPostcodes=comparisons?.secondary.sharedPostalCodes || [];
-    if (screenReview) selectedPostcodes=selectedPostcodes.slice(0,8);
+    if (screenReview) {
+      selectedPostcodes=selectedPostcodes.slice(0,8);
+      vehicleSearch.value='';
+    }
     markerRows=[];
     const extra=(screenReview?[]:[...additionalVehicles]).filter(vehicle=>vehicle!==first?.vehicle&&vehicle!==second?.vehicle)
       .map(vehicle=>model.vehicles.get(vehicle)).filter(Boolean);
-    const mapped=[...Object.entries(routes),...extra.map(route=>['extra',route])];
+    const mapped=screenReview&&!first?dayVehicles.map(route=>['overview',route]):
+      [...Object.entries(routes),...extra.map(route=>['extra',route])];
     const extraColors=['#137f5e','#7252b6','#a83d59','#177991'];
     let extraIndex=0;
     for (const [side,route] of mapped) {
@@ -629,8 +651,10 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       const routeColor=side==='extra'?extraColors[extraIndex++%extraColors.length]:null;
       for (const stop of route?.stops||[]) markerRows.push({...stop,lat:stop.point?.lat,lng:stop.point?.lng,
         customerName:stop.name,vehicle:route.vehicle,dispatchKey:route.vehicle+'|'+stop.customerCode,
-        dispatchSide:side,dispatchRole:side,routeColor,dispatchCandidate:!screenReview&&candidates.has(stop.customerCode)});
+        dispatchSide:side,dispatchRole:side,routeColor,dispatchCandidate:!screenReview&&candidates.has(stop.customerCode),
+        ...(screenReview?{amount:route.displayAmounts?.get(stop.customerCode)??null}:{})});
     }
+    if(screenReview)deliveryRows=markerRows;
     const byCustomer=new Map();
     for (const {customerCode,vehicle} of markerRows) {
       if (!byCustomer.has(customerCode)) byCustomer.set(customerCode,new Set());
@@ -645,7 +669,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     clearMarkers();
     clearOutlines();
     coverage.textContent=selectedPostcodes.length?'우편번호 경계 조회 중':first?'좌표 확인 '+markerRows.filter(row=>row.point).length+' / '+markerRows.length+'곳':'';
-    renderStoreList();
+    if (!screenReview)renderStoreList();
     renderDetail();
     renderFleet();
     addOutlines();
@@ -682,7 +706,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     const box=polygonBounds.get(code);
     if (box) fit([{lat:box[1],lng:box[0]},{lat:box[3],lng:box[2]}]);
     else fit(markerRows.filter(row=>!code||row.postalCode===code).map(row=>row.point));
-    renderStoreList();
+    if (!screenReview)renderStoreList();
     if(screenReview&&!period)renderDetail();
   }
   postcode.onchange=showPostcode;
@@ -703,7 +727,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   secondary.onchange=updateRoutes;
   fleetScope.onchange=renderFleet;
   vehicleSearch.oninput=()=>{
-    if (period) populatePeriodVehicles();
+    if (screenReview) screenReview.search(vehicleSearch.value);
+    else if (period) populatePeriodVehicles();
     else if (model) {populateDayVehicles();renderFleet();}
   };
 
@@ -713,6 +738,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     model=routes=comparisons=period=analysis=chosenArea=null;
     clearDispatchSelection();
     markerRows=[];
+    deliveryRows=[];
     repeatedCustomers.clear();
     dayVehicles=periodVehicles=discoveries=[];
     focusedAnchor=null;

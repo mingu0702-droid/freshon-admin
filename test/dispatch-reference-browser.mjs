@@ -74,6 +74,12 @@ async function exercise() {
   assert(compareVehicle);
   const number=value=>new Intl.NumberFormat('ko-KR').format(value);
   let reads=0;
+  let overviewFixture=false;
+  const extraStores=Array.from({length:1200},(_,index)=>row('501','S'+(10000+index),'추가 매장 '+index,
+    {...firstPoint,lat:36+index%25*.001,lng:128+Math.floor(index/25)*.001,coordinateVerified:index<1199}));
+  const overviewDay={...data,route:{...data.route,rows:[...data.route.rows,...extraStores]},
+    amounts:{...data.amounts,sourceTotals:{amount:1875,deliveryCount:1210},vehicles:[...data.amounts.vehicles,
+      {vehicle:'501',amount:1200,detailState:'VERIFIED',detailRows:extraStores.map(store=>({customerCode:store.customerCode,amount:1}))}]}};
   if (!local) await page.route('**/*',async route=>{
     const url=new URL(route.request().url());
     assert.equal(url.origin,origin);
@@ -85,7 +91,7 @@ async function exercise() {
       const date=url.searchParams.get('date');
       const historical={...data,date,amounts:{date,state:'UNAVAILABLE',vehicles:[]}};
       if (date==='2026-11-21') return route.fulfill({json:historical});
-      if (date===day) return route.fulfill({json:data});
+      if (date===day) return route.fulfill({json:overviewFixture?overviewDay:data});
       return route.fulfill({json:{...historical,route:{state:'UNAVAILABLE',rows:[]}}});
     }
     if (filename==='dispatch-reference-period') {
@@ -257,14 +263,41 @@ async function exercise() {
     await page.locator('#dispatchReference').waitFor();
     await page.evaluate(()=>{window.signedIn=false;window.purge();});
     assert.equal(await page.locator('#modeDispatchReference').count(),0);
+    overviewFixture=true;
     await page.goto(origin+'/?dispatch-review=compare');
     await page.evaluate(()=>{window.signedIn=true;dispatchEvent(new Event('map-staff-ready'));});
     const comparison=page.getByLabel('비교 기준 호차');
+    await comparison.waitFor({state:'visible'});
+    const roster=page.getByRole('list',{name:'확정배차 매장 목록'});
+    const query=page.getByRole('searchbox',{name:'배송 매장 검색'});
+    await details.getByRole('heading',{name:'오산 전체 배송 현황'}).waitFor();
+    assert.match(await details.innerText(),/배송건수\s+1,210\s+고유 매장 수\s+1,205\s+좌표 확인 매장\s+1,204/);
+    assert.equal(await comparison.inputValue(),'');
+    assert.equal(await page.locator('.dispatch-compare-totals').count(),0);
+    assert(await roster.getByRole('listitem').count()<40);
+    assert.equal(await roster.getByRole('listitem').first().getAttribute('aria-setsize'),'1206');
+    await page.waitForFunction(()=>[...document.querySelectorAll('#map [data-dispatch-members]')]
+      .reduce((sum,marker)=>sum+Number(marker.dataset.dispatchMembers),0)===1205);
+    await roster.press('End');
+    const endRow=roster.getByRole('listitem').last();
+    assert.equal(await endRow.getAttribute('aria-posinset'),'1206');
+    await endRow.getByRole('button').click();
+    await details.getByText('지도 위치 미확인',{exact:true}).waitFor();
+    await query.fill('둘째 s2');
+    await roster.getByRole('button',{name:/208호 둘째 매장 S2/}).click();
+    assert.match(await details.innerText(),/확정호차\s+208호\s+배송금액\s+100원\s+우편번호\s+01234/);
+    await page.waitForFunction(()=>document.querySelector('#map [data-dispatch-customer="S2"].selected'));
+    await query.fill('01234 101호');
+    assert.equal(await roster.getByRole('listitem').count(),2);
+    await query.fill('');
     await comparison.selectOption('101');
     const neighbor=page.getByRole('button',{name:'208호 비교',exact:true});
     assert.match(await neighbor.innerText(),/공통 우편번호 1곳/);
     assert.match(await neighbor.innerText(),/최근접 직선 115m/);
     assert.equal(await page.locator('[data-dispatch-role="secondary"]').count(),0);
+    await page.getByRole('button',{name:'배송 매장',exact:true}).click();
+    assert.equal(await roster.getByRole('listitem').first().getAttribute('aria-setsize'),'2');
+    await page.getByRole('button',{name:'인접 호차',exact:true}).click();
     await neighbor.click();
     assert.equal(await neighbor.getAttribute('aria-pressed'),'true');
     const postal=details.getByRole('button',{name:'01234',exact:true});

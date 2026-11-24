@@ -134,7 +134,22 @@
     display:flex; align-items:baseline; justify-content:space-between; gap:6px; font-size:15px; margin:0 0 5px;
   }
   .dispatch-compare-nearby h3 span,.dispatch-compare-postal h3 span { color:#536781; font-size:13px; }
-  .dispatch-compare-nearby { margin-top:18px; }
+  .dispatch-compare-left { margin-top:14px; }
+  .dispatch-compare-switch { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; margin-bottom:8px; }
+  .dispatch-compare-switch button { min-height:34px; padding:4px; font-weight:700; }
+  .dispatch-compare-switch button[aria-pressed=true] { color:#1455ab; border-color:#8fb5e9; background:#edf5ff; }
+  .dispatch-compare-list-count { color:#536781; margin:4px 0; font-size:12px; }
+  .dispatch-compare-roster { height:clamp(145px,calc(100dvh - 326px),760px); overflow:auto; scrollbar-gutter:stable; }
+  .dispatch-roster-track { position:relative; }
+  .dispatch-roster-entry { position:absolute; inset-inline:0; height:55px; padding-bottom:4px; }
+  .dispatch-roster-entry button { display:grid; gap:2px; width:100%; height:100%; padding:4px 6px; text-align:left; }
+  .dispatch-roster-entry button[aria-pressed=true] { color:#1455ab; background:#edf5ff; border-color:#7ba4de; }
+  .dispatch-roster-first,.dispatch-roster-second { display:flex; min-width:0; gap:6px; align-items:baseline; white-space:nowrap; }
+  .dispatch-roster-first strong { overflow:hidden; text-overflow:ellipsis; }
+  .dispatch-roster-first b { color:#1455ab; }
+  .dispatch-roster-second { justify-content:space-between; color:#536781; font-size:11px; font-variant-numeric:tabular-nums; }
+  .dispatch-roster-second span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .dispatch-roster-second b { color:#25374c; }
   .dispatch-compare-nearby h3:not(:first-child) { margin-top:14px; }
   .dispatch-compare-nearby p,.dispatch-compare-source,.dispatch-compare-postal p,.dispatch-compare-selection p,
   .dispatch-compare-simulation p { color:#536781; margin:4px 0; }
@@ -162,6 +177,11 @@
   .dispatch-compare-total b { font-size:18px; white-space:nowrap; font-variant-numeric:tabular-nums; }
   .dispatch-compare-stop-count { font-weight:700; font-size:15px; }
   .dispatch-compare-gap { margin:6px 0; color:#415870; }
+  body[data-dispatch-review=compare] .dispatch-detail-body dl.dispatch-compare-overview { margin:12px 0; }
+  body[data-dispatch-review=compare] .dispatch-detail-body .dispatch-compare-overview div {
+    grid-template-columns:1fr auto; align-items:baseline; padding:9px 3px;
+  }
+  .dispatch-compare-overview dd { color:#1455ab; font-size:21px; font-variant-numeric:tabular-nums; }
   body[data-dispatch-review=compare] .dispatch-detail-body > :is(.dispatch-compare-postal,.dispatch-compare-selection,
     .dispatch-compare-simulation,.dispatch-compare-candidates) {
     border-top:1px solid #e0e9f2; margin:7px 0 0; padding:7px 0 0;
