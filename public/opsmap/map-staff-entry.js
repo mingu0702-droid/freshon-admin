@@ -2,6 +2,8 @@
   'use strict';
   const rawFetch = window.fetch.bind(window), ACTIVITY_THROTTLE_MS = 60000;
   const stage = location.origin === 'https://freshon-admin-stage-preview-template.onrender.com';
+  const deferOptional = stage && !new URLSearchParams(location.search).has('dispatch-review');
+  const optionalFlights = new WeakMap();
   const preloadedScripts = new Set([...document.querySelectorAll('link[data-map-staff-preload]')].map(link => link.getAttribute('href')));
   let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivityCheck = 0, checking = null, checkingOwner = -1, confirming = null, confirmingOwner = -1, signingOut = null, logoutRequired = false;
   let recoveryTimer = null, initialSnapshot;
@@ -153,6 +155,38 @@
       return !signal.aborted && request.owner === epoch && session ? result : null;
     } finally { signal.removeEventListener('abort', cancel); }
   }
+  async function loadStaffScript(placeholder) {
+    const script = document.createElement('script');
+    if (placeholder.dataset.module === '1') script.type = 'module';
+    if (placeholder.dataset.src) {
+      await new Promise((resolve, reject) => {
+        script.onload = resolve;
+        script.onerror = () => { script.remove(); reject(Error('MAP_UI_UNAVAILABLE')); };
+        script.src = placeholder.dataset.src;
+        document.body.append(script);
+      });
+    } else {
+      script.textContent = placeholder.textContent;
+      document.body.append(script);
+    }
+    placeholder.dataset.loaded = '1';
+  }
+
+  async function loadOptionalScripts(owner, placeholders) {
+    for (const placeholder of placeholders) {
+      if (owner !== epoch || !session) return;
+      if (placeholder.dataset.loaded === '1') continue;
+      // The static tab modules gate visibility and reads on the current session.
+      // Reuse their in-flight load if staff log in again before it has settled.
+      let flight = optionalFlights.get(placeholder);
+      if (!flight) {
+        flight = loadStaffScript(placeholder).finally(() => optionalFlights.delete(placeholder));
+        optionalFlights.set(placeholder,flight);
+      }
+      await flight.catch(() => {});
+    }
+  }
+
   async function bootstrap(owner) {
     const stageSnapshot = stage ? primeStageSnapshot(owner) : null;
     if (document.documentElement.dataset.referenceDataOptional === 'true') {
@@ -160,7 +194,9 @@
       void window.KakaoMapsAdapter?.ready().catch(() => {});
     }
     const placeholders = document.querySelectorAll('script[type="application/x-map-staff"]');
+    const optional = deferOptional ? [...placeholders].filter(script => script.dataset.staffOptional === '1') : [];
     for (const placeholder of placeholders) {
+      if (optional.includes(placeholder)) continue;
       const src = placeholder.dataset.src;
       if (!src || placeholder.dataset.loaded === '1' || preloadedScripts.has(src)) continue;
       const preload = document.createElement('link');
@@ -174,17 +210,9 @@
     if(!stage)await loadData(owner);
     if (!booted) {
       for (const placeholder of placeholders) {
-        if (placeholder.dataset.loaded === '1') continue;
+        if (placeholder.dataset.loaded === '1' || optional.includes(placeholder)) continue;
         if (owner !== epoch || !session) throw new DOMException('Session changed', 'AbortError');
-        const script = document.createElement('script');
-        if (placeholder.dataset.module === '1') script.type = 'module';
-        if (placeholder.dataset.src) {
-          await new Promise((resolve, reject) => {
-            script.onload = resolve; script.onerror = () => reject(Error('MAP_UI_UNAVAILABLE'));
-            script.src = placeholder.dataset.src; document.body.append(script);
-          });
-        } else { script.textContent = placeholder.textContent; document.body.append(script); }
-        placeholder.dataset.loaded = '1';
+        await loadStaffScript(placeholder);
       }
       booted = true;
     } else window.dispatchEvent(new CustomEvent('map-staff-authenticated'));
@@ -192,6 +220,7 @@
     entry.hidden = true; document.body.dataset.mapStaffState = 'authenticated'; status();
     performance.mark('opsmap-staff-ready');
     window.dispatchEvent(new Event('map-staff-ready'));
+    if (optional.length) setTimeout(() => void loadOptionalScripts(owner,optional),0);
     if(stage)void stageSnapshot.then(async()=>{
       if(owner!==epoch||!session)return;
       await loadData(owner);
