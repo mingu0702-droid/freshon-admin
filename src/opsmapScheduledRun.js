@@ -8,7 +8,7 @@ import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
 import {FIXED_MASTER_WORKER_LIMIT, stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {NATIONAL_REGISTRY_WORKER_LIMIT, stageNationalRegistryEnabled} from './stageNationalRegistry.js';
 import {stageRecentOperationsSyncEnabled} from './stageRecentOperations.js';
-import {createStageScheduledJobs,signStageScheduledTask,stageSyncMemory} from './stageScheduledJobs.js';
+import {createStageScheduledJobs,signStageScheduledTask,stageSyncMemory,stageWmsNightWindow} from './stageScheduledJobs.js';
 
 export const OPSMAP_SCHEDULED_ROUTE='/internal/opsmap/scheduled-sync';
 const maxDelay=10*60_000;
@@ -165,9 +165,11 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1'&&env.OPSMAP_SNAPSHOT_STORE_TOKEN;
   const durable=!independent&&fixedJob&&env.OPSMAP_STAGE_SYNC_DURABLE_DISABLED!=='1'&&
     (openJobStore||writerConfigured)&&opsmapScheduleConfig(env).secret?.length>=32;
+  const nightWms=env.OPSMAP_STAGE_WMS_NIGHT_SLOT_APPROVED==='1';
+  const wmsPublish=env.OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED==='1';
   const jobPlan=[...(fullJob?['generation']:[]),...(recentJob?['recent']:[]),
     ...(fixedJob?['fixed']:[]),...(nationalJob?['national']:[]),
-    ...(env.OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED==='1'?['wms']:[]),
+    ...(!nightWms&&wmsPublish?['wms']:[]),
     ...(env.OPSMAP_STAGE_CURRENT_POSTAL_REFRESH_APPROVED==='1'&&nationalJob?['postal']:[])];
   let jobs;
   if(durable){
@@ -187,7 +189,11 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     clearTimeout(jobTimer);
     jobTimer=setTimeout(async()=>{
       if(jobFlight)return;
-      jobFlight=jobs.drain();
+      jobFlight=(async()=>{
+        const daily=await jobs.drain();
+        if(!nightWms||!wmsPublish||!daily.done)return daily;
+        return jobs.drain(undefined,{night:true});
+      })();
       try{
         const result=await jobFlight;
         if(!result.done)scheduleJobs(Math.max(250,result.nextAt-now()));
@@ -207,6 +213,15 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     const config={...opsmapScheduleConfig(env),now};
     try {receipt=verifyOpsmapScheduleReceipt(req.body,config);}
     catch {return res.status(403).json({error:'OPSMAP_SCHEDULE_REJECTED'});}
+    if(nightWms&&stageWmsNightWindow(receipt)){
+      if(!jobs||!wmsPublish)return res.status(503).json({error:'WMS_NIGHT_QUEUE_UNAVAILABLE'});
+      let runId;
+      try {runId=await jobs.accept(receipt,['wms-night'],{night:true});}
+      catch{return res.status(503).json({error:'WMS_NIGHT_QUEUE_UNCONFIRMED'});}
+      if(jobFlight)jobWake=true;
+      else scheduleJobs(0);
+      return res.status(202).json({state:'WMS_NIGHT_ACCEPTED',runId});
+    }
     if (independent) {
       try {await enqueueOpsmapSchedule(openDispatchStore(),receipt,config);}
       catch {return res.status(503).json({error:'OPSMAP_SCHEDULE_DISPATCH_UNCONFIRMED'});}
@@ -329,7 +344,7 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
     }
     processHandle.stderr.on('data',chunk=>{if(diagnostic.length<100) diagnostic=(diagnostic+chunk).slice(0,100);});
     const limits={generation:maxRuntime,fixed:FIXED_MASTER_WORKER_LIMIT,national:NATIONAL_REGISTRY_WORKER_LIMIT,
-      recent:3*60_000,wms:2*60_000,postal:4*60_000};
+      recent:3*60_000,wms:2*60_000,'wms-night':2*60_000,postal:4*60_000};
     const timeout=setTimeout(()=>{timedOut=true;stop();},limits[input.scheduledKind]??((fullJob?maxRuntime:0)+
       (fixedJob?FIXED_MASTER_WORKER_LIMIT:0)+(nationalJob?NATIONAL_REGISTRY_WORKER_LIMIT:0)+
       (recentJob?3*60_000:0)));

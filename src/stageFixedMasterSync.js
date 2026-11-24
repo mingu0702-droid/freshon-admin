@@ -96,7 +96,7 @@ export function stageFixedMasterStorage({env=process.env, fetchImpl=fetch, write
   function scopedFetch(input, options={}) {
     const url=new URL(input), endpoint=url.origin+url.pathname, method=options.method || 'GET';
     const file=endpoint.startsWith(contents) ? endpoint.slice(contents.length) : '';
-    const dailyFile = file===headFile || /^fixed-master-daily-v1\/(?:projection-[a-f0-9]{64}|(?:dispatch|jobs)-\d{4}-\d{2}-\d{2})\.json$/.test(file);
+    const dailyFile = file===headFile || /^fixed-master-daily-v1\/(?:projection-[a-f0-9]{64}|(?:dispatch|jobs(?:-wms-night)?)-\d{4}-\d{2}-\d{2})\.json$/.test(file);
     const read = method==='GET' && ((dailyFile || file===baselineFile) && url.searchParams.size===1 &&
       url.searchParams.get('ref')===branch || !url.search && (endpoint===root ||
       endpoint.startsWith(root+'/git/blobs/') && /^[a-f0-9]{40}$/.test(endpoint.split('/').at(-1))));

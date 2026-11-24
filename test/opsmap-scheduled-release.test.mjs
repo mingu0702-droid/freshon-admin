@@ -832,3 +832,38 @@ test('an accepted receipt wakes the durable worker when startup raced an initial
   assert.deepEqual(current.jobs.map(job=>job.state),['VERIFIED_NOOP','FAILED']);
   assert.equal(logs.filter(item=>item.state==='RUNNING'&&item.job==='recent').length,1);
 });
+
+test('the signed Stage route schedules only nighttime WMS from the existing hourly receipt',async t=>{
+  const app=express(),files=new Map();
+  let at=Date.parse(date+'T20:31:00+09:00');
+  const env={...storageEnv,OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED:'1',OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED:'1',
+    OPSMAP_STAGE_SYNC_TRIGGER_ID:triggerId,OPSMAP_STAGE_SYNC_EXECUTOR_SHA256:principal,OPSMAP_STAGE_SYNC_SCHEDULER_SECRET:secret,
+    OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED:'1',OPSMAP_STAGE_WMS_NIGHT_SLOT_APPROVED:'1'};
+  const store={
+    async read(file){const item=files.get(file);return item?structuredClone(item):{value:null,sha:null};},
+    async write(file,value,expected){
+      if((files.get(file)?.sha??null)!==expected)throw Object.assign(Error('conflict'),{code:'FIXED_STORE_CONFLICT'});
+      files.set(file,{value:structuredClone(value),sha:'a'.repeat(40)});
+    }
+  };
+  mountOpsmapScheduledRun(app,{env,now:()=>at,log(){},readFixedScope:async()=>null,openJobStore:()=>store,
+    measureMemory:async()=>({bytes:400*1024*1024,limit:512*1024*1024,measured:'synthetic'}),
+    launch(){assert.fail('this fixture has no memory headroom for an actual launch');}});
+  const base=await listen(t,app);
+  async function post(body){
+    return fetch(base+OPSMAP_SCHEDULED_ROUTE,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  }
+  const night=signed(at);
+  assert.equal((await post({...night,signature:'c'.repeat(64)})).status,403);
+  assert.deepEqual(await (await post(night)).json(),{state:'WMS_NIGHT_ACCEPTED',runId:night.runId});
+  const nightName='fixed-master-daily-v1/jobs-wms-night-'+date+'.json';
+  assert.deepEqual(files.get(nightName).value.jobs,[{kind:'wms-night',state:'PENDING'}]);
+  assert.equal(files.size,1);
+  at=Date.parse(date+'T21:04:00+09:00');
+  assert.deepEqual(await (await post(signed(at))).json(),{state:'WMS_NIGHT_ACCEPTED',runId:night.runId});
+  assert.equal(files.size,1);
+  // Separate test clock observes a signed daylight handoff and its normal plan.
+  at=Date.parse(date+'T07:10:00+09:00');
+  assert.equal((await post(signed(at))).status,202);
+  assert.deepEqual(files.get('fixed-master-daily-v1/jobs-'+date+'.json').value.jobs,[{kind:'fixed',state:'PENDING'}]);
+});

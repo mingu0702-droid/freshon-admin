@@ -19,7 +19,7 @@ import {atomicCoverageWrite} from '../src/shadowCoverage/fileStore.js';
 import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from '../src/opsmapDurableGeneration.js';
 import {claimQueuedOpsmapSchedule,independentStageSync,opsmapScheduleConfig,publishOpsmapScheduledRun,
   verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
-import {verifyStageScheduledTask} from '../src/stageScheduledJobs.js';
+import {verifyStageScheduledTask,stageWmsNightDate} from '../src/stageScheduledJobs.js';
 import {readIndependentStageScopes} from '../src/stageIndependentSyncScope.js';
 import {STAGE_OSAN_SYNC_CENTERS,STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
 import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixedMasterBaseline, stageFixedMasterStorage,
@@ -350,13 +350,20 @@ async function runScheduled(job,settingsFile){
         finally {await runNationalRegistry();}
       }
     };
-    async function runWms(){
+    async function runWms(night=false){
+      if(night!==(env.OPSMAP_STAGE_WMS_NIGHT_SLOT_APPROVED==='1'))return {state:'SKIPPED'};
       const {syncStageFreshonWmsDispatch}=await import('../src/stageFreshonWmsWorkbookGate.js');
-      return syncStageFreshonWmsDispatch({env,date:receipt.date,observedAt:new Date().toISOString(),login:async()=>{
-        const {config}=await import('../src/config.js');
-        if(new URL(config.freshonBaseUrl).origin!=='https://mis.freshon.co.kr')throw Error('WMS_EXPORT_FRESHON_SCOPE');
-        return (await import('../src/scraper/freshonDailyRoute.js')).loginFreshonSession();
-      }});
+      const date=night?stageWmsNightDate(receipt):receipt.date;
+      const verifyWindow=()=>{if(night)stageWmsNightDate(receipt);};
+      return syncStageFreshonWmsDispatch({env,date,observedAt:new Date().toISOString(),
+        fetchImpl:(...args)=>{verifyWindow();return fetch(...args);},
+        login:async()=>{
+          const {config}=await import('../src/config.js');
+          if(new URL(config.freshonBaseUrl).origin!=='https://mis.freshon.co.kr')throw Error('WMS_EXPORT_FRESHON_SCOPE');
+          const {loginFreshonSession}=await import('../src/scraper/freshonDailyRoute.js');
+          verifyWindow();
+          return loginFreshonSession();
+        }});
     }
     async function runPostal(){
       const [{createStageCurrentPostalRefreshStore},{createStageCurrentPostalProjectInputs},
@@ -388,7 +395,7 @@ async function runScheduled(job,settingsFile){
     }
     if(job.scheduledKind){
       const executors={generation:runGeneration,recent:runRecentOperations,fixed:runFixedMaster,national:runNationalRegistry,
-        wms:runWms,postal:runPostal};
+        wms:runWms,'wms-night':()=>runWms(true),postal:runPostal};
       memory('START');
       const result=await executors[job.scheduledKind]?.()??{state:'SKIPPED'};
       memory('END');

@@ -8,12 +8,29 @@ const memorySampleMs=2000;
 const retentionMs=3*3600_000;
 const dayPattern=/^\d{4}-\d{2}-\d{2}$/;
 const hash=/^[a-f0-9]{64}$/;
-const kinds=['generation','recent','fixed','national','wms','postal'];
+const kinds=['generation','recent','fixed','national','wms','postal','wms-night'];
 const finished=new Set(['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','SOURCE_UNAVAILABLE',
   'RECOVERY_CHECKPOINTED','ALREADY_ATTEMPTED','RETRY_HELD','BUSY','FAILED','INTERRUPTED','SKIPPED']);
 const kstDay=at=>new Date(at+9*3600_000).toISOString().slice(0,10);
-const stateFile=date=>'fixed-master-daily-v1/jobs-'+date+'.json';
+const stateFile=(date,night)=>'fixed-master-daily-v1/jobs-'+(night?'wms-night-':'')+date+'.json';
 const error=code=>Object.assign(Error(code),{code});
+
+// The existing hourly tick may arrive before 21:10. Its signed receipt can
+// queue the due time, but cannot change either the next date or the window.
+export function stageWmsNightWindow(receipt) {
+  if(!dayPattern.test(receipt?.date||''))return null;
+  const midnight=Date.parse(receipt.date+'T00:00:00+09:00');
+  const issued=Date.parse(receipt.issuedAt);
+  if(!Number.isFinite(midnight)||kstDay(midnight)!==receipt.date||
+      !Number.isFinite(issued)||issued<midnight+20*3600_000||issued>=midnight+22*3600_000)return null;
+  return {dueAt:midnight+(21*60+10)*60_000,expiresAt:midnight+22*3600_000,date:kstDay(midnight+24*3600_000)};
+}
+
+export function stageWmsNightDate(receipt,at=Date.now()) {
+  const slot=stageWmsNightWindow(receipt);
+  if(!slot||at<slot.dueAt||at>=slot.expiresAt)throw error('WMS_NIGHT_WINDOW_MISSED');
+  return slot.date;
+}
 
 const taskStamp=(receipt,kind,secret)=>createHmac('sha256',secret)
   .update('opsmap-stage-jobs-task-v1\0').update(JSON.stringify([receipt,kind])).digest();
@@ -28,6 +45,7 @@ export function verifyStageScheduledTask({receipt,scheduledKind,taskProof}={},se
       !timingSafeEqual(Buffer.from(taskProof,'hex'),taskStamp(receipt,scheduledKind,secret))) {
     throw error('OPSMAP_JOBS_TASK_AUTH');
   }
+  if(scheduledKind==='wms-night')stageWmsNightDate(receipt,now());
   return receipt;
 }
 
@@ -57,12 +75,14 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
   log=console.log,intervalMs=heartbeatMs}={}) {
   if(typeof secret!=='string'||secret.length<32||!store?.read||!store?.write)throw error('OPSMAP_JOBS_CONFIG');
   const stamp=data=>createHmac('sha256',secret).update('opsmap-stage-jobs-v1\0').update(JSON.stringify(data)).digest();
-  function verify(value,date) {
+  function verify(value,date,night) {
     if(!value)return null;
     const {proof,...data}=value;
     if(!hash.test(proof||'')||!timingSafeEqual(Buffer.from(proof,'hex'),stamp(data))||
         data.version!==1||data.receipt?.date!==date||!hash.test(data.receipt.runId||'')||
         !Number.isSafeInteger(data.expiresAt)||!Array.isArray(data.jobs)||!data.jobs.length||
+        (night?(data.jobs.length!==1||data.jobs[0]?.kind!=='wms-night'||
+          data.expiresAt!==stageWmsNightWindow(data.receipt)?.expiresAt):data.jobs.some(job=>job.kind==='wms-night'))||
         data.jobs.some((job,index)=>!kinds.includes(job.kind)||
           data.jobs.findIndex(row=>row.kind===job.kind)!==index||
           !['PENDING','RUNNING'].includes(job.state)&&!finished.has(job.state))||
@@ -70,35 +90,52 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
           !Number.isSafeInteger(data.lease.until)))throw error('OPSMAP_JOBS_INTEGRITY');
     return data;
   }
-  const read=async date=>{
-    const {value,sha}=await store.read(stateFile(date));
-    return {sha,record:verify(value,date)};
+  const read=async(date,night)=>{
+    const {value,sha}=await store.read(stateFile(date,night));
+    return {sha,record:verify(value,date,night)};
   };
-  async function write(record,expected) {
-    await store.write(stateFile(record.receipt.date),{...record,proof:stamp(record).toString('hex')},expected);
+  async function write(record,expected,night) {
+    await store.write(stateFile(record.receipt.date,night),{...record,proof:stamp(record).toString('hex')},expected);
   }
   const output=(runId,kind,state,fields={})=>log(JSON.stringify({component:'opsmap-stage-jobs',runId,job:kind,state,...fields}));
 
-  async function accept(receipt,plan) {
+  async function accept(receipt,plan,{night=false}={}) {
     const date=receipt?.date;
+    const slot=night?stageWmsNightWindow(receipt):null;
     if(!dayPattern.test(date||'')||date!==kstDay(now())||!hash.test(receipt.runId||'')||
-        !Array.isArray(plan)||!plan.length||new Set(plan).size!==plan.length||plan.some(kind=>!kinds.includes(kind))) {
+        !Array.isArray(plan)||!plan.length||new Set(plan).size!==plan.length||plan.some(kind=>!kinds.includes(kind))||
+        (night?(!slot||now()>=slot.expiresAt||plan.length!==1||plan[0]!=='wms-night'):plan.includes('wms-night'))) {
       throw error('OPSMAP_JOBS_RECEIPT');
     }
-    const candidate={version:1,receipt,expiresAt:now()+retentionMs,lease:null,
+    const candidate={version:1,receipt,expiresAt:slot?.expiresAt??now()+retentionMs,lease:null,
       jobs:plan.map(kind=>({kind,state:'PENDING'}))};
-    let existing=await read(date);
+    let existing=await read(date,night);
     if(!existing.record){
-      try {await write(candidate,existing.sha);}
+      try {await write(candidate,existing.sha,night);}
       catch(problem) {if(problem.code!=='FIXED_STORE_CONFLICT')throw problem;}
-      existing=await read(date);
+      existing=await read(date,night);
     }
-    if(existing.record?.receipt.runId!==receipt.runId)throw error('OPSMAP_JOBS_RECEIPT_CONFLICT');
+    const accepted=existing.record?.receipt.runId;
+    if(!accepted||!night&&accepted!==receipt.runId)throw error('OPSMAP_JOBS_RECEIPT_CONFLICT');
+    return accepted;
   }
 
-  async function reserve(date) {
-    const {record,sha}=await read(date);
-    if(!record||record.expiresAt<=now())return {done:true};
+  async function reserve(date,night) {
+    const {record,sha}=await read(date,night);
+    if(!record)return {done:true};
+    if(record.expiresAt<=now()){
+      const missed=night&&record.jobs[0].state==='PENDING';
+      if(missed){
+        Object.assign(record.jobs[0],{state:'SKIPPED',error:'WMS_NIGHT_WINDOW_MISSED',finishedAt:now()});
+        await write(record,sha,night);
+        output(record.receipt.runId,'wms-night','SKIPPED',{error:'WMS_NIGHT_WINDOW_MISSED'});
+      }
+      return {done:true};
+    }
+    if(night){
+      const starts=stageWmsNightWindow(record.receipt).dueAt;
+      if(now()<starts)return {nextAt:starts};
+    }
     const oldLease=record.lease;
     if(oldLease?.until>now())return {nextAt:oldLease.until+1000};
     if(oldLease){
@@ -106,7 +143,7 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
       old.state='INTERRUPTED';
       old.error='OPSMAP_JOBS_WORKER_LOST';
       record.lease=null;
-      await write(record,sha);
+      await write(record,sha,night);
       output(record.receipt.runId,old.kind,old.state);
       return {nextAt:now()};
     }
@@ -120,16 +157,16 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
     const lease={id:randomUUID(),kind:next.kind,until:now()+leaseMs};
     record.lease=lease;
     next.state='RUNNING';
-    await write(record,sha);
-    const saved=(await read(date)).record;
+    await write(record,sha,night);
+    const saved=(await read(date,night)).record;
     if(saved?.lease?.id!==lease.id)throw error('OPSMAP_JOBS_RESERVATION_READBACK');
     return {lease,receipt:record.receipt,memory};
   }
 
-  async function drain(date=kstDay(now())) {
+  async function drain(date=kstDay(now()),{night=false}={}) {
     if(date!==kstDay(now()))return {done:true};
     let reservation;
-    try {reservation=await reserve(date);}
+    try {reservation=await reserve(date,night);}
     catch(problem) {if(problem.code==='FIXED_STORE_CONFLICT')return {nextAt:now()+1000};throw problem;}
     if(!reservation.lease)return reservation;
     const {receipt,lease,memory}=reservation;
@@ -147,10 +184,10 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
     }
     output(receipt.runId,lease.kind,'RUNNING',memory);
     async function mutate(change) {
-      const {record,sha}=await read(date);
+      const {record,sha}=await read(date,night);
       if(record?.lease?.id!==lease.id||record.lease.until<=now())throw error('OPSMAP_JOBS_LEASE_LOST');
       change(record);
-      await write(record,sha);
+      await write(record,sha,night);
     }
     const lose=()=>controller.abort(error('OPSMAP_JOBS_LEASE_LOST'));
     function renew() {
@@ -209,7 +246,7 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
       Object.assign(job,{state,error:failure,finishedAt:now(),memory:memorySummary});
       record.lease=null;
     });
-    const saved=(await read(date)).record;
+    const saved=(await read(date,night)).record;
     const savedJob=saved?.jobs.find(job=>job.kind===lease.kind);
     if(savedJob?.state!==state||JSON.stringify(savedJob.memory)!==JSON.stringify(memorySummary)){
       throw error('OPSMAP_JOBS_RESULT_READBACK');
