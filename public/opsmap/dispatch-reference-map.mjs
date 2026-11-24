@@ -20,7 +20,7 @@ export function nearestDispatchStop(stop, target) {
 const escape = value => String(value ?? '').replace(/[&<>"']/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch]);
 const color = {primary:'#1767d4', secondary:'#dc6714', overlap:'#008f85'};
 
-export function mountDispatchReference({workspace, sidebar, bridge, readDay, readPeriod, readOutline}) {
+export function mountDispatchReference({workspace, sidebar, bridge, readDay, readPeriod, readOutline, screenReview}) {
   const controls = document.createElement('details');
   controls.className='dispatch-controls';
   controls.id='dispatchReference';
@@ -471,6 +471,18 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   }
 
   function renderDetail() {
+    screenReview?.update({
+      model:period?null:model,routes,zip:model?postcode.value:'',selection,
+      pickStop(code,vehicle){
+        const row=markerRows.find(item=>item.customerCode===code&&(!vehicle||item.vehicle===vehicle));
+        if(row)selectStop(row);
+      },
+      chooseRoute(vehicle) {
+        if(!primary.value)primary.value=vehicle;
+        else if(primary.value!==vehicle)secondary.value=vehicle;
+        updateRoutes({focusMatch:true});
+      },
+    });
     if (period) return renderPeriodDetail();
     if (!model) {
       detail.innerHTML='<p class="dispatch-empty">배송일을 조회하면 금액과 매장을 비교할 수 있습니다.</p>';
@@ -615,6 +627,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     if (box) fit([{lat:box[1],lng:box[0]},{lat:box[3],lng:box[2]}]);
     else fit(markerRows.filter(row=>!code||row.postalCode===code).map(row=>row.point));
     renderStoreList();
+    if(screenReview&&!period)renderDetail();
   }
   postcode.onchange=showPostcode;
   postcodeSearch.oninput=()=>{
@@ -686,9 +699,15 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       }
       status.textContent=[!model.routeVerified&&'확정 배차 미확인',!model.amountsVerified&&'같은 배송일 WMS 금액 미확인'].filter(Boolean).join(' · ');
       dayVehicles=[...model.vehicles.values()].filter(route=>route.stops.length).sort((a,b)=>a.vehicle.localeCompare(b.vehicle,'ko',{numeric:true}));
-      populateDayVehicles(...prior);
+      const example=screenReview&&selectedDate==='2026-11-25'&&!prior.some(Boolean)&&
+        ['101','208'].every(vehicle=>dayVehicles.some(route=>route.vehicle===vehicle));
+      populateDayVehicles(...(example?['101','208']:prior));
       choices.hidden=!dayVehicles.length;
       updateRoutes();
+      if(example&&choicesPostcodes.some(({zip,overlap})=>zip==='06312'&&overlap)){
+        postcode.value='06312';
+        showPostcode();
+      }
     } catch {
       if (!controller.signal.aborted) status.textContent='배송 자료를 불러오지 못했습니다. 다시 조회하세요.';
     }
@@ -722,7 +741,9 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       details.open=true;
       if (mapNode) observer.observe(mapNode);
       mapReset?.addEventListener('click',fitRoutes);
-      date.value=updateDateLimit(mode.value==='period');
+      const today=updateDateLimit(mode.value==='period');
+      date.value=screenReview&&mode.value==='day'&&date.max>='2026-11-25'?'2026-11-25':today;
+      screenReview?.open();
       window.addEventListener('map-sdk-ready',wireMap);
       window.addEventListener('map-store-selected',selectFromMap);
       window.addEventListener('map-fixed-master-ready',renderDetail);
@@ -732,6 +753,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     close({restoreView=true}={}) {
       if (!active) return;
       active=false;
+      screenReview?.close();
       reset();
       observer.disconnect();
       mapReset?.removeEventListener('click',fitRoutes);

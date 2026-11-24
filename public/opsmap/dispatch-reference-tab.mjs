@@ -5,6 +5,8 @@ const bridge=window.MapUiLocalBridge;
 
 if (tabs && sidebar && bridge) {
   const desktop=matchMedia('(min-width:901px) and (any-pointer:fine)');
+  const requestedReview=new URLSearchParams(location.search).get('dispatch-review');
+  const review=bridge.isStagePreview?.()&&['map','fleet','workbench'].includes(requestedReview)?requestedReview:null;
   const tab=document.createElement('button');
   Object.assign(tab,{id:'modeDispatchReference',className:'tab',type:'button',textContent:'배차 참고'});
   tab.setAttribute('aria-pressed','false');
@@ -37,6 +39,32 @@ if (tabs && sidebar && bridge) {
     return result.data?.id===id?result.data:null;
   }
 
+  async function readFixedArea(area,{signal}) {
+    const generation=bridge.searchSnapshotGeneration();
+    if(!/^[a-f0-9]{64}$/.test(generation||''))throw Error('POSTAL_REGISTRY_UNAVAILABLE');
+    const scope={generation,center:'osan'};
+    const digest=/^[a-f0-9]{64}$/;
+    const summary=(await read('shadow-coverage/postal/current-registration',scope,signal)).data;
+    if(summary?.generation!==generation||!digest.test(summary.registry||''))throw Error('POSTAL_REGISTRY_UNAVAILABLE');
+    const members=[];
+    let total,offset=0,complete=false;
+    for(let i=0;i<3;i++) {
+      const entry=(await read('shadow-coverage/postal/current-registration',{...scope,area,registry:summary.registry,offset},signal)).data;
+      if(entry?.generation!==generation||entry.registry!==summary.registry||entry.area!==Number(area)||
+          entry.offset!==offset||!Number.isSafeInteger(entry.registered)||entry.registered<0||
+          total!==undefined&&total!==entry.registered||!Array.isArray(entry.members)||entry.members.length>12) {
+        throw Error('POSTAL_REGISTRY_UNAVAILABLE');
+      }
+      total=entry.registered;
+      members.push(...entry.members);
+      if(entry.next==null){complete=members.length===total;break;}
+      if(entry.next!==offset+12)throw Error('POSTAL_REGISTRY_UNAVAILABLE');
+      offset=entry.next;
+    }
+    if(bridge.searchSnapshotGeneration()!==generation)throw Error('POSTAL_REGISTRY_UNAVAILABLE');
+    return {members,total,complete};
+  }
+
   function close(restoreView=true) {
     opening=null;
     tab.removeAttribute('aria-busy');
@@ -45,6 +73,7 @@ if (tabs && sidebar && bridge) {
     previous=null;
     tab.setAttribute('aria-pressed','false');
     document.body.classList.remove('dispatch-reference-open');
+    delete document.body.dataset.dispatchReview;
     feature.close({restoreView});
     requestAnimationFrame(()=>{if (!previous && session()) bridge.state.map?.relayout();});
   }
@@ -56,17 +85,21 @@ if (tabs && sidebar && bridge) {
     try {
       if (!feature) {
         stylesheet ||= Object.assign(document.createElement('link'),{
-          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261123-review',import.meta.url),
+          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261124-staff-screen-review',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261124-wms-totals');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261124-staff-screen-review');
         if (opening!==attempt||!session()) return;
-        feature=mountDispatchReference({workspace,sidebar,bridge,readDay,readPeriod,readOutline});
+        const createReview=review?(await import('./dispatch-reference-review.mjs?v=20261124-staff-screen-review')).createDispatchScreenReview:null;
+        if (opening!==attempt||!session()) return;
+        const screenReview=createReview?.({variant:review,workspace,bridge,readFixedArea});
+        feature=mountDispatchReference({workspace,sidebar,bridge,readDay,readPeriod,readOutline,screenReview});
       }
       window.dispatchEvent(new Event('map-dispatch-reference-open'));
       previous=[...tabs.querySelectorAll('button[aria-pressed="true"]')];
       for (const button of previous) button.setAttribute('aria-pressed','false');
       document.body.classList.add('dispatch-reference-open');
+      if(review)document.body.dataset.dispatchReview=review;
       tab.textContent='배차 참고';
       tab.setAttribute('aria-pressed','true');
       feature.open();
@@ -93,9 +126,11 @@ if (tabs && sidebar && bridge) {
     close();
     tabs.querySelector('button[aria-pressed="true"]:not([hidden])')?.focus();
   });
+  let openedReview=false;
   function sync() {
     if (session()&&desktop.matches) {
       if (!tab.isConnected) tabs.append(tab);
+      if(review&&!openedReview){openedReview=true;requestAnimationFrame(()=>tab.click());}
     } else {
       close();
       tab.remove();
