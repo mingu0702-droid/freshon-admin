@@ -183,8 +183,8 @@ test('the day route requires staff before reads and rechecks staff before sendin
 
 test('tomorrow only reads the verified WMS archive and refuses delivery or future period queries',async t=>{
   const current='2026-11-30',tomorrow='2026-12-01';
-  let wmsReads=0,available=true;
-  const noDelivery=()=>assert.fail('tomorrow must not read a delivery or fallback amount source');
+  let wmsReads=0,otherReads=0,available=true;
+  const noDelivery=()=>{otherReads++;return null;};
   const read=createOpsmapDispatchReferenceReader({getPublication:()=>({generation:'fixed',readDay:noDelivery}),
     readAmounts:noDelivery,readDated:noDelivery,readRetainedDated:noDelivery,
     readWmsExport:day=>{
@@ -224,4 +224,5 @@ test('tomorrow only reads the verified WMS archive and refuses delivery or futur
   assert.equal(absent.route.state,'UNAVAILABLE');
   assert.equal(absent.amounts.state,'UNAVAILABLE');
   assert.equal(wmsReads,2);
+  assert.equal(otherReads,0);
 });
