@@ -57,6 +57,26 @@ function memory() {
 const base=() => fixedEnvelope(source('099').data,new Date(start-hour).toISOString());
 const reader=baseValue=>({load:async()=>baseValue??null});
 
+test('published fixed master reuses a verified object for repeated current and dated reads',async()=>{
+  const store=memory(), baseline=base();
+  let tick=start;
+  const publish=route=>syncStageFixedMaster({store,receipt:receipt(tick),now:()=>tick,scope,
+    readMaster:async()=>source(route),loadBaseline:reader(baseline).load});
+  const first=await publish('122');
+  const master=createStageDailyFixedMasterReader({store,baseline:reader(baseline)});
+  const file=version=>'fixed-master-daily-v1/projection-'+version+'.json';
+  const previousCount=store.reads.get(file(first.version))||0;
+  await Promise.all([master.load(),master.readObservation(receipt(tick).date,codes)]);
+  await master.readObservation(receipt(tick).date,codes);
+  assert.equal(store.reads.get(file(first.version)),previousCount+1);
+  tick+=24*hour;
+  const next=await publish('205');
+  const beforeNew=store.reads.get(file(next.version))||0;
+  assert.equal((await master.readObservation(receipt(tick).date,[codes[0]])).data[0].baseVehicle,'205');
+  await master.load();
+  assert.equal(store.reads.get(file(next.version)),beforeNew+1);
+});
+
 test('an Excel recovery publishes workbook evidence and preserves the previous projection',async()=>{
   const store=memory(), baseline=base();
   let tick=start;

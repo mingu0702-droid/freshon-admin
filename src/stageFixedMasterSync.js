@@ -276,7 +276,21 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
 }
 
 export function createStageDailyFixedMasterReader({store, baseline,now=Date.now}) {
-  let cached=null, baselineValue, info=null;
+  let cached=null, currentKey, recentProjection, pendingProjection, baselineValue, info=null;
+  const refKey=ref=>JSON.stringify([ref.version,ref.checkedAt,ref.rowsHash,ref.count]);
+  async function readProjection(ref) {
+    const key=refKey(ref);
+    if(cached&&currentKey===key)return cached;
+    if(recentProjection?.key===key)return recentProjection.envelope;
+    if(pendingProjection?.key===key)return pendingProjection.promise;
+    const pending={key};
+    pending.promise=verifiedObject(store,ref).then(envelope=>{
+      if(pendingProjection===pending)recentProjection={key,envelope};
+      return envelope;
+    }).finally(()=>{if(pendingProjection===pending)pendingProjection=null;});
+    pendingProjection=pending;
+    return pending.promise;
+  }
   async function loadBaseline() {
     if (baselineValue===undefined) {
       const value=await baseline.load();
@@ -299,7 +313,7 @@ export function createStageDailyFixedMasterReader({store, baseline,now=Date.now}
       catch (error) {readError=error;}
       let envelope, meta;
       if (observation) {
-        envelope=await verifiedObject(store,observation.ref);
+        envelope=await readProjection(observation.ref);
         meta={state:'SCHEDULED_OBSERVATION',observedAt:observation.observedAt,publishedAt:observation.publishedAt,
           runId:observation.runId,registryGeneration:observation.registryGeneration,sourceRows:observation.sourceRows,
           registryCount:observation.registryCount};
@@ -331,7 +345,8 @@ export function createStageDailyFixedMasterReader({store, baseline,now=Date.now}
               lastFailureAt:head.lastFailure?.at||null};
             return initial;
           }
-          if (cached?.version!==head.current.version) cached=await verifiedObject(store,head.current);
+          cached=await readProjection(head.current);
+          currentKey=refKey(head.current);
           const success=head.lastSuccess;
           const prior=head.retainedByDate?.[observedDate(success.coverage?.sourceObservedAt)];
           info={state,version:cached.version,lastSuccessAt:success.at,runId:success.runId,
@@ -351,7 +366,8 @@ export function createStageDailyFixedMasterReader({store, baseline,now=Date.now}
         info={...retained,state:'READ_FAILED',lastError:failureCode(e)};
         if (cached) return cached;
         if (head?.previous) {
-          cached=await verifiedObject(store,head.previous).catch(()=>null);
+          cached=await readProjection(head.previous).catch(()=>null);
+          if(cached)currentKey=refKey(head.previous);
           if (cached) return cached;
         }
       }
