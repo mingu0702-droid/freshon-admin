@@ -266,6 +266,44 @@ test('order diagnostics distinguish empty, unsafe and inaccessible source result
   assert.deepEqual(await read(date,onlyOsan),[makeDay(date,'freshon_orders','partial',['S1'])]);
 });
 
+test('streamed orders validate fragmented UTF-8, row/scope counts, and the complete envelope before accepting evidence',async()=>{
+  const date='2026-11-20', diagnostics=[];
+  const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
+    OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'};
+  const detail={stockDate:date,logCdName:'영남센터',dcOutDate:'확정',estCd:'S1',dlvyEstCd:'S1',
+    orderNo:'O100',seq:1,orderQty:2,totalCnt:1,extra:'한글 " \\ } ] : , '.repeat(6_000)};
+  const body=JSON.stringify({other:{data:[1,{text:'[[]]'}]},data:[detail,{stockDate:'소계'}],ok:true});
+  let responseText=body, cancelCount=0;
+  const read=createStageRecentOrdersReader({env,onDiagnostic:value=>diagnostics.push(value),async fetchImpl(){
+    const bytes=new TextEncoder().encode(responseText);
+    let cursor=0;
+    return new Response(new ReadableStream({
+      pull(controller) {
+        if(cursor>=bytes.length) {controller.close();return;}
+        const next=cursor+113;
+        controller.enqueue(bytes.subarray(cursor,next));cursor=next;
+      },
+      cancel(){cancelCount++;}
+    }),{headers:{'content-type':'application/json; charset=utf-8'}});
+  }});
+  const skip=new Set(['osan','honam']);
+  assert.deepEqual(await read(date,skip),[makeDay(date,'freshon_orders','partial',['S1'],'yeongnam')]);
+  for (const [invalid,state] of [
+    [body.replace('"ok":true','"ok":false'),'RESPONSE_INVALID'],
+    [body.replace('"ok":true','"status":500'),'RESPONSE_INVALID'],
+    [body.slice(0,-1)+',"data":[]}','READ_FAILED'],
+    [body.slice(0,-1),'READ_FAILED'],
+    [body+' invalid','READ_FAILED'],
+    [body.replace('"totalCnt":1','"totalCnt":2'),'COUNT_UNVERIFIED'],
+    [body.replace('"logCdName":"영남센터"','"logCdName":"호남센터"'),'ROW_CENTER_MISMATCH']
+  ]) {
+    responseText=invalid;
+    assert.deepEqual(await read(date,skip),[]);
+    assert.equal(diagnostics.filter(d=>d.centerKey==='yeongnam').at(-1).state,state);
+  }
+  assert.equal(cancelCount,0);
+});
+
 test('a newly sourced day is saved and verified before advancing the operating ledger',async()=>{
   const date='2026-11-18', before=ledger(makeDay(initialEnd,'freshon_orders','partial',['S1']));
   const incoming=makeDay(date,'freshon_orders','partial',['S2']);
