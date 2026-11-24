@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 const MiB=1024*1024;
 const leaseMs=90_000;
 const heartbeatMs=25_000;
+const memorySampleMs=2000;
 const retentionMs=3*3600_000;
 const dayPattern=/^\d{4}-\d{2}-\d{2}$/;
 const hash=/^[a-f0-9]{64}$/;
@@ -133,7 +134,17 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
     if(!reservation.lease)return reservation;
     const {receipt,lease,memory}=reservation;
     const controller=new AbortController();
-    let heartbeat=null,alive=true,renewing=Promise.resolve();
+    let heartbeat=null,alive=true,renewing=Promise.resolve(),sampling=null;
+    const memorySummary={measured:memory.measured,limitBytes:memory.limit,startBytes:memory.bytes,
+      peakSampledBytes:memory.bytes,endBytes:null,samples:1,sampleIntervalMs:memorySampleMs};
+    async function sampleMemory() {
+      const usage=await measure();
+      if(usage.measured===memory.measured&&usage.limit===memory.limit&&Number.isSafeInteger(usage.bytes)){
+        memorySummary.peakSampledBytes=Math.max(memorySummary.peakSampledBytes,usage.bytes);
+        memorySummary.samples++;
+      }
+      return usage;
+    }
     output(receipt.runId,lease.kind,'RUNNING',memory);
     async function mutate(change) {
       const {record,sha}=await read(date);
@@ -146,9 +157,9 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
       if(!alive)return;
       renewing=(async()=>{
         try {
-          const memory=await measure();
-          if(!stageSyncHeadroom(memory,true)){
-            output(receipt.runId,lease.kind,'MEMORY_GUARD',memory);
+          const usage=await sampleMemory();
+          if(!stageSyncHeadroom(usage,true)){
+            output(receipt.runId,lease.kind,'MEMORY_GUARD',usage);
             controller.abort(error('OPSMAP_JOBS_MEMORY_GUARD'));
             return;
           }
@@ -159,21 +170,35 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
     }
     heartbeat=setTimeout(renew,intervalMs);
     heartbeat.unref?.();
-    const memoryWatch=setInterval(async()=>{
-      if(!alive||controller.signal.aborted)return;
-      try{
-        const usage=await measure();
-        if(alive&&!stageSyncHeadroom(usage,true)){
-          output(receipt.runId,lease.kind,'MEMORY_GUARD',usage);
-          controller.abort(error('OPSMAP_JOBS_MEMORY_GUARD'));
-        }
-      }catch{/* The heartbeat still verifies the lease. */}
-    },2000);
+    const memoryWatch=setInterval(()=>{
+      if(!alive||controller.signal.aborted||sampling)return;
+      sampling=(async()=>{
+        try{
+          const usage=await sampleMemory();
+          if(alive&&!stageSyncHeadroom(usage,true)){
+            output(receipt.runId,lease.kind,'MEMORY_GUARD',usage);
+            controller.abort(error('OPSMAP_JOBS_MEMORY_GUARD'));
+          }
+        }catch{/* The heartbeat still verifies the lease. */}
+        finally{sampling=null;}
+      })();
+    },memorySampleMs);
     memoryWatch.unref?.();
     let result;
     try {result=await execute({receipt,kind:lease.kind,signal:controller.signal});}
     catch(problem){result={state:'FAILED',error:problem.code||problem.message};}
-    finally {alive=false;clearTimeout(heartbeat);clearInterval(memoryWatch);await renewing;}
+    finally {
+      alive=false;
+      clearTimeout(heartbeat);
+      clearInterval(memoryWatch);
+      await Promise.all([renewing,sampling]);
+      try {
+        const usage=await sampleMemory();
+        if(usage.measured===memory.measured&&usage.limit===memory.limit&&Number.isSafeInteger(usage.bytes)){
+          memorySummary.endBytes=usage.bytes;
+        }
+      } catch {/* A failed final measurement cannot turn a completed job into a source failure. */}
+    }
     const reason=controller.signal.reason?.code;
     if(reason==='OPSMAP_JOBS_LEASE_LOST')return {nextAt:lease.until+1000};
     const state=reason?'INTERRUPTED':finished.has(result?.state)?result.state:'FAILED';
@@ -181,12 +206,15 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
     const failure=/^[A-Z][A-Z0-9_]{2,95}$/.test(rawError||'')?rawError:null;
     await mutate(record=>{
       const job=record.jobs.find(value=>value.kind===lease.kind);
-      Object.assign(job,{state,error:failure,finishedAt:now()});
+      Object.assign(job,{state,error:failure,finishedAt:now(),memory:memorySummary});
       record.lease=null;
     });
     const saved=(await read(date)).record;
-    if(saved?.jobs.find(job=>job.kind===lease.kind)?.state!==state)throw error('OPSMAP_JOBS_RESULT_READBACK');
-    output(receipt.runId,lease.kind,state,{error:failure});
+    const savedJob=saved?.jobs.find(job=>job.kind===lease.kind);
+    if(savedJob?.state!==state||JSON.stringify(savedJob.memory)!==JSON.stringify(memorySummary)){
+      throw error('OPSMAP_JOBS_RESULT_READBACK');
+    }
+    output(receipt.runId,lease.kind,state,{error:failure,memory:memorySummary});
     return {nextAt:now()};
   }
 

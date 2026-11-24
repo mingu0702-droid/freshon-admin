@@ -85,6 +85,36 @@ test('high cgroup memory defers the pending job before any source runs and the m
   assert.equal(inspect().jobs[0].state,'PUBLISHED');
 });
 
+test('scheduled job records combined memory at start, sampled peak and end without any extra source call',async()=>{
+  const {store,inspect}=fixture();
+  let releaseJob;
+  const sampled=new Promise(resolve=>{releaseJob=resolve;});
+  const readings=[280,410,262];
+  const logs=[];
+  let calls=0;
+  const jobs=createStageScheduledJobs({store,secret,now:()=>start,intervalMs:1,
+    async measure(){
+      const value=readings.shift();
+      if(value===410)releaseJob();
+      return memory(value);
+    },
+    log(value){logs.push(JSON.parse(value));},
+    async execute(){
+      calls++;
+      const deadline=setTimeout(()=>releaseJob(),1000);
+      try {await sampled;} finally {clearTimeout(deadline);}
+      return {state:'VERIFIED_NOOP'};
+    }});
+  await jobs.accept(receipt,['wms']);
+  await jobs.drain();
+  const job=inspect().jobs[0];
+  assert.equal(job.state,'VERIFIED_NOOP');
+  assert.equal(calls,1);
+  assert.deepEqual(job.memory,{measured:'synthetic',limitBytes:512*MiB,startBytes:280*MiB,
+    peakSampledBytes:410*MiB,endBytes:262*MiB,samples:3,sampleIntervalMs:2000});
+  assert.deepEqual(logs.at(-1).memory,job.memory);
+});
+
 test('private checkpoint mutation and task kind or receipt tampering fail closed',async()=>{
   const {store,tamper}=fixture();
   const jobs=createStageScheduledJobs({store,secret,now:()=>start,log(){},execute:()=>assert.fail()});
