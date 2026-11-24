@@ -74,7 +74,7 @@
       if (owner !== epoch || signal.aborted || !active) throw cancelled();
     }
 
-    async function validate(payload, requestedCursor) {
+    async function validate(payload, requestedCursor, signal) {
       if (payload?.ok === false) throw failure('CUSTOMER_REGISTRY_SOURCE_UNAVAILABLE');
       const page = payload?.data && !Array.isArray(payload.data) ? payload.data : payload;
       if (!page || page.contract !== 'customer-registry-v1' || !['FULL', 'DELTA', 'NOOP'].includes(page.mode) ||
@@ -86,7 +86,7 @@
         !page.complete && (!page.nextCursor || page.nextCursor === requestedCursor) ||
         page.mode === 'NOOP' && (page.rows.length || !page.complete)) throw failure('CUSTOMER_REGISTRY_PAGE_INVALID');
       const seen = new Set(), rows = [];
-      for (const row of page.rows) {
+      async function verifyRow(row) {
         if (!row || !code(row.customerCode) || seen.has(row.customerCode) || !['ACTIVE', 'DELETED'].includes(row.lifecycle) ||
           row.centerGroup != null && (!(registrationCenters.has(row.centerGroup) || row.nationalRegistry===true&&row.centerGroup==='osan') ||
           row.lifecycle !== 'ACTIVE'&&row.nationalRegistry!==true) ||
@@ -103,12 +103,20 @@
           location.lat < 33 || location.lat > 39.5 || location.lng < 124 || location.lng > 132 ||
           !['BUILDING', 'PARCEL', 'ADDRESS'].includes(location.kind))) throw failure('CUSTOMER_REGISTRY_LOCATION_INVALID');
         // Never copy private detail fields, provider coordinates, visits, or notes from a bulk response.
-        rows.push(Object.freeze({customerCode: row.customerCode, customerName: row.customerName || '', basicAddress: row.basicAddress || '',
+        return Object.freeze({customerCode: row.customerCode, customerName: row.customerName || '', basicAddress: row.basicAddress || '',
           addressHash: currentHash, ...(search ? {coordinateSearch: search} : {}),
           ...(row.centerGroup ? {centerGroup: row.centerGroup} : {}),
           ...(row.nationalRegistry===true ? {nationalRegistry:true} : {}),
           ...(location ? {verifiedLocation: Object.freeze({addressHash:currentHash,lat:location.lat,lng:location.lng,kind:location.kind})} : {}),
-          sourceUpdatedAt: row.sourceUpdatedAt || '', lifecycle: row.lifecycle}));
+          sourceUpdatedAt: row.sourceUpdatedAt || '', lifecycle: row.lifecycle});
+      }
+      // Keep cryptographic validation bounded without waiting for a separate
+      // browser task for every single address in a page.
+      const batchSize = 24;
+      for (let offset = 0; offset < page.rows.length; offset += batchSize) {
+        signal.throwIfAborted();
+        const batch = await Promise.all(page.rows.slice(offset, offset + batchSize).map(verifyRow));
+        rows.push(...batch);
       }
       return {...page, rows};
     }
@@ -123,7 +131,7 @@
           const requestedCursor = stage ? stage.cursor : cursor;
           const payload = await readPage({cursor: requestedCursor, signal, selection: options.selection || {}, limit: Math.max(1, Math.min(1000, pageSize))});
           assertCurrent(owner, signal);
-          const page = await validate(payload, requestedCursor);
+          const page = await validate(payload, requestedCursor, signal);
           assertCurrent(owner, signal);
           if (stage && (stage.version !== page.version || stage.sourceVersion !== (page.sourceVersion || '') || stage.mode !== page.mode)) throw failure('CUSTOMER_REGISTRY_VERSION_CHANGED');
           if (!stage) stage = {

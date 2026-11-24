@@ -165,6 +165,19 @@ test('bounded pages stage atomically and resume their cursor before exposing a c
   await api.sync(); assert.equal(api.merge([]).length, 2); assert.equal(requests[0].cursor, null); assert.equal(requests[1].cursor, 'page-2'); assert.equal(requests[0].selection.customerCode, 'S990002'); assert.equal(requests[0].limit, 250);
 });
 
+test('duplicates and invalid address hashes across validation batches preserve the committed registry', async () => {
+  const rows = Array.from({length: 24}, (_, index) => active(`S${990000 + index}`));
+  let response = page([active('S950001')]);
+  const {api} = load({readPage: async () => response});
+  await api.sync();
+  response = page([...rows, rows[0]], {version:'v2', afterCursor:'checkpoint-1'});
+  await assert.rejects(api.sync(), /CUSTOMER_REGISTRY_ROW_INVALID/);
+  response = page([...rows, active('S960001', {addressHash:'a'.repeat(64)})], {version:'v2', afterCursor:'checkpoint-1'});
+  await assert.rejects(api.sync(), /CUSTOMER_REGISTRY_ADDRESS_HASH_INVALID/);
+  assert.equal(api.summary().version, 'v1');
+  assert.deepEqual(copy(api.merge([])).map(row => row.customerCode), ['S950001']);
+});
+
 test('failed partial generation preserves the last complete values and retries its committed cursor', async () => {
   const requests = [], responses = [page([active('S990001')]), page([active('S990001', {customerName: '합성 미완료명칭'})], {version: 'v2', mode: 'DELTA', afterCursor: 'checkpoint-1', complete: false, nextCursor: 'page-v2-2'}), Error('SYNTHETIC_NETWORK'), page([active('S990002')], {version: 'v3', afterCursor: 'checkpoint-1'})];
   const {api} = load({readPage: async request => {requests.push(request.cursor); const value = responses.shift(); if (value instanceof Error) throw value; return value;}});
