@@ -193,7 +193,7 @@ test('recent operations can schedule while the independent fixed master scope is
     OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED:'1',OPSMAP_STAGE_SYNC_TRIGGER_ID:triggerId,
     OPSMAP_STAGE_SYNC_EXECUTOR_SHA256:principal,OPSMAP_STAGE_SYNC_SCHEDULER_SECRET:secret};
   let child,input='';
-  mountOpsmapScheduledRun(app,{env,now:()=>clockStart,readFixedScope:async()=>null,log:value=>logs.push(JSON.parse(value)),
+  mountOpsmapScheduledRun(app,{env:{...env,OPSMAP_STAGE_SYNC_DURABLE_DISABLED:'1'},now:()=>clockStart,readFixedScope:async()=>null,log:value=>logs.push(JSON.parse(value)),
     launch(_exec,args){
       assert.deepEqual(args.slice(1),['fixed-scheduled']);
       child=new EventEmitter();
@@ -274,7 +274,7 @@ test('registry scheduling does not require a fixed master scope',async t=>{
       OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED:fixedEnabled?'1':'0',OPSMAP_STAGE_SYNC_TRIGGER_ID:triggerId,
       OPSMAP_STAGE_SYNC_EXECUTOR_SHA256:principal,OPSMAP_STAGE_SYNC_SCHEDULER_SECRET:secret};
     let child,input='',scopeReads=0;
-    mountOpsmapScheduledRun(app,{env,now:()=>clockStart,readFixedScope:async()=>{
+    mountOpsmapScheduledRun(app,{env:{...env,OPSMAP_STAGE_SYNC_DURABLE_DISABLED:'1'},now:()=>clockStart,readFixedScope:async()=>{
       scopeReads++;
       return null;
     },log:()=>{},launch(_exec,args,options){
@@ -773,4 +773,62 @@ test('21:00 loads the next dispatch, midnight replaces drafts, and a failed sour
     assert.equal(window.end,tomorrow);
     assert.equal(window.completed,2);
   }
+});
+
+test('an accepted receipt wakes the durable worker when startup raced an initially absent checkpoint',async t=>{
+  const app=express(),logs=[];
+  let current=null,version=0,firstRead,releaseFirst;
+  const startupReading=new Promise(resolve=>{firstRead=resolve;});
+  const finishStartup=new Promise(resolve=>{releaseFirst=resolve;});
+  let reads=0;
+  const store={
+    async read(){
+      if(++reads===1){firstRead();await finishStartup;return {value:null,sha:null};}
+      return {value:structuredClone(current),sha:current?version:null};
+    },
+    async write(_file,value,expected){
+      if(expected!==(current?version:null))throw Object.assign(Error('cas'),{code:'FIXED_STORE_CONFLICT'});
+      current=structuredClone(value);version++;
+    }
+  };
+  let finished;
+  const seen=new Promise(resolve=>{finished=resolve;});
+  const env={...storageEnv,OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED:'1',OPSMAP_STAGE_RECENT_OPERATIONS_SYNC_APPROVED:'1',
+    OPSMAP_STAGE_FIXED_MASTER_SYNC_APPROVED:'1',OPSMAP_STAGE_SYNC_TRIGGER_ID:triggerId,
+    OPSMAP_STAGE_SYNC_EXECUTOR_SHA256:principal,OPSMAP_STAGE_SYNC_SCHEDULER_SECRET:secret};
+  mountOpsmapScheduledRun(app,{env,now:()=>clockStart,openJobStore:()=>store,readFixedScope:async()=>null,
+    measureMemory:async()=>({bytes:300*1024*1024,limit:512*1024*1024,measured:'test'}),
+    log(value){
+      const item=JSON.parse(value);logs.push(item);
+      if(item.component==='opsmap-stage-jobs'&&item.job==='fixed'&&item.state==='FAILED')finished();
+    },
+    launch(_exec,args){
+      assert.deepEqual(args.slice(0,2),['--max-old-space-size=144','--max-semi-space-size=8']);
+      const child=new EventEmitter();
+      child.stdin=new PassThrough();child.stderr=new PassThrough();child.stdout=new PassThrough();
+      let input='';
+      child.stdin.on('data',chunk=>{input+=chunk;});
+      child.stdin.on('end',()=>{
+        const parsed=JSON.parse(input);
+        assert.equal(parsed.scheduledKind,'recent');
+        assert.equal(parsed.receipt.signature,undefined);
+        assert.match(parsed.taskProof,/^[a-f0-9]{64}$/);
+        child.stdout.write(JSON.stringify({component:'opsmap-stage-job-result',runId:parsed.receipt.runId,
+          job:'recent',state:'VERIFIED_NOOP'})+'\n');
+        child.emit('close',0);
+      });
+      return child;
+    }});
+  const url=await listen(t,app);
+  app.emit('opsmap-stage-listening');
+  await startupReading;
+  const response=await fetch(url+OPSMAP_SCHEDULED_ROUTE,{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify(signed(clockStart))});
+  assert.equal(response.status,202);
+  assert.deepEqual(current.jobs.map(job=>job.state),['PENDING','PENDING']);
+  releaseFirst();
+  const timer=setTimeout(()=>finished(),2500);
+  try{await seen;}finally{clearTimeout(timer);}
+  assert.deepEqual(current.jobs.map(job=>job.state),['VERIFIED_NOOP','FAILED']);
+  assert.equal(logs.filter(item=>item.state==='RUNNING'&&item.job==='recent').length,1);
 });

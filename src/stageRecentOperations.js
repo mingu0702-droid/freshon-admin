@@ -319,7 +319,7 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
   };
 }
 
-export async function syncStageRecentOperations({store,receipt,readSeed,readSource,readLatestDay,retryDates=[],repairDate,
+export async function syncStageRecentOperations({store,receipt,readSeed,readSource,readLatestDay,readLatestDispatch,retryDates=[],repairDate,
   readHistoricalScope,recoverySources=[],recoveryScopeLimit=1,now=Date.now}={}) {
   const startedAt=now();
   const day=latestClosedDay(startedAt);
@@ -344,6 +344,10 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     const previous=base.days.filter(item=>item.date===date);
     const completeRows=new Map(previous.filter(item=>item.coverage==='complete').map(item=>[dayKey(item),item]));
     let input=(savedInput??[]).map(item=>completeRows.get(dayKey(item))??item);
+    if(date===day&&readLatestDispatch&&![...previous,...input].some(item=>item.source==='wms_dispatch')){
+      const archive=await readLatestDispatch(date);
+      if(archive)input.push(projectArchivedOsanDispatch(archive,date).evidence);
+    }
     const latestUnpublished=date===day && date>base.endDate;
     // A pinned WMS export can publish the date before the signed scheduled
     // collection fills its independent FreshOn and Delivery Admin scopes.
@@ -448,20 +452,8 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     ...(attempts.length?{recovery:attempts.at(-1),recoveryBatch:attempts}:{})};
 }
 
-export async function recoverArchivedOsanDispatch({
-  store,readArchive,date,approvedDate,publish=false,now=Date.now
-}={}) {
-  const closedDay=latestClosedDay(now());
-  if (!isDay(date) || date!==approvedDate || date>closedDay ||
-      date<datesFor(closedDay,90)[0] || !store?.read || !readArchive || publish&&!store.write) {
-    throw Error('RECENT_OPERATIONS_RECOVERY_SCOPE');
-  }
-  const {ledger:base,sha}=await store.read()??{};
-  if (!base || base.endDate>closedDay || date<base.startDate || !codeRevision.test(sha??'')) {
-    throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
-  }
-  const archive=await readArchive(date);
-  if (archive?.date!==date || archive.center!=='osan' || archive.source!=='WMS_CONFIRMED_DISPATCH_EXPORT' ||
+function projectArchivedOsanDispatch(archive,date){
+  if (archive?.date!==date || archive.center!=='osan' || !['WMS_CONFIRMED_DISPATCH_EXPORT','WMS_CONFIRMED_DISPATCH_FRESHON_JSON'].includes(archive.source) ||
       !Array.isArray(archive.vehicles)) throw rejected();
   const customers=new Set();
   let assignmentCount=0;
@@ -475,11 +467,27 @@ export async function recoverArchivedOsanDispatch({
     }
   }
   if (!customers.size) throw rejected();
+  return {assignmentCount,customerCount:customers.size,evidence:{date,centerKey:'osan',source:'wms_dispatch',coverage:'partial',
+    rows:[...customers].map(customerCode=>({customerCode,evidence:'dispatch_confirmed'}))}};
+}
+
+export async function recoverArchivedOsanDispatch({
+  store,readArchive,date,approvedDate,publish=false,now=Date.now
+}={}) {
+  const closedDay=latestClosedDay(now());
+  if (!isDay(date) || date!==approvedDate || date>closedDay ||
+      date<datesFor(closedDay,90)[0] || !store?.read || !readArchive || publish&&!store.write) {
+    throw Error('RECENT_OPERATIONS_RECOVERY_SCOPE');
+  }
+  const {ledger:base,sha}=await store.read()??{};
+  if (!base || base.endDate>closedDay || date<base.startDate || !codeRevision.test(sha??'')) {
+    throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
+  }
+  const archive=await readArchive(date);
+  const {evidence,assignmentCount,customerCount}=projectArchivedOsanDispatch(archive,date);
   const endDate=date>base.endDate?date:base.endDate;
-  const evidence={date,centerKey:'osan',source:'wms_dispatch',coverage:'partial',
-    rows:[...customers].map(customerCode=>({customerCode,evidence:'dispatch_confirmed'}))};
   const next=mergeRecentOperations(base,endDate,[evidence]);
-  const report={date,centerKey:'osan',source:'wms_dispatch',assignmentCount,customerCount:customers.size,endDate};
+  const report={date,centerKey:'osan',source:'wms_dispatch',assignmentCount,customerCount,endDate};
   if (JSON.stringify(next)===JSON.stringify(base)) return {state:'VERIFIED_NOOP',...report};
   if (!publish) return {state:'VERIFIED_PREVIEW',...report};
   try {await store.write(next,sha);}

@@ -19,13 +19,15 @@ import {atomicCoverageWrite} from '../src/shadowCoverage/fileStore.js';
 import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from '../src/opsmapDurableGeneration.js';
 import {claimQueuedOpsmapSchedule,independentStageSync,opsmapScheduleConfig,publishOpsmapScheduledRun,
   verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
+import {verifyStageScheduledTask} from '../src/stageScheduledJobs.js';
 import {readIndependentStageScopes} from '../src/stageIndependentSyncScope.js';
 import {STAGE_OSAN_SYNC_CENTERS,STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
 import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixedMasterBaseline, stageFixedMasterStorage,
   stageFixedMasterSyncEnabled, syncStageFixedMaster} from '../src/stageFixedMasterSync.js';
 import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
+import {createStageWmsDispatchExportReader} from '../src/opsmapWmsDispatchExport.js';
 import {createStageNationalRegistryStorage,createStageNationalRegistrationSource,stageNationalRegistryEnabled,
-  scopedNationalRegistryMembership,syncStageNationalRegistry} from '../src/stageNationalRegistry.js';
+  createStageNationalRegistryReader,readStageNationalRegistryRows,scopedNationalRegistryMembership,syncStageNationalRegistry} from '../src/stageNationalRegistry.js';
 import {createStageRecentOperationsSeed,createStageRecentOperationsStore,historicalRecoveryOutcome,stageRecentOperationsSyncEnabled,
   syncStageRecentOperations} from '../src/stageRecentOperations.js';
 import {recentOperationsBaseline} from '../src/stageRecentOperationsManifest.js';
@@ -166,7 +168,10 @@ async function readScheduledInput() {
     if (Buffer.byteLength(input)>FIXED_MASTER_SCOPE_INPUT_LIMIT) throw Error('OPSMAP_SCHEDULE_RECEIPT');
   }
   const job=JSON.parse(input);
-  return {...job,receipt:verifyOpsmapScheduleReceipt(job?.receipt ?? job,opsmapScheduleConfig(env))};
+  const config=opsmapScheduleConfig(env);
+  const receipt=job.scheduledKind?verifyStageScheduledTask(job,config.secret):
+    verifyOpsmapScheduleReceipt(job?.receipt??job,config);
+  return {...job,receipt};
 }
 
 function scheduledQueueRunner() {
@@ -179,7 +184,7 @@ function scheduledQueueRunner() {
   return {
     claim:()=>claimQueuedOpsmapSchedule({store,config,prepare:()=>readIndependentStageScopes(env)}),
     async execute({receipt,input}) {
-      await runScheduled({...input,receipt},settingsFile,{independent:true});
+      await runScheduled({...input,receipt},settingsFile);
       console.log(JSON.stringify({component:'opsmap-independent-run',state:'WORKER_EXITED',runId:receipt.runId}));
     }
   };
@@ -231,10 +236,15 @@ async function run() {
   process.once('SIGTERM',stop);
 }
 
-async function runScheduled(job,settingsFile,{independent=false}={}){
+async function runScheduled(job,settingsFile){
     const mode=settingsFile?'scheduled':'fixed-scheduled';
     const {receipt}=job;
     const fixedScope=job?.fixedScope;
+    const memory=phase=>{
+      const {rss,heapUsed,external,arrayBuffers}=process.memoryUsage();
+      console.log(JSON.stringify({component:'opsmap-stage-job-memory',runId:receipt.runId,
+        phase,rss,heapUsed,external,arrayBuffers}));
+    };
     const runNationalRegistry = async () => {
       if (!stageNationalRegistryEnabled(env)) return;
       const component='opsmap-national-registry-sync';
@@ -251,11 +261,12 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
           readCenter:createStageNationalRegistrationSource({env,membership}),readOfficial:async()=>snapshot.rows});
         console.log(JSON.stringify({component,runId:receipt.runId,state:value.state,count:value.count,
           checkedAt:value.checkedAt,matchedByCenter:value.counts}));
+        return value;
       } catch(error) {
         const code=error.code || error.message || '';
         console.log(JSON.stringify({component,runId:receipt.runId,state:'FAILED',
           error:/^(?:NATIONAL_REGISTRY|FIXED_STORE)_[A-Z_]+$/.test(code)?code:'NATIONAL_REGISTRY_SOURCE_FAILED'}));
-        if (mode==='fixed-scheduled'&&!stageFixedMasterSyncEnabled(env)) throw error;
+        if (job.scheduledKind||mode==='fixed-scheduled'&&!stageFixedMasterSyncEnabled(env)) throw error;
       }
     };
     const runFixedMaster = async () => {
@@ -263,7 +274,7 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
       try {
         if (!fixedScope) throw Error('FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE');
         const store=stageFixedMasterStorage({env,write:true});
-        const source=createStageFixedMasterSource({env,allowFullRescan:independent,onScan:evidence=>console.info(JSON.stringify({
+        const source=createStageFixedMasterSource({env,onScan:evidence=>console.info(JSON.stringify({
           component:'opsmap-fixed-master-pages',runId:receipt.runId,...evidence})),
           onPage:evidence=>console.info(JSON.stringify({
             component:'opsmap-fixed-master-page-progress',runId:receipt.runId,...evidence}))});
@@ -271,11 +282,12 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
         const result=await syncStageFixedMaster({store,receipt,scope:fixedScope,readMaster:source,loadBaseline:baseline.load});
         console.log(JSON.stringify({component:'opsmap-fixed-master-sync',runId:receipt.runId,state:result.state,version:result.version,
           checkedAt:result.checkedAt,matchedCount:result.matchedCount,centers:result.centers}));
+        return result;
       } catch(error) {
         const code=error.code || error.message || '';
         console.log(JSON.stringify({component:'opsmap-fixed-master-sync',runId:receipt.runId,state:'FAILED',
           error:/^FIXED_(?:MASTER|STORE)_[A-Z_]{1,70}$/.test(code)?code:'FIXED_MASTER_DAILY_FAILED'}));
-        if (mode==='fixed-scheduled') throw error;
+        if (job.scheduledKind||mode==='fixed-scheduled') throw error;
       }
     };
     const runRecentOperations=async()=>{
@@ -292,8 +304,11 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
           component:'opsmap-recent-delivery-source',runId:receipt.runId,...value
         }));
         const readLatestDay=readDelivery||readOrders?async(date,deliveryCenters,orderCenters)=>{
-          const evidence=await Promise.all([readDelivery?.(date,deliveryCenters,deliveryDiagnostics),readOrders?.(date,orderCenters)]);
-          return evidence.flatMap(input=>input??[]);
+          const deliveries=readDelivery?await readDelivery(date,deliveryCenters,deliveryDiagnostics).catch(()=>[]):[];
+          memory('AFTER_DELIVERY');
+          const orders=readOrders?await readOrders(date,orderCenters).catch(()=>[]):[];
+          memory('AFTER_ORDERS');
+          return [...deliveries,...orders];
         }:null;
         const autoRepair=env.OPSMAP_STAGE_RECENT_OPERATIONS_AUTO_REPAIR_APPROVED==='1';
         const approvedScopeLimit=env.OPSMAP_STAGE_RECENT_OPERATIONS_REPAIR_SCOPE_LIMIT;
@@ -313,16 +328,18 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
         const repair=/^(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})$/.exec(env.OPSMAP_STAGE_RECENT_OPERATIONS_REPAIR_REQUEST||'');
         const repairDate=repair?.[2]===receipt.date?repair[1]:undefined;
         const retryDates=env.OPSMAP_STAGE_RECENT_OPERATIONS_RETRY_DATES?.split(',').map(date=>date.trim());
+        const exportReader=createStageWmsDispatchExportReader({env});
         const result=await syncStageRecentOperations({store:createStageRecentOperationsStore({env,write:true}),receipt,
-          readLatestDay,
+          readLatestDay,readLatestDispatch:date=>exportReader?.(date).catch(()=>null),
           retryDates,repairDate,readHistoricalScope,recoverySources,recoveryScopeLimit,
           readSeed:createStageRecentOperationsSeed({env,manifest:recentOperationsBaseline})});
         console.log(JSON.stringify({component,runId:receipt.runId,...result}));
+        return result;
       } catch(error) {
         const code=error.code||error.message;
         console.log(JSON.stringify({component,runId:receipt.runId,state:'FAILED',
           error:/^(?:RECENT_OPERATIONS|FIXED_STORE)_[A-Z_]+$/.test(code||'')?code:'RECENT_OPERATIONS_SYNC_FAILED'}));
-        if (mode==='fixed-scheduled'&&!stageFixedMasterSyncEnabled(env)&&!stageNationalRegistryEnabled(env)) throw error;
+        if (job.scheduledKind||mode==='fixed-scheduled'&&!stageFixedMasterSyncEnabled(env)&&!stageNationalRegistryEnabled(env)) throw error;
       }
     };
     const runMasterJobs=async()=>{
@@ -333,16 +350,55 @@ async function runScheduled(job,settingsFile,{independent=false}={}){
         finally {await runNationalRegistry();}
       }
     };
-    if (mode==='fixed-scheduled') return runMasterJobs();
-    let durable;
-    try {
-      durable=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env,write:true}),appRoot});
-      report(await publishOpsmapScheduledRun({createWorker:recordSource=>buildWorker({mode,settingsFile,durable,recordSource}),durable,receipt}));
+    async function runWms(){
+      const {syncStageFreshonWmsDispatch}=await import('../src/stageFreshonWmsWorkbookGate.js');
+      return syncStageFreshonWmsDispatch({env,date:receipt.date,observedAt:new Date().toISOString(),login:async()=>{
+        const {config}=await import('../src/config.js');
+        if(new URL(config.freshonBaseUrl).origin!=='https://mis.freshon.co.kr')throw Error('WMS_EXPORT_FRESHON_SCOPE');
+        return (await import('../src/scraper/freshonDailyRoute.js')).loginFreshonSession();
+      }});
     }
-    finally {
-      await durable?.dispose().catch(()=>{});
-      await runMasterJobs();
+    async function runPostal(){
+      const [{createStageCurrentPostalRefreshStore},{createStageCurrentPostalProjectInputs},
+        {refreshStageCurrentPostalRegistration,readStageCurrentPostalFallback}]=await Promise.all([
+          import('../src/shadowCoverage/postalCurrentRegistrationStore.js'),
+          import('../src/shadowCoverage/postalCurrentRegistrationInputs.js'),
+          import('../src/shadowCoverage/postalCurrentRegistrationRefresh.js')]);
+      const store=createStageCurrentPostalRefreshStore({env,write:true});
+      const nationalStorage=createStageNationalRegistryStorage({env});
+      if(!store||!nationalStorage)return {state:'SKIPPED'};
+      const nationalReader=createStageNationalRegistryReader({store:nationalStorage});
+      const inputs=await createStageCurrentPostalProjectInputs({env});
+      try{
+        return await refreshStageCurrentPostalRegistration({store,...inputs,readRegistry:()=>nationalReader.read(),
+          readRegistryVersion:async()=> (await nationalStorage.readHead()).value?.current?.version,
+          readRegistryRows:version=>readStageNationalRegistryRows(nationalStorage,version),
+          fallback:()=>readStageCurrentPostalFallback({env})});
+      }finally{await inputs.dispose();}
     }
+    async function runGeneration(){
+      let durable;
+      try{
+        durable=createOpsmapDurableGeneration({...stageOpsmapDurableStorage({env,write:true}),appRoot});
+        const result=await publishOpsmapScheduledRun({
+          createWorker:recordSource=>buildWorker({mode,settingsFile,durable,recordSource}),durable,receipt});
+        report(result);
+        return result;
+      }finally{await durable?.dispose().catch(()=>{});}
+    }
+    if(job.scheduledKind){
+      const executors={generation:runGeneration,recent:runRecentOperations,fixed:runFixedMaster,national:runNationalRegistry,
+        wms:runWms,postal:runPostal};
+      memory('START');
+      const result=await executors[job.scheduledKind]?.()??{state:'SKIPPED'};
+      memory('END');
+      console.log(JSON.stringify({component:'opsmap-stage-job-result',runId:receipt.runId,job:job.scheduledKind,
+        state:result.state,error:result.error}));
+      return;
+    }
+    if(mode==='fixed-scheduled')return runMasterJobs();
+    try{await runGeneration();}
+    finally{await runMasterJobs();}
 }
 
 try { await run(); }

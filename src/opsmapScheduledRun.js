@@ -8,6 +8,7 @@ import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
 import {FIXED_MASTER_WORKER_LIMIT, stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {NATIONAL_REGISTRY_WORKER_LIMIT, stageNationalRegistryEnabled} from './stageNationalRegistry.js';
 import {stageRecentOperationsSyncEnabled} from './stageRecentOperations.js';
+import {createStageScheduledJobs,signStageScheduledTask,stageSyncMemory} from './stageScheduledJobs.js';
 
 export const OPSMAP_SCHEDULED_ROUTE='/internal/opsmap/scheduled-sync';
 const maxDelay=10*60_000;
@@ -146,7 +147,7 @@ async function enqueueOpsmapSchedule(store, receipt, config) {
 }
 
 export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Date.now,log=console.log,readFixedScope,readNationalScope,
-  openDispatchStore=()=>stageFixedMasterStorage({env,write:true})}={}) {
+  openDispatchStore=()=>stageFixedMasterStorage({env,write:true}),openJobStore,measureMemory=stageSyncMemory}={}) {
   const settings=env.OPSMAP_STAGE_SYNC_JOB_SETTINGS_FILE;
   const fullJob=path.isAbsolute(settings || '');
   const independent=independentStageSync(env);
@@ -159,7 +160,47 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1'||env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED!=='1'||
       env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED!=='1'||
       !fullJob&&!sourceJobs&&!independent) return;
-  let child, starting=false;
+  let child, starting=false, jobTimer, jobFlight, jobWake=false;
+  const writerConfigured=env.OPSMAP_STAGE_SYNC_WRITE_TOKEN ||
+    env.OPSMAP_STAGE_SYNC_USE_SNAPSHOT_WRITER==='1'&&env.OPSMAP_SNAPSHOT_STORE_TOKEN;
+  const durable=!independent&&fixedJob&&env.OPSMAP_STAGE_SYNC_DURABLE_DISABLED!=='1'&&
+    (openJobStore||writerConfigured)&&opsmapScheduleConfig(env).secret?.length>=32;
+  const jobPlan=[...(fullJob?['generation']:[]),...(recentJob?['recent']:[]),
+    ...(fixedJob?['fixed']:[]),...(nationalJob?['national']:[]),
+    ...(env.OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED==='1'?['wms']:[]),
+    ...(env.OPSMAP_STAGE_CURRENT_POSTAL_REFRESH_APPROVED==='1'&&nationalJob?['postal']:[])];
+  let jobs;
+  if(durable){
+    const secret=opsmapScheduleConfig(env).secret;
+    jobs=createStageScheduledJobs({store:(openJobStore||openDispatchStore)(),secret,now,log,measure:measureMemory,
+      async execute({receipt,kind,signal}) {
+        const scope=kind==='fixed'?await readFixedScope():null;
+        const registryScope=kind==='national'&&scopedRegistry?await readNationalScope():null;
+        signal.throwIfAborted();
+        if(kind==='fixed'&&!scope)return {state:'FAILED',error:'FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE'};
+        return launchJob(receipt,{receipt,fixedScope:scope,registryScope,scheduledKind:kind,
+          taskProof:signStageScheduledTask(receipt,kind,secret)},signal);
+      }});
+    app.once('opsmap-stage-listening',()=>scheduleJobs(0));
+  }
+  function scheduleJobs(delay) {
+    clearTimeout(jobTimer);
+    jobTimer=setTimeout(async()=>{
+      if(jobFlight)return;
+      jobFlight=jobs.drain();
+      try{
+        const result=await jobFlight;
+        if(!result.done)scheduleJobs(Math.max(250,result.nextAt-now()));
+      }catch{
+        log(JSON.stringify({component:'opsmap-stage-jobs',state:'CHECKPOINT_UNAVAILABLE'}));
+        scheduleJobs(60_000);
+      }finally{
+        jobFlight=null;
+        if(jobWake){jobWake=false;scheduleJobs(0);}
+      }
+    },delay);
+    jobTimer.unref();
+  }
   app.post(OPSMAP_SCHEDULED_ROUTE,express.json({limit:'2kb',inflate:false}), async (req,res)=>{
     res.set('Cache-Control','no-store');
     let receipt;
@@ -171,6 +212,13 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       catch {return res.status(503).json({error:'OPSMAP_SCHEDULE_DISPATCH_UNCONFIRMED'});}
       log(JSON.stringify({component:'opsmap-scheduled-dispatch',state:'QUEUED',runId:receipt.runId}));
       return res.status(202).json({state:'QUEUED',runId:receipt.runId});
+    }
+    if(jobs){
+      try{await jobs.accept(receipt,jobPlan);}
+      catch{return res.status(503).json({error:'OPSMAP_JOBS_NOT_CONFIRMED'});}
+      if(jobFlight)jobWake=true;
+      else scheduleJobs(0);
+      return res.status(202).json({state:'ACCEPTED',runId:receipt.runId});
     }
     if (child || starting) return res.status(409).json({error:'OPSMAP_SCHEDULE_BUSY'});
     let scope=null,registryScope=null;
@@ -186,10 +234,22 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       if (fixedJob && !scope && !fullJob && !nationalJob && !recentJob)
         return res.status(503).json({error:'FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE'});
     }
-    let processHandle;
-    const args=fullJob ? [jobFile,'scheduled',settings] : [jobFile,'fixed-scheduled'];
-    try {processHandle=launch(process.execPath,args,{env,stdio:['pipe',sourceJobs?'pipe':'ignore','pipe'],windowsHide:true});}
-    catch {return res.status(503).json({error:'OPSMAP_SCHEDULE_LAUNCH'});}
+    const input=fixedJob||scopedRegistry?{receipt:req.body,fixedScope:scope,...(scopedRegistry?{registryScope}:{})}:req.body;
+    try{launchJob(receipt,input);}
+    catch{return res.status(503).json({error:'OPSMAP_SCHEDULE_LAUNCH'});}
+    return res.status(202).json({state:'ACCEPTED',runId:receipt.runId});
+  });
+
+  function launchJob(receipt,input,signal) {
+    if(child)throw Error('OPSMAP_SCHEDULE_BUSY');
+    const args=fullJob?[jobFile,'scheduled',settings]:[jobFile,'fixed-scheduled'];
+    if(signal)args.unshift('--max-old-space-size=144','--max-semi-space-size=8');
+    const processHandle=launch(process.execPath,args,{env,stdio:['pipe',sourceJobs?'pipe':'ignore','pipe'],windowsHide:true});
+    let settle, jobResult;
+    const completion=new Promise(resolve=>{settle=resolve;});
+    const stop=()=>processHandle.kill('SIGKILL');
+    if(signal?.aborted)stop();
+    else signal?.addEventListener('abort',stop,{once:true});
     child=processHandle;
     let diagnostic='',timedOut=false;
     // The child emits aggregate evidence only. Never forward raw output.
@@ -200,6 +260,14 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
           if (c!=='\n') {if (!discarded) {line+=c;if(line.length>1024)discarded=true;} continue;}
           try {
             const value=!discarded&&JSON.parse(line);
+            if(value?.component==='opsmap-stage-job-result'&&value.runId===receipt.runId&&value.job===input.scheduledKind){
+              jobResult={state:value.state,error:value.error};
+            }
+            if(value?.component==='opsmap-stage-job-memory'&&value.runId===receipt.runId&&
+                ['START','AFTER_DELIVERY','AFTER_ORDERS','END'].includes(value.phase)){
+              const memory=Object.fromEntries(['rss','heapUsed','external','arrayBuffers'].map(key=>[key,boundedCount(value[key],1024*1024*1024)]));
+              log(JSON.stringify({component:value.component,runId:receipt.runId,job:input.scheduledKind||null,phase:value.phase,...memory}));
+            }
             if(value?.component==='opsmap-fixed-master-pages' && value.runId===receipt.runId) {
               const scan=fixedScanSummary(value);
               if(scan)log(JSON.stringify({component:value.component,runId:receipt.runId,...scan}));
@@ -260,14 +328,18 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       });
     }
     processHandle.stderr.on('data',chunk=>{if(diagnostic.length<100) diagnostic=(diagnostic+chunk).slice(0,100);});
-    const timeout=setTimeout(()=>{timedOut=true;processHandle.kill();},(fullJob?maxRuntime:0)+
+    const limits={generation:maxRuntime,fixed:FIXED_MASTER_WORKER_LIMIT,national:NATIONAL_REGISTRY_WORKER_LIMIT,
+      recent:3*60_000,wms:2*60_000,postal:4*60_000};
+    const timeout=setTimeout(()=>{timedOut=true;stop();},limits[input.scheduledKind]??((fullJob?maxRuntime:0)+
       (fixedJob?FIXED_MASTER_WORKER_LIMIT:0)+(nationalJob?NATIONAL_REGISTRY_WORKER_LIMIT:0)+
-      (recentJob?3*60_000:0));
+      (recentJob?3*60_000:0)));
     timeout.unref();
     const release=(exitCode,error)=>{
       if(child!==processHandle)return;
       child=null;
       clearTimeout(timeout);
+      signal?.removeEventListener('abort',stop);
+      settle(exitCode===0&&jobResult?jobResult:{state:'FAILED',error:timedOut?'OPSMAP_SCHEDULE_TIMEOUT':error||'OPSMAP_SYNC_FAILED'});
       log(JSON.stringify({component:'opsmap-scheduled-run',runId:receipt.runId,exitCode,
         error:timedOut?'OPSMAP_SCHEDULE_TIMEOUT':error || null}));
     };
@@ -277,10 +349,9 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
       release(code,code===0?null:/^[A-Z][A-Z_0-9]{1,95}$/.test(value)?value:'OPSMAP_SYNC_FAILED');
     });
     processHandle.stdin.on('error',()=>{});
-    processHandle.stdin.end(JSON.stringify(fixedJob||scopedRegistry?{receipt:req.body,fixedScope:scope,
-      ...(scopedRegistry?{registryScope}:{})}:req.body));
-    return res.status(202).json({state:'ACCEPTED',runId:receipt.runId});
-  });
+    processHandle.stdin.end(JSON.stringify(input));
+    return completion;
+  }
 }
 
 export async function publishOpsmapScheduledRun({createWorker,durable,receipt}) {

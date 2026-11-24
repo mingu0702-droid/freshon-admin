@@ -61,7 +61,7 @@ async function run() {
   const {fixedScope:scope} = await readIndependentStageScopes(readEnv);
   const baseline = stageFixedMasterBaseline({env, store});
   const result = await syncStageFixedMaster({
-    store, receipt, scope, readMaster: createStageFixedMasterSource({env, onScan, onPage, onPreflight,allowFullRescan:true}),
+    store, receipt, scope, readMaster: createStageFixedMasterSource({env, onScan, onPage, onPreflight}),
     loadBaseline: baseline.load
   });
   console.info(JSON.stringify({component: 'opsmap-fixed-master-sync', ...result}));

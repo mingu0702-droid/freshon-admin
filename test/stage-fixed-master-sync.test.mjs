@@ -506,7 +506,7 @@ test('private GitHub guard exposes no Production or legacy-file writes',async ()
 test('the existing Stage receipt route passes only the verified registry scope to a fixed-only child',async t=>{
   const app=express(), logs=[];
   let child, input='', approvedScope=null;
-  mountOpsmapScheduledRun(app,{env,now:()=>start,readFixedScope:()=>approvedScope,
+  mountOpsmapScheduledRun(app,{env:{...env,OPSMAP_STAGE_SYNC_DURABLE_DISABLED:'1'},now:()=>start,readFixedScope:()=>approvedScope,
     log:value=>logs.push(JSON.parse(value)),launch(exec,args,options) {
       assert.equal(exec,process.execPath);
       assert.deepEqual(args.slice(1),['fixed-scheduled']);
