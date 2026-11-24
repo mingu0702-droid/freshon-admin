@@ -27,6 +27,9 @@ test('archived recovery changes only one exact Osan dispatch day with CAS and ke
   const store={async read(){return {ledger:current,sha};},async write(next,expected){assert.equal(expected,sha);current=next;}};
   const request={store,date,approvedDate:date,now,readArchive:async selected=>{assert.equal(selected,date);return archive;}};
   await assert.rejects(recoverArchivedOsanDispatch({...request,approvedDate:existing.date}),/RECOVERY_SCOPE/);
+  await assert.rejects(recoverArchivedOsanDispatch({...request,now:()=>Date.parse('2026-11-23T14:59:59Z'),
+    store:{async read(){assert.fail('Do not read a current pointer before Seoul day closes');}},
+    readArchive:async()=>assert.fail('Do not read the archive before Seoul day closes')}),/RECOVERY_SCOPE/);
   await assert.rejects(recoverArchivedOsanDispatch({...request,readArchive:async()=>({...archive,center:'yeongnam'})}),/EVIDENCE_INVALID/);
   assert.equal((await recoverArchivedOsanDispatch(request)).state,'VERIFIED_PREVIEW');
   assert.deepEqual(current.days,[existing]);

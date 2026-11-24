@@ -277,6 +277,12 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   assert.equal(events.length,countsBefore);
 
   const staged=reader();
+  assert.equal(staged.configurationFailure(date2),'WMS_EXPORT_DATE_NOT_APPROVED');
+  assert.equal(staged.recoveryConfigurationFailure(date2),null);
+  assert.equal(staged.recoveryConfigurationFailure(date2,{workbook:true}),'WMS_EXPORT_DATE_NOT_APPROVED');
+  assert.equal(staged.recoveryConfigurationFailure('2026-02-31'),'WMS_EXPORT_DATE_NOT_APPROVED');
+  const noKey=createStageWmsDispatchExportReader({env:{...env,OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_KEY_B64:''},fetchImpl});
+  assert.equal(noKey.recoveryConfigurationFailure(date2),'WMS_EXPORT_DATE_NOT_APPROVED');
   assert.deepEqual(await staged.availableDates(),[date,date2,date3]);
   assert.equal((await staged(date)).total,1501);
   const localTimeRelease=await staged(date2);

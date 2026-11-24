@@ -271,6 +271,10 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
   };
   read.hasVerifiedSource=date=>read.dates.includes(date)||indexCache?.entries.some(entry=>entry.date===date);
   read.configurationFailure=configurationFailure;
+  read.recoveryConfigurationFailure=(date,{workbook=false}={})=>{
+    const failure=configurationFailure(date);
+    return !workbook&&failure==='WMS_EXPORT_DATE_NOT_APPROVED'&&releaseStore&&isStageWmsDay(date)?null:failure;
+  };
   read.configuration={serviceVerified,approved,manifestValid:Boolean(manifest),archive:archive?.configuration??null,
     dates:Object.fromEntries(read.dates.map(date=>[date,configurationFailure(date)??'VERIFIED']))};
   return read;

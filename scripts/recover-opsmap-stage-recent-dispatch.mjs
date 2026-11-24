@@ -33,7 +33,9 @@ try {
   const publish=mode==='--publish';
   const store=createStageRecentOperationsStore({env,write:publish,withSha:true});
   const exportReader=createStageWmsDispatchExportReader({env});
-  if (!store || exportReader.configurationFailure(date)) throw Error('RECENT_OPERATIONS_RECOVERY_SCOPE');
+  if (!store || exportReader.recoveryConfigurationFailure(date,{workbook:Boolean(workbook)})) {
+    throw Error('RECENT_OPERATIONS_RECOVERY_SCOPE');
+  }
   const readArchive=workbook?async selected=>exportReader.verifyWorkbook(selected,await readWorkbook(workbook)):exportReader;
   const result=await recoverArchivedOsanDispatch({store,readArchive,date,approvedDate,publish});
   console.log(JSON.stringify(result));
