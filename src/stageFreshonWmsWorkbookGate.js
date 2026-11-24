@@ -110,12 +110,14 @@ async function readFreshonWmsOnce({date,login,fetchImpl,env}) {
 }
 
 export async function syncStageFreshonWmsDispatch({
-  date,observedAt,login,replaceSha256,env=process.env,fetchImpl=fetch,archiveFetchImpl=fetch
+  date,observedAt,login,replaceSha256,reconcileExisting=false,env=process.env,fetchImpl=fetch,archiveFetchImpl=fetch
 }={}) {
   requestScope(date,env);
   if(env.OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED!=='1'||
     !createStageWmsReleaseStore({env,fetchImpl:archiveFetchImpl,write:true}))fail('SCOPE');
-  if(typeof observedAt!=='string'||!Number.isFinite(Date.parse(observedAt))||replaceSha256!==undefined&&!sha.test(replaceSha256))fail('SCOPE');
+  if(typeof observedAt!=='string'||!Number.isFinite(Date.parse(observedAt))||
+    replaceSha256!==undefined&&!sha.test(replaceSha256)||
+    reconcileExisting&&(replaceSha256!==undefined||env.OPSMAP_STAGE_WMS_NIGHT_SLOT_APPROVED!=='1'))fail('SCOPE');
   let manifest;
   try{manifest=JSON.parse(env.OPSMAP_STAGE_WMS_DISPATCH_EXPORTS_JSON);}catch{fail('SCOPE');}
   if(!manifest||typeof manifest!=='object'||Array.isArray(manifest))fail('SCOPE');
@@ -124,18 +126,22 @@ export async function syncStageFreshonWmsDispatch({
   const reader=createStageWmsDispatchExportReader({env,fetchImpl:archiveFetchImpl});
   const legacy=Object.hasOwn(manifest,date)?manifest[date]:null;
   const entry=legacy|| (await releases.readIndex()).entries.find(item=>item.date===date);
+  // Nightly reconciliation may advance a signed release, including a manual
+  // XLSX release, via the same compare-and-swap used by manual corrections.
+  const replacement=reconcileExisting&&!legacy&&entry&&Date.parse(observedAt)>Date.parse(entry.observedAt)
+    ? entry.sha256 : replaceSha256;
   if(entry){
-    if(replaceSha256!==undefined&&(legacy||replaceSha256!==entry.sha256||
+    if(replacement!==undefined&&(legacy||replacement!==entry.sha256||
       Date.parse(observedAt)<=Date.parse(entry.observedAt)))fail('REPLACEMENT');
     const readback=await reader(date);
     if(!readback)fail('ARCHIVE_READBACK');
-    if(replaceSha256===undefined)return {state:'VERIFIED_NOOP',date,sha256:entry.sha256};
-  }else if(replaceSha256!==undefined)fail('REPLACEMENT');
+    if(replacement===undefined)return {state:'VERIFIED_NOOP',date,sha256:entry.sha256};
+  }else if(replacement!==undefined)fail('REPLACEMENT');
   const pinnedDate=Object.keys(manifest).filter(isStageWmsDay).sort().at(-1);
   if(!pinnedDate||!await reader(pinnedDate))fail('ARCHIVE_READBACK');
   const evidence=await readFreshonWmsOnce({date,login,fetchImpl,env});
   const bytes=encodeFreshonWmsDispatch(date,sourceMetadata.get(evidence));
   const sha256=createHash('sha256').update(bytes).digest('hex');
-  return publishStageWmsDispatchExport({bytes,date,observedAt,sha256,replaceSha256,env,
+  return publishStageWmsDispatchExport({bytes,date,observedAt,sha256,replaceSha256:replacement,env,
     format:FRESHON_JSON_WMS_FORMAT,fetchImpl:archiveFetchImpl});
 }

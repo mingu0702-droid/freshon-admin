@@ -856,6 +856,7 @@ test('the signed Stage route schedules only nighttime WMS from the existing hour
   const nightPath=OPSMAP_SCHEDULED_ROUTE+'/wms-night';
   const night=signed(at,'APPS_SCRIPT_TIME_TRIGGER_WMS_NIGHT');
   assert.equal((await post(night)).status,403);
+  assert.equal((await post(signed(at))).status,403);
   assert.equal((await post(signed(at),nightPath)).status,403);
   assert.equal((await post({...night,signature:'c'.repeat(64)},nightPath)).status,403);
   assert.deepEqual(await (await post(night,nightPath)).json(),{state:'WMS_NIGHT_ACCEPTED',runId:night.runId});
@@ -865,10 +866,12 @@ test('the signed Stage route schedules only nighttime WMS from the existing hour
   at=Date.parse(date+'T21:04:00+09:00');
   assert.deepEqual(await (await post(signed(at,'APPS_SCRIPT_TIME_TRIGGER_WMS_NIGHT'),nightPath)).json(),{state:'WMS_NIGHT_ACCEPTED',runId:night.runId});
   assert.equal(files.size,1);
-  // Separate test clock observes a signed daylight handoff and its normal plan.
   at=Date.parse(date+'T07:10:00+09:00');
+  assert.equal((await post(signed(at))).status,403);
+  at=Date.parse(date+'T06:10:00+09:00');
   assert.equal((await post(signed(at))).status,202);
-  assert.deepEqual(files.get('fixed-master-daily-v1/jobs-'+date+'.json').value.jobs,[{kind:'fixed',state:'PENDING'}]);
+  assert.deepEqual(files.get('fixed-master-daily-v1/jobs-'+date+'.json').value.jobs,
+    [{kind:'fixed',state:'PENDING'},{kind:'wms',state:'PENDING'}]);
 });
 
 test('a valid evening-only receipt cannot start daily work when the night feature is off',async t=>{

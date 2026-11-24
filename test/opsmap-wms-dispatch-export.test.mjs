@@ -419,6 +419,38 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   assert.equal((await reader()(date4)).observedAt,'2026-11-30T08:01:00.000Z');
   assert.equal([...files.keys()].filter(name=>name.startsWith('release-'+date4+'-')).length,3);
   assert.deepEqual(files.get(oldPath),oldContent);
+  // The signed nightly run can reconcile a prepublished date once; the
+  // morning fallback checks the saved release without a second source fetch.
+  const counters=()=>[logins,sourceReads,events.length];
+  const nightlyEnv={...jsonEnv,OPSMAP_STAGE_WMS_NIGHT_SLOT_APPROVED:'1'};
+  const nightly=(target,options={})=>submit(target,{reconcileExisting:true,env:nightlyEnv,
+    observedAt:'2026-11-30T12:10:00Z',...options});
+  const nightBefore=counters();
+  await assert.rejects(nightly(date5,{env:jsonEnv}),{code:'WMS_EXPORT_FRESHON_SCOPE'});
+  await assert.rejects(nightly(date5,{replaceSha256:newest.sha256}),{code:'WMS_EXPORT_FRESHON_SCOPE'});
+  assert.equal((await nightly(date)).state,'VERIFIED_NOOP'); // Pinned legacy release.
+  assert.equal((await nightly(date5,{observedAt:'2026-11-28T00:00:00Z'})).sha256,newest.sha256);
+  assert.deepEqual(counters(),nightBefore);
+  const sameNight=await nightly(date5);
+  assert.equal(sameNight.sha256,newest.sha256);
+  assert.equal(sameNight.state,'VERIFIED_NOOP');
+  assert.deepEqual(counters(),[nightBefore[0]+1,nightBefore[1]+1,nightBefore[2]]);
+  const nightOldPath=[...files.keys()].find(f=>f.startsWith('release-'+date5+'-'));
+  const nightOldContent=files.get(nightOldPath);
+  const correctedNight=await nightly(date5,{amount:452});
+  assert.equal(correctedNight.state,'PUBLISHED');
+  assert.equal(correctedNight.supersedes,newest.sha256);
+  assert.equal((await reader()(date5)).total,553);
+  assert.deepEqual(files.get(nightOldPath),nightOldContent);
+  assert.deepEqual(counters().slice(0,2),[nightBefore[0]+2,nightBefore[1]+2]);
+  const posted=counters();
+  assert.equal((await submit(date5,{env:nightlyEnv})).sha256,correctedNight.sha256);
+  assert.deepEqual(counters(),posted);
+  await assert.rejects(nightly(date5,{observedAt:'2026-11-30T12:29:00Z',fetchImpl:async()=>Response.json({data:[]})}),
+    {code:'WMS_EXPORT_FRESHON_PAGE'});
+  assert.equal((await reader()(date5)).total,553);
+  assert.equal(events.length,posted[2]);
+
   const jsonIndex=files.get('release-index-v1.json');
   const withoutType=jsonIndex.value.entries.map(({format,...entry})=>entry);
   files.set('release-index-v1.json',{...jsonIndex,value:{...jsonIndex.value,entries:withoutType}});
