@@ -118,7 +118,7 @@ async function stageHttp(t, directory, expected) {
   const batch=await lookup(expected,cookie);
   assert.equal(batch.status,200);
   const resolved=(await batch.json()).data;
-  assert.deepEqual(resolved[0],{status:'STORED',point:{lat:point.lat,lng:point.lng,coordinateSource:'STAGE_PRESERVED_COORDINATE'}});
+  assert.deepEqual(resolved[0],{status:'STORED',state:'STORED_VERIFIED',point:{lat:point.lat,lng:point.lng,coordinateSource:'STAGE_PRESERVED_COORDINATE'}});
   assert.equal(resolved.length,58);
   assert(resolved.slice(1).every(row=>row.status==='OFFICIAL_ADDRESS_INDEX_UNAVAILABLE'&&!row.point));
   assert.equal((await lookup(expected,null)).status,401);

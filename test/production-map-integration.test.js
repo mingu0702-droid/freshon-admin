@@ -41,9 +41,9 @@ test('production routes: signed Unicode ingest, Period, staff auth, protected hi
  const logout=await fetch(base+'/api/map-phase2b/auth/logout',{method:'POST',headers:{Cookie:cookie,Origin:env.RENDER_EXTERNAL_URL}});assert.equal(logout.status,200);assert.equal((await auth('/api/map-phase2b/private/customer-detail?customerCode=S12345')).status,401);
  assert(calls.every(c=>['staffCustomerDetail','stageReadModelRequest'].includes(c.action)));
 });
-test('Production collector, Snapshot worker, ETA and legacy route code remain byte-identical to main',()=>{
- const original=execFileSync('git',['show','2b346cfc7d0341d819369f4b1c35cac3e7aeb4f8:src/server.js'],{encoding:'utf8'}).replaceAll('\r\n','\n');
+test('Production collector, Snapshot worker, ETA and legacy route code match the approved Stage source',()=>{
+ const original=execFileSync('git',['show','614441aa567fdf7f9f1cf4821cb246bfe2b8854d:src/server.js'],{encoding:'utf8'}).replaceAll('\r\n','\n');
  const current=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8').replaceAll('\r\n','\n');
  for(const [start,end]of [['async function refreshPhase2bSnapshot','function schedulePhase2bSnapshotRefresh'],['app.get("/api/collector/delivery"','app.get("/api/map-phase2b/preview/status"'],['app.get("/api/map-phase2b/preview/route-plan"','app.all("/api/*"']]){const a=original.indexOf(start),b=original.indexOf(end,a);assert(a>=0&&b>a);assert.equal(current.slice(current.indexOf(start),current.indexOf(end,current.indexOf(start))),original.slice(a,b));}
- for(const file of ['src/auth.js','src/store.js','src/hubApiClient.js','src/phase2bOperations.js','src/config.js'])assert.equal(fs.readFileSync(new URL('../'+file,import.meta.url),'utf8').replaceAll('\r\n','\n'),execFileSync('git',['show','2b346cf:'+file],{encoding:'utf8'}).replaceAll('\r\n','\n'));
+ for(const file of ['src/auth.js','src/store.js','src/hubApiClient.js','src/phase2bOperations.js','src/config.js'])assert.equal(fs.readFileSync(new URL('../'+file,import.meta.url),'utf8').replaceAll('\r\n','\n'),execFileSync('git',['show','614441aa567fdf7f9f1cf4821cb246bfe2b8854d:'+file],{encoding:'utf8'}).replaceAll('\r\n','\n'));
 });

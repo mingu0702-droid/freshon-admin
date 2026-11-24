@@ -66,8 +66,8 @@ test('missing centers and conflicting GPS remain unconfirmed',()=>{
 test('fresh source arriving after stale rejection builds boundaries on the next render without refetch',async()=>{
  const f=fixture({stale:true});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);f.master.stale=false;await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().reason,null);assert.equal(f.reads(),1);
 });
-test('manual coordinate event rebuilds only territory geometry while preserving the map and pin owner',async()=>{
- const f=fixture();await f.ui.toggle();const previous=f.polys[0],map=f.state.map;f.stores[0].lat=37.05;await f.events.get('map-coordinate-updated')();assert.equal(previous.map,null);assert.equal(f.ui.state().polygons,1);assert.equal(f.state.map,map);assert.equal(f.polys.at(-1).options.path[0][0].lat,37);assert.equal(f.polys.at(-1).options.path[0][0].lng,127);assert.equal(f.reads(),0);
+test('manual coordinate event rechecks point membership and keeps unchanged official geometry on the same map',async()=>{
+ const f=fixture();await f.ui.toggle();const previous=f.polys[0],map=f.state.map;f.stores[0].lat=37.05;await f.events.get('map-coordinate-updated')();assert.equal(previous.map,map);assert.equal(f.polys.length,1);assert.equal(f.ui.state().polygons,1);assert.equal(f.state.map,map);assert(f.queries.at(-1).points.some(point=>point.lat===37.05));assert.equal(previous.options.path[0][0].lat,37);assert.equal(previous.options.path[0][0].lng,127);assert.equal(f.reads(),0);
 });
 test('four selected verified vehicles draw independently and center changes remove only excluded boundaries',async()=>{
  const stores=[...rows('101'),...rows('122'),...rows('172'),...rows('202','yeongnam')],f=fixture({stores});f.state.selectedVehicles=['101','122','172','202'];await f.ui.toggle();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().sharedTerritories[0].vehicles.length,4);f.state.centerFilter='osan';await f.ui.renderForSelection();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().sharedTerritories[0].vehicles.length,3);assert.equal(f.state.selectedVehicles.length,4);
@@ -82,7 +82,7 @@ test('missing official geometry never turns three customer points into a territo
  const f=fixture({boundaryFailure:503});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'ADMIN_BOUNDARIES_UNAVAILABLE');assert.match(f.nodes.get('#territoryStatus').textContent,/공식 읍면동 경계/);
 });
 test('one verified GPS is sufficient for a real administrative polygon and shared responsibility stays visible',async()=>{
- const f=fixture({stores:[rows('101')[0],rows('122')[0]]});await f.ui.toggle();assert.equal(f.ui.state().polygons,2);assert.deepEqual(f.polys.map(p=>p.options.strokeColor),['color-101','color-122']);assert.match(f.nodes.get('#territoryVehicles').children[0].textContent,/공동 담당/);
+ const f=fixture({stores:[rows('101')[0],rows('122')[0]]});await f.ui.toggle();assert.equal(f.ui.state().polygons,1);assert.equal(f.ui.state().displayedVehicleCount,2);assert.deepEqual(Array.from(f.ui.state().sharedTerritories[0].vehicles),['101','122']);assert.match(f.nodes.get('#territoryVehicles').children[0].textContent,/공동 담당/);
 });
 test('GPS outside bundled subset stays unconfirmed with explicit coverage reason',async()=>{
  const f=fixture({stores:rows().map(r=>({...r,lat:35,lng:128}))});await f.ui.toggle();assert.equal(f.ui.state().polygons,0);assert.equal(f.ui.state().reason,'ADMIN_BOUNDARY_NO_MATCH');assert.equal(f.ui.state().partialCoverage,true);

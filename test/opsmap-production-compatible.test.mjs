@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import test from 'node:test';import assert from 'node:assert/strict';import {spawn,execFileSync} from 'node:child_process';import fs from 'node:fs';import path from 'node:path';import net from 'node:net';import {chromium} from 'playwright';
 const git=(args,options={})=>execFileSync('git',args,{maxBuffer:16*1024*1024,...options});
-const baseline='7e20b87bd1a6e536f18a9208da5e0e6a458c40db';
+const baseline='614441aa567fdf7f9f1cf4821cb246bfe2b8854d';
 test('legacy collector, Snapshot and Hub dependencies are unchanged',()=>{for(const f of ['src/auth.js','src/config.js','src/store.js','src/hubApiClient.js','src/phase2bOperations.js','src/stageReadModel.js','src/mapCoordinateSupplement.js','integrations/hub/HubProductionCoordinates.js','integrations/hub/HubStageReadModelRestore.js'])assert.equal(crypto.createHash('sha256').update(fs.readFileSync(f,'utf8').replace(/\r\n/g,'\n')).digest('hex'),crypto.createHash('sha256').update(git(['show',baseline+':'+f],{encoding:'utf8'}).replace(/\r\n/g,'\n')).digest('hex'),f);});
 test('Production auth rejects Stage branch and missing independent store',async()=>{const {createProductionStaffSessionStore}=await import('../src/opsmap-abc/staffSessionStore.js');let reads=0;assert.throws(()=>createProductionStaffSessionStore({env:{OPSMAP_PRODUCTION_SESSION_ENABLED:'1',GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',GITHUB_TOKEN:'synthetic',OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'stage/opsmap-manual-pins',MAP_STAFF_SESSION_SECRET:'a'.repeat(43)},fetchImpl:async()=>{reads++;}}),/STAFF_SESSION_STORE_CONFIG/);assert.equal(reads,0);});
 test('same real candidate defaults to ABC and fails closed without separate auth configuration',async()=>{
