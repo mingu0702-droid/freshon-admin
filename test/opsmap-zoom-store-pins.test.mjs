@@ -180,7 +180,8 @@ test('Stage counts bound verified points independently of populated coordinates'
     {lat:null,lng:null,center:'yeongnam'},
   ];
   const count = vm.runInNewContext(pointChecks + runtime.slice(start,end) + '\nstaffRegistrationScope', {
-    registrationCounts:null, coordinateByCode:new Map(), allStores:rows, state, dateReady:true, registrationCenter:row=>row.center,
+    registrationCounts:null, searchNeighborhood:null, coordinateByCode:new Map(), allStores:rows, state, dateReady:true,
+    registrationCenter:row=>row.center,
     hasVerifiedStageLocations:()=>true, stageRegistrationOnly:()=>true,
   });
   assert.deepEqual({...count()}, {registered:4,coordinates:3,located:1,source:'AVAILABLE'});
@@ -347,26 +348,34 @@ test('levels five and four split nearby distinct coordinates and keep exact co-l
   }
 });
 
-test('the searched neighborhood includes verified out-of-filter stores without mutating the underlying pin index', () => {
+test('the searched neighborhood separates the 500m reference list from the visible verified registration pins', () => {
   const center={lat:37.5,lng:127};
   const saved=(code,route,meters,patch)=>({...nearbyPoint(code,route,meters,100),...verifiedPoint,...patch});
   const base=saved('S10001','101',0), colocated=saved('S10002','114',0), inside=saved('S10003','114',499.9);
   const allStores=[base,colocated,inside,saved('S10004','114',500.1),saved('S10005','114',3,{coordinateStatus:'UNVERIFIED'}),
     saved('S10006','114',5,{staffRegistrationOnly:true}),saved('S10007','114',6,{customerRegistryStatus:'DELETED'}),
-    saved('S10008','114',7,{currentAddressHash:'b'.repeat(64)})];
+    saved('S10008','114',7,{currentAddressHash:'b'.repeat(64)}),saved('S10009','114',5000),
+    saved('S10010','114',8,{staffRegistrationOnly:true,coordinateStatus:'UNVERIFIED'})];
   const pointIndex=MapPeriodUi.spatialIndex([base]);
   const coord=(lat,lng)=>({getLat:()=>lat,getLng:()=>lng});
-  const state={map:{getBounds:()=>({getSouthWest:()=>coord(37.49,126.99),getNorthEast:()=>coord(37.51,127.01)})}};
+  const state={selectedVehicles:[],map:{getBounds:()=>({getSouthWest:()=>coord(37.49,126.99),getNorthEast:()=>coord(37.51,127.01)})}};
   const start=runtime.indexOf('  function nearbyVerifiedStores('),end=runtime.indexOf('  function overviewVehicleStores(',start);
-  const {nearbyVerifiedStores,detailedMarkerRows}=vm.runInNewContext(pointChecks+runtime.slice(start,end)+'\n({nearbyVerifiedStores,detailedMarkerRows})',{
-    allStores,nearbyStoreIndex:null,markerSourceVersion:1,pointIndex,state,Phase2bUi,MapPeriodUi,window:{MapViewPolicy}
-  });
-  const stores=nearbyVerifiedStores(center);
-  assert.deepEqual(Array.from(stores.map(row=>row.customerCode)),['S10001','S10002','S10003']);
-  const pins=detailedMarkerRows({width:390,height:600},null,'BASE_60D',{stores});
-  assert.deepEqual(Array.from(pins.flatMap(pin=>pin.memberCodes||[pin.customerCode])),['S10001','S10002','S10003']);
+  const {registeredAreaIndex,nearbyVerifiedStores,detailedMarkerRows}=vm.runInNewContext(
+    pointChecks+runtime.slice(start,end)+'\n({registeredAreaIndex,nearbyVerifiedStores,detailedMarkerRows})',{
+      allStores,searchNeighborhood:null,areaViewportIndex:null,pointIndex,state,Phase2bUi,MapPeriodUi,window:{MapViewPolicy},
+      hasVerifiedStageLocations:()=>true,baseVehicleKey:String,optionalNewVehicles:new Set(),mapShowsNewVehicle:()=>true
+    });
+  const areaIndex=registeredAreaIndex();
+  assert.ok(areaIndex.valid.some(row=>row.customerCode==='S10009'));
+  const stores=nearbyVerifiedStores(center,areaIndex);
+  assert.deepEqual(Array.from(stores,row=>row.customerCode).sort(),['S10001','S10002','S10003','S10006']);
+  const pins=detailedMarkerRows({width:390,height:600},null,'BASE_60D',areaIndex,true);
+  assert.deepEqual(Array.from(pins.flatMap(pin=>pin.memberCodes||[pin.customerCode])).sort(),
+    ['S10001','S10002','S10003','S10004','S10006']);
   assert.deepEqual(pointIndex.valid,[base]);
-  assert.equal(pins[0].clusterKind,'location');
+  const colocatedPin=pins.find(pin=>pin.memberCodes?.includes('S10001'));
+  assert.equal(colocatedPin.clusterKind,'location');
+  assert.deepEqual(Array.from(colocatedPin.memberCodes),['S10001','S10002']);
 });
 
 test('pin reconciliation reuses unchanged overlays across viewport and selection changes', () => {
