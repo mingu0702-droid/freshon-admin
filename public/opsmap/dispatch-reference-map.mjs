@@ -1,4 +1,4 @@
-import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs?v=20261124-freshon-json';
+import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs?v=20261124-wms-totals';
 import {summarizeDispatchPeriod} from './dispatch-reference-period.mjs?v=20261124-period-proof';
 
 const meters = km => Number.isFinite(km) ? new Intl.NumberFormat('ko-KR').format(Math.round(km*1000))+'m' : '미확인';
@@ -369,8 +369,12 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       'WMS 내보내기 범위 · 오산 전체 운행호차 완전성 미확인':model.routeVerified?
         '확정 배차 원장 범위':'확정 배차 완전성 미확인';
     const amounts=model.amountsVerified?'WMS 배송일 '+model.amountDate+' · 자료 확인 '+sourceTime(model.amountObservedAt):'해당 배송일 WMS 금액 미확인';
+    const sourceTotals=model.sourceTotals;
+    const headline=sourceTotals
+      ?'<p>WMS 원장 합계 <strong>'+money(sourceTotals.amount)+'</strong> · 배송 <strong>'+
+        sourceTotals.deliveryCount.toLocaleString('ko-KR')+'건</strong></p>':'';
     return '<section class="dispatch-provenance"><strong>배송일 '+escape(model.date)+' · '+dateKind+'</strong>'+
-      '<p>'+escape(scope)+'</p><p>'+escape(amounts)+'</p>'+
+      '<p>'+escape(scope)+'</p><p>'+escape(amounts)+'</p>'+headline+
       (model.date>today?'<p>배송완료 내역은 배송일 이후 확인할 수 있습니다.</p>':'')+'</section>';
   }
 

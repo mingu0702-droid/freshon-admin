@@ -84,6 +84,12 @@ export function createDispatchReference(day, stores, date) {
   }
   if (!amountsVerified) amounts.clear();
   const amountTotal=amountsVerified ? [...amounts.values()].reduce((sum,row)=>sum+row.amount,0) : null;
+  const sameWmsExport=['WMS_CONFIRMED_DISPATCH_EXPORT','WMS_CONFIRMED_DISPATCH_FRESHON_JSON'].includes(day.route?.source)&&
+    day.amounts?.source===day.route?.source;
+  const reported=day.amounts?.sourceTotals;
+  const sourceTotals=amountsVerified&&sameWmsExport&&Number.isSafeInteger(reported?.amount)&&reported.amount===amountTotal&&
+    Number.isSafeInteger(reported.deliveryCount)&&reported.deliveryCount>=0
+    ?{amount:reported.amount,deliveryCount:reported.deliveryCount}:null;
   const unassigned=routeVerified&&Number.isSafeInteger(day.route.unassigned)&&day.route.unassigned>=0 ? day.route.unassigned : null;
   const vehicles=new Map();
   for (const vehicle of new Set([...routes.keys(),...amounts.keys()])) {
@@ -93,7 +99,7 @@ export function createDispatchReference(day, stores, date) {
       amount:amount?.amount ?? null, detail,displayAmounts,detailSummary:summary,registryMisses:amount?.unmatched??null});
   }
   return {date, routeVerified,routeState, routeSource:day.route?.source??null, routeObservedAt:day.route?.observedAt ?? null, unassigned, amountDate, amountsVerified,amountTotal,
-    sameWmsExport:['WMS_CONFIRMED_DISPATCH_EXPORT','WMS_CONFIRMED_DISPATCH_FRESHON_JSON'].includes(day.route?.source)&&day.amounts?.source===day.route?.source,
+    sameWmsExport,sourceTotals,
     exportFailure:day.amounts?.exportFailure,
     amountObservedAt:day.amounts?.observedAt ?? null, vehicles};
 }

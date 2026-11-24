@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { createOpsmapDispatchReferenceReader, mountOpsmapDispatchReference } from '../src/opsmapDispatchReference.js';
 import { deliverySourceObservation } from '../src/snapshotRefreshEvidence.js';
 import { coordinateAddressHash } from '../src/opsmap-abc/opsmapAutoCoordinates.js';
+import {createDispatchReference} from '../public/opsmap/dispatch-reference.mjs';
 import { summarizeDispatchPeriod } from '../public/opsmap/dispatch-reference-period.mjs';
 
 const date = '2026-11-21';
@@ -191,7 +192,7 @@ test('tomorrow only reads the verified WMS archive and refuses delivery or futur
       wmsReads++;
       assert.equal(day,tomorrow);
       return available ? {source:'WMS_CONFIRMED_DISPATCH_FRESHON_JSON',date:tomorrow,center:'osan',
-        observedAt:'2026-11-30T12:00:00Z',vehicles:[{vehicle:'101',amount:10,detailTotal:10,difference:0,
+        observedAt:'2026-11-30T12:00:00Z',total:10,deliveryCount:2,vehicles:[{vehicle:'101',amount:10,detailTotal:10,difference:0,
           deliveryCount:1,details:[{customerCode:'S91001',amount:10}]}]} : null;
     },
   });
@@ -217,6 +218,11 @@ test('tomorrow only reads the verified WMS archive and refuses delivery or futur
   assert.equal(data.route.state,'VERIFIED');
   assert.equal(data.route.source,'WMS_CONFIRMED_DISPATCH_FRESHON_JSON');
   assert.equal(data.amounts.vehicles[0].amount,10);
+  assert.deepEqual(data.amounts.sourceTotals,{amount:10,deliveryCount:2});
+  assert.deepEqual(createDispatchReference(data,[],tomorrow).sourceTotals,{amount:10,deliveryCount:2});
+  assert.equal(data.route.rows.length,1);
+  const conflicting={...data,amounts:{...data.amounts,sourceTotals:{amount:9,deliveryCount:2}}};
+  assert.equal(createDispatchReference(conflicting,[],tomorrow).sourceTotals,null);
   assert.equal(data.route.completedRows,undefined);
   assert.equal(wmsReads,1);
   available=false;

@@ -117,7 +117,9 @@ export function projectOpsmapWmsDispatch(exported, registry, postcodes=new Map()
   return {date:exported.date,center:exported.center,source:exported.source,
     route:{state:'VERIFIED',observedAt:exported.observedAt,source:exported.source,rows,
       unassigned:exported.vehicles.find(row=>row.vehicle==='미배정')?.deliveryCount??0},
-    amounts:{date:exported.date,state:'VERIFIED',observedAt:exported.observedAt,source:exported.source,vehicles}};
+    amounts:{date:exported.date,state:'VERIFIED',observedAt:exported.observedAt,source:exported.source,
+      ...(Number.isSafeInteger(exported.total)&&Number.isSafeInteger(exported.deliveryCount)&&exported.deliveryCount>=0
+        ?{sourceTotals:{amount:exported.total,deliveryCount:exported.deliveryCount}}:{}),vehicles}};
 }
 
 export function sealOpsmapWmsDispatchExport(bytes, {date,observedAt,key}) {
