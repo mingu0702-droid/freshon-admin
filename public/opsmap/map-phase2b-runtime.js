@@ -50,6 +50,8 @@
     return hybridUi;
   });
   function purgeStaffData(){
+    stopFirstPinPaintAudit();
+    delete $('#map').dataset.firstPinPaint;
     recentOperationsScope='recent';recentOperationsState='loading';recentOperationsSearchCode='';
     recentOperationsReport=recentOperationsFlight=recentOperationsSelection=null;recentOperationsNextRead=0;
     syncRecentOperationsUi();
@@ -1744,6 +1746,39 @@
     mapHandlers=[];
   }
 
+  let firstPinPaintAudit=null;
+  const firstPinPaintIdentifier='opsmap-first-pin-label';
+  function stopFirstPinPaintAudit(){
+    if(!firstPinPaintAudit)return;
+    firstPinPaintAudit.observer.disconnect();
+    clearTimeout(firstPinPaintAudit.timeout);
+    firstPinPaintAudit=null;
+  }
+  function auditFirstPinPaint(label){
+    if(!label?.textContent||window.location.hash!=='#opsmap-frame-audit'||!stageAddressBatchEnabled()||
+       document.body.dataset.mapStaffState!=='authenticated'||
+       !window.PerformanceObserver?.supportedEntryTypes?.includes('element'))return;
+    const map=$('#map');
+    if(!map||map.dataset.firstPinPaint)return;
+    if(!firstPinPaintAudit){
+      const observer=new PerformanceObserver(list=>{
+        if(document.body.dataset.mapStaffState!=='authenticated'){
+          stopFirstPinPaintAudit();return;
+        }
+        if(document.visibilityState!=='visible')return;
+        const paints=list.getEntries().filter(entry=>entry.identifier===firstPinPaintIdentifier&&
+          entry.renderTime>0&&entry.intersectionRect.width>0&&entry.intersectionRect.height>0&&map.contains(entry.element));
+        if(!paints.length)return;
+        const renderTime=Math.min(...paints.map(entry=>entry.renderTime));
+        map.dataset.firstPinPaint=JSON.stringify({renderTimeMs:Math.round(renderTime),evidence:'ELEMENT_TIMING'});
+        stopFirstPinPaintAudit();
+      });
+      observer.observe({type:'element'});
+      firstPinPaintAudit={observer,timeout:setTimeout(stopFirstPinPaintAudit,15000)};
+    }
+    label.setAttribute('elementtiming',firstPinPaintIdentifier);
+  }
+
   let frameAudit=null,frameAuditId=0;
   function auditMapFrames(map,gesture) {
     if(!stageAddressBatchEnabled()||window.location.hash!=='#opsmap-frame-audit'||frameAudit)return;
@@ -2212,6 +2247,7 @@
         if(status || assignment.kind === 'unverified')label.className='pinStatus';
         label.textContent=status ? assignment.label.slice(0,2)+'\n'+assignment.label.slice(2) : pinLabel;
       }
+      if(base&&window.location.hash==='#opsmap-frame-audit')auditFirstPinPaint(label);
       pin.append(label);
       if(index&&!group)pin.title=`${assignmentTitle||'호차 정보 없음'} · 착순 ${index}`;
       button.classList.add('approvedMarker');button.append(pin);
@@ -2219,6 +2255,7 @@
       const label=row.overviewRoutes?row.overviewRoutes.length+'호차':kind==='virtual'?'임시':
         !assignment.code?pinLabel:group||index||pinLabel;
       button.innerHTML=`<svg class="pinShape" viewBox="0 0 28 34" aria-hidden="true"><path d="M14 1C6.8 1 1 6.8 1 14C1 23 14 34 14 34S27 23 27 14C27 6.8 21.2 1 14 1Z"/></svg><span class="pinNumber">${esc(label)}</span><span class="markerLabel">${esc(button.title)}</span>`;
+      if(base&&kind!=='virtual'&&window.location.hash==='#opsmap-frame-audit')auditFirstPinPaint(button.querySelector('.pinNumber'));
     }
     bindMapMarkerSelection(button,row,kind);
     if(window.MapNavigationEditor?.values?.().some(code=>markerHasStore(row,code)))button.classList.add('navAssigned');
@@ -5947,7 +5984,7 @@
     refreshVehicleUi(false);
   });
   window.addEventListener('pagehide',event=>{
-    cancelViewportRender();cancelManualRoadRoute();resetRoadRoute();
+    stopFirstPinPaintAudit();cancelViewportRender();cancelManualRoadRoute();resetRoadRoute();
     if(event.persisted)hybridUi?.cancel();else{hybridUi?.dispose();releaseMapHandlers();}
   });
   window.addEventListener('pageshow',event=>{if(event.persisted)mapCamera?.scheduleRelayout();});
