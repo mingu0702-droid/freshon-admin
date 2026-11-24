@@ -79,6 +79,12 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   let savedView=null;
   const isOpen=()=>active&&!controls.hidden;
   const dayNow=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const tomorrow=day=>new Date(Date.parse(day)+86400_000).toISOString().slice(0,10);
+  function updateDateLimit(periodMode) {
+    const today=dayNow();
+    date.max=periodMode?today:tomorrow(today);
+    return today;
+  }
   const map=()=>bridge.state.map;
   const sdk=()=>window.kakao?.maps;
 
@@ -356,14 +362,16 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   }
 
   function dailyProvenance() {
-    const dateKind=model.date===dayNow()?'당일':'과거';
+    const today=dayNow();
+    const dateKind=model.date>today?'내일 확정 배차':model.date===today?'당일':'과거';
     const scope=model.routeSource==='WMS_CONFIRMED_DISPATCH_FRESHON_JSON'?
       'FreshOn 확정배차 조회 범위 · 오산 전체 운행호차 완전성 미확인':model.routeSource==='WMS_CONFIRMED_DISPATCH_EXPORT'?
       'WMS 내보내기 범위 · 오산 전체 운행호차 완전성 미확인':model.routeVerified?
         '확정 배차 원장 범위':'확정 배차 완전성 미확인';
     const amounts=model.amountsVerified?'WMS 배송일 '+model.amountDate+' · 자료 확인 '+sourceTime(model.amountObservedAt):'해당 배송일 WMS 금액 미확인';
     return '<section class="dispatch-provenance"><strong>배송일 '+escape(model.date)+' · '+dateKind+'</strong>'+
-      '<p>'+escape(scope)+'</p><p>'+escape(amounts)+'</p></section>';
+      '<p>'+escape(scope)+'</p><p>'+escape(amounts)+'</p>'+
+      (model.date>today?'<p>배송완료 내역은 배송일 이후 확인할 수 있습니다.</p>':'')+'</section>';
   }
 
   function repeatedCustomerWarning() {
@@ -648,12 +656,14 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     event.preventDefault();
     const prior=[primary.value,secondary.value];
     const periodMode=mode.value==='period';
+    const today=updateDateLimit(periodMode), selectedDate=date.value;
     reset();
+    if(!selectedDate||!date.validity.valid)return;
     const controller=request=new AbortController();
     status.textContent=periodMode?'확정된 기간 자료를 분석하고 있습니다.':'확정 배차와 WMS 금액을 조회하고 있습니다.';
     try {
       const options={signal:controller.signal};
-      const value=periodMode?await readPeriod(date.value,Number(days.value),options):await readDay(date.value,options);
+      const value=periodMode?await readPeriod(selectedDate,Number(days.value),options):await readDay(selectedDate,options);
       if (controller.signal.aborted || !isOpen()) return;
       if (periodMode) {
         period=value;
@@ -665,9 +675,9 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
         updatePeriod();
         return;
       }
-      model=createDispatchReference(value,[],date.value);
+      model=createDispatchReference(value,[],selectedDate);
       if (!model.routeVerified && !model.vehicles.size) {
-        status.textContent='선택한 배송일의 확정 배차 미확인 · WMS 금액 미확인';
+        status.textContent=selectedDate>today?'내일 게시된 확정 배차가 아직 없습니다.':'선택한 배송일의 확정 배차 미확인 · WMS 금액 미확인';
         return;
       }
       status.textContent=[!model.routeVerified&&'확정 배차 미확인',!model.amountsVerified&&'같은 배송일 WMS 금액 미확인'].filter(Boolean).join(' · ');
@@ -684,6 +694,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   periodBasis.onchange=()=>{if (period) updatePeriod();};
   mode.onchange=()=>{
     const periodMode=mode.value==='period';
+    updateDateLimit(periodMode);
+    if(date.value>date.max)date.value=date.max;
     $('.dispatch-period-field').hidden=!periodMode;
     $('.dispatch-period-basis').hidden=!periodMode;
     $('.dispatch-period-vehicles').hidden=!periodMode;
@@ -706,8 +718,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       details.open=true;
       if (mapNode) observer.observe(mapNode);
       mapReset?.addEventListener('click',fitRoutes);
-      date.max=dayNow();
-      date.value=date.max;
+      date.value=updateDateLimit(mode.value==='period');
       window.addEventListener('map-sdk-ready',wireMap);
       window.addEventListener('map-store-selected',selectFromMap);
       window.addEventListener('map-fixed-master-ready',renderDetail);

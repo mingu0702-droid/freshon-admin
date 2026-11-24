@@ -97,7 +97,7 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
       ...(includeCompleted?{completedCoverage:complete?'VERIFIED':'PARTIAL'}:{})};
   }
 
-  async function read(date,publication=getPublication(),allowSource=false,includeCompleted=false) {
+  async function read(date,publication=getPublication(),allowSource=false,includeCompleted=false,archiveOnly=false) {
     let wmsFailure = null;
     const wms = await Promise.resolve().then(()=>readWmsExport?.(date)).catch(error=>{
       wmsFailure = safeExportFailure(error?.code);
@@ -141,6 +141,9 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
         return {contract:CONTRACT,...projected,route:{...projected.route,projectionFailure}};
       } catch { /* Existing verified dispatch and amount sources remain available below. */ }
     } else if (wms) wmsFailure=wms.date!==date?'DATE_MISMATCH':'WMS_EXPORT_WAREHOUSE_INVALID';
+    if(archiveOnly)return {contract:CONTRACT,date,center:CENTER,
+      route:{...unavailableRoute(),...(projectionFailure?{projectionFailure}:{})},
+      amounts:{...unavailableAmounts(date),...(wmsFailure?{exportFailure:wmsFailure}:{})}};
     const amountsRead = Promise.resolve().then(() => readAmounts?.(date)).catch(() => null);
     let route=await archivedRoute(date,publication,includeCompleted);
     if (route.state!=='VERIFIED'&&readRetainedDated) {
@@ -156,6 +159,7 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
       amounts:{...(amounts?.date===date ? amounts : unavailableAmounts(date)), ...(wmsFailure?{exportFailure:wmsFailure}:{})}};
   }
   read.dated=date=>read(date,getPublication(),true);
+  read.archiveOnly=date=>read(date,getPublication(),false,false,true);
 
   const dayJobs=new Map();
   function periodDay(date,publication) {
@@ -197,12 +201,15 @@ export function mountOpsmapDispatchReference(app,{requireStaff, read, today, onD
   app.get('/api/map-phase2b/private/dispatch-reference-day',requireStaff,async (req,res) => {
     res.set('Cache-Control','private, no-store').vary('Cookie');
     const {date,source} = req.query;
-    if (!exactDay(date)||date>today()||source!==undefined&&(source!=='dated'||date>=today())||
+    const current=today();
+    const tomorrow=new Date(Date.parse(current)+86400_000).toISOString().slice(0,10);
+    if (!exactDay(date)||date>tomorrow||date===tomorrow&&typeof read.archiveOnly!=='function'||
+        source!==undefined&&(source!=='dated'||date>=current)||
         Object.keys(req.query).some(key=>key!=='date'&&key!=='source')) {
       return res.status(400).json({error:'DISPATCH_REFERENCE_DATE_INVALID'});
     }
     try {
-      const result = await (source==='dated'&&read.dated?read.dated(date):read(date));
+      const result = await (date===tomorrow?read.archiveOnly(date):source==='dated'&&read.dated?read.dated(date):read(date));
       if (res.destroyed || res.writableEnded) return;
       return requireStaff(req,res,()=>{
         onDay?.(result);

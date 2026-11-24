@@ -179,3 +179,49 @@ test('the day route requires staff before reads and rechecks staff before sendin
   assert.equal(reads,1);
   assert.deepEqual(await revoked.json(),{error:'STAFF_LOGIN_REQUIRED'});
 });
+
+
+test('tomorrow only reads the verified WMS archive and refuses delivery or future period queries',async t=>{
+  const current='2026-11-30',tomorrow='2026-12-01';
+  let wmsReads=0,available=true;
+  const noDelivery=()=>assert.fail('tomorrow must not read a delivery or fallback amount source');
+  const read=createOpsmapDispatchReferenceReader({getPublication:()=>({generation:'fixed',readDay:noDelivery}),
+    readAmounts:noDelivery,readDated:noDelivery,readRetainedDated:noDelivery,
+    readWmsExport:day=>{
+      wmsReads++;
+      assert.equal(day,tomorrow);
+      return available ? {source:'WMS_CONFIRMED_DISPATCH_FRESHON_JSON',date:tomorrow,center:'osan',
+        observedAt:'2026-11-30T12:00:00Z',vehicles:[{vehicle:'101',amount:10,detailTotal:10,difference:0,
+          deliveryCount:1,details:[{customerCode:'S91001',amount:10}]}]} : null;
+    },
+  });
+  const app=express();
+  mountOpsmapDispatchReference(app,{read,today:()=>current,requireStaff(req,res,next){
+    if(req.get('X-Test-Staff')!=='yes')return res.sendStatus(401);
+    next();
+  }});
+  const listener=app.listen(0,'127.0.0.1');
+  await once(listener,'listening');
+  t.after(()=>new Promise(resolve=>listener.close(resolve)));
+  const url='http://127.0.0.1:'+listener.address().port+'/api/map-phase2b/private/dispatch-reference-';
+  const options={headers:{'X-Test-Staff':'yes'}};
+  assert.equal((await fetch(url+'day?date='+tomorrow)).status,401);
+  assert.equal((await fetch(url+'day?date='+tomorrow+'&source=dated',options)).status,400);
+  assert.equal((await fetch(url+'day?date=2026-12-02',options)).status,400);
+  assert.equal((await fetch(url+'period?end='+tomorrow+'&days=7',options)).status,400);
+  assert.equal(wmsReads,0);
+  const answer=await fetch(url+'day?date='+tomorrow,options);
+  assert.equal(answer.status,200);
+  assert.equal(answer.headers.get('cache-control'),'private, no-store');
+  const data=await answer.json();
+  assert.equal(data.route.state,'VERIFIED');
+  assert.equal(data.route.source,'WMS_CONFIRMED_DISPATCH_FRESHON_JSON');
+  assert.equal(data.amounts.vehicles[0].amount,10);
+  assert.equal(data.route.completedRows,undefined);
+  assert.equal(wmsReads,1);
+  available=false;
+  const absent=await (await fetch(url+'day?date='+tomorrow,options)).json();
+  assert.equal(absent.route.state,'UNAVAILABLE');
+  assert.equal(absent.amounts.state,'UNAVAILABLE');
+  assert.equal(wmsReads,2);
+});
