@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {test} from 'node:test';
 import express from 'express';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageRecentOrdersReader} from '../src/stageRecentOrders.js';
 import {
   createRecentOperationsReader,createStageRecentOperationsStore,mergeRecentOperations,mountRecentOperations,normalizeRecentOperations,openRecentOperations,
-  projectRecentOperations,RECENT_OPERATIONS_ROUTE,recentOperationsKey,recoverArchivedOsanDispatch,sealRecentOperations,syncStageRecentOperations
+  projectRecentOperations,RECENT_OPERATIONS_ROUTE,recentOperationsKey,recoverArchivedOsanDispatch,recoverSealedRecentOrders,
+  sealRecentOperations,syncStageRecentOperations
 } from '../src/stageRecentOperations.js';
 
 const initialStart='2026-08-20', initialEnd='2026-11-17';
@@ -14,6 +16,30 @@ const makeDay=(date,source,coverage,codes=[],centerKey='osan')=>({date,source,ce
     freshon_orders:'order_confirmed',wms_dispatch:'dispatch_confirmed',delivery_admin:'delivery_completed'
   }[source]}))});
 const ledger=(...days)=>normalizeRecentOperations({startDate:initialStart,endDate:initialEnd,days});
+
+test('sealed order recovery adds only exact partial orders and verifies the CAS readback',async()=>{
+  const date='2026-11-19', sha='b'.repeat(40), latest='2026-11-23';
+  const existing=makeDay(date,'delivery_admin','partial',['A1']);
+  const before=mergeRecentOperations(ledger(),latest,[existing]);
+  let ledgerValue=before, writes=0;
+  const orders=['osan','yeongnam','honam'].map((center,index)=>
+    makeDay(date,'freshon_orders','partial',['A'+(index+1)],center));
+  const key=recentOperationsKey(Buffer.alloc(32,6).toString('base64'));
+  const bytes=Buffer.from(JSON.stringify(await sealRecentOperations(mergeRecentOperations(ledger(),date,orders),key)));
+  const store={async read(){return {ledger:ledgerValue,sha};},async write(next,expected){
+    assert.equal(expected,sha);ledgerValue=next;writes++;
+  }};
+  const options={date,approvedDate:date,approvedSha256:createHash('sha256').update(bytes).digest('hex'),
+    key,store,readArchive:async()=>bytes,now:()=>Date.parse('2026-11-24T14:00Z')};
+  assert.equal((await recoverSealedRecentOrders(options)).state,'VERIFIED_PREVIEW');
+  assert.equal(writes,0);
+  await assert.rejects(recoverSealedRecentOrders({...options,approvedSha256:'f'.repeat(64)}),/EVIDENCE_INVALID/);
+  assert.equal((await recoverSealedRecentOrders({...options,publish:true})).state,'PUBLISHED');
+  assert.equal(ledgerValue.endDate,latest);
+  assert.deepEqual(ledgerValue.days.find(day=>day.source==='delivery_admin'),existing);
+  assert.equal((await recoverSealedRecentOrders({...options,publish:true})).state,'VERIFIED_NOOP');
+  assert.equal(writes,1);
+});
 
 test('archived recovery changes only one exact Osan dispatch day with CAS and keeps evidence partial',async()=>{
   const date='2026-11-23', sha='a'.repeat(40), now=()=>Date.parse('2026-11-24T00:00:00Z');

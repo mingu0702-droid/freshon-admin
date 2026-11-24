@@ -471,6 +471,37 @@ function projectArchivedOsanDispatch(archive,date){
     rows:[...customers].map(customerCode=>({customerCode,evidence:'dispatch_confirmed'}))}};
 }
 
+export async function recoverSealedRecentOrders({
+  store,readArchive,date,approvedDate,approvedSha256,key,publish=false,now=Date.now
+}={}) {
+  const closedDay=latestClosedDay(now());
+  if (!isDay(date)||date!==approvedDate||date>closedDay||date<datesFor(closedDay,90)[0]||
+      !hash.test(approvedSha256??'')||!store?.read||!readArchive||publish&&!store.write) {
+    throw Error('RECENT_OPERATIONS_RECOVERY_SCOPE');
+  }
+  const bytes=await readArchive();
+  if (!Buffer.isBuffer(bytes)||bytes.length>maxPackedBytes+1024||sha256(bytes)!==approvedSha256) throw rejected();
+  const archive=await openRecentOperations(JSON.parse(bytes),key);
+  if (archive.endDate!==date||archive.days.length!==recentOperationsCenters.length||
+      archive.days.some(day=>day.date!==date||day.source!=='freshon_orders'||day.coverage!=='partial'||!day.rows.length)||
+      archive.recovery) throw rejected();
+  const {ledger:base,sha}=await store.read()??{};
+  if (!base||base.endDate<date||base.endDate>closedDay||date<base.startDate||!codeRevision.test(sha??'')) {
+    throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
+  }
+  const next=mergeRecentOperations(base,base.endDate,archive.days);
+  const groups=ledger=>Object.fromEntries(recentOperationsCenters.map(centerKey=>[centerKey,Object.fromEntries(
+    ledger.days.filter(day=>day.date===date&&day.centerKey===centerKey).map(day=>[day.source,day.rows.length]))]));
+  const report={date,archiveSha256:approvedSha256,endDate:next.endDate,before:groups(base),after:groups(next)};
+  if (JSON.stringify(next)===JSON.stringify(base)) return {state:'VERIFIED_NOOP',...report};
+  if (!publish) return {state:'VERIFIED_PREVIEW',...report};
+  try {await store.write(next,sha);}
+  catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',...report};throw error;}
+  const saved=await store.read();
+  if (JSON.stringify(saved?.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
+  return {state:'PUBLISHED',...report};
+}
+
 export async function recoverArchivedOsanDispatch({
   store,readArchive,date,approvedDate,publish=false,now=Date.now
 }={}) {
