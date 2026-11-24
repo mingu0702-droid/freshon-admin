@@ -119,7 +119,8 @@
   $('.scrollside').append(workspace);
   const routeTotals=document.createElement('div');routeTotals.id='mapRouteTotals';routeTotals.hidden=true;
   routeTotals.setAttribute('role','status');
-  routeTotals.innerHTML='<span>주행거리 <b id="navDistance">— km</b></span><span>· 예상 <b id="navDuration">— 분</b></span>';
+  routeTotals.innerHTML='<span><small>주행거리</small><b id="navDistance">— km</b></span>'+
+    '<span><small>예상시간</small><b id="navDuration">— 분</b></span>';
   mapReadout.append(routeTotals);
   if($('#syncOperation'))$('#navigationSummary').append($('#syncOperation'));
   const centerChoices=document.createElement('div');centerChoices.className='navCenterChoices';centerChoices.setAttribute('aria-label','센터에서 출발');planner.querySelector('summary').after(centerChoices);

@@ -6,10 +6,22 @@
 .approvedShellCandidate .navigationWorkspace>section,.approvedShellCandidate .navigationWorkspace>details{min-width:0;margin:0;padding:12px;border:1px solid #e3e8ef;border-radius:8px}
 .approvedShellCandidate .navigationWorkspace #runListTool,.approvedShellCandidate #navMissingStores{grid-column:1/-1}
 .approvedShellCandidate #navigationPreview{display:none}
-#mapRouteTotals{display:flex;flex-wrap:wrap;align-items:center;gap:2px 5px;max-width:100%;min-height:40px;padding:6px 10px;border:1px solid var(--line,#d8e1ea);border-radius:8px;background:var(--panel,#fff);box-shadow:0 2px 10px #1634471c;color:#39495f;font-size:12px;pointer-events:none}
-#mapRouteTotals[hidden]{display:none}
-#mapRouteTotals span{white-space:nowrap}
-#mapRouteTotals b{color:#2454a4;font-size:14px;white-space:nowrap}
+#mapRouteTotals {
+  position:absolute; inset-inline-start:50%; inset-block-start:calc(100% + 10px);
+  transform:translateX(-50%); display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+  align-items:center; width:max-content; max-width:100%; padding:9px 0;
+  border:1px solid #bbd0e9; border-radius:10px; background:var(--panel,#fff);
+  box-shadow:0 3px 14px #1634472e; color:#364d6a; pointer-events:none;
+  font-variant-numeric:tabular-nums;
+}
+#mapRouteTotals[hidden] { display:none; }
+#mapRouteTotals > span {
+  display:grid; justify-items:center; gap:3px; padding-inline:clamp(11px,2vw,27px);
+  text-align:center; white-space:nowrap;
+}
+#mapRouteTotals > span + span { border-inline-start:1px solid #d9e5f2; }
+#mapRouteTotals small { color:#435a77; font-size:12px; font-weight:650; line-height:1.2; }
+#mapRouteTotals b { color:#174f9d; font-size:clamp(20px,2.3vw,31px); line-height:1.15; white-space:nowrap; }
 .approvedShellCandidate .navToggles{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin:12px 0}
 .approvedShellCandidate .navToggles input{width:auto;height:auto}
 .approvedShellCandidate #navRouteStatus{font-size:12px;overflow-wrap:anywhere}
