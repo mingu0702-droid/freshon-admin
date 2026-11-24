@@ -206,7 +206,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       }
       coverage.textContent=codes.length ? (period?'지도 경계 ':'공통 우편번호 '+codes.length+'곳 · 경계 ')+count+'곳'+
         (count<codes.length?' · 일부 경계 미확인':'') : '';
-    })();
+    })().finally(()=>{if(outlineRequest===controller)outlineRequest=null;});
   }
 
   function wireMap() {
@@ -641,7 +641,11 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     }
     if(screenReview&&!period){
       const expected=code?[code]:(comparisons?.secondary?.sharedPostalCodes||[]).slice(0,8);
-      if(JSON.stringify(selectedPostcodes)!==JSON.stringify(expected)){
+      if(code&&!selectedPostcodes.includes(code)){
+        clearOutlines();
+        selectedPostcodes=expected;
+        addOutlines();
+      }else if(!outlineRequest&&!polygonBounds.has(code)&&code){
         clearOutlines();
         selectedPostcodes=expected;
         addOutlines();

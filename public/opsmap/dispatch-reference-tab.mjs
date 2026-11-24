@@ -35,7 +35,7 @@ if (tabs && sidebar && bridge) {
     return result;
   }
   async function readOutline(id,{signal}) {
-    const result=await read('shadow-coverage/postal/outline',{id},signal);
+    const result=await read('shadow-coverage/postal/outline',{id},signal,review?40_000:15_000);
     return result.data?.id===id?result.data:null;
   }
 
@@ -88,7 +88,7 @@ if (tabs && sidebar && bridge) {
           rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261124-osan-layer',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261124-staff-screen-review-v2');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261124-stable-review-outline');
         if (opening!==attempt||!session()) return;
         const createReview=review?(await import('./dispatch-reference-review.mjs?v=20261124-staff-screen-review-v2')).createDispatchScreenReview:null;
         if (opening!==attempt||!session()) return;
