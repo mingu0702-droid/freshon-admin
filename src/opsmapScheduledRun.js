@@ -17,6 +17,7 @@ const HOUR=3_600_000;
 const maxRuntime=18*60_000;
 const kstDate=ms=>new Date(ms+9*HOUR).toISOString().slice(0,10);
 const jobFile=fileURLToPath(new URL('../scripts/run-opsmap-data-sync.mjs',import.meta.url));
+const fixedJobFile=fileURLToPath(new URL('../scripts/run-stage-fixed-master.mjs',import.meta.url));
 const sourceKeys=new Set(['customerRegistry','delivery:1','delivery:2','delivery:3','delivery:4']);
 const fixedCenters=['011','012','013'];
 const boundedCount=(value,max=120_000)=>Number.isSafeInteger(value)&&value>=0&&value<=max?value:null;
@@ -269,7 +270,8 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
 
   function launchJob(receipt,input,signal) {
     if(child)throw Error('OPSMAP_SCHEDULE_BUSY');
-    const args=fullJob?[jobFile,'scheduled',settings]:[jobFile,'fixed-scheduled'];
+    const args=input.scheduledKind==='fixed' ? [fixedJobFile,'scheduled-task'] :
+      fullJob?[jobFile,'scheduled',settings]:[jobFile,'fixed-scheduled'];
     if(signal)args.unshift('--max-old-space-size=144','--max-semi-space-size=8');
     const processHandle=launch(process.execPath,args,{env,stdio:['pipe',sourceJobs?'pipe':'ignore','pipe'],windowsHide:true});
     let settle, jobResult;
@@ -306,12 +308,21 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
                 page:value.page,rows:value.rows,declaredRows:boundedCount(value.declaredRows),
                 acceptedRows:boundedCount(value.acceptedRows)}));
             }
+            if(value?.component==='opsmap-fixed-master-excel-center'&&value.runId===receipt.runId&&
+                fixedCenters.includes(value.center)&&boundedCount(value.sourceRows,120_000)>0){
+              log(JSON.stringify({component:value.component,runId:receipt.runId,center:value.center,
+                sourceRows:value.sourceRows}));
+            }
             if(value?.component==='opsmap-fixed-master-sync' && value.runId===receipt.runId &&
                ['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','BUSY','RETRY_HELD','FAILED'].includes(value.state)) {
               log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
                 version:syncHash(value.version)?value.version:null,
                 checkedAt:Number.isFinite(Date.parse(value.checkedAt))?value.checkedAt:null,
-                matchedCount:boundedCount(value.matchedCount),error:fixedError(value.error)}));
+                matchedCount:boundedCount(value.matchedCount),
+                ...(value.source==='FRESHON_FIXED_DISPATCH_EXCEL'?{source:value.source,
+                  observedMatchedCount:boundedCount(value.observedMatchedCount),
+                  retainedUnconfirmedCount:boundedCount(value.retainedUnconfirmedCount)}:{}),
+                error:fixedError(value.error)}));
             }
             if(value?.component==='opsmap-national-registry-sync' && value.runId===receipt.runId &&
                ['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','BUSY','ALREADY_ATTEMPTED','FAILED'].includes(value.state)) {

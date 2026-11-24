@@ -14,6 +14,7 @@ import {claimQueuedOpsmapSchedule,mountOpsmapScheduledRun,opsmapScheduleConfig,O
   from '../src/opsmapScheduledRun.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
+import {createStageFixedMasterExcelSource,projectFixedMasterExcel} from '../src/stageFixedMasterExcel.js';
 
 const sha=(text,length=64)=>createHash(length===64?'sha256':'sha1').update(text).digest('hex');
 const codes=['S10001','S10002','S10003'], centers=['011','012','013'], head='fixed-master-daily-v1/head.json';
@@ -87,6 +88,78 @@ test('an Excel recovery publishes workbook evidence and preserves the previous p
   const daily=createStageDailyFixedMasterReader({store,baseline:reader(baseline),now:()=>tick});
   assert.equal((await daily.load()).version,published.version);
   assert.equal((await run(async()=>assert.fail('same-day duplicate read'))).state,'ALREADY_VERIFIED');
+});
+
+test('Excel source clears a proven empty assignment, moves centers and retains a missing customer',async()=>{
+  const store=memory(), baseline=base();
+  const tick=start, stamp=new Date(tick-60000).toISOString();
+  const fieldNames=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm');
+  const weekdays=Object.fromEntries(fieldNames.map(field=>[field,'']));
+  const data=projectFixedMasterExcel([
+    {estCd:codes[0],logCd:'013',mainCarSeqNm:'203',...weekdays},
+    {estCd:codes[1],logCd:'012',mainCarSeqNm:'',...weekdays}
+  ]);
+  const result=await syncStageFixedMaster({store,receipt:receipt(tick),now:()=>tick,scope,
+    loadBaseline:reader(baseline).load,readMaster:async(_codes,approved)=>{
+      assert.equal(approved.version,baseline.version);
+      return {data,meta:{source:FIXED_MASTER_EXCEL_SOURCE,baselineVersion:approved.version,sourceRows:3,
+        uniqueCustomers:3,projectedCustomers:2,centers:centers.map(center=>({
+          center,sourceRows:1,declaredRows:1,duplicateCustomerRows:0,sha256:sha(center),observedAt:stamp
+        }))}};
+    }});
+  assert.equal(result.observedMatchedCount,2);
+  assert.equal(result.retainedUnconfirmedCount,1);
+  const release=createStageDailyFixedMasterReader({store,baseline:reader(baseline),now:()=>tick});
+  const daily=await release.load();
+  assert.deepEqual(daily.rows[0].slice(1,4),['203','honam','VERIFIED_MASTER']);
+  assert.deepEqual(daily.rows[1],['S10002','','yeongnam','UNASSIGNED',Array(7).fill('_'),true]);
+  assert.deepEqual(daily.rows[2],baseline.rows[2]);
+  const dated=await release.readObservation(receipt(tick).date,codes);
+  assert.deepEqual(dated.data.map(row=>row.customerCode),codes.slice(0,2));
+  const cache=createFixedVehicleCache({readOnly:true,now:()=>tick,store:release});
+  assert.deepEqual((await cache.get(codes)).data.map(row=>row.baseVehicleStale),[false,false,true]);
+});
+
+test('Excel verifies each center around a sequential download and stops on source drift',async()=>{
+  async function collect(drift){
+    const requests=[], selected=new Set(codes);
+    let loginCount=0;
+    const fieldNames=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm');
+    const source=createStageFixedMasterExcelSource({env:{...env,FRESHON_ID:'fixture',FRESHON_PASSWORD:'fixture'},
+      login:async()=>{loginCount++;return {cookie:'fixture-session'};},now:()=>start,
+      fetchImpl:async(url,request)=>{
+        const center=request.body.get('logCd'),excel=request.body.get('excelExcute')==='true';
+        const index=centers.indexOf(center);
+        requests.push([center,excel]);
+        assert.equal(url,'https://mis.freshon.co.kr/bo/wm/standard/fixedAlctnList');
+        assert.equal(request.method,'POST');
+        assert.equal(request.headers.Cookie,'fixture-session');
+        assert.equal(request.body.get('isPaging'),excel?'false':'true');
+        assert.equal(request.body.get('shipGbn'),'1');
+        if(excel)return new Response(String(index));
+        return Response.json({status:200,data:[{estCd:codes[index],logCd:center,mainCarSeqNm:'101',
+          totalCnt:drift&&requests.length===3?2:1,...Object.fromEntries(fieldNames.map(field=>[field,'101']))}]});
+      },parseExcel:async(stream,{declaredRows,codes:requested})=>{
+        assert.equal(requested,selected);
+        assert.equal(declaredRows,1);
+        let raw='';
+        for await(const chunk of stream)raw+=chunk;
+        const code=codes[Number(raw)],row=[code,...Array(8).fill('101')];
+        return {sha256:sha(code),codes:[code],selected:[row],first:row};
+      }});
+    if(drift){
+      await assert.rejects(()=>source(selected,base()),/FIXED_MASTER_EXCEL_CENTER_DRIFT/);
+      assert.deepEqual(requests,[['011',false],['011',true],['011',false]]);
+    }else{
+      const value=await source(selected,base());
+      assert.equal(value.meta.sourceRows,3);
+      assert.equal(value.data.length,3);
+      assert.deepEqual(requests,centers.flatMap(center=>[[center,false],[center,true],[center,false]]));
+    }
+    assert.equal(loginCount,1);
+  }
+  await collect(false);
+  await collect(true);
 });
 
 test('independent collection can restart an 82-page center once after late count drift',async()=>{

@@ -133,6 +133,11 @@ async function readHead(store) {
       throw fail('FIXED_STORE_DAILY_HISTORY');
     }
   }
+  if(value.retainedByDate!==undefined &&
+      (!value.retainedByDate || typeof value.retainedByDate!=='object' || Array.isArray(value.retainedByDate) ||
+        Object.entries(value.retainedByDate).some(([date,entry])=>!isFixedMasterDay(date) ||
+          !hash.test(entry?.runId||'') || !Array.isArray(entry.codes) || entry.codes.length>maxRegisteredStores ||
+          entry.codes.some(code=>typeof code!=='string'||!customerCode.test(code))))) throw fail('FIXED_STORE_DAILY_HISTORY');
   return {head:value,sha};
 }
 
@@ -165,20 +170,32 @@ function verifyProjection(result, scope, baseline, observedAt) {
       meta.centers.some(item=>item.observedAt<=baseline.checkedAt))) throw fail('FIXED_STORE_DAILY_SUPERSEDED');
   const rows=data.filter(row=>scope.has(row.customerCode)), byCode=new Map(rows.map(row=>[row.customerCode,row]));
   if (rows.some(row=>row.baseVehicleState==='CONFLICT') || baseline?.rows.some(row=>{
-    if (!scope.has(row[0])) return excel;
+    if (!scope.has(row[0])) return false;
     if (row[3]!=='VERIFIED_MASTER') return false;
     const incoming=byCode.get(row[0]);
-    if (excel) return incoming?.baseVehicleState!=='VERIFIED_MASTER' ||
-      row[4]?.some((value,i)=>value && !incoming.weekdays?.[weekdays[i]]);
+    if (excel) return incoming && (incoming.baseVehicleState!=='VERIFIED_MASTER' &&
+      incoming.baseVehicleEmptyVerified!==true || row[4]?.some((value,i)=>value && !incoming.weekdays?.[weekdays[i]]));
     return !incoming || incoming.baseVehicleState!=='VERIFIED_MASTER'&&incoming.baseVehicleEmptyVerified!==true;
   })) throw fail('FIXED_MASTER_DAILY_ASSIGNMENT_GAP');
+  const observedMatchedCount=rows.length;
+  const retainedCodes=[];
+  if(excel){
+    if(!observedMatchedCount) throw fail('FIXED_MASTER_DAILY_ASSIGNMENT_GAP');
+    for(const tuple of baseline.rows){
+      if(scope.has(tuple[0])&&!byCode.has(tuple[0])){
+        rows.push(fixedTupleData(tuple));
+        retainedCodes.push(tuple[0]);
+      }
+    }
+  }
   const coverage={ledgerCount:scope.size, matchedCount:rows.length, missingCount:scope.size-rows.length, sourceRows:meta.sourceRows,
     centers:meta.centers.map(({center,sourceRows,pages,duplicateCustomerRows,sha256,observedAt})=>({center,sourceRows,
       duplicateCustomerRows:Number.isSafeInteger(duplicateCustomerRows)?duplicateCustomerRows:null,
       ...(excel?{sha256,observedAt}:{pages})})),
-    ...(excel?{source:FIXED_MASTER_EXCEL_SOURCE,baselineVersion:baseline.version}:{})};
+    ...(excel?{source:FIXED_MASTER_EXCEL_SOURCE,baselineVersion:baseline.version,observedMatchedCount,
+      retainedUnconfirmedCount:rows.length-observedMatchedCount}:{})};
   const sourceObservedAt=excel ? meta.centers.map(item=>item.observedAt).sort().at(-1) : observedAt;
-  return {envelope:fixedEnvelope(rows,sourceObservedAt),coverage,sourceObservedAt};
+  return {envelope:fixedEnvelope(rows,sourceObservedAt),coverage,sourceObservedAt,retainedCodes};
 }
 
 // Callers authenticate the signed schedule or explicitly approved Stage recovery.
@@ -210,12 +227,12 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
     const baseline=approved && (!saved || approved.checkedAt>saved.checkedAt) ? approved : saved;
     let result;
     try {
-      result=await readMaster(codes);
+      result=await readMaster(codes,baseline);
     } catch (error) {
       if (error.name==='TimeoutError') throw fail('FIXED_MASTER_DAILY_TIMEOUT');
       throw error;
     }
-    const {envelope,coverage,sourceObservedAt}=verifyProjection(result,codes,baseline,nowISO(now()));
+    const {envelope,coverage,sourceObservedAt,retainedCodes}=verifyProjection(result,codes,baseline,nowISO(now()));
     if (baseline && Date.parse(envelope.checkedAt)<=Date.parse(baseline.checkedAt)) throw fail('FIXED_STORE_DAILY_SUPERSEDED');
     const rowsHash=digest(envelope.rows);
     const unchanged=head.current?.rowsHash===rowsHash;
@@ -239,8 +256,11 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
     const previousDay=observedDate(previousObservation.observedAt);
     const observations={...(validObservation(previousDay,previousObservation)?{[previousDay]:previousObservation}:{}),
       ...head.observations,[observedDay]:observationFromSuccess(current,lastSuccess)};
+    const retainedByDate={...head.retainedByDate};
+    if(retainedCodes.length)retainedByDate[observedDay]={runId,codes:retainedCodes};
+    else delete retainedByDate[observedDay];
     await finish({current,previous:unchanged?head.previous:head.current,attempt:{...attempt,state:'VERIFIED'},
-      observations,lastSuccess});
+      observations,lastSuccess,...(head.retainedByDate || retainedCodes.length?{retainedByDate}:{})});
     const committed=(await readHead(store)).head;
     if (committed.observations?.[observedDay]?.runId!==runId ||
         committed.observations[observedDay].ref.version!==current.version) throw fail('FIXED_STORE_DAILY_READBACK');
@@ -265,11 +285,13 @@ export function createStageDailyFixedMasterReader({store, baseline,now=Date.now}
     status:()=>info,
     async readObservation(date, codes) {
       if (!isFixedMasterDay(date)) throw fail('FIXED_MASTER_DAILY_DATE');
-      let observation, readError;
+      let observation, retained, readError;
       try {
         const {head}=await readHead(store);
         const latest=observationFromSuccess(head.current,head.lastSuccess);
         observation=validObservation(date,latest)?latest:head.observations?.[date];
+        const prior=head.retainedByDate?.[date];
+        if(prior && prior.runId===observation?.runId)retained=new Set(prior.codes);
       }
       catch (error) {readError=error;}
       let envelope, meta;
@@ -288,7 +310,7 @@ export function createStageDailyFixedMasterReader({store, baseline,now=Date.now}
           runId:null,registryGeneration:null,sourceRows:null,registryCount:null};
       }
       const requested=new Set(codes);
-      const data=envelope.rows.filter(row=>requested.has(row[0])).map(fixedTupleData);
+      const data=envelope.rows.filter(row=>requested.has(row[0])&&!retained?.has(row[0])).map(fixedTupleData);
       return {data,meta:{...meta,date,sourceAsOf:null,basis:'FIXED_DISPATCH_PRIMARY',version:envelope.version,
         matchedCount:envelope.count,unconfirmedRequestedCount:requested.size-data.length}};
     },
@@ -308,7 +330,9 @@ export function createStageDailyFixedMasterReader({store, baseline,now=Date.now}
           }
           if (cached?.version!==head.current.version) cached=await verifiedObject(store,head.current);
           const success=head.lastSuccess;
+          const prior=head.retainedByDate?.[observedDate(success.coverage?.sourceObservedAt)];
           info={state,version:cached.version,lastSuccessAt:success.at,runId:success.runId,
+            retainedCustomerCodes:prior?.runId===success.runId?prior.codes:[],
             sourceObservedAt:validTime(success.coverage?.sourceObservedAt)?success.coverage.sourceObservedAt:null,
             sourceObservationDate:observedDate(success.coverage?.sourceObservedAt),
             registryGeneration:hash.test(success.coverage?.registryGeneration || '')?success.coverage.registryGeneration:null,

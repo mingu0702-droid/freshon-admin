@@ -22,8 +22,8 @@ import {claimQueuedOpsmapSchedule,independentStageSync,opsmapScheduleConfig,publ
 import {verifyStageScheduledTask,stageWmsNightDate} from '../src/stageScheduledJobs.js';
 import {readIndependentStageScopes} from '../src/stageIndependentSyncScope.js';
 import {STAGE_OSAN_SYNC_CENTERS,STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_DELIVERY_SOURCES} from '../src/opsmapSyncPolicy.js';
-import {FIXED_MASTER_SCOPE_INPUT_LIMIT, createStageFixedMasterSource, stageFixedMasterBaseline, stageFixedMasterStorage,
-  stageFixedMasterSyncEnabled, syncStageFixedMaster} from '../src/stageFixedMasterSync.js';
+import {FIXED_MASTER_SCOPE_INPUT_LIMIT,stageFixedMasterStorage,stageFixedMasterSyncEnabled} from '../src/stageFixedMasterSync.js';
+import {runStageFixedMaster} from '../src/stageFixedMasterWorker.js';
 import {createStageStaffRegistryAsset} from '../src/stageStaffRegistryAsset.js';
 import {createStageWmsDispatchExportReader} from '../src/opsmapWmsDispatchExport.js';
 import {createStageNationalRegistryStorage,createStageNationalRegistrationSource,stageNationalRegistryEnabled,
@@ -272,17 +272,7 @@ async function runScheduled(job,settingsFile){
     const runFixedMaster = async () => {
       if (!stageFixedMasterSyncEnabled(env)) return;
       try {
-        if (!fixedScope) throw Error('FIXED_MASTER_DAILY_SCOPE_UNAVAILABLE');
-        const store=stageFixedMasterStorage({env,write:true});
-        const source=createStageFixedMasterSource({env,onScan:evidence=>console.info(JSON.stringify({
-          component:'opsmap-fixed-master-pages',runId:receipt.runId,...evidence})),
-          onPage:evidence=>console.info(JSON.stringify({
-            component:'opsmap-fixed-master-page-progress',runId:receipt.runId,...evidence}))});
-        const baseline=stageFixedMasterBaseline({env,store});
-        const result=await syncStageFixedMaster({store,receipt,scope:fixedScope,readMaster:source,loadBaseline:baseline.load});
-        console.log(JSON.stringify({component:'opsmap-fixed-master-sync',runId:receipt.runId,state:result.state,version:result.version,
-          checkedAt:result.checkedAt,matchedCount:result.matchedCount,centers:result.centers}));
-        return result;
+        return await runStageFixedMaster({env,receipt,scope:fixedScope});
       } catch(error) {
         const code=error.code || error.message || '';
         console.log(JSON.stringify({component:'opsmap-fixed-master-sync',runId:receipt.runId,state:'FAILED',

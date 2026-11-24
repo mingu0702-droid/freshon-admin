@@ -1,31 +1,44 @@
 import {createHash} from 'node:crypto';
 import {opsmapScheduleConfig, verifyOpsmapScheduleReceipt} from '../src/opsmapScheduledRun.js';
 import {
-  createStageFixedMasterSource, stageFixedMasterBaseline, stageFixedMasterStorage,
-  stageFixedMasterSyncEnabled, syncStageFixedMaster
+  createStageFixedMasterSource,stageFixedMasterSyncEnabled,FIXED_MASTER_SCOPE_INPUT_LIMIT
 } from '../src/stageFixedMasterSync.js';
-import {readIndependentStageScopes} from '../src/stageIndependentSyncScope.js';
+import {verifyStageScheduledTask} from '../src/stageScheduledJobs.js';
+import {runStageFixedMaster} from '../src/stageFixedMasterWorker.js';
 
 const env = process.env;
 
+async function readInput(limit) {
+  let input='';
+  for await(const chunk of process.stdin){
+    input+=chunk;
+    if(Buffer.byteLength(input)>limit)throw Error('OPSMAP_SCHEDULE_RECEIPT');
+  }
+  return JSON.parse(input);
+}
+
 async function run() {
   const [mode, ...extra] = process.argv.slice(2);
-  if (extra.length || !['probe-source', 'verify-source', 'scheduled', 'recover'].includes(mode)) {
+  if (extra.length || !['probe-source', 'verify-source', 'scheduled', 'scheduled-task', 'recover'].includes(mode)) {
     throw Error('FIXED_MASTER_INDEPENDENT_USAGE');
   }
   if (!stageFixedMasterSyncEnabled(env)) throw Error('FIXED_MASTER_STAGE_SOURCE_SCOPE');
   if (!env.FRESHON_COOKIE && !(env.FRESHON_ID && env.FRESHON_PASSWORD)) {
     throw Error('FIXED_MASTER_AUTH_REQUIRED');
   }
+  if(mode==='scheduled-task'){
+    if(env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED!=='1')throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
+    const job=await readInput(FIXED_MASTER_SCOPE_INPUT_LIMIT);
+    const receipt=verifyStageScheduledTask(job,opsmapScheduleConfig(env).secret);
+    if(job.scheduledKind!=='fixed') throw Error('OPSMAP_JOBS_TASK_AUTH');
+    const result=await runStageFixedMaster({env,receipt,scope:job.fixedScope});
+    console.info(JSON.stringify({component:'opsmap-stage-job-result',runId:receipt.runId,job:'fixed',state:result.state}));
+    return;
+  }
   let receipt;
   if (mode === 'scheduled') {
     if (env.OPSMAP_STAGE_SYNC_SCHEDULER_APPROVED !== '1') throw Error('OPSMAP_SCHEDULE_SOURCE_CONFIG');
-    let input = '';
-    for await (const chunk of process.stdin) {
-      input += chunk;
-      if (Buffer.byteLength(input) > 2048) throw Error('OPSMAP_SCHEDULE_RECEIPT');
-    }
-    receipt = verifyOpsmapScheduleReceipt(JSON.parse(input), opsmapScheduleConfig(env));
+    receipt = verifyOpsmapScheduleReceipt(await readInput(2048), opsmapScheduleConfig(env));
   }
   if (mode === 'recover') {
     // An explicitly enabled Stage operator run has its own idempotency key.
@@ -53,18 +66,13 @@ async function run() {
     console.info(JSON.stringify({component:'opsmap-fixed-master-sync',state:preflightOnly?result.state:'SOURCE_VERIFIED'}));
     return;
   }
-  const store = stageFixedMasterStorage({env, write: true});
   // The approved Stage writer can read that same private repository in recovery mode.
   const readEnv=mode==='recover'&&!env.OPSMAP_SNAPSHOT_STORE_TOKEN
     ? {...env,OPSMAP_SNAPSHOT_STORE_TOKEN:env.OPSMAP_STAGE_SYNC_WRITE_TOKEN}
     : env;
-  const {fixedScope:scope} = await readIndependentStageScopes(readEnv);
-  const baseline = stageFixedMasterBaseline({env, store});
-  const result = await syncStageFixedMaster({
-    store, receipt, scope, readMaster: createStageFixedMasterSource({env, onScan, onPage, onPreflight}),
-    loadBaseline: baseline.load
-  });
-  console.info(JSON.stringify({component: 'opsmap-fixed-master-sync', ...result}));
+  const {readIndependentStageScopes}=await import('../src/stageIndependentSyncScope.js');
+  const {fixedScope:scope}=await readIndependentStageScopes(readEnv);
+  const result=await runStageFixedMaster({env,receipt,scope});
   if (!['PUBLISHED', 'VERIFIED_NOOP', 'ALREADY_VERIFIED'].includes(result.state)) {
     process.exitCode = 1;
   }

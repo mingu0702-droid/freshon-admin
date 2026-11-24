@@ -1,5 +1,6 @@
 import { chromium, request } from "playwright";
 import { config } from "../config.js";
+import {loginFreshonOverHttp} from "./freshonHttpSession.js";
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 8;
@@ -75,35 +76,9 @@ function serializeCookies(cookies) {
 export async function loginFreshonSession() {
   if (freshonLoginPromise) return freshonLoginPromise;
   freshonLoginPromise = (async () => {
-    assertCredentials();
-    const body = new URLSearchParams({ userId: config.freshonId, password: config.freshonPassword });
-    const response = await fetch(`${freshonOrigin}/loginProcessing`, {
-      method: "POST",
-      redirect: "manual",
-      signal: AbortSignal.timeout(20000),
-      headers: {
-        Accept: "text/html,application/xhtml+xml",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        Origin: freshonOrigin,
-        Referer: `${freshonOrigin}/login`,
-        "User-Agent": "freshon-admin-auth/1.0"
-      },
-      body: body.toString()
-    });
-    const setCookies = typeof response.headers.getSetCookie === "function"
-      ? response.headers.getSetCookie()
-      : [response.headers.get("set-cookie")].filter(Boolean);
-    const cookie = setCookies
-      .map((value) => String(value || "").split(";", 1)[0].trim())
-      .filter(Boolean)
-      .join("; ");
-    if (![200, 302, 303].includes(response.status) || !cookie) {
-      const error = new Error(`Freshon login was rejected (status ${response.status || "unknown"}).`);
-      error.status = response.status || 401;
-      throw error;
-    }
-    freshonMemoryCookie = cookie;
-    return { cookie, loginStatus: response.status, cookieCount: setCookies.length };
+    const session=await loginFreshonOverHttp({origin:freshonOrigin,userId:config.freshonId,password:config.freshonPassword});
+    freshonMemoryCookie=session.cookie;
+    return session;
   })();
   try {
     return await freshonLoginPromise;

@@ -52,7 +52,10 @@ export function createFixedVehicleCache({reader,store,now=Date.now,ttl=1800000,r
         matchedCount:sync.matchedCount??null,sourceAsOf:null}:{})};
     if(!current)return {ok:false,phase:pending?'LOADING':error?'ERROR':readOnly?'NOT_READY':'LOADING',meta};
     const rows=codes===null?[...index.values()].map(fixedTupleData):(codes||[]).map(customerCode=>index.has(customerCode)?fixedTupleData(index.get(customerCode)):{customerCode,baseVehicle:'',baseVehicleGroup:'',baseVehicleState:'NOT_IN_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY'});
-    return {ok:true,data:rows.map(r=>({...r,baseVehicleCheckedAt:meta.checkedAt,baseVehicleVersion:meta.version,baseVehicleStale:stale})),meta};
+    const retained=sync?.version===current.version&&sync.retainedCustomerCodes?.length ?
+      new Set(sync.retainedCustomerCodes) : null;
+    return {ok:true,data:rows.map(r=>({...r,baseVehicleCheckedAt:meta.checkedAt,baseVehicleVersion:meta.version,
+      baseVehicleStale:stale||retained?.has(r.customerCode)===true})),meta};
   }
   return {get,settled:()=>pending,refresh};
 }
