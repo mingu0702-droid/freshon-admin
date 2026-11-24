@@ -1,4 +1,4 @@
-import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs';
+import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs?v=20261124-freshon-json';
 import {summarizeDispatchPeriod} from './dispatch-reference-period.mjs?v=20261124-period-proof';
 
 const meters = km => Number.isFinite(km) ? new Intl.NumberFormat('ko-KR').format(Math.round(km*1000))+'m' : '미확인';
@@ -357,7 +357,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
 
   function dailyProvenance() {
     const dateKind=model.date===dayNow()?'당일':'과거';
-    const scope=model.routeSource==='WMS_CONFIRMED_DISPATCH_EXPORT'?
+    const scope=model.routeSource==='WMS_CONFIRMED_DISPATCH_FRESHON_JSON'?
+      'FreshOn 확정배차 조회 범위 · 오산 전체 운행호차 완전성 미확인':model.routeSource==='WMS_CONFIRMED_DISPATCH_EXPORT'?
       'WMS 내보내기 범위 · 오산 전체 운행호차 완전성 미확인':model.routeVerified?
         '확정 배차 원장 범위':'확정 배차 완전성 미확인';
     const amounts=model.amountsVerified?'WMS 배송일 '+model.amountDate+' · 자료 확인 '+sourceTime(model.amountObservedAt):'해당 배송일 WMS 금액 미확인';
@@ -400,7 +401,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     const list=(items,show)=>items.length?'<ul>'+items.map(show).join('')+'</ul>':'<p class="dispatch-empty">확인 자료 없음</p>';
     const interval='<p>'+escape(period.start)+' ~ '+escape(period.end)+' · '+period.days+'일</p>'+
       '<p>배차 <strong>확정 '+verified.length+'일</strong> · 미확인 '+unavailable.length+'일</p>'+
-      '<p>WMS 내보내기 범위 '+exportScoped.length+'일 · 오산 원장 검증 '+osanScoped.length+'일</p>'+
+      '<p>WMS 확인 범위 '+exportScoped.length+'일 · 오산 원장 검증 '+osanScoped.length+'일</p>'+
       '<p>배송완료 상태 확인 '+completed.length+'일'+(partialCompleted.length?' · 일부 확인 '+partialCompleted.length+'일':'')+
       ' · 미확인 '+(period.days-completed.length-partialCompleted.length)+'일</p>'+
       '<p>WMS 금액 확인 '+wms.length+'일 · 미확인 '+(period.days-wms.length)+'일</p>';

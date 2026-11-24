@@ -4,6 +4,7 @@ import {STAGE_ORIGIN,STAGE_SERVICE} from './stageScope.js';
 
 export const WMS_ARCHIVE_REPO='mingu0702-droid/freshon-cache';
 export const WMS_ARCHIVE_DIR='opsmap-stage/wms-dispatch-v1';
+export const FRESHON_JSON_WMS_FORMAT='FRESHON_JSON_V1';
 const branch='stage/opsmap-wms-exports', indexFile='release-index-v1.json';
 const entryLimit=5000, indexByteLimit=1024*1024;
 const entryFile=/^release-\d{4}-\d{2}-\d{2}-[a-f0-9]{64}\.json$/;
@@ -21,13 +22,13 @@ function serializeEntries(entries){
   if(!Array.isArray(entries)||entries.length>entryLimit)throw stageWmsError('WMS_EXPORT_RELEASE_INDEX_INVALID');
   let last='';
   return entries.map(entry=>{
-    const {date,warehouse,sha256,observedAt}=entry||{};
+    const {date,warehouse,sha256,observedAt,format}=entry||{};
     if(!isStageWmsDay(date)||date<=last||warehouse!=='011'||!sha64.test(sha256||'')||
-        typeof observedAt!=='string'||observedAt.length>35||!Number.isFinite(Date.parse(observedAt))){
+        (format!==undefined&&format!==FRESHON_JSON_WMS_FORMAT)||typeof observedAt!=='string'||observedAt.length>35||!Number.isFinite(Date.parse(observedAt))){
       throw stageWmsError('WMS_EXPORT_RELEASE_INDEX_INVALID');
     }
     last=date;
-    return [date,warehouse,sha256,observedAt];
+    return [date,warehouse,sha256,observedAt,...(format?[format]:[])];
   });
 }
 
@@ -45,11 +46,14 @@ function readIndex(value,key){
   if(value?.schema!==1||!sha64.test(value.tag||''))throw stageWmsError('WMS_EXPORT_RELEASE_INDEX_INVALID');
   const fields=serializeEntries(value.entries);
   if(!timingSafeEqual(Buffer.from(value.tag,'hex'),mac(fields,key)))throw stageWmsError('WMS_EXPORT_RELEASE_INDEX_INVALID');
-  return fields.map(([date,warehouse,sha256,observedAt])=>({date,warehouse,sha256,observedAt}));
+  return fields.map(([date,warehouse,sha256,observedAt,format])=>({date,warehouse,sha256,observedAt,...(format?{format}:{})}));
 }
-export function stageWmsReleaseFile({date,warehouse,sha256,observedAt}){
-  const [fields]=serializeEntries([{date,warehouse,sha256,observedAt}]);
-  return 'release-'+date+'-'+createHash('sha256').update(JSON.stringify(fields)).digest('hex')+'.json';
+export function stageWmsReleaseFile({date,warehouse,sha256,observedAt,format}){
+  const [fields]=serializeEntries([{date,warehouse,sha256,observedAt,format}]);
+  // JSON content is immutable and observation time belongs to the signed
+  // index. An interrupted or concurrent publish reuses the same archive file.
+  const identity=format?[date,warehouse,sha256,format]:fields;
+  return 'release-'+date+'-'+createHash('sha256').update(JSON.stringify(identity)).digest('hex')+'.json';
 }
 export const stageWmsReleaseEnabled=env=>
   env.RENDER_SERVICE_ID===STAGE_SERVICE&&env.RENDER_EXTERNAL_URL===STAGE_ORIGIN&&

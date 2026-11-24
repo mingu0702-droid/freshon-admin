@@ -4,7 +4,8 @@ import { createRequire } from 'node:module';
 import { coordinateAddressHash } from './opsmap-abc/opsmapAutoCoordinates.js';
 import { createPrivateGithubJsonStore } from './fixedVehicleStore.js';
 import { STAGE_ORIGIN, STAGE_SERVICE } from './stageScope.js';
-import {createStageWmsReleaseStore,isStageWmsDay,stageWmsArchiveKey,WMS_ARCHIVE_REPO,WMS_ARCHIVE_DIR} from './stageWmsExportIndex.js';
+import {decodeFreshonWmsDispatch,freshonWmsVehicle,verifiedFreshonWmsWorkbookLines} from './stageFreshonWmsDispatch.js';
+import {FRESHON_JSON_WMS_FORMAT,createStageWmsReleaseStore,isStageWmsDay,stageWmsArchiveKey,WMS_ARCHIVE_REPO,WMS_ARCHIVE_DIR} from './stageWmsExportIndex.js';
 
 const source = 'WMS_CONFIRMED_DISPATCH_EXPORT';
 const require = createRequire(import.meta.url);
@@ -15,8 +16,8 @@ const maxWorkbookBytes = 4 * 1024 * 1024;
 const maxArchiveBytes = Math.ceil(maxWorkbookBytes / 3) * 4 + 256;
 const scopeError = code => Object.assign(Error(code),{code});
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-const archiveBinding = (date, {warehouse,sha256,observedAt}) =>
-  Buffer.from(['opsmap-stage-wms-dispatch-v1', date, warehouse, sha256, observedAt].join('\n'));
+const archiveBinding = (date, {warehouse,sha256,observedAt,format}) =>
+  Buffer.from(['opsmap-stage-wms-dispatch-v1', date, warehouse, sha256, observedAt,...(format?[format]:[])].join('\n'));
 const text = value => String(value ?? '').trim();
 const won = value => /^-?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text(value)) && Number.isSafeInteger(Number(text(value).replace(/,/g,'')))
   ? Number(text(value).replace(/,/g,'')) : null;
@@ -122,12 +123,16 @@ export function projectOpsmapWmsDispatch(exported, registry, postcodes=new Map()
 export function sealOpsmapWmsDispatchExport(bytes, {date,observedAt,key}) {
   const verified = parseOpsmapWmsDispatchExport(bytes,{date,observedAt});
   const manifest = {warehouse:'011',sha256:digest(bytes),observedAt:verified.observedAt};
+  return {manifest,archive:sealArchive(bytes,date,manifest,key)};
+}
+
+function sealArchive(bytes,date,manifest,key) {
   const nonce = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm',key,nonce);
   cipher.setAAD(archiveBinding(date,manifest));
   const ciphertext = Buffer.concat([cipher.update(bytes),cipher.final()]);
-  return {manifest,archive:{schema:1,nonce:nonce.toString('hex'),tag:cipher.getAuthTag().toString('hex'),
-    ciphertext:ciphertext.toString('base64')}};
+  return {schema:1,nonce:nonce.toString('hex'),tag:cipher.getAuthTag().toString('hex'),
+    ciphertext:ciphertext.toString('base64'),...(manifest.format?{observedAt:manifest.observedAt}:{})};
 }
 
 function unpackArchive(value,date,expected,key) {
@@ -138,7 +143,10 @@ function unpackArchive(value,date,expected,key) {
   }
   try {
     const decipher = createDecipheriv('aes-256-gcm',key,Buffer.from(value.nonce,'hex'));
-    decipher.setAAD(archiveBinding(date,expected));
+    const captured=expected.format===FRESHON_JSON_WMS_FORMAT?value.observedAt:expected.observedAt;
+    if(typeof captured!=='string'||!Number.isFinite(Date.parse(captured))||
+      Date.parse(captured)>Date.parse(expected.observedAt))throw Error('Invalid archive time');
+    decipher.setAAD(archiveBinding(date,{...expected,observedAt:captured}));
     decipher.setAuthTag(Buffer.from(value.tag,'hex'));
     const bytes = Buffer.concat([decipher.update(Buffer.from(value.ciphertext,'base64')),decipher.final()]);
     if (!bytes.length || bytes.length>maxWorkbookBytes) throw Error('Invalid workbook size');
@@ -244,7 +252,7 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
           if (encoded.length>5_600_000 || !/^[A-Za-z0-9+/]+=*$/.test(encoded)) throw scopeError('WMS_EXPORT_ENCODING');
           bytes=Buffer.from(encoded,'base64');
         }
-        return verifyManifestWorkbook(date,bytes,expected);
+        return verifyManifestRelease(date,bytes,expected).data;
       }).catch(error=>{
         if(jobs.get(cacheKey)===task)jobs.delete(cacheKey);
         throw error;
@@ -277,8 +285,27 @@ function verifyManifestWorkbook(date,bytes,manifest) {
   }
 }
 
-export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha256,replaceSha256,env=process.env,fetchImpl=fetch}={}){
-  if(!isStageWmsDay(date))throw scopeError('WMS_EXPORT_SCOPE');
+function verifyManifestRelease(date,bytes,manifest) {
+  if(manifest.format!==FRESHON_JSON_WMS_FORMAT)return {data:verifyManifestWorkbook(date,bytes,manifest)};
+  if(!bytes?.length||bytes.length>maxWorkbookBytes||digest(bytes)!==manifest.sha256)throw scopeError('WMS_EXPORT_DIGEST');
+  return decodeFreshonWmsDispatch(bytes,{date,observedAt:manifest.observedAt});
+}
+
+function matchesExistingWorkbook(date,previous,proof) {
+  let lines;
+  try{lines=verifiedFreshonWmsWorkbookLines(previous.bytes,date);}catch{return false;}
+  const workbook=previous.data;
+  return workbook.total===proof.sum&&workbook.deliveryCount===proof.count&&
+    lines.size===proof.lines.size&&[...lines].every(line=>proof.lines.has(line))&&
+    workbook.vehicles.length===proof.routes.size&&workbook.vehicles.every(({vehicle,amount,deliveryCount})=>{
+      const row=proof.routes.get(freshonWmsVehicle(vehicle));
+      return row?.[0]===amount&&row[1]===deliveryCount;
+    });
+}
+
+export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha256,replaceSha256,format,env=process.env,fetchImpl=fetch}={}){
+  if(!isStageWmsDay(date)||format!==undefined&&(format!==FRESHON_JSON_WMS_FORMAT||
+    env.OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED!=='1'))throw scopeError('WMS_EXPORT_SCOPE');
   if(replaceSha256!==undefined&&!/^[a-f0-9]{64}$/.test(replaceSha256))throw scopeError('WMS_EXPORT_RELEASE_BASE_INVALID');
   const key=stageWmsArchiveKey(env);
   const archive=createStageWmsReleaseStore({env,fetchImpl,write:true});
@@ -288,7 +315,7 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
   catch {throw scopeError('WMS_EXPORT_MANIFEST_INVALID');}
   if(!legacy||Array.isArray(legacy)||typeof legacy!=='object')throw scopeError('WMS_EXPORT_MANIFEST_INVALID');
   if(Object.hasOwn(legacy,date))throw scopeError('WMS_EXPORT_RELEASE_LEGACY_DATE');
-  const verified=verifyManifestWorkbook(date,bytes,{sha256,observedAt});
+  const verified=verifyManifestRelease(date,bytes,{sha256,observedAt,format});
   // Prove the operator's key opens an already approved pinned export before the
   // first release write. A newly generated or mistyped key cannot fork the archive.
   const probe=Object.keys(legacy).filter(isStageWmsDay).sort().at(-1);
@@ -298,10 +325,11 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
   const writer=env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_WRITE_TOKEN||env.OPSMAP_STAGE_SYNC_WRITE_TOKEN;
   const checkedArchive=createArchiveReader({...env,OPSMAP_SHADOW_GITHUB_READ_TOKEN:writer},fetchImpl);
   verifyManifestWorkbook(probe,await checkedArchive.read(probe,pinned),pinned);
-  const dateEntry={date,warehouse:'011',sha256,observedAt:verified.observedAt};
+  const dateEntry={date,warehouse:'011',sha256,observedAt:verified.data.observedAt,...(format?{format}:{})};
   const verifyStored=async entry=>{
     const value=await archive.readArchive(entry,maxArchiveBytes);
-    return verifyManifestWorkbook(date,unpackArchive(value,date,entry,key),entry);
+    const bytes=unpackArchive(value,date,entry,key);
+    return {...verifyManifestRelease(date,bytes,entry),bytes};
   };
   for(let attempt=0;attempt<3;attempt++){
     const {sha,entries}=await archive.readIndex();
@@ -309,6 +337,9 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
     if(existing?.sha256===sha256){
       await verifyStored(existing);
       return {state:'VERIFIED_NOOP',date,sha256};
+    }
+    if(existing&&!existing.format&&verified.proof&&matchesExistingWorkbook(date,await verifyStored(existing),verified.proof)){
+      return {state:'VERIFIED_NOOP',date,sha256:existing.sha256};
     }
     if(replaceSha256===undefined){
       if(existing)throw scopeError('WMS_EXPORT_RELEASE_DATE_CONFLICT');
@@ -318,7 +349,7 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
       await verifyStored(existing);
     }
     if(attempt===0){
-      const {archive:sealed}=sealOpsmapWmsDispatchExport(bytes,{date,observedAt,key});
+      const sealed=sealArchive(bytes,date,dateEntry,key);
       try {await archive.createArchive(dateEntry,sealed);}
       catch(error){if(error.code!=='FIXED_STORE_CONFLICT')throw error;}
       await verifyStored(dateEntry);
@@ -329,7 +360,7 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
       throw error;
     }
     const saved=(await archive.readIndex()).entries.find(entry=>entry.date===date);
-    if(saved?.sha256!==sha256||saved.observedAt!==dateEntry.observedAt)throw scopeError('WMS_EXPORT_RELEASE_READBACK');
+    if(saved?.sha256!==sha256||saved.observedAt!==dateEntry.observedAt||saved.format!==format)throw scopeError('WMS_EXPORT_RELEASE_READBACK');
     await verifyStored(saved);
     return {state:'PUBLISHED',date,sha256,...(existing?{supersedes:existing.sha256}:{})};
   }

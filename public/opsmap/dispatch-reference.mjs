@@ -93,7 +93,7 @@ export function createDispatchReference(day, stores, date) {
       amount:amount?.amount ?? null, detail,displayAmounts,detailSummary:summary,registryMisses:amount?.unmatched??null});
   }
   return {date, routeVerified,routeState, routeSource:day.route?.source??null, routeObservedAt:day.route?.observedAt ?? null, unassigned, amountDate, amountsVerified,amountTotal,
-    sameWmsExport:day.route?.source==='WMS_CONFIRMED_DISPATCH_EXPORT'&&day.amounts?.source==='WMS_CONFIRMED_DISPATCH_EXPORT',
+    sameWmsExport:['WMS_CONFIRMED_DISPATCH_EXPORT','WMS_CONFIRMED_DISPATCH_FRESHON_JSON'].includes(day.route?.source)&&day.amounts?.source===day.route?.source,
     exportFailure:day.amounts?.exportFailure,
     amountObservedAt:day.amounts?.observedAt ?? null, vehicles};
 }

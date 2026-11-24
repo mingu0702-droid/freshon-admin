@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import XLSX from 'xlsx';
 import { createStageWmsDispatchExportReader, parseOpsmapWmsDispatchExport, projectOpsmapWmsDispatch,
   sealOpsmapWmsDispatchExport, publishStageWmsDispatchExport } from '../src/opsmapWmsDispatchExport.js';
+import { syncStageFreshonWmsDispatch } from '../src/stageFreshonWmsWorkbookGate.js';
 import { createOpsmapDispatchReferenceReader } from '../src/opsmapDispatchReference.js';
 import { coordinateAddressHash } from '../src/opsmap-abc/opsmapAutoCoordinates.js';
 import { STAGE_ORIGIN, STAGE_SERVICE } from '../src/stageScope.js';
@@ -328,4 +329,92 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   assert.equal(verified.observedAt,revisionTime);
   assert.equal(verified.total,updates[0].status==='fulfilled'?1521:1531);
   assert.equal((await reader()(date3)).total,1501);
+
+  const jsonEnv={...env,OPSMAP_STAGE_WMS_FRESHON_VALIDATION_APPROVED:'1',
+    OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED:'1'};
+  const date4='2026-11-27', date5='2026-11-28';
+  const original=workbook([
+    ['입고요청일','확정호차','고객','매출금액','배송건수','고객주소','고객명','기준호차'],
+    [date4,'101','S91001',450,1,address,'합성 매장','105'],
+    ['','소계','',450,1],
+    [date4,'','S91003',101,1,address,'합성 매장2','104'],
+    ['','','',101,1],
+    ['합계','','',551,2],
+  ]);
+  const originalRelease=await upload(date4,{bytes:original,observedAt:'2026-11-27T00:00:00.000Z'});
+  let logins=0,sourceReads=0;
+  const submit=(target,options={})=>syncStageFreshonWmsDispatch({
+    date:target,observedAt:'2026-11-28T00:00:00Z',env:jsonEnv,archiveFetchImpl:fetchImpl,
+    login:async()=>{logins++;return {cookie:'fixture-test-cookie'};},
+    fetchImpl:async(url,opts)=>{
+      sourceReads++;
+      assert.equal(url,'https://mis.freshon.co.kr/bo/wm/dispatch/baecha_list');
+      assert.equal(opts.redirect,'error');
+      assert.equal(new URLSearchParams(opts.body).get('calStartDate'),target);
+      const firstAmount=options.amount??450;
+      return Response.json({data:[
+        {stockDate:target,isSum:false,totalCnt:2,logCd:'011',estCd:'S91001',confirmCarSeq:'101',
+          carSeq:'105',maechul:firstAmount,baesongCnt:1,estName:'합성 매장',address},
+        {stockDate:'',isSum:false,totalCnt:0,maechul:firstAmount,baesongCnt:1},
+        {stockDate:target,isSum:false,totalCnt:2,logCd:'011',estCd:'S91003',confirmCarSeq:'',
+          carSeq:'104',maechul:101,baesongCnt:1,estName:'합성 매장2',address},
+        {stockDate:'',isSum:false,totalCnt:0,maechul:101,baesongCnt:1},
+      ]});
+    },
+    ...options,
+  });
+  await assert.rejects(submit(date5,{env:{...jsonEnv,OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED:'0'}}),
+    {code:'WMS_EXPORT_FRESHON_SCOPE'});
+  await assert.rejects(submit(date5,{env:{...jsonEnv,OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_KEY_B64:Buffer.alloc(32,0xaa).toString('base64')}}),
+    {code:'WMS_EXPORT_RELEASE_INDEX_INVALID'});
+  assert.equal((await submit(date4)).state,'VERIFIED_NOOP');
+  await assert.rejects(submit(date4,{replaceSha256:'f'.repeat(64)}),{code:'WMS_EXPORT_FRESHON_REPLACEMENT'});
+  assert.deepEqual([logins,sourceReads],[0,0]);
+  let beforeJson=events.length;
+  const same=await submit(date4,{replaceSha256:originalRelease.sha256});
+  assert.equal(same.state,'VERIFIED_NOOP');
+  assert.equal(same.sha256,originalRelease.sha256);
+  assert.equal(events.length,beforeJson);
+  assert.deepEqual([logins,sourceReads],[1,1]);
+  const newest=await submit(date5);
+  assert.equal(newest.state,'PUBLISHED');
+  assert.deepEqual([logins,sourceReads],[2,2]);
+  const jsonRead=await reader()(date5);
+  assert.equal(jsonRead.source,'WMS_CONFIRMED_DISPATCH_FRESHON_JSON');
+  assert.equal(jsonRead.total,551);
+  assert.equal(jsonRead.vehicles.find(row=>row.vehicle==='미배정').deliveryCount,1);
+  assert.equal(jsonRead.vehicles.find(row=>row.vehicle==='101').details[0].addressHash,coordinateAddressHash(address));
+  const jsonReference=createOpsmapDispatchReferenceReader({getPublication:()=>null,readWmsExport:reader()});
+  const analyzed=(await jsonReference.period(date5,7)).dates.find(day=>day.date===date5);
+  assert.equal(analyzed.dispatchScope,'WMS_EXPORT');
+  assert.equal(analyzed.wmsVerified,true);
+  beforeJson=events.length;
+  assert.equal((await submit(date5)).state,'VERIFIED_NOOP');
+  assert.equal(events.length,beforeJson);
+  assert.deepEqual([logins,sourceReads],[2,2]);
+  const oldPath=[...files.keys()].find(f=>f.startsWith('release-'+date4+'-'));
+  const oldContent=files.get(oldPath);
+  const change=await submit(date4,{replaceSha256:originalRelease.sha256,amount:451});
+  assert.equal(change.supersedes,originalRelease.sha256);
+  assert.deepEqual([logins,sourceReads],[3,3]);
+  assert.deepEqual(files.get(oldPath),oldContent);
+  assert.equal((await reader()(date4)).total,552);
+  assert.equal((await reader()(date)).total,1501);
+  const date6='2026-11-29';
+  const simultaneous=await Promise.all([
+    submit(date6,{observedAt:'2026-11-29T08:01:00Z'}),
+    submit(date6,{observedAt:'2026-11-29T08:02:00Z'}),
+  ]);
+  assert.deepEqual(simultaneous.map(row=>row.state).sort(),['PUBLISHED','VERIFIED_NOOP']);
+  assert.equal([...files.keys()].filter(name=>name.startsWith('release-'+date6+'-')).length,1);
+  const restored=await submit(date4,{replaceSha256:change.sha256,amount:450,observedAt:'2026-11-29T08:01:00Z'});
+  const restoredExisting=await submit(date4,{replaceSha256:restored.sha256,amount:451,observedAt:'2026-11-30T08:01:00Z'});
+  assert.equal(restoredExisting.sha256,change.sha256);
+  assert.equal((await reader()(date4)).observedAt,'2026-11-30T08:01:00.000Z');
+  assert.equal([...files.keys()].filter(name=>name.startsWith('release-'+date4+'-')).length,3);
+  assert.deepEqual(files.get(oldPath),oldContent);
+  const jsonIndex=files.get('release-index-v1.json');
+  const withoutType=jsonIndex.value.entries.map(({format,...entry})=>entry);
+  files.set('release-index-v1.json',{...jsonIndex,value:{...jsonIndex.value,entries:withoutType}});
+  await assert.rejects(reader()(date5),{code:'WMS_EXPORT_RELEASE_INDEX_INVALID'});
 });

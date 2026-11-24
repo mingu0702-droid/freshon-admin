@@ -1,45 +1,13 @@
 import {createHash} from 'node:crypto';
-import {createRequire} from 'node:module';
-import {parseOpsmapWmsDispatchExport,publishStageWmsDispatchExport} from './opsmapWmsDispatchExport.js';
-import {createStageWmsReleaseStore,isStageWmsDay,stageWmsError,stageWmsReleaseEnabled} from './stageWmsExportIndex.js';
+import {freshonWmsVehicle as vehicle,verifiedFreshonWmsWorkbookLines as verifiedWorkbookLines,collectFreshonWmsDispatch as collect,encodeFreshonWmsDispatch} from './stageFreshonWmsDispatch.js';
+import {createStageWmsDispatchExportReader,parseOpsmapWmsDispatchExport,publishStageWmsDispatchExport} from './opsmapWmsDispatchExport.js';
+import {FRESHON_JSON_WMS_FORMAT,createStageWmsReleaseStore,isStageWmsDay,stageWmsError,stageWmsReleaseEnabled} from './stageWmsExportIndex.js';
 
-const require=createRequire(import.meta.url);
 const warehouse='011', pageSize=3000, maxWorkbookBytes=4*1024*1024;
 const sourceUrl='https://mis.freshon.co.kr/bo/wm/dispatch/baecha_list';
 const sha=/^[a-f0-9]{64}$/;
-const text=value=>typeof value==='string'?value.trim():Number.isSafeInteger(value)?String(value):'';
 const fail=code=>{throw stageWmsError('WMS_EXPORT_FRESHON_'+code);};
-const customerPattern=/^[A-Z]\d{1,20}$/;
 const sourceMetadata=new WeakMap();
-
-function exactInteger(value) {
-  const raw=text(value);
-  if(!/^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.0+)?$/.test(raw))fail('INTEGER');
-  const numeric=Number(raw.replaceAll(',',''));
-  if(!Number.isSafeInteger(numeric))fail('INTEGER');
-  return numeric;
-}
-
-function add(left,right) {
-  const sum=left+right;
-  if(!Number.isSafeInteger(sum))fail('INTEGER');
-  return sum;
-}
-
-function vehicle(value) {
-  if(value!=null&&typeof value!=='string'&&!Number.isSafeInteger(value))fail('VEHICLE');
-  const normalized=text(value).replace(/호(?:차)?$/,'').trim();
-  if(!normalized||normalized==='미배정')return '미배정';
-  if(!/^[0-9가-힣 -]{1,24}$/.test(normalized)||['-','소계','합계'].includes(normalized))fail('VEHICLE');
-  return normalized;
-}
-
-function detail(route,base,customer,amount,count) {
-  const code=text(customer).toUpperCase();
-  const deliveries=exactInteger(count);
-  if(!customerPattern.test(code)||deliveries<1)fail('DETAIL');
-  return [vehicle(route),code,vehicle(base),exactInteger(amount),deliveries];
-}
 
 function requestScope(date,env) {
   if(!isStageWmsDay(date)||!stageWmsReleaseEnabled(env)||env.OPSMAP_STAGE_WMS_FRESHON_VALIDATION_APPROVED!=='1')fail('SCOPE');
@@ -47,65 +15,6 @@ function requestScope(date,env) {
     sort:'stock_date,ASC',excelFileNm:'baecha_list',logCd:warehouse,calStartDate:date,calEndDate:date,
     baecha:'2',shipGbn:'1',estCd:'',estName:'',cboStartCarSeq:'',cboStartCarSeqNm:'',
     cboEndCarSeq:'',cboEndCarSeqNm:''});
-}
-
-function collect(payload,date) {
-  // One explicitly counted complete page is the only provider contract verified for XLSX parity.
-  if(!Array.isArray(payload?.data)||!payload.data.length||payload.data.length>=pageSize)fail('PAGE');
-  const target=date.replaceAll('-',''), lines=new Set(), routes=new Map();
-  let current=null,declared=null,sum=0,count=0,groups=0;
-  for(const row of payload.data){
-    if(!row||typeof row!=='object'||Array.isArray(row)||!(row.isSum===false||row.isSum==='false')||
-      (row.logCd!=null&&!['','011','11'].includes(text(row.logCd))))fail('ROW');
-    const stamp=text(row.stockDate);
-    // isSum=false is present on both detail and subtotal rows in the observed provider response.
-    if(/^\d{8}$|^\d{4}-\d\d-\d\d$|^\d{4}\.\d\d\.\d\d$/.test(stamp)&&stamp.replace(/[-.]/g,'')===target){
-      const entry=detail(row.confirmCarSeq,row.carSeq,row.estCd,row.maechul,row.baesongCnt);
-      const [route,,,amount,deliveries]=entry;
-      const total=exactInteger(row.totalCnt), key=JSON.stringify(entry);
-      if(total<1||total>=pageSize||lines.has(key)||routes.has(route))fail('DETAIL');
-      if(declared===null)declared=total;
-      if(total!==declared||current&&current.route!==route)fail('DETAIL');
-      current??={route,amount:0,deliveries:0};
-      current.amount=add(current.amount,amount);
-      current.deliveries=add(current.deliveries,deliveries);
-      lines.add(key);
-      continue;
-    }
-    if(![null,undefined,''].includes(row.stockDate)||![null,undefined,''].includes(row.estCd)||!current||
-      exactInteger(row.totalCnt)!==0||exactInteger(row.maechul)!==current.amount||
-      exactInteger(row.baesongCnt)!==current.deliveries)fail('SUBTOTAL');
-    const subtotalRoute=text(row.confirmCarSeq);
-    if(subtotalRoute&&subtotalRoute!=='-'&&subtotalRoute!=='소계'&&vehicle(subtotalRoute)!==current.route)fail('SUBTOTAL');
-    groups++;
-    sum=add(sum,current.amount);
-    count=add(count,current.deliveries);
-    routes.set(current.route,[current.amount,current.deliveries]);
-    current=null;
-  }
-  if(current||declared!==lines.size||groups!==routes.size||lines.size+groups!==payload.data.length)fail('COUNT');
-  return {lines,routes,sum,count};
-}
-
-function verifiedWorkbookLines(bytes,date) {
-  const XLSX=require('xlsx');
-  const book=XLSX.read(bytes,{type:'buffer',sheetRows:12001,cellFormula:false,cellText:false});
-  const [header,...rows]=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{header:1,defval:'',blankrows:false});
-  const required=['입고요청일','확정호차','고객','매출금액','배송건수','기준호차'];
-  const columns=required.map(name=>{
-    const positions=header.flatMap((value,index)=>text(value)===name?[index]:[]);
-    if(positions.length!==1)fail('WORKBOOK_FIELDS');
-    return positions[0];
-  });
-  const [day,route,code,amount,count,base]=columns;
-  const lines=new Set();
-  for(const row of rows){
-    if(text(row[day]).replace(/[-.]/g,'')!==date.replaceAll('-',''))continue;
-    const key=JSON.stringify(detail(row[route],row[base],row[code],row[amount],row[count]));
-    if(lines.has(key))fail('WORKBOOK_DETAIL');
-    lines.add(key);
-  }
-  return lines;
 }
 
 export async function readStageFreshonWmsWorkbookEvidence({date,readJson,env=process.env,signal}={}) {
@@ -154,10 +63,18 @@ export async function runStageFreshonWmsWorkbookOnce({
   if(!Buffer.isBuffer(bytes)||!bytes.length||bytes.length>maxWorkbookBytes||!sha.test(sha256||'')||
     createHash('sha256').update(bytes).digest('hex')!==sha256)fail('WORKBOOK_SCOPE');
   parseOpsmapWmsDispatchExport(bytes,{date,observedAt});
+  const evidence=await readFreshonWmsOnce({date,login,fetchImpl,env});
+  if(publish){
+    return publishStageFreshonWmsDispatchWorkbook({evidence,bytes,date,observedAt,sha256,replaceSha256,env,fetchImpl});
+  }
+  return verifyStageFreshonWmsDispatchWorkbook({evidence,bytes,date,observedAt,sha256,env});
+}
+
+async function readFreshonWmsOnce({date,login,fetchImpl,env}) {
   if(typeof login!=='function')fail('TRANSPORT');
   const {cookie}=await login();
   if(typeof cookie!=='string'||!cookie||/[\r\n]/.test(cookie))fail('SESSION');
-  const evidence=await readStageFreshonWmsWorkbookEvidence({date,env,readJson:async (url,options)=>{
+  return readStageFreshonWmsWorkbookEvidence({date,env,readJson:async (url,options)=>{
     const origin=new URL(sourceUrl).origin;
     const response=await fetchImpl(url,{...options,signal:AbortSignal.timeout(25000),
       headers:{...options.headers,Accept:'application/json',Origin:origin,
@@ -190,8 +107,35 @@ export async function runStageFreshonWmsWorkbookOnce({
       catch{fail('RESPONSE');}
     }finally{reader.releaseLock();}
   }});
-  if(publish){
-    return publishStageFreshonWmsDispatchWorkbook({evidence,bytes,date,observedAt,sha256,replaceSha256,env,fetchImpl});
-  }
-  return verifyStageFreshonWmsDispatchWorkbook({evidence,bytes,date,observedAt,sha256,env});
+}
+
+export async function syncStageFreshonWmsDispatch({
+  date,observedAt,login,replaceSha256,env=process.env,fetchImpl=fetch,archiveFetchImpl=fetch
+}={}) {
+  requestScope(date,env);
+  if(env.OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED!=='1'||
+    !createStageWmsReleaseStore({env,fetchImpl:archiveFetchImpl,write:true}))fail('SCOPE');
+  if(typeof observedAt!=='string'||!Number.isFinite(Date.parse(observedAt))||replaceSha256!==undefined&&!sha.test(replaceSha256))fail('SCOPE');
+  let manifest;
+  try{manifest=JSON.parse(env.OPSMAP_STAGE_WMS_DISPATCH_EXPORTS_JSON);}catch{fail('SCOPE');}
+  if(!manifest||typeof manifest!=='object'||Array.isArray(manifest))fail('SCOPE');
+  const releases=createStageWmsReleaseStore({env,fetchImpl:archiveFetchImpl});
+  if(!releases)fail('SCOPE');
+  const reader=createStageWmsDispatchExportReader({env,fetchImpl:archiveFetchImpl});
+  const legacy=Object.hasOwn(manifest,date)?manifest[date]:null;
+  const entry=legacy|| (await releases.readIndex()).entries.find(item=>item.date===date);
+  if(entry){
+    if(replaceSha256!==undefined&&(legacy||replaceSha256!==entry.sha256||
+      Date.parse(observedAt)<=Date.parse(entry.observedAt)))fail('REPLACEMENT');
+    const readback=await reader(date);
+    if(!readback)fail('ARCHIVE_READBACK');
+    if(replaceSha256===undefined)return {state:'VERIFIED_NOOP',date,sha256:entry.sha256};
+  }else if(replaceSha256!==undefined)fail('REPLACEMENT');
+  const pinnedDate=Object.keys(manifest).filter(isStageWmsDay).sort().at(-1);
+  if(!pinnedDate||!await reader(pinnedDate))fail('ARCHIVE_READBACK');
+  const evidence=await readFreshonWmsOnce({date,login,fetchImpl,env});
+  const bytes=encodeFreshonWmsDispatch(date,sourceMetadata.get(evidence));
+  const sha256=createHash('sha256').update(bytes).digest('hex');
+  return publishStageWmsDispatchExport({bytes,date,observedAt,sha256,replaceSha256,env,
+    format:FRESHON_JSON_WMS_FORMAT,fetchImpl:archiveFetchImpl});
 }
