@@ -547,11 +547,19 @@ const maxDispatchArchiveBytes = 2 * 1024 * 1024;
 
 function verifyFreshonDispatchArchive(bytes,date,center,at) {
   const {day,center:sourceCenter,filter,tcFilter,checkedAt,digest,state,detail,physical,customers,confirmed,
-    vehicles,unallocated,records} = JSON.parse(bytes);
+    vehicles,unallocated,records,zeroProof} = JSON.parse(bytes);
   const checked = Date.parse(checkedAt);
-  if (day!==date || sourceCenter!==center || filter!=='2' || tcFilter!=='1' || state!=='VERIFIED' ||
-      !Number.isFinite(checked) || new Date(checked).toISOString()!==checkedAt || checked>at || !hash.test(digest??'') ||
-      ![detail,physical,customers,confirmed,vehicles,unallocated].every(Number.isInteger) ||
+  if (day!==date || sourceCenter!==center || filter!=='2' || tcFilter!=='1' ||
+      !Number.isFinite(checked) || new Date(checked).toISOString()!==checkedAt || checked>at || !hash.test(digest??''))
+    throw rejected();
+  if (state==='ZERO_VERIFIED') {
+    const {begin,end,referenceDay,referenceDetail}=zeroProof??{};
+    if (![begin,end,referenceDay].every(isDay) || date<begin || date>end || referenceDay<begin || referenceDay>end ||
+        referenceDay===date || ![begin,end].includes(referenceDay) || (Date.parse(end)-Date.parse(begin))/86400000>10 ||
+        !Number.isSafeInteger(referenceDetail) || referenceDetail<1 || referenceDetail>=3000) throw rejected();
+    return {digest,codes:[],unallocated:0,verifiedZero:true};
+  }
+  if (state!=='VERIFIED' || ![detail,physical,customers,confirmed,vehicles,unallocated].every(Number.isInteger) ||
       detail<1 || physical>=3000 || customers<1 || customers>detail || confirmed<0 || confirmed>customers ||
       vehicles<0 || unallocated<0 || unallocated>detail ||
       physical!==detail+vehicles+(unallocated>0?1:0) ||
@@ -602,13 +610,16 @@ export async function recoverVerifiedFreshonDispatch({
     let proof;
     try {proof=verifyFreshonDispatchArchive(bytes,date,center,at);}
     catch {quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_EVIDENCE_INVALID');continue;}
-    const prior=byDigest.get(proof.digest);
-    if (prior) {
-      quarantined.set(prior,'RECENT_OPERATIONS_DISPATCH_DUPLICATE_SOURCE');
-      quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_DUPLICATE_SOURCE');
-    } else byDigest.set(proof.digest,date);
+    if (!proof.verifiedZero) {
+      const prior=byDigest.get(proof.digest);
+      if (prior) {
+        quarantined.set(prior,'RECENT_OPERATIONS_DISPATCH_DUPLICATE_SOURCE');
+        quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_DUPLICATE_SOURCE');
+      } else byDigest.set(proof.digest,date);
+    }
     if (date>closed) quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_DATE_OUTSIDE_LEDGER');
-    candidates.push({date,centerKey:dispatchArchiveCenters[center],codes:proof.codes,unallocated:proof.unallocated});
+    candidates.push({date,centerKey:dispatchArchiveCenters[center],codes:proof.codes,unallocated:proof.unallocated,
+      verifiedZero:proof.verifiedZero===true});
   }
   if (!files.size) throw Error('RECENT_OPERATIONS_RECOVERY_SCOPE');
   const archiveSha256=sha256(JSON.stringify(['OPS_MAP_FRESHON_DISPATCH_BATCH_V1',[...files].sort()]));
@@ -618,18 +629,20 @@ export async function recoverVerifiedFreshonDispatch({
   if (!base || base.endDate>closed || !codeRevision.test(sha??'')) throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
   const existing=new Map(base.days.filter(day=>day.source==='wms_dispatch').map(day=>[day.date+':'+day.centerKey,day]));
   const additions=[];
-  const scopes=candidates.map(({date,centerKey,codes,unallocated})=>{
+  const scopes=candidates.map(({date,centerKey,codes,unallocated,verifiedZero})=>{
     if (date<base.startDate||date>base.endDate) quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_DATE_OUTSIDE_LEDGER');
     const saved=existing.get(date+':'+centerKey);
     const before=new Set(saved?.rows.map(row=>row.customerCode));
     const added=codes.filter(code=>!before.has(code));
-    if (saved?.coverage==='complete'&&(added.length||before.size!==codes.length))
+    if (!verifiedZero&&saved?.coverage==='complete'&&(added.length||before.size!==codes.length))
       quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_COMPLETE_CONFLICT');
     return {date,centerKey,before:before.size,confirmed:codes.length,unallocated,
-      retainedOutsideInput:before.size-codes.length+added.length,added};
-  }).flatMap(({added,...scope})=>{
+      retainedOutsideInput:before.size-codes.length+added.length,added,
+      ...(verifiedZero?{verifiedZero:true,zeroConflict:before.size>0,writeZero:!before.size&&saved?.coverage!=='complete'}:{})};
+  }).flatMap(({added,writeZero,...scope})=>{
     const {date,centerKey}=scope;
     if (quarantined.has(date)) return [];
+    if (writeZero) additions.push({date,centerKey,source:'wms_dispatch',coverage:'complete',rows:[]});
     if (added.length) additions.push({date,centerKey,source:'wms_dispatch',coverage:'partial',
       rows:added.map(customerCode=>({customerCode,evidence:'dispatch_confirmed'}))});
     return [{...scope,added:added.length}];
@@ -643,7 +656,7 @@ export async function recoverVerifiedFreshonDispatch({
   catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',...report};throw error;}
   const saved=await store.read();
   if (JSON.stringify(saved?.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
-  return {state:'PUBLISHED',...report};
+  return {state:'PUBLISHED',...report,ledgerBlobSha:saved.sha};
 }
 
 export function createRecentOperationsReader({readSeed,store,now=Date.now}={}) {

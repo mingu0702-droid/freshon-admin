@@ -136,3 +136,23 @@ test('a regional dispatch scope does not block the official Osan snapshot during
   assert.equal(dailyReads,1);
   assert.deepEqual((await store.read()).ledger.days,[dispatchDay(latest,'osan','partial',['A2']),regional]);
 });
+
+
+test('corroborated zero scopes are published without removing earlier confirmed dispatch', async()=>{
+  const old=dispatchDay('2026-11-22','osan','partial',['A1']);
+  const store=memoryStore(ledger(old));
+  const zero=(date,center,proof)=>archive(date,center,[],{
+    state:'ZERO_VERIFIED', zeroProof:proof,digest:digest('range-'+center)
+  });
+  const proof={begin:'2026-11-22',end:'2026-11-23',referenceDay:'2026-11-23',referenceDetail:500};
+  const archives=[zero('2026-11-22','011',proof),zero('2026-11-22','012',proof),
+    zero('2026-11-21','013',proof),archive('2026-11-20','013',[],{state:'EMPTY'})];
+  const preview=await recoverVerifiedFreshonDispatch({store,archives,now});
+  assert.equal(preview.scopes.find(scope=>scope.centerKey==='osan').zeroConflict,true);
+  assert.equal(preview.quarantinedDates.length,2);
+  const result=await recoverVerifiedFreshonDispatch({store,archives,now,publish:true,approvedSha256:preview.archiveSha256});
+  assert.equal(result.state,'PUBLISHED');
+  const saved=(await store.read()).ledger;
+  assert.deepEqual(saved.days,[old,dispatchDay('2026-11-22','yeongnam','complete',[])]);
+  assert.equal((await recoverVerifiedFreshonDispatch({store,archives,now})).state,'VERIFIED_NOOP');
+});
