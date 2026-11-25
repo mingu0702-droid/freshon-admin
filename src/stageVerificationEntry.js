@@ -8,6 +8,7 @@ import {mountProductionMapApi} from './opsmap-abc/productionMapIntegration.js';
 import {callHub as hubRead} from './opsmap-abc/phase2bHubReadClient.js';
 import {createFixedVehicleCache} from './opsmap-abc/fixedVehicleCache.js';
 import {createSnapshotTransfer,sendSnapshotTransfer} from './opsmapTransferVersion.js';
+import {createMapStartupReader,mountMapStartup} from './opsmapMapStartup.js';
 import {opsmapArchiveSite,PRIMARY_ORIGIN} from './stageScope.js';
 import {createFixedVehicleFileStore} from './opsmap-abc/fixedVehicleStore.js';
 import {canonicalFixedMasterVehicle} from './fixedMasterVehicle.js';
@@ -424,6 +425,22 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       return ready();
     } finally {clearTimeout(timer);}
   }
+  function projectSnapshot(saved) {
+    const rows=redactPublicData(saved.rows);
+    if(saved.source==='STAGE_VERIFIED_REGISTRY'){
+      const active=validation.active();
+      const registry=active?.generation===saved.sourceGeneration?active.registry:null;
+      for(const row of rows){
+        const area=addressRegionParts(registry?.get(row.customerCode)?.address||row.address||row.basicAddress);
+        if(area){
+          row.addressMunicipality=area.municipality;
+          row.addressAdministrativeRegion=area.region;
+        }
+        for(const field of ['address','basicAddress','customerAddress','latestAddress','addressDetail'])delete row[field];
+      }
+    }
+    return rows;
+  }
   const callHub = async (action, params, options) => {
     if (!readActions.has(action)) throw new Error('STAGE_HUB_WRITE_REJECTED');
     const payload = await readHub(action, params, action==='datedAssignments' ? {...options,
@@ -540,6 +557,14 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     return res.status(403).json({error:'STAGE_READ_ONLY'});
   });
   let staffView;
+  // This endpoint checks the durable staff session before and after its read.
+  // Mount it ahead of the legacy page gates so those checks are not repeated.
+  if(primary&&nationalRegistry) mountMapStartup(router,{requireStaff:(req,res,next)=>staffView(req,res,next),read:createMapStartupReader({
+    readSnapshot,readRegistry:()=>nationalRegistry.read(),
+    readFixed:knownVersion=>fixed.get(null,{knownVersion}),projectSnapshot,
+    snapshotMeta:saved=>({...phase2bSnapshotMeta(saved),sourceGeneration:saved.sourceGeneration,
+      sourceRunId:saved.sourceRunId||null,osanDeliveryThrough:saved.osanDeliveryThrough,recovery:'READY'})
+  })});
   const readStageStoreDetail = createStageStoreDetails({now,publication:()=>{
     const active=validation.active();
     if (!active) return null;
@@ -774,22 +799,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             ...(saved.osanDeliveryThrough?{osanDeliveryThrough:saved.osanDeliveryThrough}:{}),
             recovery,...(recovery==='RESTORING'?{retryAfterMs:2000}:{})};
           // Only share the encoded, redacted response for this exact Snapshot and metadata.
-          const projection=snapshotTransfer(saved.rows,meta,values=>{
-            const rows=redactPublicData(values);
-            if(saved.source==='STAGE_VERIFIED_REGISTRY'){
-              const active=validation.active();
-              const registry=active?.generation===saved.sourceGeneration?active.registry:null;
-              for(const row of rows){
-                const area=addressRegionParts(registry?.get(row.customerCode)?.address||row.address||row.basicAddress);
-                if(area){
-                  row.addressMunicipality=area.municipality;
-                  row.addressAdministrativeRegion=area.region;
-                }
-                for(const field of ['address','basicAddress','customerAddress','latestAddress','addressDetail'])delete row[field];
-              }
-            }
-            return rows;
-          });
+          const projection=snapshotTransfer(saved.rows,meta,()=>projectSnapshot(saved));
           const respond=()=>sendSnapshotTransfer(req,res,projection,meta);
           if(!immediate)return requireStaff(req,res,respond);
           if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});

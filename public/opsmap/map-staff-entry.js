@@ -1,8 +1,8 @@
 (() => {
   'use strict';
   const rawFetch = window.fetch.bind(window), ACTIVITY_THROTTLE_MS = 60000;
-  const stage = location.origin === 'https://freshon-admin-stage-preview-template.onrender.com'||
-    location.origin==='https://freshon-admin-1.onrender.com'&&document.documentElement?.dataset?.opsmapArchive==='primary';
+  const primary = location.origin==='https://freshon-admin-1.onrender.com'&&document.documentElement?.dataset?.opsmapArchive==='primary';
+  const stage = primary || location.origin === 'https://freshon-admin-stage-preview-template.onrender.com';
   const preloadedScripts = new Set([...document.querySelectorAll('link[data-map-staff-preload]')].map(link => link.getAttribute('href')));
   let session = null, epoch = 0, timer = null, booted = false, booting = null, lastActivityCheck = 0, checking = null, checkingOwner = -1, confirming = null, confirmingOwner = -1, signingOut = null, logoutRequired = false;
   let recoveryTimer = null, initialSnapshot;
@@ -134,8 +134,9 @@
     setTimeout(() => {
       if (initialSnapshot === request) initialSnapshot = null;
       controller.abort();
-    }, 10000);
-    request.result = window.fetch('/api/map-phase2b/preview/snapshot', { cache: 'no-store', priority: 'high', signal: controller.signal })
+    }, primary ? 22000 : 10000);
+    const route=primary?'/api/map-phase2b/private/map-startup':'/api/map-phase2b/preview/snapshot';
+    request.result = window.fetch(route, { cache: 'no-store', priority: 'high', signal: controller.signal })
       .then(async response => ({ response, json: await response.json().catch(error => {
         if (response.ok) throw error;
         return {};
@@ -193,7 +194,7 @@
     entry.hidden = true; document.body.dataset.mapStaffState = 'authenticated'; status();
     performance.mark('opsmap-staff-ready');
     window.dispatchEvent(new Event('map-staff-ready'));
-    if(stage)void stageSnapshot.then(async()=>{
+    if(stage&&!primary)void stageSnapshot.then(async()=>{
       if(owner!==epoch||!session)return;
       await loadData(owner);
       if(owner===epoch&&session&&window.VEHICLE_AREA_DATA?.vehicles?.length)

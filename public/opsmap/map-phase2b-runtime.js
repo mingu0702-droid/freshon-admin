@@ -5,8 +5,8 @@
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   let SOURCE = window.VEHICLE_AREA_DATA || { vehicles: [] };
-  const archiveView = window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com'||
-    window.location?.origin==='https://freshon-admin-1.onrender.com'&&document.documentElement?.dataset?.opsmapArchive==='primary';
+  const primaryStartup = window.location?.origin==='https://freshon-admin-1.onrender.com'&&document.documentElement?.dataset?.opsmapArchive==='primary';
+  const archiveView = primaryStartup || window.location?.origin==='https://freshon-admin-stage-preview-template.onrender.com';
   const DEFAULT_PERIOD_CENTER = archiveView?'':'osan';
   const state = { mode: "BASE_60D", connectionLines:false, rangeStart: "", rangeEnd: "", routeDate: "", selectedVehicles: [], driverKey: "", centerFilter: DEFAULT_PERIOD_CENTER, selectedDate: "", latestDate: "", map: null, overlays: [], lines: [], selected: null, virtual: null, currentRows: [], routeRows: [], newAreaResults: [], fitRequested: true, userMovedMap: false, suppressMapEventsUntil: 0, baseRequestId: 0, routeRequestId: 0, searchRequestId: 0, addressRequestId: 0, detailRequestId: 0, todayRequestId: 0 };
   let mapInitializing=null,mapObserver=null,mapHandlers=[],mapGestureEvents=null,mapCamera=null,cameraSelection=0;
@@ -71,6 +71,7 @@
     storeDetailFlights.clear();storeDetailMemory.clear();storeDetailLatest=Promise.resolve();newAreaRegistryMemo=newAreaLocationsMemo=newAreaEvidenceMemo=null;deferredBatchMapRefresh=null;
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;registrationCounts=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     snapshotTransferVersion=null;baseVehicleTransfers.clear();
+    primaryStartupVersion=null;primaryMapFlight=null;
     storeByVehicleAndCode.clear();storesByCode.clear();resetDriverMaster();geocodeCache.clear();
     indexedRows=null;pointIndex=null;baseVehicleStatus='LOADING';baseVehicleMeta=null;snapshotMeta=null;periodMeta=null;modelStatus=null;
     customerRegistrySource='';customerRegistryCheckedAt='';customerRegistrySourceCheckedAt='';
@@ -94,6 +95,7 @@
   let periodSelectionCache = null;
   let baseVehicles = new Map(), baseVehicleRequest = null, baseVehicleTimer = null, baseVehicleTries = 0;
   let baseVehicleTransfers=new Map(),snapshotTransferVersion=null;
+  let primaryStartupVersion=null,primaryMapFlight=null;
   let deferredBatchMapRefresh=null;
   let recentPeriodMode = true;
   let recentPeriodDays = 90;
@@ -266,6 +268,7 @@
     ]);
   }
   async function syncCustomerRegistry(){
+    if(primaryStartup)return;
     if(!customerRegistry||customerRegistryBusy||!generalMap||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return;
     customerRegistryBusy=true;const owner=initialRequestId,before=customerRegistry.currentVersion(),known=new Set(allStores.map(r=>r.customerCode));
     try{const options={selection:registrySelection(),maxPages:100},result=await (customerRegistry.summary().status==='logged-out'?customerRegistry.reconnect(options):customerRegistry.sync(options));if(owner!==initialRequestId||document.body.dataset.mapStaffState!=='authenticated'||state.mode!=='BASE_60D')return;
@@ -603,7 +606,7 @@
         channel: "map-snapshot", ttl: 0, timeout: 10000,
         headers:known?{'X-Opsmap-Known-Snapshot':known}:undefined,
         onHeaders:headers=>{received=headers.get('X-Opsmap-Transfer-Version');},
-        prefetch: stage&&!known ? window.MapStaffEntry?.takeInitialSnapshot : undefined });
+        prefetch: stage&&!primaryStartup&&!known ? window.MapStaffEntry?.takeInitialSnapshot : undefined });
       if(id!==initialRequestId)throw Object.assign(Error('QUERY_CANCELLED'),{name:'AbortError'});
       if(payload.notModified===true){
         if(payload.ok!==true||!known||known!==received)throw Error('SNAPSHOT_TRANSFER_VERSION');
@@ -681,7 +684,97 @@
     state.rangeStart=start;state.rangeEnd=end;
     $('#rangeStart').value=start;$('#rangeEnd').value=end;
   }
+  function loadPrimaryRegisteredMap(owner, attempt=0) {
+    const current=()=>owner===initialRequestId&&generalMap&&state.mode==='BASE_60D'&&
+      document.body.dataset.mapStaffState==='authenticated';
+    if(!current())return Promise.resolve({ok:false,skipped:true});
+    if(primaryMapFlight?.owner===owner)return primaryMapFlight.promise;
+    const flight={owner};
+    flight.promise=(async()=>{
+      const known=primaryStartupVersion;
+      const dateWasReady=dateReady;
+      try{
+        let version;
+        const reply=await fetchJson('/api/map-phase2b/private/map-startup',{
+          channel:'primary-map-startup',timeout:22000,
+          headers:known?{'X-Opsmap-Known-Startup':known}:undefined,
+          onHeaders:headers=>{version=headers.get('X-Opsmap-Startup-Version');},
+          prefetch:known?undefined:window.MapStaffEntry?.takeInitialSnapshot
+        });
+        if(!current())return {ok:false,skipped:true};
+        if(!reply.ok||!/^[a-f0-9]{64}$/.test(version||''))throw Error('OPSMAP_STARTUP_VERSION');
+        if(reply.notModified){
+          if(!known||version!==known)throw Error('OPSMAP_STARTUP_VERSION');
+          if(dateWasReady)return {ok:true,changed:false};
+        }else{
+          const {snapshot,registry,fixed}=reply.data||{};
+          if(!Array.isArray(snapshot?.rows)||!snapshot.rows.length||
+              !/^[a-f0-9]{64}$/.test(snapshot.meta?.sourceGeneration||'')||
+              !Array.isArray(registry?.rows)||registry.version!==reply.meta?.registryVersion||
+              reply.meta?.source!=='STAGE_FRESHON_NATIONAL_REGISTRY'||!Number.isFinite(Date.parse(reply.meta.checkedAt))||
+              !Array.isArray(fixed?.rows)||fixed.meta?.version!==reply.meta.fixedVersion||
+              !MapPeriodUi.acceptsBaseVersion(baseVehicleMeta,fixed.meta))
+            throw Error('OPSMAP_STARTUP_PROJECTION');
+          const codes=[...new Set([...snapshot.rows,...registry.rows].map(row=>row.customerCode))];
+          if(codes.length>30000||snapshot.rows.length>30000||registry.rows.length>30000||fixed.rows.length!==codes.length)
+            throw Error('OPSMAP_STARTUP_SCOPE');
+          const rows=fixed.rows.map(row=>({...row,baseVehicleCheckedAt:fixed.meta.checkedAt,baseVehicleVersion:fixed.meta.version,
+            baseVehicleSource:fixed.meta.basis}));
+          await collectBaseVehicleBatches([codes],async()=>({ok:true,data:rows,meta:fixed.meta}));
+          await customerRegistry.installVerifiedComplete(registry,current);
+          if(!current())return {ok:false,skipped:true};
+          latestSnapshotRows=snapshot.rows; snapshotMeta=snapshot.meta;
+          coordinateByCode.clear();
+          for(const row of snapshot.rows) coordinateByCode.set(row.customerCode,row);
+          snapshotRetryAfter=0;snapshotFailure=null;snapshotReadState='ready';
+          state.latestDate=snapshotMeta.latestDate||latestDateFromRows(latestSnapshotRows);
+          $('#selectedDate').max=localDate();
+          baseVehicles=MapPeriodUi.mergeBaseVehicles(baseVehicleMeta?.version===fixed.meta.version?baseVehicles:new Map(),rows);
+          baseVehicleMeta=fixed.meta;baseVehicleStatus='READY';
+          customerRegistrySource=reply.meta.source;
+          customerRegistrySourceCheckedAt=customerRegistryCheckedAt=reply.meta.checkedAt;
+          primaryStartupVersion=version;
+          if(!known){
+            const references=new Map();
+            for(const row of snapshot.rows){
+              const vehicle=row.baseVehicle||row.vehicle;
+              if(vehicle&&!references.has(vehicle))references.set(vehicle,{vehicle,group:row.baseVehicleGroup||row.centerGroup||'',customers:[]});
+            }
+            SOURCE={vehicles:[...references.values()]};
+            initVehicles();
+          }
+        }
+        applySnapshotRange();periodRows=[];replaceStoreSnapshot([],snapshotMeta);ensureDateVehicles();
+        if(state.selected){const refreshed=storesByCode.get(state.selected.customerCode);if(refreshed)state.selected={...state.selected,...refreshed};}
+        dateReady=true;
+        setPeriodViewState(allStores.length?'ready':'empty');
+        window.MapDataSync?.setChecking?.(false);
+        performance.mark('opsmap-verified-startup');
+        window.dispatchEvent(new Event('map-fixed-master-ready'));
+        window.dispatchEvent(new CustomEvent('map-customer-registry-updated',{detail:{
+          count:customerRegistry.summary().count,checkedAt:customerRegistryCheckedAt,version:customerRegistry.currentVersion()
+        }}));
+        await loadBaseMap();
+        return {ok:true,changed:!reply.notModified};
+      }catch(error){
+        if(!current()||isSilentRequestError(error))return {ok:false,skipped:true};
+        if(!dateWasReady){
+          setPeriodViewState('not-ready');
+          $('#freshnessState').textContent='최신 등록정보와 기준호차를 확인하고 있습니다.';
+          if(attempt<2){
+            clearTimeout(snapshotRecoveryTimer);
+            const delay=Math.min(7000,Math.max(2000,error.retryAfterMs||2000));
+            snapshotRecoveryTimer=setTimeout(()=>void loadPrimaryRegisteredMap(owner,attempt+1),delay);
+          }else window.MapDataSync?.setChecking?.(false);
+        }
+        return {ok:false,changed:false};
+      }
+    })().finally(()=>{if(primaryMapFlight===flight)primaryMapFlight=null;});
+    primaryMapFlight=flight;
+    return flight.promise;
+  }
   async function pollGeneralSnapshot({recovering=false}={}){
+    if(primaryStartup)return loadPrimaryRegisteredMap(initialRequestId);
     if(generalSnapshotPolling||!generalMap||state.mode!=='BASE_60D'||!recovering&&document.hidden||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
     generalSnapshotPolling=true;const owner=initialRequestId,oldRows=latestSnapshotRows,oldMeta=snapshotMeta;
     const version=m=>JSON.stringify([m?.preservation?.version,m?.sourceGeneration,m?.version,m?.generatedAt,m?.rowCount]);
@@ -749,6 +842,11 @@
     switchMode('BASE_60D');refreshVehicleUi(false);syncModeUi();syncPeriodBasis();
     $('#includeUnvisitedStores').checked=true;dateReady=false;setPeriodViewState('loading');
     refreshRecentOperations();
+    if(primaryStartup){
+      clearMap();
+      window.MapDataSync?.setChecking?.(true);
+      return loadPrimaryRegisteredMap(id);
+    }
     try {
       const adapter=stageAddressBatchEnabled()?null:await hybridUiReady,cached=await adapter?.readCachedGeneral();
       if(id!==initialRequestId||!generalMap)return;

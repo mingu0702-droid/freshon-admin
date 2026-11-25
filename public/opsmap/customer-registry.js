@@ -74,19 +74,19 @@
       if (owner !== epoch || signal.aborted || !active) throw cancelled();
     }
 
-    async function validate(payload, requestedCursor) {
+    async function validate(payload, requestedCursor, bulk = false) {
       if (payload?.ok === false) throw failure('CUSTOMER_REGISTRY_SOURCE_UNAVAILABLE');
       const page = payload?.data && !Array.isArray(payload.data) ? payload.data : payload;
       if (!page || page.contract !== 'customer-registry-v1' || !['FULL', 'DELTA', 'NOOP'].includes(page.mode) ||
         !validText(page.version, 256) || !page.version || typeof page.complete !== 'boolean' ||
-        page.deletionPolicy !== 'EXPLICIT_ONLY' || !Array.isArray(page.rows) || page.rows.length > 1000 ||
+        page.deletionPolicy !== 'EXPLICIT_ONLY' || !Array.isArray(page.rows) || page.rows.length > (bulk ? 30000 : 1000) ||
         page.sourceVersion != null && !validText(page.sourceVersion, 256) ||
         page.nextCursor != null && (!validText(page.nextCursor, 4096) || !page.nextCursor) ||
         (page.afterCursor ?? null) !== requestedCursor ||
         !page.complete && (!page.nextCursor || page.nextCursor === requestedCursor) ||
         page.mode === 'NOOP' && (page.rows.length || !page.complete)) throw failure('CUSTOMER_REGISTRY_PAGE_INVALID');
       const seen = new Set(), rows = [];
-      for (const row of page.rows) {
+      async function checkedRow(row) {
         if (!row || !code(row.customerCode) || seen.has(row.customerCode) || !['ACTIVE', 'DELETED'].includes(row.lifecycle) ||
           row.centerGroup != null && (!(registrationCenters.has(row.centerGroup) || row.nationalRegistry===true&&row.centerGroup==='osan') ||
           row.lifecycle !== 'ACTIVE'&&row.nationalRegistry!==true) ||
@@ -103,14 +103,37 @@
           location.lat < 33 || location.lat > 39.5 || location.lng < 124 || location.lng > 132 ||
           !['BUILDING', 'PARCEL', 'ADDRESS'].includes(location.kind))) throw failure('CUSTOMER_REGISTRY_LOCATION_INVALID');
         // Never copy private detail fields, provider coordinates, visits, or notes from a bulk response.
-        rows.push(Object.freeze({customerCode: row.customerCode, customerName: row.customerName || '', basicAddress: row.basicAddress || '',
+        return Object.freeze({customerCode: row.customerCode, customerName: row.customerName || '', basicAddress: row.basicAddress || '',
           addressHash: currentHash, ...(search ? {coordinateSearch: search} : {}),
           ...(row.centerGroup ? {centerGroup: row.centerGroup} : {}),
           ...(row.nationalRegistry===true ? {nationalRegistry:true} : {}),
           ...(location ? {verifiedLocation: Object.freeze({addressHash:currentHash,lat:location.lat,lng:location.lng,kind:location.kind})} : {}),
-          sourceUpdatedAt: row.sourceUpdatedAt || '', lifecycle: row.lifecycle}));
+          sourceUpdatedAt: row.sourceUpdatedAt || '', lifecycle: row.lifecycle});
       }
+      if (bulk) {
+        for (let offset = 0; offset < page.rows.length; offset += 128)
+          rows.push(...await Promise.all(page.rows.slice(offset, offset + 128).map(checkedRow)));
+      } else for (const row of page.rows) rows.push(await checkedRow(row));
       return {...page, rows};
+    }
+
+    async function installVerifiedComplete(payload, isCurrent) {
+      const owner = epoch, signal = controller.signal;
+      if (!authenticated() || !isCurrent()) throw cancelled();
+      const page = await validate(payload, null, true);
+      if (!authenticated() || !isCurrent() || owner !== epoch || signal.aborted) throw cancelled();
+      if (page.mode !== 'FULL' || !page.complete || page.nextCursor || !hash(page.version) ||
+          !page.rows.length || page.rows.length !== page.total || page.rows.some(row=>row.nationalRegistry!==true))
+        throw failure('CUSTOMER_REGISTRY_PAGE_INVALID');
+      if (page.version !== version) {
+        generationNewCodes = new Set(sourceInitialized ? page.rows.filter(row=>row.lifecycle==='ACTIVE'&&!records.has(row.customerCode)).map(row=>row.customerCode) : []);
+        for (const customerCode of generationNewCodes) liveNewCodes.add(customerCode);
+        for (const row of page.rows) records.set(row.customerCode,row);
+      }
+      active=true; sourceInitialized=true; complete=true; stage=null; cursor=null;
+      version=page.version; sourceVersion=page.sourceVersion||''; status='ready'; errorCode='';
+      notify();
+      return summary();
     }
 
     async function run(options, owner) {
@@ -270,7 +293,7 @@
       return [...merged.values()];
     }
 
-    return Object.freeze({sync, reconnect, purge, merge, summary, currentVersion:()=>version, priorityRows, locationRows,
+    return Object.freeze({sync, reconnect, installVerifiedComplete, purge, merge, summary, currentVersion:()=>version, priorityRows, locationRows,
       isRetired:code=>active&&records.get(code)?.lifecycle==='DELETED'});
   }
   root.MapCustomerRegistry = Object.freeze({create, priorityRows, addressHash});
