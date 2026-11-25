@@ -13,9 +13,10 @@ const key = 'a'.repeat(64), fingerprint = 'b'.repeat(64);
 
 function fixture(config = env) {
   let at = 1794500000000, revision = 0, state, failWrite = false, conflicts = 0, retryAt = 0, privateRepo = true;
+  let staleAfterNextWrite = 0, previousReadCount = 0, previousState, previousRevision;
   const requests = [];
   const gates = new Map();
-  const sha = () => revision.toString(16).padStart(40, '0');
+  const sha = (value = revision) => value.toString(16).padStart(40, '0');
   function holdNext(step) {
     let start, release;
     const started = new Promise(resolve => { start = resolve; });
@@ -31,11 +32,15 @@ function fixture(config = env) {
     await gate.released;
   }
   function read(options) {
-    if (!state) return new Response(null, {status:404});
-    const etag = '"' + sha() + '"';
+    const previous = previousReadCount > 0;
+    if (previous) previousReadCount--;
+    const value = previous ? previousState : state;
+    const digest = sha(previous ? previousRevision : revision);
+    if (!value) return new Response(null, {status:404});
+    const etag = '"' + digest + '"';
     if (options.headers['If-None-Match'] === etag) return new Response(null, {status:304});
-    const body = Buffer.from(JSON.stringify(state));
-    return Response.json({ sha: sha(), encoding: 'base64', size: body.length, content: body.toString('base64') }, { headers: { etag } });
+    const body = Buffer.from(JSON.stringify(value));
+    return Response.json({ sha: digest, encoding: 'base64', size: body.length, content: body.toString('base64') }, { headers: { etag } });
   }
   const github = async (url, options) => {
     const path = new URL(url).pathname;
@@ -61,8 +66,13 @@ function fixture(config = env) {
       }
       if (data.sha !== (state ? sha() : undefined)) return new Response(null, {status:409});
       if (failWrite) return new Response(null, {status:500});
+      previousState = state;
+      previousRevision = revision;
+      previousReadCount = staleAfterNextWrite;
+      staleAfterNextWrite = 0;
       state = JSON.parse(Buffer.from(data.content, 'base64').toString());
       revision++;
+      await pause('written');
       return Response.json({});
     }
     await pause('read');
@@ -75,6 +85,7 @@ function fixture(config = env) {
     makePublic: () => { privateRepo = false; }, rejectWrites: () => { failWrite = true; },
     conflictWrites: count => { conflicts = count; }, holdNextRead: () => holdNext('read'),
     holdNextResponse: () => holdNext('response'), holdNextWrite: () => holdNext('write'),
+    staleReadback: count => { staleAfterNextWrite = count; }, holdWrittenResponse: () => holdNext('written'),
     holdNextAcknowledgment: () => holdNext('acknowledgment'),
     start: () => createStageStaffSessionStore({ env: config, fetchImpl: github, now: () => at, wait: async ms => {
       assert.equal(ms, 4000);
@@ -165,6 +176,34 @@ test('a failed CAS cannot promote an unpersisted session into the read cache', a
   await assert.rejects(store.set('e'.repeat(64), saved, fingerprint), /STAFF_SESSION_STORE_UNAVAILABLE/);
   assert.equal(await store.get('e'.repeat(64), fingerprint), null);
   assert.deepEqual(await store.get(key, fingerprint), saved);
+});
+
+test('a stale post-write blob is read again once without rewriting the session', async () => {
+  const f = fixture(), store = f.start(), saved = future(f);
+  f.staleReadback(1);
+  assert.equal(await store.set(key, saved, fingerprint), true);
+  assert.equal(store.stats().casReadbackRetries, 1);
+  assert.equal(store.stats().sessionWrites, 1);
+  assert.deepEqual(await f.start().get(key, fingerprint), saved);
+});
+
+test('an activity readback accepts a signed later renewal, but fails closed after a remote logout', async () => {
+  const f = fixture(), a = f.start(), b = f.start(), saved = future(f);
+  await a.set(key, saved, fingerprint);
+  const earlier = { ...saved, idleExpiresAt: saved.idleExpiresAt + 1000 };
+  const later = { ...saved, idleExpiresAt: saved.idleExpiresAt + 2000 };
+  const first = f.holdWrittenResponse(), renewing = a.touch(key, earlier, fingerprint);
+  await first.started;
+  try { assert.equal(await b.touch(key, later, fingerprint), true); } finally { first.release(); }
+  assert.equal(await renewing, true);
+  assert.deepEqual(await a.get(key, fingerprint), later);
+
+  const second = f.holdWrittenResponse(), revoked = a.touch(key, later, fingerprint);
+  const refused = assert.rejects(revoked, /STAFF_SESSION_STORE_UNAVAILABLE/);
+  await second.started;
+  try { await b.delete(key); } finally { second.release(); }
+  await refused;
+  assert.equal(await a.get(key, fingerprint), null);
 });
 
 test('CAS retry is bounded and uses the durable state without resurrecting deleted sessions', async () => {
@@ -278,6 +317,19 @@ test('two concurrent Stage HTTP logins both persist when the first CAS loses', {
     const cookie = response.headers.get('set-cookie').split(';')[0];
     assert.equal((await restored.request('/protected', cookie)).status, 200);
   }
+});
+
+test('unconfirmed Stage session readback returns service unavailable without issuing a cookie', async t => {
+  const password = 'SYNTHETIC_PASSWORD';
+  const config = { ...env, MAP_STAFF_PASSWORD_HASH: await createStaffPasswordHash(password) };
+  const f = fixture(config), app = await startHttp(t, f, config);
+  f.staleReadback(2);
+  const login = await app.request('/auth/login', null, { id: env.MAP_STAFF_ID, password });
+  assert.equal(login.status, 503);
+  assert.equal(login.headers.get('set-cookie'), null);
+  assert.deepEqual(await login.json(), {error:'LOGIN_UNAVAILABLE'});
+  assert.equal(app.store.stats().casReadbackRetries, 1);
+  assert.equal(app.store.stats().sessionWrites, 1);
 });
 
 test('logout acknowledges only after the other worker can no longer approve its cached session', { timeout: 10000 }, async t => {

@@ -59,14 +59,14 @@ test('a full-size startup response is compressed once, reuses source versions an
 });
 
 test('the response is protected before loading, after loading, and when the version matches',async()=>{
-  const app=express();let active=true,reads=0,release;
+  const app=express();let active=true,reads=0,release,recovery='RESTORING';
   const fixture=reader({snapshot:()=>base,registry:()=>({ref:{version,count:1,checkedAt},rows:[registryRow(0)]}),
     fixed:()=>({ok:true,meta:fixedMeta(1),data:[fixedRow(0)],transferVersion:sha('fixed-transfer')})});
   const requireStaff=(req,res,next)=>active&&req.get('authorization')==='fixture'?next():res.sendStatus(401);
-  mountMapStartup(app,{requireStaff,read:async()=>{
+  mountMapStartup(app,{requireStaff,recovery:()=>recovery,restoreMs:()=>575,read:async()=>{
     reads++;
     if(reqWait)await new Promise(resolve=>{release=resolve;});
-    return fixture();
+    return recovery==='READY'?fixture():null;
   }});
   let reqWait=false;
   const server=app.listen(0,'127.0.0.1');
@@ -76,10 +76,22 @@ test('the response is protected before loading, after loading, and when the vers
     assert.equal((await fetch(url)).status,401);
     assert.equal(reads,0);
     const headers={authorization:'fixture','accept-encoding':'gzip'};
+    const preparing=await fetch(url,{headers});
+    assert.equal(preparing.status,503);
+    assert.equal(preparing.headers.get('retry-after'),'2');
+    assert.deepEqual(await preparing.json(),{error:'OPSMAP_STARTUP_NOT_READY'});
+    recovery='UNAVAILABLE';
+    const unavailable=await fetch(url,{headers});
+    assert.equal(unavailable.status,503);
+    assert.equal(unavailable.headers.get('retry-after'),null);
+    assert.deepEqual(await unavailable.json(),{error:'OPSMAP_STARTUP_UNAVAILABLE'});
+    recovery='READY';
     const response=await fetch(url,{headers});
     assert.equal(response.status,200);
     assert.equal(response.headers.get('content-encoding'),'gzip');
     assert.equal(response.headers.get('cache-control'),'private, no-store');
+    assert.equal(response.headers.get('x-opsmap-restore-ms'),'575');
+    assert.match(response.headers.get('server-timing'),/^opsmap-startup-prepare;dur=\d+\.\d{2}$/);
     const firstVersion=response.headers.get('x-opsmap-startup-version');
     assert.equal((await response.json()).data.fixed.rows.length,1);
     const same=await fetch(url,{headers:{...headers,'x-opsmap-known-startup':firstVersion}});

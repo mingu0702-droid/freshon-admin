@@ -475,13 +475,13 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         return res.status(400).json({error:'STAGE_BATCH_QUERY_INVALID'});
       }
       const started=performance.now();
-      let outcomes=null, stateRows;
+      let outcomes=null, stateRows, failureCode=null;
       res.once('finish',()=>console.info(JSON.stringify({component:'stage-address-batch',rows:rows.length,
-        status:res.statusCode,durationMs:Math.round(performance.now()-started),outcomes,
+        status:res.statusCode,failureCode,durationMs:Math.round(performance.now()-started),outcomes,
         states:stateRows?.reduce((counts,{state})=>({...counts,[state]:(counts[state]||0)+1}),{})??null})));
       const prepared=validation.active();
       const generationError=validation.addressGenerationError(generation,prepared);
-      if(generationError)return res.status(409).json({error:generationError});
+      if(generationError){failureCode=generationError;return res.status(409).json({error:generationError});}
       try{
         const loaded=generation!==null ? prepared?.scheduled?.snapshot||readReadySnapshot?.() : null;
         const immediate=loaded?.sourceGeneration===generation&&Array.isArray(loaded?.rows);
@@ -489,8 +489,10 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
           immediate?loaded:readSnapshot(),Promise.resolve().then(()=>readAddressMaster?.()).catch(()=>null)
         ]);
         const changed=validation.addressGenerationError(generation,validation.active());
-        if(changed||validation.active()!==prepared||generation!==null&&saved?.sourceGeneration!==generation)
-          return res.status(409).json({error:changed||'STAGE_BATCH_GENERATION_CHANGED'});
+        if(changed||validation.active()!==prepared||generation!==null&&saved?.sourceGeneration!==generation){
+          failureCode=changed||'STAGE_BATCH_GENERATION_CHANGED';
+          return res.status(409).json({error:failureCode});
+        }
         const bundled=prepared?.bundledAddress, independent=readOfficialIndex?.();
         const official=bundled||independent?{lookup(query){
           const primary=bundled?.lookup(query);
@@ -498,7 +500,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
           return independent?.lookup(query)??primary;
         }}:null;
         const snapshotReady=Array.isArray(saved?.rows);
-        if(!snapshotReady&&!official&&!master)return res.status(503).json({error:'STAGE_BATCH_UNAVAILABLE',state:'LOOKUP_FAILED'});
+        if(!snapshotReady&&!official&&!master){failureCode='STAGE_BATCH_UNAVAILABLE';return res.status(503).json({error:failureCode,state:'LOOKUP_FAILED'});}
         const preparing=performance.now();
         if(rows.some(row=>row.some(query=>!/^[A-Z]\d{1,20}$/i.test(query)))) {
           await Promise.all([preparePreservedAddressIndex(saved),prepareStageAddressMasterIndex(master)]);
@@ -553,8 +555,8 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         const checking=performance.now();
         const respond=()=>{
           if(res.destroyed||res.writableEnded)return;
-          if(!isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
-          if(validation.active()!==prepared)return res.status(409).json({error:validation.addressGenerationError(generation,validation.active())||'STAGE_BATCH_GENERATION_CHANGED'});
+          if(!isSessionCurrent(req,res.locals.staffSession?.key)){failureCode='STAFF_LOGIN_REQUIRED';return res.status(401).json({error:failureCode});}
+          if(validation.active()!==prepared){failureCode=validation.addressGenerationError(generation,validation.active())||'STAGE_BATCH_GENERATION_CHANGED';return res.status(409).json({error:failureCode});}
           if(immediate&&includeCustomers&&!externalResult)res.locals.stageInlineStaffResponse=true;
           res.set('Server-Timing',Object.entries({...baseTiming,'opsmap-address-recheck':performance.now()-checking})
             .map(([key,duration])=>key+';dur='+duration.toFixed(2)).join(', '));
@@ -564,6 +566,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
       }catch(error){
         if(res.destroyed||res.writableEnded)return;
         const code=external&&/^[A-Z_]+$/.test(error.code||'')?error.code:'STAGE_BATCH_UNAVAILABLE';
+        failureCode=code;
         const status=[400,401,403,409,429,502,503].includes(error.status)?error.status:503;
         const state=blockedExternalErrors.has(code)||status===429||[401,403,429].includes(error.providerHttp)?'LOOKUP_BLOCKED':'LOOKUP_FAILED';
         if(external==='resolve'&&stateRows?.[0])stateRows[0].state=state;

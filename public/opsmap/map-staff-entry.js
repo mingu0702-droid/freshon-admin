@@ -127,16 +127,15 @@
       throw error;
     }finally{clearTimeout(timer);requests.delete(controller);}
   }
-  function primeStageSnapshot(owner) {
+  function primeMapStartup(owner) {
     const controller = new AbortController(), started = performance.now();
     const request = { owner, controller };
     initialSnapshot = request;
     setTimeout(() => {
       if (initialSnapshot === request) initialSnapshot = null;
       controller.abort();
-    }, primary ? 22000 : 10000);
-    const route=primary?'/api/map-phase2b/private/map-startup':'/api/map-phase2b/preview/snapshot';
-    request.result = window.fetch(route, { cache: 'no-store', priority: 'high', signal: controller.signal })
+    }, 22000);
+    request.result = window.fetch('/api/map-phase2b/private/map-startup', { cache: 'no-store', priority: 'high', signal: controller.signal })
       .then(async response => ({ response, json: await response.json().catch(error => {
         if (response.ok) throw error;
         return {};
@@ -156,7 +155,7 @@
     } finally { signal.removeEventListener('abort', cancel); }
   }
   async function bootstrap(owner) {
-    const stageSnapshot = stage ? primeStageSnapshot(owner) : null;
+    if (stage) primeMapStartup(owner);
     if (document.documentElement.dataset.referenceDataOptional === 'true') {
       performance.mark('opsmap-sdk-request');
       void window.KakaoMapsAdapter?.ready().catch(() => {});
@@ -194,12 +193,6 @@
     entry.hidden = true; document.body.dataset.mapStaffState = 'authenticated'; status();
     performance.mark('opsmap-staff-ready');
     window.dispatchEvent(new Event('map-staff-ready'));
-    if(stage&&!primary)void stageSnapshot.then(async()=>{
-      if(owner!==epoch||!session)return;
-      await loadData(owner);
-      if(owner===epoch&&session&&window.VEHICLE_AREA_DATA?.vehicles?.length)
-        window.dispatchEvent(new Event('map-staff-reference-ready'));
-    }).catch(()=>{});
   }
   async function accept(value) {
     if (value?.authenticated !== true) { await revoke('직원 로그인 후 지도를 사용할 수 있습니다.'); return false; }

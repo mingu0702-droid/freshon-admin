@@ -24,7 +24,8 @@ export function createStageStaffSessionStore({ env = process.env, fetchImpl = fe
   const leaseTime = now === Date.now ? () => performance.now() : now;
   const logged = new Map();
   const stats = { repositoryReads: 0, sessionReads: 0, sessionWrites: 0,
-    cacheHits: 0, joinedReads: 0, notModified: 0, cooldownSkips: 0, casConflicts: 0, expiredLeaseRetries: 0 };
+    cacheHits: 0, joinedReads: 0, notModified: 0, cooldownSkips: 0, casConflicts: 0, expiredLeaseRetries: 0,
+    casReadbackRetries: 0 };
   let repository = null, snapshot = null, pendingRead = null, writeTail = Promise.resolve(), blockedUntil = 0;
 
   function numericHeader(response, name) {
@@ -39,7 +40,7 @@ export function createStageStaffSessionStore({ env = process.env, fetchImpl = fe
     stats.cooldownSkips++;
     throw unavailable();
   }
-  function fail(step, response) {
+  function fail(step, response, reason) {
     const at = now(), status = Number(response?.status) || null;
     const rateRemaining = numericHeader(response, 'x-ratelimit-remaining');
     const rateReset = numericHeader(response, 'x-ratelimit-reset');
@@ -49,20 +50,21 @@ export function createStageStaffSessionStore({ env = process.env, fetchImpl = fe
       const retryAt = retryAfter !== null ? at + retryAfter * 1000 : 0;
       blockedUntil = Math.max(blockedUntil, resetAt, retryAt, at + (resetAt || retryAt ? 1000 : 60000));
     }
-    const tag = step + ':' + status;
+    const tag = step + ':' + status + ':' + (reason || '');
     if (!logged.has(tag) || at - logged.get(tag) >= 30000) {
       logged.set(tag, at);
-      console.warn(JSON.stringify({ event: 'STAGE_STAFF_STORE_UNAVAILABLE', step, status, rateRemaining, rateReset, retryAfter }));
+      console.warn(JSON.stringify({ event: 'STAGE_STAFF_STORE_UNAVAILABLE', step, status, rateRemaining, rateReset, retryAfter, reason }));
     }
     throw unavailable();
   }
   const mac = value => crypto.createHmac('sha256', env.MAP_STAFF_SESSION_SECRET)
     .update('staff-session-v1:' + JSON.stringify(value)).digest('hex');
 
-  async function request(url, metric, { etag, ...options } = {}) {
+  async function request(url, metric, { etag, fresh, ...options } = {}) {
     ensureAvailable();
     stats[metric]++;
-    const requestHeaders = etag ? { ...headers, 'If-None-Match': etag } : headers;
+    const requestHeaders = fresh ? { ...headers, 'Cache-Control': 'no-cache' } :
+      etag ? { ...headers, 'If-None-Match': etag } : headers;
     try {
       return await fetchImpl(url, { ...options, headers: requestHeaders, redirect: 'error', signal: AbortSignal.timeout(10000) });
     } catch { fail('TRANSPORT'); }
@@ -83,11 +85,11 @@ export function createStageStaffSessionStore({ env = process.env, fetchImpl = fe
     if (repo?.private !== true || repo.permissions?.push !== true) fail('REPOSITORY_SCOPE', response);
     repository = { etag: response.headers?.get('etag'), until: now() + repositoryCheckTtlMs };
   }
-  async function readFile() {
-    const previous = snapshot;
+  async function readFile({ fresh = false } = {}) {
+    const previous = fresh ? null : snapshot;
     snapshot = null;
     const until = leaseTime() + sessionReadTtlMs;
-    const response = await request(file + '?ref=' + encodeURIComponent(branch), 'sessionReads', { etag: previous?.etag });
+    const response = await request(file + '?ref=' + encodeURIComponent(branch), 'sessionReads', { etag: previous?.etag, fresh });
     if (response.status === 304 && previous?.etag) {
       stats.notModified++;
       snapshot = { ...previous, until };
@@ -121,6 +123,19 @@ export function createStageStaffSessionStore({ env = process.env, fetchImpl = fe
     const { signature, ...body } = entry;
     return /^[a-f0-9]{64}$/.test(signature || '') &&
       crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(mac({ key, ...body })));
+  }
+  function readbackMismatch(saved, state, key, { entry, requireExisting, previousKey }) {
+    if (!saved.sha) return 'STATE_MISSING';
+    if (entry && saved.state.credentialFingerprint !== entry.fingerprint) return 'CREDENTIAL_MISMATCH';
+    if (previousKey && saved.state.sessions[previousKey]) return 'PREVIOUS_SESSION_PRESENT';
+    const actual = saved.state.sessions[key];
+    if (!entry) return actual ? 'SESSION_PRESENT' : null;
+    if (!actual) return 'SESSION_MISSING';
+    const expected = state.sessions[key];
+    if (valid(key, actual, now()) && (actual.signature === expected.signature || requireExisting &&
+        actual.fingerprint === expected.fingerprint && actual.expiresAt === expected.expiresAt &&
+        actual.idleExpiresAt >= expected.idleExpiresAt)) return null;
+    return 'SESSION_MISMATCH';
   }
   async function sharedRead() {
     ensureAvailable();
@@ -193,12 +208,19 @@ export function createStageStaffSessionStore({ env = process.env, fetchImpl = fe
           if (attempt < maxCasAttempts) continue;
         }
         if (!response.ok) fail('CAS_HTTP', response);
-        const saved = await readFile();
-        if ((entry && saved.state.credentialFingerprint !== entry.fingerprint) ||
-            (previousKey && saved.state.sessions[previousKey]) ||
-            JSON.stringify(saved.state.sessions[key] || null) !== JSON.stringify(state.sessions[key] || null)) {
+        const readback = { entry, requireExisting, previousKey };
+        let saved = await readFile({ fresh: true });
+        let mismatch = readbackMismatch(saved, state, key, readback);
+        // A successful write can briefly be followed by a view of the previous blob.
+        // Re-read once without submitting the write again or trusting a different state.
+        if (mismatch && saved.sha === sha) {
+          stats.casReadbackRetries++;
+          saved = await readFile({ fresh: true });
+          mismatch = readbackMismatch(saved, state, key, readback);
+        }
+        if (mismatch) {
           snapshot = null;
-          fail('CAS_READBACK');
+          fail('CAS_READBACK', null, mismatch);
         }
         return { saved: true, rotated };
       }

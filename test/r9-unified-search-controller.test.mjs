@@ -44,6 +44,7 @@ function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddres
   clearTemporaryPins(){tempClears++;},
   selectStore:row=>{context.state.selected=row;selected.push(row);},
   loadBaseVehicles:async()=>{},refreshSelectedDriverContact(){},
+  pollGeneralSnapshot:async()=>{},
   fetchJson:async(url,options)=>{queries.push({url,options});return remote(decodeURIComponent(options.headers['x-map-customer-query']));},
   isSilentRequestError:e=>e?.silent||e?.name==='AbortError',
   searchExternalAddress:async(text,options)=>fallback.push({text,options})
@@ -209,20 +210,19 @@ test('a complete road or lot address with a current protected miss skips live Cu
  assert.equal(f.queries.length,0);
 });
 
-test('a verified Stage external result paints through the existing presenter without another lookup',async()=>{
+test('Stage requests stored evidence before sending only the verified miss to the common provider path',async()=>{
  const generation='a'.repeat(64),query='서울 중구 합성로 21';
- const external={documents:[{x:'127.1',y:'37.5'}],resolution:{kind:'EXACT'}};
  const f=fixture({stageAddress:async(_query,_generation,options)=>{
-   assert.equal(options.external,'resolve');
-   options.onTiming({officialLookupMs:0.08,customerLookupMs:0.1,providerUpstreamMs:200,githubReads:1,githubWrites:1});
-   return {status:'ADDRESS_NOT_MATCHED',external};
+   assert.equal(options.external,undefined);
+   options.onTiming({officialLookupMs:0.08,customerLookupMs:0.1});
+   return {status:'ADDRESS_NOT_MATCHED',state:'SOURCE_NOT_COVERED'};
  }});
  f.context.snapshotMeta={sourceGeneration:generation};
  f.context.window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:true};
  await f.context.searchPeriod(query);
  assert.equal(f.queries.length,0);
  assert.equal(f.fallback.length,1);
- assert.equal(f.fallback[0].options.externalEvidence,external);
+ assert.equal(f.fallback[0].options.stageAddressStatus,'ADDRESS_NOT_MATCHED');
 });
 
 test('the cold national registry preserves exact matches and resolves only a true miss through one protected request',async()=>{
@@ -255,7 +255,7 @@ test('the cold national registry preserves exact matches and resolves only a tru
  assert.equal(f.selected.at(-1)?.customerCode,'S995004');
  const miss='서울 종로구 합성로 141';
  await c.searchPeriod(miss);
- assert.deepEqual(requests,[{query:miss,version:generation,external:'resolve'}]);
+ assert.deepEqual(requests,[{query:miss,version:generation,external:undefined}]);
  assert.equal(f.fallback.at(-1)?.options.externalEvidence,external);
  assert.equal(c.searchIndex,null);
  c.getSearchIndex();
@@ -354,6 +354,21 @@ test('expired Stage evidence is surfaced instead of falling through to live or e
  await f.context.searchPeriod('서울 합성구 보호로 6');
  assert.equal(f.context.lastStatus,'STAGE_BATCH_GENERATION_CHANGED');
  assert.equal(f.queries.length,0);assert.equal(f.fallback.length,0);
+});
+
+test('a stored generation conflict resolves once on the newer generation before any external address request',async()=>{
+ const first='a'.repeat(64),next='b'.repeat(64),reads=[];
+ const f=fixture({stageAddress:async(_query,generation)=>{
+   reads.push(generation);
+   if(generation===first)throw Object.assign(Error('STAGE_BATCH_GENERATION_CHANGED'),{status:409,code:'STAGE_BATCH_GENERATION_CHANGED'});
+   return {status:'ADDRESS_NOT_MATCHED',state:'SOURCE_NOT_COVERED'};
+ }});
+ f.context.snapshotMeta={sourceGeneration:first};
+ f.context.pollGeneralSnapshot=async()=>{f.context.snapshotMeta={sourceGeneration:next};};
+ await f.context.searchPeriod('서울 종로구 합성로 14');
+ assert.deepEqual(reads,[first,next]);
+ assert.equal(f.fallback.length,1);
+ assert.equal(f.fallback[0].options.stageAddressStatus,'ADDRESS_NOT_MATCHED');
 });
 
 test('a code missing from the restoring Stage snapshot waits for the verified registry',async()=>{

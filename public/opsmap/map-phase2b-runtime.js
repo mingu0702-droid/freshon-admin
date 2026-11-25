@@ -78,6 +78,8 @@
     customerRegistrySource='';customerRegistryCheckedAt='';customerRegistrySourceCheckedAt='';
     searchIndex=pendingSearchIndex=searchFlight=stageAddressHashIndex=newAreaDatedFlight=null;searchSequence++;delete $('#map').dataset.searchMetrics;
     SOURCE={vehicles:[]};state.currentRows=[];state.routeRows=[];state.newAreaResults=[];state.selectedVehicles=[];state.virtual=null;
+    selectedDriverKeys=[];state.driverKey='';
+    for(const view of Object.values(modeViews)){view.driverKeys=[];view.driverKey='';}
     clearSelection();clearMap();updateOperationMetrics(null);renderPeriodStoreList([]);resetRoadRoute();clearNewAreaBatch();renderManualDraft();
     for(const selector of ['#results','#runList','#addressJudgeResults','#periodDriver','#vehicleList','#navSuggestions','#operationsPanel'])$(selector)?.replaceChildren();
     vehicleRegions = null; renderVehicleQuickFilter([]);
@@ -269,7 +271,7 @@
     ]);
   }
   async function syncCustomerRegistry(){
-    if(primaryStartup)return;
+    if(archiveView)return;
     if(!customerRegistry||customerRegistryBusy||!generalMap||state.mode!=='BASE_60D'||document.body.dataset.mapStaffState!=='authenticated')return;
     customerRegistryBusy=true;const owner=initialRequestId,before=customerRegistry.currentVersion(),known=new Set(allStores.map(r=>r.customerCode));
     try{const options={selection:registrySelection(),maxPages:100},result=await (customerRegistry.summary().status==='logged-out'?customerRegistry.reconnect(options):customerRegistry.sync(options));if(owner!==initialRequestId||document.body.dataset.mapStaffState!=='authenticated'||state.mode!=='BASE_60D')return;
@@ -606,8 +608,7 @@
       const payload = await adapter?.readGeneral({masterOnly:true}) || await fetchJson("/api/map-phase2b/preview/snapshot", {
         channel: "map-snapshot", ttl: 0, timeout: 10000,
         headers:known?{'X-Opsmap-Known-Snapshot':known}:undefined,
-        onHeaders:headers=>{received=headers.get('X-Opsmap-Transfer-Version');},
-        prefetch: stage&&!primaryStartup&&!known ? window.MapStaffEntry?.takeInitialSnapshot : undefined });
+        onHeaders:headers=>{received=headers.get('X-Opsmap-Transfer-Version');} });
       if(id!==initialRequestId)throw Object.assign(Error('QUERY_CANCELLED'),{name:'AbortError'});
       if(payload.notModified===true){
         if(payload.ok!==true||!known||known!==received)throw Error('SNAPSHOT_TRANSFER_VERSION');
@@ -685,7 +686,7 @@
     state.rangeStart=start;state.rangeEnd=end;
     $('#rangeStart').value=start;$('#rangeEnd').value=end;
   }
-  function loadPrimaryRegisteredMap(owner, attempt=0) {
+  function loadVerifiedRegisteredMap(owner, attempt=0) {
     const current=()=>owner===initialRequestId&&generalMap&&state.mode==='BASE_60D'&&
       document.body.dataset.mapStaffState==='authenticated';
     if(!current())return Promise.resolve({ok:false,skipped:true});
@@ -697,7 +698,7 @@
       try{
         let version;
         const reply=await fetchJson('/api/map-phase2b/private/map-startup',{
-          channel:'primary-map-startup',timeout:22000,
+          channel:'verified-map-startup',timeout:22000,
           headers:known?{'X-Opsmap-Known-Startup':known}:undefined,
           onHeaders:headers=>{version=headers.get('X-Opsmap-Startup-Version');},
           prefetch:known?undefined:window.MapStaffEntry?.takeInitialSnapshot
@@ -760,12 +761,19 @@
       }catch(error){
         if(!current()||isSilentRequestError(error))return {ok:false,skipped:true};
         if(!dateWasReady){
-          setPeriodViewState('not-ready');
-          $('#freshnessState').textContent='최신 등록정보와 기준호차를 확인하고 있습니다.';
+          if(primaryStartup){
+            setPeriodViewState('not-ready');
+            $('#freshnessState').textContent='최신 등록정보와 기준호차를 확인하고 있습니다.';
+          }else{
+            const waiting=error.code==='OPSMAP_STARTUP_NOT_READY'&&attempt<2;
+            setPeriodViewState(waiting?'not-ready':'error');
+            renderPeriodStoreList([]);
+            $('#freshnessState').textContent=$('#mapStatusSub').textContent;
+          }
           if(attempt<2){
             clearTimeout(snapshotRecoveryTimer);
             const delay=Math.min(7000,Math.max(2000,error.retryAfterMs||2000));
-            snapshotRecoveryTimer=setTimeout(()=>void loadPrimaryRegisteredMap(owner,attempt+1),delay);
+            snapshotRecoveryTimer=setTimeout(()=>void loadVerifiedRegisteredMap(owner,attempt+1),delay);
           }else window.MapDataSync?.setChecking?.(false);
         }
         return {ok:false,changed:false};
@@ -775,7 +783,7 @@
     return flight.promise;
   }
   async function pollGeneralSnapshot({recovering=false}={}){
-    if(primaryStartup)return loadPrimaryRegisteredMap(initialRequestId);
+    if(archiveView)return loadVerifiedRegisteredMap(initialRequestId);
     if(generalSnapshotPolling||!generalMap||state.mode!=='BASE_60D'||!recovering&&document.hidden||document.body.dataset.mapStaffState!=='authenticated')return{ok:false,skipped:true};
     generalSnapshotPolling=true;const owner=initialRequestId,oldRows=latestSnapshotRows,oldMeta=snapshotMeta;
     const version=m=>JSON.stringify([m?.preservation?.version,m?.sourceGeneration,m?.version,m?.generatedAt,m?.rowCount]);
@@ -843,10 +851,11 @@
     switchMode('BASE_60D');refreshVehicleUi(false);syncModeUi();syncPeriodBasis();
     $('#includeUnvisitedStores').checked=true;dateReady=false;setPeriodViewState('loading');
     refreshRecentOperations();
-    if(primaryStartup){
+    if(archiveView){
       clearMap();
       window.MapDataSync?.setChecking?.(true);
-      return loadPrimaryRegisteredMap(id);
+      if(!primaryStartup)renderPeriodStoreList([]);
+      return loadVerifiedRegisteredMap(id);
     }
     try {
       const adapter=stageAddressBatchEnabled()?null:await hybridUiReady,cached=await adapter?.readCachedGeneral();
@@ -3897,7 +3906,7 @@
     };
     const active=()=>!signal.aborted&&owner===state.searchRequestId&&state.mode==='BASE_60D';
     let evidenceError=null,stageAddressStatus='';
-    const canCombine=stageLookup&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&
+    const canPrepare=stageLookup&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&
       completeAddressRegion(lookupText)&&lookupText.length<=200&&
       NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants).length===1&&!NewAreaRequests.temporaryPoint(text);
     const resolveEvidence=(generation,external)=>{
@@ -3920,7 +3929,7 @@
     const coldRegistration=coldIndex&&stageRegistrationOnly();
     trace.count('localIndexReady',Boolean(registryVersion&&!coldIndex));
     const evidenceFlight=stageLookup&&initialGeneration&&!snapshotRetryAfter&&coldIndex&&!coldRegistration&&completeAddressRegion(lookupText)
-      ?resolveEvidence(initialGeneration,canCombine?'prepare':undefined):null;
+      ?resolveEvidence(initialGeneration,canPrepare?'prepare':undefined):null;
     const local=await findStoredSearchRows(text,{signal,address});
     if(!active())return;
     trace.mark('matching');
@@ -3935,20 +3944,24 @@
       if(showMatches(restored))return;
       if(!address&&snapshotRetryAfter){setSearchState('저장 매장 자료 복원이 늦어지고 있습니다 · 잠시 후 다시 조회해 주세요.');trace.finish('unresolved');return;}
     }
-    const generation=snapshotMeta?.sourceGeneration??null;
+    let generation=snapshotMeta?.sourceGeneration??null;
     if(stageLookup){
       const readyFlight=generation===initialGeneration?evidenceFlight:null;
-      const combined=!readyFlight&&canCombine&&generation&&!snapshotRetryAfter;
-      const {reply,error}=await (readyFlight||resolveEvidence(generation,combined?'resolve':undefined));
+      let {reply,error}=await (readyFlight||resolveEvidence(generation));
+      // Stored evidence requests cannot reserve a provider call. Refresh/retry
+      // only those requests and keep external authorization failures terminal.
+      if(active()&&NewAreaRequests.storedAddressConflict(error)){
+        await pollGeneralSnapshot({recovering:true});
+        const refreshed=snapshotMeta?.sourceGeneration??null;
+        if(active()&&refreshed&&refreshed!==generation){
+          generation=refreshed;
+          ({reply,error}=await resolveEvidence(generation));
+        }
+      }else if(active()&&NewAreaRequests.storedAddressUnavailable(error)&&generation===(snapshotMeta?.sourceGeneration??null)){
+        ({reply,error}=await resolveEvidence(generation));
+      }
       evidenceError=error;
       if(!active())return;
-      if(error&&combined){
-        window.KakaoMapsAdapter?.noteAddressFailure?.(error);
-        if([401,403,409].includes(error.status))setSearchState(NewAreaRequests.message(error));
-        else waitForSearchMapPoint(text,{owner,customerMatchState:'UNCONFIRMED',reason:NewAreaRequests.message(error)});
-        trace.finish('error');
-        return;
-      }
       const evidence=(snapshotMeta?.sourceGeneration??null)===generation ? reply : null;
       const evidenceCodes=evidence?.customerCodes||[];
       const codes=evidenceCodes.filter(code=>!customerRegistry?.isRetired?.(code)), stored=currentStageSearchCustomers(codes);
@@ -3973,7 +3986,9 @@
         }
         if(evidence.external)return searchExternalAddress(text,{owner,signal,trace,stageAddressStatus,externalEvidence:evidence.external});
       }
-      if([401,403,409].includes(evidenceError?.status)){setSearchState(NewAreaRequests.message(evidenceError));trace.finish('error');return;}
+      if([401,403,409,429,503].includes(evidenceError?.status)){
+        setSearchState(NewAreaRequests.message(evidenceError));trace.finish('error');return;
+      }
     }
     const temporary=address&&NewAreaRequests.temporaryPoint(text);
     if(temporary){if(!state.map)await initMap();if(active())finishAddress({...temporary,address:text},{owner,trace});return;}
@@ -4859,7 +4874,7 @@
       const positions=missing.slice(offset,offset+120);
       const chunk=positions.map(index=>inputs[index]);
       if(timing)timing.requests++;
-      const result=await fetchJson('/api/map-phase2b/private/stage-address-evidence',{
+      const requestEvidence=()=>fetchJson('/api/map-phase2b/private/stage-address-evidence',{
         channel:'stage-address-batch:'+requestId,method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({generation,rows:chunk}),timeout:12000,signal,
         onHeaders:timing&&((headers)=>{
@@ -4869,6 +4884,12 @@
           }
         })
       }).catch(error=>({error:error.code||error.message,status:error.status}));
+      let result=await requestEvidence();
+      if(!signal.aborted&&NewAreaRequests.storedAddressUnavailable(result)&&
+         (snapshotMeta?.sourceGeneration??null)===generation){
+        if(timing)timing.requests++;
+        result=await requestEvidence();
+      }
       if(signal.aborted)break;
       const error=result.error||((snapshotMeta?.sourceGeneration??null)!==generation?'STAGE_BATCH_GENERATION_CHANGED':
         result.generation!==generation||result.data?.length!==chunk.length?'STAGE_BATCH_UNAVAILABLE':null);
@@ -4884,7 +4905,7 @@
     if(storedHits&&!cache.isCurrent())resolved.fill({error:'STAFF_LOGIN_REQUIRED',httpStatus:401});
     return indexes.map(index=>index<0?{status:'INVALID_ADDRESS'}:resolved[index]);
   }
-  async function stageSingleAreaEvidence(row,signal,requestId,{allowProvider=false}={}){
+  async function stageSingleAreaEvidence(row,signal,requestId){
     const query=row.address.trim();
     const code=/^[A-Z]\d{3,}$/i.test(query);
     const address=unifiedAddressQuery(query)||/^\d{19}$/.test(query);
@@ -4904,23 +4925,12 @@
       return {status:'ADDRESS_NOT_MATCHED'};
     }
     try{
-      const generation=snapshotMeta?.sourceGeneration??null;
-      const canResolve=allowProvider&&generation&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&
-        unifiedAddressQuery(query)&&completeAddressRegion(NewAreaRequests.addressQuery(query))&&
-        NewAreaRequests.addressQueries(query).length===1;
-      const saved=canResolve?await NewAreaRequests.stageAddress(query,generation,{signal,external:'resolve'}):
-        (await stageBatchAddressEvidence([row],signal,requestId))[0];
+      const saved=(await stageBatchAddressEvidence([row],signal,requestId))[0];
       if(!saved&&!signal.aborted)return {status:'INVALID_ADDRESS'};
       if(saved?.customerCodes?.length&&currentStageSearchCustomers(saved.customerCodes).length!==saved.customerCodes.length){
         return {status:'STORED_COORDINATE_UNVERIFIED'};
       }
       if(signal.aborted)return saved;
-      if(saved?.external){
-        const {documents,resolution}=saved.external;
-        const point=interactiveProviderPoint({rows:documents,resolution},true);
-        if(point?.candidates)return {...saved,status:'OFFICIAL_ADDRESS_AMBIGUOUS',points:point.candidates};
-        return point?{...saved,status:'OFFICIAL',point}:saved;
-      }
       if(saved?.status!=='ADDRESS_NOT_MATCHED'||!unifiedAddressQuery(query))return saved;
       const temporary=NewAreaRequests.temporaryPoint(query);
       if(temporary)return {status:'OFFICIAL',point:temporary};
@@ -4928,7 +4938,7 @@
     }catch(error){return {error:error.code||error.message,httpStatus:error.status};}
   }
   async function judgeStoredBatchAreaRow(row,evidence,batch){
-    if(!batch.lookupAddress||evidence?.status!=='ADDRESS_NOT_MATCHED'||evidence.state!=='SOURCE_NOT_COVERED'){
+    if(!batch.lookupAddress||evidence?.state!=='SOURCE_NOT_COVERED'||evidence.status!=='ADDRESS_NOT_MATCHED'){
       return judgeStageAreaRow(row,evidence,batch);
     }
     const queries=NewAreaRequests.addressQueries(row.address,Phase2bUi.addressVariants);
@@ -5383,7 +5393,7 @@
     return newAreaBatch?newAreaBatch.rows.map((row,index)=>newAreaBatch.judged[index]||{...row,decision:'검토'}):state.newAreaResults;
   }
 
-  async function runNewArea(inputId, statusId, resultId, retry = false, onlyIndex = null, allowProvider = false) {
+  async function runNewArea(inputId, statusId, resultId, retry = false, onlyIndex = null, allowProvider = false, refreshed = false) {
     if (newAreaBusy) return;
     const status = $(statusId), list = $(resultId);
     const started=performance.now();
@@ -5412,13 +5422,15 @@
     const requestId = ++newAreaRequestId;
     const controller = batchController = new AbortController();
     const {signal} = controller;
-    const current = () => requestId === newAreaRequestId && !signal.aborted && state.mode === 'BASE_60D' &&
-      periodKey === state.rangeStart + '|' + state.rangeEnd && sourceVersion===newAreaSourceVersion();
+    const inputIsCurrent = () => requestId === newAreaRequestId && !signal.aborted && state.mode === 'BASE_60D' &&
+      periodKey === state.rangeStart + '|' + state.rangeEnd && $(inputId).value===input;
+    const current = () => inputIsCurrent() && sourceVersion===newAreaSourceVersion();
     const selectedPoints=new Map(newAreaSelectedPoints);
     if(onlyIndex!==null)selectedPoints.delete(rows[onlyIndex].address);
     const batch = {requestId,signal,customers:new Map(),queries:new Map(),blocked:null,selectedPoints};
     let fragment=null;
     let dispatchPending;
+    let restart=false;
     const retainedPoints=new Map();
     for(const index of indexes){
       const row=rows[index];
@@ -5492,19 +5504,28 @@
         setupMs=addressStarted-started;
         const useSingle=requested.length===1&&(rows.length===1||allowProvider);
         const evidence=useSingle
-          ?stageSingleAreaEvidence(rows[requested[0]],signal,requestId,{allowProvider:allowProvider||!retry}).then(result=>[result])
+          ?stageSingleAreaEvidence(rows[requested[0]],signal,requestId).then(result=>[result])
           :stageBatchAddressEvidence(requested.map(index=>rows[index]),signal,requestId,addressTiming);
-        dispatchPending=prepareNewAreaDispatch();
         const prepareStarted=performance.now();
         // Prepare the fixed registry while the one protected address request is in flight.
         if(requested.length>1&&snapshotMeta?.sourceGeneration)newAreaLocations(sourceVersion,snapshotMeta.sourceGeneration);
         prepareMs=performance.now()-prepareStarted;
         const results=await evidence;
         addressMs=Math.round(performance.now()-addressStarted);
+        const conflict=results.some(result=>NewAreaRequests.storedAddressConflict(result));
+        if(!retry&&!refreshed&&inputIsCurrent()&&(conflict||!current())){
+          // No external request has started. Only restart after a verified
+          // source change and only once for the same user's input.
+          if(conflict&&current())await pollGeneralSnapshot({recovering:true});
+          if(inputIsCurrent()&&!current()){restart=true;return;}
+        }
+        if(!current())return;
+        dispatchPending=prepareNewAreaDispatch();
         batch.stageRows=new Map(requested.map((index,i)=>[index,results[i]]));
-        if(!useSingle&&results.some(result=>result?.status==='ADDRESS_NOT_MATCHED'&&result.state==='SOURCE_NOT_COVERED')){
+        if(results.some(result=>result?.status==='ADDRESS_NOT_MATCHED'&&result.state==='SOURCE_NOT_COVERED')){
           await window.KakaoMapsAdapter?.refreshAddressLookup?.();
-          const enabled=()=>window.KAKAO_MAP_CONFIG?.allowExternalBatchAddressLookup===true&&
+          const singleAddress=requested.length===1&&(retry||allowProvider||rows.length===1);
+          const enabled=()=>current()&&(window.KAKAO_MAP_CONFIG?.allowExternalBatchAddressLookup===true||singleAddress)&&
             window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&window.kakaoGeocoder?.serverProxy===true;
           if(current()&&enabled())batch.lookupAddress=NewAreaRequests.createBatchAddressLookup({signal,enabled,
             lookup:(address,rowSignal)=>lookupInteractiveLocation(address,rowSignal,{allowOfficial:false,timeout:20_000})});
@@ -5544,6 +5565,8 @@
               if(requestId===newAreaRequestId)list.setAttribute('data-batch-paint',JSON.stringify({paintMs:Math.round(performance.now()-started)}));
             }));
           }
+        } else if(restart){
+          await runNewArea(inputId,statusId,resultId,false,null,false,true);
         } else {
           clearNewAreaBatch(false);status.textContent='조회 조건이 바뀌었습니다. 다시 판단해 주세요.';
         }
@@ -5739,7 +5762,9 @@
     $("#periodStoreList").setAttribute("data-state", value);
     $("#periodStoreList").setAttribute("aria-busy", String(value === "loading"));
     $("#periodIdentity").setAttribute("role", "status");
-    if (["loading", "not-ready", "error"].includes(value)) $("#mapStatusSub").textContent = "조회 완료 전 · 이전 지도 유지 (선택 기간 결과 아님)";
+    if (["loading", "not-ready", "error"].includes(value)) $("#mapStatusSub").textContent =
+      archiveView&&!primaryStartup&&generalMap&&!dateReady ? value==='error'?'최신 매장정보를 불러오지 못했습니다. 매장·권역 지도를 눌러 다시 시도해 주세요.':'최신 매장정보와 기준호차를 불러오고 있습니다.' :
+        "조회 완료 전 · 이전 지도 유지 (선택 기간 결과 아님)";
   }
   function renderPeriodStoreList(rows = state.currentRows) {
     const panel = $("#periodStoreList"); if (!panel) return;
@@ -5750,6 +5775,11 @@
         $("#periodListMore").hidden = true; return;
       }
       $("#periodStoreListCount").textContent = periodViewState === "loading" ? "조회 중" : periodViewState === "error" ? "미확인" : "준비 중";
+      if(archiveView&&!primaryStartup&&generalMap){
+        panel.textContent=$("#mapStatusSub").textContent;
+        $("#periodListMore").hidden=true;
+        return;
+      }
       panel.innerHTML = `<p class="hint" role="status">${periodViewState === "loading" ? "기간 이력 조회 중입니다." : periodViewState === "error" ? "기간 조회 실패 · 매장 수 미확인" : "기간 이력이 아직 준비되지 않았습니다. 빈 결과가 아닙니다."} 이전 지도는 유지되며 선택 기간의 결과가 아닙니다.</p>`;
       $("#periodListMore").hidden = true; return;
     }

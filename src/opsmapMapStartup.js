@@ -80,14 +80,23 @@ export function createMapStartupReader({readSnapshot, readRegistry, readFixed, s
   };
 }
 
-export function mountMapStartup(app,{requireStaff,read}) {
+export function mountMapStartup(app,{requireStaff,read,recovery,restoreMs}) {
   app.get('/api/map-phase2b/private/map-startup',requireStaff,async(req,res)=>{
     res.set('Cache-Control','private, no-store').vary('Cookie').vary('Accept-Encoding');
+    const started=recovery?performance.now():null;
     let result;
     try { if (!Object.keys(req.query).length) result=await read(); }
     catch { /* Keep the initial view unpopulated until both archives are verified. */ }
+    const prepareMs=started===null?null:performance.now()-started;
     return requireStaff(req,res,()=>{
-      if (!result) return res.set('Retry-After','2').status(503).json({error:'OPSMAP_STARTUP_NOT_READY'});
+      if (prepareMs!==null) res.set('Server-Timing',`opsmap-startup-prepare;dur=${prepareMs.toFixed(2)}`);
+      const restored=restoreMs?.();
+      if (Number.isFinite(restored)) res.set('X-Opsmap-Restore-Ms',String(restored));
+      if (!result) {
+        const restoring = !recovery || recovery()==='RESTORING';
+        if (restoring) res.set('Retry-After','2');
+        return res.status(503).json({error:restoring?'OPSMAP_STARTUP_NOT_READY':'OPSMAP_STARTUP_UNAVAILABLE'});
+      }
       res.set('X-Opsmap-Startup-Version',result.version);
       if (req.get('X-Opsmap-Known-Startup')===result.version)
         return res.json({ok:true,notModified:true,meta:result.meta});

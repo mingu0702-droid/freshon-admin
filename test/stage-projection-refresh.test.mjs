@@ -79,6 +79,11 @@ test('Stage snapshot refreshes validated revisions and retains data after failur
       body:JSON.stringify({id:'fixture',password:'local-test-password'})});
     assert.equal(login.status,200);
     const cookie = login.headers.get('set-cookie').split(';')[0];
+    const startup= root+'/private/map-startup';
+    assert.equal((await fetch(startup)).status,401);
+    const withoutRegistry=await fetch(startup,{headers:{cookie,'sec-fetch-site':'same-origin'}});
+    assert.equal(withoutRegistry.status,503);
+    assert.deepEqual(await withoutRegistry.json(),{error:'OPSMAP_STARTUP_UNAVAILABLE'});
     const current = async () => {
       const response = await fetch(root+'/preview/snapshot',{headers:{cookie,'sec-fetch-site':'same-origin'}});
       assert.equal(response.status,200);

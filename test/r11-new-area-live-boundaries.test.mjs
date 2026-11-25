@@ -140,7 +140,7 @@ test('balanced address annotations and floor text stay out of the lookup identit
   assert.equal(globalThis.Phase2bUi.addressMatches('서울 중구 장충동2가 산3-2','서울 중구 장충동2가 3-2'),false);
 });
 
-test('46 Stage rows use one protected batch and preserve cells when the batch or source is incomplete',async()=>{
+test('46 Stage rows retry only stored 503 evidence once and preserve cells on incomplete sources',async()=>{
   const lines=Array.from({length:46},(_,index)=>{
     const address=index===45?'원문 주소 미확인':`경기도 화성시 합성로 ${index%24+1} (합성동, 본관) ${index+1}층`;
     return {address,customer:`검증용 ${index+1}`};
@@ -151,7 +151,7 @@ test('46 Stage rows use one protected batch and preserve cells when the batch or
       :{status:'ADDRESS_NOT_MATCHED'})}:{error:'STAGE_BATCH_UNAVAILABLE'}});
     const f=fixture({rows:[saved],stageBatch});
     await f.run(lines.map(({address,customer})=>address+'\t'+customer).join('\n'));
-    assert.equal(f.batches.length,1);
+    assert.equal(f.batches.length,status===503?2:1);
     assert.equal(f.batches[0].rows.length,24);
     assert.equal(f.headers.length+f.queries.length,0);
     assert.equal(f.state.newAreaResults.length,46);
@@ -193,6 +193,24 @@ test('Stage keeps one request for new rows and never reuses held results, revoke
   await paste(addresses);
   assert.equal(f.batches.at(-1).rows.length,46);
   assert(f.state.newAreaResults.every(row=>row.lookupState==='LOOKUP_BLOCKED'));
+});
+
+test('a Stage explicit retry sends only the unresolved row through the separately approved address connection',async()=>{
+  const original='경기도 화성시 합성로 1', missing='경기도 화성시 합성로 99';
+  const f=fixture({rows:[saved],verifiedStage:true,stageBatch:({generation,rows})=>({payload:{generation,
+    data:rows.map(([address])=>address===original
+      ?{status:'STORED',point:{lat:37.2,lng:127,coordinateSource:'STAGE_PRESERVED_COORDINATE'}}
+      :{status:'ADDRESS_NOT_MATCHED',state:'SOURCE_NOT_COVERED'})}}),
+    lookup:(query,callback)=>callback([{address_name:query,x:'127.01',y:'37.2'}],'OK',
+      {resolution:{kind:'EXACT'}})});
+  await f.run(original+'\n'+missing);
+  assert.deepEqual(f.queries,[]);
+  assert.equal(f.state.newAreaResults[0].lookupStatus,'SUCCESS');
+  assert.equal(f.state.newAreaResults[1].lookupState,'SOURCE_NOT_COVERED');
+  await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults',true);
+  assert.deepEqual(f.queries,[missing]);
+  assert.deepEqual(f.batches.at(-1).rows,[[missing]]);
+  assert.deepEqual(Array.from(f.state.newAreaResults,row=>row.lookupStatus),['SUCCESS','SUCCESS']);
 });
 
 test('60 independent X/Y rows retain CRLF, tabs, quotes, phones and units with no Y transmission',async()=>{
