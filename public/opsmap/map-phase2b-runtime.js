@@ -445,7 +445,9 @@
   }
   function syncPeriodBasis() {
     const driver = periodBasis === "driver";
-    $("#periodDriver").disabled = !driver; $("#periodDriver").hidden = !driver;
+    if(state.mode==='DATE_ROUTE')syncDatedDriverOptions();
+    else $("#periodDriver").disabled = !driver;
+    $("#periodDriver").hidden = !driver;
     $("#legacyVehicleState").hidden = driver;
     $("#periodCenter").disabled = driver;
     $$('input[name="periodBasis"]').forEach(input => { input.checked = input.value === periodBasis; });
@@ -1268,6 +1270,7 @@
       hybridUi?.cancel(); resetRoadRoute(); cancelManualRoadRoute();
       generalMap=false; switchMode('DATE_ROUTE');
       state.selectedDate=state.routeDate=date;
+      state.driverKey='';selectedDriverKeys=[];
       resetDailyView(); requestMapFit(); clearNewAreaBatch();
       $('#addressJudgeResults').replaceChildren(); $('#results').replaceChildren();
       window.dispatchEvent(new CustomEvent('map-navigation-context-changed',{detail:{mode:'DATE_ROUTE',date}}));
@@ -1431,6 +1434,7 @@
     delete $('#map').dataset.dailyEvidence;
     dateReady=false; datedSourceDate=''; dailyMeta=null; dailyView=null;
     state.currentRows=[]; state.routeRows=[]; operationStops=[];
+    syncPeriodBasis();
     clearSelection(); clearMap(); renderRunList(); updateOperationMetrics(null);
   }
   function renderDailyReadState() {
@@ -1461,6 +1465,7 @@
       }
       datedSourceDate=date; dateReady=true;
       dailyView={payload};
+      if(hasDatedDriverFilter())syncDatedDriverOptions();
       ensureDateVehicles();
       void loadBaseMap();
     }
@@ -1477,7 +1482,8 @@
       ++initialRequestId; clearTimeout(initialTimer); clearTimeout(periodTimer); ++periodRequestId;
       resetRoadRoute(); cancelManualRoadRoute();
       switchMode('DATE_ROUTE');
-      state.selectedDate=date; state.routeDate=date; dailyError=null; resetDailyView(); requestMapFit();
+      state.selectedDate=date; state.routeDate=date; state.driverKey=''; selectedDriverKeys=[];
+      dailyError=null; resetDailyView(); requestMapFit();
       window.dispatchEvent(new CustomEvent('map-navigation-context-changed',{detail:{mode:'DATE_ROUTE',date}}));
       clearNewAreaBatch();
       $('#addressJudgeResults').replaceChildren(); $('#results').replaceChildren();
@@ -4417,19 +4423,29 @@
     }
   }
 
-  let datedDriverEvidence;
-  function hasDatedDriverFilter(){return state.mode==='DATE_ROUTE'&&periodBasis==='driver'&&Boolean(selectedDriverKeys.length||state.driverKey);}
+  function hasDatedDriverFilter(){return state.mode==='DATE_ROUTE'&&periodBasis==='driver';}
+  function currentDatedDrivers(){return isDailyDataReady()?OpsmapDaily.datedDriverOptions(allStores,state.selectedDate,state.centerFilter):[];}
+  function syncDatedDriverOptions(){
+    const select=$('#periodDriver');
+    const drivers=hasDatedDriverFilter()?currentDatedDrivers():[];
+    const keys=new Set(drivers.map(driver=>driver.key));
+    selectedDriverKeys=selectedDriverKeys.filter(key=>keys.has(key));
+    state.driverKey=selectedDriverKeys[0]||'';
+    if(!drivers.length){
+      const message=isDailyDataReady()?'선택일 기사정보 미확인':'선택일 배차 확인 필요';
+      select.replaceChildren(new Option(message,''));
+      select.disabled=true;
+      return;
+    }
+    select.replaceChildren(...drivers.map(({key,name})=>new Option(name,key,false,selectedDriverKeys.includes(key))));
+    select.disabled=false;
+  }
   function queryFilterIdentity(){return JSON.stringify([periodBasis,selectedDriverKeys.slice().sort(),state.driverKey,selectedVehicles().slice().sort(),periodVehicleScope,state.centerFilter,state.searchRequestId]);}
   function matchesDatedDriver(row) {
-    if(periodBasis!=='driver')return true;
-    const keys=selectedDriverKeys.length?selectedDriverKeys:state.driverKey?[state.driverKey]:[];
-    if(!keys.length)return true;
-    if(row.driverIdentity==='UNVERIFIED'||row.raw?.driverIdentity==='UNVERIFIED')return false;
-    const date=state.selectedDate,vehicle=String(row.vehicle||''),code=String(row.customerCode||'');
-    if(row.driverIdentity==='VERIFIED'&&keys.includes(row.driverKey)&&(row.deliveryDate||row.lastDeliveryDate||row.raw?.deliveryDate)===date)return true;
-    if(datedDriverEvidence?.source!==periodRows){const byCode=new Map();for(const item of periodRows){const key=String(item.customerCode||item.code||'');const records=byCode.get(key)||[];records.push(...(item.relations||item.history||[]));byCode.set(key,records);}datedDriverEvidence={source:periodRows,byCode};}
-    const records=[...(row.history||[]),...(datedDriverEvidence.byCode.get(code)||[])];
-    return records.some(item=>item.deliveryDate===date&&String(item.vehicle||'')===vehicle&&keys.includes(item.driverKey)&&item.driverIdentity==='VERIFIED');
+    if(!hasDatedDriverFilter())return true;
+    if(!selectedDriverKeys.length)return false;
+    const driver=OpsmapDaily.datedDriver(row,state.selectedDate,state.centerFilter);
+    return driver!==null&&selectedDriverKeys.includes(driver.key);
   }
   function verifiedEmptyDailyScope(){
     if(dailyMeta?.roster)return rosterScopeStatus().empty;
@@ -4652,9 +4668,11 @@
     }
     ++state.searchRequestId; ++state.addressRequestId; ++state.detailRequestId;
     $('#results').replaceChildren();$('#addressJudgeResults').replaceChildren();
-    setSelectedVehicles([]);state.driverKey='';$('#periodDriver').value='';periodVehicleScope='all';periodListLimit=0;periodSelectionCache=null;
+    setSelectedVehicles([]);state.driverKey='';if(state.mode==='DATE_ROUTE')selectedDriverKeys=[];
+    $('#periodDriver').value='';periodVehicleScope='all';periodListLimit=0;periodSelectionCache=null;
     clearSelection();
     state.centerFilter = center;
+    if(hasDatedDriverFilter())syncDatedDriverOptions();
     $('#periodCenter').value=group;$('#mobileCenter').value=group;
     filterVehicleList();
     $("#mobileBaseVehicle").value = "";
@@ -5848,8 +5866,13 @@
       if(preset)preset.onclick=()=>{if(state.mode==='BASE_60D')return initializePeriod(days);};
     }
     ["#rangeStart", "#rangeEnd"].forEach(id => { $(id).oninput = syncDateHeading; });
-    $("#periodDriver").onchange = event => { if(state.mode!=="BASE_60D")return;selectedDriverKeys=[...event.target.selectedOptions].map(option=>option.value).filter(Boolean);state.driverKey=selectedDriverKeys[0]||'';clearSelection();periodListLimit=0;requestMapFit();loadBaseMap(); };
-    $$('input[name="periodBasis"]').forEach(input => input.onchange = () => { if(state.mode!=='BASE_60D')return;periodBasis = input.value; syncPeriodBasis(); clearSelection(); periodListLimit = 0; requestMapFit(); loadBaseMap(); });
+    $("#periodDriver").onchange = event => {selectedDriverKeys=[...event.target.selectedOptions].map(option=>option.value).filter(Boolean);state.driverKey=selectedDriverKeys[0]||'';clearSelection();periodListLimit=0;requestMapFit();loadBaseMap();};
+    $$('input[name="periodBasis"]').forEach(input => input.onchange = () => {
+      if(!input.checked)return;
+      periodBasis=input.value;syncPeriodBasis();clearSelection();periodListLimit=0;requestMapFit();
+      if(state.mode==='DATE_ROUTE'){resetRoadRoute();cancelManualRoadRoute();window.dispatchEvent(new Event('map-daily-query-basis-changed'));}
+      loadBaseMap();
+    });
     $("#periodListMore").onclick = () => { periodListLimit += 100; renderPeriodStoreList(); };
     $('#togglePeriodList').onclick=()=>{periodListLimit=periodListLimit?0:100;renderPeriodStoreList();};
     $("#staffLogout").onclick = () => window.MapStaffEntry?.logout();
@@ -6101,10 +6124,18 @@
     async submitDailyQuery(start,end){
       const valid=value=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
       if(state.mode!=='DATE_ROUTE'||!valid(start)||start!==end||end>maxDailyDate())return {ok:false,message:'일자별 운행은 선택한 배송일 한 날짜만 조회합니다.'};
+      if(hasDatedDriverFilter()){
+        if(start!==state.selectedDate||!currentDatedDrivers().length)return {ok:false,message:'선택일과 센터의 기사정보를 확인하지 못했습니다.'};
+        if(!selectedDriverKeys.length)return {ok:false,message:'조회할 기사를 선택해 주세요.'};
+        return {ok:true,message:''};
+      }
       const queryConditions={vehicles:selectedVehicles().slice(),centerFilter:state.centerFilter,scope:periodVehicleScope};
       await changeSelectedDate(end,queryConditions);
       return {ok:dateReady,message:dateReady?'':$('#freshnessState').textContent};
     },
+    isDailyDriverQuery:hasDatedDriverFilter,
+    dailyDriverNames:()=>hasDatedDriverFilter()?[...$('#periodDriver').selectedOptions].filter(option=>selectedDriverKeys.includes(option.value)).map(option=>option.textContent):[],
+    selectDailyCenter:group=>{if(state.mode==='DATE_ROUTE'&&['all','osan','yeongnam','honam'].includes(group))selectCenter(group);},
     setGeneralLegend(html){originalRouteLegend=html;syncRoadRoutePanel();},
     lookupStore(value){const key=String(value||'').trim();return allStores.filter(row=>[row.customerCode,row.customerName,row.address].includes(key));},
     navigationVisitRows:()=>isDailyDataReady()?operationStops.map(row=>({...row})):[],

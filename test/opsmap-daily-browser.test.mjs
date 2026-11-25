@@ -167,6 +167,7 @@ test('Stage B contract keeps every visit while vehicle evidence loads or fails',
     Array.from({length:day===older&&vehicle==='105'?6:size},(_,i)=>({
       deliveryId:digest([day,vehicle,i]),deliveryDate:day,customerCode:'S'+vehicle+(vehicle==='105'&&i===17?0:i),
       vehicle,state:vehicle==='105'&&i<8?'COMPLETED':'OPEN',sourceStatus:'OPEN',
+      ...(day===date&&vehicle==='105'&&i<3?{driverIdentity:'VERIFIED',driverName:'오산 검증 기사',driverKey:digest([day,'osan','driver'])}:{}),
       completionType:'NO_INDIVIDUAL_RECORD',individualCompletedAt:null,bulkProcessed:null,
       verification:'NO_INDIVIDUAL_RECORD',eventSource:'DELIVERY_TASK_LIST'
     })));
@@ -254,6 +255,23 @@ test('Stage B contract keeps every visit while vehicle evidence loads or fails',
       await page.waitForFunction(()=>window.MapUiLocalBridge?.state.map);
       await page.evaluate(()=>document.querySelector('#modeDaily').click());
       await ready();
+      await page.locator('#chooseRoutes').click();
+      await page.locator('#dailyCenter').selectOption('osan');
+      await page.getByLabel('기사 기준',{exact:true}).check();
+      await page.locator('#periodDriver').selectOption({label:'오산 검증 기사'});
+      await page.getByRole('button',{name:'운행 조회',exact:true}).click();
+      await page.locator('#routeDialog').waitFor({state:'hidden'});
+      assert.equal((await summary()).visits.length,3);
+      assert.equal((await summary()).located,3);
+      await dateTo(older);await ready();
+      assert.equal((await summary()).visits.length,0);
+      await page.locator('#chooseRoutes').click();
+      assert.equal(await page.locator('#periodDriver').isDisabled(),true);
+      assert.match(await page.locator('#periodDriver').textContent(),/기사정보 미확인/);
+      await dateTo(date);await ready();
+      assert.equal(await page.locator('#periodDriver option:checked').count(),0);
+      await page.getByLabel('호차 기준',{exact:true}).check();
+      await page.locator('#closeRoutes').click();
       const startedChronology=chronologyReads;
       const requested=reads,switchTimes=[];
       for(let i=0;i<12;i++){

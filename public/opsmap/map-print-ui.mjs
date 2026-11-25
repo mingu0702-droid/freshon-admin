@@ -2,7 +2,7 @@
 export const PRINT_CENTERS=Object.freeze({osan:'오산',yeongnam:'영남',honam:'호남'});
 export const PRINT_UNPROVIDED_CENTER='unprovided';
 const unprovidedCenterLabel='센터 미구분(원천 미제공)';
-const centerCodes={'011':'osan','012':'yeongnam','013':'honam','오산':'osan','오산센터':'osan','영남':'yeongnam','영남센터':'yeongnam','호남':'honam','호남센터':'honam'};
+const centerCodes={'011':'osan','012':'yeongnam','013':'honam',osanColdStorage:'osan','오산':'osan','오산센터':'osan','영남':'yeongnam','영남센터':'yeongnam','호남':'honam','호남센터':'honam'};
 const text=value=>String(value??'').trim();
 const vehicle=value=>text(value).replace(/호(?:차)?$/,'');
 export const validPrintDate=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
@@ -12,6 +12,14 @@ function centerOf(row,fixed){
  if(!fixed&&!source.length)return PRINT_UNPROVIDED_CENTER;
  const values=source.map(v=>PRINT_CENTERS[v]?v:centerCodes[text(v)]).filter(Boolean);
  return new Set(values).size===1?values[0]:'';
+}
+export function datedPrintCenter({center,date,selectedVehicle,rows}){
+ const selected=Object.hasOwn(PRINT_CENTERS,center)?center:Object.hasOwn(centerCodes,center)?centerCodes[center]:'';
+ if(selected)return selected;
+ const wanted=vehicle(selectedVehicle);
+ const scopes=new Set(rows.map(row=>row.raw||row).filter(row=>row.deliveryDate===date&&
+  (!wanted||vehicle(row.confirmedVehicle||row.vehicle)===wanted)).map(row=>centerOf(row,false)));
+ return scopes.size===1?[...scopes][0]:'';
 }
 const verifiedFixed=(row,master)=>row.baseVehicleState==='VERIFIED_MASTER'&&row.baseVehicleSource==='FIXED_DISPATCH_PRIMARY'&&/^[a-f0-9]{64}$/.test(row.baseVehicleVersion||'')&&row.baseVehicleVersion===master?.version&&row.baseVehicleCheckedAt===master?.checkedAt;
 const orderOf=row=>{const value=row.order??row.sequence??row.stopOrder??row.savedOrder;return value!==null&&value!==''&&Number.isSafeInteger(Number(value))&&Number(value)>0?Number(value):null;};
@@ -118,15 +126,28 @@ export function mountVehiclePrintUi({win=window,doc=document,bridge=win.MapUiLoc
  const cancel=()=>{epoch++;controller?.abort();controller=null;print.disabled=true;model=null;clearMap();section.replaceChildren();section.hidden=true;};
  const restore=()=>{doc.body.classList.remove('map-vehicle-printing');if(printTitle!==null){doc.title=printTitle;printTitle=null;}};
  const refreshCars=()=>{
-  const old=car.value,wanted=bridge.state.selectedVehicles?.length===1?vehicle(bridge.state.selectedVehicles[0]):'',fixed=bridge.fixedTerritoryStores?.()||[],daily=bridge.stores?.()||[];
-  const unknown=basis.value==='DATED'&&center.value===PRINT_UNPROVIDED_CENTER;
-  const values=[...new Set([...fixed.filter(r=>unknown?verifiedFixed(r,bridge.fixedTerritoryMasterState?.()):centerOf(r,true)===center.value).map(r=>vehicle(r.baseVehicle)),...daily.filter(r=>unknown||centerOf(r,false)===center.value).map(r=>vehicle(r.vehicle))].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
+  const old=car.value,wanted=bridge.state.selectedVehicles?.length===1?vehicle(bridge.state.selectedVehicles[0]):'',fixed=bridge.fixedTerritoryStores?.()||[];
+  const daily=basis.value==='DATED'?(bridge.stores?.()||[]).map(row=>row.raw||row).filter(row=>row.deliveryDate===date.value):[];
+  const centerKey=center.value;
+  const broadScope=!centerKey||centerKey===PRINT_UNPROVIDED_CENTER;
+  const master=bridge.fixedTerritoryMasterState?.();
+  const fixedVehicles=fixed.filter(row=>broadScope?verifiedFixed(row,master):centerOf(row,true)===centerKey).map(row=>vehicle(row.baseVehicle));
+  const datedVehicles=daily.filter(row=>!centerKey||centerOf(row,false)===centerKey).map(row=>vehicle(row.confirmedVehicle||row.vehicle));
+  const currentVehicle=basis.value==='DATED'&&date.value===bridge.state.selectedDate?wanted:'';
+  const values=[...new Set([...fixedVehicles,...datedVehicles,currentVehicle].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
   car.replaceChildren();const blank=make('option','호차를 선택하세요',car);blank.value='';for(const v of values){const o=make('option',v+'호차',car);o.value=v;}car.value=values.includes(old)?old:values.includes(wanted)?wanted:'';
  };
  const syncCenterOptions=()=>{
   const existing=center.querySelector('option[value="'+PRINT_UNPROVIDED_CENTER+'"]');
-  if(basis.value==='DATED'){if(!existing){const option=make('option',unprovidedCenterLabel,center);option.value=PRINT_UNPROVIDED_CENTER;}center.value=PRINT_UNPROVIDED_CENTER;}
-  else{existing?.remove();if(!PRINT_CENTERS[center.value])center.value=PRINT_CENTERS[bridge.state.centerFilter]?bridge.state.centerFilter:'osan';}
+  if(basis.value==='DATED'){
+   if(!existing){const option=make('option',unprovidedCenterLabel,center);option.value=PRINT_UNPROVIDED_CENTER;}
+   if(!center.querySelector('option[value=""]')){const blank=make('option','센터를 선택하세요');blank.value='';center.prepend(blank);}
+  }
+  else{
+   const selected=center.value;
+   existing?.remove();center.querySelector('option[value=""]')?.remove();
+   center.value=PRINT_CENTERS[selected]?selected:PRINT_CENTERS[bridge.state.centerFilter]?bridge.state.centerFilter:'osan';
+  }
  };
  const drawMap=(host,data,note,requestId)=>{
   const points=data.stores.filter(r=>r.lat!==null);if(!points.length){make('p','검증된 위치가 있는 매장이 없습니다. 주소는 아래 목록을 확인해 주세요.',host);note.textContent='위치 미확인 매장은 임의 좌표에 표시하지 않습니다.';print.disabled=false;return;}
@@ -159,7 +180,7 @@ export function mountVehiclePrintUi({win=window,doc=document,bridge=win.MapUiLoc
  const runPreview=async()=>{
   cancel();const id=epoch,selection={basis:basis.value,date:date.value,center:center.value,selectedVehicle:car.value};preview.disabled=true;status.textContent='선택 호차 자료를 확인하는 중입니다.';const ownController=new AbortController();controller=ownController;const timeout=win.setTimeout(()=>ownController.abort(),45000);
   try{
-   if(!validPrintDate(selection.date)||selection.date>today()||!selection.selectedVehicle)throw Error('SELECTION_REQUIRED');
+   if(!validPrintDate(selection.date)||selection.date>today()||!selection.center||!selection.selectedVehicle)throw Error('SELECTION_REQUIRED');
    let rows;
    if(selection.basis==='FIXED'){
     if(!bridge.fixedTerritoryMasterState?.()?.version)await bridge.refreshFixedTerritoryMaster?.();
@@ -179,8 +200,16 @@ export function mountVehiclePrintUi({win=window,doc=document,bridge=win.MapUiLoc
   finally{win.clearTimeout(timeout);if(id===epoch)preview.disabled=false;if(controller===ownController)controller=null;}
  };
  const dismiss=()=>{cancel();restore();preview.disabled=false;dialog.close();};
- trigger.onclick=()=>{cancel();basis.value=bridge.state.mode==='DATE_ROUTE'?'DATED':'FIXED';date.value=validPrintDate(bridge.state.selectedDate)&&basis.value==='DATED'?bridge.state.selectedDate:today();center.value=PRINT_CENTERS[bridge.state.centerFilter]?bridge.state.centerFilter:'osan';syncCenterOptions();refreshCars();status.textContent='센터와 호차를 선택한 뒤 미리보기를 눌러 주세요.';dialog.showModal();};
- for(const control of [basis,date,center,car])control.onchange=()=>{cancel();preview.disabled=false;if(control===basis)syncCenterOptions();if(control===center||control===basis)refreshCars();status.textContent='조건이 변경되었습니다. 미리보기를 다시 눌러 주세요.';};
+ trigger.onclick=()=>{
+  cancel();basis.value=bridge.state.mode==='DATE_ROUTE'?'DATED':'FIXED';
+  date.value=validPrintDate(bridge.state.selectedDate)&&basis.value==='DATED'?bridge.state.selectedDate:today();
+  syncCenterOptions();
+  const selectedVehicle=bridge.state.selectedVehicles?.length===1?bridge.state.selectedVehicles[0]:'';
+  center.value=basis.value==='DATED'?datedPrintCenter({center:bridge.state.centerFilter,date:date.value,selectedVehicle,rows:bridge.stores?.()||[]}):
+   PRINT_CENTERS[bridge.state.centerFilter]?bridge.state.centerFilter:'osan';
+  car.value='';refreshCars();status.textContent='센터와 호차를 선택한 뒤 미리보기를 눌러 주세요.';dialog.showModal();
+ };
+ for(const control of [basis,date,center,car])control.onchange=()=>{cancel();preview.disabled=false;if(control===basis)syncCenterOptions();if(control!==car)refreshCars();status.textContent='조건이 변경되었습니다. 미리보기를 다시 눌러 주세요.';};
  preview.onclick=runPreview;close.onclick=dismiss;dialog.addEventListener('cancel',event=>{event.preventDefault();dismiss();});
  const preparePrint=()=>{if(!model||print.disabled||!dialog.open)return false;if(printTitle===null)printTitle=doc.title;doc.title=`${model.date}_${model.centerName}_${model.vehicle}호차`;doc.body.classList.add('map-vehicle-printing');return true;};
  print.onclick=()=>{if(!preparePrint())return;try{win.print();}finally{restore();}};

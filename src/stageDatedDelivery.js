@@ -1,4 +1,5 @@
 import {createOperationalPhotoTaskReader} from './opsmapOperationalPhotoTaskReader.js';
+import {createHmac} from 'node:crypto';
 import {assertDeliverySourceObservation, sourceTaskDate} from './snapshotRefreshEvidence.js';
 import {opsmapArchiveSite} from './stageScope.js';
 import {SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
@@ -7,7 +8,7 @@ import {archiveAddressHash} from './stageArchivedDelivery.js';
 import {validateOpsmapSyncDay} from './opsmapSyncGeneration.js';
 import {createStageDeliveryAdminPhotoSession} from './opsmapStageDeliveryAdminSession.js';
 import {createDeliveryAdminPhotoTransport, readBoundedPhotoLoginJson} from './opsmapDeliveryAdminTransport.js';
-import {driverPhone, driverVehicle} from './privateDriverContact.js';
+import {driverPhone, driverVehicle, isReplacementDriver} from './privateDriverContact.js';
 import {setTimeout as delay} from 'node:timers/promises';
 import {validDeliveryPoint} from './opsmapDailyServer.js';
 import {confirmedTaskVehicle, DATED_DELIVERY_CONTRACT, datedDispatchSource, datedDispatchView, deliveryCompletion,
@@ -38,6 +39,28 @@ function eventCandidate(task, state, event, customerCode, vehicle) {
       !/^[A-Z_]{1,32}$/.test(task.completeType||'') || !Number.isFinite(Date.parse(task.completeDatedAt))) return null;
   const {id,status,completeType,completeDatedAt}=task;
   return {task:{id,status,completeType,completeDatedAt},customerCode,vehicle};
+}
+
+function taskDriverIdentity(task) {
+  const cleanName = value => typeof value === 'string' && value.length <= 100 &&
+    !/[\x00-\x1f\x7f]/.test(value) ? value.normalize('NFKC').trim() : '';
+  const assigned = [task.driver, task.carrier?.driver].filter(Boolean);
+  const names = new Set([task.driverName, task.carrier?.driverName, ...assigned.flatMap(driver=>[driver.driverName,driver.name])]
+    .map(cleanName).filter(name => name && !driverVehicle(name) && !/^(?:미확인|미등록|unknown|null|undefined)$/i.test(name)));
+  const phones = [task.driverPhone, task.driverTel, task.carrier?.driverPhone, ...assigned.flatMap(driver=>[driver.phone,driver.phoneNumber])]
+    .map(driverPhone).filter(Boolean);
+  return {names,phones};
+}
+
+function rosterDriver(task, date, center, id, secret) {
+  if (typeof secret !== 'string' || secret.length < 32 ||
+    ![task.logisticsCenter?.id,task.logisticsCenterId,task.carrier?.logisticsCenterId].some(value => String(value) === id)) return null;
+  const {names,phones}=taskDriverIdentity(task);
+  const [driverName]=names;
+  const identities=new Set(phones.map(phone=>phone.replace(/\D/g,'').replace(/^82/,'0')));
+  if (names.size!==1 || identities.size!==1 || isReplacementDriver(driverName) || /\d|^(?:미정|미배정|없음)$/u.test(driverName)) return null;
+  const driverKey=createHmac('sha256',secret).update(JSON.stringify(['opsmap-dated-driver-v1',date,center,driverName,[...identities][0]])).digest('hex');
+  return {driverKey,driverName,driverIdentity:'VERIFIED'};
 }
 
 export function createStageDatedDeliveryReader({env = process.env, fetchImpl = fetch, syncCenters = {osan:'1'},recordSource,now=Date.now} = {}) {
@@ -194,7 +217,8 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
         list.push(candidate);
         candidates.set(confirmedVehicle,list);
       }
-      rows.push({taskId:String(task.id),customerCode,vehicle:confirmedVehicle,state,event});
+      const driver=confirmedVehicle && state!=='CANCELLED' ? rosterDriver(task,date,center,id,env.MAP_STAFF_SESSION_SECRET) : null;
+      rows.push({taskId:String(task.id),customerCode,vehicle:confirmedVehicle,state,event,driver});
       if(state==='CANCELLED')continue;
       const vehicle = confirmedVehicle || '미확인';
       const customer = task.customer || {}, location = task.location || {};
@@ -219,8 +243,8 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
 
   function prepareContract(value) {
     const {date,sourceObservation:{pages,rawRows,duplicateRows}}=value.legacy;
-    const rows=value.rows.map(({taskId,customerCode,vehicle,state,event})=>
-      ({deliveryId:deliveryTaskId(taskId),deliveryDate:date,customerCode,vehicle,state,...event}));
+    const rows=value.rows.map(({taskId,customerCode,vehicle,state,event,driver})=>
+      ({deliveryId:deliveryTaskId(taskId),deliveryDate:date,customerCode,vehicle,state,...event,...driver}));
     rows.sort((a,b)=>a.deliveryId.localeCompare(b.deliveryId));
     const byVehicle=new Map();
     for(const row of rows)if(row.vehicle) {
@@ -344,13 +368,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
           driverVehicle(confirmedTaskVehicle(task)) !== vehicle || deliveryTaskState(task) === 'CANCELLED') {
         throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED',409);
       }
-      const cleanName = value => typeof value === 'string' && value.length <= 100 &&
-        !/[\x00-\x1f\x7f]/.test(value) ? value.normalize('NFKC').trim() : '';
-      const assignedDriver = task.driver || task.carrier?.driver;
-      const names = new Set([task.driverName, task.carrier?.driverName, assignedDriver?.driverName, assignedDriver?.name]
-        .map(cleanName).filter(name => name && !driverVehicle(name) && !/^(?:미확인|미등록|unknown|null|undefined)$/i.test(name)));
-      const phones = [task.driverPhone, task.driverTel, task.carrier?.driverPhone, assignedDriver?.phone, assignedDriver?.phoneNumber]
-        .map(driverPhone).filter(Boolean);
+      const {names,phones}=taskDriverIdentity(task);
       if (names.size > 1 || new Set(phones.map(phone => phone.replace(/\D/g,''))).size > 1) {
         throw fail('DRIVER_ASSIGNMENT_CONFLICT',409);
       }

@@ -56,6 +56,27 @@ test('source event IDs retain revisits to the same customer and omit chronology 
   assert.equal(result.sourceGeneration,result.source.sha256);
 });
 
+test('staff roster names use the exact dated center assignment and never expose contact fields',async()=>{
+ const assigned={driverName:'검증 기사 가',driverPhone:'010-1234-5678',logisticsCenterId:1};
+ const rows=[task(1,'102',assigned),task(2,'105',assigned),task(3,'105',{...assigned,driverPhone:undefined}),
+   task(4,'102',{...assigned,logisticsCenterId:undefined}),task(5,'102',{...assigned,driverName:'대체용차'}),
+   task(6,'102',{...assigned,driver:{name:'검증 기사 나'}})];
+ const seen=[];
+ const read=createStageDatedDeliveryReader({env:{...env,MAP_STAFF_SESSION_SECRET:'fixture-driver-roster-secret-000000'},fetchImpl:url=>{
+   seen.push(url.pathname);return page(rows);
+ }});
+ const roster=await read.readContract(date,'osan',null);
+ const byId=id=>roster.rows.find(row=>row.deliveryId===deliveryTaskId(id));
+ assert.equal(byId(1).driverName,assigned.driverName);
+ assert.equal(byId(1).driverIdentity,'VERIFIED');
+ assert.match(byId(1).driverKey,/^[a-f0-9]{64}$/);
+ assert.equal(byId(1).driverKey,byId(2).driverKey);
+ for(const id of [3,4,5,6])assert.equal(byId(id).driverKey,undefined);
+ assert.doesNotMatch(JSON.stringify(roster),/driverPhone|010-1234-5678/);
+ assert.doesNotMatch(JSON.stringify(await read(date)),/driverName|driverKey|010-1234-5678/);
+ assert.deepEqual(seen,['/api/bali/task']);
+});
+
 test('all pages are checked before returning and incomplete, duplicated or conflicting reads retain the same day only',async()=>{
   let now=Date.parse(at('20:00')), mode='initial', calls=0;
   const tasks=Array.from({length:301},(_,i)=>task(i+1,'101'));

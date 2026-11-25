@@ -63,11 +63,33 @@
   }
 
   const centers = Object.freeze({osan:'1', osanColdStorage:'2', yeongnam:'3', honam:'4'});
+  const dispatchCenters = Object.freeze({'011':'osan','012':'yeongnam','013':'honam'});
   const sourceStates = new Set(['LIVE_VERIFIED', 'STALE_VERIFIED', 'PUBLISHED_VERIFIED']);
   const visitStates = new Set(['OPEN', 'COMPLETED', 'CANCELLED']);
   const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   const iso = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
   const rosterError = () => Object.assign(Error('DATED_ASSIGNMENTS_INCOMPLETE'), {code:'DATED_ASSIGNMENTS_INCOMPLETE'});
+  const verifiedDriverFields = row => row.driverIdentity === 'VERIFIED' && digest(row.driverKey) &&
+    typeof row.driverName === 'string' && row.driverName.trim() === row.driverName && row.driverName.length > 0 &&
+    row.driverName.length <= 100 && !/[\x00-\x1f\x7f\d]/.test(row.driverName);
+  function datedDriver(row,date,center) {
+    if(row.deliveryDate!==date || !row.vehicle || !verifiedDriverFields(row)) return null;
+    const supplied = row.dispatchCenterCode;
+    const actual = Object.hasOwn(centers,supplied)?supplied:Object.hasOwn(dispatchCenters,supplied)?dispatchCenters[supplied]:'';
+    if (!actual || center && actual!==center && !(center==='osan'&&actual==='osanColdStorage')) return null;
+    return {key:row.driverKey,name:row.driverName,center:actual};
+  }
+  function datedDriverOptions(rows,date,center) {
+    const options=new Map(),conflicts=new Set();
+    for(const row of rows){
+      const found=datedDriver(row,date,center);
+      if(!found)continue;
+      const prior=options.get(found.key);
+      if(prior && (prior.name!==found.name || prior.center!==found.center)) conflicts.add(found.key);
+      else options.set(found.key,found);
+    }
+    return [...options.values()].filter(driver=>!conflicts.has(driver.key)).sort((a,b)=>a.name.localeCompare(b.name,'ko'));
+  }
   function verifyRoster(payload, date, center, selectedVehicle=null) {
     if (payload?.contract !== 'opsmap-dated-delivery-v1' || payload.date !== date || payload.center !== center ||
       payload.sourceId !== centers[center] || payload.vehicle !== selectedVehicle ||
@@ -88,7 +110,9 @@
       if (row?.deliveryDate !== date || !digest(row.deliveryId) || ids.has(row.deliveryId) ||
         typeof row.customerCode !== 'string' || !row.customerCode.trim() || !visitStates.has(row.state) ||
         (row.vehicle !== null && (typeof row.vehicle !== 'string' || !row.vehicle || vehicle(row.vehicle) !== row.vehicle)) ||
-        (selectedVehicle && row.vehicle !== selectedVehicle)) throw rosterError();
+        (selectedVehicle && row.vehicle !== selectedVehicle) ||
+        (['driverIdentity','driverKey','driverName'].some(key=>Object.hasOwn(row,key)) &&
+         (!row.vehicle || row.state==='CANCELLED' || !verifiedDriverFields(row)))) throw rosterError();
       ids.add(row.deliveryId);
       if (row.state !== 'CANCELLED') activeCount++;
     }
@@ -167,5 +191,5 @@
         Number.isFinite(row.lng) && Math.abs(row.lng) <= 180 && row.coordinateStatus !== 'CONFLICT' ? [{row, at}] : [];
     });
   }
-  root.OpsmapDaily = Object.freeze({archive, calendar, day, dispatch, errorLabel, validate, projection, actualPoints, centers, verifyRoster, rosterRows, selectVisit, sameRosterScope, chronology, rosterPoints});
+  root.OpsmapDaily = Object.freeze({archive, calendar, day, dispatch, errorLabel, validate, projection, actualPoints, centers, verifyRoster, rosterRows, selectVisit, sameRosterScope, chronology, rosterPoints, datedDriver, datedDriverOptions});
 })(globalThis);

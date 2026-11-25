@@ -69,12 +69,11 @@
 .approvedShellCandidate #vehicleTrigger,.approvedShellCandidate #vehicleQuery{width:100%}
 .approvedShellCandidate .vehicleDropdown{display:none}.approvedShellCandidate #vehicleSelect.open .vehicleDropdown{display:block}
 .approvedShellCandidate #routeDialog #dailyControls[hidden]{display:block!important}
-.approvedShellCandidate #routeDialog #periodDriver[hidden]{display:block!important}
 .approvedShellCandidate #routeDialog #vehicleList{display:flex;max-height:200px;overflow:auto}
 .approvedShellCandidate #routeDialog .vehicleItem{font-weight:400;margin:0;padding:5px 8px;font-size:14px;background:#f5f7fb;border-radius:5px}
 .approvedShellCandidate #routeDialog .vehicleArea{display:none}
-.approvedShellCandidate #routeDialog .periodBasis{display:flex!important}
-.approvedShellCandidate #routeDialog #periodDriver{height:41px}
+.approvedShellCandidate #routeDialog .periodBasis{display:flex}
+.approvedShellCandidate #routeDialog #periodDriver{min-height:90px;width:100%}
 .approvedShellCandidate #routeDialog .sourceAdvancedRoutes{margin-top:12px;font-size:12px;color:#728097}
 .approvedShellCandidate #mapBatchDialog #newAreaBatchTool{border:0;padding:0}
 .approvedShellCandidate #mapBatchDialog #newAreaBatchTool>summary{display:none}

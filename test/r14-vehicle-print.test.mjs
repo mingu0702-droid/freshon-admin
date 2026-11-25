@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildVehiclePrintModel,mergeDatedPrintCoordinates,validPrintDate,validateDatedPrintResponse,PRINT_UNPROVIDED_CENTER} from '../public/opsmap/map-print-ui.mjs';
+import {buildVehiclePrintModel,datedPrintCenter,mergeDatedPrintCoordinates,validPrintDate,validateDatedPrintResponse,PRINT_UNPROVIDED_CENTER} from '../public/opsmap/map-print-ui.mjs';
 const master={version:'a'.repeat(64),checkedAt:'2026-11-04T00:00:00Z',stale:false};
 const fixed=(code,car='2',center='osan',extra={})=>({customerCode:code,customerName:'합성 테스트 매장',address:'경기도 오산시 합성로 10',baseVehicle:car,baseVehicleGroup:center,baseVehicleState:'VERIFIED_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:master.version,baseVehicleCheckedAt:master.checkedAt,baseVehicleStale:false,lat:37.1,lng:127.1,...extra});
 const build=(rows,extra={})=>buildVehiclePrintModel({basis:'FIXED',date:'2026-11-04',nowDate:'2026-11-04',center:'osan',selectedVehicle:'2',master,rows,...extra});
@@ -34,6 +34,23 @@ test('dated center omitted at source has an explicit scope isolated from known c
  assert.deepEqual(build(rows,{basis:'DATED',date:'2026-11-03',center:'osan'}).stores.map(r=>r.customerCode),['S102']);
  assert.throws(()=>build([fixed('S100')],{center:PRINT_UNPROVIDED_CENTER}),/SELECTION_REQUIRED/);
  assert.throws(()=>build(rows,{basis:'DATED',date:'2026-11-04',center:PRINT_UNPROVIDED_CENTER}),/DATE_UNVERIFIED/);
+});
+
+test('dated print preserves the chosen center and infers a missing selection only from the exact date and vehicle',()=>{
+ const date='2026-11-17', selectedVehicle='102';
+ const osan=Array.from({length:8},(_,i)=>({customerCode:'S'+(100+i),vehicle:'102',dispatchCenterCode:'011',deliveryDate:date}));
+ const honam={...osan[0],dispatchCenterCode:'013',vehicle:'208'};
+ const prior={...osan[0],dispatchCenterCode:'012',deliveryDate:'2026-11-16'};
+ const rows=[...osan,honam,prior];
+ const args={date,selectedVehicle,rows};
+ assert.equal(datedPrintCenter({...args,center:'honam'}),'honam');
+ assert.equal(datedPrintCenter(args),'osan');
+ assert.equal(build(osan,{basis:'DATED',date,nowDate:date,center:datedPrintCenter(args),selectedVehicle}).stores.length,8);
+ assert.equal(datedPrintCenter({...args,rows:[...rows,{...honam,vehicle:'102'}]}),'');
+ assert.equal(datedPrintCenter({...args,rows:[{...osan[0],dispatchCenterCode:null}]}),PRINT_UNPROVIDED_CENTER);
+ assert.equal(datedPrintCenter({...args,rows:[{...osan[0],vehicleGroup:'osan',raw:{...osan[0],dispatchCenterCode:null}}]}),PRINT_UNPROVIDED_CENTER);
+ assert.equal(datedPrintCenter({...args,rows:[{...osan[0],vehicleGroup:'osan',raw:prior}]}),'');
+ assert.equal(datedPrintCenter({...args,rows:[prior]}),'');
 });
 
 test('dated print fills only missing points tied to the same customer address and verified saved evidence',()=>{
