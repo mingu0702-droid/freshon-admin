@@ -54,7 +54,8 @@ function taskDriverIdentity(task) {
   const contacts = [
     [[task.driverName],[task.driverPhone,task.driverTel]],
     [[task.carrierName],[task.carrierPhone]],
-    ...[...assigned,...carriers].map(person=>[[person.driverName,person.name],[person.driverPhone,person.phone,person.phoneNumber,person.tel]])
+    ...[...assigned,...carriers].map(person=>[[person.driverName,person.name],
+      [person.driverPhone,person.driverPhoneNumber,person.phone,person.phoneNumber,person.tel]])
   ].map(([names,phones])=>({
     names:names.map(cleanName).filter(name=>name && !driverVehicle(name) && !/^(?:미확인|미등록|unknown|null|undefined)$/i.test(name)),
     phones:phones.map(driverPhone).filter(Boolean)

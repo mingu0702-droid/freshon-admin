@@ -67,7 +67,9 @@ test('staff roster names use the exact dated center assignment and never expose 
    task(10,'126',{...assigned,carrierName:'서로 다른 기사',carrierPhone:'02-123-4567'}),
    task(11,'126',{driverName:assigned.driverName,carrierPhone:assigned.driverPhone,logisticsCenterId:1}),
    task(12,'126',{...assigned,carrierName:assigned.driverName,carrierPhone:'010-2345-6789'}),
-   task(13,'126',{...assigned,carrierName:assigned.driverName,carrierPhone:'+82-10-1234-5678'})];
+   task(13,'126',{...assigned,carrierName:assigned.driverName,carrierPhone:'+82-10-1234-5678'}),
+   task(15,'126',{carrier:{fixedNo:'126',logisticsCenterId:1,driverName:assigned.driverName,driverPhoneNumber:assigned.driverPhone}}),
+   task(16,'126',{carrier:{fixedNo:'126',...assigned,driverPhoneNumber:'010-2345-6789'}})];
  const seen=[];
  const read=createStageDatedDeliveryReader({env:{...env,MAP_STAFF_SESSION_SECRET:'fixture-driver-roster-secret-000000'},fetchImpl:url=>{
    seen.push(url.pathname);return page(rows);
@@ -78,8 +80,8 @@ test('staff roster names use the exact dated center assignment and never expose 
  assert.equal(byId(1).driverIdentity,'VERIFIED');
  assert.match(byId(1).driverKey,/^[a-f0-9]{64}$/);
  assert.equal(byId(1).driverKey,byId(2).driverKey);
- for(const id of [3,4,5,6,9,10,11,12])assert.equal(byId(id).driverKey,undefined);
- for(const id of [7,8,13])assert.equal(byId(id).driverKey,byId(1).driverKey);
+ for(const id of [3,4,5,6,9,10,11,12,16])assert.equal(byId(id).driverKey,undefined);
+ for(const id of [7,8,13,15])assert.equal(byId(id).driverKey,byId(1).driverKey);
  assert.doesNotMatch(JSON.stringify(roster),/driverPhone|010-1234-5678/);
  assert.doesNotMatch(JSON.stringify(await read(date)),/driverName|driverKey|010-1234-5678/);
  assert.deepEqual(seen,['/api/bali/task']);
