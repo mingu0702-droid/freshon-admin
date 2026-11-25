@@ -35,23 +35,24 @@ export function createDispatchPostalEvidenceReader({env=process.env,appRoot=proc
   if(env.OPSMAP_DISPATCH_POSTAL_ADDRESS_EVIDENCE_APPROVED!=='1')return undefined;
   const filename=env.OPSMAP_DISPATCH_POSTAL_ADDRESS_EVIDENCE_FILE;
   const expected=env.OPSMAP_DISPATCH_POSTAL_ADDRESS_EVIDENCE_SHA256;
-  const approvedOsanSuccessor=env.OPSMAP_DISPATCH_POSTAL_ADDRESS_EVIDENCE_SUCCESSOR_SHA256;
   const encoded=env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64||'';
   const key=Buffer.from(encoded,'base64');
+  const fileIdentity=({dev,ino,size,mtimeMs,ctimeMs})=>[dev,ino,size,mtimeMs,ctimeMs].join(':');
   let cache;
   return async registry=>{
     if(!opsmapArchiveSite(env)||!path.isAbsolute(filename||'')||!hash.test(expected||'')||
         key.length!==32||key.toString('base64')!==encoded)throw unavailable();
-    if(cache?.registry===registry.ref.version)return cache.checked;
     const filePath=await realpath(filename);
     const publicPath=path.relative(path.resolve(appRoot,'public'),filePath);
     if(!publicPath||!publicPath.startsWith('..'+path.sep)&&!path.isAbsolute(publicPath))throw unavailable();
     const file=await open(filePath,'r');
-    let value;
+    let value, identity;
     try {
       const stat=await file.stat();
       const {size}=stat;
       if(!stat.isFile()||size<29||size>maxLocalEvidenceBytes)throw unavailable();
+      identity=fileIdentity(stat);
+      if(cache?.registry===registry.ref.version&&cache.path===filePath&&cache.identity===identity)return cache.checked;
       const buffer=Buffer.alloc(size);
       let offset=0;
       while(offset<size){
@@ -59,21 +60,15 @@ export function createDispatchPostalEvidenceReader({env=process.env,appRoot=proc
         if(!bytesRead)throw unavailable();
         offset+=bytesRead;
       }
-      if((await file.stat()).size!==size)throw unavailable();
+      if(fileIdentity(await file.stat())!==identity)throw unavailable();
       value=JSON.parse(buffer.toString('utf8'));
     } finally {await file.close();}
     if(value?.schema!=='opsmap-local-sealed-postal-address-evidence-v1'||value.reference?.sha256!==expected||
         !hash.test(value.reference?.registry||'')||typeof value.sealed!=='string')throw unavailable();
     const bytes=Buffer.from(value.sealed,'base64');
     if(bytes.toString('base64')!==value.sealed)throw unavailable();
-    // Superseded address evidence cannot block current, independently verified postal links.
-    if(value.reference.registry!==registry.ref.version&&approvedOsanSuccessor!==registry.ref.version){
-      if(createHash('sha256').update(bytes).digest('hex')!==expected)throw unavailable();
-      cache={registry:registry.ref.version,checked:null};
-      return null;
-    }
-    const checked=readPostalAddressEvidence(bytes,{approvedReference:value.reference,registry,key,approvedOsanSuccessor});
-    cache={registry:registry.ref.version,checked};
+    const checked=readPostalAddressEvidence(bytes,{approvedReference:value.reference,registry,key,retainMatchingOsan:true});
+    cache={registry:registry.ref.version,path:filePath,identity,checked};
     return checked;
   };
 }
@@ -125,7 +120,7 @@ export function createOpsmapDispatchOverlapsReader({getPublication,postalGenerat
       const currentPostal=postal.postcodes.get(customerCode);
       const independentPostal=evidence?.lookup(customerCode)?.postalCode;
       const postalCode=validPostal(currentPostal)?currentPostal:independentPostal;
-      if(!validPostal(postalCode)||validPostal(independentPostal)&&independentPostal!==postalCode)continue;
+      if(!validPostal(postalCode))continue;
       counts.verifiedPostalStores++;
       if(!fixedVerified)continue;
       counts.eligibleStores++;

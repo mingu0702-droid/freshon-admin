@@ -30,7 +30,7 @@ function checkedSource(source) {
   return { issuer, edition:source.edition, datasetSha256:source.datasetSha256, reviewSha256:source.reviewSha256 };
 }
 
-function checkedEvidence(value, registry, {boundVersion=registry?.ref?.version, requiredCenter} = {}) {
+function checkedEvidence(value, registry, {boundVersion=registry?.ref?.version, osanOnly=false, omitChanged=false} = {}) {
   if (!hasFields(value, ['schema', 'registry', 'source', 'rows']) || value.schema !== schema ||
       !isDigest(value.registry) || boundVersion !== value.registry ||
       !Array.isArray(registry.rows) || registry.rows.length > maxRegistryRows ||
@@ -43,22 +43,27 @@ function checkedEvidence(value, registry, {boundVersion=registry?.ref?.version, 
     registryByCode.set(row.customerCode, row);
   }
   const postalByBuilding = new Map();
+  const rows = [];
   let previous = '';
   for (const row of value.rows) {
     if (!Array.isArray(row) || row.length !== 4) throw invalid();
     const [customerCode, addressSha256, buildingManagementNo, postalCode] = row;
     if (typeof customerCode !== 'string' || !code.test(customerCode) || customerCode <= previous ||
         !isDigest(addressSha256) || typeof buildingManagementNo !== 'string' || !building.test(buildingManagementNo) ||
-        typeof postalCode !== 'string' || !postal.test(postalCode) || postalCode < '01000') throw invalid();
-    const current = registryByCode.get(customerCode);
-    if (current?.lifecycle !== 'ACTIVE' || (requiredCenter && current.centerGroup !== requiredCenter) ||
-        typeof current.basicAddress !== 'string' || !current.basicAddress.trim() ||
-        current.addressHash !== addressSha256 || customerRegistryAddressHash(current.basicAddress) !== addressSha256 ||
+        typeof postalCode !== 'string' || !postal.test(postalCode) || postalCode < '01000' ||
         (postalByBuilding.has(buildingManagementNo) && postalByBuilding.get(buildingManagementNo) !== postalCode)) throw invalid();
     postalByBuilding.set(buildingManagementNo, postalCode);
     previous = customerCode;
+    const current = registryByCode.get(customerCode);
+    if (current?.lifecycle !== 'ACTIVE' || (osanOnly && current.centerGroup !== 'osan') ||
+        typeof current.basicAddress !== 'string' || !current.basicAddress.trim() ||
+        current.addressHash !== addressSha256 || customerRegistryAddressHash(current.basicAddress) !== addressSha256) {
+      if (omitChanged) continue;
+      throw invalid();
+    }
+    rows.push(row);
   }
-  return { schema, registry:value.registry, source, rows:value.rows };
+  return { schema, registry:value.registry, source, rows };
 }
 
 // Accepts only single-building evidence from an independently verified review.
@@ -79,12 +84,12 @@ export function sealPostalAddressEvidence({ registry, source, rows }, key) {
   return { bytes, reference:{ registry:checked.registry, source:checked.source, sha256:checksum(bytes) } };
 }
 
-export function readPostalAddressEvidence(bytes, { approvedReference, registry, key, approvedOsanSuccessor } = {}) {
+export function readPostalAddressEvidence(bytes, { approvedReference, registry, key, retainMatchingOsan = false } = {}) {
   const registryVersion = registry?.ref?.version;
   const successor = registryVersion !== approvedReference?.registry;
   if (!hasFields(approvedReference, ['registry', 'source', 'sha256']) ||
-      !isDigest(approvedReference.registry) ||
-      (successor && (!isDigest(approvedOsanSuccessor) || approvedOsanSuccessor !== registryVersion)) ||
+      !isDigest(approvedReference.registry) || !isDigest(registryVersion) ||
+      (successor && retainMatchingOsan !== true) ||
       !isDigest(approvedReference.sha256) || !Buffer.isBuffer(bytes) ||
       bytes.length < 29 || bytes.length > maxBytes || checksum(bytes) !== approvedReference.sha256) throw invalid();
   const approvedSource = checkedSource(approvedReference.source);
@@ -99,8 +104,10 @@ export function readPostalAddressEvidence(bytes, { approvedReference, registry, 
   } catch {
     throw invalid();
   }
+  // The approval pins the original artifact. A daily registry update only
+  // removes rows that no longer match the active Osan address.
   const verified = checkedEvidence(value, registry, {boundVersion:approvedReference.registry,
-    requiredCenter:successor ? 'osan' : undefined});
+    osanOnly:retainMatchingOsan === true, omitChanged:successor && retainMatchingOsan === true});
   if (verified.registry !== approvedReference.registry ||
       Object.keys(approvedSource).some(field => approvedSource[field] !== verified.source[field])) throw invalid();
   const byCode = new Map(verified.rows.map(([customerCode, addressSha256, buildingManagementNo, postalCode]) =>

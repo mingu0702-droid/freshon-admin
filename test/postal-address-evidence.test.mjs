@@ -56,24 +56,45 @@ test('rejects a stale registry, changed address, deleted store, and duplicate cu
   }
 });
 
-test('revalidates the original sealed proof against one approved Osan successor only', () => {
+test('revalidates unchanged active Osan addresses across daily registry versions without a new approval', () => {
   const {bytes,reference}=seal();
-  const successor='f'.repeat(64);
   const moved={...current,centerGroup:'osan'};
-  const snapshot={ref:{version:successor},rows:[moved]};
-  const options={approvedReference:reference,key,approvedOsanSuccessor:successor};
-  const approved=readPostalAddressEvidence(bytes,{...options,registry:snapshot});
-  assert.equal(approved.registry,successor);
-  assert.deepEqual(approved.lookup(row.customerCode),readPostalAddressEvidence(bytes,{
-    approvedReference:reference,registry,key}).lookup(row.customerCode));
-  assert.throws(()=>readPostalAddressEvidence(bytes,{...options,registry:{...snapshot,ref:{version:'a'.repeat(64)}}}),corrupt);
-  for(const rows of [[],[{...moved,centerGroup:'yeongnam'}],[{...moved,lifecycle:'DELETED'}],
-    [{...moved,basicAddress:address+'-2'}],[moved,moved]]){
-    assert.throws(()=>readPostalAddressEvidence(bytes,{...options,registry:{...snapshot,rows}}),corrupt);
+  const original=readPostalAddressEvidence(bytes,{approvedReference:reference,registry,key});
+  const options={approvedReference:reference,key,retainMatchingOsan:true};
+  for(const currentVersion of ['f'.repeat(64),'a'.repeat(64)]){
+    const snapshot={ref:{version:currentVersion},rows:[{...moved,basicAddress:address.replace(' 종로구 ', '  종로구 ')}]};
+    const accepted=readPostalAddressEvidence(bytes,{...options,registry:snapshot});
+    assert.equal(accepted.registry,currentVersion);
+    assert.deepEqual(accepted.lookup(row.customerCode),original.lookup(row.customerCode));
   }
+  const snapshot={ref:{version:'e'.repeat(64)},rows:[moved]};
+  for(const rows of [[],[{...moved,centerGroup:'yeongnam'}],[{...moved,lifecycle:'DELETED'}],
+    [{...moved,basicAddress:address+'-2'}],[{...moved,addressHash:'0'.repeat(64)}],
+    [{...moved,customerCode:'S124'}]]){
+    const result=readPostalAddressEvidence(bytes,{...options,registry:{...snapshot,rows}});
+    assert.equal(result.count,0);
+    assert.equal(result.lookup(row.customerCode),null);
+  }
+  assert.throws(()=>readPostalAddressEvidence(bytes,{...options,registry:{...snapshot,rows:[moved,moved]}}),corrupt);
+  assert.throws(()=>readPostalAddressEvidence(bytes,{...options,registry:snapshot,
+    approvedReference:{...reference,registry:snapshot.ref.version}}),corrupt);
   const changed=Buffer.from(bytes);
   changed[29]^=1;
   assert.throws(()=>readPostalAddressEvidence(changed,{...options,registry:snapshot}),corrupt);
+});
+
+test('a changed proof row does not erase unrelated current address evidence or give evidence to a new customer',()=>{
+  const other={...current,customerCode:'S124'};
+  const {bytes,reference}=seal([row,{...row,customerCode:other.customerCode}],{
+    ...registry,rows:[current,other]});
+  const newCustomer={...current,customerCode:'S125',centerGroup:'osan'};
+  const live={ref:{version:'a'.repeat(64)},rows:[{...current,centerGroup:'osan'},
+    {...other,centerGroup:'honam'},newCustomer]};
+  const checked=readPostalAddressEvidence(bytes,{approvedReference:reference,key,retainMatchingOsan:true,registry:live});
+  assert.equal(checked.count,1);
+  assert.equal(checked.lookup('S123').postalCode,'03047');
+  assert.equal(checked.lookup('S124'),null);
+  assert.equal(checked.lookup('S125'),null);
 });
 
 test('rejects duplicate evidence, conflicting postal codes per building, invalid identifiers, and geometry', () => {
