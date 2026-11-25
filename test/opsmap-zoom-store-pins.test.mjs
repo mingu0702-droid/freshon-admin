@@ -50,7 +50,7 @@ test('detailed map keeps all visible stores and groups only exact co-locations',
   assert.deepEqual(markers.find(marker => marker.clusterKind === 'location').memberCodes.sort(), ['S0', 'S305']);
 });
 
-test('the dated map uses the shared zoom thresholds without merging different confirmed routes to fit the budget', () => {
+test('both maps show every visible store at level six and keep their own route assignments', () => {
   const first = runtime.indexOf('  function buildMapPinIndex(');
   const last = runtime.indexOf('    const entries = pins.map(', first);
   const start = runtime.indexOf('  function detailedMarkerRows(');
@@ -80,14 +80,14 @@ test('the dated map uses the shared zoom thresholds without merging different co
       recentOperationsOnly:()=>false,markerPosition:row=>row,clearAreaViewportDots:()=>{},
     });
   const codes = pins => Array.from(pins.flatMap(pin=>pin.memberCodes||[pin.customerCode])).sort();
-  for (level of [9,7,6]) {
+  for (level of [9,7]) {
     const daily = render(rows);
     assert.equal(daily.markerMode,'GROUPS');
     assert.equal(daily.pins.length,rows.length);
     assert.ok(daily.pins.every(pin=>!pin.clusterVehicles||pin.clusterVehicles.length===1));
     assert.deepEqual(codes(daily.pins),codes(rows));
   }
-  level=5;
+  level=6;
   const daily = render(rows);
   assert.equal(daily.markerMode,'STORES');
   assert.deepEqual(codes(daily.pins),codes(rows));
@@ -101,6 +101,8 @@ test('the dated map uses the shared zoom thresholds without merging different co
   assert.equal(base.markerMode,'STORES');
   assert.deepEqual(codes(base.pins),codes(rows));
   assert.deepEqual(base.pins.find(pin=>pin.clusterKind==='location').clusterVehicles,['401','551']);
+  level=7;
+  assert.equal(render(rows).markerMode,'GROUPS');
   assert.notEqual(Phase2bUi.vehicleColor('101'),Phase2bUi.vehicleColor('251'));
 });
 
@@ -378,18 +380,18 @@ const nearbyPoint = (code, route, meters, pixel) => ({
 });
 const projectNearby = row => ({x: row.pixel??100+(row.lat-37.5)*2000, y: 150});
 
-test('levels five and four split nearby distinct coordinates and keep exact co-locations selectable', () => {
+test('levels six through four split nearby coordinates and keep exact co-locations selectable', () => {
   const {stableClusters, zoomBand} = MapViewPolicy;
   const viewport={width:390,height:844}, settings={nearbyVehicleOnly:true,maxMarkers:40,sourceVersion:1};
   const rows=[nearbyPoint('S1','101',0,100),nearbyPoint('S2','114',0,100),
     nearbyPoint('S3','114',70,101),nearbyPoint('S4','114',71,102),
     nearbyPoint('S5','122',499.999,137),nearbyPoint('S6','124',500.001,138)];
   const codes = markers => markers.flatMap(marker=>marker.memberCodes||[marker.customerCode]).sort();
-  assert.deepEqual([10,9,7,6,5,4].map(zoomBand),[3,2,2,1,0,0]);
+  assert.deepEqual([10,9,7,6,5,4].map(zoomBand),[3,2,2,0,0,0]);
   for(const level of [7,6,5,4]){
     const markers=stableClusters(rows,projectNearby,level,'S1',viewport,settings);
     assert.deepEqual(codes(markers),codes(rows));
-    if(level>5){
+    if(level>6){
       assert.ok(markers.some(row=>row.clusterKind==='vehicle'));
       continue;
     }

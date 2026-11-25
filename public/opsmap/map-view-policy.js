@@ -2,7 +2,8 @@
 (function (root) {
   'use strict';
   const EARTH = 6378137;
-  const storePinLevel = 5;
+  const storePinLevel = 6;
+  const storeFocusLevel = 5;
   const territoryCellSizes = [0, 250, 3500, 18000, 120000];
   // At 80 m the bounded Mercator plane uses fewer than 501,000 cells per axis.
   const gridStride = 2 ** 20;
@@ -491,5 +492,5 @@
       dispose(){disposed=true;releaseFocus();if(frame!==null)cancelRaf(frame);frame=null;cameraEvents?.removeListener?.(map,'center_changed',rememberCenter);},
       dimensions:()=>({width,height}) };
   }
-  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,visibleVehicleRepresentatives,groupOverviewVehiclePins,pinAssignment,storePinLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint,placeOverlayLabels});
+  root.MapViewPolicy=Object.freeze({stableClusters,exactLocations,visibleVehicleRepresentatives,groupOverviewVehiclePins,pinAssignment,storePinLevel,storeFocusLevel,zoomBand,createCamera,regionColors,cameraFocusViewport,visibleLineLabelPoint,lineLabelPoint,placeOverlayLabels});
 })(typeof window==='object'?window:globalThis);

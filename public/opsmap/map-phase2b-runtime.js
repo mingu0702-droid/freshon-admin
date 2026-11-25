@@ -2159,7 +2159,7 @@
     void loadBaseMap();
     const map=state.map,first=locations[0];
     if(locations.every(item=>item.lat===first.lat&&item.lng===first.lng)){
-      jumpToMapRegion(first,Math.min(map.getLevel(),MapViewPolicy.storePinLevel));
+      jumpToMapRegion(first,Math.min(map.getLevel(),MapViewPolicy.storeFocusLevel));
     }else{
       const bounds=new kakao.maps.LatLngBounds();
       for(const item of locations)bounds.extend(markerPosition(item));
@@ -2568,7 +2568,8 @@
     const selectedVehicleStores=showSelectedVehicleStores();
     const closeUp=level<=window.MapViewPolicy.storePinLevel;
     const detailedStores=selectedVehicleStores||closeUp;
-    const neighborhood=base&&closeUp&&searchNeighborhood;
+    const showAreaPins=areaIndex&&level<=MapViewPolicy.storeFocusLevel;
+    const neighborhood=showAreaPins&&searchNeighborhood;
     if(neighborhood&&neighborhood.index!==areaIndex){
       neighborhood.stores=nearbyVerifiedStores(neighborhood.point,areaIndex);
       neighborhood.index=areaIndex;
@@ -2604,7 +2605,7 @@
       nearbyVehicleOnly:!base||assignmentMode==='BASE_60D'};
     let pins,readyOverview=false,areaCount=0;
     if(areaIndex){
-      if(closeUp){
+      if(showAreaPins){
         clearAreaViewportDots();
         pins=detailedMarkerRows(mapViewport,null,'BASE_60D',areaIndex,true);
         areaCount=pins.reduce((total,row)=>total+(row.clusterRows?.length||1),0);
@@ -2615,7 +2616,7 @@
         areaCount=areaViewportDots.draw(visible,markerPosition,selectedCode);
         pins=[];
       }
-      mapNode.dataset.areaViewport=JSON.stringify({mode:closeUp?'pins':'dots',visible:areaCount,located:areaIndex.valid.length,center:searchNeighborhood.center||'all'});
+      mapNode.dataset.areaViewport=JSON.stringify({mode:showAreaPins?'pins':'dots',visible:areaCount,located:areaIndex.valid.length,center:searchNeighborhood.center||'all'});
     }else if(detailedStores){
       pins=detailedMarkerRows(mapViewport,selectedExtra,assignmentMode);
     }else if(vehicleOverview){
@@ -2641,7 +2642,7 @@
     }
     if(!areaIndex&&!detailedStores&&selectedExtra)pins.push(selectedExtra);
     if(!areaIndex&&hideUnverified&&!vehicleOverview)pins=pins.filter(shouldShow);
-    const markerMode=areaIndex&&!closeUp?'AREA_DOTS':detailedStores||closeUp?'STORES':readyOverview?'VEHICLES':'GROUPS';
+    const markerMode=areaIndex&&!showAreaPins?'AREA_DOTS':detailedStores?'STORES':readyOverview?'VEHICLES':'GROUPS';
     const entries = pins.map(row=>{
       const selected=markerIsSelected(row);
       const assigned=navCodes.some(code=>markerHasStore(row,code));
@@ -2946,7 +2947,7 @@
   function focusMapPoint(row,{zoom=false,key='',pinOffset,nearby=false,onSettled}={}) {
     if(!state.map||numberOrNull(row.lat)===null||numberOrNull(row.lng)===null)return;
     state.fitRequested=false;state.suppressMapEventsUntil=Date.now()+700;
-    const level=window.MapViewPolicy.storePinLevel;
+    const level=window.MapViewPolicy.storeFocusLevel;
     if(nearby)mapCamera?.relayout();
     if(nearby?state.map.getLevel()!==level:zoom&&state.map.getLevel()>level)state.map.setLevel(level,{animate:false});
     const point=new kakao.maps.LatLng(Number(row.lat),Number(row.lng));
