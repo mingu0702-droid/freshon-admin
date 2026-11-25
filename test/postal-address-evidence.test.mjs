@@ -56,6 +56,26 @@ test('rejects a stale registry, changed address, deleted store, and duplicate cu
   }
 });
 
+test('revalidates the original sealed proof against one approved Osan successor only', () => {
+  const {bytes,reference}=seal();
+  const successor='f'.repeat(64);
+  const moved={...current,centerGroup:'osan'};
+  const snapshot={ref:{version:successor},rows:[moved]};
+  const options={approvedReference:reference,key,approvedOsanSuccessor:successor};
+  const approved=readPostalAddressEvidence(bytes,{...options,registry:snapshot});
+  assert.equal(approved.registry,successor);
+  assert.deepEqual(approved.lookup(row.customerCode),readPostalAddressEvidence(bytes,{
+    approvedReference:reference,registry,key}).lookup(row.customerCode));
+  assert.throws(()=>readPostalAddressEvidence(bytes,{...options,registry:{...snapshot,ref:{version:'a'.repeat(64)}}}),corrupt);
+  for(const rows of [[],[{...moved,centerGroup:'yeongnam'}],[{...moved,lifecycle:'DELETED'}],
+    [{...moved,basicAddress:address+'-2'}],[moved,moved]]){
+    assert.throws(()=>readPostalAddressEvidence(bytes,{...options,registry:{...snapshot,rows}}),corrupt);
+  }
+  const changed=Buffer.from(bytes);
+  changed[29]^=1;
+  assert.throws(()=>readPostalAddressEvidence(changed,{...options,registry:snapshot}),corrupt);
+});
+
 test('rejects duplicate evidence, conflicting postal codes per building, invalid identifiers, and geometry', () => {
   const duplicateBuilding = { ...row, customerCode:'S124', postalCode:'03048' };
   const twoStores = { ...registry, rows:[current, { ...current, customerCode:'S124' }] };

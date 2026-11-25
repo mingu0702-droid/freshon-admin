@@ -30,9 +30,9 @@ function checkedSource(source) {
   return { issuer, edition:source.edition, datasetSha256:source.datasetSha256, reviewSha256:source.reviewSha256 };
 }
 
-function checkedEvidence(value, registry) {
+function checkedEvidence(value, registry, {boundVersion=registry?.ref?.version, requiredCenter} = {}) {
   if (!hasFields(value, ['schema', 'registry', 'source', 'rows']) || value.schema !== schema ||
-      !isDigest(value.registry) || registry?.ref?.version !== value.registry ||
+      !isDigest(value.registry) || boundVersion !== value.registry ||
       !Array.isArray(registry.rows) || registry.rows.length > maxRegistryRows ||
       !Array.isArray(value.rows) || !value.rows.length || value.rows.length > maxRows) throw invalid();
   const source = checkedSource(value.source);
@@ -51,7 +51,8 @@ function checkedEvidence(value, registry) {
         !isDigest(addressSha256) || typeof buildingManagementNo !== 'string' || !building.test(buildingManagementNo) ||
         typeof postalCode !== 'string' || !postal.test(postalCode) || postalCode < '01000') throw invalid();
     const current = registryByCode.get(customerCode);
-    if (current?.lifecycle !== 'ACTIVE' || typeof current.basicAddress !== 'string' || !current.basicAddress.trim() ||
+    if (current?.lifecycle !== 'ACTIVE' || (requiredCenter && current.centerGroup !== requiredCenter) ||
+        typeof current.basicAddress !== 'string' || !current.basicAddress.trim() ||
         current.addressHash !== addressSha256 || customerRegistryAddressHash(current.basicAddress) !== addressSha256 ||
         (postalByBuilding.has(buildingManagementNo) && postalByBuilding.get(buildingManagementNo) !== postalCode)) throw invalid();
     postalByBuilding.set(buildingManagementNo, postalCode);
@@ -78,9 +79,12 @@ export function sealPostalAddressEvidence({ registry, source, rows }, key) {
   return { bytes, reference:{ registry:checked.registry, source:checked.source, sha256:checksum(bytes) } };
 }
 
-export function readPostalAddressEvidence(bytes, { approvedReference, registry, key } = {}) {
+export function readPostalAddressEvidence(bytes, { approvedReference, registry, key, approvedOsanSuccessor } = {}) {
+  const registryVersion = registry?.ref?.version;
+  const successor = registryVersion !== approvedReference?.registry;
   if (!hasFields(approvedReference, ['registry', 'source', 'sha256']) ||
-      !isDigest(approvedReference.registry) || approvedReference.registry !== registry?.ref?.version ||
+      !isDigest(approvedReference.registry) ||
+      (successor && (!isDigest(approvedOsanSuccessor) || approvedOsanSuccessor !== registryVersion)) ||
       !isDigest(approvedReference.sha256) || !Buffer.isBuffer(bytes) ||
       bytes.length < 29 || bytes.length > maxBytes || checksum(bytes) !== approvedReference.sha256) throw invalid();
   const approvedSource = checkedSource(approvedReference.source);
@@ -95,13 +99,14 @@ export function readPostalAddressEvidence(bytes, { approvedReference, registry, 
   } catch {
     throw invalid();
   }
-  const verified = checkedEvidence(value, registry);
+  const verified = checkedEvidence(value, registry, {boundVersion:approvedReference.registry,
+    requiredCenter:successor ? 'osan' : undefined});
   if (verified.registry !== approvedReference.registry ||
       Object.keys(approvedSource).some(field => approvedSource[field] !== verified.source[field])) throw invalid();
   const byCode = new Map(verified.rows.map(([customerCode, addressSha256, buildingManagementNo, postalCode]) =>
     [customerCode, Object.freeze({ addressSha256, buildingManagementNo, postalCode })]));
   return Object.freeze({
-    registry:verified.registry, source:Object.freeze(verified.source), count:byCode.size,
+    registry:registryVersion, source:Object.freeze(verified.source), count:byCode.size,
     lookup:customerCode => byCode.get(customerCode) || null
   });
 }

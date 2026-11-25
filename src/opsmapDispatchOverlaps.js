@@ -35,6 +35,7 @@ export function createDispatchPostalEvidenceReader({env=process.env,appRoot=proc
   if(env.OPSMAP_DISPATCH_POSTAL_ADDRESS_EVIDENCE_APPROVED!=='1')return undefined;
   const filename=env.OPSMAP_DISPATCH_POSTAL_ADDRESS_EVIDENCE_FILE;
   const expected=env.OPSMAP_DISPATCH_POSTAL_ADDRESS_EVIDENCE_SHA256;
+  const approvedOsanSuccessor=env.OPSMAP_DISPATCH_POSTAL_ADDRESS_EVIDENCE_SUCCESSOR_SHA256;
   const encoded=env.OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64||'';
   const key=Buffer.from(encoded,'base64');
   let cache;
@@ -66,12 +67,12 @@ export function createDispatchPostalEvidenceReader({env=process.env,appRoot=proc
     const bytes=Buffer.from(value.sealed,'base64');
     if(bytes.toString('base64')!==value.sealed)throw unavailable();
     // Superseded address evidence cannot block current, independently verified postal links.
-    if(value.reference.registry!==registry.ref.version){
+    if(value.reference.registry!==registry.ref.version&&approvedOsanSuccessor!==registry.ref.version){
       if(createHash('sha256').update(bytes).digest('hex')!==expected)throw unavailable();
       cache={registry:registry.ref.version,checked:null};
       return null;
     }
-    const checked=readPostalAddressEvidence(bytes,{approvedReference:value.reference,registry,key});
+    const checked=readPostalAddressEvidence(bytes,{approvedReference:value.reference,registry,key,approvedOsanSuccessor});
     cache={registry:registry.ref.version,checked};
     return checked;
   };
