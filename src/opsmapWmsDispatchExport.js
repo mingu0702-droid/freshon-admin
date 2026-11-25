@@ -381,10 +381,16 @@ function releaseFormatApproved(format,env) {
 
 // An approved adapter hands over one already-read GAS wave. The publisher
 // never queries MIS or requests either WMS response again.
-export async function publishStageWmsOfficialRound({round,date,replaceSha256,env=process.env,fetchImpl=fetch}={}) {
-  if(!releaseFormatApproved(WMS_OFFICIAL_ROUND_FORMAT,env))throw scopeError('WMS_EXPORT_SCOPE');
+export async function publishStageWmsOfficialRound({round,date,replaceSha256,reconcileExisting=false,env=process.env,fetchImpl=fetch}={}) {
+  if(!releaseFormatApproved(WMS_OFFICIAL_ROUND_FORMAT,env)||reconcileExisting&&replaceSha256!==undefined)
+    throw scopeError('WMS_EXPORT_SCOPE');
   const bytes=encodeWmsOfficialRound(round,date);
   const observedAt=new Date(round.plan.observedAt).toISOString();
+  if(reconcileExisting){
+    const read=createStageWmsReleaseStore({env,fetchImpl,official:true,write:true});
+    if(!read)throw scopeError('WMS_EXPORT_RELEASE_CONFIGURATION');
+    replaceSha256=(await read.readIndex()).entries.find(entry=>entry.date===date)?.sha256;
+  }
   return publishStageWmsDispatchExport({bytes,date,observedAt,sha256:digest(bytes),replaceSha256,
     format:WMS_OFFICIAL_ROUND_FORMAT,env,fetchImpl});
 }

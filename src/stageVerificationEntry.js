@@ -50,6 +50,7 @@ import {createStageGenerationRestore} from './stageGenerationRestore.js';
 import {openOpsmapSyncGenerationStore} from './opsmapSyncGeneration.js';
 import {checkStageVerifiedBaseline,createOpsmapDurableGeneration,stageOpsmapDurableStorage,stageVerifiedBaselineConfig} from './opsmapDurableGeneration.js';
 import {mountOpsmapScheduledRun,opsmapScheduleConfig} from './opsmapScheduledRun.js';
+import {mountOpsmapWmsOfficialRoundHandoff} from './opsmapWmsOfficialRoundHandoff.js';
 import {createStageDailyFixedMasterReader, FIXED_MASTER_DAILY_TTL, isFixedMasterDay,
   stageFixedMasterScope, stageFixedMasterStorage, stageFixedMasterSyncEnabled} from './stageFixedMasterSync.js';
 import {STAGE_OSAN_SYNC_SOURCE_IDS,SYNC_DELIVERY_SOURCES} from './opsmapSyncPolicy.js';
@@ -499,6 +500,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
       return staffStoreDetail(response?.data,{customerCode:code,date:null});
     }});
   const app = express(), router = express.Router();
+  mountOpsmapWmsOfficialRoundHandoff(app,{env:stage,clock:opsmapScheduleConfig(stage),fetchImpl,now});
   async function readScheduleRegistry() {
     if (validation.active()) return validation.active();
     const pending=refreshBaseline() || fileRestorePending || scheduledRefresh;

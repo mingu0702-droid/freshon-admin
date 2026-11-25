@@ -590,9 +590,11 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
     {code:'WMS_EXPORT_OFFICIAL_ROUND_CONFLICT'});
   assert.deepEqual(counters(),beforeFreshon);
   const nextCapture=officialRound(pairDate,'2026-11-29T12:02:00.000Z','89abcdef');
-  const correctedPair=await upPair({round:nextCapture,replaceSha256:releasedPair.sha256});
+  const correctedPair=await upPair({round:nextCapture,reconcileExisting:true});
   assert.equal(correctedPair.state,'PUBLISHED');
   assert.equal(correctedPair.supersedes,releasedPair.sha256);
+  assert.equal((await upPair({round:nextCapture,reconcileExisting:true})).state,'VERIFIED_NOOP');
+  await assert.rejects(upPair({round:pair,reconcileExisting:true}),{code:'WMS_EXPORT_RELEASE_STALE'});
   assert.equal((await reader(pairedEnv)(pairDate)).observedAt,'2026-11-29T12:02:00.000Z');
   assert.deepEqual(files.get('release-index-v1.json'),legacyIndexBeforePair);
   const officialIndex=files.get('official-round-index-v1.json');
