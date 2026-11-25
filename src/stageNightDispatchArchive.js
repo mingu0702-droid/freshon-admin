@@ -2,13 +2,14 @@ import {createCipheriv,createDecipheriv,createHash,hkdfSync,randomBytes} from 'n
 import {promisify} from 'node:util';
 import {gzip,gunzip} from 'node:zlib';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
-import {isDay} from './shadowCoverage/coverageFiles.js';
+import {datesFor,isDay} from './shadowCoverage/coverageFiles.js';
 import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
 
 export const nightDispatchCenters=Object.freeze(['osan','yeongnam','honam']);
 export const nightDispatchBaselineFrom='2026-08-28';
 export const nightDispatchBaselineEnd='2026-11-25';
 const baselineFile='recent-operations-v1/night-dispatch-baseline-2026-11-25.json';
+const checkpointFile='recent-operations-v1/night-dispatch-checkpoint.json';
 const stamp=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const hash=/^[a-f0-9]{64}$/;
 const zip=promisify(gzip),unzip=promisify(gunzip);
@@ -20,6 +21,26 @@ const context=Buffer.from('opsmap-night-dispatch-v1');
 const maxPack=4*1024*1024;
 const maxDayPack=256*1024;
 const minRoute=/^[0-9A-Za-z가-힣 _().·/-]{1,24}$/u;
+const scopeKey=({date,centerKey})=>date+':'+centerKey;
+const untracked={through:nightDispatchBaselineEnd,pending:[]};
+const recoverScopeLimit=2;
+
+function normalizeCheckpoint(value){
+  const {through,pending}=value??{};
+  if(value?.version!==1||!isDay(through)||through<nightDispatchBaselineEnd||
+      !Array.isArray(pending)||pending.length>90*nightDispatchCenters.length)throw fail('CHECKPOINT_INVALID');
+  const start=datesFor(through,90)[0],seen=new Set();
+  const entries=pending.map(({date,centerKey,attemptedOn})=>{
+    const scope={date,centerKey,attemptedOn};
+    const key=scopeKey(scope);
+    if(!isDay(date)||date<=nightDispatchBaselineEnd||date<start||date>through||
+        !nightDispatchCenters.includes(centerKey)||seen.has(key)||
+        attemptedOn!==null&&(!isDay(attemptedOn)||attemptedOn<date||attemptedOn>through))throw fail('CHECKPOINT_INVALID');
+    seen.add(key);
+    return scope;
+  }).sort((a,b)=>scopeKey(a).localeCompare(scopeKey(b)));
+  return {version:1,through,pending:entries};
+}
 
 export function nightDispatchRow({customerCode,vehicles}={}) {
   if(typeof customerCode!=='string'||!/^[A-Z]\d{1,20}$/.test(customerCode)||
@@ -103,7 +124,7 @@ export function createStageNightDispatchArchive({env=process.env,fetchImpl=fetch
     GITHUB_CACHE_DIR:prefix,GITHUB_TOKEN:writable?writer:token},fetchImpl:(input,options={})=>{
     const url=new URL(input),method=options.method||'GET',path=url.origin+url.pathname;
     const file=path.startsWith(root+'/contents/'+prefix+'/') ? path.slice((root+'/contents/'+prefix+'/').length):'';
-    const allowed=file===baselineFile||/^recent-operations-v1\/night-dispatch-\d{4}-\d{2}-\d{2}\.json$/.test(file)&&
+    const allowed=file===baselineFile||file===checkpointFile||/^recent-operations-v1\/night-dispatch-\d{4}-\d{2}-\d{2}\.json$/.test(file)&&
       file>archiveFile(nightDispatchBaselineEnd);
     if(url.username||url.password||url.hash||!(method==='GET'&&(path===root&&!url.search||
         allowed&&url.searchParams.size===1&&url.searchParams.get('ref')===branch||
@@ -131,6 +152,19 @@ export function createStageNightDispatchArchive({env=process.env,fetchImpl=fetch
     return value?(await decode(value,key,file,date,maxDayPack)).scopes:[];
   }
   return {readDay:get,...(write?{
+    async readCheckpoint(){
+      const {value,sha}=await read.read(checkpointFile);
+      const checkpoint=value===null?null:normalizeCheckpoint(value);
+      if(checkpoint)checkDate(checkpoint.through);
+      return {checkpoint,sha};
+    },
+    async saveCheckpoint(through,pending,sha){
+      checkDate(through);
+      const next=normalizeCheckpoint({version:1,through,pending});
+      await updater.write(checkpointFile,next,sha);
+      const saved=await read.readRaw(checkpointFile,64*1024);
+      if(!saved||JSON.stringify(normalizeCheckpoint(saved))!==JSON.stringify(next))throw fail('CHECKPOINT_READBACK');
+    },
     async saveDay(date,additions){
       checkDate(date);
       if(date<=nightDispatchBaselineEnd)throw fail('ARCHIVE_SCOPE');
@@ -171,24 +205,32 @@ export function nightDispatchOperations(scopes){
   });
 }
 
-export async function collectStageNightDispatch({date,archive,read,onCenter=()=>{}}){
-  if(!isDay(date)||!archive?.readDay||!archive?.saveDay||typeof read!=='function')throw fail('ARCHIVE_SCOPE');
+export async function collectStageNightDispatch({date,archive,read,onCenter=()=>{},centerKeys=nightDispatchCenters,
+  latestDate=date}){
+  if(!isDay(date)||!isDay(latestDate)||date>latestDate||!archive?.readDay||!archive?.saveDay||typeof read!=='function'||
+      centerKeys.some(center=>!nightDispatchCenters.includes(center)))throw fail('ARCHIVE_SCOPE');
   if(date<=nightDispatchBaselineEnd)return [];
   const before=await archive.readDay(date);
   const savedCenters=new Set(before.map(row=>row.centerKey));
   const fetched=[];
   const neighbors=new Map();
   async function readNeighbor(centerKey){
-    for(let offset=1;offset<=4;offset++){
+    for(const offset of [1,-1,2,-2,3,-3,4,-4]){
       const day=new Date(Date.parse(date)-offset*dayMs).toISOString().slice(0,10);
+      // Never send a corroborating FreshOn range that reaches the sealed 90-day baseline.
+      if(day<=nightDispatchBaselineEnd||day>latestDate)continue;
       if(!neighbors.has(day))neighbors.set(day,await archive.readDay(day));
       const scope=neighbors.get(day).find(item=>item.centerKey===centerKey&&item.state==='VERIFIED');
       if(scope)return {date:day,centerKey,detail:scope.detail};
     }
     return null;
   }
-  for(const centerKey of nightDispatchCenters){
+  for(const centerKey of centerKeys){
     if(savedCenters.has(centerKey))continue;
+    if(read.hasCapacity?.()===false){
+      onCenter({date,centerKey,state:'DEFERRED_BUDGET'});
+      continue;
+    }
     try{
       const row=await read(date,centerKey,{neighbor:()=>readNeighbor(centerKey)});
       if(row&&row.centerKey!==centerKey)throw fail();
@@ -207,5 +249,73 @@ export async function collectStageNightDispatch({date,archive,read,onCenter=()=>
       kind:state,customers:rows.length,vehicles:vehicleSet.size,detail});
   }
   return current;
+}
+
+export async function collectStageNightDispatchRun({date,archive,read,onCenter=()=>{}}){
+  if(!isDay(date)||!archive?.readCheckpoint||!archive?.saveCheckpoint||typeof read!=='function')throw fail('ARCHIVE_SCOPE');
+  if(date<=nightDispatchBaselineEnd)return {scopes:[]};
+  const {checkpoint,sha}=await archive.readCheckpoint();
+  const {through,pending}=checkpoint??untracked;
+  if(through>date)throw fail('CHECKPOINT_INVALID');
+  const window=datesFor(date,90);
+  const remaining=new Map(pending.filter(scope=>scope.date>=window[0]).map(scope=>[scopeKey(scope),scope]));
+  for(const missingDate of window.filter(day=>day>through)){
+    for(const centerKey of nightDispatchCenters){
+      const scope={date:missingDate,centerKey,attemptedOn:null};
+      remaining.set(scopeKey(scope),scope);
+    }
+  }
+  const scopes=[];
+  async function collect(target,requested){
+    const attempted=[];
+    const accept=async(day,center,options)=>{
+      attempted.push(scopeKey({date:day,centerKey:center}));
+      return read(day,center,options);
+    };
+    accept.hasCapacity=read.hasCapacity;
+    try{
+      const saved=await collectStageNightDispatch({date:target,archive,read:accept,onCenter,
+        centerKeys:requested,latestDate:date});
+      for(const scope of saved){
+        const key=scopeKey(scope);
+        if(target===date||remaining.has(key))scopes.push(scope);
+        remaining.delete(key);
+      }
+    }catch(error){
+      logUnavailable(onCenter,target,error);
+    }
+    for(const key of attempted){
+      const scope=remaining.get(key);
+      if(scope)scope.attemptedOn=date;
+    }
+    return attempted.length;
+  }
+  const eligible=scope=>scope.attemptedOn!==date;
+  await collect(date,[...remaining.values()].filter(scope=>scope.date===date&&eligible(scope)).map(scope=>scope.centerKey));
+  const historical=[...remaining.values()].filter(scope=>scope.date<date&&eligible(scope))
+    .sort((a,b)=>(a.attemptedOn??'').localeCompare(b.attemptedOn??'')||scopeKey(a).localeCompare(scopeKey(b)));
+  let recoveryAttempts=0;
+  const examinedDates=new Set();
+  for(const {date:target,centerKey} of historical){
+    if(recoveryAttempts>=recoverScopeLimit||read.hasCapacity?.()===false)break;
+    if(!remaining.has(scopeKey({date:target,centerKey}))||
+        !examinedDates.has(target)&&examinedDates.size>=recoverScopeLimit)continue;
+    examinedDates.add(target);
+    recoveryAttempts+=await collect(target,[centerKey]);
+  }
+  const pendingScopes=[...remaining.values()].sort((a,b)=>scopeKey(a).localeCompare(scopeKey(b)));
+  return {scopes,saveProgress:async()=>{
+    // Only clear successful scopes after the public-facing projection was round-tripped.
+    if(through!==date||JSON.stringify(pending)!==JSON.stringify(pendingScopes)){
+      try{await archive.saveCheckpoint(date,pendingScopes,sha);}
+      catch(error){logUnavailable(onCenter,date,error,'CHECKPOINT_UNAVAILABLE');return;}
+    }
+    onCenter({date,state:'CHECKPOINT',pendingScopes:pendingScopes.length});
+  }};
+}
+
+function logUnavailable(onCenter,date,error,state='ARCHIVE_UNAVAILABLE'){
+  const code=error?.code??error?.message;
+  onCenter({date,state,error:/^(?:NIGHT_DISPATCH|FIXED_STORE)_[A-Z_]+$/.test(code??'')?code:'NIGHT_DISPATCH_UNAVAILABLE'});
 }
 

@@ -133,7 +133,7 @@ export function projectRecentOperations(ledger,{days,endDate=ledger.endDate,summ
     ...(!summaryOnly?{rows:[...active.values()]}:{})};
 }
 
-export function mergeRecentOperations(previous, endDate, days) {
+export function mergeRecentOperations(previous, endDate, days,{preserveDispatchEvidence=false}={}) {
   if (endDate < previous.endDate) throw rejected();
   const startDate=datesFor(endDate,90)[0];
   const scoped=normalizeRecentOperations({startDate,endDate,days});
@@ -142,9 +142,10 @@ export function mergeRecentOperations(previous, endDate, days) {
     const key=dayKey(day), existing=retained.get(key);
     const preserveNightEvidence=day.source==='freshon_orders'&&(day.completeNightOrders||existing?.completeNightOrders||
       day.rows.some(row=>row.nightOrder)||existing?.rows.some(row=>row.nightOrder));
-    if (!existing || day.coverage==='complete'&&!preserveNightEvidence) {
+    const preserveEvidence=preserveNightEvidence||preserveDispatchEvidence&&day.source==='wms_dispatch';
+    if (!existing || day.coverage==='complete'&&!preserveEvidence) {
       retained.set(key,day);
-    } else if (existing.coverage==='partial'||preserveNightEvidence) {
+    } else if (existing.coverage==='partial'||preserveEvidence) {
       const rows=new Map(existing.rows.map(row=>[row.customerCode,row]));
       for (const row of day.rows) {
         const earlier=rows.get(row.customerCode);
@@ -345,17 +346,20 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
       retryDates.some(date=>!isDay(date) || date>day)) throw rejected();
   const windowStart=datesFor(day,90)[0];
   if (repairDate!==undefined && (!isDay(repairDate) || repairDate<windowStart || repairDate>day)) throw rejected();
+  const latestUnpublished=day>base.endDate;
+  const nightScopes=[];
   let nightPublished=false;
-  let nightScopes=[];
   if(readNightDispatch){
-    nightScopes=await readNightDispatch(day);
-    if(!Array.isArray(nightScopes)||nightScopes.length>recentOperationsCenters.length||
-        nightScopes.some(scope=>scope.date!==day||scope.source!=='wms_dispatch'))throw rejected();
+    const {scopes,saveProgress}=await readNightDispatch(day);
+    if(!Array.isArray(scopes)||scopes.some(scope=>!scope||!isDay(scope.date)||scope.date<windowStart||
+        scope.date>day||scope.source!=='wms_dispatch')||
+        saveProgress!==undefined&&typeof saveProgress!=='function')throw rejected();
+    nightScopes.push(...scopes);
+    const previousPositive=new Set(base.days.filter(scope=>scope.source==='wms_dispatch'&&scope.rows.length).map(dayKey));
     // Preserve older positive evidence if it conflicts with an otherwise verified empty scope.
-    const nightAdditions=nightScopes.filter(scope=>scope.rows.length||!base.days.some(previous=>
-      dayKey(previous)===dayKey(scope)&&previous.rows.length));
-    if(nightAdditions.length){
-      const candidate=mergeRecentOperations(base,day,nightAdditions);
+    const nightAdditions=nightScopes.filter(scope=>scope.rows.length||!previousPositive.has(dayKey(scope)));
+    if(nightAdditions.length||saveProgress){
+      const candidate=mergeRecentOperations(base,day,nightAdditions,{preserveDispatchEvidence:true});
       if(!current.ledger||JSON.stringify(candidate)!==JSON.stringify(base)){
         try{await store.write(candidate,current.sha);}
         catch(error){if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
@@ -366,6 +370,7 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
       }
       onNightDispatch({date:day,state:nightPublished?'PUBLISHED':'VERIFIED_NOOP',centers:nightAdditions.length,
         zeroConflicts:nightScopes.length-nightAdditions.length});
+      await saveProgress?.();
     }
   }
 
@@ -383,14 +388,13 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
       const archive=await readLatestDispatch(date);
       if(archive)input.push(projectArchivedOsanDispatch(archive,date).evidence);
     }
-    const latestUnpublished=date===day && date>base.endDate;
     // A pinned WMS export can publish the date before the signed scheduled
     // collection fills its independent FreshOn and Delivery Admin scopes.
-    const latestHasWms=date===day && ([...previous,...input].some(osanWmsDay)||nightScopes.length>0);
+    const latestHasWms=date===day && ([...previous,...input].some(osanWmsDay)||nightScopes.some(scope=>scope.date===day));
     // Retry one explicitly selected historical gap per run. The latest day
     // takes priority, and existing sealed files and published dates are retained.
     const missingPastDay=date<day && !retriedMissingDay && savedInput==null && previous.length===0;
-    if (readLatestDay && (latestUnpublished || latestHasWms || date===repairDate || missingPastDay && repairDate===undefined)) {
+    if (readLatestDay && (date===day&&latestUnpublished || latestHasWms || date===repairDate || missingPastDay && repairDate===undefined)) {
       if (date<day) retriedMissingDay=true;
       const observed=[...previous,...input];
       const deliveryCenters=new Set(observed.filter(row=>row.source==='delivery_admin').map(row=>row.centerKey));

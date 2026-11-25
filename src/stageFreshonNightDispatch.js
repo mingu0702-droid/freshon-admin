@@ -191,9 +191,11 @@ export function createStageFreshonNightDispatchReader({login,fetchImpl=fetch,now
   }
 
   // The three centers share one bounded login, deadline and request budget.
-  return (date,centerKey,options)=>{
+  const collect=(date,centerKey,options)=>{
     const work=queue.then(()=>read(date,centerKey,options));
     queue=work.catch(()=>{});
     return work;
   };
+  collect.hasCapacity=()=>requestCount<centers.size*2&&!batchSignal?.aborted;
+  return collect;
 }

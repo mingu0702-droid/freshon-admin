@@ -369,11 +369,11 @@ async function runScheduled(job,settingsFile){
         }));
         const readNightDispatch=opsmapArchiveSite(env)==='primary'&&opsmapArchiveWriteApproved(env)&&
           env.OPSMAP_STAGE_WMS_FRESHON_VALIDATION_APPROVED==='1'?async date=>{
-            const {createStageNightDispatchArchive,collectStageNightDispatch,nightDispatchOperations,nightDispatchBaselineEnd}
+            const {createStageNightDispatchArchive,collectStageNightDispatchRun,nightDispatchOperations,nightDispatchBaselineEnd}
               =await import('../src/stageNightDispatchArchive.js');
             if(date<=nightDispatchBaselineEnd){
               noteNightDispatch({date,state:'ALREADY_ARCHIVED'});
-              return [];
+              return {scopes:[]};
             }
             try{
               const {config}=await import('../src/config.js');
@@ -384,14 +384,14 @@ async function runScheduled(job,settingsFile){
               const read=createStageFreshonNightDispatchReader({login:({signal})=>
                 loginFreshonOverHttp({origin,userId:config.freshonId,password:config.freshonPassword,signal})});
               const archive=createStageNightDispatchArchive({env,write:true});
-              const scopes=await collectStageNightDispatch({date,archive,read,onCenter:noteNightDispatch});
+              const {scopes,saveProgress}=await collectStageNightDispatchRun({date,archive,read,onCenter:noteNightDispatch});
               memory('AFTER_NIGHT_DISPATCH');
-              return nightDispatchOperations(scopes);
+              return {scopes:nightDispatchOperations(scopes),saveProgress};
             }catch(error){
               const code=error?.code??error?.message;
               noteNightDispatch({date,state:'SOURCE_UNAVAILABLE',error:
                 /^(?:NIGHT_DISPATCH|FIXED_STORE)_[A-Z_]+$/.test(code??'')?code:'NIGHT_DISPATCH_UNAVAILABLE'});
-              return [];
+              return {scopes:[]};
             }
           }:undefined;
         const result=await syncStageRecentOperations({store:createStageRecentOperationsStore({env,write:true}),receipt,

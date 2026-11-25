@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {test} from 'node:test';
 import {PRIMARY_ORIGIN,PRIMARY_SERVICE} from '../src/stageScope.js';
-import {collectStageNightDispatch,createStageNightDispatchArchive,nightDispatchOperations} from '../src/stageNightDispatchArchive.js';
+import {collectStageNightDispatch,collectStageNightDispatchRun,createStageNightDispatchArchive,
+  nightDispatchOperations} from '../src/stageNightDispatchArchive.js';
 import {syncStageRecentOperations,projectRecentOperations} from '../src/stageRecentOperations.js';
 
 const date='2026-11-26',now=()=>Date.parse('2026-11-26T21:05:00Z');
@@ -64,6 +65,36 @@ test('daily private archive encrypts assignments, keeps previous center scopes a
   assert.equal(createStageNightDispatchArchive({env:{...primaryEnv(),OPSMAP_PRIMARY_SYNC_OWNER:'0'},write:true,now}),null);
 });
 
+test('the private retry checkpoint is conditionally written and independently validated',async()=>{
+  let stored=null,sha;
+  const archive=createStageNightDispatchArchive({env:primaryEnv(),now,write:true,fetchImpl:async(input,opts)=>{
+    const url=new URL(input);
+    if(url.pathname==='/repos/mingu0702-droid/freshon-cache')return Response.json({private:true});
+    assert.match(url.pathname,/\/recent-operations-v1\/night-dispatch-checkpoint\.json$/);
+    if(opts.method==='PUT'){
+      assert.equal(opts.headers.Authorization,'Bearer write-archive');
+      const put=JSON.parse(opts.body);
+      assert.equal(put.sha,sha);
+      const bytes=Buffer.from(put.content,'base64');
+      stored=JSON.parse(bytes);
+      sha=createHash('sha1').update(bytes).digest('hex');
+      return Response.json({});
+    }
+    assert.equal(opts.headers.Authorization,'Bearer read-archive');
+    if(!stored)return new Response(null,{status:404});
+    if(opts.headers.Accept==='application/vnd.github.raw+json')return Response.json(stored);
+    return Response.json({sha,content:Buffer.from(JSON.stringify(stored)).toString('base64')});
+  }});
+  const pending=[{date,centerKey:'yeongnam',attemptedOn:date}];
+  assert.deepEqual(await archive.readCheckpoint(),{sha:null,checkpoint:null});
+  await archive.saveCheckpoint(date,pending,null);
+  assert.deepEqual(await archive.readCheckpoint(),{sha,checkpoint:{version:1,through:date,pending}});
+  await archive.saveCheckpoint(date,[],sha);
+  await assert.rejects(()=>archive.saveCheckpoint(date,[{...pending[0],date:'2026-11-25'}],sha),/CHECKPOINT_INVALID/);
+  stored.through='2026-11-27';
+  await assert.rejects(()=>archive.readCheckpoint(),/ARCHIVE_SCOPE/);
+});
+
 test('covered 90-day dates are skipped and an interrupted date only recollects missing centers',async()=>{
   const existing={...centerResult,rows:centerResult.rows.map(({customerCode,vehicles})=>[customerCode,vehicles])};
   const requested=[],historyReads=[];
@@ -92,15 +123,103 @@ test('today’s signed run publishes the previous day before any separate delive
    write:async (next,sha)=>{assert.equal(sha,signedSha);ledger=next;writes++;}};
  const ops=nightDispatchOperations([{...centerResult,rows:[['S100',['101','102']]]},result('yeongnam',[])]);
  await assert.rejects(()=>syncStageRecentOperations({store,now,receipt:{date:'2026-11-27',runId:hash},
-   readNightDispatch:async day=>{assert.equal(day,date);return ops;},
+   readNightDispatch:async day=>{assert.equal(day,date);return {scopes:ops};},
    readLatestDay:async ()=>{assert.equal(writes,1);throw Error('DELIVERY_UNAVAILABLE');}}),/DELIVERY_UNAVAILABLE/);
  assert.equal(ledger.startDate,'2026-08-29');
  assert.equal(ledger.endDate,date);
  assert.ok(ledger.days.some(d=>d.source==='delivery_admin'));
  assert.ok(ledger.days.some(d=>d.centerKey==='yeongnam'&&d.coverage==='complete'&&d.rows.length===0));
  assert.equal(projectRecentOperations(ledger,{days:90,summaryOnly:true}).centers.osan.calendar.at(-1).sources.wms_dispatch.customerCount,1);
- assert.deepEqual(await syncStageRecentOperations({store,now,receipt:{date:'2026-11-27',runId:hash},readNightDispatch:async()=>ops}),
+ assert.deepEqual(await syncStageRecentOperations({store,now,receipt:{date:'2026-11-27',runId:hash},
+   readNightDispatch:async()=>({scopes:ops})}),
    {state:'VERIFIED_NOOP',endDate:date});
  assert.equal(writes,1);
+});
+
+test('the next morning repairs only the missing center, including after an interruption before checkpointing',async()=>{
+  for(const interrupted of [false,true]){
+    const nextDate='2026-11-27';
+    const dayScans=new Map(),requests=[];
+    let checkpoint=null;
+    const archive={
+      readCheckpoint:async()=>({checkpoint,sha:checkpoint?signedSha:null}),
+      saveCheckpoint:async(through,pending,sha)=>{
+        assert.equal(sha,checkpoint?signedSha:null);
+        checkpoint=structuredClone({through,pending});
+      },
+      readDay:async day=>dayScans.get(day)??[],
+      saveDay:async(day,addition)=>{
+        const saved=[...dayScans.get(day)??[],...addition];
+        dayScans.set(day,saved);
+        return saved;
+      }
+    };
+    const read=async (day,center)=>{
+      requests.push([day,center]);
+      if(requests.length<=3&&center==='yeongnam')throw Error('FRESHON_NIGHT_DISPATCH_TRANSPORT');
+      return result(center,[row('S300',['301'])],day);
+    };
+    const baseline=await collectStageNightDispatchRun({date:'2026-11-25',archive,read});
+    assert.equal(baseline.scopes.length,0);
+    assert.equal(requests.length,0);
+    const first=await collectStageNightDispatchRun({date,archive,read});
+    assert.deepEqual(first.scopes.map(scope=>scope.centerKey),['osan','honam']);
+    if(!interrupted)await first.saveProgress();
+    const second=await collectStageNightDispatchRun({date:nextDate,archive,read});
+    assert.deepEqual(requests.slice(3),[
+      [nextDate,'osan'],[nextDate,'yeongnam'],[nextDate,'honam'],[date,'yeongnam']
+    ]);
+    assert.ok(second.scopes.some(scope=>scope.date===date&&scope.centerKey==='yeongnam'));
+    // The same receipt can resume without replaying archived centers at the source.
+    await second.saveProgress();
+    assert.deepEqual(checkpoint,{through:nextDate,pending:[]});
+    await collectStageNightDispatchRun({date:nextDate,archive,read});
+    assert.equal(requests.length,7);
+  }
+});
+
+test('recovery defers when the shared request budget is spent and corroboration never touches the sealed baseline',async()=>{
+  const recorded=[],attempted=[];
+  const nextDate='2026-11-27';
+  const checkpoint={through:date,pending:[{date,centerKey:'osan',attemptedOn:date}]};
+  let saved;
+  const archived={date:nextDate,centerKey:'honam',state:'VERIFIED',observedAt:'2026-11-27T21:05:00.000Z',
+    sourceSha256:hash,detail:1,rows:[['S300',['310']]]};
+  const archive={readCheckpoint:async()=>({checkpoint,sha:signedSha}),
+    readDay:async day=>{recorded.push(day);return day===nextDate?[archived]:[];},
+    saveDay:async()=>{throw Error('Unexpected save');},
+    saveCheckpoint:async(_through,pending)=>{saved=pending;}};
+  const read=async(day,center,{neighbor})=>{
+    attempted.push([day,center]);
+    assert.equal(await neighbor(),null);
+    return null;
+  };
+  read.hasCapacity=()=>attempted.length<2;
+  const run=await collectStageNightDispatchRun({date:nextDate,archive,read});
+  await run.saveProgress();
+  assert.deepEqual(attempted,[[nextDate,'osan'],[nextDate,'yeongnam']]);
+  assert.ok(recorded.every(day=>day>'2026-11-25'));
+  assert.ok(saved.some(scope=>scope.date===date&&scope.centerKey==='osan'));
+});
+
+test('an older scope merges with previously confirmed evidence before acknowledging progress',async()=>{
+  const nextDate='2026-11-27',calls=[];
+  let ledger={startDate:'2026-08-29',endDate:date,days:[{
+    date,centerKey:'yeongnam',source:'wms_dispatch',coverage:'complete',
+    rows:[{customerCode:'S010',evidence:'dispatch_confirmed'}]
+  }]};
+  const store={read:async()=>{calls.push('read');return {ledger,sha:signedSha};},readDay:async()=>null,
+    write:async next=>{calls.push('write');ledger=next;}};
+  const options={now:()=>now()+86_400_000,receipt:{date:'2026-11-28',runId:hash},
+    readNightDispatch:async()=>({scopes:nightDispatchOperations([result('yeongnam',[['S300',['312']]])]),
+      saveProgress:async()=>calls.push('ack')})};
+  assert.deepEqual(await syncStageRecentOperations({...options,store:{...store,
+    write:async()=>{throw Object.assign(Error(),{code:'FIXED_STORE_CONFLICT'});}}}),{state:'BUSY',endDate:date});
+  assert.deepEqual(calls.splice(0),['read']);
+  const run=await syncStageRecentOperations({...options,store});
+  assert.deepEqual(calls,['read','write','read','ack']);
+  assert.equal(ledger.endDate,nextDate);
+  assert.deepEqual(ledger.days[0].rows.map(row=>row.customerCode),['S010','S300']);
+  assert.equal(run.state,'PUBLISHED');
 });
 
