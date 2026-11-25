@@ -39,6 +39,9 @@ if (tabs && sidebar && bridge) {
     const result=await read('shadow-coverage/postal/outline',{id},signal,comparisonEnabled?40_000:15_000);
     return result.data?.id===id?result.data:null;
   }
+  function readOverlaps({postalCode,version,signal}) {
+    return read('dispatch-reference-overlaps',postalCode?{postalCode,version}:{},signal,45_000);
+  }
 
   async function readFixedArea(area,{signal}) {
     const generation=bridge.searchSnapshotGeneration();
@@ -86,15 +89,16 @@ if (tabs && sidebar && bridge) {
     try {
       if (!feature) {
         stylesheet ||= Object.assign(document.createElement('link'),{
-          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261125-staff-compare',import.meta.url),
+          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261126-v4',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261125-staff-compare');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261126-v4');
         if (opening!==attempt||!session()) return;
-        const createReview=comparisonEnabled?(await import('./dispatch-reference-review.mjs?v=20261125-staff-compare')).createDispatchScreenReview:null;
+        const createReview=comparisonEnabled?(await import('./dispatch-reference-review.mjs?v=20261126-v4')).createDispatchScreenReview:null;
         if (opening!==attempt||!session()) return;
         const screenReview=createReview?.({bridge,readFixedArea});
-        feature=mountDispatchReference({workspace,sidebar,bridge,readDay,readPeriod,readOutline,screenReview});
+        feature=mountDispatchReference({workspace,sidebar,bridge,readDay,readPeriod,readOutline,screenReview,
+          ...(requestedReview==='compare'?{}:{readOverlaps})});
       }
       window.dispatchEvent(new Event('map-dispatch-reference-open'));
       previous=[...tabs.querySelectorAll('button[aria-pressed="true"]')];

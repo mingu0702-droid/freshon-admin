@@ -7,7 +7,7 @@ const escape=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'
 const format=new Intl.NumberFormat('ko-KR');
 const plus=new Intl.NumberFormat('ko-KR',{signDisplay:'exceptZero'});
 const meters=km=>Number.isFinite(km)?format.format(Math.round(km*1000))+'m':'미확인';
-const stops=value=>Number.isSafeInteger(value)?format.format(value)+'착':'미확인';
+const stops=value=>Number.isSafeInteger(value)?format.format(value)+'곳':'미확인';
 const fixedClock=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric'});
 
 export function createDispatchScreenReview({bridge,readFixedArea}) {
@@ -103,7 +103,7 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
     const date=Number.isFinite(Date.parse(checked))?' · '+fixedClock.format(new Date(checked)):'';
     const fixed=proof?.members?groupFixedPostalRoutes(proof.members,code=>bridge.dispatchReferenceFixedVehicle(code)):[];
     const pair=fixed.filter(entry=>[routes?.primary?.vehicle,routes?.secondary?.vehicle].includes(entry.vehicle));
-    const fixedText=pair.length?pair.map(r=>label(r.vehicle)+' '+r.count+'착').join(' · ')+
+    const fixedText=pair.length?pair.map(r=>label(r.vehicle)+' '+r.count+'곳').join(' · ')+
       (proof.complete&&fixed.reduce((sum,r)=>sum+r.count,0)===proof.total?'':' · 일부 미확인'):
       proof?.loading?'확인 중':'해당 호차 확인 자료 없음';
     return '등록 매장 기준호차'+date+' · '+fixedText;
@@ -159,7 +159,7 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
     const rows=[first,second].flatMap(route=>{
       const projected=result?.vehicles.get(route.vehicle)??route;
       return [[label(route.vehicle)+' 금액',route.amount,projected.amount,money,'원'],
-        [label(route.vehicle)+' 착지',route.storeCount,projected.storeCount,stops,'착']];
+        [label(route.vehicle)+' 매장',route.storeCount,projected.storeCount,stops,'곳']];
     });
     const table='<table><thead><tr><th scope="col">항목</th><th scope="col">이관 전</th><th scope="col">이관 후</th>'+
       '<th scope="col">증감</th></tr></thead><tbody>'+rows.map(([heading,before,after,show,unit])=>
@@ -171,7 +171,7 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
       (afterGap===beforeGap?'동일':afterGap>beforeGap?'증가':'감소')+'</p>'+
       '<p>두 호차 합산 금액 <strong>'+money(first.amount+second.amount)+'</strong> · 이관 전후 일치</p>':
       entries.length?'<p role="status">이관 결과를 대조할 수 없습니다. 선택한 매장을 확인하세요.</p>':'';
-    return '<section class="dispatch-compare-simulation"><div class="dispatch-compare-heading"><h3>가상 이관 '+entries.length+'착</h3>'+
+    return '<section class="dispatch-compare-simulation"><div class="dispatch-compare-heading"><h3>가상 이관 '+entries.length+'곳</h3>'+
       (entries.length?'<button type="button" data-compare-action="clear">초기화</button>':'')+'</div>'+
       table+status+
       (entries.length?'<details class="dispatch-compare-drafts"'+(draftsOpen?' open':'')+'><summary>선택한 매장 '+entries.length+'곳</summary><ul>'+

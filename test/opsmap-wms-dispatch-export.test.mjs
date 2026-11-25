@@ -39,19 +39,44 @@ test('the same-day export reconciles published totals and preserves per-vehicle 
     {vehicle:'미배정',amount:101,detailTotal:101,difference:0},
   ]);
   const registry=new Map([
-    ['S91001',{name:'합성 매장',center:'osan',hasPoint:true,lat:37.1,lng:127.1,addressHash:coordinateAddressHash(address)}],
-    ['S91002',{name:'가려진 매장',center:'osan',hasPoint:true,lat:37.2,lng:127.2,addressHash:coordinateAddressHash(address)}],
+    ['S91001',{name:'합성 매장',center:'osan',hasPoint:true,lat:37.1,lng:127.1,address,addressHash:coordinateAddressHash(address)}],
+    ['S91002',{name:'가려진 매장',center:'osan',hasPoint:true,lat:37.2,lng:127.2,address,addressHash:coordinateAddressHash(address)}],
   ]);
   const projection=projectOpsmapWmsDispatch(result,registry,new Map([['S91001','01234'],['S91002','55555']]));
   assert.equal(projection.route.unassigned,1);
   assert.equal(projection.route.rows.length,2);
-  assert.deepEqual(projection.route.rows[0],{customerCode:'S91001',vehicle:'101',customerName:'합성 매장',postalCode:'01234',
+  assert.deepEqual(projection.route.rows[0],{customerCode:'S91001',vehicle:'101',customerName:'합성 매장',deliveryArea:'경기 오산시',postalCode:'01234',
     lat:37.1,lng:127.1,coordinateVerified:true,registryMatched:true});
+  assert.equal(projection.route.rows[1].deliveryArea,null);
   assert.equal(projection.route.rows[1].postalCode,null);
   assert.equal(projection.route.rows[1].lat,null);
   assert.equal(projection.amounts.vehicles[0].detailRows[0].amount,450);
+  assert.deepEqual(projection.amounts.vehicles.map(({vehicle,deliveryCount,waypointCount,uniqueCustomerCount,locatedCustomerCount})=>
+    ({vehicle,deliveryCount,waypointCount,uniqueCustomerCount,locatedCustomerCount})),[
+    {vehicle:'101',deliveryCount:1,waypointCount:null,uniqueCustomerCount:1,locatedCustomerCount:1},
+    {vehicle:'208',deliveryCount:1,waypointCount:null,uniqueCustomerCount:1,locatedCustomerCount:0},
+    {vehicle:'미배정',deliveryCount:1,waypointCount:null,uniqueCustomerCount:1,locatedCustomerCount:0},
+  ]);
   const body=JSON.stringify(projection);
   for(const hidden of [address,'fixture driver private','55555','addressHash','가려진 매장']) assert(!body.includes(hidden));
+});
+
+test('a matched current address supplies only the district, even without a verified pin',()=>{
+  const districtAddress='경기 수원시 팔달구 합성로 20 (합성빌딩) 302호';
+  const rows=input();
+  rows[1][5]=districtAddress;
+  const exported=parse(workbook(rows));
+  const entry={center:'osan',address:districtAddress,addressHash:coordinateAddressHash(districtAddress),hasPoint:false};
+  const byCode=value=>new Map([['S91001',value]]);
+  const known=projectOpsmapWmsDispatch(exported,byCode(entry));
+  assert.equal(known.route.rows[0].deliveryArea,'경기 수원시 팔달구');
+  assert.equal(known.route.rows[0].lat,null);
+  assert(!JSON.stringify(known).includes(districtAddress));
+  assert.equal(projectOpsmapWmsDispatch(exported,byCode({...entry,center:'yeongnam'})).route.rows[0].deliveryArea,null);
+  const ambiguous='합성로 20';
+  rows[1][5]=ambiguous;
+  assert.equal(projectOpsmapWmsDispatch(parse(workbook(rows)),byCode({...entry,address:ambiguous,
+    addressHash:coordinateAddressHash(ambiguous)})).route.rows[0].deliveryArea,null);
 });
 
 test('wrong dates, duplicate detail and a corrupt source total fail closed',()=>{
@@ -78,7 +103,12 @@ test('distinct source allocations for the same shop roll up only with matching n
   assert.equal(valid.vehicles[0].detailTotal,500);
   assert.equal(valid.vehicles[0].details.length,1);
   assert.equal(valid.vehicles[0].details[0].customerName,'과거 원천 이름');
-  assert.equal(projectOpsmapWmsDispatch(valid).route.rows[0].vehicle,'101');
+  const projected=projectOpsmapWmsDispatch(valid);
+  assert.equal(projected.route.rows[0].vehicle,'101');
+  assert.equal(projected.route.rows.filter(row=>row.vehicle==='101').length,1);
+  const {deliveryCount,waypointCount,uniqueCustomerCount,locatedCustomerCount}=projected.amounts.vehicles[0];
+  assert.deepEqual({deliveryCount,waypointCount,uniqueCustomerCount,locatedCustomerCount},
+    {deliveryCount:2,waypointCount:null,uniqueCustomerCount:1,locatedCustomerCount:0});
   slice[5]='주소 다름';
   assert.throws(()=>parse(workbook(rows)),{code:'WMS_EXPORT_DUPLICATE_DETAIL'});
 });

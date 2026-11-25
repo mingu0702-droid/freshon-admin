@@ -5,6 +5,7 @@ const dayKey = value => /^\d{4}-\d{2}-\d{2}$/.test(value ?? '') &&
   Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value;
 const codeKey = value => /^[A-Z]\d{1,20}$/.test(value ?? '');
 const vehicleKey = value => typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= 24;
+const countOrNull = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const safePoint = row => row && (row.coordinateVerified === true || row.coordinateStatus === 'CONFIRMED') &&
   row.coordinateStatus !== 'CONFLICT' &&
   !/(?:_LIVE|_TEMPORARY)$/.test(row.coordinateSource || '') && row.resolutionStatus !== 'ADDRESS_CHANGED_REVIEW_REQUIRED' &&
@@ -71,7 +72,8 @@ export function createDispatchReference(day, stores, date) {
     if (!routes.has(row.vehicle)) routes.set(row.vehicle,[]);
     const store=storeByCode.get(row.customerCode);
     routes.get(row.vehicle).push({customerCode:row.customerCode,name:row.customerName || store?.customerName || row.customerCode,
-      postalCode:postal(row.postalCode) || postal(store?.postalCode),point:safePoint(row)||safePoint(store)});
+      postalCode:postal(row.postalCode) || postal(store?.postalCode),point:safePoint(row)||safePoint(store),
+      ...(typeof row.deliveryArea==='string'&&row.deliveryArea.trim()&&row.deliveryArea.length<=80?{deliveryArea:row.deliveryArea.trim()}:{})});
   }
   if (routeState==='UNAVAILABLE') routes.clear();
   const routeVerified = routeState==='VERIFIED';
@@ -96,7 +98,9 @@ export function createDispatchReference(day, stores, date) {
     const stops=routes.get(vehicle), amount=amounts.get(vehicle);
     const {detail,displayAmounts,summary} = routeVerified ? detailAmounts(amount,stops??[]) : {detail:null,displayAmounts:null,summary:null};
     vehicles.set(vehicle,{vehicle,stops:stops??[],storeCount:routeVerified ? stops?.length ?? null : null,
-      amount:amount?.amount ?? null, detail,displayAmounts,detailSummary:summary,registryMisses:amount?.unmatched??null});
+      amount:amount?.amount ?? null, detail,displayAmounts,detailSummary:summary,registryMisses:amount?.unmatched??null,
+      wmsConfirmed:Boolean(amount),waypointCount:countOrNull(amount?.waypointCount),deliveryCount:countOrNull(amount?.deliveryCount),
+      uniqueCustomerCount:countOrNull(amount?.uniqueCustomerCount)});
   }
   return {date, routeVerified,routeState, routeSource:day.route?.source??null, routeObservedAt:day.route?.observedAt ?? null, unassigned, amountDate, amountsVerified,amountTotal,
     sameWmsExport,sourceTotals,

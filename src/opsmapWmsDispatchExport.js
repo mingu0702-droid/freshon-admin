@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { coordinateAddressHash } from './opsmap-abc/opsmapAutoCoordinates.js';
 import { createPrivateGithubJsonStore } from './fixedVehicleStore.js';
+import { officialAddressKey } from './opsmapOfficialAddressLookup.js';
 import { opsmapArchiveSite } from './stageScope.js';
 import {decodeFreshonWmsDispatch,freshonWmsVehicle,verifiedFreshonWmsWorkbookLines} from './stageFreshonWmsDispatch.js';
 import {FRESHON_JSON_WMS_FORMAT,createStageWmsReleaseStore,isStageWmsDay,stageWmsArchiveKey,WMS_ARCHIVE_REPO,WMS_ARCHIVE_DIR} from './stageWmsExportIndex.js';
@@ -21,6 +22,24 @@ const archiveBinding = (date, {warehouse,sha256,observedAt,format}) =>
 const text = value => String(value ?? '').trim();
 const won = value => /^-?(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text(value)) && Number.isSafeInteger(Number(text(value).replace(/,/g,'')))
   ? Number(text(value).replace(/,/g,'')) : null;
+const deliveryProvince = new Map([
+  ['서울','서울시','서울특별시'],['부산','부산광역시'],['대구','대구광역시'],['인천','인천시','인천광역시'],
+  ['광주','광주광역시'],['대전','대전광역시'],['울산','울산광역시'],['세종','세종특별자치시'],
+  ['경기','경기도'],['강원','강원도','강원특별자치도'],['충북','충청북도'],['충남','충청남도'],
+  ['전북','전라북도','전북특별자치도'],['전남','전라남도'],['경북','경상북도'],['경남','경상남도'],
+  ['제주','제주도','제주특별자치도'],['전남광주통합특별시'],
+].flatMap(names=>names.map(name=>[name,names[0]])));
+
+function matchedDeliveryArea(address) {
+  if (!officialAddressKey(address)) return null;
+  const [provinceToken,municipality,district]=address.normalize('NFKC').trim().replace(/^\d{5}\s+/,'').split(/\s+/);
+  const province=deliveryProvince.get(provinceToken);
+  if (!province) return null;
+  if (/^[가-힣]{1,8}시$/.test(municipality) && /^[가-힣]{1,8}구$/.test(district))
+    return [province,municipality,district].join(' ');
+  if (/^[가-힣]{1,8}[시군구]$/.test(municipality)) return province+' '+municipality;
+  return province==='세종' ? '세종특별자치시' : null;
+}
 
 function add(a,b) {
   const result = a+b;
@@ -96,8 +115,9 @@ export function parseOpsmapWmsDispatchExport(bytes,{date,observedAt}={}) {
 
 export function projectOpsmapWmsDispatch(exported, registry, postcodes=new Map()) {
   const rows = [];
-  const vehicles = exported.vehicles.map(({vehicle,amount,details,detailTotal,difference})=>{
+  const vehicles = exported.vehicles.map(({vehicle,amount,deliveryCount,details,detailTotal,difference})=>{
     let unmatched=0;
+    let locatedCustomerCount=0;
     const detailRows=[];
     for (const row of details) {
       const known=registry?.get(row.customerCode);
@@ -105,13 +125,18 @@ export function projectOpsmapWmsDispatch(exported, registry, postcodes=new Map()
       if (!matched) unmatched++;
       if (vehicle!=='미배정') {
         const located=matched && known.hasPoint===true && Number.isFinite(known.lat) && Number.isFinite(known.lng);
+        if (located) locatedCustomerCount++;
         rows.push({customerCode:row.customerCode,vehicle,customerName:row.customerName||(matched?known.name:row.customerCode),
+          deliveryArea:matched?matchedDeliveryArea(known.address):null,
           postalCode:matched?postcodes.get(row.customerCode)??null:null,
           lat:located?known.lat:null,lng:located?known.lng:null,coordinateVerified:located,registryMatched:matched});
         detailRows.push({customerCode:row.customerCode,amount:row.amount});
       }
     }
-    return {vehicle,amount,routeCode:null,detailState:vehicle==='미배정'?'UNAVAILABLE':'VERIFIED',
+    // The verified export counts deliveries. Neither format carries the WMS summary's waypoint count.
+    return {vehicle,amount,deliveryCount:Number.isSafeInteger(deliveryCount)&&deliveryCount>=0?deliveryCount:null,
+      waypointCount:null,uniqueCustomerCount:details.length,locatedCustomerCount,
+      routeCode:null,detailState:vehicle==='미배정'?'UNAVAILABLE':'VERIFIED',
       detailTotal,difference,unmatched,detailRows};
   });
   return {date:exported.date,center:exported.center,source:exported.source,

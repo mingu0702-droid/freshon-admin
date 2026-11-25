@@ -109,6 +109,9 @@ test('current roster combines safe legacy and added identities while old holds a
   const roster=await read({...params,area:11111});
   assert.deepEqual(roster.members.map(row=>row.code),['S3','S6','S1','S2']);
   assert.deepEqual(Object.keys(roster).sort(),['area','members','next','offset','registered','registry']);
+  const assignments=await read.dispatchPostcodes(params);
+  assert.equal(assignments.registryVersion,binding.registry);
+  assert.deepEqual([...assignments.postcodes],[['S3','11111'],['S1','11111'],['S2','11111']]);
 });
 
 test('remote read is immutable, read-only and checked against independent head',async()=>{

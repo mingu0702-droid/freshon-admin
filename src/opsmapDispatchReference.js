@@ -4,6 +4,7 @@ import { DISPATCH_PERIODS, dispatchPeriodDates, projectDispatchPeriodDay } from 
 import { assertDeliverySourceObservation } from './snapshotRefreshEvidence.js';
 import { coordinateAddressHash } from './opsmap-abc/opsmapAutoCoordinates.js';
 import { SYNC_DELIVERY_SOURCES } from './opsmapSyncPolicy.js';
+import { mountOpsmapDispatchOverlaps } from './opsmapDispatchOverlaps.js';
 
 const CONTRACT = 'opsmap-dispatch-reference-v1';
 const CENTER = 'osan';
@@ -197,7 +198,8 @@ export function createOpsmapDispatchReferenceReader({getPublication, readAmounts
   return read;
 }
 
-export function mountOpsmapDispatchReference(app,{requireStaff, read, today, onDay}) {
+export function mountOpsmapDispatchReference(app,{requireStaff, read, readOverlaps, today, onDay}) {
+  if(readOverlaps)mountOpsmapDispatchOverlaps(app,{requireStaff,read:readOverlaps});
   app.get('/api/map-phase2b/private/dispatch-reference-day',requireStaff,async (req,res) => {
     res.set('Cache-Control','private, no-store').vary('Cookie');
     const {date,source} = req.query;

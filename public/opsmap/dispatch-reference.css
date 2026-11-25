@@ -94,6 +94,66 @@
 .dispatch-detail-body h4 { margin:7px 0; }
 
 @media(min-width:901px) {
+  body.dotRestored.dispatch-reference-open[data-dispatch-v4] .workspace,
+  body.dotRestored.dispatch-reference-open[data-dispatch-v4][data-dispatch-review=compare] .workspace {
+    grid-template-columns:clamp(226px,21vw,286px) minmax(0,1fr) clamp(224px,20vw,274px);
+  }
+  body[data-dispatch-v4] #leftPanel > .scrollside,
+  body[data-dispatch-v4] .dispatch-choices > :not(.dispatch-v4-roster),
+  body[data-dispatch-v4] .dispatch-details > summary,
+  body[data-dispatch-v4] .dispatch-details:not([data-v4-detail]) > .dispatch-detail-body { display:none; }
+  body[data-dispatch-v4] .dispatch-controls { padding:11px 9px; }
+  body[data-dispatch-v4] .dispatch-controls,
+  body[data-dispatch-v4] .dispatch-details { min-height:0; overflow:auto; }
+}
+.dispatch-v4-roster { margin-top:9px; }
+.dispatch-v4-source,.dispatch-v4-unassigned,.dispatch-v4-overlap-status {
+  margin:7px 0; color:#536781; font-size:12px;
+}
+.dispatch-v4-source:empty,.dispatch-v4-unassigned:empty { display:none; }
+.dispatch-v4-table-head,.dispatch-v4-route {
+  display:grid;
+  grid-template-columns:38px minmax(0,1fr) 42px 82px;
+  align-items:center; gap:3px; width:100%; padding:6px 3px;
+  font-size:11px; font-variant-numeric:tabular-nums;
+}
+.dispatch-v4-table-head {
+  position:sticky; top:0; z-index:1; background:#f3f7fb; border-block:1px solid #e2e9f1;
+}
+.dispatch-v4-table-head button,.dispatch-v4-route {
+  background:transparent; color:#314861; box-shadow:none; border:0;
+}
+.dispatch-v4-table-head button { padding:2px 0; text-align:left; border-radius:0; }
+.dispatch-v4-table-head button:is(:nth-child(3),:nth-child(4)),
+.dispatch-v4-route :is(:nth-child(3),:nth-child(4)) { text-align:right; }
+.dispatch-v4-table-head [data-direction=asc]::after { content:' ▴'; }
+.dispatch-v4-table-head [data-direction=desc]::after { content:' ▾'; }
+.dispatch-v4-route { min-height:32px; border-bottom:1px solid #edf1f5; border-radius:0; text-align:left; }
+.dispatch-v4-route :is(strong,span,b) { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dispatch-v4-route strong { color:#1d5698; }
+.dispatch-v4-route[aria-pressed=true] { background:#e9f3ff; color:#144b8c; }
+.dispatch-v4-route:hover,.dispatch-v4-route:focus-visible { background:#f3f7fb; }
+.dispatch-v4-overlaps { padding:12px 10px; color:#25374c; }
+.dispatch-v4-overlaps h2 { margin:0; font-size:15px; }
+.dispatch-v4-candidates button[data-dispatch-v4-postal] {
+  display:flex; align-items:baseline; justify-content:space-between; gap:6px;
+  width:100%; min-height:34px; padding:5px 6px; text-align:left; box-shadow:none;
+  border:0; border-radius:0; border-bottom:1px solid #edf1f5; background:#fff; color:#314861; font-size:12px;
+}
+.dispatch-v4-candidates button[aria-expanded=true] { background:#e7f4f1; color:#146658; }
+.dispatch-v4-candidates button:is(:hover,:focus-visible) { background:#f3f7fb; }
+.dispatch-v4-overlap-routes { margin:0; padding:3px 6px; list-style:none; background:#f4f9f8; }
+.dispatch-v4-overlap-routes li { display:grid; grid-template-columns:1fr auto; gap:2px 6px; min-height:35px; padding:4px 0; font-size:12px; }
+.dispatch-v4-overlap-routes small { grid-column:1/-1; color:#4a6375; }
+.dispatch-v4-compare { display:grid; gap:4px; margin:0 10px 8px; color:#415870; font-size:12px; }
+.dispatch-v4-compare[hidden],.dispatch-v4-overlaps[hidden],.dispatch-v4-roster[hidden] { display:none; }
+.dispatch-v4-compare select { width:100%; min-height:31px; }
+.dispatch-reference-open .dispatch-map-pin[data-dispatch-overlap=inside] .pin { outline:3px solid #008f85; outline-offset:2px; }
+.dispatch-reference-open .dispatch-map-pin[data-dispatch-overlap=registered] .pin { background-color:#fff; border-color:var(--pin); }
+.dispatch-reference-open .dispatch-map-pin[data-dispatch-overlap=registered] .pin span { color:var(--pin); }
+.dispatch-reference-open .dispatch-map-pin[data-dispatch-overlap=outside] .pin { opacity:.76; }
+
+@media(min-width:901px) {
   .dispatch-reference-open.dotRestored .workspace {
     display:grid; grid-template-columns:minmax(172px,14fr) minmax(0,66fr) minmax(226px,20fr);
     grid-template-rows:minmax(0,1fr); grid-template-areas:"controls map detail"; overflow:hidden;

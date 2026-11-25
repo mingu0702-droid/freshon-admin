@@ -112,9 +112,7 @@ export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
     }
     return {byCenter,scope,additional};
   }
-  return async({center='all',area,offset=0,registry,boundary,release,hasArea,hasLegacyCode,readLegacy})=>{
-    if(!['all',...centers].includes(center)||!Number.isSafeInteger(offset)||offset<0||offset>maxRows||
-        (area===undefined?offset!==0:!isPostalId(area)))throw Error('POSTAL_QUERY_INVALID');
+  async function verifiedIndex({registry,boundary,release,hasArea,hasLegacyCode,readLegacy}) {
     const before=await readRegistry();
     const version=before?.ref?.version;
     if(!digest.test(version||'')||registry!==undefined&&registry!==version)throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
@@ -129,6 +127,12 @@ export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
     });
     const index=await entry.index;
     if(await readRegistryVersion()!==version)throw Error('POSTAL_CURRENT_REGISTRATION_CHANGED');
+    return {index,version};
+  }
+  const read=async({center='all',area,offset=0,...source})=>{
+    if(!['all',...centers].includes(center)||!Number.isSafeInteger(offset)||offset<0||offset>maxRows||
+        (area===undefined?offset!==0:!isPostalId(area)))throw Error('POSTAL_QUERY_INVALID');
+    const {index,version}=await verifiedIndex(source);
     const groups=index.byCenter[center];
     if(area===undefined){
       const counts=[...groups].map(([id,rows])=>[id,rows.length]);
@@ -139,6 +143,13 @@ export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
     return {registry:version,area,registered:members.length,offset,next:members.length>offset+limit?offset+limit:null,
       members:members.slice(offset,offset+limit)};
   };
+  read.dispatchPostcodes=async source=>{
+    const {index,version}=await verifiedIndex(source);
+    index.osanPostcodes??=new Map([...index.byCenter.osan].flatMap(([id,members])=>
+      members.map(({code})=>[code,String(id).padStart(5,'0')])));
+    return {registryVersion:version,postcodes:index.osanPostcodes};
+  };
+  return read;
 }
 
 export function stageCurrentPostalRegistrationReader({env=process.env,readRegistry,readRegistryVersion,fetchImpl=fetch,approvedRelease}={}) {

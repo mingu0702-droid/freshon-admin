@@ -525,6 +525,19 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       releaseSha256, appRoot, readFixed, now });
   }
 
+  function currentRegistrationSource(opened) {
+    return {boundary:boundarySha256,release:releaseSha256,
+      hasArea:id=>Boolean(findArea(opened.areas,id)),hasLegacyCode:code=>opened.codes.get(code)?.registered===true,
+      readLegacy:async()=>{
+        const {stores}=await catalogData(opened);
+        return stores.flatMap(row=>{
+          const assignment=opened.codes.get(row.code);
+          return assignment?.registered?[{code:row.code,name:row.name,address:row.address,
+            center:centers[assignment.center],id:assignment.reviewArea===undefined?assignment.area:null}]:[];
+        });
+      }};
+  }
+
   return {
     async warm() { await ready(90,'all'); },
     async operations({days,center,generation,area,offset=0}) {
@@ -558,19 +571,17 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
     },
     async currentRegistration({generation,registry,center,area,offset}) {
       const opened=await verifiedRelease(generation);
-      const data=await readCurrentRegistration({registry,boundary:boundarySha256,release:releaseSha256,center,area,offset,
-        hasArea:id=>Boolean(findArea(opened.areas,id)),hasLegacyCode:code=>opened.codes.get(code)?.registered===true,
-        readLegacy:async()=>{
-          const {stores}=await catalogData(opened);
-          return stores.flatMap(row=>{
-            const assignment=opened.codes.get(row.code);
-            return assignment?.registered?[{code:row.code,name:row.name,address:row.address,
-              center:centers[assignment.center],id:assignment.reviewArea===undefined?assignment.area:null}]:[];
-          });
-        }});
+      const data=await readCurrentRegistration({registry,center,area,offset,...currentRegistrationSource(opened)});
       const {index}=await activeIndex();
       if(index.sha256!==generation)throw Error('COVERAGE_GENERATION_CHANGED');
       return {...data,generation};
+    },
+    async dispatchOverlapPostcodes({generation,registry}) {
+      const opened=await verifiedRelease(generation);
+      const data=await readCurrentRegistration?.dispatchPostcodes?.({registry,...currentRegistrationSource(opened)});
+      const {index}=await activeIndex();
+      if(index.sha256!==generation)throw Error('COVERAGE_GENERATION_CHANGED');
+      return data;
     },
     async dispatchPostcodes(customerCodes,generation) {
       const {codes} = await verifiedRelease(generation);

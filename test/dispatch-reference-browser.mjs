@@ -105,7 +105,7 @@ async function exercise() {
     return route.fulfill({path:fileURLToPath(new URL(filename,assets))});
   });
 
-  await page.goto(origin+(local?'/opsmap/':'/'));
+  await page.goto(origin+(local?'/opsmap/':'/')+'?dispatch-review=compare');
   if (!local) {
     assert.equal(await page.locator('#modeDispatchReference').count(),0);
     assert.equal(reads,0);
@@ -264,12 +264,8 @@ async function exercise() {
     await page.evaluate(()=>{window.signedIn=false;window.purge();});
     assert.equal(await page.locator('#modeDispatchReference').count(),0);
     overviewFixture=true;
-    await page.goto(origin+'/');
-    const previousReads=reads;
+    await page.goto(origin+'/?dispatch-review=compare');
     await page.evaluate(()=>{window.signedIn=true;dispatchEvent(new Event('map-staff-ready'));});
-    assert.equal(await page.locator('#modeDispatchReference').getAttribute('aria-pressed'),'false');
-    assert.equal(reads,previousReads);
-    await page.locator('#modeDispatchReference').click();
     const comparison=page.getByLabel('비교 기준 호차');
     await comparison.waitFor({state:'visible'});
     const roster=page.getByRole('list',{name:'확정배차 매장 목록'});
@@ -314,15 +310,15 @@ async function exercise() {
     await details.getByText(/500m 이내 매장/).click();
     await details.locator('[data-compare-action="store"][data-code="S3"]').click();
     await details.getByRole('button',{name:'이관 목록에 담기'}).click();
-    await details.getByRole('heading',{name:'가상 이관 2착'}).waitFor();
+    await details.getByRole('heading',{name:'가상 이관 2곳'}).waitFor();
     assert.match(await details.getByRole('row',{name:/101호 금액/}).innerText(),/400원\s+250원/);
     assert.match(await details.getByRole('row',{name:/208호 금액/}).innerText(),/200원\s+350원/);
     assert.match(await details.innerText(),/두 호차 합산 금액 600원 · 이관 전후 일치/);
     await details.getByText('선택한 매장 2곳').click();
     await details.getByRole('button',{name:'같은 건물 매장 이관 취소'}).click();
-    await details.getByRole('heading',{name:'가상 이관 1착'}).waitFor();
+    await details.getByRole('heading',{name:'가상 이관 1곳'}).waitFor();
     await details.getByRole('button',{name:'초기화'}).click();
-    await details.getByRole('heading',{name:'가상 이관 0착'}).waitFor();
+    await details.getByRole('heading',{name:'가상 이관 0곳'}).waitFor();
     assert.equal(await page.locator('.dispatch-review-dock').count(),0);
     assert.equal(await page.locator('#map').count(),1);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

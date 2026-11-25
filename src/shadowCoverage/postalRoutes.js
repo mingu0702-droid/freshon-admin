@@ -173,6 +173,10 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     return runtime.search({ ...scope, query });
   });
   return {
+    async dispatchOverlapPostcodes(scope) {
+      const {runtime}=await load();
+      return runtime.dispatchOverlapPostcodes(scope);
+    },
     async dispatchPostcodes(customerCodes,generation) {
       const {runtime} = await load();
       return runtime.dispatchPostcodes(customerCodes,generation);

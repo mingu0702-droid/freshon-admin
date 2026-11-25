@@ -39,6 +39,7 @@ import {currentPostalRegistrationFallback} from './shadowCoverage/postalCurrentR
 import {createCoverageStatusReader} from './shadowCoverage/storeStatus.js';
 import {createStageDatedDeliveryReader} from './stageDatedDelivery.js';
 import {createOpsmapDispatchReferenceReader,mountOpsmapDispatchReference} from './opsmapDispatchReference.js';
+import {createDispatchPostalEvidenceReader,createOpsmapDispatchOverlapsReader} from './opsmapDispatchOverlaps.js';
 import {createStageWmsDispatchExportReader} from './opsmapWmsDispatchExport.js';
 import {createStageDriverContacts} from './stageDriverContacts.js';
 import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,vehicleId} from './datedDeliveryContract.js';
@@ -831,7 +832,22 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           readWmsExport,
           readPostcodes:(codes,generation)=>generation ? postalCoverage?.dispatchPostcodes(codes,generation) : null,
         });
-        mountOpsmapDispatchReference(router,{requireStaff,read,today,onDay:({date,route,amounts})=>{
+        const readDispatchOverlaps=createOpsmapDispatchOverlapsReader({
+          getPublication(){
+            const active=validation.active();
+            return active?.expiresAt===Infinity?active:null;
+          },
+          postalGenerationFor:active=>(active?.scheduled?.index??active?.coverageIndex)?.sha256,
+          readRegistry:()=>nationalRegistry?.read(),
+          readFixed:(codes,knownVersion)=>fixed.get(codes,{knownVersion}),
+          readPostcodes:scope=>postalCoverage?.dispatchOverlapPostcodes(scope),
+          readPostalEvidence:createDispatchPostalEvidenceReader({env:stage,appRoot:coverageAppRoot})
+        });
+        const readOverlaps=async scope=>{
+          if(!validation.active())await readScheduleRegistry();
+          return readDispatchOverlaps(scope);
+        };
+        mountOpsmapDispatchReference(router,{requireStaff,read,readOverlaps,today,onDay:({date,route,amounts})=>{
           if (!(readWmsExport.hasVerifiedSource?.(date)??readWmsExport.dates?.includes(date))) return;
           console.info(JSON.stringify({component:'stage-wms-export-day',date,
             route:{state:route.state,source:route.source??null,rows:route.rows.length,projectionFailure:route.projectionFailure??null},
