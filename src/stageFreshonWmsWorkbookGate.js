@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {freshonWmsVehicle as vehicle,verifiedFreshonWmsWorkbookLines as verifiedWorkbookLines,collectFreshonWmsDispatch as collect,encodeFreshonWmsDispatch} from './stageFreshonWmsDispatch.js';
 import {createStageWmsDispatchExportReader,parseOpsmapWmsDispatchExport,publishStageWmsDispatchExport} from './opsmapWmsDispatchExport.js';
-import {FRESHON_JSON_WMS_FORMAT,createStageWmsReleaseStore,isStageWmsDay,stageWmsError,stageWmsReleaseEnabled} from './stageWmsExportIndex.js';
+import {FRESHON_JSON_WMS_FORMAT,WMS_OFFICIAL_ROUND_FORMAT,createStageWmsReleaseStore,isStageWmsDay,stageWmsError,stageWmsReleaseEnabled} from './stageWmsExportIndex.js';
 
 const warehouse='011', pageSize=3000, maxWorkbookBytes=4*1024*1024;
 const sourceUrl='https://mis.freshon.co.kr/bo/wm/dispatch/baecha_list';
@@ -128,10 +128,10 @@ export async function syncStageFreshonWmsDispatch({
   const entry=legacy|| (await releases.readIndex()).entries.find(item=>item.date===date);
   // Nightly reconciliation may advance a signed release, including a manual
   // XLSX release, via the same compare-and-swap used by manual corrections.
-  const replacement=reconcileExisting&&!legacy&&entry&&Date.parse(observedAt)>Date.parse(entry.observedAt)
+  const replacement=reconcileExisting&&!legacy&&entry&&entry.format!==WMS_OFFICIAL_ROUND_FORMAT&&Date.parse(observedAt)>Date.parse(entry.observedAt)
     ? entry.sha256 : replaceSha256;
   if(entry){
-    if(replacement!==undefined&&(legacy||replacement!==entry.sha256||
+    if(replacement!==undefined&&(legacy||entry.format===WMS_OFFICIAL_ROUND_FORMAT||replacement!==entry.sha256||
       Date.parse(observedAt)<=Date.parse(entry.observedAt)))fail('REPLACEMENT');
     const readback=await reader(date);
     if(!readback)fail('ARCHIVE_READBACK');

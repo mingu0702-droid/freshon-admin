@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import XLSX from 'xlsx';
 import { createStageWmsDispatchExportReader, parseOpsmapWmsDispatchExport, projectOpsmapWmsDispatch,
-  sealOpsmapWmsDispatchExport, publishStageWmsDispatchExport } from '../src/opsmapWmsDispatchExport.js';
+  sealOpsmapWmsDispatchExport, publishStageWmsDispatchExport, publishStageWmsOfficialRound } from '../src/opsmapWmsDispatchExport.js';
+import { decodeWmsOfficialRound, encodeWmsOfficialRound, WMS_OFFICIAL_ROUND_SOURCE } from '../src/stageWmsOfficialRound.js';
 import { syncStageFreshonWmsDispatch } from '../src/stageFreshonWmsWorkbookGate.js';
 import { createOpsmapDispatchReferenceReader } from '../src/opsmapDispatchReference.js';
 import { coordinateAddressHash } from '../src/opsmap-abc/opsmapAutoCoordinates.js';
@@ -29,6 +30,62 @@ function workbook(rows=input()) {
   return XLSX.write(book,{type:'buffer',bookType:'xlsx'});
 }
 const parse=bytes=>parseOpsmapWmsDispatchExport(bytes,{date,observedAt});
+
+function officialRound(date,observedAt,roundId='01234567') {
+  const stamp={date,warehouse:'011',observedAt,roundId};
+  const detail={WH_CD:'011',DLVRY_DATE:date,DISPATCH_NO:'dispatch-101',DISPATCH_YN:'Y',ROUTE_CD_ORG:'plan-101',
+    ROUTE_NM:'101',CUST_CD:'S91001',CUST_NM:'sample shop',addressHash:coordinateAddressHash(address)};
+  return {
+    plan:{...stamp,rows:[{...detail,ROUTE_CD:'plan-101',SELL_AMT:310,STOP_LOC_CNT:1}]},
+    dispatch:{...stamp,rows:[
+      {...detail,DLVRY_NO:'delivery-1',SELL_AMT:100},
+      {...detail,DLVRY_NO:'delivery-2',SELL_AMT:205},
+      {WH_CD:'011',DLVRY_DATE:date,DLVRY_NO:'delivery-3',CUST_CD:'S91002',DISPATCH_YN:'N',SELL_AMT:23}
+    ]}
+  };
+}
+
+test('a paired GAS round keeps official waypoints separate from delivery and customer counts',()=>{
+  const round=officialRound(date,observedAt);
+  const bytes=encodeWmsOfficialRound(round,date);
+  const {data}=decodeWmsOfficialRound(bytes,{date,observedAt});
+  assert.equal(data.source,WMS_OFFICIAL_ROUND_SOURCE);
+  assert.equal(data.total,333);
+  assert.equal(data.deliveryCount,3);
+  const projected=projectOpsmapWmsDispatch(data);
+  assert.equal(projected.route.sourceComplete,true);
+  assert.equal(projected.route.unassigned,1);
+  const [confirmed,unassigned]=projected.amounts.vehicles;
+  assert.deepEqual([confirmed.vehicle,confirmed.amount,confirmed.waypointCount,confirmed.deliveryCount,
+    confirmed.uniqueCustomerCount,confirmed.detailTotal,confirmed.difference],['101',310,1,2,1,305,5]);
+  assert.equal(unassigned.waypointCount,null);
+  assert.equal(projected.route.rows[0].customerCode,'S91001');
+  assert.equal(JSON.stringify(projected).includes('dispatch-101'),false);
+  assert.equal(JSON.stringify(projected).includes('delivery-1'),false);
+  assert.throws(()=>decodeWmsOfficialRound(bytes,{date,observedAt:'2026-11-22T14:15:00.000Z'}),
+    {code:'WMS_EXPORT_OFFICIAL_ARCHIVE'});
+});
+
+test('a paired GAS round rejects mismatched captures, dispatch and economic evidence',()=>{
+  const edits=[
+    [round=>round.plan.roundId='12345678','ROUND_MISMATCH'],
+    [round=>round.plan.roundId=['01234567'],'SCOPE'],
+    [round=>round.dispatch.observedAt='2026-11-22T14:15:00.000Z','ROUND_MISMATCH'],
+    [round=>round.plan.warehouse='012','SCOPE'],
+    [round=>round.dispatch.rows[0].DLVRY_DATE='2026-11-24','DETAIL_SCOPE'],
+    [round=>round.dispatch.rows[0].DISPATCH_NO='other','DISPATCH_MATCH'],
+    [round=>round.dispatch.rows[0].ROUTE_CD_ORG='other','DISPATCH_MATCH'],
+    [round=>round.dispatch.rows[0].ROUTE_NM='102','DISPATCH_MATCH'],
+    [round=>round.dispatch.rows[0].DLVRY_NO='delivery-2','DUPLICATE_DELIVERY'],
+    [round=>round.plan.rows[0].STOP_LOC_CNT=2,'STOP_MATCH'],
+    [round=>round.plan.rows[0].SELL_AMT=400,'AMOUNT_MATCH']
+  ];
+  for(const [edit,error] of edits){
+    const round=officialRound(date,observedAt);
+    edit(round);
+    assert.throws(()=>encodeWmsOfficialRound(round,date),{code:'WMS_EXPORT_OFFICIAL_'+error});
+  }
+});
 
 test('the same-day export reconciles published totals and preserves per-vehicle differences',()=>{
   const result=parse(workbook());
@@ -489,6 +546,43 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
     {code:'WMS_EXPORT_FRESHON_PAGE'});
   assert.equal((await reader()(date5)).total,553);
   assert.equal(events.length,posted[2]);
+
+  const pairDate='2026-11-30',pairTime='2026-11-29T12:00:00.000Z';
+  const pairedEnv={...nightlyEnv,OPSMAP_STAGE_WMS_OFFICIAL_ROUND_PUBLISH_APPROVED:'1'};
+  const pair=officialRound(pairDate,pairTime);
+  const upPair=(options={})=>publishStageWmsOfficialRound({round:pair,date:pairDate,env:pairedEnv,fetchImpl,...options});
+  const beforePair=counters();
+  await assert.rejects(upPair({env:nightlyEnv}),{code:'WMS_EXPORT_SCOPE'});
+  assert.deepEqual(counters(),beforePair);
+  const releasedPair=await upPair();
+  assert.equal(releasedPair.state,'PUBLISHED');
+  assert.equal((await upPair()).state,'VERIFIED_NOOP');
+  const archivePair=await reader()(pairDate);
+  assert.equal(archivePair.source,WMS_OFFICIAL_ROUND_SOURCE);
+  assert.equal(archivePair.vehicles[0].waypointCount,1);
+  assert.equal((await reader()(date)).total,1501);
+  const pairProjection=createOpsmapDispatchReferenceReader({getPublication:()=>null,readWmsExport:reader()});
+  const pairedDay=await pairProjection(pairDate);
+  assert.equal(pairedDay.amounts.vehicles[0].waypointCount,1);
+  assert.equal(pairedDay.route.observedAt,pairedDay.amounts.observedAt);
+  const pairedView=createDispatchReference(pairedDay,[],pairDate);
+  assert.equal(pairedView.wmsScopeComplete,true);
+  assert.equal(pairedView.vehicles.get('101').waypointCount,1);
+  const mixedTime=createDispatchReference({...pairedDay,amounts:{...pairedDay.amounts,observedAt}},[],pairDate);
+  assert.equal(mixedTime.vehicles.get('101').waypointCount,null);
+  const beforeFreshon=counters();
+  assert.equal((await nightly(pairDate,{env:pairedEnv})).state,'VERIFIED_NOOP');
+  await assert.rejects(upload(pairDate,{replaceSha256:releasedPair.sha256,observedAt:'2026-11-30T14:15:00Z'}),
+    {code:'WMS_EXPORT_OFFICIAL_DOWNGRADE'});
+  const changedCapture=officialRound(pairDate,'2026-11-29T12:01:00.000Z');
+  await assert.rejects(upPair({round:changedCapture,replaceSha256:releasedPair.sha256}),
+    {code:'WMS_EXPORT_OFFICIAL_ROUND_CONFLICT'});
+  assert.deepEqual(counters(),beforeFreshon);
+  const nextCapture=officialRound(pairDate,'2026-11-29T12:02:00.000Z','89abcdef');
+  const correctedPair=await upPair({round:nextCapture,replaceSha256:releasedPair.sha256});
+  assert.equal(correctedPair.state,'PUBLISHED');
+  assert.equal(correctedPair.supersedes,releasedPair.sha256);
+  assert.equal((await reader()(pairDate)).observedAt,'2026-11-29T12:02:00.000Z');
 
   const jsonIndex=files.get('release-index-v1.json');
   const withoutType=jsonIndex.value.entries.map(({format,...entry})=>entry);
