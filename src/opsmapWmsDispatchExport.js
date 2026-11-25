@@ -212,7 +212,23 @@ function createArchiveReader(env, fetchImpl) {
   return {read,configuration};
 }
 
-export function createStageWmsDispatchExportReader({env=process.env,readSecret=readFile,fetchImpl=fetch}={}) {
+function readWmsIndex(store) {
+  let pending,cached;
+  const ready=()=>{
+    if(cached?.until>Date.now())return Promise.resolve(cached.entries);
+    pending??=store.readIndex().then(({entries})=>{
+      cached={until:Date.now()+30_000,entries};
+      return entries;
+    }).catch(error=>{
+      if(error.code==='WMS_EXPORT_RELEASE_INDEX_INVALID')throw error;
+      throw scopeError('WMS_EXPORT_RELEASE_INDEX_UNAVAILABLE');
+    }).finally(()=>{pending=null;});
+    return pending;
+  };
+  return {store,ready,hasDate:date=>cached?.entries.some(entry=>entry.date===date)};
+}
+
+export function createStageWmsDispatchExportReader({env=process.env,readSecret=readFile,fetchImpl=fetch,includeOfficial=true}={}) {
   const serviceVerified=Boolean(opsmapArchiveSite(env));
   const approved=env.OPSMAP_STAGE_WMS_DISPATCH_EXPORT_APPROVED==='1';
   let manifest;
@@ -235,21 +251,29 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
     }
     return null;
   };
-  const releaseStore = archive?.configuration.refValid&&archive.configuration.keyValid&&archive.configuration.tokenPresent
-    ? createStageWmsReleaseStore({env,fetchImpl}) : null;
-  const releaseKey = releaseStore ? stageWmsArchiveKey(env) : null;
-  let indexRead,indexCache=null;
-  async function releases(){
-    if(!releaseStore)return [];
-    if(indexCache?.until>Date.now())return indexCache.entries;
-    if(!indexRead)indexRead=releaseStore.readIndex().then(({entries})=>{
-      indexCache={until:Date.now()+30_000,entries};
-      return entries;
-    }).catch(error=>{
-      if(error.code==='WMS_EXPORT_RELEASE_INDEX_INVALID')throw error;
-      throw scopeError('WMS_EXPORT_RELEASE_INDEX_UNAVAILABLE');
-    }).finally(()=>{indexRead=null;});
-    return indexRead;
+  const indexConfigured=archive?.configuration.refValid&&archive.configuration.keyValid&&archive.configuration.tokenPresent;
+  const indexes=indexConfigured
+    ? [false,...(includeOfficial?[true]:[])].map(official=>createStageWmsReleaseStore({env,fetchImpl,official})).filter(Boolean).map(readWmsIndex)
+    : [];
+  const releaseKey=indexes.length?stageWmsArchiveKey(env):null;
+  const releases=()=>Promise.allSettled(indexes.map(async index=>({index,entries:await index.ready()})));
+  async function seek(date){
+    const results=await releases();
+    const candidates=results.flatMap(result=>{
+      if(result.status!=='fulfilled')return [];
+      const {index,entries}=result.value;
+      const entry=entries.find(value=>value.date===date);
+      return entry?[{store:index.store,entry}]:[];
+    });
+    // Never join an official count to a different signed revision. A newer
+    // verified legacy amount wins over a stale official round for this day.
+    candidates.sort((a,b)=>Date.parse(b.entry.observedAt)-Date.parse(a.entry.observedAt)||
+      Number(b.entry.format===WMS_OFFICIAL_ROUND_FORMAT)-Number(a.entry.format===WMS_OFFICIAL_ROUND_FORMAT));
+    if(!candidates.length){
+      const failure=results.find(result=>result.status==='rejected');
+      if(failure)throw failure.reason;
+    }
+    return candidates;
   }
   function verifyWorkbook(date,bytes) {
     const failure=configurationFailure(date);
@@ -257,23 +281,16 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
     return verifyManifestWorkbook(date,bytes,manifest[date]);
   }
   const jobs = new Map();
-  const read=async date=>{
-    const failure=configurationFailure(date);
-    let entry;
-    if(failure){
-      if(failure!=='WMS_EXPORT_DATE_NOT_APPROVED'||!releaseStore||!isStageWmsDay(date))return null;
-      entry=(await releases()).find(value=>value.date===date);
-      if(!entry)return null;
-    }
+  function readEntry(date,entry,store){
     const expected=entry||manifest[date];
-    const cacheKey=entry?[date,entry.sha256,entry.observedAt].join('|'):date;
+    const cacheKey=entry?[date,entry.sha256,entry.observedAt,entry.format].join('|'):date;
     if (!jobs.has(cacheKey)) {
       if (jobs.size>=4) jobs.delete(jobs.keys().next().value);
       const task=Promise.resolve().then(async()=>{
         let bytes;
         if(entry){
           let value;
-          try {value=await releaseStore.readArchive(entry,maxArchiveBytes);}
+          try {value=await store.readArchive(entry,maxArchiveBytes);}
           catch {throw scopeError('WMS_EXPORT_ARCHIVE_READ');}
           bytes=unpackArchive(value,date,entry,releaseKey);
         }else if (archive) bytes=await archive.read(date,expected);
@@ -292,18 +309,32 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
       jobs.set(cacheKey,task);
     }
     return jobs.get(cacheKey);
+  }
+  const read=async date=>{
+    const failure=configurationFailure(date);
+    if(!failure)return readEntry(date);
+    if(failure!=='WMS_EXPORT_DATE_NOT_APPROVED'||!indexes.length||!isStageWmsDay(date))return null;
+    const candidates=await seek(date);
+    let failureReading;
+    for(const {store,entry} of candidates){
+      try{return await readEntry(date,entry,store);}
+      catch(error){failureReading??=error;}
+    }
+    if(failureReading)throw failureReading;
+    return null;
   };
   read.dates=Object.keys(manifest??{}).filter(date=>dayKey.test(date));
   read.verifyWorkbook=verifyWorkbook;
   read.availableDates=async()=>{
-    const list=await releases().catch(()=>[]);
-    return [...new Set([...read.dates,...list.map(entry=>entry.date)])];
+    const list=await releases();
+    const dates=list.flatMap(result=>result.status==='fulfilled'?result.value.entries.map(entry=>entry.date):[]);
+    return [...new Set([...read.dates,...dates])];
   };
-  read.hasVerifiedSource=date=>read.dates.includes(date)||indexCache?.entries.some(entry=>entry.date===date);
+  read.hasVerifiedSource=date=>read.dates.includes(date)||indexes.some(index=>index.hasDate(date));
   read.configurationFailure=configurationFailure;
   read.recoveryConfigurationFailure=(date,{workbook=false}={})=>{
     const failure=configurationFailure(date);
-    return !workbook&&failure==='WMS_EXPORT_DATE_NOT_APPROVED'&&releaseStore&&isStageWmsDay(date)?null:failure;
+    return !workbook&&failure==='WMS_EXPORT_DATE_NOT_APPROVED'&&indexes.length&&isStageWmsDay(date)?null:failure;
   };
   read.configuration={serviceVerified,approved,manifestValid:Boolean(manifest),archive:archive?.configuration??null,
     dates:Object.fromEntries(read.dates.map(date=>[date,configurationFailure(date)??'VERIFIED']))};
@@ -362,7 +393,7 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
   if(!isStageWmsDay(date)||!releaseFormatApproved(format,env))throw scopeError('WMS_EXPORT_SCOPE');
   if(replaceSha256!==undefined&&!/^[a-f0-9]{64}$/.test(replaceSha256))throw scopeError('WMS_EXPORT_RELEASE_BASE_INVALID');
   const key=stageWmsArchiveKey(env);
-  const archive=createStageWmsReleaseStore({env,fetchImpl,write:true});
+  const archive=createStageWmsReleaseStore({env,fetchImpl,write:true,official:format===WMS_OFFICIAL_ROUND_FORMAT});
   if(!archive||!key)throw scopeError('WMS_EXPORT_RELEASE_CONFIGURATION');
   let legacy;
   try {legacy=JSON.parse(env.OPSMAP_STAGE_WMS_DISPATCH_EXPORTS_JSON);}
@@ -392,8 +423,6 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
       await verifyStored(existing);
       return {state:'VERIFIED_NOOP',date,sha256};
     }
-    if(existing?.format===WMS_OFFICIAL_ROUND_FORMAT&&format!==WMS_OFFICIAL_ROUND_FORMAT)
-      throw scopeError('WMS_EXPORT_OFFICIAL_DOWNGRADE');
     if(existing&&!existing.format&&verified.proof&&matchesExistingWorkbook(date,await verifyStored(existing),verified.proof)){
       return {state:'VERIFIED_NOOP',date,sha256:existing.sha256};
     }

@@ -343,7 +343,7 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
       sha256:createHash('sha256').update(bytes).digest('hex'),env:opts.env||env,fetchImpl});
   };
 
-  const reader=()=>createStageWmsDispatchExportReader({env,fetchImpl,readSecret:async()=>assert.fail('no plaintext fallback')});
+  const reader=(settings=env)=>createStageWmsDispatchExportReader({env:settings,fetchImpl,readSecret:async()=>assert.fail('no plaintext fallback')});
   assert.equal(await reader()(date2),null);
   await assert.rejects(upload(date2,{env:{...env,RENDER_SERVICE_ID:'other'}}),{code:'WMS_EXPORT_RELEASE_CONFIGURATION'});
   await assert.rejects(upload(date2,{env:{...env,OPSMAP_STAGE_WMS_DISPATCH_EXPORT_ARCHIVE_KEY_B64:Buffer.alloc(32,9).toString('base64')}}),
@@ -548,7 +548,10 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   assert.equal(events.length,posted[2]);
 
   const pairDate='2026-11-30',pairTime='2026-11-29T12:00:00.000Z';
-  const pairedEnv={...nightlyEnv,OPSMAP_STAGE_WMS_OFFICIAL_ROUND_PUBLISH_APPROVED:'1'};
+  const pairedEnv={...nightlyEnv,OPSMAP_STAGE_WMS_OFFICIAL_ROUND_PUBLISH_APPROVED:'1',
+    OPSMAP_STAGE_WMS_OFFICIAL_ROUND_READ_APPROVED:'1'};
+  const legacyPair=await upload(pairDate,{observedAt:'2026-11-29T11:00:00Z'});
+  const legacyIndexBeforePair=structuredClone(files.get('release-index-v1.json'));
   const pair=officialRound(pairDate,pairTime);
   const upPair=(options={})=>publishStageWmsOfficialRound({round:pair,date:pairDate,env:pairedEnv,fetchImpl,...options});
   const beforePair=counters();
@@ -557,11 +560,14 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   const releasedPair=await upPair();
   assert.equal(releasedPair.state,'PUBLISHED');
   assert.equal((await upPair()).state,'VERIFIED_NOOP');
-  const archivePair=await reader()(pairDate);
+  assert.deepEqual(files.get('release-index-v1.json'),legacyIndexBeforePair);
+  assert.equal((await reader()(pairDate)).total,1501);
+  assert.equal((await reader()(pairDate)).vehicles[0].waypointCount,undefined);
+  const archivePair=await reader(pairedEnv)(pairDate);
   assert.equal(archivePair.source,WMS_OFFICIAL_ROUND_SOURCE);
   assert.equal(archivePair.vehicles[0].waypointCount,1);
   assert.equal((await reader()(date)).total,1501);
-  const pairProjection=createOpsmapDispatchReferenceReader({getPublication:()=>null,readWmsExport:reader()});
+  const pairProjection=createOpsmapDispatchReferenceReader({getPublication:()=>null,readWmsExport:reader(pairedEnv)});
   const pairedDay=await pairProjection(pairDate);
   assert.equal(pairedDay.amounts.vehicles[0].waypointCount,1);
   assert.equal(pairedDay.route.observedAt,pairedDay.amounts.observedAt);
@@ -571,9 +577,14 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   const mixedTime=createDispatchReference({...pairedDay,amounts:{...pairedDay.amounts,observedAt}},[],pairDate);
   assert.equal(mixedTime.vehicles.get('101').waypointCount,null);
   const beforeFreshon=counters();
-  assert.equal((await nightly(pairDate,{env:pairedEnv})).state,'VERIFIED_NOOP');
-  await assert.rejects(upload(pairDate,{replaceSha256:releasedPair.sha256,observedAt:'2026-11-30T14:15:00Z'}),
-    {code:'WMS_EXPORT_OFFICIAL_DOWNGRADE'});
+  assert.equal((await submit(pairDate,{env:pairedEnv})).sha256,legacyPair.sha256);
+  const newLegacyBytes=workbook(input().map(row=>{
+    if(row[0]==='20261123')return [pairDate,row[1],row[2],'451',...row.slice(4)];
+    if(row[0]===date)return [pairDate,...row.slice(1)];
+    return row;
+  }));
+  await assert.rejects(upload(pairDate,{bytes:newLegacyBytes,replaceSha256:releasedPair.sha256,observedAt:'2026-11-30T14:15:00Z'}),
+    {code:'WMS_EXPORT_RELEASE_BASE_CHANGED'});
   const changedCapture=officialRound(pairDate,'2026-11-29T12:01:00.000Z');
   await assert.rejects(upPair({round:changedCapture,replaceSha256:releasedPair.sha256}),
     {code:'WMS_EXPORT_OFFICIAL_ROUND_CONFLICT'});
@@ -582,7 +593,28 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   const correctedPair=await upPair({round:nextCapture,replaceSha256:releasedPair.sha256});
   assert.equal(correctedPair.state,'PUBLISHED');
   assert.equal(correctedPair.supersedes,releasedPair.sha256);
-  assert.equal((await reader()(pairDate)).observedAt,'2026-11-29T12:02:00.000Z');
+  assert.equal((await reader(pairedEnv)(pairDate)).observedAt,'2026-11-29T12:02:00.000Z');
+  assert.deepEqual(files.get('release-index-v1.json'),legacyIndexBeforePair);
+  const officialIndex=files.get('official-round-index-v1.json');
+  files.set('official-round-index-v1.json',{...officialIndex,value:{...officialIndex.value,tag:'0'.repeat(64)}});
+  assert.equal((await reader(pairedEnv)(pairDate)).total,1501);
+  files.set('official-round-index-v1.json',officialIndex);
+  const officialFile=[...files.keys()].find(key=>key.startsWith('official-round-'+pairDate+'-')&&
+    files.get(key).value.observedAt==='2026-11-29T12:02:00.000Z');
+  const officialData=files.get(officialFile);
+  files.set(officialFile,{...officialData,value:{...officialData.value,tag:'0'.repeat(32)}});
+  assert.equal((await reader(pairedEnv)(pairDate)).total,1501);
+  files.set(officialFile,officialData);
+  await upload(pairDate,{bytes:newLegacyBytes,replaceSha256:legacyPair.sha256,observedAt:'2026-11-29T12:04:00Z'});
+  const afterLegacyAdvance=projectOpsmapWmsDispatch(await reader(pairedEnv)(pairDate));
+  assert.equal(afterLegacyAdvance.amounts.observedAt,'2026-11-29T12:04:00.000Z');
+  assert.equal(afterLegacyAdvance.amounts.vehicles[0].waypointCount,null);
+  assert.deepEqual(files.get('official-round-index-v1.json'),officialIndex);
+  const officialOnlyDay='2026-12-01';
+  await upPair({round:officialRound(officialOnlyDay,'2026-11-30T12:00:00.000Z','1aaabbbb'),date:officialOnlyDay});
+  assert.equal(await reader()(officialOnlyDay),null);
+  assert.ok(!(await reader().availableDates()).includes(officialOnlyDay));
+  assert.ok((await reader(pairedEnv).availableDates()).includes(officialOnlyDay));
 
   const jsonIndex=files.get('release-index-v1.json');
   const withoutType=jsonIndex.value.entries.map(({format,...entry})=>entry);
