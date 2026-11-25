@@ -105,8 +105,12 @@ export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
       if(current&&(current.lifecycle!=='ACTIVE'||current.addressHash!==customerRegistryAddressHash(address)||
           centers.has(current.centerGroup)&&current.centerGroup!==center))continue;
       add(code,current?.customerName||name,current?.centerGroup||center,id,false);
-      if(current?.centerGroup===center&&centers.has(center)&&isCurrentPostalPoint(current)&&
-          current.verifiedLocation.lat===lat&&current.verifiedLocation.lng===lng) {
+      const point=current?.verifiedLocation;
+      const legacyPoint=Number.isFinite(lat)&&lat>=33&&lat<=39.5&&Number.isFinite(lng)&&lng>=124&&lng<=132;
+      // The verified legacy point is still tied to the exact active address above.
+      // A current, conflicting coordinate must never be replaced by that point.
+      if(current?.centerGroup===center&&centers.has(center)&&legacyPoint&&
+          (!point||isCurrentPostalPoint(current)&&point.lat===lat&&point.lng===lng)) {
         dispatchDensityAssignments.set(code,{area:id,center});
       }
     }
