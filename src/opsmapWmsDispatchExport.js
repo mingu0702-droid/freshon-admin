@@ -6,7 +6,8 @@ import { createPrivateGithubJsonStore } from './fixedVehicleStore.js';
 import { officialAddressKey } from './opsmapOfficialAddressLookup.js';
 import { opsmapArchiveSite } from './stageScope.js';
 import {decodeFreshonWmsDispatch,FRESHON_JSON_WMS_SOURCE,freshonWmsVehicle,verifiedFreshonWmsWorkbookLines} from './stageFreshonWmsDispatch.js';
-import {FRESHON_JSON_WMS_FORMAT,createStageWmsReleaseStore,isStageWmsDay,stageWmsArchiveKey,WMS_ARCHIVE_REPO,WMS_ARCHIVE_DIR} from './stageWmsExportIndex.js';
+import {decodeWmsOfficialRound,encodeWmsOfficialRound,WMS_OFFICIAL_ROUND_SOURCE} from './stageWmsOfficialRound.js';
+import {FRESHON_JSON_WMS_FORMAT,WMS_OFFICIAL_ROUND_FORMAT,createStageWmsReleaseStore,isStageWmsDay,stageWmsArchiveKey,WMS_ARCHIVE_REPO,WMS_ARCHIVE_DIR} from './stageWmsExportIndex.js';
 
 const source = 'WMS_CONFIRMED_DISPATCH_EXPORT';
 const require = createRequire(import.meta.url);
@@ -115,7 +116,8 @@ export function parseOpsmapWmsDispatchExport(bytes,{date,observedAt}={}) {
 
 export function projectOpsmapWmsDispatch(exported, registry, postcodes=new Map()) {
   const rows = [];
-  const vehicles = exported.vehicles.map(({vehicle,amount,deliveryCount,details,detailTotal,difference})=>{
+  const officialRound = exported.source===WMS_OFFICIAL_ROUND_SOURCE;
+  const vehicles = exported.vehicles.map(({vehicle,amount,deliveryCount,waypointCount,details,detailTotal,difference})=>{
     let unmatched=0;
     let locatedCustomerCount=0;
     const detailRows=[];
@@ -133,16 +135,17 @@ export function projectOpsmapWmsDispatch(exported, registry, postcodes=new Map()
         detailRows.push({customerCode:row.customerCode,amount:row.amount});
       }
     }
-    // The verified export counts deliveries. Neither format carries the WMS summary's waypoint count.
+    // Legacy exports carry delivery counts only. The paired WMS round also verifies STOP_LOC_CNT.
     return {vehicle,amount,deliveryCount:Number.isSafeInteger(deliveryCount)&&deliveryCount>=0?deliveryCount:null,
-      waypointCount:null,uniqueCustomerCount:details.length,locatedCustomerCount,
+      waypointCount:officialRound&&Number.isSafeInteger(waypointCount)&&waypointCount>=0?waypointCount:null,
+      uniqueCustomerCount:details.length,locatedCustomerCount,
       routeCode:null,detailState:vehicle==='미배정'?'UNAVAILABLE':'VERIFIED',
       detailTotal,difference,unmatched,detailRows};
   });
   return {date:exported.date,center:exported.center,source:exported.source,
     route:{state:'VERIFIED',observedAt:exported.observedAt,source:exported.source,rows,
       // XLSX verifies the sums of the supplied file. The counted FreshOn response verifies source coverage.
-      sourceComplete:exported.source===FRESHON_JSON_WMS_SOURCE&&exported.sourceComplete===true,
+      sourceComplete:(officialRound||exported.source===FRESHON_JSON_WMS_SOURCE)&&exported.sourceComplete===true,
       unassigned:exported.vehicles.find(row=>row.vehicle==='미배정')?.deliveryCount??0},
     amounts:{date:exported.date,state:'VERIFIED',observedAt:exported.observedAt,source:exported.source,
       ...(Number.isSafeInteger(exported.total)&&Number.isSafeInteger(exported.deliveryCount)&&exported.deliveryCount>=0
@@ -172,7 +175,7 @@ function unpackArchive(value,date,expected,key) {
   }
   try {
     const decipher = createDecipheriv('aes-256-gcm',key,Buffer.from(value.nonce,'hex'));
-    const captured=expected.format===FRESHON_JSON_WMS_FORMAT?value.observedAt:expected.observedAt;
+    const captured=expected.format?value.observedAt:expected.observedAt;
     if(typeof captured!=='string'||!Number.isFinite(Date.parse(captured))||
       Date.parse(captured)>Date.parse(expected.observedAt))throw Error('Invalid archive time');
     decipher.setAAD(archiveBinding(date,{...expected,observedAt:captured}));
@@ -319,9 +322,12 @@ function verifyManifestWorkbook(date,bytes,manifest) {
 }
 
 function verifyManifestRelease(date,bytes,manifest) {
-  if(manifest.format!==FRESHON_JSON_WMS_FORMAT)return {data:verifyManifestWorkbook(date,bytes,manifest)};
+  if(!manifest.format)return {data:verifyManifestWorkbook(date,bytes,manifest)};
   if(!bytes?.length||bytes.length>maxWorkbookBytes||digest(bytes)!==manifest.sha256)throw scopeError('WMS_EXPORT_DIGEST');
-  return decodeFreshonWmsDispatch(bytes,{date,observedAt:manifest.observedAt});
+  const scope={date,observedAt:manifest.observedAt};
+  if(manifest.format===WMS_OFFICIAL_ROUND_FORMAT)return decodeWmsOfficialRound(bytes,scope);
+  if(manifest.format===FRESHON_JSON_WMS_FORMAT)return decodeFreshonWmsDispatch(bytes,scope);
+  throw scopeError('WMS_EXPORT_SCOPE');
 }
 
 function matchesExistingWorkbook(date,previous,proof) {
@@ -336,9 +342,24 @@ function matchesExistingWorkbook(date,previous,proof) {
     });
 }
 
+function releaseFormatApproved(format,env) {
+  if(format===undefined)return true;
+  if(format===WMS_OFFICIAL_ROUND_FORMAT)return env.OPSMAP_STAGE_WMS_OFFICIAL_ROUND_PUBLISH_APPROVED==='1';
+  return format===FRESHON_JSON_WMS_FORMAT&&env.OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED==='1';
+}
+
+// An approved adapter hands over one already-read GAS wave. The publisher
+// never queries MIS or requests either WMS response again.
+export async function publishStageWmsOfficialRound({round,date,replaceSha256,env=process.env,fetchImpl=fetch}={}) {
+  if(!releaseFormatApproved(WMS_OFFICIAL_ROUND_FORMAT,env))throw scopeError('WMS_EXPORT_SCOPE');
+  const bytes=encodeWmsOfficialRound(round,date);
+  const observedAt=new Date(round.plan.observedAt).toISOString();
+  return publishStageWmsDispatchExport({bytes,date,observedAt,sha256:digest(bytes),replaceSha256,
+    format:WMS_OFFICIAL_ROUND_FORMAT,env,fetchImpl});
+}
+
 export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha256,replaceSha256,format,env=process.env,fetchImpl=fetch}={}){
-  if(!isStageWmsDay(date)||format!==undefined&&(format!==FRESHON_JSON_WMS_FORMAT||
-    env.OPSMAP_STAGE_WMS_FRESHON_JSON_PUBLISH_APPROVED!=='1'))throw scopeError('WMS_EXPORT_SCOPE');
+  if(!isStageWmsDay(date)||!releaseFormatApproved(format,env))throw scopeError('WMS_EXPORT_SCOPE');
   if(replaceSha256!==undefined&&!/^[a-f0-9]{64}$/.test(replaceSha256))throw scopeError('WMS_EXPORT_RELEASE_BASE_INVALID');
   const key=stageWmsArchiveKey(env);
   const archive=createStageWmsReleaseStore({env,fetchImpl,write:true});
@@ -371,6 +392,8 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
       await verifyStored(existing);
       return {state:'VERIFIED_NOOP',date,sha256};
     }
+    if(existing?.format===WMS_OFFICIAL_ROUND_FORMAT&&format!==WMS_OFFICIAL_ROUND_FORMAT)
+      throw scopeError('WMS_EXPORT_OFFICIAL_DOWNGRADE');
     if(existing&&!existing.format&&verified.proof&&matchesExistingWorkbook(date,await verifyStored(existing),verified.proof)){
       return {state:'VERIFIED_NOOP',date,sha256:existing.sha256};
     }
@@ -379,7 +402,8 @@ export async function publishStageWmsDispatchExport({bytes,date,observedAt,sha25
     }else{
       if(existing?.sha256!==replaceSha256)throw scopeError('WMS_EXPORT_RELEASE_BASE_CHANGED');
       if(Date.parse(existing.observedAt)>=Date.parse(dateEntry.observedAt))throw scopeError('WMS_EXPORT_RELEASE_STALE');
-      await verifyStored(existing);
+      const preceding=await verifyStored(existing);
+      if(verified.roundId&&preceding.roundId===verified.roundId)throw scopeError('WMS_EXPORT_OFFICIAL_ROUND_CONFLICT');
     }
     if(attempt===0){
       const sealed=sealArchive(bytes,date,dateEntry,key);

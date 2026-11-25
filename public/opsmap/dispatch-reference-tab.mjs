@@ -92,7 +92,7 @@ if (tabs && sidebar && bridge) {
           rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261126-roster-rows',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261126-roster-rows');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261126-wms-official-round');
         if (opening!==attempt||!session()) return;
         const createReview=comparisonEnabled?(await import('./dispatch-reference-review.mjs?v=20261126-v4-readable')).createDispatchScreenReview:null;
         if (opening!==attempt||!session()) return;

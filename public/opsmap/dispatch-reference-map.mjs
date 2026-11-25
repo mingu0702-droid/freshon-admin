@@ -1,4 +1,4 @@
-import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs?v=20261126-v4-readable';
+import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs?v=20261126-wms-official-round';
 import {summarizeDispatchPeriod} from './dispatch-reference-period.mjs?v=20261124-period-proof';
 import {dispatchOverlapVehicles,dispatchVehicleColor,mountDispatchV4} from './dispatch-reference-v4.mjs?v=20261126-roster-rows';
 
