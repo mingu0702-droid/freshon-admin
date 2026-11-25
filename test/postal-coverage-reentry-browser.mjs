@@ -8,6 +8,7 @@ const postalCode = '06241';
 const errors = [];
 const rosterReads = [];
 const operationsReads = [];
+const dispatchReads = [];
 const viewportReads = [];
 let generation = 'before-switch';
 let observedDays = 76;
@@ -41,7 +42,8 @@ try {
       viewportReads.push([url.searchParams.get('level'),url.searchParams.get('box')]);
       data = {
         period, generation, stale:true, completeness:{ observed:observedDays, missing:[], sourceMissing:[], centerObserved:{}, unverified:[] },
-        summary:{ recorded:observedDays ? 1 : 0 }, source:{ label:'fixture', url:'#' }, candidates:[], tiles:[], tones:[], badges:[], operationsAvailable:true,
+        summary:{ recorded:observedDays ? 1 : 0 }, source:{ label:'fixture', url:'#' }, candidates:[], tiles:[], tones:[], badges:[],
+        operationsAvailable:true,dispatchDensityAvailable:true,
       };
     } else if(endpoint === 'operations') {
       const days=Number(url.searchParams.get('days')),area=url.searchParams.get('area');
@@ -51,6 +53,14 @@ try {
       const scoped=area ? {counts,next:null,members:[{code:'S123',name:'검증 매장',flags:4}]} :
         {summary:{...counts,observedAreas:1,missingAreas:0},tones:[[6241,'COMPLETED']]};
       data={period:operationPeriod,publishedThrough:'2026-11-23',observedDays:Math.min(76,days),...scoped};
+    } else if(endpoint === 'dispatch-density') {
+      const days=Number(url.searchParams.get('days')),area=url.searchParams.get('area');
+      dispatchReads.push([days,area,url.searchParams.get('registry')]);
+      const registry='d'.repeat(64),dispatchPeriod={days,start:{7:'2026-11-19',30:'2026-10-27',60:'2026-09-27',90:'2026-08-28'}[days],
+        end:'2026-11-25'};
+      data={registry,period:dispatchPeriod,publishedThrough:'2026-11-25',observedDays:4,
+        ...(area?{counts:area===postalCode?{dispatchCount:4,areaKm2:.02,density:200}:null}:
+          {summary:{located:4,unlocated:2,observedScopeDays:4,missingScopeDays:days*3-4},tones:[[6241,'HIGH']]})};
     } else if (endpoint === 'search') {
       searchReads++;
       data = [{ id:postalCode, name:postalCode, kind:'area', location }];
@@ -143,6 +153,23 @@ try {
     assert.deepEqual(operationsReads.findLast(([,area])=>area),[Number(value),postalCode]);
   }
   assert.equal(await page.locator('#postalArchive').isVisible(),false);
+  await page.locator('#postalLayer').selectOption('dispatch-density');
+  await page.locator('#postalLegendDispatch').getByText('배차 밀도 높음').waitFor();
+  assert.equal(await page.locator('#postalLegendOperations').isVisible(),false);
+  for (const value of ['7','30','60','90']) {
+    await page.locator('#coverageDays').selectOption(value);
+    await page.locator('#postalOperationsSummary').getByText(new RegExp('^'+value+'일 · .*2026-11-25$')).waitFor();
+    await page.locator('#postalOperationsDetail').getByText(/좌표 연결 배차 4건 · 200건\/km²/).waitFor();
+    assert.deepEqual(dispatchReads.findLast(([,area])=>area),[Number(value),postalCode,'d'.repeat(64)]);
+  }
+  await page.evaluate(() => {
+    window.coverageFixture.close();
+    window.coverageFixture.open();
+  });
+  assert.equal(await page.locator('#postalLayer').inputValue(),'dispatch-density');
+  assert.equal(await page.locator('#coverageDays').inputValue(),'90');
+  await page.locator('#postalOperationsDetail').getByText(/좌표 연결 배차 4건/).waitFor();
+  assert.match(await page.locator('#postalMapSource').innerText(),/배차집계 11\/25 기준/);
   await page.locator('#postalLayer').selectOption('archive');
   await page.locator('#postalPeriod').getByText(/2026-11-07/).waitFor();
   await page.getByText(generation, { exact:true }).waitFor();

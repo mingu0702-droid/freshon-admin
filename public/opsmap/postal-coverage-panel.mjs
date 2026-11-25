@@ -11,6 +11,7 @@ const labels = {
   CANDIDATE: '기간 내 미배송 확인', UNKNOWN: '자료 미확인',
 };
 const operationLabels = { COMPLETED:'배송완료 근거', DISPATCH:'배차확정 근거', ORDER:'주문확정 근거', UNKNOWN:'운영이력 확인 필요' };
+const dispatchLabels = { HIGH:'배차 밀도 높음', LOW:'배차 밀도 낮음', UNKNOWN:'배차 근거 미확인' };
 const centerNames = { all: '전체', osan: '오산', honam: '호남', yeongnam: '영남' };
 const osanLocalBounds = [126.67, 36.96, 127.29, 37.40];
 const fmt = new Intl.NumberFormat('ko-KR');
@@ -61,7 +62,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<div class="coverage-search-row"><input id="coverageQuery" type="search" placeholder="주소, 매장명, 고객코드, 5자리 우편번호" ' +
     'maxlength="200" required autocomplete="off"><button type="submit" class="coverage-primary">검색</button></div></form>' +
     '<div class="postal-scope"><label id="postalLayerControl" hidden>지도 표시 기준 <select id="postalLayer" class="field">' +
-    '<option value="archive">배송 밀도 게시본</option><option value="operations">최신 운영 근거</option></select></label>' +
+    '<option value="archive">배송 밀도 게시본</option><option value="operations">최신 운영 근거</option>' +
+    '<option value="dispatch-density" disabled hidden>배차 기준 밀도</option></select></label>' +
     '<div class="coverage-filters"><label>지도 집계 기간 <select id="coverageDays">' +
     '<option value="7" disabled hidden>7일</option><option value="30">30일</option><option value="60">60일</option><option value="90" selected>90일</option></select></label>' +
     '<label>담당 센터 <select id="coverageCenter"><option value="all">전체</option><option value="osan">오산</option>' +
@@ -101,7 +103,9 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<div id="postalLegendArchive" class="coverage-legend postal-legend" aria-label="배송 밀도 범례">' +
     Object.entries(labels).map(([key,label])=>'<span data-postal-tone="'+key+'">'+label+'</span>').join('')+'</div>' +
     '<div id="postalLegendOperations" class="coverage-legend postal-legend" aria-label="최신 운영 근거 범례" hidden>' +
-    Object.entries(operationLabels).map(([key,label])=>'<span data-postal-tone="'+key+'">'+label+'</span>').join('')+'</div></div>' +
+    Object.entries(operationLabels).map(([key,label])=>'<span data-postal-tone="'+key+'">'+label+'</span>').join('')+'</div>' +
+    '<div id="postalLegendDispatch" class="coverage-legend postal-legend" aria-label="배차 기준 밀도 범례" hidden>' +
+    Object.entries(dispatchLabels).map(([key,label])=>'<span data-postal-tone="'+key+'">'+label+'</span>').join('')+'</div></div>' +
     '<div class="postal-map-controls" role="group" aria-label="지도 보기"><button type="button" data-preset="nation">전국</button>' +
     '<button type="button" data-preset="region">오산·화성</button><button type="button" id="postalZoomIn" aria-label="지도 확대">+</button>' +
     '<button type="button" id="postalZoomOut" aria-label="지도 축소">−</button></div>' +
@@ -125,7 +129,9 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     if (entries.some(entry => entry.target === host) && map) { map.relayout(); scheduleView(); }
   });
   const range = () => find('coverageDays').value;
-  const latest = () => find('postalLayer').value === 'operations';
+  const layer = () => find('postalLayer').value;
+  const latest = () => layer() !== 'archive';
+  const dispatchDensity = () => layer() === 'dispatch-density';
   const baseScope = () => ({ days: range()==='7'?'90':range(), center: find('coverageCenter').value });
   const scope = () => view ? { days: view.period.days, center: view.center, generation: view.generation } : baseScope();
   const timeout = signal => AbortSignal.any([signal, AbortSignal.timeout(16000)]);
@@ -141,9 +147,9 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       '주문확정 '+fmt.format(orders)+'곳 · 배차확정 '+fmt.format(dispatch)+'곳 · 배송완료 '+fmt.format(completed)+'곳'];
 
   async function readOperations(generation, signal) {
-    const params=operationsParameters(generation), key=JSON.stringify(params);
+    const endpoint=layer(),params=operationsParameters(generation),key=JSON.stringify([endpoint,params]);
     if (operationsCache?.key===key && operationsCache.until>Date.now()) return operationsCache.data;
-    const data=await read('operations',params,signal);
+    const data=await read(endpoint,params,signal);
     signal.throwIfAborted();
     operationsCache={key,data,until:Date.now()+50000};
     return data;
@@ -151,6 +157,15 @@ export function createCoveragePanel({ workspace, header, openStore }) {
 
   function showOperations(data) {
     const target=find('postalOperationsSummary');
+    if(dispatchDensity()) {
+      if(!data||!data.observedDays) {target.replaceChildren(node('p','확정배차 자료 미확인'));return;}
+      const {period,summary}=data;
+      target.replaceChildren(node('h2','배차 기준 밀도'),node('p',statsText(period)),
+        node('p','좌표 연결 '+fmt.format(summary.located)+'건 · 위치·권역 미확인 '+fmt.format(summary.unlocated)+'건'),
+        node('p','자료가 확인된 날짜·센터 '+fmt.format(summary.observedScopeDays)+'건 · 미확인 '+fmt.format(summary.missingScopeDays)+'건'),
+        node('p','같은 배송일에는 매장 한 곳을 한 건으로 계산합니다. 현재 위치로 확인된 배차 건수를 권역 면적(㎢)으로 나눕니다.'));
+      return;
+    }
     if (!data) { target.replaceChildren(node('p','운영이력 확인 필요')); return; }
     const {period,publishedThrough,summary}=data;
     target.replaceChildren(node('h2','최신 운영 근거'),node('p',statsText(period)),
@@ -166,7 +181,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     const days=data?.period?.days;
     const observed=latest()?data?.observedDays:data?.completeness?.observed;
     if(!date||!Number.isInteger(days)||!Number.isInteger(observed)||observed<0||observed>days){target.textContent='';return;}
-    target.textContent=(latest()?'운영이력 ':'배송집계 ')+date+' 기준 · '+days+'일 중 '+observed+'일 자료 확인';
+    const basis=dispatchDensity()?'배차집계 ':latest()?'운영이력 ':'배송집계 ';
+    target.textContent=basis+date+' 기준 · '+days+'일 중 '+observed+'일 '+(dispatchDensity()?'배차 근거 확인':'자료 확인');
   }
 
   async function showOperationsArea(area, offset=0) {
@@ -175,16 +191,30 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     panel.replaceChildren();
     panel.hidden=!area;
     if (!area) return;
+    const endpoint=layer(),isDispatch=endpoint==='dispatch-density';
     const action=(label,run)=>Object.assign(node('button',label),{type:'button',onclick:run});
     const title=node('h2',area.id==='unmatched'?'권역 연결 미확인':'우편번호 '+area.id);
-    const line=node('p','운영 근거 확인 중');
+    const line=node('p',isDispatch?'확정배차 확인 중':'운영 근거 확인 중');
     panel.append(title,action('닫기',()=>areaCard(null)),line);
-    if (!view?.generation || area.id==='unmatched') { line.textContent='운영이력 확인 필요'; return; }
+    if (!view?.generation || area.id==='unmatched') {
+      line.textContent=isDispatch?'이 권역의 확정배차 자료 미확인':'운영이력 확인 필요';
+      return;
+    }
+    if(isDispatch&&!operationsDisplayed?.registry) {line.textContent='확정배차 자료 미확인';return;}
     const controller=operationsDetailRead=new AbortController();
     try {
-      const data=await read('operations',{...operationsParameters(view.generation),area:area.id,offset},timeout(controller.signal));
-      if(controller.signal.aborted || !latest() || selectedArea?.id !== area.id) return;
+      const params={...operationsParameters(view.generation),area:area.id,
+        ...(isDispatch?{registry:operationsDisplayed.registry}:{offset})};
+      const data=await read(endpoint,params,timeout(controller.signal));
+      if(controller.signal.aborted || layer()!==endpoint || selectedArea?.id !== area.id) return;
       line.textContent=statsText(data.period)+' · 원장 기준 '+data.publishedThrough;
+      if(isDispatch) {
+        const counts=data.counts;
+        panel.append(node('p',counts
+          ? '좌표 연결 배차 '+fmt.format(counts.dispatchCount)+'건 · '+fmt.format(Math.round(counts.density*10)/10)+'건/km²'
+          : '이 권역의 확정배차 자료 미확인'));
+        return;
+      }
       if (!data.counts) { panel.append(node('p','운영이력 확인 필요')); return; }
       panel.append(...operationFigures(data.counts).map(text=>node('p',text)));
       if (!data.counts.observed) panel.append(node('p','이 권역의 운영이력 확인이 필요합니다.'));
@@ -199,8 +229,10 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       panel.append(list);
       if(offset)panel.append(action('이전',()=>void showOperationsArea(area,Math.max(0,offset-12))));
       if(data.next!==null)panel.append(action('다음',()=>void showOperationsArea(area,data.next)));
-    } catch {
-      if(!controller.signal.aborted)line.textContent='운영이력을 확인하지 못했습니다.';
+    } catch(error) {
+      if(controller.signal.aborted)return;
+      if(isDispatch&&error.status===409){void readView(true);return;}
+      line.textContent=isDispatch?'확정배차를 확인하지 못했습니다.':'운영이력을 확인하지 못했습니다.';
     }
   }
 
@@ -295,6 +327,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
 
   function applyView(data, sameScope) {
     find('postalLayerControl').hidden=!data.operationsAvailable;
+    const dispatchOption=find('postalLayer').querySelector('[value="dispatch-density"]');
+    dispatchOption.disabled=dispatchOption.hidden=!data.dispatchDensityAvailable;
     const { completeness, summary, source } = data;
     const observed = hasDeliveryEvidence(data);
     root.dataset.postalView = JSON.stringify({ days: data.period.days, center: data.center, tier: data.tier,
@@ -345,7 +379,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   async function readView(force = false) {
     if (!active || !map) return;
     const { box, level, world } = map.viewport(), params = baseScope();
-    const key = [range(),latest(),params.center,level,Boolean(world), ...box.map(value => value.toFixed(5))].join(':');
+    const key = [range(),layer(),params.center,level,Boolean(world), ...box.map(value => value.toFixed(5))].join(':');
     const first = !view && Boolean(world);
     const firstScope = first ? [params.days,params.center].join(':') : null;
     if (loadingKey === key || (!force && key === viewKey) || (first && firstScope === bootstrapScope)) return;
@@ -362,6 +396,11 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       const frame = first && !geometry.hasOverview() ? await firstViewport(requested,signal) : null;
       const data = frame?.view || await read('view',requested,signal);
       if (!active || viewportRead !== controller) return;
+      if(dispatchDensity()&&!data.dispatchDensityAvailable) {
+        find('postalLayer').value='archive';
+        find('postalLayer').onchange();
+        return;
+      }
       const sameRelease = view?.generation === data.generation && view?.boundary === data.boundary &&
         view?.assignmentReview === data.assignmentReview;
       if (view && !sameRelease) clearPublishedView();
@@ -372,8 +411,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       if (!active || viewportRead !== controller) return;
       const operationsChanged=operationsDisplayed!==operations;
       operationsDisplayed=operations;
-      const same = sameRelease && view?.period.days === data.period.days && view.center === params.center;
-      view = { ...data, center: params.center };
+      const same = sameRelease && view?.period.days === data.period.days && view.center === params.center && view.layer===layer();
+      view = { ...data, center: params.center,layer:layer() };
       viewKey = key;
       host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame), ...geometry.metrics() });
       applyView(view,same);
@@ -387,7 +426,9 @@ export function createCoveragePanel({ workspace, header, openStore }) {
         searchNeedsRefresh = false;
         void runSearch(submittedSearch, { refresh:true });
       }
-      const missing = (latest() ? !operations : !hasDeliveryEvidence(data)) ? '선택 범위의 배송 자료 미확인' : '';
+      const missing=dispatchDensity()
+        ? operations?.observedDays?'':'선택 범위의 확정배차 자료 미확인'
+        : (latest()?!operations:!hasDeliveryEvidence(data))?'선택 범위의 배송 자료 미확인':'';
       message(missing);
     } catch (error) {
       if (!active || viewportRead !== controller || controller.signal.aborted) return;
@@ -599,11 +640,13 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     find('postalArchiveStatus').hidden=showLatest;
     find('postalOperations').hidden=!showLatest;
     find('postalLegendArchive').hidden=showLatest;
-    find('postalLegendOperations').hidden=!showLatest;
+    find('postalLegendOperations').hidden=layer()!=='operations';
+    find('postalLegendDispatch').hidden=!dispatchDensity();
     find('postalMapSource').textContent='';
     viewportRead?.abort();
     loadingKey=bootstrapScope=null;
     operationsDetailRead?.abort();
+    operationsDisplayed=null;
     map?.clear(true);
     areaCard(selectedArea);
     scheduleView();

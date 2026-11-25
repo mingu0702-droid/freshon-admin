@@ -52,3 +52,44 @@ export function projectPostalOperations(ledger, assignments, { days, center, end
     observedDays: observedDates.size, summary, areas,
   };
 }
+
+export function projectPostalDispatchDensity(ledger, assignments, { days, center, end, areaSize, highAt }) {
+  const dates=datesFor(end,90).slice(-days);
+  const window=new Set(dates);
+  const selectedCenters=center==='all'?centers:[center];
+  const allowedCenters=new Set(selectedCenters);
+  const areas=new Map();
+  const observedDates=new Set();
+  let located=0, unlocated=0, observedScopeDays=0;
+  for(const {date,centerKey,source,coverage,rows} of ledger.days) {
+    if(source!=='wms_dispatch'||!window.has(date)||!allowedCenters.has(centerKey))continue;
+    const customers=new Set(rows.filter(row=>row.evidence==='dispatch_confirmed').map(row=>row.customerCode));
+    if(customers.size||coverage==='complete') {
+      observedDates.add(date);
+      observedScopeDays++;
+    }
+    for(const code of customers) {
+      const member=assignments.get(code);
+      if(member?.center!==centerKey) {unlocated++;continue;}
+      let area=areas.get(member.area);
+      if(!area) {
+        const areaKm2=areaSize(member.area);
+        if(!Number.isFinite(areaKm2)||areaKm2<=0) {unlocated++;continue;}
+        area={areaKm2,dispatchCount:0,density:0};
+        areas.set(member.area,area);
+      }
+      area.dispatchCount++;
+      located++;
+    }
+  }
+  const tones=[];
+  for(const [id,area] of areas) {
+    area.density=area.dispatchCount/area.areaKm2;
+    tones.push([id,area.density>=highAt?'HIGH':'LOW']);
+  }
+  return {
+    period:{days,start:dates[0],end}, publishedThrough:ledger.endDate, observedDays:observedDates.size,
+    summary:{located,unlocated,observedScopeDays,missingScopeDays:days*selectedCenters.length-observedScopeDays},
+    areas,tones
+  };
+}

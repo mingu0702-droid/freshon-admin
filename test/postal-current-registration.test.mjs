@@ -114,6 +114,25 @@ test('current roster combines safe legacy and added identities while old holds a
   assert.deepEqual([...assignments.postcodes],[['S3','11111'],['S1','11111'],['S2','11111']]);
 });
 
+test('dispatch density uses verified current points and excludes legacy mismatches and address-only links',async()=>{
+  const rows=[makeRow('S1',126.5,{centerGroup:'yeongnam'}),makeRow('S2',126.51),
+    makeRow('S3',126.52),makeRow('S4',126.53),makeRow('S5',126.54,{centerGroup:'honam'})];
+  delete rows[3].verifiedLocation;
+  const read=createCurrentPostalRegistrationReader({readRegistry:async()=>({ref:{version:binding.registry},rows}),
+    readAsset:async()=>checked(new Map([['S1',{area:11111}]]))});
+  const legacy=[
+    {code:'S2',id:11111,address:rows[1].basicAddress,center:'osan',lat:37.5,lng:126.51},
+    {code:'S3',id:11111,address:rows[2].basicAddress,center:'osan',lat:37.5,lng:126.53},
+    {code:'S4',id:11111,address:rows[3].basicAddress,center:'osan',lat:37.5,lng:126.53},
+    {code:'S5',id:11111,address:rows[4].basicAddress,center:'osan',lat:37.5,lng:126.54}
+  ];
+  const input={...args,readLegacy:async()=>legacy};
+  const density=await read.dispatchDensityAssignments(input);
+  assert.equal((await read(input)).registered,4);
+  assert.deepEqual([...density.assignments],[['S2',{area:11111,center:'osan'}],['S1',{area:11111,center:'yeongnam'}]]);
+  await assert.rejects(()=>read.dispatchDensityAssignments({...input,registry:'d'.repeat(64)}),/REGISTRATION_CHANGED/);
+});
+
 test('remote read is immutable, read-only and checked against independent head',async()=>{
   const {bytes,sha256}=sealCurrentPostalRegistration({binding,assignments:new Map([['S1',{area:11111}]])},key);
   const ref='f'.repeat(40),approvedRelease={ref,sha256};

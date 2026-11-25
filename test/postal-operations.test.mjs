@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {projectPostalOperations} from '../src/shadowCoverage/postalOperations.js';
+import {projectPostalDispatchDensity,projectPostalOperations} from '../src/shadowCoverage/postalOperations.js';
 
 const order='order_confirmed', dispatch='dispatch_confirmed', delivery='delivery_completed';
 const dates=(date,centerKey,entries)=>({date,centerKey,rows:entries.map(([customerCode,evidence])=>({customerCode,evidence}))});
@@ -40,4 +40,31 @@ test('each supported window and center uses its own positive records with no geo
   assert.equal(yeongnam.summary.completed,0);
   assert.equal(yeongnam.summary.unplaced,1);
   assert.deepEqual([...yeongnam.areas.get(6241).members],[['S5',1]]);
+});
+
+test('dispatch density counts one confirmed customer per date and center, and leaves unmatched evidence visible',()=>{
+  const day=(date,centerKey,source,rows,coverage='partial')=>({...dates(date,centerKey,rows),source,coverage});
+  const archive={endDate:'2026-11-25',days:[
+    day('2026-09-10','osan','wms_dispatch',[['S1',dispatch]]),
+    day('2026-10-29','osan','wms_dispatch',[['S1',dispatch]]),
+    day('2026-11-24','osan','wms_dispatch',[['S1',dispatch],['S1',dispatch],['S2',dispatch]]),
+    day('2026-11-25','osan','wms_dispatch',[['S1',dispatch],['S3',dispatch],['S4',dispatch]]),
+    day('2026-11-25','yeongnam','wms_dispatch',[['S3',dispatch]]),
+    day('2026-11-25','honam','wms_dispatch',[]),
+    day('2026-11-25','osan','delivery_admin',[['S5',delivery],['S6',dispatch]]),
+    day('2026-11-25','osan','freshon_orders',[['S7',order]]),
+  ]};
+  const points=new Map([['S1',{area:6241,center:'osan'}],['S3',{area:6253,center:'yeongnam'}],
+    ['S4',{area:6254,center:'osan'}],['S5',{area:6241,center:'osan'}],['S6',{area:6241,center:'osan'}]]);
+  const read=(days,center)=>projectPostalDispatchDensity(archive,points,{
+    days,center,end:'2026-11-25',highAt:100,areaSize:id=>new Map([[6241,.01],[6253,1]]).get(id)
+  });
+  assert.deepEqual([7,30,60,90].map(days=>read(days,'osan').summary.located),[2,3,3,4]);
+  const recent=read(7,'all');
+  assert.deepEqual(recent.summary,{located:3,unlocated:3,observedScopeDays:3,missingScopeDays:18});
+  assert.equal(recent.observedDays,2);
+  assert.deepEqual(recent.tones,[[6241,'HIGH'],[6253,'LOW']]);
+  assert.deepEqual(recent.areas.get(6241),{areaKm2:.01,dispatchCount:2,density:200});
+  assert.equal(read(7,'honam').observedDays,0);
+  assert.deepEqual(read(7,'honam').tones,[]);
 });

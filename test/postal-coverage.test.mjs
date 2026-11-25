@@ -297,3 +297,26 @@ test('supplemental postal registration route is opt-in and session-protected', a
   assert.equal(response.headers.get('Cache-Control'),'private, no-store');
   assert.equal(read,0,'unconfigured geometry must fail before the supplemental asset');
 });
+
+test('dispatch density supports a bounded seven-day scope and staff-only generation-bound detail',async t=>{
+  const app=express();
+  const postalRegistration=()=>{};
+  postalRegistration.dispatchDensityAssignments=()=>{assert.fail('Missing verified geometry must fail first');};
+  mountPostalCoverage({app,appRoot:process.cwd(),postal:{readCurrentRegistration:postalRegistration,readOperations:()=>{}},
+    requireStaff(req,res,next){return req.get('X-Fixture-Staff')==='test'?next():res.sendStatus(401);}});
+  const http=app.listen(0,'127.0.0.1');
+  t.after(()=>{http.closeAllConnections();http.close();});
+  await once(http,'listening');
+  const url=new URL('/api/map-phase2b/private/shadow-coverage/postal/dispatch-density','http://127.0.0.1:'+http.address().port);
+  const headers={'X-Fixture-Staff':'test'};
+  url.searchParams.set('days','7');
+  url.searchParams.set('generation','a'.repeat(64));
+  assert.equal((await fetch(url)).status,401);
+  assert.equal((await fetch(url,{headers})).status,503);
+  url.searchParams.set('area','06241');
+  assert.equal((await fetch(url,{headers})).status,400);
+  url.searchParams.set('registry','b'.repeat(64));
+  assert.equal((await fetch(url,{headers})).status,503);
+  url.searchParams.set('days','8');
+  assert.equal((await fetch(url,{headers})).status,400);
+});

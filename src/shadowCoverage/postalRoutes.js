@@ -25,7 +25,7 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
   function route(path, perform, send = json) {
     app.get(postalRoot + path, ...entry, async (req, res) => {
       res.set('Cache-Control', 'private, no-store').vary('Cookie');
-      const scope = criteria(req.query,path==='/operations');
+      const scope = criteria(req.query,path==='/operations'||path==='/dispatch-density');
       if (!scope) return res.status(400).json({ ok: false, error: 'POSTAL_QUERY_INVALID' });
       const started = performance.now();
       try {
@@ -91,6 +91,17 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     }
     return runtime.operations({...scope,area:area===undefined?undefined:Number(area),offset:Number(offset)});
   });
+  if(postal?.readOperations&&postal.readCurrentRegistration?.dispatchDensityAssignments) {
+    route('/dispatch-density',(req,scope,{runtime})=>{
+      const {area,registry}=req.query;
+      if(!scope.generation||Object.keys(req.query).some(key=>!['days','center','generation','registry','area'].includes(key))||
+        registry!==undefined&&(typeof registry!=='string'||!hash.test(registry))||
+        area!==undefined&&(registry===undefined||typeof area!=='string'||!/^\d{5}$/.test(area))) {
+        throw Error('POSTAL_QUERY_INVALID');
+      }
+      return runtime.dispatchDensity({...scope,registry,area:area===undefined?undefined:Number(area)});
+    });
+  }
   if(postal?.readCurrentRegistration) route('/current-registration',(req,scope,{runtime})=>{
     const {registry,area,offset='0'}=req.query;
     if(!scope.generation || registry!==undefined&&(typeof registry!=='string'||!hash.test(registry)) ||

@@ -77,6 +77,7 @@ export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
     const byCode=new Map(before.rows.map(row=>[row.customerCode,row]));
     if(byCode.size!==before.rows.length)throw invalid();
     const byCenter={all:new Map(),osan:new Map(),yeongnam:new Map(),honam:new Map()};
+    const dispatchDensityAssignments=new Map();
     const scope={all:0,osan:0,yeongnam:0,honam:0}, additional={...scope};
     const countScope=center=>{
       scope.all++;
@@ -95,7 +96,7 @@ export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
     for(const row of byCode.values())if(row.lifecycle==='ACTIVE')countScope(row.centerGroup);
     const legacy=readLegacy?await readLegacy():[];
     const seenLegacy=new Set();
-    for(const {code,name,address,center,id} of legacy){
+    for(const {code,name,address,center,id,lat,lng} of legacy){
       if(!identity.test(code)||seenLegacy.has(code))throw invalid();
       seenLegacy.add(code);
       const current=byCode.get(code);
@@ -104,13 +105,18 @@ export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
       if(current&&(current.lifecycle!=='ACTIVE'||current.addressHash!==customerRegistryAddressHash(address)||
           centers.has(current.centerGroup)&&current.centerGroup!==center))continue;
       add(code,current?.customerName||name,current?.centerGroup||center,id,false);
+      if(current?.centerGroup===center&&centers.has(center)&&isCurrentPostalPoint(current)&&
+          current.verifiedLocation.lat===lat&&current.verifiedLocation.lng===lng) {
+        dispatchDensityAssignments.set(code,{area:id,center});
+      }
     }
     for(const [code,id] of asset.rows){
       const row=byCode.get(code);
       if(row?.lifecycle!=='ACTIVE'||!isCurrentPostalPoint(row)||hasLegacyCode(code)||seenLegacy.has(code)||!hasArea(id))throw invalid();
       add(code,row.customerName,row.centerGroup,id,true);
+      if(centers.has(row.centerGroup))dispatchDensityAssignments.set(code,{area:id,center:row.centerGroup});
     }
-    return {byCenter,scope,additional};
+    return {byCenter,scope,additional,dispatchDensityAssignments};
   }
   async function verifiedIndex({registry,boundary,release,hasArea,hasLegacyCode,readLegacy}) {
     const before=await readRegistry();
@@ -148,6 +154,10 @@ export function createCurrentPostalRegistrationReader({readAsset,readRegistry,
     index.osanPostcodes??=new Map([...index.byCenter.osan].flatMap(([id,members])=>
       members.map(({code})=>[code,String(id).padStart(5,'0')])));
     return {registryVersion:version,postcodes:index.osanPostcodes};
+  };
+  read.dispatchDensityAssignments=async source=>{
+    const {index,version}=await verifiedIndex(source);
+    return {registryVersion:version,assignments:index.dispatchDensityAssignments};
   };
   return read;
 }
