@@ -22,7 +22,8 @@ export function mountProductionMapApi(app,{
   previewEnabled,requireView,readPhase2bSnapshot,getSnapshotMemory,phase2bKstDate,
   normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus,
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
-  publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement
+  publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement,
+  warmCoordinateSupplement=true
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const stageReadModelEnabled=true;
@@ -36,7 +37,7 @@ export function mountProductionMapApi(app,{
   app.use(publicResponse);
   const mapFreshness=mountMapDataFreshness(app,{callHub,requireView,previewEnabled,modelStatus:stageReadModel.status,readBaseVehicleMaster});
   const coordinateSupplement=sharedCoordinateSupplement||createCoordinateSupplement({callHub});
-  if(process.env.RENDER_EXTERNAL_URL==='https://freshon-admin-1.onrender.com')void coordinateSupplement.refresh();
+  if(warmCoordinateSupplement&&process.env.RENDER_EXTERNAL_URL==='https://freshon-admin-1.onrender.com')void coordinateSupplement.refresh();
   if(publicDir)app.get(['/map-phase2b-snapshot.json','/customer-master-20260604.json','/vehicle-data.js','/new-area-data.js'],async(req,res)=>{
     try{
       const raw=await fs.readFile(path.join(publicDir,path.basename(req.path)),'utf8');
@@ -169,7 +170,7 @@ app.get("/api/map-phase2b/preview/period", requireView, compression({ threshold:
     const snapshot = await readPhase2bSnapshot();
     const coords = new Map((snapshot?.rows || []).map(row => [row.customerCode, row]));
     result.data = result.data.map(row => ({ ...row, customerName: row.customerName || coords.get(row.customerCode)?.customerName || '', address: row.address || coords.get(row.customerCode)?.address || '', lat: coords.get(row.customerCode)?.lat ?? null, lng: coords.get(row.customerCode)?.lng ?? null }));
-    // Separate evidence is preloaded; no full source read blocks a Period query.
+    // A Period query can refresh separate evidence without waiting for it.
     if(process.env.RENDER_EXTERNAL_URL==='https://freshon-admin-1.onrender.com')void coordinateSupplement.refresh();
     result.data=coordinateSupplement.join(result.data);
     result.meta.coordinateSupplement=coordinateSupplement.status();

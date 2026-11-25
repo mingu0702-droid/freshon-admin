@@ -8,6 +8,37 @@ import {mountProductionMapApi} from '../src/productionMapIntegration.js';
 import {createStaffPasswordHash} from '../src/mapStaffAuth.js';
 import {phase2bSnapshotMeta} from '../src/phase2bOperations.js';
 const secret='synthetic-production-read-model-key-00000000';
+
+test('coordinate warm-up can be skipped while the protected Period read retains its refresh',async t=>{
+ const previous=process.env.RENDER_EXTERNAL_URL;
+ process.env.RENDER_EXTERNAL_URL='https://freshon-admin-1.onrender.com';
+ t.after(()=>{if(previous===undefined)delete process.env.RENDER_EXTERNAL_URL;else process.env.RENDER_EXTERNAL_URL=previous;});
+ const date='2026-09-19';
+ function mount(options={}){
+   const app=express(), state={refreshes:0};
+   mountProductionMapApi(app,{previewEnabled:()=>true,
+     requireView:(req,res,next)=>req.get('x-fixture-staff')==='yes'?next():res.sendStatus(401),
+     phase2bKstDate:()=>date,readPhase2bSnapshot:async()=>({rows:[]}),
+     sharedReadModel:{status:()=>({generation:1}),period:()=>({meta:{complete:true},data:[{customerCode:'S12345'}]})},
+     sharedCoordinateSupplement:{async refresh(){state.refreshes++;},join:rows=>rows,status:()=>({state:'UNAVAILABLE'})},
+     callHub:async()=>assert.fail('Unexpected external request'),...options});
+   return {app,state};
+ }
+ assert.equal(mount().state.refreshes,1);
+ const {app,state}=mount({warmCoordinateSupplement:false});
+ assert.equal(state.refreshes,0);
+ const server=app.listen(0,'127.0.0.1');
+ t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
+ await new Promise(resolve=>server.once('listening',resolve));
+ const url='http://127.0.0.1:'+server.address().port+'/api/map-phase2b/preview/period?startDate='+date+'&endDate='+date;
+ assert.equal((await fetch(url)).status,401);
+ assert.equal(state.refreshes,0);
+ const response=await fetch(url,{headers:{'x-fixture-staff':'yes'}});
+ assert.equal(response.status,200);
+ assert.equal((await response.json()).meta.storeCount,1);
+ assert.equal(state.refreshes,1);
+});
+
 test('production routes: signed Unicode ingest, Period, staff auth, protected history/detail and public projection',async t=>{
  const env={MAP_STAFF_ID:'abc',MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash('Ab12cd'),MAP_STAFF_SESSION_SECRET:'s'.repeat(43),RENDER_EXTERNAL_URL:'https://production.example.test',HUB_API_SECRET:secret,ADMIN_TOKEN:'test-admin'};
  const snapshot={rows:[{customerCode:'S12345',customerName:'합성점포',address:'합성주소',lat:37,lng:127,password:'SYNTHETIC',rawMemo:'SYNTHETIC'}],latestDate:'2026-09-19'};

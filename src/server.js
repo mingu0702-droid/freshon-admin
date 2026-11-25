@@ -86,6 +86,7 @@ const sharedCoordinateSupplement=createCoordinateSupplement({callHub:verifiedMap
 const sharedFixedVehicleReader=createFixedVehicleReader({ensureSession: ensureFreshonSession, readJson: readFreshonJson, extractRows: extractFreshonRows,pageConcurrency:process.env.OPSMAP_FIXED_MASTER_PAGE_CONCURRENCY==='2'?2:1});
 const productionMap = mountProductionMapApi(app, {
   sharedReadModel,sharedCoordinateSupplement,
+  warmCoordinateSupplement:!primaryMap,
   readBaseVehicleMaster: sharedFixedVehicleReader,
   previewEnabled, requireView, readPhase2bSnapshot, getSnapshotMemory: () => phase2bSnapshotMemory,
   phase2bKstDate, normalizeCell, normalizeDateValue, phase2bSnapshotMeta, phase2bTodayStatus, publicDir,
