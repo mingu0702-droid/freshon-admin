@@ -40,27 +40,28 @@ function batch(assigned=2,groups=1){
   return {plans,details:[...rows,unassigned]};
 }
 
-function gas({allowed=true,audience=STAGE_ORIGIN,acknowledgement=JSON.stringify({state:'PUBLISHED',date})}={}){
+function gas({allowed=true,audience=STAGE_ORIGIN,acknowledgement=JSON.stringify({state:'PUBLISHED',date}),nightly=false,night}={}){
   const requests=[],messages=[];
-  const props={OPSMAP_WMS_OFFICIAL_HANDOFF_V1:JSON.stringify({enabled:true,audience}),
+  const props={OPSMAP_WMS_OFFICIAL_HANDOFF_V1:JSON.stringify({enabled:true,audience,nightly}),
     OPSMAP_WMS_OFFICIAL_CAPABILITY_B64:deriveOpsmapWmsHandoffKey(secret,STAGE_ORIGIN).toString('base64')};
   const byteArray=buffer=>Array.from(buffer,byte=>byte>127?byte-256:byte);
   const context={
-    Date:fixedDate,
+    Date:night?class extends Date{static now(){return night.now();}}:fixedDate,
     PropertiesService:{getScriptProperties:()=>({getProperty:key=>props[key]})},
     Utilities:{base64Decode:value=>byteArray(Buffer.from(value,'base64')),base64Encode:bytes=>Buffer.from(bytes).toString('base64'),
       newBlob:value=>({getBytes:()=>byteArray(Buffer.from(value,'utf8'))}),
       DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(algorithm,bytes)=>byteArray(createHash(algorithm).update(Buffer.from(bytes)).digest()),
-      computeHmacSha256Signature:(bytes,key)=>byteArray(createHmac('sha256',Buffer.from(key)).update(Buffer.from(bytes)).digest())},
+      computeHmacSha256Signature:(bytes,key)=>byteArray(createHmac('sha256',Buffer.from(key)).update(Buffer.from(bytes)).digest()),getUuid:()=>runId},
     UrlFetchApp:{fetch:(url,opts)=>{
       requests.push({url,...opts});
       return {getResponseCode:()=>200,getContentText:()=>acknowledgement};
     }},
     soOwner_:()=>{if(!allowed)throw Error('DENIED');},
-    console:{log:x=>messages.push(x),warn:x=>messages.push(x)}
+    console:{log:x=>messages.push(x),warn:x=>messages.push(x)},
+    ...(night?.context||{})
   };
-  const api=runInNewContext(gasSource+'\n({capture:opsmapCaptureWmsOfficialRound_,queue:opsmapQueueWmsOfficialRound_,send:opsmapSendWmsOfficialRound_})',context);
-  return {api,requests,messages};
+  const api=runInNewContext(gasSource+'\n({capture:opsmapCaptureWmsOfficialRound_,queue:opsmapQueueWmsOfficialRound_,send:opsmapSendWmsOfficialRound_,night:opsmapRunNightWmsOfficialRound_})',context);
+  return {api,requests,messages,context};
 }
 
 function makeSignedHeaders(payload,{audience=STAGE_ORIGIN,issuedAt=new Date(now).toISOString(),shipDate=date,key=deriveOpsmapWmsHandoffKey(secret,audience)}={}){
@@ -70,9 +71,9 @@ function makeSignedHeaders(payload,{audience=STAGE_ORIGIN,issuedAt=new Date(now)
       .update(JSON.stringify(['opsmap-wms-owner-handoff-v1',audience,OPSMAP_WMS_HANDOFF_ROUTE,'011',shipDate,issuedAt,digest])).digest('hex')};
 }
 
-async function start(t,{settings=env,publish}={}){
+async function start(t,{settings=env,publish,now:clockNow=now}={}){
   const app=express();
-  const registered=mountOpsmapWmsOfficialRoundHandoff(app,{env:settings,clock:{secret},now:()=>now,publish});
+  const registered=mountOpsmapWmsOfficialRoundHandoff(app,{env:settings,clock:{secret},now:()=>clockNow,publish});
   const server=app.listen(0,'127.0.0.1');
   t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
   await once(server,'listening');
@@ -189,4 +190,106 @@ test('signed handoff bounds concurrent publication and does not disclose writer 
   const conflict=await pending;
   assert.equal(conflict.status,409);
   assert.deepEqual(await conflict.json(),{error:'WMS_HANDOFF_CONFLICT'});
+});
+
+
+const nightStart=Date.parse('2026-11-26T12:15:00.000Z');
+const scheduledAt=Date.parse('2026-11-26T12:00:00.000Z');
+const uid='1234567890';
+const receipt={ok:true,source:'30-minute-clock',requestId:'R'+uid+'_'+scheduledAt,scheduledAt};
+const nightStateKey='OPSMAP_WMS_OFFICIAL_NIGHT_V1';
+
+function nightGas({nightly=true,owner=true,reconciled=true,failure,acknowledgement,nightTime=nightStart}={}){
+  const state=new Map([
+    ['TRIGGERS',{clock:uid,bootstrap:'other'}],
+    ['clock-request-'+receipt.requestId,{first:false,uid,scheduledAt,day:'2026-11-26'}]
+  ]);
+  const {plans,details}=batch();
+  const calls=[];
+  const provider={
+    SON_CLOCK_REQUEST_PREFIX_:'clock-request-',
+    SON_METER_:null,
+    sonState_:key=>state.get(key),
+    sonSave_:(key,value)=>state.set(key,value),
+    sonOwnerEffective_:()=>{if(!owner)throw Error('DENIED');},
+    soLock_:operation=>operation(),
+    sopKstDay_:time=>new Date(time.getTime()+9*60*60*1000).toISOString().slice(0,10),
+    soRead_:()=>({file:'fixture'}),
+    sonDriverCredential_:()=>({username:'fixture',password:'fixture'}),
+    swfLiveLogin_:()=>{calls.push('login');return {};},
+    swfSpec_:(_session,warehouse,day,dispatch)=>({warehouse,day,dispatch}),
+    swfSend_:specs=>{
+      calls.push(JSON.parse(JSON.stringify(specs)));
+      if(failure)throw failure;
+      return [plans,details];
+    },
+    swfRows_:(source,warehouse,day)=>{
+      assert.equal(warehouse,'011');
+      assert.equal(day,'20261127');
+      return source;
+    },
+    swfReport_:()=>({code:'011',fullyReconciled:reconciled})
+  };
+  const instance=gas({nightly,acknowledgement,night:{now:()=>nightTime,context:provider}});
+  return {...instance,calls,state};
+}
+
+test('nightly owner clock offers one same-wave Osan tomorrow pair without changing the existing MIS receipt',async t=>{
+  const {api,requests,calls,state,context}=nightGas();
+  const trigger={triggerUid:uid};
+  const unchanged={...receipt};
+  api.night(trigger,receipt,nightStart);
+  api.night(trigger,receipt,nightStart);
+  assert.deepEqual(receipt,unchanged);
+  assert.equal(context.SON_METER_,null);
+  assert.deepEqual(calls,['login',[
+    {warehouse:'011',day:'20261127',dispatch:false},
+    {warehouse:'011',day:'20261127',dispatch:true}
+  ]]);
+  assert.equal(requests.length,1);
+  assert.equal(state.get(nightStateKey).state,'ACKNOWLEDGED');
+  assert.doesNotMatch(requests[0].payload,/PRIVATE/);
+  let official;
+  const {post}=await start(t,{now:nightStart,publish:async value=>{
+    const bytes=encodeWmsOfficialRound(value.round,value.date);
+    official=decodeWmsOfficialRound(bytes,{date,observedAt:new Date(nightStart).toISOString()}).data;
+    return {state:'PUBLISHED'};
+  }});
+  const response=await post(requests[0].payload,{'Content-Type':requests[0].contentType,...requests[0].headers});
+  assert.equal(response.status,200);
+  assert.equal(official.total,2025);
+  assert.equal(official.vehicles.find(row=>row.vehicle==='100').waypointCount,2);
+});
+
+test('nightly owner clock stays off outside approval, UID, matching execution receipt, time and owner',()=>{
+  const variants=[
+    {args:{nightly:false}},
+    {args:{owner:false}},
+    {triggerUid:'unapproved'},
+    {receipt:{...receipt,ok:false}},
+    {receipt:{...receipt,requestId:'R9_'+scheduledAt}},
+    {receipt:{...receipt,source:'first-clock'}},
+    {started:Date.parse('2026-11-26T12:09:00.000Z')},
+    {started:Date.parse('2026-11-26T13:10:00.000Z')},
+    {args:{nightTime:nightStart+111_000},started:nightStart}
+  ];
+  for(const value of variants){
+    const {api,requests,calls,state}=nightGas(value.args);
+    api.night({triggerUid:value.triggerUid||uid},value.receipt||receipt,value.started??nightStart);
+    assert.deepEqual(calls,[]);
+    assert.deepEqual(requests,[]);
+    assert.equal(state.has(nightStateKey),false);
+  }
+});
+
+test('nightly owner clock keeps one attempt when the provider or receiver result is uncertain',()=>{
+  for(const args of [{failure:Error('PRIVATE MESSAGE')},{reconciled:false},{acknowledgement:'{}'}]){
+    const {api,requests,calls,state,messages}=nightGas(args);
+    api.night({triggerUid:uid},receipt,nightStart);
+    api.night({triggerUid:uid},receipt,nightStart);
+    assert.equal(calls.length,2);
+    assert.equal(requests.length,args.acknowledgement?1:0);
+    assert.ok(['ATTEMPTED','NOT_ACKNOWLEDGED'].includes(state.get(nightStateKey).state));
+    assert.doesNotMatch(messages.join('\n'),/PRIVATE/);
+  }
 });

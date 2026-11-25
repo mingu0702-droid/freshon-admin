@@ -33,3 +33,16 @@
 +  }
  }
  function sonClockRequest_(event,first){
+@@ -828,6 +831,11 @@
+ }
+ function soNativeFreshonFirst(e){return swfEnabled_()?sonFastClockTrigger_(e,true):sonClock_(e,true);}
+ function soNativeFreshonClock(e){
+-  if(swfEnabled_())return sonFastClockTrigger_(e,false);
++  if(swfEnabled_()){
++    const started=Date.now();
++    const receipt=sonFastClockTrigger_(e,false);
++    opsmapRunNightWmsOfficialRound_(e,receipt,started);
++    return receipt;
++  }
+   const shared={},receipt=sonClock_(e,false,shared);
+   if(receipt&&String(e?.triggerUid)===sonState_('TRIGGERS')?.clock){
