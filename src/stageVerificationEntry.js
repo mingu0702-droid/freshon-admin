@@ -17,6 +17,7 @@ import {createRoadRouteService,isRoadRouteRequest} from './opsmap-abc/roadRouteS
 import {createStageRoadBudget,createStageSharedRoadFreeOnly,createStageSharedRoadTrial} from './opsmap-abc/productionRoadBudget.js';
 import {createRecordedRoadRouteReader} from './opsmap-abc/recordedRoadRoute.js';
 import {staffStoreDetail} from './opsmap-abc/mapStaffDetail.js';
+import {addStaffTiming} from './opsmap-abc/staffLatency.js';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
 import {createManualPinGithubStore,createStageGeocodeBudgetStore} from './manualPinGithubStore.js';
 import {createStageStaffSessionStore} from './staffSessionStore.js';
@@ -703,22 +704,30 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           const sourceId=SYNC_DELIVERY_SOURCES[center];
           const source=scheduledSources['delivery:'+sourceId];
           const scopedSuccessAt=source?.lastSuccessDate===date?source.lastSuccessAt:null;
-          const retained=async error=>{
-            const archive=await active?.readNearbyDay?.(date).catch(()=>null);
-            return archivedDatedDispatch(archive,{center,vehicle,generation:active?.generation,
-              sourceRunId:active?.scheduled?.state.runId,publishedAt:active?.scheduled?.state.committedAt,lastSuccessAt:scopedSuccessAt,error});
-          };
+          if(client.signal.aborted)return res.off('close',disconnect);
+          // The verified archive is needed to check the live count even on success.
+          // Start that read while the date and center are being verified at the source.
+          const archiveStarted=performance.now();
+          const archiveRead=Promise.resolve().then(()=>active?.readNearbyDay?.(date)).catch(()=>null)
+            .finally(()=>addStaffTiming(res,'datedArchive',performance.now()-archiveStarted));
+          const retained=(archive,error)=>archivedDatedDispatch(archive,{center,vehicle,generation:active?.generation,
+            sourceRunId:active?.scheduled?.state.runId,publishedAt:active?.scheduled?.state.committedAt,lastSuccessAt:scopedSuccessAt,error});
           try {
-            const data=await readDatedDelivery.readContract(date,center,vehicle,{signal:client.signal});
+            const liveStarted=performance.now();
+            const data=await readDatedDelivery.readContract(date,center,vehicle,{signal:client.signal})
+              .finally(()=>addStaffTiming(res,'datedLive',performance.now()-liveStarted));
             if(client.signal.aborted)return;
-            const archive=await retained('DELIVERY_SOURCE_REGRESSION');
+            const archive=await archiveRead;
             if(client.signal.aborted)return;
-            const result=archive?.source.uniqueDeliveries>data.source.uniqueDeliveries?retainDatedDriverEvidence(archive,data):data;
+            // A verified archive binds this count to its exact center task rows.
+            const sourceCounts=archive?.dispatch?.sources.find(([id])=>id===sourceId);
+            const useArchive=sourceCounts&&sourceCounts[2]-sourceCounts[3]>data.source.uniqueDeliveries;
+            const result=useArchive?retainDatedDriverEvidence(retained(archive,'DELIVERY_SOURCE_REGRESSION'),data):data;
             return requireStaff(req,res,()=>privateResponse().json(result));
           } catch (failure) {
             if(client.signal.aborted)return;
             const error=/^DELIVERY_SOURCE_[A-Z_]+$/.test(failure.code||'')?failure.code:'DELIVERY_SOURCE_READ_UNAVAILABLE';
-            const saved=await retained(error);
+            const saved=retained(await archiveRead,error);
             if(client.signal.aborted)return;
             return requireStaff(req,res,()=>{
               console.info(JSON.stringify({component:'stage-dated-delivery',status:saved?200:503,code:error,
