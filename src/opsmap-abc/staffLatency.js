@@ -4,7 +4,8 @@ const endpoints = new Set([
   '/api/map-phase2b/auth/login', '/api/map-phase2b/auth/session', '/api/map-phase2b/auth/logout',
   '/api/map-phase2b/private/customer-detail', '/api/map-phase2b/private/driver-history', '/api/map-phase2b/preview/detail', '/api/map-phase2b/preview/route-plan'
 ]);
-const stageSearchEndpoints = new Set([
+const stageReadEndpoints = new Set([
+  '/api/map-phase2b/private/dated-delivery',
   '/api/map-phase2b/private/stage-address-evidence',
   '/api/map-phase2b/private/address-lookup', '/api/map-phase2b/private/address-lookup-diagnostic',
   '/api/map-phase2b/private/shadow-coverage/point',
@@ -24,7 +25,7 @@ export function addHubReadTiming(res, profile = {}, prefix = 'History') {
   if (Number.isFinite(profile.hubExecutionStartAt)) res.setHeader('X-Hub-Execution-Start-At', String(profile.hubExecutionStartAt));
 }
 export function staffLatency(req, res, next, { stageSearch = false } = {}) {
-  if (!endpoints.has(req.path) && !(stageSearch && stageSearchEndpoints.has(req.path))) return next();
+  if (!endpoints.has(req.path) && !(stageSearch && stageReadEndpoints.has(req.path))) return next();
   const started = performance.now(), receivedAt = new Date().toISOString(), endpoint = req.path;
   const timings = res.locals.staffTiming = { authVerify: 0, session: 0, upstream: 0, parseNormalize: 0, hub: 0 };
   const original = res.writeHead;

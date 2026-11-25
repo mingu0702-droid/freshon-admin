@@ -4,6 +4,7 @@ import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {STAGE_ORIGIN, STAGE_SERVICE} from '../src/stageAbValidation.js';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
 import {createStaffPasswordHash} from '../src/opsmap-abc/mapStaffAuth.js';
+import {deliveryCompletion,deliveryTaskId,packDatedEvent} from '../src/datedDeliveryContract.js';
 
 const date = '2026-05-16';
 const env = {RENDER_EXTERNAL_URL:STAGE_ORIGIN, RENDER_SERVICE_ID:STAGE_SERVICE,
@@ -160,12 +161,32 @@ test('only explicit matching-center delivery positives become partial operating 
 test('Stage HTTP shares dated source work and cancels a disconnected date without a Hub read', {timeout:5000},async t => {
   const password = 'fixture-only-dated-read';
   const abandonedDate='2026-05-14';
+  const archiveDate='2026-05-13';
   const abandonedStarted=Promise.withResolvers(),abandonedStopped=Promise.withResolvers();
+  const archiveStarted=Promise.withResolvers(),liveStarted=Promise.withResolvers(),scheduledReady=Promise.withResolvers();
+  const archiveTasks=tasks.slice(0,2).map(task=>({...task,enteringDatedAt:archiveDate}));
+  const archived={date:archiveDate,tasks:archiveTasks.map((task,index)=>[
+    deliveryTaskId(task.id),task.customer.erpCode,['101','122'][index],null,null,'COMPLETED'
+  ]),dispatch:{sources:[['1',1,2,0]],events:archiveTasks.map((task,index)=>packDatedEvent('1',
+    deliveryCompletion(task,{date:archiveDate,customerCode:task.customer.erpCode,vehicle:['101','122'][index]})))}};
+  const generation={registry:new Map(),ledger:{records:{}},index:{asOf:archiveDate,sha256:'a'.repeat(64)},
+    state:{revision:1,committedAt:archiveDate+'T03:00:00.000Z'}};
   let sessionContent;
   let providerReads = 0;
   const app = createStageVerificationApp({env:{...env, MAP_STAFF_ID:'fixture-staff', MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash(password),
     MAP_STAFF_SESSION_SECRET:'s'.repeat(43), GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache', GITHUB_TOKEN:'fixture-only',
-    OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'stage/opsmap-manual-pins'}, readHub:async () => assert.fail('unexpected Hub read'),
+    OPSMAP_STAGE_SYNC_READ_APPROVED:'1', OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'stage/opsmap-manual-pins'},
+    readHub:async () => assert.fail('unexpected Hub read'),
+    openScheduledStore:async()=>({
+      read:async()=>generation,
+      readStatus:async()=>{scheduledReady.resolve();return null;},
+      readDay:async day=>{
+        if(day!==archiveDate)return null;
+        archiveStarted.resolve();
+        await liveStarted.promise;
+        return archived;
+      }
+    }),
     async fetchImpl(input, options) {
       const url = new URL(input);
       if (url.hostname === 'delivery-bali.chabyulhwa.com') {
@@ -176,6 +197,11 @@ test('Stage HTTP shares dated source work and cancels a disconnected date withou
           options.signal.addEventListener('abort',()=>abandonedStopped.resolve(),{once:true});
           abandonedStarted.resolve();
           return new Promise(()=>{});
+        }
+        if(url.searchParams.get('enteringDatedAtBetween').startsWith(archiveDate)){
+          liveStarted.resolve();
+          await archiveStarted.promise;
+          return response(archiveTasks.slice(0,1),1,1);
         }
         return response(tasks.slice(0,3), 3, 1);
       }
@@ -192,6 +218,8 @@ test('Stage HTTP shares dated source work and cancels a disconnected date withou
   const server = app.listen(0,'127.0.0.1');
   t.after(() => new Promise(resolve => server.close(resolve)));
   await new Promise(resolve => server.once('listening', resolve));
+  app.emit('opsmap-stage-listening');
+  await scheduledReady.promise;
   const origin = `http://127.0.0.1:${server.address().port}`;
   const api = `${origin}/api/map-phase2b/preview`;
   assert.equal((await fetch(`${api}/assignments?date=${date}`)).status,401);
@@ -234,4 +262,13 @@ test('Stage HTTP shares dated source work and cancels a disconnected date withou
   await abandoned;
   await abandonedStopped.promise;
   assert.equal(providerReads,2);
+  const retained=await fetch(`${dated}?date=${archiveDate}`,{headers:{cookie},signal:AbortSignal.timeout(1000)});
+  assert.equal(retained.status,200);
+  assert.match(retained.headers.get('server-timing'),/datedLive;dur=\d+/);
+  assert.match(retained.headers.get('server-timing'),/datedArchive;dur=\d+/);
+  const retainedRoster=await retained.json();
+  assert.equal(retainedRoster.state,'PUBLISHED_VERIFIED');
+  assert.equal(retainedRoster.error,'DELIVERY_SOURCE_REGRESSION');
+  assert.deepEqual(retainedRoster.rows.map(row=>row.customerCode).sort(),['S1','S2']);
+  assert.equal(providerReads,3);
 });
