@@ -229,3 +229,21 @@ export function archivedDatedDispatch(day,{center,vehicle,generation,sourceRunId
     source:datedDispatchSource(rows,{pages,rawRows,duplicateRows}),
     at:lastSuccessAt||null,generation,sourceRunId,error,state:'PUBLISHED_VERIFIED',publishedAt});
 }
+
+export function retainDatedDriverEvidence(saved, observed) {
+  if (saved?.state!=='PUBLISHED_VERIFIED' || observed?.state!=='LIVE_VERIFIED' || observed.sourceComplete!==true ||
+    saved.date!==observed.date || saved.center!==observed.center || saved.sourceId!==observed.sourceId || saved.vehicle!==observed.vehicle) return saved;
+  const byVisit = new Map(observed.rows.filter(row=>row.driverIdentity==='VERIFIED' &&
+    /^[a-f0-9]{64}$/.test(row.driverKey||'') && typeof row.driverName==='string' && row.driverName.trim())
+    .map(row=>[row.deliveryId,row]));
+  let enriched = false;
+  const rows = saved.rows.map(row=>{
+    const proof=byVisit.get(row.deliveryId);
+    if (!proof || !row.vehicle || row.state==='CANCELLED' || row.driverIdentity==='VERIFIED' ||
+      row.deliveryDate!==saved.date || proof.deliveryDate!==row.deliveryDate || proof.vehicle!==row.vehicle ||
+      proof.customerCode!==row.customerCode || proof.state!==row.state) return row;
+    enriched=true;
+    return {...row,driverIdentity:proof.driverIdentity,driverKey:proof.driverKey,driverName:proof.driverName};
+  });
+  return enriched ? {...saved,rows,sha256:deliveryDigest(rows)} : saved;
+}

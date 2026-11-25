@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {archivedDatedDispatch,deliveryDigest,deliveryTaskId} from '../src/datedDeliveryContract.js';
+import {archivedDatedDispatch,deliveryDigest,deliveryTaskId,retainDatedDriverEvidence} from '../src/datedDeliveryContract.js';
 import {validateOpsmapSyncDay} from '../src/opsmapSyncGeneration.js';
 import {createStageDatedDeliveryReader} from '../src/stageDatedDelivery.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
@@ -60,7 +60,14 @@ test('staff roster names use the exact dated center assignment and never expose 
  const assigned={driverName:'검증 기사 가',driverPhone:'010-1234-5678',logisticsCenterId:1};
  const rows=[task(1,'102',assigned),task(2,'105',assigned),task(3,'105',{...assigned,driverPhone:undefined}),
    task(4,'102',{...assigned,logisticsCenterId:undefined}),task(5,'102',{...assigned,driverName:'대체용차'}),
-   task(6,'102',{...assigned,driver:{name:'검증 기사 나'}})];
+   task(6,'102',{...assigned,driver:{name:'검증 기사 나'}}),
+   task(7,'126',{carrierName:assigned.driverName,carrierPhone:assigned.driverPhone,logisticsCenterInfo:{id:1}}),
+   task(8,'126',{carrier:undefined,carrierInfo:{fixedNo:'126',name:assigned.driverName,tel:assigned.driverPhone,logisticsCenterId:1}}),
+   task(9,'126',{carrier:{fixedNo:'126',name:'126호차',tel:assigned.driverPhone,logisticsCenterId:1}}),
+   task(10,'126',{...assigned,carrierName:'서로 다른 기사',carrierPhone:'02-123-4567'}),
+   task(11,'126',{driverName:assigned.driverName,carrierPhone:assigned.driverPhone,logisticsCenterId:1}),
+   task(12,'126',{...assigned,carrierName:assigned.driverName,carrierPhone:'010-2345-6789'}),
+   task(13,'126',{...assigned,carrierName:assigned.driverName,carrierPhone:'+82-10-1234-5678'})];
  const seen=[];
  const read=createStageDatedDeliveryReader({env:{...env,MAP_STAFF_SESSION_SECRET:'fixture-driver-roster-secret-000000'},fetchImpl:url=>{
    seen.push(url.pathname);return page(rows);
@@ -71,10 +78,33 @@ test('staff roster names use the exact dated center assignment and never expose 
  assert.equal(byId(1).driverIdentity,'VERIFIED');
  assert.match(byId(1).driverKey,/^[a-f0-9]{64}$/);
  assert.equal(byId(1).driverKey,byId(2).driverKey);
- for(const id of [3,4,5,6])assert.equal(byId(id).driverKey,undefined);
+ for(const id of [3,4,5,6,9,10,11,12])assert.equal(byId(id).driverKey,undefined);
+ for(const id of [7,8,13])assert.equal(byId(id).driverKey,byId(1).driverKey);
  assert.doesNotMatch(JSON.stringify(roster),/driverPhone|010-1234-5678/);
  assert.doesNotMatch(JSON.stringify(await read(date)),/driverName|driverKey|010-1234-5678/);
  assert.deepEqual(seen,['/api/bali/task']);
+ const conflictingCenter=createStageDatedDeliveryReader({env,fetchImpl:()=>page([task(14,'126',{...assigned,logisticsCenterInfo:{id:3}})])});
+ await assert.rejects(conflictingCenter.readContract(date,'osan',null),{code:'DELIVERY_SOURCE_SCOPE'});
+});
+
+test('retained roster keeps only matching exact-visit drivers without altering saved stops or ordering',()=>{
+ const base={deliveryDate:date,vehicle:'126',state:'COMPLETED'};
+ const rows=Array.from({length:7},(_,i)=>({...base,deliveryId:deliveryTaskId(i+1),customerCode:'S'+(i+1)}));
+ const view={date,center:'osan',sourceId:'1',vehicle:null,sourceComplete:true,rows};
+ const saved={...view,state:'PUBLISHED_VERIFIED',count:rows.length,chronology:[rows[0].deliveryId],source:{sha256:'a'.repeat(64)}};
+ const proof={driverIdentity:'VERIFIED',driverKey:'b'.repeat(64),driverName:'확인 기사'};
+ const observed={...view,state:'LIVE_VERIFIED',rows:[{...rows[0],...proof,unexpected:'discard'},
+   {...rows[1],...proof,customerCode:'S999'}, {...rows[2],...proof,vehicle:'102'}, {...rows[3],...proof,state:'OPEN'},
+   {...rows[4],...proof,deliveryDate:'2026-11-10'}, {...rows[5],...proof,deliveryId:deliveryTaskId(100)}]};
+ const merged=retainDatedDriverEvidence(saved,observed);
+ assert.equal(merged.state,'PUBLISHED_VERIFIED');
+ assert.equal(merged.count,rows.length);
+ assert.equal(merged.source,saved.source);
+ assert.equal(merged.chronology,saved.chronology);
+ assert.equal(merged.sha256,deliveryDigest(merged.rows));
+ assert.deepEqual(merged.rows,[{...rows[0],...proof},...rows.slice(1)]);
+ assert.equal(retainDatedDriverEvidence(saved,{...observed,center:'honam'}),saved);
+ assert.equal(retainDatedDriverEvidence(saved,{...observed,state:'STALE_VERIFIED'}),saved);
 });
 
 test('all pages are checked before returning and incomplete, duplicated or conflicting reads retain the same day only',async()=>{

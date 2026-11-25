@@ -42,7 +42,7 @@ import {createOpsmapDispatchReferenceReader,mountOpsmapDispatchReference} from '
 import {createDispatchPostalEvidenceReader,createOpsmapDispatchOverlapsReader} from './opsmapDispatchOverlaps.js';
 import {createStageWmsDispatchExportReader} from './opsmapWmsDispatchExport.js';
 import {createStageDriverContacts} from './stageDriverContacts.js';
-import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,vehicleId} from './datedDeliveryContract.js';
+import {archivedDatedDispatch,DATED_DELIVERY_CONTRACT,retainDatedDriverEvidence,vehicleId} from './datedDeliveryContract.js';
 import {createKakaoCoordinateConnection} from './opsmap-abc/kakaoCoordinateConnection.js';
 import {createOfficialAddressLookup,createTemporaryOfficialAddressLookup,readStageOfficialAddressSupplement,readStageOfficialAddressReview} from './opsmapOfficialAddressLookup.js';
 import {createStageGenerationRestore} from './stageGenerationRestore.js';
@@ -706,7 +706,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           try {
             const data=await readDatedDelivery.readContract(date,center,vehicle);
             const archive=await retained('DELIVERY_SOURCE_REGRESSION');
-            return requireStaff(req,res,()=>privateResponse().json(archive?.source.uniqueDeliveries>data.source.uniqueDeliveries?archive:data));
+            const result=archive?.source.uniqueDeliveries>data.source.uniqueDeliveries?retainDatedDriverEvidence(archive,data):data;
+            return requireStaff(req,res,()=>privateResponse().json(result));
           } catch (failure) {
             const error=/^DELIVERY_SOURCE_[A-Z_]+$/.test(failure.code||'')?failure.code:'DELIVERY_SOURCE_READ_UNAVAILABLE';
             const saved=await retained(error);

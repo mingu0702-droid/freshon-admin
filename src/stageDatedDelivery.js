@@ -41,24 +41,36 @@ function eventCandidate(task, state, event, customerCode, vehicle) {
   return {task:{id,status,completeType,completeDatedAt},customerCode,vehicle};
 }
 
+function taskCenterIds(task) {
+  return [task.logisticsCenter?.id,task.logisticsCenterId,task.carrier?.logisticsCenterId,
+    task.logisticsCenterInfo?.id,task.carrierInfo?.logisticsCenterId].filter(value=>value!=null);
+}
+
 function taskDriverIdentity(task) {
   const cleanName = value => typeof value === 'string' && value.length <= 100 &&
     !/[\x00-\x1f\x7f]/.test(value) ? value.normalize('NFKC').trim() : '';
-  const assigned = [task.driver, task.carrier?.driver].filter(Boolean);
-  const names = new Set([task.driverName, task.carrier?.driverName, ...assigned.flatMap(driver=>[driver.driverName,driver.name])]
-    .map(cleanName).filter(name => name && !driverVehicle(name) && !/^(?:미확인|미등록|unknown|null|undefined)$/i.test(name)));
-  const phones = [task.driverPhone, task.driverTel, task.carrier?.driverPhone, ...assigned.flatMap(driver=>[driver.phone,driver.phoneNumber])]
-    .map(driverPhone).filter(Boolean);
-  return {names,phones};
+  const carriers = [task.carrier,task.carrierInfo].filter(Boolean);
+  const assigned = [task.driver,...carriers.map(carrier=>carrier.driver)].filter(Boolean);
+  const contacts = [
+    [[task.driverName],[task.driverPhone,task.driverTel]],
+    [[task.carrierName],[task.carrierPhone]],
+    ...[...assigned,...carriers].map(person=>[[person.driverName,person.name],[person.driverPhone,person.phone,person.phoneNumber,person.tel]])
+  ].map(([names,phones])=>({
+    names:names.map(cleanName).filter(name=>name && !driverVehicle(name) && !/^(?:미확인|미등록|unknown|null|undefined)$/i.test(name)),
+    phones:phones.map(driverPhone).filter(Boolean)
+  }));
+  const names = new Set(contacts.flatMap(contact=>contact.names));
+  const phones = contacts.flatMap(contact=>contact.phones);
+  return {names,phones,paired:contacts.some(contact=>contact.names.length&&contact.phones.length)};
 }
 
 function rosterDriver(task, date, center, id, secret) {
   if (typeof secret !== 'string' || secret.length < 32 ||
-    ![task.logisticsCenter?.id,task.logisticsCenterId,task.carrier?.logisticsCenterId].some(value => String(value) === id)) return null;
-  const {names,phones}=taskDriverIdentity(task);
+    !taskCenterIds(task).some(value => String(value) === id)) return null;
+  const {names,phones,paired}=taskDriverIdentity(task);
   const [driverName]=names;
   const identities=new Set(phones.map(phone=>phone.replace(/\D/g,'').replace(/^82/,'0')));
-  if (names.size!==1 || identities.size!==1 || isReplacementDriver(driverName) || /\d|^(?:미정|미배정|없음)$/u.test(driverName)) return null;
+  if (!paired || names.size!==1 || identities.size!==1 || isReplacementDriver(driverName) || /\d|^(?:미정|미배정|없음)$/u.test(driverName)) return null;
   const driverKey=createHmac('sha256',secret).update(JSON.stringify(['opsmap-dated-driver-v1',date,center,driverName,[...identities][0]])).digest('hex');
   return {driverKey,driverName,driverIdentity:'VERIFIED'};
 }
@@ -163,8 +175,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const vehicles = new Map();
     let unassignedRows=0;
     for (const task of tasks) {
-      if ([task.logisticsCenter?.id,task.logisticsCenterId,task.carrier?.logisticsCenterId]
-          .some(center=>center!=null && String(center)!==expectedCenter)) throw error('DELIVERY_SOURCE_SCOPE',503);
+      if (taskCenterIds(task).some(center=>String(center)!==expectedCenter)) throw error('DELIVERY_SOURCE_SCOPE',503);
       const code = task.customer?.erpCode ?? task.customerErpCode;
       if (task.customer?.erpCode!=null && task.customerErpCode!=null && task.customer.erpCode!==task.customerErpCode ||
           !/^[A-Z]\d{1,20}$/.test(code)) throw error('DELIVERY_SOURCE_CUSTOMER_CONFLICT',503);
@@ -359,7 +370,7 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       const payload = await readBoundedPhotoLoginJson(response,65536,signal);
       if (payload?.ok === false || payload?.success === false || payload?.error) throw fail('DRIVER_ASSIGNMENT_SOURCE_UNAVAILABLE');
       const task = payload?.data ?? payload;
-      const ids = [task?.logisticsCenter?.id,task?.logisticsCenterId,task?.carrier?.logisticsCenterId].filter(value => value != null);
+      const ids = task ? taskCenterIds(task) : [];
       const codes = [task?.customer?.erpCode,task?.customerErpCode].filter(value => value != null);
       const dates = [task?.enteringDatedAt,task?.deliveryDate,task?.carrier?.enteringDatedAt].filter(value => value != null);
       if (String(task?.id) !== row.taskId || !codes.length || codes.some(code => code !== customerCode) ||
@@ -368,12 +379,12 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
           driverVehicle(confirmedTaskVehicle(task)) !== vehicle || deliveryTaskState(task) === 'CANCELLED') {
         throw fail('DRIVER_ASSIGNMENT_UNCONFIRMED',409);
       }
-      const {names,phones}=taskDriverIdentity(task);
+      const {names,phones,paired}=taskDriverIdentity(task);
       if (names.size > 1 || new Set(phones.map(phone => phone.replace(/\D/g,''))).size > 1) {
         throw fail('DRIVER_ASSIGNMENT_CONFLICT',409);
       }
       const driverName = [...names][0] || '';
-      return {vehicle,date,center,basis:'DATED_ASSIGNMENT',driverName,driverPhone:driverName ? phones[0] || null : null,
+      return {vehicle,date,center,basis:'DATED_ASSIGNMENT',driverName,driverPhone:driverName&&paired ? phones[0] || null : null,
         checkedAt:new Date(now()).toISOString(),currentDeliveryVerified:!slot.error && slot.freshUntil>now(),stale:false};
     })().catch(error => {
       if (/^DRIVER_[A-Z_0-9]+$/.test(error.code || '')) throw error;
