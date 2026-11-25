@@ -50,6 +50,60 @@ test('detailed map keeps all visible stores and groups only exact co-locations',
   assert.deepEqual(markers.find(marker => marker.clusterKind === 'location').memberCodes.sort(), ['S0', 'S305']);
 });
 
+test('the dated map uses the shared zoom thresholds without merging different confirmed routes to fit the budget', () => {
+  const first = runtime.indexOf('  function buildMapPinIndex(');
+  const last = runtime.indexOf('    const entries = pins.map(', first);
+  const start = runtime.indexOf('  function detailedMarkerRows(');
+  const end = runtime.indexOf('  function overviewVehicleStores(', start);
+  const MapViewPolicy = globalThis.MapViewPolicy;
+  const rows = Array.from({length:150}, (_, i) => ({
+    customerCode:'S'+i, vehicle:String(101+i), baseVehicle:String(401+i),
+    deliveryId:'visit-'+i, status:i%2 ? 'PENDING' : 'COMPLETED',
+    lat:37.5+i%15/10000, lng:127+Math.floor(i/15)/10000,
+  }));
+  rows.push({...rows[0], customerCode:'S150', deliveryId:'visit-150', vehicle:'251', baseVehicle:'551', status:'PENDING'});
+  const coordinate = (lat,lng) => ({getLat:()=>lat, getLng:()=>lng});
+  let level = 7;
+  const map = {
+    getLevel:()=>level, getCenter:()=>coordinate(37.5,127),
+    getBounds:()=>({getSouthWest:()=>coordinate(37.49,126.99), getNorthEast:()=>coordinate(37.52,127.02)}),
+    getProjection:()=>({containerPointFromCoords:row=>({x:100+(row.lng-127)*30000, y:100+(row.lat-37.5)*30000})}),
+  };
+  const mapNode = {clientWidth:700, clientHeight:550, dataset:{}, classList:{toggle(){}}};
+  const state = {mode:'DATE_ROUTE', map, selectedVehicles:[], lines:[]};
+  const render = vm.runInNewContext(runtime.slice(start,end)+runtime.slice(first,last)+
+    '    return {pins,markerMode};\n  }\nrenderStops', {
+      window:{MapViewPolicy}, MapViewPolicy, MapPeriodUi, performance, state, innerWidth:700, baseVehicleStatus:'VERIFIED',
+      indexedRows:null,indexedAssignmentMode:null,pointIndex:null,markerSourceVersion:0,markerLayoutVersion:0,
+      markerSignatures:null,detachedMarkers:new Map(),searchNeighborhood:null,lastMarkerViewport:null,
+      $:()=>mapNode,showSelectedVehicleStores:()=>false,periodBasis:'vehicle',hasVerifiedStageLocations:()=>true,
+      recentOperationsOnly:()=>false,markerPosition:row=>row,clearAreaViewportDots:()=>{},
+    });
+  const codes = pins => Array.from(pins.flatMap(pin=>pin.memberCodes||[pin.customerCode])).sort();
+  for (level of [9,7,6]) {
+    const daily = render(rows);
+    assert.equal(daily.markerMode,'GROUPS');
+    assert.equal(daily.pins.length,rows.length);
+    assert.ok(daily.pins.every(pin=>!pin.clusterVehicles||pin.clusterVehicles.length===1));
+    assert.deepEqual(codes(daily.pins),codes(rows));
+  }
+  level=5;
+  const daily = render(rows);
+  assert.equal(daily.markerMode,'STORES');
+  assert.deepEqual(codes(daily.pins),codes(rows));
+  const sameLocation=daily.pins.find(pin=>pin.clusterKind==='location');
+  assert.deepEqual(sameLocation.clusterVehicles,['101','251']);
+  assert.deepEqual(sameLocation.clusterRows.map(row=>[row.deliveryId,row.status]),[
+    ['visit-0','COMPLETED'],['visit-150','PENDING'],
+  ]);
+  state.mode='BASE_60D';
+  const base = render(rows);
+  assert.equal(base.markerMode,'STORES');
+  assert.deepEqual(codes(base.pins),codes(rows));
+  assert.deepEqual(base.pins.find(pin=>pin.clusterKind==='location').clusterVehicles,['401','551']);
+  assert.notEqual(Phase2bUi.vehicleColor('101'),Phase2bUi.vehicleColor('251'));
+});
+
 test('close-up viewport preserves exact positions and does not retain an extra selection in the index', () => {
   const point = (customerCode, lat, lng, vehicle = '') => ({ customerCode, lat, lng, vehicle });
   const rows = [

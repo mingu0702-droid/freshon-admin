@@ -2567,7 +2567,7 @@
     const viewport=fit?null:mapViewport;
     const selectedVehicleStores=showSelectedVehicleStores();
     const closeUp=level<=window.MapViewPolicy.storePinLevel;
-    const detailedStores=selectedVehicleStores||base&&closeUp;
+    const detailedStores=selectedVehicleStores||closeUp;
     const neighborhood=base&&closeUp&&searchNeighborhood;
     if(neighborhood&&neighborhood.index!==areaIndex){
       neighborhood.stores=nearbyVerifiedStores(neighborhood.point,areaIndex);
@@ -2601,7 +2601,7 @@
     };
     const clusterOptions={mode:assignmentMode,maxMarkers:innerWidth<=760?120:180,margin:base?44:80,
       grouping:focusedStops?'individual':'territory',protectedCodes:navCodes,sourceVersion:markerSourceVersion,
-      nearbyVehicleOnly:assignmentMode==='BASE_60D'};
+      nearbyVehicleOnly:!base||assignmentMode==='BASE_60D'};
     let pins,readyOverview=false,areaCount=0;
     if(areaIndex){
       if(closeUp){
