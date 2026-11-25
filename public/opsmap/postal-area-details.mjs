@@ -64,6 +64,7 @@ export function createPostalAreaDetails(root, { read, dismiss, openStore }) {
     for (const [key,value] of [
       ['분석 기간',data.period.days + '일'],
       ['등록 업장 / 배송 확인',n(t.registered) + '곳 / ' + (deliveryUnverified ? '미확인' : n(t.delivered) + '곳')],
+      ['배송 구역 상태',t.visits?'배송 확인':!deliveryUnverified&&t.candidates?'기간 내 미배송 확인':'배송이력 확인 필요'],
       ['관측 배송',deliveryUnverified ? '미확인' : n(t.visits) + '건'],
       ['오산신규 확인 / 미확인',n(t.newActive) + ' / ' + n(t.newUnknown) + '곳'],
       ['오산보류 이력',n(t.held) + '곳'], ['기간 내 미배송 확인',n(t.candidates) + '곳'],

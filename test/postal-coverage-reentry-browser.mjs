@@ -47,7 +47,7 @@ try {
       const operationPeriod={days,start:{7:'2026-11-17',30:'2026-10-25',60:'2026-09-25',90:'2026-08-26'}[days],end:'2026-11-23'};
       const scoped=area ? {counts,next:null,members:[{code:'S123',name:'검증 매장',flags:4}]} :
         {summary:{...counts,observedAreas:1,missingAreas:0},tones:[[6241,'COMPLETED']]};
-      data={period:operationPeriod,publishedThrough:'2026-11-23',...scoped};
+      data={period:operationPeriod,publishedThrough:'2026-11-23',observedDays:Math.min(76,days),...scoped};
     } else if (endpoint === 'search') {
       searchReads++;
       data = [{ id:postalCode, name:postalCode, kind:'area', location }];
@@ -73,6 +73,10 @@ try {
     window.coverageFixture.open();
   });
   await page.locator('#shadowCoverage[data-postal-view]').waitFor();
+  assert.equal(await page.locator('#postalOverview').isVisible(),false);
+  assert.match(await page.locator('#postalMapSource').innerText(),/배송집계 11\/07 기준 · 90일 중 76일 자료 확인/);
+  assert.equal(await page.locator('#postalLegendArchive').isVisible(),true);
+  await page.locator('#postalDataStatus > summary').click();
   assert.match(await page.locator('#postalPeriod').innerText(),/지도 색상·구역 집계 기준.*2026-11-07/);
   await page.locator('#recentOperationWindow summary').click();
   await page.getByText(/운영이력 원장 기준 2026-11-23/).waitFor();
@@ -99,6 +103,9 @@ try {
 
   await page.locator('#postalLayer').selectOption('operations');
   await page.locator('#postalOperationsSummary').getByText('운영이력 원장 기준 2026-11-23',{exact:true}).waitFor();
+  assert.equal(await page.locator('#postalLegendArchive').isVisible(),false);
+  assert.equal(await page.locator('#postalLegendOperations').isVisible(),true);
+  assert.match(await page.locator('#postalMapSource').innerText(),/운영이력 11\/23 기준/);
   for (const value of ['7','30','60','90']) {
     await page.locator('#coverageDays').selectOption(value);
     await page.locator('#postalOperationsSummary').getByText(new RegExp('^'+value+'일 · .*2026-11-23$')).waitFor();

@@ -1,5 +1,5 @@
 import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs?v=20261124-operations';
-import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261124-coverage-window';
+import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261126-layout';
 import { splitPostalBootstrap } from './postal-geometry.mjs';
 import { createCurrentRegistrationPanel } from './postal-current-registration-panel.mjs?v=20261124-current-registration';
 import { coverageCenterBounds } from './coverage-center-viewport.mjs';
@@ -17,6 +17,7 @@ const overviewReuseMs = 15000;
 const fmt = new Intl.NumberFormat('ko-KR');
 const node = (name, text) => Object.assign(document.createElement(name), { textContent: text });
 const statsText = period => period?.days + '일 · ' + period?.start + ' ~ ' + period?.end;
+const evidenceDate = value => /^\d{4}-\d{2}-\d{2}$/.test(value ?? '') ? value.slice(5).replace('-', '/') : null;
 const pointLocation = item => Number.isFinite(item?.lat) && Number.isFinite(item?.lng) ? [item.lat, item.lng] : null;
 const hasDeliveryEvidence = ({completeness,summary}) => completeness.observed > 0 || summary.recorded > 0;
 
@@ -57,22 +58,27 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   root.innerHTML = '<aside id="coverageSidebar" class="coverage-sidebar" aria-label="음영권역 분석">' +
     '<div class="coverage-heading"><h1 id="coverageTitle">우편번호별 음영권역</h1>' +
     '<button type="button" id="coveragePanelToggle" aria-controls="coverageAnalysis" aria-expanded="true">분석 접기</button></div>' +
-    '<form class="coverage-search" id="coverageSearch"><label for="coverageQuery">주소·고객코드·우편번호 검색</label>' +
+    '<form class="coverage-search" id="coverageSearch"><label for="coverageQuery">주소·매장명·고객코드·우편번호 검색</label>' +
     '<div class="coverage-search-row"><input id="coverageQuery" type="search" placeholder="주소, 매장명, 고객코드, 5자리 우편번호" ' +
     'maxlength="200" required autocomplete="off"><button type="submit" class="coverage-primary">검색</button></div></form>' +
-    '<div id="coverageSearchResults" class="coverage-results" aria-live="polite"></div>' +
-    '<div id="coverageAnalysis"><label id="postalLayerControl" hidden>지도 집계 자료 <select id="postalLayer" class="field">' +
+    '<div class="postal-scope"><label id="postalLayerControl" hidden>지도 표시 기준 <select id="postalLayer" class="field">' +
     '<option value="archive">배송 밀도 게시본</option><option value="operations">최신 운영 근거</option></select></label>' +
     '<div class="coverage-filters"><label>지도 집계 기간 <select id="coverageDays">' +
     '<option value="7" disabled hidden>7일</option><option value="30">30일</option><option value="60">60일</option><option value="90" selected>90일</option></select></label>' +
     '<label>담당 센터 <select id="coverageCenter"><option value="all">전체</option><option value="osan">오산</option>' +
     '<option value="yeongnam">영남</option><option value="honam">호남</option></select></label>' +
     '<label>검색 반경 <select id="coverageRadius"><option value="0">구역만</option><option value="500">500m</option>' +
-    '<option value="1000">1km</option></select></label></div>' +
-    '<div id="postalOperations" hidden aria-live="polite"><div class="coverage-overview" id="postalOperationsSummary"></div>' +
-    '<div class="coverage-legend postal-legend" aria-label="최신 운영 근거 범례">' +
-    Object.entries(operationLabels).map(([key,label])=>'<span data-postal-tone="'+key+'">'+label+'</span>').join('') + '</div></div>' +
-    '<div id="postalArchive"><div id="postalOverview"><div class="coverage-overview"><h2 id="postalOverviewTitle">전국 집계</h2><p id="postalPeriod"></p><p id="postalObserved"></p>' +
+    '<option value="1000">1km</option></select></label></div></div>' +
+    '<div id="coverageSearchResults" class="coverage-results" aria-live="polite"></div>' +
+    '<div id="coverageAnalysis">' +
+    '<section class="coverage-detail" id="postalOperationsDetail" aria-label="우편번호 운영 근거 상세" hidden></section>' +
+    '<section class="coverage-detail" id="coverageDetail" aria-label="우편번호 구역 상세" hidden></section>' +
+    '<div id="postalArchive" class="coverage-list postal-candidates"><h2>미배송 확인 구역</h2><div id="postalCandidates"></div></div>' +
+    '<details class="coverage-evidence" id="postalCurrentRegistration" hidden><summary>현재 등록 매장</summary>' +
+    '<p data-current-postal-summary aria-live="polite"></p><div data-current-postal-roster aria-live="polite"></div></details>' +
+    '<details class="coverage-evidence postal-data-status" id="postalDataStatus"><summary>자료 현황</summary>' +
+    '<div id="postalOperations" hidden aria-live="polite"><div class="coverage-overview" id="postalOperationsSummary"></div></div>' +
+    '<div id="postalArchiveStatus"><div id="postalOverview"><div class="coverage-overview"><h2 id="postalOverviewTitle">전국 집계</h2><p id="postalPeriod"></p><p id="postalObserved"></p>' +
     '<p class="coverage-note" id="postalRegistryScope">매장 수는 게시 자료 기준입니다. 최신 전체 등록 현황은 확인이 필요합니다.</p>' +
     '<dl class="coverage-kpis"><div><dt>게시본 등록 매장</dt><dd data-postal-kpi="registered" aria-describedby="postalRegistryScope">—</dd></div>' +
     '<div><dt>좌표 연결 배송</dt><dd data-postal-kpi="visits">—</dd></div>' +
@@ -81,24 +87,22 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     '<div><dt>미배송 확인 구역</dt><dd data-postal-kpi="candidate">—</dd></div>' +
     '<div><dt>활성 오산신규</dt><dd data-postal-kpi="newActive">—</dd></div>' +
     '<div><dt>오산보류 이력</dt><dd data-postal-kpi="held">—</dd></div></dl></div>' +
-    '<div class="coverage-legend postal-legend" aria-label="배송 분류 범례">' +
-    Object.entries(labels).map(([key, label]) => '<span data-postal-tone="' + key + '">' + label + '</span>').join('') + '</div>' +
     '<p class="coverage-note" id="postalFormula"></p><p class="coverage-note" id="postalNewEvidence"></p>' +
     '<div class="coverage-legend postal-badges" aria-label="오산 매장 상태">' +
     '<span data-postal-badge="active">오산신규 배송 확인</span><span data-postal-badge="unverified">오산신규 배송 미확인</span>' +
     '<span data-postal-badge="held">오산보류 이력</span></div>' +
     '<button type="button" id="postalUnmatched">미매칭 업장</button>' +
-    '<div class="coverage-list postal-candidates"><h2>기간 내 미배송 확인 구역</h2><div id="postalCandidates"></div></div>' +
     '<details class="coverage-evidence"><summary>경계 출처와 원천 날짜</summary><div id="postalEvidence"></div></details></div>' +
     '<details class="coverage-evidence" id="recentOperationWindow"><summary>기간별 운영 근거</summary>' +
     '<label>운영이력 기간 <select id="recentOperationDays"><option value="7">7일</option><option value="30">30일</option>' +
     '<option value="60">60일</option><option value="90" selected>90일</option></select></label>' +
-    '<div id="recentOperationSummary" aria-live="polite"></div></details></div>' +
-    '<details class="coverage-evidence" id="postalCurrentRegistration" hidden><summary>현재 등록 매장</summary>' +
-    '<p data-current-postal-summary aria-live="polite"></p><div data-current-postal-roster aria-live="polite"></div></details>' +
-    '<section class="coverage-detail" id="postalOperationsDetail" aria-label="우편번호 운영 근거 상세" hidden></section>' +
-    '<section class="coverage-detail" id="coverageDetail" aria-label="우편번호 구역 상세" hidden></section></div></aside>' +
+    '<div id="recentOperationSummary" aria-live="polite"></div></details></details></div></aside>' +
     '<section class="coverage-map-area" aria-label="국가기초구역 배송분포 지도"><div id="coverageMap"></div>' +
+    '<div id="postalMapLegend" class="postal-map-legend">' +
+    '<div id="postalLegendArchive" class="coverage-legend postal-legend" aria-label="배송 밀도 범례">' +
+    Object.entries(labels).map(([key,label])=>'<span data-postal-tone="'+key+'">'+label+'</span>').join('')+'</div>' +
+    '<div id="postalLegendOperations" class="coverage-legend postal-legend" aria-label="최신 운영 근거 범례" hidden>' +
+    Object.entries(operationLabels).map(([key,label])=>'<span data-postal-tone="'+key+'">'+label+'</span>').join('')+'</div></div>' +
     '<div class="postal-map-controls" role="group" aria-label="지도 보기"><button type="button" data-preset="nation">전국</button>' +
     '<button type="button" data-preset="region">오산·화성</button><button type="button" id="postalZoomIn" aria-label="지도 확대">+</button>' +
     '<button type="button" id="postalZoomOut" aria-label="지도 축소">−</button></div>' +
@@ -156,6 +160,16 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       node('p','한 매장에 여러 근거가 있을 수 있습니다. 권역 연결이 확인된 매장만 색상에 반영합니다.'));
   }
 
+  function showMapEvidence() {
+    const target=find('postalMapSource');
+    const data=latest()?operationsDisplayed:view;
+    const date=evidenceDate(latest()?data?.publishedThrough:data?.period?.end);
+    const days=data?.period?.days;
+    const observed=latest()?data?.observedDays:data?.completeness?.observed;
+    if(!date||!Number.isInteger(days)||!Number.isInteger(observed)||observed<0||observed>days){target.textContent='';return;}
+    target.textContent=(latest()?'운영이력 ':'배송집계 ')+date+' 기준 · '+days+'일 중 '+observed+'일 자료 확인';
+  }
+
   async function showOperationsArea(area, offset=0) {
     const panel=find('postalOperationsDetail');
     operationsDetailRead?.abort();
@@ -194,7 +208,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   async function readOperationWindow() {
     const section=find('recentOperationWindow'), target=find('recentOperationSummary');
     recentOperationRead?.abort();
-    if (!active || !section.open) return;
+    if (!active || !section.open || !find('postalDataStatus').open) return;
     const request = recentOperationRead = new AbortController();
     const days=find('recentOperationDays').value;
     const center=find('coverageCenter').value;
@@ -307,7 +321,6 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     find('postalNewEvidence').textContent = '오산신규 배송 미확인 ' + fmt.format(summary.newUnknown) + '곳 · 등록 매장 구역 중 자료 미확인 ' +
       fmt.format(summary.unverifiedScopedAreas) + '곳';
     find('postalUnmatched').textContent = '우편번호 미매칭 ' + fmt.format(summary.unmatchedStores) + '곳 보기';
-    find('postalMapSource').textContent = source.label + ' · ' + (source.asOf || '경계 기준일 미공개');
     const credit = node('a', source.label);
     credit.href = source.url; credit.target = '_blank'; credit.rel = 'noopener';
     const dates = node('p', '배송 원천 미확인 ' + (completeness.sourceMissing.join(' · ') || '0일'));
@@ -366,6 +379,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       applyView(view,same);
       updateCurrentRegistration(force);
       if (latest()) showOperations(operations);
+      showMapEvidence();
       map.show(latest()?{...view,tones:operations?.tones??[],badges:[]}:view,slices);
       if (resumeArea) areaCard(resumeArea);
       else if (latest() && selectedArea && (operationsChanged || !find('postalOperationsDetail').firstChild)) void showOperationsArea(selectedArea);
@@ -518,6 +532,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   }
 
   find('coveragePanelToggle').onclick = () => collapse(!root.classList.contains('coverage-panel-collapsed'));
+  find('postalDataStatus').ontoggle = readOperationWindow;
   find('recentOperationWindow').ontoggle = readOperationWindow;
   find('recentOperationDays').onchange = readOperationWindow;
   find('postalUnmatched').onclick = () => { if (view) areaCard({ id:'unmatched' }); };
@@ -537,6 +552,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       showOperations(null);
       map?.clear(true);
     }
+    find('postalMapSource').textContent='';
     if (centerChanged) {
       const {center} = baseScope();
       viewportRead?.abort();
@@ -555,7 +571,11 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     week.disabled=week.hidden=!showLatest;
     if(!showLatest&&range()==='7')find('coverageDays').value='90';
     find('postalArchive').hidden=showLatest;
+    find('postalArchiveStatus').hidden=showLatest;
     find('postalOperations').hidden=!showLatest;
+    find('postalLegendArchive').hidden=showLatest;
+    find('postalLegendOperations').hidden=!showLatest;
+    find('postalMapSource').textContent='';
     viewportRead?.abort();
     loadingKey=bootstrapScope=null;
     operationsDetailRead?.abort();

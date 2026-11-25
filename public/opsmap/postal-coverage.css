@@ -1,4 +1,14 @@
 .postal-coverage .coverage-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.postal-scope { display:grid; gap:8px; margin-block:8px; }
+.postal-coverage .postal-data-status { margin-top:12px; }
+.postal-map-legend {
+  position:absolute; z-index:3; top:12px; right:10px; padding:6px 8px;
+  border:1px solid #d2deee; border-radius:7px; background:#fffffff5;
+  color:#25374c; pointer-events:none;
+}
+.postal-map-legend .postal-legend { display:grid; grid-template-columns:repeat(2,auto); gap:4px 10px; }
+.postal-map-legend .postal-legend[hidden] { display:none; }
+.postal-coverage .coverage-detail li button { text-align:left; overflow-wrap:anywhere; }
 .postal-map-overlay { position: absolute; pointer-events: none; transform-origin: center; }
 .postal-map-selection { position: absolute; overflow: visible; pointer-events: none; }
 .postal-map-selection path { fill: none; stroke: #122e50; stroke-width: 2.3px; stroke-linejoin: round; }
@@ -105,6 +115,7 @@
   .postal-coverage .coverage-sidebar { max-height: min(44dvh, 365px); }
   .postal-coverage .coverage-map-area { min-height: 300px; }
   .postal-map-controls { top: 7px; left: 7px; }
+  .postal-map-legend { top: 48px; right: 7px; }
   .postal-coverage .coverage-map-state { inset: auto 7px 42px; }
   .postal-coverage .coverage-map-state p { padding: 4px 6px; font-size: 11px; }
   .postal-area-active .coverage-sidebar { max-height: min(43dvh, 340px); }
