@@ -70,7 +70,7 @@ const runtime=fs.readFileSync(path.join(root,'map-phase2b-runtime.js'),'utf8').r
    move(lat=37.53,lng=127.03){const {map}=state;map.setLevel(6);map.setCenter(new kakao.maps.LatLng(lat,lng));for(const name of ['zoom_changed','dragstart','center_changed','dragend','idle'])kakao.maps.event.trigger(map,name);},
    zoom(level){const {map}=state;map.setLevel(level);for(const name of ['zoom_changed','idle'])kakao.maps.event.trigger(map,name);},
    setFilters(center,scope){state.centerFilter=center;periodVehicleScope=scope;periodSelectionCache=null;},
-   releaseFocus:()=>mapCamera.releaseFocus(),positionButtons:positionTemporaryRemoveButtons,
+   releaseFocus:()=>mapCamera.releaseFocus(),positionButtons:positionTemporaryRemoveButtons,clearMap,
    geometry(){
     const marker=document.querySelector('[data-search-temporary-pin]').querySelector('.pinShape').getBoundingClientRect();
     const bounds=document.querySelector('#map').getBoundingClientRect(),projection=state.map.getProjection();
@@ -218,9 +218,11 @@ try{
  await page.locator('.navRoutePoint[data-role="waypoint"]').evaluate(button=>button.click());
  check('inspecting a route point does not recreate a deleted search marker',await page.locator('#detailSection').isVisible()&&await page.locator('[data-search-temporary-pin],#removeTemporaryPin').count()===0);
  await page.evaluate(()=>{MapNavigationEditor.clear();tempPinTest.clear();});
- for(const action of ['overview','mode','pagehide','logout']){
+ for(const action of ['overview','mode','map-layer-reset','pagehide','logout']){
   await page.evaluate(()=>tempPinTest.begin('서울 합성구 검토로 30'));await page.evaluate(()=>tempPinTest.click(37.55,127));
-  if(action==='overview')await page.locator('#mapReset').click();else await page.evaluate(name=>window.dispatchEvent(name==='pagehide'?new PageTransitionEvent('pagehide',{persisted:true}):new CustomEvent(name==='mode'?'map-navigation-context-changed':'map-navigation-logout')),action);
+   if(action==='overview')await page.locator('#mapReset').click();
+   else if(action==='map-layer-reset')await page.evaluate(()=>tempPinTest.clearMap());
+   else await page.evaluate(name=>window.dispatchEvent(name==='pagehide'?new PageTransitionEvent('pagehide',{persisted:true}):new CustomEvent(name==='mode'?'map-navigation-context-changed':'map-navigation-logout')),action);
   s=await page.evaluate(()=>tempPinTest.stats());const retained=action!=='logout';
   check(action+' observes the temporary pin lifetime',s.count===Number(retained)&&Boolean(s.virtual)===retained&&
    s.activeCircles===Number(Boolean(s.viewport))&&s.stores===initial.stores);

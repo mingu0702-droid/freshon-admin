@@ -2000,6 +2000,7 @@
   }
 
   function clearMap() {
+    clearTemporaryRadius();
     cancelViewportRender();lastMarkerViewport=null;
     searchNeighborhood=null;
     areaViewportIndex=null;
