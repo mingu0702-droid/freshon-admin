@@ -37,7 +37,8 @@ function readPage(payload,{dates,center}) {
   for (const row of payload.data) {
     if (!row||typeof row!=='object'||Array.isArray(row)||
         (row.isSum!==false&&row.isSum!=='false')||
-        (row.logCd!=null&&row.logCd!==''&&![center,String(Number(center))].includes(text(row.logCd)))) fail('SCOPE');
+        (row.logCd!=null&&row.logCd!==''&&![center,String(Number(center))].includes(text(row.logCd)))||
+        (row.baecha!=null&&row.baecha!==''&&text(row.baecha)!=='2')) fail('SCOPE');
     const stamp=text(row.stockDate);
     const customerCode=text(row.estCd).toUpperCase();
     if (!stamp) {
@@ -54,7 +55,7 @@ function readPage(payload,{dates,center}) {
         !allowedDates.has(stamp.replace(/[-.]/g,''))) fail('SCOPE');
     const amount=integer(row.maechul), deliveries=integer(row.baesongCnt), total=integer(row.totalCnt);
     const route=vehicle(row.confirmCarSeq);
-    if (!customerCodePattern.test(customerCode)||deliveries<1||
+    if (!customerCodePattern.test(customerCode)||!Object.hasOwn(row,'confirmCarSeq')||deliveries<1||
         total<1||total>=pageSize||routes.has(route)||(group&&group.route!==route)) fail('DETAIL');
     declared??=total;
     if (total!==declared) fail('COUNT');
@@ -119,7 +120,7 @@ function abortable(operation,signal) {
 
 function neighborEvidence(neighbor,date,centerKey) {
   return neighbor&&neighbor.centerKey===centerKey&&isStageWmsDay(neighbor.date)&&
-    Math.abs(Date.parse(date)-Date.parse(neighbor.date))===86_400_000&&
+    Date.parse(neighbor.date)!==Date.parse(date)&&Math.abs(Date.parse(date)-Date.parse(neighbor.date))<=4*86_400_000&&
     Number.isSafeInteger(neighbor.detail)&&neighbor.detail>0&&neighbor.detail<pageSize;
 }
 
@@ -174,6 +175,7 @@ export function createStageFreshonNightDispatchReader({login,fetchImpl=fetch,now
         }));
         return result('VERIFIED',date,centerKey,new Date(now()).toISOString(),exact.digest,exact.detail,rows);
       }
+      if (typeof neighbor==='function') neighbor=await abortable(neighbor,active);
       if (!neighborEvidence(neighbor,date,centerKey)) return null;
       const [start,end]=[date,neighbor.date].sort();
       const range=await request(start,end,center,active);

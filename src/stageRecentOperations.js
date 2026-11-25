@@ -329,21 +329,46 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
   };
 }
 
-export async function syncStageRecentOperations({store,receipt,readSeed,readSource,readLatestDay,readLatestDispatch,retryDates=[],repairDate,
+export async function syncStageRecentOperations({store,receipt,readSeed,readSource,readLatestDay,readLatestDispatch,
+  readNightDispatch,onNightDispatch=()=>{},retryDates=[],repairDate,
   readHistoricalScope,recoverySources=[],recoveryScopeLimit=1,now=Date.now}={}) {
   const startedAt=now();
   const day=latestClosedDay(startedAt);
   const kstDate=new Date(startedAt+9*3600000).toISOString().slice(0,10);
   if (!store?.write || !hash.test(receipt?.runId || '') || receipt.date!==kstDate) throw Error('RECENT_OPERATIONS_RECEIPT');
   if (day<RECENT_OPERATIONS_BASELINE_END) throw rejected();
-  const current=await store.read();
-  const base=current.ledger ?? await readSeed?.();
+  let current=await store.read();
+  let base=current.ledger ?? await readSeed?.();
   if (!base) throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
   if (base.endDate>day) throw rejected();
   if (!Array.isArray(retryDates) || retryDates.length>maxRetryDates ||
       retryDates.some(date=>!isDay(date) || date>day)) throw rejected();
   const windowStart=datesFor(day,90)[0];
   if (repairDate!==undefined && (!isDay(repairDate) || repairDate<windowStart || repairDate>day)) throw rejected();
+  let nightPublished=false;
+  let nightScopes=[];
+  if(readNightDispatch){
+    nightScopes=await readNightDispatch(day);
+    if(!Array.isArray(nightScopes)||nightScopes.length>recentOperationsCenters.length||
+        nightScopes.some(scope=>scope.date!==day||scope.source!=='wms_dispatch'))throw rejected();
+    // Preserve older positive evidence if it conflicts with an otherwise verified empty scope.
+    const nightAdditions=nightScopes.filter(scope=>scope.rows.length||!base.days.some(previous=>
+      dayKey(previous)===dayKey(scope)&&previous.rows.length));
+    if(nightAdditions.length){
+      const candidate=mergeRecentOperations(base,day,nightAdditions);
+      if(!current.ledger||JSON.stringify(candidate)!==JSON.stringify(base)){
+        try{await store.write(candidate,current.sha);}
+        catch(error){if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
+        current=await store.read();
+        if(JSON.stringify(current?.ledger)!==JSON.stringify(candidate))throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
+        base=current.ledger;
+        nightPublished=true;
+      }
+      onNightDispatch({date:day,state:nightPublished?'PUBLISHED':'VERIFIED_NOOP',centers:nightAdditions.length,
+        zeroConflicts:nightScopes.length-nightAdditions.length});
+    }
+  }
+
   const dates=new Set([day,...(repairDate?[repairDate]:[]),...retryDates.filter(date=>date>=windowStart)]);
   const days=[];
   let endDate=base.endDate;
@@ -361,7 +386,7 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     const latestUnpublished=date===day && date>base.endDate;
     // A pinned WMS export can publish the date before the signed scheduled
     // collection fills its independent FreshOn and Delivery Admin scopes.
-    const latestHasWms=date===day && [...previous,...input].some(osanWmsDay);
+    const latestHasWms=date===day && ([...previous,...input].some(osanWmsDay)||nightScopes.length>0);
     // Retry one explicitly selected historical gap per run. The latest day
     // takes priority, and existing sealed files and published dates are retained.
     const missingPastDay=date<day && !retriedMissingDay && savedInput==null && previous.length===0;
@@ -449,16 +474,19 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
       attempts.push(attempt);
     }
   }
-  if (!days.length && !attempts.length) return {state:'SOURCE_UNAVAILABLE',endDate:base.endDate};
+  if (!days.length && !attempts.length) return {
+    state:nightPublished?'PUBLISHED':nightScopes.length?'VERIFIED_NOOP':'SOURCE_UNAVAILABLE',endDate:base.endDate
+  };
   let next=mergeRecentOperations(base,endDate,days);
   if (attempts.length) next=normalizeRecentOperations({...next,recovery:[...journal.values()].filter(entry=>entry.date>=next.startDate)});
-  if (current.ledger && JSON.stringify(next)===JSON.stringify(base)) return {state:'VERIFIED_NOOP',endDate:base.endDate};
+  if (current.ledger && JSON.stringify(next)===JSON.stringify(base))
+    return {state:nightPublished?'PUBLISHED':'VERIFIED_NOOP',endDate:base.endDate};
   try {await store.write(next,current.sha);}
   catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
   const saved=await store.read();
   if (JSON.stringify(saved.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
   const evidenceChanged=attempts.length&&(endDate!==base.endDate||JSON.stringify(next.days)!==JSON.stringify(base.days));
-  return {state:attempts.length&&!evidenceChanged&&current.ledger?'RECOVERY_CHECKPOINTED':'PUBLISHED',endDate,
+  return {state:!nightPublished&&attempts.length&&!evidenceChanged&&current.ledger?'RECOVERY_CHECKPOINTED':'PUBLISHED',endDate,
     ...(attempts.length?{recovery:attempts.at(-1),recoveryBatch:attempts}:{})};
 }
 

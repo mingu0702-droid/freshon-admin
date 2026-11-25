@@ -101,7 +101,7 @@ test('invalid neighbor scope leaves a blank unverified without another call',asy
   let calls=0;
   const read=create(async()=>{calls++;return response([]);});
   assert.equal(await read(date,'osan',{neighbor:{date:previous,centerKey:'honam',detail:1}}),null);
-  assert.equal(await read(date,'osan',{neighbor:{date:'2026-11-23',centerKey:'osan',detail:1}}),null);
+  assert.equal(await read(date,'osan',{neighbor:{date:'2026-11-19',centerKey:'osan',detail:1}}),null);
   assert.equal(await read(date,'osan',{neighbor:{date:previous,centerKey:'osan',rows:[1]}}),null);
   assert.equal(calls,3);
 });

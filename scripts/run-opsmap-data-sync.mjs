@@ -364,8 +364,39 @@ async function runScheduled(job,settingsFile){
         const repairDate=repair?.[2]===receipt.date?repair[1]:undefined;
         const retryDates=env.OPSMAP_STAGE_RECENT_OPERATIONS_RETRY_DATES?.split(',').map(date=>date.trim());
         const exportReader=createStageWmsDispatchExportReader({env});
+        const noteNightDispatch=value=>console.info(JSON.stringify({
+          component:'opsmap-freshon-night-dispatch',runId:receipt.runId,...value
+        }));
+        const readNightDispatch=opsmapArchiveSite(env)==='primary'&&opsmapArchiveWriteApproved(env)&&
+          env.OPSMAP_STAGE_WMS_FRESHON_VALIDATION_APPROVED==='1'?async date=>{
+            const {createStageNightDispatchArchive,collectStageNightDispatch,nightDispatchOperations,nightDispatchBaselineEnd}
+              =await import('../src/stageNightDispatchArchive.js');
+            if(date<=nightDispatchBaselineEnd){
+              noteNightDispatch({date,state:'ALREADY_ARCHIVED'});
+              return [];
+            }
+            try{
+              const {config}=await import('../src/config.js');
+              const origin='https://mis.freshon.co.kr';
+              if(new URL(config.freshonBaseUrl).origin!==origin)throw Error('NIGHT_DISPATCH_AUTH_SCOPE');
+              const {loginFreshonOverHttp}=await import('../src/scraper/freshonHttpSession.js');
+              const {createStageFreshonNightDispatchReader}=await import('../src/stageFreshonNightDispatch.js');
+              const read=createStageFreshonNightDispatchReader({login:({signal})=>
+                loginFreshonOverHttp({origin,userId:config.freshonId,password:config.freshonPassword,signal})});
+              const archive=createStageNightDispatchArchive({env,write:true});
+              const scopes=await collectStageNightDispatch({date,archive,read,onCenter:noteNightDispatch});
+              memory('AFTER_NIGHT_DISPATCH');
+              return nightDispatchOperations(scopes);
+            }catch(error){
+              const code=error?.code??error?.message;
+              noteNightDispatch({date,state:'SOURCE_UNAVAILABLE',error:
+                /^(?:NIGHT_DISPATCH|FIXED_STORE)_[A-Z_]+$/.test(code??'')?code:'NIGHT_DISPATCH_UNAVAILABLE'});
+              return [];
+            }
+          }:undefined;
         const result=await syncStageRecentOperations({store:createStageRecentOperationsStore({env,write:true}),receipt,
           readLatestDay,readLatestDispatch:date=>exportReader?.(date).catch(()=>null),
+          readNightDispatch,onNightDispatch:noteNightDispatch,
           retryDates,repairDate,readHistoricalScope,recoverySources,recoveryScopeLimit,
           readSeed:createStageRecentOperationsSeed({env,manifest:recentOperationsBaseline})});
         console.log(JSON.stringify({component,runId:receipt.runId,...result}));

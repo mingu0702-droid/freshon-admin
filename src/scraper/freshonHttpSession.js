@@ -1,7 +1,7 @@
-export async function loginFreshonOverHttp({origin,userId,password}) {
+export async function loginFreshonOverHttp({origin,userId,password,signal}) {
   if(!userId||!password) throw Error('FRESHON_ID and FRESHON_PASSWORD must be configured as environment variables.');
   const response=await fetch(origin+'/loginProcessing',{
-    method:'POST',redirect:'manual',signal:AbortSignal.timeout(20000),
+    method:'POST',redirect:'manual',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(20000)]):AbortSignal.timeout(20000),
     headers:{Accept:'text/html,application/xhtml+xml',
       'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8',
       Origin:origin,Referer:origin+'/login','User-Agent':'freshon-admin-auth/1.0'},
