@@ -89,10 +89,10 @@ if (tabs && sidebar && bridge) {
     try {
       if (!feature) {
         stylesheet ||= Object.assign(document.createElement('link'),{
-          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261126-v4',import.meta.url),
+          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261126-v4-scroll',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261126-v4');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261126-v4-scroll');
         if (opening!==attempt||!session()) return;
         const createReview=comparisonEnabled?(await import('./dispatch-reference-review.mjs?v=20261126-v4')).createDispatchScreenReview:null;
         if (opening!==attempt||!session()) return;

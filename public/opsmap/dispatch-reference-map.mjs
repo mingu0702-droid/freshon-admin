@@ -1,6 +1,6 @@
 import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs?v=20261126-v4';
 import {summarizeDispatchPeriod} from './dispatch-reference-period.mjs?v=20261124-period-proof';
-import {dispatchOverlapVehicles,mountDispatchV4} from './dispatch-reference-v4.mjs?v=20261126-v4';
+import {dispatchOverlapVehicles,mountDispatchV4} from './dispatch-reference-v4.mjs?v=20261126-v4-scroll';
 
 const meters = km => Number.isFinite(km) ? new Intl.NumberFormat('ko-KR').format(Math.round(km*1000))+'m' : '미확인';
 const sourceClock=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',

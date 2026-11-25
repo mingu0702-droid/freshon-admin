@@ -135,6 +135,9 @@
 .dispatch-v4-route:hover,.dispatch-v4-route:focus-visible { background:#f3f7fb; }
 .dispatch-v4-overlaps { padding:12px 10px; color:#25374c; }
 .dispatch-v4-overlaps h2 { margin:0; font-size:15px; }
+.dispatch-v4-candidates {
+  max-height:min(34dvh,16rem); overflow-y:auto; overscroll-behavior-y:contain; scrollbar-gutter:stable;
+}
 .dispatch-v4-candidates button[data-dispatch-v4-postal] {
   display:flex; align-items:baseline; justify-content:space-between; gap:6px;
   width:100%; min-height:34px; padding:5px 6px; text-align:left; box-shadow:none;

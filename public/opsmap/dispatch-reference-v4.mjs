@@ -105,7 +105,7 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
   panel.className='dispatch-v4-overlaps';
   panel.hidden=true;
   panel.innerHTML='<h2>우편번호 겹침 · 조정 후보</h2><p class="dispatch-v4-overlap-status" role="status"></p>'+
-    '<div class="dispatch-v4-candidates" aria-label="우편번호 후보"></div>';
+    '<div class="dispatch-v4-candidates" role="region" aria-label="우편번호 후보" tabindex="0"></div>';
   right.before(panel);
   const search=roster.querySelector('input'), source=roster.querySelector('.dispatch-v4-source');
   const table=roster.querySelector('.dispatch-v4-table'), unassigned=roster.querySelector('.dispatch-v4-unassigned');

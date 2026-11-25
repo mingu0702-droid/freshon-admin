@@ -16,7 +16,11 @@ const zone={postalCode:'01234',routeCount:3,storeCount:4,routes:[
   stores:[member('201','S1000',0),member('201','S9000',1,false),member('228','S1027',27),member('315','S9010',5)]};
 const other={postalCode:'01235',routeCount:2,storeCount:2,routes:[{vehicle:'211',storeCount:1},{vehicle:'229',storeCount:1}],
   stores:[member('211','S1010',10),member('229','S1028',28)]};
-const candidates=[other,zone].map(({stores,...summary})=>summary);
+const extraZones=Array.from({length:80},(_,index)=>({postalCode:String(20000+index),routeCount:2,storeCount:2,
+  routes:[{vehicle:'211',storeCount:1},{vehicle:'229',storeCount:1}],
+  stores:[member('211','S'+(2000+index*2),index),member('229','S'+(2001+index*2),index+1)]}));
+const zones=new Map([other,zone,...extraZones].map(candidate=>[candidate.postalCode,candidate]));
+const candidates=[...zones.values()].map(({stores,...summary})=>summary);
 const overview=dispatchOverlapOverview({...meta,candidates});
 assert.equal(overview.candidates[0].postalCode,'01234');
 assert.equal(dispatchOverlapDetail({...meta,candidate:zone},overview,overview.candidates[0]).stores.filter(row=>row.point).length,3);
@@ -93,7 +97,7 @@ try{
         if(zip){
           assert.equal(url.searchParams.get('version'),meta.version);
           if(refuseDetail)return interceptor.fulfill({status:409,json:{state:'UNAVAILABLE'}});
-          return interceptor.fulfill({json:{...meta,candidate:zip==='01234'?zone:other}});
+          return interceptor.fulfill({json:{...meta,candidate:zones.get(zip)}});
         }
         return interceptor.fulfill({json:{...meta,candidates:overlapState==='EMPTY'?[]:candidates}});
       }
@@ -111,6 +115,15 @@ try{
   await tab.click();
   await row('310').waitFor();
   await postal('01234').waitFor();
+  const candidateList=overlap.getByRole('region',{name:'우편번호 후보'});
+  assert.equal(await candidateList.locator('[data-dispatch-v4-postal]').count(),82);
+  const viewport=await candidateList.evaluate(node=>({height:node.clientHeight,content:node.scrollHeight}));
+  assert(viewport.content>2_500&&viewport.height<=256);
+  await postal('20079').click();
+  await candidateList.getByText('등록 1곳',{exact:true}).first().waitFor();
+  assert(await candidateList.evaluate(node=>node.scrollTop>2_000));
+  assert.equal(await page.locator('.dispatch-details').evaluate(node=>node.scrollTop),0);
+  await postal('20079').click();
   assert.equal(await roster.getByRole('button').count(),110);
   assert.match(await row('201').innerText(),/경기 가상시\s+2착\s+10,000원/);
   assert.match(await row('228').innerText(),/미확인\s+10,027원/);
@@ -141,8 +154,15 @@ try{
   await page.getByRole('button',{name:'매출',exact:true}).click();
   assert.equal(await roster.getByRole('button').first().getAttribute('data-dispatch-v4-route'),'310');
   await row('201').click();
-  await page.getByLabel('가상 이관 상대 호차').selectOption('228');
+  const compare=page.getByLabel('가상 이관 상대 호차');
+  const compareBounds=await compare.boundingBox(),rightBounds=await page.locator('.dispatch-details').boundingBox();
+  assert(compareBounds.y>=rightBounds.y&&compareBounds.y+compareBounds.height<=rightBounds.y+rightBounds.height,
+    'comparison selector stays in view below the scrollable candidate list');
+  await compare.selectOption('228');
   await page.getByRole('heading',{name:'호차 비교 및 가상 이관'}).waitFor();
+  await page.locator('[data-dispatch-customer="S1027"]').click();
+  await page.getByRole('button',{name:'이관 목록에 담기',exact:true}).click();
+  await page.getByRole('heading',{name:'가상 이관 1곳',exact:true}).waitFor();
   await page.getByLabel('배송일').fill(previous);
   await row('201').getByText('20,000원',{exact:true}).waitFor();
   assert.equal(await roster.getByText('10,000원',{exact:true}).count(),0);
