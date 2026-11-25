@@ -21,6 +21,9 @@ const validDate = date => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test
 const field = (...values) => values.find(value => typeof value === 'string' && value.length<=512 && value.trim())?.trim() || '';
 const cacheTtl = 60_000;
 const staleLimit = 24 * 60 * 60_000;
+// One budget for the entire staff roster read, including any retry. Leave time
+// for the HTTP handler to use the retained response before the 16 s client limit.
+const staffRosterBudgetMs = 14_000;
 const focusedVehicles=new Set(['101','105','122','202']);
 const vehicleEventLimit=32;
 const recentReadFailures=new Set([
@@ -28,6 +31,32 @@ const recentReadFailures=new Set([
   'DELIVERY_SOURCE_FORBIDDEN','DELIVERY_SOURCE_TIMEOUT','DELIVERY_SOURCE_RATE_LIMITED','DELIVERY_SOURCE_IDENTITY_UNVERIFIED',
   'DELIVERY_SOURCE_INCOMPLETE','DELIVERY_SOURCE_PAGE_DUPLICATE','DELIVERY_SOURCE_SCOPE','DELIVERY_SOURCE_CUSTOMER_CONFLICT'
 ]);
+
+const cancelledRoster = () => error('DELIVERY_REQUEST_CANCELLED',499);
+function rosterAbort(signal) {
+  if(signal.reason?.code==='DELIVERY_REQUEST_CANCELLED')return signal.reason;
+  const failure=error('DELIVERY_SOURCE_TIMEOUT',504);
+  failure.diagnostic.stage='staff-roster-deadline';
+  return failure;
+}
+
+async function waitForRoster(flight,signal) {
+  if(signal?.aborted)throw cancelledRoster();
+  flight.waiters++;
+  let onAbort;
+  try {
+    if(!signal)return await flight.pending;
+    const disconnected = new Promise((_,reject)=>{
+      onAbort=()=>reject(cancelledRoster());
+      signal.addEventListener('abort',onAbort,{once:true});
+    });
+    return await Promise.race([flight.pending,disconnected]);
+  } finally {
+    if(onAbort)signal.removeEventListener('abort',onAbort);
+    flight.waiters--;
+    if(!flight.settled&&!flight.waiters)flight.controller.abort(cancelledRoster());
+  }
+}
 
 function taskEvent(task,date,customerCode,vehicle) {
   return deliveryCompletion(vehicle?task:{status:task.status,taskStatus:task.taskStatus,statusText:task.statusText},
@@ -162,16 +191,24 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     if (!hasSource) throw error('DELIVERY_SOURCE_SESSION_REQUIRED', 401);
     if (!validDate(date)) throw error('DELIVERY_SOURCE_DATE_INVALID', 400);
   }
-  async function readTasks(date, reader = read, expectedCenter = '1',signal) {
+  async function readTasks(date, reader = read, expectedCenter = '1',signal,staffRoster=false) {
     authorize(date);
     let tasks;
     try { tasks = await reader(date,{signal}); }
     catch (failure) {
-      const code = ({UPSTREAM_AUTH_REQUIRED:'DELIVERY_SOURCE_AUTH_REQUIRED', PHOTO_FORBIDDEN:'DELIVERY_SOURCE_FORBIDDEN',
+      if(staffRoster&&signal?.aborted)throw rosterAbort(signal);
+      let code = ({UPSTREAM_AUTH_REQUIRED:'DELIVERY_SOURCE_AUTH_REQUIRED', PHOTO_FORBIDDEN:'DELIVERY_SOURCE_FORBIDDEN',
         PHOTO_TIMEOUT:'DELIVERY_SOURCE_TIMEOUT', PHOTO_RATE_LIMITED:'DELIVERY_SOURCE_RATE_LIMITED',
         PHOTO_IDENTITY_UNVERIFIED:'DELIVERY_SOURCE_IDENTITY_UNVERIFIED', PHOTO_PAGE_INCOMPLETE:'DELIVERY_SOURCE_INCOMPLETE',
         PHOTO_PAGE_DUPLICATE:'DELIVERY_SOURCE_PAGE_DUPLICATE'})[failure?.code] || 'DELIVERY_SOURCE_READ_UNAVAILABLE';
-      throw error(code, failure?.sourceHttpStatus ?? failure?.status ?? 502);
+      if(staffRoster&&code==='DELIVERY_SOURCE_TIMEOUT'){
+        if(failure.sourceHttpStatus===504)code='DELIVERY_SOURCE_PROVIDER_TIMEOUT';
+        else if(failure.stage==='source-login')code='DELIVERY_SOURCE_LOGIN_TIMEOUT';
+      }
+      const sourceFailure=error(code,failure?.sourceHttpStatus ?? failure?.status ?? 502);
+      if(staffRoster&&Number.isInteger(failure?.sourceHttpStatus))sourceFailure.diagnostic.sourceHttp=failure.sourceHttpStatus;
+      if(staffRoster&&/^source-[a-z-]{1,28}$/.test(failure?.stage||''))sourceFailure.diagnostic.stage=failure.stage;
+      throw sourceFailure;
     }
     const vehicles = new Map();
     let unassignedRows=0;
@@ -189,17 +226,20 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     return {tasks,vehicles,observation};
   }
 
-  async function readSyncTasks(date,reader,center,sourceId,signal) {
+  async function readSyncTasks(date,reader,center,sourceId,signal,staffRoster=false) {
+    let attempts=1;
     try {
       let result;
-      try {result=await readTasks(date,reader,sourceId,signal);}
+      try {result=await readTasks(date,reader,sourceId,signal,staffRoster);}
       catch(error) {
-        const retryable=error.code==='DELIVERY_SOURCE_TIMEOUT' ||
+        const retryable=(!staffRoster&&error.code==='DELIVERY_SOURCE_TIMEOUT') || error.code==='DELIVERY_SOURCE_PROVIDER_TIMEOUT' ||
           error.code==='DELIVERY_SOURCE_READ_UNAVAILABLE' && [500,502,503,504].includes(error.diagnostic?.status);
         if(!retryable||signal?.aborted)throw error;
         await delay(250,undefined,{signal});
-        result=await readTasks(date,reader,sourceId,signal);
+        attempts++;
+        result=await readTasks(date,reader,sourceId,signal,staffRoster);
       }
+      if(staffRoster&&signal?.aborted)throw rosterAbort(signal);
       recordSource?.('delivery:'+sourceId,date,null,result.observation);
       const {pages,rawRows,duplicateRows,responseRows}=result.observation;
       const at=new Date(now()).toISOString();
@@ -207,6 +247,9 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
         pages,rawRows,duplicateRows,uniqueDeliveries:responseRows,error:null});
       return result;
     } catch(error) {
+      if(staffRoster&&signal?.aborted)error=rosterAbort(signal);
+      if(error.code==='DELIVERY_REQUEST_CANCELLED')throw error;
+      if(staffRoster&&error.diagnostic)error.diagnostic.attempts=attempts;
       recordSource?.('delivery:'+sourceId,date,error);
       lastReads.set(center,{...lastReads.get(center),checkedDate:date,checkedAt:new Date(now()).toISOString(),complete:false,
         error:/^DELIVERY_SOURCE_[A-Z_]+$/.test(error.code||'')?error.code:'DELIVERY_SOURCE_READ_UNAVAILABLE'});
@@ -214,8 +257,8 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     }
   }
 
-  async function loadDate(date,{center,id,reader}) {
-    const {tasks,vehicles,observation} = await readSyncTasks(date,reader,center,id);
+  async function loadDate(date,{center,id,reader},signal) {
+    const {tasks,vehicles,observation} = await readSyncTasks(date,reader,center,id,signal,true);
     const groups = new Map();
     const rows = [], candidates=new Map();
     for (const task of tasks) {
@@ -267,7 +310,8 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     return {rows,byVehicle,source:datedDispatchSource(rows,{pages,rawRows,duplicateRows})};
   }
 
-  async function loadCenter(date,center) {
+  async function loadCenter(date,center,signal) {
+    if(signal?.aborted)throw cancelledRoster();
     authorize(date);
     const config=readers.get(center);
     if (!config) throw error('DELIVERY_SOURCE_CENTER_UNVERIFIED',503);
@@ -275,9 +319,15 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
     const saved=cached.get(key);
     const previousRead=lastReads.get(center);
     if (saved && saved.freshUntil > now()) return saved;
-    if (inflight.has(key)) return inflight.get(key);
+    const existing=inflight.get(key);
+    if(existing&&!existing.controller.signal.aborted)return waitForRoster(existing,signal);
+    if(existing){
+      await existing.pending.catch(()=>{});
+      return loadCenter(date,center,signal);
+    }
     const stale=code=>({value:saved.value,freshUntil:Math.min(now()+15_000,saved.retainUntil),retainUntil:saved.retainUntil,error:code});
     const fallback=failure=>{
+      if(failure.code==='DELIVERY_REQUEST_CANCELLED')throw failure;
       if(!saved || saved.retainUntil<=now())throw failure;
       const retained=stale(failure.code || 'DELIVERY_SOURCE_READ_UNAVAILABLE');
       if (failure.code==='DELIVERY_SOURCE_REGRESSION') lastReads.set(center,{...previousRead,checkedDate:date,
@@ -286,7 +336,11 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       return retained;
     };
     if (inflight.size >= 2) return fallback(error('DELIVERY_SOURCE_BUSY',429));
-    const pending = loadDate(date,config).then(value => {
+    const flight={controller:new AbortController(),waiters:0,settled:false};
+    const budget=AbortSignal.timeout(staffRosterBudgetMs);
+    const combined=AbortSignal.any([flight.controller.signal,budget]);
+    flight.pending = loadDate(date,config,combined).then(value => {
+      if(combined.aborted)throw rosterAbort(combined);
       if (saved) {
         const rows=new Map(value.rows.map(row=>[row.taskId,row]));
         if (saved.value.rows.some(prior=>{
@@ -304,9 +358,12 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
       const active={value,freshUntil:now()+cacheTtl,retainUntil:now()+staleLimit,error:null};
       cached.set(key,active);
       return active;
-    }).catch(fallback).finally(() => inflight.delete(key));
-    inflight.set(key, pending);
-    return pending;
+    }).catch(fallback).finally(()=>{
+      flight.settled=true;
+      inflight.delete(key);
+    });
+    inflight.set(key,flight);
+    return waitForRoster(flight,signal);
   }
   async function readDate(date) {
     const {value,error}=await loadCenter(date,'osan');
@@ -319,8 +376,9 @@ export function createStageDatedDeliveryReader({env = process.env, fetchImpl = f
   };
   readDate.retainedDates=()=>[...cached.keys()].map(key=>JSON.parse(key)).filter(
     ([date,center])=>center==='osan'&&readDate.readRetained(date)).map(([date])=>date);
-  readDate.readContract=async(date,center,vehicle)=>{
-    const {value,error}=await loadCenter(date,center);
+  readDate.readContract=async(date,center,vehicle,{signal}={})=>{
+    const {value,error}=await loadCenter(date,center,signal);
+    if(signal?.aborted)throw cancelledRoster();
     const prepared=value.prepared??=prepareContract(value);
     const candidates=center==='osan'&&focusedVehicles.has(vehicle)?value.candidates.get(vehicle):null;
     if (!error && candidates?.length && !value.eventReads.has(vehicle)) {

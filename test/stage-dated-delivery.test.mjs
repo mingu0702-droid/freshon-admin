@@ -50,10 +50,89 @@ test('the authorized reader returns the exact old date with 101, 122 and 202 acr
 
 test('authentication failures, partial pages and wrong dates never become verified results', async () => {
   const read = fetchImpl => createStageDatedDeliveryReader({env,fetchImpl})(date);
-  await assert.rejects(read(() => new Response('login', {status:401})), {code:'DELIVERY_SOURCE_AUTH_REQUIRED',diagnostic:{status:401}});
-  await assert.rejects(read(() => new Response('forbidden', {status:403})), {code:'DELIVERY_SOURCE_FORBIDDEN',diagnostic:{status:403}});
+  await assert.rejects(read(() => new Response('login', {status:401})), {
+    code:'DELIVERY_SOURCE_AUTH_REQUIRED',diagnostic:{status:401,sourceHttp:401,stage:'source-session',attempts:1}
+  });
+  await assert.rejects(read(() => new Response('forbidden', {status:403})), {
+    code:'DELIVERY_SOURCE_FORBIDDEN',diagnostic:{status:403,sourceHttp:403,stage:'source-task-search',attempts:1}
+  });
   await assert.rejects(read(() => response(tasks.slice(0,1))), {code:'DELIVERY_SOURCE_INCOMPLETE'});
   await assert.rejects(read(() => response([{...tasks[0], enteringDatedAt:'2026-05-15'}],1,1)), {code:'DELIVERY_SOURCE_IDENTITY_UNVERIFIED'});
+});
+
+test('one staff roster deadline includes the retry and differs from a provider HTTP 504',async t=>{
+  let providerCalls=0;
+  const upstream=createStageDatedDeliveryReader({env,fetchImpl:()=>{
+    providerCalls++;
+    return new Response(null,{status:504});
+  }});
+  await assert.rejects(upstream.readContract(date,'osan',null),{
+    code:'DELIVERY_SOURCE_PROVIDER_TIMEOUT',diagnostic:{status:504,sourceHttp:504,stage:'source-task-search',attempts:2}
+  });
+  assert.equal(providerCalls,2);
+
+  const budget=new AbortController();
+  const limits=[];
+  t.mock.method(AbortSignal,'timeout',limit=>{limits.push(limit);return budget.signal;});
+  let starts=0;
+  const internal=createStageDatedDeliveryReader({env,fetchImpl:()=>{
+    starts++;
+    budget.abort(new DOMException('fixture budget exceeded','TimeoutError'));
+    return new Promise(()=>{});
+  }});
+  await assert.rejects(internal.readContract(date,'osan',null),{
+    code:'DELIVERY_SOURCE_TIMEOUT',diagnostic:{status:504,stage:'staff-roster-deadline',attempts:1}
+  });
+  assert.deepEqual(limits,[14000]);
+  assert.equal(starts,1);
+});
+
+test('one departing staff reader keeps the shared date while the last departure cancels an obsolete date',async()=>{
+  const alternate='2026-05-15';
+  const signals=new Map(), replies=new Map(), calls=[];
+  const read=createStageDatedDeliveryReader({env,fetchImpl(url,{signal}){
+    const day=url.searchParams.get('enteringDatedAtBetween').slice(0,10);
+    calls.push(day);signals.set(day,signal);
+    return new Promise(resolve=>replies.set(day,resolve));
+  }});
+  const abandoned=new AbortController(), shared=new AbortController();
+  const first=read.readContract(date,'osan',null,{signal:abandoned.signal});
+  const sameScope=read.readContract(date,'osan','101',{signal:shared.signal});
+  const otherScope=read.readContract(alternate,'osan',null);
+  const firstFailed=assert.rejects(first,{code:'DELIVERY_REQUEST_CANCELLED'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(calls,[date,alternate]);
+  abandoned.abort();
+  await firstFailed;
+  assert.equal(signals.get(date).aborted,false);
+  replies.get(alternate)(response([{...tasks[0],enteringDatedAt:alternate}],1,1));
+  assert.equal((await otherScope).date,alternate);
+  const sharedFailed=assert.rejects(sameScope,{code:'DELIVERY_REQUEST_CANCELLED'});
+  shared.abort();
+  await sharedFailed;
+  assert.equal(signals.get(date).aborted,true);
+  assert.equal(read.readRetained(date),null);
+  assert.equal((await read.readContract(alternate,'osan',null)).count,1);
+  const reopened=read.readContract(date,'osan',null);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(calls,[date,alternate,date]);
+  replies.get(date)(response(tasks.slice(0,1),1,1));
+  assert.equal((await reopened).count,1);
+});
+
+test('staff source failure keeps the last verified roster for that date only',async()=>{
+  let clock=Date.parse(date), live=true;
+  const read=createStageDatedDeliveryReader({env,now:()=>clock,fetchImpl:()=>live ? response(tasks.slice(0,1),1,1):
+    new Response(null,{status:504})});
+  const first=await read.readContract(date,'osan',null);
+  live=false;
+  clock+=61000;
+  const saved=await read.readContract(date,'osan',null);
+  assert.equal(saved.state,'STALE_VERIFIED');
+  assert.equal(saved.error,'DELIVERY_SOURCE_PROVIDER_TIMEOUT');
+  assert.equal(saved.sha256,first.sha256);
+  assert.equal(saved.currentReadComplete,false);
+  await assert.rejects(read.readContract('2026-05-15','osan',null),{code:'DELIVERY_SOURCE_PROVIDER_TIMEOUT'});
 });
 
 test('only explicit matching-center delivery positives become partial operating evidence',async()=>{
@@ -78,8 +157,10 @@ test('only explicit matching-center delivery positives become partial operating 
   assert.deepEqual(queries,['1','3','4','3']);
 });
 
-test('Stage assignments and current status share the same authenticated source without a Hub read', async t => {
+test('Stage HTTP shares dated source work and cancels a disconnected date without a Hub read', {timeout:5000},async t => {
   const password = 'fixture-only-dated-read';
+  const abandonedDate='2026-05-14';
+  const abandonedStarted=Promise.withResolvers(),abandonedStopped=Promise.withResolvers();
   let sessionContent;
   let providerReads = 0;
   const app = createStageVerificationApp({env:{...env, MAP_STAFF_ID:'fixture-staff', MAP_STAFF_PASSWORD_HASH:await createStaffPasswordHash(password),
@@ -91,6 +172,11 @@ test('Stage assignments and current status share the same authenticated source w
         assert.equal(options.method, 'GET');
         assert.equal(url.searchParams.get('logisticsCenterId'), '1');
         providerReads++;
+        if(url.searchParams.get('enteringDatedAtBetween').startsWith(abandonedDate)){
+          options.signal.addEventListener('abort',()=>abandonedStopped.resolve(),{once:true});
+          abandonedStarted.resolve();
+          return new Promise(()=>{});
+        }
         return response(tasks.slice(0,3), 3, 1);
       }
       assert.equal(url.hostname, 'api.github.com');
@@ -141,4 +227,11 @@ test('Stage assignments and current status share the same authenticated source w
   const status = await todayStatus.json();
   assert.deepEqual(status.data.vehicles.map(group => [group.vehicle,group.totalStops]), [['101',1],['122',1],['202',1]]);
   assert.equal(providerReads,1);
+  const departing=new AbortController();
+  const abandoned=assert.rejects(fetch(`${dated}?date=${abandonedDate}`,{headers:{cookie},signal:departing.signal}),{name:'AbortError'});
+  await abandonedStarted.promise;
+  departing.abort();
+  await abandoned;
+  await abandonedStopped.promise;
+  assert.equal(providerReads,2);
 });

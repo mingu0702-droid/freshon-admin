@@ -29,6 +29,9 @@
     if (status === 401) return '인증 필요 (401)';
     if (status === 403) return '접근 권한 없음 (403)';
     if (status === 429) return '조회 한도 초과 (429)';
+    if (code === 'DELIVERY_SOURCE_PROVIDER_TIMEOUT') return '배송 원천 응답 시간 초과 (504)';
+    if (code === 'DELIVERY_SOURCE_LOGIN_TIMEOUT') return '배송 원천 로그인 시간 초과';
+    if (code === 'DELIVERY_SOURCE_BUSY') return '다른 배송일 조회 중';
     if (status === 504 || /TIMEOUT|DEADLINE/.test(code)) return '조회 시간 초과';
     if (/INCOMPLETE|PARTIAL|^DATED_ASSIGNMENTS_|GENERATION_CHANGED/.test(code)) return '부분 페이지 또는 조회 검증 실패';
     if (/REQUEST_CANCELLED|QUERY_CANCELLED/.test(code) || error?.name === 'AbortError') return '조회 취소';

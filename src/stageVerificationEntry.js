@@ -694,6 +694,11 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
               Object.keys(req.query).some(key=>!['date','center','vehicle'].includes(key))) {
             return res.status(400).json({error:'DELIVERY_QUERY_INVALID'});
           }
+          const started=Date.now();
+          const client=new AbortController();
+          const disconnect=()=>{if(!res.writableEnded)client.abort();};
+          res.once('close',disconnect);
+          if(res.destroyed)disconnect();
           const active=validation.active();
           const sourceId=SYNC_DELIVERY_SOURCES[center];
           const source=scheduledSources['delivery:'+sourceId];
@@ -704,21 +709,29 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
               sourceRunId:active?.scheduled?.state.runId,publishedAt:active?.scheduled?.state.committedAt,lastSuccessAt:scopedSuccessAt,error});
           };
           try {
-            const data=await readDatedDelivery.readContract(date,center,vehicle);
+            const data=await readDatedDelivery.readContract(date,center,vehicle,{signal:client.signal});
+            if(client.signal.aborted)return;
             const archive=await retained('DELIVERY_SOURCE_REGRESSION');
+            if(client.signal.aborted)return;
             const result=archive?.source.uniqueDeliveries>data.source.uniqueDeliveries?retainDatedDriverEvidence(archive,data):data;
             return requireStaff(req,res,()=>privateResponse().json(result));
           } catch (failure) {
+            if(client.signal.aborted)return;
             const error=/^DELIVERY_SOURCE_[A-Z_]+$/.test(failure.code||'')?failure.code:'DELIVERY_SOURCE_READ_UNAVAILABLE';
             const saved=await retained(error);
+            if(client.signal.aborted)return;
             return requireStaff(req,res,()=>{
               console.info(JSON.stringify({component:'stage-dated-delivery',status:saved?200:503,code:error,
-                date,center,sourceId,vehicleFiltered:vehicle!==null,retained:Boolean(saved)}));
+                date,center,sourceId,vehicleFiltered:vehicle!==null,retained:Boolean(saved),
+                elapsedMs:Date.now()-started,attempts:failure.diagnostic?.attempts??null,
+                sourceStage:failure.diagnostic?.stage??null,sourceHttp:failure.diagnostic?.sourceHttp??null}));
               return saved?privateResponse().json(saved):privateResponse().status(503).json({contract:DATED_DELIVERY_CONTRACT,
                 date,center,sourceId,vehicle,generation:null,sourceGeneration:null,sourceRunId:null,state:'SOURCE_UNAVAILABLE',error,
                 source:{kind:'DELIVERY_ADMIN_READ',observedAt:null},sourceComplete:false,currentReadComplete:false,scopeComplete:false,confirmedEmpty:false,
                 previousVerifiedRetained:false,lastSuccessAt:scopedSuccessAt,rows:null,activeCount:null,chronology:null,chronologyTies:null});
             });
+          } finally {
+            res.off('close',disconnect);
           }
         });
         router.post(officialAddressIndexRoute,requireStaff,(req,res,next)=>{
