@@ -2,6 +2,7 @@ import {createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes} fro
 import {promisify} from 'node:util';
 import {gzip, gunzip} from 'node:zlib';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
+import {freshonWmsVehicle} from './stageFreshonWmsDispatch.js';
 import {datesFor, isDay} from './shadowCoverage/coverageFiles.js';
 import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
 
@@ -36,6 +37,7 @@ const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const stageScope = env => Boolean(opsmapArchiveSite(env));
 const latestClosedDay = at => new Date(at + 9 * 3600000 - 86400000).toISOString().slice(0,10);
 const dayKey = ({date,centerKey,source}) => [date,centerKey,source].join(':');
+const osanWmsDay = day => day.centerKey==='osan'&&day.source==='wms_dispatch';
 const rejected = () => Error('RECENT_OPERATIONS_EVIDENCE_INVALID');
 
 export const stageRecentOperationsSyncEnabled = env => stageScope(env) &&
@@ -352,14 +354,14 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     const previous=base.days.filter(item=>item.date===date);
     const completeRows=new Map(previous.filter(item=>item.coverage==='complete').map(item=>[dayKey(item),item]));
     let input=(savedInput??[]).map(item=>completeRows.get(dayKey(item))??item);
-    if(date===day&&readLatestDispatch&&![...previous,...input].some(item=>item.source==='wms_dispatch')){
+    if(date===day&&readLatestDispatch&&![...previous,...input].some(osanWmsDay)){
       const archive=await readLatestDispatch(date);
       if(archive)input.push(projectArchivedOsanDispatch(archive,date).evidence);
     }
     const latestUnpublished=date===day && date>base.endDate;
     // A pinned WMS export can publish the date before the signed scheduled
     // collection fills its independent FreshOn and Delivery Admin scopes.
-    const latestHasWms=date===day && previous.some(item=>item.source==='wms_dispatch');
+    const latestHasWms=date===day && [...previous,...input].some(osanWmsDay);
     // Retry one explicitly selected historical gap per run. The latest day
     // takes priority, and existing sealed files and published dates are retained.
     const missingPastDay=date<day && !retriedMissingDay && savedInput==null && previous.length===0;
@@ -533,6 +535,112 @@ export async function recoverArchivedOsanDispatch({
   if (!publish) return {state:'VERIFIED_PREVIEW',...report};
   try {await store.write(next,sha);}
   catch (error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',...report,endDate:base.endDate};throw error;}
+  const saved=await store.read();
+  if (JSON.stringify(saved?.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
+  return {state:'PUBLISHED',...report};
+}
+
+const dispatchArchiveName = /^(\d{4}-\d{2}-\d{2})-(011|012|013)\.dpapi$/;
+const dispatchArchiveCenters = {'011':'osan','012':'yeongnam','013':'honam'};
+const maxDispatchArchiveFiles = 90 * recentOperationsCenters.length;
+const maxDispatchArchiveBytes = 2 * 1024 * 1024;
+
+function verifyFreshonDispatchArchive(bytes,date,center,at) {
+  const {day,center:sourceCenter,filter,tcFilter,checkedAt,digest,state,detail,physical,customers,confirmed,
+    vehicles,unallocated,records} = JSON.parse(bytes);
+  const checked = Date.parse(checkedAt);
+  if (day!==date || sourceCenter!==center || filter!=='2' || tcFilter!=='1' || state!=='VERIFIED' ||
+      !Number.isFinite(checked) || new Date(checked).toISOString()!==checkedAt || checked>at || !hash.test(digest??'') ||
+      ![detail,physical,customers,confirmed,vehicles,unallocated].every(Number.isInteger) ||
+      detail<1 || physical>=3000 || customers<1 || customers>detail || confirmed<0 || confirmed>customers ||
+      vehicles<0 || unallocated<0 || unallocated>detail ||
+      physical!==detail+vehicles+(unallocated>0?1:0) ||
+      !Array.isArray(records) || records.length!==customers) throw rejected();
+
+  const codes=[], seenVehicles=new Set();
+  let lastCode='', assignedPairs=0, unallocatedCustomers=0;
+  for (const record of records) {
+    if (!Array.isArray(record) || record.length!==2) throw rejected();
+    const [code, routes]=record;
+    if (typeof code!=='string'||!customerCode.test(code)||code<=lastCode||!Array.isArray(routes)||!routes.length)
+      throw rejected();
+    lastCode=code;
+    let lastVehicle='', assigned=false;
+    for (const vehicle of routes) {
+      if (typeof vehicle!=='string'||vehicle<=lastVehicle||freshonWmsVehicle(vehicle)!==vehicle) throw rejected();
+      lastVehicle=vehicle;
+      if (vehicle==='미배정') unallocatedCustomers++;
+      else {
+        assigned=true;
+        assignedPairs++;
+        seenVehicles.add(vehicle);
+      }
+    }
+    if (assigned) codes.push(code);
+  }
+  if (codes.length!==confirmed || seenVehicles.size!==vehicles || unallocatedCustomers>unallocated ||
+      Boolean(unallocated)!==Boolean(unallocatedCustomers) || assignedPairs+unallocated>detail) throw rejected();
+  return {digest,codes,unallocated};
+}
+
+// The producer verifies the source envelope. Bind the operator's approval to the
+// exact decrypted bytes of every scope, then store only verified positive codes.
+export async function recoverVerifiedFreshonDispatch({
+  store,archives,approvedSha256,publish=false,now=Date.now
+}={}) {
+  if (!store?.read || publish&&(!store.write||!hash.test(approvedSha256??'')) || !archives)
+    throw Error('RECENT_OPERATIONS_RECOVERY_SCOPE');
+  const at=now(), closed=latestClosedDay(at);
+  const files=new Map(), candidates=[], quarantined=new Map(), byDigest=new Map();
+  for await (const {name,bytes} of archives) {
+    const match=typeof name==='string'&&dispatchArchiveName.exec(name);
+    if (!match||!isDay(match[1])||files.has(name)||files.size>=maxDispatchArchiveFiles||
+        !Buffer.isBuffer(bytes)||!bytes.length||bytes.length>maxDispatchArchiveBytes)
+      throw Error('RECENT_OPERATIONS_RECOVERY_SCOPE');
+    const [,date,center]=match;
+    files.set(name,sha256(bytes));
+    let proof;
+    try {proof=verifyFreshonDispatchArchive(bytes,date,center,at);}
+    catch {quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_EVIDENCE_INVALID');continue;}
+    const prior=byDigest.get(proof.digest);
+    if (prior) {
+      quarantined.set(prior,'RECENT_OPERATIONS_DISPATCH_DUPLICATE_SOURCE');
+      quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_DUPLICATE_SOURCE');
+    } else byDigest.set(proof.digest,date);
+    if (date>closed) quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_DATE_OUTSIDE_LEDGER');
+    candidates.push({date,centerKey:dispatchArchiveCenters[center],codes:proof.codes,unallocated:proof.unallocated});
+  }
+  if (!files.size) throw Error('RECENT_OPERATIONS_RECOVERY_SCOPE');
+  const archiveSha256=sha256(JSON.stringify(['OPS_MAP_FRESHON_DISPATCH_BATCH_V1',[...files].sort()]));
+  if (approvedSha256!==undefined&&archiveSha256!==approvedSha256) throw Error('RECENT_OPERATIONS_DISPATCH_APPROVAL_MISMATCH');
+
+  const {ledger:base,sha}=await store.read()??{};
+  if (!base || base.endDate>closed || !codeRevision.test(sha??'')) throw Error('RECENT_OPERATIONS_BASELINE_UNAVAILABLE');
+  const existing=new Map(base.days.filter(day=>day.source==='wms_dispatch').map(day=>[day.date+':'+day.centerKey,day]));
+  const additions=[];
+  const scopes=candidates.map(({date,centerKey,codes,unallocated})=>{
+    if (date<base.startDate||date>base.endDate) quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_DATE_OUTSIDE_LEDGER');
+    const saved=existing.get(date+':'+centerKey);
+    const before=new Set(saved?.rows.map(row=>row.customerCode));
+    const added=codes.filter(code=>!before.has(code));
+    if (saved?.coverage==='complete'&&(added.length||before.size!==codes.length))
+      quarantined.set(date,'RECENT_OPERATIONS_DISPATCH_COMPLETE_CONFLICT');
+    return {date,centerKey,before:before.size,confirmed:codes.length,unallocated,
+      retainedOutsideInput:before.size-codes.length+added.length,added};
+  }).flatMap(({added,...scope})=>{
+    const {date,centerKey}=scope;
+    if (quarantined.has(date)) return [];
+    if (added.length) additions.push({date,centerKey,source:'wms_dispatch',coverage:'partial',
+      rows:added.map(customerCode=>({customerCode,evidence:'dispatch_confirmed'}))});
+    return [{...scope,added:added.length}];
+  }).sort((a,b)=>(a.date+':'+a.centerKey).localeCompare(b.date+':'+b.centerKey));
+  const report={archiveSha256,endDate:base.endDate,inputScopes:files.size,scopes,
+    quarantinedDates:[...quarantined].sort().map(([date,code])=>({date,code}))};
+  if (!additions.length) return {state:!scopes.length?'NO_ACCEPTED_EVIDENCE':'VERIFIED_NOOP',...report};
+  const next=mergeRecentOperations(base,base.endDate,additions);
+  if (!publish) return {state:'VERIFIED_PREVIEW',...report};
+  try {await store.write(next,sha);}
+  catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',...report};throw error;}
   const saved=await store.read();
   if (JSON.stringify(saved?.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
   return {state:'PUBLISHED',...report};
