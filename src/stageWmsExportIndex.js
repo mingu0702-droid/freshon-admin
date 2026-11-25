@@ -5,6 +5,7 @@ import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
 export const WMS_ARCHIVE_REPO='mingu0702-droid/freshon-cache';
 export const WMS_ARCHIVE_DIR='opsmap-stage/wms-dispatch-v1';
 export const FRESHON_JSON_WMS_FORMAT='FRESHON_JSON_V1';
+export const WMS_OFFICIAL_ROUND_FORMAT='WMS_GAS_PAIRED_V1';
 const branch='stage/opsmap-wms-exports', indexFile='release-index-v1.json';
 const entryLimit=5000, indexByteLimit=1024*1024;
 const entryFile=/^release-\d{4}-\d{2}-\d{2}-[a-f0-9]{64}\.json$/;
@@ -24,7 +25,7 @@ function serializeEntries(entries){
   return entries.map(entry=>{
     const {date,warehouse,sha256,observedAt,format}=entry||{};
     if(!isStageWmsDay(date)||date<=last||warehouse!=='011'||!sha64.test(sha256||'')||
-        (format!==undefined&&format!==FRESHON_JSON_WMS_FORMAT)||typeof observedAt!=='string'||observedAt.length>35||!Number.isFinite(Date.parse(observedAt))){
+        (format!==undefined&&format!==FRESHON_JSON_WMS_FORMAT&&format!==WMS_OFFICIAL_ROUND_FORMAT)||typeof observedAt!=='string'||observedAt.length>35||!Number.isFinite(Date.parse(observedAt))){
       throw stageWmsError('WMS_EXPORT_RELEASE_INDEX_INVALID');
     }
     last=date;

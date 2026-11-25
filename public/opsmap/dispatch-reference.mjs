@@ -86,7 +86,8 @@ export function createDispatchReference(day, stores, date) {
   }
   if (!amountsVerified) amounts.clear();
   const amountTotal=amountsVerified ? [...amounts.values()].reduce((sum,row)=>sum+row.amount,0) : null;
-  const sameWmsExport=['WMS_CONFIRMED_DISPATCH_EXPORT','WMS_CONFIRMED_DISPATCH_FRESHON_JSON'].includes(day.route?.source)&&
+  const officialWmsSource='WMS_CONFIRMED_DISPATCH_OFFICIAL_ROUND';
+  const sameWmsExport=['WMS_CONFIRMED_DISPATCH_EXPORT','WMS_CONFIRMED_DISPATCH_FRESHON_JSON',officialWmsSource].includes(day.route?.source)&&
     day.amounts?.source===day.route?.source;
   const reported=day.amounts?.sourceTotals;
   const sourceTotals=amountsVerified&&sameWmsExport&&Number.isSafeInteger(reported?.amount)&&reported.amount===amountTotal&&
@@ -102,7 +103,8 @@ export function createDispatchReference(day, stores, date) {
     const {detail,displayAmounts,summary} = routeVerified ? detailAmounts(amount,stops??[]) : {detail:null,displayAmounts:null,summary:null};
     vehicles.set(vehicle,{vehicle,stops:stops??[],storeCount:routeVerified ? stops?.length ?? null : null,
       amount:amount?.amount ?? null, detail,displayAmounts,detailSummary:summary,registryMisses:amount?.unmatched??null,
-      wmsConfirmed:Boolean(amount),waypointCount:countOrNull(amount?.waypointCount),deliveryCount:countOrNull(amount?.deliveryCount),
+      wmsConfirmed:Boolean(amount),waypointCount:day.amounts?.source===officialWmsSource&&!wmsScopeComplete?null:countOrNull(amount?.waypointCount),
+      deliveryCount:countOrNull(amount?.deliveryCount),
       uniqueCustomerCount:countOrNull(amount?.uniqueCustomerCount)});
   }
   return {date, routeVerified,routeState, routeSource:day.route?.source??null, routeObservedAt:day.route?.observedAt ?? null, unassigned, amountDate, amountsVerified,amountTotal,
