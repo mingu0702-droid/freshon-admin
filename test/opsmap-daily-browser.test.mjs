@@ -160,10 +160,10 @@ test('Chromium desktop and mobile: one assignment result for the list, pins, fil
 test('Stage B contract keeps every visit while vehicle evidence loads or fails', {timeout:45000}, async t=>{
   const {createHash}=await import('node:crypto');
   const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
-  const date='2026-11-11', older='2026-11-10', delayed='2026-11-08';
+  const date='2026-11-11', older='2026-11-10', delayed='2026-11-08', dense='2026-11-07';
   const stage='https://freshon-admin-stage-preview-template.onrender.com';
   const lengths={'101':22,'105':18,'122':17,'202':22};
-  const makeRows=day=>Object.entries(lengths).flatMap(([vehicle,size])=>
+  const makeRows=day=>Object.entries(day===dense?{'101':1000,'105':947}:lengths).flatMap(([vehicle,size])=>
     Array.from({length:day===older&&vehicle==='105'?6:size},(_,i)=>({
       deliveryId:digest([day,vehicle,i]),deliveryDate:day,customerCode:'S'+vehicle+(vehicle==='105'&&i===17?0:i),
       vehicle,state:vehicle==='105'&&i<8?'COMPLETED':'OPEN',sourceStatus:'OPEN',
@@ -174,6 +174,7 @@ test('Stage B contract keeps every visit while vehicle evidence loads or fails',
   const coordinates=makeRows(date).map((row,i)=>({customerCode:row.customerCode,customerName:'매장 '+i,
     address:'Fixture address',lat:37+i/1000,lng:127}));
   let mode='fail',revision=0,authLoss=false,published=false,rosterFailure=false,reads=0,chronologyReads=0,legacyReads=0;
+  let finishDenseRead, denseColdReads=0;
   const html=(await readFile(new URL('../public/opsmap/map-phase2b-preview.html',import.meta.url),'utf8'))
     .replace(/<script[^>]+src="(?:https:\/\/cdn[^"]+|map-staff-entry\.js[^"]+)"[^>]*><\/script>/g,'')
     .replace(/<script type="application\/x-map-staff" data-src="([^"]+)"[^>]*><\/script>/g,'<script src="$1"></script>')
@@ -185,6 +186,13 @@ test('Stage B contract keeps every visit while vehicle evidence loads or fails',
   app.get('/api/map-phase2b/private/dated-delivery',async(q,r)=>{
     const {date:day,center,vehicle=null}=q.query;
     if(authLoss)return r.status(403).json({error:'STAFF_ACCESS_LOST'});
+    if(center==='osanColdStorage'&&day===dense){
+      if(++denseColdReads===1)await new Promise(resolve=>{
+        finishDenseRead=resolve;
+        r.on('close',resolve);
+      });
+      return r.status(503).json({rows:null,error:'DELIVERY_SOURCE_CENTER_UNVERIFIED'});
+    }
     if(center!=='osan'||rosterFailure&&!vehicle)return r.status(503).json({rows:null,error:'DELIVERY_SOURCE_READ_UNAVAILABLE'});
     const stamp=day+'T00:00:'+String(revision).padStart(2,'0')+'.000Z';
     const roster=makeRows(day), data=vehicle?roster.filter(row=>row.vehicle===vehicle):roster;
@@ -228,7 +236,7 @@ test('Stage B contract keeps every visit while vehicle evidence loads or fails',
   try {
     browser=await chromium.launch({channel:'chrome',headless:true});
     for(const width of [1440,390])await t.test(width+'px',async()=>{
-      mode='fail';revision=0;authLoss=false;published=false;rosterFailure=false;
+      mode='fail';revision=0;authLoss=false;published=false;rosterFailure=false;denseColdReads=0;
       const page=await browser.newPage({viewport:{width,height:900}});
       const errors=[];page.on('pageerror',error=>errors.push(error.message));
       await page.clock.install({time:new Date('2026-11-11T03:00:00Z')});
@@ -251,7 +259,7 @@ test('Stage B contract keeps every visit while vehicle evidence loads or fails',
         count:document.querySelector('#runListCount').textContent,
         status:document.querySelector('#freshnessState').textContent
       }));
-      await page.goto(stage+'/opsmap/');
+      await page.goto(stage+'/opsmap/?opsmapQa=route');
       await page.waitForFunction(()=>window.MapUiLocalBridge?.state.map);
       await page.evaluate(()=>document.querySelector('#modeDaily').click());
       await ready();
@@ -315,6 +323,26 @@ test('Stage B contract keeps every visit while vehicle evidence loads or fails',
         assert.equal((await summary()).visits.length,i%2?18:6);
         restores.push(performance.now()-start);
       }
+      await vehicleTo('101','105');
+      await dateTo(dense);
+      await page.waitForFunction(()=>JSON.parse(document.querySelector('#map').dataset.rosterTiming||'{}').firstFrameMs!==undefined);
+      assert.ok(finishDenseRead);
+      assert.equal((await summary()).visits.length,1947);
+      assert.equal(await page.locator('#syncOperation').isDisabled(),true);
+      finishDenseRead();finishDenseRead=null;
+      await ready();
+      const timing=await page.locator('#map').evaluate(node=>JSON.parse(node.dataset.rosterTiming));
+      const osan=timing.requests.find(request=>request.center==='osan');
+      const other=timing.requests.find(request=>request.center==='osanColdStorage');
+      assert.ok(osan.headersMs<=osan.parsedMs&&osan.parsedMs<=osan.verifiedMs);
+      assert.ok(osan.verifiedMs<=timing.firstListMs&&timing.firstListMs<=timing.firstFrameMs);
+      assert.ok(timing.firstFrameMs<=other.failedMs&&other.failedMs<=timing.finishedMs,JSON.stringify(timing));
+      t.diagnostic(JSON.stringify({width,verifiedListMs:timing.firstListMs,firstFrameMs:timing.firstFrameMs,finishedMs:timing.finishedMs}));
+      await dateTo(dense);await ready();
+      assert.equal(denseColdReads,1);
+      assert.match((await summary()).status,/일부 센터 미확인/);
+      await sync();await ready();
+      assert.equal(denseColdReads,2);
       published=true;
       await page.reload();
       await page.waitForFunction(()=>window.MapUiLocalBridge?.state.map);
@@ -326,6 +354,7 @@ test('Stage B contract keeps every visit while vehicle evidence loads or fails',
       authLoss=true;await sync();
       await page.waitForFunction(()=>document.querySelector('#freshnessState').textContent==='직원 로그인 필요');
       assert.deepEqual([(await summary()).visits.length,(await summary()).located,(await summary()).total],[0,0,'-']);
+      assert.equal(await page.locator('#map').getAttribute('data-roster-timing'),null);
       assert.deepEqual(errors,[]);
       assert.equal(legacyReads,0);
       const p95=values=>Math.round(values.sort((a,b)=>a-b)[Math.ceil(values.length*.95)-1]*10)/10;

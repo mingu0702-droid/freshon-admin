@@ -26,7 +26,7 @@
   let routeCameraEpoch=null;
   let operationStops = [], runFilter = "ALL";
   const dailySnapshots = new Map();
-  let dailyRead = null, dailyError = null, actualRouteLayer = null, dailyView = null;
+  let dailyRead = null, dailyError = null, actualRouteLayer = null, dailyView = null, rosterTiming = null;
   const dailyEvidenceReads=new Map();
   const dailyRosters=new Map();
   let rosterAuthorized=true, rosterCoordinateRequest=null;
@@ -69,6 +69,7 @@
     dailyRosters.clear(); rosterCoordinateRequest=null;
     dailySnapshots.clear(); dailyEvidenceReads.clear(); dailyRead = dailyError = dailyView = null;
     hybridUi?.cancel();requestControllers.forEach(v=>v.controller.abort());requestControllers.clear();memoryResponses.clear();apiDiagnostics.clear();
+    rosterTiming=null;delete $('#map').dataset.rosterTiming;
     storeDetailFlights.clear();storeDetailMemory.clear();storeDetailLatest=Promise.resolve();newAreaRegistryMemo=newAreaLocationsMemo=newAreaEvidenceMemo=null;deferredBatchMapRefresh=null;
     latestSnapshotRows=[];periodRows=[];allStores=[];generalRegistryRows.clear();operationStops=[];coordinateByCode.clear();baseVehicles.clear();baseVehicleExtraCodes.clear();baseVehicleRequest=null;periodSelectionCache=null;registrationCounts=null;dateReady=false;datedSourceDate='';dailyMeta=null;closeClusterPanel();
     snapshotTransferVersion=null;baseVehicleTransfers.clear();
@@ -1230,10 +1231,10 @@
     return [401,403].includes(error?.status)||error?.code==='STAFF_LOGIN_REQUIRED';
   }
 
-  function installRoster(saved) {
+  function installRoster(saved, verifiedRows) {
     if (!saved.scopes.size) return;
     const scopes=[...saved.scopes.values()];
-    const rows=OpsmapDaily.rosterRows(scopes).map(row=>{
+    const rows=(verifiedRows||OpsmapDaily.rosterRows(scopes)).map(row=>{
       const point=coordinateByCode.get(row.customerCode)||generalRegistryRows.get(row.customerCode);
       if (!point||point.customerRegistryStatus==='DELETED') return row;
       const conflict=point.coordinateStatus==='CONFLICT';
@@ -1261,8 +1262,9 @@
     }).finally(()=>{if(owner===rosterCoordinateRequest)rosterCoordinateRequest=null;});
   }
 
-  async function changeRosterDate(date,conditions) {
+  async function changeRosterDate(date,conditions,{refresh=false}={}) {
     if (!rosterAuthorized||!OpsmapDaily.day(date)||date>maxDailyDate()) return;
+    const startedAt=performance.now();
     if (state.mode!=='DATE_ROUTE'||date!==state.selectedDate) {
       dailyRead?.controller.abort();
       dailyRead=null;
@@ -1291,11 +1293,23 @@
     while (dailyRosters.size>4) dailyRosters.delete(dailyRosters.keys().next().value);
     if (!isDailyDataReady()) installRoster(saved);
     ensureRosterCoordinates();
+    // A checked, unsupported auxiliary center remains unknown. Reuse that exact-date
+    // decision briefly during navigation and honor staff-initiated refresh immediately.
+    const requested=rosterCenters().filter(center=>center!=='osanColdStorage'||refresh||!(saved.coldStorageRetryAt>Date.now()));
     if (dailyRead?.date===date) {
-      for (const center of rosterCenters()) if (!dailyRead.visited.has(center)) dailyRead.pending.add(center);
+      for (const center of requested) if (!dailyRead.visited.has(center)) dailyRead.pending.add(center);
       return dailyRead.promise;
     }
-    const read={date,controller:new AbortController(),pending:new Set(rosterCenters()),visited:new Set()};
+    const timing=routeAuditEnabled()?{requests:[]}:null;
+    rosterTiming=timing;
+    delete $('#map').dataset.rosterTiming;
+    const elapsed=()=>Math.round(performance.now()-startedAt);
+    const publishTiming=()=>{
+      if(timing&&rosterTiming===timing&&rosterAuthorized&&state.mode==='DATE_ROUTE'&&state.selectedDate===date){
+        $('#map').dataset.rosterTiming=JSON.stringify(timing);
+      }
+    };
+    const read={date,controller:new AbortController(),pending:new Set(requested),visited:new Set()};
     dailyRead=read;
     const active=()=>rosterAuthorized&&read===dailyRead&&!read.controller.signal.aborted&&state.mode==='DATE_ROUTE'&&state.selectedDate===date;
     renderRosterReadState();
@@ -1304,10 +1318,13 @@
         for (const center of read.pending) {
           if (!active()) return;
           read.visited.add(center);
+          const span=timing?{center,startedMs:elapsed()}:null;
+          if(span)timing.requests.push(span);
           try {
             const response=await fetchJson(rosterQuery(date,center),{channel:'dated-roster:'+center,signal:read.controller.signal,
-              timeout:16000,allowSourceError:true});
+              timeout:16000,allowSourceError:true,onHeaders:span?()=>{span.headersMs=elapsed();}:null});
             if (!active()) return;
+            if(span)span.parsedMs=elapsed();
             const scope=OpsmapDaily.verifyRoster(response,date,center);
             const prior=saved.scopes.get(center);
             const before=prior?.lastSuccessAt||prior?.publishedAt||'';
@@ -1318,17 +1335,34 @@
             }
             const updated=new Map(saved.scopes);
             updated.set(center,scope);
-            OpsmapDaily.rosterRows(updated.values());
+            const verifiedRows=OpsmapDaily.rosterRows(updated.values());
+            if(span)span.verifiedMs=elapsed();
             if(prior&&!OpsmapDaily.sameRosterScope(prior,scope)){
               for(const key of saved.chronologies.keys())if(key.startsWith(center+'|'))saved.chronologies.delete(key);
             }
             saved.scopes=updated;
             saved.errors.delete(center);
-            if (!prior||prior.sha256!==scope.sha256||!OpsmapDaily.sameRosterScope(prior,scope)) installRoster(saved);
+            if(center==='osanColdStorage')delete saved.coldStorageRetryAt;
+            if (!prior||prior.sha256!==scope.sha256||!OpsmapDaily.sameRosterScope(prior,scope)) {
+              installRoster(saved,verifiedRows);
+              if(span)span.renderedMs=elapsed();
+              if(timing&&timing.firstListMs===undefined&&operationStops.length){
+                timing.firstListMs=elapsed();
+                requestAnimationFrame(()=>requestAnimationFrame(()=>{
+                  timing.firstFrameMs=elapsed();
+                  publishTiming();
+                }));
+              }
+            }
           } catch (error) {
             if (!active()) return;
             if (isStaffAccessError(error)) {purgeStaffData();return;}
             saved.errors.set(center,error);
+            if(center==='osanColdStorage'){
+              if(error.status===503&&error.code==='DELIVERY_SOURCE_CENTER_UNVERIFIED')saved.coldStorageRetryAt=Date.now()+60000;
+              else delete saved.coldStorageRetryAt;
+            }
+            if(span)span.failedMs=elapsed();
           } finally {
             read.pending.delete(center);
             if (active()) renderRosterReadState();
@@ -1345,6 +1379,7 @@
           dailyRead=null;
           if (isDailyDataReady()) void loadBaseMap();
           else renderRosterReadState();
+          if(timing){timing.finishedMs=elapsed();publishTiming();}
         }
       }
     })();
@@ -1432,6 +1467,7 @@
 
   function resetDailyView() {
     delete $('#map').dataset.dailyEvidence;
+    rosterTiming=null;delete $('#map').dataset.rosterTiming;
     dateReady=false; datedSourceDate=''; dailyMeta=null; dailyView=null;
     state.currentRows=[]; state.routeRows=[]; operationStops=[];
     syncPeriodBasis();
@@ -1472,8 +1508,8 @@
     dailyMeta=payload.meta;
     lastRefreshedAt=payload.meta.sourceObservedAt||payload.meta.generatedAt||payload.meta.observedAt||payload.meta.checkedAt||'';
   }
-  async function changeSelectedDate(date,queryConditions=null,{provided=null}={}) {
-    if(usesDeliveryRoster())return changeRosterDate(date,queryConditions);
+  async function changeSelectedDate(date,queryConditions=null,{provided=null,refresh=false}={}) {
+    if(usesDeliveryRoster())return changeRosterDate(date,queryConditions,{refresh});
     if(!OpsmapDaily.day(date)||date>maxDailyDate())return;
     const contextChanged=state.mode!=='DATE_ROUTE'||date!==state.selectedDate;
     generalMap=false;
@@ -5607,7 +5643,10 @@
   function formatDistance(value) { return Number.isFinite(Number(value)) ? `${Number(value).toFixed(Number(value) < 1 ? 2 : 1)}km` : "-"; }
   function normalizeVehicle(value) { return String(value || "").trim().replace(/호(?:차)?$/, ""); }
   function localDate(value=new Date()) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(value); }
-  function formatTime(value,seconds=false) { if (!value) return ""; const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", ...(seconds?{second:"2-digit"}:{}), hour12: false }).format(date); }
+  const kstTimeOptions={timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',hour12:false};
+  const kstMinuteFormat=new Intl.DateTimeFormat('ko-KR',kstTimeOptions);
+  const kstSecondFormat=new Intl.DateTimeFormat('ko-KR',{...kstTimeOptions,second:'2-digit'});
+  function formatTime(value,seconds=false) { if (!value) return ""; const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : (seconds?kstSecondFormat:kstMinuteFormat).format(date); }
   function formatShort(value) { const date = new Date(`${value}T00:00:00`); return `${String(date.getMonth() + 1).padStart(2, "0")}월 ${String(date.getDate()).padStart(2, "0")}일`; }
   function daysBefore(value, count) { const date = new Date(`${value}T00:00:00`); date.setDate(date.getDate() - count); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
   function esc(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
@@ -5726,9 +5765,9 @@
     if(isDailyDataReady())await loadBaseMap();
   }
 
-  async function refreshSelectedDate() {
+  async function refreshSelectedDate({refresh=false}={}) {
     if(state.mode==='BASE_60D'){periodMeta=null;return changePeriod(state.rangeStart,state.rangeEnd);}
-    if(state.selectedDate)return changeSelectedDate(state.selectedDate);
+    if(state.selectedDate)return changeSelectedDate(state.selectedDate,null,{refresh});
     return selectLatestRoute();
   }
 
@@ -5923,7 +5962,7 @@
     $("#todayBtn").onclick = selectLatestRoute;
     ["#date", "#mobileDate", "#selectedDate"].forEach((id) => { $(id).onchange = (event) => { changeSelectedDate(event.target.value); }; });
     $("#operationVehicle").onchange = (event) => { const vehicle = event.target.value; setSelectedVehicles([vehicle]); $("#vehicle").value = vehicle; $("#mobileVehicle").value = vehicle; refreshVehicleUi(true); };
-    $("#syncOperation").onclick = () => {if(state.mode==="DATE_ROUTE")return refreshSelectedDate();};
+    $("#syncOperation").onclick = () => {if(state.mode==="DATE_ROUTE")return refreshSelectedDate({refresh:true});};
     $("#routePlan").onclick = () => loadRoute("pc");
     $("#endRoute").onclick = endRoute;
     $("#mapReset").onclick = resetMapOverview;

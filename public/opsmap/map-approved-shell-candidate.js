@@ -351,12 +351,19 @@
     const visits=new Map(bridge.navigationVisitRows().map(row=>[row.deliveryId||`${row.vehicle}|${row.customerCode}`,row]));
     for(const button of $('#runList').querySelectorAll('[data-run-visit]'))sourceCard(button,visits.get(button.dataset.runVisit),true);
   }
-  for(const node of [$('#runList'),$('#dailySummary'),$('#roadRoutePanel'),$('#periodStoreList')])new MutationObserver(sourceSync).observe(node,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
+  const modeTab=$('#modeDaily'),periodCount=$('#periodStoreListCount');
+  const sources=new MutationObserver(changes=>{
+    if(changes.some(({target})=>target===modeTab||periodCount.contains(target)))sync();
+    sourceSync();
+  });
+  // The shell styles the existing rows itself; only list replacement comes from the controller.
+  for(const node of [$('#runList'),$('#periodStoreList')])sources.observe(node,{childList:true});
+  for(const node of [$('#dailySummary'),$('#roadRoutePanel')])sources.observe(node,{childList:true,subtree:true,attributes:true,attributeFilter:['data-state']});
   window.addEventListener('map-area-scope-changed',sourceSync);
   window.addEventListener('map-daily-query-basis-changed',()=>{syncModeControls(true);sourceSync();});
-  new MutationObserver(sourceSync).observe($('#togglePeriodList'),{attributes:true,attributeFilter:['aria-expanded']});
-  new MutationObserver(()=>{sync();sourceSync();}).observe($('#modeDaily'),{attributes:true,attributeFilter:['aria-pressed']});
-  new MutationObserver(()=>{sync();sourceSync();}).observe($('#periodStoreListCount'),{childList:true,subtree:true,characterData:true});
+  sources.observe($('#togglePeriodList'),{attributes:true,attributeFilter:['aria-expanded']});
+  sources.observe(modeTab,{attributes:true,attributeFilter:['aria-pressed']});
+  sources.observe(periodCount,{childList:true,subtree:true,characterData:true});
   sync();sourceSync();
   window.MapStaffEntry?.status();
 })();
