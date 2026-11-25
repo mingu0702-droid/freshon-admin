@@ -33,7 +33,8 @@ assert.throws(()=>dispatchOverlapDetail({...meta,candidate:{...zone,stores:[...z
 function daily(date) {
   const source=date===day?'WMS_CONFIRMED_DISPATCH_FRESHON_JSON':'WMS_CONFIRMED_DISPATCH_EXPORT',rows=[],vehicles=[];
   for(let i=0;i<110;i++){
-    const vehicle=String(201+i),customerCode='S'+(1000+i),amount=(date===day?10_000:20_000)+i;
+    const vehicle=i===108?'오산신규':String(201+i),customerCode='S'+(1000+i);
+    const amount=(date===day?10_000:20_000)+i+(i>=108?12_000_000:0);
     rows.push({...member(vehicle,customerCode,i),postalCode:i===0||i===27?'01234':'01235',
       deliveryArea:i===109?longArea:i%2?'충남 검증시':'경기 가상시'});
     vehicles.push({vehicle,amount,deliveryCount:3,waypointCount:i===0?2:null,uniqueCustomerCount:1,
@@ -136,17 +137,25 @@ try{
   assert.equal(await page.locator('.dispatch-details').evaluate(node=>node.scrollTop),0);
   await postal('20079').click();
   assert.equal(await roster.getByRole('button').count(),110);
-  assert.match(await row('201').innerText(),/2착\s+10,000원\s+경기 가상시/);
-  assert.match(await row('228').innerText(),/착수 미확인\s+10,027원/);
+  assert.match(await row('201').innerText(),/201호\s+10,000원\s+경기 가상시\s+2착/);
+  assert.match(await row('228').innerText(),/228호\s+10,027원\s+충남 검증시\s+착수 미확인/);
   assert.equal(await row('310').locator('.dispatch-v4-area').textContent(),longArea);
   const layout=async width=>{
     await page.setViewportSize({width,height:width===1920?1080:768});
     return page.evaluate(()=>{
       const measure=node=>({width:node.clientWidth,content:node.scrollWidth});
       const area=document.querySelector('[data-dispatch-v4-route="310"] .dispatch-v4-area');
+      const rows=[...document.querySelectorAll('.dispatch-v4-route')].map(row=>{
+        const cells=[...row.children];
+        const [vehicle,amount,region,waypoints]=cells.map(node=>node.getBoundingClientRect());
+        return cells.every(node=>node.scrollWidth<=node.clientWidth+1)&&vehicle.right<amount.left&&region.right<waypoints.left&&
+          Math.abs(vehicle.top-amount.top)<4&&Math.abs(region.top-waypoints.top)<4&&
+          region.top>=Math.max(vehicle.bottom,amount.bottom);
+      });
       return {viewport:innerWidth,map:measure(document.querySelector('#map')),work:measure(document.querySelector('.workspace')),
         right:measure(document.querySelector('.dispatch-details')),area:measure(area),
-        areaFont:parseFloat(getComputedStyle(area).fontSize),areaOverflow:getComputedStyle(area).textOverflow};
+        areaFont:parseFloat(getComputedStyle(area).fontSize),areaOverflow:getComputedStyle(area).textOverflow,
+        orderedRows:rows.filter(Boolean).length};
     });
   };
   for(const width of [1366,1920]){
@@ -154,6 +163,7 @@ try{
     assert(sizes.map.width>=width*(width===1920?.68:.58));
     assert(sizes.work.width>=sizes.work.content&&sizes.right.width>=sizes.right.content&&sizes.area.width>=sizes.area.content);
     assert(sizes.areaFont>=13&&sizes.areaOverflow!=='ellipsis');
+    assert.equal(sizes.orderedRows,110);
   }
   await layout(1366);
   assert.match(await page.locator('.dispatch-v4-unassigned').innerText(),/미배정 · 배송 2건 · 205원/);

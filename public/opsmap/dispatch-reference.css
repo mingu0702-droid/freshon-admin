@@ -125,15 +125,15 @@ body[data-dispatch-v4] .workspace > .maparea { position:relative; }
 .dispatch-v4-table-head [data-direction=asc]::after { content:' ▴'; }
 .dispatch-v4-table-head [data-direction=desc]::after { content:' ▾'; }
 .dispatch-v4-route {
-  display:grid; grid-template-columns:minmax(0,1fr) auto auto;
-  grid-template-areas:"vehicle waypoints amount" "area area area";
+  display:grid; grid-template-columns:minmax(0,1fr) auto;
+  grid-template-areas:"vehicle amount" "area waypoints";
   align-items:baseline; gap:3px 8px; width:100%; min-height:55px; padding:6px 4px;
   border-bottom:1px solid #e5ecf3; border-radius:0; text-align:left; font-size:13px; font-variant-numeric:tabular-nums;
 }
 .dispatch-v4-vehicle { display:inline-flex; align-items:center; gap:5px; color:#233d5d; font-size:16px; }
 .dispatch-v4-vehicle::before { content:""; flex:0 0 7px; height:7px; border-radius:50%; background:var(--dispatch-vehicle-color); }
 .dispatch-v4-route .dispatch-v4-vehicle { grid-area:vehicle; overflow-wrap:anywhere; }
-.dispatch-v4-waypoints { grid-area:waypoints; color:#536781; white-space:nowrap; }
+.dispatch-v4-waypoints { grid-area:waypoints; justify-self:end; color:#536781; white-space:nowrap; }
 .dispatch-v4-amount { grid-area:amount; justify-self:end; color:#263c54; white-space:nowrap; font-size:14px; }
 .dispatch-v4-area { grid-area:area; min-width:0; color:#41556d; line-height:1.35; word-break:keep-all; overflow-wrap:anywhere; }
 .dispatch-v4-route[aria-pressed=true] { background:#e9f3ff; color:#144b8c; }

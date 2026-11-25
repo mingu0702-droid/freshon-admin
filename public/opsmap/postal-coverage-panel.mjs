@@ -387,9 +387,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
         searchNeedsRefresh = false;
         void runSearch(submittedSearch, { refresh:true });
       }
-      const stale = !latest() && data.stale ? '지도 집계 게시본 ' + data.period.end + ' 기준' : '';
       const missing = (latest() ? !operations : !hasDeliveryEvidence(data)) ? '선택 범위의 배송 자료 미확인' : '';
-      message([stale, missing].filter(Boolean).join(' · '));
+      message(missing);
     } catch (error) {
       if (!active || viewportRead !== controller || controller.signal.aborted) return;
       if (error.status === 401 || error.status === 403) {

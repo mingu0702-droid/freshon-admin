@@ -10,6 +10,7 @@ const rosterReads = [];
 const operationsReads = [];
 const viewportReads = [];
 let generation = 'before-switch';
+let observedDays = 76;
 let searchReads = 0;
 const period = { days:90, start:'2026-08-10', end:'2026-11-07' };
 const location = [37.497, 127.029];
@@ -39,8 +40,8 @@ try {
     if (endpoint === 'view') {
       viewportReads.push([url.searchParams.get('level'),url.searchParams.get('box')]);
       data = {
-        period, generation, completeness:{ observed:76, missing:[], sourceMissing:[], centerObserved:{}, unverified:[] },
-        summary:{ recorded:1 }, source:{ label:'fixture', url:'#' }, candidates:[], tiles:[], tones:[], badges:[], operationsAvailable:true,
+        period, generation, stale:true, completeness:{ observed:observedDays, missing:[], sourceMissing:[], centerObserved:{}, unverified:[] },
+        summary:{ recorded:observedDays ? 1 : 0 }, source:{ label:'fixture', url:'#' }, candidates:[], tiles:[], tones:[], badges:[], operationsAvailable:true,
       };
     } else if(endpoint === 'operations') {
       const days=Number(url.searchParams.get('days')),area=url.searchParams.get('area');
@@ -77,6 +78,7 @@ try {
   await page.locator('#shadowCoverage[data-postal-view]').waitFor();
   assert.equal(await page.locator('#postalOverview').isVisible(),false);
   assert.match(await page.locator('#postalMapSource').innerText(),/배송집계 11\/07 기준 · 90일 중 76일 자료 확인/);
+  assert.equal(await page.locator('#coverageMapState').isVisible(),false);
   assert.equal(await page.locator('#postalLegendArchive').isVisible(),true);
   await page.locator('#postalDataStatus > summary').click();
   assert.match(await page.locator('#postalPeriod').innerText(),/지도 색상·구역 집계 기준.*2026-11-07/);
@@ -145,6 +147,11 @@ try {
   await page.locator('#postalPeriod').getByText(/2026-11-07/).waitFor();
   await page.getByText(generation, { exact:true }).waitFor();
 
+  generation = 'no-observations';
+  observedDays = 0;
+  await page.evaluate(() => window.coverageFixture.invalidate());
+  await page.locator('#coverageMapMessage').getByText('선택 범위의 배송 자료 미확인',{exact:true}).waitFor();
+  assert.match(await page.locator('#postalMapSource').innerText(),/배송집계 11\/07 기준 · 90일 중 0일 자료 확인/);
   await page.evaluate(() => {
     window.coverageFixture.close();
     window.coverageFixture.disposeMap();

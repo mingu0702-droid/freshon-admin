@@ -136,9 +136,9 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
     table.innerHTML=rows.length?rows.map(row=>'<button type="button" class="dispatch-v4-route" data-dispatch-v4-route="'+
       escape(row.vehicle)+'" aria-pressed="'+String(selectedVehicle===row.vehicle||selectedRoutes.has(row.vehicle))+'">'+
       '<strong class="dispatch-v4-vehicle" style="--dispatch-vehicle-color:'+dispatchVehicleColor(row.vehicle)+'">'+escape(label(row.vehicle))+
-      '</strong><span class="dispatch-v4-waypoints">'+(validCount(row.waypointCount)?count(row.waypointCount,'착'):'착수 미확인')+
-      '</span><b class="dispatch-v4-amount">'+money(row.amount)+'</b><span class="dispatch-v4-area">'+
-      escape(row.area??'주 배송지역 미확인')+'</span></button>').join(''):
+      '</strong><b class="dispatch-v4-amount">'+money(row.amount)+'</b><span class="dispatch-v4-area">'+
+      escape(row.area??'주 배송지역 미확인')+'</span><span class="dispatch-v4-waypoints">'+
+      (validCount(row.waypointCount)?count(row.waypointCount,'착'):'착수 미확인')+'</span></button>').join(''):
       '<p class="dispatch-empty">'+(rosterRows.length?'검색 결과가 없습니다.':model?.amountsVerified?'확정 호차가 없습니다.':'WMS 호차 미확인')+'</p>';
     if(focus) [...table.querySelectorAll('button')].find(item=>item.dataset.dispatchV4Route===focus)?.focus({preventScroll:true});
     const checked=model?.amountObservedAt;
