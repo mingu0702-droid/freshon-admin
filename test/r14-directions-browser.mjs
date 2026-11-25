@@ -88,6 +88,12 @@ try{
  const check=(name,value)=>{assert(value,name);checks.push(name);};
  const totals=page.locator('#mapRouteTotals');
  const centers=page.locator('#mapTopControls #centers');
+ const totalsLayout=()=>totals.evaluate(node=>{
+  const map=document.querySelector('#map').getBoundingClientRect();
+  const badge=node.getBoundingClientRect();
+  return {top:badge.top-map.top,center:(badge.left+badge.right-map.left-map.right)/2,
+    font:parseFloat(getComputedStyle(node.querySelector('b')).fontSize)};
+ });
  const topLayoutFits=()=>page.locator('.maptop').evaluate(toolbar=>{
   const rect=selector=>toolbar.ownerDocument.querySelector(selector)?.getBoundingClientRect();
   const map=rect('#map'),controls=rect('#mapTopControls'),badge=rect('#mapRouteTotals'),detail=rect('#detailSection.open');
@@ -114,7 +120,7 @@ try{
  await page.locator('#waypointPlanner').evaluate(n=>n.open=true);
  await page.locator('.navCenterChoices').getByRole('button',{name:'오산센터',exact:true}).click();
  await page.locator('#query').fill('S990003');await page.locator('#searchBtn').click();
- check('initial detail distinguishes delivery GPS from an unverified entrance',await page.locator('#detail .coordinateEvidence').textContent()==='배송 완료 GPS 위치 · 출입구 위치 미검증');
+ check('initial detail distinguishes delivery GPS from an unverified entrance',await page.locator('#detail .coordinateEvidence').textContent()==='배송 완료 위치 · 출입구 확인 필요');
  await page.locator('#detail [data-nav-pick="destination"]').click();
  check('a store card sets a destination without the separate picker',await page.evaluate(()=>MapNavigationEditor.values().at(-1)==='S990003')&&await page.locator('.navigationPicker').count()===0);
  check('route badges appear as compact rectangles in the general map',await page.locator('.navRoutePoint').count()===2&&await page.locator('.navRoutePoint').first().evaluate(n=>getComputedStyle(n).height==='24px'&&getComputedStyle(n).borderRadius==='4px'));
@@ -125,6 +131,8 @@ try{
  check('Osan center to one store displays synthetic road geometry, distance and duration',requests.length===1&&await page.evaluate(()=>__routeLines.size===1)&&await page.locator('#navDistance').textContent()==='0.1 km'&&await page.locator('#navDuration').textContent()==='1분');
  check('desktop totals are visible at the top of the map and absent from route settings',await page.locator('.maparea > .maptop #mapRouteTotals').isVisible()&&await page.locator('#waypointPlanner #navDistance, #waypointPlanner #navDuration, #waypointPlanner .plannerMetrics').count()===0);
  check('desktop map totals and center controls fit above the detail card',await topLayoutFits());
+ const desktopTotalsLayout=await totalsLayout();
+ check('desktop totals are flush with the upper edge and centered',Math.abs(desktopTotalsLayout.top)<1&&Math.abs(desktopTotalsLayout.center)<1&&desktopTotalsLayout.font>=25&&desktopTotalsLayout.font<=26);
  await page.locator('.maparea').screenshot({path:path.join(output,'map-route-totals-1366.png')});
  await page.locator('#clearPlanner').click();
  await page.evaluate(()=>MapNavigationEditor.replacePoints(['S990000','S990001','S990002','S990003']));
@@ -161,6 +169,8 @@ try{
  await page.locator('#query').fill('S990003');await page.locator('#searchBtn').click();
  await page.locator('#detailSection.open').waitFor();
  check('mobile map totals and center controls fit above the detail card',await totals.isVisible()&&await topLayoutFits());
+ const mobileTotalsLayout=await totalsLayout();
+ check('390px totals are flush with the upper edge and centered',Math.abs(mobileTotalsLayout.top)<1&&Math.abs(mobileTotalsLayout.center)<1&&mobileTotalsLayout.font===17);
  await page.locator('.maparea').screenshot({path:path.join(output,'map-route-totals-390.png')});
  await page.locator('#addWaypoint').click();await page.evaluate(()=>MapNavigationEditor.setPoint('waypoint','S990001',0));await page.waitForFunction(()=>document.querySelector('#navDistance').textContent==='0.2 km');
  check('mobile add waypoint recalculates',requests.length===6&&requests.at(-1).waypoints.length===1);
@@ -203,5 +213,5 @@ try{
   check(`${result.source}/${result.state} keeps its route status without presenting complete road totals`,!await totals.isVisible()&&await page.locator('#navRouteStatus').textContent()!=='');
  }
  check('no external calls or JavaScript errors',external.length===0&&errors.length===0);
- const result={pass:checks.length,fail:0,scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_PROVIDER',checks,routePosts:requests.length,providerCalls:providerRequests.length,reservations:reservations.length,externalCalls:external.length,errors,artifacts:output};fs.writeFileSync(path.join(output,'RESULT.safe.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+ const result={pass:checks.length,fail:0,scope:'LOCAL_PLAYWRIGHT_SYNTHETIC_PROVIDER',checks,routePosts:requests.length,providerCalls:providerRequests.length,reservations:reservations.length,externalCalls:external.length,errors,totalsLayout:{desktop:desktopTotalsLayout,mobile:mobileTotalsLayout},artifacts:output};fs.writeFileSync(path.join(output,'RESULT.safe.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }catch(error){if(errors.length)console.error(JSON.stringify(errors));throw error;}finally{await browser?.close();await new Promise(r=>server.close(r));}
