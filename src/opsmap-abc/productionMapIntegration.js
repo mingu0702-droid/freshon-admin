@@ -65,7 +65,7 @@ export function mountProductionMapApi(app,{
   callHub=verifiedHubRead,authOptions={},secret=process.env.HUB_API_SECRET,
   publicDir,getSnapshotWorkerState=()=>({}),readBaseVehicleMaster,sharedReadModel,sharedCoordinateSupplement,sharedBaseCache,
   hybridEnabled=()=>process.env.MAP_HYBRID_90DAY_ENABLED==='true',hybridReadIndexedDay,hybridUiReadiness,hybridReadDateCatalog,hybridReadDatePage,hybridReadVerifiedDayText,hybridStoredIoEnabled=false,hubPublicationCutover=null,
-  mountPrivateExtensions,getShadowCoverageState,getLocalDataEvidence,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,readObservedStoreAddress,readApprovedCoordinateSearch,readArchivedAssignments,readStageStoreDetail
+  mountPrivateExtensions,getShadowCoverageState,getLocalDataEvidence,readRecordedRoadRoute,roadRouteService,roadRouteBudget,readStoredStaffHistory,addressLookupService,externalBatchAddressApproved=false,readObservedStoreAddress,readApprovedCoordinateSearch,readArchivedAssignments,readStageStoreDetail
 }){
   const mapStaff=createMapStaffAuth(authOptions);
   const env=authOptions.env||process.env;
@@ -114,10 +114,14 @@ export function mountProductionMapApi(app,{
     if(!/^[a-f0-9]{32}$/i.test(javascriptKey))return res.status(503).set('Cache-Control','private, no-store').json({error:'MAP_JAVASCRIPT_KEY_UNCONFIGURED',...coverage});
     const sdkOnly = req.query.sdkOnly === '1';
     const lookup = sdkOnly ? null : await addressLookupService.status();
+    const allowExternalBatchAddressLookup = externalBatchAddressApproved===true && lookup?.enabled===true &&
+      Number.isSafeInteger(lookup.dailyUsed) && lookup.dailyUsed>=0 && lookup.dailyUsed<lookup.dailyLimit;
     const driverContactEnabled = env.OPSMAP_DRIVER_CONTACT_ENABLED==='1';
     const driverContactCenter = driverContactEnabled && stageOnly ? env.OPSMAP_STAGE_DRIVER_SHEET_CENTER : null;
     const respond=()=>res.set('Cache-Control','private, no-store').json({javascriptKey,...coverage,...(osanCenter?{centers:[osanCenter]}:{}),driverContactEnabled,
-      ...(driverContactCenter?{driverContactCenter}:{}),allowIndependentAddressLookup:lookup?.independentEnabled===true,allowExternalAddressLookup:lookup?.enabled===true,allowExternalPlaceLookup:lookup?.keywordEnabled===true,addressLookupReason:lookup?.reason||null,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true});
+      ...(driverContactCenter?{driverContactCenter}:{}),allowIndependentAddressLookup:lookup?.independentEnabled===true,
+      allowExternalAddressLookup:lookup?.enabled===true,allowExternalBatchAddressLookup,
+      allowExternalPlaceLookup:lookup?.keywordEnabled===true,addressLookupReason:lookup?.reason||null,addressLookupPending:sdkOnly,addressLookupRetention:'REQUEST_ONLY',addressLookupServerProxy:true});
     if(sdkOnly&&stageOnly){
       if(!mapStaff.isSessionCurrent(req,res.locals.staffSession?.key))return res.status(401).json({error:'STAFF_LOGIN_REQUIRED'});
       res.locals.stageInlineStaffResponse=true;

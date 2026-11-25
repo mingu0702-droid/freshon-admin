@@ -312,9 +312,14 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
   const geocodeBudgetFile = 'geocode-budget-v1.json';
   const geocodeBudget = stageAddressApproved ? createStageGeocodeBudgetStore({repo,token:stage.GITHUB_TOKEN,branch:pinsBranch,
     fetchImpl:stageGithub(fetchImpl,{files:[geocodeBudgetFile],branch:pinsBranch,writable:geocodeBudgetFile})}) : null;
+  const addressBudget = primary ? primaryServices.geocodeBudget : geocodeBudget;
+  const primaryBatchAddressApproved = primary && env.OPSMAP_PRIMARY_KAKAO_ADDRESS_BATCH_APPROVED==='1' &&
+    env.OPSMAP_KAKAO_GEOCODING_ENABLED==='1' &&
+    /^(?:[1-9][0-9]{0,2}|1000)$/.test(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT||'') &&
+    addressBudget?.durable===true && typeof addressBudget.transaction==='function';
   const addressEnv=primary?env:stage;
   const addressLookupService = createKakaoCoordinateConnection({env:addressEnv,fetchImpl,
-    store:primary?primaryServices.geocodeBudget:geocodeBudget,
+    store:addressBudget,
     stageAddressApproved,independentAddressLookup:()=>{
       const bundled=validation.active()?.bundledAddress,index=readOfficialIndex();
       return (bundled||index)?{lookup(query){
@@ -576,6 +581,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     phase2bKstDate:today,phase2bDispatchDate:dispatchDate,normalizeCell,normalizeDateValue,phase2bSnapshotMeta,phase2bTodayStatus:readDatedDelivery,
     callHub,readStageStoreDetail,secret:'',authOptions:{env:stage,sessionStore:sessions,cookieName:'__Host-map-staff'},
     sharedBaseCache:base,hybridEnabled:()=>false,roadRouteService,readRecordedRoadRoute,addressLookupService,
+    externalBatchAddressApproved:primaryBatchAddressApproved,
     getShadowCoverageState:()=>validation.active() || !postalEnabled && coverageState==='ready' ? 'ready' :
       baselineRefresh || scheduledRefresh || fileRestorePending ? 'restoring' : 'unavailable',
     getLocalDataEvidence:()=>validation.active()?.evidence || null,
@@ -591,7 +597,8 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           readDatedAssignment:readDatedDelivery.readDriverAssignment,readVerifiedVehicleRegistration});
         mountStageAbValidation(router,{...binding,origin:stageOrigin,validation,readSnapshot,readReadySnapshot:()=>selectSnapshot(snapshot),readOfficialIndex,
           readAddressMaster:()=>nationalRegistry?.read(),
-          readBaseVehicles:codes=>base.get(codes),externalAddressLookup:stageAddressApproved?addressLookupService:null});
+          readBaseVehicles:codes=>base.get(codes),
+          externalAddressLookup:stageAddressApproved||primaryBatchAddressApproved ? addressLookupService : null});
         if (dailyMaster) router.get('/api/map-phase2b/private/fixed-master-observation',requireStaff,async(req,res)=>{
           const {date,customerCodes}=req.query;
           const codes=typeof customerCodes==='string'&&customerCodes.length<=8000 ? customerCodes.split(',') : [];

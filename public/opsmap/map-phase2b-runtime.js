@@ -15,6 +15,7 @@
   let activeMapPinKey='';
   const temporaryPins=new Map();
   let temporaryDetailPoint=null,searchTemporaryClick=null,temporaryRemoveFrame=null;
+  let searchTemporaryRadius=null;
   let temporaryDistance=null,temporaryDistancePending=false;
   let searchSelectedOverlay=null;
     let newAreaPositionControl=null;
@@ -2828,15 +2829,15 @@
     const buttons=[];
     for(const [id,{marker,remove,point}] of temporaryPins){
       const anchor=marker.getBoundingClientRect();
-      const buttonWidth=remove.offsetWidth||36,buttonHeight=remove.offsetHeight||36;
+      const buttonWidth=remove.offsetWidth||36,buttonHeight=remove.offsetHeight||32;
       if(!intersects(anchor)||bounds.right-bounds.left<buttonWidth||bounds.bottom-bounds.top<buttonHeight){
         remove.hidden=true;
         continue;
       }
       obstacles.push(anchor);
       buttons.push({id,width:buttonWidth,height:buttonHeight,priority:Number(point===temporaryDetailPoint),
-        left:Math.max(bounds.left,Math.min(anchor.right+3,bounds.right-buttonWidth)),
-        top:Math.max(bounds.top,Math.min(anchor.top,bounds.bottom-buttonHeight))});
+        left:Math.max(bounds.left,Math.min(anchor.left+(anchor.width-buttonWidth)/2,bounds.right-buttonWidth)),
+        top:Math.max(bounds.top,Math.min(anchor.top-buttonHeight-1,bounds.bottom-buttonHeight))});
     }
     const offsets=new Map(MapViewPolicy.placeOverlayLabels(buttons,bounds,obstacles,{maxColumns:4,maxRows:6}).map(value=>[value.id,value]));
     for(const {id,left,top} of buttons){
@@ -3714,12 +3715,19 @@
 
   function clearTemporaryContext() {
     temporaryAreaPanel=null;
+    clearTemporaryRadius();
     clearTemporaryDistance();
     state.virtual=null;
   }
 
+  function clearTemporaryRadius() {
+    searchTemporaryRadius?.setMap(null);
+    searchTemporaryRadius=null;
+  }
+
   function endAreaViewport() {
     if(!searchNeighborhood)return;
+    clearTemporaryRadius();
     searchNeighborhood=null;
     clearAreaViewportDots();
     delete $('#map').dataset.areaViewport;
@@ -4151,10 +4159,14 @@
       const marker=markerElement(point,null,'virtual');
       marker.dataset.searchTemporaryPin='true';
       marker.setAttribute('aria-label','임시 위치 · '+(point.address||''));
+      marker.querySelector('.pinShape')?.setAttribute('preserveAspectRatio','none');
       const remove=document.createElement('button');
       remove.type='button';
       remove.className='searchTemporaryRemove';
-      remove.textContent='×';
+      const glyph=document.createElement('span');
+      glyph.textContent='×';
+      glyph.setAttribute('aria-hidden','true');
+      remove.append(glyph);
       remove.setAttribute('aria-label','지도에서 임시 핀 삭제');
       remove.onclick=event=>{
         event.stopPropagation();
@@ -4164,7 +4176,7 @@
       const content=document.createElement('div');
       content.className='searchTemporaryMarker';
       content.append(marker,remove);
-      const overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(lat,lng),content,clickable:true,xAnchor:.5,yAnchor:1,zIndex:45});
+      const overlay=new kakao.maps.CustomOverlay({position:markerPosition(point),content,clickable:true,xAnchor:.5,yAnchor:1,zIndex:45});
       overlay.setMap(state.map);
       entry={point,overlay,content,marker,remove};temporaryPins.set(key,entry);
     }else if(entry.point.coordinateSource==='KAKAO_ADDRESS_TEMPORARY'&&row.kakaoAddressCheck){
@@ -4216,6 +4228,11 @@
       sourceRows:allStores,cameraInteraction:mapCamera?.interaction(),trace});
     if(neighborhood){
       searchNeighborhood=neighborhood;
+      if(!searchTemporaryRadius&&kakao.maps.Circle){
+        searchTemporaryRadius=new kakao.maps.Circle({center:markerPosition(row),radius:500,strokeWeight:1,
+          strokeColor:'#64748b',strokeOpacity:.55,strokeStyle:'shortdash',fillColor:'#64748b',fillOpacity:.05});
+        searchTemporaryRadius.setMap(state.map);
+      }
       syncRecentOperationsUi();
     }
     if(!keepViewport&&innerWidth<=760)showMobileMap();
@@ -4268,6 +4285,7 @@
     const projection=state.map.getProjection();
     const [start,end]=temporaryDistance.path.map(point=>projection.containerPointFromCoords(point));
     const position=window.MapViewPolicy.visibleLineLabelPoint($('#map'),start,end);
+    temporaryDistance.badge.hidden=!position;
     if(position)temporaryDistance.label.setPosition?.(projection.coordsFromContainerPoint(new kakao.maps.Point(position.x,position.y)));
   }
 
@@ -4277,14 +4295,14 @@
     if(!Number.isFinite(km))return;
     clearTemporaryDistance();
     const text=`${store.customerName||store.customerCode} · 직선 ${MapPeriodUi.areaDistance(km)}`;
-    const path=[new kakao.maps.LatLng(point.lat,point.lng),new kakao.maps.LatLng(store.lat,store.lng)];
+    const path=[markerPosition(point),markerPosition(store)];
     const line=km>0?new kakao.maps.Polyline({path,strokeWeight:3,strokeColor:'#6d28d9',strokeOpacity:.9,strokeStyle:'shortdash',zIndex:12}):null;
     const badge=document.createElement('span');badge.className='temporaryDistanceLabel';badge.dataset.tempDistanceLabel='true';
     badge.textContent='직선 '+MapPeriodUi.areaDistance(km);
     const position=new kakao.maps.LatLng((point.lat+store.lat)/2,(point.lng+store.lng)/2);
-    const label=new kakao.maps.CustomOverlay({position,content:badge,yAnchor:1.25,zIndex:15});
+    const label=new kakao.maps.CustomOverlay({position,content:badge,xAnchor:.5,yAnchor:.5,zIndex:15});
     line?.setMap(state.map);label.setMap(state.map);
-    temporaryDistance={line,label,path,text};bindTemporaryDistanceActions();positionTemporaryDistanceLabel();
+    temporaryDistance={line,label,badge,path,text};bindTemporaryDistanceActions();positionTemporaryDistanceLabel();
   }
 
   function renderSearchTemporaryNearby(point) {
@@ -4908,6 +4926,26 @@
       return saved;
     }catch(error){return {error:error.code||error.message,httpStatus:error.status};}
   }
+  async function judgeStoredBatchAreaRow(row,evidence,batch){
+    if(!batch.lookupAddress||evidence?.status!=='ADDRESS_NOT_MATCHED'||evidence.state!=='SOURCE_NOT_COVERED'){
+      return judgeStageAreaRow(row,evidence,batch);
+    }
+    const queries=NewAreaRequests.addressQueries(row.address,Phase2bUi.addressVariants);
+    if(!queries.length||queries.some(query=>query.length>200||!completeAddressRegion(query))){
+      return judgeStageAreaRow(row,evidence,batch);
+    }
+    try {
+      const point=await batch.lookupAddress(row.address,queries);
+      if(point?.candidates)return judgeStageAreaRow(row,{status:'OFFICIAL_ADDRESS_AMBIGUOUS',points:point.candidates},batch);
+      if(point)return judgeStageAreaRow(row,{status:'OFFICIAL',state:'EXTERNAL_VERIFIED',point},batch);
+      return judgeStageAreaRow(row,evidence,batch);
+    } catch(error) {
+      if(batch.signal.aborted)throw error;
+      return judgeStageAreaRow(row,{error:error?.code||'GEOCODER_FAILED',httpStatus:error?.status,
+        providerHttp:error?.providerHttp},batch);
+    }
+  }
+
   function judgeStageAreaRow(row,evidence,batch){
     const status=evidence?.status;
     if(evidence?.point&&['STORED','OFFICIAL'].includes(status)){
@@ -4926,7 +4964,9 @@
     const candidates=['ADDRESS_AMBIGUOUS','OFFICIAL_ADDRESS_AMBIGUOUS'].includes(status)?evidence.points?.map(point=>({
       ...point,coordinateSource:point.coordinateSource||(status==='ADDRESS_AMBIGUOUS'?'STAGE_PRESERVED_COORDINATE':'OFFICIAL_PUBLIC_BUILDING')
     })):null;
-    const blocked=evidence?.state==='LOOKUP_BLOCKED'||[401,403,429].includes(http)||NewAreaRequests.stopsExternal({code:error});
+    const providerUnavailable=NewAreaRequests.addressProviderUnavailable({code:error});
+    const blocked=evidence?.state==='LOOKUP_BLOCKED'||[401,403,429].includes(http)||[401,403,429].includes(evidence?.providerHttp)||
+      !providerUnavailable&&NewAreaRequests.stopsExternal({code:error});
     const failed=!blocked&&(evidence?.state==='LOOKUP_FAILED'||!!error||
       ['OFFICIAL_ADDRESS_INDEX_UNAVAILABLE','OFFICIAL_ADDRESS_UNAVAILABLE','STORED_REGISTRY_UNAVAILABLE'].includes(status)||!status);
     const reason=http===401?'직원 로그인 필요':http===403?'주소 조회 권한 없음':
@@ -5376,7 +5416,7 @@
     const selectedPoints=new Map(newAreaSelectedPoints);
     if(onlyIndex!==null)selectedPoints.delete(rows[onlyIndex].address);
     const batch = {requestId,signal,customers:new Map(),queries:new Map(),blocked:null,selectedPoints};
-    const fragment=stage&&!retry ? document.createDocumentFragment?.() : null;
+    let fragment=null;
     let dispatchPending;
     const retainedPoints=new Map();
     for(const index of indexes){
@@ -5418,7 +5458,7 @@
         try {
           if(retainedPoints.has(index)) result=judgeNewAreaPoint(row,retainedPoints.get(index),batch);
           else if(row.inputAmbiguous) result=await judgeNewAreaRow(row,signal,batch);
-          else if(batch.stageRows) result=judgeStageAreaRow(row,batch.stageRows.get(index),batch);
+          else if(batch.stageRows) result=await judgeStoredBatchAreaRow(row,batch.stageRows.get(index),batch);
           else result=await judgeBatchRow(row,signal,batch);
         }
         catch (error) {
@@ -5461,6 +5501,14 @@
         const results=await evidence;
         addressMs=Math.round(performance.now()-addressStarted);
         batch.stageRows=new Map(requested.map((index,i)=>[index,results[i]]));
+        if(!useSingle&&results.some(result=>result?.status==='ADDRESS_NOT_MATCHED'&&result.state==='SOURCE_NOT_COVERED')){
+          await window.KakaoMapsAdapter?.refreshAddressLookup?.();
+          const enabled=()=>window.KAKAO_MAP_CONFIG?.allowExternalBatchAddressLookup===true&&
+            window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&window.kakaoGeocoder?.serverProxy===true;
+          if(current()&&enabled())batch.lookupAddress=NewAreaRequests.createBatchAddressLookup({signal,enabled,
+            lookup:(address,rowSignal)=>lookupInteractiveLocation(address,rowSignal,{allowOfficial:false,timeout:20_000})});
+        }
+        if(!retry&&!batch.lookupAddress)fragment=document.createDocumentFragment?.()||null;
       } else dispatchPending=prepareNewAreaDispatch();
       if (!current()) return;
       await Promise.all(Array.from({length:Math.min(3,indexes.length)},worker));

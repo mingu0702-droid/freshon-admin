@@ -5,6 +5,7 @@
  function lookupCapabilities(payload){
   const address=payload.allowExternalAddressLookup===true&&payload.addressLookupServerProxy===true;
   return {allowIndependentAddressLookup:payload.allowIndependentAddressLookup===true&&payload.addressLookupServerProxy===true,allowExternalAddressLookup:address,allowExternalPlaceLookup:address&&payload.allowExternalPlaceLookup===true,
+   allowExternalBatchAddressLookup:address&&payload.allowExternalBatchAddressLookup===true,
    addressLookupReason:payload.addressLookupReason||null};
  }
  function refreshAddressLookup(){
@@ -28,7 +29,7 @@
  root.addEventListener?.('map-staff-signed-out',()=>{
   addressEpoch++;addressCheck=null;addressPending=true;dailyRetryAt=0;blockedReason=null;
   const {centers,shadowCoverageEnabled,shadowCoverageRestoring,...config}=root.KAKAO_MAP_CONFIG||{};
-  root.KAKAO_MAP_CONFIG={...config,allowIndependentAddressLookup:false,allowExternalAddressLookup:false,allowExternalPlaceLookup:false};
+  root.KAKAO_MAP_CONFIG={...config,allowIndependentAddressLookup:false,allowExternalAddressLookup:false,allowExternalPlaceLookup:false,allowExternalBatchAddressLookup:false};
   pending=null;failed=false;
  });
  function ready({timeoutMs=8000,configTimeoutMs=15000,retryFailed=false}={}){
@@ -40,7 +41,7 @@
    function loaded(){try{if(typeof root.kakao?.maps?.load!=='function')return finish('MAP_SDK_UNAVAILABLE');root.kakao.maps.load(()=>finish(owner===addressEpoch?undefined:'MAP_SDK_SESSION_CHANGED'));}catch{finish('MAP_SDK_INITIALIZATION_FAILED');}}
    let config=root.KAKAO_MAP_CONFIG||{};const tag=document.getElementById('kakaoMapsSdk');
    localCenters??=Array.isArray(config.centers)?config.centers:[];
-   root.KAKAO_MAP_CONFIG={...config,allowIndependentAddressLookup:false,allowExternalAddressLookup:false,allowExternalPlaceLookup:false};
+   root.KAKAO_MAP_CONFIG={...config,allowIndependentAddressLookup:false,allowExternalAddressLookup:false,allowExternalPlaceLookup:false,allowExternalBatchAddressLookup:false};
    root.OPSMAP_DRIVER_CONTACT_ENABLED=false;
    root.OPSMAP_DRIVER_CONTACT_CENTER=null;
    const owner=addressEpoch;
@@ -82,7 +83,7 @@
   if(/^(?:GEOCODE_(?:DAILY_LIMIT|SESSION_EXPIRED|ORIGIN_REJECTED|AUTOMATICALLY_BLOCKED|DURABLE_LEDGER_REQUIRED|LEDGER_INVALID)|GEOCODING_DISABLED|TARGET_APP_FREE_QUOTA_UNVERIFIED)$/.test(code)||[401,403,429].includes(error.providerHttp)){
    blockedReason=code;
    if(code==='GEOCODE_DAILY_LIMIT')dailyRetryAt=(Math.floor((Date.now()+32400000)/86400000)+1)*86400000-32400000;
-   root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false,allowExternalPlaceLookup:false,addressLookupReason:code};
+   root.KAKAO_MAP_CONFIG={...root.KAKAO_MAP_CONFIG,allowExternalAddressLookup:false,allowExternalPlaceLookup:false,allowExternalBatchAddressLookup:false,addressLookupReason:code};
   }
  }
  function geocoder(){

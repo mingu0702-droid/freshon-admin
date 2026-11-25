@@ -71,6 +71,16 @@ const runtime=fs.readFileSync(path.join(root,'map-phase2b-runtime.js'),'utf8').r
    zoom(level){const {map}=state;map.setLevel(level);for(const name of ['zoom_changed','idle'])kakao.maps.event.trigger(map,name);},
    setFilters(center,scope){state.centerFilter=center;periodVehicleScope=scope;periodSelectionCache=null;},
    releaseFocus:()=>mapCamera.releaseFocus(),positionButtons:positionTemporaryRemoveButtons,
+   geometry(){
+    const marker=document.querySelector('[data-search-temporary-pin]').querySelector('.pinShape').getBoundingClientRect();
+    const bounds=document.querySelector('#map').getBoundingClientRect(),projection=state.map.getProjection();
+    const point=projection.containerPointFromCoords(markerPosition(state.virtual));
+    const radius=window.allCircles.find(value=>value.map)?.opts;
+    return {tipOffset:[marker.left+marker.width/2-bounds.left-point.x,marker.bottom-bounds.top-point.y],
+      radius:radius&&[radius.radius,radius.center.getLat(),radius.center.getLng(),radius.fillOpacity],
+      path:temporaryDistance?.path.map(coord=>[coord.getLat(),coord.getLng()]),
+      labelAnchor:temporaryDistance?.label.opts.yAnchor};
+   },
    stats:()=>({count:document.querySelectorAll('[data-search-temporary-pin]').length,tracked:temporaryPins.size,pending:!!searchTemporaryClick,
     activeCircles:window.allCircles.filter(x=>x.map).length,stores:state.currentRows.length,markerCount:markerEntries.size,
     viewport:JSON.parse(document.querySelector('#map').dataset.areaViewport||'null'),centerFilter:state.centerFilter,vehicleScope:periodVehicleScope,
@@ -132,7 +142,17 @@ try{
  const initial=await page.evaluate(()=>tempPinTest.stats()),check=(n,v)=>{assert(v,n);checks.push(n);};
  await page.evaluate(()=>tempPinTest.begin('서울 종로구 합성로 14'));
  let s=await page.evaluate(()=>tempPinTest.stats());check('unapproved address arms map click without a provider call',s.pending&&s.lookupCalls===0&&s.count===0);
- await page.evaluate(()=>tempPinTest.click(37.55,127));s=await page.evaluate(()=>tempPinTest.stats());check('map click creates exactly one temporary pin without a radius circle',s.count===1&&s.activeCircles===0&&!s.pending);
+ await page.evaluate(()=>tempPinTest.click(37.55,127));s=await page.evaluate(()=>tempPinTest.stats());check('map click creates one temporary pin and one radius circle',s.count===1&&s.activeCircles===1&&!s.pending);
+ const pinGeometry=await page.evaluate(()=>tempPinTest.geometry());
+ assert.deepEqual(pinGeometry.radius,[500,37.55,127,.05]);
+ assert(pinGeometry.tipOffset.every(delta=>Math.abs(delta)<1),'temporary pin offset '+pinGeometry.tipOffset.join(', '));
+ checks.push('the temporary pin tip is centered on the geographic coordinate');
+ const markerBounds=await page.locator('[data-search-temporary-pin]').boundingBox();
+ const removeBounds=await page.locator('.searchTemporaryRemove').boundingBox();
+ const glyphBounds=await page.locator('.searchTemporaryRemove span').boundingBox();
+ check('the compact X is centered directly above the pin with a larger hit target',
+  Math.abs(removeBounds.x+removeBounds.width/2-markerBounds.x-markerBounds.width/2)<1&&
+  removeBounds.y+removeBounds.height<=markerBounds.y&&glyphBounds.width<=20&&removeBounds.width>=32);
  check('temporary point stays out of customer rows and marker index',s.stores===initial.stores&&s.markerCount===initial.markerCount&&s.virtual.customerMatchState==='UNCONFIRMED');
  await page.locator('#nearWrap [data-area-nearest]').waitFor();
  check('a hand-picked location offers closest store and direct distance without a radius list',await page.locator('#nearWrap').innerText().then(x=>x.includes('직선거리')&&!x.includes('30km')));
@@ -152,8 +172,12 @@ try{
  await page.locator('#nearWrap [data-area-nearby-code]').last().focus();await page.keyboard.press('Enter');
  check('selecting a store with the keyboard keeps the viewport and measures distance',
   (await page.evaluate(()=>tempPinTest.stats())).viewport?.visible===2&&await page.locator('[data-temp-distance-label]').count()===1);
+ const distanceGeometry=await page.evaluate(()=>tempPinTest.geometry());
+ assert.deepEqual(distanceGeometry.path,[[37.55,127],[37.551,127.001]]);
+ check('the distance ends at the unchanged store coordinate and centers its label',distanceGeometry.labelAnchor===.5);
  await page.locator('[data-temp-distance-clear]').evaluate(button=>button.click());
- check('clearing distance leaves the temporary pin',await page.locator('[data-temp-distance-label]').count()===0&&(await page.evaluate(()=>tempPinTest.stats())).count===1);
+ check('clearing distance leaves the temporary pin and circle',await page.locator('[data-temp-distance-label]').count()===0&&
+  await page.evaluate(()=>tempPinTest.stats().count===1&&tempPinTest.stats().activeCircles===1));
  await submit('경기도 합성시 확인로 20');
  s=await page.evaluate(()=>tempPinTest.stats());check('a new search detaches the old preview and restores the previous filter',s.count===0&&s.tracked===0&&s.activeCircles===0&&s.pending&&!s.viewport&&s.centerFilter===initial.centerFilter&&s.vehicleScope===initial.vehicleScope);
  await page.evaluate(()=>tempPinTest.click(37.56,127.01));s=await page.evaluate(()=>tempPinTest.stats());check('a second search shows only its own pin',s.count===1&&s.virtual.address==='경기도 합성시 확인로 20');
@@ -169,7 +193,8 @@ try{
  await submit('경기도 합성시 확인로 20');check('repeat search does not restore the deleted hand-picked coordinates',await page.locator('[data-search-temporary-pin]').count()===0);
  await page.evaluate(()=>tempPinTest.click(37.56,127.01));
  await page.locator('#detailClose').evaluate(button=>button.click());
- check('closing the detail leaves the map X usable',await page.locator('.searchTemporaryRemove').isVisible());
+ check('closing the detail clears its circle and leaves the map X usable',await page.locator('.searchTemporaryRemove').isVisible()&&
+  await page.evaluate(()=>tempPinTest.stats().activeCircles===0));
  await page.locator('[data-search-temporary-pin]').evaluate(button=>button.click());
  await page.locator('#removeTemporaryPin').evaluate(button=>button.click());
  s=await page.evaluate(()=>tempPinTest.stats());check('detail deletion shares the same cleanup',s.count===0&&s.tracked===0&&!s.virtual&&!s.activeCircles);
@@ -197,7 +222,8 @@ try{
   await page.evaluate(()=>tempPinTest.begin('서울 합성구 검토로 30'));await page.evaluate(()=>tempPinTest.click(37.55,127));
   if(action==='overview')await page.locator('#mapReset').click();else await page.evaluate(name=>window.dispatchEvent(name==='pagehide'?new PageTransitionEvent('pagehide',{persisted:true}):new CustomEvent(name==='mode'?'map-navigation-context-changed':'map-navigation-logout')),action);
   s=await page.evaluate(()=>tempPinTest.stats());const retained=action!=='logout';
-  check(action+' observes the temporary pin lifetime',s.count===Number(retained)&&Boolean(s.virtual)===retained&&s.activeCircles===0&&s.stores===initial.stores);
+  check(action+' observes the temporary pin lifetime',s.count===Number(retained)&&Boolean(s.virtual)===retained&&
+   s.activeCircles===Number(Boolean(s.viewport))&&s.stores===initial.stores);
   await page.evaluate(()=>tempPinTest.clear());
  }
  await page.evaluate(()=>{KAKAO_MAP_CONFIG.allowExternalAddressLookup=true;return tempPinTest.begin('서울 합성구 차단로 40',{lookupAllowed:false});});
@@ -247,11 +273,11 @@ try{
   const button=document.querySelector('.searchTemporaryRemove');
   const anchor=document.querySelector('[data-search-temporary-pin]').getBoundingClientRect();
   const drawer=document.createElement('div');drawer.className='mobileMapControls';
-  const left=anchor.right+3, top=anchor.top;
+  const left=anchor.left+(anchor.width-button.offsetWidth)/2, top=anchor.top-button.offsetHeight-1;
   Object.assign(drawer.style,{position:'fixed',left:(left-5)+'px',top:(top-5)+'px',right:'auto',bottom:'auto',
     zIndex:'9999',display:'block',width:'48px',height:'48px'});
   document.body.append(drawer);
-  const originalBlocked=document.elementFromPoint(left+19,top+19)===drawer;
+  const originalBlocked=document.elementFromPoint(left+button.offsetWidth/2,top+button.offsetHeight/2)===drawer;
   tempPinTest.positionButtons();
   const rect=button.getBoundingClientRect();
   return {originalBlocked,buttonClickable:button.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2))};
@@ -261,15 +287,18 @@ try{
  check('390px touch can delete a pin when the drawer covers the original button position',await page.evaluate(()=>tempPinTest.stats().count===0));
  await submit('서울 합성구 상세카드길 37');
  const firstTouch=await page.evaluate(()=>{
-  const map=MapUiLocalBridge.state.map, node=document.querySelector('#map');
-  const bounds=node.getBoundingClientRect();
-  const point=map.getCenter(), x=bounds.left+bounds.width/2,y=bounds.top+bounds.height/2;
-  const drawer=document.querySelector('#detailSection');
-  for(const [key,value] of Object.entries({position:'fixed',left:x+12+'px',top:y-68+'px',right:'auto',
-    bottom:'auto',width:'140px',height:'125px',margin:'0'}))drawer.style.setProperty(key,value,'important');
+  const point=MapUiLocalBridge.state.map.getCenter();
   tempPinTest.click(point.getLat(),point.getLng());
-  const originalHit=drawer.contains(document.elementFromPoint(x+36,y-24));
-  const button=document.querySelector('.searchTemporaryRemove'), rect=button.getBoundingClientRect();
+  tempPinTest.releaseFocus();
+  const drawer=document.querySelector('#detailSection');
+  const button=document.querySelector('.searchTemporaryRemove');
+  const anchor=document.querySelector('[data-search-temporary-pin]').getBoundingClientRect();
+  const x=anchor.left+anchor.width/2,y=anchor.top-button.offsetHeight/2-1;
+  for(const [key,value] of Object.entries({position:'fixed',left:x-24+'px',top:y-22+'px',right:'auto',
+    bottom:'auto',width:'140px',height:'64px',margin:'0','z-index':'9999'}))drawer.style.setProperty(key,value,'important');
+  const originalHit=drawer.contains(document.elementFromPoint(x,y));
+  tempPinTest.positionButtons();
+  const rect=button.getBoundingClientRect();
   const touchX=rect.left+rect.width/2,touchY=rect.top+rect.height/2;
   return {originalHit,actionable:button.contains(document.elementFromPoint(touchX,touchY))};
  });

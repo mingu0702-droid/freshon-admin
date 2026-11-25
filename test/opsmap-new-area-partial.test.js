@@ -38,7 +38,7 @@ function fixture({location,fetch} = {}) {
   const window={addEventListener(){},VEHICLE_AREA_DATA:{vehicles:[]},ManualWaypoints:globalThis.ManualWaypoints,KAKAO_MAP_CONFIG:{allowExternalAddressLookup:false},kakaoGeocoder:{addressSearch(){calls++;throw Error('EXTERNAL_LOOKUP_FORBIDDEN');}}};
   window.MapFixedDeliveryWeekdays=fixedWeekdays;
   window.location=location;
-  const ctx=vm.createContext({window,location,fetch,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:{dataset:{}}},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
+  const ctx=vm.createContext({window,location,fetch,document:{querySelector:node,querySelectorAll:()=>[],addEventListener(){},createElement:batchDomTemplate,body:{dataset:{}},documentElement:{dataset:{opsmapArchive:'primary'}}},MapPeriodUi:globalThis.MapPeriodUi,Phase2bUi:globalThis.Phase2bUi,NewAreaRequests:globalThis.NewAreaRequests,Map,Set,URL,URLSearchParams,AbortController,AbortSignal,Date,Intl,Number,performance,setTimeout,clearTimeout,innerWidth:1440});
   vm.runInContext(newAreaTestRuntime,ctx);
   return {...window.test,node,externalCalls:()=>calls,window};
 }
@@ -308,4 +308,60 @@ test('cancel pending batch then rerun keeps input and suppresses stale completio
   const pending=f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');f.clearNewAreaBatch(false);finish();await pending;
   assert.equal(f.state.newAreaResults.length,0);assert.equal(f.node('#newAreaBatchInput').value,near.customerCode);
   f.setJudge(async row=>({...row,decision:'검토',nearby:[]}));await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');assert.equal(f.state.newAreaResults.length,1);
+});
+
+
+test('approved production batch resolves only distinct address misses through the protected proxy',async()=>{
+  const origin='https://freshon-admin-1.onrender.com', generation='a'.repeat(64);
+  const storedRequests=[],external=[];
+  const f=fixture({location:{origin,href:origin},fetch:async(url,{body})=>{
+    assert.equal(url,'/api/map-phase2b/private/stage-address-evidence');
+    const {rows}=JSON.parse(body);storedRequests.push(rows);
+    return Response.json({generation,data:rows.map(([query])=>query===near.customerCode
+      ?{status:'STORED',state:'STORED_VERIFIED',point:{lat:near.lat,lng:near.lng}}
+      :query.endsWith(' 1')?{status:'OFFICIAL_ADDRESS_AMBIGUOUS',state:'CANDIDATE_REVIEW',
+        points:[{lat:37.201,lng:127},{lat:37.251,lng:127}]}
+      :{status:'ADDRESS_NOT_MATCHED',state:'SOURCE_NOT_COVERED'})});
+  }});
+  f.setup([],{},[near]);f.generation(generation);
+  f.assign([{...assigned,weekdays:{Mon:'101',Wed:'101'}}]);
+  f.window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:true,allowExternalBatchAddressLookup:true};
+  let active=0;
+  f.window.kakaoGeocoder={serverProxy:true,addressSearch(query,callback,{mode}){
+    assert.equal(mode,'address');external.push(query);assert.equal(++active,1);
+    setImmediate(()=>{active--;callback([{x:'127',y:'37.201',address_name:query}],'OK',{resolution:{kind:'EXACT'}});});
+  }};
+  const road=n=>'경기도 화성시 가상로 '+n;
+  const original=[near.customerCode,road(1),...Array.from({length:18},(_,i)=>road(i+2)),road(2)+'\t다른 상세'];
+  f.node('#newAreaBatchInput').value=original.join('\n');
+  await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
+  assert.equal(f.state.newAreaResults.length,21);
+  assert.equal(storedRequests.length,1);assert.equal(storedRequests[0].length,20);
+  assert.equal(external.length,18);
+  assert.equal(new Set(external).size,18);
+  assert.equal(f.state.newAreaResults[0].lookupState,'STORED_VERIFIED');
+  assert.equal(f.state.newAreaResults[1].lookupState,'CANDIDATE_REVIEW');
+  const resolved=f.state.newAreaResults.slice(2);
+  assert.ok(resolved.every(row=>row.lookupState==='EXTERNAL_VERIFIED'&&row.nearestStoreCode===near.customerCode&&
+    row.nearestBaseVehicle==='101'&&row.nearestDistanceMeters===111));
+  assert.match(f.node('#newAreaBatchStatus').textContent,/입력 21 .*위치 확인 20 .*후보·입력 검토 1 .*권역 판단 가능 20/);
+});
+
+test('production batch requires the batch grant and stops new provider work on a quota or transport error',async()=>{
+  const origin='https://freshon-admin-1.onrender.com';
+  let calls=0;
+  for(const code of [null,'GEOCODE_DAILY_LIMIT','KAKAO_TIMEOUT']){
+    const f=fixture({location:{origin,href:origin},fetch:async(_url,{body})=>{
+      const {generation,rows}=JSON.parse(body);
+      return Response.json({generation,data:rows.map(()=>({status:'ADDRESS_NOT_MATCHED',state:'SOURCE_NOT_COVERED'}))});
+    }});
+    f.setup([],{},[near]);
+    f.window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:true,allowExternalBatchAddressLookup:code!==null};
+    f.window.kakaoGeocoder={serverProxy:true,addressSearch(_query,callback){calls++;callback([],'ERROR',{code});}};
+    f.node('#newAreaBatchInput').value='경기도 화성시 가상로 8\n경기도 화성시 가상로 9';
+    await f.runNewArea('#newAreaBatchInput','#newAreaBatchStatus','#newAreaBatchResults');
+    const state=code==='GEOCODE_DAILY_LIMIT'?'LOOKUP_BLOCKED':code?'LOOKUP_FAILED':'SOURCE_NOT_COVERED';
+    assert.deepEqual(Array.from(f.state.newAreaResults,row=>row.lookupState),[state,state]);
+  }
+  assert.equal(calls,2,'no provider call without opt-in or after a denied reservation/transport outage');
 });

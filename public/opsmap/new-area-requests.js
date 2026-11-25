@@ -62,6 +62,32 @@
   function stopsExternal(error) {
     return /^(?:KAKAO_|GEOCODE_(?:DAILY_LIMIT|AUTOMATICALLY_BLOCKED|LEDGER_|DURABLE_|SESSION_|ORIGIN_)|GEOCODING_DISABLED|TARGET_APP_)/.test(error?.code || '');
   }
+  function addressProviderUnavailable(error) {
+    return /^(?:KAKAO_(?:TIMEOUT|NETWORK_FAILED)|GEOCODE_RETRY_COOLDOWN|GEOCODER_TIMEOUT)$/.test(error?.code || '');
+  }
+  function createBatchAddressLookup({signal, lookup, enabled}) {
+    const requests = new Map();
+    let tail = Promise.resolve(), stopped;
+    return (address, queries) => {
+      const key = JSON.stringify(queries.map(addressKey));
+      if (!requests.has(key)) {
+        const task = tail.then(async () => {
+          if (signal?.aborted) throw signal.reason;
+          if (stopped) throw stopped;
+          if (!enabled()) throw failure('GEOCODING_DISABLED');
+          try { return await lookup(address, signal); }
+          catch (error) {
+            if (addressProviderUnavailable(error)||stopsExternal(error)||
+                [401,403,429].includes(error?.status)||[401,403,429].includes(error?.providerHttp)) stopped=error;
+            throw error;
+          }
+        });
+        requests.set(key, task);
+        tail = task.catch(() => {});
+      }
+      return requests.get(key);
+    };
+  }
   function outcome(error) { return error?.code === 'GEOCODE_DAILY_LIMIT' ? 'LIMIT' : ['GEOCODE_AUTOMATICALLY_BLOCKED','NEW_AREA_ROW_TIMEOUT','REQUEST_TIMEOUT','GEOCODER_TIMEOUT'].includes(error?.code)||/^GEOCODER_(?:MULTIPLE_CANDIDATES|RESULT_TRUNCATED|ADDRESS_MISMATCH)$/.test(error?.code||'') ? 'DEFERRED' : 'FAILED'; }
   function lookup(geocoder, query, { signal, mode, onTiming, timeout = geocoder?.serverProxy?45000:7000 } = {}) {
     return new Promise((resolve, reject) => {
@@ -104,6 +130,7 @@
       GEOCODING_DISABLED:'외부 주소 검색 비활성',TARGET_APP_FREE_QUOTA_UNVERIFIED:'외부 주소 검색 무료 한도 미확인',
       TARGET_APP_KEYWORD_FREE_QUOTA_UNVERIFIED:'외부 상호 검색 무료 한도 미확인',DIAGNOSTIC_REQUIRED:'외부 주소 검색 연결 미확인',
       GEOCODE_DURABLE_LEDGER_REQUIRED:'외부 검색 사용 원장 미연결',GEOCODE_RETRY_COOLDOWN:'외부 검색 응답 대기 · 잠시 후 재시도', GEOCODER_UNAVAILABLE: '주소 조회 서비스 미연결', GEOCODER_TIMEOUT: '주소 조회 시간 초과',
+      KAKAO_TIMEOUT:'외부 주소 조회 시간 초과',KAKAO_NETWORK_FAILED:'외부 주소 조회 연결 실패',
       GEOCODER_FAILED: '주소 조회 오류', GEOCODER_INVALID_COORDINATES: '주소 좌표 응답 오류',
       GEOCODE_SESSION_EXPIRED:'직원 인증이 만료되었습니다',GEOCODE_ORIGIN_REJECTED:'주소 조회 권한 확인 필요',
       GEOCODER_MULTIPLE_CANDIDATES:'주소 후보 복수 · 선택 필요',GEOCODER_RESULT_TRUNCATED:'주소 범위 확인 필요',
@@ -261,6 +288,6 @@
   }
   root.addEventListener?.('map-staff-signed-out',()=>{resetStageAddress();temporary.clear();});
   root.NewAreaRequests = { lookup, message, parseAreaInput, addressQuery, addressQueries, batchAddressQueries, addressFailureHint, stopsExternal, outcome, singleStoredLocation,
-    stageAddress, cachedStageAddress, stageStoredAddressCache, rememberTemporary, forgetTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
+    addressProviderUnavailable, createBatchAddressLookup, stageAddress, cachedStageAddress, stageStoredAddressCache, rememberTemporary, forgetTemporary, temporaryPoint:query=>temporary.get(addressKey(query)) };
 })(typeof window === 'object' ? window : globalThis);
 
