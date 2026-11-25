@@ -1,0 +1,35 @@
+--- a/WmsFast.js
++++ b/WmsFast.js
+@@ -209,5 +209,7 @@
+         const upstreamError=statuses.includes(429)?429:statuses.find(status=>status>=500);
+         if(upstreamError)throw Error('WMS_HTTP_'+upstreamError);
+-        result=swfReport_(swfRows_(plan,code,ymd),swfRows_(dispatch,code,ymd),code);
++        const planRows=swfRows_(plan,code,ymd),dispatchRows=swfRows_(dispatch,code,ymd);
++        result=swfReport_(planRows,dispatchRows,code);
++        opsmapCaptureWmsOfficialRound_(result,day,Date.now(),planRows,dispatchRows);
+       }
+       catch(error){
+@@ -618,7 +620,9 @@
+       httpCalls:meter.calls,elapsedMs:Date.now()-job.started}));
+   }
+-  return {ok:state==='success',state,day,runId:job.id.slice(0,8),elapsedMs:Date.now()-job.started,centers:reports.filter(swfVerifiedCenter_).length,
++  const outcome={ok:state==='success',state,day,runId:job.id.slice(0,8),elapsedMs:Date.now()-job.started,centers:reports.filter(swfVerifiedCenter_).length,
+     published:painted?.published===true,detailsPrevious:painted?.detailsPrevious===true,
+     priorDayPreserved:painted?.priorDayPreserved===true,reason:job.reason||'',
+     ...(painted?.metadataPending?{metadataPending:true}:{}),...(code?{code}:{})};
++  opsmapQueueWmsOfficialRound_(provider?.reports,job,outcome,lease);
++  return outcome;
+ }
+\ No newline at end of file
+--- a/NativeSheets.js
++++ b/NativeSheets.js
+@@ -664,5 +664,8 @@
+     return second;
+   }catch(_){/* A superseded request never changes the newer screen. */}
+-  finally{sonRelease_(kind,lease,sheet);}
++  finally{
++    sonRelease_(kind,lease,sheet);
++    if(kind==='amount')opsmapSendWmsOfficialRound_(lease);
++  }
+ }
+ function sonClockRequest_(event,first){
