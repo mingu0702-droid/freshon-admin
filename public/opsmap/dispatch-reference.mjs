@@ -92,6 +92,9 @@ export function createDispatchReference(day, stores, date) {
   const sourceTotals=amountsVerified&&sameWmsExport&&Number.isSafeInteger(reported?.amount)&&reported.amount===amountTotal&&
     Number.isSafeInteger(reported.deliveryCount)&&reported.deliveryCount>=0
     ?{amount:reported.amount,deliveryCount:reported.deliveryCount}:null;
+  const observedAt=Date.parse(day.route?.observedAt);
+  const wmsScopeComplete=Boolean(sourceTotals&&routeVerified&&day.route?.sourceComplete===true&&
+    Number.isFinite(observedAt)&&observedAt===Date.parse(day.amounts?.observedAt));
   const unassigned=routeVerified&&Number.isSafeInteger(day.route.unassigned)&&day.route.unassigned>=0 ? day.route.unassigned : null;
   const vehicles=new Map();
   for (const vehicle of new Set([...routes.keys(),...amounts.keys()])) {
@@ -103,7 +106,7 @@ export function createDispatchReference(day, stores, date) {
       uniqueCustomerCount:countOrNull(amount?.uniqueCustomerCount)});
   }
   return {date, routeVerified,routeState, routeSource:day.route?.source??null, routeObservedAt:day.route?.observedAt ?? null, unassigned, amountDate, amountsVerified,amountTotal,
-    sameWmsExport,sourceTotals,
+    sameWmsExport,sourceTotals,wmsScopeComplete,
     exportFailure:day.amounts?.exportFailure,
     amountObservedAt:day.amounts?.observedAt ?? null, vehicles};
 }

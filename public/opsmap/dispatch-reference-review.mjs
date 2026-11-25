@@ -1,4 +1,4 @@
-import {money} from './dispatch-reference.mjs?v=20261124-wms-totals';
+import {money} from './dispatch-reference.mjs?v=20261126-v4-readable';
 import {compareDispatchReview,groupFixedPostalRoutes,simulateDispatchReviewMoves} from './dispatch-reference-review-model.mjs?v=20261125-comparison';
 import {dispatchVehicleLabel as label,indexDispatchStores,matchDispatchStores,mountDispatchRoster,
   summarizeDispatchOverview} from './dispatch-reference-roster.mjs?v=20261125-overview';
@@ -8,6 +8,7 @@ const format=new Intl.NumberFormat('ko-KR');
 const plus=new Intl.NumberFormat('ko-KR',{signDisplay:'exceptZero'});
 const meters=km=>Number.isFinite(km)?format.format(Math.round(km*1000))+'m':'미확인';
 const stops=value=>Number.isSafeInteger(value)?format.format(value)+'곳':'미확인';
+const waypoints=value=>Number.isSafeInteger(value)?format.format(value)+'착':'미확인';
 const fixedClock=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric'});
 
 export function createDispatchScreenReview({bridge,readFixedArea}) {
@@ -92,7 +93,9 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
   }
 
   function renderRoute(route,title,side) {
-    return '<section class="dispatch-compare-total '+side+'"><span>'+title+'</span><strong>'+escape(label(route?.vehicle))+'</strong>'+
+    const routeColor=view?.colorVehicle?.(route.vehicle);
+    const heading=routeColor?'<strong class="dispatch-v4-vehicle" style="--dispatch-vehicle-color:'+escape(routeColor)+'">':'<strong>';
+    return '<section class="dispatch-compare-total '+side+'"><span>'+title+'</span>'+heading+escape(label(route.vehicle))+'</strong>'+
       '<b>'+money(route?.amount)+'</b><span class="dispatch-compare-stop-count">'+stops(route?.storeCount)+'</span></section>';
   }
 
@@ -159,9 +162,12 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
     const rows=[first,second].flatMap(route=>{
       const projected=result?.vehicles.get(route.vehicle)??route;
       return [[label(route.vehicle)+' 금액',route.amount,projected.amount,money,'원'],
+        ...(view.compactOverview?[[label(route.vehicle)+' 착수',route.waypointCount,result?null:route.waypointCount,waypoints,'착']]:[]),
         [label(route.vehicle)+' 매장',route.storeCount,projected.storeCount,stops,'곳']];
     });
-    const table='<table><thead><tr><th scope="col">항목</th><th scope="col">이관 전</th><th scope="col">이관 후</th>'+
+    const table=view.compactOverview?'<dl class="dispatch-v4-simulation-values">'+rows.map(([heading,before,after,show])=>
+      '<div><dt>'+escape(heading)+'</dt><dd><span>전 '+show(before)+'</span><span>후 '+show(after)+'</span></dd></div>').join('')+'</dl>':
+      '<table><thead><tr><th scope="col">항목</th><th scope="col">이관 전</th><th scope="col">이관 후</th>'+
       '<th scope="col">증감</th></tr></thead><tbody>'+rows.map(([heading,before,after,show,unit])=>
         '<tr><th scope="row">'+escape(heading)+'</th><td>'+show(before)+'</td><td>'+show(after)+'</td><td>'+
         (Number.isSafeInteger(before)&&Number.isSafeInteger(after)?plus.format(after-before)+unit:'—')+'</td></tr>').join('')+'</tbody></table>';
@@ -201,7 +207,7 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
     const totals=model?.sourceTotals;
     const gap=Number.isSafeInteger(first?.amount)&&Number.isSafeInteger(second?.amount)?money(Math.abs(first.amount-second.amount)):'미확인';
     const stateCount=value=>Number.isSafeInteger(value)?format.format(value):'미확인';
-    const summary=overview?'<dl class="dispatch-compare-overview"><div><dt>WMS 배송금액</dt><dd>'+money(overview.amount)+
+    const summary=overview&&!view?.compactOverview?'<dl class="dispatch-compare-overview"><div><dt>WMS 배송금액</dt><dd>'+money(overview.amount)+
       '</dd></div><div><dt>배송건수</dt><dd>'+stateCount(overview.deliveries)+'</dd></div><div><dt>고유 매장 수</dt><dd>'+
       (overview.complete?stateCount(overview.stores):'미확인')+'</dd></div><div><dt>좌표 확인 매장</dt><dd>'+stateCount(overview.located)+
       '</dd></div><div><dt>배차 확인 호차</dt><dd>'+stateCount(overview.vehicles)+'</dd></div></dl>'+
@@ -209,11 +215,11 @@ export function createDispatchScreenReview({bridge,readFixedArea}) {
     view?.highlightMoves([...drafts.values()]);
     roster.select(view?.selection?.dispatchKey??'');
     if (!first) {
-      panel.innerHTML='<h2>오산 전체 배송 현황</h2>'+summary+(model?renderSelected():'');
+      panel.innerHTML=(view?.compactOverview?'':'<h2>오산 전체 배송 현황</h2>')+summary+(model?renderSelected():'');
       return;
     }
     panel.innerHTML='<h2>호차 비교 및 가상 이관</h2>'+
-      (totals?'<p class="dispatch-compare-source">오산 WMS '+money(totals.amount)+' · 배송 '+format.format(totals.deliveryCount)+'건</p>':'')+
+      (totals&&!view?.compactOverview?'<p class="dispatch-compare-source">오산 WMS '+money(totals.amount)+' · 배송 '+format.format(totals.deliveryCount)+'건</p>':'')+
       '<div class="dispatch-compare-totals">'+renderRoute(first,'비교 기준','primary')+(second?renderRoute(second,'비교 호차','secondary'):'')+'</div>'+
       (first&&second?'<p class="dispatch-compare-gap">현재 차이 <strong>'+gap+'</strong> · '+
         (Number.isSafeInteger(first.storeCount)&&Number.isSafeInteger(second.storeCount)?stops(Math.abs(first.storeCount-second.storeCount)):'착지 미확인')+'</p>':'')+

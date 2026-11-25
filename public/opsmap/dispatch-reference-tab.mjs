@@ -89,12 +89,12 @@ if (tabs && sidebar && bridge) {
     try {
       if (!feature) {
         stylesheet ||= Object.assign(document.createElement('link'),{
-          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261126-v4-scroll',import.meta.url),
+          rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261126-v4-readable',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261126-v4-scroll');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261126-v4-readable');
         if (opening!==attempt||!session()) return;
-        const createReview=comparisonEnabled?(await import('./dispatch-reference-review.mjs?v=20261126-v4')).createDispatchScreenReview:null;
+        const createReview=comparisonEnabled?(await import('./dispatch-reference-review.mjs?v=20261126-v4-readable')).createDispatchScreenReview:null;
         if (opening!==attempt||!session()) return;
         const screenReview=createReview?.({bridge,readFixedArea});
         feature=mountDispatchReference({workspace,sidebar,bridge,readDay,readPeriod,readOutline,screenReview,

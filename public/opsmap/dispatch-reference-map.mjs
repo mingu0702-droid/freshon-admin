@@ -1,6 +1,6 @@
-import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs?v=20261126-v4';
+import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs?v=20261126-v4-readable';
 import {summarizeDispatchPeriod} from './dispatch-reference-period.mjs?v=20261124-period-proof';
-import {dispatchOverlapVehicles,mountDispatchV4} from './dispatch-reference-v4.mjs?v=20261126-v4-scroll';
+import {dispatchOverlapVehicles,dispatchVehicleColor,mountDispatchV4} from './dispatch-reference-v4.mjs?v=20261126-v4-readable';
 
 const meters = km => Number.isFinite(km) ? new Intl.NumberFormat('ko-KR').format(Math.round(km*1000))+'m' : '미확인';
 const sourceClock=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',
@@ -71,6 +71,16 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   const mapNode=workspace.querySelector('#map');
   const mapReset=workspace.querySelector('#mapReset');
   const board=readOverlaps&&mountDispatchV4({left:choices,right:detail,readOverlaps,selectRoute:chooseBoardRoute,selectCandidate:applyBoardOverlap});
+  const mapLegend=board?document.createElement('aside'):null;
+  if(mapLegend){
+    mapLegend.hidden=true;
+    mapLegend.className='dispatch-v4-map-legend';
+    mapLegend.setAttribute('aria-label','배차 지도 범례');
+    mapLegend.innerHTML='<strong></strong><span data-overlap-key="inside">해당 우편번호 배송</span>'+
+      '<span data-overlap-key="outside">다른 우편번호 배송</span><span data-overlap-key="registered">기준호차 등록 위치</span>'+
+      '<span data-overlap-key="unknown" hidden>우편번호 미확인 배송</span>';
+    mapNode.parentElement.append(mapLegend);
+  }
   const compareControl=document.createElement('label');
   compareControl.className='dispatch-v4-compare';
   compareControl.hidden=true;
@@ -208,6 +218,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     if(members.some(member=>member.dispatchOverlap==='inside'))button.dataset.dispatchOverlap='inside';
     else if(members.some(member=>member.dispatchOverlap==='outside'))button.dataset.dispatchOverlap='outside';
     else if(members.some(member=>member.dispatchOverlap==='registered'))button.dataset.dispatchOverlap='registered';
+    else if(members.some(member=>member.dispatchOverlap==='unknown'))button.dataset.dispatchOverlap='unknown';
     if(comparisonMode())button.dataset.dispatchMembers=String(members.length);
     if (members.some(member=>member.dispatchCandidate)) button.dataset.dispatchCandidate='';
     if (!isGroup&&row.customerCode) button.dataset.dispatchCustomer=row.customerCode;
@@ -574,6 +585,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     if (period) return renderPeriodDetail();
     if (comparisonMode()) return screenReview.update({
       model:period?null:model,routes,deliveryRows,zip:model?postcode.value:'',selection,showDistance:showReviewDistance,
+      ...(boardMode()?{colorVehicle:dispatchVehicleColor,compactOverview:true}:{}),
       nearest:nearestDispatchStop,
       pickStop(code,vehicle){
         const row=markerRows.find(item=>item.customerCode===code&&(!vehicle||item.vehicle===vehicle));
@@ -686,6 +698,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   function applyBoardOverlap(candidate) {
     if(!isOpen()||!boardMode())return;
     if(!candidate) {
+      mapLegend.hidden=true;
       if(model)chooseBoardRoute('');
       else {markerRows=[];clearMarkers();clearOutlines();clearDispatchSelection();renderDetail();}
       return;
@@ -696,9 +709,9 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     clearDispatchSelection();
     clearMarkers();
     clearOutlines();
-    const code=candidate.postalCode, routeColors=['#1767d4','#dc6714','#137f5e','#7252b6','#a83d59','#177991'];
-    const colors=new Map(candidate.routes.map(({vehicle},index)=>[vehicle,routeColors[index%routeColors.length]]));
-    const members=new Set(candidate.stores.map(store=>store.customerCode));
+    const code=candidate.postalCode;
+    const colors=new Map(candidate.routes.map(({vehicle})=>[vehicle,dispatchVehicleColor(vehicle)]));
+    const members=new Map(candidate.stores.map(store=>[store.customerCode,store]));
     const mappedInside=new Set();
     const dispatchRoutes=dispatchOverlapVehicles(model);
     markerRows=[];
@@ -706,13 +719,19 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
       const route=dispatchRoutes.get(vehicle);
       if(!route)continue;
       for(const stop of route.stops) {
-        const inside=members.has(stop.customerCode);
+        const registered=members.get(stop.customerCode)?.point;
+        const samePoint=stop.point&&registered&&stop.point.lat===registered.lat&&stop.point.lng===registered.lng;
+        const area=stop.postalCode?(stop.postalCode===code?'inside':'outside'):samePoint?'inside':'unknown';
+        const inside=area==='inside';
         if(inside&&stop.point)mappedInside.add(vehicle+'|'+stop.customerCode);
         markerRows.push({...stop,lat:stop.point?.lat,lng:stop.point?.lng,customerName:stop.name,vehicle:route.vehicle,
           dispatchKey:route.vehicle+'|'+stop.customerCode,
-          routeColor,dispatchSide:'area',dispatchRole:'area',dispatchOverlap:inside?'inside':'outside'});
+          routeColor,dispatchSide:'area',dispatchRole:'area',dispatchOverlap:area});
       }
     }
+    mapLegend.querySelector('strong').textContent='우편번호 '+code;
+    mapLegend.querySelector('[data-overlap-key="unknown"]').hidden=!markerRows.some(row=>row.dispatchOverlap==='unknown'&&row.point);
+    mapLegend.hidden=false;
     deliveryRows=markerRows.slice();
     for(const store of candidate.stores) {
       const deliveryKey=store.vehicle+'|'+store.customerCode;
@@ -742,6 +761,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
 
   function updateRoutes({focusMatch=false}={}) {
     if (!model) return;
+    if(mapLegend)mapLegend.hidden=true;
     const first=model.vehicles.get(primary.value), second=model.vehicles.get(secondary.value);
     const pair=first&&second&&first!==second;
     if (second&&first===second) secondary.value='';
@@ -768,7 +788,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     let extraIndex=0;
     for (const [side,route] of mapped) {
       const candidates=new Set(comparisons?.[side]?.candidates.map(stop=>stop.customerCode));
-      const routeColor=side==='extra'?extraColors[extraIndex++%extraColors.length]:null;
+      const routeColor=boardMode()&&route?dispatchVehicleColor(route.vehicle):side==='extra'?extraColors[extraIndex++%extraColors.length]:null;
       for (const stop of route?.stops||[]) markerRows.push({...stop,lat:stop.point?.lat,lng:stop.point?.lng,
         customerName:stop.name,vehicle:route.vehicle,dispatchKey:route.vehicle+'|'+stop.customerCode,
         dispatchSide:side,dispatchRole:side,routeColor,dispatchCandidate:!screenReview&&candidates.has(stop.customerCode),
@@ -857,6 +877,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     request=null;
     model=routes=comparisons=period=analysis=chosenArea=null;
     board?.setDay(null);
+    if(mapLegend)mapLegend.hidden=true;
     clearDispatchSelection();
     markerRows=[];
     deliveryRows=[];

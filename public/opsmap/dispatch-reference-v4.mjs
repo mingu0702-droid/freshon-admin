@@ -1,4 +1,4 @@
-import {money} from './dispatch-reference.mjs?v=20261126-v4';
+import {money} from './dispatch-reference.mjs?v=20261126-v4-readable';
 
 const digest = /^[a-f0-9]{64}$/;
 const customerCode = /^[A-Z]\d{1,20}$/;
@@ -12,6 +12,7 @@ const label = vehicle => /^(?:용|척)?\d+$/.test(vehicle)?vehicle+'호':vehicle
 const vehicleKey = value => typeof value==='string' && value.trim()===value && Boolean(value) && value.length<=24 && value!=='미배정';
 const normalize = value => String(value??'').normalize('NFKC').toLowerCase();
 const overlapVehicleKey = vehicle => vehicle.replace(/^(용|척)\s+(?=\d+$)/,'$1');
+export const dispatchVehicleColor=vehicle=>globalThis.Phase2bUi?.vehicleColor(overlapVehicleKey(vehicle))??'#1767d4';
 
 export function dispatchOverlapVehicles(model) {
   const routes=new Map();
@@ -96,20 +97,27 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
   roster.hidden=true;
   roster.innerHTML='<label>호차 검색<input type="search" autocomplete="off" placeholder="호차 번호 또는 배송지역"></label>'+
     '<p class="dispatch-v4-source" role="status"></p>'+
+    '<p class="dispatch-v4-roster-count"></p>'+
+    '<p class="dispatch-v4-unassigned"></p>'+
     '<div class="dispatch-v4-table-head" aria-label="호차 정렬"><button type="button" data-sort="vehicle">호차</button>'+
     '<button type="button" data-sort="area" title="확인된 배송 매장에서 가장 많이 나타난 지역">주 배송지역</button>'+
     '<button type="button" data-sort="waypointCount">착수</button><button type="button" data-sort="amount">매출</button></div>'+
-    '<div class="dispatch-v4-table" aria-label="오산 WMS 전체 확정 호차"></div><p class="dispatch-v4-unassigned"></p>';
+    '<div class="dispatch-v4-table" aria-label="오산 WMS 전체 확정 호차"></div>';
   left.prepend(roster);
   const panel=document.createElement('section');
   panel.className='dispatch-v4-overlaps';
   panel.hidden=true;
-  panel.innerHTML='<h2>우편번호 겹침 · 조정 후보</h2><p class="dispatch-v4-overlap-status" role="status"></p>'+
-    '<div class="dispatch-v4-candidates" role="region" aria-label="우편번호 후보" tabindex="0"></div>';
+  panel.innerHTML='<header class="dispatch-v4-overlap-heading"><h2>우편번호 겹침 · 조정 후보</h2>'+
+    '<p class="dispatch-v4-overlap-status" role="status"></p></header>'+
+    '<section class="dispatch-v4-selected-overlap" aria-label="선택 우편번호" hidden></section>'+
+    '<div class="dispatch-v4-candidates" role="region" aria-label="우편번호 후보" tabindex="0"></div>'+
+    '<details class="dispatch-v4-overview"><summary>오산 배송 현황</summary><dl></dl></details>';
   right.before(panel);
   const search=roster.querySelector('input'), source=roster.querySelector('.dispatch-v4-source');
   const table=roster.querySelector('.dispatch-v4-table'), unassigned=roster.querySelector('.dispatch-v4-unassigned');
   const candidates=panel.querySelector('.dispatch-v4-candidates'), summary=panel.querySelector('.dispatch-v4-overlap-status');
+  const rosterCount=roster.querySelector('.dispatch-v4-roster-count'), selectedPanel=panel.querySelector('.dispatch-v4-selected-overlap');
+  const daySummary=panel.querySelector('.dispatch-v4-overview'), summaryValues=daySummary.querySelector('dl');
   let active=false, model=null, rosterRows=[], overview=null, current=null;
   let sort='vehicle',descending=false, selectedVehicle='', summaryRequest=null, detailRequest=null, overviewState='loading';
 
@@ -127,12 +135,16 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
     const focus=table.contains(document.activeElement)?document.activeElement.dataset.dispatchV4Route:null;
     table.innerHTML=rows.length?rows.map(row=>'<button type="button" class="dispatch-v4-route" data-dispatch-v4-route="'+
       escape(row.vehicle)+'" aria-pressed="'+String(selectedVehicle===row.vehicle||selectedRoutes.has(row.vehicle))+'">'+
-      '<strong>'+escape(label(row.vehicle))+'</strong><span title="'+escape(row.area??'미확인')+'">'+escape(row.area??'미확인')+
-      '</span><span>'+count(row.waypointCount,'착')+'</span><b>'+money(row.amount)+'</b></button>').join(''):
+      '<strong class="dispatch-v4-vehicle" style="--dispatch-vehicle-color:'+dispatchVehicleColor(row.vehicle)+'">'+escape(label(row.vehicle))+
+      '</strong><span class="dispatch-v4-waypoints">'+(validCount(row.waypointCount)?count(row.waypointCount,'착'):'착수 미확인')+
+      '</span><b class="dispatch-v4-amount">'+money(row.amount)+'</b><span class="dispatch-v4-area">'+
+      escape(row.area??'주 배송지역 미확인')+'</span></button>').join(''):
       '<p class="dispatch-empty">'+(rosterRows.length?'검색 결과가 없습니다.':model?.amountsVerified?'확정 호차가 없습니다.':'WMS 호차 미확인')+'</p>';
     if(focus) [...table.querySelectorAll('button')].find(item=>item.dataset.dispatchV4Route===focus)?.focus({preventScroll:true});
     const checked=model?.amountObservedAt;
     source.textContent=model?.date?(model.date+' 배송 · WMS '+(Number.isFinite(Date.parse(checked))?clock.format(new Date(checked))+' KST':'확인 시각 미확인')):'';
+    rosterCount.textContent=rosterRows.length
+      ?(keywords.length?'검색 '+count(rows.length,'대')+' / ':'')+'확정호차 '+count(rosterRows.length,'대'):'';
     const pending=model?.vehicles.get('미배정');
     unassigned.textContent=pending?'미배정 · 배송 '+count(pending.deliveryCount,'건')+' · '+money(pending.amount):
       validCount(model?.unassigned)&&model.unassigned>0?'미배정 · 배송 '+count(model.unassigned,'건'):'';
@@ -141,25 +153,33 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
       button.setAttribute('aria-pressed',String(selected));
       button.dataset.direction=selected?(descending?'desc':'asc'):'';
     }
+    daySummary.hidden=!model;
+    const totals=model?.sourceTotals;
+    summaryValues.innerHTML=model?'<div><dt>확정호차</dt><dd>'+count(model.amountsVerified?rosterRows.length:null,'대')+
+      '</dd></div><div><dt>배송건수</dt><dd>'+count(totals?.deliveryCount,'건')+
+      '</dd></div><div><dt>WMS 매출</dt><dd>'+money(totals?.amount)+'</dd></div>':'';
   }
 
   function details(candidate) {
-    if(current.state==='loading')return '<p class="dispatch-empty">선택 권역의 매장을 확인하고 있습니다.</p>';
     if(current.state==='error')return '<p class="dispatch-empty">권역 상세 미확인</p><button type="button" data-overlap-retry>후보 다시 조회</button>';
-    const completeWms=Boolean(model?.amountsVerified&&model.sameWmsExport&&model.sourceTotals);
     const dispatchRoutes=dispatchOverlapVehicles(model);
-    return '<ul class="dispatch-v4-overlap-routes">'+candidate.routes.map(({vehicle,storeCount})=>{
+    return (current.state==='loading'?'<p class="dispatch-v4-detail-state" role="status">지도 표시 위치 확인 중</p>':'')+
+      '<ul class="dispatch-v4-overlap-routes" aria-label="관련 기준호차">'+candidate.routes.map(({vehicle,storeCount})=>{
       const route=dispatchRoutes.get(vehicle);
-      const dispatch=route?'착수 '+count(route.waypointCount,'착')+' · '+money(route.amount):
-        completeWms&&!dispatchRoutes.has(vehicle)?'미출차':'WMS 미확인';
-      return '<li><strong>'+escape(label(vehicle))+'</strong><span>등록 '+count(storeCount,'곳')+
-        '</span><small>'+escape(dispatch)+'</small></li>';
+      const dispatch=route?(validCount(route.waypointCount)?count(route.waypointCount,'착'):'착수 미확인')+' · '+money(route.amount):
+        model?.wmsScopeComplete&&!dispatchRoutes.has(vehicle)?'당일 배차 없음':'WMS 확인 필요';
+      return '<li><strong class="dispatch-v4-vehicle" style="--dispatch-vehicle-color:'+dispatchVehicleColor(vehicle)+'">'+
+        escape(label(vehicle))+'</strong><span>등록 '+count(storeCount,'곳')+'</span><small>'+escape(dispatch)+'</small></li>';
     }).join('')+'</ul>';
   }
 
   function renderCandidates(focusCode) {
     summary.textContent=overviewState==='loading'?'등록 권역 조회 중':overviewState==='error'?'등록 권역 자료 미확인':
       overview?.candidates.length?count(overview.candidates.length,'건'):'확인된 우편번호 겹침이 없습니다.';
+    selectedPanel.hidden=!current;
+    const selection=current?.candidate;
+    selectedPanel.innerHTML=selection?'<header><h3>'+escape(selection.postalCode)+'</h3>'+
+      '<button type="button" data-overlap-clear>선택 해제</button></header>'+details(selection):'';
     if(overviewState==='error') {
       candidates.innerHTML='<button type="button" data-overlap-retry>후보 다시 조회</button>';
       return;
@@ -168,7 +188,7 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
       const code=candidate.postalCode, pressed=current?.candidate.postalCode===code;
       return '<div class="dispatch-v4-overlap-row"><button type="button" data-dispatch-v4-postal="'+code+'" aria-expanded="'+
         String(pressed)+'"><strong>'+code+'</strong><span>호차 '+count(candidate.routeCount,'대')+' · 등록 '+
-        count(candidate.storeCount,'곳')+'</span></button>'+(pressed?details(candidate):'')+'</div>';
+        count(candidate.storeCount,'곳')+'</span></button></div>';
     }).join('');
     if(focusCode) candidates.querySelector('[data-dispatch-v4-postal="'+focusCode+'"]')?.focus({preventScroll:true});
   }
@@ -234,7 +254,8 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
     clearCandidate();
     selectRoute(row.dataset.dispatchV4Route);
   });
-  candidates.addEventListener('click',event=>{
+  panel.addEventListener('click',event=>{
+    if(event.target.closest('[data-overlap-clear]')){clearCandidate(true);return;}
     if(event.target.closest('[data-overlap-retry]')) {
       clearCandidate(true); void loadOverview();return;
     }
@@ -250,7 +271,8 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
       active=false;roster.hidden=panel.hidden=true;summaryRequest?.abort();summaryRequest=null;
       clearCandidate();overview=null;model=null;rosterRows=[];
       search.value='';selectedVehicle='';sort='vehicle';descending=false;
-      table.replaceChildren();candidates.replaceChildren();source.textContent=summary.textContent=unassigned.textContent='';
+      daySummary.open=false;daySummary.hidden=true;summaryValues.replaceChildren();
+      table.replaceChildren();candidates.replaceChildren();rosterCount.textContent=source.textContent=summary.textContent=unassigned.textContent='';
     },
     setDay(next){
       if(!next){clearCandidate();selectedVehicle='';search.value='';}
