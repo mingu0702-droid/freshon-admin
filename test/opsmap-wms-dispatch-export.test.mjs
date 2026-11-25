@@ -607,11 +607,56 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   files.set(officialFile,{...officialData,value:{...officialData.value,tag:'0'.repeat(32)}});
   assert.equal((await reader(pairedEnv)(pairDate)).total,1501);
   files.set(officialFile,officialData);
-  await upload(pairDate,{bytes:newLegacyBytes,replaceSha256:legacyPair.sha256,observedAt:'2026-11-29T12:04:00Z'});
-  const afterLegacyAdvance=projectOpsmapWmsDispatch(await reader(pairedEnv)(pairDate));
-  assert.equal(afterLegacyAdvance.amounts.observedAt,'2026-11-29T12:04:00.000Z');
+  // Today's separately authorized MIS correction supersedes the night pair.
+  // The ordinary morning job above does not repeat this source request.
+  const beforeMorning=counters();
+  const correctionAt='2026-11-29T21:04:00.000Z';
+  const morningCorrection=await submit(pairDate,{env:pairedEnv,amount:451,
+    replaceSha256:legacyPair.sha256,observedAt:correctionAt});
+  assert.equal(morningCorrection.state,'PUBLISHED');
+  assert.equal(morningCorrection.supersedes,legacyPair.sha256);
+  assert.deepEqual(counters().slice(0,2),[beforeMorning[0]+1,beforeMorning[1]+1]);
+  const storedCorrection=await reader(pairedEnv)(pairDate);
+  assert.equal(storedCorrection.source,'WMS_CONFIRMED_DISPATCH_FRESHON_JSON');
+  assert.equal(storedCorrection.total,552);
+  const afterLegacyAdvance=projectOpsmapWmsDispatch(storedCorrection);
+  assert.equal(afterLegacyAdvance.amounts.observedAt,correctionAt);
+  assert.equal(afterLegacyAdvance.route.observedAt,correctionAt);
   assert.equal(afterLegacyAdvance.amounts.vehicles[0].waypointCount,null);
   assert.deepEqual(files.get('official-round-index-v1.json'),officialIndex);
+
+  const activeMISFile=[...files.keys()].find(key=>key.startsWith('release-'+pairDate+'-')&&
+    files.get(key).value.observedAt===correctionAt);
+  const activeMISData=files.get(activeMISFile);
+  files.set(activeMISFile,{...activeMISData,value:{...activeMISData.value,tag:'0'.repeat(32)}});
+  // Fail closed if the signed latest MIS revision cannot be read. The older
+  // official stop counts must not reappear during the error.
+  await assert.rejects(reader(pairedEnv)(pairDate),{code:'WMS_EXPORT_ARCHIVE_INTEGRITY'});
+  const correctionFailure=await createOpsmapDispatchReferenceReader({getPublication:()=>null,
+    readWmsExport:reader(pairedEnv)}).archiveOnly(pairDate);
+  assert.equal(correctionFailure.amounts.state,'UNAVAILABLE');
+  assert.equal(correctionFailure.amounts.exportFailure,'WMS_EXPORT_ARCHIVE_INTEGRITY');
+  assert.deepEqual(correctionFailure.route.rows,[]);
+  files.set(activeMISFile,activeMISData);
+
+  const morningPairAt='2026-11-29T21:07:00.000Z';
+  const morningPair=officialRound(pairDate,morningPairAt,'89aabcde');
+  morningPair.dispatch.rows[0].SELL_AMT=117;
+  morningPair.dispatch.rows[1].CUST_CD='S91004';
+  morningPair.plan.rows[0].SELL_AMT=322;
+  morningPair.plan.rows[0].STOP_LOC_CNT=2;
+  const beforePairCorrection=counters();
+  const officialCorrection=await upPair({round:morningPair,reconcileExisting:true});
+  assert.equal(officialCorrection.state,'PUBLISHED');
+  assert.equal(officialCorrection.supersedes,correctedPair.sha256);
+  assert.equal((await upPair({round:morningPair,reconcileExisting:true})).state,'VERIFIED_NOOP');
+  const correctedProjection=projectOpsmapWmsDispatch(await reader(pairedEnv)(pairDate));
+  assert.equal(correctedProjection.amounts.sourceTotals.amount,345);
+  assert.equal(correctedProjection.route.observedAt,morningPairAt);
+  assert.equal(correctedProjection.amounts.observedAt,morningPairAt);
+  assert.equal(correctedProjection.amounts.vehicles[0].waypointCount,2);
+  assert.equal((await reader()(pairDate)).total,552);
+  assert.deepEqual(counters().slice(0,2),beforePairCorrection.slice(0,2));
   const officialOnlyDay='2026-12-01';
   await upPair({round:officialRound(officialOnlyDay,'2026-11-30T12:00:00.000Z','1aaabbbb'),date:officialOnlyDay});
   assert.equal(await reader()(officialOnlyDay),null);

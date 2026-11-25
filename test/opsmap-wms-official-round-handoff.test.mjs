@@ -270,6 +270,7 @@ test('nightly owner clock stays off outside approval, UID, matching execution re
     {receipt:{...receipt,requestId:'R9_'+scheduledAt}},
     {receipt:{...receipt,source:'first-clock'}},
     {started:Date.parse('2026-11-26T12:09:00.000Z')},
+    {started:Date.parse('2026-11-26T21:12:00.000Z')},
     {started:Date.parse('2026-11-26T13:10:00.000Z')},
     {args:{nightTime:nightStart+111_000},started:nightStart}
   ];
@@ -292,4 +293,32 @@ test('nightly owner clock keeps one attempt when the provider or receiver result
     assert.ok(['ATTEMPTED','NOT_ACKNOWLEDGED'].includes(state.get(nightStateKey).state));
     assert.doesNotMatch(messages.join('\n'),/PRIVATE/);
   }
+});
+
+test('an existing owner correction from this delivery morning posts once without another WMS fetch',async t=>{
+  const morningAt=Date.parse('2026-11-26T21:12:00.000Z');
+  const {api,requests}=gas({night:{now:()=>morningAt}});
+  const {plans,details}=batch(3);
+  const lease={id:runId},job={id:runId,day:date};
+  const report={code:'011',fullyReconciled:true};
+  api.capture(report,date,morningAt-1_000,plans,details);
+  api.queue([report],job,{ok:true,published:true},lease);
+  api.send(lease);
+  api.send(lease);
+  assert.equal(requests.length,1);
+  let published;
+  const {post}=await start(t,{now:morningAt,publish:async input=>{
+    assert.equal(input.reconcileExisting,true);
+    const {round,date:shipDate}=input;
+    const bytes=encodeWmsOfficialRound(round,shipDate);
+    published=decodeWmsOfficialRound(bytes,{date:shipDate,observedAt:round.plan.observedAt}).data;
+    return {state:'PUBLISHED'};
+  }});
+  const [request]=requests;
+  const response=await post(request.payload,{'Content-Type':request.contentType,...request.headers});
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{state:'PUBLISHED',date});
+  assert.equal(published.observedAt,new Date(morningAt-1_000).toISOString());
+  assert.equal(published.total,3025);
+  assert.equal(published.vehicles.find(row=>row.vehicle==='100').waypointCount,3);
 });

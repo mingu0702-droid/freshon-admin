@@ -314,14 +314,16 @@ export function createStageWmsDispatchExportReader({env=process.env,readSecret=r
     const failure=configurationFailure(date);
     if(!failure)return readEntry(date);
     if(failure!=='WMS_EXPORT_DATE_NOT_APPROVED'||!indexes.length||!isStageWmsDay(date))return null;
-    const candidates=await seek(date);
-    let failureReading;
-    for(const {store,entry} of candidates){
-      try{return await readEntry(date,entry,store);}
-      catch(error){failureReading??=error;}
+    const [preferred,alternate]=await seek(date);
+    if(!preferred)return null;
+    try{return await readEntry(date,preferred.entry,preferred.store);}
+    catch(error){
+      // A verified official supplement can fall back to MIS. A known newer
+      // MIS correction must never fall back to the previous official stops.
+      if(preferred.entry.format!==WMS_OFFICIAL_ROUND_FORMAT||!alternate)throw error;
+      try{return await readEntry(date,alternate.entry,alternate.store);}
+      catch{throw error;}
     }
-    if(failureReading)throw failureReading;
-    return null;
   };
   read.dates=Object.keys(manifest??{}).filter(date=>dayKey.test(date));
   read.verifyWorkbook=verifyWorkbook;
