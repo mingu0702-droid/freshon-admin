@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildVehiclePrintModel,datedPrintCenter,mergeDatedPrintCoordinates,validPrintDate,validateDatedPrintResponse,PRINT_UNPROVIDED_CENTER} from '../public/opsmap/map-print-ui.mjs';
+import {buildVehiclePrintBatch,buildVehiclePrintModel,datedPrintCenter,mergeDatedPrintCoordinates,validPrintDate,validateDatedPrintResponse,PRINT_UNPROVIDED_CENTER} from '../public/opsmap/map-print-ui.mjs';
 const master={version:'a'.repeat(64),checkedAt:'2026-11-04T00:00:00Z',stale:false};
 const fixed=(code,car='2',center='osan',extra={})=>({customerCode:code,customerName:'합성 테스트 매장',address:'경기도 오산시 합성로 10',baseVehicle:car,baseVehicleGroup:center,baseVehicleState:'VERIFIED_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:master.version,baseVehicleCheckedAt:master.checkedAt,baseVehicleStale:false,lat:37.1,lng:127.1,...extra});
 const build=(rows,extra={})=>buildVehiclePrintModel({basis:'FIXED',date:'2026-11-04',nowDate:'2026-11-04',center:'osan',selectedVehicle:'2',master,rows,...extra});
@@ -82,4 +82,33 @@ test('dated print projects official building evidence only for the same bound ad
  for(const change of invalid)assert.equal(mergeDatedPrintCoordinates([row],[{...saved,...change}])[0].lat,null);
  const moved={...row,address:'경기도 오산시 검증로 20'};
  assert.equal(mergeDatedPrintCoordinates([moved],[saved])[0].coordinateStatus,'CONFLICT');
+});
+
+test('a print batch preserves one date and center and separates store and coordinate scope per vehicle',()=>{
+ const date='2026-11-17',scope={basis:'DATED',date,center:'osan',nowDate:date,selectedVehicles:['102','108']};
+ const ready={deliveryDate:date,dispatchCenterCode:'011'};
+ const rows=[
+  {...ready,customerCode:'S100',confirmedVehicle:'102',lat:37.4,lng:127.1},
+  {...ready,customerCode:'S200',confirmedVehicle:'108'},
+  {...ready,customerCode:'S300',confirmedVehicle:'108',dispatchCenterCode:'013',lat:35.1,lng:126.9},
+  {...ready,customerCode:'S400',confirmedVehicle:'110',lat:37.1,lng:127.4}
+ ];
+ const models=buildVehiclePrintBatch({...scope,rows});
+ assert.deepEqual(models.map(row=>[row.vehicle,row.locatedCount,row.stores.map(store=>store.customerCode)]),
+  [['102',1,['S100']],['108',0,['S200']]]);
+ assert.ok(models.every(row=>row.date===date&&row.center==='osan'));
+});
+
+test('a missing or conflicted selected vehicle prevents the entire batch from printing',()=>{
+ const date='2026-11-17',scope={basis:'DATED',date,center:'osan',nowDate:date,selectedVehicles:['102','108']};
+ const first={deliveryDate:date,dispatchCenterCode:'011',customerCode:'S100',vehicle:'102'};
+ const second={...first,customerCode:'S200',vehicle:'108',address:'검증용 주소'};
+ const rows=[first,second];
+ assert.throws(()=>buildVehiclePrintBatch({...scope,rows:[first]}),{message:'BATCH_INCOMPLETE',vehicle:'108'});
+ assert.throws(()=>buildVehiclePrintBatch({...scope,rows:[...rows,{...second,address:'다른 주소'}]}),
+  {message:'BATCH_INCOMPLETE',vehicle:'108'});
+ assert.throws(()=>buildVehiclePrintBatch({...scope,rows:[...rows,{...second,confirmedVehicle:'110'}]}),
+  {message:'BATCH_INCOMPLETE',vehicle:'108'});
+ assert.throws(()=>buildVehiclePrintBatch({...scope,rows:[...rows,{...second,deliveryDate:'2026-11-16'}]}),/DATE_UNVERIFIED/);
+ assert.throws(()=>buildVehiclePrintBatch({...scope,rows,selectedVehicles:['102','102호차']}),/SELECTION_REQUIRED/);
 });

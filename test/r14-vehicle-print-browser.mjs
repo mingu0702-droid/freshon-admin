@@ -3,16 +3,21 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-const playwrightPath=process.env.PLAYWRIGHT_MODULE||'C:/Users/SFN/Documents/Codex/2026-10-27/task/opsmap-production-review-20261028/node_modules/playwright/index.mjs';
-const {chromium}=await import(pathToFileURL(playwrightPath));
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE?pathToFileURL(process.env.PLAYWRIGHT_MODULE):'playwright');
 const output=path.resolve(process.env.PRINT_TEST_OUTPUT||'outputs/r14-vehicle-print');await fs.mkdir(output,{recursive:true});
 const master={version:'a'.repeat(64),checkedAt:'2026-11-04T00:00:00Z',stale:false};
 const fixed=[['S100','2','osan','합성 오산 A'],['S101','2','osan','합성 오산 B'],['S200','20','osan','다른 호차 금지'],['S300','2','honam','다른 센터 금지']].map(([customerCode,baseVehicle,baseVehicleGroup,customerName],i)=>({customerCode,baseVehicle,baseVehicleGroup,customerName,address:`합성 검증주소 ${i+1}`,baseVehicleState:'VERIFIED_MASTER',baseVehicleSource:'FIXED_DISPATCH_PRIMARY',baseVehicleVersion:master.version,baseVehicleCheckedAt:master.checkedAt,lat:i===1?null:37+i*.1,lng:i===1?null:127+i*.1,phone:'010-9999-8888',password:'DO_NOT_PRINT',raw:{accessPassword:'ACCESS_DO_NOT_PRINT'}}));
 const dated=[...fixed].map((r,i)=>({...r,deliveryDate:'2026-11-03',vehicle:r.baseVehicle,vehicleGroup:r.baseVehicleGroup,order:i===0?9:i===1?3:1}));
 let reads=0,mode='ok';
+const datedRows=()=>{
+ if(mode==='missing-center')return [...dated.map(({vehicleGroup,...r})=>r.customerCode==='S300'?{...r,vehicleGroup}:r),{...dated[0],customerCode:'S400',vehicleGroup:'osan'}];
+ if(mode==='batch-conflict')return [...dated,{...dated[2],address:'상충하는 합성 주소'}];
+ if(mode==='batch-long')return [...dated,...Array.from({length:65},(_,i)=>({...dated[0],customerCode:'S'+(5000+i),customerName:'합성 연속 페이지 '+i,order:i+10,lat:null,lng:null}))];
+ return dated;
+};
 const server=http.createServer(async(req,res)=>{
  if(req.url==='/map-print-ui.mjs'){res.setHeader('Content-Type','text/javascript');res.end(await fs.readFile(new URL('../public/opsmap/map-print-ui.mjs',import.meta.url)));return;}
- if(req.url.startsWith('/api/map-phase2b/preview/assignments?')){reads++;if(mode==='delay')await new Promise(r=>setTimeout(r,400));res.setHeader('Content-Type','application/json');if(mode==='auth'){res.writeHead(403);res.end('{}');return;}const data=mode==='missing-center'?[...dated.map(({vehicleGroup,...r})=>r.customerCode==='S300'?{...r,vehicleGroup}:r),{...dated[0],customerCode:'S400',vehicleGroup:'osan'}]:dated;res.end(JSON.stringify({ok:true,data,meta:{date:mode==='bad-date'?'2026-11-02':'2026-11-03',complete:true}}));return;}
+ if(req.url.startsWith('/api/map-phase2b/preview/assignments?')){reads++;if(mode==='delay')await new Promise(r=>setTimeout(r,400));res.setHeader('Content-Type','application/json');if(mode==='auth'){res.writeHead(403);res.end('{}');return;}res.end(JSON.stringify({ok:true,data:datedRows(),meta:{date:mode==='bad-date'?'2026-11-02':'2026-11-03',complete:true}}));return;}
  res.setHeader('Content-Type','text/html');res.end(`<!doctype html><meta charset="UTF-8"><meta name="viewport" content="width=device-width"><title>인쇄 합성 검증</title><style>body{margin:0;font-family:Arial}#mapDateBar{display:flex;flex-wrap:wrap;padding:8px;gap:8px}#privateOutside{height:20px}</style><div id="mapDateBar" style="display:none"></div><footer id="sourceFooterLinks"></footer><div id="privateOutside">OUTSIDE_PRIVATE_PHONE_010-8888-7777</div><script>window.purges=[];window.printCalls=0;window.print=()=>{window.printCalls++;window.printBody=document.body.className;window.printTitle=document.title};window.MapStaffEntry={registerPurge:fn=>{purges.push(fn);return ()=>{}}};window.MapUiLocalBridge={state:{mode:'BASE_60D',selectedVehicles:['2'],centerFilter:'osan'},fixedTerritoryStores:()=>${JSON.stringify(fixed)},fixedTerritoryMasterState:()=>(${JSON.stringify(master)}),stores:()=>${JSON.stringify(dated)},navigationStores:()=>${JSON.stringify(dated)}};</script><script type="module" src="/map-print-ui.mjs"></script>`);
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));const url=`http://127.0.0.1:${server.address().port}/`;
@@ -47,5 +52,105 @@ try{
   window.kakao={maps:{LatLng:class{constructor(lat,lng){this.lat=lat;this.lng=lng}},LatLngBounds:class{extend(){}},Map:class{setBounds(){setTimeout(()=>this.ready?.(),0)}},CustomOverlay:class{constructor(options){this.options=options;sdkPins.push(this)}setMap(map){this.removed=map===null}},event:{addListener(map,name,fn){map.ready=fn;sdkListeners++},removeListener(map){map.ready=null;sdkListeners--}}}};
  });await sdkPage.getByRole('button',{name:'호차별 인쇄',exact:true}).click();await sdkPage.getByRole('button',{name:'미리보기',exact:true}).click();await sdkPage.waitForFunction(()=>document.querySelector('#vehiclePrintStatus').textContent.includes('준비됐습니다'));assert.equal(await sdkPage.evaluate(()=>sdkPins.length),1);assert.equal(await sdkPage.evaluate(()=>sdkListeners),1);assert.equal(await sdkPage.evaluate(()=>sdkPins[0].options.content.title.startsWith('S100')),true);await sdkPage.getByRole('button',{name:'닫기',exact:true}).click();assert.equal(await sdkPage.evaluate(()=>sdkListeners),0);assert.equal(await sdkPage.evaluate(()=>sdkPins.every(p=>p.removed)),true);await sdkPage.close();
  const longPage=await browser.newPage({viewport:{width:1366,height:900}});await longPage.goto(url);await longPage.waitForFunction(()=>window.MapVehiclePrintUi);await longPage.evaluate(template=>{window.MapUiLocalBridge.fixedTerritoryStores=()=>Array.from({length:150},(_,i)=>({...template,customerCode:'S'+(1000+i),customerName:'합성 다중페이지 매장 '+i,address:'합성 인쇄 주소 '+i,lat:null,lng:null}));},fixed[0]);await longPage.getByRole('button',{name:'호차별 인쇄',exact:true}).click();await longPage.getByRole('button',{name:'미리보기',exact:true}).click();await longPage.waitForFunction(()=>document.querySelector('#vehiclePrintPreview tbody')?.children.length===150);await longPage.evaluate(()=>document.body.classList.add('map-vehicle-printing'));await longPage.pdf({path:path.join(output,'selected-vehicle-multipage.pdf'),preferCSSPageSize:true,printBackground:true});await longPage.close();
- results.push({datedScope:'PASS',recordedOrder:'PASS',mismatchedDate:'PASS',authFailure:'PASS',selectionRace:'PASS',logoutPurge:'PASS',datedUnprovidedCenter:'PASS',knownUnknownSeparation:'PASS',fixedRejectsUnprovidedCenter:'PASS',sdkSelectedPins:'PASS',sdkCleanup:'PASS',multipageRows:150,paidApiCalls:0});await fs.writeFile(path.join(output,'results.json'),JSON.stringify({fixture:'SYNTHETIC_ONLY',browser:'Microsoft Edge headless',results},null,2));console.log(JSON.stringify({output,results}));
+ const beginBatch=async()=>{
+  const page=await browser.newPage({viewport:{width:1366,height:900}});
+  await page.goto(url);
+  await page.getByRole('button',{name:'호차별 인쇄',exact:true}).click();
+  await page.selectOption('#vehiclePrintBasis','DATED');
+  await page.selectOption('#vehiclePrintCenter','osan');
+  await page.fill('#vehiclePrintDate','2026-11-03');
+  await page.selectOption('#vehiclePrintMode','batch');
+  return page;
+ };
+ const loadBatch=page=>page.getByRole('button',{name:'호차 목록 불러오기',exact:true}).click();
+ const previewBatch=page=>page.getByRole('button',{name:'미리보기',exact:true}).click();
+ const printButton=page=>page.getByRole('button',{name:'인쇄 / PDF 저장',exact:true});
+ const batchPage=await beginBatch(), readCount=reads;
+ const batchErrors=[];
+ batchPage.on('pageerror',error=>batchErrors.push(error.message));
+ await loadBatch(batchPage);
+ await batchPage.getByRole('checkbox',{name:'2호차',exact:true}).waitFor();
+ assert.equal(await batchPage.getByRole('checkbox').count(),2);
+ await batchPage.getByRole('checkbox',{name:'20호차',exact:true}).check();
+ await previewBatch(batchPage);
+ assert.equal(reads,readCount+1);
+ const firstVehicle=batchPage.locator('.print-vehicle[data-vehicle="2"]');
+ const secondVehicle=batchPage.locator('.print-vehicle[data-vehicle="20"]');
+ assert.deepEqual(await firstVehicle.locator('tbody td:nth-child(3)').allTextContents(),['S101','S100']);
+ assert.deepEqual(await secondVehicle.locator('tbody td:nth-child(3)').allTextContents(),['S200']);
+ assert.equal(await firstVehicle.locator('svg circle').count(),1);
+ assert.equal(await secondVehicle.locator('svg circle').count(),1);
+ assert.equal(await printButton(batchPage).isEnabled(),true);
+ await batchPage.screenshot({path:path.join(output,'batch-preview-1366.png')});
+ const writePdf=async(page,name)=>{
+  await page.evaluate(()=>dispatchEvent(new Event('beforeprint')));
+  await page.emulateMedia({media:'print'});
+  assert.equal(await page.locator('#privateOutside').isVisible(),false);
+  assert.equal(await page.locator('#vehiclePrintBatchVehicles').isVisible(),false);
+  assert.equal(await page.locator('.print-vehicle').nth(1).evaluate(node=>getComputedStyle(node).breakBefore),'page');
+  assert.deepEqual(await page.locator('.print-route-header').allInnerTexts(),['오산센터 2호차 · 2026-11-03','오산센터 20호차 · 2026-11-03']);
+  const data=await page.pdf({path:path.join(output,name),preferCSSPageSize:true,printBackground:true});
+  assert.equal(data.subarray(0,4).toString(),'%PDF');
+  await page.emulateMedia({media:'screen'});
+  await page.evaluate(()=>dispatchEvent(new Event('afterprint')));
+  return [...data.toString('latin1').matchAll(/\/Type\s*\/Page\b/g)].length;
+ };
+ const batchPages=await writePdf(batchPage,'batch-two-vehicles-a4.pdf');
+ assert.equal(batchPages,2);
+ await batchPage.getByRole('checkbox',{name:'20호차',exact:true}).uncheck();
+ assert.equal(await printButton(batchPage).isDisabled(),true);
+ assert.equal(await batchPage.locator('#vehiclePrintPreview').isVisible(),false);
+ await batchPage.getByRole('checkbox',{name:'20호차',exact:true}).check();
+ await batchPage.evaluate(()=>{
+  window.batchMaps=[];window.batchPins=[];
+  window.kakao={maps:{
+   Map:class{constructor(host){this.host=host;batchMaps.push(this);}setBounds(){}},
+   LatLng:class{constructor(lat,lng){this.lat=lat;this.lng=lng;}},LatLngBounds:class{extend(){}},
+   CustomOverlay:class{constructor(options){this.options=options;batchPins.push(this);}setMap(value){this.removed=value===null;}},
+   event:{addListener(map,name,call){map.ready=call;},removeListener(map){map.ready=null;}}
+  }};
+ });
+ await previewBatch(batchPage);
+ assert.equal(reads,readCount+1);
+ assert.deepEqual(await batchPage.evaluate(()=>batchPins.map(p=>[p.options.map.host.closest('article').dataset.vehicle,p.options.content.title.split(' ')[0]])),
+  [['2','S100'],['20','S200']]);
+ await batchPage.evaluate(()=>batchMaps[0].ready());
+ assert.equal(await printButton(batchPage).isDisabled(),true);
+ await batchPage.evaluate(()=>batchMaps[1].ready());
+ assert.equal(await printButton(batchPage).isEnabled(),true);
+ await batchPage.evaluate(()=>purges.forEach(fn=>fn()));
+ assert.equal(await batchPage.locator('#vehiclePrintDialog').isVisible(),false);
+ assert.equal(await batchPage.locator('#vehiclePrintBatchVehicles input').count(),0);
+ assert.equal(await batchPage.evaluate(()=>batchPins.every(pin=>pin.removed)&&batchMaps.every(map=>!map.ready)),true);
+ assert.deepEqual(batchErrors,[]);
+ await batchPage.close();
+
+ mode='batch-conflict';
+ const failed=await beginBatch();
+ await loadBatch(failed);
+ await failed.getByRole('checkbox',{name:'20호차',exact:true}).check();
+ await previewBatch(failed);
+ await failed.getByRole('status').getByText('20호차 자료를 확인하지 못했습니다. 선택을 확인해 주세요.').waitFor();
+ assert.equal(await failed.locator('.print-vehicle').count(),0);
+ assert.equal(await printButton(failed).isDisabled(),true);
+ await failed.evaluate(()=>dispatchEvent(new Event('beforeprint')));
+ await failed.emulateMedia({media:'print'});
+ assert.equal(await failed.locator('#privateOutside').isVisible(),false);
+ await failed.close();
+
+ mode='batch-long';
+ const continued=await beginBatch();
+ await loadBatch(continued);
+ await continued.getByRole('checkbox',{name:'20호차',exact:true}).check();
+ await previewBatch(continued);
+ assert.equal(await continued.locator('.print-vehicle[data-vehicle="2"] tbody tr').count(),67);
+ assert.equal(await continued.locator('.print-vehicle[data-vehicle="20"] tbody tr').count(),1);
+ const continuedPages=await writePdf(continued,'batch-with-continuation-a4.pdf');
+ assert.ok(continuedPages>2);
+ await continued.close();
+ results.push({datedScope:'PASS',recordedOrder:'PASS',mismatchedDate:'PASS',authFailure:'PASS',selectionRace:'PASS',logoutPurge:'PASS',
+  datedUnprovidedCenter:'PASS',knownUnknownSeparation:'PASS',fixedRejectsUnprovidedCenter:'PASS',sdkSelectedPins:'PASS',sdkCleanup:'PASS',
+  multipageRows:150,batch:{sourceReads:1,batchPages,continuedPages,allOrNothing:'PASS',separateTiles:'PASS'},paidApiCalls:0});
+ await fs.writeFile(path.join(output,'results.json'),JSON.stringify({fixture:'SYNTHETIC_ONLY',browser:'Microsoft Edge headless',results},null,2));
+ console.log(JSON.stringify({output,results}));
 }finally{await browser.close();await new Promise(r=>server.close(r));}
