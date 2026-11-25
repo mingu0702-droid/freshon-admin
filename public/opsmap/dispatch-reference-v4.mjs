@@ -124,7 +124,7 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
   function renderRoster() {
     const keywords=normalize(search.value).trim().split(/\s+/).filter(Boolean);
     const dispatchRoutes=dispatchOverlapVehicles(model);
-    const selectedRoutes=new Set((current?.state==='error'?[]:current?.candidate.routes||[])
+    const selectedRoutes=new Set((current?.state==='stale'?[]:current?.candidate.routes||[])
       .map(route=>dispatchRoutes.get(route.vehicle)?.vehicle));
     const rows=rosterRows.filter(row=>keywords.every(term=>normalize(label(row.vehicle)+' '+(row.area||'')).includes(term)));
     rows.sort((a,b)=>{
@@ -161,16 +161,18 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
   }
 
   function details(candidate) {
-    if(current.state==='error')return '<p class="dispatch-empty">권역 상세 미확인</p><button type="button" data-overlap-retry>후보 다시 조회</button>';
+    const unavailable='<p class="dispatch-empty" role="status">권역 상세 미확인</p><button type="button" data-overlap-retry>후보 다시 조회</button>';
+    if(current.state==='stale')return unavailable;
     const dispatchRoutes=dispatchOverlapVehicles(model);
-    return (current.state==='loading'?'<p class="dispatch-v4-detail-state" role="status">지도 표시 위치 확인 중</p>':'')+
-      '<ul class="dispatch-v4-overlap-routes" aria-label="관련 기준호차">'+candidate.routes.map(({vehicle,storeCount})=>{
+    const locationStatus=current.state==='loading'?'<p class="dispatch-v4-detail-state" role="status">지도 표시 위치 확인 중</p>':
+      current.state==='error'?unavailable:'';
+    return '<ul class="dispatch-v4-overlap-routes" aria-label="관련 기준호차">'+candidate.routes.map(({vehicle,storeCount})=>{
       const route=dispatchRoutes.get(vehicle);
       const dispatch=route?(validCount(route.waypointCount)?count(route.waypointCount,'착'):'착수 미확인')+' · '+money(route.amount):
         model?.wmsScopeComplete&&!dispatchRoutes.has(vehicle)?'당일 배차 없음':'WMS 확인 필요';
       return '<li><strong class="dispatch-v4-vehicle" style="--dispatch-vehicle-color:'+dispatchVehicleColor(vehicle)+'">'+
         escape(label(vehicle))+'</strong><span>등록 '+count(storeCount,'곳')+'</span><small>'+escape(dispatch)+'</small></li>';
-    }).join('')+'</ul>';
+    }).join('')+'</ul>'+locationStatus;
   }
 
   function renderCandidates(focusCode) {
@@ -224,6 +226,7 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
     selectedVehicle='';
     current={candidate,state:'loading'};
     renderCandidates(code);renderRoster();
+    selectCandidate(candidate);
     const controller=detailRequest=new AbortController();
     try {
       const stable=overview;
@@ -232,10 +235,11 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
       const detail=dispatchOverlapDetail(value,stable,candidate);
       current={candidate,detail,state:'ready'};
       selectCandidate(detail);
-    } catch {
+    } catch(error) {
       if(!active||controller.signal.aborted)return;
-      current={candidate,state:'error'};
-      renderRoster();
+      const stale=[401,403,404,409].includes(error?.status)||error?.message==='DISPATCH_OVERLAPS_UNVERIFIED';
+      current={candidate,state:stale?'stale':'error'};
+      if(stale){selectCandidate(null);renderRoster();}
     }
     renderCandidates(code);
   }
@@ -279,7 +283,7 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
       model=next;rosterRows=dispatchDailyRoster(model);
       if(active){renderRoster();renderCandidates();}
     },
-    currentCandidate:()=>current?.detail??null,
+    currentCandidate:()=>current?.state==='stale'?null:current?.detail??current?.candidate??null,
     clearCandidate,
     setVehicle(vehicle){selectedVehicle=vehicle;if(active)renderRoster();},
   };

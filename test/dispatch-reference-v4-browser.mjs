@@ -31,7 +31,7 @@ assert.throws(()=>dispatchOverlapDetail({...meta,candidate:{...zone,stores:[...z
   overview,overview.candidates[0]));
 
 function daily(date) {
-  const source='WMS_CONFIRMED_DISPATCH_EXPORT',rows=[],vehicles=[];
+  const source=date===day?'WMS_CONFIRMED_DISPATCH_FRESHON_JSON':'WMS_CONFIRMED_DISPATCH_EXPORT',rows=[],vehicles=[];
   for(let i=0;i<110;i++){
     const vehicle=String(201+i),customerCode='S'+(1000+i),amount=(date===day?10_000:20_000)+i;
     rows.push({...member(vehicle,customerCode,i),postalCode:i===0||i===27?'01234':'01235',
@@ -86,7 +86,7 @@ try{
   const page=await browser.newPage({viewport:{width:1366,height:768}});
   page.setDefaultTimeout(10000);
   const errors=[],requests=[];
-  let overlapState='VERIFIED',refuseDetail=false,dayGate;
+  let overlapState='VERIFIED',detailStatus=0,dayGate,detailGate;
   page.on('pageerror',error=>errors.push(error.message));
   await page.clock.setFixedTime(new Date('2026-11-28T08:00:00+09:00'));
   await page.route('**/*',async interceptor=>{
@@ -105,7 +105,8 @@ try{
         const zip=url.searchParams.get('postalCode');
         if(zip){
           assert.equal(url.searchParams.get('version'),meta.version);
-          if(refuseDetail)return interceptor.fulfill({status:409,json:{state:'UNAVAILABLE'}});
+          if(detailGate)await detailGate;
+          if(detailStatus)return interceptor.fulfill({status:detailStatus,json:{state:'UNAVAILABLE'}});
           return interceptor.fulfill({json:{...meta,candidate:zones.get(zip)}});
         }
         return interceptor.fulfill({json:{...meta,candidates:overlapState==='EMPTY'?[]:candidates}});
@@ -158,9 +159,17 @@ try{
   assert.match(await page.locator('.dispatch-v4-unassigned').innerText(),/미배정 · 배송 2건 · 205원/);
   assert.equal(await overlap.locator('[data-dispatch-v4-postal]').first().getAttribute('data-dispatch-v4-postal'),'01234');
   assert.equal(await page.evaluate(()=>MapUiLocalBridge.state.map===window.originalMap),true);
-  await postal('01234').click();
+  const candidatesShown=['201호','228호','315호'];
+  let releaseDetail;
+  detailGate=new Promise(resolve=>{releaseDetail=resolve;});
+  try{
+    await postal('01234').click();
+    await selection.getByText('지도 표시 위치 확인 중',{exact:true}).waitFor();
+    assert.deepEqual(await selection.locator('.dispatch-v4-vehicle').allTextContents(),candidatesShown);
+    await page.locator('[data-dispatch-customer="S1000"]').waitFor();
+    assert.equal(await page.locator('[data-dispatch-customer="S9010"]').count(),0);
+  }finally{releaseDetail();detailGate=null;}
   await overlap.getByText('당일 배차 없음',{exact:true}).waitFor();
-  assert.deepEqual(await selection.locator('.dispatch-v4-vehicle').allTextContents(),['201호','228호','315호']);
   assert.equal(await roster.getByRole('button').count(),110);
   assert.deepEqual(await roster.locator('[aria-pressed=true]').evaluateAll(rows=>rows.map(row=>row.dataset.dispatchV4Route)),['201','228']);
   assert.match(await overlap.locator('li').filter({hasText:'315호'}).innerText(),/등록 1곳\s+당일 배차 없음/);
@@ -220,7 +229,14 @@ try{
   await row('310').waitFor();
   assert.equal(await roster.getByRole('button').count(),110);
   await postal('01234').waitFor();
-  refuseDetail=true;
+  detailStatus=503;
+  await postal('01234').click();
+  await overlap.getByText('권역 상세 미확인',{exact:true}).waitFor();
+  assert.deepEqual(await selection.locator('.dispatch-v4-vehicle').allTextContents(),candidatesShown);
+  assert.equal(await roster.locator('[aria-pressed=true]').count(),2);
+  assert.equal(await page.locator('[data-dispatch-customer="S9010"]').count(),0);
+  await selection.getByRole('button',{name:'선택 해제'}).click();
+  detailStatus=409;
   await postal('01234').click();
   await overlap.getByText('권역 상세 미확인',{exact:true}).waitFor();
   assert.equal(await roster.locator('[aria-pressed=true]').count(),0);
@@ -234,7 +250,7 @@ try{
   await tab.click();
   await overlap.getByText('등록 권역 자료 미확인',{exact:true}).waitFor();
   await page.getByRole('button',{name:'매장 지도'}).click();
-  overlapState='VERIFIED';refuseDetail=false;
+  overlapState='VERIFIED';detailStatus=0;
   let releaseDay;
   dayGate=new Promise(resolve=>{releaseDay=resolve;});
   await tab.click();

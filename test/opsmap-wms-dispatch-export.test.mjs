@@ -9,6 +9,7 @@ import { createOpsmapDispatchReferenceReader } from '../src/opsmapDispatchRefere
 import { coordinateAddressHash } from '../src/opsmap-abc/opsmapAutoCoordinates.js';
 import { STAGE_ORIGIN, STAGE_SERVICE } from '../src/stageScope.js';
 import { createStageShadowRuntime } from '../src/shadowCoverage/stageArchive.js';
+import { createDispatchReference } from '../public/opsmap/dispatch-reference.mjs';
 
 const date='2026-11-23',observedAt='2026-11-22T13:15:00.000Z';
 const address='경기도 오산시 합성로 10';
@@ -157,6 +158,8 @@ test('one approved WMS export supplies both confirmed stops and amounts without 
   const day=await read(date);
   assert.equal(day.route.source,'WMS_CONFIRMED_DISPATCH_EXPORT');
   assert.equal(day.amounts.source,day.route.source);
+  assert.equal(day.route.sourceComplete,false);
+  assert.equal(createDispatchReference(day,[],date).wmsScopeComplete,false);
   assert.equal(otherCalls,0);
   const wrong=createOpsmapDispatchReferenceReader({
     getPublication:()=>null,
@@ -421,6 +424,12 @@ test('published Stage WMS releases verify key, ciphertext, date and CAS without 
   assert.equal(jsonRead.vehicles.find(row=>row.vehicle==='미배정').deliveryCount,1);
   assert.equal(jsonRead.vehicles.find(row=>row.vehicle==='101').details[0].addressHash,coordinateAddressHash(address));
   const jsonReference=createOpsmapDispatchReferenceReader({getPublication:()=>null,readWmsExport:reader()});
+  const projectedDay=await jsonReference.archiveOnly(date5);
+  assert.equal(projectedDay.route.sourceComplete,true);
+  const verifiedDay=createDispatchReference(projectedDay,[],date5);
+  assert.equal(verifiedDay.wmsScopeComplete,true);
+  assert.equal(verifiedDay.vehicles.has('184'),false);
+  assert.equal(verifiedDay.vehicles.get('101').waypointCount,null);
   const analyzed=(await jsonReference.period(date5,7)).dates.find(day=>day.date===date5);
   assert.equal(analyzed.dispatchScope,'WMS_EXPORT');
   assert.equal(analyzed.wmsVerified,true);

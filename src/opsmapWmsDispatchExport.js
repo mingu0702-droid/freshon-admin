@@ -5,7 +5,7 @@ import { coordinateAddressHash } from './opsmap-abc/opsmapAutoCoordinates.js';
 import { createPrivateGithubJsonStore } from './fixedVehicleStore.js';
 import { officialAddressKey } from './opsmapOfficialAddressLookup.js';
 import { opsmapArchiveSite } from './stageScope.js';
-import {decodeFreshonWmsDispatch,freshonWmsVehicle,verifiedFreshonWmsWorkbookLines} from './stageFreshonWmsDispatch.js';
+import {decodeFreshonWmsDispatch,FRESHON_JSON_WMS_SOURCE,freshonWmsVehicle,verifiedFreshonWmsWorkbookLines} from './stageFreshonWmsDispatch.js';
 import {FRESHON_JSON_WMS_FORMAT,createStageWmsReleaseStore,isStageWmsDay,stageWmsArchiveKey,WMS_ARCHIVE_REPO,WMS_ARCHIVE_DIR} from './stageWmsExportIndex.js';
 
 const source = 'WMS_CONFIRMED_DISPATCH_EXPORT';
@@ -141,6 +141,8 @@ export function projectOpsmapWmsDispatch(exported, registry, postcodes=new Map()
   });
   return {date:exported.date,center:exported.center,source:exported.source,
     route:{state:'VERIFIED',observedAt:exported.observedAt,source:exported.source,rows,
+      // XLSX verifies the sums of the supplied file. The counted FreshOn response verifies source coverage.
+      sourceComplete:exported.source===FRESHON_JSON_WMS_SOURCE&&exported.sourceComplete===true,
       unassigned:exported.vehicles.find(row=>row.vehicle==='미배정')?.deliveryCount??0},
     amounts:{date:exported.date,state:'VERIFIED',observedAt:exported.observedAt,source:exported.source,
       ...(Number.isSafeInteger(exported.total)&&Number.isSafeInteger(exported.deliveryCount)&&exported.deliveryCount>=0

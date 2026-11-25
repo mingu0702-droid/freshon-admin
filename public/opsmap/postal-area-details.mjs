@@ -260,6 +260,8 @@ export function createPostalAreaDetails(root, { read, dismiss, openStore }) {
       root.hidden = true;
       delete root.dataset.postalCode;
       clearVisible();
+      find('postalAreaTitle').textContent = '';
+      find('postalAreaName').textContent = '';
       search.value = '';
       filter.value = 'all';
     },

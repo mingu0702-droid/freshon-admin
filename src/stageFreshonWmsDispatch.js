@@ -154,5 +154,5 @@ export function decodeFreshonWmsDispatch(bytes,{date,observedAt}) {
   const vehicles=[...proof.routes].map(([vehicle,[amount,deliveryCount]])=>({vehicle,amount,deliveryCount,
     detailTotal:amount,difference:0,details:[...customers.get(vehicle).values()].map(({bases,...entry})=>entry)}));
   return {data:{date,source:FRESHON_JSON_WMS_SOURCE,center:'osan',observedAt:new Date(observedAt).toISOString(),
-    total:proof.sum,deliveryCount:proof.count,vehicles},proof};
+    sourceComplete:true,total:proof.sum,deliveryCount:proof.count,vehicles},proof};
 }

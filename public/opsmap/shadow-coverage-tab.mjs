@@ -16,7 +16,7 @@ if (tabs && workspace && period && daily) {
   let panel, stylesheet, opening, active = false, previous;
   let panelCode, pinObserver;
   let probeTimer, probeRequest, probeUntil = 0;
-  let returnTabs = [];
+  let returnTabs = [], registryVersion;
 
   function cancelOpening() {
     if (!opening) return;
@@ -91,7 +91,7 @@ if (tabs && workspace && period && daily) {
         style.href = new URL('./postal-coverage.css?v=20261126-layout',import.meta.url);
         document.head.append(style);
       }
-      return import('./postal-coverage-panel.mjs?v=20261126-layout');
+      return import('./postal-coverage-panel.mjs?v=20261126-reentry');
     })().catch(error => {
       if (panelCode === preparation) panelCode = null;
       throw error;
@@ -226,7 +226,12 @@ if (tabs && workspace && period && daily) {
   window.addEventListener('map-dispatch-reference-open', () => close());
   window.addEventListener('map-shadow-coverage-capability', syncAvailability);
   window.addEventListener('map-staff-ready', syncAvailability);
-  window.addEventListener('map-customer-registry-updated', () => panel?.invalidate());
+  window.addEventListener('map-customer-registry-updated', ({ detail }) => {
+    const version = detail?.version;
+    if (version && version === registryVersion) return;
+    registryVersion = version;
+    panel?.invalidate();
+  });
   window.addEventListener('pageshow', event => { if (event.persisted) syncAvailability(); });
   window.addEventListener('pagehide', () => {
     stopAvailabilityProbe();
@@ -235,6 +240,7 @@ if (tabs && workspace && period && daily) {
     panel?.disposeMap();
   });
   window.MapStaffEntry?.registerPurge(() => {
+    registryVersion = null;
     stopAvailabilityProbe();
     resetPanelPreparation();
     close();

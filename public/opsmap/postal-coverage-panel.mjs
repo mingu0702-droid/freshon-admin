@@ -1,5 +1,5 @@
 import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs?v=20261124-operations';
-import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261126-layout';
+import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261126-reentry';
 import { splitPostalBootstrap } from './postal-geometry.mjs';
 import { createCurrentRegistrationPanel } from './postal-current-registration-panel.mjs?v=20261124-current-registration';
 import { coverageCenterBounds } from './coverage-center-viewport.mjs';
@@ -13,7 +13,6 @@ const labels = {
 const operationLabels = { COMPLETED:'배송완료 근거', DISPATCH:'배차확정 근거', ORDER:'주문확정 근거', UNKNOWN:'운영이력 확인 필요' };
 const centerNames = { all: '전체', osan: '오산', honam: '호남', yeongnam: '영남' };
 const osanLocalBounds = [126.67, 36.96, 127.29, 37.40];
-const overviewReuseMs = 15000;
 const fmt = new Intl.NumberFormat('ko-KR');
 const node = (name, text) => Object.assign(document.createElement(name), { textContent: text });
 const statsText = period => period?.days + '일 · ' + period?.start + ' ~ ' + period?.end;
@@ -117,9 +116,9 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   const searchResults = find('coverageSearchResults'), geometry = createPostalGeometryReader(API);
   const regionButton = root.querySelector('[data-preset="region"]');
   let map, active = false, owner = 0, viewportRead, detailRead, searchRead, view, viewKey, loadingKey;
-  let timer, refresh, selectedArea, bootstrapScope, releaseOverview, recentOperationRead;
+  let timer, refresh, selectedArea, bootstrapScope, recentOperationRead;
   let operationsCache, operationsDetailRead, operationsDisplayed;
-  let resumeArea, resumeQuery = '';
+  let submittedSearch = '', searchNeedsRefresh = false;
   const resize = new ResizeObserver(entries => {
     if (!active) return;
     if (entries.some(entry => entry.target === header)) windowHeight();
@@ -255,7 +254,6 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   }
 
   function areaCard(area) {
-    resumeArea = null;
     selectedArea = area;
     const geographic = area && area.id !== 'unmatched' ? area : null;
     map?.select(geographic);
@@ -364,6 +362,9 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       const frame = first && !geometry.hasOverview() ? await firstViewport(requested,signal) : null;
       const data = frame?.view || await read('view',requested,signal);
       if (!active || viewportRead !== controller) return;
+      const sameRelease = view?.generation === data.generation && view?.boundary === data.boundary &&
+        view?.assignmentReview === data.assignmentReview;
+      if (view && !sameRelease) clearPublishedView();
       const [slices,operations] = await Promise.all([
         frame ? geometry.acceptBootstrap(data,frame.bytes,frame.duration) : geometry.read(data,signal),
         latest() ? readOperations(data.generation,signal).catch(()=>null) : null,
@@ -371,8 +372,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       if (!active || viewportRead !== controller) return;
       const operationsChanged=operationsDisplayed!==operations;
       operationsDisplayed=operations;
-      const same = view?.period.days === data.period.days && view.center === params.center && view.generation === data.generation &&
-        view.boundary === data.boundary && view.assignmentReview === data.assignmentReview;
+      const same = sameRelease && view?.period.days === data.period.days && view.center === params.center;
       view = { ...data, center: params.center };
       viewKey = key;
       host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame), ...geometry.metrics() });
@@ -381,17 +381,23 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       if (latest()) showOperations(operations);
       showMapEvidence();
       map.show(latest()?{...view,tones:operations?.tones??[],badges:[]}:view,slices);
-      if (resumeArea) areaCard(resumeArea);
+      if (!same && selectedArea) areaCard({ id:selectedArea.id });
       else if (latest() && selectedArea && (operationsChanged || !find('postalOperationsDetail').firstChild)) void showOperationsArea(selectedArea);
-      else if (!latest() && !same && selectedArea) {
-        selectedArea = { id:selectedArea.id };
-        areaDetails.open(selectedArea,scope());
+      if (searchNeedsRefresh) {
+        searchNeedsRefresh = false;
+        void runSearch(submittedSearch, { refresh:true });
       }
       const stale = !latest() && data.stale ? '지도 집계 게시본 ' + data.period.end + ' 기준' : '';
       const missing = (latest() ? !operations : !hasDeliveryEvidence(data)) ? '선택 범위의 배송 자료 미확인' : '';
       message([stale, missing].filter(Boolean).join(' · '));
     } catch (error) {
       if (!active || viewportRead !== controller || controller.signal.aborted) return;
+      if (error.status === 401 || error.status === 403) {
+        reset();
+        message('직원 인증을 다시 확인해 주세요.');
+        return;
+      }
+      if (error.code === 'POSTAL_GENERATION_MISMATCH') clearPublishedView();
       const reason = error.code === 'POSTAL_GENERATION_MISMATCH' ? '최신 원장과 우편번호 자료의 세대가 다릅니다.'
         : error.code === 'POSTAL_DATA_UNCONFIGURED' ? '국가기초구역 자료 연결을 확인해 주세요.'
         : error.code?.startsWith('POSTAL_ASSIGNMENT_REVIEW_') ? '경계 배정 확인 자료를 연결해 주세요.' : '우편번호 자료를 읽지 못했습니다.';
@@ -426,7 +432,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     }
   }
 
-  function searchItems(rows, signal, query) {
+  function searchItems(rows, signal, query, autoPick) {
     const buttons = rows.map(row => {
       const button = node('button', (row.name || query) + (row.assignmentPending ? ' · 우편번호 미확인' : ''));
       button.type = 'button'; button.className = 'coverage-search-result';
@@ -445,10 +451,10 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       return button;
     });
     searchResults.replaceChildren(...buttons);
-    if (rows.length === 1 && rows[0].exact !== false && !rows[0].assignmentPending) buttons[0].click();
+    if (autoPick && rows.length === 1 && rows[0].exact !== false && !rows[0].assignmentPending) buttons[0].click();
   }
 
-  async function existingAddress(query, signal) {
+  async function existingAddress(query, signal, allowGeocoder) {
     const requests = window.NewAreaRequests, bridge = window.MapUiLocalBridge, config = () => window.KAKAO_MAP_CONFIG;
     if (!requests) return [];
     const address = requests.addressQuery(query, window.Phase2bUi?.addressVariants);
@@ -473,7 +479,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     if (preserved?.status === 'STORED_COORDINATE_UNVERIFIED') {
       throw Object.assign(Error('등록 매장 좌표 미확인'), { code: 'POSTAL_ADDRESS_UNVERIFIED' });
     }
-    if (!address) return [];
+    if (!address || !allowGeocoder || !active) return [];
     const adapter = window.KakaoMapsAdapter;
     if (!config()?.allowIndependentAddressLookup) await adapter?.refreshAddressLookup?.();
     const geocoder = adapter?.geocoder?.();
@@ -485,45 +491,48 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     }));
   }
 
-  async function search(event) {
-    event.preventDefault();
-    if (!active || !view) return;
-    const query = find('coverageQuery').value.normalize('NFKC').trim();
-    if (query.length < 2) return;
+  async function runSearch(query, { refresh = false } = {}) {
+    if (!active || !view || query.length < 2) return;
+    submittedSearch = query;
     searchRead?.abort();
     const request = searchRead = new AbortController();
     const signal = timeout(request.signal);
     searchResults.replaceChildren(node('p', '주소와 매장을 찾고 있습니다.'));
     try {
       let rows = await read('search', scope(), signal, { 'X-Map-Customer-Query': encodeURIComponent(query) });
-      if (!rows.length) rows = await existingAddress(query, signal);
-      if (!active || searchRead !== request || request.signal.aborted) return;
-      if (rows.length) searchItems(rows, signal, query);
+      if (!rows.length) rows = await existingAddress(query, signal, !refresh);
+      if (searchRead !== request || request.signal.aborted) return;
+      if (rows.length) searchItems(rows, request.signal, query, !refresh);
       else searchResults.replaceChildren(node('p', '승인된 주소 자료와 매장 목록에서 검색 결과가 없습니다.'));
     } catch (error) {
-      if (!active || searchRead !== request || request.signal.aborted) return;
+      if (searchRead !== request || request.signal.aborted) return;
       if (error.status === 409) void readView(true);
       searchResults.replaceChildren(node('p', error.code === 'POSTAL_ADDRESS_UNVERIFIED' ?
         '등록 주소의 좌표 검증이 필요합니다.' : '검색을 완료하지 못했습니다. 다시 시도해 주세요.'));
     }
   }
 
-  function reset(keepOverview = false) {
+  function cancelViewport() {
     clearTimeout(timer);
-    clearTimeout(releaseOverview);
-    [viewportRead, detailRead, searchRead, recentOperationRead, operationsDetailRead].forEach(request => request?.abort());
-    viewportRead = detailRead = searchRead = recentOperationRead = null;
-    view = viewKey = loadingKey = bootstrapScope = null;
+    viewportRead?.abort();
+    viewportRead = loadingKey = bootstrapScope = null;
+  }
+
+  function clearPublishedView({ retainSelection = true } = {}) {
+    const area = retainSelection ? selectedArea?.id : null;
+    [detailRead, searchRead, recentOperationRead, operationsDetailRead].forEach(request => request?.abort());
+    detailRead = searchRead = recentOperationRead = operationsDetailRead = null;
+    view = viewKey = null;
     operationsCache=operationsDisplayed=null;
-    geometry.clear(keepOverview);
+    searchNeedsRefresh = retainSelection && Boolean(submittedSearch);
     delete host.dataset.postalGeometry;
-    map?.clear(keepOverview && geometry.hasOverview());
+    map?.clear();
     areaCard(null);
-    resumeQuery = '';
+    if (area) selectedArea = { id:area };
     searchResults.replaceChildren();
-    find('coverageQuery').value = '';
     find('postalCandidates').replaceChildren();
     find('postalEvidence').replaceChildren();
+    find('postalOperationsSummary').replaceChildren();
     find('recentOperationSummary').replaceChildren();
     for (const id of ['postalPeriod','postalObserved','postalFormula','postalNewEvidence','postalMapSource']) find(id).textContent = '';
     root.querySelectorAll('[data-postal-kpi]').forEach(entry => { entry.textContent = '—'; });
@@ -531,20 +540,37 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     message();
   }
 
+  function reset() {
+    cancelViewport();
+    clearPublishedView({ retainSelection:false });
+    geometry.clear();
+    submittedSearch = '';
+    searchNeedsRefresh = false;
+    find('coverageQuery').value = '';
+  }
+
   find('coveragePanelToggle').onclick = () => collapse(!root.classList.contains('coverage-panel-collapsed'));
   find('postalDataStatus').ontoggle = readOperationWindow;
   find('recentOperationWindow').ontoggle = readOperationWindow;
   find('recentOperationDays').onchange = readOperationWindow;
   find('postalUnmatched').onclick = () => { if (view) areaCard({ id:'unmatched' }); };
-  find('coverageSearch').onsubmit = search;
-  find('coverageQuery').oninput = () => { searchRead?.abort(); searchResults.replaceChildren(); };
-  find('coverageRadius').onchange = () => { searchRead?.abort(); searchResults.replaceChildren(); map?.point(null); };
+  find('coverageSearch').onsubmit = event => {
+    event.preventDefault();
+    void runSearch(find('coverageQuery').value.normalize('NFKC').trim());
+  };
+  function clearSearch() {
+    searchRead?.abort();
+    submittedSearch = '';
+    searchNeedsRefresh = false;
+    searchResults.replaceChildren();
+  }
+  find('coverageQuery').oninput = clearSearch;
+  find('coverageRadius').onchange = () => { clearSearch(); map?.point(null); };
   function changeScope(centerChanged) {
     viewportRead?.abort();
     loadingKey=bootstrapScope=null;
-    searchRead?.abort();
+    clearSearch();
     detailRead?.abort();
-    searchResults.replaceChildren();
     if(latest()) {
       operationsDetailRead?.abort();
       operationsDisplayed=null;
@@ -594,11 +620,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
 
   return {
     open() {
-      clearTimeout(releaseOverview);
       active = true;
       root.hidden = false;
-      find('coverageQuery').value = resumeQuery;
-      resumeQuery = '';
       windowHeight();
       resize.observe(header);
       resize.observe(host);
@@ -607,23 +630,23 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       refresh = setInterval(() => { if (active && !document.hidden) void readView(true); }, 60000);
     },
     close() {
-      const area = selectedArea ?? resumeArea;
-      const query = find('coverageQuery').value;
       active = false;
       owner++;
       root.hidden = true;
       clearInterval(refresh);
       resize.disconnect();
-      reset(true);
-      resumeArea = area ? { id:area.id } : null;
-      resumeQuery = query;
-      if (geometry.hasOverview()) releaseOverview = setTimeout(() => {
-        geometry.clear();
-        map?.clear();
-      },overviewReuseMs);
+      cancelViewport();
     },
-    invalidate() { reset(); if (active) void readView(true); },
+    invalidate() {
+      cancelViewport();
+      clearPublishedView();
+      if (active) {
+        void readView(true);
+        void readOperationWindow();
+      }
+    },
     disposeMap() {
+      active = false;
       reset();
       map?.destroy();
       map = null;

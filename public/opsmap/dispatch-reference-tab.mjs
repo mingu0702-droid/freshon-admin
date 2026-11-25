@@ -20,7 +20,7 @@ if (tabs && sidebar && bridge) {
     const response=await fetch('/api/map-phase2b/private/'+path+'?'+new URLSearchParams(params),{
       credentials:'same-origin',cache:'no-store',signal:signal?AbortSignal.any([signal,timeout]):timeout,
     });
-    if (!response.ok || !session()) throw Error('DISPATCH_REFERENCE_UNAVAILABLE');
+    if (!response.ok || !session()) throw Object.assign(Error('DISPATCH_REFERENCE_UNAVAILABLE'),{status:!session()?401:response.status});
     return response.json();
   }
   async function readDay(date,{signal}) {
@@ -92,7 +92,7 @@ if (tabs && sidebar && bridge) {
           rel:'stylesheet',href:new URL('./dispatch-reference.css?v=20261126-v4-readable',import.meta.url),
         });
         if (!stylesheet.isConnected) document.head.append(stylesheet);
-        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261126-v4-readable');
+        const {mountDispatchReference}=await import('./dispatch-reference-map.mjs?v=20261126-overlap');
         if (opening!==attempt||!session()) return;
         const createReview=comparisonEnabled?(await import('./dispatch-reference-review.mjs?v=20261126-v4-readable')).createDispatchScreenReview:null;
         if (opening!==attempt||!session()) return;

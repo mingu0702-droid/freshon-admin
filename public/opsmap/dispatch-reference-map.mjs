@@ -1,6 +1,6 @@
 import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs?v=20261126-v4-readable';
 import {summarizeDispatchPeriod} from './dispatch-reference-period.mjs?v=20261124-period-proof';
-import {dispatchOverlapVehicles,dispatchVehicleColor,mountDispatchV4} from './dispatch-reference-v4.mjs?v=20261126-v4-readable';
+import {dispatchOverlapVehicles,dispatchVehicleColor,mountDispatchV4} from './dispatch-reference-v4.mjs?v=20261126-overlap';
 
 const meters = km => Number.isFinite(km) ? new Intl.NumberFormat('ko-KR').format(Math.round(km*1000))+'m' : '미확인';
 const sourceClock=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',
@@ -710,8 +710,9 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     clearMarkers();
     clearOutlines();
     const code=candidate.postalCode;
+    const storesWithEvidence=candidate.stores??[];
     const colors=new Map(candidate.routes.map(({vehicle})=>[vehicle,dispatchVehicleColor(vehicle)]));
-    const members=new Map(candidate.stores.map(store=>[store.customerCode,store]));
+    const members=new Map(storesWithEvidence.map(store=>[store.customerCode,store]));
     const mappedInside=new Set();
     const dispatchRoutes=dispatchOverlapVehicles(model);
     markerRows=[];
@@ -733,7 +734,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     mapLegend.querySelector('[data-overlap-key="unknown"]').hidden=!markerRows.some(row=>row.dispatchOverlap==='unknown'&&row.point);
     mapLegend.hidden=false;
     deliveryRows=markerRows.slice();
-    for(const store of candidate.stores) {
+    for(const store of storesWithEvidence) {
       const deliveryKey=store.vehicle+'|'+store.customerCode;
       if(mappedInside.has(deliveryKey))continue;
       markerRows.push({...store,customerName:store.name,postalCode:code,lat:store.point?.lat,lng:store.point?.lng,
@@ -747,7 +748,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     board.setVehicle('');
     renderDetail();
     renderFleet();
-    addOutlines();
+    if(candidate.stores)addOutlines();
     fit(points);
     queueMarkers();
   }

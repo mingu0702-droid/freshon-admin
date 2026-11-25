@@ -8,6 +8,7 @@ const postalCode = '06241';
 const errors = [];
 const rosterReads = [];
 const operationsReads = [];
+const viewportReads = [];
 let generation = 'before-switch';
 let searchReads = 0;
 const period = { days:90, start:'2026-08-10', end:'2026-11-07' };
@@ -36,6 +37,7 @@ try {
     }
     let data;
     if (endpoint === 'view') {
+      viewportReads.push([url.searchParams.get('level'),url.searchParams.get('box')]);
       data = {
         period, generation, completeness:{ observed:76, missing:[], sourceMissing:[], centerObserved:{}, unverified:[] },
         summary:{ recorded:1 }, source:{ label:'fixture', url:'#' }, candidates:[], tiles:[], tones:[], badges:[], operationsAvailable:true,
@@ -54,7 +56,7 @@ try {
     } else if (endpoint === 'stores') {
       rosterReads.push([url.searchParams.get('area'), url.searchParams.get('generation')]);
       data = {
-        area:postalCode, name:generation, period, filteredCount:0, offset:0, next:null, rows:[], totals:{},
+        area:postalCode, name:generation, period, filteredCount:0, offset:0, next:null, stores:[], totals:{},
         source:{ missingDates:[], fixed:{}, queriedAt:'2026-11-23T00:00:00Z' },
       };
     } else {
@@ -84,22 +86,48 @@ try {
   await page.locator('#coverageQuery').fill(postalCode);
   await page.locator('#coverageQuery').press('Enter');
   await page.getByText(generation, { exact:true }).waitFor();
+  const zoomed = page.waitForResponse(response => new URL(response.url()).searchParams.get('level') === '2');
+  await page.getByRole('button',{name:'지도 확대'}).click();
+  await zoomed;
+  const viewport = viewportReads.at(-1);
+  const firstRosterCount = rosterReads.length;
 
   await page.evaluate(() => window.coverageFixture.close());
-  assert.equal(await page.locator('#coverageQuery').inputValue(), '');
-  assert.equal(await page.locator('#coverageDetail').getAttribute('data-postal-code'), null);
-  assert.equal(await page.locator('#postalStoreList').innerText(), '');
+  assert.equal(await page.locator('#shadowCoverage').isVisible(), false);
+  const revalidated = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/view'));
+  await page.evaluate(() => window.coverageFixture.open());
+  await revalidated;
+  assert.equal(await page.locator('#coverageQuery').inputValue(), postalCode);
+  assert.equal(await page.locator('#coverageSearchResults button').count(), 1);
+  assert.equal(await page.locator('#coverageDetail').getAttribute('data-postal-code'), postalCode);
+  assert.equal(rosterReads.length, firstRosterCount);
+  assert.equal(searchReads, 1);
+  assert.deepEqual(viewportReads.at(-1), viewport);
 
   generation = 'after-switch';
+  await page.evaluate(() => {
+    window.coverageFixture.close();
+    window.coverageFixture.invalidate();
+  });
+  assert.equal(await page.locator('#coverageDetail').getAttribute('data-postal-code'), null);
+  assert.equal(await page.locator('#postalStoreList').textContent(), '');
+  assert.equal(await page.locator('#coverageSearchResults button').count(), 0);
   await page.evaluate(() => {
     window.coverageFixture.open();
     window.coverageFixture.close();
     window.coverageFixture.open();
   });
   await page.getByText(generation, { exact:true }).waitFor();
+  await page.locator('#coverageSearchResults button').waitFor();
   assert.equal(await page.locator('#coverageQuery').inputValue(), postalCode);
   assert.deepEqual(rosterReads.at(-1), [postalCode, generation]);
-  assert.equal(searchReads, 1);
+  assert.equal(searchReads, 2);
+  assert.deepEqual(viewportReads.at(-1), viewport);
+
+  generation = 'live-refresh';
+  await page.evaluate(() => window.coverageFixture.invalidate());
+  await page.getByText(generation, { exact:true }).waitFor();
+  assert.deepEqual(rosterReads.at(-1), [postalCode, generation]);
 
   await page.locator('#postalLayer').selectOption('operations');
   await page.locator('#postalOperationsSummary').getByText('운영이력 원장 기준 2026-11-23',{exact:true}).waitFor();
@@ -125,6 +153,8 @@ try {
   await page.locator('#shadowCoverage[data-postal-view]').waitFor();
   assert.equal(await page.locator('#coverageQuery').inputValue(), '');
   assert.equal(await page.locator('#coverageDetail').getAttribute('data-postal-code'), null);
+  assert.equal(await page.locator('#postalAreaTitle').textContent(), '');
+  assert.equal(await page.locator('#coverageSearchResults button').count(), 0);
   assert.deepEqual(errors, []);
   console.log('Postal tab restores the selected area from the current generation and clears it on disposal.');
 } finally {
