@@ -103,8 +103,10 @@ export function mountProductionMapApi(app,{
   app.use('/api/map-phase2b/auth',securityAudit,mapStaff.router);
   mountMapStaffEntryGate(app,mapStaff.requireStaff,{isInlineSessionCurrent:stageOnly ? mapStaff.isSessionCurrent : undefined});
   app.use('/api/map-phase2b/private/driver-history',(req,res,next)=>historyDeadline(req,res,next,{milliseconds:readStoredStaffHistory?20000:5000}));
+  // The entry gate still checks the dated roster session before the request and before sending its response.
   app.use('/api/map-phase2b/private',(req,res,next)=>stageOnly&&
-    (req.path==='/stage-address-evidence'||req.path==='/shadow-coverage/point'||req.path==='/map-sdk-config'&&req.query.sdkOnly==='1')
+    (req.path==='/stage-address-evidence'||req.path==='/shadow-coverage/point'||req.path==='/map-sdk-config'&&req.query.sdkOnly==='1'||
+      (req.method==='GET'&&req.path==='/dated-delivery'))
     ? requireStageRead(req,res,next) : mapStaff.requireStaff(req,res,next));
   mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
   app.get('/api/map-phase2b/private/map-sdk-config',async(req,res)=>{

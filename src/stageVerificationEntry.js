@@ -686,7 +686,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
           if(diagnostic!==lastSyncDiagnostic){lastSyncDiagnostic=diagnostic;console.info(diagnostic);}
           return res.set('Cache-Control','private, no-store').vary('Cookie').json(evidence);
         });
-        router.get('/api/map-phase2b/private/dated-delivery',requireStaff,async(req,res)=>{
+        router.get('/api/map-phase2b/private/dated-delivery',requireStageRead,async(req,res)=>{
           const privateResponse=()=>res.set('Cache-Control','private, no-store').vary('Cookie');
           privateResponse();
           const {date,center='osan',vehicle:queryVehicle}=req.query;
@@ -725,13 +725,13 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
             const sourceCounts=archive?.dispatch?.sources.find(([id])=>id===sourceId);
             const useArchive=sourceCounts&&sourceCounts[2]-sourceCounts[3]>data.source.uniqueDeliveries;
             const result=useArchive?retainDatedDriverEvidence(retained(archive,'DELIVERY_SOURCE_REGRESSION'),data):data;
-            return requireStaff(req,res,()=>privateResponse().json(result));
+            return requireStageRead(req,res,()=>privateResponse().json(result));
           } catch (failure) {
             if(client.signal.aborted)return;
             const error=/^DELIVERY_SOURCE_[A-Z_]+$/.test(failure.code||'')?failure.code:'DELIVERY_SOURCE_READ_UNAVAILABLE';
             const saved=retained(await archiveRead,error);
             if(client.signal.aborted)return;
-            return requireStaff(req,res,()=>{
+            return requireStageRead(req,res,()=>{
               console.info(JSON.stringify({component:'stage-dated-delivery',status:saved?200:503,code:error,
                 date,center,sourceId,vehicleFiltered:vehicle!==null,retained:Boolean(saved),
                 elapsedMs:Date.now()-started,attempts:failure.diagnostic?.attempts??null,
