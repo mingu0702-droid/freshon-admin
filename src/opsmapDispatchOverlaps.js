@@ -62,9 +62,15 @@ export function createDispatchPostalEvidenceReader({env=process.env,appRoot=proc
       value=JSON.parse(buffer.toString('utf8'));
     } finally {await file.close();}
     if(value?.schema!=='opsmap-local-sealed-postal-address-evidence-v1'||value.reference?.sha256!==expected||
-        typeof value.sealed!=='string')throw unavailable();
+        !hash.test(value.reference?.registry||'')||typeof value.sealed!=='string')throw unavailable();
     const bytes=Buffer.from(value.sealed,'base64');
     if(bytes.toString('base64')!==value.sealed)throw unavailable();
+    // Superseded address evidence cannot block current, independently verified postal links.
+    if(value.reference.registry!==registry.ref.version){
+      if(createHash('sha256').update(bytes).digest('hex')!==expected)throw unavailable();
+      cache={registry:registry.ref.version,checked:null};
+      return null;
+    }
     const checked=readPostalAddressEvidence(bytes,{approvedReference:value.reference,registry,key});
     cache={registry:registry.ref.version,checked};
     return checked;

@@ -106,7 +106,7 @@ test('pinned address-only proof contributes a missing registered store without a
   const directory=await mkdtemp(path.join(tmpdir(),'dispatch-postal-fixture-'));
   t.after(()=>rm(directory,{recursive:true,force:true}));
   const filename=path.join(directory,'postal.sealed.json');
-  const registry={ref:{version},rows:[store(0),store(1)]};
+  let registry={ref:{version},rows:[store(0),store(1),store(2),store(3)]};
   const key=Buffer.alloc(32,8);
   const source={issuer:'MOIS_JUSO_BUILDING_DB',edition:'2026-10',datasetSha256:'7'.repeat(64),reviewSha256:'8'.repeat(64)};
   const candidate=sealPostalAddressEvidence({registry,source,rows:[{
@@ -126,12 +126,24 @@ test('pinned address-only proof contributes a missing registered store without a
   const read=createOpsmapDispatchOverlapsReader({
     getPublication:()=>publication,readRegistry:async()=>registry,readPostalEvidence:evidence,
     readFixed:async codes=>({ok:true,meta:{basis:'FIXED_DISPATCH_PRIMARY',version:fixedVersion,stale:false},
-      data:codes.map((code,index)=>({customerCode:code,baseVehicle:index?'208':'101',baseVehicleGroup:'osan',
+      data:codes.map((code,index)=>({customerCode:code,baseVehicle:index%2?'208':'101',baseVehicleGroup:'osan',
         baseVehicleState:'VERIFIED_MASTER',baseVehicleVersion:fixedVersion,baseVehicleSource:'FIXED_DISPATCH_PRIMARY'}))}),
-    readPostcodes:async()=>({registryVersion:version,postcodes:new Map([[customerCode(0),'06241']])})
+    readPostcodes:async()=>({registryVersion:registry.ref.version,postcodes:new Map([
+      [customerCode(0),'06241'],[customerCode(2),'06253'],[customerCode(3),'06253']
+    ])})
   });
   const output=await read();
   assert.equal(output.candidates[0].storeCount,2);
   assert.equal((await read({postalCode:'06241',version:output.version})).candidate.stores[1].coordinateVerified,false);
-  await assert.rejects(evidence({...registry,ref:{version:'f'.repeat(64)}}),/POSTAL_ADDRESS_EVIDENCE_INVALID/);
+  registry={...registry,ref:{version:'f'.repeat(64)}};
+  assert.equal(await evidence(registry),null);
+  const current=await read();
+  assert.deepEqual(current.candidates.map(row=>[row.postalCode,row.storeCount]),[['06253',2]]);
+  await assert.rejects(read({postalCode:'06241',version:output.version}),{message:'DISPATCH_OVERLAPS_VERSION_CHANGED'});
+  const corrupt=Buffer.from(candidate.bytes);
+  corrupt[30]^=1;
+  await writeFile(filename,JSON.stringify({schema:'opsmap-local-sealed-postal-address-evidence-v1',
+    reference:candidate.reference,sealed:corrupt.toString('base64')}));
+  await assert.rejects(createDispatchPostalEvidenceReader({env})(registry),{message:'DISPATCH_OVERLAPS_UNAVAILABLE'});
+  await assert.rejects(createDispatchPostalEvidenceReader({env})({...registry,ref:{version}}),{message:'POSTAL_ADDRESS_EVIDENCE_INVALID'});
 });
