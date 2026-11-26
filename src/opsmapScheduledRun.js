@@ -335,6 +335,8 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
                ['PUBLISHED','VERIFIED_NOOP','ALREADY_VERIFIED','BUSY','ALREADY_ATTEMPTED','FAILED'].includes(value.state)) {
               const changes=value.changes&&Object.fromEntries(
                 ['admitted','addressChanged','centerMoved','centerMoveUnconfirmed'].map(key=>[key,boundedCount(value.changes[key],30_000)]));
+              if(changes&&value.changes.addressUnconfirmed!==undefined)
+                changes.addressUnconfirmed=boundedCount(value.changes.addressUnconfirmed,30_000);
               log(JSON.stringify({component:value.component,runId:receipt.runId,state:value.state,
                 count:Number.isSafeInteger(value.count)?value.count:null,
                 checkedAt:Number.isFinite(Date.parse(value.checkedAt))?value.checkedAt:null,

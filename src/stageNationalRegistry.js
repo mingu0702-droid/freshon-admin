@@ -105,10 +105,12 @@ export function scopedNationalRegistryMembership(base, regional, approvedRecover
   return membership;
 }
 
-function rowOf(value, withPoint=false) {
-  const {customerCode:code, customerName, basicAddress, centerGroup, lifecycle, sourceUpdatedAt='', verifiedLocation} = value || {};
+function rowOf(value, withPoint=false, partial=false) {
+  const {customerCode:code, customerName, basicAddress, centerGroup, lifecycle,
+    sourceUpdatedAt='', verifiedLocation} = value || {};
   if (!customerCode(code) || !SYNC_CENTERS.includes(centerGroup) || !['ACTIVE','DELETED'].includes(lifecycle) ||
-      !validText(customerName,200) || !validText(basicAddress,500) || lifecycle==='ACTIVE'&&!customerName.trim() ||
+      !validText(customerName,200) || !validText(basicAddress,500) ||
+      lifecycle==='ACTIVE'&&!partial&&!customerName.trim() ||
       sourceUpdatedAt!=='' && !time(sourceUpdatedAt)) throw failure('NATIONAL_REGISTRY_ROW_INVALID');
   const addressHash = customerRegistryAddressHash(basicAddress);
   if (value.addressHash!==undefined && value.addressHash!==addressHash) throw failure('NATIONAL_REGISTRY_ADDRESS_HASH');
@@ -121,9 +123,9 @@ function rowOf(value, withPoint=false) {
     ...(withPoint&&verifiedLocation?{verifiedLocation:{addressHash,lat:verifiedLocation.lat,lng:verifiedLocation.lng,kind:verifiedLocation.kind}}:{})};
 }
 
-function normalizeRows(input, withPoint=false) {
+function normalizeRows(input, withPoint=false, partial=false) {
   if (!Array.isArray(input) || input.length>limit) throw failure('NATIONAL_REGISTRY_ROWS_INVALID');
-  const rows = input.map(row=>rowOf(row,withPoint)).sort((a,b)=>a.customerCode.localeCompare(b.customerCode,'en'));
+  const rows = input.map(row=>rowOf(row,withPoint,partial)).sort((a,b)=>a.customerCode.localeCompare(b.customerCode,'en'));
   if (new Set(rows.map(row=>row.customerCode)).size!==rows.length) throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
   return rows;
 }
@@ -149,7 +151,7 @@ export async function collectStageNationalRegistry(readCenter) {
     counts[center]=response.total;
     rows.push(...response.rows);
   }
-  return {rows:normalizeRows(rows),counts};
+  return {rows:normalizeRows(rows,false,true),counts};
 }
 
 export function verifiedNationalRegistryMembership(approved,previous,{orderCustomersByCenter,skipRefresh}={}) {
@@ -290,7 +292,6 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
               if(approved||eligible)selected.add(code);
               if(!eligible)continue;
               activeCustomers.add(code);
-              if(approved&&(typeof address!=='string'||!address.trim()))continue;
             }else{
               if (approved?.center!==center) continue;
               if (captured.has(code)) throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
@@ -302,7 +303,7 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
             throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
           rows.push(rowOf({customerCode:code,customerName:readField(row,'estName')??'',
             basicAddress:address??'',centerGroup:center,lifecycle:status==='Y'?'ACTIVE':'DELETED',
-            sourceUpdatedAt:contract.updatedAtField?readField(row,contract.updatedAtField)??'':''}));
+            sourceUpdatedAt:contract.updatedAtField?readField(row,contract.updatedAtField)??'':''},false,verifiedChanges));
         }
         collected+=response.rows.length;
         if (collected===expected) break;
@@ -316,45 +317,105 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
   };
 }
 
-function retainedOfficialLocation(officialRow, row) {
-  const point=officialRow?.verifiedLocation;
-  if(!point||officialRow.lifecycle!=='ACTIVE'||officialRow.centerGroup!==row.centerGroup||
-      typeof officialRow.basicAddress!=='string'||point.addressHash!==officialRow.addressHash||
-      !['BUILDING','ADDRESS'].includes(point.kind))return null;
-  const normalized=value=>value.normalize('NFKC').trim().replace(/\s+/g,' ');
-  const base=normalized(officialRow.basicAddress), incoming=normalized(row.basicAddress);
+const normalizeAddress=value=>value.normalize('NFKC').trim().replace(/\s+/g,' ');
+function localityAnnotation(base,incoming) {
   const annotated=/^([^()]+) \(([가-힣]{1,22}(?:동(?:[1-9]\d?가)?|읍|면|리))\)$/.exec(incoming);
-  if(!annotated||annotated[1]!==base||customerRegistryAddressHash(base)!==officialRow.addressHash||
-      !addressRegionParts(base))return null;
+  if(!annotated||annotated[1]!==base||!addressRegionParts(base))return false;
   const lot=/(?:^| )([가-힣]+(?:동(?:[1-9]\d?가)?|읍|면|리)) (?:산 ?)?\d+(?:-\d+)?$/.exec(base);
   const road=/(?:^| )[가-힣0-9·.]+(?:대로|로|길) (?:지하 ?)?\d+(?:-\d+)?$/.test(base);
-  if(!road&&(!lot||lot[1]!==annotated[2]))return null;
-  const address=officialAddressKey(base);
-  if(!address||address!==officialAddressKey(incoming))return null;
-  // A sole locality annotation can change the displayed address hash without
-  // changing the address measured by the official point. Never re-geocode it.
+  return road||!!lot&&lot[1]===annotated[2];
+}
+
+function sameOfficialAddress(left,right,leftKey,rightKey) {
+  if(!leftKey||leftKey!==rightKey)return false;
+  const first=normalizeAddress(left), second=normalizeAddress(right);
+  if(localityAnnotation(first,second)||localityAnnotation(second,first))return true;
+  if(first.replace(/\s/g,'')!==second.replace(/\s/g,''))return false;
+  const region=addressRegionParts(first), otherRegion=addressRegionParts(second);
+  return !!region&&!!otherRegion&&JSON.stringify(region)===JSON.stringify(otherRegion)&&
+    JSON.stringify(first.match(/\d+(?:-\d+)?/g))===JSON.stringify(second.match(/\d+(?:-\d+)?/g));
+}
+
+function officialPointAt(reference,row) {
+  const point=reference?.verifiedLocation;
+  if(!point||reference.lifecycle!=='ACTIVE'||reference.centerGroup!==row.centerGroup||
+      typeof reference.basicAddress!=='string'||point.addressHash!==reference.addressHash||
+      customerRegistryAddressHash(reference.basicAddress)!==reference.addressHash)return null;
+  if(reference.addressHash===row.addressHash)return point;
+  if(!['BUILDING','ADDRESS'].includes(point.kind)||!sameOfficialAddress(reference.basicAddress,row.basicAddress,
+    officialAddressKey(reference.basicAddress),officialAddressKey(row.basicAddress)))return null;
   return {...point,addressHash:row.addressHash};
 }
 
-export function mergeStageNationalRegistry(previous, incoming, official=[]) {
+export function mergeStageNationalRegistry(previous, incoming, official=[], review={}) {
   const current=new Map(normalizeRows(previous,true).map(row=>[row.customerCode,row]));
   const points=new Map(official.filter(row=>row.verifiedLocation).map(row=>[row.customerCode,row]));
-  for (const row of normalizeRows(incoming)) {
-    const existing=current.get(row.customerCode);
-    if (existing?.sourceUpdatedAt && row.sourceUpdatedAt && Date.parse(row.sourceUpdatedAt)<Date.parse(existing.sourceUpdatedAt)) continue;
-    if (row.lifecycle==='ACTIVE') {
-      const officialRow=points.get(row.customerCode);
-      const known=[existing,officialRow].find(value=>
-        value?.verifiedLocation && value.centerGroup===row.centerGroup && value.addressHash===row.addressHash);
-      if (known) row.verifiedLocation=known.verifiedLocation;
-      else {
-        const equivalent=retainedOfficialLocation(officialRow,row);
-        if(equivalent)row.verifiedLocation=equivalent;
+  for (const observed of normalizeRows(incoming,false,true)) {
+    const existing=current.get(observed.customerCode);
+    if (existing?.sourceUpdatedAt && observed.sourceUpdatedAt &&
+        Date.parse(observed.sourceUpdatedAt)<Date.parse(existing.sourceUpdatedAt)) continue;
+    const reference=points.get(observed.customerCode);
+    const row={...observed};
+    let retainPoint=false;
+    if(existing){
+      if(!observed.customerName.trim())row.customerName=existing.customerName;
+      if(!observed.sourceUpdatedAt)row.sourceUpdatedAt=existing.sourceUpdatedAt;
+      let addressHeld=false;
+      let sameObservedAddress=existing.addressHash===observed.addressHash&&!!observed.basicAddress.trim();
+      if(!observed.basicAddress.trim())addressHeld=true;
+      else if(existing.basicAddress&&existing.addressHash!==observed.addressHash){
+        const oldKey=officialAddressKey(existing.basicAddress), nextKey=officialAddressKey(observed.basicAddress);
+        if(sameOfficialAddress(existing.basicAddress,observed.basicAddress,oldKey,nextKey)){
+          addressHeld=true;
+          sameObservedAddress=true;
+        }
+        else if(!(oldKey&&nextKey&&oldKey!==nextKey)&&!officialPointAt(reference,observed)){
+          addressHeld=true;
+          review.addressUnconfirmed=(review.addressUnconfirmed??0)+1;
+        }
       }
+      if(addressHeld||existing.addressHash===observed.addressHash){
+        row.basicAddress=existing.basicAddress;
+        row.addressHash=existing.addressHash;
+      }
+      const centerVerified=existing.centerGroup===row.centerGroup||
+        sameObservedAddress&&review.verifiedCenterMoves?.has(row.customerCode);
+      retainPoint=existing.addressHash===row.addressHash&&centerVerified;
     }
-    current.set(row.customerCode,row);
+    if(row.lifecycle==='ACTIVE'){
+      if(!row.customerName.trim())continue;
+      const point=(retainPoint&&existing.verifiedLocation)||officialPointAt(reference,row);
+      if(point)row.verifiedLocation=point;
+    }
+    const next=rowOf(row,true);
+    if(existing&&['customerName','basicAddress','centerGroup','lifecycle'].every(key=>existing[key]===next[key])&&
+        JSON.stringify(existing.verifiedLocation)===JSON.stringify(next.verifiedLocation))continue;
+    current.set(row.customerCode,next);
   }
   return normalizeRows([...current.values()],true);
+}
+
+export function assertStageNationalRegistryDelta(before,after) {
+  const previous=new Map(before.map(row=>[row.customerCode,row]));
+  const counts=Object.fromEntries(SYNC_CENTERS.map(center=>[center,{size:0,changed:0,locations:0,lost:0}]));
+  for(const row of before){
+    const center=counts[row.centerGroup];
+    center.size++;
+    if(row.verifiedLocation)center.locations++;
+  }
+  for(const row of after){
+    const original=previous.get(row.customerCode);
+    const center=counts[original?.centerGroup??row.centerGroup];
+    if(!original||['customerName','basicAddress','centerGroup','lifecycle'].some(key=>original[key]!==row[key]))
+      center.changed++;
+    if(original?.verifiedLocation&&!row.verifiedLocation)center.lost++;
+    previous.delete(row.customerCode);
+  }
+  if(previous.size)throw failure('NATIONAL_REGISTRY_CUSTOMER_LOSS');
+  for(const {size,changed,locations,lost} of Object.values(counts)){
+    if(lost>=Math.max(10,Math.ceil(locations*0.005)))throw failure('NATIONAL_REGISTRY_LOCATION_LOSS');
+    if(changed>=Math.max(100,Math.ceil(size*0.03)))throw failure('NATIONAL_REGISTRY_BULK_CHANGE');
+  }
 }
 
 export function createStageNationalRegistryStorage({env=process.env, fetchImpl=fetch, now=Date.now, write=false}={}) {
@@ -383,10 +444,9 @@ export function createStageNationalRegistryStorage({env=process.env, fetchImpl=f
     ...(write?{writeHead:(next,etag)=>store.write(headName,next,etag),writeObject:(version,value)=>store.write(dataName(version),value,null)}:{})};
 }
 
-async function encode(rows,key) {
-  const bytes=Buffer.from(JSON.stringify(rows));
+async function encode(bytes,key,version) {
   if (bytes.length>maxClearBytes) throw failure('NATIONAL_REGISTRY_STORAGE_SIZE');
-  const version=sha(bytes), nonce=randomBytes(12), cipher=createCipheriv('aes-256-gcm',key,nonce);
+  const nonce=randomBytes(12), cipher=createCipheriv('aes-256-gcm',key,nonce);
   cipher.setAAD(binding);
   const packed=Buffer.concat([nonce,cipher.update(await zip(bytes)),cipher.final(),cipher.getAuthTag()]).toString('base64');
   if (Buffer.byteLength(packed)>maxSealedBytes-1024) throw failure('NATIONAL_REGISTRY_STORAGE_SIZE');
@@ -475,6 +535,7 @@ export async function syncStageNationalRegistry({store,receipt,readCenter,readOf
     const source=prepareSource?await prepareSource(previous):{readCenter};
     const observed=await collectStageNationalRegistry(source.readCenter);
     let accepted=observed.rows, withheld=new Set();
+    const review={};
     const previousByCode=prepareSource?new Map(previous.map(row=>[row.customerCode,row])):null;
     const previousCenter=row=>previousByCode?.get(row.customerCode)?.centerGroup??source.membership?.get(row.customerCode)?.center;
     if(prepareSource){
@@ -483,12 +544,15 @@ export async function syncStageNationalRegistry({store,receipt,readCenter,readOf
       // confirms the target center; a retained assignment is not that evidence.
       const verifiedCenters=centerMoves.length?await confirmCenterMoves?.(centerMoves.map(row=>row.customerCode)):null;
       withheld=new Set(centerMoves.filter(row=>verifiedCenters?.get(row.customerCode)!==row.centerGroup).map(row=>row.customerCode));
+      review.verifiedCenterMoves=new Set(centerMoves.map(row=>row.customerCode).filter(code=>!withheld.has(code)));
       accepted=accepted.filter(row=>!withheld.has(row.customerCode));
     }
-    const rows=mergeStageNationalRegistry(previous,accepted,official);
+    const rows=mergeStageNationalRegistry(previous,accepted,official,review);
+    if(head.current)assertStageNationalRegistryDelta(previous,rows);
     let changes;
     if(prepareSource){
       changes={admitted:0,addressChanged:0,centerMoved:0,centerMoveUnconfirmed:withheld.size};
+      if(review.addressUnconfirmed)changes.addressUnconfirmed=review.addressUnconfirmed;
       for(const row of rows){
         if(row.lifecycle!=='ACTIVE')continue;
         const prior=previousByCode.get(row.customerCode), center=previousCenter(row);
@@ -497,10 +561,11 @@ export async function syncStageNationalRegistry({store,receipt,readCenter,readOf
         if(center&&center!==row.centerGroup)changes.centerMoved++;
       }
     }
-    const candidate=await encode(rows,store.key), checkedAt=new Date(now()).toISOString();
-    const current={version:candidate.version,count:rows.length,checkedAt};
-    const unchanged=head.current?.version===current.version;
+    const bytes=Buffer.from(JSON.stringify(rows)), version=sha(bytes), checkedAt=new Date(now()).toISOString();
+    const unchanged=head.current?.version===version;
+    const current=unchanged?head.current:{version,count:rows.length,checkedAt};
     if (!unchanged) {
+      const candidate=await encode(bytes,store.key,version);
       try {await store.writeObject(current.version,candidate);}
       catch(error) {if (error.code!=='FIXED_STORE_CONFLICT') throw error;}
       await decode(store,current);

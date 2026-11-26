@@ -77,6 +77,13 @@ test('a signed daily candidate preserves missing rows, updates new or revised ro
     ['S10001','DELETED'],['S10002','ACTIVE'],['S10003','ACTIVE'],['S10004','ACTIVE']]);
   assert(!saved[1].verifiedLocation);
   assert.equal(objects.size,2);
+  const reference=structuredClone(head.current);
+  tick+=day;
+  const repeated=await publish('d');
+  assert.equal(repeated.state,'VERIFIED_NOOP');
+  assert.deepEqual(head.current,reference);
+  assert.notEqual(head.lastSuccessAt,reference.checkedAt);
+  assert.equal(objects.size,2);
 });
 
 test('only the approved active Osan recovery set enters the scheduled registration membership',async()=>{

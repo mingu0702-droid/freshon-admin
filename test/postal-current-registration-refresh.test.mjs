@@ -91,6 +91,18 @@ test('a version change during geometry and a corrupt previous proof both block p
   assert.equal(f.objects.size,0);
 });
 
+test('a bulk postal loss leaves both the previous asset and pointer intact',async()=>{
+  const f=fixture();
+  const prior=Array.from({length:12},(_,i)=>row('S'+(20+i),126.4));
+  const seed=sealCurrentPostalRegistration({binding:{...binding,registry:before},
+    assignments:new Map(prior.map(({customerCode})=>[customerCode,{area:22222}]))},key);
+  await assert.rejects(refreshStageCurrentPostalRegistration({...f.args,
+    readRegistry:async()=>({ref:{version:after},rows:prior.map(({verifiedLocation,...saved})=>saved)}),
+    readRegistryRows:async()=>prior,fallback:async()=>seed}),/POSTAL_REGISTRATION_REFRESH_BULK_LOSS/);
+  assert.equal(f.objects.size,0);
+  assert.deepEqual(f.actions,[]);
+});
+
 test('Stage store gates write separately, confines paths and rejects a tampered signed head',async()=>{
   const archiveEnv={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
     OPSMAP_STAGE_SYNC_REMOTE_APPROVED:'1',OPSMAP_STAGE_SYNC_PUBLISH_APPROVED:'1',

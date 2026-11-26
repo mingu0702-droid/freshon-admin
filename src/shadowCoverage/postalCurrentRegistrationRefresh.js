@@ -84,6 +84,8 @@ export async function refreshStageCurrentPostalRegistration({store,readRegistry,
   const projection=await projectCurrentPostalRegistration(changed,legacyCodes,
     changed.length?await readDetailTiles(changed):[]);
   const assignments=new Map([...same,...projection.assignments]);
+  const lost=old.rows.filter(([code])=>!assignments.has(code)).length;
+  if(lost>=Math.max(10,Math.ceil(old.rows.length*0.005)))throw fail('BULK_LOSS');
   const nextBinding={...binding,registry:version};
   const {bytes,sha256}=sealCurrentPostalRegistration({binding:nextBinding,assignments},store.key);
   const next={...nextBinding,sha256};
