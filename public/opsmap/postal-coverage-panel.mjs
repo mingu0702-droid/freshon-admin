@@ -24,7 +24,8 @@ const hasDeliveryEvidence = ({completeness,summary}) => completeness.observed > 
 
 function request(endpoint, params, signal, headers) {
   const url = API + '/' + endpoint + '?' + new URLSearchParams(params);
-  return fetch(url,{ credentials:'same-origin', cache:'no-store', signal, headers });
+  return fetch(url,{ credentials:'same-origin', cache:'no-store', signal, headers,
+    ...(endpoint==='bootstrap' ? {priority:'high'} : {}) });
 }
 
 async function reply(response) {
@@ -321,7 +322,13 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   function pickArea(area, location) {
     const point = location || area?.location;
     const radius = Number(find('coverageRadius').value);
-    if (point) map?.focus(point, null, location ? radius : 0);
+    if (point && map) {
+      map.focus(point, null, location ? radius : 0);
+      const {box}=map.viewport(), [lat,lng]=point;
+      // When Kakao has already set the detailed camera, request its
+      // boundaries before the independent area-detail requests.
+      if (postalTilesLevel(box)==='detail' && lng>=box[0] && lat>=box[1] && lng<=box[2] && lat<=box[3]) void readView();
+    }
     if (location) map?.point(location, radius);
     areaCard(area);
   }

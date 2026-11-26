@@ -106,7 +106,7 @@ export function mountProductionMapApi(app,{
   // The entry gate still checks the dated roster session before the request and before sending its response.
   app.use('/api/map-phase2b/private',(req,res,next)=>stageOnly&&
     (req.path==='/stage-address-evidence'||req.path==='/shadow-coverage/point'||req.path==='/map-sdk-config'&&req.query.sdkOnly==='1'||
-      (req.method==='GET'&&/^\/shadow-coverage\/postal\/(?:view|geometry|bootstrap|point)$/.test(req.path))||
+      (req.method==='GET'&&/^\/shadow-coverage\/postal\/(?:view|geometry|bootstrap|point|search)$/.test(req.path))||
       (req.method==='GET'&&req.path==='/dated-delivery')||(req.method==='POST'&&req.path==='/address-lookup'))
     ? requireStageRead(req,res,next) : mapStaff.requireStaff(req,res,next));
   mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
