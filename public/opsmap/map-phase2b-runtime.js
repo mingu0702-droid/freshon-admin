@@ -4352,8 +4352,9 @@
     }
     trace?.mark('detail');
     if(!keepViewport)trace?.finish('temporary');
-    afterSearchPaint(()=>{
-      if(state.virtual===row)renderSearchTemporaryNearby(row,trace);
+    if(trace)renderSearchTemporaryNearby(row,trace);
+    else afterSearchPaint(()=>{
+      if(state.virtual===row)renderSearchTemporaryNearby(row);
     });
   }
 

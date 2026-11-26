@@ -452,7 +452,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       view = { ...data, center: params.center,layer:layer() };
       viewKey = key;
       viewCache.delete(key);
-      viewCache.set(key, cached ? saved : { data,scopeKey,until:Date.now()+20000 });
+      viewCache.set(key, cached ? saved : { data,scopeKey,until:Date.now()+(data.coveredBox?60000:20000) });
       if (viewCache.size > 6) viewCache.delete(viewCache.keys().next().value);
       host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame), ...geometry.metrics() });
       applyView(view,same);

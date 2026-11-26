@@ -119,6 +119,9 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     const size = data.tiles.reduce((sum,tile) => sum + tile[1],0);
     if (!data.overview || !size || metadata.length > POSTAL_BOOTSTRAP_METADATA_LIMIT ||
         size > POSTAL_VIEWPORT_TILE_BYTES || data.tiles.length > 32) throw Error('POSTAL_BOOTSTRAP_UNAVAILABLE');
+    // Start the existing verified detail pack in parallel with the national
+    // response, before the first street-level zoom needs its immutable tiles.
+    void modules.runtime.warmDetail().catch(()=>{});
     const prefix = Buffer.allocUnsafe(8 + metadata.length);
     prefix.write('PVF1');
     prefix.writeUInt32LE(metadata.length,4);

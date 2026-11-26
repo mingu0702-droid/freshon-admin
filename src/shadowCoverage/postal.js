@@ -592,6 +592,7 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
 
   return {
     async warm() { await ready(90,'all'); },
+    async warmDetail() { if(assetSource)await assetSource.tiles('detail'); },
     async operations({days,center,generation,area,offset=0}) {
       const opened = await verifiedRelease(generation);
       const {ledger,end,cache}=await recentLedger();
