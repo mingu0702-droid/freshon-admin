@@ -80,5 +80,11 @@
     return {draw,hit,clear};
   }
 
-  root.MapNewAreaViewport=Object.freeze({createDots});
+  function visibleLocations(index,bounds,assignmentMode){
+    // Co-located stores all pass the same bounds test, so group only the
+    // rows that the temporary-pin viewport is actually going to display.
+    return root.MapViewPolicy.exactLocations(index.query(bounds),assignmentMode);
+  }
+
+  root.MapNewAreaViewport=Object.freeze({createDots,visibleLocations});
 })(typeof window==='object'?window:globalThis);

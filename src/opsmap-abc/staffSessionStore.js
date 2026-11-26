@@ -14,16 +14,9 @@ export function createProductionStaffSessionStore({env=process.env,fetchImpl=fet
   async function requirePrivateWrite(){
     const info=await request(root);if(!info.ok)fail();const repo=await info.json();if(repo.private!==true||repo.permissions?.push!==true)fail();
   }
-  async function read({parallelValidation=false}={}){
-    const readFile=()=>request(file+'?ref='+encodeURIComponent(branch));
-    let r;
-    if(parallelValidation){
-      // Address lookup keeps both live checks on every read, including after Kakao.
-      // A signed session is usable only after the private repo proof also passes.
-      [,r]=await Promise.all([requirePrivateWrite(),readFile()]);
-    }else{
-      await requirePrivateWrite();r=await readFile();
-    }
+  const readFile=()=>request(file+'?ref='+encodeURIComponent(branch));
+  async function read(){await requirePrivateWrite();return decodeFile(await readFile());}
+  async function decodeFile(r){
     if(r.status===404)return {sha:null,state:{schema:1,sessions:{}}};if(!r.ok)fail();
     const data=await r.json();if(data.encoding!=='base64'||! /^[a-f0-9]{40}$/.test(data.sha||'')||data.size>512000)fail();
     let state;try{const bytes=Buffer.from(data.content,'base64');if(bytes.length>512000)fail();state=JSON.parse(bytes.toString('utf8'));}catch{fail();}
@@ -36,7 +29,26 @@ export function createProductionStaffSessionStore({env=process.env,fetchImpl=fet
     return /^[a-f0-9]{64}$/.test(signature||'')&&crypto.timingSafeEqual(Buffer.from(signature),Buffer.from(expected))&&Number.isFinite(entry.expiresAt)&&Number.isFinite(entry.idleExpiresAt)&&entry.idleExpiresAt<=entry.expiresAt;
   }
   let pendingRead=null,writeTail=Promise.resolve(),identityWriteTail=writeTail;
-  async function sharedRead(options){if(!pendingRead){const p=read(options);pendingRead=p;try{return await p;}finally{if(pendingRead===p)pendingRead=null;}}return pendingRead;}
+  function sharedRead({parallelValidation=false}={}){
+    if(!pendingRead){
+      let contents;
+      const startContents=()=>{
+        if(!contents){
+          contents=readFile();
+          // The proof can reject while an already-started file read is still running.
+          void contents.catch(()=>{});
+        }
+        return contents;
+      };
+      const current={startContents,ready:requirePrivateWrite().then(startContents).then(decodeFile)
+        .finally(()=>{if(pendingRead===current)pendingRead=null;})};
+      pendingRead=current;
+    }
+    // A fast read joining an ordinary read can overlap its file request with
+    // that same in-flight private-repository proof. Both are still required.
+    if(parallelValidation)pendingRead.startContents();
+    return pendingRead.ready;
+  }
   async function write(key,entry,requireExisting=false){
     const work=writeTail.catch(()=>{}).then(async()=>{
       pendingRead=null;const {sha,state}=await read();

@@ -1,6 +1,6 @@
-import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs?v=20261127-viewport-reuse';
+import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs?v=20261127-viewport-priority';
 import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261126-reentry';
-import { postalTilesLevel, splitPostalBootstrap } from './postal-geometry.mjs';
+import { postalTilesLevel, splitPostalBootstrap } from './postal-geometry.mjs?v=20261127-viewport-priority';
 import { createCurrentRegistrationPanel } from './postal-current-registration-panel.mjs?v=20261124-current-registration';
 import { coverageCenterBounds } from './coverage-center-viewport.mjs';
 
@@ -40,9 +40,9 @@ async function read(endpoint, params, signal, headers) {
   return reply(await request(endpoint,params,signal,headers));
 }
 
-async function firstViewport(params, signal) {
+async function viewportFrame(params, signal, known) {
   const started = performance.now();
-  const response = await request('bootstrap',params,signal);
+  const response = await request('bootstrap',params,signal,known ? {'X-Map-Postal-Known':known} : undefined);
   if (response.status === 404) return null;
   if (!response.ok) return reply(response);
   const raw = await response.arrayBuffer();
@@ -323,7 +323,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     areaCard(area);
   }
   async function choosePoint(location, fromSearch = false, signal) {
-    if (!view) return;
+    if (!active || !map) return;
     detailRead?.abort();
     const request = detailRead = new AbortController();
     try {
@@ -427,7 +427,10 @@ export function createCoveragePanel({ workspace, header, openStore }) {
           Array.isArray(bounds)&&bounds.length===4&&box[0]>=bounds[0]&&box[1]>=bounds[1]&&box[2]<=bounds[2]&&box[3]<=bounds[3];
       }) : null;
       const cached = saved?.data;
-      const frame = first && !geometry.hasOverview() ? await firstViewport(requested,signal) : null;
+      const frame = !cached && (first && !geometry.hasOverview() || detailed)
+        ? await viewportFrame(detailed ? {...requested,viewport:'1'} : requested,signal,
+          geometry.knownTiles(detailed ? view?.boundary : view?.overview))
+        : null;
       const data = cached || frame?.view || await read('view',requested,signal);
       if (!active || viewportRead !== controller) return;
       if(dispatchDensity()&&!data.dispatchDensityAvailable) {
@@ -438,7 +441,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       const sameRelease = view?.generation === data.generation && view?.boundary === data.boundary &&
         view?.assignmentReview === data.assignmentReview;
       const [slices,operations] = await Promise.all([
-        frame ? geometry.acceptBootstrap(data,frame.bytes,frame.duration) : geometry.read(data,signal),
+        (frame && geometry.acceptBootstrap(data,frame.bytes,frame.duration)) || geometry.read(data,signal),
         latest() ? readOperations(data.generation,signal).catch(error => {
           if (error.status === 401 || error.status === 403 || error.code === 'POSTAL_GENERATION_MISMATCH') throw error;
           return null;
@@ -572,7 +575,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   }
 
   async function runSearch(query, { refresh = false } = {}) {
-    if (!active || !view || query.length < 2) return;
+    if (!active || !map || query.length < 2) return;
     submittedSearch = query;
     searchRead?.abort();
     const request = searchRead = new AbortController();

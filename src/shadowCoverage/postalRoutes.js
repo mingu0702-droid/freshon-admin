@@ -115,19 +115,27 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
   });
   route('/bootstrap',async (req,scope,modules,timing) => {
     const data = await view(req,scope,modules,timing);
-    const metadata = Buffer.from(JSON.stringify(data));
-    const size = data.tiles.reduce((sum,tile) => sum + tile[1],0);
-    if (!data.overview || !size || metadata.length > POSTAL_BOOTSTRAP_METADATA_LIMIT ||
-        size > POSTAL_VIEWPORT_TILE_BYTES || data.tiles.length > 32) throw Error('POSTAL_BOOTSTRAP_UNAVAILABLE');
-    // Start the existing verified detail pack in parallel with the national
-    // response, before the first street-level zoom needs its immutable tiles.
-    void modules.runtime.warmDetail().catch(()=>{});
+    const version = data.overview || data.boundary;
+    const known = req.get('X-Map-Postal-Known') || '';
+    if (known.length > 1024 || known && !/^[a-f0-9]{64}:(?:(?:overview|national|regional|detail)-\d{1,3}-\d{1,3}-\d{1,2})(?:,(?:overview|national|regional|detail)-\d{1,3}-\d{1,3}-\d{1,2})*$/.test(known)) {
+      throw Error('POSTAL_QUERY_INVALID');
+    }
+    const [knownVersion,knownIds] = known.split(':');
+    const present = new Set(knownVersion === version ? knownIds.split(',') : []);
+    const missing = data.tiles.filter(([id]) => !present.has(id));
+    const ids = missing.map(([id]) => id);
+    const metadata = Buffer.from(JSON.stringify(ids.length === data.tiles.length ? data : {...data,frameTiles:ids}));
+    const size = missing.reduce((sum,tile) => sum + tile[1],0);
+    if ((!data.overview && req.query.viewport !== '1') || !data.tiles.length ||
+        metadata.length > POSTAL_BOOTSTRAP_METADATA_LIMIT || size > POSTAL_VIEWPORT_TILE_BYTES ||
+        data.tiles.length > 32) throw Error('POSTAL_BOOTSTRAP_UNAVAILABLE');
     const prefix = Buffer.allocUnsafe(8 + metadata.length);
     prefix.write('PVF1');
     prefix.writeUInt32LE(metadata.length,4);
     metadata.copy(prefix,8);
+    if (!ids.length) return { bytes:prefix, gzip:false };
     const gzip = req.acceptsEncodings('gzip','identity') === 'gzip';
-    const bytes = await modules.runtime.tiles(data.tiles.map(([id]) => id),data.overview,gzip,timing,prefix);
+    const bytes = await modules.runtime.tiles(ids,version,gzip,timing,prefix);
     return { bytes, gzip };
   },binary);
   route('/geometry', async (req, _scope, { runtime }, timing) => {

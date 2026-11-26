@@ -50,19 +50,30 @@ try {
       }});
     }
     let data;
-    if (endpoint === 'view') {
+    if (endpoint === 'view' || endpoint === 'bootstrap' && url.searchParams.get('viewport') === '1') {
       viewportReads.push([url.searchParams.get('level'),url.searchParams.get('box')]);
       const box=url.searchParams.get('box').split(',').map(Number);
       data = {
         period, generation, stale:true, completeness:{ observed:observedDays, missing:[], sourceMissing:[], centerObserved:{}, unverified:[] },
         summary:{ recorded:observedDays ? 1 : 0 }, source:{ label:'fixture', url:'#' }, candidates:[],
-        tier:postalTilesLevel(box), boundary:'fixture-boundary',
-        tiles:[['fixture-tile',geometry.length]], tones:[[6241,'LOW']], badges:[],
+        tier:postalTilesLevel(box), boundary:'b'.repeat(64),
+        tiles:[['detail-1-1-0',geometry.length]], tones:[[6241,'LOW']], badges:[],
         operationsAvailable:true,dispatchDensityAvailable:true,
       };
       if(bufferedFrames&&url.searchParams.get('buffered')==='1'){
         const [w,s,e,n]=box,dx=(e-w)*.55,dy=(n-s)*.55;
         data.coveredBox=[w-dx,s-dy,e+dx,n+dy];
+      }
+      if(endpoint==='bootstrap'){
+        const known=route.request().headers()['x-map-postal-known'];
+        const reuse=known===data.boundary+':'+data.tiles[0][0];
+        const metadata=Buffer.from(JSON.stringify(reuse ? {...data,frameTiles:[]} : data));
+        const prefix=Buffer.alloc(8);
+        prefix.write('PVF1');
+        prefix.writeUInt32LE(metadata.length,4);
+        if(!reuse)geometryReads++;
+        return route.fulfill({contentType:'application/octet-stream',
+          body:Buffer.concat(reuse ? [prefix,metadata] : [prefix,metadata,geometry])});
       }
     } else if(endpoint === 'operations') {
       const days=Number(url.searchParams.get('days')),area=url.searchParams.get('area');
@@ -142,7 +153,7 @@ try {
 
   await page.evaluate(() => window.coverageFixture.close());
   assert.equal(await page.locator('#shadowCoverage').isVisible(), false);
-  const revalidated = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/view'));
+  const revalidated = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/bootstrap'));
   await page.evaluate(() => window.coverageFixture.open());
   await revalidated;
   assert.equal(await page.locator('#coverageQuery').inputValue(), postalCode);

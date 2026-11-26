@@ -11,6 +11,8 @@ const MiB = 1024 * 1024;
 const maxHeaderBytes = 512 * 1024;
 const SHA = /^[0-9a-f]{64}$/;
 const dataUrl = 'https://api.github.com/repos/mingu0702-droid/freshon-cache/contents/opsmap-stage/postal-v1/';
+const rawDataUrl = 'https://raw.githubusercontent.com/mingu0702-droid/freshon-cache/';
+const geometryPacks = new Set(['national','regional','detail']);
 export const postalAssetPacks = Object.freeze({ core: 5 * MiB, release: MiB, national: 16 * MiB,
   regional: 24 * MiB, detail: 32 * MiB, history: 8 * MiB });
 export const sealedPostalPacks = new Set(['release', 'history']);
@@ -108,7 +110,9 @@ export function createStagePostalAssets({ env = process.env, fetchImpl = fetch, 
   const key = Buffer.from(encodedKey, 'base64');
   if (!token || key.length !== 32 || key.toString('base64') !== encodedKey) throw Error('POSTAL_ASSET_CONFIG');
   const installed = new Map(), pending = new Map(), retryAfter = new Map();
+  const layouts = new WeakMap();
   let temporary, remoteRetryAfter = 0;
+  let rangeRetryAfter = 0;
   const request = name => fetchImpl(dataUrl + name + '?ref=' + config.ref, { method: 'GET', redirect: 'error',
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github.raw+json', 'Accept-Encoding': 'identity' },
     signal: AbortSignal.timeout(45_000) });
@@ -170,6 +174,66 @@ export function createStagePostalAssets({ env = process.env, fetchImpl = fetch, 
     return task;
   }
 
+  function geometryLayout(pack, tiles) {
+    if (!layouts.has(tiles)) {
+      const files = tiles.map(({ id, sha256, bytes }) => ({ name:id + '.gz', bytes, sha256 }));
+      const length = files.reduce((sum, file) => sum + file.bytes,0);
+      checkFiles(pack, files, length);
+      const header = Buffer.byteLength(JSON.stringify({ schema:1, pack, files }), 'utf8');
+      let offset = 4 + header;
+      let ranges = null;
+      if (header <= maxHeaderBytes && offset + length === config.packs[pack].bytes) {
+        ranges = new Map();
+        for (const file of files) {
+          ranges.set(file.name, { start:offset, bytes:file.bytes, sha256:file.sha256 });
+          offset += file.bytes;
+        }
+      }
+      layouts.set(tiles,ranges);
+    }
+    return layouts.get(tiles);
+  }
+
+  async function viewportTile(tile, tiles) {
+    const pack = tile.id.split('-',1)[0];
+    if (!geometryPacks.has(pack) || installed.has(pack) || pending.has(pack) ||
+        now() < Math.max(rangeRetryAfter,remoteRetryAfter)) return null;
+    const range = geometryLayout(pack,tiles)?.get(tile.id + '.gz');
+    if (!range || range.bytes !== tile.bytes || range.sha256 !== tile.sha256) return null;
+    const end = range.start + range.bytes - 1;
+    const expected = 'bytes ' + range.start + '-' + end + '/' + config.packs[pack].bytes;
+    const started = performance.now();
+    try {
+      const response = await fetchImpl(rawDataUrl + config.ref + '/opsmap-stage/postal-v1/' + pack + '.bin', {
+        method:'GET', redirect:'error', signal:AbortSignal.timeout(5_000),
+        headers:{ Authorization:'Bearer ' + token, 'Accept-Encoding':'identity', Range:'bytes=' + range.start + '-' + end }
+      });
+      if (response.status !== 206 || response.headers.get('content-range') !== expected ||
+          Number(response.headers.get('content-length')) !== range.bytes || !response.body) {
+        await response.body?.cancel();
+        throw Error('POSTAL_TILE_RANGE_UNAVAILABLE');
+      }
+      const bytes = Buffer.allocUnsafe(range.bytes);
+      let offset = 0;
+      for await (const chunk of response.body) {
+        if (offset + chunk.length > bytes.length) throw Error('POSTAL_TILE_RANGE_INVALID');
+        bytes.set(chunk,offset);
+        offset += chunk.length;
+      }
+      // Offsets are calculated from the pinned archive layout. The approved
+      // boundary manifest proves the returned tile before it can reach staff.
+      if (offset !== bytes.length || hash(bytes) !== tile.sha256) throw Error('POSTAL_ASSET_INTEGRITY');
+      log({ component:'opsmap-postal-viewport-range', pack, bytes:bytes.length, ms:Math.round(performance.now() - started) });
+      return bytes;
+    } catch {
+      // Keep the fully verified original pack path for proxies or credentials
+      // that cannot use ranges; do not keep retrying on each viewport.
+      rangeRetryAfter = now() + 60_000;
+      log({ component:'opsmap-postal-viewport-range', pack, state:'FULL_PACK_FALLBACK' });
+      return null;
+    }
+  }
+
   return {
     config,
     async verifyReference() {
@@ -201,6 +265,7 @@ export function createStagePostalAssets({ env = process.env, fetchImpl = fetch, 
       return { directory: release, geometry: join(core, 'geometry'), overview: join(core, 'overview'), review: release };
     },
     tiles: tier => read(tier),
+    viewportTile,
     details: () => read('history')
   };
 }

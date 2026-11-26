@@ -29,13 +29,22 @@ export function splitPostalBootstrap(buffer) {
     throw Error('POSTAL_BOOTSTRAP_INVALID');
   }
   const view = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer,8,length)));
-  if (!/^[a-f0-9]{64}$/.test(view?.overview || '') || !Array.isArray(view.tiles) || !view.tiles.length ||
-      view.tiles.length > 32 || view.tiles.some(tile => !Array.isArray(tile) || tile.length !== 3 ||
-        !/^overview-\d{1,3}-\d{1,3}-\d{1,2}$/.test(tile[0]) ||
-        !Number.isInteger(tile[1]) || tile[1] < 5 || tile[1] > POSTAL_TILE_LIMIT ||
-        !Number.isInteger(tile[2]) || tile[2] < 3 || tile[2] > POSTAL_TILE_LIMIT / 8) ||
-      new Set(view.tiles.map(tile => tile[0])).size !== view.tiles.length ||
-      view.tiles.reduce((sum,tile) => sum + tile[1],0) !== buffer.byteLength - length - 8) {
+  const indexed = view?.overview !== undefined;
+  const tileId = indexed ? /^overview-\d{1,3}-\d{1,3}-\d{1,2}$/ : /^(?:national|regional|detail)-\d{1,3}-\d{1,3}-\d{1,2}$/;
+  if (!/^[a-f0-9]{64}$/.test((indexed ? view.overview : view?.boundary) || '') ||
+      !Array.isArray(view.tiles) || !view.tiles.length || view.tiles.length > 32 ||
+      view.tiles.some(tile => !Array.isArray(tile) || tile.length !== (indexed ? 3 : 2) ||
+        !tileId.test(tile[0]) || !Number.isInteger(tile[1]) || tile[1] < 5 || tile[1] > POSTAL_TILE_LIMIT ||
+        indexed && (!Number.isInteger(tile[2]) || tile[2] < 3 || tile[2] > POSTAL_TILE_LIMIT / 8))) {
+    throw Error('POSTAL_BOOTSTRAP_INVALID');
+  }
+  const ids = view.tiles.map(([id]) => id);
+  const included = view.frameTiles === undefined ? ids : view.frameTiles;
+  if (!Array.isArray(included) || included.length > ids.length || included.some(id => typeof id !== 'string') ||
+      new Set(ids).size !== ids.length ||
+      new Set(included).size !== included.length ||
+      ids.filter(id => included.includes(id)).join(',') !== included.join(',') ||
+      view.tiles.reduce((sum,[id, bytes]) => sum + (included.includes(id) ? bytes : 0),0) !== buffer.byteLength - length - 8) {
     throw Error('POSTAL_BOOTSTRAP_INVALID');
   }
   return { view, bytes:new Uint8Array(buffer,length + 8) };

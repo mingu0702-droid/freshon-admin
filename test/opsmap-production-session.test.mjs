@@ -56,3 +56,35 @@ test('fast map reads verify the signed deadline during idle renewal and still wa
  await logout;
  assert.equal(await get,null);
 });
+test('an address check starts a shared file read without waiting on the live private repository proof',async()=>{
+ const g=github(),env={OPSMAP_PRODUCTION_SESSION_ENABLED:'1',GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',GITHUB_TOKEN:'fixture',
+  OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'production/opsmap-auth',MAP_STAFF_SESSION_SECRET:'a'.repeat(43)};
+ let hold,release;
+ const requests=[];
+ const store=createProductionStaffSessionStore({env,fetchImpl:async(url,options)=>{
+  const contents=url.includes('/contents/');
+  if(hold&&options.method!=='PUT'){
+   requests.push(contents?'contents':'repository');
+   if(!contents&&!await hold)return Response.json({private:false,permissions:{push:true}});
+  }
+  return g.fetch(url,options);
+ }});
+ const key='b'.repeat(64),fp='c'.repeat(64),session={expiresAt:Date.now()+60_000,idleExpiresAt:Date.now()+30_000};
+ await store.set(key,session,fp);
+ for(const allow of [false,true]){
+  requests.length=0;
+  hold=new Promise(resolve=>{release=resolve;});
+  const ordinary=store.get(key,fp);
+  await new Promise(resolve=>setImmediate(resolve));
+  const fast=store.get(key,fp,{parallelValidation:true});
+  const outcomes=Promise.allSettled([ordinary,fast]);
+  try {
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.deepEqual(requests,['repository','contents']);
+  }finally{release(allow);}
+  for(const state of await outcomes){
+   if(allow){assert.equal(state.status,'fulfilled');assert.deepEqual(state.value,session);}
+   else{assert.equal(state.status,'rejected');assert.match(state.reason.message,/STAFF_SESSION_STORE_UNAVAILABLE/);}
+  }
+ }
+});

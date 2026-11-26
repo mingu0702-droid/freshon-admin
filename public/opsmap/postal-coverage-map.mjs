@@ -121,7 +121,15 @@ export function createPostalGeometryReader(api) {
 
   return {
     acceptBootstrap(view, bytes, duration) {
-      return [...decodeBatch(bytes,view.tiles,view.overview,duration).values()].map(item => item.zones);
+      const tiles = view.frameTiles === undefined ? view.tiles : view.tiles.filter(([id]) => view.frameTiles.includes(id));
+      const loaded = decodeBatch(bytes,tiles,view.overview || view.boundary,duration);
+      return tiles.length === view.tiles.length ? [...loaded.values()].map(item => item.zones) : null;
+    },
+    knownTiles(version) {
+      if (!version) return '';
+      const prefix = version + ':';
+      const ids = [...cache.keys()].filter(key => key.startsWith(prefix)).slice(-32).map(key => key.slice(prefix.length));
+      return ids.length ? prefix + ids.join(',') : '';
     },
     async read(view, signal) {
       signal.throwIfAborted();

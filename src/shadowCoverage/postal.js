@@ -406,9 +406,12 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
     if (pending.size >= 12) throw Error('POSTAL_READ_BUSY');
     const work = (async () => {
       reads++;
-      const directory = tile.folder || await assetSource?.tiles(tile.id.split('-', 1)[0]) || opened.geometry;
-      const file = join(directory,tile.id + '.gz');
-      const bytes = await verifiedRead(file, tile.sha256, tile.bytes, tile.bytes);
+      const tier = tile.id.split('-',1)[0];
+      let bytes = tile.folder ? null : await assetSource?.viewportTile?.(tile,opened.manifest.tiers[tier]);
+      if (!bytes) {
+        const directory = tile.folder || await assetSource?.tiles(tier) || opened.geometry;
+        bytes = await verifiedRead(join(directory,tile.id + '.gz'),tile.sha256,tile.bytes,tile.bytes);
+      }
       retainTile(tile.id,bytes);
       return bytes;
     })().finally(() => pending.delete(tile.id));
@@ -592,7 +595,6 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
 
   return {
     async warm() { await ready(90,'all'); },
-    async warmDetail() { if(assetSource)await assetSource.tiles('detail'); },
     async operations({days,center,generation,area,offset=0}) {
       const opened = await verifiedRelease(generation);
       const {ledger,end,cache}=await recentLedger();

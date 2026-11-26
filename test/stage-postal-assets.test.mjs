@@ -100,3 +100,56 @@ test('postal assets reject unexpected paths and invalid decryption or deployment
   await assert.rejects(init({ OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64: Buffer.alloc(32, 0x7f).toString('base64') }).details(), /POSTAL_ASSET_UNAVAILABLE/);
   assert.throws(() => init({ RENDER_SERVICE_ID: 'another-service' }), /POSTAL_ASSET_STAGE_SCOPE/);
 });
+
+test('detail view reads only the requested pinned range and verifies it against the boundary manifest', async t => {
+  const entries = ['detail-41-52-0.gz','detail-83-93-0.gz'];
+  const { tmp, env, blobs } = await fixture(t,{ detail:entries });
+  const tiles = entries.map(name => {
+    const bytes = Buffer.from('detail/' + name);
+    return { id:name.slice(0,-3), bytes:bytes.length, sha256:sha(bytes) };
+  });
+  const selected = tiles[1], blob = blobs.detail;
+  const calls = [];
+  const assets = createStagePostalAssets({ env, tempRoot:tmp, log:()=>{}, fetchImpl:async (url,options)=>{
+    calls.push(url);
+    assert.equal(url,'https://raw.githubusercontent.com/mingu0702-droid/freshon-cache/' + ref + '/opsmap-stage/postal-v1/detail.bin');
+    assert.equal(options.headers.Authorization,'Bearer fixture-only');
+    assert.equal(options.headers.Range,'bytes=' + (blob.length - selected.bytes) + '-' + (blob.length - 1));
+    const bytes = blob.subarray(-selected.bytes);
+    return new Response(bytes,{ status:206,headers:{
+      'Content-Range':'bytes ' + (blob.length - bytes.length) + '-' + (blob.length - 1) + '/' + blob.length,
+      'Content-Length':bytes.length
+    } });
+  } });
+  assert.equal((await assets.viewportTile(selected,tiles)).toString(),'detail/' + entries[1]);
+  assert.equal(calls.length,1);
+  assert.deepEqual(await readdir(tmp),[],'the whole pack must not get downloaded or expanded for a viewport');
+});
+
+test('unsupported and corrupted ranges fail closed and permit the original verified pack path', async t => {
+  const { tmp, env, blobs } = await fixture(t);
+  const bytes = Buffer.from('detail/' + names.detail[0]), blob = blobs.detail;
+  const tile = { id:names.detail[0].slice(0,-3), bytes:bytes.length, sha256:sha(bytes) };
+  for (const mode of ['no-range','wrong-offset','corrupt']) {
+    let cancelled = false, ranges = 0, packs = 0;
+    const assets = createStagePostalAssets({ env,tempRoot:tmp,log:()=>{},fetchImpl:async url=>{
+      if (new URL(url).hostname === 'api.github.com') {
+        packs++;
+        return new Response(blob);
+      }
+      ranges++;
+      if (mode === 'no-range') return new Response(new ReadableStream({ cancel(){ cancelled = true; } }));
+      const start = blob.length - bytes.length + (mode === 'wrong-offset' ? 1 : 0);
+      return new Response(Buffer.alloc(bytes.length),{ status:206,headers:{
+        'Content-Range':'bytes ' + start + '-' + (blob.length - 1) + '/' + blob.length,
+        'Content-Length':bytes.length
+      } });
+    } });
+    assert.equal(await assets.viewportTile(tile,[tile]),null,mode);
+    if (mode === 'no-range') assert.equal(cancelled,true,'an unexpected full response is cancelled');
+    assert.equal(await assets.viewportTile(tile,[tile]),null,'backoff does not repeat a bad Range request');
+    assert.equal(ranges,1);
+    assert.deepEqual(await readFile(join(await assets.tiles('detail'),names.detail[0])),bytes);
+    assert.equal(packs,1);
+  }
+});

@@ -196,6 +196,40 @@ test('the first viewport frame verifies the complete tile list and seeds the vie
   assert.equal(reader.metrics().bytes,0);
 });
 
+test('a new viewport frame transfers only uncached tiles within its approved boundary version', async t => {
+  const boundary = 'c'.repeat(64);
+  const ids = ['detail-1-1-0','detail-1-1-1'];
+  const zone = { id:'01234', bbox:[127,37,127.001,37.001] };
+  const tileHeader = Buffer.alloc(8);
+  tileHeader.write('PCG1');
+  tileHeader.writeUInt32LE(1,4);
+  const tile = Buffer.concat([tileHeader,encodePostalZone(zone,[[[127,37],[127.001,37],[127,37.001]]])]);
+  const makeFrame = (tiles, frameTiles, content) => {
+    const metadata = Buffer.from(JSON.stringify({ boundary,tiles,frameTiles }));
+    const prefix = Buffer.alloc(8);
+    prefix.write('PVF1');
+    prefix.writeUInt32LE(metadata.length,4);
+    const packet = Buffer.concat([prefix,metadata,content]);
+    return packet.buffer.slice(packet.byteOffset,packet.byteOffset + packet.length);
+  };
+  const reader = createPostalGeometryReader('/postal');
+  const request = t.mock.method(globalThis,'fetch',async () => { throw Error('UNEXPECTED_TILE_REQUEST'); });
+  const tiles = ids.map(id=>[id,tile.length]);
+  const first = splitPostalBootstrap(makeFrame(tiles.slice(0,1),undefined,tile));
+  assert.equal(reader.acceptBootstrap(first.view,first.bytes,0)[0][0].id,1234);
+  assert.equal(reader.knownTiles(boundary),boundary + ':' + ids[0]);
+  const second = splitPostalBootstrap(makeFrame(tiles,ids.slice(1),tile));
+  assert.equal(reader.acceptBootstrap(second.view,second.bytes,0),null);
+  assert.equal((await reader.read(second.view,new AbortController().signal)).length,2);
+  const reuse = splitPostalBootstrap(makeFrame(tiles,[],Buffer.alloc(0)));
+  assert.equal(reader.acceptBootstrap(reuse.view,reuse.bytes,0),null);
+  assert.equal((await reader.read(reuse.view,new AbortController().signal)).length,2);
+  assert.equal(request.mock.callCount(),0);
+  for (const invalid of [['detail-2-3-4'],ids.toReversed(),[ids[0],ids[0]]]) {
+    assert.throws(()=>splitPostalBootstrap(makeFrame(tiles,invalid,tile)),/POSTAL_BOOTSTRAP_INVALID/);
+  }
+});
+
 test('screen projection must match the Kakao plane before requesting indexed tiles', () => {
   class Coords {
     constructor(x,y) { Object.assign(this,{ x,y }); }

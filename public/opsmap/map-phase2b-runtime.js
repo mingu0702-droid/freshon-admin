@@ -2482,7 +2482,6 @@
   }
 
   function detailedMarkerRows(viewport,extra,assignmentMode,pinIndex=pointIndex,exactBounds=false) {
-    const index=pinIndex.locations ||= MapPeriodUi.spatialIndex(window.MapViewPolicy.exactLocations(pinIndex.valid,assignmentMode));
     const view=state.map.getBounds?.(), sw=view?.getSouthWest(),ne=view?.getNorthEast();
     if(!sw||!ne)return [];
     // Cull in map coordinates with padding for the actual marker footprint.
@@ -2490,7 +2489,9 @@
     const longitudePadding=exactBounds?0:(ne.getLng()-sw.getLng())/Math.max(1,viewport.width)*24;
     const bounds={south:sw.getLat()-latitudePerPixel*56,north:ne.getLat()+latitudePerPixel*10,
       west:sw.getLng()-longitudePadding,east:ne.getLng()+longitudePadding};
-    const visible=index.query(bounds);
+    const visible=exactBounds
+      ?window.MapNewAreaViewport.visibleLocations(pinIndex,bounds,assignmentMode)
+      :(pinIndex.locations ||= MapPeriodUi.spatialIndex(window.MapViewPolicy.exactLocations(pinIndex.valid,assignmentMode))).query(bounds);
     const extras=new Map();
     if(extra)extras.set(extra.customerCode,extra);
     if(!extras.size)return visible;
@@ -4408,23 +4409,19 @@
     if(!panel)return;
     const index=registeredAreaIndex();
     if(temporaryAreaPanel?.point!==point||temporaryAreaPanel.index!==index||temporaryAreaPanel.master!==baseVehicleMeta){
-      const rows=index.valid.map(store=>({
-        customerCode:store.customerCode,customerName:store.customerName,baseVehicle:store.baseVehicle,
-        unassigned:store.baseVehicleState==='UNASSIGNED',stale:store.baseVehicleStale,
-        distance:Phase2bUi.distanceKm(point,store)
-      })).sort((a,b)=>a.distance-b.distance||a.customerCode.localeCompare(b.customerCode));
-      const [nearest,...stores]=rows;
+      const ranked=window.MapNewAreaDetailPanel.rankNearby(point,index.valid,Phase2bUi.distanceKm);
+      const {nearest}=ranked;
       if(nearest) {
         const schedule=storeDeliveryWeekdays(index.byCode.get(nearest.customerCode));
         nearest.weekdays=MapPeriodUi.formatDeliveryWeekdays(schedule?.days);
       }
-      temporaryAreaPanel={point,index,master:baseVehicleMeta,nearest,stores};
+      temporaryAreaPanel={point,index,master:baseVehicleMeta,...ranked};
     }
-    const {nearest,stores}=temporaryAreaPanel;
+    const {nearest,stores,storeCount,readPage}=temporaryAreaPanel;
     if(temporaryDistancePending&&nearest)measureTemporaryDistance(point,index.byCode.get(nearest.customerCode));
     const expanded=panel.querySelector('[data-nearby-stores]')?.open;
-    panel.innerHTML=window.MapNewAreaDetailPanel.nearby({nearest,stores,expanded});
-    window.MapNewAreaDetailPanel.bindMore(panel,stores);
+    panel.innerHTML=window.MapNewAreaDetailPanel.nearby({nearest,stores,storeCount,expanded});
+    window.MapNewAreaDetailPanel.bindMore(panel,stores,{storeCount,readPage});
     if(trace&&nearest)requestAnimationFrame(()=>{
       if(temporaryDetailPoint===point&&visibleSearchPin(point))trace.record('completeResult');
     });
