@@ -66,3 +66,18 @@ test('only a verified Stage batch can use preserved address matching without a c
  assert.equal((await query('서울 강남구 없는로 3',{'x-test-staff':'1'})).status,503);
  assert.equal(upstream,1);
 });
+test('one-address lookup returns the same identities and points before the full index is built',async()=>{
+ const {resolvePreservedAddressBatch}=await import('../src/privateCustomerSearch.js');
+ const saved={rows:[
+  {customerCode:'S970010',address:'충북 충주시 합성로 ７３ − １４',lat:37,lng:127},
+  {customerCode:'S970011',address:'충북 충주시 합성로 73-14 (용산동)',lat:37,lng:127},
+  {customerCode:'S970012',address:'충북 충주시 합성로 73-140',lat:37.2,lng:127},
+  {customerCode:'S970013',address:'충북 충주시 새주소로 2',roadAddress:'충북 충주시 합성로 73-14',addressChanged:true},
+ ]};
+ const input=[['충청북도 충주시 합성로 73-14']];
+ const cold=resolvePreservedAddressBatch(input,saved,null,{includeCustomers:true});
+ assert.deepEqual(cold[0].customerCodes,['S970010','S970011']);
+ assert.equal(cold[0].status,'STORED');
+ await preparePreservedAddressIndex(saved);
+ assert.deepEqual(resolvePreservedAddressBatch(input,saved,null,{includeCustomers:true}),cold);
+});

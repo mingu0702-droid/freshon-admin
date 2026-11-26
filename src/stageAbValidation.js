@@ -502,7 +502,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
         const snapshotReady=Array.isArray(saved?.rows);
         if(!snapshotReady&&!official&&!master){failureCode='STAGE_BATCH_UNAVAILABLE';return res.status(503).json({error:failureCode,state:'LOOKUP_FAILED'});}
         const preparing=performance.now();
-        if(rows.some(row=>row.some(query=>!/^[A-Z]\d{1,20}$/i.test(query)))) {
+        if(!includeCustomers&&rows.some(row=>row.some(query=>!/^[A-Z]\d{1,20}$/i.test(query)))) {
           await Promise.all([preparePreservedAddressIndex(saved),prepareStageAddressMasterIndex(master)]);
         }
         if(res.destroyed||res.writableEnded)return;

@@ -31,14 +31,17 @@ function exactAddressKey(address){
  if(!prepared.query||!['ROAD','LOT'].includes(prepared.addressKind))return null;
  return officialAddressKey(prepared.query);
 }
-function indexAddressRow(index, row) {
- if (!code(row.customerCode)) return;
+function approvedAddressFields(row) {
  const addresses = [row.address || row.customerAddress || row.basicAddress || row.latestAddress];
  if (!row.addressChanged && row.resolutionStatus !== 'ADDRESS_CHANGED_REVIEW_REQUIRED') {
   addresses.push(row.customerAddress, row.roadAddress, row.roadNameAddress, row.lotAddress, row.jibunAddress);
  }
+ return addresses;
+}
+function indexAddressRow(index, row) {
+ if (!code(row.customerCode)) return;
  const keys = new Set();
- for (const address of new Set(addresses)) {
+ for (const address of new Set(approvedAddressFields(row))) {
   const key = exactAddressKey(address);
   if (key) keys.add(key);
  }
@@ -68,15 +71,25 @@ export function preparePreservedAddressIndex(snapshot) {
  return entry.preparingAddress;
 }
 
-function preservedMatches(query,snapshot){
+function preservedMatches(query,snapshot,{singleLookup=false}={}){
  const rows=snapshot.rows,index=snapshotIndex(snapshot);
  const matchedBy=code(query.toUpperCase())?'CODE':'ADDRESS';
+ const key=matchedBy==='ADDRESS'?exactAddressKey(query):null;
+ if(matchedBy==='ADDRESS'&&!key)return {matches:[],matchedBy};
+ if(singleLookup&&key&&!index.byAddress){
+  // The final consecutive digits survive the same NFKC normalization used by the full index.
+  // Filter candidates cheaply, then apply the identical exact-address test to each one.
+  const numericSuffix=key.match(/\d{1,4}$/)?.[0];
+  if(numericSuffix)return {matchedBy,matches:rows.filter(row=>code(row.customerCode)&&
+    approvedAddressFields(row).some(address=>typeof address==='string'&&
+      (address.includes(numericSuffix)||address.normalize('NFKC').includes(numericSuffix))&&exactAddressKey(address)===key))};
+ }
  if(matchedBy==='ADDRESS'&&!index.byAddress){
   const byAddress=new Map();
   for (const row of rows) indexAddressRow(byAddress, row);
   index.byAddress=byAddress;
  }
- const matches=matchedBy==='CODE'?index.byCode.get(query.toUpperCase())||[]:index.byAddress.get(exactAddressKey(query))||[];
+ const matches=matchedBy==='CODE'?index.byCode.get(query.toUpperCase())||[]:index.byAddress.get(key)||[];
  return {matches,matchedBy};
 }
 export function searchPreservedRegistry(query,snapshot){
@@ -115,13 +128,13 @@ export function resolvePreservedAddressBatch(rows,snapshot,officialIndex,{includ
  };
  const current=stageMasterSnapshot(master);
  const find=query=>measure('customer',()=>{
-  const preserved=preservedMatches(query,snapshot).matches.filter(row=>{
+  const preserved=preservedMatches(query,snapshot,{singleLookup:includeCustomers}).matches.filter(row=>{
    const active=current?.registered.get(row.customerCode);
    if (!active) return true;
    const key=exactAddressKey(active.basicAddress);
    return active.lifecycle==='ACTIVE'&&key!==null&&key===exactAddressKey(row.address||row.customerAddress||row.basicAddress||row.latestAddress);
   });
-  return current ? [...preserved,...preservedMatches(query,current.snapshot).matches] : preserved;
+  return current ? [...preserved,...preservedMatches(query,current.snapshot,{singleLookup:includeCustomers}).matches] : preserved;
  });
  return rows.map(queries=>{
   if(!queries.length)return {status:'INVALID_ADDRESS'};
