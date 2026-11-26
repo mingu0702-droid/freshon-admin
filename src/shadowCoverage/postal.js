@@ -294,7 +294,9 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
   let operationsLedger, operationsEnd, operationsScopes = new Map();
   const tileCache = new Map(), pending = new Map();
   const overviewPending = new Map();
-  let tileBytes = 0, reads = 0;
+  const detailGeometry = new Map(), detailGeometryPending = new Map();
+  const detailGeometryLimit = 4 * 1024 * 1024;
+  let tileBytes = 0, reads = 0, detailGeometryBytes = 0;
 
   async function assets() {
     if (loaded) return loaded;
@@ -484,6 +486,35 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
     if (bulk >= 4) throw Error('POSTAL_READ_BUSY');
     bulk++;
     try { return await work(); } finally { bulk--; }
+  }
+
+  async function detailZones(opened, tile) {
+    const saved = detailGeometry.get(tile.id);
+    if (saved) {
+      detailGeometry.delete(tile.id);
+      detailGeometry.set(tile.id,saved);
+      return saved.zones;
+    }
+    if (detailGeometryPending.has(tile.id)) return detailGeometryPending.get(tile.id);
+    const work = (async () => {
+      const bytes = await gunzip(await getTile(opened,tile),{maxOutputLength:POSTAL_TILE_LIMIT});
+      requireValid(bytes.length === tile.rawBytes);
+      const zones = decodePostalTile(bytes);
+      const size = bytes.length + zones.length * 176 +
+        zones.reduce((count,zone) => count + zone.rings.length * 72,0);
+      if (size <= detailGeometryLimit) {
+        while (detailGeometryBytes + size > detailGeometryLimit) {
+          const oldest = detailGeometry.keys().next().value;
+          detailGeometryBytes -= detailGeometry.get(oldest).size;
+          detailGeometry.delete(oldest);
+        }
+        detailGeometry.set(tile.id,{zones,size});
+        detailGeometryBytes += size;
+      }
+      return zones;
+    })().finally(() => detailGeometryPending.delete(tile.id));
+    detailGeometryPending.set(tile.id,work);
+    return work;
   }
 
   function detail(opened, id) {
@@ -690,8 +721,7 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       return withBatch(async () => {
         for (const tile of opened.manifest.tiers.detail) {
           if (!intersects(tile.box,area.box)) continue;
-          const bytes = await gunzip(await getTile(opened,tile),{maxOutputLength:POSTAL_TILE_LIMIT});
-          const zone = decodePostalTile(bytes).find(row=>row.id===id);
+          const zone = (await detailZones(opened,tile)).find(row=>row.id===id);
           if (!zone) continue;
           return {id:postalText(id),box:area.box,rings:zone.rings.map(ring=>{
             const points=[];
@@ -719,8 +749,7 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
         const box = [lng, lat, lng, lat];
         for (const tile of opened.manifest.tiers.detail) {
           if (!intersects(tile.box, box)) continue;
-          const bytes = await gunzip(await getTile(opened, tile), { maxOutputLength: POSTAL_TILE_LIMIT });
-          for (const zone of decodePostalTile(bytes)) {
+          for (const zone of await detailZones(opened,tile)) {
             const result = postalTilePosition(zone, lng, lat);
             if (!result || result < best) continue;
             if (result > best) { id = zone.id; best = result; ties = false; }

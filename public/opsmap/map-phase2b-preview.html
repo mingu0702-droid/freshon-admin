@@ -7,7 +7,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <script src="api-prefix.js"></script>
   <script defer fetchpriority="high" src="map-staff-entry.js?v=20261126-stability"></script>
-  <link rel="preload" as="script" href="map-phase2b-runtime.js?v=20261127-daily-scope-count" fetchpriority="high" data-map-staff-preload>
+  <link rel="preload" as="script" href="map-phase2b-runtime.js?v=20261127-arrival" fetchpriority="high" data-map-staff-preload>
   <title>운영지도 | Smart Food Networks</title>
   <style>
     :root{--blue:#2463eb;--ink:#172033;--muted:#6b7788;--line:#dde4ec;--panel:#fff;--actual:#14825d;--estimate:#f59e0b;--danger:#dc3545;--shadow:0 7px 22px #0f172a1c;--left:254px}
@@ -44,7 +44,18 @@
     <aside id="leftPanel" class="leftPanel">
       <div class="head"><img id="officialBrand" class="officialBrand" src="assets/smartfoodnetworks-logo-official.svg" alt="Smart Food Networks 공식 로고" width="120" height="42"><div><div class="title">운영지도</div><div class="fresh"><span id="dateHeading">조회기간</span> <b id="latestDate">데이터 확인 중</b><br><span id="rangeText"></span><br><span id="freshnessState">데이터 확인 중</span></div></div></div>
       <section class="block customerBlock"><div class="label"><span>매장 검색</span><span id="searchState" class="mini">검색 대기</span></div><div class="searchLine"><input id="query" class="field" autocomplete="off" placeholder="고객코드 · 점포명"><button id="searchBtn" class="primary">검색</button></div><div class="hint">고객코드, 매장명 또는 주소로 검색하세요.</div><div id="results" class="resultList"></div></section>
-<details id="runListTool" class="tool" open><summary><span id="runListTitle">운행 목록</span> <span id="runListCount" class="mini">호차 선택 대기</span></summary><div id="runListPanel" class="toolBody"><div class="runFilters" role="group" aria-label="운행 목록 필터"><button data-run-filter="ALL" class="tiny active">전체</button><button data-run-filter="COMPLETED" class="tiny">완료</button><button data-run-filter="PENDING" class="tiny">미완료</button></div><section id="roadRoutePanel" hidden aria-label="오산 도로경로 예상"><div id="roadRouteStatus" class="hint" role="status" aria-live="polite">출발지와 목적지를 선택해 주세요.</div><div class="routeSummary"><div class="routeMetric"><strong id="roadRouteDistance">—</strong><small>예상 도로거리</small></div><div class="routeMetric"><strong id="roadRouteDuration">—</strong><small>예상 주행시간</small></div></div><div id="roadRouteCoverage" class="hint">예상 도로거리 · 예상 주행시간</div><p class="hint">경기도 오산시 동부대로 446 출발 → 저장된 착순 → 마지막 매장<br>도로선은 현재 교통 기준 예상입니다. 배송 작업시간·GPS 실주행 기록과 별개입니다.</p></section><div id="runList" class="runList">상단에서 호차를 선택하세요.</div></div></details>
+<details id="runListTool" class="tool" open><summary><span id="runListTitle">운행 목록</span> <span id="runListCount" class="mini">호차 선택 대기</span></summary><div id="runListPanel" class="toolBody"><div class="runFilters" role="group" aria-label="운행 목록 필터"><button data-run-filter="ALL" class="tiny active">전체</button><button data-run-filter="COMPLETED" class="tiny">완료</button><button data-run-filter="PENDING" class="tiny">미완료</button></div><section id="roadRoutePanel" hidden aria-label="오산 도로경로 예상"><div id="roadRouteStatus" class="hint" role="status" aria-live="polite">출발지와 목적지를 선택해 주세요.</div><div class="routeSummary"><div class="routeMetric"><strong id="roadRouteDistance">—</strong><small>예상 도로거리</small></div><div class="routeMetric"><strong id="roadRouteDuration">—</strong><small>예상 주행시간</small></div></div><div id="roadRouteCoverage" class="hint">예상 도로거리 · 예상 주행시간</div><p class="hint">경기도 오산시 동부대로 446 출발 → 저장된 착순 → 마지막 매장<br>도로선은 현재 교통 기준 예상입니다. 배송 작업시간·GPS 실주행 기록과 별개입니다.</p></section><details id="dailyRouteArrival" hidden>
+  <summary>예상 도착시간</summary>
+  <div class="arrival-inputs">
+    <label>오산센터 출발 <input type="time" data-arrival-departure required></label>
+    <button type="button" data-arrival-query disabled>예상시간 조회</button>
+  </div>
+  <label data-arrival-confirm-label hidden><input type="checkbox" data-arrival-confirm> 표시된 방문 순서로 조회</label>
+  <p class="hint" data-arrival-status role="status"></p>
+  <progress data-arrival-busy aria-label="도로경로 조회 중" hidden></progress>
+  <dl data-arrival-totals hidden></dl>
+  <ol data-arrival-list></ol>
+</details><div id="runList" class="runList">상단에서 호차를 선택하세요.</div></div></details>
       <div hidden aria-hidden="true" id="legacyVehicleState"><span id="selectedVehicleCount"></span><div id="vehicleSelect"><button id="vehicleTrigger"><span id="vehicleChips"></span></button><input id="vehicleQuery"><div id="vehicleList"></div><button id="selectAllVehicles"></button><button id="clearVehicles"></button></div><span id="vehicleModeLabel"></span></div>
       <section class="block addressBlock"><div class="label"><span>주소로 위치 찾기</span><span class="mini">임시핀 지원</span></div><div class="searchLine"><input id="addressQuery" class="field" autocomplete="off" placeholder="도로명 · 지번 주소"><button id="addressBtn" class="ghost">판단</button></div><div class="hint">임시 핀에서 가까운 등록 매장과 배송 가능 근거를 확인합니다.</div><div id="searchNotice" class="notice"></div><div id="addressJudgeResults" class="judgeList"></div></section>
       <div id="detailSection" class="detailWrap"><div id="detail" class="idle">매장을 선택하면 상세정보가 표시됩니다.</div></div>
@@ -99,13 +110,15 @@
   <script type="application/x-map-staff" data-src="opsmap-daily.js?v=20261126-dated-budget"></script>
   <script type="application/x-map-staff" data-module="1" data-src="fixed-delivery-weekdays.mjs?v=20261118-national-master"></script>
   <script type="application/x-map-staff" data-module="1" data-src="recent-operations.mjs?v=20261119-evidence"></script>
-  <script type="application/x-map-staff" data-src="map-phase2b-runtime.js?v=20261127-daily-scope-count"></script>
+  <script type="application/x-map-staff" data-src="map-phase2b-runtime.js?v=20261127-arrival"></script>
 
 <link rel="stylesheet" href="approved-site-source.css?v=20261028-r5">
 <link rel="stylesheet" href="map-approved-shell-candidate.css?v=20261126-dated-driver">
 <script type="application/x-map-staff" data-src="map-approved-shell-candidate.js?v=20261127-daily-scope-count"></script>
 <link rel="stylesheet" href="navigation-ui.css?v=20261125-road-summary-top">
 <script type="application/x-map-staff" data-src="navigation-ui.js?v=20261125-road-summary-top"></script>
+<link rel="stylesheet" href="daily-route-arrival.css?v=20261127-arrival">
+<script type="application/x-map-staff" data-module="1" data-src="daily-route-arrival.mjs?v=20261127-arrival"></script>
 <link rel="stylesheet" href="manual-map-pins.css?v=20261028-r5">
 <script type="application/x-map-staff" data-module="1" data-src="manual-map-pins.mjs?v=20261117-location-counts"></script>
 <link rel="stylesheet" href="opsmap-delivery-photos.css?v=20261104-r14">
@@ -114,8 +127,8 @@
 <script type="application/x-map-staff">MapDotUi.mount();</script>
 <script type="application/x-map-staff" data-module="1" data-src="map-print-ui.mjs?v=20261126-print-batch"></script>
 <link rel="stylesheet" href="map-performance.css?v=20261125-temporary-marker">
-<script type="application/x-map-staff" data-module="1" data-src="shadow-coverage-tab.mjs?v=20261126-dispatch-density"></script>
-<script type="application/x-map-staff" data-module="1" data-src="dispatch-reference-tab.mjs?v=20261126-wms-official-round"></script>
+<script type="application/x-map-staff" data-module="1" data-src="shadow-coverage-tab.mjs?v=20261127-viewport-reuse"></script>
+<script type="application/x-map-staff" data-module="1" data-src="dispatch-reference-tab.mjs?v=20261127-postal-focus"></script>
 </body>
 </html>
 

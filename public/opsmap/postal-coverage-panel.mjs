@@ -1,10 +1,11 @@
-import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs?v=20261124-operations';
+import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs?v=20261127-viewport-reuse';
 import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261126-reentry';
 import { splitPostalBootstrap } from './postal-geometry.mjs';
 import { createCurrentRegistrationPanel } from './postal-current-registration-panel.mjs?v=20261124-current-registration';
 import { coverageCenterBounds } from './coverage-center-viewport.mjs';
 
 const API = '/api/map-phase2b/private/shadow-coverage/postal';
+const noPostalItems = [];
 const recentOperationsApi = '/api/map-phase2b/private/recent-operations';
 const labels = {
   HIGH: '배송 밀도 높음', LOW: '배송 밀도 낮음',
@@ -121,7 +122,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   const regionButton = root.querySelector('[data-preset="region"]');
   let map, active = false, owner = 0, viewportRead, detailRead, searchRead, view, viewKey, loadingKey;
   let timer, refresh, selectedArea, bootstrapScope, recentOperationRead;
-  let operationsCache, operationsDetailRead, operationsDisplayed;
+  let operationsCache, operationsPending, operationsDetailRead, operationsDisplayed;
+  const viewCache = new Map();
   let submittedSearch = '', searchNeedsRefresh = false;
   const resize = new ResizeObserver(entries => {
     if (!active) return;
@@ -146,12 +148,29 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     ['권역 게시본 등록 '+fmt.format(registered)+'곳','운영 근거 확인 '+fmt.format(observed)+'곳',
       '주문확정 '+fmt.format(orders)+'곳 · 배차확정 '+fmt.format(dispatch)+'곳 · 배송완료 '+fmt.format(completed)+'곳'];
 
+  function cancelOperations() {
+    operationsPending?.controller.abort();
+    operationsPending = null;
+  }
+
   async function readOperations(generation, signal) {
     const endpoint=layer(),params=operationsParameters(generation),key=JSON.stringify([endpoint,params]);
-    if (operationsCache?.key===key && operationsCache.until>Date.now()) return operationsCache.data;
-    const data=await read(endpoint,params,signal);
     signal.throwIfAborted();
-    operationsCache={key,data,until:Date.now()+50000};
+    if (operationsCache?.key===key && operationsCache.until>Date.now()) return operationsCache.data;
+    if (operationsPending?.key !== key) {
+      cancelOperations();
+      const controller = new AbortController(), pending = { key,controller };
+      pending.work = read(endpoint,params,timeout(controller.signal)).then(data => {
+        controller.signal.throwIfAborted();
+        operationsCache={key,data,until:Date.now()+50000};
+        return data;
+      }).finally(() => {
+        if (operationsPending === pending) operationsPending = null;
+      });
+      operationsPending = pending;
+    }
+    const data = await operationsPending.work;
+    signal.throwIfAborted();
     return data;
   }
 
@@ -382,7 +401,11 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     const key = [range(),layer(),params.center,level,Boolean(world), ...box.map(value => value.toFixed(5))].join(':');
     const first = !view && Boolean(world);
     const firstScope = first ? [params.days,params.center].join(':') : null;
-    if (loadingKey === key || (!force && key === viewKey) || (first && firstScope === bootstrapScope)) return;
+    if (loadingKey === key || (first && firstScope === bootstrapScope)) return;
+    if (!force && key === viewKey) {
+      if (loadingKey) cancelViewport();
+      return;
+    }
     viewportRead?.abort();
     const controller = viewportRead = new AbortController();
     loadingKey = key;
@@ -392,9 +415,11 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       const signal = timeout(controller.signal);
       const requested = { ...params, level, ...(world ? { indexed:'1' } : {}),
         box:box.map(value => value.toFixed(5)).join(',') };
-      // Refresh the protected view before using any versioned overview cache.
+      // The in-memory cache lasts only between the protected view refreshes.
+      const saved = force ? null : viewCache.get(key);
+      const cached = saved?.until > Date.now() ? saved.data : null;
       const frame = first && !geometry.hasOverview() ? await firstViewport(requested,signal) : null;
-      const data = frame?.view || await read('view',requested,signal);
+      const data = cached || frame?.view || await read('view',requested,signal);
       if (!active || viewportRead !== controller) return;
       if(dispatchDensity()&&!data.dispatchDensityAvailable) {
         find('postalLayer').value='archive';
@@ -403,23 +428,29 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       }
       const sameRelease = view?.generation === data.generation && view?.boundary === data.boundary &&
         view?.assignmentReview === data.assignmentReview;
-      if (view && !sameRelease) clearPublishedView();
       const [slices,operations] = await Promise.all([
         frame ? geometry.acceptBootstrap(data,frame.bytes,frame.duration) : geometry.read(data,signal),
-        latest() ? readOperations(data.generation,signal).catch(()=>null) : null,
+        latest() ? readOperations(data.generation,signal).catch(error => {
+          if (error.status === 401 || error.status === 403 || error.code === 'POSTAL_GENERATION_MISMATCH') throw error;
+          return null;
+        }) : null,
       ]);
       if (!active || viewportRead !== controller) return;
+      if (view && !sameRelease) clearPublishedView({ keepMap:true });
       const operationsChanged=operationsDisplayed!==operations;
       operationsDisplayed=operations;
       const same = sameRelease && view?.period.days === data.period.days && view.center === params.center && view.layer===layer();
       view = { ...data, center: params.center,layer:layer() };
       viewKey = key;
+      viewCache.delete(key);
+      viewCache.set(key, cached ? saved : { data,until:Date.now()+20000 });
+      if (viewCache.size > 6) viewCache.delete(viewCache.keys().next().value);
       host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame), ...geometry.metrics() });
       applyView(view,same);
       updateCurrentRegistration(force);
-      if (latest()) showOperations(operations);
+      if (latest() && (operationsChanged || !same)) showOperations(operations);
       showMapEvidence();
-      map.show(latest()?{...view,tones:operations?.tones??[],badges:[]}:view,slices);
+      map.show(latest()?{...view,tones:operations?.tones??noPostalItems,badges:noPostalItems}:view,slices);
       if (!same && selectedArea) areaCard({ id:selectedArea.id });
       else if (latest() && selectedArea && (operationsChanged || !find('postalOperationsDetail').firstChild)) void showOperationsArea(selectedArea);
       if (searchNeedsRefresh) {
@@ -558,15 +589,18 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     viewportRead = loadingKey = bootstrapScope = null;
   }
 
-  function clearPublishedView({ retainSelection = true } = {}) {
+  function clearPublishedView({ retainSelection = true, keepMap = false } = {}) {
     const area = retainSelection ? selectedArea?.id : null;
     [detailRead, searchRead, recentOperationRead, operationsDetailRead].forEach(request => request?.abort());
     detailRead = searchRead = recentOperationRead = operationsDetailRead = null;
     view = viewKey = null;
-    operationsCache=operationsDisplayed=null;
+    cancelOperations();
+    if (!keepMap) operationsCache = null;
+    operationsDisplayed = null;
+    viewCache.clear();
     searchNeedsRefresh = retainSelection && Boolean(submittedSearch);
     delete host.dataset.postalGeometry;
-    map?.clear();
+    if (!keepMap) map?.clear();
     areaCard(null);
     if (area) selectedArea = { id:area };
     searchResults.replaceChildren();
@@ -608,6 +642,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   find('coverageRadius').onchange = () => { clearSearch(); map?.point(null); };
   function changeScope(centerChanged) {
     viewportRead?.abort();
+    cancelOperations();
     loadingKey=bootstrapScope=null;
     clearSearch();
     detailRead?.abort();
@@ -644,6 +679,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     find('postalLegendDispatch').hidden=!dispatchDensity();
     find('postalMapSource').textContent='';
     viewportRead?.abort();
+    cancelOperations();
     loadingKey=bootstrapScope=null;
     operationsDetailRead?.abort();
     operationsDisplayed=null;
@@ -678,6 +714,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       clearInterval(refresh);
       resize.disconnect();
       cancelViewport();
+      cancelOperations();
     },
     invalidate() {
       cancelViewport();

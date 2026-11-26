@@ -222,11 +222,11 @@ export function mountDispatchV4({left,right,readOverlaps,selectRoute,selectCandi
     if(current?.candidate.postalCode===code) {clearCandidate(true);return;}
     const candidate=overview?.candidates.find(item=>item.postalCode===code);
     if(!candidate)return;
-    if(current)clearCandidate(true);
+    detailRequest?.abort();
     selectedVehicle='';
     current={candidate,state:'loading'};
-    renderCandidates(code);renderRoster();
     selectCandidate(candidate);
+    renderCandidates(code);renderRoster();
     const controller=detailRequest=new AbortController();
     try {
       const stable=overview;

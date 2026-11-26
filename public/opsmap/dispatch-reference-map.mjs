@@ -1,6 +1,6 @@
 import {compareDispatchRoutes,createDispatchReference,detailText,discoverDispatchRoutes,distance,money,simulateDispatchTransfer} from './dispatch-reference.mjs?v=20261126-wms-official-round';
 import {summarizeDispatchPeriod} from './dispatch-reference-period.mjs?v=20261124-period-proof';
-import {dispatchOverlapVehicles,dispatchVehicleColor,mountDispatchV4} from './dispatch-reference-v4.mjs?v=20261126-roster-rows';
+import {dispatchOverlapVehicles,dispatchVehicleColor,mountDispatchV4} from './dispatch-reference-v4.mjs?v=20261127-postal-focus';
 
 const meters = km => Number.isFinite(km) ? new Intl.NumberFormat('ko-KR').format(Math.round(km*1000))+'m' : '미확인';
 const sourceClock=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',
@@ -93,7 +93,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   };
   const observer=new ResizeObserver(queueMarkers);
   let active=false, model, routes, comparisons, selection, selectedPostcodes=[], markerRows=[], request, outlineRequest, frame;
-  let deliveryRows=[];
+  let deliveryRows=[], boardPostal=null, lastBoardFit=null;
   let period, analysis, chosenArea, choicesPostcodes=[];
   let dayVehicles=[], periodVehicles=[], focusedAnchor=null, discoveries=[];
   let repeatedCustomers=new Map();
@@ -247,7 +247,29 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     }
     queueMarkers();
   }
-  const fitRoutes=()=>fit(markerRows.map(row=>row.point));
+  function fitBoardPostal() {
+    const current=map();
+    if (!current || !sdk() || !boardPostal) return;
+    const outline=polygonBounds.get(boardPostal);
+    let bounds=Array.isArray(outline) && outline.length===4 && outline.every(Number.isFinite) ? outline : null;
+    // A verified boundary sets the extent. Before it arrives, use only stores in this postcode.
+    if (!bounds) {
+      for (const row of markerRows) {
+        if (!row.point || (row.dispatchOverlap!=='inside' && row.dispatchOverlap!=='registered')) continue;
+        const {lat,lng}=row.point;
+        bounds=bounds ? [Math.min(bounds[0],lng),Math.min(bounds[1],lat),
+          Math.max(bounds[2],lng),Math.max(bounds[3],lat)] : [lng,lat,lng,lat];
+      }
+    }
+    if (!bounds) return;
+    const key=bounds.join('|');
+    if (lastBoardFit?.map===current && lastBoardFit.key===key) return;
+    lastBoardFit={map:current,key};
+    const [west,south,east,north]=bounds;
+    fit([{lat:south,lng:west},{lat:north,lng:east}]);
+  }
+
+  const fitRoutes=()=>boardPostal?fitBoardPostal():fit(markerRows.map(row=>row.point));
 
   function addOutlines() {
     if (!isOpen() || !map() || !sdk() || outlineRequest || !selectedPostcodes.length) return;
@@ -267,7 +289,8 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
           polygon.setMap(map());
           polygons.push({code,polygon});
           polygonBounds.set(code,boundary.box);
-          if (period&&postcode.value===code&&!markerRows.some(row=>row.postalCode===code&&row.point)) {
+          if (boardPostal===code) fitBoardPostal();
+          else if (period&&postcode.value===code&&!markerRows.some(row=>row.postalCode===code&&row.point)) {
             const [west,south,east,north]=boundary.box;
             fit([{lat:south,lng:west},{lat:north,lng:east}]);
           }
@@ -289,7 +312,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     sdk().event.addListener(markerMap,'idle',queueMarkers);
     queueMarkers();
     addOutlines();
-    if (markerRows.length) fit(markerRows.map(row=>row.point));
+    fitRoutes();
   }
 
   function selectStop(row,{focus=false}={}) {
@@ -698,18 +721,24 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   function applyBoardOverlap(candidate) {
     if(!isOpen()||!boardMode())return;
     if(!candidate) {
+      boardPostal=lastBoardFit=null;
       mapLegend.hidden=true;
       if(model)chooseBoardRoute('');
       else {markerRows=[];clearMarkers();clearOutlines();clearDispatchSelection();renderDetail();}
       return;
     }
-    populateDayVehicles('','');
+    primary.value=secondary.value=compareSelect.value='';
     routes={primary:null,secondary:null};
     comparisons=null;
     clearDispatchSelection();
     clearMarkers();
-    clearOutlines();
     const code=candidate.postalCode;
+    const changed=boardPostal!==code;
+    if(changed){
+      clearOutlines();
+      boardPostal=code;
+      lastBoardFit=null;
+    }
     const storesWithEvidence=candidate.stores??[];
     const colors=new Map(candidate.routes.map(({vehicle})=>[vehicle,dispatchVehicleColor(vehicle)]));
     const members=new Map(storesWithEvidence.map(store=>[store.customerCode,store]));
@@ -744,12 +773,10 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
     selectedPostcodes=[code];
     choicesPostcodes=[{zip:code,overlap:true}];
     populatePostcodes(code);
-    const points=markerRows.map(row=>row.point);
-    board.setVehicle('');
+    fitBoardPostal();
+    if(changed)addOutlines();
     renderDetail();
     renderFleet();
-    if(candidate.stores)addOutlines();
-    fit(points);
     queueMarkers();
   }
 
@@ -762,6 +789,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
 
   function updateRoutes({focusMatch=false}={}) {
     if (!model) return;
+    boardPostal=lastBoardFit=null;
     if(mapLegend)mapLegend.hidden=true;
     const first=model.vehicles.get(primary.value), second=model.vehicles.get(secondary.value);
     const pair=first&&second&&first!==second;
@@ -825,6 +853,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
 
   function showPostcode() {
     const code=postcode.value;
+    if (boardPostal) { fitBoardPostal();return; }
     if (period) {
       chosenArea=code||null;
       if (code&&!selectedPostcodes.includes(code)) {
@@ -876,6 +905,7 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
   function reset() {
     request?.abort();
     request=null;
+    boardPostal=lastBoardFit=null;
     model=routes=comparisons=period=analysis=chosenArea=null;
     board?.setDay(null);
     if(mapLegend)mapLegend.hidden=true;
@@ -932,9 +962,9 @@ export function mountDispatchReference({workspace, sidebar, bridge, readDay, rea
         route.wmsConfirmed&&route.vehicle!=='미배정':route.stops.length).sort((a,b)=>a.vehicle.localeCompare(b.vehicle,'ko',{numeric:true}));
       populateDayVehicles(...(screenReview?[prior[0],'']:prior));
       choices.hidden=!boardMode()&&!dayVehicles.length;
-      updateRoutes();
       const activeCandidate=board?.currentCandidate();
       if(activeCandidate)applyBoardOverlap(activeCandidate);
+      else updateRoutes();
     } catch {
       if (!controller.signal.aborted) status.textContent='배송 자료를 불러오지 못했습니다. 다시 조회하세요.';
     }

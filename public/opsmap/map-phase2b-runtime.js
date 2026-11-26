@@ -1398,6 +1398,22 @@
     const scope=saved.scopes.get(center);
     return scope?{saved,scope,vehicle,key:center+'|'+vehicle}:null;
   }
+  function dailyArrivalContext() {
+    if (!isDailyDataReady() || !dailyMeta?.roster || hasDatedDriverFilter()) return null;
+    const route = currentRosterRoute();
+    if (route?.scope.center !== 'osan' || !operationStops.length) return null;
+    return {
+      date: state.selectedDate,
+      vehicle: route.vehicle,
+      complete: route.scope.sourceComplete === true && route.scope.scopeComplete === true,
+      count: operationStops.length,
+      visits: operationStops.length > 30 ? [] : operationStops.map(row => ({
+        id: runVisitId(row), name: row.customerName || row.customerCode, order: row.order,
+        lat: row.coordinateStatus === 'CONFLICT' ? null : row.lat,
+        lng: row.coordinateStatus === 'CONFLICT' ? null : row.lng,
+      })),
+    };
+  }
   function routeAuditEnabled() {
     return stageAddressBatchEnabled() && new URLSearchParams(location.search).get('opsmapQa') === 'route';
   }
@@ -3336,6 +3352,7 @@
     });
 
     $$('[data-run-filter]').forEach((button) => { button.classList.toggle("active", button.dataset.runFilter === runFilter); button.setAttribute("aria-pressed", String(button.dataset.runFilter === runFilter)); });
+    window.dispatchEvent(new Event('map-daily-arrival-updated'));
   }
 
   function activateSheet(tab = sheetTab) {
@@ -6095,6 +6112,7 @@
   // Local design shell uses the same controllers; it cannot authorize API calls.
   window.MapUiLocalBridge={
     state,
+    dailyArrivalContext,
     readDiagnostics,
     searchSnapshotGeneration:()=>snapshotMeta?.sourceGeneration??null,
     findStoredSearchRows,

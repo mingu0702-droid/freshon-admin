@@ -242,6 +242,31 @@ test('a superseded viewport shares immutable tiles until the map is closed', asy
   assert.equal(reader.metrics().tiles,0);
 });
 
+test('overlapping postal viewports fetch and decode each immutable tile only once', async t => {
+  const files = new Map(['detail-1','detail-2','detail-3'].map((id,index) => {
+    const header = Buffer.alloc(8);
+    header.write('PCG1');
+    header.writeInt32LE(1,4);
+    return [id,Buffer.concat([header,encodePostalZone({...zone,id:1234+index},[outer.slice(0,-1)])])];
+  }));
+  const requests = [], resolve = [];
+  t.mock.method(globalThis,'fetch',async url => new Promise(done => {
+    const ids = new URL(url,'http://fixture').searchParams.get('ids').split(',');
+    requests.push(ids);
+    resolve.push(() => done(new Response(Buffer.concat(ids.map(id => files.get(id))))));
+  }));
+  const reader = createPostalGeometryReader('/postal');
+  const signal = new AbortController().signal;
+  const view = (...ids) => ({boundary:'a'.repeat(64),tiles:ids.map(id => [id,files.get(id).length])});
+  const first = reader.read(view('detail-1','detail-2'),signal);
+  const second = reader.read(view('detail-3','detail-2'),signal);
+  assert.deepEqual(requests,[['detail-1','detail-2'],['detail-3']]);
+  resolve[1]();
+  resolve[0]();
+  assert.deepEqual((await first).map(zones => zones[0].id),[1234,1235]);
+  assert.deepEqual((await second).map(zones => zones[0].id),[1236,1235]);
+});
+
 test('postal history rejects customer identifiers in the request URL', async t => {
   const app = express();
   mountPostalCoverage({ app, postal:{}, appRoot:process.cwd(), requireStaff(req, res, next) {

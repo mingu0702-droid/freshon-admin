@@ -1,0 +1,33 @@
+#dailyRouteArrival {
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px solid var(--line, #dde4ec);
+  border-radius: 8px;
+}
+#dailyRouteArrival > summary { cursor: pointer; font-weight: 700; }
+#dailyRouteArrival .arrival-inputs, #dailyRouteArrival .arrival-stop-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 5px 0;
+}
+#dailyRouteArrival input[type="number"] { width: 4.6em; }
+#dailyRouteArrival button { min-height: 28px; }
+#dailyRouteArrival [data-arrival-confirm-label] { font-size: 12px; }
+#dailyRouteArrival [data-arrival-status] { margin: 4px 0; }
+#dailyRouteArrival [data-arrival-status]:empty { display: none; }
+#dailyRouteArrival ol {
+  max-height: min(38vh, 350px);
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+#dailyRouteArrival li { padding: 6px 0; border-top: 1px solid var(--line, #dde4ec); overflow-wrap: anywhere; }
+#dailyRouteArrival dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 6px 0; }
+#dailyRouteArrival dt { font-size: 11px; color: var(--muted, #6b7788); }
+#dailyRouteArrival dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+#dailyRouteArrival output { font-size: 12px; font-variant-numeric: tabular-nums; }
+#dailyRouteArrival[hidden], #dailyRouteArrival [hidden] { display: none; }

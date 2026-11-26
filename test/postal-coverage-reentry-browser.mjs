@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
+import { encodePostalZone, postalTilesLevel } from '../public/opsmap/postal-geometry.mjs';
 
 const sdk = await readFile(new URL('./fixtures/shadow-coverage-kakao.js', import.meta.url), 'utf8');
 const origin = 'http://127.0.0.1:44711';
@@ -15,6 +16,12 @@ let observedDays = 76;
 let searchReads = 0;
 const period = { days:90, start:'2026-08-10', end:'2026-11-07' };
 const location = [37.497, 127.029];
+const rings = [[[127.027,37.495],[127.031,37.495],[127.031,37.499],[127.027,37.499]]];
+const header = Buffer.alloc(8);
+header.write('PCG1');
+header.writeInt32LE(1,4);
+const geometry = Buffer.concat([header,encodePostalZone({id:postalCode,bbox:[127.027,37.495,127.031,37.499]},rings)]);
+let geometryReads = 0;
 const browser = await chromium.launch({ channel:'chrome', headless:true });
 
 try {
@@ -31,6 +38,10 @@ try {
         await readFile(new URL('../public/opsmap' + url.pathname, import.meta.url)) });
     }
     const endpoint = url.pathname.split('/').pop();
+    if (endpoint === 'geometry') {
+      geometryReads++;
+      return route.fulfill({body:geometry,contentType:'application/octet-stream'});
+    }
     if (endpoint === 'recent-operations') {
       return route.fulfill({json:{
         ok:true,days:90,startDate:'2026-08-26',endDate:'2026-11-23',publishedThrough:'2026-11-23',
@@ -42,7 +53,9 @@ try {
       viewportReads.push([url.searchParams.get('level'),url.searchParams.get('box')]);
       data = {
         period, generation, stale:true, completeness:{ observed:observedDays, missing:[], sourceMissing:[], centerObserved:{}, unverified:[] },
-        summary:{ recorded:observedDays ? 1 : 0 }, source:{ label:'fixture', url:'#' }, candidates:[], tiles:[], tones:[], badges:[],
+        summary:{ recorded:observedDays ? 1 : 0 }, source:{ label:'fixture', url:'#' }, candidates:[],
+        tier:postalTilesLevel(url.searchParams.get('box').split(',').map(Number)), boundary:'fixture-boundary',
+        tiles:[['fixture-tile',geometry.length]], tones:[[6241,'LOW']], badges:[],
         operationsAvailable:true,dispatchDensityAvailable:true,
       };
     } else if(endpoint === 'operations') {
@@ -102,6 +115,23 @@ try {
   await page.getByRole('button',{name:'지도 확대'}).click();
   await zoomed;
   const viewport = viewportReads.at(-1);
+  const drawAt = level => page.waitForFunction(expected =>
+    JSON.parse(document.querySelector('#coverageMap').dataset.postalDraw || '{}').level === expected,level);
+  await drawAt(2);
+  await page.getByRole('button',{name:'지도 축소'}).click();
+  await drawAt(3);
+  const warmedReads = viewportReads.length;
+  await page.getByRole('button',{name:'지도 확대'}).click();
+  await drawAt(2);
+  await page.getByRole('button',{name:'지도 축소'}).click();
+  await drawAt(3);
+  await page.getByRole('button',{name:'지도 확대'}).click();
+  await drawAt(2);
+  const drawn = await page.locator('#coverageMap').getAttribute('data-postal-draw');
+  assert.ok(JSON.parse(drawn).cached,'returning to the same view reuses its Canvas raster');
+  assert.equal(JSON.parse(drawn).shown,1);
+  assert.equal(viewportReads.length,warmedReads,'both previously verified viewports remain in memory');
+  assert.equal(geometryReads,1,'the same immutable tile is reused across viewports');
   const firstRosterCount = rosterReads.length;
 
   await page.evaluate(() => window.coverageFixture.close());

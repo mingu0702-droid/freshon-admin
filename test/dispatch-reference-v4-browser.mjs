@@ -23,6 +23,14 @@ const extraZones=Array.from({length:80},(_,index)=>({postalCode:String(20000+ind
   stores:[member('211','S'+(2000+index*2),index),member('229','S'+(2001+index*2),index+1)]}));
 const zones=new Map([other,zone,...extraZones].map(candidate=>[candidate.postalCode,candidate]));
 const candidates=[...zones.values()].map(({stores,...summary})=>summary);
+const outlineBoxes=new Map([['01234',[127.0499,37.4799,127.05115,37.48555]],
+  ['01235',[127.05034,37.4816,127.0512,37.4862]]]);
+function outline(id) {
+  const box=outlineBoxes.get(id);
+  if(!box)return null;
+  const [west,south,east,north]=box;
+  return {id,box,rings:[[[west,south],[east,south],[east,north],[west,north],[west,south]]]};
+}
 const overview=dispatchOverlapOverview({...meta,candidates});
 assert.equal(overview.candidates[0].postalCode,'01234');
 assert.equal(dispatchOverlapDetail({...meta,candidate:zone},overview,overview.candidates[0]).stores.filter(row=>row.point).length,3);
@@ -76,7 +84,10 @@ const html=[
   '<script src="/fixture.js"></script><script src="/map-view-policy.js"></script><script src="/phase2b-ui-helpers.js"></script><script>',
   'window.MapStaffEntry={session:()=>true,registerPurge:fn=>window.purge=fn};',
   'const {Map:KakaoMap,LatLng}=kakao.maps;const map=new KakaoMap(document.querySelector("#map"),{center:new LatLng(37.48,127.05),level:4});',
-  'window.originalMap=map;window.MapUiLocalBridge={state:{map},isStagePreview:()=>true,dispatchReferencePin:(row,{color,label,title,pick})=>{',
+  'window.originalMap=map;window.cameraFits=[];const originalSetBounds=map.setBounds.bind(map);',
+  'map.setBounds=(bounds,...padding)=>{const sw=bounds.getSouthWest(),ne=bounds.getNorthEast();',
+  'window.cameraFits.push([sw.getLng(),sw.getLat(),ne.getLng(),ne.getLat()]);originalSetBounds(bounds,...padding);};',
+  'window.MapUiLocalBridge={state:{map},isStagePreview:()=>true,dispatchReferencePin:(row,{color,label,title,pick})=>{',
   'const button=document.createElement("button"),glyph=document.createElement("span");button.className="dispatch-map-pin";button.title=title;button.onclick=pick;',
   'glyph.className="pin";glyph.style.setProperty("--pin",color);glyph.textContent=label;button.append(glyph);return button;},',
   'dispatchReferenceFixedVehicle:()=>null,selectDispatchReferenceStore:()=>false,searchSnapshotGeneration:()=>null};',
@@ -87,7 +98,7 @@ try{
   const page=await browser.newPage({viewport:{width:1366,height:768}});
   page.setDefaultTimeout(10000);
   const errors=[],requests=[];
-  let overlapState='VERIFIED',detailStatus=0,dayGate,detailGate;
+  let overlapState='VERIFIED',detailStatus=0,dayGate,detailGate,outlineGate;
   page.on('pageerror',error=>errors.push(error.message));
   await page.clock.setFixedTime(new Date('2026-11-28T08:00:00+09:00'));
   await page.route('**/*',async interceptor=>{
@@ -111,6 +122,11 @@ try{
           return interceptor.fulfill({json:{...meta,candidate:zones.get(zip)}});
         }
         return interceptor.fulfill({json:{...meta,candidates:overlapState==='EMPTY'?[]:candidates}});
+      }
+      if(url.pathname.endsWith('postal/outline')){
+        const zip=url.searchParams.get('id');
+        if(zip==='01234'&&outlineGate)await outlineGate;
+        return interceptor.fulfill({json:{data:outline(zip)}});
       }
       return interceptor.fulfill({json:{data:null}});
     }
@@ -170,15 +186,30 @@ try{
   assert.equal(await overlap.locator('[data-dispatch-v4-postal]').first().getAttribute('data-dispatch-v4-postal'),'01234');
   assert.equal(await page.evaluate(()=>MapUiLocalBridge.state.map===window.originalMap),true);
   const candidatesShown=['201호','228호','315호'];
-  let releaseDetail;
+  const cameraFits=()=>page.evaluate(()=>window.cameraFits.slice());
+  const resetCameraFits=()=>page.evaluate(()=>window.cameraFits.length=0);
+  const latestFit=async()=> (await cameraFits()).at(-1);
+  const waitForBoundaryFit=zip=>page.waitForFunction(box=>
+    window.cameraFits.at(-1)?.every((value,i)=>value===box[i]),outlineBoxes.get(zip));
+  let releaseDetail,releaseOutline;
   detailGate=new Promise(resolve=>{releaseDetail=resolve;});
+  outlineGate=new Promise(resolve=>{releaseOutline=resolve;});
+  await resetCameraFits();
+  const firstOutlineRequest=page.waitForRequest(request=>request.url().endsWith('postal/outline?id=01234'));
   try{
     await postal('01234').click();
     await selection.getByText('지도 표시 위치 확인 중',{exact:true}).waitFor();
     assert.deepEqual(await selection.locator('.dispatch-v4-vehicle').allTextContents(),candidatesShown);
     await page.locator('[data-dispatch-customer="S1000"]').waitFor();
     assert.equal(await page.locator('[data-dispatch-customer="S9010"]').count(),0);
-  }finally{releaseDetail();detailGate=null;}
+    const bounds=await latestFit();
+    assert.deepEqual(bounds,[point(0).lng,point(0).lat,point(27).lng,point(27).lat],
+      'candidate click immediately fits only located deliveries within the selected postcode');
+    await firstOutlineRequest;
+    releaseOutline();
+    await waitForBoundaryFit('01234');
+    assert.equal(await page.locator('#map svg path').count(),1);
+  }finally{releaseDetail();releaseOutline();detailGate=outlineGate=null;}
   await overlap.getByText('당일 배차 없음',{exact:true}).waitFor();
   assert.equal(await roster.getByRole('button').count(),110);
   assert.deepEqual(await roster.locator('[aria-pressed=true]').evaluateAll(rows=>rows.map(row=>row.dataset.dispatchV4Route)),['201','228']);
@@ -186,6 +217,8 @@ try{
   assert.match(await overlap.locator('li').filter({hasText:'201호'}).innerText(),/등록 2곳\s+2착/);
   await page.locator('[data-dispatch-customer="S9010"]').waitFor();
   assert.equal(await page.locator('[data-dispatch-customer="S9000"]').count(),0);
+  assert.deepEqual(await latestFit(),outlineBoxes.get('01234'),'late member details preserve the postcode boundary scale');
+  assert.equal(requests.filter(([endpoint,query])=>endpoint.endsWith('postal/outline')&&query==='?id=01234').length,1);
   assert.equal(await page.locator('[data-dispatch-customer="S1000"]').getAttribute('data-dispatch-overlap'),'inside');
   assert.equal(await page.locator('[data-dispatch-customer="S9500"]').getAttribute('data-dispatch-overlap'),'outside');
   await page.getByRole('complementary',{name:'배차 지도 범례'}).getByText('해당 우편번호 배송').waitFor();
@@ -201,12 +234,30 @@ try{
   }
   await page.locator('[data-dispatch-customer="S9010"]').click();
   assert.match(await page.locator('.dispatch-detail-body').innerText(),/현재 기준호차 315호/);
+  await resetCameraFits();
   await postal('01235').click();
+  await waitForBoundaryFit('01235');
+  assert((await cameraFits()).every(([,south,,north])=>south>37.48&&north<37.487),
+    'switching candidates never fits the full fleet in between');
   await overlap.getByText(/등록 1곳/).first().waitFor();
   assert.equal(await roster.getByRole('button').count(),110);
   await page.waitForFunction(()=>!document.querySelector('[data-dispatch-customer="S9010"]'));
   await selection.getByRole('button',{name:'선택 해제'}).click();
   assert.equal(await roster.locator('[aria-pressed=true]').count(),0);
+  const waitingOutlines=requests.filter(([endpoint,query])=>endpoint.endsWith('postal/outline')&&query==='?id=01234').length;
+  const pendingOutline=page.waitForRequest(request=>request.url().endsWith('postal/outline?id=01234'));
+  let releaseDelayedOutline;
+  outlineGate=new Promise(resolve=>{releaseDelayedOutline=resolve;});
+  await postal('01234').click();
+  await pendingOutline;
+  await postal('01235').click();
+  await waitForBoundaryFit('01235');
+  releaseDelayedOutline();outlineGate=null;
+  assert.equal(requests.filter(([endpoint,query])=>endpoint.endsWith('postal/outline')&&query==='?id=01234').length,waitingOutlines+1);
+  await page.waitForFunction(()=>document.querySelector('#map svg').children.length===1);
+  assert.deepEqual(await latestFit(),outlineBoxes.get('01235'),'out-of-order boundary cannot move the current postcode');
+  assert.equal(await postal('01235').getAttribute('aria-expanded'),'true');
+  await selection.getByRole('button',{name:'선택 해제'}).click();
   await page.getByRole('searchbox',{name:'호차 검색'}).fill('228');
   assert.equal(await roster.getByRole('button').count(),1);
   await page.getByRole('searchbox',{name:'호차 검색'}).fill('');
@@ -267,8 +318,11 @@ try{
   await postal('01234').click();
   await page.locator('[data-dispatch-customer="S9010"]').waitFor();
   await overlap.getByText('WMS 확인 필요',{exact:true}).first().waitFor();
+  await waitForBoundaryFit('01234');
+  await resetCameraFits();
   releaseDay();
   await overlap.getByText('당일 배차 없음',{exact:true}).waitFor();
+  assert.deepEqual(await cameraFits(),[],'late WMS results preserve the focused boundary without a fleet fit');
   assert.equal(await postal('01234').getAttribute('aria-expanded'),'true');
   assert.equal(await roster.getByRole('button').count(),110);
   await page.setViewportSize({width:390,height:844});
@@ -276,5 +330,5 @@ try{
   assert.equal(await page.getByRole('button',{name:'매장 지도'}).isVisible(),true);
   assert.equal(await overlap.isVisible(),false);
   assert.deepEqual(errors,[]);
-  console.log('PASS: two dates, 110 routes, overlap with three routes, no dispatch, exact coordinates, preserved transfer, verified empty, unavailable and stale data');
+  console.log('PASS: selected postcode fits immediately, late responses preserve focus, two dates, 110 routes, preserved transfer, verified empty, unavailable and stale data');
 }finally{await browser.close();}
