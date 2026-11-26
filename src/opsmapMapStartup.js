@@ -10,7 +10,7 @@ const maxClearBytes = 18 * 1024 * 1024;
 const source = 'STAGE_FRESHON_NATIONAL_REGISTRY';
 const basis = 'FIXED_DISPATCH_PRIMARY';
 
-export function createMapStartupReader({readSnapshot, readRegistry, readFixed, snapshotMeta, projectSnapshot}) {
+export function createMapStartupReader({readSnapshot, readRegistry, readFixed, snapshotMeta, projectSnapshot, prepareAddresses}) {
   let saved, pending;
   async function build() {
     const [snapshot, national] = await Promise.all([readSnapshot(), readRegistry()]);
@@ -72,6 +72,10 @@ export function createMapStartupReader({readSnapshot, readRegistry, readFixed, s
     if (body.length > maxClearBytes) return null;
     const compressed = await zip(body,{level:4});
     saved = {snapshot,version:stamp,fixedTransfer:fixed.transferVersion,meta,body,compressed};
+    if (prepareAddresses) setImmediate(async()=>{
+      try { await prepareAddresses(snapshot,national); }
+      catch { /* Foreground lookup can still use the verified source rows. */ }
+    });
     return saved;
   }
   return function read() {

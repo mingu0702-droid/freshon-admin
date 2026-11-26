@@ -24,7 +24,7 @@ import {createStageStaffSessionStore} from './staffSessionStore.js';
 import {createProductionSnapshotStore,materializeSnapshot} from './productionSnapshotStore.js';
 import {STAGE_ORIGIN,STAGE_SERVICE,STAGE_BUNDLE_ROUTE,STAGE_ADDRESS_BATCH_ROUTE,createStageAbValidation,mountStageAbValidation} from './stageAbValidation.js';
 import {phase2bSnapshotMeta} from './phase2bOperations.js';
-import {mountPrivateCustomerSearch} from './privateCustomerSearch.js';
+import {mountPrivateCustomerSearch,preparePreservedAddressIndex,prepareStageAddressMasterIndex} from './privateCustomerSearch.js';
 import {createStageStaffRegistryAsset,mountStageStaffRegistry} from './stageStaffRegistryAsset.js';
 import {createStageNationalRegistryReader,createStageNationalRegistryStorage,stageNationalRegistryScope} from './stageNationalRegistry.js';
 import {createRecentOperationsReader,createStageRecentOperationsSeed,createStageRecentOperationsStore,
@@ -573,6 +573,9 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     restoreMs:exactStageService?()=>baselineRestoreMs:undefined,read:createMapStartupReader({
     readSnapshot,readRegistry:()=>nationalRegistry?.read(),
     readFixed:knownVersion=>fixed.get(null,{knownVersion}),projectSnapshot,
+    prepareAddresses:primary?async(saved,registry)=>{
+      await Promise.all([preparePreservedAddressIndex(saved),prepareStageAddressMasterIndex(registry)]);
+    }:undefined,
     snapshotMeta:saved=>({...phase2bSnapshotMeta(saved),sourceGeneration:saved.sourceGeneration,
       sourceRunId:saved.sourceRunId||null,osanDeliveryThrough:saved.osanDeliveryThrough,recovery:'READY'})
   })});

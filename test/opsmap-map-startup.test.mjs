@@ -21,8 +21,8 @@ const fixedMeta=total=>({basis:'FIXED_DISPATCH_PRIMARY',version:fixedVersion,che
 const fixedRow=index=>({customerCode:customerCode(index),baseVehicle:'101',baseVehicleGroup:'osan',
   baseVehicleState:'VERIFIED_MASTER',baseVehicleCheckedAt:checkedAt,baseVehicleVersion:fixedVersion,
   baseVehicleStale:false,baseVehicleSource:'FIXED_DISPATCH_PRIMARY'});
-function reader({snapshot,registry,fixed}) {
-  return createMapStartupReader({readSnapshot:snapshot,readRegistry:registry,readFixed:fixed,
+function reader({snapshot,registry,fixed,prepareAddresses}) {
+  return createMapStartupReader({readSnapshot:snapshot,readRegistry:registry,readFixed:fixed,prepareAddresses,
     snapshotMeta:map=>({sourceGeneration:map.sourceGeneration,latestDate:map.latestDate}),projectSnapshot:map=>map.rows});
 }
 const base={sourceGeneration:sha('map'),latestDate:'2026-11-07',rows:[{customerCode:customerCode(0),lat:37.5,lng:127}]};
@@ -111,6 +111,29 @@ test('a missing current registry or unverified fixed master cannot serve the old
   const noMaster=reader({snapshot:()=>base,registry:()=>({ref:{version,count:1,checkedAt},rows:[registryRow(0)]}),
     fixed:()=>({ok:false,meta:{basis:'UNAVAILABLE'}})});
   assert.equal(await noMaster(),null);
+});
+
+test('already verified startup rows can prepare address lookups without delaying the map',async()=>{
+  const registry={ref:{version,count:1,checkedAt},rows:[registryRow(0)]};
+  const calls=[];
+  let finish;
+  const preparing=new Promise(resolve=>{finish=resolve;});
+  const fixedTransfer=sha('fixed-transfer');
+  const read=reader({snapshot:()=>base,registry:()=>registry,prepareAddresses:(...args)=>{
+    calls.push(args);
+    return preparing;
+  },fixed:known=>known===fixedTransfer
+    ?{ok:true,notModified:true,meta:fixedMeta(1),transferVersion:fixedTransfer}
+    :{ok:true,meta:fixedMeta(1),data:[fixedRow(0)],transferVersion:fixedTransfer}});
+  try {
+    const first=await read();
+    assert.equal(calls.length,0);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(calls,[[base,registry]]);
+    assert.equal(await read(),first);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(calls.length,1);
+  } finally { finish(); }
 });
 
 test('the browser associates a bulk registry atomically, refuses a partial bundle and revokes pending work',async()=>{
