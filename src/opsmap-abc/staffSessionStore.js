@@ -11,9 +11,20 @@ export function createProductionStaffSessionStore({env=process.env,fetchImpl=fet
   const fail=()=>{throw Error('STAFF_SESSION_STORE_UNAVAILABLE');};
   const mac=value=>crypto.createHmac('sha256',env.MAP_STAFF_SESSION_SECRET).update('staff-session-v1:'+JSON.stringify(value)).digest('hex');
   async function request(url,options={}){try{return await fetchImpl(url,{...options,headers,redirect:'error',signal:AbortSignal.timeout(10000)});}catch{fail();}}
-  async function read(){
+  async function requirePrivateWrite(){
     const info=await request(root);if(!info.ok)fail();const repo=await info.json();if(repo.private!==true||repo.permissions?.push!==true)fail();
-    const r=await request(file+'?ref='+encodeURIComponent(branch));if(r.status===404)return {sha:null,state:{schema:1,sessions:{}}};if(!r.ok)fail();
+  }
+  async function read({parallelValidation=false}={}){
+    const readFile=()=>request(file+'?ref='+encodeURIComponent(branch));
+    let r;
+    if(parallelValidation){
+      // Address lookup keeps both live checks on every read, including after Kakao.
+      // A signed session is usable only after the private repo proof also passes.
+      [,r]=await Promise.all([requirePrivateWrite(),readFile()]);
+    }else{
+      await requirePrivateWrite();r=await readFile();
+    }
+    if(r.status===404)return {sha:null,state:{schema:1,sessions:{}}};if(!r.ok)fail();
     const data=await r.json();if(data.encoding!=='base64'||! /^[a-f0-9]{40}$/.test(data.sha||'')||data.size>512000)fail();
     let state;try{const bytes=Buffer.from(data.content,'base64');if(bytes.length>512000)fail();state=JSON.parse(bytes.toString('utf8'));}catch{fail();}
     if(state.schema!==1||!state.sessions||Array.isArray(state.sessions)||Object.keys(state.sessions).length>1000)fail();
@@ -25,7 +36,7 @@ export function createProductionStaffSessionStore({env=process.env,fetchImpl=fet
     return /^[a-f0-9]{64}$/.test(signature||'')&&crypto.timingSafeEqual(Buffer.from(signature),Buffer.from(expected))&&Number.isFinite(entry.expiresAt)&&Number.isFinite(entry.idleExpiresAt)&&entry.idleExpiresAt<=entry.expiresAt;
   }
   let pendingRead=null,writeTail=Promise.resolve();
-  async function sharedRead(){if(!pendingRead){const p=read();pendingRead=p;try{return await p;}finally{if(pendingRead===p)pendingRead=null;}}return pendingRead;}
+  async function sharedRead(options){if(!pendingRead){const p=read(options);pendingRead=p;try{return await p;}finally{if(pendingRead===p)pendingRead=null;}}return pendingRead;}
   async function write(key,entry,requireExisting=false){
     const work=writeTail.catch(()=>{}).then(async()=>{
       pendingRead=null;const {sha,state}=await read();
@@ -38,5 +49,5 @@ export function createProductionStaffSessionStore({env=process.env,fetchImpl=fet
       return true;
     });writeTail=work;return work;
   }
-  return {kind:'PRIVATE_GITHUB_CAS',async get(key,fingerprint){await writeTail.catch(()=>{});const {state}=await sharedRead(),entry=state.sessions[key];if(state.credentialFingerprint!==fingerprint||!valid(key,entry)||entry.fingerprint!==fingerprint)return null;return {expiresAt:entry.expiresAt,idleExpiresAt:entry.idleExpiresAt};},set:(key,session,fingerprint)=>write(key,{...session,fingerprint}),touch:(key,session,fingerprint)=>write(key,{...session,fingerprint},true),delete:key=>write(key,null)};
+  return {kind:'PRIVATE_GITHUB_CAS',async get(key,fingerprint,options){await writeTail.catch(()=>{});const {state}=await sharedRead(options),entry=state.sessions[key];if(state.credentialFingerprint!==fingerprint||!valid(key,entry)||entry.fingerprint!==fingerprint)return null;return {expiresAt:entry.expiresAt,idleExpiresAt:entry.idleExpiresAt};},set:(key,session,fingerprint)=>write(key,{...session,fingerprint}),touch:(key,session,fingerprint)=>write(key,{...session,fingerprint},true),delete:key=>write(key,null)};
 }

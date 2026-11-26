@@ -134,7 +134,13 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
   async function readSession(req,touch=false){
     const config=configuration(),key=sessionKey(req,config),revision=fingerprint;
     if(!config.ready||!key||revoked.has(key)||req.get('origin')&&req.get('origin')!==config.origin||req.get('sec-fetch-site')&&!['same-origin','none'].includes(req.get('sec-fetch-site')))return null;
-    if(sessionStore){const saved=await sessionStore.get(key,revision);if(revoked.has(key)||configuration().secret!==config.secret||fingerprint!==revision)return null;if(saved)sessions.set(key,saved);else sessions.delete(key);}
+    if(sessionStore){
+      const parallelValidation=req.method==='POST'&&['/api/map-phase2b/private/stage-address-evidence',
+        '/api/map-phase2b/private/address-lookup'].includes(req.path);
+      const saved=await sessionStore.get(key,revision,{parallelValidation});
+      if(revoked.has(key)||configuration().secret!==config.secret||fingerprint!==revision)return null;
+      if(saved)sessions.set(key,saved);else sessions.delete(key);
+    }
     const current=readMemorySession(req);if(!current)return null;
     if(touch){const updated={expiresAt:current.expiresAt,idleExpiresAt:Math.min(current.expiresAt,now()+policy.idleMs)};if(revoked.has(key))return null;if(sessionStore&&!(await sessionStore.touch(key,updated,revision)))return null;if(revoked.has(key)||fingerprint!==revision)return null;sessions.set(key,updated);return {key,...updated};}
     return current;
