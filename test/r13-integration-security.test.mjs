@@ -1,6 +1,74 @@
 import test from 'node:test';import assert from 'node:assert/strict';import crypto from 'node:crypto';import fs from 'node:fs';import vm from 'node:vm';
-import {customerRegistryPage} from '../src/privateCustomerRegistry.js';import {createCustomerRegistryStorage} from '../src/customerRegistryStorage.js';
+import {customerRegistryPage,mountPrivateCustomerRegistry} from '../src/privateCustomerRegistry.js';import {createCustomerRegistryStorage} from '../src/customerRegistryStorage.js';
 const sha=v=>crypto.createHash('sha256').update(v).digest('hex'),secret='synthetic-cursor-secret-only',row=(i=1)=>({customerCode:'S99'+String(i).padStart(4,'0'),customerName:'합성 매장',basicAddress:'합성시 합성로 '+i,addressHash:sha('합성시 합성로 '+i),sourceUpdatedAt:'2026-11-04T00:00:00.000Z',lifecycle:'ACTIVE'}),snapshot={contract:'customer-registry-v1',version:'a'.repeat(64),sourceVersion:'b'.repeat(64),complete:true,rows:Array.from({length:6004},(_,i)=>row(i)),deletionPolicy:'EXPLICIT_ONLY'};
+function mountRegistryFixture(t, options = {}) {
+ const registry = {
+  refresh: t.mock.fn(async () => {}),
+  read: async () => ({...snapshot, rows: [row()]}),
+  status: () => ({})
+ };
+ let now = 1;
+ let invoke;
+ let handler;
+ const requireStaff = (req, res, next) => req.staff ? next() : res.status(401).json({ok:false});
+ const app = {
+  get(route, auth, run) {
+   assert.equal(route, '/api/map-phase2b/private/customer-registry');
+   handler = (req, res) => auth(req, res, () => run(req, res));
+  }
+ };
+ const timer = {unref: t.mock.fn()};
+ const schedule = t.mock.method(globalThis, 'setInterval', (callback, delay) => {
+  assert.equal(delay, 60_000);
+  invoke = callback;
+  return timer;
+ });
+ const cancel = t.mock.method(globalThis, 'clearInterval', () => {});
+ const mount = mountPrivateCustomerRegistry({app, requireStaff, registry, secret, now: () => now, ...options});
+ return {
+  mount, registry, schedule, cancel, timer,
+  advanceInterval() {
+   now += 60_000;
+   invoke?.();
+  },
+  async request(staff) {
+   const res = {
+    statusCode: 200,
+    set() {},
+    status(status) {this.statusCode = status; return this;},
+    json(data) {this.data = data; return this;}
+   };
+   await handler({staff, query: {}}, res);
+   return res;
+  }
+ };
+}
+
+test('primary mode leaves the legacy registry protected and refreshes it only on demand', async t => {
+ const fixture = mountRegistryFixture(t, {refreshInBackground: false});
+ fixture.advanceInterval();
+ assert.equal(fixture.schedule.mock.callCount(), 0);
+ assert.equal(fixture.registry.refresh.mock.callCount(), 0);
+ assert.equal((await fixture.request(false)).statusCode, 401);
+ assert.equal(fixture.registry.refresh.mock.callCount(), 0);
+ const response = await fixture.request(true);
+ assert.equal(response.statusCode, 200);
+ assert.equal(response.data.data.rows[0].customerCode, row().customerCode);
+ assert.equal(fixture.registry.refresh.mock.callCount(), 1);
+});
+
+test('legacy fallback retains startup and periodic refresh', async t => {
+ const fixture = mountRegistryFixture(t);
+ assert.equal(fixture.schedule.mock.callCount(), 1);
+ assert.equal(fixture.timer.unref.mock.callCount(), 1);
+ assert.equal(fixture.registry.refresh.mock.callCount(), 1);
+ await fixture.mount.refresh();
+ fixture.advanceInterval();
+ await fixture.mount.refresh();
+ assert.equal(fixture.registry.refresh.mock.callCount(), 2);
+ fixture.mount.stop();
+ assert.deepEqual(fixture.cancel.mock.calls[0].arguments, [fixture.timer]);
+});
 test('private pagination is bounded and rejects a changed or forged cursor',()=>{const first=customerRegistryPage(snapshot,{secret,limit:500});assert.equal(first.rows.length,500);assert.equal(first.complete,false);const next=customerRegistryPage(snapshot,{secret,cursor:first.nextCursor,limit:500});assert.equal(next.rows[0].customerCode,snapshot.rows[500].customerCode);assert.throws(()=>customerRegistryPage(snapshot,{secret,cursor:first.nextCursor+'x'}),/CURSOR_INVALID/);assert.throws(()=>customerRegistryPage({...snapshot,version:'c'.repeat(64)},{secret,cursor:first.nextCursor}),/VERSION_CHANGED/);});
 test('rules-only addition or withdrawal changes the projection generation instead of returning NOOP',()=>{const plain=customerRegistryPage(snapshot,{secret}),rules={[row().customerCode]:{originalAddressHash:row().addressHash,query:'합성시 새합성로 20',accuracy:'BUILDING'}},updated=customerRegistryPage(snapshot,{secret,rules,since:plain.version});assert.equal(updated.mode,'FULL');assert.notEqual(updated.version,plain.version);assert.equal(customerRegistryPage(snapshot,{secret,rules,since:updated.version}).mode,'NOOP');assert.equal(customerRegistryPage(snapshot,{secret,since:updated.version}).mode,'FULL');});
 test('two private CAS writers cannot overwrite a newer completed registry with an old checkpoint',async()=>{let value=null,revision=0;const fetchImpl=async(url,options={})=>{if(!String(url).includes('/contents/'))return Response.json({private:true});if(options.method==='PUT'){const body=JSON.parse(options.body);if((body.sha||null)!==(revision?String(revision):null))return Response.json({}, {status:409});value=JSON.parse(Buffer.from(body.content,'base64'));revision++;return Response.json({});}return value?Response.json({sha:String(revision),content:Buffer.from(JSON.stringify(value)).toString('base64')}):Response.json({}, {status:404});};const env={RENDER_SERVICE_ID:'srv-d87gc5rtqb8s7398t37g',OPSMAP_SNAPSHOT_STORE_REPO:'mingu0702-droid/freshon-cache',OPSMAP_SNAPSHOT_STORE_BRANCH:'production/opsmap-snapshots'},options={env,token:'synthetic',fetchImpl},old=createCustomerRegistryStorage(options),fresh=createCustomerRegistryStorage(options);await old.readState();await fresh.readState();await fresh.writeState({schema:1,customers:['S990001','S990002']});await assert.rejects(()=>old.writeState({schema:1,customers:['S990001']}),/STORAGE_CONFLICT/);assert.equal((await old.readState()).customers.length,2);});

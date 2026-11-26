@@ -45,7 +45,7 @@ export async function readProductionManualPinCustomer(readers,code,{env=process.
  const hub=await read(code);
  return staffStoreDetail(hub?.data,{customerCode:code,date:null});
 }
-export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,sessionStore:isolatedTestStore,...readers}){
+export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,sessionStore:isolatedTestStore,refreshCustomerRegistryInBackground=true,...readers}){
  const router=express.Router(),root=path.join(publicDir,'opsmap');app.get(['/','/index.html','/daily-routes.html'],(q,r,n)=>env.OPSMAP_PRODUCTION_CANDIDATE_ENABLED==='1'?r.redirect(302,'/opsmap/'):n());app.use('/opsmap',router);
  if(env.OPSMAP_PRODUCTION_CANDIDATE_ENABLED!=='1'){router.use((_q,r)=>r.status(503).json({error:'OPSMAP_DISABLED'}));return {enabled:false};}
  const credentials=resolveProductionCredentials(env);
@@ -72,7 +72,7 @@ export function mountProductionOpsmapCandidate(app,{env=process.env,publicDir,se
    const saved=readers.getSnapshotMemory?.();
    return Array.isArray(saved?.rows)?{count:saved.rows.length,asOf:saved.latestDate||null}:null;
   }});
-  if(customerRegistry)mountPrivateCustomerRegistry({...binding,registry:customerRegistry,secret:credentials.sessionSecret,readRules:approvedRules});
+  if(customerRegistry)mountPrivateCustomerRegistry({...binding,registry:customerRegistry,secret:credentials.sessionSecret,readRules:approvedRules,refreshInBackground:refreshCustomerRegistryInBackground});
   mountOfficialAdminBoundaries({...binding,origin:authEnv.MAP_STAFF_ORIGIN});
   manual.mount(binding);
   mountPrivateDriverContact({...binding,enabled:()=>env.OPSMAP_DRIVER_CONTACT_ENABLED==='1',readDriverMaster:readers.readDriverMaster,readAssignment:createDriverAssignmentReader({readBaseVehicles:codes=>readers.sharedBaseCache?.get(codes),readStoredRoute:createDatedDriverRouteReader({today:readers.phase2bKstDate,readTodayStatus:readers.phase2bTodayStatus,readStoredRoute:readers.readStoredDriverRoute})})});

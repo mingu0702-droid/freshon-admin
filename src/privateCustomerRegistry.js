@@ -11,7 +11,7 @@ export function customerRegistryPage(snapshot,{cursor=null,since='',limit=250,ma
  const end=offset+rows.length,complete=noop||end>=snapshot.rows.length,body=Buffer.from(JSON.stringify({version:snapshot.version,offset:end})).toString('base64url');
  return{...snapshot,mode:noop?'NOOP':'FULL',rows,afterCursor:cursor,nextCursor:complete?null:body+'.'+sign(body),complete,total:snapshot.rows.length};
 }
-export function mountPrivateCustomerRegistry({app,requireStaff,registry,secret,readRules=async()=>({}),now=Date.now}){
+export function mountPrivateCustomerRegistry({app,requireStaff,registry,secret,readRules=async()=>({}),now=Date.now,refreshInBackground=true}){
  let pending=null,lastStarted=-Infinity;
  const refresh=()=>{if(pending||now()-lastStarted<60000)return pending;lastStarted=now();pending=registry.refresh({maxPages:100,deadline:now()+180000}).catch(()=>null).finally(()=>{pending=null;});return pending;};
  app.get('/api/map-phase2b/private/customer-registry',requireStaff,async(req,res)=>{
@@ -21,5 +21,11 @@ export function mountPrivateCustomerRegistry({app,requireStaff,registry,secret,r
    return requireStaff(req,res,()=>res.json({ok:true,data:page,meta:{...registry.status(),servedAt:new Date(now()).toISOString(),source:'CUSTOMER_REGISTRY_READ_ONLY'}}));
   }catch(error){const code=/^CUSTOMER_REGISTRY_[A-Z_]+$/.test(error.code||'')?error.code:'CUSTOMER_REGISTRY_UNAVAILABLE';return requireStaff(req,res,()=>res.status(/CURSOR_INVALID/.test(code)?400:/VERSION_CHANGED/.test(code)?409:503).json({ok:false,error:code}));}
  });
- const timer=setInterval(()=>void refresh(),60000);timer.unref?.();void refresh();return{refresh,stop:()=>clearInterval(timer)};
+ let timer;
+ if(refreshInBackground){
+  timer=setInterval(()=>void refresh(),60000);
+  timer.unref?.();
+  void refresh();
+ }
+ return {refresh,stop:()=>clearInterval(timer)};
 }
