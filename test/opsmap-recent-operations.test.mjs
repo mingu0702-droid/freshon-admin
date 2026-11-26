@@ -666,6 +666,38 @@ test('the Stage reader can read a published pointer with its existing read-only 
   assert.match(paths[1],/recent-operations-v1\/current\.json\?ref=stage%2Fopsmap-snapshots$/);
 });
 
+test('the current pointer readback verifies the actual written digest and authentication tag',async()=>{
+  const encoded=Buffer.alloc(32,5).toString('base64');
+  const env={RENDER_SERVICE_ID:STAGE_SERVICE,RENDER_EXTERNAL_URL:STAGE_ORIGIN,
+    OPSMAP_STAGE_RECENT_OPERATIONS_SYNC_APPROVED:'1',OPSMAP_STAGE_SYNC_REMOTE_APPROVED:'1',
+    OPSMAP_STAGE_SYNC_PUBLISH_APPROVED:'1',OPSMAP_STAGE_SYNC_WRITE_TOKEN:'synthetic-stage',
+    OPSMAP_SHADOW_POSTAL_ASSET_KEY_B64:encoded};
+  const original=ledger(makeDay(initialEnd,'wms_dispatch','complete',['A1']));
+  const sha='a'.repeat(40);
+  let stored=await sealRecentOperations(original,recentOperationsKey(encoded));
+  const store=createStageRecentOperationsStore({env,write:true,async fetchImpl(url,options){
+    const address=new URL(url);
+    if(address.pathname.endsWith('/freshon-cache')) return Response.json({private:true});
+    assert.match(address.pathname,/\/recent-operations-v1\/current\.json$/);
+    if(options.method==='PUT'){
+      const update=JSON.parse(options.body);
+      assert.equal(update.sha,sha);
+      stored=JSON.parse(Buffer.from(update.content,'base64'));
+      return Response.json({});
+    }
+    return Response.json({sha,content:Buffer.from(JSON.stringify(stored)).toString('base64')});
+  }});
+  const next=mergeRecentOperations(original,initialEnd,[makeDay(initialEnd,'wms_dispatch','complete',['A2'])]);
+  const version=await store.write(next,sha);
+  assert.equal(await store.readback(version),sha);
+  assert.deepEqual((await store.read()).ledger,next);
+  await assert.rejects(store.readback('b'.repeat(64)),/RECENT_OPERATIONS_STORAGE_READBACK/);
+  const invalidPacked=Buffer.from(stored.packed,'base64');
+  invalidPacked[invalidPacked.length-1]^=1;
+  stored={...stored,packed:invalidPacked.toString('base64')};
+  await assert.rejects(store.readback(version));
+});
+
 test('protects positive evidence before reading and again after the asynchronous read',async t=>{
   const app=express();
   let callbacks=0, revoke=false;

@@ -39,6 +39,7 @@ const latestClosedDay = at => new Date(at + 9 * 3600000 - 86400000).toISOString(
 const dayKey = ({date,centerKey,source}) => [date,centerKey,source].join(':');
 const osanWmsDay = day => day.centerKey==='osan'&&day.source==='wms_dispatch';
 const rejected = () => Error('RECENT_OPERATIONS_EVIDENCE_INVALID');
+const verifiedScopes = new WeakSet();
 
 export const stageRecentOperationsSyncEnabled = env => stageScope(env) &&
   env.OPSMAP_STAGE_RECENT_OPERATIONS_SYNC_APPROVED === '1';
@@ -48,7 +49,8 @@ export function normalizeRecentOperations({startDate,endDate,days,recovery=[]} =
       startDate !== datesFor(endDate,90)[0] || !Array.isArray(days) || days.length > 810) throw rejected();
   const keys = new Set(), normalized = [];
   let rowCount = 0;
-  for (const {date,centerKey,source,coverage,rows,completeNightOrders} of days) {
+  for (const scope of days) {
+    const {date,centerKey,source,coverage,rows,completeNightOrders}=scope;
     const allowedEvidence = sourceEvidence[source];
     const key = dayKey({date,centerKey,source});
     if (!isDay(date) || date < startDate || date > endDate || !recentOperationsCenters.includes(centerKey) ||
@@ -57,16 +59,23 @@ export function normalizeRecentOperations({startDate,endDate,days,recovery=[]} =
         completeNightOrders!==undefined && (completeNightOrders!==true || source!=='freshon_orders' || coverage!=='complete') ||
         !Array.isArray(rows) || rows.length > 30000 || (rowCount += rows.length) > 850000) throw rejected();
     keys.add(key);
-    const codes = new Map();
+    if (verifiedScopes.has(scope)) {
+      normalized.push(scope);
+      continue;
+    }
+    const codes = new Set(), normalizedRows=[];
     for (const row of rows) {
       if (typeof row?.customerCode !== 'string' || !customerCode.test(row.customerCode) ||
           !allowedEvidence.includes(row.evidence) || codes.has(row.customerCode) ||
           row.nightOrder!==undefined && (row.nightOrder!==true || source!=='freshon_orders')) throw rejected();
-      codes.set(row.customerCode,{customerCode:row.customerCode,evidence:row.evidence,
-        ...(row.nightOrder?{nightOrder:true}:{})});
+      codes.add(row.customerCode);
+      normalizedRows.push(Object.freeze({customerCode:row.customerCode,evidence:row.evidence,
+        ...(row.nightOrder?{nightOrder:true}:{})}));
     }
-    normalized.push({date,centerKey,source,coverage,...(completeNightOrders?{completeNightOrders:true}:{}),
-      rows:[...codes.values()].sort((a,b)=>a.customerCode.localeCompare(b.customerCode))});
+    const verified=Object.freeze({date,centerKey,source,coverage,...(completeNightOrders?{completeNightOrders:true}:{}),
+      rows:Object.freeze(normalizedRows.sort((a,b)=>a.customerCode.localeCompare(b.customerCode)))});
+    verifiedScopes.add(verified);
+    normalized.push(verified);
   }
   if (!Array.isArray(recovery) || recovery.length>540) throw rejected();
   const attempts=new Set();
@@ -206,7 +215,7 @@ export async function sealRecentOperations(ledger,key) {
   return {version:sha256(bytes),packed};
 }
 
-export async function openRecentOperations(value,key) {
+async function verifiedRecentOperationsBytes(value,key) {
   if (!hash.test(value?.version || '') || typeof value.packed!=='string' ||
       value.packed.length>maxPackedBytes) throw rejected();
   const data=Buffer.from(value.packed,'base64');
@@ -216,7 +225,30 @@ export async function openRecentOperations(value,key) {
   decipher.setAuthTag(data.subarray(-16));
   const bytes=await decompress(Buffer.concat([decipher.update(data.subarray(12,-16)),decipher.final()]),{maxOutputLength:maxClearBytes});
   if (sha256(bytes)!==value.version) throw rejected();
-  return normalizeRecentOperations(JSON.parse(bytes));
+  return bytes;
+}
+
+export async function openRecentOperations(value,key) {
+  return normalizeRecentOperations(JSON.parse(await verifiedRecentOperationsBytes(value,key)));
+}
+
+function sameScopes(left,right) {
+  return left.length===right.length && left.every((scope,index)=>{
+    const other=right[index];
+    return scope===other || JSON.stringify(scope)===JSON.stringify(other);
+  });
+}
+
+function sameLedger(left,right) {
+  return left?.startDate===right.startDate && left.endDate===right.endDate &&
+    sameScopes(left.days,right.days) && JSON.stringify(left.recovery)===JSON.stringify(right.recovery);
+}
+
+async function confirmRecentOperationsWrite(store,version,ledger) {
+  if (version && store.readback) return {sha:await store.readback(version),ledger};
+  const persisted=await store.read();
+  if (!sameLedger(persisted?.ledger,ledger)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
+  return persisted;
 }
 
 export function createStageRecentOperationsSeed({env=process.env,fetchImpl=fetch,manifest,log=()=>{}}={}) {
@@ -325,7 +357,19 @@ export function createStageRecentOperationsStore({env=process.env,fetchImpl=fetc
         const value=await sealRecentOperations({startDate:datesFor(endDate,90)[0],endDate,days},key);
         return client.write(prefix+'day-'+date+'.json',value,null);
       },
-      async write(ledger,sha) {await client.write(currentFile,await sealRecentOperations(ledger,key),sha);}
+      async write(ledger,sha) {
+        const value=await sealRecentOperations(ledger,key);
+        await client.write(currentFile,value,sha);
+        return value.version;
+      },
+      async readback(version) {
+        const {value,sha}=await client.read(currentFile);
+        if (!sha || value?.version!==version) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
+        // The exact written plaintext is already normalized. Verify its digest and
+        // authentication independently without creating a second ledger in memory.
+        await verifiedRecentOperationsBytes(value,key);
+        return sha;
+      }
     }:{})
   };
 }
@@ -360,11 +404,11 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     const nightAdditions=nightScopes.filter(scope=>scope.rows.length||!previousPositive.has(dayKey(scope)));
     if(nightAdditions.length||saveProgress){
       const candidate=mergeRecentOperations(base,day,nightAdditions,{preserveDispatchEvidence:true});
-      if(!current.ledger||JSON.stringify(candidate)!==JSON.stringify(base)){
-        try{await store.write(candidate,current.sha);}
+      if(!current.ledger||!sameLedger(candidate,base)){
+        let version;
+        try{version=await store.write(candidate,current.sha);}
         catch(error){if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
-        current=await store.read();
-        if(JSON.stringify(current?.ledger)!==JSON.stringify(candidate))throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
+        current=await confirmRecentOperationsWrite(store,version,candidate);
         base=current.ledger;
         nightPublished=true;
       }
@@ -483,13 +527,13 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
   };
   let next=mergeRecentOperations(base,endDate,days);
   if (attempts.length) next=normalizeRecentOperations({...next,recovery:[...journal.values()].filter(entry=>entry.date>=next.startDate)});
-  if (current.ledger && JSON.stringify(next)===JSON.stringify(base))
+  if (current.ledger && sameLedger(next,base))
     return {state:nightPublished?'PUBLISHED':'VERIFIED_NOOP',endDate:base.endDate};
-  try {await store.write(next,current.sha);}
+  let version;
+  try {version=await store.write(next,current.sha);}
   catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
-  const saved=await store.read();
-  if (JSON.stringify(saved.ledger)!==JSON.stringify(next)) throw Error('RECENT_OPERATIONS_STORAGE_READBACK');
-  const evidenceChanged=attempts.length&&(endDate!==base.endDate||JSON.stringify(next.days)!==JSON.stringify(base.days));
+  await confirmRecentOperationsWrite(store,version,next);
+  const evidenceChanged=attempts.length&&(endDate!==base.endDate||!sameScopes(next.days,base.days));
   return {state:!nightPublished&&attempts.length&&!evidenceChanged&&current.ledger?'RECOVERY_CHECKPOINTED':'PUBLISHED',endDate,
     ...(attempts.length?{recovery:attempts.at(-1),recoveryBatch:attempts}:{})};
 }

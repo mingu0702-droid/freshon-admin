@@ -300,7 +300,7 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
               jobResult={state:value.state,error:value.error};
             }
             if(value?.component==='opsmap-stage-job-memory'&&value.runId===receipt.runId&&
-                ['START','AFTER_DELIVERY','AFTER_ORDERS','END'].includes(value.phase)){
+                ['START','AFTER_NIGHT_DISPATCH','AFTER_DELIVERY','AFTER_ORDERS','END'].includes(value.phase)){
               const memory=Object.fromEntries(['rss','heapUsed','external','arrayBuffers'].map(key=>[key,boundedCount(value[key],1024*1024*1024)]));
               log(JSON.stringify({component:value.component,runId:receipt.runId,job:input.scheduledKind||null,phase:value.phase,...memory}));
             }
@@ -380,26 +380,35 @@ export function mountOpsmapScheduledRun(app,{env=process.env,launch=spawn,now=Da
         }
       });
     }
-    processHandle.stderr.on('data',chunk=>{if(diagnostic.length<100) diagnostic=(diagnostic+chunk).slice(0,100);});
+    let errorTail='',heapExhausted=false;
+    processHandle.stderr.on('data',chunk=>{
+      if(diagnostic.length<100) diagnostic=(diagnostic+chunk).slice(0,100);
+      const combined=errorTail+String(chunk);
+      heapExhausted ||= /FATAL ERROR:[^\r\n]*(?:heap out of memory|allocation failed)/i.test(combined);
+      errorTail=combined.slice(-256);
+    });
     const limits={generation:maxRuntime,fixed:FIXED_MASTER_WORKER_LIMIT,national:NATIONAL_REGISTRY_WORKER_LIMIT,
       recent:3*60_000,wms:2*60_000,'wms-night':2*60_000,postal:4*60_000};
     const timeout=setTimeout(()=>{timedOut=true;stop();},limits[input.scheduledKind]??((fullJob?maxRuntime:0)+
       (fixedJob?FIXED_MASTER_WORKER_LIMIT:0)+(nationalJob?NATIONAL_REGISTRY_WORKER_LIMIT:0)+
       (recentJob?3*60_000:0)));
     timeout.unref();
-    const release=(exitCode,error)=>{
+    const release=(exitCode,error,exitSignal)=>{
       if(child!==processHandle)return;
       child=null;
       clearTimeout(timeout);
       signal?.removeEventListener('abort',stop);
       settle(exitCode===0&&jobResult?jobResult:{state:'FAILED',error:timedOut?'OPSMAP_SCHEDULE_TIMEOUT':error||'OPSMAP_SYNC_FAILED'});
       log(JSON.stringify({component:'opsmap-scheduled-run',runId:receipt.runId,exitCode,
+        ...(typeof exitSignal==='string'&&/^SIG[A-Z0-9]+$/.test(exitSignal)?{exitSignal}:{}),
         error:timedOut?'OPSMAP_SCHEDULE_TIMEOUT':error || null}));
     };
     processHandle.once('error',()=>release(null,'OPSMAP_SCHEDULE_LAUNCH'));
-    processHandle.once('close',code=>{
+    processHandle.once('close',(code,exitSignal)=>{
       const value=diagnostic.trim();
-      release(code,code===0?null:/^[A-Z][A-Z_0-9]{1,95}$/.test(value)?value:'OPSMAP_SYNC_FAILED');
+      const error=heapExhausted?'OPSMAP_WORKER_HEAP_EXHAUSTED':
+        /^[A-Z][A-Z_0-9]{1,95}$/.test(value)?value:'OPSMAP_SYNC_FAILED';
+      release(code,code===0?null:error,exitSignal);
     });
     processHandle.stdin.on('error',()=>{});
     processHandle.stdin.end(JSON.stringify(input));
