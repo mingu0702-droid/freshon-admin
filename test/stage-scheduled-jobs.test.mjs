@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHmac} from 'node:crypto';
 import test from 'node:test';
 import {createStageScheduledJobs,signStageScheduledTask,stageSyncHeadroom,verifyStageScheduledTask,stageWmsNightDate,stageWmsNightWindow} from '../src/stageScheduledJobs.js';
 
@@ -118,6 +119,60 @@ test('a missing CAS response and transient lease readback failure start the exac
   assert.equal(backing.inspect().jobs[0].state,'PUBLISHED');
   assert.deepEqual(await jobs.drain(),{done:true});
   assert.equal(calls,1);
+});
+
+for(const lostCompletionResponse of [false,true]){
+  test('a completed postal job survives a '+(lostCompletionResponse?'lost CAS response and transient':'stale')+' readback without replay',async()=>{
+    const backing=fixture();
+    let previousRead=null,calls=0,completionWrites=0;
+    const logs=[];
+    const store={
+      async write(file,value,sha){
+        if(value.jobs[0].state!=='PUBLISHED')return backing.store.write(file,value,sha);
+        completionWrites++;
+        previousRead=await backing.store.read(file);
+        await backing.store.write(file,value,sha);
+        if(lostCompletionResponse)throw Object.assign(Error(),{code:'FIXED_STORE_NETWORK'});
+      },
+      async read(file){
+        if(!previousRead)return backing.store.read(file);
+        const stale=previousRead;
+        previousRead=null;
+        if(lostCompletionResponse)throw Object.assign(Error(),{code:'FIXED_STORE_READ'});
+        return stale;
+      }
+    };
+    const setup={store,secret,now:()=>start,measure:async()=>memory(272),log:value=>logs.push(JSON.parse(value))};
+    const jobs=createStageScheduledJobs({...setup,async execute(){calls++;return {state:'PUBLISHED'};}});
+    await jobs.accept(receipt,['postal']);
+    await jobs.drain();
+    const resumed=createStageScheduledJobs({...setup,execute:()=>assert.fail('published job reexecuted')});
+    assert.deepEqual(await resumed.drain(),{done:true});
+    assert.equal(calls,1);
+    assert.equal(completionWrites,1);
+    assert.equal(backing.inspect().lease,null);
+    assert.equal(backing.inspect().jobs[0].state,'PUBLISHED');
+    assert.equal(logs.at(-1).state,'PUBLISHED');
+  });
+}
+
+test('a valid but different signed completion does not confirm the local result',async()=>{
+  const backing=fixture(),logs=[];
+  const store={...backing.store,async write(file,value,sha){
+    if(value.jobs[0].state==='PUBLISHED'){
+      const {proof,...body}=value;
+      const replacement={...body,jobs:[{...body.jobs[0],finishedAt:body.jobs[0].finishedAt+1}]};
+      value={...replacement,proof:createHmac('sha256',secret).update('opsmap-stage-jobs-v1\0')
+        .update(JSON.stringify(replacement)).digest('hex')};
+    }
+    await backing.store.write(file,value,sha);
+  }};
+  const jobs=createStageScheduledJobs({store,secret,now:()=>start,measure:async()=>memory(272),
+    log:value=>logs.push(JSON.parse(value)),execute:async()=>({state:'PUBLISHED'})});
+  await jobs.accept(receipt,['postal']);
+  await assert.rejects(jobs.drain(),{code:'OPSMAP_JOBS_RESULT_READBACK'});
+  assert.equal(logs.some(entry=>entry.state==='PUBLISHED'),false);
+  assert.deepEqual(await jobs.drain(),{done:true});
 });
 
 test('scheduled job records combined memory at start, sampled peak and end without any extra source call',async()=>{

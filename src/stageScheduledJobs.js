@@ -117,6 +117,27 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
     }
     throw failure;
   }
+  async function confirmResult(date,night,runId,kind,result) {
+    let failure=error('OPSMAP_JOBS_RESULT_READBACK');
+    for(const wait of [0,250,750]){
+      if(wait)await delay(wait);
+      try{
+        const saved=(await read(date,night)).record;
+        if(saved&&saved.receipt.runId!==runId)throw error('OPSMAP_JOBS_RESULT_READBACK');
+        const job=saved?.jobs.find(job=>job.kind===kind);
+        if(job&&finished.has(job.state)){
+          if(job.state===result.state&&job.error===result.error&&job.finishedAt===result.finishedAt&&
+             JSON.stringify(job.memory)===JSON.stringify(result.memory))return;
+          throw error('OPSMAP_JOBS_RESULT_READBACK');
+        }
+        failure=error('OPSMAP_JOBS_RESULT_READBACK');
+      }catch(problem){
+        if(!['FIXED_STORE_READ','FIXED_STORE_NETWORK'].includes(problem.code))throw problem;
+        failure=problem;
+      }
+    }
+    throw failure;
+  }
   const output=(runId,kind,state,fields={})=>log(JSON.stringify({component:'opsmap-stage-jobs',runId,job:kind,state,...fields}));
 
   async function accept(receipt,plan,{night=false}={}) {
@@ -265,16 +286,19 @@ export function createStageScheduledJobs({store,secret,now=Date.now,execute,meas
     const state=reason?'INTERRUPTED':finished.has(result?.state)?result.state:'FAILED';
     const rawError=reason||result?.error;
     const failure=/^[A-Z][A-Z0-9_]{2,95}$/.test(rawError||'')?rawError:null;
-    await mutate(record=>{
-      const job=record.jobs.find(value=>value.kind===lease.kind);
-      Object.assign(job,{state,error:failure,finishedAt:now(),memory:memorySummary});
-      record.lease=null;
-    });
-    const saved=(await read(date,night)).record;
-    const savedJob=saved?.jobs.find(job=>job.kind===lease.kind);
-    if(savedJob?.state!==state||JSON.stringify(savedJob.memory)!==JSON.stringify(memorySummary)){
-      throw error('OPSMAP_JOBS_RESULT_READBACK');
+    let completion;
+    try{
+      await mutate(record=>{
+        const job=record.jobs.find(value=>value.kind===lease.kind);
+        completion={state,error:failure,finishedAt:now(),memory:memorySummary};
+        Object.assign(job,completion);
+        record.lease=null;
+      });
+    }catch(problem){
+      // A lost CAS response may still have committed the result. Never repeat the write or the source read.
+      if(!completion||!['FIXED_STORE_WRITE','FIXED_STORE_NETWORK'].includes(problem.code))throw problem;
     }
+    await confirmResult(date,night,receipt.runId,lease.kind,completion);
     output(receipt.runId,lease.kind,state,{error:failure,memory:memorySummary});
     return {nextAt:now()};
   }
