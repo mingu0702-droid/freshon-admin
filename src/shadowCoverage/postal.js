@@ -707,8 +707,14 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
         const started = performance.now();
         const chunks = overview?.archive ? await readOverviewTiles(overview.archive,files) : [];
         if (!overview?.archive) {
-          for (let i = 0; i < files.length; i += 2) {
-            chunks.push(...await Promise.all(files.slice(i,i + 2).map(file => getTile(opened,file))));
+          let offset=0;
+          while (offset < files.length) {
+            // A small detail frame often straddles three grid tiles. Admit a
+            // third read only when the shared queue has room, so it needn't
+            // wait for a second round trip on an otherwise idle server.
+            const width=prefix&&files[offset].id.startsWith('detail-')&&pending.size<=7 ? 3 : 2;
+            chunks.push(...await Promise.all(files.slice(offset,offset + width).map(file => getTile(opened,file))));
+            offset+=width;
           }
         }
         if (timing) timing.postal_tile_read = performance.now() - started;

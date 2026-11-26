@@ -240,6 +240,7 @@
         const durations={
           officialLookupMs:Number(timing.get('opsmap-address-official')),
           customerLookupMs:Number(timing.get('opsmap-address-customer')),
+          registryReadMs:Number(timing.get('opsmap-address-read')),
           serverIndexMs:Number(timing.get('opsmap-address-index')),
           protectedSessionMs:Number(timing.get('session')),
           providerUpstreamMs:Number(timing.get('opsmap-kakao-provider')),

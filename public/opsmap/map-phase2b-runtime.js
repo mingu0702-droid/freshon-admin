@@ -3573,12 +3573,19 @@
 
   function afterSearchPaint(work) { requestAnimationFrame(()=>setTimeout(work,0)); }
 
-  function startSearchTrace() {
+  function startSearchTrace(event) {
     const id=++searchSequence, started=performance.now(), stages={input:Math.round(started-(searchInputAt??started))};
+    const eventAt=event?.timeStamp;
+    const fromEvent=Number.isFinite(eventAt)&&eventAt>0&&eventAt<=started;
+    if(fromEvent)stages.dispatchDelay=Math.round(started-eventAt);
     const mark=phase=>{if(phase!=='coordinates'||stages[phase]===undefined)stages[phase]=Math.round(performance.now()-started);};
     let kind;
     const publish=()=>{if(kind&&id===searchSequence)$('#map').dataset.searchMetrics=JSON.stringify({id,kind,...stages});};
-    return {mark,record(phase){if(stages[phase]===undefined){mark(phase);publish();}},count(name,value){stages[name]=value;publish();},finish(result){
+    return {mark,record(phase){if(stages[phase]===undefined){
+      mark(phase);
+      if(phase==='completeResult'&&fromEvent)stages.eventToResult=Math.round(performance.now()-eventAt);
+      publish();
+    }},count(name,value){stages[name]=value;publish();},finish(result){
       kind=result;mark('total');publish();
       requestAnimationFrame(()=>{mark('frame');publish();});
     }};
@@ -3789,13 +3796,13 @@
     return /^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|충청북|충청남|전라북|전라남|경상북|경상남|제주|전남광주통합특별시)(?:특별자치도|특별자치시|특별시|광역시|시|도)?\s/.test(address);
   }
 
-  async function search() {
+  async function search(event) {
     const text=$('#query').value.normalize('NFKC').trim();
     if(!text){clearUnifiedSearch();return;}
     if(state.mode!=='BASE_60D')return;
     const key=text.replace(/\s+/g,' ');
     if(searchFlight?.key===key)return searchFlight.task;
-    const trace=startSearchTrace();
+    const trace=startSearchTrace(event);
     if(temporaryPins.size&&reuseVisibleAddressSearch(text,trace))return;
     const task=searchPeriod(text,trace).finally(()=>{if(searchFlight?.task===task)searchFlight=null;});
     searchFlight={key,task};
@@ -5985,7 +5992,7 @@
     };
     $("#query").onkeydown = (event) => {
       if(event.key==='Escape'){invalidateUnifiedSearch();cancelAddressLookup();closeUnifiedSearchResults();return;}
-      if(event.key==='Enter'&&!composing&&!event.isComposing){event.preventDefault();void search();}
+      if(event.key==='Enter'&&!composing&&!event.isComposing){event.preventDefault();void search(event);}
     };
     $("#searchBtn").onclick = search;
     window.addEventListener('map-unified-search-clear',clearUnifiedSearch);

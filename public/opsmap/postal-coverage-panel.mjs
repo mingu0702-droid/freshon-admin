@@ -43,11 +43,14 @@ async function read(endpoint, params, signal, headers) {
 async function viewportFrame(params, signal, known) {
   const started = performance.now();
   const response = await request('bootstrap',params,signal,known ? {'X-Map-Postal-Known':known} : undefined);
+  const headersMs = performance.now() - started;
   if (response.status === 404) return null;
   if (!response.ok) return reply(response);
   const raw = await response.arrayBuffer();
   signal.throwIfAborted();
-  return { ...splitPostalBootstrap(raw), duration:performance.now() - started };
+  const tileRead = /(?:^|,\s*)postal_tile_read;dur=(\d+(?:\.\d+)?)/.exec(response.headers.get('Server-Timing') || '');
+  return { ...splitPostalBootstrap(raw), duration:performance.now() - started,
+    headersMs, serverTileReadMs:tileRead ? Number(tileRead[1]) : undefined };
 }
 
 export function createCoveragePanel({ workspace, header, openStore }) {
@@ -457,7 +460,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       viewCache.delete(key);
       viewCache.set(key, cached ? saved : { data,scopeKey,until:Date.now()+(data.coveredBox?60000:20000) });
       if (viewCache.size > 6) viewCache.delete(viewCache.keys().next().value);
-      host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame), ...geometry.metrics() });
+      host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame),
+        headersMs:frame?.headersMs, serverTileReadMs:frame?.serverTileReadMs, ...geometry.metrics() });
       applyView(view,same);
       updateCurrentRegistration(force);
       if (latest() && (operationsChanged || !same)) showOperations(operations);
