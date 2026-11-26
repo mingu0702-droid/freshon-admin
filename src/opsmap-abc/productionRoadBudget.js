@@ -18,7 +18,8 @@ export function createProductionRoadBudget({env=process.env,token,fetchImpl=fetc
  if(env.OPSMAP_ROAD_BUDGET_STORE_ENABLED!=='1')return null;
  const key=String(env.KAKAO_MOBILITY_REST_API_KEY||env.KAKAO_REST_API_KEY||'').trim();
  const configured=env.OPSMAP_AUTH_STORE_REPO===repo&&env.OPSMAP_AUTH_STORE_BRANCH===productionBranch&&typeof token==='string'&&!!token&&!!key;
- return createPrivateRoadBudget({key,token,configured,branch:productionBranch,stage:false,fetchImpl,now});
+ return createPrivateRoadBudget({key,token,configured,branch:productionBranch,stage:false,fetchImpl,now,
+   waypointsFreePeriod:env.OPSMAP_PRODUCTION_WAYPOINTS_FREE_PERIOD});
 }
 
 export function createStageRoadBudget({key,token,fetchImpl=fetch,now=Date.now}={}){
@@ -46,7 +47,7 @@ export function createStageSharedRoadFreeOnly({key,token,grant,fetchImpl=fetch,n
   return createPrivateRoadBudget({key,token,configured:true,branch:productionBranch,stage:false,formal,fetchImpl,now});
 }
 
-function createPrivateRoadBudget({key,token,configured,branch,stage,trial,formal,fetchImpl,now}){
+function createPrivateRoadBudget({key,token,configured,branch,stage,trial,formal,fetchImpl,now,waypointsFreePeriod}){
  const accountHash=createHash('sha256').update(key).digest('hex');
  const file=root+'/contents/'+(stage?'opsmap-stage':'opsmap-production')+'/road-budget-v1.json';
  const headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':stage?'opsmap-stage-road-budget':'opsmap-production-road-budget'};
@@ -105,13 +106,19 @@ function createPrivateRoadBudget({key,token,configured,branch,stage,trial,formal
   if(total!==b.used)fail('ROAD_BUDGET_QUOTA_UNVERIFIED');
   return b;
  }
+ function apiApproved(b,api) {
+  if(!b.approvedApis||b.approvedApis.includes(api))return true;
+  // This operator attestation is scoped to the already verified production
+  // monthly approval. The provider still rejects any shared free overage.
+  return api==='waypoints'&&typeof waypointsFreePeriod==='string'&&
+    b.monthlyApproval?.period===waypointsFreePeriod&&b.monthlyApproval.providerRejectsFreeOverage===true;
+ }
  function stateStatus(b,time){
   const day=kst(time),approvalDay=kst(Date.parse(b.verifiedAt));
   // Earlier verified ledgers covered both endpoints. A scoped approval stays
   // scoped across daily rollover and still accounts for prior calls to either.
-  const approved=b.approvedApis??supportedApis;
   const apis=Object.fromEntries(supportedApis.map(api=>{
-   if(!approved.includes(api))return [api,0];
+   if(!apiApproved(b,api))return [api,0];
    const value=b.apis[api];
    const remaining=b.monthlyApproval?(day===approvalDay?value.freeRemainingAtApproval:dailyLimits[api])-(b.monthlyApproval.dailyUsage[day]?.[api]||0):value.freeRemainingAtApproval-value.used;
    return [api,Math.max(0,remaining)];
@@ -145,7 +152,7 @@ function createPrivateRoadBudget({key,token,configured,branch,stage,trial,formal
   reserve:({cost,provider,api})=>transaction(async({state,sha})=>{
    if(cost!==1||provider!=='kakao-directions'||!supportedApis.includes(api))fail('ROAD_BUDGET_INVALID_RESERVATION');
    const time=now(),b=validate(state,time),status=stateStatus(b,time);
-   if(b.approvedApis&&!b.approvedApis.includes(api))fail('ROAD_BUDGET_API_UNVERIFIED');
+   if(!apiApproved(b,api))fail('ROAD_BUDGET_API_UNVERIFIED');
    if(!status.remaining||!status.apiRemaining[api])fail('QUOTA_EXCEEDED');
    b.used++;b.apis[api].used++;b.lastReservation=randomUUID();b.updatedAt=new Date(time).toISOString();
    if(b.monthlyApproval){const day=status.usageDate;b.monthlyApproval.dailyUsage[day]||={directions:0,waypoints:0};b.monthlyApproval.dailyUsage[day][api]++;}
@@ -164,7 +171,8 @@ function createPrivateRoadBudget({key,token,configured,branch,stage,trial,formal
    };
    const bytes=Buffer.from(JSON.stringify(clean));if(bytes.length>32768)fail('ROAD_BUDGET_FORMAT');
    const message=formal?'Reserve approved Stage shared free Directions call':trial?'Reserve approved Stage Directions test call':
-     stage?'Reserve approved Stage free Directions call':'Reserve approved Production free Directions call';
+     stage?'Reserve approved Stage free Directions call':api==='waypoints'?
+       'Reserve approved Production free Waypoints call':'Reserve approved Production free Directions call';
    const response=await request(file,{method:'PUT',body:JSON.stringify({message,branch,sha,content:bytes.toString('base64')})});
    if([409,422].includes(response.status))fail('ROAD_BUDGET_CONFLICT');if(!response.ok)fail('ROAD_BUDGET_WRITE');
    const saved=await read();if(JSON.stringify(saved.state)!==JSON.stringify(clean))fail('ROAD_BUDGET_READBACK_UNKNOWN');
