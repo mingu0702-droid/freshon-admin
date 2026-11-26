@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createOpsmapPhotoIndex, createPhotoIndexCollector } from '../src/opsmapPhotoIndex.js';
 import { createOperationalPhotoExtension } from '../src/opsmapOperationalPhotos.js';
+import { mountProductionPhotoBinding } from '../src/opsmapProductionPhotos.js';
+import { PRIMARY_ORIGIN, PRIMARY_SERVICE } from '../src/stageScope.js';
+import { createHash } from 'node:crypto';
 import { DeliveryPhotoError, createDeliveryPhotoService } from '../src/opsmapDeliveryPhotos.js';
 import { chromium } from 'playwright';
 import express from 'express';
@@ -168,13 +171,39 @@ test('a mounted legacy index preserves delivery photos and keeps inspection-only
   const {lstat, realpath} = fs;
   t.mock.method(fs, 'lstat', file => file === named
     ? Promise.resolve({isSymbolicLink:() => true, isFile:() => false}) : lstat(file));
-  t.mock.method(fs, 'realpath', file => file === named ? Promise.resolve(mounted) : realpath(file));
+  let linkedTarget = mounted;
+  t.mock.method(fs, 'realpath', file => file === '/etc/secrets' ? Promise.resolve(directory)
+    : file === named ? Promise.resolve(linkedTarget) : realpath(file));
   await assert.rejects(index.read({customerCode:code}), {code:'PHOTO_HISTORY_INDEX_INVALID'});
   const reader = createOpsmapPhotoIndex({directory, now, allowMountedLinks:true});
   const page = await reader.read({customerCode:code});
   assert.deepEqual(page.counts, {[front]:1,[inside]:0});
   assert.equal(page.state, 'COLLECTING');
   assert.equal((await readFile(mounted)).length, legacy);
+  const preservation=JSON.stringify({schema:1,destination:PRIMARY_ORIGIN,legacyRegistryChecked:1,legacyFixedChecked:1,
+    legacyRegistryVerified:true,legacyRegistryUnconfirmed:0,legacyFixedUnconfirmed:0,stagePinsUnconfirmed:0,
+    ...Object.fromEntries(['operationsArchive','wmsArchive','legacySnapshotArchive','legacyAuthArchive',
+      'legacyPinsArchive','stagePinsArchive'].map(field=>[field,'a'.repeat(40)]))});
+  const app=express();
+  mountProductionPhotoBinding({app,env:{RENDER_SERVICE_ID:PRIMARY_SERVICE,RENDER_EXTERNAL_URL:PRIMARY_ORIGIN,
+    OPSMAP_PRIMARY_CUTOVER_APPROVED:'1',OPSMAP_PRIMARY_ARCHIVE_READ_APPROVED:'1',OPSMAP_PRIMARY_ARCHIVE_READ_TOKEN:'fixture-only',
+    OPSMAP_PRIMARY_PRESERVATION_JSON:preservation,
+    OPSMAP_PRIMARY_PRESERVATION_SHA256:createHash('sha256').update(preservation).digest('hex'),
+    OPSMAP_PHOTO_HISTORY_DIRECTORY:'/etc/secrets',OPSMAP_PRODUCTION_PHOTOS_ENABLED:'1'},previewEnabled:()=>true,
+    requireStaff(req,res,next){res.locals.staffSession={key:'fixture-staff'};next();},isSessionCurrent:()=>true});
+  const server=app.listen(0,'127.0.0.1');
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  await new Promise(resolve=>server.once('listening',resolve));
+  const url=`http://127.0.0.1:${server.address().port}/api/map-phase2b/private/delivery-photos/history?customerCode=${code}`;
+  const productionResponse=await fetch(url);
+  const body=await productionResponse.json();
+  assert.equal(productionResponse.status,200,JSON.stringify(body.error));
+  assert.equal(body.data.items.length,1);
+  linkedTarget=path.resolve(directory,'..','outside-history.json');
+  const rejected=await fetch(url);
+  assert.equal(rejected.status,503);
+  assert.equal((await rejected.json()).error.indexReason,'FILE_LINK');
+  linkedTarget=mounted;
   const data = JSON.parse(await readFile(mounted, 'utf8'));
   data.tasks[0].photos.shift();
   await writeFile(mounted, JSON.stringify(data));

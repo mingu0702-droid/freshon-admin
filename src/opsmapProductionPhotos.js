@@ -4,6 +4,7 @@ import {createDeliveryAdminPhotoTransport,DELIVERY_ADMIN_PHOTO_CATEGORY_MAP,DELI
 import {mountDeliveryPhotoConfig,mountOpsmapDeliveryPhotoRoutes} from './opsmapDeliveryPhotoRouter.js';
 import {createOperationalPhotoExtension} from './opsmapOperationalPhotos.js';
 import {createOpsmapPhotoIndex} from './opsmapPhotoIndex.js';
+import {opsmapArchiveSite} from './stageScope.js';
 const fail=(code,status=503,stage='source-session',sourceHttpStatus)=>{throw new DeliveryPhotoError(code,status,{stage,...(Number.isInteger(sourceHttpStatus)?{sourceHttpStatus}:{})});};
 const session=has=>{if(typeof has!=='function'||has()!==true)fail('UPSTREAM_AUTH_REQUIRED',502);};
 const checkLimit=(value,maximum)=>Number.isInteger(value)&&value>=1&&value<=maximum;
@@ -85,9 +86,11 @@ export function mountProductionPhotoBinding({env=process.env,rawRequest,hasMemor
    sourceSession:typeof hasMemorySession==='function'&&hasMemorySession()===true,metadataConfigured:typeof listDeliveryMetadata==='function'};
  });
  if(env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1'){
+  const historyDirectory=env.OPSMAP_PHOTO_HISTORY_DIRECTORY;
+  const historyIndex=historyDirectory?createOpsmapPhotoIndex({directory:historyDirectory,
+   allowMountedLinks:historyDirectory==='/etc/secrets'&&opsmapArchiveSite(env)==='primary'}):null;
   const extension=createOperationalPhotoExtension({enabled:()=>env.OPSMAP_PRODUCTION_PHOTOS_ENABLED==='1',rawRequest,hasMemorySession,prepareSession,
-   prepareHistorySession:true,prepareMediaSession:Boolean(env.OPSMAP_PHOTO_HISTORY_DIRECTORY),listDeliveryMetadata,
-   readIndexedHistory:env.OPSMAP_PHOTO_HISTORY_DIRECTORY ? createOpsmapPhotoIndex({directory:env.OPSMAP_PHOTO_HISTORY_DIRECTORY}).read : undefined});
+   prepareHistorySession:true,prepareMediaSession:Boolean(historyDirectory),listDeliveryMetadata,readIndexedHistory:historyIndex?.read});
   extension.mount(binding);return extension;
  }
  let approvedRecords=[];
