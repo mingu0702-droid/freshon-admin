@@ -3,9 +3,11 @@ import {readFile} from 'node:fs/promises';
 import {promisify} from 'node:util';
 import {gzip, gunzip} from 'node:zlib';
 import {customerRegistryAddressHash} from './customerRegistry.js';
+import {officialAddressKey} from './opsmapOfficialAddressLookup.js';
 import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
 import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
 import {FRESHON_NIGHT_DISPATCH,FRESHON_NIGHT_DISPATCH_LABEL,SYNC_CENTERS} from './opsmapSyncPolicy.js';
+import {addressRegionParts} from '../public/opsmap/vehicle-picker-regions.js';
 
 const repository = 'mingu0702-droid/freshon-cache';
 const branch = 'stage/opsmap-snapshots';
@@ -314,6 +316,26 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
   };
 }
 
+function retainedOfficialLocation(officialRow, row) {
+  const point=officialRow?.verifiedLocation;
+  if(!point||officialRow.lifecycle!=='ACTIVE'||officialRow.centerGroup!==row.centerGroup||
+      typeof officialRow.basicAddress!=='string'||point.addressHash!==officialRow.addressHash||
+      !['BUILDING','ADDRESS'].includes(point.kind))return null;
+  const normalized=value=>value.normalize('NFKC').trim().replace(/\s+/g,' ');
+  const base=normalized(officialRow.basicAddress), incoming=normalized(row.basicAddress);
+  const annotated=/^([^()]+) \(([가-힣]{1,22}(?:동(?:[1-9]\d?가)?|읍|면|리))\)$/.exec(incoming);
+  if(!annotated||annotated[1]!==base||customerRegistryAddressHash(base)!==officialRow.addressHash||
+      !addressRegionParts(base))return null;
+  const lot=/(?:^| )([가-힣]+(?:동(?:[1-9]\d?가)?|읍|면|리)) (?:산 ?)?\d+(?:-\d+)?$/.exec(base);
+  const road=/(?:^| )[가-힣0-9·.]+(?:대로|로|길) (?:지하 ?)?\d+(?:-\d+)?$/.test(base);
+  if(!road&&(!lot||lot[1]!==annotated[2]))return null;
+  const address=officialAddressKey(base);
+  if(!address||address!==officialAddressKey(incoming))return null;
+  // A sole locality annotation can change the displayed address hash without
+  // changing the address measured by the official point. Never re-geocode it.
+  return {...point,addressHash:row.addressHash};
+}
+
 export function mergeStageNationalRegistry(previous, incoming, official=[]) {
   const current=new Map(normalizeRows(previous,true).map(row=>[row.customerCode,row]));
   const points=new Map(official.filter(row=>row.verifiedLocation).map(row=>[row.customerCode,row]));
@@ -321,9 +343,14 @@ export function mergeStageNationalRegistry(previous, incoming, official=[]) {
     const existing=current.get(row.customerCode);
     if (existing?.sourceUpdatedAt && row.sourceUpdatedAt && Date.parse(row.sourceUpdatedAt)<Date.parse(existing.sourceUpdatedAt)) continue;
     if (row.lifecycle==='ACTIVE') {
-      const known=[existing,points.get(row.customerCode)].find(value=>
+      const officialRow=points.get(row.customerCode);
+      const known=[existing,officialRow].find(value=>
         value?.verifiedLocation && value.centerGroup===row.centerGroup && value.addressHash===row.addressHash);
       if (known) row.verifiedLocation=known.verifiedLocation;
+      else {
+        const equivalent=retainedOfficialLocation(officialRow,row);
+        if(equivalent)row.verifiedLocation=equivalent;
+      }
     }
     current.set(row.customerCode,row);
   }
