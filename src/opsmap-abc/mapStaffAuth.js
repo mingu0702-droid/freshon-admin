@@ -135,8 +135,9 @@ export function createMapStaffAuth({ env = process.env, now = Date.now, sessionS
     const config=configuration(),key=sessionKey(req,config),revision=fingerprint;
     if(!config.ready||!key||revoked.has(key)||req.get('origin')&&req.get('origin')!==config.origin||req.get('sec-fetch-site')&&!['same-origin','none'].includes(req.get('sec-fetch-site')))return null;
     if(sessionStore){
-      const parallelValidation=req.method==='POST'&&['/api/map-phase2b/private/stage-address-evidence',
-        '/api/map-phase2b/private/address-lookup'].includes(req.path);
+      const parallelValidation=(req.method==='POST'&&['/api/map-phase2b/private/stage-address-evidence',
+        '/api/map-phase2b/private/address-lookup'].includes(req.path))||
+        (req.method==='GET'&&/^\/api\/map-phase2b\/private\/shadow-coverage\/postal\/(?:view|geometry|bootstrap|point)$/.test(req.path));
       const saved=await sessionStore.get(key,revision,{parallelValidation});
       if(revoked.has(key)||configuration().secret!==config.secret||fingerprint!==revision)return null;
       if(saved)sessions.set(key,saved);else sessions.delete(key);

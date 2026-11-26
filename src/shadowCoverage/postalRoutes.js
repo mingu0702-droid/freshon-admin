@@ -69,13 +69,13 @@ export function mountPostalCoverage({ app, requireStaff, readDirectory, appRoot,
     });
   }
   function view(req, scope, { runtime, postalBounds }, timing) {
-    const { box, level, indexed } = req.query;
+    const { box, level, indexed, buffered } = req.query;
     if (typeof box !== 'string' || box.length > 100 || !/^-?\d+(\.\d+)?(,-?\d+(\.\d+)?){3}$/.test(box) ||
         typeof level !== 'string' || !/^(?:[1-9]|1[01234])$/.test(level) ||
-        indexed !== undefined && indexed !== '1') throw Error('POSTAL_QUERY_INVALID');
+        indexed !== undefined && indexed !== '1' || buffered !== undefined && buffered !== '1') throw Error('POSTAL_QUERY_INVALID');
     const coords = box.split(',').map(Number);
     if (!postalBounds(coords)) throw Error('POSTAL_QUERY_INVALID');
-    return runtime.view({ ...scope, box:coords, indexed:indexed === '1', timing });
+    return runtime.view({ ...scope, box:coords, indexed:indexed === '1', buffered:buffered === '1', timing });
   }
   function binary(res, { bytes, gzip }) {
     if (gzip) res.set('Content-Encoding','gzip');

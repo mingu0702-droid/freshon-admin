@@ -175,3 +175,75 @@ test('keyword lookup requires separate proof, rejects sensitive queries, and pro
  assert.equal(f.store.snapshot().used,1);
  assert(!JSON.stringify(f.store.snapshot()).includes('합성'));
 });
+function permitFixture({limit=6,reply}={}){
+ let ledger={...createKakaoGeocodeLedger(),diagnosticPassed:true},version=0,clock=stamp,writes=0;
+ const calls=[],env={...fixture({enabled:'1',dailyLimit:String(limit)}).env};
+ const instance=()=>createKakaoCoordinateConnection({
+  env,now:()=>clock,enableAddressPermits:true,
+  store:{durable:true,supportsAddressPermits:true,async transaction(work){
+   const revision=version;
+   return work(structuredClone(ledger),async next=>{
+    if(revision!==version)throw Error('MANUAL_PIN_GITHUB_CONFLICT');
+    ledger=structuredClone(next);version++;writes++;
+   });
+  }},
+  fetchImpl:async url=>{
+   const query=url.searchParams.get('query');
+   calls.push(query);
+   return reply?reply():Response.json(body(query));
+  },
+ });
+ return {instance,calls,usage:()=>({ledger,writes}),env,advance:ms=>clock+=ms};
+}
+const addressFor=index=>'경기도 오산시 원동 '+(100+index);
+const interactive=(service,index,auth={})=>service.lookup(addressFor(index),{mode:'address',...auth});
+
+test('warm reserves three atomically and many staff lookups cannot reuse a permit',async()=>{
+ const f=permitFixture({limit:3}),service=f.instance(),authorized=()=>{};
+ await Promise.all(Array.from({length:5},()=>service.warmAddressPermits(authorized)));
+ assert.equal(f.usage().writes,1);
+ assert.equal(f.calls.length,0);
+ const results=await Promise.allSettled(Array.from({length:8},(_,index)=>interactive(service,index)));
+ assert.equal(results.filter(result=>result.status==='fulfilled').length,3);
+ assert(results.filter(result=>result.status==='fulfilled').every(({value})=>
+  value.githubRequests.writes===0&&value.serverTimings.geocodePermitReady===1));
+ assert.equal(f.calls.length,3);
+ assert.equal(f.usage().writes,1);
+ assert.equal(f.usage().ledger.days['2026-11-03'],3);
+ assert.equal(f.usage().ledger.addressPermitDays['2026-11-03'],3);
+ assert(!JSON.stringify(f.usage().ledger).includes('원동'));
+});
+
+test('separate instances, restart, and KST rollover honor the same charged budget',async()=>{
+ const f=permitFixture({limit:4}),first=f.instance(),second=f.instance();
+ const settled=await Promise.allSettled([first.warmAddressPermits(()=>{}),second.warmAddressPermits(()=>{})]);
+ assert.equal(settled.filter(result=>result.status==='rejected').length,1);
+ assert.equal(f.usage().ledger.used,3);
+ const owner=settled[0].status==='fulfilled'?first:second;
+ await interactive(owner,1);
+ const restarted=f.instance();
+ await interactive(restarted,2);
+ await assert.rejects(interactive(restarted,3),/GEOCODE_DAILY_LIMIT/);
+ assert.equal(f.calls.length,2);
+ assert.equal(f.usage().ledger.used,4);
+ f.advance(86400_000);
+ await interactive(owner,4);
+ assert.equal(f.usage().ledger.days['2026-11-04'],3);
+});
+
+test('prepaid permits still require current staff, key proof and the provider circuit',async()=>{
+ const f=permitFixture({limit:3,reply:()=>new Response('{}',{status:429})}),service=f.instance();
+ const expired=()=>{throw Object.assign(Error('GEOCODE_SESSION_EXPIRED'),{code:'GEOCODE_SESSION_EXPIRED'});};
+ await assert.rejects(service.warmAddressPermits(expired),/GEOCODE_SESSION_EXPIRED/);
+ assert.equal(f.usage().writes,0);
+ await service.warmAddressPermits(()=>{});
+ await assert.rejects(interactive(service,1,{assertCurrent:expired}),/GEOCODE_SESSION_EXPIRED/);
+ f.env.OPSMAP_KAKAO_PAID_API_DISABLED='0';
+ await assert.rejects(interactive(service,2),/TARGET_APP_FREE_QUOTA_UNVERIFIED/);
+ assert.equal(f.calls.length,0);
+ f.env.OPSMAP_KAKAO_PAID_API_DISABLED='1';
+ await assert.rejects(interactive(service,3),/KAKAO_HTTP_REJECTED/);
+ await assert.rejects(interactive(service,4),/GEOCODE_AUTOMATICALLY_BLOCKED/);
+ assert.equal(f.calls.length,1);
+ assert.equal(f.usage().ledger.used,3);
+});

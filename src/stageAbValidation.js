@@ -549,7 +549,7 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
             for(const [phase,ms] of Object.entries(externalResult.serverTimings||{}))addStaffTiming(res,phase,ms);
             if(Number.isFinite(externalResult.providerDurationMs))baseTiming['opsmap-kakao-provider']=externalResult.providerDurationMs;
             const github=externalResult.githubRequests;
-            if(github?.writes)res.set('X-Opsmap-Geocode-Github',github.reads+','+github.writes);
+            if(github)res.set('X-Opsmap-Geocode-Github',github.reads+','+github.writes);
           }
         }
         const checking=performance.now();

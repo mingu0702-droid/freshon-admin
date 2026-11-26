@@ -650,16 +650,30 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
       }
       return result;
     },
-    async view({ days, center, generation, box, indexed, timing }) {
+    async view({ days, center, generation, box, indexed, buffered, timing }) {
       const opened = await ready(days,center,generation,timing);
       const selectedAt = performance.now();
       const { scope, manifest, release } = opened;
       const tier = postalTilesLevel(box);
       const overview = tier === 'national' && indexed ? opened.overview : null;
-      const selectedTiles = [...(overview?.tiles.values() || manifest.tiers[tier])]
-        .filter(tile => intersects(tile.box,box));
+      const sourceTiles=[...(overview?.tiles.values() || manifest.tiers[tier])];
+      const selectTiles=bounds=>sourceTiles.filter(tile=>intersects(tile.box,bounds));
+      const selectBadges=bounds=>[...scope.groups].filter(([,group])=>
+        (group.newActive||group.newUnknown||group.held)&&intersects(group.place.box,bounds));
+      let bounds=box,selectedTiles=selectTiles(box),badges=tier==='national'?[]:selectBadges(box);
+      if(buffered&&tier==='detail'){
+        const dx=(box[2]-box[0])*.55,dy=(box[3]-box[1])*.55;
+        const expanded=[box[0]-dx,box[1]-dy,box[2]+dx,box[3]+dy];
+        const tiles=selectTiles(expanded),extraBadges=selectBadges(expanded);
+        // Fall back to the exact viewport when a larger window would crowd out
+        // badges or fetch a disproportionate amount of geometry.
+        if(tiles.length<=selectedTiles.length+2&&sum(tiles.map(tile=>tile.rawBytes))<=2*1024*1024&&extraBadges.length<=180){
+          bounds=expanded;selectedTiles=tiles;badges=extraBadges;
+        }
+      }
       const data = {
         generation: release.generation, boundary: boundarySha256, assignmentReview:reviewSha256, source: manifest.source, tier,
+        ...(bounds!==box?{coveredBox:bounds}:{}),
         ...(readOperations ? {operationsAvailable:true} : {}),
         ...(readOperations && readCurrentRegistration?.dispatchDensityAssignments ? {dispatchDensityAvailable:true} : {}),
         ...(readCurrentRegistration ? {currentRegistrationAvailable:true} : {}),
@@ -669,12 +683,10 @@ export function createPostalRuntime({ directory, boundarySha256, releaseSha256, 
         ...(overview ? { overview:overview.proof } : {}),
         tiles: selectedTiles.map(({ id, rawBytes, vertices }) => overview ? [id,rawBytes,vertices] : [id,rawBytes]),
         tones: [...scope.groups].filter(([, group]) =>
-          (group.status !== 'UNKNOWN' || group.registered > 0) && intersects(group.place.box, box))
+          (group.status !== 'UNKNOWN' || group.registered > 0) && intersects(group.place.box, bounds))
           .map(([id, group]) => [id, group.status]),
         candidates: scope.candidates.slice(0, 24).map(([id]) => detail(opened, id)),
-        badges: tier === 'national' ? [] : [...scope.groups].filter(([, group]) =>
-          (group.newActive || group.newUnknown || group.held) && intersects(group.place.box, box))
-          .slice(0, 180).map(([id, group]) => [id, group.place.location, group.newActive, group.newUnknown, group.held]),
+        badges: badges.slice(0,180).map(([id, group]) => [id, group.place.location, group.newActive, group.newUnknown, group.held]),
       };
       if (timing) timing.postal_viewport = performance.now() - selectedAt;
       return data;

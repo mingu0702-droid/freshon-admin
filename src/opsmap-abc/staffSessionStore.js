@@ -35,7 +35,7 @@ export function createProductionStaffSessionStore({env=process.env,fetchImpl=fet
     const {signature,...body}=entry;const expected=mac({key,...body});
     return /^[a-f0-9]{64}$/.test(signature||'')&&crypto.timingSafeEqual(Buffer.from(signature),Buffer.from(expected))&&Number.isFinite(entry.expiresAt)&&Number.isFinite(entry.idleExpiresAt)&&entry.idleExpiresAt<=entry.expiresAt;
   }
-  let pendingRead=null,writeTail=Promise.resolve();
+  let pendingRead=null,writeTail=Promise.resolve(),identityWriteTail=writeTail;
   async function sharedRead(options){if(!pendingRead){const p=read(options);pendingRead=p;try{return await p;}finally{if(pendingRead===p)pendingRead=null;}}return pendingRead;}
   async function write(key,entry,requireExisting=false){
     const work=writeTail.catch(()=>{}).then(async()=>{
@@ -47,7 +47,17 @@ export function createProductionStaffSessionStore({env=process.env,fetchImpl=fet
       const result=await request(file,{method:'PUT',body:JSON.stringify({message:'Update isolated Production staff session metadata',branch,...(sha?{sha}:{}),content:bytes.toString('base64')})});if(!result.ok)fail();
       pendingRead=null;const saved=await read();if(JSON.stringify(saved.state.sessions[key]||null)!==JSON.stringify(state.sessions[key]||null))fail();
       return true;
-    });writeTail=work;return work;
+    });
+    writeTail=work;
+    if(!requireExisting)identityWriteTail=work;
+    return work;
   }
-  return {kind:'PRIVATE_GITHUB_CAS',async get(key,fingerprint,options){await writeTail.catch(()=>{});const {state}=await sharedRead(options),entry=state.sessions[key];if(state.credentialFingerprint!==fingerprint||!valid(key,entry)||entry.fingerprint!==fingerprint)return null;return {expiresAt:entry.expiresAt,idleExpiresAt:entry.idleExpiresAt};},set:(key,session,fingerprint)=>write(key,{...session,fingerprint}),touch:(key,session,fingerprint)=>write(key,{...session,fingerprint},true),delete:key=>write(key,null)};
+  return {kind:'PRIVATE_GITHUB_CAS',async get(key,fingerprint,options){
+    // An idle renewal only extends an existing deadline. The address path can
+    // verify the currently signed deadline without waiting behind that write.
+    await (options?.parallelValidation?identityWriteTail:writeTail).catch(()=>{});
+    const {state}=await sharedRead(options),entry=state.sessions[key];
+    if(state.credentialFingerprint!==fingerprint||!valid(key,entry)||entry.fingerprint!==fingerprint)return null;
+    return {expiresAt:entry.expiresAt,idleExpiresAt:entry.idleExpiresAt};
+  },set:(key,session,fingerprint)=>write(key,{...session,fingerprint}),touch:(key,session,fingerprint)=>write(key,{...session,fingerprint},true),delete:key=>write(key,null)};
 }

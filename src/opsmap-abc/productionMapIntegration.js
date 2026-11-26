@@ -106,6 +106,7 @@ export function mountProductionMapApi(app,{
   // The entry gate still checks the dated roster session before the request and before sending its response.
   app.use('/api/map-phase2b/private',(req,res,next)=>stageOnly&&
     (req.path==='/stage-address-evidence'||req.path==='/shadow-coverage/point'||req.path==='/map-sdk-config'&&req.query.sdkOnly==='1'||
+      (req.method==='GET'&&/^\/shadow-coverage\/postal\/(?:view|geometry|bootstrap|point)$/.test(req.path))||
       (req.method==='GET'&&req.path==='/dated-delivery')||(req.method==='POST'&&req.path==='/address-lookup'))
     ? requireStageRead(req,res,next) : mapStaff.requireStaff(req,res,next));
   mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
@@ -117,7 +118,14 @@ export function mountProductionMapApi(app,{
     const sdkOnly = req.query.sdkOnly === '1';
     const lookup = sdkOnly ? null : await addressLookupService.status();
     const allowExternalBatchAddressLookup = externalBatchAddressApproved===true && lookup?.enabled===true &&
-      Number.isSafeInteger(lookup.dailyUsed) && lookup.dailyUsed>=0 && lookup.dailyUsed<lookup.dailyLimit;
+      Number.isSafeInteger(lookup.dailyUsed) && lookup.dailyUsed>=0 &&
+      (lookup.dailyUsed<lookup.dailyLimit || lookup.addressPermitsAvailable>0);
+    if(allowExternalBatchAddressLookup){
+      const sessionKey=res.locals.staffSession?.key;
+      void addressLookupService.warmAddressPermits?.(()=>{
+        if(!mapStaff.isSessionCurrent(req,sessionKey))throw Error('STAFF_LOGIN_REQUIRED');
+      }).catch(()=>{});
+    }
     const driverContactEnabled = env.OPSMAP_DRIVER_CONTACT_ENABLED==='1';
     const driverContactCenter = driverContactEnabled && stageOnly ? env.OPSMAP_STAGE_DRIVER_SHEET_CENTER : null;
     const respond=()=>res.set('Cache-Control','private, no-store').json({javascriptKey,...coverage,...(osanCenter?{centers:[osanCenter]}:{}),driverContactEnabled,

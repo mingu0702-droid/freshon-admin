@@ -33,3 +33,26 @@ test('late activity after durable logout cannot recreate a revoked session',asyn
  await a.set(key,s,fp);const prior=await b.get(key,fp);assert.ok(prior);await a.delete(key);assert.equal(await b.touch(key,prior,fp),false);assert.equal(await a.get(key,fp),null);
  await a.set(key,s,fp);await Promise.all([a.delete(key),a.touch(key,s,fp)]);assert.equal(await b.get(key,fp),null);
 });
+test('fast map reads verify the signed deadline during idle renewal and still wait for logout',async()=>{
+ const g=github(),env={OPSMAP_PRODUCTION_SESSION_ENABLED:'1',GITHUB_CACHE_REPO:'mingu0702-droid/freshon-cache',GITHUB_TOKEN:'fixture',
+  OPSMAP_MANUAL_PIN_GITHUB_BRANCH:'production/opsmap-auth',MAP_STAFF_SESSION_SECRET:'a'.repeat(43)};
+ let hold,writing;
+ const store=createProductionStaffSessionStore({env,fetchImpl:async(url,options)=>{
+  if(options.method==='PUT'&&hold){const current=hold;hold=null;writing();await current;}
+  return g.fetch(url,options);
+ }});
+ const key='b'.repeat(64),fp='c'.repeat(64),session={expiresAt:Date.now()+60_000,idleExpiresAt:Date.now()+30_000};
+ await store.set(key,session,fp);
+ const gate=()=>{let release;hold=new Promise(resolve=>release=resolve);const started=new Promise(resolve=>writing=resolve);return {release,started};};
+ const renewal=gate(),touch=store.touch(key,{...session,idleExpiresAt:session.idleExpiresAt+10_000},fp);
+ await renewal.started;
+ try{assert.deepEqual(await store.get(key,fp,{parallelValidation:true}),session);}
+ finally{renewal.release();}
+ await touch;
+ const revocation=gate(),logout=store.delete(key);
+ await revocation.started;
+ const get=store.get(key,fp,{parallelValidation:true});
+ revocation.release();
+ await logout;
+ assert.equal(await get,null);
+});

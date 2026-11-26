@@ -4352,10 +4352,8 @@
     }
     trace?.mark('detail');
     if(!keepViewport)trace?.finish('temporary');
-    const enrich=()=>{if(state.virtual===row)renderSearchTemporaryNearby(row);};
     afterSearchPaint(()=>{
-      if(trace&&typeof window.requestIdleCallback==='function')window.requestIdleCallback(enrich,{timeout:800});
-      else enrich();
+      if(state.virtual===row)renderSearchTemporaryNearby(row,trace);
     });
   }
 
@@ -4403,7 +4401,7 @@
     temporaryDistance={line,label,badge,path,text};bindTemporaryDistanceActions();positionTemporaryDistanceLabel();
   }
 
-  function renderSearchTemporaryNearby(point) {
+  function renderSearchTemporaryNearby(point,trace) {
     if(!point?.searchTemporary||point!==state.virtual||temporaryDetailPoint!==point)return;
     const panel=$('#nearWrap');
     if(!panel)return;
@@ -4426,6 +4424,9 @@
     const expanded=panel.querySelector('[data-nearby-stores]')?.open;
     panel.innerHTML=window.MapNewAreaDetailPanel.nearby({nearest,stores,expanded});
     window.MapNewAreaDetailPanel.bindMore(panel,stores);
+    if(trace&&nearest)requestAnimationFrame(()=>{
+      if(temporaryDetailPoint===point&&visibleSearchPin(point))trace.record('completeResult');
+    });
     panel.onclick=event=>{
       const code=event.target.closest('[data-area-nearby-code]')?.dataset.areaNearbyCode;
       const store=index.byCode.get(code);

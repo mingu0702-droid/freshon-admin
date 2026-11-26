@@ -10,6 +10,8 @@ export const createKakaoGeocodeLedger=()=>({schema:1,epoch:KAKAO_GEOCODE_EPOCH,h
 const hash=text=>createHash('sha256').update(text,'utf8').digest('hex');
 const fail=(code,status=503)=>{throw Object.assign(Error(code),{code,status});};
 const day=stamp=>new Date(stamp+32400000).toISOString().slice(0,10);
+const addressPermitCount=3;
+const addressPermitLifetimeMs=5*60_000;
 const safePlaceQuery=value=>{
  const text=value.normalize('NFKC').trim().replace(/ +/g,' ');
  return text.length>=2&&text.length<=100&&/^[가-힣a-z0-9 ()·.,&'-]+$/i.test(text)&&
@@ -35,11 +37,13 @@ function interactiveDocuments(body,mode){
  return [...found.values()];
 }
 
-export function createKakaoCoordinateConnection({env=process.env,store,independentAddressLookup=()=>null,stageAddressApproved=false,now=Date.now,fetchImpl=globalThis.fetch}={}) {
+export function createKakaoCoordinateConnection({env=process.env,store,independentAddressLookup=()=>null,stageAddressApproved=false,enableAddressPermits=false,now=Date.now,fetchImpl=globalThis.fetch}={}) {
  const externalDisabled=env.OPSMAP_STAGE_VERIFY_ONLY==='1'&&!stageAddressApproved;
  const configuredLimit=Number(env.OPSMAP_KAKAO_GEOCODING_DAILY_LIMIT||100);
  const dailyLimit=Number.isSafeInteger(configuredLimit)&&configuredLimit>=1&&configuredLimit<=1000?configuredLimit:100;
  let blocked=false,cooldownUntil=0,lastProviderAt=0,providerQueue=Promise.resolve();const pending=new Map();
+ const permitsEnabled=enableAddressPermits&&store?.supportsAddressPermits===true;
+ let addressPermits,permitFill,warmedDay;
  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
  const providerRequest=work=>{const task=providerQueue.catch(()=>{}).then(async()=>{const delay=250-(Date.now()-lastProviderAt);if(delay>0)await wait(delay);lastProviderAt=Date.now();return work();});providerQueue=task;return task;};
  const proof=()=>{
@@ -54,13 +58,69 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
  };
  const transaction=(work,options)=>{if(!store?.durable||typeof store.transaction!=='function')fail('GEOCODE_DURABLE_LEDGER_REQUIRED');return store.transaction((state,commit)=>work(validate(state),commit),options);};
  const keywordProof=()=>env.OPSMAP_KAKAO_KEYWORD_FREE_QUOTA_VERIFIED==='1';
+ const permitOpen=batch=>batch?.day===day(now())&&now()<batch.expiresAt;
+ const availablePermits=()=>!blocked&&permitOpen(addressPermits)?addressPermits.remaining:0;
+ function requireAddressApproval(){
+  if(externalDisabled||env.OPSMAP_KAKAO_GEOCODING_ENABLED!=='1')fail('GEOCODING_DISABLED');
+  if(!proof())fail('TARGET_APP_FREE_QUOTA_UNVERIFIED');
+  if(blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
+  if(now()<cooldownUntil)fail('GEOCODE_RETRY_COOLDOWN');
+ }
+ function fillAddressPermits(assertCurrent,options,warming=false){
+  if(permitFill)return permitFill;
+  const fill=transaction(async(state,commit)=>{
+   requireAddressApproval();
+   if(state.blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
+   if(!state.diagnosticPassed)fail('GEOCODING_DISABLED');
+   await assertCurrent();
+   const stamp=now(),today=day(stamp),charged=state.days[today]??0;
+   const permitDays=state.addressPermitDays??{};
+   const previouslyReserved=permitDays[today]??0;
+   if(!Number.isSafeInteger(charged)||charged<0||
+     typeof permitDays!=='object'||Array.isArray(permitDays)||
+     !Number.isSafeInteger(previouslyReserved)||previouslyReserved<0||previouslyReserved>charged)fail('GEOCODE_LEDGER_INVALID');
+   const remaining=Math.min(addressPermitCount,dailyLimit-charged);
+   if(warming&&remaining<addressPermitCount)return;
+   if(remaining<=0)fail('GEOCODE_DAILY_LIMIT',429);
+   if(!Number.isSafeInteger(state.used+remaining))fail('GEOCODE_LEDGER_INVALID');
+   // Charge the full batch with the existing durable CAS before making it available.
+   // Restarted processes never restore or refund unused permits from this record.
+   state.used+=remaining;
+   state.days[today]=charged+remaining;
+   state.addressPermitDays={...permitDays,[today]:previouslyReserved+remaining};
+   await commit(state);
+   addressPermits={day:today,expiresAt:stamp+addressPermitLifetimeMs,remaining};
+  },{reservation:true,...options}).finally(()=>{if(permitFill===fill)permitFill=null;});
+  return permitFill=fill;
+ }
+ async function warmAddressPermits(assertCurrent){
+  if(!permitsEnabled||availablePermits()||permitFill||warmedDay===day(now()))return;
+  await assertCurrent();
+  if(availablePermits()||permitFill||warmedDay===day(now()))return;
+  warmedDay=day(now());
+  await fillAddressPermits(assertCurrent,undefined,true);
+ }
+ async function takeAddressPermit(assertCurrent,options){
+  await assertCurrent();
+  requireAddressApproval();
+  while(!availablePermits()){
+   await fillAddressPermits(assertCurrent,options);
+   await assertCurrent();
+   requireAddressApproval();
+   if(!permitOpen(addressPermits))fail('GEOCODE_RETRY_COOLDOWN');
+  }
+  // Claim exactly once without yielding between the availability check and debit.
+  addressPermits.remaining--;
+  return addressPermits;
+ }
  const status=async()=>{
   const independentEnabled=Boolean(independentAddressLookup());
   if(externalDisabled)return {enabled:false,independentEnabled,reason:'GEOCODING_DISABLED',retention:'REQUEST_ONLY'};
   if(!proof())return {enabled:false,independentEnabled,reason:'TARGET_APP_FREE_QUOTA_UNVERIFIED',retention:'REQUEST_ONLY'};
   try{return await transaction(async state=>{
+   if(permitsEnabled&&state.blocked){blocked=true;addressPermits=null;}
    const enabled=env.OPSMAP_KAKAO_GEOCODING_ENABLED==='1'&&state.diagnosticPassed&&!state.blocked&&!blocked;
-   return {enabled,independentEnabled,keywordEnabled:enabled&&keywordProof(),
+   return {enabled,independentEnabled,keywordEnabled:enabled&&keywordProof(),addressPermitsAvailable:enabled?availablePermits():0,
    diagnosticAvailable:env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED==='1'&&!state.diagnosticUsed&&!state.blocked&&!blocked,
    reason:state.blocked||blocked?'GEOCODE_AUTOMATICALLY_BLOCKED':enabled?'READY':state.diagnosticPassed?'GEOCODING_DISABLED':'DIAGNOSTIC_REQUIRED',
    dailyLimit,dailyUsed:Number(state.days[day(now())]||0),epoch:state.epoch,retention:'REQUEST_ONLY',lastAttempt:state.lastAttempt||null};},{status:true});}
@@ -110,7 +170,15 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
    const reservationStarted=performance.now();
    let reservationAuthMs=0;
    const githubRequests={reads:0,writes:0},serverTimings={};
-   await transaction(async(state,commit)=>{
+   const budgetOptions={reservation:!diagnostic,onRequest:method=>githubRequests[method==='GET'?'reads':'writes']++,
+    onTiming:(phase,ms)=>{serverTimings[phase]=ms;}};
+   let permit;
+   if(permitsEnabled&&!diagnostic&&mode==='address'){
+    const ready=availablePermits()>0;
+    permit=await takeAddressPermit(assertCurrent,budgetOptions);
+    serverTimings.geocodePermitReady=Number(ready);
+    console.info(JSON.stringify({component:'opsmap-geocode-permit',date:permit.day,ready}));
+   }else await transaction(async(state,commit)=>{
     if(state.blocked||blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
     if(diagnostic){if(env.OPSMAP_KAKAO_DIAGNOSTIC_ENABLED!=='1'||state.diagnosticUsed)fail('DIAGNOSTIC_ALREADY_USED',429);}
     else if(env.OPSMAP_KAKAO_GEOCODING_ENABLED!=='1'||!state.diagnosticPassed)fail('GEOCODING_DISABLED');
@@ -122,8 +190,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
     state.used++;state.days[today]=count+1;state.queries[today+':'+queryHash]=Number(state.queries[today+':'+queryHash]||0)+1;
     if(diagnostic)state.diagnosticUsed=true;
     await commit(state);
-   },{reservation:!diagnostic,onRequest:method=>githubRequests[method==='GET'?'reads':'writes']++,
-    onTiming:(phase,ms)=>{serverTimings[phase]=ms;}});
+   },budgetOptions);
    const ledgerReservationMs=performance.now()-reservationStarted-reservationAuthMs;
    let stage='PROVIDER_REQUEST',providerHttp=null,providerStarted=null,providerDurationMs=null;const started=now();
    try{
@@ -137,6 +204,10 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
      await assertCurrent();
      if(blocked)fail('GEOCODE_AUTOMATICALLY_BLOCKED');
      if(now()<cooldownUntil)fail('GEOCODE_RETRY_COOLDOWN');
+     if(permit){
+      requireAddressApproval();
+      if(!permitOpen(permit))fail('GEOCODE_RETRY_COOLDOWN');
+     }
      providerStarted=performance.now();
      serverTimings.geocodeProviderQueue=providerStarted-providerQueued;
      return fetchImpl(url,{method:'GET',headers:{Authorization:'KakaoAK '+String(env.KAKAO_REST_API_KEY).trim()},signal:AbortSignal.timeout(6000),redirect:'error',cache:'no-store'});
@@ -172,7 +243,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
     // Authentication/quota/unsafe contracts stop shared calls. A transport outage
     // only backs off: one network error must not disable the rest of the day.
     const transient=['KAKAO_TIMEOUT','KAKAO_NETWORK_FAILED'].includes(code)||Number.isInteger(providerHttp)&&providerHttp>=500;
-    if(transient)cooldownUntil=now()+30000;else blocked=true;
+    if(transient)cooldownUntil=now()+30000;else {blocked=true;addressPermits=null;}
     try{await transaction(async(state,commit)=>{if(!transient)state.blocked=true;state.lastAttempt=lastAttempt;await commit(state);});}catch{blocked=true;}
     throw Object.assign(Error(code),{code,status:502,providerHttp:lastAttempt.providerHttp,providerDurationMs});
    }
@@ -192,7 +263,7 @@ export function createKakaoCoordinateConnection({env=process.env,store,independe
    evidence:{source:'USER_DEVELOPER_CONSOLE_20261103',appId:KAKAO_EXPECTED_APP_ID,addressDailyUsed:0,addressDailyQuota:100000,mapSdkUsed:14,mapSdkQuota:300000,paidApiEnabled:false},
    missingGateSettings:missing,...await status()};
  };
- return {status,lookup,configuration,prepareReservation};
+ return {status,lookup,configuration,prepareReservation,warmAddressPermits};
 }
 export function mountKakaoCoordinateConnection({app,requireStaff,isSessionCurrent,service,jsonBody,origin}){
  const respond=diagnostic=>async(req,res)=>{
@@ -214,7 +285,7 @@ export function mountKakaoCoordinateConnection({app,requireStaff,isSessionCurren
    for(const [phase,ms] of Object.entries(serverTimings||{}))addStaffTiming(res,phase,ms);
    return requireStaff(req,res,()=>{
     if(Number.isFinite(providerDurationMs))res.set('Server-Timing','opsmap-kakao-provider;dur='+providerDurationMs);
-    if(githubRequests?.writes)res.set('X-Opsmap-Geocode-Github',githubRequests.reads+','+githubRequests.writes);
+    if(githubRequests)res.set('X-Opsmap-Geocode-Github',githubRequests.reads+','+githubRequests.writes);
     return res.json(payload);
    });
   }catch(error){return requireStaff(req,res,()=>{

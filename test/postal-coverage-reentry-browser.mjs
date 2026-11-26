@@ -22,6 +22,7 @@ header.write('PCG1');
 header.writeInt32LE(1,4);
 const geometry = Buffer.concat([header,encodePostalZone({id:postalCode,bbox:[127.027,37.495,127.031,37.499]},rings)]);
 let geometryReads = 0;
+let bufferedFrames = false;
 const browser = await chromium.launch({ channel:'chrome', headless:true });
 
 try {
@@ -51,13 +52,18 @@ try {
     let data;
     if (endpoint === 'view') {
       viewportReads.push([url.searchParams.get('level'),url.searchParams.get('box')]);
+      const box=url.searchParams.get('box').split(',').map(Number);
       data = {
         period, generation, stale:true, completeness:{ observed:observedDays, missing:[], sourceMissing:[], centerObserved:{}, unverified:[] },
         summary:{ recorded:observedDays ? 1 : 0 }, source:{ label:'fixture', url:'#' }, candidates:[],
-        tier:postalTilesLevel(url.searchParams.get('box').split(',').map(Number)), boundary:'fixture-boundary',
+        tier:postalTilesLevel(box), boundary:'fixture-boundary',
         tiles:[['fixture-tile',geometry.length]], tones:[[6241,'LOW']], badges:[],
         operationsAvailable:true,dispatchDensityAvailable:true,
       };
+      if(bufferedFrames&&url.searchParams.get('buffered')==='1'){
+        const [w,s,e,n]=box,dx=(e-w)*.55,dy=(n-s)*.55;
+        data.coveredBox=[w-dx,s-dy,e+dx,n+dy];
+      }
     } else if(endpoint === 'operations') {
       const days=Number(url.searchParams.get('days')),area=url.searchParams.get('area');
       operationsReads.push([days,area]);
@@ -145,6 +151,20 @@ try {
   assert.equal(rosterReads.length, firstRosterCount);
   assert.equal(searchReads, 1);
   assert.deepEqual(viewportReads.at(-1), viewport);
+
+  bufferedFrames=true;
+  await page.evaluate(()=>window.coverageFixture.close());
+  const buffered=page.waitForResponse(response=>new URL(response.url()).searchParams.get('buffered')==='1');
+  await page.evaluate(()=>window.coverageFixture.open());
+  await buffered;
+  await drawAt(2);
+  const bufferedReads=viewportReads.length;
+  const drawCount=Number(JSON.parse(await page.locator('#coverageMap').getAttribute('data-postal-draw')).count);
+  await page.evaluate(()=>window.__coverageFixture.mapFor(document.querySelector('#coverageMap')).panBy(100,15));
+  await page.waitForFunction(count=>JSON.parse(document.querySelector('#coverageMap').dataset.postalDraw).count>count,drawCount);
+  assert.equal(viewportReads.length,bufferedReads,'a new pan inside the verified envelope needs no metadata fetch');
+  assert.equal(geometryReads,1);
+  await page.evaluate(()=>window.__coverageFixture.mapFor(document.querySelector('#coverageMap')).panBy(-100,-15));
 
   generation = 'after-switch';
   await page.evaluate(() => {

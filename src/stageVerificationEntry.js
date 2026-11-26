@@ -322,7 +322,7 @@ export function createStageVerificationApp({env = process.env, fetchImpl = fetch
     addressBudget?.durable===true && typeof addressBudget.transaction==='function';
   const addressEnv=primary?env:stage;
   const addressLookupService = createKakaoCoordinateConnection({env:addressEnv,fetchImpl,
-    store:addressBudget,
+    store:addressBudget,enableAddressPermits:primaryBatchAddressApproved,
     stageAddressApproved,independentAddressLookup:()=>{
       const bundled=validation.active()?.bundledAddress,index=readOfficialIndex();
       return (bundled||index)?{lookup(query){

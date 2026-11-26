@@ -7,7 +7,7 @@ const geocodeLedger=Symbol('separate-geocode-ledger');
 const geocodeReadLeaseMs=5000;
 export function createProductionGeocodeBudgetGithubStore(options={}){
  const store=createProductionManualPinGithubStore({...options,[geocodeLedger]:true});let tail=Promise.resolve();
- return {...store,transaction(work,options){
+ return {...store,supportsAddressPermits:true,transaction(work,options){
   const queued=performance.now();
   const result=tail.then(()=>{
    options?.onTiming?.('geocodeLedgerQueue',performance.now()-queued);

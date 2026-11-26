@@ -1,6 +1,6 @@
 import { createPostalGeometryReader, createPostalMap } from './postal-coverage-map.mjs?v=20261127-viewport-reuse';
 import { createPostalAreaDetails } from './postal-area-details.mjs?v=20261126-reentry';
-import { splitPostalBootstrap } from './postal-geometry.mjs';
+import { postalTilesLevel, splitPostalBootstrap } from './postal-geometry.mjs';
 import { createCurrentRegistrationPanel } from './postal-current-registration-panel.mjs?v=20261124-current-registration';
 import { coverageCenterBounds } from './coverage-center-viewport.mjs';
 
@@ -398,7 +398,8 @@ export function createCoveragePanel({ workspace, header, openStore }) {
   async function readView(force = false) {
     if (!active || !map) return;
     const { box, level, world } = map.viewport(), params = baseScope();
-    const key = [range(),layer(),params.center,level,Boolean(world), ...box.map(value => value.toFixed(5))].join(':');
+    const scopeKey=[range(),layer(),params.center].join(':');
+    const key = [scopeKey,level,Boolean(world), ...box.map(value => value.toFixed(5))].join(':');
     const first = !view && Boolean(world);
     const firstScope = first ? [params.days,params.center].join(':') : null;
     if (loadingKey === key || (first && firstScope === bootstrapScope)) return;
@@ -413,11 +414,19 @@ export function createCoveragePanel({ workspace, header, openStore }) {
     if (!view) message('우편번호 경계를 불러오는 중입니다.');
     try {
       const signal = timeout(controller.signal);
+      const detailed=postalTilesLevel(box)==='detail';
       const requested = { ...params, level, ...(world ? { indexed:'1' } : {}),
+        ...(detailed?{buffered:'1'}:{}),
         box:box.map(value => value.toFixed(5)).join(',') };
       // The in-memory cache lasts only between the protected view refreshes.
-      const saved = force ? null : viewCache.get(key);
-      const cached = saved?.until > Date.now() ? saved.data : null;
+      const at=Date.now();
+      const exact=viewCache.get(key);
+      const saved = force ? null : exact?.until>at ? exact : detailed ? [...viewCache.values()].find(entry=>{
+        const bounds=entry.data.coveredBox;
+        return entry.scopeKey===scopeKey&&entry.until>at&&entry.data.tier==='detail'&&
+          Array.isArray(bounds)&&bounds.length===4&&box[0]>=bounds[0]&&box[1]>=bounds[1]&&box[2]<=bounds[2]&&box[3]<=bounds[3];
+      }) : null;
+      const cached = saved?.data;
       const frame = first && !geometry.hasOverview() ? await firstViewport(requested,signal) : null;
       const data = cached || frame?.view || await read('view',requested,signal);
       if (!active || viewportRead !== controller) return;
@@ -443,7 +452,7 @@ export function createCoveragePanel({ workspace, header, openStore }) {
       view = { ...data, center: params.center,layer:layer() };
       viewKey = key;
       viewCache.delete(key);
-      viewCache.set(key, cached ? saved : { data,until:Date.now()+20000 });
+      viewCache.set(key, cached ? saved : { data,scopeKey,until:Date.now()+20000 });
       if (viewCache.size > 6) viewCache.delete(viewCache.keys().next().value);
       host.dataset.postalGeometry = JSON.stringify({ indexed:Boolean(data.overview), combined:Boolean(frame), ...geometry.metrics() });
       applyView(view,same);
