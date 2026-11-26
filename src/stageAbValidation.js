@@ -562,7 +562,8 @@ export function mountStageAbValidation(router, {requireStaff, isSessionCurrent, 
             .map(([key,duration])=>key+';dur='+duration.toFixed(2)).join(', '));
           return res.json({ok:true,generation,data});
         };
-        return immediate&&includeCustomers&&!externalResult?respond():requireStaff(req,res,respond);
+        // The entry gate rechecks an external response against the durable session store.
+        return immediate&&includeCustomers?respond():requireStaff(req,res,respond);
       }catch(error){
         if(res.destroyed||res.writableEnded)return;
         const code=external&&/^[A-Z_]+$/.test(error.code||'')?error.code:'STAGE_BATCH_UNAVAILABLE';

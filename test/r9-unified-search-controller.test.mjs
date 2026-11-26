@@ -25,11 +25,11 @@ function declaration(name){
 // interface stubs here and are exercised by the independent full-browser QA.
 const controllerSource=['normalizeSearchText','normalizeSearchAddress','searchTokens','rankSearchRow','searchIndexCurrent','buildSearchIndex','searchIndexWork','advanceSearchIndex','getSearchIndex','prepareStageSearchIndex','currentSearchStore','currentStageSearchCustomers','rankSearchRows','fixedVehicleFor','normalizeApiStore','storeSearchAddresses','newAreaRegistryRows','usesRecentOperations',
  'closeUnifiedSearchResults','invalidateUnifiedSearch','clearUnifiedSearch','selectUnifiedSearchStore','applyUnifiedSearchCoordinateGuard',
- 'renderResults','unifiedAddressQuery','completeAddressRegion','stageAddressHashMatches','findColdRegistrationAddressRows','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
+ 'renderResults','unifiedAddressQuery','completeAddressRegion','stageAddressHashMatches','partialSearchAddress','findColdRegistrationAddressRows','findStoredSearchRows','afterSearchPaint','startSearchTrace','search','searchPeriod'].map(declaration).join('\n');
 function fixture({rows=[],remote=async()=>({data:[],meta:{}}),manual,stageAddress}={}){
  const nodes=new Map(),selected=[],fallback=[],queries=[],requests=new Map();let resets=0,tempClears=0;
  const node=key=>{if(!nodes.has(key))nodes.set(key,{dataset:{},value:'',hidden:true,html:'',replaceChildren(){this.html='';this.buttons=[];},setAttribute(k,v){this[k]=v;},dispatchEvent(){},get innerHTML(){return this.html;},set innerHTML(v){this.html=v;this.buttons=[...v.matchAll(/data-result="(\d+)"/g)].map(m=>({dataset:{result:m[1]}}));}});return nodes.get(key);};
- const context={console,AbortController,Event,setTimeout,clearTimeout,Number,Map,Set,performance,requestAnimationFrame:fn=>fn(),
+ const context={console,AbortController,Event,setTimeout,clearTimeout,Number,Map,Set,performance,requestAnimationFrame:fn=>fn(),primaryStartup:false,
   state:{mode:'BASE_60D',selected:null,searchRequestId:0,selectedDate:'2026-11-02',centerFilter:'osan',selectedVehicles:['101','122'],currentRows:rows},
   periodBasis:'vehicle',periodRows:rows,latestSnapshotRows:rows,allStores:rows,
  coordinateByCode:new Map(rows.map(row=>[row.customerCode,row])),generalRegistryRows:new Map(),storeByVehicleAndCode:new Map(),storesByCode:new Map(rows.map(row=>[row.customerCode,row])),baseVehicles:new Map(),baseVehicleStatus:'LOADING',baseVehicleMeta:null,requestControllers:requests,
@@ -481,4 +481,42 @@ test('manual projection refresh preserves an already verified search address con
  const start=source.indexOf('refreshManualCoordinates(){'),end=source.indexOf('},',start)+1;
  vm.runInContext('({'+source.slice(start,end)+'}).refreshManualCoordinates()',f.context);
  assert.equal(f.context.state.selected.lat,null);assert.equal(f.context.state.selected.lng,null);assert.equal(f.context.state.selected.resolutionStatus,'ADDRESS_CHANGED_REVIEW_REQUIRED');
+});
+test('partial registered addresses match the full building number and district without a remote search', async()=>{
+ const rows=[
+   store('S995111','충주 매장','충청북도 충주시 남산로 73 (용산동)'),
+   store('S995112','다른 건물','충북 충주시 남산로 73-1'),
+   store('S995113','다른 도로','충북 충주시 새남산로 73'),
+   store('S995114','다른 지역','충북 영동군 남산로 73'),
+ ];
+ const f=fixture({rows,stageAddress:async()=>assert.fail('registered address should stay local')});
+ f.context.snapshotMeta={sourceGeneration:'a'.repeat(64)};
+ f.context.customerRegistry={currentVersion:()=> 'test-registry'};
+ f.context.stageRegistrationOnly=()=>true;
+ f.context.generalRegistryRows=new Map(rows.map(row=>[row.customerCode,row]));
+ await f.context.searchPeriod('충주시 남산로 73');
+ assert.equal(f.selected.at(-1)?.customerCode,'S995111');
+ f.context.getSearchIndex();
+ await f.context.searchPeriod('충주시 남산로 73-1');
+ assert.equal(f.selected.at(-1)?.customerCode,'S995112');
+ await f.context.searchPeriod('남산로 73');
+ assert.deepEqual(f.node('#results').buttons.map(button=>button.dataset.result),['0','1']);
+ assert.equal(f.queries.length,0);
+});
+
+test('primary combines the approved external lookup and protected evidence only after a local miss', async()=>{
+ const generation='a'.repeat(64), query='충북 충주시 외부로 80';
+ const evidence={documents:[{x:'127.1',y:'37.5'}],resolution:{kind:'EXACT'}};
+ const requests=[];
+ const f=fixture({stageAddress:async(_query,version,options)=>{
+   requests.push([version,options.external]);
+   return {status:'ADDRESS_NOT_MATCHED',external:evidence};
+ }});
+ f.context.primaryStartup=true;
+ f.context.snapshotMeta={sourceGeneration:generation};
+ f.context.window.KAKAO_MAP_CONFIG={allowExternalAddressLookup:true,allowExternalBatchAddressLookup:true};
+ await f.context.searchPeriod(query);
+ assert.deepEqual(requests,[[generation,'resolve']]);
+ assert.equal(f.fallback.at(-1)?.options.externalEvidence,evidence);
+ assert.equal(f.queries.length,0);
 });

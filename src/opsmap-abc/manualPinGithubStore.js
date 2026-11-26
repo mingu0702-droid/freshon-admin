@@ -4,20 +4,58 @@ import crypto from 'node:crypto';
 const fail=(code,status=503)=>{throw Object.assign(new Error(code),{code,status});};
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 const geocodeLedger=Symbol('separate-geocode-ledger');
+const geocodeReadLeaseMs=5000;
 export function createProductionGeocodeBudgetGithubStore(options={}){
  const store=createProductionManualPinGithubStore({...options,[geocodeLedger]:true});let tail=Promise.resolve();
- return {...store,transaction(work){const result=tail.then(()=>store.transaction(work));tail=result.catch(()=>{});return result;}};
+ return {...store,transaction(work,options){
+  const queued=performance.now();
+  const result=tail.then(()=>{
+   options?.onTiming?.('geocodeLedgerQueue',performance.now()-queued);
+   return store.transaction(work,options);
+  });
+  tail=result.catch(()=>{});return result;
+ }};
 }
-export function createProductionManualPinGithubStore({repo,token,branch,productionBranch='main',fetchImpl=fetch,[geocodeLedger]:geocode=false}={}){
+export function createProductionManualPinGithubStore({repo,token,branch,productionBranch='main',fetchImpl=fetch,clock=()=>performance.now(),[geocodeLedger]:geocode=false}={}){
  if(repo!=='mingu0702-droid/freshon-cache'||!token||branch!=='production/opsmap-manual-pins'||branch===productionBranch)fail('MANUAL_PIN_GITHUB_CONFIG');
- const root='https://api.github.com/repos/'+repo,api=root+'/contents/opsmap-production/'+(geocode?'geocode-budget-v1.json':'manual-pins-v1.json'),headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'opsmap-manual-pin-stage'};
- async function request(url,options={}){try{return await fetchImpl(url,{...options,headers,signal:AbortSignal.timeout(12000)});}catch{fail(options.method==='PUT'?'MANUAL_PIN_WRITE_OUTCOME_UNKNOWN':'MANUAL_PIN_GITHUB_NETWORK');}}
- async function read(){
-  const r=await request(root);if(!r.ok)fail('MANUAL_PIN_GITHUB_PERMISSION');const repoInfo=await r.json();if(repoInfo.private!==true||repoInfo.permissions?.push!==true)fail('MANUAL_PIN_GITHUB_PRIVATE_WRITE_REQUIRED');
-  const v=await request(api+'?ref='+encodeURIComponent(branch));if(v.status===404)fail('MANUAL_PIN_GITHUB_FILE_OR_BRANCH_MISSING');if(!v.ok)fail('MANUAL_PIN_GITHUB_READ');const m=await v.json();
+ const root='https://api.github.com/repos/'+repo,filePath='opsmap-production/'+(geocode?'geocode-budget-v1.json':'manual-pins-v1.json');
+ const api=root+'/contents/'+filePath,headers={Authorization:'Bearer '+token,Accept:'application/vnd.github+json','Content-Type':'application/json','User-Agent':'opsmap-manual-pin-stage'};
+ let committedLedger=null,repositoryUntil=0,ledgerUntil=0;
+ async function request(url,options={},onRequest){
+  onRequest?.(options.method||'GET');
+  try{return await fetchImpl(url,{...options,headers,signal:AbortSignal.timeout(12000)});}catch{fail(options.method==='PUT'?'MANUAL_PIN_WRITE_OUTCOME_UNKNOWN':'MANUAL_PIN_GITHUB_NETWORK');}
+ }
+ async function verifyPermission(reuse,onRequest){
+  const checkedAt=clock();
+  if(reuse&&checkedAt<repositoryUntil)return;
+  repositoryUntil=0;
+  const r=await request(root,{},onRequest);if(!r.ok)fail('MANUAL_PIN_GITHUB_PERMISSION');
+  const repoInfo=await r.json();
+  if(repoInfo.private!==true||repoInfo.permissions?.push!==true)fail('MANUAL_PIN_GITHUB_PRIVATE_WRITE_REQUIRED');
+  if(geocode)repositoryUntil=checkedAt+geocodeReadLeaseMs;
+ }
+ async function readFile(onRequest){
+  const v=await request(api+'?ref='+encodeURIComponent(branch),{},onRequest);
+  if(v.status===404)fail('MANUAL_PIN_GITHUB_FILE_OR_BRANCH_MISSING');if(!v.ok)fail('MANUAL_PIN_GITHUB_READ');const m=await v.json();
   if(!/^[a-f0-9]{40}$/.test(m.sha||'')||m.encoding!=='base64'||typeof m.content!=='string')fail('MANUAL_PIN_GITHUB_FORMAT');
   const b=Buffer.from(m.content,'base64');if(b.length>512000)fail('MANUAL_PIN_GITHUB_SIZE');let value;try{value=JSON.parse(b.toString('utf8'));}catch{fail('MANUAL_PIN_GITHUB_FORMAT');}
   return {sha:m.sha,value};
+ }
+ async function read({reservation=false,status=false,onRequest}={}){
+  if(!geocode){await verifyPermission(false,onRequest);return readFile(onRequest);}
+  const started=clock(),cached=committedLedger&&(reservation||status&&started<ledgerUntil);
+  const [,saved]=await Promise.all([verifyPermission(reservation||status,onRequest),cached?committedLedger:readFile(onRequest)]);
+  committedLedger=saved;
+  if(!cached)ledgerUntil=started+geocodeReadLeaseMs;
+  return saved;
+ }
+ async function verifiedReceipt(response,bytes) {
+  let receipt;
+  try{receipt=await response.json();}catch{return null;}
+  const sha=crypto.createHash('sha1').update('blob '+bytes.length+'\0').update(bytes).digest('hex');
+  if(receipt?.content?.type!=='file'||receipt.content.path!==filePath||receipt.content.sha!==sha||
+    !/^[a-f0-9]{40}$/.test(receipt.commit?.sha||''))return null;
+  return {sha,value:JSON.parse(bytes.toString('utf8'))};
  }
  function safeBytes(value){
   const text=JSON.stringify(value);if(Buffer.byteLength(text)>512000)fail('MANUAL_PIN_GITHUB_SIZE');
@@ -28,11 +66,30 @@ export function createProductionManualPinGithubStore({repo,token,branch,producti
  }
  // The previous private Git commit is the backup; each new state also carries
  // the complete per-customer audit chain. No second file is written.
- return {durable:true,kind:'github-production-cas-v1',backupStore:{async transaction(work){return work(null,async()=>{});}},async transaction(work){const old=await read(),state=structuredClone(old.value);let wrote=false;
+ return {durable:true,kind:'github-production-cas-v1',backupStore:{async transaction(work){return work(null,async()=>{});}},async transaction(work,options={}){
+  const {reservation=false,onRequest,onTiming}=options;
+  const started=performance.now(),old=await read(options),state=structuredClone(old.value);let wrote=false;
+  onTiming?.('geocodeLedgerRead',performance.now()-started);
   return work(state,async next=>{if(wrote)fail('MANUAL_PIN_GITHUB_SINGLE_WRITE');wrote=true;const bytes=safeBytes(next);
-   const response=await request(api,{method:'PUT',body:JSON.stringify({message:geocode?'Reserve isolated geocode request count':'Update isolated Stage manual pins',branch,sha:old.sha,content:bytes.toString('base64')})});
-   if([409,422].includes(response.status))fail('MANUAL_PIN_GITHUB_CONFLICT',409);if(!response.ok)fail('MANUAL_PIN_GITHUB_WRITE');
-   let saved;try{saved=await read();}catch{fail('MANUAL_PIN_GITHUB_READBACK_UNKNOWN');}if(hash(Buffer.from(JSON.stringify(saved.value),'utf8'))!==hash(bytes))fail('MANUAL_PIN_GITHUB_READBACK_UNKNOWN');
+   if(geocode)committedLedger=null;
+   const writeStarted=performance.now();
+   try {
+    if(geocode&&reservation&&clock()>=repositoryUntil)await verifyPermission(false,onRequest);
+    const response=await request(api,{method:'PUT',body:JSON.stringify({message:geocode?'Reserve isolated geocode request count':'Update isolated Stage manual pins',branch,sha:old.sha,content:bytes.toString('base64')})},onRequest);
+    if([409,422].includes(response.status))fail('MANUAL_PIN_GITHUB_CONFLICT',409);
+    if(!response.ok)fail('MANUAL_PIN_GITHUB_WRITE');
+    // Kakao is called only after proving the write. A valid Git object receipt
+    // proves the same content as a readback without another repository request.
+    let saved=geocode&&reservation?await verifiedReceipt(response,bytes):null;
+    if(!saved){
+     try{saved=geocode?await readFile(onRequest):await read(options);}catch{fail('MANUAL_PIN_GITHUB_READBACK_UNKNOWN');}
+     if(hash(Buffer.from(JSON.stringify(saved.value),'utf8'))!==hash(bytes))fail('MANUAL_PIN_GITHUB_READBACK_UNKNOWN');
+    }
+    if(geocode){committedLedger=saved;ledgerUntil=clock()+geocodeReadLeaseMs;}
+   }catch(error){
+    if(geocode)repositoryUntil=ledgerUntil=0;
+    throw error;
+   }finally{onTiming?.('geocodeLedgerWrite',performance.now()-writeStarted);}
   });
  }};
 }

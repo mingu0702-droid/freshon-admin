@@ -3711,8 +3711,16 @@
     return current;
   }
 
-  function findColdRegistrationAddressRows(keys, rows) {
+  function partialSearchAddress(query) {
+    if (completeAddressRegion(query)) return null;
+    const parsed = Phase2bUi.parseAddress(query);
+    if (!parsed.base || (parsed.prefix && !parsed.prefix.split(' ').every(part => /[시군구읍면]$/.test(part)))) return null;
+    return normalizeSearchAddress(parsed.name + ' ' + parsed.number);
+  }
+
+  function findColdRegistrationAddressRows(keys, rows, partialQuery, partialKey) {
     const matches = new Map(keys.filter(Boolean).map(key => [key, []]));
+    const partialMatches = new Set();
     // All digits in the final key occur in order in the NFKC source, even if
     // normalizing an address removes spaces or annotations between them.
     const digits = [...matches.keys()].map(key => key.replace(/[^0-9]/g, '').slice(-4));
@@ -3731,10 +3739,13 @@
           }
           return true;
         })) continue;
-        matches.get(normalizeSearchAddress(source))?.push(row);
+        const key = normalizeSearchAddress(source);
+        matches.get(key)?.push(row);
+        if (partialKey && key.endsWith(partialKey) && Phase2bUi.addressMatches(partialQuery, source)) partialMatches.add(row);
       }
     }
-    return [...new Set(keys.flatMap(key => matches.get(key) || []))];
+    const exact = [...new Set(keys.flatMap(key => matches.get(key) || []))];
+    return exact.length ? exact : [...partialMatches];
   }
 
   async function findStoredSearchRows(query,{signal,address=unifiedAddressQuery(query)||/^\d{19}$/.test(query)}={}) {
@@ -3746,12 +3757,19 @@
     const indexed = searchIndexCurrent(searchIndex);
     if(indexed||!stageAddressBatchEnabled()||registryVersion){
       const keys=[query,...NewAreaRequests.addressQueries(query,Phase2bUi.addressVariants)].map(normalizeSearchAddress);
+      const partialKey=partialSearchAddress(query);
       let matches;
       if(!indexed&&stageAddressBatchEnabled()&&stageRegistrationOnly()&&registryVersion){
-        matches=findColdRegistrationAddressRows(keys,generalRegistryRows);
+        matches=findColdRegistrationAddressRows(keys,generalRegistryRows,query,partialKey);
       }else{
         const {byAddress,records}=getSearchIndex();
         matches=[...new Set(keys.flatMap(key=>[...(byAddress.get(key)||[])]))].map(code=>records.get(code)?.row).filter(Boolean);
+        if(!matches.length&&partialKey){
+          for(const {row,addresses} of records.values()){
+            if(addresses.some(key=>key.endsWith(partialKey))&&
+              storeSearchAddresses(row).some(value=>value&&Phase2bUi.addressMatches(query,value))) matches.push(row);
+          }
+        }
       }
       if(matches.length)return matches;
     }
@@ -3969,9 +3987,12 @@
     const canPrepare=stageLookup&&window.KAKAO_MAP_CONFIG?.allowExternalAddressLookup===true&&
       completeAddressRegion(lookupText)&&lookupText.length<=200&&
       NewAreaRequests.addressQueries(text,Phase2bUi.addressVariants).length===1&&!NewAreaRequests.temporaryPoint(text);
+    const combinedExternal=canPrepare&&primaryStartup&&window.KAKAO_MAP_CONFIG?.allowExternalBatchAddressLookup===true;
     const resolveEvidence=(generation,external)=>{
       const cached=NewAreaRequests.cachedStageAddress?.(text,generation);
-      if(cached){trace.count('cacheHit',true);return Promise.resolve({reply:cached});}
+      if(cached&&!(external==='resolve'&&cached.status==='ADDRESS_NOT_MATCHED')){
+        trace.count('cacheHit',true);return Promise.resolve({reply:cached});
+      }
       trace.mark('apiStart');
       return NewAreaRequests.stageAddress(text,generation,{signal,external,onTiming:timings=>{
         for(const [name,value] of Object.entries(timings)){
@@ -3994,7 +4015,7 @@
     if(!active())return;
     trace.mark('matching');
     if(showMatches(local)){if(evidenceFlight)controller.abort('stored-match');return;}
-    if(stageAddressBatchEnabled()&&snapshotRetryAfter){
+    if(stageAddressBatchEnabled()&&snapshotRetryAfter&&(!address||!snapshotMeta?.sourceGeneration)){
       setSearchState('저장 매장 자료 복원 중',true);
       await waitForSearchSnapshot(signal);
       if(!active())return;
@@ -4007,17 +4028,18 @@
     let generation=snapshotMeta?.sourceGeneration??null;
     if(stageLookup){
       const readyFlight=generation===initialGeneration?evidenceFlight:null;
-      let {reply,error}=await (readyFlight||resolveEvidence(generation));
+      const external=generation&&combinedExternal&&!readyFlight?'resolve':undefined;
+      let {reply,error}=await (readyFlight||resolveEvidence(generation,external));
       // Stored evidence requests cannot reserve a provider call. Refresh/retry
       // only those requests and keep external authorization failures terminal.
-      if(active()&&NewAreaRequests.storedAddressConflict(error)){
+      if(active()&&!external&&NewAreaRequests.storedAddressConflict(error)){
         await pollGeneralSnapshot({recovering:true});
         const refreshed=snapshotMeta?.sourceGeneration??null;
         if(active()&&refreshed&&refreshed!==generation){
           generation=refreshed;
           ({reply,error}=await resolveEvidence(generation));
         }
-      }else if(active()&&NewAreaRequests.storedAddressUnavailable(error)&&generation===(snapshotMeta?.sourceGeneration??null)){
+      }else if(active()&&!external&&NewAreaRequests.storedAddressUnavailable(error)&&generation===(snapshotMeta?.sourceGeneration??null)){
         ({reply,error}=await resolveEvidence(generation));
       }
       evidenceError=error;

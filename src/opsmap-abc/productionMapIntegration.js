@@ -106,7 +106,7 @@ export function mountProductionMapApi(app,{
   // The entry gate still checks the dated roster session before the request and before sending its response.
   app.use('/api/map-phase2b/private',(req,res,next)=>stageOnly&&
     (req.path==='/stage-address-evidence'||req.path==='/shadow-coverage/point'||req.path==='/map-sdk-config'&&req.query.sdkOnly==='1'||
-      (req.method==='GET'&&req.path==='/dated-delivery'))
+      (req.method==='GET'&&req.path==='/dated-delivery')||(req.method==='POST'&&req.path==='/address-lookup'))
     ? requireStageRead(req,res,next) : mapStaff.requireStaff(req,res,next));
   mountCurrentCustomerDetailRoute(app,{requireStaff:mapStaff.requireStaff,previewEnabled,callHub,env});
   app.get('/api/map-phase2b/private/map-sdk-config',async(req,res)=>{
@@ -131,7 +131,9 @@ export function mountProductionMapApi(app,{
     }
     return mapStaff.requireStaff(req,res,respond);
   });
-  mountKakaoCoordinateConnection({app,requireStaff:mapStaff.requireStaff,isSessionCurrent:mapStaff.isSessionCurrent,service:addressLookupService,jsonBody:express.json({limit:'4kb'}),origin:env.MAP_STAFF_ORIGIN||env.RENDER_EXTERNAL_URL});
+  // The entry gate checks the durable session before and after the address lookup.
+  // Its inner route can reuse the same request's session and still check revocation.
+  mountKakaoCoordinateConnection({app,requireStaff:requireStageRead,isSessionCurrent:mapStaff.isSessionCurrent,service:addressLookupService,jsonBody:express.json({limit:'4kb'}),origin:env.MAP_STAFF_ORIGIN||env.RENDER_EXTERNAL_URL});
   app.get('/api/map-phase2b/private/address-lookup/config',async(req,res)=>{
     const value=await addressLookupService.configuration({javascriptKey:env.KAKAO_MAP_JAVASCRIPT_KEY});
     return mapStaff.requireStaff(req,res,()=>res.set('Cache-Control','private, no-store').json({ok:true,data:value}));
