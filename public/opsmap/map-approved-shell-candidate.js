@@ -324,7 +324,12 @@
       const text=`${label} ${scope.registered.toLocaleString('ko-KR')}곳 · 위치 확인 ${scope.located.toLocaleString('ko-KR')}곳`;
       if(registrationScope.textContent!==text)registrationScope.textContent=text;
     }
-    if(daily){const count=new Set(bridge.state.currentRows.map(row=>row.customerCode)).size;const badge=count?`${count} 매장`:bridge.isDataReady()?'0 매장':'불러오는 중';if($('#totalBadge').textContent!==badge)$('#totalBadge').textContent=badge;
+    if(daily){
+      const count=new Set(bridge.state.currentRows.map(row=>row.customerCode)).size;
+      let badge='불러오는 중';
+      if(count)badge=`${count} 매장`;
+      else if(bridge.isDataReady())badge=bridge.isVerifiedDailyEmpty()?'0 매장':'매장 수 미확인';
+      if($('#totalBadge').textContent!==badge)$('#totalBadge').textContent=badge;
       if($('#runListTitle').textContent!=='방문 순서')$('#runListTitle').textContent='방문 순서';
       const visits=bridge.state.currentRows.length;
       const drivers=bridge.dailyDriverNames();

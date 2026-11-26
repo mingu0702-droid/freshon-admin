@@ -120,6 +120,7 @@ test('Chromium desktop and mobile: one assignment result for the list, pins, fil
         assert.equal(await page.locator('#runListPanel [data-run-filter="ALL"]').getAttribute('aria-pressed'),'true');
       }
       await vehicle('999');assert.equal((await summary()).count,'0착');
+      await page.waitForFunction(()=>document.querySelector('#totalBadge').textContent==='0 매장');
       await vehicle('105');
       const calls=requests.length;
       const switching=[];
@@ -263,6 +264,11 @@ test('Stage B contract keeps every visit while vehicle evidence loads or fails',
       await page.waitForFunction(()=>window.MapUiLocalBridge?.state.map);
       await page.evaluate(()=>document.querySelector('#modeDaily').click());
       await ready();
+      await page.locator('#chooseRoutes').click();
+      await page.locator('#dailyCenter').selectOption('yeongnam');
+      await page.getByRole('button',{name:'운행 조회',exact:true}).click();
+      await page.waitForFunction(()=>document.querySelector('#totalBadge').textContent==='매장 수 미확인');
+      assert.equal((await summary()).total,'-');
       await page.locator('#chooseRoutes').click();
       await page.locator('#dailyCenter').selectOption('osan');
       await page.getByLabel('기사 기준',{exact:true}).check();

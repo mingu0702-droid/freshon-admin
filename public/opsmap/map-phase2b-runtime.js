@@ -6104,6 +6104,7 @@
     refreshCustomerRegistry:syncCustomerRegistry,
     customerRegistryStatus:()=>customerRegistry?.summary(),
     isDataReady:()=>state.mode==='DATE_ROUTE'?isDailyDataReady():dateReady,
+    isVerifiedDailyEmpty:verifiedEmptyDailyScope,
     isStagePreview:stageAddressBatchEnabled,
     staffRegistrationScope,
     initMap,
